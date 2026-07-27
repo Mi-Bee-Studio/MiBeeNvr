@@ -144,6 +144,15 @@ type RollingMergeCoordinator struct {
 	eventBus  *event.EventBus
 	eventCh   chan event.Event
 	cancelSub context.CancelFunc
+
+	// wg tracks ALL goroutines spawned by Start (eventLoop, backfillOnStartup,
+	// backfillLoop) AND the per-camera mergeSegments goroutines fan-out by
+	// eventLoop. Stop waits on wg so that, once Stop returns, no goroutine is
+	// still writing to the storage tree — required by the App.Service contract
+	// ("must release all goroutines ... resources") and prevents the TempDir
+	// cleanup race (issue #143 / #125 class) where outlived goroutines write
+	// files after t.TempDir() RemoveAll begins.
+	wg sync.WaitGroup
 }
 
 // bucketInfo tracks the accumulated merge state for a camera's current window.
@@ -234,6 +243,11 @@ func (r *RollingMergeCoordinator) Start(ctx context.Context) error {
 		return fmt.Errorf("rolling merge: subscribe to segment.completed: %w", err)
 	}
 
+	// wg.Add BEFORE the `go` statement (not inside the goroutine) is required by
+	// sync.WaitGroup's contract: "Calls with a positive delta that start when the
+	// counter is zero must happen before a Wait." Otherwise a fast Stop's Wait
+	// could observe counter==0 and return before the goroutine's Add runs.
+	r.wg.Add(3)
 	go r.eventLoop(ctx)
 
 	// One-shot backfill: drain historical pending segments for rolling-enabled cameras.
@@ -254,6 +268,7 @@ func (r *RollingMergeCoordinator) Start(ctx context.Context) error {
 // cameras and merges them into window buckets. This ensures that recordings that existed
 // before rolling merge was enabled get the same quasi-real-time treatment retroactively.
 func (r *RollingMergeCoordinator) backfillOnStartup(ctx context.Context) {
+	defer r.wg.Done() // paired with r.wg.Add(3) in Start
 	// Check if any camera has rolling enabled — skip entirely if none.
 	hasRolling := false
 	for _, cam := range r.cameras() {
@@ -352,6 +367,7 @@ func (r *RollingMergeCoordinator) backfillOnStartup(ctx context.Context) {
 // (default 10m) it processes up to `rolling_backfill_batch` (default 500) pending
 // segments, using try-locks to yield to real-time events.
 func (r *RollingMergeCoordinator) backfillLoop(ctx context.Context) {
+	defer r.wg.Done() // paired with r.wg.Add(3) in Start
 	global := r.getGlobalCfg()
 	interval := time.Duration(0)
 	if global.RollingBackfillInterval != "" && global.RollingBackfillInterval != "0" {
@@ -1035,7 +1051,11 @@ func (r *RollingMergeCoordinator) mergeBatchSegments(ctx context.Context, camera
 	return len(recs), nil
 }
 
-// Stop unsubscribes and signals the event loop to exit.
+// Stop unsubscribes, signals all goroutines to exit via ctx cancellation, and
+// WAITS for them to fully return before returning itself. This honors the
+// App.Service contract ("must release all goroutines") and prevents the
+// TempDir cleanup race (#143/#125 class) where outlived goroutines write files
+// after the caller (e.g. a test's t.TempDir) begins cleanup.
 func (r *RollingMergeCoordinator) Stop() {
 	if r.cancelSub != nil {
 		r.cancelSub()
@@ -1043,17 +1063,34 @@ func (r *RollingMergeCoordinator) Stop() {
 	if r.eventBus != nil {
 		r.eventBus.Unsubscribe(event.TopicSegmentCompleted, r.eventCh)
 	}
+	// Wait for eventLoop + backfillOnStartup + backfillLoop + any in-flight
+	// mergeSegments goroutines fan-out by eventLoop to fully exit.
+	r.wg.Wait()
 }
 
 // eventLoop drains SegmentCompleted events and dispatches per-camera merge goroutines.
 // It applies debounce per camera: rapid segment closes (e.g. short segment dur with
 // reconnects) get batched into a single merge.
+//
+// All wg.Add calls for the mergeSegments fan-out happen inside this goroutine (in the
+// fireCh select case), so once ctx is cancelled the loop exits via ctx.Done and no
+// further Add can race with a concurrent Stop's Wait (which would violate sync.WaitGroup's
+// "Add with positive delta must happen before Wait when counter is zero" rule).
+// The debounce timers only send a non-blocking signal on fireCh; they never touch wg.
 func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
+	defer r.wg.Done() // paired with r.wg.Add(3) in Start
 	pendingMu := sync.Mutex{}
 	pending := make(map[string][]pendingSegmentInfo) // cameraID → queued segments
 	timers := make(map[string]*time.Timer)
 
-	processCamera := func(cameraID string) {
+	// fireCh carries cameraIDs whose debounce timer elapsed. Buffered so a timer
+	// callback virtually never blocks; the per-camera dedup in pending (delete on
+	// dispatch) keeps semantics correct if multiple signals queue. Dispatch is
+	// non-blocking (only wg.Add + go), so drain is fast and the buffer is rarely
+	// more than lightly populated.
+	fireCh := make(chan string, 256)
+
+	dispatch := func(cameraID string) {
 		pendingMu.Lock()
 		segs := pending[cameraID]
 		delete(pending, cameraID)
@@ -1064,8 +1101,14 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 			return
 		}
 
-		// Launch async merge — never block the event loop.
-		go r.mergeSegments(ctx, cameraID, segs)
+		// Launch async merge — never block the event loop. Tracked by wg so Stop
+		// waits for in-flight merges too (prevents merge goroutines from outliving
+		// t.TempDir cleanup — issue #143).
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			r.mergeSegments(ctx, cameraID, segs)
+		}()
 	}
 
 	for {
@@ -1077,6 +1120,9 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 			}
 			pendingMu.Unlock()
 			return
+
+		case cameraID := <-fireCh:
+			dispatch(cameraID)
 
 		case evt := <-r.eventCh:
 			sc, ok := evt.Data.(event.SegmentCompleted)
@@ -1096,7 +1142,7 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 				continue
 			}
 
-			// Parse the segment's started_at time for window calculation.
+			// Parse the segment's startedAt time for window calculation.
 			startedAt, err := time.Parse(time.RFC3339Nano, sc.StartedAt)
 			if err != nil {
 				// Fallback: use now.
@@ -1116,12 +1162,23 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 			pendingMu.Lock()
 			pending[sc.CameraID] = append(pending[sc.CameraID], seg)
 
-			// Reset or create the debounce timer.
+			// Reset or create the debounce timer. The timer callback only signals
+			// fireCh (non-blocking); the actual wg.Add/dispatch happens in the
+			// eventLoop's fireCh select case, keeping all wg mutation on this goroutine.
 			if existing, ok := timers[sc.CameraID]; ok {
 				existing.Stop()
 			}
+			camID := sc.CameraID
 			t := time.AfterFunc(cfg.Debounce, func() {
-				processCamera(sc.CameraID)
+				// Non-blocking send: if fireCh is full OR the event loop has exited
+				// (ctx cancelled, no reader), the signal is dropped. Dropping is safe
+				// during shutdown — pending segments stay in the DB and are picked up
+				// by the next process start's backfill. This also guarantees the timer
+				// callback never leaks a goroutine blocked on a channel send.
+				select {
+				case fireCh <- camID:
+				default:
+				}
 			})
 			timers[sc.CameraID] = t
 			pendingMu.Unlock()

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -1037,4 +1039,58 @@ func TestAdaptiveBatchPause(t *testing.T) {
 				tc.pending, tc.diskFree, got, want, base, tc.wantFactor)
 		})
 	}
+}
+
+// TestRollingMerge_StopJoinsGoroutines is a regression test for #143:
+// RollingMergeCoordinator.Start spawns 3 goroutines (eventLoop,
+// backfillOnStartup, backfillLoop) and eventLoop fans out a mergeSegments
+// goroutine per debounced camera. Stop must join ALL of them (via r.wg.Wait)
+// so none outlive the caller and keep writing the storage tree — that was the
+// root cause of the TempDir "directory not empty" flake (#143 / #125 class).
+//
+// We assert deterministically by inspecting goroutine stacks: after Stop, no
+// live goroutine should have a frame rooted in RollingMergeCoordinator. Counting
+// NumGoroutine is unreliable under -race (detector injects helper goroutines).
+func TestRollingMerge_StopJoinsGoroutines(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping goroutine-leak test in short mode")
+	}
+
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "10ms",
+	}
+	r := newTestRollingCoordinator(env, cfg, bus)
+	require.NoError(t, r.Start(context.Background()))
+
+	// Exercise the eventLoop + a fan-out mergeSegments goroutine by publishing
+	// a segment-completed event for a (synthetic) MP4 segment. The merge will
+	// fail to find the file, but the goroutine still launches — that's what we
+	// want to verify gets joined.
+	now := time.Now()
+	publishSegmentCompleted(t, bus, "leak-cam", "rec1", "/nonexistent/path.mp4", "h264", now)
+	// Let the debounce timer fire and the mergeSegments goroutine launch.
+	time.Sleep(80 * time.Millisecond)
+
+	r.Stop()
+
+	// Poll: after Stop, no goroutine should be running our coordinator code.
+	leakMarker := "merge.(*RollingMergeCoordinator)"
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		buf := make([]byte, 1<<16)
+		n := runtime.Stack(buf, true)
+		if !strings.Contains(string(buf[:n]), leakMarker) {
+			return // pass
+		}
+	}
+
+	buf := make([]byte, 1<<18)
+	n := runtime.Stack(buf, true)
+	t.Errorf("goroutine leak after Stop: RollingMergeCoordinator goroutine still alive. Stacks:\n%s", buf[:n])
 }
