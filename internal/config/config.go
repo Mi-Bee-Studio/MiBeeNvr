@@ -398,10 +398,17 @@ type HLSConfig struct {
 }
 
 // StreamingConfig configures streaming protocol options (WebRTC, FLV, etc.)
+//
+// NOTE: a global default_protocol field was removed — the frontend Player
+// Orchestrator now auto-selects the best protocol per camera (probes
+// /api/cameras/{id}/protocols, folds in codec + browser capability, demotes
+// on health failure). A stale default_protocol key in existing YAML is
+// silently ignored (unknown fields are not strict-decoded). Per-camera
+// overrides remain available via the Protocol Switcher on each camera's
+// LiveView page.
 type StreamingConfig struct {
-	DefaultProtocol string       `yaml:"default_protocol"` // webrtc | flv | hls | ll-hls (default "hls")
-	WebRTC          WebRTCConfig `yaml:"webrtc"`
-	FLV             FLVConfig    `yaml:"flv"`
+	WebRTC WebRTCConfig `yaml:"webrtc"`
+	FLV    FLVConfig    `yaml:"flv"`
 }
 
 // WebRTCConfig configures WebRTC WHEP streaming
@@ -1147,9 +1154,6 @@ func Validate(cfg *Config) error {
 	}
 
 	// Validate streaming configuration
-	if cfg.Streaming.DefaultProtocol != "webrtc" && cfg.Streaming.DefaultProtocol != "flv" && cfg.Streaming.DefaultProtocol != "hls" && cfg.Streaming.DefaultProtocol != "ll-hls" {
-		return fmt.Errorf("streaming.default_protocol invalid: %s (must be webrtc/flv/hls/ll-hls)", cfg.Streaming.DefaultProtocol)
-	}
 	if cfg.Streaming.WebRTC.MaxViewers < 1 || cfg.Streaming.WebRTC.MaxViewers > 10 {
 		return fmt.Errorf("streaming.webrtc.max_viewers must be between 1 and 10, got %d", cfg.Streaming.WebRTC.MaxViewers)
 	}
@@ -1364,9 +1368,6 @@ func (cfg *Config) ApplyDefaults() {
 	}
 
 	// Streaming defaults
-	if strings.TrimSpace(cfg.Streaming.DefaultProtocol) == "" {
-		cfg.Streaming.DefaultProtocol = "hls"
-	}
 	if cfg.Streaming.WebRTC.Enabled == nil {
 		cfg.Streaming.WebRTC.Enabled = new(bool)
 		*cfg.Streaming.WebRTC.Enabled = true

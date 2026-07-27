@@ -1033,8 +1033,6 @@
   "settings.saving": "保存中...",
   "settings.streaming": "流媒体协议",
   "settings.streaming.error": "保存流媒体设置失败",
-  "settings.streaming.fallbackProtocol": "备用直播协议",
-  "settings.streaming.fallbackProtocolHint": "监控大屏会按摄像头自动选择最佳协议。此项仅在无法查询摄像头能力时作为备用。",
   "settings.streaming.flv": "HTTP-FLV",
   "settings.streaming.flv.gopCache": "GOP 缓存大小",
   "settings.streaming.flv.gopCacheHint": "关键帧缓存，用于加速定位（帧数）。",

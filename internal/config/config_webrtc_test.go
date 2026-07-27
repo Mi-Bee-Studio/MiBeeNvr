@@ -84,7 +84,6 @@ func TestWebRTCICEServersRoundTrip(t *testing.T) {
 		Storage: StorageConfig{RootDir: "/tmp/nvr"},
 		Auth:    AuthConfig{Username: "u", PasswordHash: "$2a$10$x"},
 		Streaming: StreamingConfig{
-			DefaultProtocol: "hls",
 			WebRTC: WebRTCConfig{
 				ICEServers: []ICEServerConfig{
 					{URLs: []string{"stun:stun.l.google.com:19302"}},

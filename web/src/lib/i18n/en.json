@@ -1033,8 +1033,6 @@
   "settings.saving": "Saving...",
   "settings.streaming": "Streaming Protocols",
   "settings.streaming.error": "Failed to save streaming settings",
-  "settings.streaming.fallbackProtocol": "Fallback streaming protocol",
-  "settings.streaming.fallbackProtocolHint": "The surveillance grid auto-selects the best protocol per camera. This is used only as a fallback when the camera's capabilities can't be queried.",
   "settings.streaming.flv": "HTTP-FLV",
   "settings.streaming.flv.gopCache": "GOP Cache Size",
   "settings.streaming.flv.gopCacheHint": "Keyframe cache for faster seeking (frames).",
