@@ -24,7 +24,7 @@ func TestStreamingGzip_BinaryNoGzipTrailer(t *testing.T) {
 		io.WriteString(w, payload)
 	}))
 
-	req := httptest.NewRequest("GET", "/models/x.onnx", nil)
+	req := httptest.NewRequest(http.MethodGet, "/models/x.onnx", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
