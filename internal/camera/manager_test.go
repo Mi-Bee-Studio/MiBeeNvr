@@ -63,10 +63,27 @@ func testConfig() *config.Config {
 
 func newTestManager(t *testing.T) (*CameraManager, *storage.Manager, *storage.DB, string) {
 	t.Helper()
+	return newTestManagerWithCfg(t, testConfig())
+}
+
+// newTestManagerWithCfg wires up a CameraManager against a fresh temp dir + DB
+// for the given config, registering teardown in the correct order:
+//
+//  1. store.CleanupTempFiles()  (registered first → runs last)
+//  2. db.Close()
+//  3. mgr.Stop()               (registered last → runs first)
+//
+// mgr.Stop() runs FIRST (LIFO) so that the startup backfill goroutines
+// (backfillStableIDs, backfillEncoding — both touch cm.db) have fully exited
+// before the DB file is closed and the temp dir is deleted. Any test that
+// calls Start() MUST go through this helper (or replicate the ordering):
+// leaking those goroutines races against t.TempDir() cleanup →
+// "directory not empty" / "disk I/O error" (flaky under -race, see #112, #124).
+func newTestManagerWithCfg(t *testing.T, cfg *config.Config) (*CameraManager, *storage.Manager, *storage.DB, string) {
+	t.Helper()
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
-	cfg := testConfig()
 	cfg.Storage.RootDir = filepath.Join(tmpDir, "storage")
 	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
 	require.NoError(t, config.Save(configPath, cfg))
@@ -84,13 +101,6 @@ func newTestManager(t *testing.T) (*CameraManager, *storage.Manager, *storage.DB
 	t.Cleanup(func() { store.CleanupTempFiles() })
 
 	mgr := NewCameraManager(cfg, store, db, configPath)
-	// Stop the manager BEFORE the db.Close() / t.TempDir() cleanups run (LIFO
-	// order: this is registered last, so it runs first). Stop() waits on
-	// backfillWg, ensuring the startup backfill goroutines (backfillStableIDs,
-	// backfillEncoding — both touch cm.db) have fully exited before the DB file
-	// is closed and the temp dir is deleted. Without this, a test that calls
-	// Start() races the goroutine against t.TempDir() cleanup →
-	// "directory not empty" / "disk I/O error" (flaky under -race, see #112).
 	t.Cleanup(func() { _ = mgr.Stop() })
 	return mgr, store, db, configPath
 }
@@ -134,10 +144,8 @@ func TestStart_EnabledCameras(t *testing.T) {
 }
 
 func TestStart_HTTPJPEGRecorderCreated(t *testing.T) {
-	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.StorageConfig{
-			RootDir:         filepath.Join(tmpDir, "storage"),
 			SegmentDuration: "1m",
 		},
 		Cameras: []config.CameraConfig{
@@ -148,24 +156,12 @@ func TestStart_HTTPJPEGRecorderCreated(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	db, err := storage.New(dbPath)
-	require.NoError(t, err)
-	defer db.Close()
+	mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_ = db.Init(ctx)
-
-	store, err := storage.NewManager(cfg.Storage.RootDir)
-	require.NoError(t, err)
-	defer store.CleanupTempFiles()
-
-	mgr := NewCameraManager(cfg, store, db, "")
-	err = mgr.Start(ctx)
+	err := mgr.Start(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, mgr.RecorderCount())
 	_, hasJPEG := mgr.Status()["cam-1"]
@@ -342,10 +338,8 @@ func TestGracefulShutdown(t *testing.T) {
 }
 
 func TestStart_UnknownProtocol(t *testing.T) {
-	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.StorageConfig{
-			RootDir:         filepath.Join(tmpDir, "storage"),
 			SegmentDuration: "1m",
 		},
 		Cameras: []config.CameraConfig{
@@ -356,24 +350,12 @@ func TestStart_UnknownProtocol(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	db, err := storage.New(dbPath)
-	require.NoError(t, err)
-	defer db.Close()
+	mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_ = db.Init(ctx)
-
-	store, err := storage.NewManager(cfg.Storage.RootDir)
-	require.NoError(t, err)
-	defer store.CleanupTempFiles()
-
-	mgr := NewCameraManager(cfg, store, db, "")
-	err = mgr.Start(ctx)
+	err := mgr.Start(ctx)
 	require.NoError(t, err) // should not fail, just skip unknown protocol
 	assert.Equal(t, 0, mgr.RecorderCount())
 }
