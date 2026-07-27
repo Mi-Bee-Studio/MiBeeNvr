@@ -23,6 +23,9 @@ recorder.go     # StatusRecorder — wraps ResponseWriter to capture status code
 recorder_test.go
 slogutil.go     # slog utilities — custom error handler for chi
 slogutil_test.go
+compress.go     # Streaming gzip middleware — per-Write flush (SSE-safe), auto-skip binary. ⚠️ See ANTI-PATTERNS (gzip-trailer bug)
+compress_test.go        # gzip tests — JSON, no-accept-encoding, skip-video, SSE flush, WebSocket skip
+compress_issue_test.go  # regression test — binary responses must NOT get a gzip trailer (issue #109)
 remotelog/      # Remote log shipping subdirectory
   handler.go    # RemoteLog handler — batch ingest, rate-limited, auth-gated
   handler_test.go
@@ -44,6 +47,7 @@ remotelog/      # Remote log shipping subdirectory
 | Auth metrics | `auth_metrics.go` `recordAuthAttempt()` | Success/failure counters for Prometheus |
 | Remote log shipping | `remotelog/handler.go` | Batch log ingest from external sources, rate-limited, auth-gated |
 | Generate API key | `apikey.go` `GenerateAPIKey()` | Produces mbv_ + 40-char hex (44 chars total) |
+| Response compression | `compress.go` `StreamingGzip(level)` | Registered in `pkg/app/run.go` via `r.Use(...)`. SSE-safe (flushes per Write), auto-skips video/image/audio/octet-stream. ⚠️ MUST guard `gz.Close()` with `wroteGzip` — see ANTI-PATTERNS |
 
 ## CONVENTIONS
 
@@ -61,3 +65,5 @@ remotelog/      # Remote log shipping subdirectory
 
 - **DO NOT** store plaintext passwords — always use `HashPassword()` with bcrypt
 - **DO NOT** bypass auth middleware for sensitive endpoints — public routes are `/api/health`, `/api/metrics`, `/models/{filename}`, `/api/recordings/{id}/download` + `/merged`
+- **DO NOT** call `gz.Close()` (or `gz.Flush()`) unconditionally in `compressWriter.Close()/Flush()` — `gzip.Writer.Close()` on a writer that was never `Write()`n to STILL emits a complete empty gzip member (~20 bytes: magic `1f 8b 08` + trailer) to the underlying `ResponseWriter`. For skip-compression content types (`application/octet-stream` for `/models/*.onnx`, video, images), `Write()` bypasses `gz` and writes raw bytes directly — but if `Close()` still finalizes `gz`, that empty gzip frame gets **appended** to the raw response, silently corrupting every binary download. The `wroteGzip` flag (set on first `gz.Write`) gates both `Close()` and `Flush()`. This was the root cause of issue #109 (ONNX `INVALID_PROTOBUF` in the browser while Python loaded the same bytes fine — the corruption was a 20-byte gzip trailer at the END of the file, invisible if you only compare the first N bytes). Full writeup: `docs/known-issues-ai-onnx-gzip-trailer.md`. Regression test: `compress_issue_test.go::TestStreamingGzip_BinaryNoGzipTrailer`. The same trap applies to `deflate`/`zlib`/`brotli`/`zstd` writers — all emit headers/footers on `Close()`.
+- **DO NOT** verify a binary transfer by comparing only the first N bytes — corruption from chunked-encoding bugs, compression trailers, and range-join errors frequently lands at the END of the stream while leaving the head intact. Compare the full content hash (md5/sha256) of received bytes against the source.
