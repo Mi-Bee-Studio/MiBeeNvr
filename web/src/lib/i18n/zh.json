@@ -355,6 +355,7 @@
   "dashboard.apply": "应用",
   "dashboard.backToGrid": "返回网格",
   "dashboard.buffering": "缓冲中",
+  "dashboard.cameraOffline": "摄像头离线",
   "dashboard.clickToLive": "点击查看实时画面",
   "dashboard.configure": "配置",
   "dashboard.errorState": "错误",

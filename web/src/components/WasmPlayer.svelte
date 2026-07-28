@@ -880,9 +880,9 @@ onDestroy(() => {
         : streamState === 'error'
           ? t('dashboard.errorState')
           : streamState === 'offline'
-            ? 'Camera Offline'
+            ? t('dashboard.cameraOffline')
             : streamState === 'disconnected'
-              ? t('live.webrtc.connecting') || 'Disconnected'
+              ? t('live.webrtc.disconnected')
               : t('dashboard.snapshotMode'),
   );
 </script>
@@ -946,7 +946,7 @@ onDestroy(() => {
       <div class="absolute inset-0 bg-black/70"></div>
       <div class="relative flex flex-col items-center gap-3 z-10">
         <AlertCircle size={28} class="text-orange-400" />
-        <span class="text-white/70 text-xs">Camera Offline</span>
+        <span class="text-white/70 text-xs">{t('dashboard.cameraOffline')}</span>
         <button
           onclick={() => cm?.reconnect()}
           class="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 text-white/80 text-xs hover:bg-white/20 transition-colors"
