@@ -241,6 +241,62 @@ func TestStop(t *testing.T) {
 	// Status should be stopped
 }
 
+// TestStop_WaitsForONVIFEnsureGoroutines guards #163: Stop must join the
+// per-recorder ensure* goroutines (ensureStableID / ensureProfileToken /
+// ensureEncoding) spawned via launchTrackedEnsure. Without onvifEnsureWg.Wait
+// in Stop, those goroutines could still be mid configMu.Lock + persistConfig
+// + DB write when Stop returns, racing the caller's resource teardown.
+//
+// We exercise the tracker directly: spawn a tracked "ensure" that blocks on a
+// release channel, call Stop in a goroutine, and assert Stop does NOT return
+// until the tracked work is released and finishes.
+func TestStop_WaitsForONVIFEnsureGoroutines(t *testing.T) {
+	t.Helper()
+	mgr, _, _, _ := newTestManager(t)
+
+	release := make(chan struct{})
+	done := atomic.Bool{}
+
+	// launchTrackedEnsure is the exact wrapper used by startRecorderLocked for
+	// the three ensure* passes, so this exercises the real tracking path.
+	mgr.launchTrackedEnsure(func(_ string) {
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			t.Error("tracked ensure goroutine was not released within 5s")
+		}
+		done.Store(true)
+	}, "cam-test")
+
+	// Give the goroutine a moment to start. We can't observe entry directly,
+	// but the Stop below will prove blocking: if it returns before release,
+	// the tracker is missing.
+	stopReturned := make(chan struct{})
+	go func() {
+		_ = mgr.Stop()
+		close(stopReturned)
+	}()
+
+	select {
+	case <-stopReturned:
+		t.Fatal("Stop returned before the tracked ensure goroutine finished — onvifEnsureWg.Wait is missing in Stop")
+	case <-time.After(50 * time.Millisecond):
+		// expected: Stop is parked on onvifEnsureWg.Wait
+	}
+
+	close(release)
+
+	select {
+	case <-stopReturned:
+		// expected: Stop returned after the tracked goroutine exited
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return within 2s of releasing the tracked goroutine")
+	}
+	if !done.Load() {
+		t.Fatal("tracked ensure goroutine should have completed before Stop returned")
+	}
+}
+
 func TestStop_EmptyManager(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()

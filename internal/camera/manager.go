@@ -121,6 +121,12 @@ type CameraManager struct {
 	// outlive the DB handle and crash with "sql: database is closed" when the
 	// test/process tears down resources (flaky TestStartupBackfillStableID).
 	backfillWg sync.WaitGroup
+	// onvifEnsureWg tracks the per-recorder-start ONVIF backfill goroutines
+	// (ensureStableID / ensureProfileToken / ensureEncoding) spawned from
+	// startRecorderLocked. Each does its own configMu.Lock + persistConfig +
+	// DB write with a 15s timeout ctx; without joining them in Stop, those
+	// writes could race the DB/config teardown that Stop initiates (#163).
+	onvifEnsureWg sync.WaitGroup
 }
 
 // RelayManager is the subset of *relay.Manager the camera manager calls. Kept
@@ -506,6 +512,13 @@ func (cm *CameraManager) Stop() error {
 	// with "sql: database is closed". The goroutine checks ctx between cameras
 	// so this returns promptly once the caller cancels the start context.
 	cm.backfillWg.Wait()
+
+	// Wait for any in-flight per-recorder ONVIF ensure* goroutines
+	// (ensureStableID / ensureProfileToken / ensureEncoding). Each does a
+	// configMu.Lock + persistConfig + DB write with a 15s timeout; joining
+	// them here prevents those writes from racing the teardown performed by
+	// Stop / the caller above (#163). Bounded by the ensure* 15s timeout.
+	cm.onvifEnsureWg.Wait()
 
 	return nil
 }

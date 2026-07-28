@@ -407,22 +407,38 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	// For ONVIF cameras without a stable_id yet, auto-populate it asynchronously
 	// so IP self-healing (internal/rediscovery) can later re-acquire the camera.
 	// This is best-effort and non-blocking: failures are logged and ignored.
+	// Tracked by onvifEnsureWg so Stop can join these goroutines and avoid a
+	// race between their configMu.Lock + persistConfig + DB write and the
+	// teardown Stop initiates (#163).
 	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.StableID) == "" {
-		go cm.ensureStableID(cam.ID)
+		cm.launchTrackedEnsure(cm.ensureStableID, cam.ID)
 	}
 	// For ONVIF cameras without a profile_token, persist the auto-selected one
 	// after Start resolves it — avoids re-running GetProfiles on every restart.
 	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.ProfileToken) == "" {
-		go cm.ensureProfileToken(cam.ID)
+		cm.launchTrackedEnsure(cm.ensureProfileToken, cam.ID)
 	}
 	// For ONVIF cameras without a resolved encoding, persist the probe result
 	// (RTSP DESCRIBE / ONVIF profile) so a later device outage doesn't leave
 	// encoding="" — which makes the frontend lose the codec and storm through
 	// the protocol chain. Mirrors ensureStableID/ensureProfileToken. See #112.
 	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.Encoding) == "" {
-		go cm.ensureEncoding(cam.ID)
+		cm.launchTrackedEnsure(cm.ensureEncoding, cam.ID)
 	}
 	return nil
+}
+
+// launchTrackedEnsure runs a best-effort ONVIF ensure* pass for a camera in a
+// goroutine tracked by onvifEnsureWg, so Stop can join it and prevent the
+// ensure write (configMu.Lock + persistConfig + DB write) from racing the
+// teardown Stop initiates (#163). Each ensure* uses its own 15s timeout ctx,
+// so worst-case a tracked goroutine blocks Stop for ≤15s.
+func (cm *CameraManager) launchTrackedEnsure(fn func(string), cameraID string) {
+	cm.onvifEnsureWg.Add(1)
+	go func() {
+		defer cm.onvifEnsureWg.Done()
+		fn(cameraID)
+	}()
 }
 
 // persistConfig saves the current config to disk if configPath is set.

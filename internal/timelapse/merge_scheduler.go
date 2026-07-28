@@ -148,8 +148,16 @@ func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
 	for id, entry := range s.entries {
 		if !entry.nextRun.IsZero() && (now.After(entry.nextRun) || now.Equal(entry.nextRun)) {
 			triggered++
+			// Track the merge goroutine so Stop's wg.Wait() joins it too.
+			// Otherwise derived merges could outlive Stop and touch runFunc
+			// resources (e.g. the merger / DB) after the caller tears them
+			// down (#163). Add must happen before the goroutine starts so
+			// Stop's Wait can't race an Add-at-zero from a concurrent
+			// TriggerDue.
+			s.wg.Add(1)
 			// Run merge in background — do not block the loop
 			go func(camID string, refTime time.Time) {
+				defer s.wg.Done()
 				if err := s.runFunc(ctx, camID, refTime); err != nil {
 					slog.Error(
 						"merge scheduler: merge failed",

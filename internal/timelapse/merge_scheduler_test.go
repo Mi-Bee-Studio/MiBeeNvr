@@ -408,6 +408,72 @@ func TestMergeScheduler_TriggerDue(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "merge goroutine should have executed")
 }
 
+// TestMergeScheduler_StopWaitsForDerivedMerge guards #163: Stop must join not
+// only the runLoop goroutine but also the per-camera merge goroutines spawned
+// by triggerDueAt. Without wg.Add around that goroutine, Stop could return
+// while a runFunc was still executing and touching caller-owned resources.
+//
+// To prove the wait is real, the runFunc observes ctx cancellation (as a real
+// merge callback would) but then does non-trivial post-cancel work
+// (teardownSleep). If Stop didn't join the goroutine, it would return
+// ~instantly after the cancel; we assert Stop takes at least teardownSleep.
+func TestMergeScheduler_StopWaitsForDerivedMerge(t *testing.T) {
+	t.Helper()
+
+	const teardownSleep = 80 * time.Millisecond
+	runStarted := make(chan struct{})
+	cancelled := atomic.Bool{}
+
+	s := NewMergeScheduler(nil)
+	s.SetRunFunc(func(ctx context.Context, cameraID string, refTime time.Time) error {
+		close(runStarted)
+		<-ctx.Done()
+		cancelled.Store(true)
+		// Simulate non-trivial teardown after cancellation. Stop's wg.Wait
+		// must cover this window — otherwise Stop would return before the
+		// merge goroutine finishes.
+		time.Sleep(teardownSleep)
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	now := fixedNow()
+	s.mu.Lock()
+	s.addOrUpdateAt(now, "cam-stop", 8*time.Hour)
+	s.entries["cam-stop"].nextRun = now.Add(-time.Hour) // force due
+	s.mu.Unlock()
+
+	s.Start(ctx)
+
+	// Do NOT call TriggerDue externally: it would pass the test's ctx into
+	// runFunc, which s.Stop() does not cancel (Stop cancels s.ctx). Instead
+	// rely on the runLoop's own triggerDueAt(s.ctx, ...) — nextRun is in the
+	// past, so the loop fires the merge on its first iteration and runFunc
+	// receives s.ctx, which Stop will cancel.
+
+	// Wait for the runFunc to actually be running, so Stop genuinely contends
+	// with an in-flight derived merge goroutine.
+	select {
+	case <-runStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runFunc did not start within 2s")
+	}
+
+	// Stop cancels s.ctx → the runFunc's <-ctx.Done() unblocks → it sleeps
+	// teardownSleep → returns → deferred wg.Done → Stop's Wait unblocks.
+	start := time.Now()
+	s.Stop()
+	elapsed := time.Since(start)
+
+	require.True(t, cancelled.Load(), "runFunc should have observed ctx cancellation")
+	if elapsed < teardownSleep {
+		t.Fatalf("Stop returned after %v (< %v teardown sleep) — wg.Wait is not joining the triggerDueAt goroutine",
+			elapsed, teardownSleep)
+	}
+}
+
 func TestMergeScheduler_TriggerDue_NotDue(t *testing.T) {
 	t.Helper()
 	var triggered int32
