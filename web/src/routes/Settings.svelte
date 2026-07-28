@@ -145,23 +145,55 @@
         </div>
       </nav>
 
-      <!-- Right content area -->
+      <!--
+        Right content area (#160 fix).
+
+        All 7 panels are MOUNTED SIMULTANEOUSLY and toggled via CSS
+        `hidden`, NOT conditionally rendered with `{#if}`. This is deliberate:
+
+          - Conditional render (`{#if activeCategory === 'general'}`) unmounts
+            the inactive panel → fires its `onDestroy` → calls
+            `settingsForm.unregister(panelId)` → the panel's dirty predicate,
+            unsaved form values, and last-saved snapshot are dropped from the
+            coordinator. Switching back remounts it from scratch (fresh
+            `loadSettings()`), so any edits made before the switch are silently
+            lost. This broke the unified-save promise (#159): users expect a
+            single Save at the bottom to persist every category's edits.
+
+          - Keeping every panel mounted means `onDestroy` never fires while the
+            user navigates between categories, so each panel's registration —
+            and its in-progress edits — survive the switch. The unified Save bar
+            then sees the accumulated dirty state across all panels at once.
+
+        Trade-off: all panels load their API data on first mount. This is a few
+        extra GETs on the Settings page entry (one-time, idempotent), well
+        within the RPi-3B budget. Panels already guard their fetches with
+        loading states, and these are read-only config reads (no per-frame or
+        streaming cost). The alternative — lifting form state into the
+        coordinator — is a larger rewrite for no user-facing benefit.
+      -->
       <div class="flex-1 min-w-0 space-y-6 pb-24">
-        {#if activeCategory === 'general'}
+        <div class={activeCategory === 'general' ? '' : 'hidden'}>
           <GeneralPanel />
-        {:else if activeCategory === 'storage'}
+        </div>
+        <div class={activeCategory === 'storage' ? '' : 'hidden'}>
           <StoragePanel />
-        {:else if activeCategory === 'cameras'}
+        </div>
+        <div class={activeCategory === 'cameras' ? '' : 'hidden'}>
           <CameraAccessPanel />
-        {:else if activeCategory === 'streaming'}
+        </div>
+        <div class={activeCategory === 'streaming' ? '' : 'hidden'}>
           <StreamingPanel />
-        {:else if activeCategory === 'ai'}
+        </div>
+        <div class={activeCategory === 'ai' ? '' : 'hidden'}>
           <AIPanel />
-        {:else if activeCategory === 'processing'}
+        </div>
+        <div class={activeCategory === 'processing' ? '' : 'hidden'}>
           <ProcessingPanel />
-        {:else if activeCategory === 'advanced'}
+        </div>
+        <div class={activeCategory === 'advanced' ? '' : 'hidden'}>
           <AdvancedPanel />
-        {/if}
+        </div>
       </div>
     </div>
   </main>

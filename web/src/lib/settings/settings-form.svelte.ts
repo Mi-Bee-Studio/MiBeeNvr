@@ -25,7 +25,10 @@ export interface PanelFormHandle {
 }
 
 class SettingsFormCoordinator {
-  private panels: Map<string, PanelFormHandle> = $state(new Map());
+  // Exposed (read/write) for tests only — production callers must use the
+  // register/unregister API below. Test setup clears this between cases so
+  // one test's panels don't leak into the next.
+  panels: Map<string, PanelFormHandle> = $state(new Map());
 
   register(panelId: string, handle: PanelFormHandle): () => void {
     this.panels.set(panelId, handle);
@@ -34,6 +37,11 @@ class SettingsFormCoordinator {
       this.panels.delete(panelId);
       this.panels = new Map(this.panels); // trigger reactivity
     };
+  }
+
+  /** Test helper: drop all panel registrations. No-op in production. */
+  clear(): void {
+    this.panels = new Map();
   }
 
   /** True if ANY registered panel has unsaved changes. Reactive. */
