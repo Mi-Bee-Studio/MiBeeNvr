@@ -20,7 +20,7 @@
     ApiRequestError
   } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
-  import { enqueueTranscodeTask, getTranscodingTasks } from '$lib/api/transcoding';
+  import { enqueueTranscodeTask, getTranscodingStatus, getTranscodingTasks } from '$lib/api/transcoding';
   import type { Recording, TimelapseFrame, TimelapsePreviewFrame } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
@@ -130,35 +130,9 @@ let timelapsePreviewFrames = $state<TimelapsePreviewFrame[]>([]);
 let timelapsePreviewLoading = $state(false);
 let timelapsePreviewError = $state('');
 
-// SessionStorage merge tracking — survives navigation away and page refresh
-const MERGE_STORAGE_KEY = 'mibee_nvr_merge_active';
-
-function saveMergeState(data: { cameraId: string; recordingId: string; progress: number; status: string }) {
-  try {
-    const all = JSON.parse(sessionStorage.getItem(MERGE_STORAGE_KEY) || '{}');
-    all[data.cameraId] = data;
-    sessionStorage.setItem(MERGE_STORAGE_KEY, JSON.stringify(all));
-  } catch {}
-}
-
-function clearMergeState(cameraId: string) {
-  try {
-    const all = JSON.parse(sessionStorage.getItem(MERGE_STORAGE_KEY) || '{}');
-    delete all[cameraId];
-    if (Object.keys(all).length === 0) {
-      sessionStorage.removeItem(MERGE_STORAGE_KEY);
-    } else {
-      sessionStorage.setItem(MERGE_STORAGE_KEY, JSON.stringify(all));
-    }
-  } catch {}
-}
-
-function getMergeStateForCamera(cameraId: string): { progress: number; status: string; recordingId: string } | null {
-  try {
-    const all = JSON.parse(sessionStorage.getItem(MERGE_STORAGE_KEY) || '{}');
-    return all[cameraId] || null;
-  } catch { return null; }
-}
+// SessionStorage merge tracking — survives navigation away and page refresh.
+// The pure helpers are extracted to $lib/recording/merge-utils.ts for unit testing.
+import { saveMergeState, clearMergeState, getMergeStateForCamera, computeMergeEta } from '$lib/recording/merge-utils';
 
 /** Restore merge state from DB or sessionStorage when returning to this page */
 function restoreMergeState(rec: Recording) {
@@ -760,24 +734,7 @@ async function handleCancelMerge() {
 
 // --- Merge ETA ---
 function updateMergeEta() {
-  if (!mergeStartTime || mergeProgressPct <= 0) {
-    mergeEta = '';
-    return;
-  }
-  const elapsed = Date.now() - mergeStartTime;
-  if (elapsed < 1000) {
-    mergeEta = '';
-    return;
-  }
-  const totalEstimate = elapsed / mergeProgressPct * 100;
-  const remaining = totalEstimate - elapsed;
-  if (remaining < 60000) {
-    mergeEta = '< 1min';
-  } else {
-    const mins = Math.floor(remaining / 60000);
-    const secs = Math.floor((remaining % 60000) / 1000);
-    mergeEta = `~${mins}m ${secs}s`;
-  }
+  mergeEta = computeMergeEta(mergeStartTime, mergeProgressPct);
 }
 
 // --- Timelapse Preview ---
