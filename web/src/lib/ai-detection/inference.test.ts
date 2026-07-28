@@ -328,7 +328,27 @@ describe('ObjectDetector', () => {
 
       await detector.detect(mockFrame);
 
-      expect(mockRuntime.run).toHaveBeenCalledWith(expect.any(Float32Array), [1, 84, 8400]);
+      // Input dims are [1, 3, inputSize, inputSize] (NCHW RGB image), NOT the
+      // output shape [1, 84, 8400]. Regression guard for #173.
+      expect(mockRuntime.run).toHaveBeenCalledWith(expect.any(Float32Array), [1, 3, 640, 640]);
+    });
+
+    it('passes input dims whose product matches the preprocessed tensor length (#173 regression)', async () => {
+      // The dims passed to runtime.run must describe the SAME element count as
+      // the Float32Array produced by preprocessFrame. Previously the output
+      // shape [1,84,8400]=705600 was passed while the input tensor had
+      // [1,3,640,640]=1228800 elements → ORT threw on every frame (#173).
+      const runSpy = vi.mocked(mockRuntime.run);
+      const detector = new ObjectDetector(mockRuntime, { frameSkip: 1 });
+      const mockFrame = createMockVideoFrame();
+
+      await detector.detect(mockFrame);
+
+      expect(runSpy).toHaveBeenCalledTimes(1);
+      const [tensorArg, dimsArg] = runSpy.mock.calls[0];
+      const tensorLen = (tensorArg as Float32Array).length;
+      const dimsProduct = (dimsArg as number[]).reduce((a, b) => a * b, 1);
+      expect(dimsProduct).toBe(tensorLen);
     });
 
     it('filters by confidence threshold', async () => {
