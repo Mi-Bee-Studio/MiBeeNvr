@@ -418,7 +418,7 @@
                   <button
                     onclick={(e) => handlePlayClick(e, recording.id)}
                     class="btn btn-ghost action-btn action-btn--play"
-                    title="Play AVI"
+                    title={t('recordings.view')}
                   >
                     <Play size={16} />
                   </button>

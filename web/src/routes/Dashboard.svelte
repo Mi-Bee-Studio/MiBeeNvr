@@ -137,6 +137,13 @@
     if (s === 'reconnecting') return t('health.status.reconnecting');
     if (s === 'error' || s === 'failed') return t('cameras.statusError');
     if (s === 'stopped') return t('cameras.statusStopped');
+    // Camera-health statuses from /api/cameras/{id}/health (model.HealthStatus):
+    // healthy / warning / unknown. Without these branches the raw English enum
+    // value leaked into the UI (#170). statusColor() above already mapped these
+    // to colors, so this also fixes the "right color, wrong text" inconsistency.
+    if (s === 'healthy') return t('health.statusHealthy');
+    if (s === 'warning' || s === 'degraded') return t('health.statusWarning');
+    if (s === 'unknown') return t('health.statusUnknown');
     return s;
   }
 
