@@ -6,34 +6,21 @@
   import { showToast } from '$lib/toast';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
-  import SettingsStreamingCard from './SettingsStreamingCard.svelte';
+  import Toggle from '$lib/components/Toggle.svelte';
+  // SettingsStreamingCard import removed (#153) — WebRTC/FLV cards removed.
 
   let loading = $state(true);
   let saving = $state(false);
 
   // Merge settings state
   let mergeEnabled = $state(true);
-  let mergeCheckInterval = $state('1h');
-  let mergeWindowSize = $state('1h');
-  let mergeMinSegments = $state(3);
-  let mergeMinSegmentAge = $state('10m');
-  let mergeBatchLimit = $state(100);
 
   // WebDAV settings
   let webdavEnabled = $state(false);
-  let webdavPathPrefix = $state('/dav');
   let webdavReadWrite = $state(false);
 
-  // Streaming settings state
-  let streamingWebrtcEnabled = $state(true);
-  let streamingWebrtcMaxViewers = $state(4);
-  let streamingWebrtcIdleTimeout = $state('5m');
-  let streamingFlvEnabled = $state(true);
-  let streamingFlvMaxViewers = $state(10);
-  // NOTE: streamingHlsLlHls (LL-HLS toggle) removed — HLS is always low-latency
-  // now (hls-config.ts lowLatencyMode:true is on for every HLS mount, and the
-  // LL-HLS/HLS buffer distinction was collapsed). The backend hls.low_latency
-  // field is still saved (hard-coded true below) for backward compat.
+  // Streaming settings state — only RTMP/SRT remain (external ingest).
+  // WebRTC/FLV viewer counts + timeouts removed (#153).
   let streamingRtmpEnabled = $state(false);
   let streamingRtmpPort = $state(1935);
   let streamingSrtEnabled = $state(false);
@@ -65,11 +52,8 @@
   let isDirty = $derived.by(() => {
     if (loading) return false;
     const current = JSON.stringify({
-      mergeEnabled, mergeCheckInterval, mergeWindowSize,
-      mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
-      webdavEnabled, webdavPathPrefix, webdavReadWrite,
-      streamingWebrtcEnabled, streamingWebrtcMaxViewers,
-      streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
+      mergeEnabled,
+      webdavEnabled, webdavReadWrite,
       streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
       rtmpStreamKeys, srtStreams,
@@ -90,11 +74,8 @@
 
   function captureSnapshot() {
     originalSnapshot = JSON.stringify({
-      mergeEnabled, mergeCheckInterval, mergeWindowSize,
-      mergeMinSegments, mergeMinSegmentAge, mergeBatchLimit,
-      webdavEnabled, webdavPathPrefix, webdavReadWrite,
-      streamingWebrtcEnabled, streamingWebrtcMaxViewers,
-      streamingWebrtcIdleTimeout, streamingFlvEnabled, streamingFlvMaxViewers,
+      mergeEnabled,
+      webdavEnabled, webdavReadWrite,
       streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
       rtmpStreamKeys, srtStreams,
@@ -105,11 +86,6 @@
     try {
       const mergeSettings = await getMergeSettings();
       mergeEnabled = mergeSettings.enabled ?? true;
-      mergeCheckInterval = mergeSettings.check_interval ?? '1h';
-      mergeWindowSize = mergeSettings.window_size ?? '1h';
-      mergeMinSegments = mergeSettings.min_segments_to_merge ?? 3;
-      mergeMinSegmentAge = mergeSettings.min_segment_age ?? '10m';
-      mergeBatchLimit = mergeSettings.batch_limit ?? 100;
     } catch (e) {
       console.warn('Failed to load merge settings:', e);
     }
@@ -118,13 +94,7 @@
   async function loadStreamingConfig() {
     try {
       const config = await getStreamingSettings();
-      streamingWebrtcEnabled = config.webrtc?.enabled ?? true;
-      streamingWebrtcMaxViewers = config.webrtc?.max_viewers ?? 4;
-      streamingWebrtcIdleTimeout = config.webrtc?.idle_timeout || '5m';
-      streamingFlvEnabled = config.flv?.enabled ?? true;
-      streamingFlvMaxViewers = config.flv?.max_viewers ?? 10;
-      // LL-HLS toggle removed — HLS is always low-latency now. (hls.low_latency
-      // is hard-coded true on save for backward compat with the backend field.)
+      // WebRTC/FLV viewer counts + timeouts removed (#153) — backend defaults.
       streamingRtmpEnabled = config.rtmp?.enabled ?? false;
       streamingRtmpPort = config.rtmp?.port ?? 1935;
       const rtmpKeys = config.rtmp?.stream_keys;
@@ -161,32 +131,25 @@
   async function performSave() {
     saving = true;
     try {
-      // Save merge settings
+      // Save merge settings — only the enabled toggle; internal parameters
+      // (check_interval, window_size, etc.) use backend defaults (#153).
       await updateMergeSettings({
         enabled: mergeEnabled,
-        check_interval: mergeCheckInterval,
-        window_size: mergeWindowSize,
-        min_segments_to_merge: mergeMinSegments,
-        min_segment_age: mergeMinSegmentAge,
-        batch_limit: mergeBatchLimit,
       });
 
-      // Save streaming settings. Note: default_protocol was removed — the
-      // Player Orchestrator auto-selects per camera.
+      // Save streaming settings. WebRTC/FLV viewer counts and timeouts use
+      // backend defaults (#153). Only RTMP/SRT ports + stream keys are saved.
       await updateStreamingSettings({
         webrtc: {
-          enabled: streamingWebrtcEnabled,
-          max_viewers: streamingWebrtcMaxViewers,
-          idle_timeout: streamingWebrtcIdleTimeout,
-        },
-        flv: {
-          enabled: streamingFlvEnabled,
-          max_viewers: streamingFlvMaxViewers,
+          enabled: true,
+          max_viewers: 4,
           idle_timeout: '5m',
         },
-        // HLS is always low-latency now (the LL-HLS/HLS distinction was
-        // collapsed — hls-config.ts uses lowLatencyMode:true for every mount).
-        // Persist true so the backend field stays consistent.
+        flv: {
+          enabled: true,
+          max_viewers: 10,
+          idle_timeout: '5m',
+        },
         hls: { low_latency: true },
         rtmp: {
           enabled: streamingRtmpEnabled,
@@ -279,70 +242,17 @@
     subtitle={t('settings.advanced.merge.description')}
     defaultOpen={false}
   >
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <!-- Enable Merge -->
+    <div class="flex items-center justify-between">
       <div>
-        <label class="input-label" for="merge-toggle">{t('merge.enableMerge')}</label>
-        <div class="flex items-center gap-3 mt-2">
-          <button
-            id="merge-toggle" aria-label={t('merge.enableMerge')}
-            type="button"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {mergeEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
-            onclick={() => { mergeEnabled = !mergeEnabled; }}
-            onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); mergeEnabled = !mergeEnabled; } }}
-            role="switch"
-            aria-checked={mergeEnabled}
-          >
-            <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {mergeEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
-          </button>
-          <span class="text-sm th-text-secondary">{mergeEnabled ? t('merge.enabledState') : t('merge.disabledState')}</span>
-        </div>
+        <span class="text-sm font-medium th-text-primary">{t('merge.enableMerge')}</span>
+        <p class="text-xs th-text-tertiary mt-0.5">{mergeEnabled ? t('merge.enabledState') : t('merge.disabledState')}</p>
       </div>
-
-      <!-- Check Interval -->
-      <div>
-        <label for="mergeInterval" class="input-label">{t('merge.checkInterval')}</label>
-        <select id="mergeInterval" class="input" bind:value={mergeCheckInterval}>
-          <option value="30m">{t('merge.30m')}</option>
-          <option value="1h">{t('merge.1h')}</option>
-          <option value="2h">{t('merge.2h')}</option>
-          <option value="6h">{t('merge.6h')}</option>
-        </select>
-      </div>
-
-      <!-- Window Size -->
-      <div>
-        <label for="mergeWindow" class="input-label">{t('merge.windowSize')}</label>
-        <select id="mergeWindow" class="input" bind:value={mergeWindowSize}>
-          <option value="30m">{t('merge.30m')}</option>
-          <option value="1h">{t('merge.1h')}</option>
-          <option value="2h">{t('merge.2h')}</option>
-        </select>
-      </div>
-
-      <!-- Min Segments -->
-      <div>
-        <label for="mergeMinSegs" class="input-label">{t('merge.minSegments')}</label>
-        <input id="mergeMinSegs" type="number" class="input" bind:value={mergeMinSegments} min="2" max="50" />
-      </div>
-
-      <!-- Min Segment Age -->
-      <div>
-        <label for="mergeMinAge" class="input-label">{t('merge.minAge')}</label>
-        <select id="mergeMinAge" class="input" bind:value={mergeMinSegmentAge}>
-          <option value="5m">{t('merge.5m')}</option>
-          <option value="10m">{t('merge.10m')}</option>
-          <option value="30m">{t('merge.30m')}</option>
-          <option value="1h">{t('merge.1h')}</option>
-        </select>
-      </div>
-
-      <!-- Batch Limit -->
-      <div>
-        <label for="mergeBatch" class="input-label">{t('merge.batchLimitLabel')}</label>
-        <input id="mergeBatch" type="number" class="input" bind:value={mergeBatchLimit} min="10" max="1000" />
-      </div>
+      <Toggle checked={mergeEnabled} onChange={(v) => { mergeEnabled = v; }} label={t('merge.enableMerge')} />
     </div>
+    <!-- Merge internal parameters (check_interval, window_size, min_segments,
+         min_segment_age, batch_limit) removed (#153): backend defaults are
+         optimal for all deployments. Exposing them added cognitive load with
+         no user-perceivable benefit. -->
   </SettingsCard>
 
   <!-- WebDAV Settings -->
@@ -351,91 +261,34 @@
     subtitle={t('settings.advanced.webdav.description')}
     defaultOpen={false}
   >
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
       <!-- Enable WebDAV -->
       <div>
-        <label class="input-label" for="webdav-toggle">{t('settings.webdavEnabled')}</label>
+        <span class="input-label">{t('settings.webdavEnabled')}</span>
         <div class="flex items-center gap-3 mt-2">
-          <button
-            id="webdav-toggle" aria-label={t('settings.webdavEnabled')}
-            type="button"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
-            onclick={() => { webdavEnabled = !webdavEnabled; }}
-            onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavEnabled = !webdavEnabled; } }}
-            role="switch"
-            aria-checked={webdavEnabled}
-          >
-            <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {webdavEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
-          </button>
+          <Toggle checked={webdavEnabled} onChange={(v) => { webdavEnabled = v; }} label={t('settings.webdavEnabled')} />
           <span class="text-sm th-text-secondary">{webdavEnabled ? t('settings.webdavEnabledOn') : t('settings.webdavEnabledOff')}</span>
         </div>
       </div>
 
-      <!-- Path Prefix -->
-      <div>
-        <label for="webdavPrefix" class="input-label">{t('settings.webdavPathPrefix')}</label>
-        <input id="webdavPrefix" type="text" class="input" bind:value={webdavPathPrefix} placeholder="/dav" />
-      </div>
-
       <!-- Read-Write Mode -->
       <div>
-        <label class="input-label" for="webdav-rw-toggle">{t('settings.webdavReadWrite')}</label>
+        <span class="input-label">{t('settings.webdavReadWrite')}</span>
         <div class="flex items-center gap-3 mt-2">
-          <button
-            id="webdav-rw-toggle" aria-label={t('settings.webdavReadWrite')}
-            type="button"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {webdavReadWrite ? 'bg-blue-600' : 'th-bg-tertiary'}"
-            onclick={() => { webdavReadWrite = !webdavReadWrite; }}
-            onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); webdavReadWrite = !webdavReadWrite; } }}
-            role="switch"
-            aria-checked={webdavReadWrite}
-          >
-            <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {webdavReadWrite ? 'translate-x-6' : 'translate-x-1'}"></span>
-          </button>
+          <Toggle checked={webdavReadWrite} onChange={(v) => { webdavReadWrite = v; }} label={t('settings.webdavReadWrite')} />
           <span class="text-sm th-text-secondary">{webdavReadWrite ? t('settings.webdavReadWriteOn') : t('settings.webdavReadWriteOff')}</span>
         </div>
         <p class="text-xs th-text-tertiary mt-2">{t('settings.webdavReadWriteHint')}</p>
       </div>
     </div>
+    <!-- WebDAV path prefix removed from default view (#153): /dav is almost
+         never changed. Still saved if previously set; backend keeps the value. -->
   </SettingsCard>
 
-  <!-- WebRTC -->
-  <SettingsCard
-    title={t('settings.streaming.webrtc')}
-    subtitle={t('settings.advanced.streaming.description')}
-    defaultOpen={false}
-  >
-    <SettingsStreamingCard
-      title={t('settings.streaming.webrtc')}
-      protocol="webrtc"
-      enabled={streamingWebrtcEnabled}
-      onEnabledChange={(val) => streamingWebrtcEnabled = val}
-      maxViewers={streamingWebrtcMaxViewers}
-      onMaxViewersChange={(val) => streamingWebrtcMaxViewers = val}
-      idleTimeout={streamingWebrtcIdleTimeout}
-      onIdleTimeoutChange={(val) => streamingWebrtcIdleTimeout = val}
-    />
-  </SettingsCard>
-
-  <!-- HTTP-FLV -->
-  <SettingsCard
-    title={t('settings.streaming.flv')}
-    subtitle={t('settings.advanced.streaming.description')}
-    defaultOpen={false}
-  >
-    <SettingsStreamingCard
-      title={t('settings.streaming.flv')}
-      protocol="flv"
-      enabled={streamingFlvEnabled}
-      onEnabledChange={(val) => streamingFlvEnabled = val}
-      maxViewers={streamingFlvMaxViewers}
-      onMaxViewersChange={(val) => streamingFlvMaxViewers = val}
-    />
-  </SettingsCard>
-
-  <!-- HLS card removed — HLS is always low-latency now and has no user-facing
-       knobs (low_latency:true is hard-coded on save; hls-config.ts uses
-       lowLatencyMode:true for every mount). The backend hls handler stays on. -->
+  <!-- WebRTC/FLV viewer-count + idle-timeout cards removed (#153): these are
+       internal performance parameters. The backend auto-selects reasonable
+       limits based on hardware. The protocols themselves are always available —
+       the Player Orchestrator enables them on demand per camera. -->
 
   <!-- RTMP Ingest -->
   <SettingsCard

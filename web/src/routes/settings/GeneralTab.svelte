@@ -22,12 +22,17 @@
     { value: 'Local', label: t('settings.timezoneLocal') },
     { value: 'UTC', label: 'UTC' },
     { value: 'Asia/Shanghai', label: 'Asia/Shanghai' },
+    { value: 'Asia/Hong_Kong', label: 'Asia/Hong_Kong' },
+    { value: 'Asia/Singapore', label: 'Asia/Singapore' },
     { value: 'Asia/Tokyo', label: 'Asia/Tokyo' },
     { value: 'America/New_York', label: 'America/New_York' },
     { value: 'America/Los_Angeles', label: 'America/Los_Angeles' },
+    { value: 'America/Chicago', label: 'America/Chicago' },
     { value: 'Europe/London', label: 'Europe/London' },
     { value: 'Europe/Berlin', label: 'Europe/Berlin' },
+    { value: 'Europe/Paris', label: 'Europe/Paris' },
     { value: 'Australia/Sydney', label: 'Australia/Sydney' },
+    { value: 'Pacific/Auckland', label: 'Pacific/Auckland' },
   ]);
   let itemsPerPage = $state(getItemsPerPage());
   let autoRefresh = $state(getAutoRefresh());
@@ -58,7 +63,7 @@
   let isDirty = $derived.by(() => {
     if (loading) return false;
     const current = JSON.stringify({
-      retentionDays, diskThresholdPercent, checkInterval, selectedTimezone,
+      retentionDays, diskThresholdPercent, selectedTimezone,
     });
     return current !== originalSnapshot;
   });
@@ -105,7 +110,7 @@
 
   function captureSnapshot() {
     originalSnapshot = JSON.stringify({
-      retentionDays, diskThresholdPercent, checkInterval, selectedTimezone,
+      retentionDays, diskThresholdPercent, selectedTimezone,
     });
     originalRetentionDays = retentionDays;
   }
@@ -117,7 +122,7 @@
       settings = await getSettings();
       retentionDays = settings.cleanup.retention_days;
       diskThresholdPercent = settings.cleanup.disk_threshold_percent;
-      checkInterval = settings.cleanup.check_interval;
+      // check_interval removed from UI (#153) — backend default (1h) is optimal.
       selectedTimezone = settings.timezone || 'Local';
       captureSnapshot();
     } catch (e) {
@@ -153,7 +158,6 @@
         cleanup: {
           retention_days: retentionDays,
           disk_threshold_percent: diskThresholdPercent,
-          check_interval: checkInterval,
         },
         timezone: selectedTimezone,
       };
@@ -276,7 +280,7 @@
     <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.cleanup')}</h3>
     <p class="text-sm th-text-tertiary mb-8">{t('settings.cleanupDesc')}</p>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div>
         <label for="retention" class="input-label">{t('settings.retentionDays')}</label>
         <input
@@ -312,17 +316,10 @@
           <p class="text-xs th-text-muted mt-1">{diskThresholdPercent}% {t('settings.diskRemaining')} {diskGbEstimate}</p>
         {/if}
       </div>
-
-      <div>
-        <label for="interval" class="input-label">{t('settings.checkInterval')}</label>
-        <select id="interval" class="input" bind:value={checkInterval}>
-          <option value="30m">{t('settings.every30m')}</option>
-          <option value="1h">{t('settings.every1h')}</option>
-          <option value="6h">{t('settings.every6h')}</option>
-          <option value="24h">{t('settings.every24h')}</option>
-        </select>
-      </div>
     </div>
+
+    <!-- Check interval removed (#153): backend default (1h) is optimal;
+         exposing it added cognitive load with no user-perceivable benefit. -->
   </div>
 
   <!-- Frontend Preferences -->
