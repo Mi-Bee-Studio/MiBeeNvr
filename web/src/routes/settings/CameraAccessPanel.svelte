@@ -74,7 +74,11 @@
       await loadAutoDiscover(); // refresh has_default_password
       showToast(t('settings.autoDiscover.saved'), 'success');
     } catch (e: any) {
+      // Re-throw so the unified shell keeps the dirty bar visible and reports
+      // the failure (#160). Without this, saveAll treats the panel as saved
+      // and the user's backend failure is hidden behind a one-shot toast.
       showToast(friendlyError(e, 'settings.autoDiscover.saveFailed'), 'error');
+      throw e;
     }
   }
 

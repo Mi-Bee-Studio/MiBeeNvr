@@ -138,9 +138,12 @@
       await loadAll();
       showToast(t('settings.saved'), 'success');
     } catch (e) {
-      // Swallow + toast, matching the other settings tabs. The unified shell's
-      // saveAll iterates panels and surfaces its own error handling.
+      // Surface to the unified shell (#160): saveAll's contract is "throws on
+      // first error" so the shell can keep the dirty bar visible and report
+      // failure. Without re-throwing, the shell would think this panel saved
+      // OK and clear its dirty state, hiding a backend failure from the user.
       showToast(e instanceof Error ? e.message : t('common.failedSaveSettings'), 'error');
+      throw e;
     } finally {
       saving = false;
     }

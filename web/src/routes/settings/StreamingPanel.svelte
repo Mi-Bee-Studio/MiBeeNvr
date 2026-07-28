@@ -122,7 +122,11 @@
       captureSnapshot();
       showToast(t('settings.saved'), 'success');
     } catch (e) {
+      // Re-throw so the unified shell keeps the dirty bar visible and reports
+      // the failure (#160). Without this, saveAll treats the panel as saved
+      // and a backend failure is hidden behind a one-shot toast.
       showToast(e instanceof Error ? e.message : t('common.failedSaveSettings'), 'error');
+      throw e;
     }
   }
 
