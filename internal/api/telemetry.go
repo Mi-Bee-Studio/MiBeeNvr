@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 )
 
@@ -56,4 +58,10 @@ func telemetryRateLimiter() func(http.Handler) http.Handler {
 		Window:      time.Second,
 	})
 	return rl.Handler
+}
+
+// registerTelemetryRoute registers the telemetry ingestion endpoint with its
+// own rate limiter.
+func (h *Handler) registerTelemetryRoute(r chi.Router) {
+	r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
 }

@@ -58,3 +58,10 @@ func (h *Handler) handleRelayCapabilities(w http.ResponseWriter, r *http.Request
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// registerRelayRoutes registers push-out relay preset and capability routes.
+func (h *Handler) registerRelayRoutes(r chi.Router) {
+	r.Get("/api/relay-presets", h.handleListRelayPresets)
+	r.Get("/api/relay-presets/{name}", h.handleGetRelayPreset)
+	r.Get("/api/relay/capabilities", h.handleRelayCapabilities)
+}

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 )
@@ -310,4 +312,19 @@ func verificationToResponse(v *CloudVerificationRequired) map[string]any {
 		resp["session_id"] = v.CaptchaSessionID
 	}
 	return resp
+}
+
+// registerXiaomiRoutes registers Xiaomi cloud auth, device discovery, and
+// two-way audio upstream WebSocket routes.
+func (h *Handler) registerXiaomiRoutes(r chi.Router) {
+	r.Route("/api/xiaomi", func(r chi.Router) {
+		r.Post("/auth", h.handleXiaomiAuth)
+		r.Post("/captcha", h.handleXiaomiCaptcha)
+		r.Post("/verify", h.handleXiaomiVerify)
+		r.Get("/devices", h.handleXiaomiDevices)
+		r.Post("/sync", h.handleXiaomiSync)
+		r.Get("/check-vendor", h.handleCheckVendor)
+	})
+	// Xiaomi two-way audio upstream WebSocket
+	r.Get("/api/ws/camera/{id}/audio-upstream", h.handleAudioUpstreamWS)
 }

@@ -212,3 +212,14 @@ func (h *Handler) handleSetArchiveRetention(w http.ResponseWriter, r *http.Reque
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
+
+// registerArchiveRoutes registers archive list/delete/retention routes.
+func (h *Handler) registerArchiveRoutes(r chi.Router) {
+	r.Route("/api/archives", func(r chi.Router) {
+		r.Get("/", h.handleListArchives)
+		r.Get("/{cameraID}/recordings", h.handleListArchiveRecordings)
+		r.Delete("/{cameraID}", h.handleDeleteArchiveGroup)
+		r.Delete("/{cameraID}/recordings/{recordingID}", h.handleDeleteArchiveRecording)
+		r.Put("/{cameraID}/retention", h.handleSetArchiveRetention)
+	})
+}

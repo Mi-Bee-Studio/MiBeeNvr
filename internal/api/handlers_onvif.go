@@ -816,3 +816,10 @@ func handleONVIFDeviceMgmtError(w http.ResponseWriter, cameraID string, err erro
 		WriteError(w, http.StatusInternalServerError, "device management operation failed")
 	}
 }
+
+// registerONVIFRoutes registers ONVIF discovery and probe routes.
+func (h *Handler) registerONVIFRoutes(r chi.Router) {
+	r.Post("/api/onvif/discover", h.handleONVIFDiscover)
+	r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
+	r.Post("/api/onvif/probe", h.handleONVIFProbe)
+}

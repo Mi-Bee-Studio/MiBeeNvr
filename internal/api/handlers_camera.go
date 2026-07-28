@@ -1095,3 +1095,83 @@ func probeONVIFStream(ctx context.Context, endpoint, username, password string) 
 func probeONVIFEncoding(ctx context.Context, endpoint, username, password string) string {
 	return probeONVIFStream(ctx, endpoint, username, password).Encoding
 }
+
+// registerCameraRoutes registers all /api/cameras* routes (including nested
+// stream, ONVIF, PTZ, snapshot, merge-config, timelapse config, events, and
+// Xiaomi sub-routes) on the given (already auth-protected) router.
+func (h *Handler) registerCameraRoutes(r chi.Router) {
+	r.Route("/api/cameras", func(r chi.Router) {
+		r.Get("/", h.handleListCameras)
+		r.Post("/", h.handleCreateCamera)
+		r.Post("/test-connection", h.handleTestConnection)
+		r.Route("/{id}", func(r chi.Router) {
+			r.Get("/", h.handleGetCamera)
+			r.Put("/", h.handleUpdateCamera)
+			r.Delete("/", h.handleDeleteCamera)
+			// WebSocket stream (must be before HLS catch-all /stream/*)
+			r.Get("/stream/ws", h.handleStreamWS)
+			r.Get("/stream/*", h.handleHLSStream)
+			r.Delete("/stream", h.handleStopHLSStream)
+			// WebRTC WHEP endpoints
+			r.Post("/stream/webrtc", h.handleCreateWHEPSession)
+			r.Delete("/stream/webrtc/{session}", h.handleDeleteWHEPSession)
+			// HTTP-FLV stream
+			r.Get("/stream.flv", h.handleFLVStream)
+			r.Get("/stream.mjpeg", h.handleMjpegStream)
+			r.Get("/latest-frame", h.handleLatestFrame)
+			// Per-camera protocols
+			r.Get("/protocols", h.handleCameraProtocols)
+			r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
+			r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
+			r.Post("/ptz/move", h.handlePTZMove)
+			r.Post("/ptz/stop", h.handlePTZStop)
+			r.Get("/ptz/status", h.handlePTZStatus)
+			r.Get("/ptz/presets", h.handlePTZGetPresets)
+			r.Post("/ptz/presets", h.handlePTZCreatePreset)
+			r.Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
+			r.Delete("/ptz/presets/{token}", h.handlePTZDeletePreset)
+			r.Get("/snapshot/uri", h.handleSnapshotGetUri)
+			r.Get("/imaging/settings", h.handleImagingGetSettings)
+			r.Put("/imaging/settings", h.handleImagingSetSettings)
+			r.Get("/imaging/options", h.handleImagingGetOptions)
+			// Device management
+			r.Post("/onvif/reboot", h.handleONVIFReboot)
+			r.Get("/onvif/network", h.handleONVIFGetNetwork)
+			r.Put("/onvif/network", h.handleONVIFSetNetwork)
+			r.Get("/onvif/users", h.handleONVIFGetUsers)
+			r.Post("/onvif/users", h.handleONVIFCreateUsers)
+			r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
+			r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
+			r.Get("/snapshot", h.handleSnapshot)
+			r.Get("/merge-config", h.handleGetCameraMergeConfig)
+			r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
+			r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
+			r.Get("/stats", h.handleCameraRecordingStats)
+			// Per-camera timelapse configuration
+			r.Get("/timelapse", h.handleGetCameraTimelapse)
+			r.Put("/timelapse", h.handlePutCameraTimelapse)
+			// Camera-specific events (SSE)
+			r.Get("/events", h.handleCameraEvents)
+			r.Post("/start", h.handleStartCamera)
+			r.Post("/stop", h.handleStopCamera)
+			// Activate a pending_activation camera: supply credentials and start
+			// its recorder. Used by the auto-discover flow.
+			r.Post("/activate", h.handleActivateCamera)
+			// Manually trigger IP self-healing for a camera whose address changed.
+			r.Post("/rediscover", h.handleRediscoverCamera)
+			// Xiaomi-specific PTZ and device info endpoints
+			r.Route("/xiaomi", func(r chi.Router) {
+				r.Post("/ptz/move", h.handleXiaomiPTZMove)
+				r.Post("/ptz/stop", h.handleXiaomiPTZStop)
+				r.Get("/device-info", h.handleXiaomiDeviceInfo)
+				// Xiaomi two-way audio endpoints
+				r.Post("/two-way-audio/start", h.handleStartTwoWayAudio)
+				r.Post("/two-way-audio/stop", h.handleStopTwoWayAudio)
+			})
+		})
+	})
+	// Push-out relay status (per-camera) — flat route, kept with cameras
+	r.Get("/api/cameras/{id}/push-status", h.handleCameraPushStatus)
+	// Per-camera health (flat route)
+	r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
+}

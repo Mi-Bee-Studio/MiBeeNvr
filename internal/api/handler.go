@@ -231,7 +231,35 @@ func (h *Handler) Close() {
 func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
 
-	// Public routes with rate limiting on health/readyz
+	// Public routes (rate-limited health/readyz/capabilities/events)
+	h.registerPublicRoutes(r)
+	// Anonymous routes (login, setup, public playback, model serving)
+	h.registerAnonymousRoutes(r)
+
+	// Protected routes (behind authMW)
+	r.Group(func(r chi.Router) {
+		r.Use(h.authMW)
+		h.registerRecordingRoutes(r)
+		h.registerCameraRoutes(r)
+		h.registerSystemRoutes(r)
+		h.registerMergeRoutes(r)
+		h.registerTimelapseRoutes(r)
+		h.registerONVIFRoutes(r)
+		h.registerArchiveRoutes(r)
+		h.registerXiaomiRoutes(r)
+		h.registerHealthRoutes(r)
+		h.registerRelayRoutes(r)
+		h.registerTranscodeRoutes(r)
+		h.registerAIRoutes(r)
+		h.registerTelemetryRoute(r)
+	})
+
+	return r
+}
+
+// registerPublicRoutes registers rate-limited public endpoints (health, readyz,
+// capabilities, generic SSE events). These are callable without authentication.
+func (h *Handler) registerPublicRoutes(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		rl := middleware.NewRateLimiter(context.Background(), middleware.RateLimiterConfig{
 			MaxRequests: 60,
@@ -245,6 +273,11 @@ func (h *Handler) Routes() http.Handler {
 		// Generic event streaming (SSE)
 		r.Get("/api/events", h.handleEvents)
 	})
+}
+
+// registerAnonymousRoutes registers endpoints that require no authentication
+// but are NOT rate-limited (login, setup, public video playback, AI model file).
+func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
 	// Public routes
@@ -253,211 +286,6 @@ func (h *Handler) Routes() http.Handler {
 	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)      // Public for timelapse video playback
 	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording)     // HEAD for browser <video> probe
 	r.Get("/models/{filename}", h.handleServeModel)                    // Public for browser-side AI model loading
-
-	// Protected routes
-	r.Group(func(r chi.Router) {
-		r.Use(h.authMW)
-		r.Route("/api/recordings", func(r chi.Router) {
-			r.Get("/", h.handleListRecordings)
-			r.Get("/daily-summary", h.handleDailyRecordingSummary)
-			r.Get("/timeline", h.handleTimelineSegments)
-			r.Post("/", h.handleCreateRecording)
-			r.Post("/timeline/seek-event", h.handleTimelineSeekEvent)
-			r.Post("/batch-delete", h.handleBatchDeleteRecordings)
-			r.Route("/{id}", func(r chi.Router) {
-				r.Get("/", h.handleGetRecording)
-				r.Delete("/", h.handleDeleteRecording)
-				r.Patch("/", h.handleUpdateRecording)
-				r.Patch("/ai-status", h.handleUpdateRecordingAIStatus)
-				r.Get("/frames", h.handleListFrames)
-				r.Get("/playback", h.handlePlayback)
-				r.Get("/timelapse-frames", h.handleTimelapseFrames)
-				r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
-				r.Post("/retry-merge", h.handleRetryTimelapseMerge)
-			})
-		})
-		r.Route("/api/cameras", func(r chi.Router) {
-			r.Get("/", h.handleListCameras)
-			r.Post("/", h.handleCreateCamera)
-			r.Post("/test-connection", h.handleTestConnection)
-			r.Route("/{id}", func(r chi.Router) {
-				r.Get("/", h.handleGetCamera)
-				r.Put("/", h.handleUpdateCamera)
-				r.Delete("/", h.handleDeleteCamera)
-				// WebSocket stream (must be before HLS catch-all /stream/*)
-				r.Get("/stream/ws", h.handleStreamWS)
-				r.Get("/stream/*", h.handleHLSStream)
-				r.Delete("/stream", h.handleStopHLSStream)
-				// WebRTC WHEP endpoints
-				r.Post("/stream/webrtc", h.handleCreateWHEPSession)
-				r.Delete("/stream/webrtc/{session}", h.handleDeleteWHEPSession)
-				// HTTP-FLV stream
-				r.Get("/stream.flv", h.handleFLVStream)
-				r.Get("/stream.mjpeg", h.handleMjpegStream)
-				r.Get("/latest-frame", h.handleLatestFrame)
-				// Per-camera protocols
-				r.Get("/protocols", h.handleCameraProtocols)
-				r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
-				r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
-				r.Post("/ptz/move", h.handlePTZMove)
-				r.Post("/ptz/stop", h.handlePTZStop)
-				r.Get("/ptz/status", h.handlePTZStatus)
-				r.Get("/ptz/presets", h.handlePTZGetPresets)
-				r.Post("/ptz/presets", h.handlePTZCreatePreset)
-				r.Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
-				r.Delete("/ptz/presets/{token}", h.handlePTZDeletePreset)
-				r.Get("/snapshot/uri", h.handleSnapshotGetUri)
-				r.Get("/imaging/settings", h.handleImagingGetSettings)
-				r.Put("/imaging/settings", h.handleImagingSetSettings)
-				r.Get("/imaging/options", h.handleImagingGetOptions)
-				// Device management
-				r.Post("/onvif/reboot", h.handleONVIFReboot)
-				r.Get("/onvif/network", h.handleONVIFGetNetwork)
-				r.Put("/onvif/network", h.handleONVIFSetNetwork)
-				r.Get("/onvif/users", h.handleONVIFGetUsers)
-				r.Post("/onvif/users", h.handleONVIFCreateUsers)
-				r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
-				r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
-				r.Get("/snapshot", h.handleSnapshot)
-				r.Get("/merge-config", h.handleGetCameraMergeConfig)
-				r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
-				r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
-				r.Get("/stats", h.handleCameraRecordingStats)
-				// Per-camera timelapse configuration
-				r.Get("/timelapse", h.handleGetCameraTimelapse)
-				r.Put("/timelapse", h.handlePutCameraTimelapse)
-				// Camera-specific events (SSE)
-				r.Get("/events", h.handleCameraEvents)
-				r.Post("/start", h.handleStartCamera)
-				r.Post("/stop", h.handleStopCamera)
-				// Activate a pending_activation camera: supply credentials and start
-				// its recorder. Used by the auto-discover flow.
-				r.Post("/activate", h.handleActivateCamera)
-				// Manually trigger IP self-healing for a camera whose address changed.
-				r.Post("/rediscover", h.handleRediscoverCamera)
-				// Xiaomi-specific PTZ and device info endpoints
-				r.Route("/xiaomi", func(r chi.Router) {
-					r.Post("/ptz/move", h.handleXiaomiPTZMove)
-					r.Post("/ptz/stop", h.handleXiaomiPTZStop)
-					r.Get("/device-info", h.handleXiaomiDeviceInfo)
-					// Xiaomi two-way audio endpoints
-					r.Post("/two-way-audio/start", h.handleStartTwoWayAudio)
-					r.Post("/two-way-audio/stop", h.handleStopTwoWayAudio)
-				})
-			})
-		})
-		r.Get("/api/stats", h.handleStats)
-		r.Get("/api/stats/system", h.handleSystemStats)
-		r.Get("/api/stats/trends", h.handleStatsTrends)
-		r.Get("/api/settings", h.handleGetSettings)
-		r.Put("/api/settings", h.handleUpdateSettings)
-		r.Post("/api/settings/api-keys", h.handleGenerateAPIKey)
-		r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
-		r.Get("/api/settings/merge", h.handleGetMergeSettings)
-		r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
-		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
-		r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
-		r.Get("/api/settings/auto-discover", h.handleGetAutoDiscoverSettings)
-		r.Put("/api/settings/auto-discover", h.handleUpdateAutoDiscoverSettings)
-		r.Get("/api/settings/transcoding", h.handleGetTranscodingSettings)
-		r.Put("/api/settings/transcoding", h.handleUpdateTranscodingSettings)
-		r.Post("/api/backup", h.handleBackup)
-		r.Get("/api/backups", h.handleListBackups)
-		r.Post("/api/onvif/discover", h.handleONVIFDiscover)
-		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
-		r.Post("/api/onvif/probe", h.handleONVIFProbe)
-		// Xiaomi two-way audio upstream WebSocket
-		r.Get("/api/ws/camera/{id}/audio-upstream", h.handleAudioUpstreamWS)
-		r.Get("/api/merge/status", h.handleMergeStatus)
-		r.Get("/api/merge/pending", h.handleMergePending)
-		r.Post("/api/merge/reclassify", h.handleMergeReclassify)
-		r.Post("/api/merge/backfill", h.handleMergeBackfillAll)                 // Backfill all cameras
-		r.Post("/api/merge/consolidate", h.handleMergeConsolidate)              // Merge short recordings into longer ones
-		r.Post("/api/cameras/{id}/merge/backfill", h.handleMergeBackfillCamera) // Backfill single camera
-		r.Get("/api/cameras/{id}/timeline/gaps", h.handleTimelineGaps)          // Recording gaps for timeline
-		// Timelapse endpoints
-		r.Get("/api/timelapse", h.handleTimelapseList)
-		r.Get("/api/timelapse/status", h.handleTimelapseStatus)
-		r.Post("/api/timelapse/batch-merge", h.handleTimelapseBatchMerge)
-		// Periodic-merge outputs (timelapse_merges table). Registered BEFORE the
-		// /api/timelapse/{id} wildcard routes so the static /merges paths win.
-		r.Get("/api/timelapse/merges", h.handleListTimelapseMerges)
-		r.Get("/api/timelapse/merges/{id}", h.handleGetTimelapseMerge)
-		r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
-		r.Delete("/api/timelapse/merges/{id}", h.handleDeleteTimelapseMerge)
-		r.Post("/api/timelapse/{id}/merge", h.handleTimelapseMerge)
-		r.Delete("/api/timelapse/{cameraId}/merge", h.handleTimelapseMergeCancel)
-		r.Post("/api/timelapse/{id}/pause", h.handleTimelapsePause)
-		r.Post("/api/timelapse/{id}/resume", h.handleTimelapseResume)
-		r.Get("/api/timelapse/{id}", h.handleTimelapseGet)
-		r.Delete("/api/timelapse/{id}", h.handleTimelapseDelete)
-		r.Post("/api/timelapse/{id}/download", h.handleTimelapseDownload)
-		r.Get("/api/timelapse/merge/progress/{cameraId}", h.handleTimelapseMergeProgress)
-		r.Get("/api/protocols", h.handleProtocols)
-		r.Get("/api/features", h.handleGetFeatures)
-		r.Put("/api/features", h.handleUpdateFeatures)
-		// Archive endpoints
-		r.Route("/api/archives", func(r chi.Router) {
-			r.Get("/", h.handleListArchives)
-			r.Get("/{cameraID}/recordings", h.handleListArchiveRecordings)
-			r.Delete("/{cameraID}", h.handleDeleteArchiveGroup)
-			r.Delete("/{cameraID}/recordings/{recordingID}", h.handleDeleteArchiveRecording)
-			r.Put("/{cameraID}/retention", h.handleSetArchiveRetention)
-		})
-		// Xiaomi cloud auth and device discovery
-		r.Route("/api/xiaomi", func(r chi.Router) {
-			r.Post("/auth", h.handleXiaomiAuth)
-			r.Post("/captcha", h.handleXiaomiCaptcha)
-			r.Post("/verify", h.handleXiaomiVerify)
-			r.Get("/devices", h.handleXiaomiDevices)
-			r.Post("/sync", h.handleXiaomiSync)
-			r.Get("/check-vendor", h.handleCheckVendor)
-		})
-		// Health monitoring endpoints
-		r.Get("/api/health/status", h.handleGetHealthStatus)
-		r.Get("/api/health/events", h.handleGetHealthEvents)
-		r.Get("/api/health/stability", h.handleGetStability)
-		r.Get("/api/health/stability/{camera_id}", h.handleGetCameraStability)
-		r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
-		// Push-out relay status (per-camera)
-		r.Get("/api/cameras/{id}/push-status", h.handleCameraPushStatus)
-		// Relay platform presets
-		r.Get("/api/relay-presets", h.handleListRelayPresets)
-		r.Get("/api/relay-presets/{name}", h.handleGetRelayPreset)
-		// Relay capabilities
-		r.Get("/api/relay/capabilities", h.handleRelayCapabilities)
-		// Transcoding endpoints
-		r.Get("/api/transcoding/check", h.handleTranscodingCheck)
-		r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)
-		r.Post("/api/transcoding/ffmpeg/download", h.handleFFmpegDownload)
-		r.Post("/api/transcoding/ffmpeg/download/retry", h.handleFFmpegDownloadRetry)
-		r.Get("/api/transcoding/status", h.handleTranscodingStatus)
-		r.Get("/api/transcoding/tasks", h.handleTranscodingTasksList)
-		r.Post("/api/transcoding/tasks", h.handleTranscodingTaskCreate)
-		r.Delete("/api/transcoding/tasks/{id}", h.handleTranscodingTaskCancel)
-		r.Post("/api/transcoding/tasks/{id}/retry", h.handleTranscodingTaskRetry)
-		r.Post("/api/transcoding/backfill", h.handleTranscodingBackfill)
-		r.Get("/api/transcoding/cameras", h.handleTranscodingCameraConfigs)
-		r.Get("/api/transcoding/recordings-without-transcode", h.handleTranscodingRecordingsWithoutTranscode)
-		// Telemetry
-		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
-		// AI endpoints
-		r.Get("/api/ai/status", h.aiHandler.handleAIStatus)
-		r.Put("/api/ai/config", h.aiHandler.handleAIUpdateConfig)
-		r.Get("/api/ai/zones", h.aiHandler.handleAIZones)
-		r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
-		r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
-		r.Delete("/api/ai/zones/{id}", h.aiHandler.handleAIDeleteZone)
-		// AI event endpoints (MiBeeVision collaboration)
-		// POST /api/ai/events requires API Key auth (checked inside handler)
-		r.Post("/api/ai/events", h.handleCreateAIEvent)
-		// GET endpoints are user-authenticated (behind the group's authMW)
-		r.Get("/api/ai/events", h.handleListAIEvents)
-		r.Get("/api/ai/events/{id}", h.handleGetAIEvent)
-		r.Get("/api/ai/stats", h.handleGetAIEventStats)
-	})
-
-	return r
 }
 
 // --- Helpers ---
