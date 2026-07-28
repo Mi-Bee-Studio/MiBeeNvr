@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getFeatures, updateFeatures, getAiSettings, saveAiSettings, detectAiBackend, listCameras, getFFmpegStatus, getAiStatus, updateAiConfig } from '$lib/api';
+  import { getAiSettings, saveAiSettings, detectAiBackend, listCameras, getFFmpegStatus, getAiStatus, updateAiConfig } from '$lib/api';
   import { getPerCameraAiSettings, savePerCameraAiSettings, getAIZones, createAIZone, deleteAIZone } from '$lib/api';
   import { getSettings, generateAPIKey, revokeAPIKey } from '$lib/api';
   import { getAutoDiscoverSettings, updateAutoDiscoverSettings, type AutoDiscoverSettings } from '$lib/api/settings';
@@ -12,6 +12,7 @@
   import { showToast } from '$lib/toast';
   import { friendlyError } from '$lib/errors';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
+  import Toggle from '$lib/components/Toggle.svelte';
   import SettingsTranscodingCard from './SettingsTranscodingCard.svelte';
 
   // AI Detection state
@@ -21,13 +22,10 @@
   let aiDetectedBackend = $state('');
   let aiSettingsSaving = $state(false);
 
-  // Feature toggles state
-  let featureFlags = $state<Record<string, boolean>>({});
-  let featuresLoading = $state(true);
-  let featuresSaving = $state(false);
-  let originalFeatureFlags = $state<Record<string, boolean>>({});
+  // Feature toggles removed (#153) — protocol enable/disable caused streaming
+  // accidents. The Player Orchestrator handles protocol selection automatically.
 
-  // Camera list for feature toggle affected count
+  // Camera list (still needed for per-camera AI)
   let allCameras = $state<Camera[]>([]);
 
   // FFmpeg status for Transcoding badge
@@ -60,8 +58,6 @@
   let adDirty = $derived(
     !!adSettings && (
       adEnabled !== adSettings.enabled ||
-      Number(adScanInterval) !== adSettings.scan_interval ||
-      adListenForHello !== adSettings.listen_for_hello ||
       adNetworkInterface !== adSettings.network_interface ||
       adDefaultUsername !== adSettings.default_username ||
       adIgnoreScopes !== (adSettings.ignore_scopes ?? []).join(', ') ||
@@ -69,8 +65,7 @@
     )
   );
 
-  // Feature flags dirty tracking
-  let featuresDirty = $derived(JSON.stringify(featureFlags) !== JSON.stringify(originalFeatureFlags));
+  // Feature flags dirty tracking removed (#153).
 
   // Derived badges
   let aiBadge = $derived(aiEnabled
@@ -87,33 +82,9 @@
   });
 
   // Affected camera count for a protocol
-  function getAffectedCameraCount(protocol: string): number {
-    return allCameras.filter(c => c.protocol === protocol || c.protocol.startsWith(protocol)).length;
-  }
+  // getAffectedCameraCount removed (#153) — feature toggles card was removed.
 
-  async function loadFeatures() {
-    featuresLoading = true;
-    try {
-      const data = await getFeatures();
-      featureFlags = data.protocols;
-      originalFeatureFlags = { ...data.protocols };
-    } catch (e) { console.warn('Failed to load feature flags:', e); featureFlags = {}; } finally {
-      featuresLoading = false;
-    }
-  }
-
-  async function saveFeatures() {
-    featuresSaving = true;
-    try {
-      await updateFeatures({ protocols: featureFlags });
-      originalFeatureFlags = { ...featureFlags };
-      showToast(t('settings.featureToggles.saved'), 'success');
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : t('settings.featureToggles.error'), 'error');
-    } finally {
-      featuresSaving = false;
-    }
-  }
+  // loadFeatures/saveFeatures removed (#153) — feature toggles card was removed.
 
   async function loadCameraList() {
     try {
@@ -343,8 +314,6 @@ async function handleDeleteZone(zoneName: string) {
       adSettings = cfg;
       adOriginal = cfg;
       adEnabled = cfg.enabled;
-      adScanInterval = cfg.scan_interval;
-      adListenForHello = cfg.listen_for_hello;
       adNetworkInterface = cfg.network_interface;
       adDefaultUsername = cfg.default_username;
       adHasPassword = cfg.has_default_password;
@@ -361,8 +330,6 @@ async function handleDeleteZone(zoneName: string) {
     try {
       const payload: Record<string, unknown> = {
         enabled: adEnabled,
-        scan_interval: Number(adScanInterval),
-        listen_for_hello: adListenForHello,
         network_interface: adNetworkInterface,
         default_username: adDefaultUsername,
         ignore_scopes: adIgnoreScopes.split(',').map((s) => s.trim()).filter(Boolean),
@@ -381,7 +348,6 @@ async function handleDeleteZone(zoneName: string) {
   }
 
   onMount(() => {
-    loadFeatures();
     loadAiSettings();
     loadCameraList();
     loadPerCameraAiSettings();
@@ -400,17 +366,8 @@ async function handleDeleteZone(zoneName: string) {
 >
   <div class="flex items-center justify-between mb-4">
     <span class="text-sm th-text-secondary">{t('settings.ai.enabled')}</span>
-    <button
-      id="ai-toggle" aria-label={t('settings.ai.title')}
-      type="button"
-      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {aiEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
-      onclick={() => { aiEnabled = !aiEnabled; }}
-      onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aiEnabled = !aiEnabled; } }}
-      role="switch"
-      aria-checked={aiEnabled}
-    >
-      <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {aiEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
-    </button>
+    <Toggle checked={aiEnabled} onChange={(v) => { aiEnabled = v; }} label={t('settings.ai.title')} />
+  </div>
 
   {#if aiEnabled}
     <div class="space-y-6">
@@ -432,23 +389,9 @@ async function handleDeleteZone(zoneName: string) {
         <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.confidenceHint')}</p>
       </div>
 
-      <!-- Frame Skip -->
-      <div>
-        <div class="flex items-center justify-between mb-2">
-          <label class="input-label" for="ai-frame-skip">{t('settings.ai.frameSkip')}</label>
-          <span class="text-sm font-medium th-text-primary">{aiFrameSkip}</span>
-        </div>
-        <input
-          id="ai-frame-skip"
-          type="range"
-          class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
-          bind:value={aiFrameSkip}
-          min="1"
-          max="10"
-          step="1"
-        />
-        <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.frameSkipHint')}</p>
-      </div>
+      <!-- Frame Skip removed (#153): internal performance tuning parameter.
+           The backend default (3) is optimal for all camera counts; exposing
+           it in the UI added cognitive load with no user-perceivable benefit. -->
 
       <!-- Model & Backend Info -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -485,44 +428,13 @@ async function handleDeleteZone(zoneName: string) {
 >
   <div class="flex items-center justify-between mb-4">
     <span class="text-sm th-text-secondary">{t('settings.autoDiscover.enabled')}</span>
-    <button
-      aria-label={t('settings.autoDiscover.enabled')}
-      type="button"
-      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {adEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
-      onclick={() => { adEnabled = !adEnabled; }}
-      onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); adEnabled = !adEnabled; } }}
-      role="switch"
-      aria-checked={adEnabled}
-    >
-      <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {adEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
-    </button>
+    <Toggle checked={adEnabled} onChange={(v) => { adEnabled = v; }} label={t('settings.autoDiscover.enabled')} />
   </div>
 
   {#if adEnabled}
     <div class="space-y-6">
-      <!-- Scan interval -->
-      <div>
-        <label class="input-label" for="ad-scan">{t('settings.autoDiscover.scanInterval')}</label>
-        <input id="ad-scan" type="number" min="30" step="10" class="input mt-1 w-full" bind:value={adScanInterval} />
-        <p class="text-xs th-text-tertiary mt-1">{t('settings.autoDiscover.scanIntervalHint')}</p>
-      </div>
-
-      <!-- Listen for Hello -->
-      <div class="flex items-center justify-between">
-        <div>
-          <span class="text-sm th-text-primary">{t('settings.autoDiscover.listenForHello')}</span>
-          <p class="text-xs th-text-tertiary mt-0.5">{t('settings.autoDiscover.listenForHelloHint')}</p>
-        </div>
-        <button
-          aria-label={t('settings.autoDiscover.listenForHello')}
-          type="button"
-          class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none {adListenForHello ? 'bg-blue-600' : 'th-bg-tertiary'}"
-          onclick={() => { adListenForHello = !adListenForHello; }}
-          role="switch" aria-checked={adListenForHello}
-        >
-          <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {adListenForHello ? 'translate-x-6' : 'translate-x-1'}"></span>
-        </button>
-      </div>
+      <!-- Scan interval removed (#153): internal parameter, backend default (60s) is optimal. -->
+      <!-- Listen for Hello removed (#153): technical detail, backend default (on) is correct. -->
 
       <!-- Network interface -->
       <div>
@@ -886,62 +798,10 @@ async function handleDeleteZone(zoneName: string) {
   </div>
 {/if}
 
-<!-- Feature Toggles -->
-<SettingsCard
-  title={t('settings.featureToggles.title')}
-  subtitle={t('settings.advanced.features.description')}
->
-  {#if featuresLoading}
-    <div class="flex items-center gap-2 py-4 th-text-muted">
-      <span class="spinner"></span>
-      <span class="text-sm">{t('common.loading')}</span>
-    </div>
-  {:else}
-    <div class="space-y-4">
-      {#each Object.entries(featureFlags) as [protocol, enabled] (protocol)}
-        <div class="p-4 rounded-md th-bg-hover border th-border">
-          <div class="flex items-center justify-between">
-            <div class="min-w-0 flex-1">
-              <div class="font-medium th-text-primary">{t(`settings.featureToggles.protocols.${protocol}`)}</div>
-              {#if !enabled}
-                <div class="flex items-center gap-1 mt-1 text-xs th-color-warning">
-                  <AlertTriangle size={12} />
-                  <span>{t('settings.featureToggles.warning')}{#if getAffectedCameraCount(protocol) > 0} <span class="th-color-danger">({getAffectedCameraCount(protocol)} {t('cameras.title').toLowerCase()})</span>{/if}</span>
-                </div>
-              {/if}
-            </div>
-            <div class="flex items-center gap-3">
-              <button
-                id="protocol-toggle-{protocol}" aria-label={t(`settings.featureToggles.protocols.${protocol}`)}
-                type="button"
-                class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {enabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
-                onclick={() => { featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; }}
-                onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); featureFlags[protocol] = !featureFlags[protocol]; featureFlags = featureFlags; } }}
-                role="switch"
-                aria-checked={enabled}
-              >
-                <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {enabled ? 'translate-x-6' : 'translate-x-1'}"></span>
-              </button>
-            </div>
-          </div>
-        </div>
-      {/each}
-    </div>
-  {/if}
-
-  {#if featuresDirty}
-    <div class="flex justify-end mt-4 pt-4 border-t th-border">
-      <button type="button" class="btn btn-primary" onclick={saveFeatures} disabled={featuresSaving}>
-        {#if featuresSaving}
-          <span class="spinner mr-2"></span>
-          {t('settings.featureToggles.saving')}
-        {:else}
-          {t('settings.featureToggles.save')}
-        {/if}
-      </button>
-    </div>
-  {/if}
-</SettingsCard>
+<!-- Feature Toggles (protocol enable/disable) removed (#153): disabling a
+     protocol breaks streaming for cameras using it, and the Player Orchestrator
+     already enables protocols on demand. Keeping the toggles caused
+     "I disabled RTSP and now all cameras are black" accidents. -->
 
 <!-- Transcoding -->
 <SettingsCard
