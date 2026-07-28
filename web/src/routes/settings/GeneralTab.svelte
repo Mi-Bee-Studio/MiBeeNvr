@@ -16,7 +16,7 @@
   // Form state
   let retentionDays = $state(30);
   let diskThresholdPercent = $state(90);
-  let checkInterval = $state('1h');
+  // checkInterval removed (#153) — backend default (1h) is optimal.
   let selectedTimezone = $state('Local');
   let timezoneOptions = $derived([
     { value: 'Local', label: t('settings.timezoneLocal') },

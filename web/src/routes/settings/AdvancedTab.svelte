@@ -7,7 +7,7 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
-  // SettingsStreamingCard import removed (#153) — WebRTC/FLV cards removed.
+  import SettingsStreamingCard from './SettingsStreamingCard.svelte';
 
   let loading = $state(true);
   let saving = $state(false);

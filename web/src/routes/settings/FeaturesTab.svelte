@@ -47,8 +47,7 @@
   let adSaving = $state(false);
   // Local form fields (so the toggle/inputs are reactive before save).
   let adEnabled = $state(false);
-  let adScanInterval = $state(60);
-  let adListenForHello = $state(true);
+  // adScanInterval/adListenForHello removed (#153) — backend defaults are optimal.
   let adNetworkInterface = $state('');
   let adDefaultUsername = $state('');
   let adDefaultPassword = $state(''); // only sent when the user types a new one
