@@ -99,6 +99,15 @@ type Metrics struct {
 	SQLiteReadInUseConnections prometheus.Gauge   // read pool
 	SQLiteReadWaitCount        prometheus.Counter // read pool: times a conn was unavailable
 	SQLiteReadWaitDuration     prometheus.Gauge   // read pool: cumulative seconds waited for a conn
+
+	// Codec probe metrics — observability for the H.265 codec-probe pipeline
+	// (recorder probe → DB persist → /protocols → orchestrator → player). The
+	// chain is the project's largest complexity/defect source (#112 black-screen
+	// was a silent probe failure). These make probe outcome + latency visible to
+	// Prometheus so stale-encoding issues surface before users see black video.
+	CodecProbeTotal           *prometheus.CounterVec   // labels: camera_id, encoding, result (ok|fail|unsupported)
+	CodecProbeDurationSeconds *prometheus.HistogramVec // labels: camera_id — RTSP DESCRIBE probe latency
+	ResolvedEncoding          *prometheus.GaugeVec     // labels: camera_id, encoding — last persisted encoding (alert on drift)
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -467,6 +476,21 @@ func NewMetrics() *Metrics {
 		Help: "Total seconds callers waited for a read-pool connection (cumulative since start).",
 	})
 
+	// Codec probe metrics — see the Metrics struct comment for rationale (#140).
+	codecProbeTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_codec_probe_total",
+		Help: "Total codec probes by camera, resolved encoding, and result. result=ok: live RTSP DESCRIBE resolved the codec; unsupported: probe empty, fell back to a claimed/default encoding; fail: probe empty AND no fallback (defaulted to H264 — highest stale-encoding risk, see #112).",
+	}, []string{"camera_id", "encoding", "result"})
+	codecProbeDurationSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "nvr_codec_probe_duration_seconds",
+		Help:    "Latency of the RTSP DESCRIBE codec probe in seconds, partitioned by camera. High p99 indicates slow/unreachable devices.",
+		Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+	}, []string{"camera_id"})
+	resolvedEncoding := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_resolved_encoding",
+		Help: "Last codec resolved for a camera and persisted to DB (value is always 1; the encoding label is the signal). Compare against the recorder's live codec to detect stale persisted encoding — a persistent mismatch indicates a persistence bug.",
+	}, []string{"camera_id", "encoding"})
+
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -543,6 +567,9 @@ func NewMetrics() *Metrics {
 		sqliteReadInUseConnections,
 		sqliteReadWaitCount,
 		sqliteReadWaitDuration,
+		codecProbeTotal,
+		codecProbeDurationSeconds,
+		resolvedEncoding,
 	)
 
 	return &Metrics{
@@ -622,6 +649,9 @@ func NewMetrics() *Metrics {
 		SQLiteReadInUseConnections:     sqliteReadInUseConnections,
 		SQLiteReadWaitCount:            sqliteReadWaitCount,
 		SQLiteReadWaitDuration:         sqliteReadWaitDuration,
+		CodecProbeTotal:                codecProbeTotal,
+		CodecProbeDurationSeconds:      codecProbeDurationSeconds,
+		ResolvedEncoding:               resolvedEncoding,
 	}
 }
 

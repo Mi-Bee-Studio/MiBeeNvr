@@ -377,6 +377,15 @@ func (cm *CameraManager) ensureEncoding(cameraID string) {
 			}
 			logger.Info("auto-persisted encoding for camera", logArgs...)
 		}
+		// Surface the resolved encoding as a gauge for stale-encoding alerts
+		// (#140): compare this label against the recorder's live codec — a
+		// persistent mismatch signals a persistence bug. Value is always 1; the
+		// encoding label is the signal. Emitted on every resolution (including
+		// the idempotent alreadySet early-return above is skipped on purpose,
+		// since nothing changed).
+		if cm.metrics != nil {
+			cm.metrics.ResolvedEncoding.WithLabelValues(cameraID, encLower).Set(1)
+		}
 		// Best-effort DB persist. Single-column UPDATEs (not full-row upsert) so
 		// they can't be clobbered by a concurrent UpsertCamera rebuilding the row.
 		if cm.db != nil {

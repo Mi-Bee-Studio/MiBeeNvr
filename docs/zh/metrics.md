@@ -341,7 +341,43 @@ rate(nvr_remote_log_dropped_total[5m]) > 0
 
 ---
 
-## 13. 内置运行时指标
+## 13. 编码探测指标
+
+观测编码检测链路（recorder 探测 → DB 持久化 → `/protocols` → orchestrator → 播放器）。H.265 链路是本项目最大的复杂度与缺陷来源——#112（H.265 黑屏）就是一次**静默的探测失败**。这些指标让探测结果与延迟可观测，使编码陈旧问题在用户看到黑屏之前就能被发现。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_codec_probe_total` | Counter | `camera_id`, `encoding`, `result` | 按解析出的编码与结果统计的探测次数 |
+| `nvr_codec_probe_duration_seconds` | Histogram | `camera_id` | RTSP DESCRIBE 编码探测耗时 |
+| `nvr_resolved_encoding` | Gauge | `camera_id`, `encoding` | 最近解析并持久化的编码（值恒为 `1`，`encoding` 标签才是信号） |
+
+**`nvr_codec_probe_total` 的 `result` 标签取值：**
+- `ok` — 实时 RTSP DESCRIBE 成功解析编码（权威结果）
+- `unsupported` — 探测返回空，回退到声明/默认编码（设备可用，但未从实时流验证）
+- `fail` — 探测返回空**且**无声明值，默认为 H264。陈旧编码风险最高（见 #112）。
+
+**`encoding` 标签取值：** `h264`、`h265`、`mjpeg`、`jpeg`（小写，`MJPEG`→`jpeg` 归一化）。
+
+**用法 / 告警：**
+
+```promql
+# 陈旧编码嫌疑：单相机 5 分钟内探测失败率 > 50%
+sum(rate(nvr_codec_probe_total{result="fail"}[5m]))
+  by (camera_id)
+  / sum(rate(nvr_codec_probe_total[5m])) by (camera_id) > 0.5
+
+# 慢/不可达设备：探测延迟 p99 偏高
+histogram_quantile(0.99, sum(rate(nvr_codec_probe_duration_seconds_bucket[5m])) by (le, camera_id)) > 2.5
+
+# 持久化编码漂移：nvr_resolved_encoding 与其他路径上报的实时编码不符
+# —— 应作为持久化 bug 排查。
+```
+
+**说明：** 由 `ONVIFRecorder.detectEncoding()`（计数器 + 耗时）和 `ensureEncoding`（resolved gauge）发出。探测耗时仅含 RTSP DESCRIBE 往返，不含 ONVIF profile 回退。直方图桶：`0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10` 秒。
+
+---
+
+## 14. 内置运行时指标
 
 除了自定义的 NVR 指标外，还注册了以下标准收集器：
 

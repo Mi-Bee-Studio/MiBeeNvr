@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -167,6 +168,81 @@ func TestHLSFramesDroppedCounter(t *testing.T) {
 		}
 	}
 	t.Fatal("expected nvr_hls_frames_dropped_total metric family")
+}
+
+// TestCodecProbeMetrics covers the H.265 codec-probe observability metrics (#140):
+// the probe counter must be partitioned by result (ok/unsupported/fail), the
+// duration histogram must record observations, and the resolved-encoding gauge
+// must carry the encoding label that stale-encoding alerts compare against.
+func TestCodecProbeMetrics(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	m := NewMetrics()
+	require.NotNil(t, m.CodecProbeTotal)
+	require.NotNil(t, m.CodecProbeDurationSeconds)
+	require.NotNil(t, m.ResolvedEncoding)
+
+	// Simulate the three probe outcomes detectEncoding records.
+	m.CodecProbeTotal.WithLabelValues("cam-onvif", "h265", "ok").Inc()
+	m.CodecProbeTotal.WithLabelValues("cam-onvif", "h265", "ok").Inc()
+	m.CodecProbeTotal.WithLabelValues("cam-onvif", "h264", "unsupported").Inc()
+	m.CodecProbeTotal.WithLabelValues("cam-flaky", "h264", "fail").Inc()
+
+	// Duration observations.
+	m.CodecProbeDurationSeconds.WithLabelValues("cam-onvif").Observe(0.12)
+	m.CodecProbeDurationSeconds.WithLabelValues("cam-onvif").Observe(2.1)
+
+	// Resolved encoding — value is always 1; the label is the signal.
+	m.ResolvedEncoding.WithLabelValues("cam-onvif", "h265").Set(1)
+
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+
+	byName := make(map[string]*dto.MetricFamily, len(families))
+	for _, f := range families {
+		byName[f.GetName()] = f
+	}
+
+	// Counter: 3 distinct (camera,encoding,result) combos
+	// (cam-onvif/h265/ok, cam-onvif/h264/unsupported, cam-flaky/h264/fail).
+	probeFam, ok := byName["nvr_codec_probe_total"]
+	require.True(t, ok, "expected nvr_codec_probe_total metric family")
+	require.Len(t, probeFam.GetMetric(), 3, "3 distinct label combinations")
+
+	// ok/h265 incremented twice → counter value 2.
+	var okCount float64
+	for _, met := range probeFam.GetMetric() {
+		labels := labelMap(met)
+		if labels["camera_id"] == "cam-onvif" && labels["encoding"] == "h265" && labels["result"] == "ok" {
+			okCount = met.GetCounter().GetValue()
+		}
+	}
+	require.Equal(t, float64(2), okCount, "ok/h265 should have count 2")
+
+	// Duration histogram: 2 observations for cam-onvif.
+	durFam, ok := byName["nvr_codec_probe_duration_seconds"]
+	require.True(t, ok, "expected nvr_codec_probe_duration_seconds metric family")
+	require.NotEmpty(t, durFam.GetMetric(), "duration histogram should have samples")
+	require.Equal(t, uint64(2), durFam.GetMetric()[0].GetHistogram().GetSampleCount(),
+		"cam-onvif duration histogram should have 2 observations")
+
+	// Resolved encoding gauge: value 1, encoding label h265.
+	encFam, ok := byName["nvr_resolved_encoding"]
+	require.True(t, ok, "expected nvr_resolved_encoding metric family")
+	require.NotEmpty(t, encFam.GetMetric())
+	require.Equal(t, float64(1), encFam.GetMetric()[0].GetGauge().GetValue(),
+		"resolved_encoding gauge value should always be 1")
+	require.Equal(t, "h265", labelMap(encFam.GetMetric()[0])["encoding"],
+		"resolved_encoding gauge should carry the encoding label")
+}
+
+// labelMap converts a metric's labels to a string map for assertion.
+func labelMap(m *dto.Metric) map[string]string {
+	out := make(map[string]string, len(m.GetLabel()))
+	for _, l := range m.GetLabel() {
+		out[l.GetName()] = l.GetValue()
+	}
+	return out
 }
 
 func TestNewStreamingMetrics(t *testing.T) {
