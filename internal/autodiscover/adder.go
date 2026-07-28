@@ -22,6 +22,7 @@ package autodiscover
 import (
 	"context"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -69,12 +70,13 @@ type dedupKey struct {
 }
 
 // makeDedupKey returns the dedup key for a device. serial takes precedence;
-// empty serial falls back to endpoint (legacy behavior).
+// empty serial falls back to a normalized endpoint (so http://x:80 and
+// http://x produce the same key).
 func makeDedupKey(endpoint, serial string) dedupKey {
 	if s := strings.TrimSpace(serial); s != "" {
 		return dedupKey{identity: "serial:" + s}
 	}
-	return dedupKey{identity: "endpoint:" + endpoint}
+	return dedupKey{identity: "endpoint:" + normalizeEndpoint(endpoint)}
 }
 
 // Adder is the shared enrollment pipeline invoked by both the passive listener
@@ -183,14 +185,58 @@ func (a *Adder) HandleDiscovered(ctx context.Context, dev onvif.DiscoveredDevice
 // canonicalEndpoint returns the device service URL to use as the dedup key and
 // the camera's ONVIFEndpoint. Prefers the explicit Endpoint field; falls back to
 // the first XAddrs entry. Empty if neither is present (device not usable).
+//
+// The result is normalized via normalizeEndpoint so that semantically-identical
+// endpoints (e.g. http://1.2.3.4:80/... vs http://1.2.3.4/...) produce the same
+// string — critical for dedup and endpointChanged comparisons. Without this,
+// a device added via manual probe (which forces :80) would appear "changed" when
+// auto-discover later sees it via WS-Discovery Hello (device-controlled XAddr
+// format, often without :80), triggering a spurious recorder restart every
+// dedup window. Same bug class as the trailing-slash issue fixed in PR #123.
 func canonicalEndpoint(endpoint string, xaddrs []string) string {
 	if endpoint != "" {
-		return endpoint
+		return normalizeEndpoint(endpoint)
 	}
 	if len(xaddrs) > 0 {
-		return xaddrs[0]
+		return normalizeEndpoint(xaddrs[0])
 	}
 	return ""
+}
+
+// normalizeEndpoint canonicalizes an ONVIF device-service URL so that
+// semantically-identical endpoints compare equal. It:
+//   - lowercases the scheme and host (case-insensitive per RFC 3986)
+//   - elides the default port (:80 for http, :443 for https)
+//   - strips trailing slashes
+//
+// If the input is not a valid URL (unexpected for ONVIF XAddrs, but possible
+// from malformed firmware), it falls back to a best-effort strings.TrimRight
+// so the comparison never panics.
+func normalizeEndpoint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		// Fallback: at least strip trailing slashes (legacy behavior).
+		return strings.TrimRight(raw, "/")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	// Elide default ports.
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		port = ""
+	}
+	// Reconstruct the canonical form.
+	result := scheme + "://" + host
+	if port != "" {
+		result += ":" + port
+	}
+	path := strings.TrimRight(u.Path, "/")
+	result += path
+	return result
 }
 
 // matchesIgnoreScope reports whether any of the device's scopes contains any
@@ -283,7 +329,10 @@ func (a *Adder) findExistingCamera(ctx context.Context, endpoint, serial, stable
 // by the initial #121 fix, where a stable_id match unconditionally triggered
 // updateEndpointForRoaming).
 //
-// Comparison normalizes trailing slashes (mirrors AddCamera's endpoint dedup).
+// Comparison normalizes the URLs via normalizeEndpoint (lowercases scheme/host,
+// elides default ports :80/:443, strips trailing slashes) so that
+// semantically-identical endpoints from different discovery paths (manual probe
+// vs WS-Discovery Hello) compare equal — preventing spurious recorder restarts.
 // On DB error or missing row, returns true (fail-open: attempt the update, which
 // is idempotent and will no-op if the endpoint is in fact unchanged).
 func (a *Adder) endpointChanged(ctx context.Context, cameraID, discoveredEndpoint string) bool {
@@ -295,7 +344,7 @@ func (a *Adder) endpointChanged(ctx context.Context, cameraID, discoveredEndpoin
 		logger.Warn("roaming check: failed to read existing endpoint, failing open", "camera_id", cameraID, "error", err)
 		return true
 	}
-	return strings.TrimRight(existing, "/") != strings.TrimRight(discoveredEndpoint, "/")
+	return normalizeEndpoint(existing) != normalizeEndpoint(discoveredEndpoint)
 }
 
 // updateEndpointForRoaming updates an existing camera's ONVIF endpoint (and URL)

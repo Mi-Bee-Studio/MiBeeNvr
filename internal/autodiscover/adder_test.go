@@ -424,6 +424,102 @@ func TestEndpointChanged(t *testing.T) {
 	require(adder.endpointChanged(ctx, camID+"-nope", ep), "unknown camera must fail-open (true)")
 }
 
+// TestEndpointChanged_PortAndSchemeNormalization is the regression test for the
+// port/scheme normalization gap (issue #133): a device added via manual probe
+// (which forces :80) must NOT appear "changed" when auto-discover later sees it
+// via WS-Discovery Hello with a device-controlled XAddr format (often without
+// :80). Without normalization, this triggered a spurious recorder restart every
+// dedup window — same bug class as the trailing-slash issue (PR #123).
+func TestEndpointChanged_PortAndSchemeNormalization(t *testing.T) {
+	t.Helper()
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name       string
+		stored     string
+		discovered string
+		changed    bool
+	}{
+		// Port normalization: :80 is default for http → same endpoint.
+		{"explicit-80 vs no-port", "http://1.2.3.4:80/onvif/device_service", "http://1.2.3.4/onvif/device_service", false},
+		{"no-port vs explicit-80", "http://1.2.3.4/onvif/device_service", "http://1.2.3.4:80/onvif/device_service", false},
+		// Non-default port must still report changed.
+		{"port-80 vs port-81", "http://1.2.3.4:80/onvif/device_service", "http://1.2.3.4:81/onvif/device_service", true},
+		// HTTPS default port :443.
+		{"https-443 vs no-port", "https://1.2.3.4:443/onvif/device_service", "https://1.2.3.4/onvif/device_service", false},
+		// Scheme case-insensitive.
+		{"HTTP vs http", "HTTP://1.2.3.4/onvif/device_service", "http://1.2.3.4/onvif/device_service", false},
+		// Host case-insensitive.
+		{"uppercase-host", "http://CAMERA.LOCAL/onvif/device_service", "http://camera.local/onvif/device_service", false},
+		// Trailing slash still handled.
+		{"trailing-slash", "http://1.2.3.4:80/onvif/device_service", "http://1.2.3.4/onvif/device_service/", false},
+		// Different IP still changed.
+		{"different-ip", "http://1.2.3.4/onvif/device_service", "http://1.2.3.5/onvif/device_service", true},
+		// http vs https genuinely different (different listener).
+		{"http-vs-https", "http://1.2.3.4/onvif/device_service", "https://1.2.3.4/onvif/device_service", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			camID := "cam-norm-" + tc.name
+			if err := db.UpsertCamera(ctx, camID, "Cam", "onvif", "", "", "", "", tc.stored, "", "", "SERIAL-"+tc.name); err != nil {
+				t.Fatalf("UpsertCamera: %v", err)
+			}
+			adder := NewAdder(&config.AutoDiscoverConfig{}, nil, db, nil)
+			got := adder.endpointChanged(ctx, camID, tc.discovered)
+			if got != tc.changed {
+				t.Errorf("endpointChanged(stored=%q, discovered=%q) = %v, want %v",
+					tc.stored, tc.discovered, got, tc.changed)
+			}
+		})
+	}
+}
+
+// TestNormalizeEndpoint verifies the URL canonicalization helper directly.
+func TestNormalizeEndpoint(t *testing.T) {
+	t.Helper()
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		{"http://1.2.3.4/onvif/device_service", "http://1.2.3.4/onvif/device_service"},
+		{"http://1.2.3.4:80/onvif/device_service", "http://1.2.3.4/onvif/device_service"},
+		{"https://1.2.3.4:443/onvif/device_service", "https://1.2.3.4/onvif/device_service"},
+		{"http://1.2.3.4:8080/onvif/device_service", "http://1.2.3.4:8080/onvif/device_service"},
+		{"HTTP://1.2.3.4/Path", "http://1.2.3.4/Path"},
+		{"http://CAMERA.LOCAL/onvif/device_service", "http://camera.local/onvif/device_service"},
+		{"http://1.2.3.4/onvif/device_service/", "http://1.2.3.4/onvif/device_service"},
+		{"  http://1.2.3.4/onvif/device_service  ", "http://1.2.3.4/onvif/device_service"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got := normalizeEndpoint(tc.input)
+			if got != tc.want {
+				t.Errorf("normalizeEndpoint(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCanonicalEndpoint_Normalizes verifies that canonicalEndpoint normalizes
+// both the explicit endpoint and the XAddrs fallback path.
+func TestCanonicalEndpoint_Normalizes(t *testing.T) {
+	t.Helper()
+	// Explicit endpoint with :80 → normalized to no-port.
+	got := canonicalEndpoint("http://1.2.3.4:80/onvif/device_service", nil)
+	want := "http://1.2.3.4/onvif/device_service"
+	if got != want {
+		t.Errorf("canonicalEndpoint(endpoint=:80) = %q, want %q", got, want)
+	}
+	// Fallback to XAddrs — also normalized.
+	got = canonicalEndpoint("", []string{"http://1.2.3.4:80/onvif/device_service"})
+	if got != want {
+		t.Errorf("canonicalEndpoint(xaddrs=:80) = %q, want %q", got, want)
+	}
+}
+
 // TestUpdateEndpointForRoaming verifies that when auto-discover recognizes a
 // known device at a NEW endpoint, it updates the existing camera's endpoint and
 // restarts its recorder (issue #121 core fix).
