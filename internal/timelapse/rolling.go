@@ -59,6 +59,12 @@ type RollingMergeManager struct {
 	progressMu           sync.Mutex
 	progress             map[string]*progressEntry
 	progressCleanupDelay time.Duration
+	// wg tracks every runMerge goroutine so StopAll can wait for them to fully
+	// exit before returning. Without this, runMerge goroutines could briefly
+	// outlive StopAll and touch the merger/db after the caller (e.g. App.Stop)
+	// has begun tearing those resources down (#163). Matches the
+	// merge.RollingMergeCoordinator wg pattern.
+	wg sync.WaitGroup
 }
 
 func NewRollingMergeManager(merger TimelapseMerger, db MergeStatusUpdater, fps int, deleteOriginal bool) *RollingMergeManager {
@@ -88,6 +94,10 @@ func (r *RollingMergeManager) StartSegmentMerge(ctx context.Context, cameraID, s
 	r.nextID++
 	id := r.nextID
 	r.active[cameraID] = &activeEntry{cancel: cancel, id: id}
+	// Track the goroutine before launching it so StopAll's Wait can't race
+	// with a concurrent Add (sync.WaitGroup forbids Add-after-Wait-at-zero).
+	// Add stays under r.mu so StopAll's cancel+clear block observes it.
+	r.wg.Add(1)
 	r.mu.Unlock()
 
 	// Count total frames in segment dir for progress estimation.
@@ -119,6 +129,7 @@ func (r *RollingMergeManager) StopSegmentMerge(cameraID string) {
 }
 
 func (r *RollingMergeManager) runMerge(ctx context.Context, ownID uint64, cameraID, segmentDir, outputPath, recordingID string, totalFrames int) {
+	defer r.wg.Done() // paired with r.wg.Add in StartSegmentMerge
 	defer func() {
 		r.mu.Lock()
 		// Only delete if this goroutine's entry is still the active one.
@@ -274,7 +285,20 @@ func (r *RollingMergeManager) IsActive(cameraID string) bool {
 	return ok
 }
 
-// StopAll cancels all active merge goroutines.
+// StopAll cancels all active merge goroutines and waits for them to fully exit.
+//
+// Waiting is required to honor the App.Service contract ("Stop must release all
+// goroutines"): in-flight runMerge goroutines touch r.merger and r.db, which
+// the caller may begin tearing down once StopAll returns (#163). Without the
+// wait, those goroutines could briefly outlive the resources they reference.
+//
+// The cancel+clear happens under r.mu, but the Wait is OUTSIDE the lock —
+// runMerge's cleanup defer also acquires r.mu, so waiting under the lock would
+// deadlock. A concurrent StartSegmentMerge may add a fresh entry after the
+// clear; that goroutine is tracked by wg too, so Wait still returns promptly
+// (mergers honor ctx cancel) and the new entry is left in r.active for the
+// next lifecycle — matching the existing "final state may have active entries"
+// semantics documented in TestRollingMergeManager_ConcurrentStopAllAndStart.
 func (r *RollingMergeManager) StopAll() {
 	r.mu.Lock()
 	for _, entry := range r.active {
@@ -283,6 +307,10 @@ func (r *RollingMergeManager) StopAll() {
 	// Clear the map.
 	r.active = make(map[string]*activeEntry)
 	r.mu.Unlock()
+
+	// Wait for the cancelled runMerge goroutines to fully exit before clearing
+	// progress. Do not acquire r.mu here (see comment above).
+	r.wg.Wait()
 
 	// Also clear progress.
 	r.progressMu.Lock()

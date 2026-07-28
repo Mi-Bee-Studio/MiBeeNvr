@@ -6,9 +6,44 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// blockingMerger blocks Merge until releaseCh is closed (or ctx is cancelled),
+// then optionally simulates post-cancel teardown work (teardownSleep). Used to
+// prove StopAll waits for in-flight merges to fully exit (#163).
+type blockingMerger struct {
+	releaseCh     chan struct{}
+	started       chan struct{}
+	teardownSleep time.Duration // work done AFTER ctx cancel, BEFORE return
+	cancelled     atomic.Bool
+}
+
+func (b *blockingMerger) CanMerge() bool  { return true }
+func (b *blockingMerger) Tier() MergeTier { return TierGo }
+func (b *blockingMerger) Merge(ctx context.Context, _, outputPath string, _ int) (*MergeResult, error) {
+	if b.started != nil {
+		close(b.started)
+	}
+	select {
+	case <-b.releaseCh:
+		// released by the test — merge completes normally
+	case <-ctx.Done():
+		b.cancelled.Store(true)
+		// Simulate non-trivial teardown after cancellation (e.g. flushing a
+		// partial output). StopAll must wait for this, not just the cancel.
+		if b.teardownSleep > 0 {
+			time.Sleep(b.teardownSleep)
+		}
+		return nil, ctx.Err()
+	}
+	if outputPath != "" {
+		os.WriteFile(outputPath, []byte("merged"), 0o644)
+	}
+	return &MergeResult{Tier: TierGo, FramesMerged: 10, Duration: 1.0}, nil
+}
 
 // mockDB implements MergeStatusUpdater for testing.
 type mockDB struct {
@@ -161,6 +196,60 @@ func TestRollingMergeManager_StopAll(t *testing.T) {
 
 	if mgr.ActiveCount() != 0 {
 		t.Fatalf("expected 0 active merges after StopAll, got %d", mgr.ActiveCount())
+	}
+}
+
+// TestRollingMergeManager_StopAllWaitsForInFlightMerge guards #163:
+// StopAll must block until in-flight runMerge goroutines have fully exited.
+// Without wg tracking, StopAll returned immediately after clearing the map,
+// and the merger/DB write could race resource teardown in the caller.
+//
+// To prove the wait is real, the merger observes ctx cancellation (as a real
+// merger would) but then does non-trivial post-cancel work (teardownSleep).
+// If StopAll didn't join the goroutine, it would return ~instantly after the
+// cancel; we assert StopAll takes at least teardownSleep — i.e. it waited for
+// the goroutine to fully exit, not just for the cancel signal to be sent.
+func TestRollingMergeManager_StopAllWaitsForInFlightMerge(t *testing.T) {
+	t.Helper()
+	teardownSleep := 80 * time.Millisecond
+	merger := &blockingMerger{
+		releaseCh:     make(chan struct{}),
+		started:       make(chan struct{}),
+		teardownSleep: teardownSleep,
+	}
+	mgr := NewRollingMergeManager(merger, newMockDB(), 10, false)
+
+	tmpDir := t.TempDir()
+	segmentDir := filepath.Join(tmpDir, "segment")
+	os.MkdirAll(segmentDir, 0o755)
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.StartSegmentMerge(ctx, "cam-block", segmentDir, outputPath, "")
+
+	// Wait until the merger is actually running (inside Merge), so we know
+	// StopAll will be called while runMerge is genuinely in-flight.
+	select {
+	case <-merger.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("merge goroutine did not enter Merge within 2s")
+	}
+
+	// StopAll cancels the in-flight merge; the merger observes ctx.Done but
+	// then sleeps teardownSleep before returning. The wg.Wait in StopAll must
+	// cover that window — so StopAll should take ≥ teardownSleep.
+	start := time.Now()
+	mgr.StopAll()
+	elapsed := time.Since(start)
+
+	if elapsed < teardownSleep {
+		t.Fatalf("StopAll returned after %v (< %v teardown sleep) — wg.Wait is missing or not joining runMerge",
+			elapsed, teardownSleep)
+	}
+	if !merger.cancelled.Load() {
+		t.Fatal("merger should have observed ctx cancellation")
 	}
 }
 
