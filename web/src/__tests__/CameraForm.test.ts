@@ -185,6 +185,72 @@ describe('CameraForm - push target platform selector', () => {
   });
 });
 
+describe('CameraForm - encoding field visibility (#166)', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+  });
+
+  // Xiaomi recorders detect codec from the live stream and ignore any stored
+  // encoding, so the field must be read-only "auto-detect" (like ONVIF).
+  it('renders encoding as disabled auto-detect for xiaomi cameras', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const xiaomiCam = {
+      id: 'xiaomi-test',
+      name: 'Xiaomi Cam',
+      protocol: 'xiaomi',
+      encoding: 'h264', // stale value — must NOT be editable
+      url: 'xiaomi://abc',
+      enabled: true,
+    };
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: xiaomiCam as any }),
+    });
+
+    await vi.waitFor(() => {
+      const encSelect = container.querySelector('#cam-encoding') as HTMLSelectElement | null;
+      expect(encSelect, 'encoding <select> should exist').toBeTruthy();
+      expect(encSelect!.disabled, 'encoding field must be disabled for xiaomi').toBe(true);
+      // The only option is auto-detect
+      const opts = Array.from(encSelect!.options);
+      expect(opts.length).toBe(1);
+      expect(opts[0].value).toBe('');
+    });
+  });
+
+  // rtsp/http/srt/rtmp keep encoding editable — it drives recorder selection.
+  it('renders encoding as editable for rtsp cameras', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const rtspCam = {
+      id: 'rtsp-test',
+      name: 'RTSP Cam',
+      protocol: 'rtsp',
+      encoding: 'h264',
+      url: 'rtsp://example/stream',
+      enabled: true,
+    };
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: rtspCam as any }),
+    });
+
+    await vi.waitFor(() => {
+      const encSelect = container.querySelector('#cam-encoding') as HTMLSelectElement | null;
+      expect(encSelect, 'encoding <select> should exist').toBeTruthy();
+      expect(encSelect!.disabled, 'encoding field must be editable for rtsp').toBe(false);
+      // Multiple codec options available (h264/h265/mjpeg)
+      expect(encSelect!.options.length).toBeGreaterThan(1);
+    });
+  });
+});
+
 describe('CameraForm - transcode policy', () => {
   afterEach(() => {
     cleanup();

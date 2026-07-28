@@ -102,23 +102,23 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 		cameraRowForAPI(&cameras[i])
 	}
 	// Backfill encoding for cameras whose stored encoding is empty (e.g. ONVIF
-	// auto-detect cameras like the ESP32 MiBeeCam, where encoding is resolved at
-	// runtime by the recorder). Without this, the camera list reports encoding=""
-	// and frontend pages that select a player from the list (Surveillance grid)
-	// cannot tell a JPEG camera from an unknown one → they fall back to HLS and
-	// render black (the per-camera LiveView page works because it queries /protocols
-	// which already probes the live recorder). Probe the running recorder here so
-	// every list consumer sees the same resolved encoding.
+	// Resolve each camera's displayed encoding from the LIVE recorder probe so
+	// the list agrees with /protocols and LiveView (single source of truth). The
+	// probe is authoritative: some cameras physically stream a different codec
+	// than their stored config (e.g. Xiaomi H.265 cameras whose DB still says
+	// h264, or ONVIF auto-detect devices). When the probe is empty (camera
+	// offline / recorder not started / codec not yet detected) we keep the
+	// stored value as a fallback so the UI still has something to render and
+	// doesn't regress to the #112 black-screen-on-empty-encoding failure.
+	//
+	// For protocol-configured cameras (rtsp/http/srt/rtmp) the recorder is
+	// constructed from the stored encoding, so the probe returns the SAME codec
+	// — the displayed value is unchanged. For auto-detect cameras (onvif/xiaomi)
+	// the probe is the real codec and the stored value may be stale or empty;
+	// showing the probe here makes list/get/protocols consistent (#166).
 	if h.camMgr != nil {
 		for i := range cameras {
-			if cameras[i].Encoding != "" {
-				continue
-			}
-			if rec := h.camMgr.GetRecorder(cameras[i].ID); rec != nil {
-				if codec, _, _, _ := getCodecParams(rec); codec != "" {
-					cameras[i].Encoding = string(codec)
-				}
-			}
+			cameras[i].Encoding = resolveEncoding(cameras[i].Encoding, probeCodec(h.camMgr, cameras[i].ID))
 		}
 	}
 	// Summary view: return only the fields needed for grid/dashboard display.
@@ -437,16 +437,42 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cameraRowForAPI(row)
-	// Backfill encoding from the live recorder when the stored value is empty
-	// (ONVIF auto-detect cameras). See handleListCameras for the rationale.
-	if row.Encoding == "" && h.camMgr != nil {
-		if rec := h.camMgr.GetRecorder(id); rec != nil {
-			if codec, _, _, _ := getCodecParams(rec); codec != "" {
-				row.Encoding = string(codec)
-			}
-		}
+	// Resolve displayed encoding from the live recorder probe (authoritative),
+	// falling back to the stored value when the probe is empty. Matches
+	// handleListCameras and /protocols so all three paths agree. See
+	// handleListCameras for the full rationale (#166).
+	if h.camMgr != nil {
+		row.Encoding = resolveEncoding(row.Encoding, probeCodec(h.camMgr, id))
 	}
 	writeJSON(w, http.StatusOK, row)
+}
+
+// probeCodec returns the live recorder's runtime-detected codec for a camera,
+// or "" when there is no running recorder or its codec hasn't been detected
+// yet. It is a thin wrapper over GetRecorder + getCodecParams so callers don't
+// repeat the nil-recorder / empty-codec dance.
+func probeCodec(camMgr *camera.CameraManager, id string) model.Format {
+	if camMgr == nil {
+		return ""
+	}
+	rec := camMgr.GetRecorder(id)
+	if rec == nil {
+		return ""
+	}
+	codec, _, _, _ := getCodecParams(rec)
+	return codec
+}
+
+// resolveEncoding picks the displayed encoding for a camera: the recorder's
+// runtime-probed codec when it is non-empty (authoritative — the recorder reads
+// the actual stream), otherwise the stored value as a fallback (covers offline
+// cameras / codec-not-yet-detected). Centralizing this keeps the list, get, and
+// /protocols read-paths consistent (#166) and gives a single seam to test.
+func resolveEncoding(stored string, probe model.Format) string {
+	if probe != "" {
+		return string(probe)
+	}
+	return stored
 }
 
 // handleCameraPushStatus returns the runtime status of a camera's push-out relay

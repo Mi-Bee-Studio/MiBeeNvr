@@ -311,7 +311,10 @@
       await createCamera({
         name: device.name,
         protocol: 'xiaomi',
-        encoding: 'h264',
+        // encoding intentionally omitted: Xiaomi recorders detect the codec
+        // from the live stream (H.264 vs H.265) and ignore any stored value,
+        // so sending 'h264' here was misleading. The backend resolves and
+        // surfaces the real codec via the /protocols probe (#166).
         url: `xiaomi://${device.did}`,
         enabled: true,
       });

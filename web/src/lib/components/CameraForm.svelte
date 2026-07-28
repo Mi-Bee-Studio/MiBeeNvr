@@ -140,7 +140,8 @@ let validationErrors = $state<Record<string, string>>({});
     if (!proto) return;
     const encodings = proto.encodings;
     if (!encodings.includes(formEncoding)) {
-      if (formProtocol === 'onvif') {
+      if (formProtocol === 'onvif' || formProtocol === 'xiaomi') {
+        // Auto-detect protocols: codec comes from the live stream, not config.
         formEncoding = '';
       } else if (formProtocol === 'http') {
         formEncoding = 'jpeg';
@@ -511,7 +512,10 @@ async function performCameraSave() {
             serial_number: formSerialNumber || undefined,
             retention_days: formRetentionDays,
             stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
-            encoding: formEncoding,
+            // onvif/xiaomi auto-detect codec from the live stream and ignore the
+            // stored value, so don't send one (avoids writing a stale label).
+            // rtsp/http/srt/rtmp send formEncoding — it drives recorder selection.
+            encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' ? undefined : formEncoding,
             transcoding: {
                 enabled: formTranscodingEnabled,
                 target_codec: formTranscodingCodec,
@@ -565,7 +569,10 @@ async function performCameraSave() {
             serial_number: formSerialNumber || undefined,
             retention_days: formRetentionDays,
             stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
-            encoding: formEncoding,
+            // onvif/xiaomi auto-detect codec from the live stream and ignore the
+            // stored value, so don't send one (avoids writing a stale label).
+            // rtsp/http/srt/rtmp send formEncoding — it drives recorder selection.
+            encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' ? undefined : formEncoding,
             transcoding: {
                 enabled: formTranscodingEnabled,
                 target_codec: formTranscodingCodec,
@@ -629,14 +636,21 @@ async function performCameraSave() {
     <!-- Encoding -->
     <div>
       <label for="cam-encoding" class="input-label">{t('cameras.tableEncoding')}</label>
-      <select id="cam-encoding" class="input" bind:value={formEncoding}>
-        {#if formProtocol === 'onvif'}
+      <!-- onvif + xiaomi auto-detect their codec from the live stream and ignore
+           any stored value, so the field is read-only "auto-detect" for them.
+           rtsp/http/srt/rtmp keep it editable — it drives recorder selection
+           (H264Recorder vs H265Recorder). See #166. -->
+      {#if formProtocol === 'onvif' || formProtocol === 'xiaomi'}
+        <select id="cam-encoding" class="input" disabled>
           <option value="">{t('cameras.autoDetect')}</option>
-        {/if}
-        {#each (protocolsMap.get(formProtocol)?.encodings || [formEncoding]) as enc}
-          <option value={enc}>{t('cameras.encoding.' + enc) || enc.toUpperCase()}</option>
-        {/each}
-      </select>
+        </select>
+      {:else}
+        <select id="cam-encoding" class="input" bind:value={formEncoding}>
+          {#each (protocolsMap.get(formProtocol)?.encodings || [formEncoding]) as enc}
+            <option value={enc}>{t('cameras.encoding.' + enc) || enc.toUpperCase()}</option>
+          {/each}
+        </select>
+      {/if}
     </div>
 
     {#if formProtocol === 'xiaomi'}

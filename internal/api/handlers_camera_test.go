@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -359,6 +360,48 @@ func TestIsImageFile_MP4(t *testing.T) {
 func TestIsImageFile_NoExtension(t *testing.T) {
 	t.Parallel()
 	require.False(t, isImageFile("frame"))
+}
+
+// --- resolveEncoding / probeCodec tests (encoding read-path unification, #166) ---
+
+// TestResolveEncoding_ProbeWinsOverStored proves the live recorder probe is
+// authoritative: a camera stored as h264 but physically streaming h265 (e.g.
+// Xiaomi) must display h265. This is the core of the #165 fix.
+func TestResolveEncoding_ProbeWinsOverStored(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	got := resolveEncoding("h264", model.FormatH265)
+	require.Equal(t, "h265", got, "probe (h265) must override stored h264")
+}
+
+// TestResolveEncoding_StoredFallbackOnEmptyProbe proves an empty probe (camera
+// offline / codec not yet detected) keeps the stored value. This guards against
+// re-introducing #112 (black screen when encoding="" reached the frontend).
+func TestResolveEncoding_StoredFallbackOnEmptyProbe(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	require.Equal(t, "h264", resolveEncoding("h264", ""),
+		"empty probe must fall back to stored value")
+	require.Equal(t, "", resolveEncoding("", ""),
+		"empty probe + empty stored stays empty")
+}
+
+// TestResolveEncoding_ProbeFillsEmptyStored proves the probe fills in an empty
+// stored value (ONVIF auto-detect devices — the original backfill case).
+func TestResolveEncoding_ProbeFillsEmptyStored(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	require.Equal(t, "jpeg", resolveEncoding("", model.EncJPEG),
+		"probe must fill an empty stored encoding")
+}
+
+// TestProbeCodec_NilManager proves probeCodec is nil-safe so handlers can call
+// it unconditionally even when camMgr is unset (e.g. setup-required state).
+func TestProbeCodec_NilManager(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	require.Equal(t, model.Format(""), probeCodec(nil, "any-cam"),
+		"probeCodec(nil, ...) must return empty, not panic")
 }
 
 // --- handleListCameras tests ---
