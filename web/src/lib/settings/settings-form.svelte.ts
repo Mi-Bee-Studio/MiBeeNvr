@@ -1,74 +1,81 @@
 /**
  * Unified settings form state coordinator (#153).
  *
- * This module provides a lightweight coordination layer for the Settings page.
- * Each tab component (GeneralTab, FeaturesTab, AdvancedTab) registers itself
- * with a dirty-check predicate and a save function. The Settings shell uses
- * this to:
- *   1. Show a single unified sticky Save button (instead of 4 separate ones)
- *   2. Track dirty state across ALL tabs for the navigation guard
+ * Each settings panel registers itself with a dirty-check predicate, a save
+ * function, and an optional destructive-warning detector. The Settings shell
+ * uses this to:
+ *   1. Show a single unified sticky Save button
+ *   2. Track dirty state across ALL panels for the navigation guard
  *   3. Detect destructive changes before saving (confirmation dialogs)
- *
- * Design: each tab remains autonomous in its form state and API calls — this
- * module just aggregates the dirty + save signals. This avoids a massive
- * centralized state migration while achieving the unified-save UX goal.
  */
 
-export interface TabFormHandle {
-  /** Returns true if the tab has unsaved changes. */
+export interface PanelFormHandle {
+  /** Returns true if the panel has unsaved changes. */
   isDirty: () => boolean;
-  /** Saves the tab's changes. Throws on error. */
+  /** Saves the panel's changes. Throws on error. */
   save: () => Promise<void>;
-  /** Resets the tab's form to the last-saved state (Reset button). */
+  /** Resets the panel's form to the last-saved state (Reset button). */
   reset?: () => void;
-}
-
-export interface DestructiveChange {
-  /** i18n message describing what the destructive change does. */
-  message: string;
+  /**
+   * Returns a warning message if the current pending changes are destructive,
+   * or null if non-destructive. The shell collects all non-null warnings and
+   * shows a single confirmation dialog before saving.
+   */
+  getDestructiveWarning?: () => string | null;
 }
 
 class SettingsFormCoordinator {
-  private tabs: Map<string, TabFormHandle> = new Map();
+  private panels: Map<string, PanelFormHandle> = $state(new Map());
 
-  register(tabId: string, handle: TabFormHandle): () => void {
-    this.tabs.set(tabId, handle);
-    return () => this.tabs.delete(tabId);
+  register(panelId: string, handle: PanelFormHandle): () => void {
+    this.panels.set(panelId, handle);
+    this.panels = new Map(this.panels); // trigger reactivity
+    return () => {
+      this.panels.delete(panelId);
+      this.panels = new Map(this.panels); // trigger reactivity
+    };
   }
 
-  /** True if ANY registered tab has unsaved changes. */
-  isAnyDirty(): boolean {
-    for (const handle of this.tabs.values()) {
+  /** True if ANY registered panel has unsaved changes. Reactive. */
+  get isAnyDirty(): boolean {
+    for (const handle of this.panels.values()) {
       if (handle.isDirty()) return true;
     }
     return false;
   }
 
-  /** True if a specific tab has unsaved changes. */
-  isDirty(tabId: string): boolean {
-    return this.tabs.get(tabId)?.isDirty() ?? false;
+  /** True if a specific panel has unsaved changes. */
+  isDirty(panelId: string): boolean {
+    return this.panels.get(panelId)?.isDirty() ?? false;
   }
 
-  /** Save all dirty tabs sequentially. Throws on first error. */
+  /**
+   * Collect destructive-warning messages from all dirty panels.
+   * Returns an array of warning strings (empty if no destructive changes).
+   */
+  getDestructiveWarnings(): string[] {
+    const warnings: string[] = [];
+    for (const handle of this.panels.values()) {
+      if (handle.isDirty() && handle.getDestructiveWarning) {
+        const w = handle.getDestructiveWarning();
+        if (w) warnings.push(w);
+      }
+    }
+    return warnings;
+  }
+
+  /** Save all dirty panels sequentially. Throws on first error. */
   async saveAll(): Promise<void> {
-    for (const [, handle] of this.tabs) {
+    for (const [, handle] of this.panels) {
       if (handle.isDirty()) {
         await handle.save();
       }
     }
   }
 
-  /** Save only the specified tab. */
-  async saveTab(tabId: string): Promise<void> {
-    const handle = this.tabs.get(tabId);
-    if (handle?.isDirty()) {
-      await handle.save();
-    }
-  }
-
-  /** Reset all tabs to last-saved state. */
+  /** Reset all panels to last-saved state. */
   resetAll(): void {
-    for (const handle of this.tabs.values()) {
+    for (const handle of this.panels.values()) {
       handle.reset?.();
     }
   }
