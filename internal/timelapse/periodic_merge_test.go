@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -874,5 +875,225 @@ func TestPeriodicMerge_MixedSources(t *testing.T) {
 	}
 	if status := db.GetStatus("tl-2"); status != "daily_merged" && status != "merged" {
 		t.Errorf("expected tl-2 status 'daily_merged' or 'merged', got %q", status)
+	}
+}
+
+// --- Regression tests for issue #132 ---
+
+// TestParseMergeRange_TimezoneAware verifies that parseMergeRange respects the
+// provided timezone for window alignment. All existing tests pass nil (UTC
+// fallback); this test locks the timezone-aware path so a regression that drops
+// the loc parameter (or hardcodes UTC) is caught. PR #94 fixed a bug where
+// Local timezone handling caused natural-day windows to misalign.
+func TestParseMergeRange_TimezoneAware(t *testing.T) {
+	t.Helper()
+	// CST+8 (Asia/Shanghai): 2025-06-07T18:30:00+08:00 = 2025-06-07T10:30:00Z.
+	// For an 8h window in CST+8, the window is 16:00-24:00 CST (16:00-23:59 local).
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	tm := time.Date(2025, 6, 7, 18, 30, 0, 0, loc) // 18:30 CST
+
+	start, end := parseMergeRange(tm, 8*time.Hour, loc)
+
+	// Expected: window 16:00-24:00 CST on 2025-06-07.
+	expectedStart := time.Date(2025, 6, 7, 16, 0, 0, 0, loc)
+	expectedEnd := time.Date(2025, 6, 8, 0, 0, 0, 0, loc)
+
+	if !start.Equal(expectedStart) {
+		t.Errorf("timezone-aware 8h start: expected %v (CST), got %v", expectedStart, start)
+	}
+	if !end.Equal(expectedEnd) {
+		t.Errorf("timezone-aware 8h end: expected %v (CST), got %v", expectedEnd, end)
+	}
+
+	// Verify the returned times carry the CST location (not UTC). 16:00 CST and
+	// 08:00 UTC are the same instant, so we check the *location*, not equality.
+	if start.Location() != loc {
+		t.Errorf("timezone-aware start should carry CST location, got %v", start.Location())
+	}
+}
+
+// TestParseMergeRange_NaturalDayTimezone verifies natural-day (24h) alignment
+// respects local midnight, not UTC midnight. This was the core PR #94 fix.
+func TestParseMergeRange_NaturalDayTimezone(t *testing.T) {
+	t.Helper()
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	// 2025-06-07T14:00:00 EDT (UTC-4) → natural-day window should be
+	// 2025-06-07 00:00 to 2025-06-08 00:00 EDT.
+	tm := time.Date(2025, 6, 7, 14, 0, 0, 0, loc)
+
+	start, end := parseMergeRange(tm, 24*time.Hour, loc)
+
+	expectedStart := time.Date(2025, 6, 7, 0, 0, 0, 0, loc)
+	expectedEnd := time.Date(2025, 6, 8, 0, 0, 0, 0, loc)
+
+	if !start.Equal(expectedStart) {
+		t.Errorf("natural-day start (EDT): expected %v, got %v", expectedStart, start)
+	}
+	if !end.Equal(expectedEnd) {
+		t.Errorf("natural-day end (EDT): expected %v, got %v", expectedEnd, end)
+	}
+}
+
+// TestMarkMergeFailed_SkipsUsableMP4 verifies that markMergeFailed does NOT
+// mark segments that already have a usable merged .mp4 output. This prevents
+// the "vicious cycle" where one bad segment in a window poisons all segments
+// (including good ones with valid output) to merge_status='failed', which then
+// blocks future merge retries via filterEligibleSegments. PR #95 fix.
+func TestMarkMergeFailed_SkipsUsableMP4(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	db := newTrackDB()
+	mgr := NewPeriodicMergeManager(&mockRecordingLister{}, db, &errorMerger{}, 10, dataDir, 8*time.Hour, nil)
+
+	// Create a valid .mp4 file for seg-good so os.Stat succeeds with size > 0.
+	goodMP4 := filepath.Join(dataDir, "good.mp4")
+	if err := os.WriteFile(goodMP4, []byte("valid mp4 content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	segs := []model.Recording{
+		{
+			ID:        "seg-good",
+			CameraID:  "test-cam",
+			FilePath:  dataDir,
+			Format:    model.FormatTimelapse,
+			MergePath: goodMP4, // has usable output → should NOT be marked failed
+		},
+		{
+			ID:       "seg-bad",
+			CameraID: "test-cam",
+			FilePath: dataDir,
+			Format:   model.FormatTimelapse,
+			// MergePath empty → SHOULD be marked failed
+		},
+	}
+
+	if err := mgr.markMergeFailed(context.Background(), segs, fmt.Errorf("aggregation error")); err != nil {
+		t.Fatalf("markMergeFailed: %v", err)
+	}
+
+	// seg-bad should have a retry count (was marked failed).
+	mgr.retryMu.Lock()
+	badInfo, badOk := mgr.retryCounts["seg-bad"]
+	_, goodOk := mgr.retryCounts["seg-good"]
+	mgr.retryMu.Unlock()
+
+	if !badOk {
+		t.Error("seg-bad (no MergePath) should have a retry count entry")
+	} else if badInfo.count != 1 {
+		t.Errorf("seg-bad retry count: expected 1, got %d", badInfo.count)
+	}
+
+	if goodOk {
+		t.Error("seg-good (usable .mp4) should NOT have a retry count entry — it must be skipped")
+	}
+}
+
+// TestMarkMergeFailed_EmptyMP4NotSkipped verifies that a .mp4 file that exists
+// but is EMPTY (size 0) is still marked failed — a zero-byte merge output is
+// not a usable file.
+func TestMarkMergeFailed_EmptyMP4NotSkipped(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	db := newTrackDB()
+	mgr := NewPeriodicMergeManager(&mockRecordingLister{}, db, &errorMerger{}, 10, dataDir, 8*time.Hour, nil)
+
+	// Create an EMPTY .mp4 (size 0).
+	emptyMP4 := filepath.Join(dataDir, "empty.mp4")
+	if err := os.WriteFile(emptyMP4, []byte{}, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	segs := []model.Recording{
+		{
+			ID:        "seg-empty",
+			CameraID:  "test-cam",
+			FilePath:  dataDir,
+			Format:    model.FormatTimelapse,
+			MergePath: emptyMP4, // exists but size 0 → SHOULD be marked failed
+		},
+	}
+
+	if err := mgr.markMergeFailed(context.Background(), segs, fmt.Errorf("error")); err != nil {
+		t.Fatalf("markMergeFailed: %v", err)
+	}
+
+	mgr.retryMu.Lock()
+	_, ok := mgr.retryCounts["seg-empty"]
+	mgr.retryMu.Unlock()
+
+	if !ok {
+		t.Error("seg-empty (zero-byte .mp4) should be marked failed — empty files are not usable")
+	}
+}
+
+// TestGoMergeSegments_CollectsH265Frames verifies that goMergeSegments collects
+// frame_*.h265 files (not just .jpg). This is the PR #95 regression guard:
+// previously the periodic merge hardcoded .jpg collection, so H.265 cameras
+// always got "no frames found in segments" and could never produce a periodic
+// merge output. The fix uses isFrameFile which accepts .jpg/.jpeg/.h264/.h265.
+//
+// This test exercises the frame-collection path directly (without running a
+// full merge) by checking that goMergeSegments does NOT return "no frames
+// found" when only .h265 frame files are present.
+func TestGoMergeSegments_CollectsH265Frames(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	db := newTrackDB()
+
+	// Create a segment dir with only .h265 frame files (no .jpg).
+	segDir := filepath.Join(dataDir, "seg-h265")
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	for i := range 3 {
+		framePath := filepath.Join(segDir, fmt.Sprintf("frame_%06d.h265", i+1))
+		if err := os.WriteFile(framePath, []byte("fake h265 nal unit"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	segs := []model.Recording{
+		{ID: "seg-h265", CameraID: "test-cam", FilePath: segDir, Format: model.FormatTimelapse},
+	}
+
+	// Direct test of isFrameFile: the closure is not exported, but we can
+	// verify the collection by checking that ReadDir + the frame-detection
+	// logic finds the .h265 files.
+	entries, err := os.ReadDir(segDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	frameCount := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "frame_") {
+			continue
+		}
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, ".h265") || strings.HasSuffix(lower, ".h264") ||
+			strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") {
+			frameCount++
+		}
+	}
+	if frameCount != 3 {
+		t.Errorf("expected 3 frame files collected (.h265), got %d", frameCount)
+	}
+
+	// Verify goMergeSegments doesn't bail with "no frames" — it should proceed
+	// to the merger. We use the existing successMerger (from daily_test.go) to
+	// avoid nil-deref and confirm the .h265 frames reach the merge step.
+	mgr := NewPeriodicMergeManager(&mockRecordingLister{}, db, &successMerger{}, 10, dataDir, 8*time.Hour, nil)
+	outputPath := filepath.Join(dataDir, "output.mp4")
+	err = mgr.goMergeSegments(context.Background(), segs, outputPath)
+	// The important assertion: no "no frames found" error.
+	if err != nil && strings.Contains(err.Error(), "no frames") {
+		t.Errorf("goMergeSegments should collect .h265 frames, got 'no frames' error: %v", err)
 	}
 }
