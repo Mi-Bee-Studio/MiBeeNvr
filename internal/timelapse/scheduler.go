@@ -25,6 +25,15 @@ func NewScheduler(loc *time.Location) *Scheduler {
 	return &Scheduler{loc: loc}
 }
 
+// SetClockForTesting injects a fixed time source for deterministic tests.
+// Pass nil to restore the default (time.Now().In(s.loc)). Test-only helper —
+// do not call in production code. Solves wall-clock flakiness where a schedule
+// window (e.g. 00:00-00:01) deterministically matches when CI runs at midnight
+// UTC (issue #151).
+func (s *Scheduler) SetClockForTesting(now func() time.Time) {
+	s.now = now
+}
+
 // IsRecordingTime reports whether timelapse recording should be active
 // based on the current time in the scheduler's timezone and the given schedule configuration.
 //

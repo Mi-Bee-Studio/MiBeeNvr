@@ -118,6 +118,7 @@ func TestMergeProgress_Complete(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	merger := &testSlowMerger{delay: 10 * time.Millisecond}
 	mgr := timelapse.NewRollingMergeManager(merger, nil, 10, false)
@@ -187,6 +188,7 @@ func TestMergeProgress_Failed(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	merger := &testSlowMerger{delay: 10 * time.Millisecond, fail: true}
 	mgr := timelapse.NewRollingMergeManager(merger, nil, 10, false)
@@ -235,6 +237,7 @@ func TestMergeProgress_Idle(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	merger := &testSlowMerger{delay: 10 * time.Millisecond}
 	mgr := timelapse.NewRollingMergeManager(merger, nil, 10, false)
@@ -262,6 +265,7 @@ func TestMergeProgress_NoManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 	// No timelapse merge manager set.
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/merge/progress/cam-nomgr", nil, "", "")
@@ -285,6 +289,7 @@ func TestTimelapseStatus_WithMergeManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	merger := &testSlowMerger{delay: 50 * time.Millisecond}
 	mgr := timelapse.NewRollingMergeManager(merger, nil, 10, false)
@@ -331,6 +336,7 @@ func TestTimelapseStatus_NoMergeManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // No merge manager set
+	defer h.Close()             // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/status", nil, "", "")
 	if rr.Code != http.StatusOK {
@@ -353,6 +359,7 @@ func TestTimelapseStatus_SupportedMergeDurations(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/status", nil, "", "")
 	if rr.Code != http.StatusOK {
@@ -387,6 +394,7 @@ func TestTimelapseList_Empty(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse", nil, "", "")
 	if rr.Code != http.StatusOK {
@@ -407,6 +415,7 @@ func TestTimelapseList_FiltersByFormat(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	seedRecording(t, db, makeRecording("rec-tl", "cam-1", "timelapse", now, false))
@@ -433,6 +442,7 @@ func TestTimelapseList_Pagination(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	for i := range 5 {
@@ -460,6 +470,7 @@ func TestTimelapseMerge_DefaultNaturalDay(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 	h.config = &config.Config{Storage: config.StorageConfig{RootDir: t.TempDir()}}
 
 	// No duration param — defaults to "natural-day" (24h). Should be accepted.
@@ -483,6 +494,7 @@ func TestTimelapseMerge_Accepted(t *testing.T) {
 	defer db.Close()
 
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 	h.config = &config.Config{Storage: config.StorageConfig{RootDir: t.TempDir()}}
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?date=2026-06-06", nil, "", "")
@@ -502,6 +514,7 @@ func TestTimelapseMerge_DefaultDate(t *testing.T) {
 	defer db.Close()
 
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 	h.config = &config.Config{Storage: config.StorageConfig{RootDir: t.TempDir()}}
 
 	// No date param — should default to today in the configured timezone
@@ -516,6 +529,7 @@ func TestTimelapseMerge_DurationInvalid(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?duration=invalid", nil, "", "")
 	if rr.Code != http.StatusBadRequest {
@@ -532,6 +546,7 @@ func TestTimelapseMerge_ErrorPathCleansActiveMerges(t *testing.T) {
 		db, store := setupTestDB(t)
 		defer db.Close()
 		h := TestHandler(db, store) // no config set
+		defer h.Close()             // join merge goroutines before TempDir cleanup (#152)
 
 		rr1 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-stuck/merge", nil, "", "")
 		if rr1.Code != http.StatusInternalServerError {
@@ -549,6 +564,7 @@ func TestTimelapseMerge_ErrorPathCleansActiveMerges(t *testing.T) {
 		db, store := setupTestDB(t)
 		defer db.Close()
 		h := TestHandler(db, store)
+		defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 		rr1 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-dur/merge?duration=badvalue", nil, "", "")
 		if rr1.Code != http.StatusBadRequest {
@@ -566,6 +582,7 @@ func TestTimelapseMerge_ErrorPathCleansActiveMerges(t *testing.T) {
 		db, store := setupTestDB(t)
 		defer db.Close()
 		h := TestHandler(db, store) // no config set
+		defer h.Close()             // join merge goroutines before TempDir cleanup (#152)
 
 		rr1 := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-nocfg/merge?duration=8h", nil, "", "")
 		if rr1.Code != http.StatusInternalServerError {
@@ -585,6 +602,7 @@ func TestTimelapseMerge_DurationNeedsConfig(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // no config set
+	defer h.Close()             // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?duration=8h", nil, "", "")
 	if rr.Code != http.StatusInternalServerError {
@@ -721,6 +739,7 @@ func TestTimelapsePause_NoConfig(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // nil config
+	defer h.Close()             // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/pause", nil, "", "")
 	if rr.Code != http.StatusInternalServerError {
@@ -735,6 +754,7 @@ func TestTimelapseGet_Found(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-1", "rec-tl-get")
@@ -769,6 +789,7 @@ func TestTimelapseGet_NotFound(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/timelapse/nonexistent", nil, "", "")
 	if rr.Code != http.StatusNotFound {
@@ -781,6 +802,7 @@ func TestTimelapseGet_WrongFormat(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	seedRecording(t, db, makeRecording("rec-h264", "cam-1", "h264", now, false))
@@ -798,6 +820,7 @@ func TestTimelapseDelete_Success(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-1", "rec-tl-del")
@@ -862,6 +885,7 @@ func TestTimelapseDelete_NotFound(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/timelapse/nonexistent", nil, "", "")
 	if rr.Code != http.StatusNotFound {
@@ -874,6 +898,7 @@ func TestTimelapseDelete_WrongFormat(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	seedRecording(t, db, makeRecording("rec-h264-del", "cam-1", "h264", now, false))
@@ -891,6 +916,7 @@ func TestTimelapseDownload_Merged(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-1", "rec-tl-dl")
@@ -938,6 +964,7 @@ func TestTimelapseDownload_NotMerged(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	now := time.Now().UTC().Truncate(time.Second)
 	segDir := filepath.Join(store.RootDir(), "cam-1", "rec-tl-notmerged")
@@ -969,6 +996,7 @@ func TestTimelapseDownload_NotFound(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/nonexistent/download", nil, "", "")
 	if rr.Code != http.StatusNotFound {
@@ -983,6 +1011,7 @@ func TestTimelapseMergeCancel_Success(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	// Create a RollingMergeManager with an active merge
 	mgr := timelapse.NewRollingMergeManager(nil, nil, 10, false)
@@ -1012,6 +1041,7 @@ func TestTimelapseMergeCancel_NotFound(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	// Create a manager with no active merge
 	mgr := timelapse.NewRollingMergeManager(nil, nil, 10, false)
@@ -1028,6 +1058,7 @@ func TestTimelapseMergeCancel_NoManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // no merge mgr set
+	defer h.Close()             // join merge goroutines before TempDir cleanup (#152)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/timelapse/cam-1/merge", nil, "", "")
 	if rr.Code != http.StatusServiceUnavailable {
@@ -1105,6 +1136,7 @@ func TestTimelapseBatchMerge_EmptyIDs(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	body := map[string]any{
 		"camera_ids": []string{},
@@ -1122,6 +1154,7 @@ func TestTimelapseBatchMerge_TooMany(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store)
+	defer h.Close() // join merge goroutines before TempDir cleanup (#152)
 
 	cameraIDs := make([]string, 11)
 	for i := range 11 {
@@ -1165,6 +1198,7 @@ func TestTimelapseBatchMerge_NoConfig(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	h := TestHandler(db, store) // no config
+	defer h.Close()             // join merge goroutines before TempDir cleanup (#152)
 
 	body := map[string]any{
 		"camera_ids": []string{"cam-1"},
