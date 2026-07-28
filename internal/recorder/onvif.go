@@ -304,27 +304,46 @@ func (r *ONVIFRecorder) detectEncoding(ctx context.Context) string {
 	// fall back to it and log a warning when it disagrees with reality.
 	claimed := r.claimedEncoding(ctx)
 
+	// recordProbe emits a codec-probe metric event (#140). result is one of:
+	//   ok          — live RTSP DESCRIBE resolved the codec (authoritative)
+	//   unsupported — probe empty; fell back to a claimed/default encoding (device works but wasn't verified live)
+	//   fail        — probe empty AND no claim; defaulted to H264 (highest stale-encoding risk, see #112)
+	recordProbe := func(encoding, result string) {
+		if r.metrics == nil {
+			return
+		}
+		r.metrics.CodecProbeTotal.WithLabelValues(r.cfg.CameraID, strings.ToLower(encoding), result).Inc()
+	}
+
 	// 1. RTSP DESCRIBE is authoritative. Some ONVIF cameras lie about their codec.
 	if r.rtspURL != "" {
-		if enc := r.probeEncodingFn(); enc != "" {
-			if claimed != "" && !strings.EqualFold(enc, claimed) {
+		probeStart := time.Now()
+		probed := r.probeEncodingFn()
+		if r.metrics != nil {
+			r.metrics.CodecProbeDurationSeconds.WithLabelValues(r.cfg.CameraID).Observe(time.Since(probeStart).Seconds())
+		}
+		if probed != "" {
+			if claimed != "" && !strings.EqualFold(probed, claimed) {
 				onvifRecLogger.Warn("ONVIF-declared encoding disagrees with actual RTSP stream; trusting the stream",
-					"camera_id", r.cfg.CameraID, "declared", claimed, "actual", enc)
+					"camera_id", r.cfg.CameraID, "declared", claimed, "actual", probed)
 			} else {
-				onvifRecLogger.Info("detected encoding via RTSP DESCRIBE", "camera_id", r.cfg.CameraID, "encoding", enc)
+				onvifRecLogger.Info("detected encoding via RTSP DESCRIBE", "camera_id", r.cfg.CameraID, "encoding", probed)
 			}
-			return enc
+			recordProbe(probed, "ok")
+			return probed
 		}
 	}
 
 	// 2/3. Fall back to the claimed encoding (config or ONVIF).
 	if claimed != "" {
 		onvifRecLogger.Info("RTSP DESCRIBE unavailable, using claimed encoding", "camera_id", r.cfg.CameraID, "encoding", claimed)
+		recordProbe(claimed, "unsupported")
 		return claimed
 	}
 
 	// 4. Default to H264
 	onvifRecLogger.Warn("could not detect encoding, defaulting to H264", "camera_id", r.cfg.CameraID)
+	recordProbe("H264", "fail")
 	return "H264"
 }
 

@@ -341,7 +341,43 @@ rate(nvr_remote_log_dropped_total[5m]) > 0
 
 ---
 
-## 13. Built-in Runtime Metrics
+## 13. Codec Probe Metrics
+
+Observe the codec-detection pipeline (recorder probe → DB persist → `/protocols` → orchestrator → player). The H.265 chain is the project's largest complexity and defect source — issue #112 (H.265 black screen) was a **silent probe failure**. These metrics make probe outcome and latency visible so stale-encoding problems surface before users see black video.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_codec_probe_total` | Counter | `camera_id`, `encoding`, `result` | Codec probes by resolved encoding and outcome |
+| `nvr_codec_probe_duration_seconds` | Histogram | `camera_id` | Latency of the RTSP DESCRIBE codec probe |
+| `nvr_resolved_encoding` | Gauge | `camera_id`, `encoding` | Last codec resolved and persisted (value always `1`; the `encoding` label is the signal) |
+
+**`result` label values for `nvr_codec_probe_total`:**
+- `ok` — the live RTSP DESCRIBE resolved the codec (authoritative)
+- `unsupported` — the probe returned empty; fell back to a claimed/default encoding (the device works but its codec wasn't verified from the live stream)
+- `fail` — probe empty **and** no claim; defaulted to H264. Highest stale-encoding risk (see #112).
+
+**`encoding` label values:** `h264`, `h265`, `mjpeg`, `jpeg` (lowercase, normalized — `MJPEG`→`jpeg`).
+
+**Usage / alerts:**
+
+```promql
+# Stale-encoding suspect: a single camera's probe fails >50% over 5 min
+sum(rate(nvr_codec_probe_total{result="fail"}[5m]))
+  by (camera_id)
+  / sum(rate(nvr_codec_probe_total[5m])) by (camera_id) > 0.5
+
+# Slow/unreachable devices: high probe latency p99
+histogram_quantile(0.99, sum(rate(nvr_codec_probe_duration_seconds_bucket[5m])) by (le, camera_id)) > 2.5
+
+# Persisted encoding drift: nvr_resolved_encoding disagrees with the live codec
+# reported by other labels/paths — investigate as a persistence bug.
+```
+
+**Notes:** Emitted from `ONVIFRecorder.detectEncoding()` (counter + duration) and `ensureEncoding` (resolved gauge). Probe duration is the RTSP DESCRIBE round-trip only — it excludes ONVIF profile fallback. Histogram buckets: `0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10` seconds.
+
+---
+
+## 14. Built-in Runtime Metrics
 
 In addition to custom NVR metrics, these standard collectors are registered:
 
