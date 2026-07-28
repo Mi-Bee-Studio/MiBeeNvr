@@ -429,3 +429,13 @@ func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request)
 		"min_duration":     minDurStr,
 	})
 }
+
+// registerMergeRoutes registers merge status/backfill/reclassify/consolidate routes.
+func (h *Handler) registerMergeRoutes(r chi.Router) {
+	r.Get("/api/merge/status", h.handleMergeStatus)
+	r.Get("/api/merge/pending", h.handleMergePending)
+	r.Post("/api/merge/reclassify", h.handleMergeReclassify)
+	r.Post("/api/merge/backfill", h.handleMergeBackfillAll)                 // Backfill all cameras
+	r.Post("/api/merge/consolidate", h.handleMergeConsolidate)              // Merge short recordings into longer ones
+	r.Post("/api/cameras/{id}/merge/backfill", h.handleMergeBackfillCamera) // Backfill single camera
+}

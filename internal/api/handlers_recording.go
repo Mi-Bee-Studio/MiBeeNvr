@@ -1306,3 +1306,30 @@ func parseDateParts(s string) (year, month, day int, err error) {
 	}
 	return year, month, day, nil
 }
+
+// registerRecordingRoutes registers all /api/recordings* routes on the given
+// (already auth-protected) router.
+func (h *Handler) registerRecordingRoutes(r chi.Router) {
+	r.Route("/api/recordings", func(r chi.Router) {
+		r.Get("/", h.handleListRecordings)
+		r.Get("/daily-summary", h.handleDailyRecordingSummary)
+		r.Get("/timeline", h.handleTimelineSegments)
+		r.Post("/", h.handleCreateRecording)
+		r.Post("/timeline/seek-event", h.handleTimelineSeekEvent)
+		r.Post("/batch-delete", h.handleBatchDeleteRecordings)
+		r.Route("/{id}", func(r chi.Router) {
+			r.Get("/", h.handleGetRecording)
+			r.Delete("/", h.handleDeleteRecording)
+			r.Patch("/", h.handleUpdateRecording)
+			r.Patch("/ai-status", h.handleUpdateRecordingAIStatus)
+			r.Get("/frames", h.handleListFrames)
+			r.Get("/playback", h.handlePlayback)
+			r.Get("/timelapse-frames", h.handleTimelapseFrames)
+			r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
+			r.Post("/retry-merge", h.handleRetryTimelapseMerge)
+		})
+	})
+	// Recording gaps for timeline (per-camera, registered here to keep recording-
+	// related routes together)
+	r.Get("/api/cameras/{id}/timeline/gaps", h.handleTimelineGaps)
+}

@@ -253,3 +253,20 @@ func getDefaultStatsSince(period string) (t time.Time) {
 		return now.Add(-24 * time.Hour)
 	}
 }
+
+// registerAIRoutes registers AI config/status/zones and MiBeeVision event routes.
+func (h *Handler) registerAIRoutes(r chi.Router) {
+	r.Get("/api/ai/status", h.aiHandler.handleAIStatus)
+	r.Put("/api/ai/config", h.aiHandler.handleAIUpdateConfig)
+	r.Get("/api/ai/zones", h.aiHandler.handleAIZones)
+	r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
+	r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
+	r.Delete("/api/ai/zones/{id}", h.aiHandler.handleAIDeleteZone)
+	// AI event endpoints (MiBeeVision collaboration)
+	// POST /api/ai/events requires API Key auth (checked inside handler)
+	r.Post("/api/ai/events", h.handleCreateAIEvent)
+	// GET endpoints are user-authenticated (behind the group's authMW)
+	r.Get("/api/ai/events", h.handleListAIEvents)
+	r.Get("/api/ai/events/{id}", h.handleGetAIEvent)
+	r.Get("/api/ai/stats", h.handleGetAIEventStats)
+}

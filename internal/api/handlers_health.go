@@ -135,3 +135,11 @@ func (h *Handler) handleGetCameraStability(w http.ResponseWriter, r *http.Reques
 
 	writeJSON(w, http.StatusOK, data)
 }
+
+// registerHealthRoutes registers health monitoring status/events/stability routes.
+func (h *Handler) registerHealthRoutes(r chi.Router) {
+	r.Get("/api/health/status", h.handleGetHealthStatus)
+	r.Get("/api/health/events", h.handleGetHealthEvents)
+	r.Get("/api/health/stability", h.handleGetStability)
+	r.Get("/api/health/stability/{camera_id}", h.handleGetCameraStability)
+}

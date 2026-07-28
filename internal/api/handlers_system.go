@@ -1089,3 +1089,27 @@ func (h *Handler) handleUpdateAutoDiscoverSettings(w http.ResponseWriter, r *htt
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
+
+// registerSystemRoutes registers system/stats/settings/backup/protocol/feature routes.
+func (h *Handler) registerSystemRoutes(r chi.Router) {
+	r.Get("/api/stats", h.handleStats)
+	r.Get("/api/stats/system", h.handleSystemStats)
+	r.Get("/api/stats/trends", h.handleStatsTrends)
+	r.Get("/api/settings", h.handleGetSettings)
+	r.Put("/api/settings", h.handleUpdateSettings)
+	r.Post("/api/settings/api-keys", h.handleGenerateAPIKey)
+	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
+	r.Get("/api/settings/merge", h.handleGetMergeSettings)
+	r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
+	r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
+	r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
+	r.Get("/api/settings/auto-discover", h.handleGetAutoDiscoverSettings)
+	r.Put("/api/settings/auto-discover", h.handleUpdateAutoDiscoverSettings)
+	r.Get("/api/settings/transcoding", h.handleGetTranscodingSettings)
+	r.Put("/api/settings/transcoding", h.handleUpdateTranscodingSettings)
+	r.Post("/api/backup", h.handleBackup)
+	r.Get("/api/backups", h.handleListBackups)
+	r.Get("/api/protocols", h.handleProtocols)
+	r.Get("/api/features", h.handleGetFeatures)
+	r.Put("/api/features", h.handleUpdateFeatures)
+}

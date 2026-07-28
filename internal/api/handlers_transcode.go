@@ -685,3 +685,19 @@ func (h *Handler) handleTranscodingRecordingsWithoutTranscode(w http.ResponseWri
 		"count": len(recordings),
 	})
 }
+
+// registerTranscodeRoutes registers transcoding check/status/task/download routes.
+func (h *Handler) registerTranscodeRoutes(r chi.Router) {
+	r.Get("/api/transcoding/check", h.handleTranscodingCheck)
+	r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)
+	r.Post("/api/transcoding/ffmpeg/download", h.handleFFmpegDownload)
+	r.Post("/api/transcoding/ffmpeg/download/retry", h.handleFFmpegDownloadRetry)
+	r.Get("/api/transcoding/status", h.handleTranscodingStatus)
+	r.Get("/api/transcoding/tasks", h.handleTranscodingTasksList)
+	r.Post("/api/transcoding/tasks", h.handleTranscodingTaskCreate)
+	r.Delete("/api/transcoding/tasks/{id}", h.handleTranscodingTaskCancel)
+	r.Post("/api/transcoding/tasks/{id}/retry", h.handleTranscodingTaskRetry)
+	r.Post("/api/transcoding/backfill", h.handleTranscodingBackfill)
+	r.Get("/api/transcoding/cameras", h.handleTranscodingCameraConfigs)
+	r.Get("/api/transcoding/recordings-without-transcode", h.handleTranscodingRecordingsWithoutTranscode)
+}
