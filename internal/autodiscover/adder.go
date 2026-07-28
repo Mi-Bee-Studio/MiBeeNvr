@@ -148,6 +148,20 @@ func (a *Adder) HandleDiscovered(ctx context.Context, dev onvif.DiscoveredDevice
 		return
 	}
 
+	// 2b. Reserve the endpoint in the dedup map BEFORE the (slow) enrich step.
+	// The passive listener (WS-Discovery Hello) and the active scanner (Probe)
+	// run concurrently and report the same device from two goroutines; the
+	// endpoint strings differ only by a default port (e.g. http://x:80 from
+	// probe vs http://x from Hello), which makeDedupKey normalizes to the same
+	// key. Without reserving here, the second path's recentlySeen check (above)
+	// runs while the first is still inside enrich — a classic check-then-act
+	// race — so BOTH paths call EnrichDevice (issue #161). Reserving under the
+	// endpoint key now makes the second path's recentlySeen hit on its next
+	// iteration. The serial key is still marked later (step 4 / enroll) once
+	// enrich fills it in. The reserve expires naturally after dedupWindow, so a
+	// genuinely transient enrich failure is retried within minutes.
+	a.reserveSeen(endpoint)
+
 	// 3. Enrich with GetDeviceInformation (unauthenticated). Fills Serial —
 	// needed for both the stable_id (IP self-healing) and DB dedup.
 	enrichCtx, enrichCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -567,5 +581,22 @@ func (a *Adder) markSeenBothKeys(endpoint, serial string) {
 	if s := strings.TrimSpace(serial); s != "" {
 		a.dedup[makeDedupKey(endpoint, s)] = now // serial key (post-enrichment lookups)
 	}
+	a.dedupMu.Unlock()
+}
+
+// reserveSeen records ONLY the endpoint key as seen now. It is the minimal
+// pre-enrichment reservation that closes the probe/Hello race window of
+// issue #161: between recentlySeen and markSeenBothKeys lies the (hundreds of
+// ms) enrich step, during which a concurrently-reported discovery of the SAME
+// device (different endpoint string, same normalized key) would slip past the
+// recentlySeen gate. Unlike markSeenBothKeys, this intentionally does NOT mark
+// the serial key — the serial is unknown before enrichment, and the full
+// both-keys marking still happens later (in enroll, or in the existing-camera
+// branch via markSeenBothKeys). Reserve is idempotent with markSeenBothKeys,
+// which simply overwrites the endpoint key with a fresh timestamp.
+func (a *Adder) reserveSeen(endpoint string) {
+	now := time.Now()
+	a.dedupMu.Lock()
+	a.dedup[makeDedupKey(endpoint, "")] = now
 	a.dedupMu.Unlock()
 }

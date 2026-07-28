@@ -16,6 +16,10 @@ var logger = slog.Default().With("component", "auth")
 
 const (
 	authCacheTTL = 5 * time.Minute
+	// authCacheCleanupInterval is how often authCacheCleanupLoop sweeps expired
+	// authCache entries. Set to authCacheTTL so eviction stays ahead of churn;
+	// the loop mirrors RateLimiter.cleanupLoop's 2×Window cadence in spirit.
+	authCacheCleanupInterval = authCacheTTL
 )
 
 type rateLimitEntry struct {
@@ -218,9 +222,67 @@ type authCacheEntry struct {
 
 var authCache sync.Map
 
+// authCacheCleanupStarted ensures the background eviction goroutine for
+// authCache is launched at most once per process. Stale entries are otherwise
+// only evicted lazily on re-lookup (CheckPassword), so cache keys that are
+// never revisited (e.g. a one-time login from a transient client) would
+// accumulate indefinitely. The cleanup loop mirrors RateLimiter.cleanupLoop.
+var authCacheCleanupStarted sync.Once
+
+// startAuthCacheCleanup launches a background goroutine that periodically
+// evicts expired authCache entries. It is safe to call concurrently; the first
+// caller wins via authCacheCleanupStarted and subsequent calls are no-ops.
+// The goroutine runs for the lifetime of the process (authCache is process-
+// global), so it intentionally does NOT take a cancellable context — mirroring
+// the package-level authFailures rate-limiter, which is likewise never stopped.
+// The interval is a multiple of authCacheTTL so eviction stays ahead of churn
+// without excessive scanning.
+func startAuthCacheCleanup() {
+	authCacheCleanupStarted.Do(func() {
+		go authCacheCleanupLoop()
+	})
+}
+
+// authCacheCleanupLoop walks authCache every authCacheCleanupInterval and
+// deletes entries older than authCacheTTL.
+func authCacheCleanupLoop() {
+	ticker := time.NewTicker(authCacheCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		evictExpiredAuthCache(time.Now())
+	}
+}
+
+// evictExpiredAuthCache deletes every authCache entry whose verifiedAt is older
+// than authCacheTTL relative to now. Extracted from authCacheCleanupLoop so the
+// eviction logic is unit-testable without waiting on the ticker. Returns the
+// number of entries removed (useful for assertions).
+func evictExpiredAuthCache(now time.Time) int {
+	removed := 0
+	authCache.Range(func(k, v any) bool {
+		entry, ok := v.(authCacheEntry)
+		if !ok {
+			// Malformed entry (should never happen) — drop defensively.
+			authCache.Delete(k)
+			removed++
+			return true
+		}
+		if now.Sub(entry.verifiedAt) >= authCacheTTL {
+			authCache.Delete(k)
+			removed++
+		}
+		return true
+	})
+	return removed
+}
+
 // CheckPassword compares a plaintext password against a bcrypt hash.
 // Results are cached for authCacheTTL to avoid repeated bcrypt overhead.
 func CheckPassword(password, hash string) bool {
+	// Lazily start the periodic eviction goroutine on first use. Idempotent via
+	// sync.Once; subsequent calls are essentially free.
+	startAuthCacheCleanup()
+
 	if strings.TrimSpace(hash) == "" {
 		return false
 	}

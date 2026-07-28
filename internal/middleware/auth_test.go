@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -326,4 +327,98 @@ func TestRateLimiterCleanupStopsOnCancel(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 	require.Equal(t, http.StatusTooManyRequests, w2.Code, "second request from same IP should be blocked when MaxRequests=1")
+}
+
+// resetAuthCacheForTest wipes the package-global authCache so tests start from
+// a known state (the cache otherwise leaks between tests in the same package).
+func resetAuthCacheForTest() {
+	authCache.Range(func(k, _ any) bool {
+		authCache.Delete(k)
+		return true
+	})
+}
+
+// authCacheSize counts the current number of authCache entries (test helper).
+func authCacheSize() int {
+	n := 0
+	authCache.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
+	return n
+}
+
+// TestEvictExpiredAuthCache_RemovesStaleEntries is the regression test for
+// issue #164: authCache had no background eviction, so entries that were never
+// re-looked-up (e.g. a one-time login) accumulated indefinitely. The fix added
+// a periodic sweep; this test drives the core eviction logic directly via
+// evictExpiredAuthCache (the function the ticker calls), so it doesn't depend
+// on wall-clock timing of the 5-minute interval.
+func TestEvictExpiredAuthCache_RemovesStaleEntries(t *testing.T) {
+	resetAuthCacheForTest()
+	t.Cleanup(resetAuthCacheForTest)
+
+	now := time.Now()
+	// Seed: one fresh entry (verified just now) and one stale entry (older than TTL).
+	authCache.Store("fresh-key", authCacheEntry{hash: "h1", verifiedAt: now})
+	authCache.Store("stale-key", authCacheEntry{hash: "h2", verifiedAt: now.Add(-authCacheTTL - time.Second)})
+	require.Equal(t, 2, authCacheSize(), "precondition: two entries seeded")
+
+	// Evict at a "now" that is within TTL of fresh but past TTL of stale.
+	removed := evictExpiredAuthCache(now.Add(time.Second))
+	require.Equal(t, 1, removed, "only the stale entry should be evicted")
+	require.Equal(t, 1, authCacheSize(), "fresh entry must survive eviction")
+
+	// The surviving entry is the fresh one.
+	if _, ok := authCache.Load("fresh-key"); !ok {
+		t.Error("fresh entry should still be present after eviction")
+	}
+	if _, ok := authCache.Load("stale-key"); ok {
+		t.Error("stale entry should have been evicted")
+	}
+
+	// A second sweep at the same now does nothing (already evicted).
+	if removed := evictExpiredAuthCache(now.Add(time.Second)); removed != 0 {
+		t.Errorf("second sweep should remove nothing, got %d", removed)
+	}
+}
+
+// TestEvictExpiredAuthCache_ExpiredBoundary confirms an entry exactly at TTL is
+// evicted (>= comparison), while one just under TTL survives.
+func TestEvictExpiredAuthCache_ExpiredBoundary(t *testing.T) {
+	resetAuthCacheForTest()
+	t.Cleanup(resetAuthCacheForTest)
+
+	base := time.Now()
+	authCache.Store("at-ttl", authCacheEntry{verifiedAt: base.Add(-authCacheTTL)})                       // exactly TTL old
+	authCache.Store("under-ttl", authCacheEntry{verifiedAt: base.Add(-authCacheTTL + time.Millisecond)}) // just under
+
+	removed := evictExpiredAuthCache(base)
+	require.Equal(t, 1, removed, "entry at exactly TTL (>=) should be evicted")
+	if _, ok := authCache.Load("under-ttl"); !ok {
+		t.Error("entry under TTL should survive")
+	}
+}
+
+// TestStartAuthCacheCleanup_Idempotent verifies the cleanup goroutine is
+// launched at most once (sync.Once) regardless of how many concurrent
+// CheckPassword calls race on it. Repeated calls must be cheap no-ops and must
+// not spawn additional goroutines.
+func TestStartAuthCacheCleanup_Idempotent(t *testing.T) {
+	// sync.Once is process-global and may already be consumed by an earlier
+	// test that called CheckPassword. We assert only the documented contract:
+	// calling startAuthCacheCleanup many times concurrently never panics and
+	// returns quickly. (We cannot assert "exactly one goroutine" without
+	// goroutine counting, which is flaky; the sync.Once guarantee is unit-
+	// tested by the stdlib itself.)
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			startAuthCacheCleanup() // must be a safe no-op after the first call
+		}()
+	}
+	wg.Wait()
+	// Reaching here without panicking/deadlocking is the success condition.
 }

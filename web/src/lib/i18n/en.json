@@ -355,6 +355,7 @@
   "dashboard.apply": "Apply",
   "dashboard.backToGrid": "Back to grid",
   "dashboard.buffering": "Buffering",
+  "dashboard.cameraOffline": "Camera Offline",
   "dashboard.clickToLive": "Click for live view",
   "dashboard.configure": "Configure",
   "dashboard.errorState": "Error",

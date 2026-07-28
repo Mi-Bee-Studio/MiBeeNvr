@@ -81,12 +81,37 @@ type deviceInfoEnvelope struct {
 // The enrichment runs in parallel and does not require authentication.
 // Returns a DiscoveryResult with categorized errors.
 // The result always contains a non-nil Devices slice (empty when no devices found).
+//
+// This is the variant for callers that consume the enriched fields directly
+// (e.g. the manual-scan API handler, which returns Manufacturer/Firmware to the
+// UI). Background callers that re-enrich themselves (autodiscover.Scanner →
+// Adder.HandleDiscovered) should use DiscoverNoEnrich to avoid a redundant
+// GetDeviceInformation round-trip per device (issue #161).
 func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
+	return discover(ctx, timeout, true)
+}
+
+// DiscoverNoEnrich is the same as Discover but WITHOUT the internal
+// GetDeviceInformation enrichment pass. Use it when the caller will enrich the
+// devices itself (and wants its own dedup/gating to apply BEFORE enrichment) —
+// notably autodiscover.Scanner, whose Adder.HandleDiscovered re-runs
+// EnrichDevice and would otherwise pay for GetDeviceInformation twice per
+// device on the first scan (once inside Discover, once inside HandleDiscovered).
+// The returned devices have Endpoint/XAddrs/Scopes populated but
+// Manufacturer/Model/Firmware/Serial empty (filled in later by the caller).
+func DiscoverNoEnrich(ctx context.Context, timeout time.Duration) *DiscoveryResult {
+	return discover(ctx, timeout, false)
+}
+
+// discover is the shared core of Discover / DiscoverNoEnrich. When enrich is
+// true, devices are enriched with GetDeviceInformation in parallel before
+// returning; when false, the caller owns enrichment.
+func discover(ctx context.Context, timeout time.Duration, enrich bool) *DiscoveryResult {
 	if timeout <= 0 {
 		timeout = defaultDiscoveryTimeout
 	}
 
-	logger.Info("starting ONVIF device discovery", "timeout", timeout)
+	logger.Info("starting ONVIF device discovery", "timeout", timeout, "enrich", enrich)
 
 	devices, err := discovery.Discover(ctx, timeout)
 	if err != nil {
@@ -109,14 +134,16 @@ func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
 		}
 	}
 
-	// Enrich devices with GetDeviceInformation (no auth, best-effort).
-	// Use a fresh background context with its own timeout so enrichment
-	// is not affected by the expired discovery context.
-	enrichCtx, enrichCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer enrichCancel()
-	enrichDevices(enrichCtx, result)
+	if enrich {
+		// Enrich devices with GetDeviceInformation (no auth, best-effort).
+		// Use a fresh background context with its own timeout so enrichment
+		// is not affected by the expired discovery context.
+		enrichCtx, enrichCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer enrichCancel()
+		enrichDevices(enrichCtx, result)
+	}
 
-	logger.Info("ONVIF discovery completed", "device_count", len(result))
+	logger.Info("ONVIF discovery completed", "device_count", len(result), "enriched", enrich)
 	return &DiscoveryResult{Devices: result}
 }
 

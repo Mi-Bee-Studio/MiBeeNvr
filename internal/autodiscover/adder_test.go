@@ -294,6 +294,74 @@ func TestRecentlySeen_PreEnrichmentEndpointLookupHits(t *testing.T) {
 	}
 }
 
+// TestReserveSeen_ClosesProbeHelloRace is the regression test for issue #161:
+// the passive listener (WS-Discovery Hello) and the active scanner (Probe)
+// concurrently report the SAME device, but with endpoint strings that differ
+// only by the default port (probe forces :80, Hello often omits it). Both paths
+// enter HandleDiscovered at once; before the fix, the enrich step (hundreds of
+// ms) sat between the recentlySeen READ and the markSeenBothKeys WRITE, so the
+// second path's recentlySeen returned false and BOTH paths called EnrichDevice.
+//
+// The fix reserves the endpoint key BEFORE enrich. This test asserts the
+// critical property the fix relies on: after reserveSeen, a recentlySeen query
+// for the SAME device under a DIFFERENT endpoint string (default-port variant)
+// must hit immediately — i.e. the race window is closed. Also verifies the
+// reservation is endpoint-only (serial key NOT yet marked, since the serial is
+// unknown pre-enrichment).
+func TestReserveSeen_ClosesProbeHelloRace(t *testing.T) {
+	t.Helper()
+	adder := NewAdder(&config.AutoDiscoverConfig{}, nil, nil, nil)
+	const probeEP = "http://192.168.1.50:80/onvif/device_service" // :80 forced by probe
+	const helloEP = "http://192.168.1.50/onvif/device_service"    // no port from Hello
+
+	// Simulate the probe path: it passed recentlySeen and reserved the endpoint
+	// before entering the slow enrich step.
+	adder.reserveSeen(probeEP)
+
+	// The Hello path now calls recentlySeen with a DIFFERENT endpoint string
+	// (no :80) but the same normalized key. It MUST hit — otherwise enrich runs
+	// twice (the issue #161 double-EnrichDevice).
+	if !adder.recentlySeen(helloEP, "") {
+		t.Error("recentlySeen must hit a reserved endpoint even when the query string omits the default port (:80) — makeDedupKey normalizes them equal; missing this is the issue #161 race")
+	}
+
+	// Reserve is endpoint-keyed only: a serial-keyed lookup (post-enrichment)
+	// must NOT hit yet, because enrich has not run and the serial is unknown.
+	// This confirms reserveSeen does not over-eagerly suppress by serial.
+	if adder.recentlySeen(helloEP, "SOME-SERIAL") {
+		t.Error("reserveSeen must mark only the endpoint key, not the serial key (serial is unknown pre-enrichment)")
+	}
+
+	// After enrichment completes, markSeenBothKeys is called and marks the
+	// serial key too — at that point the serial-keyed lookup hits. This models
+	// the normal post-enrich path that has always worked.
+	adder.markSeenBothKeys(probeEP, "SOME-SERIAL")
+	if !adder.recentlySeen(helloEP, "SOME-SERIAL") {
+		t.Error("post-enrichment markSeenBothKeys must mark the serial key so serial-keyed lookups hit")
+	}
+}
+
+// TestReserveSeen_IdempotentWithMarkSeenBothKeys verifies that reserveSeen and
+// markSeenBothKeys compose correctly: calling markSeenBothKeys after
+// reserveSeen (the normal enrich → enroll flow) simply refreshes the endpoint
+// key's timestamp and adds the serial key. There is no double-counting or stuck
+// suppression beyond dedupWindow.
+func TestReserveSeen_IdempotentWithMarkSeenBothKeys(t *testing.T) {
+	t.Helper()
+	adder := NewAdder(&config.AutoDiscoverConfig{}, nil, nil, nil)
+	const ep = "http://192.168.1.50/onvif/device_service"
+
+	adder.reserveSeen(ep)
+	adder.markSeenBothKeys(ep, "ABC") // post-enrich call
+	// Both keys now marked; both lookups hit.
+	if !adder.recentlySeen(ep, "") {
+		t.Error("endpoint key must remain marked after markSeenBothKeys")
+	}
+	if !adder.recentlySeen(ep, "ABC") {
+		t.Error("serial key must be marked after markSeenBothKeys")
+	}
+}
+
 func TestClassify_NoCredsUnauthDevice(t *testing.T) {
 	t.Helper()
 	// An unauthenticated device (ESP32 MiBeeCam): enrichment filled in

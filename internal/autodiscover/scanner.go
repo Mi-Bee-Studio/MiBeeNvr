@@ -55,20 +55,27 @@ func (s *Scanner) Run(ctx context.Context) {
 	}
 }
 
-// sweep performs one discovery cycle: multicast Probe + enrichment, then feed
-// each result to the Adder. The Adder owns dedup, so duplicates across sweeps
-// (or vs. the passive listener) are silently skipped.
+// sweep performs one discovery cycle: multicast Probe (no enrichment), then
+// feed each result to the Adder. The Adder owns dedup AND enrichment, so
+// duplicates across sweeps (or vs. the passive listener) are silently skipped
+// BEFORE any GetDeviceInformation call.
+//
+// We deliberately use DiscoverNoEnrich (not Discover): Discover's internal
+// enrichDevices pass runs BEFORE HandleDiscovered, so it bypasses the Adder's
+// dedup entirely and every device paid for GetDeviceInformation twice on the
+// first scan (once inside Discover, once inside HandleDiscovered.enrich). With
+// DiscoverNoEnrich, enrichment happens only inside HandleDiscovered, where
+// reserveSeen + recentlySeen gate it (issue #161).
 //
 // Each device is processed in its own goroutine so a slow/hung device does not
 // block the others — bounded only by the 5s enrichment timeout inside the Adder.
 func (s *Scanner) sweep(ctx context.Context) {
-	// 8s timeout covers a 5s multicast Probe window + a few seconds of
-	// enrichment headroom. Longer than the listener's per-device path because
-	// Discover enriches in bulk.
+	// 8s timeout covers a 5s multicast Probe window + headroom. Enrichment now
+	// happens inside the Adder (per-device goroutine), not in bulk here.
 	sweepCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
-	result := onvif.Discover(sweepCtx, 5*time.Second)
+	result := onvif.DiscoverNoEnrich(sweepCtx, 5*time.Second)
 	for _, dev := range result.Devices {
 		dev := dev // capture for goroutine
 		go s.adder.HandleDiscovered(ctx, dev)
