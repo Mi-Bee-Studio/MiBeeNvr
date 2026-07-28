@@ -1077,8 +1077,15 @@ func TestTimelapseWiring_ResumeNotRecordingTime(t *testing.T) {
 
 	mgr := NewCameraManager(cfg, store, nil, "")
 
+	// Inject a fixed time (noon) so the schedule window below deterministically
+	// does NOT match, regardless of when CI runs. Previously this test relied on
+	// wall-clock not being in the 00:00-00:01 window, which failed every time CI
+	// ran at UTC midnight (issue #151).
+	noon := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	mgr.scheduler.SetClockForTesting(func() time.Time { return noon })
+
 	trueVal := true
-	// Schedule that only covers a time that is unlikely to match now
+	// Schedule window 00:00-00:01 — does NOT match the injected noon time.
 	cam := config.CameraConfig{
 		ID:       "cam-tl-wiring-skip",
 		Name:     "Timelapse Wiring Skip",
@@ -1091,7 +1098,7 @@ func TestTimelapseWiring_ResumeNotRecordingTime(t *testing.T) {
 			Paused:      false,
 			Schedule: &config.ScheduleConfig{
 				TimeRanges: []config.TimeRange{
-					{Start: "00:00", End: "00:01"}, // Very unlikely to match
+					{Start: "00:00", End: "00:01"}, // does not match noon (injected time)
 				},
 			},
 		},
