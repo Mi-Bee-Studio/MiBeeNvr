@@ -3,6 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -37,6 +41,9 @@ func (h *AIHandler) syncAndSaveConfig() {
 		Zones:               aiCfg.Zones,
 		FrameSkipRate:       aiCfg.FrameSkipRate,
 		ConfidenceThreshold: aiCfg.ConfidenceThreshold,
+		EmaAlpha:            aiCfg.EmaAlpha,
+		MaxAge:              aiCfg.MaxAge,
+		EnabledClasses:      aiCfg.EnabledClasses,
 	}
 	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Warn("failed to save AI config", "error", err)
@@ -55,6 +62,9 @@ func (h *AIHandler) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		"model_url":            cfg.ModelURL,
 		"confidence_threshold": cfg.ConfidenceThreshold,
 		"frame_skip_rate":      cfg.FrameSkipRate,
+		"ema_alpha":            cfg.EmaAlpha,
+		"max_age":              cfg.MaxAge,
+		"enabled_classes":      cfg.EnabledClasses,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -69,6 +79,12 @@ func (h *AIHandler) handleAIUpdateConfig(w http.ResponseWriter, r *http.Request)
 		ConfidenceThreshold *float64 `json:"confidence_threshold,omitempty"`
 		FrameSkipRate       *int     `json:"frame_skip_rate,omitempty"`
 		ModelURL            *string  `json:"model_url,omitempty"`
+		EmaAlpha            *float64 `json:"ema_alpha,omitempty"`
+		MaxAge              *int     `json:"max_age,omitempty"`
+		// EnabledClasses uses a pointer-to-slice so an explicit empty array
+		// ([]) is distinguishable from "field omitted" (nil). nil = leave
+		// unchanged; &[] = clear the filter (detect all classes).
+		EnabledClasses *[]string `json:"enabled_classes,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -89,6 +105,15 @@ func (h *AIHandler) handleAIUpdateConfig(w http.ResponseWriter, r *http.Request)
 	}
 	if body.ModelURL != nil {
 		cfg.ModelURL = *body.ModelURL
+	}
+	if body.EmaAlpha != nil {
+		cfg.EmaAlpha = *body.EmaAlpha
+	}
+	if body.MaxAge != nil {
+		cfg.MaxAge = *body.MaxAge
+	}
+	if body.EnabledClasses != nil {
+		cfg.EnabledClasses = *body.EnabledClasses
 	}
 
 	h.manager.UpdateConfig(cfg)
@@ -276,4 +301,50 @@ func (h *AIHandler) handleAIDeleteZone(w http.ResponseWriter, r *http.Request) {
 	h.syncAndSaveConfig()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// --- Model listing endpoint (#185) ---
+
+// aiModelInfo describes one selectable ONNX model file.
+type aiModelInfo struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`  // "/models/<name>" — the URL the browser loads
+	Size int64  `json:"size"` // bytes
+}
+
+// handleAIModels handles GET /api/ai/models.
+// Lists the .onnx files available under {storage_root}/models/ so the Settings
+// UI can offer a model picker (precision/speed trade-off between yolo11n/s/m).
+// Mirrors the directory used by the public GET /models/{filename} file server
+// (handler.go handleServeModel), so the listed URLs are directly loadable.
+func (h *AIHandler) handleAIModels(w http.ResponseWriter, r *http.Request) {
+	modelDir := filepath.Join(h.config.Storage.RootDir, "models")
+	entries, err := os.ReadDir(modelDir)
+	if err != nil {
+		// Directory missing (e.g. download-model never run) → return an empty
+		// list rather than a 500; the UI shows "no models available".
+		writeJSON(w, http.StatusOK, map[string]any{"models": []aiModelInfo{}})
+		return
+	}
+
+	models := make([]aiModelInfo, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".onnx") {
+			continue
+		}
+		info, err := e.Info()
+		size := int64(0)
+		if err == nil {
+			size = info.Size()
+		}
+		models = append(models, aiModelInfo{
+			Name: e.Name(),
+			URL:  "/models/" + e.Name(),
+			Size: size,
+		})
+	}
+	// Stable, predictable order (name ascending).
+	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
+
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }

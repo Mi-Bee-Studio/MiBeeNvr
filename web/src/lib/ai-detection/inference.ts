@@ -53,6 +53,13 @@ export interface ObjectDetectorOptions {
   emaAlpha?: number;
   /** Max age (in skipped frames) before a smoothed detection is removed (default: 15). */
   maxAge?: number;
+  /**
+   * Restrict detection to these COCO class labels (#184). null/undefined/empty =
+   * all 80 classes (no filtering). A non-empty array keeps only detections whose
+   * best class label is in the set — a more precise noise filter than a global
+   * confidence threshold (e.g. show only "person"/"car", never "chair"/"clock").
+   */
+  enabledClasses?: string[] | null;
   /** Input size for YOLO model (default: 640). */
   inputSize?: number;
   /** Number of COCO classes (default: 80). */
@@ -399,6 +406,8 @@ export class ObjectDetector {
   private _frameSkip: number;
   private _emaAlpha: number;
   private _maxAge: number;
+  /** null = all classes (no filtering); a Set = only keep these class labels (#184). */
+  private _enabledClasses: Set<string> | null = null;
   private _inputSize: number;
   private _numClasses: number;
   private _numBoxes: number;
@@ -437,6 +446,9 @@ export class ObjectDetector {
     this._frameSkip = options?.frameSkip ?? FRAME_SKIP;
     this._emaAlpha = options?.emaAlpha ?? EMA_ALPHA;
     this._maxAge = options?.maxAge ?? MAX_AGE;
+    // Build a label Set for O(1) class filtering (#184). Empty/null = all classes.
+    const ec = options?.enabledClasses;
+    this._enabledClasses = ec && ec.length > 0 ? new Set(ec) : null;
     this._inputSize = options?.inputSize ?? INPUT_SIZE;
     this._numClasses = options?.numClasses ?? NUM_CLASSES;
     this._numBoxes = options?.numBoxes ?? NUM_BOXES;
@@ -530,6 +542,14 @@ export class ObjectDetector {
         this._numBoxes,
         this._confidenceThreshold,
       );
+
+      // 4b. Class filter (#184): if a non-empty enabledClasses set is configured,
+      // drop any detection whose best class label isn't in the set. This runs
+      // before NMS so suppressed-class boxes don't interfere with kept-class
+      // box selection. A null set means "all classes" (no filtering).
+      if (this._enabledClasses) {
+        detections = detections.filter((d) => this._enabledClasses!.has(COCO_CLASSES[d.classId] ?? ''));
+      }
 
       // 5. NMS
       detections = nms(detections, this._nmsThreshold);

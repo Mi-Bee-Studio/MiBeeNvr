@@ -1435,5 +1435,19 @@
   "xiaomi.verifyCodePlaceholder": "Verification code",
   "xiaomi.verifyEmailHint": "Enter the code sent to {email}",
   "xiaomi.verifyPhoneHint": "Enter the code sent to {phone}",
-  "xiaomi.verifyTitle": "Verification Required"
+  "xiaomi.verifyTitle": "Verification Required",
+  "settings.ai.classFilter": "Detection Classes",
+  "settings.ai.classFilterHint": "Detect only the selected classes (e.g. people/vehicles). Empty = all 80 classes.",
+  "settings.ai.allClasses": "All",
+  "settings.ai.classFilterDetails": "Detailed class selection",
+  "settings.ai.classPresetAll": "All classes",
+  "settings.ai.classPresetPerson": "People only",
+  "settings.ai.classPresetSecurity": "Security common",
+  "settings.ai.classPresetPersonVehicle": "People + vehicles",
+  "settings.ai.advanced": "Advanced parameters",
+  "settings.ai.emaAlpha": "Smoothing factor",
+  "settings.ai.emaAlphaHint": "Box position smoothing: lower = smoother (box lags), higher = more responsive.",
+  "settings.ai.maxAge": "Box dwell time",
+  "settings.ai.maxAgeHint": "After an object disappears, its box lingers up to ~{secs} seconds.",
+  "settings.ai.noModelsHint": "No models found. Run mibee-nvr download-model to fetch one."
 }

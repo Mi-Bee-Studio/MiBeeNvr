@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getAiSettings, saveAiSettings, detectAiBackend, listCameras, getAiStatus, updateAiConfig } from '$lib/api';
+  import { getAiSettings, saveAiSettings, detectAiBackend, listCameras, getAiStatus, updateAiConfig, listAiModels } from '$lib/api';
   import { getPerCameraAiSettings, savePerCameraAiSettings, getAIZones, createAIZone, deleteAIZone } from '$lib/api';
   import { getSettings, generateAPIKey, revokeAPIKey } from '$lib/api';
   import { refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
-  import type { Camera, Zone, PerCameraAiState } from '$lib/api';
+  import type { Camera, Zone, PerCameraAiState, AiModelInfo } from '$lib/api';
+  import { COCO_CLASSES } from '$lib/ai-detection/inference';
   import { t } from '$lib/i18n';
   import { Plus, Trash2, X, Copy, Check, ChevronDown } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
@@ -19,6 +20,18 @@
   let originalConfidence = $state(0.5);
   let aiFrameSkip = $state(3);
   let originalFrameSkip = $state(3);
+  // Advanced detection params (#183/#184/#185)
+  let aiEmaAlpha = $state(0.3);
+  let originalEmaAlpha = $state(0.3);
+  let aiMaxAge = $state(15);
+  let originalMaxAge = $state(15);
+  let aiEnabledClasses = $state<string[] | null>(null); // null = all classes
+  let originalEnabledClasses = $state<string[] | null>(null);
+  let aiModelUrl = $state('');
+  let originalModelUrl = $state('');
+  let aiModels = $state<AiModelInfo[]>([]);
+  let showAdvanced = $state(false);
+  let showClassFilter = $state(false);
   let aiDetectedBackend = $state('');
   let loading = $state(true);
 
@@ -46,11 +59,24 @@
 
   const hasMiBeeVisionKey = $derived(mibeeVisionKeys.length > 0);
 
+  // Compare two enabled-classes values for isDirty (order-insensitive).
+  function classesEqual(a: string[] | null, b: string[] | null): boolean {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    if (a.length !== b.length) return false;
+    const sb = new Set(b);
+    return a.every((c) => sb.has(c));
+  }
+
   let isDirty = $derived(
     !loading && (
       aiEnabled !== originalAiEnabled ||
       aiConfidenceThreshold !== originalConfidence ||
-      aiFrameSkip !== originalFrameSkip
+      aiFrameSkip !== originalFrameSkip ||
+      aiEmaAlpha !== originalEmaAlpha ||
+      aiMaxAge !== originalMaxAge ||
+      !classesEqual(aiEnabledClasses, originalEnabledClasses) ||
+      aiModelUrl !== originalModelUrl
     )
   );
 
@@ -65,6 +91,17 @@
       originalConfidence = status.confidence_threshold;
       aiFrameSkip = status.frame_skip_rate;
       originalFrameSkip = status.frame_skip_rate;
+      aiEmaAlpha = status.ema_alpha ?? 0.3;
+      originalEmaAlpha = aiEmaAlpha;
+      aiMaxAge = status.max_age ?? 15;
+      originalMaxAge = aiMaxAge;
+      aiEnabledClasses =
+        Array.isArray(status.enabled_classes) && status.enabled_classes.length > 0
+          ? [...status.enabled_classes]
+          : null;
+      originalEnabledClasses = aiEnabledClasses ? [...aiEnabledClasses] : null;
+      aiModelUrl = status.model_url ?? '';
+      originalModelUrl = aiModelUrl;
     } catch (e) {
       console.warn('Failed to load AI status from backend, falling back to localStorage:', e);
       const settings = getAiSettings();
@@ -74,6 +111,14 @@
       originalConfidence = settings.confidenceThreshold;
       aiFrameSkip = settings.frameSkip;
       originalFrameSkip = settings.frameSkip;
+      aiEmaAlpha = settings.emaAlpha ?? 0.3;
+      originalEmaAlpha = aiEmaAlpha;
+      aiMaxAge = settings.maxAge ?? 15;
+      originalMaxAge = aiMaxAge;
+      aiEnabledClasses = settings.enabledClasses ? [...settings.enabledClasses] : null;
+      originalEnabledClasses = aiEnabledClasses ? [...aiEnabledClasses] : null;
+      aiModelUrl = '';
+      originalModelUrl = '';
     }
     aiDetectedBackend = detectAiBackend();
   }
@@ -83,15 +128,27 @@
       enabled: aiEnabled,
       confidence_threshold: aiConfidenceThreshold,
       frame_skip_rate: aiFrameSkip,
+      ema_alpha: aiEmaAlpha,
+      max_age: aiMaxAge,
+      // Send the array as-is; null/empty means "all classes".
+      enabled_classes: aiEnabledClasses && aiEnabledClasses.length > 0 ? aiEnabledClasses : [],
+      model_url: aiModelUrl || undefined,
     });
     saveAiSettings({
       enabled: aiEnabled,
       confidenceThreshold: aiConfidenceThreshold,
       frameSkip: aiFrameSkip,
+      emaAlpha: aiEmaAlpha,
+      maxAge: aiMaxAge,
+      enabledClasses: aiEnabledClasses && aiEnabledClasses.length > 0 ? aiEnabledClasses : null,
     });
     originalAiEnabled = aiEnabled;
     originalConfidence = aiConfidenceThreshold;
     originalFrameSkip = aiFrameSkip;
+    originalEmaAlpha = aiEmaAlpha;
+    originalMaxAge = aiMaxAge;
+    originalEnabledClasses = aiEnabledClasses ? [...aiEnabledClasses] : null;
+    originalModelUrl = aiModelUrl;
     showToast(t('settings.saved'), 'success');
   }
 
@@ -99,6 +156,10 @@
     aiEnabled = originalAiEnabled;
     aiConfidenceThreshold = originalConfidence;
     aiFrameSkip = originalFrameSkip;
+    aiEmaAlpha = originalEmaAlpha;
+    aiMaxAge = originalMaxAge;
+    aiEnabledClasses = originalEnabledClasses ? [...originalEnabledClasses] : null;
+    aiModelUrl = originalModelUrl;
   }
 
   // MiBeeVision key management
@@ -248,16 +309,68 @@
     savePerCameraAiSettings(perCameraAIConfig);
   }
 
+  // ─── Class filter (#184) ────────────────────────────────────────────────
+  // Curated subset of COCO classes offered as checkboxes (the full 80 are too
+  // many to scan; common surveillance targets cover most use cases). The full
+  // label set remains the source of truth via COCO_CLASSES.
+  const COMMON_CLASSES = [
+    'person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck',
+    'cat', 'dog', 'bird', 'horse',
+    'backpack', 'handbag', 'suitcase',
+    'chair', 'clock',
+  ];
+  const CLASS_PRESETS: { label: string; classes: string[] | null }[] = [
+    { label: 'settings.ai.classPresetAll', classes: null },
+    { label: 'settings.ai.classPresetPerson', classes: ['person'] },
+    { label: 'settings.ai.classPresetSecurity', classes: ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck', 'dog', 'cat'] },
+    { label: 'settings.ai.classPresetPersonVehicle', classes: ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck'] },
+  ];
+
+  function applyClassPreset(classes: string[] | null) {
+    aiEnabledClasses = classes ? [...classes] : null;
+  }
+
+  function toggleClass(label: string) {
+    const set = new Set(aiEnabledClasses ?? []);
+    if (set.has(label)) set.delete(label);
+    else set.add(label);
+    // Empty selection = all classes (more intuitive than "detect nothing").
+    aiEnabledClasses = set.size > 0 ? [...set] : null;
+  }
+
+  function isClassEnabled(label: string): boolean {
+    // null = all enabled; otherwise check membership.
+    return aiEnabledClasses === null || aiEnabledClasses.includes(label);
+  }
+
+  // ─── Models (#185) ──────────────────────────────────────────────────────
+  async function loadAiModels() {
+    try {
+      aiModels = await listAiModels();
+    } catch {
+      aiModels = [];
+    }
+  }
+
+  // Human-readable model size for the dropdown.
+  function formatBytes(bytes: number): string {
+    if (!bytes) return '';
+    if (bytes >= 1_000_000) return (bytes / 1_000_000).toFixed(1) + ' MB';
+    if (bytes >= 1000) return (bytes / 1000).toFixed(0) + ' KB';
+    return bytes + ' B';
+  }
+
   onMount(() => {
     Promise.all([
       loadAiSettings(),
       loadMiBeeVisionKeys(),
       loadZones(),
+      loadAiModels(),
       // listCameras is async (returns Promise<Camera[]>); it MUST be awaited,
       // not assigned directly — otherwise allCameras holds a Promise (truthy but
       // .length === undefined) and the per-camera list renders nothing (#180).
       listCameras().catch(() => []),
-    ]).then(([, , , cams]) => {
+    ]).then(([, , , , cams]) => {
       allCameras = cams;
       perCameraAIConfig = getPerCameraAiSettings();
       loading = false;
@@ -336,11 +449,121 @@
           <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.frameSkipHint')}</p>
         </div>
 
-        <!-- Model & Backend Info -->
+        <!-- Class Filter (#184) -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <label class="input-label">{t('settings.ai.classFilter')}</label>
+            <span class="text-sm font-medium th-text-primary">
+              {aiEnabledClasses === null ? t('settings.ai.allClasses') : `${aiEnabledClasses.length}`}
+            </span>
+          </div>
+          <p class="text-xs th-text-tertiary mb-2">{t('settings.ai.classFilterHint')}</p>
+          <!-- Presets -->
+          <div class="flex flex-wrap gap-2 mb-2">
+            {#each CLASS_PRESETS as preset}
+              <button
+                type="button"
+                class="px-2 py-1 text-xs rounded-md border th-border th-bg-hover hover:th-bg-hover transition-colors {classesEqual(aiEnabledClasses, preset.classes) ? 'ring-1 ring-blue-500' : ''}"
+                onclick={() => applyClassPreset(preset.classes)}
+              >
+                {t(preset.label)}
+              </button>
+            {/each}
+          </div>
+          <!-- Expandable detailed selection -->
+          <button
+            type="button"
+            class="text-xs th-text-secondary hover:th-text-primary flex items-center gap-1"
+            onclick={() => (showClassFilter = !showClassFilter)}
+          >
+            <ChevronDown size={12} class="transition-transform {showClassFilter ? 'rotate-180' : ''}" />
+            {t('settings.ai.classFilterDetails')}
+          </button>
+          {#if showClassFilter}
+            <div class="mt-2 p-3 rounded-md border th-border grid grid-cols-2 sm:grid-cols-3 gap-2 th-bg-hover">
+              {#each COMMON_CLASSES as cls}
+                <label class="flex items-center gap-2 text-xs th-text-secondary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="accent-blue-600"
+                    checked={isClassEnabled(cls)}
+                    onchange={() => toggleClass(cls)}
+                  />
+                  {cls}
+                </label>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <!-- Advanced (#183): EMA + MaxAge -->
+        <div>
+          <button
+            type="button"
+            class="text-xs th-text-secondary hover:th-text-primary flex items-center gap-1"
+            onclick={() => (showAdvanced = !showAdvanced)}
+          >
+            <ChevronDown size={12} class="transition-transform {showAdvanced ? 'rotate-180' : ''}" />
+            {t('settings.ai.advanced')}
+          </button>
+          {#if showAdvanced}
+            <div class="mt-2 p-3 rounded-md border th-border space-y-4 th-bg-hover">
+              <!-- EMA alpha -->
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <label class="input-label text-sm" for="ai-ema-alpha">{t('settings.ai.emaAlpha')}</label>
+                  <span class="text-sm th-text-secondary">{aiEmaAlpha.toFixed(1)}</span>
+                </div>
+                <input
+                  id="ai-ema-alpha"
+                  type="range"
+                  class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                  bind:value={aiEmaAlpha}
+                  min="0.1"
+                  max="0.9"
+                  step="0.1"
+                />
+                <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.emaAlphaHint')}</p>
+              </div>
+              <!-- Max age -->
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <label class="input-label text-sm" for="ai-max-age">{t('settings.ai.maxAge')}</label>
+                  <span class="text-sm th-text-secondary">{aiMaxAge}</span>
+                </div>
+                <input
+                  id="ai-max-age"
+                  type="range"
+                  class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                  bind:value={aiMaxAge}
+                  min="3"
+                  max="30"
+                  step="1"
+                />
+                <!-- Show the equivalent dwell time so users understand maxAge in
+                     real seconds rather than abstract "detection cycles" (#183). -->
+                <p class="text-xs th-text-tertiary mt-1">
+                  {t('settings.ai.maxAgeHint', { values: { secs: (aiMaxAge / (30 / aiFrameSkip)).toFixed(1) } })}
+                </p>
+              </div>
+            </div>
+          {/if}
+        </div>
+
+        <!-- Model selection (#185) + Backend Info -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div class="p-3 rounded-md th-bg-hover border th-border">
             <div class="text-xs th-text-tertiary mb-1">{t('settings.ai.modelInfo')}</div>
-            <div class="text-sm font-medium th-text-primary">{t('settings.ai.modelName')}</div>
+            {#if aiModels.length > 0}
+              <select class="input mt-1 text-sm" bind:value={aiModelUrl}>
+                {#each aiModels as m (m.url)}
+                  <option value={m.url}>{m.name} ({formatBytes(m.size)})</option>
+                {/each}
+              </select>
+            {:else}
+              <div class="text-sm font-medium th-text-primary">{t('settings.ai.modelName')}</div>
+              <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.noModelsHint')}</p>
+            {/if}
           </div>
           <div class="p-3 rounded-md th-bg-hover border th-border">
             <div class="text-xs th-text-tertiary mb-1">{t('settings.ai.backendInfo')}</div>

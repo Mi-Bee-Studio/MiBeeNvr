@@ -1435,5 +1435,19 @@
   "xiaomi.verifyCodePlaceholder": "验证码",
   "xiaomi.verifyEmailHint": "请输入发送至 {email} 的验证码",
   "xiaomi.verifyPhoneHint": "请输入发送至 {phone} 的验证码",
-  "xiaomi.verifyTitle": "需要验证"
+  "xiaomi.verifyTitle": "需要验证",
+  "settings.ai.classFilter": "检测类别",
+  "settings.ai.classFilterHint": "只检测选中的类别（如只圈人/车）。空选 = 全部 80 类。",
+  "settings.ai.allClasses": "全部",
+  "settings.ai.classFilterDetails": "详细类别选择",
+  "settings.ai.classPresetAll": "全部类别",
+  "settings.ai.classPresetPerson": "仅人物",
+  "settings.ai.classPresetSecurity": "安防常见",
+  "settings.ai.classPresetPersonVehicle": "人 + 车辆",
+  "settings.ai.advanced": "高级参数",
+  "settings.ai.emaAlpha": "平滑系数",
+  "settings.ai.emaAlphaHint": "框位置平滑：越低越平滑（框跟手慢），越高越灵敏。",
+  "settings.ai.maxAge": "框滞留时长",
+  "settings.ai.maxAgeHint": "目标消失后检测框最多保留约 {secs} 秒。",
+  "settings.ai.noModelsHint": "未找到模型。运行 mibee-nvr download-model 下载。"
 }

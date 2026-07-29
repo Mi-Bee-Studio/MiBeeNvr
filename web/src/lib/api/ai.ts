@@ -16,6 +16,12 @@ export interface AiDetectionSettings {
   confidenceThreshold: number;
   /** Detect every N frames (1–10, default 3) */
   frameSkip: number;
+  /** EMA smoothing factor for box positions (#183, 0.1–0.9, default 0.3). Optional for back-compat. */
+  emaAlpha?: number;
+  /** Max detection cycles a disappeared box lingers (#183, 3–30, default 15). Optional for back-compat. */
+  maxAge?: number;
+  /** Restrict detection to these COCO class labels (#184). null/undefined = all 80 classes. */
+  enabledClasses?: string[] | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -26,6 +32,9 @@ const DEFAULTS: AiDetectionSettings = {
   enabled: false,
   confidenceThreshold: 0.5,
   frameSkip: 3,
+  emaAlpha: 0.3,
+  maxAge: 15,
+  enabledClasses: null,
 };
 
 // ─── Persistence ──────────────────────────────────────────────────────────────
@@ -43,6 +52,10 @@ export function getAiSettings(): AiDetectionSettings {
       enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULTS.enabled,
       confidenceThreshold: clampConfidence(parsed.confidenceThreshold),
       frameSkip: clampFrameSkip(parsed.frameSkip),
+      emaAlpha: clampEmaAlpha(parsed.emaAlpha),
+      maxAge: clampMaxAge(parsed.maxAge),
+      // null/undefined/[] all mean "all classes"; only a non-empty array filters.
+      enabledClasses: Array.isArray(parsed.enabledClasses) ? parsed.enabledClasses : null,
     };
   } catch {
     return { ...DEFAULTS };
@@ -60,6 +73,9 @@ export function saveAiSettings(settings: AiDetectionSettings): void {
         enabled: settings.enabled,
         confidenceThreshold: clampConfidence(settings.confidenceThreshold),
         frameSkip: clampFrameSkip(settings.frameSkip),
+        emaAlpha: clampEmaAlpha(settings.emaAlpha),
+        maxAge: clampMaxAge(settings.maxAge),
+        enabledClasses: Array.isArray(settings.enabledClasses) ? settings.enabledClasses : null,
       }),
     );
   } catch (e) {
@@ -90,6 +106,14 @@ export async function resolveAiSettings(): Promise<AiDetectionSettings> {
       enabled: status.enabled,
       confidenceThreshold: clampConfidence(status.confidence_threshold),
       frameSkip: clampFrameSkip(status.frame_skip_rate),
+      emaAlpha: clampEmaAlpha(status.ema_alpha),
+      maxAge: clampMaxAge(status.max_age),
+      // Backend omits enabled_classes when unset (all classes). Treat null/empty
+      // as "all classes" on the client too.
+      enabledClasses:
+        Array.isArray(status.enabled_classes) && status.enabled_classes.length > 0
+          ? status.enabled_classes
+          : null,
     };
     // Mirror into localStorage so a later offline path falls back to fresh data.
     saveAiSettings(settings);
@@ -110,6 +134,16 @@ function clampConfidence(value: number): number {
 function clampFrameSkip(value: number): number {
   if (typeof value !== 'number' || isNaN(value)) return DEFAULTS.frameSkip;
   return Math.min(10, Math.max(1, Math.round(value)));
+}
+
+function clampEmaAlpha(value: number | undefined): number {
+  if (typeof value !== 'number' || isNaN(value) || value <= 0) return DEFAULTS.emaAlpha!;
+  return Math.round(Math.min(0.9, Math.max(0.1, value)) * 10) / 10;
+}
+
+function clampMaxAge(value: number | undefined): number {
+  if (typeof value !== 'number' || isNaN(value) || value <= 0) return DEFAULTS.maxAge!;
+  return Math.min(30, Math.max(3, Math.round(value)));
 }
 
 // ─── Backend detection ────────────────────────────────────────────────────────
@@ -172,6 +206,9 @@ export interface AiStatus {
   model_url: string;
   confidence_threshold: number;
   frame_skip_rate: number;
+  ema_alpha?: number;
+  max_age?: number;
+  enabled_classes?: string[] | null;
 }
 
 export interface AiConfigUpdate {
@@ -179,6 +216,15 @@ export interface AiConfigUpdate {
   confidence_threshold?: number;
   frame_skip_rate?: number;
   model_url?: string;
+  ema_alpha?: number;
+  max_age?: number;
+  enabled_classes?: string[] | null;
+}
+
+export interface AiModelInfo {
+  name: string;
+  url: string;
+  size: number;
 }
 
 // ─── Backend API functions ────────────────────────────────────────────────
@@ -192,6 +238,12 @@ export async function updateAiConfig(config: AiConfigUpdate): Promise<void> {
     method: 'PUT',
     body: JSON.stringify(config),
   });
+}
+
+/** List selectable ONNX models under {storage_root}/models/ (#185). */
+export async function listAiModels(): Promise<AiModelInfo[]> {
+  const resp = await apiRequest<{ models: AiModelInfo[] }>('/ai/models');
+  return resp.models ?? [];
 }
 
 // ─── Per-camera localStorage ──────────────────────────────────────────────────

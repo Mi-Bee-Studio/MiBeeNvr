@@ -297,12 +297,14 @@ export {
   deleteAIZone,
   getAiStatus,
   updateAiConfig,
+  listAiModels,
 } from './ai';
 
 export type {
   AiDetectionSettings,
   AiStatus,
   AiConfigUpdate,
+  AiModelInfo,
   Zone,
   ZoneList,
   CreateZoneRequest,
