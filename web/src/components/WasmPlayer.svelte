@@ -14,7 +14,7 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
   import AiOverlay from './AiOverlay.svelte';
   import { AiRuntime } from '$lib/ai-detection/runtime';
   import { ObjectDetector, type Detection } from '$lib/ai-detection/inference';
-  import { getAiSettings, getAIZones, getAiStatus, type AiDetectionSettings, type Zone } from '$lib/api/ai';
+  import { getAIZones, getAiStatus, resolveAiSettings, getPerCameraAiSettings, type AiDetectionSettings, type Zone } from '$lib/api/ai';
 
   let {
     cameraId,
@@ -620,8 +620,24 @@ function handleWebGpuLost() {
     aiInitializing = true;
     aiError = null;
     try {
-      const settings = getAiSettings();
+      // Single source of truth (#182): the backend YAML config is authoritative.
+      // resolveAiSettings() pulls /api/ai/status, clamps, and caches to localStorage
+      // for offline fallback. Editing mibee-nvr.yaml + restart now takes effect on
+      // the next player init (previously the stale localStorage value won and a
+      // manual UI save was required to "discover" the new value).
+      const settings = await resolveAiSettings();
       if (!settings.enabled) return;
+
+      // Per-camera override (#179): if this camera has explicit per-camera settings,
+      // they win over the global defaults. This lets the user tune sensitivity per
+      // camera (e.g. high recall at an entrance, high precision indoors) — the
+      // prerequisite for the scenario-based tuning guide (docs/{zh,en}/ai-detection-tuning.md).
+      // Per-camera enabled flag: when present and false, this camera skips AI even
+      // if the global toggle is on. (Global-off always wins — handled by the check above.)
+      const perCam = getPerCameraAiSettings()[cameraId];
+      if (perCam && perCam.enabled === false) {
+        return;
+      }
 
       aiRuntime = new AiRuntime();
       // Fetch the backend-configured model_url (from /api/ai/status) instead of
@@ -645,8 +661,9 @@ function handleWebGpuLost() {
       });
 
       aiDetector = new ObjectDetector(aiRuntime, {
-        confidenceThreshold: settings.confidenceThreshold,
-        frameSkip: settings.frameSkip,
+        // Per-camera value (if set) overrides the global default (#179).
+        confidenceThreshold: perCam?.confidenceThreshold ?? settings.confidenceThreshold,
+        frameSkip: perCam?.frameSkip ?? settings.frameSkip,
       });
     } catch (e) {
       // AI is a non-fatal overlay — never abort the video. The most common

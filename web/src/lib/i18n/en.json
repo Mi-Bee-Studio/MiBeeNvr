@@ -905,6 +905,7 @@
   "settings.ai.noCameras": "No cameras configured",
   "settings.ai.perCameraConfidence": "Confidence Threshold (override)",
   "settings.ai.perCameraDesc": "Configure AI detection individually for each camera.",
+  "settings.ai.perCameraHint": "Tune this camera’s detection parameters. Leave unset to use the global values above.",
   "settings.ai.perCameraFrameSkip": "Frame Skip (override)",
   "settings.ai.perCameraSaved": "Per-camera AI settings saved",
   "settings.ai.perCameraTitle": "Per-Camera AI Settings",

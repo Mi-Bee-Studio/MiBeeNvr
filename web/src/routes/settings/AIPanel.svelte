@@ -18,6 +18,7 @@
   let aiConfidenceThreshold = $state(0.5);
   let originalConfidence = $state(0.5);
   let aiFrameSkip = $state(3);
+  let originalFrameSkip = $state(3);
   let aiDetectedBackend = $state('');
   let loading = $state(true);
 
@@ -48,7 +49,8 @@
   let isDirty = $derived(
     !loading && (
       aiEnabled !== originalAiEnabled ||
-      aiConfidenceThreshold !== originalConfidence
+      aiConfidenceThreshold !== originalConfidence ||
+      aiFrameSkip !== originalFrameSkip
     )
   );
 
@@ -62,6 +64,7 @@
       aiConfidenceThreshold = status.confidence_threshold;
       originalConfidence = status.confidence_threshold;
       aiFrameSkip = status.frame_skip_rate;
+      originalFrameSkip = status.frame_skip_rate;
     } catch (e) {
       console.warn('Failed to load AI status from backend, falling back to localStorage:', e);
       const settings = getAiSettings();
@@ -70,6 +73,7 @@
       aiConfidenceThreshold = settings.confidenceThreshold;
       originalConfidence = settings.confidenceThreshold;
       aiFrameSkip = settings.frameSkip;
+      originalFrameSkip = settings.frameSkip;
     }
     aiDetectedBackend = detectAiBackend();
   }
@@ -87,12 +91,14 @@
     });
     originalAiEnabled = aiEnabled;
     originalConfidence = aiConfidenceThreshold;
+    originalFrameSkip = aiFrameSkip;
     showToast(t('settings.saved'), 'success');
   }
 
   function resetForm() {
     aiEnabled = originalAiEnabled;
     aiConfidenceThreshold = originalConfidence;
+    aiFrameSkip = originalFrameSkip;
   }
 
   // MiBeeVision key management
@@ -207,21 +213,52 @@
   }
 
   function getCameraConfig(cameraId: string) {
-    return perCameraAIConfig[cameraId] || { enabled: false, confidence: 0.5 };
+    // Field names MUST match PerCameraAiState ({ enabled, confidenceThreshold,
+    // frameSkip }). Previously this returned { enabled, confidence } (wrong key),
+    // which is why the per-camera values never reached the player (#180).
+    return (
+      perCameraAIConfig[cameraId] || { enabled: false, confidenceThreshold: 0.5, frameSkip: 3 }
+    );
   }
 
   function togglePerCameraAi(cameraId: string) {
     if (!perCameraAIConfig[cameraId]) {
-      perCameraAIConfig[cameraId] = { enabled: false, confidence: 0.5 };
+      perCameraAIConfig[cameraId] = { enabled: false, confidenceThreshold: 0.5, frameSkip: 3 };
     }
     perCameraAIConfig[cameraId].enabled = !perCameraAIConfig[cameraId].enabled;
     perCameraAIConfig = perCameraAIConfig;
     savePerCameraAiSettings(perCameraAIConfig);
   }
 
+  /** Patch per-camera confidence/frameSkip and persist immediately (#180). */
+  function updatePerCamera(
+    cameraId: string,
+    patch: Partial<{ confidenceThreshold: number; frameSkip: number }>,
+  ) {
+    if (!perCameraAIConfig[cameraId]) {
+      perCameraAIConfig[cameraId] = { enabled: true, confidenceThreshold: 0.5, frameSkip: 3 };
+    }
+    if (patch.confidenceThreshold !== undefined) {
+      perCameraAIConfig[cameraId].confidenceThreshold = patch.confidenceThreshold;
+    }
+    if (patch.frameSkip !== undefined) {
+      perCameraAIConfig[cameraId].frameSkip = patch.frameSkip;
+    }
+    perCameraAIConfig = perCameraAIConfig;
+    savePerCameraAiSettings(perCameraAIConfig);
+  }
+
   onMount(() => {
-    Promise.all([loadAiSettings(), loadMiBeeVisionKeys(), loadZones()]).then(() => {
-      allCameras = listCameras().catch(() => []) as any;
+    Promise.all([
+      loadAiSettings(),
+      loadMiBeeVisionKeys(),
+      loadZones(),
+      // listCameras is async (returns Promise<Camera[]>); it MUST be awaited,
+      // not assigned directly — otherwise allCameras holds a Promise (truthy but
+      // .length === undefined) and the per-camera list renders nothing (#180).
+      listCameras().catch(() => []),
+    ]).then(([, , , cams]) => {
+      allCameras = cams;
       perCameraAIConfig = getPerCameraAiSettings();
       loading = false;
     });
@@ -279,6 +316,24 @@
             step="0.1"
           />
           <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.confidenceHint')}</p>
+        </div>
+
+        <!-- Frame Skip (#181) -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <label class="input-label" for="ai-frame-skip">{t('settings.ai.frameSkip')}</label>
+            <span class="text-sm font-medium th-text-primary">{aiFrameSkip}</span>
+          </div>
+          <input
+            id="ai-frame-skip"
+            type="range"
+            class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+            bind:value={aiFrameSkip}
+            min="1"
+            max="10"
+            step="1"
+          />
+          <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.frameSkipHint')}</p>
         </div>
 
         <!-- Model & Backend Info -->
@@ -377,6 +432,46 @@
               </div>
               <ChevronDown size={16} class="th-text-tertiary transition-transform {expandedCameras[cam.id] ? 'rotate-180' : ''}" />
             </button>
+
+            {#if expandedCameras[cam.id]}
+              <div class="p-3 border-t th-border space-y-4 th-bg-hover">
+                <p class="text-xs th-text-tertiary">{t('settings.ai.perCameraHint')}</p>
+                <!-- Per-camera confidence -->
+                <div>
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="input-label text-sm" for="percam-conf-{cam.id}">{t('settings.ai.confidenceThreshold')}</label>
+                    <span class="text-sm th-text-secondary">{Math.round((getCameraConfig(cam.id).confidenceThreshold ?? 0.5) * 100)}%</span>
+                  </div>
+                  <input
+                    id="percam-conf-{cam.id}"
+                    type="range"
+                    class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                    min="0.1"
+                    max="0.9"
+                    step="0.1"
+                    value={getCameraConfig(cam.id).confidenceThreshold ?? 0.5}
+                    oninput={(e) => updatePerCamera(cam.id, { confidenceThreshold: parseFloat(e.currentTarget.value) })}
+                  />
+                </div>
+                <!-- Per-camera frame skip -->
+                <div>
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="input-label text-sm" for="percam-skip-{cam.id}">{t('settings.ai.frameSkip')}</label>
+                    <span class="text-sm th-text-secondary">{getCameraConfig(cam.id).frameSkip ?? 3}</span>
+                  </div>
+                  <input
+                    id="percam-skip-{cam.id}"
+                    type="range"
+                    class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                    min="1"
+                    max="10"
+                    step="1"
+                    value={getCameraConfig(cam.id).frameSkip ?? 3}
+                    oninput={(e) => updatePerCamera(cam.id, { frameSkip: parseInt(e.currentTarget.value) })}
+                  />
+                </div>
+              </div>
+            {/if}
           </div>
         {/each}
       </div>

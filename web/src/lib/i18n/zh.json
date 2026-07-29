@@ -905,6 +905,7 @@
   "settings.ai.noCameras": "未配置摄像头",
   "settings.ai.perCameraConfidence": "置信度阈值（覆盖全局）",
   "settings.ai.perCameraDesc": "为每个摄像头单独配置 AI 检测。",
+  "settings.ai.perCameraHint": "调整此摄像头的检测参数。留空则使用上方全局值。",
   "settings.ai.perCameraFrameSkip": "帧跳过（覆盖全局）",
   "settings.ai.perCameraSaved": "单摄像头 AI 设置已保存",
   "settings.ai.perCameraTitle": "单摄像头 AI 设置",
