@@ -165,13 +165,18 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 	return res, nil
 }
 
-// UpsertCamera inserts or updates a camera record in the database
+// UpsertCamera inserts or updates a camera record in the database.
+//
+// The onvifEndpoint is normalized to its canonical form (default port :80/:443
+// elided, scheme/host lowercased) before storage so that dedup queries can use
+// a normalized comparison and a device discovered as "http://1.2.3.4/..." still
+// matches a later write of "http://1.2.3.4:80/..." (#175).
 func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, onvifEndpoint, profileToken, streamEncoding, stableID string) error {
 	q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, onvif_endpoint, profile_token, stream_encoding, stable_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)
 
 		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding, stable_id=excluded.stable_id;`
 
-	_, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, onvifEndpoint, profileToken, streamEncoding, stableID)
+	_, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, NormalizeOnvifEndpoint(onvifEndpoint), profileToken, streamEncoding, stableID)
 
 	return err
 }
@@ -212,11 +217,11 @@ func (d *DB) CameraExistsByOnvifEndpoint(ctx context.Context, onvifEndpoint, ser
 		return false, nil
 	}
 	if onvifEndpoint != "" {
-		var c int
-		if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE onvif_endpoint=? LIMIT 1`, onvifEndpoint).Scan(&c); err != nil {
+		found, err := d.endpointExists(ctx, onvifEndpoint)
+		if err != nil {
 			return false, err
 		}
-		if c > 0 {
+		if found {
 			return true, nil
 		}
 	}
@@ -437,12 +442,11 @@ func (d *DB) CameraIDByOnvifEndpoint(ctx context.Context, onvifEndpoint, serial 
 		return "", "", nil
 	}
 	if onvifEndpoint != "" {
-		var id string
-		if err := d.readConn().QueryRowContext(ctx, `SELECT id FROM cameras WHERE onvif_endpoint=? LIMIT 1`, onvifEndpoint).Scan(&id); err != nil {
-			if err != sql.ErrNoRows {
-				return "", "", err
-			}
-		} else {
+		id, found, err := d.cameraIDByEndpoint(ctx, onvifEndpoint)
+		if err != nil {
+			return "", "", err
+		}
+		if found {
 			return id, "endpoint", nil
 		}
 	}

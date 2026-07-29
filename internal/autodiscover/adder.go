@@ -22,7 +22,6 @@ package autodiscover
 import (
 	"context"
 	"log/slog"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -217,40 +216,13 @@ func canonicalEndpoint(endpoint string, xaddrs []string) string {
 	return ""
 }
 
-// normalizeEndpoint canonicalizes an ONVIF device-service URL so that
-// semantically-identical endpoints compare equal. It:
-//   - lowercases the scheme and host (case-insensitive per RFC 3986)
-//   - elides the default port (:80 for http, :443 for https)
-//   - strips trailing slashes
-//
-// If the input is not a valid URL (unexpected for ONVIF XAddrs, but possible
-// from malformed firmware), it falls back to a best-effort strings.TrimRight
-// so the comparison never panics.
+// normalizeEndpoint canonicalizes an ONVIF device-service URL. It is a thin
+// wrapper around storage.NormalizeOnvifEndpoint so that the canonical form is
+// identical between the autodiscover discovery path and the storage write/dedup
+// paths — preventing :80-vs-no-port mismatches from defeating dedup (#175).
+// Kept as an unexported alias for the existing call sites in this package.
 func normalizeEndpoint(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		// Fallback: at least strip trailing slashes (legacy behavior).
-		return strings.TrimRight(raw, "/")
-	}
-	scheme := strings.ToLower(u.Scheme)
-	host := strings.ToLower(u.Hostname())
-	port := u.Port()
-	// Elide default ports.
-	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
-		port = ""
-	}
-	// Reconstruct the canonical form.
-	result := scheme + "://" + host
-	if port != "" {
-		result += ":" + port
-	}
-	path := strings.TrimRight(u.Path, "/")
-	result += path
-	return result
+	return storage.NormalizeOnvifEndpoint(raw)
 }
 
 // matchesIgnoreScope reports whether any of the device's scopes contains any
