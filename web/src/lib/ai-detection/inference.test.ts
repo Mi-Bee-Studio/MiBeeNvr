@@ -236,8 +236,10 @@ describe('ObjectDetector', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
 
-    // Suppress console.warn from detect() error handler
+    // Suppress console.warn from detect() error handler and console.info from
+    // the adaptive-throttle logger (kept quiet in test output).
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
 
     // Mock browser APIs for preprocessing
     setupBrowserMocks();
@@ -306,6 +308,79 @@ describe('ObjectDetector', () => {
       expect(results).toHaveLength(0);
     });
   });
+
+  describe('adaptive throttle (#186 scheme 1)', () => {
+    // The detector measures each inference's wall-clock time and, when the
+    // running average exceeds SLOW_INFERENCE_MS (80), raises frameSkip one step
+    // (capped at 10) to protect low-power devices. The raise is monotonic — it
+    // never auto-lowers, to avoid flapping against the user's explicit setting.
+
+    it('keeps frameSkip unchanged when inference is fast', () => {
+      const detector = new ObjectDetector(mockRuntime, { frameSkip: 3 });
+      // 5 fast samples (well below 80ms) → no throttle.
+      for (let i = 0; i < 5; i++) detector.recordInferenceTime(20);
+      expect(detector.effectiveFrameSkip).toBe(3);
+    });
+
+    it('raises frameSkip when average inference time exceeds threshold', () => {
+      const detector = new ObjectDetector(mockRuntime, { frameSkip: 3 });
+      // 5 slow samples (≈100ms each, avg > 80ms) → raise once 3→4.
+      for (let i = 0; i < 5; i++) detector.recordInferenceTime(100);
+      expect(detector.effectiveFrameSkip).toBe(4);
+    });
+
+    it('does not throttle before the minimum sample count', () => {
+      const detector = new ObjectDetector(mockRuntime, { frameSkip: 3 });
+      // Only 4 samples (below INFERENCE_MIN_SAMPLES=5) → no decision yet.
+      for (let i = 0; i < 4; i++) detector.recordInferenceTime(100);
+      expect(detector.effectiveFrameSkip).toBe(3);
+    });
+
+    it('caps frameSkip at the maximum under sustained slow inference', () => {
+      const detector = new ObjectDetector(mockRuntime, { frameSkip: 3 });
+      // Feed enough slow samples to raise from 3 all the way to the cap (10).
+      // Each batch of 5 fresh slow samples raises one step; the window holds
+      // the last 10, so we keep feeding to climb 3→10.
+      for (let i = 0; i < 50; i++) detector.recordInferenceTime(100);
+      expect(detector.effectiveFrameSkip).toBe(10);
+    });
+
+    it('does not lower frameSkip when inference becomes fast again (monotonic, #186)', () => {
+      // The auto-throttle is monotonic: it only ever raises frameSkip, never
+      // lowers it. Lowering would flap against the user's explicit setting and
+      // cause oscillation. Once raised (even by transient slow samples), the
+      // value holds until the user manually changes it.
+      const detector = new ObjectDetector(mockRuntime, { frameSkip: 3 });
+      // Slow inference → raises (at least one step).
+      for (let i = 0; i < 7; i++) detector.recordInferenceTime(100);
+      const raisedTo = detector.effectiveFrameSkip;
+      expect(raisedTo).toBeGreaterThan(3);
+      // Now sustained fast inference — value must never drop below the raised
+      // level. It may rise a little more while slow samples drain from the
+      // sliding window, but it MUST NOT decrease.
+      let lowest = raisedTo;
+      for (let i = 0; i < 100; i++) {
+        detector.recordInferenceTime(5);
+        lowest = Math.min(lowest, detector.effectiveFrameSkip);
+      }
+      expect(lowest).toBeGreaterThanOrEqual(raisedTo);
+    });
+
+    it('ignores brief slow spikes when the window average stays fast (#186)', () => {
+      // A single slow sample among fast ones must not trigger a raise — the
+      // sliding-window average smooths out transient spikes. Only a sustained
+      // slow average (several samples) raises frameSkip.
+      const detector = new ObjectDetector(mockRuntime, { frameSkip: 3 });
+      // Fill the window with fast samples (avg well below 80ms).
+      for (let i = 0; i < 10; i++) detector.recordInferenceTime(20);
+      expect(detector.effectiveFrameSkip).toBe(3);
+      // One slow spike — window is [20×9, 200×1], avg = (180+200)/10 = 38 < 80.
+      detector.recordInferenceTime(200);
+      expect(detector.effectiveFrameSkip).toBe(3);
+    });
+  });
+
+
 
   describe('detection pipeline', () => {
     it('returns detections with correct structure', async () => {
