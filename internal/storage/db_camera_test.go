@@ -170,3 +170,62 @@ func TestCameraIDByOnvifEndpoint(t *testing.T) {
 	require.Equal(t, camID2, id)
 	require.Equal(t, "endpoint", kind, "endpoint match must be reported when both endpoint and serial match")
 }
+
+// TestCameraIDByOnvifEndpoint_DefaultPortMismatch is the regression test for
+// issue #175: a row stored with an explicit default port (:80) must still be
+// matched by a query without it (and vice versa). Before the fix,
+// CameraIDByOnvifEndpoint did a raw WHERE onvif_endpoint=? exact match, so
+// autodiscover (which discovers endpoints WITHOUT :80 from WS-Discovery
+// XAddrs) would miss a camera stored WITH :80 and create a duplicate.
+func TestCameraIDByOnvifEndpoint_DefaultPortMismatch(t *testing.T) {
+	db := newCameraDB(t)
+	ctx := context.Background()
+	const camID = "cam-port"
+
+	// Store WITH explicit :80. UpsertCamera now normalizes on write, so the
+	// stored value is actually "http://192.168.1.50/onvif/device_service"; we
+	// also directly exercise the un-normalized stored case below.
+	require.NoError(t, db.UpsertCamera(ctx, camID, "Port Cam", "onvif", "", "", "", "",
+		"http://192.168.1.50:80/onvif/device_service", "", "", ""))
+
+	// Query WITHOUT :80 → must match (this is the autodiscover discovery form).
+	id, kind, err := db.CameraIDByOnvifEndpoint(ctx, "http://192.168.1.50/onvif/device_service", "")
+	require.NoError(t, err)
+	require.Equal(t, camID, id)
+	require.Equal(t, "endpoint", kind)
+
+	// Query WITH :80 → must still match (normalized comparison).
+	id, kind, err = db.CameraIDByOnvifEndpoint(ctx, "http://192.168.1.50:80/onvif/device_service", "")
+	require.NoError(t, err)
+	require.Equal(t, camID, id)
+	require.Equal(t, "endpoint", kind)
+
+	// Simulate a LEGACY un-normalized row (written before UpsertCamera
+	// normalized on write) by directly poking the column to contain :80.
+	_, err = db.db.ExecContext(ctx, `UPDATE cameras SET onvif_endpoint=? WHERE id=?`,
+		"http://192.168.1.50:80/onvif/device_service", camID)
+	require.NoError(t, err)
+	// Now a query WITHOUT :80 must STILL match via the normalize-and-compare
+	// fallback scan — this is the exact scenario from #175.
+	id, kind, err = db.CameraIDByOnvifEndpoint(ctx, "http://192.168.1.50/onvif/device_service", "")
+	require.NoError(t, err)
+	require.Equal(t, camID, id, "legacy row stored with :80 must match a query without :80 (#175)")
+	require.Equal(t, "endpoint", kind)
+}
+
+// TestCameraExistsByOnvifEndpoint_DefaultPortMismatch mirrors the above for the
+// sibling Exists query, which had the same exact-match bug.
+func TestCameraExistsByOnvifEndpoint_DefaultPortMismatch(t *testing.T) {
+	db := newCameraDB(t)
+	ctx := context.Background()
+	// Legacy row stored with explicit :80 via direct column poke.
+	require.NoError(t, db.UpsertCamera(ctx, "cam-ex", "Exists Cam", "onvif", "", "", "", "",
+		"http://192.168.1.70/onvif/device_service", "", "", ""))
+	_, err := db.db.ExecContext(ctx, `UPDATE cameras SET onvif_endpoint=? WHERE id=?`,
+		"http://192.168.1.70:80/onvif/device_service", "cam-ex")
+	require.NoError(t, err)
+
+	found, err := db.CameraExistsByOnvifEndpoint(ctx, "http://192.168.1.70/onvif/device_service", "")
+	require.NoError(t, err)
+	require.True(t, found, "query without :80 must match legacy row stored with :80 (#175)")
+}

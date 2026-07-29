@@ -11,6 +11,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
@@ -51,10 +52,12 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 			break
 		}
 		// ONVIF endpoint dedup: both must be onvif protocol with a non-empty,
-		// equal endpoint. Stripped of trailing slash for tolerance.
+		// equal endpoint. Compared via NormalizeOnvifEndpoint (lowercases
+		// scheme/host, elides default port :80/:443, strips trailing slash) so
+		// that "http://1.2.3.4/..." and "http://1.2.3.4:80/..." match (#175).
 		if cam.Protocol == string(model.ProtoONVIF) && existing.Protocol == string(model.ProtoONVIF) {
-			if ep := strings.TrimRight(cam.ONVIFEndpoint, "/"); ep != "" {
-				if strings.TrimRight(existing.ONVIFEndpoint, "/") == ep {
+			if ep := storage.NormalizeOnvifEndpoint(cam.ONVIFEndpoint); ep != "" {
+				if storage.NormalizeOnvifEndpoint(existing.ONVIFEndpoint) == ep {
 					dup = true
 					dupID = existing.ID
 					break

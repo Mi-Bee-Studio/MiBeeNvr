@@ -52,6 +52,8 @@ func runRepair() int {
 		return runRepairPruneIntermediateMP4()
 	case "reclaim-orphan-merges":
 		return runRepairReclaimOrphanMerges()
+	case "normalize-endpoints":
+		return runRepairNormalizeEndpoints()
 	case "--help", "-h":
 		printRepairUsage()
 		return 0
@@ -1246,6 +1248,9 @@ Subcommands:
   reclaim-orphan-merges Remove merged-output .mp4 files left on disk after their recording
                          row was deleted via the web UI (pre-#117 fix leak). Only touches
                          unreferenced .mp4 files; never source segments or frame dirs.
+  normalize-endpoints   Canonicalize every camera's onvif_endpoint (elide default :80/:443,
+                         lowercase scheme/host, strip trailing slash) so dedup queries match
+                         across discovery paths. Fixes legacy rows written before #175.
 
 Common options:
   --dry-run      Report what would change without modifying (default)
