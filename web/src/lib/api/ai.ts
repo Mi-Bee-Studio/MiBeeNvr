@@ -128,7 +128,12 @@ export async function resolveAiSettings(): Promise<AiDetectionSettings> {
 
 function clampConfidence(value: number): number {
   if (typeof value !== 'number' || isNaN(value)) return DEFAULTS.confidenceThreshold;
-  return Math.round(Math.min(0.9, Math.max(0.1, value)) * 10) / 10;
+  // Upper bound 0.99 (was 0.9): YOLOv11-nano on complex scenes produces
+  // background false positives in the 0.85–0.92 range; pushing the threshold
+  // to 0.95 filters most of them while keeping real persons (>0.93). Two
+  // decimal places so 0.95 is representable (the old 1-decimal rounding turned
+  // 0.95 into 0.9 or 1.0).
+  return Math.round(Math.min(0.99, Math.max(0.1, value)) * 100) / 100;
 }
 
 function clampFrameSkip(value: number): number {

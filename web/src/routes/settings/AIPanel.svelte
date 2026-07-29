@@ -425,8 +425,8 @@
             class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
             bind:value={aiConfidenceThreshold}
             min="0.1"
-            max="0.9"
-            step="0.1"
+            max="0.99"
+            step="0.01"
           />
           <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.confidenceHint')}</p>
         </div>
@@ -670,8 +670,8 @@
                     type="range"
                     class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
                     min="0.1"
-                    max="0.9"
-                    step="0.1"
+                    max="0.99"
+                    step="0.01"
                     value={getCameraConfig(cam.id).confidenceThreshold ?? 0.5}
                     oninput={(e) => updatePerCamera(cam.id, { confidenceThreshold: parseFloat(e.currentTarget.value) })}
                   />
