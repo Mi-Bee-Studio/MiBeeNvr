@@ -294,17 +294,31 @@ function parseYoloOutput(
     if (w <= 0 || h <= 0) continue;
 
     // Find best class
-    let maxScore = -Infinity;
+    let maxRaw = -Infinity;
     let maxClass = 0;
     for (let j = 0; j < numClasses; j++) {
-      const rawScore = data[offset + 4 + j];
-      // YOLOv11 may or may not use sigmoid — handle both
-      const score = sigmoid(rawScore);
-      if (score > maxScore) {
-        maxScore = score;
+      const raw = data[offset + 4 + j];
+      if (raw > maxRaw) {
+        maxRaw = raw;
         maxClass = j;
       }
     }
+
+    // YOLOv11's ONNX export emits raw class logits. Apply sigmoid to normalize
+    // to a probability before the threshold check (a 0.95 threshold ≈ logit
+    // 2.94). This fixed the "100% everywhere" bug where the old low thresholds
+    // let any positive logit through after sigmoid.
+    //
+    // Sanity cap on logits: a well-formed YOLO detection has a class logit in
+    // roughly the -10..+15 range. Values in the thousands (seen on corrupted /
+    // garbled decoded frames — H.265 decode errors feed the model noise) produce
+    // exploding logits whose sigmoid is indistinguishable from 1.0, swamping the
+    // threshold and painting dozens of phantom "person:100%" boxes. Reject any
+    // box whose best-class logit exceeds this cap as a decode artifact.
+    const MAX_VALID_LOGIT = 15;
+    if (maxRaw > MAX_VALID_LOGIT) continue;
+
+    const maxScore = sigmoid(maxRaw);
 
     if (maxScore < confidenceThreshold) continue;
 
