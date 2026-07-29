@@ -67,9 +67,12 @@ func (d *DB) endpointExists(ctx context.Context, query string) (bool, error) {
 		return true, nil
 	}
 	// Fallback: normalize every stored endpoint and compare to the normalized query.
+	// This catches legacy rows stored before UpsertCamera normalized on write
+	// (e.g. a row with explicit :80 while the query omits it). Note we MUST scan
+	// even when the query is already canonical, because the STORED value may not be.
 	normQuery := NormalizeOnvifEndpoint(query)
-	if normQuery == "" || normQuery == query {
-		return false, nil // already tried exact; nothing more to do
+	if normQuery == "" {
+		return false, nil
 	}
 	rows, err := d.readConn().QueryContext(ctx, `SELECT onvif_endpoint FROM cameras`)
 	if err != nil {
@@ -99,9 +102,10 @@ func (d *DB) cameraIDByEndpoint(ctx context.Context, query string) (string, bool
 	} else if err != sql.ErrNoRows {
 		return "", false, err
 	}
-	// Fallback: normalize-and-compare scan.
+	// Fallback: normalize-and-compare scan. Catches legacy un-normalized rows
+	// even when the query is already canonical (the stored value may carry :80).
 	normQuery := NormalizeOnvifEndpoint(query)
-	if normQuery == "" || normQuery == query {
+	if normQuery == "" {
 		return "", false, nil
 	}
 	rows, err := d.readConn().QueryContext(ctx, `SELECT id, onvif_endpoint FROM cameras`)
