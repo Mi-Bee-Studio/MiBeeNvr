@@ -380,6 +380,64 @@ describe('ObjectDetector', () => {
     });
   });
 
+  describe('class filter (#184)', () => {
+    // The detector can restrict results to a subset of COCO class labels.
+    // null/empty enabledClasses = all classes (no filtering). A non-empty array
+    // keeps only detections whose best-class label is in the set.
+
+    function buildMultiClassOutput(): { data: Float32Array; dims: number[] } {
+      // Three detections: person (0), car (2), chair (56). All high-confidence.
+      return buildYoloOutput([
+        { boxIndex: 0, cx: 100, cy: 100, w: 50, h: 80, classId: 0, rawScore: 6 },
+        { boxIndex: 1, cx: 300, cy: 300, w: 60, h: 40, classId: 2, rawScore: 6 },
+        { boxIndex: 2, cx: 500, cy: 500, w: 40, h: 40, classId: 56, rawScore: 6 },
+      ]);
+    }
+
+    it('returns all classes when enabledClasses is null/empty (default)', async () => {
+      const { data, dims } = buildMultiClassOutput();
+      const rt = createMockRuntime(data, dims);
+      const detector = new ObjectDetector(rt, { frameSkip: 1, enabledClasses: null });
+      const results = await detector.detect(createMockVideoFrame());
+      const labels = results.map((d) => d.label).sort();
+      expect(labels).toEqual(['car', 'chair', 'person']);
+    });
+
+    it('returns only the enabled classes when a filter is set', async () => {
+      const { data, dims } = buildMultiClassOutput();
+      const rt = createMockRuntime(data, dims);
+      const detector = new ObjectDetector(rt, {
+        frameSkip: 1,
+        // Only people and cars — chair must be dropped.
+        enabledClasses: ['person', 'car'],
+      });
+      const results = await detector.detect(createMockVideoFrame());
+      const labels = results.map((d) => d.label).sort();
+      expect(labels).toEqual(['car', 'person']);
+      expect(labels).not.toContain('chair');
+    });
+
+    it('drops all detections when the filter matches no class', async () => {
+      const { data, dims } = buildMultiClassOutput();
+      const rt = createMockRuntime(data, dims);
+      const detector = new ObjectDetector(rt, {
+        frameSkip: 1,
+        enabledClasses: ['airplane'], // none of person/car/chair
+      });
+      const results = await detector.detect(createMockVideoFrame());
+      expect(results).toHaveLength(0);
+    });
+
+    it('treats an empty array the same as null (all classes)', async () => {
+      const { data, dims } = buildMultiClassOutput();
+      const rt = createMockRuntime(data, dims);
+      const detector = new ObjectDetector(rt, { frameSkip: 1, enabledClasses: [] });
+      const results = await detector.detect(createMockVideoFrame());
+      const labels = results.map((d) => d.label).sort();
+      expect(labels).toEqual(['car', 'chair', 'person']);
+    });
+  });
+
 
 
   describe('detection pipeline', () => {

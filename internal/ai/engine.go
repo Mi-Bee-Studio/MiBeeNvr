@@ -15,6 +15,9 @@ type Config struct {
 	Zones               map[string][]ROI `yaml:"zones"`
 	FrameSkipRate       int              `yaml:"frame_skip_rate"`
 	ConfidenceThreshold float64          `yaml:"confidence_threshold"`
+	EmaAlpha            float64          `yaml:"ema_alpha"`
+	MaxAge              int              `yaml:"max_age"`
+	EnabledClasses      []string         `yaml:"enabled_classes"`
 }
 
 // Manager manages AI configuration. No backend inference — the browser

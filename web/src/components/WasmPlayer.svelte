@@ -664,6 +664,11 @@ function handleWebGpuLost() {
         // Per-camera value (if set) overrides the global default (#179).
         confidenceThreshold: perCam?.confidenceThreshold ?? settings.confidenceThreshold,
         frameSkip: perCam?.frameSkip ?? settings.frameSkip,
+        // EMA smoothing + class filter are global-only for now (#183/#184);
+        // per-camera override of these can follow if needed.
+        emaAlpha: settings.emaAlpha,
+        maxAge: settings.maxAge,
+        enabledClasses: settings.enabledClasses,
       });
     } catch (e) {
       // AI is a non-fatal overlay — never abort the video. The most common

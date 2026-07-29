@@ -305,6 +305,15 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.AI.ModelURL == "" {
 		cfg.AI.ModelURL = "/models/yolo11n.onnx"
 	}
+	// EMA smoothing defaults (#183): mirror the ObjectDetector constants so a
+	// config that omits these fields behaves identically to the pre-config era.
+	if cfg.AI.EmaAlpha <= 0 {
+		cfg.AI.EmaAlpha = 0.3
+	}
+	if cfg.AI.MaxAge <= 0 {
+		cfg.AI.MaxAge = 15
+	}
+	// EnabledClasses default: empty = all 80 COCO classes (no filtering, #184).
 
 	// Remote log defaults
 	if cfg.RemoteLog.Format == "" {

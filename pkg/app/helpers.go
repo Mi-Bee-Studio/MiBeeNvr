@@ -28,6 +28,9 @@ func aiConfigFromConfig(cfg config.AIConfig) ai.Config {
 		Zones:               cfg.Zones,
 		FrameSkipRate:       cfg.FrameSkipRate,
 		ConfidenceThreshold: cfg.ConfidenceThreshold,
+		EmaAlpha:            cfg.EmaAlpha,
+		MaxAge:              cfg.MaxAge,
+		EnabledClasses:      cfg.EnabledClasses,
 	}
 }
 

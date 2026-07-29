@@ -258,6 +258,7 @@ func getDefaultStatsSince(period string) (t time.Time) {
 func (h *Handler) registerAIRoutes(r chi.Router) {
 	r.Get("/api/ai/status", h.aiHandler.handleAIStatus)
 	r.Put("/api/ai/config", h.aiHandler.handleAIUpdateConfig)
+	r.Get("/api/ai/models", h.aiHandler.handleAIModels)
 	r.Get("/api/ai/zones", h.aiHandler.handleAIZones)
 	r.Post("/api/ai/zones", h.aiHandler.handleAICreateZone)
 	r.Put("/api/ai/zones/{id}", h.aiHandler.handleAIUpdateZone)
