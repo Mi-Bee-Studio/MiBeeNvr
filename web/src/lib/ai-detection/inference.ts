@@ -449,7 +449,11 @@ export class ObjectDetector {
       );
 
       // 2. Run inference
-      const dims = [1, 4 + this._numClasses, this._numBoxes];
+      // Input tensor shape is [1, 3, inputSize, inputSize] — the preprocessed
+      // RGB Float32 image (NCHW). Do NOT use the *output* shape [1, 4+numClasses,
+      // numBoxes] here; that produces a tensor of the wrong size and every
+      // inference throws "Tensor's size does not match data length" (#173).
+      const dims = [1, 3, this._inputSize, this._inputSize];
       const results = await this._runtime.run(tensor, dims);
 
       // 3. Parse output — get first output tensor
