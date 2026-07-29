@@ -67,6 +67,39 @@ export function saveAiSettings(settings: AiDetectionSettings): void {
   }
 }
 
+// ─── Single source of truth (#182) ───────────────────────────────────────────
+
+/**
+ * Resolve the authoritative AI detection settings.
+ *
+ * The backend YAML config (`GET /api/ai/status`) is the single source of truth.
+ * localStorage is only an offline cache used when the API is unreachable (NVR
+ * restarting, network down) so the player can still show *something* rather
+ * than nothing. This fixes #182: previously the player read localStorage only
+ * (`getAiSettings`), so editing mibee-nvr.yaml and restarting had no effect on
+ * an already-open browser (its localStorage was stale), and different browsers
+ * saw different AI behavior for the same NVR.
+ *
+ * On success the backend value is written back to localStorage so the next
+ * offline fallback is fresh.
+ */
+export async function resolveAiSettings(): Promise<AiDetectionSettings> {
+  try {
+    const status = await getAiStatus();
+    const settings: AiDetectionSettings = {
+      enabled: status.enabled,
+      confidenceThreshold: clampConfidence(status.confidence_threshold),
+      frameSkip: clampFrameSkip(status.frame_skip_rate),
+    };
+    // Mirror into localStorage so a later offline path falls back to fresh data.
+    saveAiSettings(settings);
+    return settings;
+  } catch {
+    // API unreachable (offline / NVR mid-restart): fall back to the cached copy.
+    return getAiSettings();
+  }
+}
+
 // ─── Validation helpers ───────────────────────────────────────────────────────
 
 function clampConfidence(value: number): number {
