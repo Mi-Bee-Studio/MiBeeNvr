@@ -176,12 +176,44 @@ export class AiRuntime {
    */
   private static _ortUmdPromise: Promise<any> | null = null;
   private _loadOrtUmd(): Promise<any> {
-    // Fast path: UMD bundle already ran and set globalThis.ort (covers repeat
-    // calls and the unit-test stub). Bypasses the cached promise so a freshly
-    // stubbed global is picked up immediately.
+    // Fast path: ORT already loaded (covers repeat calls, the unit-test stub,
+    // and a worker that already imported the bundle). globalThis.ort is set by
+    // both the UMD bundle (main thread) and the ESM bundle (worker import).
     const w = globalThis as any;
     if (w.ort) return Promise.resolve(w.ort);
     if (AiRuntime._ortUmdPromise) return AiRuntime._ortUmdPromise;
+
+    // Worker path (#186 scheme 2): a Web Worker has no `document`, so the
+    // <script>-injection path below cannot run. Use a dynamic ESM import of the
+    // all-backends bundle instead — it's already copied to /ort/ by
+    // ortAssetsPlugin (vite.config.js). The .bundle. build inlines the wasm-JS
+    // glue, sidestepping the separate ort-wasm-simd-threaded.jsep.{mjs,wasm}
+    // resolution that Vite code-splitting breaks (issue #109). After import the
+    // module's default export is the ORT namespace; also mirror it to
+    // globalThis.ort so subsequent fast-path calls and nested workers resolve it.
+    const isWorker =
+      typeof document === 'undefined' && typeof (self as any).importScripts !== 'undefined';
+
+    if (isWorker) {
+      AiRuntime._ortUmdPromise = (async () => {
+        // Build the URL via a variable so Vite's static import-analysis cannot
+        // see the literal path (it only exists at runtime after ortAssetsPlugin
+        // copies it into dist/ort/ — not during tests). `@vite-ignore` alone does
+        // not stop the analyzer; a non-literal specifier does.
+        const bundleUrl = '/ort/ort.all.bundle.min.mjs';
+        const mod: any = await import(/* @vite-ignore */ bundleUrl);
+        const ort = mod?.default ?? mod;
+        if (!ort) throw new Error('ort.all.bundle.min.mjs imported but module export is undefined');
+        w.ort = ort;
+        return ort;
+      })();
+      return AiRuntime._ortUmdPromise;
+    }
+
+    // Main-thread path: load the UMD bundle via a <script> tag (served at
+    // /ort.min.js by ortAssetsPlugin). NOT via Vite's bundled
+    // `import('onnxruntime-web')` — Vite's code-splitting breaks ORT 1.27's
+    // internal wasm/worker path resolution (issue #109, INVALID_PROTOBUF).
     AiRuntime._ortUmdPromise = new Promise<any>((resolve, reject) => {
       const script = document.createElement('script');
       script.src = '/ort.min.js';
