@@ -98,6 +98,21 @@ describe('inference', () => {
       expect(result).toHaveLength(0);
     });
 
+    it('rejects exploding logits as decode artifacts (logit cap)', () => {
+      // A garbled/corrupted decoded frame can make the model emit absurdly large
+      // class logits (thousands), whose sigmoid is indistinguishable from 1.0.
+      // These paint dozens of phantom "person:100%" boxes. The logit cap (>15)
+      // drops them. A normal strong detection (logit 6 → sigmoid 0.998) survives.
+      const { data, dims } = buildYoloOutput([
+        { boxIndex: 0, cx: 320, cy: 240, w: 100, h: 80, classId: 0, rawScore: 6 }, // valid
+        { boxIndex: 1, cx: 100, cy: 100, w: 50, h: 50, classId: 0, rawScore: 62932 }, // exploding → rejected
+      ]);
+      const result = parseYoloOutput(data, dims, 80, 8400, 0.5);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].score).toBeGreaterThan(0.99); // sigmoid(6) ≈ 0.998
+    });
+
     it('selects highest scoring class', () => {
       const { data, dims } = buildYoloOutput([
         { boxIndex: 0, cx: 320, cy: 240, w: 100, h: 80, classId: 2, rawScore: 6 },
