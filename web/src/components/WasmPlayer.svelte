@@ -98,6 +98,13 @@ let webgpuRenderer: WebGPURenderer | null = null;
   let aiInitializing = $state(false);
   let aiError: string | null = $state(null);
   let aiZones: Zone[] = $state([]);
+  // Busy guard (#187 defect 1): processAiDetection is fire-and-forget from the
+  // worker onmessage 'frame' branch. Without this flag every decoded frame
+  // kicks off a new ONNX inference even while the previous one is still running
+  // on the main thread (ORT WASM is blocking, numThreads=1). The pile-up
+  // starves the render loop → stutter. When busy we skip inference for the new
+  // frame (the existing EMA-smoothed boxes stay visible, which is fine).
+  let aiBusy = false;
 
   // ─── Zone filtering ──────────────────────────────────────────────
 
@@ -676,9 +683,31 @@ function handleWebGpuLost() {
   }
 
   async function processAiDetection(frame: VideoFrame) {
+    // Gating order matters: the visibility/playing checks run BEFORE the busy
+    // guard so a frame that arrives while hidden/backgrounded does not set the
+    // busy flag and block the next visible-frame inference.
+
+    // Visibility gate (#187 defect 2): when the tab is hidden, the decode
+    // worker still posts frames (WasmPlayer has no <video> element, so the
+    // browser does not auto-pause the WS→worker→VideoFrame pipeline). Running
+    // ONNX in a background tab burns CPU and is the direct cause of "switching
+    // pages feels laggy". Skip inference on hidden tabs; the rendered canvas
+    // is invisible anyway. CRITICAL: we only skip AI here and deliberately do
+    // NOT touch the WS connection/protocol — the old per-player visibility
+    // $effect that disconnected/reconnected WS caused a reconnect storm (see
+    // the REMOVED comment below). AI inference is pure CPU, dropping it is
+    // side-effect-free.
+    if (document.hidden) return;
+    // Playing-state gate: don't run inference before the stream is live.
+    if (streamState !== 'playing') return;
+    // Busy guard (#187 defect 1): see aiBusy declaration above.
+    if (aiBusy) return;
     if (!aiDetector) return;
+
+    aiBusy = true;
     try {
-      // Clone frame because detect() is async and frame may be closed
+      // Clone frame because detect() is async and the original frame is closed
+      // by the renderer below.
       const cloned = new VideoFrame(frame);
       const newDetections = await aiDetector.detect(cloned);
       cloned.close();
@@ -686,6 +715,8 @@ function handleWebGpuLost() {
     } catch (e) {
       // Non-fatal — keep showing last detections
       if (import.meta.env.DEV) console.warn('[WasmPlayer] AI detection error:', e);
+    } finally {
+      aiBusy = false;
     }
   }
 
@@ -805,6 +836,14 @@ function handleWebGpuLost() {
       disconnectConnection();
       terminateWorker();
       cleanupWebGL2();
+      // Dispose AI on effect re-run (#187 defect 4): previously AI was only
+      // released in onDestroy, so an effect re-run (e.g. cameraId change) left
+      // the old AiRuntime/InferenceSession orphaned until unmount, leaking a
+      // full ONNX session per stale player. The onDestroy block below repeats
+      // the same calls as a final safety net (dispose + set-null is idempotent).
+      if (aiDetector) { aiDetector.dispose(); aiDetector = null; }
+      if (aiRuntime) { aiRuntime.dispose(); aiRuntime = null; }
+      aiBusy = false;
     };
   });
 

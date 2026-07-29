@@ -407,6 +407,24 @@ export class ObjectDetector {
   private _smoothedDetections: Map<string, SmoothedDetection> = new Map();
   private _disposed = false;
 
+  // ─── Adaptive throttle (#186 scheme 1) ───────────────────────────────────
+  // Measures per-inference wall time in a sliding window and, when the running
+  // average exceeds SLOW_INFERENCE_MS, raises frameSkip toward MAX_FRAME_SKIP.
+  // This keeps low-power devices (RPi 3B / Banana Pi M5 WASM SIMD ≈100ms/infer)
+  // from freezing the page: under load the detector self-slowers, trading
+  // temporal resolution for UI responsiveness. The auto-raised value NEVER
+  // falls back on its own (avoids flapping against the user's explicit setting)
+  // — to restore a lower rate the user adjusts frameSkip manually.
+  private _inferenceTimes: number[] = [];
+  /** Inference samples kept for the running average. */
+  private static readonly INFERENCE_WINDOW = 10;
+  /** Minimum samples before the throttle decision kicks in (avoid cold-start misfire). */
+  private static readonly INFERENCE_MIN_SAMPLES = 5;
+  /** Average inference time (ms) above which frameSkip is raised. ~WASM on RPi. */
+  private static readonly SLOW_INFERENCE_MS = 80;
+  /** Hard ceiling for auto-raised frameSkip (matches the UI slider max). */
+  private static readonly MAX_FRAME_SKIP = 10;
+
   /** Detection key generation for EMA matching. */
   private static detectionKey(classId: number, x1: number, y1: number): string {
     return `${classId}:${Math.round(x1)}:${Math.round(y1)}`;
@@ -422,6 +440,47 @@ export class ObjectDetector {
     this._inputSize = options?.inputSize ?? INPUT_SIZE;
     this._numClasses = options?.numClasses ?? NUM_CLASSES;
     this._numBoxes = options?.numBoxes ?? NUM_BOXES;
+  }
+
+  /**
+   * Record one inference's wall-clock time and, if the running average is
+   * consistently slow, raise frameSkip (one step per call, capped at
+   * MAX_FRAME_SKIP). Called internally by detect(); also exposed so a caller
+   * measuring around detect() (#186 / WasmPlayer) can feed the same window.
+   */
+  recordInferenceTime(ms: number): void {
+    if (this._disposed) return;
+    this._inferenceTimes.push(ms);
+    if (this._inferenceTimes.length > ObjectDetector.INFERENCE_WINDOW) {
+      this._inferenceTimes.shift();
+    }
+    this._maybeRaiseFrameSkip();
+  }
+
+  /** Current effective frameSkip (may be higher than the configured value after auto-throttle). */
+  get effectiveFrameSkip(): number {
+    return this._frameSkip;
+  }
+
+  /**
+   * Raise frameSkip by one step when the running average inference time stays
+   * above SLOW_INFERENCE_MS. Monotonic (never lowers) to avoid flapping.
+   */
+  private _maybeRaiseFrameSkip(): void {
+    if (this._inferenceTimes.length < ObjectDetector.INFERENCE_MIN_SAMPLES) return;
+    let sum = 0;
+    for (const t of this._inferenceTimes) sum += t;
+    const avg = sum / this._inferenceTimes.length;
+    if (avg > ObjectDetector.SLOW_INFERENCE_MS && this._frameSkip < ObjectDetector.MAX_FRAME_SKIP) {
+      const prev = this._frameSkip;
+      this._frameSkip = Math.min(ObjectDetector.MAX_FRAME_SKIP, this._frameSkip + 1);
+      if (prev !== this._frameSkip && import.meta.env.DEV) {
+        console.info(
+          `[ObjectDetector] avg inference ${avg.toFixed(0)}ms > ${ObjectDetector.SLOW_INFERENCE_MS}ms, ` +
+            `throttling frameSkip ${prev}→${this._frameSkip}`,
+        );
+      }
+    }
   }
 
   /**
@@ -454,7 +513,10 @@ export class ObjectDetector {
       // numBoxes] here; that produces a tensor of the wrong size and every
       // inference throws "Tensor's size does not match data length" (#173).
       const dims = [1, 3, this._inputSize, this._inputSize];
+      const inferStart = performance.now();
       const results = await this._runtime.run(tensor, dims);
+      // Feed the wall-clock inference time into the adaptive throttle (#186).
+      this.recordInferenceTime(performance.now() - inferStart);
 
       // 3. Parse output — get first output tensor
       const outputKey = Object.keys(results)[0];
