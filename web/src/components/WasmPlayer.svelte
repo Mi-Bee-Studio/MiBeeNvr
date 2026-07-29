@@ -12,8 +12,8 @@
   import { createStateDispatcher } from '$lib/player/dispatch';
 import { WebGPURenderer } from '$lib/webgpu-renderer';
   import AiOverlay from './AiOverlay.svelte';
-  import { AiRuntime } from '$lib/ai-detection/runtime';
-  import { ObjectDetector, type Detection } from '$lib/ai-detection/inference';
+  import { type Detection } from '$lib/ai-detection/inference';
+  import { getInferenceClient } from '$lib/ai-detection/inference-client';
   import { getAIZones, getAiStatus, resolveAiSettings, getPerCameraAiSettings, type AiDetectionSettings, type Zone } from '$lib/api/ai';
 
   let {
@@ -92,18 +92,20 @@ let webgpuRenderer: WebGPURenderer | null = null;
   let aiOverlayVisible = $derived(detections.length > 0);
   let canvasWidth = $state(0);
   let canvasHeight = $state(0);
-  // AI detection engine
-  let aiRuntime: AiRuntime | null = null;
-  let aiDetector: ObjectDetector | null = null;
+  // AI detection engine. As of #186 scheme 2, inference runs in a shared Web
+  // Worker (see inference-client.ts); this component no longer holds an
+  // AiRuntime/ObjectDetector directly — it registers with the client and sends
+  // frames. `aiRegistered` tracks whether this camera has a live detector in
+  // the worker; `aiAiEnabled` gates the whole path.
+  let aiRegistered = false;
   let aiInitializing = $state(false);
   let aiError: string | null = $state(null);
   let aiZones: Zone[] = $state([]);
-  // Busy guard (#187 defect 1): processAiDetection is fire-and-forget from the
-  // worker onmessage 'frame' branch. Without this flag every decoded frame
-  // kicks off a new ONNX inference even while the previous one is still running
-  // on the main thread (ORT WASM is blocking, numThreads=1). The pile-up
-  // starves the render loop → stutter. When busy we skip inference for the new
-  // frame (the existing EMA-smoothed boxes stay visible, which is fine).
+  let aiEnabled = false;
+  // Busy guard (#187): a per-camera in-flight detect is tracked inside the
+  // client (inference-client.ts pending map), so this flag now guards against
+  // re-entry from the worker.onmessage 'frame' branch before the client even
+  // sees the call. Kept as a cheap local short-circuit.
   let aiBusy = false;
 
   // ─── Zone filtering ──────────────────────────────────────────────
@@ -433,7 +435,7 @@ function handleWebGpuLost() {
             }
           }
           // AI detection — must happen before frame.close()
-          if (aiDetector) {
+          if (aiRegistered) {
             processAiDetection(frame);
           }
           if (webgpuRenderer) {
@@ -616,37 +618,22 @@ function handleWebGpuLost() {
   // ─── AI Detection ────────────────────────────────────────────────────────
 
   async function initAiDetection() {
-    if (aiDetector || aiInitializing) return;
+    if (aiRegistered || aiInitializing) return;
     aiInitializing = true;
     aiError = null;
     try {
       // Single source of truth (#182): the backend YAML config is authoritative.
-      // resolveAiSettings() pulls /api/ai/status, clamps, and caches to localStorage
-      // for offline fallback. Editing mibee-nvr.yaml + restart now takes effect on
-      // the next player init (previously the stale localStorage value won and a
-      // manual UI save was required to "discover" the new value).
       const settings = await resolveAiSettings();
       if (!settings.enabled) return;
 
-      // Per-camera override (#179): if this camera has explicit per-camera settings,
-      // they win over the global defaults. This lets the user tune sensitivity per
-      // camera (e.g. high recall at an entrance, high precision indoors) — the
-      // prerequisite for the scenario-based tuning guide (docs/{zh,en}/ai-detection-tuning.md).
-      // Per-camera enabled flag: when present and false, this camera skips AI even
-      // if the global toggle is on. (Global-off always wins — handled by the check above.)
+      // Per-camera override (#179): per-camera settings win over global defaults.
       const perCam = getPerCameraAiSettings()[cameraId];
       if (perCam && perCam.enabled === false) {
         return;
       }
 
-      aiRuntime = new AiRuntime();
-      // Fetch the backend-configured model_url (from /api/ai/status) instead of
-      // hardcoding DEFAULT_MODEL_URL (/models/yolo11n.onnx). The admin can change
-      // model_url via Settings → Features or by editing mibee-nvr.yaml; if the
-      // frontend ignores that, a model swap (e.g. to a smaller/compatible one for
-      // issue #109 diagnosis) has no effect because the runtime keeps loading the
-      // old cached yolo model. Fall back to the default only if the API call fails
-      // or returns an empty path.
+      // Fetch the backend-configured model_url (#185 / #109). The shared
+      // inference worker loads the model once; all cameras reuse that session.
       let modelUrl: string | undefined;
       try {
         const status = await getAiStatus();
@@ -654,30 +641,28 @@ function handleWebGpuLost() {
           modelUrl = status.model_url.trim();
         }
       } catch {
-        // Non-fatal: fall back to DEFAULT_MODEL_URL in AiRuntime.init.
+        // Non-fatal: the worker falls back to DEFAULT_MODEL_URL in AiRuntime.init.
       }
-      await aiRuntime.init(modelUrl, {
-        inferenceTimeoutMs: 10000, // Higher for edge devices
-      });
 
-      aiDetector = new ObjectDetector(aiRuntime, {
-        // Per-camera value (if set) overrides the global default (#179).
+      // #186 scheme 2: inference runs in a shared Web Worker. init() loads the
+      // ORT session (idempotent across cameras); register() creates this
+      // camera's detector with per-camera-overridden options. EMA smoothing,
+      // class filtering, and adaptive throttle all live inside the worker.
+      const client = getInferenceClient();
+      await client.init(modelUrl);
+      await client.register(cameraId, {
         confidenceThreshold: perCam?.confidenceThreshold ?? settings.confidenceThreshold,
         frameSkip: perCam?.frameSkip ?? settings.frameSkip,
-        // EMA smoothing + class filter are global-only for now (#183/#184);
-        // per-camera override of these can follow if needed.
         emaAlpha: settings.emaAlpha,
         maxAge: settings.maxAge,
         enabledClasses: settings.enabledClasses,
       });
+      aiRegistered = true;
+      aiEnabled = true;
     } catch (e) {
-      // AI is a non-fatal overlay — never abort the video. The most common
-      // failures are deployment issues, not bugs:
-      //  - HTTP 404 on /models/yolo11n.onnx → `mibee-nvr download-model` not run
-      //  - ERROR_CODE 7 "protobuf parsing failed" → model file present but
-      //    corrupt/wrong-format, or an ONNX Runtime Web version mismatch.
-      // Both are deployment steps, so log quietly (dev only) rather than a
-      // prominent console.warn with a full stack trace that alarms users.
+      // AI is a non-fatal overlay — never abort the video. Common failures are
+      // deployment issues (404 on model, corrupt model → ERROR_CODE 7), so log
+      // quietly in dev rather than alarming users with a full stack trace.
       const msg = e instanceof Error ? e.message : 'AI init failed';
       const isDeployIssue = /Model download failed: 404|protobuf parsing failed|ERROR_CODE: 7/i.test(msg);
       if (import.meta.env.DEV) {
@@ -688,9 +673,7 @@ function handleWebGpuLost() {
         }
       }
       aiError = msg;
-      aiRuntime?.dispose();
-      aiRuntime = null;
-      aiDetector = null;
+      aiRegistered = false;
     } finally {
       aiInitializing = false;
     }
@@ -705,34 +688,34 @@ function handleWebGpuLost() {
   }
 
   async function processAiDetection(frame: VideoFrame) {
-    // Gating order matters: the visibility/playing checks run BEFORE the busy
-    // guard so a frame that arrives while hidden/backgrounded does not set the
-    // busy flag and block the next visible-frame inference.
+    // Gating order matters: visibility/playing checks run BEFORE the busy guard
+    // so a frame arriving while hidden doesn't block the next visible inference.
 
-    // Visibility gate (#187 defect 2): when the tab is hidden, the decode
-    // worker still posts frames (WasmPlayer has no <video> element, so the
-    // browser does not auto-pause the WS→worker→VideoFrame pipeline). Running
-    // ONNX in a background tab burns CPU and is the direct cause of "switching
-    // pages feels laggy". Skip inference on hidden tabs; the rendered canvas
-    // is invisible anyway. CRITICAL: we only skip AI here and deliberately do
-    // NOT touch the WS connection/protocol — the old per-player visibility
-    // $effect that disconnected/reconnected WS caused a reconnect storm (see
-    // the REMOVED comment below). AI inference is pure CPU, dropping it is
-    // side-effect-free.
+    // Visibility gate (#187): when the tab is hidden, skip inference entirely.
+    // The decode worker still posts frames (no <video> to auto-pause), but
+    // running ONNX in a background tab burns CPU and is the direct cause of
+    // "switching pages feels laggy". CRITICAL: only skip AI here — never touch
+    // the WS connection/protocol (the old visibility $effect that did caused a
+    // reconnect storm).
     if (document.hidden) return;
-    // Playing-state gate: don't run inference before the stream is live.
+    // Playing-state gate: don't infer before the stream is live.
     if (streamState !== 'playing') return;
-    // Busy guard (#187 defect 1): see aiBusy declaration above.
+    if (!aiRegistered || !aiEnabled) return;
+    // Busy guard: the inference client ALSO guards per-camera in-flight detects,
+    // but this local flag short-circuits before the clone cost.
     if (aiBusy) return;
-    if (!aiDetector) return;
 
     aiBusy = true;
     try {
-      // Clone frame because detect() is async and the original frame is closed
-      // by the renderer below.
+      // Clone the frame — the original is consumed/closed by the renderer below.
+      // The clone is TRANSFERRED to the inference worker (zero-copy); the worker
+      // owns and closes it after inference. This is the same clone that happened
+      // on the main thread before #186 scheme 2; only its destination changed.
       const cloned = new VideoFrame(frame);
-      const newDetections = await aiDetector.detect(cloned);
-      cloned.close();
+      const client = getInferenceClient();
+      const newDetections = await client.detect(cameraId, cloned);
+      // cloned is closed inside the worker; do NOT close it here (it was
+      // transferred and is no longer accessible on the main thread).
       detections = filterDetectionsByZones(newDetections);
     } catch (e) {
       // Non-fatal — keep showing last detections
@@ -858,13 +841,13 @@ function handleWebGpuLost() {
       disconnectConnection();
       terminateWorker();
       cleanupWebGL2();
-      // Dispose AI on effect re-run (#187 defect 4): previously AI was only
-      // released in onDestroy, so an effect re-run (e.g. cameraId change) left
-      // the old AiRuntime/InferenceSession orphaned until unmount, leaking a
-      // full ONNX session per stale player. The onDestroy block below repeats
-      // the same calls as a final safety net (dispose + set-null is idempotent).
-      if (aiDetector) { aiDetector.dispose(); aiDetector = null; }
-      if (aiRuntime) { aiRuntime.dispose(); aiRuntime = null; }
+      // Release this camera's detector in the shared inference worker (#187/#186).
+      // The shared worker + ORT session persist for other cameras; only this
+      // camera's per-camera detector state is dropped.
+      if (aiRegistered) {
+        getInferenceClient().disposeCamera(cameraId);
+        aiRegistered = false;
+      }
       aiBusy = false;
     };
   });
@@ -897,8 +880,12 @@ onDestroy(() => {
     if (coordinator) coordinator.cancelRequest(cameraId);
     terminateWorker();
     cleanupWebGL2();
-    if (aiDetector) { aiDetector.dispose(); aiDetector = null; }
-    if (aiRuntime) { aiRuntime.dispose(); aiRuntime = null; }
+    // Final safety net: release this camera's worker detector if the $effect
+    // cleanup didn't run (idempotent — disposeCamera is safe to call twice).
+    if (aiRegistered) {
+      getInferenceClient().disposeCamera(cameraId);
+      aiRegistered = false;
+    }
   });
 
   // ─── Derived ───────────────────────────────────────────────────────────
@@ -1046,7 +1033,7 @@ onDestroy(() => {
         </span>
       {:else if aiError}
         <span class="text-red-400/70 text-xs" title={aiError}>AI ✗</span>
-      {:else if aiDetector}
+      {:else if aiRegistered}
         <span class="text-green-400/70 text-xs flex items-center gap-1">
           <span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
           {t('settings.ai.ready')}
