@@ -389,6 +389,16 @@ Or use the in-app downloader: **Settings → Transcoding → Download FFmpeg**
 
 ## Recording Issues
 
+### Recordings page shows `failed to list recordings` (after upgrade)
+
+**Symptom**: After upgrading straight from an old version (v0.3.0 – v0.8.0) to 0.10.0, the Recordings page reports `failed to list recordings`, but the `.mp4` segments are clearly still on disk. You may also see adding/editing a camera fail with `no such column: stable_id`.
+
+**Cause**: The 0.10.0 DB schema is incompatible with the old one. The legacy `recordings` / `cameras` tables are missing columns that 0.10.0 queries reference (`merge_status`, `merge_quality`, `stable_id`, ...), so the query fails with `no such column`. The recording data itself is intact — only the table structure is out of sync.
+
+**Fix**: Run the repair script in [Upgrade Guide → Manual schema repair when you can't roll back](./upgrade-guide.md#manual-schema-repair-when-you-cant-roll-back). It's idempotent and won't lose data.
+
+---
+
 ### No Recordings Created
 
 #### No Disk Space

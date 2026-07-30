@@ -154,6 +154,125 @@ You **cannot** upgrade directly from below v0.9.x to 0.10.0. There is no startup
 
 **Correct path:** upgrade to the latest v0.9.x first, let it run once to normalize the DB, then upgrade to 0.10.0.
 
+### Manual schema repair when you can't roll back
+
+If you already upgraded straight to 0.10.0, your recordings are still on disk, but the UI errors out — and you can't or don't want to roll back to v0.9.x — you can **manually bring the DB schema up to 0.10.0** with the script below. Your recording files are not touched; only the missing columns get added.
+
+> ⚠️ **Back up first.** This edits the DB directly; the backup is your only rollback.
+
+**Symptom checklist — you're affected if:**
+
+- the Recordings page shows `failed to list recordings` but the `.mp4` segments are clearly still on disk;
+- adding/editing a camera errors out (e.g. `no such column: stable_id`);
+- any "database" error appeared after jumping from any v0.3.0 – v0.8.0 straight to 0.10.0.
+
+**Step 1 — stop the service and back up the DB.**
+
+Bare metal (systemd):
+
+```bash
+systemctl stop mibee-nvr
+cp /var/lib/mibee-nvr/nvr.db /var/lib/mibee-nvr/nvr.db.pre-fix   # adjust to your Storage.root_dir
+```
+
+Docker:
+
+```bash
+docker compose stop mibee-nvr
+cp ./data/nvr.db ./data/nvr.db.pre-fix          # default volume is ./data:/data; DB filename is under Storage.root_dir
+```
+
+**Step 2 — save this repair script as `fix-schema.sql`** (copy in full):
+
+```sql
+-- ===== MiBeeNvr manual schema repair (0.3.0-0.8.0 -> 0.10.0) =====
+-- Each ADD COLUMN runs independently; if a column already exists you'll see
+-- "duplicate column name" -- that error can be ignored, the rest still apply.
+-- Re-running is idempotent (it won't damage data).
+
+-- ----- recordings -----
+ALTER TABLE recordings ADD COLUMN merge_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE recordings ADD COLUMN merge_path TEXT DEFAULT '';
+ALTER TABLE recordings ADD COLUMN merge_error TEXT DEFAULT '';
+ALTER TABLE recordings ADD COLUMN merge_tier TEXT DEFAULT '';
+ALTER TABLE recordings ADD COLUMN merge_progress INTEGER DEFAULT 0;
+ALTER TABLE recordings ADD COLUMN merge_quality TEXT DEFAULT 'complete';
+ALTER TABLE recordings ADD COLUMN archived INTEGER DEFAULT 0;
+ALTER TABLE recordings ADD COLUMN ai_status TEXT DEFAULT NULL;
+ALTER TABLE recordings ADD COLUMN ai_processed_at TEXT DEFAULT NULL;
+ALTER TABLE recordings ADD COLUMN ai_error TEXT DEFAULT NULL;
+-- Migrate legacy merged=1 rows into merge_status (only effective if the merged column still exists)
+UPDATE recordings SET merge_status='merged' WHERE merged=1 AND merge_status='pending';
+
+-- ----- cameras -----
+ALTER TABLE cameras ADD COLUMN merge_enabled INTEGER;
+ALTER TABLE cameras ADD COLUMN merge_check_interval TEXT;
+ALTER TABLE cameras ADD COLUMN merge_window_size TEXT;
+ALTER TABLE cameras ADD COLUMN merge_batch_limit INTEGER;
+ALTER TABLE cameras ADD COLUMN merge_min_segment_age TEXT;
+ALTER TABLE cameras ADD COLUMN merge_min_segments_to_merge INTEGER;
+ALTER TABLE cameras ADD COLUMN onvif_endpoint TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN profile_token TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN stream_encoding TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN archived INTEGER DEFAULT 0;
+ALTER TABLE cameras ADD COLUMN archived_at DATETIME DEFAULT NULL;
+ALTER TABLE cameras ADD COLUMN archive_retention_days INTEGER DEFAULT 0;
+ALTER TABLE cameras ADD COLUMN merge_duration TEXT DEFAULT 'natural-day';
+ALTER TABLE cameras ADD COLUMN stream_key TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN srt_passphrase TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN srt_stream_id TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN activation_state TEXT DEFAULT 'active';
+ALTER TABLE cameras ADD COLUMN stable_id TEXT DEFAULT '';
+
+-- ----- schema_meta / feature_flags cleanup -----
+INSERT OR IGNORE INTO schema_meta(key,value) VALUES('schema_version','29');
+UPDATE schema_meta SET value='29' WHERE key='schema_version';
+INSERT OR IGNORE INTO feature_flags(key,value) VALUES('protocol.srt',1);
+INSERT OR IGNORE INTO feature_flags(key,value) VALUES('protocol.rtmp',1);
+```
+
+**Step 3 — run the repair script.** The NVR's Docker runtime image (Alpine-based) does **not** ship `sqlite3`, so pick whichever fits your setup:
+
+- **Option A — host already has sqlite3** (bare metal):
+
+  ```bash
+  sqlite3 /var/lib/mibee-nvr/nvr.db < fix-schema.sql
+  ```
+  A few `duplicate column name: ...` lines are expected (they mean the column already exists); only other errors need attention.
+
+- **Option B — throwaway Alpine container** (recommended for Docker, nothing to install on the host):
+
+  ```bash
+  docker run --rm -v "$PWD/data:/data" -v "$PWD/fix-schema.sql:/fix-schema.sql:ro" alpine \
+    sh -c "apk add --no-cache sqlite >/dev/null && sqlite3 /data/nvr.db < /fix-schema.sql"
+  ```
+  Replace `$PWD/data` with your actual volume directory (default `./data:/data`). `duplicate column name` errors are safe to ignore.
+
+**Step 4 — verify the repair** (same sqlite3 session):
+
+```bash
+# Option A
+sqlite3 /var/lib/mibee-nvr/nvr.db "SELECT merge_quality FROM recordings LIMIT 1;"
+sqlite3 /var/lib/mibee-nvr/nvr.db "SELECT stable_id FROM cameras LIMIT 1;"
+
+# Option B (Docker)
+docker run --rm -v "$PWD/data:/data" alpine \
+  sh -c "apk add --no-cache sqlite >/dev/null && sqlite3 /data/nvr.db 'SELECT merge_quality FROM recordings LIMIT 1;'"
+```
+
+Both should no longer report `no such column` (the first returns `complete`, the second an empty string or a serial) — that means the repair worked.
+
+**Step 5 — restart and confirm the Recordings page loads normally.**
+
+```bash
+# Bare metal
+systemctl start mibee-nvr
+# Docker
+docker compose start mibee-nvr
+```
+
+> This script is **idempotent**: re-running it on an already-0.10.0 schema just prints a bunch of `duplicate column name` and harms nothing. When in doubt about which columns you're missing, just run the full thing — it's the simplest path.
+
 ---
 
 ## General upgrade best practices
