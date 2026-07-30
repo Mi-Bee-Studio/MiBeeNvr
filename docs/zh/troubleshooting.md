@@ -381,6 +381,16 @@ sudo apk add ffmpeg
 #SY|
 ## 录制问题
 
+### 录像页报 `failed to list recordings`（升级后）
+
+**症状**：从旧版本（0.3.0 ~ 0.8.0）直升到 0.10.0 后，录像页面报 `failed to list recordings`，但硬盘里的 `.mp4` 录像片段明明都还在。可能还伴随：新增/编辑摄像头报 `no such column: stable_id`。
+
+**原因**：0.10.0 的数据库 schema 和旧版本不兼容。旧库的 `recordings` / `cameras` 表缺 0.10.0 查询时引用的列（`merge_status`、`merge_quality`、`stable_id` 等），查询直接报 `no such column`。录像数据本身完好，只是表结构对不上。
+
+**解决**：按 [升级指南 → 无法回退版本时的手工 schema 修复](./upgrade-guide.md#无法回退版本时的手工-schema-修复) 执行修复脚本（幂等，可重复执行，不丢数据）。
+
+---
+
 ### 未创建录像
 
 #### 无磁盘空间

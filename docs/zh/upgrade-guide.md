@@ -154,6 +154,124 @@ curl http://localhost:9090/api/health
 
 **正确路径：** 先升级到最新的 v0.9.x，让它跑一次以规范化数据库，再升级到 0.10.0。
 
+### 无法回退版本时的手工 schema 修复
+
+如果你已经直升到 0.10.0、录像数据都还在磁盘上、但页面报错用不了，又不想/无法回退到 v0.9.x 中转，可以用下面的脚本**手工把数据库 schema 补齐到 0.10.0**。录像文件不会丢，只是补上缺失的列。
+
+> ⚠️ **先备份。** 这一步直接改库，出错只能靠备份恢复。
+
+**对号入座 —— 哪些症状说明你中招了：**
+
+- 录像页报 `failed to list recordings`，但硬盘里 `.mp4` 录像片段明明都在；
+- 新增/编辑摄像头报错或加不上（`no such column: stable_id`）；
+- 从 0.3.0 ~ 0.8.0 任一版本直升 0.10.0 后出现的“数据库相关”报错。
+
+**第 1 步：停服 + 备份数据库。**
+
+裸机（systemd）：
+
+```bash
+systemctl stop mibee-nvr
+cp /var/lib/mibee-nvr/nvr.db /var/lib/mibee-nvr/nvr.db.pre-fix   # 路径以你的 Storage.root_dir 为准
+```
+
+Docker：
+
+```bash
+docker compose stop mibee-nvr
+cp ./data/nvr.db ./data/nvr.db.pre-fix          # 默认卷映射是 ./data:/data，DB 文件名见 Storage.root_dir
+```
+
+**第 2 步：把下面的修复脚本存成 `fix-schema.sql`**（完整复制）：
+
+```sql
+-- ===== MiBeeNvr 手工 schema 修复(0.3.0-0.8.0 → 0.10.0) =====
+-- 每条 ADD COLUMN 独立执行;某列已存在会报 "duplicate column name" —— 该报错可忽略,
+-- 其余语句照常生效。重复执行幂等(不会损坏数据)。
+
+-- ----- recordings -----
+ALTER TABLE recordings ADD COLUMN merge_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE recordings ADD COLUMN merge_path TEXT DEFAULT '';
+ALTER TABLE recordings ADD COLUMN merge_error TEXT DEFAULT '';
+ALTER TABLE recordings ADD COLUMN merge_tier TEXT DEFAULT '';
+ALTER TABLE recordings ADD COLUMN merge_progress INTEGER DEFAULT 0;
+ALTER TABLE recordings ADD COLUMN merge_quality TEXT DEFAULT 'complete';
+ALTER TABLE recordings ADD COLUMN archived INTEGER DEFAULT 0;
+ALTER TABLE recordings ADD COLUMN ai_status TEXT DEFAULT NULL;
+ALTER TABLE recordings ADD COLUMN ai_processed_at TEXT DEFAULT NULL;
+ALTER TABLE recordings ADD COLUMN ai_error TEXT DEFAULT NULL;
+-- 把旧的 merged=1 行迁移到 merge_status(仅当 merged 列还在时生效;已被取代)
+UPDATE recordings SET merge_status='merged' WHERE merged=1 AND merge_status='pending';
+
+-- ----- cameras -----
+ALTER TABLE cameras ADD COLUMN merge_enabled INTEGER;
+ALTER TABLE cameras ADD COLUMN merge_check_interval TEXT;
+ALTER TABLE cameras ADD COLUMN merge_window_size TEXT;
+ALTER TABLE cameras ADD COLUMN merge_batch_limit INTEGER;
+ALTER TABLE cameras ADD COLUMN merge_min_segment_age TEXT;
+ALTER TABLE cameras ADD COLUMN merge_min_segments_to_merge INTEGER;
+ALTER TABLE cameras ADD COLUMN onvif_endpoint TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN profile_token TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN stream_encoding TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN archived INTEGER DEFAULT 0;
+ALTER TABLE cameras ADD COLUMN archived_at DATETIME DEFAULT NULL;
+ALTER TABLE cameras ADD COLUMN archive_retention_days INTEGER DEFAULT 0;
+ALTER TABLE cameras ADD COLUMN merge_duration TEXT DEFAULT 'natural-day';
+ALTER TABLE cameras ADD COLUMN stream_key TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN srt_passphrase TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN srt_stream_id TEXT DEFAULT '';
+ALTER TABLE cameras ADD COLUMN activation_state TEXT DEFAULT 'active';
+ALTER TABLE cameras ADD COLUMN stable_id TEXT DEFAULT '';
+
+-- ----- schema_meta / feature_flags 收尾 -----
+INSERT OR IGNORE INTO schema_meta(key,value) VALUES('schema_version','29');
+UPDATE schema_meta SET value='29' WHERE key='schema_version';
+INSERT OR IGNORE INTO feature_flags(key,value) VALUES('protocol.srt',1);
+INSERT OR IGNORE INTO feature_flags(key,value) VALUES('protocol.rtmp',1);
+```
+
+**第 3 步：执行修复脚本。** NVR 的 Docker 运行镜像（基于 Alpine）**不含** `sqlite3`，所以用哪种方式取决于你的环境：
+
+- **方式 A — 宿主机已装 sqlite3**（裸机用户首选）：
+
+  ```bash
+  sqlite3 /var/lib/mibee-nvr/nvr.db < fix-schema.sql
+  ```
+  出现若干 `duplicate column name: ...` 是正常的（说明该列已存在），其余报错才需要处理。
+
+- **方式 B — 用一次性 Alpine 容器**（Docker 用户推荐，无需在宿主机装任何东西）：
+
+  ```bash
+  docker run --rm -v "$PWD/data:/data" -v "$PWD/fix-schema.sql:/fix-schema.sql:ro" alpine \
+    sh -c "apk add --no-cache sqlite >/dev/null && sqlite3 /data/nvr.db < /fix-schema.sql"
+  ```
+  `$PWD/data` 换成你实际的卷映射目录（默认 `./data:/data`）。同样，`duplicate column name` 报错可忽略。
+
+**第 4 步：验证修复成功**（用同一个 sqlite3 会话）：
+
+```bash
+# 方式 A
+sqlite3 /var/lib/mibee-nvr/nvr.db "SELECT merge_quality FROM recordings LIMIT 1;"
+sqlite3 /var/lib/mibee-nvr/nvr.db "SELECT stable_id FROM cameras LIMIT 1;"
+
+# 方式 B(Docker)
+docker run --rm -v "$PWD/data:/data" alpine \
+  sh -c "apk add --no-cache sqlite >/dev/null && sqlite3 /data/nvr.db 'SELECT merge_quality FROM recordings LIMIT 1;'"
+```
+
+两条都不再报 `no such column`（第一条返回 `complete`，第二条返回空串或序列号）即修复成功。
+
+**第 5 步：重启服务，刷新页面确认录像列表正常加载。**
+
+```bash
+# 裸机
+systemctl start mibee-nvr
+# Docker
+docker compose start mibee-nvr
+```
+
+> 这套脚本是**幂等**的：在已经是 0.10.0 schema 的库上重跑只会报一堆 `duplicate column name`，不会损坏任何数据。所以不确定自己缺哪些列时，直接全量跑一遍最省事。
+
 ---
 
 ## 通用升级最佳实践
