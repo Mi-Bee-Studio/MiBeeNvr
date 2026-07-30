@@ -9,6 +9,7 @@
   import { t } from '$lib/i18n';
   import { Plus, Trash2, X, Copy, Check, ChevronDown } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
+  import { copyText } from '$lib/clipboard';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
@@ -207,10 +208,11 @@
     }
   }
 
-  function copyKey() {
+  async function copyKey() {
     if (newlyGeneratedKey) {
-      navigator.clipboard.writeText(newlyGeneratedKey);
-      copiedKey = true;
+      // copyText falls back to execCommand('copy') on plain HTTP origins
+      // (navigator.clipboard is undefined there — issue #197).
+      copiedKey = await copyText(newlyGeneratedKey);
     }
   }
 
