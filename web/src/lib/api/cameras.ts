@@ -302,6 +302,28 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
 let fullListEtag: string | null = null;
 let cachedFullList: Camera[] | null = null;
 
+/**
+ * Discard the full-list ETag cache so the next listCameras() issues a full GET
+ * instead of returning a stale body on a 304.
+ *
+ * The server's full-list ETag is hashed from camera count + ID + Status +
+ * LastSeen only — it does NOT cover fields like push_targets, name,
+ * transcoding, audio_enabled, ... So any write that mutates such a field leaves
+ * the ETag unchanged, the next listCameras() gets a 304, and the caller renders
+ * the pre-write cached copy. This is exactly the "deleted push-out target
+ * reappears" regression in issue #197.
+ *
+ * Rather than keep the ETag hash in sync with every field (fragile — the next
+ * new field reintroduces the bug), we decouple correctness from caching: every
+ * mutating camera call invalidates the cache on success, forcing a fresh GET.
+ * The ETag still pays off for the read-only Dashboard 30s poll. This is the
+ * structural fix: correctness no longer depends on which fields the hash covers.
+ */
+export function invalidateCameraListCache() {
+  fullListEtag = null;
+  cachedFullList = null;
+}
+
 export async function listCameras(signal?: AbortSignal): Promise<Camera[]> {
   const headers: Record<string, string> = {};
   if (fullListEtag) headers['If-None-Match'] = fullListEtag;
@@ -372,11 +394,13 @@ export async function listCamerasSummary(signal?: AbortSignal): Promise<CameraSu
 }
 
 export async function createCamera(data: CreateCameraRequest, signal?: AbortSignal): Promise<Camera> {
-  return apiRequest<Camera>('/cameras', {
+  const camera = await apiRequest<Camera>('/cameras', {
     method: 'POST',
     body: JSON.stringify(data),
     signal,
   });
+  invalidateCameraListCache();
+  return camera;
 }
 
 export async function getCamera(id: string, signal?: AbortSignal): Promise<Camera> {
@@ -384,11 +408,13 @@ export async function getCamera(id: string, signal?: AbortSignal): Promise<Camer
 }
 
 export async function updateCamera(id: string, data: UpdateCameraRequest, signal?: AbortSignal): Promise<Camera> {
-  return apiRequest<Camera>(`/cameras/${id}`, {
+  const camera = await apiRequest<Camera>(`/cameras/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
     signal,
   });
+  invalidateCameraListCache();
+  return camera;
 }
 
 /** Fetch live push-out relay status for a camera (per-target state + bitrate). */
@@ -397,10 +423,11 @@ export async function getPushStatus(id: string, signal?: AbortSignal): Promise<P
 }
 
 export async function deleteCamera(id: string, signal?: AbortSignal): Promise<void> {
-  return apiRequest<void>(`/cameras/${id}`, {
+  await apiRequest<void>(`/cameras/${id}`, {
     method: 'DELETE',
     signal,
   });
+  invalidateCameraListCache();
 }
 
 export interface CameraRecordingStats {
@@ -413,17 +440,21 @@ export async function getCameraRecordingStats(id: string, signal?: AbortSignal):
 }
 
 export async function startCamera(id: string, signal?: AbortSignal): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/cameras/${id}/start`, {
+  const res = await apiRequest<{ status: string }>(`/cameras/${id}/start`, {
     method: 'POST',
     signal,
   });
+  invalidateCameraListCache();
+  return res;
 }
 
 export async function stopCamera(id: string, signal?: AbortSignal): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/cameras/${id}/stop`, {
+  const res = await apiRequest<{ status: string }>(`/cameras/${id}/stop`, {
     method: 'POST',
     signal,
   });
+  invalidateCameraListCache();
+  return res;
 }
 
 // Manually trigger IP self-healing for a camera whose network address may have
@@ -438,10 +469,12 @@ export async function rediscoverCamera(
   // restart time, so use a generous client-side timeout rather than the default
   // 30s. Caller-supplied signal takes precedence.
   const effectiveSignal = signal ?? AbortSignal.timeout(90000);
-  return apiRequest<{ found: boolean; status?: string; reason?: string }>(`/cameras/${id}/rediscover`, {
+  const res = await apiRequest<{ found: boolean; status?: string; reason?: string }>(`/cameras/${id}/rediscover`, {
     method: 'POST',
     signal: effectiveSignal,
   });
+  invalidateCameraListCache();
+  return res;
 }
 
 /**
@@ -456,11 +489,13 @@ export async function activateCamera(
   signal?: AbortSignal,
 ): Promise<{ status: string }> {
   const effectiveSignal = signal ?? AbortSignal.timeout(60000);
-  return apiRequest<{ status: string }>(`/cameras/${id}/activate`, {
+  const res = await apiRequest<{ status: string }>(`/cameras/${id}/activate`, {
     method: 'POST',
     body: JSON.stringify(credentials),
     signal: effectiveSignal,
   });
+  invalidateCameraListCache();
+  return res;
 }
 
 export function getDashboardCameras(signal?: AbortSignal): Promise<Camera[]> {
@@ -531,18 +566,22 @@ export async function updateMergeConfig(
   config: MergeConfig,
   signal?: AbortSignal,
 ): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
+  const res = await apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
     method: 'PUT',
     body: JSON.stringify(config),
     signal,
   });
+  invalidateCameraListCache();
+  return res;
 }
 
 export async function deleteCameraMergeConfig(cameraId: string, signal?: AbortSignal): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
+  const res = await apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
     method: 'DELETE',
     signal,
   });
+  invalidateCameraListCache();
+  return res;
 }
 
 // --- PTZ ---

@@ -4,6 +4,7 @@
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
   import { showToast } from '$lib/toast';
+  import { copyText } from '$lib/clipboard';
   import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff, Copy, X } from 'lucide-svelte';
 
   interface Props {
@@ -51,10 +52,12 @@
   // popover listing each target's URL with a copy-to-clipboard button.
   let pushTargetsOpen = $state(false);
   async function copyPushUrl(url: string, name?: string) {
-    try {
-      await navigator.clipboard.writeText(url);
+    // copyText falls back to execCommand('copy') on plain HTTP origins
+    // (navigator.clipboard is undefined there — issue #197).
+    const ok = await copyText(url);
+    if (ok) {
       showToast(t('cameras.pushOutUrlCopied'), 'success');
-    } catch {
+    } else {
       showToast(t('cameras.pushOutUrlCopyFailed'), 'error');
     }
   }
