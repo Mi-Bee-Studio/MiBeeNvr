@@ -1,0 +1,42 @@
+# MiBee NVR — iStoreOS / OpenWrt Docker Compose
+#
+# iStoreOS runs Docker with host networking as the DEFAULT, which is exactly
+# what ONVIF auto-discovery needs (UDP multicast 239.255.255.250:3702 does not
+# cross Docker's bridge). No extra network setup is required here.
+#
+# This file is also usable verbatim on generic OpenWrt builds that ship Docker.
+#
+# Hardware gate: a full NVR (recording + SQLite + stream demux) needs >= 4 GB
+# RAM + external storage. On 512 MB-1 GB router boxes, prefer a lightweight
+# "ingest gateway / preview only" setup or do not enable recording.
+#
+# Usage (iStoreOS Web UI: 系统 → Docker → Compose → 新建项目, paste this file;
+#       or via SSH):
+#   docker compose up -d
+# Then open http://<device-ip>:9090 and complete the setup wizard.
+
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+
+    # iStoreOS defaults to host networking — keep it. Bridge breaks ONVIF
+    # multicast discovery.
+    network_mode: host
+
+    volumes:
+      # Map to external storage on low-flash devices (router eMMC/flash is
+      # typically 8-32 GB and will fill up fast with recordings).
+      - /mnt/sata1/mibee-nvr/data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+      # Run as the owner of the data directory.
+      # - NVR_UID=1000
+      # - NVR_GID=1000
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>mibee-nvr</Name>
+  <Repository>ghcr.io/mi-bee-studio/mibeenvr:latest</Repository>
+  <Registry>https://github.com/Mi-Bee-Studio/MiBeeNvr/pkgs/container/mibeenvr</Registry>
+
+  <Branches>
+    <Branch tag="latest" description="Latest stable release (multi-arch amd64/arm64/armv7)" />
+    <Branch tag="0.10.0" description="Pinned release tag — use for reproducible rollbacks" />
+  </Branches>
+
+  <!-- ★ host network is REQUIRED: ONVIF auto-discovery uses UDP multicast,
+       which Docker's default bridge breaks. host is a first-class network mode
+       on unRAID and makes camera discovery work out of the box. -->
+  <Network>host</Network>
+  <Shell>sh</Shell>
+  <View>2</View>
+  <Privileged>false</Privileged>
+
+  <Support>https://github.com/Mi-Bee-Studio/MiBeeNvr/issues</Support>
+  <Project>https://github.com/Mi-Bee-Studio/MiBeeNvr</Project>
+  <Overview>Lightweight Network Video Recorder for the edge. ONVIF/RTSP/MJPEG camera support, pure-Go recording &amp; merge (no FFmpeg required), browser-side AI detection (ONNX Runtime Web), and FTP/WebDAV/WebRTC streaming. Built as a single static binary, multi-arch Docker image.&#13;&#13;On first launch open the Web UI and complete the setup wizard. Recordings/DB/config persist under /data.</Overview>
+  <Category>HomeAutomation: Security:</Category>
+  <WebUI>http://[IP]:[PORT:9090]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/unraid/mibee-nvr.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/unraid/mibee-nvr.png</Icon>
+
+  <!-- Volumes -->
+  <Config Name="Data (recordings / DB / config)" Target="/data" Mode="rw" Description="Persist recordings, SQLite DB, config and AI models. Point this at a share on your storage pool (ideally an external/parity-protected array)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/mibee-nvr/data</Config>
+
+  <!-- Environment -->
+  <Config Name="NVR_DATA_DIR" Target="NVR_DATA_DIR" Mode="" Description="Storage path inside the container. Must match the volume target (/data)." Type="Variable" Display="advanced" Required="true" Mask="false">/data</Config>
+  <Config Name="NVR_UID" Target="NVR_UID" Mode="" Description="UID to run as. Set to the owner of the data share (default 99 = nobody on unRAID)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="NVR_GID" Target="NVR_GID" Mode="" Description="GID to run as (default 100 = users on unRAID)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+
+  <!-- Port note: with Network=host the container binds directly to the host.
+       These port fields document the well-known ports; do NOT remap them in a
+       host-network setup (they are ignored). If a host port is already in use,
+       change the app's own port in mibee-nvr.yaml (server.listen / ftp.*) instead. -->
+  <Config Name="Web / API (host)" Target="9090" Mode="tcp" Description="Host-network: binds directly to host :9090. To change, edit server.listen in mibee-nvr.yaml, NOT this field." Type="Port" Display="always" Required="false" Mask="false">9090</Config>
+  <Config Name="FTP (host)" Target="2121" Mode="tcp" Description="Host-network: FTP control port on host. Configure via ftp.* in mibee-nvr.yaml." Type="Port" Display="advanced" Required="false" Mask="false">2121</Config>
+</Container>

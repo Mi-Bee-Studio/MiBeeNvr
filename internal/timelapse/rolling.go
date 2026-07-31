@@ -59,6 +59,15 @@ type RollingMergeManager struct {
 	progressMu           sync.Mutex
 	progress             map[string]*progressEntry
 	progressCleanupDelay time.Duration
+	// stopMu serializes concurrent StopAll calls. sync.WaitGroup forbids Add
+	// after its counter has gone to zero on a Wait, so two overlapping StopAll
+	// calls (one Wait drains wg to zero, a concurrent StartSegmentMerge does
+	// Add(1), the second Wait races) panic with "WaitGroup is reused before
+	// previous Wait has returned". This is a real production hazard when a
+	// shutdown (StopAll) races with an in-flight merge start, not just a test
+	// artifact. Holding stopMu across the whole cancel-clear-wait makes StopAll
+	// reentrant-safe.
+	stopMu sync.Mutex
 	// wg tracks every runMerge goroutine so StopAll can wait for them to fully
 	// exit before returning. Without this, runMerge goroutines could briefly
 	// outlive StopAll and touch the merger/db after the caller (e.g. App.Stop)
@@ -299,7 +308,15 @@ func (r *RollingMergeManager) IsActive(cameraID string) bool {
 // (mergers honor ctx cancel) and the new entry is left in r.active for the
 // next lifecycle — matching the existing "final state may have active entries"
 // semantics documented in TestRollingMergeManager_ConcurrentStopAllAndStart.
+//
+// r.stopMu serializes overlapping StopAll calls so that a second StopAll
+// cannot call r.wg.Wait() while the wg counter is between zero (drained by a
+// first Wait) and a fresh Add(1) from a racing StartSegmentMerge — which would
+// panic with "WaitGroup is reused before previous Wait has returned".
 func (r *RollingMergeManager) StopAll() {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+
 	r.mu.Lock()
 	for _, entry := range r.active {
 		entry.cancel()

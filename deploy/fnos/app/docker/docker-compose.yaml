@@ -1,0 +1,28 @@
+# MiBee NVR — fnOS Docker Compose.
+# fnOS provides environment variables; key ones used here:
+#   TRIM_APPDEST  — installed app target directory (/var/apps/mibee-nvr/target)
+#   TRIM_PKGVAR   — app runtime data directory (persists across restarts)
+#
+# host networking is REQUIRED for ONVIF auto-discovery (UDP multicast does not
+# cross Docker's bridge). fnOS allows apps without a meaningful service_port
+# (manifest: checkport=false), which fits a host-network multi-port service.
+#
+# The image tag is injected at build time via the VERSION env var to keep it in
+# lockstep with manifest.version (see deploy/fnos/build.sh).
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:${VERSION:-latest}
+    container_name: mibee-nvr
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # Persist recordings / DB / config / models in fnOS app data dir.
+      - "${TRIM_PKGVAR}/data:/data"
+    environment:
+      - NVR_DATA_DIR=/data
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

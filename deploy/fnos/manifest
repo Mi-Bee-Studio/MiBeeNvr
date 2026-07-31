@@ -1,0 +1,26 @@
+# MiBee NVR — fnOS application manifest.
+# INI format (no file extension). Fields per fnOS docs:
+#   https://github.com/ckcoding/fnnas-docs/blob/main/docs/core-concepts/manifest.md
+#
+# version MUST be X.Y.Z (fnOS requirement) and MUST match the image tag exactly,
+# otherwise pulling the image fails with a misleading "manifest unknown" error.
+# The build injects the real version from the git tag (see deploy/fnos/build.sh).
+appname=mibee-nvr
+version=0.0.0
+display_name=MiBee NVR
+desc=Lightweight Network Video Recorder. ONVIF/RTSP/MJPEG cameras, pure-Go recording & merge, browser-side AI detection, FTP/WebDAV/WebRTC streaming.
+source=thirdparty
+platform=all
+maintainer=Mi-Bee Studio
+maintainer_url=https://github.com/Mi-Bee-Studio/MiBeeNvr
+distributor=Mi-Bee Studio
+os_min_version=1.2.0
+desktop_uidir=ui
+desktop_applaunchname=mibee-nvr.main
+# host networking: the app binds its own ports, no fixed service_port mapping
+# is meaningful, and fnOS's port pre-check is not applicable.
+service_port=9090
+checkport=false
+ctl_stop=true
+disable_authorization_path=false
+changelog=Initial release on fnOS.
