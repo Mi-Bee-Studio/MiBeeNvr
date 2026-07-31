@@ -72,10 +72,9 @@ type Checker struct {
 	// endpoint overrides the GitHub API URL when non-empty (tests only).
 	endpoint string
 
-	mu       sync.RWMutex
-	cached   *Status // latest known status (nil before first successful check)
-	etag     string  // sent as If-None-Match on the next poll
-	etagTime time.Time
+	mu     sync.RWMutex
+	cached *Status // latest known status (nil before first successful check)
+	etag   string  // sent as If-None-Match on the next poll
 
 	stop chan struct{} // closed by Stop to end the poll loop
 }
@@ -143,8 +142,13 @@ func (c *Checker) Refresh(ctx context.Context) (Status, error) {
 }
 
 func (c *Checker) loop(ctx context.Context) {
+	poll := func() {
+		if _, err := c.fetchAndCache(ctx); err != nil {
+			slog.Warn("update: poll failed", "repo", c.repo, "error", err)
+		}
+	}
 	// First check immediately so the UI has data on startup.
-	c.fetchAndCache(ctx)
+	poll()
 	t := time.NewTicker(c.interval)
 	defer t.Stop()
 	for {
@@ -154,7 +158,7 @@ func (c *Checker) loop(ctx context.Context) {
 		case <-c.stop:
 			return
 		case <-t.C:
-			c.fetchAndCache(ctx)
+			poll()
 		}
 	}
 }
