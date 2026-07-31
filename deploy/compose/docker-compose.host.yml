@@ -1,0 +1,47 @@
+# MiBee NVR — Host-network base Compose
+#
+# Shared base for NAS OS deployment templates (unRAID / iStoreOS / fnOS).
+# The defining choice is `network_mode: host`:
+#   ONVIF WS-Discovery uses UDP multicast (239.255.255.250:3702). Docker's
+#   default bridge breaks multicast, so camera auto-discovery fails unless the
+#   container shares the host network stack. Every NAS template under
+#   deploy/{unraid,istoreos,fnos}/ derives from (or mirrors) this file.
+#
+# Trade-off accepted by going host-network: no port isolation. The container's
+# 9090 (Web/API), 2121 + 2122-2140 (FTP), and optional RTMP/SRT/WebRTC ports
+# bind directly to the host. If a host port is taken, change the app's own port:
+#   mibee-nvr.yaml → server.listen: ":8080"   (Web/API)
+#   mibee-nvr.yaml → ftp.port / ftp.passive_port_range  (FTP)
+#
+# Image is multi-arch (amd64/arm64/armv7); the runtime pulls the matching arch.
+# Pin to a released tag (e.g. :0.10.0) for reproducible rollbacks, or use :latest
+# for automatic updates (pair with the Watchtower profile, see deploy/docs/).
+#
+# Usage:
+#   docker compose -f deploy/compose/docker-compose.host.yml up -d
+# Then open http://<host-ip>:9090 and complete the setup wizard.
+
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+
+    # ★ Required for ONVIF auto-discovery (UDP multicast). Do NOT use bridge.
+    network_mode: host
+
+    volumes:
+      # Recordings, SQLite DB, config, AI models — all persist here.
+      # Map the left side to your NAS storage pool / external drive.
+      - ./data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+      # Run as the UID/GID that owns ./data on the host (defaults to 1000:1000).
+      # - NVR_UID=1000
+      # - NVR_GID=1000
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

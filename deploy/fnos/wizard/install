@@ -1,0 +1,11 @@
+[
+  {
+    "stepTitle": "Storage",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "Recordings, the database, config and AI models are stored under the app data directory. Mount external storage there for large recording sets. ONVIF camera auto-discovery works because the app runs with host networking."
+      }
+    ]
+  }
+]

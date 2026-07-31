@@ -1,0 +1,27 @@
+#!/bin/bash
+# MiBee NVR — fnOS lifecycle status check.
+# Docker start/stop are managed by fnOS via the docker-project resource; only
+# `status` needs to probe the container. Exit codes (fnOS convention):
+#   0 = running (status), 1 = failure, 3 = not running (status).
+CONTAINER_NAME="mibee-nvr"
+
+case "$1" in
+  start)
+    # fnOS starts the Docker project; nothing to do here.
+    exit 0
+    ;;
+  stop)
+    # fnOS stops the Docker project; nothing to do here.
+    exit 0
+    ;;
+  status)
+    if docker inspect "$CONTAINER_NAME" 2>/dev/null | grep -q '"Status": "running"'; then
+      exit 0
+    fi
+    exit 3
+    ;;
+  *)
+    echo "Unknown command: $1" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+    ;;
+esac
