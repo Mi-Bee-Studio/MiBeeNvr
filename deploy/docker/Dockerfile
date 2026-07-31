@@ -81,6 +81,10 @@ FROM ghcr.io/mi-bee-studio/mibeenvr-base:v1
 ENV NVR_DATA_DIR=/data
 ENV NVR_UID=1000
 ENV NVR_GID=1000
+# Marks this as a Docker deployment so the in-app version checker surfaces
+# "update the image" guidance (see internal/update/checker.go) instead of the
+# bare-binary upgrade instructions.
+ENV NVR_DEPLOYMENT=docker
 
 # Persistent data: recordings, database, config
 VOLUME ["/data"]

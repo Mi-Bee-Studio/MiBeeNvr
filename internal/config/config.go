@@ -32,6 +32,7 @@ type Config struct {
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
+	Update        UpdateConfig        `yaml:"update"`
 	APIKeys       []APIKeyConfig      `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
 	Version       string              `yaml:"version"`
 	Timezone      string              `yaml:"timezone"` // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"

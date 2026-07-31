@@ -1112,4 +1112,7 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Get("/api/protocols", h.handleProtocols)
 	r.Get("/api/features", h.handleGetFeatures)
 	r.Put("/api/features", h.handleUpdateFeatures)
+	r.Get("/api/version", h.handleVersion)
+	r.Get("/api/update/check", h.handleUpdateCheck)
+	r.Post("/api/update/check", h.handleUpdateCheck)
 }

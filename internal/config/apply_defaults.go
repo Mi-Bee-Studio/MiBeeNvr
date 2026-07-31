@@ -380,4 +380,15 @@ func applyConfigDefaults(cfg *Config) {
 			// MergeEnabled defaults to nil (auto-detect)
 		}
 	}
+
+	// Update (in-app version check — sensing layer only, never executes upgrade)
+	if cfg.Update.Channel == "" {
+		cfg.Update.Channel = "stable"
+	}
+	if cfg.Update.CheckInterval == "" {
+		cfg.Update.CheckInterval = "1h"
+	}
+	if cfg.Update.Repo == "" {
+		cfg.Update.Repo = "Mi-Bee-Studio/MiBeeNvr"
+	}
 }
