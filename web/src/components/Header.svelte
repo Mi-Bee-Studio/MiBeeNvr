@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
-  import { logout, getSettings } from '$lib/api';
+  import { logout, getSettings, getUpdateStatus } from '$lib/api';
   import { getMiBeeVisionConnected, refreshMiBeeVisionStatus } from '$lib/mibeevision-status';
   import { getEffectiveTheme } from '$lib/preferences';
   import LanguageSwitcher from './LanguageSwitcher.svelte';
@@ -22,6 +22,20 @@
 
   // MiBeeVision connection status (shared reactive store)
   let miBeeVisionConnected = $derived(getMiBeeVisionConnected());
+
+  // Version-check badge: a subtle dot on the Settings link when an update is
+  // available. Polled once on mount + on focus (cheap; backend caches + uses
+  // ETag so 304s do not count against GitHub's rate limit).
+  let updateAvailable = $state(false);
+  async function refreshUpdateBadge() {
+    try {
+      const st = await getUpdateStatus();
+      updateAvailable = st.update_available;
+    } catch {
+      // Backend may be briefly unavailable / update disabled — never bother the user.
+      updateAvailable = false;
+    }
+  }
 
   // Mobile menu state
   let mobileMenuOpen = $state(false);
@@ -55,6 +69,16 @@
 
     // Check MiBeeVision API key status
     void refreshMiBeeVisionStatus();
+
+    // Version-check badge (re-check on tab focus + every 90 min).
+    void refreshUpdateBadge();
+    const focusHandler = () => void refreshUpdateBadge();
+    window.addEventListener('focus', focusHandler);
+    const badgeTimer = window.setInterval(refreshUpdateBadge, 90 * 60 * 1000);
+    onDestroy(() => {
+      window.removeEventListener('focus', focusHandler);
+      window.clearInterval(badgeTimer);
+    });
   });
 
   onDestroy(() => {
@@ -101,6 +125,9 @@
             aria-label={t(item.labelKey)}
           >
             {t(item.labelKey)}
+            {#if updateAvailable && item.route === '/settings'}
+              <span class="update-dot" title={t('about.updateAvailable')}></span>
+            {/if}
           </a>
         {/each}
       </nav>
@@ -246,6 +273,18 @@
     color: #ffffff;
     background: var(--color-primary);
     position: relative;
+  }
+
+  /* Subtle indicator that a new version is available (sits on the Settings link). */
+  .update-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 0.25rem;
+    border-radius: 9999px;
+    background: #f59e0b;
+    box-shadow: 0 0 0 2px var(--bg-elevated, #fff);
+    vertical-align: middle;
   }
 
   .navbar-right {

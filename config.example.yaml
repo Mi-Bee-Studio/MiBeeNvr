@@ -280,6 +280,18 @@ observability:
 #   password: ""                     # Metrics endpoint password
 #   password_hash: ""                 # Metrics endpoint password hash (bcrypt)
 
+# In-app version check (sensing layer ONLY — never executes an upgrade).
+# The backend polls GitHub Releases with ETag conditional requests (304s do not
+# count against the unauthenticated rate limit) and exposes the result at
+# /api/update/check + /api/version for the UI to show a "new version" badge.
+# Real upgrades are done by an external tool (Watchtower), the NAS app store, or
+# `docker compose pull && up -d`.
+# update:
+#   enabled: true                     # Gate the background check (default: true)
+#   channel: "stable"                 # Release stream; only "stable" implemented
+#   check_interval: "1h"              # Poll cadence (time.Duration; min 1m)
+#   repo: "Mi-Bee-Studio/MiBeeNvr"   # GitHub "owner/name" to check
+
 # Extensions — arbitrary key-value pairs for external module config passthrough.
 # MiBeeNvr core does NOT read or validate these. Use for out-of-module service
 # extensions registered via pkg/app.App.Register. Unknown keys are silently ignored.

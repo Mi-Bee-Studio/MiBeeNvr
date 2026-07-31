@@ -13,8 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/pkg/app"
 )
 
@@ -175,6 +177,20 @@ func main() {
 		os.Exit(1)
 	}
 	defer cancel()
+
+	// In-app version check (sensing layer only — never executes an upgrade).
+	// Polls GitHub Releases with ETag conditional requests (304s do not count
+	// against the unauth rate limit) and exposes the result at /api/update/check.
+	if cfg.Update.IsEnabled() {
+		interval, err := time.ParseDuration(cfg.Update.CheckInterval)
+		if err != nil || interval < time.Minute {
+			interval = time.Hour
+		}
+		upd := update.New(appVersion, cfg.Update.Repo, cfg.Update.Channel, interval)
+		upd.Start(ctx)
+		defer upd.Stop()
+		api.SetUpdateChecker(upd)
+	}
 
 	httpSrv := a.Value("http-server").(*http.Server)
 	go func() {

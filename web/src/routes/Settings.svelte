@@ -12,6 +12,7 @@
     BrainCircuit,
     Film,
     SlidersHorizontal,
+    Info,
     Save,
     RotateCcw,
   } from 'lucide-svelte';
@@ -23,6 +24,7 @@
   import AIPanel from './settings/AIPanel.svelte';
   import ProcessingPanel from './settings/ProcessingPanel.svelte';
   import AdvancedPanel from './settings/AdvancedPanel.svelte';
+  import UpdatePanel from './settings/UpdatePanel.svelte';
 
   let activeCategory = $state('general');
 
@@ -34,6 +36,7 @@
     { id: 'ai', label: t('settings.sidebar.ai'), icon: BrainCircuit },
     { id: 'processing', label: t('settings.sidebar.processing'), icon: Film },
     { id: 'advanced', label: t('settings.sidebar.advanced'), icon: SlidersHorizontal },
+    { id: 'about', label: t('settings.sidebar.about'), icon: Info },
   ]);
 
   let saving = $state(false);
@@ -193,6 +196,9 @@
         </div>
         <div class={activeCategory === 'advanced' ? '' : 'hidden'}>
           <AdvancedPanel />
+        </div>
+        <div class={activeCategory === 'about' ? '' : 'hidden'}>
+          <UpdatePanel />
         </div>
       </div>
     </div>
