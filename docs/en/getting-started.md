@@ -48,6 +48,10 @@ Open http://localhost:9090 in your browser.
 
 > **Note**: No config preparation needed! MiBee NVR auto-initializes when started without a config file.
 
+> **Running on a NAS (Synology / QNAP / unRAID / fnOS / iStoreOS / 极空间)?** See the per-platform guides in the [Deployment Guide](deployment.md#deploying-on-a-nas-os) — they cover host networking (required for ONVIF camera auto-discovery), volume paths, and port conflicts.
+
+
+
 #### Changing the Storage Location
 
 By default, recordings are stored in `./data` on the host (mapped to `/data` inside the container).

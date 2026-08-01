@@ -187,7 +187,8 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | [Configuration](docs/en/configuration.md) | Full config reference |
 | [API Reference](docs/en/api/README.md) | REST API documentation |
 | [MediaMTX Guide](docs/en/mediamtx-guide.md) | MediaMTX integration for CSI cameras |
-| [Deployment](docs/en/deployment.md) | systemd, reverse proxy, cross-compile |
+| [Deployment](docs/en/deployment.md) | systemd, reverse proxy, cross-compile, and per-platform **NAS** guides (unRAID / fnOS / iStoreOS / Synology / QNAP / 极空间) |
+| [Auto-update (Docker)](docs/en/deployment-autoupdate.md) | Manual + optional Watchtower auto-updates and rollback |
 | [Xiaomi Setup](docs/en/xiaomi-setup.md) | Xiaomi cloud camera integration |
 | [ONVIF Guide](docs/en/onvif-guide.md) | ONVIF camera setup, PTZ control, troubleshooting |
 | [Camera Guide](docs/en/camera-guide.md) | Camera setup, protocols, troubleshooting |

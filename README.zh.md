@@ -132,7 +132,8 @@ make build
 | [配置说明](docs/zh/configuration.md) | 完整配置参考 |
 | [API 文档](docs/zh/api/README.md) | REST API 接口文档 |
 | [MediaMTX 指南](docs/zh/mediamtx-guide.md) | MediaMTX CSI 摄像头集成 |
-| [部署指南](docs/zh/deployment.md) | systemd、反向代理、交叉编译 |
+| [部署指南](docs/zh/deployment.md) | systemd、反向代理、交叉编译，及各 **NAS** 平台指南（unRAID / 飞牛 / iStoreOS / 群晖 / 威联通 / 极空间） |
+| [Docker 自动升级](docs/zh/deployment-autoupdate.md) | 手动升级 + 可选 Watchtower 自动升级与回滚 |
 | [摄像头指南](docs/zh/camera-guide.md) | 摄像头设置、协议、故障排除 |
 | [Xiaomi 设置](docs/zh/xiaomi-setup.md) | 小米云摄像头集成 |
 | [ONVIF 指南](docs/zh/onvif-guide.md) | ONVIF 摄像头设置、云台控制、故障排除 |
