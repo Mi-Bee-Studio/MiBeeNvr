@@ -59,3 +59,52 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+    labels:
+      # Opt-in marker for Watchtower: with WATCHTOWER_LABEL_ENABLE=true, Watchtower
+      # only updates containers carrying this label, so it manages MiBee NVR and
+      # leaves the user's other containers untouched. See deploy/docs/auto-update.md.
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # --------------------------------------------------------------------------- #
+  # Optional automatic updates via Watchtower. OFF by default.
+  #
+  # Enable with:
+  #   docker compose --profile auto-update up -d
+  #
+  # Watchtower pulls a new mibeenvr image on a schedule and recreates ONLY the
+  # mibee-nvr container (the label above + WATCHTOWER_LABEL_ENABLE scope it).
+  # Recordings/DB/config live in ./data, so recreation never touches your data.
+  #
+  # ghcr.io is a private/org registry: Watchtower needs credentials to pull.
+  # After a one-time `docker login ghcr.io` (use a GitHub PAT with read:packages),
+  # mount the resulting ~/.docker/config.json read-only below. Without it the
+  # pull fails with a misleading "denied" error.
+  #
+  # WATCHTOWER_CLEANUP=false deliberately keeps the old image so you can roll
+  # back by changing the image tag and recreating. Do NOT combine :latest with
+  # cleanup if you want rollback.
+  # --------------------------------------------------------------------------- #
+  watchtower:
+    profiles: ["auto-update"]
+    image: containrrr/watchtower:latest
+    container_name: mibee-nvr-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Required for ghcr.io auth. Run once on the host:
+      #   docker login ghcr.io -u <github-user> --password-stdin  (PAT: read:packages)
+      - ~/.docker/config.json:/config.json:ro
+    environment:
+      # Only manage containers labeled com.centurylinklabs.watchtower.enable=true.
+      - WATCHTOWER_LABEL_ENABLE=true
+      # Keep old images for rollback (do NOT enable cleanup).
+      - WATCHTOWER_CLEANUP=false
+      # 6-field cron (sec min hour dom mon dow): check daily at 04:00 (off-peak).
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_NO_STARTUP_MESSAGE=true
+      # Notifications (Shoutrrr) — uncomment one and fill in:
+      # Discord:    WATCHTOWER_NOTIFICATION_URL=discord://webhookid@webhooktoken
+      # Telegram:   WATCHTOWER_NOTIFICATION_URL=telegram://<token>@telegram?chats=<chat-id>
+      # - WATCHTOWER_NOTIFICATION_URL=discord://webhookid@webhooktoken
+      # Conservative mode: only notify, never update (use to evaluate first):
+      # - WATCHTOWER_MONITOR_ONLY=true
