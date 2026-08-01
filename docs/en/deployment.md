@@ -118,6 +118,22 @@ services:
 
 No extra steps needed — the `docker-compose.yml` uses the pre-built image by default.
 
+#### Deploying on a NAS OS
+
+The same multi-arch Docker image installs on most NAS operating systems. All NAS deployments share one design choice: **`network_mode: host` is required** — ONVIF camera auto-discovery uses UDP multicast (`239.255.255.250:3702`), which Docker's default bridge blocks. Per-platform guides (with the exact UI path, volume paths, and port-conflict notes):
+
+| Platform | Guide |
+|----------|-------|
+| unRAID | [deployment-unraid.md](deployment-unraid.md) — Community Applications template |
+| 飞牛 fnOS | [deployment-fnos.md](deployment-fnos.md) — `.fpk` package |
+| iStoreOS / OpenWrt | [deployment-istoreos.md](deployment-istoreos.md) — Compose (default host networking) |
+| Synology DSM | [deployment-synology.md](deployment-synology.md) — Container Manager → Project |
+| QNAP QTS | [deployment-qnap.md](deployment-qnap.md) — Container Station → Application |
+| 极空间 ZSpace | [deployment-zspace.md](deployment-zspace.md) — Docker → Compose |
+
+For keeping the image current (manual pull, or optional Watchtower), see the [auto-update guide](deployment-autoupdate.md).
+
+
 **Option B: Build locally**
 
 If you need custom builds or want the latest source code:
@@ -486,6 +502,8 @@ Caveats:
 - **Approaches NOT adopted** (they conflict with the project's design constraints): a resident in-memory ring buffer needs a large constant RAM allocation, incompatible with the RPi 3B's 1 GB target; enlarging the muxer write buffer risks losing hundreds of MB on power loss and corrupts the MP4 moov atom, violating the atomic-write (temp → rename) crash-safety principle. The project therefore sticks with the memory-friendly "small segments + async merge + optional tmpfs (deployment layer)" approach.
 
 ## Updating
+
+For Docker deployments — manual `docker compose pull && up -d`, optional Watchtower auto-updates, and rollback — see the [auto-update guide](deployment-autoupdate.md). For breaking-change migrations between specific versions, see the [Upgrade Guide](upgrade-guide.md).
 
 ### Using install.sh (Recommended)
 

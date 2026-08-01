@@ -118,6 +118,22 @@ services:
 
 直接使用 `docker-compose.yml` 中的默认镜像地址即可，无需额外操作。
 
+#### 在 NAS OS 上部署
+
+同一个多架构 Docker 镜像可安装到大多数 NAS 操作系统。所有 NAS 部署共享一个设计选择：**必须用 `network_mode: host`** —— ONVIF 摄像头自动发现使用 UDP 多播（`239.255.255.250:3702`），Docker 默认的 bridge 会阻断它。各平台指南（含精确的 UI 路径、数据卷路径、端口冲突提示）：
+
+| 平台 | 指南 |
+|------|------|
+| unRAID | [deployment-unraid.md](deployment-unraid.md) —— Community Applications 模板 |
+| 飞牛 fnOS | [deployment-fnos.md](deployment-fnos.md) —— `.fpk` 应用包 |
+| iStoreOS / OpenWrt | [deployment-istoreos.md](deployment-istoreos.md) —— Compose（默认 host 网络） |
+| Synology DSM | [deployment-synology.md](deployment-synology.md) —— Container Manager → 项目 |
+| 威联通 QNAP QTS | [deployment-qnap.md](deployment-qnap.md) —— Container Station → 应用程序 |
+| 极空间 ZSpace | [deployment-zspace.md](deployment-zspace.md) —— Docker → Compose |
+
+镜像如何保持最新（手动拉取，或可选的 Watchtower），见[自动升级指南](deployment-autoupdate.md)。
+
+
 **选项 B：本地构建**
 
 如果需要自定义构建或使用最新源码：
@@ -485,6 +501,8 @@ sudo mount -t tmpfs -o size=2G tmpfs /mnt/nvr-tmp
 - **不采用的方案**（与项目设计约束冲突）：常驻内存的环形缓冲（Ring Buffer）需要恒定占用一大块内存，与"树莓派 3B 仅 1 GB RAM"的兼容目标冲突；增大 muxer 写缓冲会在断电时丢失数百 MB 数据并损坏 MP4 的 moov atom，违反原子写（temp → rename）的崩溃安全原则。因此本项目坚持"小分片 + 异步合并 + tmpfs（部署层可选）"的内存友好方案。
 
 ## 更新
+
+Docker 部署的更新方式——手动 `docker compose pull && up -d`、可选的 Watchtower 自动升级与回滚——见[自动升级指南](deployment-autoupdate.md)。特定版本间的破坏性变更迁移，见[升级指南](upgrade-guide.md)。
 
 ### 使用安装脚本（推荐）
 
