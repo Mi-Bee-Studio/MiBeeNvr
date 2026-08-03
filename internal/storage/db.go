@@ -393,6 +393,9 @@ func (d *DB) Init(ctx context.Context) error {
 		// AI events
 		"CREATE INDEX IF NOT EXISTS idx_ai_events_camera_time ON ai_events(camera_id, created_at DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_ai_events_recording ON ai_events(recording_id)",
+		// Composite index for the recordings ?ai_class= filter (EXISTS subquery on
+		// class_name + recording_id). Also serves class_name-only lookups.
+		"CREATE INDEX IF NOT EXISTS idx_ai_events_class_recording ON ai_events(class_name, recording_id)",
 		// Timelapse merges
 		"CREATE INDEX IF NOT EXISTS idx_timelapse_merges_camera_window ON timelapse_merges(camera_id, window_start)",
 		"CREATE INDEX IF NOT EXISTS idx_timelapse_merges_status ON timelapse_merges(status)",

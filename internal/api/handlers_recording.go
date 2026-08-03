@@ -82,6 +82,9 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 	filter.Search = r.URL.Query().Get("search")
 
+	// AI class filter: only recordings that have an AI event with this class_name.
+	filter.AiClass = r.URL.Query().Get("ai_class")
+
 	// List + cached count. Cursor-based requests still get the total from cache.
 	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
@@ -138,6 +141,7 @@ func (h *Handler) handleTimelineSegments(w http.ResponseWriter, r *http.Request)
 			filter.EndTime = t
 		}
 	}
+	filter.AiClass = r.URL.Query().Get("ai_class")
 
 	segments, total, err := h.db.ListRecordingTimelineSegments(r.Context(), filter)
 	if err != nil {
@@ -180,6 +184,7 @@ func (h *Handler) handleDailyRecordingSummary(w http.ResponseWriter, r *http.Req
 			filter.EndTime = t
 		}
 	}
+	filter.AiClass = r.URL.Query().Get("ai_class")
 
 	// formats: comma-separated list (e.g. "timelapse,mjpeg")
 	if v := r.URL.Query().Get("formats"); v != "" {

@@ -138,6 +138,11 @@ type RecordingFilter struct {
 	SortBy    string // started_at, duration, file_size, camera_id; default: started_at
 	SortOrder string // asc, desc; default: desc
 	Archived  *bool  // nil = all, true = archived only, false = not archived
+	// AiClass filters to recordings that have at least one AI event with this class_name
+	// (e.g. "person", "car"). Translates to an EXISTS subquery against ai_events joined on
+	// recording_id. Empty = no AI filter. Requires ai_events.class_name to be populated by
+	// the AI event ingest path.
+	AiClass string
 	// Cursor enables keyset (seek) pagination for O(1) deep-page performance.
 	// When set AND the sort is the default (started_at DESC), ListRecordings uses
 	// WHERE started_at < cursor instead of OFFSET, avoiding the O(N) scan-skip that
