@@ -15,6 +15,7 @@
   "ai.statusStopped": "已停止",
   "ai.title": "AI 检测状态",
   "aiEvents.allCameras": "所有摄像头",
+  "aiEvents.allTypes": "全部类型",
   "aiEvents.goToSettings": "前往设置",
   "aiEvents.noEvents": "暂无 AI 事件",
   "aiEvents.notConnectedDesc": "在设置页配置 MiBeeVision 集成,即可开始接收 AI 检测事件。",

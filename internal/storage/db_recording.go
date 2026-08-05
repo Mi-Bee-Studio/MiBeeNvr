@@ -320,6 +320,10 @@ func countCacheKey(f model.RecordingFilter) string {
 	b.WriteString(merged)
 	b.WriteByte('|')
 	b.WriteString(archived)
+	b.WriteByte('|')
+	// AiClass must be part of the key: without it, ?ai_class=person collides
+	// with the unfiltered count cache entry and returns the wrong total.
+	b.WriteString(f.AiClass)
 	return b.String()
 }
 

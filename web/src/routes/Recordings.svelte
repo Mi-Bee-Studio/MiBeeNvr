@@ -418,11 +418,9 @@ let selectedPresetCamera = $state<string>('');
 
     try {
       const useCursor = cursor !== '';
+      // 复用 sharedFilterParams()(含 ai_class),避免列表加载漏掉过滤参数。
       const baseParams = {
-        camera_id: cameraId || undefined,
-        search: searchQuery || undefined,
-        merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
-        archived: showArchived ? true : undefined,
+        ...sharedFilterParams(),
         limit,
         sort_by: sortBy,
         order: sortOrder,

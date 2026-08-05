@@ -15,6 +15,7 @@
   "ai.statusStopped": "Stopped",
   "ai.title": "AI Detection",
   "aiEvents.allCameras": "All Cameras",
+  "aiEvents.allTypes": "All Types",
   "aiEvents.goToSettings": "Go to Settings",
   "aiEvents.noEvents": "No AI events yet",
   "aiEvents.notConnectedDesc": "Configure MiBeeVision integration in Settings to start receiving AI detection events.",
