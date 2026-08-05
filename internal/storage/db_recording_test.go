@@ -223,3 +223,19 @@ func TestPathIsRecordingFile(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, got, "path under a different camera should not match")
 }
+
+// TestCountCacheKeyIncludesAiClass guards against a regression where the AI
+// class filter was omitted from the count-cache key: without AiClass in the
+// key, ?ai_class=person collided with the unfiltered entry and the list API
+// returned the wrong total (the whole-table count), making the "含人" filter
+// look broken in the UI.
+func TestCountCacheKeyIncludesAiClass(t *testing.T) {
+	base := model.RecordingFilter{CameraID: "cam-1", Format: model.FormatH264}
+	noClass := countCacheKey(base)
+	withPerson := countCacheKey(model.RecordingFilter{CameraID: "cam-1", Format: model.FormatH264, AiClass: "person"})
+	withCar := countCacheKey(model.RecordingFilter{CameraID: "cam-1", Format: model.FormatH264, AiClass: "car"})
+
+	require.NotEqual(t, noClass, withPerson, "AiClass=person must not share the cache key of the unfiltered query")
+	require.NotEqual(t, noClass, withCar, "AiClass=car must not share the cache key of the unfiltered query")
+	require.NotEqual(t, withPerson, withCar, "different AiClass values must produce different cache keys")
+}
