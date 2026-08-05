@@ -370,6 +370,13 @@ func recordingsFilterWhere(filter model.RecordingFilter) ([]string, []any) {
 	} else {
 		where = append(where, "archived=0")
 	}
+	// AI class filter: keep only recordings that have ≥1 AI event with the given
+	// class_name. Uses a correlated EXISTS against ai_events joined on recording_id
+	// (both TEXT snowflake IDs). Leverages idx_ai_events_class_recording.
+	if filter.AiClass != "" {
+		where = append(where, "EXISTS(SELECT 1 FROM ai_events WHERE ai_events.recording_id = recordings.id AND ai_events.class_name = ?)")
+		args = append(args, filter.AiClass)
+	}
 	return where, args
 }
 
@@ -558,6 +565,12 @@ func (d *DB) DailyRecordingSummary(ctx context.Context, filter model.RecordingFi
 		where = append(where, "archived=1")
 	} else {
 		where = append(where, "archived=0")
+	}
+	// AI class filter (mirrors recordingsFilterWhere; DailyRecordingSummary builds its
+	// own WHERE rather than reusing the shared helper, so replicate the EXISTS here).
+	if filter.AiClass != "" {
+		where = append(where, "EXISTS(SELECT 1 FROM ai_events WHERE ai_events.recording_id = recordings.id AND ai_events.class_name = ?)")
+		args = append(args, filter.AiClass)
 	}
 
 	// Conditional aggregation (version-safe — no GROUP_CONCAT(DISTINCT) dependency).

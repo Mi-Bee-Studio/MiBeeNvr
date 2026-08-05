@@ -58,6 +58,9 @@
   let searchQuery = $state('');
   let mergedFilter = $state('');
   let showArchived = $state(false);
+  // AI class filter: '' = all, 'person' / 'car' / ... = only recordings with such an event.
+  // Populated from ai_events written by the external AI backend; requires that backend running.
+  let aiClass = $state('');
   let cameras = $state<Camera[]>([]);
 
   // ── Date/time state ──
@@ -271,6 +274,7 @@ let selectedPresetCamera = $state<string>('');
     formatPill = 'All';
     mergedFilter = '';
     showArchived = false;
+    aiClass = '';
     selectedDate = null;
     offset = 0;
   }
@@ -313,13 +317,14 @@ let selectedPresetCamera = $state<string>('');
 
   // ── Data loading ──
 
-  // Shared filter params (camera, search, merged, archived).
+  // Shared filter params (camera, search, merged, archived, ai_class).
   function sharedFilterParams() {
     return {
       camera_id: cameraId || undefined,
       search: searchQuery || undefined,
       merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
       archived: showArchived ? true : undefined,
+      ai_class: aiClass || undefined,
     };
   }
 
@@ -770,7 +775,7 @@ let selectedPresetCamera = $state<string>('');
 
   // Calendar summary: reload when month or filters change (independent of selected date)
   $effect(() => {
-    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, currentMonth];
+    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, aiClass, currentMonth];
     clearTimeout(calLoadTimeout);
     calLoadTimeout = window.setTimeout(() => loadCalendarSummary(), 100);
     return () => clearTimeout(calLoadTimeout);
@@ -779,7 +784,7 @@ let selectedPresetCamera = $state<string>('');
   // Watch list mode pagination/sort → reload list data
   $effect(() => {
     if (viewMode === 'list') {
-      const _ = [offset, limit, sortBy, sortOrder, cameraId, formatPill, searchQuery, mergedFilter, showArchived];
+      const _ = [offset, limit, sortBy, sortOrder, cameraId, formatPill, searchQuery, mergedFilter, showArchived, aiClass];
       clearTimeout(listLoadTimeout);
       listLoadTimeout = window.setTimeout(() => loadListData(), 100);
       return () => clearTimeout(listLoadTimeout);
@@ -788,13 +793,14 @@ let selectedPresetCamera = $state<string>('');
 
   // Timeline: reload when the selected day changes (camera/format filters don't
   // apply here — the timeline shows all cameras for the whole day; the coverage
-  // bands are colored by format). viewMode gating avoids fetching when neither
-  // timeline-viewing tab is visible (same lazy pattern as list). The Timelapse
+  // bands are colored by format). AI class DOES apply (e.g. "含人" narrows the day's
+  // bands to recordings with person events). viewMode gating avoids fetching when
+  // neither timeline-viewing tab is visible (same lazy pattern as list). The Timelapse
   // tab reuses the same day fetch and slices off the timelapse-format rows.
   let timelineLoadTimeout: number;
   $effect(() => {
     if (viewMode === 'timeline' || viewMode === 'timelapse') {
-      const _ = selectedDate;
+      const _ = [selectedDate, aiClass];
       clearTimeout(timelineLoadTimeout);
       timelineLoadTimeout = window.setTimeout(() => loadTimelineData(), 100);
       return () => clearTimeout(timelineLoadTimeout);
@@ -880,6 +886,16 @@ let selectedPresetCamera = $state<string>('');
               {#each cameras as camera}
                 <option value={camera.id}>{camera.name}</option>
               {/each}
+            </select>
+          </div>
+          <div class="flex-1 min-w-[140px]">
+            <label for="ai-class" class="input-label" title={t('recordings.aiClassHint')}>
+              {t('recordings.aiClass')}
+            </label>
+            <select id="ai-class" class="input" bind:value={aiClass}>
+              <option value="">{t('recordings.aiClassAll')}</option>
+              <option value="person">{t('recordings.aiClassPerson')}</option>
+              <option value="car">{t('recordings.aiClassCar')}</option>
             </select>
           </div>
           <div class="flex-1 min-w-[180px]">

@@ -99,6 +99,7 @@ export async function listRecordings(
     search?: string;
     archived?: boolean;
     cursor?: string; // keyset cursor (started_at of last row on prev page) for O(1) deep paging
+    ai_class?: string; // "person" / "car" / ... — filter to recordings with an AI event of this class
     signal?: AbortSignal;
   } = {},
 ): Promise<RecordingListResponse> {
@@ -116,6 +117,7 @@ export async function listRecordings(
   if (params.search) queryParams.set('search', params.search);
   if (params.archived !== undefined) queryParams.set('archived', String(params.archived));
   if (params.cursor) queryParams.set('cursor', params.cursor);
+  if (params.ai_class) queryParams.set('ai_class', params.ai_class);
 
   const query = queryParams.toString();
   const endpoint = query ? `/recordings?${query}` : '/recordings';
@@ -134,6 +136,7 @@ export async function getRecordingDailySummary(
     end?: string;
     search?: string;
     archived?: boolean;
+    ai_class?: string;
     tz_offset?: number;
     signal?: AbortSignal;
   } = {},
@@ -147,6 +150,7 @@ export async function getRecordingDailySummary(
   if (params.end) queryParams.set('end', params.end);
   if (params.search) queryParams.set('search', params.search);
   if (params.archived !== undefined) queryParams.set('archived', String(params.archived));
+  if (params.ai_class) queryParams.set('ai_class', params.ai_class);
   if (params.tz_offset !== undefined) queryParams.set('tz_offset', String(params.tz_offset));
 
   const query = queryParams.toString();
@@ -193,6 +197,7 @@ export async function getRecordingsTimeline(
     camera_id?: string;
     format?: string;
     merged?: boolean;
+    ai_class?: string;
     start?: string; // RFC3339 day-start
     end?: string; // RFC3339 day-end
     signal?: AbortSignal;
@@ -202,6 +207,7 @@ export async function getRecordingsTimeline(
   if (params.camera_id) queryParams.set('camera_id', params.camera_id);
   if (params.format) queryParams.set('format', params.format);
   if (params.merged !== undefined) queryParams.set('merged', String(params.merged));
+  if (params.ai_class) queryParams.set('ai_class', params.ai_class);
   if (params.start) queryParams.set('start', params.start);
   if (params.end) queryParams.set('end', params.end);
 
