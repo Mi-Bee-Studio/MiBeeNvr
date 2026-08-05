@@ -51,6 +51,46 @@ func ExtractParamSetsH264(au [][]byte) (sps, pps []byte) {
 	return sps, pps
 }
 
+// ExtractParamSetsH265 scans an H.265 access unit and returns the most recently
+// observed VPS (NAL type 32), SPS (NAL type 33), and PPS (NAL type 34), without
+// the start-code prefix. Returns nil for any that are not present. Used by the
+// StreamHub IDR fast-start cache to validate that a cached IDR carries a complete
+// parameter set before replaying it to a new consumer (an incomplete parameter
+// set cannot configure a decoder).
+func ExtractParamSetsH265(au [][]byte) (vps, sps, pps []byte) {
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		switch (nalu[0] >> 1) & 0x3F {
+		case 32: // VPS_NUT
+			vps = nalu
+		case 33: // SPS_NUT
+			sps = nalu
+		case 34: // PPS_NUT
+			pps = nalu
+		}
+	}
+	return vps, sps, pps
+}
+
+// HasCompleteParamSets reports whether an access unit contains the full set of
+// parameter-set NALUs needed to (re)configure a decoder for that codec:
+//   - H.264: SPS (type 7) AND PPS (type 8)
+//   - H.265: VPS (type 32) AND SPS (type 33) AND PPS (type 34)
+//
+// isH265 selects the codec. Returns true for empty AUs only when the codec needs
+// no parameter sets (never the case for H.264/H.265 video), so callers can use
+// this as a gate before replaying a cached IDR.
+func HasCompleteParamSets(au [][]byte, isH265 bool) bool {
+	if isH265 {
+		vps, sps, pps := ExtractParamSetsH265(au)
+		return vps != nil && sps != nil && pps != nil
+	}
+	sps, pps := ExtractParamSetsH264(au)
+	return sps != nil && pps != nil
+}
+
 // EqualParamSets reports whether two SPS/PPS NAL units are byte-identical.
 // nil comparisons are treated as equal-to-nil only (nil != non-nil).
 func EqualParamSets(a, b []byte) bool {

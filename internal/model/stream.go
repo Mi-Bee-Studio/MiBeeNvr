@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
 // FrameCallback is called for each decoded video frame.
@@ -98,6 +100,20 @@ type StreamHub struct {
 	OnAudioDrop func(cameraID string)
 	cameraID    string // set by SetCameraID after construction
 
+	// IDR fast-start cache — stores the most recent N keyframe access units so a
+	// newly-subscribed consumer can begin decoding immediately, without waiting up
+	// to one full GOP for the next natural IDR. This is essential for cameras with
+	// long GOPs (e.g. 8s): without replay, a consumer that connects mid-GOP and
+	// misses the IDR's inline parameter sets waits indefinitely for a keyframe and
+	// the decoder emits nothing ("buffering" forever). See HasCompleteParamSets for
+	// the integrity gate that prevents replaying an IDR lacking VPS/SPS/PPS.
+	//
+	// All access is guarded by h.mu (set in distributeFrame under h.mu; read &
+	// drained in Subscribe under h.mu), matching the locking discipline of
+	// consumers — no separate lock is needed.
+	idrCache     []FrameMsg
+	idrCacheSize int // max cached IDRs (ring); 0 disables replay (legacy behavior)
+
 	// Jitter buffer state — only activated when out-of-order frames are detected.
 	jitterBufferEnabled  atomic.Bool
 	jitterBufferSize     int           // max frames to buffer before flush (default: 5)
@@ -119,6 +135,12 @@ type StreamHub struct {
 	OnJitterReorder func(cameraID string)
 }
 
+// DefaultIDRCacheSize is the number of most-recent IDR access units StreamHub
+// keeps for fast-start replay to new subscribers. 3 balances memory (a few frames)
+// against giving a late joiner a keyframe near the current playhead. Set
+// StreamHub.idrCacheSize = 0 to disable replay entirely (legacy behavior).
+const DefaultIDRCacheSize = 3
+
 // NewStreamHub creates a new StreamHub with no consumers.
 func NewStreamHub() *StreamHub {
 	return &StreamHub{
@@ -128,6 +150,7 @@ func NewStreamHub() *StreamHub {
 		jitterBufferSize:      5,   // buffer up to 5 frames before forced flush
 		jitterBufferTimeout:   500 * time.Millisecond,
 		dropRateWarnThreshold: 0.30,
+		idrCacheSize:          DefaultIDRCacheSize,
 	}
 }
 
@@ -156,7 +179,76 @@ func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
 	}
 	h.consumers[id] = entry
 	go entry.drain()
+
+	// Fast-start: replay the most recent cached IDR whose access unit carries a
+	// complete parameter set (VPS+SPS+PPS for H.265, SPS+PPS for H.264) into the
+	// new consumer's channel so its decoder can configure and produce output
+	// immediately — instead of waiting up to one full GOP for the next natural
+	// IDR. This is what lets long-GOP cameras (e.g. 8s) be watchable. We walk the
+	// cache newest-first and replay only the first complete one: a single valid
+	// keyframe + parameter set is sufficient to bootstrap decoding, and replaying
+	// stale older IDRs adds no value while risking decoder confusion.
+	//
+	// Safe because we hold h.mu (distributeFrame also needs h.mu to populate the
+	// cache), entry.ch is buffered (consumerBufferSize, default 150), and drain
+	// cannot have closed the channel (closed is set only in Unsubscribe, which
+	// also needs h.mu). The non-blocking send guards against any pathological
+	// buffer-too-small case by skipping replay (the consumer still gets future
+	// frames normally).
+	h.replayCachedIDRLocked(entry)
 	return nil
+}
+
+// cacheIDRLocked appends a deep copy of an IDR access unit to the IDR ring
+// buffer. Must be called with h.mu held (caller is distributeFrame, which
+// already holds the lock). The ring keeps at most h.idrCacheSize entries,
+// evicting the oldest when full.
+func (h *StreamHub) cacheIDRLocked(pts int64, au [][]byte) {
+	cp := make([][]byte, len(au))
+	for i, nalu := range au {
+		c := make([]byte, len(nalu))
+		copy(c, nalu)
+		cp[i] = c
+	}
+	if len(h.idrCache) >= h.idrCacheSize {
+		// Ring: drop oldest. copy-in-place keeps the backing array.
+		copy(h.idrCache, h.idrCache[1:])
+		h.idrCache[len(h.idrCache)-1] = FrameMsg{PTS: pts, AU: cp, IsKeyframe: true}
+	} else {
+		h.idrCache = append(h.idrCache, FrameMsg{PTS: pts, AU: cp, IsKeyframe: true})
+	}
+}
+
+// replayCachedIDRLocked pushes the most recent parameter-set-complete cached IDR
+// into a freshly-subscribed consumer's channel. Must be called with h.mu held.
+// No-op when the cache is empty, disabled (idrCacheSize==0), or contains no IDR
+// with a complete parameter set (in which case the consumer falls back to
+// waiting for the next natural IDR — legacy behavior, no worse than before).
+func (h *StreamHub) replayCachedIDRLocked(entry *consumerEntry) {
+	if h.idrCacheSize == 0 || len(h.idrCache) == 0 {
+		return
+	}
+	// Walk newest-first: the newest complete IDR is closest to the live edge and
+	// the only one a decoder needs to bootstrap. (Replaying older IDRs would just
+	// add stale frames the consumer must discard.)
+	for i := len(h.idrCache) - 1; i >= 0; i-- {
+		msg := h.idrCache[i]
+		if msg.AU == nil {
+			continue
+		}
+		// StreamHub is codec-agnostic; try both H.264 and H.265 parameter-set
+		// extraction. A real IDR for either codec will satisfy exactly one.
+		if nalutil.HasCompleteParamSets(msg.AU, true) || nalutil.HasCompleteParamSets(msg.AU, false) {
+			select {
+			case entry.ch <- msg:
+			default:
+				// Buffer unexpectedly full (shouldn't happen for a brand-new entry
+				// with a 150-slot buffer) — skip replay; consumer still receives
+				// live frames normally.
+			}
+			return
+		}
+	}
 }
 
 // Unsubscribe removes the consumer with the given ID.
@@ -223,6 +315,15 @@ func (h *StreamHub) Broadcast(pts int64, au [][]byte, isIDR bool) {
 // This is the direct (no jitter buffer) path.
 func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 	h.mu.Lock()
+	// Cache IDR access units for fast-start replay to future subscribers. Done
+	// under h.mu (same lock that guards consumers) so Subscribe — which reads &
+	// drains the cache under h.mu — sees a consistent snapshot. Deep-copy the AU:
+	// upstream recorders don't mutate slices after Broadcast today, but there's no
+	// enforced contract, and a cached reference could outlive the producer's
+	// intended lifetime. The copy cost (one IDR per GOP) is negligible.
+	if isIDR && h.idrCacheSize > 0 {
+		h.cacheIDRLocked(pts, au)
+	}
 	type entryWithID struct {
 		id    string
 		entry *consumerEntry

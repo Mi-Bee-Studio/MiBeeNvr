@@ -22,6 +22,10 @@ interface MockDecoderInstance {
   close: ReturnType<typeof vi.fn>;
   state: string;
   decodeQueueSize: number;
+  // Saved constructor output/error callbacks so tests can simulate decoded
+  // frame delivery (used by the decode-stall watchdog tests).
+  _output?: (frame: any) => void;
+  _error?: (e: Error) => void;
 }
 
 let mockDecoderInstances: MockDecoderInstance[] = [];
@@ -37,6 +41,8 @@ function createMockDecoderClass(): any {
     decodeQueueSize = 0;
 
     constructor(init: { output: (frame: any) => void; error: (e: Error) => void }) {
+      this._output = init.output;
+      this._error = init.error;
       this.configure = vi.fn().mockImplementation(async (config: any) => {
         this.state = 'configured';
       });
@@ -1010,6 +1016,69 @@ describe('Decoder', () => {
       expect(decoder.frameDropCount).toBe(95);
       expect(decoder.pendingDecodeCount).toBe(5);
       expect(() => decoder.close()).not.toThrow();
+    });
+  });
+
+  // ─── Decode-stall watchdog ──────────────────────────────────────────────
+
+  describe('decode-stall watchdog', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('fires onStall when configured but no output arrives within DECODE_STALL_MS', async () => {
+      const decoder = new Decoder();
+      const onStall = vi.fn();
+      decoder.onStall(onStall);
+      await decoder.configure(makeH265CodecInfo());
+
+      // No output delivered — advance past the stall window.
+      vi.advanceTimersByTime(16000);
+
+      expect(onStall).toHaveBeenCalledTimes(1);
+      decoder.close();
+    });
+
+    it('does NOT fire onStall when a decoded frame arrives in time', async () => {
+      const decoder = new Decoder();
+      const onStall = vi.fn();
+      decoder.onStall(onStall);
+      await decoder.configure(makeH265CodecInfo());
+
+      // Simulate the decoder producing output by invoking the captured output
+      // callback before the stall window elapses.
+      const inst = mockDecoderInstances.at(-1)!;
+      inst._output!({ close() {}, displayWidth: 16, displayHeight: 16, timestamp: 0 } as any);
+
+      vi.advanceTimersByTime(16000);
+      expect(onStall).not.toHaveBeenCalled();
+      decoder.close();
+    });
+
+    it('does not arm the stall timer when no onStall listener is registered', async () => {
+      const decoder = new Decoder();
+      // No decoder.onStall(...) call — the timer should be skipped entirely.
+      await decoder.configure(makeH265CodecInfo());
+
+      // If a timer were armed, advancing time must not throw (there's no
+      // listener to call). The real assertion is that close() cleans up without
+      // a pending-timer fire causing issues.
+      expect(() => vi.advanceTimersByTime(16000)).not.toThrow();
+      decoder.close();
+    });
+
+    it('cancels the stall timer on close', async () => {
+      const decoder = new Decoder();
+      const onStall = vi.fn();
+      decoder.onStall(onStall);
+      await decoder.configure(makeH265CodecInfo());
+      decoder.close();
+
+      vi.advanceTimersByTime(16000);
+      expect(onStall).not.toHaveBeenCalled();
     });
   });
 });

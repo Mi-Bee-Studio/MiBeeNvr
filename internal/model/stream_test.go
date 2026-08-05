@@ -1098,3 +1098,289 @@ func TestJitterBuffer_NonBlocking(t *testing.T) {
 	close(blockCh)
 	hub.Unsubscribe("slow")
 }
+
+// ─── IDR fast-start cache tests ────────────────────────────────────────────
+//
+// The next group covers the StreamHub IDR replay feature: a newly-subscribed
+// consumer immediately receives the most recent parameter-set-complete cached
+// IDR, so it can begin decoding without waiting up to one full GOP for the next
+// natural keyframe. This is the fix for long-GOP cameras (e.g. 8s) whose live
+// preview would otherwise stall in "buffering" forever if the subscriber missed
+// the IDR's inline parameter sets.
+
+// NAL first-byte constants that satisfy nalutil's type checks, so the cache's
+// parameter-set-completeness gate (HasCompleteParamSets) accepts them as a real
+// IDR carrying inline params.
+//
+//	H.264: SPS type 7 (0x67), PPS type 8 (0x68), IDR slice type 5 (0x65)
+//	H.265: VPS type 32 (0x40), SPS type 33 (0x42), PPS type 34 (0x44),
+//	       IDR_W_RADL type 19 (0x26).
+const (
+	nalH264SPS = 0x67
+	nalH264PPS = 0x68
+	nalH264IDR = 0x65
+	nalH265VPS = 0x40
+	nalH265SPS = 0x42
+	nalH265PPS = 0x44
+	nalH265IDR = 0x26
+)
+
+// h264IDRAU builds a minimal H.264 IDR access unit with inline SPS+PPS+IDR.
+func h264IDRAU() [][]byte {
+	return [][]byte{{nalH264SPS, 0x01}, {nalH264PPS, 0x02}, {nalH264IDR, 0xAA}}
+}
+
+// h265IDRAU builds a minimal H.265 IDR access unit with inline VPS+SPS+PPS+IDR.
+func h265IDRAU() [][]byte {
+	return [][]byte{{nalH265VPS, 0x01}, {nalH265SPS, 0x02}, {nalH265PPS, 0x03}, {nalH265IDR, 0xBB}}
+}
+
+// TestStreamHub_ReplaysIDROnSubscribe verifies the core fast-start behavior: a
+// consumer that subscribes AFTER an IDR has been broadcast immediately receives
+// that cached IDR, without needing a second Broadcast.
+func TestStreamHub_ReplaysIDROnSubscribe(t *testing.T) {
+	hub := newTestStreamHub(t)
+
+	// Broadcast one H.265 IDR (with complete VPS/SPS/PPS) BEFORE any subscriber.
+	hub.Broadcast(1000, h265IDRAU(), true)
+
+	// Now subscribe — the new consumer should receive the cached IDR immediately.
+	var (
+		mu       sync.Mutex
+		received []frameInfo
+	)
+	require.NoError(t, hub.Subscribe("late", func(pts int64, au [][]byte) {
+		mu.Lock()
+		received = append(received, frameInfo{pts: pts, au: au})
+		mu.Unlock()
+	}))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) >= 1
+	}, time.Second, 5*time.Millisecond, "late subscriber should receive the replayed IDR")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, received, 1, "exactly the replayed IDR (no older frames in cache)")
+	require.Equal(t, int64(1000), received[0].pts, "replayed IDR must carry the original PTS")
+	require.True(t, len(received[0].au) >= 4, "replayed AU must include VPS+SPS+PPS+IDR NALUs")
+}
+
+// TestStreamHub_ReplaysH264IDR verifies the H.264 branch of the completeness
+// gate (SPS+PPS required).
+func TestStreamHub_ReplaysH264IDR(t *testing.T) {
+	hub := newTestStreamHub(t)
+	hub.Broadcast(42, h264IDRAU(), true)
+
+	var (
+		mu       sync.Mutex
+		received []frameInfo
+	)
+	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+		mu.Lock()
+		received = append(received, frameInfo{pts: pts, au: au})
+		mu.Unlock()
+	}))
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) >= 1
+	}, time.Second, 5*time.Millisecond, "H.264 IDR should be replayed")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, int64(42), received[0].pts)
+}
+
+// TestStreamHub_NoReplayWhenCacheEmpty confirms that subscribing before any IDR
+// has been broadcast delivers nothing (legacy behavior preserved; the consumer
+// just waits for the next live frame).
+func TestStreamHub_NoReplayWhenCacheEmpty(t *testing.T) {
+	hub := newTestStreamHub(t)
+
+	var (
+		mu       sync.Mutex
+		received []frameInfo
+	)
+	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+		mu.Lock()
+		received = append(received, frameInfo{pts: pts, au: au})
+		mu.Unlock()
+	}))
+
+	// Give the drain goroutine a moment, then assert nothing arrived.
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Empty(t, received, "no IDR replay when cache is empty")
+}
+
+// TestStreamHub_IDRCacheRingSize verifies the ring buffer evicts the oldest IDR
+// once the cache reaches idrCacheSize, so only the most recent N are kept.
+func TestStreamHub_IDRCacheRingSize(t *testing.T) {
+	hub := newTestStreamHub(t)
+	hub.idrCacheSize = 2 // small ring for a deterministic test
+
+	// Broadcast 3 IDRs (PTS 10, 20, 30) plus a non-IDR to confirm non-IDRs are
+	// NOT cached.
+	hub.Broadcast(10, h265IDRAU(), true)
+	hub.Broadcast(15, [][]byte{{0x02}}, false) // P-frame, must not enter cache
+	hub.Broadcast(20, h265IDRAU(), true)
+	hub.Broadcast(30, h265IDRAU(), true) // this should evict PTS=10
+
+	// Subscribe — should receive only the newest complete IDR (PTS=30). The
+	// replay walks newest-first and stops at the first complete one, so even
+	// though the ring holds [20, 30], only 30 is delivered.
+	var (
+		mu       sync.Mutex
+		received []frameInfo
+	)
+	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+		mu.Lock()
+		received = append(received, frameInfo{pts: pts, au: au})
+		mu.Unlock()
+	}))
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) >= 1
+	}, time.Second, 5*time.Millisecond, "replay should deliver the newest cached IDR")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, received, 1, "only the newest complete IDR is replayed")
+	require.Equal(t, int64(30), received[0].pts)
+
+	// Verify the ring itself evicted the oldest.
+	hub.mu.Lock()
+	ringPTS := make([]int64, len(hub.idrCache))
+	for i, m := range hub.idrCache {
+		ringPTS[i] = m.PTS
+	}
+	hub.mu.Unlock()
+	require.Equal(t, []int64{20, 30}, ringPTS, "ring must hold only the last 2 IDRs")
+}
+
+// TestStreamHub_ReplaySkipsIncompleteIDR confirms the completeness gate: an IDR
+// whose access unit lacks the full parameter set is NOT replayed. We seed the
+// cache with one incomplete IDR followed by one complete IDR and assert only the
+// complete one is replayed.
+func TestStreamHub_ReplaySkipsIncompleteIDR(t *testing.T) {
+	hub := newTestStreamHub(t)
+
+	// Incomplete H.265 IDR: VPS + IDR slice, but NO SPS/PPS.
+	incomplete := [][]byte{{nalH265VPS, 0x01}, {nalH265IDR, 0xBB}}
+	hub.Broadcast(100, incomplete, true)
+	// Complete H.265 IDR.
+	hub.Broadcast(200, h265IDRAU(), true)
+
+	var (
+		mu       sync.Mutex
+		received []frameInfo
+	)
+	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+		mu.Lock()
+		received = append(received, frameInfo{pts: pts, au: au})
+		mu.Unlock()
+	}))
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) >= 1
+	}, time.Second, 5*time.Millisecond, "complete IDR should be replayed")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, received, 1)
+	require.Equal(t, int64(200), received[0].pts, "the incomplete IDR (PTS=100) must be skipped")
+}
+
+// TestStreamHub_NoReplayWhenAllIncomplete confirms that if NO cached IDR has a
+// complete parameter set, nothing is replayed (fall back to legacy behavior).
+func TestStreamHub_NoReplayWhenAllIncomplete(t *testing.T) {
+	hub := newTestStreamHub(t)
+	incomplete := [][]byte{{nalH265VPS, 0x01}, {nalH265IDR, 0xBB}} // no SPS/PPS
+	hub.Broadcast(100, incomplete, true)
+
+	var (
+		mu       sync.Mutex
+		received []frameInfo
+	)
+	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+		mu.Lock()
+		received = append(received, frameInfo{pts: pts, au: au})
+		mu.Unlock()
+	}))
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Empty(t, received, "no replay when cached IDR lacks complete param sets")
+}
+
+// TestStreamHub_DisabledIDRCacheNoReplay confirms idrCacheSize=0 disables replay
+// entirely (legacy behavior), even after IDRs are broadcast.
+func TestStreamHub_DisabledIDRCacheNoReplay(t *testing.T) {
+	hub := newTestStreamHub(t)
+	hub.idrCacheSize = 0
+	hub.Broadcast(1000, h265IDRAU(), true)
+
+	var (
+		mu       sync.Mutex
+		received []frameInfo
+	)
+	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+		mu.Lock()
+		received = append(received, frameInfo{pts: pts, au: au})
+		mu.Unlock()
+	}))
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Empty(t, received, "idrCacheSize=0 disables replay")
+}
+
+// TestStreamHub_ReplayRace exercises concurrent Broadcast (IDR) + Subscribe
+// under the race detector to confirm the cache is lock-safe.
+func TestStreamHub_ReplayRace(t *testing.T) {
+	hub := newTestStreamHub(t)
+	var subs atomic.Int64
+	var wg sync.WaitGroup
+
+	// Producers: continuously broadcast IDRs and P-frames.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				pts := int64(n*1000 + j)
+				if j%5 == 0 {
+					hub.Broadcast(pts, h265IDRAU(), true)
+				} else {
+					hub.Broadcast(pts, [][]byte{{0x02}}, false)
+				}
+			}
+		}(i)
+	}
+
+	// Subscribers: continuously subscribe/unsubscribe.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				id := fmt.Sprintf("r-%d-%d", n, j)
+				cb := func(int64, [][]byte) {
+					subs.Add(1)
+				}
+				_ = hub.Subscribe(id, cb)
+				hub.Unsubscribe(id)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	// No data race => race detector passes; subs > 0 confirms callbacks ran.
+	require.Greater(t, subs.Load(), int64(0))
+}

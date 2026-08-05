@@ -1096,3 +1096,64 @@ describe('backpressure', () => {
     expect(cm.frameDropCount).toBe(3);
   });
 });
+
+// ─── decode-stall (decoder configured but producing no output) ─────────────
+//
+// These cover the failure mode the zombie detector can't see: the WS keeps
+// delivering P-frames (so _lastFrameTime stays fresh and the zombie never
+// trips), but the decoder never gets a keyframe and emits nothing. The decoder
+// fires a stall signal; handleDecoderStall reconnects (to catch an IDR on a
+// fresh stream) up to MAX_DECODE_STALL_RECONNECTS times, then reports offline so
+// the orchestrator can demote to another protocol.
+describe('decode-stall', () => {
+  it('handleDecoderStall triggers a reconnect via the coordinator', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(1000);
+    const onStateChange = vi.fn();
+    const cm = createManager({ coordinator, cameraId: 'cam-1', onStateChange });
+    cm.connect();
+
+    cm.handleDecoderStall();
+
+    expect(coordinator.requestReconnect).toHaveBeenCalledWith('cam-1', expect.any(Function));
+  });
+
+  it('reports offline after MAX_DECODE_STALL_RECONNECTS consecutive stalls', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(1000);
+    const onCameraOffline = vi.fn();
+    const onStateChange = vi.fn();
+    const cm = createManager({ coordinator, cameraId: 'cam-1', onStateChange, onCameraOffline });
+    cm.connect();
+
+    // MAX_DECODE_STALL_RECONNECTS = 3: stalls 1..3 each reconnect, the 4th trips
+    // offline.
+    cm.handleDecoderStall(); // stall #1 → reconnect
+    cm.handleDecoderStall(); // stall #2 → reconnect
+    cm.handleDecoderStall(); // stall #3 → reconnect
+    expect(onCameraOffline).not.toHaveBeenCalled();
+
+    cm.handleDecoderStall(); // stall #4 → offline
+    expect(onCameraOffline).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenLastCalledWith('offline');
+  });
+
+  it('resetDecodeStallCount lets the decoder recover between stall stretches', () => {
+    const coordinator = createMockCoordinator();
+    coordinator.requestReconnect.mockReturnValue(1000);
+    const onCameraOffline = vi.fn();
+    const cm = createManager({ coordinator, cameraId: 'cam-1', onCameraOffline });
+    cm.connect();
+
+    // Two stalls, then the decoder produces output → caller resets the tally.
+    cm.handleDecoderStall();
+    cm.handleDecoderStall();
+    cm.resetDecodeStallCount();
+
+    // Now three more stalls should NOT trip offline (tally started fresh).
+    cm.handleDecoderStall();
+    cm.handleDecoderStall();
+    cm.handleDecoderStall();
+    expect(onCameraOffline).not.toHaveBeenCalled();
+  });
+});
