@@ -427,6 +427,9 @@ function handleWebGpuLost() {
 
         if (msg.type === 'frame' && msg.data instanceof VideoFrame) {
           const frame = msg.data;
+          // Decoder produced output → the stall watchdog's reconnect tally no
+          // longer applies; reset it so a future stall starts fresh.
+          cm?.resetDecodeStallCount();
           // Track canvas dimensions for AI overlay
           if (canvasEl) {
             if (canvasWidth !== frame.displayWidth || canvasHeight !== frame.displayHeight) {
@@ -449,6 +452,7 @@ function handleWebGpuLost() {
           }
         } else if (msg.type === 'wasm-frame' && msg.data) {
           // HTTP H.265 path: raw RGBA from libde265 WASM (no VideoFrame).
+          cm?.resetDecodeStallCount();
           renderWasmFrame(msg.data);
           if (streamState !== 'playing') {
             updateState('playing');
@@ -473,6 +477,15 @@ function handleWebGpuLost() {
           // Decoder configured — resume frame delivery (paused in onCodecInfo).
           if (cm) {
             cm.setPaused(false);
+          }
+        } else if (msg.type === 'decode-stall') {
+          // Decoder configured but produced no output within DECODE_STALL_MS
+          // (long-GOP camera feeding P-frames with no keyframe). Let the
+          // ConnectionManager decide: reconnect (to grab a keyframe on the fresh
+          // stream) or, after repeated stalls, report offline so the orchestrator
+          // demotes to another protocol.
+          if (cm) {
+            cm.handleDecoderStall();
           }
         }
       };

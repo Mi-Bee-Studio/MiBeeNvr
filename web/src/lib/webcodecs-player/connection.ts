@@ -134,6 +134,17 @@ export class ConnectionManager {
   // rejection (never opened) from a post-open drop (zombie/reconnect territory).
   private _socketOpened = false;
 
+  // ─── Decode-stall detection ─────────────────────────────────────────────
+  // Distinct from the zombie detector above: zombie keys on WS frame ARRIVAL
+  // (_lastFrameTime), so it never trips when a long-GOP camera keeps sending
+  // P-frames but the decoder never gets a keyframe and emits nothing. The
+  // decoder itself fires the stall signal (worker 'decode-stall' →
+  // handleDecoderStall). We cap consecutive stall-triggered reconnects just
+  // like zombie reconnects; exceeding the cap reports offline so the orchestrator
+  // can demote to another protocol (e.g. wasm → hls).
+  private _decodeStallReconnectCount = 0;
+  private static readonly MAX_DECODE_STALL_RECONNECTS = 3;
+
   // Backpressure
   private _paused = false;
   private _frameDropCount = 0;
@@ -384,6 +395,43 @@ export class ConnectionManager {
     this._stopCoordinatedTimer();
     this._cancelCoordinatorRequest();
     this._scheduleCoordinatedReconnect();
+  }
+
+  /**
+   * Called when the decoder reports a stall (configured but no output for
+   * DECODE_STALL_MS). This is the failure mode the zombie detector can't see:
+   * the WS keeps delivering P-frames (so _lastFrameTime stays fresh and the
+   * zombie never trips) yet the decoder never receives a keyframe and produces
+   * nothing — UI stuck in "buffering". We reconnect (a fresh stream start is the
+   * best chance to catch an IDR, especially now that the backend replays a
+   * cached IDR to new subscribers) up to MAX_DECODE_STALL_RECONNECTS times;
+   * beyond that we report offline so the orchestrator demotes to another
+   * protocol.
+   */
+  handleDecoderStall(): void {
+    if (this._destroyed) return;
+    this._decodeStallReconnectCount++;
+    if (this._decodeStallReconnectCount > ConnectionManager.MAX_DECODE_STALL_RECONNECTS) {
+      // Exhausted stall-driven reconnects — give up on this protocol so the
+      // orchestrator can demote (e.g. wasm/webcodecs → hls).
+      this._setState('offline');
+      this._opts.onCameraOffline?.();
+      return;
+    }
+    // Reset the zombie cycle cap so this reconnect isn't blocked by the
+    // zombie-reconnect limiter (these are independent failure signals).
+    this._zombieReconnectCount = 0;
+    this.reconnect();
+  }
+
+  /**
+   * Reset the decode-stall reconnect counter. Called when the decoder produces
+   * output (a decoded frame reaches the main thread), proving the pipeline
+   * works — so a future stall starts the reconnect count fresh rather than
+   * building on a stale tally from a previous bad stretch.
+   */
+  resetDecodeStallCount(): void {
+    this._decodeStallReconnectCount = 0;
   }
 
   /** Full cleanup — no further operations possible. */

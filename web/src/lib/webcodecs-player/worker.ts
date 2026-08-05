@@ -133,6 +133,15 @@ async function handleCodecInfo(data: {
     self.postMessage({ type: 'backpressure', paused });
   });
 
+  // Set stall callback — decoder is configured but produced no output for
+  // DECODE_STALL_MS (e.g. long-GOP camera where P-frames keep arriving but no
+  // keyframe ever reaches the decoder). Forward to main thread so the
+  // ConnectionManager can reconnect (hoping to catch a keyframe on the fresh
+  // stream) or demote to another protocol.
+  decoder.onStall(() => {
+    self.postMessage({ type: 'decode-stall' });
+  });
+
   try {
     await decoder.configure({
       codec: data.codec as any,

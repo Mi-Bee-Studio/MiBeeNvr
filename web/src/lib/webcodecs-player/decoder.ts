@@ -23,6 +23,15 @@ const FALLBACK_H264_CODEC = 'avc1.42001E'; // Baseline L3.0
 const FALLBACK_H265_CODEC = 'hvc1.1.6.L93.B0'; // Main L3.1
 const BACKPRESSURE_THRESHOLD = 5;
 
+// DECODE_STALL_MS: if the decoder is configured but produces zero output frames
+// within this many milliseconds, it is "stalled" and the onStall callback fires.
+// This catches the long-GOP failure mode where the WS keeps delivering P-frames
+// (so the connection-layer zombie detector, which keys on frame ARRIVAL, never
+// trips) but the decoder never gets a keyframe and emits nothing — leaving the
+// UI stuck in "buffering" forever. 15s comfortably exceeds one 8s GOP plus init
+// latency, so it won't false-fire on slow-starting streams.
+const DECODE_STALL_MS = 15000;
+
 // ─── Codec string builders ────────────────────────────────────────────────
 
 /**
@@ -150,6 +159,18 @@ export class Decoder {
   private _backpressureCallback: ((paused: boolean) => void) | null = null;
   private _decoderEpoch = 0;
 
+  // ─── Decode-stall detection ─────────────────────────────────────────────
+  // _configuredAt stamps when configure() last succeeded with no output yet;
+  // _lastOutputAt stamps the last decoded frame. _outputCount tracks total
+  // outputs so we can tell "never produced anything" (the dangerous case) from
+  // "produced then went quiet" (recoverable). _stallTimer arms after configure
+  // and fires onStall if no output arrives within DECODE_STALL_MS.
+  private _configuredAt = 0;
+  private _lastOutputAt = 0;
+  private _outputCount = 0;
+  private _stallTimer: ReturnType<typeof setTimeout> | null = null;
+  private _onStallCallback: (() => void) | null = null;
+
   /**
    * Configure the decoder with codec info.
    *
@@ -204,6 +225,9 @@ export class Decoder {
   reset(): void {
     if (this._closed) return;
 
+    // Cancel any pending stall watchdog; a re-configure will re-arm it.
+    this._clearStallTimer();
+
     // Reset WASM decoder
     if (this._wasmDecoder) {
       this._wasmDecoder.reset();
@@ -247,6 +271,7 @@ export class Decoder {
     this._closed = true;
     this._configured = false;
     this._mode = null;
+    this._clearStallTimer();
 
     if (this._decoder) {
       try {
@@ -360,6 +385,7 @@ export class Decoder {
     this._configured = true;
     this._lastCodecInfo = ci;
     this._errorCount = 0;
+    this._armStallTimer();
   }
 
   /** Configure WASM H.265 fallback decoder. */
@@ -369,6 +395,50 @@ export class Decoder {
     this._configured = true;
     this._lastCodecInfo = ci;
     this._errorCount = 0;
+    this._armStallTimer();
+  }
+
+  // ─── Decode-stall watchdog ──────────────────────────────────────────────
+
+  /**
+   * Arm the stall timer after a successful configure. If no decoded frame
+   * arrives within DECODE_STALL_MS, fire onStall so the caller (worker → main →
+   * ConnectionManager) can reconnect or demote. Re-armable: each configure and
+   * each output cancels and reschedules.
+   */
+  private _armStallTimer(): void {
+    this._clearStallTimer();
+    this._configuredAt = performance.now();
+    if (this._onStallCallback === null) return; // no listener — skip the timer
+    this._stallTimer = setTimeout(() => {
+      this._stallTimer = null;
+      // Only fire if STILL no output since this configure (output cancels the
+      // timer, but guard against a race where output arrived just as the timer
+      // elapsed).
+      if (this._outputCount === 0 || this._lastOutputAt < this._configuredAt) {
+        try {
+          this._onStallCallback?.();
+        } catch {
+          /* listener threw — ignore */
+        }
+      }
+    }, DECODE_STALL_MS);
+  }
+
+  /** Cancel any pending stall timer. */
+  private _clearStallTimer(): void {
+    if (this._stallTimer !== null) {
+      clearTimeout(this._stallTimer);
+      this._stallTimer = null;
+    }
+  }
+
+  /**
+   * Register the stall callback. Pass null to disable. Must be set BEFORE
+   * configure to observe the first stall window.
+   */
+  onStall(cb: (() => void) | null): void {
+    this._onStallCallback = cb;
   }
 
   /** Decode via WebCodecs. */
@@ -467,6 +537,15 @@ export class Decoder {
       }
       return;
     }
+
+    // Record that the decoder produced output. This is the single chokepoint
+    // for decoded frames (both WebCodecs and WASM paths funnel through it), so
+    // stamping here lets the stall watchdog distinguish "WS alive, decoder
+    // silent" from "decoder working". Cancel the pending stall timer: any
+    // output proves the pipeline is functioning.
+    this._lastOutputAt = performance.now();
+    this._outputCount++;
+    this._clearStallTimer();
 
     this._pendingDecodeCount--;
 
