@@ -1349,11 +1349,11 @@ func TestStreamHub_ReplayRace(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Producers: continuously broadcast IDRs and P-frames.
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			for j := 0; j < 200; j++ {
+			for j := range 200 {
 				pts := int64(n*1000 + j)
 				if j%5 == 0 {
 					hub.Broadcast(pts, h265IDRAU(), true)
@@ -1365,11 +1365,11 @@ func TestStreamHub_ReplayRace(t *testing.T) {
 	}
 
 	// Subscribers: continuously subscribe/unsubscribe.
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			for j := 0; j < 100; j++ {
+			for j := range 100 {
 				id := fmt.Sprintf("r-%d-%d", n, j)
 				cb := func(int64, [][]byte) {
 					subs.Add(1)
