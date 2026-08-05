@@ -7,6 +7,7 @@
   import { getMiBeeVisionConnected, getMiBeeVisionLoaded, refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
+  import { classLabel, eventTypeLabel, severityLabel, zoneLabel } from '$lib/ai-labels';
   import { AlertCircle, Brain, ChevronDown, Settings } from 'lucide-svelte';
   import Pagination from '../components/Pagination.svelte';
 
@@ -22,13 +23,14 @@
   let stats = $state<AIEventStats[]>([]);
   const pageSize = 20;
 
+  // 事件类型下拉框:label 与列表显示保持一致(中文),value 仍是后端用的英文 key。
   const eventTypes = [
-    { value: '', label: 'All Types' },
-    { value: 'zone_intrusion', label: 'Zone Intrusion' },
-    { value: 'line_crossing', label: 'Line Crossing' },
-    { value: 'loitering', label: 'Loitering' },
-    { value: 'object_detected', label: 'Object Detected' },
-    { value: 'custom', label: 'Custom' },
+    { value: '', label: t('aiEvents.allTypes') },
+    { value: 'zone_intrusion', label: eventTypeLabel('zone_intrusion') },
+    { value: 'line_crossing', label: eventTypeLabel('line_crossing') },
+    { value: 'loitering', label: eventTypeLabel('loitering') },
+    { value: 'object_detected', label: eventTypeLabel('object_detected') },
+    { value: 'custom', label: eventTypeLabel('custom') },
   ];
 
   const severityColors: Record<string, string> = {
@@ -185,17 +187,17 @@
           >
             <!-- Severity badge -->
             <span class="px-2 py-0.5 rounded text-xs font-medium border {severityColors[evt.severity] || severityColors.info}">
-              {evt.severity}
+              {severityLabel(evt.severity)}
             </span>
             <!-- Event info -->
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <span class="font-medium th-text-primary text-sm">{evt.event_type}</span>
+                <span class="font-medium th-text-primary text-sm">{eventTypeLabel(evt.event_type)}</span>
                 {#if evt.class_name}
-                  <span class="text-xs th-text-muted">· {evt.class_name}</span>
+                  <span class="text-xs th-text-muted">· {classLabel(evt.class_name)}</span>
                 {/if}
                 {#if evt.zone_name}
-                  <span class="text-xs th-text-muted">· {evt.zone_name}</span>
+                  <span class="text-xs th-text-muted">· {zoneLabel(evt.zone_name)}</span>
                 {/if}
               </div>
               <div class="text-xs th-text-muted mt-0.5">
