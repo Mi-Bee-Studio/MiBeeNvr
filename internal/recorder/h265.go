@@ -34,14 +34,14 @@ type H265Config = BaseConfig
 // H265NALDriver implements codecDriver for H.265/HEVC video.
 type H265NALDriver struct{}
 
-func (d H265NALDriver) codecLabel() string          { return "h265" }
+func (d H265NALDriver) codecLabel() string { return "h265" }
 func (d H265NALDriver) segmentFormat() model.Format { return model.FormatH265 }
-func (d H265NALDriver) rtpFormat() format.Format    { return &format.H265{} }
-func (d H265NALDriver) minNALUDataLen() int         { return 6 }
+func (d H265NALDriver) rtpFormat() format.Format { return &format.H265{} }
+func (d H265NALDriver) minNALUDataLen() int { return 6 }
 func (d H265NALDriver) naluType(firstByte byte) int { return int((firstByte >> 1) & 0x3F) }
-func (d H265NALDriver) isIDR(typ int) bool          { return typ == 19 || typ == 20 }
+func (d H265NALDriver) isIDR(typ int) bool { return typ == 19 || typ == 20 }
 func (d H265NALDriver) isParameterSet(typ int) bool { return typ == 32 || typ == 33 || typ == 34 }
-func (d H265NALDriver) isVCL(typ int) bool          { return typ < 32 }
+func (d H265NALDriver) isVCL(typ int) bool { return typ < 32 }
 func (d H265NALDriver) paramSetsReady(b *baseRecorder) bool {
 	vps, sps, pps := b.codecSnapshot()
 	return vps != nil && sps != nil && pps != nil
