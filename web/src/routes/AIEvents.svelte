@@ -2,13 +2,15 @@
   import { onMount } from 'svelte';
   import { listAIEvents, getAIEventStats } from '$lib/api/ai-events';
   import type { AIEvent, AIEventStats } from '$lib/api/ai-events';
-  import { listCameras } from '$lib/api';
+  import { listCameras, getRecordingsTimeline } from '$lib/api';
   import type { Camera } from '$lib/api';
+  import { findSegmentAt } from '$lib/timeline-utils';
   import { getMiBeeVisionConnected, getMiBeeVisionLoaded, refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
+  import { showToast } from '$lib/toast';
   import { classLabel, eventTypeLabel, severityLabel, zoneLabel } from '$lib/ai-labels';
-  import { AlertCircle, Brain, ChevronDown, Settings } from 'lucide-svelte';
+  import { AlertCircle, Brain, ChevronDown, Play, Settings } from 'lucide-svelte';
   import Pagination from '../components/Pagination.svelte';
 
   let events = $state<AIEvent[]>([]);
@@ -89,6 +91,79 @@
     page = 0;
     loadData();
     loadStats();
+  }
+
+  // Jump-to-recording: the event list doubles as an index into the recordings.
+  // An event knows its absolute time (frame_timestamp || created_at) and,
+  // optionally, which recording it belongs to. We deep-link as
+  // #/recordings/{recording_id}?at=<epochMs>; the detail page resolves `at`
+  // against the recording's started_at to seek the player.
+  //
+  // The event's recording_id can be stale — the AI backend may have written it
+  // against a pre-merge 30s fragment whose id no longer exists in the
+  // recordings table (the NVR assigns a new id when merging fragments). So
+  // instead of trusting recording_id blindly, we resolve the event's timestamp
+  // against the camera's day timeline (the same source the recordings page
+  // uses) and jump to whichever real segment covers that moment. This matches
+  // how the DayTimeline marker click resolves a target and guarantees the user
+  // never lands on a 404 when a recording actually exists at that time.
+  let jumping = $state(false);
+
+  function eventEpochMs(evt: AIEvent): number {
+    const ts = evt.frame_timestamp || evt.created_at;
+    return Date.parse(ts);
+  }
+
+  function canJump(evt: AIEvent): boolean {
+    // A valid timestamp is all we need — the camera+time resolution finds the
+    // real recording. camera_id is required to scope the timeline lookup.
+    return Number.isFinite(eventEpochMs(evt)) && !!evt.camera_id;
+  }
+
+  // Resolve an event's moment to a real {recordingId, offset} via the day
+  // timeline. Returns null if no recording covers (or snaps near) the event.
+  async function resolveTarget(evt: AIEvent): Promise<{ recordingId: string; at: number } | null> {
+    const at = eventEpochMs(evt);
+    const d = new Date(at);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const dd = d.getDate();
+    const startISO = new Date(y, m, dd, 0, 0, 0).toISOString();
+    const endISO = new Date(y, m, dd, 23, 59, 59).toISOString();
+    const resp = await getRecordingsTimeline({
+      camera_id: evt.camera_id,
+      start: startISO,
+      end: endISO,
+    });
+    const dayStartMs = new Date(y, m, dd).getTime();
+    const segs = (resp.segments || [])
+      .map((r) => ({
+        id: r.id,
+        startSec: (Date.parse(r.started_at) - dayStartMs) / 1000,
+        endSec: ((r.ended_at ? Date.parse(r.ended_at) : Date.parse(r.started_at) + r.duration * 1000) - dayStartMs) / 1000,
+      }))
+      .filter((s) => Number.isFinite(s.startSec) && Number.isFinite(s.endSec));
+    const eventSec = (at - dayStartMs) / 1000;
+    const hit = findSegmentAt(segs, eventSec);
+    if (!hit.seg) return null;
+    return { recordingId: hit.seg.id, at };
+  }
+
+  async function jumpToRecording(evt: AIEvent) {
+    if (!canJump(evt) || jumping) return;
+    jumping = true;
+    try {
+      const target = await resolveTarget(evt);
+      if (!target) {
+        showToast(t('aiEvents.noRecordingAtTime'), 'warning');
+        return;
+      }
+      window.location.hash = `#/recordings/${target.recordingId}?at=${target.at}`;
+    } catch {
+      showToast(t('aiEvents.jumpFailed'), 'error');
+    } finally {
+      jumping = false;
+    }
   }
 
   const miBeeVisionConnected = $derived(getMiBeeVisionConnected());
@@ -181,40 +256,58 @@
     <div class="space-y-2">
       {#each events as evt (evt.id)}
         <div class="th-bg-surface th-border rounded-lg overflow-hidden">
-          <button
-            class="w-full flex items-center gap-3 p-3 hover:th-bg-hover transition-colors text-left"
-            onclick={() => expandedEvent = expandedEvent === evt.id ? null : evt.id}
-          >
-            <!-- Severity badge -->
-            <span class="px-2 py-0.5 rounded text-xs font-medium border {severityColors[evt.severity] || severityColors.info}">
-              {severityLabel(evt.severity)}
-            </span>
-            <!-- Event info -->
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="font-medium th-text-primary text-sm">{eventTypeLabel(evt.event_type)}</span>
-                {#if evt.class_name}
-                  <span class="text-xs th-text-muted">· {classLabel(evt.class_name)}</span>
-                {/if}
-                {#if evt.zone_name}
-                  <span class="text-xs th-text-muted">· {zoneLabel(evt.zone_name)}</span>
-                {/if}
+          <div class="flex items-stretch hover:th-bg-hover transition-colors">
+            <!-- Expand/collapse the detail panel (existing behavior) -->
+            <button
+              class="flex-1 flex items-center gap-3 p-3 text-left"
+              onclick={() => expandedEvent = expandedEvent === evt.id ? null : evt.id}
+              aria-expanded={expandedEvent === evt.id}
+            >
+              <!-- Severity badge -->
+              <span class="px-2 py-0.5 rounded text-xs font-medium border {severityColors[evt.severity] || severityColors.info}">
+                {severityLabel(evt.severity)}
+              </span>
+              <!-- Event info -->
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="font-medium th-text-primary text-sm">{eventTypeLabel(evt.event_type)}</span>
+                  {#if evt.class_name}
+                    <span class="text-xs th-text-muted">· {classLabel(evt.class_name)}</span>
+                  {/if}
+                  {#if evt.zone_name}
+                    <span class="text-xs th-text-muted">· {zoneLabel(evt.zone_name)}</span>
+                  {/if}
+                </div>
+                <div class="text-xs th-text-muted mt-0.5">
+                  {cameraName(evt.camera_id)} · {formatDate(evt.created_at)}
+                </div>
               </div>
-              <div class="text-xs th-text-muted mt-0.5">
-                {cameraName(evt.camera_id)} · {formatDate(evt.created_at)}
-              </div>
-            </div>
-            <!-- Confidence -->
-            {#if evt.confidence > 0}
-              <div class="text-xs th-text-muted">
-                {(evt.confidence * 100).toFixed(0)}%
-              </div>
+              <!-- Confidence -->
+              {#if evt.confidence > 0}
+                <div class="text-xs th-text-muted">
+                  {(evt.confidence * 100).toFixed(0)}%
+                </div>
+              {/if}
+              <ChevronDown
+                size={16}
+                class="th-text-muted transition-transform {expandedEvent === evt.id ? 'rotate-180' : ''}"
+              />
+            </button>
+            <!-- Jump-to-recording action. The row also works as an index into
+                 the recordings: clicking play opens the recording at this
+                 event's timestamp. Disabled (hidden) when no recording_id. -->
+            {#if canJump(evt)}
+              <button
+                class="ai-jump-btn"
+                title={t('aiEvents.jumpToRecording')}
+                aria-label={t('aiEvents.jumpToRecording')}
+                onclick={() => jumpToRecording(evt)}
+                disabled={jumping}
+              >
+                <Play size={16} />
+              </button>
             {/if}
-            <ChevronDown
-              size={16}
-              class="th-text-muted transition-transform {expandedEvent === evt.id ? 'rotate-180' : ''}"
-            />
-          </button>
+          </div>
 
           <!-- Expanded detail -->
           {#if expandedEvent === evt.id}
@@ -226,7 +319,21 @@
                 <div><span class="th-text-muted">Frame index:</span> {evt.frame_idx}</div>
               {/if}
               {#if evt.recording_id}
-                <div><span class="th-text-muted">Recording:</span> {evt.recording_id}</div>
+                <div class="flex items-center gap-1 flex-wrap">
+                  <span class="th-text-muted">Recording:</span>
+                  <span class="th-text-tertiary" title={t('aiEvents.recordingIdHint')}>{evt.recording_id}</span>
+                  {#if canJump(evt)}
+                    <button
+                      class="ai-rec-link"
+                      title={t('aiEvents.jumpToRecording')}
+                      onclick={() => jumpToRecording(evt)}
+                      disabled={jumping}
+                    >
+                      {t('aiEvents.jumpToRecording')}
+                      <Play size={11} />
+                    </button>
+                  {/if}
+                </div>
               {/if}
               {#if parseBBox(evt.bbox)}
                 <div><span class="th-text-muted">Bounding box:</span> {parseBBox(evt.bbox)!.map(v => v.toFixed(3)).join(', ')}</div>
@@ -237,6 +344,7 @@
               {#if evt.metadata && evt.metadata !== 'null'}
                 <div><span class="th-text-muted">Metadata:</span> {evt.metadata}</div>
               {/if}
+              <div class="th-text-tertiary pt-1">{t('aiEvents.clickToJump')}</div>
               <div><span class="th-text-muted">Event ID:</span> {evt.id}</div>
             </div>
           {/if}
@@ -258,3 +366,46 @@
   {/if} <!-- /loading -->
   {/if} <!-- /miBeeVision guard -->
 </div>
+
+<style>
+  /* Jump-to-recording button on each event row. Green accent signals "play",
+     matching the person-marker color used on the recordings timeline so the two
+     surfaces read as the same kind of action. */
+  .ai-jump-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    flex-shrink: 0;
+    border: 0;
+    border-left: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    background: transparent;
+    color: var(--text-muted, inherit);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .ai-jump-btn:hover {
+    background: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+  }
+  .ai-rec-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    border: 0;
+    background: transparent;
+    color: #22c55e;
+    font: inherit;
+    font-size: inherit;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .ai-rec-link:hover {
+    text-decoration: underline;
+  }
+  .ai-rec-link:disabled {
+    opacity: 0.5;
+    cursor: progress;
+  }
+</style>

@@ -11,6 +11,7 @@
    */
   import { findSegmentAt, parseDayStart, epochMsToDaySec, formatLength, type TimelineSegment } from '$lib/timeline-utils';
   import type { Recording, Camera } from '$lib/api';
+  import { classLabel, eventTypeLabel } from '$lib/ai-labels';
   import { t } from '$lib/i18n';
   import { Clock } from 'lucide-svelte';
 
@@ -23,12 +24,26 @@
     'id' | 'camera_id' | 'started_at' | 'ended_at' | 'duration' | 'format' | 'merge_status'
   >;
 
+  // Minimal shape of an AI event used for timeline markers. Decoupled from the
+  // full AIEvent so Recordings.svelte can pass a projected subset and the
+  // component stays independent of the ai-events API module.
+  export interface TimelineAIEvent {
+    id: number;
+    camera_id: string;
+    created_at: string; // ISO timestamp
+    event_type: string;
+    severity: 'info' | 'warning' | 'critical';
+    class_name?: string;
+    confidence?: number;
+    recording_id?: string;
+  }
+
   interface Props {
     cameras: Camera[];
     recordings: TimelineRecording[];
     selectedDate: string; // YYYY-MM-DD
     onseek: (recordingId: string, offsetSeconds: number) => void;
-    aiEvents?: unknown[]; // reserved for stage E (AI event markers)
+    aiEvents?: TimelineAIEvent[]; // optional AI event markers overlay
   }
 
   let { cameras, recordings, selectedDate, onseek, aiEvents }: Props = $props();
@@ -93,6 +108,146 @@
   });
 
   const hasAnyRecordings = $derived(rows.some((r) => r.bands.length > 0));
+
+  // ── AI event markers per camera row ──
+  // Each event maps to a position on the 24h axis (seconds-from-midnight). High-
+  // frequency detection (e.g. person every second) can produce thousands of
+  // events/day on one camera; rendering each as a DOM node would both overwhelm
+  // the row and merge into an unreadable solid bar. We cluster events within a
+  // small time window (CLUSTER_SEC) into a single marker carrying a count badge.
+  const CLUSTER_SEC = 2; // events ≤2s apart collapse into one marker
+
+  interface AIMarker {
+    /** A stable render key (first event id in cluster, or cluster start sec) */
+    key: string;
+    /** seconds-from-midnight of the cluster representative */
+    sec: number;
+    /** cluster size (1 if standalone) */
+    count: number;
+    /** representative event for color/tooltip */
+    event: TimelineAIEvent;
+    /** epoch-ms of the representative event (for offset computation on click) */
+    epochMs: number;
+  }
+
+  const aiMarkersByCam = $derived.by<Map<string, AIMarker[]>>(() => {
+    const m = new Map<string, AIMarker[]>();
+    if (!aiEvents || aiEvents.length === 0) return m;
+    // Bucket by camera first.
+    const byCam = new Map<string, TimelineAIEvent[]>();
+    for (const e of aiEvents) {
+      const list = byCam.get(e.camera_id) ?? [];
+      list.push(e);
+      byCam.set(e.camera_id, list);
+    }
+    for (const [camId, evs] of byCam) {
+      // Sort by time ascending so clustering is order-independent.
+      const sorted = evs
+        .map((e) => ({ e, ms: Date.parse(e.created_at) }))
+        .filter((x) => Number.isFinite(x.ms))
+        .sort((a, b) => a.ms - b.ms);
+      const markers: AIMarker[] = [];
+      let cluster: typeof sorted = [];
+      const flush = () => {
+        if (cluster.length === 0) return;
+        const rep = cluster[0];
+        markers.push({
+          key: `ai-${rep.e.id}`,
+          sec: clampDay(epochMsToDaySec(rep.ms, dayStartMs)),
+          count: cluster.length,
+          event: rep.e,
+          epochMs: rep.ms,
+        });
+        cluster = [];
+      };
+      for (const item of sorted) {
+        if (cluster.length === 0) {
+          cluster = [item];
+          continue;
+        }
+        const last = cluster[cluster.length - 1];
+        if ((item.ms - last.ms) / 1000 <= CLUSTER_SEC) {
+          cluster.push(item);
+        } else {
+          flush();
+          cluster = [item];
+        }
+      }
+      flush();
+      m.set(camId, markers);
+    }
+    return m;
+  });
+
+  // Event marker color: severity first, then class_name, then default.
+  // Mirrors TimelineBar.eventColor so the two timelines read consistently.
+  function eventColor(evt: TimelineAIEvent): string {
+    if (evt.severity === 'critical') return '#ef4444'; // red
+    if (evt.severity === 'warning') return '#eab308';  // yellow
+    const cn = (evt.class_name || '').toLowerCase();
+    if (cn === 'person') return '#22c55e';       // green
+    if (['car', 'vehicle', 'truck', 'bus', 'motorcycle', 'bicycle'].includes(cn)) return '#3b82f6'; // blue
+    if (['cat', 'dog', 'animal', 'bird', 'horse'].includes(cn)) return '#f97316'; // orange
+    return '#3b82f6'; // default blue (info)
+  }
+
+  // Resolve a marker click → (recordingId, offset). Prefer the event's own
+  // recording_id if it lands on one of this row's segments; otherwise snap with
+  // findSegmentAt. Returns null when there is no segment to jump to.
+  function resolveMarkerTarget(
+    row: CameraRow,
+    marker: AIMarker,
+  ): { recordingId: string; offset: number } | null {
+    // Fast path: event carries a recording_id that belongs to this row.
+    if (marker.event.recording_id) {
+      const seg = row.segments.find((s) => s.id === marker.event.recording_id);
+      if (seg) {
+        const off = Math.floor((marker.epochMs - dayStartMs) / 1000 - seg.startSec);
+        return { recordingId: seg.id, offset: Math.max(0, off) };
+      }
+    }
+    // Fallback: snap to nearest segment at the marker's day-second.
+    const res = findSegmentAt(row.segments, marker.sec);
+    if (res.seg) return { recordingId: res.seg.id, offset: Math.max(0, Math.floor(res.offset)) };
+    return null;
+  }
+
+  function isMarkerReachable(row: CameraRow, marker: AIMarker): boolean {
+    return resolveMarkerTarget(row, marker) !== null;
+  }
+
+  function onMarkerClick(e: MouseEvent, row: CameraRow, marker: AIMarker) {
+    // Stop the click from also triggering the underlying band seek.
+    e.stopPropagation();
+    const target = resolveMarkerTarget(row, marker);
+    if (target) onseek(target.recordingId, target.offset);
+  }
+
+  // ── Marker hover tooltip ──
+  let hoveredMarker = $state<AIMarker | null>(null);
+  let hoveredMarkerCam = $state<string>('');
+  let markerTooltipX = $state(0);
+  let markerTooltipY = $state(0);
+
+  function onMarkerEnter(e: MouseEvent, marker: AIMarker, camId: string) {
+    e.stopPropagation();
+    hoveredMarker = marker;
+    hoveredMarkerCam = camId;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    markerTooltipX = rect.left + rect.width / 2;
+    markerTooltipY = rect.top;
+  }
+  function onMarkerLeave() {
+    hoveredMarker = null;
+    hoveredMarkerCam = '';
+  }
+
+  function markerTooltipLabel(marker: AIMarker): string {
+    const parts = [secToClock(marker.sec), eventTypeLabel(marker.event.event_type)];
+    if (marker.event.class_name) parts.push(classLabel(marker.event.class_name));
+    if (marker.count > 1) parts.push(`×${marker.count}`);
+    return parts.join(' · ');
+  }
 
   // ── Format → color (matches gallery card format conventions) ──
   function bandClass(band: CoverageBand): string {
@@ -260,6 +415,30 @@
               ></div>
             {/each}
 
+            <!-- AI event markers overlay (stage E). Each marker sits above the
+                 bands; click jumps to the recording at that moment. -->
+            {#if aiMarkersByCam.get(row.camera.id)}
+              {@const markers = aiMarkersByCam.get(row.camera.id)!}
+              {#each markers as marker (marker.key)}
+                {@const reachable = isMarkerReachable(row, marker)}
+                <button
+                  type="button"
+                  class="ai-marker {reachable ? '' : 'ai-marker-unreachable'}"
+                  style="left: {(marker.sec / DAY_SECONDS) * 100}%; background: {eventColor(marker.event)};"
+                  title={markerTooltipLabel(marker) + (reachable ? '' : ' · ' + t('library.aiMarkerNoRecording'))}
+                  aria-label={markerTooltipLabel(marker)}
+                  onclick={(e) => reachable && onMarkerClick(e, row, marker)}
+                  onmouseenter={(e) => onMarkerEnter(e, marker, row.camera.id)}
+                  onmouseleave={onMarkerLeave}
+                  disabled={!reachable}
+                >
+                  {#if marker.count > 1}
+                    <span class="ai-marker-count">{marker.count}</span>
+                  {/if}
+                </button>
+              {/each}
+            {/if}
+
             <!-- Hour gridlines (overlay for readability on dense days) -->
             {#each [6, 12, 18] as h}
               <div
@@ -305,6 +484,20 @@
   </div>
 {/if}
 
+<!-- AI marker hover tooltip -->
+{#if hoveredMarker}
+  {@const hoveredRow = rows.find((r) => r.camera.id === hoveredMarkerCam)}
+  <div
+    class="fixed z-50 pointer-events-none px-2 py-1 rounded bg-black/85 dark:bg-white/90 text-white dark:text-black text-[11px] shadow-lg"
+    style="left: {markerTooltipX}px; top: {markerTooltipY - 36}px; transform: translateX(-50%)"
+  >
+    {markerTooltipLabel(hoveredMarker)}
+    {#if hoveredRow && !isMarkerReachable(hoveredRow, hoveredMarker)}
+      <span class="opacity-70"> · {t('library.aiMarkerNoRecording')}</span>
+    {/if}
+  </div>
+{/if}
+
 <style>
   .track-bg {
     background: color-mix(in srgb, currentColor 4%, transparent);
@@ -329,6 +522,60 @@
   }
   .band-mjpeg {
     background: #6b7280; /* gray-500 */
+  }
+  /* AI event markers — thin vertical bars with a triangular tip, sitting above
+     the recording bands. Clickable (button) so keyboard/AT users can reach them. */
+  .ai-marker {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    width: 3px;
+    min-width: 3px;
+    border: 0;
+    padding: 0;
+    margin-left: -1.5px; /* center the bar on its `left` anchor */
+    border-radius: 1px;
+    cursor: pointer;
+    z-index: 5;
+    opacity: 0.95;
+    transition: opacity 0.1s, transform 0.1s;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25); /* outline for contrast on any band color */
+  }
+  .ai-marker:hover {
+    opacity: 1;
+    transform: scaleX(1.6);
+    z-index: 6;
+  }
+  .ai-marker:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 1px;
+    z-index: 6;
+  }
+  .ai-marker-unreachable {
+    opacity: 0.35;
+    cursor: not-allowed;
+    background: repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 1px,
+      rgba(107, 114, 128, 0.9) 1px,
+      rgba(107, 114, 128, 0.9) 2px
+    ) !important;
+  }
+  .ai-marker-count {
+    position: absolute;
+    top: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    line-height: 1;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.7);
+    border-radius: 6px;
+    padding: 1px 3px;
+    pointer-events: none;
+    white-space: nowrap;
   }
   .band-legend {
     display: inline-block;
