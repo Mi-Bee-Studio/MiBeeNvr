@@ -275,27 +275,25 @@ func unwrapDelegate(rec model.Recorder) model.Recorder {
 }
 
 // getCodecParams extracts codec parameters from a recorder.
-// Uses HLSProvider interface first, then falls back to concrete type access.
+// Uses the HLSProvider interface first (covering H264/H265/Ingest/Xiaomi
+// recorders via a single atomic codec-snapshot read), then falls back to a
+// concrete type switch for JPEG/MJPEG cameras which have no codec parameter sets.
 func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byte) {
-	if provider, ok := rec.(model.HLSProvider); ok {
+	// Unwrap delegates (e.g. ONVIFRecorder → concrete H264/H265) so the
+	// HLSProvider check sees the real recorder that owns the codec params.
+	actualRec := unwrapDelegate(rec)
+	if provider, ok := actualRec.(model.HLSProvider); ok {
 		codec, sps, pps, vps = provider.CodecParams()
-		if sps != nil && pps != nil {
+		// Return as soon as we have a usable param set. codec is always set even
+		// when params are still nil (before the first keyframe) — callers treat a
+		// non-nil codec with nil sps/pps as "stream initializing" (503) and a nil
+		// codec as "not a codec-streaming camera" (e.g. JPEG/MJPEG).
+		if codec != "" {
 			return
 		}
-		// HLSProvider returned empty params — fall through to concrete type switch
 	}
 
-	actualRec := unwrapDelegate(rec)
-	switch r := actualRec.(type) {
-	case *recorder.H264Recorder:
-		codec = model.FormatH264
-		sps = r.SPS()
-		pps = r.PPS()
-	case *recorder.H265Recorder:
-		codec = model.FormatH265
-		vps = r.VPS()
-		sps = r.SPS()
-		pps = r.PPS()
+	switch actualRec.(type) {
 	case *recorder.HTTPJPEGRecorder:
 		// ESP32 MiBeeCam and other HTTP JPEG cameras. Live preview is served via
 		// latest-frame polling (MjpegLivePlayer), advertised as the "mjpeg" protocol
