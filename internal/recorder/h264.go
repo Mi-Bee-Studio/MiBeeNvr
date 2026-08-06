@@ -55,18 +55,15 @@ type H264Config = BaseConfig
 // H264NALDriver implements codecDriver for H.264 video.
 type H264NALDriver struct{}
 
-func (d H264NALDriver) codecLabel() string { return "h264" }
-func (d H264NALDriver) segmentFormat() model.Format { return model.FormatH264 }
-func (d H264NALDriver) rtpFormat() format.Format { return &format.H264{} }
-func (d H264NALDriver) minNALUDataLen() int { return 5 }
-func (d H264NALDriver) naluType(firstByte byte) int { return int(firstByte & 0x1F) }
-func (d H264NALDriver) isIDR(typ int) bool { return typ == 5 }
-func (d H264NALDriver) isParameterSet(typ int) bool { return typ == 7 || typ == 8 }
-func (d H264NALDriver) isVCL(typ int) bool { return typ == 1 || typ == 5 }
-func (d H264NALDriver) paramSetsReady(b *baseRecorder) bool {
-	sps, pps, _ := b.codecSnapshot()
-	return sps != nil && pps != nil
-}
+func (d H264NALDriver) codecLabel() string                  { return "h264" }
+func (d H264NALDriver) segmentFormat() model.Format         { return model.FormatH264 }
+func (d H264NALDriver) rtpFormat() format.Format            { return &format.H264{} }
+func (d H264NALDriver) minNALUDataLen() int                 { return 5 }
+func (d H264NALDriver) naluType(firstByte byte) int         { return int(firstByte & 0x1F) }
+func (d H264NALDriver) isIDR(typ int) bool                  { return typ == 5 }
+func (d H264NALDriver) isParameterSet(typ int) bool         { return typ == 7 || typ == 8 }
+func (d H264NALDriver) isVCL(typ int) bool                  { return typ == 1 || typ == 5 }
+func (d H264NALDriver) paramSetsReady(b *baseRecorder) bool { sps, pps, _ := b.codecSnapshot(); return sps != nil && pps != nil }
 
 func (d H264NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) bool {
 	// Load the current snapshot once; this method runs only on the single
