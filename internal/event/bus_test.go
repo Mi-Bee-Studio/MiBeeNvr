@@ -332,3 +332,81 @@ func TestSubscribeByPrefix_AndExactSubscribe(t *testing.T) {
 		t.Fatalf("prefix: expected 2 events, got %d", len(prefixEvents))
 	}
 }
+
+// TestPublishUnbufferedChannelDoesNotDeadlock guards the fix for #220: a
+// subscriber registered with an UNBUFFERED channel (cap==0) and no concurrent
+// reader must not deadlock Publish. Previously the len==cap drain guard
+// evaluated 0==0 → true and the blocking <-s.ch wedged the bus while holding
+// s.mu. Publish must return promptly (within the guard timeout) and the event
+// is simply dropped (non-blocking send).
+func TestPublishUnbufferedChannelDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+	bus := helperNewBus(t, 16)
+	// Unbuffered topic subscriber, never read from.
+	unbuf := make(chan Event)
+	if err := bus.Subscribe("unbuf.topic", unbuf, 0); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		bus.Publish(context.Background(), "unbuf.topic", "no-reader")
+		close(done)
+	}()
+	select {
+	case <-done:
+		// Publish returned without blocking — pass.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Publish deadlocked on an unbuffered channel with no reader (#220)")
+	}
+}
+
+// TestPublishUnbufferedPrefixChannelDoesNotDeadlock is the prefix-subscriber
+// counterpart of the test above, exercising the second drain+send site.
+func TestPublishUnbufferedPrefixChannelDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+	bus := helperNewBus(t, 16)
+	unbuf := make(chan Event) // unbuffered, never read
+	if err := bus.SubscribeByPrefix("unbuf.", unbuf, 0); err != nil {
+		t.Fatalf("SubscribeByPrefix failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		bus.Publish(context.Background(), "unbuf.something", "no-reader")
+		close(done)
+	}()
+	select {
+	case <-done:
+		// pass
+	case <-time.After(2 * time.Second):
+		t.Fatal("Publish deadlocked on an unbuffered prefix channel with no reader (#220)")
+	}
+}
+
+// TestPublish_DeadConsumerDoesNotBlockPublisher ensures a full buffered channel
+// (consumer stopped reading) cannot stall the publisher — the non-blocking send
+// drops the newest event instead. This is the defense-in-depth guarantee.
+func TestPublish_DeadConsumerDoesNotBlockPublisher(t *testing.T) {
+	t.Parallel()
+	bus := helperNewBus(t, 4)
+	full := make(chan Event, 1) // tiny buffer, will fill immediately
+	if err := bus.Subscribe("full.topic", full, 1); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		// Publish far more than the buffer can hold with no reader.
+		for range 50 {
+			bus.Publish(context.Background(), "full.topic", "fill")
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+		// pass — publisher was never blocked by the saturated subscriber
+	case <-time.After(2 * time.Second):
+		t.Fatal("Publish blocked on a full buffered channel (dead consumer should not stall publisher)")
+	}
+}
