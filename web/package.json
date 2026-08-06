@@ -33,7 +33,7 @@
   },
   "overrides": {
     "js-yaml": "^4.2.0",
-    "undici": "^7.28.0",
+    "undici": "^7.29.0",
     "protobufjs": "^7.6.5"
   }
 }
