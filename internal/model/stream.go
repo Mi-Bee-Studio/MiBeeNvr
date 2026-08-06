@@ -165,10 +165,17 @@ func (h *StreamHub) SetCameraID(id string) {
 // The callback is called from a dedicated goroutine — it may block without
 // affecting other consumers or the Broadcast caller.
 func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
+	// Snapshot the IDR cache to replay OUTSIDE h.mu. We deliberately do NOT push
+	// the replay frame while holding h.mu: the consumer's drain goroutine
+	// (started below) runs the callback, and that callback commonly acquires
+	// ANOTHER lock (e.g. wsstream.Manager.mu in RegisterStream's caller). If we
+	// pushed during Subscribe while the caller still holds that outer lock, the
+	// drain goroutine would block on it (lock-order inversion), stalling frame
+	// delivery to the new consumer — observed as a 6s reconnect storm. Pushing
+	// after Subscribe returns lets the caller release its lock first.
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	if _, ok := h.consumers[id]; ok {
+		h.mu.Unlock()
 		return fmt.Errorf("consumer %q already subscribed", id)
 	}
 
@@ -178,24 +185,25 @@ func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
 		done: make(chan struct{}),
 	}
 	h.consumers[id] = entry
+	// Capture the replay candidate under the lock (consistent snapshot with the
+	// consumers map), but defer the actual channel send until after Unlock.
+	replay := h.latestCompleteIDRLocked()
+	h.mu.Unlock()
+
 	go entry.drain()
 
-	// Fast-start: replay the most recent cached IDR whose access unit carries a
-	// complete parameter set (VPS+SPS+PPS for H.265, SPS+PPS for H.264) into the
-	// new consumer's channel so its decoder can configure and produce output
-	// immediately — instead of waiting up to one full GOP for the next natural
-	// IDR. This is what lets long-GOP cameras (e.g. 8s) be watchable. We walk the
-	// cache newest-first and replay only the first complete one: a single valid
-	// keyframe + parameter set is sufficient to bootstrap decoding, and replaying
-	// stale older IDRs adds no value while risking decoder confusion.
-	//
-	// Safe because we hold h.mu (distributeFrame also needs h.mu to populate the
-	// cache), entry.ch is buffered (consumerBufferSize, default 150), and drain
-	// cannot have closed the channel (closed is set only in Unsubscribe, which
-	// also needs h.mu). The non-blocking send guards against any pathological
-	// buffer-too-small case by skipping replay (the consumer still gets future
-	// frames normally).
-	h.replayCachedIDRLocked(entry)
+	// Replay the cached IDR now that no StreamHub lock is held. drain is already
+	// running; it will consume this frame via its callback. Because Subscribe has
+	// returned to the caller (e.g. wsstream.RegisterStream), the caller's outer
+	// lock is released by this point too, so the callback's own lock acquisition
+	// won't deadlock. The non-blocking send skips if the buffer is unexpectedly
+	// full (the consumer still receives live frames normally).
+	if replay != nil {
+		select {
+		case entry.ch <- *replay:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -219,14 +227,16 @@ func (h *StreamHub) cacheIDRLocked(pts int64, au [][]byte) {
 	}
 }
 
-// replayCachedIDRLocked pushes the most recent parameter-set-complete cached IDR
-// into a freshly-subscribed consumer's channel. Must be called with h.mu held.
-// No-op when the cache is empty, disabled (idrCacheSize==0), or contains no IDR
-// with a complete parameter set (in which case the consumer falls back to
-// waiting for the next natural IDR — legacy behavior, no worse than before).
-func (h *StreamHub) replayCachedIDRLocked(entry *consumerEntry) {
+// latestCompleteIDRLocked returns a pointer to the newest cached IDR whose
+// access unit carries a complete parameter set (VPS+SPS+PPS for H.265, SPS+PPS
+// for H.264), or nil if the cache is empty, disabled, or contains no such IDR.
+// Must be called with h.mu held. The caller pushes the returned frame into the
+// new consumer's channel AFTER releasing h.mu (see Subscribe) to avoid a
+// lock-order inversion: the consumer's drain callback may acquire an outer lock
+// (e.g. wsstream.Manager.mu) that the Subscribe caller still holds.
+func (h *StreamHub) latestCompleteIDRLocked() *FrameMsg {
 	if h.idrCacheSize == 0 || len(h.idrCache) == 0 {
-		return
+		return nil
 	}
 	// Walk newest-first: the newest complete IDR is closest to the live edge and
 	// the only one a decoder needs to bootstrap. (Replaying older IDRs would just
@@ -239,16 +249,10 @@ func (h *StreamHub) replayCachedIDRLocked(entry *consumerEntry) {
 		// StreamHub is codec-agnostic; try both H.264 and H.265 parameter-set
 		// extraction. A real IDR for either codec will satisfy exactly one.
 		if nalutil.HasCompleteParamSets(msg.AU, true) || nalutil.HasCompleteParamSets(msg.AU, false) {
-			select {
-			case entry.ch <- msg:
-			default:
-				// Buffer unexpectedly full (shouldn't happen for a brand-new entry
-				// with a 150-slot buffer) — skip replay; consumer still receives
-				// live frames normally.
-			}
-			return
+			return &msg
 		}
 	}
+	return nil
 }
 
 // Unsubscribe removes the consumer with the given ID.
