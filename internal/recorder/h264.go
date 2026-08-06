@@ -63,7 +63,10 @@ func (d H264NALDriver) naluType(firstByte byte) int         { return int(firstBy
 func (d H264NALDriver) isIDR(typ int) bool                  { return typ == 5 }
 func (d H264NALDriver) isParameterSet(typ int) bool         { return typ == 7 || typ == 8 }
 func (d H264NALDriver) isVCL(typ int) bool                  { return typ == 1 || typ == 5 }
-func (d H264NALDriver) paramSetsReady(b *baseRecorder) bool { sps, pps, _ := b.codecSnapshot(); return sps != nil && pps != nil }
+func (d H264NALDriver) paramSetsReady(b *baseRecorder) bool {
+	sps, pps, _ := b.codecSnapshot()
+	return sps != nil && pps != nil
+}
 
 func (d H264NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) bool {
 	// Load the current snapshot once; this method runs only on the single
