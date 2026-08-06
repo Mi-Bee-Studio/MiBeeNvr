@@ -30,6 +30,10 @@
   import CalendarView from '../components/timelapse/CalendarView.svelte';
   import AviPlayback from '../components/AviPlayback.svelte';
   import DayTimeline from '../lib/components/DayTimeline.svelte';
+  import type { TimelineAIEvent } from '../lib/components/DayTimeline.svelte';
+  import { listAIEvents } from '../lib/api/ai-events';
+  import { getMiBeeVisionConnected } from '../lib/mibeevision-status.svelte';
+  import { Brain } from 'lucide-svelte';
 
   // ── URL params initialization ──
   // Timeline is the default view for continuous 24/7 recording (the natural
@@ -99,6 +103,14 @@
   let timelineLoading = $state(false);
   let timelineTruncated = $state(false);
   let timelineAbortController: AbortController | null = null;
+
+  // ── AI event markers overlay (stage E) ──
+  // Loaded alongside the day's recordings when MiBeeVision is connected; passed
+  // to DayTimeline as colored click-to-seek markers. Disabled/hidden otherwise.
+  let aiTimelineEvents = $state<TimelineAIEvent[]>([]);
+  let showAIMarkers = $state(true);
+  let aiEventsAbortController: AbortController | null = null;
+  const miBeeVisionConnected = $derived(getMiBeeVisionConnected());
 
   // Slices of the day's recordings keyed off the active view: the Timeline tab
   // shows video bands only (no cyan timelapse noise), the Timelapse tab shows
@@ -366,11 +378,16 @@ let selectedPresetCamera = $state<string>('');
   async function loadTimelineData() {
     if (!selectedDate) {
       timelineRecordings = [];
+      aiTimelineEvents = [];
       return;
     }
     if (timelineAbortController) timelineAbortController.abort();
     timelineAbortController = new AbortController();
     timelineLoading = true;
+    // Kick off the AI events fetch in parallel (best-effort, never blocks the
+    // recordings render). One call covers ALL cameras for the day (no camera_id
+    // filter) — DayTimeline buckets events per-row in-component.
+    void loadDayAIEvents(selectedDate);
     try {
       const dayStart = new Date(selectedDate + 'T00:00:00');
       const dayEnd = new Date(selectedDate + 'T23:59:59.999');
@@ -391,6 +408,39 @@ let selectedPresetCamera = $state<string>('');
       // Non-fatal: timeline stays stale on error
     } finally {
       timelineLoading = false;
+    }
+  }
+
+  // Best-effort fetch of the selected day's AI events across all cameras.
+  // Mirrors TimelineBar.loadAIEvents' range/limit (asc + 2000 cap). Silently
+  // no-ops when MiBeeVision is not connected — the toggle is hidden anyway.
+  async function loadDayAIEvents(date: string) {
+    if (!getMiBeeVisionConnected()) {
+      aiTimelineEvents = [];
+      return;
+    }
+    if (aiEventsAbortController) aiEventsAbortController.abort();
+    aiEventsAbortController = new AbortController();
+    try {
+      const [y, m, d] = date.split('-').map(Number);
+      // Local-midnight range: a "day" is the user's calendar day (matches how
+      // recordings are queried + how the 24h axis is labelled).
+      const startISO = new Date(y, m - 1, d, 0, 0, 0).toISOString();
+      const endISO = new Date(y, m - 1, d, 23, 59, 59).toISOString();
+      const resp = await listAIEvents({ start: startISO, end: endISO, asc: true, limit: 2000 });
+      aiTimelineEvents = (resp.events || []).map((e) => ({
+        id: e.id,
+        camera_id: e.camera_id,
+        created_at: e.created_at,
+        event_type: e.event_type,
+        severity: e.severity,
+        class_name: e.class_name,
+        confidence: e.confidence,
+        recording_id: e.recording_id,
+      }));
+    } catch {
+      // Events are an overlay, not critical — fail silent.
+      aiTimelineEvents = [];
     }
   }
 
@@ -876,6 +926,18 @@ let selectedPresetCamera = $state<string>('');
         <div class="flex flex-wrap items-end gap-3">
           <div class="flex items-center gap-2 pb-[2px]">
             <FormatFilter bind:selectedFormat={formatPill} />
+            {#if miBeeVisionConnected}
+              <button
+                type="button"
+                class="ai-marker-toggle {showAIMarkers ? 'is-active' : ''}"
+                onclick={() => showAIMarkers = !showAIMarkers}
+                title={t('library.showAIMarkers')}
+                aria-pressed={showAIMarkers}
+              >
+                <Brain size={14} />
+                <span>{t('library.showAIMarkers')}</span>
+              </button>
+            {/if}
           </div>
           <div class="flex-1 min-w-[160px]">
             <label for="camera" class="input-label">{t('recordings.camera')}</label>
@@ -980,6 +1042,7 @@ let selectedPresetCamera = $state<string>('');
               recordings={timelineRecordingsVideo}
               selectedDate={selectedDate || ''}
               onseek={handleTimelineSeek}
+              aiEvents={showAIMarkers && miBeeVisionConnected ? aiTimelineEvents : []}
             />
           </div>
         {/if}
@@ -1044,6 +1107,7 @@ let selectedPresetCamera = $state<string>('');
               recordings={timelineRecordingsTimelapse}
               selectedDate={selectedDate || ''}
               onseek={handleTimelineSeek}
+              aiEvents={showAIMarkers && miBeeVisionConnected ? aiTimelineEvents : []}
             />
           </div>
         {/if}
@@ -1210,4 +1274,33 @@ let selectedPresetCamera = $state<string>('');
     </div>
   </div>
 {/if}
+
+<style>
+  /* AI markers toggle pill — sits beside FormatFilter. Reuses surface/border
+     tokens so it tracks light/dark like the surrounding controls. */
+  .ai-marker-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 0.375rem;
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+    background: transparent;
+    color: inherit;
+    font-size: 0.75rem;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.12s, background 0.12s;
+  }
+  .ai-marker-toggle:hover {
+    opacity: 1;
+  }
+  .ai-marker-toggle.is-active {
+    opacity: 1;
+    color: #22c55e; /* green — matches the person/AI marker accent */
+    border-color: rgba(34, 197, 94, 0.5);
+    background: rgba(34, 197, 94, 0.08);
+  }
+</style>
 

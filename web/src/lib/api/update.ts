@@ -27,15 +27,16 @@ export interface UpdateStatus {
 
 /** Lightweight current version + deployment (no network call). */
 export async function getVersion(): Promise<UpdateStatus> {
-  return apiRequest<UpdateStatus>('/api/version');
+  // apiRequest already prepends API_BASE ("/api"), so the endpoint is relative.
+  return apiRequest<UpdateStatus>('/version');
 }
 
 /** Cached version-check status. */
 export async function getUpdateStatus(): Promise<UpdateStatus> {
-  return apiRequest<UpdateStatus>('/api/update/check');
+  return apiRequest<UpdateStatus>('/update/check');
 }
 
 /** Force a refresh on the backend ("check now" button) before returning. */
 export async function refreshUpdateStatus(): Promise<UpdateStatus> {
-  return apiRequest<UpdateStatus>('/api/update/check', { method: 'POST' });
+  return apiRequest<UpdateStatus>('/update/check', { method: 'POST' });
 }

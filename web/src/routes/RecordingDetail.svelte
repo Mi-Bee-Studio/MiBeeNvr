@@ -372,6 +372,11 @@ function startMergeSse(cameraId: string, recordingId: string) {
 
   // --- Timeline seek (M6 DVR-style browsing) ---
   let pendingTimelineSeekOffset = $state<number | null>(null);
+  // Deep-link absolute timestamp (?at=<epochMs>, used by the AI events page).
+  // Unlike ?t=<offsetSeconds>, the source (an AI event) only knows its absolute
+  // time, not the recording's start. We stash it here and resolve to an offset
+  // once the recording (and thus started_at) is loaded — see the $effect below.
+  let pendingTimelineSeekAtMs = $state<number | null>(null);
 
   async function handleTimelineSeek(recordingId: string, offsetSeconds: number) {
     if (!recording) return;
@@ -391,6 +396,22 @@ function startMergeSse(cameraId: string, recordingId: string) {
       if (videoEl) videoEl.currentTime = offsetSeconds;
     }
   }
+
+  // Resolve a deep-linked absolute timestamp (?at=, set in onMount) into a
+  // recording-relative offset once the recording is loaded. The offset is then
+  // handed to the same pendingTimelineSeekOffset path that ?t= uses, so the
+  // existing handleVideoLoadedMetadata applies it when the <video> is ready.
+  $effect(() => {
+    if (pendingTimelineSeekAtMs == null) return;
+    if (!recording || !recording.started_at) return;
+    const startedAtMs = Date.parse(recording.started_at);
+    if (!Number.isFinite(startedAtMs)) return;
+    const offsetSec = Math.max(0, Math.floor((pendingTimelineSeekAtMs - startedAtMs) / 1000));
+    pendingTimelineSeekAtMs = null;
+    // ?t= takes precedence if both are somehow present (it's the more precise,
+    // already-relative form coming from the recordings timeline).
+    if (pendingTimelineSeekOffset == null) pendingTimelineSeekOffset = offsetSec;
+  });
 
   // --- H.265 → H.264 transcode-for-playback ---
   let transcodeForPlayback = $state(false);
@@ -1201,6 +1222,15 @@ $effect(() => {
         const off = Number(tParam);
         if (Number.isFinite(off) && off >= 0) {
           pendingTimelineSeekOffset = off;
+        }
+      } else {
+        // ?at=<epochMs>: an absolute wall-clock time (from the AI events page,
+        // which only knows the event's timestamp, not the recording-relative
+        // offset). Resolved against recording.started_at in the $effect above.
+        const atParam = params.get('at');
+        if (atParam !== null) {
+          const atMs = Number(atParam);
+          if (Number.isFinite(atMs)) pendingTimelineSeekAtMs = atMs;
         }
       }
     } catch {}
