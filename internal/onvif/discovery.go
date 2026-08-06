@@ -76,6 +76,36 @@ type deviceInfoEnvelope struct {
 	} `xml:"Body"`
 }
 
+// discoverFunc is the backing implementation of Discover / DiscoverNoEnrich.
+// It is a package-level variable so that tests in this module can stub it out
+// (set discoverFunc = ...) to avoid the real UDP multicast WS-Discovery, which
+// is network-dependent and non-deterministic in CI sandboxes (issue #221:
+// TestONVIFDiscoverEndpoint assumed "no devices on the network" and asserted
+// len(devices)==0, which failed when a CI runner shared a LAN with a real ONVIF
+// camera). Production code must never reassign this; only test code does.
+var discoverFunc = discover
+
+// SetDiscoverFuncForTest replaces the discovery implementation for the
+// duration of a test. Pass nil to restore the default (real WS-Discovery). It
+// exists so callers in other packages (e.g. internal/api handler tests) can
+// make the /api/onvif/discover endpoint deterministic without performing real
+// network multicast. The returned restore func MUST be deferred by the caller.
+//
+// Usage:
+//
+//	restore := onvif.SetDiscoverFuncForTest(func(ctx context.Context, timeout time.Duration, enrich bool) *onvif.DiscoveryResult {
+//	    return &onvif.DiscoveryResult{Devices: []onvif.DiscoveredDevice{}}
+//	})
+//	defer restore()
+func SetDiscoverFuncForTest(fn func(ctx context.Context, timeout time.Duration, enrich bool) *DiscoveryResult) (restore func()) {
+	prev := discoverFunc
+	if fn == nil {
+		fn = discover
+	}
+	discoverFunc = fn
+	return func() { discoverFunc = prev }
+}
+
 // Discover performs WS-Discovery to find ONVIF devices on the local network
 // via UDP multicast, then enriches each device with GetDeviceInformation.
 // The enrichment runs in parallel and does not require authentication.
@@ -88,7 +118,7 @@ type deviceInfoEnvelope struct {
 // Adder.HandleDiscovered) should use DiscoverNoEnrich to avoid a redundant
 // GetDeviceInformation round-trip per device (issue #161).
 func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
-	return discover(ctx, timeout, true)
+	return discoverFunc(ctx, timeout, true)
 }
 
 // DiscoverNoEnrich is the same as Discover but WITHOUT the internal
@@ -100,7 +130,7 @@ func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
 // The returned devices have Endpoint/XAddrs/Scopes populated but
 // Manufacturer/Model/Firmware/Serial empty (filled in later by the caller).
 func DiscoverNoEnrich(ctx context.Context, timeout time.Duration) *DiscoveryResult {
-	return discover(ctx, timeout, false)
+	return discoverFunc(ctx, timeout, false)
 }
 
 // discover is the shared core of Discover / DiscoverNoEnrich. When enrich is

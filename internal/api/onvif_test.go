@@ -1,17 +1,34 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/stretchr/testify/require"
 )
 
+// stubDiscoverEmpty makes onvif.Discover deterministic for tests by returning
+// an empty device list without performing real UDP multicast WS-Discovery,
+// which is network-dependent (issue #221: a CI runner sharing a LAN with a
+// real ONVIF camera caused the old "len(devices)==0" assertion to fail). The
+// restore func is returned for the caller to defer.
+func stubDiscoverEmpty(t *testing.T) {
+	t.Helper()
+	restore := onvif.SetDiscoverFuncForTest(func(ctx context.Context, timeout time.Duration, enrich bool) *onvif.DiscoveryResult {
+		return &onvif.DiscoveryResult{Devices: []onvif.DiscoveredDevice{}}
+	})
+	t.Cleanup(restore)
+}
+
 func TestONVIFDiscoverEndpoint(t *testing.T) {
 	t.Parallel()
+	stubDiscoverEmpty(t)
 	h := TestHandler(nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", nil)
 	req.Header.Set("Content-Type", "application/json")
@@ -19,7 +36,7 @@ func TestONVIFDiscoverEndpoint(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	// Discovery now works — returns 200 with empty devices list
+	// Discovery is stubbed — returns 200 with an empty devices list.
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var resp map[string]interface{}
@@ -27,11 +44,12 @@ func TestONVIFDiscoverEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	devices, ok := resp["devices"].([]interface{})
 	require.True(t, ok, "response should have 'devices' field")
-	require.Equal(t, 0, len(devices), "no ONVIF devices in test environment")
+	require.Equal(t, 0, len(devices), "stubbed discovery returns no devices")
 }
 
 func TestONVIFDiscoverDefaultTimeout(t *testing.T) {
 	t.Parallel()
+	stubDiscoverEmpty(t)
 	h := TestHandler(nil, nil)
 	body := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", strings.NewReader(body))
@@ -40,7 +58,7 @@ func TestONVIFDiscoverDefaultTimeout(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	// Discovery succeeds — returns 200 with empty devices
+	// Discovery is stubbed — returns 200 with empty devices.
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
@@ -64,6 +82,7 @@ func TestONVIFDiscoverTimeoutTooLarge(t *testing.T) {
 
 func TestONVIFDiscoverNegativeTimeout(t *testing.T) {
 	t.Parallel()
+	stubDiscoverEmpty(t)
 	h := TestHandler(nil, nil)
 	body := `{"timeout": -1}`
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", strings.NewReader(body))
@@ -72,7 +91,7 @@ func TestONVIFDiscoverNegativeTimeout(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	// Negative timeout defaults to 5s, discovery runs and returns
+	// Negative timeout defaults to 5s; with discovery stubbed it returns 200.
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
