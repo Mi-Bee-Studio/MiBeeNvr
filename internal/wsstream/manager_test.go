@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -850,6 +851,153 @@ func TestManagerInterface(t *testing.T) {
 }
 
 // Benchmark writing frames through the manager.
+// ─── concurrent-write regression tests (#248) ────────────────────────────
+//
+// gorilla/websocket requires all writes to a single conn to be serialized.
+// Before the fix, UnregisterStream and the idle watchdog wrote EOS directly
+// to conn, racing the ServeWS frame-loop writer → panic "concurrent write to
+// websocket connection" (gorilla's internal check, also caught by -race).
+// These tests exercise the race: stream frames concurrently while triggering
+// each EOS path, and assert no panic + clean shutdown.
+
+// TestServeWS_NoConcurrentWriteOnUnregister streams frames while calling
+// UnregisterStream mid-flight. Under the old code this panicked; now the EOS
+// is enqueued onto the viewer channel and emitted by the single writer.
+func TestServeWS_NoConcurrentWriteOnUnregister(t *testing.T) {
+	m := NewManager()
+	hub := newTestHub(t)
+	require.NoError(t, m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.ServeWS("cam1", w, r)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
+	conn := dialWS(t, wsURL)
+	defer conn.Close()
+
+	// CodecInfo handshake
+	_, err := readMessage(t, conn)
+	require.NoError(t, err)
+	waitForViewer(t, m, "cam1")
+
+	// Stream frames continuously in the background while we unregister.
+	idrNALU := []byte{0x65, 0x01, 0x02, 0x03}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := int64(0)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				broadcastFrame(t, hub, 90000*i, [][]byte{idrNALU})
+				i++
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+	// Let a few frames flow so the frame-loop writer is actively writing.
+	time.Sleep(20 * time.Millisecond)
+
+	// UnregisterStream must not panic (previously: concurrent write to conn).
+	m.UnregisterStream("cam1")
+
+	close(stop)
+	wg.Wait()
+
+	// Viewer is torn down.
+	eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestServeWS_EOSDeliveredBeforeClose confirms the drain logic: after
+// UnregisterStream, the client receives the EOS message (0xFF) before the
+// connection closes. This proves the EOS enqueued via the channel actually
+// reaches the wire (single writer drains on ctx-done exit).
+func TestServeWS_EOSDeliveredBeforeClose(t *testing.T) {
+	m := NewManager()
+	hub := newTestHub(t)
+	require.NoError(t, m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.ServeWS("cam1", w, r)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
+	conn := dialWS(t, wsURL)
+	defer conn.Close()
+
+	_, err := readMessage(t, conn) // CodecInfo
+	require.NoError(t, err)
+	waitForViewer(t, m, "cam1")
+
+	m.UnregisterStream("cam1")
+
+	// Read until we see EOS (0xFF) or the conn closes. A short deadline bounds
+	// the wait; the drain should deliver EOS promptly after the ctx cancels.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	gotEOS := false
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			break // conn closed
+		}
+		if len(msg) > 0 && msg[0] == MsgTypeEOS {
+			gotEOS = true
+			break
+		}
+	}
+	assert.True(t, gotEOS, "client should receive EOS (0xFF) before conn closes")
+}
+
+// TestServeWS_NoConcurrentWriteOnIdle forces the idle watchdog to fire (no
+// frames → idle timeout) and asserts the EOS path via the channel does not
+// race the writer. Uses a tiny idle timeout to trigger it quickly.
+func TestServeWS_NoConcurrentWriteOnIdle(t *testing.T) {
+	m := NewManager(WithIdleTimeout(80 * time.Millisecond))
+	hub := newTestHub(t)
+	require.NoError(t, m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.ServeWS("cam1", w, r)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
+	conn := dialWS(t, wsURL)
+	defer conn.Close()
+
+	_, err := readMessage(t, conn) // CodecInfo
+	require.NoError(t, err)
+	waitForViewer(t, m, "cam1")
+
+	// Don't stream any frames — let the idle watchdog fire. It enqueues EOS via
+	// the channel (not a direct write) and cancels the viewer. No panic should
+	// occur; the client should receive EOS then close.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	gotEOS := false
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		if len(msg) > 0 && msg[0] == MsgTypeEOS {
+			gotEOS = true
+			break
+		}
+	}
+	assert.True(t, gotEOS, "idle watchdog should deliver EOS via the channel")
+	eventually(t, func() bool { return m.viewerCount("cam1") == 0 }, 2*time.Second, 10*time.Millisecond)
+}
+
 func BenchmarkWriteFrame(b *testing.B) {
 	m := NewManager(WithWriteBufSize(100))
 	hub := model.NewStreamHub()

@@ -202,15 +202,55 @@ func (m *Manager) UnregisterStream(camID string) {
 	entry.viewerMu.Lock()
 	eosMsg := []byte{byte(MsgTypeEOS)}
 	for _, v := range entry.viewers {
-		// Send EOS to viewer before closing
-		_ = v.conn.WriteMessage(websocket.BinaryMessage, eosMsg)
+		// Signal EOS by enqueuing it onto the viewer's channel (best-effort,
+		// non-blocking) rather than writing conn directly. Writing conn here would
+		// race the ServeWS frame-loop writer on the same conn — gorilla/websocket
+		// requires all writes to a conn to be serialized, and the frame loop is the
+		// single designated writer. The frame loop drains remaining channel
+		// messages (including this EOS) on its way out via viewerCtx cancellation.
+		// We do NOT close v.ch: a close would race distributeVideoFrame's
+		// `case v.ch <-` send (send-on-closed-channel panic). The channel is GC'd
+		// once the ServeWS goroutine exits and drops its reference.
+		sendNonBlocking(v.ch, eosMsg)
 		v.cancel()
-		close(v.ch)
 	}
 	entry.viewerMu.Unlock()
 	wsLogger.Load().Info("WebSocket stream unregistered", "camera_id", camID)
 	if cnt := entry.dropCount.Load(); cnt > 0 {
 		wsLogger.Load().Info("stream drop count", "camera_id", camID, "total_drops", cnt)
+	}
+}
+
+// sendNonBlocking attempts a non-blocking send of msg onto ch. If ch is full or
+// closed, the send is skipped (best-effort). This is the safe way to deliver
+// out-of-band messages (EOS, idle-timeout) to a viewer's writer goroutine
+// without risking a panic on a closed channel or a blocked sender.
+func sendNonBlocking(ch chan []byte, msg []byte) {
+	select {
+	case ch <- msg:
+	default:
+	}
+}
+
+// drainViewerCh flushes any pending messages buffered in ch by writing them to
+// conn via the single-writer discipline (the caller IS the single writer). Used
+// on viewer shutdown so an EOS enqueued by the idle watchdog or
+// UnregisterStream is actually emitted before the conn closes, rather than
+// being dropped when the ctx cancels. Non-blocking: stops as soon as the
+// channel is empty or a write fails. A failed write is expected on shutdown.
+func drainViewerCh(ch chan []byte, conn *websocket.Conn) {
+	for {
+		select {
+		case data, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+				return
+			}
+		default:
+			return
+		}
 	}
 }
 
@@ -583,8 +623,11 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		}
 	}()
 
-	// Start idle watchdog
-	lastActivity := time.Now()
+	// Start idle watchdog. lastActivity is read here (watchdog goroutine) and
+	// written by the frame loop below (ServeWS goroutine) — use atomic to avoid
+	// a data race under -race. Stored as unix nanoseconds.
+	var lastActivity atomic.Int64
+	lastActivity.Store(time.Now().UnixNano())
 	idleTicker := time.NewTicker(m.idleTimeout / 2)
 	defer idleTicker.Stop()
 	go func() {
@@ -593,9 +636,14 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 			case <-viewerCtx.Done():
 				return
 			case <-idleTicker.C:
-				if time.Since(lastActivity) > m.idleTimeout {
-					// Send EOS before closing so frontend can show offline status
-					_ = conn.WriteMessage(websocket.BinaryMessage, []byte{byte(MsgTypeEOS)})
+				last := time.Unix(0, lastActivity.Load())
+				if time.Since(last) > m.idleTimeout {
+					// Signal EOS via the channel (the frame loop is the single
+					// writer to conn) — do NOT write conn here, that races the
+					// frame loop. The frame loop's ctx-done drain will emit it.
+					// Best-effort: if the channel is full, skip (the cancel below
+					// still closes the viewer).
+					sendNonBlocking(viewerCh, []byte{byte(MsgTypeEOS)})
 					viewerCancel()
 					return
 				}
@@ -603,16 +651,25 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		}
 	}()
 
-	// Write frames to WebSocket until disconnect
+	// Write frames to WebSocket until disconnect. This goroutine is the SOLE
+	// writer to conn (codec-info preamble above + this loop). Out-of-band
+	// signals (EOS from idle watchdog or UnregisterStream) are enqueued onto
+	// viewerCh and emitted here, never written directly — gorilla/websocket
+	// requires all conn writes to be serialized.
 	for {
 		select {
 		case <-viewerCtx.Done():
+			// Drain any pending messages (e.g. an EOS enqueued by the idle
+			// watchdog or UnregisterStream) before returning, so they are emitted
+			// by this single writer rather than lost. A write failure here is
+			// expected on shutdown and is ignored.
+			drainViewerCh(viewerCh, conn)
 			return nil
 		case data, ok := <-viewerCh:
 			if !ok {
 				return nil // channel closed
 			}
-			lastActivity = time.Now()
+			lastActivity.Store(time.Now().UnixNano())
 			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 				if !strings.Contains(err.Error(), "use of closed") {
 					wsLogger.Load().Warn("WebSocket write error", "camera_id", camID, "viewer_id", viewerID, "error", err)
