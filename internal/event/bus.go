@@ -158,11 +158,24 @@ func (b *EventBus) Publish(ctx context.Context, topic string, data any) {
 			s.mu.Unlock()
 			continue
 		}
-		// Ring-buffer overflow: if channel full, drain one (oldest) then send.
-		if len(s.ch) == cap(s.ch) {
-			<-s.ch // drop oldest
+		// Ring-buffer overflow: if the buffered channel is full, drain the
+		// oldest event to make room. cap>0 guard: on an unbuffered channel
+		// (cap==0) len==cap is 0==0 and the drain would block forever on the
+		// empty channel while holding s.mu, deadlocking the whole bus (#220).
+		if cap(s.ch) > 0 && len(s.ch) == cap(s.ch) {
+			select {
+			case <-s.ch: // drop oldest
+			default: // lost a race with another sender's drain; skip
+			}
 		}
-		s.ch <- evt
+		// Non-blocking send: an unbuffered channel with no current reader, or a
+		// full buffered channel, drops the newest event instead of blocking.
+		// This keeps the "never blocks on any single subscriber" contract even
+		// for a dead/slow consumer (status events are lossy by design).
+		select {
+		case s.ch <- evt:
+		default: // unbuffered-and-no-reader, or full — drop newest
+		}
 		s.mu.Unlock()
 	}
 
@@ -192,11 +205,20 @@ func (b *EventBus) Publish(ctx context.Context, topic string, data any) {
 			s.mu.Unlock()
 			continue
 		}
-		// Ring-buffer overflow: if channel full, drain one (oldest) then send.
-		if len(s.ch) == cap(s.ch) {
-			<-s.ch // drop oldest
+		// Ring-buffer overflow: drain oldest when the buffered channel is full.
+		// cap>0 guard avoids the unbuffered-channel deadlock (#220); see the
+		// topic-subscriber block above for the full rationale.
+		if cap(s.ch) > 0 && len(s.ch) == cap(s.ch) {
+			select {
+			case <-s.ch: // drop oldest
+			default: // lost a race with another sender's drain; skip
+			}
 		}
-		s.ch <- evt
+		// Non-blocking send: drop newest rather than block on a dead consumer.
+		select {
+		case s.ch <- evt:
+		default: // unbuffered-and-no-reader, or full — drop newest
+		}
 		s.mu.Unlock()
 	}
 }
