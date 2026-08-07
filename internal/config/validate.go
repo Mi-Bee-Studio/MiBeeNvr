@@ -47,7 +47,7 @@ func IsValidStableID(s string) bool {
 	// only (skip ':'/'_'/'-' separators) so a colon-separated all-zero MAC like
 	// "00:00:00:00:00:00" is also caught — its alphanumerics are all '0'.
 	var first byte
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		if c == ':' || c == '_' || c == '-' {
 			continue
