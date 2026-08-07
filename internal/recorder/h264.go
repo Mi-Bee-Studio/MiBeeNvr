@@ -55,32 +55,40 @@ type H264Config = BaseConfig
 // H264NALDriver implements codecDriver for H.264 video.
 type H264NALDriver struct{}
 
-func (d H264NALDriver) codecLabel() string                  { return "h264" }
-func (d H264NALDriver) segmentFormat() model.Format         { return model.FormatH264 }
-func (d H264NALDriver) rtpFormat() format.Format            { return &format.H264{} }
-func (d H264NALDriver) minNALUDataLen() int                 { return 5 }
-func (d H264NALDriver) naluType(firstByte byte) int         { return int(firstByte & 0x1F) }
-func (d H264NALDriver) isIDR(typ int) bool                  { return typ == 5 }
-func (d H264NALDriver) isParameterSet(typ int) bool         { return typ == 7 || typ == 8 }
-func (d H264NALDriver) isVCL(typ int) bool                  { return typ == 1 || typ == 5 }
-func (d H264NALDriver) paramSetsReady(b *baseRecorder) bool { return b.sps != nil && b.pps != nil }
+func (d H264NALDriver) codecLabel() string          { return "h264" }
+func (d H264NALDriver) segmentFormat() model.Format { return model.FormatH264 }
+func (d H264NALDriver) rtpFormat() format.Format    { return &format.H264{} }
+func (d H264NALDriver) minNALUDataLen() int         { return 5 }
+func (d H264NALDriver) naluType(firstByte byte) int { return int(firstByte & 0x1F) }
+func (d H264NALDriver) isIDR(typ int) bool          { return typ == 5 }
+func (d H264NALDriver) isParameterSet(typ int) bool { return typ == 7 || typ == 8 }
+func (d H264NALDriver) isVCL(typ int) bool          { return typ == 1 || typ == 5 }
+func (d H264NALDriver) paramSetsReady(b *baseRecorder) bool {
+	sps, pps, _ := b.codecSnapshot()
+	return sps != nil && pps != nil
+}
 
 func (d H264NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) bool {
+	// Load the current snapshot once; this method runs only on the single
+	// writeFrames goroutine, so load-then-store is race-free. We always rebuild
+	// and store the full triplet so a concurrent reader (live preview via
+	// codecSnapshot) never sees a torn mix of old+new params (#219).
+	sps, pps, _ := b.codecSnapshot()
 	switch typ {
 	case 7: // SPS
-		if b.sps != nil && !bytes.Equal(b.sps, nalu) {
+		if sps != nil && !bytes.Equal(sps, nalu) {
 			b.log.Info("SPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.sps = append([]byte(nil), nalu...)
+			b.setCodecParams(nalu, pps, nil)
 			return true
 		}
-		b.sps = append([]byte(nil), nalu...)
+		b.setCodecParams(nalu, pps, nil)
 	case 8: // PPS
-		if b.pps != nil && !bytes.Equal(b.pps, nalu) {
+		if pps != nil && !bytes.Equal(pps, nalu) {
 			b.log.Info("PPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.pps = append([]byte(nil), nalu...)
+			b.setCodecParams(sps, nalu, nil)
 			return true
 		}
-		b.pps = append([]byte(nil), nalu...)
+		b.setCodecParams(sps, nalu, nil)
 	}
 	return false
 }
@@ -98,7 +106,8 @@ func (d H264NALDriver) extractParamSets(b *baseRecorder, au [][]byte) {
 }
 
 func (d H264NALDriver) addTrack(m *muxer.MP4Muxer, b *baseRecorder) (int, error) {
-	return m.AddH264Track(b.sps, b.pps)
+	sps, pps, _ := b.codecSnapshot()
+	return m.AddH264Track(sps, pps)
 }
 
 // H264Recorder records H.264 video from an RTSP source.
@@ -162,10 +171,22 @@ func (r *H264Recorder) Status() model.RecorderStatus {
 func (r *H264Recorder) GetHub() *model.StreamHub { return r.Hub }
 
 // SPS returns the current H264 Sequence Parameter Set NAL unit (without start bytes).
-func (r *H264Recorder) SPS() []byte { return r.sps }
+// Reads the atomic codec snapshot — safe for concurrent live-preview reads (#219).
+func (r *H264Recorder) SPS() []byte { s, _, _ := r.codecSnapshot(); return s }
 
 // PPS returns the current H264 Picture Parameter Set NAL unit (without start bytes).
-func (r *H264Recorder) PPS() []byte { return r.pps }
+// Reads the atomic codec snapshot — safe for concurrent live-preview reads (#219).
+func (r *H264Recorder) PPS() []byte { _, p, _ := r.codecSnapshot(); return p }
+
+// CodecParams implements model.HLSProvider, returning the current H.264 codec
+// and parameter-set snapshot in a single atomic read. This lets getCodecParams
+// (handlers_stream.go) use the HLSProvider fast-path instead of the concrete
+// type switch, and guarantees a consistent (non-torn) SPS/PPS pair (#219).
+// vps is always nil for H.264.
+func (r *H264Recorder) CodecParams() (codec model.Format, sps, pps, vps []byte) {
+	sps, pps, vps = r.codecSnapshot()
+	return model.FormatH264, sps, pps, vps
+}
 
 // AudioCodec returns the audio codec name ("aac", "g711", or "" for no audio).
 func (r *H264Recorder) AudioCodec() string { return r.audioCodec }
@@ -221,13 +242,17 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		return fmt.Errorf("SETUP: %w", err), false
 	}
 
-	// Store initial parameter sets from SDP.
+	// Store initial parameter sets from SDP. Merge with any params already
+	// captured (rare, but keeps the snapshot consistent) and store atomically as
+	// a full triplet so concurrent live-preview reads see a consistent pair (#219).
+	sps, pps, _ := r.codecSnapshot()
 	if forma.SPS != nil {
-		r.sps = append([]byte(nil), forma.SPS...)
+		sps = forma.SPS
 	}
 	if forma.PPS != nil {
-		r.pps = append([]byte(nil), forma.PPS...)
+		pps = forma.PPS
 	}
+	r.setCodecParams(sps, pps, nil)
 
 	// Audio setup: find AAC or G.711 format if AudioEnabled.
 	var audioDec *rtpmpeg4audio.Decoder

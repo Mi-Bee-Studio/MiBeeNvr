@@ -43,32 +43,38 @@ func (d H265NALDriver) isIDR(typ int) bool          { return typ == 19 || typ ==
 func (d H265NALDriver) isParameterSet(typ int) bool { return typ == 32 || typ == 33 || typ == 34 }
 func (d H265NALDriver) isVCL(typ int) bool          { return typ < 32 }
 func (d H265NALDriver) paramSetsReady(b *baseRecorder) bool {
-	return b.vps != nil && b.sps != nil && b.pps != nil
+	vps, sps, pps := b.codecSnapshot()
+	return vps != nil && sps != nil && pps != nil
 }
 
 func (d H265NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) bool {
+	// Load the current snapshot once; this method runs only on the single
+	// writeFrames goroutine, so load-then-store is race-free. We always rebuild
+	// and store the full triplet (VPS/SPS/PPS) so a concurrent reader (live
+	// preview via codecSnapshot) never sees a torn mix of old+new params (#219).
+	vps, sps, pps := b.codecSnapshot()
 	switch typ {
 	case 32: // VPS
-		if b.vps != nil && !bytes.Equal(b.vps, nalu) {
+		if vps != nil && !bytes.Equal(vps, nalu) {
 			b.log.Info("VPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.vps = append([]byte(nil), nalu...)
+			b.setCodecParams(nalu, sps, pps)
 			return true
 		}
-		b.vps = append([]byte(nil), nalu...)
+		b.setCodecParams(nalu, sps, pps)
 	case 33: // SPS
-		if b.sps != nil && !bytes.Equal(b.sps, nalu) {
+		if sps != nil && !bytes.Equal(sps, nalu) {
 			b.log.Info("SPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.sps = append([]byte(nil), nalu...)
+			b.setCodecParams(vps, nalu, pps)
 			return true
 		}
-		b.sps = append([]byte(nil), nalu...)
+		b.setCodecParams(vps, nalu, pps)
 	case 34: // PPS
-		if b.pps != nil && !bytes.Equal(b.pps, nalu) {
+		if pps != nil && !bytes.Equal(pps, nalu) {
 			b.log.Info("PPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.pps = append([]byte(nil), nalu...)
+			b.setCodecParams(vps, sps, nalu)
 			return true
 		}
-		b.pps = append([]byte(nil), nalu...)
+		b.setCodecParams(vps, sps, nalu)
 	}
 	return false
 }
@@ -86,7 +92,8 @@ func (d H265NALDriver) extractParamSets(b *baseRecorder, au [][]byte) {
 }
 
 func (d H265NALDriver) addTrack(m *muxer.MP4Muxer, b *baseRecorder) (int, error) {
-	return m.AddH265Track(b.vps, b.sps, b.pps)
+	vps, sps, pps := b.codecSnapshot()
+	return m.AddH265Track(vps, sps, pps)
 }
 
 // H265Recorder records H.265/HEVC video from an RTSP source.
@@ -150,13 +157,25 @@ func (r *H265Recorder) Status() model.RecorderStatus {
 func (r *H265Recorder) GetHub() *model.StreamHub { return r.Hub }
 
 // VPS returns the current H265 Video Parameter Set NAL unit (without start bytes).
-func (r *H265Recorder) VPS() []byte { return r.vps }
+// Reads the atomic codec snapshot — safe for concurrent live-preview reads (#219).
+func (r *H265Recorder) VPS() []byte { _, _, v := r.codecSnapshot(); return v }
 
 // SPS returns the current H265 Sequence Parameter Set NAL unit (without start bytes).
-func (r *H265Recorder) SPS() []byte { return r.sps }
+// Reads the atomic codec snapshot — safe for concurrent live-preview reads (#219).
+func (r *H265Recorder) SPS() []byte { s, _, _ := r.codecSnapshot(); return s }
 
 // PPS returns the current H265 Picture Parameter Set NAL unit (without start bytes).
-func (r *H265Recorder) PPS() []byte { return r.pps }
+// Reads the atomic codec snapshot — safe for concurrent live-preview reads (#219).
+func (r *H265Recorder) PPS() []byte { _, p, _ := r.codecSnapshot(); return p }
+
+// CodecParams implements model.HLSProvider, returning the current H.265 codec
+// and parameter-set snapshot in a single atomic read. This lets getCodecParams
+// (handlers_stream.go) use the HLSProvider fast-path instead of the concrete
+// type switch, and guarantees a consistent (non-torn) VPS/SPS/PPS triplet (#219).
+func (r *H265Recorder) CodecParams() (codec model.Format, sps, pps, vps []byte) {
+	sps, pps, vps = r.codecSnapshot()
+	return model.FormatH265, sps, pps, vps
+}
 
 // AudioCodec returns the audio codec name ("aac", "g711", or "" for no audio).
 func (r *H265Recorder) AudioCodec() string { return r.audioCodec }
@@ -212,16 +231,20 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		return fmt.Errorf("SETUP: %w", err), false
 	}
 
-	// Store initial parameter sets from SDP.
+	// Store initial parameter sets from SDP. Merge with any params already
+	// captured and store atomically as a full triplet so concurrent live-preview
+	// reads see a consistent VPS/SPS/PPS set (#219).
+	vps, sps, pps := r.codecSnapshot()
 	if forma.VPS != nil {
-		r.vps = append([]byte(nil), forma.VPS...)
+		vps = forma.VPS
 	}
 	if forma.SPS != nil {
-		r.sps = append([]byte(nil), forma.SPS...)
+		sps = forma.SPS
 	}
 	if forma.PPS != nil {
-		r.pps = append([]byte(nil), forma.PPS...)
+		pps = forma.PPS
 	}
+	r.setCodecParams(vps, sps, pps)
 
 	// Audio setup: find AAC or G.711 format if AudioEnabled.
 	var audioDec *rtpmpeg4audio.Decoder

@@ -231,10 +231,12 @@ type baseRecorder struct {
 	lastFrameTime time.Time
 
 	// Codec parameter sets (populated from SDP + in-band NALUs).
-	// vps is H.265-only; always nil for H.264.
-	vps []byte
-	sps []byte
-	pps []byte
+	// Stored as an immutable snapshot behind atomic.Pointer so the live-preview
+	// (HLS/WebRTC/WS) goroutines can read SPS/PPS/VPS concurrently with the
+	// writeFrames goroutine's writes without a data race or torn triplet reads
+	// (SPS from one config, PPS from another). vps is H.265-only; always nil
+	// for H.264. See codecSnapshot / setCodecParams (#219).
+	codec atomic.Pointer[codecParams]
 
 	// Audio state (populated during connectAndRecord; read during segment
 	// creation to add the audio track to the muxer).
@@ -256,6 +258,42 @@ type baseRecorder struct {
 
 	// Throttled logging for storage health failures.
 	lastHealthLogAt time.Time
+}
+
+// codecParams is an immutable snapshot of the video codec parameter sets
+// (SPS/PPS/VPS). It is written by setCodecParams (deep-copying the inputs) and
+// read via codecSnapshot's single atomic load. Immutability after construction
+// is what makes the concurrent reader path (live preview via SPS()/PPS()/VPS())
+// race-free without a mutex (#219). vps is H.265-only; always nil for H.264.
+type codecParams struct {
+	sps []byte
+	pps []byte
+	vps []byte
+}
+
+// setCodecParams atomically replaces the codec parameter snapshot. The slices
+// are deep-copied so the stored snapshot is independent of the caller's buffers
+// (which may be reused RTP scratch buffers). Intended to be called from the
+// single writer path (writeFrames via the driver's handleParamSet, and the SDP
+// pre-seed in connectAndRecord) — concurrent callers must not interleave
+// partial updates; build the full triplet first, then Store.
+func (b *baseRecorder) setCodecParams(sps, pps, vps []byte) {
+	b.codec.Store(&codecParams{
+		sps: append([]byte(nil), sps...),
+		pps: append([]byte(nil), pps...),
+		vps: append([]byte(nil), vps...),
+	})
+}
+
+// codecSnapshot returns the current SPS/PPS/VPS via a single atomic load,
+// guaranteeing a consistent triplet (no torn read where SPS comes from one
+// configuration and PPS from another). Returns all-nil before the first
+// keyframe/SDP arrives.
+func (b *baseRecorder) codecSnapshot() (sps, pps, vps []byte) {
+	if cp := b.codec.Load(); cp != nil {
+		return cp.sps, cp.pps, cp.vps
+	}
+	return nil, nil, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -387,11 +425,11 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 	for data := range b.frameCh {
 		// Always parse NALUs to capture codec parameter sets (VPS/SPS/PPS), even
 		// in live-only mode (RecordEnabled=false). Live preview (HLS/WebRTC/WS)
-		// needs these via getCodecParams(); if we skip parsing here, SPS()/VPS()/
-		// PPS() stay nil and every live-preview endpoint returns 503 "waiting for
-		// video stream" → permanent grey/black screen for cameras with recording
-		// disabled. (Only the SDP pre-seed in connectAndRecord runs otherwise,
-		// which is empty for cameras that send params in-band only.)
+		// needs these via getCodecParams(); if we skip parsing here, the codec
+		// snapshot stays nil and every live-preview endpoint returns 503 "waiting
+		// for video stream" → permanent grey/black screen for cameras with
+		// recording disabled. (Only the SDP pre-seed in connectAndRecord runs
+		// otherwise, which is empty for cameras that send params in-band only.)
 		if len(data) < b.driver.minNALUDataLen() {
 			continue
 		}
