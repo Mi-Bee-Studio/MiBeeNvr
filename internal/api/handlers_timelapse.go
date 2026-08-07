@@ -214,11 +214,11 @@ func (h *Handler) handleTimelapseStatus(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleTimelapseMergeProgress handles GET /api/timelapse/merge/progress/{cameraId}.
+// handleTimelapseMergeProgress handles GET /api/timelapse/merge/progress/{id}.
 // SSE endpoint that streams merge progress updates for a specific camera.
 // It sends progress events as the merge progresses and closes when complete.
 func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "cameraId")
+	cameraID := chi.URLParam(r, "id")
 
 	if h.timelapseMergeMgr == nil {
 		WriteError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
@@ -750,10 +750,10 @@ func (h *Handler) handleRetryTimelapseMerge(w http.ResponseWriter, r *http.Reque
 }
 
 // --- Task 7: Merge Cancellation ---
-// handleTimelapseMergeCancel handles DELETE /api/timelapse/{cameraId}/merge.
+// handleTimelapseMergeCancel handles DELETE /api/timelapse/{id}/merge.
 // Cancels an active rolling merge for the specified camera.
 func (h *Handler) handleTimelapseMergeCancel(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "cameraId")
+	cameraID := chi.URLParam(r, "id")
 
 	if h.timelapseMergeMgr == nil {
 		WriteError(w, http.StatusServiceUnavailable, "timelapse merge manager not available")
@@ -1056,11 +1056,11 @@ func (h *Handler) registerTimelapseRoutes(r chi.Router) {
 	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
 	r.Delete("/api/timelapse/merges/{id}", h.handleDeleteTimelapseMerge)
 	r.Post("/api/timelapse/{id}/merge", h.handleTimelapseMerge)
-	r.Delete("/api/timelapse/{cameraId}/merge", h.handleTimelapseMergeCancel)
+	r.Delete("/api/timelapse/{id}/merge", h.handleTimelapseMergeCancel)
 	r.Post("/api/timelapse/{id}/pause", h.handleTimelapsePause)
 	r.Post("/api/timelapse/{id}/resume", h.handleTimelapseResume)
 	r.Get("/api/timelapse/{id}", h.handleTimelapseGet)
 	r.Delete("/api/timelapse/{id}", h.handleTimelapseDelete)
 	r.Post("/api/timelapse/{id}/download", h.handleTimelapseDownload)
-	r.Get("/api/timelapse/merge/progress/{cameraId}", h.handleTimelapseMergeProgress)
+	r.Get("/api/timelapse/merge/progress/{id}", h.handleTimelapseMergeProgress)
 }

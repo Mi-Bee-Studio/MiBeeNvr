@@ -116,7 +116,7 @@ func (h *Handler) handleGetStability(w http.ResponseWriter, r *http.Request) {
 
 // handleGetCameraStability returns stability quality data for a single camera.
 func (h *Handler) handleGetCameraStability(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "camera_id")
+	cameraID := chi.URLParam(r, "id")
 	if cameraID == "" {
 		WriteError(w, http.StatusBadRequest, "missing camera id")
 		return
@@ -141,5 +141,5 @@ func (h *Handler) registerHealthRoutes(r chi.Router) {
 	r.Get("/api/health/status", h.handleGetHealthStatus)
 	r.Get("/api/health/events", h.handleGetHealthEvents)
 	r.Get("/api/health/stability", h.handleGetStability)
-	r.Get("/api/health/stability/{camera_id}", h.handleGetCameraStability)
+	r.Get("/api/health/stability/{id}", h.handleGetCameraStability)
 }

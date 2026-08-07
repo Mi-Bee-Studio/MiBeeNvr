@@ -28,7 +28,7 @@ curl -u username:password \
 
 ## 查询归档录制列表
 
-**端点：** `GET /api/archives/{cameraID}/recordings`
+**端点：** `GET /api/archives/{id}/recordings`
 
 列出指定归档中的录制。
 
@@ -55,7 +55,7 @@ curl -u username:password \
 
 ## 删除归档分组
 
-**端点：** `DELETE /api/archives/{cameraID}`
+**端点：** `DELETE /api/archives/{id}`
 
 删除指定摄像头的整个归档分组。
 
@@ -75,7 +75,7 @@ curl -u username:password \
 
 ## 删除归档录制
 
-**端点：** `DELETE /api/archives/{cameraID}/recordings/{recordingID}`
+**端点：** `DELETE /api/archives/{id}/recordings/{recordingID}`
 
 从归档中删除指定的录制。
 
@@ -95,7 +95,7 @@ curl -u username:password \
 
 ## 设置归档保留期
 
-**端点：** `PUT /api/archives/{cameraID}/retention`
+**端点：** `PUT /api/archives/{id}/retention`
 
 设置归档分组的保留期限。
 

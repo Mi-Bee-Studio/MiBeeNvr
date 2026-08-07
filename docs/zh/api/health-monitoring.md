@@ -130,7 +130,7 @@ curl -u username:password \
 
 ## 单个摄像头稳定性
 
-**端点：** `GET /api/health/stability/{camera_id}`
+**端点：** `GET /api/health/stability/{id}`
 
 获取单个摄像头的稳定性质量数据。
 
