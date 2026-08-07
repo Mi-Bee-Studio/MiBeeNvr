@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mp4util"
 	"github.com/abema/go-mp4"
 )
 
@@ -631,114 +632,31 @@ func writeH265Ftyp(w *mp4.Writer) (int64, error) {
 // buildHvcC builds the HEVCDecoderConfigurationRecord bytes from raw VPS, SPS,
 // and PPS NAL units (without start codes). Format per ISO 14496-15.
 //
-// This deliberately uses conservative defaults for the profile_tier_level
-// fields rather than fully parsing them from the SPS. Several H.265 ONVIF
+// This is a thin wrapper over mp4util.BuildHvcC (the shared, single source of
+// truth for the hvcC record used by timelapse, merge, and muxer — see #236).
+// The shared helper uses conservative Main-tier / Main-profile / zeroed-compat
+// defaults rather than fully parsing the SPS, because several H.265 ONVIF
 // cameras in production (cam-fa049182 工作室内, cam-5b24e253 视通) emit an SPS
-// whose profile_tier_level is internally inconsistent — e.g. profile_idc=1
-// (Main) paired with tier=1 (High) and a stray compat bit 0x40000000. Windows
-// Edge's HEVC Video Extension enforces strict HEVC conformance and refuses to
-// play an MP4 whose hvcC header fields don't make sense together (Edge's
-// PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS), while Linux Chromium /
-// Firefox reject all HEVC regardless. Mirroring internal/merge/mp4merge.go's
-// buildMergeHvcC, we read only sps[1] (profile byte, masked to 5 bits) and
-// sps[12] (level byte), and force everything else to safe Main-tier / 8-bit
-// 4:2:0 defaults. This keeps the regular-recording merge (mp4merge.go) and
-// timelapse merge (this file) byte-aligned in their hvcC headers, so both
-// paths are equally Edge-playable.
+// whose profile_tier_level is internally inconsistent (e.g. profile_idc=1 Main
+// paired with tier=1 High + a stray compat bit 0x40000000) — Windows Edge's
+// HEVC Video Extension enforces strict HEVC conformance and refuses to play
+// such an MP4 (DEMUXER_ERROR_NO_SUPPORTED_STREAMS). Marshaling the typed
+// *mp4.HvcC struct produces byte-identical output to the previous hand-rolled
+// buffer because go-mp4 bit-packs GeneralProfileIdc as a 5-bit field, so the
+// low 5 bits of sps[1] reach byte 1 exactly as the old `sps[1] & 0x1F` did.
+//
+// Returns the marshaled bytes so callers (and tests) keep working with the same
+// []byte contract; the struct is the construction mechanism only.
 func buildHvcC(vps, sps, pps []byte) []byte {
 	var buf bytes.Buffer
-
-	// configurationVersion
-	buf.WriteByte(1)
-
-	// Read only the raw profile and level bytes from the SPS — no further
-	// parsing. Falls back to Main profile / Level 4.0 on a too-short SPS.
-	// sps[1] low 5 bits = general_profile_idc (we discard the high 3 bits,
-	// which carry profile_space + tier_flag, to force Main-tier defaults).
-	profileIDC := byte(1) // Main profile
-	levelIDC := byte(120) // Level 4.0 (40 * 3)
-	if len(sps) > 1 {
-		profileIDC = sps[1] & 0x1F
+	if _, err := mp4.Marshal(&buf, mp4util.BuildHvcC(vps, sps, pps), mp4.Context{}); err != nil {
+		// Marshal of a fully-populated *mp4.HvcC never fails in practice (all
+		// fields are concrete, no dynamic lengths beyond the fixed NAL arrays).
+		// Return an empty record on the impossible failure so the caller
+		// surfaces a clearly broken (unplayable) file rather than panicking.
+		return nil
 	}
-	if len(sps) > 12 {
-		levelIDC = sps[12]
-	}
-
-	// general_profile_space(2)=0 + general_tier_flag(1)=0 (Main tier)
-	//   + general_profile_idc(5)
-	// tier is forced to 0 (Main) regardless of the SPS to avoid the
-	// Edge-rejected Main-profile + High-tier mismatch.
-	buf.WriteByte(profileIDC)
-
-	// general_profile_compatibility_flags (32 bits) = 0
-	// (A non-zero value here, e.g. 0x40000000, combined with Main profile is
-	// another trigger for Edge's HEVC conformance rejection.)
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00})
-
-	// general_constraint_indicator_flags (48 bits) = 0
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
-
-	// general_level_idc
-	buf.WriteByte(levelIDC)
-
-	// min_spatial_segmentation_idc (4 reserved + 12 value) = 0
-	buf.WriteByte(0xF0)
-	buf.WriteByte(0x00)
-
-	// parallelismType (6 reserved + 2 value) = 0
-	buf.WriteByte(0xFC)
-
-	// chromaFormat (6 reserved bits = 111111 + 2-bit value 01 = 4:2:0)
-	buf.WriteByte(0xFD)
-
-	// bitDepthLumaMinus8 (5 reserved bits = 11111 + 3-bit value 000 = 8-bit)
-	buf.WriteByte(0xF8)
-
-	// bitDepthChromaMinus8 (5 reserved bits = 11111 + 3-bit value 000 = 8-bit)
-	buf.WriteByte(0xF8)
-
-	// avgFrameRate (16 bits)
-	buf.Write([]byte{0x00, 0x00})
-
-	// constantFrameRate(2) + numTemporalLayers(3) + temporalIdNested(1) + lengthSizeMinusOne(2)
-	// numTemporalLayers=1, lengthSizeMinusOne=3 (4-byte lengths)
-	buf.WriteByte(0x0B)
-
-	// numOfArrays = 3 (VPS, SPS, PPS)
-	buf.WriteByte(3)
-
-	// Write arrays in standard order: VPS, SPS, PPS.
-	writeHvcCArray(&buf, 32, vps) // VPS type 32
-	writeHvcCArray(&buf, 33, sps) // SPS type 33
-	writeHvcCArray(&buf, 34, pps) // PPS type 34
-
 	return buf.Bytes()
-}
-
-// writeHvcCArray writes one NAL array to the hvcC buffer per ISO 14496-15
-// section 8.3.3.1.2 (HEVC NAL Unit Array).
-//
-// Layout per array:
-//
-//	array_completeness(1) | reserved(0) | NAL_unit_type(6)   — 1 byte
-//	numNalus                                              — 2 bytes  (count of NALUs)
-//	for each NALU:
-//	  nalUnitLength                                       — 2 bytes
-//	  nalUnit                                             — nalUnitLength bytes
-//
-// We always write exactly one NALU per array (numNalus = 1), since each call
-// receives a single parameter set (VPS / SPS / PPS).
-func writeHvcCArray(buf *bytes.Buffer, nalType byte, nalu []byte) {
-	// array_completeness(1) | reserved(0) | NAL_unit_type(6)
-	buf.WriteByte(0x80 | (nalType & 0x3F))
-	// numNalus (16 bits) — one NALU in this array.
-	buf.WriteByte(0x00)
-	buf.WriteByte(0x01)
-	// nalUnitLength (16 bits) + nalUnit data
-	naluLen := uint16(len(nalu))
-	buf.WriteByte(byte(naluLen >> 8))
-	buf.WriteByte(byte(naluLen))
-	buf.Write(nalu)
 }
 
 // isH265ParamSet returns true if the NAL unit is a parameter set (VPS, SPS, or PPS).

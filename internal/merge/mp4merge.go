@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mp4util"
 	"github.com/abema/go-mp4"
 )
 
@@ -1039,22 +1040,7 @@ func writeMergeH264SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 	if err != nil {
 		return err
 	}
-	avcC := &mp4.AVCDecoderConfiguration{
-		AnyTypeBox:                 mp4.AnyTypeBox{Type: mp4.StrToBoxType("avcC")},
-		ConfigurationVersion:       1,
-		Profile:                    tr.sps[1],
-		ProfileCompatibility:       tr.sps[2],
-		Level:                      tr.sps[3],
-		LengthSizeMinusOne:         3,
-		NumOfSequenceParameterSets: 1,
-		SequenceParameterSets: []mp4.AVCParameterSet{
-			{Length: uint16(len(tr.sps)), NALUnit: tr.sps},
-		},
-		NumOfPictureParameterSets: 1,
-		PictureParameterSets: []mp4.AVCParameterSet{
-			{Length: uint16(len(tr.pps)), NALUnit: tr.pps},
-		},
-	}
+	avcC := mp4util.BuildAvcC(tr.sps, tr.pps)
 	if _, err := mp4.Marshal(w, avcC, mp4.Context{}); err != nil {
 		return err
 	}
@@ -1094,7 +1080,7 @@ func writeMergeH265SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 	if err != nil {
 		return err
 	}
-	hvcC := buildMergeHvcC(tr.vps, tr.sps, tr.pps)
+	hvcC := mp4util.BuildHvcC(tr.vps, tr.sps, tr.pps)
 	if _, err := mp4.Marshal(w, hvcC, mp4.Context{}); err != nil {
 		return err
 	}
@@ -1107,48 +1093,6 @@ func writeMergeH265SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 	}
 	_ = bi
 	return nil
-}
-
-// buildMergeHvcC constructs an HvcC from VPS, SPS, PPS.
-func buildMergeHvcC(vps, sps, pps []byte) *mp4.HvcC {
-	profile := uint8(0)
-	if len(sps) > 1 {
-		profile = sps[1]
-	}
-	level := uint8(0)
-	if len(sps) > 12 {
-		level = sps[12]
-	}
-	return &mp4.HvcC{
-		ConfigurationVersion:        1,
-		GeneralProfileSpace:         0,
-		GeneralTierFlag:             false,
-		GeneralProfileIdc:           profile,
-		GeneralProfileCompatibility: [32]bool{},
-		GeneralConstraintIndicator:  [6]uint8{},
-		GeneralLevelIdc:             level,
-		Reserved1:                   15,
-		MinSpatialSegmentationIdc:   0,
-		Reserved2:                   63,
-		ParallelismType:             0,
-		Reserved3:                   63,
-		ChromaFormatIdc:             1,
-		Reserved4:                   31,
-		BitDepthLumaMinus8:          0,
-		Reserved5:                   31,
-		BitDepthChromaMinus8:        0,
-		AvgFrameRate:                0,
-		ConstantFrameRate:           0,
-		NumTemporalLayers:           1,
-		TemporalIdNested:            1,
-		LengthSizeMinusOne:          3,
-		NumOfNaluArrays:             3,
-		NaluArrays: []mp4.HEVCNaluArray{
-			{Completeness: true, NaluType: 32, NumNalus: 1, Nalus: []mp4.HEVCNalu{{Length: uint16(len(vps)), NALUnit: vps}}},
-			{Completeness: true, NaluType: 33, NumNalus: 1, Nalus: []mp4.HEVCNalu{{Length: uint16(len(sps)), NALUnit: sps}}},
-			{Completeness: true, NaluType: 34, NumNalus: 1, Nalus: []mp4.HEVCNalu{{Length: uint16(len(pps)), NALUnit: pps}}},
-		},
-	}
 }
 
 // writeMergeFtyp writes a minimal ftyp box to the output file.
