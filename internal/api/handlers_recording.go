@@ -50,26 +50,9 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			filter.Limit = n
-		}
-	}
-	// Enforce a safe default + upper bound to prevent accidental full-table scans.
-	// Without this, omitting ?limit= returns the entire recordings table.
-	if filter.Limit == 0 || filter.Limit > 500 {
-		if filter.Limit > 500 {
-			filter.Limit = 500
-		} else {
-			filter.Limit = 50 // safe default
-		}
-	}
-
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			filter.Offset = n
-		}
-	}
+	// limit/offset parsing centralized in parsePagination (#222); recordings use a
+	// safe default of 50 and a hard cap of 500 to prevent accidental full-table scans.
+	filter.Limit, filter.Offset = parsePagination(r, 50, 500)
 
 	// Keyset (cursor) pagination: ?cursor=<RFC3339 started_at of last row on prev page>.
 	// When provided with default sort, the DB uses WHERE started_at < cursor (O(1) deep page)
@@ -643,7 +626,7 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
-		http.Error(w, "frame not found", http.StatusNotFound)
+		WriteError(w, http.StatusNotFound, "frame not found")
 		return
 	}
 

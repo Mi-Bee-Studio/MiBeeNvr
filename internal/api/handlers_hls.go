@@ -301,7 +301,7 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if snapshotURL == "" {
-		http.Error(w, "Snapshot URL not configured", http.StatusNotFound)
+		WriteError(w, http.StatusNotFound, "Snapshot URL not configured")
 		return
 	}
 
@@ -377,5 +377,5 @@ func serveStaleOrError(w http.ResponseWriter, cached *snapshotCache, ok bool, ca
 		return
 	}
 	logger.Warn("failed to fetch snapshot", "camera_id", cameraID, "error", err)
-	http.Error(w, "Failed to fetch snapshot", http.StatusBadGateway)
+	WriteError(w, http.StatusBadGateway, "Failed to fetch snapshot")
 }

@@ -268,23 +268,17 @@ func (h *Handler) handleTranscodingTasksList(w http.ResponseWriter, r *http.Requ
 		CameraID: r.URL.Query().Get("camera_id"),
 	}
 
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
-			filter.Limit = v
-		}
-	}
-	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
-		if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
-			filter.Offset = v
-		}
-	} else if pageStr := r.URL.Query().Get("page"); pageStr != "" {
-		// Support page-based pagination (1-indexed).
-		// Convert page to offset: offset = (page - 1) * limit.
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			if filter.Limit <= 0 {
-				filter.Limit = 50
+	filter.Limit, filter.Offset = parsePagination(r, 0, 0)
+	// When offset is not supplied, support page-based pagination (1-indexed):
+	// offset = (page - 1) * limit, with a default limit of 50.
+	if r.URL.Query().Get("offset") == "" {
+		if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+			if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+				if filter.Limit <= 0 {
+					filter.Limit = 50
+				}
+				filter.Offset = (p - 1) * filter.Limit
 			}
-			filter.Offset = (p - 1) * filter.Limit
 		}
 	}
 

@@ -311,23 +311,8 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Parse pagination params with abuse prevention
-	limit := 0
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if limit > 1000 {
-		limit = 1000
-	}
-
-	offset := 0
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
+	// Parse pagination params with abuse prevention (cap 1000, no default).
+	limit, offset := parsePagination(r, 0, 1000)
 
 	// Parse optional filters
 	cameraID := r.URL.Query().Get("camera_id")
@@ -925,21 +910,7 @@ func (h *Handler) handleListTimelapseMerges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	limit := 100
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if limit > 1000 {
-		limit = 1000
-	}
-	offset := 0
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
+	limit, offset := parsePagination(r, 100, 1000)
 
 	f := storage.TimelapseMergeFilter{
 		CameraID:      r.URL.Query().Get("camera_id"),

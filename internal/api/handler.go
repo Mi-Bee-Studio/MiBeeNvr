@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -298,6 +299,32 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func WriteError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// parsePagination parses the limit/offset query params with a caller-specified
+// default limit and a hard upper bound. It is the single source of truth for the
+// limit/offset parsing that was previously duplicated (with subtly different
+// default/max values) across the recording, archive, AI, timelapse, and
+// transcode list handlers (#222).
+//
+// defaultLimit is used when ?limit is absent or invalid; maxLimit<=0 disables
+// the upper-bound clamp. offset defaults to 0 and is never negative.
+func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset int) {
+	limit = defaultLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if maxLimit > 0 && limit > maxLimit {
+		limit = maxLimit
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	return limit, offset
 }
 
 func writeAPIError(w http.ResponseWriter, status int, err error) {
