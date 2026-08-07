@@ -210,13 +210,13 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // all tables are CREATE TABLE IF NOT EXISTS with the final column set inline,
 // replacing the 27 incremental ALTER TABLE migrations from v1–v28.
 //
-// Upgrade path: users on 0.9.x (schema v28) upgrade transparently — the IF NOT
-// EXISTS clauses skip existing tables, and the v28→v29 migration block handles
-// the only breaking change (dropping the redundant `merged` column now that
-// merge_status fully replaces it). Users below v28 must upgrade to 0.9.x first.
+// Upgrade path: users on 0.9.x (schema v28) must upgrade to 0.10.x first —
+// the v28→v29 migration (dropping the redundant `merged` column) was removed
+// in v30 (#240) since the v0.9.x → v0.10.x upgrade population has long since
+// migrated. Users below v0.9.x must upgrade to 0.9.x first (see upgrade-guide).
 //
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "29"
+const currentSchemaVersion = "30"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -353,7 +353,7 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 
 	// Seed schema_meta + default feature flags for new databases.
-	_, _ = d.db.ExecContext(ctx, "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', '"+currentSchemaVersion+"')")
+	_, _ = d.db.ExecContext(ctx, "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', ?)", currentSchemaVersion)
 	_, _ = d.db.ExecContext(ctx, `INSERT OR IGNORE INTO feature_flags (key, value) VALUES
 		('protocol.xiaomi', 1),
 		('protocol.rtsp', 1),
@@ -361,12 +361,6 @@ func (d *DB) Init(ctx context.Context) error {
 		('protocol.onvif', 1),
 		('protocol.srt', 1),
 		('protocol.rtmp', 1);`)
-
-	// ── v28 → v29 migration: drop the legacy `merged` column ──
-	// The `merged` bool was fully superseded by `merge_status` TEXT in v13.
-	// All write paths already set both; all read paths prefer merge_status.
-	// SQLite 3.35+ (modernc.org/sqlite v1.x) supports DROP COLUMN.
-	d.migrateV28ToV29(ctx)
 
 	// ── Indexes (final optimized set — all the compound/covering indexes) ──
 	indexes := []string{
@@ -407,14 +401,13 @@ func (d *DB) Init(ctx context.Context) error {
 	// Drop legacy indexes superseded by compound indexes (idempotent).
 	for _, drop := range []string{
 		"DROP INDEX IF EXISTS idx_recordings_camera",   // superseded by idx_recordings_camera_time
-		"DROP INDEX IF EXISTS idx_recordings_merged",   // merged column removed; merge_status indexed separately
 		"DROP INDEX IF EXISTS idx_recordings_archived", // superseded by idx_recordings_archived_time
 		"DROP INDEX IF EXISTS idx_recordings_pinned",   // ancient (v3→v4 rename)
 	} {
 		_, _ = d.db.ExecContext(ctx, drop)
 	}
 
-	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='"+currentSchemaVersion+"' WHERE key='schema_version'")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value=? WHERE key='schema_version'", currentSchemaVersion)
 
 	// Enable auto_vacuum = INCREMENTAL for fresh databases (no-op for existing).
 	_, _ = d.db.ExecContext(ctx, "PRAGMA auto_vacuum = INCREMENTAL")
@@ -423,31 +416,6 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 
 	return nil
-}
-
-// migrateV28ToV29 drops the legacy `merged` bool column from recordings.
-// merge_status (TEXT, added in v13) fully replaces it. All write paths already
-// set merge_status; this is purely removing the redundant column.
-// Safe to call on fresh installs (column never existed) and on already-migrated DBs.
-func (d *DB) migrateV28ToV29(ctx context.Context) {
-	var mergedColExists int
-	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='merged'`).Scan(&mergedColExists)
-	if mergedColExists == 0 {
-		return // fresh install or already migrated
-	}
-	// Safety net: ensure merge_status is populated for any row still at default
-	// 'pending' but with merged=1 (shouldn't happen, but prevents data loss).
-	_, _ = d.db.ExecContext(ctx, `UPDATE recordings SET merge_status = 'merged' WHERE merged = 1 AND merge_status = 'pending'`)
-	// Backup before destructive schema change (best-effort).
-	backupPath := d.path + ".pre-v29-backup"
-	if backupErr := d.Backup(ctx, backupPath); backupErr != nil {
-		logger.Warn("failed to create pre-v29 backup", "path", backupPath, "error", backupErr)
-	}
-	if _, err := d.db.ExecContext(ctx, `ALTER TABLE recordings DROP COLUMN merged`); err != nil {
-		logger.Error("failed to drop merged column (v29 migration)", "error", err)
-	} else {
-		logger.Info("dropped legacy merged column from recordings (migration v29)")
-	}
 }
 
 func (d *DB) Close() error {
