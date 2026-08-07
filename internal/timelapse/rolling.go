@@ -59,6 +59,17 @@ type RollingMergeManager struct {
 	progressMu           sync.Mutex
 	progress             map[string]*progressEntry
 	progressCleanupDelay time.Duration
+	// stopped is set under r.mu by StopAll. Once set, StartSegmentMerge refuses
+	// to launch new merges — this is what makes the wg.Add/wg.Wait pair safe
+	// from the sync.WaitGroup "Add with positive delta must happen before Wait
+	// when counter is zero" rule. Without it, a StartSegmentMerge that races
+	// ahead of StopAll's Wait would call wg.Add(1) after Wait has drained the
+	// counter to zero (data race + potential "WaitGroup is reused before
+	// previous Wait has returned" panic). The flag is read AND the Add is done
+	// atomically under r.mu in StartSegmentMerge, and set under r.mu before the
+	// Wait in StopAll, so StopAll's clear-then-Wait cannot observe a zero
+	// counter while a racing Start is mid-Add.
+	stopped bool
 	// stopMu serializes concurrent StopAll calls. sync.WaitGroup forbids Add
 	// after its counter has gone to zero on a Wait, so two overlapping StopAll
 	// calls (one Wait drains wg to zero, a concurrent StartSegmentMerge does
@@ -95,6 +106,19 @@ func (r *RollingMergeManager) StartSegmentMerge(ctx context.Context, cameraID, s
 	ctx, cancel := context.WithCancel(ctx)
 
 	r.mu.Lock()
+	// Refuse to start a new merge after StopAll has begun tearing down. The
+	// stopped flag + the wg.Add below are under the same r.mu hold as StopAll's
+	// set-stopped+clear, so once StopAll has set stopped and moved on to Wait,
+	// no racing Start can sneak in a wg.Add(1) after the counter reaches zero
+	// (which would violate sync.WaitGroup's "no Add after Wait-at-zero" rule
+	// and trigger a data race / panic). This is the root cause of the
+	// TestRollingMergeManager_ConcurrentStopAllAndStart flake on main CI.
+	if r.stopped {
+		r.mu.Unlock()
+		cancel()
+		slog.Debug("rolling merge: refusing to start new merge after StopAll", "camera_id", cameraID)
+		return
+	}
 	// Cancel any existing merge for this camera before starting a new one.
 	if old, ok := r.active[cameraID]; ok {
 		slog.Warn("rolling merge: replacing active merge for camera", "camera_id", cameraID)
@@ -318,6 +342,10 @@ func (r *RollingMergeManager) StopAll() {
 	defer r.stopMu.Unlock()
 
 	r.mu.Lock()
+	// Set stopped BEFORE clearing + waiting. StartSegmentMerge checks this
+	// flag under the same r.mu, so once we release the lock here no racing
+	// Start can perform a wg.Add(1) after our Wait has drained the counter.
+	r.stopped = true
 	for _, entry := range r.active {
 		entry.cancel()
 	}
