@@ -281,12 +281,13 @@
   onDestroy(() => teardown());
 </script>
 
-<ConfirmDialog
-  open={cancelMergeConfirm}
-  title={t('detail.cancelMerge')}
-  message={t('detail.cancelMergeConfirm')}
-  confirmText={t('detail.cancelMerge')}
-  variant="danger"
-  onconfirm={handleCancelMerge}
-  oncancel={() => (cancelMergeConfirm = false)}
-/>
+{#if cancelMergeConfirm}
+  <ConfirmDialog
+    title={t('detail.cancelMerge')}
+    message={t('detail.cancelMergeConfirm')}
+    confirmText={t('detail.cancelMerge')}
+    variant="danger"
+    onconfirm={handleCancelMerge}
+    oncancel={() => (cancelMergeConfirm = false)}
+  />
+{/if}
