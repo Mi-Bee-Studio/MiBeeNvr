@@ -524,58 +524,12 @@ func (d *DB) ListRecordingTimelineSegments(ctx context.Context, filter model.Rec
 // in minutes (e.g. 480 for UTC+8, -300 for UTC-5); 0 groups by UTC date. The result is
 // bounded by the number of days in the date range (max 31 for a month), so no LIMIT is needed.
 func (d *DB) DailyRecordingSummary(ctx context.Context, filter model.RecordingFilter, tzOffsetMinutes int) ([]model.RecordingDaySummary, error) {
-	// The tz modifier is the first bound parameter (positionally before any WHERE args).
+	// The tz modifier is the first bound parameter (positionally before any WHERE
+	// args) because the SELECT uses date(started_at, ?). Reuse the shared
+	// recordingsFilterWhere (#235) and prepend the modifier to keep arg order.
 	modifier := fmt.Sprintf("%d minutes", tzOffsetMinutes)
-	args := []any{modifier}
-	where := []string{}
-	if filter.CameraID != "" {
-		where = append(where, "camera_id=?")
-		args = append(args, filter.CameraID)
-	}
-	if filter.Merged != nil {
-		if *filter.Merged {
-			where = append(where, "merge_status IN ('merged','daily_merged')")
-		} else {
-			where = append(where, "merge_status NOT IN ('merged','daily_merged')")
-		}
-	}
-	if !filter.StartTime.IsZero() {
-		where = append(where, "started_at>=?")
-		args = append(args, formatTime(filter.StartTime))
-	}
-	if !filter.EndTime.IsZero() {
-		where = append(where, "started_at<=?")
-		args = append(args, formatTime(filter.EndTime))
-	}
-	if len(filter.Formats) > 0 {
-		placeholders := make([]string, len(filter.Formats))
-		for i, f := range filter.Formats {
-			placeholders[i] = "?"
-			args = append(args, string(f))
-		}
-		where = append(where, "format IN ("+strings.Join(placeholders, ",")+")")
-	} else if filter.Format != "" {
-		where = append(where, "format=?")
-		args = append(args, filter.Format)
-	}
-	if filter.Search != "" {
-		pattern := "%" + escapeLike(filter.Search) + "%"
-		where = append(where, "(camera_id LIKE ? ESCAPE '\\' OR format LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\')")
-		args = append(args, pattern, pattern, pattern)
-	}
-	if filter.Archived == nil {
-		where = append(where, "archived=0")
-	} else if *filter.Archived {
-		where = append(where, "archived=1")
-	} else {
-		where = append(where, "archived=0")
-	}
-	// AI class filter (mirrors recordingsFilterWhere; DailyRecordingSummary builds its
-	// own WHERE rather than reusing the shared helper, so replicate the EXISTS here).
-	if filter.AiClass != "" {
-		where = append(where, "EXISTS(SELECT 1 FROM ai_events WHERE ai_events.recording_id = recordings.id AND ai_events.class_name = ?)")
-		args = append(args, filter.AiClass)
-	}
+	where, whereArgs := recordingsFilterWhere(filter)
+	args := append([]any{modifier}, whereArgs...)
 
 	// Conditional aggregation (version-safe — no GROUP_CONCAT(DISTINCT) dependency).
 	// MAX(expr) over a group returns 1 if any row satisfies the condition, 0 otherwise.
@@ -795,9 +749,20 @@ func (d *DB) CleanupIncomplete(ctx context.Context) error {
 	return err
 }
 
-func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
-	rows, err := d.readConn().QueryContext(ctx, sqlstr, retentionDays)
+// listExpiredRecordings is the shared core of the three ListExpired* methods
+// below (#237). cameraID=="" means "all cameras"; archived selects the
+// archived=0/1 partition. retentionDays is always applied.
+func (d *DB) listExpiredRecordings(ctx context.Context, cameraID string, archived, retentionDays int) ([]model.Recording, error) {
+	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=?`
+	args := []any{archived}
+	if cameraID != "" {
+		sqlstr += ` AND camera_id=?`
+		args = append(args, cameraID)
+	}
+	sqlstr += ` AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
+	args = append(args, retentionDays)
+
+	rows, err := d.readConn().QueryContext(ctx, sqlstr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -809,58 +774,24 @@ func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]mo
 		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
 			return nil, err
 		}
-		if mergeStatusStr.Valid && mergeStatusStr.String != "" {
-			r.MergeStatus = mergeStatusStr.String
-		} else if r.MergeStatus == "" {
-			r.MergeStatus = model.MergeStatusPending
-		}
-		r.StartedAt = scanTime(startedAtStr)
-		r.EndedAt = scanTime(endedAtStr)
+		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
 		res = append(res, r)
 	}
 	return res, nil
+}
+
+func (d *DB) ListExpiredRecordings(ctx context.Context, retentionDays int) ([]model.Recording, error) {
+	return d.listExpiredRecordings(ctx, "", 0, retentionDays)
 }
 
 // ListExpiredRecordingsByCamera returns expired recordings for a specific camera
 func (d *DB) ListExpiredRecordingsByCamera(ctx context.Context, cameraID string, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=0 AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
-	rows, err := d.readConn().QueryContext(ctx, sqlstr, cameraID, retentionDays)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var res []model.Recording
-	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
-			return nil, err
-		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, r)
-	}
-	return res, nil
+	return d.listExpiredRecordings(ctx, cameraID, 0, retentionDays)
 }
 
 // ListExpiredArchivedRecordingsByCamera returns expired archived recordings for a specific camera.
 func (d *DB) ListExpiredArchivedRecordingsByCamera(ctx context.Context, cameraID string, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=1 AND camera_id=? AND ended_at < datetime('now', '-' || ? || ' days') ORDER BY ended_at ASC;`
-	rows, err := d.readConn().QueryContext(ctx, sqlstr, cameraID, retentionDays)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var res []model.Recording
-	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
-			return nil, err
-		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, r)
-	}
-	return res, nil
+	return d.listExpiredRecordings(ctx, cameraID, 1, retentionDays)
 }
 
 func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recording, error) {
