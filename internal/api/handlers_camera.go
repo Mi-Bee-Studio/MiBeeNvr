@@ -336,6 +336,14 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		SubnetHints:       body.SubnetHints,
 	}
 
+	// Reject a dirty stable_id at the API boundary so it can't be frozen as the
+	// camera's permanent identity (which would break rediscovery — see #216).
+	// An empty stable_id is allowed (ONVIF cameras auto-populate it later).
+	if strings.TrimSpace(cam.StableID) != "" && !config.IsValidStableID(cam.StableID) {
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("stable_id %q is not a valid hardware identity (must be 3–64 chars of [A-Za-z0-9:_-], not all-same-character; rejects IPs, URLs, all-zero MACs)", cam.StableID))
+		return
+	}
+
 	if h.camMgr == nil {
 		WriteError(w, http.StatusInternalServerError, "camera manager not available")
 		return
@@ -540,6 +548,13 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Reject a dirty stable_id at the API boundary (see #216). nil/empty means
+	// "don't update" and is allowed.
+	if body.StableID != nil && strings.TrimSpace(*body.StableID) != "" && !config.IsValidStableID(*body.StableID) {
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("stable_id %q is not a valid hardware identity (must be 3–64 chars of [A-Za-z0-9:_-], not all-same-character; rejects IPs, URLs, all-zero MACs)", *body.StableID))
 		return
 	}
 

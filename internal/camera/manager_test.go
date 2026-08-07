@@ -2240,3 +2240,71 @@ func TestAddCameraReverseONVIFSkip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, cam3.StableID)
 }
+
+// TestTryFillStableIDFromONVIF_OverwritesDirty verifies the #216 self-heal: a
+// dirty StableID (IP, URL, all-zero MAC — frozen in YAML by a prior firmware
+// glitch) is NOT treated as "already set". The reverse ONVIF lookup runs and
+// overwrites it with the real hardware serial.
+func TestTryFillStableIDFromONVIF_OverwritesDirty(t *testing.T) {
+	realSerial := "744dbd988218"
+	dirtyCases := []struct {
+		name    string
+		dirtyID string
+	}{
+		{"dirty = IP address", "192.168.63.148"},
+		{"dirty = all-zero MAC", "000000000000"},
+		{"dirty = URL", "http://cam/onvif"},
+	}
+	for _, tc := range dirtyCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockClient := &onvif.MockDeviceClient{
+				DeviceInfo: &onvif.DeviceInfo{SerialNumber: realSerial},
+			}
+			cam := &config.CameraConfig{
+				StableID:      tc.dirtyID,
+				Protocol:      "onvif",
+				ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			err := tryFillStableIDFromONVIFWithClient(ctx, cam, mockClient)
+			require.NoError(t, err)
+			assert.Equal(t, realSerial, cam.StableID, "dirty stable_id must be overwritten by the real serial")
+			assert.Equal(t, 1, mockClient.GetDeviceInformationCalls, "lookup must run despite non-empty dirty value")
+		})
+	}
+}
+
+// TestTryFillStableIDFromONVIF_RejectsDirtySerial verifies the firmware-glitch
+// defense (#216, upstream seeed-esp32s3-cam #2): when GetDeviceInformation
+// returns a garbage serial (all-zero, empty, IP-like), it is NOT persisted —
+// the dirty/garbage value cannot re-poison the field.
+func TestTryFillStableIDFromONVIF_RejectsDirtySerial(t *testing.T) {
+	garbageCases := []struct {
+		name   string
+		serial string
+	}{
+		{"all-zero", "000000000000"},
+		{"empty after trim", "   "},
+		{"IP-like", "192.168.1.10"},
+		{"too short", "ab"},
+	}
+	for _, tc := range garbageCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockClient := &onvif.MockDeviceClient{
+				DeviceInfo: &onvif.DeviceInfo{SerialNumber: tc.serial},
+			}
+			cam := &config.CameraConfig{
+				Protocol:      "onvif",
+				ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			err := tryFillStableIDFromONVIFWithClient(ctx, cam, mockClient)
+			require.NoError(t, err, "best-effort: must not return error on garbage serial")
+			assert.Empty(t, cam.StableID, "garbage serial must NOT be persisted")
+		})
+	}
+}
