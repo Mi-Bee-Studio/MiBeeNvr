@@ -1,6 +1,8 @@
 package config
 
-import "testing"
+import (
+	"testing"
+)
 
 // TestIsValidStableID covers the real-world serial formats observed in the
 // field (must accept) and the dirty values that have frozen rediscovery in
@@ -48,6 +50,64 @@ func TestIsValidStableID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := IsValidStableID(tt.s); got != tt.want {
 				t.Errorf("IsValidStableID(%q) = %v, want %v", tt.s, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidateDirtyStableIDDoesNotBlockStartup is the regression guard for the
+// production outage that happened when #216's config-time validation hard-failed
+// on a pre-existing dirty stable_id (an IP persisted by a prior firmware glitch).
+// Validate() MUST tolerate a dirty value — log a warning, defer to the async
+// self-heal path — so that an upgrade never bricks startup on legacy data.
+// The hard rejection happens at the API write boundary instead.
+func TestValidateDirtyStableIDDoesNotBlockStartup(t *testing.T) {
+	dirtyCases := []string{
+		"192.168.63.148",   // IP (the actual production dirty value)
+		"000000000000",     // all-zero MAC
+		"http://cam/onvif", // URL
+	}
+	for _, dirty := range dirtyCases {
+		t.Run(dirty, func(t *testing.T) {
+			cfg := &Config{Cameras: []CameraConfig{{
+				ID:       "cam-test",
+				URL:      "rtsp://x",
+				Protocol: "rtsp",
+				StableID: dirty,
+			}}}
+			cfg.ApplyDefaults()
+			if err := Validate(cfg); err != nil {
+				t.Fatalf("Validate() must not reject a pre-existing dirty stable_id (would brick startup on legacy data, #216): %v", err)
+			}
+			// The dirty value is left in place for the async self-heal path to
+			// overwrite — Validate does not mutate it.
+			if cfg.Cameras[0].StableID != dirty {
+				t.Fatalf("Validate() must not mutate stable_id (self-heal is async): got %q, want %q", cfg.Cameras[0].StableID, dirty)
+			}
+		})
+	}
+}
+
+// TestValidateValidStableIDAccepted confirms a well-formed stable_id passes
+// Validate() without issue (no false-positive rejection of legit serials).
+func TestValidateValidStableIDAccepted(t *testing.T) {
+	validCases := []string{
+		"744dbd988218", // 12-hex MAC
+		"88492D665CCF", // uppercase efuse MAC
+		"SN-AAA",       // vendor serial
+		"",             // empty (ONVIF auto-populates later) — also fine
+	}
+	for _, valid := range validCases {
+		t.Run(valid, func(t *testing.T) {
+			cfg := &Config{Cameras: []CameraConfig{{
+				ID:       "cam-test",
+				URL:      "rtsp://x",
+				Protocol: "rtsp",
+				StableID: valid,
+			}}}
+			cfg.ApplyDefaults()
+			if err := Validate(cfg); err != nil {
+				t.Fatalf("Validate() rejected a valid stable_id %q: %v", valid, err)
 			}
 		})
 	}

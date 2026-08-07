@@ -130,11 +130,17 @@ func validateConfigDetails(cfg *Config) error {
 		}
 
 		// Validate IP self-healing fields (stable_id + subnet_hints).
-		// A non-empty stable_id must pass IsValidStableID: this catches dirty
-		// values (IP, URL, all-zero MAC) at config load instead of freezing
-		// them as the camera's permanent identity and breaking rediscovery (#216).
+		// A non-empty stable_id that fails IsValidStableID (IP, URL, all-zero
+		// MAC — frozen in YAML by a prior firmware glitch, see #216) is logged
+		// as a WARNING, NOT a hard error. Hard-erroring would brick startup on
+		// pre-existing dirty data (the very thing #216 exists to fix). Instead
+		// the value is tolerated at load time and the async self-heal path
+		// (backfillStableIDs / ensureStableID) overwrites it on the next
+		// successful ONVIF lookup. New dirty values are still rejected at the
+		// API write boundary (handleAddCamera / handleUpdateCamera).
 		if strings.TrimSpace(c.StableID) != "" && !IsValidStableID(c.StableID) {
-			return fmt.Errorf("camera[%d].stable_id %q is not a valid hardware identity: must be 3–64 chars of [A-Za-z0-9:_-] and not all-same-character (rejects IPs, URLs, all-zero MACs); see #216", i, c.StableID)
+			slog.Warn("camera stable_id is not a valid hardware identity; will be overwritten by the next ONVIF lookup",
+				"camera_idx", i, "camera_id", c.ID, "stable_id", c.StableID)
 		}
 		for j, hint := range c.SubnetHints {
 			hint = strings.TrimSpace(hint)
