@@ -183,10 +183,24 @@ type AIEventStats struct {
 	Count     int    `json:"count"`
 }
 
-// GetAIEventStats returns event type counts for a camera within a time period.
+// GetAIEventStats returns event type counts within a time period. When cameraID
+// is non-empty, stats are scoped to that camera; when empty, stats aggregate
+// across ALL cameras (global view, #213). The query groups by event_type only,
+// so the result shape is identical in both modes.
 func (d *DB) GetAIEventStats(ctx context.Context, cameraID string, since time.Time) ([]AIEventStats, error) {
-	q := `SELECT event_type, COUNT(*) as cnt FROM ai_events WHERE camera_id = ? AND created_at >= ? GROUP BY event_type ORDER BY cnt DESC`
-	rows, err := d.readConn().QueryContext(ctx, q, cameraID, since.Format("2006-01-02 15:04:05"))
+	var where []string
+	var args []interface{}
+	if cameraID != "" {
+		where = append(where, "camera_id = ?")
+		args = append(args, cameraID)
+	}
+	where = append(where, "created_at >= ?")
+	args = append(args, since.Format("2006-01-02 15:04:05"))
+
+	q := `SELECT event_type, COUNT(*) as cnt FROM ai_events WHERE ` +
+		strings.Join(where, " AND ") +
+		` GROUP BY event_type ORDER BY cnt DESC`
+	rows, err := d.readConn().QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

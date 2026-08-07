@@ -133,16 +133,7 @@ func (h *Handler) handleListAIEvents(w http.ResponseWriter, r *http.Request) {
 		CameraID:  r.URL.Query().Get("camera_id"),
 		EventType: r.URL.Query().Get("event_type"),
 	}
-	if lim := r.URL.Query().Get("limit"); lim != "" {
-		if v, err := strconv.Atoi(lim); err == nil && v > 0 {
-			f.Limit = v
-		}
-	}
-	if off := r.URL.Query().Get("offset"); off != "" {
-		if v, err := strconv.Atoi(off); err == nil && v >= 0 {
-			f.Offset = v
-		}
-	}
+	f.Limit, f.Offset = parsePagination(r, 0, 0) // no default/cap; ListAIEvents clamps to 50 internally
 	// Time-range filtering for timeline overlay support.
 	if startStr := r.URL.Query().Get("start"); startStr != "" {
 		if t, err := time.Parse(time.RFC3339Nano, startStr); err == nil {
@@ -211,11 +202,9 @@ func (h *Handler) handleGetAIEventStats(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// camera_id is optional: when omitted, stats aggregate across ALL cameras
+	// (global view). When present, stats are scoped to that camera (#213).
 	cameraID := r.URL.Query().Get("camera_id")
-	if cameraID == "" {
-		WriteError(w, http.StatusBadRequest, "camera_id is required")
-		return
-	}
 
 	period := r.URL.Query().Get("period")
 	since := getDefaultStatsSince(period)

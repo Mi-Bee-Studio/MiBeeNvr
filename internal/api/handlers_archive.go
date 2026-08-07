@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -63,16 +62,7 @@ func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Req
 		CameraID: cameraID,
 		Archived: &trueVal,
 	}
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			filter.Limit = n
-		}
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			filter.Offset = n
-		}
-	}
+	filter.Limit, filter.Offset = parsePagination(r, 0, 0)
 	filter.SortBy = r.URL.Query().Get("sort_by")
 	filter.SortOrder = r.URL.Query().Get("order")
 
