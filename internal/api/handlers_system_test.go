@@ -100,6 +100,7 @@ func TestUpdateSettings_InvalidTimezone(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
+
 func TestUpdateSettings_ListenPort(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
@@ -166,7 +167,6 @@ func TestGetSettings_IncludesServerListen(t *testing.T) {
 	require.True(t, ok, "expected server object in response")
 	require.Equal(t, ":9090", server["listen"])
 }
-
 
 // --- handleReadyz tests ---
 
