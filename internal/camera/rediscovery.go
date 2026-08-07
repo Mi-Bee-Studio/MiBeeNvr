@@ -26,7 +26,9 @@ func (cm *CameraManager) ensureStableID(cameraID string) {
 		}
 	}
 	// Re-check under lock in case another goroutine filled it already.
-	if cam == nil || strings.TrimSpace(cam.StableID) != "" {
+	// Use IsValidStableID (not just non-empty) so a dirty value frozen in YAML
+	// (IP, URL, all-zero MAC — see #216) gets overwritten by the real serial.
+	if cam == nil || config.IsValidStableID(cam.StableID) {
 		cm.configMu.Unlock()
 		return
 	}
@@ -36,16 +38,22 @@ func (cm *CameraManager) ensureStableID(cameraID string) {
 	defer cancel()
 
 	info := cm.GetCachedDeviceInfo(ctx, cameraID)
-	if info == nil || strings.TrimSpace(info.SerialNumber) == "" {
-		logger.Debug("could not auto-populate stable_id (no serial number)", "camera_id", cameraID)
+	// Gate the returned serial through IsValidStableID: defends against the
+	// firmware glitch (upstream seeed-esp32s3-cam #2) that occasionally returns
+	// all-zero/empty/garbage serials, which would re-poison the field (#216).
+	if info == nil || !config.IsValidStableID(info.SerialNumber) {
+		logger.Debug("could not auto-populate stable_id (no valid serial number)", "camera_id", cameraID)
 		return
 	}
 
 	cm.configMu.Lock()
 	// Locate again under the write lock (slice may have been mutated).
+	// Overwrite when the current value is NOT a valid stable_id — this covers
+	// both "empty" (never set) and "dirty" (IP/URL/all-zero, see #216) so a
+	// once-poisoned value self-heals on the next successful ONVIF lookup.
 	for i := range cm.cfg.Cameras {
 		if cm.cfg.Cameras[i].ID == cameraID {
-			if strings.TrimSpace(cm.cfg.Cameras[i].StableID) == "" {
+			if !config.IsValidStableID(cm.cfg.Cameras[i].StableID) {
 				cm.cfg.Cameras[i].StableID = info.SerialNumber
 				logger.Info("auto-populated stable_id for camera", "camera_id", cameraID, "stable_id", info.SerialNumber)
 			}
@@ -102,9 +110,12 @@ func (cm *CameraManager) backfillStableIDs(ctx context.Context) {
 		cam := cameras[i]
 		yamlStableID := strings.TrimSpace(cam.StableID)
 
-		if yamlStableID != "" {
-			// YAML has stable_id — backfill DB if empty (e.g. cameras added
-			// before the stable_id column migration, or restored from backup).
+		if config.IsValidStableID(yamlStableID) {
+			// YAML has a valid stable_id — backfill DB if empty (e.g. cameras
+			// added before the stable_id column migration, or restored from
+			// backup). A dirty YAML value (IP/URL/all-zero) is NOT backfilled;
+			// it falls through to the ONVIF discovery branch below so the real
+			// serial can overwrite it (#216).
 			dbStableID, err := cm.db.GetCameraStableID(ctx, cam.ID)
 			if err != nil {
 				logger.Warn("backfill: failed to read db stable_id", "camera_id", cam.ID, "error", err)
@@ -118,33 +129,39 @@ func (cm *CameraManager) backfillStableIDs(ctx context.Context) {
 				}
 			}
 		} else if strings.EqualFold(string(cam.Protocol), "onvif") {
-			// YAML has no stable_id for an ONVIF camera — try to discover it.
+			// YAML has no (or dirty) stable_id for an ONVIF camera — try to
+			// discover the real serial. Gate the returned serial through
+			// IsValidStableID to defend against the firmware glitch (upstream
+			// seeed-esp32s3-cam #2) that occasionally returns all-zero/empty.
 			info := cm.GetCachedDeviceInfo(ctx, cam.ID)
-			if info != nil && strings.TrimSpace(info.SerialNumber) != "" {
-				// Write to YAML config (source of truth).
-				cm.configMu.Lock()
-				for j := range cm.cfg.Cameras {
-					if cm.cfg.Cameras[j].ID == cam.ID {
-						if strings.TrimSpace(cm.cfg.Cameras[j].StableID) == "" {
-							cm.cfg.Cameras[j].StableID = info.SerialNumber
-						}
-						break
+			if info == nil || !config.IsValidStableID(info.SerialNumber) {
+				logger.Debug("backfill: could not discover a valid stable_id for onvif camera", "camera_id", cam.ID)
+				continue
+			}
+			serial := info.SerialNumber
+			// Write to YAML config (source of truth). Overwrite when the
+			// current value is NOT a valid stable_id — covers both "empty"
+			// (never set) and "dirty" (#216) so a poisoned value self-heals.
+			cm.configMu.Lock()
+			for j := range cm.cfg.Cameras {
+				if cm.cfg.Cameras[j].ID == cam.ID {
+					if !config.IsValidStableID(cm.cfg.Cameras[j].StableID) {
+						cm.cfg.Cameras[j].StableID = serial
 					}
+					break
 				}
-				cm.configMu.Unlock()
+			}
+			cm.configMu.Unlock()
 
-				if err := cm.persistConfig(); err != nil {
-					logger.Warn("backfill: failed to persist yaml stable_id", "camera_id", cam.ID, "error", err)
-				}
+			if err := cm.persistConfig(); err != nil {
+				logger.Warn("backfill: failed to persist yaml stable_id", "camera_id", cam.ID, "error", err)
+			}
 
-				// Write to DB (best-effort).
-				if cm.db != nil {
-					if err := cm.db.UpdateCameraStableID(ctx, cam.ID, info.SerialNumber); err != nil {
-						logger.Warn("backfill: failed to persist stable_id to db", "camera_id", cam.ID, "error", err)
-					}
+			// Write to DB (best-effort).
+			if cm.db != nil {
+				if err := cm.db.UpdateCameraStableID(ctx, cam.ID, serial); err != nil {
+					logger.Warn("backfill: failed to persist stable_id to db", "camera_id", cam.ID, "error", err)
 				}
-			} else {
-				logger.Debug("backfill: could not discover stable_id for onvif camera", "camera_id", cam.ID)
 			}
 		}
 	}

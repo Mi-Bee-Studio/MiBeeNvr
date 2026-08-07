@@ -404,13 +404,16 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	cm.healthMgr.OnCameraAdded(cam.ID, rec, overrides)
 	logger.Info("started recorder for camera", "camera_id", cam.ID)
 
-	// For ONVIF cameras without a stable_id yet, auto-populate it asynchronously
-	// so IP self-healing (internal/rediscovery) can later re-acquire the camera.
-	// This is best-effort and non-blocking: failures are logged and ignored.
-	// Tracked by onvifEnsureWg so Stop can join these goroutines and avoid a
-	// race between their configMu.Lock + persistConfig + DB write and the
-	// teardown Stop initiates (#163).
-	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.StableID) == "" {
+	// For ONVIF cameras without a valid stable_id yet, auto-populate it
+	// asynchronously so IP self-healing (internal/rediscovery) can later
+	// re-acquire the camera. The guard uses IsValidStableID (not just non-empty)
+	// so a dirty value frozen in YAML (IP/URL/all-zero — see #216) triggers a
+	// fresh ONVIF lookup that overwrites it with the real serial. Best-effort
+	// and non-blocking: failures are logged and ignored. Tracked by
+	// onvifEnsureWg so Stop can join these goroutines and avoid a race between
+	// their configMu.Lock + persistConfig + DB write and the teardown Stop
+	// initiates (#163).
+	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && !config.IsValidStableID(cam.StableID) {
 		cm.launchTrackedEnsure(cm.ensureStableID, cam.ID)
 	}
 	// For ONVIF cameras without a profile_token, persist the auto-selected one

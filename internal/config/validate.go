@@ -18,7 +18,48 @@ var (
 	rePlatformName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 	reResolution   = regexp.MustCompile(`^\d+x\d+$`)
 	reBitrate      = regexp.MustCompile(`^(0|\d+(\.\d+)?[kMG])$`)
+	// reStableID matches the character class allowed for a camera's stable_id
+	// (the hardware-level identity used by IP self-healing / rediscovery):
+	// alphanumerics plus ':', '_', '-'. Length 3–64. This deliberately rejects
+	// values that cannot be a hardware serial: IPs (contain '.'), URLs (contain
+	// '/'), all-zero / all-same-char strings (firmware glitch returns — see
+	// upstream seeed-esp32s3-cam issue #2). See #216.
+	reStableID = regexp.MustCompile(`^[A-Za-z0-9:_-]{3,64}$`)
 )
+
+// IsValidStableID reports whether s is a plausible hardware-identity value
+// suitable for persisting as a camera's StableID. It accepts real-world serial
+// formats observed in the field: 12-hex MAC (lowercase `744dbd988218`), uppercase
+// efuse MAC (`88492D665CCF`), colon-separated MAC (`74:4d:bd:98:82:18`), and
+// vendor serials with `-`/`_` separators (`SN-AAA`, `XIAOMI-CAM-001`). It rejects
+// the dirty values that have caused permanent rediscovery failure in production
+// (see #216): IP addresses, URLs, all-zero, all-same-char, too short/long.
+//
+// Used to gate both write paths (ONVIF reverse lookup, API add/update, config
+// validation) and the "already set, skip" guards so a once-persisted dirty value
+// gets overwritten on the next successful ONVIF lookup instead of being frozen.
+func IsValidStableID(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || !reStableID.MatchString(s) {
+		return false
+	}
+	// Reject all-zero / all-same-character runs. Compare on the alphanumerics
+	// only (skip ':'/'_'/'-' separators) so a colon-separated all-zero MAC like
+	// "00:00:00:00:00:00" is also caught — its alphanumerics are all '0'.
+	var first byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ':' || c == '_' || c == '-' {
+			continue
+		}
+		if first == 0 {
+			first = c
+		} else if c != first {
+			return true
+		}
+	}
+	return false
+}
 
 // validateConfigDetails contains the full per-subsystem validation logic,
 // extracted from Validate() for readability. Order matters: each section may
@@ -89,11 +130,11 @@ func validateConfigDetails(cfg *Config) error {
 		}
 
 		// Validate IP self-healing fields (stable_id + subnet_hints).
-		if strings.TrimSpace(c.StableID) != "" {
-			// Loose sanity: limit length to avoid accidental misuse (e.g. pasting a URL).
-			if len(c.StableID) > 128 {
-				return fmt.Errorf("camera[%d].stable_id is too long (max 128 chars): got %d", i, len(c.StableID))
-			}
+		// A non-empty stable_id must pass IsValidStableID: this catches dirty
+		// values (IP, URL, all-zero MAC) at config load instead of freezing
+		// them as the camera's permanent identity and breaking rediscovery (#216).
+		if strings.TrimSpace(c.StableID) != "" && !IsValidStableID(c.StableID) {
+			return fmt.Errorf("camera[%d].stable_id %q is not a valid hardware identity: must be 3–64 chars of [A-Za-z0-9:_-] and not all-same-character (rejects IPs, URLs, all-zero MACs); see #216", i, c.StableID)
 		}
 		for j, hint := range c.SubnetHints {
 			hint = strings.TrimSpace(hint)

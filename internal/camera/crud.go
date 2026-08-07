@@ -185,7 +185,9 @@ func (cm *CameraManager) publishCameraAdded(ctx context.Context, cam config.Came
 // Creates a one-time ONVIF client (not cached) so the manager's client cache is
 // not polluted by a camera that may not be added (e.g. deduped).
 func tryFillStableIDFromONVIF(ctx context.Context, cam *config.CameraConfig) error {
-	if cam.StableID != "" || cam.Protocol != string(model.ProtoONVIF) || cam.ONVIFEndpoint == "" {
+	// Skip only when a VALID stable_id is already set — a dirty value (IP, URL,
+	// all-zero MAC — see #216) should be overwritten by the real serial.
+	if config.IsValidStableID(cam.StableID) || cam.Protocol != string(model.ProtoONVIF) || cam.ONVIFEndpoint == "" {
 		return nil
 	}
 
@@ -213,7 +215,10 @@ func tryFillStableIDFromONVIFWithClient(ctx context.Context, cam *config.CameraC
 		return nil
 	}
 
-	if serial := strings.TrimSpace(info.SerialNumber); serial != "" {
+	// Only persist a serial that passes IsValidStableID — defends against the
+	// firmware glitch (upstream seeed-esp32s3-cam #2) returning garbage that
+	// would freeze as the camera's identity and break rediscovery (#216).
+	if serial := strings.TrimSpace(info.SerialNumber); config.IsValidStableID(serial) {
 		cam.StableID = serial
 		logger.Info("reverse ONVIF lookup: populated stable_id",
 			"endpoint", cam.ONVIFEndpoint, "stable_id", serial)
