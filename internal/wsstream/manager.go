@@ -601,7 +601,12 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 		wsLogger.Load().Debug("WebSocket viewer disconnected", "camera_id", camID, "viewer_id", viewerID)
 	}()
 
-	// Start read pump to detect client disconnect.
+	// Start read pump to detect client disconnect. The read deadline is set to
+	// 2× the idle timeout so the idle watchdog (which fires at idleTimeout and
+	// enqueues EOS via the channel) reliably runs FIRST. If both used the same
+	// deadline, the read pump's timeout could cancel the viewer before the
+	// watchdog enqueued EOS, dropping the EOS and closing the conn without the
+	// graceful idle signal (#250 follow-up).
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -614,7 +619,7 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 				return
 			default:
 			}
-			conn.SetReadDeadline(time.Now().Add(m.idleTimeout))
+			conn.SetReadDeadline(time.Now().Add(2 * m.idleTimeout))
 			_, _, err := conn.ReadMessage()
 			if err != nil {
 				viewerCancel()
