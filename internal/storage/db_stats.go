@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -47,6 +48,51 @@ func (d *DB) CountRecordingsByCamera(ctx context.Context, cameraID string) (int,
 	var count int
 	err := d.readConn().QueryRowContext(ctx, "SELECT COUNT(*) FROM recordings WHERE camera_id=?", cameraID).Scan(&count)
 	return count, err
+}
+
+// countableTables is the fixed allowlist of tables that CountRowsByCamera may
+// query. Listing them as constants (instead of interpolating a caller-supplied
+// table name into SQL) eliminates the injection surface and keeps schema names
+// inside the storage layer (#231).
+var countableTables = map[string]string{
+	"camera_health_events": "SELECT COUNT(*) FROM camera_health_events WHERE camera_id=?",
+	"ai_events":            "SELECT COUNT(*) FROM ai_events WHERE camera_id=?",
+	"transcoding_tasks":    "SELECT COUNT(*) FROM transcoding_tasks WHERE camera_id=?",
+}
+
+// CountRowsByCamera returns the row count for cameraID in the named table.
+// table MUST be one of the keys in countableTables; any other value returns an
+// error rather than being interpolated into SQL. This is the storage-layer
+// replacement for the CLI's old countRowsByCamera helper (#231).
+func (d *DB) CountRowsByCamera(ctx context.Context, table, cameraID string) (int, error) {
+	q, ok := countableTables[table]
+	if !ok {
+		return 0, fmt.Errorf("storage: CountRowsByCamera: unknown table %q", table)
+	}
+	var count int
+	err := d.readConn().QueryRowContext(ctx, q, cameraID).Scan(&count)
+	return count, err
+}
+
+// ListRecordingFilePathsByCamera returns the file_path of every recording row
+// for cameraID (including empty paths, which the caller filters). It is the
+// storage-layer replacement for the CLI's old listRecordingsByCamera helper,
+// keeping raw SQL out of cmd/ (#231).
+func (d *DB) ListRecordingFilePathsByCamera(ctx context.Context, cameraID string) ([]string, error) {
+	rows, err := d.readConn().QueryContext(ctx, "SELECT file_path FROM recordings WHERE camera_id=?", cameraID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
 }
 
 // GetRecordingTrends returns daily aggregated recording statistics.

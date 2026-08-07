@@ -93,7 +93,7 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 
 	whereClause := ""
 	if len(where) > 0 {
-		whereClause = " WHERE " + joinStrings(where, " AND ")
+		whereClause = " WHERE " + strings.Join(where, " AND ")
 	}
 
 	// Count
@@ -218,10 +218,6 @@ func (d *DB) GetAIEventStats(ctx context.Context, cameraID string, since time.Ti
 		return nil, err
 	}
 	return stats, nil
-}
-
-func joinStrings(ss []string, sep string) string {
-	return strings.Join(ss, sep)
 }
 
 // MarshalBBox converts a [4]float64 to JSON string for storage.
