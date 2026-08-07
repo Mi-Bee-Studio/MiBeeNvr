@@ -11,6 +11,27 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
+// selectRecordingColumns is the canonical "lite" column list for the many
+// list/expired/repair queries that don't need merge-detail (merge_path/tier/
+// progress/error/quality) or AI columns. Pair every SELECT that uses it with
+// scanRecordingRow; both must stay in sync. (#224 — mirrors the
+// selectTimelapseMergeColumns / scanTimelapseMerge pattern in db_timelapse_merge.go.)
+const selectRecordingColumns = `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings`
+
+// scanRecordingRow scans one row of selectRecordingColumns (11 cols) via the
+// shared scanner interface (satisfied by *sql.Row and *sql.Rows), then applies
+// the time/merge_status defaulting. It replaces the per-call-site
+// rows.Scan(...) + scanRecording(...) duplication across ~10 list paths (#224).
+func scanRecordingRow(s scanner) (*model.Recording, error) {
+	var r model.Recording
+	var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
+	if err := s.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+		return nil, err
+	}
+	scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
+	return &r, nil
+}
+
 // scanRecording scans the standard recording columns from a row. It handles the
 // time fields and merge_status defaulting that are common across all SELECT paths.
 // AI fields (ai_status, ai_processed_at, ai_error) are scanned separately by each
@@ -753,7 +774,7 @@ func (d *DB) CleanupIncomplete(ctx context.Context) error {
 // below (#237). cameraID=="" means "all cameras"; archived selects the
 // archived=0/1 partition. retentionDays is always applied.
 func (d *DB) listExpiredRecordings(ctx context.Context, cameraID string, archived, retentionDays int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=?`
+	sqlstr := selectRecordingColumns + ` WHERE ended_at IS NOT NULL AND archived=?`
 	args := []any{archived}
 	if cameraID != "" {
 		sqlstr += ` AND camera_id=?`
@@ -769,13 +790,11 @@ func (d *DB) listExpiredRecordings(ctx context.Context, cameraID string, archive
 	defer rows.Close()
 	var res []model.Recording
 	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+		r, err := scanRecordingRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list expired recordings: %w", err)
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, r)
+		res = append(res, *r)
 	}
 	return res, nil
 }
@@ -795,7 +814,7 @@ func (d *DB) ListExpiredArchivedRecordingsByCamera(ctx context.Context, cameraID
 }
 
 func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE ended_at IS NOT NULL AND archived=0 ORDER BY ended_at ASC LIMIT ?;`
+	sqlstr := selectRecordingColumns + ` WHERE ended_at IS NOT NULL AND archived=0 ORDER BY ended_at ASC LIMIT ?;`
 	rows, err := d.readConn().QueryContext(ctx, sqlstr, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list oldest recordings: %w", err)
@@ -803,13 +822,11 @@ func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recor
 	defer rows.Close()
 	var res []model.Recording
 	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+		r, err := scanRecordingRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list oldest recordings: %w", err)
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, r)
+		res = append(res, *r)
 	}
 	return res, nil
 }
@@ -857,7 +874,7 @@ func (d *DB) PathIsRecordingFile(ctx context.Context, cameraID, fullpath string)
 // ListPendingMJPEGRecordings returns recordings for a camera where format IN ('mjpeg','jpeg')
 // AND merge_status='pending' AND ended_at IS NOT NULL.
 func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE camera_id = ? AND format IN ('mjpeg','jpeg') AND merge_status = 'pending' AND ended_at IS NOT NULL;`
+	sqlstr := selectRecordingColumns + ` WHERE camera_id = ? AND format IN ('mjpeg','jpeg') AND merge_status = 'pending' AND ended_at IS NOT NULL;`
 	rows, err := d.readConn().QueryContext(ctx, sqlstr, cameraID)
 	if err != nil {
 		return nil, fmt.Errorf("list pending mjpeg recordings: %w", err)
@@ -865,13 +882,11 @@ func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([
 	defer rows.Close()
 	var res []model.Recording
 	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+		r, err := scanRecordingRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list pending mjpeg recordings: %w", err)
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, r)
+		res = append(res, *r)
 	}
 	return res, nil
 }
@@ -879,7 +894,7 @@ func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([
 // ListRecordingsWithoutTranscode returns recordings for a camera that have ended
 // but have no corresponding transcoding task, and are not archived.
 func (d *DB) ListRecordingsWithoutTranscode(ctx context.Context, cameraID string) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE camera_id = ? AND ended_at IS NOT NULL AND archived = 0 AND NOT EXISTS (SELECT 1 FROM transcoding_tasks WHERE recording_id = recordings.id) ORDER BY started_at DESC;`
+	sqlstr := selectRecordingColumns + ` WHERE camera_id = ? AND ended_at IS NOT NULL AND archived = 0 AND NOT EXISTS (SELECT 1 FROM transcoding_tasks WHERE recording_id = recordings.id) ORDER BY started_at DESC;`
 	rows, err := d.readConn().QueryContext(ctx, sqlstr, cameraID)
 	if err != nil {
 		return nil, fmt.Errorf("list recordings without transcode: %w", err)
@@ -887,13 +902,11 @@ func (d *DB) ListRecordingsWithoutTranscode(ctx context.Context, cameraID string
 	defer rows.Close()
 	res := make([]model.Recording, 0)
 	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+		r, err := scanRecordingRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list recordings without transcode: %w", err)
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, r)
+		res = append(res, *r)
 	}
 	return res, nil
 }
@@ -902,7 +915,7 @@ func (d *DB) ListRecordingsWithoutTranscode(ctx context.Context, cameraID string
 // non-trivial in size, non-MJPEG, has ended_at set, and merge_status=pending.
 // These are candidates for duration repair via ffprobe.
 func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recording, error) {
-	sqlstr := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE duration = 0 AND file_size > 1048576 AND format != 'mjpeg' AND ended_at IS NOT NULL AND merge_status = 'pending';`
+	sqlstr := selectRecordingColumns + ` WHERE duration = 0 AND file_size > 1048576 AND format != 'mjpeg' AND ended_at IS NOT NULL AND merge_status = 'pending';`
 	rows, err := d.readConn().QueryContext(ctx, sqlstr)
 	if err != nil {
 		return nil, fmt.Errorf("repair zero duration recordings: %w", err)
@@ -910,13 +923,11 @@ func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recordin
 	defer rows.Close()
 	var res []model.Recording
 	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+		r, err := scanRecordingRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("repair zero duration recordings: %w", err)
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, r)
+		res = append(res, *r)
 	}
 	return res, nil
 }
@@ -935,7 +946,7 @@ func (d *DB) UpdateRecordingDuration(ctx context.Context, id string, duration fl
 //
 // cameraID="" scans all cameras. limit caps the result (0 = unlimited).
 func (d *DB) ListZeroDurationRecordings(ctx context.Context, cameraID string, limit int) ([]*model.Recording, error) {
-	query := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE duration = 0 AND ended_at IS NOT NULL`
+	query := selectRecordingColumns + ` WHERE duration = 0 AND ended_at IS NOT NULL`
 	args := []interface{}{}
 	if cameraID != "" {
 		query += " AND camera_id = ?"
@@ -955,13 +966,11 @@ func (d *DB) ListZeroDurationRecordings(ctx context.Context, cameraID string, li
 	defer rows.Close()
 	var res []*model.Recording
 	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+		r, err := scanRecordingRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list zero duration recordings: %w", err)
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, &r)
+		res = append(res, r)
 		if err := rows.Err(); err != nil {
 			return nil, fmt.Errorf("list zero duration recordings: %w", err)
 		}
@@ -1020,7 +1029,7 @@ func (d *DB) BatchGetRecordingAIStatus(ctx context.Context, ids []string) (map[s
 // excluded from merge and pending cleanup.
 func (d *DB) ListDarkRecordings(ctx context.Context, gracePeriod time.Duration) ([]model.Recording, error) {
 	cutoff := time.Now().Add(-gracePeriod).Format("2006-01-02 15:04:05.999999999")
-	q := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE merge_status = 'dark' AND ended_at IS NOT NULL AND ended_at < ? ORDER BY ended_at ASC LIMIT 500;`
+	q := selectRecordingColumns + ` WHERE merge_status = 'dark' AND ended_at IS NOT NULL AND ended_at < ? ORDER BY ended_at ASC LIMIT 500;`
 	rows, err := d.readConn().QueryContext(ctx, q, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("list dark recordings: %w", err)
@@ -1028,13 +1037,11 @@ func (d *DB) ListDarkRecordings(ctx context.Context, gracePeriod time.Duration) 
 	defer rows.Close()
 	var res []model.Recording
 	for rows.Next() {
-		var r model.Recording
-		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+		r, err := scanRecordingRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list dark recordings: %w", err)
 		}
-		scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
-		res = append(res, r)
+		res = append(res, *r)
 	}
 	return res, rows.Err()
 }
