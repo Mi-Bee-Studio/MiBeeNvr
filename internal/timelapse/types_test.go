@@ -43,6 +43,7 @@ func TestMergeTypes(t *testing.T) {
 // --- MergeMode tests ---
 
 func testMergeModeValues(t *testing.T) {
+	t.Helper()
 	if MergeModeAuto != "auto" {
 		t.Errorf("MergeModeAuto = %q, want %q", MergeModeAuto, "auto")
 	}
@@ -55,6 +56,7 @@ func testMergeModeValues(t *testing.T) {
 }
 
 func testMergeModeString(t *testing.T) {
+	t.Helper()
 	if MergeModeAuto.String() != "auto" {
 		t.Errorf("MergeModeAuto.String() = %q, want %q", MergeModeAuto.String(), "auto")
 	}
@@ -67,6 +69,7 @@ func testMergeModeString(t *testing.T) {
 }
 
 func testMergeModeUniqueness(t *testing.T) {
+	t.Helper()
 	vals := map[MergeMode]bool{
 		MergeModeAuto: true,
 		MergeModeMP4:  true,
@@ -80,6 +83,7 @@ func testMergeModeUniqueness(t *testing.T) {
 // --- MergeStatus tests ---
 
 func testMergeStatusValues(t *testing.T) {
+	t.Helper()
 	if MergeStatusNone != "none" {
 		t.Errorf("MergeStatusNone = %q, want %q", MergeStatusNone, "none")
 	}
@@ -95,6 +99,7 @@ func testMergeStatusValues(t *testing.T) {
 }
 
 func testMergeStatusString(t *testing.T) {
+	t.Helper()
 	if MergeStatusNone.String() != "none" {
 		t.Errorf("MergeStatusNone.String() = %q, want %q", MergeStatusNone.String(), "none")
 	}
@@ -110,6 +115,7 @@ func testMergeStatusString(t *testing.T) {
 }
 
 func testMergeStatusUniqueness(t *testing.T) {
+	t.Helper()
 	vals := map[MergeStatus]bool{
 		MergeStatusNone:    true,
 		MergeStatusMerging: true,
@@ -124,6 +130,7 @@ func testMergeStatusUniqueness(t *testing.T) {
 // --- MergeConfig tests ---
 
 func testMergeConfigDefaults(t *testing.T) {
+	t.Helper()
 	cfg := MergeConfig{}
 	if cfg.Enabled {
 		t.Error("MergeConfig.Enabled should default to false")
@@ -149,6 +156,7 @@ func testMergeConfigDefaults(t *testing.T) {
 }
 
 func testMergeConfigValues(t *testing.T) {
+	t.Helper()
 	cfg := MergeConfig{
 		Enabled:        true,
 		Mode:           MergeModeMP4,
@@ -184,6 +192,7 @@ func testMergeConfigValues(t *testing.T) {
 // --- MergeResult tests ---
 
 func testMergeResultDefaults(t *testing.T) {
+	t.Helper()
 	r := MergeResult{}
 	if r.OutputPath != "" {
 		t.Errorf("MergeResult.OutputPath should default to empty, got %q", r.OutputPath)
@@ -203,6 +212,7 @@ func testMergeResultDefaults(t *testing.T) {
 }
 
 func testMergeResultSuccess(t *testing.T) {
+	t.Helper()
 	r := MergeResult{
 		Tier:         TierGo,
 		OutputPath:   "/tmp/merged.mp4",
@@ -231,6 +241,7 @@ func testMergeResultSuccess(t *testing.T) {
 }
 
 func testMergeResultError(t *testing.T) {
+	t.Helper()
 	r := MergeResult{
 		Tier:       TierFFmpeg,
 		Error:      "ffmpeg not found",
@@ -250,6 +261,7 @@ func testMergeResultError(t *testing.T) {
 // --- TimelapseMerger interface tests ---
 
 func testTimelapseMergerInterface(t *testing.T) {
+	t.Helper()
 	merger := &mockMerger{canMerge: true, tier: TierGo}
 
 	if !merger.CanMerge() {
@@ -279,11 +291,13 @@ func testTimelapseMergerInterface(t *testing.T) {
 }
 
 func testTimelapseMergerMethodCount(t *testing.T) {
+	t.Helper()
 	// Compile-time check: mockMerger implements TimelapseMerger.
 	var _ TimelapseMerger = (*mockMerger)(nil)
 }
 
 func testTimelapseMergerAllTiers(t *testing.T) {
+	t.Helper()
 	for _, tier := range []MergeTier{TierFFmpeg, TierGo, TierJPEG} {
 		m := &mockMerger{canMerge: true, tier: tier}
 		if m.Tier() != tier {
@@ -293,6 +307,7 @@ func testTimelapseMergerAllTiers(t *testing.T) {
 }
 
 func testTimelapseMergerCanMergeFalse(t *testing.T) {
+	t.Helper()
 	m := &mockMerger{canMerge: false}
 	if m.CanMerge() {
 		t.Error("mockMerger with canMerge=false should return false")
@@ -302,6 +317,7 @@ func testTimelapseMergerCanMergeFalse(t *testing.T) {
 // --- Human-readable constants test ---
 
 func testConstantsHumanReadable(t *testing.T) {
+	t.Helper()
 	for name, s := range map[string]interface{ String() string }{
 		"MergeModeAuto":      MergeModeAuto,
 		"MergeModeMP4":       MergeModeMP4,
