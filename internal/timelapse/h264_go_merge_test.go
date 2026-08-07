@@ -888,7 +888,7 @@ func TestListH264FrameFiles(t *testing.T) {
 		}
 	}
 
-	result, err := listH264FrameFiles(tmpDir)
+	result, err := listCodecFrameFiles(tmpDir, "h264")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -907,7 +907,7 @@ func TestListH264FrameFiles(t *testing.T) {
 
 func TestListH264FrameFiles_EmptyDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	result, err := listH264FrameFiles(tmpDir)
+	result, err := listCodecFrameFiles(tmpDir, "h264")
 	if err != nil {
 		t.Fatal(err)
 	}

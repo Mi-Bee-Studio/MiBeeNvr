@@ -9,11 +9,8 @@ package timelapse
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -46,7 +43,7 @@ func (m *H264GoMerger) Tier() MergeTier {
 // outputPath with the given fps, and returns a MergeResult.
 func (m *H264GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps int) (*MergeResult, error) {
 	// List and sort frame files.
-	frames, err := listH264FrameFiles(framesDir)
+	frames, err := listCodecFrameFiles(framesDir, "h264")
 	if err != nil {
 		return &MergeResult{Tier: TierGo, Error: err.Error()}, err
 	}
@@ -154,13 +151,15 @@ func (m *H264GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	}
 
 	// First pass: calculate moov size by writing to a buffer.
-	muxer := &h264Muxer{
-		frameCount:  len(frames),
-		sampleSizes: sampleSizes,
-		width:       width,
-		height:      height,
-		avcCData:    avcCData,
-		sampleDur:   sampleDuration,
+	muxer := &codecMuxer{
+		frameCount:        len(frames),
+		sampleSizes:       sampleSizes,
+		width:             width,
+		height:            height,
+		decoderConfigData: avcCData,
+		sampleDur:         sampleDuration,
+		sampleEntryType:   [4]byte{'a', 'v', 'c', '1'},
+		configBoxType:     [4]byte{'a', 'v', 'c', 'C'},
 	}
 
 	buf := &bytesWriter{}
@@ -188,7 +187,7 @@ func (m *H264GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	w := mp4.NewWriter(f)
 
 	// Write ftyp.
-	ftypSize, err := writeFtyp(w)
+	ftypSize, err := writeCodecFtyp(w, [4]byte{'a', 'v', 'c', '1'})
 	if err != nil {
 		return &MergeResult{Tier: TierGo, Error: err.Error()},
 			fmt.Errorf("write ftyp: %w", err)
@@ -213,7 +212,7 @@ func (m *H264GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	}
 
 	// Write mdat box (strips SPS/PPS from samples — they are in avcC only).
-	if err := writeH264Mdat(w, frames, ctx); err != nil {
+	if err := writeCodecMdat(w, frames, ctx, isH264ParamSet); err != nil {
 		f.Close()
 		os.Remove(outputPath)
 		return &MergeResult{Tier: TierGo, Error: err.Error()}, err
@@ -229,391 +228,7 @@ func (m *H264GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	}, nil
 }
 
-// --- H.264 MP4 Muxer ---
-
-// h264Muxer builds the moov box structure for an H.264 video track.
-type h264Muxer struct {
-	frameCount  int
-	sampleSizes []uint32
-	width       int
-	height      int
-	avcCData    []byte
-	sampleDur   time.Duration
-	chunkOffset int64
-}
-
-func (m *h264Muxer) writeMoov(w *mp4.Writer, chunkOffset int64) error {
-	_, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("moov")})
-	if err != nil {
-		return err
-	}
-	if err := m.writeMvhd(w); err != nil {
-		return err
-	}
-	if err := m.writeTrak(w, chunkOffset); err != nil {
-		return err
-	}
-	_, err = w.EndBox()
-	return err
-}
-
-func (m *h264Muxer) writeMvhd(w *mp4.Writer) error {
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mvhd")})
-	if err != nil {
-		return err
-	}
-
-	duration := uint32(m.frameCount) * uint32(m.sampleDur.Milliseconds())
-
-	mvhd := &mp4.Mvhd{
-		Timescale:   1000,
-		DurationV0:  duration,
-		Rate:        0x00010000,
-		Volume:      0x0100,
-		NextTrackID: 2,
-		Matrix: [9]int32{
-			0x00010000, 0, 0,
-			0, 0x00010000, 0,
-			0, 0, 0x40000000,
-		},
-	}
-	if _, err := mp4.Marshal(w, mvhd, mp4.Context{}); err != nil {
-		return err
-	}
-	_, err = w.EndBox()
-	_ = bi
-	return err
-}
-
-func (m *h264Muxer) writeTrak(w *mp4.Writer, chunkOffset int64) error {
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("trak")})
-	if err != nil {
-		return err
-	}
-
-	// tkhd
-	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("tkhd")})
-	if err != nil {
-		return err
-	}
-	duration := uint32(m.frameCount) * uint32(m.sampleDur.Milliseconds())
-	tkhd := &mp4.Tkhd{
-		TrackID:    1,
-		DurationV0: duration,
-		Width:      uint32(m.width) << 16,
-		Height:     uint32(m.height) << 16,
-		Matrix: [9]int32{
-			0x00010000, 0, 0,
-			0, 0x00010000, 0,
-			0, 0, 0x40000000,
-		},
-	}
-	if _, err := mp4.Marshal(w, tkhd, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi2
-
-	// mdia
-	if err := m.writeMdia(w, chunkOffset); err != nil {
-		return err
-	}
-
-	_, err = w.EndBox()
-	_ = bi
-	return err
-}
-
-func (m *h264Muxer) writeMdia(w *mp4.Writer, chunkOffset int64) error {
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdia")})
-	if err != nil {
-		return err
-	}
-
-	duration := uint32(m.frameCount) * uint32(m.sampleDur.Milliseconds())
-
-	// mdhd
-	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdhd")})
-	if err != nil {
-		return err
-	}
-	mdhd := &mp4.Mdhd{
-		Timescale:  1000,
-		DurationV0: duration,
-		Language:   [3]byte{0x15, 0xC0, 0x00},
-	}
-	if _, err := mp4.Marshal(w, mdhd, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi2
-
-	// hdlr
-	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("hdlr")})
-	if err != nil {
-		return err
-	}
-	hdlr := &mp4.Hdlr{
-		HandlerType: [4]byte{'v', 'i', 'd', 'e'},
-		Name:        "VideoHandler\x00",
-	}
-	if _, err := mp4.Marshal(w, hdlr, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi3
-
-	// minf > stbl
-	if err := m.writeMinf(w, chunkOffset); err != nil {
-		return err
-	}
-
-	_, err = w.EndBox()
-	_ = bi
-	return err
-}
-
-func (m *h264Muxer) writeMinf(w *mp4.Writer, chunkOffset int64) error {
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("minf")})
-	if err != nil {
-		return err
-	}
-
-	// vmhd
-	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("vmhd")})
-	if err != nil {
-		return err
-	}
-	if _, err := mp4.Marshal(w, &mp4.Vmhd{Graphicsmode: 0}, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi2
-
-	// dinf > dref > url
-	bi3, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("dinf")})
-	if err != nil {
-		return err
-	}
-	bi4, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("dref")})
-	if err != nil {
-		return err
-	}
-	if _, err := mp4.Marshal(w, &mp4.Dref{EntryCount: 1}, mp4.Context{}); err != nil {
-		return err
-	}
-	bi5, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("url ")})
-	if err != nil {
-		return err
-	}
-	if _, err := mp4.Marshal(w, &mp4.Url{Location: ""}, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi5
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi4
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi3
-
-	// stbl
-	if err := m.writeStbl(w, chunkOffset); err != nil {
-		return err
-	}
-
-	_, err = w.EndBox()
-	_ = bi
-	return err
-}
-
-func (m *h264Muxer) writeStbl(w *mp4.Writer, chunkOffset int64) error {
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stbl")})
-	if err != nil {
-		return err
-	}
-
-	n := m.frameCount
-
-	// stsd > avc1 + avcC
-	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stsd")})
-	if err != nil {
-		return err
-	}
-	if _, err := mp4.Marshal(w, &mp4.Stsd{EntryCount: 1}, mp4.Context{}); err != nil {
-		return err
-	}
-	if err := m.writeAVC1SampleEntry(w); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi2
-
-	// stts
-	bi6, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stts")})
-	if err != nil {
-		return err
-	}
-	sampleDelta := uint32(m.sampleDur.Milliseconds())
-	sttsEntries := make([]mp4.SttsEntry, n)
-	for i := range sttsEntries {
-		sttsEntries[i] = mp4.SttsEntry{
-			SampleCount: 1,
-			SampleDelta: sampleDelta,
-		}
-	}
-	if _, err := mp4.Marshal(w, &mp4.Stts{EntryCount: uint32(n), Entries: sttsEntries}, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi6
-
-	// stsc
-	bi7, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stsc")})
-	if err != nil {
-		return err
-	}
-	stscEntries := []mp4.StscEntry{
-		{FirstChunk: 1, SamplesPerChunk: uint32(n), SampleDescriptionIndex: 1},
-	}
-	if n == 0 {
-		stscEntries = nil
-	}
-	if _, err := mp4.Marshal(w, &mp4.Stsc{EntryCount: uint32(len(stscEntries)), Entries: stscEntries}, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi7
-
-	// stsz
-	bi8, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stsz")})
-	if err != nil {
-		return err
-	}
-	if _, err := mp4.Marshal(w, &mp4.Stsz{SampleSize: 0, SampleCount: uint32(n), EntrySize: m.sampleSizes}, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi8
-
-	// stco
-	bi9, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stco")})
-	if err != nil {
-		return err
-	}
-	stco := &mp4.Stco{EntryCount: 0, ChunkOffset: nil}
-	if n > 0 {
-		stco.EntryCount = 1
-		stco.ChunkOffset = []uint32{uint32(chunkOffset)}
-	}
-	if _, err := mp4.Marshal(w, stco, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi9
-
-	_, err = w.EndBox()
-	_ = bi
-	return err
-}
-
-// writeAVC1SampleEntry writes the avc1 sample entry with the avcC box inside stsd.
-func (m *h264Muxer) writeAVC1SampleEntry(w *mp4.Writer) error {
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("avc1")})
-	if err != nil {
-		return err
-	}
-
-	avc1 := &mp4.VisualSampleEntry{
-		SampleEntry: mp4.SampleEntry{
-			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("avc1")},
-			DataReferenceIndex: 1,
-		},
-		Width:           uint16(m.width),
-		Height:          uint16(m.height),
-		Horizresolution: 0x00480000,
-		Vertresolution:  0x00480000,
-		FrameCount:      1,
-		Depth:           0x0018,
-	}
-	if _, err := mp4.Marshal(w, avc1, mp4.Context{}); err != nil {
-		return err
-	}
-
-	// avcC box (raw decoder configuration data)
-	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("avcC")})
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write(m.avcCData); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi2
-
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi
-	return nil
-}
-
 // --- Helpers ---
-
-// writeFtyp writes the ftyp box and returns its total size.
-func writeFtyp(w *mp4.Writer) (int64, error) {
-	start, _ := w.Seek(0, 1)
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("ftyp")})
-	if err != nil {
-		return 0, err
-	}
-
-	ftyp := &mp4.Ftyp{
-		MajorBrand:   [4]byte{'i', 's', 'o', 'm'},
-		MinorVersion: 0,
-		CompatibleBrands: []mp4.CompatibleBrandElem{
-			{CompatibleBrand: [4]byte{'i', 's', 'o', 'm'}},
-			{CompatibleBrand: [4]byte{'i', 's', 'o', '2'}},
-			{CompatibleBrand: [4]byte{'m', 'p', '4', '1'}},
-			{CompatibleBrand: [4]byte{'a', 'v', 'c', '1'}},
-		},
-	}
-	if _, err := mp4.Marshal(w, ftyp, mp4.Context{}); err != nil {
-		return 0, err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return 0, err
-	}
-	_ = bi
-
-	end, _ := w.Seek(0, 1)
-	return end - start, nil
-}
 
 // isH264ParamSet returns true if the NAL unit is a parameter set (SPS or PPS).
 // These must only appear in the avcC box, not in sample data.
@@ -623,76 +238,6 @@ func isH264ParamSet(nalu []byte) bool {
 	}
 	nalType := nalu[0] & 0x1F
 	return nalType == 7 || nalType == 8 // SPS, PPS
-}
-
-// writeH264Mdat writes the mdat box with H.264 frame data, stripping SPS/PPS
-// from each frame. Parameter sets belong in avcC only — including them in sample
-// data causes MEDIA_ERR_SRC_NOT_SUPPORTED in browsers.
-func writeH264Mdat(w *mp4.Writer, framePaths []string, ctx context.Context) error {
-	// First pass: compute total mdat payload size (excluding param sets).
-	var totalPayloadSize uint32
-	for _, path := range framePaths {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read frame %s: %w", path, err)
-		}
-		for _, nalu := range splitAnnexB(data) {
-			if isH264ParamSet(nalu) {
-				continue
-			}
-			totalPayloadSize += 4 + uint32(len(nalu))
-		}
-	}
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	mdatBoxSize := uint64(8 + totalPayloadSize)
-	_, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: mdatBoxSize})
-	if err != nil {
-		return fmt.Errorf("start mdat: %w", err)
-	}
-
-	// Write each frame as length-prefixed NALUs, skipping param sets.
-	for _, path := range framePaths {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read frame for mdat %s: %w", path, err)
-		}
-
-		for _, nalu := range splitAnnexB(data) {
-			if isH264ParamSet(nalu) {
-				continue
-			}
-			lenBytes := make([]byte, 4)
-			binary.BigEndian.PutUint32(lenBytes, uint32(len(nalu)))
-			if _, err := w.Write(lenBytes); err != nil {
-				return fmt.Errorf("write NALU length: %w", err)
-			}
-			if _, err := w.Write(nalu); err != nil {
-				return fmt.Errorf("write NALU data: %w", err)
-			}
-		}
-	}
-
-	if _, err := w.EndBox(); err != nil {
-		return fmt.Errorf("end mdat: %w", err)
-	}
-	return nil
 }
 
 // buildAvcC builds the AVCDecoderConfiguration record bytes from raw SPS and PPS
@@ -710,55 +255,6 @@ func buildAvcC(sps, pps []byte) []byte {
 		return nil
 	}
 	return buf.Bytes()
-}
-
-// splitAnnexB splits an Annex-B byte stream into individual raw NAL units,
-// stripping the 0x00000001 (or 0x000001) start codes.
-func splitAnnexB(data []byte) [][]byte {
-	var nalus [][]byte
-	start := 0
-	found := false
-
-	for i := 0; i < len(data)-3; i++ {
-		if data[i] == 0 && data[i+1] == 0 {
-			var codeLen int
-			if data[i+2] == 1 {
-				codeLen = 3
-			} else if i+3 < len(data) && data[i+2] == 0 && data[i+3] == 1 {
-				codeLen = 4
-			} else {
-				continue
-			}
-
-			if found {
-				// Extract NALU from start to current position.
-				nalu := data[start:i]
-				// Strip trailing zeros (emulation prevention or padding).
-				for len(nalu) > 0 && nalu[len(nalu)-1] == 0 {
-					nalu = nalu[:len(nalu)-1]
-				}
-				if len(nalu) > 0 {
-					nalus = append(nalus, nalu)
-				}
-			}
-			i += codeLen - 1
-			start = i + 1
-			found = true
-		}
-	}
-
-	// Handle the last NALU.
-	if start < len(data) {
-		nalu := data[start:]
-		for len(nalu) > 0 && nalu[len(nalu)-1] == 0 {
-			nalu = nalu[:len(nalu)-1]
-		}
-		if len(nalu) > 0 {
-			nalus = append(nalus, nalu)
-		}
-	}
-
-	return nalus
 }
 
 // parseH264Dimensions extracts width and height from a raw H.264 SPS NAL unit.
@@ -871,106 +367,3 @@ func parseH264Dimensions(sps []byte) (width, height int) {
 
 	return width, height
 }
-
-// --- Bit-level reader for H.264 SPS parsing ---
-
-type bitReader struct {
-	data    []byte
-	pos     int  // bit position (0-7 in current byte)
-	offset  int  // byte offset
-	overran bool // true if we read past the end of data
-}
-
-func (r *bitReader) readBit() uint8 {
-	if r.offset >= len(r.data) {
-		r.overran = true
-		return 0
-	}
-	bit := (r.data[r.offset] >> (7 - r.pos)) & 1
-	r.pos++
-	if r.pos >= 8 {
-		r.pos = 0
-		r.offset++
-	}
-	return bit
-}
-
-// readBits reads n bits as a uint32 (MSB first).
-func (r *bitReader) readBits(n int) uint32 {
-	var val uint32
-	for range n {
-		val = (val << 1) | uint32(r.readBit())
-	}
-	return val
-}
-
-// readUE reads an unsigned exp-golomb coded value.
-// Returns 0 and sets r.overran on EOF.
-func (r *bitReader) readUE() uint32 {
-	leadingZeros := 0
-	for r.readBit() == 0 {
-		if r.overran {
-			return 0
-		}
-		leadingZeros++
-		if leadingZeros > 31 {
-			r.overran = true
-			return 0
-		}
-	}
-	if leadingZeros == 0 {
-		return 0
-	}
-	// Read leadingZeros more bits to form the value.
-	suffix := r.readBits(leadingZeros)
-	return (1 << leadingZeros) - 1 + suffix
-}
-
-// readSE reads a signed exp-golomb coded value.
-func (r *bitReader) readSE() int32 {
-	ue := r.readUE()
-	if ue == 0 {
-		return 0
-	}
-	if ue&1 == 0 {
-		return -int32(ue / 2)
-	}
-	return int32((ue + 1) / 2)
-}
-
-// skipScalingLists skips scaling list fields in an SPS.
-func skipScalingLists(r *bitReader) {
-	for i := range 8 {
-		if r.readBit() != 0 {
-			size := 16
-			if i >= 6 {
-				size = 64
-			}
-			lastScale := int32(8)
-			nextScale := int32(8)
-			for range size {
-				if nextScale != 0 {
-					delta := r.readSE()
-					nextScale = (lastScale + delta + 256) % 256
-				}
-				lastScale = nextScale
-			}
-		}
-	}
-}
-
-// --- Frame listing ---
-
-// listH264FrameFiles returns a sorted list of .h264 frame files in the directory.
-func listH264FrameFiles(dir string) ([]string, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "frame_*.h264"))
-	if err != nil {
-		return nil, err
-	}
-	// Sort to ensure correct frame order.
-	sort.Strings(matches)
-	return matches, nil
-}
-
-// Ensure H264GoMerger satisfies the TimelapseMerger interface.
-var _ TimelapseMerger = (*H264GoMerger)(nil)

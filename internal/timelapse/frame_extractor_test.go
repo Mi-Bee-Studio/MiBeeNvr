@@ -302,7 +302,11 @@ func createTestMP4(t *testing.T, tmpDir, name string, isH265 bool, samples []tes
 	defer f.Close()
 
 	w := mp4.NewWriter(f)
-	ftypSize, err := writeFtyp(w)
+	brand := [4]byte{'a', 'v', 'c', '1'}
+	if isH265 {
+		brand = [4]byte{'h', 'v', 'c', '1'}
+	}
+	ftypSize, err := writeCodecFtyp(w, brand)
 	if err != nil {
 		t.Fatalf("write ftyp: %v", err)
 	}
