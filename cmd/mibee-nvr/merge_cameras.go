@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -203,11 +202,23 @@ func runMergeCameras() int {
 		fmt.Fprintf(os.Stderr, "Error counting recordings for %q: %v\n", f.sourceID, err)
 		return 1
 	}
-	healthCount := countRowsByCamera(ctx, db.DB(), "camera_health_events", f.sourceID)
-	aiCount := countRowsByCamera(ctx, db.DB(), "ai_events", f.sourceID)
-	transcodeCount := countRowsByCamera(ctx, db.DB(), "transcoding_tasks", f.sourceID)
+	healthCount, err := db.CountRowsByCamera(ctx, "camera_health_events", f.sourceID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error counting health events for %q: %v\n", f.sourceID, err)
+		return 1
+	}
+	aiCount, err := db.CountRowsByCamera(ctx, "ai_events", f.sourceID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error counting AI events for %q: %v\n", f.sourceID, err)
+		return 1
+	}
+	transcodeCount, err := db.CountRowsByCamera(ctx, "transcoding_tasks", f.sourceID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error counting transcoding tasks for %q: %v\n", f.sourceID, err)
+		return 1
+	}
 
-	recordings, err := listRecordingsByCamera(ctx, db.DB(), f.sourceID)
+	filePaths, err := db.ListRecordingFilePathsByCamera(ctx, f.sourceID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error listing recordings for %q: %v\n", f.sourceID, err)
 		return 1
@@ -219,10 +230,10 @@ func runMergeCameras() int {
 
 	var orphanCount int
 	var fileList []string
-	for _, rec := range recordings {
-		if rec.filePath != "" {
-			fileList = append(fileList, rec.filePath)
-			if _, err := os.Stat(rec.filePath); errors.Is(err, fs.ErrNotExist) {
+	for _, p := range filePaths {
+		if p != "" {
+			fileList = append(fileList, p)
+			if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
 				orphanCount++
 			}
 		}
@@ -437,39 +448,6 @@ func applyTargetOverrides(cfg *config.Config, targetID string, f mergeCamerasFla
 			_ = b
 		}
 	}
-}
-
-func countRowsByCamera(ctx context.Context, d *sql.DB, table, cameraID string) int {
-	var count int
-	err := d.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE camera_id=?", table), cameraID).Scan(&count)
-	if err != nil {
-		return 0
-	}
-	return count
-}
-
-type recordingInfo struct {
-	filePath string
-}
-
-func listRecordingsByCamera(ctx context.Context, d *sql.DB, cameraID string) ([]recordingInfo, error) {
-	rows, err := d.QueryContext(ctx,
-		"SELECT file_path FROM recordings WHERE camera_id=?", cameraID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var result []recordingInfo
-	for rows.Next() {
-		var r recordingInfo
-		if err := rows.Scan(&r.filePath); err != nil {
-			return nil, err
-		}
-		result = append(result, r)
-	}
-	return result, rows.Err()
 }
 
 // mergeDiskDirectories moves all files from srcDir into dstDir, preserving
