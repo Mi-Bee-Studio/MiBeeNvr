@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mp4util"
 	"github.com/abema/go-mp4"
 )
 
@@ -696,45 +697,18 @@ func writeH264Mdat(w *mp4.Writer, framePaths []string, ctx context.Context) erro
 
 // buildAvcC builds the AVCDecoderConfiguration record bytes from raw SPS and PPS
 // NAL units (without start codes). Format per ISO 14496-15.
+//
+// Thin wrapper over mp4util.BuildAvcC (the shared single source of truth for
+// the avcC record — see #236). Returns marshaled bytes so callers and tests
+// keep working with the same []byte contract.
 func buildAvcC(sps, pps []byte) []byte {
-	// Extract profile/compatibility/level from SPS.
-	// Raw SPS NALU layout: [NAL header][profile_idc][constraint_flags][level_idc]...
-	profile := byte(66)  // default: Baseline
-	compat := byte(0xC0) // default
-	level := byte(30)    // default: Level 3.0
-	if len(sps) >= 4 {
-		profile = sps[1]
-		compat = sps[2]
-		level = sps[3]
-	}
-
 	var buf bytes.Buffer
-	// configurationVersion
-	buf.WriteByte(1)
-	// AVCProfileIndication
-	buf.WriteByte(profile)
-	// profile_compatibility
-	buf.WriteByte(compat)
-	// AVCLevelIndication
-	buf.WriteByte(level)
-	// Reserved (6 bits) + lengthSizeMinusOne (2 bits) = 0xFF (length size = 4 bytes)
-	buf.WriteByte(0xFF)
-	// Reserved (3 bits) + numOfSequenceParameterSets (5 bits) = 0xE1 (1 SPS)
-	buf.WriteByte(0xE1)
-
-	// SPS
-	spsLen := len(sps)
-	buf.WriteByte(byte(spsLen >> 8))
-	buf.WriteByte(byte(spsLen))
-	buf.Write(sps)
-
-	// PPS
-	buf.WriteByte(1) // numOfPictureParameterSets
-	ppsLen := len(pps)
-	buf.WriteByte(byte(ppsLen >> 8))
-	buf.WriteByte(byte(ppsLen))
-	buf.Write(pps)
-
+	if _, err := mp4.Marshal(&buf, mp4util.BuildAvcC(sps, pps), mp4.Context{}); err != nil {
+		// Marshal of a fully-populated *mp4.AVCDecoderConfiguration never fails
+		// in practice. Return nil on the impossible failure so the caller
+		// surfaces a clearly broken file rather than panicking.
+		return nil
+	}
 	return buf.Bytes()
 }
 

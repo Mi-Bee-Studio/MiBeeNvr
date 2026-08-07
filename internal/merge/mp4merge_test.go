@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mp4util"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/abema/go-mp4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -832,5 +834,51 @@ func TestLimitedWriter_SeekError(t *testing.T) {
 	}
 	if err.Error() != "seek error" {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestMergeHvcC_ByteAlignment is the merge-package mirror of timelapse's
+// TestBuildHvcC_ConservativeTierAndCompat. Before #236, the merge package had
+// NO byte-level hvcC test — only a round-trip ParseSegment check that would
+// silently accept a subtly-wrong hvcC. This test pins the conservative
+// Main-tier / zeroed-compat defaults that make ONVIF SPS inconsistencies
+// (cam-fa049182) playable in Edge, now that the construction is shared via
+// mp4util.BuildHvcC.
+func TestMergeHvcC_ByteAlignment(t *testing.T) {
+	// Inconsistent SPS captured from cam-fa049182 (Main profile + High tier +
+	// stray compat bit). See timelapse TestBuildHvcC_ConservativeTierAndCompat
+	// for the byte-by-byte decode.
+	inconsistentSPS := []byte{
+		0x42, 0x01, 0x21, 0x40, 0x00, 0x00, 0x03,
+		0x00, 0x90, 0x00, 0x00, 0x03, 0x00,
+		0x96, 0xa0, 0x01, 0x40, 0x20, 0x05, 0xa1,
+	}
+	pps := []byte{0x44, 0x01, 0xc1, 0x73, 0xd1, 0x89}
+	vps := []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60}
+
+	// The merge path now builds hvcC via the shared mp4util.BuildHvcC and
+	// marshals it inside writeMergeH265SampleEntry. Marshal here the same way
+	// to inspect the exact bytes that reach the output file.
+	var buf bytes.Buffer
+	hvcC := mp4util.BuildHvcC(vps, inconsistentSPS, pps)
+	if _, err := mp4.Marshal(&buf, hvcC, mp4.Context{}); err != nil {
+		t.Fatalf("mp4.Marshal(hvcC) failed: %v", err)
+	}
+	out := buf.Bytes()
+
+	// Byte 1 must be 0x01 (Main tier forced + Main profile), NOT 0x21.
+	if got := out[1]; got != 0x01 {
+		t.Errorf("hvcC[1] = 0x%02x (space=%d tier=%d profile_idc=%d), want 0x01 "+
+			"(Main tier forced; Edge rejects tier=1 + profile_idc=1)", got, got>>6, (got>>5)&1, got&0x1F)
+	}
+	// Bytes 2-5 (profile compat) and 6-11 (constraint) must be zeroed.
+	for i := 2; i <= 11; i++ {
+		if out[i] != 0x00 {
+			t.Errorf("hvcC[%d] = 0x%02x, want 0x00 (forced to zero)", i, out[i])
+		}
+	}
+	// numOfArrays (byte 22) must be 3.
+	if out[22] != 3 {
+		t.Errorf("hvcC[22] (numOfArrays) = %d, want 3", out[22])
 	}
 }
