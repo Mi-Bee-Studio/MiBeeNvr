@@ -4,6 +4,7 @@ set -euo pipefail
 # MiBee NVR — One-click installer for Linux
 # Usage: curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | bash
 #        or: ./install.sh --version v0.9.0
+#        or: ./install.sh --port 9091 --version v0.9.0
 #        or: ./install.sh --uninstall
 
 REPO="Mi-Bee-Studio/MiBeeNvr"
@@ -12,6 +13,7 @@ BIN_PATH="/usr/local/bin/mibee-nvr"
 SERVICE_NAME="mibee-nvr"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 SERVICE_URL="https://raw.githubusercontent.com/${REPO}/main/deploy/${SERVICE_NAME}.service"
+LISTEN_PORT=""   # Web UI listen port (--port flag or interactive prompt; default 9090)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -126,6 +128,19 @@ init_config() {
 
     info "No config file found. Running init..."
     echo ""
+    # Listen port: --port flag wins; else prompt in interactive (TTY) mode;
+    # else default 9090 (pipe/non-interactive must not block).
+    if [[ -z "${LISTEN_PORT:-}" ]]; then
+        if [[ -t 0 ]]; then
+            read -rp "Listen port [9090]: " LISTEN_PORT
+        fi
+        LISTEN_PORT="${LISTEN_PORT:-9090}"
+    fi
+    if ! [[ "${LISTEN_PORT}" =~ ^[0-9]+$ ]] || (( LISTEN_PORT < 1 || LISTEN_PORT > 65535 )); then
+        error "Invalid listen port: ${LISTEN_PORT} (must be 1-65535)."
+        exit 1
+    fi
+
     read -rp "Enter admin password for Web UI: " -s INSTALL_PASSWORD
     echo ""
     if [[ -z "$INSTALL_PASSWORD" ]]; then
@@ -137,9 +152,9 @@ init_config() {
         --password "$INSTALL_PASSWORD" \
         --data-dir "${DATA_DIR}" \
         --config "${DATA_DIR}/mibee-nvr.yaml" \
-        --listen ":9090"
+        --listen ":${LISTEN_PORT}"
 
-    info "Config initialized at ${DATA_DIR}/mibee-nvr.yaml."
+    info "Config initialized at ${DATA_DIR}/mibee-nvr.yaml (listening on :${LISTEN_PORT})."
 }
 
 install_service() {
@@ -299,9 +314,17 @@ do_install() {
                 fi
                 version="$1"
                 ;;
+            --port)
+                shift
+                if [[ $# -eq 0 ]]; then
+                    error "--port requires an argument (e.g. 9091)"
+                    exit 1
+                fi
+                LISTEN_PORT="$1"
+                ;;
             *)
                 error "Unknown option: $1"
-                echo "Usage: $0 [--version <tag>] [--uninstall]"
+                echo "Usage: $0 [--version <tag>] [--port <port>] [--uninstall]"
                 exit 1
                 ;;
         esac
