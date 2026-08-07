@@ -1,308 +1,66 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  // RecordingDetail.svelte — Host for the recording detail page (#136 refactor).
+  //
+  // Owns: loading/error/delete states, recording orchestration (loadRecording,
+  // next-segment navigation, cross-segment timeline seek, deep-link ?t=/?at=),
+  // keyboard dispatch, and the page chrome (loading/error/delete-confirm).
+  // Delegates to three child components:
+  //   - MergePanel:    merge state machine (SSE/poll/cancel) + onprogress mirror
+  //   - PlaybackPanel: all playback modes (video/timelapse/mjpeg/avi/unsupported)
+  //   - MetaEditor:    info card + actions row + transcode status
+  import { onMount } from 'svelte';
+  import { t } from '$lib/i18n';
+  import type { Recording } from '$lib/api';
   import {
     getRecording,
     deleteRecording,
-    downloadRecording as apiDownloadRecording,
-    getRecordingVideoUrl,
-    getMergedRecordingUrl,
     probeMergedRecordingCodec,
     clearMergedCodecCache,
-    listRecordings,
-    getTimelapseFrames,
-    loadTimelapseFrameBlob,
-    triggerTimelapseMerge,
-    retryRecordingMerge,
-    subscribeTimelapseMergeProgress,
-    cancelMerge,
-    fetchTimelapsePreview,
-    recordTimelineSeek,
-    ApiRequestError
   } from '$lib/api';
-  import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
-  import { enqueueTranscodeTask, getTranscodingStatus, getTranscodingTasks } from '$lib/api/transcoding';
-  import type { Recording, TimelapseFrame, TimelapsePreviewFrame } from '$lib/api';
-  import { formatDate, formatDuration, formatFileSize } from '$lib/format';
-  import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { t } from '$lib/i18n';
-  import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
-  import { showToast } from '$lib/toast';
-  import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
-  import AviPlayback from '../components/AviPlayback.svelte';
-  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import TimelineBar from '$lib/components/TimelineBar.svelte';
+  import { AlertTriangle, RefreshCw } from 'lucide-svelte';
+
+  import MergePanel from './recordings/MergePanel.svelte';
+  import PlaybackPanel from './recordings/PlaybackPanel.svelte';
+  import MetaEditor from './recordings/MetaEditor.svelte';
 
   let { recordingId = '' } = $props();
   let currentId = $state('');
   let recording = $state<Recording | null>(null);
   let loading = $state(true);
   let error = $state('');
+  let loadErrorType = $state<'generic' | 'not_found'>('generic');
   let deleteConfirm = $state(false);
-  let mjpegPlayer: MjpegPlayer | undefined = $state();
-  let videoUrl = $state('');
-  let videoLoading = $state(false);
-let videoSpeed = $state(1);
-let videoFullscreen = $state(false);
-let videoEl = $state<HTMLVideoElement | null>(null);
-let videoCurrentTime = $state(0);
-let videoDuration = $state(0);
-let videoBuffered = $state(0);
-let videoIsPlaying = $state(false);
-let formatBadgeVisible = $state(true);
-let formatBadgeTimeout = $state<ReturnType<typeof setTimeout> | null>(null);
-let videoLoop = $state(false);
-let videoError = $state<string | null>(null);
-let videoErrorMsg = $state('');
-let videoRetryCount = $state(0);
-let videoStalled = $state(false);
-let videoStallTimeout: ReturnType<typeof setTimeout> | null = null;
-const MAX_VIDEO_RETRIES = 3;
-// When true, the merged MP4 failed to load (network error / missing file) and
-// we fall back to the JPEG frame viewer for timelapse/MJPEG recordings.
-let useFrameFallback = $state(false);
-let loadErrorType = $state<'generic' | 'not_found'>('generic');
-  let downloadProgress = $state(0);
-  let isDownloading = $state(false);
-  let nextRecordingId = $state<string | null>(null);
   let isTransitioning = $state(false);
-  // Transcoding state
-  let transcodingStatus = $state<ManagerStatus | null>(null);
-  let transcodingPollInterval: ReturnType<typeof setInterval> | null = null;
-  let transcodeTask = $derived(findTranscodeTask());
 
-let formatLabel = $derived.by(() => {
-  if (!recording) return '';
-  switch (recording.format) {
-    case 'h264': return t('recording.format.h264');
-    case 'h265': return t('recording.format.h265');
-    case 'timelapse': return t('recording.format.timelapse');
-    default: return recording.format;
-  }
-});
+  // Deep-link / cross-segment seek offset handed to PlaybackPanel.
+  let pendingTimelineSeekOffset = $state<number | null>(null);
+  // ?at=<epochMs> absolute timestamp (from the AI events page) — resolved to an
+  // offset once the recording's started_at is known.
+  let pendingTimelineSeekAtMs = $state<number | null>(null);
 
-let formatBadgeClass = $derived.by(() => {
-  if (!recording) return 'badge-neutral';
-  if (recording.format === 'timelapse') return 'bg-cyan-500/20 text-cyan-300 dark:text-cyan-300';
-  if (recording.format === 'h264' || recording.format === 'h265') return 'bg-[var(--color-info)]/20 text-[var(--color-info)]';
-  return 'bg-white/10 th-text-secondary';
-});
+  // Merge state mirror — updated by MergePanel via onprogress, read by
+  // PlaybackPanel + MetaEditor for badges / inline controls.
+  let mergeState = $state({ inProgress: false, pct: 0, eta: '', error: '' });
+  let mergePanel: MergePanel | undefined = $state();
+  let playbackPanel: PlaybackPanel | undefined = $state();
 
-  // Timelapse player state
-  let timelapseFrames = $state<TimelapseFrame[]>([]);
-  let tlCurrentFrame = $state(0);
-  let tlIsPlaying = $state(false);
-  let tlSpeed = $state(1);
-  let tlLoading = $state(false);
-  let tlError = $state('');
-  const tlSpeeds = [1, 2, 4];
-  let tlPlayTimeout: ReturnType<typeof setTimeout> | null = null;
-  let tlBlobCache = $state<Map<number, string>>(new Map());
-  let tlAbortController: AbortController | null = null;
-  let tlLoop = $state(false);
-  let tlSeekLoading = $state(false);
-
-  // Prefetched next-segment data for seamless JPEG-cycler chaining. Populated
-  // by prefetchNextSegmentFrames() when playback crosses ~80% of the current
-  // segment. When playNextFrame() reaches the last frame, it consumes this
-  // cache to continue into the next segment without a full stop+reload.
-  interface PrefetchedSegment {
-    recordingId: string;
-    frames: TimelapseFrame[];
-    blobCache: Map<number, string>;
-  }
-  let prefetchedNextSegment: PrefetchedSegment | null = null;
-  let prefetchingNextSegment = false;
-  let tlSeekTimeout: ReturnType<typeof setTimeout> | null = null;
-
-// Merge state
-let mergeInProgress = $state(false);
-let mergeProgressPct = $state(0);
-let mergeErrorMsg = $state('');
-let mergeAbortController = $state<AbortController | null>(null);
-let selectedMergeDuration = $state('1h');
-let mergeStartTime = $state(0);
-let mergeEta = $state('');
-let mergeReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let cancelMergeConfirm = $state(false);
-
-// Timelapse preview state
-let timelapsePreviewFrames = $state<TimelapsePreviewFrame[]>([]);
-let timelapsePreviewLoading = $state(false);
-let timelapsePreviewError = $state('');
-
-// SessionStorage merge tracking — survives navigation away and page refresh.
-// The pure helpers are extracted to $lib/recording/merge-utils.ts for unit testing.
-import { saveMergeState, clearMergeState, getMergeStateForCamera, computeMergeEta } from '$lib/recording/merge-utils';
-
-/** Restore merge state from DB or sessionStorage when returning to this page */
-function restoreMergeState(rec: Recording) {
-  // Check sessionStorage first — persists across navigation, cleared on completion
-  const stored = getMergeStateForCamera(rec.camera_id);
-  if (stored && stored.status === 'pending' && stored.progress < 100) {
-    mergeInProgress = true;
-    mergeProgressPct = stored.progress;
-    mergeErrorMsg = '';
-    startMergeSse(rec.camera_id, rec.id);
-    startMergePolling(rec.id, rec.camera_id);
-    return;
-  }
-
-  // Fallback: check DB-persisted progress (survives page refresh)
-  if (rec.merge_status === 'pending' && rec.merge_progress != null && rec.merge_progress > 0 && rec.merge_progress < 100) {
-    mergeInProgress = true;
-    mergeProgressPct = rec.merge_progress;
-    mergeErrorMsg = '';
-    // Re-establish SSE subscription for live progress updates
-    startMergeSse(rec.camera_id, rec.id);
-    startMergePolling(rec.id, rec.camera_id);
-    // Also store in sessionStorage for other pages
-    saveMergeState({
-      cameraId: rec.camera_id,
-      recordingId: rec.id,
-      progress: rec.merge_progress,
-      status: 'pending',
-    });
-  }
-  // Check DB-persisted failed status
-  if (rec.merge_status === 'failed' && rec.merge_error) {
-    mergeErrorMsg = rec.merge_error;
-  }
-}
-
-/** Subscribe to merge SSE progress updates for a camera, with auto-reconnection */
-function startMergeSse(cameraId: string, recordingId: string) {
-  let reconnectAttempt = 0;
-  const maxBackoff = 30000;
-
-  function connect() {
-    mergeAbortController?.abort();
-    mergeAbortController = null;
-
-    if (!mergeInProgress) return;
-
-  const ac = subscribeTimelapseMergeProgress(cameraId, (data) => {
-        reconnectAttempt = 0; // Reset backoff on any event
-        if (data.status === 'completed') {
-          stopMergePolling();
-          mergeInProgress = false;
-          mergeProgressPct = 100;
-          mergeEta = '';
-          mergeAbortController = null;
-          clearMergeState(cameraId);
-          // Invalidate the codec cache — the merge just produced a new file
-          // whose codec may differ from what we previously probed (or the
-          // file didn't exist before).
-          clearMergedCodecCache(cameraId);
-          loadRecording();
-          showToast(t('detail.mergeCompleted'), 'success');
-        } else if (data.status === 'failed') {
-          stopMergePolling();
-          mergeInProgress = false;
-          mergeEta = '';
-          mergeErrorMsg = data.error || '';
-          clearMergeState(cameraId);
-          showToast(t('detail.mergeFailed', { error: data.error || '' }), 'error');
-        } else if (data.progress !== undefined) {
-          mergeProgressPct = data.progress;
-          updateMergeEta();
-          saveMergeState({
-            cameraId,
-            recordingId,
-            progress: data.progress,
-            status: 'pending',
-          });
-        }
-      },
-      () => {
-        // SSE error — schedule reconnect
-        scheduleReconnect(cameraId);
-      }
-    );
-
-    mergeAbortController = ac;
-  }
-
-  function scheduleReconnect(cameraId: string) {
-    if (!mergeInProgress) return;
-    const delay = Math.min(maxBackoff, 1000 * Math.pow(2, reconnectAttempt));
-    reconnectAttempt++;
-    if (mergeReconnectTimer) clearTimeout(mergeReconnectTimer);
-    mergeReconnectTimer = setTimeout(async () => {
-      if (!mergeInProgress) return;
-      // Poll DB for current progress before reconnecting
-      try {
-        const rec = await getRecording(recordingId);
-        if (!rec) return;
-        if (rec.merge_status === 'merged') {
-          stopMergePolling();
-          mergeInProgress = false;
-          mergeProgressPct = 100;
-          mergeEta = '';
-          clearMergeState(cameraId);
-          loadRecording();
-          showToast(t('detail.mergeCompleted'), 'success');
-          return;
-        }
-        if (rec.merge_status === 'failed') {
-          stopMergePolling();
-          mergeInProgress = false;
-          mergeEta = '';
-          mergeErrorMsg = rec.merge_error || '';
-          clearMergeState(cameraId);
-          showToast(t('detail.mergeFailed', { error: mergeErrorMsg }), 'error');
-          return;
-        }
-        if (rec.merge_progress > 0) {
-          mergeProgressPct = rec.merge_progress;
-          updateMergeEta();
-        }
-      } catch {}
-      connect();
-    }, delay);
-  }
-
-  connect();
-}
+  // Whether the recording offers a merge action (timelapse/mjpeg without an
+  // already-merged output). Drives merge button visibility in the children.
+  let canMerge = $derived.by(() => {
+    if (!recording) return false;
+    if (recording.format !== 'timelapse' && recording.format !== 'mjpeg') return false;
+    return recording.merge_status !== 'merged' && recording.merge_status !== 'daily_merged';
+  });
 
   async function loadRecording() {
     loading = true;
     error = '';
-    nextRecordingId = null;
     try {
       recording = await getRecording(currentId);
       if (recording) {
-        // Restore merge state from DB if merge is in progress
-        restoreMergeState(recording);
-        useFrameFallback = false; // Reset fallback on each recording load
-
-        if (recording.format === 'mjpeg' || recording.format === 'timelapse') {
-          // Timelapse/MJPEG recordings can have one of two merge outputs:
-          //   - H.264/H.265 MP4 (when the camera produces rtsp_keyframe source
-          //     frames) — browser-playable in <video>.
-          //   - MJPEG-in-MP4 / mjpa (when the camera produces JPEG source
-          //     frames) — NOT browser-playable in <video>, needs the JPEG
-          //     frame cycler.
-          // Probe the merged file's codec via HEAD/X-Timelapse-Codec to pick
-          // the right path. Only probe when a merge output actually exists
-          // (merge_status === 'merged'); otherwise go straight to the frame
-          // cycler.
-          const hasMergedOutput = recording.merge_status === 'merged' && !!recording.merge_path;
-          if (hasMergedOutput) {
-            const codec = await probeMergedRecordingCodec(currentId);
-            if (codec === 'h264' || codec === 'h265') {
-              initVideoPlayer();
-            } else {
-              // mjpa, missing header, or HEAD failed → JPEG frame cycler.
-              initTimelapsePlayer();
-              loadTimelapsePreview();
-            }
-          } else {
-            initTimelapsePlayer();
-            loadTimelapsePreview();
-          }
-        } else if (recording.format === 'h264' || recording.format === 'h265') {
-          initVideoPlayer();
-        }
+        // PlaybackPanel handles player init in its $effect on `recording`.
+        // The codec probe that picks <video> vs cycler for timelapse/mjpeg is
+        // done lazily by PlaybackPanel's mode derivation.
       }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : '';
@@ -319,14 +77,14 @@ function startMergeSse(cameraId: string, recordingId: string) {
     }
   }
 
-  async function loadNextRecording() {
-    if (!recording) return null;
+  async function navigateToNext() {
+    if (!recording) return;
+    // Delegate to PlaybackPanel's next-segment logic via its exported action;
+    // but navigation (currentId + reload) is the host's job. Reuse the same
+    // listRecordings-based next-finder that PlaybackPanel uses internally by
+    // having it call ongotonext → which lands here.
+    const { listRecordings } = await import('$lib/api');
     try {
-      // Fetch a small window of upcoming segments and skip any that have been
-      // folded into a periodic-merge output (merge_status === 'daily_merged').
-      // Those rows had their intermediate .mp4 pruned (WS3) so they have no
-      // standalone playback content — chaining into them would stall.
-      // Limit 5 balances "find the next playable one" against over-fetching.
       const resp = await listRecordings({
         camera_id: recording.camera_id,
         format: recording.format,
@@ -336,71 +94,29 @@ function startMergeSse(cameraId: string, recordingId: string) {
         limit: 5,
         offset: 0,
       });
-      const playable = resp.recordings.find(r => r.merge_status !== 'daily_merged');
-      return playable ?? null;
-    } catch (e) { return null; }
-  }
-  async function handleVideoEnded() {
-    if (videoLoop && videoEl) {
-      videoEl.currentTime = 0;
-      await videoEl.play();
-      return;
-    }
-    const next = await loadNextRecording();
-    if (next) { isTransitioning = true; currentId = next.id; await loadRecording(); isTransitioning = false; }
+      const next = resp.recordings.find(r => r.merge_status !== 'daily_merged');
+      if (next) {
+        isTransitioning = true;
+        window.location.hash = `#/recordings/${next.id}`;
+      }
+    } catch { /* ignore */ }
   }
 
-  function handleTimeUpdate(e: Event) {
-    const video = e.target as HTMLVideoElement;
-    videoCurrentTime = video.currentTime;
-    videoDuration = video.duration || 0;
-    if (video.duration && video.currentTime / video.duration > 0.8 && !nextRecordingId) prefetchNextRecording();
+  // <video> ended → try the next segment.
+  function handleEnded() {
+    void navigateToNext();
   }
 
-  async function prefetchNextRecording() {
-    if (nextRecordingId || !recording) return;
-    const next = await loadNextRecording();
-    if (next) {
-      nextRecordingId = next.id;
-    }
+  // Cross-segment timeline seek: update the hash; the {#key} block in App.svelte
+  // recreates this component with the new recordingId → $effect → loadRecording.
+  // The offset is preserved across the remount via pendingTimelineSeekOffset.
+  function handleTimelineSeek(recordingId: string, offsetSeconds: number) {
+    pendingTimelineSeekOffset = offsetSeconds;
+    isTransitioning = true;
+    window.location.hash = `#/recordings/${recordingId}`;
   }
 
-  async function navigateToNext() {
-    const next = await loadNextRecording();
-    if (next) { isTransitioning = true; currentId = next.id; await loadRecording(); isTransitioning = false; }
-  }
-
-  // --- Timeline seek (M6 DVR-style browsing) ---
-  let pendingTimelineSeekOffset = $state<number | null>(null);
-  // Deep-link absolute timestamp (?at=<epochMs>, used by the AI events page).
-  // Unlike ?t=<offsetSeconds>, the source (an AI event) only knows its absolute
-  // time, not the recording's start. We stash it here and resolve to an offset
-  // once the recording (and thus started_at) is loaded — see the $effect below.
-  let pendingTimelineSeekAtMs = $state<number | null>(null);
-
-  async function handleTimelineSeek(recordingId: string, offsetSeconds: number) {
-    if (!recording) return;
-    const isSegmentSwitch = recordingId !== currentId;
-    // Record observability (fire-and-forget)
-    void recordTimelineSeek(recording.camera_id, isSegmentSwitch ? 'segment' : 'intra');
-
-    if (isSegmentSwitch) {
-      // Switch to target recording by updating the hash route.
-      // The {#key} block in App.svelte recreates this component with the new
-      // recordingId prop, which triggers $effect → loadRecording().
-      pendingTimelineSeekOffset = offsetSeconds;
-      isTransitioning = true;
-      window.location.hash = `#/recordings/${recordingId}`;
-    } else {
-      // Same segment — native seek
-      if (videoEl) videoEl.currentTime = offsetSeconds;
-    }
-  }
-
-  // Resolve a deep-linked absolute timestamp (?at=, set in onMount) into a
-  // recording-relative offset once the recording is loaded. The offset is then
-  // handed to the same pendingTimelineSeekOffset path that ?t= uses, so the
-  // existing handleVideoLoadedMetadata applies it when the <video> is ready.
+  // Resolve ?at= absolute timestamp → offset once recording.started_at is known.
   $effect(() => {
     if (pendingTimelineSeekAtMs == null) return;
     if (!recording || !recording.started_at) return;
@@ -408,574 +124,20 @@ function startMergeSse(cameraId: string, recordingId: string) {
     if (!Number.isFinite(startedAtMs)) return;
     const offsetSec = Math.max(0, Math.floor((pendingTimelineSeekAtMs - startedAtMs) / 1000));
     pendingTimelineSeekAtMs = null;
-    // ?t= takes precedence if both are somehow present (it's the more precise,
-    // already-relative form coming from the recordings timeline).
     if (pendingTimelineSeekOffset == null) pendingTimelineSeekOffset = offsetSec;
   });
 
-  // --- H.265 → H.264 transcode-for-playback ---
-  let transcodeForPlayback = $state(false);
-  let transcodeForPlaybackError = $state('');
-  let transcodePollTimer = $state<ReturnType<typeof setInterval> | null>(null);
-
-  function timelineDate(): string {
-    // Local calendar date of the recording (YYYY-MM-DD in the user's timezone).
-    // toLocaleDateString('en-CA') emits ISO-style YYYY-MM-DD per local time.
-    // Using the UTC date from started_at would put the timeline on the wrong
-    // day for recordings near local midnight (UTC previous day).
-    if (!recording || !recording.started_at) return new Date().toLocaleDateString('en-CA');
-    return new Date(recording.started_at).toLocaleDateString('en-CA');
-  }
-
-  async function startTranscodeForPlayback() {
-    if (!recording) return;
-    transcodeForPlayback = true;
-    transcodeForPlaybackError = '';
-    try {
-      const task = await enqueueTranscodeTask({
-        camera_id: recording.camera_id,
-        recording_id: currentId,
-        target_codec: 'h264',
-      });
-      // Poll until completed
-      transcodePollTimer = setInterval(async () => {
-        try {
-          const resp = await getTranscodingTasks({ camera_id: recording.camera_id, limit: 10 });
-          const t = resp.tasks.find((x) => x.id === task.id);
-          if (!t) return;
-          if (t.status === 'completed') {
-            stopTranscodePoll();
-            transcodeForPlayback = false;
-            showToast(t_('detail.transcodeReady'), 'success');
-            // Reload player — file replaced with H.264 version
-            initVideoPlayer();
-          } else if (t.status === 'failed') {
-            stopTranscodePoll();
-            transcodeForPlayback = false;
-            transcodeForPlaybackError = t.error || t_('detail.transcodeFailed');
-            showToast(transcodeForPlaybackError, 'error');
-          }
-        } catch { /* retry next tick */ }
-      }, 3000);
-    } catch (e) {
-      transcodeForPlayback = false;
-      transcodeForPlaybackError = e instanceof Error ? e.message : t_('detail.transcodeFailed');
-      showToast(transcodeForPlaybackError, 'error');
-    }
-  }
-
-  function stopTranscodePoll() {
-    if (transcodePollTimer) { clearInterval(transcodePollTimer); transcodePollTimer = null; }
-  }
-
-  // Alias for i18n calls inside nested functions (avoids shadowing the imported `t`)
-  const t_ = t;
-
-function initVideoPlayer() {
-  videoSpeed = 1;
-  videoLoading = true;
-  // Merged timelapse uses /merged endpoint; regular video uses /download.
-  // (MJPEG never reaches here — it always uses the frame viewer.)
-  if (recording && recording.format === 'timelapse') {
-    videoUrl = getMergedRecordingUrl(currentId);
-  } else {
-    videoUrl = getRecordingVideoUrl(currentId);
-  }
-  if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
-  videoError = null;
-  videoErrorMsg = '';
-  videoRetryCount = 0;
-  videoStalled = false;
-  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
-
-  // When switching recordings (src already set on an existing <video> element),
-  // Svelte updates the DOM src attribute but the browser does NOT auto-reload.
-  // We must explicitly call load() after Svelte flushes the DOM update.
-  // See: https://html.spec.whatwg.org/#loading-the-media-resource
-  void tick().then(() => {
-    if (videoEl) {
-      videoEl.load();
-    }
+  // Reactively reload when recordingId changes (SPA navigation + cross-segment
+  // seeks that update window.location.hash).
+  $effect(() => {
+    const id = recordingId;
+    if (!id) return;
+    if (currentId === id && recording) return;
+    currentId = id;
+    loading = true;
+    error = '';
+    loadRecording().finally(() => { isTransitioning = false; });
   });
-}
-
-function setVideoSpeed(speed: number) {
-  videoSpeed = speed;
-  const video = document.querySelector('video');
-  if (video) video.playbackRate = speed;
-}
-
-
-function handleVideoLoadedMetadata(e: Event) {
-  const video = e.target as HTMLVideoElement;
-  videoDuration = video.duration || 0;
-  // Apply pending timeline seek after cross-segment switch
-  if (pendingTimelineSeekOffset != null && video) {
-    video.currentTime = Math.min(pendingTimelineSeekOffset, video.duration || pendingTimelineSeekOffset);
-    pendingTimelineSeekOffset = null;
-  }
-}
-
-function handleVideoLoadedData() {
-  videoLoading = false;
-  videoError = null;
-  videoErrorMsg = '';
-  videoRetryCount = 0;
-  videoStalled = false;
-  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
-}
-function handleVideoProgress() {
-  if (!videoEl || !videoEl.buffered.length || !videoEl.duration) {
-    videoBuffered = 0;
-    return;
-  }
-  const bf = videoEl.buffered;
-  for (let i = 0; i < bf.length; i++) {
-    if (bf.start(i) <= videoEl.currentTime && bf.end(i) >= videoEl.currentTime) {
-      videoBuffered = (bf.end(i) / videoEl.duration) * 100;
-      return;
-    }
-  }
-  videoBuffered = (bf.end(bf.length - 1) / videoEl.duration) * 100;
-}
-function handleVideoPlay() {
-  videoIsPlaying = true;
-  // Auto-hide format badge after 3 seconds of playback
-  if (formatBadgeTimeout) clearTimeout(formatBadgeTimeout);
-  formatBadgeTimeout = setTimeout(() => { formatBadgeVisible = false; }, 3000);
-}
-function handleVideoPause() {
-  videoIsPlaying = false;
-  formatBadgeVisible = true;
-  if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
-}
-
-function handleVideoContainerMouseEnter() {
-  formatBadgeVisible = true;
-  if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
-}
-function handleVideoContainerMouseLeave() {
-  if (videoIsPlaying) {
-    formatBadgeTimeout = setTimeout(() => { formatBadgeVisible = false; }, 3000);
-  }
-}
-function toggleVideoLoop() {
-  videoLoop = !videoLoop;
-}
-
-function handleVideoError(e: Event) {
-  const video = e.target as HTMLVideoElement;
-  const mediaError = video.error;
-  if (!mediaError) return;
-
-  videoStalled = false;
-  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
-
-  const code = mediaError.code;
-  // MEDIA_ERR_ABORTED (1) is user-initiated — no recovery UI needed
-  if (code === MediaError.MEDIA_ERR_ABORTED) return;
-
-  videoLoading = false;
-
-  // For merged timelapse recordings, a network / decode / src-not-supported
-  // error likely means the merged MP4 is missing, corrupt, OR the browser
-  // cannot decode its codec (e.g. H.265 on Firefox/Linux Chrome). Fall back to
-  // the JPEG frame viewer instead of showing a dead-end error overlay.
-  if (recording && (recording.format === 'timelapse' || recording.format === 'mjpeg')
-      && recording.merge_status === 'merged' && !useFrameFallback
-      && (code === MediaError.MEDIA_ERR_NETWORK
-        || code === MediaError.MEDIA_ERR_DECODE
-        || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)) {
-    console.warn('Merged MP4 playback failed, falling back to frame viewer',
-      { format: recording.format, errorCode: code });
-    useFrameFallback = true;
-    clearMergedCodecCache(recording.id);
-    videoError = null;
-    videoErrorMsg = '';
-    initTimelapsePlayer();
-    loadTimelapsePreview();
-    return;
-  }
-
-  if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-    videoError = 'src_not_supported';
-    videoErrorMsg = t('detail.videoFormatNotSupported');
-  } else if (code === MediaError.MEDIA_ERR_NETWORK) {
-    videoError = 'network';
-    videoErrorMsg = t('detail.videoNetworkError');
-  } else if (code === MediaError.MEDIA_ERR_DECODE) {
-    videoError = 'decode';
-    videoErrorMsg = t('detail.videoDecodeError');
-  } else {
-    videoError = 'unknown';
-    videoErrorMsg = t('detail.videoUnknownError');
-  }
-}
-
-function handleVideoRetry() {
-  if (videoRetryCount >= MAX_VIDEO_RETRIES) return;
-  videoRetryCount++;
-  videoError = null;
-  videoErrorMsg = '';
-  videoLoading = true;
-  videoStalled = false;
-  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
-
-  const video = document.querySelector('video');
-  if (video) {
-    video.removeAttribute('src');
-    video.load();
-    video.src = videoUrl;
-    video.load();
-  }
-}
-
-function handleVideoCanPlay(e: Event) {
-  videoStalled = false;
-  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
-  videoError = null;
-  videoErrorMsg = '';
-  videoRetryCount = 0;
-}
-
-function handleVideoWaiting() {
-  if (videoStallTimeout) clearTimeout(videoStallTimeout);
-  videoStallTimeout = setTimeout(() => {
-    videoStalled = true;
-  }, 3000);
-}
-
-function handleVideoPlaying() {
-  videoStalled = false;
-  if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
-}
-
-async function handleMergeAndPlay() {
-  if (!recording) return;
-  mergeInProgress = true;
-  mergeProgressPct = 0;
-  mergeErrorMsg = '';
-  mergeStartTime = Date.now();
-  mergeEta = '';
-
-  // Store in sessionStorage so other pages can track this merge
-  saveMergeState({
-    cameraId: recording.camera_id,
-    recordingId: recording.id,
-    progress: 0,
-    status: 'pending',
-  });
-
-  try {
-    if (recording.format === 'timelapse') {
-      // Use direct retry-merge endpoint for timelapse recordings
-      await retryRecordingMerge(recording.id);
-    } else {
-      await triggerTimelapseMerge(recording.camera_id, undefined, selectedMergeDuration);
-    }
-    startMergeSse(recording.camera_id, recording.id);
-    // DB polling fallback when SSE is unavailable (e.g. RollingMergeManager is nil)
-    startMergePolling(recording.id, recording.camera_id);
-  } catch (e) {
-    mergeInProgress = false;
-    mergeErrorMsg = e instanceof Error ? e.message : 'Failed to start merge';
-    clearMergeState(recording.camera_id);
-  }
-}
-
-// DB polling fallback for merge progress (SSE may be unavailable)
-let mergePollTimer = null;
-
-function startMergePolling(recId, camId) {
-  stopMergePolling();
-  let attempts = 0;
-  const maxAttempts = 60; // 2 minutes at 2s interval
-  mergePollTimer = setInterval(async () => {
-    attempts++;
-    try {
-      const rec = await getRecording(recId);
-      if (!rec) { stopMergePolling(); return; }
-      if (rec.merge_progress > 0 && rec.merge_progress < 100) {
-        mergeProgressPct = rec.merge_progress;
-        attempts = 0; // reset timeout when progress changes
-      }
-      if (rec.merge_status === 'merged') {
-        stopMergePolling();
-        mergeInProgress = false;
-        mergeProgressPct = 100;
-        mergeAbortController?.abort();
-        mergeAbortController = null;
-        clearMergeState(camId);
-        loadRecording();
-        showToast(t('detail.mergeCompleted'), 'success');
-      } else if (rec.merge_status === 'failed') {
-        stopMergePolling();
-        mergeInProgress = false;
-        mergeErrorMsg = rec.merge_error || 'Merge failed';
-        mergeAbortController?.abort();
-        mergeAbortController = null;
-        clearMergeState(camId);
-        showToast(t('detail.mergeFailed', { error: mergeErrorMsg }), 'error');
-      } else if (attempts >= maxAttempts) {
-        // Timeout: merge didn't progress, stop polling
-        stopMergePolling();
-        mergeInProgress = false;
-        mergeErrorMsg = 'Merge timed out — no progress detected';
-        clearMergeState(camId);
-      }
-    } catch (_e) { /* retry next interval */ }
-  }, 2000);
-}
-
-function stopMergePolling() {
-  if (mergePollTimer) { clearInterval(mergePollTimer); mergePollTimer = null; }
-}
-
-// --- Cancel Merge ---
-async function handleCancelMerge() {
-  if (!recording) return;
-  cancelMergeConfirm = false;
-  try {
-    await cancelMerge(recording.camera_id);
-    mergeInProgress = false;
-    mergeProgressPct = 0;
-    mergeEta = '';
-    mergeErrorMsg = '';
-    mergeAbortController?.abort();
-    mergeAbortController = null;
-    if (mergeReconnectTimer) { clearTimeout(mergeReconnectTimer); mergeReconnectTimer = null; }
-    stopMergePolling();
-    clearMergeState(recording.camera_id);
-    loadRecording();
-    showToast(t('detail.mergeCancelled'), 'success');
-  } catch (e) {
-    showToast(e instanceof Error ? e.message : 'Failed to cancel merge', 'error');
-  }
-}
-
-// --- Merge ETA ---
-function updateMergeEta() {
-  mergeEta = computeMergeEta(mergeStartTime, mergeProgressPct);
-}
-
-// --- Timelapse Preview ---
-async function loadTimelapsePreview() {
-  if (!recording || recording.format !== 'timelapse') return;
-  timelapsePreviewLoading = true;
-  timelapsePreviewError = '';
-  try {
-    timelapsePreviewFrames = await fetchTimelapsePreview(currentId, 6);
-  } catch (e) {
-    timelapsePreviewError = e instanceof Error ? e.message : 'Failed to load preview';
-    timelapsePreviewFrames = [];
-  } finally {
-    timelapsePreviewLoading = false;
-  }
-}
-  // --- Timelapse JPEG sequence player ---
-
-  async function initTimelapsePlayer() {
-    tlLoading = true;
-    tlError = '';
-    tlIsPlaying = false;
-    tlCurrentFrame = 0;
-    stopTimelapsePlayback();
-    // Abort any in-flight requests from previous recording
-    tlAbortController?.abort();
-    tlAbortController = new AbortController();
-    const signal = tlAbortController.signal;
-    // Clear old blob URLs
-    tlBlobCache.forEach(url => URL.revokeObjectURL(url));
-    tlBlobCache = new Map();
-    // Drop any prefetched next-segment data — it's for a different recording.
-    prefetchedNextSegment = null;
-    prefetchingNextSegment = false;
-    try {
-      timelapseFrames = await getTimelapseFrames(currentId, signal);
-      if (timelapseFrames.length > 0) {
-        await ensureFrameCached(0, signal);
-        prefetchAhead(0, signal);
-      }
-    } catch (e) {
-      if (signal.aborted) return; // cancelled, not an error
-      console.error('Failed to load timelapse frames:', e);
-      tlError = t('detail.failedLoadVideo');
-      timelapseFrames = [];
-    } finally {
-      tlLoading = false;
-    }
-  }
-
-  async function ensureFrameCached(index: number, signal?: AbortSignal) {
-    if (tlBlobCache.has(index) || !timelapseFrames[index]) return;
-    if (signal?.aborted) return;
-    try {
-      const blobUrl = await loadTimelapseFrameBlob(currentId, timelapseFrames[index].filename, signal);
-      if (signal?.aborted) return; // aborted while waiting
-      tlBlobCache.set(index, blobUrl);
-      // Evict old cache entries when over 500 limit
-      if (tlBlobCache.size >= 500) {
-        const keys = [...tlBlobCache.keys()].sort((a, b) => a - b);
-        const toEvict = keys.slice(0, keys.length - 400);
-        for (const k of toEvict) {
-          const url = tlBlobCache.get(k);
-          if (url) URL.revokeObjectURL(url);
-          tlBlobCache.delete(k);
-        }
-      }
-    } catch (e) {
-      if (signal?.aborted) return;
-      console.warn('Failed to load timelapse frame:', index, e);
-    }
-  }
-
-  async function prefetchAhead(fromIndex: number, signal?: AbortSignal) {
-    const windowSize = 200;
-    const batchSize = 20;
-    const end = Math.min(fromIndex + windowSize, timelapseFrames.length);
-    for (let i = fromIndex; i < end; i += batchSize) {
-      if (signal?.aborted) return;
-      const batch = [];
-      for (let j = i; j < Math.min(i + batchSize, end); j++) {
-        if (!tlBlobCache.has(j)) {
-          batch.push(ensureFrameCached(j, signal));
-        }
-      }
-      await Promise.all(batch);
-    }
-  }
-
-  function stopTimelapsePlayback() {
-    if (tlPlayTimeout) {
-      clearTimeout(tlPlayTimeout);
-      tlPlayTimeout = null;
-    }
-  }
-
-  function playNextFrame() {
-    if (!tlIsPlaying) return;
-    const signal = tlAbortController?.signal;
-    if (signal?.aborted) return;
-    const next = tlCurrentFrame + 1;
-
-    // Trigger next-segment prefetch when playback crosses ~80% of the current
-    // segment — gives the prefetch ample time to fetch frames before the
-    // boundary so the chain is seamless.
-    if (timelapseFrames.length > 0 && next >= timelapseFrames.length * 0.8 && !prefetchedNextSegment && !prefetchingNextSegment) {
-      prefetchNextSegmentFrames();
-    }
-
-    if (next >= timelapseFrames.length) {
-      if (tlLoop) {
-        tlCurrentFrame = 0;
-        tlPlayTimeout = setTimeout(playNextFrame, 50);
-        return;
-      }
-      // Seamless chain: if the next segment's frames are prefetched, append
-      // them to the current frame list and continue playing without a stop.
-      // The blob URLs are carried over so no re-fetch is needed.
-      if (prefetchedNextSegment && prefetchedNextSegment.frames.length > 0) {
-        const pre = prefetchedNextSegment;
-        prefetchedNextSegment = null;
-        // Merge: shift current frame index back by current segment length,
-        // then append the prefetched frames + blob cache.
-        // Easiest: switch currentId to the prefetched segment, replace the
-        // frame list + cache, and continue from frame 0.
-        currentId = pre.recordingId;
-        timelapseFrames = pre.frames;
-        // Revoke the OLD cache entries (no longer reachable) and adopt the new.
-        tlBlobCache.forEach(url => URL.revokeObjectURL(url));
-        tlBlobCache = pre.blobCache;
-        tlCurrentFrame = 0;
-        // Clear stale codec cache (different recording).
-        clearMergedCodecCache(pre.recordingId);
-        // Reload the recording metadata in the background (for the side panel,
-        // TimelineBar, etc.) without interrupting playback.
-        void getRecording(pre.recordingId).then(r => { if (r) recording = r; });
-        // Schedule next frame without the full navigateToNext stall.
-        const fps = 10 * tlSpeed;
-        const delay = Math.max(0, (1000 / fps) - 10);
-        tlPlayTimeout = setTimeout(playNextFrame, delay);
-        return;
-      }
-      // No prefetch available → fall back to the legacy stop + navigate path.
-      tlIsPlaying = false;
-      navigateToNext();
-      return;
-    }
-    tlCurrentFrame = next;
-    const loadPromise = tlBlobCache.has(next)
-      ? Promise.resolve()
-      : ensureFrameCached(next, signal);
-    prefetchAhead(next + 1, signal);
-    loadPromise.then(() => {
-      if (signal?.aborted) return;
-      const fps = 10 * tlSpeed;
-      const delay = Math.max(0, (1000 / fps) - 10);
-      tlPlayTimeout = setTimeout(playNextFrame, delay);
-    });
-  }
-
-  // prefetchNextSegmentFrames discovers the next playable timelapse recording
-  // (skipping daily_merged ones) and pre-fetches its frame list + first batch
-  // of blobs so playNextFrame can chain into it without a visible stall.
-  // Failures are silent — worst case we fall back to the navigateToNext path.
-  async function prefetchNextSegmentFrames() {
-    if (!recording || prefetchedNextSegment || prefetchingNextSegment) return;
-    prefetchingNextSegment = true;
-    try {
-      const next = await loadNextRecording();
-      if (!next) return;
-      const frames = await getTimelapseFrames(next.id);
-      if (frames.length === 0) return;
-      const blobCache = new Map<number, string>();
-      // Pre-fetch the first 20 frames so the chain starts instantly.
-      const batchSize = Math.min(20, frames.length);
-      await Promise.all(
-        Array.from({ length: batchSize }, (_, i) =>
-          loadTimelapseFrameBlob(next.id, frames[i].filename)
-            .then(url => blobCache.set(i, url))
-            .catch(() => {})
-        )
-      );
-      prefetchedNextSegment = { recordingId: next.id, frames, blobCache };
-    } catch {
-      // Silent — main playback path remains intact.
-    } finally {
-      prefetchingNextSegment = false;
-    }
-  }
-
-  function tlTogglePlay() {
-    if (tlIsPlaying) {
-      tlIsPlaying = false;
-      stopTimelapsePlayback();
-    } else {
-      if (timelapseFrames.length === 0) return;
-      tlIsPlaying = true;
-      stopTimelapsePlayback();
-      playNextFrame();
-    }
-  }
-
-  function tlSetSpeed(speed: number) {
-    tlSpeed = speed;
-  }
-
-  function tlSeek(index: number) {
-    const target = Math.max(0, Math.min(index, timelapseFrames.length - 1));
-    tlCurrentFrame = target;
-    const signal = tlAbortController?.signal;
-    if (!tlBlobCache.has(target)) {
-      // Show spinner only if loading takes >500ms
-      tlSeekTimeout = setTimeout(() => { tlSeekLoading = true; }, 500);
-      ensureFrameCached(target, signal).finally(() => {
-        if (tlSeekTimeout) { clearTimeout(tlSeekTimeout); tlSeekTimeout = null; }
-        tlSeekLoading = false;
-      });
-    }
-    prefetchAhead(target + 1, signal);
-  }
 
   async function confirmDelete() {
     if (!recording) return;
@@ -990,262 +152,88 @@ async function loadTimelapsePreview() {
 
   function goBack() { window.location.hash = '#/recordings'; }
 
-  async function handleDownload() {
-    if (isDownloading || !recording) return;
-    isDownloading = true;
-    downloadProgress = 0;
-    try {
-      await apiDownloadRecording(recording.id, (loaded, total) => {
-        downloadProgress = Math.round((loaded / total) * 100);
-      });
-    } catch (e) { console.error('Download failed:', e); }
-    finally { isDownloading = false; downloadProgress = 0; }
+  // Merge completion → reload recording (re-probe codec, refresh merge_status).
+  function onMergeCompleted() {
+    if (recording) clearMergedCodecCache(recording.camera_id);
+    void loadRecording();
   }
 
-  // --- Transcoding ---
-  async function loadTranscodingStatus() {
-    try {
-      transcodingStatus = await getTranscodingStatus();
-    } catch (e) {
-      // Silently fail — not critical
-    }
-  }
-
-  function startTranscodingPoll() {
-    stopTranscodingPoll();
-    loadTranscodingStatus();
-    transcodingPollInterval = setInterval(loadTranscodingStatus, 3000);
-  }
-
-  function stopTranscodingPoll() {
-    if (transcodingPollInterval) {
-      clearInterval(transcodingPollInterval);
-      transcodingPollInterval = null;
-    }
-  }
-
-  function findTranscodeTask(): TranscodeTask | undefined {
-    if (!transcodingStatus?.recent_results) return undefined;
-    return transcodingStatus.recent_results.find(
-      (t) => t.recording_id === currentId
-    );
-  }
-
-  async function handleTranscode() {
-    if (!recording) return;
-    const targetCodec = recording.format === 'h264' ? 'h265' : recording.format === 'h265' ? 'h264' : 'h264';
-    try {
-      await enqueueTranscodeTask({
-        camera_id: recording.camera_id,
-        recording_id: recording.id,
-        target_codec: targetCodec,
-        replace_original: false,
-      });
-      showToast(t('transcoding.recordings.transcodeSuccess', { camera: recording.camera_id }), 'success');
-      loadTranscodingStatus();
-    } catch (e) {
-      showToast(t('transcoding.recordings.transcodeFailed'), 'error');
-    }
-  }
+  // --- Keyboard dispatcher (host owns it; forwards to PlaybackPanel + MergePanel) ---
   function handleKeydown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     switch (e.key) {
       case ' ':
         e.preventDefault();
-        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('togglePlay');
-        else if (recording?.format === 'timelapse') tlTogglePlay();
-        else if (recording?.format === 'h264' || recording?.format === 'h265') {
-          const video = document.querySelector('video');
-          if (video) { if (video.paused) video.play(); else video.pause(); }
-        }
+        playbackPanel?.handleKeyAction('space');
         break;
       case 'ArrowLeft':
         e.preventDefault();
-        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('prevFrame');
-        else if (recording?.format === 'timelapse') tlSeek(tlCurrentFrame - 1);
-        else { const v = document.querySelector('video'); if (v) v.currentTime = Math.max(0, v.currentTime - 5); }
+        playbackPanel?.handleKeyAction('arrowleft');
         break;
       case 'ArrowRight':
         e.preventDefault();
-        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('nextFrame');
-        else if (recording?.format === 'timelapse') tlSeek(tlCurrentFrame + 1);
-        else { const v = document.querySelector('video'); if (v) v.currentTime = Math.min(v.duration, v.currentTime + 5); }
+        playbackPanel?.handleKeyAction('arrowright');
         break;
       case 'Escape':
         if (document.fullscreenElement) { document.exitFullscreen(); break; }
         goBack();
         break;
-      case 'f':
-      case 'F':
+      case 'f': case 'F':
         e.preventDefault();
-        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('toggleFullscreen');
-        else if (recording?.format === 'timelapse') toggleFullscreen();
-        else toggleVideoFullscreen();
+        playbackPanel?.handleKeyAction('f');
         break;
-      case 'l':
-      case 'L':
+      case 'l': case 'L':
         e.preventDefault();
-        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('toggleLoop');
-        else if (recording?.format === 'timelapse') tlToggleLoop();
-        else if (recording?.format === 'h264' || recording?.format === 'h265') toggleVideoLoop();
+        playbackPanel?.handleKeyAction('l');
         break;
       case 'Home':
         e.preventDefault();
-        if (recording?.format === 'mjpeg') mjpegPlayer?.handleKeyAction('home');
-        else if (recording?.format === 'timelapse') tlSeek(0);
-        else if (recording?.format === 'h264' || recording?.format === 'h265') setVideoSpeed(1);
+        playbackPanel?.handleKeyAction('home');
+        break;
+      case 'c': case 'C':
+        mergePanel?.handleKeyAction('c');
         break;
     }
   }
-  function tlToggleLoop() {
-    tlLoop = !tlLoop;
-  }
-
-  function toggleFullscreen() {
-    const el = document.querySelector('.timelapse-container');
-    if (!el) return;
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      el.requestFullscreen();
-    }
-  }
-
-  function toggleVideoFullscreen() {
-    const el = document.querySelector('.video-container');
-    if (!el) return;
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      el.requestFullscreen();
-    }
-  }
-
-  $effect(() => {
-    function onFSChange() {
-      videoFullscreen = !!document.fullscreenElement;
-    }
-    document.addEventListener('fullscreenchange', onFSChange);
-    return () => {
-      document.removeEventListener('fullscreenchange', onFSChange);
-    };
-  });
-
-
-  function getFrameTimestamp(): string {
-    if (!recording || !timelapseFrames[tlCurrentFrame]) return '';
-    const start = new Date(recording.started_at).getTime();
-    const frame = timelapseFrames[tlCurrentFrame];
-    // Use frame.timestamp if available, otherwise estimate from index
-    if (frame.timestamp) {
-      const ts = new Date(frame.timestamp).getTime();
-      const diff = Math.max(0, ts - start);
-      const totalSec = Math.floor(diff / 1000);
-      const h = Math.floor(totalSec / 3600);
-      const m = Math.floor((totalSec % 3600) / 60);
-      const s = totalSec % 60;
-      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    }
-    // Fallback: estimate from frame index
-    const totalFrames = timelapseFrames.length;
-    const durationMs = recording.duration * 1000;
-    const estimatedSec = Math.floor((tlCurrentFrame / Math.max(1, totalFrames)) * (durationMs / 1000));
-    const h = Math.floor(estimatedSec / 3600);
-    const m = Math.floor((estimatedSec % 3600) / 60);
-    const s = estimatedSec % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  }
-
-  $effect(() => {
-    return () => {
-      // Save current merge state before cleanup so other pages can pick it up
-      if (mergeInProgress && recording) {
-        saveMergeState({
-          cameraId: recording.camera_id,
-          recordingId: recording.id,
-          progress: mergeProgressPct,
-          status: 'pending',
-        });
-      }
-      // Abort all in-flight timelapse frame requests
-      tlAbortController?.abort();
-      tlAbortController = null;
-      // Abort merge SSE connection (merge continues on server, progress in DB)
-      mergeAbortController?.abort();
-      mergeAbortController = null;
-      // Clear merge reconnect timer
-      if (mergeReconnectTimer) { clearTimeout(mergeReconnectTimer); mergeReconnectTimer = null; }
-      tlBlobCache.forEach(url => URL.revokeObjectURL(url));
-      tlBlobCache = new Map();
-      stopTimelapsePlayback();
-      // Clear format badge auto-hide timeout
-      if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
-      if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
-    };
-  });
-
-// --- MJPEG player auto-init when component mounts ---
-
-$effect(() => {
-  if (recording?.format === 'mjpeg' && mjpegPlayer) {
-    mjpegPlayer.initPlayer();
-  }
-});
-
-  // Reactively reload when recordingId prop changes (handles SPA navigation between recordings
-  // AND timeline cross-segment seeks which update window.location.hash)
-  $effect(() => {
-    const id = recordingId;
-    if (!id) return;
-    if (currentId === id && recording) return; // already loaded this recording
-    currentId = id;
-    loading = true;
-    error = '';
-    loadRecording().finally(() => {
-      isTransitioning = false;
-    });
-  });
 
   onMount(() => {
-    startTranscodingPoll();
     window.addEventListener('keydown', handleKeydown);
-
-    // Deep-link seek offset: when arriving from the DayTimeline (hash includes
-    // ?t=N), read the offset and set it as the pending seek so handleVideoLoadedMetadata
-    // applies it once the video element is ready. This reuses the exact same
-    // mechanism the in-page TimelineBar cross-segment seek uses.
+    // Deep-link seek offsets (?t= / ?at=) from the DayTimeline / AI events page.
     try {
       const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
       const tParam = params.get('t');
       if (tParam !== null) {
         const off = Number(tParam);
-        if (Number.isFinite(off) && off >= 0) {
-          pendingTimelineSeekOffset = off;
-        }
+        if (Number.isFinite(off) && off >= 0) pendingTimelineSeekOffset = off;
       } else {
-        // ?at=<epochMs>: an absolute wall-clock time (from the AI events page,
-        // which only knows the event's timestamp, not the recording-relative
-        // offset). Resolved against recording.started_at in the $effect above.
         const atParam = params.get('at');
         if (atParam !== null) {
           const atMs = Number(atParam);
           if (Number.isFinite(atMs)) pendingTimelineSeekAtMs = atMs;
         }
       }
-    } catch {}
+    } catch { /* ignore malformed query */ }
 
     return () => {
       window.removeEventListener('keydown', handleKeydown);
-      stopTranscodingPoll();
-      stopMergePolling();
-      stopTranscodePoll();
+      // MergePanel owns its own teardown (onDestroy); no merge cleanup needed here.
     };
   });
 </script>
+
+<!-- MergePanel is a headless controller (no visible UI except its cancel dialog).
+     It tracks merge progress and pushes state updates via onprogress. -->
+<MergePanel
+  bind:this={mergePanel}
+  {recording}
+  {currentId}
+  onmergecompleted={onMergeCompleted}
+  onprogress={(info) => (mergeState = info)}
+/>
+
 <div class="min-h-screen th-bg-primary pt-[68px]">
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <!-- Loading state -->
     {#if loading}
       <div class="flex justify-center items-center h-64">
         <div class="spinner spinner-lg"></div>
@@ -1257,10 +245,10 @@ $effect(() => {
         <p class="th-text-secondary mb-4">{error}</p>
         <div class="flex justify-center gap-3">
           {#if loadErrorType === 'generic'}
-          <button onclick={loadRecording} class="btn btn-primary btn-sm flex items-center gap-1">
-            <RefreshCw size={14} />
-            {t('common.retry')}
-          </button>
+            <button onclick={loadRecording} class="btn btn-primary btn-sm flex items-center gap-1">
+              <RefreshCw size={14} />
+              {t('common.retry')}
+            </button>
           {/if}
           <button onclick={goBack} class="btn btn-secondary btn-sm">
             {t('detail.goBack')}
@@ -1271,513 +259,33 @@ $effect(() => {
       <div class="space-y-6">
         <!-- Playback section -->
         <div class="card border th-border overflow-hidden">
-          {#if recording.format === 'h264' || recording.format === 'h265'}
-            <div role="presentation"
-              class="video-container relative max-w-full bg-black rounded-t-[var(--radius-md)]"
-              onmouseenter={handleVideoContainerMouseEnter}
-              onmouseleave={handleVideoContainerMouseLeave}>
-              {#if isTransitioning}
-                <div class="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
-                  <Loader2 size={32} class="animate-spin th-text-secondary" />
-                </div>
-              {/if}
-              {#if videoUrl}
-                <video bind:this={videoEl} preload="metadata" controlsList="nodownload" class="w-full max-h-[80vh]" src={videoUrl}
-                  onended={handleVideoEnded} ontimeupdate={handleTimeUpdate} onplay={handleVideoPlay} onpause={handleVideoPause}
-                  onloadedmetadata={handleVideoLoadedMetadata} onprogress={handleVideoProgress} onloadeddata={handleVideoLoadedData}
-                  onerror={handleVideoError} onwaiting={handleVideoWaiting} oncanplay={handleVideoCanPlay} onplaying={handleVideoPlaying}>
-                  <track kind="captions" />
-                  {t('detail.videoUnsupported')}
-                </video>
-                {#if videoLoading}
-                  <div class="absolute inset-0 skeleton-shimmer" style="border-radius: var(--radius-md) var(--radius-md) 0 0;"></div>
-                {/if}
-                {#if videoError}
-                <div class="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20 p-6">
-                  <AlertTriangle size={48} class="th-color-danger mb-3" />
-                  <p class="text-white text-center text-sm mb-4">{videoErrorMsg}</p>
-                  {#if videoError === 'src_not_supported' && recording.format === 'h265'}
-                    {#if transcodeForPlayback}
-                      <div class="flex items-center gap-2 text-white/80 mb-3">
-                        <Loader2 size={16} class="animate-spin" />
-                        <span class="text-sm">{t('detail.transcodingForPlayback')}</span>
-                      </div>
-                    {:else if transcodeForPlaybackError}
-                      <p class="text-red-400 text-xs mb-3">{transcodeForPlaybackError}</p>
-                      <button onclick={startTranscodeForPlayback} class="btn btn-primary btn-sm flex items-center gap-1 mb-3">
-                        <RefreshCw size={14} />
-                        {t('detail.transcodeToH264')}
-                      </button>
-                    {:else}
-                      <button onclick={startTranscodeForPlayback} class="btn btn-primary btn-sm flex items-center gap-1 mb-3">
-                        <RefreshCw size={14} />
-                        {t('detail.transcodeToH264')}
-                      </button>
-                    {/if}
-                  {/if}
-                  {#if videoRetryCount < MAX_VIDEO_RETRIES}
-                    <button onclick={handleVideoRetry} class="btn btn-primary btn-sm flex items-center gap-1">
-                      <RefreshCw size={14} />
-                      {videoRetryCount > 0 ? t('detail.videoRetrying', { count: String(videoRetryCount), max: String(MAX_VIDEO_RETRIES) }) : t('common.retry')}
-                    </button>
-                  {:else}
-                    <p class="text-white/70 text-xs mb-3">{t('detail.videoMaxRetries')}</p>
-                    <button onclick={goBack} class="btn btn-secondary btn-sm">{t('detail.goBack')}</button>
-                  {/if}
-                </div>
-                {:else if videoStalled}
-                <div class="absolute inset-0 bg-black/40 flex items-center justify-center z-20">
-                  <div class="flex items-center gap-2 text-white/80">
-                    <Loader2 size={20} class="animate-spin" />
-                    <span class="text-sm">{t('detail.videoBuffering')}</span>
-                  </div>
-                </div>
-                {/if}
-              {:else if !loading}
-                <div class="flex items-center justify-center h-64 th-text-muted">{t('detail.failedLoadVideo')}</div>
-              {/if}
-
-            <!-- Format badge overlay -->
-            <div class="absolute top-2 left-2 z-10 pointer-events-none transition-opacity duration-300 ease-in-out"
-              style="opacity: {formatBadgeVisible ? 1 : 0};">
-              <span class="badge text-[10px] leading-none py-0.5 px-1.5 {formatBadgeClass}">
-                {formatLabel}
-              </span>
-            </div>
-            </div>
-            <VideoPlaybackControls
-              currentTime={videoCurrentTime}
-              duration={videoDuration}
-              isPlaying={videoIsPlaying}
-              playbackRate={videoSpeed}
-              buffered={videoBuffered}
-              isLooping={videoLoop}
-              ontoggleplay={() => { if (videoEl) { if (videoEl.paused) videoEl.play(); else videoEl.pause(); } }}
-              onseek={(ratio) => { if (videoEl) videoEl.currentTime = ratio * videoDuration; }}
-              onsetspeed={(speed) => setVideoSpeed(speed)}
-              onfullscreen={toggleVideoFullscreen}
-              ontoggleloop={toggleVideoLoop}
-              onarrowleft={() => { if (videoEl) videoEl.currentTime = Math.max(0, videoEl.currentTime - 5); }}
-              onarrowright={() => { if (videoEl) videoEl.currentTime = Math.min(videoEl.duration, videoEl.currentTime + 5); }}
-            />
-            {#if recording.camera_id}
-              <TimelineBar
-                cameraId={recording.camera_id}
-                date={timelineDate()}
-                currentRecording={recording}
-                currentVideoTime={videoCurrentTime}
-                onseek={handleTimelineSeek}
-                showEvents={true}
-              />
-            {/if}
-            <div class="flex items-center justify-between px-4 py-2 th-bg-secondary border-t th-border">
-              <span class="text-sm th-text-muted">{t('detail.playing')} <span class="font-mono th-text-primary">{recording.camera_id}</span></span>
-              <button onclick={navigateToNext} class="btn btn-ghost btn-sm flex items-center gap-1">
-                {t('detail.nextRecording')} <SkipForward size={16} />
-              </button>
-            </div>
-          {/if}
-          {#if recording.format === 'timelapse'}
-            <!-- Timelapse JPEG sequence player (always used — MJPEG-in-MP4 can't play in <video>) -->
-            {#if tlLoading}
-              <div class="flex items-center justify-center h-64 bg-black">
-                <div class="spinner spinner-lg"></div>
-                <span class="th-text-muted ml-3">{t('detail.loadingFrames')}</span>
-              </div>
-            {:else if tlError}
-              <div class="flex items-center justify-center h-64 bg-black">
-                <div class="text-center th-text-muted">
-                  <AlertTriangle size={48} class="mx-auto mb-2" />
-                  <p>{tlError}</p>
-                </div>
-              </div>
-            {:else if timelapseFrames.length === 0}
-              <div class="flex items-center justify-center h-64 bg-black">
-                <div class="text-center th-text-muted">
-                  <HelpCircle size={48} class="mx-auto mb-2" />
-                  <p>{t('detail.noFrames')}</p>
-                </div>
-              </div>
-            {:else}
-              <!-- Frame display -->
-              <div class="timelapse-container relative max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
-                {#if timelapseFrames[tlCurrentFrame]}
-                  {@const frame = timelapseFrames[tlCurrentFrame]}
-                  {#if tlBlobCache.has(tlCurrentFrame)}
-                    <img
-                      src={tlBlobCache.get(tlCurrentFrame)}
-                      alt={frame.filename}
-                      class="max-w-full max-h-[75vh]"
-                      style="transition: opacity 0.2s ease-in-out"
-                    />
-                  {:else if tlCurrentFrame > 0 && tlBlobCache.has(tlCurrentFrame - 1)}
-                    <!-- Show previous frame while loading, with fade -->
-                    <img
-                      src={tlBlobCache.get(tlCurrentFrame - 1)}
-                      alt={frame.filename}
-                      class="max-w-full max-h-[75vh] opacity-50"
-                      style="transition: opacity 0.3s ease-in-out"
-                    />
-                    {#if tlSeekLoading}
-                      <div class="absolute inset-0 flex items-center justify-center bg-black/30">
-                        <div class="spinner spinner-lg"></div>
-                      </div>
-                    {/if}
-                  {:else}
-                    <div class="flex items-center justify-center h-64 bg-black">
-                      <div class="spinner spinner-lg"></div>
-                    </div>
-                  {/if}
-                {/if}
-              </div>
-              <!-- Timelapse preview thumbnails -->
-              {#if timelapsePreviewLoading}
-                <div class="th-bg-secondary px-4 py-3 border-t th-border text-center">
-                  <span class="text-xs th-text-secondary">{t('common.loading')}</span>
-                </div>
-              {:else if timelapsePreviewFrames.length > 0}
-                <div class="th-bg-secondary px-4 py-3 border-t th-border">
-                  <p class="text-xs th-text-muted mb-2">{t('detail.timelapsePreview')}</p>
-                  <div class="grid grid-cols-6 gap-1">
-                    {#each timelapsePreviewFrames as frame}
-                      <img src={frame.url} alt={frame.filename} class="w-full h-16 object-cover rounded" loading="lazy" />
-                    {/each}
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Merge controls -->
-              {#if recording.merge_status !== 'merged' && !mergeInProgress}
-                <div class="th-bg-secondary px-4 py-3 border-t th-border">
-                  <div class="flex items-center justify-center gap-3">
-                    <select
-                      class="input text-sm py-1 w-auto"
-                      value={selectedMergeDuration}
-                      onchange={(e) => selectedMergeDuration = (e.target as HTMLSelectElement).value}
-                    >
-                      <option value="1h">{t('timelapse.mergeDuration1h')}</option>
-                      <option value="8h">{t('timelapse.mergeDuration8h')}</option>
-                      <option value="12h">{t('timelapse.mergeDuration12h')}</option>
-                      <option value="24h">{t('timelapse.mergeDuration24h')}</option>
-                      <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
-                      <option value="7d">{t('timelapse.mergeDuration7d')}</option>
-                      <option value="30d">{t('timelapse.mergeDuration30d')}</option>
-                    </select>
-                    <button onclick={handleMergeAndPlay} class="btn btn-primary flex items-center gap-2">
-                      <Play size={16} /> {t('detail.mergeAndPlay')}
-                    </button>
-                  </div>
-                </div>
-              {/if}
-              {#if mergeInProgress}
-                <div class="th-bg-secondary px-4 py-3 border-t th-border">
-                  <div class="flex items-center gap-3 justify-center flex-wrap">
-                    <div class="w-32 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
-                      <div class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500" style="width: {mergeProgressPct}%"></div>
-                    </div>
-                    <span class="text-xs th-text-secondary">{t('detail.mergingProgress', { percent: String(mergeProgressPct) })}</span>
-                    {#if mergeEta}
-                      <span class="text-xs th-text-muted">{mergeEta}</span>
-                    {/if}
-                    <button
-                      onclick={() => cancelMergeConfirm = true}
-                      class="btn btn-ghost btn-xs text-xs th-color-danger"
-                    >
-                      {t('detail.cancelMerge')}
-                    </button>
-                  </div>
-                </div>
-              {/if}
-              {#if mergeErrorMsg}
-                <div class="th-bg-secondary px-4 py-3 border-t th-border text-center">
-                  <div class="flex items-center gap-3 justify-center">
-                    <span class="text-xs th-color-danger">{t('detail.mergeFailed', { error: mergeErrorMsg })}</span>
-                    <button onclick={handleMergeAndPlay} class="btn btn-secondary btn-sm">{t('detail.mergeRetry')}</button>
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Controls -->
-              <div class="th-bg-secondary px-4 py-3 space-y-2">
-                <!-- Progress bar -->
-                <div
-                  class="relative h-2 th-bg-tertiary rounded cursor-pointer group"
-                  role="slider"
-                  tabindex="0"
-                  aria-label={t('detail.frameCounter', { current: String(tlCurrentFrame + 1), total: String(timelapseFrames.length) })}
-                  aria-valuenow={tlCurrentFrame}
-                  aria-valuemin={0}
-                  aria-valuemax={timelapseFrames.length - 1}
-                  onclick={(e) => {
-                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    const ratio = (e.clientX - rect.left) / rect.width;
-                    tlSeek(Math.round(ratio * (timelapseFrames.length - 1)));
-                  }}
-                  onkeydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); }
-                    else if (e.key === 'ArrowLeft') { e.preventDefault(); tlSeek(tlCurrentFrame - 1); }
-                    else if (e.key === 'ArrowRight') { e.preventDefault(); tlSeek(tlCurrentFrame + 1); }
-                  }}
-                >
-                  <div
-                    class="absolute top-0 left-0 h-full th-bg-accent rounded group-hover:th-bg-info transition-colors"
-                    style="width: {timelapseFrames.length > 1 ? (tlCurrentFrame / (timelapseFrames.length - 1)) * 100 : 100}%"
-                  ></div>
-                  <div
-                    class="absolute top-1/2 -translate-y-1/2 w-3 h-3 th-bg-info rounded-full shadow group-hover:th-bg-accent transition-colors"
-                    style="left: calc({timelapseFrames.length > 1 ? (tlCurrentFrame / (timelapseFrames.length - 1)) * 100 : 100}% - 6px)"
-                  ></div>
-                </div>
-
-                <!-- Control buttons -->
-                <div class="flex items-center justify-between">
-                  <div class="flex items-center gap-2">
-                    <button
-                      onclick={() => tlSeek(tlCurrentFrame - 1)}
-                      disabled={tlCurrentFrame === 0 || tlIsPlaying}
-                      class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
-                      style="color: {tlCurrentFrame === 0 || tlIsPlaying ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {tlCurrentFrame === 0 || tlIsPlaying ? 'transparent' : 'var(--bg-tertiary)'}"
-                    >
-                      <ChevronLeft size={16} />
-                    </button>
-
-                    <button
-                      onclick={tlTogglePlay}
-                      class="px-4 py-1.5 rounded text-sm font-medium text-white transition-colors flex items-center gap-1"
-                      style="background-color: {tlIsPlaying ? 'var(--color-danger)' : 'var(--color-info)'}"
-                    >
-                      {#if tlIsPlaying}
-                        <Pause size={14} /> {t('detail.pause')}
-                      {:else}
-                        <Play size={14} /> {t('detail.play')}
-                      {/if}
-                    </button>
-
-                    <button
-                      onclick={() => tlSeek(tlCurrentFrame + 1)}
-                      disabled={tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying}
-                      class="px-3 py-1.5 rounded text-sm font-medium transition-colors"
-                      style="color: {tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying ? 'var(--text-tertiary)' : 'var(--text-body)'}; background-color: {tlCurrentFrame >= timelapseFrames.length - 1 || tlIsPlaying ? 'transparent' : 'var(--bg-tertiary)'}"
-                    >
-                      <ChevronRight size={16} />
-                    </button>
-                  </div>
-
-                  <!-- Frame counter + timestamp -->
-                  <div class="flex items-center gap-3">
-                    <span class="th-text-secondary text-sm font-mono">
-                      {tlCurrentFrame + 1} / {timelapseFrames.length}
-                    </span>
-                    <span class="th-text-tertiary text-xs font-mono">
-                      {getFrameTimestamp()}
-                    </span>
-                  </div>
-
-                  <!-- Speed control -->
-                  <div class="flex items-center gap-1">
-                    <span class="th-text-tertiary text-xs mr-1">{t('detail.speed')}</span>
-                    {#each tlSpeeds as speed}
-                      <button
-                        onclick={() => tlSetSpeed(speed)}
-                        class="px-2 py-1 rounded text-xs font-medium transition-colors"
-                        style="background-color: {tlSpeed === speed ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {tlSpeed === speed ? 'white' : 'var(--text-secondary)'}"
-                      >
-                        {speed}x
-                      </button>
-                    {/each}
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <!-- Loop toggle -->
-                    <button
-                      onclick={tlToggleLoop}
-                      class="px-2 py-1 rounded text-xs font-medium transition-colors"
-                      style="background-color: {tlLoop ? 'var(--color-info)' : 'var(--bg-tertiary)'}; color: {tlLoop ? 'white' : 'var(--text-secondary)'}"
-                      title="Loop playback"
-                    >
-                      {#if tlLoop}
-                        🔁 Loop
-                      {:else}
-                        🔁 Loop
-                      {/if}
-                    </button>
-                    <!-- Fullscreen button -->
-                    <button
-                      onclick={toggleFullscreen}
-                      class="px-2 py-1 rounded text-xs font-medium transition-colors th-bg-tertiary th-text-secondary"
-                      title={t('live.fullscreen')}
-                    >
-                      ⛶ {t('live.fullscreen')}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-            {/if}
-          {/if}
-          {#if recording.format === 'avi'}
-            <AviPlayback recordingId={currentId} />
-          {:else if recording.format === 'mjpeg'}
-            <MjpegPlayer bind:this={mjpegPlayer} recordingId={currentId} oninitdone={() => {}} />
-            <!-- Keyboard shortcuts hint -->
-            <div class="px-4 py-2 th-bg-tertiary">
-              <p class="text-xs text-center th-text-muted">
-                {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | Home {t('detail.homeReset')} | F {t('live.fullscreen')} | L {t('detail.loop')} | {t('detail.escapeBack')}
-              </p>
-            </div>
-          {:else if recording.format !== 'h264' && recording.format !== 'h265' && recording.format !== 'timelapse' && recording.format !== 'avi'}
-            <div class="flex items-center justify-center h-64 bg-black">
-              <div class="text-center th-text-tertiary">
-                <div class="text-4xl mb-2 flex justify-center"><HelpCircle size={48} /></div>
-                <p class="text-lg">{t('detail.unsupportedFormat')}</p>
-                <p class="text-sm mt-2">{t('detail.format')}: {recording.format}</p>
-              </div>
-            </div>
-          {/if}
+          <PlaybackPanel
+            bind:this={playbackPanel}
+            {recording}
+            {currentId}
+            {isTransitioning}
+            bind:pendingTimelineSeekOffset
+            {mergeState}
+            {canMerge}
+            onstartmerge={() => mergePanel?.startMerge()}
+            oncancelmerge={() => mergePanel?.requestCancel()}
+            onended={handleEnded}
+            ontimelineseek={handleTimelineSeek}
+            ongotonext={navigateToNext}
+            oncrosssegment={(r) => (recording = r)}
+          />
         </div>
 
-        <!-- Recording info -->
-        <div class="card p-6 border th-border">
-          <div class="flex items-start justify-between mb-6">
-            <div>
-              <h2 class="text-2xl font-bold th-text-primary mb-2">
-                {recording.camera_id}
-              </h2>
-              <p class="th-text-tertiary">
-                {formatDate(recording.started_at)}
-              </p>
-            </div>
-            <div class="flex gap-2">
-              {#if recording.merge_status === 'merged' || recording.merge_status === 'daily_merged'}
-                <span class="badge badge-success">{t('recordings.merged')}</span>
-              {:else}
-                <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
-              {/if}
-              <span class="badge {recording.format === 'timelapse' ? 'badge-info' : 'badge-neutral'}">
-                {recording.format === 'timelapse'
-                  ? t('recording.format.timelapse')
-                  : (recording.format === 'h264' || recording.format === 'h265')
-                    ? t('recording.format.h264')
-                    : recording.format === 'avi'
-                      ? 'AVI'
-                    : t('recording.format.mjpeg')}
-              </span>
-              {#if recording.format === 'timelapse' && recording.merge_status}
-                <span class="badge {recording.merge_status === 'merged' ? 'badge-success' : recording.merge_status === 'failed' ? 'badge-error' : mergeInProgress ? 'badge-info' : 'badge-neutral'}">
-                  {recording.merge_status === 'merged' ? t('detail.mergeStatusMerged') : recording.merge_status === 'failed' ? t('detail.mergeStatusFailed') : mergeInProgress ? t('detail.mergeStatusMerging', { percent: String(mergeProgressPct) }) : t('detail.mergeStatusPending')}
-                </span>
-              {/if}
-            </div>
-          </div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8">
-            <div>
-              <p class="text-sm th-text-tertiary mb-1">{t('detail.duration')}</p>
-              <p class="text-lg font-semibold th-text-body">{formatDuration(recording.duration)}</p>
-            </div>
-            <div>
-              <p class="text-sm th-text-tertiary mb-1">{t('detail.fileSize')}</p>
-              <p class="text-lg font-semibold th-text-body">{formatFileSize(recording.file_size)}</p>
-            </div>
-            <div>
-              <p class="text-sm th-text-tertiary mb-1">{t('detail.frames')}</p>
-              <p class="text-lg font-semibold th-text-body">{recording.frame_count.toLocaleString()}</p>
-            </div>
-            <div>
-              <p class="text-sm th-text-tertiary mb-1">{t('detail.endTime')}</p>
-              <p class="text-lg font-semibold th-text-body">{formatDate(recording.ended_at)}</p>
-            </div>
-          </div>
-
-          <!-- Actions -->
-          <div class="flex flex-wrap gap-3 border-t th-border pt-6">
-            <div class="flex flex-wrap gap-3">
-              {#if isDownloading}
-                <button disabled class="btn btn-primary opacity-75 flex items-center gap-2">
-                  <div class="spinner spinner-sm"></div>
-                  {downloadProgress}%
-                </button>
-              {:else}
-                <button onclick={handleDownload} class="btn btn-primary">
-                  {t('detail.download')}
-                </button>
-              {/if}
-              {#if recording.format === 'timelapse' && recording.merge_status !== 'merged' && !mergeInProgress}
-                <button onclick={handleMergeAndPlay} class="btn btn-primary">
-                  {t('detail.mergeAndPlay')}
-                </button>
-              {/if}
-              {#if mergeInProgress}
-                <div class="flex items-center gap-3">
-                  <div class="flex-1 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
-                    <div class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500" style="width: {mergeProgressPct}%"></div>
-                  </div>
-                  <span class="text-xs th-text-secondary">{t('detail.mergingProgress', { percent: String(mergeProgressPct) })}</span>
-                  {#if mergeEta}
-                    <span class="text-xs th-text-muted">{mergeEta}</span>
-                  {/if}
-                  <button
-                    onclick={() => cancelMergeConfirm = true}
-                    class="btn btn-ghost btn-xs th-color-danger"
-                  >
-                    {t('detail.cancelMerge')}
-                  </button>
-                </div>
-              {/if}
-              {#if mergeErrorMsg}
-                <div class="flex items-center gap-3">
-                  <span class="text-xs th-color-danger">{t('detail.mergeFailed', { error: mergeErrorMsg })}</span>
-                  <button onclick={handleMergeAndPlay} class="btn btn-secondary btn-sm">{t('detail.mergeRetry')}</button>
-                </div>
-              {/if}
-              {#if transcodingStatus?.enabled && !transcodeTask}
-                <button onclick={handleTranscode} class="btn btn-secondary" title={t('transcoding.recordings.transcodeBtn')}>
-                  <RefreshCw size={16} />
-                  {t('transcoding.recordings.transcodeBtn')}
-                </button>
-              {/if}
-            </div>
-            <div class="flex gap-3 ml-auto">
-              <button
-                onclick={() => deleteConfirm = true}
-                class="btn btn-danger"
-              >
-                {t('detail.delete')}
-              </button>
-            </div>
-          </div>
-
-          {#if transcodingStatus?.enabled && transcodeTask}
-            <div class="mt-3 border-t th-border pt-4">
-              {#if transcodeTask.status === 'running' || transcodeTask.status === 'pending'}
-                <div class="flex items-center gap-3">
-                  <span class="badge bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 animate-pulse text-xs">{t('transcoding.running')}</span>
-                  <span class="text-xs th-text-secondary">
-                    {t('transcoding.recordings.transcodingProgress', { percent: String(transcodeTask.progress ?? 0) })}
-                  </span>
-                  <div class="flex-1 h-1.5 rounded-full th-bg-tertiary overflow-hidden">
-                    <div
-                      class="h-full rounded-full bg-[var(--color-info)] transition-all duration-500"
-                      style="width: {Math.max(transcodeTask.progress ?? 0, 2)}%"
-                    ></div>
-                  </div>
-                </div>
-              {:else if transcodeTask.status === 'completed'}
-                <div class="flex items-center gap-2">
-                  <span class="badge badge-success text-xs">{t('transcoding.completed')}</span>
-                  <span class="text-xs th-text-secondary">{t('transcoding.queue.codecConversion', { input: transcodeTask.input_format?.toUpperCase() || '?', output: transcodeTask.output_format?.toUpperCase() || '?' })}</span>
-                </div>
-              {:else if transcodeTask.status === 'failed'}
-                <div class="flex items-center gap-2">
-                  <span class="badge badge-danger text-xs">{t('transcoding.failed')}</span>
-                  <span class="text-xs th-text-secondary">{transcodeTask.error || ''}</span>
-                </div>
-              {:else}
-                <div class="flex items-center gap-2">
-                  <span class="badge badge-neutral text-xs">{t('transcoding.pending')}</span>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
+        <!-- Recording info + actions + transcode status -->
+        <MetaEditor
+          {recording}
+          {currentId}
+          {mergeState}
+          {canMerge}
+          onstartmerge={() => mergePanel?.startMerge()}
+          oncancelmerge={() => mergePanel?.requestCancel()}
+          ondelete={() => (deleteConfirm = true)}
+        />
       </div>
     {/if}
   </main>
@@ -1791,32 +299,14 @@ $effect(() => {
           {t('detail.deleteMessage', { camera_id: recording.camera_id })}
         </p>
         <div class="flex gap-3 justify-end">
-          <button
-            onclick={() => deleteConfirm = false}
-            class="btn btn-secondary"
-          >
+          <button onclick={() => (deleteConfirm = false)} class="btn btn-secondary">
             {t('detail.cancel')}
           </button>
-          <button
-            onclick={confirmDelete}
-            class="btn btn-danger"
-          >
+          <button onclick={confirmDelete} class="btn btn-danger">
             {t('detail.deleteConfirm')}
           </button>
         </div>
       </div>
     </div>
-  {/if}
-
-  <!-- Cancel merge confirmation dialog -->
-  {#if cancelMergeConfirm}
-    <ConfirmDialog
-      title={t('detail.cancelMerge')}
-      message={t('detail.cancelMergeConfirm')}
-      onconfirm={handleCancelMerge}
-      oncancel={() => cancelMergeConfirm = false}
-      confirmText={t('detail.cancelMerge')}
-      variant="danger"
-    />
   {/if}
 </div>
