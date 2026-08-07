@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings } from '$lib/api';
+  import { getSettings, updateSettings, getVersion } from '$lib/api';
   import type { SettingsConfig } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '$lib/preferences';
   import { t } from '$lib/i18n';
@@ -21,6 +21,12 @@
 
   // Last-saved timezone snapshot — drives isDirty and reset.
   let savedTimezone = $state('Local');
+
+  // Web UI listen port (server-persisted; flows through unified save).
+  let listenPort = $state('9090');
+  let savedListenPort = $state('9090');
+  let deployment = $state(''); // "docker" | "binary" | "" — drives restart hint
+  let portChanged = $state(false); // true after save when the port actually changed
 
   // Timezone options (expanded set — Hong_Kong, Singapore, Chicago, Paris, Auckland).
   const timezoneOptions = [
@@ -43,7 +49,7 @@
   // Dirty only tracks the server-persisted timezone; prefs are instant-save.
   let isDirty = $derived.by(() => {
     if (loading) return false;
-    return selectedTimezone !== savedTimezone;
+    return selectedTimezone !== savedTimezone || listenPort.trim() !== savedListenPort;
   });
 
   // --- Load / save / reset ---
@@ -55,17 +61,41 @@
       const settings = await getSettings();
       selectedTimezone = settings.timezone || 'Local';
       savedTimezone = selectedTimezone; // snapshot
+      const raw = settings.server?.listen || ':9090';
+      listenPort = raw.startsWith(':') ? raw.slice(1) : raw;
+      savedListenPort = listenPort; // snapshot
+      portChanged = false;
     } catch (e) {
       error = e instanceof Error ? e.message : t('common.failedLoadSettings');
     } finally {
       loading = false;
     }
+    // Deployment type (non-fatal) — drives the port-change restart hint.
+    try {
+      const v = await getVersion();
+      deployment = v.deployment || '';
+    } catch {
+      deployment = '';
+    }
   }
 
   async function performSave() {
+    const port = listenPort.trim();
+    const portNum = Number(port);
+    if (!/^\d+$/.test(port) || portNum < 1 || portNum > 65535) {
+      const msg = t('settings.listenPortInvalid');
+      showToast(msg, 'error');
+      throw new Error(msg);
+    }
     try {
-      await updateSettings({ timezone: selectedTimezone } as SettingsConfig);
+      const body: SettingsConfig = { timezone: selectedTimezone };
+      if (port !== savedListenPort) {
+        body.server = { listen: `:${portNum}` };
+      }
+      await updateSettings(body);
+      portChanged = port !== savedListenPort;
       savedTimezone = selectedTimezone; // re-snapshot after success
+      savedListenPort = port; // re-snapshot after success
       showToast(t('settings.saved'), 'success');
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('common.failedSaveSettings'), 'error');
@@ -75,6 +105,8 @@
 
   function resetForm() {
     selectedTimezone = savedTimezone;
+    listenPort = savedListenPort;
+    portChanged = false;
   }
 
   // --- localStorage prefs (instant-save) ---
@@ -145,6 +177,30 @@
       </select>
     </div>
   </div>
+
+  <!-- Web UI Port (server-persisted; flows through unified save) -->
+  <div class="card p-8 border th-border">
+    <h3 class="text-lg font-semibold th-text-primary mb-1">{t('settings.listenPort')}</h3>
+    <p class="text-sm th-text-tertiary mb-8">{t('settings.listenPortDesc')}</p>
+    <div class="max-w-sm">
+      <label for="listenPort" class="input-label">{t('settings.listenPort')}</label>
+      <input
+        id="listenPort"
+        class="input"
+        type="number"
+        min="1"
+        max="65535"
+        bind:value={listenPort}
+        placeholder="9090"
+      />
+    </div>
+    {#if portChanged}
+      <div class="mt-4 p-3 th-bg-warning-soft th-color-warning text-sm rounded">
+        {deployment === 'docker' ? t('settings.portRestartHintDocker') : t('settings.portRestartHint')}
+      </div>
+    {/if}
+  </div>
+
 
   <!-- Frontend Preferences (localStorage, instant-save) -->
   <div class="card p-8 border th-border">

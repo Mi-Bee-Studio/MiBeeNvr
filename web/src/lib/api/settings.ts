@@ -77,6 +77,7 @@ export interface SettingsConfig {
   mibeevision?: MiBeeVisionConfig;
   timezone?: string; // "Local", "UTC", or IANA timezone name
   timezone_display?: string; // Human-readable timezone label (e.g. "Asia/Shanghai (UTC+8)")
+  server?: { listen?: string }; // listen address ":9090" — changed via Settings UI
 }
 
 export interface MergeStatus {
