@@ -397,6 +397,9 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		},
 		"timezone":         h.config.Timezone,
 		"timezone_display": tzDisplay,
+		"server": map[string]any{
+			"listen": h.config.Server.Listen,
+		},
 	})
 }
 
@@ -448,6 +451,9 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			ReadWrite  *bool   `json:"read_write"`
 		} `json:"webdav"`
 		Timezone *string `json:"timezone"`
+		Server   *struct {
+			Listen *string `json:"listen"`
+		} `json:"server"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -506,6 +512,18 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		h.config.Timezone = tz
+	}
+
+	// Update server listen port
+	if body.Server != nil && body.Server.Listen != nil {
+		raw := strings.TrimSpace(*body.Server.Listen)
+		raw = strings.TrimPrefix(raw, ":")
+		port, err := strconv.Atoi(raw)
+		if err != nil || port < 1 || port > 65535 {
+			WriteError(w, http.StatusBadRequest, "listen must be a valid port (1-65535)")
+			return
+		}
+		h.config.Server.Listen = fmt.Sprintf(":%d", port)
 	}
 
 	// Persist config to disk
