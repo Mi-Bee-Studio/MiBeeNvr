@@ -130,7 +130,7 @@ curl -u username:password \
 
 ## Per-Camera Stability
 
-**Endpoint:** `GET /api/health/stability/{camera_id}`
+**Endpoint:** `GET /api/health/stability/{id}`
 
 Get stability quality data for a single camera.
 

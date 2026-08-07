@@ -54,7 +54,7 @@ func (h *Handler) handleListArchives(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "cameraID")
+	cameraID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
 	trueVal := true
@@ -81,7 +81,7 @@ func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "cameraID")
+	cameraID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
 	// Verify camera is archived
@@ -130,7 +130,7 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "cameraID")
+	cameraID := chi.URLParam(r, "id")
 	recordingID := chi.URLParam(r, "recordingID")
 	ctx := r.Context()
 
@@ -181,7 +181,7 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 }
 
 func (h *Handler) handleSetArchiveRetention(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "cameraID")
+	cameraID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
 	var body struct {
@@ -207,9 +207,9 @@ func (h *Handler) handleSetArchiveRetention(w http.ResponseWriter, r *http.Reque
 func (h *Handler) registerArchiveRoutes(r chi.Router) {
 	r.Route("/api/archives", func(r chi.Router) {
 		r.Get("/", h.handleListArchives)
-		r.Get("/{cameraID}/recordings", h.handleListArchiveRecordings)
-		r.Delete("/{cameraID}", h.handleDeleteArchiveGroup)
-		r.Delete("/{cameraID}/recordings/{recordingID}", h.handleDeleteArchiveRecording)
-		r.Put("/{cameraID}/retention", h.handleSetArchiveRetention)
+		r.Get("/{id}/recordings", h.handleListArchiveRecordings)
+		r.Delete("/{id}", h.handleDeleteArchiveGroup)
+		r.Delete("/{id}/recordings/{recordingID}", h.handleDeleteArchiveRecording)
+		r.Put("/{id}/retention", h.handleSetArchiveRetention)
 	})
 }

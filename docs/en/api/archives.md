@@ -28,7 +28,7 @@ curl -u username:password \
 
 ## List Archive Recordings
 
-**Endpoint:** `GET /api/archives/{cameraID}/recordings`
+**Endpoint:** `GET /api/archives/{id}/recordings`
 
 List recordings for a specific archive.
 
@@ -55,7 +55,7 @@ curl -u username:password \
 
 ## Delete Archive Group
 
-**Endpoint:** `DELETE /api/archives/{cameraID}`
+**Endpoint:** `DELETE /api/archives/{id}`
 
 Delete an entire archive group for a camera.
 
@@ -75,7 +75,7 @@ curl -u username:password \
 
 ## Delete Archive Recording
 
-**Endpoint:** `DELETE /api/archives/{cameraID}/recordings/{recordingID}`
+**Endpoint:** `DELETE /api/archives/{id}/recordings/{recordingID}`
 
 Delete a specific recording from an archive.
 
@@ -95,7 +95,7 @@ curl -u username:password \
 
 ## Set Archive Retention
 
-**Endpoint:** `PUT /api/archives/{cameraID}/retention`
+**Endpoint:** `PUT /api/archives/{id}/retention`
 
 Set retention period for an archive group.
 
