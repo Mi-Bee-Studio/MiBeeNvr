@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +21,18 @@ func applyConfigDefaults(cfg *Config) {
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
 		cfg.Server.Listen = ":9090"
+	}
+
+	// NVR_LISTEN_PORT overrides server.listen (env wins over the config file —
+	// 12-factor). Docker host-network deployments need this because ONVIF WS-Discovery
+	// multicast forces network_mode: host, which makes Docker port mapping impossible;
+	// users change the port via a single compose env var instead of editing the YAML.
+	// Accepts both "9091" and ":9091". See issue #269, docs/zh/deployment-faq.md Q2.
+	if env := strings.TrimSpace(os.Getenv("NVR_LISTEN_PORT")); env != "" {
+		if !strings.HasPrefix(env, ":") {
+			env = ":" + env
+		}
+		cfg.Server.Listen = env
 	}
 	// Storage
 	if strings.TrimSpace(cfg.Storage.RootDir) == "" {

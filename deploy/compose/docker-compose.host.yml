@@ -11,6 +11,7 @@
 # 9090 (Web/API), 2121 + 2122-2140 (FTP), and optional RTMP/SRT/WebRTC ports
 # bind directly to the host. If a host port is taken, change the app's own port:
 #   mibee-nvr.yaml → server.listen: ":8080"   (Web/API)
+#   or set NVR_LISTEN_PORT=8080 below (recommended for NAS — no YAML editing)
 #   mibee-nvr.yaml → ftp.port / ftp.passive_port_range  (FTP)
 #
 # Image is multi-arch (amd64/arm64/armv7); the runtime pulls the matching arch.
@@ -36,6 +37,9 @@ services:
       - ./data:/data
     environment:
       - NVR_DATA_DIR=/data
+      # Web UI listen port. Host networking means Docker port mapping is NOT used,
+      # so change the app's port here if 9090 is taken on the host.
+      # - NVR_LISTEN_PORT=9090
       # Run as the UID/GID that owns ./data on the host (defaults to 1000:1000).
       # - NVR_UID=1000
       # - NVR_GID=1000
