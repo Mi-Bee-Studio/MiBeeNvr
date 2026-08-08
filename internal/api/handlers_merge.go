@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -51,18 +52,24 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		h.config.Merge.Enabled = *body.Enabled
 	}
 	if body.CheckInterval != nil {
-		if _, err := time.ParseDuration(*body.CheckInterval); err != nil {
-			WriteError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
-			return
+		// Blank = keep current (partial PUT). time.ParseDuration("") would 400
+		// the whole save otherwise (#294). Mirrors handlers_system.go cleanup.
+		if v := strings.TrimSpace(*body.CheckInterval); v != "" {
+			if _, err := time.ParseDuration(v); err != nil {
+				WriteError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
+				return
+			}
+			h.config.Merge.CheckInterval = v
 		}
-		h.config.Merge.CheckInterval = *body.CheckInterval
 	}
 	if body.WindowSize != nil {
-		if _, err := time.ParseDuration(*body.WindowSize); err != nil {
-			WriteError(w, http.StatusBadRequest, "window_size must be a valid duration (e.g., \"24h\", \"48h\")")
-			return
+		if v := strings.TrimSpace(*body.WindowSize); v != "" {
+			if _, err := time.ParseDuration(v); err != nil {
+				WriteError(w, http.StatusBadRequest, "window_size must be a valid duration (e.g., \"24h\", \"48h\")")
+				return
+			}
+			h.config.Merge.WindowSize = v
 		}
-		h.config.Merge.WindowSize = *body.WindowSize
 	}
 	if body.BatchLimit != nil {
 		if *body.BatchLimit < 1 {
@@ -72,11 +79,13 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		h.config.Merge.BatchLimit = *body.BatchLimit
 	}
 	if body.MinSegmentAge != nil {
-		if _, err := time.ParseDuration(*body.MinSegmentAge); err != nil {
-			WriteError(w, http.StatusBadRequest, "min_segment_age must be a valid duration (e.g., \"1h\", \"6h\")")
-			return
+		if v := strings.TrimSpace(*body.MinSegmentAge); v != "" {
+			if _, err := time.ParseDuration(v); err != nil {
+				WriteError(w, http.StatusBadRequest, "min_segment_age must be a valid duration (e.g., \"1h\", \"6h\")")
+				return
+			}
+			h.config.Merge.MinSegmentAge = v
 		}
-		h.config.Merge.MinSegmentAge = *body.MinSegmentAge
 	}
 	if body.MinSegmentsToMerge != nil {
 		if *body.MinSegmentsToMerge < 1 {
@@ -120,8 +129,21 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Treat blank duration strings as "no change" (nil → COALESCE keeps the
+	// existing value). A blank "" would otherwise fail time.ParseDuration and
+	// 400 the whole save (#294), and ptrToNullString("") is Valid so it would
+	// also overwrite the column with empty. Normalize to nil instead.
+	normalizeDurationPtr := func(p *string) *string {
+		if p == nil || strings.TrimSpace(*p) == "" {
+			return nil
+		}
+		return p
+	}
+	checkInterval := normalizeDurationPtr(body.CheckInterval)
+	windowSize := normalizeDurationPtr(body.WindowSize)
+	minSegmentAge := normalizeDurationPtr(body.MinSegmentAge)
 	// Validate duration fields
-	for _, d := range []*string{body.CheckInterval, body.WindowSize, body.MinSegmentAge} {
+	for _, d := range []*string{checkInterval, windowSize, minSegmentAge} {
 		if d != nil {
 			if _, err := time.ParseDuration(*d); err != nil {
 				WriteError(w, http.StatusBadRequest, "duration fields must be valid (e.g., \"30m\", \"1h\")")
@@ -139,7 +161,7 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 	}
 
 	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
-		body.Enabled, body.CheckInterval, body.WindowSize, body.MinSegmentAge,
+		body.Enabled, checkInterval, windowSize, minSegmentAge,
 		body.BatchLimit, body.MinSegmentsToMerge); err != nil {
 		logger.Warn("failed to update camera merge config", "error", err, "camera_id", cameraID)
 		WriteError(w, http.StatusInternalServerError, "failed to update merge config")
