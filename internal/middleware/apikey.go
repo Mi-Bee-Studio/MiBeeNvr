@@ -78,6 +78,14 @@ func APIKeyNameFromContext(ctx context.Context) string {
 	return ""
 }
 
+// WithAPIKeyName returns a derived context carrying the API-key name, mirroring
+// what APIKeyAuthMiddleware sets. Exported so tests (and only tests) can exercise
+// handlers that gate on IsAPIKeyAuthenticated without standing up the full key
+// map + middleware chain. Production code should authenticate via the middleware.
+func WithAPIKeyName(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, apiKeyContextKey{}, name)
+}
+
 // IsAPIKeyAuthenticated reports whether the request was authenticated via API Key.
 func IsAPIKeyAuthenticated(ctx context.Context) bool {
 	return APIKeyNameFromContext(ctx) != ""
