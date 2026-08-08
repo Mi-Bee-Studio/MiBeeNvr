@@ -1,6 +1,7 @@
 package camera
 
 import (
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
@@ -192,4 +193,74 @@ func (cm *CameraManager) GetCodecInfo(cameraID string) model.CodecInfo {
 		ci.AudioChannels = ai.AudioChannels()
 	}
 	return ci
+}
+
+// SetHealthManager sets the health manager for camera health monitoring.
+// Can be called with nil to disable health monitoring.
+func (cm *CameraManager) SetHealthManager(m *health.Manager) {
+	cm.healthMgr = m
+	if m != nil {
+		m.SetStatusFunc(cm.statusSnapshot)
+	}
+}
+
+// statusSnapshot returns the current status of every camera the manager knows
+// about, for consumption by the health manager's periodic loop. It merges two
+// snapshot sources (both lock-free):
+//   - snapshot.recorders: active recorders report their real Status().
+//   - snapshot.failedStarts: cameras whose recorder failed to start (e.g. ONVIF
+//     endpoint unreachable after an IP change). These are NOT in the recorders
+//     map (startRecorder removes them on failure), so without surfacing them
+//     here they would be invisible to the health loop → never auto-remediated →
+//     never rediscovered. They are reported as StatusError so the existing
+//     CheckAll → restart → blacklist → rediscovery chain can self-heal them.
+//
+// A camera present in BOTH maps (stale failed-start entry + live recorder) is
+// dominated by its real recorder status.
+func (cm *CameraManager) statusSnapshot() map[string]string {
+	// Lock-free: load the immutable snapshot and read each recorder's Status().
+	// Each recorder guards its own status with a short internal mutex; this loop
+	// never holds any CameraManager lock, so it can never block lifecycle ops.
+	s := cm.loadSnapshot()
+	result := make(map[string]string, len(s.recorders)+len(s.failedStarts))
+	for id, rec := range s.recorders {
+		result[id] = string(rec.Status())
+	}
+	for id := range s.failedStarts {
+		// Only surface a failed-start for cameras that still exist in config.
+		// A failedStarts entry can outlive its camera if the camera was removed
+		// and a stale entry lingered (failedStarts is in-memory only, not
+		// persisted); reporting it would surface a phantom camera to the health
+		// loop and the /api/health details. The configs map is the source of
+		// truth for "does this camera still exist".
+		if _, stillConfigured := s.configs[id]; !stillConfigured {
+			continue
+		}
+		if _, exists := result[id]; !exists {
+			result[id] = string(model.StatusError)
+		}
+	}
+	return result
+}
+
+// markStartFailed records a camera whose recorder failed to start, so that
+// statusFunc can surface it to the health manager as StatusError. This is the
+// entry point that connects startup failures to the auto-remediation → IP
+// rediscovery self-healing chain. Safe to call from the lifecycle actor or any
+// goroutine — apply() takes only the short configMu.
+func (cm *CameraManager) markStartFailed(cameraID string, err error) {
+	cm.apply(func(s *snapshot) *snapshot {
+		s.failedStarts[cameraID] = err
+		return s
+	})
+}
+
+// clearStartFailed removes a camera from the failed-start tracking. Called on
+// successful (re)start so the camera transitions to normal health monitoring.
+// Safe to call from the lifecycle actor or any goroutine.
+func (cm *CameraManager) clearStartFailed(cameraID string) {
+	cm.apply(func(s *snapshot) *snapshot {
+		delete(s.failedStarts, cameraID)
+		return s
+	})
 }

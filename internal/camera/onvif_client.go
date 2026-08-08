@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
@@ -280,4 +281,57 @@ func (cm *CameraManager) StopAllONVIFEvents(ctx context.Context) {
 	}
 	cm.eventSubscribers = make(map[string]onvif.EventSubscriber)
 	cm.onvifMu.Unlock()
+}
+
+// autoPopulateSnapshotURL fetches the ONVIF snapshot URI and sets cam.SnapshotURL if empty.
+// Runs in a goroutine — manages its own locking to avoid deadlock with callers.
+func (cm *CameraManager) autoPopulateSnapshotURL(ctx context.Context, cameraID string) {
+	// Use a short-lived context to avoid blocking forever
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	client, err := cm.getOrCreateONVIFClient(fetchCtx, cameraID)
+	if err != nil {
+		logger.Warn("failed to get ONVIF client for snapshot URL", "camera_id", cameraID, "error", err)
+		return
+	}
+
+	profiles, err := client.GetProfiles(fetchCtx)
+	if err != nil {
+		logger.Warn("failed to get profiles for snapshot URL", "camera_id", cameraID, "error", err)
+		return
+	}
+	if len(profiles) == 0 {
+		logger.Warn("no profiles found for snapshot URL", "camera_id", cameraID)
+		return
+	}
+
+	provider := client.NewSnapshotProvider(profiles[0].Token)
+	if provider == nil {
+		logger.Warn("failed to create snapshot provider", "camera_id", cameraID)
+		return
+	}
+
+	uri, err := provider.GetSnapshotUri(fetchCtx)
+	if err != nil {
+		logger.Warn("failed to get snapshot URI from ONVIF device", "camera_id", cameraID, "error", err)
+		return
+	}
+
+	// Update SnapshotURL under configMu (cfg.Cameras is the mutable config slice).
+	// The snapshot's configs[id] points into cfg.Cameras, so the new value is
+	// visible through the existing pointer without republishing the snapshot.
+	cm.configMu.Lock()
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID && cm.cfg.Cameras[i].SnapshotURL == "" {
+			cm.cfg.Cameras[i].SnapshotURL = uri
+			break
+		}
+	}
+	if err := cm.persistConfig(); err != nil {
+		logger.Warn("failed to persist snapshot URL", "camera_id", cameraID, "error", err)
+	}
+	cm.configMu.Unlock()
+
+	logger.Info("auto-populated snapshot URL from ONVIF device", "camera_id", cameraID, "url", uri)
 }
