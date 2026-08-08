@@ -146,7 +146,7 @@ MiBee NVR uses a **separate transport + encoding** format for camera protocols:
 - **Transport**: `rtsp`, `http`, `onvif`, `xiaomi`, `timelapse`
 - **Encoding**: `h264`, `h265`, `mjpeg`, `jpeg`
 
-> The old combined format (`rtsp_h264`, `rtsp_h265`, `rtsp_mjpeg`, `http_jpeg`) still works for backward compatibility.
+> The old combined format (`rtsp_h264`, `rtsp_h265`, `rtsp_mjpeg`, `http_jpeg`) is **rejected in 0.10.0+** — `Validate()` and the camera create handler return an error asking you to split into separate `protocol` and `encoding` fields.
 
 ### RTSP H.264 Camera
 
@@ -275,7 +275,7 @@ ftp your-server 2121
 
 ### Port conflicts
 
-- Default port is 9090. If it's in use, change `server.listen` in config (e.g. `":8080"`)
+- Default port is 9090. If it's in use, change `server.listen` in config (e.g. `":8080"`). You can also override the listen port without editing config via the `NVR_LISTEN_PORT` environment variable (e.g. `NVR_LISTEN_PORT=8080`), the `install.sh --port <port>` flag, or the Web UI Settings page.
 
 ### Can't connect to camera
 
