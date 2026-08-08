@@ -143,7 +143,7 @@ func (d *DB) HasArchiveCleanupTaskForCamera(ctx context.Context, cameraID string
 		`SELECT COUNT(*) FROM archive_cleanup_tasks WHERE camera_id = ?`, cameraID).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("check archive cleanup task for camera: %w", err)
-		}
+	}
 	return count > 0, nil
 }
 
