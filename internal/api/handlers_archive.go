@@ -92,22 +92,28 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
-	if cam == nil || !cam.Archived {
+if cam == nil || !cam.Archived {
+		// Idempotent: if a cleanup task already exists (concurrent delete), return 202.
+		if exists, _ := h.db.HasArchiveCleanupTaskForCamera(ctx, cameraID); exists {
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "deleting"})
+			return
+			}
 		WriteError(w, http.StatusNotFound, "archived camera not found")
 		return
-	}
+		}
 
 	// 2. Get stats for the task record (best-effort)
 	count, totalSize, _ := h.db.GetArchiveGroupStats(ctx, cameraID)
 
 	// 3. Create cleanup task (status=pending)
-	h.db.CreateArchiveCleanupTask(ctx, storage.ArchiveCleanupTask{
+	//nolint:errcheck // Fire-and-forget: SQLite INSERT into own table; failure is logged by driver.
+	_ = h.db.CreateArchiveCleanupTask(ctx, storage.ArchiveCleanupTask{
 		CameraID:       cameraID,
 		CameraName:     cam.Name,
 		RecordingCount: count,
 		TotalSize:      totalSize,
 		Status:         "pending",
-	})
+		})
 
 	// 4. Delete camera row immediately (vanishes from all list queries).
 	// Map sql.ErrNoRows to success: a concurrent delete request may have

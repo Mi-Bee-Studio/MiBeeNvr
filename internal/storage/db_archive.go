@@ -136,6 +136,17 @@ func (d *DB) ListRecentArchiveCleanupTasks(ctx context.Context, since time.Time)
 	return tasks, rows.Err()
 }
 
+// HasArchiveCleanupTaskForCamera checks if any cleanup task exists for a camera.
+func (d *DB) HasArchiveCleanupTaskForCamera(ctx context.Context, cameraID string) (bool, error) {
+	var count int
+	err := d.readConn().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM archive_cleanup_tasks WHERE camera_id = ?`, cameraID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check archive cleanup task for camera: %w", err)
+		}
+	return count > 0, nil
+}
+
 // UpdateArchiveCleanupTaskStatus updates status, error, and (for terminal states)
 // completed_at of a cleanup task.
 func (d *DB) UpdateArchiveCleanupTaskStatus(ctx context.Context, cameraID, status, errMsg string) error {
