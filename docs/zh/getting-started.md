@@ -145,7 +145,7 @@ MiBee NVR 使用**独立的传输协议 + 编码格式**配置摄像头：
 - **传输协议**：`rtsp`、`http`、`onvif`、`xiaomi`、`timelapse`
 - **编码格式**：`h264`、`h265`、`mjpeg`、`jpeg`
 
-> 旧版组合格式（`rtsp_h264`、`rtsp_h265`、`rtsp_mjpeg`、`http_jpeg`）仍然支持，保持向后兼容。
+> 旧版组合格式（`rtsp_h264`、`rtsp_h265`、`rtsp_mjpeg`、`http_jpeg`）在 **0.10.0+ 已被拒绝** —— `Validate()` 与摄像头创建处理器会返回错误，要求拆分为独立的 `protocol` 和 `encoding` 字段。
 
 ### RTSP H.264 摄像头
 
@@ -210,15 +210,19 @@ cameras:
 
 > 延时摄影摄像头按周期拍摄快照，不产生连续视频流。
 
-### 使用旧版组合格式
+### 组合格式已弃用
 
-以下格式仍然可用：
+> ⚠️ **0.10.0+ 拒绝组合格式**（如 `rtsp_h264`）。如你从旧版升级且配置里仍用组合格式，必须拆分为独立的 `protocol` + `encoding` 字段，否则 NVR 启动时会校验失败。
+
+**错误（旧）**：`protocol: "rtsp_h264"`
+**正确（新）**：
 
 ```yaml
 cameras:
   - id: "cam1"
-    name: "旧格式摄像头"
-    protocol: "rtsp_h264"
+    name: "摄像头"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://192.168.1.100:554/stream"
     enabled: true
 ```
@@ -274,7 +278,7 @@ ftp 你的服务器地址 2121
 
 ### 端口冲突
 
-- 默认端口为 9090。如果被占用，在配置中修改 `server.listen`（如 `":8080"`）
+- 默认端口为 9090。如果被占用，在配置中修改 `server.listen`（如 `":8080"`）。也可不改配置而通过以下方式覆盖监听端口：环境变量 `NVR_LISTEN_PORT`（如 `NVR_LISTEN_PORT=8080`）、`install.sh --port <端口>` 参数、或 Web UI 设置页。
 
 ### 无法连接摄像头
 

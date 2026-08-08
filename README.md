@@ -237,7 +237,7 @@ Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `latest`, `v1.2.
 
 ```
 cmd/mibee-nvr/       # CLI entry point + app lifecycle
-internal/            # Core packages (29 Go modules)
+internal/            # Core packages (39 Go modules)
 web/                # Svelte 5 SPA frontend
 deploy/             # systemd services, Caddyfile
 docs/               # Bilingual documentation (EN/ZH)
