@@ -66,13 +66,21 @@ export interface VideoFrame {
 /**
  * AudioCodecInfo: audio codec configuration sent once when audio is present.
  * Binary wire format:
- *   {type:1}{codec:1}{sample_rate:4_BE}{channels:1}
+ *   {type:1}{codec:1}{sample_rate:4_BE}{channels:1}{config_len:2_BE}{config}
  *   codec byte: 0x01=G.711 μ-law, 0x02=G.711 A-law, 0x03=Opus, 0x04=AAC
+ *
+ * The trailing {config_len}{config} block carries codec setup needed by the
+ * client decoder: AAC → AudioSpecificConfig (required by WebCodecs
+ * AudioDecoder), Opus → reserved channel-mapping blob, G.711 → empty.
+ * Older clients that stop parsing after `channels` ignore the block, so the
+ * extension is backwards-compatible. decodeAudioCodecInfo accepts both the
+ * legacy 7-byte form (no config_len) and the current 9+ byte form.
  */
 export interface AudioCodecInfo {
   codec: number; // audio codec byte (0x01-0x04)
   sampleRate: number; // sample rate in Hz (e.g. 8000)
   channels: number; // number of audio channels (1=mono)
+  config?: Uint8Array; // codec setup (AAC AASC); empty/undefined when absent
 }
 
 /**
@@ -189,7 +197,17 @@ export function decodeAudioCodecInfo(data: ArrayBuffer): AudioCodecInfo {
   const sampleRate = dv.getUint32(2);
   const channels = dv.getUint8(6);
 
-  return { codec, sampleRate, channels };
+  // Backwards-compatible config block (added for AAC/Opus): legacy 7-byte
+  // packets have no config_len, so only read it when present.
+  let config: Uint8Array | undefined;
+  if (data.byteLength >= 9) {
+    const configLen = dv.getUint16(7);
+    if (9 + configLen <= data.byteLength && configLen > 0) {
+      config = new Uint8Array(data, 9, configLen);
+    }
+  }
+
+  return { codec, sampleRate, channels, config };
 }
 
 // ─── AudioFrame Decode ────────────────────────────────────────────────────

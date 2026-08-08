@@ -53,6 +53,14 @@ type AudioCodecInfo struct {
 	Codec      byte   // audio codec byte (AudioCodecG711Mu, etc.)
 	SampleRate uint32 // sample rate in Hz (e.g. 8000, 44100, 48000)
 	Channels   uint8  // number of channels (1=mono, 2=stereo)
+	// Config carries codec-specific setup bytes needed by the client decoder:
+	//   AAC:  AudioSpecificConfig (AASC) — required by WebCodecs AudioDecoder.
+	//   Opus: channel mapping / pre-skip blob (reserved; not currently produced).
+	//   G.711: nil (μ-law/A-law is fully described by Codec + SampleRate).
+	// Older clients that stop parsing after Channels ignore this field, so the
+	// wire extension (config_len + config appended in EncodeAudioCodecInfo) is
+	// backwards-compatible.
+	Config []byte
 }
 
 // AudioFrameData contains a single audio frame's presentation timestamp,
