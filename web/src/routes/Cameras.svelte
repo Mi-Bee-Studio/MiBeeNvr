@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader, ApiRequestError } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -401,6 +401,15 @@
       showToast(t('cameras.activateSuccess'), 'success');
       await loadCameras();
     } catch (e: any) {
+      // The recorder auto-restored (e.g. on NVR restart) and raced with this
+      // request — the camera is already in the desired state, so treat it as
+      // success rather than a scary red error. Backend returns 409 with
+      // code CAMERA_ALREADY_RUNNING (mirrors the /start endpoint).
+      if (e instanceof ApiRequestError && e.code === 'CAMERA_ALREADY_RUNNING') {
+        showToast(t('errors.CAMERA_ALREADY_RUNNING'), 'info');
+        await loadCameras();
+        return; // don't re-throw: close the dialog, status is already aligned
+      }
       showToast(friendlyError(e, 'cameras.activateFailed'), 'error');
       throw e; // re-throw so CameraCard keeps the dialog open on failure
     }

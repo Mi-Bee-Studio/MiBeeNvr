@@ -456,6 +456,38 @@ func TestStartCamera_NoManager(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
+// --- handleActivateCamera tests ---
+//
+// handleActivateCamera parses the JSON body before checking the manager, so
+// the InvalidBody branch (400) is reachable even with a nil manager. The
+// NoManager case mirrors TestStartCamera_NoManager: a valid (empty) body with
+// no manager wired up returns 503. The 409 (CameraAlreadyRunningError) and 404
+// (CameraNotFoundError) branches require a real CameraManager, which the test
+// harness does not inject (camMgr is a concrete *camera.CameraManager, not an
+// interface); they are covered instead by the higher-level camera-manager tests.
+
+func TestActivateCamera_InvalidBody(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/test-cam/activate", bytes.NewReader([]byte("not json")), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestActivateCamera_NoManager(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	// A valid JSON body is required so the handler reaches the manager-nil
+	// check (an empty/nil body fails JSON decode with io.EOF → 400 first).
+	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/test-cam/activate", bytes.NewReader([]byte(`{}`)), "", "")
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}
+
 // --- handleStopCamera tests ---
 
 func TestStopCamera_NoManager(t *testing.T) {

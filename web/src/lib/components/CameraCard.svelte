@@ -390,7 +390,7 @@ let healthShowWarningIcon = $derived(
      {/if}
      <!-- Activate: supply credentials for a pending_activation camera (auto-discovered,
           credentials unknown). -->
-     {#if isPendingActivation && onactivate}
+     {#if isPendingActivation && camera.status !== 'recording' && onactivate}
         <button
           class="btn btn-ghost px-2 py-1 text-sm text-amber-400 hover:text-amber-300"
           onclick={() => (activateOpen = true)}
