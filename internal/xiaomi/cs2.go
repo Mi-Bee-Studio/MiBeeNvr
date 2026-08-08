@@ -46,6 +46,22 @@ func CS2Dial(host, transport string, idleTimeout time.Duration) (*CS2Conn, error
 }
 
 // CS2Conn wraps a CS2 P2P connection (UDP or TCP) to a Xiaomi device.
+//
+// # Lock-order audit (#234): no mu ↔ cmdMu cycle exists.
+//
+// The two mutexes are never nested by any goroutine:
+//   - mu    protects only `err` (via setErr/getErr). The worker goroutine is
+//     its only writer; Read*/Error helpers read it. None of these take
+//     cmdMu.
+//   - cmdMu serializes WriteCommand (channel-0 command sends + UDP ACK retry
+//     loop). While holding cmdMu, WriteCommand does NOT take mu — it
+//     touches seqCh0 (mutation is serialized by cmdMu itself, so no
+//     race) and sets c.cmdAck, then blocks on a timer.
+//
+// The worker's cs2MsgDrwAck path invokes c.cmdAck() (which unblocks a pending
+// WriteCommand) WITHOUT holding mu or cmdMu, so there is no nested acquisition
+// in either direction. The PTZ/motor/two-way-audio command paths all go through
+// WriteCommand (under cmdMu) and none re-enter mu.
 type CS2Conn struct {
 	net.Conn
 	isTCP       bool
