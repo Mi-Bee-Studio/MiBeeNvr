@@ -62,6 +62,7 @@ type streamEntry struct {
 	audioCodec      byte                  // wire format codec byte
 	audioSampleRate uint32                // sample rate in Hz
 	audioChannels   uint8                 // number of channels
+	audioConfig     []byte                // codec config (AAC AASC; nil for G.711)
 	audioCh         chan model.AudioFrame // audio frame channel, nil if no audio
 	audioSubID      string                // StreamHub audio subscription ID
 }
@@ -350,7 +351,10 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 // Must be called after RegisterStream. Audio frames will be forwarded
 // from the StreamHub to WebSocket viewers alongside video frames.
 // For G.711 codecs, muLaw specifies μ-law (true) vs A-law (false).
-func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRate int, channels int) error {
+// config carries codec-specific setup bytes forwarded to clients in the
+// AudioCodecInfo message: for AAC this is the AudioSpecificConfig (required
+// by browser-side WebCodecs AudioDecoder); for G.711 it is nil.
+func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRate int, channels int, config []byte) error {
 	m.mu.RLock()
 	entry, ok := m.streams[camID]
 	m.mu.RUnlock()
@@ -378,6 +382,12 @@ func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRat
 	entry.audioCodec = codecByte
 	entry.audioSampleRate = uint32(sampleRate)
 	entry.audioChannels = uint8(channels)
+	// Deep-copy config so the caller can't mutate what viewers receive.
+	if config != nil {
+		entry.audioConfig = append([]byte(nil), config...)
+	} else {
+		entry.audioConfig = nil
+	}
 
 	// Lazily allocate audio channel
 	if entry.audioCh == nil {
@@ -407,6 +417,7 @@ func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRat
 		"codec", codec,
 		"sample_rate", sampleRate,
 		"channels", channels,
+		"config_len", len(config),
 	)
 	return nil
 }
@@ -561,6 +572,7 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 			Codec:      entry.audioCodec,
 			SampleRate: entry.audioSampleRate,
 			Channels:   entry.audioChannels,
+			Config:     entry.audioConfig,
 		}
 		aciData, err := EncodeAudioCodecInfo(aci)
 		if err != nil {
@@ -733,6 +745,6 @@ var _ interface {
 	writeH264(camID string, pts int64, au [][]byte)
 	writeH265(camID string, pts int64, au [][]byte)
 	ServeWS(camID string, w http.ResponseWriter, r *http.Request) error
-	SetAudioInfo(camID string, codec string, muLaw bool, sampleRate int, channels int) error
+	SetAudioInfo(camID string, codec string, muLaw bool, sampleRate int, channels int, config []byte) error
 	StopAll()
 } = (*Manager)(nil)

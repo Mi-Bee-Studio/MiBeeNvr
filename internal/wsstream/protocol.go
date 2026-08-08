@@ -274,20 +274,27 @@ func decodeVideoFrame(data []byte) (*VideoFrame, error) {
 
 // EncodeAudioCodecInfo encodes an AudioCodecInfo into binary wire format.
 //
-// Wire format:
+// Wire format (the trailing config block was added for AAC/Opus support and
+// is backwards-compatible: clients written before it parse only the first 7
+// bytes and ignore the rest):
 //
-//	{type:1}{audio_codec:1}{sample_rate:4_BE}{channels:1}
+//	{type:1}{audio_codec:1}{sample_rate:4_BE}{channels:1}{config_len:2_BE}{config}
 //
-// All multi-byte integers are big-endian.
+// For G.711, Config is nil and config_len is 0. For AAC, Config is the
+// AudioSpecificConfig. All multi-byte integers are big-endian.
 func EncodeAudioCodecInfo(ci *AudioCodecInfo) ([]byte, error) {
 	if ci == nil {
 		return nil, errors.New("wsstream: nil AudioCodecInfo")
 	}
-	buf := make([]byte, 7)
+	configLen := len(ci.Config)
+	// type(1) + codec(1) + sample_rate(4) + channels(1) + config_len(2) + config
+	buf := make([]byte, 9+configLen)
 	buf[0] = MsgTypeAudioCodecInfo
 	buf[1] = ci.Codec
 	binary.BigEndian.PutUint32(buf[2:], ci.SampleRate)
 	buf[6] = ci.Channels
+	binary.BigEndian.PutUint16(buf[7:], uint16(configLen))
+	copy(buf[9:], ci.Config)
 	return buf, nil
 }
 

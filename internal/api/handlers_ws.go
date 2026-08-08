@@ -136,18 +136,23 @@ func setupAudioForWS(h *Handler, id string, rec model.Recorder) {
 	sampleRate := provider.AudioSampleRate()
 	channels := provider.AudioChannels()
 
-	// For G.711, determine μ-law vs A-law from config bytes
+	// For G.711, determine μ-law vs A-law from config bytes.
+	// For AAC, AudioConfig() returns the AudioSpecificConfig (AASC), which the
+	// client needs to configure its WebCodecs AudioDecoder.
 	muLaw := false
+	var audioConfig []byte
 	if audioCodec == "g711" {
 		config := provider.AudioConfig()
 		if len(config) > 0 && config[0] == 1 {
 			muLaw = true
 		}
+	} else if audioCodec == "aac" {
+		audioConfig = provider.AudioConfig()
 	}
 
-	if err := h.wsMgr.SetAudioInfo(id, audioCodec, muLaw, sampleRate, channels); err != nil {
+	if err := h.wsMgr.SetAudioInfo(id, audioCodec, muLaw, sampleRate, channels, audioConfig); err != nil {
 		slog.Warn("WS: failed to set audio info", "camera_id", id, "error", err)
 	} else {
-		slog.Info("WS: audio configured", "camera_id", id, "codec", audioCodec, "muLaw", muLaw, "rate", sampleRate, "channels", channels)
+		slog.Info("WS: audio configured", "camera_id", id, "codec", audioCodec, "muLaw", muLaw, "rate", sampleRate, "channels", channels, "config_len", len(audioConfig))
 	}
 }

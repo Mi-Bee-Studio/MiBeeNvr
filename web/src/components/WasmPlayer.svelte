@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
-  import { Maximize, Minimize, AlertCircle, RefreshCw, Volume2, VolumeX } from 'lucide-svelte';
+  import { Maximize, Minimize, AlertCircle, RefreshCw, Volume2, VolumeX, Volume } from 'lucide-svelte';
   import { getTokenForUrl } from '$lib/api';
   import type { StreamState } from '$lib/hls-errors';
   import { getPlaybackTier, detectWebCodecs, detectWebGL2 } from '$lib/webcodecs-player/capabilities';
@@ -68,6 +68,24 @@ let webgpuRenderer: WebGPURenderer | null = null;
   let audioPlayer: AudioPlayer | null = null;
   let hasAudio = $state(false);
   let audioMuted = $state(true); // Start muted per autoplay policy
+  // Mirrors AudioPlayer.unavailableReason so the audio button can render a
+  // disabled state + degradation hint when the codec has no decode path.
+  let audioUnavailableReason = $state<import('$lib/audio-player').AudioDecodeUnavailableReason | null>(null);
+
+  function audioTooltip(): string {
+    switch (audioUnavailableReason) {
+      case 'unsupported_codec':
+        return t('live.audioUnsupported');
+      case 'webcodecs_unavailable':
+        return t('live.audioWebCodecsUnavailable');
+      case 'wasm_load_failed':
+        return t('live.audioWasmFailed');
+      case 'decoder_error':
+        return t('live.audioDecodeError');
+      default:
+        return '';
+    }
+  }
 
   // Web Worker
   let worker: Worker | null = null;
@@ -553,8 +571,11 @@ function handleWebGpuLost() {
       },
       onAudioCodecInfo: (info) => {
         hasAudio = true;
-        // Pre-create AudioPlayer (but don't init until user clicks unmute)
-        audioPlayer = new AudioPlayer(info.codec, info.sampleRate, info.channels);
+        // Pre-create AudioPlayer (but don't init until user clicks unmute).
+        // Pass the codec config (AAC AASC / Opus channel blob) so the decoder
+        // backend can be configured when init() runs.
+        audioPlayer = new AudioPlayer(info.codec, info.sampleRate, info.channels, info.config);
+        audioUnavailableReason = null; // reset; re-evaluated on init()
       },
       onAudioFrame: (frame) => {
         if (audioPlayer?.initialized) {
@@ -1062,16 +1083,24 @@ onDestroy(() => {
       onclick={async (e: MouseEvent) => {
         e.stopPropagation();
         if (!audioPlayer) return;
+        // If this codec has no usable decode path (e.g. AAC/Opus over plain
+        // HTTP without WebCodecs/WASM), do nothing — the tooltip explains why.
+        if (audioUnavailableReason) return;
         if (!audioPlayer.initialized) {
           await audioPlayer.init();
+          audioUnavailableReason = audioPlayer.unavailableReason ?? null;
+          if (audioUnavailableReason) return;
         }
         audioMuted = !audioMuted;
         audioPlayer.setMuted(audioMuted);
       }}
+      disabled={!!audioUnavailableReason}
       class="absolute top-2 right-{expanded ? '10' : '10'} p-1.5 rounded-md bg-black/50 text-white/70 hover:text-white hover:bg-black/70 transition-all z-10"
-      title={audioMuted ? t('live.unmute') || 'Unmute' : t('live.mute') || 'Mute'}
+      title={audioUnavailableReason ? audioTooltip() : audioMuted ? t('live.unmute') || 'Unmute' : t('live.mute') || 'Mute'}
     >
-      {#if audioMuted}
+      {#if audioUnavailableReason}
+        <Volume size={16} class="opacity-50" />
+      {:else if audioMuted}
         <VolumeX size={16} />
       {:else}
         <Volume2 size={16} />
