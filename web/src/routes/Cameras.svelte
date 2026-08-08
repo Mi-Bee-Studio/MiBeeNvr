@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader, ApiRequestError } from '$lib/api';
-  import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse } from '$lib/api';
+  import { onMount, onDestroy } from 'svelte';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader, ApiRequestError } from '$lib/api';
+  import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse, ArchiveCleanupTask, ArchiveCleanupStatus } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { friendlyError } from '$lib/errors';
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
-  import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings } from 'lucide-svelte';
+  import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings, Loader2 } from 'lucide-svelte';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import CameraCard from '$lib/components/CameraCard.svelte';
@@ -41,6 +41,8 @@
   let selectedArchiveGroup = $state<ArchiveGroup | null>(null);
   let retentionDays = $state(30);
   let healthData = $state<Record<string, CameraHealth>>({});
+  let cleanupTasks = $state<ArchiveCleanupTask[]>([]);
+  let cleanupPolling = $state<number | null>(null);
 
   // Form state
   let showForm = $state(false);
@@ -88,6 +90,21 @@
     }
   }
 
+  async function loadCleanupStatus() {
+    try {
+      const res = await getArchiveCleanupStatus();
+      cleanupTasks = [...res.active, ...res.recent.filter(t => t.status === 'failed')];
+      // Stop polling when no active tasks remain
+      if (res.active.length === 0 && cleanupPolling) {
+        clearInterval(cleanupPolling);
+        cleanupPolling = null;
+        if (res.recent.some(t => t.status === 'done')) {
+          showToast(t('cameras.archive.cleanup.allDone'), 'success');
+        }
+      }
+    } catch (e) { /* silent fail — polling is best-effort */ }
+  }
+
   async function openArchiveConfirm(camera: Camera) {
     archiveConfirm = camera;
     archiveConfirmCount = 0;
@@ -121,8 +138,13 @@
       showToast(t('cameras.archive.deleteAllSuccess'), 'success');
       confirmDeleteArchive = null;
       await loadArchives();
+      // Start polling for cleanup status
+      if (!cleanupPolling) {
+        await loadCleanupStatus();
+        cleanupPolling = window.setInterval(loadCleanupStatus, 3000);
+      }
     } catch (e) {
-      showToast(t('cameras.failedArchive'), 'error');
+      showToast(t('cameras.archive.cleanup.deleteFailed'), 'error');
     } finally {
       deleteArchiveLoading = false;
     }
@@ -431,6 +453,11 @@
   onMount(async () => {
     loadCameras();
     loadHealth();
+    loadArchives().then(() => loadCleanupStatus().then(() => {
+      if (cleanupTasks.some(t => t.status === 'pending' || t.status === 'running')) {
+        cleanupPolling = window.setInterval(loadCleanupStatus, 3000);
+      }
+    }));
     try {
       const list = await listProtocols();
       if (list && list.length > 0) {
@@ -459,6 +486,8 @@
     const healthInterval = window.setInterval(() => loadHealth(), 30000);
     return () => clearInterval(healthInterval);
   });
+
+  onDestroy(() => { if (cleanupPolling) clearInterval(cleanupPolling); });
 
   // Live auto-discover notifications: when the backend's auto-discover service
   // adds a camera, it publishes a 'camera.added' SSE event. Refresh the list and
@@ -659,6 +688,28 @@
         {/if}
       {:else}
         <!-- Archived Tab -->
+        {#if cleanupTasks.length > 0}
+          <div class="card border th-border p-4 mb-4 flex items-center gap-3">
+            <Loader2 size={20} class="animate-spin th-text-secondary shrink-0" />
+            <div class="flex-1 min-w-0">
+              <p class="text-sm th-text-primary font-medium">
+                {t('cameras.archive.cleanup.inProgress', { count: String(cleanupTasks.filter(t => t.status === 'pending' || t.status === 'running').length) })}
+              </p>
+              <div class="mt-1 space-y-0.5">
+                {#each cleanupTasks as task (task.camera_id)}
+                  <p class="text-xs th-text-muted">
+                    {t('cameras.archive.cleanup.taskItem', {
+                      name: task.camera_name,
+                      count: String(task.recording_count),
+                      size: formatFileSize(task.total_size),
+                      status: t('cameras.archive.cleanup.status' + task.status.charAt(0).toUpperCase() + task.status.slice(1))
+                    })}
+                  </p>
+                {/each}
+              </div>
+            </div>
+          </div>
+        {/if}
         {#if archives.length === 0}
           <div class="card border th-border p-12 text-center mt-6">
             <div class="flex justify-center mb-4 th-text-muted">

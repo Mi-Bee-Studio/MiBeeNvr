@@ -572,6 +572,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		}
 	}
 	deps.cleanupMgr = cleanupMgr
+	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)
 
 	// Step 9: Optional MQTT client
 	if cfg.MQTT.Enabled {
