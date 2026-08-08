@@ -76,7 +76,8 @@ type appDeps struct {
 	srtListener *srt.Listener
 
 	// Cleanup
-	cleanupMgr *cleanup.CleanupManager
+	cleanupMgr     *cleanup.CleanupManager
+	archiveDeleter *cleanup.ArchiveDeleter
 
 	// HTTP layer
 	handler    *api.Handler

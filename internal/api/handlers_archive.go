@@ -1,7 +1,9 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"time"
@@ -84,7 +86,7 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 	cameraID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	// Verify camera is archived
+	// 1. Verify camera is archived
 	cam, err := h.db.GetCamera(ctx, cameraID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
@@ -95,38 +97,38 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Get all archived recording IDs for batch DB deletion
-	trueVal := true
-	recordings, err := h.db.ListRecordings(ctx, model.RecordingFilter{CameraID: cameraID, Archived: &trueVal})
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
-		return
-	}
+	// 2. Get stats for the task record (best-effort)
+	count, totalSize, _ := h.db.GetArchiveGroupStats(ctx, cameraID)
 
-	// Delete all recording rows from DB (single transaction)
-	ids := make([]string, len(recordings))
-	for i, rec := range recordings {
-		ids[i] = rec.ID
-	}
-	if len(ids) > 0 {
-		if _, err := h.db.DeleteRecordingsBatch(ctx, ids); err != nil {
-			WriteError(w, http.StatusInternalServerError, "failed to delete recordings")
-			return
-		}
-	}
+	// 3. Create cleanup task (status=pending)
+	h.db.CreateArchiveCleanupTask(ctx, storage.ArchiveCleanupTask{
+		CameraID:       cameraID,
+		CameraName:     cam.Name,
+		RecordingCount: count,
+		TotalSize:      totalSize,
+		Status:         "pending",
+	})
 
-	// Delete camera row from DB
-	if err := h.db.DeleteCamera(ctx, cameraID); err != nil {
+	// 4. Delete camera row immediately (vanishes from all list queries).
+	// Map sql.ErrNoRows to success: a concurrent delete request may have
+	// already deleted the row — the cleanup task is still needed regardless.
+	if err := h.db.DeleteCamera(ctx, cameraID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		WriteError(w, http.StatusInternalServerError, "failed to delete camera")
 		return
 	}
 
-	// Remove entire camera directory from disk (handles all files at once)
-	if err := h.store.DeleteCameraDir(cameraID); err != nil {
-		logger.Warn("failed to remove camera directory", "camera_id", cameraID, "error", err)
-	}
+	// 5. Return 202 — background worker handles recordings + disk cleanup
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deleting"})
+}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+func (h *Handler) handleGetCleanupStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	active, _ := h.db.ListActiveArchiveCleanupTasks(ctx)
+	recent, _ := h.db.ListRecentArchiveCleanupTasks(ctx, time.Now().Add(-1*time.Hour))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"active": active, // pending + running
+		"recent": recent, // done + failed (last 1h)
+	})
 }
 
 func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +210,7 @@ func (h *Handler) registerArchiveRoutes(r chi.Router) {
 	r.Route("/api/archives", func(r chi.Router) {
 		r.Get("/", h.handleListArchives)
 		r.Get("/{id}/recordings", h.handleListArchiveRecordings)
+		r.Get("/cleanup-status", h.handleGetCleanupStatus)
 		r.Delete("/{id}", h.handleDeleteArchiveGroup)
 		r.Delete("/{id}/recordings/{recordingID}", h.handleDeleteArchiveRecording)
 		r.Put("/{id}/retention", h.handleSetArchiveRetention)

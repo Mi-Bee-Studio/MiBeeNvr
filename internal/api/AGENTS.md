@@ -49,6 +49,7 @@ xiaomi_local.go           # Local Xiaomi auth implementation
 | Transcoding tasks | `handlers_transcode.go` | Hardware check, FFmpeg jobs, backfill |
 | Health monitoring | `handlers_health.go` | Camera health history |
 | Camera archiving | `handlers_archive.go` | Archive/restore operations |
+| Archive camera deletion | `handlers_archive.go` | Async: DELETE returns 202, background ArchiveDeleter worker processes recordings + disk cleanup. GET /cleanup-status for progress. |
 | Merge policies | `handlers_merge.go` | Per-camera segment merge config |
 | HLS streaming | `handlers_hls.go` | HLS segment proxy |
 | HTTP-FLV | `handlers_flv.go` | HTTP-FLV streaming endpoint |
