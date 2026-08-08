@@ -80,4 +80,3 @@ func (silentRecorder) Stop() error                 { return nil }
 func (silentRecorder) Status() model.RecorderStatus {
 	return model.RecorderStatus("idle")
 }
-
