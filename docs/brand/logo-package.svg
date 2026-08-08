@@ -1,5 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="MiBeeNvr">
   <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#635bff"/>
+      <stop offset="1" stop-color="#3a1c9e"/>
+    </linearGradient>
     <linearGradient id="lensGrad" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#cfcaff"/>
@@ -9,24 +13,26 @@
       <stop offset="1" stop-color="#3a1c9e"/>
     </linearGradient>
   </defs>
+  <!-- 圆角套件底板 -->
+  <rect x="0" y="0" width="256" height="256" rx="56" ry="56" fill="url(#bgGrad)"/>
   <!-- 机翼 -->
-  <g fill="#ffffff" stroke="#635bff" stroke-width="2" opacity="0.96">
+  <g fill="#ffffff" opacity="0.95">
     <ellipse cx="94" cy="100" rx="25" ry="42" transform="rotate(-22 94 100)"/>
     <ellipse cx="162" cy="100" rx="25" ry="42" transform="rotate(22 162 100)"/>
   </g>
   <!-- 触角 -->
-  <g fill="none" stroke="#3a1c9e" stroke-width="4" stroke-linecap="round">
+  <g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.9">
     <path d="M116 102 C108 84 104 70 99 56"/>
     <path d="M140 102 C148 84 152 70 157 56"/>
   </g>
   <!-- 机身/镜头 -->
-  <circle cx="128" cy="154" r="56" fill="#1b1147"/>
-  <circle cx="128" cy="154" r="48" fill="url(#lensGrad)" stroke="#ffffff" stroke-width="3"/>
-  <circle cx="128" cy="154" r="31" fill="url(#bodyGrad)"/>
-  <circle cx="128" cy="154" r="17" fill="#160d3a"/>
-  <circle cx="118" cy="144" r="7" fill="#ffffff" opacity="0.85"/>
+  <circle cx="128" cy="154" r="58" fill="#ffffff" opacity="0.12"/>
+  <circle cx="128" cy="154" r="50" fill="url(#lensGrad)" stroke="#ffffff" stroke-width="3"/>
+  <circle cx="128" cy="154" r="33" fill="url(#bodyGrad)"/>
+  <circle cx="128" cy="154" r="18" fill="#2a1b6b"/>
+  <circle cx="118" cy="144" r="7" fill="#ffffff" opacity="0.9"/>
   <!-- 蜜蜂黄尾 -->
-  <circle cx="128" cy="214" r="9" fill="#ffd166" stroke="#3a1c9e" stroke-width="2"/>
+  <circle cx="128" cy="214" r="9" fill="#ffd166"/>
   <!-- REC -->
   <circle cx="200" cy="58" r="12" fill="#ff4d5e"/>
 </svg>
