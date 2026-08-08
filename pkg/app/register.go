@@ -231,6 +231,19 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 7.5. archive-deleter — background cleanup of deleted archived cameras
+	if err := a.Register(&serviceFunc{
+		name: "archive-deleter",
+		startFunc: func(ctx context.Context) error {
+			return deps.archiveDeleter.Start(ctx)
+		},
+		stopFunc: func() error {
+			return deps.archiveDeleter.Stop()
+		},
+	}); err != nil {
+		return fmt.Errorf("register archive-deleter: %w", err)
+	}
+
 	// 8. mqtt (optional)
 	if deps.mqttClient != nil {
 		if err := a.Register(&serviceFunc{
