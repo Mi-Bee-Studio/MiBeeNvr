@@ -808,6 +808,11 @@ func (h *Handler) handleActivateCamera(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.As(err, new(*model.CameraNotFoundError)):
 			writeAPIError(w, http.StatusNotFound, err)
+		case errors.As(err, new(*model.CameraAlreadyRunningError)):
+			// Idempotent: the recorder auto-restored (e.g. on NVR restart) and raced
+			// with this request. Mirrors handleStartCamera's 409 — the camera is
+			// already in the desired state, not a server error.
+			writeAPIError(w, http.StatusConflict, err)
 		default:
 			logger.Error("failed to activate camera", "camera_id", id, "error", err, "path", r.URL.Path)
 			WriteError(w, http.StatusInternalServerError, "failed to activate camera")
