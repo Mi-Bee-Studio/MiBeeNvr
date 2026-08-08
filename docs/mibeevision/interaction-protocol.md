@@ -1,8 +1,10 @@
 # 交互协议总纲 — MiBeeVision ↔ MiBeeNVR
 
-> **状态**：设计中（2026-06-15）
+> **状态**：已实施（代码 2026-08 校准；原设计 2026-06-15）
 > **读者**：MiBeeNVR 团队 (Go)、MiBeeVision 团队 (Rust)
 > **基础**：REST + SSE + 流协议，API Key 认证
+>
+> ⚠️ **本文档以下部分已按实际代码校准**（早期设计稿与实现有出入）：SSE `data:` 行负载是整个 `Event{Topic,Data}` 嵌套 JSON（非扁平 `{event,data}`）；`file_path` 是绝对路径（非相对 storage root）；`POST /api/ai/events` 的 JSON key 是 `class_name`；`ai_status` 合法值为 `pending/processing/completed/failed`（无 `done`/`skipped`）。
 
 ---
 
@@ -50,46 +52,37 @@ api_keys:
 
 > **状态**：SSE 基础设施已存在（`GET /api/events`），需标准化事件 data 字段。
 
-### segment.completed（已有，需增强）
+### segment.completed（已实施）
 
-```json
-{
-  "event": "segment.completed",
-  "data": {
-    "recording_id": "abc123",
-    "camera_id": "cam01",
-    "file_path": "recordings/cam01/2026-06-15/segment-120000.mp4",
-    "format": "mp4",
-    "encoding": "h265",
-    "started_at": "2026-06-15T12:00:00Z",
-    "ended_at": "2026-06-15T12:00:30Z",
-    "duration": 30.0,
-    "file_size": 1234567,
-    "download_url": "/api/recordings/abc123"
-  }
-}
+SSE 的 `data:` 行是**整个 Event 结构的 JSON**（嵌套），不是扁平对象：
+
+```
+event: segment.completed
+data: {"Topic":"segment.completed","Data":{"camera_id":"cam01","file_path":"/mnt/data/nvr/cam01/20260615/120000.mp4","format":"mp4","encoding":"h265","started_at":"2026-06-15T12:00:00Z","ended_at":"2026-06-15T12:00:30Z","file_size":1234567,"recording_id":"abc123"}}
 ```
 
-**变更**（相比现有 `SegmentCompleted` struct）：
-- `file_path` 改为**相对 storage root** 的路径（跨服务器兼容）
-- 新增 `encoding` 字段（h264/h265/mjpeg）
-- 新增 `download_url`（相对 API 路径）
+`Data` 内字段（对应 `internal/event/types.go::SegmentCompleted`）：
 
-### segment.deleted（新增）
+| 字段 | 说明 |
+|---|---|
+| `camera_id` | 摄像头 ID |
+| `file_path` | **绝对**路径（如 `/mnt/data/nvr/cam01/...`，由 `storage.Manager` 的 `filepath.Join(rootDir,...)` 构造） |
+| `format` | mp4 / ... |
+| `encoding` | h264 / h265 / mjpeg |
+| `started_at` / `ended_at` | 时间戳（RFC3339Nano 或 DB 时间戳格式） |
+| `file_size` | 字节 |
+| `recording_id` | 录像 ID |
 
-```json
-{
-  "event": "segment.deleted",
-  "data": {
-    "recording_id": "abc123",
-    "camera_id": "cam01",
-    "file_path": "recordings/cam01/2026-06-15/segment-120000.mp4",
-    "reason": "retention_expired"
-  }
-}
+> **注意**：没有 `download_url` 字段；下载走 `GET /api/recordings/{recording_id}/download`。`file_path` 在 struct 上有"relative to storage root"的注释，但实际发布的是**绝对**路径（设计意图未落地）。
+
+### segment.deleted（已实施）
+
+```
+event: segment.deleted
+data: {"Topic":"segment.deleted","Data":{"recording_id":"abc123","camera_id":"cam01","file_path":"/mnt/data/nvr/...","reason":"retention_expired"}}
 ```
 
-MiBeeVision 收到后取消进行中的处理任务，标记关联的 AI 事件快照为孤儿。
+`reason` 取值：`retention_expired` / `manual` / `disk_threshold`。MiBeeVision 收到后取消进行中的处理任务，标记关联的 AI 事件快照为孤儿。
 
 ---
 
@@ -108,7 +101,7 @@ Content-Type: application/json
   "event_type": "zone_intrusion",      // zone_intrusion / line_crossing / loitering / object_detected / custom
   "severity": "warning",               // info / warning / critical
   "zone_name": "后院",                  // 可选
-  "class_name": "person",              // COCO class 或自定义
+  "class_name": "person",              // ⚠️ JSON key 必须是 class_name（NVR handler 与 DB 列都读 class_name），勿用 label
   "confidence": 0.92,
   "frame_idx": 150,
   "frame_timestamp": "2026-06-15T12:00:15Z",  // 帧在录像中的时间点
@@ -117,6 +110,8 @@ Content-Type: application/json
   "metadata": {}                       // 自定义扩展字段
 }
 ```
+
+> **`class_name` 字段名说明**：早期协议草案写 `label`，但 NVR 的 `handleCreateAIEvent`（`internal/api/handlers_ai.go`）和 `ai_events` 表列实际读取的 JSON key 是 `class_name`。外部 AI 后端提交事件时**必须用 `class_name`**（而非 `label`），否则该列恒为空。
 
 **响应**：
 ```json
@@ -151,11 +146,14 @@ CREATE INDEX idx_ai_events_recording ON ai_events(recording_id);
 ### 查询接口
 
 ```
-GET /api/ai/events?camera_id=&event_type=&since=&limit=&offset=
+GET /api/ai/events?camera_id=&event_type=&start=&end=&asc=&limit=&offset=   # camera_id 可选
 GET /api/ai/events/{id}
-GET /api/ai/events/{id}/snapshot      -- 返回快照图片
-GET /api/ai/stats?camera_id=&period=  -- 统计（按天/周聚合）
+GET /api/ai/stats?camera_id=&period=  # camera_id 可选（缺省=全局聚合）；period: 1h/24h/7d/30d
 ```
+
+> 时间过滤用 `start` / `end`（RFC3339Nano），`asc=true` 升序 —— **无 `since` 参数**。列表响应含 `events`/`total`/`limit`/`offset` 字段。`camera_id` 在两个端点均为可选（issue #213 已修复，缺省时做全局聚合）。
+>
+> ⚠️ 不存在 `GET /api/ai/events/{id}/snapshot` 路由（`snapshot_path` 存于 DB 但无独立 serving 端点）。
 
 ---
 
@@ -193,9 +191,9 @@ PATCH /api/recordings/{id}
 # 删除录像（如清理中间产物）
 DELETE /api/recordings/{id}?delete_file=true
 
-# 替换录像文件（原子操作：上传新文件 → 替换 DB 记录 → 删旧文件）
-PUT /api/recordings/{id}/file
-Content-Type: multipart/form-data or application/octet-stream
+# 替换录像文件（⚠️ 未实现；见 future-design.md 域 8）
+# PUT /api/recordings/{id}/file
+# Content-Type: multipart/form-data or application/octet-stream
 ```
 
 ### 权限
@@ -210,7 +208,8 @@ Content-Type: multipart/form-data or application/octet-stream
 
 ```sql
 ALTER TABLE recordings ADD COLUMN ai_status TEXT DEFAULT NULL;
--- NULL=未处理, pending=排队中, processing=处理中, done=完成, failed=失败, skipped=跳过
+-- NULL=未处理, pending=排队中, processing=处理中, completed=完成, failed=失败
+-- ⚠️ 无 done / skipped；NVR handler 校验并拒绝非法值（返回 400）
 ALTER TABLE recordings ADD COLUMN ai_processed_at TEXT DEFAULT NULL;
 ALTER TABLE recordings ADD COLUMN ai_error TEXT DEFAULT NULL;
 ```
@@ -218,17 +217,19 @@ ALTER TABLE recordings ADD COLUMN ai_error TEXT DEFAULT NULL;
 ### 接口
 
 ```
-# MiBeeVision 标记处理状态
+# MiBeeVision 标记处理状态（body JSON key 是 ai_status）
 PATCH /api/recordings/{id}/ai-status
-{ "status": "processing" }
+{ "ai_status": "processing" }
 PATCH /api/recordings/{id}/ai-status
-{ "status": "done", "event_count": 3 }
+{ "ai_status": "completed", "event_count": 3 }
 PATCH /api/recordings/{id}/ai-status
-{ "status": "failed", "error": "decoder initialization failed" }
+{ "ai_status": "failed", "ai_error": "decoder initialization failed" }
 
 # NVR Web 查询（已有 recordings API 自动返回 ai_status 字段）
 GET /api/recordings?ai_status=pending
 ```
+
+> 合法值：`pending` / `processing` / `completed` / `failed`（`internal/api/handlers_recording.go::handleUpdateRecordingAIStatus` 校验；其它值返回 400 `"invalid ai_status; must be one of: pending, processing, completed, failed"`）。
 
 ### 轮转保护
 - Cleanup manager 删除录像时检查 `ai_status`：`processing` 状态的录像跳过删除
@@ -270,16 +271,18 @@ NVR 发现需要转码 → 检查 MiBeeVision 是否可用
 
 | event | data 关键字段 | 触发时机 |
 |-------|--------------|----------|
-| `segment.completed` | recording_id, camera_id, file_path(相对), encoding | 录像片段录制完成 |
+| `segment.completed` | recording_id, camera_id, file_path(**绝对**), encoding | 录像片段录制完成 |
 | `segment.deleted` | recording_id, file_path, reason | 录像被轮转/手动删除 |
 | `camera.status` | camera_id, status, error | 摄像头状态变化（在线/离线/错误） |
 | `ai.event.created` | event_id, camera_id, event_type | AI 事件被创建（Vision→NVR 回写后，NVR 可选广播给其他订阅者） |
 
+> ⚠️ `data:` 行负载是整个 `Event{Topic,Data}` JSON（嵌套），字段在 `Data` 内 —— 见 §三示例。
+
 ### SSE 订阅
 ```
-GET /api/events?filter=segment.&api_key=mbv_xxx
+GET /api/events?filter=segment.
 ```
-- MiBeeVision 订阅 `segment.` 前缀获取录像事件
+- MiBeeVision 订阅 `segment.` 前缀获取录像事件。**该端点公开、限流 60/min（无需 api_key）**。
 - 心跳：每 15s 发送 `: ping`
 - 断线重连：MiBeeVision 用 `Last-Event-ID` header 恢复
 

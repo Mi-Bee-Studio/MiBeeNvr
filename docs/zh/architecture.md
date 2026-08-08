@@ -275,7 +275,7 @@ G.711 使用 `rtplpcm.Decoder`（返回原始 8-bit 字节，不做解压），A
 - 每个音频帧创建一个 `AudioBuffer`，填充解码后的 Float32 样本。
 - **无缝调度**：通过 `_nextTime` 跟踪串联 `AudioBufferSourceNode` 实例。每个缓冲持续时间 = `frameCount / sampleRate`（G.711 通常 20ms）。如果调度超前 >1s，`_nextTime` 重置以防内存堆积。
 - AudioContext 在用户点击时创建（浏览器自动播放策略）。由 `CameraAudioButton.svelte` 处理。
-- 实时预览仅支持 G.711 解码。AAC 和 Opus 直接返回（不支持）。Opus 支持需要解码器库（如 libopus WASM）。
+- **实时预览三种编码均已支持解码**（#131）：G.711 经 ITU-T 查找表；AAC 经 WebCodecs `AudioDecoder`（HTTPS/localhost）或 FAAD2 WASM（明文 HTTP）；Opus 经 WebCodecs `OpusDecoder`。见 `web/src/lib/audio-player.ts` 与 `web/src/lib/decoders/`。（早期仅支持 G.711，AAC/Opus 实时预览在 #131 加入。）
 
 ### 7.8 组件表格
 
@@ -321,7 +321,7 @@ Browser
 - **AudioContext 采样率匹配**：AudioContext 必须以流的原生采样率（G.711 为 8000 Hz）创建。使用浏览器默认值（48000 Hz）会导致逐缓冲重采样伪影。
 - **无服务端解码**：所有 G.711 解码在浏览器中进行。后端直接透传原始编解码器字节，不做变换。
 - **录制与实时预览的差异**：录制回放使用浏览器原生 MP4 音频解码器（经过充分测试，清晰）。实时预览使用 JS 查找表 + Web Audio API（需要正确的表和采样率匹配）。
-- **AAC 和 Opus 限制**：实时预览仅支持 G.711 解码。AAC 和 Opus 摄像头在录制中有音频（浏览器原生解码），但实时预览无音频。
+- **AAC/Opus 实时预览解码（#131 已支持）**：实时预览现支持全部三种编码——G.711 经查找表；AAC 经 WebCodecs `AudioDecoder`（HTTPS/localhost）或 FAAD2 WASM（明文 HTTP）；Opus 经 WebCodecs `OpusDecoder`（见 `web/src/lib/decoders/`）。录制回放使用浏览器原生 MP4 解码器。
 - **按摄像头控制**：每个摄像头都有 `audio_enabled` 标志 (默认: false) 用于录制。
 - **格式保留**：合并流水线保留音频轨道，并使用特定于编解码器的 sample entry (`writeMergeG711SampleEntry`, `writeMergeOpusSampleEntry`)。
 - **协议支持**：所有四种流媒体协议 (WebSocket、FLV、HLS、WebRTC) 都通过共享的音频 WebSocket 端点支持音频。

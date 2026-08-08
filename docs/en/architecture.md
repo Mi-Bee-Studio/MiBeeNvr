@@ -294,7 +294,7 @@ Live preview audio playback uses the Web Audio API for gapless, low-latency audi
 
 - **Autoplay policy**: AudioContext creation requires user gesture (browser autoplay policy). `CameraAudioButton.svelte` handles this by creating the AudioContext on the first click.
 
-- **Codec limitation**: Only G.711 is supported for live preview decode. AAC and Opus return early (unsupported) in the frontend. Opus support would require a decoder library (e.g., libopus compiled to WASM), which is not currently implemented due to complexity.
+- **Codec support**: All three codecs (G.711, AAC, Opus) are now decoded for live preview (#131). G.711 via ITU-T lookup tables; AAC via WebCodecs `AudioDecoder` (HTTPS/localhost) or FAAD2 WASM (plain HTTP); Opus via WebCodecs `OpusDecoder` — see `web/src/lib/audio-player.ts` + `web/src/lib/decoders/`. (Previously only G.711 was decoded; AAC/Opus live preview was added in #131.)
 
 ### 7.8 Components
 
@@ -349,7 +349,7 @@ Recording Playback (HLS/MP4)           │  Web Audio API gapless playback
 
 - **Recording vs live difference**: Recording playback uses the browser's native MP4 audio decoder (well-tested, clean, hardware-accelerated in some browsers). Live preview uses JS lookup tables + Web Audio API (requires correct tables, sample rate matching, and gapless scheduling). The audio quality difference is decoder implementation, not data.
 
-- **AAC and Opus limitation**: Live preview only supports G.711 decode. AAC and Opus cameras have audio in recordings (native browser decode works perfectly) but no live preview audio (unsupported codec). Opus support would require a WASM decoder library (~200KB), which is not currently implemented.
+- **AAC/Opus live preview decode (supported as of #131)**: All three codecs are now decoded for live preview. AAC via WebCodecs `AudioDecoder` (HTTPS/localhost) or FAAD2 WASM (~200KB, plain HTTP); Opus via WebCodecs `OpusDecoder`; G.711 via lookup tables. See `web/src/lib/decoders/`. (Previously only G.711 was decoded live; AAC/Opus were recordings-only.)
 
 - **Dual-path preservation**: The same raw codec bytes flow to both recording and live paths. Any change to the encoding side (e.g., sample rate, codec selection) affects both paths equally. The decoder is the only variable between recording and live quality.
 
