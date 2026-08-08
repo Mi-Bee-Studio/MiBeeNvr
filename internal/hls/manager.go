@@ -857,6 +857,7 @@ func (m *Manager) evictLRULocked(newStreamID string) {
 // Every site that takes entry.mu first releases m.mu:
 //   - writeFrame:   m.mu.RLock → read entry → m.mu.RUnlock → entry.mu.Lock …
 //   - idleWatchdog: m.mu.RLock → read entry → m.mu.RUnlock → entry.mu.Lock …
+//
 // And this method (under m.mu) NEVER takes entry.mu — it only calls
 // cancel/Close/RemoveAll. So the lock order is uniformly
 // m.mu → (release) → entry.mu, with no reverse acquisition. The idleWatchdog
