@@ -783,7 +783,9 @@ func TestUpdateSettings_InvalidCheckInterval(t *testing.T) {
 // Blank (and whitespace-only) must now be treated as "no change" and succeed.
 func TestUpdateSettings_BlankCheckIntervalKeepsCurrent(t *testing.T) {
 	t.Parallel()
-	cases := []string{`""`, `"   `, `"\t"`}
+	// Each entry is a raw JSON value for the check_interval field: empty string,
+	// whitespace-only, and a literal tab. All must be treated as "no change".
+	cases := []string{`""`, `"   "`, `"\t"`}
 	for _, raw := range cases {
 		db, store := setupTestDB(t)
 		defer db.Close()
