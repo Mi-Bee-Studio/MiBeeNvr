@@ -198,6 +198,34 @@ type codecDriver interface {
 //   - audio*: audio track state (set during connectAndRecord, read during segment creation)
 //   - frameCh/dropped/lastPTS: frame pipeline
 //   - Hub: stream fan-out to HLS/WebRTC/etc. consumers
+//
+// baseRecorder is the shared base for RTSP-based recorders (H264Recorder,
+// H265Recorder). Its fields follow a three-tier locking discipline (#226):
+//
+//   - Tier 1 — lifecycle + per-segment state, guarded by mu:
+//     status, cancel, done, muxer, audioTrackID, segStart.
+//     mu serializes multi-field consistency (e.g. publishing muxer+segStart+
+//     audioTrackID together so the audio RTP callback sees an aligned triplet).
+//     The writeFrames goroutine is the sole writer of muxer/segStart/
+//     audioTrackID; the lock exists for the RTP-callback and lifecycle readers.
+//
+//   - Tier 2 — cross-goroutine configuration, stored behind atomic.Pointer as
+//     an immutable snapshot:
+//     codec (SPS/PPS/VPS, #219) and audio (codec/sampleRate/channels/muxerConfig,
+//     #226). Both are written once during connectAndRecord and read from many
+//     goroutines (writeFrames, audio RTP callbacks, and the external
+//     HLS/WebRTC/WS/relay/status accessor paths). The snapshot's immutability
+//     after Store makes these reads race-free without a mutex.
+//
+//   - Tier 3 — writeFrames-owned, NO lock (single-goroutine invariant):
+//     trackID, curFinalPath, curTempPath, frameCount, lastFrameTime.
+//     Only the writeFrames goroutine reads/writes these; HTTP handlers and RTP
+//     callbacks MUST NOT touch them.
+//
+// Note: muxer.MP4Muxer itself is goroutine-safe (WriteSample/WriteAudioSample
+// each take the muxer's own mutex), so concurrent video (writeFrames) and
+// audio (RTP callback) writes are safe by construction — the concern in #226
+// was the audio *config* fields, now migrated to the Tier-2 snapshot.
 type baseRecorder struct {
 	// driver provides codec-specific behavior (NAL parsing, track creation).
 	driver codecDriver
@@ -219,8 +247,10 @@ type baseRecorder struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	// Active segment state (written from writeFrames goroutine; muxer field
-	// also read from audio RTP callback under mu).
+	// Active segment state (Tier 1: written from writeFrames, read from audio
+	// RTP callbacks under mu). muxer is published together with segStart and
+	// audioTrackID in createNewSegment so the audio callback observes an
+	// aligned (muxer, trackID, segStart) triplet.
 	muxer         *muxer.MP4Muxer
 	trackID       int
 	audioTrackID  int
@@ -230,22 +260,18 @@ type baseRecorder struct {
 	frameCount    int
 	lastFrameTime time.Time
 
-	// Codec parameter sets (populated from SDP + in-band NALUs).
-	// Stored as an immutable snapshot behind atomic.Pointer so the live-preview
-	// (HLS/WebRTC/WS) goroutines can read SPS/PPS/VPS concurrently with the
-	// writeFrames goroutine's writes without a data race or torn triplet reads
-	// (SPS from one config, PPS from another). vps is H.265-only; always nil
-	// for H.264. See codecSnapshot / setCodecParams (#219).
+	// Codec parameter sets (Tier 2, #219): immutable snapshot behind
+	// atomic.Pointer so the live-preview (HLS/WebRTC/WS) goroutines can read
+	// SPS/PPS/VPS concurrently with the writeFrames writer without a data race
+	// or torn triplet reads. vps is H.265-only; always nil for H.264.
 	codec atomic.Pointer[codecParams]
 
-	// Audio state (populated during connectAndRecord; read during segment
-	// creation to add the audio track to the muxer).
-	audioMuxerConfig []byte // AAC: AudioSpecificConfig; G.711: [muLawFlag, rate×4]
-	audioCodec       string // "aac", "g711", or "" for no audio
-	g711MULaw        bool   // true=μ-law, false=A-law
-	g711SampleRate   int    // typically 8000
-	audioSampleRate  int    // unified sample rate (Hz)
-	audioChannels    int    // 0 when no audio
+	// Audio configuration (Tier 2, #226): immutable snapshot behind
+	// atomic.Pointer, detected once during connectAndRecord and read by the
+	// external accessors (AudioCodec/AudioConfig/AudioSampleRate/AudioChannels,
+	// called from WS/relay/status goroutines) and the G.711 RTP callback.
+	// See audioSnapshot / setAudioConfig.
+	audio atomic.Pointer[audioConfig]
 
 	// Frame pipeline (written from RTP callback goroutine, read from writeFrames).
 	frameCh chan []byte
@@ -294,6 +320,54 @@ func (b *baseRecorder) codecSnapshot() (sps, pps, vps []byte) {
 		return cp.sps, cp.pps, cp.vps
 	}
 	return nil, nil, nil
+}
+
+// audioConfig is an immutable snapshot of the recorder's audio configuration,
+// detected once during connectAndRecord (AAC or G.711 SDP negotiation) and
+// thereafter read-only. It is stored behind atomic.Pointer so the external
+// reader paths — AudioCodec()/AudioConfig()/AudioSampleRate()/AudioChannels()
+// accessors (called from the WS live-preview, relay engine, and camera-status
+// goroutines) and the G.711 RTP callback — can read it concurrently with the
+// connectAndRecord writer without a data race or a torn view (e.g. an AAC
+// codec string paired with a G.711 muxerConfig). Mirrors the codecParams
+// pattern from #219. muxerConfig is deep-copied on store so the snapshot is
+// independent of the writer's buffer.
+type audioConfig struct {
+	codec          string // "aac", "g711", or "" for no audio
+	sampleRate     int    // unified sample rate (Hz)
+	channels       int    // 0 when no audio
+	muxerConfig    []byte // AAC: AudioSpecificConfig; G.711: [muLawFlag, rate×4 BE]
+	g711MULaw      bool
+	g711SampleRate int
+}
+
+// setAudioConfig atomically replaces the audio configuration snapshot. The
+// muxerConfig slice is deep-copied (see codecParams). Intended to be called
+// once per audio codec detection in connectAndRecord (AAC path and G.711 path
+// each call it once with their fully-built config); concurrent callers must
+// not interleave partial updates (#226).
+func (b *baseRecorder) setAudioConfig(cfg *audioConfig) {
+	if cfg == nil {
+		b.audio.Store(nil)
+		return
+	}
+	stored := &audioConfig{
+		codec:          cfg.codec,
+		sampleRate:     cfg.sampleRate,
+		channels:       cfg.channels,
+		g711MULaw:      cfg.g711MULaw,
+		g711SampleRate: cfg.g711SampleRate,
+	}
+	if cfg.muxerConfig != nil {
+		stored.muxerConfig = append([]byte(nil), cfg.muxerConfig...)
+	}
+	b.audio.Store(stored)
+}
+
+// audioSnapshot returns the current audio configuration via a single atomic
+// load, or nil when no audio has been configured yet.
+func (b *baseRecorder) audioSnapshot() *audioConfig {
+	return b.audio.Load()
 }
 
 // ---------------------------------------------------------------------------
@@ -532,20 +606,28 @@ func (b *baseRecorder) createNewSegment() bool {
 	}
 	b.trackID = trackID
 
-	// Add audio track if audio config is available.
-	if len(b.audioMuxerConfig) > 0 && b.audioCodec != "" {
-		aID, err := m.AddAudioTrack(b.audioCodec, b.audioMuxerConfig)
+	// Add audio track if audio config is available (read the immutable snapshot
+	// once — the audio config is set during connectAndRecord and read here from
+	// writeFrames; the snapshot makes this race-free, #226).
+	var audioTrackID int
+	if a := b.audioSnapshot(); a != nil && len(a.muxerConfig) > 0 && a.codec != "" {
+		aID, err := m.AddAudioTrack(a.codec, a.muxerConfig)
 		if err != nil {
 			b.log.Error("failed to add audio track",
-				"camera_id", b.cfg.CameraID, "codec", b.audioCodec, "error", err)
+				"camera_id", b.cfg.CameraID, "codec", a.codec, "error", err)
 		} else {
-			b.audioTrackID = aID
+			audioTrackID = aID
 		}
 	}
 
+	// Publish muxer + segStart + audioTrackID together under mu so the audio
+	// RTP callback (a different goroutine) observes an aligned triplet. Earlier
+	// audioTrackID was assigned outside this lock, so a callback could see a
+	// non-zero trackID before muxer was published (torn view) — fixed (#226).
 	b.mu.Lock()
 	b.muxer = m
 	b.segStart = time.Now()
+	b.audioTrackID = audioTrackID
 	b.mu.Unlock()
 	b.curTempPath = tempPath
 	b.curFinalPath = finalPath

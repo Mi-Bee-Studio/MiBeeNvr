@@ -189,16 +189,40 @@ func (r *H264Recorder) CodecParams() (codec model.Format, sps, pps, vps []byte) 
 }
 
 // AudioCodec returns the audio codec name ("aac", "g711", or "" for no audio).
-func (r *H264Recorder) AudioCodec() string { return r.audioCodec }
+// Reads the immutable audio snapshot (#226); safe to call from any goroutine
+// (WS/relay/status handlers concurrently with connectAndRecord).
+func (r *H264Recorder) AudioCodec() string {
+	if a := r.audioSnapshot(); a != nil {
+		return a.codec
+	}
+	return ""
+}
 
-// AudioConfig returns the audio codec configuration bytes.
-func (r *H264Recorder) AudioConfig() []byte { return r.audioMuxerConfig }
+// AudioConfig returns a copy of the audio codec configuration bytes.
+// Returns nil when no audio is configured. The returned slice is a fresh copy
+// so callers may mutate it freely (#226).
+func (r *H264Recorder) AudioConfig() []byte {
+	if a := r.audioSnapshot(); a != nil && a.muxerConfig != nil {
+		return append([]byte(nil), a.muxerConfig...)
+	}
+	return nil
+}
 
 // AudioSampleRate returns the audio sample rate in Hz, or 0 if no audio.
-func (r *H264Recorder) AudioSampleRate() int { return r.audioSampleRate }
+func (r *H264Recorder) AudioSampleRate() int {
+	if a := r.audioSnapshot(); a != nil {
+		return a.sampleRate
+	}
+	return 0
+}
 
 // AudioChannels returns the number of audio channels, or 0 if no audio.
-func (r *H264Recorder) AudioChannels() int { return r.audioChannels }
+func (r *H264Recorder) AudioChannels() int {
+	if a := r.audioSnapshot(); a != nil {
+		return a.channels
+	}
+	return 0
+}
 
 // connectAndRecord implements rtspConnector. It connects to the RTSP server,
 // sets up the H.264 video stream (with optional audio), registers RTP
@@ -273,18 +297,23 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 					h264Logger.Warn("audio SETUP failed, continuing video-only", "camera_id", r.cfg.CameraID, "error", err)
 					audioDec = nil
 				} else {
+					var enc []byte
 					if audioForma.Config != nil {
-						if enc, err := audioForma.Config.Marshal(); err == nil {
-							r.audioMuxerConfig = enc
-						}
+						enc, _ = audioForma.Config.Marshal()
 					}
-					r.audioCodec = "aac"
-					r.audioSampleRate = audioForma.Config.SampleRate
-					aCh := int(audioForma.Config.ChannelConfig)
+					aCh := int(audioForma.Config.ChannelCount)
 					if aCh == 0 {
 						aCh = 1
 					}
-					r.audioChannels = aCh
+					// Publish the audio config as one immutable snapshot so the
+					// external accessors + G.711 callback read a consistent view
+					// (no torn codec/muxerConfig pairing). Single Store (#226).
+					r.setAudioConfig(&audioConfig{
+						codec:       "aac",
+						sampleRate:  audioForma.Config.SampleRate,
+						channels:    aCh,
+						muxerConfig: enc,
+					})
 					h264Logger.Info("AAC audio track detected", "camera_id", r.cfg.CameraID)
 				}
 			}
@@ -302,17 +331,19 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 						h264Logger.Warn("G.711 audio SETUP failed, continuing video-only", "camera_id", r.cfg.CameraID, "error", err)
 						g711Dec = nil
 					} else {
-						r.audioCodec = "g711"
-						r.g711MULaw = g711Forma.MULaw
-						r.g711SampleRate = g711Forma.SampleRate
-						r.audioSampleRate = g711Forma.SampleRate
-						r.audioChannels = 1
+						rate := g711Forma.SampleRate
 						muLawByte := byte(0)
 						if g711Forma.MULaw {
 							muLawByte = 1
 						}
-						rate := g711Forma.SampleRate
-						r.audioMuxerConfig = []byte{muLawByte, byte(rate >> 24), byte(rate >> 16), byte(rate >> 8), byte(rate)}
+						r.setAudioConfig(&audioConfig{
+							codec:          "g711",
+							sampleRate:     rate,
+							channels:       1,
+							g711MULaw:      g711Forma.MULaw,
+							g711SampleRate: rate,
+							muxerConfig:    []byte{muLawByte, byte(rate >> 24), byte(rate >> 16), byte(rate >> 8), byte(rate)},
+						})
 						h264Logger.Info("G.711 audio track detected", "camera_id", r.cfg.CameraID, "mulaw", g711Forma.MULaw, "rate", rate)
 					}
 				}
@@ -418,7 +449,14 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			r.mu.Unlock()
 			if m != nil && aid > 0 {
 				pts := time.Since(start)
-				dur := time.Duration(len(data)) * time.Second / time.Duration(r.g711SampleRate)
+				// g711SampleRate is read from the immutable audio snapshot
+				// (this callback runs on the RTP reader goroutine, concurrently
+				// with connectAndRecord's writer; the snapshot is race-free, #226).
+				g711Rate := 8000
+				if a := r.audioSnapshot(); a != nil && a.g711SampleRate > 0 {
+					g711Rate = a.g711SampleRate
+				}
+				dur := time.Duration(len(data)) * time.Second / time.Duration(g711Rate)
 				if dur < time.Millisecond {
 					dur = time.Millisecond
 				}
