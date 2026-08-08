@@ -1716,6 +1716,62 @@ func TestHandleUpdateCamera_NotFound(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateCamera_ResponseIncludesYAMLFields guards the #297 regression:
+// the PUT response used to be built from the DB CameraRow + Transcoding-only
+// injection, so push_targets / recording_enabled were absent and audio_enabled
+// serialized as its zero value (false). Any caller trusting the PUT response
+// instead of re-GETting saw its just-saved data "missing" — the symptom users
+// reported as "转推无法保存" / "录制开关保存后不变". The response must now carry
+// the same YAML-injected fields as GET /api/cameras/{id}.
+func TestHandleUpdateCamera_ResponseIncludesYAMLFields(t *testing.T) {
+	t.Parallel()
+	h, _, _ := newTestCamHandler(t)
+
+	// Create an H.264 camera (no push targets, recording default).
+	body := strings.NewReader(`{"name":"RelayCam","protocol":"rtsp","encoding":"h264","url":"rtsp://cam/stream","audio_enabled":true}`)
+	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("setup: expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var created config.CameraConfig
+	parseJSON(t, rr, &created)
+
+	// Disable recording + add a push target via PUT.
+	updateBody := strings.NewReader(`{"recording_enabled":false,"audio_enabled":true,"push_targets":[{"id":"tgt-1","name":"B站","protocol":"rtmp","url":"rtmp://example.com/live/key","enabled":true}]}`)
+	rr = doRequest(t, h.Routes(), "PUT", "/api/cameras/"+created.ID, updateBody, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// The response is a storage.CameraRow; decode into a map to assert the
+	// YAML-injected fields are present with the right values.
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+
+	pts, ok := resp["push_targets"].([]any)
+	if !ok || len(pts) != 1 {
+		t.Fatalf("expected push_targets with 1 entry in PUT response, got %#v", resp["push_targets"])
+	}
+	pt, _ := pts[0].(map[string]any)
+	if pt["url"] != "rtmp://example.com/live/key" || pt["protocol"] != "rtmp" {
+		t.Fatalf("push target not echoed correctly in PUT response: %#v", pt)
+	}
+
+	recEnabled, hasField := resp["recording_enabled"]
+	if !hasField {
+		t.Fatalf("recording_enabled missing from PUT response (this is the #297 regression)")
+	}
+	// JSON false is decoded into a bool.
+	if b, _ := recEnabled.(bool); b {
+		t.Fatalf("expected recording_enabled=false in PUT response, got %v", recEnabled)
+	}
+
+	// audio_enabled must reflect the YAML value (true), not the zero value (false).
+	if audio, _ := resp["audio_enabled"].(bool); !audio {
+		t.Fatalf("expected audio_enabled=true in PUT response, got %v (zero-value bug)", resp["audio_enabled"])
+	}
+}
+
 func TestHandleDeleteCamera(t *testing.T) {
 	t.Parallel()
 	h, _, _ := newTestCamHandler(t)

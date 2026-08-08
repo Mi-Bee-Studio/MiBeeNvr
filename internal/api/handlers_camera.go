@@ -33,6 +33,50 @@ func cameraRowForAPI(row *storage.CameraRow) {
 	}
 }
 
+// injectYAMLConfigFields overlays the per-camera YAML-config fields that are NOT
+// stored in (or not read by) the DB query onto a CameraRow. The DB is the source
+// of truth for core columns (name/protocol/encoding/url/status/…), but several
+// fields live only in mibee-nvr.yaml (transcoding, channel, audio_enabled, push
+// targets, recording gate, dark-frame filter, recording schedule, stable_id,
+// subnet hints, ingest keys). Without this overlay the API response is missing
+// them — which previously made PUT /api/cameras/{id} return a row with
+// push_targets/recording_enabled absent and audio_enabled at its zero value
+// (false), so any caller trusting the PUT response (instead of re-GETting) saw
+// its just-saved data "missing" (issue #297).
+//
+// cfg may be nil (no-op). If the camera ID is not found in cfg.Cameras the row
+// is returned unchanged. Callers: handleListCameras, handleGetCamera,
+// handleUpdateCamera — all three now share this so list/get/update agree.
+func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for _, cam := range cfg.Cameras {
+		if cam.ID != row.ID {
+			continue
+		}
+		if cam.Transcoding != nil {
+			row.Transcoding = cam.Transcoding
+		}
+		if cam.Channel != "" {
+			row.Channel = cam.Channel
+		}
+		row.AudioEnabled = cam.AudioEnabled
+		row.StreamKey = cam.StreamKey
+		row.SRTPassphrase = cam.SRTPassphrase
+		row.SRTStreamID = cam.SRTStreamID
+		row.PushTargets = cam.PushTargets
+		row.PushRetentionDays = cam.PushRetentionDays
+		row.StableID = cam.StableID
+		row.SubnetHints = cam.SubnetHints
+		row.DarkFrameFilterEnabled = cam.DarkFrameFilterEnabled
+		row.DarkFrameThreshold = cam.DarkFrameThreshold
+		row.RecordingEnabled = cam.RecordingEnabled
+		row.RecordingSchedule = cam.RecordingSchedule
+		return
+	}
+}
+
 func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	cameras, err := h.db.ListCameras(r.Context())
 	if err != nil {
@@ -73,29 +117,8 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	}
 	// Inject per-camera transcoding config, channel, audio_enabled, and push
 	// fields from config (not all stored in DB columns read by ListCameras).
-	if h.config != nil {
-		for i := range cameras {
-			for _, cam := range h.config.Cameras {
-				if cam.ID == cameras[i].ID {
-					if cam.Transcoding != nil {
-						cameras[i].Transcoding = cam.Transcoding
-					}
-					if cam.Channel != "" {
-						cameras[i].Channel = cam.Channel
-					}
-					cameras[i].AudioEnabled = cam.AudioEnabled
-					cameras[i].StreamKey = cam.StreamKey
-					cameras[i].SRTPassphrase = cam.SRTPassphrase
-					cameras[i].SRTStreamID = cam.SRTStreamID
-					cameras[i].PushTargets = cam.PushTargets
-					cameras[i].PushRetentionDays = cam.PushRetentionDays
-					cameras[i].StableID = cam.StableID
-					cameras[i].SubnetHints = cam.SubnetHints
-					cameras[i].RecordingEnabled = cam.RecordingEnabled
-					break
-				}
-			}
-		}
+	for i := range cameras {
+		injectYAMLConfigFields(&cameras[i], h.config)
 	}
 	// For ONVIF cameras, show onvif_endpoint as url for unified frontend handling
 	for i := range cameras {
@@ -419,31 +442,7 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	// Inject per-camera transcoding config, channel, audio_enabled, and push
 	// fields from config (not all stored in DB columns read by GetCamera).
-	if h.config != nil {
-		for _, cam := range h.config.Cameras {
-			if cam.ID == id {
-				if cam.Transcoding != nil {
-					row.Transcoding = cam.Transcoding
-				}
-				if cam.Channel != "" {
-					row.Channel = cam.Channel
-				}
-				row.AudioEnabled = cam.AudioEnabled
-				row.StreamKey = cam.StreamKey
-				row.SRTPassphrase = cam.SRTPassphrase
-				row.SRTStreamID = cam.SRTStreamID
-				row.PushTargets = cam.PushTargets
-				row.PushRetentionDays = cam.PushRetentionDays
-				row.StableID = cam.StableID
-				row.SubnetHints = cam.SubnetHints
-				row.DarkFrameFilterEnabled = cam.DarkFrameFilterEnabled
-				row.DarkFrameThreshold = cam.DarkFrameThreshold
-				row.RecordingEnabled = cam.RecordingEnabled
-				row.RecordingSchedule = cam.RecordingSchedule
-				break
-			}
-		}
-	}
+	injectYAMLConfigFields(row, h.config)
 	cameraRowForAPI(row)
 	// Resolve displayed encoding from the live recorder probe (authoritative),
 	// falling back to the stored value when the probe is empty. Matches
@@ -672,15 +671,14 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
-		// Inject per-camera transcoding config
-		if h.config != nil {
-			for _, cam := range h.config.Cameras {
-				if cam.ID == id && cam.Transcoding != nil {
-					row.Transcoding = cam.Transcoding
-					break
-				}
-			}
-		}
+		// Inject ALL per-camera YAML-config fields (transcoding, channel,
+		// audio_enabled, push targets, recording gate, dark-frame filter,
+		// recording schedule, stable_id, subnet hints, ingest keys) so the PUT
+		// response matches GET /api/cameras/{id}. Previously only Transcoding was
+		// injected here — so push_targets/recording_enabled were missing and
+		// audio_enabled serialized as its zero value (false), making any caller
+		// that trusted the PUT response see its just-saved data "missing" (#297).
+		injectYAMLConfigFields(row, h.config)
 		cameraRowForAPI(row)
 		writeJSON(w, http.StatusOK, row)
 	} else {

@@ -29,9 +29,10 @@
         VideoPresetOverrides,
         RelayCapabilities,
     } from '$lib/api';
-    import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight } from 'lucide-svelte';
+    import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
     import { showToast } from '$lib/toast';
+    import { copyText } from '$lib/clipboard';
     import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
     import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
     import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
@@ -428,6 +429,20 @@ let validationErrors = $state<Record<string, string>>({});
     if (!formName.trim()) validationErrors['name'] = t('cameras.nameRequired');
     if (!formProtocol) validationErrors['protocol'] = t('cameras.protocolRequired');
     if (!formUrl.trim()) validationErrors['url'] = t('cameras.urlRequired');
+    // Push-out relay targets: an enabled target must have a non-empty URL whose
+    // scheme matches its selected protocol. This was unvalidated, so a target
+    // saved with a blank/typo URL appeared later as "only the name, no link"
+    // in the camera-card popover (issue #297). Disabled targets are skipped —
+    // a user may stage a draft target and turn it on later.
+    for (const tgt of formPushTargets) {
+      if (!tgt.enabled) continue;
+      const u = (tgt.url || '').trim();
+      if (!u) {
+        validationErrors[`push_${tgt.id}`] = t('cameras.pushOutUrlRequired');
+      } else if (!/^rtmp:\/\//i.test(u) && !/^rtsp:\/\//i.test(u)) {
+        validationErrors[`push_${tgt.id}`] = t('cameras.pushOutUrlBadScheme');
+      }
+    }
     return Object.keys(validationErrors).length === 0;
   }
   async function handleTestConnection() {
@@ -917,7 +932,7 @@ async function performCameraSave() {
                     </select>
                   {/if}
 
-                  <input type="text" class="input flex-[2] min-w-[160px]" placeholder={tgt.protocol === 'rtsp' ? 'rtsp://host:8554/stream' : 'rtmp://host:1935/live/key'}
+                  <input type="text" class="input flex-[2] min-w-[160px] {validationErrors['push_' + tgt.id] ? 'border-red-500' : ''}" placeholder={tgt.protocol === 'rtsp' ? 'rtsp://host:8554/stream' : 'rtmp://host:1935/live/你的直播密钥'}
                     value={tgt.url} oninput={(e) => updatePushTarget(tgt.id, { url: (e.target as HTMLInputElement).value })} />
                   <label class="flex items-center gap-1 text-xs th-text-secondary whitespace-nowrap">
                     <input type="checkbox" class="checkbox" checked={tgt.enabled}
@@ -956,6 +971,31 @@ async function performCameraSave() {
                     </button>
                   {/if}
                 </div>
+
+                <!-- Validation error for this target's URL -->
+                {#if validationErrors['push_' + tgt.id]}
+                  <p class="th-color-danger text-xs">{validationErrors['push_' + tgt.id]}</p>
+                {/if}
+
+                <!-- Live preview of the full push address the relay will
+                     actually use. This answers "这个输入框到底是什么意思": the
+                     URL field IS the full destination address (including the
+                     RTMP stream key, which lives in the path). Show it
+                     read-only with a copy button so the user can verify what
+                     they typed equals the address the platform gave them. -->
+                {#if tgt.url.trim()}
+                  <div class="flex items-center gap-2 px-2 py-1 rounded th-bg-muted/60">
+                    <span class="text-[10px] th-text-muted whitespace-nowrap shrink-0">{t('cameras.pushOutPreview')}</span>
+                    <code class="text-[11px] th-text-secondary truncate flex-1 font-mono">{tgt.url.trim()}</code>
+                    <button type="button" class="btn-ghost p-1 th-text-muted hover:th-text-primary shrink-0"
+                      title={t('cameras.pushOutCopyUrl')} aria-label={t('cameras.pushOutCopyUrl')}
+                      onclick={() => copyText(tgt.url.trim()).then((ok) =>
+                        showToast(ok ? t('cameras.pushOutUrlCopied') : t('cameras.pushOutUrlCopyFailed'), ok ? 'success' : 'error')
+                      )}>
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                {/if}
 
                 <!-- Preset override panel (collapsed) -->
                 <details class="text-xs">
