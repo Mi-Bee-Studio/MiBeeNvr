@@ -482,7 +482,9 @@ func TestActivateCamera_NoManager(t *testing.T) {
 	defer db.Close()
 	h := TestHandler(db, store)
 
-	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/test-cam/activate", nil, "", "")
+	// A valid JSON body is required so the handler reaches the manager-nil
+	// check (an empty/nil body fails JSON decode with io.EOF → 400 first).
+	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/test-cam/activate", bytes.NewReader([]byte(`{}`)), "", "")
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
