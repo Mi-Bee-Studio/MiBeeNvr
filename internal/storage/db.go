@@ -216,7 +216,7 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // migrated. Users below v0.9.x must upgrade to 0.9.x first (see upgrade-guide).
 //
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "30"
+const currentSchemaVersion = "31"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -346,7 +346,18 @@ func (d *DB) Init(ctx context.Context) error {
 		created_at TEXT NOT NULL,
 		completed_at TEXT DEFAULT ''
 	)`
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL} {
+
+	archiveCleanupTasksSQL := `CREATE TABLE IF NOT EXISTS archive_cleanup_tasks (
+		camera_id TEXT PRIMARY KEY,
+		camera_name TEXT NOT NULL DEFAULT '',
+		recording_count INTEGER NOT NULL DEFAULT 0,
+		total_size INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'pending',
+		error TEXT DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		completed_at TEXT DEFAULT ''
+	);`
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
@@ -393,6 +404,8 @@ func (d *DB) Init(ctx context.Context) error {
 		// Timelapse merges
 		"CREATE INDEX IF NOT EXISTS idx_timelapse_merges_camera_window ON timelapse_merges(camera_id, window_start)",
 		"CREATE INDEX IF NOT EXISTS idx_timelapse_merges_status ON timelapse_merges(status)",
+		// Archive cleanup tasks
+		"CREATE INDEX IF NOT EXISTS idx_archive_cleanup_status ON archive_cleanup_tasks(status)",
 	}
 	for _, idx := range indexes {
 		_, _ = d.db.ExecContext(ctx, idx)

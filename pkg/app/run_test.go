@@ -159,12 +159,13 @@ func TestRunFree_ServiceOrder(t *testing.T) {
 	t.Logf("service count = %d", len(svcs))
 
 	// With all optionals disabled, expected core services:
-	// db, startup-bg, camera, health, merge, rolling-merge, mergeScheduler, cleanup, ws, hls, api-handler
+	// db, startup-bg, camera, health, merge, rolling-merge, mergeScheduler, cleanup,
+	// archive-deleter, ws, hls, api-handler
 	// (health is always created even when Health.Enabled=false)
 	// (rolling-merge is always registered but only does work when Merge.RollingEnabled=true)
 	// (startup-bg joins the two RunFree background goroutines; api-handler closes
 	// tracked timelapse-merge goroutines — both added for #143 TempDir flake fix)
-	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "ws", "hls", "api-handler"}
+	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "archive-deleter", "ws", "hls", "api-handler"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}

@@ -510,6 +510,26 @@ export async function setArchiveRetention(
   });
 }
 
+export interface ArchiveCleanupTask {
+  camera_id: string;
+  camera_name: string;
+  recording_count: number;
+  total_size: number;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  error?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface ArchiveCleanupStatus {
+  active: ArchiveCleanupTask[];
+  recent: ArchiveCleanupTask[];
+}
+
+export async function getArchiveCleanupStatus(signal?: AbortSignal): Promise<ArchiveCleanupStatus> {
+  return apiRequest<ArchiveCleanupStatus>('/archives/cleanup-status', { signal });
+}
+
 // --- Timelapse Merge Cancel ---
 
 export async function cancelMerge(cameraId: string): Promise<void> {
