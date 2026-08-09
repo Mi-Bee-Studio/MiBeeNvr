@@ -2,6 +2,7 @@
 # fnOS provides environment variables; key ones used here:
 #   TRIM_APPDEST  — installed app target directory (/var/apps/mibee-nvr/target)
 #   TRIM_PKGVAR   — app runtime data directory (persists across restarts)
+#   wizard_port   — port chosen by the user in the install wizard (default 9090)
 #
 # host networking is REQUIRED for ONVIF auto-discovery (UDP multicast does not
 # cross Docker's bridge). fnOS allows apps without a meaningful service_port
@@ -19,7 +20,16 @@ services:
       # Persist recordings / DB / config / models in fnOS app data dir.
       - "${TRIM_PKGVAR}/data:/data"
     environment:
-      - NVR_DATA_DIR=/data
+      NVR_DATA_DIR: /data
+      # Port from the install wizard (ui/config opens the iframe on the same
+      # port via ${wizard_port}). The app reads NVR_LISTEN_PORT to bind it.
+      NVR_LISTEN_PORT: "${wizard_port:-9090}"
+      # The fnOS desktop embeds the UI in a cross-origin iframe (desktop page
+      # origin != the NVR's :wizard_port origin), so CSP frame-ancestors must
+      # allow the embedder. 'self' + http://* covers LAN fnOS hosts without
+      # prelisting each user's NAS IP. Restrict further in mibee-nvr.yaml
+      # (security.frame_ancestors) if your network model requires it.
+      NVR_FRAME_ANCESTORS: "'self' http://*"
     healthcheck:
       test: ["CMD", "mibee-nvr", "health"]
       interval: 30s
