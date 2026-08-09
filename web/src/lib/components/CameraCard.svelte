@@ -176,7 +176,7 @@ let healthShowWarningIcon = $derived(
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="card camera-card border th-border p-4 transition-all {menuOpen ? 'is-menu-open' : ''}"
+  class="card camera-card border th-border p-4 transition-all {menuOpen || pushTargetsOpen ? 'is-popover-open' : ''}"
 >
   <!-- Top: Name + Status -->
   <div class="flex items-start justify-between gap-2 mb-3">
@@ -290,18 +290,20 @@ let healthShowWarningIcon = $derived(
                      {pt.protocol.toUpperCase()}
                    </span>
                  </div>
-                 <div class="flex items-center gap-1 mt-1">
-                   <code class="text-[10px] th-text-secondary truncate flex-1 font-mono">{pt.url}</code>
-                   <button
-                     type="button"
-                     class="btn-ghost p-1 th-text-muted hover:th-text-primary shrink-0"
-                     title={t('cameras.pushOutCopyUrl')}
-                     aria-label={t('cameras.pushOutCopyUrl')}
-                     onclick={() => copyPushUrl(pt.url, pt.name)}
-                   >
-                     <Copy size={12} />
-                   </button>
-                 </div>
+                <div class="flex items-center gap-1 mt-1">
+                  <code class="text-[10px] {pt.url ? 'th-text-secondary' : 'th-text-muted italic'} truncate flex-1 font-mono">{pt.url || t('cameras.pushOutNoUrl')}</code>
+                  {#if pt.url}
+                    <button
+                      type="button"
+                      class="btn-ghost p-1 th-text-muted hover:th-text-primary shrink-0"
+                      title={t('cameras.pushOutCopyUrl')}
+                      aria-label={t('cameras.pushOutCopyUrl')}
+                      onclick={() => copyPushUrl(pt.url, pt.name)}
+                    >
+                      <Copy size={12} />
+                    </button>
+                  {/if}
+                </div>
                </li>
              {/each}
            </ul>
@@ -485,7 +487,13 @@ let healthShowWarningIcon = $derived(
     position: relative;
   }
 
-  .camera-card.is-menu-open {
+  /* Lift this card above its siblings while a popover (the More menu OR the
+   * push-out targets popover) is open. Without this, .card:hover's
+   * transform: translateY(-2px) establishes a stacking context on the card, so
+   * the absolute z-50 push-out popover gets painted under later sibling cards
+   * (issue #297: "转推复制卡片被其他摄像头卡片遮挡"). z-index only competes
+   * within a stacking context, so the whole card must rise. */
+  .camera-card.is-popover-open {
     z-index: 100;
   }
 
