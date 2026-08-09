@@ -2,7 +2,53 @@
 
 > Forward camera streams to live streaming platforms (Bilibili, YouTube, Douyin, Kuaishou) with automatic encoding optimization. Native Go relay by default — handles all tested strict FMS-compatible receivers including Douyu Live Companion; optional FFmpeg mode as a fallback for exotic platforms.
 
-## Quick Start
+## Set up relay in the Web UI (recommended — no config editing needed)
+
+Most users only need the web interface. Below: forward one camera to **Bilibili Live**.
+
+### Step 1: Get the push URL (with stream key) from your platform
+
+After opening a live room on your platform (e.g. the [Bilibili Live Studio](https://link.bilibili.com/p/center/index)), the platform gives you a **push address** and a **stream key**. Concatenated, they form the full push URL:
+
+- Bilibili: address `rtmp://live-push.bilivideo.com/live-bvc/`, key like `?streamkey=bvc_live_xxxxxx` → full URL = `rtmp://live-push.bilivideo.com/live-bvc/?streamkey=bvc_live_xxxxxx`
+- Douyin/TikTok: `rtmp://live-push.douyin.com/YOUR_KEY`
+- YouTube: `rtmp://a.youtube.com/live2/YOUR_KEY`
+- Kuaishou: `rtmp://txyun-push.voipimgs.com/gifshow/YOUR_KEY`
+
+> **Key point**: the RTMP "stream key" IS the last segment of the URL path — **type it into the same URL field**. There is no separate key input.
+
+### Step 2: Add the push target in the NVR web UI
+
+1. Open the NVR web UI (default `http://<NVR-IP>:9090`) and log in.
+2. Go to the **Cameras** page, find the camera to forward, click **Edit**.
+3. Scroll to the **Push-Out (Relay)** section and expand it, then click **Add Target**.
+4. Fill in:
+   - **Name**: anything, e.g. "Bilibili Live".
+   - **Protocol**: `RTMP` (most live platforms use RTMP; pick RTSP to push to another server/NVR).
+   - **Platform** (optional): pick Bilibili / Douyin / YouTube / Kuaishou / Generic — this auto-applies that platform's recommended encoding params (resolution/bitrate/framerate), no manual entry needed.
+   - **URL**: paste the **full push address** (with key) from Step 1. The live preview below shows it; click copy to verify.
+   - **Enabled**: check to actually start pushing (you can leave it off, verify, then enable).
+5. Click **Save** at the bottom. "Updated" toast = success.
+
+### Step 3: Check status / copy the address
+
+- Back on the Cameras list, the card shows a "**1/1**" relay badge. Click it to open a popover:
+  - See each target's name, protocol, full URL, and live status (`streaming` + bitrate = pushing successfully).
+  - Click the copy button to copy the push URL.
+- If it shows `error`: check the URL is correct, the key hasn't expired, and the platform room is open. See "Troubleshooting" at the end.
+
+### Common questions
+
+- **"What is the URL field for?"** — it's the **full push address** your platform gave you (protocol prefix `rtmp://` or `rtsp://`, server, app name, and stream key all in one). The live preview below the field is exactly what will be used to push.
+- **"Where do I set the RTMP key?"** — there's no separate key input; the key is the last path segment of the URL. e.g. `rtmp://live-push.bilivideo.com/live-bvc/?streamkey=YOUR_KEY`.
+- **Can H.265 cameras push?** — yes. Live platforms mostly accept only H.264, so NVR auto-transcodes H.265 → H.264 before pushing (enable transcode policy `auto`; M5 has hardware transcode). H.264 cameras are forwarded directly with zero transcode overhead.
+- **Is there audio?** — yes. When the camera provides AAC audio it's passed through; with only G.711, NVR auto-fills compatible/silent audio — no setup needed.
+
+---
+
+## Method 2: edit the config file directly (advanced)
+
+If you prefer editing YAML (bulk config, scripted management, headless deployments), here's the manual method.
 
 ### 3-Step Setup: Camera → Bilibili Live
 

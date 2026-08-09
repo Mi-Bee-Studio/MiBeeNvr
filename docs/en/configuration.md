@@ -165,6 +165,7 @@ version: "1.0"
 - **Default**: `":9090"`
 - **Description**: The address and port for the web server to listen on
 - **Example**: `":8080"` or `"192.168.1.100:9090"`
+- **Env override**: The `NVR_LISTEN_PORT` environment variable overrides the port portion at startup (e.g. `NVR_LISTEN_PORT=8080`). Useful for NAS host-networking deployments where you can't edit the config file. You can also set it via `install.sh --port <port>` or the Web UI Settings page.
 
 ## Storage Configuration
 
