@@ -10,6 +10,16 @@
 server:
   listen: ":9090"
 
+# HTTP security response headers.
+# frame_ancestors controls who may embed the Web UI in an <iframe> via the CSP
+# frame-ancestors directive. A space-separated list of sources, e.g.
+#   "'self' http://192.168.1.10 http://192.168.1.11"
+# Empty/'self' (default) = no cross-origin embedding. Override at runtime with
+# the NVR_FRAME_ANCESTORS env var (e.g. fnOS sets "'self' http://*" so the fnOS
+# desktop can embed the UI from a different origin).
+security:
+  frame_ancestors: ""  # empty = default 'self' (no cross-origin framing)
+
 # Storage settings
 # root_dir: where recordings, database, and HLS segments are stored.
 # Docker: set via NVR_DATA_DIR env var (default /data). See deploy/docker/docker-compose.yml.

@@ -34,6 +34,15 @@ func applyConfigDefaults(cfg *Config) {
 		}
 		cfg.Server.Listen = env
 	}
+	// NVR_FRAME_ANCESTORS overrides security.frame_ancestors (env wins over the
+	// config file). Lets NAS platforms that embed the UI in a cross-origin iframe
+	// (fnOS desktop: the desktop page is served from a different origin than the
+	// NVR's :9090) whitelist the embedder without editing the YAML, e.g.
+	//   NVR_FRAME_ANCESTORS="http://192.168.1.10 http://192.168.1.11"
+	// Empty/unset keeps the default 'self' (no cross-origin framing).
+	if env := strings.TrimSpace(os.Getenv("NVR_FRAME_ANCESTORS")); env != "" {
+		cfg.Security.FrameAncestors = env
+	}
 	// Storage
 	if strings.TrimSpace(cfg.Storage.RootDir) == "" {
 		cfg.Storage.RootDir = "/var/lib/mibee-nvr"
