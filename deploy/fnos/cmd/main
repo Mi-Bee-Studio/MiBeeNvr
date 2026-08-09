@@ -1,27 +1,106 @@
 #!/bin/bash
-# MiBee NVR — fnOS lifecycle status check.
-# Docker start/stop are managed by fnOS via the docker-project resource; only
-# `status` needs to probe the container. Exit codes (fnOS convention):
-#   0 = running (status), 1 = failure, 3 = not running (status).
-CONTAINER_NAME="mibee-nvr"
+#
+# Native-app lifecycle controller for MiBee NVR on fnOS.
+#
+# This app manages its own Docker container (we do NOT use fnOS's
+# docker-project resource, because that makes fnOS run `docker compose up`
+# during install — before any lifecycle hook can `docker load` the bundled
+# offline image, so the pull fails). Instead, cmd/main owns the full container
+# lifecycle: start loads the bundled image + runs the container; stop/status
+# manage it. This runs in the START phase, after files are extracted, so the
+# image tar is on disk and the load succeeds.
+#
+# Runs as root (config/privilege run-as: root) — needs the Docker socket.
+#
+# Exit codes (fnOS): 0 = ok / running, 1 = error, 3 = not running (status).
+set +e
+
+CONTAINER="mibee-nvr"
+APP_VERSION="${TRIM_APPVER:-0.10.1}"
+IMAGE="mibee-nvr:${APP_VERSION}"
+LOG="${TRIM_TEMP_LOGFILE:-${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log}"
+PORT="${wizard_port:-${TRIM_SERVICE_PORT:-9090}}"
+DATA_DIR="${TRIM_PKGVAR:-/var/lib/mibee-nvr}/data"
+# frame-ancestors: allow the fnOS desktop to embed the UI. The desktop is
+# cross-origin (served from a different port than the NVR's :9090), so 'self'
+# alone is not enough. Use scheme-sources 'http:'/'https:' (NOT 'http://*',
+# which only matches the default port 80 and is rejected for the desktop's
+# non-default origin like http://host:5666).
+FRAME_ANCESTORS="${NVR_FRAME_ANCESTORS:-'self' http: https:}"
+
+log() { echo "[mibee-nvr main] $*" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1; }
+
+# Load the bundled image for this host's arch if the image isn't present yet.
+ensure_image() {
+  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    return 0
+  fi
+  local arch=""
+  case "${TRIM_SYS_ARCH:-}" in
+    x86_64|amd64|x64)          arch="amd64" ;;
+    # fnOS may report bare "arm" (32-bit userspace on some ARM boards); the
+    # bundled arm64 image runs fine under a 64-bit kernel. Map all ARM variants
+    # to the arm64 tarball.
+    aarch64|arm64|armv8*|arm)  arch="arm64" ;;
+    *) arch="" ;;
+  esac
+  local tar="${TRIM_APPDEST}/images/mibee-nvr-${arch}.tar"
+  if [ -z "$arch" ] || [ ! -f "$tar" ]; then
+    log "no bundled image for arch='${TRIM_SYS_ARCH:-<unset>}' ($tar); cannot start offline"
+    echo "[mibee-nvr] No bundled image for this arch. See ${TRIM_PKGVAR}/mibee-nvr-main.log." > "$LOG"
+    return 1
+  fi
+  log "loading $tar"
+  docker load -i "$tar" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
+  log "docker load exit=$?"
+  docker image inspect "$IMAGE" >/dev/null 2>&1 || { log "image still missing after load"; return 1; }
+  return 0
+}
+
+is_running() {
+  docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true
+}
 
 case "$1" in
   start)
-    # fnOS starts the Docker project; nothing to do here.
-    exit 0
+    log "=== start === arch=${TRIM_SYS_ARCH:-<unset>} port=$PORT"
+    if is_running; then log "already running"; exit 0; fi
+    ensure_image || exit 1
+    mkdir -p "$DATA_DIR"
+    log "docker run $IMAGE (host net, port $PORT, data $DATA_DIR)"
+    docker run -d \
+      --name "$CONTAINER" \
+      --restart unless-stopped \
+      --network host \
+      -e NVR_DATA_DIR=/data \
+      -e "NVR_LISTEN_PORT=$PORT" \
+      -e "NVR_FRAME_ANCESTORS=$FRAME_ANCESTORS" \
+      -v "${DATA_DIR}:/data" \
+      "$IMAGE" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
+    rc=$?
+    log "docker run exit=$rc"
+    # Give it a moment, then verify it's up.
+    sleep 2
+    if is_running; then log "started ok"; exit 0; fi
+    echo "[mibee-nvr] container failed to start. See ${TRIM_PKGVAR}/mibee-nvr-main.log." > "$LOG"
+    exit 1
     ;;
+
   stop)
-    # fnOS stops the Docker project; nothing to do here.
+    log "=== stop ==="
+    docker stop "$CONTAINER" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
+    docker rm "$CONTAINER" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
+    log "stopped"
     exit 0
     ;;
+
   status)
-    if docker inspect "$CONTAINER_NAME" 2>/dev/null | grep -q '"Status": "running"'; then
-      exit 0
-    fi
+    if is_running; then exit 0; fi
     exit 3
     ;;
+
   *)
-    echo "Unknown command: $1" > "$TRIM_TEMP_LOGFILE"
+    echo "Unknown command: $1" > "$LOG"
     exit 1
     ;;
 esac

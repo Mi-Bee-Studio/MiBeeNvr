@@ -5,6 +5,11 @@ FROM --platform=$BUILDPLATFORM node:22-slim AS frontend
 
 WORKDIR /build/web
 
+# Optional npm registry mirror (e.g. https://registry.npmmirror.com for mainland
+# China builds). Not set by default — CI uses the public registry.
+ARG NPM_REGISTRY
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi
+
 # Install dependencies first (layer cache)
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
@@ -20,6 +25,11 @@ WORKDIR /build
 
 ARG TARGETARCH
 ARG TARGETVARIANT
+# Optional Go module proxy (e.g. https://goproxy.cn,direct for mainland China
+# builds where proxy.golang.org is blocked). Not set by default — CI uses the
+# Go default proxy.
+ARG GOPROXY
+RUN if [ -n "$GOPROXY" ]; then go env -w GOPROXY="$GOPROXY"; fi
 
 # Cache go module downloads
 COPY go.mod go.sum ./

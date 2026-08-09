@@ -1,5 +1,3 @@
 #!/bin/bash
-
-### This script is called before the user installs the application.
-
+# Called before files are applied. Nothing to do (cmd/main start loads the image).
 exit 0
