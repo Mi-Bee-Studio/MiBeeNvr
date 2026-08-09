@@ -21,8 +21,12 @@ IMAGE="mibee-nvr:${APP_VERSION}"
 LOG="${TRIM_TEMP_LOGFILE:-${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log}"
 PORT="${wizard_port:-${TRIM_SERVICE_PORT:-9090}}"
 DATA_DIR="${TRIM_PKGVAR:-/var/lib/mibee-nvr}/data"
-# frame-ancestors: allow the fnOS desktop (cross-origin) to embed the UI.
-FRAME_ANCESTORS="${NVR_FRAME_ANCESTORS:-'self' http://*}"
+# frame-ancestors: allow the fnOS desktop to embed the UI. The desktop is
+# cross-origin (served from a different port than the NVR's :9090), so 'self'
+# alone is not enough. Use scheme-sources 'http:'/'https:' (NOT 'http://*',
+# which only matches the default port 80 and is rejected for the desktop's
+# non-default origin like http://host:5666).
+FRAME_ANCESTORS="${NVR_FRAME_ANCESTORS:-'self' http: https:}"
 
 log() { echo "[mibee-nvr main] $*" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1; }
 

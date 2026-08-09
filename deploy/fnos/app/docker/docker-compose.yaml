@@ -30,10 +30,11 @@ services:
       NVR_LISTEN_PORT: "${wizard_port:-9090}"
       # The fnOS desktop embeds the UI in a cross-origin iframe (desktop page
       # origin != the NVR's :wizard_port origin), so CSP frame-ancestors must
-      # allow the embedder. 'self' + http://* covers LAN fnOS hosts without
-      # prelisting each user's NAS IP. Restrict further in mibee-nvr.yaml
+      # allow the embedder. Use scheme-sources 'http:'/'https:' so it matches the
+      # desktop's non-default port (e.g. http://nas:5666) — 'http://*' would only
+      # match port 80 and get rejected. Restrict further in mibee-nvr.yaml
       # (security.frame_ancestors) if your network model requires it.
-      NVR_FRAME_ANCESTORS: "'self' http://*"
+      NVR_FRAME_ANCESTORS: "'self' http: https:"
     healthcheck:
       test: ["CMD", "mibee-nvr", "health"]
       interval: 30s

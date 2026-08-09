@@ -1,35 +1,35 @@
 [
   {
-    "stepTitle": "Network",
+    "stepTitle": "网络端口",
     "items": [
       {
         "type": "text",
         "field": "wizard_port",
-        "label": "Web UI port",
+        "label": "Web 管理端口",
         "initValue": "9090",
         "rules": [
           {
             "required": true,
-            "message": "Enter a port number"
+            "message": "请输入端口号"
           },
           {
             "pattern": "^[1-9][0-9]{3,4}$",
-            "message": "Enter a port between 1024 and 65535 (digits only)"
+            "message": "请输入 1024-65535 之间的数字端口"
           }
         ]
       },
       {
         "type": "tips",
-        "helpText": "MiBee NVR uses host networking (required for ONVIF camera auto-discovery), so it binds this port directly on the host. If 9090 is already taken by another service, choose a different port here — the desktop icon will open the UI on the port you pick."
+        "helpText": "MiBee NVR 使用宿主机网络（ONVIF 摄像头自动发现需要），因此会直接占用此端口。若 9090 已被其他服务占用（如与其他应用冲突），请在此改为其他端口——桌面图标会按你选择的端口打开管理界面。"
       }
     ]
   },
   {
-    "stepTitle": "Storage",
+    "stepTitle": "存储位置",
     "items": [
       {
         "type": "tips",
-        "helpText": "Recordings, the database, config and AI models are stored under the app data directory. Mount external storage there for large recording sets. ONVIF camera auto-discovery works because the app runs with host networking."
+        "helpText": "录像、数据库、配置和 AI 模型都会保存在你安装本应用时选择的「存储空间」上，由 MiBee NVR 统一管理。\n\n• 通过 NVR 管理界面回放、下载录像，无需手动管理文件。\n• 不要在飞牛文件管理中直接删除或修改应用数据目录里的文件，否则可能导致数据损坏。\n• 如需更换到更大的磁盘，安装完成后在 NVR 的「设置」中修改存储路径。"
       }
     ]
   }
