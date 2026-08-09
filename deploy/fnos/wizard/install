@@ -13,13 +13,8 @@
             "message": "Enter a port number"
           },
           {
-            "pattern": "^[0-9]+$",
-            "message": "Use numbers only"
-          },
-          {
-            "min": 1024,
-            "max": 65535,
-            "message": "Use a port between 1024 and 65535"
+            "pattern": "^[1-9][0-9]{3,4}$",
+            "message": "Enter a port between 1024 and 65535 (digits only)"
           }
         ]
       },

@@ -68,6 +68,8 @@ dist/
 .build-tmp/
 # fnOS .fpk is a build artifact (produced by deploy/fnos/build.sh), never commit
 deploy/fnos/*.fpk
+# docker-saved image tars bundled into the offline .fpk by build.sh
+deploy/fnos/app/images/
 internal/transcoding/-decoders
 internal/transcoding/-encoders
 .zcode/
