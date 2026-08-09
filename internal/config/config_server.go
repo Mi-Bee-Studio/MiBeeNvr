@@ -89,6 +89,17 @@ func (c MetricsAuthConfig) IsConfigured() bool {
 		(strings.TrimSpace(c.Password) != "" || strings.TrimSpace(c.PasswordHash) != "")
 }
 
+// SecurityConfig controls HTTP security response headers.
+type SecurityConfig struct {
+	// FrameAncestors sets the CSP frame-ancestors directive: who may embed the
+	// Web UI in an <iframe>. A space-separated list of sources
+	// (e.g. "'self' http://192.168.1.10"). Empty/'self' = no cross-origin
+	// embedding. Needed for platforms that embed the app from a different origin
+	// (e.g. the fnOS desktop, where the desktop page origin differs from the
+	// NVR's :9090 origin). Overridable via the NVR_FRAME_ANCESTORS env var.
+	FrameAncestors string `yaml:"frame_ancestors"`
+}
+
 // APIKeyConfig represents a single API key for MiBeeVision integration.
 type APIKeyConfig struct {
 	Key     string `yaml:"key" json:"key"`

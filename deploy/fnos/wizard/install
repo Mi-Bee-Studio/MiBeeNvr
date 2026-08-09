@@ -1,5 +1,35 @@
 [
   {
+    "stepTitle": "Network",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_port",
+        "label": "Web UI port",
+        "initValue": "9090",
+        "rules": [
+          {
+            "required": true,
+            "message": "Enter a port number"
+          },
+          {
+            "pattern": "^[0-9]+$",
+            "message": "Use numbers only"
+          },
+          {
+            "min": 1024,
+            "max": 65535,
+            "message": "Use a port between 1024 and 65535"
+          }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "MiBee NVR uses host networking (required for ONVIF camera auto-discovery), so it binds this port directly on the host. If 9090 is already taken by another service, choose a different port here — the desktop icon will open the UI on the port you pick."
+      }
+    ]
+  },
+  {
     "stepTitle": "Storage",
     "items": [
       {

@@ -15,7 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION="${1:-${VERSION:-}}"
-FNPACK_BIN="${FNPACK_BIN:-fnpack}"
+# fnpack binary; on Windows set FNPACK_BIN to the path of fnpack.exe.
+FNPACK="${FNPACK_BIN:-fnpack}"
 
 if [ -z "$VERSION" ]; then
   echo "ERROR: version required (X.Y.Z). Usage: $0 <version>" >&2
@@ -27,7 +28,7 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! command -v "$FNPACK_BIN" >/dev/null 2>&1; then
+if ! command -v "$FNPACK" >/dev/null 2>&1; then
   echo "ERROR: fnpack not found on PATH. Install it or set FNPACK_BIN." >&2
   echo "       https://github.com/ckcoding/fnnas-docs/blob/main/docs/cli/fnpack.md" >&2
   exit 1
@@ -39,10 +40,22 @@ tmp_manifest="$(mktemp)"
 sed -E "s/^version=.*/version=${VERSION}/" "$SCRIPT_DIR/manifest" > "$tmp_manifest"
 mv "$tmp_manifest" "$SCRIPT_DIR/manifest"
 
-# Build. fnpack picks up the image tag from compose via the VERSION env var
-# (docker-compose.yaml uses ${VERSION:-latest}).
+# Bake the version into docker-compose.yaml. fnpack does NOT substitute
+# ${VERSION} (unlike docker compose at runtime, fnOS does not inject a VERSION
+# env at install time), so the placeholder must be resolved here — otherwise
+# manifest.version and the image tag drift apart and the pull fails with a
+# misleading "manifest unknown". The source keeps ${VERSION:-latest} so it
+# stays usable for manual `docker compose up`; we restore it after packing.
+compose_file="$SCRIPT_DIR/app/docker/docker-compose.yaml"
+cp "$compose_file" "$compose_file.bak"
+sed -E "s#\\\$\\{VERSION:-latest\\}#${VERSION}#g" "$compose_file" > "$compose_file.tmp"
+mv "$compose_file.tmp" "$compose_file"
+restore_compose() { mv "$compose_file.bak" "$compose_file"; }
+trap restore_compose EXIT
+
+# Build.
 echo "Building .fpk with version ${VERSION}..."
-( cd "$SCRIPT_DIR" && VERSION="$VERSION" fnpack build )
+( cd "$SCRIPT_DIR" && "$FNPACK" build )
 
 echo "Done. Install the generated .fpk via fnOS 应用中心 → 手动安装,"
 echo "or submit it through the fnOS developer channel."

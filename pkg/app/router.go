@@ -32,7 +32,7 @@ func buildRouter(
 	r := chi.NewRouter()
 	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
 	r.Use(chimiddleware.Recoverer)
-	r.Use(authmw.SecurityHeaders)
+	r.Use(authmw.SecurityHeaders(cfg.Security.FrameAncestors))
 	r.Use(authmw.COOPHeaders)
 	// Streaming gzip compression for all JSON/HTML/text responses.
 	// SSE (text/event-stream) is also compressed but flushed per-event.

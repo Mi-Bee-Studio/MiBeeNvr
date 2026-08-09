@@ -3,13 +3,14 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestSecurityHeaders(t *testing.T) {
 	t.Parallel()
-	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := SecurityHeaders("")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -20,17 +21,45 @@ func TestSecurityHeaders(t *testing.T) {
 		header string
 		want   string
 	}{
-		{"X-Frame-Options", "DENY"},
+		// X-Frame-Options is intentionally absent: replaced by CSP frame-ancestors
+		// (which can express a cross-origin allow-list, unlike X-Frame-Options).
+		{"X-Frame-Options", ""},
 		{"X-XSS-Protection", "1; mode=block"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},
 		{"Permissions-Policy", "camera=(), microphone=(), geolocation=()"},
-		{"Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src blob: data: 'self'; media-src blob: 'self'; connect-src 'self' ws: wss:; worker-src 'self' blob:"},
+		{"Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src blob: data: 'self'; media-src blob: 'self'; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors 'self'"},
 	}
 	for _, tt := range tests {
 		got := w.Header().Get(tt.header)
 		if got != tt.want {
 			t.Errorf("header %s = %q, want %q", tt.header, got, tt.want)
 		}
+	}
+}
+
+// TestSecurityHeadersCustomFrameAncestors verifies that a configured
+// frame-ancestors allow-list (e.g. for embedding in the fnOS desktop, which
+// serves the desktop page from a different origin than the NVR) is reflected
+// verbatim in the CSP directive.
+func TestSecurityHeadersCustomFrameAncestors(t *testing.T) {
+	t.Parallel()
+	allowed := "http://192.168.63.60 http://192.168.63.50"
+	handler := SecurityHeaders(allowed)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	csp := w.Header().Get("Content-Security-Policy")
+	wantFragment := "frame-ancestors " + allowed
+	if !strings.Contains(csp, wantFragment) {
+		t.Errorf("CSP missing %q\ngot CSP: %s", wantFragment, csp)
+	}
+	// X-Frame-Options must stay absent so it cannot tighten the policy below
+	// the allow-list (it is the legacy, less-expressive header).
+	if got := w.Header().Get("X-Frame-Options"); got != "" {
+		t.Errorf("X-Frame-Options should be absent under custom frame-ancestors, got %q", got)
 	}
 }
 

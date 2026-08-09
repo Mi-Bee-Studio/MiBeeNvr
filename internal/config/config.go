@@ -32,6 +32,7 @@ type Config struct {
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
+	Security      SecurityConfig      `yaml:"security"`
 	Update        UpdateConfig        `yaml:"update"`
 	APIKeys       []APIKeyConfig      `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
 	Version       string              `yaml:"version"`
