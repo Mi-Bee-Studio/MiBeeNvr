@@ -478,11 +478,17 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			h.config.Cleanup.DiskThresholdPercent = *body.Cleanup.DiskThresholdPercent
 		}
 		if body.Cleanup.CheckInterval != nil {
-			if _, err := time.ParseDuration(*body.Cleanup.CheckInterval); err != nil {
-				WriteError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
-				return
+			// An empty/whitespace string means "keep current value" (partial PUT
+			// semantics). Previously any non-nil value — including "" sent by the
+			// cleanup settings UI — hit time.ParseDuration("") → 400 and aborted
+			// the whole cleanup save (#294). Treat blank as "no change".
+			if trimmed := strings.TrimSpace(*body.Cleanup.CheckInterval); trimmed != "" {
+				if _, err := time.ParseDuration(trimmed); err != nil {
+					WriteError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
+					return
+				}
+				h.config.Cleanup.CheckInterval = trimmed
 			}
-			h.config.Cleanup.CheckInterval = *body.Cleanup.CheckInterval
 		}
 	}
 

@@ -123,9 +123,10 @@
         cleanup: {
           retention_days: retentionDays,
           disk_threshold_percent: diskThresholdPercent,
-          // check_interval is required by the type but handled by backend
-          // defaults; pass an empty string so the server keeps its current value.
-          check_interval: '',
+          // check_interval intentionally omitted: this panel no longer exposes
+          // it (1h backend default is optimal). Sending "" used to 400 the save
+          // (#294) because the server runs time.ParseDuration("") on it. The
+          // server treats an absent field as "keep current" (partial PUT).
         },
         webdav: {
           enabled: webdavEnabled,
