@@ -1,5 +1,5 @@
 #!/bin/bash
-
-### This script is called after the user installs the application.
-
+# Called after files are applied. Remove any stale container from a previous
+# install attempt so cmd/main start gets a clean state (idempotent).
+docker rm -f mibee-nvr >/dev/null 2>&1 || true
 exit 0
