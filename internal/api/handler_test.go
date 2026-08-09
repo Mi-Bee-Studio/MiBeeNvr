@@ -777,6 +777,39 @@ func TestUpdateSettings_InvalidCheckInterval(t *testing.T) {
 	}
 }
 
+// TestUpdateSettings_BlankCheckIntervalKeepsCurrent guards the #294 regression:
+// the cleanup settings UI used to send check_interval:"" meaning "keep current",
+// but the server ran time.ParseDuration("") → 400 and aborted the whole save.
+// Blank (and whitespace-only) must now be treated as "no change" and succeed.
+func TestUpdateSettings_BlankCheckIntervalKeepsCurrent(t *testing.T) {
+	t.Parallel()
+	// Each entry is a raw JSON value for the check_interval field: empty string,
+	// whitespace-only, and a literal tab. All must be treated as "no change".
+	cases := []string{`""`, `"   "`, `"\t"`}
+	for _, raw := range cases {
+		db, store := setupTestDB(t)
+		defer db.Close()
+		cfg := &config.Config{
+			Cleanup: config.CleanupConfig{RetentionDays: 14, CheckInterval: "45m", DiskThresholdPercent: 90},
+			Cameras: []config.CameraConfig{},
+		}
+		h := newHandlerWithConfig(db, store, cfg)
+
+		body := strings.NewReader(`{"cleanup":{"retention_days":7,"check_interval":` + raw + `,"disk_threshold_percent":80}}`)
+		rr := doRequest(t, h.Routes(), "PUT", "/api/settings", body, "", "")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("blank check_interval %s: expected 200, got %d: %s", raw, rr.Code, rr.Body.String())
+		}
+		// The other fields must still update; check_interval must be preserved.
+		if cfg.Cleanup.RetentionDays != 7 || cfg.Cleanup.DiskThresholdPercent != 80 {
+			t.Fatalf("blank check_interval %s: sibling fields not updated (ret=%d, thresh=%d)", raw, cfg.Cleanup.RetentionDays, cfg.Cleanup.DiskThresholdPercent)
+		}
+		if cfg.Cleanup.CheckInterval != "45m" {
+			t.Fatalf("blank check_interval %s: expected preserved 45m, got %q", raw, cfg.Cleanup.CheckInterval)
+		}
+	}
+}
+
 func TestUpdateSettings_Success(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

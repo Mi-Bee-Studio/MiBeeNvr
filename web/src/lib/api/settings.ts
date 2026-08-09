@@ -8,7 +8,11 @@ import { apiRequest } from './client';
 export interface CleanupConfig {
   retention_days: number;
   disk_threshold_percent: number;
-  check_interval: string;
+  // Optional on writes: omit (or send "") to keep the server's current value.
+  // The cleanup settings UI no longer exposes this field (1h backend default is
+  // optimal), so we never send it on save — sending "" used to 400 the whole
+  // cleanup save because the server validates it with time.ParseDuration("").
+  check_interval?: string;
 }
 
 export interface WebDAVConfig {
