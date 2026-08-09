@@ -104,6 +104,13 @@ mv "$compose_file.tmp" "$compose_file"
 restore_compose() { cp "$compose_bak" "$compose_file" && rm -f "$compose_bak"; }
 trap restore_compose EXIT
 
+# Ensure lifecycle scripts are executable before packing. Files created on
+# Windows lack the Unix +x bit; without it fnOS silently skips the cmd/ hooks
+# (the script never starts — no log, no effect), which presents as a bare
+# "No such image" because install_callback's docker load never ran. fnpack
+# preserves the on-disk mode into the .fpk, so this must happen before build.
+chmod +x "$SCRIPT_DIR"/cmd/*
+
 # ---- 3. Pack ---------------------------------------------------------------
 echo "Building .fpk with version ${VERSION}..."
 ( cd "$SCRIPT_DIR" && "$FNPACK" build )
