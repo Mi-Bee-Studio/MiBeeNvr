@@ -11,7 +11,7 @@ vi.mock('$lib/i18n', () => ({
 
 // --- Mock lucide-svelte icons ---
 vi.mock('lucide-svelte', () => {
-  const icons = ['Eye', 'EyeOff', 'PlugZap', 'Plus', 'Trash2', 'ArrowUpRight'];
+  const icons = ['Eye', 'EyeOff', 'PlugZap', 'Plus', 'Trash2', 'ArrowUpRight', 'Copy'];
   const mock: Record<string, () => HTMLElement> = {};
   for (const name of icons) {
     mock[name] = () => document.createElement('span');
