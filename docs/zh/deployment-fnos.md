@@ -4,7 +4,7 @@
 
 ## 为什么用 host 网络
 
-ONVIF WS-Discovery 使用 UDP 多播（`239.255.255.250:3702`），Docker 默认 bridge 会阻断它。因此包内容器用 `network_mode: host`，摄像头自动发现正常工作，并在 manifest 里设 `checkport=false`（host 网络的多端口服务没有单一有效的 `service_port`）。若宿主的 `9090`（Web）或 `2121`（FTP）已被占用，改 `mibee-nvr.yaml` 里应用自己的端口（`server.listen` / `ftp.port`）。
+ONVIF WS-Discovery 使用 UDP 多播（`239.255.255.250:3702`），Docker 默认 bridge 会阻断它。因此包内容器用 `network_mode: host`，摄像头自动发现正常工作，并在 manifest 里设 `checkport=false`（host 网络的多端口服务没有单一有效的 `service_port`）。若宿主的 `9090`（Web）或 `2121`（FTP）已被占用：Web 端口首选在 **Web UI → 设置 → 通用 → "Web 界面端口"** 修改（装完即可改），或部署前设 `NVR_LISTEN_PORT` 环境变量；FTP 端口改 `mibee-nvr.yaml` 里的 `ftp.port`。
 
 ## 包内容
 

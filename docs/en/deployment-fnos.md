@@ -4,7 +4,7 @@
 
 ## Why host networking
 
-ONVIF WS-Discovery uses UDP multicast (`239.255.255.250:3702`), which Docker's default bridge blocks. The package runs the container with `network_mode: host` so camera auto-discovery works, and sets `manifest: checkport=false` since a host-network multi-port service has no single meaningful `service_port`. If `9090` (Web) or `2121` (FTP) is already in use on the host, change the app's own port in `mibee-nvr.yaml` (`server.listen` / `ftp.port`).
+ONVIF WS-Discovery uses UDP multicast (`239.255.255.250:3702`), which Docker's default bridge blocks. The package runs the container with `network_mode: host` so camera auto-discovery works, and sets `manifest: checkport=false` since a host-network multi-port service has no single meaningful `service_port`. If `9090` (Web) or `2121` (FTP) is already in use on the host: for the Web port, prefer changing it via **Web UI → Settings → General → "Web UI port"** after install, or set the `NVR_LISTEN_PORT` environment variable before deploying; for FTP, change `ftp.port` in `mibee-nvr.yaml`.
 
 ## Package contents
 
