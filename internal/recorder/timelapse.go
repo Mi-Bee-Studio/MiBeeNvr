@@ -36,6 +36,13 @@ type TimelapseRecorderConfig struct {
 	DB         RecordingDB
 	Metrics    *metrics.Metrics
 	MergeMgr   *timelapse.RollingMergeManager // optional rolling merge manager
+	// RecordEnabled gates whether captured frames are written to disk, mirroring
+	// the segment recorder's RecordEnabled (internal/recorder/base.go).
+	// nil or true = write timelapse frames (default). false = "preview-only":
+	// the capture loop keeps the MJPEG connection alive but performs no
+	// segment/frame I/O — useful when recording_enabled=false and the user
+	// expects zero disk writes.
+	RecordEnabled *bool
 }
 
 // TimelapseRecorder captures JPEG frames at a configurable interval from an
@@ -322,6 +329,13 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 		// Validate JPEG magic bytes
 		if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
 			timelapseLogger.Warn("skipping invalid frame (missing JPEG magic)", "camera_id", r.cfg.CameraID, "size", len(data))
+			continue
+		}
+
+		// Preview-only: keep the MJPEG stream alive (so it recovers if the flag
+		// flips back) but skip ALL segment/frame I/O. Mirrors the recorder gate
+		// in base.go; nil => recording enabled (default).
+		if r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled {
 			continue
 		}
 
