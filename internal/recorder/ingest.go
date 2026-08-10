@@ -35,6 +35,13 @@ type IngestConfig struct {
 	// Metrics, EventBus optional (nil-safe)
 	Metrics  *metrics.Metrics
 	EventBus *event.EventBus
+	// RecordEnabled gates whether pushed frames are written to disk as segments.
+	// nil or true (default) = record normally. false = "live-only" mode: the
+	// recorder keeps accepting publishers and the StreamHub fan-out keeps feeding
+	// live preview (HLS/WebRTC/FLV/WS) and relay, but NO segments are written —
+	// useful when the NVR is used purely as a live/relay gateway and disk writes
+	// must be avoided. Mirrors RecordEnabled on the pull recorders (base.go).
+	RecordEnabled *bool
 }
 
 // IngestRecorder records H.264 video pushed into the NVR via SRT/RTMP ingest.
@@ -246,6 +253,15 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 			broadcastAU = append(broadcastAU, au...)
 		}
 		hub.Broadcast(ptsTicks, broadcastAU, isIDR)
+	}
+
+	// Live-only mode: the StreamHub fan-out above already delivered this frame to
+	// live preview (HLS/WebRTC/FLV/WS) and relay, and the cached SPS/PPS keep
+	// getCodecParams() populated. Skip all segment I/O from here on so nothing is
+	// written to disk. Mirrors the gate in base.go writeFrames.
+	// nil => recording enabled (default); pointer to false => live-only.
+	if r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled {
+		return
 	}
 
 	// ---- Find VCL NALU (type 1 non-IDR or type 5 IDR) to write to disk ----

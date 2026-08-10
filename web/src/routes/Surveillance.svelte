@@ -173,6 +173,12 @@
   function getStatusBadge(camera: Camera): { class: string; label: string; icon: any; text: string } {
     const status = camera.status?.toLowerCase() || '';
     if (status === 'recording' || status === 'active') {
+      // Live-only cameras connect and stream for preview/relay but write no
+      // segments — show "Live only" instead of "Recording" so the grid matches
+      // CameraCard and users can tell preview-only cameras at a glance.
+      if (camera.recording_enabled === false) {
+        return { class: 'badge-info', label: '●', icon: CircleCheck, text: t('cameras.statusLive') };
+      }
       return { class: 'badge-success', label: '●', icon: CircleCheck, text: t('cameras.statusRecording') };
     }
     if (status === 'error' || status === 'failed') {

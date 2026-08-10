@@ -1138,6 +1138,7 @@
   "settings.sidebar.advanced": "Advanced",
   "settings.sidebar.about": "About",
   "about.title": "About & Updates",
+  "about.brandTagline": "Network Video Recorder",
   "about.currentVersion": "Current version",
   "about.latestVersion": "Latest version",
   "about.lastChecked": "Last checked",
