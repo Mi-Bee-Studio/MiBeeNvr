@@ -297,12 +297,13 @@ chown -R 65534:65534 ./data
 
 **Port conflicts**
 
-Change the left-side (host) port in `docker-compose.yml`:
+MiBee NVR offers three ways to configure the listen port, in order of preference:
 
-```yaml
-ports:
-  - "8090:9090"   # Change host port to 8090
-```
+1. **Web UI (recommended)**: Settings → General → "Web UI port". Saving applies it immediately (the service restarts automatically). This is the preferred way to change the port after installation — no config file editing or container restart needed.
+2. **At install time**: `./install.sh --port 9091` (set during first install, bare-metal).
+3. **Environment variable (NAS host networking / Docker)**: `NVR_LISTEN_PORT=9091` (for `network_mode: host` NAS deployments, where Docker port mapping has no effect).
+
+> The legacy `server.listen: ":9191"` in `mibee-nvr.yaml` still works, but the three options above are more straightforward and require no manual config editing.
 
 **Container keeps restarting**
 
@@ -336,7 +337,7 @@ ONVIF auto-discovery uses WS-Discovery (UDP multicast to `239.255.255.250:3702`)
 
 Solutions:
 
-1. **Host networking** (recommended for discovery): Uncomment `network_mode: host` in `docker-compose.yml` and remove the `ports` section. The container shares the host's network stack, enabling multicast. If the host's port 9090 is already in use (e.g. Synology DSM), set `server.listen: ":9191"` (or any free port) in `mibee-nvr.yaml` — the container binds that host port directly. The health check (`mibee-nvr health`) auto-detects the configured listen port, so no extra setup is needed.
+1. **Host networking** (recommended for discovery): Uncomment `network_mode: host` in `docker-compose.yml` and remove the `ports` section. The container shares the host's network stack, enabling multicast. If the host's port 9090 is already in use (e.g. Synology DSM), use a different port: change it via **Web UI → Settings → General → "Web UI port"** after install (recommended), or set the `NVR_LISTEN_PORT=9191` environment variable before deploying — the container binds that host port directly. The health check (`mibee-nvr health`) auto-detects the configured listen port, so no extra setup is needed.
 
 2. **Manual probe** (works in any network mode): In the Web UI camera page, use the "Manual Probe" section to enter a device IP address directly. This bypasses multicast and works in any Docker configuration.
 
