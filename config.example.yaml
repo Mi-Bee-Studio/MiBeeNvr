@@ -49,6 +49,19 @@ cameras: []
 #     encoding: "h264"         # Encoding: h264, h265, mjpeg, jpeg
 #     url: "rtsp://192.168.1.100:554/stream"
 #     enabled: true
+#     recording_enabled: true       # Write recordings to disk (default: true). Set false for
+#                                   # "live-only" / preview-only mode: the camera stays connected
+#                                   # and feeds live preview (HLS/WebRTC/HTTP-FLV/WS) plus relay/
+#                                   # forwarding, but writes NO segment files — useful when the NVR
+#                                   # is used purely as a live/relay gateway and disk writes (e.g. on
+#                                   # an SD card) must be avoided. Applies to all protocols incl.
+#                                   # SRT/RTMP push-ingest cameras. Also gates timelapse frame
+#                                   # capture — a preview-only camera writes no timelapse frames
+#                                   # either (the capture loops stay alive but skip all disk I/O).
+#                                   # Other "don't record" knobs (NOT the same as this):
+#                                   #   recording_schedule    — time-window recording (still writes when "on")
+#                                   #   activation_state: "pending_activation" — does not connect at all
+#                                   #   push_retention_days: 0 — cleanup policy only (segments are written first)
 #     audio_enabled: false          # Enable audio recording (default: false)
 #     frame_watchdog_timeout: "30s"  # Timeout before declaring camera unhealthy (default: 30s)
 #     timelapse:                      # Per-camera timelapse recording (see full reference below)

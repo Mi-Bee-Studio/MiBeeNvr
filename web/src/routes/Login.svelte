@@ -76,8 +76,10 @@
 
   <div class="card w-full max-w-md p-10 border th-border shadow-2xl">
     <div class="text-center mb-10">
-      <div class="text-sm font-semibold tracking-widest uppercase th-text-tertiary mb-3">MiBee</div>
-      <h1 class="text-3xl font-bold bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent mb-3">{t('login.title')}</h1>
+      <div class="flex items-center justify-center gap-3 mb-3">
+        <img src="/logo-icon.svg" alt="MiBee NVR" class="h-14 w-14" />
+        <h1 class="text-3xl font-bold bg-gradient-to-r from-[#635bff] to-[#3a1c9e] bg-clip-text text-transparent">{t('login.title')}</h1>
+      </div>
       <p class="th-text-tertiary text-sm">{t('login.subtitle')}</p>
     </div>
 

@@ -51,6 +51,14 @@ type KeyframeExtractorConfig struct {
 	// and the H264GoMerger/H265GoMerger permanently fails with "frames missing SPS".
 	// Optional — when nil, only inline parameter sets are used.
 	CodecParamsProvider func() (sps, pps, vps []byte)
+
+	// RecordEnabled gates whether captured frames are written to disk, mirroring
+	// the segment recorder's RecordEnabled (internal/recorder/base.go).
+	// nil or true = write timelapse frames (default). false = "preview-only":
+	// the capture loop keeps ticking (so it self-heals if the flag flips back),
+	// but performs no segment/frame I/O — useful when a camera is set to
+	// recording_enabled=false and the user expects zero disk writes.
+	RecordEnabled *bool
 }
 
 // KeyframeExtractor subscribes to a recorder's StreamHub and captures
@@ -96,6 +104,10 @@ type KeyframeExtractor struct {
 	// parameter sets are missing from frame AUs (out-of-band codec config).
 	codecParamsProvider func() (sps, pps, vps []byte)
 
+	// recordEnabled gates disk writes (nil/true = write, false = preview-only).
+	// Mirrors the recorder gate; see KeyframeExtractorConfig.RecordEnabled.
+	recordEnabled *bool
+
 	// Segment state.
 	curTempPath  string
 	curFinalPath string
@@ -131,6 +143,7 @@ func NewKeyframeExtractor(cfg KeyframeExtractorConfig) *KeyframeExtractor {
 		db:                  cfg.DB,
 		mergeMgr:            cfg.MergeMgr,
 		codecParamsProvider: cfg.CodecParamsProvider,
+		recordEnabled:       cfg.RecordEnabled,
 		consumerID:          "keyframe-extractor-" + cfg.CameraID,
 	}
 }
@@ -288,6 +301,12 @@ func (k *KeyframeExtractor) captureLoop(ctx context.Context) {
 // current segment. Prefers IDR frames but falls back to P-frames if no
 // IDR has been received since the last capture.
 func (k *KeyframeExtractor) captureFrame() {
+	// Preview-only: keep the loop alive (so it recovers if the flag flips back)
+	// but skip ALL segment/frame I/O. Mirrors the recorder gate in base.go.
+	if k.recordEnabled != nil && !*k.recordEnabled {
+		return
+	}
+
 	// Try to get the latest IDR frame first.
 	k.latestFrameMu.Lock()
 	frame := k.latestFrame

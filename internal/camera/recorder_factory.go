@@ -177,13 +177,14 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			enc = string(model.FormatH264)
 		}
 		rec = recorder.NewIngestRecorder(recorder.IngestConfig{
-			CameraID:   cam.ID,
-			Encoding:   enc,
-			SegmentDur: segDur,
-			Store:      cm.store,
-			DB:         cm.db,
-			Metrics:    cm.metrics,
-			EventBus:   cm.eventBus,
+			CameraID:      cam.ID,
+			Encoding:      enc,
+			SegmentDur:    segDur,
+			Store:         cm.store,
+			DB:            cm.db,
+			Metrics:       cm.metrics,
+			EventBus:      cm.eventBus,
+			RecordEnabled: cam.RecordingEnabled,
 		})
 	default:
 		return nil

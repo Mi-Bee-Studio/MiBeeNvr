@@ -113,7 +113,10 @@
           <span>{backLabel || t('detail.back')}</span>
         </button>
       {/if}
-      <a href="#/surveillance" class="logo">MiBee NVR</a>
+      <a href="#/surveillance" class="logo">
+        <img src="/logo-icon.svg" alt="" class="logo-mark" />
+        <span>MiBee NVR</span>
+      </a>
       
       <!-- Desktop Navigation -->
       <nav class="nav-links">
@@ -231,15 +234,26 @@
 
 
   .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
     font-size: 1.25rem;
     font-weight: 700;
     letter-spacing: -0.025em;
     text-decoration: none;
     white-space: nowrap;
-    background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 40%, #38bdf8 100%);
+    background: linear-gradient(135deg, #635bff 0%, #3a1c9e 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+  }
+
+  .logo-mark {
+    width: 2rem;
+    height: 2rem;
+    flex-shrink: 0;
+    /* SVG gradient text fill doesn't apply to the <img>; keep it crisp. */
+    -webkit-text-fill-color: initial;
   }
 
   .nav-links {

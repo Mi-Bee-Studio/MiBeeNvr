@@ -135,8 +135,8 @@
 
   <div class="card w-full max-w-lg p-10 border th-border shadow-2xl">
     <div class="text-center mb-8">
-      <div class="text-sm font-semibold tracking-widest uppercase th-text-tertiary mb-3">MiBee</div>
-      <h1 class="text-3xl font-bold bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent mb-3">{t('setup.title')}</h1>
+      <img src="/logo-icon.svg" alt="MiBee NVR" class="h-16 w-16 mx-auto mb-4" />
+      <h1 class="text-3xl font-bold bg-gradient-to-r from-[#635bff] to-[#3a1c9e] bg-clip-text text-transparent mb-3">{t('setup.title')}</h1>
       <p class="th-text-tertiary text-sm">{t('setup.subtitle')}</p>
     </div>
 

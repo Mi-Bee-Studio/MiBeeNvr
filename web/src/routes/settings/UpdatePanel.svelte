@@ -106,8 +106,12 @@
 </script>
 
 <div class="space-y-6">
-  <div>
-    <h3 class="text-lg font-semibold th-text-primary">{t('about.title')}</h3>
+  <div class="flex items-center gap-3">
+    <img src="/logo-icon.svg" alt="MiBee NVR" class="h-12 w-12" />
+    <div>
+      <h3 class="text-lg font-semibold th-text-primary">{t('about.title')}</h3>
+      <p class="text-xs th-text-tertiary">{t('about.brandTagline')}</p>
+    </div>
   </div>
 
   {#if loading}

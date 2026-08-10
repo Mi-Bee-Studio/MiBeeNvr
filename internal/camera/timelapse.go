@@ -147,13 +147,14 @@ func (cm *CameraManager) createTimelapseSnapshotRecorder(cam config.CameraConfig
 // createTimelapseMJPEGRecorder creates a TimelapseRecorder for MJPEG stream or auto source.
 func (cm *CameraManager) createTimelapseMJPEGRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
 	tlCfg := recorder.TimelapseRecorderConfig{
-		CameraID: cam.ID,
-		URL:      cam.URL,
-		Username: cam.Username,
-		Password: cam.Password,
-		DataDir:  cm.cfg.Storage.RootDir,
-		DB:       cm.db,
-		Metrics:  cm.metrics,
+		CameraID:      cam.ID,
+		URL:           cam.URL,
+		Username:      cam.Username,
+		Password:      cam.Password,
+		DataDir:       cm.cfg.Storage.RootDir,
+		DB:            cm.db,
+		Metrics:       cm.metrics,
+		RecordEnabled: cam.RecordingEnabled,
 	}
 	if cam.Timelapse != nil {
 		if d, err := time.ParseDuration(cam.Timelapse.Interval); err == nil && d >= time.Millisecond {
@@ -466,6 +467,7 @@ func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam co
 		DB:                  cm.db,
 		MergeMgr:            mergeMgr,
 		CodecParamsProvider: codecProvider,
+		RecordEnabled:       cam.RecordingEnabled,
 	})
 
 	ctx := context.Background()
@@ -739,6 +741,7 @@ func (cm *CameraManager) startTimelapseFramePoller(cameraID string, cam config.C
 		Metrics:       cm.metrics,
 		MergeMgr:      mergeMgr,
 		FrameProvider: frameProvider,
+		RecordEnabled: cam.RecordingEnabled,
 	}
 	capturer := timelapse.NewSnapshotCapturer(snapCfg, cm.store, cm.metrics)
 

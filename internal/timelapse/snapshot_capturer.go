@@ -41,6 +41,14 @@ type SnapshotCapturerConfig struct {
 	// (critical for ESP32 cameras with very limited concurrent HTTP capacity).
 	// When set, SnapshotURL is not required and the HTTP client is unused.
 	FrameProvider func() []byte
+
+	// RecordEnabled gates whether captured frames are written to disk, mirroring
+	// the segment recorder's RecordEnabled (internal/recorder/base.go).
+	// nil or true = write timelapse frames (default). false = "preview-only":
+	// the capture loop keeps ticking (so it self-heals if the flag flips back),
+	// but performs no segment/frame I/O — useful when a camera is set to
+	// recording_enabled=false and the user expects zero disk writes.
+	RecordEnabled *bool
 }
 
 // SnapshotCapturer captures JPEG snapshots from an HTTP URL at a configurable
@@ -204,6 +212,12 @@ func (r *SnapshotCapturer) run(ctx context.Context) {
 
 // captureFrame fetches a single snapshot and writes it to the current segment.
 func (r *SnapshotCapturer) captureFrame(ctx context.Context) {
+	// Preview-only: keep the loop alive (so it recovers if the flag flips back)
+	// but skip ALL segment/frame I/O. Mirrors the recorder gate in base.go.
+	if r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled {
+		return
+	}
+
 	var data []byte
 	if r.cfg.FrameProvider != nil {
 		// Dual-mode: pull latest frame from the running recorder's in-memory cache.
