@@ -307,12 +307,31 @@ sudo apk add ffmpeg
    curl -u admin:password http://localhost:9090/api/xiaomi/devices
    ```
 2. 检查设备兼容性：
-   - 仅支持小米 CS2 摄像头
+   - CS2 与 TUTK 两种传输均支持（见小米集成文档的型号对照表）
    - 验证设备型号是否支持
 3. 尝试手动同步：
    ```bash
    curl -X POST -u admin:password http://localhost:9090/api/xiaomi/sync
    ```
+
+#### 小米摄像头一直"连接中"
+**症状**: 小米摄像头添加后状态一直停在"连接中"，始终进不了"录制中"。
+
+**根本原因**: 小米摄像头虽通过云账号扫描添加，但**取流是 NVR 直连摄像头局域网 IP 的 UDP P2P 握手（CS2 默认端口 32108），并非云端中继**。当 NVR 与摄像头不在同一局域网、或 UDP 被防火墙 / AP 隔离拦截时，握手会持续超时，表现为无限重连。
+
+**解决方案**:
+1. 看日志定位（按关键字区分原因）：
+   ```bash
+   docker logs mibee-nvr 2>&1 | grep -iE "xiaomi|miss|connect|LAN IP|cloud" | tail -40
+   ```
+   - `device ... has no LAN IP` —— 摄像头在米家 App 里离线，或未上报局域网 IP；去米家确认在线后回 NVR 点"重新连接"
+   - `miss connect: read udp ... i/o timeout` —— NVR 到摄像头的 UDP 被挡；确认两者在同一子网，并放行 UDP 32108
+   - `xiaomi cloud auth: ...` —— 云令牌失效；重新登录一次小米账号
+2. 确认 NVR 能在局域网内 ping 通摄像头（IP 在米家 App 的设备信息中查看）：
+   ```bash
+   ping <摄像头IP>
+   ```
+3. 关闭路由器 AP 隔离；飞牛 / 群晖等 NAS 的防火墙需放行 UDP 32108。
 
 #HB|## 实时预览问题
 #SY|
