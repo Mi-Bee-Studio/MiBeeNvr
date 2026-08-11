@@ -1,14 +1,14 @@
 # Xiaomi Camera Integration
 
-MiBee NVR provides comprehensive support for Xiaomi cloud cameras through the CS2 P2P protocol. This integration allows you to connect Xiaomi cameras to your NVR system without requiring direct network access to the cameras themselves, as all communication is handled through Xiaomi's cloud services.
+MiBee NVR provides comprehensive support for Xiaomi cloud cameras through the CS2/TUTK P2P protocol. Xiaomi's cloud services handle account authentication and device/connection-URL resolution; however, **when streaming, the NVR connects directly to the camera's LAN IP over UDP (P2P)**. The NVR and the camera must therefore be on the same local network (same subnet, UDP-reachable), with no firewall or AP isolation blocking the traffic — otherwise the camera stays stuck on "connecting".
 
 ## Overview
 
-- **Protocol**: CS2 P2P (Xiaomi's proprietary cloud protocol)
+- **Protocol**: CS2 P2P / TUTK (Xiaomi's proprietary cloud protocol)
 - **Authentication**: Xiaomi cloud services with token-based auth
-- **Supported Models**: CS2-based cameras (see table below)
+- **Supported Models**: CS2 and TUTK cameras (see table below)
 - **Features**: Live streaming, recording, snapshots, PTZ control
-- **Network**: Requires connectivity to Xiaomi cloud services
+- **Network**: Requires connectivity to Xiaomi cloud services **and the NVR on the same LAN as the camera** (auth via cloud, streaming via LAN P2P)
 
 ## Prerequisites
 
@@ -16,6 +16,7 @@ MiBee NVR provides comprehensive support for Xiaomi cloud cameras through the CS
 - Cameras bound to your Xiaomi account in Mi Home app
 - Network access to Xiaomi cloud services (`api.io.mi.com`)
 - Working internet connection for NVR system
+- **NVR and camera on the same local network** (same subnet, UDP-reachable) — streaming is a direct LAN P2P connection; different networks cause a permanent "connecting" state
 
 | Model | Identifier | Protocol | Support Level | Notes |
 |-------|------------|----------|---------------|-------|
@@ -633,14 +634,20 @@ ufw allow from 192.168.1.0/24 to any port 9090 proto tcp
 **Required Access**:
 - `api.io.mi.com:443` - Xiaomi cloud API (device list, MISS URL resolution; regional variants `<region>.api.io.mi.com`)
 - `account.xiaomi.com:443` - Xiaomi authentication
+- **UDP reachability from the NVR to the camera on the LAN (CS2 default port 32108)** — streaming is a direct P2P handshake to the camera's LAN IP, **not a cloud relay**. Cross-subnet setups, AP isolation, or firewall blocking will leave the camera stuck on "connecting"
+
+> Note: only authentication and address resolution go through Xiaomi's cloud; the video stream itself travels over LAN P2P between the NVR and the camera. So even with cloud connectivity, streaming is impossible if the two are not on the same local network.
 
 **Network Troubleshooting**:
 ```bash
-# Test connectivity to Xiaomi services
+# Test connectivity to Xiaomi services (auth, device list)
 curl -v https://api.io.mi.com
 
 # Test DNS resolution
 nslookup api.io.mi.com
+
+# Confirm the NVR can ping the camera on the LAN (find the IP in the Mi Home app device info)
+ping <camera-ip>
 ```
 
 ## Performance Optimization
