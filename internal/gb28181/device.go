@@ -30,6 +30,7 @@ type Device struct {
 	Status        atomic.Int32
 	channels      sync.Map     // channelID -> *Channel
 	lastKeepalive atomic.Int64 // UnixNano timestamp of the last keepalive
+	Mu            sync.RWMutex // guards Name/Manufacturer/Model/NetAddr
 }
 
 // DeviceManager tracks registered GB28181 devices and their channels.
@@ -134,10 +135,12 @@ func (m *DeviceManager) Register(d *Device) {
 	}
 	// Existing device: copy fresh metadata (a device may re-REGISTER from a
 	// new address after an IP change) but keep the original channels map.
+	dev.Mu.Lock()
 	dev.Name = d.Name
 	dev.Manufacturer = d.Manufacturer
 	dev.Model = d.Model
 	dev.NetAddr = d.NetAddr
+	dev.Mu.Unlock()
 }
 
 // Unregister removes the device and its channels.

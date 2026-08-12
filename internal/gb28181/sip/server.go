@@ -162,9 +162,12 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 	if !ok {
 		return fmt.Errorf("gb28181: device %q not registered", deviceID)
 	}
-	devHost, devPortStr, err := net.SplitHostPort(dev.NetAddr)
+	dev.Mu.RLock()
+	netAddr := dev.NetAddr
+	dev.Mu.RUnlock()
+	devHost, devPortStr, err := net.SplitHostPort(netAddr)
 	if err != nil {
-		return fmt.Errorf("gb28181: invalid device address %q: %w", dev.NetAddr, err)
+		return fmt.Errorf("gb28181: invalid device address %q: %w", netAddr, err)
 	}
 	devPort, err := strconv.Atoi(devPortStr)
 	if err != nil {
@@ -306,6 +309,7 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 	case manscdp.CmdDeviceInfo:
 		p := payload.(manscdp.DeviceInfo)
 		if d, ok := s.deviceMgr.Device(p.DeviceID); ok {
+			d.Mu.Lock()
 			if p.DeviceName != "" {
 				d.Name = p.DeviceName
 			}
@@ -315,6 +319,7 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 			if p.Model != "" {
 				d.Model = p.Model
 			}
+			d.Mu.Unlock()
 		}
 	}
 
@@ -486,7 +491,7 @@ func (s *Server) localIP() string {
 func generateNonce() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		return strconv.FormatInt(time.Now().UnixNano(), 10)
 	}
 	return hex.EncodeToString(b)
 }

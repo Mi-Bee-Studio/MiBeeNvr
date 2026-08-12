@@ -263,8 +263,11 @@ func TestServer_Register_Flow(t *testing.T) {
 	if dev.Status.Load() != gb28181.DeviceOnline {
 		t.Fatalf("device status = %d, want online", dev.Status.Load())
 	}
-	if !strings.Contains(dev.NetAddr, "127.0.0.1") {
-		t.Fatalf("device NetAddr = %q, want client addr", dev.NetAddr)
+	dev.Mu.RLock()
+	netAddr := dev.NetAddr
+	dev.Mu.RUnlock()
+	if !strings.Contains(netAddr, "127.0.0.1") {
+		t.Fatalf("device NetAddr = %q, want client addr", netAddr)
 	}
 }
 
@@ -441,8 +444,11 @@ func TestServer_Message_DeviceInfo(t *testing.T) {
 	if !ok {
 		t.Fatalf("device not registered")
 	}
-	if dev.Name != "Hikvision NVR" || dev.Manufacturer != "Hikvision" || dev.Model != "DS-7608" {
-		t.Fatalf("device metadata = %+v", dev)
+	dev.Mu.RLock()
+	name, manufacturer, model := dev.Name, dev.Manufacturer, dev.Model
+	dev.Mu.RUnlock()
+	if name != "Hikvision NVR" || manufacturer != "Hikvision" || model != "DS-7608" {
+		t.Fatalf("device metadata = name=%q manufacturer=%q model=%q", name, manufacturer, model)
 	}
 }
 
