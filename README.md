@@ -170,6 +170,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 | RTSP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
 | ONVIF | Camera ↔ NVR | ✅ Done | Discovery, PTZ, stream URI |
 | Xiaomi (CS2 + TUTK) | Camera → NVR | ✅ Done | CS2 P2P + legacy TUTK (7 models), cloud auth |
+| GB/T 28181 | Camera → NVR | ✅ Done | SIP platform, device registration, PTZ, playback |
 
 ## Use Cases
 

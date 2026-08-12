@@ -215,8 +215,11 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // in v30 (#240) since the v0.9.x → v0.10.x upgrade population has long since
 // migrated. Users below v0.9.x must upgrade to 0.9.x first (see upgrade-guide).
 //
+// v32: added gb28181_devices + gb28181_channels (GB28181 platform-role device
+// catalog, issue #315).
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "31"
+const currentSchemaVersion = "32"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -347,6 +350,26 @@ func (d *DB) Init(ctx context.Context) error {
 		completed_at TEXT DEFAULT ''
 	)`
 
+	gbDevSQL := `CREATE TABLE IF NOT EXISTS gb28181_devices (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL DEFAULT '',
+		manufacturer TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'offline',
+		last_keepalive DATETIME,
+		registered_at DATETIME
+	);`
+	gbChSQL := `CREATE TABLE IF NOT EXISTS gb28181_channels (
+		id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		name TEXT NOT NULL DEFAULT '',
+		manufacturer TEXT NOT NULL DEFAULT '',
+		parental INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'idle',
+		camera_id TEXT,
+		updated_at DATETIME
+	);`
+
 	archiveCleanupTasksSQL := `CREATE TABLE IF NOT EXISTS archive_cleanup_tasks (
 		camera_id TEXT PRIMARY KEY,
 		camera_name TEXT NOT NULL DEFAULT '',
@@ -357,7 +380,7 @@ func (d *DB) Init(ctx context.Context) error {
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		completed_at TEXT DEFAULT ''
 	);`
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL} {
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}

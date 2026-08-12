@@ -11,7 +11,7 @@
 //
 // During `vite dev` the placeholder is NOT rewritten, so we fall back to a
 // dev-only random version (each reload is a new cache — fine for dev).
-const CACHE_VERSION = 'mibee-nvr-1785743985030';
+const CACHE_VERSION = 'mibee-nvr-1786529183890';
 const APP_SHELL = [
   '/',
   '/index.html',

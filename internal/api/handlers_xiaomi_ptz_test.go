@@ -27,7 +27,7 @@ func TestXiaomiPTZMove(t *testing.T) {
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
 
 	rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{
 		CameraID: "xiaomi-cam",
@@ -65,7 +65,7 @@ func TestXiaomiPTZStop(t *testing.T) {
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
 
 	rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{
 		CameraID: "xiaomi-cam",
@@ -101,7 +101,7 @@ func TestXiaomiDeviceInfo(t *testing.T) {
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
 
 	rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{
 		CameraID: "xiaomi-cam",
@@ -160,7 +160,7 @@ func TestXiaomiDeviceInfoNotConnected(t *testing.T) {
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
 
 	rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{
 		CameraID: "xiaomi-cam",

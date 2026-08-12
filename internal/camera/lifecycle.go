@@ -38,7 +38,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 		}
 
 		switch cam.Protocol {
-		case string(model.ProtoRTSP), string(model.ProtoHTTP):
+		case string(model.ProtoRTSP), string(model.ProtoHTTP), string(model.ProtoGB28181):
 			rec := cm.createRecorder(cam, segDur)
 			if rec != nil {
 				cm.apply(func(s *snapshot) *snapshot {

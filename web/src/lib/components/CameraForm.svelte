@@ -96,6 +96,9 @@
   let formStreamKey = $state('');
   let formSRTPassphrase = $state('');
   let formSRTStreamID = $state('');
+  // GB28181 SIP device/channel binding (required when protocol is gb28181)
+  let formGB28181DeviceID = $state('');
+  let formGB28181ChannelID = $state('');
   // Push-in retention (SRT/RTMP): null=follow global, 0=live-only, N=keep N days
   let formPushRetentionDays = $state<number | null>(null);
   // Push-out relay targets
@@ -141,7 +144,9 @@ let validationErrors = $state<Record<string, string>>({});
     if (!proto) return;
     const encodings = proto.encodings;
     if (!encodings.includes(formEncoding)) {
-      if (formProtocol === 'onvif' || formProtocol === 'xiaomi') {
+      if (formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181') {
+        // Auto-detect protocols: codec comes from the live stream, not config.
+        formEncoding = '';
         // Auto-detect protocols: codec comes from the live stream, not config.
         formEncoding = '';
       } else if (formProtocol === 'http') {
@@ -242,6 +247,8 @@ let validationErrors = $state<Record<string, string>>({});
     formStreamKey = '';
     formSRTPassphrase = '';
     formSRTStreamID = '';
+    formGB28181DeviceID = '';
+    formGB28181ChannelID = '';
     formPushRetentionDays = null;
     formPushTargets = [];
     pushStatus = [];
@@ -291,6 +298,8 @@ let validationErrors = $state<Record<string, string>>({});
     formStreamKey = camera.stream_key || '';
     formSRTPassphrase = camera.srt_passphrase || '';
     formSRTStreamID = camera.srt_stream_id || '';
+    formGB28181DeviceID = camera.gb28181?.device_id || '';
+    formGB28181ChannelID = camera.gb28181?.channel_id || '';
     formPushRetentionDays = camera.push_retention_days ?? null;
     formPushTargets = (camera.push_targets ?? []).map((p) => ({ ...p }));
     // Start polling push-out status while editing (only if there are targets).
@@ -428,7 +437,13 @@ let validationErrors = $state<Record<string, string>>({});
     validationErrors = {};
     if (!formName.trim()) validationErrors['name'] = t('cameras.nameRequired');
     if (!formProtocol) validationErrors['protocol'] = t('cameras.protocolRequired');
-    if (!formUrl.trim()) validationErrors['url'] = t('cameras.urlRequired');
+    // gb28181 cameras are identified by SIP DeviceID/ChannelID — no URL.
+    if (formProtocol !== 'gb28181' && !formUrl.trim()) validationErrors['url'] = t('cameras.urlRequired');
+    if (formProtocol === 'gb28181') {
+      if (!formGB28181DeviceID.trim()) validationErrors['gb28181_device_id'] = t('cameras.gb28181DeviceIdRequired');
+      if (!formGB28181ChannelID.trim()) validationErrors['gb28181_channel_id'] = t('cameras.gb28181ChannelIdRequired');
+    }
+    if (!formProtocol) validationErrors['protocol'] = t('cameras.protocolRequired');
     // Push-out relay targets: an enabled target must have a non-empty URL whose
     // scheme matches its selected protocol. This was unvalidated, so a target
     // saved with a blank/typo URL appeared later as "only the name, no link"
@@ -527,10 +542,11 @@ async function performCameraSave() {
             serial_number: formSerialNumber || undefined,
             retention_days: formRetentionDays,
             stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
-            // onvif/xiaomi auto-detect codec from the live stream and ignore the
-            // stored value, so don't send one (avoids writing a stale label).
-            // rtsp/http/srt/rtmp send formEncoding — it drives recorder selection.
-            encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' ? undefined : formEncoding,
+            // onvif/xiaomi/gb28181 auto-detect codec from the live stream and
+            // ignore the stored value, so don't send one (avoids writing a
+            // stale label). rtsp/http/srt/rtmp send formEncoding — it drives
+            // recorder selection.
+            encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181' ? undefined : formEncoding,
             transcoding: {
                 enabled: formTranscodingEnabled,
                 target_codec: formTranscodingCodec,
@@ -546,6 +562,7 @@ async function performCameraSave() {
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
+            gb28181: formProtocol === 'gb28181' ? { device_id: formGB28181DeviceID, channel_id: formGB28181ChannelID } : undefined,
             push_targets: formPushTargets.length > 0 ? formPushTargets : [],
             push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp') ? formPushRetentionDays : undefined,
             dark_frame_filter_enabled: formDarkFrameFilterEnabled,
@@ -584,10 +601,14 @@ async function performCameraSave() {
             serial_number: formSerialNumber || undefined,
             retention_days: formRetentionDays,
             stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
-            // onvif/xiaomi auto-detect codec from the live stream and ignore the
+            // onvif/xiaomi/gb28181 auto-detect codec from the live stream and
+            // ignore the stored value, so don't send one (avoids writing a
+            // stale label). rtsp/http/srt/rtmp send formEncoding — it drives
+            // recorder selection.
+            encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181' ? undefined : formEncoding,
             // stored value, so don't send one (avoids writing a stale label).
             // rtsp/http/srt/rtmp send formEncoding — it drives recorder selection.
-            encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' ? undefined : formEncoding,
+            encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181' ? undefined : formEncoding,
             transcoding: {
                 enabled: formTranscodingEnabled,
                 target_codec: formTranscodingCodec,
@@ -603,6 +624,7 @@ async function performCameraSave() {
             stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
+            gb28181: formProtocol === 'gb28181' ? { device_id: formGB28181DeviceID, channel_id: formGB28181ChannelID } : undefined,
             push_targets: formPushTargets.length > 0 ? formPushTargets : undefined,
             push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp') ? formPushRetentionDays : undefined,
             dark_frame_filter_enabled: formDarkFrameFilterEnabled,
@@ -655,7 +677,7 @@ async function performCameraSave() {
            any stored value, so the field is read-only "auto-detect" for them.
            rtsp/http/srt/rtmp keep it editable — it drives recorder selection
            (H264Recorder vs H265Recorder). See #166. -->
-      {#if formProtocol === 'onvif' || formProtocol === 'xiaomi'}
+      {#if formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181'}
         <select id="cam-encoding" class="input" disabled>
           <option value="">{t('cameras.autoDetect')}</option>
         </select>
@@ -676,6 +698,29 @@ async function performCameraSave() {
           <option value="">{t('cameras.channelMain')}</option>
           <option value="1">{t('cameras.channelSecondary')}</option>
         </select>
+      </div>
+    {/if}
+
+    {#if formProtocol === 'gb28181'}
+      <!-- GB28181: the camera is identified by its SIP DeviceID + ChannelID.
+           The NVR invites the channel over SIP; there is no URL to dial. -->
+      <div>
+        <label for="cam-gb28181-device-id" class="input-label">{t('cameras.gb28181DeviceId')}</label>
+        <input id="cam-gb28181-device-id" type="text" class="input {validationErrors['gb28181_device_id'] ? 'border-red-500' : ''}" bind:value={formGB28181DeviceID}
+          placeholder={t('cameras.gb28181DeviceIdPlaceholder')}
+          oninput={() => { if (validationErrors['gb28181_device_id']) delete validationErrors['gb28181_device_id']; }} />
+        {#if validationErrors['gb28181_device_id']}
+          <p class="th-color-danger text-xs mt-1">{validationErrors['gb28181_device_id']}</p>
+        {/if}
+      </div>
+      <div>
+        <label for="cam-gb28181-channel-id" class="input-label">{t('cameras.gb28181ChannelId')}</label>
+        <input id="cam-gb28181-channel-id" type="text" class="input {validationErrors['gb28181_channel_id'] ? 'border-red-500' : ''}" bind:value={formGB28181ChannelID}
+          placeholder={t('cameras.gb28181ChannelIdPlaceholder')}
+          oninput={() => { if (validationErrors['gb28181_channel_id']) delete validationErrors['gb28181_channel_id']; }} />
+        {#if validationErrors['gb28181_channel_id']}
+          <p class="th-color-danger text-xs mt-1">{validationErrors['gb28181_channel_id']}</p>
+        {/if}
       </div>
     {/if}
 
@@ -825,8 +870,9 @@ async function performCameraSave() {
     </details>
     {/if}
 
-    <!-- URL (hidden for push/ingest protocols — publisher connects to us) -->
-    {#if formProtocol !== 'srt' && formProtocol !== 'rtmp'}
+    <!-- URL (hidden for push/ingest protocols — publisher connects to us; and
+         for gb28181 — the camera is identified by SIP DeviceID/ChannelID) -->
+    {#if formProtocol !== 'srt' && formProtocol !== 'rtmp' && formProtocol !== 'gb28181'}
     <div class="md:col-span-2">
       <label for="cam-url" class="input-label">
         {t('cameras.url')}

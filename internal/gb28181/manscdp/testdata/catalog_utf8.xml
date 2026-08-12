@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response CmdType="Catalog" SN="1">
+	<DeviceID>34020000001310000001</DeviceID>
+	<SumNum>2</SumNum>
+	<DeviceList Num="2">
+		<Item>
+			<DeviceID>34020000001320000001</DeviceID>
+			<Name>通道一</Name>
+			<ParentID>34020000001310000001</ParentID>
+			<Parental>0</Parental>
+			<Status>ON</Status>
+			<Manufacturer>Hikvision</Manufacturer>
+			<Model>DS-2CD</Model>
+			<PTZType>1</PTZType>
+		</Item>
+		<Item>
+			<DeviceID>34020000001320000002</DeviceID>
+			<Name>通道二</Name>
+			<ParentID>34020000001310000001</ParentID>
+			<Parental>0</Parental>
+			<Status>OFF</Status>
+			<Manufacturer>Hikvision</Manufacturer>
+			<Model>DS-2CD</Model>
+			<PTZType>0</PTZType>
+		</Item>
+	</DeviceList>
+</Response>

@@ -56,6 +56,12 @@ export interface Camera {
   // "pending_activation" (auto-discovered but credentials unknown — recorder
   // NOT started, user must supply credentials via the activate endpoint).
   activation_state?: string;
+  // GB28181 SIP-registered device/channel binding
+  gb28181?: {
+    device_id: string;
+    channel_id: string;
+    manufacturer?: string;
+  };
 }
 
 /** One push-out relay destination (RTMP/RTSP) for a camera. */
@@ -151,6 +157,12 @@ export interface CreateCameraRequest {
   subnet_hints?: string[];
   // Xiaomi two-way audio
   two_way_audio_enabled?: boolean;
+  // GB28181 SIP-registered device/channel binding
+  gb28181?: {
+    device_id: string;
+    channel_id: string;
+    manufacturer?: string;
+  };
 }
 
 export interface UpdateCameraRequest {
@@ -181,7 +193,14 @@ export interface UpdateCameraRequest {
   push_targets?: PushTargetConfig[];
   push_retention_days?: number | null;
   // Xiaomi two-way audio
+  // Xiaomi two-way audio
   two_way_audio_enabled?: boolean;
+  // GB28181 SIP-registered device/channel binding
+  gb28181?: {
+    device_id: string;
+    channel_id: string;
+    manufacturer?: string;
+  };
 }
 
 export interface DiscoveredDevice {
@@ -291,7 +310,17 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     builtIn: true,
     capabilities: { hls: false, ptz: false, snapshot: false, discovery: false, auth: false },
   },
-];
+  {
+    id: 'gb28181',
+    label: 'GB28181',
+    encodings: ['h264', 'h265'],
+    builtIn: true,
+    // GB28181 devices register via SIP and push RTP media; the NVR invites
+    // channels by DeviceID/ChannelID. No per-camera credentials (SIP digest
+    // auth is configured server-side in Settings) and no discovery.
+    capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
+]
 
 // --- Camera CRUD ---
 

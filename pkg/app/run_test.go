@@ -180,6 +180,57 @@ func TestRunFree_ServiceOrder(t *testing.T) {
 	}
 }
 
+func TestRunFree_ServiceOrder_GB28181Enabled(t *testing.T) {
+	t.Helper()
+	cfg, _ := minimalConfig(t)
+
+	// Enable SRT (so gb28181's slot between srt and ws is observable) and GB28181.
+	trueVal := true
+	cfg.SRT.Enabled = &trueVal
+	cfg.GB28181.Enabled = true
+
+	a, err := RunFree(cfg, filepath.Join(cfg.Storage.RootDir, "mibee-nvr.yaml"))
+	if err != nil {
+		t.Fatalf("RunFree: %v", err)
+	}
+
+	svcs := a.Services()
+	t.Logf("observed Services() = %v", svcs)
+
+	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "archive-deleter", "srt", "gb28181", "ws", "hls", "api-handler"}
+	if len(svcs) != len(expected) {
+		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
+	}
+	for i, want := range expected {
+		if i >= len(svcs) {
+			t.Errorf("Services()[%d] missing, want %q", i, want)
+			continue
+		}
+		if svcs[i] != want {
+			t.Errorf("Services()[%d] = %q, want %q", i, svcs[i], want)
+		}
+	}
+}
+
+func TestRunFree_ServiceOrder_GB28181Disabled(t *testing.T) {
+	t.Helper()
+	cfg, _ := minimalConfig(t) // GB28181.Enabled stays at its zero value (false)
+
+	a, err := RunFree(cfg, filepath.Join(cfg.Storage.RootDir, "mibee-nvr.yaml"))
+	if err != nil {
+		t.Fatalf("RunFree: %v", err)
+	}
+
+	svcs := a.Services()
+	t.Logf("observed Services() = %v", svcs)
+
+	for _, name := range svcs {
+		if name == "gb28181" {
+			t.Errorf("Services() contains %q, want absent when gb28181.enabled=false", name)
+		}
+	}
+}
+
 func TestRunFree_SmokeStartStop(t *testing.T) {
 	t.Helper()
 	if testing.Short() {

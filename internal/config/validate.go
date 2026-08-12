@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,7 +95,8 @@ func validateConfigDetails(cfg *Config) error {
 		}
 		seen[c.ID] = i
 		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" &&
-			c.Protocol != string(model.ProtoSRT) && c.Protocol != string(model.ProtoRTMP) {
+			c.Protocol != string(model.ProtoSRT) && c.Protocol != string(model.ProtoRTMP) &&
+			c.Protocol != string(model.ProtoGB28181) {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}
 		// Validate URL format if set
@@ -127,6 +129,16 @@ func validateConfigDetails(cfg *Config) error {
 		}
 		if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
 			return fmt.Errorf("camera[%d].%w", i, err)
+		}
+
+		// Validate GB28181-specific camera fields.
+		if c.Protocol == string(model.ProtoGB28181) {
+			if strings.TrimSpace(c.GB28181.DeviceID) == "" {
+				return fmt.Errorf("camera[%d].gb28181.device_id is required for gb28181 cameras", i)
+			}
+			if strings.TrimSpace(c.GB28181.ChannelID) == "" {
+				return fmt.Errorf("camera[%d].gb28181.channel_id is required for gb28181 cameras", i)
+			}
 		}
 
 		// Validate IP self-healing fields (stable_id + subnet_hints).
@@ -540,6 +552,39 @@ func validateConfigDetails(cfg *Config) error {
 		}
 	}
 
+	// Validate GB28181 server configuration
+	if cfg.GB28181.Enabled {
+		if strings.TrimSpace(cfg.GB28181.ServerID) == "" {
+			return fmt.Errorf("gb28181.server_id is required when gb28181.enabled=true")
+		}
+		if strings.TrimSpace(cfg.GB28181.SIPListen) == "" {
+			return fmt.Errorf("gb28181.sip_listen is required when gb28181.enabled=true")
+		}
+		if strings.TrimSpace(cfg.GB28181.Password) == "" {
+			return fmt.Errorf("gb28181.password is required when gb28181.enabled=true")
+		}
+		if err := validatePortRange(cfg.GB28181.PortRange); err != nil {
+			return fmt.Errorf("gb28181.port_range invalid: %w", err)
+		}
+		switch cfg.GB28181.TCPFraming {
+		case "rfc4571", "0x24", "auto":
+			// valid
+		default:
+			return fmt.Errorf("gb28181.tcp_framing must be one of \"rfc4571\", \"0x24\", \"auto\" (got %q)", cfg.GB28181.TCPFraming)
+		}
+		if _, err := time.ParseDuration(cfg.GB28181.HeartbeatInterval); err != nil {
+			return fmt.Errorf("gb28181.heartbeat_interval invalid duration: %w", err)
+		}
+		if _, err := time.ParseDuration(cfg.GB28181.CatalogInterval); err != nil {
+			return fmt.Errorf("gb28181.catalog_interval invalid duration: %w", err)
+		}
+		for i, id := range cfg.GB28181.AllowedDeviceIDs {
+			if strings.TrimSpace(id) == "" {
+				return fmt.Errorf("gb28181.allowed_device_ids[%d] is empty", i)
+			}
+		}
+	}
+
 	// Validate health configuration
 	if cfg.Health.Enabled {
 		if _, err := time.ParseDuration(cfg.Health.EventsRetention); err != nil {
@@ -606,6 +651,30 @@ func validateConfigDetails(cfg *Config) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// validatePortRange checks a "start-end" port range string (e.g. "30000-30050").
+// Both endpoints must be valid TCP/UDP port numbers and start must be <= end.
+func validatePortRange(r string) error {
+	parts := strings.SplitN(r, "-", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("must be in format start-end (e.g. \"30000-30050\")")
+	}
+	start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return fmt.Errorf("invalid start port %q: %w", parts[0], err)
+	}
+	end, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return fmt.Errorf("invalid end port %q: %w", parts[1], err)
+	}
+	if start < 1 || start > 65535 || end < 1 || end > 65535 {
+		return fmt.Errorf("ports must be between 1 and 65535, got %d-%d", start, end)
+	}
+	if start > end {
+		return fmt.Errorf("start port %d must be <= end port %d", start, end)
 	}
 	return nil
 }

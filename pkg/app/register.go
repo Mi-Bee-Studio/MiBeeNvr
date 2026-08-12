@@ -332,6 +332,27 @@ func registerServices(a *App, deps *appDeps) error {
 			return fmt.Errorf("register srt: %w", err)
 		}
 	}
+	// 11.5. gb28181 (optional) — GB/T 28181 SIP platform server. Registered
+	// after srt and before ws so its Stop (reverse order) runs before the
+	// streaming managers tear down. The SIP stack only handles signaling;
+	// media sessions are delegated to the session-manager hooks.
+	if deps.gb28181Server != nil {
+		if err := a.Register(&serviceFunc{
+			name: "gb28181",
+			startFunc: func(ctx context.Context) error {
+				if err := deps.gb28181Server.Start(ctx); err != nil {
+					slog.Error("gb28181", "error", err)
+				}
+				return nil
+			},
+			stopFunc: func() error {
+				_ = deps.gb28181Server.Stop()
+				return nil
+			},
+		}); err != nil {
+			return fmt.Errorf("register gb28181: %w", err)
+		}
+	}
 
 	// 12. ws
 	if err := a.Register(&serviceFunc{

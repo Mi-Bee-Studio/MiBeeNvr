@@ -171,6 +171,12 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			logger.Warn("unknown timelapse frame source", "camera_id", cam.ID, "frame_source", frameSource)
 			return nil
 		}
+	case string(model.ProtoGB28181):
+		enc := cam.Encoding
+		if enc == "" {
+			enc = string(model.FormatH264)
+		}
+		rec = recorder.NewGB28181Recorder(cam.ID, enc, nil)
 	case string(model.ProtoSRT), string(model.ProtoRTMP):
 		enc := cam.Encoding
 		if enc == "" {
@@ -237,6 +243,9 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 		hub = model.NewStreamHub()
 		r.Hub = hub
 	case *recorder.IngestRecorder:
+		hub = model.NewStreamHub()
+		r.Hub = hub
+	case *recorder.GB28181Recorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
 	}

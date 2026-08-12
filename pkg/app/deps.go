@@ -12,6 +12,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/sip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
@@ -70,10 +72,13 @@ type appDeps struct {
 	wsMgr     *wsstream.Manager
 
 	// Ingest listeners (optional)
-	mqttClient  *mqtt.Client
-	ftpServer   *ftp.Server
-	rtmpServer  *rtmp.Server
-	srtListener *srt.Listener
+	mqttClient        *mqtt.Client
+	ftpServer         *ftp.Server
+	rtmpServer        *rtmp.Server
+	srtListener       *srt.Listener
+	gb28181Server     *sip.Server
+	gb28181DevMgr     *gb28181.DeviceManager
+	gb28181SessionMgr *gb28181.SessionManager
 
 	// Cleanup
 	cleanupMgr     *cleanup.CleanupManager
