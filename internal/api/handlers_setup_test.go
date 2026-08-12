@@ -22,7 +22,7 @@ func setupTestHandlerForSetup(t *testing.T) (*Handler, string) {
 	err := os.WriteFile(cfgPath, []byte("version: \"1.0\"\n"), 0o644)
 	require.NoError(t, err)
 	cfg := &config.Config{Version: "1.0"}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, cfgPath, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, cfgPath, nil, nil, nil, nil, nil)
 	return h, cfgPath
 }
 

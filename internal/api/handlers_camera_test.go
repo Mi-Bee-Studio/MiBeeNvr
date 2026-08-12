@@ -2,9 +2,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
@@ -572,4 +575,50 @@ func TestStrPtr(t *testing.T) {
 	p := strPtr(s)
 	require.NotNil(t, p)
 	require.Equal(t, "hello", *p)
+}
+
+// --- GB28181 encoding backfill ---
+
+// TestHandleListCameras_GB28181_EncodingBackfill verifies that a GB28181 camera
+// whose stored encoding is empty still reports its runtime codec in the list
+// response (via getCodecParams' HLSProvider fast-path — GB28181Recorder
+// implements CodecParams()). Without this, the Surveillance grid cannot pick
+// the right player for GB28181 cameras (the ESP32 MiBeeCam grid-rendering
+// regression class, AGENTS.md).
+func TestHandleListCameras_GB28181_EncodingBackfill(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: store.RootDir(), SegmentDuration: "30s"},
+		Cameras: []config.CameraConfig{{
+			ID:       "cam-gb28181-backfill",
+			Name:     "GB28181 Camera",
+			Protocol: string(model.ProtoGB28181),
+			Encoding: "", // auto-detect case
+		}},
+	}
+	camMgr := camera.NewCameraManager(cfg, store, db, "")
+
+	// Start the manager: the GB28181 recorder's Start only flips status to
+	// Reconnecting (no network I/O), so this safely registers recorder + hub
+	// through the real lifecycle path.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, camMgr.Start(ctx))
+	defer camMgr.Stop()
+
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	rr := doRequest(t, h.Routes(), "GET", "/api/cameras", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var cameras []struct {
+		ID       string `json:"id"`
+		Encoding string `json:"encoding"`
+	}
+	parseJSON(t, rr, &cameras)
+	require.Len(t, cameras, 1)
+	require.Equal(t, "cam-gb28181-backfill", cameras[0].ID)
+	require.Equal(t, "h264", cameras[0].Encoding, "GB28181 recorder must backfill encoding via HLSProvider")
 }

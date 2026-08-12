@@ -9,6 +9,7 @@
     HardDrive,
     Camera,
     Radio,
+    RadioTower,
     BrainCircuit,
     Film,
     SlidersHorizontal,
@@ -21,6 +22,7 @@
   import StoragePanel from './settings/StoragePanel.svelte';
   import CameraAccessPanel from './settings/CameraAccessPanel.svelte';
   import StreamingPanel from './settings/StreamingPanel.svelte';
+  import GB28181Panel from './settings/GB28181Panel.svelte';
   import AIPanel from './settings/AIPanel.svelte';
   import ProcessingPanel from './settings/ProcessingPanel.svelte';
   import AdvancedPanel from './settings/AdvancedPanel.svelte';
@@ -33,6 +35,7 @@
     { id: 'storage', label: t('settings.sidebar.storage'), icon: HardDrive },
     { id: 'cameras', label: t('settings.sidebar.cameras'), icon: Camera },
     { id: 'streaming', label: t('settings.sidebar.streaming'), icon: Radio },
+    { id: 'gb28181', label: t('settings.sidebar.gb28181'), icon: RadioTower },
     { id: 'ai', label: t('settings.sidebar.ai'), icon: BrainCircuit },
     { id: 'processing', label: t('settings.sidebar.processing'), icon: Film },
     { id: 'advanced', label: t('settings.sidebar.advanced'), icon: SlidersHorizontal },
@@ -187,6 +190,9 @@
         </div>
         <div class={activeCategory === 'streaming' ? '' : 'hidden'}>
           <StreamingPanel />
+        </div>
+        <div class={activeCategory === 'gb28181' ? '' : 'hidden'}>
+          <GB28181Panel />
         </div>
         <div class={activeCategory === 'ai' ? '' : 'hidden'}>
           <AIPanel />

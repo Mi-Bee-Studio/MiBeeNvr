@@ -242,6 +242,23 @@ func applyConfigDefaults(cfg *Config) {
 		cfg.SRT.Port = 9000
 	}
 
+	// GB28181 defaults (server block; per-camera fields have no defaults)
+	if strings.TrimSpace(cfg.GB28181.SIPListen) == "" {
+		cfg.GB28181.SIPListen = ":5060"
+	}
+	if strings.TrimSpace(cfg.GB28181.HeartbeatInterval) == "" {
+		cfg.GB28181.HeartbeatInterval = "60s"
+	}
+	if strings.TrimSpace(cfg.GB28181.CatalogInterval) == "" {
+		cfg.GB28181.CatalogInterval = "30m"
+	}
+	if strings.TrimSpace(cfg.GB28181.PortRange) == "" {
+		cfg.GB28181.PortRange = "30000-30050"
+	}
+	if strings.TrimSpace(cfg.GB28181.TCPFraming) == "" {
+		cfg.GB28181.TCPFraming = "auto"
+	}
+
 	// Health defaults
 	if cfg.Health.EventsRetention == "" {
 		cfg.Health.EventsRetention = "720h" // 30 days

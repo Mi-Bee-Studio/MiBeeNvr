@@ -39,6 +39,24 @@ func TestValidateProtocolEncoding(t *testing.T) {
 	}
 }
 
+func TestValidateProtocolEncoding_GB28181(t *testing.T) {
+	t.Parallel()
+	validCombos := []struct{ proto, enc string }{
+		{string(ProtoGB28181), string(FormatH264)},
+		{string(ProtoGB28181), string(FormatH265)},
+		{string(ProtoGB28181), ""}, // empty = auto-detect from PS stream_type
+	}
+	for _, c := range validCombos {
+		t.Run("valid_"+c.proto+"_"+c.enc, func(t *testing.T) {
+			require.NoError(t, ValidateProtocolEncoding(c.proto, c.enc))
+		})
+	}
+
+	t.Run("invalid_gb28181_mjpeg", func(t *testing.T) {
+		require.Error(t, ValidateProtocolEncoding(string(ProtoGB28181), string(FormatMJPEG)))
+	})
+}
+
 func TestHealthStatusConstants(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

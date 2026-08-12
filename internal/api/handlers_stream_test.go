@@ -221,7 +221,7 @@ func TestProtocolsEndpoint_RegistryIntegration(t *testing.T) {
 		codecs: []model.Format{model.FormatH264, model.FormatH265},
 	})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/protocols", nil, "", "")

@@ -52,6 +52,11 @@ type CameraConfig struct {
 	SRTPassphrase string `yaml:"srt_passphrase,omitempty" json:"srt_passphrase,omitempty"`
 	SRTStreamID   string `yaml:"srt_stream_id,omitempty" json:"srt_stream_id,omitempty"`
 
+	// GB28181-specific camera fields (only used when protocol is "gb28181").
+	// The camera is SIP-pull: the NVR INVITEs the channel by device/channel GB code
+	// and ingests its RTP/PS stream. URL is not used.
+	GB28181 GB28181ChannelConfig `yaml:"gb28181,omitempty" json:"gb28181,omitempty"`
+
 	// Dark frame filtering: skip recording segments that are too dark to be useful
 	// (night without IR capability). Only applies to MJPEG/AVI cameras.
 	// When enabled, each segment is brightness-checked at close time; dark segments

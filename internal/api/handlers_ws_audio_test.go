@@ -48,7 +48,7 @@ func newAudioTestHandler(t *testing.T) (*Handler, *wsstream.Manager) {
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	mgr := wsstream.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
 	h.SetWSManager(mgr)
 	return h, mgr
 }

@@ -79,9 +79,24 @@ export interface SettingsConfig {
   webdav: WebDAVConfig;
   streaming?: StreamingConfig;
   mibeevision?: MiBeeVisionConfig;
+  gb28181?: GB28181Config;
   timezone?: string; // "Local", "UTC", or IANA timezone name
   timezone_display?: string; // Human-readable timezone label (e.g. "Asia/Shanghai (UTC+8)")
   server?: { listen?: string }; // listen address ":9090" — changed via Settings UI
+}
+
+export interface GB28181Config {
+  enabled: boolean;
+  sip_listen: string;
+  server_id: string;
+  realm: string;
+  password: string;
+  port_range: string;
+  heartbeat_interval: string;
+  catalog_interval: string;
+  tcp_mode: boolean;
+  tcp_framing: string; // "auto" | "rfc4571" | "0x24"
+  allowed_device_ids?: string[];
 }
 
 export interface MergeStatus {

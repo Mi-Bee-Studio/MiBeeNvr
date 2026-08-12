@@ -630,7 +630,7 @@ func TestTimelapseMerge_DurationAccepted(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
 	defer h.Close() // join merge goroutine before TempDir cleanup (#152, flake #221)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/timelapse/cam-1/merge?duration=8h&date=2026-06-06", nil, "", "")

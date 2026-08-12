@@ -40,3 +40,14 @@ func (cm *CameraManager) GetIngestRecorder(cameraID string) *recorder.IngestReco
 func (cm *CameraManager) GetTimelapseMergeMgr() *timelapse.RollingMergeManager {
 	return cm.timelapseMergeMgr
 }
+
+// GetGB28181Recorder returns the GB28181Recorder for a camera if it is one, else
+// nil. Convenience for the GB28181 SessionManager that needs to call OnInvite/
+// OnBye on GB28181 cameras.
+func (cm *CameraManager) GetGB28181Recorder(cameraID string) *recorder.GB28181Recorder {
+	rec, ok := cm.GetRecorder(cameraID).(*recorder.GB28181Recorder)
+	if !ok {
+		return nil
+	}
+	return rec
+}

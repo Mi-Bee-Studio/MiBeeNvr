@@ -326,11 +326,11 @@ func getStreamHub(rec model.Recorder) *model.StreamHub {
 		return r.Hub
 	case *xiaomi.XiaomiRecorder:
 		return r.Hub
+	case *recorder.GB28181Recorder:
+		return r.Hub
 	}
 	return nil
 }
-
-// --- HTTP handler for /api/cameras/{id}/stream/* (HLS proxy) ---
 
 // SetStreamRegistry sets the stream registry on the handler for protocol queries.
 func (h *Handler) SetStreamRegistry(reg *StreamRegistry) {

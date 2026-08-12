@@ -2308,3 +2308,103 @@ func TestTryFillStableIDFromONVIF_RejectsDirtySerial(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateRecorder_GB28181(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "1m",
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	defer store.CleanupTempFiles()
+
+	mgr := NewCameraManager(cfg, store, nil, "")
+
+	// Test H.264 GB28181 camera
+	cam := config.CameraConfig{
+		ID:       "cam-gb28181-h264",
+		Name:     "GB28181 H264 Camera",
+		Protocol: string(model.ProtoGB28181),
+		Encoding: "h264",
+	}
+	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
+	require.NoError(t, err)
+
+	rec := mgr.createRecorder(cam, segDur)
+	require.NotNil(t, rec, "GB28181 protocol should create a recorder")
+	gbRec, ok := rec.(*recorder.GB28181Recorder)
+	require.True(t, ok, "recorder should be a GB28181Recorder")
+	require.NotNil(t, gbRec.GetHub(), "hub should be set by initStreamHub")
+
+	// Verify hub is in the hubRegistry
+	snapshot := mgr.loadSnapshot()
+	hub, ok := snapshot.hubs["cam-gb28181-h264"]
+	require.True(t, ok, "hub should be registered")
+	require.Same(t, gbRec.Hub, hub, "hub in registry should be the same object")
+
+	// Test H.265 GB28181 camera
+	cam2 := config.CameraConfig{
+		ID:       "cam-gb28181-h265",
+		Name:     "GB28181 H265 Camera",
+		Protocol: string(model.ProtoGB28181),
+		Encoding: "h265",
+	}
+	rec2 := mgr.createRecorder(cam2, segDur)
+	require.NotNil(t, rec2, "GB28181 protocol should create a recorder for H.265")
+	gbRec2, ok := rec2.(*recorder.GB28181Recorder)
+	require.True(t, ok)
+	require.NotNil(t, gbRec2.GetHub(), "hub should be set by initStreamHub")
+}
+
+func TestGetGB28181Recorder(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "1m",
+		},
+		Cameras: []config.CameraConfig{{
+			ID:       "cam-gb28181",
+			Name:     "GB28181 Camera",
+			Protocol: string(model.ProtoGB28181),
+			Encoding: "h264",
+		}},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	defer store.CleanupTempFiles()
+
+	db, err := storage.New(filepath.Join(tmpDir, "test.db"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	mgr := NewCameraManager(cfg, store, db, tmpDir)
+	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
+	require.NoError(t, err)
+
+	// Create a GB28181 recorder
+	rec := mgr.createRecorder(cfg.Cameras[0], segDur)
+	require.NotNil(t, rec)
+
+	// Register the recorder
+	mgr.apply(func(s *snapshot) *snapshot {
+		s.recorders["cam-gb28181"] = rec
+		return s
+	})
+
+	// Test GetGB28181Recorder
+	gbRec := mgr.GetGB28181Recorder("cam-gb28181")
+	require.NotNil(t, gbRec)
+	require.Same(t, rec, gbRec)
+
+	// Test non-GB28181 camera returns nil
+	nilRec := mgr.GetGB28181Recorder("non-existent")
+	require.Nil(t, nilRec)
+}

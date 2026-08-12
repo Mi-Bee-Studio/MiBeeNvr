@@ -239,8 +239,9 @@ const (
 	// Push/ingest protocols: a remote publisher pushes the stream TO the NVR
 	// (SRT listener, RTMP server). Unlike the pull protocols above, the NVR does
 	// not dial out; frames arrive via the ingest server callbacks.
-	ProtoSRT  Protocol = "srt"
-	ProtoRTMP Protocol = "rtmp"
+	ProtoSRT     Protocol = "srt"
+	ProtoRTMP    Protocol = "rtmp"
+	ProtoGB28181 Protocol = "gb28181"
 )
 
 // Encoding constants
@@ -344,11 +345,14 @@ var ValidEncodingsForProtocol = map[string][]string{
 	// RTMP is H.264 only (the classic RTMP spec; Enhanced-RTMP H.265 is rare).
 	string(ProtoSRT):  {string(FormatH264), string(FormatH265)},
 	string(ProtoRTMP): {string(FormatH264)},
+	// GB28181 is an ingest protocol: the camera registers via SIP and the NVR
+	// INVITEs it; the codec is auto-detected from the PS stream_type at runtime.
+	string(ProtoGB28181): {string(FormatH264), string(FormatH265)},
 }
 
 // ValidateProtocolEncoding checks if the protocol+encoding combination is valid.
 // Empty encoding is allowed for ONVIF/Timelapse (auto-detect) and the push
-// protocols srt/rtmp (encoding is derived from the published stream).
+// protocols srt/rtmp/gb28181 (encoding is derived from the published stream).
 func ValidateProtocolEncoding(protocol, encoding string) error {
 	encodings, ok := ValidEncodingsForProtocol[protocol]
 	if !ok {
@@ -356,7 +360,8 @@ func ValidateProtocolEncoding(protocol, encoding string) error {
 	}
 	// ONVIF, Timelapse, and push protocols allow empty encoding (auto-detect / derived from stream)
 	if (protocol == string(ProtoONVIF) || protocol == string(ProtoTimelapse) ||
-		protocol == string(ProtoSRT) || protocol == string(ProtoRTMP)) && encoding == "" {
+		protocol == string(ProtoSRT) || protocol == string(ProtoRTMP) ||
+		protocol == string(ProtoGB28181)) && encoding == "" {
 		return nil
 	}
 	for _, e := range encodings {

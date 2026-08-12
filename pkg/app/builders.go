@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +30,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/sip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
@@ -532,6 +536,20 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		}
 		slog.Info("SRT listener configured", "port", cfg.SRT.Port)
 	}
+	// Step 7.9: GB28181 SIP platform server (optional). Constructed after the
+	// ingest listeners (SRT) and before cleanup; registered as the "gb28181"
+	// service between srt and ws. The DeviceManager heartbeat checker is owned
+	// by the SIP server's service lifecycle.
+	if cfg.GB28181.Enabled {
+		heartbeatInterval, err := time.ParseDuration(cfg.GB28181.HeartbeatInterval)
+		if err != nil {
+			heartbeatInterval = gb28181.DefaultHeartbeatInterval
+		}
+		deps.gb28181DevMgr = gb28181.NewDeviceManager(heartbeatInterval)
+		deps.gb28181SessionMgr = newGB28181SessionManager(cfg.GB28181)
+		deps.gb28181Server = sip.NewServer(cfg.GB28181, deps.gb28181DevMgr)
+		slog.Info("GB28181 SIP server configured", "sip_listen", cfg.GB28181.SIPListen)
+	}
 
 	// Step 8: Cleanup manager
 	cleanupMgr, err := cleanup.NewCleanupManager(db, store, cfg.Cleanup, m)
@@ -592,7 +610,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 
 	// ---- Build HTTP router ----
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
-	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, configPath, deps.mergeMgr, cloudProxy, mergeScheduler)
+	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, configPath, deps.mergeMgr, cloudProxy, mergeScheduler, deps.gb28181DevMgr, deps.gb28181SessionMgr)
 
 	// Wire streaming managers
 	handler.SetWebRTCManager(deps.webrtcMgr)
@@ -611,6 +629,11 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	ah := api.NewAIHandler(aiMgr, cfg, configPath)
 	handler.SetAIHandler(ah)
 	handler.SetRelayManager(relayMgr)
+	// Wire GB28181 PTZ controller (sends DeviceControl via the SIP server) when
+	// the GB28181 platform server is enabled.
+	if deps.gb28181Server != nil {
+		handler.SetGB28181PTZ(gb28181.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server))
+	}
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
 	reg.Register(&api.HLSStreamHandler{Mgr: hlsMgr})
@@ -681,4 +704,21 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		db.Close()
 	}
 	return deps, cleanup, nil
+}
+
+// newGB28181SessionManager builds the media SessionManager from config. The
+// port pool is parsed from PortRange ("start-end"); on parse failure the
+// default pool 30000-30050 is used (config validation already rejects bad
+// ranges, so this is defensive only).
+func newGB28181SessionManager(cfg config.GB28181ServerConfig) *gb28181.SessionManager {
+	start, end := uint16(30000), uint16(30050)
+	if parts := strings.SplitN(cfg.PortRange, "-", 2); len(parts) == 2 {
+		if s, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
+			start = uint16(s)
+		}
+		if e, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+			end = uint16(e)
+		}
+	}
+	return gb28181.NewSessionManager(gb28181.NewPortManager(start, end), cfg.ServerID)
 }

@@ -467,3 +467,147 @@ describe('CameraForm - preset override panel', () => {
     expect(summary?.textContent?.includes('cameras.pushPresetCustom')).toBeTruthy();
   });
 });
+describe('CameraForm - gb28181 protocol (todo 18)', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+  });
+
+  const gb28181Cam = {
+    id: 'gb-cam-1',
+    name: 'GB28181 Cam',
+    protocol: 'gb28181',
+    encoding: '',
+    url: '',
+    gb28181: { device_id: '34020000001310000001', channel_id: '34020000001320000001' },
+  };
+
+  it('shows DeviceID/ChannelID fields, hides URL, disables encoding when editing a gb28181 camera', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: gb28181Cam as any }),
+    });
+
+    await vi.waitFor(() => {
+      const deviceInput = container.querySelector('#cam-gb28181-device-id') as HTMLInputElement | null;
+      expect(deviceInput, 'DeviceID input should exist').toBeTruthy();
+      expect(deviceInput!.value).toBe('34020000001310000001');
+      const channelInput = container.querySelector('#cam-gb28181-channel-id') as HTMLInputElement | null;
+      expect(channelInput, 'ChannelID input should exist').toBeTruthy();
+      expect(channelInput!.value).toBe('34020000001320000001');
+      // URL field hidden for gb28181 (identified by SIP IDs, not a URL)
+      expect(container.querySelector('#cam-url'), 'URL field must be hidden for gb28181').toBeNull();
+      // Encoding is auto-detect (disabled), like onvif/xiaomi
+      const encSelect = container.querySelector('#cam-encoding') as HTMLSelectElement | null;
+      expect(encSelect, 'encoding <select> should exist').toBeTruthy();
+      expect(encSelect!.disabled, 'encoding field must be disabled for gb28181').toBe(true);
+      const opts = Array.from(encSelect!.options);
+      expect(opts.length).toBe(1);
+      expect(opts[0].value).toBe('');
+    });
+  });
+
+  it('shows gb28181 fields after selecting the protocol in add mode', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, { props: defaultProps() });
+
+    await vi.waitFor(() => {
+      expect(mockApiRequest).toHaveBeenCalledWith('/relay-presets', expect.any(Object));
+    });
+
+    const protocolSelect = container.querySelector('#cam-protocol') as HTMLSelectElement | null;
+    expect(protocolSelect, 'protocol <select> should exist').toBeTruthy();
+    // GB28181 must be a selectable option
+    const gbOption = Array.from(protocolSelect!.options).find((o) => o.value === 'gb28181');
+    expect(gbOption, 'gb28181 option should exist in protocol dropdown').toBeTruthy();
+
+    await fireEvent.change(protocolSelect!, { target: { value: 'gb28181' } });
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-gb28181-device-id')).toBeTruthy();
+      expect(container.querySelector('#cam-gb28181-channel-id')).toBeTruthy();
+      expect(container.querySelector('#cam-url')).toBeNull();
+      const encSelect = container.querySelector('#cam-encoding') as HTMLSelectElement | null;
+      expect(encSelect!.disabled).toBe(true);
+    });
+  });
+
+  it('requires DeviceID and ChannelID when gb28181 is selected', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, { props: defaultProps() });
+
+    await vi.waitFor(() => {
+      expect(mockApiRequest).toHaveBeenCalledWith('/relay-presets', expect.any(Object));
+    });
+
+    const protocolSelect = container.querySelector('#cam-protocol') as HTMLSelectElement | null;
+    await fireEvent.change(protocolSelect!, { target: { value: 'gb28181' } });
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.save')
+    );
+    expect(saveBtn).toBeTruthy();
+    await fireEvent.click(saveBtn!);
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-gb28181-device-id')?.classList.contains('border-red-500')).toBe(true);
+      expect(container.querySelector('#cam-gb28181-channel-id')?.classList.contains('border-red-500')).toBe(true);
+    });
+    // Save must NOT have been attempted
+    expect(mockApiRequest).not.toHaveBeenCalledWith('/cameras', expect.anything());
+  });
+
+  it('includes gb28181 in the create payload when protocol is gb28181', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve({ id: 'gb-cam-1', name: 'GB28181 Cam' });
+    });
+
+    const { container } = render(CameraForm, { props: defaultProps() });
+
+    await vi.waitFor(() => {
+      expect(mockApiRequest).toHaveBeenCalledWith('/relay-presets', expect.any(Object));
+    });
+
+    const protocolSelect = container.querySelector('#cam-protocol') as HTMLSelectElement | null;
+    await fireEvent.change(protocolSelect!, { target: { value: 'gb28181' } });
+
+    const nameInput = container.querySelector('#cam-name') as HTMLInputElement | null;
+    await fireEvent.input(nameInput!, { target: { value: 'GB28181 Cam' } });
+    const deviceInput = container.querySelector('#cam-gb28181-device-id') as HTMLInputElement | null;
+    await fireEvent.input(deviceInput!, { target: { value: '34020000001310000001' } });
+    const channelInput = container.querySelector('#cam-gb28181-channel-id') as HTMLInputElement | null;
+    await fireEvent.input(channelInput!, { target: { value: '34020000001320000001' } });
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.save')
+    );
+    await fireEvent.click(saveBtn!);
+
+    await vi.waitFor(() => {
+      expect(mockApiRequest).toHaveBeenCalledWith(
+        '/cameras',
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('gb28181'),
+        }),
+      );
+    });
+    const call = mockApiRequest.mock.calls.find((c) => c[0] === '/cameras');
+    const body = JSON.parse(call![1].body);
+    expect(body.gb28181).toEqual({ device_id: '34020000001310000001', channel_id: '34020000001320000001' });
+    expect(body.url).toBe('');
+  });
+});

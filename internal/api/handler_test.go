@@ -626,12 +626,12 @@ func TestLogin_ResponseContentType(t *testing.T) {
 
 // newHandlerWithConfig creates a Handler with a real config for testing.
 func newHandlerWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Config) *Handler {
-	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
 }
 
 func newHandlerWithConfigAndAuth(db *storage.DB, store *storage.Manager, username, passwordHash string, cfg *config.Config) *Handler {
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return username }, GetHash: func() string { return passwordHash }}, "", middleware.AuthRateLimitConfig{})
-	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil, nil, nil)
+	return NewHandler(db, store, authMW, cfg, nil, nil, "", nil, nil, nil, nil, nil)
 }
 
 func TestGetSettings_NoConfig(t *testing.T) {
@@ -1604,7 +1604,7 @@ func newTestCamHandler(t *testing.T) (*Handler, *camera.CameraManager, *config.C
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
 	return h, camMgr, cfg
 }
 
@@ -2035,7 +2035,7 @@ func newSnapshotTestHandler(t *testing.T, snapshotServer *httptest.Server, camer
 			},
 		},
 	}
-	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
 }
 
 func TestHandleSnapshot_NoURL(t *testing.T) {
@@ -2047,7 +2047,7 @@ func TestHandleSnapshot_NoURL(t *testing.T) {
 			{ID: "cam-1", Name: "NoSnap", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://x"},
 		},
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-1/snapshot", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)
@@ -2061,7 +2061,7 @@ func TestHandleSnapshot_CameraNotFound(t *testing.T) {
 		Cleanup: config.CleanupConfig{RetentionDays: 30},
 		Cameras: []config.CameraConfig{},
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/snapshot", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)
@@ -2209,7 +2209,7 @@ func TestHandleSnapshot_BasicAuth(t *testing.T) {
 			},
 		},
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-auth/snapshot", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code, "should succeed when creds are provided")
@@ -2242,7 +2242,7 @@ func TestHandleSnapshot_Unauthorized(t *testing.T) {
 			},
 		},
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-noauth/snapshot", nil, "", "")
 	require.Equal(t, http.StatusBadGateway, rr.Code)
@@ -2641,7 +2641,7 @@ func TestHandleMergeStatus_WithManager(t *testing.T) {
 		func() []config.CameraConfig { return cfg.Cameras },
 		nil,
 	)
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/merge/status", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -2669,7 +2669,7 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 		func() []config.CameraConfig { return cfg.Cameras },
 		nil,
 	)
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", mergeMgr, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/merge/pending", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -2714,7 +2714,7 @@ func TestHandleStopHLSStream_NotActive(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/nonexistent/stream", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -2729,7 +2729,7 @@ func TestHandleStopHLSStream_Active(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, hlsMgr, "", nil, nil, nil, nil, nil)
 
 	// Manually insert a stream entry
 	hlsMgr.StartStream("cam-1",
@@ -2828,7 +2828,7 @@ func TestXiaomiCheckVendorCompatibility(t *testing.T) {
 				Cameras: []config.CameraConfig{},
 				Xiaomi:  config.XiaomiConfig{Token: "test-token"},
 			}
-			h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, stubCloudProxy{vendor: tc.vendor}, nil)
+			h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, stubCloudProxy{vendor: tc.vendor}, nil, nil, nil)
 
 			rr := doRequest(t, h.Routes(), "GET", "/api/xiaomi/check-vendor?did=123456", nil, "", "")
 			require.Equal(t, http.StatusOK, rr.Code, "vendor check should succeed")
@@ -2850,7 +2850,7 @@ func TestXiaomiAuthEmptyCredentials(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil, nil, nil)
 
 	// Test empty body
 	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/auth", strings.NewReader("{}"), "", "")
@@ -2877,7 +2877,7 @@ func TestXiaomiDevicesNoAuth(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$testhash" }}, "", middleware.AuthRateLimitConfig{})
-	h := NewHandler(db, store, authMW, cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
+	h := NewHandler(db, store, authMW, cfg, nil, nil, "", nil, noopCloudProxy{}, nil, nil, nil)
 
 	// Without auth should return 401
 	req := httptest.NewRequest(http.MethodGet, "/api/xiaomi/devices", nil)
@@ -2891,7 +2891,7 @@ func TestXiaomiDevicesEmpty(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil, nil, nil)
 
 	// With no token configured, should return empty list
 	rr := doRequest(t, h.Routes(), "GET", "/api/xiaomi/devices", nil, "", "")
@@ -2908,7 +2908,7 @@ func TestXiaomiCaptchaRequiresFields(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil, nil, nil)
 
 	body := strings.NewReader(`{}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/captcha", body, "", "")
@@ -2920,7 +2920,7 @@ func TestXiaomiVerifyRequiresFields(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, noopCloudProxy{}, nil, nil, nil)
 
 	body := strings.NewReader(`{}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/xiaomi/verify", body, "", "")
@@ -2933,7 +2933,7 @@ func TestXiaomiCloudUnavailableWithoutProxy(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
 	// No cloudProxy passed — should return 503 for all xiaomi endpoints
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
 
 	for _, tc := range []struct {
 		method string

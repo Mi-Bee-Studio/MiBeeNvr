@@ -18,6 +18,7 @@
     dashboard: () => import('./routes/Dashboard.svelte'),
     'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
     'ai-events': () => import('./routes/AIEvents.svelte'),
+    'gb28181-devices': () => import('./routes/GB28181Devices.svelte'),
   };
   import Header from './components/Header';
 
@@ -145,6 +146,10 @@ function parseRoute(hash: string) {
 
     if (segments[0] === 'ai-events') {
       return { route: 'ai-events', params: {} };
+    }
+
+    if (segments[0] === 'gb28181-devices') {
+      return { route: 'gb28181-devices', params: {} };
     }
 
     if (segments[0] === 'dashboard') {

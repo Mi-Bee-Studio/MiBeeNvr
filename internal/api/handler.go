@@ -17,6 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -153,8 +154,11 @@ type Handler struct {
 	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
 	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
 	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
-	frameListMu    sync.Mutex
-	frameListCache map[string]*frameListEntry
+	frameListMu       sync.Mutex
+	frameListCache    map[string]*frameListEntry
+	gb28181DeviceMgr  *gb28181.DeviceManager
+	gb28181SessionMgr *gb28181.SessionManager
+	gb28181PTZ        *gb28181.PTZController
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -169,8 +173,8 @@ type frameListEntry struct {
 // pick up new frames promptly but long enough to collapse a burst of requests.
 const frameListCacheTTL = 500 * time.Millisecond
 
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *gb28181.DeviceManager, gb28181SessionMgr *gb28181.SessionManager) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr}
 }
 
 // startMergeGoroutine launches fn on a tracked background goroutine using the
@@ -253,6 +257,7 @@ func (h *Handler) Routes() http.Handler {
 		h.registerTranscodeRoutes(r)
 		h.registerAIRoutes(r)
 		h.registerTelemetryRoute(r)
+		h.registerGB28181Routes(r)
 	})
 
 	return r
@@ -371,7 +376,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil)
+	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
 }
 
 // --- Test helper exported for handler_test.go ---
@@ -387,7 +392,7 @@ func testHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
 	}, "", middleware.AuthRateLimitConfig{})
-	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil)
+	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
 }
 
 // extractDIDFromURL parses the DID from a xiaomi:// URL.
@@ -597,4 +602,27 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeFile(w, r, cleanPath)
+}
+
+// SetGB28181PTZ wires the GB28181 PTZ controller for the channel PTZ endpoint.
+func (h *Handler) SetGB28181PTZ(ptz *gb28181.PTZController) {
+	h.gb28181PTZ = ptz
+}
+
+// registerGB28181Routes registers GB28181 device and channel endpoints.
+func (h *Handler) registerGB28181Routes(r chi.Router) {
+	r.Route("/api/gb28181", func(r chi.Router) {
+		r.Get("/devices", h.handleListGB28181Devices)
+		r.Route("/devices/{id}", func(r chi.Router) {
+			r.Get("/channels", h.handleListGB28181Channels)
+			r.Post("/catalog-refresh", h.handleCatalogRefresh)
+		})
+		r.Route("/channels/{id}", func(r chi.Router) {
+			r.Post("/invite", h.handleInviteChannel)
+			r.Post("/bye", h.handleByeChannel)
+			r.Post("/ptz", h.handlePTZChannel)
+			r.Get("/records", h.handleChannelRecords)
+			r.Post("/playback", h.handleChannelPlayback)
+		})
+	})
 }
