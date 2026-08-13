@@ -15,6 +15,23 @@ On 512 MB – 1 GB boxes, run only as a lightweight **ingest gateway / live prev
 
 iStoreOS uses `network_mode: host` by default for Docker. Since the router is itself the network device, the NVR process sits directly on the LAN — ONVIF multicast and broadcast reach cameras with no bridge/NAT in the way. No code change is needed; the app already listens on `0.0.0.0`.
 
+## Image registry / China mirror
+
+The image is on two registries — identical content (same multi-arch manifest list):
+
+| Registry | Address | Use |
+|---|---|---|
+| GitHub ghcr | `ghcr.io/mi-bee-studio/mibeenvr` | Overseas (default) |
+| Alibaba ACR | `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr` | **China recommended** (anonymous pull, no login/PAT) |
+
+**One-line installer** (auto-selects the faster registry — races ghcr vs ACR latency, then pulls and starts the container). On iStoreOS without bash, run `opkg install bash` first, or use the Compose path below:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/install-online.sh | bash
+```
+
+> China users can also swap `image:` to the ACR address for a faster pull: `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest`
+
 ## Install
 
 ### Via the iStoreOS Web UI (recommended)

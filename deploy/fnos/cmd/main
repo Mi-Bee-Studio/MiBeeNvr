@@ -37,7 +37,9 @@ ensure_image() {
   fi
   local arch=""
   case "${TRIM_SYS_ARCH:-}" in
-    x86_64|amd64|x64)          arch="amd64" ;;
+    # fnOS reports "x86" for x86_64 hosts (it ships no 32-bit x86 build, so
+    # "x86" is unambiguously the 64-bit flavor and maps to our amd64 image).
+    x86_64|amd64|x64|x86)      arch="amd64" ;;
     # fnOS may report bare "arm" (32-bit userspace on some ARM boards); the
     # bundled arm64 image runs fine under a 64-bit kernel. Map all ARM variants
     # to the arm64 tarball.

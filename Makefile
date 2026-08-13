@@ -18,7 +18,12 @@ CONTAINER_RUNTIME := $(shell command -v docker 2>/dev/null || command -v podman 
 
 frontend:
 	cd web && npm run build
-	rm -rf internal/ui/static/assets
+	# Wipe ALL generated frontend output (not just assets/) so stale hashed
+	# files from previous builds can't accumulate. embed.go re-includes the
+	# directory at compile time, so an empty-then-refill is safe.
+	rm -rf internal/ui/static/assets internal/ui/static/ort internal/ui/static/ort.min.js \
+	       internal/ui/static/index.html internal/ui/static/manifest.json \
+	       internal/ui/static/favicon.svg internal/ui/static/icons.svg internal/ui/static/sw.js
 	cp -r web/dist/* internal/ui/static/
 
 build: frontend

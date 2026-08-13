@@ -15,6 +15,23 @@
 
 iStoreOS 的 Docker 默认用 `network_mode: host`。路由器本身就是网络设备，NVR 进程直接位于 LAN 上——ONVIF 多播和广播直达摄像头，中间没有 bridge/NAT。无需改任何代码；应用已监听 `0.0.0.0`。
 
+## 镜像源与国内加速
+
+镜像同时发布在两个 registry，**内容完全一致**（同一多架构 manifest list）：
+
+| Registry | 地址 | 适用 |
+|---|---|---|
+| GitHub ghcr | `ghcr.io/mi-bee-studio/mibeenvr` | 海外（默认） |
+| 阿里云 ACR | `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr` | **中国大陆推荐**（匿名直拉、免登录、免 PAT） |
+
+**SSH 一键安装（自动判断最优源）**——脚本并发探测两个 registry 的延迟，自动选最快的，完成拉取 + 启动（iStoreOS 若无 bash，先 `opkg install bash`，或用下面的 compose 路径）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/install-online.sh | bash
+```
+
+> 国内用户把 compose 里的 `image:` 换成阿里云地址也能加速：`registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest`
+
 ## 安装
 
 ### 通过 iStoreOS Web UI（推荐）

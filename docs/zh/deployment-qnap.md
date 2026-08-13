@@ -6,6 +6,23 @@
 
 ONVIF WS-Discovery 使用 UDP 多播（`239.255.255.250:3702`），Docker 默认的 **bridge** 会阻断它。因此 compose 固定 `network_mode: host`。Container Station 2 的 GUI 历史上**不支持** host 模式，但 CS 3.x 的 compose/应用程序路径可以接受并按 host 网络运行。请优先用下面的**应用程序（compose）**路径，而非单容器 GUI。
 
+## 镜像源与国内加速
+
+镜像同时发布在两个 registry，**内容完全一致**（同一多架构 manifest list）：
+
+| Registry | 地址 | 适用 |
+|---|---|---|
+| GitHub ghcr | `ghcr.io/mi-bee-studio/mibeenvr` | 海外（默认） |
+| 阿里云 ACR | `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr` | **中国大陆推荐**（匿名直拉、免登录、免 PAT） |
+
+**SSH 一键安装（自动判断最优源）**——脚本并发探测两个 registry 的延迟，自动选最快的，完成拉取 + 启动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/install-online.sh | bash
+```
+
+> 不会 SSH？走下面的 Container Station 应用程序 compose 路径即可。国内用户把 compose 里的 `image:` 换成阿里云地址也能加速：`registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest`
+
 ## 通过 Container Station → 应用程序安装
 
 1. 从 App Center 安装/启用 **Container Station**（推荐 3.x）。

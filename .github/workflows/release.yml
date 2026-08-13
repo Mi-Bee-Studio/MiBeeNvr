@@ -82,6 +82,12 @@ jobs:
             type=raw,value=latest
 
 
+      # QEMU is required for multi-arch builds (amd64/arm64/arm/v7) on the x86_64
+      # GHA runner. buildx auto-pulls QEMU in some builders, but adding it
+      # explicitly avoids breakage when the default builder image changes.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -98,3 +104,130 @@ jobs:
             VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ---- Offline fnOS .fpk -------------------------------------------------------
+  # Produces the self-contained fnOS installer (both arch images docker-saved
+  # into the .fpk) and attaches it to the Release, so fnOS users install with no
+  # ghcr.io pull — the main cause of slow mainland-China installs. Fully additive:
+  # if it fails, the release (binaries + image) is already complete; re-run or
+  # build locally with ./deploy/fnos/build.sh instead.
+  fnos-fpk:
+    needs: release
+    # build.sh validates VERSION against ^[0-9]+\.[0-9]+\.[0-9]+$; on
+    # workflow_dispatch github.ref_name is a branch name, which would hard-fail
+    # that check. The offline fpk is only meaningful on a real tag.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download fnpack 1.2.3
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/fnpack" \
+            https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          chmod +x "$RUNNER_TEMP/fnpack"
+          # build.sh reads FNPACK_BIN; keep it outside the checkout so it can't
+          # leak into any artifact.
+          echo "FNPACK_BIN=$RUNNER_TEMP/fnpack" >> "$GITHUB_ENV"
+
+      - name: Resolve fpk version (strip leading v)
+        # manifest.version + the bundled image tag must be X.Y.Z (no 'v') to
+        # match build.sh's gate and the mibee-nvr:${VERSION} compose reference.
+        # The in-app version string INSIDE the image keeps the 'v' via the
+        # build-arg below, matching the pushed registry image.
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # buildx --load supports only ONE platform per invocation, so we build
+      # each arch separately into the local daemon with the tag build.sh expects
+      # (mibee-nvr:<ver>-<arch>). type=gha reuses the cache the release job
+      # warmed, so these are mostly cache hits.
+      - name: Build amd64 image (load)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: mibee-nvr:${{ steps.ver.outputs.version }}-amd64
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build arm64 image (load)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: linux/arm64
+          push: false
+          load: true
+          tags: mibee-nvr:${{ steps.ver.outputs.version }}-arm64
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build offline .fpk
+        run: ./deploy/fnos/build.sh ${{ steps.ver.outputs.version }}
+
+      - name: Attach .fpk to the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Only attach the file — never touch the release body (it is curated
+          # by hand per RELEASE_NOTES.md). append_body:false keeps it file-only.
+          files: deploy/fnos/*.fpk
+          append_body: false
+
+  # ---- Mirror to Alibaba Cloud ACR (mainland-China fast pull) -----------------
+  # Copies the multi-arch manifest list from ghcr to ACR via skopeo so mainland-
+  # China NAS users can `docker pull` anonymously, sidestepping ghcr's slow /
+  # unreliable cross-border pull (the single biggest source of slow CN installs;
+  # see deploy/fnos/build.sh). OPT-IN: set repo Variable ENABLE_ACR=true AND
+  # Secrets ACR_USERNAME/ACR_PASSWORD. Disabled by default — a missing/incorrect
+  # ACR secret must NEVER block a release, so this job is simply skipped and the
+  # ghcr image (already pushed by the `release` job) remains the source of truth.
+  # ACR personal tier accepts externally-built multi-arch manifests; skopeo
+  # --all copies the whole manifest list (all arches), not a single arch.
+  mirror-to-acr:
+    needs: release
+    if: vars.ENABLE_ACR == 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve semver tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/mi-bee-studio/mibeenvr
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - name: Mirror multi-arch images ghcr → ACR (skopeo)
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACR_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+          ACR_REPO: mickeybeehome/mibee-nvr
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq skopeo
+          for tag in ${{ steps.meta.outputs.tags }}; do
+            bare="${tag#*:}"
+            echo "::group::Mirror tag ${bare}"
+            skopeo copy --all --retry-times 3 \
+              "docker://ghcr.io/mi-bee-studio/mibeenvr:${bare}" \
+              "docker://${ACR_REGISTRY}/${ACR_REPO}:${bare}" \
+              --src-creds "${GHCR_USER}:${GHCR_TOKEN}" \
+              --dest-creds "${ACR_USERNAME}:${ACR_PASSWORD}"
+            echo "::endgroup::"
+          done

@@ -6,6 +6,23 @@
 
 ONVIF WS-Discovery uses UDP multicast (`239.255.255.250:3702`), which Docker's default **bridge** blocks. ZOS Docker supports host / macvlan / bridge; the compose pins `network_mode: host` so camera discovery works with no extra setup.
 
+## Image registry / China mirror
+
+The image is on two registries — identical content (same multi-arch manifest list):
+
+| Registry | Address | Use |
+|---|---|---|
+| GitHub ghcr | `ghcr.io/mi-bee-studio/mibeenvr` | Overseas (default) |
+| Alibaba ACR | `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr` | **China recommended** (anonymous pull, no login/PAT) |
+
+**One-line installer** (auto-selects the faster registry — races ghcr vs ACR latency, then pulls and starts the container):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/install-online.sh | bash
+```
+
+> No SSH? Use the Docker → Compose path below. China users can also swap `image:` to the ACR address for a faster pull: `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest`
+
 ## Install via Docker → Compose
 
 1. In **文件管理**, pick a folder on your storage pool for persistent data, e.g. an external-disk or large-share path.

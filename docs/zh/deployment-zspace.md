@@ -6,6 +6,23 @@
 
 ONVIF WS-Discovery 使用 UDP 多播（`239.255.255.250:3702`），Docker 默认的 **bridge** 会阻断它。ZOS 的 Docker 支持 host / macvlan / bridge；compose 固定 `network_mode: host`，摄像头发现无需额外配置即可工作。
 
+## 镜像源与国内加速
+
+镜像同时发布在两个 registry，**内容完全一致**（同一多架构 manifest list）：
+
+| Registry | 地址 | 适用 |
+|---|---|---|
+| GitHub ghcr | `ghcr.io/mi-bee-studio/mibeenvr` | 海外（默认） |
+| 阿里云 ACR | `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr` | **中国大陆推荐**（匿名直拉、免登录、免 PAT） |
+
+**SSH 一键安装（自动判断最优源）**——脚本并发探测两个 registry 的延迟，自动选最快的，完成拉取 + 启动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/install-online.sh | bash
+```
+
+> 不会 SSH？走下面的 Docker → Compose 路径即可。国内用户把 compose 里的 `image:` 换成阿里云地址也能加速：`registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest`
+
 ## 通过 Docker → Compose 安装
 
 1. 在 **文件管理** 里，从存储池选一个文件夹存放持久数据（如外接硬盘或大共享上的路径）。
