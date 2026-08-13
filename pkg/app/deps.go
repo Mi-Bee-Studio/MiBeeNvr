@@ -26,6 +26,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 )
@@ -60,6 +61,7 @@ type appDeps struct {
 	transcodeMgr          *transcoding.TranscodeManager
 	rollingMergeMgr       *timelapse.RollingMergeManager // timelapse rolling merge (wired to API handler)
 	mergeScheduler        *timelapse.MergeScheduler
+	visionMgr             *vision.Coordinator             // NVR→Vision push coordinator
 
 	// Camera + health + relay
 	camMgr    *camera.CameraManager

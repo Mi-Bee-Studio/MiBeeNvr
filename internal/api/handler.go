@@ -24,6 +24,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
@@ -151,6 +152,7 @@ type Handler struct {
 	isClosed    bool // guarded by mergeMu; prevents new merges after Close
 	aiHandler   *AIHandler
 	relayMgr    *relay.Manager
+	visionCoordinator *vision.Coordinator
 	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
 	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
 	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
@@ -258,6 +260,7 @@ func (h *Handler) Routes() http.Handler {
 		h.registerRelayRoutes(r)
 		h.registerTranscodeRoutes(r)
 		h.registerAIRoutes(r)
+		h.registerVisionRoutes(r)
 		h.registerTelemetryRoute(r)
 		h.registerGB28181Routes(r)
 	})
@@ -280,6 +283,8 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 		r.Get("/api/capabilities", h.handleCapabilities)
 		// Generic event streaming (SSE)
 		r.Get("/api/events", h.handleEvents)
+		// Vision heartbeat (public, rate-limited — Vision has no BasicAuth)
+		h.registerVisionPublicRoutes(r)
 	})
 }
 
@@ -454,6 +459,11 @@ func (h *Handler) SetTimelapseMergeMgr(mgr *timelapse.RollingMergeManager) {
 // SetRollingMergeMgr sets the recording rolling merge coordinator on the handler.
 func (h *Handler) SetRollingMergeMgr(mgr *merge.RollingMergeCoordinator) {
 	h.rollingMergeMgr = mgr
+}
+
+// SetVisionCoordinator sets the Vision push coordinator on the handler.
+func (h *Handler) SetVisionCoordinator(mgr *vision.Coordinator) {
+	h.visionCoordinator = mgr
 }
 
 // SetAIHandler sets the AI handler on the Handler.

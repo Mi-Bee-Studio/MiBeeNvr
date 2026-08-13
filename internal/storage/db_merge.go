@@ -42,6 +42,31 @@ type MergeWindow struct {
 	Format       string    `json:"format"`
 }
 
+// migrateAIEventsInTx reparents AI events from old recording IDs to a new merged
+// recording ID within the given transaction. This prevents AI events from becoming
+// orphaned when source segments are deleted during merge — without this, events
+// pointing at deleted segment IDs would no longer join to any recording, and the
+// merged recording would appear to have no AI data even though its content was analyzed.
+func migrateAIEventsInTx(ctx context.Context, tx *sql.Tx, newRecordingID string, oldIDs []string) error {
+	if len(oldIDs) == 0 {
+		return nil
+	}
+	for _, chunk := range chunkIDs(oldIDs, batchUpdateChunkSize) {
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, 0, len(chunk)+1)
+		args = append(args, newRecordingID)
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		q := "UPDATE ai_events SET recording_id = ? WHERE recording_id IN (" + strings.Join(placeholders, ",") + ")"
+		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+			return fmt.Errorf("migrate ai_events to merged recording %s: %w", newRecordingID, err)
+		}
+	}
+	return nil
+}
+
 // MergeAndReplaceRecordings atomically inserts a merged recording and deletes old recordings in a single transaction.
 // This reduces SQLITE_BUSY contention compared to separate INSERT + SetMerged + DeleteBatch calls.
 func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Recording, oldIDs []string) error {
@@ -70,6 +95,11 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	delQ := "DELETE FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
 	_, err = tx.ExecContext(ctx, delQ, args...)
 	if err != nil {
+		return err
+	}
+
+	// Migrate AI events from deleted segment IDs to the new merged recording.
+	if err := migrateAIEventsInTx(ctx, tx, merged.ID, oldIDs); err != nil {
 		return err
 	}
 
@@ -162,6 +192,16 @@ func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recordi
 		delQ := "DELETE FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
 		_, err = tx.ExecContext(ctx, delQ, args...)
 		if err != nil {
+			return err
+		}
+
+		// Migrate AI events from source segment IDs to the merged recording.
+		// Target is existingMergedID (append) or merged.ID (create new bucket).
+		targetID := existingMergedID
+		if targetID == "" {
+			targetID = merged.ID
+		}
+		if err := migrateAIEventsInTx(ctx, tx, targetID, sourceIDs); err != nil {
 			return err
 		}
 	}

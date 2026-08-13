@@ -47,6 +47,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
@@ -255,6 +256,19 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		}
 	}
 	deps.transcodeMgr = transcodeMgr
+
+	// Step 5.6: Vision push coordinator (NVR → MiBeeVision active push).
+	// Subscribes to segment.completed; pushes segment info to Vision when healthy.
+	// Only active when [vision].enabled = true AND Vision sends heartbeats.
+	if cfg.Vision.Enabled {
+		deps.visionMgr = vision.NewCoordinator(
+			func() config.VisionConfig { return cfg.Vision },
+			deps.eventBus,
+		)
+		slog.Info("Vision push integration enabled",
+			"url", cfg.Vision.URL,
+			"push_mode", cfg.Vision.PushMode)
+	}
 
 	// Load display timezone for merge window alignment and camera scheduling.
 	appLoc := time.Local // Default: use server's local timezone
@@ -629,6 +643,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		handler.SetTimelapseMergeMgr(deps.rollingMergeMgr)
 	}
 	handler.SetRollingMergeMgr(deps.recordRollingMergeMgr)
+	if deps.visionMgr != nil {
+		handler.SetVisionCoordinator(deps.visionMgr)
+	}
 	// Wire AI handler (config + zones only, no backend inference)
 	aiMgr := ai.NewManager(aiConfigFromConfig(cfg.AI), deps.eventBus)
 	ah := api.NewAIHandler(aiMgr, cfg, configPath)

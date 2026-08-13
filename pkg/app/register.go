@@ -167,6 +167,28 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 4.2. vision-push — NVR→Vision segment push coordinator (optional)
+	if deps.visionMgr != nil {
+		var visionCancel context.CancelFunc
+		if err := a.Register(&serviceFunc{
+			name: "vision-push",
+			startFunc: func(ctx context.Context) error {
+				var runCtx context.Context
+				runCtx, visionCancel = context.WithCancel(ctx)
+				return deps.visionMgr.Start(runCtx)
+			},
+			stopFunc: func() error {
+				if visionCancel != nil {
+					visionCancel()
+				}
+				deps.visionMgr.Stop()
+				return nil
+			},
+		}); err != nil {
+			return fmt.Errorf("register vision-push: %w", err)
+		}
+	}
+
 	// 5. transcode (optional)
 	if deps.transcodeMgr != nil {
 		if err := a.Register(&serviceFunc{
