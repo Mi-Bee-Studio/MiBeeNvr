@@ -6,6 +6,23 @@
 
 ONVIF WS-Discovery uses UDP multicast (`239.255.255.250:3702`), which Docker's default **bridge** blocks. The compose file therefore pins `network_mode: host`. Container Station 2's GUI historically did **not** expose host mode, but CS 3.x's compose/Application path accepts it and runs the container on the host network. Prefer the **Application (compose)** path below over the single-container GUI.
 
+## Image registry / China mirror
+
+The image is on two registries — identical content (same multi-arch manifest list):
+
+| Registry | Address | Use |
+|---|---|---|
+| GitHub ghcr | `ghcr.io/mi-bee-studio/mibeenvr` | Overseas (default) |
+| Alibaba ACR | `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr` | **China recommended** (anonymous pull, no login/PAT) |
+
+**One-line installer** (auto-selects the faster registry — races ghcr vs ACR latency, then pulls and starts the container):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/install-online.sh | bash
+```
+
+> No SSH? Use the Container Station → Application path below. China users can also swap `image:` to the ACR address for a faster pull: `registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest`
+
 ## Install via Container Station → Application
 
 1. Install/enable **Container Station** (3.x recommended) from the App Center.
