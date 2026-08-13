@@ -263,6 +263,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	if cfg.Vision.Enabled {
 		deps.visionMgr = vision.NewCoordinator(
 			func() config.VisionConfig { return cfg.Vision },
+			func() string { return cfg.Storage.RootDir },
 			deps.eventBus,
 		)
 		slog.Info("Vision push integration enabled",
