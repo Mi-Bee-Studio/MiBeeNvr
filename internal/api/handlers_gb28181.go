@@ -149,9 +149,19 @@ func (h *Handler) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Trigger SIP MESSAGE catalog refresh (requires SIP server integration)
-	// For now, just acknowledge the request
-	slog.Info("GB28181 catalog refresh requested", "device_id", deviceID)
+	// Send the SIP MESSAGE Catalog query to the device. The device responds
+	// asynchronously with its channel list, which the SIP server's
+	// handleMessage parses and persists to the DB.
+	if h.gb28181Catalog == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 catalog controller not available")
+		return
+	}
+	if err := h.gb28181Catalog.RequestCatalog(deviceID); err != nil {
+		slog.Error("failed to send GB28181 catalog query", "device_id", deviceID, "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to send catalog query")
+		return
+	}
+	slog.Info("GB28181 catalog refresh sent", "device_id", deviceID)
 
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, http.StatusAccepted, map[string]string{

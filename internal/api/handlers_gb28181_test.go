@@ -298,12 +298,17 @@ func TestAPI_GB28181_CatalogRefresh_MissingDeviceID(t *testing.T) {
 
 func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 	t.Helper()
-	h := setupGB28181TestHandler(t)
+	db, _ := setupTestDB(t)
+	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
+	sessionMgr := gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), "3402000000")
+	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 
 	ctx := context.Background()
 	now := time.Now()
 
-	// Create online device
+	// Register device in BOTH the DeviceManager (source of truth for liveness)
+	// and the DB (persistence).
+	deviceMgr.Register(&gb28181.Device{ID: "device1", Name: "Test Device", NetAddr: "192.168.1.50:5060"})
 	_ = h.db.UpsertGB28181Device(ctx, storage.GB28181Device{
 		ID:            "device1",
 		Name:          "Test Device",
@@ -314,6 +319,10 @@ func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 		RegisteredAt:  now,
 	})
 
+	// Wire a fake SIP sender + Catalog controller.
+	sender := &fakePTZSender{}
+	h.SetGB28181Catalog(gb28181.NewCatalogController(deviceMgr, sender))
+
 	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/devices/device1/catalog-refresh", nil, "", "")
 
 	if rr.Code != http.StatusAccepted {
@@ -321,7 +330,6 @@ func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 	}
 
 	var response map[string]string
-
 	err := json.Unmarshal(rr.Body.Bytes(), &response)
 	if err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
@@ -329,6 +337,34 @@ func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 
 	if response["status"] != "catalog_refresh_requested" {
 		t.Fatalf("expected status 'catalog_refresh_requested', got '%s'", response["status"])
+	}
+
+	// Verify a SIP MESSAGE was actually sent to the device.
+	if sender.deviceID != "device1" {
+		t.Fatalf("expected sender.deviceID 'device1', got %q", sender.deviceID)
+	}
+	if !strings.Contains(sender.body, "Catalog") {
+		t.Fatalf("expected body to contain 'Catalog', got: %s", sender.body)
+	}
+	if !strings.Contains(sender.body, "device1") {
+		t.Fatalf("expected body to contain 'device1', got: %s", sender.body)
+	}
+}
+
+func TestAPI_GB28181_CatalogRefresh_NoController(t *testing.T) {
+	t.Helper()
+	h := setupGB28181TestHandler(t)
+
+	ctx := context.Background()
+	now := time.Now()
+	_ = h.db.UpsertGB28181Device(ctx, storage.GB28181Device{
+		ID: "device1", Status: "online", LastKeepalive: now, RegisteredAt: now,
+	})
+
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/devices/device1/catalog-refresh", nil, "", "")
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rr.Code)
 	}
 }
 

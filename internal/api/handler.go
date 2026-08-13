@@ -159,6 +159,7 @@ type Handler struct {
 	gb28181DeviceMgr  *gb28181.DeviceManager
 	gb28181SessionMgr *gb28181.SessionManager
 	gb28181PTZ        *gb28181.PTZController
+	gb28181Catalog    *gb28181.CatalogController
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -607,6 +608,12 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 // SetGB28181PTZ wires the GB28181 PTZ controller for the channel PTZ endpoint.
 func (h *Handler) SetGB28181PTZ(ptz *gb28181.PTZController) {
 	h.gb28181PTZ = ptz
+}
+
+// SetGB28181Catalog wires the GB28181 catalog controller for the device
+// catalog-refresh endpoint.
+func (h *Handler) SetGB28181Catalog(c *gb28181.CatalogController) {
+	h.gb28181Catalog = c
 }
 
 // registerGB28181Routes registers GB28181 device and channel endpoints.
