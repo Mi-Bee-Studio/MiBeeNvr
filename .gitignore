@@ -73,3 +73,4 @@ deploy/fnos/app/images/
 internal/transcoding/-decoders
 internal/transcoding/-encoders
 .zcode/
+.codegraph/
