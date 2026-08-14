@@ -154,3 +154,12 @@ type RecordInfoQuery struct {
 	EndTime   string   `xml:"EndTime"`
 	Type      string   `xml:"Type"`
 }
+
+// CatalogQuery is a platform-to-device request for the device's channel catalog.
+// The device responds with a Catalog response listing its channels.
+type CatalogQuery struct {
+	XMLName  xml.Name `xml:"Query"`
+	CmdType  CmdType  `xml:"CmdType,attr"`
+	SN       int      `xml:"SN,attr"`
+	DeviceID string   `xml:"DeviceID"`
+}

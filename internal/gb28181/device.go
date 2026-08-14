@@ -2,6 +2,7 @@ package gb28181
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,7 @@ type DeviceManager struct {
 	started          bool
 	mu               sync.Mutex // protects Start/Stop lifecycle
 	wg               sync.WaitGroup
+	onOffline        func(deviceID string) // optional callback when a device is marked offline
 }
 
 // NewDeviceManager creates a manager whose heartbeat checker marks a device
@@ -60,6 +62,15 @@ func NewDeviceManager(heartbeatInterval time.Duration) *DeviceManager {
 		heartbeatTimeout: 3 * heartbeatInterval,
 		checkInterval:    heartbeatInterval / 2,
 	}
+}
+
+// SetOfflineCallback installs a callback invoked when the heartbeat checker
+// marks a device offline. Used by the SIP server to sync offline status to
+// the database so the REST API reflects real liveness.
+func (m *DeviceManager) SetOfflineCallback(cb func(deviceID string)) {
+	m.mu.Lock()
+	m.onOffline = cb
+	m.mu.Unlock()
 }
 
 // Start launches the heartbeat checker goroutine. It is idempotent; the
@@ -109,10 +120,19 @@ func (m *DeviceManager) checkLoop(ctx context.Context) {
 // heartbeatTimeout as offline.
 func (m *DeviceManager) checkHeartbeats() {
 	now := time.Now()
+	m.mu.Lock()
+	cb := m.onOffline
+	m.mu.Unlock()
+
 	m.devices.Range(func(_, value any) bool {
 		d := value.(*Device)
 		if time.Unix(0, d.lastKeepalive.Load()).Add(m.heartbeatTimeout).Before(now) {
-			d.Status.Store(DeviceOffline)
+			if d.Status.CompareAndSwap(DeviceOnline, DeviceOffline) {
+				slog.Info("gb28181: device went offline (heartbeat timeout)", "device", d.ID)
+				if cb != nil {
+					cb(d.ID)
+				}
+			}
 		}
 		return true
 	})

@@ -14,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	gosip "github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
@@ -36,6 +37,7 @@ const (
 type Server struct {
 	cfg       config.GB28181ServerConfig
 	deviceMgr *gb28181.DeviceManager
+	db        *storage.DB // nil in tests
 
 	gosipSrv gosip.Server
 	cancel   context.CancelFunc
@@ -49,11 +51,15 @@ type Server struct {
 	perDeviceMu map[string]*sync.Mutex // serialize SIP handling per device
 }
 
-// NewServer creates a GB28181 SIP server bound to the given config.
-func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager) *Server {
+// NewServer creates a GB28181 SIP server bound to the given config. The db
+// parameter persists device registrations and catalog data so the REST API
+// (which reads from the DB) reflects live SIP state; pass nil to skip
+// persistence (test-only).
+func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager, db *storage.DB) *Server {
 	return &Server{
 		cfg:         cfg,
 		deviceMgr:   deviceMgr,
+		db:          db,
 		perDeviceMu: make(map[string]*sync.Mutex),
 	}
 }
@@ -108,6 +114,7 @@ func (s *Server) Start(ctx context.Context) error {
 			return fmt.Errorf("gb28181: listen TCP %s: %w", addr, err)
 		}
 	}
+	s.deviceMgr.Start(ctx)
 	return nil
 }
 
@@ -130,6 +137,7 @@ func (s *Server) Stop() error {
 	if srv != nil {
 		srv.Shutdown()
 	}
+	s.deviceMgr.Stop()
 	return nil
 }
 
@@ -228,16 +236,19 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 	from, ok := req.From()
 	if !ok {
+		slog.Warn("gb28181: REGISTER without From header", "source", req.Source())
 		s.respond(req, tx, statusBadRequest, "Missing From header", nil)
 		return
 	}
 	deviceID := from.Address.User().String()
 	if deviceID == "" {
+		slog.Warn("gb28181: REGISTER with empty device ID", "source", req.Source())
 		s.respond(req, tx, statusBadRequest, "Missing device ID", nil)
 		return
 	}
 
 	if !s.isAllowedDevice(deviceID) {
+		slog.Warn("gb28181: REGISTER rejected — device not in allowlist", "device", deviceID, "source", req.Source())
 		s.respond(req, tx, statusForbidden, "Device not allowed", nil)
 		return
 	}
@@ -245,10 +256,12 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 	if s.cfg.Password != "" {
 		auth := s.getAuthHeader(req)
 		if auth == nil {
+			slog.Info("gb28181: REGISTER challenge sent", "device", deviceID, "source", req.Source())
 			s.send401Challenge(req, tx)
 			return
 		}
 		if !s.validateDigest(auth, deviceID, req) {
+			slog.Warn("gb28181: REGISTER auth failed", "device", deviceID, "source", req.Source())
 			s.respond(req, tx, statusForbidden, "Invalid credentials", nil)
 			return
 		}
@@ -265,12 +278,30 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 	}
 
 	if expires == 0 {
+		slog.Info("gb28181: device unregistered", "device", deviceID, "source", req.Source())
 		s.deviceMgr.Unregister(deviceID)
+		if s.db != nil {
+			if err := s.db.DeleteGB28181Device(context.Background(), deviceID); err != nil {
+				slog.Warn("gb28181: failed to delete device from DB", "device", deviceID, "error", err)
+			}
+		}
 	} else {
+		slog.Info("gb28181: device registered", "device", deviceID, "source", req.Source(), "expires", expires)
 		s.deviceMgr.Register(&gb28181.Device{
 			ID:      deviceID,
 			NetAddr: req.Source(),
 		})
+		if s.db != nil {
+			now := time.Now()
+			if err := s.db.UpsertGB28181Device(context.Background(), storage.GB28181Device{
+				ID:            deviceID,
+				Status:        "online",
+				LastKeepalive: now,
+				RegisteredAt:  now,
+			}); err != nil {
+				slog.Warn("gb28181: failed to persist device to DB", "device", deviceID, "error", err)
+			}
+		}
 	}
 
 	exp := sip.Expires(expires)
@@ -296,8 +327,18 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 	case manscdp.CmdKeepalive:
 		p := payload.(manscdp.Keepalive)
 		s.deviceMgr.Touch(p.DeviceID)
+		if s.db != nil {
+			if err := s.db.UpsertGB28181Device(context.Background(), storage.GB28181Device{
+				ID:            p.DeviceID,
+				Status:        "online",
+				LastKeepalive: time.Now(),
+			}); err != nil {
+				slog.Warn("gb28181: failed to update keepalive in DB", "device", p.DeviceID, "error", err)
+			}
+		}
 	case manscdp.CmdCatalog:
 		p := payload.(manscdp.Catalog)
+		slog.Info("gb28181: catalog received", "device", p.DeviceID, "channels", len(p.Item))
 		for _, item := range p.Item {
 			s.deviceMgr.RegisterChannel(p.DeviceID, &gb28181.Channel{
 				ID:       item.DeviceID,
@@ -305,9 +346,22 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 				Parental: item.Parental,
 				PTZType:  item.PTZType,
 			})
+			if s.db != nil {
+				if err := s.db.UpsertGB28181Channel(context.Background(), storage.GB28181Channel{
+					ID:        item.DeviceID,
+					DeviceID:  p.DeviceID,
+					Name:      item.Name,
+					Parental:  item.Parental,
+					Status:    "idle",
+					UpdatedAt: time.Now(),
+				}); err != nil {
+					slog.Warn("gb28181: failed to persist channel to DB", "channel", item.DeviceID, "error", err)
+				}
+			}
 		}
 	case manscdp.CmdDeviceInfo:
 		p := payload.(manscdp.DeviceInfo)
+		slog.Info("gb28181: device info received", "device", p.DeviceID, "name", p.DeviceName, "manufacturer", p.Manufacturer, "model", p.Model)
 		if d, ok := s.deviceMgr.Device(p.DeviceID); ok {
 			d.Mu.Lock()
 			if p.DeviceName != "" {
@@ -320,6 +374,18 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 				d.Model = p.Model
 			}
 			d.Mu.Unlock()
+		}
+		if s.db != nil {
+			if err := s.db.UpsertGB28181Device(context.Background(), storage.GB28181Device{
+				ID:            p.DeviceID,
+				Name:          p.DeviceName,
+				Manufacturer:  p.Manufacturer,
+				Model:         p.Model,
+				Status:        "online",
+				LastKeepalive: time.Now(),
+			}); err != nil {
+				slog.Warn("gb28181: failed to update device info in DB", "device", p.DeviceID, "error", err)
+			}
 		}
 	}
 
@@ -386,7 +452,7 @@ func (s *Server) send401Challenge(req sip.Request, tx sip.ServerTransaction) {
 	if realm == "" {
 		realm = "gb28181"
 	}
-	value := fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=MD5, qop="auth"`, realm, generateNonce())
+	value := fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=MD5`, realm, generateNonce())
 	headers := []sip.Header{&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: value}}
 	s.respond(req, tx, statusUnauthorized, "Unauthorized", headers)
 }

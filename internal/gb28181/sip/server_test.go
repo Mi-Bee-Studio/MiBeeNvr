@@ -48,7 +48,7 @@ func testConfig(t *testing.T) config.GB28181ServerConfig {
 func startTestServer(t *testing.T, cfg config.GB28181ServerConfig) (*Server, *gb28181.DeviceManager) {
 	t.Helper()
 	dm := gb28181.NewDeviceManager(60 * time.Second)
-	srv := NewServer(cfg, dm)
+	srv := NewServer(cfg, dm, nil)
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -210,7 +210,7 @@ func getChallenge(t *testing.T, res sip.Response) *sip.GenericHeader {
 }
 
 func TestServer_Name(t *testing.T) {
-	srv := NewServer(config.GB28181ServerConfig{}, gb28181.NewDeviceManager(time.Minute))
+	srv := NewServer(config.GB28181ServerConfig{}, gb28181.NewDeviceManager(time.Minute), nil)
 	if got := srv.Name(); got != "gb28181" {
 		t.Fatalf("Name() = %q, want %q", got, "gb28181")
 	}

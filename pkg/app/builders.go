@@ -546,8 +546,13 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			heartbeatInterval = gb28181.DefaultHeartbeatInterval
 		}
 		deps.gb28181DevMgr = gb28181.NewDeviceManager(heartbeatInterval)
+		deps.gb28181DevMgr.SetOfflineCallback(func(id string) {
+			if err := db.MarkDeviceOffline(context.Background(), id); err != nil {
+				slog.Warn("gb28181: failed to mark device offline in DB", "device", id, "error", err)
+			}
+		})
 		deps.gb28181SessionMgr = newGB28181SessionManager(cfg.GB28181)
-		deps.gb28181Server = sip.NewServer(cfg.GB28181, deps.gb28181DevMgr)
+		deps.gb28181Server = sip.NewServer(cfg.GB28181, deps.gb28181DevMgr, deps.db)
 		slog.Info("GB28181 SIP server configured", "sip_listen", cfg.GB28181.SIPListen)
 	}
 
@@ -633,6 +638,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// the GB28181 platform server is enabled.
 	if deps.gb28181Server != nil {
 		handler.SetGB28181PTZ(gb28181.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server))
+		handler.SetGB28181Catalog(gb28181.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 	}
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
