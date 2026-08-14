@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -167,9 +168,9 @@ func TestGB28181Recorder_NonBlockingBroadcast(t *testing.T) {
 
 	rec.WriteNALU([][]byte{sps, pps, idr}, 90000, true)
 
-	callCount := 0
+	var callCount atomic.Int64
 	slowCallback := func(pts int64, au [][]byte) {
-		callCount++
+		callCount.Add(1)
 	}
 	require.NoError(t, rec.Hub.Subscribe("slow", slowCallback))
 
@@ -180,8 +181,9 @@ func TestGB28181Recorder_NonBlockingBroadcast(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.Less(t, elapsed, 2*time.Second)
-	// Hub delivery is asynchronous (consumer drain goroutine).
-	require.Eventually(t, func() bool { return callCount > 0 }, 2*time.Second, 10*time.Millisecond)
+	// Hub delivery is asynchronous (consumer drain goroutine); the counter is
+	// atomic because the drain goroutine and this Eventually poller race.
+	require.Eventually(t, func() bool { return callCount.Load() > 0 }, 2*time.Second, 10*time.Millisecond)
 
 	rec.Hub.Unsubscribe("slow")
 }
