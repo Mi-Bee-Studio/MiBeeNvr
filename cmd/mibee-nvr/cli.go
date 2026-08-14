@@ -397,6 +397,9 @@ func cleanupByDate(ctx context.Context, db *sql.DB, storageRoot, beforeDate stri
 		recs = append(recs, r)
 		totalSize += r.size
 	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: iterate recordings: %v\n", err)
+	}
 
 	fmt.Printf("  Found %d recordings (%.1f GB)\n", len(recs), float64(totalSize)/1e9)
 	if dryRun || len(recs) == 0 {
@@ -446,6 +449,7 @@ func cleanupOrphanFiles(ctx context.Context, db *sql.DB, storageRoot string, dry
 		fmt.Fprintf(os.Stderr, "  Error querying DB paths: %v\n", err)
 		return
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var p string
 		rows.Scan(&p)
@@ -455,7 +459,9 @@ func cleanupOrphanFiles(ctx context.Context, db *sql.DB, storageRoot string, dry
 		}
 		dbPaths[filepath.Clean(p)] = true
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: iterate DB paths: %v\n", err)
+	}
 	fmt.Printf("  DB has %d recording file paths\n", len(dbPaths))
 
 	// 扫描磁盘上的视频文件。
