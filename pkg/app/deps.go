@@ -57,7 +57,7 @@ type appDeps struct {
 
 	// Merge / transcode / timelapse
 	mergeMgr              *merge.MergeManager
-	recordRollingMergeMgr *merge.RollingMergeCoordinator  // quasi-real-time merge (registered as "rolling-merge" service)
+	recordRollingMergeMgr *merge.RollingMergeCoordinator // quasi-real-time merge (registered as "rolling-merge" service)
 	transcodeMgr          *transcoding.TranscodeManager
 	rollingMergeMgr       *timelapse.RollingMergeManager // timelapse rolling merge (wired to API handler)
 	mergeScheduler        *timelapse.MergeScheduler
