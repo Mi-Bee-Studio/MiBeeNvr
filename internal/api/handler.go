@@ -160,6 +160,7 @@ type Handler struct {
 	gb28181SessionMgr *gb28181.SessionManager
 	gb28181PTZ        *gb28181.PTZController
 	gb28181Catalog    *gb28181.CatalogController
+	gb28181Inviter    GB28181InviteSender
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -614,6 +615,17 @@ func (h *Handler) SetGB28181PTZ(ptz *gb28181.PTZController) {
 // catalog-refresh endpoint.
 func (h *Handler) SetGB28181Catalog(c *gb28181.CatalogController) {
 	h.gb28181Catalog = c
+}
+
+// GB28181InviteSender sends a SIP INVITE to start a media session on a channel.
+// Implemented by the SIP server; declared here to avoid importing sip in Handler.
+type GB28181InviteSender interface {
+	InviteChannel(deviceID, channelID string) error
+}
+
+// SetGB28181Inviter wires the SIP server for the channel INVITE endpoint.
+func (h *Handler) SetGB28181Inviter(s GB28181InviteSender) {
+	h.gb28181Inviter = s
 }
 
 // registerGB28181Routes registers GB28181 device and channel endpoints.

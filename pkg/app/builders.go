@@ -552,7 +552,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			}
 		})
 		deps.gb28181SessionMgr = newGB28181SessionManager(cfg.GB28181)
-		deps.gb28181Server = sip.NewServer(cfg.GB28181, deps.gb28181DevMgr, deps.db)
+		deps.gb28181Server = sip.NewServer(cfg.GB28181, deps.gb28181DevMgr, deps.gb28181SessionMgr, deps.db)
 		slog.Info("GB28181 SIP server configured", "sip_listen", cfg.GB28181.SIPListen)
 	}
 
@@ -639,6 +639,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	if deps.gb28181Server != nil {
 		handler.SetGB28181PTZ(gb28181.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Catalog(gb28181.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
+		handler.SetGB28181Inviter(deps.gb28181Server)
 	}
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

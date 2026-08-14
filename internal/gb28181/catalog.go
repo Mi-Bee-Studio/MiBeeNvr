@@ -3,8 +3,6 @@ package gb28181
 import (
 	"fmt"
 	"sync/atomic"
-
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 )
 
 // CatalogController sends platform-to-device Catalog queries over the SIP
@@ -34,14 +32,12 @@ func (c *CatalogController) RequestCatalog(deviceID string) error {
 	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
 	}
-	body, err := manscdp.Encode(manscdp.CatalogQuery{
-		CmdType:  manscdp.CmdCatalog,
-		SN:       int(c.seq.Add(1)),
-		DeviceID: deviceID,
-	})
-	if err != nil {
-		return fmt.Errorf("gb28181: encode Catalog query: %w", err)
-	}
+	sn := c.seq.Add(1)
+	// GB/T 28181-2016 § 9.3.1: platform-to-device Query uses child elements
+	// for CmdType/SN/DeviceID (NOT attributes). Many device parsers reject
+	// the attribute form even though some emitters (and our Decode probe)
+	// accept it.
+	body := []byte(fmt.Sprintf(`<Query><CmdType>Catalog</CmdType><SN>%d</SN><DeviceID>%s</DeviceID></Query>`, sn, deviceID))
 	if err := c.sender.SendMessage(deviceID, body); err != nil {
 		return fmt.Errorf("gb28181: send Catalog query to %s: %w", deviceID, err)
 	}

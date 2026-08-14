@@ -212,13 +212,19 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The actual INVITE is handled by the SIP server
-	// This endpoint just validates and acknowledges the request
+	// Send the SIP INVITE via the SIP server's InviteChannel method.
+	if h.gb28181Inviter == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 invite not available")
+		return
+	}
 	slog.Info("GB28181 channel invite requested", "device_id", deviceID, "channel_id", channelID)
-
-	w.WriteHeader(http.StatusAccepted)
+	if err := h.gb28181Inviter.InviteChannel(deviceID, channelID); err != nil {
+		slog.Error("failed to send GB28181 INVITE", "channel_id", channelID, "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to send INVITE")
+		return
+	}
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":     "invite_requested",
+		"status":     "invite_sent",
 		"device_id":  deviceID,
 		"channel_id": channelID,
 	})

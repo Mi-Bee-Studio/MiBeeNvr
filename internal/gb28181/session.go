@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -66,8 +67,9 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 		return nil, fmt.Errorf("gb28181: failed to allocate port: %w", err)
 	}
 
-	// Generate SSRC per GB28181 convention: <deviceID><channelID>:<08X> where last digit = 0 for live
-	ssrc := fmt.Sprintf("%s%s:%08d", channel.DeviceID, channel.ID, 0)
+	// Generate SSRC per GB28181 convention: 10-digit decimal (0=live, 1=playback
+	// + last 8 digits of channel ID).
+	ssrc := manscdp.SSRC(false, channel.ID)
 
 	// Build SDP answer (GB28181 minimal format)
 	sdpAnswer := []byte(fmt.Sprintf(
@@ -193,8 +195,8 @@ func (sm *SessionManager) InvitePlayback(channel *Channel, serverIP string, star
 		return nil, fmt.Errorf("gb28181: failed to allocate port: %w", err)
 	}
 
-	// Generate SSRC per GB28181 convention: <deviceID><channelID>:<08X> where last digit = 1 for playback
-	ssrc := fmt.Sprintf("%s%s:%08d", channel.DeviceID, channel.ID, 1)
+	// Generate SSRC per GB28181 convention: 10-digit decimal (playback uses digit 1).
+	ssrc := manscdp.SSRC(true, channel.ID)
 
 	// Convert times to NTP timestamps (seconds since 1900-01-01)
 	// NTP timestamp = Unix timestamp + 2208988800
