@@ -30,14 +30,17 @@ func buildPS(nalus [][]byte, streamType byte) []byte {
 	// Program Stream Map: 00 00 01 BC (4) + PSM data
 	ps.Write([]byte{0x00, 0x00, 0x01, 0xBC})
 
-	// PSM packet_length (2 bytes): body length = 8 bytes
-	ps.Write([]byte{0x00, 0x08})
+	// PSM packet_length (2 bytes): body length = 10 bytes
+	ps.Write([]byte{0x00, 0x0A})
 
-	// PSM body: version (1) + reserved (1) + PS_info_length (2) + stream_info (4) = 8 bytes
+	// PSM body per ISO/IEC 13818-1 program_stream_map:
+	// version (1) + reserved (1) + PS_info_length (2) +
+	// elementary_stream_map_length (2) + stream_info entry (4)
 	ps.Write([]byte{
 		0x02,       // version = 2
 		0xC0,       // reserved byte
 		0x00, 0x00, // PS_info_length = 0 (no PS_info)
+		0x00, 0x04, // elementary_stream_map_length = 4 (one entry)
 		// stream_info for video
 		streamType, // stream_type (0x1B for H.264, 0x24 for H.265)
 		0xE0,       // elementary_stream_id (video stream 0)
@@ -54,14 +57,16 @@ func buildPS(nalus [][]byte, streamType byte) []byte {
 		payloadLen += len(nalu)
 	}
 
-	// PES packet length = 2 (flags + header_data_length) + payload_len
-	pesPacketLen := 2 + payloadLen
+	// PES packet length = flags (2) + header_data_length (1) + payload_len
+	pesPacketLen := 3 + payloadLen
 
-	// PES header with simplest case (no PTS/DTS, no other optional fields)
+	// PES header, standard layout (ITU-T H.222.0): byte6='10'+flags,
+	// byte7=PTS_DTS_flags (0 = no PTS), byte8=PES_header_data_length (0).
 	pesHeader := []byte{
 		byte(pesPacketLen >> 8), byte(pesPacketLen), // PES_packet_length (2 bytes)
-		0x80, // Byte 6: bits 7-6='10' marker, bits 5-0='000000'
-		0x00, // Byte 7: PES_header_data_length (0)
+		0x80, // Byte 6: '10' marker + zero flags
+		0x00, // Byte 7: PTS_DTS_flags = '00' (no PTS in synthetic stream)
+		0x00, // Byte 8: PES_header_data_length (0)
 	}
 	ps.Write(pesHeader)
 
@@ -85,7 +90,7 @@ func TestPSDemuxer_H264(t *testing.T) {
 	psData := buildPS(nalus, streamTypeH264)
 
 	d := NewPSDemuxer()
-	extractedNALUs, err := d.FeedAU(psData, 90000)
+	extractedNALUs, err := d.FeedAU(psData, 90000, true)
 	if err != nil {
 		t.Fatalf("FeedAU failed: %v", err)
 	}
@@ -124,7 +129,7 @@ func TestPSDemuxer_H265(t *testing.T) {
 	psData := buildPS(nalus, streamTypeH265)
 
 	d := NewPSDemuxer()
-	extractedNALUs, err := d.FeedAU(psData, 180000)
+	extractedNALUs, err := d.FeedAU(psData, 180000, true)
 	if err != nil {
 		t.Fatalf("FeedAU failed: %v", err)
 	}
@@ -175,7 +180,7 @@ func TestPSDemuxer_Fragmented(t *testing.T) {
 			end = len(psData) // Last chunk gets remainder
 		}
 		chunk := psData[start:end]
-		extractedNALUs, err := d.FeedAU(chunk, int64(i)*90000)
+		extractedNALUs, err := d.FeedAU(chunk, int64(i)*90000, true)
 		if err != nil {
 			t.Fatalf("FeedAU failed on chunk %d: %v", i, err)
 		}
@@ -210,7 +215,7 @@ func TestPSDemuxer_Flush(t *testing.T) {
 		0x00, 0x00, 0x01, 0xBA, // Pack header
 		0x44, 0x00, 0x04, 0x00, 0x04, 0x01, 0x01, 0x89, 0xC3, 0xF8,
 		0x00, 0x00, 0x01, 0xBC, // PSM
-		0x00, 0x08, 0x81, 0xC0, 0x00, 0x00, // PSM length=8, version, reserved, PS_info_length=0
+		0x00, 0x0A, 0x81, 0xC0, 0x00, 0x00, 0x00, 0x04, // PSM length=10, version, reserved, PS_info_length=0, es_map_length=4
 		0x1B, 0xE0, 0x00, 0x00, // stream_type 0x1B, stream_id 0xE0, es_info_len=0
 		0x00, 0x00, 0x01, 0xE0, // Video PES start (incomplete)
 		0x00, 0x0E, // PES length (14: 2 header + 12 payload)
@@ -220,7 +225,7 @@ func TestPSDemuxer_Flush(t *testing.T) {
 	}
 
 	d := NewPSDemuxer()
-	extractedNALUs, err := d.FeedAU(psData, 90000)
+	extractedNALUs, err := d.FeedAU(psData, 90000, true)
 	if err != nil {
 		t.Fatalf("FeedAU failed: %v", err)
 	}
@@ -255,20 +260,20 @@ func TestPSDemuxer_AudioPES(t *testing.T) {
 	// PSM with audio stream type
 	ps.Write([]byte{0x00, 0x00, 0x01, 0xBC})
 	psm := []byte{
-		0x00, 0x08, 0x81, 0xC0, 0x00, 0x00, // PSM length=8, version, reserved, PS_info_length=0
+		0x00, 0x0A, 0x81, 0xC0, 0x00, 0x00, 0x00, 0x04, // PSM length=10, version, reserved, PS_info_length=0, es_map_length=4
 		0x90, 0xC0, 0x00, 0x00, // stream_type 0x90 (G.711), stream_id 0xC0, es_info_len=0
 	}
 	ps.Write(psm)
 
 	// Audio PES
-	ps.Write([]byte{0x00, 0x00, 0x01, 0xC0})      // stream_id 0xC0 (audio)
-	audioHeader := []byte{0x00, 0x06, 0x80, 0x00} // PES length=6, flags, header_data_length=0
+	ps.Write([]byte{0x00, 0x00, 0x01, 0xC0})            // stream_id 0xC0 (audio)
+	audioHeader := []byte{0x00, 0x07, 0x80, 0x00, 0x00} // PES length=7, flags1, flags2, header_data_length=0
 	ps.Write(audioHeader)
 	// Some dummy audio data
 	ps.Write([]byte{0x01, 0x02, 0x03, 0x04})
 
 	d := NewPSDemuxer()
-	extractedNALUs, err := d.FeedAU(ps.Bytes(), 90000)
+	extractedNALUs, err := d.FeedAU(ps.Bytes(), 90000, true)
 	if err != nil {
 		t.Fatalf("FeedAU failed: %v", err)
 	}
@@ -282,7 +287,7 @@ func TestPSDemuxer_AudioPES(t *testing.T) {
 // TestPSDemuxer_EmptyInput tests handling of empty input.
 func TestPSDemuxer_EmptyInput(t *testing.T) {
 	d := NewPSDemuxer()
-	extractedNALUs, err := d.FeedAU([]byte{}, 90000)
+	extractedNALUs, err := d.FeedAU([]byte{}, 90000, true)
 	if err != nil {
 		t.Fatalf("FeedAU failed on empty input: %v", err)
 	}
@@ -304,14 +309,14 @@ func TestPSDemuxer_IncompletePES(t *testing.T) {
 		0x00, 0x00, 0x01, 0xBA, // Pack header
 		0x44, 0x00, 0x04, 0x00, 0x04, 0x01, 0x01, 0x89, 0xC3, 0xF8,
 		0x00, 0x00, 0x01, 0xBC, // PSM
-		0x00, 0x08, 0x81, 0xC0, 0x00, 0x00, // PSM length=8, version, reserved, PS_info_length=0
+		0x00, 0x0A, 0x81, 0xC0, 0x00, 0x00, 0x00, 0x04, // PSM length=10, version, reserved, PS_info_length=0, es_map_length=4
 		0x1B, 0xE0, 0x00, 0x00, // stream_type 0x1B, stream_id 0xE0, es_info_len=0
 		0x00, 0x00, 0x01, 0xE0, // Video PES start
 		0x00, 0x00, // PES length 0 (unbounded) or truncated header
 	}
 
 	d := NewPSDemuxer()
-	extractedNALUs, err := d.FeedAU(psData, 90000)
+	extractedNALUs, err := d.FeedAU(psData, 90000, true)
 	if err != nil {
 		t.Fatalf("FeedAU failed: %v", err)
 	}
@@ -403,13 +408,13 @@ func TestPSDemuxer_MultipleFeedAUs(t *testing.T) {
 	ps2 := buildPS([][]byte{sps2, pps2, idr2}, streamTypeH264)
 
 	// Feed first PS
-	nalus1, err := d.FeedAU(ps1, 90000)
+	nalus1, err := d.FeedAU(ps1, 90000, true)
 	if err != nil {
 		t.Fatalf("FeedAU 1 failed: %v", err)
 	}
 
 	// Feed second PS
-	nalus2, err := d.FeedAU(ps2, 180000)
+	nalus2, err := d.FeedAU(ps2, 180000, true)
 	if err != nil {
 		t.Fatalf("FeedAU 2 failed: %v", err)
 	}
@@ -425,5 +430,166 @@ func TestPSDemuxer_MultipleFeedAUs(t *testing.T) {
 	// Verify codec detection
 	if d.Codec() != "h264" {
 		t.Errorf("Expected codec h264, got %s", d.Codec())
+	}
+}
+
+// TestFindVideoStreamType_RealPSM is a regression test for the PSM parser:
+// ISO/IEC 13818-1 program_stream_map carries a 2-byte
+// elementary_stream_map_length between the PS info and the stream entries.
+// A real Hikvision PSM (with CRC placeholder) must yield the video type.
+func TestFindVideoStreamType_RealPSM(t *testing.T) {
+	// Full PSM packet: 00 00 01 BC + length + body + CRC32 (zeros).
+	psm := []byte{
+		0x00, 0x00, 0x01, 0xBC,
+		0x00, 0x0E, // packet_length = 14 body bytes
+		0xE0,       // current_next + version
+		0xFF,       // reserved + marker
+		0x00, 0x00, // program_stream_info_length = 0
+		0x00, 0x04, // elementary_stream_map_length = 4
+		0x1B,       // stream_type = H.264
+		0xE0,       // elementary_stream_id = video 0
+		0x00, 0x00, // elementary_stream_info_length = 0
+		0x00, 0x00, 0x00, 0x00, // CRC_32 (unchecked by parser)
+	}
+	body := psm[6 : 6+14]
+	st, ok := findVideoStreamType(body)
+	if !ok || st != 0x1B {
+		t.Fatalf("expected H.264 stream type 0x1B, got %#x (ok=%v)", st, ok)
+	}
+
+	// H.265 variant.
+	psmH265 := append([]byte{}, psm...)
+	psmH265[12] = 0x24
+	st, ok = findVideoStreamType(psmH265[6 : 6+14])
+	if !ok || st != 0x24 {
+		t.Fatalf("expected H.265 stream type 0x24, got %#x (ok=%v)", st, ok)
+	}
+}
+
+// TestExtractNALUs_ThreeByteStartCodeHeaderByte is a regression test for the
+// start-code length detection: a 3-byte start code (00 00 01) followed by a
+// NAL header of 0x01 (H.264 non-reference slice / H.265 TRAIL_N) must NOT be
+// treated as a 4-byte start code — that would strip the NAL header byte.
+func TestExtractNALUs_ThreeByteStartCodeHeaderByte(t *testing.T) {
+	sps := []byte{0x67, 0x42, 0x00, 0x1E}
+	slice := []byte{0x01, 0x88, 0xB4, 0x99}
+	data := append(append([]byte{0x00, 0x00, 0x01}, sps...),
+		append([]byte{0x00, 0x00, 0x01}, slice...)...)
+
+	nalus := extractNALUs(data, "h264")
+	if len(nalus) != 2 {
+		t.Fatalf("expected 2 NALUs, got %d", len(nalus))
+	}
+	if nalus[0][0] != 0x67 {
+		t.Fatalf("SPS header byte stripped: first NALU starts with %#x", nalus[0][0])
+	}
+	if nalus[1][0] != 0x01 {
+		t.Fatalf("slice header byte stripped: second NALU starts with %#x", nalus[1][0])
+	}
+}
+
+// TestParseVideoPES_StandardPTS is a regression test for the PES header
+// layout: a real-device video PES carries a 5-byte PTS (byte7=0x80,
+// PES_header_data_length=5 at byte 8, payload at offset 14). The old parser
+// read header_data_length from byte 7 and computed a 136-byte header.
+func TestParseVideoPES_StandardPTS(t *testing.T) {
+	sps := []byte{0x67, 0x42, 0x00, 0x1E}
+	payload := append([]byte{0x00, 0x00, 0x01}, sps...)
+
+	// PES body after the 6-byte prefix: flags1, flags2, hdrlen, PTS(5), payload
+	optional := []byte{0x80, 0x80, 0x05, 0x21, 0x00, 0x05, 0xD4, 0x4D}
+	pesPacketLen := len(optional) + len(payload)
+
+	pes := []byte{
+		0x00, 0x00, 0x01, 0xE0,
+		byte(pesPacketLen >> 8), byte(pesPacketLen & 0xFF),
+	}
+	pes = append(pes, optional...)
+	pes = append(pes, payload...)
+
+	got, total, err := parseVideoPES(pes)
+	if err != nil {
+		t.Fatalf("parseVideoPES: %v", err)
+	}
+	if total != 6+pesPacketLen {
+		t.Fatalf("total = %d, want %d", total, 6+pesPacketLen)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("payload mismatch: got % X, want % X", got, payload)
+	}
+}
+
+// TestParseVideoPES_InconsistentHeaderLength is a crash regression test: a
+// corrupt PES whose PES_header_data_length makes the header longer than the
+// packet itself previously panicked with slice bounds out of range [58:56]
+// (took down the whole NVR process when fed by a real device's truncated
+// stream). It must return ErrIncompletePES instead.
+func TestParseVideoPES_InconsistentHeaderLength(t *testing.T) {
+	// PES_packet_length = 50 → totalLen = 56, but header_data_length = 49 →
+	// headerLen = 58 > 56.
+	pes := []byte{
+		0x00, 0x00, 0x01, 0xE0,
+		0x00, 0x32, // PES_packet_length = 50
+		0x80, 0x80, // flags1, flags2 (PTS present)
+		0x31, // PES_header_data_length = 49 → headerLen = 58 > totalLen = 56
+	}
+	pes = append(pes, make([]byte, 60)...) // enough raw bytes for either bound
+
+	// Must not panic; with the calibrated payload locator the header bound
+	// is clamped to the packet, yielding either an error or an EMPTY payload —
+	// never a bogus slice and never a crash.
+	payload, _, err := parseVideoPES(pes)
+	if err == nil && len(payload) != 0 {
+		t.Fatalf("corrupt PES must yield empty payload or error, got %d bytes", len(payload))
+	}
+}
+
+// TestParseVideoPES_LegacyHeaderLayout is a regression test using bytes from
+// a REAL device capture (mibee-eye-raspi-rs): its firmware writes
+// PES_header_data_length at byte 7 (0x0a = 10, matching its two 5-byte custom
+// timestamps) instead of the standard byte 8 — whose value (0x31) is the
+// first optional byte. The payload locator must find the ES start code
+// regardless of which byte lies.
+func TestParseVideoPES_LegacyHeaderLayout(t *testing.T) {
+	// Real capture: pack header + PES head. ES (00 00 00 01 21 …) begins at
+	// PES offset 18 (legacy 8+data[7]).
+	pes := []byte{
+		0x00, 0x00, 0x01, 0xE0,
+		0x1A, 0x1B, // PES_packet_length = 6683
+		0xC0,                         // flags1
+		0x0A,                         // firmware writes PES_header_data_length HERE (10)
+		0x31,                         // …and this (49) is actually the first optional byte
+		0x02, 0x31, 0x26, 0xC1, 0x11, // optional field 1
+		0x02, 0x31, 0x26, 0xC1, // optional field 2 (first 4 bytes)
+		0x00,             // trailing zero byte
+		0x00, 0x00, 0x01, // Annex-B start code
+		0x21, 0x9A, 0x16, // NAL header + slice bytes
+	}
+	// Pad so len(data) ≥ totalLen (6+6683) and the slice bounds are real.
+	full := append(append([]byte{}, pes...), make([]byte, 6683)...)
+
+	payload, total, err := parseVideoPES(full)
+	if err != nil {
+		t.Fatalf("parseVideoPES: %v", err)
+	}
+	if total != 6+6683 {
+		t.Fatalf("total = %d, want %d", total, 6+6683)
+	}
+	// The payload must start at/before the ES start code (legacy candidate 18)
+	// and contain the NAL header 0x21 — under the standard candidate (9+49=58)
+	// the start code would be clipped off.
+	foundStartCode := false
+	for i := 0; i+2 < len(payload) && i < 8; i++ {
+		if payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 1 {
+			foundStartCode = true
+			break
+		}
+	}
+	if !foundStartCode {
+		t.Fatalf("ES start code not at payload head; first bytes: % X", payload[:8])
+	}
+	nalus := extractNALUs(payload, "h264")
+	if len(nalus) == 0 || nalus[0][0] != 0x21 {
+		t.Fatalf("expected first NALU header 0x21, got %d NALUs", len(nalus))
 	}
 }

@@ -1,7 +1,7 @@
 // Package manscdp implements the MANSCDP (Manufacturer and System Control
 // Description Protocol) XML codec used by GB/T 28181 SIP MESSAGE bodies.
 //
-// Each message type is an XML document distinguished by the CmdType attribute:
+// Each message type is an XML document distinguished by the CmdType child element:
 // the platform sends Control messages (DeviceControl) while devices answer
 // with Response (Catalog/DeviceInfo/DeviceStatus/RecordInfo) or Notify
 // (Keepalive/Alarm) roots. Root elements follow GB/T 28181-2016 § 9.3.
@@ -9,7 +9,9 @@ package manscdp
 
 import "encoding/xml"
 
-// CmdType identifies a MANSCDP command (the CmdType XML attribute).
+// CmdType identifies a MANSCDP command (the CmdType XML element).
+// GB/T 28181-2016 § 9.3 encodes CmdType/SN as child elements — the attribute
+// form is rejected by real devices.
 type CmdType string
 
 const (
@@ -27,11 +29,26 @@ const (
 // device's channels (Item entries) wrapped in a DeviceList element.
 type Catalog struct {
 	XMLName  xml.Name `xml:"Response"`
-	CmdType  CmdType  `xml:"CmdType,attr"`
-	SN       int      `xml:"SN,attr"`
+	CmdType  CmdType  `xml:"CmdType"`
+	SN       int      `xml:"SN"`
 	DeviceID string   `xml:"DeviceID"`
 	SumNum   int      `xml:"SumNum"`
 	Item     []Item   `xml:"DeviceList>Item"`
+	// Attribute-form aliases: some devices (minimal firmwares) emit
+	// CmdType/SN as XML attributes instead of child elements. normalize()
+	// coalesces them into the element fields; omitempty keeps Encode
+	// emitting only the spec-correct element form.
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *Catalog) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
 }
 
 // Item is a single channel entry in a Catalog response.
@@ -60,17 +77,29 @@ type Item struct {
 // Keepalive is a device heartbeat sent periodically to the platform.
 type Keepalive struct {
 	XMLName  xml.Name `xml:"Notify"`
-	CmdType  CmdType  `xml:"CmdType,attr"`
-	SN       int      `xml:"SN,attr"`
+	CmdType  CmdType  `xml:"CmdType"`
+	SN       int      `xml:"SN"`
 	DeviceID string   `xml:"DeviceID"`
 	Status   string   `xml:"Status"`
+	// Attribute-form aliases (see Catalog).
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *Keepalive) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
 }
 
 // DeviceInfo is a device's response to a platform DeviceInfo query.
 type DeviceInfo struct {
 	XMLName      xml.Name `xml:"Response"`
-	CmdType      CmdType  `xml:"CmdType,attr"`
-	SN           int      `xml:"SN,attr"`
+	CmdType      CmdType  `xml:"CmdType"`
+	SN           int      `xml:"SN"`
 	DeviceID     string   `xml:"DeviceID"`
 	DeviceName   string   `xml:"DeviceName"`
 	Manufacturer string   `xml:"Manufacturer"`
@@ -83,23 +112,47 @@ type DeviceInfo struct {
 // DeviceStatus is a device's response to a platform DeviceStatus query.
 type DeviceStatus struct {
 	XMLName  xml.Name `xml:"Response"`
-	CmdType  CmdType  `xml:"CmdType,attr"`
-	SN       int      `xml:"SN,attr"`
+	CmdType  CmdType  `xml:"CmdType"`
+	SN       int      `xml:"SN"`
 	DeviceID string   `xml:"DeviceID"`
 	Status   string   `xml:"Status"`
 	Time     string   `xml:"Time"`
+	// Attribute-form aliases (see Catalog).
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *DeviceStatus) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
 }
 
 // RecordInfo is a device's response to a platform RecordInfo query listing
 // its recorded segments within a requested time range.
 type RecordInfo struct {
 	XMLName    xml.Name     `xml:"Response"`
-	CmdType    CmdType      `xml:"CmdType,attr"`
-	SN         int          `xml:"SN,attr"`
+	CmdType    CmdType      `xml:"CmdType"`
+	SN         int          `xml:"SN"`
 	DeviceID   string       `xml:"DeviceID"`
 	Name       string       `xml:"Name"`
 	SumNum     int          `xml:"SumNum"`
 	RecordList []RecordItem `xml:"RecordList>Item"`
+	// Attribute-form aliases (see Catalog).
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *RecordInfo) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
 }
 
 // RecordItem is a single recorded segment in a RecordInfo response.
@@ -122,33 +175,57 @@ type RecordItem struct {
 // optional fields.
 type DeviceControl struct {
 	XMLName      xml.Name `xml:"Control"`
-	CmdType      CmdType  `xml:"CmdType,attr"`
-	SN           int      `xml:"SN,attr"`
+	CmdType      CmdType  `xml:"CmdType"`
+	SN           int      `xml:"SN"`
 	DeviceID     string   `xml:"DeviceID"`
 	PTZCmd       string   `xml:"PTZCmd"`
 	HomePosition string   `xml:"HomePosition"`
 	TeleCmd      string   `xml:"TeleCmd"`
+	// Attribute-form aliases (see Catalog).
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *DeviceControl) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
 }
 
 // Alarm is a device-initiated alarm notification sent to the platform.
 type Alarm struct {
 	XMLName          xml.Name `xml:"Notify"`
-	CmdType          CmdType  `xml:"CmdType,attr"`
-	SN               int      `xml:"SN,attr"`
+	CmdType          CmdType  `xml:"CmdType"`
+	SN               int      `xml:"SN"`
 	DeviceID         string   `xml:"DeviceID"`
 	AlarmPriority    string   `xml:"AlarmPriority"`
 	AlarmMethod      string   `xml:"AlarmMethod"`
 	AlarmTime        string   `xml:"AlarmTime"`
 	AlarmDescription string   `xml:"AlarmDescription"`
 	AlarmType        string   `xml:"AlarmType"`
+	// Attribute-form aliases (see Catalog).
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *Alarm) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
 }
 
 // RecordInfoQuery is a platform-to-device request for recording information
 // within a specific time range.
 type RecordInfoQuery struct {
 	XMLName   xml.Name `xml:"Query"`
-	CmdType   CmdType  `xml:"CmdType,attr"`
-	SN        int      `xml:"SN,attr"`
+	CmdType   CmdType  `xml:"CmdType"`
+	SN        int      `xml:"SN"`
 	DeviceID  string   `xml:"DeviceID"`
 	StartTime string   `xml:"StartTime"`
 	EndTime   string   `xml:"EndTime"`
@@ -159,7 +236,7 @@ type RecordInfoQuery struct {
 // The device responds with a Catalog response listing its channels.
 type CatalogQuery struct {
 	XMLName  xml.Name `xml:"Query"`
-	CmdType  CmdType  `xml:"CmdType,attr"`
-	SN       int      `xml:"SN,attr"`
+	CmdType  CmdType  `xml:"CmdType"`
+	SN       int      `xml:"SN"`
 	DeviceID string   `xml:"DeviceID"`
 }

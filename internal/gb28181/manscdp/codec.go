@@ -26,7 +26,7 @@ func Encode(v any) ([]byte, error) {
 // RecordInfo, DeviceControl, or Alarm).
 //
 // The input is first parsed as UTF-8. If that fails — because the bytes are
-// GBK/GB18030 encoded or the CmdType attribute cannot be determined — the
+// GBK/GB18030 encoded or the CmdType element cannot be determined — the
 // input is converted via CharsetDecode and parsed again.
 func Decode(data []byte) (CmdType, any, error) {
 	// Fast path: bytes that are already valid UTF-8. Raw GBK/GB18030 bytes
@@ -46,33 +46,46 @@ func Decode(data []byte) (CmdType, any, error) {
 	return decodeOnce(converted)
 }
 
-// SSRC builds the GB/T 28181-2016 § 9.3.1.3 media stream SSRC: a leading
-// digit (0 = live, 1 = playback) followed by the last 8 digits of the
-// device ID. Shorter device IDs are used as-is.
-func SSRC(playback bool, deviceID string) string {
+// SSRC builds the GB/T 28181-2016 § 9.3.1.3 (Annex C.2.4) 10-digit decimal
+// media stream SSRC: digit 1 = live(0)/playback(1), digits 2-6 = digits 4-8 of
+// the 20-digit platform (server) ID, digits 7-10 = a per-stream sequence.
+// serverID shorter than 8 digits is left-padded with zeros.
+func SSRC(playback bool, serverID string, seq int) string {
 	prefix := "0"
 	if playback {
 		prefix = "1"
 	}
-	if len(deviceID) > 8 {
-		deviceID = deviceID[len(deviceID)-8:]
+	domain := "00000"
+	if len(serverID) >= 8 {
+		domain = serverID[3:8]
+	} else if len(serverID) > 3 {
+		domain = serverID[3:]
 	}
-	return prefix + deviceID
+	for len(domain) < 5 {
+		domain = "0" + domain
+	}
+	return fmt.Sprintf("%s%s%04d", prefix, domain, seq%10000)
 }
 
 // decodeOnce parses data assuming UTF-8. It strips any XML declaration first
 // (a declared non-UTF-8 charset would otherwise be rejected by encoding/xml),
-// then routes on the CmdType attribute.
+// then routes on the CmdType child element. GB/T 28181-2016 § 9.3 encodes
+// CmdType/SN as child elements — real devices (Hikvision, Dahua, Uniview)
+// never send the attribute form.
 func decodeOnce(data []byte) (CmdType, any, error) {
 	body := stripXMLDecl(data)
 	var probe struct {
-		CmdType CmdType `xml:"CmdType,attr"`
+		CmdType     CmdType `xml:"CmdType"`
+		CmdTypeAttr CmdType `xml:"CmdType,attr"`
 	}
 	if err := xml.Unmarshal(body, &probe); err != nil {
 		return "", nil, err
 	}
 	if probe.CmdType == "" {
-		return "", nil, fmt.Errorf("manscdp: missing CmdType attribute")
+		probe.CmdType = probe.CmdTypeAttr
+	}
+	if probe.CmdType == "" {
+		return "", nil, fmt.Errorf("manscdp: missing CmdType element")
 	}
 	switch probe.CmdType {
 	case CmdCatalog:
@@ -94,11 +107,19 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 	}
 }
 
+// normalizer is implemented by every message type to coalesce attribute-form
+// CmdType/SN aliases into the element fields (some minimal firmwares emit
+// the attribute form).
+type normalizer interface{ normalize() }
+
 // unmarshalAs decodes body into a concrete T and pairs it with its CmdType.
 func unmarshalAs[T any](body []byte, ct CmdType) (CmdType, any, error) {
 	var v T
 	if err := xml.Unmarshal(body, &v); err != nil {
 		return "", nil, err
+	}
+	if n, ok := any(&v).(normalizer); ok {
+		n.normalize()
 	}
 	return ct, v, nil
 }

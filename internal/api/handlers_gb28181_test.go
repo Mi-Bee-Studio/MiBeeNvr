@@ -14,6 +14,18 @@ import (
 )
 
 // Test helper function - must use t.Helper()
+// fakeGBByeSender records ByeChannelByID calls for assertions.
+type fakeGBByeSender struct {
+	channelID string
+	calls     int
+}
+
+func (f *fakeGBByeSender) ByeChannelByID(channelID string) error {
+	f.channelID = channelID
+	f.calls++
+	return nil
+}
+
 func setupGB28181TestHandler(t *testing.T) *Handler {
 	t.Helper()
 	db, _ := setupTestDB(t)
@@ -21,7 +33,9 @@ func setupGB28181TestHandler(t *testing.T) *Handler {
 	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
 	sessionMgr := gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), "3402000000")
 
-	return NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
+	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
+	h.SetGB28181ByeSender(&fakeGBByeSender{})
+	return h
 }
 
 func TestAPI_GB28181_ListDevices_Empty(t *testing.T) {
@@ -550,7 +564,7 @@ func TestAPI_GB28181_PTZ_Success(t *testing.T) {
 	if sender.deviceID != "34020000001310000001" {
 		t.Fatalf("expected PTZ sent to device, got '%s'", sender.deviceID)
 	}
-	if !strings.Contains(sender.body, "<PTZCmd>A5 0F 01 08 00 20 00 DD</PTZCmd>") {
+	if !strings.Contains(sender.body, "<PTZCmd>A50F0108002000DD</PTZCmd>") {
 		t.Fatalf("expected PTZCmd in body, got: %s", sender.body)
 	}
 }

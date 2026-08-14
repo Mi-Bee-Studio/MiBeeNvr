@@ -26,9 +26,12 @@ func extractNALUs(data []byte, naluType string) [][]byte {
 			continue
 		}
 
-		// Determine start code length (3 or 4 bytes)
+		// Determine start code length (3 or 4 bytes). A 4-byte code is
+		// 00 00 00 01; a 3-byte code is 00 00 01. Checking data[pos+3]==0x01
+		// alone is wrong: for a 3-byte code that byte is the NAL header,
+		// which is 0x01 for H.264 non-ref slices / H.265 TRAIL_N.
 		scLen := 3
-		if pos+3 <= len(data) && data[pos+3] == 0x01 {
+		if pos+3 < len(data) && data[pos+2] == 0x00 && data[pos+3] == 0x01 {
 			// 4-byte start code: 00 00 00 01
 			scLen = 4
 		}
@@ -76,8 +79,8 @@ func findStartCodes(data []byte) []int {
 // Returns (payload, totalPESLength, error).
 func parseVideoPES(data []byte) ([]byte, int, error) {
 	// PES: start_code (4) + stream_id (1) + PES_packet_length (2) + optional PES_header
-	// Minimum: 6 bytes (start_code + stream_id + PES_packet_length)
-	if len(data) < 6 {
+	// pesPayloadStart reads bytes 7-8, so 9 bytes are required up front.
+	if len(data) < 9 {
 		return nil, 0, ErrIncompletePES
 	}
 
@@ -93,15 +96,6 @@ func parseVideoPES(data []byte) ([]byte, int, error) {
 	}
 
 	pesPacketLen := int(data[4])<<8 | int(data[5])
-
-	// Parse optional PES header
-	if len(data) < 8 {
-		return nil, 0, ErrIncompletePES
-	}
-
-	// PES_header_data_length at offset 7
-	headerDataLen := int(data[7])
-	headerLen := 8 + headerDataLen
 	totalLen := 6 + pesPacketLen
 
 	// Check if we have enough data
@@ -110,13 +104,12 @@ func parseVideoPES(data []byte) ([]byte, int, error) {
 		return nil, 0, ErrIncompletePES
 	}
 
-	// Check if we have enough data for the header
-	if len(data) < headerLen {
+	payloadOffset := pesPayloadStart(data, totalLen)
+	if payloadOffset > totalLen || payloadOffset > len(data) {
 		return nil, 0, ErrIncompletePES
 	}
 
 	// Extract payload (after PES header)
-	payloadOffset := headerLen
 	if pesPacketLen > 0 {
 		payload := data[payloadOffset:totalLen]
 		return payload, totalLen, nil
@@ -125,6 +118,69 @@ func parseVideoPES(data []byte) ([]byte, int, error) {
 	// Unbounded PES (pesPacketLen == 0) - return everything after header
 	payload := data[payloadOffset:]
 	return payload, len(data), nil
+}
+
+// pesPayloadStart locates the elementary-stream start within a video PES.
+//
+// Header-layout tolerance: the standard (ITU-T H.222.0 §2.4.3.7) places
+// PES_header_data_length at byte 8 (payload at 9+hdrlen). At least one real
+// firmware in the field writes hdrlen at byte 7 (payload at 8+hdrlen) with
+// two 5-byte custom timestamps as optional fields — and byte 8 then holds
+// optional data (0x31), not a length. Instead of trusting either byte, the
+// payload start is CALIBRATED against the first Annex-B start code in the
+// header region: the ES begins there in both layouts (Annex-B permits a few
+// leading zero bytes). Continuation PES (a frame split across PES packets,
+// standard devices) carry no start code — the standard position is used.
+func pesPayloadStart(data []byte, totalLen int) int {
+	std := 9 + int(data[8])
+	legacy := 8 + int(data[7])
+	limit := totalLen
+	if limit > len(data) {
+		limit = len(data)
+	}
+	clamp := func(v int) int {
+		if v < 9 {
+			return 9
+		}
+		if v > limit {
+			return limit
+		}
+		return v
+	}
+	std, legacy = clamp(std), clamp(legacy)
+
+	// Scan the header region (a few bytes past both candidates) for the
+	// first Annex-B start code.
+	bound := std
+	if legacy > bound {
+		bound = legacy
+	}
+	bound += 4
+	if bound > limit {
+		bound = limit
+	}
+	sc := -1
+	for i := 8; i+2 < bound; i++ {
+		if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 {
+			sc = i
+			break
+		}
+	}
+	if sc < 0 {
+		return std // no start code → continuation PES (standard layout)
+	}
+	// Pick the candidate closest to the observed start code.
+	near := func(v int) int {
+		d := sc - v
+		if d < 0 {
+			d = -d
+		}
+		return d
+	}
+	if near(legacy) < near(std) {
+		return legacy
+	}
+	return std
 }
 
 // findPSStartCode finds the next MPEG-PS start code in the data.
@@ -192,7 +248,12 @@ func parsePSM(data []byte) (int, error) {
 }
 
 // findVideoStreamType scans PSM stream_info for the first video stream type.
-// The PSM body starts with: current_next_indicator (1 bit) + PS_version_number (5 bits) + reserved (2 bits) + PS_info_length (2 bytes) + PS_info bytes.
+// psmData starts after the 6-byte packet header (start code + map_stream_id +
+// length): [0]=version byte, [1]=reserved/marker byte, [2:4]=
+// program_stream_info_length, then PS info, then the 2-byte
+// elementary_stream_map_length (ISO/IEC 13818-1 program_stream_map), then the
+// 4-byte entries (stream_type + elementary_stream_id + es_info_length) and
+// their info blobs.
 func findVideoStreamType(psmData []byte) (byte, bool) {
 	if len(psmData) < 4 {
 		return 0, false
@@ -201,6 +262,11 @@ func findVideoStreamType(psmData []byte) (byte, bool) {
 	// Skip version byte + reserved byte + PS_info_length + PS_info bytes
 	infoLen := int(psmData[2])<<8 | int(psmData[3])
 	offset := 4 + infoLen
+	// Skip the 2-byte elementary_stream_map_length that precedes the entries.
+	if offset+2 > len(psmData) {
+		return 0, false
+	}
+	offset += 2
 
 	for offset <= len(psmData)-4 {
 		streamType := psmData[offset]

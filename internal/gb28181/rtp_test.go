@@ -436,13 +436,12 @@ func TestReceiverTCPMode0x24(t *testing.T) {
 	payload := buildTestMPEGPSPayload()
 	rtpPkt := buildTestRTPPacket(0, 90000, payload, true)
 
-	buf := make([]byte, 5+len(rtpPkt))
+	buf := make([]byte, 4+len(rtpPkt))
 	buf[0] = 0x24
-	buf[1] = 0x00 // Reserved
+	buf[1] = 0x00 // Channel
 	buf[2] = byte(len(rtpPkt) >> 8)
 	buf[3] = byte(len(rtpPkt))
-	buf[4] = 0x00 // Reserved
-	copy(buf[5:], rtpPkt)
+	copy(buf[4:], rtpPkt)
 
 	_, err = clientConn.Write(buf)
 	require.NoError(t, err)
@@ -564,13 +563,12 @@ func TestReceiverTCPModeAutoDetect0x24(t *testing.T) {
 	payload := buildTestMPEGPSPayload()
 	rtpPkt := buildTestRTPPacket(0, 90000, payload, true)
 
-	buf := make([]byte, 5+len(rtpPkt))
+	buf := make([]byte, 4+len(rtpPkt))
 	buf[0] = 0x24
 	buf[1] = 0x00
 	buf[2] = byte(len(rtpPkt) >> 8)
 	buf[3] = byte(len(rtpPkt))
-	buf[4] = 0x00
-	copy(buf[5:], rtpPkt)
+	copy(buf[4:], rtpPkt)
 
 	_, err = clientConn.Write(buf)
 	require.NoError(t, err)

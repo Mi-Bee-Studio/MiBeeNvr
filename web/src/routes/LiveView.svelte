@@ -78,6 +78,10 @@
     return normalizeProtocol(cam.protocol) === 'onvif';
   }
 
+  function isGB28181Camera(cam: Camera): boolean {
+    return normalizeProtocol(cam.protocol) === 'gb28181';
+  }
+
   function isXiaomiCamera(cam: Camera): boolean {
     return normalizeProtocol(cam.protocol) === 'xiaomi';
   }
@@ -342,8 +346,10 @@
         
         <!-- PTZ Control for PTZ-capable ONVIF cameras. Default to hidden until
              capabilities confirm PTZ support — otherwise a fixed (non-PTZ) bullet
-             camera shows a dead PTZ pad while caps are still loading. -->
-        {#if isPtzSupported(camera) && (deviceCaps?.ptz ?? false)}
+             camera shows a dead PTZ pad while caps are still loading. GB28181
+             cameras use the same /ptz endpoints — the backend routes them to
+             the GB/T 28181 DeviceControl transport (no ONVIF caps to consult). -->
+        {#if (isPtzSupported(camera) && (deviceCaps?.ptz ?? false)) || isGB28181Camera(camera)}
           <div class="card">
             <PtzControl {cameraId} enabled={true} protocol={camera.protocol} />
           </div>

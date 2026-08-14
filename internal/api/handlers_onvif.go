@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/go-chi/chi/v5"
@@ -200,6 +201,94 @@ func (h *Handler) requireONVIF(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// cameraProtocol returns the camera's protocol ("" when unknown).
+func (h *Handler) cameraProtocol(r *http.Request, cameraID string) string {
+	if h.db == nil {
+		return ""
+	}
+	camera, err := h.db.GetCamera(r.Context(), cameraID)
+	if err != nil || camera == nil {
+		return ""
+	}
+	return camera.Protocol
+}
+
+// handleGB28181PTZMove maps an ONVIF-style continuous-move vector onto the
+// GB/T 28181 PTZ direction bits (one axis at a time, matching the direction
+// pad semantics) and sends it via the channel PTZ controller.
+func (h *Handler) handleGB28181PTZMove(w http.ResponseWriter, r *http.Request, cameraID string, pan, tilt, zoom float64) {
+	channelID := h.gb28181ChannelID(cameraID)
+	if channelID == "" {
+		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	const speed = byte(128)
+	switch {
+	case zoom > 0:
+		h.sendGB28181PTZ(w, channelID, gb28181.DirZoomIn, speed)
+	case zoom < 0:
+		h.sendGB28181PTZ(w, channelID, gb28181.DirZoomOut, speed)
+	case tilt > 0:
+		h.sendGB28181PTZ(w, channelID, gb28181.DirUp, speed)
+	case tilt < 0:
+		h.sendGB28181PTZ(w, channelID, gb28181.DirDown, speed)
+	case pan > 0:
+		h.sendGB28181PTZ(w, channelID, gb28181.DirRight, speed)
+	case pan < 0:
+		h.sendGB28181PTZ(w, channelID, gb28181.DirLeft, speed)
+	default:
+		h.sendGB28181PTZ(w, channelID, gb28181.DirStop, 0)
+	}
+}
+
+// handleGB28181PTZStop sends the GB/T 28181 PTZ stop command.
+func (h *Handler) handleGB28181PTZStop(w http.ResponseWriter, r *http.Request, cameraID string) {
+	channelID := h.gb28181ChannelID(cameraID)
+	if channelID == "" {
+		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	h.sendGB28181PTZ(w, channelID, gb28181.DirStop, 0)
+}
+
+// gb28181ChannelID resolves the camera's configured GB28181 channel binding.
+func (h *Handler) gb28181ChannelID(cameraID string) string {
+	if h.camMgr == nil {
+		return ""
+	}
+	cam := h.camMgr.GetCameraConfig(cameraID)
+	if cam == nil || cam.Protocol != "gb28181" {
+		return ""
+	}
+	return cam.GB28181.ChannelID
+}
+
+func (h *Handler) sendGB28181PTZ(w http.ResponseWriter, channelID, direction string, speed byte) {
+	if err := h.gb28181PTZ.SendPTZ(channelID, direction, speed); err != nil {
+		switch {
+		case errors.Is(err, gb28181.ErrChannelNotFound):
+			WriteError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, gb28181.ErrDeviceOffline):
+			WriteError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, gb28181.ErrPTZUnsupported), errors.Is(err, gb28181.ErrZoomUnsupported):
+			WriteError(w, http.StatusNotFound, "PTZ not supported")
+		default:
+			logger.Error("failed to send GB28181 PTZ command", "channel_id", channelID, "error", err)
+			WriteError(w, http.StatusInternalServerError, "failed to send PTZ command")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // --- PTZ control endpoints ---
 
 func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +305,12 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Mode != "continuous" && req.Mode != "absolute" && req.Mode != "relative" {
 		WriteError(w, http.StatusBadRequest, "mode must be continuous, absolute, or relative")
+		return
+	}
+	// GB28181 cameras: translate the continuous-move vector into a GB/T 28181
+	// DeviceControl PTZ command via the SIP MESSAGE transport.
+	if h.cameraProtocol(r, cameraID) == "gb28181" {
+		h.handleGB28181PTZMove(w, r, cameraID, req.Pan, req.Tilt, req.Zoom)
 		return
 	}
 	if !h.requireONVIF(w, r) {
@@ -249,6 +344,10 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
+	if h.cameraProtocol(r, cameraID) == "gb28181" {
+		h.handleGB28181PTZStop(w, r, cameraID)
+		return
+	}
 	if !h.requireONVIF(w, r) {
 		return
 	}

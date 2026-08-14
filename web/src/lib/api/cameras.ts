@@ -317,8 +317,10 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     builtIn: true,
     // GB28181 devices register via SIP and push RTP media; the NVR invites
     // channels by DeviceID/ChannelID. No per-camera credentials (SIP digest
-    // auth is configured server-side in Settings) and no discovery.
-    capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
+    // auth is configured server-side in Settings) and no discovery. PTZ goes
+    // through /api/cameras/{id}/ptz/* which the backend routes to the
+    // GB/T 28181 DeviceControl transport for gb28181 cameras.
+    capabilities: { hls: true, ptz: true, snapshot: false, discovery: false, auth: false },
   },
 ]
 
@@ -723,6 +725,14 @@ export function getProtocolCapabilities(
   const baseId = normalizeProtocol(protocol);
   const info = protocolsMap.get(baseId);
   if (info) return info.capabilities;
+  // Fall back to the built-in catalog. The map is populated asynchronously
+  // from GET /api/protocols and is EMPTY until that resolves (and on fetch
+  // failure) — returning all-false raced the LiveView's orchestrator
+  // registration into isHlsCapable=false → empty chain → "live not
+  // supported" even though the camera streams fine (the Surveillance grid
+  // registers only after the map loads, so only LiveView hit the race).
+  const fallback = DEFAULT_PROTOCOLS.find((p) => p.id === baseId);
+  if (fallback) return fallback.capabilities;
   return { hls: false, ptz: false, snapshot: false, discovery: false, auth: false };
 }
 

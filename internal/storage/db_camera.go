@@ -76,6 +76,10 @@ type CameraRow struct {
 	// (persisted + visible but recorder not started — awaiting credentials).
 	// "" is treated as "active". Set by auto-discover for authenticated devices.
 	ActivationState string `json:"activation_state,omitempty"`
+	// GB28181 channel binding, injected from YAML at API response time.
+	// Without it the camera edit form cannot show the DeviceID/ChannelID a
+	// gb28181 camera is bound to (always-empty fields, forced re-entry).
+	GB28181 *config.GB28181ChannelConfig `json:"gb28181,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
