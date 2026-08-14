@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
-
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 )
 
 // PTZ direction identifiers accepted by SendPTZ and the PTZ API.
@@ -139,15 +137,16 @@ func (c *PTZController) SendPTZ(channelID, direction string, speed byte) error {
 	if err != nil {
 		return err
 	}
-	body, err := manscdp.Encode(manscdp.DeviceControl{
-		CmdType:  manscdp.CmdDeviceControl,
-		SN:       int(c.seq.Add(1)),
-		DeviceID: ch.ID,
-		PTZCmd:   ptzCmdString(cmd),
-	})
-	if err != nil {
-		return fmt.Errorf("gb28181: encode DeviceControl: %w", err)
-	}
+	sn := c.seq.Add(1)
+	// GB/T 28181-2016: DeviceControl uses child elements (not attributes) for
+	// CmdType/SN — see CatalogController.RequestCatalog for the same pattern.
+	body := []byte(fmt.Sprintf(`<?xml version="1.0" encoding="GB2312"?>
+<Control>
+<CmdType>DeviceControl</CmdType>
+<SN>%d</SN>
+<DeviceID>%s</DeviceID>
+<PTZCmd>%s</PTZCmd>
+</Control>`, sn, ch.ID, ptzCmdString(cmd)))
 	if err := c.sender.SendMessage(dev.ID, body); err != nil {
 		return fmt.Errorf("gb28181: send PTZ to %s: %w", dev.ID, err)
 	}

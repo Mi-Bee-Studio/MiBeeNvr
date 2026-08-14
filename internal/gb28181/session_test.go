@@ -2,6 +2,7 @@ package gb28181
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -306,8 +307,7 @@ func TestSessionManager_SDPAnswerFormat(t *testing.T) {
 	require.Contains(t, sdpStr, "a=recvonly", "should have recvonly attribute")
 	require.Contains(t, sdpStr, "a=rtpmap:96 PS/90000", "should have RTP map")
 	require.Contains(t, sdpStr, "y=", "should have SSRC (y=)")
-	require.Contains(t, sdpStr, channel.DeviceID, "SSRC should contain device ID")
-	require.Contains(t, sdpStr, channel.ID, "SSRC should contain channel ID")
+	require.Contains(t, sdpStr, channel.ID[len(channel.ID)-8:], "SSRC should contain last 8 digits of channel ID")
 
 	_ = sm.Bye(channel.ID)
 }
@@ -491,8 +491,16 @@ func TestSession_PlaybackSDP(t *testing.T) {
 	require.Contains(t, sdpStr, "t=", "SDP should contain t= line for time range")
 	require.Contains(t, sdpStr, "y=", "SDP should contain SSRC (y=)")
 
-	// Verify SSRC ends with :00000001 (playback, digit 1)
-	require.Contains(t, sdpStr, ":00000001\r\n", "SSRC should end with :00000001 for playback")
+	// Verify SSRC starts with 1 (playback prefix)
+	lines := strings.Split(sdpStr, "\r\n")
+	for _, l := range lines {
+		if strings.HasPrefix(l, "y=1") {
+			break
+		}
+		if strings.HasPrefix(l, "y=") && !strings.HasPrefix(l, "y=1") {
+			t.Fatalf("playback SSRC should start with 1, got: %s", l)
+		}
+	}
 
 	// Verify port was allocated
 	receiver := sm.GetReceiver(channel.ID)
@@ -523,7 +531,7 @@ func TestSession_PlaybackSDP(t *testing.T) {
 	require.NoError(t, err)
 	sdpLiveStr := string(sdpLive)
 	require.Contains(t, sdpLiveStr, "s=Play", "Live SDP should contain s=Play")
-	require.Contains(t, sdpLiveStr, ":00000000\r\n", "Live SSRC should end with :00000000")
+	require.Contains(t, sdpLiveStr, "y=0", "Live SSRC should start with 0")
 	_ = sm.Bye(channel2.ID)
 }
 

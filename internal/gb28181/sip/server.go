@@ -35,9 +35,10 @@ const (
 // keepalive/catalog/device-info MESSAGE handling. Media sessions (INVITE/BYE)
 // are delegated to the hooks installed by the session manager.
 type Server struct {
-	cfg       config.GB28181ServerConfig
-	deviceMgr *gb28181.DeviceManager
-	db        *storage.DB // nil in tests
+	cfg        config.GB28181ServerConfig
+	deviceMgr  *gb28181.DeviceManager
+	sessionMgr *gb28181.SessionManager
+	db         *storage.DB // nil in tests
 
 	gosipSrv gosip.Server
 	cancel   context.CancelFunc
@@ -55,10 +56,11 @@ type Server struct {
 // parameter persists device registrations and catalog data so the REST API
 // (which reads from the DB) reflects live SIP state; pass nil to skip
 // persistence (test-only).
-func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager, db *storage.DB) *Server {
+func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager, sessionMgr *gb28181.SessionManager, db *storage.DB) *Server {
 	return &Server{
 		cfg:         cfg,
 		deviceMgr:   deviceMgr,
+		sessionMgr:  sessionMgr,
 		db:          db,
 		perDeviceMu: make(map[string]*sync.Mutex),
 	}
@@ -183,7 +185,7 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 	}
 	portVal := sip.Port(devPort)
 
-	serverHost := s.localIP()
+	serverHost := s.localIPFor(netAddr)
 
 	from := &sip.Address{
 		DisplayName: sip.String{Str: s.cfg.ServerID},
@@ -228,6 +230,82 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 	if _, err := srv.Request(req); err != nil {
 		return fmt.Errorf("gb28181: send MESSAGE to %s: %w", deviceID, err)
 	}
+	return nil
+}
+
+// InviteChannel sends a SIP INVITE to channelID on deviceID, starting a live
+// media session. It allocates an RTP receive port via the SessionManager,
+// builds a GB28181 SDP offer (s=Play, PS/90000, recvonly), and sends the INVITE.
+// The device responds 200 OK and starts streaming RTP/PS to the allocated port.
+func (s *Server) InviteChannel(deviceID, channelID string) error {
+	s.mu.Lock()
+	srv := s.gosipSrv
+	s.mu.Unlock()
+	if srv == nil {
+		return fmt.Errorf("gb28181: SIP server not started")
+	}
+
+	dev, ok := s.deviceMgr.Device(deviceID)
+	if !ok {
+		return fmt.Errorf("gb28181: device %q not registered", deviceID)
+	}
+	ch, ok := s.deviceMgr.FindChannel(deviceID, channelID)
+	if !ok {
+		return fmt.Errorf("gb28181: channel %q not found on device %q", channelID, deviceID)
+	}
+
+	dev.Mu.RLock()
+	netAddr := dev.NetAddr
+	dev.Mu.RUnlock()
+
+	serverHost := s.localIPFor(netAddr)
+
+	// Allocate port, create SDP, start receiver.
+	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil)
+	if err != nil {
+		return fmt.Errorf("gb28181: session setup for %s: %w", channelID, err)
+	}
+
+	devHost, devPortStr, err := net.SplitHostPort(netAddr)
+	if err != nil {
+		return fmt.Errorf("gb28181: invalid device address %q: %w", netAddr, err)
+	}
+	devPort, _ := strconv.Atoi(devPortStr)
+	portVal := sip.Port(devPort)
+
+	from := &sip.Address{
+		DisplayName: sip.String{Str: s.cfg.ServerID},
+		Uri:         &sip.SipUri{FUser: sip.String{Str: s.cfg.ServerID}, FHost: serverHost},
+	}
+	to := &sip.Address{
+		DisplayName: sip.String{Str: channelID},
+		Uri:         &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal},
+	}
+	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}
+
+	rb := sip.NewRequestBuilder()
+	rb.SetMethod(sip.INVITE)
+	rb.SetFrom(from)
+	rb.SetTo(to)
+	rb.SetRecipient(recipient)
+	rb.SetHost(serverHost)
+	rb.AddVia(&sip.ViaHop{
+		Host:   serverHost,
+		Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
+	})
+	rb.SetSeqNo(1)
+	ct := sip.ContentType("application/sdp")
+	rb.SetContentType(&ct)
+	rb.SetBody(string(sdp))
+
+	req, err := rb.Build()
+	if err != nil {
+		return fmt.Errorf("gb28181: build INVITE request: %w", err)
+	}
+	if _, err := srv.Request(req); err != nil {
+		return fmt.Errorf("gb28181: send INVITE to %s: %w", channelID, err)
+	}
+	slog.Info("gb28181: INVITE sent", "channel", channelID, "device", deviceID)
 	return nil
 }
 
@@ -291,6 +369,17 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 			ID:      deviceID,
 			NetAddr: req.Source(),
 		})
+		// Auto-register the device itself as a channel — but ONLY on first
+		// registration, not on periodic re-REGISTERs. Re-registering would
+		// overwrite the channel's Status (resetting inviting/playing to idle).
+		if _, exists := s.deviceMgr.FindChannel(deviceID, deviceID); !exists {
+			s.deviceMgr.RegisterChannel(deviceID, &gb28181.Channel{
+				ID:       deviceID,
+				DeviceID: deviceID,
+				Name:     "",
+			})
+			slog.Info("gb28181: device auto-registered as channel", "device", deviceID)
+		}
 		if s.db != nil {
 			now := time.Now()
 			if err := s.db.UpsertGB28181Device(context.Background(), storage.GB28181Device{
@@ -300,6 +389,16 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 				RegisteredAt:  now,
 			}); err != nil {
 				slog.Warn("gb28181: failed to persist device to DB", "device", deviceID, "error", err)
+			}
+			if _, exists := s.deviceMgr.FindChannel(deviceID, deviceID); !exists {
+				if err := s.db.UpsertGB28181Channel(context.Background(), storage.GB28181Channel{
+					ID:        deviceID,
+					DeviceID:  deviceID,
+					Status:    "idle",
+					UpdatedAt: now,
+				}); err != nil {
+					slog.Warn("gb28181: failed to persist auto-channel to DB", "device", deviceID, "error", err)
+				}
 			}
 		}
 	}
@@ -535,8 +634,24 @@ func parseSIPListen(listen string) (host string, port int, err error) {
 // Via headers of outbound requests. It prefers the host from sip_listen when
 // configured, otherwise the first non-loopback IPv4 interface address, and
 // falls back to 127.0.0.1.
+
+// localIPFor returns the NVR's source IP for reaching remoteAddr (an
+// "ip:port" string). It performs a UDP dial to let the kernel pick the
+// correct local address for the route, which handles multi-homed hosts
+// and cross-subnet devices correctly. Falls back to localIP() on error.
+func (s *Server) localIPFor(remoteAddr string) string {
+	if conn, err := net.Dial("udp", remoteAddr); err == nil {
+		defer conn.Close()
+		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP.To4() != nil {
+			return addr.IP.String()
+		}
+	}
+	return s.localIP()
+}
+
 func (s *Server) localIP() string {
-	if host, _, err := parseSIPListen(s.cfg.SIPListen); err == nil && host != "" {
+	host, _, err := parseSIPListen(s.cfg.SIPListen)
+	if err == nil && host != "" && host != "0.0.0.0" {
 		return host
 	}
 	addrs, err := net.InterfaceAddrs()

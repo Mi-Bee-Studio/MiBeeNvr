@@ -95,7 +95,7 @@ func TestPTZ_SendPTZ_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "34020000001310000001", sender.deviceID)
-	require.Contains(t, sender.body, `CmdType="DeviceControl"`)
+	require.Contains(t, sender.body, "<CmdType>DeviceControl</CmdType>")
 	require.Contains(t, sender.body, "<DeviceID>34020000001320000001</DeviceID>")
 	require.Contains(t, sender.body, "<PTZCmd>A5 0F 01 08 00 20 00 DD</PTZCmd>")
 }
