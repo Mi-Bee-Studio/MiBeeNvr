@@ -471,7 +471,8 @@ func cleanupOrphanFiles(ctx context.Context, db *sql.DB, storageRoot string, dry
 
 	err = filepath.Walk(storageRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // 跳过不可访问的目录
+			// 跳过不可访问的目录(权限/断链等),继续扫描其余部分。
+			return nil //nolint:nilerr // 有意忽略子树错误,Walk 继续遍历
 		}
 		// 跳过 DB 文件和配置文件。
 		if !info.IsDir() {
