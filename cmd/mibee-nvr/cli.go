@@ -349,7 +349,6 @@ func cmdCleanup() {
 		fmt.Fprintf(os.Stderr, "Error opening DB: %v\n", err)
 		os.Exit(1)
 	}
-	defer db.Close()
 
 	ctx := context.Background()
 	dryRunSuffix := ""
@@ -370,6 +369,9 @@ func cmdCleanup() {
 	}
 
 	fmt.Println("\nCleanup complete.")
+	db.Close()
+	// CLI 子命令必须显式退出:dispatchSubcommand 在服务器启动之前调用,
+	// 直接 return 会误启动 NVR 服务。db 已显式 Close(见上)。
 	os.Exit(0)
 }
 
@@ -452,7 +454,9 @@ func cleanupOrphanFiles(ctx context.Context, db *sql.DB, storageRoot string, dry
 	defer rows.Close()
 	for rows.Next() {
 		var p string
-		rows.Scan(&p)
+		if err := rows.Scan(&p); err != nil {
+			continue
+		}
 		// 标准化：转绝对路径。
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(storageRoot, p)
