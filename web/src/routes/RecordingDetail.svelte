@@ -31,6 +31,13 @@
   let loadErrorType = $state<'generic' | 'not_found'>('generic');
   let deleteConfirm = $state(false);
   let isTransitioning = $state(false);
+  // Guards against out-of-order in-place loads: only the latest loadRecording
+  // call may write `recording` / clear the transitioning overlay.
+  let loadToken = 0;
+  // Last recordingId prop consumed by the props-effect (mount-time entry point).
+  // In-place segment switches own `currentId` from then on; the prop only
+  // changes again on a full route remount.
+  let lastRoutedId = '';
 
   // Deep-link / cross-segment seek offset handed to PlaybackPanel.
   let pendingTimelineSeekOffset = $state<number | null>(null);
@@ -52,17 +59,22 @@
     return recording.merge_status !== 'merged' && recording.merge_status !== 'daily_merged';
   });
 
-  async function loadRecording() {
-    loading = true;
+  async function loadRecording(opts: { keepPanel?: boolean } = {}) {
+    const token = ++loadToken;
+    // keepPanel: mid-session segment switch — keep the playback panel (and its
+    // <video>) mounted; only the metadata reloads. The panel shows the
+    // isTransitioning overlay meanwhile.
+    if (!opts.keepPanel) loading = true;
     error = '';
     try {
-      recording = await getRecording(currentId);
-      if (recording) {
-        // PlaybackPanel handles player init in its $effect on `recording`.
-        // The codec probe that picks <video> vs cycler for timelapse/mjpeg is
-        // done lazily by PlaybackPanel's mode derivation.
-      }
+      const rec = await getRecording(currentId);
+      if (token !== loadToken) return;
+      recording = rec;
+      // PlaybackPanel handles player init in its $effect on `recording`.
+      // The codec probe that picks <video> vs cycler for timelapse/mjpeg is
+      // done lazily by PlaybackPanel's mode derivation.
     } catch (e) {
+      if (token !== loadToken) return;
       const errMsg = e instanceof Error ? e.message : '';
       if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('RECORDING_NOT_FOUND')) {
         loadErrorType = 'not_found';
@@ -73,16 +85,40 @@
       }
       recording = null;
     } finally {
-      loading = false;
+      if (token === loadToken) {
+        if (!opts.keepPanel) loading = false;
+        isTransitioning = false;
+      }
     }
+  }
+
+  // In-place segment switch (same route, different recording): no component
+  // remount (App.svelte keys recording-detail without the id), no skeleton —
+  // the playback panel stays mounted and swaps its source. The URL is synced
+  // via replaceState so deep-links/refresh stay correct WITHOUT stacking one
+  // history entry per segment.
+  function switchRecordingInPlace(recordingId: string, offsetSeconds: number | null) {
+    if (!recordingId) return;
+    if (recordingId === currentId) {
+      if (offsetSeconds != null) pendingTimelineSeekOffset = offsetSeconds;
+      return;
+    }
+    if (offsetSeconds != null) pendingTimelineSeekOffset = offsetSeconds;
+    isTransitioning = true;
+    // Set currentId before anything else: the props-effect below must see
+    // currentId already matching to skip (recording is still the old, non-null
+    // one until the fetch resolves).
+    currentId = recordingId;
+    try {
+      history.replaceState(null, '', `#/recordings/${recordingId}`);
+    } catch { /* non-browser env */ }
+    void loadRecording({ keepPanel: true });
   }
 
   async function navigateToNext() {
     if (!recording) return;
-    // Delegate to PlaybackPanel's next-segment logic via its exported action;
-    // but navigation (currentId + reload) is the host's job. Reuse the same
-    // listRecordings-based next-finder that PlaybackPanel uses internally by
-    // having it call ongotonext → which lands here.
+    // Fallback path when PlaybackPanel could not seamlessly chain the next
+    // segment (different playback mode, prefetch failed, …).
     const { listRecordings } = await import('$lib/api');
     try {
       const resp = await listRecordings({
@@ -95,10 +131,7 @@
         offset: 0,
       });
       const next = resp.recordings.find(r => r.merge_status !== 'daily_merged');
-      if (next) {
-        isTransitioning = true;
-        window.location.hash = `#/recordings/${next.id}`;
-      }
+      if (next) switchRecordingInPlace(next.id, null);
     } catch { /* ignore */ }
   }
 
@@ -107,13 +140,23 @@
     void navigateToNext();
   }
 
-  // Cross-segment timeline seek: update the hash; the {#key} block in App.svelte
-  // recreates this component with the new recordingId → $effect → loadRecording.
-  // The offset is preserved across the remount via pendingTimelineSeekOffset.
+  // Cross-segment timeline seek: switch the recording in place. The offset is
+  // applied by PlaybackPanel once the target segment's video is ready
+  // (standby-buffer swap, falling back to a fresh load).
   function handleTimelineSeek(recordingId: string, offsetSeconds: number) {
-    pendingTimelineSeekOffset = offsetSeconds;
-    isTransitioning = true;
-    window.location.hash = `#/recordings/${recordingId}`;
+    switchRecordingInPlace(recordingId, offsetSeconds);
+  }
+
+  // PlaybackPanel chains seamlessly into a prefetched next segment (video
+  // double-buffer adoption or timelapse cycler adoption). Adopt its metadata
+  // in place — no fetch, no skeleton, no remount. Sync the URL for deep-links.
+  function handleCrossSegment(r: Recording) {
+    if (!r || r.id === currentId) return;
+    currentId = r.id;
+    recording = r;
+    try {
+      history.replaceState(null, '', `#/recordings/${r.id}`);
+    } catch { /* non-browser env */ }
   }
 
   // Resolve ?at= absolute timestamp → offset once recording.started_at is known.
@@ -127,16 +170,20 @@
     if (pendingTimelineSeekOffset == null) pendingTimelineSeekOffset = offsetSec;
   });
 
-  // Reactively reload when recordingId changes (SPA navigation + cross-segment
-  // seeks that update window.location.hash).
+  // Route-entry effect: reacts to the recordingId PROP (fresh mount, or a
+  // remount from another route). Mid-session segment switches do NOT come
+  // through here — they own currentId via switchRecordingInPlace, and
+  // replaceState never fires hashchange — so once mounted, this effect runs
+  // exactly once.
   $effect(() => {
     const id = recordingId;
     if (!id) return;
-    if (currentId === id && recording) return;
+    if (id === lastRoutedId) return;
+    lastRoutedId = id;
     currentId = id;
     loading = true;
     error = '';
-    loadRecording().finally(() => { isTransitioning = false; });
+    void loadRecording();
   });
 
   async function confirmDelete() {
@@ -272,7 +319,7 @@
             onended={handleEnded}
             ontimelineseek={handleTimelineSeek}
             ongotonext={navigateToNext}
-            oncrosssegment={(r) => (recording = r)}
+            oncrosssegment={handleCrossSegment}
           />
         </div>
 

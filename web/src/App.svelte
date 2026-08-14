@@ -279,7 +279,12 @@ function parseRoute(hash: string) {
        navigating from recording A to recording B). Inside {#await}, expressions
        only re-evaluate when the awaited promise re-resolves. -->
   {@const routeProps = getRouteProps(currentRoute)}
-  {#key currentRoute + '|' + (params.id || '')}
+  <!-- recording-detail is intentionally NOT keyed by the id: RecordingDetail
+       reacts to recordingId prop changes in place (seamless segment switching
+       across recordings, #321). Every other id-based route (timelapse-merge,
+       live, cameras-detail) loads its id once in onMount and relies on the
+       remount for id changes — keep the id in their key. -->
+  {#key currentRoute + '|' + (currentRoute === 'recording-detail' ? '' : params.id || '')}
   {#await routeLoaders[currentRoute]()}
     <div class="skeleton skeleton--page"></div>
   {:then module}
