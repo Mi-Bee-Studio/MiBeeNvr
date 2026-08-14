@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -156,7 +157,7 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	req.Header.Set("X-Encoding", seg.Encoding)
 	req.Header.Set("X-Started-At", seg.StartedAt)
 	req.Header.Set("X-Ended-At", seg.EndedAt)
-	req.Header.Set("X-File-Size", fmt.Sprintf("%d", seg.FileSize))
+	req.Header.Set("X-File-Size", strconv.FormatInt(seg.FileSize, 10))
 
 	resp, err := c.client.Do(req)
 	if err != nil {
