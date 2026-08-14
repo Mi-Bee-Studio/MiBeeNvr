@@ -400,6 +400,19 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"server": map[string]any{
 			"listen": h.config.Server.Listen,
 		},
+		"gb28181": map[string]any{
+			"enabled":            h.config.GB28181.Enabled,
+			"sip_listen":         h.config.GB28181.SIPListen,
+			"server_id":          h.config.GB28181.ServerID,
+			"realm":              h.config.GB28181.Realm,
+			"password":           h.config.GB28181.Password,
+			"port_range":         h.config.GB28181.PortRange,
+			"allowed_device_ids": h.config.GB28181.AllowedDeviceIDs,
+			"heartbeat_interval": h.config.GB28181.HeartbeatInterval,
+			"catalog_interval":   h.config.GB28181.CatalogInterval,
+			"tcp_mode":           h.config.GB28181.TCPMode,
+			"tcp_framing":        h.config.GB28181.TCPFraming,
+		},
 	})
 }
 
@@ -454,6 +467,19 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		Server   *struct {
 			Listen *string `json:"listen"`
 		} `json:"server"`
+		GB28181 *struct {
+			Enabled           *bool     `json:"enabled"`
+			SIPListen         *string   `json:"sip_listen"`
+			ServerID          *string   `json:"server_id"`
+			Realm             *string   `json:"realm"`
+			Password          *string   `json:"password"`
+			PortRange         *string   `json:"port_range"`
+			AllowedDeviceIDs  *[]string `json:"allowed_device_ids"`
+			HeartbeatInterval *string   `json:"heartbeat_interval"`
+			CatalogInterval   *string   `json:"catalog_interval"`
+			TCPMode           *bool     `json:"tcp_mode"`
+			TCPFraming        *string   `json:"tcp_framing"`
+		} `json:"gb28181"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -530,6 +556,48 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.config.Server.Listen = fmt.Sprintf(":%d", port)
+	}
+
+	// Update GB28181 settings
+	if body.GB28181 != nil {
+		if body.GB28181.Enabled != nil {
+			h.config.GB28181.Enabled = *body.GB28181.Enabled
+		}
+		if body.GB28181.SIPListen != nil {
+			h.config.GB28181.SIPListen = *body.GB28181.SIPListen
+		}
+		if body.GB28181.ServerID != nil {
+			h.config.GB28181.ServerID = *body.GB28181.ServerID
+		}
+		if body.GB28181.Realm != nil {
+			h.config.GB28181.Realm = *body.GB28181.Realm
+		}
+		if body.GB28181.Password != nil {
+			h.config.GB28181.Password = *body.GB28181.Password
+		}
+		if body.GB28181.PortRange != nil {
+			h.config.GB28181.PortRange = *body.GB28181.PortRange
+		}
+		if body.GB28181.AllowedDeviceIDs != nil {
+			h.config.GB28181.AllowedDeviceIDs = *body.GB28181.AllowedDeviceIDs
+		}
+		if body.GB28181.HeartbeatInterval != nil {
+			h.config.GB28181.HeartbeatInterval = *body.GB28181.HeartbeatInterval
+		}
+		if body.GB28181.CatalogInterval != nil {
+			h.config.GB28181.CatalogInterval = *body.GB28181.CatalogInterval
+		}
+		if body.GB28181.TCPMode != nil {
+			h.config.GB28181.TCPMode = *body.GB28181.TCPMode
+		}
+		if body.GB28181.TCPFraming != nil {
+			h.config.GB28181.TCPFraming = *body.GB28181.TCPFraming
+		}
+		// Validate the updated config (catches invalid server_id, sip_listen, etc.)
+		if err := config.Validate(h.config); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Persist config to disk
