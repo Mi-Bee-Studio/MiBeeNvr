@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
+	"github.com/go-chi/chi/v5"
 )
 
 // registerVisionPublicRoutes 注册无需认证的 Vision 端点(与 SSE 一样在 public 组)。
@@ -66,11 +66,11 @@ func (h *Handler) handleVisionStatus(w http.ResponseWriter, r *http.Request) {
 
 	healthy, lastSeen, status := h.visionCoordinator.Health().Snapshot()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"enabled":       true,
-		"healthy":       healthy,
-		"last_seen":     lastSeen,
-		"device":        status.Device,
-		"queue_depth":   status.QueueDepth,
-		"processed":     status.ProcessedCount,
+		"enabled":     true,
+		"healthy":     healthy,
+		"last_seen":   lastSeen,
+		"device":      status.Device,
+		"queue_depth": status.QueueDepth,
+		"processed":   status.ProcessedCount,
 	})
 }

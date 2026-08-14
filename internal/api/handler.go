@@ -24,8 +24,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
@@ -145,13 +145,13 @@ type Handler struct {
 	// Close waits on mergeWg so in-flight merges finish (or observe ctx cancel)
 	// before the caller (App.Stop / a test's t.TempDir cleanup) tears down the
 	// storage tree — prevents the TempDir "directory not empty" flake (#143/#125).
-	mergeMu     sync.Mutex
-	mergeCtx    context.Context    // set by initMergeCtx; nil ⇒ fall back to context.Background()
-	mergeCancel context.CancelFunc // set by initMergeCtx
-	mergeWg     sync.WaitGroup
-	isClosed    bool // guarded by mergeMu; prevents new merges after Close
-	aiHandler   *AIHandler
-	relayMgr    *relay.Manager
+	mergeMu           sync.Mutex
+	mergeCtx          context.Context    // set by initMergeCtx; nil ⇒ fall back to context.Background()
+	mergeCancel       context.CancelFunc // set by initMergeCtx
+	mergeWg           sync.WaitGroup
+	isClosed          bool // guarded by mergeMu; prevents new merges after Close
+	aiHandler         *AIHandler
+	relayMgr          *relay.Manager
 	visionCoordinator *vision.Coordinator
 	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
 	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
