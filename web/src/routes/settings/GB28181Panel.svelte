@@ -21,7 +21,10 @@
   let sipListen = $state(':5060');
   let serverId = $state('');
   let realm = $state('34020000002000000001');
+  // The API never returns the password (password_configured only), so this
+  // field stays blank on load; leaving it blank keeps the current password.
   let password = $state('');
+  let passwordConfigured = $state(false);
   let portRange = $state('30000-30050');
   let heartbeatInterval = $state('60s');
   let catalogInterval = $state('30m');
@@ -82,7 +85,8 @@
       sipListen = cfg?.sip_listen ?? ':5060';
       serverId = cfg?.server_id ?? '';
       realm = cfg?.realm ?? '34020000002000000001';
-      password = cfg?.password ?? '';
+      password = '';
+      passwordConfigured = cfg?.password_configured ?? false;
       portRange = cfg?.port_range ?? '30000-30050';
       heartbeatInterval = cfg?.heartbeat_interval ?? '60s';
       catalogInterval = cfg?.catalog_interval ?? '30m';
@@ -279,8 +283,11 @@
               type="password"
               bind:value={password}
               autocomplete="new-password"
+              placeholder={passwordConfigured ? '********' : ''}
             />
-            <p class="text-xs th-text-tertiary mt-1">{t('settings.gb28181.passwordHint')}</p>
+            <p class="text-xs th-text-tertiary mt-1">
+              {passwordConfigured ? t('settings.gb28181.passwordConfigured') : t('settings.gb28181.passwordHint')}
+            </p>
           </div>
 
           <!-- RTP port range -->

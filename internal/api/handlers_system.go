@@ -401,17 +401,19 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"listen": h.config.Server.Listen,
 		},
 		"gb28181": map[string]any{
-			"enabled":            h.config.GB28181.Enabled,
-			"sip_listen":         h.config.GB28181.SIPListen,
-			"server_id":          h.config.GB28181.ServerID,
-			"realm":              h.config.GB28181.Realm,
-			"password":           h.config.GB28181.Password,
-			"port_range":         h.config.GB28181.PortRange,
-			"allowed_device_ids": h.config.GB28181.AllowedDeviceIDs,
-			"heartbeat_interval": h.config.GB28181.HeartbeatInterval,
-			"catalog_interval":   h.config.GB28181.CatalogInterval,
-			"tcp_mode":           h.config.GB28181.TCPMode,
-			"tcp_framing":        h.config.GB28181.TCPFraming,
+			"enabled":    h.config.GB28181.Enabled,
+			"sip_listen": h.config.GB28181.SIPListen,
+			"server_id":  h.config.GB28181.ServerID,
+			"realm":      h.config.GB28181.Realm,
+			// Never return the SIP password (mirrors the masked auth/API-key
+			// fields above); the frontend only needs whether one is set.
+			"password_configured": h.config.GB28181.Password != "",
+			"port_range":          h.config.GB28181.PortRange,
+			"allowed_device_ids":  h.config.GB28181.AllowedDeviceIDs,
+			"heartbeat_interval":  h.config.GB28181.HeartbeatInterval,
+			"catalog_interval":    h.config.GB28181.CatalogInterval,
+			"tcp_mode":            h.config.GB28181.TCPMode,
+			"tcp_framing":         h.config.GB28181.TCPFraming,
 		},
 	})
 }
@@ -573,7 +575,11 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			h.config.GB28181.Realm = *body.GB28181.Realm
 		}
 		if body.GB28181.Password != nil {
-			h.config.GB28181.Password = *body.GB28181.Password
+			// Blank password = keep current (the GET no longer returns the
+			// password, so the UI round-trips an empty field when unchanged).
+			if trimmed := strings.TrimSpace(*body.GB28181.Password); trimmed != "" {
+				h.config.GB28181.Password = trimmed
+			}
 		}
 		if body.GB28181.PortRange != nil {
 			h.config.GB28181.PortRange = *body.GB28181.PortRange
@@ -920,6 +926,16 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Encodings:    []string{"h264"},
 			BuiltIn:      true,
 			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
+		{
+			ID:        "gb28181",
+			Label:     "GB28181",
+			Encodings: []string{"h264", "h265"},
+			BuiltIn:   true,
+			// GB/T 28181 devices register via SIP (server-side digest auth in
+			// Settings — no per-camera credentials); PTZ rides the standard
+			// camera PTZ endpoints which dispatch to DeviceControl.
+			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": false, "auth": false},
 		},
 	}
 

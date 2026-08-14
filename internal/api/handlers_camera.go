@@ -73,6 +73,10 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.DarkFrameThreshold = cam.DarkFrameThreshold
 		row.RecordingEnabled = cam.RecordingEnabled
 		row.RecordingSchedule = cam.RecordingSchedule
+		if cam.Protocol == "gb28181" {
+			gb := cam.GB28181
+			row.GB28181 = &gb
+		}
 		return
 	}
 }
@@ -220,6 +224,31 @@ var validProtocols = map[string]bool{
 	// Plugin protocols
 	"xiaomi":    true,
 	"timelapse": true,
+	// GB/T 28181 SIP-registered devices (no URL — identified by DeviceID/ChannelID)
+	"gb28181": true,
+}
+
+// gb28181ChannelPayload is the API shape of a camera's GB28181 binding.
+type gb28181ChannelPayload struct {
+	DeviceID     string `json:"device_id"`
+	ChannelID    string `json:"channel_id"`
+	Manufacturer string `json:"manufacturer,omitempty"`
+}
+
+func (p *gb28181ChannelPayload) toConfig() config.GB28181ChannelConfig {
+	return config.GB28181ChannelConfig{
+		DeviceID:     p.DeviceID,
+		ChannelID:    p.ChannelID,
+		Manufacturer: p.Manufacturer,
+	}
+}
+
+func (p *gb28181ChannelPayload) toConfigPtr() *config.GB28181ChannelConfig {
+	if p == nil {
+		return nil
+	}
+	cfg := p.toConfig()
+	return &cfg
 }
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
@@ -254,6 +283,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		// IP self-healing: stable hardware ID (ONVIF serial) + candidate subnets.
 		StableID    string   `json:"stable_id"`
 		SubnetHints []string `json:"subnet_hints"`
+		// GB28181 SIP device/channel binding (protocol "gb28181")
+		GB28181 *gb28181ChannelPayload `json:"gb28181"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -263,16 +294,24 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if isGBCamera := body.Protocol == "gb28181"; isGBCamera {
+		if body.GB28181 == nil || strings.TrimSpace(body.GB28181.DeviceID) == "" || strings.TrimSpace(body.GB28181.ChannelID) == "" {
+			WriteError(w, http.StatusBadRequest, "gb28181 device_id and channel_id are required for gb28181 cameras")
+			return
+		}
+	}
 	if body.Protocol == "" {
 		WriteError(w, http.StatusBadRequest, "protocol is required")
 		return
 	}
 	if !validProtocols[body.Protocol] {
-		WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, xiaomi, timelapse", body.Protocol))
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, xiaomi, timelapse, gb28181", body.Protocol))
 		return
 	}
 	// Push/ingest cameras (srt/rtmp): no URL — the publisher connects to us.
 	isPush := body.Protocol == "srt" || body.Protocol == "rtmp"
+	// GB28181 cameras: no URL — identified by SIP DeviceID/ChannelID.
+	isGB28181 := body.Protocol == "gb28181"
 	// ONVIF cameras: accept url OR onvif_endpoint
 	if body.Protocol == "onvif" {
 		endpoint := body.ONVIFEndpoint
@@ -295,12 +334,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-	} else if !isPush && body.URL == "" {
+	} else if !isPush && !isGB28181 && body.URL == "" {
 		WriteError(w, http.StatusBadRequest, "url is required")
 		return
 	}
-	// Validate URL format for cameras that have one (not ONVIF, not push)
-	if body.Protocol != "onvif" && !isPush && body.URL != "" && !validateURL(body.URL) {
+	// Validate URL format for cameras that have one (not ONVIF, not push, not gb28181)
+	if body.Protocol != "onvif" && !isPush && !isGB28181 && body.URL != "" && !validateURL(body.URL) {
 		WriteError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
@@ -321,6 +360,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			enc = "jpeg"
 		case "srt", "rtmp":
 			// Push cameras: encoding derived from the published stream (H.264 default).
+			enc = "h264"
+		case "gb28181":
+			// Hint only — the recorder detects the real codec from PS stream NALUs.
 			enc = "h264"
 		case "onvif":
 			// Auto-detect encoding from ONVIF device profiles
@@ -357,6 +399,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		PushRetentionDays: body.PushRetentionDays,
 		StableID:          body.StableID,
 		SubnetHints:       body.SubnetHints,
+	}
+	if body.GB28181 != nil {
+		cam.GB28181 = body.GB28181.toConfig()
 	}
 
 	// Reject a dirty stable_id at the API boundary so it can't be frozen as the
@@ -544,6 +589,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// IP self-healing: stable hardware ID (ONVIF serial) + candidate subnets.
 		StableID    *string   `json:"stable_id"`
 		SubnetHints *[]string `json:"subnet_hints"`
+		// GB28181 SIP device/channel binding
+		GB28181 *gb28181ChannelPayload `json:"gb28181"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -608,6 +655,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		SRTStreamID:            body.SRTStreamID,
 		PushTargets:            body.PushTargets,
 		PushRetentionDays:      body.PushRetentionDays,
+		GB28181:                body.GB28181.toConfigPtr(),
 	}
 
 	// Validate URL format if URL is being updated (skip for ONVIF and push cameras).
@@ -616,7 +664,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		if body.Protocol != nil {
 			proto = *body.Protocol
 		}
-		if proto != "onvif" && proto != "srt" && proto != "rtmp" {
+		if proto != "onvif" && proto != "srt" && proto != "rtmp" && proto != "gb28181" {
 			if !validateURL(*body.URL) {
 				WriteError(w, http.StatusBadRequest, "invalid URL format")
 				return

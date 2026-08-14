@@ -230,7 +230,9 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleByeChannel stops a channel's media session (BYE).
+// handleByeChannel stops a channel's media session: transmits a SIP BYE to
+// the device, tears down the local receiver, and flips the bound camera's
+// recorder back to Reconnecting. Requires the SIP server (bye sender).
 func (h *Handler) handleByeChannel(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 
@@ -239,19 +241,16 @@ func (h *Handler) handleByeChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.gb28181SessionMgr == nil {
-		WriteError(w, http.StatusServiceUnavailable, "GB28181 session manager not available")
+	if h.gb28181Bye == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 BYE not available")
 		return
 	}
 
-	// Stop the session
-	if err := h.gb28181SessionMgr.Bye(channelID); err != nil {
+	if err := h.gb28181Bye.ByeChannelByID(channelID); err != nil {
 		slog.Error("failed to stop GB28181 session", "channel_id", channelID, "error", err)
 		WriteError(w, http.StatusInternalServerError, "failed to stop session")
 		return
 	}
-
-	slog.Info("GB28181 channel session stopped", "channel_id", channelID)
 
 	slog.Info("GB28181 channel session stopped", "channel_id", channelID)
 
@@ -319,8 +318,8 @@ func (h *Handler) handlePTZChannel(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleChannelRecords returns device-side recording index for a time range.
-// Queries the device via SIP MESSAGE RecordInfo; returns the recorded-segment
-// list or an empty list when the device has no recordings for the range.
+// NOT IMPLEMENTED: the RecordInfo query + response correlation is not wired
+// yet. Returns 501 so callers don't mistake an empty list for "no recordings".
 func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
@@ -333,12 +332,7 @@ func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "start and end query params are required")
 		return
 	}
-	// RecordInfo query requires the SIP server + session manager wiring.
-	// When unavailable, return an empty list (device has no recordings).
-	writeJSON(w, http.StatusOK, map[string]any{
-		"records":    []any{},
-		"channel_id": channelID,
-	})
+	WriteError(w, http.StatusNotImplemented, "device-side record listing is not implemented")
 }
 
 // handleChannelPlayback starts a playback session for a time range.
@@ -362,13 +356,6 @@ func (h *Handler) handleChannelPlayback(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusBadRequest, "start and end are required")
 		return
 	}
-	if h.gb28181SessionMgr == nil {
-		WriteError(w, http.StatusServiceUnavailable, "GB28181 session manager not available")
-		return
-	}
 	slog.Info("GB28181 channel playback requested", "channel_id", channelID, "start", req.Start, "end", req.End)
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":     "playback_requested",
-		"channel_id": channelID,
-	})
+	WriteError(w, http.StatusNotImplemented, "device-side playback is not implemented")
 }

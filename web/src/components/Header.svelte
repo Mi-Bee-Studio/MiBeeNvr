@@ -3,7 +3,6 @@
   import { t } from '$lib/i18n';
   import { logout, getSettings, getUpdateStatus } from '$lib/api';
   import { getMiBeeVisionConnected, refreshMiBeeVisionStatus } from '$lib/mibeevision-status';
-  import { getGB28181Enabled, refreshGB28181Status } from '$lib/gb28181-status';
   import { getEffectiveTheme } from '$lib/preferences';
   import LanguageSwitcher from './LanguageSwitcher.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
@@ -23,9 +22,6 @@
 
   // MiBeeVision connection status (shared reactive store)
   let miBeeVisionConnected = $derived(getMiBeeVisionConnected());
-
-  // GB28181 server enabled state (shared reactive store)
-  let gb28181Enabled = $derived(getGB28181Enabled());
 
   // Version-check badge: a subtle dot on the Settings link when an update is
   // available. Polled once on mount + on focus (cheap; backend caches + uses
@@ -74,9 +70,6 @@
     // Check MiBeeVision API key status
     void refreshMiBeeVisionStatus();
 
-    // Check GB28181 server status
-    void refreshGB28181Status();
-
     // Version-check badge (re-check on tab focus + every 90 min).
     void refreshUpdateBadge();
     const focusHandler = () => void refreshUpdateBadge();
@@ -98,7 +91,6 @@
     { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
     ...(miBeeVisionConnected ? [{ href: '#/ai-events', labelKey: 'nav.aiEvents', route: '/ai-events' }] : []),
-    ...(gb28181Enabled ? [{ href: '#/gb28181-devices', labelKey: 'nav.gb28181Devices', route: '/gb28181-devices' }] : []),
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
   ]);

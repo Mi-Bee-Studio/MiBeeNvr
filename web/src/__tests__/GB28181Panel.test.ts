@@ -45,7 +45,7 @@ const sampleConfig: SettingsConfig = {
     sip_listen: ':5060',
     server_id: '34020000002000000001',
     realm: '34020000002000000001',
-    password: 'secret123',
+    password_configured: true,
     port_range: '30000-30050',
     heartbeat_interval: '60s',
     catalog_interval: '30m',
@@ -94,7 +94,7 @@ describe('GB28181Panel', () => {
     expect(realm.value).toBe('34020000002000000001');
 
     const password = container.querySelector('#gb28181-password') as HTMLInputElement;
-    expect(password.value).toBe('secret123');
+    expect(password.value).toBe('');
 
     const portRange = container.querySelector('#gb28181-port-range') as HTMLInputElement;
     expect(portRange.value).toBe('30000-30050');
@@ -144,7 +144,7 @@ describe('GB28181Panel', () => {
       sip_listen: ':5060',
       server_id: '34020000002000000001',
       realm: '34020000002000000001',
-      password: 'secret123',
+      password: '',
       port_range: '30000-30050',
       heartbeat_interval: '60s',
       catalog_interval: '30m',

@@ -88,6 +88,10 @@ func (c *sipClient) localPort() int {
 // skipping provisional responses such as 100 Trying.
 func (c *sipClient) roundTrip(req sip.Request) sip.Response {
 	c.t.Helper()
+	callID := ""
+	if id, ok := req.CallID(); ok {
+		callID = id.String()
+	}
 	if _, err := c.conn.WriteToUDP([]byte(req.String()), c.addr); err != nil {
 		c.t.Fatalf("roundTrip: write: %v", err)
 	}
@@ -104,9 +108,17 @@ func (c *sipClient) roundTrip(req sip.Request) sip.Response {
 		if err != nil {
 			c.t.Fatalf("roundTrip: parse response: %v", err)
 		}
+		// Skip unsolicited server-initiated requests (e.g. the catalog query
+		// sent right after a successful REGISTER) — they are not responses.
 		res, ok := msg.(sip.Response)
 		if !ok {
-			c.t.Fatalf("roundTrip: expected response, got %T", msg)
+			continue
+		}
+		// Match by CallID so late responses to earlier requests are ignored.
+		if callID != "" {
+			if rc, ok := res.CallID(); !ok || rc.String() != callID {
+				continue
+			}
 		}
 		if res.StatusCode() >= 200 {
 			return res

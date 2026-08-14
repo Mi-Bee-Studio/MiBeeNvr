@@ -368,7 +368,15 @@ func registerServices(a *App, deps *appDeps) error {
 				return nil
 			},
 			stopFunc: func() error {
+				// BYE active dialogs FIRST (while the SIP stack is still up)
+				// so single-stream devices release their dialog, resume
+				// re-registering, and stop streaming into recycled ports.
+				deps.gb28181Server.ByeAllSessions()
 				_ = deps.gb28181Server.Stop()
+				// Reap all media sessions (UDP sockets, receiver goroutines,
+				// port pool) before process exit — the SIP stack alone does
+				// not own them.
+				deps.gb28181SessionMgr.StopAll()
 				return nil
 			},
 		}); err != nil {

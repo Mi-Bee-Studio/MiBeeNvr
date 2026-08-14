@@ -565,6 +565,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			if err := db.MarkDeviceOffline(context.Background(), id); err != nil {
 				slog.Warn("gb28181: failed to mark device offline in DB", "device", id, "error", err)
 			}
+			// Tear down the device's media sessions and flip its cameras'
+			// recorders to Reconnecting (they recover on the next re-REGISTER).
+			deps.gb28181Server.OnDeviceOffline(id)
 		})
 		deps.gb28181SessionMgr = newGB28181SessionManager(cfg.GB28181)
 		deps.gb28181Server = sip.NewServer(cfg.GB28181, deps.gb28181DevMgr, deps.gb28181SessionMgr, deps.db)
@@ -658,6 +661,11 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		handler.SetGB28181PTZ(gb28181.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Catalog(gb28181.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
+		handler.SetGB28181ByeSender(deps.gb28181Server)
+		// Auto-create cameras when GB28181 devices register, matching ONVIF auto-add.
+		deps.gb28181Server.SetCameraEnroller(camMgr)
+		// Auto-INVITE when GB28181 recorders start (pull media on camera creation).
+		camMgr.SetGB28181Inviter(deps.gb28181Server)
 	}
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

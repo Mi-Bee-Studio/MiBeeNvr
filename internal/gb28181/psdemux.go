@@ -37,11 +37,20 @@ const (
 
 // PSDemuxer extracts NALUs from complete MPEG-PS access unit byte streams.
 // It is Stage 2 of the two-stage pipeline (Stage 1 = RTP reassembly).
+//
+// Video handling: a frame's Annex-B elementary stream is CONTINUOUS across
+// PES packets — PES_packet_length is 16-bit, so devices MUST split frames
+// larger than 64KB (and many split at ~14KB regardless). NALUs may therefore
+// straddle PES boundaries; extracting per-PES corrupted exactly those frames
+// (every large I-frame). Video PES payloads are accumulated into esBuf and
+// NALUs are extracted once per FeedAU call — the RTP marker bit defines the
+// access-unit boundary upstream.
 type PSDemuxer struct {
 	streamType  byte   // 0x1B=H.264, 0x24=H.265, 0=unknown
 	naluType    string // "h264" or "h265"
 	buf         []byte // residual buffer for incomplete PS structure
-	videoPesBuf []byte // buffer for assembling video PES payload
+	videoPesBuf []byte // buffer for assembling an incomplete video PES (across RTP AUs)
+	esBuf       []byte // continuous video elementary stream within the current AU
 	currentPTS  int64  // PTS for current PES (90kHz clock)
 }
 
@@ -50,10 +59,14 @@ func NewPSDemuxer() *PSDemuxer {
 	return &PSDemuxer{}
 }
 
-// FeedAU processes a complete access unit PS byte stream and returns extracted NALUs.
-// The auPayload must be a complete PS packet (Stage 1 already reassembled it).
-// NALUs are returned with Annex-B start codes stripped.
-func (d *PSDemuxer) FeedAU(auPayload []byte, ptsTicks int64) ([][]byte, error) {
+// FeedAU processes one access unit PS byte stream and returns extracted
+// NALUs. auPayload is the PS data reassembled by Stage 1; complete marks
+// whether it ends on a real access-unit boundary (RTP marker). When complete
+// is false (a mid-AU jitter-buffer overflow flush), extracted NALUs cannot
+// be trusted to be whole — payloads are only accumulated and the caller
+// receives nothing until the AU completes. NALUs are returned with Annex-B
+// start codes stripped.
+func (d *PSDemuxer) FeedAU(auPayload []byte, ptsTicks int64, complete bool) ([][]byte, error) {
 	if len(auPayload) == 0 {
 		return nil, nil
 	}
@@ -163,23 +176,21 @@ feedLoop:
 					offset = startCodePos + 6 + pesLen
 				}
 			} else if startCode >= startCodeVideoMin && startCode <= startCodeVideoMax {
-				// Video PES - extract NALUs
+				// Video PES - accumulate payload into the continuous ES buffer.
 				pesData := data[startCodePos:]
 				pesPayload, pesEnd, err := parseVideoPES(pesData)
-				if err != nil {
-					// Incomplete PES - keep buffering for the next call
-					d.videoPesBuf = append(d.videoPesBuf, pesData...)
+				if err != nil || pesEnd > len(pesData) {
+					// Incomplete PES (AU split across RTP packets or a
+					// mid-AU flush). REPLACE the reassembly buffer with the
+					// PES-so-far slice — data already starts with the
+					// previously buffered bytes (prepended below), so
+					// appending would duplicate them.
+					d.videoPesBuf = append([]byte(nil), pesData...)
 					break feedLoop
 				}
-				if pesEnd > len(pesData) {
-					// Incomplete - buffer for the next call
-					d.videoPesBuf = append(d.videoPesBuf, pesData...)
-					break feedLoop
-				}
-				// Extract NALUs from the PES payload
 				if len(pesPayload) > 0 {
 					d.currentPTS = ptsTicks
-					nalus = append(nalus, extractNALUs(pesPayload, d.naluType)...)
+					d.esBuf = append(d.esBuf, pesPayload...)
 				}
 				// Advance past the PES
 				offset = startCodePos + pesEnd
@@ -190,6 +201,14 @@ feedLoop:
 		}
 	}
 
+	// Extract NALUs from the accumulated elementary stream only on a real AU
+	// boundary (RTP marker): the trailing NALU ends exactly there. Mid-AU
+	// flushes keep accumulating — emitting a truncated trailing NALU would
+	// corrupt the frame and desync the stream.
+	if complete && len(d.esBuf) > 0 {
+		nalus = append(nalus, extractNALUs(d.esBuf, d.naluType)...)
+		d.esBuf = nil
+	}
 	return nalus, nil
 }
 
@@ -197,12 +216,20 @@ feedLoop:
 func (d *PSDemuxer) Flush() [][]byte {
 	var nalus [][]byte
 
+	// Extract from the residual elementary stream first.
+	if len(d.esBuf) > 0 {
+		nalus = append(nalus, extractNALUs(d.esBuf, d.naluType)...)
+		d.esBuf = nil
+	}
+
 	// Process any buffered video PES data
 	if len(d.videoPesBuf) > 0 {
 		// Strip the PES header so payload NALUs are extracted cleanly.
 		payload := d.videoPesBuf
-		if len(payload) >= 8 {
-			headerLen := 8 + int(payload[7])
+		// Standard PES header: flags (2) + PES_header_data_length (1) at
+		// bytes 6-8, payload at 9 + header_data_length.
+		if len(payload) >= 9 {
+			headerLen := 9 + int(payload[8])
 			if headerLen <= len(payload) {
 				payload = payload[headerLen:]
 			}

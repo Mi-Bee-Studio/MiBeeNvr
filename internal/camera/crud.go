@@ -491,6 +491,10 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.Channel != nil && *updates.Channel != cam.Channel {
 		needsRestart = true
 	}
+	if updates.GB28181 != nil &&
+		(updates.GB28181.DeviceID != cam.GB28181.DeviceID || updates.GB28181.ChannelID != cam.GB28181.ChannelID) {
+		needsRestart = true
+	}
 
 	// Apply updates
 	if updates.Name != nil {
@@ -548,6 +552,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	}
 	if updates.Channel != nil {
 		cam.Channel = *updates.Channel
+	}
+	if updates.GB28181 != nil {
+		cam.GB28181 = *updates.GB28181
 	}
 	if updates.AudioEnabled != nil {
 		cam.AudioEnabled = *updates.AudioEnabled

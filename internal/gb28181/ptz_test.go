@@ -57,7 +57,7 @@ func TestPTZ_CommandBytes_UnknownDirection(t *testing.T) {
 func TestPTZ_CommandString(t *testing.T) {
 	cmd, err := BuildPTZCommand(DirUp, 0x20)
 	require.NoError(t, err)
-	require.Equal(t, "A5 0F 01 08 00 20 00 DD", ptzCmdString(cmd))
+	require.Equal(t, "A50F0108002000DD", ptzCmdString(cmd))
 }
 
 // fakeMessageSender records sent device/body pairs for assertions.
@@ -97,7 +97,7 @@ func TestPTZ_SendPTZ_Success(t *testing.T) {
 	require.Equal(t, "34020000001310000001", sender.deviceID)
 	require.Contains(t, sender.body, "<CmdType>DeviceControl</CmdType>")
 	require.Contains(t, sender.body, "<DeviceID>34020000001320000001</DeviceID>")
-	require.Contains(t, sender.body, "<PTZCmd>A5 0F 01 08 00 20 00 DD</PTZCmd>")
+	require.Contains(t, sender.body, "<PTZCmd>A50F0108002000DD</PTZCmd>")
 }
 
 func TestPTZ_SendPTZ_ChannelNotFound(t *testing.T) {

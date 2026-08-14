@@ -176,7 +176,18 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		if enc == "" {
 			enc = string(model.FormatH264)
 		}
-		rec = recorder.NewGB28181Recorder(cam.ID, enc, nil)
+		// Full recording pipeline: segments on disk, recordings DB rows,
+		// SegmentCompleted events, metrics — same guarantees as ingest cams.
+		rec = recorder.NewGB28181Recorder(recorder.GB28181Config{
+			CameraID:      cam.ID,
+			Encoding:      enc,
+			SegmentDur:    segDur,
+			Store:         cm.store,
+			DB:            cm.db,
+			Metrics:       cm.metrics,
+			EventBus:      cm.eventBus,
+			RecordEnabled: cam.RecordingEnabled == nil || *cam.RecordingEnabled,
+		}, nil)
 	case string(model.ProtoSRT), string(model.ProtoRTMP):
 		enc := cam.Encoding
 		if enc == "" {
@@ -413,6 +424,17 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	}
 	cm.healthMgr.OnCameraAdded(cam.ID, rec, overrides)
 	logger.Info("started recorder for camera", "camera_id", cam.ID)
+
+	// Auto-INVITE GB28181 cameras: the recorder is passive and needs the SIP
+	// server to send an INVITE before any RTP media flows. Run in a goroutine
+	// so the recorder start returns promptly (INVITE involves network I/O).
+	if cam.Protocol == string(model.ProtoGB28181) && cm.gb28181Inviter != nil {
+		go func() {
+			if err := cm.gb28181Inviter.InviteChannel(cam.GB28181.DeviceID, cam.GB28181.ChannelID); err != nil {
+				logger.Warn("gb28181: auto-INVITE failed", "camera_id", cam.ID, "error", err)
+			}
+		}()
+	}
 
 	// For ONVIF cameras without a valid stable_id yet, auto-populate it
 	// asynchronously so IP self-healing (internal/rediscovery) can later

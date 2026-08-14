@@ -1,6 +1,7 @@
 package gb28181
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -153,12 +154,10 @@ func (c *PTZController) SendPTZ(channelID, direction string, speed byte) error {
 	return nil
 }
 
-// ptzCmdString formats the 8-byte PTZ command as space-separated uppercase hex
-// (e.g. "A5 0F 01 08 00 20 00 DD"), the PTZCmd value GB/T 28181 devices expect.
+// ptzCmdString formats the 8-byte PTZ command as continuous uppercase hex
+// (e.g. "A50F0108002000DD") — the PTZCmd form mainstream GB/T 28181
+// implementations (wvp-pro, ZLMediaKit) emit and devices parse; some
+// firmwares reject the space-separated form.
 func ptzCmdString(cmd []byte) string {
-	parts := make([]string, len(cmd))
-	for i, b := range cmd {
-		parts[i] = fmt.Sprintf("%02X", b)
-	}
-	return strings.Join(parts, " ")
+	return strings.ToUpper(hex.EncodeToString(cmd))
 }

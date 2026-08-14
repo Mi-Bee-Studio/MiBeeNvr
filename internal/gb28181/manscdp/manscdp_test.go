@@ -154,7 +154,8 @@ func TestDecode_RoutesAllCmdTypes(t *testing.T) {
 func TestDecode_CharsetDeclaredGB2312UTF8Content(t *testing.T) {
 	// Real devices often declare encoding="GB2312" but actually send UTF-8.
 	data := []byte("<?xml version=\"1.0\" encoding=\"GB2312\"?>\n" +
-		"<Response CmdType=\"Catalog\" SN=\"1\">" +
+		"<Response>" +
+		"<CmdType>Catalog</CmdType><SN>1</SN>" +
 		"<DeviceID>34020000001310000001</DeviceID><SumNum>1</SumNum>" +
 		"<DeviceList Num=\"1\"><Item><DeviceID>34020000001320000001</DeviceID>" +
 		"<Name>通道一</Name><Status>ON</Status></Item></DeviceList></Response>")
@@ -165,7 +166,7 @@ func TestDecode_CharsetDeclaredGB2312UTF8Content(t *testing.T) {
 }
 
 func TestDecode_Malformed(t *testing.T) {
-	_, _, err := Decode([]byte("<Response CmdType=\"Catalog\"><Unclosed>"))
+	_, _, err := Decode([]byte("<Response><CmdType>Catalog</CmdType><Unclosed>"))
 	require.Error(t, err)
 
 	_, _, err = Decode([]byte("<Response><DeviceID>x</DeviceID></Response>"))
@@ -188,8 +189,40 @@ func TestCharsetDecode_GBK(t *testing.T) {
 }
 
 func TestSSRC(t *testing.T) {
-	assert.Equal(t, "020000001", SSRC(false, "34020000001320000001"), "live: 0 + last 8 digits")
-	assert.Equal(t, "120000001", SSRC(true, "34020000001320000001"), "playback: 1 + last 8 digits")
-	assert.Equal(t, "012345678", SSRC(false, "12345678"), "8-digit ID used as-is")
-	assert.Equal(t, "0123", SSRC(false, "123"), "short ID used as-is")
+	// GB/T 28181-2016 Annex C.2.4: 10 digits = [0=live|1=playback] +
+	// digits 4-8 of the platform ID + 4-digit sequence.
+	assert.Equal(t, "0200000001", SSRC(false, "34020000002000000001", 1), "live SSRC from 20-digit platform ID")
+	assert.Equal(t, "1200000042", SSRC(true, "34020000002000000001", 42), "playback SSRC")
+	assert.Equal(t, "0200009999", SSRC(false, "34020000002000000001", 19999), "sequence wraps mod 10000")
+	assert.Equal(t, "0000000007", SSRC(false, "", 7), "empty platform ID left-padded")
+	assert.Len(t, SSRC(false, "34020000002000000001", 1), 10, "SSRC must be exactly 10 digits")
+}
+
+// TestDecode_CatalogAttributeForm is a compatibility test: some real devices
+// (minimal firmwares) emit CmdType/SN as XML attributes instead of the
+// spec's child elements — the decoder must accept both.
+func TestDecode_CatalogAttributeForm(t *testing.T) {
+	data := []byte(`<Response CmdType="Catalog" SN="7">` +
+		`<DeviceID>34020000001310000001</DeviceID><SumNum>1</SumNum>` +
+		`<DeviceList Num="1"><Item><DeviceID>34020000001320000001</DeviceID>` +
+		`<Name>Front Gate</Name><Status>ON</Status></Item></DeviceList></Response>`)
+	ct, v, err := Decode(data)
+	require.NoError(t, err)
+	assert.Equal(t, CmdCatalog, ct)
+	cat := v.(Catalog)
+	assert.Equal(t, 7, cat.SN)
+	assert.Len(t, cat.Item, 1)
+	assert.Equal(t, "Front Gate", cat.Item[0].Name)
+}
+
+// TestDecode_KeepaliveAttributeForm covers the attribute form for keepalives.
+func TestDecode_KeepaliveAttributeForm(t *testing.T) {
+	data := []byte(`<Notify CmdType="Keepalive" SN="3">` +
+		`<DeviceID>34020000001310000001</DeviceID><Status>OK</Status></Notify>`)
+	ct, v, err := Decode(data)
+	require.NoError(t, err)
+	assert.Equal(t, CmdKeepalive, ct)
+	ka := v.(Keepalive)
+	assert.Equal(t, 3, ka.SN)
+	assert.Equal(t, "OK", ka.Status)
 }

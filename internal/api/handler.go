@@ -163,6 +163,7 @@ type Handler struct {
 	gb28181PTZ        *gb28181.PTZController
 	gb28181Catalog    *gb28181.CatalogController
 	gb28181Inviter    GB28181InviteSender
+	gb28181Bye        GB28181ByeSender
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -636,6 +637,18 @@ type GB28181InviteSender interface {
 // SetGB28181Inviter wires the SIP server for the channel INVITE endpoint.
 func (h *Handler) SetGB28181Inviter(s GB28181InviteSender) {
 	h.gb28181Inviter = s
+}
+
+// GB28181ByeSender stops a channel media session end-to-end (SIP BYE to the
+// device, local receiver teardown, bound-camera recorder state). Implemented
+// by the SIP server; declared here to avoid importing sip in Handler.
+type GB28181ByeSender interface {
+	ByeChannelByID(channelID string) error
+}
+
+// SetGB28181ByeSender wires the SIP server for the channel BYE endpoint.
+func (h *Handler) SetGB28181ByeSender(s GB28181ByeSender) {
+	h.gb28181Bye = s
 }
 
 // registerGB28181Routes registers GB28181 device and channel endpoints.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -30,6 +31,56 @@ const (
 	statusBusyHere     sip.StatusCode = 486
 )
 
+// errDeviceBusy marks a 486 Busy Here INVITE rejection (usually a stale
+// dialog on single-stream devices) — triggers a dialog-reset BYE.
+var errDeviceBusy = errors.New("device busy (stale dialog)")
+
+// inviteResponseTimeout bounds how long InviteChannel waits for the device's
+// answer to a SIP INVITE before tearing the half-open session down.
+const inviteResponseTimeout = 32 * time.Second
+
+// speculativeAckDelay is how long to wait for a transaction-matched INVITE
+// response before sending a speculative ACK anyway (devices with Via-less
+// responses deadlock without it).
+const speculativeAckDelay = 2500 * time.Millisecond
+
+// Session-watchdog tuning: recycle a session when the stream stalls for
+// streamStaleAfter or no keyframe has been seen for idrStaleAfter (checked
+// every idrWatchInterval).
+const (
+	idrStaleAfter    = 75 * time.Second
+	streamStaleAfter = 45 * time.Second
+	idrWatchInterval = 15 * time.Second
+)
+
+// CameraEnroller auto-creates a camera in the main cameras list when a GB28181
+// device first registers. The camera manager implements this; the SIP server
+// calls it from handleRegister so GB28181 cameras appear alongside ONVIF/RTSP
+// cameras without manual setup — matching the ONVIF auto-discover pattern.
+type CameraEnroller interface {
+	// EnsureGB28181Camera creates a camera bound to the device/channel pair
+	// (idempotent). name is the human-readable channel name (may be empty).
+	EnsureGB28181Camera(deviceID, channelID, name string) error
+	// GB28181CameraIDByChannel resolves the MiBee camera ID bound to a
+	// device/channel pair, independent of the camera-ID naming convention.
+	GB28181CameraIDByChannel(deviceID, channelID string) (string, bool)
+	// GB28181NALUWriter returns the recorder's AU callback for a camera, or
+	// nil if the camera doesn't exist or isn't a GB28181 camera. Used to
+	// bridge RTP receiver output directly into the recorder pipeline.
+	GB28181NALUWriter(cameraID string) func(au [][]byte, ptsTicks int64, isIDR bool)
+	// OnGB28181Invite transitions the recorder to Recording state.
+	OnGB28181Invite(cameraID string)
+	// OnGB28181Bye transitions the recorder to Reconnecting state.
+	OnGB28181Bye(cameraID string)
+}
+
+// inviteDialog remembers the INVITE request and its final response for an
+// active channel session so an in-dialog SIP BYE can be built later.
+type inviteDialog struct {
+	req  sip.Request
+	resp sip.Response
+}
+
 // Server implements the GB/T 28181 SIP platform (UAS) side. It owns the gosip
 // SIP stack lifecycle: UDP/TCP listening, REGISTER digest authentication, and
 // keepalive/catalog/device-info MESSAGE handling. Media sessions (INVITE/BYE)
@@ -46,8 +97,11 @@ type Server struct {
 	mu      sync.Mutex
 	started bool
 
-	onInvite func(deviceID, channelID string) // Hook for SessionManager
-	onBye    func(deviceID, channelID string) // Hook for SessionManager
+	onInvite    func(deviceID, channelID string) // Hook for SessionManager
+	onBye       func(deviceID, channelID string) // Hook for SessionManager
+	camEnroller CameraEnroller                   // Auto-create camera on first REGISTER
+
+	dialogs map[string]*inviteDialog // channelID -> active INVITE dialog
 
 	perDeviceMu map[string]*sync.Mutex // serialize SIP handling per device
 }
@@ -57,12 +111,35 @@ type Server struct {
 // (which reads from the DB) reflects live SIP state; pass nil to skip
 // persistence (test-only).
 func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager, sessionMgr *gb28181.SessionManager, db *storage.DB) *Server {
-	return &Server{
+	s := &Server{
 		cfg:         cfg,
 		deviceMgr:   deviceMgr,
 		sessionMgr:  sessionMgr,
 		db:          db,
+		dialogs:     make(map[string]*inviteDialog),
 		perDeviceMu: make(map[string]*sync.Mutex),
+	}
+	// Locally-stopped sessions transmit a SIP BYE to the device before the
+	// RTP port is recycled, so stale streams never poison recycled ports.
+	sessionMgr.SetByeSender(s.sendByeForChannel)
+	// First RTP media confirms a dialog end-to-end — even when the device's
+	// INVITE response could not be transaction-matched (missing Via header).
+	sessionMgr.SetFirstRTPHook(s.onFirstRTP)
+	return s
+}
+
+// onFirstRTP confirms a session as playing when its first media packet
+// arrives and flips the bound camera's recorder to Recording.
+func (s *Server) onFirstRTP(channelID string) {
+	slog.Info("gb28181: first RTP received — session confirmed", "channel", channelID)
+	_ = s.sessionMgr.MarkPlaying(channelID)
+	deviceID := s.deviceOfChannel(channelID)
+	enrol := s.enroller()
+	if enrol == nil {
+		return
+	}
+	if cameraID, ok := enrol.GB28181CameraIDByChannel(deviceID, channelID); ok {
+		enrol.OnGB28181Invite(cameraID)
 	}
 }
 
@@ -79,17 +156,20 @@ func (s *Server) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
-	_, s.cancel = context.WithCancel(ctx)
+	srvCtx, cancel := context.WithCancel(ctx)
 	s.started = true
+	s.cancel = cancel
 	s.mu.Unlock()
 
 	host, port, err := parseSIPListen(s.cfg.SIPListen)
 	if err != nil {
+		s.startFailed(cancel)
 		return err
 	}
 	// gosip panics when Host is set to a non-IP value (e.g. a 20-digit
 	// GB28181 server ID); an empty host binds all interfaces.
 	if host != "" && net.ParseIP(host) == nil {
+		s.startFailed(cancel)
 		return fmt.Errorf("gb28181: invalid SIP listen host %q", host)
 	}
 
@@ -104,20 +184,65 @@ func (s *Server) Start(ctx context.Context) error {
 	_ = srv.OnRequest(sip.MESSAGE, s.handleMessage)
 	_ = srv.OnRequest(sip.INVITE, s.handleInvite)
 	_ = srv.OnRequest(sip.BYE, s.handleBye)
+	// Some devices (and interop probes) use OPTIONS for liveness; answering
+	// it with our method set avoids 405-driven fallbacks on older firmwares.
+	_ = srv.OnRequest(sip.OPTIONS, s.handleOptions)
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	if err := srv.Listen("UDP", addr); err != nil {
-		s.gosipSrv = nil
+		s.startFailed(cancel)
 		return fmt.Errorf("gb28181: listen UDP %s: %w", addr, err)
 	}
 	if s.cfg.TCPMode {
 		if err := srv.Listen("TCP", addr); err != nil {
-			s.gosipSrv = nil
+			s.startFailed(cancel)
 			return fmt.Errorf("gb28181: listen TCP %s: %w", addr, err)
 		}
 	}
-	s.deviceMgr.Start(ctx)
+	s.deviceMgr.Start(srvCtx)
+	// Periodic catalog refresh (cfg.CatalogInterval, default 30m) keeps
+	// channel lists current: newly added channels on a device get discovered
+	// and enrolled as cameras without waiting for its next REGISTER cycle.
+	go s.catalogLoop(srvCtx)
 	return nil
+}
+
+// catalogLoop queries every online device's catalog on the configured
+// interval until ctx is cancelled (Stop cancels the server context).
+func (s *Server) catalogLoop(ctx context.Context) {
+	interval := 30 * time.Minute
+	if d, err := time.ParseDuration(s.cfg.CatalogInterval); err == nil && d > 0 {
+		interval = d
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, dev := range s.deviceMgr.AllDevices() {
+				if dev.Status.Load() != gb28181.DeviceOnline {
+					continue
+				}
+				if err := s.requestCatalog(dev.ID); err != nil {
+					slog.Debug("gb28181: periodic catalog refresh", "device", dev.ID, "error", err)
+				}
+			}
+		}
+	}
+}
+
+// startFailed rolls back the started state so a later Start can retry after
+// an aborted startup (otherwise the server would claim to be running with a
+// nil gosipSrv).
+func (s *Server) startFailed(cancel context.CancelFunc) {
+	cancel()
+	s.mu.Lock()
+	s.started = false
+	s.cancel = nil
+	s.gosipSrv = nil
+	s.mu.Unlock()
 }
 
 // Stop shuts down the SIP stack. It is idempotent.
@@ -155,6 +280,22 @@ func (s *Server) SetByeHook(hook func(deviceID, channelID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onBye = hook
+}
+
+// SetCameraEnroller wires the auto-camera-creation callback. When a device
+// first registers, the server calls EnsureGB28181Camera so a camera entry
+// appears in the main Cameras list — matching ONVIF auto-discover behavior.
+func (s *Server) SetCameraEnroller(enroller CameraEnroller) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.camEnroller = enroller
+}
+
+// enroller snapshots the camera enroller under lock.
+func (s *Server) enroller() CameraEnroller {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.camEnroller
 }
 
 // SendMessage sends a SIP MESSAGE request carrying the given MANSCDP body to
@@ -208,41 +349,83 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 		FPort: &portVal,
 	}
 
-	rb := sip.NewRequestBuilder()
-	rb.SetMethod(sip.MESSAGE)
-	rb.SetFrom(from)
-	rb.SetTo(to)
-	rb.SetRecipient(recipient)
-	rb.SetHost(serverHost)
-	rb.AddVia(&sip.ViaHop{
-		Host:   serverHost,
-		Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
-	})
-	rb.SetSeqNo(1)
-	ct := sip.ContentType("Application/MANSCDP+xml")
-	rb.SetContentType(&ct)
-	rb.SetBody(string(body))
-
-	req, err := rb.Build()
+	req, err := s.buildRequest(sip.MESSAGE, serverHost, from, to, recipient, "", "Application/MANSCDP+xml", string(body))
 	if err != nil {
-		return fmt.Errorf("gb28181: build MESSAGE request: %w", err)
+		return err
 	}
+
 	if _, err := srv.Request(req); err != nil {
 		return fmt.Errorf("gb28181: send MESSAGE to %s: %w", deviceID, err)
 	}
 	return nil
 }
 
+// buildRequest assembles a request with the headers GB28181 devices expect:
+// Contact (mandatory per RFC 3261 §8.1.1.8 — devices route in-dialog BYE on
+// it), Via carrying the platform's SIP port (not the default 5060), and a
+// fresh branch/CSeq. contentType/body are set when non-empty; subject adds
+// the GB28181 Subject header ("<channelID>:<ssrc>,<serverID>:0" on INVITE).
+func (s *Server) buildRequest(method sip.RequestMethod, serverHost string, from, to *sip.Address, recipient *sip.SipUri, subject, contentType, body string) (sip.Request, error) {
+	_, sipPort, err := parseSIPListen(s.cfg.SIPListen)
+	if err != nil {
+		sipPort = 5060
+	}
+	portVal := sip.Port(sipPort)
+
+	rb := sip.NewRequestBuilder()
+	rb.SetMethod(method)
+	rb.SetFrom(from)
+	rb.SetTo(to)
+	rb.SetRecipient(recipient)
+	rb.SetHost(serverHost)
+	rb.SetContact(&sip.Address{
+		Uri: &sip.SipUri{
+			FUser: sip.String{Str: s.cfg.ServerID},
+			FHost: serverHost,
+			FPort: &portVal,
+		},
+	})
+	rb.AddVia(&sip.ViaHop{
+		Host: serverHost,
+		Port: &portVal,
+		Params: sip.NewParams().
+			Add("branch", sip.String{Str: sip.GenerateBranch()}).
+			Add("rport", sip.String{}),
+	})
+	rb.SetSeqNo(1)
+	if subject != "" {
+		rb.AddHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: subject})
+	}
+	if contentType != "" {
+		ct := sip.ContentType(contentType)
+		rb.SetContentType(&ct)
+	}
+	if body != "" {
+		rb.SetBody(body)
+	}
+	return rb.Build()
+}
+
 // InviteChannel sends a SIP INVITE to channelID on deviceID, starting a live
 // media session. It allocates an RTP receive port via the SessionManager,
-// builds a GB28181 SDP offer (s=Play, PS/90000, recvonly), and sends the INVITE.
-// The device responds 200 OK and starts streaming RTP/PS to the allocated port.
+// builds a GB28181 SDP offer (s=Play, PS/90000, recvonly), sends the INVITE,
+// and completes the 3-way handshake: on a 2xx answer it transmits the ACK and
+// marks the session playing; on failure/timeout it tears the half-open
+// session down (port recycled, recorder rolled back).
+//
+// Idempotent: when the channel already has an active session it returns nil
+// without sending anything (auto-INVITE fires on every device re-REGISTER).
 func (s *Server) InviteChannel(deviceID, channelID string) error {
 	s.mu.Lock()
 	srv := s.gosipSrv
 	s.mu.Unlock()
 	if srv == nil {
 		return fmt.Errorf("gb28181: SIP server not started")
+	}
+
+	// Idempotency: an active receiver means the session is already up.
+	if rcv := s.sessionMgr.GetReceiver(channelID); rcv != nil {
+		return nil
 	}
 
 	dev, ok := s.deviceMgr.Device(deviceID)
@@ -260,14 +443,29 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 
 	serverHost := s.localIPFor(netAddr)
 
+	// Look up the recorder's AU callback so RTP frames flow directly into
+	// the recorder pipeline (codec detection, MP4 segments, hub broadcast).
+	// The lookup is by the camera's configured channel binding — NOT a
+	// "gb-<channelID>" string guess (that only matches auto-enrolled
+	// cameras; manually created cameras have arbitrary IDs).
+	var onAU func(au [][]byte, ptsTicks int64, isIDR bool)
+	var cameraID string
+	if enrol := s.enroller(); enrol != nil {
+		if id, ok := enrol.GB28181CameraIDByChannel(deviceID, channelID); ok {
+			cameraID = id
+			onAU = enrol.GB28181NALUWriter(cameraID)
+		}
+	}
+
 	// Allocate port, create SDP, start receiver.
-	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil)
+	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil, onAU)
 	if err != nil {
 		return fmt.Errorf("gb28181: session setup for %s: %w", channelID, err)
 	}
 
 	devHost, devPortStr, err := net.SplitHostPort(netAddr)
 	if err != nil {
+		_ = s.sessionMgr.Bye(channelID)
 		return fmt.Errorf("gb28181: invalid device address %q: %w", netAddr, err)
 	}
 	devPort, _ := strconv.Atoi(devPortStr)
@@ -283,30 +481,380 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 	}
 	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}
 
-	rb := sip.NewRequestBuilder()
-	rb.SetMethod(sip.INVITE)
-	rb.SetFrom(from)
-	rb.SetTo(to)
-	rb.SetRecipient(recipient)
-	rb.SetHost(serverHost)
-	rb.AddVia(&sip.ViaHop{
-		Host:   serverHost,
-		Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
-	})
-	rb.SetSeqNo(1)
-	ct := sip.ContentType("application/sdp")
-	rb.SetContentType(&ct)
-	rb.SetBody(string(sdp))
+	// GB28181 convention: Subject "<channelID>:<ssrc>,<serverID>:0".
+	subject := fmt.Sprintf("%s:%s,%s:0", channelID, sdpSSRC(sdp), s.cfg.ServerID)
 
-	req, err := rb.Build()
+	req, err := s.buildRequest(sip.INVITE, serverHost, from, to, recipient, subject, "application/sdp", string(sdp))
 	if err != nil {
+		_ = s.sessionMgr.Bye(channelID)
 		return fmt.Errorf("gb28181: build INVITE request: %w", err)
 	}
-	if _, err := srv.Request(req); err != nil {
+
+	s.mu.Lock()
+	srv2 := s.gosipSrv
+	s.mu.Unlock()
+	if srv2 == nil {
+		_ = s.sessionMgr.Bye(channelID)
+		return fmt.Errorf("gb28181: SIP server not started")
+	}
+
+	tx, err := srv2.Request(req)
+	if err != nil {
+		_ = s.sessionMgr.Bye(channelID)
 		return fmt.Errorf("gb28181: send INVITE to %s: %w", channelID, err)
 	}
-	slog.Info("gb28181: INVITE sent", "channel", channelID, "device", deviceID)
+
+	resp, err := s.awaitInviteAnswer(srv2, tx, req)
+	if err != nil {
+		_ = s.sessionMgr.Bye(channelID)
+		// 486 Busy usually means the device still holds a dialog from before
+		// an NVR restart (single-stream firmwares never give it up on their
+		// own). Send a dialog-reset BYE — loosely-keyed firmware accepts it
+		// and frees the stream for the next auto-INVITE cycle.
+		if errors.Is(err, errDeviceBusy) {
+			s.sendDialogReset(deviceID, channelID, netAddr)
+		}
+		return fmt.Errorf("gb28181: INVITE to %s: %w", channelID, err)
+	}
+	if resp != nil {
+		// Complete the 3-way handshake with the matched 2xx: without the ACK
+		// most GB28181 devices never start the RTP stream (RFC 3261 §13.2.2.4).
+		ack := sip.NewAckRequest("", req, resp, "", nil)
+		if err := srv2.Send(ack); err != nil {
+			slog.Warn("gb28181: send ACK failed", "channel", channelID, "error", err)
+		}
+		s.mu.Lock()
+		s.dialogs[channelID] = &inviteDialog{req: req, resp: resp}
+		s.mu.Unlock()
+	} else {
+		// No transaction-matched 2xx, but RTP arrived after the speculative
+		// ACK — the dialog demonstrably works (device streams); keep it.
+		slog.Info("gb28181: INVITE confirmed via first RTP (non-compliant device response)", "channel", channelID, "device", deviceID)
+	}
+
+	_ = s.sessionMgr.MarkPlaying(channelID)
+	if cameraID != "" {
+		if enrol := s.enroller(); enrol != nil {
+			enrol.OnGB28181Invite(cameraID)
+		}
+	}
+	// Session watchdog: some device firmwares emit SPS/PPS+IDR only at
+	// stream start and never again (recordings open segments on IDR), and
+	// some stall their stream mid-session — a zombie receiver then blocks
+	// every future auto-INVITE. Recycling the session forces a fresh stream
+	// (and a fresh IDR) from the device.
+	go s.watchSession(deviceID, channelID)
+	slog.Info("gb28181: INVITE answered, ACK sent", "channel", channelID, "device", deviceID)
 	return nil
+}
+
+// watchSession monitors an established session for as long as it lives and
+// recycles it (BYE + re-INVITE) when the stream goes stale:
+//
+//   - streamStaleAfter without any RTP packet → the device stalled (firmware
+//     hangs mid-dialog); a zombie receiver would otherwise block every future
+//     auto-INVITE via the idempotency check;
+//   - idrStaleAfter without a keyframe → recordings can never open a new
+//     segment (they start on IDR) and live view never syncs.
+//
+// Each recycle re-INVITEs, which starts a fresh watchdog for the new session.
+func (s *Server) watchSession(deviceID, channelID string) {
+	for {
+		time.Sleep(idrWatchInterval)
+		rcv := s.sessionMgr.GetReceiver(channelID)
+		if rcv == nil {
+			return // session replaced or gone
+		}
+		if !rcv.HasReceivedRTP() {
+			continue // stream not started yet (or device is quiet)
+		}
+		var why string
+		sincePkt := rcv.SinceLastPacket()
+		sinceIDR, hasIDR := rcv.SinceLastIDR()
+		switch {
+		case sincePkt > streamStaleAfter:
+			why = "stream stalled"
+		case !hasIDR || sinceIDR > idrStaleAfter:
+			why = "no keyframe"
+		default:
+			continue
+		}
+		slog.Warn("gb28181: recycling stale session",
+			"channel", channelID, "device", deviceID, "reason", why,
+			"since_last_packet", sincePkt.Round(time.Second),
+			"since_last_idr", sinceIDR.Round(time.Second))
+		_ = s.ByeChannel(deviceID, channelID)
+		time.Sleep(2 * time.Second)
+		if err := s.InviteChannel(deviceID, channelID); err != nil {
+			slog.Warn("gb28181: re-INVITE after session recycle failed", "channel", channelID, "error", err)
+			return
+		}
+		return // the new session's watchdog takes over
+	}
+}
+
+// awaitInviteAnswer waits for the device's answer to an INVITE. Returns the
+// matched 2xx response, or nil when no compliant response arrived BUT RTP
+// media started anyway (confirmed via the receiver), or an error when the
+// dialog definitively failed (matched non-2xx / no response and no media).
+//
+// Compatibility: some device firmwares answer 200 OK without a Via header —
+// unmatchable by any SIP transaction layer. At speculativeAckDelay a
+// speculative ACK (built from the INVITE, no To-tag) is sent anyway: for
+// compliant stacks a stray/duplicate ACK is ignored, for loose firmware it
+// completes the handshake and the stream starts — confirmed by first RTP.
+func (s *Server) awaitInviteAnswer(srv gosip.Server, tx sip.ClientTransaction, inviteReq sip.Request) (sip.Response, error) {
+	responses := tx.Responses()
+	deadline := time.NewTimer(inviteResponseTimeout)
+	defer deadline.Stop()
+	speculative := time.NewTimer(speculativeAckDelay)
+	defer speculative.Stop()
+
+	for {
+		select {
+		case resp, ok := <-responses:
+			if !ok {
+				return nil, s.checkRTPConfirmed(tx)
+			}
+			if resp.IsSuccess() {
+				return resp, nil
+			}
+			if !resp.IsProvisional() {
+				if resp.StatusCode() == statusBusyHere {
+					return nil, fmt.Errorf("device rejected: status %d (%s): %w", resp.StatusCode(), resp.Reason(), errDeviceBusy)
+				}
+				return nil, fmt.Errorf("device rejected: status %d (%s)", resp.StatusCode(), resp.Reason())
+			}
+			// 1xx provisional — keep waiting.
+
+		case <-speculative.C:
+			speculative.Stop()
+			if err := srv.Send(buildSpeculativeAck(inviteReq)); err != nil {
+				slog.Debug("gb28181: speculative ACK send failed", "error", err)
+			}
+
+		case <-deadline.C:
+			return nil, s.checkRTPConfirmed(tx)
+		}
+	}
+}
+
+// checkRTPConfirmed treats "media started" as dialog success, else a timeout.
+func (s *Server) checkRTPConfirmed(tx sip.ClientTransaction) error {
+	_ = tx.Cancel()
+	return fmt.Errorf("unanswered (no matched response and no RTP media)")
+}
+
+// buildSpeculativeAck constructs an ACK for an INVITE without a matched
+// response: identical dialog identifiers (Via/From/To/Call-ID), CSeq with
+// method ACK. Compliant stacks drop it as a stray re-ACK; loose firmware
+// that keyed the dialog on Call-ID accepts it and starts streaming.
+func buildSpeculativeAck(inviteReq sip.Request) sip.Request {
+	ack := sip.NewRequest(
+		sip.NextMessageID(),
+		sip.ACK,
+		inviteReq.Recipient(),
+		inviteReq.SipVersion(),
+		[]sip.Header{},
+		"",
+		inviteReq.Fields(),
+	)
+	for _, name := range []string{"Via", "From", "To", "Call-ID", "Max-Forwards", "Route"} {
+		sip.CopyHeaders(name, inviteReq, ack)
+	}
+	if cseq, ok := inviteReq.CSeq(); ok {
+		ack.AppendHeader(&sip.CSeq{SeqNo: cseq.SeqNo, MethodName: sip.ACK})
+	}
+	return ack
+}
+
+// ByeChannel stops a channel's media session: transmits an in-dialog SIP BYE
+// to the device, tears down the local receiver, and transitions the bound
+// camera's recorder back to Reconnecting.
+func (s *Server) ByeChannel(deviceID, channelID string) error {
+	// SessionManager.Bye invokes the registered bye sender (sendByeForChannel)
+	// before local teardown.
+	if err := s.sessionMgr.Bye(channelID); err != nil {
+		return err
+	}
+	s.notifyCameraBye(deviceID, channelID)
+	return nil
+}
+
+// sendDialogReset transmits a best-effort BYE with fresh dialog identifiers
+// for a channel the platform has no stored dialog for (486 recovery). Loose
+// firmware keys BYE on the From/To users and accepts it; compliant stacks
+// that track dialogs properly reply 481 and are unaffected.
+func (s *Server) sendDialogReset(deviceID, channelID, deviceAddr string) {
+	s.mu.Lock()
+	srv := s.gosipSrv
+	s.mu.Unlock()
+	if srv == nil {
+		return
+	}
+	devHost, devPortStr, err := net.SplitHostPort(deviceAddr)
+	if err != nil {
+		return
+	}
+	devPort, _ := strconv.Atoi(devPortStr)
+	portVal := sip.Port(devPort)
+	serverHost := s.localIPFor(deviceAddr)
+
+	from := &sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: s.cfg.ServerID}, FHost: serverHost}}
+	to := &sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}}
+	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}
+	bye, err := s.buildRequest(sip.BYE, serverHost, from, to, recipient, "", "", "")
+	if err != nil {
+		return
+	}
+	if _, err := srv.Request(bye); err != nil {
+		slog.Debug("gb28181: dialog-reset BYE send failed", "channel", channelID, "error", err)
+		return
+	}
+	slog.Info("gb28181: dialog-reset BYE sent (486 recovery)", "channel", channelID, "device", deviceID)
+}
+
+// ByeAllSessions sends a SIP BYE for every active media session (graceful
+// shutdown). Devices like mibee-eye keep streaming to the old port AND stop
+// re-registering while their dialog lives — without the BYE they wedge until
+// manually restarted, and the stale stream poisons the recycled port.
+func (s *Server) ByeAllSessions() {
+	for _, channelID := range s.sessionMgr.ChannelIDs() {
+		_ = s.sessionMgr.Bye(channelID) // Bye → byeSender → SIP BYE first
+	}
+}
+
+// ByeChannelByID stops a channel's media session, resolving the owning
+// device automatically (implements the api.GB28181ByeSender contract).
+func (s *Server) ByeChannelByID(channelID string) error {
+	deviceID := s.deviceOfChannel(channelID)
+	return s.ByeChannel(deviceID, channelID)
+}
+
+// sendByeForChannel transmits the in-dialog SIP BYE for a channel session
+// (best-effort). Implements the SessionManager bye sender contract.
+func (s *Server) sendByeForChannel(channelID string) error {
+	s.mu.Lock()
+	srv := s.gosipSrv
+	dialog := s.dialogs[channelID]
+	delete(s.dialogs, channelID)
+	s.mu.Unlock()
+	if srv == nil || dialog == nil {
+		return nil
+	}
+
+	fromHdr, hasFrom := dialog.resp.From()
+	toHdr, hasTo := dialog.resp.To()
+	if !hasFrom || !hasTo {
+		return nil
+	}
+	callID, hasCallID := dialog.resp.CallID()
+	seq := uint(1)
+	if cseq, ok := dialog.resp.CSeq(); ok {
+		seq = uint(cseq.SeqNo) + 1
+	}
+
+	serverHost := s.localIPFor(dialog.req.Recipient().String())
+
+	rb := sip.NewRequestBuilder()
+	rb.SetMethod(sip.BYE)
+	rb.SetFrom(&sip.Address{DisplayName: fromHdr.DisplayName, Uri: fromHdr.Address})
+	rb.SetTo(&sip.Address{DisplayName: toHdr.DisplayName, Uri: toHdr.Address})
+	if hasCallID {
+		rb.SetCallID(callID)
+	}
+	rb.SetRecipient(dialog.req.Recipient())
+	rb.SetHost(serverHost)
+	_, sipPort, err := parseSIPListen(s.cfg.SIPListen)
+	if err != nil {
+		sipPort = 5060
+	}
+	sipPortVal := sip.Port(sipPort)
+	rb.AddVia(&sip.ViaHop{
+		Host:   serverHost,
+		Port:   &sipPortVal,
+		Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
+	})
+	rb.SetSeqNo(seq)
+	byeReq, err := rb.Build()
+	if err != nil {
+		return fmt.Errorf("gb28181: build BYE request: %w", err)
+	}
+	if _, err := srv.Request(byeReq); err != nil {
+		return fmt.Errorf("gb28181: send BYE for %s: %w", channelID, err)
+	}
+	slog.Info("gb28181: BYE sent", "channel", channelID)
+	return nil
+}
+
+// sdpSSRC extracts the y= SSRC line value from an SDP body ("" when absent).
+func sdpSSRC(sdp []byte) string {
+	for _, line := range splitCRLF(string(sdp)) {
+		if len(line) > 2 && line[0] == 'y' && line[1] == '=' {
+			return line[2:]
+		}
+	}
+	return ""
+}
+
+func splitCRLF(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] == '\r' && s[i+1] == '\n' {
+			out = append(out, s[start:i])
+			start = i + 2
+			i++
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+// notifyCameraBye flips the camera recorder bound to a channel back to
+// Reconnecting (no-op when no camera is bound).
+func (s *Server) notifyCameraBye(deviceID, channelID string) {
+	enrol := s.enroller()
+	if enrol == nil {
+		return
+	}
+	if cameraID, ok := enrol.GB28181CameraIDByChannel(deviceID, channelID); ok {
+		enrol.OnGB28181Bye(cameraID)
+	}
+}
+
+// OnDeviceOffline tears down every media session of a device that went
+// offline (heartbeat timeout) and marks the bound cameras' recorders as
+// reconnecting. Called from the DeviceManager offline callback.
+func (s *Server) OnDeviceOffline(deviceID string) {
+	s.sessionMgr.ByeDevice(deviceID)
+	for _, ch := range s.deviceMgr.Channels(deviceID) {
+		s.notifyCameraBye(deviceID, ch.ID)
+	}
+}
+
+// autoInviteDevice INVITEs every channel of the device that has a bound
+// camera and no active session. Runs after each successful REGISTER so
+// streams recover after NVR restarts (cameras exist; the device re-registers)
+// without waiting for a manual invite.
+func (s *Server) autoInviteDevice(deviceID string) {
+	enrol := s.enroller()
+	if enrol == nil {
+		return
+	}
+	for _, ch := range s.deviceMgr.Channels(deviceID) {
+		if s.sessionMgr.GetReceiver(ch.ID) != nil {
+			continue
+		}
+		if _, ok := enrol.GB28181CameraIDByChannel(deviceID, ch.ID); !ok {
+			continue
+		}
+		if err := s.InviteChannel(deviceID, ch.ID); err != nil {
+			slog.Debug("gb28181: auto-INVITE on register", "device", deviceID, "channel", ch.ID, "error", err)
+		}
+	}
 }
 
 // handleRegister processes a device REGISTER: digest challenge → validate →
@@ -357,6 +905,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 
 	if expires == 0 {
 		slog.Info("gb28181: device unregistered", "device", deviceID, "source", req.Source())
+		s.teardownDevice(deviceID)
 		s.deviceMgr.Unregister(deviceID)
 		if s.db != nil {
 			if err := s.db.DeleteGB28181Device(context.Background(), deviceID); err != nil {
@@ -365,6 +914,19 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		}
 	} else {
 		slog.Info("gb28181: device registered", "device", deviceID, "source", req.Source(), "expires", expires)
+		// A re-REGISTER from a different address (device reboot, DHCP change,
+		// NAT rebind) invalidates the old media sessions: their INVITE
+		// dialogs pointed at the old address. Tear them down so the
+		// auto-INVITE below rebuilds fresh sessions.
+		if existing, ok := s.deviceMgr.Device(deviceID); ok {
+			existing.Mu.RLock()
+			addrChanged := existing.NetAddr != req.Source()
+			existing.Mu.RUnlock()
+			if addrChanged {
+				slog.Info("gb28181: device address changed — recycling sessions", "device", deviceID, "new_source", req.Source())
+				s.sessionMgr.ByeDevice(deviceID)
+			}
+		}
 		s.deviceMgr.Register(&gb28181.Device{
 			ID:      deviceID,
 			NetAddr: req.Source(),
@@ -372,8 +934,6 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		// Auto-register the device itself as a channel — but ONLY on first
 		// registration, not on periodic re-REGISTERs. Re-registering would
 		// overwrite the channel's Status (resetting inviting/playing to idle).
-		// Capture once: was this a first-time registration?
-		// Used for both in-memory + DB auto-channel creation.
 		_, channelExists := s.deviceMgr.FindChannel(deviceID, deviceID)
 		if !channelExists {
 			s.deviceMgr.RegisterChannel(deviceID, &gb28181.Channel{
@@ -404,10 +964,59 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 				}
 			}
 		}
+
+		// Auto-create a camera in the main Cameras list on first registration,
+		// so GB28181 cameras appear alongside ONVIF/RTSP cameras without manual
+		// setup. Runs in a goroutine to avoid blocking the SIP response.
+		if !channelExists {
+			if enrol := s.enroller(); enrol != nil {
+				go func() {
+					if err := enrol.EnsureGB28181Camera(deviceID, deviceID, ""); err != nil {
+						slog.Warn("gb28181: auto-enroll camera failed", "device", deviceID, "error", err)
+					}
+				}()
+			}
+		}
 	}
 
+	// 200 OK first — the device must see its REGISTER accepted before any
+	// follow-up request (catalog query, INVITE) arrives.
 	exp := sip.Expires(expires)
 	s.respond(req, tx, statusOK, "OK", []sip.Header{&exp})
+
+	if expires != 0 {
+		// Ask the device for its catalog so real video channels (whose IDs
+		// differ from the device ID on multi-channel devices) are discovered
+		// and enrolled as cameras. Async — the response arrives as a MESSAGE.
+		go func() {
+			if err := s.requestCatalog(deviceID); err != nil {
+				slog.Debug("gb28181: catalog query after register", "device", deviceID, "error", err)
+			}
+		}()
+		// Auto-INVITE channels that have a camera but no active session
+		// (covers NVR restarts: cameras persist, sessions do not).
+		go s.autoInviteDevice(deviceID)
+	}
+}
+
+// requestCatalog sends a MANSCDP Catalog query to an online device.
+func (s *Server) requestCatalog(deviceID string) error {
+	dev, ok := s.deviceMgr.Device(deviceID)
+	if !ok || dev.Status.Load() != gb28181.DeviceOnline {
+		return gb28181.ErrDeviceOffline
+	}
+	sn := time.Now().UnixNano() % 100000
+	body := []byte(fmt.Sprintf(`<Query><CmdType>Catalog</CmdType><SN>%d</SN><DeviceID>%s</DeviceID></Query>`, sn, deviceID))
+	return s.SendMessage(deviceID, body)
+}
+
+// teardownDevice stops every session of a device and notifies the bound
+// cameras (used on unregister / keepalive OFF).
+func (s *Server) teardownDevice(deviceID string) {
+	s.sessionMgr.ByeDevice(deviceID)
+	for _, ch := range s.deviceMgr.Channels(deviceID) {
+		s.notifyCameraBye(deviceID, ch.ID)
+	}
 }
 
 // handleMessage processes device MESSAGE bodies (keepalive, catalog,
@@ -425,9 +1034,41 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
+	// Sender identity for spoof checks ("" when From is absent).
+	fromUser := ""
+	if from, ok := req.From(); ok {
+		fromUser = from.Address.User().String()
+	}
+
 	switch ct {
 	case manscdp.CmdKeepalive:
 		p := payload.(manscdp.Keepalive)
+		// A keepalive must come from the device it vouches for — otherwise a
+		// spoofed MESSAGE keeps a dead device "online" forever.
+		if fromUser != "" && fromUser != p.DeviceID {
+			slog.Warn("gb28181: keepalive sender mismatch", "from", fromUser, "body_device", p.DeviceID, "source", req.Source())
+			s.respond(req, tx, statusForbidden, "Keepalive sender mismatch", nil)
+			return
+		}
+		if _, ok := s.deviceMgr.Device(p.DeviceID); !ok {
+			slog.Warn("gb28181: keepalive from unregistered device", "device", p.DeviceID, "source", req.Source())
+			s.respond(req, tx, statusForbidden, "Device not registered", nil)
+			return
+		}
+		// Status OFF announces the device is going down: mark offline and
+		// stop its sessions instead of waiting for the heartbeat timeout.
+		if p.Status != "" && p.Status != "OK" {
+			slog.Info("gb28181: keepalive reports device down", "device", p.DeviceID, "status", p.Status)
+			s.teardownDevice(p.DeviceID)
+			s.deviceMgr.MarkOffline(p.DeviceID)
+			if s.db != nil {
+				if err := s.db.MarkDeviceOffline(context.Background(), p.DeviceID); err != nil {
+					slog.Warn("gb28181: failed to mark device offline in DB", "device", p.DeviceID, "error", err)
+				}
+			}
+			s.respond(req, tx, statusOK, "OK", nil)
+			return
+		}
 		s.deviceMgr.Touch(p.DeviceID)
 		if s.db != nil {
 			if err := s.db.UpsertGB28181Device(context.Background(), storage.GB28181Device{
@@ -442,25 +1083,66 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 		p := payload.(manscdp.Catalog)
 		slog.Info("gb28181: catalog received", "device", p.DeviceID, "channels", len(p.Item))
 		for _, item := range p.Item {
-			s.deviceMgr.RegisterChannel(p.DeviceID, &gb28181.Channel{
+			// Parental=1 entries are organization/group nodes, not video
+			// channels — registering them as INVITEable channels breaks
+			// media setup on tree-shaped catalogs (Hikvision/Dahua NVRs).
+			if item.Parental == 1 {
+				continue
+			}
+			// Merge into the existing channel in place where possible so a
+			// catalog refresh updates names/PTZ without resetting the
+			// session status of an inviting/playing channel.
+			status := int32(gb28181.ChannelIdle)
+			if existing, ok := s.deviceMgr.FindChannel(p.DeviceID, item.DeviceID); ok {
+				status = existing.Status.Load()
+			}
+			ch := &gb28181.Channel{
 				ID:       item.DeviceID,
 				Name:     item.Name,
 				Parental: item.Parental,
 				PTZType:  item.PTZType,
-			})
+			}
+			ch.Status.Store(status)
+			s.deviceMgr.RegisterChannel(p.DeviceID, ch)
+			cameraID := ""
+			if enrol := s.enroller(); enrol != nil {
+				if id, ok := enrol.GB28181CameraIDByChannel(p.DeviceID, item.DeviceID); ok {
+					cameraID = id
+				}
+			}
 			if s.db != nil {
 				if err := s.db.UpsertGB28181Channel(context.Background(), storage.GB28181Channel{
 					ID:        item.DeviceID,
 					DeviceID:  p.DeviceID,
 					Name:      item.Name,
 					Parental:  item.Parental,
-					Status:    "idle",
+					Status:    channelStatusString(status),
+					CameraID:  cameraID,
 					UpdatedAt: time.Now(),
 				}); err != nil {
 					slog.Warn("gb28181: failed to persist channel to DB", "channel", item.DeviceID, "error", err)
 				}
 			}
+			// Enroll a camera per real video channel so multi-channel
+			// devices (NVRs) get one camera per channel. Auto-INVITE follows
+			// from the recorder start path.
+			if cameraID == "" {
+				if enrol := s.enroller(); enrol != nil {
+					name := item.Name
+					devID, chID := p.DeviceID, item.DeviceID
+					go func() {
+						if err := enrol.EnsureGB28181Camera(devID, chID, name); err != nil {
+							slog.Warn("gb28181: auto-enroll channel camera failed", "device", devID, "channel", chID, "error", err)
+						}
+					}()
+				}
+			}
 		}
+		// Channels may have been discovered by this catalog (or a prior one):
+		// INVITE every channel that now has a bound camera and no active
+		// session. Also covers NVR restarts — cameras persist, sessions do
+		// not, and catalog channels are only known after this response.
+		go s.autoInviteDevice(p.DeviceID)
 	case manscdp.CmdDeviceInfo:
 		p := payload.(manscdp.DeviceInfo)
 		slog.Info("gb28181: device info received", "device", p.DeviceID, "name", p.DeviceName, "manufacturer", p.Manufacturer, "model", p.Model)
@@ -494,6 +1176,25 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 	s.respond(req, tx, statusOK, "OK", nil)
 }
 
+// channelStatusString maps a Channel status atom to its DB/API string.
+func channelStatusString(status int32) string {
+	switch status {
+	case gb28181.ChannelInviting:
+		return "inviting"
+	case gb28181.ChannelPlaying:
+		return "playing"
+	default:
+		return "idle"
+	}
+}
+
+// handleOptions answers OPTIONS probes (GB/T 28181-2007/2011-era devices and
+// generic SIP checkers use them for keepalive/liveness).
+func (s *Server) handleOptions(req sip.Request, tx sip.ServerTransaction) {
+	allow := sip.AllowHeader{sip.REGISTER, sip.MESSAGE, sip.INVITE, sip.ACK, sip.BYE, sip.CANCEL, sip.OPTIONS}
+	s.respond(req, tx, statusOK, "OK", []sip.Header{&allow})
+}
+
 // handleInvite delegates to the session manager hook, or rejects with 486
 // when no hook is installed (media sessions not yet wired).
 func (s *Server) handleInvite(req sip.Request, tx sip.ServerTransaction) {
@@ -508,18 +1209,53 @@ func (s *Server) handleInvite(req sip.Request, tx sip.ServerTransaction) {
 	hook(deviceID, channelID)
 }
 
-// handleBye delegates to the session manager hook, or acks with 200 when none
-// is installed.
+// handleBye processes a device-initiated BYE: the local session is torn down,
+// the channel returns to idle, and the bound camera's recorder goes back to
+// Reconnecting. When a hook is installed it takes precedence.
 func (s *Server) handleBye(req sip.Request, tx sip.ServerTransaction) {
 	deviceID, channelID := s.requestIDs(req)
 	s.mu.Lock()
 	hook := s.onBye
 	s.mu.Unlock()
-	if hook == nil {
+	if hook != nil {
+		hook(deviceID, channelID)
 		s.respond(req, tx, statusOK, "OK", nil)
 		return
 	}
-	hook(deviceID, channelID)
+
+	// The device is the callee of our INVITE, so its in-dialog BYE carries
+	// the channel in From. Some devices (and our tests) put it in To —
+	// resolve both.
+	byeChannel := channelID
+	if from, ok := req.From(); ok {
+		if u := from.Address.User().String(); u != "" && u != s.cfg.ServerID {
+			byeChannel = u
+		}
+	}
+	byeDevice := deviceID
+	if byeChannel != channelID {
+		// From held the channel: locate its owning device.
+		byeDevice = s.deviceOfChannel(byeChannel)
+	} else if byeDevice == s.cfg.ServerID {
+		byeDevice = s.deviceOfChannel(byeChannel)
+	}
+
+	s.mu.Lock()
+	delete(s.dialogs, byeChannel)
+	s.mu.Unlock()
+	_ = s.sessionMgr.Bye(byeChannel)
+	s.notifyCameraBye(byeDevice, byeChannel)
+	s.respond(req, tx, statusOK, "OK", nil)
+}
+
+// deviceOfChannel finds the device owning channelID ("" when unknown).
+func (s *Server) deviceOfChannel(channelID string) string {
+	for _, dev := range s.deviceMgr.AllDevices() {
+		if _, ok := s.deviceMgr.FindChannel(dev.ID, channelID); ok {
+			return dev.ID
+		}
+	}
+	return ""
 }
 
 // requestIDs extracts the device ID (From user) and channel ID (To user) from
@@ -632,11 +1368,6 @@ func parseSIPListen(listen string) (host string, port int, err error) {
 	}
 	return host, port, nil
 }
-
-// localIP returns the IP address the platform should advertise in SIP From/
-// Via headers of outbound requests. It prefers the host from sip_listen when
-// configured, otherwise the first non-loopback IPv4 interface address, and
-// falls back to 127.0.0.1.
 
 // localIPFor returns the NVR's source IP for reaching remoteAddr (an
 // "ip:port" string). It performs a UDP dial to let the kernel pick the

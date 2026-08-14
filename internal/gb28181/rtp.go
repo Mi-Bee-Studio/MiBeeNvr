@@ -10,6 +10,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
@@ -26,6 +27,12 @@ const (
 	TCPModeRFC4571 TCPMode = "rfc4571" // 2-byte length prefix (RFC 4571)
 	TCPMode0x24    TCPMode = "0x24"    // 0x24 + 2-byte length (GB28181 standard)
 )
+
+// rtpReadBufSize is the UDP read buffer size. UDP datagrams can be up to
+// 65507 bytes after IP fragmentation reassembly — GB28181 devices commonly
+// emit 1400–4KB PS packets, and Go's UDP Read silently truncates anything
+// larger than the buffer, so a small "MTU-sized" buffer corrupts AUs.
+const rtpReadBufSize = 65535
 
 // Receiver manages GB/T 28181 RTP media reception.
 // It implements Stage 1 of the two-stage pipeline: RTP packet reassembly
@@ -51,21 +58,35 @@ type Receiver struct {
 	lastSeq          uint16
 	baseSeq          uint16
 	baseSeqSet       bool
-	maxJitterPackets int // default: 32
+	maxJitterPackets int    // default: 32
+	packetsDroppedU  uint64 // count of gap-skipped packets (diagnostics)
 
 	// Stage 2: PS demux
 	demuxer *PSDemuxer
 
+	// OnFirstRTP fires once when the first RTP packet is received — used by
+	// the session layer to confirm a dialog without a matched SIP response
+	// (some device firmwares answer INVITE 200 OK without a Via header, which
+	// no SIP stack can transaction-match).
+	OnFirstRTP func()
+
 	// Callbacks
+	// AUCallback is invoked once per complete access unit (full NALU list).
+	// Preferred by recorders: it preserves AU grouping for muxing and hub
+	// fan-out. Non-blocking.
+	AUCallback func(au [][]byte, ptsTicks int64, isIDR bool)
+
 	// NALUCallback is invoked for each NALU extracted from PS demux.
-	// Used for recording (recorder.WriteNALU). Non-blocking.
+	// Kept for per-NALU consumers; when both are set, AUCallback is used.
 	NALUCallback func(nalu []byte, ptsTicks int64, isIDR bool)
 
 	// Metrics
 	rtpPacketsReceived atomic.Int64
 	rtpPacketsDropped  atomic.Int64
 	auEmitted          atomic.Int64
-	ptsClock           int64 // 90kHz clock accumulator
+	ptsClock           atomic.Int64 // last emitted PTS (90kHz)
+	lastIDRUnix        atomic.Int64 // last IDR AU time (unix nano)
+	lastPktUnix        atomic.Int64 // last received RTP packet time (unix nano)
 }
 
 // NewReceiver creates a new GB28181 RTP receiver.
@@ -118,7 +139,8 @@ func (r *Receiver) Start(ctx context.Context, conn net.Conn) error {
 	return nil
 }
 
-// Stop terminates the receiver and recycles the UDP port.
+// Stop terminates the receiver and closes the connection. Port recycling is
+// the SessionManager's job (it owns the port allocation).
 func (r *Receiver) Stop() error {
 	if !r.running.Swap(false) {
 		return nil
@@ -145,6 +167,33 @@ func (r *Receiver) Running() bool {
 	return r.running.Load()
 }
 
+// HasReceivedRTP reports whether at least one RTP packet arrived.
+func (r *Receiver) HasReceivedRTP() bool {
+	return r.rtpPacketsReceived.Load() > 0
+}
+
+// SinceLastPacket returns how long ago the last RTP packet arrived.
+// A session whose stream stops (device firmware stall) must be recycled or
+// its zombie receiver blocks every future auto-INVITE (idempotency check).
+func (r *Receiver) SinceLastPacket() time.Duration {
+	ns := r.lastPktUnix.Load()
+	if ns == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, ns))
+}
+
+// SinceLastIDR returns how long ago the last IDR access unit was emitted
+// (never if ok=false). Devices that only emit a keyframe at stream start go
+// stale for segment starts; the session layer watches this.
+func (r *Receiver) SinceLastIDR() (time.Duration, bool) {
+	ns := r.lastIDRUnix.Load()
+	if ns == 0 {
+		return 0, false
+	}
+	return time.Since(time.Unix(0, ns)), true
+}
+
 // readLoop reads RTP packets from the network, reassembles access units,
 // and feeds them to the PS demuxer.
 func (r *Receiver) readLoop(ctx context.Context) {
@@ -153,7 +202,7 @@ func (r *Receiver) readLoop(ctx context.Context) {
 		logger.Info("gb28181: read loop exited", "camera_id", r.cameraID)
 	}()
 
-	buf := make([]byte, 2048) // MTU-safe buffer
+	buf := make([]byte, rtpReadBufSize)
 
 	for r.running.Load() {
 		var n int
@@ -182,14 +231,21 @@ func (r *Receiver) readLoop(ctx context.Context) {
 		}
 
 		r.rtpPacketsReceived.Add(1)
+		r.lastPktUnix.Store(time.Now().UnixNano())
+		if r.rtpPacketsReceived.Load() == 1 && r.OnFirstRTP != nil {
+			r.OnFirstRTP()
+		}
 
-		// Parse RTP packet
+		// Parse RTP packet. pion/rtp aliases buf — the payload slice points
+		// into buf, which the next Read overwrites — so the payload is
+		// cloned before the packet is stored in the jitter buffer.
 		var pkt rtp.Packet
 		if err := pkt.Unmarshal(buf[:n]); err != nil {
 			logger.Warn("gb28181: RTP unmarshal failed", "camera_id", r.cameraID, "error", err)
 			r.rtpPacketsDropped.Add(1)
 			continue
 		}
+		pkt.Payload = append([]byte(nil), pkt.Payload...)
 
 		// Feed to jitter buffer for reassembly
 		if err := r.feedJitterBuffer(&pkt); err != nil {
@@ -204,7 +260,8 @@ func (r *Receiver) readLoop(ctx context.Context) {
 }
 
 // readTCP reads an RTP packet from TCP with framing detection.
-// Supports RFC 4571 (2-byte length) and 0x24 framing.
+// Supports RFC 4571 (2-byte length) and GB28181 0x24 framing
+// ('$' + 1-byte channel + 2-byte big-endian length = 4-byte header).
 func (r *Receiver) readTCP(buf []byte) (int, error) {
 	// Read framing header
 	if r.tcpMode == TCPModeAuto {
@@ -217,8 +274,8 @@ func (r *Receiver) readTCP(buf []byte) (int, error) {
 		if first[0] == 0x24 {
 			r.tcpMode = TCPMode0x24
 			buf[0] = first[0]
-			// Read rest of 0x24 framing (reserved + 2-byte length + reserved)
-			if _, err := io.ReadFull(r.conn, buf[1:5]); err != nil {
+			// Rest of 0x24 framing: channel (1) + 2-byte length
+			if _, err := io.ReadFull(r.conn, buf[1:4]); err != nil {
 				return 0, err
 			}
 		} else {
@@ -232,7 +289,7 @@ func (r *Receiver) readTCP(buf []byte) (int, error) {
 	} else {
 		// Read framing based on known mode
 		if r.tcpMode == TCPMode0x24 {
-			if _, err := io.ReadFull(r.conn, buf[:5]); err != nil {
+			if _, err := io.ReadFull(r.conn, buf[:4]); err != nil {
 				return 0, err
 			}
 		} else {
@@ -287,8 +344,9 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 
 	// Buffer size check
 	if len(r.jitterBuffer) >= r.maxJitterPackets {
-		// Force flush to make room
-		r.emitAccessUnitsLocked()
+		// Force flush to make room. Mid-AU: the demuxer only accumulates
+		// (complete=false) — partial NALUs are never emitted.
+		r.emitAccessUnitsLocked(false)
 	}
 
 	// Store packet
@@ -297,21 +355,28 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 
 	// Marker bit indicates AU boundary - emit complete AU
 	if pkt.Header.Marker {
-		r.emitAccessUnitsLocked()
+		r.emitAccessUnitsLocked(true)
 	}
 
 	return nil
 }
 
 // emitAccessUnitsLocked reassembles packets in sequence order and emits
-// complete access units. Must be called with jitterBufferMu held.
-func (r *Receiver) emitAccessUnitsLocked() {
+// complete access units. Must be called with jitterBufferMu held. complete
+// marks whether this emission ends on a marker (real AU boundary).
+//
+// Loss recovery: when the packet at baseSeq is missing (UDP loss), the
+// contiguous drain below would stall forever. Instead the gap is skipped —
+// baseSeq advances to the lowest buffered sequence number — so the stream
+// continues (the partial AU is dropped, which the PS demuxer tolerates)
+// instead of freezing and growing the buffer without bound.
+func (r *Receiver) emitAccessUnitsLocked(complete bool) {
 	if len(r.jitterBuffer) == 0 {
 		return
 	}
 
-	// Build ordered list of packets by sequence number
-	// Start from oldest received (lowest seq number)
+	// Build ordered list of packets by sequence number,
+	// starting from the oldest received (lowest seq number).
 	var packets []*rtp.Packet
 	for len(packets) < len(r.jitterBuffer) {
 		targetSeq := r.baseSeq + uint16(len(packets))
@@ -324,6 +389,18 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	}
 
 	if len(packets) == 0 {
+		// baseSeq itself is missing: skip the gap to the lowest buffered seq
+		// that is AHEAD of baseSeq (positive 16-bit distance — wrap-safe).
+		next, ok := r.nextBufferedSeqLocked()
+		if !ok {
+			return
+		}
+		r.packetsDroppedU++
+		logger.Debug("gb28181: RTP packet loss — skipping gap",
+			"camera_id", r.cameraID, "from_seq", r.baseSeq, "to_seq", next)
+		r.baseSeq = next
+		// Re-run so the buffered packets above the gap are emitted now.
+		r.emitAccessUnitsLocked(complete)
 		return
 	}
 
@@ -344,9 +421,10 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	// RTP timestamp is 90kHz clock, same as NVR PTS
 	lastPkt := packets[len(packets)-1]
 	ptsTicks := int64(lastPkt.Header.Timestamp)
+	r.ptsClock.Store(ptsTicks)
 
 	// Feed to Stage 2: PS demuxer
-	nalus, err := r.demuxer.FeedAU(auPayload, ptsTicks)
+	nalus, err := r.demuxer.FeedAU(auPayload, ptsTicks, complete)
 	if err != nil {
 		logger.Debug("gb28181: PS demux error", "camera_id", r.cameraID, "error", err)
 		return
@@ -362,16 +440,46 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	// Detect IDR frame
 	isH265 := r.demuxer.Codec() == "h265"
 	isIDR := nalutil.IsIDR(nalus, isH265)
+	if isIDR {
+		r.lastIDRUnix.Store(time.Now().UnixNano())
+	}
 
-	// Broadcast to StreamHub (non-blocking)
-	r.hub.Broadcast(ptsTicks, nalus, isIDR)
+	// Broadcast to StreamHub (non-blocking, nil-safe for recorder-bridged sessions)
+	if r.hub != nil {
+		r.hub.Broadcast(ptsTicks, nalus, isIDR)
+	}
 
-	// Invoke NALU callback for recording
-	if r.NALUCallback != nil {
+	// Prefer AU-granular callback (recorders need full AU grouping); fall
+	// back to the legacy per-NALU callback.
+	if r.AUCallback != nil {
+		r.AUCallback(nalus, ptsTicks, isIDR)
+	} else if r.NALUCallback != nil {
 		for _, nalu := range nalus {
 			r.NALUCallback(nalu, ptsTicks, isIDR)
 		}
 	}
+}
+
+// nextBufferedSeqLocked returns the buffered sequence number closest ahead of
+// baseSeq (positive int16 distance, wrap-safe), or ok=false when the buffer
+// holds nothing ahead. Must be called with jitterBufferMu held.
+func (r *Receiver) nextBufferedSeqLocked() (uint16, bool) {
+	var best uint16
+	found := false
+	for seq := range r.jitterBuffer {
+		if int16(seq-r.baseSeq) <= 0 {
+			continue // stale (already passed) — drop it
+		}
+		if !found || int16(seq-best) < 0 {
+			best = seq
+			found = true
+		}
+	}
+	if !found {
+		// Nothing ahead: the buffer only holds stale entries — clear them.
+		r.jitterBuffer = make(map[uint16]*rtp.Packet)
+	}
+	return best, found
 }
 
 // flushJitterBuffer emits any remaining packets in the jitter buffer.
@@ -379,9 +487,9 @@ func (r *Receiver) flushJitterBuffer() {
 	r.jitterBufferMu.Lock()
 	defer r.jitterBufferMu.Unlock()
 
-	// Emit any remaining packets as one AU
+	// Emit any remaining packets as one AU (stream end = boundary)
 	if len(r.jitterBuffer) > 0 {
-		r.emitAccessUnitsLocked()
+		r.emitAccessUnitsLocked(true)
 	}
 
 	// Flush demuxer residual data
@@ -389,11 +497,16 @@ func (r *Receiver) flushJitterBuffer() {
 	if len(nalus) > 0 {
 		isH265 := r.demuxer.Codec() == "h265"
 		isIDR := nalutil.IsIDR(nalus, isH265)
-		r.hub.Broadcast(r.ptsClock, nalus, isIDR)
+		ptsTicks := r.ptsClock.Load()
+		if r.hub != nil {
+			r.hub.Broadcast(ptsTicks, nalus, isIDR)
+		}
 
-		if r.NALUCallback != nil {
+		if r.AUCallback != nil {
+			r.AUCallback(nalus, ptsTicks, isIDR)
+		} else if r.NALUCallback != nil {
 			for _, nalu := range nalus {
-				r.NALUCallback(nalu, r.ptsClock, isIDR)
+				r.NALUCallback(nalu, ptsTicks, isIDR)
 			}
 		}
 	}

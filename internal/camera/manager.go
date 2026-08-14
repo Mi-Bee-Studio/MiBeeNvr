@@ -76,6 +76,10 @@ type CameraUpdate struct {
 	// "pending_activation". Set to "active" by ActivateCamera to flip a
 	// pending camera live. nil = unchanged. See CameraConfig.ActivationState.
 	ActivationState *string
+	// GB28181 channel binding (protocol "gb28181"). nil = unchanged; changing
+	// DeviceID/ChannelID restarts the recorder (the SIP session must be
+	// re-INVITEd to the new channel).
+	GB28181 *config.GB28181ChannelConfig
 }
 
 type CameraManager struct {
@@ -125,6 +129,9 @@ type CameraManager struct {
 	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
 	// import cycle.
 	relayMgr RelayManager
+	// gb28181Inviter (optional) sends SIP INVITE to start media sessions for
+	// GB28181 cameras. When set, starting a GB28181 recorder auto-triggers INVITE.
+	gb28181Inviter GB28181Inviter
 	// backfillWg tracks the startup stable_id backfill goroutine so Stop can
 	// wait for it to exit before returning. Without this, the goroutine can
 	// outlive the DB handle and crash with "sql: database is closed" when the

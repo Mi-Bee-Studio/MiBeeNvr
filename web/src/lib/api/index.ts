@@ -14,6 +14,7 @@ export {
   healthCheck,
   getSystemStats,
   getAuthHeader,
+  forceRelogin,
   API_BASE,
   apiRequest,
   apiRequestBlob,
@@ -319,14 +320,3 @@ export type {
 export { getVersion, getUpdateStatus, refreshUpdateStatus } from './update';
 export type { UpdateStatus } from './update';
 
-// GB28181 — registered devices, channels, catalog refresh, invite/bye
-export {
-  listGB28181Devices,
-  listGB28181Channels,
-  catalogRefreshGB28181,
-  inviteGB28181Channel,
-  byeGB28181Channel,
-  gb28181PtzMove,
-} from './gb28181';
-
-export type { GB28181Device, GB28181Channel, GB28181ActionResponse } from './gb28181';

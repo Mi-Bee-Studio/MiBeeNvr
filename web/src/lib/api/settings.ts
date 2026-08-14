@@ -90,7 +90,8 @@ export interface GB28181Config {
   sip_listen: string;
   server_id: string;
   realm: string;
-  password: string;
+  /** Whether a SIP password is configured — the value itself is never returned. */
+  password_configured?: boolean;
   port_range: string;
   heartbeat_interval: string;
   catalog_interval: string;

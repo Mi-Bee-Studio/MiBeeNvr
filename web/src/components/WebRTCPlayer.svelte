@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
   import CameraAudioButton from './CameraAudioButton.svelte';
-  import { getAuthHeader, getTokenForUrl } from '$lib/api';
+  import { forceRelogin, getAuthHeader, getTokenForUrl } from '$lib/api';
   import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
   import { sendTelemetry } from '$lib/telemetry';
@@ -459,6 +459,12 @@ let destroyed = false;
         clearTimeout(whepTimeout);
       }
 
+      if (response.status === 401) {
+        // Session invalidated (server restart rotates the signing pepper) —
+        // retrying media on dead credentials would black-screen forever.
+        forceRelogin();
+        throw new Error('WHEP: session expired');
+      }
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
         throw new Error(`WHEP server error: ${response.status} ${errorText}`);

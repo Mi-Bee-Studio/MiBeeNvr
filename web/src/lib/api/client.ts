@@ -127,6 +127,16 @@ export function getToken(): string | null {
   return s.token;
 }
 
+// Force a re-login from anywhere (raw fetches outside the api client, e.g.
+// the WebRTC WHEP exchange): clears the stale token and routes to the login
+// page. Exported so media players that bypass apiRequest() can share the
+// exact 401 semantics — without this a token invalidated by a server restart
+// left them retrying forever on dead credentials, rendering black tiles.
+export function forceRelogin(): void {
+  clearToken();
+  window.location.hash = '#/login';
+}
+
 // Clear the stored session token (logout).
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
