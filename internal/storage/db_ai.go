@@ -50,13 +50,14 @@ func (d *DB) InsertAIEvent(ctx context.Context, e *AIEvent) (int64, error) {
 
 // AIEventFilter holds query parameters for listing AI events.
 type AIEventFilter struct {
-	CameraID  string
-	EventType string
-	StartTime *time.Time // inclusive lower bound on created_at
-	EndTime   *time.Time // inclusive upper bound on created_at
-	AscOrder  bool       // order by created_at ASC (for timeline overlay)
-	Limit     int
-	Offset    int
+	CameraID    string
+	RecordingID string // filter by recording_id (used by merge migration tests + NVR UI)
+	EventType   string
+	StartTime   *time.Time // inclusive lower bound on created_at
+	EndTime     *time.Time // inclusive upper bound on created_at
+	AscOrder    bool       // order by created_at ASC (for timeline overlay)
+	Limit       int
+	Offset      int
 }
 
 // ListAIEvents returns AI events matching the filter, ordered by created_at DESC
@@ -77,6 +78,10 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 	if f.CameraID != "" {
 		where = append(where, "camera_id = ?")
 		args = append(args, f.CameraID)
+	}
+	if f.RecordingID != "" {
+		where = append(where, "recording_id = ?")
+		args = append(args, f.RecordingID)
 	}
 	if f.EventType != "" {
 		where = append(where, "event_type = ?")

@@ -32,6 +32,7 @@ type Config struct {
 	Transcoding   TranscodingConfig   `yaml:"transcoding"`
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
 	AI            AIConfig            `yaml:"ai"`
+	Vision        VisionConfig        `yaml:"vision"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
 	Security      SecurityConfig      `yaml:"security"`
 	Update        UpdateConfig        `yaml:"update"`
