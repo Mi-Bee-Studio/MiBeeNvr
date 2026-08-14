@@ -7,7 +7,10 @@ package camera
 // Extracted from manager.go (#225).
 
 import (
+	"context"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
@@ -50,4 +53,30 @@ func (cm *CameraManager) GetGB28181Recorder(cameraID string) *recorder.GB28181Re
 		return nil
 	}
 	return rec
+}
+
+// EnsureGB28181Camera creates a camera entry for a GB28181 device if one
+// doesn't already exist. Called by the SIP server on first REGISTER so
+// GB28181 cameras auto-appear in the Cameras list — matching ONVIF auto-add.
+// Idempotent: if a camera with matching GB28181.DeviceID exists, returns nil.
+func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID string) error {
+	// Check if a camera for this device already exists.
+	snap := cm.loadSnapshot()
+	for _, cfg := range snap.configs {
+		if cfg.GB28181.DeviceID == deviceID {
+			return nil // Already enrolled
+		}
+	}
+
+	cam := config.CameraConfig{
+		ID:       "gb-" + deviceID,
+		Name:     "GB28181 " + deviceID,
+		Protocol: string(model.ProtoGB28181),
+		GB28181: config.GB28181ChannelConfig{
+			DeviceID:  deviceID,
+			ChannelID: channelID,
+		},
+	}
+	_, err := cm.AddCamera(context.Background(), cam)
+	return err
 }

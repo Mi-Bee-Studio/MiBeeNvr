@@ -30,6 +30,14 @@ const (
 	statusBusyHere     sip.StatusCode = 486
 )
 
+// CameraEnroller auto-creates a camera in the main cameras list when a GB28181
+// device first registers. The camera manager implements this; the SIP server
+// calls it from handleRegister so GB28181 cameras appear alongside ONVIF/RTSP
+// cameras without manual setup — matching the ONVIF auto-discover pattern.
+type CameraEnroller interface {
+	EnsureGB28181Camera(deviceID, channelID string) error
+}
+
 // Server implements the GB/T 28181 SIP platform (UAS) side. It owns the gosip
 // SIP stack lifecycle: UDP/TCP listening, REGISTER digest authentication, and
 // keepalive/catalog/device-info MESSAGE handling. Media sessions (INVITE/BYE)
@@ -46,8 +54,9 @@ type Server struct {
 	mu      sync.Mutex
 	started bool
 
-	onInvite func(deviceID, channelID string) // Hook for SessionManager
-	onBye    func(deviceID, channelID string) // Hook for SessionManager
+	onInvite    func(deviceID, channelID string) // Hook for SessionManager
+	onBye       func(deviceID, channelID string) // Hook for SessionManager
+	camEnroller CameraEnroller                   // Auto-create camera on first REGISTER
 
 	perDeviceMu map[string]*sync.Mutex // serialize SIP handling per device
 }
@@ -155,6 +164,15 @@ func (s *Server) SetByeHook(hook func(deviceID, channelID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onBye = hook
+}
+
+// SetCameraEnroller wires the auto-camera-creation callback. When a device
+// first registers, the server calls EnsureGB28181Camera so a camera entry
+// appears in the main Cameras list — matching ONVIF auto-discover behavior.
+func (s *Server) SetCameraEnroller(enroller CameraEnroller) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.camEnroller = enroller
 }
 
 // SendMessage sends a SIP MESSAGE request carrying the given MANSCDP body to
@@ -402,6 +420,22 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 				}); err != nil {
 					slog.Warn("gb28181: failed to persist auto-channel to DB", "device", deviceID, "error", err)
 				}
+			}
+		}
+
+		// Auto-create a camera in the main Cameras list on first registration,
+		// so GB28181 cameras appear alongside ONVIF/RTSP cameras without manual
+		// setup. Runs in a goroutine to avoid blocking the SIP response.
+		if !channelExists {
+			s.mu.Lock()
+			enrol := s.camEnroller
+			s.mu.Unlock()
+			if enrol != nil {
+				go func() {
+					if err := enrol.EnsureGB28181Camera(deviceID, deviceID); err != nil {
+						slog.Warn("gb28181: auto-enroll camera failed", "device", deviceID, "error", err)
+					}
+				}()
 			}
 		}
 	}

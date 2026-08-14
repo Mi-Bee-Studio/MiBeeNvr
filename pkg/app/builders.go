@@ -658,6 +658,8 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		handler.SetGB28181PTZ(gb28181.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Catalog(gb28181.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
+		// Auto-create cameras when GB28181 devices register, matching ONVIF auto-add.
+		deps.gb28181Server.SetCameraEnroller(camMgr)
 	}
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
