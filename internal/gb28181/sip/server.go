@@ -372,7 +372,10 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		// Auto-register the device itself as a channel — but ONLY on first
 		// registration, not on periodic re-REGISTERs. Re-registering would
 		// overwrite the channel's Status (resetting inviting/playing to idle).
-		if _, exists := s.deviceMgr.FindChannel(deviceID, deviceID); !exists {
+		// Capture once: was this a first-time registration?
+		// Used for both in-memory + DB auto-channel creation.
+		_, channelExists := s.deviceMgr.FindChannel(deviceID, deviceID)
+		if !channelExists {
 			s.deviceMgr.RegisterChannel(deviceID, &gb28181.Channel{
 				ID:       deviceID,
 				DeviceID: deviceID,
@@ -390,7 +393,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 			}); err != nil {
 				slog.Warn("gb28181: failed to persist device to DB", "device", deviceID, "error", err)
 			}
-			if _, exists := s.deviceMgr.FindChannel(deviceID, deviceID); !exists {
+			if !channelExists {
 				if err := s.db.UpsertGB28181Channel(context.Background(), storage.GB28181Channel{
 					ID:        deviceID,
 					DeviceID:  deviceID,
