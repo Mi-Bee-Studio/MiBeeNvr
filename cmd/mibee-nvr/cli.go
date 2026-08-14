@@ -382,6 +382,7 @@ func cleanupByDate(ctx context.Context, db *sql.DB, storageRoot, beforeDate stri
 		fmt.Fprintf(os.Stderr, "  Error querying: %v\n", err)
 		return
 	}
+	defer rows.Close()
 	type rec struct {
 		id, path string
 		size     int64
@@ -396,7 +397,6 @@ func cleanupByDate(ctx context.Context, db *sql.DB, storageRoot, beforeDate stri
 		recs = append(recs, r)
 		totalSize += r.size
 	}
-	rows.Close()
 
 	fmt.Printf("  Found %d recordings (%.1f GB)\n", len(recs), float64(totalSize)/1e9)
 	if dryRun || len(recs) == 0 {
