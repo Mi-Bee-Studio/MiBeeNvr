@@ -74,11 +74,22 @@
   let mjpegPlayer: MjpegPlayer | undefined = $state();
 
   // --- Video player state (H.264 / H.265) ---
+  // Two stacked <video> elements (CSS grid, same cell): the active one plays
+  // the current recording, the standby preloads the next segment so the
+  // ended→next transition swaps buffers instead of reloading — no black flash
+  // at segment boundaries (#321). Cross-segment timeline seeks also land via
+  // the standby (old frame stays visible until the target is buffered).
+  let videoA = $state<HTMLVideoElement | null>(null);
+  let videoB = $state<HTMLVideoElement | null>(null);
+  let activeIsA = $state(true);
+  let srcA = $state('');
+  let srcB = $state('');
+  let videoEl = $derived<HTMLVideoElement | null>(activeIsA ? videoA : videoB);
+  let standbyVideoEl = $derived<HTMLVideoElement | null>(activeIsA ? videoB : videoA);
   let videoUrl = $state('');
   let videoLoading = $state(false);
   let videoSpeed = $state(1);
   let videoFullscreen = $state(false);
-  let videoEl = $state<HTMLVideoElement | null>(null);
   let videoCurrentTime = $state(0);
   let videoDuration = $state(0);
   let videoBuffered = $state(0);
@@ -95,6 +106,18 @@
   // When true, the merged MP4 failed to load (network / missing / unsupported
   // codec) and we fall back to the JPEG frame viewer for timelapse/MJPEG.
   let useFrameFallback = $state(false);
+
+  // --- Seamless next-segment chain (video double buffer) ---
+  // armedNext/armedRecId describe what the standby element holds. Events from
+  // the standby are ignored by the active-video handlers (target guard) and
+  // adoption flips activeIsA, so both elements keep their full template
+  // handler wiring across role swaps.
+  interface ArmedNext { rec: Recording; url: string; }
+  let armedNext: ArmedNext | null = null;
+  let armedRecId = '';
+  let armingNext = false;
+  let standbyReady = false;
+  let switchToken = 0;
 
   // --- H.265 → H.264 transcode-for-playback ---
   let transcodeForPlayback = $state(false);
@@ -165,19 +188,27 @@
   });
 
   // Re-init when the recording changes. The host's loadRecording sets
-  // `recording`; we react here. For timelapse/mjpeg with a merged output we
-  // first probe the merged codec to decide <video> vs cycler (mirrors the
-  // original probe inside the host's loadRecording). For plain h264/h265 we
-  // init the video player directly.
+  // `recording`; we react here. Seamless adoptions (video double-buffer swap,
+  // timelapse cycler chain) set lastLoadedId THEMSELVES before the host swaps
+  // the prop, so an adoption never re-enters this effect — the adopted
+  // playback continues undisturbed and only the metadata UI updates.
   let lastLoadedId = '';
   $effect(() => {
     if (!recording || recording.id === lastLoadedId) return;
+    // Drop any next-segment prefetch / armed standby from the previous
+    // recording, and cancel any in-flight standby segment switch.
+    armedNext = null;
+    armedRecId = '';
+    armingNext = false;
+    standbyReady = false;
+    nextRecordingId = null;
+    switchToken++;
     lastLoadedId = recording.id;
     useFrameFallback = false;
     const f = recording.format;
     if (f === 'h264' || f === 'h265') {
       probedMergedCodec = '';
-      initVideoPlayer();
+      void startVideoForRecording(recording, pendingTimelineSeekOffset);
       return;
     }
     if (f === 'timelapse' || f === 'mjpeg') {
@@ -185,12 +216,12 @@
       if (hasMerged) {
         // Probe, then init based on the result.
         let cancelled = false;
-        probeMergedRecordingCodec(currentId)
+        probeMergedRecordingCodec(recording.id)
           .then((codec) => {
             if (cancelled) return;
             probedMergedCodec = codec === 'h264' || codec === 'h265' ? codec : 'other';
             if (probedMergedCodec === 'h264' || probedMergedCodec === 'h265') {
-              initVideoPlayer();
+              void startVideoForRecording(recording, pendingTimelineSeekOffset);
             } else {
               initTimelapsePlayer();
             }
@@ -240,22 +271,191 @@
 
   let nextRecordingId = $state<string | null>(null);
   function handleTimeUpdate(e: Event) {
+    if (e.target !== videoEl) return;
     const video = e.target as HTMLVideoElement;
     videoCurrentTime = video.currentTime;
     videoDuration = video.duration || 0;
     if (video.duration && video.currentTime / video.duration > 0.8 && !nextRecordingId) prefetchNextRecording();
   }
-  async function prefetchNextRecording() {
-    if (nextRecordingId || !recording) return;
-    const next = await loadNextRecording();
-    if (next) nextRecordingId = next.id;
+
+  // Direct-playback URL for a recording, or null when it is not <video>-playable
+  // (timelapse/mjpeg without a merged MP4 → the JPEG cycler owns it).
+  function segmentVideoUrlSync(rec: Recording): string | null {
+    const f = rec.format;
+    if (f === 'h264' || f === 'h265') return getRecordingVideoUrl(rec.id);
+    if (f === 'timelapse' || f === 'mjpeg') {
+      if (rec.merge_status === 'merged' && rec.merge_path) return getMergedRecordingUrl(rec.id);
+    }
+    return null;
+  }
+  async function segmentVideoUrl(rec: Recording): Promise<string | null> {
+    const url = segmentVideoUrlSync(rec);
+    if (!url || (rec.format !== 'timelapse' && rec.format !== 'mjpeg')) return url;
+    // Merged output must also be browser-playable — HEAD-probe its codec.
+    try {
+      const codec = await probeMergedRecordingCodec(rec.id);
+      return codec === 'h264' || codec === 'h265' ? url : null;
+    } catch { return null; }
   }
 
-  async function handleVideoEnded() {
+  async function prefetchNextRecording() {
+    if (nextRecordingId || !recording || armedNext || armingNext) return;
+    armingNext = true;
+    try {
+      const next = await loadNextRecording();
+      if (!next) return;
+      nextRecordingId = next.id;
+      const url = await segmentVideoUrl(next);
+      if (!url) return; // next segment is cycler-mode → host fallback on ended
+      armStandby(url, next.id);
+      armedNext = { rec: next, url };
+    } catch { /* silent */ } finally {
+      armingNext = false;
+    }
+  }
+
+  // Point the standby element at `url` and start buffering it (preload=auto).
+  function armStandby(url: string, recId: string) {
+    const el = standbyVideoEl;
+    if (!el || !url) return;
+    armedRecId = recId;
+    standbyReady = false;
+    if (activeIsA) srcB = url; else srcA = url;
+    void tick().then(() => { el.load(); });
+  }
+
+  // Resolve with the standby element once its CURRENT load is playable,
+  // or null on error / timeout / nothing armed.
+  function waitForStandby(timeoutMs: number): Promise<HTMLVideoElement | null> {
+    const el = standbyVideoEl;
+    if (!el || !armedRecId) return Promise.resolve(null);
+    if (standbyReady && el.readyState >= 3) return Promise.resolve(el);
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        el.removeEventListener('canplay', onCanPlay);
+        el.removeEventListener('error', onError);
+        resolve(standbyReady && el.readyState >= 3 ? el : null);
+      };
+      const onCanPlay = () => { standbyReady = true; finish(); };
+      const onError = () => { standbyReady = false; finish(); };
+      const timer = setTimeout(finish, timeoutMs);
+      el.addEventListener('canplay', onCanPlay);
+      el.addEventListener('error', onError);
+    });
+  }
+
+  // Seek an element and resolve once the seek lands (or after a safety timeout).
+  function seekEl(el: HTMLVideoElement, offset: number): Promise<void> {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        el.removeEventListener('seeked', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, 5000);
+      el.addEventListener('seeked', finish);
+      el.currentTime = offset;
+    });
+  }
+
+  // Swap the standby buffer into the active slot (instant, no reload). The old
+  // active element pauses and becomes the new standby. Returns false when the
+  // standby holds something other than `expectId` (stale arm → caller falls
+  // back to a hard src swap).
+  async function adoptStandby(expectId: string, offset: number | null, wasPlaying: boolean): Promise<boolean> {
+    if (!armedRecId || armedRecId !== expectId) return false;
+    const next = standbyVideoEl;
+    const prev = videoEl;
+    if (!next) return false;
+    if (offset != null && Number.isFinite(offset) && offset > 0) {
+      await seekEl(next, Math.min(offset, next.duration > 0 ? next.duration : offset));
+    }
+    if (armedRecId !== expectId) return false; // re-armed while seeking
+    if (prev) {
+      next.muted = prev.muted;
+      next.volume = prev.volume;
+      prev.pause();
+    }
+    const url = armedNext?.url ?? next.currentSrc ?? videoUrl;
+    activeIsA = !activeIsA;
+    videoUrl = url;
+    lastLoadedId = expectId;
+    next.playbackRate = videoSpeed;
+    videoDuration = next.duration || 0;
+    videoCurrentTime = next.currentTime || 0;
+    videoBuffered = 0;
+    videoError = null;
+    videoErrorMsg = '';
+    videoRetryCount = 0;
+    videoStalled = false;
+    if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
+    standbyReady = false;
+    // Adoption consumes the prefetch WITHOUT running the recording-change
+    // effect (that is what makes it seamless) — reset its state here so the
+    // 80% prefetch re-arms for the segment after this one.
+    nextRecordingId = null;
+    if (wasPlaying) {
+      try { await next.play(); videoIsPlaying = true; } catch { videoIsPlaying = false; }
+    } else {
+      videoIsPlaying = false;
+    }
+    return true;
+  }
+
+  // Load `rec` into the video stack. First load (no visible frame yet) does a
+  // hard src swap; a mid-session segment switch arms the standby first and
+  // swaps when ready so the previous frame stays visible until the target is
+  // buffered. Falls back to the hard swap on timeout/error.
+  async function startVideoForRecording(rec: Recording, offset: number | null) {
+    const token = ++switchToken;
+    const url = await segmentVideoUrl(rec);
+    if (token !== switchToken) return;
+    if (!url) {
+      useFrameFallback = true;
+      initTimelapsePlayer();
+      return;
+    }
+    const hasSession = !!videoUrl && !!standbyVideoEl;
+    if (hasSession) {
+      videoLoading = true;
+      armStandby(url, rec.id);
+      const el = await waitForStandby(8000);
+      if (token !== switchToken) return;
+      if (el && await adoptStandby(rec.id, offset, videoIsPlaying)) {
+        pendingTimelineSeekOffset = null;
+        videoLoading = false;
+        return;
+      }
+    }
+    initVideoPlayerWith(url);
+  }
+
+  async function handleVideoEnded(e: Event) {
+    if (e.target !== videoEl) return;
     if (videoLoop && videoEl) {
       videoEl.currentTime = 0;
       await videoEl.play();
       return;
+    }
+    // Seamless chain: adopt the prefetched next segment. If it is still
+    // buffering, wait briefly (the ended frame stays visible — reads as a
+    // short pause, not a flash) before falling back to the host navigation.
+    if (armedNext) {
+      const rec = armedNext.rec;
+      const ready = standbyReady || (await waitForStandby(4000)) !== null;
+      if (ready && await adoptStandby(rec.id, null, true)) {
+        armedNext = null;
+        oncrosssegment?.(rec);
+        return;
+      }
+      armedNext = null;
     }
     onended();
   }
@@ -278,14 +478,12 @@
   }
 
   // --- Video player init + handlers ---
-  function initVideoPlayer() {
+  // Hard src swap on the ACTIVE element (first load, retry, transcode-ready).
+  function initVideoPlayerWith(url: string) {
     videoSpeed = 1;
     videoLoading = true;
-    if (recording && (recording.format === 'timelapse' || recording.format === 'mjpeg')) {
-      videoUrl = getMergedRecordingUrl(currentId);
-    } else {
-      videoUrl = getRecordingVideoUrl(currentId);
-    }
+    videoUrl = url;
+    if (activeIsA) srcA = url; else srcB = url;
     if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
     videoError = null;
     videoErrorMsg = '';
@@ -295,13 +493,21 @@
     void tick().then(() => { videoEl?.load(); });
   }
 
+  // Derive the URL from the current recording (legacy callers: transcode-ready
+  // re-init, H.265 fallback paths).
+  function initVideoPlayer() {
+    if (!recording) return;
+    initVideoPlayerWith(segmentVideoUrlSync(recording) ?? getRecordingVideoUrl(recording.id));
+  }
+
   function setVideoSpeed(speed: number) {
     videoSpeed = speed;
-    const video = document.querySelector('video');
+    const video = videoEl;
     if (video) video.playbackRate = speed;
   }
 
   function handleVideoLoadedMetadata(e: Event) {
+    if (e.target !== videoEl) return;
     const video = e.target as HTMLVideoElement;
     videoDuration = video.duration || 0;
     if (pendingTimelineSeekOffset != null && video) {
@@ -309,7 +515,8 @@
       pendingTimelineSeekOffset = null;
     }
   }
-  function handleVideoLoadedData() {
+  function handleVideoLoadedData(e: Event) {
+    if (e.target !== videoEl) return;
     videoLoading = false;
     videoError = null;
     videoErrorMsg = '';
@@ -317,7 +524,8 @@
     videoStalled = false;
     if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
   }
-  function handleVideoProgress() {
+  function handleVideoProgress(e: Event) {
+    if (e.target !== videoEl) return;
     if (!videoEl || !videoEl.buffered.length || !videoEl.duration) { videoBuffered = 0; return; }
     const bf = videoEl.buffered;
     for (let i = 0; i < bf.length; i++) {
@@ -328,12 +536,14 @@
     }
     videoBuffered = (bf.end(bf.length - 1) / videoEl.duration) * 100;
   }
-  function handleVideoPlay() {
+  function handleVideoPlay(e: Event) {
+    if (e.target !== videoEl) return;
     videoIsPlaying = true;
     if (formatBadgeTimeout) clearTimeout(formatBadgeTimeout);
     formatBadgeTimeout = setTimeout(() => { formatBadgeVisible = false; }, 3000);
   }
-  function handleVideoPause() {
+  function handleVideoPause(e: Event) {
+    if (e.target !== videoEl) return;
     videoIsPlaying = false;
     formatBadgeVisible = true;
     if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
@@ -348,6 +558,7 @@
   function toggleVideoLoop() { videoLoop = !videoLoop; }
 
   function handleVideoError(e: Event) {
+    if (e.target !== videoEl) return; // standby-element errors are handled by waitForStandby
     const video = e.target as HTMLVideoElement;
     const mediaError = video.error;
     if (!mediaError) return;
@@ -395,7 +606,7 @@
     videoLoading = true;
     videoStalled = false;
     if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
-    const video = document.querySelector('video');
+    const video = videoEl;
     if (video) {
       video.removeAttribute('src');
       video.load();
@@ -403,18 +614,25 @@
       video.load();
     }
   }
-  function handleVideoCanPlay() {
+  function handleVideoCanPlay(e: Event) {
+    if (e.target !== videoEl) {
+      // Standby element finished buffering — flag it for waitForStandby.
+      if (e.target === standbyVideoEl) standbyReady = true;
+      return;
+    }
     videoStalled = false;
     if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
     videoError = null;
     videoErrorMsg = '';
     videoRetryCount = 0;
   }
-  function handleVideoWaiting() {
+  function handleVideoWaiting(e: Event) {
+    if (e.target !== videoEl) return;
     if (videoStallTimeout) clearTimeout(videoStallTimeout);
     videoStallTimeout = setTimeout(() => { videoStalled = true; }, 3000);
   }
-  function handleVideoPlaying() {
+  function handleVideoPlaying(e: Event) {
+    if (e.target !== videoEl) return;
     videoStalled = false;
     if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
   }
@@ -553,6 +771,10 @@
         tlBlobCache = pre.blobCache;
         tlCurrentFrame = 0;
         clearMergedCodecCache(pre.recordingId);
+        // Claim the adopted segment BEFORE the host swaps the recording prop —
+        // the recording-change effect must skip so the adopted playback is not
+        // re-initialized (which would stomp the chain back to the old segment).
+        lastLoadedId = pre.recordingId;
         // Reload the recording metadata in the background so the side panel /
         // timeline update, without interrupting the cycler.
         void getRecording(pre.recordingId).then(r => { if (r) oncrosssegment?.(r); });
@@ -680,15 +902,15 @@
     if (key === 'space') {
       if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('togglePlay');
       else if (f === 'timelapse') tlTogglePlay();
-      else { const v = document.querySelector('video'); if (v) { if (v.paused) v.play(); else v.pause(); } }
+      else { const v = videoEl; if (v) { if (v.paused) void v.play(); else v.pause(); } }
     } else if (key === 'arrowleft') {
       if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('prevFrame');
       else if (f === 'timelapse') tlSeek(tlCurrentFrame - 1);
-      else { const v = document.querySelector('video'); if (v) v.currentTime = Math.max(0, v.currentTime - 5); }
+      else { const v = videoEl; if (v) v.currentTime = Math.max(0, v.currentTime - 5); }
     } else if (key === 'arrowright') {
       if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('nextFrame');
       else if (f === 'timelapse') tlSeek(tlCurrentFrame + 1);
-      else { const v = document.querySelector('video'); if (v) v.currentTime = Math.min(v.duration, v.currentTime + 5); }
+      else { const v = videoEl; if (v) v.currentTime = Math.min(v.duration, v.currentTime + 5); }
     } else if (key === 'f') {
       if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('toggleFullscreen');
       else if (f === 'timelapse') toggleFullscreen();
@@ -716,13 +938,31 @@
       </div>
     {/if}
     {#if videoUrl}
-      <video bind:this={videoEl} preload="metadata" controlsList="nodownload" class="w-full max-h-[80vh]" src={videoUrl}
-        onended={handleVideoEnded} ontimeupdate={handleTimeUpdate} onplay={handleVideoPlay} onpause={handleVideoPause}
-        onloadedmetadata={handleVideoLoadedMetadata} onprogress={handleVideoProgress} onloadeddata={handleVideoLoadedData}
-        onerror={handleVideoError} onwaiting={handleVideoWaiting} oncanplay={handleVideoCanPlay} onplaying={handleVideoPlaying}>
-        <track kind="captions" />
-        {t('detail.videoUnsupported')}
-      </video>
+      <!-- Double-buffered video stack (#321): both elements share one grid cell;
+           the standby (invisible, preload=auto) buffers the next segment and
+           flips into view on adoption — no element recreation, no black flash.
+           Event handlers are target-guarded so only the active element drives
+           the UI state. -->
+      <div class="grid">
+        <video bind:this={videoA} preload={activeIsA ? 'metadata' : 'auto'} controlsList="nodownload"
+          class="col-start-1 row-start-1 w-full max-h-[80vh] {activeIsA ? '' : 'invisible pointer-events-none'}"
+          src={srcA || undefined}
+          onended={handleVideoEnded} ontimeupdate={handleTimeUpdate} onplay={handleVideoPlay} onpause={handleVideoPause}
+          onloadedmetadata={handleVideoLoadedMetadata} onprogress={handleVideoProgress} onloadeddata={handleVideoLoadedData}
+          onerror={handleVideoError} onwaiting={handleVideoWaiting} oncanplay={handleVideoCanPlay} onplaying={handleVideoPlaying}>
+          <track kind="captions" />
+          {t('detail.videoUnsupported')}
+        </video>
+        <video bind:this={videoB} preload={activeIsA ? 'auto' : 'metadata'} controlsList="nodownload"
+          class="col-start-1 row-start-1 w-full max-h-[80vh] {activeIsA ? 'invisible pointer-events-none' : ''}"
+          src={srcB || undefined}
+          onended={handleVideoEnded} ontimeupdate={handleTimeUpdate} onplay={handleVideoPlay} onpause={handleVideoPause}
+          onloadedmetadata={handleVideoLoadedMetadata} onprogress={handleVideoProgress} onloadeddata={handleVideoLoadedData}
+          onerror={handleVideoError} onwaiting={handleVideoWaiting} oncanplay={handleVideoCanPlay} onplaying={handleVideoPlaying}>
+          <track kind="captions" />
+          {t('detail.videoUnsupported')}
+        </video>
+      </div>
       {#if videoLoading}
         <div class="absolute inset-0 skeleton-shimmer" style="border-radius: var(--radius-md) var(--radius-md) 0 0;"></div>
       {/if}
