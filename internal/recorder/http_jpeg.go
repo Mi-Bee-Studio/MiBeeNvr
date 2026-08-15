@@ -367,6 +367,21 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 	r.setStatus(model.StatusRecording)
 	reader := bufio.NewReader(resp.Body)
 
+	// Stall watchdog: after a camera hiccup the TCP connection can survive as
+	// a zombie — open, but the device never sends another byte. Without a
+	// read deadline the loop blocks forever on the first Read, the latest-
+	// frame cache freezes, and live viewers sit on a static picture (observed
+	// on the ESP32 MiBeeCam: EOF reconnect succeeds, then silence). Arm a
+	// per-frame deadline; cameras send frames at ≥1fps, so 15s covers even
+	// slow timelapse-y devices while catching zombies.
+	const frameReadTimeout = 15 * time.Second
+	armDeadline := func() {
+		if rd, ok := resp.Body.(interface{ SetReadDeadline(time.Time) error }); ok {
+			_ = rd.SetReadDeadline(time.Now().Add(frameReadTimeout))
+		}
+	}
+	armDeadline()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -406,6 +421,7 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			httpJpegLogger.Warn("skipping invalid frame (missing JPEG magic)", "camera_id", r.cfg.CameraID, "size", len(data))
 			continue
 		}
+		armDeadline() // frame received — re-arm the zombie-connection watchdog
 		// Cache latest frame for snapshot polling (before storage check,
 		// so live preview works even during storage issues). data is freshly allocated
 		// each frame (make or bytes.Buffer), so storing the pointer directly is safe —

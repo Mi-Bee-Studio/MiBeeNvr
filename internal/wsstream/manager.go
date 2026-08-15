@@ -263,6 +263,47 @@ func (m *Manager) IsActive(camID string) bool {
 	return ok
 }
 
+// ActiveHub returns the StreamHub the registered entry is currently
+// subscribed to (nil when the stream is not active).
+func (m *Manager) ActiveHub(camID string) *model.StreamHub {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.streams[camID]
+	if !ok {
+		return nil
+	}
+	return entry.hub
+}
+
+// RebindHub re-subscribes an active stream to a new StreamHub. Recorders that
+// reconnect get a FRESH hub from the camera manager; without a rebind the
+// entry keeps listening to the dead hub and every viewer goes black forever
+// (observed on flaky MJPEG cameras whose recorder reconnects often).
+func (m *Manager) RebindHub(camID string, hub *model.StreamHub) {
+	if hub == nil {
+		return
+	}
+	m.mu.Lock()
+	entry, ok := m.streams[camID]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	oldHub := entry.hub
+	entry.hub = hub
+	subID := entry.hubSubID
+	m.mu.Unlock()
+
+	if oldHub != nil {
+		// Unsubscribe OUTSIDE m.mu (drain calls writeFrame → RLock).
+		oldHub.Unsubscribe(subID)
+	}
+	_ = hub.Subscribe(subID, func(pts int64, au [][]byte) {
+		m.writeFrame(camID, pts, au)
+	})
+	wsLogger.Load().Info("WebSocket stream rebound to new StreamHub", "camera_id", camID)
+}
+
 // viewerCount returns the number of active viewers for a stream.
 func (m *Manager) viewerCount(camID string) int {
 	m.mu.RLock()
