@@ -207,6 +207,244 @@ func TestRollingMerge_AppendMultiple(t *testing.T) {
 	require.Equal(t, 6, info.SampleCount, "merged file should contain all 3 segments' samples")
 }
 
+// waitForBucketAudio polls until the camera's bucket reaches the expected
+// segment count AND audio key (the audio key disambiguates a reset bucket from
+// the previous one — count alone can match stale state after a bucket break).
+func waitForBucketAudio(t *testing.T, r *RollingMergeCoordinator, cameraID string, expectedCount int, expectedAudioKey string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		bucketAny, ok := r.buckets.Load(cameraID)
+		if ok {
+			bi := bucketAny.(*bucketInfo)
+			bi.mu.Lock()
+			count, key := bi.segmentCount, bi.audioKey
+			bi.mu.Unlock()
+			if count == expectedCount && key == expectedAudioKey {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for bucket segmentCount=%d audioKey=%q for camera %s", expectedCount, expectedAudioKey, cameraID)
+}
+
+// ---------------------------------------------------------------------------
+// TestRollingMerge_AudioConfigChangeBreaksBucket — audio presence/config change
+// across segments (audio_enabled toggled mid-stream) must finalize the current
+// bucket and start a new one, NOT merge across the boundary. Merging across it
+// trips MergeMP4Segments' mixed-audio drop policy, and the resulting video-only
+// bucket poisons every subsequent append (sticky audio loss — observed live:
+// "audio presence/config mismatch across segments" warning repeating every
+// segment close long after all new segments carried audio).
+// ---------------------------------------------------------------------------
+
+// createAndInsertSegmentWithG711 is createAndInsertSegment with a G.711 μ-law
+// audio track (2 samples) muxed in.
+func createAndInsertSegmentWithG711(t *testing.T, env *mergeTestEnv, recordingID, cameraID string, startedAt time.Time) string {
+	t.Helper()
+	ctx := context.Background()
+
+	tempPath, finalPath, err := env.store.CreateSegment(cameraID, "h264")
+	require.NoError(t, err)
+
+	segDir := filepath.Dir(tempPath)
+	segFile := createH264SegmentWithG711Audio(t, segDir)
+	data, err := os.ReadFile(segFile)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(tempPath, data, 0o644))
+	os.Remove(segFile)
+	require.NoError(t, env.store.CloseSegment(tempPath, finalPath))
+
+	fi, err := os.Stat(finalPath)
+	require.NoError(t, err)
+
+	rec := &model.Recording{
+		ID:         recordingID,
+		CameraID:   cameraID,
+		FilePath:   finalPath,
+		Format:     model.FormatH264,
+		StartedAt:  startedAt,
+		EndedAt:    startedAt.Add(30 * time.Second),
+		Duration:   30.0,
+		FileSize:   fi.Size(),
+		FrameCount: 2,
+	}
+	require.NoError(t, env.db.InsertRecording(ctx, rec))
+	return finalPath
+}
+
+func TestRollingMerge_AudioConfigChangeBreaksBucket(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	r := newTestRollingCoordinator(env, cfg, bus)
+	require.NoError(t, r.Start(context.Background()))
+	defer r.Stop()
+
+	cameraID := "cam-audio-boundary"
+	baseTime := time.Now().UTC().Truncate(time.Hour).Add(10 * time.Minute)
+
+	// Segment 1: video-only. Creates the first bucket.
+	p1 := createAndInsertSegment(t, env, "rec-plain", cameraID, baseTime)
+	publishSegmentCompleted(t, bus, cameraID, "rec-plain", p1, "h264", baseTime)
+	waitForBucketAudio(t, r, cameraID, 1, "none", 5*time.Second)
+
+	// Segment 2: audio arrives (audio_enabled toggled / codec negotiated).
+	// The audio key differs from the bucket's — a new bucket must start here.
+	p2 := createAndInsertSegmentWithG711(t, env, "rec-audio1", cameraID, baseTime.Add(30*time.Second))
+	publishSegmentCompleted(t, bus, cameraID, "rec-audio1", p2, "h264", baseTime.Add(30*time.Second))
+	audioInfo, err := ParseSegment(p2)
+	require.NoError(t, err)
+	audioKey := segmentAudioKey(audioInfo)
+	require.NotEqual(t, "none", audioKey)
+	waitForBucketAudio(t, r, cameraID, 1, audioKey, 5*time.Second)
+
+	// Segment 3: audio again. Must append to the SECOND bucket (audio intact),
+	// not trip the mixed-audio drop.
+	p3 := createAndInsertSegmentWithG711(t, env, "rec-audio2", cameraID, baseTime.Add(60*time.Second))
+	publishSegmentCompleted(t, bus, cameraID, "rec-audio2", p3, "h264", baseTime.Add(60*time.Second))
+	waitForBucketAudio(t, r, cameraID, 2, audioKey, 5*time.Second)
+
+	// Two merged recordings: the video-only bucket + the audio bucket.
+	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, recs, 2, "audio boundary must produce two merged recordings, one per audio state")
+
+	var plainRec, audioRec *model.Recording
+	for i := range recs {
+		info, err := ParseSegment(recs[i].FilePath)
+		require.NoError(t, err)
+		switch {
+		case !info.HasAudio:
+			require.Nil(t, plainRec, "more than one video-only merged recording")
+			plainRec = &recs[i]
+		case info.HasAudio:
+			require.Nil(t, audioRec, "more than one audio merged recording")
+			audioRec = &recs[i]
+			// 2 G.711 samples per segment × 2 segments — audio survived the
+			// rolling merge instead of being dropped at the boundary.
+			require.Equal(t, 4, info.AudioSampleCount, "audio bucket must retain all audio samples")
+			require.Equal(t, "g711", info.AudioCodec)
+			require.True(t, info.G711MULaw, "audio bucket must retain the μ-law config")
+			require.Equal(t, 4, info.SampleCount, "audio bucket must retain all video samples")
+		}
+	}
+	require.NotNil(t, plainRec, "video-only bucket missing")
+	require.NotNil(t, audioRec, "audio bucket missing")
+}
+
+// ---------------------------------------------------------------------------
+// TestBackfillMP4_MixedAudioBatchSplitsRuns — a backfill batch straddling an
+// audio boundary must split into audio-homogeneous runs instead of tripping
+// the mixed-audio drop policy (which would strip audio from the whole output).
+// ---------------------------------------------------------------------------
+
+func TestBackfillMP4_MixedAudioBatchSplitsRuns(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true)}
+	r := newTestRollingCoordinator(env, cfg, bus)
+
+	cameraID := "cam-mixed-batch"
+	baseTime := time.Now().UTC().Truncate(time.Hour).Add(10 * time.Minute)
+
+	// A batch spanning the boundary: plain → audio → audio.
+	p1 := createAndInsertSegment(t, env, "rec-plain", cameraID, baseTime)
+	p2 := createAndInsertSegmentWithG711(t, env, "rec-a1", cameraID, baseTime.Add(30*time.Second))
+	p3 := createAndInsertSegmentWithG711(t, env, "rec-a2", cameraID, baseTime.Add(60*time.Second))
+
+	recs := []*model.Recording{
+		{ID: "rec-plain", CameraID: cameraID, FilePath: p1, Format: model.FormatH264, StartedAt: baseTime, EndedAt: baseTime.Add(30 * time.Second), Duration: 30, FileSize: 1},
+		{ID: "rec-a1", CameraID: cameraID, FilePath: p2, Format: model.FormatH264, StartedAt: baseTime.Add(30 * time.Second), EndedAt: baseTime.Add(60 * time.Second), Duration: 30, FileSize: 1},
+		{ID: "rec-a2", CameraID: cameraID, FilePath: p3, Format: model.FormatH264, StartedAt: baseTime.Add(60 * time.Second), EndedAt: baseTime.Add(90 * time.Second), Duration: 30, FileSize: 1},
+	}
+	// Recording rows were already inserted by the create helpers above.
+
+	merged, err := r.backfillCameraRecordings(context.Background(), cameraID, recs)
+	require.NoError(t, err)
+	require.Equal(t, 3, merged)
+
+	// The plain segment stays standalone; the two audio segments merge together.
+	dbRecs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, dbRecs, 2, "expected standalone plain + merged audio recordings")
+
+	var sawPlain, sawAudio bool
+	for i := range dbRecs {
+		info, err := ParseSegment(dbRecs[i].FilePath)
+		require.NoError(t, err)
+		if info.HasAudio {
+			sawAudio = true
+			require.Equal(t, 4, info.AudioSampleCount, "merged audio run must keep all audio samples")
+			require.Equal(t, 4, info.SampleCount)
+		} else {
+			sawPlain = true
+			require.Equal(t, 2, info.SampleCount, "plain segment must stay standalone")
+		}
+	}
+	require.True(t, sawPlain, "plain standalone recording missing")
+	require.True(t, sawAudio, "audio merged recording missing")
+}
+
+// ---------------------------------------------------------------------------
+// TestSplitRunsByAudioKey — unit test for the run splitter.
+// ---------------------------------------------------------------------------
+
+func TestSplitRunsByAudioKey(t *testing.T) {
+	none := &SegmentInfo{HasAudio: false}
+	g711u := &SegmentInfo{HasAudio: true, AudioCodec: "g711", G711MULaw: true, AudioTimescale: 8000}
+	g711a := &SegmentInfo{HasAudio: true, AudioCodec: "g711", G711MULaw: false, AudioTimescale: 8000}
+	aac := &SegmentInfo{HasAudio: true, AudioCodec: "aac", AudioTimescale: 44100, AudioConfig: []byte{0x12, 0x10}}
+
+	mk := func(n int, f func(i int) *SegmentInfo) ([]*model.Recording, []*SegmentInfo) {
+		recs := make([]*model.Recording, n)
+		infos := make([]*SegmentInfo, n)
+		for i := range n {
+			recs[i] = &model.Recording{ID: fmt.Sprintf("r%d", i)}
+			infos[i] = f(i)
+		}
+		return recs, infos
+	}
+
+	// none none | g711u g711u | none | aac  → 4 runs
+	recs, infos := mk(6, func(i int) *SegmentInfo {
+		switch i {
+		case 0, 1:
+			return none
+		case 2, 3:
+			return g711u
+		case 4:
+			return none
+		default:
+			return aac
+		}
+	})
+	runs := splitRunsByAudioKey(recs, infos)
+	require.Len(t, runs, 4)
+	require.Equal(t, []int{2, 2, 1, 1}, []int{len(runs[0].infos), len(runs[1].infos), len(runs[2].infos), len(runs[3].infos)})
+	require.Equal(t, "none", runs[0].keyStr)
+	require.Equal(t, segmentAudioKey(g711u), runs[1].keyStr)
+	require.Equal(t, "none", runs[2].keyStr)
+	require.Equal(t, segmentAudioKey(aac), runs[3].keyStr)
+	// A-law vs μ-law must be different keys (config bytes differ).
+	require.NotEqual(t, segmentAudioKey(g711u), segmentAudioKey(g711a))
+
+	// All-homogeneous batch → single run.
+	recs, infos = mk(3, func(int) *SegmentInfo { return g711u })
+	runs = splitRunsByAudioKey(recs, infos)
+	require.Len(t, runs, 1)
+	require.Len(t, runs[0].infos, 3)
+}
+
 // ---------------------------------------------------------------------------
 // TestRollingMerge_DisabledByDefault — when RollingEnabled=false, no merge happens.
 // ---------------------------------------------------------------------------

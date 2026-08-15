@@ -120,7 +120,8 @@ type RollingMergeConfig struct {
 //     MergeMP4Segments([bucketOrCreate, newSegment]) → RollingReplaceRecordings.
 //   - Per-camera non-blocking lock: one merge per camera at a time (same pattern
 //     as MergeManager.acquireMergeLock). Never blocks the recorder.
-//   - SPS/PPS change (camera reconnect with new params) → close current bucket,
+//   - SPS/PPS change (camera reconnect with new params) or audio config change
+//     (audio_enabled toggled, codec/config renegotiated) → close current bucket,
 //     start a new one.
 //
 // Benchmark data (see mp4merge_bench_test.go BenchmarkRollingMergeSimulation):
@@ -161,10 +162,25 @@ type bucketInfo struct {
 	mergedFilePath string // path to the accumulating merged file (empty = not yet created)
 	mergedRecID    string // DB recording ID of the merged row (for UPDATE on next append)
 	spsKey         string // SHA-256(SPS+PPS+VPS) for compatibility checking
+	audioKey       string // segmentAudioKey for audio compatibility checking
 	windowStart    time.Time
 	windowEnd      time.Time
 	segmentCount   int   // how many segments have been merged into this bucket
 	mergedFileSize int64 // current byte size of mergedFilePath (0 if no bucket yet)
+}
+
+// segmentAudioKey derives the audio compatibility key for a parsed segment.
+// Segments with different keys cannot be merged into one MP4 without dropping
+// the audio track (MergeMP4Segments' mixed-audio policy), so the rolling bucket
+// must break at every key change — otherwise the first mixed append produces a
+// video-only bucket whose subsequent appends keep mismatching forever (sticky
+// audio loss: the degraded bucket is the input to every later merge).
+func segmentAudioKey(info *SegmentInfo) string {
+	if !info.HasAudio {
+		return "none"
+	}
+	return fmt.Sprintf("%s:mulaw=%v:ts=%d:cfg=%x",
+		info.AudioCodec, info.G711MULaw, info.AudioTimescale, info.AudioConfig)
 }
 
 // bucketSizeLimit caps how large an accumulating rolling-merge bucket file can
@@ -806,13 +822,17 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 	return merged, nil //nolint:nilerr // TODO(#storage-overhaul): intentional — report partial merge count on ctx cancellation rather than failing the whole backfill.
 }
 
-// mergeBatchMP4 merges a batch of MP4 segments into a single output file.
+// mergeBatchMP4 merges a batch of MP4 segments into output file(s).
 // Uses ParseSegment + MergeMP4Segments (the same as the periodic MergeManager).
+// The batch is first split into consecutive audio-homogeneous runs: a batch
+// that straddles an audio toggle boundary (audio_enabled flipped, codec
+// renegotiated) must not merge across it — MergeMP4Segments' mixed-audio
+// policy would silently drop the audio from the whole output.
 // Returns the number of segments successfully merged.
 func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
 	// Parse all segments.
 	infos := make([]*SegmentInfo, 0, len(recs))
-	sourcePaths := make([]string, 0, len(recs))
+	parsedRecs := make([]*model.Recording, 0, len(recs))
 	for _, rec := range recs {
 		info, err := ParseSegment(rec.FilePath)
 		if err != nil {
@@ -821,14 +841,12 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 			continue
 		}
 		infos = append(infos, info)
-		sourcePaths = append(sourcePaths, rec.FilePath)
+		parsedRecs = append(parsedRecs, rec)
 	}
+
 	if len(infos) < 2 {
 		// Not enough parseable segments — mark only the valid ones as merged.
-		for _, rec := range recs {
-			if _, err := os.Stat(rec.FilePath); os.IsNotExist(err) {
-				continue // skip missing files, don't mark them
-			}
+		for _, rec := range parsedRecs {
 			if err := storage.RetryOnBusy(ctx, func() error {
 				return r.db.SetMergeStatus(ctx, []string{rec.ID}, model.MergeStatusMerged)
 			}); err != nil {
@@ -836,7 +854,68 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 					"camera_id", cameraID, "recording_id", rec.ID, "error", err)
 			}
 		}
-		return len(recs), nil
+		return len(parsedRecs), nil
+	}
+
+	merged := 0
+	for _, run := range splitRunsByAudioKey(parsedRecs, infos) {
+		if len(run.infos) < 2 {
+			// Lone segment in its audio run — no merge partner within the run.
+			// Mark it merged; the file stays as a standalone recording.
+			if err := storage.RetryOnBusy(ctx, func() error {
+				return r.db.SetMergeStatus(ctx, []string{run.recs[0].ID}, model.MergeStatusMerged)
+			}); err != nil {
+				rollingLogger.Warn("backfill MP4: failed to mark singleton run",
+					"camera_id", cameraID, "recording_id", run.recs[0].ID, "error", err)
+			}
+			merged++
+			continue
+		}
+		n, err := r.mergeAudioRun(ctx, cameraID, run.recs, run.infos)
+		if err != nil {
+			rollingLogger.Warn("backfill MP4: run merge failed",
+				"camera_id", cameraID, "segments", len(run.recs), "error", err)
+			continue
+		}
+		merged += n
+	}
+	return merged, nil
+}
+
+// segmentRun is a consecutive, audio-homogeneous slice of a parsed batch.
+type segmentRun struct {
+	recs   []*model.Recording
+	infos  []*SegmentInfo
+	keyStr string
+}
+
+// splitRunsByAudioKey splits a parsed batch into consecutive runs sharing the
+// same segmentAudioKey. recs and infos are parallel slices (same length).
+func splitRunsByAudioKey(recs []*model.Recording, infos []*SegmentInfo) []segmentRun {
+	var runs []segmentRun
+	for i, info := range infos {
+		key := segmentAudioKey(info)
+		if len(runs) > 0 && runs[len(runs)-1].keyStr == key {
+			last := &runs[len(runs)-1]
+			last.recs = append(last.recs, recs[i])
+			last.infos = append(last.infos, info)
+			continue
+		}
+		runs = append(runs, segmentRun{
+			recs:   []*model.Recording{recs[i]},
+			infos:  []*SegmentInfo{info},
+			keyStr: key,
+		})
+	}
+	return runs
+}
+
+// mergeAudioRun merges one audio-homogeneous run into a single output file and
+// updates the DB atomically. Returns the number of source segments merged.
+func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID string, recs []*model.Recording, infos []*SegmentInfo) (int, error) {
+	sourcePaths := make([]string, 0, len(recs))
+	for _, rec := range recs {
+		sourcePaths = append(sourcePaths, rec.FilePath)
 	}
 
 	// Create output file.
@@ -1350,6 +1429,9 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	h.Write(newInfo.VPS)
 	spsKey := hex.EncodeToString(h.Sum(nil))
 
+	// Compute audio compatibility key (see segmentAudioKey).
+	audioKey := segmentAudioKey(newInfo)
+
 	// Compute the window for this segment (natural-hour or configured window).
 	cfg := r.resolveRollingConfig(seg.cameraID)
 	windowStart, windowEnd := computeWindow(seg.startedAt, cfg.Window)
@@ -1382,6 +1464,18 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 				"old_key", bucket.spsKey[:8],
 				"new_key", spsKey[:8])
 			needNewBucket = true
+		} else if bucket.audioKey != audioKey {
+			// Audio presence/config changed (audio_enabled toggled, G.711 ↔ AAC
+			// renegotiated). Merging across the boundary would trip the
+			// mixed-audio policy in MergeMP4Segments and drop audio — and the
+			// degraded bucket would poison every later append. Start a new
+			// bucket at the boundary instead: each side keeps its own intact
+			// audio state.
+			rollingLogger.Info("audio config changed, starting new bucket",
+				"camera_id", seg.cameraID,
+				"old_key", bucket.audioKey,
+				"new_key", audioKey)
+			needNewBucket = true
 		} else if bucket.mergedFileSize > 0 && bucket.mergedFileSize+newInfo.MdatSize > bucketSizeLimit {
 			// Bucket approaching the 4 GiB MP4 mdat hard limit. Finalize it
 			// and start a fresh bucket within the same window. Without this,
@@ -1404,6 +1498,7 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 		bucket.mergedFilePath = ""
 		bucket.mergedRecID = ""
 		bucket.spsKey = ""
+		bucket.audioKey = ""
 		bucket.segmentCount = 0
 		bucket.mergedFileSize = 0
 		bucket.windowStart = windowStart
@@ -1432,6 +1527,7 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	bucket.mergedFilePath = outputPath
 	bucket.mergedRecID = mergedRecID
 	bucket.spsKey = spsKey
+	bucket.audioKey = audioKey
 	bucket.segmentCount++
 	// Track merged file size for the bucketSizeLimit check on the next append.
 	// One stat per merged segment is cheap (the file was just written and its
@@ -1542,6 +1638,12 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		!bytesEqual(bucketInfo.SPS, newInfo.SPS) ||
 		!bytesEqual(bucketInfo.PPS, newInfo.PPS) {
 		return "", "", fmt.Errorf("bucket/segment codec mismatch during append")
+	}
+	// Same for audio: a mismatch here would silently drop the audio track for
+	// the whole bucket (and every future append — see segmentAudioKey).
+	if segmentAudioKey(bucketInfo) != segmentAudioKey(newInfo) {
+		return "", "", fmt.Errorf("bucket/segment audio mismatch during append (%s vs %s)",
+			segmentAudioKey(bucketInfo), segmentAudioKey(newInfo))
 	}
 
 	// Create new output file.
