@@ -16,15 +16,16 @@ const TargetFragmentDur = 6 // seconds
 
 // trun flag bits (ISO/IEC 14496-12 §8.8.8).
 const (
-	trunDataOffsetPresent    = 0x000001
+	trunDataOffsetPresent     = 0x000001
 	trunSampleDurationPresent = 0x000100
 	trunSampleSizePresent     = 0x000200
 	trunSampleFlagsPresent    = 0x000400
 )
 
 // sample flag bits: bit(4..5) sample_depends_on, bit(20) sample_is_non_sync_sample.
-//   keyframe: sample_depends_on=2 (no dependency), sync sample
-//   other:    sample_depends_on=1 (depends on others), non-sync
+//
+//	keyframe: sample_depends_on=2 (no dependency), sync sample
+//	other:    sample_depends_on=1 (depends on others), non-sync
 const (
 	sampleFlagsKeyframe = 0x02000000
 	sampleFlagsOther    = 0x01010000
@@ -34,7 +35,7 @@ const (
 // range plus the audio samples that overlap it in time. Ranges are half-open
 // [First,End).
 type Fragment struct {
-	First, End int // video sample indices
+	First, End           int // video sample indices
 	AudioFirst, AudioEnd int // audio sample indices
 
 	StartUnits    uint64 // cumulative video timescale units at First
@@ -107,7 +108,7 @@ func PlanFragments(info *merge.SegmentInfo, targetSec float64, oracle keyframeOr
 		ai := 0
 		for k := range frags {
 			fStartSec := float64(frags[k].StartUnits) / ts
-			fEndSec := fStartSec + float64(frags[k].DurationUnits) / ts
+			fEndSec := fStartSec + float64(frags[k].DurationUnits)/ts
 			first := ai
 			for ai < len(info.AudioSamples) {
 				sampleStartSec := float64(audioUnits) / ats
@@ -223,7 +224,7 @@ func BuildFragment(info *merge.SegmentInfo, frag Fragment, sequenceNumber uint32
 		for _, r := range audioRanges {
 			audioBytes += r.Size
 		}
-		for i := 0; i < frag.AudioFirst; i++ {
+		for i := range frag.AudioFirst {
 			audioStartUnits += uint64(info.AudioSamples[i].Duration)
 		}
 	}

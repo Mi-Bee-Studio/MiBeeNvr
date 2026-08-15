@@ -17,8 +17,10 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 )
 
-var testSPS = []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
-var testPPS = []byte{0x68, 0xCB, 0x83, 0xCB, 0x20}
+var (
+	testSPS = []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	testPPS = []byte{0x68, 0xCB, 0x83, 0xCB, 0x20}
+)
 
 // buildTestMP4 writes a small H.264 MP4 via the production muxer: nalu frames
 // alternating IDR (0x65) / non-IDR (0x41) headers with a keyframe every
@@ -29,7 +31,7 @@ func buildTestMP4(t *testing.T, dir, name string, sampleCount, gopSize int) stri
 	m := muxer.NewMP4Muxer(path)
 	trackID, err := m.AddH264Track(testSPS, testPPS)
 	require.NoError(t, err)
-	for i := 0; i < sampleCount; i++ {
+	for i := range sampleCount {
 		hdr := byte(0x41) // non-IDR
 		if i%gopSize == 0 {
 			hdr = 0x65 // IDR
@@ -97,11 +99,11 @@ func TestBuildFragment_BoxRoundtrip(t *testing.T) {
 
 	// Parse the moof back and verify structure + offsets.
 	var (
-		gotMfhd   *mp4.Mfhd
-		gotTraf   int
-		gotTfhd   []*mp4.Tfhd
-		gotTfdt   []*mp4.Tfdt
-		gotTrun   []*mp4.Trun
+		gotMfhd *mp4.Mfhd
+		gotTraf int
+		gotTfhd []*mp4.Tfhd
+		gotTfdt []*mp4.Tfdt
+		gotTrun []*mp4.Trun
 	)
 	_, err = mp4.ReadBoxStructure(bytes.NewReader(data.Moof), func(h *mp4.ReadHandle) (interface{}, error) {
 		switch h.BoxInfo.Type.String() {
@@ -303,8 +305,10 @@ func TestFragments_ViaManager_NoStss(t *testing.T) {
 	path := buildTestMP4(t, dir, "seg.mp4", 20, 5)
 	fi := fileInfo(t, path)
 	m := NewManager()
-	rec := model.Recording{ID: "r1", CameraID: "c1", FilePath: path, FileSize: fi.Size(), Format: model.FormatH264,
-		StartedAt: time.Now().UTC().Add(-time.Hour), EndedAt: time.Now().UTC()}
+	rec := model.Recording{
+		ID: "r1", CameraID: "c1", FilePath: path, FileSize: fi.Size(), Format: model.FormatH264,
+		StartedAt: time.Now().UTC().Add(-time.Hour), EndedAt: time.Now().UTC(),
+	}
 
 	frags, ts, err := m.Fragments(rec)
 	require.NoError(t, err)
@@ -325,7 +329,6 @@ func TestFragments_ViaManager_NoStss(t *testing.T) {
 	require.Same(t, &frags[0], &frags2[0])
 }
 
-
 func TestManagerPlaylist(t *testing.T) {
 	dir := t.TempDir()
 	p1 := buildTestMP4(t, dir, "a.mp4", 20, 5)
@@ -334,10 +337,14 @@ func TestManagerPlaylist(t *testing.T) {
 
 	m := NewManager()
 	recs := []model.Recording{
-		{ID: "rec-a", CameraID: "cam1", FilePath: p1, FileSize: fi1.Size(), Format: model.FormatH264,
-			StartedAt: time.Now().UTC().Add(-time.Hour), EndedAt: time.Now().UTC().Add(-30 * time.Minute)},
-		{ID: "rec-b", CameraID: "cam1", FilePath: p2, FileSize: fi2.Size(), Format: model.FormatH264,
-			StartedAt: time.Now().UTC().Add(-29 * time.Minute), EndedAt: time.Now().UTC().Add(-25 * time.Minute)},
+		{
+			ID: "rec-a", CameraID: "cam1", FilePath: p1, FileSize: fi1.Size(), Format: model.FormatH264,
+			StartedAt: time.Now().UTC().Add(-time.Hour), EndedAt: time.Now().UTC().Add(-30 * time.Minute),
+		},
+		{
+			ID: "rec-b", CameraID: "cam1", FilePath: p2, FileSize: fi2.Size(), Format: model.FormatH264,
+			StartedAt: time.Now().UTC().Add(-29 * time.Minute), EndedAt: time.Now().UTC().Add(-25 * time.Minute),
+		},
 	}
 
 	playlist, count, err := m.BuildPlaylist("cam1", recs)

@@ -34,16 +34,16 @@ type Manager struct {
 	targetSec     float64
 	maxRecordings int
 
-	planMu  sync.Mutex
-	plans   map[string]*planCacheItem // recording ID → fragment plan
+	planMu sync.Mutex
+	plans  map[string]*planCacheItem // recording ID → fragment plan
 }
 
 type planCacheItem struct {
-	path     string
-	size     int64
-	mtimeNs  int64
-	ts       uint32
-	frags    []Fragment
+	path    string
+	size    int64
+	mtimeNs int64
+	ts      uint32
+	frags   []Fragment
 }
 
 func NewManager() *Manager {

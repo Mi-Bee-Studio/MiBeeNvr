@@ -330,17 +330,17 @@ func parseSegment(filePath string, probeKeyframes bool) (*SegmentInfo, error) {
 	}
 
 	info := &SegmentInfo{
-		Codec:            videoTrack.codec,
-		SPS:              videoTrack.sps,
-		PPS:              videoTrack.pps,
-		VPS:              videoTrack.vps,
-		Timescale:        videoTrack.timescale,
-		SampleCount:      len(videoSamples),
-		TotalDuration:    totalDur,
-		MdatOffset:       mdatOffset,
-		MdatSize:         mdatSize,
-		Samples:          videoSamples,
-		FilePath:         filePath,
+		Codec:             videoTrack.codec,
+		SPS:               videoTrack.sps,
+		PPS:               videoTrack.pps,
+		VPS:               videoTrack.vps,
+		Timescale:         videoTrack.timescale,
+		SampleCount:       len(videoSamples),
+		TotalDuration:     totalDur,
+		MdatOffset:        mdatOffset,
+		MdatSize:          mdatSize,
+		Samples:           videoSamples,
+		FilePath:          filePath,
 		KeyframesFromStss: keyframesFromStss,
 	}
 

@@ -37,20 +37,6 @@ func (o stssOracle) nextAtOrAfter(from int) (int, bool) {
 	return 0, false
 }
 
-// sidecarOracle serves keyframe positions from a persisted index file.
-type sidecarOracle struct {
-	samples []merge.SampleEntry
-	keys    []int // sorted sample indices
-}
-
-func (o sidecarOracle) nextAtOrAfter(from int) (int, bool) {
-	i := sort.SearchInts(o.keys, from)
-	if i < len(o.keys) {
-		return o.keys[i], true
-	}
-	return 0, false
-}
-
 type probeOracle struct {
 	file    *os.File
 	samples []merge.SampleEntry
@@ -63,9 +49,9 @@ type probeOracle struct {
 	// GOP prediction state (time domain): lastBoundaryUnits is the decode
 	// time of the last keyframe returned; gopUnits the learned GOP duration.
 	// 0 = not learned yet.
-	lastBoundary    int
-	lastBoundaryU   uint64
-	gopUnits        uint64
+	lastBoundary  int
+	lastBoundaryU uint64
+	gopUnits      uint64
 
 	// Found collects every keyframe index returned (for sidecar persistence).
 	Found []int
@@ -77,10 +63,10 @@ func newProbeOracle(file *os.File, info *merge.SegmentInfo) *probeOracle {
 		prefix[i+1] = prefix[i] + uint64(s.Duration)
 	}
 	return &probeOracle{
-		file:    file,
-		samples: info.Samples,
-		codec:   info.Codec,
-		prefix:  prefix,
+		file:         file,
+		samples:      info.Samples,
+		codec:        info.Codec,
+		prefix:       prefix,
 		lastBoundary: -1,
 	}
 }

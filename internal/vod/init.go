@@ -21,7 +21,7 @@ func BuildInitSegment(info *merge.SegmentInfo, includeAudio bool) ([]byte, error
 		return nil, fmt.Errorf("segment has no timescale")
 	}
 
-	width, height := 0, 0
+	var width, height int
 	var err error
 	switch info.Codec {
 	case "h265":
@@ -87,12 +87,12 @@ func BuildInitSegment(info *merge.SegmentInfo, includeAudio bool) ([]byte, error
 
 	if includeAudio {
 		if err := writeInitTrak(w, initTrack{
-			trackID:      2,
-			timescale:    info.AudioTimescale,
-			audio:        true,
-			audioCodec:   info.AudioCodec,
-			audioConfig:  info.AudioConfig,
-			g711MULaw:    info.G711MULaw,
+			trackID:     2,
+			timescale:   info.AudioTimescale,
+			audio:       true,
+			audioCodec:  info.AudioCodec,
+			audioConfig: info.AudioConfig,
+			g711MULaw:   info.G711MULaw,
 		}); err != nil {
 			return nil, err
 		}
@@ -128,14 +128,14 @@ var identityMatrix = [9]int32{
 }
 
 type initTrack struct {
-	trackID   uint32
-	timescale uint32
-	width     uint16
-	height    uint16
-	video     bool
-	codec     string
-	sps, pps  []byte
-	vps       []byte
+	trackID     uint32
+	timescale   uint32
+	width       uint16
+	height      uint16
+	video       bool
+	codec       string
+	sps, pps    []byte
+	vps         []byte
 	audio       bool
 	audioCodec  string
 	audioConfig []byte

@@ -15,8 +15,10 @@ import (
 //
 // Best-effort: any read/write failure falls back to live computation.
 
-const sidecarSuffix = ".vodidx"
-const sidecarVersion = 2
+const (
+	sidecarSuffix  = ".vodidx"
+	sidecarVersion = 2
+)
 
 type sidecarData struct {
 	Version   int           `json:"version"`
@@ -27,12 +29,12 @@ type sidecarData struct {
 }
 
 type sidecarFrag struct {
-	First     int    `json:"f"` // video sample range [First,End)
-	End       int    `json:"e"`
-	AudioFirst int   `json:"af"`
-	AudioEnd  int    `json:"ae"`
+	First      int    `json:"f"` // video sample range [First,End)
+	End        int    `json:"e"`
+	AudioFirst int    `json:"af"`
+	AudioEnd   int    `json:"ae"`
 	StartUnits uint64 `json:"s"`
-	DurUnits  uint64 `json:"d"`
+	DurUnits   uint64 `json:"d"`
 }
 
 func sidecarPath(mp4Path string) string {
