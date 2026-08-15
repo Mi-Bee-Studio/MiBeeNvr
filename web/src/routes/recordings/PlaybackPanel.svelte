@@ -15,6 +15,7 @@
   import {
     getRecording,
     getRecordingVideoUrl,
+    getCameraPlaybackPlaylistURL,
     getMergedRecordingUrl,
     probeMergedRecordingCodec,
     clearMergedCodecCache,
@@ -118,169 +119,6 @@
   let armingNext = false;
   let standbyReady = false;
   let switchToken = 0;
-
-  // --- Continuous playback (VOD HLS, #321 Phase 2) ---
-  // One hls.js MediaSource timeline for the camera's whole day: scrub anywhere
-  // (across recordings AND gaps) like a local file. Media time (0..dayDur on
-  // the video element) is mapped to/from wall-clock segments via vodMap,
-  // which is parsed from the playlist's EXT-X-MAP/EXTINF lines.
-  interface VodEntry { rid: string; mediaStart: number; dur: number; }
-  let continuousMode = $state(false);
-  let continuousReady = $state(false);
-  let hlsInstance: any = null;
-  let vodMap: VodEntry[] = [];
-  let activeVodEntry: VodEntry | null = null;
-  const CONTINUOUS_PREF_KEY = 'mibee_nvr_continuous_playback';
-
-  function mediaTimeFor(rid: string, offsetSec: number): number | null {
-    const e = vodMap.find((x) => x.rid === rid);
-    if (!e) return null;
-    return e.mediaStart + Math.max(0, Math.min(offsetSec, e.dur));
-  }
-
-  function vodEntryAt(mediaTime: number): VodEntry | null {
-    for (const e of vodMap) {
-      if (mediaTime >= e.mediaStart && mediaTime < e.mediaStart + e.dur) return e;
-    }
-    return vodMap.length > 0 ? vodMap[vodMap.length - 1] : null;
-  }
-
-  function parseVodPlaylist(text: string): VodEntry[] {
-    const entries: VodEntry[] = [];
-    let current: VodEntry | null = null;
-    for (const line of text.split('\n')) {
-      const mapMatch = line.match(/^#EXT-X-MAP:URI="\/api\/cameras\/[^/]+\/playback\/([^/]+)\/init\.mp4"/);
-      if (mapMatch) {
-        current = { rid: mapMatch[1], mediaStart: 0, dur: 0 };
-        entries.push(current);
-        continue;
-      }
-      const infMatch = line.match(/^#EXTINF:([\d.]+),/);
-      if (infMatch && current) {
-        current.dur += parseFloat(infMatch[1]);
-      }
-    }
-    let cum = 0;
-    for (const e of entries) {
-      e.mediaStart = cum;
-      cum += e.dur;
-    }
-    return entries;
-  }
-
-  function teardownContinuous() {
-    if (hlsInstance) {
-      try { hlsInstance.destroy(); } catch { /* already dead */ }
-      hlsInstance = null;
-    }
-    continuousReady = false;
-    activeVodEntry = null;
-    vodMap = [];
-  }
-
-  async function enableContinuous(startOffsetSec: number | null) {
-    if (!recording || !videoEl) return;
-    const f = recording.format;
-    if (f !== 'h264' && f !== 'h265') return;
-    if (f === 'h265') {
-      const MS = (window as any).MediaSource;
-      if (!MS || !MS.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"')) {
-        showToast(t('detail.continuousH265Unsupported'), 'error');
-        continuousMode = false;
-        localStorage.removeItem(CONTINUOUS_PREF_KEY);
-        return;
-      }
-    }
-    // Local calendar day of the current recording (same window TimelineBar uses).
-    const d = new Date(recording.started_at);
-    const startISO = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0).toISOString();
-    const endISO = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59).toISOString();
-    const { getCameraPlaybackPlaylistURL } = await import('$lib/api');
-
-    let text: string;
-    showToast(t('detail.continuousBuilding'), 'info');
-    try {
-      const resp = await fetch(getCameraPlaybackPlaylistURL(recording.camera_id, startISO, endISO));
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      text = await resp.text();
-    } catch (e) {
-      console.warn('VOD playlist fetch failed', e);
-      showToast(t('detail.continuousFailed'), 'error');
-      continuousMode = false;
-      localStorage.removeItem(CONTINUOUS_PREF_KEY);
-      return;
-    }
-    const map = parseVodPlaylist(text);
-    if (map.length === 0) {
-      showToast(t('detail.continuousFailed'), 'error');
-      continuousMode = false;
-      localStorage.removeItem(CONTINUOUS_PREF_KEY);
-      return;
-    }
-    vodMap = map;
-
-    const mod: any = await import('hls.js');
-    const Hls = mod.default;
-    if (!Hls.isSupported()) {
-      showToast(t('detail.continuousFailed'), 'error');
-      continuousMode = false;
-      return;
-    }
-    teardownContinuous();
-    // The per-segment chain is owned by hls.js in this mode.
-    armedNext = null;
-    armedRecId = '';
-    nextRecordingId = null;
-    const hls = new Hls({
-      enableWorker: false,
-      maxBufferLength: 30,
-      backBufferLength: 60,
-      // Building the first playlist of a day parses every recording server-side
-      // (seconds on a slow disk) — allow generous load timeouts.
-      manifestLoadPolicy: {
-        default: { maxTimeToFirstByteMs: 20000, maxLoadTimeMs: 60000, timeoutRetry: { maxNumRetry: 1, retryDelayMs: 500 }, errorRetry: { maxNumRetry: 1, retryDelayMs: 500 } },
-      },
-    });
-    hlsInstance = hls;
-
-    const entry = vodMap.find((x) => x.rid === recording!.id) ?? vodMap[0];
-    const startAt = entry.rid === recording.id
-      ? entry.mediaStart + Math.max(0, Math.min(startOffsetSec ?? videoCurrentTime, entry.dur))
-      : entry.mediaStart;
-
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      continuousReady = true;
-      videoEl?.focus?.();
-      if (videoEl) {
-        try { videoEl.currentTime = startAt; } catch { /* not seekable yet */ }
-        activeVodEntry = vodEntryAt(startAt);
-        if (videoIsPlaying) void videoEl.play();
-      }
-    });
-    hls.on(Hls.Events.ERROR, (_evt: unknown, data: any) => {
-      if (!data?.fatal) return;
-      console.warn('VOD HLS fatal error, falling back to per-segment mode', data);
-      teardownContinuous();
-      continuousMode = false;
-      localStorage.removeItem(CONTINUOUS_PREF_KEY);
-      showToast(t('detail.continuousFailed'), 'error');
-      initVideoPlayer();
-    });
-    hls.attachMedia(videoEl);
-    hls.loadSource(getCameraPlaybackPlaylistURL(recording.camera_id, startISO, endISO));
-  }
-
-  function toggleContinuous() {
-    continuousMode = !continuousMode;
-    if (continuousMode) {
-      localStorage.setItem(CONTINUOUS_PREF_KEY, '1');
-      void enableContinuous(pendingTimelineSeekOffset);
-    } else {
-      localStorage.removeItem(CONTINUOUS_PREF_KEY);
-      teardownContinuous();
-      initVideoPlayer();
-    }
-  }
 
   // --- H.265 → H.264 transcode-for-playback ---
   let transcodeForPlayback = $state(false);
@@ -442,6 +280,170 @@
   }
 
   let nextRecordingId = $state<string | null>(null);
+
+  // --- Continuous playback (VOD HLS, #321 Phase 2) ---
+  // One hls.js MediaSource timeline for the camera's whole day: scrub anywhere
+  // (across recordings AND gaps) like a local file. Media time (0..dayDur on
+  // the video element) is mapped to/from wall-clock segments via vodMap,
+  // which is parsed from the playlist's EXT-X-MAP/EXTINF lines.
+  interface VodEntry { rid: string; mediaStart: number; dur: number; }
+  let continuousMode = $state(false);
+  let continuousReady = $state(false);
+  let hlsInstance: any = null;
+  let vodMap: VodEntry[] = [];
+  let activeVodEntry: VodEntry | null = null;
+  const CONTINUOUS_PREF_KEY = 'mibee_nvr_continuous_playback';
+
+  function mediaTimeFor(rid: string, offsetSec: number): number | null {
+    const e = vodMap.find((x) => x.rid === rid);
+    if (!e) return null;
+    return e.mediaStart + Math.max(0, Math.min(offsetSec, e.dur));
+  }
+
+  function vodEntryAt(mediaTime: number): VodEntry | null {
+    for (const e of vodMap) {
+      if (mediaTime >= e.mediaStart && mediaTime < e.mediaStart + e.dur) return e;
+    }
+    return vodMap.length > 0 ? vodMap[vodMap.length - 1] : null;
+  }
+
+  function parseVodPlaylist(text: string): VodEntry[] {
+    const entries: VodEntry[] = [];
+    let current: VodEntry | null = null;
+    for (const line of text.split('\n')) {
+      const mapMatch = line.match(/^#EXT-X-MAP:URI="\/api\/cameras\/[^/]+\/playback\/([^/]+)\/init\.mp4"/);
+      if (mapMatch) {
+        current = { rid: mapMatch[1], mediaStart: 0, dur: 0 };
+        entries.push(current);
+        continue;
+      }
+      const infMatch = line.match(/^#EXTINF:([\d.]+),/);
+      if (infMatch && current) {
+        current.dur += parseFloat(infMatch[1]);
+      }
+    }
+    let cum = 0;
+    for (const e of entries) {
+      e.mediaStart = cum;
+      cum += e.dur;
+    }
+    return entries;
+  }
+
+  function teardownContinuous() {
+    if (hlsInstance) {
+      try { hlsInstance.destroy(); } catch { /* already dead */ }
+      hlsInstance = null;
+    }
+    continuousReady = false;
+    activeVodEntry = null;
+    vodMap = [];
+  }
+
+  async function enableContinuous(startOffsetSec: number | null) {
+    if (!recording || !videoEl) return;
+    const f = recording.format;
+    if (f !== 'h264' && f !== 'h265') return;
+    if (f === 'h265') {
+      const MS = (window as any).MediaSource;
+      if (!MS || !MS.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"')) {
+        showToast(t('detail.continuousH265Unsupported'), 'error');
+        continuousMode = false;
+        localStorage.removeItem(CONTINUOUS_PREF_KEY);
+        return;
+      }
+    }
+    // Local calendar day of the current recording (same window TimelineBar uses).
+    const d = new Date(recording.started_at);
+    const startISO = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0).toISOString();
+    const endISO = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59).toISOString();
+
+    let text: string;
+    showToast(t('detail.continuousBuilding'), 'info');
+    try {
+      const resp = await fetch(getCameraPlaybackPlaylistURL(recording.camera_id, startISO, endISO));
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      text = await resp.text();
+    } catch (e) {
+      console.warn('VOD playlist fetch failed', e);
+      showToast(t('detail.continuousFailed'), 'error');
+      continuousMode = false;
+      localStorage.removeItem(CONTINUOUS_PREF_KEY);
+      return;
+    }
+    const map = parseVodPlaylist(text);
+    if (map.length === 0) {
+      showToast(t('detail.continuousFailed'), 'error');
+      continuousMode = false;
+      localStorage.removeItem(CONTINUOUS_PREF_KEY);
+      return;
+    }
+    vodMap = map;
+    // Capture the start position BEFORE teardownContinuous() resets vodMap.
+    const entry = vodMap.find((x) => x.rid === recording!.id) ?? vodMap[0];
+    const startAt = entry.rid === recording.id
+      ? entry.mediaStart + Math.max(0, Math.min(startOffsetSec ?? videoCurrentTime, entry.dur))
+      : entry.mediaStart;
+
+    const mod: any = await import('hls.js');
+    const Hls = mod.default;
+    if (!Hls.isSupported()) {
+      showToast(t('detail.continuousFailed'), 'error');
+      continuousMode = false;
+      return;
+    }
+    teardownContinuous();
+    vodMap = map; // re-arm: teardown cleared it
+    // The per-segment chain is owned by hls.js in this mode.
+    armedNext = null;
+    armedRecId = '';
+    nextRecordingId = null;
+    const hls = new Hls({
+      enableWorker: false,
+      maxBufferLength: 30,
+      backBufferLength: 60,
+      // Building the first playlist of a day parses every recording server-side
+      // (seconds on a slow disk) — allow generous load timeouts.
+      manifestLoadPolicy: {
+        default: { maxTimeToFirstByteMs: 20000, maxLoadTimeMs: 60000, timeoutRetry: { maxNumRetry: 1, retryDelayMs: 500 }, errorRetry: { maxNumRetry: 1, retryDelayMs: 500 } },
+      },
+    });
+    hlsInstance = hls;
+
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      continuousReady = true;
+      videoEl?.focus?.();
+      if (videoEl) {
+        try { videoEl.currentTime = startAt; } catch { /* not seekable yet */ }
+        activeVodEntry = vodEntryAt(startAt);
+        if (videoIsPlaying) void videoEl.play();
+      }
+    });
+    hls.on(Hls.Events.ERROR, (_evt: unknown, data: any) => {
+      if (!data?.fatal) return;
+      console.warn('VOD HLS fatal error, falling back to per-segment mode', data);
+      teardownContinuous();
+      continuousMode = false;
+      localStorage.removeItem(CONTINUOUS_PREF_KEY);
+      showToast(t('detail.continuousFailed'), 'error');
+      initVideoPlayer();
+    });
+    hls.attachMedia(videoEl);
+    hls.loadSource(getCameraPlaybackPlaylistURL(recording.camera_id, startISO, endISO));
+  }
+
+  function toggleContinuous() {
+    continuousMode = !continuousMode;
+    if (continuousMode) {
+      localStorage.setItem(CONTINUOUS_PREF_KEY, '1');
+      void enableContinuous(pendingTimelineSeekOffset);
+    } else {
+      localStorage.removeItem(CONTINUOUS_PREF_KEY);
+      teardownContinuous();
+      initVideoPlayer();
+    }
+  }
+
   function handleTimeUpdate(e: Event) {
     if (e.target !== videoEl) return;
     const video = e.target as HTMLVideoElement;
