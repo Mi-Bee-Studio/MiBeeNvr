@@ -103,7 +103,7 @@ func (o *probeOracle) nextAtOrAfter(from int) (int, bool) {
 	if o.gopUnits > 0 && o.lastBoundary >= 0 {
 		target := o.lastBoundaryU + o.gopUnits
 		base := sort.Search(len(o.prefix), func(i int) bool { return o.prefix[i] >= target })
-		for d := 0; d <= 4; d++ {
+		for d := range 5 {
 			for _, p := range []int{base + d, base - d} {
 				if p >= from && p < n && o.isKey(p) {
 					o.record(p)
