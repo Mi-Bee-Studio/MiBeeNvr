@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 AGENTS.md
+
+# emergency out-dir (Windows file-lock workaround)
+dist2/

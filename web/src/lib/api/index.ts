@@ -156,6 +156,7 @@ export {
   getRecordingDownloadUrl,
   getRecordingVideoUrl,
   getMergedRecordingUrl,
+  getCameraPlaybackPlaylistURL,
   probeMergedRecordingCodec,
   clearMergedCodecCache,
   downloadRecording,

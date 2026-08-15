@@ -244,6 +244,13 @@ export function getMergedRecordingUrl(id: string): string {
   return `/api/recordings/${id}/merged`;
 }
 
+// getCameraPlaybackPlaylistURL builds the day-range VOD HLS playlist URL
+// (#321 Phase 2). The playlist stitches every H.264/H.265 recording of the
+// camera within [start, end] (RFC3339) into one seekable timeline.
+export function getCameraPlaybackPlaylistURL(cameraId: string, startISO: string, endISO: string): string {
+  return `/api/cameras/${cameraId}/playback/playlist.m3u8?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`;
+}
+
 // probeMergedRecordingCodec issues a HEAD request to the /merged endpoint and
 // returns the X-Timelapse-Codec header value ('h264' / 'h265' / 'mjpeg') so the
 // frontend can pick the right playback path: <video> for H.264/H.265 (browser-

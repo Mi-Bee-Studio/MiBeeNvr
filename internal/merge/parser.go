@@ -24,6 +24,11 @@ type SegmentInfo struct {
 	MdatSize      int64 // total mdat box size including header
 	Samples       []SampleEntry
 	FilePath      string // source file path for data reading
+	// KeyframesFromStss reports that Samples' IsKeyFrame flags were populated
+	// from the file's sync-sample table (complete + exact). False means the
+	// flags were NOT probed (ParseSegmentNoProbe on an stss-less file) and the
+	// caller must derive keyframes itself.
+	KeyframesFromStss bool
 
 	// Audio track fields (populated when segment contains audio).
 	HasAudio         bool
@@ -66,11 +71,27 @@ type trackAccum struct {
 	stscEntries []mp4.StscEntry
 	stcoOffsets []uint32
 	co64Offsets []uint64
+	stssSamples []uint32 // sync-sample numbers (1-indexed), when present
 }
 
 // ParseSegment reads an MP4 file and extracts codec config, sample tables,
-// and mdat location. Uses file seeking — does not load the entire file.
+// and mdat location, including per-sample keyframe flags (from stss when the
+// file has one, else by probing each sample's first NAL header byte).
+// Uses file seeking — does not load the entire file.
 func ParseSegment(filePath string) (*SegmentInfo, error) {
+	return parseSegment(filePath, true)
+}
+
+// ParseSegmentNoProbe is ParseSegment WITHOUT the byte-probing keyframe pass:
+// IsKeyFrame is only filled when the file carries a sync-sample table (stss).
+// For stss-less files the caller owns keyframe detection (e.g. the VOD
+// fragmenter probes lazily at candidate cut points instead of scanning the
+// whole media data — a full probe pass costs minutes on slow spinning disks).
+func ParseSegmentNoProbe(filePath string) (*SegmentInfo, error) {
+	return parseSegment(filePath, false)
+}
+
+func parseSegment(filePath string, probeKeyframes bool) (*SegmentInfo, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
@@ -184,6 +205,9 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		case *mp4.Stsc:
 			current.stscEntries = b.Entries
 
+		case *mp4.Stss:
+			current.stssSamples = b.SampleNumber
+
 		case *mp4.Stco:
 			current.stcoOffsets = b.ChunkOffset
 
@@ -263,9 +287,19 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		return nil, fmt.Errorf("build video samples: %w", err)
 	}
 
-	// Detect keyframes in video samples.
-	if err := detectKeyframes(f, videoSamples, videoTrack.codec); err != nil {
-		return nil, fmt.Errorf("detect keyframes: %w", err)
+	// Detect keyframes in video samples. A sync-sample table (stss) is the
+	// fast path — no media bytes need to be read. Without stss, byte-probe
+	// each sample's first NAL header (sequential windowed reads) — skippable
+	// via ParseSegmentNoProbe for callers with their own lazy strategy.
+	keyframesFromStss := len(videoTrack.stssSamples) > 0
+	if keyframesFromStss {
+		if err := markKeyframesFromStss(videoSamples, videoTrack.stssSamples); err != nil {
+			return nil, fmt.Errorf("mark keyframes from stss: %w", err)
+		}
+	} else if probeKeyframes {
+		if err := detectKeyframes(f, videoSamples, videoTrack.codec); err != nil {
+			return nil, fmt.Errorf("detect keyframes: %w", err)
+		}
 	}
 
 	// Validate per-sample bounds.
@@ -296,17 +330,18 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 	}
 
 	info := &SegmentInfo{
-		Codec:         videoTrack.codec,
-		SPS:           videoTrack.sps,
-		PPS:           videoTrack.pps,
-		VPS:           videoTrack.vps,
-		Timescale:     videoTrack.timescale,
-		SampleCount:   len(videoSamples),
-		TotalDuration: totalDur,
-		MdatOffset:    mdatOffset,
-		MdatSize:      mdatSize,
-		Samples:       videoSamples,
-		FilePath:      filePath,
+		Codec:             videoTrack.codec,
+		SPS:               videoTrack.sps,
+		PPS:               videoTrack.pps,
+		VPS:               videoTrack.vps,
+		Timescale:         videoTrack.timescale,
+		SampleCount:       len(videoSamples),
+		TotalDuration:     totalDur,
+		MdatOffset:        mdatOffset,
+		MdatSize:          mdatSize,
+		Samples:           videoSamples,
+		FilePath:          filePath,
+		KeyframesFromStss: keyframesFromStss,
 	}
 
 	// Build audio sample entries if audio track present.
@@ -558,40 +593,76 @@ func buildSampleEntries(
 	return samples, nil
 }
 
-// detectKeyframes reads the first few bytes of each sample's NAL data
-// to determine if it's a keyframe (IDR for H.264, IRAP for H.265).
+// markKeyframesFromStss sets IsKeyFrame from a sync-sample table (1-indexed
+// sample numbers). Out-of-range entries are an error — a corrupt stss must not
+// silently produce a wrong keyframe map.
+func markKeyframesFromStss(samples []SampleEntry, stssSamples []uint32) error {
+	n := uint32(len(samples))
+	for _, num := range stssSamples {
+		if num < 1 || num > n {
+			return fmt.Errorf("stss entry %d out of range (1..%d)", num, n)
+		}
+		samples[num-1].IsKeyFrame = true
+	}
+	return nil
+}
+
+// detectKeyframes reads the first bytes of each sample's NAL data to determine
+// if it's a keyframe (IDR for H.264, IRAP for H.265).
+//
+// Samples are laid out in ascending file-offset order (per-track chunk layout),
+// so the probe walks the media data sequentially in large windows instead of
+// issuing one tiny ReadAt per sample. A 1-hour recording has ~90k samples —
+// per-sample 6-byte reads cost ~13 CPU-seconds in syscall overhead alone on
+// ARM (verified on the Banana Pi: a 9-file day kept the process in D-state for
+// minutes); windowed 1MB reads cut the syscall count ~200x with identical
+// results.
 func detectKeyframes(f *os.File, samples []SampleEntry, codec string) error {
 	if len(samples) == 0 || codec == "" {
 		return nil
 	}
 
-	// 4-byte NAL length prefix + up to 2 bytes NAL header (H.265 has 2-byte header).
-	buf := make([]byte, 6)
+	const window = 1 << 20
+	buf := make([]byte, window)
+	var winStart, winEnd int64 // file range currently buffered in buf
 
-	for i := range samples {
-		if samples[i].Size < 5 {
-			continue
+	var readErr error
+	probe := func(i int) {
+		s := &samples[i]
+		if s.Size < 5 {
+			return
 		}
-
-		n, err := f.ReadAt(buf, samples[i].Offset)
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return fmt.Errorf("read sample %d at offset %d: %w", i, samples[i].Offset, err)
+		off := s.Offset
+		if off < winStart || off+6 > winEnd {
+			n, err := f.ReadAt(buf, off)
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				readErr = fmt.Errorf("read sample %d at offset %d: %w", i, off, err)
+				return
+			}
+			winStart, winEnd = off, off+int64(n)
 		}
-		if n < 5 {
-			continue
+		if off+6 > winEnd {
+			return // short read at EOF — skip this sample
 		}
-
-		// buf[0:4] = NAL length prefix (big-endian).
-		// buf[4] = first byte of NAL unit (for both H.264 and H.265).
+		pos := off - winStart
+		// buf[pos:pos+4] = NAL length prefix (big-endian).
+		// buf[pos+4] = first byte of NAL unit (for both H.264 and H.265).
 		switch codec {
 		case "h264":
-			nalType := buf[4] & 0x1F
-			samples[i].IsKeyFrame = (nalType == 5) || (nalType == 7) || (nalType == 8) // IDR, SPS, or PPS
+			nalType := buf[pos+4] & 0x1F
+			s.IsKeyFrame = (nalType == 5) || (nalType == 7) || (nalType == 8) // IDR, SPS, or PPS
 		case "h265":
 			// H.265 NAL header: forbidden_zero_bit(1) + nal_unit_type(6) + nuh_layer_id(6) + nuh_temporal_id_plus1(3).
 			// Type is in bits 1-6 of the first NAL header byte.
-			nalType := (uint16(buf[4]) >> 1) & 0x3F
-			samples[i].IsKeyFrame = (nalType >= 16 && nalType <= 21) // IRAP: BLA/IDR/CRA
+			nalType := (uint16(buf[pos+4]) >> 1) & 0x3F
+			s.IsKeyFrame = (nalType >= 16 && nalType <= 21) // IRAP: BLA/IDR/CRA
+		}
+	}
+
+	for i := range samples {
+		probe(i)
+		if readErr != nil {
+			return readErr
 		}
 	}
 
