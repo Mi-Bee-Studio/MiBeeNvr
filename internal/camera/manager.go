@@ -132,6 +132,10 @@ type CameraManager struct {
 	// gb28181Inviter (optional) sends SIP INVITE to start media sessions for
 	// GB28181 cameras. When set, starting a GB28181 recorder auto-triggers INVITE.
 	gb28181Inviter GB28181Inviter
+	// gb28181SessionEnder recycles a channel session when its recorder is
+	// replaced (camera update/restart), so the next auto-INVITE binds the
+	// new recorder instead of streaming into a stale one.
+	gb28181SessionEnder GB28181SessionEnder
 	// backfillWg tracks the startup stable_id backfill goroutine so Stop can
 	// wait for it to exit before returning. Without this, the goroutine can
 	// outlive the DB handle and crash with "sql: database is closed" when the

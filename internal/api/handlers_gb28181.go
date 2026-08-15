@@ -317,28 +317,260 @@ func (h *Handler) handlePTZChannel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChannelRecords returns device-side recording index for a time range.
-// NOT IMPLEMENTED: the RecordInfo query + response correlation is not wired
-// yet. Returns 501 so callers don't mistake an empty list for "no recordings".
+// --- GB28181 PTZ presets (local registry + device commands, #339) ---
+// GB28181 has no device-side preset query — the platform picks preset numbers
+// (1-255) and devices only understand set/call/delete commands
+// (GB/T 28181-2016 § A.3.4). Presets are therefore tracked in the local
+// camera_ptz_presets table and mirrored to the device on every operation.
+
+// gb28181PresetResponse mirrors the ONVIF PTZPreset shape consumed by the
+// frontend (token + name).
+type gb28181PresetResponse struct {
+	Token string `json:"token"`
+	Name  string `json:"name"`
+}
+
+func (h *Handler) handleGB28181PTZGetPresets(w http.ResponseWriter, r *http.Request, cameraID string) {
+	presets := []gb28181PresetResponse{}
+	if h.db != nil {
+		rows, err := h.db.ListPTZPresets(r.Context(), cameraID)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "failed to list presets")
+			return
+		}
+		for _, p := range rows {
+			presets = append(presets, gb28181PresetResponse{Token: p.Token, Name: p.Name})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"presets": presets})
+}
+
+func (h *Handler) handleGB28181PTZCreatePreset(w http.ResponseWriter, r *http.Request, cameraID string) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name == "" {
+		WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	channelID := h.gb28181ChannelID(cameraID)
+	if channelID == "" {
+		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	token, ok := h.db.NextPTZPresetToken(r.Context(), cameraID)
+	if !ok {
+		WriteError(w, http.StatusConflict, "all 255 preset slots are in use")
+		return
+	}
+	presetNum, err := strconv.Atoi(token)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "invalid preset token")
+		return
+	}
+	// Best-effort SET on the device: the local row is created regardless —
+	// devices without firmware preset support still get goto/delete commands
+	// once the firmware catches up.
+	if err := h.gb28181PTZ.SendPTZPreset(channelID, gb28181.PresetSet, byte(presetNum)); err != nil &&
+		!errors.Is(err, gb28181.ErrPTZUnsupported) {
+		h.mapGB28181PTZError(w, err)
+		return
+	}
+	if err := h.db.UpsertPTZPreset(r.Context(), storage.PTZPreset{
+		CameraID:  cameraID,
+		Token:     token,
+		Name:      req.Name,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to save preset")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+func (h *Handler) handleGB28181PTZGoToPreset(w http.ResponseWriter, r *http.Request, cameraID, token string) {
+	channelID := h.gb28181ChannelID(cameraID)
+	if channelID == "" {
+		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	presetNum, err := strconv.Atoi(token)
+	if err != nil || presetNum < 1 || presetNum > 255 {
+		WriteError(w, http.StatusBadRequest, "invalid preset token")
+		return
+	}
+	if err := h.gb28181PTZ.SendPTZPreset(channelID, gb28181.PresetCall, byte(presetNum)); err != nil {
+		h.mapGB28181PTZError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) handleGB28181PTZDeletePreset(w http.ResponseWriter, r *http.Request, cameraID, token string) {
+	channelID := h.gb28181ChannelID(cameraID)
+	if channelID == "" {
+		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 channel")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	presetNum, err := strconv.Atoi(token)
+	if err != nil || presetNum < 1 || presetNum > 255 {
+		WriteError(w, http.StatusBadRequest, "invalid preset token")
+		return
+	}
+	if err := h.gb28181PTZ.SendPTZPreset(channelID, gb28181.PresetDelete, byte(presetNum)); err != nil &&
+		!errors.Is(err, gb28181.ErrPTZUnsupported) {
+		h.mapGB28181PTZError(w, err)
+		return
+	}
+	if h.db != nil {
+		if err := h.db.DeletePTZPreset(r.Context(), cameraID, token); err != nil {
+			WriteError(w, http.StatusInternalServerError, "failed to delete preset")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// mapGB28181PTZError maps PTZ controller errors to HTTP status codes.
+func (h *Handler) mapGB28181PTZError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, gb28181.ErrChannelNotFound):
+		WriteError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, gb28181.ErrDeviceOffline):
+		WriteError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, gb28181.ErrPTZUnsupported), errors.Is(err, gb28181.ErrZoomUnsupported):
+		WriteError(w, http.StatusNotFound, "PTZ not supported")
+	default:
+		slog.Error("failed to send GB28181 PTZ command", "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to send PTZ command")
+	}
+}
+
+// gb28181DeviceRecord is the JSON shape of one device-side record entry.
+type gb28181DeviceRecord struct {
+	Name      string `json:"name"`
+	FilePath  string `json:"file_path,omitempty"`
+	StartTime string `json:"start_time"` // RFC3339
+	EndTime   string `json:"end_time"`   // RFC3339
+}
+
+// parseGB28181Time parses a device-supplied timestamp. GB/T 28181 uses
+// "2006-01-02T15:04:05"; some vendors use a space separator. Local device
+// time is interpreted in the NVR's local timezone (devices lack TZ info).
+func parseGB28181Time(v string) (time.Time, bool) {
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", time.RFC3339} {
+		if t, err := time.ParseInLocation(layout, v, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// resolveChannelDevice finds the device owning channelID across all
+// registered devices ("" when unknown).
+func (h *Handler) resolveChannelDevice(channelID string) (string, bool) {
+	if h.gb28181DeviceMgr == nil {
+		return "", false
+	}
+	for _, dev := range h.gb28181DeviceMgr.AllDevices() {
+		if _, ok := h.gb28181DeviceMgr.FindChannel(dev.ID, channelID); ok {
+			return dev.ID, true
+		}
+	}
+	return "", false
+}
+
+// handleChannelRecords returns the device-side recording index for a time
+// range (RecordInfo query + paged response correlation, #337).
 func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
 		return
 	}
-	start := r.URL.Query().Get("start")
-	end := r.URL.Query().Get("end")
-	if start == "" || end == "" {
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+	if startStr == "" || endStr == "" {
 		WriteError(w, http.StatusBadRequest, "start and end query params are required")
 		return
 	}
-	WriteError(w, http.StatusNotImplemented, "device-side record listing is not implemented")
+	start, err := time.Parse(time.RFC3339, startStr)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "start must be RFC3339")
+		return
+	}
+	end, err := time.Parse(time.RFC3339, endStr)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "end must be RFC3339")
+		return
+	}
+	if !end.After(start) || end.Sub(start) > 7*24*time.Hour {
+		WriteError(w, http.StatusBadRequest, "invalid range: end must be after start, max 7 days")
+		return
+	}
+
+	deviceID, ok := h.resolveChannelDevice(channelID)
+	if !ok {
+		WriteError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if h.gb28181Media == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
+		return
+	}
+
+	items, err := h.gb28181Media.QueryChannelRecords(deviceID, channelID, start, end)
+	if err != nil {
+		slog.Warn("GB28181 record query failed", "channel_id", channelID, "error", err)
+		WriteError(w, http.StatusBadGateway, "device record query failed: "+err.Error())
+		return
+	}
+
+	records := make([]gb28181DeviceRecord, 0, len(items))
+	for _, it := range items {
+		st, okSt := parseGB28181Time(it.StartTime)
+		et, okEt := parseGB28181Time(it.EndTime)
+		if !okSt || !okEt {
+			continue // malformed device entries are dropped, not fatal
+		}
+		records = append(records, gb28181DeviceRecord{
+			Name:      it.Name,
+			FilePath:  it.FilePath,
+			StartTime: st.UTC().Format(time.RFC3339),
+			EndTime:   et.UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"channel_id": channelID,
+		"count":      len(records),
+		"records":    records,
+	})
 }
 
-// handleChannelPlayback starts a playback session for a time range.
-// Triggers a playback INVITE via the session manager; the incoming RTP/PS
-// stream is demuxed and written as a normal MiBee recording.
-func (h *Handler) handleChannelPlayback(w http.ResponseWriter, r *http.Request) {
+// handleChannelPlaybackStart starts a device-recording fetch: a playback
+// INVITE whose RTP/PS stream is muxed into a normal MiBee recording for the
+// bound camera. One fetch per channel — a running fetch is replaced.
+func (h *Handler) handleChannelPlaybackStart(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
 	if channelID == "" {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
@@ -352,10 +584,99 @@ func (h *Handler) handleChannelPlayback(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Start == "" || req.End == "" {
-		WriteError(w, http.StatusBadRequest, "start and end are required")
+	start, err := time.Parse(time.RFC3339, req.Start)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "start must be RFC3339")
 		return
 	}
+	end, err := time.Parse(time.RFC3339, req.End)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "end must be RFC3339")
+		return
+	}
+	if !end.After(start) || end.Sub(start) > 24*time.Hour {
+		WriteError(w, http.StatusBadRequest, "invalid range: end must be after start, max 24 hours")
+		return
+	}
+
+	deviceID, ok := h.resolveChannelDevice(channelID)
+	if !ok {
+		WriteError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if h.gb28181Media == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
+		return
+	}
+
 	slog.Info("GB28181 channel playback requested", "channel_id", channelID, "start", req.Start, "end", req.End)
-	WriteError(w, http.StatusNotImplemented, "device-side playback is not implemented")
+	if err := h.gb28181Media.StartPlayback(deviceID, channelID, start, end); err != nil {
+		slog.Warn("GB28181 playback start failed", "channel_id", channelID, "error", err)
+		WriteError(w, http.StatusBadGateway, "playback start failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":     "playback_started",
+		"channel_id": channelID,
+	})
+}
+
+// handleChannelPlaybackStatus reports the running fetch (404 when idle).
+func (h *Handler) handleChannelPlaybackStatus(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "id")
+	if h.gb28181Media == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
+		return
+	}
+	st, ok := h.gb28181Media.PlaybackStatusFor(channelID)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false, "channel_id": channelID})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// handleChannelPlaybackStop stops a running fetch (SIP BYE + finalize the
+// partially-fetched recording).
+func (h *Handler) handleChannelPlaybackStop(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "id")
+	if h.gb28181Media == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
+		return
+	}
+	if err := h.gb28181Media.StopPlayback(channelID); err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to stop playback")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "playback_stopped", "channel_id": channelID})
+}
+
+// handleChannelPlaybackControl drives a running fetch via SIP INFO
+// MANSRTSP: pause / resume / seek (optional scale + position seconds).
+func (h *Handler) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "id")
+	var req struct {
+		Action   string  `json:"action"`
+		Scale    float64 `json:"scale"`
+		Position float64 `json:"position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	switch req.Action {
+	case "pause", "resume", "seek":
+	default:
+		WriteError(w, http.StatusBadRequest, "action must be pause, resume, or seek")
+		return
+	}
+	if h.gb28181Media == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
+		return
+	}
+	if err := h.gb28181Media.PlaybackControl(channelID, req.Action, req.Scale, req.Position); err != nil {
+		WriteError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "control_sent", "action": req.Action})
 }

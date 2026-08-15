@@ -31,6 +31,10 @@ type GB28181Config struct {
 	Metrics       *metrics.Metrics
 	EventBus      *event.EventBus
 	RecordEnabled bool
+	// AudioEnabled gates the PS audio path: demuxed G.711/AAC frames are
+	// muxed into MP4 segments and broadcast on the hub only when set
+	// (mirrors the per-camera audio_enabled flag of the RTSP recorders).
+	AudioEnabled bool
 }
 
 // GB28181Recorder is a passive recorder for GB/T 28181 channels: media does
@@ -55,6 +59,18 @@ type GB28181Recorder struct {
 	frameCount    int
 	ptsBase       int64 // first AU's RTP timestamp (90kHz), PTS origin
 	lastPtsTicks  int64 // last written AU's RTP timestamp (monotonic guard)
+
+	// Audio state (PS audio demux, #340). The audio track is added lazily on
+	// the first frame — GB28181 streams may start video-only and interleave
+	// audio PES later.
+	audioTrackID   int
+	audioCodec     string // "g711a" | "g711u" | "aac"
+	audioSampleRat int    // Hz (G.711: 8000, AAC: from ASC)
+	audioChannels  int    // AAC only (G.711 is always 1)
+	aacConfig      []byte // AudioSpecificConfig
+	audioWarned    bool   // one-time warning for unusable AAC frames
+	lastAudioPts   int64  // monotonic guard
+	audioBytes     int64  // diagnostics
 }
 
 var (
@@ -294,6 +310,217 @@ func ticksToDuration(ticks int64) time.Duration {
 	return time.Duration(ticks) * time.Second / 90000
 }
 
+// WriteAudio ingests one demuxed audio frame from the PS stream.
+// codec: "g711a" | "g711u" | "aac". config is the AAC AudioSpecificConfig
+// (nil for G.711); samples is the frame's sample count for duration math.
+// Frames are broadcast on the hub (live WS audio) and muxed into the open
+// MP4 segment. A no-op when the camera has audio_enabled=false.
+func (r *GB28181Recorder) WriteAudio(codec string, data, config []byte, ptsTicks int64, samples int) {
+	if !r.cfg.AudioEnabled || len(data) == 0 {
+		return
+	}
+
+	r.mu.Lock()
+	if r.status == model.StatusStopped {
+		r.mu.Unlock()
+		return
+	}
+	if r.audioCodec == "" {
+		r.audioCodec = codec
+		r.audioSampleRat = 8000
+		r.audioChannels = 1
+		if codec == "aac" {
+			r.aacConfig = append([]byte(nil), config...)
+			if rate := ascSampleRate(config); rate > 0 {
+				r.audioSampleRat = rate
+			}
+			if ch := ascChannels(config); ch > 0 {
+				r.audioChannels = ch
+			}
+		}
+	} else if r.audioCodec != codec {
+		// Mid-stream codec switches are not remuxable — keep the first.
+		r.mu.Unlock()
+		return
+	}
+	if codec == "aac" && r.aacConfig == nil {
+		// Raw AAC without a derivable ASC cannot be muxed or decoded.
+		if !r.audioWarned {
+			r.audioWarned = true
+			gb28181Logger.Warn("gb28181: AAC frames carry no ADTS — cannot derive config; audio dropped",
+				"camera_id", r.cfg.CameraID)
+		}
+		r.mu.Unlock()
+		return
+	}
+	hub, curMux, audioTrack := r.Hub, r.muxer, r.audioTrackID
+	if ptsTicks <= r.lastAudioPts {
+		ptsTicks = r.lastAudioPts + 1
+	}
+	r.lastAudioPts = ptsTicks
+	r.audioBytes += int64(len(data))
+	r.mu.Unlock()
+
+	if hub != nil {
+		switch codec {
+		case "g711a", "g711u":
+			hub.BroadcastAudio(ptsTicks, model.AudioG711, data)
+		case "aac":
+			hub.BroadcastAudio(ptsTicks, model.AudioAAC, data)
+		}
+	}
+
+	if curMux == nil {
+		return // no open video segment — audio before first IDR is dropped
+	}
+
+	r.mu.Lock()
+	if r.audioTrackID == 0 {
+		muxCodec := "g711"
+		var trackConfig []byte
+		if codec == "aac" {
+			muxCodec = "aac"
+			trackConfig = r.aacConfig
+		} else {
+			// Muxer G.711 config: [0]=μ-law flag (0=A-law, 1=μ-law), [1:5]=rate BE.
+			muLaw := byte(0)
+			if codec == "g711u" {
+				muLaw = 1
+			}
+			trackConfig = []byte{muLaw, 0, 0, 0x1F, 0x40} // 8000 Hz
+		}
+		tid, err := curMux.AddAudioTrack(muxCodec, trackConfig)
+		if err != nil {
+			r.mu.Unlock()
+			gb28181Logger.Error("failed to add audio track", "camera_id", r.cfg.CameraID, "codec", codec, "error", err)
+			return
+		}
+		r.audioTrackID = tid
+		audioTrack = tid
+	}
+	ptsBase := r.ptsBase
+	r.mu.Unlock()
+
+	rel := ptsTicks - ptsBase
+	if rel < 0 {
+		rel = 0
+	}
+	rate := int64(8000)
+	if codec == "aac" && r.audioSampleRat > 0 {
+		rate = int64(r.audioSampleRat)
+	}
+	if samples <= 0 {
+		samples = 1
+	}
+	dur := time.Duration(samples) * time.Second / time.Duration(rate)
+	if dur < time.Millisecond {
+		dur = time.Millisecond
+	}
+	if err := curMux.WriteAudioSample(audioTrack, data, ticksToDuration(rel), dur); err != nil &&
+		err.Error() != "muxer is closed" {
+		gb28181Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
+	}
+}
+
+// AudioCodec implements the audioInfoProvider interface consumed by the WS
+// streaming layer (handlers_ws.go). Returns "" until the first audio frame.
+func (r *GB28181Recorder) AudioCodec() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch r.audioCodec {
+	case "g711a", "g711u":
+		return "g711"
+	case "aac":
+		return "aac"
+	default:
+		return ""
+	}
+}
+
+// AudioSampleRate implements audioInfoProvider.
+func (r *GB28181Recorder) AudioSampleRate() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.audioSampleRat == 0 {
+		return 8000
+	}
+	return r.audioSampleRat
+}
+
+// AudioChannels implements audioInfoProvider.
+func (r *GB28181Recorder) AudioChannels() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.audioChannels == 0 {
+		return 1
+	}
+	return r.audioChannels
+}
+
+// AudioConfig implements audioInfoProvider. G.711: 1-byte μ-law flag + 4-byte
+// rate (muxer convention); AAC: the AudioSpecificConfig.
+func (r *GB28181Recorder) AudioConfig() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch r.audioCodec {
+	case "g711u":
+		return []byte{1, 0, 0, 0x1F, 0x40}
+	case "g711a":
+		return []byte{0, 0, 0, 0x1F, 0x40}
+	case "aac":
+		return r.aacConfig
+	default:
+		return nil
+	}
+}
+
+// ascSampleRate reads the sampling frequency index from a 2-byte ASC.
+func ascSampleRate(asc []byte) int {
+	if len(asc) < 2 {
+		return 0
+	}
+	// ASC: 5 bits AOT | 4 bits freqIdx | 4 bits chans (spans both bytes)
+	idx := (asc[0] >> 1) & 0x0F
+	switch idx {
+	case 0:
+		return 96000
+	case 1:
+		return 88200
+	case 2:
+		return 64000
+	case 3:
+		return 48000
+	case 4:
+		return 44100
+	case 5:
+		return 32000
+	case 6:
+		return 24000
+	case 7:
+		return 22050
+	case 8:
+		return 16000
+	case 9:
+		return 12000
+	case 10:
+		return 11025
+	case 11:
+		return 8000
+	case 12:
+		return 7350
+	default:
+		return 0
+	}
+}
+
+// ascChannels reads the channel configuration from a 2-byte ASC.
+func ascChannels(asc []byte) int {
+	if len(asc) < 2 {
+		return 0
+	}
+	return int(asc[1] >> 3 & 0x0F)
+}
+
 func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 	if r.muxer == nil {
 		return
@@ -374,4 +601,5 @@ func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 	r.curTemp = ""
 	r.curFinal = ""
 	r.frameCount = 0
+	r.audioTrackID = 0 // the next segment's muxer needs a fresh audio track
 }

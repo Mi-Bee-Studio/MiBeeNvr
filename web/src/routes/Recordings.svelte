@@ -22,7 +22,8 @@
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { showToast } from '$lib/toast';
-  import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass } from 'lucide-svelte';
+  import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass, Server } from 'lucide-svelte';
+  import GB28181DeviceRecords from '$lib/components/GB28181DeviceRecords.svelte';
 
   // New components
   import FormatFilter from '../components/library/FormatFilter.svelte';
@@ -41,14 +42,14 @@
   // sparse event clips but not thousands of 30s fragments. Timelapse is its
   // own view because timelapse segments are sparse point-samples (not coverage)
   // and mixing them with video bands distorts the perceived recording gaps.
-  let initialViewMode: 'timeline' | 'list' | 'timelapse' = 'timeline';
+  let initialViewMode: 'timeline' | 'list' | 'timelapse' | 'device' = 'timeline';
   let initialFormat = 'All';
   let initialCameraId = '';
   let initialDate: string | null = null;
   try {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
     const v = params.get('view');
-    if (v === 'list' || v === 'timeline' || v === 'timelapse') initialViewMode = v;
+    if (v === 'list' || v === 'timeline' || v === 'timelapse' || v === 'device') initialViewMode = v;
     // Legacy ?view=gallery URLs (gallery view was removed) silently fall back
     // to the default timeline view rather than rendering an empty page.
     const f = params.get('format');
@@ -133,7 +134,7 @@
   let currentPageNum = $state(1);
 
   // ── View mode ──
-  let viewMode = $state<'timeline' | 'list' | 'timelapse'>(initialViewMode);
+  let viewMode = $state<'timeline' | 'list' | 'timelapse' | 'device'>(initialViewMode);
 
   // ── Timeline data (all recordings for the selected day, grouped by camera in-component) ──
   // Uses the lightweight RecordingTimelineSegment (7 fields) from
@@ -152,6 +153,13 @@
   let showAIMarkers = $state(true);
   let aiEventsAbortController: AbortController | null = null;
   const miBeeVisionConnected = $derived(getMiBeeVisionConnected());
+
+  // The selected camera's GB28181 channel binding — the 设备录像 (device
+  // recordings) tab is offered only when a GB28181 camera is selected (#337).
+  let selectedGB28181Channel = $derived.by(() => {
+    const cam = cameras.find((c) => c.id === cameraId);
+    return cam?.protocol === 'gb28181' && cam.gb28181?.channel_id ? cam.gb28181.channel_id : '';
+  });
 
   // Slices of the day's recordings keyed off the active view: the Timeline tab
   // shows video bands only (no cyan timelapse noise), the Timelapse tab shows
@@ -947,7 +955,7 @@ let selectedPresetCamera = $state<string>('');
       try {
         const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
         const v = params.get('view');
-        if (v === 'timeline' || v === 'list' || v === 'timelapse') viewMode = v;
+        if (v === 'timeline' || v === 'list' || v === 'timelapse' || v === 'device') viewMode = v;
         // Legacy ?view=gallery (gallery view removed) falls back to default
         // timeline via the initial value — no explicit handling needed.
         const f = params.get('format');
@@ -1078,6 +1086,15 @@ let selectedPresetCamera = $state<string>('');
           <Table2 size={16} class="mr-1" />
           {t('library.viewList')}
         </button>
+        {#if selectedGB28181Channel}
+          <button
+            class="btn btn-sm {viewMode === 'device' ? 'btn-primary' : 'btn-ghost'}"
+            onclick={() => viewMode = 'device'}
+          >
+            <Server size={16} class="mr-1" />
+            {t('gb28181.records.tabTitle')}
+          </button>
+        {/if}
       </div>
 
       <!-- ── Error state ── -->
@@ -1208,6 +1225,9 @@ let selectedPresetCamera = $state<string>('');
           onplay={handlePlay}
 
         />
+      {:else if viewMode === 'device'}
+        <!-- ── Device-side recordings (GB28181 RecordInfo + fetch, #337) ── -->
+        <GB28181DeviceRecords channelId={selectedGB28181Channel} />
       {/if}
     </div>
   </main>

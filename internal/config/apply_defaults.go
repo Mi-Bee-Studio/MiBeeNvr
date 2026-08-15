@@ -266,6 +266,16 @@ func applyConfigDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.GB28181.TCPFraming) == "" {
 		cfg.GB28181.TCPFraming = "auto"
 	}
+	if strings.TrimSpace(cfg.GB28181.MediaTransport) == "" {
+		if cfg.GB28181.TCPMode {
+			cfg.GB28181.MediaTransport = "tcp-passive" // legacy tcp_mode alias
+		} else {
+			cfg.GB28181.MediaTransport = "udp"
+		}
+	}
+	if strings.TrimSpace(cfg.GB28181.SIPTransport) == "" {
+		cfg.GB28181.SIPTransport = "udp"
+	}
 
 	// Health defaults
 	if cfg.Health.EventsRetention == "" {

@@ -97,6 +97,8 @@ export interface GB28181Config {
   catalog_interval: string;
   tcp_mode: boolean;
   tcp_framing: string; // "auto" | "rfc4571" | "0x24"
+  media_transport?: string; // "udp" | "tcp-passive" | "tcp-active"
+  sip_transport?: string; // "udp" | "tcp"
   allowed_device_ids?: string[];
 }
 

@@ -74,6 +74,97 @@ func BuildPTZCommand(direction string, speed byte) ([]byte, error) {
 	return cmd[:], nil
 }
 
+// PTZ preset instruction codes (GB/T 28181-2016 § A.3.4 表 A.8 — byte 4 of
+// the command; identical in the 2022 revision). The preset number (1-255,
+// 0 reserved) rides in byte 6.
+const (
+	ptzSetPreset    byte = 0x81 // 设置预置位
+	ptzCallPreset   byte = 0x82 // 调用预置位
+	ptzDeletePreset byte = 0x83 // 删除预置位
+)
+
+// Cruise instruction codes (§ A.3.5 表 A.9): cruise group in byte 5, the
+// group's preset/value in byte 6 where applicable.
+const (
+	ptzAddCruisePoint byte = 0x84 // 加入巡航点
+	ptzDelCruisePoint byte = 0x85 // 删除巡航点
+	ptzCruiseSpeed    byte = 0x86 // 设置巡航速度
+	ptzCruiseStayTime byte = 0x87 // 设置巡航停留时间
+	ptzStartCruise    byte = 0x88 // 开始巡航
+)
+
+// PTZ preset/cruise actions accepted by BuildPTZPresetCommand /
+// BuildPTZCruiseCommand.
+const (
+	PresetSet    = "set"
+	PresetCall   = "call"
+	PresetDelete = "delete"
+
+	CruiseAddPoint = "add-point"
+	CruiseDelPoint = "del-point"
+	CruiseSpeed    = "speed"
+	CruiseStay     = "stay"
+	CruiseStart    = "start"
+	CruiseStop     = "stop"
+)
+
+// BuildPTZPresetCommand builds a preset instruction: A5 0F 01 <81|82|83> 00
+// <preset> <checksum>. Preset numbers are 1-255 (0 reserved per A.3.4).
+func BuildPTZPresetCommand(action string, preset byte) ([]byte, error) {
+	if preset == 0 {
+		return nil, fmt.Errorf("gb28181: preset number 0 is reserved")
+	}
+	var code byte
+	switch action {
+	case PresetSet:
+		code = ptzSetPreset
+	case PresetCall:
+		code = ptzCallPreset
+	case PresetDelete:
+		code = ptzDeletePreset
+	default:
+		return nil, fmt.Errorf("gb28181: unknown PTZ preset action %q", action)
+	}
+	cmd := [8]byte{0xA5, 0x0F, 0x01, code, 0x00, 0x00, preset, 0x00}
+	return finishPTZCommand(cmd), nil
+}
+
+// BuildPTZCruiseCommand builds a cruise instruction: A5 0F 01 <code>
+// <cruise group> <value> <checksum>. CruiseStop is not defined by the
+// standard as a dedicated code — callers send the plain stop command.
+func BuildPTZCruiseCommand(action string, cruise, value byte) ([]byte, error) {
+	if cruise == 0 {
+		return nil, fmt.Errorf("gb28181: cruise group must be 1-255")
+	}
+	var code byte
+	switch action {
+	case CruiseAddPoint:
+		code = ptzAddCruisePoint
+	case CruiseDelPoint:
+		code = ptzDelCruisePoint
+	case CruiseSpeed:
+		code = ptzCruiseSpeed
+	case CruiseStay:
+		code = ptzCruiseStayTime
+	case CruiseStart:
+		code = ptzStartCruise
+	default:
+		return nil, fmt.Errorf("gb28181: unknown PTZ cruise action %q", action)
+	}
+	cmd := [8]byte{0xA5, 0x0F, 0x01, code, cruise, 0x00, value, 0x00}
+	return finishPTZCommand(cmd), nil
+}
+
+// finishPTZCommand fills the checksum byte (mod-256 sum of bytes 0-6).
+func finishPTZCommand(cmd [8]byte) []byte {
+	var sum byte
+	for _, b := range cmd[:7] {
+		sum += b
+	}
+	cmd[7] = sum
+	return cmd[:]
+}
+
 // MessageSender sends a SIP MESSAGE body to a GB28181 device. Implemented by
 // the sip.Server; declared here so the controller does not import sip (which
 // would be an import cycle: sip already imports this package).
@@ -138,6 +229,71 @@ func (c *PTZController) SendPTZ(channelID, direction string, speed byte) error {
 	if err != nil {
 		return err
 	}
+	return c.sendCommand(ch, cmd)
+}
+
+// SendPTZPreset sends a preset instruction (set/call/delete) for channelID.
+// Preset numbers are 1-255 (0 reserved).
+func (c *PTZController) SendPTZPreset(channelID, action string, preset byte) error {
+	var ch *Channel
+	var dev *Device
+	for _, d := range c.devices.AllDevices() {
+		if found, ok := c.devices.FindChannel(d.ID, channelID); ok {
+			ch = found
+			dev = d
+			break
+		}
+	}
+	if ch == nil {
+		return ErrChannelNotFound
+	}
+	if dev.Status.Load() != DeviceOnline {
+		return ErrDeviceOffline
+	}
+	if ch.PTZType == 0 {
+		return ErrPTZUnsupported
+	}
+	cmd, err := BuildPTZPresetCommand(action, preset)
+	if err != nil {
+		return err
+	}
+	return c.sendCommand(ch, cmd)
+}
+
+// SendPTZCruise sends a cruise instruction for channelID (cruise group
+// 1-255; value = preset number / speed / stay-time depending on action).
+func (c *PTZController) SendPTZCruise(channelID, action string, cruise, value byte) error {
+	var ch *Channel
+	var dev *Device
+	for _, d := range c.devices.AllDevices() {
+		if found, ok := c.devices.FindChannel(d.ID, channelID); ok {
+			ch = found
+			dev = d
+			break
+		}
+	}
+	if ch == nil {
+		return ErrChannelNotFound
+	}
+	if dev.Status.Load() != DeviceOnline {
+		return ErrDeviceOffline
+	}
+	if ch.PTZType == 0 {
+		return ErrPTZUnsupported
+	}
+	if action == CruiseStop {
+		return c.SendPTZ(channelID, DirStop, 0)
+	}
+	cmd, err := BuildPTZCruiseCommand(action, cruise, value)
+	if err != nil {
+		return err
+	}
+	return c.sendCommand(ch, cmd)
+}
+
+// sendCommand transmits an 8-byte PTZ instruction wrapped in a DeviceControl
+// MANSCDP body.
+func (c *PTZController) sendCommand(ch *Channel, cmd []byte) error {
 	sn := c.seq.Add(1)
 	// GB/T 28181-2016: DeviceControl uses child elements (not attributes) for
 	// CmdType/SN — see CatalogController.RequestCatalog for the same pattern.
@@ -148,8 +304,8 @@ func (c *PTZController) SendPTZ(channelID, direction string, speed byte) error {
 <DeviceID>%s</DeviceID>
 <PTZCmd>%s</PTZCmd>
 </Control>`, sn, ch.ID, ptzCmdString(cmd)))
-	if err := c.sender.SendMessage(dev.ID, body); err != nil {
-		return fmt.Errorf("gb28181: send PTZ to %s: %w", dev.ID, err)
+	if err := c.sender.SendMessage(ch.DeviceID, body); err != nil {
+		return fmt.Errorf("gb28181: send PTZ to %s: %w", ch.DeviceID, err)
 	}
 	return nil
 }

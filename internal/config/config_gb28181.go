@@ -33,18 +33,32 @@ type GB28181ServerConfig struct {
 	CatalogInterval string `yaml:"catalog_interval"` // default "30m"
 
 	// TCPMode forces TCP media transport (passive). Default false (UDP).
+	//
+	// Deprecated: superseded by MediaTransport — kept as a YAML-compat
+	// alias (true → "tcp-passive").
 	TCPMode bool `yaml:"tcp_mode"`
 
 	// TCPFraming selects the TCP-passive framing: "rfc4571" (2-byte length
 	// prefix), "0x24" (RTSP-interleaved), or "auto" (detect from first bytes).
 	TCPFraming string `yaml:"tcp_framing"` // default "auto"
+
+	// MediaTransport selects the RTP media transport for INVITE sessions:
+	// "udp" (default), "tcp-passive" (NVR listens, device connects — the
+	// Hikvision/Dahua default), or "tcp-active" (NVR dials the device's
+	// answer address). Signaling transport is independent (SIPTransport).
+	MediaTransport string `yaml:"media_transport"` // default "udp"
+
+	// SIPTransport selects the SIP signaling listener: "udp" (default) or
+	// "tcp". "tcp" adds a SIP-over-TCP listener alongside UDP — devices pick
+	// whichever they speak.
+	SIPTransport string `yaml:"sip_transport"` // default "udp"
 }
 
 // GB28181ChannelConfig holds per-camera GB28181 fields (used when the camera
 // protocol is "gb28181"). DeviceID/ChannelID map a SIP device+channel to this
 // camera; the NVR INVITEs the channel and ingests its RTP/PS stream (no URL).
 type GB28181ChannelConfig struct {
-	DeviceID     string `yaml:"device_id,omitempty"`  // GB 20-digit device code
-	ChannelID    string `yaml:"channel_id,omitempty"` // GB 20-digit channel code
-	Manufacturer string `yaml:"manufacturer,omitempty"`
+	DeviceID     string `yaml:"device_id,omitempty" json:"device_id,omitempty"`   // GB 20-digit device code
+	ChannelID    string `yaml:"channel_id,omitempty" json:"channel_id,omitempty"` // GB 20-digit channel code
+	Manufacturer string `yaml:"manufacturer,omitempty" json:"manufacturer,omitempty"`
 }

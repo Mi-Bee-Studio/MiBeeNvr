@@ -149,3 +149,53 @@ func (errSender) SendMessage(string, []byte) error {
 type sipWriteError struct{}
 
 func (*sipWriteError) Error() string { return "sip write failed" }
+
+// TestBuildPTZPresetCommand verifies the § A.3.4 preset instruction layout:
+// byte 3 = 81/82/83 (set/call/delete), byte 5 = 0, byte 6 = preset number.
+func TestBuildPTZPresetCommand(t *testing.T) {
+	cmd, err := BuildPTZPresetCommand(PresetSet, 5)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xA5, 0x0F, 0x01, 0x81, 0x00, 0x00, 0x05, 0x3B}, cmd)
+
+	cmd, err = BuildPTZPresetCommand(PresetCall, 100)
+	require.NoError(t, err)
+	require.Equal(t, byte(0x82), cmd[3])
+	require.Equal(t, byte(100), cmd[6])
+
+	cmd, err = BuildPTZPresetCommand(PresetDelete, 255)
+	require.NoError(t, err)
+	require.Equal(t, byte(0x83), cmd[3])
+	require.Equal(t, byte(0xFF), cmd[6])
+
+	// checksum = sum(bytes 0-6) mod 256
+	var sum byte
+	for _, b := range cmd[:7] {
+		sum += b
+	}
+	require.Equal(t, sum, cmd[7])
+
+	_, err = BuildPTZPresetCommand(PresetSet, 0)
+	require.Error(t, err, "preset 0 is reserved")
+	_, err = BuildPTZPresetCommand("bogus", 1)
+	require.Error(t, err)
+}
+
+// TestBuildPTZCruiseCommand verifies the § A.3.5 cruise instruction layout:
+// byte 3 = 84-88, byte 4 = cruise group, byte 6 = value.
+func TestBuildPTZCruiseCommand(t *testing.T) {
+	cmd, err := BuildPTZCruiseCommand(CruiseAddPoint, 1, 5)
+	require.NoError(t, err)
+	require.Equal(t, byte(0x84), cmd[3])
+	require.Equal(t, byte(1), cmd[4])
+	require.Equal(t, byte(5), cmd[6])
+
+	cmd, err = BuildPTZCruiseCommand(CruiseStart, 2, 0)
+	require.NoError(t, err)
+	require.Equal(t, byte(0x88), cmd[3])
+	require.Equal(t, byte(2), cmd[4])
+
+	_, err = BuildPTZCruiseCommand(CruiseStart, 0, 0)
+	require.Error(t, err, "cruise group 0 invalid")
+	_, err = BuildPTZCruiseCommand("bogus", 1, 0)
+	require.Error(t, err)
+}

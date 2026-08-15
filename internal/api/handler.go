@@ -18,6 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -168,7 +169,8 @@ type Handler struct {
 	// vodMgr serves the on-demand HLS VOD fragmenter for recording playback
 	// (#321 Phase 2). Self-contained (owns its segment cache) — constructed
 	// here rather than threaded through NewHandler's positional params.
-	vodMgr *vod.Manager
+	vodMgr       *vod.Manager
+	gb28181Media GB28181DeviceMedia
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -661,6 +663,30 @@ func (h *Handler) SetGB28181ByeSender(s GB28181ByeSender) {
 	h.gb28181Bye = s
 }
 
+// GB28181DeviceMedia is the device-side recording API (RecordInfo query,
+// playback INVITE fetch, MANSRTSP control) implemented by the SIP server;
+// declared here to avoid importing sip in Handler (#337).
+type GB28181DeviceMedia interface {
+	// QueryChannelRecords sends a RecordInfo query and collects the paged
+	// responses for a time range.
+	QueryChannelRecords(deviceID, channelID string, start, end time.Time) ([]manscdp.RecordItem, error)
+	// StartPlayback starts a fetch that muxes the device recording into the
+	// normal recordings pipeline of the bound camera.
+	StartPlayback(deviceID, channelID string, start, end time.Time) error
+	// StopPlayback stops a fetch (SIP BYE + finalize).
+	StopPlayback(channelID string) error
+	// PlaybackStatusFor reports fetch progress (ok=false when idle).
+	PlaybackStatusFor(channelID string) (gb28181.PlaybackInfo, bool)
+	// PlaybackControl sends a MANSRTSP control (pause/resume/seek).
+	PlaybackControl(channelID, action string, scale, position float64) error
+}
+
+// SetGB28181DeviceMedia wires the SIP server for the device-recording
+// endpoints.
+func (h *Handler) SetGB28181DeviceMedia(s GB28181DeviceMedia) {
+	h.gb28181Media = s
+}
+
 // registerGB28181Routes registers GB28181 device and channel endpoints.
 func (h *Handler) registerGB28181Routes(r chi.Router) {
 	r.Route("/api/gb28181", func(r chi.Router) {
@@ -674,7 +700,10 @@ func (h *Handler) registerGB28181Routes(r chi.Router) {
 			r.Post("/bye", h.handleByeChannel)
 			r.Post("/ptz", h.handlePTZChannel)
 			r.Get("/records", h.handleChannelRecords)
-			r.Post("/playback", h.handleChannelPlayback)
+			r.Post("/playback", h.handleChannelPlaybackStart)
+			r.Get("/playback", h.handleChannelPlaybackStatus)
+			r.Delete("/playback", h.handleChannelPlaybackStop)
+			r.Post("/playback/control", h.handleChannelPlaybackControl)
 		})
 	})
 }

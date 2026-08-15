@@ -68,10 +68,22 @@ type CameraEnroller interface {
 	// nil if the camera doesn't exist or isn't a GB28181 camera. Used to
 	// bridge RTP receiver output directly into the recorder pipeline.
 	GB28181NALUWriter(cameraID string) func(au [][]byte, ptsTicks int64, isIDR bool)
+	// GB28181AudioWriter returns the recorder's audio-frame callback for a
+	// camera, or nil. Bridges demuxed PS audio (G.711/AAC) into the recorder
+	// for MP4 muxing and live hub broadcast.
+	GB28181AudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int)
 	// OnGB28181Invite transitions the recorder to Recording state.
 	OnGB28181Invite(cameraID string)
 	// OnGB28181Bye transitions the recorder to Reconnecting state.
 	OnGB28181Bye(cameraID string)
+	// NewGB28181PlaybackSink creates a sink that muxes a fetched device
+	// recording into the normal recordings pipeline for cameraID — used by
+	// playback INVITEs (#337). The sink must also implement Stopper so the
+	// session teardown finalizes the recording.
+	NewGB28181PlaybackSink(cameraID string) (gb28181.AUWriter, error)
+	// GB28181PlaybackAudioWriter returns the playback sink's audio writer
+	// (nil when the camera has audio disabled).
+	GB28181PlaybackAudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int)
 }
 
 // inviteDialog remembers the INVITE request and its final response for an
@@ -103,6 +115,15 @@ type Server struct {
 
 	dialogs map[string]*inviteDialog // channelID -> active INVITE dialog
 
+	// Playback fetch state (#337): one per channel, separate from live
+	// sessions/dialogs so live streaming and device-recording fetching can
+	// run concurrently on the same channel.
+	pbMu          sync.Mutex
+	playbacks     map[string]*playbackState // channelID -> running fetch
+	pbDialogs     map[string]*inviteDialog  // channelID -> playback INVITE dialog
+	recMu         sync.Mutex
+	recordQueries map[string]*pendingRecordQuery // deviceID|sn -> pending RecordInfo
+
 	perDeviceMu map[string]*sync.Mutex // serialize SIP handling per device
 }
 
@@ -112,12 +133,15 @@ type Server struct {
 // persistence (test-only).
 func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager, sessionMgr *gb28181.SessionManager, db *storage.DB) *Server {
 	s := &Server{
-		cfg:         cfg,
-		deviceMgr:   deviceMgr,
-		sessionMgr:  sessionMgr,
-		db:          db,
-		dialogs:     make(map[string]*inviteDialog),
-		perDeviceMu: make(map[string]*sync.Mutex),
+		cfg:           cfg,
+		deviceMgr:     deviceMgr,
+		sessionMgr:    sessionMgr,
+		db:            db,
+		dialogs:       make(map[string]*inviteDialog),
+		playbacks:     make(map[string]*playbackState),
+		pbDialogs:     make(map[string]*inviteDialog),
+		recordQueries: make(map[string]*pendingRecordQuery),
+		perDeviceMu:   make(map[string]*sync.Mutex),
 	}
 	// Locally-stopped sessions transmit a SIP BYE to the device before the
 	// RTP port is recycled, so stale streams never poison recycled ports.
@@ -125,6 +149,12 @@ func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager,
 	// First RTP media confirms a dialog end-to-end — even when the device's
 	// INVITE response could not be transaction-matched (missing Via header).
 	sessionMgr.SetFirstRTPHook(s.onFirstRTP)
+	// Media transport + TCP framing resolve live from the startup config
+	// snapshot (udp | tcp-passive | tcp-active — GB28181 media_transport).
+	sessionMgr.SetMediaTransport(func() string { return s.cfg.MediaTransport })
+	sessionMgr.SetTCPFraming(func() string { return s.cfg.TCPFraming })
+	// Playback fetch sessions BYE on their own dialog store.
+	sessionMgr.SetPlaybackByeSender(s.sendByeForPlayback)
 	return s
 }
 
@@ -193,7 +223,9 @@ func (s *Server) Start(ctx context.Context) error {
 		s.startFailed(cancel)
 		return fmt.Errorf("gb28181: listen UDP %s: %w", addr, err)
 	}
-	if s.cfg.TCPMode {
+	// SIP-over-TCP signaling listener (gb28181.sip_transport). UDP always
+	// stays up — devices pick whichever transport they speak.
+	if s.cfg.SIPTransport == "tcp" || s.cfg.TCPMode {
 		if err := srv.Listen("TCP", addr); err != nil {
 			s.startFailed(cancel)
 			return fmt.Errorf("gb28181: listen TCP %s: %w", addr, err)
@@ -449,16 +481,22 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 	// "gb-<channelID>" string guess (that only matches auto-enrolled
 	// cameras; manually created cameras have arbitrary IDs).
 	var onAU func(au [][]byte, ptsTicks int64, isIDR bool)
+	var onAudio gb28181.AudioFrameHandler
 	var cameraID string
 	if enrol := s.enroller(); enrol != nil {
 		if id, ok := enrol.GB28181CameraIDByChannel(deviceID, channelID); ok {
 			cameraID = id
 			onAU = enrol.GB28181NALUWriter(cameraID)
+			if w := enrol.GB28181AudioWriter(cameraID); w != nil {
+				onAudio = func(frame gb28181.AudioFrame) {
+					w(frame.Codec, frame.Data, frame.Config, frame.PTSTicks, frame.Samples)
+				}
+			}
 		}
 	}
 
 	// Allocate port, create SDP, start receiver.
-	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil, onAU)
+	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil, onAU, onAudio)
 	if err != nil {
 		return fmt.Errorf("gb28181: session setup for %s: %w", channelID, err)
 	}
@@ -526,6 +564,15 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 		s.mu.Lock()
 		s.dialogs[channelID] = &inviteDialog{req: req, resp: resp}
 		s.mu.Unlock()
+		// tcp-active: the device's answer SDP carries its media address —
+		// dial it now that the dialog is confirmed.
+		if s.cfg.MediaTransport == gb28181.MediaTCPActive {
+			if err := s.sessionMgr.ConnectActiveTCP(channelID, []byte(resp.Body())); err != nil {
+				slog.Warn("gb28181: tcp-active media connect failed", "channel", channelID, "error", err)
+				_ = s.sessionMgr.Bye(channelID)
+				return fmt.Errorf("gb28181: INVITE to %s: %w", channelID, err)
+			}
+		}
 	} else {
 		// No transaction-matched 2xx, but RTP arrived after the speculative
 		// ACK — the dialog demonstrably works (device streams); keep it.
@@ -1143,6 +1190,11 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 		// session. Also covers NVR restarts — cameras persist, sessions do
 		// not, and catalog channels are only known after this response.
 		go s.autoInviteDevice(p.DeviceID)
+	case manscdp.CmdRecordInfo:
+		p := payload.(manscdp.RecordInfo)
+		slog.Info("gb28181: record info received", "device", p.DeviceID,
+			"sn", p.SN, "sum_num", p.SumNum, "items", len(p.RecordList))
+		s.feedRecordQuery(p.DeviceID, p)
 	case manscdp.CmdDeviceInfo:
 		p := payload.(manscdp.DeviceInfo)
 		slog.Info("gb28181: device info received", "device", p.DeviceID, "name", p.DeviceName, "manufacturer", p.Manufacturer, "model", p.Model)
@@ -1214,6 +1266,27 @@ func (s *Server) handleInvite(req sip.Request, tx sip.ServerTransaction) {
 // Reconnecting. When a hook is installed it takes precedence.
 func (s *Server) handleBye(req sip.Request, tx sip.ServerTransaction) {
 	deviceID, channelID := s.requestIDs(req)
+
+	// A BYE whose Call-ID matches a playback dialog ends that fetch (the
+	// device finished streaming the requested range) — distinct from the
+	// live dialog on the same channel (#337).
+	if callID, ok := req.CallID(); ok {
+		s.mu.Lock()
+		pbDlg := s.pbDialogs[channelID]
+		s.mu.Unlock()
+		if pbDlg != nil {
+			if dlgCallID, ok2 := pbDlg.resp.CallID(); ok2 && dlgCallID.String() == callID.String() {
+				slog.Info("gb28181: playback BYE received", "channel", channelID)
+				s.mu.Lock()
+				delete(s.pbDialogs, channelID)
+				s.mu.Unlock()
+				_ = s.StopPlayback(channelID)
+				s.respond(req, tx, statusOK, "OK", nil)
+				return
+			}
+		}
+	}
+
 	s.mu.Lock()
 	hook := s.onBye
 	s.mu.Unlock()

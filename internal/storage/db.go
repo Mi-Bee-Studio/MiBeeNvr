@@ -380,7 +380,17 @@ func (d *DB) Init(ctx context.Context) error {
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		completed_at TEXT DEFAULT ''
 	);`
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL} {
+
+	// Local PTZ preset registry for protocols without device-side preset
+	// queries (GB28181). token = the preset number sent in the A.3.4 command.
+	ptzPresetsSQL := `CREATE TABLE IF NOT EXISTS camera_ptz_presets (
+		camera_id TEXT NOT NULL,
+		token TEXT NOT NULL,
+		name TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (camera_id, token)
+	);`
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, ptzPresetsSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
