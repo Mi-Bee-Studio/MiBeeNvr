@@ -276,6 +276,9 @@ func applyConfigDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.GB28181.SIPTransport) == "" {
 		cfg.GB28181.SIPTransport = "udp"
 	}
+	if strings.TrimSpace(cfg.GB28181.SubscribeExpires) == "" {
+		cfg.GB28181.SubscribeExpires = "3600s"
+	}
 
 	// Health defaults
 	if cfg.Health.EventsRetention == "" {

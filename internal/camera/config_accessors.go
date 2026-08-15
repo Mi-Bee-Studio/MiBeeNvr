@@ -208,3 +208,52 @@ func (cm *CameraManager) NewGB28181PlaybackSink(cameraID string) (gb28181.AUWrit
 func (cm *CameraManager) GB28181PlaybackAudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
 	return nil
 }
+
+// UpdateGB28181DeviceMeta backfills Brand/Model on the cameras bound to a
+// GB28181 device from its DeviceInfo response. Empty camera fields only —
+// user-entered values always win. Non-fatal: a failed update leaves the
+// camera unchanged.
+func (cm *CameraManager) UpdateGB28181DeviceMeta(deviceID, manufacturer, modelName string) error {
+	cm.configMu.Lock()
+	camIDs := make([]string, 0, 4)
+	for i := range cm.cfg.Cameras {
+		c := &cm.cfg.Cameras[i]
+		if c.Protocol == "gb28181" && c.GB28181.DeviceID == deviceID {
+			camIDs = append(camIDs, c.ID)
+		}
+	}
+	cm.configMu.Unlock()
+	if len(camIDs) == 0 || cm.db == nil {
+		return nil
+	}
+
+	// Brand/Model are DB-only fields (CameraRow) — read each row and fill
+	// the empty ones, leaving user-entered values untouched.
+	updated := 0
+	for _, id := range camIDs {
+		row, err := cm.db.GetCamera(context.Background(), id)
+		if err != nil || row == nil {
+			continue
+		}
+		brand, mdl := row.Brand, row.Model
+		if brand == "" && manufacturer != "" {
+			brand = manufacturer
+		}
+		if mdl == "" && modelName != "" {
+			mdl = modelName
+		}
+		if brand == row.Brand && mdl == row.Model {
+			continue
+		}
+		if err := cm.db.UpdateCameraMetadata(context.Background(), id,
+			row.Description, row.Location, brand, mdl, row.SerialNumber, row.RetentionDays); err != nil {
+			return err
+		}
+		updated++
+	}
+	if updated > 0 {
+		logger.Info("gb28181: camera meta backfilled from device info",
+			"device_id", deviceID, "cameras", updated)
+	}
+	return nil
+}

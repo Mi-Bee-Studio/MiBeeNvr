@@ -23,6 +23,8 @@ const (
 	CmdRecordInfoQuery CmdType = "RecordInfoQuery"
 	CmdDeviceControl   CmdType = "DeviceControl"
 	CmdAlarm           CmdType = "Alarm"
+	CmdTimeSync        CmdType = "TimeSync"
+	CmdMobilePosition  CmdType = "MobilePosition"
 )
 
 // Catalog is a device's response to a platform Catalog query. It lists the
@@ -239,4 +241,91 @@ type CatalogQuery struct {
 	CmdType  CmdType  `xml:"CmdType"`
 	SN       int      `xml:"SN"`
 	DeviceID string   `xml:"DeviceID"`
+}
+
+// CatalogNotify is a device-initiated catalog change notification delivered
+// via SIP NOTIFY after the platform subscribes to Catalog (GB/T 28181-2016
+// § 9.5.2). Same payload shape as Catalog but rooted at Notify.
+type CatalogNotify struct {
+	XMLName  xml.Name `xml:"Notify"`
+	CmdType  CmdType  `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	SumNum   int      `xml:"SumNum"`
+	Item     []Item   `xml:"DeviceList>Item"`
+	// Attribute-form aliases (see Catalog).
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *CatalogNotify) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
+}
+
+// TimeSyncQuery is a device-to-platform clock query (GB/T 28181-2016 § 9.6).
+// The platform answers with a TimeSyncResponse carrying its wall clock so the
+// device can correct drift — critical for RecordInfo time ranges.
+type TimeSyncQuery struct {
+	XMLName  xml.Name `xml:"Query"`
+	CmdType  CmdType  `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+}
+
+// TimeSyncResponse is the platform's answer to a TimeSyncQuery. Time is
+// ISO 8601 ("2006-01-02T15:04:05").
+type TimeSyncResponse struct {
+	XMLName  xml.Name `xml:"Response"`
+	CmdType  CmdType  `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	Time     string   `xml:"Time"`
+}
+
+// MobilePosition is a device-initiated position report (GB/T 28181-2016
+// § 9.5.3) delivered via SIP NOTIFY while the platform's MobilePosition
+// subscription is active. Coordinates are decimal-degree strings from the
+// device (Longitude may carry an "E/W" hemisphere suffix on some firmwares).
+type MobilePosition struct {
+	XMLName   xml.Name `xml:"Notify"`
+	CmdType   CmdType  `xml:"CmdType"`
+	SN        int      `xml:"SN"`
+	DeviceID  string   `xml:"DeviceID"`
+	Time      string   `xml:"Time"`
+	Longitude string   `xml:"Longitude"`
+	Latitude  string   `xml:"Latitude"`
+	Speed     string   `xml:"Speed"`
+	Direction string   `xml:"Direction"`
+	Altitude  string   `xml:"Altitude"`
+	// Attribute-form aliases (see Catalog).
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *MobilePosition) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
+}
+
+// Subscribe is the platform-to-device SUBSCRIBE request body (GB/T 28181-2016
+// § 9.5). CmdType selects the subject (Catalog / Alarm / MobilePosition).
+// The overall subscription lifetime rides the SIP Expires header; Interval is
+// MobilePosition-specific (report period in seconds).
+type Subscribe struct {
+	XMLName   xml.Name `xml:"SUBSCRIBE"`
+	CmdType   CmdType  `xml:"CmdType"`
+	SN        int      `xml:"SN"`
+	DeviceID  string   `xml:"DeviceID"`
+	StartTime string   `xml:"StartTime,omitempty"` // Alarm subscription window
+	EndTime   string   `xml:"EndTime,omitempty"`
+	Interval  int      `xml:"Interval,omitempty"` // MobilePosition report period (s)
 }

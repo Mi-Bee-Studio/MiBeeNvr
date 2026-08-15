@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -84,6 +85,9 @@ type CameraEnroller interface {
 	// GB28181PlaybackAudioWriter returns the playback sink's audio writer
 	// (nil when the camera has audio disabled).
 	GB28181PlaybackAudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int)
+	// UpdateGB28181DeviceMeta backfills Brand/Model on the cameras bound to
+	// a device from its DeviceInfo response (empty fields only).
+	UpdateGB28181DeviceMeta(deviceID, manufacturer, model string) error
 }
 
 // inviteDialog remembers the INVITE request and its final response for an
@@ -124,6 +128,19 @@ type Server struct {
 	recMu         sync.Mutex
 	recordQueries map[string]*pendingRecordQuery // deviceID|sn -> pending RecordInfo
 
+	// Subscription state (#341): SUBSCRIBE Catalog/Alarm/MobilePosition,
+	// refresh deadlines, and the alarm / mobile-position rings.
+	subMu         sync.Mutex
+	subscriptions map[string]*gbSubscription           // deviceID|subject -> active SUBSCRIBE
+	alarmRing     map[string][]event.GB28181AlarmEvent // deviceID -> latest-first alarms
+	posRing       map[string][]gb28181.GBPosition      // deviceID -> latest-first positions
+	eventBus      *event.EventBus
+
+	// Talk sessions (#341): channelID -> active voice intercom.
+	talkMu  sync.Mutex
+	talks   map[string]*talkSession
+	talkSeq int
+
 	perDeviceMu map[string]*sync.Mutex // serialize SIP handling per device
 }
 
@@ -141,6 +158,10 @@ func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager,
 		playbacks:     make(map[string]*playbackState),
 		pbDialogs:     make(map[string]*inviteDialog),
 		recordQueries: make(map[string]*pendingRecordQuery),
+		subscriptions: make(map[string]*gbSubscription),
+		alarmRing:     make(map[string][]event.GB28181AlarmEvent),
+		posRing:       make(map[string][]gb28181.GBPosition),
+		talks:         make(map[string]*talkSession),
 		perDeviceMu:   make(map[string]*sync.Mutex),
 	}
 	// Locally-stopped sessions transmit a SIP BYE to the device before the
@@ -214,6 +235,9 @@ func (s *Server) Start(ctx context.Context) error {
 	_ = srv.OnRequest(sip.MESSAGE, s.handleMessage)
 	_ = srv.OnRequest(sip.INVITE, s.handleInvite)
 	_ = srv.OnRequest(sip.BYE, s.handleBye)
+	// NOTIFY delivers subscription payloads (catalog changes, alarms,
+	// mobile positions) after our SUBSCRIBE (#341).
+	_ = srv.OnRequest(sip.NOTIFY, s.handleNotify)
 	// Some devices (and interop probes) use OPTIONS for liveness; answering
 	// it with our method set avoids 405-driven fallbacks on older firmwares.
 	_ = srv.OnRequest(sip.OPTIONS, s.handleOptions)
@@ -236,6 +260,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// channel lists current: newly added channels on a device get discovered
 	// and enrolled as cameras without waiting for its next REGISTER cycle.
 	go s.catalogLoop(srvCtx)
+	// Subscription refresh (SUBSCRIBE Catalog/Alarm/MobilePosition) renews
+	// before expiry so device-initiated pushes keep flowing (#341).
+	go s.subscribeLoop(srvCtx)
 	return nil
 }
 
@@ -321,6 +348,14 @@ func (s *Server) SetCameraEnroller(enroller CameraEnroller) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.camEnroller = enroller
+}
+
+// SetEventBus wires the publish bus for GB28181 alarm events (SSE surface).
+// Optional — without a bus the alarm ring + logs still work.
+func (s *Server) SetEventBus(bus *event.EventBus) {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	s.eventBus = bus
 }
 
 // enroller snapshots the camera enroller under lock.
@@ -1039,10 +1074,32 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 			if err := s.requestCatalog(deviceID); err != nil {
 				slog.Debug("gb28181: catalog query after register", "device", deviceID, "error", err)
 			}
+			// Auto-populate device metadata (manufacturer/model) and probe
+			// its status — fills camera Brand/Model on first registration.
+			s.queryDeviceDetails(deviceID)
+			// Refresh subscriptions (catalog changes, alarms, mobile
+			// positions) per config — idempotent on re-REGISTER.
+			s.subscribeDevice(deviceID)
 		}()
 		// Auto-INVITE channels that have a camera but no active session
 		// (covers NVR restarts: cameras persist, sessions do not).
 		go s.autoInviteDevice(deviceID)
+	}
+}
+
+// queryDeviceDetails sends DeviceInfo + DeviceStatus queries to a device.
+// Responses arrive as MESSAGEs and land in handleMessage's DeviceInfo /
+// DeviceStatus cases. Failures are non-fatal (metadata stays empty).
+func (s *Server) queryDeviceDetails(deviceID string) {
+	sn := time.Now().UnixNano() % 100000
+	infoBody := []byte(fmt.Sprintf(`<Query><CmdType>DeviceInfo</CmdType><SN>%d</SN><DeviceID>%s</DeviceID></Query>`, sn, deviceID))
+	if err := s.SendMessage(deviceID, infoBody); err != nil {
+		slog.Debug("gb28181: device info query", "device", deviceID, "error", err)
+	}
+	sn = time.Now().UnixNano() % 100000
+	statusBody := []byte(fmt.Sprintf(`<Query><CmdType>DeviceStatus</CmdType><SN>%d</SN><DeviceID>%s</DeviceID></Query>`, sn, deviceID))
+	if err := s.SendMessage(deviceID, statusBody); err != nil {
+		slog.Debug("gb28181: device status query", "device", deviceID, "error", err)
 	}
 }
 
@@ -1061,6 +1118,7 @@ func (s *Server) requestCatalog(deviceID string) error {
 // cameras (used on unregister / keepalive OFF).
 func (s *Server) teardownDevice(deviceID string) {
 	s.sessionMgr.ByeDevice(deviceID)
+	s.unsubscribeDevice(deviceID)
 	for _, ch := range s.deviceMgr.Channels(deviceID) {
 		s.notifyCameraBye(deviceID, ch.ID)
 	}
@@ -1129,67 +1187,7 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 	case manscdp.CmdCatalog:
 		p := payload.(manscdp.Catalog)
 		slog.Info("gb28181: catalog received", "device", p.DeviceID, "channels", len(p.Item))
-		for _, item := range p.Item {
-			// Parental=1 entries are organization/group nodes, not video
-			// channels — registering them as INVITEable channels breaks
-			// media setup on tree-shaped catalogs (Hikvision/Dahua NVRs).
-			if item.Parental == 1 {
-				continue
-			}
-			// Merge into the existing channel in place where possible so a
-			// catalog refresh updates names/PTZ without resetting the
-			// session status of an inviting/playing channel.
-			status := int32(gb28181.ChannelIdle)
-			if existing, ok := s.deviceMgr.FindChannel(p.DeviceID, item.DeviceID); ok {
-				status = existing.Status.Load()
-			}
-			ch := &gb28181.Channel{
-				ID:       item.DeviceID,
-				Name:     item.Name,
-				Parental: item.Parental,
-				PTZType:  item.PTZType,
-			}
-			ch.Status.Store(status)
-			s.deviceMgr.RegisterChannel(p.DeviceID, ch)
-			cameraID := ""
-			if enrol := s.enroller(); enrol != nil {
-				if id, ok := enrol.GB28181CameraIDByChannel(p.DeviceID, item.DeviceID); ok {
-					cameraID = id
-				}
-			}
-			if s.db != nil {
-				if err := s.db.UpsertGB28181Channel(context.Background(), storage.GB28181Channel{
-					ID:        item.DeviceID,
-					DeviceID:  p.DeviceID,
-					Name:      item.Name,
-					Parental:  item.Parental,
-					Status:    channelStatusString(status),
-					CameraID:  cameraID,
-					UpdatedAt: time.Now(),
-				}); err != nil {
-					slog.Warn("gb28181: failed to persist channel to DB", "channel", item.DeviceID, "error", err)
-				}
-			}
-			// Enroll a camera per real video channel so multi-channel
-			// devices (NVRs) get one camera per channel. Auto-INVITE follows
-			// from the recorder start path.
-			if cameraID == "" {
-				if enrol := s.enroller(); enrol != nil {
-					name := item.Name
-					devID, chID := p.DeviceID, item.DeviceID
-					go func() {
-						if err := enrol.EnsureGB28181Camera(devID, chID, name); err != nil {
-							slog.Warn("gb28181: auto-enroll channel camera failed", "device", devID, "channel", chID, "error", err)
-						}
-					}()
-				}
-			}
-		}
-		// Channels may have been discovered by this catalog (or a prior one):
-		// INVITE every channel that now has a bound camera and no active
-		// session. Also covers NVR restarts — cameras persist, sessions do
-		// not, and catalog channels are only known after this response.
-		go s.autoInviteDevice(p.DeviceID)
+		s.mergeCatalogChannels(p.DeviceID, p.Item)
 	case manscdp.CmdRecordInfo:
 		p := payload.(manscdp.RecordInfo)
 		slog.Info("gb28181: record info received", "device", p.DeviceID,
@@ -1223,9 +1221,144 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 				slog.Warn("gb28181: failed to update device info in DB", "device", p.DeviceID, "error", err)
 			}
 		}
+		// Backfill Brand/Model on the device's bound cameras (empty fields
+		// only — user-entered values win). Firmware is kept on the device
+		// record (no camera column for it).
+		if enrol := s.enroller(); enrol != nil {
+			if p.Manufacturer != "" || p.Model != "" {
+				if err := enrol.UpdateGB28181DeviceMeta(p.DeviceID, p.Manufacturer, p.Model); err != nil {
+					slog.Debug("gb28181: camera meta backfill", "device", p.DeviceID, "error", err)
+				}
+			}
+		}
+	case manscdp.CmdDeviceStatus:
+		p := payload.(manscdp.DeviceStatus)
+		slog.Info("gb28181: device status received", "device", p.DeviceID, "status", p.Status, "time", p.Time)
+		if p.Status != "" && p.Status != "OK" && p.Status != "ON" {
+			slog.Warn("gb28181: device reports abnormal status", "device", p.DeviceID, "status", p.Status)
+		}
+	case manscdp.CmdAlarm:
+		// Some firmwares deliver alarms as MESSAGE instead of NOTIFY —
+		// route both into the same pipeline.
+		s.handleAlarm(payload.(manscdp.Alarm))
+	case manscdp.CmdTimeSync:
+		// Device clock query (GB/T 28181-2016 § 9.6): answer with the
+		// platform wall clock so device-side timestamps (and RecordInfo
+		// ranges) stay aligned. The query may arrive with a Query root.
+		p := payload.(manscdp.TimeSyncQuery)
+		slog.Info("gb28181: time sync query", "device", p.DeviceID, "sn", p.SN)
+		go func(devID string, sn int) {
+			body, err := manscdp.Encode(manscdp.TimeSyncResponse{
+				CmdType:  manscdp.CmdTimeSync,
+				SN:       sn,
+				DeviceID: devID,
+				Time:     time.Now().Format("2006-01-02T15:04:05"),
+			})
+			if err != nil {
+				slog.Warn("gb28181: encode time sync response", "error", err)
+				return
+			}
+			if err := s.SendMessage(devID, body); err != nil {
+				slog.Debug("gb28181: send time sync response", "device", devID, "error", err)
+			}
+		}(p.DeviceID, p.SN)
 	}
 
 	s.respond(req, tx, statusOK, "OK", nil)
+}
+
+// mergeCatalogChannels ingests a channel list from a catalog response or a
+// catalog-change NOTIFY: registers channels, persists them, enrolls cameras
+// for new ones, and auto-INVITEs channels that have a camera but no session.
+func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
+	for _, item := range items {
+		// Parental=1 entries are organization/group nodes, not video
+		// channels — registering them as INVITEable channels breaks
+		// media setup on tree-shaped catalogs (Hikvision/Dahua NVRs).
+		if item.Parental == 1 {
+			continue
+		}
+		// Merge into the existing channel in place where possible so a
+		// catalog refresh updates names/PTZ without resetting the
+		// session status of an inviting/playing channel.
+		status := int32(gb28181.ChannelIdle)
+		if existing, ok := s.deviceMgr.FindChannel(deviceID, item.DeviceID); ok {
+			status = existing.Status.Load()
+		}
+		ch := &gb28181.Channel{
+			ID:       item.DeviceID,
+			Name:     item.Name,
+			Parental: item.Parental,
+			PTZType:  item.PTZType,
+		}
+		ch.Status.Store(status)
+		s.deviceMgr.RegisterChannel(deviceID, ch)
+		cameraID := ""
+		if enrol := s.enroller(); enrol != nil {
+			if id, ok := enrol.GB28181CameraIDByChannel(deviceID, item.DeviceID); ok {
+				cameraID = id
+			}
+		}
+		if s.db != nil {
+			if err := s.db.UpsertGB28181Channel(context.Background(), storage.GB28181Channel{
+				ID:        item.DeviceID,
+				DeviceID:  deviceID,
+				Name:      item.Name,
+				Parental:  item.Parental,
+				Status:    channelStatusString(status),
+				CameraID:  cameraID,
+				UpdatedAt: time.Now(),
+			}); err != nil {
+				slog.Warn("gb28181: failed to persist channel to DB", "channel", item.DeviceID, "error", err)
+			}
+		}
+		// Enroll a camera per real video channel so multi-channel
+		// devices (NVRs) get one camera per channel. Auto-INVITE follows
+		// from the recorder start path.
+		if cameraID == "" {
+			if enrol := s.enroller(); enrol != nil {
+				name := item.Name
+				devID, chID := deviceID, item.DeviceID
+				go func() {
+					if err := enrol.EnsureGB28181Camera(devID, chID, name); err != nil {
+						slog.Warn("gb28181: auto-enroll channel camera failed", "device", devID, "channel", chID, "error", err)
+					}
+				}()
+			}
+		}
+	}
+	// Channels may have been discovered by this catalog (or a prior one):
+	// INVITE every channel that now has a bound camera and no active
+	// session. Also covers NVR restarts — cameras persist, sessions do
+	// not, and catalog channels are only known after this response.
+	go s.autoInviteDevice(deviceID)
+
+	// Channel-level Manufacturer/Model backfill: the DeviceInfo response
+	// often races (and loses to) async auto-enrollment, but the catalog
+	// that CREATED the camera carries the same metadata. Async — the
+	// backfill only fills empty Brand/Model fields, never overwrites.
+	mfr, mdl := "", ""
+	for _, item := range items {
+		if item.Parental == 1 {
+			continue // organization nodes carry placeholder metadata
+		}
+		if mfr == "" && item.Manufacturer != "" {
+			mfr = item.Manufacturer
+		}
+		if mdl == "" && item.Model != "" {
+			mdl = item.Model
+		}
+	}
+	if mfr != "" || mdl != "" {
+		if enrol := s.enroller(); enrol != nil {
+			devID := deviceID
+			go func() {
+				if err := enrol.UpdateGB28181DeviceMeta(devID, mfr, mdl); err != nil {
+					slog.Debug("gb28181: camera meta backfill from catalog", "device", devID, "error", err)
+				}
+			}()
+		}
+	}
 }
 
 // channelStatusString maps a Channel status atom to its DB/API string.
@@ -1266,6 +1399,13 @@ func (s *Server) handleInvite(req sip.Request, tx sip.ServerTransaction) {
 // Reconnecting. When a hook is installed it takes precedence.
 func (s *Server) handleBye(req sip.Request, tx sip.ServerTransaction) {
 	deviceID, channelID := s.requestIDs(req)
+
+	// A BYE whose Call-ID matches an active talk session ends the intercom
+	// (#341) — the device hung up on the caller.
+	if s.stopTalkOnBye(req) {
+		s.respond(req, tx, statusOK, "OK", nil)
+		return
+	}
 
 	// A BYE whose Call-ID matches a playback dialog ends that fetch (the
 	// device finished streaming the requested range) — distinct from the

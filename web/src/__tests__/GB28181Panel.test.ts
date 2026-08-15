@@ -154,6 +154,10 @@ describe('GB28181Panel', () => {
       catalog_interval: '30m',
       media_transport: 'tcp-passive',
       tcp_framing: 'rfc4571',
+      subscribe_catalog: true,
+      subscribe_alarm: true,
+      subscribe_mobile_position: false,
+      subscribe_expires: '3600s',
       allowed_device_ids: ['34020000001310000001', '34020000001310000002'],
     });
   });

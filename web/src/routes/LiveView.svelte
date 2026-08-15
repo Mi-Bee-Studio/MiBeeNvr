@@ -11,6 +11,7 @@
   import SnapshotButton from '../components/SnapshotButton.svelte';
   import ImagingPanel from '$lib/components/ImagingPanel.svelte';
   import PresetManager from '$lib/components/PresetManager.svelte';
+  import GB28181TalkButton from '$lib/components/GB28181TalkButton.svelte';
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -366,6 +367,11 @@
              keeps presets in a local registry and drives the device with
              GB/T 28181 § A.3.4 set/call/delete commands (#339). -->
         {#if isGB28181Camera(camera)}
+          <!-- 语音对讲：麦克风 → G.711 A-law → 设备扬声器（半双工） -->
+          <div class="flex items-center gap-2">
+            <GB28181TalkButton cameraId={camera.id} />
+            <span class="text-xs text-gray-500">{t('gb28181.talk.label')}</span>
+          </div>
           <details class="onvif-collapsible" bind:open={showPresets}>
             <summary class="onvif-collapsible-summary">
               <div class="onvif-collapsible-title-row">
