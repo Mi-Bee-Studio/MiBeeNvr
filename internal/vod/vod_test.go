@@ -356,6 +356,8 @@ func TestManagerPlaylist(t *testing.T) {
 	require.Contains(t, playlist, "#EXT-X-PLAYLIST-TYPE:VOD")
 	require.Contains(t, playlist, "#EXT-X-ENDLIST")
 	require.Contains(t, playlist, `#EXT-X-MAP:URI="/api/cameras/cam1/playback/rec-a/init.mp4"`)
+	require.Contains(t, playlist, "#EXT-X-PROGRAM-DATE-TIME:")
+	require.Equal(t, 2, strings.Count(playlist, "#EXT-X-PROGRAM-DATE-TIME:"))
 	require.Contains(t, playlist, `#EXT-X-MAP:URI="/api/cameras/cam1/playback/rec-b/init.mp4"`)
 	require.Equal(t, 1, strings.Count(playlist, "#EXT-X-DISCONTINUITY\n"))
 	// Default fragment target is 6s; the fixtures are 0.66s/0.33s total, so

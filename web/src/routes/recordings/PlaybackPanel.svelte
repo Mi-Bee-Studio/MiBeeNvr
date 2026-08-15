@@ -26,6 +26,7 @@
   } from '$lib/api';
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
+  import { parseVodPlaylist, entryAt, nearestEntryByWallClock, mediaTimeFor, type VodEntry } from '$lib/vod-playlist';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
   import AviPlayback from '../../components/AviPlayback.svelte';
   import TimelineBar from '$lib/components/TimelineBar.svelte';
@@ -284,51 +285,19 @@
   // --- Continuous playback (VOD HLS, #321 Phase 2) ---
   // One hls.js MediaSource timeline for the camera's whole day: scrub anywhere
   // (across recordings AND gaps) like a local file. Media time (0..dayDur on
-  // the video element) is mapped to/from wall-clock segments via vodMap,
-  // which is parsed from the playlist's EXT-X-MAP/EXTINF lines.
-  interface VodEntry { rid: string; mediaStart: number; dur: number; }
+  // the video element) is mapped to/from wall-clock segments via vodMap
+  // (mapping helpers in $lib/vod-playlist.ts).
   let continuousMode = $state(false);
   let continuousReady = $state(false);
   let hlsInstance: any = null;
   let vodMap: VodEntry[] = [];
   let activeVodEntry: VodEntry | null = null;
+  // Rebuild resume target: set by the hls fatal-error path when the playlist
+  // went stale (rolling merge replaced recordings -> fragment 404s), consumed
+  // by the next enableContinuous() to restore the playback position.
+  let vodResume: { rid: string | null; offset: number; wallMs: number } | null = null;
+  let vodRebuilds = 0; // bounded per successful parse (reset in MANIFEST_PARSED)
   const CONTINUOUS_PREF_KEY = 'mibee_nvr_continuous_playback';
-
-  function mediaTimeFor(rid: string, offsetSec: number): number | null {
-    const e = vodMap.find((x) => x.rid === rid);
-    if (!e) return null;
-    return e.mediaStart + Math.max(0, Math.min(offsetSec, e.dur));
-  }
-
-  function vodEntryAt(mediaTime: number): VodEntry | null {
-    for (const e of vodMap) {
-      if (mediaTime >= e.mediaStart && mediaTime < e.mediaStart + e.dur) return e;
-    }
-    return vodMap.length > 0 ? vodMap[vodMap.length - 1] : null;
-  }
-
-  function parseVodPlaylist(text: string): VodEntry[] {
-    const entries: VodEntry[] = [];
-    let current: VodEntry | null = null;
-    for (const line of text.split('\n')) {
-      const mapMatch = line.match(/^#EXT-X-MAP:URI="\/api\/cameras\/[^/]+\/playback\/([^/]+)\/init\.mp4"/);
-      if (mapMatch) {
-        current = { rid: mapMatch[1], mediaStart: 0, dur: 0 };
-        entries.push(current);
-        continue;
-      }
-      const infMatch = line.match(/^#EXTINF:([\d.]+),/);
-      if (infMatch && current) {
-        current.dur += parseFloat(infMatch[1]);
-      }
-    }
-    let cum = 0;
-    for (const e of entries) {
-      e.mediaStart = cum;
-      cum += e.dur;
-    }
-    return entries;
-  }
 
   function teardownContinuous() {
     if (hlsInstance) {
@@ -380,10 +349,25 @@
     }
     vodMap = map;
     // Capture the start position BEFORE teardownContinuous() resets vodMap.
-    const entry = vodMap.find((x) => x.rid === recording!.id) ?? vodMap[0];
-    const startAt = entry.rid === recording.id
-      ? entry.mediaStart + Math.max(0, Math.min(startOffsetSec ?? videoCurrentTime, entry.dur))
-      : entry.mediaStart;
+    // Resume target wins (rebuild after stale-playlist 404s): exact recording
+    // match, else the period nearest the remembered wall clock.
+    const resume = vodResume;
+    vodResume = null;
+    let entry: VodEntry;
+    let startAt: number;
+    if (resume) {
+      entry = vodMap.find((x) => x.rid === resume.rid)
+        ?? nearestEntryByWallClock(vodMap, resume.wallMs);
+      const offset = Math.max(0, Math.min(resume.offset, entry.dur));
+      startAt = entry.mediaStart + offset;
+      videoCurrentTime = offset;
+      showToast(t('detail.continuousRebuilt'), 'info');
+    } else {
+      entry = vodMap.find((x) => x.rid === recording!.id) ?? vodMap[0];
+      startAt = entry.rid === recording.id
+        ? entry.mediaStart + Math.max(0, Math.min(startOffsetSec ?? videoCurrentTime, entry.dur))
+        : entry.mediaStart;
+    }
 
     const mod: any = await import('hls.js');
     const Hls = mod.default;
@@ -412,15 +396,37 @@
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       continuousReady = true;
+      vodRebuilds = 0;
       videoEl?.focus?.();
       if (videoEl) {
         try { videoEl.currentTime = startAt; } catch { /* not seekable yet */ }
-        activeVodEntry = vodEntryAt(startAt);
+        activeVodEntry = entryAt(vodMap, startAt);
         if (videoIsPlaying) void videoEl.play();
       }
     });
     hls.on(Hls.Events.ERROR, (_evt: unknown, data: any) => {
       if (!data?.fatal) return;
+      // Stale playlist (rolling merge replaced recordings -> fragment 404s) is
+      // the common fatal case: rebuild the session at the current position
+      // before giving up. Bounded to 2 rebuilds per successful parse so a
+      // genuinely broken stream falls through to per-segment mode.
+      if (continuousMode && vodRebuilds < 2) {
+        const v = videoEl;
+        const t = v ? v.currentTime : 0;
+        const cur = entryAt(vodMap, t);
+        if (cur) {
+          vodRebuilds++;
+          vodResume = {
+            rid: cur.rid,
+            offset: Math.max(0, t - cur.mediaStart),
+            wallMs: cur.wallStart ? cur.wallStart + Math.max(0, t - cur.mediaStart) * 1000 : 0,
+          };
+          console.warn('VOD HLS fatal error, rebuilding continuous session', data);
+          teardownContinuous();
+          void enableContinuous(null);
+          return;
+        }
+      }
       console.warn('VOD HLS fatal error, falling back to per-segment mode', data);
       teardownContinuous();
       continuousMode = false;
@@ -450,7 +456,7 @@
     if (continuousMode) {
       // Media timeline → within-recording offset; adopt the target recording's
       // metadata when playback crosses a recording boundary (discontinuity).
-      const entry = vodEntryAt(video.currentTime);
+      const entry = entryAt(vodMap, video.currentTime);
       if (entry) {
         videoCurrentTime = video.currentTime - entry.mediaStart;
         videoDuration = entry.dur;
@@ -668,7 +674,7 @@
     // Continuous mode: every target maps into the single media timeline —
     // cross-recording, cross-gap, anything. No source switch, no reload.
     if (continuousMode && continuousReady) {
-      const mt = mediaTimeFor(recordingId, offsetSeconds);
+      const mt = mediaTimeFor(vodMap, recordingId, offsetSeconds);
       if (mt != null && videoEl) {
         void recordTimelineSeek(recording.camera_id, 'segment');
         videoEl.currentTime = mt;

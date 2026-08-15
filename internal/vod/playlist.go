@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -198,6 +199,10 @@ func (m *Manager) renderPlaylist(cameraID string, entries []*Entry) string {
 		if i > 0 {
 			b.WriteString("#EXT-X-DISCONTINUITY\n")
 		}
+		// Wall-clock anchor for the recording period: lets the client find the
+		// NEAREST period by wall clock when rebuilding the session after
+		// rolling merges replaced the currently-playing recording (404s).
+		fmt.Fprintf(&b, "#EXT-X-PROGRAM-DATE-TIME:%s\n", e.Rec.StartedAt.UTC().Format(time.RFC3339Nano))
 		b.WriteString(fmt.Sprintf("#EXT-X-MAP:URI=%q\n", InitURL(cameraID, e.Rec.ID)))
 		for _, f := range e.Frags {
 			dur := f.DurationSec(e.Ts)

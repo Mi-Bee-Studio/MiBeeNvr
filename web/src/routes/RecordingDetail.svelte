@@ -70,6 +70,7 @@
       const rec = await getRecording(currentId);
       if (token !== loadToken) return;
       recording = rec;
+      syncDetailDateInURL();
       // PlaybackPanel handles player init in its $effect on `recording`.
       // The codec probe that picks <video> vs cycler for timelapse/mjpeg is
       // done lazily by PlaybackPanel's mode derivation.
@@ -157,6 +158,7 @@
     try {
       history.replaceState(null, '', `#/recordings/${r.id}`);
     } catch { /* non-browser env */ }
+    syncDetailDateInURL();
   }
 
   // Resolve ?at= absolute timestamp → offset once recording.started_at is known.
@@ -169,6 +171,21 @@
     pendingTimelineSeekAtMs = null;
     if (pendingTimelineSeekOffset == null) pendingTimelineSeekOffset = offsetSec;
   });
+
+  // Keep the watched day in the detail URL (?date=YYYY-MM-DD). The Header
+  // back button reads it to return to the recordings list on the SAME day
+  // (#321 follow-up); deep links like ?t=/?at= are preserved.
+  function syncDetailDateInURL() {
+    if (!recording?.started_at) return;
+    const day = new Date(recording.started_at).toLocaleDateString('en-CA');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+    try {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+      if (params.get('date') === day) return;
+      params.set('date', day);
+      history.replaceState(null, '', `#/recordings/${currentId}?${params.toString()}`);
+    } catch { /* non-browser env */ }
+  }
 
   // Route-entry effect: reacts to the recordingId PROP (fresh mount, or a
   // remount from another route). Mid-session segment switches do NOT come
@@ -186,18 +203,27 @@
     void loadRecording();
   });
 
+  // Back target keeps the watched day: #/recordings?date=<local day of the
+  // recording> — returning from yesterday's playback must land on yesterday's
+  // list, not jump to today (#321 follow-up).
+  function recordingsHashWithDay(): string {
+    if (!recording?.started_at) return '#/recordings';
+    const day = new Date(recording.started_at).toLocaleDateString('en-CA');
+    return /^\d{4}-\d{2}-\d{2}$/.test(day) ? `#/recordings?date=${day}` : '#/recordings';
+  }
+
   async function confirmDelete() {
     if (!recording) return;
     try {
       await deleteRecording(recording.id);
-      window.location.hash = '#/recordings';
+      window.location.hash = recordingsHashWithDay();
     } catch (e) {
       error = e instanceof Error ? e.message : t('common.failedDeleteRecording');
       deleteConfirm = false;
     }
   }
 
-  function goBack() { window.location.hash = '#/recordings'; }
+  function goBack() { window.location.hash = recordingsHashWithDay(); }
 
   // Merge completion → reload recording (re-probe codec, refresh merge_status).
   function onMergeCompleted() {
