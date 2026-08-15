@@ -827,9 +827,10 @@ let selectedPresetCamera = $state<string>('');
   onMount(() => {
     loadCameras();
     startTranscodingPoll();
-    // Idle-time prefetch: the detail route chunk loads in the background so
-    // the FIRST list→detail click doesn't flash the lazy-load skeleton either.
-    window.setTimeout(prefetchDetailChunk, 1500);
+    // Immediate background prefetch: the detail route chunk loads alongside
+    // the list data so the FIRST list→detail click skips the lazy-load
+    // skeleton entirely (LAN bandwidth is cheap; the import is cached).
+    prefetchDetailChunk();
 
     refreshInterval = window.setInterval(() => {
       loadCalendarSummary();
