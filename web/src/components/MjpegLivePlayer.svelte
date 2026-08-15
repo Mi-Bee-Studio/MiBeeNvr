@@ -50,6 +50,12 @@
   let lastEtag: string | null = null;
   let wsConnection: WebSocket | null = null;
   let useWebSocket = true; // Try WebSocket first, fall back to HTTP polling
+  // Silence-watchdog state: a WS that stays open without any video frame is
+  // treated as dead (recorder-side hub went stale) → fall back to polling.
+  const WS_SILENCE_FALLBACK_MS = 5000;
+  let wsSilenceTimer: ReturnType<typeof setTimeout> | null = null;
+  let renderedOnce = false; // at least one frame has been painted
+  let frameSeenSinceOpen = false;
 
   function revokeBlobUrl() {
     if (currentBlobUrl) {
@@ -79,6 +85,26 @@
       if (resp.status === 304) {
         consecutiveErrors = 0;
         lastLoadTime = Date.now();
+        // A 304 is only usable when the player ALREADY rendered a frame. With
+        // cache:'no-cache' the browser can answer 304 from its own cache on
+        // the very first poll (recorder-side frame cache frozen), leaving the
+        // <img> empty forever — force one unconditional fetch so the viewer
+        // at least sees the cached frame, and live motion resumes when the
+        // recorder starts producing frames again.
+        if (!renderedOnce) {
+          renderedOnce = true; // guard against loops
+          try {
+            const fresh = await fetch(`${API_BASE}/cameras/${cameraId}/latest-frame`, { cache: 'reload', headers: authHeader ? { Authorization: authHeader } : {} });
+            if (fresh.ok && !destroyed) {
+              const blob = await fresh.blob();
+              if (blob.size > 0) {
+                revokeBlobUrl();
+                currentBlobUrl = URL.createObjectURL(blob);
+                if (imgEl) imgEl.src = currentBlobUrl;
+              }
+            }
+          } catch { /* best-effort */ }
+        }
         return;
       }
 
@@ -104,6 +130,7 @@
       if (imgEl) {
         imgEl.src = currentBlobUrl;
       }
+      renderedOnce = true;
 
       consecutiveErrors = 0;
       lastLoadTime = Date.now();
@@ -152,6 +179,19 @@
 
     wsConnection.onopen = () => {
       consecutiveErrors = 0;
+      // Silence watchdog: the socket can be OPEN yet carry zero frames (e.g.
+      // the recorder reconnected and the server-side subscription went stale).
+      // A connected-but-mute socket must fall back to HTTP polling like a
+      // failed one, or the player sits on "connecting" forever.
+      clearTimeout(wsSilenceTimer);
+      wsSilenceTimer = setTimeout(() => {
+        if (!destroyed && useWebSocket && !frameSeenSinceOpen) {
+          useWebSocket = false;
+          stopWebSocket();
+          startPolling();
+        }
+      }, WS_SILENCE_FALLBACK_MS);
+      frameSeenSinceOpen = false;
     };
 
     wsConnection.onmessage = async (event) => {
@@ -160,6 +200,10 @@
       if (data.length < 1) return;
 
       const msgType = data[0];
+      if (msgType === 0x02) {
+        frameSeenSinceOpen = true;
+        clearTimeout(wsSilenceTimer);
+      }
       // Video frame (0x02): nalus[0] contains the complete JPEG
       if (msgType === 0x02 && data.length >= 12) {
         const naluCount = (data[10] << 8) | data[11];
@@ -175,6 +219,7 @@
           revokeBlobUrl();
           currentBlobUrl = URL.createObjectURL(blob);
           if (imgEl) imgEl.src = currentBlobUrl;
+          renderedOnce = true;
 
           lastLoadTime = Date.now();
           if (streamState === 'loading' || streamState === 'frozen') {
@@ -214,6 +259,8 @@
   }
 
   function stopWebSocket() {
+    clearTimeout(wsSilenceTimer);
+    wsSilenceTimer = null;
     if (wsConnection) {
       wsConnection.onopen = null;
       wsConnection.onmessage = null;

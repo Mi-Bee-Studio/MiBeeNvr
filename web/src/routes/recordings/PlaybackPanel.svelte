@@ -928,8 +928,16 @@
     try {
       timelapseFrames = await getTimelapseFrames(currentId, signal);
       if (timelapseFrames.length > 0) {
-        await ensureFrameCached(0, signal);
-        prefetchAhead(0, signal);
+        if (pendingTimelineSeekOffset != null) {
+          // Cross-segment timeline seek: land on the frame nearest the
+          // requested offset instead of the segment start.
+          const target = frameIndexAtOffset(pendingTimelineSeekOffset);
+          pendingTimelineSeekOffset = null;
+          tlSeek(target);
+        } else {
+          await ensureFrameCached(0, signal);
+        }
+        prefetchAhead(pendingTimelineSeekOffset == null ? 0 : tlCurrentFrame, signal);
       }
     } catch (e) {
       if (signal.aborted) return;
@@ -1094,6 +1102,52 @@
     if (!el) return;
     if (document.fullscreenElement) document.exitFullscreen();
     else el.requestFullscreen();
+  }
+
+  // --- Day timeline on the frame cycler (MJPEG/timelapse/AVI) ---
+  // Maps the whole day's TimelineBar onto cycler frames: any click anywhere
+  // in the day lands on the nearest frame (same "scrub anywhere" UX as the
+  // H.264 continuous timeline), and cross-segment clicks switch in place.
+  function frameIndexAtOffset(offsetSec: number): number {
+    if (timelapseFrames.length === 0 || !recording) return 0;
+    const start = Date.parse(recording.started_at);
+    if (Number.isFinite(start) && timelapseFrames[0]?.timestamp) {
+      const targetMs = start + Math.max(0, offsetSec) * 1000;
+      for (let i = 0; i < timelapseFrames.length; i++) {
+        const ts = Date.parse(timelapseFrames[i].timestamp);
+        if (!Number.isNaN(ts) && ts >= targetMs) return i;
+      }
+      return timelapseFrames.length - 1;
+    }
+    const dur = recording.duration || 0;
+    if (dur > 0) {
+      return Math.min(timelapseFrames.length - 1, Math.floor((Math.max(0, offsetSec) / dur) * timelapseFrames.length));
+    }
+    return 0;
+  }
+
+  function cyclerOffsetSec(): number {
+    const f = timelapseFrames[tlCurrentFrame];
+    if (!recording || !f) return 0;
+    if (f.timestamp) {
+      const start = Date.parse(recording.started_at);
+      const d = Date.parse(f.timestamp) - start;
+      if (Number.isFinite(d) && Number.isFinite(start)) return Math.max(0, d / 1000);
+    }
+    const total = timelapseFrames.length || 1;
+    return (tlCurrentFrame / total) * (recording.duration || 0);
+  }
+
+  function handleCyclerTimelineSeek(recordingId: string, offsetSeconds: number) {
+    if (!recording) return;
+    const isSegmentSwitch = recordingId !== currentId;
+    void recordTimelineSeek(recording.camera_id, isSegmentSwitch ? 'segment' : 'intra');
+    if (isSegmentSwitch) {
+      pendingTimelineSeekOffset = offsetSeconds;
+      ontimelineseek(recordingId, offsetSeconds);
+    } else {
+      tlSeek(frameIndexAtOffset(offsetSeconds));
+    }
   }
 
   function getFrameTimestamp(): string {
@@ -1491,6 +1545,17 @@
         </div>
       </div>
     </div>
+
+    {#if recording?.camera_id}
+      <TimelineBar
+        cameraId={recording.camera_id}
+        date={timelineDate()}
+        currentRecording={recording}
+        currentVideoTime={cyclerOffsetSec()}
+        onseek={handleCyclerTimelineSeek}
+        showEvents={true}
+      />
+    {/if}
   {/if}
 {:else if playbackMode === 'avi'}
   <AviPlayback recordingId={currentId} />
