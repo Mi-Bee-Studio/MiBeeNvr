@@ -1,6 +1,7 @@
 package manscdp
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
@@ -225,4 +226,146 @@ func TestDecode_KeepaliveAttributeForm(t *testing.T) {
 	ka := v.(Keepalive)
 	assert.Equal(t, 3, ka.SN)
 	assert.Equal(t, "OK", ka.Status)
+}
+
+func TestDecodeTimeSyncQuery(t *testing.T) {
+	body := `<?xml version="1.0" encoding="GB2312"?>
+<Query>
+<CmdType>TimeSync</CmdType>
+<SN>812</SN>
+<DeviceID>34020000001310000003</DeviceID>
+</Query>`
+	ct, v, err := Decode([]byte(body))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ct != CmdTimeSync {
+		t.Fatalf("cmdtype = %q", ct)
+	}
+	q, ok := v.(TimeSyncQuery)
+	if !ok {
+		t.Fatalf("type %T", v)
+	}
+	if q.SN != 812 || q.DeviceID != "34020000001310000003" {
+		t.Fatalf("fields: %+v", q)
+	}
+}
+
+func TestEncodeDecodeTimeSyncResponse(t *testing.T) {
+	raw, err := Encode(TimeSyncResponse{
+		CmdType:  CmdTimeSync,
+		SN:       812,
+		DeviceID: "34020000001310000003",
+		Time:     "2026-08-16T10:00:00",
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	ct, v, err := Decode(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ct != CmdTimeSync {
+		t.Fatalf("cmdtype = %q", ct)
+	}
+	r, ok := v.(TimeSyncResponse)
+	if !ok {
+		t.Fatalf("type %T", v)
+	}
+	if r.Time != "2026-08-16T10:00:00" || r.SN != 812 {
+		t.Fatalf("fields: %+v", r)
+	}
+	if !bytes.Contains(raw, []byte("<Response>")) {
+		t.Fatalf("root not Response: %s", raw)
+	}
+}
+
+func TestDecodeMobilePositionNotify(t *testing.T) {
+	body := `<?xml version="1.0"?>
+<Notify>
+<CmdType>MobilePosition</CmdType>
+<SN>1</SN>
+<DeviceID>34020000001310000003</DeviceID>
+<Time>2026-08-16T10:00:00</Time>
+<Longitude>116.4074</Longitude>
+<Latitude>39.9042</Latitude>
+<Speed>12.5</Speed>
+<Direction>45</Direction>
+<Altitude>50.0</Altitude>
+</Notify>`
+	ct, v, err := Decode([]byte(body))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ct != CmdMobilePosition {
+		t.Fatalf("cmdtype = %q", ct)
+	}
+	p, ok := v.(MobilePosition)
+	if !ok {
+		t.Fatalf("type %T", v)
+	}
+	if p.Longitude != "116.4074" || p.Latitude != "39.9042" || p.Speed != "12.5" {
+		t.Fatalf("fields: %+v", p)
+	}
+}
+
+func TestDecodeCatalogNotifyVsResponse(t *testing.T) {
+	notifyBody := `<?xml version="1.0"?>
+<Notify>
+<CmdType>Catalog</CmdType>
+<SN>2</SN>
+<DeviceID>34020000001310000003</DeviceID>
+<SumNum>1</SumNum>
+<DeviceList><Item><DeviceID>34020000001320000003</DeviceID><Name>ch1</Name><Status>ON</Status></Item></DeviceList>
+</Notify>`
+	ct, v, err := Decode([]byte(notifyBody))
+	if err != nil {
+		t.Fatalf("decode notify: %v", err)
+	}
+	if ct != CmdCatalog {
+		t.Fatalf("cmdtype = %q", ct)
+	}
+	n, ok := v.(CatalogNotify)
+	if !ok {
+		t.Fatalf("notify decoded as %T", v)
+	}
+	if len(n.Item) != 1 || n.Item[0].DeviceID != "34020000001320000003" || n.Item[0].Status != "ON" {
+		t.Fatalf("items: %+v", n.Item)
+	}
+
+	respBody := `<?xml version="1.0"?>
+<Response>
+<CmdType>Catalog</CmdType>
+<SN>3</SN>
+<DeviceID>34020000001310000003</DeviceID>
+<SumNum>1</SumNum>
+<DeviceList><Item><DeviceID>34020000001320000003</DeviceID><Name>ch1</Name></Item></DeviceList>
+</Response>`
+	ct2, v2, err := Decode([]byte(respBody))
+	if err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if ct2 != CmdCatalog {
+		t.Fatalf("cmdtype = %q", ct2)
+	}
+	if _, ok := v2.(Catalog); !ok {
+		t.Fatalf("response decoded as %T", v2)
+	}
+}
+
+func TestEncodeSubscribe(t *testing.T) {
+	raw, err := Encode(Subscribe{
+		CmdType:  CmdMobilePosition,
+		SN:       5,
+		DeviceID: "34020000001310000003",
+		Interval: 5,
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	for _, want := range []string{"<SUBSCRIBE>", "<CmdType>MobilePosition</CmdType>", "<Interval>5</Interval>"} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Fatalf("missing %s in %s", want, raw)
+		}
+	}
 }

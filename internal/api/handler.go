@@ -679,6 +679,19 @@ type GB28181DeviceMedia interface {
 	PlaybackStatusFor(channelID string) (gb28181.PlaybackInfo, bool)
 	// PlaybackControl sends a MANSRTSP control (pause/resume/seek).
 	PlaybackControl(channelID, action string, scale, position float64) error
+	// StartTalk establishes a voice intercom with a channel (audio-only
+	// INVITE; #341). Idempotent.
+	StartTalk(cameraID, deviceID, channelID string) error
+	// StopTalk ends the intercom (SIP BYE + socket close).
+	StopTalk(channelID string) error
+	// WriteTalkAudio packetizes one G.711 A-law frame to the device.
+	WriteTalkAudio(channelID string, alaw []byte)
+	// TalkStatusFor reports the intercom state of a camera.
+	TalkStatusFor(cameraID string) gb28181.TalkStatus
+	// GB28181Alarms returns the device's recent alarms (latest first).
+	GB28181Alarms(deviceID string) []event.GB28181AlarmEvent
+	// GB28181Positions returns the device's recent mobile positions.
+	GB28181Positions(deviceID string) []gb28181.GBPosition
 }
 
 // SetGB28181DeviceMedia wires the SIP server for the device-recording
@@ -694,6 +707,8 @@ func (h *Handler) registerGB28181Routes(r chi.Router) {
 		r.Route("/devices/{id}", func(r chi.Router) {
 			r.Get("/channels", h.handleListGB28181Channels)
 			r.Post("/catalog-refresh", h.handleCatalogRefresh)
+			r.Get("/alarms", h.handleGB28181DeviceAlarms)
+			r.Get("/positions", h.handleGB28181DevicePositions)
 		})
 		r.Route("/channels/{id}", func(r chi.Router) {
 			r.Post("/invite", h.handleInviteChannel)

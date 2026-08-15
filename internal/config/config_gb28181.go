@@ -52,6 +52,44 @@ type GB28181ServerConfig struct {
 	// "tcp". "tcp" adds a SIP-over-TCP listener alongside UDP — devices pick
 	// whichever they speak.
 	SIPTransport string `yaml:"sip_transport"` // default "udp"
+
+	// SubscribeCatalog enables SUBSCRIBE Catalog: devices push channel-list
+	// changes via NOTIFY instead of waiting for the periodic catalog poll
+	// (GB/T 28181-2016 § 9.5.1). Default: on when gb28181.enabled (nil =
+	// unset; explicit false opts out).
+	SubscribeCatalog *bool `yaml:"subscribe_catalog,omitempty"`
+
+	// SubscribeAlarm enables SUBSCRIBE Alarm: device alarm notifications
+	// (motion, offline, ...) arrive as NOTIFY and surface on the event bus
+	// (gb28181.alarm topic, SSE) plus the REST ring. Default: on when
+	// gb28181.enabled.
+	SubscribeAlarm *bool `yaml:"subscribe_alarm,omitempty"`
+
+	// SubscribeMobilePosition enables SUBSCRIBE MobilePosition for moving
+	// devices (vehicle-mounted cameras); reports land in the REST ring
+	// (/api/gb28181/devices/{id}/positions). Default false — stationary
+	// cameras never emit reports.
+	SubscribeMobilePosition bool `yaml:"subscribe_mobile_position"` // default false
+
+	// SubscribeExpires is the SUBSCRIBE lifetime; renewed at 80%.
+	SubscribeExpires string `yaml:"subscribe_expires"` // default "3600s"
+}
+
+// CatalogSubscriptionOn resolves the subscribe_catalog toggle: on when the
+// server is enabled and the flag is unset or true.
+func (c GB28181ServerConfig) CatalogSubscriptionOn() bool {
+	if c.SubscribeCatalog == nil {
+		return c.Enabled
+	}
+	return *c.SubscribeCatalog
+}
+
+// AlarmSubscriptionOn resolves the subscribe_alarm toggle (see CatalogSubscriptionOn).
+func (c GB28181ServerConfig) AlarmSubscriptionOn() bool {
+	if c.SubscribeAlarm == nil {
+		return c.Enabled
+	}
+	return *c.SubscribeAlarm
 }
 
 // GB28181ChannelConfig holds per-camera GB28181 fields (used when the camera

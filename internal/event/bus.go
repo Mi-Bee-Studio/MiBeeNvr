@@ -23,6 +23,10 @@ const (
 	// activation_state, source}. The frontend subscribes via
 	// /api/events?filter=camera. to refresh its camera list and toast the user.
 	TopicCameraAdded = "camera.added"
+	// TopicGB28181Alarm is published when a GB/T 28181 device pushes an alarm
+	// notification (SUBSCRIBE/NOTIFY Alarm, or a MESSAGE-delivered alarm).
+	// Payload: event.GB28181AlarmEvent. Surfaces via /api/events SSE.
+	TopicGB28181Alarm = "gb28181.alarm"
 )
 
 var ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")

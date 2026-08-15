@@ -416,6 +416,12 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"tcp_framing":         h.config.GB28181.TCPFraming,
 			"media_transport":     h.config.GB28181.MediaTransport,
 			"sip_transport":       h.config.GB28181.SIPTransport,
+			// Subscription toggles (#341): resolve the *bool defaults so the
+			// UI sees the effective values.
+			"subscribe_catalog":         h.config.GB28181.CatalogSubscriptionOn(),
+			"subscribe_alarm":           h.config.GB28181.AlarmSubscriptionOn(),
+			"subscribe_mobile_position": h.config.GB28181.SubscribeMobilePosition,
+			"subscribe_expires":         h.config.GB28181.SubscribeExpires,
 		},
 	})
 }
@@ -485,6 +491,11 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			TCPFraming        *string   `json:"tcp_framing"`
 			MediaTransport    *string   `json:"media_transport"`
 			SIPTransport      *string   `json:"sip_transport"`
+
+			SubscribeCatalog        *bool   `json:"subscribe_catalog"`
+			SubscribeAlarm          *bool   `json:"subscribe_alarm"`
+			SubscribeMobilePosition *bool   `json:"subscribe_mobile_position"`
+			SubscribeExpires        *string `json:"subscribe_expires"`
 		} `json:"gb28181"`
 	}
 
@@ -610,6 +621,24 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.GB28181.SIPTransport != nil {
 			h.config.GB28181.SIPTransport = *body.GB28181.SIPTransport
+		}
+		if body.GB28181.SubscribeCatalog != nil {
+			h.config.GB28181.SubscribeCatalog = body.GB28181.SubscribeCatalog
+		}
+		if body.GB28181.SubscribeAlarm != nil {
+			h.config.GB28181.SubscribeAlarm = body.GB28181.SubscribeAlarm
+		}
+		if body.GB28181.SubscribeMobilePosition != nil {
+			h.config.GB28181.SubscribeMobilePosition = *body.GB28181.SubscribeMobilePosition
+		}
+		if body.GB28181.SubscribeExpires != nil {
+			if trimmed := strings.TrimSpace(*body.GB28181.SubscribeExpires); trimmed != "" {
+				if _, err := time.ParseDuration(trimmed); err != nil {
+					WriteError(w, http.StatusBadRequest, "subscribe_expires must be a valid duration (e.g., \"3600s\", \"2h\")")
+					return
+				}
+				h.config.GB28181.SubscribeExpires = trimmed
+			}
 		}
 		// Validate the updated config (catches invalid server_id, sip_listen, etc.)
 		if err := config.Validate(h.config); err != nil {

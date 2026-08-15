@@ -13,6 +13,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/websocket"
 )
 
 // --- GB28181 Device Handlers ---
@@ -679,4 +680,93 @@ func (h *Handler) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "control_sent", "action": req.Action})
+}
+
+// --- GB28181 Talk (语音对讲) / Alarms / MobilePosition handlers (#341) ---
+
+// gbTalkUpgrader upgrades talk WebSocket connections (browser mic → server).
+var gbTalkUpgrader = websocket.Upgrader{
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
+
+// handleGB28181TalkWS streams the browser microphone to a GB28181 camera's
+// speaker: GET /api/cameras/{id}/gb28181/talk upgrades to a WebSocket whose
+// binary frames carry G.711 A-law chunks (encoded browser-side). The INVITE
+// handshake runs on connect; closing the socket BYEs the session.
+func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if h.gb28181Media == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
+		return
+	}
+	cam := h.camMgr.GetCameraConfig(cameraID)
+	if cam == nil || cam.Protocol != "gb28181" {
+		WriteError(w, http.StatusBadRequest, "camera is not a GB28181 camera")
+		return
+	}
+	channelID := cam.GB28181.ChannelID
+	deviceID := cam.GB28181.DeviceID
+	if channelID == "" || deviceID == "" {
+		WriteError(w, http.StatusBadRequest, "camera is not bound to a GB28181 device/channel")
+		return
+	}
+
+	if err := h.gb28181Media.StartTalk(cameraID, deviceID, channelID); err != nil {
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("talk setup failed: %v", err))
+		return
+	}
+	defer func() {
+		if err := h.gb28181Media.StopTalk(channelID); err != nil {
+			slog.Warn("gb28181: stop talk on WS close", "camera", cameraID, "error", err)
+		}
+	}()
+
+	conn, err := gbTalkUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	for {
+		mt, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		if mt != websocket.BinaryMessage {
+			continue
+		}
+		h.gb28181Media.WriteTalkAudio(channelID, data)
+	}
+}
+
+// handleGB28181TalkStatus reports whether a camera's intercom is active.
+func (h *Handler) handleGB28181TalkStatus(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if h.gb28181Media == nil {
+		writeJSON(w, http.StatusOK, gb28181.TalkStatus{Active: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.gb28181Media.TalkStatusFor(cameraID))
+}
+
+// handleGB28181DeviceAlarms returns a device's recent alarm notifications.
+func (h *Handler) handleGB28181DeviceAlarms(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	if h.gb28181Media == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.gb28181Media.GB28181Alarms(deviceID))
+}
+
+// handleGB28181DevicePositions returns a device's recent mobile positions.
+func (h *Handler) handleGB28181DevicePositions(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	if h.gb28181Media == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.gb28181Media.GB28181Positions(deviceID))
 }

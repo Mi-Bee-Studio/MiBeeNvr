@@ -72,9 +72,14 @@ func SSRC(playback bool, serverID string, seq int) string {
 // then routes on the CmdType child element. GB/T 28181-2016 § 9.3 encodes
 // CmdType/SN as child elements — real devices (Hikvision, Dahua, Uniview)
 // never send the attribute form.
+//
+// The root element (Response / Notify / Query / Control) disambiguates
+// commands that share a CmdType: Catalog arrives as both a query Response and
+// a subscription Notify, and TimeSync as a Query or a Response.
 func decodeOnce(data []byte) (CmdType, any, error) {
 	body := stripXMLDecl(data)
 	var probe struct {
+		XMLName     xml.Name
 		CmdType     CmdType `xml:"CmdType"`
 		CmdTypeAttr CmdType `xml:"CmdType,attr"`
 	}
@@ -86,6 +91,16 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 	}
 	if probe.CmdType == "" {
 		return "", nil, fmt.Errorf("manscdp: missing CmdType element")
+	}
+	switch {
+	case probe.CmdType == CmdCatalog && probe.XMLName.Local == "Notify":
+		return unmarshalAs[CatalogNotify](body, CmdCatalog)
+	case probe.CmdType == CmdTimeSync && probe.XMLName.Local == "Response":
+		return unmarshalAs[TimeSyncResponse](body, CmdTimeSync)
+	case probe.CmdType == CmdTimeSync:
+		return unmarshalAs[TimeSyncQuery](body, CmdTimeSync)
+	case probe.CmdType == CmdMobilePosition:
+		return unmarshalAs[MobilePosition](body, CmdMobilePosition)
 	}
 	switch probe.CmdType {
 	case CmdCatalog:

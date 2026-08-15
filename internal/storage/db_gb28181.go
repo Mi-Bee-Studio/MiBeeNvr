@@ -34,11 +34,23 @@ type GB28181Channel struct {
 	UpdatedAt    time.Time
 }
 
-// UpsertGB28181Device inserts or replaces a device row (INSERT OR REPLACE).
+// UpsertGB28181Device inserts a device row, or updates the existing one
+// while PRESERVING non-empty metadata fields. Callers upsert from multiple
+// paths with partial payloads (REGISTER passes status only, keepalive passes
+// status+timestamp, DeviceInfo passes name/manufacturer/model) — a blind
+// INSERT OR REPLACE from the keepalive path wiped the DeviceInfo metadata
+// ~20s after it landed.
 func (d *DB) UpsertGB28181Device(ctx context.Context, device GB28181Device) error {
-	_, err := d.db.ExecContext(ctx, `INSERT OR REPLACE INTO gb28181_devices
+	_, err := d.db.ExecContext(ctx, `INSERT INTO gb28181_devices
 		(id, name, manufacturer, model, status, last_keepalive, registered_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?);`,
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = COALESCE(NULLIF(excluded.name, ''), name),
+			manufacturer = COALESCE(NULLIF(excluded.manufacturer, ''), manufacturer),
+			model = COALESCE(NULLIF(excluded.model, ''), model),
+			status = excluded.status,
+			last_keepalive = excluded.last_keepalive,
+			registered_at = COALESCE(NULLIF(excluded.registered_at, ''), registered_at);`,
 		device.ID, device.Name, device.Manufacturer, device.Model, device.Status,
 		timeToDB(device.LastKeepalive), timeToDB(device.RegisteredAt))
 	return err

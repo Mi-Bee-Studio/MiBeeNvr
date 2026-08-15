@@ -1,5 +1,7 @@
 package event
 
+import "time"
+
 // Event represents a single event published to the bus.
 type Event struct {
 	Topic string
@@ -51,4 +53,18 @@ type AIDetection struct {
 	Confidence float64    `json:"confidence"`
 	ClassID    int        `json:"class_id"`
 	ClassLabel string     `json:"class_label"`
+}
+
+// GB28181AlarmEvent is published when a GB/T 28181 device pushes an alarm
+// notification (TopicGB28181Alarm).
+type GB28181AlarmEvent struct {
+	CameraID         string    `json:"camera_id,omitempty"`
+	DeviceID         string    `json:"device_id"`
+	ChannelID        string    `json:"channel_id,omitempty"`
+	AlarmPriority    string    `json:"alarm_priority,omitempty"` // 1高 2中 3低
+	AlarmMethod      string    `json:"alarm_method,omitempty"`   // 2 motion, 5 offline...
+	AlarmType        string    `json:"alarm_type,omitempty"`
+	AlarmTime        string    `json:"alarm_time,omitempty"`
+	AlarmDescription string    `json:"alarm_description,omitempty"`
+	ReceivedAt       time.Time `json:"received_at"`
 }

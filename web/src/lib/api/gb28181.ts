@@ -75,3 +75,42 @@ export async function controlGB28181Playback(
     body: JSON.stringify({ action, scale: opts?.scale ?? 0, position: opts?.position ?? 0 }),
   });
 }
+
+/** Recent alarm notifications of a device (SUBSCRIBE Alarm ring, latest first). */
+export interface GB28181Alarm {
+  camera_id?: string;
+  device_id: string;
+  channel_id?: string;
+  alarm_priority?: string;
+  alarm_method?: string;
+  alarm_type?: string;
+  alarm_time?: string;
+  alarm_description?: string;
+  received_at: string;
+}
+
+/** One mobile-position report (SUBSCRIBE MobilePosition). */
+export interface GB28181Position {
+  device_id: string;
+  time: string;
+  longitude: string;
+  latitude: string;
+  speed?: string;
+  direction?: string;
+  altitude?: string;
+  updated_at: string;
+}
+
+export async function getGB28181Alarms(deviceId: string): Promise<GB28181Alarm[]> {
+  return apiRequest<GB28181Alarm[]>(`/gb28181/devices/${encodeURIComponent(deviceId)}/alarms`);
+}
+
+export async function getGB28181Positions(deviceId: string): Promise<GB28181Position[]> {
+  return apiRequest<GB28181Position[]>(`/gb28181/devices/${encodeURIComponent(deviceId)}/positions`);
+}
+
+export async function getGB28181TalkStatus(
+  cameraId: string,
+): Promise<{ active: boolean; packets?: number; bytes_sent?: number }> {
+  return apiRequest(`/cameras/${encodeURIComponent(cameraId)}/gb28181/talk/status`);
+}

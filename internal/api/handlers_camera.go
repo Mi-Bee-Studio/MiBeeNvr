@@ -1213,6 +1213,9 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Get("/latest-frame", h.handleLatestFrame)
 			// Per-camera protocols
 			r.Get("/protocols", h.handleCameraProtocols)
+			// GB28181 voice intercom (talk): WS ingest + status (#341)
+			r.Get("/gb28181/talk", h.handleGB28181TalkWS)
+			r.Get("/gb28181/talk/status", h.handleGB28181TalkStatus)
 			r.Get("/onvif/profiles", h.handleONVIFCameraProfiles)
 			r.Get("/onvif/capabilities", h.handleONVIFCapabilities)
 			r.Post("/ptz/move", h.handlePTZMove)

@@ -29,6 +29,11 @@
   let heartbeatInterval = $state('60s');
   let catalogInterval = $state('30m');
   let mediaTransport = $state('udp');
+
+  let subscribeCatalog = $state(true);
+  let subscribeAlarm = $state(true);
+  let subscribeMobilePosition = $state(false);
+  let subscribeExpires = $state('3600s');
   let tcpFraming = $state('auto');
   let allowedDeviceIds = $state<string[]>([]);
   let newDeviceId = $state('');
@@ -53,6 +58,10 @@
       catalogInterval,
       mediaTransport,
       tcpFraming,
+      subscribeCatalog,
+      subscribeAlarm,
+      subscribeMobilePosition,
+      subscribeExpires,
       allowedDeviceIds,
     });
     return current !== originalSnapshot;
@@ -70,6 +79,10 @@
       catalogInterval,
       mediaTransport,
       tcpFraming,
+      subscribeCatalog,
+      subscribeAlarm,
+      subscribeMobilePosition,
+      subscribeExpires,
       allowedDeviceIds,
     });
     originalEnabled = gb28181Enabled;
@@ -91,6 +104,10 @@
       heartbeatInterval = cfg?.heartbeat_interval ?? '60s';
       catalogInterval = cfg?.catalog_interval ?? '30m';
       mediaTransport = cfg?.media_transport ?? (cfg?.tcp_mode ? 'tcp-passive' : 'udp');
+      subscribeCatalog = cfg?.subscribe_catalog ?? true;
+      subscribeAlarm = cfg?.subscribe_alarm ?? true;
+      subscribeMobilePosition = cfg?.subscribe_mobile_position ?? false;
+      subscribeExpires = cfg?.subscribe_expires ?? '3600s';
       tcpFraming = cfg?.tcp_framing ?? 'auto';
       allowedDeviceIds = cfg?.allowed_device_ids ? [...cfg.allowed_device_ids] : [];
       captureSnapshot();
@@ -129,6 +146,10 @@
           catalog_interval: catalogInterval.trim(),
           media_transport: mediaTransport,
           tcp_framing: tcpFraming,
+          subscribe_catalog: subscribeCatalog,
+          subscribe_alarm: subscribeAlarm,
+          subscribe_mobile_position: subscribeMobilePosition,
+          subscribe_expires: subscribeExpires,
           allowed_device_ids: allowedDeviceIds,
         },
       });
@@ -155,6 +176,10 @@
       heartbeatInterval = snap.heartbeatInterval;
       catalogInterval = snap.catalogInterval;
       mediaTransport = snap.mediaTransport;
+      subscribeCatalog = snap.subscribeCatalog;
+      subscribeAlarm = snap.subscribeAlarm;
+      subscribeMobilePosition = snap.subscribeMobilePosition;
+      subscribeExpires = snap.subscribeExpires;
       tcpFraming = snap.tcpFraming;
       allowedDeviceIds = snap.allowedDeviceIds;
     } catch { /* ignore */ }
@@ -356,6 +381,35 @@
             <option value="tcp-passive">{t('settings.gb28181.mediaTransportTcpPassive')}</option>
             <option value="tcp-active">{t('settings.gb28181.mediaTransportTcpActive')}</option>
           </select>
+        </div>
+
+        <!-- Subscriptions (目录/报警/移动位置订阅) -->
+        <div class="flex items-center justify-between p-3 rounded-md border th-border th-bg-hover">
+          <div>
+            <span class="text-sm font-medium th-text-primary">{t('settings.gb28181.subscriptions')}</span>
+            <p class="text-xs th-text-tertiary mt-1">{t('settings.gb28181.subscriptionsHint')}</p>
+          </div>
+          <div class="flex flex-col gap-2 items-end">
+            <label class="flex items-center gap-2 text-sm th-text-primary">
+              <input type="checkbox" class="checkbox" bind:checked={subscribeCatalog} />
+              {t('settings.gb28181.subscribeCatalog')}
+            </label>
+            <label class="flex items-center gap-2 text-sm th-text-primary">
+              <input type="checkbox" class="checkbox" bind:checked={subscribeAlarm} />
+              {t('settings.gb28181.subscribeAlarm')}
+            </label>
+            <label class="flex items-center gap-2 text-sm th-text-primary">
+              <input type="checkbox" class="checkbox" bind:checked={subscribeMobilePosition} />
+              {t('settings.gb28181.subscribeMobilePosition')}
+            </label>
+            <input
+              class="input w-44"
+              type="text"
+              bind:value={subscribeExpires}
+              aria-label={t('settings.gb28181.subscribeExpires')}
+              placeholder="3600s"
+            />
+          </div>
         </div>
 
         <!-- Allowed device IDs -->

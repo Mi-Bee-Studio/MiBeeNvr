@@ -571,6 +571,8 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		})
 		deps.gb28181SessionMgr = newGB28181SessionManager(cfg.GB28181)
 		deps.gb28181Server = sip.NewServer(cfg.GB28181, deps.gb28181DevMgr, deps.gb28181SessionMgr, deps.db)
+		// Alarm notifications surface on the event bus (SSE /api/events).
+		deps.gb28181Server.SetEventBus(deps.eventBus)
 		slog.Info("GB28181 SIP server configured", "sip_listen", cfg.GB28181.SIPListen)
 	}
 
