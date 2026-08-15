@@ -106,7 +106,7 @@ func parseAndStore(c *segmentCache, rec model.Recording) (*merge.SegmentInfo, er
 	}
 	c.mu.Unlock()
 
-	info, err := merge.ParseSegment(rec.FilePath)
+	info, err := merge.ParseSegmentNoProbe(rec.FilePath)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", rec.FilePath, err)
 	}

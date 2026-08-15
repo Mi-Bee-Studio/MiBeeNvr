@@ -198,6 +198,7 @@
     const { getCameraPlaybackPlaylistURL } = await import('$lib/api');
 
     let text: string;
+    showToast(t('detail.continuousBuilding'), 'info');
     try {
       const resp = await fetch(getCameraPlaybackPlaylistURL(recording.camera_id, startISO, endISO));
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

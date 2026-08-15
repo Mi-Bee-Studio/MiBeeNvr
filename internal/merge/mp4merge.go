@@ -150,9 +150,12 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		videoTrack.width, videoTrack.height = uint16(w), uint16(h)
 	}
 	// Populate placeholder samples so the size calculation includes per-sample tables.
+	// Keyframes marked true on EVERY placeholder sample: the real pass writes
+	// fewer-or-equal stss entries, so the reserved moov always fits.
 	videoTrack.samples = make([]mergedSample, totalVideoSamples)
 	for i := range videoTrack.samples {
 		videoTrack.samples[i].duration = 33 // placeholder
+		videoTrack.samples[i].isKeyFrame = true
 	}
 	// Build audio track placeholder for size calculation.
 	var audioTrack *mergeTrack
@@ -744,6 +747,32 @@ func writeMergeStbl(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 		return err
 	}
 	_ = bi8
+
+	// stss — sync sample table (1-indexed). Lets parsers (VOD fragmenter, other
+	// players) find keyframes without probing media bytes. Written whenever any
+	// keyframe exists — including the all-sync case — so the SIZE-estimation
+	// pass (which marks every placeholder sample as a keyframe = worst case)
+	// never under-reserves the moov.
+	var syncSamples []uint32
+	for i, s := range samples {
+		if s.isKeyFrame {
+			syncSamples = append(syncSamples, uint32(i+1))
+		}
+	}
+	if len(syncSamples) > 0 {
+		biSS, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stss")})
+		if err != nil {
+			return err
+		}
+		stss := &mp4.Stss{EntryCount: uint32(len(syncSamples)), SampleNumber: syncSamples}
+		if _, err := mp4.Marshal(w, stss, mp4.Context{}); err != nil {
+			return err
+		}
+		if _, err := w.EndBox(); err != nil {
+			return err
+		}
+		_ = biSS
+	}
 
 	// stco or co64 — single chunk at chunkOffset.
 	if uint64(chunkOffset) > math.MaxUint32 {

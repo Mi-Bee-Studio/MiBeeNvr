@@ -142,14 +142,16 @@ func (h *Handler) handlePlaybackSegment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Re-derive the fragment plan and locate the requested fragment. The plan
-	// is deterministic, so this both validates the range and reproduces the
-	// exact audio alignment/timing the playlist was generated with.
+	// Look up the cached fragment plan and locate the requested fragment.
 	var frag *vod.Fragment
-	for _, f := range vod.PlanFragments(info, h.vodMgr.TargetSec()) {
-		if f.First == first && f.End == end {
-			ff := f
-			frag = &ff
+	frags, _, err := h.vodMgr.Fragments(*rec)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "plan fragments: "+err.Error())
+		return
+	}
+	for i := range frags {
+		if frags[i].First == first && frags[i].End == end {
+			frag = &frags[i]
 			break
 		}
 	}

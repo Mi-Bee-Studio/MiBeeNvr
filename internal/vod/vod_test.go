@@ -63,7 +63,7 @@ func TestPlanFragments_KeyframeAligned(t *testing.T) {
 
 	// Target 100ms @33ms/sample → cut at the first keyframe with ≥100ms
 	// accumulated → fragments [0,5),[5,10),[10,15),[15,20).
-	frags := PlanFragments(info, 0.1)
+	frags := PlanFragments(info, 0.1, stssOracle{samples: info.Samples})
 	require.Len(t, frags, 4)
 	for i, f := range frags {
 		require.Equal(t, 5*i, f.First)
@@ -87,7 +87,7 @@ func TestBuildFragment_BoxRoundtrip(t *testing.T) {
 	path := buildTestMP4(t, dir, "seg.mp4", 10, 5)
 	info := parseInfo(t, path)
 
-	frags := PlanFragments(info, 0.1)
+	frags := PlanFragments(info, 0.1, stssOracle{samples: info.Samples})
 	require.NotEmpty(t, frags)
 	f := frags[0]
 
@@ -197,7 +197,7 @@ func TestBuildFragment_BoxRoundtrip(t *testing.T) {
 func TestBuildFragment_SecondFragmentTfdt(t *testing.T) {
 	dir := t.TempDir()
 	info := parseInfo(t, buildTestMP4(t, dir, "seg.mp4", 10, 5))
-	frags := PlanFragments(info, 0.1)
+	frags := PlanFragments(info, 0.1, stssOracle{samples: info.Samples})
 	require.Len(t, frags, 2)
 
 	data, err := BuildFragment(info, frags[1], 8, false)
@@ -270,6 +270,61 @@ func TestIncludeAudio(t *testing.T) {
 	require.True(t, IncludeAudio(&merge.SegmentInfo{HasAudio: true, AudioCodec: "aac"}))
 	require.True(t, IncludeAudio(&merge.SegmentInfo{HasAudio: true, AudioCodec: "opus"}))
 }
+
+// TestProbeOracle_GOPPrediction exercises the stss-less path: the oracle must
+// find the first boundary with a linear scan, learn the GOP period, and then
+// land EXACTLY on keyframe positions via prediction (fixture: IDR every 50).
+func TestProbeOracle_GOPPrediction(t *testing.T) {
+	dir := t.TempDir()
+	path := buildTestMP4(t, dir, "seg.mp4", 500, 50)
+	info, err := merge.ParseSegmentNoProbe(path)
+	require.NoError(t, err)
+	require.False(t, info.KeyframesFromStss)
+
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer f.Close()
+	o := newProbeOracle(f, info)
+
+	for _, want := range []int{0, 50, 100, 150, 200, 250, 300, 350, 400, 450} {
+		got, ok := o.nextAtOrAfter(want)
+		require.True(t, ok, "no keyframe found from %d", want)
+		require.Equal(t, want, got, "boundary must land exactly on the keyframe")
+	}
+	// Beyond the last keyframe: not found.
+	_, ok := o.nextAtOrAfter(451)
+	require.False(t, ok)
+}
+
+// TestFragments_ViaManager_NoStss runs the full manager path on a NoProbe
+// parse (probe oracle internally) and verifies keyframe-aligned boundaries.
+func TestFragments_ViaManager_NoStss(t *testing.T) {
+	dir := t.TempDir()
+	path := buildTestMP4(t, dir, "seg.mp4", 20, 5)
+	fi := fileInfo(t, path)
+	m := NewManager()
+	rec := model.Recording{ID: "r1", CameraID: "c1", FilePath: path, FileSize: fi.Size(), Format: model.FormatH264,
+		StartedAt: time.Now().UTC().Add(-time.Hour), EndedAt: time.Now().UTC()}
+
+	frags, ts, err := m.Fragments(rec)
+	require.NoError(t, err)
+	require.NotZero(t, ts)
+	require.NotEmpty(t, frags)
+	// Boundaries at the learned keyframe positions (0,5,10,15).
+	require.Equal(t, 0, frags[0].First)
+	for i := 1; i < len(frags); i++ {
+		require.Equal(t, frags[i-1].End, frags[i].First)
+		require.Equal(t, 0, frags[i].First%5)
+	}
+	require.Equal(t, 20, frags[len(frags)-1].End)
+
+	// Plan cache: second call returns the same slice (pointer identity) —
+	// and persists a sidecar plan next to the fixture.
+	frags2, _, err := m.Fragments(rec)
+	require.NoError(t, err)
+	require.Same(t, &frags[0], &frags2[0])
+}
+
 
 func TestManagerPlaylist(t *testing.T) {
 	dir := t.TempDir()

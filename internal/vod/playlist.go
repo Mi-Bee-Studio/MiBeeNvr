@@ -3,6 +3,7 @@ package vod
 import (
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -14,7 +15,7 @@ import (
 // Entry is one playable recording inside a playlist, with its fragment plan.
 type Entry struct {
 	Rec   model.Recording
-	Info  *merge.SegmentInfo
+	Ts    uint32 // video timescale (EXTINF rendering)
 	Frags []Fragment
 }
 
@@ -26,27 +27,108 @@ func IncludeAudio(info *merge.SegmentInfo) bool {
 	return info.HasAudio && info.AudioCodec != "g711"
 }
 
-// Manager owns the segment cache and builds playlists. One instance lives in
-// the API handler for the process lifetime.
+// Manager owns the caches and builds playlists. One instance lives in the
+// API handler for the process lifetime.
 type Manager struct {
-	cache        *segmentCache
-	targetSec    float64
+	cache         *segmentCache
+	targetSec     float64
 	maxRecordings int
+
+	planMu  sync.Mutex
+	plans   map[string]*planCacheItem // recording ID → fragment plan
+}
+
+type planCacheItem struct {
+	path     string
+	size     int64
+	mtimeNs  int64
+	ts       uint32
+	frags    []Fragment
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		// ~12 hourly recordings ≈ 50MB of cached sample tables worst case —
-		// bounded for the RPi 3B memory budget.
+		// ~12 hourly recordings of parsed sample tables ≈ tens of MB — bounded
+		// for the RPi 3B memory budget. Playlist generation does NOT depend on
+		// this cache (it reads persisted fragment plans); only fragment/init
+		// serving parses tables, and hls.js fetches those sequentially.
 		cache:         newSegmentCache(12),
 		targetSec:     TargetFragmentDur,
 		maxRecordings: 200,
+		plans:         make(map[string]*planCacheItem),
 	}
 }
 
-// BuildPlaylist parses every recording of the range (in parallel, bounded)
-// and renders the VOD M3U8. Recordings that fail to parse are skipped with a
-// warning — a corrupt hour must not take down the whole day.
+// statFile returns (size, mtime) for plan-cache validation.
+func statFile(path string) (int64, int64, bool) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, 0, false
+	}
+	return fi.Size(), fi.ModTime().UnixNano(), true
+}
+
+// Fragments returns the fragment plan for a recording, resolving through
+// (1) the in-memory plan cache, (2) the persisted sidecar plan, (3) live
+// computation (sample-table parse + stss/probing oracle), persisting the
+// result. The plan depends only on file identity — sample tables are parsed
+// at most once per file state.
+func (m *Manager) Fragments(rec model.Recording) ([]Fragment, uint32, error) {
+	if rec.FilePath == "" {
+		return nil, 0, fmt.Errorf("recording %s has no file path", rec.ID)
+	}
+	size, mtimeNs, ok := statFile(rec.FilePath)
+	if !ok {
+		return nil, 0, fmt.Errorf("stat %s", rec.FilePath)
+	}
+
+	m.planMu.Lock()
+	if pc, ok := m.plans[rec.ID]; ok && pc.path == rec.FilePath && pc.size == size && pc.mtimeNs == mtimeNs {
+		frags, ts := pc.frags, pc.ts
+		m.planMu.Unlock()
+		return frags, ts, nil
+	}
+	m.planMu.Unlock()
+
+	// Persisted plan (validated internally against the same stat fields).
+	if frags, ts, ok := readSidecar(rec.FilePath); ok {
+		m.storePlan(rec.ID, rec.FilePath, size, mtimeNs, ts, frags)
+		return frags, ts, nil
+	}
+
+	// Compute: parse sample tables once, pick the keyframe oracle.
+	statRecording(&rec)
+	info, err := m.cache.Get(rec)
+	if err != nil {
+		return nil, 0, err
+	}
+	var oracle keyframeOracle = stssOracle{samples: info.Samples}
+	if !info.KeyframesFromStss {
+		f, err := os.Open(info.FilePath)
+		if err != nil {
+			return nil, 0, fmt.Errorf("open for keyframe probing: %w", err)
+		}
+		oracle = newProbeOracle(f, info)
+		defer f.Close()
+	}
+	frags := PlanFragments(info, m.targetSec, oracle)
+	if len(frags) == 0 {
+		return nil, 0, fmt.Errorf("no fragments planned for %s", rec.ID)
+	}
+	writeSidecar(info.FilePath, frags, info.Timescale)
+	m.storePlan(rec.ID, rec.FilePath, size, mtimeNs, info.Timescale, frags)
+	return frags, info.Timescale, nil
+}
+
+func (m *Manager) storePlan(id, path string, size, mtimeNs int64, ts uint32, frags []Fragment) {
+	m.planMu.Lock()
+	m.plans[id] = &planCacheItem{path: path, size: size, mtimeNs: mtimeNs, ts: ts, frags: frags}
+	m.planMu.Unlock()
+}
+
+// BuildPlaylist plans every recording of the range (in parallel, bounded)
+// and renders the VOD M3U8. Recordings that fail are skipped with a warning —
+// a corrupt hour must not take down the whole day.
 func (m *Manager) BuildPlaylist(cameraID string, recordings []model.Recording) (string, int, error) {
 	if len(recordings) == 0 {
 		return "", 0, fmt.Errorf("no recordings in range")
@@ -69,15 +151,14 @@ func (m *Manager) BuildPlaylist(cameraID string, recordings []model.Recording) (
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			statRecording(&rec)
-			info, err := m.cache.Get(rec)
+			frags, ts, err := m.Fragments(rec)
 			if err != nil {
 				logger.Warn("skipping unplayable recording in playlist",
 					"recording_id", rec.ID, "error", err)
 				return
 			}
 			mu.Lock()
-			entries = append(entries, &Entry{Rec: rec, Info: info, Frags: PlanFragments(info, m.targetSec)})
+			entries = append(entries, &Entry{Rec: rec, Ts: ts, Frags: frags})
 			mu.Unlock()
 		}()
 	}
@@ -119,7 +200,7 @@ func (m *Manager) renderPlaylist(cameraID string, entries []*Entry) string {
 		}
 		b.WriteString(fmt.Sprintf("#EXT-X-MAP:URI=%q\n", InitURL(cameraID, e.Rec.ID)))
 		for _, f := range e.Frags {
-			dur := f.DurationSec(e.Info.Timescale)
+			dur := f.DurationSec(e.Ts)
 			target = max(target, int(math.Ceil(dur)))
 			fmt.Fprintf(&b, "#EXTINF:%.3f,\n%s\n", dur, FragmentURL(cameraID, e.Rec.ID, f.First, f.End))
 		}
@@ -130,8 +211,9 @@ func (m *Manager) renderPlaylist(cameraID string, entries []*Entry) string {
 	return b.String()
 }
 
-// GetInfo exposes the cached SegmentInfo for a recording (used by the init +
-// fragment handlers).
+// GetInfo exposes the cached (or freshly parsed) SegmentInfo for a recording
+// — used by the init + fragment handlers. Audio-inclusion and sample offsets
+// need the full table; this is the only path that parses it.
 func (m *Manager) GetInfo(rec model.Recording) (*merge.SegmentInfo, error) {
 	statRecording(&rec)
 	return m.cache.Get(rec)

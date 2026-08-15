@@ -1545,5 +1545,6 @@
   "detail.continuous": "Continuous",
   "detail.continuousOn": "Continuous (full-day timeline)",
   "detail.continuousH265Unsupported": "This browser lacks MSE H.265 support — continuous playback unavailable (per-segment mode unaffected)",
-  "detail.continuousFailed": "Continuous playback failed to start, fell back to per-segment mode"
+  "detail.continuousFailed": "Continuous playback failed to start, fell back to per-segment mode",
+  "detail.continuousBuilding": "Building the full-day index (first time may take a minute or two)…"
 }

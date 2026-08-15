@@ -51,10 +51,11 @@ func (f Fragment) DurationSec(timescale uint32) float64 {
 
 // PlanFragments cuts a recording into keyframe-aligned fragments of ~target
 // seconds. The first fragment starts at sample 0 (recordings begin with an
-// IDR); subsequent fragments start at the first keyframe whose accumulated
-// duration reaches the target. Audio sample ranges are aligned by overlap
-// with each video fragment's time span.
-func PlanFragments(info *merge.SegmentInfo, targetSec float64) []Fragment {
+// IDR); subsequent fragments start at the first keyframe at/after the target
+// duration, as reported by the oracle (exact via stss, stride-probed
+// otherwise). Audio sample ranges are aligned by overlap with each video
+// fragment's time span.
+func PlanFragments(info *merge.SegmentInfo, targetSec float64, oracle keyframeOracle) []Fragment {
 	n := info.SampleCount
 	if n == 0 || len(info.Samples) == 0 {
 		return nil
@@ -65,25 +66,36 @@ func PlanFragments(info *merge.SegmentInfo, targetSec float64) []Fragment {
 	start := 0
 	var startUnits uint64
 	for start < n {
-		var units uint64
-		end := -1
+		// Accumulate until the target duration is reached, then advance to
+		// the next keyframe for the actual cut.
+		var acc uint64
+		iTarget := n
 		for i := start; i < n; i++ {
-			// Cut BEFORE the keyframe sample i so the fragment covers
-			// [start, i) — sample i's duration belongs to the NEXT fragment.
-			if i > start && info.Samples[i].IsKeyFrame && float64(units)/ts >= targetSec {
-				end = i
+			acc += uint64(info.Samples[i].Duration)
+			if i > start && float64(acc)/ts >= targetSec {
+				iTarget = i
 				break
 			}
-			units += uint64(info.Samples[i].Duration)
 		}
-		if end < 0 {
-			end = n // tail fragment
+		end := n
+		if iTarget < n {
+			if k, ok := oracle.nextAtOrAfter(iTarget); ok && k > start && k < n {
+				end = k
+			}
+		}
+
+		var units uint64
+		for i := start; i < end; i++ {
+			units += uint64(info.Samples[i].Duration)
 		}
 		frags = append(frags, Fragment{
 			First: start, End: end,
 			StartUnits:    startUnits,
 			DurationUnits: units,
 		})
+		if end <= start {
+			break // defensive: never loop forever on a broken oracle
+		}
 		startUnits += units
 		start = end
 	}
@@ -95,7 +107,7 @@ func PlanFragments(info *merge.SegmentInfo, targetSec float64) []Fragment {
 		ai := 0
 		for k := range frags {
 			fStartSec := float64(frags[k].StartUnits) / ts
-			fEndSec := fStartSec + float64(frags[k].DurationUnits)/ts
+			fEndSec := fStartSec + float64(frags[k].DurationUnits) / ts
 			first := ai
 			for ai < len(info.AudioSamples) {
 				sampleStartSec := float64(audioUnits) / ats
@@ -104,7 +116,6 @@ func PlanFragments(info *merge.SegmentInfo, targetSec float64) []Fragment {
 				}
 				audioUnits += uint64(info.AudioSamples[ai].Duration)
 				ai++
-				_ = sampleStartSec
 			}
 			frags[k].AudioFirst, frags[k].AudioEnd = first, ai
 		}
@@ -306,14 +317,18 @@ func writeTraf(w *mp4.Writer, trackID uint32, baseUnits uint64, samples []merge.
 		return err
 	}
 	entries := make([]mp4.TrunEntry, len(samples))
-	for i, s := range samples {
+	for i := range samples {
+		// Positional sync flags: every fragment starts on a keyframe (the
+		// planner guarantees it) and audio samples are all sync points. Video
+		// samples after the first are marked non-sync — trun flags are decode
+		// HINTS, and a mid-fragment IDR mis-flagged as non-sync is harmless.
 		flag := uint32(sampleFlagsOther)
-		if !video || s.IsKeyFrame {
+		if !video || i == 0 {
 			flag = sampleFlagsKeyframe
 		}
 		entries[i] = mp4.TrunEntry{
-			SampleDuration: s.Duration,
-			SampleSize:     s.Size,
+			SampleDuration: samples[i].Duration,
+			SampleSize:     samples[i].Size,
 			SampleFlags:    flag,
 		}
 	}
