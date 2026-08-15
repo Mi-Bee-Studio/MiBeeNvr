@@ -175,10 +175,14 @@
 
   // Effective playback mode: derived from recording.format + probed codec +
   // useFrameFallback (the latter flips a failed <video> to the cycler at runtime).
+  // AVI: default to the JPEG frame cycler (seekable + seamless chaining via
+  // the timelapse-frames contract); the legacy realtime WS player (audio)
+  // stays one toggle away (#321).
+  let aviLegacyMode = $state(false);
   let playbackMode = $derived.by<PlaybackMode>(() => {
     if (!recording) return 'unsupported';
     const f = recording.format;
-    if (f === 'avi') return 'avi';
+    if (f === 'avi') return aviLegacyMode ? 'avi' : 'timelapse';
     if (f === 'mjpeg' || f === 'timelapse') {
       if (useFrameFallback) return 'timelapse';
       const hasMerged = recording.merge_status === 'merged' && !!recording.merge_path;
@@ -220,6 +224,14 @@
     if (f === 'h264' || f === 'h265') {
       probedMergedCodec = '';
       void startVideoForRecording(recording, pendingTimelineSeekOffset);
+      return;
+    }
+    if (f === 'avi') {
+      // AVI recordings play through the JPEG cycler directly — frames are
+      // served from the AVI itself via the timelapse-frames contract, no
+      // merged-output codec probe.
+      probedMergedCodec = '';
+      initTimelapsePlayer();
       return;
     }
     if (f === 'timelapse' || f === 'mjpeg') {
@@ -1432,6 +1444,14 @@
         </div>
 
         <div class="flex items-center gap-3">
+          {#if recording?.format === 'avi'}
+            <button
+              onclick={() => (aviLegacyMode = true)}
+              class="px-2 py-1 rounded text-xs font-medium th-bg-tertiary th-text-secondary"
+              title={t('detail.aviRealtimeTitle')}>
+              {t('detail.aviRealtime')}
+            </button>
+          {/if}
           <span class="th-text-secondary text-sm font-mono">
             {tlCurrentFrame + 1} / {timelapseFrames.length}
           </span>
@@ -1474,6 +1494,14 @@
   {/if}
 {:else if playbackMode === 'avi'}
   <AviPlayback recordingId={currentId} />
+  <div class="px-4 py-2 th-bg-secondary border-t th-border flex justify-end">
+    <button
+      onclick={() => (aviLegacyMode = false)}
+      class="px-2 py-1 rounded text-xs font-medium th-bg-tertiary th-text-secondary"
+      title={t('detail.aviFramesTitle')}>
+      {t('detail.aviFrames')}
+    </button>
+  </div>
 {:else if playbackMode === 'mjpeg'}
   <MjpegPlayer bind:this={mjpegPlayer} recordingId={currentId} oninitdone={() => {}} />
   <div class="px-4 py-2 th-bg-tertiary">

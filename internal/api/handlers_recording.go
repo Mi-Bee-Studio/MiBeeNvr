@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -758,6 +759,10 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
+	if rec.Format == model.FormatAVI {
+		h.handleAviFrames(w, r, rec)
+		return
+	}
 	if rec.Format != model.FormatTimelapse && rec.Format != model.FormatMJPEG {
 		WriteError(w, http.StatusNotFound, "not a timelapse or MJPEG recording")
 		return
@@ -818,6 +823,93 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, frames)
 }
 
+// handleAviFrames serves the timelapse-frames listing contract for AVI
+// recordings (#321): video frames (complete JPEGs) indexed by walking the
+// movi chunk headers. The frontend JPEG cycler — which already has seamless
+// cross-segment chaining and seeking — consumes this exactly like timelapse
+// frames, giving AVI recordings seekable playback instead of the realtime-only
+// WebSocket player.
+func (h *Handler) handleAviFrames(w http.ResponseWriter, r *http.Request, rec *model.Recording) {
+	f, err := os.Open(rec.FilePath)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "AVI file not found")
+		return
+	}
+	defer f.Close()
+
+	dmx, err := avi.NewDemuxer(f)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "parse AVI: "+err.Error())
+		return
+	}
+	entries, err := dmx.VideoFrameIndex()
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "index AVI frames: "+err.Error())
+		return
+	}
+
+	type TimelapseFrameInfo struct {
+		Filename  string `json:"filename"`
+		URL       string `json:"url"`
+		Size      int64  `json:"size"`
+		Timestamp string `json:"timestamp"`
+	}
+	started := rec.StartedAt
+	frames := make([]TimelapseFrameInfo, 0, len(entries))
+	for _, e := range entries {
+		name := fmt.Sprintf("f%06d.jpg", e.Index)
+		frames = append(frames, TimelapseFrameInfo{
+			Filename:  name,
+			URL:       fmt.Sprintf("/api/recordings/%s/timelapse-frames/%s", rec.ID, name),
+			Size:      int64(e.Size),
+			Timestamp: started.Add(time.Duration(e.PTSUs) * time.Microsecond).UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, frames)
+}
+
+// handleAviFrame serves one JPEG frame out of an AVI recording by synthetic
+// filename (f%06d.jpg — see handleAviFrames).
+func (h *Handler) handleAviFrame(w http.ResponseWriter, r *http.Request, rec *model.Recording, filename string) {
+	var idx int
+	if _, err := fmt.Sscanf(filename, "f%d.jpg", &idx); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid AVI frame filename")
+		return
+	}
+	f, err := os.Open(rec.FilePath)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "AVI file not found")
+		return
+	}
+	defer f.Close()
+	dmx, err := avi.NewDemuxer(f)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "parse AVI: "+err.Error())
+		return
+	}
+	entries, err := dmx.VideoFrameIndex()
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "index AVI frames: "+err.Error())
+		return
+	}
+	if idx < 0 || idx >= len(entries) {
+		WriteError(w, http.StatusNotFound, "AVI frame out of range")
+		return
+	}
+	e := entries[idx]
+	if _, err := f.Seek(e.Offset, io.SeekStart); err != nil {
+		WriteError(w, http.StatusInternalServerError, "seek AVI frame: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Length", strconv.FormatInt(int64(e.Size), 10))
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.CopyN(w, f, int64(e.Size)); err != nil {
+		return // client went away
+	}
+}
+
 // handleTimelapseFrame handles GET /api/recordings/{id}/timelapse-frames/{filename}.
 // Serves an individual JPEG frame from a timelapse recording.
 func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
@@ -843,6 +935,10 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 	}
 	if rec == nil {
 		WriteError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	if rec.Format == model.FormatAVI {
+		h.handleAviFrame(w, r, rec, filename)
 		return
 	}
 	if rec.Format != model.FormatTimelapse && rec.Format != model.FormatMJPEG {

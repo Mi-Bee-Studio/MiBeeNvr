@@ -1547,5 +1547,9 @@
   "detail.continuousH265Unsupported": "This browser lacks MSE H.265 support — continuous playback unavailable (per-segment mode unaffected)",
   "detail.continuousFailed": "Continuous playback failed to start, fell back to per-segment mode",
   "detail.continuousBuilding": "Building the full-day index (first time may take a minute or two)…",
-  "detail.continuousRebuilt": "Recordings updated (rolling merge) — playback restored to your position"
+  "detail.continuousRebuilt": "Recordings updated (rolling merge) — playback restored to your position",
+  "detail.aviRealtime": "Realtime (audio)",
+  "detail.aviRealtimeTitle": "Switch to the legacy realtime stream (audio, not seekable)",
+  "detail.aviFrames": "Frame view (seekable)",
+  "detail.aviFramesTitle": "Switch to frame view (seekable, cross-segment continuous)"
 }

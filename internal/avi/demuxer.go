@@ -176,6 +176,75 @@ func (d *Demuxer) NextChunk() (*Chunk, error) {
 	}
 }
 
+// VideoFrameEntry describes one video frame inside the movi list WITHOUT its
+// payload — byte range + presentation time only.
+type VideoFrameEntry struct {
+	Index  int   // 0-based video frame index
+	Offset int64 // absolute file offset of the JPEG payload
+	Size   uint32
+	PTSUs  int64 // microseconds from stream start
+}
+
+// VideoFrameIndex walks the movi list reading ONLY chunk headers and returns
+// the video frames' byte ranges. The payloads are complete JPEGs (the
+// recorder stores camera MJPEG frames verbatim), so a frame can be served
+// by seeking to Offset and reading Size bytes. Header-walking keeps indexing
+// an AVI cheap (8 bytes read + one seek per chunk, no payload I/O).
+func (d *Demuxer) VideoFrameIndex() ([]VideoFrameEntry, error) {
+	if !d.atMovi {
+		if err := d.enterMovi(); err != nil {
+			return nil, err
+		}
+	}
+	var frames []VideoFrameEntry
+	idx := 0
+	for {
+		pos, err := d.r.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, fmt.Errorf("avi: index seek: %w", err)
+		}
+		var header [8]byte
+		if _, err := io.ReadFull(d.r, header[:]); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break // truncated tail — serve what we have
+			}
+			return nil, fmt.Errorf("avi: index read header: %w", err)
+		}
+		ckID := binary.LittleEndian.Uint32(header[0:4])
+		ckSize := binary.LittleEndian.Uint32(header[4:8])
+		if ckID == fccidx1 {
+			break
+		}
+		if ckID == fccLIST {
+			// 'rec ' list: skip type + payload.
+			skip := int64(ckSize) - 4 + 4
+			if _, err := d.r.Seek(skip, io.SeekCurrent); err != nil {
+				return nil, fmt.Errorf("avi: index skip list: %w", err)
+			}
+			continue
+		}
+		dataOff := pos + 8
+		skip := int64(ckSize)
+		if skip%2 == 1 {
+			skip++ // WORD alignment padding
+		}
+		if _, err := d.r.Seek(skip, io.SeekCurrent); err != nil {
+			return nil, fmt.Errorf("avi: index skip data: %w", err)
+		}
+		if chunkType, _ := classifyChunk(ckID); chunkType == ChunkVideo {
+			frames = append(frames, VideoFrameEntry{
+				Index:  idx,
+				Offset: dataOff,
+				Size:   ckSize,
+				PTSUs:  int64(idx) * int64(d.dwMicroSecPerFrame),
+			})
+			idx++
+		}
+	}
+	d.atEnd = true
+	return frames, nil
+}
+
 // parseHeaders reads and validates the RIFF header and hdrl list.
 func (d *Demuxer) parseHeaders() error {
 	// Read RIFF header.
