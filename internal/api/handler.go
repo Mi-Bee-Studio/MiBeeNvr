@@ -26,6 +26,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vod"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
@@ -164,6 +165,10 @@ type Handler struct {
 	gb28181Catalog    *gb28181.CatalogController
 	gb28181Inviter    GB28181InviteSender
 	gb28181Bye        GB28181ByeSender
+	// vodMgr serves the on-demand HLS VOD fragmenter for recording playback
+	// (#321 Phase 2). Self-contained (owns its segment cache) — constructed
+	// here rather than threaded through NewHandler's positional params.
+	vodMgr *vod.Manager
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -179,7 +184,7 @@ type frameListEntry struct {
 const frameListCacheTTL = 500 * time.Millisecond
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *gb28181.DeviceManager, gb28181SessionMgr *gb28181.SessionManager) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr}
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, vodMgr: vod.NewManager()}
 }
 
 // startMergeGoroutine launches fn on a tracked background goroutine using the
@@ -300,6 +305,11 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)      // Public for timelapse video playback
 	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording)     // HEAD for browser <video> probe
 	r.Get("/models/{filename}", h.handleServeModel)                    // Public for browser-side AI model loading
+	// VOD HLS recording playback (#321) — same exposure class as /download:
+	// hls.js requests these same-origin without auth headers, and they serve
+	// the same media bytes /download already exposes.
+	r.Get("/api/cameras/{cameraID}/playback/playlist.m3u8", h.handlePlaybackPlaylist)
+	r.Get("/api/cameras/{cameraID}/playback/{recordingID}/{segName}", h.handlePlaybackSegment)
 }
 
 // --- Helpers ---

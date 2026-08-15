@@ -1541,5 +1541,9 @@
   "settings.ai.emaAlphaHint": "Box position smoothing: lower = smoother (box lags), higher = more responsive.",
   "settings.ai.maxAge": "Box dwell time",
   "settings.ai.maxAgeHint": "After an object disappears, its box lingers up to ~{secs} seconds.",
-  "settings.ai.noModelsHint": "No models found. Run mibee-nvr download-model to fetch one."
+  "settings.ai.noModelsHint": "No models found. Run mibee-nvr download-model to fetch one.",
+  "detail.continuous": "Continuous",
+  "detail.continuousOn": "Continuous (full-day timeline)",
+  "detail.continuousH265Unsupported": "This browser lacks MSE H.265 support — continuous playback unavailable (per-segment mode unaffected)",
+  "detail.continuousFailed": "Continuous playback failed to start, fell back to per-segment mode"
 }

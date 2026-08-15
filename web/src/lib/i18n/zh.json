@@ -1507,5 +1507,9 @@
   "cameras.gb28181DeviceId": "设备编号",
   "cameras.gb28181DeviceIdPlaceholder": "例如 34020000001310000001",
   "cameras.gb28181DeviceIdRequired": "设备编号为必填项",
-  "cameras.protocol.gb28181": "GB28181"
+  "cameras.protocol.gb28181": "GB28181",
+  "detail.continuous": "连续播放",
+  "detail.continuousOn": "连续播放（全天时间轴）",
+  "detail.continuousH265Unsupported": "此浏览器的 MSE 不支持 H.265，连续播放不可用（单段模式不受影响）",
+  "detail.continuousFailed": "连续播放初始化失败，已回退单段模式"
 }
