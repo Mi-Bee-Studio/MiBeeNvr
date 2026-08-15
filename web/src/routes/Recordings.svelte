@@ -44,6 +44,7 @@
   let initialViewMode: 'timeline' | 'list' | 'timelapse' = 'timeline';
   let initialFormat = 'All';
   let initialCameraId = '';
+  let initialDate: string | null = null;
   try {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
     const v = params.get('view');
@@ -54,6 +55,11 @@
     if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) initialFormat = f;
     const c = params.get('camera');
     if (c) initialCameraId = c;
+    // ?date=YYYY-MM-DD restores the watched day when returning from a
+    // recording's detail page (back-nav must land on the day you were
+    // watching, not jump to today).
+    const dt = params.get('date');
+    if (dt && /^\d{4}-\d{2}-\d{2}$/.test(dt)) initialDate = dt;
   } catch {}
 
   // ── Filter state ──
@@ -69,7 +75,7 @@
 
   // ── Date/time state ──
   let currentMonth = $state(new Date());
-  let selectedDate = $state<string | null>(null);
+  let selectedDate = $state<string | null>(initialDate);
 
   // ── Calendar summary (lightweight per-day aggregate, no row limit) ──
   let calendarSummary = $state<RecordingDaySummary[]>([]);
@@ -898,6 +904,8 @@ let selectedPresetCamera = $state<string>('');
         if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) formatPill = f;
         const c = params.get('camera');
         if (c !== null) cameraId = c;
+        const dt = params.get('date');
+        if (dt && /^\d{4}-\d{2}-\d{2}$/.test(dt)) selectedDate = dt;
       } catch {}
     };
     window.addEventListener('hashchange', handler);
@@ -913,6 +921,20 @@ let selectedPresetCamera = $state<string>('');
       const d = String(today.getDate()).padStart(2, '0');
       selectedDate = `${y}-${m}-${d}`;
     }
+  });
+
+  // Mirror the selected date into the URL (?date=YYYY-MM-DD, replaceState — no
+  // history spam) so navigating to a recording and back returns to the SAME
+  // day instead of resetting to today (#321 follow-up).
+  $effect(() => {
+    const d = selectedDate;
+    if (!d) return;
+    try {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+      if (params.get('date') === d) return;
+      params.set('date', d);
+      history.replaceState(null, '', `#/recordings?${params.toString()}`);
+    } catch { /* non-browser env */ }
   });
 </script>
 

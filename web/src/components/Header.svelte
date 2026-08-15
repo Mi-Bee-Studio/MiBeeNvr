@@ -100,6 +100,16 @@
   }
 
   function goBack() {
+    // On a recording's detail page the back button returns to the recordings
+    // list ON THE WATCHED DAY (?date= carried by the detail URL) instead of
+    // raw browser history — watching yesterday's recording and going back must
+    // land on yesterday, not on today (#321 follow-up). Other back contexts
+    // (live view) keep native history semantics.
+    if (window.location.hash.startsWith('#/recordings/')) {
+      const m = window.location.hash.match(/[?&]date=(\d{4}-\d{2}-\d{2})/);
+      window.location.hash = m ? `#/recordings?date=${m[1]}` : '#/recordings';
+      return;
+    }
     window.history.back();
   }
 </script>

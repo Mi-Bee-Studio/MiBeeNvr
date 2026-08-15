@@ -1512,5 +1512,6 @@
   "detail.continuousOn": "连续播放（全天时间轴）",
   "detail.continuousH265Unsupported": "此浏览器的 MSE 不支持 H.265，连续播放不可用（单段模式不受影响）",
   "detail.continuousFailed": "连续播放初始化失败，已回退单段模式",
-  "detail.continuousBuilding": "正在生成当日连续播放索引（首次可能需要一两分钟）…"
+  "detail.continuousBuilding": "正在生成当日连续播放索引（首次可能需要一两分钟）…",
+  "detail.continuousRebuilt": "录像已更新（滚动合并），已自动恢复到当前进度"
 }
