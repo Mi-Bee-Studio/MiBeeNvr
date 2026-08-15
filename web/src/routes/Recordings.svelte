@@ -62,6 +62,41 @@
     if (dt && /^\d{4}-\d{2}-\d{2}$/.test(dt)) initialDate = dt;
   } catch {}
 
+  // ── Day-data session cache (silky list↔detail navigation) ──
+  // Navigating list → detail → back remounts this page and used to re-fetch
+  // the whole day (recordings + AI events) on every return, making it FEEL
+  // like a full page reload. Cache the last rendered day module-scope: the
+  // return renders instantly from cache, then a background refresh keeps it
+  // honest. Invalidated when the selected day changes.
+  interface DayCacheEntry {
+    recordings: typeof timelineRecordings;
+    events: typeof aiTimelineEvents;
+    at: number;
+  }
+  let dayCache: { key: string; entry: DayCacheEntry } | null = null;
+  const DAY_CACHE_TTL_MS = 30_000;
+
+  function takeDayCache(key: string): DayCacheEntry | null {
+    if (dayCache && dayCache.key === key && Date.now() - dayCache.entry.at < DAY_CACHE_TTL_MS) {
+      return dayCache.entry;
+    }
+    return null;
+  }
+
+  function putDayCache(key: string, recordings: typeof timelineRecordings, events: typeof aiTimelineEvents) {
+    dayCache = { key, entry: { recordings, events, at: Date.now() } };
+  }
+
+  // Prefetch the detail route chunk on first pointer interaction so the
+  // list→detail transition has no lazy-load skeleton flash (the module import
+  // is cached by the browser after the first prefetch).
+  let detailChunkPrefetched = false;
+  function prefetchDetailChunk() {
+    if (detailChunkPrefetched) return;
+    detailChunkPrefetched = true;
+    void import('./RecordingDetail.svelte').catch(() => {});
+  }
+
   // ── Filter state ──
   let formatPill = $state(initialFormat);
   let cameraId = $state(initialCameraId);
@@ -387,6 +422,14 @@ let selectedPresetCamera = $state<string>('');
       aiTimelineEvents = [];
       return;
     }
+    // Instant paint from the session cache (returning from a detail page),
+    // then continue to the network refresh below for freshness.
+    const cacheKey = selectedDate;
+    const cached = takeDayCache(cacheKey);
+    if (cached && timelineRecordings !== cached.recordings) {
+      timelineRecordings = cached.recordings;
+      aiTimelineEvents = cached.events;
+    }
     if (timelineAbortController) timelineAbortController.abort();
     timelineAbortController = new AbortController();
     timelineLoading = true;
@@ -409,6 +452,7 @@ let selectedPresetCamera = $state<string>('');
       });
       timelineRecordings = response.segments;
       timelineTruncated = response.truncated;
+      putDayCache(cacheKey, timelineRecordings, aiTimelineEvents);
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
       // Non-fatal: timeline stays stale on error
@@ -423,6 +467,7 @@ let selectedPresetCamera = $state<string>('');
   async function loadDayAIEvents(date: string) {
     if (!getMiBeeVisionConnected()) {
       aiTimelineEvents = [];
+    if (dayCache && dayCache.key === date) putDayCache(date, timelineRecordings, aiTimelineEvents);
       return;
     }
     if (aiEventsAbortController) aiEventsAbortController.abort();
@@ -453,6 +498,7 @@ let selectedPresetCamera = $state<string>('');
   // Seek from the timeline → navigate to the recording detail with the clicked
   // offset as a query param (?t=N). The detail page reads ?t on mount and seeks.
   function handleTimelineSeek(recordingId: string, offsetSeconds: number) {
+    prefetchDetailChunk();
     window.location.hash = `#/recordings/${recordingId}?t=${Math.floor(offsetSeconds)}`;
   }
 
@@ -781,6 +827,10 @@ let selectedPresetCamera = $state<string>('');
   onMount(() => {
     loadCameras();
     startTranscodingPoll();
+    // Immediate background prefetch: the detail route chunk loads alongside
+    // the list data so the FIRST list→detail click skips the lazy-load
+    // skeleton entirely (LAN bandwidth is cheap; the import is cached).
+    prefetchDetailChunk();
 
     refreshInterval = window.setInterval(() => {
       loadCalendarSummary();
