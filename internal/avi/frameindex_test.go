@@ -18,7 +18,7 @@ func buildTestAVI(t *testing.T, dir, name string, nFrames int) string {
 	}
 	defer f.Close()
 	m := NewMuxer(f, 640, 480, 8000, true)
-	for i := 0; i < nFrames; i++ {
+	for i := range nFrames {
 		jpeg := append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, bytes.Repeat([]byte{byte(i)}, 64)...)
 		jpeg = append(jpeg, 0xFF, 0xD9)
 		if err := m.WriteVideo(jpeg, int64(i)*100000); err != nil {
