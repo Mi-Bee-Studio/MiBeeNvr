@@ -108,11 +108,15 @@ describe('GB28181Panel', () => {
     const framing = container.querySelector('#gb28181-tcp-framing') as HTMLSelectElement;
     expect(framing.value).toBe('rfc4571');
 
-    // Enabled + TCP mode toggles reflect the config.
+    // Enabled toggle reflects the config; the legacy TCP mode toggle is now
+    // the media transport select (#338).
     const switches = container.querySelectorAll('[role="switch"]');
-    expect(switches.length).toBe(2);
+    expect(switches.length).toBe(1);
     expect(switches[0].getAttribute('aria-checked')).toBe('true');
-    expect(switches[1].getAttribute('aria-checked')).toBe('true');
+    const transport = [...container.querySelectorAll('select')].find((s) =>
+      [...s.options].some((o) => (o as HTMLOptionElement).value === 'tcp-passive'),
+    ) as HTMLSelectElement;
+    expect(transport.value).toBe('tcp-passive');
 
     // Allowed device chips render.
     expect(container.textContent).toContain('34020000001310000001');
@@ -148,7 +152,7 @@ describe('GB28181Panel', () => {
       port_range: '30000-30050',
       heartbeat_interval: '60s',
       catalog_interval: '30m',
-      tcp_mode: true,
+      media_transport: 'tcp-passive',
       tcp_framing: 'rfc4571',
       allowed_device_ids: ['34020000001310000001', '34020000001310000002'],
     });

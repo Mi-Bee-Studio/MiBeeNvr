@@ -25,15 +25,53 @@ const (
 	startCodeVideoMax = 0xEF
 )
 
-// MPEG-PS stream types from PSM
+// MPEG-PS stream types from PSM (GB/T 28181 附录 C StreamType assignments)
 const (
 	streamTypeH264  = 0x1B // AVC video stream
-	streamTypeH265  = 0x24 // H.265/HEVC video stream
-	streamTypeG711  = 0x90 // G.711
-	streamTypeG726  = 0x91 // G.726
-	streamTypeG7221 = 0x92 // G.722.1
-	streamTypeAAC   = 0x0F // AAC ADTS
+	streamTypeH265  = 0x24 // H.265/HEVC video stream (GB/T 28181-2022)
+	streamTypeAAC   = 0x0F // AAC audio stream (ADTS framing)
+	streamTypeG711A = 0x90 // G.711 A-law
+	streamTypeG711U = 0x91 // G.711 μ-law
+	streamTypeG722  = 0x92 // G.722
+	streamTypeG723  = 0x93 // G.723
+	streamTypeG729  = 0x99 // G.729
+	streamTypeSVACA = 0x9B // SVAC audio
 )
+
+// Audio codec identifiers reported by AudioFrame.Codec. Only the codecs the
+// NVR can mux (G.711, AAC) are demuxed; other PSM audio types are skipped.
+const (
+	AudioCodecG711A = "g711a"
+	AudioCodecG711U = "g711u"
+	AudioCodecAAC   = "aac"
+)
+
+// AudioFrame is one demuxed audio frame from the PS stream.
+type AudioFrame struct {
+	Codec    string // "g711a" | "g711u" | "aac"
+	Data     []byte // codec payload (ADTS headers stripped for AAC)
+	Config   []byte // AAC only: AudioSpecificConfig derived from ADTS (nil when payload is raw)
+	PTSTicks int64  // 90kHz, translated into the RTP timestamp domain
+	Samples  int    // sample count (G.711: bytes; AAC: 1024 per frame)
+}
+
+// AudioFrameHandler consumes demuxed audio frames (receiver callbacks).
+type AudioFrameHandler func(frame AudioFrame)
+
+// audioStreamCodec maps a PSM stream_type to the demuxable audio codec (""
+// when the NVR cannot handle it — G.722/G.723/G.729/SVAC have no muxer path).
+func audioStreamCodec(streamType byte) string {
+	switch streamType {
+	case streamTypeG711A:
+		return AudioCodecG711A
+	case streamTypeG711U:
+		return AudioCodecG711U
+	case streamTypeAAC:
+		return AudioCodecAAC
+	default:
+		return ""
+	}
+}
 
 // PSDemuxer extracts NALUs from complete MPEG-PS access unit byte streams.
 // It is Stage 2 of the two-stage pipeline (Stage 1 = RTP reassembly).
@@ -52,6 +90,21 @@ type PSDemuxer struct {
 	videoPesBuf []byte // buffer for assembling an incomplete video PES (across RTP AUs)
 	esBuf       []byte // continuous video elementary stream within the current AU
 	currentPTS  int64  // PTS for current PES (90kHz clock)
+
+	// audioCodecs maps audio stream_ids (0xC0-0xDF) to demuxable codecs,
+	// populated from the PSM elementary_stream_map.
+	audioCodecs map[byte]string
+	// audioPesBuf holds an audio PES that straddles an AU boundary (rare —
+	// audio PES packets are small enough to fit one RTP packet).
+	audioPesBuf []byte
+	// audioOut collects frames extracted during FeedAU; DrainAudio consumes.
+	audioOut []AudioFrame
+	// ptsOffset aligns the PES PTS clock domain with the RTP timestamp
+	// domain: ptsOffset = firstVideoPESPTS - firstAU_RTPts. Audio PES PTS
+	// values are translated through it so audio and video share the video
+	// pipeline's RTP-anchored clock.
+	ptsOffset    int64
+	ptsOffsetSet bool
 }
 
 // NewPSDemuxer creates a new MPEG-PS to H.264/H.265 NALU demuxer.
@@ -80,6 +133,10 @@ func (d *PSDemuxer) FeedAU(auPayload []byte, ptsTicks int64, complete bool) ([][
 	if len(d.videoPesBuf) > 0 {
 		data = slices.Concat(d.videoPesBuf, data)
 		d.videoPesBuf = nil
+	}
+	if len(d.audioPesBuf) > 0 {
+		data = slices.Concat(d.audioPesBuf, data)
+		d.audioPesBuf = nil
 	}
 
 	var nalus [][]byte
@@ -144,6 +201,12 @@ feedLoop:
 						d.naluType = "h265"
 					}
 				}
+				if d.audioCodecs == nil {
+					d.audioCodecs = make(map[byte]string)
+				}
+				for esID, st := range audioStreamTypes(psmData) {
+					d.audioCodecs[esID] = audioStreamCodec(st)
+				}
 			}
 			offset = startCodePos + psmEnd
 		case startCodePadding, startCodePrivate2:
@@ -160,21 +223,20 @@ feedLoop:
 			offset = startCodePos + 6 + headerLen
 		default:
 			if startCode >= startCodeAudioMin && startCode <= startCodeAudioMax {
-				// Audio PES - skip it
-				if startCodePos+6 > len(data) {
-					d.buf = data[startCodePos:]
+				// Audio PES - demux when the PSM declared a codec for the stream
+				pesData := data[startCodePos:]
+				payload, pesPTS, hasPTS, pesEnd, err := parseAudioPES(pesData)
+				if err != nil || pesEnd > len(pesData) {
+					// Incomplete PES (straddles the AU boundary). REPLACE the
+					// buffer — the data already includes previously buffered
+					// bytes (prepended above), so appending duplicates them.
+					d.audioPesBuf = append([]byte(nil), pesData...)
 					break feedLoop
 				}
-				pesLen := int(data[startCodePos+4])<<8 | int(data[startCodePos+5])
-				if pesLen == 0 {
-					// Unbounded - skip to next start code
-					offset = startCodePos + 6
-				} else if startCodePos+6+pesLen > len(data) {
-					d.buf = data[startCodePos:]
-					break feedLoop
-				} else {
-					offset = startCodePos + 6 + pesLen
+				if len(payload) > 0 {
+					d.emitAudio(payload, startCode, pesPTS, hasPTS, ptsTicks)
 				}
+				offset = startCodePos + pesEnd
 			} else if startCode >= startCodeVideoMin && startCode <= startCodeVideoMax {
 				// Video PES - accumulate payload into the continuous ES buffer.
 				pesData := data[startCodePos:]
@@ -190,6 +252,7 @@ feedLoop:
 				}
 				if len(pesPayload) > 0 {
 					d.currentPTS = ptsTicks
+					d.establishClockOffset(pesData, ptsTicks)
 					d.esBuf = append(d.esBuf, pesPayload...)
 				}
 				// Advance past the PES
@@ -245,6 +308,81 @@ func (d *PSDemuxer) Flush() [][]byte {
 	}
 
 	return nalus
+}
+
+// DrainAudio returns audio frames extracted since the last drain. Frames are
+// copied out; the internal buffer is reset.
+func (d *PSDemuxer) DrainAudio() []AudioFrame {
+	if len(d.audioOut) == 0 {
+		return nil
+	}
+	out := d.audioOut
+	d.audioOut = nil
+	return out
+}
+
+// establishClockOffset anchors the PES PTS clock to the RTP timestamp domain
+// using the first video PES that carries a parseable PTS. Audio frames are
+// translated through this offset so both clocks compose into one timeline
+// (video PTS downstream is RTP-derived, not PES-derived).
+func (d *PSDemuxer) establishClockOffset(pesData []byte, rtpTicks int64) {
+	if d.ptsOffsetSet {
+		return
+	}
+	pts, ok := parsePESPTS(pesData)
+	if !ok {
+		return
+	}
+	d.ptsOffset = pts - rtpTicks
+	d.ptsOffsetSet = true
+}
+
+// emitAudio converts one audio PES payload into AudioFrames on the collector.
+func (d *PSDemuxer) emitAudio(payload []byte, streamID byte, pesPTS int64, hasPTS bool, rtpTicks int64) {
+	codec := d.audioCodecs[streamID]
+	if codec == "" {
+		return // codec not declared in PSM (or unsupported: G.722/G.723/...)
+	}
+	if !d.ptsOffsetSet {
+		// No video PTS seen yet (audio-only start): anchor audio to the RTP
+		// clock directly so frames are still on a sane timeline.
+		if hasPTS {
+			d.ptsOffset = pesPTS - rtpTicks
+			d.ptsOffsetSet = true
+		} else {
+			return
+		}
+	}
+	pts := rtpTicks
+	if hasPTS {
+		pts = pesPTS - d.ptsOffset
+		if pts < 0 {
+			pts = rtpTicks
+		}
+	}
+
+	switch codec {
+	case AudioCodecG711A, AudioCodecG711U:
+		d.audioOut = append(d.audioOut, AudioFrame{
+			Codec:    codec,
+			Data:     payload,
+			PTSTicks: pts,
+			Samples:  len(payload),
+		})
+	case AudioCodecAAC:
+		// GB28181 devices send AAC with ADTS framing; strip each frame and
+		// derive the AudioSpecificConfig from the first header. Raw payloads
+		// (no ADTS) carry Config=nil — sinks without a stored ASC skip them.
+		for _, frame := range splitADTS(payload) {
+			d.audioOut = append(d.audioOut, AudioFrame{
+				Codec:    codec,
+				Data:     frame.data,
+				Config:   adtsToASC(frame.header),
+				PTSTicks: pts,
+				Samples:  1024,
+			})
+		}
+	}
 }
 
 // Codec returns the detected codec type ("h264" or "h265").

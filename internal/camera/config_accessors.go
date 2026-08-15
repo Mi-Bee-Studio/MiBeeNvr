@@ -8,8 +8,11 @@ package camera
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
@@ -26,6 +29,19 @@ type GB28181Inviter interface {
 // a GB28181 recorder automatically triggers an INVITE to pull the media stream.
 func (cm *CameraManager) SetGB28181Inviter(inviter GB28181Inviter) {
 	cm.gb28181Inviter = inviter
+}
+
+// GB28181SessionEnder tears down a channel's media session end-to-end
+// (SIP BYE + local receiver + recorder state). Implemented by the SIP server.
+type GB28181SessionEnder interface {
+	ByeChannelByID(channelID string) error
+}
+
+// SetGB28181SessionEnder wires the session recycler used when a GB28181
+// recorder restarts: the old session's AU callback still points at the
+// replaced recorder, so the session is recycled before the fresh auto-INVITE.
+func (cm *CameraManager) SetGB28181SessionEnder(ender GB28181SessionEnder) {
+	cm.gb28181SessionEnder = ender
 }
 
 // CameraCount returns the number of configured cameras (O(1), no DB query).
@@ -123,6 +139,17 @@ func (cm *CameraManager) GB28181NALUWriter(cameraID string) func(au [][]byte, pt
 	return rec.WriteNALU
 }
 
+// GB28181AudioWriter returns the recorder's audio-frame callback for a
+// GB28181 camera, or nil. The SIP server bridges demuxed PS audio frames
+// (G.711/AAC) into the recorder for MP4 muxing and live hub broadcast.
+func (cm *CameraManager) GB28181AudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
+	rec := cm.GetGB28181Recorder(cameraID)
+	if rec == nil {
+		return nil
+	}
+	return rec.WriteAudio
+}
+
 // OnGB28181Invite transitions the recorder to Recording state.
 func (cm *CameraManager) OnGB28181Invite(cameraID string) {
 	if rec := cm.GetGB28181Recorder(cameraID); rec != nil {
@@ -135,4 +162,49 @@ func (cm *CameraManager) OnGB28181Bye(cameraID string) {
 	if rec := cm.GetGB28181Recorder(cameraID); rec != nil {
 		rec.OnBye()
 	}
+}
+
+// NewGB28181PlaybackSink creates a dedicated recorder that muxes a fetched
+// device-side recording (playback INVITE, #337) into the normal recordings
+// pipeline — segments on disk, recordings rows, SegmentCompleted events —
+// attributed to cameraID. Independent of the live recorder so live streaming
+// and playback fetching coexist on the same camera.
+func (cm *CameraManager) NewGB28181PlaybackSink(cameraID string) (gb28181.AUWriter, error) {
+	cam := cm.snapshotConfig(cameraID)
+	if cam == nil || cam.Protocol != string(model.ProtoGB28181) {
+		return nil, fmt.Errorf("camera %q is not a GB28181 camera", cameraID)
+	}
+	enc := cam.Encoding
+	if enc == "" {
+		enc = string(model.FormatH264)
+	}
+	segDur := recorder.DefaultSegmentDur
+	if d, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration); err == nil {
+		segDur = d
+	}
+	rec := recorder.NewGB28181Recorder(recorder.GB28181Config{
+		CameraID:      cameraID,
+		Encoding:      enc,
+		SegmentDur:    segDur,
+		Store:         cm.store,
+		DB:            cm.db,
+		Metrics:       cm.metrics,
+		EventBus:      cm.eventBus,
+		RecordEnabled: true,
+		AudioEnabled:  cam.AudioEnabled,
+	}, nil)
+	rec.Hub = model.NewStreamHub()
+	rec.Hub.SetCameraID(cameraID)
+	if err := rec.Start(context.Background()); err != nil {
+		return nil, err
+	}
+	rec.OnInvite()
+	return rec, nil
+}
+
+// GB28181PlaybackAudioWriter adapts a playback sink into an audio writer.
+// The sink recorder implements this itself; kept for interface symmetry with
+// the live path (GB28181AudioWriter).
+func (cm *CameraManager) GB28181PlaybackAudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
+	return nil
 }

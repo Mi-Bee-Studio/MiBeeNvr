@@ -1,7 +1,9 @@
 package recorder
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -357,4 +359,100 @@ func TestDetectCodec_SliceAmbiguity(t *testing.T) {
 	if got := detectCodec([][]byte{pSlice, vps}, ""); got != "h265" {
 		t.Fatalf("H.265 VPS must win — got %q", got)
 	}
+}
+
+// TestGB28181Recorder_AudioIntoSegment verifies G.711 A-law frames are muxed
+// into the open MP4 segment's audio track when audio_enabled is set (#340).
+func TestGB28181Recorder_AudioIntoSegment(t *testing.T) {
+	store, err := storage.NewManager(t.TempDir())
+	require.NoError(t, err)
+	rec := NewGB28181Recorder(GB28181Config{
+		CameraID:      "audio-cam",
+		Encoding:      "h264",
+		SegmentDur:    10 * time.Minute,
+		Store:         store,
+		RecordEnabled: true,
+		AudioEnabled:  true,
+	}, nil)
+	rec.Hub = model.NewStreamHub()
+	rec.Hub.SetCameraID("audio-cam")
+	require.NoError(t, rec.Start(context.Background()))
+	rec.OnInvite()
+
+	sps := []byte{0x67, 0x42, 0x80, 0x0A}
+	pps := []byte{0x68, 0xCE, 0x3C, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x00}
+	rec.WriteNALU([][]byte{sps, pps, idr}, 90000, true)
+
+	// Two 20ms A-law frames on the same 90kHz clock.
+	frame := bytes.Repeat([]byte{0xD5}, 160)
+	rec.WriteAudio("g711a", frame, nil, 90600, 160)
+	rec.WriteAudio("g711a", frame, nil, 92400, 160)
+
+	// audioInfoProvider contract used by the WS streaming layer.
+	require.Equal(t, "g711", rec.AudioCodec())
+	require.Equal(t, 8000, rec.AudioSampleRate())
+	require.Equal(t, 1, rec.AudioChannels())
+	cfg := rec.AudioConfig()
+	require.Len(t, cfg, 5)
+	require.Equal(t, byte(0), cfg[0], "A-law → muLaw flag 0")
+
+	require.NoError(t, rec.Stop())
+	files := gbFiles(t, store, "audio-cam")
+	require.Len(t, files, 1)
+
+	// The segment must contain a G.711 A-law audio track (alaw sample entry
+	// 4CC in moov).
+	raw, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "alaw", "MP4 segment should carry a G.711 A-law track")
+}
+
+// TestGB28181Recorder_AudioDisabled verifies audio frames are dropped when
+// audio_enabled=false (no hub broadcast, no track).
+func TestGB28181Recorder_AudioDisabled(t *testing.T) {
+	rec, store := newGBRecorder(t, "audio-off", "h264", 10*time.Minute)
+	defer func() { _ = rec.Stop() }()
+	rec.WriteNALU([][]byte{{0x67, 0x42}, {0x68, 0xCE}, {0x65, 0x88}}, 90000, true)
+	rec.WriteAudio("g711u", []byte{1, 2, 3}, nil, 90600, 3)
+	require.Equal(t, "", rec.AudioCodec())
+	require.NoError(t, rec.Stop())
+	files := gbFiles(t, store, "audio-off")
+	require.Len(t, files, 1)
+	raw, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "ulaw")
+	require.NotContains(t, string(raw), "alaw")
+}
+
+// TestGB28181Recorder_HubAudioBroadcast verifies live WS audio fan-out.
+func TestGB28181Recorder_HubAudioBroadcast(t *testing.T) {
+	store, err := storage.NewManager(t.TempDir())
+	require.NoError(t, err)
+	rec := NewGB28181Recorder(GB28181Config{
+		CameraID:      "hub-audio",
+		Encoding:      "h264",
+		SegmentDur:    10 * time.Minute,
+		Store:         store,
+		RecordEnabled: true,
+		AudioEnabled:  true,
+	}, nil)
+	rec.Hub = model.NewStreamHub()
+	rec.Hub.SetCameraID("hub-audio")
+	require.NoError(t, rec.Start(context.Background()))
+	rec.OnInvite()
+
+	frames := make(chan model.AudioFrame, 4)
+	require.NoError(t, rec.Hub.SubscribeAudio("test", func(pts int64, codec model.AudioCodec, data []byte) {
+		frames <- model.AudioFrame{PTS: pts, Codec: codec, Data: data}
+	}))
+	rec.WriteAudio("g711u", []byte{7, 8, 9}, nil, 95000, 3)
+	select {
+	case f := <-frames:
+		require.Equal(t, model.AudioG711, f.Codec)
+		require.Equal(t, []byte{7, 8, 9}, f.Data)
+	case <-time.After(2 * time.Second):
+		t.Fatal("no audio frame broadcast to hub")
+	}
+	_ = rec.Stop()
 }

@@ -415,6 +415,10 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
+	if h.cameraProtocol(r, cameraID) == "gb28181" {
+		h.handleGB28181PTZGetPresets(w, r, cameraID)
+		return
+	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
@@ -451,6 +455,10 @@ func (h *Handler) handlePTZGetPresets(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
+	if h.cameraProtocol(r, cameraID) == "gb28181" {
+		h.handleGB28181PTZCreatePreset(w, r, cameraID)
+		return
+	}
 	var req struct {
 		Name string `json:"name"`
 	}
@@ -486,6 +494,10 @@ func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	token := chi.URLParam(r, "token")
+	if h.cameraProtocol(r, cameraID) == "gb28181" {
+		h.handleGB28181PTZGoToPreset(w, r, cameraID, token)
+		return
+	}
 	if !h.requireONVIF(w, r) {
 		return
 	}
@@ -509,6 +521,10 @@ func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handlePTZDeletePreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	token := chi.URLParam(r, "token")
+	if h.cameraProtocol(r, cameraID) == "gb28181" {
+		h.handleGB28181PTZDeletePreset(w, r, cameraID, token)
+		return
+	}
 	if !h.requireONVIF(w, r) {
 		return
 	}

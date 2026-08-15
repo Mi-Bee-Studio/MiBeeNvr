@@ -414,6 +414,8 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"catalog_interval":    h.config.GB28181.CatalogInterval,
 			"tcp_mode":            h.config.GB28181.TCPMode,
 			"tcp_framing":         h.config.GB28181.TCPFraming,
+			"media_transport":     h.config.GB28181.MediaTransport,
+			"sip_transport":       h.config.GB28181.SIPTransport,
 		},
 	})
 }
@@ -481,6 +483,8 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			CatalogInterval   *string   `json:"catalog_interval"`
 			TCPMode           *bool     `json:"tcp_mode"`
 			TCPFraming        *string   `json:"tcp_framing"`
+			MediaTransport    *string   `json:"media_transport"`
+			SIPTransport      *string   `json:"sip_transport"`
 		} `json:"gb28181"`
 	}
 
@@ -598,6 +602,14 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.GB28181.TCPFraming != nil {
 			h.config.GB28181.TCPFraming = *body.GB28181.TCPFraming
+		}
+		if body.GB28181.MediaTransport != nil {
+			h.config.GB28181.MediaTransport = *body.GB28181.MediaTransport
+			// Keep the legacy alias coherent for older config readers.
+			h.config.GB28181.TCPMode = *body.GB28181.MediaTransport != "udp"
+		}
+		if body.GB28181.SIPTransport != nil {
+			h.config.GB28181.SIPTransport = *body.GB28181.SIPTransport
 		}
 		// Validate the updated config (catches invalid server_id, sip_listen, etc.)
 		if err := config.Validate(h.config); err != nil {

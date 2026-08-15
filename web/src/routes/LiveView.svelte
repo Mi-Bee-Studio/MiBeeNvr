@@ -362,6 +362,28 @@
           </div>
         {/if}
 
+        <!-- GB28181 preset manager — same endpoints as ONVIF; the backend
+             keeps presets in a local registry and drives the device with
+             GB/T 28181 § A.3.4 set/call/delete commands (#339). -->
+        {#if isGB28181Camera(camera)}
+          <details class="onvif-collapsible" bind:open={showPresets}>
+            <summary class="onvif-collapsible-summary">
+              <div class="onvif-collapsible-title-row">
+                {#if showPresets}
+                  <ChevronDown size={16} />
+                {:else}
+                  <ChevronRight size={16} />
+                {/if}
+                <Move size={16} />
+                <span>{t('onvif.presets.title')}</span>
+              </div>
+            </summary>
+            <div class="onvif-collapsible-body">
+              <PresetManager cameraId={camera.id} />
+            </div>
+          </details>
+        {/if}
+
         <!-- ONVIF collapsible panels -->
         {#if isOnvifCamera(camera) && !capsLoading}
           {#if deviceCaps}

@@ -662,10 +662,12 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		handler.SetGB28181Catalog(gb28181.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
 		handler.SetGB28181ByeSender(deps.gb28181Server)
+		handler.SetGB28181DeviceMedia(deps.gb28181Server)
 		// Auto-create cameras when GB28181 devices register, matching ONVIF auto-add.
 		deps.gb28181Server.SetCameraEnroller(camMgr)
 		// Auto-INVITE when GB28181 recorders start (pull media on camera creation).
 		camMgr.SetGB28181Inviter(deps.gb28181Server)
+		camMgr.SetGB28181SessionEnder(deps.gb28181Server)
 	}
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

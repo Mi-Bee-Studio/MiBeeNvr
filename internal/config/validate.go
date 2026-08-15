@@ -572,6 +572,18 @@ func validateConfigDetails(cfg *Config) error {
 		default:
 			return fmt.Errorf("gb28181.tcp_framing must be one of \"rfc4571\", \"0x24\", \"auto\" (got %q)", cfg.GB28181.TCPFraming)
 		}
+		switch cfg.GB28181.MediaTransport {
+		case "", "udp", "tcp-passive", "tcp-active":
+			// valid ("" resolves via defaults)
+		default:
+			return fmt.Errorf("gb28181.media_transport must be one of \"udp\", \"tcp-passive\", \"tcp-active\" (got %q)", cfg.GB28181.MediaTransport)
+		}
+		switch cfg.GB28181.SIPTransport {
+		case "", "udp", "tcp":
+			// valid ("" resolves via defaults)
+		default:
+			return fmt.Errorf("gb28181.sip_transport must be \"udp\" or \"tcp\" (got %q)", cfg.GB28181.SIPTransport)
+		}
 		if _, err := time.ParseDuration(cfg.GB28181.HeartbeatInterval); err != nil {
 			return fmt.Errorf("gb28181.heartbeat_interval invalid duration: %w", err)
 		}

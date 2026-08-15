@@ -557,6 +557,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cam.GB28181 = *updates.GB28181
 	}
 	if updates.AudioEnabled != nil {
+		// The audio gate is read once at recorder construction (GB28181's
+		// passive recorder; RTSP's audio track setup) — toggling it requires
+		// a recorder restart to take effect.
+		if *updates.AudioEnabled != cam.AudioEnabled {
+			needsRestart = true
+		}
 		cam.AudioEnabled = *updates.AudioEnabled
 	}
 	// Push/ingest fields (SRT/RTMP)

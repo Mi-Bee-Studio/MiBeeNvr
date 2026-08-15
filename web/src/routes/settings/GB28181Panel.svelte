@@ -28,7 +28,7 @@
   let portRange = $state('30000-30050');
   let heartbeatInterval = $state('60s');
   let catalogInterval = $state('30m');
-  let tcpMode = $state(false);
+  let mediaTransport = $state('udp');
   let tcpFraming = $state('auto');
   let allowedDeviceIds = $state<string[]>([]);
   let newDeviceId = $state('');
@@ -51,7 +51,7 @@
       portRange,
       heartbeatInterval,
       catalogInterval,
-      tcpMode,
+      mediaTransport,
       tcpFraming,
       allowedDeviceIds,
     });
@@ -68,7 +68,7 @@
       portRange,
       heartbeatInterval,
       catalogInterval,
-      tcpMode,
+      mediaTransport,
       tcpFraming,
       allowedDeviceIds,
     });
@@ -90,7 +90,7 @@
       portRange = cfg?.port_range ?? '30000-30050';
       heartbeatInterval = cfg?.heartbeat_interval ?? '60s';
       catalogInterval = cfg?.catalog_interval ?? '30m';
-      tcpMode = cfg?.tcp_mode ?? false;
+      mediaTransport = cfg?.media_transport ?? (cfg?.tcp_mode ? 'tcp-passive' : 'udp');
       tcpFraming = cfg?.tcp_framing ?? 'auto';
       allowedDeviceIds = cfg?.allowed_device_ids ? [...cfg.allowed_device_ids] : [];
       captureSnapshot();
@@ -127,7 +127,7 @@
           port_range: portRange.trim(),
           heartbeat_interval: heartbeatInterval.trim(),
           catalog_interval: catalogInterval.trim(),
-          tcp_mode: tcpMode,
+          media_transport: mediaTransport,
           tcp_framing: tcpFraming,
           allowed_device_ids: allowedDeviceIds,
         },
@@ -154,7 +154,7 @@
       portRange = snap.portRange;
       heartbeatInterval = snap.heartbeatInterval;
       catalogInterval = snap.catalogInterval;
-      tcpMode = snap.tcpMode;
+      mediaTransport = snap.mediaTransport;
       tcpFraming = snap.tcpFraming;
       allowedDeviceIds = snap.allowedDeviceIds;
     } catch { /* ignore */ }
@@ -341,13 +341,21 @@
           </div>
         </div>
 
-        <!-- TCP mode -->
+        <!-- Media transport -->
         <div class="flex items-center justify-between p-3 rounded-md border th-border th-bg-hover">
           <div>
-            <span class="text-sm font-medium th-text-primary">{t('settings.gb28181.tcpMode')}</span>
-            <p class="text-xs th-text-tertiary mt-1">{t('settings.gb28181.tcpModeHint')}</p>
+            <span class="text-sm font-medium th-text-primary">{t('settings.gb28181.mediaTransport')}</span>
+            <p class="text-xs th-text-tertiary mt-1">{t('settings.gb28181.mediaTransportHint')}</p>
           </div>
-          <Toggle checked={tcpMode} onChange={(v) => { tcpMode = v; }} label={t('settings.gb28181.tcpMode')} />
+          <select
+            class="input w-44"
+            aria-label={t('settings.gb28181.mediaTransport')}
+            bind:value={mediaTransport}
+          >
+            <option value="udp">{t('settings.gb28181.mediaTransportUdp')}</option>
+            <option value="tcp-passive">{t('settings.gb28181.mediaTransportTcpPassive')}</option>
+            <option value="tcp-active">{t('settings.gb28181.mediaTransportTcpActive')}</option>
+          </select>
         </div>
 
         <!-- Allowed device IDs -->

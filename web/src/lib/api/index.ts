@@ -321,3 +321,15 @@ export type {
 export { getVersion, getUpdateStatus, refreshUpdateStatus } from './update';
 export type { UpdateStatus } from './update';
 
+export {
+  queryGB28181Records,
+  startGB28181Playback,
+  gb28181PlaybackStatus,
+  stopGB28181Playback,
+  controlGB28181Playback,
+} from './gb28181';
+export type {
+  GB28181DeviceRecord,
+  GB28181RecordListResponse,
+  GB28181PlaybackStatus,
+} from './gb28181';

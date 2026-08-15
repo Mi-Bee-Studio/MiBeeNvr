@@ -76,6 +76,10 @@ type Receiver struct {
 	// fan-out. Non-blocking.
 	AUCallback func(au [][]byte, ptsTicks int64, isIDR bool)
 
+	// AudioCallback is invoked for each demuxed audio frame (G.711/AAC) from
+	// the PS stream. Non-blocking.
+	AudioCallback func(frame AudioFrame)
+
 	// NALUCallback is invoked for each NALU extracted from PS demux.
 	// Kept for per-NALU consumers; when both are set, AUCallback is used.
 	NALUCallback func(nalu []byte, ptsTicks int64, isIDR bool)
@@ -432,6 +436,7 @@ func (r *Receiver) emitAccessUnitsLocked(complete bool) {
 
 	// If no NALUs, this was a non-video PS packet (e.g., system header)
 	if len(nalus) == 0 {
+		r.dispatchAudioLocked()
 		return
 	}
 
@@ -457,6 +462,20 @@ func (r *Receiver) emitAccessUnitsLocked(complete bool) {
 		for _, nalu := range nalus {
 			r.NALUCallback(nalu, ptsTicks, isIDR)
 		}
+	}
+	r.dispatchAudioLocked()
+}
+
+// dispatchAudioLocked drains demuxed audio frames to the callback. Must be
+// called with jitterBufferMu held (audio demux state lives under the same
+// lock as video reassembly).
+func (r *Receiver) dispatchAudioLocked() {
+	if r.AudioCallback == nil {
+		r.demuxer.DrainAudio() // discard — no consumer
+		return
+	}
+	for _, frame := range r.demuxer.DrainAudio() {
+		r.AudioCallback(frame)
 	}
 }
 
@@ -509,6 +528,7 @@ func (r *Receiver) flushJitterBuffer() {
 				r.NALUCallback(nalu, ptsTicks, isIDR)
 			}
 		}
+		r.dispatchAudioLocked()
 	}
 }
 

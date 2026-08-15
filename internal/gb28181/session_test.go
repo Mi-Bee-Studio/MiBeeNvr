@@ -1,12 +1,16 @@
 package gb28181
 
 import (
+	"encoding/binary"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +30,7 @@ func TestSessionManager_Invite(t *testing.T) {
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
 
-	sdpAnswer, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	sdpAnswer, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err, "Invite should succeed")
 	require.NotNil(t, sdpAnswer, "SDP answer should not be nil")
 	require.Contains(t, string(sdpAnswer), "m=video", "SDP answer should contain media line")
@@ -65,7 +69,7 @@ func TestSessionManager_Invite_NoAvailablePorts(t *testing.T) {
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
 
 	// First invite should succeed
-	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err, "first Invite should succeed")
 
 	// Second invite should fail (no ports available)
@@ -77,7 +81,7 @@ func TestSessionManager_Invite_NoAvailablePorts(t *testing.T) {
 	}
 	channel2.Status.Store(ChannelIdle)
 
-	_, err = sm.Invite(channel2, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	_, err = sm.Invite(channel2, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.Error(t, err, "second Invite should fail with no available ports")
 	require.Contains(t, err.Error(), "no available RTP ports", "error should mention no available ports")
 
@@ -101,7 +105,7 @@ func TestSessionManager_Bye(t *testing.T) {
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
 
 	// Create session
-	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err)
 
 	receiver := sm.GetReceiver(channel.ID)
@@ -158,7 +162,7 @@ func TestSessionManager_MultipleSessions(t *testing.T) {
 
 	for _, ch := range channels {
 		ch.Status.Store(ChannelIdle)
-		_, err := sm.Invite(ch, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+		_, err := sm.Invite(ch, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 		require.NoError(t, err, "Invite should succeed for channel %s", ch.ID)
 	}
 
@@ -194,7 +198,7 @@ func TestSessionManager_StopAll(t *testing.T) {
 
 	for _, ch := range channels {
 		ch.Status.Store(ChannelIdle)
-		_, err := sm.Invite(ch, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+		_, err := sm.Invite(ch, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 		require.NoError(t, err)
 	}
 
@@ -211,7 +215,7 @@ func TestSessionManager_Invite_NilChannel(t *testing.T) {
 	pm := NewPortManager(55080, 55090)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
-	_, err := sm.Invite(nil, "127.0.0.1", "192.168.1.100:5060", []byte("..."), nil)
+	_, err := sm.Invite(nil, "127.0.0.1", "192.168.1.100:5060", []byte("..."), nil, nil)
 	require.Error(t, err, "Invite with nil channel should fail")
 	require.Contains(t, err.Error(), "channel is nil", "error should mention nil channel")
 }
@@ -231,7 +235,7 @@ func TestSessionManager_GetHub(t *testing.T) {
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
 
-	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err)
 
 	hub := sm.GetHub(channel.ID)
@@ -255,7 +259,7 @@ func TestSessionManager_MarkPlaying(t *testing.T) {
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
 
-	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err)
 
 	err = sm.MarkPlaying(channel.ID)
@@ -294,7 +298,7 @@ func TestSessionManager_SDPAnswerFormat(t *testing.T) {
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
 
-	sdpAnswer, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	sdpAnswer, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err)
 
 	sdpStr := string(sdpAnswer)
@@ -335,7 +339,7 @@ func TestSessionManager_ConcurrentInvites(t *testing.T) {
 			}
 			channel.Status.Store(ChannelIdle)
 
-			_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+			_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 			if err != nil {
 				errors <- err
 			}
@@ -371,7 +375,7 @@ func TestSessionManager_ChannelStateTransitions(t *testing.T) {
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
 
 	// Invite: idle -> inviting
-	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, ChannelInviting, channel.Status.Load(), "should be inviting")
 
@@ -403,7 +407,7 @@ func TestSessionManager_ReceiverBroadcast(t *testing.T) {
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
 
-	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err)
 
 	hub := sm.GetHub(channel.ID)
@@ -449,7 +453,7 @@ func BenchmarkSessionManager_Invite(b *testing.B) {
 		}
 		channel.Status.Store(ChannelIdle)
 
-		_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+		_, err := sm.Invite(channel, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 		if err != nil {
 			b.Fatalf("Invite failed: %v", err)
 		}
@@ -482,7 +486,7 @@ func TestSession_PlaybackSDP(t *testing.T) {
 	// Create playback session
 	start := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC)
-	sdpAnswer, err := sm.InvitePlayback(channel, "127.0.0.1", start, end, fakeSink)
+	sdpAnswer, err := sm.InvitePlayback(channel, "127.0.0.1", start, end, fakeSink, nil)
 	require.NoError(t, err, "InvitePlayback should succeed")
 	require.NotNil(t, sdpAnswer, "SDP answer should not be nil")
 
@@ -503,8 +507,8 @@ func TestSession_PlaybackSDP(t *testing.T) {
 	}
 
 	// Verify port was allocated
-	receiver := sm.GetReceiver(channel.ID)
-	require.NotNil(t, receiver, "receiver should exist")
+	receiver := sm.GetPlaybackReceiver(channel.ID)
+	require.NotNil(t, receiver, "playback receiver should exist")
 	require.True(t, receiver.Running(), "receiver should be running")
 
 	// Verify NTP timestamps in t= line
@@ -527,7 +531,7 @@ func TestSession_PlaybackSDP(t *testing.T) {
 	}
 	channel2.Status.Store(ChannelIdle)
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
-	sdpLive, err := sm.Invite(channel2, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil)
+	sdpLive, err := sm.Invite(channel2, "127.0.0.1", "192.168.1.100:5060", sdpOffer, nil, nil)
 	require.NoError(t, err)
 	sdpLiveStr := string(sdpLive)
 	require.Contains(t, sdpLiveStr, "s=Play", "Live SDP should contain s=Play")
@@ -544,4 +548,141 @@ func (f *fakeAUWriter) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 	if f.writeNALU != nil {
 		f.writeNALU(au, ptsTicks, isIDR)
 	}
+}
+
+// TestSessionInviteTCPPassive verifies the TCP-passive media path: the SDP
+// carries TCP/RTP/AVP + setup:passive, a connection to the media port starts
+// the receiver, and 0x24-framed RTP flows to the AU callback.
+func TestSessionInviteTCPPassive(t *testing.T) {
+	pm := NewPortManager(31000, 31010)
+	sm := NewSessionManager(pm, "34020000002000000001")
+	sm.SetMediaTransport(func() string { return "tcp-passive" })
+	sm.SetTCPFraming(func() string { return "0x24" })
+
+	ch := &Channel{ID: "34020000001320000001", DeviceID: "34020000001110000001"}
+	ch.Status.Store(ChannelIdle)
+
+	var mu sync.Mutex
+	var gotFrames int
+	onAU := func(au [][]byte, ptsTicks int64, isIDR bool) {
+		mu.Lock()
+		gotFrames++
+		mu.Unlock()
+	}
+
+	sdp, err := sm.Invite(ch, "127.0.0.1", "127.0.0.1:5060", nil, onAU, nil)
+	require.NoError(t, err)
+	defer func() { _ = sm.Bye(ch.ID) }()
+
+	require.Contains(t, string(sdp), "TCP/RTP/AVP 96")
+	require.Contains(t, string(sdp), "a=setup:passive")
+	require.Contains(t, string(sdp), "a=connection:new")
+
+	// Extract the media port from the SDP m= line.
+	port := sdpMediaPort(t, sdp)
+
+	// Device-side: connect and send one 0x24-framed RTP packet carrying a
+	// tiny PS AU (video PES with one NALU, marker set).
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	ps := buildPS([][]byte{{0x67, 0x42, 0x00, 0x1F}}, 0x1B)
+	pkt := buildRTPPacket(t, ps, 1000, 1, true)
+	frame := make([]byte, 4, 4+len(pkt))
+	frame[0] = 0x24
+	frame[1] = 0x00
+	binary.BigEndian.PutUint16(frame[2:4], uint16(len(pkt)))
+	frame = append(frame, pkt...)
+	_, err = conn.Write(frame)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return gotFrames >= 1
+	}, 5*time.Second, 100*time.Millisecond, "AU callback should fire over TCP")
+}
+
+// TestSessionInviteTCPActive verifies the active path: the SDP offers
+// setup:active with port 9, and ConnectActiveTCP dials the device address
+// from the answer SDP.
+func TestSessionInviteTCPActive(t *testing.T) {
+	// Device-side media listener.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			c.Close()
+		}
+	}()
+	devPort := ln.Addr().(*net.TCPAddr).Port
+
+	pm := NewPortManager(31100, 31110)
+	sm := NewSessionManager(pm, "34020000002000000001")
+	sm.SetMediaTransport(func() string { return "tcp-active" })
+
+	ch := &Channel{ID: "34020000001320000001", DeviceID: "34020000001110000001"}
+	ch.Status.Store(ChannelIdle)
+
+	sdp, err := sm.Invite(ch, "127.0.0.1", "127.0.0.1:5060", nil, nil, nil)
+	require.NoError(t, err)
+	defer func() { _ = sm.Bye(ch.ID) }()
+
+	require.Contains(t, string(sdp), "a=setup:active")
+	require.Contains(t, string(sdp), "m=video 9 TCP/RTP/AVP 96")
+
+	answer := []byte(fmt.Sprintf("v=0\r\nc=IN IP4 127.0.0.1\r\nm=video %d TCP/RTP/AVP 96\r\n", devPort))
+	require.NoError(t, sm.ConnectActiveTCP(ch.ID, answer))
+
+	rcv := sm.GetReceiver(ch.ID)
+	require.NotNil(t, rcv)
+	require.Eventually(t, func() bool { return rcv.Running() }, 5*time.Second, 50*time.Millisecond)
+}
+
+// TestSDPMediaAddress verifies answer-SDP address extraction.
+func TestSDPMediaAddress(t *testing.T) {
+	host, port, ok := sdpMediaAddress([]byte("v=0\r\no=- 0 0 IN IP4 192.168.1.5\r\nc=IN IP4 192.168.1.5\r\nt=0 0\r\nm=video 30012 TCP/RTP/AVP 96\r\n"))
+	require.True(t, ok)
+	require.Equal(t, "192.168.1.5", host)
+	require.Equal(t, uint16(30012), port)
+
+	_, _, ok = sdpMediaAddress([]byte("v=0\r\nm=audio 0 RTP/AVP 8\r\n"))
+	require.False(t, ok)
+}
+
+// sdpMediaPort extracts the m= video port from an SDP body.
+func sdpMediaPort(t *testing.T, sdp []byte) uint16 {
+	t.Helper()
+	for _, line := range strings.Split(string(sdp), "\r\n") {
+		if strings.HasPrefix(line, "m=video ") {
+			fields := strings.Fields(line)
+			p, err := strconv.Atoi(fields[1])
+			require.NoError(t, err)
+			return uint16(p)
+		}
+	}
+	t.Fatal("no m=video line in SDP")
+	return 0
+}
+
+// buildRTPPacket assembles a minimal RTP packet.
+func buildRTPPacket(t *testing.T, payload []byte, ts uint32, seq uint16, marker bool) []byte {
+	t.Helper()
+	pkt := rtp.Packet{
+		Header: rtp.Header{
+			Version:        2,
+			PayloadType:    96,
+			SequenceNumber: seq,
+			Timestamp:      ts,
+			Marker:         marker,
+			CSRC:           []uint32{},
+		},
+		Payload: payload,
+	}
+	raw, err := pkt.Marshal()
+	require.NoError(t, err)
+	return raw
 }

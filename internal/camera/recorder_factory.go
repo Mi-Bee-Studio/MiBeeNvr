@@ -187,6 +187,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			Metrics:       cm.metrics,
 			EventBus:      cm.eventBus,
 			RecordEnabled: cam.RecordingEnabled == nil || *cam.RecordingEnabled,
+			AudioEnabled:  cam.AudioEnabled,
 		}, nil)
 	case string(model.ProtoSRT), string(model.ProtoRTMP):
 		enc := cam.Encoding
@@ -430,6 +431,12 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	// so the recorder start returns promptly (INVITE involves network I/O).
 	if cam.Protocol == string(model.ProtoGB28181) && cm.gb28181Inviter != nil {
 		go func() {
+			// A recorder restart replaces the recorder instance, but a live
+			// session's AU callback still feeds the OLD one — recycle the
+			// session first so the INVITE below binds the new recorder.
+			if cm.gb28181SessionEnder != nil {
+				_ = cm.gb28181SessionEnder.ByeChannelByID(cam.GB28181.ChannelID)
+			}
 			if err := cm.gb28181Inviter.InviteChannel(cam.GB28181.DeviceID, cam.GB28181.ChannelID); err != nil {
 				logger.Warn("gb28181: auto-INVITE failed", "camera_id", cam.ID, "error", err)
 			}

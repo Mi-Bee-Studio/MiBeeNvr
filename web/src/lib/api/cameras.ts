@@ -809,7 +809,13 @@ export interface PTZPreset {
 }
 
 export async function getPTZPresets(cameraId: string, signal?: AbortSignal): Promise<PTZPreset[]> {
-  return apiRequest<PTZPreset[]>(`/cameras/${cameraId}/ptz/presets`, { signal });
+  // The handler wraps the list: {"presets": [...]} — unwrap to the array the
+  // consumers iterate (a raw object made the preset dropdown render empty).
+  const resp = await apiRequest<{ presets?: PTZPreset[] } | PTZPreset[]>(
+    `/cameras/${cameraId}/ptz/presets`,
+    { signal },
+  );
+  return Array.isArray(resp) ? resp : (resp.presets ?? []);
 }
 
 export async function createPTZPreset(cameraId: string, name: string, signal?: AbortSignal): Promise<PTZPreset> {
