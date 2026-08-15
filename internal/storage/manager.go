@@ -393,6 +393,12 @@ func (m *Manager) DeleteFile(path string) error {
 		if err := os.Remove(path); err != nil {
 			return fmt.Errorf("storage: failed to delete %q: %w", path, err)
 		}
+		// VOD playback-plan sidecar (suffix contract with internal/vod/sidecar.go):
+		// deleting a recording MP4 must reclaim its .vodidx too, or these tiny
+		// index files accumulate as orphans no scanner ever reaches (every
+		// delete path — API, batch, archive, cleanup, merge source reclaim —
+		// funnels through here). Best-effort: a missing sidecar is fine.
+		_ = os.Remove(path + ".vodidx") // best-effort sidecar reclaim
 	}
 	return nil
 }
