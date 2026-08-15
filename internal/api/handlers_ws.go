@@ -41,7 +41,7 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 	// An already-active entry may be subscribed to a STALE StreamHub (the
 	// recorder reconnected and got a fresh hub) — rebind before serving, or
 	// the viewer would sit on a dead hub with zero frames forever.
-	if h.wsMgr.IsActive(id) {
+	if h.wsMgr.IsActive(id) && h.camMgr != nil {
 		if rec := h.camMgr.GetRecorder(id); rec != nil {
 			if hub := getStreamHub(rec); hub != nil && hub != h.wsMgr.ActiveHub(id) {
 				h.wsMgr.RebindHub(id, hub)
