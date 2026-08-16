@@ -186,10 +186,21 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 
 	// Idempotency guard: recycle any prior session for this channel before
 	// allocating a new one (its port, socket, and receiver would otherwise
-	// leak — auto-INVITE fires on every device re-REGISTER).
+	// leak — auto-INVITE fires on every device re-REGISTER). The SIP BYE must
+	// reach the device BEFORE the old port is recycled: a sender that never
+	// hears a BYE keeps streaming into the recycled port, which the port pool
+	// hands to a DIFFERENT channel — two interleaved SSRCs then corrupt both
+	// demuxers (observed as SPS flip-flop + AU starvation on cascades).
 	sm.mu.Lock()
 	if old, ok := sm.sessions[channel.ID]; ok {
+		delete(sm.sessions, channel.ID)
+		sender := sm.byeSender
 		sm.mu.Unlock()
+		if sender != nil {
+			if err := sender(channel.ID); err != nil {
+				slog.Warn("gb28181: SIP BYE for replaced session failed", "channel_id", channel.ID, "error", err)
+			}
+		}
 		sm.teardown(old, false)
 	} else {
 		sm.mu.Unlock()

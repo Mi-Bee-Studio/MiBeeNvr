@@ -593,15 +593,15 @@ func TestRegisterStream(t *testing.T) {
 	hub := model.NewStreamHub()
 
 	// Register should subscribe to hub
-	mgr.RegisterStream("test-cam", hub)
+	mgr.RegisterStream("test-cam", hub, nil)
 	require.Equal(t, 1, hub.ConsumerCount(), "hub should have 1 consumer after register")
 
 	// Duplicate register should be a no-op
-	mgr.RegisterStream("test-cam", hub)
+	mgr.RegisterStream("test-cam", hub, nil)
 	require.Equal(t, 1, hub.ConsumerCount(), "duplicate register should not add another consumer")
 
 	// Nil hub should be a no-op
-	mgr.RegisterStream("nil-cam", nil)
+	mgr.RegisterStream("nil-cam", nil, nil)
 	require.Equal(t, 1, hub.ConsumerCount(), "nil hub should not change consumer count")
 
 	// Unregister should unsubscribe from hub
@@ -626,7 +626,7 @@ func TestRegisterStreamDeliversFrames(t *testing.T) {
 
 	// Register stream with a hub
 	hub := model.NewStreamHub()
-	mgr.RegisterStream("test-cam", hub)
+	mgr.RegisterStream("test-cam", hub, nil)
 
 	// Broadcast a frame through the hub
 	sps := []byte{0x67, 0x64, 0x00, 0x1f, 0xac, 0xd9, 0x40, 0x50, 0x05, 0xbb, 0x01, 0x10}
@@ -652,8 +652,8 @@ func TestStopAllCleansUpHubSubs(t *testing.T) {
 	hub1 := model.NewStreamHub()
 	hub2 := model.NewStreamHub()
 
-	mgr.RegisterStream("cam-1", hub1)
-	mgr.RegisterStream("cam-2", hub2)
+	mgr.RegisterStream("cam-1", hub1, nil)
+	mgr.RegisterStream("cam-2", hub2, nil)
 	require.Equal(t, 1, hub1.ConsumerCount())
 	require.Equal(t, 1, hub2.ConsumerCount())
 
@@ -856,4 +856,26 @@ func TestCongestionTracker_AlternatingSkip(t *testing.T) {
 	}
 	// With alternating skip, roughly half should be skipped
 	require.Equal(t, iterations/2, skipCount, "should skip every other frame")
+}
+
+// TestFmtpForProfile locks the per-camera H.264 SDP variant: High-family
+// streams must offer profile-level-id 640028 (registering/offering only
+// Constrained Baseline made browsers reject every frame of a High stream —
+// the GB28181 cascade black screen).
+func TestFmtpForProfile(t *testing.T) {
+	require.Equal(t,
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640028",
+		fmtpForProfile([]byte{0x67, 0x64, 0x00, 0x28}), "High@4.0 (GB28181 cascade)")
+	require.Equal(t,
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640028",
+		fmtpForProfile([]byte{0x67, 0x6E, 0x00, 0x1F}), "Progressive High")
+	require.Equal(t,
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+		fmtpForProfile([]byte{0x67, 0x42, 0xC0, 0x1F}), "Constrained Baseline")
+	require.Equal(t,
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+		fmtpForProfile([]byte{0x67, 0x4D, 0x00, 0x1F}), "Main falls back to baseline offer")
+	require.Equal(t,
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+		fmtpForProfile(nil), "no SPS yet")
 }

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1384,7 +1385,15 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 				devID, chID := deviceID, item.DeviceID
 				go func() {
 					if err := enrol.EnsureGB28181Camera(devID, chID, name, srcHost); err != nil {
-						slog.Warn("gb28181: auto-enroll channel camera failed", "device", devID, "channel", chID, "error", err)
+						// "camera already exists" fires on every catalog
+						// refresh for enrolled channels (an idempotency
+						// signal, not an error) — Debug keeps the log
+						// readable; real failures (DB errors) stay at Warn.
+						if strings.Contains(err.Error(), "already exists") {
+							slog.Debug("gb28181: channel already enrolled", "device", devID, "channel", chID)
+						} else {
+							slog.Warn("gb28181: auto-enroll channel camera failed", "device", devID, "channel", chID, "error", err)
+						}
 					}
 				}()
 			}

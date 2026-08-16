@@ -162,6 +162,9 @@ type Manager struct {
 	peers        map[string]*peerEntry       // sessionID -> entry
 	camPeers     map[string][]string         // camID -> []sessionID
 	hubSubs      map[string]*hubSubscription // camID -> subscription info
+	// streamProfile caches each camera's H.264 SDP fmtp variant (see
+	// fmtpForProfile) so per-session tracks offer the matching profile.
+	streamProfile map[string]string // cameraID → fmtp
 	stopped      bool
 	api          *webrtc.API
 	maxPeers     int
@@ -227,15 +230,31 @@ func WithICEServers(servers []webrtc.ICEServer) ManagerOption {
 // NewManager creates a new WebRTC Manager with H.264 video-only support.
 func NewManager(opts ...ManagerOption) *Manager {
 	mediaEngine := &webrtc.MediaEngine{}
-	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeH264,
-			ClockRate:   h264ClockRate,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
-		},
-		PayloadType: 96,
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		logger.Error("failed to register H264 codec", "error", err)
+	// Register the common H.264 profiles (the same set go2rtc/MediaMTX
+	// offer): browsers answer with the variant they can decode, and the
+	// per-camera track is created with the variant matching the ACTUAL
+	// stream profile. Registering only Constrained Baseline (42001f)
+	// black-screened every High-profile camera (e.g. GB28181 cascades,
+	// profile 0x64 level 4.0): the answer locked the decoder to Baseline
+	// and every frame was silently rejected.
+	h264Profiles := []string{
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d001f",
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640028",
+		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640c1f",
+	}
+	for i, fmtp := range h264Profiles {
+		if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:    webrtc.MimeTypeH264,
+				ClockRate:   h264ClockRate,
+				SDPFmtpLine: fmtp,
+			},
+			PayloadType: webrtc.PayloadType(96 + i),
+		}, webrtc.RTPCodecTypeVideo); err != nil {
+			logger.Error("failed to register H264 codec", "fmtp", fmtp, "error", err)
+		}
 	}
 
 	interceptorRegistry := &interceptor.Registry{}
@@ -252,6 +271,7 @@ func NewManager(opts ...ManagerOption) *Manager {
 		peers:        make(map[string]*peerEntry),
 		camPeers:     make(map[string][]string),
 		hubSubs:      make(map[string]*hubSubscription),
+		streamProfile: make(map[string]string),
 		api:          api,
 		maxPeers:     defaultMaxPeers,
 		idleTimeout:  defaultIdleTimeout,
@@ -273,12 +293,15 @@ func (m *Manager) CanHandle(codec model.Format) bool {
 
 // RegisterStream subscribes to the recorder's StreamHub for live frames.
 // If hub is nil, this is a no-op. Safe to call multiple times for the same camID.
-func (m *Manager) RegisterStream(camID string, hub *model.StreamHub) {
+// sps (optional, the recorder's codec params) selects the H.264 profile
+// variant offered for this camera's track — see NewManager's codec list.
+func (m *Manager) RegisterStream(camID string, hub *model.StreamHub, sps []byte) {
 	if hub == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.streamProfile[camID] = fmtpForProfile(sps)
 	if _, ok := m.hubSubs[camID]; ok {
 		return // already registered
 	}
@@ -288,6 +311,21 @@ func (m *Manager) RegisterStream(camID string, hub *model.StreamHub) {
 	})
 	m.hubSubs[camID] = &hubSubscription{hub: hub, subID: subID}
 	logger.Info("WebRTC stream registered", "camera_id", camID)
+}
+
+// fmtpForProfile maps a recorder SPS to the H.264 SDP fmtp line matching
+// its profile: High-family (profile_idc 100/110/122/244) offers 640028,
+// everything else stays on Constrained Baseline 42001f. The variant must be
+// one of the codecs registered in NewManager (answers bind by exact fmtp).
+func fmtpForProfile(sps []byte) string {
+	const base = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id="
+	if len(sps) >= 4 {
+		switch sps[1] {
+		case 100, 110, 122, 244:
+			return base + "640028"
+		}
+	}
+	return base + "42001f"
 }
 
 // UnregisterStream unsubscribes from the recorder's StreamHub.
@@ -391,12 +429,18 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 		return nil, "", err
 	}
 
-	// Create H.264 video track
+	// Create H.264 video track. The SDP fmtp mirrors the camera's actual
+	// stream profile so browsers negotiate a decoder that accepts it.
+	// (CreateWHEPSession already holds m.mu — do not re-lock.)
+	profileFmtp := m.streamProfile[camID]
+	if profileFmtp == "" {
+		profileFmtp = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
+	}
 	track, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
 			MimeType:    webrtc.MimeTypeH264,
 			ClockRate:   h264ClockRate,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+			SDPFmtpLine: profileFmtp,
 		},
 		"video", camID,
 	)

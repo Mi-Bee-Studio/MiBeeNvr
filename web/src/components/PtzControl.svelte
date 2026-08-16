@@ -7,6 +7,16 @@
 
   let moving = $state<string | null>(null);
   let error = $state('');
+  let errorTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function reportPtzError(e: unknown) {
+    // AbortError = our own rapid-tap cancel, not a failure.
+    if (e instanceof DOMException && e.name === 'AbortError') return;
+    const msg = e instanceof Error ? e.message : String(e);
+    error = msg ? `PTZ: ${msg}` : 'PTZ command failed';
+    if (errorTimer) clearTimeout(errorTimer);
+    errorTimer = setTimeout(() => (error = ''), 4000);
+  }
   let presets = $state<PTZPreset[]>([]);
   let selectedPreset = $state('');
   let goingToPreset = $state(false);
@@ -22,7 +32,7 @@
     if (moveAbort) { moveAbort.abort(); }
     moveAbort = new AbortController();
     if (protocol === 'xiaomi') {
-      xiaomiPtzMove(cameraId, direction, speed ?? 5).catch(() => {});
+      xiaomiPtzMove(cameraId, direction, speed ?? 5).catch(reportPtzError);
     } else {
       // Map direction to ONVIF ContinuousMove velocity vector.
       // ONVIF PanTilt: x=pan (right+), y=tilt (up+); Zoom: x=zoom (in+).
@@ -36,7 +46,7 @@
         case 'zoom_in':  zoom =  s; break;
         case 'zoom_out': zoom = -s; break;
       }
-      ptzMove(cameraId, { mode: 'continuous', pan, tilt, zoom }, moveAbort.signal).catch(() => {});
+      ptzMove(cameraId, { mode: 'continuous', pan, tilt, zoom }, moveAbort.signal).catch(reportPtzError);
     }
   }
 

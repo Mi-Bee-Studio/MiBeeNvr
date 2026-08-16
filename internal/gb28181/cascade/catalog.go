@@ -62,6 +62,10 @@ func (s *Service) catalogItems() ([]manscdp.Item, error) {
 			Manufacturer: orDefault(cam.Brand, "MiBee"),
 			Model:        orDefault(cam.Model, "MiBeeNvr"),
 			RegisterWay:  1,
+			// PTZType 3 = pan/tilt/zoom: the upper platform refuses to send
+			// PTZ (404 "PTZ not supported") when this is 0. The cascade
+			// forwards DeviceControl to whatever the local camera supports.
+			PTZType: 3,
 		})
 	}
 	return items, nil

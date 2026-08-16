@@ -63,10 +63,11 @@ type Service struct {
 
 	sn atomic.Int64 // MANSCDP sequence numbers
 
-	mu       sync.Mutex
-	sessions map[string]*mediaSession // SIP Call-ID → active forward
-	online   bool
-	regTS    time.Time
+	mu         sync.Mutex
+	sessions   map[string]*mediaSession // SIP Call-ID → active forward
+	online     bool
+	regTS      time.Time
+	ptzForward PTZForwarder
 }
 
 func New(cfg config.GB28181CascadeConfig, src CameraSource, db *storage.DB) *Service {
@@ -90,6 +91,11 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = srv.OnRequest(sip.MESSAGE, s.onMessage)
 	_ = srv.OnRequest(sip.INVITE, s.onInvite)
 	_ = srv.OnRequest(sip.BYE, s.onBye)
+	// ACK completes the upper platform's INVITE dialog. gosip logs "SIP
+	// request handler not found" for unregistered methods; a no-op handler
+	// keeps the transaction layer quiet (dialog state lives in the media
+	// sessions map, keyed by Call-ID).
+	_ = srv.OnRequest(sip.ACK, func(_ sip.Request, _ sip.ServerTransaction) {})
 	// The upper platform may SUBSCRIBE to catalog changes; cascade v1 does
 	// not push NOTIFYs — answer 200 with Expires 0 so the upper falls back to
 	// its periodic catalog polling instead of retry-storming.
@@ -201,6 +207,25 @@ func (s *Service) Online() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.online
+}
+
+// RegistrationSince returns how long the current registration has been up
+// (ok=false when offline).
+func (s *Service) RegistrationSince() (time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.online {
+		return 0, false
+	}
+	return time.Since(s.regTS), true
+}
+
+// ForwardCount returns the number of active media forwards (INVITE dialogs
+// currently streaming to the upper platform).
+func (s *Service) ForwardCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.sessions)
 }
 
 func (s *Service) upperAddr() (*net.UDPAddr, error) {
@@ -429,6 +454,17 @@ func (s *Service) onMessage(req sip.Request, _ sip.ServerTransaction) {
 	case manscdp.CmdDeviceInfo:
 		if d, ok := payload.(manscdp.DeviceInfo); ok && d.SN > 0 {
 			s.answerDeviceInfo(d.SN)
+		}
+	case manscdp.CmdRecordInfo:
+		// Root <Query> carries CmdType RecordInfo (decoded as
+		// RecordInfoQuery); the Response-root form is a device answer that
+		// never reaches the cascade.
+		if q, ok := payload.(manscdp.RecordInfoQuery); ok && q.SN > 0 {
+			go s.answerRecordInfo(q)
+		}
+	case manscdp.CmdDeviceControl:
+		if dc, ok := payload.(manscdp.DeviceControl); ok {
+			go s.forwardDeviceControl(dc)
 		}
 	}
 }

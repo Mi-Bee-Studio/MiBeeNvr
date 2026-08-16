@@ -111,3 +111,38 @@ func TestSniffCodecAndIDR(t *testing.T) {
 	require.True(t, auIsIDR([][]byte{{0x40, 0x01}}, "h265"), "H.265 VPS")
 	require.False(t, auIsIDR([][]byte{{0x41, 0x9A}}, "h264"), "P-frame only")
 }
+
+// TestDecodePTZCmd covers the hex → direction/speed decode used to bridge
+// upper-platform DeviceControl commands onto local cameras.
+func TestDecodePTZCmd(t *testing.T) {
+	dir, speed, err := decodePTZCmd("A50F010800000067")
+	require.NoError(t, err)
+	require.Equal(t, "up", dir)
+	require.Equal(t, byte(0), speed)
+
+	dir, speed, err = decodePTZCmd("A50F010132000069")
+	require.NoError(t, err)
+	require.Equal(t, "right", dir)
+	require.Equal(t, byte(0x32), speed)
+
+	dir, _, err = decodePTZCmd("A50F010A20000079")
+	require.NoError(t, err)
+	require.Equal(t, "up-left", dir)
+
+	dir, _, err = decodePTZCmd("A50F0110000000C5")
+	require.NoError(t, err)
+	require.Equal(t, "zoom-in", dir)
+
+	dir, _, err = decodePTZCmd("A50F0120000000E5")
+	require.NoError(t, err)
+	require.Equal(t, "zoom-out", dir)
+
+	dir, _, err = decodePTZCmd("A50F0100000000B5")
+	require.NoError(t, err)
+	require.Equal(t, "stop", dir)
+
+	_, _, err = decodePTZCmd("nothex")
+	require.Error(t, err)
+	_, _, err = decodePTZCmd("1234")
+	require.Error(t, err)
+}

@@ -1590,5 +1590,12 @@
   "detail.aviRealtime": "Realtime (audio)",
   "detail.aviRealtimeTitle": "Switch to the legacy realtime stream (audio, not seekable)",
   "detail.aviFrames": "Frame view (seekable)",
-  "detail.aviFramesTitle": "Switch to frame view (seekable, cross-segment continuous)"
+  "detail.aviFramesTitle": "Switch to frame view (seekable, cross-segment continuous)",
+  "settings.gb28181.cascade": "Cascade (lower-level) status",
+  "settings.gb28181.cascadeHint": "This NVR registers to an upper-level platform as a lower-level device; the upper platform can play our cameras.",
+  "settings.gb28181.cascadeOnline": "Registered",
+  "settings.gb28181.cascadeOffline": "Not registered",
+  "settings.gb28181.cascadeDisabled": "Disabled",
+  "settings.gb28181.cascadeForwards": "Active forwards",
+  "settings.gb28181.cascadeRegisteredFor": "Registered for"
 }
