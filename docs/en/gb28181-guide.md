@@ -1,23 +1,25 @@
-# GB/T 28181 Guide for MiBee NVR
+# MiBee NVR GB/T 28181 Guide
 
-This guide covers GB/T 28181 (Chinese national video surveillance standard) integration with MiBee NVR, including SIP platform configuration, device enrollment, PTZ control, playback, and troubleshooting.
+This guide covers MiBee NVR's GB/T 28181 (Chinese national video-surveillance standard) integration: SIP platform setup, device enrollment, audio, voice intercom, subscriptions, PTZ, device-side recording playback, and troubleshooting.
 
 ## What is GB/T 28181?
 
-GB/T 28181 is a Chinese national standard for video surveillance network systems, defining how IP cameras, NVRs, and platforms communicate over SIP and RTP/PS. MiBee NVR implements the **platform role** (UAS — answering side), which means:
+GB/T 28181 is China's national standard for networked video monitoring; it defines how IP cameras, NVRs, and platforms interoperate over SIP and RTP/PS. MiBee NVR implements the **platform role** (UAS):
 
-- Devices **REGISTER** with the NVR over SIP (UDP port 5060 by default)
-- Devices send **Keepalive** messages to maintain their online status
+- Devices **REGISTER** to the NVR over SIP (UDP port 5060 by default)
+- Devices send **Keepalive** heartbeats to stay online
 - The NVR **INVITEs** a channel to pull an RTP/PS media stream (pull model)
-- The NVR demuxes MPEG-PS into H.264/H.265 NALUs and feeds them to StreamHub
+- The NVR demuxes MPEG-PS into H.264/H.265 NALUs plus audio frames (G.711/AAC) and feeds the standard recording/streaming pipeline
 
-Supported camera brands include Hikvision, Dahua, Uniview, and other GB28181-compliant manufacturers.
+Compatibility matrix: GB/T 28181-2007/2011/2016/2022 (see `internal/gb28181/doc.go`). Supported vendors include Hikvision, Dahua, Uniview, and other GB28181-compliant manufacturers.
 
 ## Quick Start
 
-### Step 1: Enable GB28181 Server
+### Step 1: Enable the GB28181 server
 
-Open `mibee-nvr.yaml` and add the GB28181 server configuration:
+**Recommended: the web UI.** Open the NVR web UI → **Settings → GB28181**, flip the enable toggle, fill in the fields, and save (the password is write-only; leaving it blank keeps the current value).
+
+Equivalent YAML (`mibee-nvr.yaml`):
 
 ```yaml
 gb28181:
@@ -29,59 +31,41 @@ gb28181:
   port_range: "30000-30050"
   heartbeat_interval: "60s"
   catalog_interval: "30m"
-  tcp_mode: false
-  tcp_framing: "auto"
-  allowed_device_ids: []
+  media_transport: "udp"        # udp | tcp-passive | tcp-active
+  subscribe_catalog: true       # real-time channel-change push
+  subscribe_alarm: true         # alarm subscription
+  subscribe_mobile_position: false
+  subscribe_expires: "3600s"
+  allowed_device_ids: []        # empty = allow any device
 ```
 
 **Key parameters**:
-- `server_id`: Your NVR's 20-digit GB/T 28181 serial code (format: `34020000002000000001`)
-- `realm`: SIP digest-auth realm (typically your 10-digit area code, e.g., `3402000000`)
-- `password`: Secret for SIP digest authentication (encrypt via `mibee-nvr encrypt-config`)
-- `port_range`: RTP media port pool, format `"start-end"` (default `"30000-30050"`)
-- `tcp_mode`: Force TCP-passive mode for devices behind NAT (default `false`, UDP)
-- `tcp_framing`: TCP framing when `tcp_mode=true` — `"rfc4571"`, `"0x24"`, or `"auto"`
+- `server_id`: the NVR's 20-digit GB/T 28181 platform serial (must match the device side exactly)
+- `realm`: the SIP digest-auth realm (usually your 10-digit area code)
+- `password`: the SIP digest secret. **Empty = no authentication** (any device that can reach port 5060 can register — see Security)
+- `media_transport`: RTP transport — `udp` (default), `tcp-passive` (NVR listens, device connects — the Hikvision/Dahua NAT default), or `tcp-active` (NVR dials the device's answer address)
 
-### Step 2: Configure Your Camera
+### Step 2: Configure the camera
 
-On your GB28181 camera (Hikvision, Dahua, etc.), configure the SIP platform:
+On the camera's web UI, configure SIP platform access:
 
-**Hikvision example** (via web UI):
-- Navigate to **Network → Advanced Platform Access**
-- Set **Server Address** to your NVR's IP address
-- Set **Server Port** to `5060`
-- Set **Device ID** to your camera's 20-digit code (e.g., `34020000001320000001`)
-- Set **Password** to match your NVR's GB28181 password
-- Enable **Platform Access**
+**Hikvision**: *Network → Advanced Platform Access* — server address = NVR IP, server port `5060`, device ID = the camera's 20-digit code, password matching the NVR's, enable platform access.
 
-**Dahua example** (via web UI):
-- Navigate to **Network → TCP/IP → 28181**
-- Set **Server IP** to your NVR's IP address
-- Set **Server Port** to `5060`
-- Set **Device ID** to your camera's 20-digit code
-- Set **Device Domain** to match your NVR's realm (e.g., `3402000000`)
-- Set **Password** to match your NVR's GB28181 password
-- Enable **28181**
+**Dahua**: *Network → TCP/IP → 28181* — server IP/port/device ID/domain (realm)/password matching the NVR's, enable 28181.
 
-### Step 3: Start the NVR
+The device should REGISTER within seconds.
 
-```bash
-./mibee-nvr -config mibee-nvr.yaml
-```
+### Step 3: Auto-enrollment (zero manual setup)
 
-The GB28181 server will listen on UDP port 5060. Your camera should REGISTER within a few seconds.
+**No manual camera setup is required.** Once a device registers, the NVR automatically:
 
-### Step 4: View Registered Devices
+1. Records it in the device list and tracks online status (heartbeat timeout → offline)
+2. Queries its catalog and discovers every real video channel (organization nodes are skipped)
+3. Creates one camera per channel (`gb-<channelID>`), listed alongside ONVIF/RTSP cameras
+4. Auto-INVITEs each enrolled channel and starts recording
+5. Backfills manufacturer/model (DeviceInfo) and subscribes to catalog changes and alarms
 
-Open the MiBee NVR web UI and navigate to **GB28181** in the sidebar. You should see:
-
-- **Devices**: Registered GB28181 devices with online/offline status
-- **Channels**: Each device's video channels (typically channel 1 = main stream, channel 2 = sub-stream)
-- **PTZ**: PTZ control pad (if the channel supports PTZ)
-
-### Step 5: Add a Camera to Record
-
-Create a camera entry in your config that maps to a GB28181 channel:
+To bind a specific channel manually (optional), create the camera via the web form or YAML:
 
 ```yaml
 cameras:
@@ -91,412 +75,201 @@ cameras:
     gb28181:
       device_id: "34020000001320000001"
       channel_id: "34020000001320000001"
-      manufacturer: "Hikvision"
     recording_enabled: true
     enabled: true
 ```
 
-The NVR will:
-- Auto-detect the codec (H.264 or H.265) from the PS stream
-- INVITE the channel when the camera starts recording
-- Demux the MPEG-PS stream into NALUs
-- Feed the video to StreamHub for recording and live streaming (HLS, WebRTC, FLV, etc.)
+### Step 4: Enable audio (per camera)
+
+Audio is off by default. Turn on the **Audio** toggle in the camera's edit page (or `PUT /api/cameras/{id}` with `{"audio_enabled": true}`); the PS stream's audio track (G.711 A-law/μ-law, AAC) is then muxed into MP4 recordings and live streams.
+
+## Capability Overview
+
+| Capability | Status | Notes |
+|---|---|---|
+| REGISTER + Digest auth / allowlist | ✅ | 401 challenge, periodic re-register, unregister, IP-change session rebuild |
+| Auto-enrollment | ✅ | Register → catalog → per-channel cameras → auto streaming, zero config |
+| Live viewing (INVITE) | ✅ | UDP / TCP passive / TCP active (0x24, rfc4571, auto framing) |
+| Recording | ✅ | H.264/H.265, 30s segments, IDR-aligned, rolling merge |
+| Streaming out | ✅ | Via StreamHub to HLS/WebRTC/FLV/WS |
+| **Audio** | ✅ | G.711 A-law/μ-law + AAC → MP4 tracks + live audio; PSM-less streams auto-resolved |
+| **Voice intercom (talk)** | ✅ | Browser mic → camera speaker (one-click in LiveView) |
+| Device-side recording search/playback | ✅ | RecordInfo + fetch into the recordings library + speed/seek control |
+| PTZ + presets | ✅ | Direction/zoom/preset/cruise (FICommand) |
+| Catalog subscription | ✅ | Real-time channel-change NOTIFY instead of polling |
+| Alarm subscription | ✅ | → event bus/SSE/REST ring buffer |
+| Mobile-position subscription | ✅ | Vehicle-mounted cameras; REST trajectory query |
+| Time sync | ✅ | Device Query answered with platform time |
+| DeviceInfo/Status automation | ✅ | Brand/model backfill; keepalive preserves metadata |
+| Multi-level cascading / GB35114 | ⏸ | On demand (see #341) |
 
 ## Configuration Reference
 
-### Server Configuration
+### Server
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable GB28181 server |
-| `sip_listen` | string | `":5060"` | SIP UDP/TCP listen address |
-| `server_id` | string | (required) | NVR's 20-digit GB/T 28181 serial code |
-| `realm` | string | (required) | SIP digest-auth realm (10-digit area code) |
-| `password` | string | (required) | SIP digest-auth secret (encrypted) |
+| `enabled` | bool | `false` | Enable the GB28181 server |
+| `sip_listen` | string | `":5060"` | SIP UDP listen address |
+| `server_id` | string | (required) | Platform 20-digit serial |
+| `realm` | string | (required) | SIP digest realm |
+| `password` | string | (recommended) | SIP digest password; empty = no auth |
 | `port_range` | string | `"30000-30050"` | RTP media port pool (`"start-end"`) |
-| `heartbeat_interval` | string | `"60s"` | Device keepalive interval |
-| `catalog_interval` | string | `"30m"` | Catalog refresh interval |
-| `tcp_mode` | bool | `false` | Force TCP-passive mode for NAT traversal |
-| `tcp_framing` | string | `"auto"` | TCP framing: `"rfc4571"`, `"0x24"`, or `"auto"` |
-| `allowed_device_ids` | `[]string` | `[]` | Restrict registration to specific device IDs (empty = allow all) |
+| `heartbeat_interval` | string | `"60s"` | Expected device heartbeat interval |
+| `catalog_interval` | string | `"30m"` | Catalog poll interval (fallback when subscribed) |
+| `media_transport` | string | `"udp"` | `udp` / `tcp-passive` / `tcp-active` |
+| `sip_transport` | string | `"udp"` | Signaling transport: `udp` (add `tcp` listener optionally) |
+| `tcp_framing` | string | `"auto"` | TCP framing: `rfc4571` / `0x24` / `auto` |
+| `subscribe_catalog` | bool | `true` | Catalog subscription (real-time channel push) |
+| `subscribe_alarm` | bool | `true` | Alarm subscription |
+| `subscribe_mobile_position` | bool | `false` | Mobile-position subscription |
+| `subscribe_expires` | string | `"3600s"` | Subscription lifetime (auto-renewed at 80%) |
+| `allowed_device_ids` | `[]string` | `[]` | Registration allowlist (empty = allow all) |
 
-### Camera Configuration
+> `tcp_mode` (bool) is a legacy alias of `media_transport`, kept for YAML compatibility.
+
+### Camera
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `protocol` | string | Must be `"gb28181"` |
-| `gb28181.device_id` | string | Camera's 20-digit GB/T 28181 device code |
-| `gb28181.channel_id` | string | Camera's 20-digit GB/T 28181 channel code |
-| `gb28181.manufacturer` | string | Optional manufacturer name (e.g., `"Hikvision"`) |
+| `gb28181.device_id` | string | Device 20-digit code |
+| `gb28181.channel_id` | string | Channel 20-digit code |
+| `audio_enabled` | bool | Audio toggle (default false; enables MP4 audio tracks + live audio) |
+
+## Audio
+
+- **Codecs**: G.711 A-law / μ-law (8 kHz), AAC (ADTS auto-converted to ASC)
+- **Toggle**: per-camera `audio_enabled`; when off, demuxed audio frames are dropped
+- **PSM-less streams**: some firmware muxes audio into the PS stream without ever sending a PSM (or without declaring audio in it). The NVR resolves the codec in priority order: **PSM declaration → INVITE-answer SDP `a=rtpmap` → byte-shape heuristic** (ADTS sync → AAC; μ/A-law by quiet-cluster voting — μ-law silence clusters at 0xFF/0x7F, A-law at 0x55/0xD5). The decision is logged as `codec inferred`
+- **PTS-less audio**: frames without PES PTS advance the timeline by sample count, tolerating firmware that omits audio PTS
+- **Device-side recommendations**: mux audio into the same PS/RTP stream (same port + SSRC), declare it in the PSM (stream_type 0x90=μ-law / 0x91=A-law / 0x0F=AAC, stream_id 0xC0-0xDF), send G.711 as raw 8 kHz mono bytes
+
+## Voice Intercom (Talk)
+
+The LiveView page shows a **Talk** button for GB28181 cameras: browser mic → AudioWorklet downsample to 8 kHz → A-law encode → WebSocket upstream → the NVR sends an audio-only INVITE (`m=audio ... RTP/AVP 8`, `a=sendrecv`) → RTP to the device's receive address. Half-duplex: live audio and talk coexist.
+
+API: `GET /api/cameras/{id}/gb28181/talk` (WebSocket; binary frames = A-law bytes) and `GET /api/cameras/{id}/gb28181/talk/status`.
+
+## Subscriptions and Events
+
+- **Catalog**: channel-list changes arrive as NOTIFY in real time (merged into the channel table, cameras auto-enrolled)
+- **Alarm**: `GET /api/gb28181/devices/{id}/alarms` reads the ring buffer (latest 200); events also hit the bus (SSE `gb28181.alarm`)
+- **Mobile position**: `GET /api/gb28181/devices/{id}/positions` returns the trajectory
+- Toggles + lifetime in the settings page / table above; auto-renewal at 80% of lifetime
+
+## Device-Side Recording Search & Playback
+
+The Recordings page can search **recordings stored on the device** (RecordInfo) and fetch them: fetched segments go through the normal recording pipeline (segments on disk, recordings rows) and play back in the Recordings page with speed/seek control (INFO).
+
+API:
+- `GET /api/gb28181/channels/{id}/records?start=&end=` — search device recordings
+- `POST /api/gb28181/channels/{id}/playback` — start a fetch (body carries start/end)
+- `GET /api/gb28181/channels/{id}/playback` — fetch progress
+- `DELETE /api/gb28181/channels/{id}/playback` — stop
+- `POST /api/gb28181/channels/{id}/playback/control` — speed/seek/pause
 
 ## PTZ Control
 
-GB28181 PTZ control works via SIP MESSAGE with MANSCDP DeviceControl commands.
+PTZ is sent via MANSCDP DeviceControl. Supported: directions (incl. diagonals), zoom (needs `PTZType=2`), presets/cruise (FICommand). A channel's `PTZType` comes from its catalog entry (0=none, 1=pan/tilt, 2=pan/tilt+zoom).
 
-### Supported Directions
-
-- `up`, `down`, `left`, `right` — Pan/tilt movement
-- `up-left`, `up-right`, `down-left`, `down-right` — Diagonal movement
-- `zoom-in`, `zoom-out` — Zoom (requires `PTZType=2`)
-- `stop` — Stop all movement
-
-### PTZ Type
-
-Channels report `PTZType` from the catalog:
-- `0` — No PTZ support
-- `1` — Pan/tilt only
-- `2` — Pan/tilt + zoom
-
-### Web UI Control
-
-On the GB28181 devices page, click the PTZ pad for a channel with `PTZType > 0`:
-- Hold a direction button to move at speed 128
-- Release to stop
-- Click the center stop button to halt movement
-- Zoom in/out buttons appear for `PTZType=2`
-
-### API Control
+Web UI: the PTZ panel on the camera's LiveView page (press-and-hold movement, preset set/recall).
 
 ```bash
 curl -X POST http://localhost:9090/api/gb28181/channels/34020000001320000001/ptz \
   -H "Content-Type: application/json" \
   -H "Authorization: Basic base64(username:password)" \
-  -d '{
-    "direction": "up",
-    "speed": 128
-  }'
+  -d '{"direction": "up", "speed": 128}'
 ```
 
-Response:
-```json
-{
-  "status": "ptz_sent",
-  "channel_id": "34020000001320000001",
-  "direction": "up",
-  "speed": 128
-}
-```
-
-## Playback
-
-GB28181 supports historical playback via INVITE with `PlayMode=PlayBack` and `StartTime`/`EndTime`. This feature is not yet implemented in the MiBee NVR web UI, but you can trigger it via the API:
-
-```bash
-curl -X POST http://localhost:9090/api/gb28181/channels/34020000001320000001/invite \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Basic base64(username:password)" \
-  -d '{
-    "playback": {
-      "start_time": "2026-01-01T00:00:00Z",
-      "end_time": "2026-01-01T01:00:00Z"
-    }
-  }'
-```
-
-This is a placeholder for future UI work. The underlying INVITE/BYE infrastructure already supports playback SDP negotiation.
-
-## Troubleshooting
-
-### Device Does Not Register
-
-**Symptom**: Device does not appear in the GB28181 devices list.
-
-**Solutions**:
-1. **Check SIP port**: Ensure `sip_listen` is listening on `:5060` (or your configured port):
-   ```bash
-   sudo netstat -ulnp | grep 5060
-   sudo ss -ulnp | grep 5060
-   ```
-
-2. **Check firewall**: Allow UDP port 5060:
-   ```bash
-   sudo ufw allow 5060/udp
-   # or
-   sudo iptables -A INPUT -p udp --dport 5060 -j ACCEPT
-   ```
-
-3. **Verify camera SIP settings**:
-   - Server IP matches your NVR's IP
-   - Server port is `5060`
-   - Device ID is 20 digits (GB/T 28181 format)
-   - Password matches your NVR's `gb28181.password`
-   - Platform access is enabled on the camera
-
-4. **Check NVR logs**:
-   ```bash
-   journalctl -u mibee-nvr -f | grep -i gb28181
-   ```
-
-5. **Test SIP reachability**:
-   ```bash
-   # From the camera (if you have shell access):
-   nc -uvz nvr-ip 5060
-   ```
-
-### Heartbeat Timeout
-
-**Symptom**: Device registers but goes offline after a few minutes.
-
-**Cause**: Device heartbeat interval does not match NVR's `heartbeat_interval` (default 60s). Most cameras send keepalives every 60 seconds, but some use different intervals.
-
-**Solution**:
-1. Adjust `heartbeat_interval` in your config:
-   ```yaml
-   gb28181:
-     heartbeat_interval: "90s"  # or "30s", depending on your camera
-   ```
-
-2. Check camera SIP settings for its keepalive interval and match it.
-
-### No Video (Black Screen)
-
-**Symptom**: Channel invites successfully but live view is black.
-
-**Solutions**:
-1. **Check RTP port allocation**: Ensure `port_range` is not exhausted:
-   ```bash
-   # Check GB28181 devices page for "RTP Port" column
-   # Verify ports are in the configured range
-   ```
-
-2. **Check firewall for RTP ports**: Allow UDP ports in `port_range`:
-   ```bash
-   sudo ufw allow 30000:30050/udp
-   ```
-
-3. **Verify codec**: GB28181 uses MPEG-PS with stream_type 96 (H.264) or 97 (H.265). The NVR auto-detects this from the PS stream. If the camera sends an unsupported codec, demux will fail.
-
-4. **Check NVR logs for demux errors**:
-   ```bash
-   journalctl -u mibee-nvr -f | grep -i "psdemux\|demux"
-   ```
-
-5. **Test with direct RTP capture** (advanced):
-   ```bash
-   # Capture RTP from the camera's advertised port
-   sudo tcpdump -i any -w capture.pcap udp port <camera-rtp-port>
-   # Analyze with Wireshark to verify MPEG-PS structure
-   ```
-
-### Device Behind NAT (Network Address Translation)
-
-**Symptom**: Device registers but cannot establish RTP media (video never starts).
-
-**Cause**: RTP packets from the camera cannot reach the NVR because the camera is behind NAT and the SDP-advertised port is not forwarded.
-
-**Solutions**:
-1. **Enable TCP-passive mode** on the NVR:
-   ```yaml
-   gb28181:
-     tcp_mode: true
-     tcp_framing: "auto"
-   ```
-   TCP-passive mode requires the camera to initiate the TCP connection to the NVR, which works through NAT.
-
-2. **Configure port forwarding** on your router:
-   - Forward UDP ports `30000-30050` (or your `port_range`) to the NVR's IP address
-   - Forward UDP port `5060` (SIP) to the NVR's IP address
-
-3. **Use a VPN** (e.g., Tailscale, WireGuard) to bypass NAT:
-   - Install the VPN on both the NVR and the camera (if supported)
-   - Use VPN-assigned IPs in the camera's SIP settings
-
-4. **Check camera NAT traversal settings**:
-   - Hikvision: **Network → Advanced Platform Access → NAT Traversal**
-   - Dahua: **Network → TCP/IP → 28181 → NAT Mode**
-
-### Charset Issues (GBK vs UTF-8)
-
-**Symptom**: Catalog response has mojibake (garbled text) for Chinese device/channel names.
-
-**Cause**: GB/T 28181 devices often declare encoding as GB2312/GBK in the XML prolog (`<?xml ... encoding="GB2312"?>`) but may send actual UTF-8.
-
-**Solution**: The NVR's MANSCDP codec handles this automatically:
-- Strips the XML declaration before unmarshaling
-- Validates UTF-8 and falls back to GB18030 → GBK decoders
-- Logs a warning if charset fallback fails
-
-If you still see garbled text, check the camera's GB28181 configuration for encoding settings. Some older devices require explicit UTF-8 declaration.
-
-### Clock Sync Issues
-
-**Symptom**: Device rejects REGISTER with authentication failure even though credentials are correct.
-
-**Cause**: GB28181 digest authentication uses the SIP `Date` header for nonce freshness. If the NVR and device clocks are not synchronized, the device may reject the challenge.
-
-**Solution**:
-1. **Sync NVR clock** to NTP:
-   ```bash
-   sudo timedatectl set-ntp true
-   # or
-   sudo ntpdate pool.ntp.org
-   ```
-
-2. **Sync camera clock** to NTP (via camera web UI):
-   - Hikvision: **System → Time Configuration**
-   - Dahua: **System → General → Time**
-
-3. **Verify clock drift**:
-   ```bash
-   # On NVR
-   date
-   # On camera (if shell access)
-   date
-   ```
-
-### TCP Framing Issues
-
-**Symptom**: TCP-passive mode (`tcp_mode=true`) shows "read error" or "invalid length".
-
-**Cause**: `tcp_framing` setting does not match the camera's wire format.
-
-**Solutions**:
-1. Try each framing option:
-   ```yaml
-   gb28181:
-     tcp_mode: true
-     tcp_framing: "rfc4571"   # 2-byte big-endian length prefix
-     # or
-     tcp_framing: "0x24"      # RTSP interleaved ($ + channel + 2-byte length)
-     # or
-     tcp_framing: "auto"      # Detect from first bytes (default)
-   ```
-
-2. Check NVR logs for framing detection errors:
-   ```bash
-   journalctl -u mibee-nvr -f | grep -i "tcp\|framing\|0x24\|rfc4571"
-   ```
-
-3. **Note**: GB/T 28181-2016 and -2022 specify RFC4571 for RTP over TCP. The `0x24` mode models a vendor extension (RTSP interleaving). Use `"auto"` for mixed deployments.
-
-### PTZ Not Working
-
-**Symptom**: PTZ pad is disabled or PTZ commands have no effect.
-
-**Solutions**:
-1. **Check PTZType**: Verify the channel's `PTZType` from the catalog:
-   - `0` = No PTZ support (device firmware limitation)
-   - `1` = Pan/tilt only
-   - `2` = Pan/tilt + zoom
-
-2. **Check device online status**: PTZ commands fail with 409 if the device is offline.
-
-3. **Verify manufacturer support**: Not all GB28181 devices support PTZ via MANSCDP DeviceControl. Some use proprietary SIP extensions.
-
-4. **Check NVR logs for PTZ errors**:
-   ```bash
-   journalctl -u mibee-nvr -f | grep -i "ptz\|devicecontrol"
-   ```
+Directions: `up/down/left/right/up-left/up-right/down-left/down-right/zoom-in/zoom-out/stop`.
 
 ## API Reference
 
-### Device and Channel Endpoints
+### Devices & channels
+- `GET /api/gb28181/devices` — registered devices (ETag supported)
+- `GET /api/gb28181/devices/{id}/channels` — channel list
+- `POST /api/gb28181/devices/{id}/catalog-refresh` — trigger a catalog refresh (202)
+- `GET /api/gb28181/devices/{id}/alarms` — alarm ring buffer
+- `GET /api/gb28181/devices/{id}/positions` — mobile-position trajectory
 
-- `GET /api/gb28181/devices` — List registered devices (ETag support)
-- `GET /api/gb28181/channels` — List all channels across devices
-- `GET /api/gb28181/channels/{id}` — Get channel details (including PTZType)
-- `POST /api/gb28181/catalog/refresh` — Trigger catalog refresh (stub, 202 accepted)
+### Media sessions
+- `POST /api/gb28181/channels/{id}/invite` / `bye` — manual stream start/stop
+- `POST /api/gb28181/channels/{id}/ptz` — PTZ control
 
-### Media Session Endpoints
+### Device-side recordings
+- See the previous section
 
-- `POST /api/gb28181/channels/{id}/invite` — Invite a channel (stub, 202 accepted)
-- `POST /api/gb28181/channels/{id}/bye` — Send BYE to stop streaming (calls SessionManager.Bye)
+### Talk
+- `GET /api/cameras/{id}/gb28181/talk` (WebSocket), `GET .../talk/status`
 
-### PTZ Endpoints
+### Errors
 
-- `POST /api/gb28181/channels/{id}/ptz` — Send PTZ command
+| Status | Case |
+|--------|-------|
+| 400 | Missing/malformed body; unsupported PTZ |
+| 404 | Channel not found |
+| 409 | Device offline |
+| 500 | Internal error (MANSCDP encode/send failure) |
 
-PTZ request body:
-```json
-{
-  "direction": "up|down|left|right|up-left|up-right|down-left|down-right|zoom-in|zoom-out|stop",
-  "speed": 0-255
-}
-```
+## Troubleshooting
 
-PTZ directions:
-- `up`, `down`, `left`, `right` — Pan/tilt
-- `up-left`, `up-right`, `down-left`, `down-right` — Diagonal
-- `zoom-in`, `zoom-out` — Zoom (requires `PTZType=2`)
-- `stop` — Stop all movement
+### Device does not register
 
-### Error Responses
+1. Verify `sip_listen` is listening (`ss -ulnp | grep 5060`) and UDP 5060 is allowed through the firewall
+2. Check the five device-side fields: server IP / port 5060 / server ID (must equal `server_id` exactly) / realm / password
+3. Check logs: `journalctl -u mibee-nvr -f | grep -i gb28181` — `REGISTER auth failed` = password mismatch; `not in allowlist` = allowlist
+4. After changing the NVR password: the device's next re-REGISTER (within one registration cycle) fails with 403 and it goes offline; once the camera side is updated it recovers automatically, no re-enrollment needed
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| 400 | Invalid body | Missing or malformed PTZ body |
-| 404 | Channel not found | `ErrChannelNotFound` |
-| 409 | Device offline | `ErrDeviceOffline` |
-| 400 | PTZ unsupported | `ErrPTZUnsupported` (PTZType=0) |
-| 400 | Zoom unsupported | `ErrZoomUnsupported` (PTZType=1) |
-| 500 | Internal error | Failed to encode MANSCDP or send MESSAGE |
+### Black screen / no stream
 
-## Supported Protocols and Features
+1. Check the `port_range` isn't exhausted and the UDP range is firewall-allowed
+2. Behind NAT, switch to `media_transport: tcp-passive`
+3. On TCP framing errors, try `tcp_framing: rfc4571 / 0x24 / auto`
+4. Codec: H.264/H.265 auto-detected, no configuration needed
 
-### SIP (Session Initiation Protocol)
-- **REGISTER**: Device registration with digest authentication
-- **Keepalive**: Heartbeat messages for online/offline tracking
-- **INVITE**: Pull a live or playback media stream
-- **BYE**: Tear down a media session
-- **MESSAGE**: Send MANSCDP commands (catalog request, device control)
+### No audio
 
-### Media (RTP/PS)
-- **RTP over UDP**: Default transport (port range configurable)
-- **RTP over TCP**: Optional TCP-passive mode for NAT traversal
-  - Framing: RFC4571 (standard), 0x24 (vendor extension), auto-detect
-- **MPEG-PS demuxing**: Extract H.264 (stream_type 96) or H.265 (stream_type 97) NALUs
-- **StreamHub integration**: Non-blocking frame fan-out to HLS, WebRTC, FLV, etc.
+1. Confirm the camera's **Audio** toggle is on (`audio_enabled`, off by default)
+2. Look for the `codec inferred` log line — PSM-less devices get their codec auto-resolved; if the line never appears and there is no audio track, capture the stream and confirm the device actually muxes audio into the PS stream
+3. See the device-side recommendations under Audio; PSM-less audio works here (auto fallback) but other platforms (ZLMediaKit etc.) drop it — devices should ideally declare audio in the PSM
 
-### MANSCDP (Management and Control)
-- **Catalog**: Device/channel list with PTZType, manufacturer, model
-- **DeviceInfo**: Device firmware/hardware details
-- **DeviceControl**: PTZ commands (direction, speed)
+### Periodic session recycling
 
-## Limitations and Known Issues
+Logs show `recycling stale session reason=no keyframe` and recordings have a gap every minute or so: the device's keyframe interval (GOP) exceeds the NVR's 75s watchdog. This is the designed self-healing (the re-INVITE forces a fresh IDR), but the device GOP should ideally be **2-4 seconds**.
 
-### Playback UI
-Playback INVITE is supported in the session manager but not yet exposed in the web UI. Use the API endpoint `POST /api/gb28181/channels/{id}/invite` with `playback.start_time` and `playback.end_time` as a workaround.
+### REGISTER source-port rotation
 
-### TCP 0x24 Mode
-The `0x24` TCP framing mode models a vendor extension (RTSP interleaved). GB/T 28181-2016 and -2022 specify RFC4571 as the standard. Use `"auto"` for mixed deployments; use `"rfc4571"` for strict compliance.
+Some SIP stacks use a fresh source port per REGISTER. The NVR compares **IP only** when detecting address changes; port rotation never recycles sessions.
 
-### Device-Specific Behavior
-- **Hikvision**: Supports full catalog, PTZ, and playback. Some older models may require GBK charset fallback.
-- **Dahua**: Supports full catalog, PTZ, and playback. NAT traversal settings vary by firmware.
-- **Uniview**: Similar to Hikvision, but may have different PTZ command semantics.
-- **Other brands**: Support varies. Minimal devices implement only REGISTER/keepalive/INVITE.
+### Heartbeat timeouts
 
-### Port Exhaustion on RPi 3B
-The default `port_range` is `"30000-30050"` (51 ports). If you have many concurrent GB28181 streams, expand the range:
-```yaml
-gb28181:
-  port_range: "30000-30100"  # 101 ports
-```
+If the device drops offline, align its heartbeat interval with `heartbeat_interval` (default 60s) on either side.
 
-On RPi 3B, keep the pool under 200 ports to avoid ephemeral port exhaustion.
+### Mojibake (GBK vs UTF-8)
 
-## Security Considerations
+The MANSCDP codec strips the XML declaration, validates UTF-8, and falls back to GB18030/GBK automatically. If names still look garbled, check the device's encoding setting.
 
-- **Digest authentication**: GB28181 uses SIP digest auth (like HTTP Basic but with nonce hashing). The `password` field is encrypted when `NVR_ENCRYPTION_KEY` is set.
-- **Device ID restriction**: Use `allowed_device_ids` to whitelist specific 20-digit device codes. Empty list = allow all.
-- **Network exposure**: GB28181 runs on UDP port 5060 by default. If your NVR is exposed to the internet, use a firewall or VPN to restrict access.
-- **No commercial content**: This implementation is open-source and free. No Pro/P2P features are included or referenced.
+### Clock sync
 
-## Support Resources
+If authentication or recording searches misbehave due to clock drift: the NVR answers TimeSync queries automatically; keep both sides NTP-synced.
 
-### Documentation
-- [MiBee NVR Getting Started](./getting-started.md)
-- [MiBee NVR Configuration Guide](./configuration.md)
-- [MiBee NVR API Reference](./api/README.md)
+## Limitations & Known Issues
 
-### GB/T 28181 References
-- GB/T 28181-2016: Information technology — Technical requirements for video surveillance networking system
-- GB/T 28181-2022: Latest revision (adds TCP-passive, improved catalog)
+- **Device-self pseudo-channel**: after an NVR restart, catalog-capable multi-channel devices briefly get a "device-self" camera that never streams. Known issue; archive it manually after restart. Tracked in #352
+- **Talk real-device coverage**: voice intercom is E2E-verified against a simulator; the real-device loopback is tracked in #353
+- **TCP 0x24 framing**: a vendor extension (GB/T 28181-2016/2022 specify RFC4571); use `auto` for mixed fleets
+- **Multi-level cascading / GB35114**: not implemented, on demand (#341)
+- **Alarm-triggered streaming**: alarm events are on the bus; automated alarm → INVITE linkage is tracked in #355
 
-### Community Support
-- GitHub Issues: [MiBee NVR Issues](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues)
-- Discussions: [MiBee NVR Discussions](https://github.com/Mi-Bee-Studio/MiBeeNvr/discussions)
+## Security
 
----
+- **Authentication**: always set `password` (empty = any reachable device can register). Combine with the `allowed_device_ids` allowlist for defense in depth
+- **Transport**: SIP/RTP are plaintext (GB35114 TLS/SM crypto not implemented). Public deployments must sit behind a firewall/VPN — do not expose 5060 or the port pool directly
+- **Port pool**: 51 ports by default; extend as needed (keep under ~200 on RPi 3B)
 
-This guide provides comprehensive coverage of GB/T 28181 integration with MiBee NVR. For specific camera models, check manufacturer documentation for GB28181 capabilities and limitations.
+## Resources
+
+- [Getting Started](./getting-started.md) · [Configuration](./configuration.md) · [API Reference](./api/README.md)
+- GB/T 28181-2016 / 2022 standard texts
+- [GitHub Issues](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues) · [Discussions](https://github.com/Mi-Bee-Studio/MiBeeNvr/discussions)
