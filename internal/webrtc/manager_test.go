@@ -879,3 +879,27 @@ func TestFmtpForProfile(t *testing.T) {
 		"level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
 		fmtpForProfile(nil), "no SPS yet")
 }
+
+// TestRegisterStreamRebindsOnHubChange: a GB session recycle hands out a NEW
+// hub — RegisterStream must resubscribe (the old guard kept feeding viewers
+// from the dead hub: frozen video until a page reload).
+func TestRegisterStreamRebindsOnHubChange(t *testing.T) {
+	m := NewManager()
+	hub1 := model.NewStreamHub()
+	hub2 := model.NewStreamHub()
+
+	m.RegisterStream("cam-rebind", hub1, nil)
+	require.Same(t, hub1, m.hubSubs["cam-rebind"].hub)
+
+	// Same hub re-registration stays a no-op.
+	m.RegisterStream("cam-rebind", hub1, nil)
+	require.Same(t, hub1, m.hubSubs["cam-rebind"].hub)
+
+	// New hub swaps the subscription.
+	m.RegisterStream("cam-rebind", hub2, nil)
+	require.Same(t, hub2, m.hubSubs["cam-rebind"].hub)
+	require.Equal(t, "webrtc-cam-rebind", m.hubSubs["cam-rebind"].subID)
+
+	m.UnregisterStream("cam-rebind")
+	require.Nil(t, m.hubSubs["cam-rebind"])
+}

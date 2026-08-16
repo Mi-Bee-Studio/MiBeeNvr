@@ -49,9 +49,12 @@ const speculativeAckDelay = 2500 * time.Millisecond
 
 // Session-watchdog tuning: recycle a session when the stream stalls for
 // streamStaleAfter or no keyframe has been seen for idrStaleAfter (checked
-// every idrWatchInterval).
+// every idrWatchInterval). idrStaleAfter must comfortably exceed real
+// devices' GOP lengths — IPCs with 2-4 minute GOPs are common, and a
+// threshold inside the GOP recycles healthy streams forever (observed: a
+// ~3min-GOP source recycled every ~80s, breaking every live view each cycle).
 const (
-	idrStaleAfter    = 75 * time.Second
+	idrStaleAfter    = 10 * time.Minute
 	streamStaleAfter = 45 * time.Second
 	idrWatchInterval = 15 * time.Second
 )
