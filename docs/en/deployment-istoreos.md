@@ -9,6 +9,12 @@ These are software-router/router-board OSes. A **full** NVR — recording to dis
 - **x86 software routers** (Intel N100 / J4125 / N305 class) with **≥ 4 GB RAM**, or
 - **ARM SBCs** (Raspberry Pi 4/5 4 GB+, RK3588) with external storage.
 
+> **RK3588 note**: the NVR transcoding backend supports software / V4L2 M2M /
+> VAAPI / NVENC only — **not RKMPP (Rockchip NPU encode/decode)**. The RK3588
+> NPU cannot be used; transcoding falls back to software encoding (CPU-bound
+> with multiple streams). Core functions (recording / live / playback) are pure
+> Go and do not depend on transcoding, so they are unaffected.
+
 On 512 MB – 1 GB boxes, run only as a lightweight **ingest gateway / live preview** (disable or strictly limit recording), or you will OOM. Router flash (8–32 GB eMMC) fills in days with video — **always map `/data` to external storage** (USB HDD / SATA / mounted NAS share).
 
 ## Why it works so well here
