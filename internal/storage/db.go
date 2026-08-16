@@ -390,7 +390,14 @@ func (d *DB) Init(ctx context.Context) error {
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		PRIMARY KEY (camera_id, token)
 	);`
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, ptzPresetsSQL} {
+	gbFpSQL := `CREATE TABLE IF NOT EXISTS gb28181_fingerprints (
+		device_id TEXT PRIMARY KEY,
+		serial TEXT NOT NULL,
+		source_ip TEXT NOT NULL DEFAULT '',
+		probed_at DATETIME
+	);`
+
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, ptzPresetsSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
