@@ -370,3 +370,34 @@ func sdpAudioAddress(sdp []byte) (string, uint16, bool) {
 	}
 	return host, uint16(port), true
 }
+
+// sdpAudioCodec extracts the audio codec an SDP body declares on its m=audio
+// media line: PCMA→g711a, PCMU→g711u, mpeg4-generic→aac. Returns "" when the
+// body declares no usable audio codec. Used to seed the PS demuxer's no-PSM
+// audio fallback for devices that mux audio into the PS stream without ever
+// sending a Program Stream Map.
+func sdpAudioCodec(sdp []byte) string {
+	inAudio := false
+	for _, line := range splitCRLF(string(sdp)) {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "m="):
+			inAudio = strings.HasPrefix(line, "m=audio ")
+		case inAudio && strings.HasPrefix(line, "a=rtpmap:"):
+			// a=rtpmap:<pt> <encoding>/<clock> [/<params>]
+			fields := strings.Fields(strings.TrimPrefix(line, "a=rtpmap:"))
+			if len(fields) < 2 {
+				continue
+			}
+			switch strings.ToUpper(fields[1]) {
+			case "PCMA":
+				return gb28181.AudioCodecG711A
+			case "PCMU":
+				return gb28181.AudioCodecG711U
+			case "MPEG4-GENERIC":
+				return gb28181.AudioCodecAAC
+			}
+		}
+	}
+	return ""
+}

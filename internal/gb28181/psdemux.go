@@ -94,11 +94,32 @@ type PSDemuxer struct {
 	// audioCodecs maps audio stream_ids (0xC0-0xDF) to demuxable codecs,
 	// populated from the PSM elementary_stream_map.
 	audioCodecs map[byte]string
+	// psmSeen/psmAudioEntries track the latest PSM: when a PSM declares any
+	// audio entries it is authoritative and undeclared audio streams stay
+	// dropped; with no PSM at all (or a video-only PSM) the codec is unknown
+	// and the no-PSM fallback below resolves it instead.
+	psmSeen         bool
+	psmAudioEntries int
+	// audioResolved latches fallback decisions (SDP hint or byte-shape
+	// heuristic) per stream_id. A later PSM declaration still overrides it.
+	audioResolved map[byte]string
+	// audioHint seeds the fallback with the codec declared in the device's
+	// INVITE answer SDP ("" = none).
+	audioHint    string
+	guessScanned int // bytes scanned while voting μ-law vs A-law
+	guessMulaw   int // hits in the μ-law quiet cluster (0xFD-0xFF / 0x7D-0x7F)
+	guessAlaw    int // hits in the A-law quiet cluster (0x54-0x56 / 0xD4-0xD6)
 	// audioPesBuf holds an audio PES that straddles an AU boundary (rare —
 	// audio PES packets are small enough to fit one RTP packet).
 	audioPesBuf []byte
 	// audioOut collects frames extracted during FeedAU; DrainAudio consumes.
 	audioOut []AudioFrame
+	// audioContPTSTicks continues the audio timeline across frames whose PES
+	// carries no PTS (some firmware omits audio PTS entirely): each frame
+	// advances by its sample count instead of inheriting the enclosing video
+	// AU's RTP clock.
+	audioContPTSTicks int64
+	audioContSet      bool
 	// ptsOffset aligns the PES PTS clock domain with the RTP timestamp
 	// domain: ptsOffset = firstVideoPESPTS - firstAU_RTPts. Audio PES PTS
 	// values are translated through it so audio and video share the video
@@ -204,7 +225,10 @@ feedLoop:
 				if d.audioCodecs == nil {
 					d.audioCodecs = make(map[byte]string)
 				}
-				for esID, st := range audioStreamTypes(psmData) {
+				entries := audioStreamTypes(psmData)
+				d.psmSeen = true
+				d.psmAudioEntries = len(entries)
+				for esID, st := range entries {
 					d.audioCodecs[esID] = audioStreamCodec(st)
 				}
 			}
@@ -340,8 +364,13 @@ func (d *PSDemuxer) establishClockOffset(pesData []byte, rtpTicks int64) {
 // emitAudio converts one audio PES payload into AudioFrames on the collector.
 func (d *PSDemuxer) emitAudio(payload []byte, streamID byte, pesPTS int64, hasPTS bool, rtpTicks int64) {
 	codec := d.audioCodecs[streamID]
+	if codec == "" && !(d.psmSeen && d.psmAudioEntries > 0) {
+		// No authoritative PSM declaration for this stream — resolve via the
+		// SDP hint / byte-shape fallback (see resolveFallbackAudioCodec).
+		codec = d.resolveFallbackAudioCodec(streamID, payload)
+	}
 	if codec == "" {
-		return // codec not declared in PSM (or unsupported: G.722/G.723/...)
+		return // not declared in PSM (or unsupported: G.722/G.723/...) and not inferable
 	}
 	if !d.ptsOffsetSet {
 		// No video PTS seen yet (audio-only start): anchor audio to the RTP
@@ -353,12 +382,18 @@ func (d *PSDemuxer) emitAudio(payload []byte, streamID byte, pesPTS int64, hasPT
 			return
 		}
 	}
-	pts := rtpTicks
+	var pts int64
 	if hasPTS {
 		pts = pesPTS - d.ptsOffset
 		if pts < 0 {
 			pts = rtpTicks
 		}
+	} else if d.audioContSet {
+		pts = d.audioContPTSTicks
+	} else {
+		d.audioContPTSTicks = rtpTicks
+		d.audioContSet = true
+		pts = rtpTicks
 	}
 
 	switch codec {
@@ -369,6 +404,7 @@ func (d *PSDemuxer) emitAudio(payload []byte, streamID byte, pesPTS int64, hasPT
 			PTSTicks: pts,
 			Samples:  len(payload),
 		})
+		d.audioContPTSTicks, d.audioContSet = pts+int64(len(payload)), true
 	case AudioCodecAAC:
 		// GB28181 devices send AAC with ADTS framing; strip each frame and
 		// derive the AudioSpecificConfig from the first header. Raw payloads
@@ -381,6 +417,8 @@ func (d *PSDemuxer) emitAudio(payload []byte, streamID byte, pesPTS int64, hasPT
 				PTSTicks: pts,
 				Samples:  1024,
 			})
+			pts += 1024
+			d.audioContPTSTicks, d.audioContSet = pts, true
 		}
 	}
 }
