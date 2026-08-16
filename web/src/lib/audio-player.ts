@@ -4,8 +4,12 @@
  * Routes incoming frames by codec:
  *   - G.711 μ-law / A-law — pure-JS ITU-T lookup tables → 16-bit PCM, scheduled
  *     on an AudioBufferSourceNode at the stream's 8 kHz rate.
- *   - AAC — WebCodecs AudioDecoder (HTTPS/localhost) or FAAD2 WASM (plain HTTP)
+ *   - AAC / Opus — WebCodecs AudioDecoder (HTTPS/localhost secure context)
  *     → Float32 planar PCM, scheduled on a BufferSource at the native rate.
+ *     On plain-HTTP LAN (no secure context) AAC/Opus live preview degrades
+ *     with a hint; G.711 is unaffected. The former FAAD2 WASM fallback for
+ *     plain-HTTP AAC was removed (#319): @audio/decode-aac is GPL-2.0 and
+ *     incompatible with the repo license.
  *
  * G.711 lookup tables, AudioContext sample-rate, and the gapless scheduling
  * scheme are the AGENTS.md "Audio recording & playback" CONVENTIONS; the
@@ -23,7 +27,6 @@ import {
   detectWebCodecsOpus,
   type AacDecoder,
 } from './aac-webcodecs-decoder';
-import { WasmAacDecoder } from './aac-wasm-decoder';
 import { WebCodecsOpusDecoder } from './opus-webcodecs-decoder';
 
 /** Audio codec byte constants. */
@@ -37,8 +40,7 @@ export const AudioCodec = {
 /** Reason the (AAC/Opus) decoder could not start, surfaced to the UI. */
 export type AudioDecodeUnavailableReason =
   | 'unsupported_codec' // codec with no live-preview decode path
-  | 'webcodecs_unavailable' // AAC over plain HTTP, no WebCodecs
-  | 'wasm_load_failed' // WASM module failed to fetch/initialize
+  | 'webcodecs_unavailable' // AAC/Opus over plain HTTP, no WebCodecs
   | 'decoder_error'; // decoder reported a fatal error
 
 export class AudioPlayer {
@@ -115,44 +117,33 @@ export class AudioPlayer {
     }
   }
 
-  /** Construct + configure the AAC decoder backend (WebCodecs preferred, WASM fallback). */
+  /** Construct + configure the AAC decoder backend (WebCodecs only).
+   *
+   * WebCodecs AudioDecoder is the sole AAC path (#319 removed the GPL-2.0
+   * FAAD2 WASM fallback). On plain-HTTP LAN (no secure context) AAC live
+   * preview degrades with `webcodecs_unavailable` — same semantics as Opus. */
   private async _initAacDecoder(): Promise<boolean> {
     if (!this._config || this._config.length === 0) {
-      // No AASC arrived — cannot configure either backend.
+      // No AASC arrived — cannot configure the backend.
       this._unavailableReason = 'decoder_error';
       return false;
     }
-    const onOutput = (frame: AudioData) => this._scheduleDecoded(frame);
-    if (detectWebCodecsAudioDecoder()) {
-      try {
-        const dec = new WebCodecsAacDecoder(onOutput, (err) => {
-          console.warn('[AudioPlayer] WebCodecs AAC error:', err);
-          this._unavailableReason = 'decoder_error';
-        });
-        dec.configure(this._config, this._sampleRate, this._channels);
-        this._aac = dec;
-        return true;
-      } catch (err) {
-        // isConfigSupported may have rejected; fall through to WASM.
-        console.warn('[AudioPlayer] WebCodecs AAC configure failed, trying WASM:', err);
-      }
-    } else {
+    if (!detectWebCodecsAudioDecoder()) {
       this._unavailableReason = 'webcodecs_unavailable';
+      return false;
     }
-    // WASM fallback (works on plain HTTP).
+    const onOutput = (frame: AudioData) => this._scheduleDecoded(frame);
     try {
-      const dec = new WasmAacDecoder(onOutput, (err) => {
-        console.warn('[AudioPlayer] WASM AAC error:', err);
+      const dec = new WebCodecsAacDecoder(onOutput, (err) => {
+        console.warn('[AudioPlayer] WebCodecs AAC error:', err);
         this._unavailableReason = 'decoder_error';
       });
-      await dec.configure(this._config, this._sampleRate, this._channels);
+      dec.configure(this._config, this._sampleRate, this._channels);
       this._aac = dec;
-      // WASM succeeded; clear the "webcodecs_unavailable" reason since we have a working path.
-      this._unavailableReason = null;
       return true;
     } catch (err) {
-      console.warn('[AudioPlayer] WASM AAC backend unavailable:', err);
-      this._unavailableReason = this._unavailableReason ?? 'wasm_load_failed';
+      console.warn('[AudioPlayer] WebCodecs AAC configure failed:', err);
+      this._unavailableReason = 'decoder_error';
       return false;
     }
   }
@@ -164,8 +155,8 @@ export class AudioPlayer {
    * deployments is deferred — the upstream `opus-decoder` package triggers a
    * Rolldown bundler panic (cross-chunk symbol "assignNames"), tracked
    * separately. On HTTP LAN without WebCodecs, Opus degrades with a clear
-   * hint (AAC has the FAAD2 WASM fallback because that package bundles
-   * cleanly). */
+   * hint (same semantics as AAC, whose FAAD2 WASM fallback was removed in
+   * #319 for license compatibility). */
   private async _initOpusDecoder(): Promise<boolean> {
     const onOutput = (frame: AudioData) => this._scheduleDecoded(frame);
     const webcodecsOk = await detectWebCodecsOpus();

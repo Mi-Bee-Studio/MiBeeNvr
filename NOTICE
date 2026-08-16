@@ -1,0 +1,52 @@
+MiBee NVR — NOTICE
+==================
+
+Copyright (c) 2026 Mi&Bee Studio
+
+This project is licensed under the GNU Affero General Public License
+version 3 only (AGPL-3.0-only) — see LICENSE — with an additional
+linking exception for the pkg/ tree — see LICENSE.pkg-linking-exception.
+
+License history
+---------------
+Releases up to and including v0.10.1 were distributed under the MIT
+License. Those versions remain available under MIT; the license change
+applies to this repository from v0.11.0 onward.
+
+Third-party components
+----------------------
+This project distributes binaries that embed the following third-party
+components under their own (non-AGPL) licenses. The complete build
+inputs (go.mod / web/package-lock.json) and full corresponding source
+code are provided in this repository, satisfying the source-availability
+and relink/replace obligations of the weak-copyleft licenses below.
+
+Copyleft components:
+
+  * @yume-chan/libde265 (LGPL-3.0-only) — H.265 WASM decoder used by
+    the web frontend for plain-HTTP live playback. The frontend build
+    (web/, vite.config.js) is provided in full; rebuild with a modified
+    or replacement libde265 to produce an equivalent binary.
+    https://github.com/yume-chan/libde265-wasm
+
+  * github.com/discoviking/fsm (LGPL-2.1) — indirect dependency via
+    github.com/ghettovoice/gosip (GB/T 28181 SIP stack).
+    https://github.com/discoviking/fsm
+
+  * github.com/eclipse/paho.mqtt.golang (EPL-2.0) — MQTT client.
+    https://github.com/eclipse/paho.mqtt.golang
+
+Attribution-required components:
+
+  * internal/xiaomi/ and internal/tutk/ contain code adapted from
+    go2rtc (https://github.com/AlexxIT/go2rtc), Copyright AlexxIT,
+    licensed under the MIT License. Divergences are documented in the
+    code comments ("Ported from go2rtc: ...").
+
+  * Community contributions submitted while this repository was
+    MIT-licensed remain available under the MIT License (Copyright its
+    authors, all rights reserved).
+
+Permissive dependencies (MIT / BSD / Apache-2.0 / Zlib) are listed with
+versions in go.mod and web/package.json; their copyright and license
+notices are preserved in their respective source distributions.
