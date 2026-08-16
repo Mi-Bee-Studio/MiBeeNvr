@@ -340,6 +340,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	// explicitly opts in (dual-protocol setups) with allow_duplicate.
 	if !isPush && !isGB28181 && h.gb28181DeviceMgr != nil {
 		if host := createBodyHost(body.URL, body.ONVIFEndpoint); host != "" {
+			conflict := ""
 			for _, d := range h.gb28181DeviceMgr.AllDevices() {
 				d.Mu.RLock()
 				netAddr := d.NetAddr
@@ -349,19 +350,35 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 					devHost = h2
 				}
 				if devHost == host {
-					if !body.AllowDuplicate {
-						logger.Warn("create camera refused: host already registered via GB28181",
-							"host", host, "gb_device", d.ID)
-						WriteError(w, http.StatusConflict, fmt.Sprintf(
-							"a GB28181 device (%s) is already connected from %s — this looks like the same physical camera. "+
-								"Use it as-is, remove/archive it first, or pass allow_duplicate=true to keep both",
-							d.ID, host))
-						return
-					}
-					logger.Info("create camera: allow_duplicate set despite GB28181 device at same host",
-						"host", host, "gb_device", d.ID)
+					conflict = fmt.Sprintf("a GB28181 device (%s) is already connected from %s", d.ID, host)
 					break
 				}
+			}
+			// L2: dual-NIC devices register GB28181 from a different interface
+			// IP than the ONVIF endpoint. Probe the create-host's ONVIF serial
+			// and match it against cached GB28181 device fingerprints. Skipped
+			// entirely when no fingerprints exist (no dual-protocol device has
+			// ever registered) so normal setups pay no probe latency.
+			if conflict == "" && h.db != nil {
+				if fps, err := h.db.ListGB28181Fingerprints(r.Context()); err == nil && len(fps) > 0 {
+					if serial, ok := onvif.ProbeSerial(r.Context(), host); ok {
+						for _, fp := range fps {
+							if fp.Serial == serial {
+								conflict = fmt.Sprintf("a GB28181 device (%s) with the same hardware serial (%s) is already connected", fp.DeviceID, serial)
+								break
+							}
+						}
+					}
+				}
+			}
+			if conflict != "" {
+				if !body.AllowDuplicate {
+					logger.Warn("create camera refused: same physical camera already connected via GB28181", "host", host)
+					WriteError(w, http.StatusConflict, conflict+
+						" — this looks like the same physical camera. Use it as-is, remove/archive it first, or pass allow_duplicate=true to keep both")
+					return
+				}
+				logger.Info("create camera: allow_duplicate set despite GB28181 dedup match", "host", host)
 			}
 		}
 	}
