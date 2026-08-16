@@ -9,12 +9,19 @@ package camera
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
@@ -90,10 +97,38 @@ func (cm *CameraManager) GetGB28181Recorder(cameraID string) *recorder.GB28181Re
 // auto-appear in the Cameras list — matching ONVIF auto-add. Dedup is by
 // channel: a multi-channel device (NVR) gets one camera per video channel.
 // Idempotent: if a camera with matching GB28181.ChannelID exists, returns nil.
-func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name string) error {
+//
+// Cross-protocol dedup (dual-protocol cameras, e.g. ONVIF + GB28181 both
+// enabled — possibly on DIFFERENT interface IPs of the same device): before
+// creating, the manager resolves the device's ONVIF serial (fingerprint cache
+// → DB → live probe of the SIP source IP) and skips when a camera with that
+// serial already exists. sourceIP "" (unknown) skips dedup entirely. Manual
+// camera creation (API/web) is the escape hatch for deliberate dual-protocol
+// setups.
+func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
 	// Check if a camera for this channel already exists.
 	if _, ok := cm.GB28181CameraIDByChannel(deviceID, channelID); ok {
 		return nil // Already enrolled
+	}
+	if sourceIP != "" {
+		// L1: an existing pull camera streams from the same IP.
+		if existingID, ok := cm.CameraIDByHostIP(sourceIP); ok {
+			slog.Info("gb28181: auto-enroll skipped — another camera already streams from the device IP",
+				"device", deviceID, "channel", channelID, "source_ip", sourceIP, "existing_camera", existingID)
+			return nil
+		}
+		// L2: cross-IP identity — dual-NIC devices register GB28181 from one
+		// interface and may stream ONVIF from another. The ONVIF serial is
+		// interface-independent; probe (cache → DB → live) and match camera
+		// stable IDs / serial numbers.
+		if serial, ok := cm.resolveGBDeviceSerial(deviceID, sourceIP); ok {
+			if existingID, ok := cm.CameraIDBySerial(serial); ok {
+				slog.Info("gb28181: auto-enroll skipped — camera with matching device serial exists (cross-interface dedup)",
+					"device", deviceID, "channel", channelID, "source_ip", sourceIP,
+					"serial", serial, "existing_camera", existingID)
+				return nil
+			}
+		}
 	}
 
 	cameraName := name
@@ -113,6 +148,108 @@ func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name string) e
 	return err
 }
 
+// gbSerialCache memoizes probed device serials (device_id → serial) for the
+// process lifetime; guarded by gbSerialMu.
+var (
+	gbSerialMu    sync.Mutex
+	gbSerialCache = make(map[string]string)
+	// probeGBSerial is the ONVIF serial probe used by cross-protocol dedup;
+	// a var so tests can stub the network round-trip.
+	probeGBSerial = onvif.ProbeSerial
+)
+
+// resolveGBDeviceSerial resolves the ONVIF serial of a GB28181 device by
+// probing its SIP source IP (dual-protocol cameras answer GetDeviceInformation
+// without auth on every interface). Results are cached in memory and the DB
+// (gb28181_fingerprints) — the DB copy also serves the reverse dedup path
+// (camera create). ok=false when the device has no reachable unauthenticated
+// ONVIF endpoint (pure-GB cameras) — callers fall through to normal enroll.
+func (cm *CameraManager) resolveGBDeviceSerial(deviceID, sourceIP string) (string, bool) {
+	gbSerialMu.Lock()
+	if serial, ok := gbSerialCache[deviceID]; ok {
+		gbSerialMu.Unlock()
+		return serial, true
+	}
+	gbSerialMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	serial, ok := probeGBSerial(ctx, sourceIP)
+	if !ok {
+		return "", false
+	}
+
+	gbSerialMu.Lock()
+	gbSerialCache[deviceID] = serial
+	gbSerialMu.Unlock()
+	if cm.db != nil {
+		if err := cm.db.UpsertGB28181Fingerprint(ctx, storage.GB28181Fingerprint{
+			DeviceID: deviceID, Serial: serial, SourceIP: sourceIP, ProbedAt: time.Now(),
+		}); err != nil {
+			slog.Debug("gb28181: persist device fingerprint failed", "device", deviceID, "error", err)
+		}
+	}
+	return serial, true
+}
+
+// CameraIDByHostIP resolves an active non-GB28181 camera whose pull URL or
+// ONVIF endpoint points at the given IP. Used by GB28181 auto-enroll to keep
+// one camera per physical device when a dual-protocol camera registers.
+// GB28181 cameras are excluded (their dedup key is the channel ID, not IP).
+func (cm *CameraManager) CameraIDByHostIP(ip string) (string, bool) {
+	if ip == "" {
+		return "", false
+	}
+	snap := cm.loadSnapshot()
+	for _, cfg := range snap.configs {
+		if cfg.Protocol == string(model.ProtoGB28181) {
+			continue
+		}
+		if cameraHostIP(cfg) == ip {
+			return cfg.ID, true
+		}
+	}
+	return "", false
+}
+
+// CameraIDBySerial resolves a camera by its stable hardware serial — the
+// cross-protocol identity for dual-NIC dedup. ONVIF cameras auto-populate
+// StableID from the device serial on first connection (crud.go reverse
+// lookup), making it the natural join key against the GB28181 fingerprint.
+func (cm *CameraManager) CameraIDBySerial(serial string) (string, bool) {
+	if serial == "" {
+		return "", false
+	}
+	snap := cm.loadSnapshot()
+	for _, cfg := range snap.configs {
+		if cfg.Protocol == string(model.ProtoGB28181) {
+			continue
+		}
+		if cfg.StableID == serial {
+			return cfg.ID, true
+		}
+	}
+	return "", false
+}
+
+// cameraHostIP extracts the host from a camera's URL or ONVIF endpoint
+// ("" when neither carries one — push/ingest cameras, GB28181, xiaomi P2P).
+func cameraHostIP(cfg *config.CameraConfig) string {
+	for _, raw := range []string{cfg.URL, cfg.ONVIFEndpoint} {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			return u.Hostname()
+		}
+		if host, _, err := net.SplitHostPort(raw); err == nil && host != "" {
+			return host
+		}
+	}
+	return ""
+}
+
 // GB28181CameraIDByChannel resolves the MiBee camera bound to a GB28181
 // device/channel pair by scanning camera configs — independent of the
 // "gb-<channelID>" naming convention so manually created cameras resolve too.
@@ -126,6 +263,17 @@ func (cm *CameraManager) GB28181CameraIDByChannel(deviceID, channelID string) (s
 		}
 	}
 	return "", false
+}
+
+// ArchiveGB28181Camera soft-removes the camera auto-enrolled for a channel —
+// used when a catalog supersedes the device-self pseudo-channel (#352).
+// Archives preserve recordings; a no-op when no camera is bound.
+func (cm *CameraManager) ArchiveGB28181Camera(deviceID, channelID string) error {
+	cameraID, ok := cm.GB28181CameraIDByChannel(deviceID, channelID)
+	if !ok {
+		return nil
+	}
+	return cm.ArchiveCamera(context.Background(), cameraID)
 }
 
 // GB28181NALUWriter returns the recorder's AU callback for a GB28181 camera,
@@ -256,4 +404,19 @@ func (cm *CameraManager) UpdateGB28181DeviceMeta(deviceID, manufacturer, modelNa
 			"device_id", deviceID, "cameras", updated)
 	}
 	return nil
+}
+
+// GB28181RecordingWanted reports whether the camera bound to a channel wants
+// recording (nil RecordingEnabled = record by default). The alarm linkage
+// leaves such sessions to the recorder's own reconnect loop (#355).
+func (cm *CameraManager) GB28181RecordingWanted(deviceID, channelID string) bool {
+	cameraID, ok := cm.GB28181CameraIDByChannel(deviceID, channelID)
+	if !ok {
+		return false // no camera → alarm linkage owns the session lifecycle
+	}
+	cam := cm.snapshotConfig(cameraID)
+	if cam == nil {
+		return false
+	}
+	return cam.RecordingEnabled == nil || *cam.RecordingEnabled
 }
