@@ -50,6 +50,11 @@ type HealthResponse struct {
 	Uptime        string                 `json:"uptime"`
 	SetupRequired bool                   `json:"setup_required"`
 	Cameras       *CameraHealthSummary   `json:"cameras,omitempty"`
+	// DeviceID / DeviceName give LAN clients a stable identity to anchor on
+	// instead of an IP address (#330). Empty until the config provides them
+	// (the ID is generated and persisted on first config load).
+	DeviceID   string `json:"device_id,omitempty"`
+	DeviceName string `json:"device_name,omitempty"`
 }
 
 // CameraHealthSummary provides aggregated camera health in the /api/health response.

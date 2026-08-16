@@ -61,6 +61,13 @@ import (
 func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), error) {
 	deps := &appDeps{cfg: cfg, configPath: configPath}
 
+	// Step -1: Stable device identity (#330) — generate + persist the
+	// device_id on first startup so LAN clients can anchor on an ID instead
+	// of an IP. Best-effort: a read-only config keeps the in-memory ID.
+	if err := config.EnsureDeviceIdentity(configPath, cfg); err != nil {
+		slog.Warn("failed to persist device identity", "path", configPath, "error", err)
+	}
+
 	// Step 0: Ensure storage root directory exists
 	if err := os.MkdirAll(cfg.Storage.RootDir, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("create storage dir %s: %w", cfg.Storage.RootDir, err)

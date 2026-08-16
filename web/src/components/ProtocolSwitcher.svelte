@@ -111,13 +111,13 @@
     try {
       const result = await apiRequest<ProtocolsResponse>(`/cameras/${cameraId}/protocols`);
       availableProtocols = result.protocols
-        .filter(p => p.Available)
-        .map(p => p.Protocol);
+        .filter(p => p.available)
+        .map(p => p.protocol);
       // Store backend reasons for unavailable protocols
       const reasons: Record<string, string> = {};
       for (const p of result.protocols) {
-        if (!p.Available && p.Reason) {
-          reasons[p.Protocol] = p.Reason;
+        if (!p.available && p.reason) {
+          reasons[p.protocol] = p.reason;
         }
       }
       protocolReasons = reasons;

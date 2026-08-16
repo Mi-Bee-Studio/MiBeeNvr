@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,38 @@ func setupHealthHandler(t *testing.T, mgr HealthManager) *Handler {
 	h := TestHandler(db, store)
 	h.healthMgr = mgr
 	return h
+}
+
+// --- GET /api/health (public) tests ---
+
+func TestHealth_Endpoint_DeviceIdentity(t *testing.T) {
+	t.Parallel()
+	h := setupHealthHandler(t, nil)
+	h.config = &config.Config{}
+	h.config.Server.DeviceID = "11111111-2222-4333-8444-555555555555"
+	h.config.Server.DeviceName = "living-room-nvr"
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp HealthResponse
+	parseJSON(t, rr, &resp)
+	require.Equal(t, "11111111-2222-4333-8444-555555555555", resp.DeviceID)
+	require.Equal(t, "living-room-nvr", resp.DeviceName)
+}
+
+func TestHealth_Endpoint_DeviceIdentityOmittedWithoutConfig(t *testing.T) {
+	t.Parallel()
+	h := setupHealthHandler(t, nil)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// omitempty: absent identity must not surface as empty strings.
+	var raw map[string]any
+	parseJSON(t, rr, &raw)
+	require.NotContains(t, raw, "device_id")
+	require.NotContains(t, raw, "device_name")
 }
 
 // --- handleGetHealthStatus tests ---
