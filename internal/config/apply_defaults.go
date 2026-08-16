@@ -43,6 +43,25 @@ func applyConfigDefaults(cfg *Config) {
 	if env := strings.TrimSpace(os.Getenv("NVR_FRAME_ANCESTORS")); env != "" {
 		cfg.Security.FrameAncestors = env
 	}
+	// Device identity (#330): the name defaults to the system hostname and is
+	// intentionally NOT persisted (an explicit server.device_name overrides it;
+	// a hostname change is reflected on the next restart). The ID itself is
+	// generated and persisted by Load via ensureDeviceIdentity because it must
+	// stay stable across restarts.
+	if cfg.Server.DeviceName == "" {
+		if hn, err := os.Hostname(); err == nil && hn != "" {
+			cfg.Server.DeviceName = hn
+		}
+	}
+	// LAN discovery (#334): UDP broadcast responder on by default — it carries
+	// no more information than the already-public GET /api/health.
+	if cfg.Server.Discovery.UDP.Enabled == nil {
+		enabled := true
+		cfg.Server.Discovery.UDP.Enabled = &enabled
+	}
+	if cfg.Server.Discovery.UDP.Port == 0 {
+		cfg.Server.Discovery.UDP.Port = DefaultUDPPort
+	}
 	// Storage
 	if strings.TrimSpace(cfg.Storage.RootDir) == "" {
 		cfg.Storage.RootDir = "/var/lib/mibee-nvr"

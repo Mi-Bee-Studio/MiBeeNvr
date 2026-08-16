@@ -121,6 +121,12 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	// SetupRequired — true when no password is configured
 	resp.SetupRequired = h.config != nil && h.config.Auth.PasswordHash == "" && h.config.Auth.Password == ""
+
+	// Stable device identity for LAN clients (#330)
+	if h.config != nil {
+		resp.DeviceID = h.config.Server.DeviceID
+		resp.DeviceName = h.config.Server.DeviceName
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
