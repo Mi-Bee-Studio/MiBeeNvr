@@ -28,6 +28,7 @@ func buildRouter(
 	metrics *metrics.Metrics,
 	davHandler http.Handler,
 	uploadHandler *upload.Handler,
+	apiKeyStore *authmw.APIKeyStore,
 ) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
@@ -39,22 +40,16 @@ func buildRouter(
 	// Already-compressed content (video, images) is auto-skipped.
 	r.Use(authmw.StreamingGzip(5))
 
-	// API Key middleware — validates Bearer mbv_* tokens for MiBeeVision.
-	// Runs before authMW: if the request has an API Key Bearer token, it's
-	// authenticated here; otherwise it falls through to BasicAuth.
-	if len(cfg.APIKeys) > 0 {
-		validKeys := make(map[string]string)
-		for _, k := range cfg.APIKeys {
-			if !k.Revoked && k.Key != "" {
-				validKeys[k.Key] = k.Name
-			}
-		}
-		if len(validKeys) > 0 {
-			r.Use(func(next http.Handler) http.Handler {
-				return authmw.APIKeyAuthMiddleware(validKeys, next)
-			})
-			slog.Info("API Key authentication enabled", "keys", len(validKeys))
-		}
+	// API Key middleware — validates Bearer mbv_* tokens for MiBeeVision and
+	// per-device app tokens. Runs before authMW: if the request has an API Key
+	// Bearer token, it's authenticated here; otherwise it falls through to
+	// BasicAuth. Mounted unconditionally (when a store is wired) so keys minted
+	// at runtime work without a restart (#335).
+	if apiKeyStore != nil {
+		r.Use(func(next http.Handler) http.Handler {
+			return authmw.APIKeyAuthMiddleware(apiKeyStore, next)
+		})
+		slog.Info("API Key authentication enabled")
 	}
 
 	// Prometheus metrics — independent auth when configured, public otherwise

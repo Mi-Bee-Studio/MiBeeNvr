@@ -654,6 +654,12 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, configPath, deps.mergeMgr, cloudProxy, mergeScheduler, deps.gb28181DevMgr, deps.gb28181SessionMgr)
 
+	// Live API key store: seeded from config, updated in place by the
+	// generate/revoke handlers so key changes apply without restart (#335).
+	apiKeyStore := authmw.NewAPIKeyStore()
+	apiKeyStore.SetKeys(validAPIKeysFromConfig(cfg))
+	handler.SetAPIKeyStore(apiKeyStore)
+
 	// Wire streaming managers
 	handler.SetWebRTCManager(deps.webrtcMgr)
 	handler.SetFLVManager(flvMgr)
@@ -756,7 +762,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	chi.RegisterMethod("MOVE")
 
 	// ---- Build HTTP router ----
-	r, err := buildRouter(cfg, authMW, handler, m, davHandler, uploadHandler)
+	r, err := buildRouter(cfg, authMW, handler, m, davHandler, uploadHandler, apiKeyStore)
 	if err != nil {
 		startupBgCancel()
 		return nil, nil, err
@@ -796,4 +802,16 @@ func newGB28181SessionManager(cfg config.GB28181ServerConfig) *gb28181.SessionMa
 		}
 	}
 	return gb28181.NewSessionManager(gb28181.NewPortManager(start, end), cfg.ServerID)
+}
+
+// validAPIKeysFromConfig extracts the non-revoked API keys (token → name)
+// from the config, for seeding the live APIKeyStore.
+func validAPIKeysFromConfig(cfg *config.Config) map[string]string {
+	valid := make(map[string]string)
+	for _, k := range cfg.APIKeys {
+		if !k.Revoked && k.Key != "" {
+			valid[k.Key] = k.Name
+		}
+	}
+	return valid
 }

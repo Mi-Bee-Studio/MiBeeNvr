@@ -23,7 +23,8 @@ export function getMiBeeVisionLoaded(): boolean {
 export async function refreshMiBeeVisionStatus(): Promise<void> {
   try {
     const settings = await getSettings();
-    _connected = (settings.mibeevision?.api_keys?.length ?? 0) > 0;
+    // Revoked keys no longer authenticate — only active keys count as connected.
+    _connected = (settings.mibeevision?.api_keys?.filter((k) => !k.revoked).length ?? 0) > 0;
   } catch {
     // Non-fatal — default to not connected
     _connected = false;

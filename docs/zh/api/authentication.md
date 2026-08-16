@@ -10,7 +10,9 @@ curl -u username:password http://localhost:9090/api/cameras
 
 ## API Key 认证
 
-API Key 允许外部服务（如 MiBeeVision AI 处理）无需用户凭据即可进行认证。密钥使用 `mbv_` 前缀，以 Bearer token 形式发送。
+API Key 允许外部服务（如 MiBeeVision AI 处理）或按设备客户端 token（如家庭成员的手机）无需用户凭据即可进行认证。密钥使用 `mbv_` 前缀，生成时带标签，可单独吊销 — 手机丢失时只需吊销该设备的 token，不影响其他凭据。
+
+**密钥变更即时生效** — 生成或吊销密钥在下一个请求即生效，无需重启服务。密钥列表（设置 → AI 检测 → MiBeeVision，或 `GET /api/settings` → `mibeevision.api_keys`）显示每个密钥的前缀、吊销状态和最近使用时间（每密钥每分钟最多更新一次）。
 
 ### 如何使用 API Key
 
@@ -19,7 +21,7 @@ API Key 允许外部服务（如 MiBeeVision AI 处理）无需用户凭据即�
 curl -H "Authorization: Bearer mbv_your_api_key_here" \
   http://localhost:9090/api/recordings
 
-# 使用查询参数（仅限 SSE/WebSocket）
+# 使用查询参数（适用于无法设置请求头的客户端，如 SSE/WebSocket）
 curl "http://localhost:9090/api/ai/events?api_key=mbv_your_api_key_here"
 ```
 

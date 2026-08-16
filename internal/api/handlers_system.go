@@ -399,7 +399,7 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"auth_configured": h.config.Auth.PasswordHash != "" || h.config.Auth.Password != "",
 		},
 		"mibeevision": map[string]any{
-			"api_keys": buildAPIKeyInfo(h.config.APIKeys),
+			"api_keys": buildAPIKeyInfo(h.config.APIKeys, h.apiKeyLastUsed()),
 		},
 		"timezone":         h.config.Timezone,
 		"timezone_display": tzDisplay,
@@ -446,20 +446,48 @@ func formatOffset(seconds int) string {
 	return fmt.Sprintf("%s%d:%02d", sign, hours, mins)
 }
 
-// buildAPIKeyInfo returns a safe summary of configured API keys (never the key itself).
-func buildAPIKeyInfo(keys []config.APIKeyConfig) []map[string]any {
+// buildAPIKeyInfo returns a safe summary of configured API keys (never the key
+// itself). Revoked keys are included (grayed in the UI) so owners can see the
+// full per-device token list; last_used comes from the live store when wired.
+func buildAPIKeyInfo(keys []config.APIKeyConfig, lastUsed map[string]time.Time) []map[string]any {
 	result := make([]map[string]any, 0, len(keys))
 	for _, k := range keys {
-		if k.Revoked {
-			continue
-		}
-		result = append(result, map[string]any{
+		info := map[string]any{
 			"name":    k.Name,
 			"prefix":  k.Key[:min(8, len(k.Key))] + "…", // e.g. "mbv_ab12…"
 			"revoked": k.Revoked,
-		})
+		}
+		if t, ok := lastUsed[k.Name]; ok && !t.IsZero() {
+			info["last_used"] = t.UTC().Format(time.RFC3339)
+		}
+		result = append(result, info)
 	}
 	return result
+}
+
+// syncAPIKeyStore rebuilds the live key set from the in-memory config. Called
+// after generate/revoke mutations so the API-key middleware picks up the
+// change on the next request without a restart (#335).
+func (h *Handler) syncAPIKeyStore() {
+	if h.apiKeyStore == nil || h.config == nil {
+		return
+	}
+	valid := make(map[string]string)
+	for _, k := range h.config.APIKeys {
+		if !k.Revoked && k.Key != "" {
+			valid[k.Key] = k.Name
+		}
+	}
+	h.apiKeyStore.SetKeys(valid)
+}
+
+// apiKeyLastUsed returns the store's last-used map, or nil when no store is
+// wired (tests, sub-handlers).
+func (h *Handler) apiKeyLastUsed() map[string]time.Time {
+	if h.apiKeyStore == nil {
+		return nil
+	}
+	return h.apiKeyStore.LastUsed()
 }
 
 func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -691,8 +719,9 @@ func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
+	h.syncAPIKeyStore()
 
-	logger.Info("API key generated for MiBeeVision integration", "name", name)
+	logger.Info("API key generated", "name", name)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"name":   name,
 		"key":    key,
@@ -730,6 +759,7 @@ func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
+	h.syncAPIKeyStore()
 
 	logger.Info("API key revoked", "name", name)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
