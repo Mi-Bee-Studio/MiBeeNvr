@@ -57,6 +57,14 @@ docker compose up -d
 ```
 
 ## Port conflicts
+## Import the ready-made template
+
+Prefer not to paste compose by hand? A ready-to-use application template
+lives in the repo: [`deploy/qnap/docker-compose.yml`](../../deploy/qnap/docker-compose.yml)
+(with [`README.md`](../../deploy/qnap/README.md) import steps). It is the
+same host-network compose with the typical QTS pool path pre-filled, plus
+commented `NVR_LISTEN_PORT` and China-mirror switches.
+
 
 QNAP QTS uses `8080` (HTTP management) / `443` (HTTPS) / `80` (Web Server, if enabled) for itself. These do not clash with MiBee NVR's `9090` (Web) or `2121` (FTP). If a QNAP service occupies a port you need, change that service's port in the QTS **Control Panel → Network** rather than remapping the NVR.
 

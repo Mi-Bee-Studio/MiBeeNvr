@@ -1,0 +1,37 @@
+# MiBee NVR — 极空间(ZSPACE) Docker Compose 模板
+#
+# 导入方式（详见 README.md）：
+#   极空间 Docker → 编排 → 创建编排 → 粘贴本文件内容
+#
+# network_mode: host 是 ONVIF 自动发现（UDP 组播，Docker bridge 不转发）的
+# 必要条件。host 模式下不要再写 ports: 端口映射。
+services:
+  mibee-nvr:
+    image: registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest
+    # 海外用户可换回 ghcr（内容完全一致）：
+    # image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    network_mode: host
+
+    volumes:
+      # 左侧 = 极空间上的存储路径。建议选空间充足的硬盘/个人空间目录，
+      # 例如 /zs/media/nvr/data（按实际路径调整）。
+      - /zs/media/nvr/data:/data
+
+    environment:
+      - NVR_DATA_DIR=/data
+      # 9090 端口被其他应用占用（#269）？直接用环境变量改监听端口，
+      # 无需改 YAML/配置文件：
+      # - NVR_LISTEN_PORT=8080
+      # （或之后在 Web UI 里改：设置 → 通用，见 #270。）
+      # 数据目录属主非 1000 时按需调整：
+      # - NVR_UID=1000
+      # - NVR_GID=1000
+
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

@@ -51,6 +51,14 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/
 6. Open `http://<nas-ip>:9090` and complete the setup wizard.
 
 ## Port conflicts
+## Import the ready-made template
+
+Prefer not to paste compose by hand? A ready-to-upload project template lives
+in the repo: [`deploy/synology/docker-compose.yml`](../../deploy/synology/docker-compose.yml)
+(with [`README.md`](../../deploy/synology/README.md) import steps). It is the
+same host-network compose with the Synology path pre-filled, plus commented
+`NVR_LISTEN_PORT` and China-mirror switches.
+
 
 On host networking the container binds directly to the NAS. MiBee NVR uses `9090` (Web/API) and `2121` (FTP) — these do **not** clash with DSM's own ports. DSM reserves `5000` (HTTP) / `5001` (HTTPS) for its UI, and `20/21` for its optional built-in FTP. If you also enabled DSM's FTP, note it is a separate service from MiBee NVR's FTP (2121) — do not confuse them.
 
