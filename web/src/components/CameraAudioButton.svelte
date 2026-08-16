@@ -137,8 +137,6 @@
         return t('live.audioUnsupported');
       case 'webcodecs_unavailable':
         return t('live.audioWebCodecsUnavailable');
-      case 'wasm_load_failed':
-        return t('live.audioWasmFailed');
       case 'decoder_error':
         return t('live.audioDecodeError');
       default:
