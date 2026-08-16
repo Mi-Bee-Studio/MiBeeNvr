@@ -1,14 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// Mock the AAC WASM loader BEFORE importing AudioPlayer so the AAC-over-HTTP
-// fallback path is deterministically forced to fail (the loader rejects).
-// vi.mock is hoisted to the top of the file by Vitest.
-vi.mock('./aac-wasm-loader', () => ({
-  loadFaad: vi.fn().mockRejectedValue(new Error('WASM unavailable in test')),
-  isFaadLoaded: vi.fn().mockReturnValue(false),
-}));
-
-// Import AFTER the mock is registered so audio-player.ts picks up the stub.
+// AudioPlayer no longer has an AAC WASM fallback (#319 removed the GPL-2.0
+// FAAD2 backend) — plain-HTTP AAC degrades exactly like Opus.
 const { AudioPlayer, AudioCodec } = await import('./audio-player');
 
 /**
@@ -16,10 +9,10 @@ const { AudioPlayer, AudioCodec } = await import('./audio-player');
  *
  * Scope:
  *   - G.711 path is unchanged (still returns initialized=true after init()).
- *   - AAC reports a graceful `unavailableReason` when neither WebCodecs nor
- *     the WASM backend can be loaded (WebCodecs absent + WASM mocked to fail
- *     = the HTTP LAN, WASM-failed regression guard).
- *   - Unsupported codecs (Opus) report `unsupported_codec` without throwing.
+ *   - AAC reports a graceful `unavailableReason` when WebCodecs is absent
+ *     (the HTTP LAN regression guard — deterministic since #319 removed the
+ *     WASM fallback).
+ *   - Unsupported codecs report `unsupported_codec` without throwing.
  *
  * The actual PCM decode is covered by g711-decoder.test.ts and the AAC
  * backend tests; here we only pin the routing decisions.
@@ -95,13 +88,12 @@ describe('AudioPlayer — G.711 routing (unchanged path)', () => {
 
 describe('AudioPlayer — AAC routing', () => {
   it('reports webcodecs_unavailable when AudioDecoder is absent (HTTP LAN)', async () => {
-    // AudioDecoder is undefined in this stub environment. WASM is also stubbed
-    // to fail, so the final reason should reflect the missing backend.
+    // AudioDecoder is undefined in this stub environment; with the WASM
+    // fallback removed (#319) the reason is deterministic.
     const p = new AudioPlayer(AudioCodec.AAC, 44100, 2, new Uint8Array([0x12, 0x10]));
     await p.init();
     expect(p.initialized).toBe(false);
-    // Reason is one of the AAC-unavailable codes (WebCodecs gone, WASM failed).
-    expect(['webcodecs_unavailable', 'wasm_load_failed', 'decoder_error']).toContain(p.unavailableReason);
+    expect(p.unavailableReason).toBe('webcodecs_unavailable');
     p.destroy();
   });
 
