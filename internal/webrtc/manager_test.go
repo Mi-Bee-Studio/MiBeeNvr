@@ -991,8 +991,7 @@ func TestAudioForwarding(t *testing.T) {
 	defer client.close()
 
 	audioPackets := make(chan *rtp.Packet, 8)
-	var audioTrackReady chan struct{}
-	audioTrackReady = make(chan struct{}, 1)
+	audioTrackReady := make(chan struct{}, 1)
 	client.pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		if track.Kind() != webrtc.RTPCodecTypeAudio {
 			return

@@ -194,19 +194,19 @@ type audioConfig struct {
 
 // audioCapability maps a negotiated audio config to the pion track capability.
 func (a audioConfig) capability() webrtc.RTPCodecCapability {
-	cap := webrtc.RTPCodecCapability{ClockRate: uint32(a.clockRate)}
+	codecCap := webrtc.RTPCodecCapability{ClockRate: uint32(a.clockRate)}
 	switch a.codec {
 	case "pcmu":
-		cap.MimeType = webrtc.MimeTypePCMU
+		codecCap.MimeType = webrtc.MimeTypePCMU
 	case "pcma":
-		cap.MimeType = webrtc.MimeTypePCMA
+		codecCap.MimeType = webrtc.MimeTypePCMA
 	case "opus":
-		cap.MimeType = webrtc.MimeTypeOpus
+		codecCap.MimeType = webrtc.MimeTypeOpus
 		// Matches the conventional browser-offered Opus fmtp; pion requires
 		// the capability to be one of the registered variants.
-		cap.SDPFmtpLine = "minptime=10;useinbandfec=1"
+		codecCap.SDPFmtpLine = "minptime=10;useinbandfec=1"
 	}
-	return cap
+	return codecCap
 }
 
 // hubSubscription tracks a StreamHub subscription for a camera.
