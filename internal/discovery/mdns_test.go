@@ -26,7 +26,7 @@ func TestMDNSRegistrarConstructor(t *testing.T) {
 	require.Len(t, r.txt, len(want))
 	for _, kv := range r.txt {
 		var k, v string
-		for i := 0; i < len(kv); i++ {
+		for i := range len(kv) {
 			if kv[i] == '=' {
 				k, v = kv[:i], kv[i+1:]
 				break
