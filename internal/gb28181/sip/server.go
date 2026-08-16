@@ -599,6 +599,15 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 		s.mu.Lock()
 		s.dialogs[channelID] = &inviteDialog{req: req, resp: resp}
 		s.mu.Unlock()
+		// Seed the no-PSM audio fallback from the answer SDP: devices that
+		// mux audio into the PS stream without ever sending a Program Stream
+		// Map are otherwise undecodable (the codec is unknowable from raw
+		// G.711 bytes). The hint yields to any later PSM declaration.
+		if rc := s.sessionMgr.GetReceiver(channelID); rc != nil {
+			if codec := sdpAudioCodec([]byte(resp.Body())); codec != "" {
+				rc.SetAudioCodecHint(codec)
+			}
+		}
 		// tcp-active: the device's answer SDP carries its media address —
 		// dial it now that the dialog is confirmed.
 		if s.cfg.MediaTransport == gb28181.MediaTCPActive {
@@ -996,13 +1005,15 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		}
 	} else {
 		slog.Info("gb28181: device registered", "device", deviceID, "source", req.Source(), "expires", expires)
-		// A re-REGISTER from a different address (device reboot, DHCP change,
-		// NAT rebind) invalidates the old media sessions: their INVITE
-		// dialogs pointed at the old address. Tear them down so the
-		// auto-INVITE below rebuilds fresh sessions.
+		// A re-REGISTER from a different IP (device reboot, DHCP change, NAT
+		// rebind) invalidates the old media sessions: their INVITE dialogs
+		// pointed at the old address. Tear them down so the auto-INVITE below
+		// rebuilds fresh sessions. The source PORT is not compared: SIP-over-
+		// UDP stacks may open a fresh socket per REGISTER, and media sessions
+		// are anchored by SDP addresses, not the REGISTER source port.
 		if existing, ok := s.deviceMgr.Device(deviceID); ok {
 			existing.Mu.RLock()
-			addrChanged := existing.NetAddr != req.Source()
+			addrChanged := hostOfAddr(existing.NetAddr) != hostOfAddr(req.Source())
 			existing.Mu.RUnlock()
 			if addrChanged {
 				slog.Info("gb28181: device address changed — recycling sessions", "device", deviceID, "new_source", req.Source())
@@ -1506,6 +1517,16 @@ func (s *Server) send401Challenge(req sip.Request, tx sip.ServerTransaction) {
 	value := fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=MD5`, realm, generateNonce())
 	headers := []sip.Header{&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: value}}
 	s.respond(req, tx, statusUnauthorized, "Unauthorized", headers)
+}
+
+// hostOfAddr extracts the IP from a "IP:port" source address. Used to detect
+// device address changes while tolerating source-port rotation (see
+// handleRegister).
+func hostOfAddr(addr string) string {
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		return h
+	}
+	return addr
 }
 
 // getAuthHeader extracts the Authorization header from a request. gosip's

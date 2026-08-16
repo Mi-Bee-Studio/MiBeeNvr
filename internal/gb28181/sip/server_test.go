@@ -559,3 +559,52 @@ func TestServer_Bye_Hook(t *testing.T) {
 		t.Fatalf("hook not called")
 	}
 }
+
+func TestHostOfAddr(t *testing.T) {
+	cases := map[string]string{
+		"192.168.63.152:36115": "192.168.63.152",
+		"10.0.0.1:5060":        "10.0.0.1",
+		"bare-addr":            "bare-addr",
+	}
+	for in, want := range cases {
+		if got := hostOfAddr(in); got != want {
+			t.Fatalf("hostOfAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestServer_Register_PortRotationKeepsAddressStable(t *testing.T) {
+	// SIP-over-UDP stacks may open a fresh socket per REGISTER. A source-port
+	// change alone must NOT be treated as a device address change (which
+	// recycles media sessions); only an IP change may.
+	cfg := testConfig(t)
+	_, dm := startTestServer(t, cfg)
+
+	register := func(client *sipClient) {
+		req := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "")
+		res := client.roundTrip(req)
+		if res.StatusCode() != 401 {
+			t.Fatalf("first REGISTER status = %d, want 401", res.StatusCode())
+		}
+		auth := digestAuth(t, getChallenge(t, res), req, cfg.Password)
+		req2 := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "", auth)
+		if res2 := client.roundTrip(req2); res2.StatusCode() != 200 {
+			t.Fatalf("authed REGISTER status = %d, want 200", res2.StatusCode())
+		}
+	}
+
+	register(newSIPClient(t, cfg.SIPListen))
+	// A second socket — same IP, different source port — re-REGISTERs.
+	register(newSIPClient(t, cfg.SIPListen))
+
+	dev, ok := dm.Device(testDeviceID)
+	if !ok {
+		t.Fatalf("device %s no longer registered after port rotation", testDeviceID)
+	}
+	dev.Mu.RLock()
+	netAddr := dev.NetAddr
+	dev.Mu.RUnlock()
+	if !strings.Contains(netAddr, "127.0.0.1") {
+		t.Fatalf("device NetAddr = %q, want the newest client addr", netAddr)
+	}
+}

@@ -113,6 +113,13 @@ func (r *Receiver) SetTCPMode(mode TCPMode) {
 	r.tcpMode = mode
 }
 
+// SetAudioCodecHint seeds the PS demuxer's no-PSM audio fallback with the
+// codec declared in the device's INVITE answer SDP. No-op once the stream's
+// PSM declares the audio codec itself.
+func (r *Receiver) SetAudioCodecHint(codec string) {
+	r.demuxer.SetAudioCodecHint(codec)
+}
+
 // Start begins receiving RTP packets.
 // UDP mode: Binds to an available UDP port from PortManager.
 // TCP mode: Accepts an incoming TCP connection (conn must be non-nil).

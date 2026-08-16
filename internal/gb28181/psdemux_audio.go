@@ -1,7 +1,77 @@
 package gb28181
 
+import (
+	"fmt"
+	"log/slog"
+)
+
 // Audio-path helpers for the MPEG-PS demuxer: audio PES parsing, PTS
 // extraction, PSM audio stream enumeration, and AAC ADTS framing.
+
+// SetAudioCodecHint seeds the no-PSM audio fallback with the codec declared
+// in the device's INVITE answer SDP (a=rtpmap PCMA/PCMU/mpeg4-generic). The
+// hint is used only while the stream carries no PSM audio declaration — a
+// PSM (the device's own in-stream statement) always wins.
+func (d *PSDemuxer) SetAudioCodecHint(codec string) {
+	d.audioHint = codec
+}
+
+// resolveFallbackAudioCodec resolves the codec of an audio stream that no PSM
+// has declared: a previously latched decision, the SDP hint, or a byte-shape
+// heuristic (ADTS sync → AAC; μ-law vs A-law by quiet-cluster voting over the
+// first ~4KB of payload — near-silent samples cluster at 0xFF/0x7F for μ-law
+// and 0x55/0xD5 for A-law). Returns "" while evidence is still insufficient.
+func (d *PSDemuxer) resolveFallbackAudioCodec(streamID byte, payload []byte) string {
+	if c, ok := d.audioResolved[streamID]; ok {
+		return c
+	}
+	codec := d.guessAudioCodec(payload)
+	if codec == "" {
+		return ""
+	}
+	if d.audioResolved == nil {
+		d.audioResolved = make(map[byte]string)
+	}
+	d.audioResolved[streamID] = codec
+	slog.Info("gb28181: PS audio stream not declared in PSM — codec inferred",
+		"stream_id", fmt.Sprintf("0x%02X", streamID), "codec", codec,
+		"hint", d.audioHint, "mulaw_votes", d.guessMulaw, "alaw_votes", d.guessAlaw)
+	return codec
+}
+
+// guessAudioCodec applies the fallback detection order to one payload: ADTS
+// sync (self-describing AAC) → SDP hint → quiet-cluster voting. Voting
+// accumulates across calls until 4KB has been scanned.
+func (d *PSDemuxer) guessAudioCodec(payload []byte) string {
+	// ADTS sync at the payload start: frame length must be sane, which
+	// distinguishes real ADTS from G.711 bytes that happen to open with
+	// 0xFF 0Fx (μ-law near-silence).
+	if len(payload) >= 7 && payload[0] == 0xFF && payload[1]&0xF0 == 0xF0 {
+		frameLen := int(payload[3]&0x03)<<11 | int(payload[4])<<3 | int(payload[5])>>5
+		if frameLen >= 7 && frameLen <= 8192 {
+			return AudioCodecAAC
+		}
+	}
+	if d.audioHint != "" {
+		return d.audioHint
+	}
+	for _, b := range payload {
+		switch {
+		case b >= 0xFD, b >= 0x7D && b <= 0x7F:
+			d.guessMulaw++
+		case b >= 0x54 && b <= 0x56, b >= 0xD4 && b <= 0xD6:
+			d.guessAlaw++
+		}
+	}
+	d.guessScanned += len(payload)
+	if d.guessScanned < 4096 {
+		return "" // keep collecting votes
+	}
+	if d.guessMulaw >= d.guessAlaw {
+		return AudioCodecG711U
+	}
+	return AudioCodecG711A
+}
 
 // parseAudioPES parses an audio PES packet and returns the payload, its PTS
 // (when present), and the total PES length. Audio uses the standard
