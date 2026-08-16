@@ -9,6 +9,10 @@ package camera
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -90,10 +94,23 @@ func (cm *CameraManager) GetGB28181Recorder(cameraID string) *recorder.GB28181Re
 // auto-appear in the Cameras list — matching ONVIF auto-add. Dedup is by
 // channel: a multi-channel device (NVR) gets one camera per video channel.
 // Idempotent: if a camera with matching GB28181.ChannelID exists, returns nil.
-func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name string) error {
+//
+// sourceIP is the device's SIP source address host ("" when unknown). When a
+// camera of another protocol already streams from the same IP, the device is
+// physically present under a different identity — auto-enroll is skipped so
+// one physical camera never yields two recording entries. Manual camera
+// creation (API/web) is the escape hatch for deliberately dual-protocol setups.
+func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
 	// Check if a camera for this channel already exists.
 	if _, ok := cm.GB28181CameraIDByChannel(deviceID, channelID); ok {
 		return nil // Already enrolled
+	}
+	if sourceIP != "" {
+		if existingID, ok := cm.CameraIDByHostIP(sourceIP); ok {
+			slog.Info("gb28181: auto-enroll skipped — another camera already streams from the device IP",
+				"device", deviceID, "channel", channelID, "source_ip", sourceIP, "existing_camera", existingID)
+			return nil
+		}
 	}
 
 	cameraName := name
@@ -111,6 +128,44 @@ func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name string) e
 	}
 	_, err := cm.AddCamera(context.Background(), cam)
 	return err
+}
+
+// CameraIDByHostIP resolves an active non-GB28181 camera whose pull URL or
+// ONVIF endpoint points at the given IP. Used by GB28181 auto-enroll to keep
+// one camera per physical device when a dual-protocol camera registers.
+// GB28181 cameras are excluded (their dedup key is the channel ID, not IP).
+func (cm *CameraManager) CameraIDByHostIP(ip string) (string, bool) {
+	if ip == "" {
+		return "", false
+	}
+	snap := cm.loadSnapshot()
+	for _, cfg := range snap.configs {
+		if cfg.Protocol == string(model.ProtoGB28181) {
+			continue
+		}
+		if cameraHostIP(cfg) == ip {
+			return cfg.ID, true
+		}
+	}
+	return "", false
+}
+
+// cameraHostIP extracts the host from a camera's URL or ONVIF endpoint
+// ("" when neither carries one — push/ingest cameras, GB28181, xiaomi P2P).
+func cameraHostIP(cfg *config.CameraConfig) string {
+	for _, raw := range []string{cfg.URL, cfg.ONVIFEndpoint} {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			return u.Hostname()
+		}
+		if host, _, err := net.SplitHostPort(raw); err == nil && host != "" {
+			return host
+		}
+	}
+	return ""
 }
 
 // GB28181CameraIDByChannel resolves the MiBee camera bound to a GB28181

@@ -235,6 +235,24 @@ type gb28181ChannelPayload struct {
 	Manufacturer string `json:"manufacturer,omitempty"`
 }
 
+// createBodyHost extracts the host IP from a create-camera body's URL or
+// ONVIF endpoint ("" when neither carries one). Feeds the cross-protocol
+// dedup against registered GB28181 devices.
+func createBodyHost(rawURL, onvifEndpoint string) string {
+	for _, raw := range []string{strings.TrimSpace(rawURL), strings.TrimSpace(onvifEndpoint)} {
+		if raw == "" {
+			continue
+		}
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			return u.Hostname()
+		}
+		if host, _, err := net.SplitHostPort(raw); err == nil && host != "" {
+			return host
+		}
+	}
+	return ""
+}
+
 func (p *gb28181ChannelPayload) toConfig() config.GB28181ChannelConfig {
 	return config.GB28181ChannelConfig{
 		DeviceID:     p.DeviceID,
@@ -285,6 +303,10 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		SubnetHints []string `json:"subnet_hints"`
 		// GB28181 SIP device/channel binding (protocol "gb28181")
 		GB28181 *gb28181ChannelPayload `json:"gb28181"`
+		// AllowDuplicate opts in to adding a pull camera (onvif/rtsp/http)
+		// whose host IP already belongs to a registered GB28181 device.
+		// Default false: one camera per physical device.
+		AllowDuplicate bool `json:"allow_duplicate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -312,6 +334,37 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	isPush := body.Protocol == "srt" || body.Protocol == "rtmp"
 	// GB28181 cameras: no URL — identified by SIP DeviceID/ChannelID.
 	isGB28181 := body.Protocol == "gb28181"
+	// Cross-protocol dedup: a pull camera (onvif/rtsp/http) whose host IP
+	// matches a registered GB28181 device is the same physical camera — the
+	// GB28181 auto-enroll skips it symmetrically. Refuse unless the caller
+	// explicitly opts in (dual-protocol setups) with allow_duplicate.
+	if !isPush && !isGB28181 && h.gb28181DeviceMgr != nil {
+		if host := createBodyHost(body.URL, body.ONVIFEndpoint); host != "" {
+			for _, d := range h.gb28181DeviceMgr.AllDevices() {
+				d.Mu.RLock()
+				netAddr := d.NetAddr
+				d.Mu.RUnlock()
+				devHost := netAddr
+				if h2, _, err := net.SplitHostPort(netAddr); err == nil && h2 != "" {
+					devHost = h2
+				}
+				if devHost == host {
+					if !body.AllowDuplicate {
+						logger.Warn("create camera refused: host already registered via GB28181",
+							"host", host, "gb_device", d.ID)
+						WriteError(w, http.StatusConflict, fmt.Sprintf(
+							"a GB28181 device (%s) is already connected from %s — this looks like the same physical camera. "+
+								"Use it as-is, remove/archive it first, or pass allow_duplicate=true to keep both",
+							d.ID, host))
+						return
+					}
+					logger.Info("create camera: allow_duplicate set despite GB28181 device at same host",
+						"host", host, "gb_device", d.ID)
+					break
+				}
+			}
+		}
+	}
 	// ONVIF cameras: accept url OR onvif_endpoint
 	if body.Protocol == "onvif" {
 		endpoint := body.ONVIFEndpoint

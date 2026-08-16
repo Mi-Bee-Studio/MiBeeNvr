@@ -61,7 +61,10 @@ const (
 type CameraEnroller interface {
 	// EnsureGB28181Camera creates a camera bound to the device/channel pair
 	// (idempotent). name is the human-readable channel name (may be empty).
-	EnsureGB28181Camera(deviceID, channelID, name string) error
+	// sourceIP is the device's SIP source host ("" unknown) — auto-enroll is
+	// skipped when another camera already streams from that IP (dual-protocol
+	// dedup; manual creation bypasses it).
+	EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error
 	// GB28181CameraIDByChannel resolves the MiBee camera ID bound to a
 	// device/channel pair, independent of the camera-ID naming convention.
 	GB28181CameraIDByChannel(deviceID, channelID string) (string, bool)
@@ -1063,8 +1066,9 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		// setup. Runs in a goroutine to avoid blocking the SIP response.
 		if !channelExists {
 			if enrol := s.enroller(); enrol != nil {
+				srcHost := hostOfAddr(req.Source())
 				go func() {
-					if err := enrol.EnsureGB28181Camera(deviceID, deviceID, ""); err != nil {
+					if err := enrol.EnsureGB28181Camera(deviceID, deviceID, "", srcHost); err != nil {
 						slog.Warn("gb28181: auto-enroll camera failed", "device", deviceID, "error", err)
 					}
 				}()
@@ -1282,6 +1286,14 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 // catalog-change NOTIFY: registers channels, persists them, enrolls cameras
 // for new ones, and auto-INVITEs channels that have a camera but no session.
 func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
+	// Source host for cross-protocol auto-enroll dedup (dual-protocol cameras
+	// that already stream via ONVIF/RTSP from the same IP).
+	srcHost := ""
+	if d, ok := s.deviceMgr.Device(deviceID); ok {
+		d.Mu.RLock()
+		srcHost = hostOfAddr(d.NetAddr)
+		d.Mu.RUnlock()
+	}
 	for _, item := range items {
 		// Parental=1 entries are organization/group nodes, not video
 		// channels — registering them as INVITEable channels breaks
@@ -1331,7 +1343,7 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 				name := item.Name
 				devID, chID := deviceID, item.DeviceID
 				go func() {
-					if err := enrol.EnsureGB28181Camera(devID, chID, name); err != nil {
+					if err := enrol.EnsureGB28181Camera(devID, chID, name, srcHost); err != nil {
 						slog.Warn("gb28181: auto-enroll channel camera failed", "device", devID, "channel", chID, "error", err)
 					}
 				}()
