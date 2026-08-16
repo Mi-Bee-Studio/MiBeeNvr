@@ -53,14 +53,19 @@ func applyConfigDefaults(cfg *Config) {
 			cfg.Server.DeviceName = hn
 		}
 	}
-	// LAN discovery (#334): UDP broadcast responder on by default — it carries
-	// no more information than the already-public GET /api/health.
+	// LAN discovery (#333/#334): mDNS registration + UDP broadcast responder
+	// on by default — they carry no more information than the already-public
+	// GET /api/health.
 	if cfg.Server.Discovery.UDP.Enabled == nil {
 		enabled := true
 		cfg.Server.Discovery.UDP.Enabled = &enabled
 	}
 	if cfg.Server.Discovery.UDP.Port == 0 {
 		cfg.Server.Discovery.UDP.Port = DefaultUDPPort
+	}
+	if cfg.Server.Discovery.MDNS.Enabled == nil {
+		enabled := true
+		cfg.Server.Discovery.MDNS.Enabled = &enabled
 	}
 	// Storage
 	if strings.TrimSpace(cfg.Storage.RootDir) == "" {
