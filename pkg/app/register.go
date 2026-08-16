@@ -14,7 +14,6 @@ import (
 	"log/slog"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
@@ -390,18 +389,15 @@ func registerServices(a *App, deps *appDeps) error {
 	// for LAN clients on multicast-restricted networks. Bind failures are
 	// logged, never fatal: discovery is a convenience path. Treated as enabled
 	// when the pointer is nil so manually-constructed configs (tests) behave
-	// like ApplyDefaults output.
+	// like ApplyDefaults output. Port 0 binds an ephemeral port (tests);
+	// ApplyDefaults supplies 49090 for real configs.
 	if deps.cfg.Server.Discovery.UDP.Enabled == nil || *deps.cfg.Server.Discovery.UDP.Enabled {
-		port := deps.cfg.Server.Discovery.UDP.Port
-		if port == 0 {
-			port = config.DefaultUDPPort
-		}
 		responder := discovery.NewUDPResponder(
 			deps.cfg.Server.DeviceID,
 			deps.cfg.Server.DeviceName,
 			discovery.ParseAPIPort(deps.cfg.Server.Listen),
 			deps.cfg.Server.TLSListen != "",
-			port,
+			deps.cfg.Server.Discovery.UDP.Port,
 		)
 		if err := a.Register(&serviceFunc{
 			name: "discovery",

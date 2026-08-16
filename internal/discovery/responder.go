@@ -101,9 +101,13 @@ func (r *UDPResponder) Start(_ context.Context) error {
 	}
 	r.mu.Lock()
 	r.conn = conn
-	r.done = make(chan struct{})
+	done := make(chan struct{})
+	r.done = done
 	r.mu.Unlock()
-	go r.serve(conn)
+	// Pass done explicitly: reading r.done inside serve would race with Stop
+	// resetting the field to nil before the goroutine's first statement runs
+	// (observed as "panic: close of nil channel" under TestRunFree_SmokeStartStop).
+	go r.serve(conn, done)
 	slog.Info("discovery: udp responder listening", "addr", conn.LocalAddr().String())
 	return nil
 }
@@ -136,8 +140,8 @@ func (r *UDPResponder) Addr() *net.UDPAddr {
 	return r.conn.LocalAddr().(*net.UDPAddr)
 }
 
-func (r *UDPResponder) serve(conn *net.UDPConn) {
-	defer close(r.done)
+func (r *UDPResponder) serve(conn *net.UDPConn, done chan struct{}) {
+	defer close(done)
 	buf := make([]byte, probeBufSize)
 	for {
 		n, src, err := conn.ReadFromUDP(buf)
