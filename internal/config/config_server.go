@@ -23,7 +23,33 @@ type ServerConfig struct {
 	// works (browsers will warn). See deploy/AGENTS.md.
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
+	// DeviceID is a stable per-install identity (UUIDv4). Generated on first
+	// load and persisted so it survives restarts and IP changes (#330).
+	// Exposed via GET /api/health for LAN clients that anchor on an ID
+	// instead of an IP address.
+	DeviceID   string `yaml:"device_id,omitempty"`
+	DeviceName string `yaml:"device_name,omitempty"`
+	// Discovery controls how the NVR announces itself on the LAN for clients
+	// that cannot rely on subnet scanning or multicast (mDNS).
+	Discovery DiscoveryConfig `yaml:"discovery"`
 }
+
+// DiscoveryConfig groups LAN self-announcement mechanisms.
+type DiscoveryConfig struct {
+	UDP UDPDiscoveryConfig `yaml:"udp"`
+}
+
+// UDPDiscoveryConfig is the UDP broadcast responder (MIBEE-NVR-DISC/v1, #334):
+// listens on 0.0.0.0:49090 and answers the exact probe "MIBEE-NVR-DISCv1?"
+// with a unicast JSON identity payload. This is the discovery fallback for
+// multicast-restricted Wi-Fi where mDNS does not travel.
+type UDPDiscoveryConfig struct {
+	Enabled *bool `yaml:"enabled"` // default true
+	Port    int   `yaml:"port"`    // default DefaultUDPPort
+}
+
+// DefaultUDPPort is the default UDP listen port for the discovery responder.
+const DefaultUDPPort = 49090
 
 type StorageConfig struct {
 	RootDir         string `yaml:"root_dir"`         // default "/mnt/data/nvr"

@@ -4,6 +4,16 @@
 
 硬件直通对于 Docker 容器中的最佳转码性能至关重要。MiBee NVR 支持多种硬件加速路径：Intel/AMD GPU 的 VAAPI、NVIDIA GPU 的 NVENC，以及树莓派的 V4L2 M2M。本指南介绍如何配置 Docker 以将硬件设备暴露给容器，以实现最大转码效率。
 
+> **⚠️ NAS / host 网络部署者请先看**：本文的 compose 示例为通用桥接（bridge）写法，方便
+> 独立 Docker 主机参考。但 **NAS 部署（群晖/威联通/飞牛/极空间等）必须用 `network_mode: host`**：
+> ONVIF 摄像头自动发现依赖 UDP 多播（`239.255.255.250:3702`），Docker bridge 网络会阻断
+> 多播，且 host 模式下 `ports:` 映射无效（群晖 DSM 甚至会直接拒绝"同时声明 host + ports"的
+> compose）。照抄本文示例到 NAS 会丢失自动发现或直接报错——请改用下面的
+> [NAS / host 网络模板](#nas--host-网络下的硬件转码)。
+
+> **RK3588 说明**：转码后端仅支持 software / V4L2 M2M / VAAPI / NVENC，**不支持 RKMPP
+> （Rockchip NPU）**。RK3588 的 NPU 用不上，只能软件编码。
+
 ## 树莓派 V4L2 M2M
 
 V4L2 内存到内存 (M2M) 加速为树莓派设备提供硬件加速的 H.264/H.265 编码，相比软件编码显著提升性能。
@@ -328,6 +338,59 @@ NVR 按以下顺序解析 FFmpeg 二进制文件（见 `internal/transcoding/dow
 # 或通过挂载卷在运行时提供：
 docker run -v $(pwd)/my-ffmpeg:/data/tools/ffmpeg ...
 ```
+
+## NAS / host 网络下的硬件转码
+
+所有 NAS 部署模板都强制 `network_mode: host`（见 `deploy/compose/docker-compose.host.yml`
+与各 `deployment-*.md`）。host 模式下**不要写 `ports:`**（无效且部分 NAS 系统会报错）；
+端口冲突改用 `NVR_LISTEN_PORT` 环境变量或 `server.listen`（见 `deployment-faq.md` Q2）。
+把本文各节的 `devices:` / `deploy:` 块并入下面的模板即可：
+
+```yaml
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    network_mode: host          # NAS 必须：ONVIF 多播发现直达 LAN
+    # ports: 不要写！host 模式下无效，DSM 会拒绝
+
+    volumes:
+      - /path/to/data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+
+    # ↓↓↓ 按加速器二选一，来自本文上文的对应小节 ↓↓↓
+    # Intel/AMD VAAPI:
+    #   devices:
+    #     - /dev/dri/renderD128:/dev/dri/renderD128
+    #     - /dev/dri/card0:/dev/dri/card0
+    #   environment 追加: LIBVA_DRIVER_NAME=i965 (Intel) / radeonsi (AMD)
+    #
+    # NVIDIA NVENC (需主机装 NVIDIA Container Toolkit):
+    #   deploy:
+    #     resources:
+    #       reservations:
+    #         devices:
+    #           - driver: nvidia
+    #             count: all
+    #             capabilities: [gpu]
+    #
+    # 树莓派 V4L2 M2M:
+    #   devices:
+    #     - /dev/video10:/dev/video10
+    #     - /dev/video11:/dev/video11
+    #     - /dev/video12:/dev/video12
+
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+```
+
+FTP 端口同理：host 模式下无需映射，冲突时改 `ftp.port` / 被动端口范围。
 
 ## 故障排除清单
 

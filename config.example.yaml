@@ -9,6 +9,16 @@
 # HTTP server listen address (default: ":9090")
 server:
   listen: ":9090"
+  # Stable device identity for LAN clients (mobile apps bind to this ID
+  # instead of the IP). device_id is generated automatically on first start
+  # and never changes afterwards; device_name defaults to the system hostname.
+  # device_id: ""
+  # device_name: ""
+  # LAN self-announcement for clients that cannot use multicast/mDNS.
+  # discovery:
+  #   udp:
+  #     enabled: true   # answer "MIBEE-NVR-DISCv1?" probes on UDP 49090
+  #     port: 49090
 
 # HTTP security response headers.
 # frame_ancestors controls who may embed the Web UI in an <iframe> via the CSP
