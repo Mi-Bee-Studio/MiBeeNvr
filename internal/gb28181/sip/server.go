@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -156,6 +157,26 @@ type Server struct {
 	talkSeq      int
 
 	perDeviceMu map[string]*sync.Mutex // serialize SIP handling per device
+
+	// gbLoc pins the zone for naive GB/T 28181 device-clock timestamps
+	// (RecordInfo query formatting). nil → time.Local.
+	gbLoc atomic.Pointer[time.Location]
+}
+
+// SetGBTimezone pins the naive-clock zone for GB/T 28181 timestamps — set it
+// when the host's system zone differs from the devices' (e.g. a UTC container
+// fronting CST cameras), so record query windows align with device clocks.
+func (s *Server) SetGBTimezone(loc *time.Location) {
+	if loc != nil {
+		s.gbLoc.Store(loc)
+	}
+}
+
+func (s *Server) gbTZ() *time.Location {
+	if loc := s.gbLoc.Load(); loc != nil {
+		return loc
+	}
+	return time.Local
 }
 
 // NewServer creates a GB28181 SIP server bound to the given config. The db

@@ -19,9 +19,9 @@ import (
 const recordPageSize = 40
 
 // gbTimeLayout is the naive GB/T 28181 timestamp form (device-local wall
-// clock, no zone). Queries arrive in the upper platform's local time; the
-// cascade answers in its own local time — deployments should align the two
-// hosts' timezones.
+// clock, no zone). Queries arrive in the upper platform's naive clock; the
+// cascade answers in its own — both sides must agree on the zone, which
+// SetGBTimezone pins when the hosts' system zones diverge.
 const gbTimeLayout = "2006-01-02T15:04:05"
 
 // answerRecordInfo replies to the upper platform's recording query with the
@@ -34,8 +34,8 @@ func (s *Service) answerRecordInfo(q manscdp.RecordInfoQuery) {
 		slog.Warn("gb28181-cascade: RecordInfo for unknown channel", "channel", q.DeviceID)
 		return
 	}
-	start, err1 := time.ParseInLocation(gbTimeLayout, q.StartTime, time.Local)
-	end, err2 := time.ParseInLocation(gbTimeLayout, q.EndTime, time.Local)
+	start, err1 := time.ParseInLocation(gbTimeLayout, q.StartTime, s.gbTZ())
+	end, err2 := time.ParseInLocation(gbTimeLayout, q.EndTime, s.gbTZ())
 	if err1 != nil || err2 != nil || !end.After(start) {
 		slog.Warn("gb28181-cascade: RecordInfo query with bad time range",
 			"channel", q.DeviceID, "start", q.StartTime, "end", q.EndTime)
@@ -67,8 +67,8 @@ func (s *Service) answerRecordInfo(q manscdp.RecordInfoQuery) {
 		items = append(items, manscdp.RecordItem{
 			DeviceID:  q.DeviceID,
 			Name:      name,
-			StartTime: rec.StartedAt.Local().Format(gbTimeLayout),
-			EndTime:   rec.EndedAt.Local().Format(gbTimeLayout),
+			StartTime: rec.StartedAt.In(s.gbTZ()).Format(gbTimeLayout),
+			EndTime:   rec.EndedAt.In(s.gbTZ()).Format(gbTimeLayout),
 			Secrecy:   0,
 			Type:      "time",
 		})

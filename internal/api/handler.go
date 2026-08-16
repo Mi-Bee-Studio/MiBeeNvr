@@ -172,6 +172,7 @@ type Handler struct {
 	gb28181Inviter    GB28181InviteSender
 	gb28181Bye        GB28181ByeSender
 	gb28181Cascade    GB28181CascadeStatus
+	gb28181Loc        *time.Location // GB naive-clock zone (nil → Local)
 	// vodMgr serves the on-demand HLS VOD fragmenter for recording playback
 	// (#321 Phase 2). Self-contained (owns its segment cache) — constructed
 	// here rather than threaded through NewHandler's positional params.
@@ -658,6 +659,12 @@ type GB28181CascadeStatus interface {
 // SetGB28181Cascade wires the cascade client for the status endpoint.
 func (h *Handler) SetGB28181Cascade(s GB28181CascadeStatus) {
 	h.gb28181Cascade = s
+}
+
+// SetGB28181Timezone pins the zone used to interpret/format naive GB/T 28181
+// device-clock timestamps (RecordInfo entries). nil keeps time.Local.
+func (h *Handler) SetGB28181Timezone(loc *time.Location) {
+	h.gb28181Loc = loc
 }
 
 // GB28181InviteSender sends a SIP INVITE to start a media session on a channel.

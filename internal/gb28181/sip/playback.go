@@ -76,15 +76,16 @@ func (s *Server) QueryChannelRecords(deviceID, channelID string, start, end time
 	}()
 
 	// GB/T 28181 timestamps are naive device-local clock strings — format in
-	// the platform's local timezone (deployments run NVR and devices in one
-	// TZ). Sending UTC-shifted strings skews every record window by the TZ
-	// offset once the device echoes them back.
+	// the configured GB zone (defaults to the platform's local timezone:
+	// deployments run NVR and devices in one TZ). Sending UTC-shifted strings
+	// on a UTC host skews every record window by the TZ offset once the device
+	// echoes them back.
 	query := manscdp.RecordInfoQuery{
 		CmdType:   manscdp.CmdRecordInfo,
 		SN:        sn,
 		DeviceID:  channelID,
-		StartTime: start.Local().Format("2006-01-02T15:04:05"),
-		EndTime:   end.Local().Format("2006-01-02T15:04:05"),
+		StartTime: start.In(s.gbTZ()).Format("2006-01-02T15:04:05"),
+		EndTime:   end.In(s.gbTZ()).Format("2006-01-02T15:04:05"),
 		Type:      "all",
 	}
 	body, err := manscdp.Encode(query)

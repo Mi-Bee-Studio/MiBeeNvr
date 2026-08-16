@@ -64,14 +64,38 @@ type Service struct {
 	sn atomic.Int64 // MANSCDP sequence numbers
 
 	mu         sync.Mutex
-	sessions   map[string]*mediaSession // SIP Call-ID → active forward
+	sessions   map[string]*mediaSession    // SIP Call-ID → active live forward
+	playbacks  map[string]*playbackSession // SIP Call-ID → active playback dialog
 	online     bool
 	regTS      time.Time
 	ptzForward PTZForwarder
+	gbLoc      *time.Location // GB naive-clock zone (nil → time.Local)
 }
 
 func New(cfg config.GB28181CascadeConfig, src CameraSource, db *storage.DB) *Service {
-	return &Service{cfg: cfg, src: src, db: db, sessions: make(map[string]*mediaSession)}
+	return &Service{
+		cfg: cfg, src: src, db: db,
+		sessions:  make(map[string]*mediaSession),
+		playbacks: make(map[string]*playbackSession),
+	}
+}
+
+// SetGBTimezone pins the zone used for GB/T 28181 naive timestamps (RecordInfo
+// query parsing / response formatting). Deployments whose host clock zone
+// differs from the devices' (e.g. a UTC container cascading into CST cameras)
+// set this to the devices' zone.
+func (s *Service) SetGBTimezone(loc *time.Location) {
+	if loc != nil {
+		s.gbLoc = loc
+	}
+}
+
+// gbTZ returns the effective GB naive-clock zone.
+func (s *Service) gbTZ() *time.Location {
+	if s.gbLoc != nil {
+		return s.gbLoc
+	}
+	return time.Local
 }
 
 func (s *Service) Name() string { return "gb28181-cascade" }
@@ -107,6 +131,9 @@ func (s *Service) Start(ctx context.Context) error {
 		allow := sip.AllowHeader{sip.REGISTER, sip.MESSAGE, sip.INVITE, sip.ACK, sip.BYE, sip.CANCEL, sip.OPTIONS}
 		_, _ = srv.RespondOnRequest(req, 200, "OK", "", []sip.Header{&allow})
 	})
+	// MANSRTSP playback controls (pause/resume/seek/scale) ride in-dialog INFO
+	// messages; onInfo routes them to the channel's playback session.
+	_ = srv.OnRequest(sip.INFO, s.onInfo)
 
 	s.wg.Add(1)
 	go s.registerLoop()
@@ -121,17 +148,25 @@ func (s *Service) Stop() error {
 	}
 	s.wg.Wait()
 
-	// Best-effort unregister (Expires 0) and BYE of active forwards.
+	// Best-effort unregister (Expires 0) and BYE of active forwards/playbacks.
 	s.mu.Lock()
 	sessions := make([]*mediaSession, 0, len(s.sessions))
 	for _, ms := range s.sessions {
 		sessions = append(sessions, ms)
 	}
 	s.sessions = make(map[string]*mediaSession)
+	playbacks := make([]*playbackSession, 0, len(s.playbacks))
+	for _, ps := range s.playbacks {
+		playbacks = append(playbacks, ps)
+	}
+	s.playbacks = make(map[string]*playbackSession)
 	s.online = false
 	s.mu.Unlock()
 	for _, ms := range sessions {
 		ms.stop()
+	}
+	for _, ps := range playbacks {
+		ps.stop()
 	}
 	if s.srv != nil {
 		_ = s.sendRegister(0)
@@ -220,12 +255,12 @@ func (s *Service) RegistrationSince() (time.Duration, bool) {
 	return time.Since(s.regTS), true
 }
 
-// ForwardCount returns the number of active media forwards (INVITE dialogs
-// currently streaming to the upper platform).
+// ForwardCount returns the number of active media dialogs (live forwards +
+// playback streams) currently sending to the upper platform.
 func (s *Service) ForwardCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.sessions)
+	return len(s.sessions) + len(s.playbacks)
 }
 
 func (s *Service) upperAddr() (*net.UDPAddr, error) {

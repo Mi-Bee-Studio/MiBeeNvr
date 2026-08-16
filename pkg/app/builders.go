@@ -684,17 +684,23 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		handler.SetGB28181Inviter(deps.gb28181Server)
 		handler.SetGB28181ByeSender(deps.gb28181Server)
 		handler.SetGB28181DeviceMedia(deps.gb28181Server)
+		handler.SetGB28181Timezone(appLoc)
 		// Auto-create cameras when GB28181 devices register, matching ONVIF auto-add.
 		deps.gb28181Server.SetCameraEnroller(camMgr)
 		// Auto-INVITE when GB28181 recorders start (pull media on camera creation).
 		camMgr.SetGB28181Inviter(deps.gb28181Server)
 		camMgr.SetGB28181SessionEnder(deps.gb28181Server)
+		// Naive GB device-clock timestamps follow the app timezone — hosts in
+		// a different zone than the devices (UTC container, CST cameras) would
+		// otherwise skew every record window by the TZ offset.
+		deps.gb28181Server.SetGBTimezone(appLoc)
 	}
 	// Wire the cascade client: registration status surfaced in Settings, and
 	// upper-platform PTZ DeviceControl commands bridged to the local camera's
 	// native PTZ (ONVIF ContinuousMove / Xiaomi motor / local GB channel).
 	if deps.gb28181Cascade != nil {
 		handler.SetGB28181Cascade(deps.gb28181Cascade)
+		deps.gb28181Cascade.SetGBTimezone(appLoc)
 		var gbSend func(channelID, direction string, speed byte) error
 		if gbPTZController != nil {
 			gbSend = gbPTZController.SendPTZ
