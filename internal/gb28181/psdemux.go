@@ -126,7 +126,19 @@ type PSDemuxer struct {
 	// pipeline's RTP-anchored clock.
 	ptsOffset    int64
 	ptsOffsetSet bool
+	// esResyncLogged latches the one-shot warning for an esBuf overflow
+	// reset (marker-less accumulation — see maxESBufBytes).
+	esResyncLogged bool
 }
+
+// maxESBufBytes caps the elementary-stream accumulator. esBuf drains at
+// every AU boundary (RTP marker); a stream whose markers stop arriving
+// (broken upstream packetizer, mid-stream renegotiation) would otherwise
+// accumulate for the life of the session — invisible while sessions were
+// recycled every ~3min, unbounded now that healthy sessions live for hours
+// (#383). On overflow the buffer is dropped and demuxing resyncs at the
+// next AU boundary.
+const maxESBufBytes = 8 << 20
 
 // NewPSDemuxer creates a new MPEG-PS to H.264/H.265 NALU demuxer.
 func NewPSDemuxer() *PSDemuxer {
@@ -278,6 +290,14 @@ feedLoop:
 					d.currentPTS = ptsTicks
 					d.establishClockOffset(pesData, ptsTicks)
 					d.esBuf = append(d.esBuf, pesPayload...)
+					if len(d.esBuf) > maxESBufBytes {
+						if !d.esResyncLogged {
+							d.esResyncLogged = true
+							logger.Warn("gb28181: PS elementary stream exceeded cap with no AU boundary — resyncing",
+								"bytes", len(d.esBuf), "cap", maxESBufBytes)
+						}
+						d.esBuf = nil
+					}
 				}
 				// Advance past the PES
 				offset = startCodePos + pesEnd
