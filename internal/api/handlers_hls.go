@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
@@ -219,11 +221,45 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Issue the stream cookie on playlist fetches (#331): media players that
+	// cannot attach headers to every request (iOS AVPlayer on HLS segments)
+	// need a cookie to authenticate the relative segment URLs, which do not
+	// inherit the playlist's query token per RFC 3986. HttpOnly + SameSite=Lax
+	// + the method/suffix gate in bearerSessionToken keep the cookie from
+	// ever authenticating anything but read-only media fetches. Re-issued on
+	// every playlist fetch, so players polling the playlist stay fresh.
+	setStreamCookieOnPlaylist(w, r, id)
 	// Proxy to muxer handler
 	if !h.hlsMgr.Handle(id, w, r) {
 		WriteError(w, http.StatusServiceUnavailable, "HLS stream not available")
 		return
 	}
+}
+
+// setStreamCookieOnPlaylist sets the mbs_session cookie when the request is
+// for an HLS playlist (path ends in .m3u8) and was authenticated with a
+// session token. A freshly-renewed token (X-Renewed-Token) takes precedence
+// so the cookie outlives the original token's remaining lifetime.
+func setStreamCookieOnPlaylist(w http.ResponseWriter, r *http.Request, cameraID string) {
+	if !strings.HasSuffix(r.URL.Path, ".m3u8") {
+		return
+	}
+	tok := middleware.SessionTokenFromRequest(r)
+	if tok == "" {
+		return // BasicAuth/API-key callers: nothing to hand out
+	}
+	if renewed := w.Header().Get(middleware.RenewedTokenHeader); renewed != "" {
+		tok = renewed
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     middleware.StreamCookieName,
+		Value:    tok,
+		Path:     "/api/cameras/" + cameraID + "/",
+		MaxAge:   int(middleware.TokenTTL.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
+	})
 }
 
 func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
