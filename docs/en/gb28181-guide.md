@@ -101,7 +101,8 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 | Mobile-position subscription | ✅ | Vehicle-mounted cameras; REST trajectory query |
 | Time sync | ✅ | Device Query answered with platform time |
 | DeviceInfo/Status automation | ✅ | Brand/model backfill; keepalive preserves metadata |
-| Multi-level cascading / GB35114 | ⏸ | On demand (see #341) |
+| **Cascading (lower-level role)** | ✅ | Registers to an upper platform, aggregated catalog, INVITE forwarding (see Cascading Uplink) |
+| GB35114 | ⏸ | On demand (see #341) |
 
 ## Configuration Reference
 
@@ -150,6 +151,31 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 The LiveView page shows a **Talk** button for GB28181 cameras: browser mic → AudioWorklet downsample to 8 kHz → A-law encode → WebSocket upstream → the NVR sends an audio-only INVITE (`m=audio ... RTP/AVP 8`, `a=sendrecv`) → RTP to the device's receive address. Half-duplex: live audio and talk coexist.
 
 API: `GET /api/cameras/{id}/gb28181/talk` (WebSocket; binary frames = A-law bytes) and `GET /api/cameras/{id}/gb28181/talk/status`.
+
+## Cascading Uplink (Lower-Level Role)
+
+The NVR can register to an upper-level GB/T 28181 platform as a lower-level platform: local cameras are aggregated into one catalog, and when the upper platform INVITEs a channel its stream is forwarded as RTP/PS (pure remux, no transcode). The upper platform needs nothing cascade-specific — any standard platform works, including another MiBee NVR's platform role.
+
+```yaml
+gb28181_cascade:
+  enabled: true
+  server_domain: "34020000002000000001"   # upper platform 20-digit ID
+  server_addr: "192.168.63.30:5060"       # upper SIP address
+  local_device_id: "34020000001320000099" # this NVR's lower-level device ID
+  realm: "3402000000"
+  password: "..."                          # encrypted via encrypt-config
+  sip_listen: ":5061"                      # cascade signaling port (coexists with 5060)
+  heartbeat_interval: "60s"
+  register_expires: 3600
+```
+
+Behavior:
+
+- Channel IDs are allocated on first catalog appearance (`<ID[:10]>132` + 7-digit serial) and persisted — upper-platform bindings survive restarts
+- REGISTER + Digest, re-registration at 80% of Expires, Keepalive; an upper restart (keepalive 403) triggers immediate re-registration
+- The catalog aggregates every non-MJPEG camera; H.264/H.265 is sniffed from the first NAL for the PSM type
+- Upper INVITE → 200 OK (sendonly) → StreamHub subscription → PS mux → RTP push; BYE/error teardown
+- v1 limits: **video only** (the hub's audio callback does not distinguish G.711 A/μ-law yet); single upper platform; no catalog-change NOTIFY pushes (the upper falls back to polling)
 
 ## Subscriptions and Events
 
