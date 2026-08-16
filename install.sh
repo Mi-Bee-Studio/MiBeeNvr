@@ -57,7 +57,7 @@ detect_arch() {
     case "$machine" in
         aarch64|arm64)  echo "arm64" ;;
         x86_64|amd64)   echo "amd64" ;;
-        armv7l|armhf)   echo "arm64" ;;
+        armv7l|armhf)   echo "armv7" ;;
         *)
             error "Unsupported architecture: $machine"
             exit 1
