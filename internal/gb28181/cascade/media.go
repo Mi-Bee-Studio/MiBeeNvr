@@ -161,7 +161,10 @@ func (ms *mediaSession) localPort() int {
 
 // run subscribes to the camera's hub and pumps frames until stopped.
 func (ms *mediaSession) run(hub *model.StreamHub) {
-	subID := "cascade-" + ms.channel
+	// Unique per dialog: the upper platform may re-INVITE the same channel in
+	// a NEW dialog while an old one lingers — a channel-only ID collides in
+	// the hub's consumer registry.
+	subID := "cascade-" + ms.callID
 	err := hub.Subscribe(subID, func(pts int64, au [][]byte) {
 		if ms.closed.Load() || len(au) == 0 {
 			return

@@ -90,6 +90,13 @@ func (s *Service) Start(ctx context.Context) error {
 	_ = srv.OnRequest(sip.MESSAGE, s.onMessage)
 	_ = srv.OnRequest(sip.INVITE, s.onInvite)
 	_ = srv.OnRequest(sip.BYE, s.onBye)
+	// The upper platform may SUBSCRIBE to catalog changes; cascade v1 does
+	// not push NOTIFYs — answer 200 with Expires 0 so the upper falls back to
+	// its periodic catalog polling instead of retry-storming.
+	_ = srv.OnRequest(sip.SUBSCRIBE, func(req sip.Request, _ sip.ServerTransaction) {
+		zero := sip.Expires(0)
+		_, _ = srv.RespondOnRequest(req, 200, "OK", "", []sip.Header{&zero})
+	})
 	_ = srv.OnRequest(sip.OPTIONS, func(req sip.Request, tx sip.ServerTransaction) {
 		allow := sip.AllowHeader{sip.REGISTER, sip.MESSAGE, sip.INVITE, sip.ACK, sip.BYE, sip.CANCEL, sip.OPTIONS}
 		_, _ = srv.RespondOnRequest(req, 200, "OK", "", []sip.Header{&allow})
@@ -160,7 +167,13 @@ func (s *Service) registerLoop() {
 				return
 			}
 			if err := s.sendKeepalive(); err != nil {
-				slog.Warn("gb28181-cascade: keepalive failed", "error", err)
+				// A keepalive failure usually means the upper platform
+				// restarted (403 Device not registered) or vanished —
+				// re-REGISTER immediately instead of waiting out the
+				// Expires window.
+				slog.Warn("gb28181-cascade: keepalive failed — re-registering", "error", err)
+				s.setOnline(false)
+				break
 			}
 		}
 	}
@@ -341,11 +354,8 @@ func (s *Service) digestFrom(resp sip.Response, origReq sip.Request) (sip.Header
 
 func md5hex(parts ...string) string {
 	h := md5.New() //nolint:gosec // GB28181 digest mandates MD5
-	for _, p := range parts {
-		_, _ = h.Write([]byte(p))
-		_, _ = h.Write([]byte(":"))
-	}
-	return hex.EncodeToString(h.Sum(nil))[:32]
+	_, _ = h.Write([]byte(strings.Join(parts, ":")))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (s *Service) request(req sip.Request) (sip.Response, error) {
@@ -411,8 +421,10 @@ func (s *Service) onMessage(req sip.Request, _ sip.ServerTransaction) {
 	_, _ = s.srv.RespondOnRequest(req, 200, "OK", "", nil)
 	switch cmd {
 	case manscdp.CmdCatalog:
-		if c, ok := payload.(manscdp.Catalog); ok && c.SN > 0 {
-			s.answerCatalog(c.SN)
+		// Queries (root <Query>) come from the upper platform; Response-root
+		// Catalogs are other devices' answers and never reach the cascade.
+		if q, ok := payload.(manscdp.CatalogQuery); ok && q.SN > 0 {
+			s.answerCatalog(q.SN)
 		}
 	case manscdp.CmdDeviceInfo:
 		if d, ok := payload.(manscdp.DeviceInfo); ok && d.SN > 0 {

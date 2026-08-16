@@ -243,9 +243,15 @@ func (s *Server) Start(ctx context.Context) error {
 		s.startFailed(cancel)
 		return err
 	}
+	// An empty host must mean "all interfaces": this gosip version folds an
+	// empty Host into a loopback-only bind, silently making the documented
+	// ":5060" default unreachable for devices (observed on a live server).
+	if host == "" {
+		host = "0.0.0.0"
+	}
 	// gosip panics when Host is set to a non-IP value (e.g. a 20-digit
-	// GB28181 server ID); an empty host binds all interfaces.
-	if host != "" && net.ParseIP(host) == nil {
+	// GB28181 server ID).
+	if net.ParseIP(host) == nil {
 		s.startFailed(cancel)
 		return fmt.Errorf("gb28181: invalid SIP listen host %q", host)
 	}

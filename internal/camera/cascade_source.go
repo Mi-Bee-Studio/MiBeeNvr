@@ -15,19 +15,18 @@ type cascadeSource struct {
 // NewCascadeSource builds the cascade view of the camera manager.
 func NewCascadeSource(cm *CameraManager) cascade.CameraSource { return cascadeSource{cm: cm} }
 
-// Cameras lists cameras eligible for cascade forwarding: H.264/H.265
-// encodings with a live hub (the PS muxer has no MJPEG story). Encoding is
-// resolved from the config with the live recorder's backfill as fallback —
-// GB28181 cameras store "" until their stream starts, and the muxer sniffs
-// the codec from the first NAL anyway, so an empty encoding only excludes a
-// camera that has never streamed.
+// Cameras lists cameras eligible for cascade forwarding. MJPEG/JPEG cameras
+// are excluded (no PS mux story); everything else is offered — GB28181
+// cameras store encoding "" in config until their stream starts, so the
+// forwarder sniffs the codec from the first NAL when the hint is empty.
 func (s cascadeSource) Cameras() []cascade.CameraInfo {
 	snap := s.cm.loadSnapshot()
 	out := make([]cascade.CameraInfo, 0, len(snap.configs))
 	for _, cfg := range snap.configs {
-		switch cfg.Encoding {
-		case "h264", "h265":
-		default:
+		if cfg.Encoding == "mjpeg" || cfg.Encoding == "jpeg" {
+			continue
+		}
+		if cfg.Protocol == "timelapse" {
 			continue
 		}
 		out = append(out, cascade.CameraInfo{
