@@ -4,6 +4,20 @@
 
 Hardware passthrough is essential for optimal transcoding performance in Docker containers. MiBee NVR supports multiple hardware acceleration paths: VAAPI for Intel/AMD GPUs, NVENC for NVIDIA GPUs, and V4L2 M2M for Raspberry Pi. This guide explains how to configure Docker to expose hardware devices to the container for maximum transcoding efficiency.
 
+> **⚠️ NAS / host-network deployments, read this first**: the compose examples
+> in this guide use generic bridge networking for standalone Docker hosts. NAS
+> deployments (Synology/QNAP/fnOS/Zspace etc.) **must use `network_mode: host`**:
+> ONVIF camera auto-discovery relies on UDP multicast (`239.255.255.250:3702`),
+> which Docker bridge networking blocks — and under host mode `ports:` mappings
+> are ignored (Synology DSM even rejects a compose that declares both host and
+> ports). Copying these examples onto a NAS breaks auto-discovery or fails
+> outright — use the [NAS / host-network template](#nas--host-network-hardware-transcoding)
+> below instead.
+
+> **RK3588 note**: the transcoding backend supports software / V4L2 M2M /
+> VAAPI / NVENC only — **not RKMPP (Rockchip NPU)**. The RK3588 NPU cannot be
+> used; transcoding falls back to software encoding.
+
 ## Raspberry Pi V4L2 M2M
 
 V4L2 Memory-to-Memory (M2M) acceleration provides hardware-accelerated H.264/H.265 encoding on Raspberry Pi devices, significantly improving performance compared to software encoding.
@@ -331,6 +345,62 @@ To override the bundled FFmpeg with a custom build (e.g. a newer version with ex
 # Or at runtime via a mounted volume:
 docker run -v $(pwd)/my-ffmpeg:/data/tools/ffmpeg ...
 ```
+
+## NAS / host-network hardware transcoding
+
+All NAS deployment templates mandate `network_mode: host` (see
+`deploy/compose/docker-compose.host.yml` and the various `deployment-*.md`
+guides). Under host mode **do not declare `ports:`** (ignored, and some NAS
+platforms reject it); resolve port conflicts with the `NVR_LISTEN_PORT` env
+var or `server.listen` (see `deployment-faq.md` Q2). Merge the `devices:` /
+`deploy:` block from the relevant section above into this template:
+
+```yaml
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    network_mode: host          # required on NAS: ONVIF multicast reaches the LAN
+    # ports: do not declare! ignored under host mode; DSM rejects it
+
+    volumes:
+      - /path/to/data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+
+    # ↓↓↓ pick ONE accelerator block from the sections above ↓↓↓
+    # Intel/AMD VAAPI:
+    #   devices:
+    #     - /dev/dri/renderD128:/dev/dri/renderD128
+    #     - /dev/dri/card0:/dev/dri/card0
+    #   add to environment: LIBVA_DRIVER_NAME=i965 (Intel) / radeonsi (AMD)
+    #
+    # NVIDIA NVENC (host needs the NVIDIA Container Toolkit):
+    #   deploy:
+    #     resources:
+    #       reservations:
+    #         devices:
+    #           - driver: nvidia
+    #             count: all
+    #             capabilities: [gpu]
+    #
+    # Raspberry Pi V4L2 M2M:
+    #   devices:
+    #     - /dev/video10:/dev/video10
+    #     - /dev/video11:/dev/video11
+    #     - /dev/video12:/dev/video12
+
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+```
+
+FTP ports likewise need no mapping under host mode; change `ftp.port` / the
+passive port range on conflict.
 
 ## Troubleshooting Checklist
 
