@@ -91,7 +91,7 @@ func TestAPIKeyAuthMiddlewareHotReload(t *testing.T) {
 	// Simulate handleRevokeAPIKey: rebuild the valid set without mbv_old.
 	store.SetKeys(map[string]string{"mbv_keep": "keep-key", "mbv_new": "new-key"})
 	assertStatus("mbv_old", http.StatusUnauthorized) // revoked → next request denied
-	assertStatus("mbv_new", http.StatusOK)            // minted → next request accepted
+	assertStatus("mbv_new", http.StatusOK)           // minted → next request accepted
 }
 
 func TestAPIKeyStoreLookupRecordsLastUsed(t *testing.T) {

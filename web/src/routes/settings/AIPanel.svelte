@@ -643,7 +643,7 @@
               {visionStatus.healthy ? t('settings.mibeevision.consumerOnline') : t('settings.mibeevision.consumerOffline')}
             </span>
           </div>
-          {#if visionStatus.last_seen}
+          {#if visionStatus.last_seen && !visionStatus.last_seen.startsWith('0001-01-01')}
             <span class="text-xs th-text-tertiary">
               {t('settings.mibeevision.lastHeartbeat')}: {formatRelativeTime(visionStatus.last_seen, visionStatusNow)}
             </span>
