@@ -435,6 +435,32 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 11.8. mdns (optional) — DNS-SD service registration (_mibee-nvr._tcp)
+	// for fast LAN discovery; same non-fatal failure policy as the UDP
+	// responder (a resident avahi on 5353 must not block startup).
+	if deps.cfg.Server.Discovery.MDNS.Enabled == nil || *deps.cfg.Server.Discovery.MDNS.Enabled {
+		registrar := discovery.NewMDNSRegistrar(
+			deps.cfg.Server.DeviceID,
+			deps.cfg.Server.DeviceName,
+			discovery.ParseAPIPort(deps.cfg.Server.Listen),
+			deps.cfg.Server.TLSListen != "",
+		)
+		if err := a.Register(&serviceFunc{
+			name: "mdns",
+			startFunc: func(ctx context.Context) error {
+				if err := registrar.Start(ctx); err != nil {
+					slog.Error("discovery: mdns registration disabled", "error", err)
+				}
+				return nil
+			},
+			stopFunc: func() error {
+				return registrar.Stop()
+			},
+		}); err != nil {
+			return fmt.Errorf("register mdns: %w", err)
+		}
+	}
+
 	// 12. ws
 	if err := a.Register(&serviceFunc{
 		name: "ws",

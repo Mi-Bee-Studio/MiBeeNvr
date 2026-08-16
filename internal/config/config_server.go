@@ -36,7 +36,15 @@ type ServerConfig struct {
 
 // DiscoveryConfig groups LAN self-announcement mechanisms.
 type DiscoveryConfig struct {
-	UDP UDPDiscoveryConfig `yaml:"udp"`
+	UDP  UDPDiscoveryConfig  `yaml:"udp"`
+	MDNS MDNSDiscoveryConfig `yaml:"mdns"`
+}
+
+// MDNSDiscoveryConfig is the mDNS/DNS-SD service registration
+// (_mibee-nvr._tcp.local) — the fast discovery path for LAN clients; the UDP
+// responder covers multicast-restricted networks (#333).
+type MDNSDiscoveryConfig struct {
+	Enabled *bool `yaml:"enabled"` // default true
 }
 
 // UDPDiscoveryConfig is the UDP broadcast responder (MIBEE-NVR-DISC/v1, #334):

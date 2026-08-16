@@ -143,8 +143,9 @@ func minimalConfig(t *testing.T) (*config.Config, string) {
 	cfg.Health.Enabled = false
 	// Keep the UDP discovery responder out of the shared tests — it would bind
 	// the well-known port 49090; TestRunFree_DiscoveryService covers it on an
-	// ephemeral port instead.
+	// ephemeral port instead. mDNS likewise binds the multicast 5353 socket.
 	cfg.Server.Discovery.UDP.Enabled = &falseVal
+	cfg.Server.Discovery.MDNS.Enabled = &falseVal
 
 	return cfg, dir
 }
@@ -235,10 +236,11 @@ func TestRunFree_ServiceOrder_GB28181Disabled(t *testing.T) {
 	}
 }
 
-// TestRunFree_ServiceOrder_DiscoveryEnabled asserts the UDP discovery
-// responder registers in the discovery slot (after archive-deleter, before ws)
-// when enabled. Binds an ephemeral port (0) so parallel test runs never
-// contend for the production port 49090.
+// TestRunFree_ServiceOrder_DiscoveryEnabled asserts the discovery services
+// register in their slots (after archive-deleter, before ws) when enabled.
+// UDP binds an ephemeral port (0) so parallel test runs never contend for the
+// production port 49090; mDNS's Start failure (e.g. 5353 occupied) is logged
+// and non-fatal, so the registration assertion holds regardless.
 func TestRunFree_ServiceOrder_DiscoveryEnabled(t *testing.T) {
 	t.Helper()
 	cfg, _ := minimalConfig(t)
@@ -246,6 +248,7 @@ func TestRunFree_ServiceOrder_DiscoveryEnabled(t *testing.T) {
 	trueVal := true
 	cfg.Server.Discovery.UDP.Enabled = &trueVal
 	cfg.Server.Discovery.UDP.Port = 0
+	cfg.Server.Discovery.MDNS.Enabled = &trueVal
 
 	a, err := RunFree(cfg, filepath.Join(cfg.Storage.RootDir, "mibee-nvr.yaml"))
 	if err != nil {
@@ -255,7 +258,7 @@ func TestRunFree_ServiceOrder_DiscoveryEnabled(t *testing.T) {
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
 
-	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "archive-deleter", "discovery", "ws", "hls", "api-handler"}
+	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "archive-deleter", "discovery", "mdns", "ws", "hls", "api-handler"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}
