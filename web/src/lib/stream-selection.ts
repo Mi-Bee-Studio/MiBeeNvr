@@ -33,9 +33,9 @@ export function isAudioCapable(camera: Camera): boolean {
 
 /** Mirrors the backend `cameraProtocolsResponse` (internal/api/handler.go:533). */
 export interface ProtocolDetail {
-  Protocol: string;
-  Available: boolean;
-  Reason: string;
+  protocol: string;
+  available: boolean;
+  reason: string;
 }
 
 export interface ProtocolsResponse {
@@ -73,7 +73,7 @@ export const FALLBACK_ORDER: readonly CameraMode[] = ['webrtc', 'flv', 'hls', 'm
  */
 export function fallbackChain(resp: ProtocolsResponse | null): CameraMode[] {
   if (!resp) return [];
-  const available = new Set(resp.protocols.filter((p) => p.Available).map((p) => p.Protocol.toLowerCase()));
+  const available = new Set(resp.protocols.filter((p) => p.available).map((p) => p.protocol.toLowerCase()));
   const chain: CameraMode[] = [];
   for (const proto of FALLBACK_ORDER) {
     if (available.has(proto)) chain.push(proto);
@@ -156,7 +156,7 @@ export function pickCameraMode(
     return opts.isUnsupported ? 'unsupported' : 'snapshot';
   }
 
-  const available = new Set(resp ? resp.protocols.filter((p) => p.Available).map((p) => p.Protocol.toLowerCase()) : []);
+  const available = new Set(resp ? resp.protocols.filter((p) => p.available).map((p) => p.protocol.toLowerCase()) : []);
   const backendDefault = (resp?.default || '').toLowerCase();
 
   // Choose the "candidate" protocol: override > backend default > legacy.
@@ -297,7 +297,7 @@ export function buildCandidateChain(
     return [];
   }
 
-  const available = new Set(resp ? resp.protocols.filter((p) => p.Available).map((p) => p.Protocol.toLowerCase()) : []);
+  const available = new Set(resp ? resp.protocols.filter((p) => p.available).map((p) => p.protocol.toLowerCase()) : []);
 
   // (3) User override pins the chain to a single mode (if still usable).
   // When the backend response is null (fetch failed, NOT "empty list"), we have

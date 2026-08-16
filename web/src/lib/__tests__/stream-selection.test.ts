@@ -21,11 +21,11 @@ const H264_RESP: ProtocolsResponse = {
   encoding: 'h264',
   default: 'webrtc',
   protocols: [
-    { Protocol: 'webrtc', Available: true, Reason: '' },
-    { Protocol: 'flv', Available: true, Reason: '' },
-    { Protocol: 'll-hls', Available: true, Reason: '' },
-    { Protocol: 'hls', Available: true, Reason: '' },
-    { Protocol: 'wasm', Available: true, Reason: '' },
+    { protocol: 'webrtc', available: true, reason: '' },
+    { protocol: 'flv', available: true, reason: '' },
+    { protocol: 'll-hls', available: true, reason: '' },
+    { protocol: 'hls', available: true, reason: '' },
+    { protocol: 'wasm', available: true, reason: '' },
   ],
 };
 
@@ -34,11 +34,11 @@ const H265_RESP: ProtocolsResponse = {
   encoding: 'h265',
   default: 'hls',
   protocols: [
-    { Protocol: 'hls', Available: true, Reason: '' },
-    { Protocol: 'll-hls', Available: true, Reason: '' },
-    { Protocol: 'wasm', Available: true, Reason: '' },
-    { Protocol: 'webrtc', Available: false, Reason: 'WebRTC does not support H.265' },
-    { Protocol: 'flv', Available: false, Reason: 'FLV cannot decode H.265 in browser' },
+    { protocol: 'hls', available: true, reason: '' },
+    { protocol: 'll-hls', available: true, reason: '' },
+    { protocol: 'wasm', available: true, reason: '' },
+    { protocol: 'webrtc', available: false, reason: 'WebRTC does not support H.265' },
+    { protocol: 'flv', available: false, reason: 'FLV cannot decode H.265 in browser' },
   ],
 };
 
@@ -51,7 +51,7 @@ describe('pickCameraMode', () => {
     const resp: ProtocolsResponse = {
       encoding: 'jpeg',
       default: 'mjpeg',
-      protocols: [{ Protocol: 'mjpeg', Available: true, Reason: '' }],
+      protocols: [{ protocol: 'mjpeg', available: true, reason: '' }],
     };
     expect(pickCameraMode(cam, resp, FULL_CAPS)).toBe('mjpeg');
   });

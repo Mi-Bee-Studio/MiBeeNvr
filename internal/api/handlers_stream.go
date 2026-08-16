@@ -69,10 +69,12 @@ func (r *StreamRegistry) protocolsForCodec(codec model.Format) []string {
 }
 
 // ProtocolDetail describes a protocol's availability for the API response.
+// json tags are snake_case like every other API response field (#332) —
+// the Go field names used to leak through encoding/json's default naming.
 type ProtocolDetail struct {
-	Protocol  string
-	Available bool
-	Reason    string
+	Protocol  string `json:"protocol"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason"`
 }
 
 // ProtocolsDetailForCodec returns detailed protocol availability for the given codec.

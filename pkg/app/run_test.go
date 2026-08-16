@@ -141,6 +141,10 @@ func minimalConfig(t *testing.T) (*config.Config, string) {
 	cfg.Transcoding.Enabled = false
 	cfg.RemoteLog.Enabled = false
 	cfg.Health.Enabled = false
+	// Keep the UDP discovery responder out of the shared tests — it would bind
+	// the well-known port 49090; TestRunFree_DiscoveryService covers it on an
+	// ephemeral port instead.
+	cfg.Server.Discovery.UDP.Enabled = &falseVal
 
 	return cfg, dir
 }
@@ -227,6 +231,41 @@ func TestRunFree_ServiceOrder_GB28181Disabled(t *testing.T) {
 	for _, name := range svcs {
 		if name == "gb28181" {
 			t.Errorf("Services() contains %q, want absent when gb28181.enabled=false", name)
+		}
+	}
+}
+
+// TestRunFree_ServiceOrder_DiscoveryEnabled asserts the UDP discovery
+// responder registers in the discovery slot (after archive-deleter, before ws)
+// when enabled. Binds an ephemeral port (0) so parallel test runs never
+// contend for the production port 49090.
+func TestRunFree_ServiceOrder_DiscoveryEnabled(t *testing.T) {
+	t.Helper()
+	cfg, _ := minimalConfig(t)
+
+	trueVal := true
+	cfg.Server.Discovery.UDP.Enabled = &trueVal
+	cfg.Server.Discovery.UDP.Port = 0
+
+	a, err := RunFree(cfg, filepath.Join(cfg.Storage.RootDir, "mibee-nvr.yaml"))
+	if err != nil {
+		t.Fatalf("RunFree: %v", err)
+	}
+
+	svcs := a.Services()
+	t.Logf("observed Services() = %v", svcs)
+
+	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "archive-deleter", "discovery", "ws", "hls", "api-handler"}
+	if len(svcs) != len(expected) {
+		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
+	}
+	for i, want := range expected {
+		if i >= len(svcs) {
+			t.Errorf("Services()[%d] missing, want %q", i, want)
+			continue
+		}
+		if svcs[i] != want {
+			t.Errorf("Services()[%d] = %q, want %q", i, svcs[i], want)
 		}
 	}
 }
