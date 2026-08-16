@@ -2,19 +2,25 @@ package sip
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/ghettovoice/gosip/sip/parser"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -608,3 +614,170 @@ func TestServer_Register_PortRotationKeepsAddressStable(t *testing.T) {
 		t.Fatalf("device NetAddr = %q, want the newest client addr", netAddr)
 	}
 }
+
+// fakeEnroller stubs CameraEnroller for pseudo-channel lifecycle tests.
+// Mutex-guarded: mergeCatalogChannels calls it from spawned goroutines while
+// assertions read the recorded calls (-race clean).
+type fakeEnroller struct {
+	mu       sync.Mutex
+	enrolled []string // "deviceID/channelID"
+	archived []string // "deviceID/channelID"
+}
+
+func (f *fakeEnroller) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enrolled = append(f.enrolled, deviceID+"/"+channelID)
+	return nil
+}
+
+func (f *fakeEnroller) GB28181CameraIDByChannel(deviceID, channelID string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.enrolled {
+		if e == deviceID+"/"+channelID {
+			return "cam-" + channelID, true
+		}
+	}
+	return "", false
+}
+
+func (f *fakeEnroller) GB28181NALUWriter(string) func([][]byte, int64, bool) { return nil }
+func (f *fakeEnroller) GB28181AudioWriter(string) func(string, []byte, []byte, int64, int) {
+	return nil
+}
+func (f *fakeEnroller) OnGB28181Invite(string) {}
+func (f *fakeEnroller) OnGB28181Bye(string)    {}
+func (f *fakeEnroller) NewGB28181PlaybackSink(string) (gb28181.AUWriter, error) {
+	return nil, errors.New("not implemented in fake")
+}
+
+func (f *fakeEnroller) GB28181PlaybackAudioWriter(string) func(string, []byte, []byte, int64, int) {
+	return nil
+}
+func (f *fakeEnroller) UpdateGB28181DeviceMeta(string, string, string) error { return nil }
+func (f *fakeEnroller) ArchiveGB28181Camera(deviceID, channelID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.archived = append(f.archived, deviceID+"/"+channelID)
+	return nil
+}
+
+func (f *fakeEnroller) archivedContains(entry string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.archived, entry)
+}
+
+func (f *fakeEnroller) enrolledEmpty() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.enrolled) == 0
+}
+
+func (f *fakeEnroller) archivedEmpty() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.archived) == 0
+}
+
+// TestServer_Register_SkipsDeviceSelfWhenCatalogChannelsPersisted (#352):
+// after a restart, a device whose catalog channels were persisted must NOT
+// get its device-self pseudo-channel (and camera) re-created.
+func TestServer_Register_SkipsDeviceSelfWhenCatalogChannelsPersisted(t *testing.T) {
+	cfg := testConfig(t)
+	dbPath := filepath.Join(t.TempDir(), "sip.db")
+	db, err := storage.New(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, db.Init(context.Background()))
+	t.Cleanup(func() { _ = db.Close() })
+
+	dm := gb28181.NewDeviceManager(60 * time.Second)
+	srv := NewServer(cfg, dm, gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), cfg.ServerID), db)
+	require.NoError(t, srv.Start(context.Background()))
+	t.Cleanup(func() { _ = srv.Stop() })
+
+	// A catalog channel persisted for this device from before the "restart".
+	require.NoError(t, db.UpsertGB28181Channel(context.Background(), storage.GB28181Channel{
+		ID: testDeviceID + "1", DeviceID: testDeviceID, Status: "idle", UpdatedAt: time.Now(),
+	}))
+
+	fe := &fakeEnroller{}
+	srv.SetCameraEnroller(fe)
+
+	client := newSIPClient(t, cfg.SIPListen)
+	req := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "")
+	res := client.roundTrip(req)
+	require.EqualValues(t, 401, res.StatusCode())
+	auth := digestAuth(t, getChallenge(t, res), req, cfg.Password)
+	req2 := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "", auth)
+	res2 := client.roundTrip(req2)
+	require.EqualValues(t, 200, res2.StatusCode())
+
+	_, ok := dm.FindChannel(testDeviceID, testDeviceID)
+	require.False(t, ok, "device-self pseudo-channel must not be created when catalog channels are persisted")
+	require.True(t, fe.enrolledEmpty(), "device-self camera must not be enrolled")
+}
+
+// TestRetireDeviceSelfChannel: a catalog with real channels retires the idle
+// device-self pseudo-channel and archives its camera (#352).
+func TestRetireDeviceSelfChannel(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+	fe := &fakeEnroller{}
+	srv.SetCameraEnroller(fe)
+
+	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:60000"})
+	dm.RegisterChannel(testDeviceID, &gb28181.Channel{ID: testDeviceID, DeviceID: testDeviceID})
+
+	srv.mergeCatalogChannels(testDeviceID, []manscdp.Item{
+		{DeviceID: testDeviceID + "1", Name: "Real Channel"},
+	})
+
+	_, ok := dm.FindChannel(testDeviceID, testDeviceID)
+	require.False(t, ok, "idle device-self channel must be retired when real channels exist")
+	require.True(t, fe.archivedContains(testDeviceID+"/"+testDeviceID), "auto-enrolled device-self camera must be archived")
+}
+
+// TestRetireDeviceSelfChannel_KeptWhenStreamingOrListed: the pseudo-channel
+// survives when it is actively playing or when the catalog lists the device
+// ID itself (single-channel devices whose channel equals the device ID).
+func TestRetireDeviceSelfChannel_KeptWhenStreamingOrListed(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+	fe := &fakeEnroller{}
+	srv.SetCameraEnroller(fe)
+
+	// Playing device-self: kept.
+	dm.Register(&gb28181.Device{ID: "dev-a", NetAddr: "127.0.0.1:60001"})
+	chA := &gb28181.Channel{ID: "dev-a", DeviceID: "dev-a"}
+	chA.Status.Store(int32(gb28181.ChannelPlaying))
+	dm.RegisterChannel("dev-a", chA)
+	srv.mergeCatalogChannels("dev-a", []manscdp.Item{{DeviceID: "dev-a-ch1"}})
+	_, ok := dm.FindChannel("dev-a", "dev-a")
+	require.True(t, ok, "playing device-self channel must be kept")
+
+	// Catalog lists the device ID itself: kept.
+	dm.Register(&gb28181.Device{ID: "dev-b", NetAddr: "127.0.0.1:60002"})
+	dm.RegisterChannel("dev-b", &gb28181.Channel{ID: "dev-b", DeviceID: "dev-b"})
+	srv.mergeCatalogChannels("dev-b", []manscdp.Item{{DeviceID: "dev-b"}})
+	_, ok = dm.FindChannel("dev-b", "dev-b")
+	require.True(t, ok, "device-self listed in catalog must be kept")
+	require.True(t, fe.archivedEmpty())
+}
+
+// TestRetireDeviceSelfChannel_NoRealChannels: parental-only catalogs (org
+// trees) must not retire the device-self channel.
+func TestRetireDeviceSelfChannel_NoRealChannels(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+	srv.SetCameraEnroller(&fakeEnroller{})
+
+	dm.Register(&gb28181.Device{ID: "dev-c", NetAddr: "127.0.0.1:60003"})
+	dm.RegisterChannel("dev-c", &gb28181.Channel{ID: "dev-c", DeviceID: "dev-c"})
+	srv.mergeCatalogChannels("dev-c", []manscdp.Item{{DeviceID: "org-1", Parental: 1}})
+	_, ok := dm.FindChannel("dev-c", "dev-c")
+	require.True(t, ok, "parental-only catalog must not retire the device-self channel")
+}
+
+func (f *fakeEnroller) GB28181RecordingWanted(deviceID, channelID string) bool { return false }

@@ -1,5 +1,7 @@
 package config
 
+import "time"
+
 // GB28181ServerConfig configures the GB/T 28181 platform server. When Enabled,
 // compliant devices (Hikvision, Dahua, Uniview, ...) REGISTER over SIP and
 // expose their channels as MiBee cameras; the NVR INVITEs a channel and ingests
@@ -73,6 +75,31 @@ type GB28181ServerConfig struct {
 
 	// SubscribeExpires is the SUBSCRIBE lifetime; renewed at 80%.
 	SubscribeExpires string `yaml:"subscribe_expires"` // default "3600s"
+
+	// AlarmLinkage configures alarm-triggered streaming (#355): on an alarm
+	// notification, INVITE the alarm channel when it is not already streaming,
+	// hold the stream for the configured duration, then BYE — unless the
+	// channel's camera wants recording (then the stream stays).
+	AlarmLinkage *GB28181AlarmLinkageConfig `yaml:"alarm_linkage,omitempty"`
+}
+
+// GB28181AlarmLinkageConfig is the alarm→stream linkage block.
+type GB28181AlarmLinkageConfig struct {
+	Enabled bool `yaml:"enabled"` // default false
+
+	// Duration of each alarm-triggered stream hold. Default "60s".
+	Duration string `yaml:"duration"`
+}
+
+// AlarmLinkageDuration resolves the hold duration with its default.
+func (c *GB28181AlarmLinkageConfig) AlarmLinkageDuration() time.Duration {
+	if c == nil {
+		return 0
+	}
+	if d, err := time.ParseDuration(c.Duration); err == nil && d > 0 {
+		return d
+	}
+	return 60 * time.Second
 }
 
 // CatalogSubscriptionOn resolves the subscribe_catalog toggle: on when the
