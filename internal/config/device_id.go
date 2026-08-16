@@ -38,6 +38,7 @@ func EnsureDeviceIdentity(path string, cfg *Config) error {
 		return nil
 	}
 	if _, err := os.Stat(path); err != nil {
+		//nolint:nilerr // missing config file = caller built cfg out of band; deliberately a no-op
 		return nil
 	}
 	cfg.Server.DeviceID = newDeviceID()
