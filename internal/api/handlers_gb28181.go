@@ -477,10 +477,15 @@ type gb28181DeviceRecord struct {
 
 // parseGB28181Time parses a device-supplied timestamp. GB/T 28181 uses
 // "2006-01-02T15:04:05"; some vendors use a space separator. Local device
-// time is interpreted in the NVR's local timezone (devices lack TZ info).
-func parseGB28181Time(v string) (time.Time, bool) {
+// time is interpreted in the configured GB timezone (devices lack TZ info;
+// defaults to the NVR's local zone).
+func (h *Handler) parseGB28181Time(v string) (time.Time, bool) {
+	loc := h.gb28181Loc
+	if loc == nil {
+		loc = time.Local
+	}
 	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", time.RFC3339} {
-		if t, err := time.ParseInLocation(layout, v, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, v, loc); err == nil {
 			return t, true
 		}
 	}
@@ -549,8 +554,8 @@ func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 
 	records := make([]gb28181DeviceRecord, 0, len(items))
 	for _, it := range items {
-		st, okSt := parseGB28181Time(it.StartTime)
-		et, okEt := parseGB28181Time(it.EndTime)
+		st, okSt := h.parseGB28181Time(it.StartTime)
+		et, okEt := h.parseGB28181Time(it.EndTime)
 		if !okSt || !okEt {
 			continue // malformed device entries are dropped, not fatal
 		}

@@ -42,28 +42,66 @@ type mediaSession struct {
 	closed atomic.Bool
 }
 
+// inviteSDP is the subset of an INVITE's SDP the cascade cares about.
+type inviteSDP struct {
+	host  string
+	port  int
+	ssrc  uint32
+	name  string // s= session name ("Play"|"Playback")
+	t0    int64  // t= start, Unix seconds (NTP-era values normalized)
+	t1    int64  // t= end, Unix seconds
+	hasT  bool
+	rawT0 string // original t= tokens, echoed by the playback answer
+	rawT1 string
+}
+
 // sdpFromInvite extracts the upper platform's receive address (c= + m=video
-// port) and requested SSRC (y= line).
-func sdpFromInvite(body []byte) (host string, port int, ssrc uint32, err error) {
+// port), requested SSRC (y= line), session name (s=), and time range (t=).
+// The t= values follow GB/T 28181 Annex C: NTP-era seconds — but Unix-era
+// seconds are accepted too (both conventions exist in the field).
+func sdpFromInvite(body []byte) (inviteSDP, error) {
+	var sd inviteSDP
 	for _, line := range strings.Split(string(body), "\r\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "c=IN IP4 "):
-			host = strings.TrimSpace(strings.TrimPrefix(line, "c=IN IP4"))
+			sd.host = strings.TrimSpace(strings.TrimPrefix(line, "c=IN IP4"))
 		case strings.HasPrefix(line, "m=video "):
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				port, _ = strconv.Atoi(fields[1])
+				sd.port, _ = strconv.Atoi(fields[1])
 			}
 		case strings.HasPrefix(line, "y="):
 			v, _ := strconv.ParseUint(strings.TrimPrefix(line, "y="), 10, 32)
-			ssrc = uint32(v)
+			sd.ssrc = uint32(v)
+		case strings.HasPrefix(line, "s="):
+			sd.name = strings.TrimSpace(strings.TrimPrefix(line, "s="))
+		case strings.HasPrefix(line, "t="):
+			fields := strings.Fields(strings.TrimPrefix(line, "t="))
+			if len(fields) >= 2 {
+				sd.rawT0, sd.rawT1 = fields[0], fields[1]
+				if v0, err0 := strconv.ParseInt(fields[0], 10, 64); err0 == nil && v0 > 0 {
+					if v1, err1 := strconv.ParseInt(fields[1], 10, 64); err1 == nil && v1 > 0 {
+						sd.t0, sd.t1 = sdpToUnix(v0), sdpToUnix(v1)
+						sd.hasT = true
+					}
+				}
+			}
 		}
 	}
-	if host == "" || port <= 0 {
-		return "", 0, 0, fmt.Errorf("invite SDP lacks c=/m=video address")
+	if sd.host == "" || sd.port <= 0 {
+		return sd, fmt.Errorf("invite SDP lacks c=/m=video address")
 	}
-	return host, port, ssrc, nil
+	return sd, nil
+}
+
+// sdpToUnix normalizes an SDP t= value to Unix seconds. NTP-era seconds
+// (post-2037 in Unix terms, i.e. ≥3e9) are shifted by the 1900→1970 delta.
+func sdpToUnix(v int64) int64 {
+	if v >= 3_000_000_000 {
+		return v - ntpEpochDelta
+	}
+	return v
 }
 
 // onInvite handles the upper platform's INVITE for one aggregated channel:
@@ -79,7 +117,21 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 	}
 	_, channelID := reqIDs(req)
 
-	// Idempotency: a re-INVITE for an active forward keeps it.
+	sd, err := sdpFromInvite([]byte(req.Body()))
+	if err != nil {
+		slog.Warn("gb28181-cascade: INVITE SDP parse failed", "error", err)
+		_, _ = s.srv.RespondOnRequest(req, 400, "Bad SDP", "", nil)
+		return
+	}
+
+	// Playback dialogs take the recordings-backed path.
+	if strings.EqualFold(sd.name, "Playback") {
+		s.onPlaybackInvite(req, callID, channelID, sd)
+		return
+	}
+
+	// Idempotency: a re-INVITE for an active forward keeps it. A re-INVITE
+	// for a live playback restarts it when the requested window moved.
 	s.mu.Lock()
 	if ms, ok := s.sessions[callID]; ok {
 		sdp := ms.sdpBody
@@ -87,7 +139,20 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		_, _ = s.srv.RespondOnRequest(req, 200, "OK", sdp, nil)
 		return
 	}
-	s.mu.Unlock()
+	if ps, ok := s.playbacks[callID]; ok {
+		sameWindow := sd.hasT && abs64(sd.t0-ps.start.Unix()) < 2 && abs64(sd.t1-ps.end.Unix()) < 2
+		if sameWindow {
+			sdp := ps.sdpBody
+			s.mu.Unlock()
+			_, _ = s.srv.RespondOnRequest(req, 200, "OK", sdp, nil)
+			return
+		}
+		delete(s.playbacks, callID)
+		s.mu.Unlock()
+		ps.finish("re-INVITE with new window", true)
+	} else {
+		s.mu.Unlock()
+	}
 
 	cameraID, ok := s.cameraOfChannel(channelID)
 	if !ok {
@@ -101,13 +166,7 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		return
 	}
 
-	host, port, ssrc, err := sdpFromInvite([]byte(req.Body()))
-	if err != nil {
-		slog.Warn("gb28181-cascade: INVITE SDP parse failed", "error", err)
-		_, _ = s.srv.RespondOnRequest(req, 400, "Bad SDP", "", nil)
-		return
-	}
-	dst := &net.UDPAddr{IP: net.ParseIP(host), Port: port}
+	dst := &net.UDPAddr{IP: net.ParseIP(sd.host), Port: sd.port}
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		_, _ = s.srv.RespondOnRequest(req, 500, "Internal Error", "", nil)
@@ -116,18 +175,18 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 
 	ms := &mediaSession{
 		svc: s, callID: callID, channel: channelID, camera: cameraID,
-		conn: conn, dst: dst, ssrc: ssrc,
+		conn: conn, dst: dst, ssrc: sd.ssrc,
 		mux: psmux.New(),
 	}
 	if cam, ok := s.cameraInfo(cameraID); ok && cam.Encoding != "" {
 		ms.codecHint = cam.Encoding
 		ms.mux.SetVideoCodec(cam.Encoding)
 	}
-	ms.rtp = psmux.NewRTPPacketizer(conn, dst, ssrc, uint16(time.Now().UnixNano()&0xFFFF))
+	ms.rtp = psmux.NewRTPPacketizer(conn, dst, sd.ssrc, uint16(time.Now().UnixNano()&0xFFFF))
 	ms.sdpBody = fmt.Sprintf(
 		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=Play\r\nc=IN IP4 %s\r\nt=0 0\r\n"+
 			"m=video %d RTP/AVP 96\r\na=sendonly\r\na=rtpmap:96 PS/90000\r\ny=%d\r\n",
-		ms.localHost(), ms.localHost(), ms.localPort(), ssrc)
+		ms.localHost(), ms.localHost(), ms.localPort(), sd.ssrc)
 
 	s.mu.Lock()
 	s.sessions[callID] = ms
@@ -136,7 +195,14 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 	_, _ = s.srv.RespondOnRequest(req, 200, "OK", ms.sdpBody, nil)
 	go ms.run(hub)
 	slog.Info("gb28181-cascade: INVITE accepted — forwarding",
-		"channel", channelID, "camera", cameraID, "to", dst.String(), "ssrc", ssrc)
+		"channel", channelID, "camera", cameraID, "to", dst.String(), "ssrc", sd.ssrc)
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func reqIDs(req sip.Request) (deviceID, channelID string) {
@@ -147,6 +213,14 @@ func reqIDs(req sip.Request) (deviceID, channelID string) {
 		deviceID = from.Address.User().String()
 	}
 	return
+}
+
+// bareCallID strips a serialized header prefix. req.CallID().String() returns
+// the FULL header ("Call-ID: <value>") — usable as a map key but NOT as the
+// value when re-building a request (the doubled prefix makes gosip's parser
+// on the peer reject the whole message).
+func bareCallID(callID string) string {
+	return strings.TrimSpace(strings.TrimPrefix(callID, "Call-ID:"))
 }
 
 func (ms *mediaSession) localHost() string {
@@ -191,7 +265,8 @@ func (ms *mediaSession) run(hub *model.StreamHub) {
 	ms.subID = subID
 }
 
-// onBye tears a forward down when the upper platform sends BYE.
+// onBye tears a forward or playback dialog down when the upper platform
+// sends BYE.
 func (s *Service) onBye(req sip.Request, _ sip.ServerTransaction) {
 	callID := ""
 	if h, ok := req.CallID(); ok {
@@ -202,10 +277,15 @@ func (s *Service) onBye(req sip.Request, _ sip.ServerTransaction) {
 	s.mu.Lock()
 	ms := s.sessions[callID]
 	delete(s.sessions, callID)
+	ps := s.playbacks[callID]
+	delete(s.playbacks, callID)
 	s.mu.Unlock()
 	if ms != nil {
 		ms.close()
 		slog.Info("gb28181-cascade: BYE — forward stopped", "channel", ms.channel)
+	}
+	if ps != nil {
+		ps.finish("BYE from upper platform", false) // already BYEd — no reply BYE
 	}
 }
 
@@ -240,7 +320,8 @@ func (ms *mediaSession) stop() {
 	ms.close()
 }
 
-// sendBye delivers an in-dialog BYE for an errored forward. Best-effort.
+// sendBye delivers an in-dialog BYE for an ended forward or playback
+// dialog. Best-effort.
 func (s *Service) sendBye(callID, channelID string) {
 	if s.srv == nil {
 		return
@@ -257,12 +338,26 @@ func (s *Service) sendBye(callID, channelID string) {
 	rb.SetFrom(&sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: s.cfg.LocalDeviceID}, FHost: host, FPort: &p}})
 	rb.SetTo(&sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: dst.IP.String()}})
 	rb.SetRecipient(&sip.SipUri{FUser: sip.String{Str: channelID}, FHost: dst.IP.String(), FPort: &dstPort})
-	cid := sip.CallID(callID)
+	cid := sip.CallID(bareCallID(callID))
 	rb.SetCallID(&cid)
 	rb.SetHost(host)
 	rb.SetSeqNo(2)
-	if req, err := rb.Build(); err == nil {
-		_, _ = s.srv.Request(req)
+	// A request without Via is unroutable — the upper platform's transaction
+	// layer drops it (observed: end-of-playback BYE never matched the dialog).
+	rb.AddVia(&sip.ViaHop{
+		Host: host,
+		Port: &p,
+		Params: sip.NewParams().
+			Add("branch", sip.String{Str: sip.GenerateBranch()}).
+			Add("rport", sip.String{}),
+	})
+	req, err := rb.Build()
+	if err != nil {
+		slog.Warn("gb28181-cascade: BYE build failed", "channel", channelID, "error", err)
+		return
+	}
+	if _, err := s.srv.Request(req); err != nil {
+		slog.Warn("gb28181-cascade: BYE send failed", "channel", channelID, "error", err)
 	}
 }
 

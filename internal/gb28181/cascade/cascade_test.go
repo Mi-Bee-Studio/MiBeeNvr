@@ -87,15 +87,38 @@ func TestCameraOfChannel(t *testing.T) {
 }
 
 func TestSDPFromInvite(t *testing.T) {
-	host, port, ssrc, err := sdpFromInvite([]byte(
+	sd, err := sdpFromInvite([]byte(
 		"v=0\r\no=- 0 0 IN IP4 10.0.0.1\r\ns=Play\r\nc=IN IP4 10.0.0.1\r\nt=0 0\r\n" +
 			"m=video 30010 RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 PS/90000\r\ny=0200000031\r\n"))
 	require.NoError(t, err)
-	require.Equal(t, "10.0.0.1", host)
-	require.Equal(t, 30010, port)
-	require.EqualValues(t, 200000031, ssrc, "y= is decimal per GB28181 Annex C")
+	require.Equal(t, "10.0.0.1", sd.host)
+	require.Equal(t, 30010, sd.port)
+	require.Equal(t, "Play", sd.name)
+	require.EqualValues(t, 200000031, sd.ssrc, "y= is decimal per GB28181 Annex C")
+	require.False(t, sd.hasT, "t=0 0 is not a playback range")
 
-	_, _, _, err = sdpFromInvite([]byte("v=0\r\nm=audio 8 RTP/AVP 8\r\n"))
+	// Playback form: NTP-era t= seconds normalize to Unix.
+	sd, err = sdpFromInvite([]byte(
+		"v=0\r\no=- 0 0 IN IP4 10.0.0.2\r\ns=Playback\r\nc=IN IP4 10.0.0.2\r\nt=3970000000 3970000120\r\n" +
+			"m=video 30012 RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 PS/90000\r\ny=1000000042\r\n"))
+	require.NoError(t, err)
+	require.Equal(t, "Playback", sd.name)
+	require.True(t, sd.hasT)
+	require.EqualValues(t, 3970000000-2208988800, sd.t0)
+	require.EqualValues(t, 3970000120-2208988800, sd.t1)
+	require.Equal(t, "3970000000", sd.rawT0)
+	require.EqualValues(t, 1000000042, sd.ssrc)
+
+	// Unix-era t= values pass through unchanged.
+	sd, err = sdpFromInvite([]byte(
+		"v=0\r\no=- 0 0 IN IP4 10.0.0.3\r\ns=Playback\r\nc=IN IP4 10.0.0.3\r\nt=1760000000 1760000060\r\n" +
+			"m=video 30014 RTP/AVP 96\r\na=recvonly\r\ny=9\r\n"))
+	require.NoError(t, err)
+	require.True(t, sd.hasT)
+	require.EqualValues(t, 1760000000, sd.t0)
+	require.EqualValues(t, 1760000060, sd.t1)
+
+	_, err = sdpFromInvite([]byte("v=0\r\nm=audio 8 RTP/AVP 8\r\n"))
 	require.Error(t, err, "no c=/m=video must fail")
 }
 
