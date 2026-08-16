@@ -129,10 +129,10 @@ func TestSplitAUsByFrame(t *testing.T) {
 	// first RBSP byte top bit set (0x88). Non-first slices use 0x08 (top bit 0).
 	sps := []byte{0x67, 0x42, 0x80}
 	pps := []byte{0x68, 0xCE, 0x3C}
-	idr := []byte{0x65, 0x88, 0x01}      // type 5, first_mb=0
-	p1a := []byte{0x41, 0x88, 0x02}      // type 1, first_mb=0 → new frame
-	p1b := []byte{0x41, 0x08, 0x03}      // type 1, first_mb>0 → continuation slice
-	p2 := []byte{0x41, 0x88, 0x04}       // type 1, first_mb=0 → next frame
+	idr := []byte{0x65, 0x88, 0x01} // type 5, first_mb=0
+	p1a := []byte{0x41, 0x88, 0x02} // type 1, first_mb=0 → new frame
+	p1b := []byte{0x41, 0x08, 0x03} // type 1, first_mb>0 → continuation slice
+	p2 := []byte{0x41, 0x88, 0x04}  // type 1, first_mb=0 → next frame
 	sei := []byte{0x06, 0x01, 0x02}
 
 	// Single frame: SPS+PPS+IDR stays together.
@@ -153,9 +153,9 @@ func TestSplitAUsByFrame(t *testing.T) {
 	require.Equal(t, [][]byte{sei, p2}, got[1])
 
 	// H.265: first bit after the 2-byte NAL header = first_slice_segment flag.
-	h265slice1 := []byte{0x02, 0x01, 0x80, 0x00} // type 1 (TRAIL_R), new pic
+	h265slice1 := []byte{0x02, 0x01, 0x80, 0x00}  // type 1 (TRAIL_R), new pic
 	h265slice1b := []byte{0x02, 0x01, 0x00, 0x00} // continuation segment
-	h265slice2 := []byte{0x02, 0x01, 0x80, 0x01} // new pic
+	h265slice2 := []byte{0x02, 0x01, 0x80, 0x01}  // new pic
 	got = splitAUsByFrame([][]byte{h265slice1, h265slice1b, h265slice2}, true)
 	require.Len(t, got, 2)
 	require.Equal(t, [][]byte{h265slice1, h265slice1b}, got[0])

@@ -158,21 +158,19 @@ func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
 // It supports H.264 video only (no audio), with configurable max peers
 // per camera and idle eviction.
 type Manager struct {
-	mu           sync.RWMutex
-	peers        map[string]*peerEntry       // sessionID -> entry
-	camPeers     map[string][]string         // camID -> []sessionID
-	hubSubs      map[string]*hubSubscription // camID -> subscription info
-	// streamProfile caches each camera's H.264 SDP fmtp variant (see
-	// fmtpForProfile) so per-session tracks offer the matching profile.
-	streamProfile map[string]string // cameraID → fmtp
-	stopped      bool
-	api          *webrtc.API
-	maxPeers     int
-	idleTimeout  time.Duration
-	frameBufSize int
-	iceServers   []webrtc.ICEServer // STUN/TURN servers for cross-network ICE; nil = LAN-only
-	drainWg      sync.WaitGroup     // tracks RTCP drain goroutines for clean shutdown
-	mets         *metrics.Metrics
+	mu            sync.RWMutex
+	peers         map[string]*peerEntry       // sessionID -> entry
+	camPeers      map[string][]string         // camID -> []sessionID
+	hubSubs       map[string]*hubSubscription // camID -> subscription info
+	streamProfile map[string]string           // cameraID → H.264 fmtp variant (fmtpForProfile)
+	stopped       bool
+	api           *webrtc.API
+	maxPeers      int
+	idleTimeout   time.Duration
+	frameBufSize  int
+	iceServers    []webrtc.ICEServer // STUN/TURN servers for cross-network ICE; nil = LAN-only
+	drainWg       sync.WaitGroup     // tracks RTCP drain goroutines for clean shutdown
+	mets          *metrics.Metrics
 }
 
 // hubSubscription tracks a StreamHub subscription for a camera.
@@ -268,14 +266,14 @@ func NewManager(opts ...ManagerOption) *Manager {
 	)
 
 	m := &Manager{
-		peers:        make(map[string]*peerEntry),
-		camPeers:     make(map[string][]string),
-		hubSubs:      make(map[string]*hubSubscription),
+		peers:         make(map[string]*peerEntry),
+		camPeers:      make(map[string][]string),
+		hubSubs:       make(map[string]*hubSubscription),
 		streamProfile: make(map[string]string),
-		api:          api,
-		maxPeers:     defaultMaxPeers,
-		idleTimeout:  defaultIdleTimeout,
-		frameBufSize: defaultFrameBufSize,
+		api:           api,
+		maxPeers:      defaultMaxPeers,
+		idleTimeout:   defaultIdleTimeout,
+		frameBufSize:  defaultFrameBufSize,
 	}
 
 	for _, opt := range opts {
