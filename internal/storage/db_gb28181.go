@@ -34,6 +34,68 @@ type GB28181Channel struct {
 	UpdatedAt    time.Time
 }
 
+// GB28181Fingerprint is the ONVIF serial probed from a GB28181 device's SIP
+// source address — the cross-protocol identity link for dedup (dual-protocol
+// cameras carry the same serial on every network interface, so the fingerprint
+// matches regardless of which interface IP each protocol used).
+type GB28181Fingerprint struct {
+	DeviceID string
+	Serial   string
+	SourceIP string
+	ProbedAt time.Time
+}
+
+// UpsertGB28181Fingerprint caches a successfully probed device serial.
+func (d *DB) UpsertGB28181Fingerprint(ctx context.Context, fp GB28181Fingerprint) error {
+	_, err := d.db.ExecContext(ctx, `INSERT INTO gb28181_fingerprints
+		(device_id, serial, source_ip, probed_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT(device_id) DO UPDATE SET
+			serial = excluded.serial,
+			source_ip = excluded.source_ip,
+			probed_at = excluded.probed_at`,
+		fp.DeviceID, fp.Serial, fp.SourceIP, timeToDB(fp.ProbedAt))
+	return err
+}
+
+// GetGB28181Fingerprint returns the cached serial for a device (nil when none).
+func (d *DB) GetGB28181Fingerprint(ctx context.Context, deviceID string) (*GB28181Fingerprint, error) {
+	row := d.db.QueryRowContext(ctx,
+		`SELECT device_id, serial, source_ip, probed_at FROM gb28181_fingerprints WHERE device_id = ?`, deviceID)
+	var fp GB28181Fingerprint
+	var probed sql.NullString
+	err := row.Scan(&fp.DeviceID, &fp.Serial, &fp.SourceIP, &probed)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	fp.ProbedAt = scanTime(probed)
+	return &fp, nil
+}
+
+// ListGB28181Fingerprints returns all cached device serials (serial → device
+// correlation for the camera-create dedup path).
+func (d *DB) ListGB28181Fingerprints(ctx context.Context) ([]GB28181Fingerprint, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT device_id, serial, source_ip, probed_at FROM gb28181_fingerprints`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []GB28181Fingerprint
+	for rows.Next() {
+		var fp GB28181Fingerprint
+		var probed sql.NullString
+		if err := rows.Scan(&fp.DeviceID, &fp.Serial, &fp.SourceIP, &probed); err != nil {
+			return nil, err
+		}
+		fp.ProbedAt = scanTime(probed)
+		out = append(out, fp)
+	}
+	return out, rows.Err()
+}
+
 // UpsertGB28181Device inserts a device row, or updates the existing one
 // while PRESERVING non-empty metadata fields. Callers upsert from multiple
 // paths with partial payloads (REGISTER passes status only, keepalive passes
@@ -164,4 +226,11 @@ func (d *DB) GetGB28181Device(ctx context.Context, id string) (*GB28181Device, e
 	dev.LastKeepalive = scanTime(lastKeepalive)
 	dev.RegisteredAt = scanTime(registeredAt)
 	return &dev, nil
+}
+
+// DeleteGB28181Channel removes one channel row (device-self pseudo-channel
+// cleanup, #352).
+func (d *DB) DeleteGB28181Channel(ctx context.Context, channelID string) error {
+	_, err := d.db.ExecContext(ctx, `DELETE FROM gb28181_channels WHERE id = ?`, channelID)
+	return err
 }

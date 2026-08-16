@@ -157,3 +157,32 @@ func TestDB_GB28181_DeleteDeviceCascades(t *testing.T) {
 	// Deleting an unknown device is a silent no-op.
 	require.NoError(t, db.DeleteGB28181Device(ctx, "never-registered"))
 }
+
+func TestGB28181FingerprintRoundtrip(t *testing.T) {
+	db := newGB28181DB(t)
+	ctx := context.Background()
+
+	fp, err := db.GetGB28181Fingerprint(ctx, "34020000001310000001")
+	require.NoError(t, err)
+	require.Nil(t, fp, "no fingerprint yet")
+
+	now := time.Now()
+	require.NoError(t, db.UpsertGB28181Fingerprint(ctx, GB28181Fingerprint{
+		DeviceID: "34020000001310000001", Serial: "NC00000001", SourceIP: "192.168.63.152", ProbedAt: now,
+	}))
+
+	fp, err = db.GetGB28181Fingerprint(ctx, "34020000001310000001")
+	require.NoError(t, err)
+	require.NotNil(t, fp)
+	require.Equal(t, "NC00000001", fp.Serial)
+	require.Equal(t, "192.168.63.152", fp.SourceIP)
+
+	// Upsert updates, list sees one row.
+	require.NoError(t, db.UpsertGB28181Fingerprint(ctx, GB28181Fingerprint{
+		DeviceID: "34020000001310000001", Serial: "NC00000002", SourceIP: "192.168.63.40", ProbedAt: now,
+	}))
+	fps, err := db.ListGB28181Fingerprints(ctx)
+	require.NoError(t, err)
+	require.Len(t, fps, 1)
+	require.Equal(t, "NC00000002", fps[0].Serial)
+}

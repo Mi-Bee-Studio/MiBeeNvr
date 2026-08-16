@@ -249,3 +249,14 @@ func (m *DeviceManager) RegisterChannel(devID string, ch *Channel) {
 	ch.Device = dev
 	dev.channels.Store(ch.ID, ch)
 }
+
+// UnregisterChannel removes a channel from its device's registry. Used to
+// drop the device-self pseudo-channel once a catalog proves the device's real
+// channels (#352).
+func (m *DeviceManager) UnregisterChannel(deviceID, channelID string) {
+	d, ok := m.devices.Load(deviceID)
+	if !ok {
+		return
+	}
+	d.(*Device).channels.Delete(channelID)
+}

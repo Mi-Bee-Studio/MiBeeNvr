@@ -61,7 +61,10 @@ const (
 type CameraEnroller interface {
 	// EnsureGB28181Camera creates a camera bound to the device/channel pair
 	// (idempotent). name is the human-readable channel name (may be empty).
-	EnsureGB28181Camera(deviceID, channelID, name string) error
+	// sourceIP is the device's SIP source host ("" unknown) — auto-enroll is
+	// skipped when another camera already streams from that IP (dual-protocol
+	// dedup; manual creation bypasses it).
+	EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error
 	// GB28181CameraIDByChannel resolves the MiBee camera ID bound to a
 	// device/channel pair, independent of the camera-ID naming convention.
 	GB28181CameraIDByChannel(deviceID, channelID string) (string, bool)
@@ -88,6 +91,14 @@ type CameraEnroller interface {
 	// UpdateGB28181DeviceMeta backfills Brand/Model on the cameras bound to
 	// a device from its DeviceInfo response (empty fields only).
 	UpdateGB28181DeviceMeta(deviceID, manufacturer, model string) error
+	// ArchiveGB28181Camera soft-removes the camera auto-enrolled for a
+	// channel (device-self pseudo-channel superseded by a real catalog,
+	// #352). No-op when no camera is bound to the channel.
+	ArchiveGB28181Camera(deviceID, channelID string) error
+	// GB28181RecordingWanted reports whether the camera bound to a channel
+	// wants recording (alarm linkage leaves those sessions to the record
+	// loop, #355).
+	GB28181RecordingWanted(deviceID, channelID string) bool
 }
 
 // inviteDialog remembers the INVITE request and its final response for an
@@ -137,9 +148,11 @@ type Server struct {
 	eventBus      *event.EventBus
 
 	// Talk sessions (#341): channelID -> active voice intercom.
-	talkMu  sync.Mutex
-	talks   map[string]*talkSession
-	talkSeq int
+	talkMu sync.Mutex
+	talks  map[string]*talkSession
+	// alarmLinkage drives alarm-triggered streaming (#355).
+	alarmLinkage *alarmLinkage
+	talkSeq      int
 
 	perDeviceMu map[string]*sync.Mutex // serialize SIP handling per device
 }
@@ -164,6 +177,19 @@ func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager,
 		talks:         make(map[string]*talkSession),
 		perDeviceMu:   make(map[string]*sync.Mutex),
 	}
+	s.alarmLinkage = newAlarmLinkage(
+		s.InviteChannel, s.ByeChannel,
+		func(channelID string) bool {
+			rcv := s.sessionMgr.GetReceiver(channelID)
+			return rcv != nil && rcv.Running()
+		},
+		func(deviceID, channelID string) bool {
+			if enrol := s.enroller(); enrol != nil {
+				return enrol.GB28181RecordingWanted(deviceID, channelID)
+			}
+			return false
+		},
+	)
 	// Locally-stopped sessions transmit a SIP BYE to the device before the
 	// RTP port is recycled, so stale streams never poison recycled ports.
 	sessionMgr.SetByeSender(s.sendByeForChannel)
@@ -319,6 +345,8 @@ func (s *Server) Stop() error {
 	srv := s.gosipSrv
 	s.gosipSrv = nil
 	s.mu.Unlock()
+
+	s.alarmLinkage.Stop()
 
 	if srv != nil {
 		srv.Shutdown()
@@ -1027,14 +1055,23 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		// Auto-register the device itself as a channel — but ONLY on first
 		// registration, not on periodic re-REGISTERs. Re-registering would
 		// overwrite the channel's Status (resetting inviting/playing to idle).
+		//
+		// The device-self pseudo-channel is a pre-catalog fallback for
+		// single-channel devices without Catalog support. When the DB already
+		// holds OTHER channels for this device (persisted from an earlier
+		// catalog), the pseudo-channel would never stream and its camera would
+		// respawn on every NVR restart — skip it entirely (#352).
 		_, channelExists := s.deviceMgr.FindChannel(deviceID, deviceID)
-		if !channelExists {
+		selfSuperseded := !channelExists && s.deviceHasCatalogChannels(deviceID)
+		if !channelExists && !selfSuperseded {
 			s.deviceMgr.RegisterChannel(deviceID, &gb28181.Channel{
 				ID:       deviceID,
 				DeviceID: deviceID,
 				Name:     "",
 			})
 			slog.Info("gb28181: device auto-registered as channel", "device", deviceID)
+		} else if selfSuperseded {
+			slog.Info("gb28181: device-self pseudo-channel skipped — catalog channels known", "device", deviceID)
 		}
 		if s.db != nil {
 			now := time.Now()
@@ -1046,7 +1083,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 			}); err != nil {
 				slog.Warn("gb28181: failed to persist device to DB", "device", deviceID, "error", err)
 			}
-			if !channelExists {
+			if !channelExists && !selfSuperseded {
 				if err := s.db.UpsertGB28181Channel(context.Background(), storage.GB28181Channel{
 					ID:        deviceID,
 					DeviceID:  deviceID,
@@ -1061,10 +1098,11 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		// Auto-create a camera in the main Cameras list on first registration,
 		// so GB28181 cameras appear alongside ONVIF/RTSP cameras without manual
 		// setup. Runs in a goroutine to avoid blocking the SIP response.
-		if !channelExists {
+		if !channelExists && !selfSuperseded {
 			if enrol := s.enroller(); enrol != nil {
+				srcHost := hostOfAddr(req.Source())
 				go func() {
-					if err := enrol.EnsureGB28181Camera(deviceID, deviceID, ""); err != nil {
+					if err := enrol.EnsureGB28181Camera(deviceID, deviceID, "", srcHost); err != nil {
 						slog.Warn("gb28181: auto-enroll camera failed", "device", deviceID, "error", err)
 					}
 				}()
@@ -1282,6 +1320,14 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 // catalog-change NOTIFY: registers channels, persists them, enrolls cameras
 // for new ones, and auto-INVITEs channels that have a camera but no session.
 func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
+	// Source host for cross-protocol auto-enroll dedup (dual-protocol cameras
+	// that already stream via ONVIF/RTSP from the same IP).
+	srcHost := ""
+	if d, ok := s.deviceMgr.Device(deviceID); ok {
+		d.Mu.RLock()
+		srcHost = hostOfAddr(d.NetAddr)
+		d.Mu.RUnlock()
+	}
 	for _, item := range items {
 		// Parental=1 entries are organization/group nodes, not video
 		// channels — registering them as INVITEable channels breaks
@@ -1331,13 +1377,18 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 				name := item.Name
 				devID, chID := deviceID, item.DeviceID
 				go func() {
-					if err := enrol.EnsureGB28181Camera(devID, chID, name); err != nil {
+					if err := enrol.EnsureGB28181Camera(devID, chID, name, srcHost); err != nil {
 						slog.Warn("gb28181: auto-enroll channel camera failed", "device", devID, "channel", chID, "error", err)
 					}
 				}()
 			}
 		}
 	}
+	// A catalog with real (non-parental) channels supersedes the device-self
+	// pseudo-channel created speculatively at first REGISTER — UNLESS the
+	// catalog lists the device ID itself (single-channel devices whose channel
+	// equals the device ID) or the pseudo-channel is actively streaming (#352).
+	s.retireDeviceSelfChannel(deviceID, items)
 	// Channels may have been discovered by this catalog (or a prior one):
 	// INVITE every channel that now has a bound camera and no active
 	// session. Also covers NVR restarts — cameras persist, sessions do
@@ -1382,6 +1433,50 @@ func channelStatusString(status int32) string {
 	default:
 		return "idle"
 	}
+}
+
+// retireDeviceSelfChannel removes the device-self pseudo-channel once a
+// catalog proves the device's real channels (#352). Guards:
+//   - the catalog must contain at least one real (non-parental) channel
+//   - the device ID itself must NOT be among the catalog items (single-channel
+//     devices whose channel equals the device ID keep it)
+//   - the pseudo-channel must never have streamed (idle) — a playing
+//     device-self session means some firmware actually streams on it
+//
+// Removal covers the in-memory registry, the DB row, and the auto-enrolled
+// camera (archived, preserving its recordings).
+func (s *Server) retireDeviceSelfChannel(deviceID string, items []manscdp.Item) {
+	realCount := 0
+	for _, item := range items {
+		if item.Parental != 1 {
+			realCount++
+			if item.DeviceID == deviceID {
+				return // device-self IS a catalog channel — keep it
+			}
+		}
+	}
+	if realCount == 0 {
+		return
+	}
+	ch, ok := s.deviceMgr.FindChannel(deviceID, deviceID)
+	if !ok {
+		return
+	}
+	if ch.Status.Load() != int32(gb28181.ChannelIdle) {
+		return // streaming (or mid-invite): leave it alone
+	}
+	s.deviceMgr.UnregisterChannel(deviceID, deviceID)
+	if s.db != nil {
+		if err := s.db.DeleteGB28181Channel(context.Background(), deviceID); err != nil {
+			slog.Warn("gb28181: failed to delete device-self channel row", "device", deviceID, "error", err)
+		}
+	}
+	if enrol := s.enroller(); enrol != nil {
+		if err := enrol.ArchiveGB28181Camera(deviceID, deviceID); err != nil {
+			slog.Warn("gb28181: failed to archive device-self camera", "device", deviceID, "error", err)
+		}
+	}
+	slog.Info("gb28181: device-self pseudo-channel retired — catalog provides real channels", "device", deviceID)
 }
 
 // handleOptions answers OPTIONS probes (GB/T 28181-2007/2011-era devices and
@@ -1527,6 +1622,27 @@ func hostOfAddr(addr string) string {
 		return h
 	}
 	return addr
+}
+
+// deviceHasCatalogChannels reports whether the DB holds any channel for the
+// device other than the device-self pseudo-channel — i.e., a catalog was
+// received at some point and persisted its real channels. Used to suppress
+// the device-self fallback after NVR restarts (#352). DB-less deployments
+// (tests) report false, preserving the legacy behavior.
+func (s *Server) deviceHasCatalogChannels(deviceID string) bool {
+	if s.db == nil {
+		return false
+	}
+	channels, err := s.db.ListGB28181Channels(context.Background(), deviceID)
+	if err != nil {
+		return false
+	}
+	for _, ch := range channels {
+		if ch.ID != deviceID {
+			return true
+		}
+	}
+	return false
 }
 
 // getAuthHeader extracts the Authorization header from a request. gosip's
