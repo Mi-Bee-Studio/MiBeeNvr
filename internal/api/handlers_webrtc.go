@@ -49,13 +49,16 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// On-demand StreamHub registration for WebRTC
+	// On-demand StreamHub registration for WebRTC. The recorder's SPS picks
+	// the offered H.264 profile variant (High-profile streams need the
+	// 640028 track or browsers reject every frame — see webrtc.NewManager).
 	if h.camMgr != nil {
 		rec := h.camMgr.GetRecorder(id)
 		if rec != nil {
 			hub := getStreamHub(rec)
 			if hub != nil {
-				h.webrtcMgr.RegisterStream(id, hub)
+				_, sps, _, _ := getCodecParams(rec)
+				h.webrtcMgr.RegisterStream(id, hub, sps)
 			}
 		}
 	}

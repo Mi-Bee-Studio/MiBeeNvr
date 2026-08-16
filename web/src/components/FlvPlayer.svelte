@@ -59,6 +59,11 @@
   let videoEl: HTMLVideoElement | undefined = $state();
   let mpegtsPlayer: any = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Loading watchdog: a failed dynamic import or a wedged mpegts load() can
+  // leave streamState at 'loading' forever with no network request issued
+  // (observed on degraded GB28181 streams — the tile stuck at "connecting"
+  // while the backend never saw a /stream.flv request). Recycle the init.
+  let loadingWatchdog: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
   const maxReconnectAttempts = 5;
   const reconnectDelays = [2000, 4000, 8000, 16000, 32000];
@@ -201,6 +206,10 @@ let videoEventAc: AbortController | null = null;
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    if (loadingWatchdog) {
+      clearTimeout(loadingWatchdog);
+      loadingWatchdog = null;
+    }
     if (zombieInterval) {
       clearInterval(zombieInterval);
       zombieInterval = null;
@@ -258,10 +267,24 @@ let videoEventAc: AbortController | null = null;
   }
 
   async function initFlv() {
-    if (!videoEl) return;
     if (destroyed) return;
+    if (!videoEl) {
+      // Bind race: the mount effect fired before bind:this resolved — retry
+      // shortly instead of returning (which left the tile in loading forever).
+      setTimeout(() => { if (!destroyed) initFlv(); }, 250);
+      return;
+    }
 
     streamState = 'loading';
+    if (loadingWatchdog) clearTimeout(loadingWatchdog);
+    loadingWatchdog = setTimeout(() => {
+      loadingWatchdog = null;
+      if (destroyed || snapshotMode) return;
+      if (streamState === 'loading') {
+        console.warn(`FLV init stuck in loading for ${cameraId}, retrying`);
+        scheduleReconnect();
+      }
+    }, 12000);
 
     try {
       const mpegts = await import('mpegts.js');

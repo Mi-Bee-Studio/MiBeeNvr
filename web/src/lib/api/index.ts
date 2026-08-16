@@ -327,9 +327,11 @@ export {
   gb28181PlaybackStatus,
   stopGB28181Playback,
   controlGB28181Playback,
+  getGB28181CascadeStatus,
 } from './gb28181';
 export type {
   GB28181DeviceRecord,
   GB28181RecordListResponse,
   GB28181PlaybackStatus,
+  GB28181CascadeStatus,
 } from './gb28181';

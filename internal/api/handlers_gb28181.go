@@ -770,3 +770,25 @@ func (h *Handler) handleGB28181DevicePositions(w http.ResponseWriter, r *http.Re
 	}
 	writeJSON(w, http.StatusOK, h.gb28181Media.GB28181Positions(deviceID))
 }
+
+// handleGB28181CascadeStatus reports the lower-level cascade client's
+// registration state (Settings → GB28181 status card).
+func (h *Handler) handleGB28181CascadeStatus(w http.ResponseWriter, _ *http.Request) {
+	if h.gb28181Cascade == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled":  false,
+			"online":   false,
+			"forwards": 0,
+		})
+		return
+	}
+	resp := map[string]any{
+		"enabled":  true,
+		"online":   h.gb28181Cascade.Online(),
+		"forwards": h.gb28181Cascade.ForwardCount(),
+	}
+	if since, ok := h.gb28181Cascade.RegistrationSince(); ok {
+		resp["registered_for_seconds"] = int(since.Seconds())
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

@@ -3,8 +3,8 @@
   // Part of the unified settings shell (#153): no save button here; the
   // shell drives save/reset via the settingsForm coordinator.
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings } from '$lib/api';
-  import type { GB28181Config } from '$lib/api';
+  import { getSettings, updateSettings, getGB28181CascadeStatus } from '$lib/api';
+  import type { GB28181Config, GB28181CascadeStatus } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
@@ -14,6 +14,9 @@
 
   let loading = $state(true);
   let error = $state('');
+
+  // Lower-level cascade registration state (read-only diagnostics).
+  let cascade = $state<GB28181CascadeStatus | null>(null);
 
   // GB28181 server config state — mirrors internal/config/config_gb28181.go
   // defaults (applyConfigDefaults).
@@ -91,6 +94,9 @@
   async function loadConfig() {
     loading = true;
     error = '';
+    getGB28181CascadeStatus()
+      .then((st) => (cascade = st))
+      .catch(() => (cascade = null)); // diagnostics only — never block the panel
     try {
       const settings = await getSettings();
       const cfg: GB28181Config | undefined = settings.gb28181;
@@ -455,5 +461,34 @@
         </div>
       </div>
     {/if}
+    <!-- Cascade (lower-level) registration status — read-only diagnostics;
+         configuration stays in mibee-nvr.yaml (gb28181_cascade). -->
+    <div class="flex items-center justify-between p-3 rounded-md border th-border th-bg-hover">
+      <div>
+        <span class="text-sm font-medium th-text-primary">{t('settings.gb28181.cascade')}</span>
+        <p class="text-xs th-text-tertiary mt-1">{t('settings.gb28181.cascadeHint')}</p>
+      </div>
+      <div class="flex flex-col gap-1 items-end text-xs">
+        {#if cascade === null}
+          <span class="th-text-tertiary">{t('settings.gb28181.cascadeDisabled')}</span>
+        {:else if cascade.online}
+          <span class="inline-flex items-center gap-1.5 text-green-600 dark:text-green-400">
+            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            {t('settings.gb28181.cascadeOnline')}
+          </span>
+          <span class="th-text-tertiary">
+            {t('settings.gb28181.cascadeForwards')}: {cascade.forwards}
+            {#if cascade.registered_for_seconds != null}
+              · {t('settings.gb28181.cascadeRegisteredFor')}: {Math.floor(cascade.registered_for_seconds / 3600)}h{Math.floor((cascade.registered_for_seconds % 3600) / 60)}m
+            {/if}
+          </span>
+        {:else}
+          <span class="inline-flex items-center gap-1.5 text-yellow-600 dark:text-yellow-400">
+            <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
+            {t('settings.gb28181.cascadeOffline')}
+          </span>
+        {/if}
+      </div>
+    </div>
   </SettingsCard>
 {/if}

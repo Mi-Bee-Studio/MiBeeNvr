@@ -456,3 +456,41 @@ func TestGB28181Recorder_HubAudioBroadcast(t *testing.T) {
 	}
 	_ = rec.Stop()
 }
+
+// TestGB28181Recorder_ClockJumpClosesSegment locks the 41h-duration fix: a
+// forward RTP clock jump mid-segment (upstream session recycle / cascaded
+// source switch) must close the segment so the next IDR re-anchors ptsBase —
+// trusting the jump inflated sample PTS (and merged MP4 durations) to days.
+func TestGB28181Recorder_ClockJumpClosesSegment(t *testing.T) {
+	rec, store := newGBRecorder(t, "jump-cam", "h264", 10*time.Minute)
+	defer func() { _ = rec.Stop() }()
+
+	sps := []byte{0x67, 0x42, 0x80, 0x0A}
+	pps := []byte{0x68, 0xCE, 0x3C, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x00}
+	pframe := []byte{0x41, 0x9A, 0x24, 0x80}
+
+	rec.WriteNALU([][]byte{sps, pps, idr}, 90000, true)
+	for i := range 5 {
+		rec.WriteNALU([][]byte{pframe}, 90000+int64(i)*3000, false)
+	}
+	// Clock-domain jump: 10 hours forward in one step.
+	rec.WriteNALU([][]byte{pframe}, 90000+10*3600*90000, false)
+	// Next IDR opens the new segment in the new clock domain.
+	rec.WriteNALU([][]byte{sps, pps, idr}, 90000+10*3600*90000+3000, true)
+	for i := range 5 {
+		rec.WriteNALU([][]byte{pframe}, 90000+10*3600*90000+3000+int64(i)*3000, false)
+	}
+
+	require.NoError(t, rec.Stop())
+	files := gbFiles(t, store, "jump-cam")
+	require.Len(t, files, 2, "clock jump must split the recording into two segments")
+
+	// Each segment's internal duration must stay small (anchored per segment),
+	// not span the 10h gap.
+	for _, f := range files {
+		info, err := merge.ParseSegment(f)
+		require.NoError(t, err)
+		require.Less(t, info.TotalDuration, time.Minute, "segment %s must not absorb the clock jump", f)
+	}
+}

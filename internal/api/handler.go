@@ -171,6 +171,7 @@ type Handler struct {
 	gb28181Catalog    *gb28181.CatalogController
 	gb28181Inviter    GB28181InviteSender
 	gb28181Bye        GB28181ByeSender
+	gb28181Cascade    GB28181CascadeStatus
 	// vodMgr serves the on-demand HLS VOD fragmenter for recording playback
 	// (#321 Phase 2). Self-contained (owns its segment cache) — constructed
 	// here rather than threaded through NewHandler's positional params.
@@ -645,6 +646,20 @@ func (h *Handler) SetGB28181Catalog(c *gb28181.CatalogController) {
 	h.gb28181Catalog = c
 }
 
+// GB28181CascadeStatus reports the lower-level cascade client's registration
+// state. Implemented by the cascade service; declared here to avoid importing
+// cascade in Handler.
+type GB28181CascadeStatus interface {
+	Online() bool
+	RegistrationSince() (time.Duration, bool)
+	ForwardCount() int
+}
+
+// SetGB28181Cascade wires the cascade client for the status endpoint.
+func (h *Handler) SetGB28181Cascade(s GB28181CascadeStatus) {
+	h.gb28181Cascade = s
+}
+
 // GB28181InviteSender sends a SIP INVITE to start a media session on a channel.
 // Implemented by the SIP server; declared here to avoid importing sip in Handler.
 type GB28181InviteSender interface {
@@ -709,6 +724,7 @@ func (h *Handler) SetGB28181DeviceMedia(s GB28181DeviceMedia) {
 func (h *Handler) registerGB28181Routes(r chi.Router) {
 	r.Route("/api/gb28181", func(r chi.Router) {
 		r.Get("/devices", h.handleListGB28181Devices)
+		r.Get("/cascade/status", h.handleGB28181CascadeStatus)
 		r.Route("/devices/{id}", func(r chi.Router) {
 			r.Get("/channels", h.handleListGB28181Channels)
 			r.Post("/catalog-refresh", h.handleCatalogRefresh)

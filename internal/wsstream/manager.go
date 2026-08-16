@@ -344,17 +344,30 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	if entry.codec == model.FormatMJPEG {
 		// MJPEG: every frame is independently decodable (like an IDR).
 		isKeyframe = true
-	} else if len(au) > 0 && len(au[0]) > 0 {
-		var naluType int
-		if entry.codec == model.FormatH265 {
-			// H.265: forbidden(1) | nal_unit_type(6) | ...
-			naluType = int((au[0][0] >> 1) & 0x3F)
-		} else {
-			// H.264: forbidden(1) | nal_ref_idc(2) | nal_unit_type(5)
-			naluType = int(au[0][0] & 0x1F)
+	} else {
+		// Scan EVERY NALU of the AU: the GB28181 recorder prepends SPS/PPS
+		// to IDR access units (prepareBroadcastAU), so the IDR NAL is NOT
+		// au[0] — checking only the first NALU marked those AUs non-keyframe
+		// and downstream consumers (frontend keyframe waits, WebCodecs
+		// configure) never saw a keyframe arrive on the WS path.
+		for _, nalu := range au {
+			if len(nalu) == 0 {
+				continue
+			}
+			var naluType int
+			if entry.codec == model.FormatH265 {
+				// H.265: forbidden(1) | nal_unit_type(6) | ...
+				naluType = int((nalu[0] >> 1) & 0x3F)
+			} else {
+				// H.264: forbidden(1) | nal_ref_idc(2) | nal_unit_type(5)
+				naluType = int(nalu[0] & 0x1F)
+			}
+			// H.264 IDR = 5, H.265 IDR_W_RADL = 19, IDR_N_LP = 20
+			if naluType == 5 || naluType == 19 || naluType == 20 {
+				isKeyframe = true
+				break
+			}
 		}
-		// H.264 IDR = 5, H.265 IDR_W_RADL = 19, IDR_N_LP = 20
-		isKeyframe = naluType == 5 || naluType == 19 || naluType == 20
 	}
 
 	// Non-blocking send

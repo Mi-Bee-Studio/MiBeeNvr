@@ -676,8 +676,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	handler.SetRelayManager(relayMgr)
 	// Wire GB28181 PTZ controller (sends DeviceControl via the SIP server) when
 	// the GB28181 platform server is enabled.
+	var gbPTZController *gb28181.PTZController
 	if deps.gb28181Server != nil {
-		handler.SetGB28181PTZ(gb28181.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server))
+		gbPTZController = gb28181.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server)
+		handler.SetGB28181PTZ(gbPTZController)
 		handler.SetGB28181Catalog(gb28181.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
 		handler.SetGB28181ByeSender(deps.gb28181Server)
@@ -687,6 +689,19 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		// Auto-INVITE when GB28181 recorders start (pull media on camera creation).
 		camMgr.SetGB28181Inviter(deps.gb28181Server)
 		camMgr.SetGB28181SessionEnder(deps.gb28181Server)
+	}
+	// Wire the cascade client: registration status surfaced in Settings, and
+	// upper-platform PTZ DeviceControl commands bridged to the local camera's
+	// native PTZ (ONVIF ContinuousMove / Xiaomi motor / local GB channel).
+	if deps.gb28181Cascade != nil {
+		handler.SetGB28181Cascade(deps.gb28181Cascade)
+		var gbSend func(channelID, direction string, speed byte) error
+		if gbPTZController != nil {
+			gbSend = gbPTZController.SendPTZ
+		}
+		deps.gb28181Cascade.SetPTZForwarder(func(cameraID, direction string, speed byte) error {
+			return camera.ForwardPTZ(context.Background(), camMgr, gbSend, cameraID, direction, speed)
+		})
 	}
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()

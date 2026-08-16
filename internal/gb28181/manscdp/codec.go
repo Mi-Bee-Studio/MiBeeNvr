@@ -103,6 +103,14 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 		return unmarshalAs[TimeSyncQuery](body, CmdTimeSync)
 	case probe.CmdType == CmdMobilePosition:
 		return unmarshalAs[MobilePosition](body, CmdMobilePosition)
+	case probe.CmdType == CmdRecordInfo && probe.XMLName.Local == "Query":
+		// A platform's recording query carries CmdType RecordInfo under a
+		// Query root; the Response-root form with the same CmdType is the
+		// device's ANSWER. Without this arm the Query form fails to
+		// unmarshal into RecordInfo (XMLName expects Response), so the
+		// device side rejects the query with 400 and the upper platform
+		// sees an empty recording list.
+		return unmarshalAs[RecordInfoQuery](body, CmdRecordInfo)
 	}
 	switch probe.CmdType {
 	case CmdCatalog:

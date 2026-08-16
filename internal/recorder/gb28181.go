@@ -151,6 +151,11 @@ func (r *GB28181Recorder) OnBye() {
 	r.status = model.StatusReconnecting
 }
 
+// maxClockJumpTicks bounds the plausible PTS advance between two consecutive
+// AUs (5s @ 90kHz). A larger forward gap means the RTP clock switched to a
+// new domain (upstream session recycle / source switch) — not slow motion.
+const maxClockJumpTicks = int64(5 * 90000)
+
 // WriteNALU ingests one complete access unit from the RTP receiver bridge.
 // ptsTicks is the RTP timestamp (90kHz) of the AU.
 func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
@@ -239,6 +244,19 @@ func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 	}
 
 	r.mu.Lock()
+	// RTP clock-domain jump guard: an upstream session recycle (device, or a
+	// cascaded lower platform re-INVITE) restarts the 90kHz clock at a new
+	// arbitrary base. Mid-segment that arrives as a huge FORWARD gap;
+	// trusting it inflates sample PTS — and merged MP4 durations — to days
+	// (observed 41h). Close the segment at the discontinuity; the next IDR
+	// re-anchors ptsBase in the new clock domain.
+	if r.muxer != nil && ptsTicks-r.lastPtsTicks > maxClockJumpTicks {
+		gb28181Logger.Warn("gb28181: RTP clock jumped — closing segment at discontinuity",
+			"camera_id", r.cfg.CameraID,
+			"gap", ticksToDuration(ptsTicks-r.lastPtsTicks))
+		r.closeCurrentSegmentLocked()
+		curMux = nil
+	}
 	if curMux == nil {
 		tempPath, finalPath, err := r.cfg.Store.CreateSegment(r.cfg.CameraID, localCodecType)
 		if err != nil {

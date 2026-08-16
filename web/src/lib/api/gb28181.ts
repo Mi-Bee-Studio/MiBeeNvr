@@ -114,3 +114,14 @@ export async function getGB28181TalkStatus(
 ): Promise<{ active: boolean; packets?: number; bytes_sent?: number }> {
   return apiRequest(`/cameras/${encodeURIComponent(cameraId)}/gb28181/talk/status`);
 }
+
+export interface GB28181CascadeStatus {
+  enabled: boolean;
+  online: boolean;
+  forwards: number;
+  registered_for_seconds?: number;
+}
+
+export async function getGB28181CascadeStatus(): Promise<GB28181CascadeStatus> {
+  return apiRequest<GB28181CascadeStatus>('/gb28181/cascade/status');
+}

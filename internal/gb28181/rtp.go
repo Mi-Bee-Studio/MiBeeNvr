@@ -91,6 +91,17 @@ type Receiver struct {
 	ptsClock           atomic.Int64 // last emitted PTS (90kHz)
 	lastIDRUnix        atomic.Int64 // last IDR AU time (unix nano)
 	lastPktUnix        atomic.Int64 // last received RTP packet time (unix nano)
+
+	// SSRC isolation: the first received packet's SSRC is latched as this
+	// dialog's source; packets from any other SSRC are dropped. A recycled
+	// UDP port can receive stale RTP from a previous dialog's sender (a
+	// forwarder that never saw the BYE, or packets in flight during
+	// teardown) — interleaving those into this session's byte stream
+	// corrupts the PS demuxer and the downstream recorder.
+	ssrcLatched   atomic.Bool
+	expectedSSRC  atomic.Uint32
+	foreignDrops  atomic.Int64
+	foreignLogged atomic.Bool // one warning per session (not per packet)
 }
 
 // NewReceiver creates a new GB28181 RTP receiver.
@@ -169,6 +180,7 @@ func (r *Receiver) Stop() error {
 		"camera_id", r.cameraID,
 		"packets_received", r.rtpPacketsReceived.Load(),
 		"packets_dropped", r.rtpPacketsDropped.Load(),
+		"foreign_ssrc_dropped", r.foreignDrops.Load(),
 		"au_emitted", r.auEmitted.Load())
 	return nil
 }
@@ -256,6 +268,7 @@ func (r *Receiver) readLoop(ctx context.Context) {
 			r.rtpPacketsDropped.Add(1)
 			continue
 		}
+
 		pkt.Payload = append([]byte(nil), pkt.Payload...)
 
 		// Feed to jitter buffer for reassembly
@@ -334,6 +347,26 @@ func (r *Receiver) readTCP(buf []byte) (int, error) {
 // feedJitterBuffer adds an RTP packet to the jitter buffer and emits
 // complete access units when the marker bit is set.
 func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
+	// SSRC isolation: latch the dialog's SSRC from the first packet and drop
+	// everything else (stale sender on a recycled port — see the struct
+	// comment). One foreign AU interleaved mid-stream corrupts the demuxer
+	// state for the rest of the session.
+	if !r.ssrcLatched.Load() {
+		r.expectedSSRC.Store(pkt.Header.SSRC)
+		r.ssrcLatched.Store(true)
+	} else if pkt.Header.SSRC != r.expectedSSRC.Load() {
+		r.foreignDrops.Add(1)
+		if !r.foreignLogged.Load() {
+			r.foreignLogged.Store(true)
+			logger.Warn("gb28181: dropping RTP from foreign SSRC on session port",
+				"camera_id", r.cameraID,
+				"expected_ssrc", r.expectedSSRC.Load(),
+				"foreign_ssrc", pkt.Header.SSRC)
+		}
+		r.rtpPacketsDropped.Add(1)
+		return nil
+	}
+
 	r.jitterBufferMu.Lock()
 	defer r.jitterBufferMu.Unlock()
 
@@ -447,30 +480,44 @@ func (r *Receiver) emitAccessUnitsLocked(complete bool) {
 		return
 	}
 
+	// One marker can cover multiple frames when the AU boundary was lost
+	// upstream (dropped marker packet → concatenated PS bursts → the demuxer
+	// returns both frames' NALUs together). Split at VCL frame boundaries so
+	// every consumer gets exactly one frame per access unit.
+	subAUs := splitAUsByFrame(nalus, r.demuxer.Codec() == "h265")
+
+	for _, subAU := range subAUs {
+		r.emitAULocked(subAU, ptsTicks)
+	}
+	r.dispatchAudioLocked()
+}
+
+// emitAULocked fans one single-frame access unit out to the hub and the
+// registered callbacks. Must be called with jitterBufferMu held.
+func (r *Receiver) emitAULocked(au [][]byte, ptsTicks int64) {
 	r.auEmitted.Add(1)
 
 	// Detect IDR frame
 	isH265 := r.demuxer.Codec() == "h265"
-	isIDR := nalutil.IsIDR(nalus, isH265)
+	isIDR := nalutil.IsIDR(au, isH265)
 	if isIDR {
 		r.lastIDRUnix.Store(time.Now().UnixNano())
 	}
 
 	// Broadcast to StreamHub (non-blocking, nil-safe for recorder-bridged sessions)
 	if r.hub != nil {
-		r.hub.Broadcast(ptsTicks, nalus, isIDR)
+		r.hub.Broadcast(ptsTicks, au, isIDR)
 	}
 
 	// Prefer AU-granular callback (recorders need full AU grouping); fall
 	// back to the legacy per-NALU callback.
 	if r.AUCallback != nil {
-		r.AUCallback(nalus, ptsTicks, isIDR)
+		r.AUCallback(au, ptsTicks, isIDR)
 	} else if r.NALUCallback != nil {
-		for _, nalu := range nalus {
+		for _, nalu := range au {
 			r.NALUCallback(nalu, ptsTicks, isIDR)
 		}
 	}
-	r.dispatchAudioLocked()
 }
 
 // dispatchAudioLocked drains demuxed audio frames to the callback. Must be
@@ -522,17 +569,19 @@ func (r *Receiver) flushJitterBuffer() {
 	nalus := r.demuxer.Flush()
 	if len(nalus) > 0 {
 		isH265 := r.demuxer.Codec() == "h265"
-		isIDR := nalutil.IsIDR(nalus, isH265)
 		ptsTicks := r.ptsClock.Load()
-		if r.hub != nil {
-			r.hub.Broadcast(ptsTicks, nalus, isIDR)
-		}
+		for _, subAU := range splitAUsByFrame(nalus, isH265) {
+			isIDR := nalutil.IsIDR(subAU, isH265)
+			if r.hub != nil {
+				r.hub.Broadcast(ptsTicks, subAU, isIDR)
+			}
 
-		if r.AUCallback != nil {
-			r.AUCallback(nalus, ptsTicks, isIDR)
-		} else if r.NALUCallback != nil {
-			for _, nalu := range nalus {
-				r.NALUCallback(nalu, ptsTicks, isIDR)
+			if r.AUCallback != nil {
+				r.AUCallback(subAU, ptsTicks, isIDR)
+			} else if r.NALUCallback != nil {
+				for _, nalu := range subAU {
+					r.NALUCallback(nalu, ptsTicks, isIDR)
+				}
 			}
 		}
 		r.dispatchAudioLocked()
