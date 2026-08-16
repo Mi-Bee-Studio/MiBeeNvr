@@ -25,26 +25,34 @@ const (
 	defaultMaxPeers       = 2
 	defaultIdleTimeout    = 60 * time.Second
 	defaultFrameBufSize   = 100
+	defaultAudioBufSize   = 50
 	defaultFPS            = 30
 	h264ClockRate         = 90000
-	highDropRateThreshold = 0.20 // 20% — trigger frame skipping
-	lowDropRateThreshold  = 0.05 // 5% — restore full frame rate
+	g711ClockRate         = 8000
+	opusClockRate         = 48000
+	highDropRateThreshold = 0.20                  // 20% — trigger frame skipping
+	lowDropRateThreshold  = 0.05                  // 5% — restore full frame rate
+	defaultAudioFrameDur  = 20 * time.Millisecond // typical G.711/Opus frame
 )
 
 // peerEntry holds a single WHEP peer connection and its metadata.
 type peerEntry struct {
-	mu         sync.Mutex
-	pc         *webrtc.PeerConnection
-	track      *webrtc.TrackLocalStaticSample
-	sender     *webrtc.RTPSender
-	cancel     context.CancelFunc
-	camID      string
-	sessionID  string
-	lastUsed   time.Time
-	frameCh    chan model.FrameMsg
-	drops      uint64             // atomic: total frames dropped due to buffer full
-	congestion *congestionTracker // tracks drop rate for bitrate adaptation
-	lastPTS    int64
+	mu           sync.Mutex
+	pc           *webrtc.PeerConnection
+	track        *webrtc.TrackLocalStaticSample
+	sender       *webrtc.RTPSender
+	audioTrack   *webrtc.TrackLocalStaticSample // nil for video-only peers
+	audioCh      chan model.AudioFrame          // nil for video-only peers
+	audioClock   int                            // RTP clock rate for audio PTS→duration
+	lastAudioPTS int64
+	cancel       context.CancelFunc
+	camID        string
+	sessionID    string
+	lastUsed     time.Time
+	frameCh      chan model.FrameMsg
+	drops        uint64             // atomic: total frames dropped due to buffer full
+	congestion   *congestionTracker // tracks drop rate for bitrate adaptation
+	lastPTS      int64
 }
 
 // congestionTracker tracks frame send/drop rates in a sliding window
@@ -155,28 +163,57 @@ func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
 }
 
 // Manager manages WebRTC WHEP sessions for camera streaming.
-// It supports H.264 video only (no audio), with configurable max peers
-// per camera and idle eviction.
+// H.264 video with optional G.711 (PCMU/PCMA) or Opus audio — the WebRTC
+// mandatory codecs, passed through with zero transcoding. AAC cameras stay
+// video-only (AAC is not a WebRTC codec; those keep the separate audio WS).
 type Manager struct {
 	mu            sync.RWMutex
 	peers         map[string]*peerEntry       // sessionID -> entry
 	camPeers      map[string][]string         // camID -> []sessionID
 	hubSubs       map[string]*hubSubscription // camID -> subscription info
 	streamProfile map[string]string           // cameraID → H.264 fmtp variant (fmtpForProfile)
+	audioCfgs     map[string]audioConfig      // cameraID → negotiated audio (absent = video-only)
 	stopped       bool
 	api           *webrtc.API
 	maxPeers      int
 	idleTimeout   time.Duration
 	frameBufSize  int
+	audioBufSize  int
 	iceServers    []webrtc.ICEServer // STUN/TURN servers for cross-network ICE; nil = LAN-only
 	drainWg       sync.WaitGroup     // tracks RTCP drain goroutines for clean shutdown
 	mets          *metrics.Metrics
 }
 
+// audioConfig is the per-camera audio wire format for WHEP tracks (#372).
+type audioConfig struct {
+	codec     string // "pcmu", "pcma", "opus"
+	clockRate int    // RTP clock: 8000 (G.711) / 48000 (Opus)
+	sampleHz  int    // source sample rate (informational)
+	channels  int
+}
+
+// audioCapability maps a negotiated audio config to the pion track capability.
+func (a audioConfig) capability() webrtc.RTPCodecCapability {
+	cap := webrtc.RTPCodecCapability{ClockRate: uint32(a.clockRate)}
+	switch a.codec {
+	case "pcmu":
+		cap.MimeType = webrtc.MimeTypePCMU
+	case "pcma":
+		cap.MimeType = webrtc.MimeTypePCMA
+	case "opus":
+		cap.MimeType = webrtc.MimeTypeOpus
+		// Matches the conventional browser-offered Opus fmtp; pion requires
+		// the capability to be one of the registered variants.
+		cap.SDPFmtpLine = "minptime=10;useinbandfec=1"
+	}
+	return cap
+}
+
 // hubSubscription tracks a StreamHub subscription for a camera.
 type hubSubscription struct {
-	hub   *model.StreamHub
-	subID string
+	hub             *model.StreamHub
+	subID           string
+	audioSubscribed bool // SetAudioInfo ran against this hub instance
 }
 
 // ManagerOption configures a Manager.
@@ -255,6 +292,27 @@ func NewManager(opts ...ManagerOption) *Manager {
 		}
 	}
 
+	// Audio codecs for WHEP muxing (#372) — all WebRTC mandatory codecs, so
+	// the NVR passes raw hub bytes through with zero transcoding. Static
+	// payload types for G.711, the conventional 111 for Opus. Opus must be
+	// registered as stereo (2 channels) per RFC 7587 / browser convention.
+	audioCodecs := []struct {
+		cap webrtc.RTPCodecCapability
+		pt  webrtc.PayloadType
+	}{
+		{webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: g711ClockRate, Channels: 1}, 0},
+		{webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: g711ClockRate, Channels: 1}, 8},
+		{webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: opusClockRate, Channels: 2}, 111},
+	}
+	for _, ac := range audioCodecs {
+		if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: ac.cap,
+			PayloadType:        ac.pt,
+		}, webrtc.RTPCodecTypeAudio); err != nil {
+			logger.Error("failed to register audio codec", "mime", ac.cap.MimeType, "error", err)
+		}
+	}
+
 	interceptorRegistry := &interceptor.Registry{}
 	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
 		logger.Error("failed to register default interceptors", "error", err)
@@ -270,10 +328,12 @@ func NewManager(opts ...ManagerOption) *Manager {
 		camPeers:      make(map[string][]string),
 		hubSubs:       make(map[string]*hubSubscription),
 		streamProfile: make(map[string]string),
+		audioCfgs:     make(map[string]audioConfig),
 		api:           api,
 		maxPeers:      defaultMaxPeers,
 		idleTimeout:   defaultIdleTimeout,
 		frameBufSize:  defaultFrameBufSize,
+		audioBufSize:  defaultAudioBufSize,
 	}
 
 	for _, opt := range opts {
@@ -320,6 +380,54 @@ func (m *Manager) RegisterStream(camID string, hub *model.StreamHub, sps []byte)
 	logger.Info("WebRTC stream registered", "camera_id", camID)
 }
 
+// SetAudioInfo configures the audio track offered for a camera's WHEP
+// sessions (#372). Must be called after RegisterStream. codec is the
+// recorder's audio codec ("g711", "opus", ...); muLaw selects PCMU vs PCMA
+// for G.711. AAC is not a WebRTC codec — it returns without configuring
+// (those cameras keep the separate audio-WS path).
+func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRate, channels int) error {
+	var cfg audioConfig
+	switch codec {
+	case "g711":
+		cfg = audioConfig{codec: "pcmu", clockRate: g711ClockRate, sampleHz: sampleRate, channels: 1}
+		if !muLaw {
+			cfg.codec = "pcma"
+		}
+	case "opus":
+		cfg = audioConfig{codec: "opus", clockRate: opusClockRate, sampleHz: sampleRate, channels: channels}
+	default:
+		// AAC and unknown codecs: leave video-only. No error — callers treat
+		// audio setup as best-effort.
+		return nil
+	}
+
+	m.mu.Lock()
+	m.audioCfgs[camID] = cfg
+	sub, hasSub := m.hubSubs[camID]
+	needSubscribe := hasSub && sub != nil && !sub.audioSubscribed
+	if needSubscribe {
+		sub.audioSubscribed = true
+	}
+	m.mu.Unlock()
+	if !hasSub {
+		return fmt.Errorf("webrtc: SetAudioInfo before RegisterStream (camera %s)", camID)
+	}
+	if !needSubscribe {
+		return nil // already subscribed on this hub (codec update only)
+	}
+
+	// Idempotent: the subscription fan-outs to every peer entry, so a single
+	// audio subscription per camera is enough regardless of peer count.
+	audioSubID := "webrtc-audio-" + camID
+	if err := sub.hub.SubscribeAudio(audioSubID, func(pts int64, audioCodec model.AudioCodec, data []byte) {
+		m.WriteAudio(camID, pts, data)
+	}); err != nil {
+		return fmt.Errorf("webrtc: subscribe audio: %w", err)
+	}
+	logger.Info("WebRTC audio configured", "camera_id", camID, "codec", cfg.codec, "sample_rate", sampleRate, "channels", cfg.channels)
+	return nil
+}
+
 // fmtpForProfile maps a recorder SPS to the H.264 SDP fmtp line matching
 // its profile: High-family (profile_idc 100/110/122/244) offers 640028,
 // everything else stays on Constrained Baseline 42001f. The variant must be
@@ -342,10 +450,35 @@ func (m *Manager) UnregisterStream(camID string) {
 	if ok {
 		delete(m.hubSubs, camID)
 	}
+	delete(m.audioCfgs, camID)
 	m.mu.Unlock()
 	if ok {
 		sub.hub.Unsubscribe(sub.subID)
+		sub.hub.UnsubscribeAudio("webrtc-audio-" + camID)
 		logger.Info("WebRTC stream unregistered", "camera_id", camID)
+	}
+}
+
+// WriteAudio queues an audio frame for async writing to all WHEP peers of
+// the given camera. Non-blocking — frames are dropped if a peer's audio
+// buffer is full (audio glitches are preferable to stalling the pipeline).
+func (m *Manager) WriteAudio(camID string, pts int64, data []byte) {
+	m.mu.RLock()
+	sids := m.camPeers[camID]
+	entries := make([]*peerEntry, 0, len(sids))
+	for _, sid := range sids {
+		if e, ok := m.peers[sid]; ok && e.audioCh != nil {
+			entries = append(entries, e)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, entry := range entries {
+		select {
+		case entry.audioCh <- model.AudioFrame{PTS: pts, Data: data}:
+		default:
+			// Audio buffer full — drop this frame.
+		}
 	}
 }
 
@@ -463,6 +596,27 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 		return nil, "", err
 	}
 
+	// Audio track (#372): added only when the camera negotiated a
+	// WebRTC-compatible audio codec. Video-only cameras leave the browser's
+	// audio m-line rejected (pion answers port 0 automatically — no track,
+	// no transceiver).
+	var audioTrack *webrtc.TrackLocalStaticSample
+	var audioSender *webrtc.RTPSender
+	var audioClock int
+	if cfg, ok := m.audioCfgs[camID]; ok {
+		audioTrack, err = webrtc.NewTrackLocalStaticSample(cfg.capability(), "audio", camID)
+		if err != nil {
+			pc.Close()
+			return nil, "", err
+		}
+		audioSender, err = pc.AddTrack(audioTrack)
+		if err != nil {
+			pc.Close()
+			return nil, "", err
+		}
+		audioClock = cfg.clockRate
+	}
+
 	// Context for goroutine lifecycle
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -487,6 +641,30 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 			}
 		}
 	}()
+
+	// Separate RTCP drain for the audio sender (if present).
+	if audioSender != nil {
+		m.drainWg.Add(1)
+		go func() {
+			defer m.drainWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Warn("audio RTCP drain goroutine panic recovered", "error", r)
+				}
+			}()
+			buf := make([]byte, 1500)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				if _, _, readErr := audioSender.Read(buf); readErr != nil {
+					return
+				}
+			}
+		}()
+	}
 
 	// Generate session ID
 	sid := uuid.New().String()
@@ -536,20 +714,22 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 		logger.Warn("ICE gathering timed out, proceeding with gathered candidates", "camera_id", camID)
 	}
 
-	// Reject audio m-lines in the answer SDP (belt-and-suspenders)
-	finalSDP := rejectAudioInSDP(pc.LocalDescription().SDP)
-
 	// Create peer entry
 	entry := &peerEntry{
 		pc:         pc,
 		track:      track,
 		sender:     sender,
+		audioTrack: audioTrack,
+		audioClock: audioClock,
 		cancel:     cancel,
 		camID:      camID,
 		sessionID:  sid,
 		lastUsed:   time.Now(),
 		frameCh:    make(chan model.FrameMsg, m.frameBufSize),
 		congestion: newCongestionTracker(m.frameBufSize),
+	}
+	if audioTrack != nil {
+		entry.audioCh = make(chan model.AudioFrame, m.audioBufSize)
 	}
 
 	m.peers[sid] = entry
@@ -561,11 +741,22 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 	// Start async frame writer goroutine
 	go m.writeLoop(ctx, entry)
 
+	// Start async audio writer goroutine (no-op for video-only peers)
+	if audioTrack != nil {
+		go m.audioWriteLoop(ctx, entry)
+	}
+
 	// Start idle watchdog goroutine
 	go m.idleWatchdog(ctx, entry)
 
-	logger.Info("WHEP session created", "camera_id", camID, "session_id", sid)
-	return []byte(finalSDP), sid, nil
+	logger.Info("WHEP session created", "camera_id", camID, "session_id", sid, "audio", audioTrack != nil)
+	if audioTrack == nil {
+		// Video-only peer: pion leaves the offered audio m-line answerable
+		// (port 9 + engine codecs) even without a track — reject it
+		// explicitly so browsers don't wait for audio that never comes.
+		return []byte(rejectAudioInSDP(pc.LocalDescription().SDP)), sid, nil
+	}
+	return []byte(pc.LocalDescription().SDP), sid, nil
 }
 
 // DeleteWHEPSession removes a WHEP session and cleans up all associated resources.
@@ -654,8 +845,9 @@ func (m *Manager) StopAll() {
 	}
 
 	// Unsubscribe from all StreamHubs
-	for _, sub := range hubSubs {
+	for camID, sub := range hubSubs {
 		sub.hub.Unsubscribe(sub.subID)
+		sub.hub.UnsubscribeAudio("webrtc-audio-" + camID)
 	}
 
 	// Wait for all RTCP drain goroutines to exit
@@ -731,6 +923,57 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 			entry.congestion.recordSent()
 			if m.mets != nil {
 				m.mets.WebRTCFramesSent.WithLabelValues(entry.camID).Inc()
+			}
+		}
+	}
+}
+
+// audioWriteLoop drains audio frames and writes them to the audio track.
+// Duration comes from the PTS delta on the codec's RTP clock with a 20ms
+// fallback (typical G.711/Opus frame length).
+func (m *Manager) audioWriteLoop(ctx context.Context, entry *peerEntry) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("WebRTC audioWriteLoop panic recovered",
+				"session_id", entry.sessionID, "error", r)
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case frame := <-entry.audioCh:
+			entry.mu.Lock()
+			var dur time.Duration
+			if entry.lastAudioPTS == 0 {
+				dur = defaultAudioFrameDur
+			} else {
+				delta := frame.PTS - entry.lastAudioPTS
+				if delta > 0 {
+					dur = time.Duration(delta) * time.Second / time.Duration(entry.audioClock)
+					if dur > time.Second {
+						dur = defaultAudioFrameDur
+					}
+				} else {
+					dur = defaultAudioFrameDur
+				}
+			}
+			entry.lastAudioPTS = frame.PTS
+			entry.mu.Unlock()
+			if dur < time.Millisecond {
+				dur = time.Millisecond
+			}
+
+			if err := entry.audioTrack.WriteSample(media.Sample{
+				Data:     frame.Data,
+				Duration: dur,
+			}); err != nil {
+				// Non-fatal: log and continue (never crash the goroutine)
+				if !strings.Contains(err.Error(), "use of closed") {
+					logger.Warn("WebRTC audio write sample error",
+						"session_id", entry.sessionID, "error", err)
+				}
 			}
 		}
 	}

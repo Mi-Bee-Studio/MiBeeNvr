@@ -13,9 +13,16 @@
   let {
     cameraId,
     class: className = '',
+    webrtcAudioTrack = null,
+    onToggleVideoMute = undefined,
   }: {
     cameraId: string;
     class?: string;
+    /** WebRTC audio track from the negotiated m-line (#372). When present the
+     *  button unmutes the <video> element instead of opening the audio WS. */
+    webrtcAudioTrack?: MediaStreamTrack | null;
+    /** Mute toggle for the player's <video> element (WebRTC audio path). */
+    onToggleVideoMute?: (muted: boolean) => void;
   } = $props();
 
   let ws: WebSocket | null = null;
@@ -111,6 +118,15 @@
 
     if (unavailableReason) {
       // No decode path available — clicks do nothing; tooltip explains.
+      return;
+    }
+
+    // WebRTC audio track (#372): the browser decodes natively — unmuting the
+    // <video> element is all it takes. No WS, no JS decode.
+    if (webrtcAudioTrack) {
+      muted = !muted;
+      webrtcAudioTrack.enabled = true;
+      onToggleVideoMute?.(muted);
       return;
     }
 

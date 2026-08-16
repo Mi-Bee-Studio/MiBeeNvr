@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pion/interceptor"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/stretchr/testify/require"
 
@@ -43,14 +44,27 @@ func newTestClient(t *testing.T, withAudio bool) *testClient {
 	}, webrtc.RTPCodecTypeVideo))
 
 	if withAudio {
-		require.NoError(t, mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:  webrtc.MimeTypeOpus,
-				ClockRate: 48000,
-				Channels:  2,
-			},
-			PayloadType: 111,
-		}, webrtc.RTPCodecTypeAudio))
+		// Browsers support all WebRTC mandatory audio codecs — mirror that so
+		// answers selecting PCMU/PCMA/Opus all negotiate.
+		for _, ac := range []struct {
+			mime string
+			rate uint32
+			ch   uint16
+			pt   webrtc.PayloadType
+		}{
+			{webrtc.MimeTypePCMU, 8000, 1, 0},
+			{webrtc.MimeTypePCMA, 8000, 1, 8},
+			{webrtc.MimeTypeOpus, 48000, 2, 111},
+		} {
+			require.NoError(t, mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+				RTPCodecCapability: webrtc.RTPCodecCapability{
+					MimeType:  ac.mime,
+					ClockRate: ac.rate,
+					Channels:  ac.ch,
+				},
+				PayloadType: ac.pt,
+			}, webrtc.RTPCodecTypeAudio))
+		}
 	}
 
 	interceptorRegistry := &interceptor.Registry{}
@@ -441,19 +455,77 @@ func TestAnnexBEncode(t *testing.T) {
 	require.Equal(t, expected, result)
 }
 
-// TestRejectAudioInSDP verifies that audio m-lines are rejected in SDP.
-func TestRejectAudioInSDP(t *testing.T) {
-	// SDP with audio m-line using port 9
-	sdp := "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n"
-	result := rejectAudioInSDP(sdp)
+// TestWHEPAudioMuxing verifies SDP-level audio negotiation (#372):
+// cameras with a WebRTC-compatible codec get an active audio m-line in the
+// answer; video-only cameras keep the audio m-line rejected.
+func TestWHEPAudioMuxing(t *testing.T) {
+	mgr := NewManager()
+	defer mgr.StopAll()
 
-	require.Contains(t, result, "m=audio 0 UDP/TLS/RTP/SAVPF 111")
-	require.Contains(t, result, "m=video 9 UDP/TLS/RTP/SAVPF 96")
+	hub := model.NewStreamHub()
+	mgr.RegisterStream("audio-cam", hub, nil)
+	require.NoError(t, mgr.SetAudioInfo("audio-cam", "g711", true, 8000, 1))
+	// AAC is not a WebRTC codec — the manager leaves the camera video-only.
+	mgr.RegisterStream("aac-cam", hub, nil)
+	require.NoError(t, mgr.SetAudioInfo("aac-cam", "aac", false, 16000, 1))
+	mgr.RegisterStream("video-cam", hub, nil)
 
-	// No audio m-line — should be unchanged
-	sdpNoAudio := "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n"
-	result = rejectAudioInSDP(sdpNoAudio)
-	require.Equal(t, sdpNoAudio, result)
+	offerWithAudio := func(camID string) string {
+		client := newTestClient(t, true)
+		defer client.close()
+		answer, sid := connectWHEP(t, mgr, camID, client.pc, createOfferWithAudio(t, client.pc))
+		defer mgr.DeleteWHEPSession(sid)
+		return string(answer)
+	}
+
+	audioAnswer := offerWithAudio("audio-cam")
+	require.Contains(t, audioAnswer, "m=audio 9", "audio-capable camera must answer with an active audio m-line")
+	require.Contains(t, audioAnswer, "PCMU/8000", "µ-law G.711 must map to PCMU")
+
+	aLawAnswer := offerWithAudio("audio-cam")
+	require.Contains(t, aLawAnswer, "PCMU/8000")
+
+	aacAnswer := offerWithAudio("aac-cam")
+	require.Contains(t, aacAnswer, "m=audio 0 ", "AAC camera must keep the audio m-line rejected")
+
+	videoAnswer := offerWithAudio("video-cam")
+	require.Contains(t, videoAnswer, "m=audio 0 ", "video-only camera must keep the audio m-line rejected")
+}
+
+// TestSetAudioInfoA LAW maps G.711 A-law to PCMA.
+func TestSetAudioInfoALaw(t *testing.T) {
+	mgr := NewManager()
+	defer mgr.StopAll()
+
+	hub := model.NewStreamHub()
+	mgr.RegisterStream("alaw-cam", hub, nil)
+	require.NoError(t, mgr.SetAudioInfo("alaw-cam", "g711", false, 8000, 1))
+
+	client := newTestClient(t, true)
+	defer client.close()
+	answer, sid := connectWHEP(t, mgr, "alaw-cam", client.pc, createOfferWithAudio(t, client.pc))
+	defer mgr.DeleteWHEPSession(sid)
+	require.Contains(t, string(answer), "PCMA/8000", "A-law G.711 must map to PCMA")
+}
+
+// TestSetAudioInfoBeforeRegister errors — audio cannot be configured without
+// a hub subscription.
+func TestSetAudioInfoBeforeRegister(t *testing.T) {
+	mgr := NewManager()
+	defer mgr.StopAll()
+	require.Error(t, mgr.SetAudioInfo("no-hub-cam", "g711", true, 8000, 1))
+}
+
+// TestSetAudioInfoIdempotent — repeated calls (one per WHEP session) must
+// not fail on duplicate audio subscription.
+func TestSetAudioInfoIdempotent(t *testing.T) {
+	mgr := NewManager()
+	defer mgr.StopAll()
+
+	hub := model.NewStreamHub()
+	mgr.RegisterStream("cam", hub, nil)
+	require.NoError(t, mgr.SetAudioInfo("cam", "g711", true, 8000, 1))
+	require.NoError(t, mgr.SetAudioInfo("cam", "g711", true, 8000, 1))
 }
 
 // TestWriteH264NonBlocking verifies that WriteH264 is non-blocking and
@@ -902,4 +974,86 @@ func TestRegisterStreamRebindsOnHubChange(t *testing.T) {
 
 	m.UnregisterStream("cam-rebind")
 	require.Nil(t, m.hubSubs["cam-rebind"])
+}
+
+// TestAudioForwarding verifies the full audio path (#372): hub broadcast →
+// WriteAudio → WebRTC audio track → RTP packets on the client. Uses G.711
+// µ-law (PCMU), the common case for Xiaomi/ESP32 cameras.
+func TestAudioForwarding(t *testing.T) {
+	mgr := newTestManager(t)
+	defer mgr.StopAll()
+
+	hub := model.NewStreamHub()
+	mgr.RegisterStream("audio-cam", hub, nil)
+	require.NoError(t, mgr.SetAudioInfo("audio-cam", "g711", true, 8000, 1))
+
+	client := newTestClient(t, true)
+	defer client.close()
+
+	audioPackets := make(chan *rtp.Packet, 8)
+	var audioTrackReady chan struct{}
+	audioTrackReady = make(chan struct{}, 1)
+	client.pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		if track.Kind() != webrtc.RTPCodecTypeAudio {
+			return
+		}
+		select {
+		case audioTrackReady <- struct{}{}:
+		default:
+		}
+		go func() {
+			for {
+				pkt, _, err := track.ReadRTP()
+				if err != nil {
+					return
+				}
+				select {
+				case audioPackets <- pkt:
+				default:
+				}
+			}
+		}()
+	})
+
+	connected := make(chan struct{}, 1)
+	client.pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		if state == webrtc.ICEConnectionStateConnected {
+			select {
+			case connected <- struct{}{}:
+			default:
+			}
+		}
+	})
+
+	offerSDP := createOfferWithAudio(t, client.pc)
+	_, sid := connectWHEP(t, mgr, "audio-cam", client.pc, offerSDP)
+	defer mgr.DeleteWHEPSession(sid)
+
+	select {
+	case <-connected:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ICE connection timeout")
+	}
+
+	// Push audio through the hub — OnTrack fires on the first received RTP
+	// packet (same semantics as the video forwarding test).
+	frame := make([]byte, 160) // 20ms of G.711 at 8kHz
+	for i := range 10 {
+		hub.BroadcastAudio(int64(i)*160, model.AudioG711, frame)
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	select {
+	case <-audioTrackReady:
+	case <-time.After(10 * time.Second):
+		t.Fatal("audio track not received within timeout")
+	}
+
+	select {
+	case pkt := <-audioPackets:
+		require.Equal(t, uint8(0), pkt.Header.PayloadType, "PCMU uses static payload type 0")
+		require.NotEmpty(t, pkt.Payload)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no audio RTP packets received within timeout")
+	}
 }
