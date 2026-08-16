@@ -101,7 +101,8 @@ cameras:
 | 移动位置订阅 | ✅ | 车载/布控球场景，REST 查询轨迹 |
 | 时钟同步 | ✅ | 设备发 Query，平台应答标准时间 |
 | 设备信息/状态自动化 | ✅ | 厂商/型号自动补全，keepalive 不丢元数据 |
-| 多级级联 / GB35114 国密 | ⏸ | 按需评估（见 #341） |
+| **多级级联（下级角色）** | ✅ | 向上级平台注册、聚合目录、INVITE 转发（见"级联上联"） |
+| GB35114 国密 | ⏸ | 按需评估（见 #341） |
 
 ## 配置参考
 
@@ -150,6 +151,31 @@ cameras:
 LiveView 页国标相机有 **对讲** 按钮：浏览器麦克风 → AudioWorklet 降采样到 8kHz → A-law 编码 → WebSocket 上行 → NVR 发起 audio-only INVITE（`m=audio ... RTP/AVP 8`，`a=sendrecv`）→ 设备接收地址收 RTP。半双工：直播音频与对讲下行并存。
 
 API：`GET /api/cameras/{id}/gb28181/talk`（WebSocket，二进制帧 = A-law 字节）、`GET /api/cameras/{id}/gb28181/talk/status`。
+
+## 级联上联（下级角色）
+
+NVR 可作为**下级平台**向上级 GB/T 28181 平台上联：本机相机聚合为国标目录上报，上级 INVITE 任意通道时以 RTP/PS 转发媒体（纯封装不转码）。上级无需特殊支持——任何标准平台（包括另一台 MiBee NVR 的平台角色）即可对接。
+
+```yaml
+gb28181_cascade:
+  enabled: true
+  server_domain: "34020000002000000001"   # 上级平台 20 位编号
+  server_addr: "192.168.63.30:5060"       # 上级 SIP 地址
+  local_device_id: "34020000001320000099" # 本 NVR 作为下级设备的编号
+  realm: "3402000000"
+  password: "..."                          # encrypt-config 加密
+  sip_listen: ":5061"                      # 级联信令端口（与平台角色 5060 并存）
+  heartbeat_interval: "60s"
+  register_expires: 3600
+```
+
+行为要点：
+
+- 通道编号按相机首次入目录顺序分配（`<编号前10位>132+7位序号`），持久化防重启变号——上级的绑定始终有效
+- REGISTER + Digest、Expires 80% 续注、Keepalive；上级重启（keepalive 403）立即重注册
+- 目录应答聚合全部非 MJPEG 相机；H.264/H.265 由首帧 NAL 嗅探决定 PSM 类型
+- 上级 INVITE → 200 OK(sendonly) → 从 StreamHub 取流 → PS 复用 → RTP 推送；BYE/错误清理
+- v1 限制：**仅视频**（hub 音频暂不区分 G.711 A/μ 律）；单上级；不推送目录变更 NOTIFY（上级轮询兜底）
 
 ## 订阅与事件
 
