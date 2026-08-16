@@ -1,0 +1,55 @@
+pkg/ Linking Exception — Additional Permission under Section 7 of AGPL-3.0
+============================================================================
+
+Copyright (c) 2026 Mi&Bee Studio
+
+This file grants an additional permission (a "linking exception") on top
+of the GNU Affero General Public License version 3 ("AGPL-3.0") that
+governs this repository. It applies ONLY to the packages under the
+`pkg/` directory of this repository (the "Extension Interfaces") — the
+rest of the repository remains under plain AGPL-3.0.
+
+The permission
+
+  As a special exception to the terms and conditions of AGPL-3.0, the
+  copyright holders of MiBee NVR give you permission to link or combine
+  the Extension Interfaces (or modified versions of the Extension
+  Interfaces, provided you otherwise comply with Section 4 of AGPL-3.0
+  regarding your modifications) with independent modules to produce a
+  work containing the Extension Interfaces, and to copy and distribute
+  the resulting work under terms of your choice, provided that:
+
+    1. the resulting work does not itself incorporate, beyond the
+       Extension Interfaces, any other part of this repository in a way
+       that would require it to be licensed under AGPL-3.0 against your
+       choice; and
+
+    2. for each linked independent module you meet the terms and
+       conditions of the license of that module.
+
+  An independent module is a module which is not derived from or based
+  on the Extension Interfaces or the rest of this repository. If you
+  modify the Extension Interfaces, you may extend this exception to
+  your version of the Extension Interfaces, but you are not obligated
+  to do so. If you do not wish to do so, delete this exception
+  statement from your version.
+
+Why this exception exists
+
+  The `pkg/` tree (pkg/app, pkg/camera, pkg/streamhub, pkg/eventbus) is
+  a public, stable extension API: it exists so that third parties can
+  build their own programs on top of MiBee NVR's service and camera
+  abstractions. Without this exception, AGPL-3.0's copyleft would
+  extend to any program compiled together with `pkg/`, which would
+  defeat the tree's stated purpose as a neutral extension surface.
+
+  This exception does NOT weaken the copyleft of the rest of the
+  repository (including `internal/`): programs that incorporate
+  MiBee NVR's internal packages are still subject to AGPL-3.0.
+  Interacting with a running MiBee NVR over its HTTP/WebSocket APIs
+  (as a separate process) never triggers AGPL-3.0 obligations at all.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this repository shall be dual-licensed as
+described in CONTRIBUTING.md, without this additional permission being
+required from you for that contribution.
