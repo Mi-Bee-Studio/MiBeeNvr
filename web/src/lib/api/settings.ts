@@ -71,6 +71,8 @@ export interface MiBeeVisionConfig {
     name: string;
     prefix: string;
     revoked: boolean;
+    /** RFC3339 UTC timestamp of the last successful auth with this key (#335). */
+    last_used?: string;
   }>;
 }
 

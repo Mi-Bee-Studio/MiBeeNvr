@@ -53,14 +53,16 @@
   let zoneCreating = $state(false);
 
   // MiBeeVision keys
-  let mibeeVisionKeys = $state<Array<{ name: string; prefix: string; revoked: boolean }>>([]);
+  let mibeeVisionKeys = $state<Array<{ name: string; prefix: string; revoked: boolean; last_used?: string }>>([]);
   let mibeeVisionLoading = $state(false);
   let newKeyName = $state('');
   let generatingKey = $state(false);
   let newlyGeneratedKey = $state<string | null>(null);
   let copiedKey = $state(false);
 
-  const hasMiBeeVisionKey = $derived(mibeeVisionKeys.length > 0);
+  // Only active (non-revoked) keys count as connected; revoked entries stay
+  // visible in the list for audit (#335).
+  const hasMiBeeVisionKey = $derived(mibeeVisionKeys.filter((k) => !k.revoked).length > 0);
 
   // MiBeeVision consumer health (#328) — polled while the panel is mounted so
   // operators notice silent push suspension (heartbeat timeout stops pushes).
@@ -187,7 +189,12 @@
       const settings = await getSettings();
       const cfg = settings.mibeevision;
       if (cfg && cfg.api_keys) {
-        mibeeVisionKeys = cfg.api_keys.map(k => ({ name: k.name, prefix: k.prefix, revoked: k.revoked }));
+        mibeeVisionKeys = cfg.api_keys.map((k) => ({
+          name: k.name,
+          prefix: k.prefix,
+          revoked: k.revoked,
+          last_used: k.last_used,
+        }));
       }
     } catch (e) {
       console.warn('Failed to load MiBeeVision keys:', e);
@@ -672,13 +679,22 @@
       {#if mibeeVisionKeys.length > 0}
         <div class="space-y-2">
           {#each mibeeVisionKeys as key (key.name)}
-            <div class="flex items-center justify-between p-3 rounded-md border th-border">
-              <div>
-                <span class="text-sm font-medium th-text-primary">{key.name}</span>
-                <!-- prefix from the backend already contains the mbv_ prefix
-                     and the ellipsis (e.g. "mbv_ab12…") — do not prepend again. -->
-                <span class="text-xs th-text-tertiary ml-2">{key.prefix}</span>
-                {#if key.revoked}<span class="badge badge-error ml-2">{t('settings.mibeevision.revoked')}</span>{/if}
+            <div class="flex items-center justify-between p-3 rounded-md border th-border {key.revoked ? 'opacity-60' : ''}">
+              <div class="min-w-0">
+                <div class="flex items-center flex-wrap">
+                  <span class="text-sm font-medium th-text-primary">{key.name}</span>
+                  <!-- prefix from the backend already contains the mbv_ prefix
+                       and the ellipsis (e.g. "mbv_ab12…") — do not prepend again. -->
+                  <span class="text-xs th-text-tertiary ml-2">{key.prefix}</span>
+                  {#if key.revoked}<span class="badge badge-error ml-2">{t('settings.mibeevision.revoked')}</span>{/if}
+                </div>
+                <div class="text-xs th-text-tertiary mt-1">
+                  {#if key.last_used}
+                    {t('settings.mibeevision.lastUsed')}: {formatRelativeTime(key.last_used)}
+                  {:else}
+                    {t('settings.mibeevision.neverUsed')}
+                  {/if}
+                </div>
               </div>
               {#if !key.revoked}
                 <button type="button" class="btn btn-ghost btn-sm th-color-danger" onclick={() => handleRevokeKey(key.name)}>

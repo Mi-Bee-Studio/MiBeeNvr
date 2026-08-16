@@ -160,6 +160,7 @@ type Handler struct {
 	aiHandler         *AIHandler
 	relayMgr          *relay.Manager
 	visionCoordinator *vision.Coordinator
+	apiKeyStore       *middleware.APIKeyStore
 	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
 	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
 	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
@@ -484,6 +485,14 @@ func (h *Handler) SetRollingMergeMgr(mgr *merge.RollingMergeCoordinator) {
 // SetVisionCoordinator sets the Vision push coordinator on the handler.
 func (h *Handler) SetVisionCoordinator(mgr *vision.Coordinator) {
 	h.visionCoordinator = mgr
+}
+
+// SetAPIKeyStore wires the live API key store. The generate/revoke handlers
+// keep it in sync with the config so key changes apply on the next request
+// without a service restart (#335); last-used timestamps surface in the key
+// list API.
+func (h *Handler) SetAPIKeyStore(s *middleware.APIKeyStore) {
+	h.apiKeyStore = s
 }
 
 // SetAIHandler sets the AI handler on the Handler.
