@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 )
@@ -196,10 +197,13 @@ func IsSessionToken(s string) bool {
 }
 
 // bearerSessionToken extracts a session token (mbs_...) from a request, in
-// either of the two forms the frontend uses:
+// any of the three forms the clients use:
 //   - Authorization: Bearer mbs_...   (normal API calls)
 //   - ?token=mbs_...                  (WebSocket upgrades + sendBeacon, which
 //     cannot set headers)
+//   - stream cookie mbs_session       (HLS segment fetches by players that
+//     cannot attach headers per request — iOS AVPlayer; strictly gated by
+//     streamCookieEligible, see #331)
 //
 // Returns "" when no session token is present (the request then falls through
 // to API-Key / BasicAuth / legacy base64 ?token= handling).
@@ -210,5 +214,46 @@ func bearerSessionToken(r *http.Request) string {
 	if tok := r.URL.Query().Get("token"); IsSessionToken(tok) {
 		return tok
 	}
+	if streamCookieEligible(r) {
+		if c, err := r.Cookie(StreamCookieName); err == nil && IsSessionToken(c.Value) {
+			return c.Value
+		}
+	}
 	return ""
+}
+
+// StreamCookieName is the cookie that carries a session token for media
+// players that cannot attach headers to every request (notably iOS AVPlayer,
+// whose custom header support does not reliably apply to HLS segment
+// requests). Issued by the HLS playlist handler; see #331.
+const StreamCookieName = "mbs_session"
+
+// SessionTokenFromRequest returns the session token (mbs_...) authenticating
+// the current request, in header, query, or stream-cookie form. Exposed so
+// media handlers can re-issue the stream cookie on playlist fetches.
+func SessionTokenFromRequest(r *http.Request) string {
+	return bearerSessionToken(r)
+}
+
+// mediaExtensions are the response suffixes a stream cookie may authenticate.
+// Anything else (API calls, state-changing routes) must use header/query
+// forms — browsers auto-send cookies on every matching request, so accepting
+// them beyond read-only media fetches would open a CSRF surface.
+var mediaExtensions = map[string]struct{}{
+	".m3u8":  {},
+	".ts":    {},
+	".m4s":   {},
+	".mp4":   {},
+	".flv":   {},
+	".mjpeg": {},
+}
+
+// streamCookieEligible reports whether the request may authenticate via the
+// stream cookie: GET/HEAD only, and only for media file suffixes.
+func streamCookieEligible(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	_, ok := mediaExtensions[path.Ext(r.URL.Path)]
+	return ok
 }

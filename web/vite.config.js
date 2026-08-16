@@ -103,12 +103,12 @@ export default defineConfig({
     conditions: ['browser'],
   },
   optimizeDeps: {
-    // @audio/decode-aac dynamically loads its WASM blob in a way Vite's
-    // dep-optimizer mis-resolves (same class of problem as
-    // @yume-chan/libde265); exclude it so the WASM loader runs at runtime
-    // via dynamic import(). (opus-decoder, which would have the same issue,
-    // is not used — Opus goes through WebCodecs AudioDecoder instead.)
-    exclude: ['@yume-chan/libde265', '@audio/decode-aac'],
+    // @yume-chan/libde265 dynamically loads its WASM blob in a way Vite's
+    // dep-optimizer mis-resolves; exclude it so the WASM loader runs at
+    // runtime via dynamic import(). (opus-decoder, which would have the same
+    // issue, is not used — Opus goes through WebCodecs AudioDecoder instead.
+    // @audio/decode-aac was removed entirely in #319.)
+    exclude: ['@yume-chan/libde265'],
   },
   build: {
     rollupOptions: {
@@ -132,12 +132,10 @@ export default defineConfig({
           if (id.includes('node_modules/@yume-chan/libde265')) {
             return 'vendor-libde265';
           }
-          // Note: @audio/decode-aac and opus-decoder are deliberately NOT given
-          // explicit manualChunks. They share @wasm-audio-decoders/common, and
-          // forcing them into separate named chunks triggers a Rolldown panic
-          // ("Symbol assignNames should belong to a chunk"). Vite's default
-          // code-splitting + the dynamic import() in the loaders keeps both
-          // WASM payloads lazy (only fetched when an AAC/Opus stream arrives).
+          // Note: opus-decoder is deliberately NOT given an explicit
+          // manualChunk. Forcing it into a separate named chunk triggers a
+          // Rolldown panic ("Symbol assignNames should belong to a chunk").
+          // Vite's default code-splitting keeps the payload lazy.
           if (id.includes('node_modules')) {
             return 'vendor';
           }

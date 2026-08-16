@@ -10,16 +10,17 @@
  * AASC is required by `AudioDecoder.configure()` as the `description`.
  *
  * WebCodecs requires a secure context (HTTPS or localhost). On plain-HTTP LAN
- * deployments `AudioDecoder` is undefined; callers must fall back to the WASM
- * decoder (`./aac-wasm-decoder`).
+ * deployments `AudioDecoder` is undefined and AAC live preview degrades with
+ * a hint (#319 removed the GPL-2.0 FAAD2 WASM fallback for license
+ * compatibility; Opus has the same semantics).
  */
 
 import type { AudioData } from './aac-types';
 
 /**
  * Adapt a native WebCodecs `AudioData` into the shared plain-object form so
- * the AudioPlayer consumer is identical across WebCodecs / WASM backends.
- * Copies the PCM out of the GPU/heap buffer and closes the native handle.
+ * the AudioPlayer consumer stays backend-agnostic. Copies the PCM out of the
+ * GPU/heap buffer and closes the native handle.
  */
 export function adaptNativeAudioData(native: globalThis.AudioData): AudioData {
   const numberOfChannels = native.numberOfChannels;
