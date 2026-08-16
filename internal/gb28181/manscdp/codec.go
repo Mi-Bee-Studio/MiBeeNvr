@@ -95,6 +95,8 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 	switch {
 	case probe.CmdType == CmdCatalog && probe.XMLName.Local == "Notify":
 		return unmarshalAs[CatalogNotify](body, CmdCatalog)
+	case probe.CmdType == CmdCatalog && probe.XMLName.Local == "Query":
+		return unmarshalAs[CatalogQuery](body, CmdCatalog)
 	case probe.CmdType == CmdTimeSync && probe.XMLName.Local == "Response":
 		return unmarshalAs[TimeSyncResponse](body, CmdTimeSync)
 	case probe.CmdType == CmdTimeSync:
