@@ -11,7 +11,7 @@
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![ARM](https://img.shields.io/badge/ARM-0091BD?style=flat&logo=arm&logoColor=white)](https://www.arm.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=flat)](LICENSE)
 
 轻量级、易上手的网络视频录像机，单文件部署，零配置烦恼——下载即用。
 
@@ -239,4 +239,11 @@ docs/                # 文档（中文/英文）
 
 ## 许可证
 
-[MIT License](LICENSE) © Mi&Bee Studio
+[AGPL-3.0-only](LICENSE) © Mi&Bee Studio，附带 [`pkg/` 链接例外](LICENSE.pkg-linking-exception)——第三方程序可以基于扩展接口构建，不触发 AGPL 义务。
+
+- **使用 MiBee NVR**（运行、录像、看流）：无任何义务，可自由使用（包括商用）。
+- **修改并分发**：修改版必须以 AGPL-3.0 开源发布。
+- **在自己的程序中使用 `pkg/` 接口**：受链接例外保护，你的程序许可证由你决定。
+- **独立进程通过 HTTP/WebSocket API 调用运行中的 NVR**：完全不受许可证影响。
+
+v0.10.1 及更早版本以 MIT 授权发布，继续适用于那些版本。第三方组件声明见 [NOTICE](NOTICE)，贡献授权政策见 [CONTRIBUTING.md](CONTRIBUTING.md)。

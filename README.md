@@ -11,7 +11,7 @@
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![ARM](https://img.shields.io/badge/ARM-0091BD?style=flat&logo=arm&logoColor=white)](https://www.arm.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat)](LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=flat)](LICENSE)
 
 > **Turn any low-power ARM device into a professional NVR in 60 seconds.**  
 > Single binary, zero dependencies, no cloud required. Runs on low-power ARM devices with a 512MB memory budget.
@@ -256,4 +256,11 @@ For full project details, see the [architecture overview](docs/en/architecture.m
 
 ## License
 
-[MIT License](LICENSE) © Mi&Bee Studio
+[AGPL-3.0-only](LICENSE) © Mi&Bee Studio, with a [linking exception for `pkg/`](LICENSE.pkg-linking-exception) so third-party programs may build on the extension interfaces without triggering AGPL obligations.
+
+- **Using MiBee NVR** (running it, recording cameras, watching streams): no obligations — use it freely, including commercially.
+- **Modifying and distributing it**: your modified version must be released under AGPL-3.0.
+- **Building on `pkg/`** in your own program: allowed under the linking exception; your program's license is your choice.
+- **Separate programs talking to a running NVR** over its HTTP/WebSocket APIs: never affected by the license.
+
+Releases up to v0.10.1 were MIT-licensed; that continues to apply to those versions. See [NOTICE](NOTICE) for third-party components and [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution licensing policy.
