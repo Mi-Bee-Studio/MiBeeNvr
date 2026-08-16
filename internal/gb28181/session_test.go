@@ -608,16 +608,27 @@ func TestSessionInviteTCPPassive(t *testing.T) {
 // setup:active with port 9, and ConnectActiveTCP dials the device address
 // from the answer SDP.
 func TestSessionInviteTCPActive(t *testing.T) {
-	// Device-side media listener.
+	// Device-side media listener. The accepted connection is held open until
+	// test cleanup: closing it immediately (as this test once did) races the
+	// receiver's Running() lifecycle — the read loop can hit EOF and flip
+	// Running back off between the 50ms Eventually polls, timing the wait out.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer ln.Close()
+	devConnCh := make(chan net.Conn, 1)
 	go func() {
 		c, err := ln.Accept()
 		if err == nil {
-			c.Close()
+			devConnCh <- c
 		}
 	}()
+	t.Cleanup(func() {
+		select {
+		case c := <-devConnCh:
+			_ = c.Close()
+		default:
+		}
+	})
 	devPort := ln.Addr().(*net.TCPAddr).Port
 
 	pm := NewPortManager(31100, 31110)
