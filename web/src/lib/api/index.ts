@@ -227,6 +227,7 @@ export {
   updateStreamingSettings,
   generateAPIKey,
   revokeAPIKey,
+  getVisionStatus,
 } from './settings';
 
 export type {
@@ -244,6 +245,7 @@ export type {
   RTMPConfig,
   SRTStreamConfig,
   SRTConfig,
+  VisionStatus,
 } from './settings';
 
 // Xiaomi — cloud auth, devices, sync
