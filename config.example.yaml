@@ -325,6 +325,34 @@ observability:
 #   check_interval: "1h"              # Poll cadence (time.Duration; min 1m)
 #   repo: "Mi-Bee-Studio/MiBeeNvr"   # GitHub "owner/name" to check
 
+# GB/T 28181 national-standard platform access (v0.11.0+, OFF by default).
+# SIP-capable cameras (Hikvision/Dahua/Uniview...) REGISTER to the NVR and
+# appear as normal cameras. Full reference: docs/{en,zh}/gb28181-guide.md
+# gb28181:
+#   enabled: false                  # master switch (opt-in)
+#   sip_listen: ":5060"             # SIP UDP signaling port
+#   server_id: "34020000002000000001"  # 20-digit platform ID (must match device config)
+#   realm: "3402000000"             # SIP digest auth realm (10-digit area code)
+#   password: ""                    # digest password; EMPTY = no auth (see guide)
+#   port_range: "30000-30050"       # RTP media port pool
+#   media_transport: "udp"          # udp | tcp-passive | tcp-active
+#   subscribe_catalog: true         # realtime channel-change NOTIFY
+#   subscribe_alarm: true           # alarm subscription
+#   subscribe_mobile_position: false
+#   allowed_device_ids: []          # empty = allow all registering devices
+
+# GB/T 28181 lower-platform cascade (v0.11.0+, OFF by default): register this
+# NVR to an upper GB/T 28181 platform and forward its cameras as channels.
+# gb28181_cascade:
+#   enabled: false
+#   server_domain: "34020000002000000001"   # upper platform 20-digit ID
+#   server_addr: "192.168.1.10:5060"        # upper platform SIP address
+#   local_device_id: "34020000001320000099" # this NVR's lower-platform ID
+#   realm: "3402000000"
+#   password: ""
+#   sip_listen: ":5061"            # cascade signaling port (coexists with 5060)
+#   register_expires: 3600
+
 # Extensions — arbitrary key-value pairs for external module config passthrough.
 # MiBeeNvr core does NOT read or validate these. Use for out-of-module service
 # extensions registered via pkg/app.App.Register. Unknown keys are silently ignored.

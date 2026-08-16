@@ -6,13 +6,61 @@ This guide covers upgrade paths and breaking changes between MiBee NVR releases.
 
 | From → To | Status | Action required |
 |-----------|--------|-----------------|
-| **v0.9.1 → 0.10.0** | 🟡 **Action required** | Fix combined `protocol` strings; optional disk-space reclaim. See [v0.9.1 → 0.10.0](#v091--v01000). |
+| **0.10.x → 0.11.0** | 🟡 **Read the license + API changes** | License change (AGPL-3.0); one API response field rename; plain-HTTP AAC live-audio degradation. See [0.10.x → 0.11.0](#010x--v0110). |
+| **v0.9.1 → 0.10.0** | 🟡 **Action required** | Fix combined `protocol` strings; optional disk-space reclaim. See [v0.9.1 → v0.10.0](#v091--v0100). |
 | v0.9.0 → v0.9.1 | 🟢 Transparent | None. |
 | v0.8.x → v0.9.x | 🟡 Back up first | Large storage-layer refactor. Back up the DB, then upgrade. |
 | v0.8.x → 0.10.0 | 🟡 Two hops | Upgrade to v0.9.x first, then to 0.10.0. |
 | **< v0.9.x → 0.10.0** | 🔴 **Not supported (direct)** | You **must** upgrade to 0.9.x first — see [below](#below-v09x--v01000-not-supported-direct) for why. |
 
 ---
+
+## 0.10.x → 0.11.0
+
+0.11.0 adds GB/T 28181 national-standard platform access (opt-in), continuous recording playback with a full-day timeline, and changes the project license. The upgrade itself is transparent for the database — no schema migration is required.
+
+### ⚖️ License change (please read)
+
+Starting with v0.11.0, MiBee NVR is licensed under **AGPL-3.0-only** (previously MIT; releases up to v0.10.1 remain MIT-licensed). In plain terms:
+
+- **Just using MiBee NVR** (running it, recording cameras, watching streams — including commercially): no obligations, nothing changes for you.
+- **Redistributing a modified version**: your modified version must be released under AGPL-3.0.
+- **Building your own program on the `pkg/` extension interfaces**: covered by a [linking exception](../../LICENSE.pkg-linking-exception) — your program's license stays your choice.
+- **A separate program talking to a running NVR** over its HTTP/WebSocket APIs: never affected by the license.
+
+See [LICENSE](../../LICENSE), [NOTICE](../../NOTICE), and [CONTRIBUTING.md](../../CONTRIBUTING.md) for details.
+
+### 🔴 Breaking: `GET /api/cameras/{id}/protocols` field names
+
+JSON field names in the entries are now snake_case, consistent with every other endpoint (#332). If you have scripts consuming this endpoint, update them:
+
+| 0.10.x | 0.11.0 |
+|--------|--------|
+| `Protocol` | `protocol` |
+| `Available` | `available` |
+| `Reason` | `reason` |
+
+### 🟡 Plain-HTTP AAC live-audio degradation
+
+The FAAD2 (GPL-2.0) WASM fallback for AAC live-preview audio was removed for license compatibility (#319). AAC live audio now requires WebCodecs (HTTPS or localhost). On plain-HTTP LAN deployments AAC live preview degrades with a hint — the same behavior Opus already had. **Not affected**: G.711 live audio (works everywhere), and AAC audio in recordings/playback (decoded natively by the browser's MP4 pipeline).
+
+### 🟢 GB/T 28181 platform access (opt-in, off by default)
+
+v0.11.0 adds a GB/T 28181 platform role: SIP-capable cameras (Hikvision, Dahua, Uniview, …) register with the NVR and appear as normal cameras — with PTZ, two-way voice talk, device-side recording retrieval, alarm/catalog/mobile-position subscriptions, and cascade to an upper platform. Everything is **disabled by default**; nothing changes unless you turn it on. See the [GB/T 28181 guide](gb28181-guide.md) for setup.
+
+New config sections: `gb28181:` (platform role) and `gb28181_cascade:` (lower-platform role). New DB tables (`gb28181_devices`, `gb28181_channels`, `camera_ptz_presets`, `cascade_channels`, `gb28181_fingerprints`) are created with `CREATE TABLE IF NOT EXISTS` on first start — no migration.
+
+### 🟢 LAN identity & discovery
+
+- `server.device_id`: a stable UUID is generated on first start and persisted to the config; `GET /api/health` now carries `device_id`/`device_name` so clients can anchor on an identity instead of an IP.
+- mDNS/DNS-SD announcement (`_mibee-nvr._tcp`, on by default) and a UDP discovery responder (port 49090, on by default; answers `MIBEE-NVR-DISCv1?` probes for multicast-restricted networks). Both log and continue on bind failure — configurable under `server.discovery.*`.
+
+### 🟢 HLS playback on iOS/AVPlayer
+
+Playlist requests authenticated with a session token now receive a scoped `mbs_session` cookie, fixing 401s on media segments in players that cannot set per-request headers (iOS AVPlayer). No action required.
+
+---
+
 
 ## v0.9.1 → v0.10.0
 
