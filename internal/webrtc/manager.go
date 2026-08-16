@@ -298,16 +298,25 @@ func (m *Manager) RegisterStream(camID string, hub *model.StreamHub, sps []byte)
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.streamProfile[camID] = fmtpForProfile(sps)
-	if _, ok := m.hubSubs[camID]; ok {
-		return // already registered
+	if sub, ok := m.hubSubs[camID]; ok {
+		if sub.hub == hub {
+			m.mu.Unlock()
+			return // already registered on this hub
+		}
+		m.mu.Unlock()
+		// The GB session was recycled (or the recorder restarted) and handed
+		// out a NEW hub — resubscribe, or every viewer stays fed by the dead
+		// one (frozen video until a page reload re-registers).
+		sub.hub.Unsubscribe(sub.subID)
+		m.mu.Lock()
 	}
 	subID := "webrtc-" + camID
 	_ = hub.Subscribe(subID, func(pts int64, au [][]byte) {
 		m.WriteH264(camID, pts, au)
 	})
 	m.hubSubs[camID] = &hubSubscription{hub: hub, subID: subID}
+	m.mu.Unlock()
 	logger.Info("WebRTC stream registered", "camera_id", camID)
 }
 
