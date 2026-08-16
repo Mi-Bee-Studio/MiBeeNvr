@@ -84,6 +84,10 @@ func validateConfigDetails(cfg *Config) error {
 			return fmt.Errorf("server.tls_listen %q is set but server.cert_file / server.key_file are missing", cfg.Server.TLSListen)
 		}
 	}
+	// LAN discovery responder port validation (0 = not set, defaults applied)
+	if p := cfg.Server.Discovery.UDP.Port; p < 0 || p > 65535 {
+		return fmt.Errorf("server.discovery.udp.port must be between 1 and 65535, got %d", p)
+	}
 	// cameras must have id and url
 	seen := make(map[string]int)
 	for i, c := range cfg.Cameras {
