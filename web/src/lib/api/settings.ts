@@ -248,3 +248,20 @@ export async function revokeAPIKey(name: string): Promise<{ status: string }> {
     method: 'DELETE',
   });
 }
+
+// --- MiBeeVision consumer health (#328) ---
+
+// Mirrors GET /api/vision/status. When the vision integration is disabled the
+// backend returns only { enabled: false }; all other fields are optional.
+export interface VisionStatus {
+  enabled: boolean;
+  healthy?: boolean;
+  last_seen?: string;
+  device?: string;
+  queue_depth?: number;
+  processed?: number;
+}
+
+export async function getVisionStatus(signal?: AbortSignal): Promise<VisionStatus> {
+  return apiRequest<VisionStatus>('/vision/status', { signal });
+}
