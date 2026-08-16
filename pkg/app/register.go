@@ -14,6 +14,7 @@ import (
 	"log/slog"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
 
@@ -381,6 +382,36 @@ func registerServices(a *App, deps *appDeps) error {
 			},
 		}); err != nil {
 			return fmt.Errorf("register gb28181: %w", err)
+		}
+	}
+
+	// 11.7. discovery (optional) — UDP broadcast responder (MIBEE-NVR-DISC/v1)
+	// for LAN clients on multicast-restricted networks. Bind failures are
+	// logged, never fatal: discovery is a convenience path. Treated as enabled
+	// when the pointer is nil so manually-constructed configs (tests) behave
+	// like ApplyDefaults output. Port 0 binds an ephemeral port (tests);
+	// ApplyDefaults supplies 49090 for real configs.
+	if deps.cfg.Server.Discovery.UDP.Enabled == nil || *deps.cfg.Server.Discovery.UDP.Enabled {
+		responder := discovery.NewUDPResponder(
+			deps.cfg.Server.DeviceID,
+			deps.cfg.Server.DeviceName,
+			discovery.ParseAPIPort(deps.cfg.Server.Listen),
+			deps.cfg.Server.TLSListen != "",
+			deps.cfg.Server.Discovery.UDP.Port,
+		)
+		if err := a.Register(&serviceFunc{
+			name: "discovery",
+			startFunc: func(ctx context.Context) error {
+				if err := responder.Start(ctx); err != nil {
+					slog.Error("discovery: udp responder disabled", "error", err)
+				}
+				return nil
+			},
+			stopFunc: func() error {
+				return responder.Stop()
+			},
+		}); err != nil {
+			return fmt.Errorf("register discovery: %w", err)
 		}
 	}
 
