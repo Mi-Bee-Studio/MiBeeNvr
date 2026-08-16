@@ -243,3 +243,12 @@ func TestPlaybackMANSRTSPHeuristic(t *testing.T) {
 	require.Empty(t, pbActionFor(parseMANSRTSP("BOGUS MANSRTSP/1.0\r\n\r\n")))
 	require.NoError(t, ps.conn.Close())
 }
+
+// TestBareCallID guards the serialized-header-prefix trap: req.CallID().String()
+// includes the header name, which must not leak into a rebuilt request (the
+// peer's parser rejects the doubled prefix and drops the whole message).
+func TestBareCallID(t *testing.T) {
+	require.Equal(t, "abc@1", bareCallID("Call-ID: abc@1"))
+	require.Equal(t, "abc@1", bareCallID("abc@1"))
+	require.Equal(t, "", bareCallID(""))
+}

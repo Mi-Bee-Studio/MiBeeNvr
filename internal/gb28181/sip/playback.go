@@ -235,6 +235,7 @@ type playbackState struct {
 	end       time.Time
 	startedAt time.Time
 	paused    bool
+	resumedAt time.Time // last resume instant — stall watchdog grace anchor
 	scale     float64
 	counter   *countingSink
 }
@@ -314,7 +315,21 @@ func (s *Server) watchPlayback(st *playbackState) {
 			}
 			continue
 		}
-		if rcv.SinceLastPacket() > playbackStallTimeout {
+		// A MANSRTSP-paused fetch sends nothing by design — the stall
+		// watchdog must not recycle it (only an explicit stop / user stop
+		// ends a paused fetch).
+		if cur.paused {
+			continue
+		}
+		// After a resume the stall clock restarts: the device gets a full
+		// timeout to deliver post-pause media however deep the pause was.
+		idle := rcv.SinceLastPacket()
+		if !cur.resumedAt.IsZero() {
+			if since := time.Since(cur.resumedAt); since < idle {
+				idle = since
+			}
+		}
+		if idle > playbackStallTimeout {
 			slog.Info("gb28181: playback fetch stream ended", "channel", st.channelID,
 				"frames", st.counter.frames.Load())
 			_ = s.StopPlayback(st.channelID)
@@ -394,6 +409,7 @@ func (s *Server) PlaybackControl(channelID, action string, scale, position float
 		body = fmt.Sprintf("PLAY MANSRTSP/1.0\r\nCSeq: %d\r\nScale: %.2f\r\nRange: npt=%.3f-\r\n\r\n",
 			cseq, st.scale, position)
 		st.paused = false
+		st.resumedAt = time.Now()
 	case "seek":
 		npt := position
 		if npt < 0 {

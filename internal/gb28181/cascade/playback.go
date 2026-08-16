@@ -129,11 +129,14 @@ func (s *Service) onPlaybackInvite(req sip.Request, callID, channelID string, sd
 }
 
 // playbackRecordings lists the fMP4 recordings of cameraID overlapping the
-// window (oldest first). AVI/MJPEG recordings are not PS-muxable.
+// window (oldest first). AVI/MJPEG recordings are not PS-muxable. The query
+// start is padded — ListRecordings filters on "started_at within window", so
+// a recording straddling the window start would otherwise be missed; the
+// sample-level wall-time trim in playOnce aligns playback to the exact edge.
 func (s *Service) playbackRecordings(cameraID string, start, end time.Time) ([]model.Recording, error) {
 	recs, err := s.db.ListRecordings(context.Background(), model.RecordingFilter{
 		CameraID:  cameraID,
-		StartTime: start,
+		StartTime: start.Add(-2 * time.Hour),
 		EndTime:   end,
 		Limit:     2000,
 		SortBy:    "started_at",
@@ -324,7 +327,11 @@ func (ps *playbackSession) playOnce(seekNPT float64) (bool, *float64, error) {
 }
 
 // applyCtrl folds one MANSRTSP control into the pacing state. rel is the
-// current sample's RTP tick (needed to re-anchor `base` on scale changes).
+// current sample's RTP tick. base maps rel → due time (due = base +
+// rel/90/scale); a resume (with or without a scale change) re-anchors base so
+// the CURRENT frame is due immediately — computing that in two steps (re-anchor
+// for scale, then shift by the paused span) stacks both offsets and defers
+// media by the whole pause length.
 // Returns (seekTarget, stop).
 func (ps *playbackSession) applyCtrl(c pbCtrl, paused *bool, pausedAt *time.Time, scale *float64, base *time.Time, rel int64) (*float64, bool) {
 	switch c.action {
@@ -334,15 +341,11 @@ func (ps *playbackSession) applyCtrl(c pbCtrl, paused *bool, pausedAt *time.Time
 			*pausedAt = time.Now()
 		}
 	case "resume":
-		if c.scale > 0 && c.scale != *scale {
-			// Keep the current sample at "now" under the new scale.
-			*base = time.Now().Add(-time.Duration(float64(rel) / 90 / *scale * float64(time.Millisecond)))
+		if c.scale > 0 {
 			*scale = c.scale
 		}
-		if *paused {
-			*base = base.Add(time.Since(*pausedAt))
-			*paused = false
-		}
+		*paused = false
+		*base = time.Now().Add(-time.Duration(float64(rel) / 90 / *scale * float64(time.Millisecond)))
 	case "seek":
 		npt := c.pos
 		return &npt, false

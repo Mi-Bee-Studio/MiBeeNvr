@@ -215,6 +215,14 @@ func reqIDs(req sip.Request) (deviceID, channelID string) {
 	return
 }
 
+// bareCallID strips a serialized header prefix. req.CallID().String() returns
+// the FULL header ("Call-ID: <value>") — usable as a map key but NOT as the
+// value when re-building a request (the doubled prefix makes gosip's parser
+// on the peer reject the whole message).
+func bareCallID(callID string) string {
+	return strings.TrimSpace(strings.TrimPrefix(callID, "Call-ID:"))
+}
+
 func (ms *mediaSession) localHost() string {
 	h, _ := ms.svc.localHostPort()
 	return h
@@ -312,7 +320,8 @@ func (ms *mediaSession) stop() {
 	ms.close()
 }
 
-// sendBye delivers an in-dialog BYE for an errored forward. Best-effort.
+// sendBye delivers an in-dialog BYE for an ended forward or playback
+// dialog. Best-effort.
 func (s *Service) sendBye(callID, channelID string) {
 	if s.srv == nil {
 		return
@@ -329,12 +338,26 @@ func (s *Service) sendBye(callID, channelID string) {
 	rb.SetFrom(&sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: s.cfg.LocalDeviceID}, FHost: host, FPort: &p}})
 	rb.SetTo(&sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: dst.IP.String()}})
 	rb.SetRecipient(&sip.SipUri{FUser: sip.String{Str: channelID}, FHost: dst.IP.String(), FPort: &dstPort})
-	cid := sip.CallID(callID)
+	cid := sip.CallID(bareCallID(callID))
 	rb.SetCallID(&cid)
 	rb.SetHost(host)
 	rb.SetSeqNo(2)
-	if req, err := rb.Build(); err == nil {
-		_, _ = s.srv.Request(req)
+	// A request without Via is unroutable — the upper platform's transaction
+	// layer drops it (observed: end-of-playback BYE never matched the dialog).
+	rb.AddVia(&sip.ViaHop{
+		Host: host,
+		Port: &p,
+		Params: sip.NewParams().
+			Add("branch", sip.String{Str: sip.GenerateBranch()}).
+			Add("rport", sip.String{}),
+	})
+	req, err := rb.Build()
+	if err != nil {
+		slog.Warn("gb28181-cascade: BYE build failed", "channel", channelID, "error", err)
+		return
+	}
+	if _, err := s.srv.Request(req); err != nil {
+		slog.Warn("gb28181-cascade: BYE send failed", "channel", channelID, "error", err)
 	}
 }
 
