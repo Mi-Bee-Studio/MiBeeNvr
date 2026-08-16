@@ -354,6 +354,26 @@ func registerServices(a *App, deps *appDeps) error {
 			return fmt.Errorf("register srt: %w", err)
 		}
 	}
+	// 11.45. gb28181-cascade (optional) — GB/T 28181 lower-level client:
+	// registers to an upper platform and forwards local cameras on INVITE
+	// (#364). Registered after the gb28181 platform server so its Stop
+	// (reverse order) runs before the camera service tears down the hubs it
+	// subscribes to.
+	if deps.gb28181Cascade != nil {
+		cascadeSvc := deps.gb28181Cascade
+		if err := a.Register(&serviceFunc{
+			name: "gb28181-cascade",
+			startFunc: func(ctx context.Context) error {
+				if err := cascadeSvc.Start(ctx); err != nil {
+					slog.Error("gb28181-cascade", "error", err)
+				}
+				return nil
+			},
+			stopFunc: func() error { return cascadeSvc.Stop() },
+		}); err != nil {
+			return fmt.Errorf("register gb28181-cascade: %w", err)
+		}
+	}
 	// 11.5. gb28181 (optional) — GB/T 28181 SIP platform server. Registered
 	// after srt and before ws so its Stop (reverse order) runs before the
 	// streaming managers tear down. The SIP stack only handles signaling;

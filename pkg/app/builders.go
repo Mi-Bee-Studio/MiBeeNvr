@@ -31,6 +31,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/sip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
@@ -574,6 +575,15 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		// Alarm notifications surface on the event bus (SSE /api/events).
 		deps.gb28181Server.SetEventBus(deps.eventBus)
 		slog.Info("GB28181 SIP server configured", "sip_listen", cfg.GB28181.SIPListen)
+	}
+
+	// Step 7.95: GB28181 cascade client (optional, #364). The NVR registers
+	// to the configured upper platform as a lower-level device; cameras are
+	// aggregated into its catalog and forwarded (PS mux) on INVITE.
+	if cfg.GB28181Cascade.Enabled {
+		deps.gb28181Cascade = cascade.New(cfg.GB28181Cascade, camera.NewCascadeSource(camMgr), db)
+		slog.Info("GB28181 cascade client configured",
+			"upper", cfg.GB28181Cascade.ServerAddr, "device", cfg.GB28181Cascade.LocalDeviceID)
 	}
 
 	// Step 8: Cleanup manager

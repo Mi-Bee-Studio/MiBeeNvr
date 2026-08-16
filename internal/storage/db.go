@@ -390,6 +390,13 @@ func (d *DB) Init(ctx context.Context) error {
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		PRIMARY KEY (camera_id, token)
 	);`
+	cascadeChSQL := `CREATE TABLE IF NOT EXISTS cascade_channels (
+		camera_id TEXT PRIMARY KEY,
+		gb_channel_id TEXT NOT NULL UNIQUE,
+		name TEXT NOT NULL DEFAULT '',
+		updated_at DATETIME
+	);`
+
 	gbFpSQL := `CREATE TABLE IF NOT EXISTS gb28181_fingerprints (
 		device_id TEXT PRIMARY KEY,
 		serial TEXT NOT NULL,
@@ -397,7 +404,7 @@ func (d *DB) Init(ctx context.Context) error {
 		probed_at DATETIME
 	);`
 
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, ptzPresetsSQL} {
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}

@@ -1816,3 +1816,7 @@ func (a slogAdapter) Error(args ...interface{}) { a.logger.Error(fmt.Sprint(args
 func (a slogAdapter) Errorf(format string, args ...interface{}) {
 	a.logger.Error(fmt.Sprintf(format, args...))
 }
+
+// SlogLogger exposes the package's gosip log adapter to sibling packages
+// (gb28181/cascade) so they share one adapter implementation.
+func SlogLogger(l *slog.Logger) log.Logger { return slogAdapter{l} }

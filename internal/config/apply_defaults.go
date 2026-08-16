@@ -250,6 +250,17 @@ func applyConfigDefaults(cfg *Config) {
 		cfg.SRT.Port = 9000
 	}
 
+	// GB28181 cascade client defaults (#364)
+	if strings.TrimSpace(cfg.GB28181Cascade.SIPListen) == "" {
+		cfg.GB28181Cascade.SIPListen = ":5061"
+	}
+	if strings.TrimSpace(cfg.GB28181Cascade.HeartbeatInterval) == "" {
+		cfg.GB28181Cascade.HeartbeatInterval = "60s"
+	}
+	if cfg.GB28181Cascade.RegisterExpires == 0 {
+		cfg.GB28181Cascade.RegisterExpires = 3600
+	}
+
 	// GB28181 defaults (server block; per-camera fields have no defaults)
 	if strings.TrimSpace(cfg.GB28181.SIPListen) == "" {
 		cfg.GB28181.SIPListen = ":5060"
