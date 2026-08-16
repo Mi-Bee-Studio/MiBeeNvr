@@ -227,3 +227,10 @@ func (d *DB) GetGB28181Device(ctx context.Context, id string) (*GB28181Device, e
 	dev.RegisteredAt = scanTime(registeredAt)
 	return &dev, nil
 }
+
+// DeleteGB28181Channel removes one channel row (device-self pseudo-channel
+// cleanup, #352).
+func (d *DB) DeleteGB28181Channel(ctx context.Context, channelID string) error {
+	_, err := d.db.ExecContext(ctx, `DELETE FROM gb28181_channels WHERE id = ?`, channelID)
+	return err
+}

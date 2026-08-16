@@ -265,6 +265,17 @@ func (cm *CameraManager) GB28181CameraIDByChannel(deviceID, channelID string) (s
 	return "", false
 }
 
+// ArchiveGB28181Camera soft-removes the camera auto-enrolled for a channel —
+// used when a catalog supersedes the device-self pseudo-channel (#352).
+// Archives preserve recordings; a no-op when no camera is bound.
+func (cm *CameraManager) ArchiveGB28181Camera(deviceID, channelID string) error {
+	cameraID, ok := cm.GB28181CameraIDByChannel(deviceID, channelID)
+	if !ok {
+		return nil
+	}
+	return cm.ArchiveCamera(context.Background(), cameraID)
+}
+
 // GB28181NALUWriter returns the recorder's AU callback for a GB28181 camera,
 // or nil. The SIP server uses this to bridge RTP receiver output directly
 // into the recorder pipeline at access-unit granularity.
@@ -393,4 +404,19 @@ func (cm *CameraManager) UpdateGB28181DeviceMeta(deviceID, manufacturer, modelNa
 			"device_id", deviceID, "cameras", updated)
 	}
 	return nil
+}
+
+// GB28181RecordingWanted reports whether the camera bound to a channel wants
+// recording (nil RecordingEnabled = record by default). The alarm linkage
+// leaves such sessions to the recorder's own reconnect loop (#355).
+func (cm *CameraManager) GB28181RecordingWanted(deviceID, channelID string) bool {
+	cameraID, ok := cm.GB28181CameraIDByChannel(deviceID, channelID)
+	if !ok {
+		return false // no camera → alarm linkage owns the session lifecycle
+	}
+	cam := cm.snapshotConfig(cameraID)
+	if cam == nil {
+		return false
+	}
+	return cam.RecordingEnabled == nil || *cam.RecordingEnabled
 }

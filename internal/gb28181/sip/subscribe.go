@@ -237,6 +237,10 @@ func (s *Server) handleAlarm(a manscdp.Alarm) {
 	if s.eventBus != nil {
 		s.eventBus.Publish(context.Background(), event.TopicGB28181Alarm, evt)
 	}
+
+	// Alarm-triggered streaming (#355): INVITE the alarming channel when it
+	// is not already streaming (recording-owned sessions are left alone).
+	s.alarmLinkage.Trigger(ownerID, a.DeviceID, s.cfg.AlarmLinkage)
 }
 
 // GB28181Alarms returns the device's most recent alarms (latest first).
