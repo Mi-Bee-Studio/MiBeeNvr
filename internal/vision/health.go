@@ -18,10 +18,11 @@ type HeartbeatStatus struct {
 // NVR 的推送协调器在推送段之前检查 IsHealthy()——只在 Vision 健康时推送,
 // 避免向不可用的 Vision 发请求。Vision 恢复后,心跳恢复,推送自动续上。
 type HealthTracker struct {
-	mu       sync.RWMutex
-	lastSeen time.Time
-	status   HeartbeatStatus
-	timeout  time.Duration
+	mu         sync.RWMutex
+	lastSeen   time.Time
+	status     HeartbeatStatus
+	timeout    time.Duration
+	onRecovery func()
 }
 
 // NewHealthTracker 创建健康追踪器。timeoutSecs ≤ 0 时默认 60 秒。
@@ -34,12 +35,28 @@ func NewHealthTracker(timeoutSecs int) *HealthTracker {
 	}
 }
 
+// SetOnRecovery registers a callback fired (on its own goroutine) when a
+// heartbeat arrives after an unhealthy gap — the hook that triggers offline
+// compensation in the push coordinator (#329). Optional; nil disables.
+func (h *HealthTracker) SetOnRecovery(f func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onRecovery = f
+}
+
 // RecordHeartbeat 记录一次 Vision 心跳。
 func (h *HealthTracker) RecordHeartbeat(status HeartbeatStatus) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	wasHealthy := !h.lastSeen.IsZero() && time.Since(h.lastSeen) < h.timeout
 	h.lastSeen = time.Now()
 	h.status = status
+	cb := h.onRecovery
+	h.mu.Unlock()
+	if !wasHealthy && cb != nil {
+		// Fire off the request goroutine — the heartbeat handler must not
+		// block on compensation work.
+		go cb()
+	}
 }
 
 // IsHealthy 返回 Vision 是否健康(最近 timeout 内收到过心跳)。

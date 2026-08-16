@@ -248,6 +248,34 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 	return scanRecordingRows(rows)
 }
 
+// ListRecordingsForVisionRepush returns up to limit recordings whose segments
+// completed within [since, until] and that Vision has not finished processing —
+// the offline-compensation window for the vision push coordinator (#329).
+// The window is keyed on ended_at (completion): segments that started before
+// the pause but landed while offline must still be compensated; a small grace
+// on since covers ordering slack between segment completion and the push
+// attempt. Excludes timelapse segments (never pushed live) and merged segments
+// (files are typically reclaimed by the merge pipeline), and drops anything
+// already in a terminal ai_status (completed/failed).
+func (d *DB) ListRecordingsForVisionRepush(ctx context.Context, since, until time.Time, limit int) ([]model.Recording, error) {
+	defer d.observeQuery("ListRecordingsForVisionRepush", time.Now())
+	rows, err := d.readConn().QueryContext(ctx, `
+		SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived
+		FROM recordings
+		WHERE ended_at>=? AND ended_at<=?
+			AND format != 'timelapse'
+			AND COALESCE(merge_status,'') NOT IN ('merged','daily_merged')
+			AND COALESCE(ai_status,'') IN ('','pending','processing')
+		ORDER BY started_at ASC
+		LIMIT ?;`,
+		timeToDB(since.Add(-time.Minute)), timeToDB(until), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list recordings for vision repush: %w", err)
+	}
+	defer rows.Close()
+	return scanRecordingRows(rows)
+}
+
 // ListRecordingsWithTotal returns a page of recordings plus the total count matching the
 // filter. It runs ListRecordings (covering index, no sort) for the page, and a cached
 // CountRecordingsWithFilter for the total — collapsing repeated counts for the same

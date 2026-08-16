@@ -273,6 +273,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			func() config.VisionConfig { return cfg.Vision },
 			func() string { return cfg.Storage.RootDir },
 			deps.eventBus,
+			db,
 		)
 		slog.Info("Vision push integration enabled",
 			"url", cfg.Vision.URL,
