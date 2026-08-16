@@ -58,6 +58,11 @@
   }
   type WebrtcState = 'connecting' | 'connected' | 'disconnected' | 'failed';
 
+  // WebRTC audio track from the negotiated m-line (#372). Non-null only for
+  // cameras with a WebRTC-compatible codec (G.711/Opus); AAC cameras keep the
+  // separate audio-WS path in CameraAudioButton.
+  let webrtcAudioTrack = $state<MediaStreamTrack | null>(null);
+
   let streamState: StreamState | 'loading' = $state('loading');
   let webrtcState: WebrtcState = $state('connecting');
   let videoEl: HTMLVideoElement | undefined = $state();
@@ -239,6 +244,7 @@ let destroyed = false;
     reconnectAttempts = 0;
     streamState = 'loading';
     webrtcState = 'connecting';
+    webrtcAudioTrack = null;
     initWebRTC();
   }
 
@@ -334,6 +340,7 @@ let destroyed = false;
 
     streamState = 'loading';
     webrtcState = 'connecting';
+    webrtcAudioTrack = null;
 
     // Arm the connection-establishment timeout: if no real frame arrives within
     // CONNECT_TIMEOUT_MS, abort and reconnect. Cleared on first frame or when
@@ -362,6 +369,9 @@ let destroyed = false;
 
       // Handle incoming tracks
       peerConnection.ontrack = (event) => {
+        if (event.track.kind === 'audio') {
+          webrtcAudioTrack = event.track;
+        }
         if (event.streams && event.streams[0] && videoEl) {
           videoEl.srcObject = event.streams[0];
           // A frame actually playing is the ONLY reliable signal that this
@@ -514,6 +524,7 @@ let destroyed = false;
     destroyPeerConnection();
     streamState = 'loading';
     webrtcState = 'connecting';
+    webrtcAudioTrack = null;
 
     const timer = setTimeout(() => initWebRTC(), 50);
     return () => {
@@ -691,7 +702,11 @@ let destroyed = false;
 
   <!-- Audio button (top-right, before expand) — hidden for video-only cameras -->
   {#if hasAudio}
-    <CameraAudioButton {cameraId} />
+    <CameraAudioButton
+      {cameraId}
+      webrtcAudioTrack={webrtcAudioTrack}
+      onToggleVideoMute={(muted) => { if (videoEl) videoEl.muted = muted; }}
+    />
   {/if}
 
   <!-- Expand/Shrink -->
