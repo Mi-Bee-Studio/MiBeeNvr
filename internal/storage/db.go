@@ -513,6 +513,13 @@ func (d *DB) Optimize(ctx context.Context) error {
 // CheckpointWAL performs a WAL checkpoint operation.
 // Mode can be "PASSIVE", "FULL", "RESTART", or "TRUNCATE".
 func (d *DB) CheckpointWAL(ctx context.Context, mode string) (busy int, logFrames int, checkpointedFrames int, err error) {
+	// PRAGMA does not accept bound parameters, so the mode is interpolated into
+	// the statement text — whitelist it so no caller can smuggle arbitrary SQL.
+	switch mode {
+	case "PASSIVE", "FULL", "RESTART", "TRUNCATE":
+	default:
+		return 0, 0, 0, fmt.Errorf("invalid checkpoint mode: %q", mode)
+	}
 	query := fmt.Sprintf("PRAGMA wal_checkpoint(%s)", mode)
 	row := d.db.QueryRowContext(ctx, query)
 	err = row.Scan(&busy, &logFrames, &checkpointedFrames)

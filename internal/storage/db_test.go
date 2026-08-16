@@ -1625,6 +1625,22 @@ func TestCheckpointWALTruncate(t *testing.T) {
 	t.Logf("TRUNCATE checkpoint: busy=%d logFrames=%d ckptFrames=%d", busy, logFrames, ckptFrames)
 }
 
+func TestCheckpointWALInvalidMode(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_ckpt_invalid.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	for _, mode := range []string{"", "passive", "PASSIVE) OR 1=1--", "TRUNCATE; DROP TABLE recordings"} {
+		_, _, _, err := db.CheckpointWAL(ctx, mode)
+		require.Error(t, err, "mode %q must be rejected", mode)
+		require.Contains(t, err.Error(), "invalid checkpoint mode")
+	}
+}
+
 func TestGetWALSize(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test_walsize.db")
