@@ -32,6 +32,7 @@
   import FlvPlayer from './FlvPlayer.svelte';
   import MjpegLivePlayer from './MjpegLivePlayer.svelte';
   import { isAudioCapable } from '$lib/stream-selection';
+  import { API_BASE } from '$lib/api';
   import type { Camera } from '$lib/api';
   import type { PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
   import { healthFromStreamState, healthFromConnectionState, type HealthState } from '$lib/player/health';
@@ -148,7 +149,7 @@
   });
 
   function getHlsStreamUrl(): string {
-    return streamUrl ?? `/api/cameras/${cameraId}/stream/index.m3u8`;
+    return streamUrl ?? `${API_BASE}/cameras/${cameraId}/stream/index.m3u8`;
   }
 </script>
 

@@ -3,7 +3,8 @@
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
   import CameraAudioButton from './CameraAudioButton.svelte';
-  import { forceRelogin, getAuthHeader, getTokenForUrl } from '$lib/api';
+  import { forceRelogin, getAuthHeader, getTokenForUrl, API_BASE } from '$lib/api';
+  import { withBase } from '$lib/base-path';
   import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
   import { sendTelemetry } from '$lib/telemetry';
@@ -459,7 +460,7 @@ let destroyed = false;
       const whepTimeout = setTimeout(() => whepAbort.abort(), 10000);
       let response: Response;
       try {
-        response = await fetch(`/api/cameras/${cameraId}/stream/webrtc`, {
+        response = await fetch(`${API_BASE}/cameras/${cameraId}/stream/webrtc`, {
           method: 'POST',
           headers,
           body: peerConnection.localDescription!.sdp,
@@ -485,7 +486,10 @@ let destroyed = false;
       const location = response.headers.get('Location');
       if (location) {
         // Make absolute if relative
-        sessionUrl = location.startsWith('/') ? location : `/api/cameras/${cameraId}/stream/webrtc/${location}`;
+        // Make absolute if relative. The Location header is a root-absolute
+        // in-app path ("/api/...") — re-prefix it with the runtime base path
+        // so it resolves against the proxy/gateway origin (#394).
+        sessionUrl = location.startsWith('/') ? withBase(location) : `${API_BASE}/cameras/${cameraId}/stream/webrtc/${location}`;
       }
 
       // Parse SDP answer

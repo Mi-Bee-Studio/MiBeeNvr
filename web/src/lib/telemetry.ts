@@ -6,9 +6,9 @@
  * delivery that survives page unload.
  */
 
-import { getTokenForUrl } from '$lib/api/client';
+import { API_BASE, getTokenForUrl } from '$lib/api/client';
 
-const TELEMETRY_ENDPOINT = '/api/telemetry';
+const TELEMETRY_ENDPOINT = `${API_BASE}/telemetry`;
 
 /** Whether user has explicitly opted into telemetry in production mode. */
 let _telemetryOptedIn = false;

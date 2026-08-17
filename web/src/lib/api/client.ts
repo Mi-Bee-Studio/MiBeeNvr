@@ -1,6 +1,7 @@
 /**
  * Base HTTP client — auth, generic fetch wrappers
  */
+import { APP_BASE } from '$lib/base-path';
 
 // Session token storage.
 //
@@ -174,8 +175,9 @@ export function getTokenForUrl(): string | null {
   return getToken();
 }
 
-// API base URL (relative path for embedded static files)
-export const API_BASE = '/api';
+// API base URL: runtime base path (reverse-proxy / unified-gateway prefix,
+// e.g. fnOS "/app/mibee-nvr") + "/api". Empty prefix keeps "/api" unchanged.
+export const API_BASE = `${APP_BASE}/api`;
 
 // Generic API request function
 export async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -306,7 +308,7 @@ export async function apiHeadHeader(
 export async function login(username: string, password: string, signal?: AbortSignal): Promise<LoginResponse> {
   const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
 
-  const response = await fetch('/api/auth/login', {
+  const response = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: {
       Authorization: authHeader,
@@ -340,9 +342,34 @@ export function logout(): void {
   window.location.hash = '#/login';
 }
 
+// Unified-gateway session bootstrap (fnOS SSO, #394).
+//
+// On boot, when no session token is stored, the SPA asks the NVR to mint one
+// via the gateway: inside the fnOS desktop the request arrives through the
+// fnOS unified gateway with a verified NAS-admin identity and returns a normal
+// signed session token — the user never sees the login page. Accessed
+// directly on the NVR port there is no gateway identity, the endpoint 401s,
+// and the app falls back to the regular login form. Must run BEFORE mount so
+// the synchronous isAuthenticated() route gate sees the stored token.
+export async function tryGatewaySession(): Promise<boolean> {
+  if (getToken()) return true;
+  try {
+    const response = await fetch(`${API_BASE}/auth/gateway-session`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return false;
+    const data = (await response.json()) as LoginResponse;
+    if (!data.token) return false;
+    storeToken(data.token, data.expires_at);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Health check (no auth required)
 export async function healthCheck(signal?: AbortSignal): Promise<HealthResponse> {
-  const response = await fetch('/api/health', { signal });
+  const response = await fetch(`${API_BASE}/health`, { signal });
   return response.json();
 }
 
@@ -369,7 +396,7 @@ export async function setupApi(
   if (language) body.language = language;
   if (storagePath) body.storage_path = storagePath;
 
-  const response = await fetch('/api/setup', {
+  const response = await fetch(`${API_BASE}/setup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

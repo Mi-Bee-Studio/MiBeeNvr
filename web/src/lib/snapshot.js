@@ -21,6 +21,11 @@ const BACKOFF_AFTER_FAILURES = 3;
 /** Backoff interval once the failure threshold is crossed. */
 const BACKOFF_INTERVAL_MS = 30000;
 
+// Runtime base path (unified-gateway prefix, e.g. fnOS "/app/mibee-nvr").
+// Inlined here instead of imported: this plain-JS module is also consumed by
+// non-Svelte callers. Mirrors src/lib/base-path.ts.
+const APP_BASE = (typeof window !== 'undefined' && window.__NVR_BASE__) || '';
+
 /**
  * Fetch a snapshot image for a camera.
  * Updates the provided state stores via callbacks.
@@ -52,7 +57,7 @@ export async function fetchSnapshot({
   }
 
   try {
-    const response = await fetch(`/api/cameras/${cameraId}/snapshot`, { headers });
+    const response = await fetch(`${APP_BASE}/api/cameras/${cameraId}/snapshot`, { headers });
     if (response.status === 404) {
       onUnsupported(cameraId);
       onResult?.(cameraId, 'unsupported');

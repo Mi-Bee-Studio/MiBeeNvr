@@ -1,10 +1,10 @@
 <script lang="ts">
-  // 存储设置 (Storage) — retention + disk threshold + WebDAV.
+  // 存储设置 (Storage) — recording root (#395) + retention + disk threshold + WebDAV.
   // Part of the unified settings shell (#153): no save button here; the
   // shell drives save/reset via the settingsForm coordinator.
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getStats } from '$lib/api';
-  import type { SettingsConfig, StorageStats } from '$lib/api';
+  import { getSettings, updateSettings, getStats, getStorageCandidates } from '$lib/api';
+  import type { SettingsConfig, StorageStats, StorageCandidatesResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
@@ -14,6 +14,11 @@
   let loading = $state(true);
   let error = $state('');
   let saving = $state(false);
+
+  // Form state — recording root (#395)
+  let storageRoot = $state('');
+  let storageCandidates = $state<StorageCandidatesResponse | null>(null);
+  let storageRestartRequired = $state(false);
 
   // Form state — cleanup
   let retentionDays = $state(30);
@@ -32,6 +37,7 @@
   // Originals snapshot for dirty tracking + destructive detection
   let originalSnapshot = $state('');
   let originalRetentionDays = $state(0);
+  let originalStorageRoot = $state('');
   let originalWebdavEnabled = $state(false);
   let originalWebdavReadWrite = $state(false);
 
@@ -39,7 +45,7 @@
   let isDirty = $derived.by(() => {
     if (loading) return false;
     const current = JSON.stringify({
-      retentionDays, diskThresholdPercent, webdavEnabled, webdavReadWrite,
+      storageRoot, retentionDays, diskThresholdPercent, webdavEnabled, webdavReadWrite,
     });
     return current !== originalSnapshot;
   });
@@ -57,9 +63,10 @@
 
   function captureSnapshot() {
     originalSnapshot = JSON.stringify({
-      retentionDays, diskThresholdPercent, webdavEnabled, webdavReadWrite,
+      storageRoot, retentionDays, diskThresholdPercent, webdavEnabled, webdavReadWrite,
     });
     originalRetentionDays = retentionDays;
+    originalStorageRoot = storageRoot;
     originalWebdavEnabled = webdavEnabled;
     originalWebdavReadWrite = webdavReadWrite;
   }
@@ -101,14 +108,17 @@
       diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       webdavEnabled = settings.webdav.enabled;
       webdavReadWrite = settings.webdav.read_write;
+      storageRoot = settings.storage?.root_dir ?? '';
       captureSnapshot();
     } catch (e) {
       error = e instanceof Error ? e.message : t('common.failedLoadSettings');
     } finally {
       loading = false;
     }
-    // Disk info is non-critical — load separately so a stats failure doesn't
-    // block the rest of the panel.
+    // Candidates + disk info are non-critical — load separately so their
+    // failure doesn't block the rest of the panel.
+    storageCandidates = await getStorageCandidates().catch(() => null);
+    if (storageCandidates && !storageRoot) storageRoot = storageCandidates.current;
     diskInfo = await getStats().catch(() => null);
   }
 
@@ -120,6 +130,12 @@
       // single payload. We only send the fields this panel owns; timezone is
       // omitted (server preserves the existing value).
       const payload: SettingsConfig = {
+        // Recording root (#395): partial-PUT only when this panel actually
+        // changed it — the backend applies it on the NEXT start and answers
+        // restart_required=true, which we surface as a toast below.
+        ...(storageRoot !== originalStorageRoot && storageRoot
+          ? { storage: { root_dir: storageRoot } }
+          : {}),
         cleanup: {
           retention_days: retentionDays,
           disk_threshold_percent: diskThresholdPercent,
@@ -135,9 +151,15 @@
           path_prefix: '',
         },
       };
-      await updateSettings(payload);
+      const res = await updateSettings(payload);
+      storageRestartRequired = !!res.restart_required;
       await loadAll();
-      showToast(t('settings.saved'), 'success');
+      if (storageRestartRequired) {
+        showToast(t('settings.storageRootRestartHint'), 'success');
+        storageRestartRequired = false;
+      } else {
+        showToast(t('settings.saved'), 'success');
+      }
     } catch (e) {
       // Surface to the unified shell (#160): saveAll's contract is "throws on
       // first error" so the shell can keep the dirty bar visible and report
@@ -153,6 +175,7 @@
   function resetForm() {
     // Restore from the last captured snapshot.
     retentionDays = originalRetentionDays;
+    storageRoot = originalStorageRoot;
     webdavEnabled = originalWebdavEnabled;
     webdavReadWrite = originalWebdavReadWrite;
     // Threshold original isn't tracked separately — reparse from snapshot.
@@ -205,6 +228,28 @@
     <button onclick={loadAll} class="btn btn-primary btn-sm">{t('common.retry')}</button>
   </div>
 {:else}
+  <!-- Recording root (#395): current + host-granted candidates -->
+  <SettingsCard title={t('settings.storageRoot')} subtitle={t('settings.storageRootDesc')}>
+    <div class="max-w-xl">
+      <select class="input" bind:value={storageRoot} aria-label={t('settings.storageRoot')}>
+        {#if storageCandidates}
+          {#each storageCandidates.candidates as c (c.path)}
+            <option value={c.path}>
+              {c.path}{c.label === 'current' ? ` (${t('settings.storageRootCurrent')})` : ''}
+            </option>
+          {/each}
+        {:else if storageRoot}
+          <option value={storageRoot}>{storageRoot}</option>
+        {/if}
+      </select>
+      {#if storageCandidates && storageCandidates.candidates.length <= 1}
+        <p class="text-xs th-text-muted mt-2">{t('settings.storageRootNoCandidates')}</p>
+      {:else}
+        <p class="text-xs th-text-muted mt-2">{storageCandidates?.restart_hint}</p>
+      {/if}
+    </div>
+  </SettingsCard>
+
   <!-- Cleanup Policy: retention + disk threshold -->
   <SettingsCard title={t('settings.cleanup')} subtitle={t('settings.cleanupDesc')}>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -2,7 +2,7 @@
   import { onDestroy, getContext } from 'svelte';
   import { t } from '$lib/i18n';
   import { Maximize, Minimize, AlertCircle, RefreshCw, Volume2, VolumeX, Volume } from 'lucide-svelte';
-  import { getTokenForUrl } from '$lib/api';
+  import { getTokenForUrl, API_BASE } from '$lib/api';
   import type { StreamState } from '$lib/hls-errors';
   import { getPlaybackTier, detectWebCodecs, detectWebGL2 } from '$lib/webcodecs-player/capabilities';
   import { decodeVideoFrame } from '$lib/webcodecs-player/protocol';
@@ -529,7 +529,7 @@ function handleWebGpuLost() {
 
   function buildWsUrl(): string {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = `${proto}//${location.host}/api/cameras/${cameraId}/stream/ws`;
+    let url = `${proto}//${location.host}${API_BASE}/cameras/${cameraId}/stream/ws`;
     // ?token= carries the bare session token (mbs_...), NOT a "Bearer ..." header —
     // the backend auth middleware reads ?token= directly. getTokenForUrl returns
     // the token without the "Bearer " prefix.

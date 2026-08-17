@@ -1,6 +1,6 @@
 <script lang="ts">
   import { AudioPlayer, AudioCodec } from '$lib/audio-player';
-  import { getTokenForUrl } from '$lib/api';
+  import { getTokenForUrl, API_BASE } from '$lib/api';
   import { t } from '$lib/i18n';
 
   let {
@@ -71,7 +71,7 @@
   // ── WebSocket URL with auth ──
   function buildWsUrl(): string {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = `${proto}//${location.host}/api/recordings/${recordingId}/playback`;
+    let url = `${proto}//${location.host}${API_BASE}/recordings/${recordingId}/playback`;
     // ?token= carries the bare session token (mbs_...), NOT a "Bearer ..." header.
     const token = getTokenForUrl();
     if (token) {

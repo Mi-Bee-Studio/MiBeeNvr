@@ -43,6 +43,37 @@ func applyConfigDefaults(cfg *Config) {
 	if env := strings.TrimSpace(os.Getenv("NVR_FRAME_ANCESTORS")); env != "" {
 		cfg.Security.FrameAncestors = env
 	}
+	// NVR_UNIX_SOCKET overrides server.unix_socket (env wins over the config
+	// file). Set by the fnOS app lifecycle script: the fnOS unified gateway
+	// forwards authenticated requests to a Unix socket inside the app's target
+	// directory (see docs/core-concepts gateway-registration).
+	if env := strings.TrimSpace(os.Getenv("NVR_UNIX_SOCKET")); env != "" {
+		cfg.Server.UnixSocket = env
+	}
+	// NVR_BASE_PATH overrides server.base_path (env wins over the config
+	// file). "/app/mibee-nvr" on fnOS — the unified-gateway prefix the SPA is
+	// served under. Normalized to a leading slash and no trailing slash.
+	if env := strings.TrimSpace(os.Getenv("NVR_BASE_PATH")); env != "" {
+		cfg.Server.BasePath = NormalizeBasePath(env)
+	}
+	if cfg.Server.BasePath != "" {
+		cfg.Server.BasePath = NormalizeBasePath(cfg.Server.BasePath)
+	}
+	// NVR_STORAGE_CANDIDATES (colon-separated container paths, #395): extra
+	// storage locations the host platform granted the app (fnOS user-authorized
+	// directories, mounted by the lifecycle script under /media/*). Informational
+	// only — surfaced via /api/storage/candidates for the settings UI.
+	if env := strings.TrimSpace(os.Getenv("NVR_STORAGE_CANDIDATES")); env != "" {
+		var candidates []string
+		for _, p := range strings.Split(env, ":") {
+			if p = strings.TrimSpace(p); p != "" {
+				candidates = append(candidates, p)
+			}
+		}
+		if len(candidates) > 0 {
+			cfg.Storage.Candidates = candidates
+		}
+	}
 	// Device identity (#330): the name defaults to the system hostname and is
 	// intentionally NOT persisted (an explicit server.device_name overrides it;
 	// a hostname change is reflected on the next restart). The ID itself is
