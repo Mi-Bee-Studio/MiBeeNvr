@@ -104,6 +104,13 @@ jobs:
             VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # No provenance/SBOM attestations: buildx attaches them as extra
+          # manifest-list entries (application/vnd.oci.empty.v1+json), which the
+          # Alibaba Cloud ACR mirror rejects with
+          # "denied: unknown manifest class" — breaking mirror-to-acr. ghcr
+          # works with or without them; ACR compatibility wins.
+          provenance: false
+          sbom: false
 
   # ---- Offline fnOS .fpk -------------------------------------------------------
   # Produces the self-contained fnOS installer (both arch images docker-saved
