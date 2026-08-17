@@ -6,6 +6,10 @@
 
 提供按需 HLS 实时流媒体。
 
+携带会话令牌请求播放列表时，响应会同时设置一个作用域受限的
+`mbs_session` cookie —— 供无法设置逐请求头的播放器（iOS AVPlayer、部分原生
+播放器）拉取媒体分片，避免分片 401（0.11.0 新增）。
+
 **请求（HLS 播放列表）：**
 ```bash
 curl -u username:password \
@@ -47,6 +51,9 @@ curl -u username:password \
 **端点：** `POST /api/cameras/{id}/stream/webrtc`
 
 创建新的 WebRTC WHEP（WebRTC-HTTP Egress Protocol）会话。接受 SDP offer 并返回 SDP answer，同时在 Location 头中返回会话 URL。
+
+G.711（PCMU/PCMA）与 Opus 音频直接复用进 WebRTC 轨道，零转码（0.11.0 起）；
+AAC 直播音频仍走独立的音频 WebSocket 端点。
 
 **请求：**
 ```bash
@@ -240,23 +247,23 @@ curl -u username:password \
   "protocols": [
     {
       "protocol": "webrtc",
-      "label": "WebRTC (WHEP)",
-      "available": true
+      "available": true,
+      "reason": ""
     },
     {
       "protocol": "flv",
-      "label": "HTTP-FLV",
-      "available": true
+      "available": true,
+      "reason": ""
     },
     {
       "protocol": "hls",
-      "label": "HLS",
-      "available": true
+      "available": true,
+      "reason": ""
     },
     {
       "protocol": "ws",
-      "label": "WebSocket",
-      "available": true
+      "available": true,
+      "reason": ""
     }
   ],
   "encoding": "h264",

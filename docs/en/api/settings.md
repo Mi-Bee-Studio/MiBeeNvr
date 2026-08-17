@@ -63,21 +63,110 @@ curl -u username:password \
 **Response:**
 ```json
 {
-  "server": {
-    "listen": ":9090"
-  },
-  "storage": {
-    "root_dir": "/var/lib/mibee-nvr",
-    "segment_duration": "30s"
-  },
   "cleanup": {
     "retention_days": 30,
     "check_interval": "1h",
-    "disk_threshold_percent": 95
+    "disk_threshold_percent": 85
+  },
+  "webdav": {
+    "enabled": true,
+    "path_prefix": "/dav",
+    "read_write": false
   },
   "auth": {
-    "username": "admin"
+    "username": "admin",
+    "auth_configured": true
+  },
+  "mibeevision": {
+    "api_keys": [
+      {
+        "name": "vision",
+        "prefix": "mbv_1a2b…",
+        "revoked": false,
+        "last_used": "2026-08-17T02:00:00Z"
+      }
+    ]
+  },
+  "timezone": "Local",
+  "timezone_display": "CST (UTC+8)",
+  "server": {
+    "listen": ":9090"
+  },
+  "gb28181": {
+    "enabled": false,
+    "sip_listen": ":5060",
+    "server_id": "34020000002000000001",
+    "realm": "3402000000",
+    "password_configured": true,
+    "port_range": "30000-30050",
+    "allowed_device_ids": [],
+    "heartbeat_interval": "60s",
+    "catalog_interval": "30m",
+    "tcp_mode": false,
+    "tcp_framing": "auto",
+    "media_transport": "udp",
+    "sip_transport": "udp",
+    "subscribe_catalog": true,
+    "subscribe_alarm": false,
+    "subscribe_mobile_position": false,
+    "subscribe_expires": "3600s"
   }
+}
+```
+
+`mibeevision.api_keys` never returns full secrets (prefix only); `last_used` is the
+UTC time that key was last used (minute granularity), omitted when never used.
+
+## MiBeeVision Integration Status
+
+### Query Vision consumer health
+
+**Endpoint:** `GET /api/vision/status`
+
+Report the health of the external AI processing consumer (MiBeeVision), as shown in
+the web UI. Returns `{"enabled": false}` when the integration is not enabled.
+
+**Request:**
+```bash
+curl -u username:password   "http://localhost:9090/api/vision/status"
+```
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "healthy": true,
+  "device": "jetson-orin",
+  "queue_depth": 0,
+  "processed": 12841,
+  "last_seen": "2026-08-17T12:00:00Z"
+}
+```
+
+`last_seen` is omitted when no heartbeat has ever been received. The NVR only pushes
+video segments to Vision while `healthy` is `true`; after a heartbeat returns, missed
+segments are automatically re-pushed as compensation.
+
+### Vision heartbeat
+
+**Endpoint:** `POST /api/vision/heartbeat` (public, no auth)
+
+The Vision service reports every 30 seconds. Request body:
+
+```json
+{
+  "status": "ok",
+  "device": "jetson-orin",
+  "queue_depth": 0,
+  "processed_count": 12841
+}
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "push_enabled": true
 }
 ```
 

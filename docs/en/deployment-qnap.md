@@ -56,7 +56,6 @@ mkdir -p /share/Container/mibee-nvr && cd /share/Container/mibee-nvr
 docker compose up -d
 ```
 
-## Port conflicts
 ## Import the ready-made template
 
 Prefer not to paste compose by hand? A ready-to-use application template
@@ -65,6 +64,7 @@ lives in the repo: [`deploy/qnap/docker-compose.yml`](../../deploy/qnap/docker-c
 same host-network compose with the typical QTS pool path pre-filled, plus
 commented `NVR_LISTEN_PORT` and China-mirror switches.
 
+## Port conflicts
 
 QNAP QTS uses `8080` (HTTP management) / `443` (HTTPS) / `80` (Web Server, if enabled) for itself. These do not clash with MiBee NVR's `9090` (Web) or `2121` (FTP). If a QNAP service occupies a port you need, change that service's port in the QTS **Control Panel → Network** rather than remapping the NVR.
 
@@ -79,7 +79,7 @@ ftp:
 
 ## Updates & rollback
 
-See [Auto-update guide](deployment-autoupdate.md). Redeploy from the Application after `docker compose pull`, or pin a tag (`mibeenvr:0.10.0`) for reproducible rollbacks. Data under `/share/Container/mibee-nvr/data` persists across recreation.
+See [Auto-update guide](deployment-autoupdate.md). Redeploy from the Application after `docker compose pull`, or pin a tag (`mibeenvr:0.11.0`) for reproducible rollbacks. Data under `/share/Container/mibee-nvr/data` persists across recreation.
 
 ## Native `.qpkg` — when it's worth it (optional)
 

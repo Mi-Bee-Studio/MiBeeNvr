@@ -17,7 +17,8 @@
 | ONVIF | [onvif.md](onvif.md) | PTZ 控制、预置位、成像、网络、用户、发现 |
 | 录制 | [recordings.md](recordings.md) | 列出、获取、删除、下载录制文件、延时摄影帧 |
 | 归档 | [archives.md](archives.md) | 归档组、保留管理 |
-| 设置 | [settings.md](settings.md) | 系统统计、设置增删改查、合并/流媒体/转码设置 |
+| 设置 | [settings.md](settings.md) | 系统统计、设置增删改查、合并/流媒体/转码设置、MiBeeVision 集成状态 |
+| GB28181 | [../gb28181-guide.md](../gb28181-guide.md) | 国标平台：设备/通道、目录刷新、报警、云台、设备录像检索回放 |
 | 小米 | [xiaomi.md](xiaomi.md) | 云认证、验证码、设备管理 |
 | 合并与延时配置 | [merge.md](merge.md) | 合并状态、待处理计数、摄像头合并/延时配置 |
 | 转码 | [transcoding.md](transcoding.md) | FFmpeg 管理、转码任务、回填、摄像头配置 |

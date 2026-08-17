@@ -1,16 +1,16 @@
 # 部署 FAQ — NAS 打包、端口冲突、自动升级
 
-> 适用于 v0.10.0+。覆盖各大 NAS 平台的升级机制与端口冲突防护。
+> 适用于 v0.11.0+。覆盖各大 NAS 平台的升级机制与端口冲突防护。
 > 英文版待补:`docs/en/deployment-faq.md`。
 
 ## 目录
 
-- [Q1：发布 v0.10.0 正式版后，各 NAS 平台如何自动升级？](#q1发布-v0100-正式版后各-nas-平台如何自动升级)
+- [Q1：发布 v0.11.0 正式版后，各 NAS 平台如何自动升级？](#q1发布-v0110-正式版后各-nas-平台如何自动升级)
 - [Q2：如何防止端口冲突？初始化能否设端口？装完能否改？](#q2如何防止端口冲突初始化能否设端口装完能否改)
 
 ---
 
-## Q1：发布 v0.10.0 正式版后，各 NAS 平台如何自动升级？
+## Q1：发布 v0.11.0 正式版后，各 NAS 平台如何自动升级？
 
 ### 1.1 应用内的"升级感知"层（已具备，但不执行升级）
 
@@ -52,7 +52,7 @@ docker compose --profile auto-update up -d   # 启动 Watchtower
 curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
 
 # 或指定版本
-sudo install.sh --version v0.10.1
+sudo install.sh --version v0.11.0
 ```
 
 ### 1.4 要不要做"应用内一键自升级"？
@@ -61,7 +61,7 @@ sudo install.sh --version v0.10.1
 
 - systemd 进程自替换 + 重启需要 root / `CAP_SYS_ADMIN`，容器内做不到，Docker 用户拿不到这个能力。
 - 端口、数据目录、配置路径各平台不同，自升级脚本要兼容全场景，维护成本高。
-- v0.10.0 阶段 Docker 是主推路径，Watchtower 已够；裸机用户重跑 `install.sh` 是一行命令，门槛极低。
+- v0.11.0 阶段 Docker 是主推路径，Watchtower 已够；裸机用户重跑 `install.sh` 是一行命令，门槛极低。
 
 **结论：Docker 走 Watchtower 全自动；裸机走"重跑 install.sh"半自动；应用内只提醒。** 若未来要补，等 1.x 再加 `--self-update` 子命令，且仅对裸机生效。
 
@@ -89,7 +89,7 @@ sudo install.sh --version v0.10.1
 |---|---|---|
 | `init` 时设端口 | ✅ 支持 | `mibee-nvr init --listen :PORT`，默认 `:9090`，写入 `mibee-nvr.yaml` 的 `server.listen` 字段 |
 | 装完后改端口 | ✅ 可改 | 编辑 `mibee-nvr.yaml` 的 `server.listen` → **重启**进程/容器 |
-| Web UI 改端口 | ❌ 不支持 | 设置页 `SettingsConfig` 不含 `server` 字段，UI 无法修改 |
+| Web UI 改端口 | ✅ 支持 | 设置页「通用/General」可改监听端口（写入 `server.listen`，后端 PUT 自 #270 起接受），保存后重启生效 |
 | 热重载（不重启生效） | ❌ 不支持 | HTTP listener 无法运行时重新 bind，必须重启 |
 | Docker 端口映射规避冲突 | ❌ host 网络下失效 | 所有 NAS compose 用 `network_mode: host` |
 
@@ -97,7 +97,7 @@ sudo install.sh --version v0.10.1
 
 | 安装包形态 | 安装时设端口 | 装完改端口 |
 |---|---|---|
-| **`install.sh`（裸机）** | ⚠️ 脚本内硬编码 `--listen :9090`，未暴露用户传参入口。底层二进制 `init` 支持 `--listen`，但脚本没接 | ✅ 改 `/var/lib/mibee-nvr/mibee-nvr.yaml` 的 `server.listen` → `sudo systemctl restart mibee-nvr` |
+| **`install.sh`（裸机）** | ✅ 支持（#268）：`install.sh --port 9091`，或 TTY 交互提示输入端口（pipe 模式走默认 `9090` 不阻塞） | ✅ 改 `/var/lib/mibee-nvr/mibee-nvr.yaml` 的 `server.listen` → `sudo systemctl restart mibee-nvr` |
 | **Docker compose（NAS 通用）** | ✅ 改挂载的 config 或 env | ✅ 改 config 卷里的 `mibee-nvr.yaml` → `docker compose restart mibee-nvr` |
 | **fnOS `.fpk`** | 底层是 docker-compose，同上 | 同上 |
 | **unRAID CA 模板** | XML 模板 `WebUI` 字段指向 `9090`，但实际端口由容器内 config 决定 | 改 `/mnt/user/appdata/mibee-nvr/data/mibee-nvr.yaml` → 在 Docker 面板重启容器 |
@@ -142,7 +142,7 @@ server:
 
 2. ✅ **compose env 驱动端口**（#269，已实现）：二进制启动时读 `NVR_LISTEN_PORT` 覆盖 `server.listen`（env 优先于 config 文件，12-factor）。NAS 用户改 compose 一个变量即可，不用动 YAML。
 
-3. ⬜ **Web UI 增加端口设置 + “需重启生效”提示**（#270，待实现）：设置页加 `server.listen` 字段，保存时弹窗提示重启。
+3. ✅ **Web UI 增加端口设置 + “需重启生效”提示**（#270，已实现）：设置页加 `server.listen` 字段，保存时提示需重启生效。
 
 ---
 

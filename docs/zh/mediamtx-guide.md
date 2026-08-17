@@ -195,18 +195,20 @@ protocols:
 cameras:
   - id: "cam1"
     name: "前门摄像头"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     # 使用 MediaMTX 作为中间代理
     url: "rtsp://admin:password123@localhost:8554/cam1"
     enabled: true
-    recording: true
-    
+    recording_enabled: true
+
   - id: "cam2"
     name: "后院摄像头"
-    protocol: "rtsp_mjpeg"
+    protocol: "rtsp"
+    encoding: "mjpeg"
     url: "rtsp://admin:password123@localhost:8554/cam2"
     enabled: true
-    recording: true
+    recording_enabled: true
 ```
 
 ### MediaMTX 路径配置

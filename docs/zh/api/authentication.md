@@ -80,9 +80,15 @@ curl -u username:password -X POST "http://localhost:9090/api/auth/login"
 **响应（200 OK）：**
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "token": "mbs_eyJhbGciOi…",
+  "expires_at": "2026-08-17T14:00:00Z"
 }
 ```
+
+`token` 为 HMAC 签名的无状态会话令牌（`mbs_` 前缀），有效期内可通过
+`Authorization: Bearer <token>` 使用，临近过期时服务端会经 `X-Renewed-Token`
+响应头自动续期。
 
 **响应（401 Unauthorized）：**
 ```json
@@ -96,7 +102,7 @@ curl -u username:password -X POST "http://localhost:9090/api/auth/login"
 
 **端点：** `POST /api/setup`
 
-首次初始化。仅在未配置 `password_hash` 时成功。创建管理员凭据、设置存储路径，并返回用于自动登录的 Basic Auth 令牌。
+首次初始化。仅在未配置 `password_hash` 时成功。在**已加载的配置**上增量写入管理员凭据（用户名 + bcrypt 密码哈希）—— 预置在 YAML 里的其它字段（`listen`、`vision`、`api_keys`、摄像头列表等）全部保留，不会被重置。`storage_path` 可选，仅在填写时覆盖当前 `storage.root_dir`，留空则沿用服务端配置。返回用于自动登录的签名会话令牌（`mbs_` 前缀）与过期时间。
 
 **请求体：**
 ```json
@@ -124,7 +130,8 @@ curl -X POST \
 ```json
 {
   "status": "ok",
-  "token": "YWRtaW46c2VjdXJlcGFzc3dvcmQ="
+  "token": "mbs_eyJhbGciOi…",
+  "expires_at": "2026-08-17T14:00:00Z"
 }
 ```
 

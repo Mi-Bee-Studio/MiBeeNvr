@@ -76,7 +76,6 @@ hls:
   low_latency: false             # 启用低延迟 HLS (LL-HLS)
   part_min_duration: "200ms"     # LL-HLS 分片时长 (范围: 100ms-1s)
 streaming:
-  default_protocol: "hls"        # 备用协议：当按摄像头自动选择不可用时使用 (webrtc/flv/hls/ll-hls)
   webrtc:
     enabled: true                  # 启用 WebRTC WHEP 直播
     max_viewers: 2                # 最大并发 WebRTC 观众数 (范围: 1-10)
@@ -125,6 +124,17 @@ version: "1.0"
 - **描述**: Web 服务器监听地址和端口
 - **示例**: `":8080"` 或 `"192.168.1.100:9090"`
 - **环境变量覆盖**：`NVR_LISTEN_PORT` 环境变量在启动时覆盖端口部分（如 `NVR_LISTEN_PORT=8080`）。适用于无法编辑配置文件的 NAS host-networking 部署。也可通过 `install.sh --port <端口>` 或 Web UI 设置页设置。
+
+### `server.device_id` / `server.device_name`
+- **类型**： string
+- **默认**： `device_id` 首次启动自动生成（UUIDv4，持久化）；`device_name` 默认取主机名
+- **说明**： 通过 `GET /api/health` 暴露的稳定局域网身份，客户端（如手机 App）可锚定 ID 而非易变的 IP。均可选；显式设置 `device_name` 会覆盖主机名。
+- **示例**： `device_name: "garage-nvr"`
+
+### `server.discovery.mdns.enabled` / `server.discovery.udp.*`
+- **类型**： bool /（bool, int）
+- **默认**： 均为 `true`；UDP 端口 `49090`
+- **说明**： 局域网自通告。mDNS/DNS-SD 注册 `_mibee-nvr._tcp` 服务；UDP 应答器用 JSON 身份载荷回应 `MIBEE-NVR-DISCv1?` 广播探测（覆盖组播受限的 Wi-Fi）。绑定失败只记日志，绝不阻塞启动。
 
 ## 存储配置
 
@@ -208,9 +218,9 @@ cameras:
 - **必需**: 是
 - **描述**: 摄像头传输协议
 - **选项**: `"rtsp"`, `"http"`, `"onvif"`, `"xiaomi"`, `"timelapse"`
-- **旧格式**: 也支持 `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"`（自动解析为新格式）
-- **注意**: 旧格式会自动解析为新协议+编码格式以保持向后兼容性
-- **兼容性**: 两种格式都支持
+- **旧格式**: 不支持——组合格式字符串如 `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"` 自 0.10.0 起校验报错拒绝
+- **注意**: 请改用独立的 `protocol` + `encoding` 字段（见下方 `cameras[].encoding`）
+- **兼容性**: 仅支持独立的 `protocol` + `encoding` 格式
 
 ### `cameras[].encoding`
 - **类型**: string
@@ -397,6 +407,37 @@ cameras:
   ```
 - **注意**: 如果设置了 `NVR_ENCRYPTION_KEY`，密钥会在保存时自动加密。通过 `POST /api/settings/api-keys` 生成新密钥。
 
+## Vision 推送集成配置
+
+外部 AI 后处理端（MiBeeVision）集成。消费者用上面的 API Key 鉴权并上报心跳；
+心跳健康的消费者收到视频段推送，并把 AI 事件写回 NVR。
+
+### `vision.enabled`
+- **类型**: bool
+- **默认**: `false`
+- **描述**: 启用推送集成。心跳超时后 NVR 暂停推送；心跳恢复时，错过的段会自动补偿重推。
+
+### `vision.url`
+- **类型**: string
+- **示例**: `"http://192.168.63.110:9091"`
+- **描述**: 消费者服务基地址。
+
+### `vision.heartbeat_timeout_secs`
+- **类型**: int
+- **默认**: `60`
+- **描述**: 超过该秒数未收到心跳即视为消费者离线。
+
+### `vision.push_mode`
+- **类型**: string
+- **默认**: `"notify"`
+- **取值**: `"notify"`（通知消费者自行拉取）/ `"upload"`（NVR 直接推送视频字节）
+
+## GB28181 配置
+
+国标平台接入（默认关闭）。完整键位说明（`gb28181:` 平台角色与
+`gb28181_cascade:` 下级级联角色）参见 [GB28181 指南](gb28181-guide.md)，
+示例参见根目录 `config.example.yaml`。
+
 ## 清理配置
 
 ### `cleanup.retention_days`
@@ -579,12 +620,7 @@ cameras:
 
 流媒体配置控制直播协议的默认行为和限制。
 
-### `streaming.default_protocol`
-- **类型**: string
-- **默认**: `"hls"`
-- **选项**: `"webrtc"`, `"flv"`, `"hls"`, `"ll-hls"`
-- **描述**: 备用直播协议。监控大屏会按摄像头自动选择最佳协议（基于编码，通过 `GET /api/cameras/{id}/protocols`）。此值仅在无法查询摄像头能力时（如摄像头正在连接、端点不可达）作为备用。用户也可在 LiveView 的协议切换器中按摄像头手动覆盖。
-- **示例**: `"hls"`, `"webrtc"`, `"flv"`, `"ll-hls"`
+> **注**：`streaming.default_protocol` 已在 0.11.0 移除（遗留旧值会被静默忽略）——按摄像头的 orchestrator 自动选择协议；需要固定协议时用播放器内的协议切换器。
 
 ### `streaming.webrtc.enabled`
 - **类型**: boolean
@@ -910,16 +946,16 @@ cameras:
 
 ## 从旧格式迁移
 
-旧协议格式如 `"rtsp_h264"` 会自动转换为新的独立 `protocol` 和 `encoding` 字段：
+组合协议字符串如 `"rtsp_h264"` 自 0.10.0 起校验报错拒绝。请迁移到独立的 `protocol` 和 `encoding` 字段：
 
 ```yaml
-# 旧格式（仍然支持）
+# 旧组合格式（0.10.0 起被拒绝）
 cameras:
   - id: "cam1"
     protocol: "rtsp_h264"
     url: "rtsp://..."
 
-# 自动转换为新格式：
+# 迁移为新格式：
 # protocol: "rtsp"
 # encoding: "h264"
 ```
@@ -943,7 +979,6 @@ cameras:
   - 低延迟 HLS: segment_count 必须 >= 7
   - 分片时长: 必须在 100ms-1s 之间
 - **流媒体配置**:
-  - default_protocol 必须是 webrtc/flv/hls/ll-hls 之一
   - webrtc.max_viewers: 1-10
   - flv.max_viewers: 1-50
 - **健康配置**: 所有时长字段必须有效
@@ -1034,7 +1069,6 @@ hls:
 observability:
   log_level: "info"
 streaming:
-  default_protocol: "hls"
   webrtc:
     enabled: true
     max_viewers: 2

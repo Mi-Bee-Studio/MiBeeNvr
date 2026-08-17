@@ -79,11 +79,18 @@ curl -u metrics:password http://localhost:9090/metrics
 |--------|------|--------|-------------|
 | `nvr_storage_used_bytes` | Gauge | — | 录制文件占用的存储空间 |
 | `nvr_storage_total_bytes` | Gauge | — | 可用总存储容量 |
+| `nvr_storage_write_errors_total` | Counter | — | 所有摄像头的存储写入 I/O 错误总数 |
 
 **用途：** 设置 80%/90% 容量告警：
 
 ```promql
 nvr_storage_used_bytes / nvr_storage_total_bytes > 0.8
+```
+
+存储写入错误告警 — 速率持续非零表明存储可能出现故障：
+
+```promql
+rate(nvr_storage_write_errors_total[5m]) > 0
 ```
 
 ---
@@ -95,8 +102,11 @@ nvr_storage_used_bytes / nvr_storage_total_bytes > 0.8
 | 指标 | 类型 | 标签 | 说明 |
 |--------|------|--------|-------------|
 | `nvr_cleanup_deleted_total` | Counter | `reason` | 清理任务删除的录制文件总数 |
+| `nvr_cleanup_duration_seconds` | Histogram | — | 清理周期耗时（秒） |
 
 **`reason` 标签值：** `retention`（保留期过期）, `disk_threshold`（磁盘阈值）, `archive_retention`（归档保留）, `orphan`（孤立文件）。
+
+**`nvr_cleanup_duration_seconds` 桶区间：** 1秒, 5秒, 10秒, 30秒, 60秒, 300秒, 600秒。
 
 **用途：** 监控清理活动：
 
@@ -241,6 +251,8 @@ rate(nvr_camera_connection_errors_total[5m])
 | `nvr_frame_processing_duration_seconds` | Histogram | `camera_id`, `protocol` | 帧通过管道的处理时间（1:100 采样） |
 | `nvr_jitter_buffer_depth` | Gauge | `camera_id` | 当前抖动缓冲区中的帧数 |
 | `nvr_jitter_buffer_reorders_total` | Counter | `camera_id` | 检测到的乱序帧数 |
+| `nvr_audio_frames_total` | Counter | `camera_id`, `codec` | 广播到 StreamHub 的音频帧总数（按摄像头和编码分区） |
+| `nvr_audio_frames_dropped_total` | Counter | `camera_id` | 因缓冲区溢出丢弃的音频帧数（按摄像头分区） |
 
 **`consumer` 标签值：** `hls`, `webrtc`, `flv`, `wsstream`, `recorder`, `ai` 等。
 
@@ -302,8 +314,13 @@ nvr_stream_bitrate_kbps == 0
 | `nvr_transcoding_duration_seconds` | Histogram | `codec_from`, `codec_to` | 完成的转码任务持续时间 |
 | `nvr_transcoding_bytes_processed` | Counter | — | 转码处理的总字节数 |
 | `nvr_transcoding_ffmpeg_status` | Gauge | — | FFmpeg 可用性：0=未安装, 1=下载中, 2=可用 |
+| `nvr_relay_transcoder_temperature_c` | Gauge | — | 转码器热区当前温度（摄氏度） |
+| `nvr_relay_transcoder_restarts_total` | Counter | — | 转码器重启总次数 |
+| `nvr_relay_transcoder_thermal_throttles_total` | Counter | — | 触发预设降级的热节流事件总次数 |
 
 **`status` 标签值：** `completed`, `failed`, `cancelled`。
+
+**说明：** `nvr_relay_transcoder_*` 指标由实时中继转码器（`internal/livetranscode`）发出，独立于中央 `internal/metrics` 注册表单独注册。
 
 **用途：**
 
@@ -406,6 +423,136 @@ nvr_process_resident_memory_bytes > 500 * 1024 * 1024
 
 # Goroutine 泄漏检测
 go_goroutines > 500
+```
+
+---
+
+## 15. 合并指标
+
+跟踪录像片段合并操作 — 批量合并与准实时滚动合并。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_merge_attempts_total` | Counter | — | 合并尝试总次数 |
+| `nvr_merge_successes_total` | Counter | — | 成功合并的总次数 |
+| `nvr_merge_failures_total` | Counter | `reason` | 失败合并的总次数（按原因分区） |
+| `nvr_merge_duration_seconds` | Histogram | — | 合并操作耗时（秒） |
+| `nvr_merge_size_bytes` | Histogram | — | 合并输出大小（字节） |
+| `nvr_merge_pending_segments` | Gauge | `camera_id` | 待合并的片段数量（按摄像头分区） |
+| `nvr_rolling_merge_latency_seconds` | Histogram | `camera_id` | 从片段关闭到滚动合并完成的耗时 |
+| `nvr_rolling_merge_bucket_segments` | Gauge | `camera_id` | 当前滚动合并窗口桶中累计的片段数 |
+
+**`nvr_merge_duration_seconds` 桶区间：** 0.5秒, 1秒, 5秒, 10秒, 30秒, 60秒, 300秒, 600秒。**`nvr_merge_size_bytes` 桶区间：** 10MB, 50MB, 100MB, 500MB, 1GB, 3GB。**`nvr_rolling_merge_latency_seconds` 桶区间：** 0.1秒, 0.5秒, 1秒, 2秒, 5秒, 10秒, 30秒。
+
+**用途：**
+
+```promql
+# 合并失败率
+rate(nvr_merge_failures_total[5m]) / rate(nvr_merge_attempts_total[5m])
+
+# 滚动合并延迟 P99（片段关闭 → 合并完成）
+histogram_quantile(0.99, rate(nvr_rolling_merge_latency_seconds_bucket[5m]))
+
+# 各摄像头未合并片段积压
+nvr_merge_pending_segments
+```
+
+---
+
+## 16. SQLite 数据库指标
+
+SQLite 元数据库的健康指标 — 写连接池、只读连接池与文件级健康度。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_sqlite_open_connections` | Gauge | — | SQLite 写连接池的打开连接数 |
+| `nvr_sqlite_in_use_connections` | Gauge | — | SQLite 写连接池的使用中连接数 |
+| `nvr_sqlite_read_open_connections` | Gauge | — | SQLite 只读连接池的打开连接数（query_only，WAL 模式下与写并发） |
+| `nvr_sqlite_read_in_use_connections` | Gauge | — | SQLite 只读连接池的使用中连接数 |
+| `nvr_sqlite_read_wait_count_total` | Counter | — | 只读连接池无可用连接、调用方需要等待的总次数（持续增长说明应调大 `SetReadPoolSize`） |
+| `nvr_sqlite_read_wait_duration_seconds` | Gauge | — | 调用方等待只读连接池连接的累计秒数（自启动起累计） |
+| `nvr_sqlite_wal_size_bytes` | Gauge | — | SQLite WAL 文件大小（字节） |
+| `nvr_sqlite_db_size_bytes` | Gauge | — | SQLite 数据库文件大小（字节） |
+| `nvr_sqlite_fragmentation_ratio` | Gauge | — | SQLite 碎片率（freelist_count / page_count） |
+| `nvr_sqlite_query_duration_seconds` | Histogram | `query_name` | SQLite 查询耗时（秒），按查询名称分区 |
+| `nvr_sqlite_busy_errors_total` | Counter | — | 所有数据库操作中重试的 SQLITE_BUSY 错误总数 |
+
+**`nvr_sqlite_query_duration_seconds` 桶区间：** 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s。
+
+**用途：**
+
+```promql
+# 按查询名称的慢查询 P99
+histogram_quantile(0.99, rate(nvr_sqlite_query_duration_seconds_bucket[5m]))
+
+# 只读连接池不足 — 应调大 SetReadPoolSize
+rate(nvr_sqlite_read_wait_count_total[5m]) > 0
+
+# 锁竞争
+rate(nvr_sqlite_busy_errors_total[5m]) > 0
+```
+
+---
+
+## 17. 认证指标
+
+跟踪登录尝试，用于安全监控。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_auth_attempts_total` | Counter | `result` | 认证尝试总次数（按结果分区） |
+| `nvr_auth_rate_limited_total` | Counter | — | 被认证速率限制器拦截的请求总数 |
+
+**`result` 标签值：** `success`（成功）, `failure`（失败）, `no_password`（无密码）。
+
+**用途：**
+
+```promql
+# 暴力破解检测 — 高失败率
+rate(nvr_auth_attempts_total{result="failure"}[5m]) > 0.1
+
+# 速率限制器活动情况
+rate(nvr_auth_rate_limited_total[5m])
+```
+
+---
+
+## 18. AI 事件指标
+
+跟踪从外部 MiBeeVision 后端接收的 AI 事件。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_ai_events_received_total` | Counter | `camera_id`, `event_type` | 从 MiBeeVision 接收的 AI 事件总数（按摄像头和事件类型分区） |
+| `nvr_ai_events_errors_total` | Counter | — | 接收或处理 AI 事件时的错误总数 |
+
+**用途：**
+
+```promql
+# AI 管道健康 — 各摄像头事件流入速率
+rate(nvr_ai_events_received_total[5m])
+
+# 摄入错误
+rate(nvr_ai_events_errors_total[5m]) > 0
+```
+
+---
+
+## 19. 时间轴指标
+
+跟踪 DVR 式录像浏览过程中的时间轴跳转操作。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_timeline_seeks_total` | Counter | `camera_id`, `type` | 时间轴跳转操作总次数（按摄像头和跳转类型分区） |
+
+**`type` 标签值：** `segment`, `intra`。
+
+**用途：**
+
+```promql
+# 各摄像头跳转热点
+topk(5, sum(rate(nvr_timeline_seeks_total[1h])) by (camera_id))
 ```
 
 ---

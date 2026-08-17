@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install
 安装指定版本：
 
 ```bash
-sudo ./install.sh --version v0.9.0
+sudo ./install.sh --version v0.11.0
 ```
 
 卸载（保留 `/var/lib/mibee-nvr` 中的录像数据）：
@@ -217,8 +217,8 @@ docker inspect --format='{{.State.Health.Status}}' mibee-nvr
 **运行指定版本：**
 
 ```bash
-docker pull ghcr.io/mi-bee-studio/mibeenvr:v0.9.0
-docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:v0.9.0
+docker pull ghcr.io/mi-bee-studio/mibeenvr:0.11.0
+docker run -d --name mibee-nvr ... ghcr.io/mi-bee-studio/mibeenvr:0.11.0
 ```
 
 **停止和删除：**
@@ -508,7 +508,7 @@ Docker 部署的更新方式——手动 `docker compose pull && up -d`、可选
 ### 使用安装脚本（推荐）
 
 ```bash
-sudo ./install.sh --version v0.9.0
+sudo ./install.sh --version v0.11.0
 ```
 
 脚本会自动停止服务、替换二进制文件并重启。配置和录像数据不受影响。

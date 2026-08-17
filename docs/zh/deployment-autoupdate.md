@@ -30,7 +30,7 @@ docker compose up -d         # 用新镜像重建容器
 ```yaml
 services:
   mibee-nvr:
-    image: ghcr.io/mi-bee-studio/mibeenvr:0.10.0   # 固定，可复现
+    image: ghcr.io/mi-bee-studio/mibeenvr:0.11.0   # 固定，可复现
 ```
 
 回滚时把 tag 改回上一个版本，`docker compose up -d` 即可。若想保留回滚镜像，**不要**把 `:latest` 和自动清理一起用。

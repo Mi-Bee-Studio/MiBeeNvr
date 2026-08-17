@@ -6,8 +6,10 @@ MiBee NVR 是一个用 Go 语言编写的轻量级网络视频录像机。它将
 
 **主要功能：**
 
-- 支持 RTSP (H.264、H.265、MJPEG)、HTTP JPEG、ONVIF、Xiaomi (CS2 P2P) 和 Timelapse 摄像头录制为 MP4 片段
+- 支持 RTSP (H.264、H.265、MJPEG)、HTTP JPEG、ONVIF、Xiaomi (CS2/TUTK P2P)、GB/T 28181 国标平台、SRT/RTMP 推流接入和 Timelapse 摄像头录制为 MP4 片段
 - Web 管理界面，支持深色/浅色主题、多协议实时预览（HLS、WebRTC、HTTP-FLV、WebSocket）和 Chart.js 统计图表
+- 录像连续播放：双缓冲无缝换段 + 按需 fMP4 分片的全天 VOD 时间轴（跨录像、跨空隙拖动）
+- 局域网自动发现：mDNS `_mibee-nvr._tcp` 通告 + UDP 49090 广播应答，`/api/health` 暴露稳定 `device_id`
 - WebDAV（可配置只读/读写）和 FTP 访问录像文件
 - MQTT 集成，支持事件触发录制
 - 片段合并，减少文件数量

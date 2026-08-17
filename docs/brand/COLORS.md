@@ -20,4 +20,4 @@ brand-aligned artwork, deployment icons, or marketing material.
 - **`icon-{16,32,48,64,128,256,512}.png`** — pre-rendered transparent icons.
 - **`mibee-nvr-{72,128,192,256,512}.png`** — pre-rendered rounded-square icons.
 
-All assets are MIT-licensed, same as the project.
+All assets are released under the project's AGPL-3.0 license.

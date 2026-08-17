@@ -34,29 +34,36 @@ loaded, so the pull fails. Instead `cmd/main` owns the full container lifecycle:
 - **stop**: `docker stop` + `docker rm`
 - **status**: `docker inspect`
 
+`cmd/main` is **dual-mode**: a bundled tar under `${TRIM_APPDEST}/images/` selects the
+offline path, its absence selects the online pull path — one script serves both
+packages, and switching editions across upgrades is seamless.
+
 So `app/docker/docker-compose.yaml` is effectively vestigial (kept for
 readability); `cmd/main` is the real entry point. `config/privilege` runs as
 **root** (needs the Docker socket); `config/resource` is `{}` (no docker-project).
 
 ## Architecture note (x86)
 
-`cmd/main` maps `TRIM_SYS_ARCH` to the bundled image arch. As of 0.10.1 it
-recognizes `x86` (fnOS's label for x86_64, alongside `x86_64`/`amd64`/`x64`) and
-`armv7l`/`armhf` → armv7 — fixing [#311](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/311)
+`cmd/main` maps `TRIM_SYS_ARCH` to the image arch: `x86` (fnOS's label for
+x86_64, alongside `x86_64`/`amd64`/`x64`) → amd64, and
+`aarch64`/`arm64`/`armv8*`/`arm` → arm64 (the arm64 image runs fine on a 64-bit
+kernel) — fixing [#311](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/311)
 where x86 fnOS hosts couldn't start (the arch variable was empty, producing
-`mibee-nvr-.tar`).
+`mibee-nvr-.tar`). No armv7 image is bundled (fnOS ships no 32-bit ARM product).
 
 ## Package source
 
-Lives in [`deploy/fnos/`](../../deploy/fnos); the online edition derives from it
-(drops `app/images/`, swaps `cmd/main` for the pull-based version).
+Lives in [`deploy/fnos/`](../../deploy/fnos); both editions build from the same
+source — `cmd/main` is dual-mode (bundled tar → `docker load`; no tar → probe
+and `docker pull`); the online build simply omits `app/images/`.
 
 ## Build the `.fpk`
 
 Install [`fnpack`](https://github.com/ckcoding/fnnas-docs/blob/main/docs/cli/fnpack.md), then:
 
 ```bash
-./deploy/fnos/build.sh 0.10.1    # version MUST be X.Y.Z, must match image tag
+./deploy/fnos/build.sh 0.11.0              # offline: needs both arch images built locally
+./deploy/fnos/build.sh --online 0.11.0    # online: no images bundled, no docker needed
 ```
 
 The version must be `X.Y.Z` (fnOS rejects pre-release suffixes) **and** must equal

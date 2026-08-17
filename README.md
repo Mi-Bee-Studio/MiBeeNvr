@@ -115,6 +115,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - ONVIF discovery & management with PTZ control
 - Xiaomi CS2 + legacy TUTK (7 models) cloud camera support
 - SRT/RTMP push-in cameras (cross-network ingest — receive streams from remote publishers)
+- GB/T 28181 national-standard platform (experimental): SIP cameras (Hikvision/Dahua/Uniview) register to the NVR — catalog, PTZ, voice intercom, device-side recording search & playback, alarm subscription, cascade. Default off
 - Native Go push-out relay (forward any camera to remote RTMP/RTSP targets; FFmpeg optional for compatibility)
 
 ### 📺 Streaming & Live View
@@ -132,6 +133,8 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - Audio capture (AAC + G.711 + Opus)
 - Segment merging with configurable policies
 - Periodic timelapse recording
+- Continuous playback: double-buffered seamless segment chaining + full-day VOD timeline (scrub across recordings and gaps), AVI frame-browse mode
+- LAN discovery (mDNS `_mibee-nvr._tcp` + UDP 49090 responder) with a stable `device_id` in `/api/health`
 
 ### 🔧 Management
 - Modern Svelte 5 web UI with dark/light themes
@@ -232,13 +235,13 @@ Docker deployment:
 docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
-Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `latest`, `v1.2.3`, `sha-abc1234`
+Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `0.11.0` (exact version), `0.11` (minor track), `0` (major track), `latest`
 
 ## Project Structure
 
 ```
 cmd/mibee-nvr/       # CLI entry point + app lifecycle
-internal/            # Core packages (39 Go modules)
+internal/            # Core packages (43 Go modules)
 web/                # Svelte 5 SPA frontend
 deploy/             # systemd services, Caddyfile
 docs/               # Bilingual documentation (EN/ZH)

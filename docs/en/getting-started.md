@@ -6,8 +6,10 @@ MiBee NVR is a lightweight Network Video Recorder written in Go. It records vide
 
 **Key Features:**
 
-- Records RTSP (H.264, H.265, MJPEG), HTTP JPEG, ONVIF, Xiaomi (CS2 P2P), and Timelapse cameras to MP4 segments
+- Records RTSP (H.264, H.265, MJPEG), HTTP JPEG, ONVIF, Xiaomi (CS2/TUTK P2P), GB/T 28181, SRT/RTMP push-in, and Timelapse cameras to MP4 segments
 - Web UI with dark/light theme, multi-protocol live view (HLS, WebRTC, HTTP-FLV, WebSocket), and Chart.js statistics
+- Continuous playback: double-buffered seamless segment chaining + an on-demand fMP4 full-day VOD timeline (scrub across recordings and gaps)
+- LAN discovery: mDNS `_mibee-nvr._tcp` announcement + UDP 49090 broadcast responder; `/api/health` exposes a stable `device_id`
 - WebDAV (configurable read-only/read-write) and FTP access to recordings
 - MQTT integration for event-driven recording
 - Segment merging to reduce file count
@@ -211,15 +213,19 @@ cameras:
 
 > Timelapse cameras capture periodic snapshots without a continuous video stream.
 
-### Using the Old Combined Format
+### Combined Format Is Deprecated
 
-All of these still work:
+> ⚠️ **Combined formats (e.g. `rtsp_h264`) are rejected since 0.10.0.** If you are upgrading from an older version and your config still uses a combined format, you must split it into separate `protocol` + `encoding` fields, otherwise NVR startup fails validation.
+
+**Wrong (old):** `protocol: "rtsp_h264"`
+**Correct (new):**
 
 ```yaml
 cameras:
   - id: "cam1"
     name: "Legacy Cam"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://192.168.1.100:554/stream"
     enabled: true
 ```

@@ -16,6 +16,12 @@ A typical NVR deployment has a **mixed fleet**: an H.264 RTSP camera, an H.265 O
 
 Requiring the user to pick one "default protocol" in Settings that's wrong for some camera was the old model. The grid auto-selects per camera now, and **new users see no protocol picker at all** — the orchestrator picks the lowest-latency protocol each browser+codec can handle.
 
+**Audio** (since 0.11.0): WebRTC (WHEP) muxes G.711 and Opus audio directly into the
+track (zero transcoding); WebSocket players use the shared audio-WS endpoint (G.711
+everywhere; AAC/Opus need WebCodecs, i.e. HTTPS or localhost); HLS/HTTP-FLV/MJPEG
+polling carry no live audio. Recording-playback audio (G.711/AAC/Opus) is decoded
+natively by the browser's MP4 player and is unaffected by protocol choice.
+
 ---
 
 ## The architecture (three layers)
@@ -37,11 +43,11 @@ Requiring the user to pick one "default protocol" in Settings that's wrong for s
 ```json
 {
   "protocols": [
-    {"Protocol": "webrtc", "Available": true,  "Reason": ""},
-    {"Protocol": "flv",    "Available": true,  "Reason": ""},
-    {"Protocol": "hls",    "Available": true,  "Reason": ""},
-    {"Protocol": "wasm",   "Available": true,  "Reason": ""},
-    {"Protocol": "webrtc", "Available": false, "Reason": "WebRTC does not support H.265"}
+    {"protocol": "webrtc", "available": true,  "reason": ""},
+    {"protocol": "flv",    "available": true,  "reason": ""},
+    {"protocol": "hls",    "available": true,  "reason": ""},
+    {"protocol": "wasm",   "available": true,  "reason": ""},
+    {"protocol": "webrtc", "available": false, "reason": "WebRTC does not support H.265"}
   ],
   "encoding": "h265",
   "default": "hls"
@@ -58,9 +64,9 @@ On mount, each route (`Surveillance.svelte`, `LiveView.svelte`):
    ```
    PREFERENCE_ORDER = [wasm, webrtc, flv, hls, mjpeg]
    wasm   ← frontend-only, gated on WebCodecs (any codec) or libde265 WASM (H.265 on HTTP)
-   webrtc ← backend Available + H.264 only (H.265 excluded by codec gate)
-   flv    ← backend Available + (H.264, or H.265 only when MSE H.265 present)
-   hls    ← backend Available (universal fallback)
+   webrtc ← backend available + H.264 only (H.265 excluded by codec gate)
+   flv    ← backend available + (H.264, or H.265 only when MSE H.265 present)
+   hls    ← backend available (universal fallback)
    mjpeg  ← JPEG/MJPEG cameras only (single-element chain)
    ```
    The chain head is what the grid renders initially; subsequent entries are degrade targets. A user override **pins** the chain to a single element (see "User manual override" below).

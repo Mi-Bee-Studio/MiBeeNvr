@@ -80,9 +80,15 @@ curl -u username:password -X POST "http://localhost:9090/api/auth/login"
 **Response (200 OK):**
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "token": "mbs_eyJhbGciOi…",
+  "expires_at": "2026-08-17T14:00:00Z"
 }
 ```
+
+`token` is an HMAC-signed stateless session token (`mbs_` prefix); use it as
+`Authorization: Bearer <token>` until expiry. Near expiry the server renews it
+transparently via the `X-Renewed-Token` response header.
 
 **Response (401 Unauthorized):**
 ```json
@@ -96,7 +102,7 @@ curl -u username:password -X POST "http://localhost:9090/api/auth/login"
 
 **Endpoint:** `POST /api/setup`
 
-First-time initialization. Only succeeds when no `password_hash` is configured. Creates admin credentials, sets storage path, and returns a Basic Auth token for auto-login.
+First-time initialization. Only succeeds when no `password_hash` is configured. Patches the admin credentials (username + bcrypt hash) onto the **loaded config** — every other field pre-set in the YAML (`listen`, `vision`, `api_keys`, cameras, …) is preserved, never reset. `storage_path` is optional and only overrides `storage.root_dir` when provided; leave it empty to keep the server's current setting. Returns a signed session token (`mbs_` prefix) plus its expiry for auto-login.
 
 **Request Body:**
 ```json
@@ -124,7 +130,8 @@ curl -X POST \
 ```json
 {
   "status": "ok",
-  "token": "YWRtaW46c2VjdXJlcGFzc3dvcmQ="
+  "token": "mbs_eyJhbGciOi…",
+  "expires_at": "2026-08-17T14:00:00Z"
 }
 ```
 

@@ -16,6 +16,8 @@ server:
   # device_name: ""
   # LAN self-announcement for clients that cannot use multicast/mDNS.
   # discovery:
+  #   mdns:
+  #     enabled: true   # register _mibee-nvr._tcp (mDNS/DNS-SD)
   #   udp:
   #     enabled: true   # answer "MIBEE-NVR-DISCv1?" probes on UDP 49090
   #     port: 49090
@@ -210,6 +212,24 @@ observability:
   log_level: "info"                # Log level: debug, info, warn, error (default: info)
   log_format: "text"               # Log format: json or text (default: text)
   # enable_pprof: false            # Enable pprof debug endpoints (default: false)
+
+# External AI post-processing consumer (MiBeeVision) integration.
+# The consumer authenticates with an API key (below) and reports a heartbeat;
+# a healthy consumer receives video-segment pushes and writes AI events back.
+# vision:
+#   enabled: false                      # Enable the push integration (default: false)
+#   url: "http://192.168.63.110:9091"   # Consumer base address
+#   heartbeat_timeout_secs: 60          # Consider consumer offline after this long without a heartbeat
+#   push_mode: "notify"                 # "notify" = tell consumer to fetch; "upload" = push video bytes
+
+# Per-device API keys for the external AI consumer (Bearer tokens, "mbv_" prefix).
+# Managed via Settings → Features in the Web UI (generate/revoke, hot-reloaded,
+# last-use tracked). Revoked keys stay in the list with revoked: true.
+# api_keys:
+#   - key: "mbv_0123456789abcdef0123456789abcdef01234567"
+#     name: "vision"
+#     revoked: false
+
 
 # Transcoding — optional video transcoding via FFmpeg
 # Used to reduce bitrate, change codec format, or adjust quality
