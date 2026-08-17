@@ -24,9 +24,10 @@ func annexBEncode(au [][]byte) []byte {
 	return buf
 }
 
-// rejectAudioInSDP ensures all audio m-lines in the SDP answer are rejected
-// by setting their port to 0. This implements the WHEP requirement to reject
-// audio when the server only supports video.
+// rejectAudioInSDP rejects all audio m-lines in the SDP answer by setting
+// their port to 0. Applied only for video-only peers (#372): pion answers an
+// offered audio m-line with the engine's codecs (port 9) even when no audio
+// track was added — zeroing the port gives browsers an unambiguous rejection.
 func rejectAudioInSDP(sdp string) string {
 	lines := strings.Split(sdp, "\n")
 	for i, line := range lines {

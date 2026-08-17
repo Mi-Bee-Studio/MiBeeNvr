@@ -1,0 +1,40 @@
+# MiBee NVR — QNAP QTS 5.x Container Station application template
+#
+# Import (see README.md):
+#   Container Station → Applications → Create Application
+#   → paste/upload this file
+#
+# network_mode: host is REQUIRED for ONVIF WS-Discovery auto-scan (UDP
+# multicast does not cross Docker's bridge). Do NOT add a "ports:" section
+# alongside host mode.
+services:
+  mibee-nvr:
+    image: ghcr.io/mi-bee-studio/mibeenvr:latest
+    # China / slow ghcr? Swap to the Aliyun mirror (same manifest, anonymous pull):
+    # image: registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr:latest
+    container_name: mibee-nvr
+    restart: unless-stopped
+    network_mode: host
+
+    volumes:
+      # Left side = host path on the NAS. Adjust to your storage pool, e.g.
+      # /share/CACHEDEV1_DATA/mibee-nvr/data (typical QTS layout) or a
+      # dedicated HDD volume. Keep recordings where the space is.
+      - /share/CACHEDEV1_DATA/mibee-nvr/data:/data
+
+    environment:
+      - NVR_DATA_DIR=/data
+      # Port conflict with another app on the NAS (#269)? Set the app's
+      # listen port via env — no YAML/config editing needed:
+      # - NVR_LISTEN_PORT=8080
+      # (Or change it later in the Web UI: Settings → General, see #270.)
+      # Match the UID/GID of the owner of the data folder if not 1000:
+      # - NVR_UID=1000
+      # - NVR_GID=1000
+
+    healthcheck:
+      test: ["CMD", "mibee-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

@@ -3,8 +3,10 @@ package api
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/go-chi/chi/v5"
 )
@@ -59,6 +61,11 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 			if hub != nil {
 				_, sps, _, _ := getCodecParams(rec)
 				h.webrtcMgr.RegisterStream(id, hub, sps)
+				// Audio muxing (#372): G.711/Opus ride the WebRTC track;
+				// AAC cameras are left video-only by the manager (keep the
+				// separate audio-WS path). Best-effort — video continues on
+				// any error.
+				setupAudioForWebRTC(h, id, rec)
 			}
 		}
 	}
@@ -105,4 +112,33 @@ func (h *Handler) handleDeleteWHEPSession(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// setupAudioForWebRTC configures audio muxing on the WebRTC manager for a
+// camera stream (#372). Mirrors setupAudioForWS: extracts codec params from
+// the recorder and calls SetAudioInfo. AAC and unknown codecs are ignored by
+// the manager (video-only WHEP, separate audio-WS path stays). Errors are
+// non-fatal — video streaming continues.
+func setupAudioForWebRTC(h *Handler, id string, rec model.Recorder) {
+	actualRec := unwrapDelegate(rec)
+	provider, ok := actualRec.(audioInfoProvider)
+	if !ok {
+		return
+	}
+	audioCodec := provider.AudioCodec()
+	if audioCodec == "" {
+		return
+	}
+
+	muLaw := false
+	if audioCodec == "g711" {
+		config := provider.AudioConfig()
+		if len(config) > 0 && config[0] == 1 {
+			muLaw = true
+		}
+	}
+
+	if err := h.webrtcMgr.SetAudioInfo(id, audioCodec, muLaw, provider.AudioSampleRate(), provider.AudioChannels()); err != nil {
+		slog.Warn("WebRTC: failed to set audio info", "camera_id", id, "error", err)
+	}
 }

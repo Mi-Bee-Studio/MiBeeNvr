@@ -2,8 +2,10 @@
   import { onMount, onDestroy } from 'svelte';
   import { getAiSettings, saveAiSettings, detectAiBackend, listCameras, getAiStatus, updateAiConfig, listAiModels } from '$lib/api';
   import { getPerCameraAiSettings, savePerCameraAiSettings, getAIZones, createAIZone, deleteAIZone } from '$lib/api';
-  import { getSettings, generateAPIKey, revokeAPIKey } from '$lib/api';
+  import { getSettings, generateAPIKey, revokeAPIKey, getVisionStatus } from '$lib/api';
+  import type { VisionStatus } from '$lib/api';
   import { refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
+  import { formatRelativeTime } from '$lib/format';
   import type { Camera, Zone, PerCameraAiState, AiModelInfo } from '$lib/api';
   import { COCO_CLASSES } from '$lib/ai-detection/inference';
   import { t } from '$lib/i18n';
@@ -51,14 +53,31 @@
   let zoneCreating = $state(false);
 
   // MiBeeVision keys
-  let mibeeVisionKeys = $state<Array<{ name: string; prefix: string; revoked: boolean }>>([]);
+  let mibeeVisionKeys = $state<Array<{ name: string; prefix: string; revoked: boolean; last_used?: string }>>([]);
   let mibeeVisionLoading = $state(false);
   let newKeyName = $state('');
   let generatingKey = $state(false);
   let newlyGeneratedKey = $state<string | null>(null);
   let copiedKey = $state(false);
 
-  const hasMiBeeVisionKey = $derived(mibeeVisionKeys.length > 0);
+  // Only active (non-revoked) keys count as connected; revoked entries stay
+  // visible in the list for audit (#335).
+  const hasMiBeeVisionKey = $derived(mibeeVisionKeys.filter((k) => !k.revoked).length > 0);
+
+  // MiBeeVision consumer health (#328) — polled while the panel is mounted so
+  // operators notice silent push suspension (heartbeat timeout stops pushes).
+  let visionStatus = $state<VisionStatus | null>(null);
+  let visionStatusNow = $state(new Date());
+  let visionStatusTimer: ReturnType<typeof setInterval> | undefined;
+
+  async function loadVisionStatus() {
+    try {
+      visionStatus = await getVisionStatus();
+      visionStatusNow = new Date();
+    } catch {
+      // Non-fatal — keep the last known status
+    }
+  }
 
   // Compare two enabled-classes values for isDirty (order-insensitive).
   function classesEqual(a: string[] | null, b: string[] | null): boolean {
@@ -170,7 +189,12 @@
       const settings = await getSettings();
       const cfg = settings.mibeevision;
       if (cfg && cfg.api_keys) {
-        mibeeVisionKeys = cfg.api_keys.map(k => ({ name: k.name, prefix: k.prefix, revoked: k.revoked }));
+        mibeeVisionKeys = cfg.api_keys.map((k) => ({
+          name: k.name,
+          prefix: k.prefix,
+          revoked: k.revoked,
+          last_used: k.last_used,
+        }));
       }
     } catch (e) {
       console.warn('Failed to load MiBeeVision keys:', e);
@@ -377,6 +401,10 @@
       perCameraAIConfig = getPerCameraAiSettings();
       loading = false;
     });
+    // Heartbeat cadence is 30s; 15s polling keeps the indicator responsive
+    // without hammering the API.
+    loadVisionStatus();
+    visionStatusTimer = setInterval(loadVisionStatus, 15_000);
     unregister = settingsForm.register('ai', {
       isDirty: () => isDirty,
       save: performSave,
@@ -389,7 +417,10 @@
       },
     });
   });
-  onDestroy(() => unregister?.());
+  onDestroy(() => {
+    if (visionStatusTimer) clearInterval(visionStatusTimer);
+    unregister?.();
+  });
 </script>
 
 {#if loading}
@@ -599,6 +630,37 @@
         </div>
       {/if}
 
+      <!-- Consumer health (#328): online/offline indicator driven by the
+           heartbeat tracker — silent push suspension is otherwise invisible. -->
+      {#if hasMiBeeVisionKey && visionStatus?.enabled}
+        <div class="p-3 rounded-md border th-border th-bg-hover flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div class="flex items-center gap-2">
+            <span
+              class="inline-block h-2.5 w-2.5 rounded-full {visionStatus.healthy ? 'bg-green-500' : 'bg-red-500'}"
+              aria-hidden="true"
+            ></span>
+            <span class="text-sm font-medium th-text-primary">
+              {visionStatus.healthy ? t('settings.mibeevision.consumerOnline') : t('settings.mibeevision.consumerOffline')}
+            </span>
+          </div>
+          {#if visionStatus.last_seen && !visionStatus.last_seen.startsWith('0001-01-01')}
+            <span class="text-xs th-text-tertiary">
+              {t('settings.mibeevision.lastHeartbeat')}: {formatRelativeTime(visionStatus.last_seen, visionStatusNow)}
+            </span>
+          {:else}
+            <span class="text-xs th-text-tertiary">{t('settings.mibeevision.noHeartbeat')}</span>
+          {/if}
+          {#if visionStatus.device}
+            <span class="text-xs th-text-tertiary">{t('settings.mibeevision.device')}: {visionStatus.device}</span>
+          {/if}
+          {#if typeof visionStatus.queue_depth === 'number' && typeof visionStatus.processed === 'number' && (visionStatus.processed > 0 || visionStatus.queue_depth > 0)}
+            <span class="text-xs th-text-tertiary">
+              {t('settings.mibeevision.queue')}: {visionStatus.queue_depth} · {t('settings.mibeevision.processed')}: {visionStatus.processed}
+            </span>
+          {/if}
+        </div>
+      {/if}
+
       <!-- Generate new key -->
       <div class="flex gap-2">
         <input
@@ -617,11 +679,22 @@
       {#if mibeeVisionKeys.length > 0}
         <div class="space-y-2">
           {#each mibeeVisionKeys as key (key.name)}
-            <div class="flex items-center justify-between p-3 rounded-md border th-border">
-              <div>
-                <span class="text-sm font-medium th-text-primary">{key.name}</span>
-                <span class="text-xs th-text-tertiary ml-2">mbv_{key.prefix}...</span>
-                {#if key.revoked}<span class="badge badge-error ml-2">{t('settings.mibeevision.revoked')}</span>{/if}
+            <div class="flex items-center justify-between p-3 rounded-md border th-border {key.revoked ? 'opacity-60' : ''}">
+              <div class="min-w-0">
+                <div class="flex items-center flex-wrap">
+                  <span class="text-sm font-medium th-text-primary">{key.name}</span>
+                  <!-- prefix from the backend already contains the mbv_ prefix
+                       and the ellipsis (e.g. "mbv_ab12…") — do not prepend again. -->
+                  <span class="text-xs th-text-tertiary ml-2">{key.prefix}</span>
+                  {#if key.revoked}<span class="badge badge-error ml-2">{t('settings.mibeevision.revoked')}</span>{/if}
+                </div>
+                <div class="text-xs th-text-tertiary mt-1">
+                  {#if key.last_used}
+                    {t('settings.mibeevision.lastUsed')}: {formatRelativeTime(key.last_used)}
+                  {:else}
+                    {t('settings.mibeevision.neverUsed')}
+                  {/if}
+                </div>
               </div>
               {#if !key.revoked}
                 <button type="button" class="btn btn-ghost btn-sm th-color-danger" onclick={() => handleRevokeKey(key.name)}>

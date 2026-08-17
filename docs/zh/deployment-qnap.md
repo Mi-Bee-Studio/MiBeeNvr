@@ -57,6 +57,13 @@ docker compose up -d
 ```
 
 ## 端口冲突
+## 导入现成模板
+
+不想手抄 Compose？仓库里有可直接导入的应用模板：
+[`deploy/qnap/docker-compose.yml`](../../deploy/qnap/docker-compose.yml)
+（导入步骤见 [`README.md`](../../deploy/qnap/README.md)）。与下文 compose 等价，
+已预填 QTS 典型存储池路径，并带 `NVR_LISTEN_PORT`（改端口）与国内镜像源注释开关。
+
 
 QNAP QTS 自身用 `8080`（HTTP 管理）/ `443`（HTTPS）/ `80`（Web Server，若启用）。这些与 MiBee NVR 的 `9090`（Web）或 `2121`（FTP）不冲突。若某个 QNAP 服务占用了你需要的端口，请在 QTS **控制面板 → 网络**里改该服务的端口，不要重映射 NVR。
 

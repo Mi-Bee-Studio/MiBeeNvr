@@ -35,6 +35,24 @@ export function formatDuration(seconds: number): string {
 }
 
 /**
+ * Format a timestamp as a locale-aware relative time ("5 minutes ago" / "5分钟前").
+ * Falls back to formatDate for anything older than a week.
+ */
+export function formatRelativeTime(dateStr: string, now: Date = new Date()): string {
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
+  const lang = state.currentLang === 'zh' ? 'zh-CN' : 'en-US';
+  const rtf = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });
+  const diffMs = date.getTime() - now.getTime();
+  const absSec = Math.abs(diffMs) / 1000;
+  if (absSec < 60) return rtf.format(Math.round(diffMs / 1000), 'second');
+  if (absSec < 3600) return rtf.format(Math.round(diffMs / 60000), 'minute');
+  if (absSec < 86400) return rtf.format(Math.round(diffMs / 3600000), 'hour');
+  if (absSec < 7 * 86400) return rtf.format(Math.round(diffMs / 86400000), 'day');
+  return formatDate(dateStr);
+}
+
+/**
  * Format bytes to a human-readable file size string.
  * e.g. "1.50 GB"
  */

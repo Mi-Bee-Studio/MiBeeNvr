@@ -10,7 +10,9 @@ curl -u username:password http://localhost:9090/api/cameras
 
 ## API Key Authentication
 
-API Keys allow external services (e.g., MiBeeVision AI processing) to authenticate without user credentials. Keys use the `mbv_` prefix and are sent as Bearer tokens.
+API Keys allow external services (e.g., MiBeeVision AI processing) or per-device app tokens (e.g., a family member's phone) to authenticate without user credentials. Keys use the `mbv_` prefix, are minted with a label, and can be revoked individually — a lost device's token is revoked without touching other credentials.
+
+**Key changes apply immediately** — minting or revoking a key takes effect on the next request, no service restart required. The key list (Settings → AI Detection → MiBeeVision, or `GET /api/settings` → `mibeevision.api_keys`) shows each key's prefix, revocation state, and last-used timestamp (updated at most once per minute per key).
 
 ### How to Use API Key Auth
 
@@ -19,7 +21,7 @@ API Keys allow external services (e.g., MiBeeVision AI processing) to authentica
 curl -H "Authorization: Bearer mbv_your_api_key_here" \
   http://localhost:9090/api/recordings
 
-# Using query parameter (for SSE/WebSocket only)
+# Using query parameter (for clients that cannot set headers, e.g. SSE/WebSocket)
 curl "http://localhost:9090/api/ai/events?api_key=mbv_your_api_key_here"
 ```
 

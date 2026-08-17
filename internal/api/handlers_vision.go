@@ -65,12 +65,17 @@ func (h *Handler) handleVisionStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	healthy, lastSeen, status := h.visionCoordinator.Health().Snapshot()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"enabled":     true,
 		"healthy":     healthy,
-		"last_seen":   lastSeen,
 		"device":      status.Device,
 		"queue_depth": status.QueueDepth,
 		"processed":   status.ProcessedCount,
-	})
+	}
+	// Omit the zero time — no heartbeat has ever been received. Rendering it
+	// would surface "0001-01-01" in the UI (#328).
+	if !lastSeen.IsZero() {
+		resp["last_seen"] = lastSeen
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

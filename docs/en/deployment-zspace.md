@@ -50,6 +50,14 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/
 5. Open `http://<nas-ip>:9090` and complete the setup wizard.
 
 ## Port conflicts
+## Import the ready-made template
+
+Prefer not to paste compose by hand? A ready-to-import orchestration template
+lives in the repo: [`deploy/zspace/docker-compose.yml`](../../deploy/zspace/docker-compose.yml)
+(with [`README.md`](../../deploy/zspace/README.md) import steps). It defaults
+to the Aliyun mirror (fast in China, anonymous pull), host networking, and a
+commented `NVR_LISTEN_PORT` switch.
+
 
 On host networking the container binds directly to the NAS. MiBee NVR uses `9090` (Web) and `2121` (FTP); if either clashes with another service or container, change the app's own port in `mibee-nvr.yaml` (not a port remap):
 ```yaml
