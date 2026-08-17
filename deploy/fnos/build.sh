@@ -26,6 +26,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ONLINE=1 builds the online .fpk: no bundled image tars — cmd/main probes
+# ghcr vs the ACR mirror at start and pulls the matching arch. The online
+# package is tiny (~KB) but requires the NAS to reach a registry on install.
+ONLINE=0
+if [ "${1:-}" = "--online" ]; then ONLINE=1; shift; fi
 VERSION="${1:-${VERSION:-}}"
 # fnpack binary; on Windows set FNPACK_BIN to the path of fnpack.exe.
 FNPACK="${FNPACK_BIN:-fnpack}"
@@ -48,22 +53,26 @@ if ! command -v "$FNPACK" >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
+if [ "$ONLINE" -eq 0 ] && ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: docker not found on PATH (needed to save the bundled images)." >&2
   exit 1
 fi
 
-# ---- 1. Save the per-arch images into app/images/ ---------------------------
+# ---- 1. Save the per-arch images into app/images/ (offline only) -------------
 # Each tarball is saved with the UNIFIED tag mibee-nvr:<version> (the tag the
 # compose references), so install_init only needs `docker load` — no re-tagging
 # at install time. We can't keep both arches tagged identically in the local
 # daemon simultaneously (a tag names one image), so we tag→save→drop per arch.
 IMAGES_DIR="$SCRIPT_DIR/app/images"
 mkdir -p "$IMAGES_DIR"
-# Clean stale tars so a half-built arch can't leak through.
+# Clean stale tars so a half-built arch can't leak through (offline), and so
+# the online package never accidentally bundles an old tar.
 rm -f "$IMAGES_DIR"/mibee-nvr-*.tar
 
 UNIFIED_TAG="mibee-nvr:${VERSION}"
+if [ "$ONLINE" -eq 1 ]; then
+  echo "Online mode: skipping bundled images (cmd/main pulls at install time)."
+else
 for arch in $ARCHES; do
   src="mibee-nvr:${VERSION}-${arch}"
   out="$IMAGES_DIR/mibee-nvr-${arch}.tar"
@@ -82,6 +91,7 @@ for arch in $ARCHES; do
   docker save -o "$out" "$UNIFIED_TAG"
   docker rmi "$UNIFIED_TAG" >/dev/null 2>&1 || true
 done
+fi
 
 # ---- 2. Bake the version into manifest + compose ---------------------------
 # Inject the version into the manifest (idempotent).
@@ -110,11 +120,31 @@ trap restore_compose EXIT
 # "No such image" because install_callback's docker load never ran. fnpack
 # preserves the on-disk mode into the .fpk, so this must happen before build.
 chmod +x "$SCRIPT_DIR"/cmd/*
+# Windows checkouts carry CRLF line endings; a "#!/bin/bash\r" shebang fails on
+# the NAS with a confusing "bad interpreter". Strip CR bytes in-place — no-op
+# when already LF. (fnpack preserves on-disk bytes/mode into the .fpk.)
+for f in "$SCRIPT_DIR"/cmd/*; do
+  if grep -q $'\r' "$f"; then
+    echo "normalizing CRLF -> LF: $f"
+    tr -d '\r' < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+done
 
 # ---- 3. Pack ---------------------------------------------------------------
 echo "Building .fpk with version ${VERSION}..."
 ( cd "$SCRIPT_DIR" && "$FNPACK" build )
 
+# ---- 4. Canonical output name ------------------------------------------------
+# fnpack derives its own filename from the manifest; rename to a deterministic
+# asset name so release.yml can attach both editions side by side:
+#   offline → mibee-nvr-fnos-<ver>.fpk      online → mibee-nvr-fnos-online-<ver>.fpk
+OUT="$SCRIPT_DIR/mibee-nvr-fnos${ONLINE:+-online}-${VERSION}.fpk"
+PRODUCED="$(ls -1t "$SCRIPT_DIR"/*.fpk 2>/dev/null | head -1 || true)"
+if [ -n "$PRODUCED" ] && [ "$(basename "$PRODUCED")" != "$(basename "$OUT")" ]; then
+  mv -f "$PRODUCED" "$OUT"
+fi
+[ -f "$OUT" ] || { echo "ERROR: no .fpk produced." >&2; exit 1; }
+
 echo ""
-echo "Done. Output: $(ls -1 "$SCRIPT_DIR"/*.fpk 2>/dev/null | head -1)"
+echo "Done. Output: $OUT"
 echo "Install via fnOS 应用中心 → 手动安装."

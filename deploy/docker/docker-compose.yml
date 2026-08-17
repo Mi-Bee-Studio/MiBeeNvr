@@ -62,7 +62,7 @@ services:
     labels:
       # Opt-in marker for Watchtower: with WATCHTOWER_LABEL_ENABLE=true, Watchtower
       # only updates containers carrying this label, so it manages MiBee NVR and
-      # leaves the user's other containers untouched. See deploy/docs/auto-update.md.
+      # leaves the user's other containers untouched. See docs/en/deployment-autoupdate.md.
       - "com.centurylinklabs.watchtower.enable=true"
 
   # --------------------------------------------------------------------------- #
