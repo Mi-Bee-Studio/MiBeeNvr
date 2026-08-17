@@ -145,11 +145,14 @@ is_running() {
 # gateway injects verified X-Trim-* identity headers); direct :9090 access
 # still requires the normal NVR login. GW_ARGS stays empty when TRIM_APPDEST is
 # absent (e.g. bare docker runs) so the container works without fnOS too.
+# NB: no socket cleanup here — fnOS re-invokes this script for *every* status
+# poll, and a top-level `rm -f app.sock` deletes the LIVE socket ~20s after
+# start. Stale-socket cleanup belongs in the start branch (pre-run) and stop
+# branch only.
 GATEWAY_PREFIX="/app/mibee-nvr"
 GW_ARGS=()
 if [ -n "${TRIM_APPDEST:-}" ] && [ -d "${TRIM_APPDEST}" ]; then
   mkdir -p "${TRIM_APPDEST}"
-  rm -f "${TRIM_APPDEST}/app.sock" 2>/dev/null || true
   GW_ARGS=(-v "${TRIM_APPDEST}:/fnos-gateway"
            -e "NVR_UNIX_SOCKET=/fnos-gateway/app.sock"
            -e "NVR_BASE_PATH=${GATEWAY_PREFIX}")
@@ -164,6 +167,9 @@ case "$1" in
     if is_running; then log "already running"; exit 0; fi
     ensure_image || exit 1
     mkdir -p "$DATA_DIR"
+    # Remove a stale socket left by an unclean shutdown before the new
+    # container binds it (net.Listen on a stale file fails with EADDRINUSE).
+    [ -n "${TRIM_APPDEST:-}" ] && rm -f "${TRIM_APPDEST}/app.sock" 2>/dev/null || true
     log "docker run $IMAGE (host net, port $PORT, data $DATA_DIR)"
     docker run -d \
       --name "$CONTAINER" \
