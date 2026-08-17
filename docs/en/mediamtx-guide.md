@@ -129,7 +129,6 @@ mediamtx /etc/mediamtx/mediamtx.yml
 ```
 
 The stream is now available at `rtsp://localhost:8554/cam_front`.
-```
 
 
 ## Integrating with MiBee NVR
@@ -141,7 +140,8 @@ Configure MiBee NVR to pull from MediaMTX:
 cameras:
   - id: "front-door"
     name: "Front Door"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://localhost:8554/cam_front"
     enabled: true
 ```
@@ -237,22 +237,26 @@ Then in MiBee NVR config:
 cameras:
   - id: "front"
     name: "Front Door"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://localhost:8554/front_door"
     enabled: true
   - id: "backyard"
     name: "Backyard"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://localhost:8554/backyard"
     enabled: true
   - id: "garage"
     name: "Garage"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://localhost:8554/garage"
     enabled: true
   - id: "csi-cam"
     name: "CSI Camera"
-    protocol: "rtsp_h264"
+    protocol: "rtsp"
+    encoding: "h264"
     url: "rtsp://localhost:8554/rpi_csi"
     enabled: true
 ```

@@ -93,7 +93,6 @@ observability:
   log_format: "text"             # Log format: json or text
   enable_pprof: false            # Enable pprof debug endpoints
 streaming:
-  default_protocol: "hls"        # Fallback protocol when per-camera auto-selection is unavailable (hls/ll-hls/webrtc/flv)
   webrtc:
     enabled: true
     max_viewers: 2               # Range: 1-10
@@ -166,6 +165,17 @@ version: "1.0"
 - **Description**: The address and port for the web server to listen on
 - **Example**: `":8080"` or `"192.168.1.100:9090"`
 - **Env override**: The `NVR_LISTEN_PORT` environment variable overrides the port portion at startup (e.g. `NVR_LISTEN_PORT=8080`). Useful for NAS host-networking deployments where you can't edit the config file. You can also set it via `install.sh --port <port>` or the Web UI Settings page.
+
+### `server.device_id` / `server.device_name`
+- **Type**: string
+- **Default**: `device_id` is generated automatically on first start (UUIDv4, persisted); `device_name` defaults to the system hostname
+- **Description**: Stable LAN identity exposed by `GET /api/health` so clients (e.g. mobile apps) can anchor on an ID instead of a changeable IP. Both are optional; an explicit `device_name` overrides the hostname.
+- **Example**: `device_name: "garage-nvr"`
+
+### `server.discovery.mdns.enabled` / `server.discovery.udp.*`
+- **Type**: bool / (bool, int)
+- **Default**: both `true`; UDP port `49090`
+- **Description**: LAN self-announcement. mDNS/DNS-SD registers the `_mibee-nvr._tcp` service; the UDP responder answers `MIBEE-NVR-DISCv1?` broadcast probes with a JSON identity payload (covers multicast-restricted Wi-Fi). Bind failures are logged, never fatal.
 
 ## Storage Configuration
 
@@ -250,9 +260,9 @@ cameras:
 - **Description**: Camera transport protocol
 - **Options**: `"rtsp"`, `"http"`, `"onvif"`, `"xiaomi"`, `"timelapse"`, `"srt"`, `"rtmp"`
 - **Push protocols**: `"srt"` and `"rtmp"` are push/ingest protocols — a remote publisher pushes a stream INTO the NVR. The `url` field is not used; instead configure `stream_key` (RTMP) or `srt_stream_id` / `srt_passphrase` (SRT). See [Push Cameras](./camera-guide.md#push-cameras-srt--rtmp--cross-network-ingest).
-- **Legacy Format**: Also supports `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"` (automatically parsed to new format)
-- **Note**: Legacy format is automatically parsed to the new protocol+encoding format for backward compatibility
-- **Compatibility**: Both formats are supported
+- **Legacy Format**: Not supported — combined strings like `"rtsp_h264"`, `"rtsp_h265"`, `"rtsp_mjpeg"`, `"http_jpeg"` are rejected with a validation error since 0.10.0
+- **Note**: Use the separate `protocol` + `encoding` fields instead (see `cameras[].encoding` below)
+- **Compatibility**: Only the separate `protocol` + `encoding` format is supported
 
 ### `cameras[].encoding`
 - **Type**: string
@@ -492,6 +502,38 @@ cameras:
   ```
 - **Note**: Keys are auto-encrypted on save if `NVR_ENCRYPTION_KEY` is set. Generate new keys via `POST /api/settings/api-keys`.
 
+## Vision Push Integration Configuration
+
+External AI post-processing consumer (MiBeeVision) integration. The consumer
+authenticates with the API keys above and reports heartbeats; a healthy consumer
+receives video-segment pushes and writes AI events back to the NVR.
+
+### `vision.enabled`
+- **Type**: bool
+- **Default**: `false`
+- **Description**: Enable the push integration. Pushing pauses when the heartbeat times out; when it returns, missed segments are re-pushed automatically.
+
+### `vision.url`
+- **Type**: string
+- **Example**: `"http://192.168.63.110:9091"`
+- **Description**: Base address of the consumer service.
+
+### `vision.heartbeat_timeout_secs`
+- **Type**: int
+- **Default**: `60`
+- **Description**: Consider the consumer offline after this many seconds without a heartbeat.
+
+### `vision.push_mode`
+- **Type**: string
+- **Default**: `"notify"`
+- **Values**: `"notify"` (tell the consumer to fetch) / `"upload"` (the NVR pushes video bytes)
+
+## GB28181 Configuration
+
+GB/T 28181 platform access (default off). See the [GB28181 guide](gb28181-guide.md)
+for the full key reference (`gb28181:` platform role and `gb28181_cascade:`
+lower-level cascade role) and `config.example.yaml` in the repo root for examples.
+
 ## Cleanup Configuration
 
 ### `cleanup.retention_days`
@@ -715,12 +757,7 @@ cameras:
 
 ## Streaming Configuration
 
-### `streaming.default_protocol`
-- **Type**: string
-- **Default**: `"hls"`
-- **Options**: `"hls"`, `"ll-hls"`, `"webrtc"`, `"flv"`
-- **Description**: Fallback streaming protocol. The surveillance grid auto-selects the best protocol per camera (codec-aware, via `GET /api/cameras/{id}/protocols`). This value is used only when per-camera capabilities can't be queried (e.g. camera still connecting, endpoint unreachable). Users can also override the protocol per camera via the LiveView protocol switcher.
-- **Example**: `"hls"`, `"webrtc"`, `"flv"`
+> **Note**: `streaming.default_protocol` was removed in 0.11.0 (stale values are silently ignored) — the per-camera orchestrator auto-selects the protocol; use the switcher in the player UI to pin one manually.
 
 ### `streaming.webrtc.enabled`
 - **Type**: boolean
@@ -1200,16 +1237,16 @@ cameras:
 
 ## Migration from Legacy Format
 
-Legacy protocol formats like `"rtsp_h264"` are automatically converted to the new separate `protocol` and `encoding` fields:
+Combined protocol strings like `"rtsp_h264"` are rejected with a validation error since 0.10.0. Migrate to the separate `protocol` and `encoding` fields:
 
 ```yaml
-# Old format (still supported)
+# Old combined format (rejected since 0.10.0)
 cameras:
   - id: "cam1"
     protocol: "rtsp_h264"
     url: "rtsp://..."
 
-# Automatically converted to new format:
+# Migrate to the new format:
 # protocol: "rtsp"
 # encoding: "h264"
 ```
@@ -1334,7 +1371,6 @@ hls:
   max_streams: 4
   low_latency: false
 streaming:
-  default_protocol: "hls"
   webrtc:
     enabled: true
     max_viewers: 2

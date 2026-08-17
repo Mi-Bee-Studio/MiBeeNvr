@@ -45,7 +45,7 @@ ftp:
 
 ## 升级
 
-- **手动 / 固定 tag（录像关键场景推荐）：** 镜像 tag 锁定到某个发布版本（如 `mibeenvr:0.10.0`），`docker pull` + 重建容器即可升级。固定 tag 同时也是干净的回滚目标。
+- **手动 / 固定 tag（录像关键场景推荐）：** 镜像 tag 锁定到某个发布版本（如 `mibeenvr:0.11.0`），`docker pull` + 重建容器即可升级。固定 tag 同时也是干净的回滚目标。
 - **自动升级：** 可选的 Watchtower profile（见[自动升级指南](deployment-autoupdate.md)）能按计划拉取 `:latest`。自动升级方便但牺牲回滚确定性——务必保留一个已知可靠的 tag。
 
 录像、SQLite 数据库、配置和 AI 模型全部存放在 `/data` 下，重建容器不会触碰这些数据。

@@ -37,7 +37,7 @@ streaming:
 
 - **STUN**:免费公共服务器即可,适合大多数 NAT 类型(锥形 NAT)。
 - **TURN**:对称 NAT(symmetric NAT,运营商级 NAT 常见)必须用 TURN 中继。TURN 流量会消耗服务器带宽,建议自建 [coturn](https://github.com/coturn/coturn)。
-- **TCP-only tunnel(如 Cloudflare Tunnel)走不通 WebRTC UDP**:这种情况请改用 HLS 协议(`streaming.default_protocol: hls`),HLS 走 HTTP/TCP,tunnel 友好。
+- **TCP-only tunnel(如 Cloudflare Tunnel)走不通 WebRTC UDP**:这种情况请在播放器里手动选择 HLS 协议(播放器切换器/协议降级链会自动落到 HTTP 传输),HLS 走 HTTP/TCP,tunnel 友好。
 
 ---
 
@@ -117,12 +117,9 @@ Cloudflare Tunnel 是 **TCP-only**,无法转发 WebRTC 的 UDP 媒体流。在�
 - ✅ HLS / LL-HLS / HTTP-FLV / WebSocket 流(走 HTTP)正常工作
 - ✅ 回放、管理 API、所有非 WebRTC 功能正常
 
-**建议**:Cloudflare Tunnel 部署时把默认流协议改为 HLS:
-
-```yaml
-streaming:
-  default_protocol: hls   # 或 ll-hls
-```
+**建议**:Cloudflare Tunnel 部署时在摄像头播放器上手动选择 HLS(协议切换器默认 Auto,
+WebRTC 不可用时会自动降级到 HTTP 传输)。`streaming.default_protocol` 配置项在 0.11.0
+已移除,遗留的旧值会被静默忽略。
 
 ### 配置要点
 
@@ -140,6 +137,13 @@ streaming:
 - **ZeroTier**:类似 Tailscale 的 mesh VPN,可自建 controller。
 
 ---
+
+## iOS / AVPlayer 的 HLS 播放
+
+携带会话令牌请求 HLS 播放列表时,NVR 会同时下发一个作用域受限的 `mbs_session`
+cookie,供无法设置逐请求头的播放器(iOS AVPlayer、部分原生播放器)拉取媒体分片。
+远程访问场景下用 Safari 直接打开 Web UI 或复制 HLS 地址到 infuse 等播放器即可,
+无需额外配置。0.11.0 之前的版本在 iOS 上播放受保护 HLS 会遇到分片 401,升级即修复。
 
 ## 局限性
 

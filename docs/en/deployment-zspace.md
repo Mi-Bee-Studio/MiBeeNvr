@@ -49,7 +49,6 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/
 4. Save and start the project. The multi-arch image is pulled (x86 models get `amd64`, ARM models like Z2Pro/T6 get `arm64`).
 5. Open `http://<nas-ip>:9090` and complete the setup wizard.
 
-## Port conflicts
 ## Import the ready-made template
 
 Prefer not to paste compose by hand? A ready-to-import orchestration template
@@ -58,6 +57,7 @@ lives in the repo: [`deploy/zspace/docker-compose.yml`](../../deploy/zspace/dock
 to the Aliyun mirror (fast in China, anonymous pull), host networking, and a
 commented `NVR_LISTEN_PORT` switch.
 
+## Port conflicts
 
 On host networking the container binds directly to the NAS. MiBee NVR uses `9090` (Web) and `2121` (FTP); if either clashes with another service or container, change the app's own port in `mibee-nvr.yaml` (not a port remap):
 ```yaml
@@ -84,7 +84,7 @@ Think of 监控中心 as quick preview, MiBee NVR as AI analysis + long-term rec
 
 ## Updates & rollback
 
-See [Auto-update guide](deployment-autoupdate.md). `docker compose pull && up -d` from the project, or pin a tag (`mibeenvr:0.10.0`) for rollback. Data under your mapped path persists across recreation.
+See [Auto-update guide](deployment-autoupdate.md). `docker compose pull && up -d` from the project, or pin a tag (`mibeenvr:0.11.0`) for rollback. Data under your mapped path persists across recreation.
 
 ## Reaching the official app store (optional)
 

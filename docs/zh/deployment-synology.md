@@ -50,7 +50,6 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/
 5. **下一步 → 完成**。Container Manager 拉取多架构镜像并启动容器。
 6. 打开 `http://<NAS-IP>:9090` 完成初始化向导。
 
-## 端口冲突
 ## 导入现成模板
 
 不想手抄 Compose？仓库里有可直接上传的项目模板：
@@ -58,6 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/
 （导入步骤见 [`README.md`](../../deploy/synology/README.md)）。与下文 compose 等价，
 已预填 Synology 路径，并带 `NVR_LISTEN_PORT`（改端口）与国内镜像源注释开关。
 
+## 端口冲突
 
 host 网络下容器直接监听 NAS 端口。MiBee NVR 用 `9090`（Web/API）和 `2121`（FTP）——这俩**不与** DSM 自身端口冲突。DSM 保留 `5000`（HTTP）/ `5001`（HTTPS）给其管理界面，`20/21` 给可选的内置 FTP。如果你也开了 DSM 的 FTP，请注意它与本 NVR 的 FTP（2121）是两套独立服务，别混淆。
 
@@ -72,7 +72,7 @@ ftp:
 
 ## 升级与回滚
 
-见[自动升级指南](deployment-autoupdate.md)。简言之：在项目目录 `docker compose pull && up -d`，或固定 tag（`mibeenvr:0.10.0`）以便可复现回滚。`/volume1/docker/mibee-nvr/data` 下的数据不受重建影响。
+见[自动升级指南](deployment-autoupdate.md)。简言之：在项目目录 `docker compose pull && up -d`，或固定 tag（`mibeenvr:0.11.0`）以便可复现回滚。`/volume1/docker/mibee-nvr/data` 下的数据不受重建影响。
 
 ## 原生 `.spk` 套件——何时值得（可选）
 

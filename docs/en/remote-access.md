@@ -37,7 +37,7 @@ streaming:
 
 - **STUN**: any free public server works for most NAT types (cone NAT).
 - **TURN**: required for symmetric NAT (common with carrier-grade NAT). TURN traffic consumes server bandwidth — consider self-hosting [coturn](https://github.com/coturn/coturn).
-- **TCP-only tunnels (e.g. Cloudflare Tunnel) cannot carry WebRTC UDP**: in that case switch the streaming protocol to HLS (`streaming.default_protocol: hls`) — HLS runs over HTTP/TCP and is tunnel-friendly.
+- **TCP-only tunnels (e.g. Cloudflare Tunnel) cannot carry WebRTC UDP**: in that case select HLS manually in the camera player (the protocol switcher defaults to Auto and degrades to HTTP transports when WebRTC is unavailable) — HLS runs over HTTP/TCP and is tunnel-friendly.
 
 ---
 
@@ -117,12 +117,10 @@ Cloudflare Tunnel is **TCP-only** and cannot relay WebRTC's UDP media. Under thi
 - ✅ HLS / LL-HLS / HTTP-FLV / WebSocket streams (over HTTP) work normally
 - ✅ Playback, management API, and all non-WebRTC features work normally
 
-**Recommendation**: switch the default streaming protocol to HLS when deploying behind Cloudflare Tunnel:
-
-```yaml
-streaming:
-  default_protocol: hls   # or ll-hls
-```
+**Recommendation**: select HLS in the camera player when deploying behind Cloudflare
+Tunnel (the switcher defaults to Auto and degrades to HTTP transports automatically).
+The `streaming.default_protocol` setting was removed in 0.11.0; stale values are
+silently ignored.
 
 ### Notes
 
@@ -140,6 +138,15 @@ These are not covered in detail here — see their official docs:
 - **ZeroTier**: mesh VPN similar to Tailscale, supports self-hosted controllers.
 
 ---
+
+## HLS playback on iOS / AVPlayer
+
+When an HLS playlist is requested with a session token, the NVR also sets a
+scoped `mbs_session` cookie so that players which cannot set per-request headers
+(iOS AVPlayer, some native players) can fetch media segments. In remote-access
+setups, simply open the Web UI in Safari or paste the HLS URL into a player such
+as infuse — no extra configuration needed. Versions before 0.11.0 returned 401
+on protected HLS segments in iOS players; upgrading fixes it.
 
 ## Limitations
 

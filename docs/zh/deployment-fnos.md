@@ -1,36 +1,68 @@
 # 在飞牛 fnOS 上部署
 
-> 通过 `.fpk` 包把 MiBee NVR 安装到 fnOS。该包只是封装现成的多架构 Docker 镜像，不涉及任何后端代码改动。fnOS 在目标平台里有最完整的官方开发工具链（`fnpack`）。
+> 通过 `.fpk` 包把 MiBee NVR 安装到 fnOS。每个版本发布两个包：**离线版** `.fpk`
+> （双架构镜像 docker-save 进包 —— 安装无需访问镜像仓库，ghcr 慢/不可达环境首选）
+> 和**在线版** `.fpk`（极小 —— 首次启动时拉取镜像，按延迟自动选择 ghcr 或阿里云
+> ACR 镜像源）。包只是封装现成的多架构 Docker 镜像，不涉及后端代码改动。
 
 ## 为什么用 host 网络
 
 ONVIF WS-Discovery 使用 UDP 多播（`239.255.255.250:3702`），Docker 默认 bridge 会阻断它。因此包内容器用 `network_mode: host`，摄像头自动发现正常工作，并在 manifest 里设 `checkport=false`（host 网络的多端口服务没有单一有效的 `service_port`）。若宿主的 `9090`（Web）或 `2121`（FTP）已被占用：Web 端口首选在 **Web UI → 设置 → 通用 → "Web 界面端口"** 修改（装完即可改），或部署前设 `NVR_LISTEN_PORT` 环境变量；FTP 端口改 `mibee-nvr.yaml` 里的 `ftp.port`。
 
-## 包内容
+## 离线版 vs 在线版
 
-`.fpk` 源在 [`deploy/fnos/`](../../deploy/fnos)：
+| | 离线 `.fpk` | 在线 `.fpk` |
+|---|---|---|
+| 体积 | ~150 MB（内置双架构镜像） | ~65 KB |
+| 安装时联网 | 不需要（加载内置镜像） | 需要（启动时拉取） |
+| 镜像来源 | 内置 tar | 自动：ghcr（海外）/ ACR（国内更快） |
+| 适用 | ghcr 拉取慢/被墙 | 网络通畅、想要小包 |
 
-```
-deploy/fnos/
-├── manifest                     # 应用元数据（INI），版本在构建时注入
-├── ICON.PNG  ICON_256.PNG       # 64/256 图标（用真实 logo 替换占位图）
-├── config/{privilege,resource}  # 以 package 用户运行；声明 docker-project
-├── app/docker/docker-compose.yaml   # host 网络，复用 ghcr 镜像
-├── app/ui/config                # 桌面入口 → 打开 http://host:9090
-├── cmd/main                     # 通过 `docker inspect` 检查运行状态
-├── wizard/install               # 安装时提示
-└── build.sh                     # 注入 X.Y.Z 版本号，执行 fnpack build
-```
+两者都在[发布页](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases)：
+`mibee-nvr-fnos-<ver>.fpk`（离线）与 `mibee-nvr-fnos-online-<ver>.fpk`（在线）。
+
+## 包的工作原理（重要）
+
+包**不使用** fnOS 的 `docker-project` 资源 —— 那会让 fnOS 在安装期间就执行
+`docker compose up`，此时离线镜像还没 `docker load`，拉取必然失败。因此 `cmd/main`
+自己掌管容器完整生命周期：
+
+- **start**：（离线）`docker load` 内置的本架构 tar → `docker run --network host`；
+  （在线）探测 ghcr 与 ACR 延迟 → 从更快的一方 `docker pull` → `docker run`
+- **stop**：`docker stop` + `docker rm`
+- **status**：`docker inspect`
+
+`cmd/main` 是**双模式**的：发现 `${TRIM_APPDEST}/images/` 下有内置 tar 就走离线路径，
+没有就走在线拉取路径 —— 同一份脚本同时服务两种包，从离线版升级到在线版（或反之）
+无感切换。`app/docker/docker-compose.yaml` 实际上是 vestigial（保留作参考），
+真正的入口是 `cmd/main`。`config/privilege` 以 **root** 运行（需要 Docker socket）；
+`config/resource` 为 `{}`（无 docker-project）。
+
+## 架构说明（x86）
+
+`cmd/main` 把 `TRIM_SYS_ARCH` 映射到镜像架构：`x86`（fnOS 对 x86_64 的称呼，与
+`x86_64`/`amd64`/`x64` 等价）→ amd64；`aarch64`/`arm64`/`armv8*`/`arm` → arm64
+（64 位内核上 64 位镜像可正常运行）—— 修复了
+[#311](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/311) 中 x86 fnOS 主机
+无法启动的问题（此前架构变量为空，产生 `mibee-nvr-.tar`）。包内不含 armv7 镜像
+（fnOS 无 32 位 ARM 产品线）。
+
+## 包源码
+
+在 [`deploy/fnos/`](../../deploy/fnos)；在线版与离线版共用同一份源码（`cmd/main`
+双模式），仅 `app/images/` 在线打包时不打入。
 
 ## 构建 `.fpk`
 
 先安装 [`fnpack`](https://github.com/ckcoding/fnnas-docs/blob/main/docs/cli/fnpack.md)，然后：
 
 ```bash
-./deploy/fnos/build.sh 0.10.0    # 版本号必须是 X.Y.Z，且与镜像 tag 一致
+./deploy/fnos/build.sh 0.11.0              # 离线包：需要本地已构建双架构镜像
+./deploy/fnos/build.sh --online 0.11.0    # 在线包：不含镜像，无需 docker
 ```
 
-版本号必须是 `X.Y.Z`（fnOS 拒绝 pre-release 后缀），**并且**必须等于镜像 tag——不一致会在 NAS 拉镜像时报误导性的 `manifest unknown`。`build.sh` 会把同一个版本号写入 `manifest` 和 compose 的 `${VERSION}`。
+版本号必须是 `X.Y.Z`（fnOS 拒绝 pre-release 后缀），**并且**必须等于镜像 tag——不一致会在 NAS 拉镜像时报误导性的 `manifest unknown`。`build.sh` 会把同一个版本号写入 `manifest` 和 compose 的 `${VERSION}`，并把产物命名为确定性的
+`mibee-nvr-fnos-<ver>.fpk` / `mibee-nvr-fnos-online-<ver>.fpk`。
 
 ## 安装 / 上架
 

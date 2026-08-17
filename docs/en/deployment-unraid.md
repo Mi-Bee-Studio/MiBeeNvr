@@ -45,7 +45,7 @@ ftp:
 
 ## Updates
 
-- **Manual / pinned (recommended for recording-critical setups):** set the image tag to a specific release (e.g. `mibeenvr:0.10.0`), then `docker pull` + recreate to update. Pinning also gives you a clean rollback target.
+- **Manual / pinned (recommended for recording-critical setups):** set the image tag to a specific release (e.g. `mibeenvr:0.11.0`), then `docker pull` + recreate to update. Pinning also gives you a clean rollback target.
 - **Automatic:** the optional Watchtower profile (see [Auto-update guide](deployment-autoupdate.md)) can pull `:latest` on a schedule. Automatic updates trade convenience for rollback risk — keep a known-good tag handy.
 
 Recordings, the SQLite DB, config, and AI models all live under `/data`, so recreating the container never touches your data.

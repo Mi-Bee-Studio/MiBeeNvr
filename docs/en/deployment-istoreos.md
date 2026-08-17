@@ -76,7 +76,7 @@ ftp:
 ## Updates & rollback
 
 - **Manual (recommended):** `cd /mnt/sata1/mibee-nvr && docker compose pull && docker compose up -d`.
-- **Pinned / rollback:** set the image tag to a specific release (`mibeenvr:0.10.0`), recreate, and keep the old tag for rollback.
+- **Pinned / rollback:** set the image tag to a specific release (`mibeenvr:0.11.0`), recreate, and keep the old tag for rollback.
 - **Automatic:** optional Watchtower profile — see [Auto-update guide](deployment-autoupdate.md).
 
 Data under `/data` (recordings, DB, config, models) is untouched by container recreation.

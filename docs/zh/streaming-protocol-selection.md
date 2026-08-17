@@ -16,6 +16,11 @@
 
 旧模式要求用户在设置中选一个"默认协议"，对某些摄像头是错的。现在大屏按摄像头自动选择，**新用户根本看不到协议选择器**——orchestrator 自动选当前浏览器+编码能支持的最低延迟协议。
 
+**音频**（0.11.0 起）：WebRTC (WHEP) 将 G.711 与 Opus 音频直接复用进轨道（零转码）；
+WebSocket 播放器走共享音频 WS 端点（G.711 全场景可用，AAC/Opus 需 WebCodecs 即
+HTTPS 或 localhost）；HLS/HTTP-FLV/MJPEG 轮询不承载直播音频。录像回放的音频
+（G.711/AAC/Opus）由浏览器 MP4 原生解码，不受协议选择影响。
+
 ---
 
 ## 架构（三层）
@@ -37,11 +42,11 @@
 ```json
 {
   "protocols": [
-    {"Protocol": "webrtc", "Available": true,  "Reason": ""},
-    {"Protocol": "flv",    "Available": true,  "Reason": ""},
-    {"Protocol": "hls",    "Available": true,  "Reason": ""},
-    {"Protocol": "wasm",   "Available": true,  "Reason": ""},
-    {"Protocol": "webrtc", "Available": false, "Reason": "WebRTC does not support H.265"}
+    {"protocol": "webrtc", "available": true,  "reason": ""},
+    {"protocol": "flv",    "available": true,  "reason": ""},
+    {"protocol": "hls",    "available": true,  "reason": ""},
+    {"protocol": "wasm",   "available": true,  "reason": ""},
+    {"protocol": "webrtc", "available": false, "reason": "WebRTC does not support H.265"}
   ],
   "encoding": "h265",
   "default": "hls"
@@ -58,9 +63,9 @@
    ```
    PREFERENCE_ORDER = [wasm, webrtc, flv, hls, mjpeg]
    wasm   ← 仅前端模式，门控：WebCodecs（任意编码）或 libde265 WASM（HTTP 上的 H.265）
-   webrtc ← 后端 Available + 仅 H.264（H.265 被编码门控排除）
-   flv    ← 后端 Available +（H.264，或 H.265 仅当有 MSE H.265）
-   hls    ← 后端 Available（通用兜底）
+   webrtc ← 后端 available + 仅 H.264（H.265 被编码门控排除）
+   flv    ← 后端 available +（H.264，或 H.265 仅当有 MSE H.265）
+   hls    ← 后端 available（通用兜底）
    mjpeg  ← 仅 JPEG/MJPEG 摄像头（单元素链）
    ```
    链首是大屏初始渲染的协议；后续条目是降级目标。用户覆盖会把链**钉死**为单元素（见下"用户手动覆盖"）。

@@ -79,11 +79,18 @@ Track disk usage and capacity.
 |--------|------|--------|-------------|
 | `nvr_storage_used_bytes` | Gauge | — | Storage space consumed by recordings |
 | `nvr_storage_total_bytes` | Gauge | — | Total storage capacity available |
+| `nvr_storage_write_errors_total` | Counter | — | Total number of storage write I/O errors across all cameras |
 
 **Usage:** Set alerts at 80%/90% thresholds:
 
 ```promql
 nvr_storage_used_bytes / nvr_storage_total_bytes > 0.8
+```
+
+Alert on storage write errors — a sustained non-zero rate indicates failing storage:
+
+```promql
+rate(nvr_storage_write_errors_total[5m]) > 0
 ```
 
 ---
@@ -95,8 +102,11 @@ Track retention and disk threshold cleanup operations.
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `nvr_cleanup_deleted_total` | Counter | `reason` | Total recordings deleted by cleanup jobs |
+| `nvr_cleanup_duration_seconds` | Histogram | — | Cleanup cycle duration in seconds |
 
 **`reason` label values:** `retention`, `disk_threshold`, `archive_retention`, `orphan`.
+
+**Buckets** for `nvr_cleanup_duration_seconds`: 1s, 5s, 10s, 30s, 60s, 300s, 600s.
 
 **Usage:** Monitor cleanup activity:
 
@@ -241,6 +251,8 @@ Track the internal frame distribution pipeline. These metrics help diagnose bott
 | `nvr_frame_processing_duration_seconds` | Histogram | `camera_id`, `protocol` | Frame processing time through the pipeline (1:100 sampling) |
 | `nvr_jitter_buffer_depth` | Gauge | `camera_id` | Current jitter buffer frame count |
 | `nvr_jitter_buffer_reorders_total` | Counter | `camera_id` | Out-of-order frames detected |
+| `nvr_audio_frames_total` | Counter | `camera_id`, `codec` | Total audio frames broadcast into StreamHub |
+| `nvr_audio_frames_dropped_total` | Counter | `camera_id` | Audio frames dropped due to buffer overflow |
 
 **`consumer` label values:** `hls`, `webrtc`, `flv`, `wsstream`, `recorder`, `ai`, etc.
 
@@ -302,8 +314,13 @@ Track FFmpeg transcoding jobs.
 | `nvr_transcoding_duration_seconds` | Histogram | `codec_from`, `codec_to` | Duration of completed transcoding jobs |
 | `nvr_transcoding_bytes_processed` | Counter | — | Total bytes processed by transcoding |
 | `nvr_transcoding_ffmpeg_status` | Gauge | — | FFmpeg availability: 0=not_installed, 1=downloading, 2=available |
+| `nvr_relay_transcoder_temperature_c` | Gauge | — | Current transcoder thermal zone temperature in Celsius |
+| `nvr_relay_transcoder_restarts_total` | Counter | — | Total number of transcoder restarts |
+| `nvr_relay_transcoder_thermal_throttles_total` | Counter | — | Total number of thermal throttle events that caused preset downgrade |
 
 **`status` label values:** `completed`, `failed`, `cancelled`.
+
+**Note:** The `nvr_relay_transcoder_*` metrics are emitted by the live relay transcoder (`internal/livetranscode`) and registered separately from the central `internal/metrics` registry.
 
 **Usage:**
 
@@ -406,6 +423,136 @@ nvr_process_resident_memory_bytes > 500 * 1024 * 1024
 
 # Goroutine leak detection
 go_goroutines > 500
+```
+
+---
+
+## 15. Merge Metrics
+
+Track recording segment merge operations — both batch merges and the quasi-real-time rolling merge.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_merge_attempts_total` | Counter | — | Total number of merge attempts |
+| `nvr_merge_successes_total` | Counter | — | Total number of successful merges |
+| `nvr_merge_failures_total` | Counter | `reason` | Total number of failed merges, partitioned by reason |
+| `nvr_merge_duration_seconds` | Histogram | — | Duration of merge operations in seconds |
+| `nvr_merge_size_bytes` | Histogram | — | Size of merged output in bytes |
+| `nvr_merge_pending_segments` | Gauge | `camera_id` | Number of segments pending merge, partitioned by camera |
+| `nvr_rolling_merge_latency_seconds` | Histogram | `camera_id` | Time from segment close to rolling merge completion |
+| `nvr_rolling_merge_bucket_segments` | Gauge | `camera_id` | Segments accumulated in the current rolling merge window bucket |
+
+**Buckets** for `nvr_merge_duration_seconds`: 0.5s, 1s, 5s, 10s, 30s, 60s, 300s, 600s. For `nvr_merge_size_bytes`: 10MB, 50MB, 100MB, 500MB, 1GB, 3GB. For `nvr_rolling_merge_latency_seconds`: 0.1s, 0.5s, 1s, 2s, 5s, 10s, 30s.
+
+**Usage:**
+
+```promql
+# Merge failure rate
+rate(nvr_merge_failures_total[5m]) / rate(nvr_merge_attempts_total[5m])
+
+# Rolling merge latency P99 (segment close → merged)
+histogram_quantile(0.99, rate(nvr_rolling_merge_latency_seconds_bucket[5m]))
+
+# Backlog of unmerged segments per camera
+nvr_merge_pending_segments
+```
+
+---
+
+## 16. SQLite Database Metrics
+
+Health metrics for the SQLite metadata database — writer pool, read-only pool, and file-level health.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_sqlite_open_connections` | Gauge | — | SQLite open connections from the writer connection pool |
+| `nvr_sqlite_in_use_connections` | Gauge | — | SQLite in-use connections from the writer connection pool |
+| `nvr_sqlite_read_open_connections` | Gauge | — | SQLite open connections from the read-only pool (query_only, concurrent with the writer under WAL) |
+| `nvr_sqlite_read_in_use_connections` | Gauge | — | SQLite in-use connections from the read-only pool |
+| `nvr_sqlite_read_wait_count_total` | Counter | — | Total number of times the read pool had no connection available and the caller waited (sustained growth means `SetReadPoolSize` should be raised) |
+| `nvr_sqlite_read_wait_duration_seconds` | Gauge | — | Total seconds callers waited for a read-pool connection (cumulative since start) |
+| `nvr_sqlite_wal_size_bytes` | Gauge | — | SQLite WAL file size in bytes |
+| `nvr_sqlite_db_size_bytes` | Gauge | — | SQLite database file size in bytes |
+| `nvr_sqlite_fragmentation_ratio` | Gauge | — | SQLite fragmentation ratio (freelist_count / page_count) |
+| `nvr_sqlite_query_duration_seconds` | Histogram | `query_name` | SQLite query duration in seconds, partitioned by query name |
+| `nvr_sqlite_busy_errors_total` | Counter | — | Total SQLITE_BUSY errors retried across all database operations |
+
+**Buckets** for `nvr_sqlite_query_duration_seconds`: 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s.
+
+**Usage:**
+
+```promql
+# Slow queries by name, P99
+histogram_quantile(0.99, rate(nvr_sqlite_query_duration_seconds_bucket[5m]))
+
+# Read pool starved — raise SetReadPoolSize
+rate(nvr_sqlite_read_wait_count_total[5m]) > 0
+
+# Lock contention
+rate(nvr_sqlite_busy_errors_total[5m]) > 0
+```
+
+---
+
+## 17. Authentication Metrics
+
+Track login attempts for security monitoring.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_auth_attempts_total` | Counter | `result` | Total authentication attempts, partitioned by result |
+| `nvr_auth_rate_limited_total` | Counter | — | Total requests blocked by auth rate limiter |
+
+**`result` label values:** `success`, `failure`, `no_password`.
+
+**Usage:**
+
+```promql
+# Brute-force detection — high failure rate
+rate(nvr_auth_attempts_total{result="failure"}[5m]) > 0.1
+
+# Rate limiter activity
+rate(nvr_auth_rate_limited_total[5m])
+```
+
+---
+
+## 18. AI Event Metrics
+
+Track AI events received from the external MiBeeVision backend.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_ai_events_received_total` | Counter | `camera_id`, `event_type` | Total AI events received from MiBeeVision, partitioned by camera and event type |
+| `nvr_ai_events_errors_total` | Counter | — | Total errors when receiving or processing AI events |
+
+**Usage:**
+
+```promql
+# AI pipeline health — events flowing per camera
+rate(nvr_ai_events_received_total[5m])
+
+# Ingest errors
+rate(nvr_ai_events_errors_total[5m]) > 0
+```
+
+---
+
+## 19. Timeline Metrics
+
+Track DVR-style timeline seek operations during recording browsing.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_timeline_seeks_total` | Counter | `camera_id`, `type` | Total timeline seek operations, partitioned by camera and seek type |
+
+**`type` label values:** `segment`, `intra`.
+
+**Usage:**
+
+```promql
+# Seek hot spots per camera
+topk(5, sum(rate(nvr_timeline_seeks_total[1h])) by (camera_id))
 ```
 
 ---

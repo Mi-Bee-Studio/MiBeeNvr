@@ -50,7 +50,6 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/
 5. **Next → Done**. Container Manager pulls the multi-arch image and starts the container.
 6. Open `http://<nas-ip>:9090` and complete the setup wizard.
 
-## Port conflicts
 ## Import the ready-made template
 
 Prefer not to paste compose by hand? A ready-to-upload project template lives
@@ -59,6 +58,7 @@ in the repo: [`deploy/synology/docker-compose.yml`](../../deploy/synology/docker
 same host-network compose with the Synology path pre-filled, plus commented
 `NVR_LISTEN_PORT` and China-mirror switches.
 
+## Port conflicts
 
 On host networking the container binds directly to the NAS. MiBee NVR uses `9090` (Web/API) and `2121` (FTP) — these do **not** clash with DSM's own ports. DSM reserves `5000` (HTTP) / `5001` (HTTPS) for its UI, and `20/21` for its optional built-in FTP. If you also enabled DSM's FTP, note it is a separate service from MiBee NVR's FTP (2121) — do not confuse them.
 
@@ -73,7 +73,7 @@ ftp:
 
 ## Updates & rollback
 
-See [Auto-update guide](deployment-autoupdate.md). In short: `docker compose pull && up -d` from the project folder, or pin a tag (`mibeenvr:0.10.0`) for reproducible rollbacks. Data under `/volume1/docker/mibee-nvr/data` is never touched by recreation.
+See [Auto-update guide](deployment-autoupdate.md). In short: `docker compose pull && up -d` from the project folder, or pin a tag (`mibeenvr:0.11.0`) for reproducible rollbacks. Data under `/volume1/docker/mibee-nvr/data` is never touched by recreation.
 
 ## Native `.spk` package — when it's worth it (optional)
 

@@ -17,7 +17,8 @@ Most endpoints require authentication via HTTP Basic Auth. See [Authentication](
 | ONVIF | [onvif.md](onvif.md) | PTZ control, presets, imaging, network, users, discovery |
 | Recordings | [recordings.md](recordings.md) | List, get, delete, download recordings, timelapse frames |
 | Archives | [archives.md](archives.md) | Archive groups, retention management |
-| Settings | [settings.md](settings.md) | System stats, settings CRUD, merge/streaming/transcoding settings |
+| Settings | [settings.md](settings.md) | System stats, settings CRUD, merge/streaming/transcoding settings, MiBeeVision integration status |
+| GB28181 | [../gb28181-guide.md](../gb28181-guide.md) | GB/T 28181 platform: devices/channels, catalog refresh, alarms, PTZ, device-side recording search & playback |
 | Xiaomi | [xiaomi.md](xiaomi.md) | Cloud auth, captcha, device management |
 | Merge & Timelapse Config | [merge.md](merge.md) | Merge status, pending counts, camera merge/timelapse config |
 | Transcoding | [transcoding.md](transcoding.md) | FFmpeg management, transcode tasks, backfill, camera configs |

@@ -63,21 +63,110 @@ curl -u username:password \
 **响应：**
 ```json
 {
-  "server": {
-    "listen": ":9090"
-  },
-  "storage": {
-    "root_dir": "/var/lib/mibee-nvr",
-    "segment_duration": "30s"
-  },
   "cleanup": {
     "retention_days": 30,
     "check_interval": "1h",
-    "disk_threshold_percent": 95
+    "disk_threshold_percent": 85
+  },
+  "webdav": {
+    "enabled": true,
+    "path_prefix": "/dav",
+    "read_write": false
   },
   "auth": {
-    "username": "admin"
+    "username": "admin",
+    "auth_configured": true
+  },
+  "mibeevision": {
+    "api_keys": [
+      {
+        "name": "vision",
+        "prefix": "mbv_1a2b…",
+        "revoked": false,
+        "last_used": "2026-08-17T02:00:00Z"
+      }
+    ]
+  },
+  "timezone": "Local",
+  "timezone_display": "CST (UTC+8)",
+  "server": {
+    "listen": ":9090"
+  },
+  "gb28181": {
+    "enabled": false,
+    "sip_listen": ":5060",
+    "server_id": "34020000002000000001",
+    "realm": "3402000000",
+    "password_configured": true,
+    "port_range": "30000-30050",
+    "allowed_device_ids": [],
+    "heartbeat_interval": "60s",
+    "catalog_interval": "30m",
+    "tcp_mode": false,
+    "tcp_framing": "auto",
+    "media_transport": "udp",
+    "sip_transport": "udp",
+    "subscribe_catalog": true,
+    "subscribe_alarm": false,
+    "subscribe_mobile_position": false,
+    "subscribe_expires": "3600s"
   }
+}
+```
+
+`mibeevision.api_keys` 永远不会返回完整密钥（只有前缀）；`last_used`
+为该密钥最近一次被使用的 UTC 时间（每分钟粒度），从未使用过的密钥省略该字段。
+
+## MiBeeVision 集成状态
+
+### 查询 Vision 消费端健康
+
+**端点：** `GET /api/vision/status`
+
+查询外部 AI 处理端（MiBeeVision）的连接健康状况，供 Web UI 展示。
+未启用 Vision 集成时返回 `{"enabled": false}`。
+
+**请求：**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/vision/status"
+```
+
+**响应：**
+```json
+{
+  "enabled": true,
+  "healthy": true,
+  "device": "jetson-orin",
+  "queue_depth": 0,
+  "processed": 12841,
+  "last_seen": "2026-08-17T12:00:00Z"
+}
+```
+
+`last_seen` 在从未收到心跳时省略。只有 `healthy` 为 `true` 时 NVR 才会向
+Vision 推送视频段；心跳恢复后，错过的段会被自动补偿重推。
+
+### Vision 心跳上报
+
+**端点：** `POST /api/vision/heartbeat`（公开端点，无需认证）
+
+Vision 服务每 30 秒上报一次。请求体：
+
+```json
+{
+  "status": "ok",
+  "device": "jetson-orin",
+  "queue_depth": 0,
+  "processed_count": 12841
+}
+```
+
+**响应：**
+```json
+{
+  "ok": true,
+  "push_enabled": true
 }
 ```
 
