@@ -98,15 +98,29 @@ TASKID=$(jsonget "$TASKRESP" 'd["data"]["taskId"]' || echo "")
 [ -n "$TASKID" ] || die "no taskId from task creation: $TASKRESP"
 echo "== install taskId=$TASKID =="
 
-# 7. poll the task until it finishes
+# 7. poll the task until it finishes. Observed status codes (2026-08-17):
+# 1 = running, 2 = success, 5 = task closed after completion (the poller can
+# first see 5 with progress 0 once the task record is recycled). We treat 2 as
+# success, then cross-check the installed version via /app/installed.
 for i in $(seq 1 180); do
   ST=$(api POST "$STATUS_PATH" -d "{\"taskId\":\"${TASKID}\"}")
-  STATE=$(jsonget "$ST" '(d["data"] or {}).get("status", d["data"])' || echo "?")
-  case "$STATE" in
-    *finish*|*success*|*complete*|*done*) echo "== OK: $ST"; exit 0 ;;
-    *fail*|*error*|*cancel*)              die "task failed: $ST" ;;
+  S=$(jsonget "$ST" '(d["data"] or {}).get("status")' || echo "?")
+  case "$S" in
+    2)
+      FINAL=$(api GET "/app-center/v1/app/installed?language=zh-CN")
+      GOT=$(printf '%s' "$FINAL" | python3 -c "import sys,json; d=json.load(sys.stdin); a=[x for x in d['data']['list'] if x['appName']=='$APP']; print(a[0]['version'] if a else 'ABSENT')")
+      if [ "$GOT" = "$VER" ]; then echo "== OK: $APP $VER installed (task $TASKID)"; exit 0
+      else die "task done but installed version is '$GOT' (want $VER)"; fi ;;
+    5)
+      # task closed — the cross-check decides
+      FINAL=$(api GET "/app-center/v1/app/installed?language=zh-CN")
+      GOT=$(printf '%s' "$FINAL" | python3 -c "import sys,json; d=json.load(sys.stdin); a=[x for x in d['data']['list'] if x['appName']=='$APP']; print(a[0]['version'] if a else 'ABSENT')")
+      if [ "$GOT" = "$VER" ]; then echo "== OK: $APP $VER installed (task closed, verified via /app/installed)"; exit 0
+      else die "task closed with version '$GOT' (want $VER): $ST"; fi ;;
+    *fail*|*error*|*cancel*|6|7)
+      die "task failed: $ST" ;;
   esac
-  [ $((i % 5)) -eq 0 ] && echo "... $STATE"
+  [ $((i % 5)) -eq 0 ] && echo "... status=$S progress=$(jsonget "$ST" '(d["data"] or {}).get("progress","?")' || echo '?')"
   sleep 2
 done
 die "timed out waiting for task $TASKID (last: $ST)"
