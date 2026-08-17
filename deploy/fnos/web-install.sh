@@ -40,8 +40,10 @@ api() { # api METHOD PATH [curl-extra...]
 echo "== fnOS web-install: $FPK → $HOST =="
 [ -f "$FPK" ] || die "fpk not found: $FPK"
 
-# 1. client-side task id (mirrors the web client's app-upload-<rand>)
-TASK="app-upload-$(tr -dc a-z0-9 </dev/urandom | head -c 8)"
+# 1. client-side task id (mirrors the web client's app-upload-<rand>).
+# NB: no `tr | head` pipelines here — under `set -o pipefail` the SIGPIPE from
+# head killing tr aborts the whole script (exit 141).
+TASK="app-upload-$(printf '%04x%04x%04x' $RANDOM $RANDOM $RANDOM)"
 
 # 2/3. init task + upload the package (multipart; volumeID from sysconfig)
 VOL=$(api GET "/app-center/v1/sysconfig?language=zh-CN" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["volumeID"])')
