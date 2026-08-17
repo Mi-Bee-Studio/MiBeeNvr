@@ -1209,7 +1209,7 @@
   "setup.passwordPlaceholder": "至少 8 个字符",
   "setup.secureNote": "密码安全存储，无法恢复，请妥善保管",
   "setup.storagePath": "存储路径",
-  "setup.storagePathHint": "录像文件的存储目录",
+  "setup.storagePathHint": "录像文件的存储目录；留空则沿用服务端当前配置",
   "setup.submit": "完成设置",
   "setup.submitting": "正在设置...",
   "setup.subtitle": "创建管理员账户以开始使用",

@@ -12,7 +12,10 @@
   let showPassword = $state(false);
   let showConfirmPassword = $state(false);
   let language = $state('en');
-  let storagePath = $state('/var/lib/mibee-nvr');
+  // Empty = keep the server-side storage.root_dir (pre-configured YAML or its
+  // default). Only a user-entered path is submitted — the wizard must never
+  // clobber a pre-configured root_dir with its own default (#388).
+  let storagePath = $state('');
   let error = $state('');
   let loading = $state(false);
 

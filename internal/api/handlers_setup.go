@@ -54,47 +54,44 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build minimal valid config (mirrors cmdInit pattern)
+	// Storage path: only a wizard-provided path overrides the loaded config.
+	// When absent, keep the existing root_dir; fall back to Docker env detection
+	// only if the loaded config has none (it normally went through ApplyDefaults,
+	// which already sets /var/lib/mibee-nvr).
 	dataDir := strings.TrimSpace(req.StoragePath)
-	if dataDir == "" {
-		// Prefer existing config value, then Docker env detection
-		if h.config.Storage.RootDir != "" {
-			dataDir = h.config.Storage.RootDir
-		} else if envDir := os.Getenv("NVR_DATA_DIR"); envDir != "" {
-			dataDir = envDir
-		} else if info, err := os.Stat("/data"); err == nil && info.IsDir() {
-			dataDir = "/data"
-		} else {
-			dataDir = "/var/lib/mibee-nvr"
+	if dataDir == "" && strings.TrimSpace(h.config.Storage.RootDir) == "" {
+		switch {
+		case os.Getenv("NVR_DATA_DIR") != "":
+			dataDir = os.Getenv("NVR_DATA_DIR")
+		default:
+			if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+				dataDir = "/data"
+			} else {
+				dataDir = "/var/lib/mibee-nvr"
+			}
 		}
 	}
 
-	cfg := config.Config{
-		Server:  config.ServerConfig{Listen: ":9090"},
-		Storage: config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
-		Auth:    config.AuthConfig{Username: req.Username, PasswordHash: hash},
-		Cameras: []config.CameraConfig{},
-		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 85},
-		FTP:     config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
-		WebDAV:  config.WebDAVConfig{PathPrefix: "/dav"},
-		Observability: config.ObservabilityConfig{
-			LogLevel:  "info",
-			LogFormat: "text",
-		},
-		Version: "1.0",
+	// Patch the ALREADY-LOADED config in place — never rebuild from defaults
+	// (#388): a hand-preconfigured YAML (listen, vision, api_keys, cameras, …)
+	// completed through the setup wizard must keep every non-auth field. The
+	// loaded config already carries ApplyDefaults values, so a fresh install
+	// still materializes the same defaults the old rebuild wrote.
+	h.config.Auth.Username = req.Username
+	h.config.Auth.PasswordHash = hash
+	if dataDir != "" {
+		h.config.Storage.RootDir = dataDir
+	}
+	if strings.TrimSpace(h.config.Version) == "" {
+		h.config.Version = "1.0"
 	}
 
 	// Atomic save
-	if err := config.Save(h.configPath, &cfg); err != nil {
+	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Error("failed to save config", "error", err, "path", r.URL.Path)
 		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
-
-	// Update in-memory config so middleware picks up the new password hash
-	h.config.Auth.Username = req.Username
-	h.config.Auth.PasswordHash = hash
-	h.config.Storage.RootDir = dataDir
 
 	// Issue a stateless signed session token (same scheme as /api/auth/login) so
 	// the just-initialized browser session never carries a reversible password.
