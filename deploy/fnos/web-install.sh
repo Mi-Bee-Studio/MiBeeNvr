@@ -72,11 +72,14 @@ STATE=$(jsonget "$ST" 'd["data"].get("message","")' || echo "?")
 echo "== package: $APP $VER (message=$STATE) =="
 
 # 5/6. install (fresh) or update (already installed) — same fork the UI makes.
-# TASK BODY IS DELIBERATELY MINIMAL: {appName, packageType:"local", version,
-# language}. Adding systemParameters (installVolumeID/apiScope/...) makes the
-# fnOS binder PANIC (server 10000, verified 2026-08-17) — the UI's S1 wrapper
-# only injects those for wizard-driven installs; the backend then applies the
-# existing install's volume + wizard values on its own.
+# Task bodies verified against the fnOS binder (2026-08-17):
+#   - customParameters is an ARRAY of {key,value} wizard answers (the web UI
+#     builds exactly that shape). A plain object panics the binder (10000),
+#     and omitting it on a fresh install fails required-field validation
+#     (19000 "wizard required field … not found").
+#   - UPDATE works with the minimal body — wizard/system values carry over.
+#   - INSTALL additionally needs systemParameters {agreedToProtocol,
+#     installVolumeID, dataVolumeId, immediateStart} like the UI sends.
 INSTALLED=$(api GET "/app-center/v1/app/installed?language=zh-CN" \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print(any(a['appName']=='$APP' for a in d['data']['list']))")
 
@@ -89,8 +92,7 @@ if [ "$INSTALLED" = "True" ]; then
 else
   echo "== installing $APP $VER =="
   api GET "/app-center/v1/install/info?appName=${APP}&version=${VER}&packageType=local&language=zh-CN" >/dev/null
-  TASKRESP=$(api POST /app-center/v1/install/task -d \
-    "{\"appName\":\"${APP}\",\"packageType\":\"local\",\"version\":\"${VER}\",\"language\":\"zh-CN\"}")
+  TASKRESP=$(api POST /app-center/v1/install/task -d "{\"appName\":\"${APP}\",\"packageType\":\"local\",\"version\":\"${VER}\",\"language\":\"zh-CN\",\"systemParameters\":{\"agreedToProtocol\":true,\"installVolumeID\":${VOL:-1},\"dataVolumeId\":${VOL:-1},\"immediateStart\":true},\"customParameters\":[{\"key\":\"wizard_port\",\"value\":\"${PORT}\"}]}")
   STATUS_PATH=/app-center/v1/install/status
 fi
 
