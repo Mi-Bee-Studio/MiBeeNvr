@@ -173,9 +173,10 @@ if [ -n "${TRIM_DATA_ACCESSIBLE_PATHS:-}" ]; then
   OLDIFS="$IFS"; IFS=":"
   for host_dir in $TRIM_DATA_ACCESSIBLE_PATHS; do
     [ -d "$host_dir" ] || continue
-    name=$(basename "$host_dir")
-    # Sanitize the mount name (docker volume names reject some chars).
-    name=$(echo "$name" | tr -c 'A-Za-z0-9_.-' '_')
+    # Sanitize the mount name (docker bind targets reject some chars; the
+    # trailing underscore scrub drops the newline tr synthesizes from $(echo)).
+    name=$(basename "$host_dir" | tr -c 'A-Za-z0-9_.-' '_' | sed 's/_\+$//')
+    [ -n "$name" ] || name="storage"
     STORAGE_ARGS+=(-v "${host_dir}:/media/${name}:rw")
     if [ -n "$STORAGE_CANDIDATES" ]; then
       STORAGE_CANDIDATES="${STORAGE_CANDIDATES}:/media/${name}"
