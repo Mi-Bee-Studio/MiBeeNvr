@@ -89,8 +89,8 @@ func NormalizeBasePath(p string) string {
 }
 
 type StorageConfig struct {
-	RootDir         string   `yaml:"root_dir"`         // default "/mnt/data/nvr"
-	SegmentDuration string   `yaml:"segment_duration"` // default "30s"
+	RootDir         string `yaml:"root_dir"`         // default "/mnt/data/nvr"
+	SegmentDuration string `yaml:"segment_duration"` // default "30s"
 	// Candidates lists additional storage locations made available to the NVR
 	// by the host platform (#395): on fnOS these are the user-authorized
 	// directories (TRIM_DATA_ACCESSIBLE_PATHS), mounted into the container and
