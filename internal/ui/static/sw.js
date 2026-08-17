@@ -11,12 +11,23 @@
 //
 // During `vite dev` the placeholder is NOT rewritten, so we fall back to a
 // dev-only random version (each reload is a new cache — fine for dev).
-const CACHE_VERSION = 'mibee-nvr-1786942986652';
+const CACHE_VERSION = 'mibee-nvr-1786960526114';
+
+// Serving prefix (#394): when the app is served under a reverse-proxy /
+// unified-gateway base path (e.g. fnOS "/app/mibee-nvr"), this SW itself lives
+// at "<base>/sw.js", so the base is derived from our own URL. At the root the
+// base is "". All path checks and cache keys are prefix-aware so the SW never
+// touches (or precaches) paths outside the app.
+const BASE = self.location.pathname.replace(/\/sw\.js$/, '').replace(/\/+$/, '');
+const P = (p) => BASE + p;
+const stripBase = (pathname) =>
+  BASE && pathname.startsWith(BASE) ? pathname.slice(BASE.length) : pathname;
+
 const APP_SHELL = [
-  '/',
-  '/index.html',
-  '/favicon.svg',
-  '/manifest.json',
+  P('/'),
+  P('/index.html'),
+  P('/favicon.svg'),
+  P('/manifest.json'),
 ];
 
 // Install: pre-cache app shell
@@ -51,8 +62,12 @@ self.addEventListener('fetch', (event) => {
   // Skip non-GET (POST/PUT/DELETE always go to network)
   if (req.method !== 'GET') return;
 
+  // Strip the serving prefix so the route checks below see app-relative paths
+  // ("/api/...", "/models/...") regardless of the base the SW is scoped to.
+  const path = stripBase(url.pathname);
+
   // Media streams: always network (HLS m3u8, FLV, WebSocket, WebRTC)
-  if (url.pathname.includes('/stream') || url.pathname.includes('/api/cameras/') && url.pathname.includes('stream')) {
+  if (path.includes('/stream') || path.includes('/api/cameras/') && path.includes('stream')) {
     return; // Let browser handle normally
   }
 
@@ -64,12 +79,12 @@ self.addEventListener('fetch', (event) => {
   // (issue #109) on every load, with no way to recover without clearing site
   // data. Let the request fall through to the browser (the app's fetch still
   // goes through its own caching layer in runtime.ts).
-  if (url.pathname.startsWith('/models/')) {
+  if (path.startsWith('/models/')) {
     return; // Let browser handle normally (app-level Cache API still applies)
   }
 
   // API requests: Network First (fall back to cache when offline)
-  if (url.pathname.startsWith('/api/')) {
+  if (path.startsWith('/api/')) {
     event.respondWith(
       fetch(req)
         .then((resp) => {
@@ -87,7 +102,7 @@ self.addEventListener('fetch', (event) => {
 
   // HTML documents (index.html, routes): Network First to get latest version,
   // fallback to cache when offline. This ensures app updates are picked up.
-  if (req.headers.get('accept')?.includes('text/html') || url.pathname === '/' || url.pathname === '/index.html') {
+  if (req.headers.get('accept')?.includes('text/html') || path === '/' || path === '/index.html') {
     event.respondWith(
       fetch(req)
         .then((resp) => {
@@ -97,7 +112,7 @@ self.addEventListener('fetch', (event) => {
           }
           return resp;
         })
-        .catch(() => caches.match(req).then((cached) => cached || caches.match('/index.html')))
+        .catch(() => caches.match(req).then((cached) => cached || caches.match(P('/index.html'))))
     );
     return;
   }

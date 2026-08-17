@@ -59,6 +59,21 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Server.BasePath != "" {
 		cfg.Server.BasePath = NormalizeBasePath(cfg.Server.BasePath)
 	}
+	// NVR_STORAGE_CANDIDATES (colon-separated container paths, #395): extra
+	// storage locations the host platform granted the app (fnOS user-authorized
+	// directories, mounted by the lifecycle script under /media/*). Informational
+	// only — surfaced via /api/storage/candidates for the settings UI.
+	if env := strings.TrimSpace(os.Getenv("NVR_STORAGE_CANDIDATES")); env != "" {
+		var candidates []string
+		for _, p := range strings.Split(env, ":") {
+			if p = strings.TrimSpace(p); p != "" {
+				candidates = append(candidates, p)
+			}
+		}
+		if len(candidates) > 0 {
+			cfg.Storage.Candidates = candidates
+		}
+	}
 	// Device identity (#330): the name defaults to the system hostname and is
 	// intentionally NOT persisted (an explicit server.device_name overrides it;
 	// a hostname change is reflected on the next restart). The ID itself is

@@ -161,6 +161,33 @@ else
   log "TRIM_APPDEST not set — unified gateway disabled (direct port only)"
 fi
 
+# User-authorized extra storage (#395): fnOS delivers the directories the user
+# granted to this app in App-Center settings via TRIM_DATA_ACCESSIBLE_PATHS
+# (colon-separated). Each is mounted into the container under /media/<name> and
+# the container paths are handed to the NVR via NVR_STORAGE_CANDIDATES — the
+# settings UI then offers them as recording-root choices. Nothing granted → no
+# mounts, no candidates (the app data dir stays the only storage).
+STORAGE_ARGS=()
+STORAGE_CANDIDATES=""
+if [ -n "${TRIM_DATA_ACCESSIBLE_PATHS:-}" ]; then
+  OLDIFS="$IFS"; IFS=":"
+  for host_dir in $TRIM_DATA_ACCESSIBLE_PATHS; do
+    [ -d "$host_dir" ] || continue
+    name=$(basename "$host_dir")
+    # Sanitize the mount name (docker volume names reject some chars).
+    name=$(echo "$name" | tr -c 'A-Za-z0-9_.-' '_')
+    STORAGE_ARGS+=(-v "${host_dir}:/media/${name}:rw")
+    if [ -n "$STORAGE_CANDIDATES" ]; then
+      STORAGE_CANDIDATES="${STORAGE_CANDIDATES}:/media/${name}"
+    else
+      STORAGE_CANDIDATES="/media/${name}"
+    fi
+    log "extra storage mounted: ${host_dir} -> /media/${name}"
+  done
+  IFS="$OLDIFS"
+  [ -n "$STORAGE_CANDIDATES" ] && STORAGE_ARGS+=(-e "NVR_STORAGE_CANDIDATES=${STORAGE_CANDIDATES}")
+fi
+
 case "$1" in
   start)
     log "=== start === arch=${TRIM_SYS_ARCH:-<unset>} port=$PORT"
@@ -180,6 +207,7 @@ case "$1" in
       -e "NVR_FRAME_ANCESTORS=$FRAME_ANCESTORS" \
       -v "${DATA_DIR}:/data" \
       "${GW_ARGS[@]}" \
+      "${STORAGE_ARGS[@]}" \
       "$IMAGE" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
     rc=$?
     log "docker run exit=$rc"

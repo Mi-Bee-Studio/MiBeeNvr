@@ -218,6 +218,7 @@ export type { TimelapseMerge, TimelapseMergeListResponse, ListTimelapseMergesPar
 export {
   getSettings,
   updateSettings,
+  getStorageCandidates,
   getMergeSettings,
   updateMergeSettings,
   getMergeStatus,

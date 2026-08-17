@@ -85,6 +85,7 @@ export interface SettingsConfig {
   timezone?: string; // "Local", "UTC", or IANA timezone name
   timezone_display?: string; // Human-readable timezone label (e.g. "Asia/Shanghai (UTC+8)")
   server?: { listen?: string }; // listen address ":9090" — changed via Settings UI
+  storage?: { root_dir?: string }; // recording root (#395) — applied on next start
 }
 
 export interface GB28181Config {
@@ -131,12 +132,24 @@ export async function getSettings(signal?: AbortSignal): Promise<SettingsConfig>
   return apiRequest<SettingsConfig>('/settings', { signal });
 }
 
-export async function updateSettings(settings: SettingsConfig, signal?: AbortSignal): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>('/settings', {
+export async function updateSettings(settings: SettingsConfig, signal?: AbortSignal): Promise<{ status: string; restart_required?: boolean }> {
+  return apiRequest<{ status: string; restart_required?: boolean }>('/settings', {
     method: 'PUT',
     body: JSON.stringify(settings),
     signal,
   });
+}
+
+// Recording-root choices (#395): the current storage.root_dir plus extra
+// locations the host platform granted (fnOS user-authorized directories).
+export interface StorageCandidatesResponse {
+  current: string;
+  candidates: Array<{ path: string; label: string }>;
+  restart_hint: string;
+}
+
+export async function getStorageCandidates(signal?: AbortSignal): Promise<StorageCandidatesResponse> {
+  return apiRequest<StorageCandidatesResponse>('/storage/candidates', { signal });
 }
 
 // --- Global merge settings ---
