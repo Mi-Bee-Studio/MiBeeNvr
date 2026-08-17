@@ -229,36 +229,7 @@ func main() {
 	// degrading into "desktop login never works".
 	var gatewaySrv *http.Server
 	if sock := strings.TrimSpace(cfg.Server.UnixSocket); sock != "" {
-		if err := os.MkdirAll(filepath.Dir(sock), 0o755); err != nil {
-			slog.Error("gateway socket: mkdir", "dir", filepath.Dir(sock), "error", err)
-			os.Exit(1)
-		}
-		// A stale socket file from an unclean shutdown blocks net.Listen.
-		if err := os.Remove(sock); err != nil && !os.IsNotExist(err) {
-			slog.Error("gateway socket: remove stale", "path", sock, "error", err)
-		}
-		ln, err := net.Listen("unix", sock)
-		if err != nil {
-			slog.Error("gateway socket: listen", "path", sock, "error", err)
-			os.Exit(1)
-		}
-		// The fnOS gateway service connects to the socket; it lives in a
-		// root-owned app directory, so group/other bits stay closed.
-		if err := os.Chmod(sock, 0o660); err != nil {
-			slog.Warn("gateway socket: chmod", "error", err)
-		}
-		gatewaySrv = &http.Server{
-			Handler:           authmw.GatewayAuthMiddleware(httpSrv.Handler),
-			ReadHeaderTimeout: 10 * time.Second,
-			// No WriteTimeout: SSE and WebSocket need long-lived connections.
-		}
-		go func() {
-			slog.Info("MiBee NVR gateway socket listening", "path", sock)
-			if err := gatewaySrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				slog.Error("gateway socket serve", "error", err)
-				os.Exit(1)
-			}
-		}()
+		gatewaySrv = listenGatewaySocket(sock, authmw.GatewayAuthMiddleware(httpSrv.Handler))
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -288,4 +259,42 @@ func main() {
 		slog.Error("stop", "error", err)
 	}
 	slog.Info("MiBee NVR stopped")
+}
+
+// listenGatewaySocket binds the fnOS unified-gateway Unix socket and starts
+// serving handler on it. Kept as a standalone function (with its own os.Exit
+// calls) so gocritic's exitAfterDefer stays quiet in main — and because these
+// are fatal init errors where main's defers are moot anyway.
+func listenGatewaySocket(sock string, handler http.Handler) *http.Server {
+	if err := os.MkdirAll(filepath.Dir(sock), 0o755); err != nil {
+		slog.Error("gateway socket: mkdir", "dir", filepath.Dir(sock), "error", err)
+		os.Exit(1)
+	}
+	// A stale socket file from an unclean shutdown blocks net.Listen.
+	if err := os.Remove(sock); err != nil && !os.IsNotExist(err) {
+		slog.Error("gateway socket: remove stale", "path", sock, "error", err)
+	}
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		slog.Error("gateway socket: listen", "path", sock, "error", err)
+		os.Exit(1)
+	}
+	// The fnOS gateway service connects to the socket; it lives in a
+	// root-owned app directory, so group/other bits stay closed.
+	if err := os.Chmod(sock, 0o660); err != nil {
+		slog.Warn("gateway socket: chmod", "error", err)
+	}
+	srv := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		// No WriteTimeout: SSE and WebSocket need long-lived connections.
+	}
+	go func() {
+		slog.Info("MiBee NVR gateway socket listening", "path", sock)
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("gateway socket serve", "error", err)
+			os.Exit(1)
+		}
+	}()
+	return srv
 }
