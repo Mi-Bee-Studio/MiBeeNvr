@@ -82,6 +82,15 @@ type IngestRecorder struct {
 	segStart   time.Time
 	lastFrame  time.Time
 	frameCount int
+
+	// Audio (WHIP push-in, #369). The negotiated format is set via SetAudioFormat
+	// when the publisher's audio track is accepted; frames then arrive via
+	// WriteAudio. audioTrackID is bound when a segment muxer is created (Opus
+	// track added alongside H.264).
+	audioCodec    string // "opus" or "" (no audio)
+	audioSampleHz int
+	audioChans    int
+	audioTrackID  int
 }
 
 var _ model.Recorder = (*IngestRecorder)(nil)
@@ -125,18 +134,101 @@ func (r *IngestRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte
 	return model.FormatH264, r.sps, r.pps, nil
 }
 
-// AudioCodec returns the audio codec name. IngestRecorder does not currently
-// support audio; returns empty string.
-func (r *IngestRecorder) AudioCodec() string { return "" }
+// AudioCodec returns the negotiated audio codec ("opus") or "" when the push
+// publisher has no audio track. Set via SetAudioFormat (#369).
+func (r *IngestRecorder) AudioCodec() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.audioCodec
+}
 
-// AudioConfig returns audio config bytes. Always nil for ingest (no audio).
+// AudioConfig returns audio config bytes. Always nil for ingest — Opus needs
+// no out-of-band config (the browser decoder self-configures from the stream).
 func (r *IngestRecorder) AudioConfig() []byte { return nil }
 
-// AudioSampleRate returns the audio sample rate. Always 0 for ingest (no audio).
-func (r *IngestRecorder) AudioSampleRate() int { return 0 }
+// AudioSampleRate returns the negotiated audio sample rate (48000 for Opus).
+func (r *IngestRecorder) AudioSampleRate() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.audioSampleHz
+}
 
-// AudioChannels returns the number of audio channels. Always 0 for ingest (no audio).
-func (r *IngestRecorder) AudioChannels() int { return 0 }
+// AudioChannels returns the negotiated audio channel count.
+func (r *IngestRecorder) AudioChannels() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.audioChans
+}
+
+// SetAudioFormat records the audio format negotiated by a push publisher
+// (WHIP OnTrack). Call before frames arrive; later calls are ignored so a
+// renegotiation mid-stream can't swap the muxer's track format. Only "opus"
+// is supported — G.711 push-in has no producer today.
+func (r *IngestRecorder) SetAudioFormat(codec string, sampleRate, channels int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.audioCodec != "" || codec != "opus" {
+		return
+	}
+	if sampleRate <= 0 {
+		sampleRate = 48000
+	}
+	if channels <= 0 {
+		channels = 2
+	}
+	r.audioCodec = codec
+	r.audioSampleHz = sampleRate
+	r.audioChans = channels
+	ingestLogger.Info("ingest audio configured",
+		"camera_id", r.cfg.CameraID, "codec", codec, "sample_rate", sampleRate, "channels", channels)
+}
+
+// WriteAudio ingests one raw audio frame from a push publisher (#369).
+// ptsTicks is on the audio RTP clock (48 kHz for Opus) — used for the hub
+// fan-out so live consumers pace themselves; the MP4 sample uses wall-clock
+// PTS like the video path. dur is the frame duration (caller-derived from
+// RTP timestamps; 20ms fallback when unset).
+func (r *IngestRecorder) WriteAudio(codec string, ptsTicks int64, data []byte, dur time.Duration) {
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			ingestLogger.Error("PANIC recovered in WriteAudio",
+				"camera_id", r.cfg.CameraID, "panic", panicErr)
+		}
+	}()
+	if codec != "opus" || len(data) == 0 {
+		return
+	}
+	if dur < time.Millisecond {
+		dur = 20 * time.Millisecond
+	}
+
+	r.mu.Lock()
+	hub := r.Hub
+	m := r.muxer
+	aid := r.audioTrackID
+	start := r.segStart
+	r.mu.Unlock()
+
+	// Live fan-out (outside lock, hub is non-blocking by design).
+	if hub != nil {
+		hub.BroadcastAudio(ptsTicks, model.AudioOpus, data)
+	}
+
+	// Live-only mode: skip all segment I/O (mirrors the WriteNALU gate).
+	if r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled {
+		return
+	}
+
+	if m != nil && aid > 0 {
+		pts := time.Since(start)
+		if err := m.WriteAudioSample(aid, data, pts, dur); err != nil {
+			if err.Error() != "muxer is closed" {
+				ingestLogger.Error("failed to write audio sample",
+					"camera_id", r.cfg.CameraID, "error", err)
+			}
+		}
+	}
+}
 
 // Start initializes the recorder into the Idle state (awaiting a publisher).
 // It does NOT dial any source — unlike the pull recorders, there is nothing to
@@ -323,10 +415,31 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 			os.Remove(tempPath)
 			return
 		}
+		// Opus audio track (#369): config = 1 byte channels + 2 bytes PreSkip +
+		// 4 bytes InputSampleRate (big-endian) — see muxer.AddAudioTrack.
+		r.mu.Lock()
+		var newAudioTrackID int
+		if r.audioCodec == "opus" {
+			opusCfg := []byte{
+				byte(min(r.audioChans, 2)), 0, 0,
+				byte(r.audioSampleHz >> 24), byte(r.audioSampleHz >> 16), byte(r.audioSampleHz >> 8), byte(r.audioSampleHz),
+			}
+			aid, aerr := newMux.AddAudioTrack("opus", opusCfg)
+			if aerr != nil {
+				ingestLogger.Warn("failed to add opus track — recording video-only",
+					"camera_id", r.cfg.CameraID, "error", aerr)
+			} else {
+				newAudioTrackID = aid
+			}
+		}
+		r.mu.Unlock()
 		now := time.Now()
 		r.mu.Lock()
 		r.muxer = newMux
 		r.trackID = newTrackID
+		if newAudioTrackID > 0 {
+			r.audioTrackID = newAudioTrackID
+		}
 		r.segStart = now
 		r.curTemp = tempPath
 		r.curFinal = finalPath
@@ -465,6 +578,7 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 	r.curTemp = ""
 	r.curFinal = ""
 	r.frameCount = 0
+	r.audioTrackID = 0
 }
 
 // --- metrics helpers (nil-safe, mirror H264Recorder) ---

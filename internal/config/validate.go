@@ -100,6 +100,7 @@ func validateConfigDetails(cfg *Config) error {
 		seen[c.ID] = i
 		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" &&
 			c.Protocol != string(model.ProtoSRT) && c.Protocol != string(model.ProtoRTMP) &&
+			c.Protocol != string(model.ProtoWHIP) &&
 			c.Protocol != string(model.ProtoGB28181) {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}

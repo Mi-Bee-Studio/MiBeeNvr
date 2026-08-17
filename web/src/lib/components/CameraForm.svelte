@@ -438,7 +438,7 @@ let validationErrors = $state<Record<string, string>>({});
     if (!formName.trim()) validationErrors['name'] = t('cameras.nameRequired');
     if (!formProtocol) validationErrors['protocol'] = t('cameras.protocolRequired');
     // gb28181 cameras are identified by SIP DeviceID/ChannelID — no URL.
-    if (formProtocol !== 'gb28181' && !formUrl.trim()) validationErrors['url'] = t('cameras.urlRequired');
+    if (formProtocol !== 'gb28181' && formProtocol !== 'whip' && !formUrl.trim()) validationErrors['url'] = t('cameras.urlRequired');
     if (formProtocol === 'gb28181') {
       if (!formGB28181DeviceID.trim()) validationErrors['gb28181_device_id'] = t('cameras.gb28181DeviceIdRequired');
       if (!formGB28181ChannelID.trim()) validationErrors['gb28181_channel_id'] = t('cameras.gb28181ChannelIdRequired');
@@ -559,12 +559,12 @@ async function performCameraSave() {
             recording_enabled: formRecordingEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
-            stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
+            stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
             gb28181: formProtocol === 'gb28181' ? { device_id: formGB28181DeviceID, channel_id: formGB28181ChannelID } : undefined,
             push_targets: formPushTargets.length > 0 ? formPushTargets : [],
-            push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp') ? formPushRetentionDays : undefined,
+            push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp' || formProtocol === 'whip') ? formPushRetentionDays : undefined,
             dark_frame_filter_enabled: formDarkFrameFilterEnabled,
             dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
             recording_schedule: formRecordingScheduleEnabled ? {
@@ -621,12 +621,12 @@ async function performCameraSave() {
             recording_enabled: formRecordingEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
-            stream_key: formProtocol === 'rtmp' ? (formStreamKey || undefined) : undefined,
+            stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
             srt_passphrase: formProtocol === 'srt' ? (formSRTPassphrase || undefined) : undefined,
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
             gb28181: formProtocol === 'gb28181' ? { device_id: formGB28181DeviceID, channel_id: formGB28181ChannelID } : undefined,
             push_targets: formPushTargets.length > 0 ? formPushTargets : undefined,
-            push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp') ? formPushRetentionDays : undefined,
+            push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp' || formProtocol === 'whip') ? formPushRetentionDays : undefined,
             dark_frame_filter_enabled: formDarkFrameFilterEnabled,
             dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
             recording_schedule: formRecordingScheduleEnabled ? {
@@ -724,6 +724,19 @@ async function performCameraSave() {
       </div>
     {/if}
 
+    {#if formProtocol === 'whip'}
+      <!-- WHIP push (WebRTC): browser/OBS pushes to the NVR; show the endpoint -->
+      <div>
+        <label for="cam-stream-key" class="input-label">{t('cameras.streamKey')}</label>
+        <input id="cam-stream-key" type="text" class="input" bind:value={formStreamKey}
+          placeholder="front-door" />
+        <p class="text-xs th-text-muted mt-1">
+          {t('cameras.whipPushAddress')}: http{'<'}NVR-IP:PORT{'>'}/whip/{formStreamKey || '<key>'}
+        </p>
+        <p class="text-xs th-text-muted mt-1">{t('cameras.whipHint')}</p>
+      </div>
+    {/if}
+
     {#if formProtocol === 'rtmp'}
       <!-- RTMP push: publisher connects to NVR; show the ingest address -->
       <div>
@@ -754,7 +767,7 @@ async function performCameraSave() {
       </div>
     {/if}
 
-    {#if formProtocol === 'srt' || formProtocol === 'rtmp'}
+    {#if formProtocol === 'srt' || formProtocol === 'rtmp' || formProtocol === 'whip'}
       <!-- Push-in save policy: follow global / live-only / custom retention -->
       <div>
         <label for="cam-push-retention" class="input-label">{t('cameras.pushRetention')}</label>
@@ -872,7 +885,7 @@ async function performCameraSave() {
 
     <!-- URL (hidden for push/ingest protocols — publisher connects to us; and
          for gb28181 — the camera is identified by SIP DeviceID/ChannelID) -->
-    {#if formProtocol !== 'srt' && formProtocol !== 'rtmp' && formProtocol !== 'gb28181'}
+    {#if formProtocol !== 'srt' && formProtocol !== 'rtmp' && formProtocol !== 'whip' && formProtocol !== 'gb28181'}
     <div class="md:col-span-2">
       <label for="cam-url" class="input-label">
         {t('cameras.url')}

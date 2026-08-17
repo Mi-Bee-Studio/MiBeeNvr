@@ -198,3 +198,106 @@ func TestIngestRecorder_ConcurrentLockNarrowing(t *testing.T) {
 	require.NoError(t, rec.Stop())
 	_ = db
 }
+
+// TestIngestRecorder_Audio verifies the WHIP audio path (#369): negotiated
+// Opus format + WriteAudio frames land in the MP4 (audio track present) and
+// on the hub for live consumers; audio info accessors reflect the negotiation.
+func TestIngestRecorder_Audio(t *testing.T) {
+	rec, store, db := newIngestRecorder(t, 10*time.Minute)
+	t.Cleanup(func() { _ = rec.Stop() })
+
+	// No audio until negotiated.
+	require.Empty(t, rec.AudioCodec())
+	require.Equal(t, 0, rec.AudioSampleRate())
+
+	// WHIP-style negotiation, then a publisher session with video + audio.
+	rec.SetAudioFormat("opus", 48000, 2)
+	require.Equal(t, "opus", rec.AudioCodec())
+	require.Equal(t, 48000, rec.AudioSampleRate())
+	require.Equal(t, 2, rec.AudioChannels())
+
+	// Subscribe to the hub's audio stream to observe the live fan-out.
+	var audioMu sync.Mutex
+	audioFrames := 0
+	require.NoError(t, rec.Hub.SubscribeAudio("test-audio", func(pts int64, codec model.AudioCodec, data []byte) {
+		audioMu.Lock()
+		audioFrames++
+		audioMu.Unlock()
+	}))
+
+	rec.WriteConnected()
+	rec.WriteNALU([][]byte{testSPS, testPPS, testIDR}, 0, true)
+	for i := 1; i <= 5; i++ {
+		rec.WriteNALU([][]byte{testPFrame}, int64(i)*90, false)
+		rec.WriteAudio("opus", int64(i)*960, []byte{0x11, 0x22, 0x33, 0x44}, 20*time.Millisecond)
+	}
+	// Non-opus audio is ignored.
+	rec.WriteAudio("g711", 0, []byte{0x55}, time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+	require.Len(t, db.recordings, 1)
+
+	audioMu.Lock()
+	require.Equal(t, 5, audioFrames, "audio frames must reach the hub")
+	audioMu.Unlock()
+
+	// The finalized MP4 must contain an Opus track — probe the raw bytes for
+	// the sample entry box (dOps) rather than pulling a full MP4 parser here.
+	// Segments land under cameraID/<date>/.
+	segs, err := filepath.Glob(filepath.Join(store.RootDir(), "push-cam", "*", "*", "*", "*.mp4"))
+	require.NoError(t, err)
+	require.Len(t, segs, 1, "expected one finalized mp4, got %v", segs)
+	data, err := os.ReadFile(segs[0])
+	require.NoError(t, err)
+	require.Contains(t, string(data), "Opus", "MP4 must carry an Opus sample entry")
+	require.Contains(t, string(data), "dOps", "MP4 must carry a dOps box")
+}
+
+// TestIngestRecorder_AudioLiveOnly verifies the RecordEnabled=false gate:
+// audio still reaches the hub but nothing is written to disk.
+func TestIngestRecorder_AudioLiveOnly(t *testing.T) {
+	store, err := storage.NewManager(t.TempDir())
+	require.NoError(t, err)
+	db := &ingestTestDB{}
+	liveOnly := false
+	rec := NewIngestRecorder(IngestConfig{
+		CameraID:      "push-live",
+		Encoding:      "h264",
+		SegmentDur:    10 * time.Minute,
+		Store:         store,
+		DB:            db,
+		RecordEnabled: &liveOnly,
+	})
+	rec.Hub = model.NewStreamHub()
+	rec.Hub.SetCameraID("push-live")
+	require.NoError(t, rec.Start(context.Background()))
+	t.Cleanup(func() { _ = rec.Stop() })
+
+	rec.SetAudioFormat("opus", 48000, 2)
+	rec.WriteNALU([][]byte{testSPS, testPPS, testIDR}, 0, true)
+	rec.WriteAudio("opus", 960, []byte{0x11}, 20*time.Millisecond)
+	require.NoError(t, rec.Stop())
+
+	require.Empty(t, db.recordings, "live-only mode must not record")
+	files, err := filepath.Glob(filepath.Join(store.RootDir(), "push-live", "*"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
+
+// TestIngestRecorder_SetAudioFormatLockedIn verifies renegotiation cannot
+// swap the format once set (the muxer track would be inconsistent).
+func TestIngestRecorder_SetAudioFormatLockedIn(t *testing.T) {
+	rec, _, _ := newIngestRecorder(t, 10*time.Minute)
+	t.Cleanup(func() { _ = rec.Stop() })
+
+	rec.SetAudioFormat("opus", 48000, 2)
+	rec.SetAudioFormat("opus", 16000, 1)
+	require.Equal(t, 48000, rec.AudioSampleRate(), "first negotiation wins")
+	require.Equal(t, 2, rec.AudioChannels())
+
+	// Non-opus is rejected outright.
+	other, _, _ := newIngestRecorder(t, 10*time.Minute)
+	t.Cleanup(func() { _ = other.Stop() })
+	other.SetAudioFormat("g711", 8000, 1)
+	require.Empty(t, other.AudioCodec())
+}

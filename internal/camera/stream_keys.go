@@ -50,6 +50,19 @@ func (cm *CameraManager) ResolveStreamKey(streamKey string) (cameraID string, ok
 	return "", false
 }
 
+// ResolveWHIPKey maps an incoming WHIP stream key to its camera ID. Live
+// resolver (snapshot read) used by the WHIP endpoint on every publisher
+// offer — mirrors ResolveStreamKey for the WebRTC push-in protocol (#369).
+func (cm *CameraManager) ResolveWHIPKey(streamKey string) (cameraID string, ok bool) {
+	s := cm.loadSnapshot()
+	for _, cam := range s.configs {
+		if cam.Protocol == string(model.ProtoWHIP) && cam.StreamKey == streamKey {
+			return cam.ID, true
+		}
+	}
+	return "", false
+}
+
 // SRTStreamConfigs returns a copy of the SRT push parameters (passphrase,
 // stream_id) for all SRT cameras. Used by main.go to keep the SRT listener's
 // per-stream encryption map in sync with per-camera config. Lock-free read.

@@ -29,6 +29,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vod"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/whip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
 )
@@ -108,6 +109,7 @@ type capabilitiesResponse struct {
 type ingestCapabilities struct {
 	RTMP *protocolCapability `json:"rtmp,omitempty"`
 	SRT  *protocolCapability `json:"srt,omitempty"`
+	WHIP *protocolCapability `json:"whip,omitempty"`
 }
 
 type protocolCapability struct {
@@ -161,6 +163,7 @@ type Handler struct {
 	relayMgr          *relay.Manager
 	visionCoordinator *vision.Coordinator
 	apiKeyStore       *middleware.APIKeyStore
+	whipServer        *whip.Server
 	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
 	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
 	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
@@ -320,6 +323,12 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	// the same media bytes /download already exposes.
 	r.Get("/api/cameras/{cameraID}/playback/playlist.m3u8", h.handlePlaybackPlaylist)
 	r.Get("/api/cameras/{cameraID}/playback/{recordingID}/{segName}", h.handlePlaybackSegment)
+	// WHIP push-in ingest (#369): browsers/OBS cannot send auth headers with
+	// the SDP POST, and the stream key IS the credential (RTMP/SRT streamid
+	// threat model). Must NOT be rate-limited — media sessions are long-lived.
+	if h.whipServer != nil {
+		h.whipServer.RegisterRoutes(r)
+	}
 }
 
 // --- Helpers ---
@@ -487,6 +496,12 @@ func (h *Handler) SetVisionCoordinator(mgr *vision.Coordinator) {
 	h.visionCoordinator = mgr
 }
 
+// SetWHIPServer wires the WHIP push-in ingest server. When set, the anonymous
+// route group mounts /whip/{streamKey} and capabilities reports it (#369).
+func (h *Handler) SetWHIPServer(s *whip.Server) {
+	h.whipServer = s
+}
+
 // SetAPIKeyStore wires the live API key store. The generate/revoke handlers
 // keep it in sync with the config so key changes apply on the next request
 // without a service restart (#335); last-used timestamps surface in the key
@@ -618,6 +633,19 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			Enabled: false,
 			Port:    h.config.SRT.Port,
 		}
+	}
+
+	// WHIP rides the main HTTP listener — Port mirrors server.listen when set
+	// so clients can build the endpoint URL from capabilities.
+	whipPort := 0
+	if _, port, err := net.SplitHostPort(h.config.Server.Listen); err == nil {
+		if p, perr := strconv.Atoi(port); perr == nil {
+			whipPort = p
+		}
+	}
+	resp.Ingest.WHIP = &protocolCapability{
+		Enabled: h.whipServer != nil,
+		Port:    whipPort,
 	}
 
 	writeJSON(w, http.StatusOK, resp)

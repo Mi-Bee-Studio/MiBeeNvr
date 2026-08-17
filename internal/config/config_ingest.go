@@ -36,3 +36,11 @@ type RTMPConfig struct {
 	Port       int               `yaml:"port"`        // default 1935
 	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id → stream_key
 }
+
+// WHIPConfig configures the WHIP (WebRTC-HTTP Ingest Protocol) push-in
+// endpoint (#369): browsers (getUserMedia) and OBS 30+ push H.264+Opus over
+// WebRTC. No port of its own — it rides the main HTTP listener. The stream
+// key configured per camera (protocol "whip") is the credential.
+type WHIPConfig struct {
+	Enabled *bool `yaml:"enabled"` // default false
+}

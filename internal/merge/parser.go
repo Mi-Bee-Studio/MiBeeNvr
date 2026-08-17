@@ -345,7 +345,12 @@ func parseSegment(filePath string, probeKeyframes bool) (*SegmentInfo, error) {
 	}
 
 	// Build audio sample entries if audio track present.
-	if audioTrack != nil && audioTrack.sampleCount > 0 && (len(audioTrack.audioConfig) > 0 || audioTrack.audioCodec == "g711") {
+	// Opus tracks carry no audioConfig (the dOps payload is not parsed — see
+	// the Opus case above), so the empty-config guard must exempt them the
+	// same way it exempts G.711; otherwise every Opus recording parses as
+	// video-only and the merge pipeline silently drops its audio (#369).
+	if audioTrack != nil && audioTrack.sampleCount > 0 &&
+		(len(audioTrack.audioConfig) > 0 || audioTrack.audioCodec == "g711" || audioTrack.audioCodec == "opus") {
 		audioSamples, err := buildTrackSamples(audioTrack)
 		if err != nil {
 			return nil, fmt.Errorf("build audio samples: %w", err)

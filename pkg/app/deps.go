@@ -29,6 +29,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/whip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 )
 
@@ -79,6 +80,7 @@ type appDeps struct {
 	ftpServer         *ftp.Server
 	rtmpServer        *rtmp.Server
 	srtListener       *srt.Listener
+	whipServer        *whip.Server
 	gb28181Server     *sip.Server
 	gb28181Cascade    *cascade.Service
 	gb28181DevMgr     *gb28181.DeviceManager

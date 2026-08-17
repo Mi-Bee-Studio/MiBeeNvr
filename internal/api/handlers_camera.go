@@ -221,6 +221,7 @@ var validProtocols = map[string]bool{
 	// Push/ingest protocols (publisher pushes to NVR)
 	"srt":  true,
 	"rtmp": true,
+	"whip": true,
 	// Plugin protocols
 	"xiaomi":    true,
 	"timelapse": true,
@@ -330,8 +331,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, xiaomi, timelapse, gb28181", body.Protocol))
 		return
 	}
-	// Push/ingest cameras (srt/rtmp): no URL — the publisher connects to us.
-	isPush := body.Protocol == "srt" || body.Protocol == "rtmp"
+	// Push/ingest cameras (srt/rtmp/whip): no URL — the publisher connects to us.
+	isPush := body.Protocol == "srt" || body.Protocol == "rtmp" || body.Protocol == "whip"
 	// GB28181 cameras: no URL — identified by SIP DeviceID/ChannelID.
 	isGB28181 := body.Protocol == "gb28181"
 	// Cross-protocol dedup: a pull camera (onvif/rtsp/http) whose host IP
@@ -428,7 +429,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			enc = "h264"
 		case "http":
 			enc = "jpeg"
-		case "srt", "rtmp":
+		case "srt", "rtmp", "whip":
 			// Push cameras: encoding derived from the published stream (H.264 default).
 			enc = "h264"
 		case "gb28181":
@@ -734,7 +735,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		if body.Protocol != nil {
 			proto = *body.Protocol
 		}
-		if proto != "onvif" && proto != "srt" && proto != "rtmp" && proto != "gb28181" {
+		if proto != "onvif" && proto != "srt" && proto != "rtmp" && proto != "whip" && proto != "gb28181" {
 			if !validateURL(*body.URL) {
 				WriteError(w, http.StatusBadRequest, "invalid URL format")
 				return

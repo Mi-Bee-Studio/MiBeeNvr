@@ -189,7 +189,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			RecordEnabled: cam.RecordingEnabled == nil || *cam.RecordingEnabled,
 			AudioEnabled:  cam.AudioEnabled,
 		}, nil)
-	case string(model.ProtoSRT), string(model.ProtoRTMP):
+	case string(model.ProtoSRT), string(model.ProtoRTMP), string(model.ProtoWHIP):
 		enc := cam.Encoding
 		if enc == "" {
 			enc = string(model.FormatH264)

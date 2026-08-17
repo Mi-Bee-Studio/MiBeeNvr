@@ -195,7 +195,7 @@ func TestProtocols(t *testing.T) {
 	parseJSON(t, rr, &resp)
 	protocols, ok := resp["protocols"].([]interface{})
 	require.True(t, ok, "expected protocols array")
-	require.Len(t, protocols, 7) // rtsp, http, onvif, xiaomi, srt, rtmp, gb28181
+	require.Len(t, protocols, 8) // rtsp, http, onvif, xiaomi, srt, whip, rtmp, gb28181
 
 	// Xiaomi cameras authenticate via cloud account token, not per-camera
 	// username/password — auth must be false so the form hides credentials.
