@@ -202,17 +202,11 @@ jobs:
     if: vars.ENABLE_ACR == 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve semver tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/mi-bee-studio/mibeenvr
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
-
+      # Tags are derived from GITHUB_REF_NAME directly. Do NOT inject
+      # docker/metadata-action's multi-line `outputs.tags` expression into the
+      # `for` line — the newlines break the generated script with
+      # "syntax error near unexpected token" (first seen on the v0.11.0 run,
+      # where this job executed for the first time ever).
       - name: Mirror multi-arch images ghcr → ACR (skopeo)
         env:
           GHCR_USER: ${{ github.actor }}
@@ -223,13 +217,15 @@ jobs:
           ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
         run: |
           set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"          # v0.11.0 → 0.11.0
+          MAJOR="${VER%%.*}"                  # 0
+          MINOR="${VER%.*}"                   # 0.11
           sudo apt-get update -qq && sudo apt-get install -y -qq skopeo
-          for tag in ${{ steps.meta.outputs.tags }}; do
-            bare="${tag#*:}"
-            echo "::group::Mirror tag ${bare}"
+          for tag in "$VER" "$MINOR" "$MAJOR" latest; do
+            echo "::group::Mirror tag ${tag}"
             skopeo copy --all --retry-times 3 \
-              "docker://ghcr.io/mi-bee-studio/mibeenvr:${bare}" \
-              "docker://${ACR_REGISTRY}/${ACR_REPO}:${bare}" \
+              "docker://ghcr.io/mi-bee-studio/mibeenvr:${tag}" \
+              "docker://${ACR_REGISTRY}/${ACR_REPO}:${tag}" \
               --src-creds "${GHCR_USER}:${GHCR_TOKEN}" \
               --dest-creds "${ACR_USERNAME}:${ACR_PASSWORD}"
             echo "::endgroup::"
