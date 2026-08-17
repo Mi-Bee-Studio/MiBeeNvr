@@ -31,6 +31,15 @@ func buildRouter(
 	apiKeyStore *authmw.APIKeyStore,
 ) (http.Handler, error) {
 	r := chi.NewRouter()
+	// Reverse-proxy / unified-gateway base path (#394): strip the configured
+	// prefix (e.g. /app/mibee-nvr) before anything else — routing, logging and
+	// auth all see the stripped path. Unprefixed paths pass through unchanged,
+	// so the same listener serves direct access at "/" too.
+	basePath := config.NormalizeBasePath(cfg.Server.BasePath)
+	if basePath != "" {
+		r.Use(authmw.StripBasePath(basePath))
+		slog.Info("base-path prefix stripping enabled", "prefix", basePath)
+	}
 	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
 	r.Use(chimiddleware.Recoverer)
 	r.Use(authmw.SecurityHeaders(cfg.Security.FrameAncestors))
@@ -82,6 +91,23 @@ func buildRouter(
 		return nil, fmt.Errorf("static fs: %w", err)
 	}
 	fileServer := http.FileServer(http.FS(staticContent))
+	// When served under a base path (gateway/proxy), index.html must tell the
+	// SPA the prefix so it can build absolute asset/API/stream URLs. Precompute
+	// the injected copy once; nil = serve the original untouched.
+	var indexBytes []byte
+	if basePath != "" {
+		raw, err := fs.ReadFile(staticContent, "index.html")
+		if err != nil {
+			return nil, fmt.Errorf("read index.html: %w", err)
+		}
+		inject := `<script>window.__NVR_BASE__="` + basePath + `";</script>`
+		replaced := strings.Replace(string(raw), "</title>", "</title>"+inject, 1)
+		if replaced == string(raw) {
+			// No </title> anchor — fall back to injecting right after <head>.
+			replaced = strings.Replace(string(raw), "<head>", "<head>"+inject, 1)
+		}
+		indexBytes = []byte(replaced)
+	}
 	// Static files served without auth — SPA handles login flow client-side.
 	// All sensitive data is protected via API endpoints in handler.Routes().
 	// Cache: index.html must not be cached (always fresh after deploy).
@@ -90,6 +116,11 @@ func buildRouter(
 		path := r.URL.Path
 		if path == "/" || path == "/index.html" {
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			if indexBytes != nil {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write(indexBytes)
+				return
+			}
 		} else if strings.HasPrefix(path, "/assets/") {
 			// Vite produces content-hash filenames (e.g. Cameras-CjnyKwd-.js).
 			// Content changes → filename changes → safe to cache immutably.

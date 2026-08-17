@@ -233,22 +233,22 @@ export async function batchDeleteRecordings(ids: string[], signal?: AbortSignal)
 }
 
 export function getRecordingDownloadUrl(id: string): string {
-  return `/api/recordings/${id}/download`;
+  return `${API_BASE}/recordings/${id}/download`;
 }
 
 export function getRecordingVideoUrl(id: string): string {
-  return `/api/recordings/${id}/download`;
+  return `${API_BASE}/recordings/${id}/download`;
 }
 
 export function getMergedRecordingUrl(id: string): string {
-  return `/api/recordings/${id}/merged`;
+  return `${API_BASE}/recordings/${id}/merged`;
 }
 
 // getCameraPlaybackPlaylistURL builds the day-range VOD HLS playlist URL
 // (#321 Phase 2). The playlist stitches every H.264/H.265 recording of the
 // camera within [start, end] (RFC3339) into one seekable timeline.
 export function getCameraPlaybackPlaylistURL(cameraId: string, startISO: string, endISO: string): string {
-  return `/api/cameras/${cameraId}/playback/playlist.m3u8?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`;
+  return `${API_BASE}/cameras/${cameraId}/playback/playlist.m3u8?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`;
 }
 
 // probeMergedRecordingCodec issues a HEAD request to the /merged endpoint and
@@ -282,7 +282,7 @@ export async function downloadRecording(
   id: string,
   onProgress?: (loaded: number, total: number) => void,
 ): Promise<void> {
-  const url = `/api/recordings/${id}/download`;
+  const url = `${API_BASE}/recordings/${id}/download`;
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     const xhr = new XMLHttpRequest();

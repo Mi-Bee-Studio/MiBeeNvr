@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { Volume2, VolumeX, Volume } from 'lucide-svelte';
-  import { getTokenForUrl } from '$lib/api';
+  import { getTokenForUrl, API_BASE } from '$lib/api';
   import { t } from '$lib/i18n';
   import { AudioPlayer, type AudioDecodeUnavailableReason } from '$lib/audio-player';
   import {
@@ -35,7 +35,7 @@
 
   function buildUrl(): string {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = `${proto}//${location.host}/api/cameras/${cameraId}/stream/ws?audio_only=1`;
+    let url = `${proto}//${location.host}${API_BASE}/cameras/${cameraId}/stream/ws?audio_only=1`;
     // ?token= carries the bare session token (mbs_...), NOT a "Bearer ..." header.
     const token = getTokenForUrl();
     if (token) {

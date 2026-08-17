@@ -295,6 +295,39 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleGatewaySession mints an NVR session token for a request that arrived
+// through the fnOS unified gateway with a verified ADMIN identity (issue #394).
+// The SPA calls this on boot when it has no stored token: inside the fnOS
+// desktop (gateway iframe) it gets a token and skips the login page; accessed
+// directly on :9090 there is no gateway identity context, so it always 401s
+// and the SPA shows the normal login form.
+func (h *Handler) handleGatewaySession(w http.ResponseWriter, r *http.Request) {
+	gi := middleware.GatewayIdentityFromContext(r.Context())
+	if gi == nil || !gi.Admin {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not available on this listener"})
+		return
+	}
+	if h.config == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no config"})
+		return
+	}
+	hash := h.config.Auth.PasswordHash
+	if hash == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("WWW-Authenticate", `Basic realm="MiBee NVR"`)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"setup required","code":"SETUP_REQUIRED"}`))
+		return
+	}
+	token, expiresAt := middleware.SignSessionToken(h.config.Auth.Username, hash, time.Now())
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":       "ok",
+		"token":        token,
+		"expires_at":   expiresAt.UTC().Format(time.RFC3339),
+		"gateway_user": gi.Username,
+	})
+}
+
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

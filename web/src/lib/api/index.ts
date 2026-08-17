@@ -15,6 +15,7 @@ export {
   getSystemStats,
   getAuthHeader,
   forceRelogin,
+  tryGatewaySession,
   API_BASE,
   apiRequest,
   apiRequestBlob,

@@ -29,6 +29,20 @@ type ServerConfig struct {
 	// instead of an IP address.
 	DeviceID   string `yaml:"device_id,omitempty"`
 	DeviceName string `yaml:"device_name,omitempty"`
+	// UnixSocket starts a second HTTP listener on a Unix domain socket at this
+	// path, alongside the TCP listener. NAS platforms (fnOS unified gateway)
+	// validate their own login session, then forward authenticated requests to
+	// the socket with trusted X-Trim-* user headers; the gateway-auth middleware
+	// is mounted ONLY on this listener, so those headers are ignored on TCP.
+	// Empty = no socket listener. Overridable via NVR_UNIX_SOCKET.
+	UnixSocket string `yaml:"unix_socket"`
+	// BasePath is the URL prefix the app is served under when fronted by a
+	// reverse proxy or NAS unified gateway (e.g. "/app/mibee-nvr"). Incoming
+	// request paths carrying the prefix are stripped before routing, and the
+	// prefix is injected into index.html so the SPA can build absolute URLs
+	// (assets, API, stream endpoints). Empty = served at "/". Overridable via
+	// NVR_BASE_PATH.
+	BasePath string `yaml:"base_path"`
 	// Discovery controls how the NVR announces itself on the LAN for clients
 	// that cannot rely on subnet scanning or multicast (mDNS).
 	Discovery DiscoveryConfig `yaml:"discovery"`
@@ -58,6 +72,21 @@ type UDPDiscoveryConfig struct {
 
 // DefaultUDPPort is the default UDP listen port for the discovery responder.
 const DefaultUDPPort = 49090
+
+// NormalizeBasePath canonicalizes a URL base path: ensured leading "/", no
+// trailing "/" ("/app/x/" and "app/x" both become "/app/x"). Returns "" for
+// "/" and blank input (serving at the root needs no prefix).
+func NormalizeBasePath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
+}
 
 type StorageConfig struct {
 	RootDir         string `yaml:"root_dir"`         // default "/mnt/data/nvr"

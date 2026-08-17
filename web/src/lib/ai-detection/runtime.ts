@@ -10,6 +10,8 @@
  * TDD: tested via runtime.test.ts with mocked onnxruntime-web.
  */
 
+import { APP_BASE, withBase } from '$lib/base-path';
+
 /** Cache API store name for AI model files. */
 export const MODEL_CACHE_NAME = 'mibee-nvr-ai-models';
 
@@ -200,7 +202,7 @@ export class AiRuntime {
         // see the literal path (it only exists at runtime after ortAssetsPlugin
         // copies it into dist/ort/ — not during tests). `@vite-ignore` alone does
         // not stop the analyzer; a non-literal specifier does.
-        const bundleUrl = '/ort/ort.all.bundle.min.mjs';
+        const bundleUrl = APP_BASE + '/ort/ort.all.bundle.min.mjs';
         const mod: any = await import(/* @vite-ignore */ bundleUrl);
         const ort = mod?.default ?? mod;
         if (!ort) throw new Error('ort.all.bundle.min.mjs imported but module export is undefined');
@@ -216,7 +218,7 @@ export class AiRuntime {
     // internal wasm/worker path resolution (issue #109, INVALID_PROTOBUF).
     AiRuntime._ortUmdPromise = new Promise<any>((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = '/ort.min.js';
+      script.src = APP_BASE + '/ort.min.js';
       script.async = true;
       script.onload = () => {
         const ort = (globalThis as any).ort;
@@ -271,7 +273,7 @@ export class AiRuntime {
     if (this._ort.env) {
       // Ensure the `wasm` sub-object exists; some mocks omit it.
       if (!this._ort.env.wasm) this._ort.env.wasm = {};
-      this._ort.env.wasm.wasmPaths = '/ort/';
+      this._ort.env.wasm.wasmPaths = `${APP_BASE}/ort/`;
       // Single-threaded: crossOriginIsolated is false on our deployment (no
       // COOP/COEP headers), so SharedArrayBuffer is unavailable. ORT detects
       // this and falls back anyway, but set it explicitly so the proxy worker
@@ -381,6 +383,13 @@ export class AiRuntime {
     modelUrl: string,
     onProgress?: (loaded: number, total: number) => void,
   ): Promise<ArrayBuffer> {
+    // Root-absolute in-app paths (default "/models/…", or the value from
+    // /api/ai/status) must carry the runtime base path so the fetch hits the
+    // NVR through the proxy/gateway origin instead of the embedder (#394).
+    if (modelUrl.startsWith('/')) {
+      modelUrl = withBase(modelUrl);
+    }
+
     // Check cache first
     try {
       const cache = await caches.open(MODEL_CACHE_NAME);

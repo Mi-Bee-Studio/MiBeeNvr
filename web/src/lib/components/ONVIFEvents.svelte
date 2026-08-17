@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
-  import { getAuthHeader } from '$lib/api';
+  import { getAuthHeader, API_BASE } from '$lib/api';
   import { Activity, Circle, Trash2 } from 'lucide-svelte';
 
   interface ONVIFEvent {
@@ -83,8 +83,8 @@
       error = '';
 
       const url = cameraId
-        ? `/api/events?filter=onvif.&camera_id=${encodeURIComponent(cameraId)}`
-        : `/api/events?filter=onvif.`;
+        ? `${API_BASE}/events?filter=onvif.&camera_id=${encodeURIComponent(cameraId)}`
+        : `${API_BASE}/events?filter=onvif.`;
 
       es = new EventSource(url);
 

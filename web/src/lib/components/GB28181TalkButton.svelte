@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { Mic, MicOff, Loader2 } from 'lucide-svelte';
-  import { getTokenForUrl } from '$lib/api';
+  import { getTokenForUrl, API_BASE } from '$lib/api';
   import { t } from '$lib/i18n';
   import { encodeAlaw } from '$lib/alaw-encoder';
 
@@ -56,7 +56,7 @@ registerProcessor('talk-downsampler', TalkDownsampler);
 
   function buildUrl(): string {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = `${proto}//${location.host}/api/cameras/${cameraId}/gb28181/talk`;
+    let url = `${proto}//${location.host}${API_BASE}/cameras/${cameraId}/gb28181/talk`;
     const token = getTokenForUrl();
     if (token) {
       url += `?token=${encodeURIComponent(token)}`;

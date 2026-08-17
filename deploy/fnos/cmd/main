@@ -138,6 +138,26 @@ is_running() {
   docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true
 }
 
+# Unified-gateway integration (#394): fnOS forwards authenticated desktop
+# requests to a Unix socket inside the app's install dir. We mount TRIM_APPDEST
+# into the container and tell the NVR (via env) to listen on the socket and to
+# serve under the /app/mibee-nvr prefix. Desktop users then get SSO (the
+# gateway injects verified X-Trim-* identity headers); direct :9090 access
+# still requires the normal NVR login. GW_ARGS stays empty when TRIM_APPDEST is
+# absent (e.g. bare docker runs) so the container works without fnOS too.
+GATEWAY_PREFIX="/app/mibee-nvr"
+GW_ARGS=()
+if [ -n "${TRIM_APPDEST:-}" ] && [ -d "${TRIM_APPDEST}" ]; then
+  mkdir -p "${TRIM_APPDEST}"
+  rm -f "${TRIM_APPDEST}/app.sock" 2>/dev/null || true
+  GW_ARGS=(-v "${TRIM_APPDEST}:/fnos-gateway"
+           -e "NVR_UNIX_SOCKET=/fnos-gateway/app.sock"
+           -e "NVR_BASE_PATH=${GATEWAY_PREFIX}")
+  log "unified gateway enabled: socket=${TRIM_APPDEST}/app.sock prefix=${GATEWAY_PREFIX}"
+else
+  log "TRIM_APPDEST not set — unified gateway disabled (direct port only)"
+fi
+
 case "$1" in
   start)
     log "=== start === arch=${TRIM_SYS_ARCH:-<unset>} port=$PORT"
@@ -153,6 +173,7 @@ case "$1" in
       -e "NVR_LISTEN_PORT=$PORT" \
       -e "NVR_FRAME_ANCESTORS=$FRAME_ANCESTORS" \
       -v "${DATA_DIR}:/data" \
+      "${GW_ARGS[@]}" \
       "$IMAGE" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
     rc=$?
     log "docker run exit=$rc"
@@ -167,6 +188,9 @@ case "$1" in
     log "=== stop ==="
     docker stop "$CONTAINER" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
     docker rm "$CONTAINER" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
+    # Remove the gateway socket too — a stale file makes fnOS report the app
+    # entry as broken until the next start recreates it.
+    [ -n "${TRIM_APPDEST:-}" ] && rm -f "${TRIM_APPDEST}/app.sock" 2>/dev/null || true
     log "stopped"
     exit 0
     ;;

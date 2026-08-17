@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, setContext } from 'svelte';
-  import { getCamera, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities } from '$lib/api';
+  import { getCamera, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, API_BASE } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
@@ -326,7 +326,7 @@
                 {camera}
                 expanded={true}
                 tabVisible={true}
-                streamUrl={`/api/cameras/${cameraId}/stream/index.m3u8`}
+                streamUrl={`${API_BASE}/cameras/${cameraId}/stream/index.m3u8`}
               />
             {/if}
           </div>

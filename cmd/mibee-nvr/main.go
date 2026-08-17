@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -219,6 +221,46 @@ func main() {
 		}()
 	}
 
+	// Optional Unix-socket listener (fnOS unified gateway, #394). fnOS validates
+	// the NAS login session, then forwards authenticated requests to this socket
+	// with trusted X-Trim-* user headers. GatewayAuthMiddleware is mounted ONLY
+	// here — the TCP listener never trusts those headers. Serving fails hard on
+	// error so a broken gateway setup surfaces at start instead of silently
+	// degrading into "desktop login never works".
+	var gatewaySrv *http.Server
+	if sock := strings.TrimSpace(cfg.Server.UnixSocket); sock != "" {
+		if err := os.MkdirAll(filepath.Dir(sock), 0o755); err != nil {
+			slog.Error("gateway socket: mkdir", "dir", filepath.Dir(sock), "error", err)
+			os.Exit(1)
+		}
+		// A stale socket file from an unclean shutdown blocks net.Listen.
+		if err := os.Remove(sock); err != nil && !os.IsNotExist(err) {
+			slog.Error("gateway socket: remove stale", "path", sock, "error", err)
+		}
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			slog.Error("gateway socket: listen", "path", sock, "error", err)
+			os.Exit(1)
+		}
+		// The fnOS gateway service connects to the socket; it lives in a
+		// root-owned app directory, so group/other bits stay closed.
+		if err := os.Chmod(sock, 0o660); err != nil {
+			slog.Warn("gateway socket: chmod", "error", err)
+		}
+		gatewaySrv = &http.Server{
+			Handler:           authmw.GatewayAuthMiddleware(httpSrv.Handler),
+			ReadHeaderTimeout: 10 * time.Second,
+			// No WriteTimeout: SSE and WebSocket need long-lived connections.
+		}
+		go func() {
+			slog.Info("MiBee NVR gateway socket listening", "path", sock)
+			if err := gatewaySrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("gateway socket serve", "error", err)
+				os.Exit(1)
+			}
+		}()
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
@@ -226,6 +268,14 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+	if gatewaySrv != nil {
+		if err := gatewaySrv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("gateway socket shutdown", "error", err)
+		}
+		if sock := strings.TrimSpace(cfg.Server.UnixSocket); sock != "" {
+			_ = os.Remove(sock)
+		}
+	}
 	if tlsSrv != nil {
 		if err := tlsSrv.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("https shutdown", "error", err)

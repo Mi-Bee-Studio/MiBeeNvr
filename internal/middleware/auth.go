@@ -70,6 +70,19 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 				return
 			}
 
+			// fnOS unified gateway (issue #394): a request that arrived via the
+			// gateway Unix-socket listener with a verified admin identity skips
+			// BasicAuth — the NAS already validated the login session. The
+			// identity context is only ever set by GatewayAuthMiddleware on the
+			// socket listener, never on TCP, so a browser sending forged
+			// X-Trim-* headers to :9090 gets no bypass. Non-admin NAS users
+			// fall through to the normal auth path (rejected by default).
+			if gi := GatewayIdentityFromContext(r.Context()); gi != nil && gi.Admin {
+				recordAuthAttempt("success")
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			ip := extractIP(r.RemoteAddr)
 
 			// Auth failure rate limiting (optional — enabled via config).
