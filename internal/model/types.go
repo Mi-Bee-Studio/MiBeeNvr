@@ -237,10 +237,12 @@ const (
 	ProtoRTSP      Protocol = "rtsp"
 	ProtoHTTP      Protocol = "http"
 	// Push/ingest protocols: a remote publisher pushes the stream TO the NVR
-	// (SRT listener, RTMP server). Unlike the pull protocols above, the NVR does
-	// not dial out; frames arrive via the ingest server callbacks.
+	// (SRT listener, RTMP server, WHIP endpoint over the main HTTP listener).
+	// Unlike the pull protocols above, the NVR does not dial out; frames arrive
+	// via the ingest server callbacks.
 	ProtoSRT     Protocol = "srt"
 	ProtoRTMP    Protocol = "rtmp"
+	ProtoWHIP    Protocol = "whip"
 	ProtoGB28181 Protocol = "gb28181"
 )
 
@@ -345,6 +347,9 @@ var ValidEncodingsForProtocol = map[string][]string{
 	// RTMP is H.264 only (the classic RTMP spec; Enhanced-RTMP H.265 is rare).
 	string(ProtoSRT):  {string(FormatH264), string(FormatH265)},
 	string(ProtoRTMP): {string(FormatH264)},
+	// WHIP (browser/OBS WebRTC push-in) is H.264 only — matches WHEP egress
+	// (browser WebRTC H.265 support is still fragmented).
+	string(ProtoWHIP): {string(FormatH264)},
 	// GB28181 is an ingest protocol: the camera registers via SIP and the NVR
 	// INVITEs it; the codec is auto-detected from the PS stream_type at runtime.
 	string(ProtoGB28181): {string(FormatH264), string(FormatH265)},
@@ -361,6 +366,7 @@ func ValidateProtocolEncoding(protocol, encoding string) error {
 	// ONVIF, Timelapse, and push protocols allow empty encoding (auto-detect / derived from stream)
 	if (protocol == string(ProtoONVIF) || protocol == string(ProtoTimelapse) ||
 		protocol == string(ProtoSRT) || protocol == string(ProtoRTMP) ||
+		protocol == string(ProtoWHIP) ||
 		protocol == string(ProtoGB28181)) && encoding == "" {
 		return nil
 	}

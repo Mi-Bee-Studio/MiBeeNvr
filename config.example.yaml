@@ -327,6 +327,14 @@ observability:
 #   port: 9000                       # SRT listen port (default: 9000)
 #   streams: []                      # SRT stream mappings (camera_id, mode, address, passphrase, stream_id)
 
+# WHIP ingest — WebRTC push-in over the main HTTP listener (#369)
+# Browsers (getUserMedia), phones, and OBS 30+ (Settings → Stream → WHIP) push
+# H.264 video + Opus audio. Add a camera with protocol "whip" + a stream key,
+# then publish to http://<nvr-ip>:9090/whip/<stream-key>. The stream key is
+# the credential (same threat model as RTMP push keys / SRT streamid).
+# whip:
+#   enabled: false                   # Enable the WHIP endpoint (default: false)
+
 # Metrics authentication — optional BasicAuth for /metrics endpoint
 # metrics_auth:
 #   username: ""                     # Metrics endpoint username (empty = public access)

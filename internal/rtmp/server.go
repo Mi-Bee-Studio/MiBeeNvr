@@ -275,15 +275,21 @@ func (s *Server) handlePublisher(ctx context.Context, sc *gortmplib.ServerConn, 
 	// Clear deadline for continuous reading
 	conn.SetReadDeadline(time.Time{})
 
-	// Set up H.264 data callback — non-blocking broadcast to StreamHub.
+	// Set up H.264 data callback. When an IngestRecorder is wired (the normal
+	// case), WriteNALU itself broadcasts to the camera's StreamHub — AND
+	// prepends cached SPS/PPS to IDR frames, which downstream consumers need.
+	// Broadcasting here too would deliver every AU twice (the hub in
+	// hubRegistry is the SAME object the recorder owns), so the direct
+	// broadcast is only the no-recorder fallback (live-only gateway).
 	r.OnDataH264(h264Track, func(pts time.Duration, dts time.Duration, au [][]byte) {
 		// pts is time.Duration from stream start, convert to 90kHz clock ticks
 		// for compatibility with StreamHub's existing consumers (HLS, WebRTC, FLV).
 		ptsTicks := pts.Nanoseconds() * 90 / 1e6 // ns → 90kHz ticks
 		isIDR := nalutil.IsIDR(au, false)
-		entry.hub.Broadcast(ptsTicks, au, isIDR)
 		if recordCB != nil {
 			recordCB(au, ptsTicks, isIDR)
+		} else {
+			entry.hub.Broadcast(ptsTicks, au, isIDR)
 		}
 	})
 

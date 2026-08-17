@@ -297,6 +297,13 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: false },
   },
   {
+    id: 'whip',
+    label: 'WHIP (WebRTC push)',
+    encodings: ['h264'],
+    builtIn: true,
+    capabilities: { hls: false, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
+  {
     id: 'rtmp',
     label: 'RTMP',
     encodings: ['h264'],

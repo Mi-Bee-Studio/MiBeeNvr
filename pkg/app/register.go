@@ -332,6 +332,24 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 10b. whip (optional) — rides the main HTTP listener; no listener to
+	// start, but Stop must tear publisher sessions down cleanly.
+	if deps.whipServer != nil {
+		if err := a.Register(&serviceFunc{
+			name: "whip",
+			startFunc: func(ctx context.Context) error {
+				deps.whipServer.Start(ctx)
+				return nil
+			},
+			stopFunc: func() error {
+				deps.whipServer.Stop()
+				return nil
+			},
+		}); err != nil {
+			return fmt.Errorf("register whip: %w", err)
+		}
+	}
+
 	// 11. srt (optional)
 	if deps.srtListener != nil {
 		if err := a.Register(&serviceFunc{

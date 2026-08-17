@@ -25,6 +25,7 @@ type Config struct {
 	Xiaomi        XiaomiConfig        `yaml:"xiaomi"`
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
+	WHIP          WHIPConfig          `yaml:"whip"`
 	GB28181       GB28181ServerConfig `yaml:"gb28181"`
 	// GB28181Cascade is the lower-level cascade client config (#364).
 	GB28181Cascade GB28181CascadeConfig `yaml:"gb28181_cascade"`

@@ -51,6 +51,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webdav"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/whip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 )
 
@@ -515,6 +516,52 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		slog.Info("RTMP server configured", "port", cfg.RTMP.Port)
 	}
 
+	// Step 7.7b: WHIP push-in ingest over the main HTTP listener (#369).
+	// Mirrors the RTMP wiring: stream key → camera, same IngestRecorder
+	// lifecycle hooks. Opus audio reaches the recorder via SetAudioFormat +
+	// WriteAudio (SRT/RTMP have no audio path today).
+	if cfg.WHIP.Enabled != nil && *cfg.WHIP.Enabled {
+		deps.whipServer = whip.NewServer(
+			camMgr.ResolveWHIPKey,
+			camMgr.GetOrCreateHub,
+			func(cameraID string, _ *model.StreamHub) {
+				if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
+					ir.WriteConnected()
+				}
+			},
+			func(cameraID string) {
+				if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
+					ir.OnDisconnect()
+				}
+			},
+			nil,
+		)
+		deps.whipServer.NALUProvider = func(cameraID string) whip.NALUCallback {
+			ir := camMgr.GetIngestRecorder(cameraID)
+			if ir == nil {
+				return nil
+			}
+			return func(au [][]byte, ptsTicks int64, isIDR bool) {
+				ir.WriteNALU(au, ptsTicks, isIDR)
+			}
+		}
+		deps.whipServer.AudioFormatter = func(cameraID string, codec string, sampleRate, channels int) {
+			if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
+				ir.SetAudioFormat(codec, sampleRate, channels)
+			}
+		}
+		deps.whipServer.AudioProvider = func(cameraID string) whip.AudioCallback {
+			ir := camMgr.GetIngestRecorder(cameraID)
+			if ir == nil {
+				return nil
+			}
+			return func(codec string, ptsTicks int64, data []byte, dur time.Duration) {
+				ir.WriteAudio(codec, ptsTicks, data, dur)
+			}
+		}
+		slog.Info("WHIP ingest endpoint enabled", "path", "/whip/{streamKey}")
+	}
+
 	// Step 7.8: SRT listener (optional)
 	if cfg.SRT.Enabled != nil && *cfg.SRT.Enabled {
 		// Merge per-camera SRT push params into cfg.SRT.Streams so the listener's
@@ -661,6 +708,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	apiKeyStore.SetKeys(validAPIKeysFromConfig(cfg))
 	handler.SetAPIKeyStore(apiKeyStore)
 
+	if deps.whipServer != nil {
+		handler.SetWHIPServer(deps.whipServer)
+	}
 	// Wire streaming managers
 	handler.SetWebRTCManager(deps.webrtcMgr)
 	handler.SetFLVManager(flvMgr)

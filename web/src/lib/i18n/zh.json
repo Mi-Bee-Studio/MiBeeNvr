@@ -1616,5 +1616,7 @@
   "settings.gb28181.cascadeOffline": "未注册",
   "settings.gb28181.cascadeDisabled": "未启用",
   "settings.gb28181.cascadeForwards": "转发中的通道",
-  "settings.gb28181.cascadeRegisteredFor": "注册时长"
+  "settings.gb28181.cascadeRegisteredFor": "注册时长",
+  "cameras.whipPushAddress": "WHIP 推流地址（OBS → 设置 → 推流 → WHIP）",
+  "cameras.whipHint": "浏览器/手机/OBS 经 WebRTC 推 H.264 + Opus — 无需 App、无需 FFmpeg；经 ICE/STUN 可跨网络推流。"
 }

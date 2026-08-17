@@ -1617,5 +1617,7 @@
   "settings.gb28181.cascadeOffline": "Not registered",
   "settings.gb28181.cascadeDisabled": "Disabled",
   "settings.gb28181.cascadeForwards": "Active forwards",
-  "settings.gb28181.cascadeRegisteredFor": "Registered for"
+  "settings.gb28181.cascadeRegisteredFor": "Registered for",
+  "cameras.whipPushAddress": "WHIP endpoint (OBS → Settings → Stream → WHIP)",
+  "cameras.whipHint": "Browser/phone/OBS push H.264 + Opus over WebRTC — no app or FFmpeg needed; works across networks via ICE/STUN."
 }

@@ -1109,6 +1109,15 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
 		},
 		{
+			ID:        "whip",
+			Label:     "WHIP (WebRTC push)",
+			Encodings: []string{"h264"},
+			BuiltIn:   true,
+			// WHIP publishers send the stream key inside the endpoint URL — no
+			// per-camera credentials (same model as RTMP push keys).
+			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
+		{
 			ID:           "rtmp",
 			Label:        "RTMP (push)",
 			Encodings:    []string{"h264"},
