@@ -140,6 +140,50 @@ func TestHandleSetup_CustomStoragePath(t *testing.T) {
 	require.Equal(t, "/tmp/custom-nvr", saved.Storage.RootDir)
 }
 
+// TestHandleSetup_PreservesPreconfiguredFields locks in the #388 fix: setup
+// must patch auth (plus an explicit wizard storage path) on the already-loaded
+// config — never rewrite the file from defaults. A hand-preconfigured YAML
+// (listen / vision / api_keys / cameras) completed through the setup wizard
+// previously had every non-auth field silently reset.
+func TestHandleSetup_PreservesPreconfiguredFields(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	cfgPath := filepath.Join(t.TempDir(), "test-config.yaml")
+
+	cfg := &config.Config{
+		Version: "1.0",
+		Server:  config.ServerConfig{Listen: "127.0.0.1:9777"},
+		Storage: config.StorageConfig{RootDir: "/mnt/preconfigured"},
+		Vision:  config.VisionConfig{Enabled: true, URL: "http://192.168.63.110:9091"},
+		APIKeys: []config.APIKeyConfig{{Key: "mbv_abcdef0123456789", Name: "vision"}},
+		Cameras: []config.CameraConfig{{ID: "test-cam", Name: "Test", Protocol: "rtsp", URL: "rtsp://example/stream", Encoding: "h264"}},
+	}
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, cfgPath, nil, nil, nil, nil, nil)
+
+	body := setupRequest{Username: "admin", Password: "testpassword123"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handleSetup(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	saved, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:9777", saved.Server.Listen)
+	require.Equal(t, "/mnt/preconfigured", saved.Storage.RootDir)
+	require.True(t, saved.Vision.Enabled)
+	require.Equal(t, "http://192.168.63.110:9091", saved.Vision.URL)
+	require.Len(t, saved.APIKeys, 1)
+	require.Equal(t, "mbv_abcdef0123456789", saved.APIKeys[0].Key)
+	require.Len(t, saved.Cameras, 1)
+	require.Equal(t, "test-cam", saved.Cameras[0].ID)
+	require.Equal(t, "admin", saved.Auth.Username)
+	require.NotEmpty(t, saved.Auth.PasswordHash)
+}
+
 func TestHandleSetup_TokenIsValid(t *testing.T) {
 	t.Parallel()
 	h, _ := setupTestHandlerForSetup(t)

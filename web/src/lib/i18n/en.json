@@ -1250,7 +1250,7 @@
   "setup.passwordPlaceholder": "At least 8 characters",
   "setup.secureNote": "Your password is stored securely and cannot be recovered",
   "setup.storagePath": "Storage Path",
-  "setup.storagePathHint": "Directory where recordings will be stored",
+  "setup.storagePathHint": "Directory where recordings will be stored; leave empty to keep the server's current setting",
   "setup.submit": "Complete Setup",
   "setup.submitting": "Setting up...",
   "setup.subtitle": "Create your admin account to get started",
