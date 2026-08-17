@@ -53,36 +53,44 @@ UP=$(curl -sS -H "$AUTH" -F "taskID=${TASK}" -F "file=@${FPK}" \
   ${VOL:+-F "volumeID=${VOL}"} "$BASE/app-center/v1/download/upload")
 echo "upload: $UP"
 
-# 4. poll until the package is parsed (status carries app name/version)
+# 4. poll until the package is parsed. Observed status payload (2026-08-17):
+# {"code":0,"data":{"status":2,"message":"success","progress":1,
+#   "packageType":"local","packageSourceType":"upload",
+#   "path":"/vol1/appcenter-downloads/<app>-<ver>-tpk",
+#   "appName":"mibee-nvr","version":"0.12.0","name":"MiBee NVR",
+#   "installed":true,"installedInfo":{...}}}
 APP=""; VER=""
 for i in $(seq 1 60); do
   ST=$(api GET "/app-center/v1/download/status?downloadTaskId=${TASK}&language=zh-CN")
-  STATE=$(jsonget "$ST" 'd["data"].get("state","")' || echo "")
-  APP=$(jsonget "$ST" '(d["data"].get("app") or {}).get("appName","")' || echo "")
-  VER=$(jsonget "$ST" '(d["data"].get("app") or {}).get("version","")' || echo "")
+  APP=$(jsonget "$ST" 'd["data"].get("appName","")' || echo "")
+  VER=$(jsonget "$ST" 'd["data"].get("version","")' || echo "")
   [ -n "$APP" ] && break
   sleep 1
 done
 [ -n "$APP" ] || die "upload never parsed a package (last status: $ST)"
-echo "== package: $APP $VER (state=$STATE) =="
+STATE=$(jsonget "$ST" 'd["data"].get("message","")' || echo "?")
+echo "== package: $APP $VER (message=$STATE) =="
 
-# 5/6. install (fresh) or update (already installed) — same fork the UI makes
+# 5/6. install (fresh) or update (already installed) — same fork the UI makes.
+# TASK BODY IS DELIBERATELY MINIMAL: {appName, packageType:"local", version,
+# language}. Adding systemParameters (installVolumeID/apiScope/...) makes the
+# fnOS binder PANIC (server 10000, verified 2026-08-17) — the UI's S1 wrapper
+# only injects those for wizard-driven installs; the backend then applies the
+# existing install's volume + wizard values on its own.
 INSTALLED=$(api GET "/app-center/v1/app/installed?language=zh-CN" \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print(any(a['appName']=='$APP' for a in d['data']['list']))")
-SYS_PARAMS="{\"installVolumeID\":${VOL:-1},\"agreedToProtocol\":true,\"immediateStart\":true}"
-WIZARD_PARAMS="{\"wizard_port\":\"${PORT}\"}"
 
 if [ "$INSTALLED" = "True" ]; then
   echo "== upgrading $APP → $VER =="
   api GET "/app-center/v1/update/info?appName=${APP}&updateVersion=${VER}&packageType=local&language=zh-CN" >/dev/null
   TASKRESP=$(api POST /app-center/v1/update/task -d \
-    "{\"appName\":\"${APP}\",\"packageType\":\"local\",\"updateVersion\":\"${VER}\",\"systemParameters\":${SYS_PARAMS},\"customParameters\":${WIZARD_PARAMS}}")
+    "{\"appName\":\"${APP}\",\"packageType\":\"local\",\"updateVersion\":\"${VER}\",\"language\":\"zh-CN\"}")
   STATUS_PATH=/app-center/v1/update/status
 else
   echo "== installing $APP $VER =="
   api GET "/app-center/v1/install/info?appName=${APP}&version=${VER}&packageType=local&language=zh-CN" >/dev/null
   TASKRESP=$(api POST /app-center/v1/install/task -d \
-    "{\"appName\":\"${APP}\",\"packageType\":\"local\",\"version\":\"${VER}\",\"systemParameters\":${SYS_PARAMS},\"customParameters\":${WIZARD_PARAMS}}")
+    "{\"appName\":\"${APP}\",\"packageType\":\"local\",\"version\":\"${VER}\",\"language\":\"zh-CN\"}")
   STATUS_PATH=/app-center/v1/install/status
 fi
 
