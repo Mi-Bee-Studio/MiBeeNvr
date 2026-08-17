@@ -16,7 +16,7 @@
 #
 # Image is multi-arch (amd64/arm64/armv7); the runtime pulls the matching arch.
 # Pin to a released tag (e.g. :0.10.0) for reproducible rollbacks, or use :latest
-# for automatic updates (pair with the Watchtower profile, see deploy/docs/).
+# for automatic updates (pair with the Watchtower profile, see docs/en/deployment.md).
 #
 # Usage:
 #   docker compose -f deploy/compose/docker-compose.host.yml up -d

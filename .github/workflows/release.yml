@@ -194,6 +194,9 @@ jobs:
   # ghcr image (already pushed by the `release` job) remains the source of truth.
   # ACR personal tier accepts externally-built multi-arch manifests; skopeo
   # --all copies the whole manifest list (all arches), not a single arch.
+  # The ONLINE fnOS package (fnos-fpk-online below) hard-depends on this job:
+  # the online .fpk pulls from ghcr-or-ACR at install time, so the ACR copy
+  # must exist before the package is attached to the release.
   mirror-to-acr:
     needs: release
     if: vars.ENABLE_ACR == 'true' && startsWith(github.ref, 'refs/tags/v')
@@ -231,3 +234,39 @@ jobs:
               --dest-creds "${ACR_USERNAME}:${ACR_PASSWORD}"
             echo "::endgroup::"
           done
+
+  # ---- Online fnOS .fpk -------------------------------------------------------
+  # Tiny (~KB) package without bundled images: cmd/main probes ghcr vs the ACR
+  # mirror at first start and pulls the multi-arch image from the faster one.
+  # HARD DEPENDENCY on mirror-to-acr: the ACR copy of the just-released image
+  # must exist before this package ships, otherwise mainland-China installs
+  # would fall back to a slow ghcr pull (or fail when ghcr is unreachable and
+  # ACR still holds the previous version). When the mirror job is skipped
+  # (ENABLE_ACR unset), this job is skipped too — attach it manually after a
+  # manual mirror with ./deploy/fnos/build.sh --online <ver> if ever needed.
+  fnos-fpk-online:
+    needs: mirror-to-acr
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download fnpack 1.2.3
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/fnpack" \
+            https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          chmod +x "$RUNNER_TEMP/fnpack"
+          echo "FNPACK_BIN=$RUNNER_TEMP/fnpack" >> "$GITHUB_ENV"
+
+      - name: Resolve fpk version (strip leading v)
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build online .fpk
+        run: ./deploy/fnos/build.sh --online ${{ steps.ver.outputs.version }}
+
+      - name: Attach online .fpk to the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: deploy/fnos/mibee-nvr-fnos-online-*.fpk
+          append_body: false

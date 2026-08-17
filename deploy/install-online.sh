@@ -14,7 +14,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/install-online.sh | bash
 #
 #   # Pin version / data dir / port:
-#   ./install-online.sh --tag 0.10.1 --data-dir /volume1/docker/mibee-nvr/data --port 9090
+#   ./install-online.sh --tag 0.11.0 --data-dir /volume1/docker/mibee-nvr/data --port 9090
 #
 #   # Force a specific registry (skip auto-detect). Pass the full image prefix
 #   # without the tag:
@@ -27,7 +27,7 @@ set -eu
 CONTAINER="mibee-nvr"
 GHCR_PREFIX="ghcr.io/mi-bee-studio/mibeenvr"
 ACR_PREFIX="registry.cn-hangzhou.aliyuncs.com/mickeybeehome/mibee-nvr"
-TAG="0.10.1"
+TAG="0.11.0"
 DATA_DIR=""
 PORT="9090"
 REGISTRY=""          # empty = auto-detect
