@@ -94,6 +94,12 @@ function ortAssetsPlugin() {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Relative base: index.html asset URLs resolve against the document URL, so
+  // the SAME build serves the SPA at "/" (direct access) and under a reverse-
+  // proxy / unified-gateway prefix like fnOS "/app/mibee-nvr" (#394). The
+  // backend injects window.__NVR_BASE__ so runtime code (API/stream URLs)
+  // knows the prefix.
+  base: './',
   plugins: [svelte(), tailwindcss(), swVersionPlugin(), ortAssetsPlugin()],
   resolve: {
     alias: {

@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
   import CameraAudioButton from './CameraAudioButton.svelte';
-  import { getAuthHeader, getTokenForUrl } from '$lib/api';
+  import { getAuthHeader, getTokenForUrl, API_BASE } from '$lib/api';
   import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
   import { sendTelemetry } from '$lib/telemetry';
@@ -296,7 +296,7 @@ let videoEventAc: AbortController | null = null;
         return;
       }
 
-      const url = `/api/cameras/${cameraId}/stream.flv`;
+      const url = `${API_BASE}/cameras/${cameraId}/stream.flv`;
       const authHeader = getAuthHeader();
 
       const player = mpegts.default.createPlayer({

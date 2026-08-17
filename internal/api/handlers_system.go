@@ -295,6 +295,39 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleGatewaySession mints an NVR session token for a request that arrived
+// through the fnOS unified gateway with a verified ADMIN identity (issue #394).
+// The SPA calls this on boot when it has no stored token: inside the fnOS
+// desktop (gateway iframe) it gets a token and skips the login page; accessed
+// directly on :9090 there is no gateway identity context, so it always 401s
+// and the SPA shows the normal login form.
+func (h *Handler) handleGatewaySession(w http.ResponseWriter, r *http.Request) {
+	gi := middleware.GatewayIdentityFromContext(r.Context())
+	if gi == nil || !gi.Admin {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not available on this listener"})
+		return
+	}
+	if h.config == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no config"})
+		return
+	}
+	hash := h.config.Auth.PasswordHash
+	if hash == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("WWW-Authenticate", `Basic realm="MiBee NVR"`)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"setup required","code":"SETUP_REQUIRED"}`))
+		return
+	}
+	token, expiresAt := middleware.SignSessionToken(h.config.Auth.Username, hash, time.Now())
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":       "ok",
+		"token":        token,
+		"expires_at":   expiresAt.UTC().Format(time.RFC3339),
+		"gateway_user": gi.Username,
+	})
+}
+
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -393,6 +426,9 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"enabled":     h.config.WebDAV.Enabled != nil && *h.config.WebDAV.Enabled,
 			"path_prefix": h.config.WebDAV.PathPrefix,
 			"read_write":  h.config.WebDAV.ReadWrite,
+		},
+		"storage": map[string]any{
+			"root_dir": h.config.Storage.RootDir,
 		},
 		"auth": map[string]any{
 			"username":        h.config.Auth.Username,
@@ -502,6 +538,13 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			DiskThresholdPercent *int    `json:"disk_threshold_percent"`
 			CheckInterval        *string `json:"check_interval"`
 		} `json:"cleanup"`
+		Storage *struct {
+			// Recording root directory (#395). Takes effect on the NEXT start —
+			// the DB and all subsystems open paths under the old root at boot,
+			// so a live switch would corrupt state. The response carries
+			// restart_required=true when this changes.
+			RootDir *string `json:"root_dir"`
+		} `json:"storage"`
 		WebDAV *struct {
 			Enabled    *bool   `json:"enabled"`
 			PathPrefix *string `json:"path_prefix"`
@@ -566,6 +609,33 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				}
 				h.config.Cleanup.CheckInterval = trimmed
 			}
+		}
+	}
+
+	// Update storage root (#395) — next-start semantics, see body.Storage.
+	storageChanged := false
+	if body.Storage != nil && body.Storage.RootDir != nil {
+		dir := strings.TrimSpace(*body.Storage.RootDir)
+		if dir == "" || !strings.HasPrefix(dir, "/") {
+			WriteError(w, http.StatusBadRequest, "storage.root_dir must be an absolute path")
+			return
+		}
+		dir = strings.TrimRight(dir, "/")
+		if dir == "" {
+			dir = "/"
+		}
+		if dir != h.config.Storage.RootDir {
+			// The path must exist or be creatable at next start; probe now so
+			// typos fail fast instead of bricking the next boot. Ignore errors
+			// on setups where the dir only materializes after a platform
+			// remount — MkdirAll failing is then reported, not fatal.
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				WriteError(w, http.StatusBadRequest, fmt.Sprintf("cannot create %q: %v", dir, err))
+				return
+			}
+			h.config.Storage.RootDir = dir
+			storageChanged = true
+			logger.Info("storage root_dir updated (effective after restart)", "new_root", dir)
 		}
 	}
 
@@ -686,7 +756,48 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("failed to save config", "error", err)
 	}
 
+	if storageChanged {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "restart_required": true})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// handleStorageCandidates reports the recording-root choices available to the
+// settings UI (#395): the current storage.root_dir plus any extra locations the
+// host platform granted (fnOS user-authorized dirs, mounted under /media/* by
+// the lifecycle script and passed via NVR_STORAGE_CANDIDATES).
+func (h *Handler) handleStorageCandidates(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		WriteError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	type candidate struct {
+		Path  string `json:"path"`
+		Label string `json:"label"`
+	}
+	resp := struct {
+		Current     string      `json:"current"`
+		Candidates  []candidate `json:"candidates"`
+		RestartHint string      `json:"restart_hint"`
+	}{
+		Current:     h.config.Storage.RootDir,
+		Candidates:  []candidate{{Path: h.config.Storage.RootDir, Label: "current"}},
+		RestartHint: "changing the recording root takes effect after restart",
+	}
+	seen := map[string]bool{h.config.Storage.RootDir: true}
+	for _, p := range h.config.Storage.Candidates {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		label := strings.TrimPrefix(p, "/media/")
+		if label == p {
+			label = filepath.Base(p)
+		}
+		resp.Candidates = append(resp.Candidates, candidate{Path: p, Label: label})
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleGenerateAPIKey creates a new API key for MiBeeVision integration.
@@ -1291,6 +1402,7 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Get("/api/stats/trends", h.handleStatsTrends)
 	r.Get("/api/settings", h.handleGetSettings)
 	r.Put("/api/settings", h.handleUpdateSettings)
+	r.Get("/api/storage/candidates", h.handleStorageCandidates)
 	r.Post("/api/settings/api-keys", h.handleGenerateAPIKey)
 	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
 	r.Get("/api/settings/merge", h.handleGetMergeSettings)

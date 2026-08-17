@@ -15,6 +15,7 @@ export {
   getSystemStats,
   getAuthHeader,
   forceRelogin,
+  tryGatewaySession,
   API_BASE,
   apiRequest,
   apiRequestBlob,
@@ -217,6 +218,7 @@ export type { TimelapseMerge, TimelapseMergeListResponse, ListTimelapseMergesPar
 export {
   getSettings,
   updateSettings,
+  getStorageCandidates,
   getMergeSettings,
   updateMergeSettings,
   getMergeStatus,

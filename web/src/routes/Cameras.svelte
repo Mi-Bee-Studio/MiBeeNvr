@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader, ApiRequestError } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader, ApiRequestError, API_BASE } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse, ArchiveCleanupTask, ArchiveCleanupStatus } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -185,7 +185,7 @@
   }
 
   function downloadRecording(rec: Recording) {
-    const url = `/api/archives/${expandedArchiveId}/recordings/${rec.id}/download`;
+    const url = `${API_BASE}/archives/${expandedArchiveId}/recordings/${rec.id}/download`;
     const authHeader = getAuthHeader();
     if (authHeader) {
       fetch(url, {
@@ -498,7 +498,7 @@
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout>;
     function connect() {
-      es = new EventSource('/api/events?filter=camera.');
+      es = new EventSource(`${API_BASE}/events?filter=camera.`);
       es.addEventListener('camera.added', (e: MessageEvent) => {
         try {
           const d = JSON.parse(e.data) as { name?: string; activation_state?: string };

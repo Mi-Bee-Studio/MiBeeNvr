@@ -312,6 +312,11 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
+	// fnOS unified-gateway SSO (#394): mints an NVR session token when the
+	// request carries a gateway-verified ADMIN identity. The identity context
+	// only exists on the gateway Unix-socket listener — everywhere else this
+	// always returns 401, so it cannot be used to bypass the direct login.
+	r.Get("/api/auth/gateway-session", h.handleGatewaySession)
 	// Public routes
 	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)  // Public for video playback
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe

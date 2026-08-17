@@ -1,7 +1,7 @@
 /**
  * Health API — camera health status, health events, per-camera health
  */
-import { apiRequest } from './client';
+import { API_BASE, apiRequest } from './client';
 
 // --- Types ---
 
@@ -94,7 +94,7 @@ export interface HealthCamerasResponse {
 
 // Fetch health cameras (public, no auth required)
 export async function getHealthCameras(): Promise<HealthCamerasResponse> {
-  const response = await fetch('/api/health/cameras');
+  const response = await fetch(`${API_BASE}/health/cameras`);
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
