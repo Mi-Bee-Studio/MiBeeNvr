@@ -8,13 +8,32 @@ package app
 // TestRunFree_ServiceOrder.
 
 import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
+	"time"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 
-	_ "net/http/pprof"
 	_ "time/tzdata" // embed timezone database for minimal containers (scratch/alpine)
 
 	_ "github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
+
+// pprofServer exposes net/http/pprof on loopback only (localhost:6060). The
+// blank import registers handlers on http.DefaultServeMux; nothing else
+// serves that mux, so without a listener the profile endpoints are
+// unreachable — missing exactly when diagnosing memory incidents (e.g. the
+// 2026-08-17 OOM post-mortem).
+func pprofServer() *http.Server {
+	return &http.Server{
+		Addr:              "127.0.0.1:6060",
+		Handler:           http.DefaultServeMux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
 
 // RunFree constructs and returns a configured *App with all open-source services
 // registered in the correct start/stop order.
@@ -57,5 +76,29 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		return nil, err
 	}
 
+	// Phase 4: loopback diagnostics (pprof) — registered last, stopped first.
+	if err := a.Register(&pprofService{srv: pprofServer()}); err != nil {
+		cleanup()
+		return nil, err
+	}
+
 	return a, nil
 }
+
+// pprofService adapts the loopback pprof server to the App service lifecycle.
+type pprofService struct {
+	srv *http.Server
+}
+
+func (p *pprofService) Name() string { return "pprof-loopback" }
+
+func (p *pprofService) Start(_ context.Context) error {
+	go func() {
+		if err := p.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Warn("pprof loopback server stopped", "error", err)
+		}
+	}()
+	return nil
+}
+
+func (p *pprofService) Stop() error { return p.srv.Close() }

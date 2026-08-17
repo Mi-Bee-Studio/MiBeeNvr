@@ -593,3 +593,46 @@ func TestParseVideoPES_LegacyHeaderLayout(t *testing.T) {
 		t.Fatalf("expected first NALU header 0x21, got %d NALUs", len(nalus))
 	}
 }
+
+// TestESBufCap: marker-less accumulation must hit the cap and resync instead
+// of growing for the session's lifetime (#383 made sessions effectively
+// unbounded).
+func TestESBufCap(t *testing.T) {
+	d := NewPSDemuxer()
+	// Video PES without any AU marker: FeedAU(complete=false) accumulates.
+	// 9 MB of payload in 64 KB chunks.
+	chunk := make([]byte, 64<<10)
+	chunk[0], chunk[1], chunk[2] = 0x00, 0x00, 0x01 // keep extractNALUs calm
+	var maxSeen int
+	for range 150 {
+		// A PES header + small payload each AU so parseVideoPES succeeds.
+		pes := append([]byte{0x00, 0x00, 0x01, 0xE0, 0xFF, 0xFF, 0x80, 0x00, 0x00}, chunk...)
+		_, _ = d.FeedAU(pes, 90000, false)
+		if len(d.esBuf) > maxSeen {
+			maxSeen = len(d.esBuf)
+		}
+	}
+	if maxSeen > maxESBufBytes+(64<<10)+16 {
+		t.Fatalf("esBuf grew to %d beyond cap %d", maxSeen, maxESBufBytes)
+	}
+}
+
+// TestVideoPesBufCap: a PES whose announced length can never be satisfied must
+// hit the cap and resync instead of buffering the stream's bitrate forever.
+func TestVideoPesBufCap(t *testing.T) {
+	d := NewPSDemuxer()
+	// Header claims 65529 bytes of payload; feed far beyond the cap in
+	// marker-less chunks so the PES never completes.
+	chunk := make([]byte, 512<<10)
+	var maxSeen int
+	for range 40 {
+		pes := append([]byte{0x00, 0x00, 0x01, 0xE0, 0xFF, 0xF9, 0x80, 0x80, 0x05, 0x21, 0x00, 0x01, 0x02, 0x03}, chunk...)
+		_, _ = d.FeedAU(pes, 90000, false)
+		if len(d.videoPesBuf) > maxSeen {
+			maxSeen = len(d.videoPesBuf)
+		}
+	}
+	if maxSeen > maxPESBufBytes+(512<<10)+16 {
+		t.Fatalf("videoPesBuf grew to %d beyond cap %d", maxSeen, maxPESBufBytes)
+	}
+}

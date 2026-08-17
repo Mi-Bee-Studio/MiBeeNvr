@@ -126,6 +126,38 @@ type PSDemuxer struct {
 	// pipeline's RTP-anchored clock.
 	ptsOffset    int64
 	ptsOffsetSet bool
+	// esResyncLogged latches the one-shot warning for an esBuf overflow
+	// reset (marker-less accumulation — see maxESBufBytes).
+	esResyncLogged bool
+	// pesOverflowLogged latches the one-shot warning for PES reassembly
+	// overflows (see maxPESBufBytes).
+	pesOverflowLogged bool
+}
+
+// maxESBufBytes caps the elementary-stream accumulator. esBuf drains at
+// every AU boundary (RTP marker); a stream whose markers stop arriving
+// (broken upstream packetizer, mid-stream renegotiation) would otherwise
+// accumulate for the life of the session — invisible while sessions were
+// recycled every ~3min, unbounded now that healthy sessions live for hours
+// (#383). On overflow the buffer is dropped and demuxing resyncs at the
+// next AU boundary.
+const maxESBufBytes = 8 << 20
+
+// maxPESBufBytes caps the PES reassembly buffer. A PES whose announced
+// length can never be satisfied (corrupt header, hostile/wrapped 16-bit
+// length) accumulates the stream's full bitrate until the host OOMs —
+// observed live: 95MB in 7 minutes on one 1.8Mbps stream. 4MB comfortably
+// exceeds any real access unit (8K IDR included).
+const maxPESBufBytes = 4 << 20
+
+// warnPESOverflow logs (once) that a PES reassembly was abandoned.
+func (d *PSDemuxer) warnPESOverflow(kind string, size int) {
+	if d.pesOverflowLogged {
+		return
+	}
+	d.pesOverflowLogged = true
+	logger.Warn("gb28181: PES reassembly exceeded cap — dropping and resyncing",
+		"kind", kind, "bytes", size, "cap", maxPESBufBytes)
 }
 
 // NewPSDemuxer creates a new MPEG-PS to H.264/H.265 NALU demuxer.
@@ -254,6 +286,15 @@ feedLoop:
 					// Incomplete PES (straddles the AU boundary). REPLACE the
 					// buffer — the data already includes previously buffered
 					// bytes (prepended above), so appending duplicates them.
+					// A PES that outgrew maxPESBufBytes is corrupt (its
+					// announced length can never be satisfied) — drop and
+					// resync at the next AU instead of buffering the
+					// stream's full bitrate forever (OOM, 2026-08-17).
+					if len(pesData) > maxPESBufBytes {
+						d.warnPESOverflow("audio", len(pesData))
+						d.audioPesBuf = nil
+						break feedLoop
+					}
 					d.audioPesBuf = append([]byte(nil), pesData...)
 					break feedLoop
 				}
@@ -270,7 +311,15 @@ feedLoop:
 					// mid-AU flush). REPLACE the reassembly buffer with the
 					// PES-so-far slice — data already starts with the
 					// previously buffered bytes (prepended below), so
-					// appending would duplicate them.
+					// appending would duplicate them. Same overflow cap as
+					// the audio path — measured in the wild: one stream's
+					// videoPesBuf grew at the full stream bitrate until
+					// the box OOM'd.
+					if len(pesData) > maxPESBufBytes {
+						d.warnPESOverflow("video", len(pesData))
+						d.videoPesBuf = nil
+						break feedLoop
+					}
 					d.videoPesBuf = append([]byte(nil), pesData...)
 					break feedLoop
 				}
@@ -278,6 +327,14 @@ feedLoop:
 					d.currentPTS = ptsTicks
 					d.establishClockOffset(pesData, ptsTicks)
 					d.esBuf = append(d.esBuf, pesPayload...)
+					if len(d.esBuf) > maxESBufBytes {
+						if !d.esResyncLogged {
+							d.esResyncLogged = true
+							logger.Warn("gb28181: PS elementary stream exceeded cap with no AU boundary — resyncing",
+								"bytes", len(d.esBuf), "cap", maxESBufBytes)
+						}
+						d.esBuf = nil
+					}
 				}
 				// Advance past the PES
 				offset = startCodePos + pesEnd
