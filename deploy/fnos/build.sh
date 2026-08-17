@@ -29,7 +29,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ONLINE=1 builds the online .fpk: no bundled image tars — cmd/main probes
 # ghcr vs the ACR mirror at start and pulls the matching arch. The online
 # package is tiny (~KB) but requires the NAS to reach a registry on install.
-ONLINE=0
+# ONLINE uses EMPTY/1 (not 0/1): the canonical-name suffix below relies on
+# ${ONLINE:+-online}, which tests NON-EMPTY — a literal "0" would wrongly add
+# the suffix to offline builds too (v0.11.0: both jobs emitted -online- names
+# and the offline upload clobbered the small online package).
+ONLINE=""
 if [ "${1:-}" = "--online" ]; then ONLINE=1; shift; fi
 VERSION="${1:-${VERSION:-}}"
 # fnpack binary; on Windows set FNPACK_BIN to the path of fnpack.exe.
