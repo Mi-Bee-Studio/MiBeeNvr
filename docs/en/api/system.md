@@ -4,7 +4,11 @@
 
 **Endpoint:** `GET /api/health`
 
-Get overall system health status including database and storage disk space.
+Get overall system health status including database and storage disk space. Public endpoint (no auth).
+
+`device_id` is a stable UUID generated on first start and persisted (`server.device_id`);
+`device_name` defaults to the hostname — LAN clients can anchor on the identity instead of
+a changeable IP address.
 
 **Request:**
 ```bash
@@ -20,14 +24,34 @@ curl http://localhost:9090/api/health
       "status": "ok",
       "message": ""
     },
+    "goroutines": {
+      "status": "ok",
+      "message": "167 goroutines"
+    },
     "storage": {
-      "status": "ok", 
-      "message": ""
+      "status": "ok",
+      "message": "43% used (1272250408960 / 2953130397696 bytes)"
     }
   },
-  "uptime": "2h34m15s"
+  "uptime": "2h34m15s",
+  "setup_required": false,
+  "device_id": "371da2dc-7804-4706-b424-ce50d14ce2d2",
+  "device_name": "bananapim5",
+  "cameras": {
+    "total": 13,
+    "recording": 10,
+    "reconnecting": 0,
+    "error": 3,
+    "offline": 0,
+    "details": [
+      { "id": "front-door", "name": "Front Door", "status": "healthy", "score": 75 }
+    ]
+  }
 }
 ```
+
+`setup_required: true` means the NVR is not yet initialized (no admin password); guide the
+user through the setup wizard.
 
 ## Readiness Check
 

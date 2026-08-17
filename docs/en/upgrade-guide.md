@@ -61,7 +61,6 @@ Playlist requests authenticated with a session token now receive a scoped `mbs_s
 
 ---
 
-
 ## v0.9.1 → v0.10.0
 
 0.10.0 is a large release (H.265 WASM live playback, Timelapse v3, stateless auth tokens, MJPEG-over-WebSocket, AI model integrity hardening, and a 0.10.0 architecture cleanup). It contains a few **breaking changes** that require a one-time config or post-deploy step.

@@ -38,7 +38,7 @@ curl -u username:password \
       "duration": 10.0,
       "file_size": 1048576,
       "frame_count": 300,
-      "merged": false
+      "merge_status": "pending"
     }
   ],
   "total": 1
@@ -69,7 +69,7 @@ curl -u username:password \
   "duration": 10.0,
   "file_size": 1048576,
   "frame_count": 300,
-  "merged": false
+  "merge_status": "pending"
 }
 ```
 

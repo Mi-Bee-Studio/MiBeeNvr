@@ -6,6 +6,11 @@
 
 Provide on-demand HLS live streaming.
 
+When the playlist is requested with a session token, the response also sets a
+scoped `mbs_session` cookie — for players that cannot set per-request headers
+(iOS AVPlayer, some native players) to fetch media segments without 401s
+(new in 0.11.0).
+
 **Request (HLS playlist):**
 ```bash
 curl -u username:password \
@@ -47,6 +52,10 @@ curl -u username:password \
 **Endpoint:** `POST /api/cameras/{id}/stream/webrtc`
 
 Create a new WebRTC WHEP (WebRTC-HTTP Egress Protocol) session. Accepts an SDP offer and returns an SDP answer with a session URL in the Location header.
+
+G.711 (PCMU/PCMA) and Opus audio are muxed directly into the WebRTC track with
+zero transcoding (since 0.11.0); AAC live audio still uses the separate audio
+WebSocket endpoint.
 
 **Request:**
 ```bash
@@ -250,23 +259,23 @@ curl -u username:password \
   "protocols": [
     {
       "protocol": "webrtc",
-      "label": "WebRTC (WHEP)",
-      "available": true
+      "available": true,
+      "reason": ""
     },
     {
       "protocol": "flv",
-      "label": "HTTP-FLV",
-      "available": true
+      "available": true,
+      "reason": ""
     },
     {
       "protocol": "hls",
-      "label": "HLS",
-      "available": true
+      "available": true,
+      "reason": ""
     },
     {
       "protocol": "ws",
-      "label": "WebSocket",
-      "available": true
+      "available": true,
+      "reason": ""
     }
   ],
   "encoding": "h264",

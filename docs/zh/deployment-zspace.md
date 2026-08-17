@@ -49,7 +49,6 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/
 4. 保存并启动项目。多架构镜像被拉取（x86 机型取 `amd64`，Z2Pro/T6 等 ARM 机型取 `arm64`）。
 5. 打开 `http://<NAS-IP>:9090` 完成初始化向导。
 
-## 端口冲突
 ## 导入现成模板
 
 不想手抄 Compose？仓库里有可直接导入的编排模板：
@@ -57,6 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/
 （导入步骤见 [`README.md`](../../deploy/zspace/README.md)）。默认走阿里云镜像源
 （国内免登录拉取）+ host 网络，并带 `NVR_LISTEN_PORT`（改端口）注释开关。
 
+## 端口冲突
 
 host 网络下容器直接监听 NAS 端口。MiBee NVR 用 `9090`（Web）和 `2121`（FTP）；若与其它服务或容器冲突，改 `mibee-nvr.yaml` 里应用自己的端口（不要重映射）：
 ```yaml
@@ -83,7 +83,7 @@ ftp:
 
 ## 升级与回滚
 
-见[自动升级指南](deployment-autoupdate.md)。在项目里 `docker compose pull && up -d`，或固定 tag（`mibeenvr:0.10.0`）以便回滚。映射路径下的数据在重建中保持不变。
+见[自动升级指南](deployment-autoupdate.md)。在项目里 `docker compose pull && up -d`，或固定 tag（`mibeenvr:0.11.0`）以便回滚。映射路径下的数据在重建中保持不变。
 
 ## 进入官方应用商店（可选）
 
