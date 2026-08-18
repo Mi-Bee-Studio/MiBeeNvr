@@ -411,6 +411,27 @@ func TestXiaomiConfigValidationWithToken(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestXiaomiEmptyEncodingBackfilled (#402): configs written since v0.10.0
+// store encoding:"" for xiaomi cameras (the UI deliberately omits it for
+// auto-detect protocols; the add handler lacked a xiaomi default). The strict
+// protocol/encoding validation rejected that fatally at startup — Validate
+// must instead backfill the h264 hint so the next start succeeds, while still
+// rejecting a genuinely wrong encoding value.
+func TestXiaomiEmptyEncodingBackfilled(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "", URL: "xiaomi://device"}}}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+	require.Equal(t, "h264", cfg.Cameras[0].Encoding, "empty xiaomi encoding must be backfilled to the h264 hint")
+}
+
+func TestXiaomiInvalidEncodingStillRejected(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{ID: "c1", Protocol: "xiaomi", Encoding: "jpeg", URL: "xiaomi://device"}}}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.Error(t, err, "backfill must only heal the empty value, not loosen validation for garbage")
+}
+
 func TestCameraConfigXiaomiFields(t *testing.T) {
 	cfg := &Config{
 		Cameras: []CameraConfig{{

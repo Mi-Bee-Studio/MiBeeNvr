@@ -328,7 +328,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validProtocols[body.Protocol] {
-		WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, xiaomi, timelapse, gb28181", body.Protocol))
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid protocol %q, must be one of: rtsp, http, onvif, srt, rtmp, whip, xiaomi, timelapse, gb28181", body.Protocol))
 		return
 	}
 	// Push/ingest cameras (srt/rtmp/whip): no URL — the publisher connects to us.
@@ -435,6 +435,13 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		case "gb28181":
 			// Hint only — the recorder detects the real codec from PS stream NALUs.
 			enc = "h264"
+		case "xiaomi":
+			// Hint only — the Xiaomi recorder probes H264/H265 from the MISS
+			// stream at runtime; the list/get probe backfill corrects the label
+			// for H.265 devices. Without this default the UI's deliberate
+			// encoding omission (auto-detect protocols send none) persisted an
+			// empty encoding that failed startup validation fatally (#402).
+			enc = "h264"
 		case "onvif":
 			// Auto-detect encoding from ONVIF device profiles
 			if body.StreamEncoding == "" {
@@ -447,6 +454,14 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 				enc = strings.ToLower(body.StreamEncoding)
 			}
 		}
+	}
+	// Guard the API write boundary with the same protocol+encoding validation
+	// the startup path enforces: an invalid combo saved here (e.g. rtmp+h265
+	// from a non-UI client) bricks the NEXT restart with a fatal config
+	// validation error (#402 bug class).
+	if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	cam := config.CameraConfig{
@@ -751,6 +766,34 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		if updates.ONVIFEndpoint != nil && *updates.ONVIFEndpoint != "" {
 			updates.URL = updates.ONVIFEndpoint
+		}
+	}
+
+	// When protocol or encoding is being changed, validate the RESULTING combo
+	// against the same rules startup enforces — otherwise a partial update
+	// (e.g. encoding h265 on an rtmp camera) saves a config that fails fatally
+	// on the next restart (#402 bug class).
+	if body.Protocol != nil || body.Encoding != nil {
+		proto, enc := "", ""
+		managed := false
+		if cur := h.camMgr.GetCameraConfig(id); cur != nil {
+			proto, enc = cur.Protocol, cur.Encoding
+			managed = true
+		}
+		if body.Protocol != nil {
+			proto = *body.Protocol
+		}
+		if body.Encoding != nil {
+			enc = *body.Encoding
+		}
+		// Validate only when the effective protocol is known: from the body, or
+		// from the camera's config entry. Orphaned DB-only cameras (no YAML
+		// entry) keep the legacy no-validation behavior.
+		if managed || body.Protocol != nil {
+			if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
+				WriteError(w, http.StatusBadRequest, fmt.Sprintf("camera %q: %s", id, err.Error()))
+				return
+			}
 		}
 	}
 
