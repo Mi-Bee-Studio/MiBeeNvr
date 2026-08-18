@@ -292,6 +292,9 @@ func (s *Server) Start(ctx context.Context) error {
 	_ = srv.OnRequest(sip.MESSAGE, s.handleMessage)
 	_ = srv.OnRequest(sip.INVITE, s.handleInvite)
 	_ = srv.OnRequest(sip.BYE, s.handleBye)
+	// INFO carries device→platform media notifications: a MANSRTSP MediaStatus
+	// body ("playback/download finished") ends the active fetch (#378).
+	_ = srv.OnRequest(sip.INFO, s.handleInfo)
 	// NOTIFY delivers subscription payloads (catalog changes, alarms,
 	// mobile positions) after our SUBSCRIBE (#341).
 	_ = srv.OnRequest(sip.NOTIFY, s.handleNotify)
@@ -1604,6 +1607,44 @@ func (s *Server) handleBye(req sip.Request, tx sip.ServerTransaction) {
 	_ = s.sessionMgr.Bye(byeChannel)
 	s.notifyCameraBye(byeDevice, byeChannel)
 	s.respond(req, tx, statusOK, "OK", nil)
+}
+
+// handleInfo answers device→platform SIP INFO. Devices report media end via a
+// MANSRTSP-style MediaStatus body on the fetch dialog (GB/T 28181-2016
+// §9.4.2: "MediaStatus: Download Finished" / "Play Finished") — finalize the
+// fetch immediately instead of waiting out the stall watchdog.
+func (s *Server) handleInfo(req sip.Request, tx sip.ServerTransaction) {
+	s.respond(req, tx, statusOK, "OK", nil)
+	body := string(req.Body())
+	if !strings.Contains(strings.ToLower(body), "mediastatus") {
+		return
+	}
+	finished := strings.Contains(strings.ToLower(body), "finished")
+	// In-dialog INFO from the device mirrors our fetch INVITE: From = the
+	// INVITEd channel, To = this server.
+	channelID := ""
+	if from, ok := req.From(); ok {
+		channelID = from.Address.User().String()
+	}
+	if channelID == "" || channelID == s.cfg.ServerID {
+		return
+	}
+	// Only trust the notification when it arrives on the channel's fetch
+	// dialog (matched by Call-ID), mirroring handleBye's dialog check.
+	callID, hasCallID := req.CallID()
+	s.mu.Lock()
+	pbDlg := s.pbDialogs[channelID]
+	s.mu.Unlock()
+	if pbDlg == nil || !hasCallID {
+		return
+	}
+	if dlgCallID, ok := pbDlg.resp.CallID(); !ok || dlgCallID.String() != callID.String() {
+		return
+	}
+	if finished {
+		slog.Info("gb28181: fetch MediaStatus finished received", "channel", channelID)
+		_ = s.StopPlayback(channelID)
+	}
 }
 
 // deviceOfChannel finds the device owning channelID ("" when unknown).

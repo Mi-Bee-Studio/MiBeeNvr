@@ -33,8 +33,8 @@ const ntpEpochDelta = 2208988800
 // the same cap on fetch requests).
 const pbMaxWindow = 24 * time.Hour
 
-// playbackSession is one s=Playback dialog: local recordings → psmux →
-// RTP/UDP toward the upper platform's receive address.
+// playbackSession is one s=Playback / s=Download dialog: local recordings →
+// psmux → RTP/UDP toward the upper platform's receive address.
 type playbackSession struct {
 	svc     *Service
 	callID  string
@@ -42,6 +42,7 @@ type playbackSession struct {
 	camera  string // local camera ID
 	start   time.Time
 	end     time.Time
+	download bool // s=Download: send at file speed, no 1x pacing (#378)
 
 	conn    *net.UDPConn
 	dst     *net.UDPAddr
@@ -65,10 +66,11 @@ type pbCtrl struct {
 	scale  float64
 }
 
-// onPlaybackInvite answers an s=Playback INVITE: resolve the channel, look up
-// recordings for the SDP time range, 200 OK with a sendonly s=Playback answer,
-// and pump the media. 404 when the channel is unknown or the window holds no
-// recordings (the platform surfaces that as a fetch error).
+// onPlaybackInvite answers an s=Playback (or s=Download, #378) INVITE:
+// resolve the channel, look up recordings for the SDP time range, 200 OK with
+// a sendonly s= answer, and pump the media. Downloads skip the 1x pacing and
+// stream at file speed. 404 when the channel is unknown or the window holds
+// no recordings (the platform surfaces that as a fetch error).
 func (s *Service) onPlaybackInvite(req sip.Request, callID, channelID string, sd inviteSDP) {
 	cameraID, ok := s.cameraOfChannel(channelID)
 	if !ok {
@@ -103,9 +105,13 @@ func (s *Service) onPlaybackInvite(req sip.Request, callID, channelID string, sd
 		return
 	}
 
+	sdpName := "Playback"
+	if strings.EqualFold(sd.name, "Download") {
+		sdpName = "Download"
+	}
 	ps := &playbackSession{
 		svc: s, callID: callID, channel: channelID, camera: cameraID,
-		start: start, end: end,
+		start: start, end: end, download: sdpName == "Download",
 		conn: conn, dst: dst, ssrc: sd.ssrc,
 		mux:  psmux.New(),
 		rtp:  psmux.NewRTPPacketizer(conn, dst, sd.ssrc, uint16(time.Now().UnixNano()&0xFFFF)),
@@ -113,9 +119,9 @@ func (s *Service) onPlaybackInvite(req sip.Request, callID, channelID string, sd
 		done: make(chan struct{}),
 	}
 	ps.sdpBody = fmt.Sprintf(
-		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=Playback\r\nc=IN IP4 %s\r\nt=%s %s\r\n"+
+		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=%s\r\nc=IN IP4 %s\r\nt=%s %s\r\n"+
 			"m=video %d RTP/AVP 96\r\na=sendonly\r\na=rtpmap:96 PS/90000\r\ny=%d\r\n",
-		ps.localHost(), ps.localHost(), sd.rawT0, sd.rawT1, ps.localPort(), sd.ssrc)
+		ps.localHost(), sdpName, ps.localHost(), sd.rawT0, sd.rawT1, ps.localPort(), sd.ssrc)
 
 	s.mu.Lock()
 	s.playbacks[callID] = ps
@@ -123,8 +129,8 @@ func (s *Service) onPlaybackInvite(req sip.Request, callID, channelID string, sd
 
 	_, _ = s.srv.RespondOnRequest(req, 200, "OK", ps.sdpBody, nil)
 	go ps.pump()
-	slog.Info("gb28181-cascade: playback INVITE accepted — streaming",
-		"channel", channelID, "camera", cameraID, "start", start, "end", end,
+	slog.Info("gb28181-cascade: fetch INVITE accepted — streaming",
+		"kind", sdpName, "channel", channelID, "camera", cameraID, "start", start, "end", end,
 		"to", dst.String(), "ssrc", sd.ssrc)
 }
 
@@ -264,7 +270,8 @@ func (ps *playbackSession) playOnce(seekNPT float64) (bool, *float64, error) {
 
 			rel := cum90 - firstCum90
 
-			// Pace + controls.
+			// Pace + controls. s=Download dialogs send at file speed — the
+			// pacing wait collapses to just the pause/select drain.
 			for {
 				if ps.closed.Load() {
 					_ = f.Close()
@@ -282,6 +289,17 @@ func (ps *playbackSession) playOnce(seekNPT float64) (bool, *float64, error) {
 						_ = f.Close()
 						return false, nil, nil
 					}
+				}
+				if ps.download {
+					select {
+					case c := <-ps.ctrl:
+						if seek, stop := ps.applyCtrl(c, &paused, &pausedAt, &scale, &base, rel); stop || seek != nil {
+							_ = f.Close()
+							return false, seek, nil
+						}
+					default:
+					}
+					break
 				}
 				target := base.Add(time.Duration(float64(rel) / 90 / scale * float64(time.Millisecond)))
 				dLeft := time.Until(target)

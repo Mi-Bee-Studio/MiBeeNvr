@@ -252,3 +252,46 @@ func TestBareCallID(t *testing.T) {
 	require.Equal(t, "abc@1", bareCallID("abc@1"))
 	require.Equal(t, "", bareCallID(""))
 }
+
+// TestDownloadFastPump: an s=Download dialog streams the whole window without
+// 1x pacing — 165ms of media must land nearly instantly (playback pacing
+// would take at least the media duration).
+func TestDownloadFastPump(t *testing.T) {
+	ps, collect := newPlaybackHarness(t)
+	ps.download = true
+	start := time.Now().Add(-time.Minute)
+	createPlaybackSegment(t, ps.svc.db, "front", start)
+	ps.start = start
+	ps.end = start.Add(time.Minute)
+
+	t0 := time.Now()
+	done, _, err := ps.playOnce(0)
+	elapsed := time.Since(t0)
+	require.NoError(t, err)
+	require.True(t, done)
+	ps.finish("test end", false)
+
+	aus := collect()
+	require.Len(t, aus, 5, "all frames delivered")
+	require.Less(t, elapsed, 100*time.Millisecond,
+		"download sends at file speed, not 1x (took %v for 165ms of media)", elapsed)
+}
+
+// TestPlaybackPacedForContrast: the same window under s=Playback pacing takes
+// at least the media duration — the control for TestDownloadFastPump.
+func TestPlaybackPacedForContrast(t *testing.T) {
+	ps, _ := newPlaybackHarness(t)
+	start := time.Now().Add(-time.Minute)
+	createPlaybackSegment(t, ps.svc.db, "front", start)
+	ps.start = start
+	ps.end = start.Add(time.Minute)
+
+	t0 := time.Now()
+	done, _, err := ps.playOnce(0)
+	elapsed := time.Since(t0)
+	require.NoError(t, err)
+	require.True(t, done)
+	ps.finish("test end", false)
+	require.GreaterOrEqual(t, elapsed, 150*time.Millisecond,
+		"playback paces at 1x (took %v)", elapsed)
+}

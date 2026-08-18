@@ -144,6 +144,19 @@ func recordKey(deviceID string, sn int) string {
 // recordings UI like any local recording). One fetch per channel — a running
 // fetch is stopped first.
 func (s *Server) StartPlayback(deviceID, channelID string, start, end time.Time) error {
+	return s.startFetch(deviceID, channelID, start, end, false)
+}
+
+// StartDownload begins a device-recording download (#378): an s=Download
+// INVITE — the device streams the requested window at file speed (no 1x
+// pacing) and the media is muxed into the bound camera's recordings exactly
+// like a playback fetch. Replaces any running fetch on the channel.
+func (s *Server) StartDownload(deviceID, channelID string, start, end time.Time) error {
+	return s.startFetch(deviceID, channelID, start, end, true)
+}
+
+// startFetch is the shared playback/download fetch driver.
+func (s *Server) startFetch(deviceID, channelID string, start, end time.Time, download bool) error {
 	if _, ok := s.deviceMgr.Device(deviceID); !ok {
 		return fmt.Errorf("gb28181: device %q not registered", deviceID)
 	}
@@ -192,11 +205,21 @@ func (s *Server) StartPlayback(deviceID, channelID string, start, end time.Time)
 			audioSink(frame.Codec, frame.Data, frame.Config, frame.PTSTicks, frame.Samples)
 		}
 	}
-	sdp, err := s.sessionMgr.InvitePlayback(ch, serverHost, start, end, counter, onAudio)
+	var sdp []byte
+	var err error
+	if download {
+		sdp, err = s.sessionMgr.InviteDownload(ch, serverHost, start, end, counter, onAudio)
+	} else {
+		sdp, err = s.sessionMgr.InvitePlayback(ch, serverHost, start, end, counter, onAudio)
+	}
 	if err != nil {
 		return fmt.Errorf("gb28181: playback session for %s: %w", channelID, err)
 	}
 
+	kind := "playback"
+	if download {
+		kind = "download"
+	}
 	st := &playbackState{
 		channelID: channelID,
 		deviceID:  deviceID,
@@ -206,12 +229,13 @@ func (s *Server) StartPlayback(deviceID, channelID string, start, end time.Time)
 		startedAt: time.Now(),
 		scale:     1.0,
 		counter:   counter,
+		kind:      kind,
 	}
 	s.pbMu.Lock()
 	s.playbacks[channelID] = st
 	s.pbMu.Unlock()
 
-	// INVITE the device for the playback dialog.
+	// INVITE the device for the fetch dialog.
 	if err := s.sendPlaybackInvite(deviceID, channelID, netAddr, sdp); err != nil {
 		s.pbMu.Lock()
 		delete(s.playbacks, channelID)
@@ -221,7 +245,7 @@ func (s *Server) StartPlayback(deviceID, channelID string, start, end time.Time)
 	}
 
 	go s.watchPlayback(st)
-	slog.Info("gb28181: playback fetch started", "channel", channelID, "device", deviceID,
+	slog.Info("gb28181: fetch started", "kind", kind, "channel", channelID, "device", deviceID,
 		"camera", cameraID, "start", start, "end", end)
 	return nil
 }
@@ -231,6 +255,7 @@ type playbackState struct {
 	channelID string
 	deviceID  string
 	cameraID  string
+	kind      string // "playback" | "download"
 	start     time.Time
 	end       time.Time
 	startedAt time.Time
@@ -367,6 +392,7 @@ func (s *Server) PlaybackStatusFor(channelID string) (gb28181.PlaybackInfo, bool
 	s.pbMu.Lock()
 	status = gb28181.PlaybackInfo{
 		Active:       true,
+		Kind:         st.kind,
 		ChannelID:    channelID,
 		DeviceID:     st.deviceID,
 		CameraID:     st.cameraID,

@@ -124,8 +124,9 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		return
 	}
 
-	// Playback dialogs take the recordings-backed path.
-	if strings.EqualFold(sd.name, "Playback") {
+	// Playback/download dialogs take the recordings-backed path (download =
+	// same pump without 1x pacing, #378).
+	if strings.EqualFold(sd.name, "Playback") || strings.EqualFold(sd.name, "Download") {
 		s.onPlaybackInvite(req, callID, channelID, sd)
 		return
 	}

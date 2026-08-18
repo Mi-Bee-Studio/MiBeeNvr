@@ -3,10 +3,11 @@ package gb28181
 import "time"
 
 // PlaybackInfo is the API-facing state of an active device-recording fetch
-// (playback INVITE). Shared by the SIP server (producer) and the REST layer
-// (consumer).
+// (playback or download INVITE). Shared by the SIP server (producer) and the
+// REST layer (consumer).
 type PlaybackInfo struct {
 	Active       bool      `json:"active"`
+	Kind         string    `json:"kind"` // "playback" | "download"
 	ChannelID    string    `json:"channel_id"`
 	DeviceID     string    `json:"device_id"`
 	CameraID     string    `json:"camera_id"`
