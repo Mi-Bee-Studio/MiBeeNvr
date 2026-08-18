@@ -618,10 +618,11 @@ func TestESBufCap(t *testing.T) {
 }
 
 // TestVideoPesBufCap: a PES whose announced length can never be satisfied must
-// hit the cap and resync instead of buffering the stream's bitrate forever.
+// hit the pending bound and resync instead of buffering the stream's bitrate
+// forever.
 func TestVideoPesBufCap(t *testing.T) {
 	d := NewPSDemuxer()
-	// Header claims 65529 bytes of payload; feed far beyond the cap in
+	// Header claims 65529 bytes of payload; feed far beyond the bound in
 	// marker-less chunks so the PES never completes.
 	chunk := make([]byte, 512<<10)
 	var maxSeen int
@@ -632,7 +633,90 @@ func TestVideoPesBufCap(t *testing.T) {
 			maxSeen = len(d.videoPesBuf)
 		}
 	}
-	if maxSeen > maxPESBufBytes+(512<<10)+16 {
-		t.Fatalf("videoPesBuf grew to %d beyond cap %d", maxSeen, maxPESBufBytes)
+	if maxSeen > maxPendingPESBytes+(512<<10)+16 {
+		t.Fatalf("videoPesBuf grew to %d beyond bound %d", maxSeen, maxPendingPESBytes)
+	}
+}
+
+// TestPSDemuxer_TrailingZeroPayloadBeforePES reproduces the #390 OOM root
+// cause. In-order parsing skips complete PES packets by their declared
+// length, so payload bytes are only ever SCANNED on a resync path (RTP loss
+// mis-aligning a PES extent, joining mid-stream). From inside a payload, a
+// NALU ending in trailing zeros (legal Annex-B trailing_zero_8bytes) abuts
+// the next PES header as ...00 00 00 00 01 E0 — findPSStartCode matched the
+// 4-byte form at an EARLIER index than the true 3-byte header, and
+// parseVideoPES then rejected the prefix on every AU, wedging the
+// reassembly at stream bitrate forever. The resync must recover at the real
+// PES instead.
+func TestPSDemuxer_TrailingZeroPayloadBeforePES(t *testing.T) {
+	d := NewPSDemuxer()
+
+	// Orphan ES bytes (the tail of a PES lost upstream) ending in two zeros,
+	// immediately followed by a well-formed video PES.
+	orphan := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x11, 0x22, 0x33, 0x00, 0x00}
+	nalu2 := []byte{0x00, 0x00, 0x00, 0x01, 0x41, 0xAA, 0xBB}
+	p2 := append([]byte{0x00, 0x00, 0x01, 0xE0, 0x00, byte(3 + len(nalu2)), 0x80, 0x00, 0x00}, nalu2...)
+
+	au := append(append([]byte{}, orphan...), p2...)
+	nalus, err := d.FeedAU(au, 9000, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nalus) != 1 {
+		t.Fatalf("resync must deliver the PES payload NALU, got %d NALUs", len(nalus))
+	}
+	if nalus[0][0] != 0x41 {
+		t.Fatalf("expected the P-frame NALU, got %#x", nalus[0][0])
+	}
+	if len(d.videoPesBuf) != 0 {
+		t.Fatalf("videoPesBuf must stay empty, has %d bytes", len(d.videoPesBuf))
+	}
+
+	// And the wedged-retry pathology must not return on subsequent AUs.
+	for range 3 {
+		if _, err := d.FeedAU(au, 9000, true); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.videoPesBuf) != 0 {
+			t.Fatalf("videoPesBuf must not accumulate across AUs, has %d bytes", len(d.videoPesBuf))
+		}
+	}
+}
+
+// TestParseVideoPES_FourByteStartCode: direct parse of a 4-byte-prefixed PES
+// (00 00 00 01 E0) must succeed after zero-stripping, not error forever.
+func TestParseVideoPES_FourByteStartCode(t *testing.T) {
+	payload := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x77}
+	pes := append([]byte{0x00, 0x00, 0x00, 0x01, 0xE0, 0x00, byte(3 + len(payload)), 0x80, 0x00, 0x00}, payload...)
+	got, pesEnd, err := parseVideoPES(pes)
+	if err != nil {
+		t.Fatalf("4-byte prefix must be tolerated: %v", err)
+	}
+	if pesEnd != 6+3+len(payload) {
+		t.Fatalf("unexpected pesEnd %d", pesEnd)
+	}
+	if len(got) != len(payload) {
+		t.Fatalf("payload %d bytes, got %d", len(payload), len(got))
+	}
+}
+
+// TestFindPSStartCode_FourByteNormalization: a 4-byte prefix before a PS code
+// value must be normalized to the 3-byte position so consumers index
+// stream_id / lengths at standard offsets.
+func TestFindPSStartCode_FourByteNormalization(t *testing.T) {
+	data := []byte{0xFF, 0x00, 0x00, 0x00, 0x01, 0xE0, 0x12, 0x34}
+	pos, code, err := findPSStartCode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != startCodeVideoMin {
+		t.Fatalf("code %#x", code)
+	}
+	// Position must point at the LAST 00 before 01: stream_id at pos+3.
+	if data[pos] != 0 || data[pos+1] != 0 || data[pos+2] != 1 || data[pos+3] != 0xE0 {
+		t.Fatalf("position %d not a 3-byte start code", pos)
+	}
+	if data[pos+4] != 0x12 || data[pos+5] != 0x34 {
+		t.Fatalf("length bytes not at pos+4/+5")
 	}
 }

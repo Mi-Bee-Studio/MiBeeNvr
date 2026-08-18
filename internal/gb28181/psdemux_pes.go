@@ -75,11 +75,25 @@ func findStartCodes(data []byte) []int {
 	return positions
 }
 
+// stripStartCodeLeadingZeros tolerates zero bytes stuffed between a PES
+// payload's end and the next packet's 23-bit start code. Annex-B permits
+// trailing_zero_8bytes after the last NALU, so a payload ending in 0x00
+// followed by the next PES header reads 00 00 00 01 E0 — a legal stream that
+// a strict 3-byte prefix check rejects. All leading zeros before the 00 00 01
+// prefix are skipped.
+func stripStartCodeLeadingZeros(data []byte) []byte {
+	for len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x01 {
+		data = data[1:]
+	}
+	return data
+}
+
 // parseVideoPES parses a video PES packet and returns the payload and total PES length.
 // Returns (payload, totalPESLength, error).
 func parseVideoPES(data []byte) ([]byte, int, error) {
 	// PES: start_code (4) + stream_id (1) + PES_packet_length (2) + optional PES_header
 	// pesPayloadStart reads bytes 7-8, so 9 bytes are required up front.
+	data = stripStartCodeLeadingZeros(data)
 	if len(data) < 9 {
 		return nil, 0, ErrIncompletePES
 	}
@@ -184,8 +198,13 @@ func pesPayloadStart(data []byte, totalLen int) int {
 }
 
 // findPSStartCode finds the next MPEG-PS start code in the data.
-// Returns the position of the start code, the start code value, and an error if not found.
-// NALU start codes (00 00 00 01 followed by 0x67, 0x68, 0x06, etc.) are skipped.
+// Returns the position of the start code, the start code value, and an error
+// if not found. NALU start codes (00 00 00 01 followed by 0x67, 0x68, 0x06,
+// etc.) are skipped. The returned position always points at a 3-byte prefix
+// (00 00 01 <value>): a 4-byte prefix (00 00 00 01 <value>, produced when a
+// PES payload ends in trailing zeros — legal Annex-B — abutting the next
+// packet header) is normalized so every consumer indexing pos+3/+4/+5 sees
+// stream_id / PES_packet_length at the standard offsets.
 func findPSStartCode(data []byte) (int, byte, error) {
 	for i := 0; i < len(data); i++ {
 		// Need at least 3 bytes for a start code prefix (00 00 01)
@@ -209,13 +228,13 @@ func findPSStartCode(data []byte) (int, byte, error) {
 		startCodeValue := data[i+scLen]
 		switch startCodeValue {
 		case startCodePack, startCodeSystem, startCodePSM, startCodePadding, startCodePrivate2:
-			return i, startCodeValue, nil
+			return i + scLen - 3, startCodeValue, nil
 		default:
 			if startCodeValue >= startCodeAudioMin && startCodeValue <= startCodeAudioMax {
-				return i, startCodeValue, nil
+				return i + scLen - 3, startCodeValue, nil
 			}
 			if startCodeValue >= startCodeVideoMin && startCodeValue <= startCodeVideoMax {
-				return i, startCodeValue, nil
+				return i + scLen - 3, startCodeValue, nil
 			}
 			// NALU data - skip past this start code and keep scanning
 			i += scLen

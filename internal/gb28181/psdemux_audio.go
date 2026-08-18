@@ -80,6 +80,7 @@ func (d *PSDemuxer) guessAudioCodec(payload []byte) string {
 // PES, and the payload carries no Annex-B start code to calibrate against.
 // Returns (payload, pts, hasPTS, totalPESLength, error).
 func parseAudioPES(data []byte) ([]byte, int64, bool, int, error) {
+	data = stripStartCodeLeadingZeros(data)
 	if len(data) < 9 {
 		return nil, 0, false, 0, ErrIncompletePES
 	}

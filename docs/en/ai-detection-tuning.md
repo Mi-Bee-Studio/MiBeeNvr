@@ -19,6 +19,8 @@ All parameters are configurable in **Settings → AI Detection**. Saving persist
 
 Additionally, **per-camera overrides**: each camera can have its own confidence + frame-skip values (expand the per-camera section), which take priority over the global defaults.
 
+![AI Detection settings panel](images/settings-ai.webp)
+
 ### Adaptive throttle (automatic, no config needed)
 
 Inference runs in a Web Worker. When the running average inference time exceeds 80ms (typical for RPi-class WASM SIMD), the system automatically raises frameSkip (monotonic — never lowers on its own, capped at 10) to keep the page responsive. The log (dev builds only) shows `throttling frameSkip X→Y`.

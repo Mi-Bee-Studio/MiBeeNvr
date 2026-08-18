@@ -1,6 +1,7 @@
 package gb28181
 
 import (
+	"encoding/hex"
 	"errors"
 	"slices"
 )
@@ -143,21 +144,33 @@ type PSDemuxer struct {
 // next AU boundary.
 const maxESBufBytes = 8 << 20
 
-// maxPESBufBytes caps the PES reassembly buffer. A PES whose announced
-// length can never be satisfied (corrupt header, hostile/wrapped 16-bit
-// length) accumulates the stream's full bitrate until the host OOMs —
-// observed live: 95MB in 7 minutes on one 1.8Mbps stream. 4MB comfortably
-// exceeds any real access unit (8K IDR included).
-const maxPESBufBytes = 4 << 20
+// maxPendingPESBytes bounds how long a single PES reassembly may stay
+// PENDING (incomplete across feeds). PES_packet_length is a 16-bit field,
+// so a genuine straddling PES always completes within 65541 bytes; a pending
+// reassembly past that point is a structural parse failure (corrupt header,
+// false start code) that would otherwise retry at stream bitrate forever.
+// This is the mechanism behind the 2026-08-17 OOM (#390): a payload ending
+// in Annex-B trailing zeros abutting the next PES header read as a 4-byte
+// start code the parser then rejected every AU — the reassembly rode the
+// incomplete branch at full bitrate to 4MB+ and back, repeatedly, on two
+// live streams. (The trailing-zero mismatch itself is fixed in
+// findPSStartCode/parseVideoPES; this bound is the backstop.)
+const maxPendingPESBytes = 65541 + 4096
 
-// warnPESOverflow logs (once) that a PES reassembly was abandoned.
-func (d *PSDemuxer) warnPESOverflow(kind string, size int) {
+// warnPESOverflow logs (once) that a PES reassembly was abandoned, carrying
+// the offending leading bytes for remote diagnosis (#390).
+func (d *PSDemuxer) warnPESOverflow(kind string, size int, pesData []byte) {
 	if d.pesOverflowLogged {
 		return
 	}
 	d.pesOverflowLogged = true
-	logger.Warn("gb28181: PES reassembly exceeded cap — dropping and resyncing",
-		"kind", kind, "bytes", size, "cap", maxPESBufBytes)
+	head := pesData
+	if len(head) > 16 {
+		head = head[:16]
+	}
+	logger.Warn("gb28181: PES reassembly abandoned — dropping and resyncing",
+		"kind", kind, "bytes", size, "bound", maxPendingPESBytes,
+		"head", hex.EncodeToString(head))
 }
 
 // NewPSDemuxer creates a new MPEG-PS to H.264/H.265 NALU demuxer.
@@ -286,12 +299,12 @@ feedLoop:
 					// Incomplete PES (straddles the AU boundary). REPLACE the
 					// buffer — the data already includes previously buffered
 					// bytes (prepended above), so appending duplicates them.
-					// A PES that outgrew maxPESBufBytes is corrupt (its
-					// announced length can never be satisfied) — drop and
-					// resync at the next AU instead of buffering the
-					// stream's full bitrate forever (OOM, 2026-08-17).
-					if len(pesData) > maxPESBufBytes {
-						d.warnPESOverflow("audio", len(pesData))
+					// A pending reassembly past any legal 16-bit length is a
+					// structural failure — drop and resync at the next AU
+					// instead of buffering the stream's bitrate forever (OOM,
+					// 2026-08-17 / #390).
+					if len(pesData) > maxPendingPESBytes {
+						d.warnPESOverflow("audio", len(pesData), pesData)
 						d.audioPesBuf = nil
 						break feedLoop
 					}
@@ -311,12 +324,14 @@ feedLoop:
 					// mid-AU flush). REPLACE the reassembly buffer with the
 					// PES-so-far slice — data already starts with the
 					// previously buffered bytes (prepended below), so
-					// appending would duplicate them. Same overflow cap as
-					// the audio path — measured in the wild: one stream's
+					// appending would duplicate them. Same bounds as the
+					// audio path — measured in the wild: one stream's
 					// videoPesBuf grew at the full stream bitrate until
-					// the box OOM'd.
-					if len(pesData) > maxPESBufBytes {
-						d.warnPESOverflow("video", len(pesData))
+					// the box OOM'd (#390, root cause: trailing-zero
+					// payloads forming 4-byte start codes the parser
+					// rejected — fixed; the bounds remain as backstops).
+					if len(pesData) > maxPendingPESBytes {
+						d.warnPESOverflow("video", len(pesData), pesData)
 						d.videoPesBuf = nil
 						break feedLoop
 					}

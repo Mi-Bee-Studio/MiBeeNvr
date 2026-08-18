@@ -727,13 +727,10 @@ curl http://localhost:9090/api/cameras/front-door/health
 ## Screenshots
 
 *Relay configuration interface in web UI*
-![Relay Configuration](docs/images/relay-config.png)
 
 *Real-time relay status dashboard*
-![Relay Status](docs/images/relay-dashboard.png)
 
 *Platform preset management*
-![Preset Management](docs/images/relay-presets.png)
 
 ---
 
