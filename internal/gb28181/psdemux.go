@@ -1,8 +1,8 @@
 package gb28181
 
 import (
+	"encoding/hex"
 	"errors"
-	"fmt"
 	"slices"
 )
 
@@ -170,7 +170,7 @@ func (d *PSDemuxer) warnPESOverflow(kind string, size int, pesData []byte) {
 	}
 	logger.Warn("gb28181: PES reassembly abandoned — dropping and resyncing",
 		"kind", kind, "bytes", size, "bound", maxPendingPESBytes,
-		"head", fmt.Sprintf("%x", head))
+		"head", hex.EncodeToString(head))
 }
 
 // NewPSDemuxer creates a new MPEG-PS to H.264/H.265 NALU demuxer.
