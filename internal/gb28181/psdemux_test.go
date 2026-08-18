@@ -639,32 +639,47 @@ func TestVideoPesBufCap(t *testing.T) {
 }
 
 // TestPSDemuxer_TrailingZeroPayloadBeforePES reproduces the #390 OOM root
-// cause: a video PES whose payload ends in trailing zeros (legal Annex-B
-// trailing_zero_8bytes) abutting the next PES header forms 00 00 00 01 E0,
-// which findPSStartCode accepted as a 4-byte start code while parseVideoPES
-// rejected the prefix — the reassembly then retried at stream bitrate forever.
-// Both PES payloads must demux cleanly.
+// cause. In-order parsing skips complete PES packets by their declared
+// length, so payload bytes are only ever SCANNED on a resync path (RTP loss
+// mis-aligning a PES extent, joining mid-stream). From inside a payload, a
+// NALU ending in trailing zeros (legal Annex-B trailing_zero_8bytes) abuts
+// the next PES header as ...00 00 00 00 01 E0 — findPSStartCode matched the
+// 4-byte form at an EARLIER index than the true 3-byte header, and
+// parseVideoPES then rejected the prefix on every AU, wedging the
+// reassembly at stream bitrate forever. The resync must recover at the real
+// PES instead.
 func TestPSDemuxer_TrailingZeroPayloadBeforePES(t *testing.T) {
 	d := NewPSDemuxer()
 
-	nalu1 := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x11, 0x22, 0x33, 0x00, 0x00} // ends in two zeros
+	// Orphan ES bytes (the tail of a PES lost upstream) ending in two zeros,
+	// immediately followed by a well-formed video PES.
+	orphan := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x11, 0x22, 0x33, 0x00, 0x00}
 	nalu2 := []byte{0x00, 0x00, 0x00, 0x01, 0x41, 0xAA, 0xBB}
-
-	// PES1: 00 00 01 E0 | len | header(9) | nalu1   (payload ends ...00 00)
-	p1 := append([]byte{0x00, 0x00, 0x01, 0xE0, 0x00, byte(3 + len(nalu1)), 0x80, 0x00, 0x00}, nalu1...)
-	// PES2 immediately follows: ...00 00 | 00 00 01 E0 → byte stream holds
-	// 00 00 00 00 01 E0 at the seam.
 	p2 := append([]byte{0x00, 0x00, 0x01, 0xE0, 0x00, byte(3 + len(nalu2)), 0x80, 0x00, 0x00}, nalu2...)
 
-	nalus, err := d.FeedAU(append(append([]byte{}, p1...), p2...), 9000, true)
+	au := append(append([]byte{}, orphan...), p2...)
+	nalus, err := d.FeedAU(au, 9000, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(nalus) != 2 {
-		t.Fatalf("expected 2 NALUs (trailing-zero seam must not wedge reassembly), got %d", len(nalus))
+	if len(nalus) != 1 {
+		t.Fatalf("resync must deliver the PES payload NALU, got %d NALUs", len(nalus))
+	}
+	if nalus[0][0] != 0x41 {
+		t.Fatalf("expected the P-frame NALU, got %#x", nalus[0][0])
 	}
 	if len(d.videoPesBuf) != 0 {
 		t.Fatalf("videoPesBuf must stay empty, has %d bytes", len(d.videoPesBuf))
+	}
+
+	// And the wedged-retry pathology must not return on subsequent AUs.
+	for range 3 {
+		if _, err := d.FeedAU(au, 9000, true); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.videoPesBuf) != 0 {
+			t.Fatalf("videoPesBuf must not accumulate across AUs, has %d bytes", len(d.videoPesBuf))
+		}
 	}
 }
 
