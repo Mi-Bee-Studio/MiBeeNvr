@@ -34,6 +34,10 @@ const notifyScanInterval = 10 * time.Second
 func (s *Service) onSubscribe(req sip.Request, _ sip.ServerTransaction) {
 	event := ""
 	for _, h := range req.GetHeaders("Event") {
+		if e, ok := h.(*sip.Event); ok {
+			event = strings.TrimSpace(e.Value())
+			break
+		}
 		if g, ok := h.(*sip.GenericHeader); ok {
 			event = strings.TrimSpace(g.Contents)
 			break
@@ -41,14 +45,19 @@ func (s *Service) onSubscribe(req sip.Request, _ sip.ServerTransaction) {
 	}
 	expires := 3600
 	for _, h := range req.GetHeaders("Expires") {
-		if g, ok := h.(*sip.GenericHeader); ok {
-			if v := strings.TrimSpace(g.Contents); v != "" {
+		switch hv := h.(type) {
+		case *sip.Expires:
+			if *hv > 0 {
+				expires = int(*hv)
+			}
+		case *sip.GenericHeader:
+			if v := strings.TrimSpace(hv.Contents); v != "" {
 				if n, err := strconv.Atoi(v); err == nil && n > 0 {
 					expires = n
 				}
 			}
-			break
 		}
+		break
 	}
 	if !strings.Contains(event, "catalog") {
 		zero := sip.Expires(0)
