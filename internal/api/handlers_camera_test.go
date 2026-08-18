@@ -622,3 +622,73 @@ func TestHandleListCameras_GB28181_EncodingBackfill(t *testing.T) {
 	require.Equal(t, "cam-gb28181-backfill", cameras[0].ID)
 	require.Equal(t, "h264", cameras[0].Encoding, "GB28181 recorder must backfill encoding via HLSProvider")
 }
+
+// --- protocol+encoding write-boundary validation (#402) ---
+
+// TestCreateCamera_XiaomiDefaultsEncodingHint: the UI omits encoding for
+// auto-detect protocols (xiaomi) — the API must persist the h264 hint, not an
+// empty encoding. An empty encoding passed the API write path since v0.10.0
+// but failed startup validation fatally on the next restart (Docker update
+// brick, #402).
+func TestCreateCamera_XiaomiDefaultsEncodingHint(t *testing.T) {
+	h := setupDedupHandler(t)
+
+	body := `{"name":"Xiaomi Cam","protocol":"xiaomi","url":"xiaomi://123456789"}`
+	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+
+	var created struct {
+		ID string `json:"id"`
+	}
+	parseJSON(t, rr, &created)
+	cfg := h.camMgr.GetCameraConfig(created.ID)
+	require.NotNil(t, cfg, "created camera must be in the manager config")
+	require.Equal(t, "h264", cfg.Encoding, "xiaomi cameras must get the h264 hint, never an empty encoding")
+}
+
+// TestCreateCamera_RejectsInvalidEncodingCombo: the create API enforces the
+// same protocol+encoding rules as startup validation, so a non-UI client
+// cannot save a combo (rtmp+h265) that bricks the next restart.
+func TestCreateCamera_RejectsInvalidEncodingCombo(t *testing.T) {
+	h := setupDedupHandler(t)
+
+	body := `{"name":"RTMP Cam","protocol":"rtmp","encoding":"h265","stream_key":"k1"}`
+	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code, "body: %s", rr.Body.String())
+	require.Contains(t, rr.Body.String(), "not valid for protocol")
+}
+
+// TestUpdateCamera_RejectsInvalidEncodingCombo: updating the encoding alone is
+// validated against the camera's current protocol; a valid combo passes.
+func TestUpdateCamera_RejectsInvalidEncodingCombo(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: store.RootDir(), SegmentDuration: "30s"},
+		Cameras: []config.CameraConfig{{
+			ID:       "cam-xiaomi-update",
+			Name:     "Xiaomi",
+			Protocol: "xiaomi",
+			Encoding: "h264",
+			URL:      "xiaomi://123456789",
+		}},
+	}
+	camMgr := camera.NewCameraManager(cfg, store, db, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, camMgr.Start(ctx))
+	t.Cleanup(func() { _ = camMgr.Stop() })
+
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+
+	// jpeg is not a valid xiaomi encoding → 400, nothing persisted.
+	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam-xiaomi-update", bytes.NewReader([]byte(`{"encoding":"jpeg"}`)), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code, "body: %s", rr.Body.String())
+	require.Equal(t, "h264", camMgr.GetCameraConfig("cam-xiaomi-update").Encoding)
+
+	// h265 is a valid hint for xiaomi → accepted.
+	rr = doRequest(t, h.Routes(), "PUT", "/api/cameras/cam-xiaomi-update", bytes.NewReader([]byte(`{"encoding":"h265"}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+	require.Equal(t, "h265", camMgr.GetCameraConfig("cam-xiaomi-update").Encoding)
+}
