@@ -851,3 +851,52 @@ func (h *Handler) handleGB28181CascadeStatus(w http.ResponseWriter, _ *http.Requ
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// handleChannelDeviceControl sends a non-PTZ DeviceControl instruction to a
+// channel (#379): remote record start/stop, arm/disarm, alarm reset, reboot,
+// home-position reset. TeleBoot requires confirm=true (destructive).
+func (h *Handler) handleChannelDeviceControl(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "id")
+	var req struct {
+		Command string `json:"command"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	type ctrl struct {
+		element, value string
+		needsConfirm   bool
+	}
+	cmds := map[string]ctrl{
+		"record":        {element: "RecordCmd", value: "Record"},
+		"stop_record":   {element: "RecordCmd", value: "StopRecord"},
+		"set_guard":     {element: "GuardCmd", value: "SetGuard"},
+		"reset_guard":   {element: "GuardCmd", value: "ResetGuard"},
+		"reset_alarm":   {element: "AlarmCmd", value: "ResetAlarm"},
+		"home_position": {element: "HomePosition", value: "1"},
+		"tele_boot":     {element: "TeleBoot", value: "Boot", needsConfirm: true},
+	}
+	c, ok := cmds[req.Command]
+	if !ok {
+		WriteError(w, http.StatusBadRequest, "unknown command: record, stop_record, set_guard, reset_guard, reset_alarm, home_position, tele_boot")
+		return
+	}
+	if c.needsConfirm && !req.Confirm {
+		WriteError(w, http.StatusBadRequest, "tele_boot reboots the device — retry with confirm=true")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	if err := h.gb28181PTZ.SendDeviceControl(channelID, c.element, c.value); err != nil {
+		slog.Warn("GB28181 device control failed", "channel_id", channelID, "command", req.Command, "error", err)
+		WriteError(w, http.StatusBadGateway, "device control failed: "+err.Error())
+		return
+	}
+	slog.Info("GB28181 device control sent", "channel_id", channelID, "command", req.Command)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "control_sent", "command": req.Command})
+}

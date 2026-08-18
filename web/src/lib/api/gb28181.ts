@@ -135,3 +135,17 @@ export interface GB28181CascadeStatus {
 export async function getGB28181CascadeStatus(): Promise<GB28181CascadeStatus> {
   return apiRequest<GB28181CascadeStatus>('/gb28181/cascade/status');
 }
+
+/** Send a non-PTZ DeviceControl to a channel (#379): record | stop_record |
+ * set_guard | reset_guard | reset_alarm | home_position | tele_boot. */
+export async function sendGB28181DeviceControl(
+  channelId: string,
+  command: string,
+  confirm = false,
+): Promise<void> {
+  await apiRequest(`/gb28181/channels/${encodeURIComponent(channelId)}/control`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, confirm }),
+  });
+}

@@ -172,17 +172,21 @@ type RecordItem struct {
 }
 
 // DeviceControl is a platform-to-device Control message. PTZCmd carries the
-// 8-byte GB/T 28181 § A.4 PTZ command (XML-escaped binary), and other
-// controls (record, guard, alarm, home) are expressed via the respective
-// optional fields.
+// 8-byte GB/T 28181 § A.4 PTZ command (XML-escaped binary); the other
+// management controls are expressed via their respective optional fields
+// (§ 9.3.2): RecordCmd ("Record"/"StopRecord"), GuardCmd ("SetGuard"/
+// "ResetGuard"), AlarmCmd ("ResetAlarm"), TeleBoot ("Boot"), HomePosition.
 type DeviceControl struct {
 	XMLName      xml.Name `xml:"Control"`
 	CmdType      CmdType  `xml:"CmdType"`
 	SN           int      `xml:"SN"`
 	DeviceID     string   `xml:"DeviceID"`
-	PTZCmd       string   `xml:"PTZCmd"`
-	HomePosition string   `xml:"HomePosition"`
-	TeleCmd      string   `xml:"TeleCmd"`
+	PTZCmd       string   `xml:"PTZCmd,omitempty"`
+	HomePosition string   `xml:"HomePosition,omitempty"`
+	TeleBoot     string   `xml:"TeleBoot,omitempty"`
+	RecordCmd    string   `xml:"RecordCmd,omitempty"`
+	GuardCmd     string   `xml:"GuardCmd,omitempty"`
+	AlarmCmd     string   `xml:"AlarmCmd,omitempty"`
 	// Attribute-form aliases (see Catalog).
 	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
 	SNAttr      int     `xml:"SN,attr,omitempty"`
