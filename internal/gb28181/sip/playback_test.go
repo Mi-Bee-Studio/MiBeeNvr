@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/stretchr/testify/require"
 )
@@ -79,4 +80,28 @@ func TestPlaybackControlValidation(t *testing.T) {
 	// (no dialog installed) — the state transition is what callers check.
 	_ = s.PlaybackControl("ch", "pause", 0, 0)
 	require.True(t, s.playbacks["ch"].paused)
+}
+
+// stopCountingSink is an AUWriter+Stopper test double.
+type stopCountingSink struct{ stopped int }
+
+func (s *stopCountingSink) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {}
+func (s *stopCountingSink) Stop() error                                       { s.stopped++; return nil }
+
+// TestCountingSinkForwardsStop: the session teardown asserts Stopper on its
+// sink — the counting wrapper must forward Stop to the recorder or a
+// full-speed download (finishing inside one segment) persists nothing.
+func TestCountingSinkForwardsStop(t *testing.T) {
+	inner := &stopCountingSink{}
+	c := &countingSink{inner: inner}
+	st, ok := interface{}(c).(gb28181.Stopper)
+	if !ok {
+		t.Fatal("countingSink must satisfy gb28181.Stopper")
+	}
+	if err := st.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if inner.stopped != 1 {
+		t.Fatalf("Stop not forwarded, stopped=%d", inner.stopped)
+	}
 }

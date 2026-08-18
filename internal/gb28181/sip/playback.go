@@ -571,3 +571,15 @@ func (c *countingSink) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 	c.frames.Add(1)
 	c.lastPTS.Store(ptsTicks)
 }
+
+// Stop forwards teardown to the wrapped recorder. Without this the session's
+// Stopper assertion misses and the recorder is never finalized — segment
+// duration closes hide it on 1x playbacks (only the tail segment leaks), but
+// a full-speed download finishes inside one segment and would persist
+// NOTHING (#378 live repro: 0-byte .tmp, no recordings row).
+func (c *countingSink) Stop() error {
+	if s, ok := c.inner.(gb28181.Stopper); ok {
+		return s.Stop()
+	}
+	return nil
+}
