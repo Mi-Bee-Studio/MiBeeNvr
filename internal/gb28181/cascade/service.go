@@ -49,6 +49,16 @@ type CameraSource interface {
 	Hub(cameraID string) *model.StreamHub
 }
 
+// upper is one upper-platform registration session (#370): its own REGISTER /
+// keepalive loop and online state over the shared SIP listener. The single
+// legacy config form becomes uppers[0]; gb28181_cascade.upstreams appends
+// more.
+type upper struct {
+	cfg    config.GB28181CascadeUpstream // resolved — defaults filled in
+	online bool
+	regTS  time.Time
+}
+
 // Service is the cascade client (pkg/app.Service "gb28181-cascade").
 type Service struct {
 	cfg config.GB28181CascadeConfig
@@ -63,20 +73,63 @@ type Service struct {
 
 	sn atomic.Int64 // MANSCDP sequence numbers
 
+	uppers []*upper // #370: one entry per upper platform
+
 	mu         sync.Mutex
 	sessions   map[string]*mediaSession    // SIP Call-ID → active live forward
 	playbacks  map[string]*playbackSession // SIP Call-ID → active playback dialog
-	online     bool
-	regTS      time.Time
+	subs       map[string]*catalogSub      // catalog subscriptions (SUBSCRIBE → NOTIFY, #370)
 	ptzForward PTZForwarder
 	gbLoc      *time.Location // GB naive-clock zone (nil → time.Local)
+}
+
+// buildUppers resolves the configured upper platforms: the legacy single form
+// (ServerAddr non-empty) first, then every upstreams[] entry with unset
+// fields inherited from the single form.
+func buildUppers(cfg config.GB28181CascadeConfig) []*upper {
+	var uppers []*upper
+	if cfg.ServerAddr != "" {
+		uppers = append(uppers, &upper{cfg: config.GB28181CascadeUpstream{
+			ServerDomain:      cfg.ServerDomain,
+			ServerAddr:        cfg.ServerAddr,
+			LocalDeviceID:     cfg.LocalDeviceID,
+			Realm:             cfg.Realm,
+			Password:          cfg.Password,
+			HeartbeatInterval: cfg.HeartbeatInterval,
+			RegisterExpires:   cfg.RegisterExpires,
+		}})
+	}
+	for _, u := range cfg.Upstreams {
+		if u.ServerAddr == "" {
+			continue
+		}
+		if u.LocalDeviceID == "" {
+			u.LocalDeviceID = cfg.LocalDeviceID
+		}
+		if u.Realm == "" {
+			u.Realm = cfg.Realm
+		}
+		if u.Password == "" {
+			u.Password = cfg.Password
+		}
+		if u.HeartbeatInterval == "" {
+			u.HeartbeatInterval = cfg.HeartbeatInterval
+		}
+		if u.RegisterExpires == 0 {
+			u.RegisterExpires = cfg.RegisterExpires
+		}
+		uppers = append(uppers, &upper{cfg: u})
+	}
+	return uppers
 }
 
 func New(cfg config.GB28181CascadeConfig, src CameraSource, db *storage.DB) *Service {
 	return &Service{
 		cfg: cfg, src: src, db: db,
+		uppers:    buildUppers(cfg),
 		sessions:  make(map[string]*mediaSession),
 		playbacks: make(map[string]*playbackSession),
+		subs:      make(map[string]*catalogSub),
 	}
 }
 
@@ -120,13 +173,10 @@ func (s *Service) Start(ctx context.Context) error {
 	// keeps the transaction layer quiet (dialog state lives in the media
 	// sessions map, keyed by Call-ID).
 	_ = srv.OnRequest(sip.ACK, func(_ sip.Request, _ sip.ServerTransaction) {})
-	// The upper platform may SUBSCRIBE to catalog changes; cascade v1 does
-	// not push NOTIFYs — answer 200 with Expires 0 so the upper falls back to
-	// its periodic catalog polling instead of retry-storming.
-	_ = srv.OnRequest(sip.SUBSCRIBE, func(req sip.Request, _ sip.ServerTransaction) {
-		zero := sip.Expires(0)
-		_, _ = srv.RespondOnRequest(req, 200, "OK", "", []sip.Header{&zero})
-	})
+	// The upper platform may SUBSCRIBE to catalog changes — catalog NOTIFYs
+	// push channel additions/removals without waiting for the upper's
+	// polling fallback (#370).
+	_ = srv.OnRequest(sip.SUBSCRIBE, s.onSubscribe)
 	_ = srv.OnRequest(sip.OPTIONS, func(req sip.Request, tx sip.ServerTransaction) {
 		allow := sip.AllowHeader{sip.REGISTER, sip.MESSAGE, sip.INVITE, sip.ACK, sip.BYE, sip.CANCEL, sip.OPTIONS}
 		_, _ = srv.RespondOnRequest(req, 200, "OK", "", []sip.Header{&allow})
@@ -135,10 +185,17 @@ func (s *Service) Start(ctx context.Context) error {
 	// messages; onInfo routes them to the channel's playback session.
 	_ = srv.OnRequest(sip.INFO, s.onInfo)
 
+	if len(s.uppers) == 0 {
+		return fmt.Errorf("gb28181-cascade: no upper platform configured (server_addr / upstreams)")
+	}
+	for _, u := range s.uppers {
+		s.wg.Add(1)
+		go s.registerLoop(u)
+	}
 	s.wg.Add(1)
-	go s.registerLoop()
+	go s.catalogNotifyLoop()
 	slog.Info("gb28181-cascade: started",
-		"listen", listen, "upper", s.cfg.ServerAddr, "device", s.cfg.LocalDeviceID)
+		"listen", listen, "uppers", len(s.uppers), "device", s.cfg.LocalDeviceID)
 	return nil
 }
 
@@ -160,7 +217,9 @@ func (s *Service) Stop() error {
 		playbacks = append(playbacks, ps)
 	}
 	s.playbacks = make(map[string]*playbackSession)
-	s.online = false
+	for _, u := range s.uppers {
+		u.online = false
+	}
 	s.mu.Unlock()
 	for _, ms := range sessions {
 		ms.stop()
@@ -169,7 +228,9 @@ func (s *Service) Stop() error {
 		ps.stop()
 	}
 	if s.srv != nil {
-		_ = s.sendRegister(0)
+		for _, u := range s.uppers {
+			_ = s.sendRegister(u, 0)
+		}
 		s.srv.Shutdown()
 	}
 	slog.Info("gb28181-cascade: stopped")
@@ -178,9 +239,9 @@ func (s *Service) Stop() error {
 
 // ---- registration & keepalive ----
 
-func (s *Service) registerLoop() {
+func (s *Service) registerLoop(u *upper) {
 	defer s.wg.Done()
-	expires := s.cfg.RegisterExpires
+	expires := u.cfg.RegisterExpires
 	if expires <= 0 {
 		expires = 3600
 	}
@@ -188,18 +249,19 @@ func (s *Service) registerLoop() {
 		if s.ctx.Err() != nil {
 			return
 		}
-		if err := s.sendRegister(expires); err != nil {
-			slog.Warn("gb28181-cascade: register failed, retrying", "error", err)
-			s.setOnline(false)
+		if err := s.sendRegister(u, expires); err != nil {
+			slog.Warn("gb28181-cascade: register failed, retrying",
+				"upper", u.cfg.ServerAddr, "error", err)
+			s.setOnline(u, false)
 			if !sleepCtx(s.ctx, 15*time.Second) {
 				return
 			}
 			continue
 		}
-		s.setOnline(true)
+		s.setOnline(u, true)
 		// Keepalive cadence while registered.
 		hb := 60 * time.Second
-		if d, err := time.ParseDuration(s.cfg.HeartbeatInterval); err == nil && d > 0 {
+		if d, err := time.ParseDuration(u.cfg.HeartbeatInterval); err == nil && d > 0 {
 			hb = d
 		}
 		reRegister := time.Duration(expires)*8/10*time.Second - hb
@@ -207,25 +269,26 @@ func (s *Service) registerLoop() {
 			if !sleepCtx(s.ctx, hb) {
 				return
 			}
-			if err := s.sendKeepalive(); err != nil {
+			if err := s.sendKeepalive(u); err != nil {
 				// A keepalive failure usually means the upper platform
 				// restarted (403 Device not registered) or vanished —
 				// re-REGISTER immediately instead of waiting out the
 				// Expires window.
-				slog.Warn("gb28181-cascade: keepalive failed — re-registering", "error", err)
-				s.setOnline(false)
+				slog.Warn("gb28181-cascade: keepalive failed — re-registering",
+					"upper", u.cfg.ServerAddr, "error", err)
+				s.setOnline(u, false)
 				break
 			}
 		}
 	}
 }
 
-func (s *Service) setOnline(v bool) {
+func (s *Service) setOnline(u *upper, v bool) {
 	s.mu.Lock()
-	changed := s.online != v
-	s.online = v
+	changed := u.online != v
+	u.online = v
 	if v {
-		s.regTS = time.Now()
+		u.regTS = time.Now()
 	}
 	s.mu.Unlock()
 	if changed {
@@ -233,7 +296,8 @@ func (s *Service) setOnline(v bool) {
 		if v {
 			state = "online"
 		}
-		slog.Info("gb28181-cascade: registration state", "state", state)
+		slog.Info("gb28181-cascade: registration state",
+			"upper", u.cfg.ServerAddr, "state", state)
 	}
 }
 
@@ -241,18 +305,29 @@ func (s *Service) setOnline(v bool) {
 func (s *Service) Online() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.online
+	for _, u := range s.uppers {
+		if u.online {
+			return true
+		}
+	}
+	return false
 }
 
-// RegistrationSince returns how long the current registration has been up
-// (ok=false when offline).
+// RegistrationSince returns how long the OLDEST live registration has been
+// up (ok=false when every upper is offline).
 func (s *Service) RegistrationSince() (time.Duration, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.online {
+	var oldest time.Time
+	for _, u := range s.uppers {
+		if u.online && (oldest.IsZero() || u.regTS.Before(oldest)) {
+			oldest = u.regTS
+		}
+	}
+	if oldest.IsZero() {
 		return 0, false
 	}
-	return time.Since(s.regTS), true
+	return time.Since(oldest), true
 }
 
 // ForwardCount returns the number of active media dialogs (live forwards +
@@ -263,14 +338,36 @@ func (s *Service) ForwardCount() int {
 	return len(s.sessions) + len(s.playbacks)
 }
 
-func (s *Service) upperAddr() (*net.UDPAddr, error) {
-	return net.ResolveUDPAddr("udp", s.cfg.ServerAddr)
+func upperAddr(u *upper) (*net.UDPAddr, error) {
+	return net.ResolveUDPAddr("udp", u.cfg.ServerAddr)
+}
+
+// upperOf resolves which upper platform an incoming request belongs to: the
+// From user of a platform's requests is its server ID (ServerDomain). Falls
+// back to the sole upper; unknown senders on a multi-upper deployment land
+// on the first (their dialogs still route by Call-ID).
+func (s *Service) upperOf(req sip.Request) *upper {
+	if len(s.uppers) == 0 {
+		return nil
+	}
+	if len(s.uppers) == 1 {
+		return s.uppers[0]
+	}
+	if from, ok := req.From(); ok {
+		user := from.Address.User().String()
+		for _, u := range s.uppers {
+			if u.cfg.ServerDomain == user {
+				return u
+			}
+		}
+	}
+	return s.uppers[0]
 }
 
 // buildCoreRequest assembles a REGISTER/MESSAGE request toward the upper
 // platform on the cascade's own SIP listening port.
-func (s *Service) buildCoreRequest(method sip.RequestMethod, localHost string, localPort int, body, contentType string) (sip.Request, error) {
-	dst, err := s.upperAddr()
+func (s *Service) buildCoreRequest(u *upper, method sip.RequestMethod, localHost string, localPort int, body, contentType string) (sip.Request, error) {
+	dst, err := upperAddr(u)
 	if err != nil {
 		return nil, err
 	}
@@ -278,17 +375,17 @@ func (s *Service) buildCoreRequest(method sip.RequestMethod, localHost string, l
 	rb := sip.NewRequestBuilder()
 	rb.SetMethod(method)
 	rb.SetFrom(&sip.Address{
-		Uri:    &sip.SipUri{FUser: sip.String{Str: s.cfg.LocalDeviceID}, FHost: localHost, FPort: &port},
+		Uri:    &sip.SipUri{FUser: sip.String{Str: u.cfg.LocalDeviceID}, FHost: localHost, FPort: &port},
 		Params: sip.NewParams().Add("tag", sip.String{Str: sip.GenerateBranch()}),
 	})
 	rb.SetTo(&sip.Address{
-		Uri: &sip.SipUri{FUser: sip.String{Str: s.cfg.ServerDomain}, FHost: dst.IP.String()},
+		Uri: &sip.SipUri{FUser: sip.String{Str: u.cfg.ServerDomain}, FHost: dst.IP.String()},
 	})
 	dstPort := sip.Port(dst.Port)
-	rb.SetRecipient(&sip.SipUri{FUser: sip.String{Str: s.cfg.ServerDomain}, FHost: dst.IP.String(), FPort: &dstPort})
+	rb.SetRecipient(&sip.SipUri{FUser: sip.String{Str: u.cfg.ServerDomain}, FHost: dst.IP.String(), FPort: &dstPort})
 	rb.SetHost(localHost)
 	rb.SetContact(&sip.Address{
-		Uri: &sip.SipUri{FUser: sip.String{Str: s.cfg.LocalDeviceID}, FHost: localHost, FPort: &port},
+		Uri: &sip.SipUri{FUser: sip.String{Str: u.cfg.LocalDeviceID}, FHost: localHost, FPort: &port},
 	})
 	rb.AddVia(&sip.ViaHop{
 		Host: localHost,
@@ -308,12 +405,15 @@ func (s *Service) buildCoreRequest(method sip.RequestMethod, localHost string, l
 	return rb.Build()
 }
 
-func (s *Service) localHostPort() (string, int) {
+func (s *Service) localHostPort(u *upper) (string, int) {
 	listen := s.cfg.SIPListen
 	if listen == "" {
 		listen = ":5061"
 	}
-	if dst, err := s.upperAddr(); err == nil {
+	if u == nil {
+		return "127.0.0.1", 5061
+	}
+	if dst, err := upperAddr(u); err == nil {
 		// Route via the interface that reaches the upper platform.
 		if conn, err := net.DialUDP("udp", nil, dst); err == nil {
 			defer func() { _ = conn.Close() }()
@@ -336,12 +436,12 @@ func (s *Service) localHostPort() (string, int) {
 
 // sendRegister performs the REGISTER + digest challenge round. expires=0
 // unregisters.
-func (s *Service) sendRegister(expires int) error {
+func (s *Service) sendRegister(u *upper, expires int) error {
 	if s.srv == nil {
 		return fmt.Errorf("not started")
 	}
-	host, port := s.localHostPort()
-	req, err := s.buildCoreRequest(sip.REGISTER, host, port, "", "")
+	host, port := s.localHostPort(u)
+	req, err := s.buildCoreRequest(u, sip.REGISTER, host, port, "", "")
 	if err != nil {
 		return err
 	}
@@ -353,11 +453,11 @@ func (s *Service) sendRegister(expires int) error {
 		return err
 	}
 	if resp.StatusCode() == 401 {
-		auth, err2 := s.digestFrom(resp, req)
+		auth, err2 := s.digestFrom(u, resp, req)
 		if err2 != nil {
 			return err2
 		}
-		req2, err2 := s.buildCoreRequest(sip.REGISTER, host, port, "", "")
+		req2, err2 := s.buildCoreRequest(u, sip.REGISTER, host, port, "", "")
 		if err2 != nil {
 			return err2
 		}
@@ -378,7 +478,7 @@ func (s *Service) sendRegister(expires int) error {
 var challengeRe = regexp.MustCompile(`(\w+)\s*=\s*"([^"]+)"`)
 
 // digestFrom computes the Authorization header for a 401 challenge.
-func (s *Service) digestFrom(resp sip.Response, origReq sip.Request) (sip.Header, error) {
+func (s *Service) digestFrom(u *upper, resp sip.Response, origReq sip.Request) (sip.Header, error) {
 	var hdrVal string
 	for _, h := range resp.GetHeaders("WWW-Authenticate") {
 		if g, ok := h.(*sip.GenericHeader); ok {
@@ -395,20 +495,20 @@ func (s *Service) digestFrom(resp sip.Response, origReq sip.Request) (sip.Header
 	}
 	realm := vals["realm"]
 	if realm == "" {
-		realm = s.cfg.Realm
+		realm = u.cfg.Realm
 	}
 	nonce := vals["nonce"]
 	if nonce == "" {
 		return nil, fmt.Errorf("challenge without nonce")
 	}
 
-	uri := fmt.Sprintf("sip:%s@%s", s.cfg.ServerDomain, addrHost(s.cfg.ServerAddr))
-	ha1 := md5hex(s.cfg.LocalDeviceID, realm, s.cfg.Password)
+	uri := fmt.Sprintf("sip:%s@%s", u.cfg.ServerDomain, addrHost(u.cfg.ServerAddr))
+	ha1 := md5hex(u.cfg.LocalDeviceID, realm, u.cfg.Password)
 	ha2 := md5hex("REGISTER", uri)
 	response := md5hex(ha1, nonce, ha2)
 
 	value := fmt.Sprintf(`Digest realm="%s",algorithm=MD5,nonce="%s",username="%s",uri="%s",response="%s"`,
-		realm, nonce, s.cfg.LocalDeviceID, uri, response)
+		realm, nonce, u.cfg.LocalDeviceID, uri, response)
 	return &sip.GenericHeader{HeaderName: "Authorization", Contents: value}, nil
 }
 
@@ -445,18 +545,18 @@ func (s *Service) request(req sip.Request) (sip.Response, error) {
 	}
 }
 
-func (s *Service) sendKeepalive() error {
+func (s *Service) sendKeepalive(u *upper) error {
 	body, err := manscdp.Encode(manscdp.Keepalive{
 		CmdType:  manscdp.CmdKeepalive,
 		SN:       int(s.sn.Add(1)),
-		DeviceID: s.cfg.LocalDeviceID,
+		DeviceID: u.cfg.LocalDeviceID,
 		Status:   "OK",
 	})
 	if err != nil {
 		return err
 	}
-	host, port := s.localHostPort()
-	req, err := s.buildCoreRequest(sip.MESSAGE, host, port, string(body), "Application/MANSCDP+xml")
+	host, port := s.localHostPort(u)
+	req, err := s.buildCoreRequest(u, sip.MESSAGE, host, port, string(body), "Application/MANSCDP+xml")
 	if err != nil {
 		return err
 	}
@@ -479,23 +579,24 @@ func (s *Service) onMessage(req sip.Request, _ sip.ServerTransaction) {
 		return
 	}
 	_, _ = s.srv.RespondOnRequest(req, 200, "OK", "", nil)
+	u := s.upperOf(req)
 	switch cmd {
 	case manscdp.CmdCatalog:
 		// Queries (root <Query>) come from the upper platform; Response-root
 		// Catalogs are other devices' answers and never reach the cascade.
 		if q, ok := payload.(manscdp.CatalogQuery); ok && q.SN > 0 {
-			s.answerCatalog(q.SN)
+			s.answerCatalog(u, q.SN)
 		}
 	case manscdp.CmdDeviceInfo:
 		if d, ok := payload.(manscdp.DeviceInfo); ok && d.SN > 0 {
-			s.answerDeviceInfo(d.SN)
+			s.answerDeviceInfo(u, d.SN)
 		}
 	case manscdp.CmdRecordInfo:
 		// Root <Query> carries CmdType RecordInfo (decoded as
 		// RecordInfoQuery); the Response-root form is a device answer that
 		// never reaches the cascade.
 		if q, ok := payload.(manscdp.RecordInfoQuery); ok && q.SN > 0 {
-			go s.answerRecordInfo(q)
+			go s.answerRecordInfo(u, q)
 		}
 	case manscdp.CmdDeviceControl:
 		if dc, ok := payload.(manscdp.DeviceControl); ok {
@@ -504,7 +605,7 @@ func (s *Service) onMessage(req sip.Request, _ sip.ServerTransaction) {
 	}
 }
 
-func (s *Service) answerCatalog(sn int) {
+func (s *Service) answerCatalog(u *upper, sn int) {
 	items, err := s.catalogItems()
 	if err != nil {
 		slog.Warn("gb28181-cascade: catalog build failed", "error", err)
@@ -513,39 +614,39 @@ func (s *Service) answerCatalog(sn int) {
 	body, err := manscdp.Encode(manscdp.Catalog{
 		CmdType:  manscdp.CmdCatalog,
 		SN:       sn,
-		DeviceID: s.cfg.LocalDeviceID,
+		DeviceID: u.cfg.LocalDeviceID,
 		SumNum:   len(items),
 		Item:     items,
 	})
 	if err != nil {
 		return
 	}
-	if err := s.sendMessageBody(body, "Application/MANSCDP+xml"); err != nil {
+	if err := s.sendMessageBodyTo(u, body, "Application/MANSCDP+xml"); err != nil {
 		slog.Warn("gb28181-cascade: catalog response failed", "channels", len(items), "error", err)
 	} else {
 		slog.Info("gb28181-cascade: catalog response sent", "channels", len(items))
 	}
 }
 
-func (s *Service) answerDeviceInfo(sn int) {
+func (s *Service) answerDeviceInfo(u *upper, sn int) {
 	body, err := manscdp.Encode(manscdp.DeviceInfo{
 		CmdType:      manscdp.CmdDeviceInfo,
 		SN:           sn,
-		DeviceID:     s.cfg.LocalDeviceID,
+		DeviceID:     u.cfg.LocalDeviceID,
 		DeviceName:   "MiBee NVR",
 		Manufacturer: "MiBee",
 		Model:        "MiBeeNvr",
 	})
 	if err == nil {
-		if err := s.sendMessageBody(body, "Application/MANSCDP+xml"); err != nil {
+		if err := s.sendMessageBodyTo(u, body, "Application/MANSCDP+xml"); err != nil {
 			slog.Warn("gb28181-cascade: deviceinfo response failed", "error", err)
 		}
 	}
 }
 
-func (s *Service) sendMessageBody(body []byte, contentType string) error {
-	host, port := s.localHostPort()
-	req, err := s.buildCoreRequest(sip.MESSAGE, host, port, string(body), contentType)
+func (s *Service) sendMessageBodyTo(u *upper, body []byte, contentType string) error {
+	host, port := s.localHostPort(u)
+	req, err := s.buildCoreRequest(u, sip.MESSAGE, host, port, string(body), contentType)
 	if err != nil {
 		return err
 	}

@@ -28,6 +28,7 @@ type mediaSession struct {
 	callID  string
 	channel string // GB channel ID the upper platform INVITEd
 	camera  string // local camera ID
+	upper   *upper // owning upper platform (#370 dialog routing)
 
 	conn *net.UDPConn
 	dst  *net.UDPAddr
@@ -38,6 +39,11 @@ type mediaSession struct {
 	subID     string
 	sdpBody   string
 	codecHint string
+	// withAudio: the upper's INVITE carried an audio m-line — hub audio
+	// frames are PS-muxed alongside video (#370).
+	withAudio    bool
+	audioSubID   string
+	audioLawWarn bool // one-shot: audio present but law unknown/unsupported
 
 	closed atomic.Bool
 }
@@ -175,8 +181,10 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 
 	ms := &mediaSession{
 		svc: s, callID: callID, channel: channelID, camera: cameraID,
-		conn: conn, dst: dst, ssrc: sd.ssrc,
-		mux: psmux.New(),
+		upper: s.upperOf(req),
+		conn:  conn, dst: dst, ssrc: sd.ssrc,
+		mux:       psmux.New(),
+		withAudio: strings.Contains(string(req.Body()), "m=audio"),
 	}
 	if cam, ok := s.cameraInfo(cameraID); ok && cam.Encoding != "" {
 		ms.codecHint = cam.Encoding
@@ -224,12 +232,12 @@ func bareCallID(callID string) string {
 }
 
 func (ms *mediaSession) localHost() string {
-	h, _ := ms.svc.localHostPort()
+	h, _ := ms.svc.localHostPort(ms.upper)
 	return h
 }
 
 func (ms *mediaSession) localPort() int {
-	_, p := ms.svc.localHostPort()
+	_, p := ms.svc.localHostPort(ms.upper)
 	return p
 }
 
@@ -263,6 +271,42 @@ func (ms *mediaSession) run(hub *model.StreamHub) {
 		return
 	}
 	ms.subID = subID
+
+	// Audio upstream (#370): when the upper INVITEd with an audio m-line,
+	// subscribe to the hub's audio and PS-mux frames alongside video. Only
+	// law-specific G.711 is forwardable — PS stream types distinguish A-law
+	// (0x90) from μ-law (0x91), and legacy producers still broadcasting the
+	// unspecified "g711" codec are skipped rather than sent under a guessed
+	// law (wrong-law audio is loud noise).
+	if !ms.withAudio {
+		return
+	}
+	audioSubID := subID + "-audio"
+	if err := hub.SubscribeAudio(audioSubID, func(pts int64, codec model.AudioCodec, data []byte) {
+		if ms.closed.Load() || len(data) == 0 {
+			return
+		}
+		switch string(codec) {
+		case "g711a":
+			ms.mux.SetAudioCodec("g711a")
+		case "g711u":
+			ms.mux.SetAudioCodec("g711u")
+		default:
+			if !ms.audioLawWarn {
+				ms.audioLawWarn = true
+				slog.Warn("gb28181-cascade: audio codec not forwardable over PS — skipped",
+					"camera", ms.camera, "codec", string(codec))
+			}
+			return
+		}
+		if err := ms.rtp.Send(ms.mux.WriteAudio(data, pts), pts); err != nil {
+			ms.teardown("audio send error")
+		}
+	}); err != nil {
+		slog.Warn("gb28181-cascade: hub audio subscribe failed", "camera", ms.camera, "error", err)
+		return
+	}
+	ms.audioSubID = audioSubID
 }
 
 // onBye tears a forward or playback dialog down when the upper platform
@@ -299,12 +343,16 @@ func (ms *mediaSession) teardown(reason string) {
 	delete(ms.svc.sessions, ms.callID)
 	ms.svc.mu.Unlock()
 	ms.close()
-	ms.svc.sendBye(ms.callID, ms.channel)
+	ms.svc.sendBye(ms.upper, ms.callID, ms.channel)
 }
 
 func (ms *mediaSession) close() {
 	ms.closed.Store(true)
 	if hub := ms.svc.src.Hub(ms.camera); hub != nil {
+		if ms.audioSubID != "" {
+			hub.UnsubscribeAudio(ms.audioSubID)
+			ms.audioSubID = ""
+		}
 		if ms.subID != "" {
 			hub.Unsubscribe(ms.subID)
 		}
@@ -322,20 +370,20 @@ func (ms *mediaSession) stop() {
 
 // sendBye delivers an in-dialog BYE for an ended forward or playback
 // dialog. Best-effort.
-func (s *Service) sendBye(callID, channelID string) {
-	if s.srv == nil {
+func (s *Service) sendBye(u *upper, callID, channelID string) {
+	if s.srv == nil || u == nil {
 		return
 	}
-	dst, err := s.upperAddr()
+	dst, err := upperAddr(u)
 	if err != nil {
 		return
 	}
-	host, port := s.localHostPort()
+	host, port := s.localHostPort(u)
 	p := sip.Port(port)
 	dstPort := sip.Port(dst.Port)
 	rb := sip.NewRequestBuilder()
 	rb.SetMethod(sip.BYE)
-	rb.SetFrom(&sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: s.cfg.LocalDeviceID}, FHost: host, FPort: &p}})
+	rb.SetFrom(&sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: u.cfg.LocalDeviceID}, FHost: host, FPort: &p}})
 	rb.SetTo(&sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: dst.IP.String()}})
 	rb.SetRecipient(&sip.SipUri{FUser: sip.String{Str: channelID}, FHost: dst.IP.String(), FPort: &dstPort})
 	cid := sip.CallID(bareCallID(callID))

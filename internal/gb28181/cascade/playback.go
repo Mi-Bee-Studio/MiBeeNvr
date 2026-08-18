@@ -36,12 +36,14 @@ const pbMaxWindow = 24 * time.Hour
 // playbackSession is one s=Playback dialog: local recordings → psmux →
 // RTP/UDP toward the upper platform's receive address.
 type playbackSession struct {
-	svc     *Service
-	callID  string
-	channel string // GB channel ID the upper platform INVITEd
-	camera  string // local camera ID
-	start   time.Time
-	end     time.Time
+	svc      *Service
+	callID   string
+	channel  string // GB channel ID the upper platform INVITEd
+	camera   string // local camera ID
+	upper    *upper // owning upper platform (#370 dialog routing)
+	start    time.Time
+	end      time.Time
+	download bool // s=Download: send at file speed, no 1x pacing (#378)
 
 	conn    *net.UDPConn
 	dst     *net.UDPAddr
@@ -103,9 +105,14 @@ func (s *Service) onPlaybackInvite(req sip.Request, callID, channelID string, sd
 		return
 	}
 
+	sdpName := "Playback"
+	if strings.EqualFold(sd.name, "Download") {
+		sdpName = "Download"
+	}
+	u := s.upperOf(req)
 	ps := &playbackSession{
 		svc: s, callID: callID, channel: channelID, camera: cameraID,
-		start: start, end: end,
+		upper: u, start: start, end: end, download: sdpName == "Download",
 		conn: conn, dst: dst, ssrc: sd.ssrc,
 		mux:  psmux.New(),
 		rtp:  psmux.NewRTPPacketizer(conn, dst, sd.ssrc, uint16(time.Now().UnixNano()&0xFFFF)),
@@ -155,12 +162,12 @@ func (s *Service) playbackRecordings(cameraID string, start, end time.Time) ([]m
 }
 
 func (ps *playbackSession) localHost() string {
-	h, _ := ps.svc.localHostPort()
+	h, _ := ps.svc.localHostPort(ps.upper)
 	return h
 }
 
 func (ps *playbackSession) localPort() int {
-	_, p := ps.svc.localHostPort()
+	_, p := ps.svc.localHostPort(ps.upper)
 	return p
 }
 
@@ -365,7 +372,7 @@ func (ps *playbackSession) finish(reason string, bye bool) {
 	ps.svc.mu.Unlock()
 	_ = ps.conn.Close()
 	if bye {
-		ps.svc.sendBye(ps.callID, ps.channel)
+		ps.svc.sendBye(ps.upper, ps.callID, ps.channel)
 	}
 	slog.Info("gb28181-cascade: playback ended",
 		"channel", ps.channel, "reason", reason,

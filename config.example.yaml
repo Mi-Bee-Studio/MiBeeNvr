@@ -380,6 +380,13 @@ observability:
 #   password: ""
 #   sip_listen: ":5061"            # cascade signaling port (coexists with 5060)
 #   register_expires: 3600
+#   # Multi-upstream (#370): additional upper platforms, each with its own
+#   # REGISTER/keepalive session over the shared sip_listen. Fields left empty
+#   # inherit the single-form values above.
+#   upstreams:
+#     - server_domain: "34020000002000000002"
+#       server_addr: "192.168.1.11:5060"
+#       local_device_id: "34020000001320000098"  # per-upper identity (optional)
 
 # Extensions — arbitrary key-value pairs for external module config passthrough.
 # MiBeeNvr core does NOT read or validate these. Use for out-of-module service
