@@ -59,7 +59,7 @@ func (s *Service) onSubscribe(req sip.Request, _ sip.ServerTransaction) {
 		}
 		break
 	}
-	if !strings.Contains(event, "catalog") {
+	if !strings.Contains(strings.ToLower(event), "catalog") {
 		zero := sip.Expires(0)
 		_, _ = s.srv.RespondOnRequest(req, 200, "OK", "", []sip.Header{&zero})
 		return
