@@ -787,6 +787,7 @@ func (h *Handler) registerGB28181Routes(r chi.Router) {
 			r.Post("/invite", h.handleInviteChannel)
 			r.Post("/bye", h.handleByeChannel)
 			r.Post("/ptz", h.handlePTZChannel)
+			r.Post("/control", h.handleChannelDeviceControl)
 			r.Get("/records", h.handleChannelRecords)
 			r.Post("/playback", h.handleChannelPlaybackStart)
 			r.Get("/playback", h.handleChannelPlaybackStatus)

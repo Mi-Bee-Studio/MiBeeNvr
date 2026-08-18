@@ -24,6 +24,7 @@
   import { showToast } from '$lib/toast';
   import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass, Server } from 'lucide-svelte';
   import GB28181DeviceRecords from '$lib/components/GB28181DeviceRecords.svelte';
+  import GB28181DeviceControl from '$lib/components/GB28181DeviceControl.svelte';
 
   // New components
   import FormatFilter from '../components/library/FormatFilter.svelte';
@@ -1227,6 +1228,7 @@ let selectedPresetCamera = $state<string>('');
         />
       {:else if viewMode === 'device'}
         <!-- ── Device-side recordings (GB28181 RecordInfo + fetch, #337) ── -->
+        <GB28181DeviceControl channelId={selectedGB28181Channel} />
         <GB28181DeviceRecords channelId={selectedGB28181Channel} />
       {/if}
     </div>
