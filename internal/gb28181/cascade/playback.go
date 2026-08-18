@@ -36,12 +36,12 @@ const pbMaxWindow = 24 * time.Hour
 // playbackSession is one s=Playback / s=Download dialog: local recordings →
 // psmux → RTP/UDP toward the upper platform's receive address.
 type playbackSession struct {
-	svc     *Service
-	callID  string
-	channel string // GB channel ID the upper platform INVITEd
-	camera  string // local camera ID
-	start   time.Time
-	end     time.Time
+	svc      *Service
+	callID   string
+	channel  string // GB channel ID the upper platform INVITEd
+	camera   string // local camera ID
+	start    time.Time
+	end      time.Time
 	download bool // s=Download: send at file speed, no 1x pacing (#378)
 
 	conn    *net.UDPConn

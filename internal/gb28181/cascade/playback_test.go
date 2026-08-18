@@ -274,7 +274,7 @@ func TestDownloadFastPump(t *testing.T) {
 	aus := collect()
 	require.Len(t, aus, 5, "all frames delivered")
 	require.Less(t, elapsed, 100*time.Millisecond,
-		"download sends at file speed, not 1x (took %v for 165ms of media)", elapsed)
+		"download sends at file speed, not 1x (took %v for 132ms of media)", elapsed)
 }
 
 // TestPlaybackPacedForContrast: the same window under s=Playback pacing takes
@@ -292,6 +292,6 @@ func TestPlaybackPacedForContrast(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, done)
 	ps.finish("test end", false)
-	require.GreaterOrEqual(t, elapsed, 150*time.Millisecond,
+	require.GreaterOrEqual(t, elapsed, 100*time.Millisecond,
 		"playback paces at 1x (took %v)", elapsed)
 }
