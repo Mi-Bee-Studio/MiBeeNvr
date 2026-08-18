@@ -125,6 +125,20 @@ func validateConfigDetails(cfg *Config) error {
 				return fmt.Errorf("camera[%d].onvif_endpoint has invalid format: %s", i, c.ONVIFEndpoint)
 			}
 		}
+		// Self-heal legacy xiaomi configs with an empty encoding (#402): since
+		// v0.10.0 the UI deliberately omits encoding for xiaomi cameras (the
+		// recorder probes H264/H265 from the MISS stream at runtime), but the
+		// add handler only started defaulting it — configs written in between
+		// hold encoding:"" which the strict protocol/encoding validation below
+		// rejects fatally at startup. Backfill the same h264 hint the add path
+		// now writes; the runtime codec probe corrects the label for H.265
+		// devices. Mirrors the onvif_endpoint auto-populate above.
+		if c.Protocol == string(model.ProtoXiaomi) && c.Encoding == "" {
+			// Write through the loop index — c is a copy (the onvif_endpoint
+			// auto-populate above mutates only its copy and never persists).
+			cfg.Cameras[i].Encoding = string(model.FormatH264)
+			c.Encoding = string(model.FormatH264)
+		}
 		// 0.10.0+: combined protocol strings (e.g. "rtsp_h264") are no longer
 		// accepted. protocol and encoding must be specified separately.
 		proto := c.Protocol
