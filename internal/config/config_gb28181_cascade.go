@@ -35,4 +35,37 @@ type GB28181CascadeConfig struct {
 	// RegisterExpires is the REGISTER lifetime in seconds (re-registered at
 	// 80%). Default 3600.
 	RegisterExpires int `yaml:"register_expires"`
+
+	// Upstreams declares ADDITIONAL upper platforms for multi-upstream
+	// cascade (#370): each entry runs its own REGISTER/keepalive session over
+	// the shared SIP listener, with independent online state. Fields left
+	// empty fall back to the single-form values above. The single form itself
+	// (ServerAddr non-empty) remains the first upstream.
+	Upstreams []GB28181CascadeUpstream `yaml:"upstreams,omitempty"`
+}
+
+// GB28181CascadeUpstream is one upper-platform entry of a multi-upstream
+// cascade (#370).
+type GB28181CascadeUpstream struct {
+	// ServerDomain is the upper platform's 20-digit GB ID.
+	ServerDomain string `yaml:"server_domain"`
+
+	// ServerAddr is the upper platform's SIP address, "host:port".
+	ServerAddr string `yaml:"server_addr"`
+
+	// LocalDeviceID is this NVR's device ID AT THAT platform — uppers may
+	// assign different IDs. Empty = the single-form LocalDeviceID.
+	LocalDeviceID string `yaml:"local_device_id,omitempty"`
+
+	// Realm is the digest realm. Empty = the single-form Realm.
+	Realm string `yaml:"realm,omitempty"`
+
+	// Password is the digest secret. Empty = the single-form Password.
+	Password string `yaml:"password,omitempty"`
+
+	// HeartbeatInterval overrides the keepalive cadence for this upstream.
+	HeartbeatInterval string `yaml:"heartbeat_interval,omitempty"`
+
+	// RegisterExpires overrides the REGISTER lifetime for this upstream.
+	RegisterExpires int `yaml:"register_expires,omitempty"`
 }

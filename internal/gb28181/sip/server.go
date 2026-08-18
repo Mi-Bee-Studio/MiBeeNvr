@@ -1268,7 +1268,17 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 			}
 		}
 	case manscdp.CmdCatalog:
-		p := payload.(manscdp.Catalog)
+		// Response-root over MESSAGE; Notify-root normally rides a NOTIFY
+		// request (handleNotify) but tolerate it here rather than panic.
+		if n, ok := payload.(manscdp.CatalogNotify); ok {
+			slog.Info("gb28181: catalog received (notify form)", "device", n.DeviceID, "channels", len(n.Item))
+			s.mergeCatalogChannels(n.DeviceID, n.Item)
+			break
+		}
+		p, ok := payload.(manscdp.Catalog)
+		if !ok {
+			break
+		}
 		slog.Info("gb28181: catalog received", "device", p.DeviceID, "channels", len(p.Item))
 		s.mergeCatalogChannels(p.DeviceID, p.Item)
 	case manscdp.CmdRecordInfo:

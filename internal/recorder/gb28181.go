@@ -381,8 +381,12 @@ func (r *GB28181Recorder) WriteAudio(codec string, data, config []byte, ptsTicks
 
 	if hub != nil {
 		switch codec {
-		case "g711a", "g711u":
-			hub.BroadcastAudio(ptsTicks, model.AudioG711, data)
+		case "g711a":
+			// Law-specific values keep the law observable downstream
+			// (cascade PS muxing maps A-law/μ-law to distinct stream types).
+			hub.BroadcastAudio(ptsTicks, model.AudioG711A, data)
+		case "g711u":
+			hub.BroadcastAudio(ptsTicks, model.AudioG711U, data)
 		case "aac":
 			hub.BroadcastAudio(ptsTicks, model.AudioAAC, data)
 		}

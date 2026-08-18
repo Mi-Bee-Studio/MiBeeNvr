@@ -270,9 +270,11 @@ const (
 type AudioCodec string
 
 const (
-	AudioAAC  AudioCodec = "aac"  // AAC audio codec
-	AudioG711 AudioCodec = "g711" // G.711 mu-law (PCMU) and a-law (PCMA)
-	AudioOpus AudioCodec = "opus" // Opus audio codec
+	AudioAAC   AudioCodec = "aac"   // AAC audio codec
+	AudioG711  AudioCodec = "g711"  // G.711, law unspecified (legacy producers)
+	AudioG711A AudioCodec = "g711a" // G.711 A-law (PCMA)
+	AudioG711U AudioCodec = "g711u" // G.711 μ-law (PCMU)
+	AudioOpus  AudioCodec = "opus"  // Opus audio codec
 )
 
 // Merge status constants.
