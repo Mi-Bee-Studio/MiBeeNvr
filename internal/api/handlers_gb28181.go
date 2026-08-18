@@ -627,6 +627,60 @@ func (h *Handler) handleChannelPlaybackStart(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// handleChannelDownloadStart starts a device-recording download (#378): an
+// s=Download INVITE — the device streams at file speed and the media is muxed
+// into the bound camera's recordings. One fetch per channel.
+func (h *Handler) handleChannelDownloadStart(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "id")
+	if channelID == "" {
+		WriteError(w, http.StatusBadRequest, "channel ID is required")
+		return
+	}
+	var req struct {
+		Start string `json:"start"`
+		End   string `json:"end"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	start, err := time.Parse(time.RFC3339, req.Start)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "start must be RFC3339")
+		return
+	}
+	end, err := time.Parse(time.RFC3339, req.End)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "end must be RFC3339")
+		return
+	}
+	if !end.After(start) || end.Sub(start) > 7*24*time.Hour {
+		WriteError(w, http.StatusBadRequest, "invalid range: end must be after start, max 7 days")
+		return
+	}
+
+	deviceID, ok := h.resolveChannelDevice(channelID)
+	if !ok {
+		WriteError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if h.gb28181Media == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
+		return
+	}
+
+	slog.Info("GB28181 channel download requested", "channel_id", channelID, "start", req.Start, "end", req.End)
+	if err := h.gb28181Media.StartDownload(deviceID, channelID, start, end); err != nil {
+		slog.Warn("GB28181 download start failed", "channel_id", channelID, "error", err)
+		WriteError(w, http.StatusBadGateway, "download start failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":     "download_started",
+		"channel_id": channelID,
+	})
+}
+
 // handleChannelPlaybackStatus reports the running fetch (404 when idle).
 func (h *Handler) handleChannelPlaybackStatus(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
@@ -796,4 +850,53 @@ func (h *Handler) handleGB28181CascadeStatus(w http.ResponseWriter, _ *http.Requ
 		resp["registered_for_seconds"] = int(since.Seconds())
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleChannelDeviceControl sends a non-PTZ DeviceControl instruction to a
+// channel (#379): remote record start/stop, arm/disarm, alarm reset, reboot,
+// home-position reset. TeleBoot requires confirm=true (destructive).
+func (h *Handler) handleChannelDeviceControl(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "id")
+	var req struct {
+		Command string `json:"command"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	type ctrl struct {
+		element, value string
+		needsConfirm   bool
+	}
+	cmds := map[string]ctrl{
+		"record":        {element: "RecordCmd", value: "Record"},
+		"stop_record":   {element: "RecordCmd", value: "StopRecord"},
+		"set_guard":     {element: "GuardCmd", value: "SetGuard"},
+		"reset_guard":   {element: "GuardCmd", value: "ResetGuard"},
+		"reset_alarm":   {element: "AlarmCmd", value: "ResetAlarm"},
+		"home_position": {element: "HomePosition", value: "1"},
+		"tele_boot":     {element: "TeleBoot", value: "Boot", needsConfirm: true},
+	}
+	c, ok := cmds[req.Command]
+	if !ok {
+		WriteError(w, http.StatusBadRequest, "unknown command: record, stop_record, set_guard, reset_guard, reset_alarm, home_position, tele_boot")
+		return
+	}
+	if c.needsConfirm && !req.Confirm {
+		WriteError(w, http.StatusBadRequest, "tele_boot reboots the device — retry with confirm=true")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	if err := h.gb28181PTZ.SendDeviceControl(channelID, c.element, c.value); err != nil {
+		slog.Warn("GB28181 device control failed", "channel_id", channelID, "command", req.Command, "error", err)
+		WriteError(w, http.StatusBadGateway, "device control failed: "+err.Error())
+		return
+	}
+	slog.Info("GB28181 device control sent", "channel_id", channelID, "command", req.Command)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "control_sent", "command": req.Command})
 }

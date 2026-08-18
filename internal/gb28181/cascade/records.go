@@ -110,11 +110,31 @@ func (s *Service) SetPTZForwarder(f PTZForwarder) {
 }
 
 // forwardDeviceControl routes an upper-platform DeviceControl to the local
-// camera behind the channel. v1 supports PTZ commands only; other controls
-// (teleboot, record, guard, alarm reset, home position) are acknowledged but
-// not implemented.
+// camera behind the channel. PTZ commands forward to the camera's own PTZ
+// path; the management instructions (RecordCmd/GuardCmd/AlarmCmd/TeleBoot/
+// HomePosition) have no local equivalent on an NVR lower — they are answered
+// with an explicit unsupported log instead of silent drops so operators can
+// see the upper platform's intent (#379). TeleBoot is additionally refused
+// outright: an upper platform must not be able to power-cycle this host.
 func (s *Service) forwardDeviceControl(dc manscdp.DeviceControl) {
 	if dc.PTZCmd == "" {
+		switch {
+		case dc.RecordCmd != "":
+			slog.Warn("gb28181-cascade: RecordCmd has no local equivalent — ignored",
+				"channel", dc.DeviceID, "cmd", dc.RecordCmd)
+		case dc.GuardCmd != "":
+			slog.Warn("gb28181-cascade: GuardCmd has no local equivalent — ignored",
+				"channel", dc.DeviceID, "cmd", dc.GuardCmd)
+		case dc.AlarmCmd != "":
+			slog.Warn("gb28181-cascade: AlarmCmd has no local equivalent — ignored",
+				"channel", dc.DeviceID, "cmd", dc.AlarmCmd)
+		case dc.TeleBoot != "":
+			slog.Warn("gb28181-cascade: TeleBoot refused (will not reboot this host)",
+				"channel", dc.DeviceID)
+		case dc.HomePosition != "":
+			slog.Warn("gb28181-cascade: HomePosition has no local equivalent — ignored",
+				"channel", dc.DeviceID)
+		}
 		return
 	}
 	cameraID, ok := s.cameraOfChannel(dc.DeviceID)

@@ -742,6 +742,9 @@ type GB28181DeviceMedia interface {
 	// StartPlayback starts a fetch that muxes the device recording into the
 	// normal recordings pipeline of the bound camera.
 	StartPlayback(deviceID, channelID string, start, end time.Time) error
+	// StartDownload starts an s=Download fetch (file-speed transfer, #378) —
+	// media lands in the recordings pipeline like a playback fetch.
+	StartDownload(deviceID, channelID string, start, end time.Time) error
 	// StopPlayback stops a fetch (SIP BYE + finalize).
 	StopPlayback(channelID string) error
 	// PlaybackStatusFor reports fetch progress (ok=false when idle).
@@ -784,11 +787,15 @@ func (h *Handler) registerGB28181Routes(r chi.Router) {
 			r.Post("/invite", h.handleInviteChannel)
 			r.Post("/bye", h.handleByeChannel)
 			r.Post("/ptz", h.handlePTZChannel)
+			r.Post("/control", h.handleChannelDeviceControl)
 			r.Get("/records", h.handleChannelRecords)
 			r.Post("/playback", h.handleChannelPlaybackStart)
 			r.Get("/playback", h.handleChannelPlaybackStatus)
 			r.Delete("/playback", h.handleChannelPlaybackStop)
 			r.Post("/playback/control", h.handleChannelPlaybackControl)
+			r.Post("/download", h.handleChannelDownloadStart)
+			r.Get("/download", h.handleChannelPlaybackStatus)
+			r.Delete("/download", h.handleChannelPlaybackStop)
 		})
 	})
 }

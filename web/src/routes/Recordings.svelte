@@ -24,6 +24,8 @@
   import { showToast } from '$lib/toast';
   import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass, Server } from 'lucide-svelte';
   import GB28181DeviceRecords from '$lib/components/GB28181DeviceRecords.svelte';
+  import GB28181DeviceControl from '$lib/components/GB28181DeviceControl.svelte';
+  import GB28181AlarmsPositions from '$lib/components/GB28181AlarmsPositions.svelte';
 
   // New components
   import FormatFilter from '../components/library/FormatFilter.svelte';
@@ -159,6 +161,11 @@
   let selectedGB28181Channel = $derived.by(() => {
     const cam = cameras.find((c) => c.id === cameraId);
     return cam?.protocol === 'gb28181' && cam.gb28181?.channel_id ? cam.gb28181.channel_id : '';
+  });
+  // The binding's parent device — alarm/position panels key off it (#380).
+  let selectedGB28181Device = $derived.by(() => {
+    const cam = cameras.find((c) => c.id === cameraId);
+    return cam?.protocol === 'gb28181' && cam.gb28181?.device_id ? cam.gb28181.device_id : '';
   });
 
   // Slices of the day's recordings keyed off the active view: the Timeline tab
@@ -1227,7 +1234,11 @@ let selectedPresetCamera = $state<string>('');
         />
       {:else if viewMode === 'device'}
         <!-- ── Device-side recordings (GB28181 RecordInfo + fetch, #337) ── -->
+        <GB28181DeviceControl channelId={selectedGB28181Channel} />
         <GB28181DeviceRecords channelId={selectedGB28181Channel} />
+        {#if selectedGB28181Device}
+          <GB28181AlarmsPositions deviceId={selectedGB28181Device} />
+        {/if}
       {/if}
     </div>
   </main>
