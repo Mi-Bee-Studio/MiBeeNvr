@@ -334,10 +334,14 @@ export {
   controlGB28181Playback,
   sendGB28181DeviceControl,
   getGB28181CascadeStatus,
+  getGB28181Alarms,
+  getGB28181Positions,
 } from './gb28181';
 export type {
   GB28181DeviceRecord,
   GB28181RecordListResponse,
   GB28181PlaybackStatus,
   GB28181CascadeStatus,
+  GB28181Alarm,
+  GB28181Position,
 } from './gb28181';
