@@ -697,3 +697,45 @@ func buildRTPPacket(t *testing.T, payload []byte, ts uint32, seq uint16, marker 
 	require.NoError(t, err)
 	return raw
 }
+
+// TestInviteDownload: the #378 download variant shares the playback pipeline
+// but negotiates s=Download with the download SSRC prefix, and tears down via
+// the shared ByePlayback fetch path.
+func TestInviteDownload(t *testing.T) {
+	pm := NewPortManager(55000, 55010)
+	sm := NewSessionManager(pm, "34020000001320000001")
+	channel := &Channel{
+		DeviceID: "34020000001310000009",
+		ID:       "34020000001320000009",
+		Name:     "Camera D",
+		Parental: 0,
+	}
+	channel.Status.Store(ChannelIdle)
+	fakeSink := &fakeAUWriter{}
+
+	start := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	sdp, err := sm.InviteDownload(channel, "127.0.0.1", start, end, fakeSink, nil)
+	require.NoError(t, err)
+
+	sdpStr := string(sdp)
+	require.Contains(t, sdpStr, "s=Download")
+	require.Contains(t, sdpStr, "t=", "download SDP carries the window")
+	require.Contains(t, sdpStr, "a=recvonly")
+	// SSRC leading digit 2 marks the download session.
+	var yLine string
+	for _, l := range strings.Split(sdpStr, "\r\n") {
+		if strings.HasPrefix(l, "y=") {
+			yLine = l
+			break
+		}
+	}
+	require.True(t, strings.HasPrefix(yLine, "y=2"), "download SSRC must start with 2, got %q", yLine)
+
+	rcv := sm.GetPlaybackReceiver(channel.ID)
+	require.NotNil(t, rcv, "download receiver lives in the fetch map")
+	require.True(t, rcv.Running())
+
+	require.NoError(t, sm.ByePlayback(channel.ID))
+	require.Nil(t, sm.GetPlaybackReceiver(channel.ID))
+}

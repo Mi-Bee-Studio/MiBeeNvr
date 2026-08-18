@@ -570,6 +570,20 @@ func (sm *SessionManager) teardown(sess *session, resetStatus bool) {
 // sessions — the same channel can record live and fetch playback at once.
 // onAudio (optional) receives demuxed PS audio frames.
 func (sm *SessionManager) InvitePlayback(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio AudioFrameHandler) ([]byte, error) {
+	return sm.inviteFetch(channel, serverIP, start, end, sink, onAudio, false)
+}
+
+// InviteDownload creates a download session (#378): identical pipeline to a
+// playback fetch, but the SDP names s=Download (GB/T 28181-2022 §9.3.4 file
+// transfer semantics — the device sends at file speed, not 1x pacing) and the
+// SSRC carries the download leading digit 2. Sessions share the fetch map
+// with playbacks: one fetch per channel regardless of kind.
+func (sm *SessionManager) InviteDownload(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio AudioFrameHandler) ([]byte, error) {
+	return sm.inviteFetch(channel, serverIP, start, end, sink, onAudio, true)
+}
+
+// inviteFetch is the shared playback/download session constructor.
+func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio AudioFrameHandler, download bool) ([]byte, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("gb28181: channel is nil")
 	}
@@ -577,7 +591,7 @@ func (sm *SessionManager) InvitePlayback(channel *Channel, serverIP string, star
 		return nil, fmt.Errorf("gb28181: sink is nil")
 	}
 
-	// One playback per channel: recycle a prior fetch first.
+	// One playback/download per channel: recycle a prior fetch first.
 	sm.mu.Lock()
 	if old, ok := sm.playbackSessions[channel.ID]; ok {
 		sm.mu.Unlock()
@@ -592,18 +606,23 @@ func (sm *SessionManager) InvitePlayback(channel *Channel, serverIP string, star
 		return nil, fmt.Errorf("gb28181: failed to allocate port: %w", err)
 	}
 
-	// Generate SSRC per GB/T 28181 Annex C.2.4: playback uses leading digit 1.
-	ssrc := manscdp.SSRC(true, sm.serverID, int(sm.ssrcSeq.Add(1)))
+	// Generate SSRC per GB/T 28181 Annex C.2.4: playback leading digit 1,
+	// download leading digit 2 (2022 extension).
+	sdpName, ssrc := "Playback", manscdp.SSRC(true, sm.serverID, int(sm.ssrcSeq.Add(1)))
+	if download {
+		sdpName = "Download"
+		ssrc = manscdp.SSRCDownload(sm.serverID, int(sm.ssrcSeq.Add(1)))
+	}
 
 	// Convert times to NTP timestamps (seconds since 1900-01-01)
 	// NTP timestamp = Unix timestamp + 2208988800
 	startNTP := start.Unix() + 2208988800
 	endNTP := end.Unix() + 2208988800
 
-	// Build SDP answer for playback (GB28181 format with t= line)
+	// Build SDP answer for the fetch (GB28181 format with t= line)
 	sdpAnswer := []byte(fmt.Sprintf(
-		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=Playback\r\nc=IN IP4 %s\r\nt=%d %d\r\nm=video %d RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 PS/90000\r\ny=%s\r\n",
-		serverIP, serverIP, startNTP, endNTP, port, ssrc,
+		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=%s\r\nc=IN IP4 %s\r\nt=%d %d\r\nm=video %d RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 PS/90000\r\ny=%s\r\n",
+		serverIP, sdpName, serverIP, startNTP, endNTP, port, ssrc,
 	))
 
 	// Create StreamHub for this session
@@ -657,7 +676,7 @@ func (sm *SessionManager) InvitePlayback(channel *Channel, serverIP string, star
 	sm.playbackSessions[channel.ID] = sess
 	sm.mu.Unlock()
 
-	slog.Info("gb28181: playback session created", "channel_id", channel.ID, "device_id", channel.DeviceID,
+	slog.Info("gb28181: fetch session created", "kind", sdpName, "channel_id", channel.ID, "device_id", channel.DeviceID,
 		"port", port, "ssrc", ssrc, "start", start, "end", end)
 
 	return sdpAnswer, nil

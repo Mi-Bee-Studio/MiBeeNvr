@@ -7,6 +7,7 @@
   import {
     queryGB28181Records,
     startGB28181Playback,
+    startGB28181Download,
     gb28181PlaybackStatus,
     stopGB28181Playback,
     controlGB28181Playback,
@@ -14,7 +15,7 @@
   import type { GB28181DeviceRecord, GB28181PlaybackStatus } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
-  import { Search, Download, Pause, Play, Square, HardDriveDownload, Loader2 } from 'lucide-svelte';
+  import { Search, Download, FileDown, Pause, Play, Square, HardDriveDownload, Loader2 } from 'lucide-svelte';
 
   let { channelId }: { channelId: string } = $props();
 
@@ -76,6 +77,16 @@
       await pollStatus();
     } catch (e: any) {
       showToast(e.message || t('gb28181.records.fetchFailed'), 'error');
+    }
+  }
+
+  async function downloadRecord(rec: GB28181DeviceRecord) {
+    try {
+      await startGB28181Download(channelId, rec.start_time, rec.end_time);
+      showToast(t('gb28181.records.downloadStarted'), 'success');
+      await pollStatus();
+    } catch (e: any) {
+      showToast(e.message || t('gb28181.records.downloadFailed'), 'error');
     }
   }
 
@@ -172,7 +183,9 @@
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-2">
           <HardDriveDownload size={16} class="th-text-primary animate-pulse" />
-          <span class="text-sm font-medium th-text-primary">{t('gb28181.records.fetching')}</span>
+          <span class="text-sm font-medium th-text-primary">
+            {playback.kind === 'download' ? t('gb28181.records.downloading') : t('gb28181.records.fetching')}
+          </span>
           <span class="text-xs th-text-tertiary">
             {playback.frames ?? 0} {t('gb28181.records.frames')}
             · {fmtTime(playback.start ?? '')} → {fmtTime(playback.end ?? '')}
@@ -190,11 +203,13 @@
               {t('gb28181.records.pause')}
             </button>
           {/if}
-          <select class="input w-24 text-xs" bind:value={scale} aria-label={t('gb28181.records.scale')}>
-            {#each SCALE_OPTIONS as opt}
-              <option value={opt}>{opt}×</option>
-            {/each}
-          </select>
+          {#if playback.kind !== 'download'}
+            <select class="input w-24 text-xs" bind:value={scale} aria-label={t('gb28181.records.scale')}>
+              {#each SCALE_OPTIONS as opt}
+                <option value={opt}>{opt}×</option>
+              {/each}
+            </select>
+          {/if}
           <button class="btn btn-danger btn-sm" onclick={stopFetch}>
             <Square size={14} />
             {t('gb28181.records.stop')}
@@ -225,7 +240,7 @@
               <td class="px-4 py-2 th-text-secondary">{fmtTime(rec.start_time)}</td>
               <td class="px-4 py-2 th-text-secondary">{fmtTime(rec.end_time)}</td>
               <td class="px-4 py-2 th-text-secondary">{fmtDur(rec)}</td>
-              <td class="px-4 py-2 text-right">
+              <td class="px-4 py-2 text-right whitespace-nowrap">
                 <button
                   class="btn btn-ghost btn-sm"
                   onclick={() => fetchRecord(rec)}
@@ -234,6 +249,15 @@
                 >
                   <Download size={14} />
                   {t('gb28181.records.fetch')}
+                </button>
+                <button
+                  class="btn btn-ghost btn-sm ml-1"
+                  onclick={() => downloadRecord(rec)}
+                  disabled={!!playback}
+                  title={t('gb28181.records.download')}
+                >
+                  <FileDown size={14} />
+                  {t('gb28181.records.download')}
                 </button>
               </td>
             </tr>

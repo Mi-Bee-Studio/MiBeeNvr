@@ -18,6 +18,7 @@ export interface GB28181RecordListResponse {
 
 export interface GB28181PlaybackStatus {
   active: boolean;
+  kind?: 'playback' | 'download';
   channel_id: string;
   device_id?: string;
   camera_id?: string;
@@ -45,6 +46,15 @@ export async function queryGB28181Records(
 /** Start a device-recording fetch (playback INVITE → local recording). */
 export async function startGB28181Playback(channelId: string, start: string, end: string): Promise<void> {
   await apiRequest(`/gb28181/channels/${encodeURIComponent(channelId)}/playback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start, end }),
+  });
+}
+
+/** Start a device-recording download (#378): s=Download file-speed fetch. */
+export async function startGB28181Download(channelId: string, start: string, end: string): Promise<void> {
+  await apiRequest(`/gb28181/channels/${encodeURIComponent(channelId)}/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ start, end }),

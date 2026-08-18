@@ -55,6 +55,17 @@ func SSRC(playback bool, serverID string, seq int) string {
 	if playback {
 		prefix = "1"
 	}
+	return buildSSRC(prefix, serverID, seq)
+}
+
+// SSRCDownload builds the download-session SSRC variant (GB/T 28181-2022
+// Annex C.2.4 extends the leading digit: 0=live, 1=playback, 2=download).
+func SSRCDownload(serverID string, seq int) string {
+	return buildSSRC("2", serverID, seq)
+}
+
+// buildSSRC assembles the 10-digit decimal SSRC from its parts.
+func buildSSRC(prefix, serverID string, seq int) string {
 	domain := "00000"
 	if len(serverID) >= 8 {
 		domain = serverID[3:8]

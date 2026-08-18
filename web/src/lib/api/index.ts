@@ -328,6 +328,7 @@ export type { UpdateStatus } from './update';
 export {
   queryGB28181Records,
   startGB28181Playback,
+  startGB28181Download,
   gb28181PlaybackStatus,
   stopGB28181Playback,
   controlGB28181Playback,
