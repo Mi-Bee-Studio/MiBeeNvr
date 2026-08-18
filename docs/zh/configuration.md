@@ -419,7 +419,7 @@ cameras:
 
 ### `vision.url`
 - **类型**: string
-- **示例**: `"http://192.168.63.110:9091"`
+- **示例**: `"http://192.168.1.20:9091"`
 - **描述**: 消费者服务基地址。
 
 ### `vision.heartbeat_timeout_secs`

@@ -727,13 +727,10 @@ curl http://localhost:9090/api/cameras/front-door/health
 ## 截图
 
 *Web UI 中的转发配置界面*
-![转发配置](docs/images/relay-config.png)
 
 *实时转发状态仪表板*
-![转发状态](docs/images/relay-dashboard.png)
 
 *平台预设管理*
-![预设管理](docs/images/relay-presets.png)
 
 ---
 

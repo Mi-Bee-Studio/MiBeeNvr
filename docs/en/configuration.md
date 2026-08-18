@@ -515,7 +515,7 @@ receives video-segment pushes and writes AI events back to the NVR.
 
 ### `vision.url`
 - **Type**: string
-- **Example**: `"http://192.168.63.110:9091"`
+- **Example**: `"http://192.168.1.20:9091"`
 - **Description**: Base address of the consumer service.
 
 ### `vision.heartbeat_timeout_secs`

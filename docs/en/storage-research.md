@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-The MiBee NVR storage layer uses SQLite with the `modernc.org/sqlite` pure-Go driver, operating in WAL mode. The production database at Banana Pi M5 (`192.168.63.30`) holds **67,000+ recording rows** across an **86MB database file**, growing at approximately **90GB/day** in recording data (not DB size — the database only stores metadata).
+The MiBee NVR storage layer uses SQLite with the `modernc.org/sqlite` pure-Go driver, operating in WAL mode. The production database at Banana Pi M5 (`192.168.1.10`) holds **67,000+ recording rows** across an **86MB database file**, growing at approximately **90GB/day** in recording data (not DB size — the database only stores metadata).
 
 **Key findings:**
 

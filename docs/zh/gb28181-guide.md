@@ -19,6 +19,8 @@ GB/T 28181 是中国视频监控网络系统的国家标准，定义了 IP 摄�
 
 **推荐：Web 设置页**。打开 NVR Web UI → **设置 → GB28181**，打开启用开关并填写参数后保存（密码为只写字段，留空保存表示保持不变）。
 
+![GB28181 设置页](images/settings-gb28181.webp)
+
 等价的 YAML 配置（`mibee-nvr.yaml`）：
 
 ```yaml
@@ -160,7 +162,7 @@ NVR 可作为**下级平台**向上级 GB/T 28181 平台上联：本机相机聚
 gb28181_cascade:
   enabled: true
   server_domain: "34020000002000000001"   # 上级平台 20 位编号
-  server_addr: "192.168.63.30:5060"       # 上级 SIP 地址
+  server_addr: "192.168.1.10:5060"       # 上级 SIP 地址
   local_device_id: "34020000001320000099" # 本 NVR 作为下级设备的编号
   realm: "3402000000"
   password: "..."                          # encrypt-config 加密

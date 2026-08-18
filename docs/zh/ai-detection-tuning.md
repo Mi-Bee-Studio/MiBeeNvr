@@ -19,6 +19,8 @@
 
 此外还有 **单摄像头覆盖**：每路摄像头可单独配置置信度 + 帧跳过（展开单摄像头设置），优先级高于全局默认。
 
+![AI 检测设置面板](images/settings-ai.webp)
+
 ### 自适应节流（自动，无需配置）
 
 推理在 Web Worker 中运行，当连续多次推理平均耗时 > 80ms（RPi 类 WASM SIMD 的典型值）时，系统会自动提高 frameSkip（单升不降，上限 10），保护页面不卡死。日志（仅 dev 构建）会显示 `throttling frameSkip X→Y`。

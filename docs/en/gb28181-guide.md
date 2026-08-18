@@ -19,6 +19,8 @@ Compatibility matrix: GB/T 28181-2007/2011/2016/2022 (see `internal/gb28181/doc.
 
 **Recommended: the web UI.** Open the NVR web UI → **Settings → GB28181**, flip the enable toggle, fill in the fields, and save (the password is write-only; leaving it blank keeps the current value).
 
+![GB28181 settings page](images/settings-gb28181.webp)
+
 Equivalent YAML (`mibee-nvr.yaml`):
 
 ```yaml
@@ -160,7 +162,7 @@ The NVR can register to an upper-level GB/T 28181 platform as a lower-level plat
 gb28181_cascade:
   enabled: true
   server_domain: "34020000002000000001"   # upper platform 20-digit ID
-  server_addr: "192.168.63.30:5060"       # upper SIP address
+  server_addr: "192.168.1.10:5060"       # upper SIP address
   local_device_id: "34020000001320000099" # this NVR's lower-level device ID
   realm: "3402000000"
   password: "..."                          # encrypted via encrypt-config
