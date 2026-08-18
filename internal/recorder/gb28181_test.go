@@ -446,10 +446,12 @@ func TestGB28181Recorder_HubAudioBroadcast(t *testing.T) {
 	require.NoError(t, rec.Hub.SubscribeAudio("test", func(pts int64, codec model.AudioCodec, data []byte) {
 		frames <- model.AudioFrame{PTS: pts, Codec: codec, Data: data}
 	}))
+	// Law-specific broadcast (#370): the hub must carry g711u/g711a so
+	// downstream PS muxing can map the stream type.
 	rec.WriteAudio("g711u", []byte{7, 8, 9}, nil, 95000, 3)
 	select {
 	case f := <-frames:
-		require.Equal(t, model.AudioG711, f.Codec)
+		require.Equal(t, model.AudioG711U, f.Codec)
 		require.Equal(t, []byte{7, 8, 9}, f.Data)
 	case <-time.After(2 * time.Second):
 		t.Fatal("no audio frame broadcast to hub")
