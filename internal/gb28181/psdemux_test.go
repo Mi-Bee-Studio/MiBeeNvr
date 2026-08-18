@@ -618,10 +618,11 @@ func TestESBufCap(t *testing.T) {
 }
 
 // TestVideoPesBufCap: a PES whose announced length can never be satisfied must
-// hit the cap and resync instead of buffering the stream's bitrate forever.
+// hit the pending bound and resync instead of buffering the stream's bitrate
+// forever.
 func TestVideoPesBufCap(t *testing.T) {
 	d := NewPSDemuxer()
-	// Header claims 65529 bytes of payload; feed far beyond the cap in
+	// Header claims 65529 bytes of payload; feed far beyond the bound in
 	// marker-less chunks so the PES never completes.
 	chunk := make([]byte, 512<<10)
 	var maxSeen int
@@ -632,7 +633,75 @@ func TestVideoPesBufCap(t *testing.T) {
 			maxSeen = len(d.videoPesBuf)
 		}
 	}
-	if maxSeen > maxPESBufBytes+(512<<10)+16 {
-		t.Fatalf("videoPesBuf grew to %d beyond cap %d", maxSeen, maxPESBufBytes)
+	if maxSeen > maxPendingPESBytes+(512<<10)+16 {
+		t.Fatalf("videoPesBuf grew to %d beyond bound %d", maxSeen, maxPendingPESBytes)
+	}
+}
+
+// TestPSDemuxer_TrailingZeroPayloadBeforePES reproduces the #390 OOM root
+// cause: a video PES whose payload ends in trailing zeros (legal Annex-B
+// trailing_zero_8bytes) abutting the next PES header forms 00 00 00 01 E0,
+// which findPSStartCode accepted as a 4-byte start code while parseVideoPES
+// rejected the prefix — the reassembly then retried at stream bitrate forever.
+// Both PES payloads must demux cleanly.
+func TestPSDemuxer_TrailingZeroPayloadBeforePES(t *testing.T) {
+	d := NewPSDemuxer()
+
+	nalu1 := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x11, 0x22, 0x33, 0x00, 0x00} // ends in two zeros
+	nalu2 := []byte{0x00, 0x00, 0x00, 0x01, 0x41, 0xAA, 0xBB}
+
+	// PES1: 00 00 01 E0 | len | header(9) | nalu1   (payload ends ...00 00)
+	p1 := append([]byte{0x00, 0x00, 0x01, 0xE0, 0x00, byte(3 + len(nalu1)), 0x80, 0x00, 0x00}, nalu1...)
+	// PES2 immediately follows: ...00 00 | 00 00 01 E0 → byte stream holds
+	// 00 00 00 00 01 E0 at the seam.
+	p2 := append([]byte{0x00, 0x00, 0x01, 0xE0, 0x00, byte(3 + len(nalu2)), 0x80, 0x00, 0x00}, nalu2...)
+
+	nalus, err := d.FeedAU(append(append([]byte{}, p1...), p2...), 9000, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nalus) != 2 {
+		t.Fatalf("expected 2 NALUs (trailing-zero seam must not wedge reassembly), got %d", len(nalus))
+	}
+	if len(d.videoPesBuf) != 0 {
+		t.Fatalf("videoPesBuf must stay empty, has %d bytes", len(d.videoPesBuf))
+	}
+}
+
+// TestParseVideoPES_FourByteStartCode: direct parse of a 4-byte-prefixed PES
+// (00 00 00 01 E0) must succeed after zero-stripping, not error forever.
+func TestParseVideoPES_FourByteStartCode(t *testing.T) {
+	payload := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x77}
+	pes := append([]byte{0x00, 0x00, 0x00, 0x01, 0xE0, 0x00, byte(3 + len(payload)), 0x80, 0x00, 0x00}, payload...)
+	got, pesEnd, err := parseVideoPES(pes)
+	if err != nil {
+		t.Fatalf("4-byte prefix must be tolerated: %v", err)
+	}
+	if pesEnd != 6+3+len(payload) {
+		t.Fatalf("unexpected pesEnd %d", pesEnd)
+	}
+	if len(got) != len(payload) {
+		t.Fatalf("payload %d bytes, got %d", len(payload), len(got))
+	}
+}
+
+// TestFindPSStartCode_FourByteNormalization: a 4-byte prefix before a PS code
+// value must be normalized to the 3-byte position so consumers index
+// stream_id / lengths at standard offsets.
+func TestFindPSStartCode_FourByteNormalization(t *testing.T) {
+	data := []byte{0xFF, 0x00, 0x00, 0x00, 0x01, 0xE0, 0x12, 0x34}
+	pos, code, err := findPSStartCode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != startCodeVideoMin {
+		t.Fatalf("code %#x", code)
+	}
+	// Position must point at the LAST 00 before 01: stream_id at pos+3.
+	if data[pos] != 0 || data[pos+1] != 0 || data[pos+2] != 1 || data[pos+3] != 0xE0 {
+		t.Fatalf("position %d not a 3-byte start code", pos)
+	}
+	if data[pos+4] != 0x12 || data[pos+5] != 0x34 {
+		t.Fatalf("length bytes not at pos+4/+5")
 	}
 }
