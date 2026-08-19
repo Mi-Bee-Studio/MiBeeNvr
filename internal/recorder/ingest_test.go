@@ -82,14 +82,16 @@ func TestIngestRecorder_WriteNALU_RecordsSegment(t *testing.T) {
 	rec, store, db := newIngestRecorder(t, 10*time.Minute)
 	t.Cleanup(func() { _ = rec.Stop() })
 
-	// First access unit: SPS + PPS + IDR. Should open a segment + write the IDR.
+	// First access unit: SPS + PPS + IDR. Held by the AU assembler until the
+	// next picture starts (one-picture assembly lag by design).
 	rec.WriteNALU([][]byte{testSPS, testPPS, testIDR}, 0, true)
-	require.Equal(t, model.StatusRecording, rec.Status())
 
-	// A few non-IDR VCL frames.
+	// A few non-IDR VCL frames. The first flushes the pending IDR picture,
+	// opening a segment + writing the IDR.
 	for i := 1; i <= 5; i++ {
 		rec.WriteNALU([][]byte{testPFrame}, int64(i)*90, false)
 	}
+	require.Equal(t, model.StatusRecording, rec.Status())
 
 	// Stop closes the in-flight segment → one recording row + one file.
 	require.NoError(t, rec.Stop())
@@ -114,6 +116,8 @@ func TestIngestRecorder_OnDisconnect_ClosesSegment(t *testing.T) {
 
 	rec.WriteConnected()
 	rec.WriteNALU([][]byte{testSPS, testPPS, testIDR}, 0, true)
+	// Flush the pending IDR picture (one-picture assembly lag).
+	rec.WriteNALU([][]byte{testPFrame}, 90, false)
 	require.Equal(t, model.StatusRecording, rec.Status())
 
 	rec.OnDisconnect()
@@ -146,9 +150,12 @@ func TestIngestRecorder_IgnoresNonIDRBeforeKeyframe(t *testing.T) {
 	rec, store, db := newIngestRecorder(t, 10*time.Minute)
 	t.Cleanup(func() { _ = rec.Stop() })
 
-	// P-frame only (no SPS/PPS/IDR) → status flips to recording (live pusher
-	// active) but NO segment is opened (no SPS/PPS, not IDR).
+	// P-frames only (no SPS/PPS/IDR) → once the first picture completes (the
+	// second delivery flushes the first; one-picture assembly lag), status
+	// flips to recording (live pusher active) but NO segment is opened (no
+	// SPS/PPS, not IDR).
 	rec.WriteNALU([][]byte{testPFrame}, 0, false)
+	rec.WriteNALU([][]byte{testPFrame}, 90, false)
 	require.Equal(t, model.StatusRecording, rec.Status(), "publisher is live, but no segment yet")
 	require.Empty(t, db.recordings, "no recording row until IDR opens a segment")
 
@@ -158,6 +165,59 @@ func TestIngestRecorder_IgnoresNonIDRBeforeKeyframe(t *testing.T) {
 
 // testPFrame is a minimal H.264 non-IDR slice NAL (type 1).
 var testPFrame = []byte{0x41, 0x9a, 0x10, 0x00}
+
+// TestIngestRecorder_GroupsPerSliceDeliveries reproduces the fnOS live-push
+// topology failure (2026-08-20): a restreamer publisher emits one NAL unit per
+// RTMP message, so libx264 sliced-threads frames (1080p = 4 slices) arrived as
+// four separate "AUs" and every downstream consumer showed black video. The
+// recorder must regroup them into ONE picture-complete hub broadcast, keyed on
+// the assembled picture (IDR), keeping the publisher's inline param sets
+// without a duplicate cached prepend.
+func TestIngestRecorder_GroupsPerSliceDeliveries(t *testing.T) {
+	rec, _, _ := newIngestRecorder(t, 10*time.Minute)
+	t.Cleanup(func() { _ = rec.Stop() })
+
+	type hubFrame struct {
+		pts int64
+		au  [][]byte
+	}
+	ch := make(chan hubFrame, 4)
+	require.NoError(t, rec.Hub.Subscribe("test-grouping", func(pts int64, au [][]byte) {
+		ch <- hubFrame{pts, au}
+	}))
+
+	// IDR picture split across four deliveries: header param sets + first
+	// slice (first_mb_in_slice==0 → testIDR's 0x88), then three continuation
+	// slices (first_mb_in_slice!=0 → first header byte 0x00, i.e. ue(v) with
+	// leading zero bits).
+	s2 := []byte{0x65, 0x08, 0x84, 0x00, 0x10}
+	s3 := []byte{0x65, 0x08, 0x84, 0x00, 0x11}
+	s4 := []byte{0x65, 0x08, 0x84, 0x00, 0x12}
+
+	rec.WriteNALU([][]byte{testSPS, testPPS, testIDR}, 0, true)
+	rec.WriteNALU([][]byte{s2}, 30, true)
+	rec.WriteNALU([][]byte{s3}, 60, true)
+	rec.WriteNALU([][]byte{s4}, 90, true)
+
+	// Nothing may surface before the picture completes.
+	select {
+	case f := <-ch:
+		t.Fatalf("partial picture leaked to the hub: %+v", f)
+	default:
+	}
+
+	// The next picture's first slice flushes the grouped IDR picture.
+	rec.WriteNALU([][]byte{testPFrame}, 3000, false)
+
+	select {
+	case f := <-ch:
+		require.Equal(t, int64(0), f.pts, "picture PTS comes from its first VCL delivery")
+		require.Equal(t, [][]byte{testSPS, testPPS, testIDR, s2, s3, s4}, f.au,
+			"one picture-complete AU with all four slices and no duplicate param prepend")
+	case <-time.After(2 * time.Second):
+		t.Fatal("grouped IDR picture never reached the hub")
+	}
+}
 
 // TestIngestRecorder_ConcurrentLockNarrowing verifies that WriteNALU, Status,
 // and Stop can be called concurrently without data races.
