@@ -100,13 +100,7 @@ func buildRouter(
 		if err != nil {
 			return nil, fmt.Errorf("read index.html: %w", err)
 		}
-		inject := `<script>window.__NVR_BASE__="` + basePath + `";</script>`
-		replaced := strings.Replace(string(raw), "</title>", "</title>"+inject, 1)
-		if replaced == string(raw) {
-			// No </title> anchor — fall back to injecting right after <head>.
-			replaced = strings.Replace(string(raw), "<head>", "<head>"+inject, 1)
-		}
-		indexBytes = []byte(replaced)
+		indexBytes = injectBasePath(raw, basePath)
 	}
 	// Static files served without auth — SPA handles login flow client-side.
 	// All sensitive data is protected via API endpoints in handler.Routes().
@@ -130,4 +124,23 @@ func buildRouter(
 	}))
 
 	return r, nil
+}
+
+// injectBasePath bakes the serving prefix into index.html: the
+// window.__NVR_BASE__ global for runtime URL building, plus prefix-absolute
+// rewrites of document-level refs. The gateway may serve the document at
+// "<base>" WITHOUT the trailing slash (fnOS opens the iframe at
+// /app/mibee-nvr); relative refs would then resolve one directory too high
+// (./assets/x.js → /app/assets/x.js) and every asset load fails, leaving a
+// blank page (#394).
+func injectBasePath(raw []byte, basePath string) []byte {
+	inject := `<script>window.__NVR_BASE__="` + basePath + `";</script>`
+	replaced := strings.Replace(string(raw), "</title>", "</title>"+inject, 1)
+	if replaced == string(raw) {
+		// No </title> anchor — fall back to injecting right after <head>.
+		replaced = strings.Replace(string(raw), "<head>", "<head>"+inject, 1)
+	}
+	replaced = strings.ReplaceAll(replaced, `href="./`, `href="`+basePath+`/`)
+	replaced = strings.ReplaceAll(replaced, `src="./`, `src="`+basePath+`/`)
+	return []byte(replaced)
 }
