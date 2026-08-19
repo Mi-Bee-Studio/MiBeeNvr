@@ -1365,3 +1365,40 @@ func TestInsertOrphanRecordingsBatching(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, inserted, "second insert should find no new records")
 }
+
+// A vanished temp segment (removed by the stale-segment cleanup or lost in a
+// restart window) must NOT count toward storage health. Counting it drove a
+// production deadlock: three vanished-tmp closes during restart ramp-up
+// escalated a healthy camera to Failed, the recorders' skip-before-write
+// behavior then blocked the successful write that resets the state, and the
+// camera stopped recording until the next restart.
+func TestCloseSegment_VanishedTempDoesNotTripHealth(t *testing.T) {
+	dir := t.TempDir()
+	m, _ := NewManager(dir)
+	m.EnsureCameraDir("cam-latch")
+
+	// Create and register a real segment, then delete the temp file out from
+	// under the closer — the observed production scenario.
+	tempPath, finalPath, err := m.CreateSegment("cam-latch", "h264")
+	if err != nil {
+		t.Fatalf("CreateSegment error: %v", err)
+	}
+	if err := os.Remove(tempPath); err != nil {
+		t.Fatalf("Remove temp: %v", err)
+	}
+
+	if err := m.CloseSegment(tempPath, finalPath); err == nil {
+		t.Fatal("CloseSegment must still report the lost segment")
+	}
+
+	// Repeat far past the failure threshold: health must stay clean.
+	for range maxConsecutiveFailures * 2 {
+		_ = m.CloseSegment(tempPath, finalPath)
+	}
+	if m.StorageFailedLegacy() {
+		t.Fatal("vanished temp segments must not trip storage health")
+	}
+	if m.StorageHealth("cam-latch") != HealthHealthy {
+		t.Fatal("camera health must remain healthy after vanished-tmp closes")
+	}
+}

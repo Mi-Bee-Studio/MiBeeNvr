@@ -2,7 +2,10 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -134,12 +137,27 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 	return tempPath, finalPath, nil
 }
 
+// recordFinalizeFailure feeds a finalize-path error into health tracking —
+// unless the temp segment simply vanished. A missing .tmp is a stale-segment
+// cleanup or restart-window artifact, not an I/O error: counting it escalates
+// a healthy camera to Failed on every restart, and the recorders' skip-before-
+// write behavior then blocks the successful write that would reset the state,
+// deadlocking the camera out of recording until the process restarts.
+func (m *Manager) recordFinalizeFailure(tempPath string, err error) {
+	if errors.Is(err, fs.ErrNotExist) {
+		slog.Warn("storage: temp segment vanished before finalize — segment lost, storage healthy",
+			"path", tempPath)
+		return
+	}
+	m.RecordWriteFailureForPath(tempPath)
+}
+
 // CloseSegment atomically finalizes a segment by syncing and renaming .tmp to final path.
 func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 	// Check if temp is a directory (MJPEG) or file (H.264)
 	info, err := os.Stat(tempPath)
 	if err != nil {
-		m.RecordWriteFailureForPath(tempPath)
+		m.recordFinalizeFailure(tempPath, err)
 		m.unregisterTempPath(tempPath)
 		return fmt.Errorf("storage: temp path not found: %w", err)
 	}
@@ -148,7 +166,7 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 		// Sync the directory for MJPEG
 		dirFd, err := os.Open(tempPath)
 		if err != nil {
-			m.RecordWriteFailureForPath(tempPath)
+			m.recordFinalizeFailure(tempPath, err)
 			m.unregisterTempPath(tempPath)
 			return fmt.Errorf("storage: cannot open temp dir for sync: %w", err)
 		}
@@ -169,7 +187,7 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 		// Sync and close the file for H.264
 		f, err := os.OpenFile(tempPath, os.O_WRONLY, 0)
 		if err != nil {
-			m.RecordWriteFailureForPath(tempPath)
+			m.recordFinalizeFailure(tempPath, err)
 			m.unregisterTempPath(tempPath)
 			return fmt.Errorf("storage: cannot open temp file for sync: %w", err)
 		}
