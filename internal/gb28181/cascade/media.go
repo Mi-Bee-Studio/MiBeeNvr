@@ -173,6 +173,22 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		return
 	}
 
+	// Supersede: a new-dialog INVITE for a channel that is already forwarding
+	// means the upper recycled the session (its BYE may be lost or still in
+	// flight). Keeping both forwards alive overlaps two SSRCs onto the upper's
+	// recycled receive port — the upper's first-packet SSRC latch grabs
+	// whichever sender arrives first and every packet of the other is dropped
+	// as foreign (observed as endless "recycling stale session / no keyframe"
+	// churn on the fnOS upper, 2026-08-19). One channel, one live forward.
+	s.mu.Lock()
+	for otherID, other := range s.sessions {
+		if otherID != callID && other.channel == channelID {
+			delete(s.sessions, otherID)
+			go other.teardown("superseded by new-dialog re-INVITE")
+		}
+	}
+	s.mu.Unlock()
+
 	dst := &net.UDPAddr{IP: net.ParseIP(sd.host), Port: sd.port}
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
