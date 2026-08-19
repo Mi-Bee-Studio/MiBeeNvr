@@ -61,8 +61,10 @@
       streamingRtmpEnabled = config.rtmp?.enabled ?? false;
       streamingRtmpPort = config.rtmp?.port ?? 1935;
       const rtmpKeys = config.rtmp?.stream_keys;
+      // Backend map is camera_id → stream_key (legacy global map; per-camera
+      // stream_key fields take precedence at publish time).
       rtmpStreamKeys = rtmpKeys
-        ? Object.entries(rtmpKeys).map(([key, cameraId]) => ({ key, cameraId: String(cameraId) }))
+        ? Object.entries(rtmpKeys).map(([cameraId, key]) => ({ key: String(key), cameraId }))
         : [];
       streamingSrtEnabled = config.srt?.enabled ?? false;
       streamingSrtPort = config.srt?.port ?? 9000;
@@ -105,7 +107,7 @@
         rtmp: {
           enabled: streamingRtmpEnabled,
           port: streamingRtmpPort,
-          stream_keys: Object.fromEntries(rtmpStreamKeys.map((sk) => [sk.key, sk.cameraId])),
+          stream_keys: Object.fromEntries(rtmpStreamKeys.map((sk) => [sk.cameraId, sk.key])),
         },
         srt: {
           enabled: streamingSrtEnabled,

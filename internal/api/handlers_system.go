@@ -897,6 +897,20 @@ func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Requ
 		"hls": map[string]any{
 			"low_latency": h.config.HLS.LowLatency,
 		},
+		// RTMP/SRT ingest settings. The streaming panel persisted nothing for
+		// them before: the PUT body had no rtmp/srt fields, so the UI switches
+		// silently no-op'd while still toasting success (found configuring the
+		// fnOS test box, 2026-08-19).
+		"rtmp": map[string]any{
+			"enabled":     h.config.RTMP.Enabled != nil && *h.config.RTMP.Enabled,
+			"port":        h.config.RTMP.Port,
+			"stream_keys": h.config.RTMP.StreamKeys, // camera_id → stream_key (legacy map; per-camera stream_key takes precedence)
+		},
+		"srt": map[string]any{
+			"enabled": h.config.SRT.Enabled != nil && *h.config.SRT.Enabled,
+			"port":    h.config.SRT.Port,
+			"streams": h.config.SRT.Streams,
+		},
 	})
 }
 
@@ -921,6 +935,16 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 		HLS *struct {
 			LowLatency *bool `json:"low_latency"`
 		} `json:"hls"`
+		RTMP *struct {
+			Enabled    *bool             `json:"enabled"`
+			Port       *int              `json:"port"`
+			StreamKeys map[string]string `json:"stream_keys"` // camera_id → stream_key
+		} `json:"rtmp"`
+		SRT *struct {
+			Enabled *bool              `json:"enabled"`
+			Port    *int               `json:"port"`
+			Streams []config.SRTStream `json:"streams"`
+		} `json:"srt"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -963,6 +987,36 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 
 	if body.HLS != nil && body.HLS.LowLatency != nil {
 		h.config.HLS.LowLatency = *body.HLS.LowLatency
+	}
+
+	if body.RTMP != nil {
+		if body.RTMP.Enabled != nil {
+			if h.config.RTMP.Enabled == nil {
+				h.config.RTMP.Enabled = new(bool)
+			}
+			*h.config.RTMP.Enabled = *body.RTMP.Enabled
+		}
+		if body.RTMP.Port != nil {
+			h.config.RTMP.Port = *body.RTMP.Port
+		}
+		if body.RTMP.StreamKeys != nil {
+			h.config.RTMP.StreamKeys = body.RTMP.StreamKeys
+		}
+	}
+
+	if body.SRT != nil {
+		if body.SRT.Enabled != nil {
+			if h.config.SRT.Enabled == nil {
+				h.config.SRT.Enabled = new(bool)
+			}
+			*h.config.SRT.Enabled = *body.SRT.Enabled
+		}
+		if body.SRT.Port != nil {
+			h.config.SRT.Port = *body.SRT.Port
+		}
+		if body.SRT.Streams != nil {
+			h.config.SRT.Streams = body.SRT.Streams
+		}
 	}
 
 	// Persist config to disk

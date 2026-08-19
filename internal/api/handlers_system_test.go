@@ -383,3 +383,53 @@ func TestUpdateFeatures_InvalidBody(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "PUT", "/api/features", bytes.NewReader([]byte("not json")), "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
+
+// --- streaming settings RTMP/SRT persistence (regression: the PUT body used
+// to have no rtmp/srt fields, so the UI switches silently no-op'd) ---
+
+func TestStreamingSettings_RTMPAndSRT(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := newHandlerWithConfig(db, store, &config.Config{})
+	h.config.RTMP.Port = 1935
+	h.config.SRT.Port = 9000
+
+	body := `{"rtmp":{"enabled":true,"port":1936,"stream_keys":{"cam-1":"front-door"}},"srt":{"enabled":true,"port":9001,"streams":[{"camera_id":"cam-2","mode":"listener","address":"","passphrase":"pw","stream_id":"s1"}]}}`
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/streaming", bytes.NewReader([]byte(body)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	require.NotNil(t, h.config.RTMP.Enabled)
+	require.True(t, *h.config.RTMP.Enabled)
+	require.Equal(t, 1936, h.config.RTMP.Port)
+	require.Equal(t, map[string]string{"cam-1": "front-door"}, h.config.RTMP.StreamKeys)
+
+	require.NotNil(t, h.config.SRT.Enabled)
+	require.True(t, *h.config.SRT.Enabled)
+	require.Equal(t, 9001, h.config.SRT.Port)
+	require.Len(t, h.config.SRT.Streams, 1)
+	require.Equal(t, "cam-2", h.config.SRT.Streams[0].CameraID)
+
+	// GET must round-trip what was stored.
+	rr = doRequest(t, h.Routes(), "GET", "/api/settings/streaming", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got struct {
+		RTMP struct {
+			Enabled    bool              `json:"enabled"`
+			Port       int               `json:"port"`
+			StreamKeys map[string]string `json:"stream_keys"`
+		} `json:"rtmp"`
+		SRT struct {
+			Enabled bool               `json:"enabled"`
+			Port    int                `json:"port"`
+			Streams []config.SRTStream `json:"streams"`
+		} `json:"srt"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+	require.True(t, got.RTMP.Enabled)
+	require.Equal(t, 1936, got.RTMP.Port)
+	require.Equal(t, "front-door", got.RTMP.StreamKeys["cam-1"])
+	require.True(t, got.SRT.Enabled)
+	require.Equal(t, 9001, got.SRT.Port)
+	require.Equal(t, "cam-2", got.SRT.Streams[0].CameraID)
+}

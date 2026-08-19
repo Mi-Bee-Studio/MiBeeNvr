@@ -41,7 +41,7 @@ export interface HLSStreamingConfig {
 export interface RTMPConfig {
   enabled: boolean;
   port: number;
-  stream_keys?: Record<string, string>; // stream_key → camera_id
+  stream_keys?: Record<string, string>; // camera_id → stream_key (legacy map; per-camera stream_key takes precedence)
 }
 
 export interface SRTStreamConfig {
