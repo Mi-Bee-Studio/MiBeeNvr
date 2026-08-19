@@ -24,10 +24,10 @@ type SRTConfig struct {
 // SRTStream configures a single SRT stream mapping.
 type SRTStream struct {
 	CameraID   string `yaml:"camera_id" json:"camera_id"`
-	Mode       string `yaml:"mode" json:"mode"`                 // "listener" (receive pushes) or "caller" (pull from remote)
-	Address    string `yaml:"address" json:"address"`           // For caller mode: remote SRT address (e.g. "192.168.1.100:9000")
-	Passphrase string `yaml:"passphrase" json:"passphrase"`     // AES encryption passphrase (optional)
-	StreamID   string `yaml:"stream_id" json:"stream_id"`       // SRT stream ID for caller mode (optional)
+	Mode       string `yaml:"mode" json:"mode"`             // "listener" (receive pushes) or "caller" (pull from remote)
+	Address    string `yaml:"address" json:"address"`       // For caller mode: remote SRT address (e.g. "192.168.1.100:9000")
+	Passphrase string `yaml:"passphrase" json:"passphrase"` // AES encryption passphrase (optional)
+	StreamID   string `yaml:"stream_id" json:"stream_id"`   // SRT stream ID for caller mode (optional)
 }
 
 // RTMPConfig configures the RTMP ingest server.

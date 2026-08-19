@@ -415,13 +415,13 @@ func TestStreamingSettings_RTMPAndSRT(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	var got struct {
 		RTMP struct {
-			Enabled     bool              `json:"enabled"`
-			Port        int               `json:"port"`
-			StreamKeys  map[string]string `json:"stream_keys"`
+			Enabled    bool              `json:"enabled"`
+			Port       int               `json:"port"`
+			StreamKeys map[string]string `json:"stream_keys"`
 		} `json:"rtmp"`
 		SRT struct {
-			Enabled bool             `json:"enabled"`
-			Port    int              `json:"port"`
+			Enabled bool               `json:"enabled"`
+			Port    int                `json:"port"`
 			Streams []config.SRTStream `json:"streams"`
 		} `json:"srt"`
 	}
