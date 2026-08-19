@@ -230,7 +230,13 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 		return // stream not active, silently ignore
 	}
 
-	isKeyframe := isKeyframeNALU(au[0], entry.codec == model.FormatH265)
+	// Scan the WHOLE AU, not just au[0]: ingest push paths (RTMP/SRT/WHIP)
+	// prepend the cached SPS/PPS to IDR frames before broadcasting, so au[0]
+	// is a parameter set, never the IDR itself — an au[0]-only check marked
+	// every ingest keyframe as an inter frame (GOP cache never filled, FLV
+	// viewers got a P-frame-only stream, players waited for a keyframe and
+	// gave up; found on the fnOS live-push topology, 2026-08-19).
+	isKeyframe := nalutil.IsIDR(au, entry.codec == model.FormatH265)
 
 	traceID := "no-trace"
 	if isKeyframe {
@@ -257,11 +263,6 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 			"queue_depth", len(entry.frameCh),
 		)
 	}
-}
-
-// isKeyframeNALU checks if the first NALU is an IDR frame.
-func isKeyframeNALU(nalu []byte, isH265 bool) bool {
-	return nalutil.IsKeyframeNALU(nalu, isH265)
 }
 
 // writeLoop drains frames from the channel and distributes to all viewers.
