@@ -155,6 +155,86 @@ func BuildPTZCruiseCommand(action string, cruise, value byte) ([]byte, error) {
 	return finishPTZCommand(cmd), nil
 }
 
+// FI (Focus/Iris) lens instruction bits (GB/T 28181-2022 § A.3.3 表 A.6 —
+// byte 4 low nibble of the command; the 2016 revision numbers the tables
+// identically). Iris and focus may combine, but never opposite directions of
+// the same lens axis (Bit3/Bit2 and Bit1/Bit0 are mutually exclusive pairs).
+const (
+	fiIrisCloseBits byte = 0x08 // 光圈缩小
+	fiIrisOpenBits  byte = 0x04 // 光圈放大
+	fiFocusNearBits byte = 0x02 // 聚焦近
+	fiFocusFarBits  byte = 0x01 // 聚焦远
+)
+
+// FI lens actions accepted by BuildFICommand / SendFI.
+const (
+	FIIrisClose = "iris-close" // 光圈缩小
+	FIIrisOpen  = "iris-open"  // 光圈放大
+	FIFocusNear = "focus-near" // 聚焦近
+	FIFocusFar  = "focus-far"  // 聚焦远
+	FILensStop  = "stop"       // 镜头所有动作停止 (byte4=40H)
+)
+
+// fiActionBits maps a single FI action to its byte-4 bits.
+var fiActionBits = map[string]byte{
+	FIIrisClose: fiIrisCloseBits,
+	FIIrisOpen:  fiIrisOpenBits,
+	FIFocusNear: fiFocusNearBits,
+	FIFocusFar:  fiFocusFarBits,
+	FILensStop:  0x00,
+}
+
+// BuildFICommand builds an FI lens instruction (GB/T 28181-2022 § A.3.3
+// 表 A.7): A5 0F 01 <0x40|bits> <focus speed> <iris speed> 00 <checksum>.
+// Byte 5 (cmd[4]) is the focus speed, byte 6 (cmd[5]) the iris speed
+// (00H-FFH slow→fast); only the acting axis's speed byte is set, mirroring
+// BuildPTZCommand.
+func BuildFICommand(action string, speed byte) ([]byte, error) {
+	bits, ok := fiActionBits[action]
+	if !ok {
+		return nil, fmt.Errorf("gb28181: unknown FI lens action %q", action)
+	}
+	cmd := [8]byte{0xA5, 0x0F, 0x01, 0x40 | bits, 0x00, 0x00, 0x00, 0x00}
+	switch action {
+	case FIIrisClose, FIIrisOpen:
+		cmd[5] = speed // 光圈速度 (字节6)
+	case FIFocusNear, FIFocusFar:
+		cmd[4] = speed // 聚焦速度 (字节5)
+	case FILensStop:
+		// all speed bytes stay 0
+	}
+	return finishPTZCommand(cmd), nil
+}
+
+// Auxiliary switch codes (GB/T 28181-2022 § A.3.7 表 A.11): byte 4 = 0x8C
+// (switch on) / 0x8D (switch off), byte 5 = the switch number. The standard
+// fixes number 1 = wiper (雨刷); light/ heater numbering is vendor convention
+// with 2 = light the de-facto mainstream value.
+const (
+	ptzAuxSwitchOn  byte = 0x8C
+	ptzAuxSwitchOff byte = 0x8D
+)
+
+// Fixed / conventional auxiliary switch numbers.
+const (
+	AuxSwitchWiper byte = 1 // 雨刷 — spec-fixed (表 A.11 注)
+	AuxSwitchLight byte = 2 // 灯光/补光 — de-facto convention
+)
+
+// BuildAuxSwitchCommand builds an auxiliary switch instruction: A5 0F 01
+// <8C|8D> <switch no> 00 00 <checksum>. Switch numbers are 1-255.
+func BuildAuxSwitchCommand(switchNo byte, on bool) ([]byte, error) {
+	if switchNo == 0 {
+		return nil, fmt.Errorf("gb28181: auxiliary switch number must be 1-255")
+	}
+	code := ptzAuxSwitchOff
+	if on {
+		code = ptzAuxSwitchOn
+	}
+	cmd := [8]byte{0xA5, 0x0F, 0x01, code, switchNo, 0x00, 0x00, 0x00}
+	return finishPTZCommand(cmd), nil
+}
+
 // finishPTZCommand fills the checksum byte (mod-256 sum of bytes 0-6).
 func finishPTZCommand(cmd [8]byte) []byte {
 	var sum byte
@@ -199,21 +279,24 @@ func NewPTZController(devices *DeviceManager, sender MessageSender) *PTZControll
 	return &PTZController{devices: devices, sender: sender}
 }
 
+// locateChannel resolves a channel ID across all registered devices,
+// returning the channel and its owning device.
+func (c *PTZController) locateChannel(channelID string) (*Channel, *Device, error) {
+	for _, d := range c.devices.AllDevices() {
+		if found, ok := c.devices.FindChannel(d.ID, channelID); ok {
+			return found, d, nil
+		}
+	}
+	return nil, nil, ErrChannelNotFound
+}
+
 // SendPTZ sends a PTZ command for channelID. The channel is located across all
 // registered devices. Errors cover unknown channel, offline device, missing
 // PTZ capability, pan/tilt-only devices rejecting zoom, and send failures.
 func (c *PTZController) SendPTZ(channelID, direction string, speed byte) error {
-	var ch *Channel
-	var dev *Device
-	for _, d := range c.devices.AllDevices() {
-		if found, ok := c.devices.FindChannel(d.ID, channelID); ok {
-			ch = found
-			dev = d
-			break
-		}
-	}
-	if ch == nil {
-		return ErrChannelNotFound
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
 	}
 	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
@@ -235,17 +318,9 @@ func (c *PTZController) SendPTZ(channelID, direction string, speed byte) error {
 // SendPTZPreset sends a preset instruction (set/call/delete) for channelID.
 // Preset numbers are 1-255 (0 reserved).
 func (c *PTZController) SendPTZPreset(channelID, action string, preset byte) error {
-	var ch *Channel
-	var dev *Device
-	for _, d := range c.devices.AllDevices() {
-		if found, ok := c.devices.FindChannel(d.ID, channelID); ok {
-			ch = found
-			dev = d
-			break
-		}
-	}
-	if ch == nil {
-		return ErrChannelNotFound
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
 	}
 	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
@@ -263,17 +338,9 @@ func (c *PTZController) SendPTZPreset(channelID, action string, preset byte) err
 // SendPTZCruise sends a cruise instruction for channelID (cruise group
 // 1-255; value = preset number / speed / stay-time depending on action).
 func (c *PTZController) SendPTZCruise(channelID, action string, cruise, value byte) error {
-	var ch *Channel
-	var dev *Device
-	for _, d := range c.devices.AllDevices() {
-		if found, ok := c.devices.FindChannel(d.ID, channelID); ok {
-			ch = found
-			dev = d
-			break
-		}
-	}
-	if ch == nil {
-		return ErrChannelNotFound
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
 	}
 	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
@@ -285,6 +352,44 @@ func (c *PTZController) SendPTZCruise(channelID, action string, cruise, value by
 		return c.SendPTZ(channelID, DirStop, 0)
 	}
 	cmd, err := BuildPTZCruiseCommand(action, cruise, value)
+	if err != nil {
+		return err
+	}
+	return c.sendCommand(ch, cmd)
+}
+
+// SendFI sends an FI lens instruction (iris open/close, focus near/far, stop)
+// for channelID. Requires a PTZ-capable channel, like the preset/cruise paths.
+func (c *PTZController) SendFI(channelID, action string, speed byte) error {
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if dev.Status.Load() != DeviceOnline {
+		return ErrDeviceOffline
+	}
+	if ch.PTZType == 0 {
+		return ErrPTZUnsupported
+	}
+	cmd, err := BuildFICommand(action, speed)
+	if err != nil {
+		return err
+	}
+	return c.sendCommand(ch, cmd)
+}
+
+// SendAuxSwitch toggles an auxiliary switch (wiper/light, GB/T 28181-2022
+// § A.3.7) on channelID. Not gated on PTZType — a fixed camera can carry a
+// wiper or light without a pan/tilt head.
+func (c *PTZController) SendAuxSwitch(channelID string, switchNo byte, on bool) error {
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if dev.Status.Load() != DeviceOnline {
+		return ErrDeviceOffline
+	}
+	cmd, err := BuildAuxSwitchCommand(switchNo, on)
 	if err != nil {
 		return err
 	}

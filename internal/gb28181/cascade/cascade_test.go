@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
@@ -168,4 +169,54 @@ func TestDecodePTZCmd(t *testing.T) {
 	require.Error(t, err)
 	_, _, err = decodePTZCmd("1234")
 	require.Error(t, err)
+}
+
+// TestLensCmdKind covers FI/auxiliary opcode recognition (GB/T 28181-2022
+// § A.3.3/A.3.7): FI lens 0x4X, aux switch 0x8C/0x8D; direction bits (0x00-
+// 0x3F) and preset opcodes must NOT classify as lens.
+func TestLensCmdKind(t *testing.T) {
+	require.Equal(t, "FI lens", lensCmdKind("A50F014400400039"))    // iris open
+	require.Equal(t, "FI lens", lensCmdKind("A50F014120000016"))    // focus far
+	require.Equal(t, "FI lens", lensCmdKind("A50F01492040005E"))    // combined iris+focus
+	require.Equal(t, "aux switch", lensCmdKind("A50F018C01000042")) // wiper on
+	require.Equal(t, "aux switch", lensCmdKind("A50F018D01000043")) // wiper off
+	require.Equal(t, "", lensCmdKind("A50F0108002000DD"))           // direction (up)
+	require.Equal(t, "", lensCmdKind("A50F0100000000B5"))           // stop
+	require.Equal(t, "", lensCmdKind("nothex"))
+	require.Equal(t, "", lensCmdKind("1234"))
+}
+
+// Upper-platform FI/aux commands must not be mis-decoded as PTZ directions
+// and pushed at local cameras — they stop at an explicit refusal log.
+func TestForwardDeviceControl_LensNotForwarded(t *testing.T) {
+	db := newCascadeTestDB(t)
+	svc := New(testCfg(), fakeSource{cams: []CameraInfo{{ID: "front", Name: "Front"}}}, db)
+	_, err := svc.catalogItems()
+	require.NoError(t, err)
+
+	forwarded := 0
+	svc.SetPTZForwarder(func(cameraID, direction string, speed byte) error {
+		forwarded++
+		return nil
+	})
+
+	svc.forwardDeviceControl(manscdp.DeviceControl{
+		CmdType:  manscdp.CmdDeviceControl,
+		DeviceID: "34020000001320000001",
+		PTZCmd:   "A50F014400400039", // FI iris-open
+	})
+	svc.forwardDeviceControl(manscdp.DeviceControl{
+		CmdType:  manscdp.CmdDeviceControl,
+		DeviceID: "34020000001320000001",
+		PTZCmd:   "A50F018C01000042", // aux wiper on
+	})
+	require.Equal(t, 0, forwarded, "lens/aux commands must not reach the local PTZ bridge")
+
+	// Sanity: plain directions still forward through the same path.
+	svc.forwardDeviceControl(manscdp.DeviceControl{
+		CmdType:  manscdp.CmdDeviceControl,
+		DeviceID: "34020000001320000001",
+		PTZCmd:   "A50F0108002000DD",
+	})
+	require.Equal(t, 1, forwarded)
 }

@@ -587,3 +587,83 @@ func TestAPI_GB28181_PTZ_NotSupported(t *testing.T) {
 		t.Fatalf("expected 'PTZ not supported' message, got: %s", rr.Body.String())
 	}
 }
+
+func TestAPI_GB28181_Lens_Success(t *testing.T) {
+	t.Helper()
+	h, sender := setupGB28181PTZHandler(t)
+
+	// Omitted speed must default to mid-range (0x40) on the iris axis:
+	// A5 0F 01 44 00 40 00 39 (表 A.7 iris-open example).
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/channels/34020000001320000001/lens", strings.NewReader(`{"action":"iris-open"}`), "", "")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rr.Code, rr.Body.String())
+	}
+	var response map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response["status"] != "lens_sent" {
+		t.Fatalf("expected status 'lens_sent', got '%s'", response["status"])
+	}
+	if sender.deviceID != "34020000001310000001" {
+		t.Fatalf("expected lens command sent to device, got '%s'", sender.deviceID)
+	}
+	if !strings.Contains(sender.body, "<PTZCmd>A50F014400400039</PTZCmd>") {
+		t.Fatalf("expected FI PTZCmd in body, got: %s", sender.body)
+	}
+}
+
+func TestAPI_GB28181_Lens_UnknownAction(t *testing.T) {
+	t.Helper()
+	h, _ := setupGB28181PTZHandler(t)
+
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/channels/34020000001320000001/lens", strings.NewReader(`{"action":"bogus"}`), "", "")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rr.Code)
+	}
+}
+
+func TestAPI_GB28181_Lens_MissingAction(t *testing.T) {
+	t.Helper()
+	h, _ := setupGB28181PTZHandler(t)
+
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/channels/34020000001320000001/lens", strings.NewReader(`{}`), "", "")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rr.Code)
+	}
+}
+
+func TestAPI_GB28181_AuxSwitch_Success(t *testing.T) {
+	t.Helper()
+	h, sender := setupGB28181PTZHandler(t)
+
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/channels/34020000001320000001/aux-switch", strings.NewReader(`{"switch":1,"on":true}`), "", "")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d (%s)", rr.Code, rr.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if response["status"] != "aux_switch_sent" {
+		t.Fatalf("expected status 'aux_switch_sent', got '%v'", response["status"])
+	}
+	if !strings.Contains(sender.body, "<PTZCmd>A50F018C01000042</PTZCmd>") {
+		t.Fatalf("expected aux-switch PTZCmd in body, got: %s", sender.body)
+	}
+}
+
+func TestAPI_GB28181_AuxSwitch_InvalidSwitch(t *testing.T) {
+	t.Helper()
+	h, _ := setupGB28181PTZHandler(t)
+
+	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/channels/34020000001320000001/aux-switch", strings.NewReader(`{"switch":0,"on":true}`), "", "")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for switch 0, got %d", rr.Code)
+	}
+}
