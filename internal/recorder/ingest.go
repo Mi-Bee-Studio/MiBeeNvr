@@ -64,6 +64,10 @@ type IngestRecorder struct {
 	// Hub is set by camera.initStreamHub (same pattern as H264Recorder.Hub).
 	Hub *model.StreamHub
 
+	// auAsm regroups delivered NALUs into picture-complete AUs before fan-out
+	// (push publishers disagree on delivery granularity; see AUAssembler).
+	auAsm *nalutil.AUAssembler
+
 	// connected reflects whether a publisher is currently pushing frames.
 	// Drives the Idle ↔ Recording status transitions.
 	connected atomic.Bool
@@ -101,7 +105,10 @@ func NewIngestRecorder(cfg IngestConfig) *IngestRecorder {
 	if cfg.SegmentDur <= 0 {
 		cfg.SegmentDur = DefaultSegmentDur
 	}
-	return &IngestRecorder{cfg: cfg}
+	return &IngestRecorder{
+		cfg:   cfg,
+		auAsm: nalutil.NewAUAssembler(cfg.Encoding == "h265"),
+	}
 }
 
 // GetHub returns the StreamHub for frame fan-out (satisfies the hubber interface
@@ -254,6 +261,9 @@ func (r *IngestRecorder) Start(_ context.Context) error {
 
 // Stop closes any in-flight segment and marks the recorder stopped.
 func (r *IngestRecorder) Stop() error {
+	// Emit the pending picture before closing the segment (the assembler holds
+	// it back until the next picture starts, which will never come).
+	r.auAsm.Flush(r.writeAssembledAU)
 	r.mu.Lock()
 	if r.cancel != nil {
 		r.cancel()
@@ -280,17 +290,25 @@ func (r *IngestRecorder) WriteConnected() {
 	r.connected.Store(true)
 }
 
-// WriteNALU ingests one H.264 access unit (slice of NAL units, WITHOUT start
-// codes) delivered by an ingest server (SRT tsdemux / RTMP reader).
+// WriteNALU ingests H.264 NAL units (WITHOUT start codes) delivered by an
+// ingest server (SRT tsdemux / RTMP reader / WHIP track handler).
+//
+// Delivery granularity varies by publisher: FFmpeg sends picture-complete AUs
+// per message, while restreamer-style publishers emit one NAL unit per message
+// — splitting multi-slice pictures (libx264 sliced-threads) into fragments no
+// decoder can decode. An AUAssembler regroups everything into picture-complete
+// AUs before fan-out, so the isIDR hint from the transport is ignored and IDR
+// is recomputed on the assembled picture.
 //
 // ptsTicks is a 90 kHz clock value (matching the RTP/StreamHub convention used
-// by the pull recorders). isIDR indicates the AU contains a keyframe.
+// by the pull recorders).
 //
 // It performs three jobs:
-//  1. Broadcasts the AU to the StreamHub for live consumers (HLS/WebRTC/FLV/WS).
+//  1. Broadcasts the assembled AU to the StreamHub for live consumers
+//     (HLS/WebRTC/FLV/WS).
 //  2. Captures SPS/PPS and rolls the MP4 segment when they change.
 //  3. Writes VCL NALUs (types 1, 5) to the rolling MP4 segment for recordings.
-func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
+func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, _ bool) {
 	defer func() {
 		if panicErr := recover(); panicErr != nil {
 			buf := make([]byte, 4096)
@@ -300,15 +318,23 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 		}
 	}()
 
-	// ---- Lock scope 1: status transition, SPS/PPS update, segment rotation ----
-	r.mu.Lock()
-	if r.status != model.StatusRecording {
-		r.status = model.StatusRecording
-		r.incActive()
-		ingestLogger.Info("ingest publisher streaming", "camera_id", r.cfg.CameraID)
-	}
+	// Assembly runs first so a completing picture is written under the PREVIOUS
+	// codec parameters; the incoming AU's parameter sets are cached afterwards
+	// and rotate the recording segment before the next picture opens one.
+	r.auAsm.Add(au, ptsTicks, r.writeAssembledAU)
+	r.cacheParamSets(au)
+}
 
+// cacheParamSets extracts SPS/PPS from an incoming delivery (any granularity)
+// and rotates the recording segment when they change. Runs on every WriteNALU
+// call so out-of-band parameter-set deliveries (the RTMP sequence-header feed,
+// which carries no VCL NALU and is never emitted by the assembler) are still
+// captured in time for HLS/FLV/WebRTC initialization. H.264 only — H.265 push
+// ingest is a follow-up (see IngestConfig.Encoding).
+func (r *IngestRecorder) cacheParamSets(au [][]byte) {
 	sps, pps := nalutil.ExtractParamSetsH264(au)
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if sps != nil {
 		if r.sps != nil && !nalutil.EqualParamSets(r.sps, sps) {
 			ingestLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
@@ -323,6 +349,29 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 		}
 		r.pps = append([]byte(nil), pps...)
 	}
+}
+
+// writeAssembledAU fans one picture-complete AU out to the StreamHub and the
+// rolling segment. Called synchronously by the AUAssembler.
+func (r *IngestRecorder) writeAssembledAU(au [][]byte, ptsTicks int64) {
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			buf := make([]byte, 4096)
+			buf = buf[:runtime.Stack(buf, false)]
+			ingestLogger.Error("PANIC recovered in writeAssembledAU",
+				"camera_id", r.cfg.CameraID, "panic", panicErr, "stack", string(buf))
+		}
+	}()
+
+	isIDR := nalutil.IsIDR(au, r.cfg.Encoding == "h265")
+
+	// ---- Lock scope 1: status transition, shared-state snapshot ----
+	r.mu.Lock()
+	if r.status != model.StatusRecording {
+		r.status = model.StatusRecording
+		r.incActive()
+		ingestLogger.Info("ingest publisher streaming", "camera_id", r.cfg.CameraID)
+	}
 
 	// Copy shared state to locals while holding lock.
 	hub := r.Hub
@@ -331,18 +380,21 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 	r.mu.Unlock()
 
 	// ---- Hub broadcast (outside lock, non-blocking by design) ----
-	// RTMP/SRT publishers send SPS/PPS out-of-band (RTMP sequence header), so a
-	// keyframe AU typically does NOT contain the param sets that downstream
-	// consumers need — notably gohlslib's DTS extractor scans the AU for an SPS
-	// NAL and fails with "SPS not received yet" otherwise. Match the RTSP path
-	// (which inlines SPS/PPS in every IDR AU) by ALWAYS prepending the cached
-	// param sets to IDR frames (idempotent if the AU already has them).
+	// Downstream consumers need param sets in-band on keyframes — notably
+	// gohlslib's DTS extractor scans the AU for an SPS NAL and fails with
+	// "SPS not received yet" otherwise. Match the RTSP path by prepending the
+	// cached param sets to IDR AUs that don't already carry them inline
+	// (restreamer publishers inline them; FFmpeg delivers them out-of-band
+	// only, via the sequence-header feed cached in cacheParamSets).
 	if hub != nil {
 		broadcastAU := au
 		if isIDR && localSPS != nil && localPPS != nil {
-			broadcastAU = make([][]byte, 0, len(au)+2)
-			broadcastAU = append(broadcastAU, localSPS, localPPS)
-			broadcastAU = append(broadcastAU, au...)
+			inSPS, inPPS := nalutil.ExtractParamSetsH264(au)
+			if inSPS == nil || inPPS == nil {
+				broadcastAU = make([][]byte, 0, len(au)+2)
+				broadcastAU = append(broadcastAU, localSPS, localPPS)
+				broadcastAU = append(broadcastAU, au...)
+			}
 		}
 		hub.Broadcast(ptsTicks, broadcastAU, isIDR)
 	}
@@ -487,6 +539,8 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 // accept the next publisher without being restarted.
 func (r *IngestRecorder) OnDisconnect() {
 	r.connected.Store(false)
+	// Emit the pending picture before flushing the segment (see Stop).
+	r.auAsm.Flush(r.writeAssembledAU)
 	r.mu.Lock()
 	wasRecording := r.status == model.StatusRecording
 	r.closeCurrentSegmentLocked()
