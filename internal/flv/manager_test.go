@@ -742,3 +742,31 @@ var (
 
 // ensure io.Writer is satisfied
 var _ io.Writer = (*bytes.Buffer)(nil)
+
+// Ingest push paths (RTMP/SRT/WHIP) prepend the cached SPS/PPS to IDR frames
+// before hub broadcast — au[0] is a parameter set, never the IDR. writeFrame
+// used to check only au[0], marking every ingest keyframe as an inter frame:
+// the GOP cache never filled and FLV viewers got a P-frame-only stream that
+// no player could start from (fnOS live-push topology, 2026-08-19).
+func TestWriteFrame_IngestStyleAU_KeyframeDetected(t *testing.T) {
+	mgr := newTestManager(t)
+	require.NoError(t, mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, nil))
+
+	mgr.mu.RLock()
+	entry := mgr.streams["cam1"]
+	mgr.mu.RUnlock()
+	require.NotNil(t, entry)
+
+	// [SPS, PPS, IDR] — ingest-style AU with prepended param sets.
+	idr := append([]byte{0x65}, make([]byte, 16)...)
+	au := [][]byte{append([]byte{0x67}, minimalSPS[1:]...), append([]byte{0x68}, minimalPPS[1:]...), idr}
+	mgr.writeFrame("cam1", 9000, au)
+
+	// writeLoop consumes frameCh and updates the GOP cache on keyframes —
+	// before the fix this AU was flagged inter and the cache stayed empty.
+	require.Eventually(t, func() bool {
+		entry.gopMu.RLock()
+		defer entry.gopMu.RUnlock()
+		return len(entry.gopCache.frames) == 1 && entry.gopCache.frames[0].isKeyframe
+	}, 2*time.Second, 20*time.Millisecond, "ingest-style [SPS,PPS,IDR] AU must land in the GOP cache as a keyframe")
+}
