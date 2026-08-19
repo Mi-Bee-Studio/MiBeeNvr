@@ -329,6 +329,54 @@ describe('CameraForm - transcode policy', () => {
   });
 });
 
+describe('CameraForm - push camera URL exemption', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+  });
+
+  // rtmp/srt/whip push cameras are identified by stream key / stream-id and
+  // the form shows no URL field for them. validate() used to require a URL
+  // for rtmp/srt anyway — the hidden-field error silently blocked save.
+  it('submits a create for an rtmp push camera without a URL', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, { props: defaultProps() });
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-name')).toBeTruthy();
+    });
+
+    const nameInput = container.querySelector('#cam-name') as HTMLInputElement;
+    await fireEvent.input(nameInput, { target: { value: 'Push Cam' } });
+
+    const protoSelect = container.querySelector('#cam-protocol') as HTMLSelectElement;
+    await fireEvent.change(protoSelect, { target: { value: 'rtmp' } });
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-stream-key')).toBeTruthy();
+      expect(container.querySelector('#cam-url')).toBeFalsy();
+    });
+
+    const keyInput = container.querySelector('#cam-stream-key') as HTMLInputElement;
+    await fireEvent.input(keyInput, { target: { value: 'push-key-1' } });
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.save'),
+    );
+    await fireEvent.click(saveBtn!);
+
+    await vi.waitFor(() => {
+      const create = mockApiRequest.mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0] === '/cameras',
+      );
+      expect(create, 'POST /cameras should have been issued').toBeTruthy();
+    });
+  });
+});
+
 describe('CameraForm - preset override panel', () => {
   afterEach(() => {
     cleanup();

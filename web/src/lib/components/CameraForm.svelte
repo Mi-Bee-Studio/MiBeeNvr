@@ -438,7 +438,11 @@ let validationErrors = $state<Record<string, string>>({});
     if (!formName.trim()) validationErrors['name'] = t('cameras.nameRequired');
     if (!formProtocol) validationErrors['protocol'] = t('cameras.protocolRequired');
     // gb28181 cameras are identified by SIP DeviceID/ChannelID — no URL.
-    if (formProtocol !== 'gb28181' && formProtocol !== 'whip' && !formUrl.trim()) validationErrors['url'] = t('cameras.urlRequired');
+    // rtmp/srt/whip push cameras are identified by stream key / stream-id —
+    // the form shows no URL field for them, so the requirement must not apply
+    // (a hidden-field validation error silently blocked save with no UI hint).
+    const urlNotRequired = formProtocol === 'gb28181' || formProtocol === 'whip' || formProtocol === 'rtmp' || formProtocol === 'srt';
+    if (!urlNotRequired && !formUrl.trim()) validationErrors['url'] = t('cameras.urlRequired');
     if (formProtocol === 'gb28181') {
       if (!formGB28181DeviceID.trim()) validationErrors['gb28181_device_id'] = t('cameras.gb28181DeviceIdRequired');
       if (!formGB28181ChannelID.trim()) validationErrors['gb28181_channel_id'] = t('cameras.gb28181ChannelIdRequired');
