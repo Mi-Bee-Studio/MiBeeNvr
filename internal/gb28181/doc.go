@@ -37,7 +37,10 @@
 //   - 2022: additive over 2016 (optional SDP f= line, subscription/notify
 //     extensions, extra catalog fields). The platform omits f= (optional per
 //     spec — devices tolerate its absence) and ignores unknown catalog
-//     fields, so 2022 devices interoperate on the 2016 feature set.
+//     fields, so 2022 devices interoperate on the 2016 feature set. Control
+//     additions are emitted too: FI lens instructions (§ A.3.3 iris/focus)
+//     and auxiliary switches (§ A.3.7 wiper/light) ride the PTZCmd
+//     transport, whose 8-byte layout is shared across revisions.
 //
 // Device-side tolerances accumulated from real-device interop (see
 // Mi-Bee-Studio/mibee-eye-raspi issues #3-#6 for the firmware side):

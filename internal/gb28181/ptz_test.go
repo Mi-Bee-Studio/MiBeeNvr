@@ -199,3 +199,90 @@ func TestBuildPTZCruiseCommand(t *testing.T) {
 	_, err = BuildPTZCruiseCommand("bogus", 1, 0)
 	require.Error(t, err)
 }
+
+// TestBuildFICommand verifies the FI lens instruction layout against the
+// GB/T 28181-2022 § A.3.3 表 A.6/A.7 examples: byte 3 = 0x40|bits (Bit3 iris
+// close, Bit2 iris open, Bit1 focus near, Bit0 focus far), byte 5 = focus
+// speed, byte 6 = iris speed. Checksums verified by hand.
+func TestBuildFICommand(t *testing.T) {
+	tests := []struct {
+		name   string
+		action string
+		speed  byte
+		want   []byte
+	}{
+		{name: "iris close", action: FIIrisClose, speed: 0x40, want: []byte{0xA5, 0x0F, 0x01, 0x48, 0x00, 0x40, 0x00, 0x3D}},
+		{name: "iris open", action: FIIrisOpen, speed: 0x40, want: []byte{0xA5, 0x0F, 0x01, 0x44, 0x00, 0x40, 0x00, 0x39}},
+		{name: "focus near", action: FIFocusNear, speed: 0x20, want: []byte{0xA5, 0x0F, 0x01, 0x42, 0x20, 0x00, 0x00, 0x17}},
+		{name: "focus far", action: FIFocusFar, speed: 0x20, want: []byte{0xA5, 0x0F, 0x01, 0x41, 0x20, 0x00, 0x00, 0x16}},
+		{name: "stop all lens motion", action: FILensStop, speed: 0x00, want: []byte{0xA5, 0x0F, 0x01, 0x40, 0x00, 0x00, 0x00, 0xF5}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, err := BuildFICommand(tt.action, tt.speed)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, cmd)
+
+			var sum byte
+			for _, b := range cmd[:7] {
+				sum += b
+			}
+			require.Equal(t, sum, cmd[7], "checksum includes byte0")
+		})
+	}
+
+	_, err := BuildFICommand("bogus", 0x20)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown FI lens action")
+}
+
+// TestBuildAuxSwitchCommand verifies the auxiliary switch instruction layout
+// (GB/T 28181-2022 § A.3.7 表 A.11): byte 3 = 0x8C on / 0x8D off, byte 4 =
+// switch number (1 = wiper per the table's note). Checksums verified by hand.
+func TestBuildAuxSwitchCommand(t *testing.T) {
+	cmd, err := BuildAuxSwitchCommand(AuxSwitchWiper, true)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xA5, 0x0F, 0x01, 0x8C, 0x01, 0x00, 0x00, 0x42}, cmd)
+
+	cmd, err = BuildAuxSwitchCommand(AuxSwitchWiper, false)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xA5, 0x0F, 0x01, 0x8D, 0x01, 0x00, 0x00, 0x43}, cmd)
+
+	cmd, err = BuildAuxSwitchCommand(AuxSwitchLight, true)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xA5, 0x0F, 0x01, 0x8C, 0x02, 0x00, 0x00, 0x43}, cmd)
+
+	_, err = BuildAuxSwitchCommand(0, true)
+	require.Error(t, err, "switch number 0 invalid")
+}
+
+func TestPTZ_SendFI_Success(t *testing.T) {
+	c, sender, _ := newPTZTestEnv(t, 2)
+
+	err := c.SendFI("34020000001320000001", FIIrisOpen, 0x40)
+	require.NoError(t, err)
+	require.Equal(t, "34020000001310000001", sender.deviceID)
+	require.Contains(t, sender.body, "<PTZCmd>A50F014400400039</PTZCmd>")
+}
+
+func TestPTZ_SendFI_PTZUnsupported(t *testing.T) {
+	c, _, _ := newPTZTestEnv(t, 0)
+	err := c.SendFI("34020000001320000001", FIFocusNear, 0x20)
+	require.ErrorIs(t, err, ErrPTZUnsupported)
+}
+
+// Aux switches are device-level (wiper/light) — a fixed camera without a
+// pan/tilt head (PTZType 0) must still be controllable.
+func TestPTZ_SendAuxSwitch_NoPTZTypeGate(t *testing.T) {
+	c, sender, _ := newPTZTestEnv(t, 0)
+
+	err := c.SendAuxSwitch("34020000001320000001", AuxSwitchWiper, true)
+	require.NoError(t, err)
+	require.Contains(t, sender.body, "<PTZCmd>A50F018C01000042</PTZCmd>")
+}
+
+func TestPTZ_SendAuxSwitch_InvalidSwitch(t *testing.T) {
+	c, _, _ := newPTZTestEnv(t, 2)
+	err := c.SendAuxSwitch("34020000001320000001", 0, true)
+	require.Error(t, err)
+}

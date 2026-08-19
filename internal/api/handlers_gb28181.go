@@ -318,6 +318,122 @@ func (h *Handler) handlePTZChannel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// lensControlRequest is the body of POST /api/gb28181/channels/{id}/lens
+// (#341 lens extension): an FI instruction — iris-open | iris-close |
+// focus-near | focus-far | stop.
+type lensControlRequest struct {
+	Action string `json:"action"`
+	Speed  byte   `json:"speed"` // optional 0-255 lens-axis speed; 0 defaults to 0x40 (mid-range)
+}
+
+// handleChannelLensControl sends an FI lens instruction (GB/T 28181-2022
+// § A.3.3 — iris/focus) to a channel via the PTZCmd transport.
+func (h *Handler) handleChannelLensControl(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "id")
+	if channelID == "" {
+		WriteError(w, http.StatusBadRequest, "channel ID is required")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	var req lensControlRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Action == "" {
+		WriteError(w, http.StatusBadRequest, "action is required")
+		return
+	}
+	switch req.Action {
+	case gb28181.FIIrisClose, gb28181.FIIrisOpen, gb28181.FIFocusNear, gb28181.FIFocusFar, gb28181.FILensStop:
+	default:
+		WriteError(w, http.StatusBadRequest, "unknown action: iris-open, iris-close, focus-near, focus-far, stop")
+		return
+	}
+	// 0x00 is a valid (slowest) FI speed, so an omitted speed defaults to
+	// mid-range instead of creeping like the PTZ default passthrough does.
+	if req.Speed == 0 && req.Action != gb28181.FILensStop {
+		req.Speed = 0x40
+	}
+
+	slog.Info("GB28181 channel lens control requested", "channel_id", channelID, "action", req.Action)
+
+	if err := h.gb28181PTZ.SendFI(channelID, req.Action, req.Speed); err != nil {
+		switch {
+		case errors.Is(err, gb28181.ErrChannelNotFound):
+			WriteError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, gb28181.ErrDeviceOffline):
+			WriteError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, gb28181.ErrPTZUnsupported):
+			WriteError(w, http.StatusNotFound, "PTZ not supported")
+		case errors.Is(err, gb28181.ErrZoomUnsupported):
+			WriteError(w, http.StatusNotFound, "lens control not supported")
+		default:
+			slog.Error("failed to send GB28181 lens command", "channel_id", channelID, "error", err)
+			WriteError(w, http.StatusInternalServerError, "failed to send lens command")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":     "lens_sent",
+		"channel_id": channelID,
+		"action":     req.Action,
+	})
+}
+
+// handleChannelAuxSwitch toggles a channel auxiliary switch (GB/T 28181-2022
+// § A.3.7 — wiper/light). switch is the switch number 1-255 (1 = wiper per
+// the standard; 2 = light by convention).
+func (h *Handler) handleChannelAuxSwitch(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "id")
+	if channelID == "" {
+		WriteError(w, http.StatusBadRequest, "channel ID is required")
+		return
+	}
+	if h.gb28181PTZ == nil {
+		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
+		return
+	}
+	var req struct {
+		Switch int  `json:"switch"`
+		On     bool `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Switch < 1 || req.Switch > 255 {
+		WriteError(w, http.StatusBadRequest, "switch must be 1-255")
+		return
+	}
+
+	slog.Info("GB28181 channel aux switch requested", "channel_id", channelID, "switch", req.Switch, "on", req.On)
+
+	if err := h.gb28181PTZ.SendAuxSwitch(channelID, byte(req.Switch), req.On); err != nil {
+		switch {
+		case errors.Is(err, gb28181.ErrChannelNotFound):
+			WriteError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, gb28181.ErrDeviceOffline):
+			WriteError(w, http.StatusConflict, err.Error())
+		default:
+			slog.Error("failed to send GB28181 aux switch command", "channel_id", channelID, "error", err)
+			WriteError(w, http.StatusInternalServerError, "failed to send aux switch command")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "aux_switch_sent",
+		"channel_id": channelID,
+		"switch":     req.Switch,
+		"on":         req.On,
+	})
+}
+
 // --- GB28181 PTZ presets (local registry + device commands, #339) ---
 // GB28181 has no device-side preset query — the platform picks preset numbers
 // (1-255) and devices only understand set/call/delete commands

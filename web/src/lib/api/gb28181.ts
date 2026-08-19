@@ -149,3 +149,32 @@ export async function sendGB28181DeviceControl(
     body: JSON.stringify({ command, confirm }),
   });
 }
+
+/** Send an FI lens instruction to a channel (#341, GB/T 28181-2022 § A.3.3):
+ * iris-open | iris-close | focus-near | focus-far | stop. Speed 0-255;
+ * 0 lets the server default to mid-range. */
+export async function sendGB28181LensControl(
+  channelId: string,
+  action: string,
+  speed = 0,
+): Promise<void> {
+  await apiRequest(`/gb28181/channels/${encodeURIComponent(channelId)}/lens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, speed }),
+  });
+}
+
+/** Toggle a channel auxiliary switch (#341, GB/T 28181-2022 § A.3.7):
+ * switch 1 = wiper (spec-fixed), 2 = light (convention). */
+export async function sendGB28181AuxSwitch(
+  channelId: string,
+  switchNo: number,
+  on: boolean,
+): Promise<void> {
+  await apiRequest(`/gb28181/channels/${encodeURIComponent(channelId)}/aux-switch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ switch: switchNo, on }),
+  });
+}

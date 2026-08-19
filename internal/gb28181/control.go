@@ -28,17 +28,11 @@ const (
 // ("RecordCmd"/"GuardCmd"/"AlarmCmd"/"TeleBoot"/"HomePosition"); value its
 // text content ("" for flag-style elements).
 func (c *PTZController) SendDeviceControl(channelID, element, value string) error {
-	var ch *Channel
-	for _, d := range c.devices.AllDevices() {
-		if found, ok := c.devices.FindChannel(d.ID, channelID); ok {
-			ch = found
-			break
-		}
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
 	}
-	if ch == nil {
-		return ErrChannelNotFound
-	}
-	if d, ok := c.devices.Device(ch.DeviceID); !ok || d.Status.Load() != DeviceOnline {
+	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
 	}
 

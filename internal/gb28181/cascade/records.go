@@ -142,6 +142,15 @@ func (s *Service) forwardDeviceControl(dc manscdp.DeviceControl) {
 		slog.Warn("gb28181-cascade: DeviceControl for unknown channel", "channel", dc.DeviceID)
 		return
 	}
+	if kind := lensCmdKind(dc.PTZCmd); kind != "" {
+		// FI lens (0x4X) and auxiliary-switch (0x8C/0x8D) opcodes share the
+		// PTZCmd transport but are not directions — the local PTZ bridge has
+		// no lens/wiper equivalent, so refuse loudly instead of letting
+		// decodePTZCmd misread the bits as a direction (#341).
+		slog.Warn("gb28181-cascade: lens/aux control has no local equivalent — ignored",
+			"channel", dc.DeviceID, "kind", kind, "ptz", dc.PTZCmd)
+		return
+	}
 	direction, speed, err := decodePTZCmd(dc.PTZCmd)
 	if err != nil {
 		slog.Warn("gb28181-cascade: unparseable PTZ command",
@@ -158,6 +167,24 @@ func (s *Service) forwardDeviceControl(dc manscdp.DeviceControl) {
 		slog.Warn("gb28181-cascade: PTZ forward failed",
 			"channel", dc.DeviceID, "camera", cameraID, "direction", direction, "error", err)
 	}
+}
+
+// lensCmdKind reports the GB/T 28181-2022 § A.3.3/A.3.7 opcode family carried
+// by a hex PTZCmd: "FI lens" (byte 4 in 0x40-0x4F — iris/focus) or
+// "aux switch" (0x8C on / 0x8D off — wiper/light). "" = not a lens opcode.
+// PTZ direction bits only occupy 0x00-0x3F, so 0x4X never collides.
+func lensCmdKind(hexCmd string) string {
+	raw, err := hex.DecodeString(strings.TrimSpace(hexCmd))
+	if err != nil || len(raw) < 4 || raw[0] != 0xA5 {
+		return ""
+	}
+	switch {
+	case raw[3]&0xF0 == 0x40:
+		return "FI lens"
+	case raw[3] == 0x8C || raw[3] == 0x8D:
+		return "aux switch"
+	}
+	return ""
 }
 
 // decodePTZCmd decodes the hex-encoded 8-byte GB/T 28181 § A.4 PTZ command

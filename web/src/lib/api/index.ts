@@ -333,6 +333,8 @@ export {
   stopGB28181Playback,
   controlGB28181Playback,
   sendGB28181DeviceControl,
+  sendGB28181LensControl,
+  sendGB28181AuxSwitch,
   getGB28181CascadeStatus,
   getGB28181Alarms,
   getGB28181Positions,
