@@ -113,6 +113,6 @@ See the [Camera Brand Compatibility Guide](https://raw.githubusercontent.com/Mi-
 
 ## Next Steps
 
-- [Xiaomi Camera Integration](xiaomi.md) — TUTK P2P connection
+- [Xiaomi Camera Integration](xiaomi-setup.md) — TUTK P2P connection
 - [SRT / RTMP Push-Stream Ingest](srt-rtmp.md) — Push-stream camera configuration
 - [Raspberry Pi Camera Integration](raspberrypi.md) — libcamera configuration

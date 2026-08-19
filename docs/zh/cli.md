@@ -98,7 +98,7 @@ mibee-nvr encrypt-config --config mibee-nvr.yaml
 mibee-nvr download-model --config mibee-nvr.yaml
 ```
 
-内置 5 次指数退避重试和大小 / 完整性校验，适合离线环境预下载后随包分发。模型用于[浏览器端 AI 检测](ai-detection.md)。
+内置 5 次指数退避重试和大小 / 完整性校验，适合离线环境预下载后随包分发。模型用于[浏览器端 AI 检测](ai-detection-tuning.md)。
 
 ## merge-cameras — 合并摄像头
 
@@ -190,4 +190,4 @@ mibee-nvr cleanup --orphans
 
 - [配置参考](config.md) — YAML 顶层键速查
 - [初始化向导](wizard.md) — Web 端首次配置
-- [升级指南](upgrade-faq.md) — 版本升级与数据迁移
+- [升级指南](upgrade-guide.md) — 版本升级与数据迁移

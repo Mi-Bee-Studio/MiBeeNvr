@@ -735,6 +735,6 @@ curl http://localhost:9090/api/cameras/front-door/health
 ---
 
 **下一步：**
-- [配置参考](docs/zh/configuration.md) - 完整配置指南
-- [API 参考](docs/zh/api/README.md) - REST API 文档
-- [故障排除](docs/zh/troubleshooting.md) - 常见问题和解决方案
+- [配置参考](configuration.md) - 完整配置指南
+- [API 参考](api/README.md) - REST API 文档
+- [故障排除](troubleshooting.md) - 常见问题和解决方案

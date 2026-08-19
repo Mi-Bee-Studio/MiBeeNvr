@@ -1,7 +1,7 @@
 # 部署 FAQ — NAS 打包、端口冲突、自动升级
 
 > 适用于 v0.11.0+。覆盖各大 NAS 平台的升级机制与端口冲突防护。
-> 英文版待补:`docs/en/deployment-faq.md`。
+> 英文版:`docs/en/deployment-faq.md`。
 
 ## 目录
 

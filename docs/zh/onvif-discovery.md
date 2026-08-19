@@ -113,6 +113,6 @@ cameras:
 
 ## 下一步
 
-- [小米摄像头接入](xiaomi.md) — TUTK P2P 连接
+- [小米摄像头接入](xiaomi-setup.md) — TUTK P2P 连接
 - [SRT / RTMP 推流接入](srt-rtmp.md) — 推流摄像头配置
 - [树莓派摄像头接入](raspberrypi.md) — libcamera 配置

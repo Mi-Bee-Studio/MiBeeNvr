@@ -98,7 +98,7 @@ Downloads the ONNX model needed for browser-side AI detection (YOLOv11-nano, ~5.
 mibee-nvr download-model --config mibee-nvr.yaml
 ```
 
-Includes 5 exponential-backoff retries plus size/integrity checks — useful for pre-downloading in offline environments and shipping it with the package. The model powers [browser-side AI detection](ai-detection.md).
+Includes 5 exponential-backoff retries plus size/integrity checks — useful for pre-downloading in offline environments and shipping it with the package. The model powers [browser-side AI detection](ai-detection-tuning.md).
 
 ## merge-cameras — Merge Cameras
 
@@ -190,4 +190,4 @@ mibee-nvr cleanup --orphans
 
 - [Configuration Reference](config.md) — top-level YAML key cheat sheet
 - [Setup Wizard](wizard.md) — first-run configuration in the browser
-- [Upgrade Guide](upgrade-faq.md) — upgrades and data migration
+- [Upgrade Guide](upgrade-guide.md) — upgrades and data migration
