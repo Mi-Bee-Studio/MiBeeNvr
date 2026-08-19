@@ -24,6 +24,12 @@ import (
 // Start creates and starts recorders for all enabled cameras in the config.
 // If a single camera fails to start, it logs the error and continues with the rest.
 func (cm *CameraManager) Start(ctx context.Context) error {
+	// Serialized against Stop: app wiring launches Start detached, so a Stop
+	// racing an in-flight Start would tear down state the registration is
+	// still writing and leak the recorders it hasn't applied yet.
+	cm.startStopMu.Lock()
+	defer cm.startStopMu.Unlock()
+
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
 	if err != nil {
 		return fmt.Errorf("camera manager: invalid segment duration %q: %w", cm.cfg.Storage.SegmentDuration, err)
@@ -172,6 +178,11 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 // Stop stops all running recorders and waits for them to complete.
 func (cm *CameraManager) Stop() error {
+	// Blocks until an in-flight Start has finished registering recorders, so
+	// the snapshot below always sees them (see startStopMu on Start).
+	cm.startStopMu.Lock()
+	defer cm.startStopMu.Unlock()
+
 	// Snapshot the recorders (lock-free) then stop each OUTSIDE any lock —
 	// rec.Stop can join a goroutine / do I/O and must not hold configMu.
 	s := cm.loadSnapshot()

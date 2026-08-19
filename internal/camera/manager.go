@@ -106,6 +106,13 @@ type CameraManager struct {
 	// withCameraLifecycle to serialize start/stop/restart for a single camera,
 	// preventing concurrent-recorder-construction leaks. See registry.go.
 	lifecycleMu sync.Map
+	// startStopMu serializes the top-level Start/Stop pair. App wiring runs
+	// Start detached (pkg/app spawns it in a goroutine so readiness doesn't
+	// wait on cameras), so Stop can arrive while Start is still registering
+	// recorders — without this lock the teardown races the registration
+	// (fields + the recorder snapshot itself, leaking recorders that Stop
+	// never sees). Per-camera operations use withCameraLifecycle instead.
+	startStopMu sync.Mutex
 	// snapshot is the immutable, atomically-published registry view consumed by
 	// ALL lock-free reads (GetRecorder/GetHub/Status/statusSnapshot/counts). See
 	// registry.go. Writes go through apply(); lifecycle I/O runs outside any lock
