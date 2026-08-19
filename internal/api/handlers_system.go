@@ -1160,7 +1160,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Label:        "SRT (push)",
 			Encodings:    []string{"h264", "h265"},
 			BuiltIn:      true,
-			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
 		},
 		{
 			ID:        "whip",
@@ -1169,14 +1169,14 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			BuiltIn:   true,
 			// WHIP publishers send the stream key inside the endpoint URL — no
 			// per-camera credentials (same model as RTMP push keys).
-			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
 		},
 		{
 			ID:           "rtmp",
 			Label:        "RTMP (push)",
 			Encodings:    []string{"h264"},
 			BuiltIn:      true,
-			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
 		},
 		{
 			ID:        "gb28181",
