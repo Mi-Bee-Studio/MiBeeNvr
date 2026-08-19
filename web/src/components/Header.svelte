@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
+  import { withBase } from '$lib/base-path';
   import { logout, getSettings, getUpdateStatus } from '$lib/api';
   import { getMiBeeVisionConnected, refreshMiBeeVisionStatus } from '$lib/mibeevision-status';
   import { getEffectiveTheme } from '$lib/preferences';
@@ -124,7 +125,7 @@
         </button>
       {/if}
       <a href="#/surveillance" class="logo">
-        <img src="/logo-icon.svg" alt="" class="logo-mark" />
+        <img src={withBase('/logo-icon.svg')} alt="" class="logo-mark" />
         <span>MiBee NVR</span>
       </a>
       

@@ -3,6 +3,7 @@
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
+  import { withBase } from '$lib/base-path';
   import { showToast } from '$lib/toast';
   import { Eye, EyeOff, Check, X } from 'lucide-svelte';
 
@@ -138,7 +139,7 @@
 
   <div class="card w-full max-w-lg p-10 border th-border shadow-2xl">
     <div class="text-center mb-8">
-      <img src="/logo-icon.svg" alt="MiBee NVR" class="h-16 w-16 mx-auto mb-4" />
+      <img src={withBase('/logo-icon.svg')} alt="MiBee NVR" class="h-16 w-16 mx-auto mb-4" />
       <h1 class="text-3xl font-bold bg-gradient-to-r from-[#635bff] to-[#3a1c9e] bg-clip-text text-transparent mb-3">{t('setup.title')}</h1>
       <p class="th-text-tertiary text-sm">{t('setup.subtitle')}</p>
     </div>
