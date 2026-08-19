@@ -13,10 +13,10 @@ The default page after login — a live multi-camera grid:
 - **Grid layout**: the "Configure" button picks which cameras to show
 - **Per tile**: camera name, live badge, playback protocol (WebCodecs / MJPEG, etc.), and a **health score**
 - **Tile controls**: unmute (cameras with audio) and fullscreen
-- **AI overlay**: with [browser-side AI detection](ai-detection.md) enabled, detection boxes draw directly on the feed
+- **AI overlay**: with [browser-side AI detection](ai-detection-tuning.md) enabled, detection boxes draw directly on the feed
 - **Click a tile** to open that camera's live page
 
-> H.265 cameras play in the browser via WASM decoding — no HTTPS or plugins needed; see [Streaming Protocol Selection](streaming.md).
+> H.265 cameras play in the browser via WASM decoding — no HTTPS or plugins needed; see [Streaming Protocol Selection](streaming-protocol-selection.md).
 
 ## Cameras
 
@@ -56,7 +56,7 @@ Operations at a glance: camera online / recording stats, storage usage and trend
 
 Nine pages: **General** (timezone / port / frontend prefs), **Storage** (root path and candidate volumes), **Camera Access**, **Streaming**, **GB28181**, **AI Detection** (browser-side detection + MiBeeVision integration + per-camera config), **Recording & Processing**, **Advanced**, **About**.
 
-- The "A new version is available" badge on the nav signals an upgrade (see the [Upgrade Guide](upgrade-faq.md))
+- The "A new version is available" badge on the nav signals an upgrade (see the [Upgrade Guide](upgrade-guide.md))
 - Most settings apply immediately; a few (like the storage path) need a restart
 
 ## Live Page (Single Camera)
@@ -78,4 +78,4 @@ Opened from the grid or a camera card at `#/live/{id}`:
 
 - [Quick Start](quickstart.md) — add your first camera
 - [CLI Reference](cli.md) — command-line administration
-- [Live Relay](relay.md) — push feeds to streaming platforms
+- [Live Relay](relay-guide.md) — push feeds to streaming platforms

@@ -67,7 +67,7 @@ The payload is nested — business fields live inside `Data` (including `recordi
 data: {"Topic":"segment.completed","Data":{ ... }}
 ```
 
-> Events are also available via [MQTT](mqtt.md) for home-automation integrations.
+> Events are also available via [MQTT](mqtt-integration.md) for home-automation integrations.
 
 ## Full Documentation
 
@@ -77,6 +77,6 @@ Request/response fields and error codes per group live in the repo:
 
 ## Next Steps
 
-- [MQTT Integration](mqtt.md) — events for home automation
+- [MQTT Integration](mqtt-integration.md) — events for home automation
 - [WebDAV / FTP](webdav-ftp.md) — file-level access to recordings
 - [CLI Reference](cli.md) — command-line administration

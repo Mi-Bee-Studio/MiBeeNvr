@@ -72,7 +72,7 @@ fails, the LiveView status bar shows a red `AI ✗` chip with an error message.
 This means the ONNX model bytes received by the browser could not be parsed.
 
 **First, confirm your version is fixed.** Versions before the gzip-trailer fix
-(see [`docs/known-issues-ai-onnx-gzip-trailer.md`](./known-issues-ai-onnx-gzip-trailer.md))
+(see [`docs/known-issues-ai-onnx-gzip-trailer.md`](../known-issues-ai-onnx-gzip-trailer.md))
 corrupted binary downloads by appending a spurious gzip trailer — every model
 failed regardless of validity. If you are on a current build, proceed:
 

@@ -3,6 +3,7 @@
   import { getUpdateStatus, refreshUpdateStatus } from '$lib/api';
   import type { UpdateStatus } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { withBase } from '$lib/base-path';
   import { showToast } from '$lib/toast';
   import { RefreshCw, CheckCircle2, ArrowUpCircle, ExternalLink } from 'lucide-svelte';
 
@@ -107,7 +108,7 @@
 
 <div class="space-y-6">
   <div class="flex items-center gap-3">
-    <img src="/logo-icon.svg" alt="MiBee NVR" class="h-12 w-12" />
+    <img src={withBase('/logo-icon.svg')} alt="MiBee NVR" class="h-12 w-12" />
     <div>
       <h3 class="text-lg font-semibold th-text-primary">{t('about.title')}</h3>
       <p class="text-xs th-text-tertiary">{t('about.brandTagline')}</p>

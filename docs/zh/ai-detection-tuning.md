@@ -35,7 +35,7 @@
 
 如果**调任何参数（置信度 0.98、类别、模型）都无效**，框全是 `person:100%`，这是 H.265 解码出错的花屏帧导致模型输出爆炸 logit（数千），sigmoid 后全是 1.0，阈值完全失效。**已在代码层修复**：logit > 15 的框视为解码异常丢弃。如果你仍然看到满屏 100% 误报，请确认运行的是 #193 之后的版本。
 
-详见 [known-issues-ai-logit-false-positives.md](known-issues-ai-logit-false-positives.md)。
+详见 [known-issues-ai-logit-false-positives.md](../known-issues-ai-logit-false-positives.md)。
 
 ### 2. 置信度阈值过低（最常见）
 
@@ -149,6 +149,6 @@ curl -u admin:密码 http://localhost:9090/api/ai/models
 
 ## 相关
 
-- [已知问题：logit 爆炸导致满屏 person:100% 误报](known-issues-ai-logit-false-positives.md)
-- [已知问题：ONNX 模型加载 gzip-trailer](known-issues-ai-onnx-gzip-trailer.md)
+- [已知问题：logit 爆炸导致满屏 person:100% 误报](../known-issues-ai-logit-false-positives.md)
+- [已知问题：ONNX 模型加载 gzip-trailer](../known-issues-ai-onnx-gzip-trailer.md)
 - 架构：AI 推理完全在浏览器端（`web/src/lib/ai-detection/`），后端仅存配置与模型文件

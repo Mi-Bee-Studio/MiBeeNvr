@@ -67,7 +67,7 @@ curl -N "http://localhost:9090/api/events?filter=segment."
 data: {"Topic":"segment.completed","Data":{ ... }}
 ```
 
-> 事件也可通过 [MQTT](mqtt.md) 订阅，适合家庭自动化集成。
+> 事件也可通过 [MQTT](mqtt-integration.md) 订阅，适合家庭自动化集成。
 
 ## 完整文档
 
@@ -77,6 +77,6 @@ data: {"Topic":"segment.completed","Data":{ ... }}
 
 ## 下一步
 
-- [MQTT 集成](mqtt.md) — 事件的家庭自动化集成
+- [MQTT 集成](mqtt-integration.md) — 事件的家庭自动化集成
 - [WebDAV / FTP](webdav-ftp.md) — 文件级访问录像
 - [CLI 手册](cli.md) — 命令行管理

@@ -73,7 +73,7 @@ cameras:
     recording_enabled: true      # false = live-only, no recording
 ```
 
-Full recipes per protocol: [ONVIF](onvif-discovery.md) · [Xiaomi](xiaomi.md) · [SRT/RTMP](srt-rtmp.md) · [Raspberry Pi](raspberrypi.md) · [GB28181](gb28181.md).
+Full recipes per protocol: [ONVIF](onvif-discovery.md) · [Xiaomi](xiaomi-setup.md) · [SRT/RTMP](srt-rtmp.md) · [Raspberry Pi](raspberrypi.md) · [GB28181](gb28181-guide.md).
 
 ## Common Recipes
 
