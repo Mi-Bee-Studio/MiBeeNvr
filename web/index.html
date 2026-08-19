@@ -36,9 +36,11 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
-          // Relative registration: scopes to the serving prefix (root, or the
-          // gateway base path) instead of always claiming "/".
-          navigator.serviceWorker.register('./sw.js').catch(function(e) {
+          // Register at the serving prefix (root, or the gateway base path
+          // injected by the server as window.__NVR_BASE__) instead of always
+          // claiming "/". Absolute URL: a document served without the trailing
+          // slash would break a relative "./sw.js" (#394).
+          navigator.serviceWorker.register((window.__NVR_BASE__ || '') + '/sw.js').catch(function(e) {
             console.warn('SW registration failed:', e);
           });
         });
