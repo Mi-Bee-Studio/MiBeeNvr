@@ -220,6 +220,15 @@ func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
 
 	info, err := os.Stat(tempPath)
 	if err != nil {
+		// A vanished temp is a rotation/cleanup artifact, not an I/O error —
+		// same rationale as the CloseSegment gate: counting it escalates a
+		// healthy camera to Failed and the skip-before-write recorders then
+		// never record the successful write that would reset the state.
+		if errors.Is(err, fs.ErrNotExist) {
+			slog.Warn("storage: temp segment vanished before write — frame dropped, storage healthy",
+				"path", tempPath)
+			return 0, fmt.Errorf("storage: temp path not accessible: %w", err)
+		}
 		m.RecordWriteFailureForPath(tempPath)
 		return 0, fmt.Errorf("storage: temp path not accessible: %w", err)
 	}

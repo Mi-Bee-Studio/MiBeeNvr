@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -288,4 +289,64 @@ func TestMemAvailableMB(t *testing.T) {
 	require.Greater(t, mb, 0, "memAvailableMB must be positive")
 	// Any real Linux host has at least 128MB available; the fallback is 1024.
 	require.Less(t, mb, 1024*1024, "memAvailableMB should be <1TB (sanity check)")
+}
+
+// vanishedTmpStore simulates a segment tmp that disappears mid-stream
+// (rotation/cleanup race): WriteFrame fails with fs.ErrNotExist until told
+// otherwise. Everything else succeeds.
+type vanishedTmpStore struct {
+	createCount int
+	failFirst   int
+	writes      []string
+}
+
+func (s *vanishedTmpStore) CreateSegment(cameraID, format string) (string, string, error) {
+	s.createCount++
+	return fmt.Sprintf("seg-%d.tmp", s.createCount), fmt.Sprintf("seg-%d.final", s.createCount), nil
+}
+
+func (s *vanishedTmpStore) WriteFrame(tempPath string, data []byte) (int, error) {
+	if s.failFirst > 0 {
+		s.failFirst--
+		return 0, fmt.Errorf("storage: temp path not accessible: %w", fs.ErrNotExist)
+	}
+	s.writes = append(s.writes, tempPath)
+	return len(data), nil
+}
+
+func (s *vanishedTmpStore) CloseSegment(tempPath, finalPath string) error { return nil }
+
+// A vanished segment tmp must restart the segment in-loop: keep the HTTP
+// stream, open a fresh segment on the next frame — NOT tear down and
+// reconnect into the same dead path (#413; the reconnect loop previously
+// hammered the missing tmp until storage health escalated to Failed).
+func TestHTTPJPEGVanishedTempRestartsSegment(t *testing.T) {
+	srv, handler := newMJPEGStreamServer()
+	defer srv.Close()
+
+	store := &vanishedTmpStore{failFirst: 1}
+	rec := NewHTTPJPEGRecorder(HTTPJPEGConfig{
+		CameraID:   "cam-vanished-tmp",
+		URL:        srv.URL,
+		SegmentDur: time.Hour,
+	}, store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, rec.Start(ctx))
+	require.Equal(t, model.StatusRecording, rec.Status())
+
+	time.Sleep(200 * time.Millisecond)
+	handler.sendFrames(5, 20*time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
+
+	require.NoError(t, rec.Stop())
+	require.Equal(t, model.StatusStopped, rec.Status())
+
+	require.GreaterOrEqual(t, store.createCount, 2, "recorder must open a fresh segment after the tmp vanished")
+	require.NotEmpty(t, store.writes, "frames must land in the replacement segment")
+	for _, w := range store.writes {
+		require.Equal(t, "seg-2.tmp", w, "frames must go to the replacement segment only")
+	}
 }

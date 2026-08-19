@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -503,6 +505,20 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		} else {
 			n, err := r.store.WriteFrame(r.curTempPath, data)
 			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					// The segment tmp vanished (rotated away or cleaned while
+					// this stream loop held it). The camera and HTTP stream
+					// are healthy — drop the stale path so the next frame
+					// opens a fresh segment instead of tearing down and
+					// reconnecting into the same dead path (which also fed
+					// the storage-health failure counter, #413).
+					httpJpegLogger.Warn("segment temp vanished — restarting segment",
+						"camera_id", r.cfg.CameraID, "path", r.curTempPath)
+					r.curTempPath = ""
+					r.curFinalPath = ""
+					r.frameCount = 0
+					continue
+				}
 				return fmt.Errorf("write frame: %w", err), true
 			}
 			r.frameCount++

@@ -1402,3 +1402,32 @@ func TestCloseSegment_VanishedTempDoesNotTripHealth(t *testing.T) {
 		t.Fatal("camera health must remain healthy after vanished-tmp closes")
 	}
 }
+
+// WriteFrame on a vanished temp must not feed the health tracker either —
+// the recorder-side reconnect loop used to hammer the missing tmp until the
+// camera escalated to Failed (#413).
+func TestWriteFrame_VanishedTempDoesNotTripHealth(t *testing.T) {
+	dir := t.TempDir()
+	m, _ := NewManager(dir)
+	m.EnsureCameraDir("cam-wf")
+
+	tempPath, _, err := m.CreateSegment("cam-wf", "h264")
+	if err != nil {
+		t.Fatalf("CreateSegment error: %v", err)
+	}
+	if err := os.Remove(tempPath); err != nil {
+		t.Fatalf("Remove temp: %v", err)
+	}
+
+	for range maxConsecutiveFailures * 2 {
+		if _, err := m.WriteFrame(tempPath, []byte("x")); err == nil {
+			t.Fatal("WriteFrame must still report the missing temp")
+		}
+	}
+	if m.StorageFailedLegacy() {
+		t.Fatal("vanished temp segments must not trip storage health on write")
+	}
+	if m.StorageHealth("cam-wf") != HealthHealthy {
+		t.Fatal("camera health must remain healthy after vanished-tmp writes")
+	}
+}
