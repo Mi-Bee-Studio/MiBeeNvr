@@ -3,6 +3,7 @@
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
+  import { withBase } from '$lib/base-path';
   import { Eye, EyeOff } from 'lucide-svelte';
 
   let username = $state('');
@@ -77,7 +78,7 @@
   <div class="card w-full max-w-md p-10 border th-border shadow-2xl">
     <div class="text-center mb-10">
       <div class="flex items-center justify-center gap-3 mb-3">
-        <img src="/logo-icon.svg" alt="MiBee NVR" class="h-14 w-14" />
+        <img src={withBase('/logo-icon.svg')} alt="MiBee NVR" class="h-14 w-14" />
         <h1 class="text-3xl font-bold bg-gradient-to-r from-[#635bff] to-[#3a1c9e] bg-clip-text text-transparent">{t('login.title')}</h1>
       </div>
       <p class="th-text-tertiary text-sm">{t('login.subtitle')}</p>

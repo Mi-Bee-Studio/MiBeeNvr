@@ -115,7 +115,7 @@ MiBee NVR ships an official `.fpk` app package for fnOS — install it manually 
 
 > The screenshots below show the Chinese fnOS interface (fnOS is a Chinese NAS OS); the steps are identical on any fnOS install.
 
-![MiBee NVR on the fnOS desktop](images/fnos-desktop.webp)
+![MiBee NVR on the fnOS desktop](../zh/images/fnos-desktop.webp)
 
 ### Installing the .fpk Package
 
@@ -134,11 +134,11 @@ Install steps:
 2. fnOS desktop → **App Center** → **Manual Install**, and upload the `.fpk` (or via SSH: `sudo appcenter-cli install-fpk mibee-nvr-fnos-<ver>.fpk`)
 3. Follow the install wizard to choose a storage volume and start the app
 
-![App Center — Manual Install](images/fnos-appcenter-manual.webp)
+![App Center — Manual Install](../zh/images/fnos-appcenter-manual.webp)
 
 Once installed, the app shows up in the "Installed" list where you can open or update it:
 
-![App Center — Installed](images/fnos-appcenter-installed.webp)
+![App Center — Installed](../zh/images/fnos-appcenter-installed.webp)
 
 ### Notes
 

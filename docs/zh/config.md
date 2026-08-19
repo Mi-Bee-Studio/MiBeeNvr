@@ -73,7 +73,7 @@ cameras:
     recording_enabled: true      # false = 仅直播不落盘
 ```
 
-各接入协议的完整写法见对应文档：[ONVIF](onvif-discovery.md) · [小米](xiaomi.md) · [SRT/RTMP](srt-rtmp.md) · [树莓派](raspberrypi.md) · [GB28181](gb28181.md)。
+各接入协议的完整写法见对应文档：[ONVIF](onvif-discovery.md) · [小米](xiaomi-setup.md) · [SRT/RTMP](srt-rtmp.md) · [树莓派](raspberrypi.md) · [GB28181](gb28181-guide.md)。
 
 ## 常见组合示例
 

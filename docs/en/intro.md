@@ -80,4 +80,4 @@ MiBee Nvr v0.11.0 is released under the **AGPL-3.0** open-source license.
 
 - **GitHub Issues**: [MiBeeNvr Issues](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues)
 - **Discussions**: [MiBeeNvr Discussions](https://github.com/Mi-Bee-Studio/MiBeeNvr/discussions)
-- **Upgrade Guide**: [Upgrade Guide](upgrade-faq.md)
+- **Upgrade Guide**: [Upgrade Guide](upgrade-guide.md)
