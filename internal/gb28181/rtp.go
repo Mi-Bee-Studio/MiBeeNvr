@@ -180,9 +180,19 @@ func (r *Receiver) Stop() error {
 		"camera_id", r.cameraID,
 		"packets_received", r.rtpPacketsReceived.Load(),
 		"packets_dropped", r.rtpPacketsDropped.Load(),
+		"gap_skipped_packets", r.gapSkippedPackets(),
 		"foreign_ssrc_dropped", r.foreignDrops.Load(),
 		"au_emitted", r.auEmitted.Load())
 	return nil
+}
+
+// gapSkippedPackets returns the count of packets lost in transit (sequence
+// gaps the jitter drain had to skip). Guarded by jitterBufferMu — the only
+// writer increments under the same lock.
+func (r *Receiver) gapSkippedPackets() uint64 {
+	r.jitterBufferMu.Lock()
+	defer r.jitterBufferMu.Unlock()
+	return r.packetsDroppedU
 }
 
 // Running returns whether the receiver is active.
@@ -591,9 +601,10 @@ func (r *Receiver) flushJitterBuffer() {
 // Metrics returns receiver metrics.
 func (r *Receiver) Metrics() map[string]int64 {
 	return map[string]int64{
-		"packets_received": r.rtpPacketsReceived.Load(),
-		"packets_dropped":  r.rtpPacketsDropped.Load(),
-		"au_emitted":       r.auEmitted.Load(),
+		"packets_received":    r.rtpPacketsReceived.Load(),
+		"packets_dropped":     r.rtpPacketsDropped.Load(),
+		"gap_skipped_packets": int64(r.gapSkippedPackets()),
+		"au_emitted":          r.auEmitted.Load(),
 	}
 }
 
