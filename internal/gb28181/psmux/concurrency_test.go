@@ -52,7 +52,7 @@ func TestConcurrentVideoAudioBursts(t *testing.T) {
 	wg.Add(2)
 	go func() { // video drain goroutine
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for i := range iterations {
 			ps := mux.WriteAU(videoAU, int64(i)*3000, i%30 == 0)
 			require.NoError(t, pkt.Send(ps, int64(i)*3000))
 			time.Sleep(2 * time.Millisecond) // pace: keep the collector in step
@@ -60,7 +60,7 @@ func TestConcurrentVideoAudioBursts(t *testing.T) {
 	}()
 	go func() { // audio drain goroutine
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for i := range iterations {
 			ps := mux.WriteAudio(audioFrame, int64(i)*2880)
 			require.NoError(t, pkt.Send(ps, int64(i)*2880))
 		}
