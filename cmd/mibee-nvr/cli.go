@@ -64,7 +64,7 @@ func resolveHealthAddr(args []string) (string, error) {
 	// Auto-detect config in Docker environments only when neither --addr nor
 	// --config was given.
 	if !addrExplicit && !configExplicit {
-		if dir := dockerStorageDir(); dir != "" {
+		if dir := config.DockerDataDir(); dir != "" {
 			if cfg, err := config.Load(dir + "/mibee-nvr.yaml"); err == nil {
 				if cfg.Server.Listen != "" {
 					addr = cfg.Server.Listen

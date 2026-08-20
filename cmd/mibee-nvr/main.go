@@ -96,41 +96,6 @@ func autoInitConfig(configPath string) *config.Config {
 	return cfg
 }
 
-// dockerStorageDir detects the correct storage directory for Docker environments.
-// Returns empty string if not running in Docker or no Docker-specific path found.
-func dockerStorageDir() string {
-	// Method 1: Explicit env var (set in Dockerfile and docker-compose.yml)
-	if dir := os.Getenv("NVR_DATA_DIR"); dir != "" {
-		return dir
-	}
-	// Method 2: /data directory exists (Docker container indicator)
-	if info, err := os.Stat("/data"); err == nil && info.IsDir() {
-		return "/data"
-	}
-	// Method 3: Docker marker files
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		// Running in Docker but NVR_DATA_DIR not set — check /data
-		if info, err := os.Stat("/data"); err == nil && info.IsDir() {
-			return "/data"
-		}
-	}
-	return ""
-}
-
-// storageRootUsable reports whether the recordings root exists or can be
-// created at the configured path — i.e. whether the app can actually use it.
-// A host-absolute path from a previous install (e.g. /vol1/...) is typically
-// neither inside Docker nor creatable by the unprivileged container user.
-func storageRootUsable(path string) bool {
-	if path == "" {
-		return false
-	}
-	if info, err := os.Stat(path); err == nil {
-		return info.IsDir()
-	}
-	return os.MkdirAll(path, 0o755) == nil
-}
-
 func main() {
 	// Dispatch CLI subcommands before flag parsing
 	dispatchSubcommand(os.Args)
@@ -158,25 +123,15 @@ func main() {
 		cfg = autoInitConfig(*configPath)
 	}
 
-	// Fix Docker storage path mismatch: if running in Docker but the configured
-	// recordings root is unusable here, auto-fix to the container data volume.
-	// Besides the bare non-Docker default, this covers a host-absolute path
-	// left behind by a previous install (#434): uninstalling on fnOS preserves
-	// the config volume, so the reinstalled container reads a root_dir nothing
-	// is mounted at and dies in a restart loop on `mkdir /vol1: permission
-	// denied`. Paths that exist or can be created (volumes mounted at custom
-	// host paths included) are left untouched.
-	if dockerDir := dockerStorageDir(); dockerDir != "" {
-		root := cfg.Storage.RootDir
-		if root == "" || root == "/var/lib/mibee-nvr" || !storageRootUsable(root) {
-			if root != dockerDir {
-				slog.Warn("auto-fixing storage.root_dir for Docker environment",
-					"old", root, "new", dockerDir,
-					"reason", "configured root is not available inside this container")
-				cfg.Storage.RootDir = dockerDir
-				if err := config.Save(*configPath, cfg); err != nil {
-					slog.Warn("failed to save auto-fixed config", "error", err)
-				}
+	// Fix Docker storage path mismatch: if running in Docker but config has
+	// the non-Docker default /var/lib/mibee-nvr, auto-fix to /data.
+	if dockerDir := config.DockerDataDir(); dockerDir != "" {
+		if cfg.Storage.RootDir == "/var/lib/mibee-nvr" || cfg.Storage.RootDir == "" {
+			slog.Warn("auto-fixing storage.root_dir for Docker environment",
+				"old", cfg.Storage.RootDir, "new", dockerDir)
+			cfg.Storage.RootDir = dockerDir
+			if err := config.Save(*configPath, cfg); err != nil {
+				slog.Warn("failed to save auto-fixed config", "error", err)
 			}
 		}
 	}

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -74,23 +73,13 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		slog.Warn("failed to persist device identity", "path", configPath, "error", err)
 	}
 
-	// Step 0: Ensure the recording root exists. The DB no longer lives here
-	// (it stays on the data volume, see dbpath.go), so an unusable root only
-	// degrades recording — the app still boots. If the root cannot even be
-	// created, fall back to the data volume so the NVR keeps recording
-	// SOMEWHERE instead of refusing to start (the "auto-fix" the entrypoint
-	// promises). The revert is persisted so the next boot is clean.
-	if err := os.MkdirAll(cfg.Storage.RootDir, 0o755); err != nil {
-		if dd := dataDir(); dd != "" && dd != cfg.Storage.RootDir {
-			slog.Error("recording root unusable — falling back to the data volume",
-				"configured_root", cfg.Storage.RootDir, "data_dir", dd, "error", err)
-			cfg.Storage.RootDir = dd
-			if err := config.Save(configPath, cfg); err != nil {
-				slog.Warn("failed to persist root fallback", "error", err)
-			}
-		} else {
-			return nil, nil, fmt.Errorf("create storage dir %s: %w", cfg.Storage.RootDir, err)
-		}
+	// Step 0: Ensure storage root directory exists. Inside containers an
+	// un-creatable root_dir (stale host path left by an uninstall-keep-data
+	// reinstall, #434) falls back to the data volume (in-memory only) instead
+	// of aborting startup into a restart loop. The DB is decoupled from the
+	// root (dbpath.go), so this only gates where recordings land.
+	if err := ensureStorageRoot(cfg, config.DockerDataDir()); err != nil {
+		return nil, nil, err
 	}
 
 	// Step 1: Open database (decoupled from the recording root; adopts a

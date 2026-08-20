@@ -69,6 +69,12 @@ ONVIF WS-Discovery 使用 UDP 多播（`239.255.255.250:3702`），Docker 默认
 - **本地测试：** fnOS → 应用中心 → 手动安装 → 选择生成的 `.fpk`，或 `appcenter-cli install-fpk mibee-nvr.fpk`。
 - **上架应用商店：** 通过飞牛官网 → 关注飞牛 → 微信群，加任意粉丝群后联系社区主理人，加入「应用中心开发者先锋交流群」，按工作人员指引提交 `.fpk` + 截图。见 [fnOS 上架文档](https://github.com/ckcoding/fnnas-docs/blob/main/docs/quick-started/publish-application.md)。
 
+## 卸载、重装与配置文件位置
+
+fnOS 卸载应用时**不勾选“删除应用数据”**会保留应用数据卷（录像、数据库、`mibee-nvr.yaml` 全在里面），重装后直接沿用旧配置。挂载源路径可通过 `docker inspect mibee-nvr` 查看（`/data` 的源路径），配置文件在 `<该路径>/mibee-nvr.yaml`。
+
+**存储路径必须填容器内路径**（默认 `/data`），不要填 `/vol1/...` 这类宿主机路径——容器内不存在该挂载，进程（非 root）无法创建。历史版本（≤ v0.11.0）的初始化向导不校验这一点，填了宿主机路径的配置在下次重启时会因 `mkdir` 权限被拒进入崩溃循环（[#434](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/434)）。新版已双重防护：向导保存前探测路径可创建性；启动时容器内不可用的 `root_dir` 会记录 ERROR 并回落到数据卷路径，而不是崩溃循环。旧版中招后的解法：卸载时勾选“删除应用数据”重装，或把数据卷里 `mibee-nvr.yaml` 的 `storage.root_dir` 改回 `/data` 后重启容器。
+
 ## 升级流程
 
 fnOS 通过应用生命周期驱动升级：提升 `manifest.version` + 镜像 tag，重新构建 `.fpk`，平台会执行 `upgrade_init`/`upgrade_callback`（数据/配置迁移钩子），再停止并重启应用。应用数据目录下的录像/数据库/配置在升级中保持不变。见 [fnOS 应用框架](https://github.com/ckcoding/fnnas-docs/blob/main/docs/core-concepts/framework.md)。

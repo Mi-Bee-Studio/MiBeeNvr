@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 // recorder tracks which stub subcommand handlers were invoked.
@@ -193,24 +191,3 @@ func TestResolveHealthAddrNoDocker(t *testing.T) {
 // or can be created is usable (custom-mounted volumes stay untouched), while
 // an empty path or one under a regular file can never be — the Docker
 // auto-fix must fall back to the container data volume for those.
-func TestStorageRootUsable(t *testing.T) {
-	t.Parallel()
-
-	// Existing directory.
-	require.True(t, storageRootUsable(t.TempDir()))
-
-	// Missing but creatable — and actually created, as the app would.
-	p := filepath.Join(t.TempDir(), "nested", "root")
-	require.True(t, storageRootUsable(p))
-	info, err := os.Stat(p)
-	require.NoError(t, err)
-	require.True(t, info.IsDir())
-
-	// Empty is never usable.
-	require.False(t, storageRootUsable(""))
-
-	// A path under a regular file cannot exist nor be created.
-	f := filepath.Join(t.TempDir(), "not-a-dir")
-	require.NoError(t, os.WriteFile(f, []byte("x"), 0o644))
-	require.False(t, storageRootUsable(filepath.Join(f, "sub")))
-}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -58,7 +59,27 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// When absent, keep the existing root_dir; fall back to Docker env detection
 	// only if the loaded config has none (it normally went through ApplyDefaults,
 	// which already sets /var/lib/mibee-nvr).
-	dataDir := strings.TrimSpace(req.StoragePath)
+	userPath := strings.TrimSpace(req.StoragePath)
+	// Validate a wizard-provided path the same way the Settings page does
+	// (#395): absolute, and creatable by the app user right now. Inside a
+	// container a HOST path (e.g. /vol1/...) cannot exist and would brick the
+	// next restart (#434) — reject it here, with a hint at the mounted data
+	// volume, instead of letting the wizard save a boot-looping config.
+	if userPath != "" {
+		if !strings.HasPrefix(userPath, "/") {
+			WriteError(w, http.StatusBadRequest, "storage path must be an absolute path")
+			return
+		}
+		if err := os.MkdirAll(userPath, 0o755); err != nil {
+			msg := fmt.Sprintf("cannot create storage path %q: %v", userPath, err)
+			if vol := config.DockerDataDir(); vol != "" {
+				msg += fmt.Sprintf(" — running inside a container: use a mounted container path (e.g. %s), not a host path", vol)
+			}
+			WriteError(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
+	dataDir := userPath
 	if dataDir == "" && strings.TrimSpace(h.config.Storage.RootDir) == "" {
 		switch {
 		case os.Getenv("NVR_DATA_DIR") != "":
