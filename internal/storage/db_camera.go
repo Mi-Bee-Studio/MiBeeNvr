@@ -72,6 +72,9 @@ type CameraRow struct {
 	RecordingEnabled *bool `json:"recording_enabled,omitempty"`
 	// Recording schedule (injected from YAML at API response time)
 	RecordingSchedule *config.ScheduleConfig `json:"recording_schedule,omitempty"`
+	// Cascade gate (injected from YAML at API response time): false = hidden
+	// from the GB28181 cascade catalog, INVITEs refused. nil = exposed.
+	CascadeEnabled *bool `json:"cascade_enabled,omitempty"`
 	// ActivationState: "active" (recorder runs) or "pending_activation"
 	// (persisted + visible but recorder not started — awaiting credentials).
 	// "" is treated as "active". Set by auto-discover for authenticated devices.

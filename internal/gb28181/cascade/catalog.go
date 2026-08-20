@@ -41,6 +41,12 @@ func (s *Service) catalogItems() ([]manscdp.Item, error) {
 
 	items := make([]manscdp.Item, 0, len(cams))
 	for _, cam := range cams {
+		if cam.CascadeHidden {
+			// Catalog convergence: hidden cameras are not advertised. Their
+			// persisted channel allocation is kept so re-enabling restores the
+			// same channel code (upper-side bindings survive).
+			continue
+		}
 		chID, ok := alloc[cam.ID]
 		if !ok {
 			maxSerial++

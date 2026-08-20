@@ -262,6 +262,8 @@
   "cameras.recordFrom": "录制起始",
   "cameras.recordTo": "至",
   "cameras.recordingDisabledHint": "仅直播模式：摄像头保持连接用于实时预览和转发，但不保存录像（减少 SD 卡损耗）。",
+  "cameras.cascadeEnabled": "国标级联上报此摄像头",
+  "cameras.cascadeDisabledHint": "关闭后此摄像头不上报国标级联目录，上级平台无法看到或点播它（通道号保留，重新开启后绑定关系不变）",
   "cameras.recordingEnabled": "录制视频到磁盘",
   "cameras.recordingSchedule": "录制时间表",
   "cameras.recordingScheduleHint": "按时段录制",

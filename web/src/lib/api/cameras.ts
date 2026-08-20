@@ -39,6 +39,9 @@ export interface Camera {
   // Recording gate: false = live-only (no segments written to disk; the recorder
   // stays connected for live preview + relay + health). undefined = record.
   recording_enabled?: boolean | null;
+  // Cascade gate: false = hidden from the GB28181 cascade catalog (upper
+  // platform cannot see or invite it). undefined = exposed.
+  cascade_enabled?: boolean | null;
   // Xiaomi two-way audio enable flag
   two_way_audio_enabled?: boolean;
   // Push/ingest fields (SRT/RTMP cameras)
@@ -144,6 +147,8 @@ export interface CreateCameraRequest {
   channel?: string;
   // Recording gate: false = live-only (no segments written). Omit = record.
   recording_enabled?: boolean | null;
+  // Cascade gate: false = hidden from the GB28181 cascade catalog. Omit = exposed.
+  cascade_enabled?: boolean | null;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -185,6 +190,8 @@ export interface UpdateCameraRequest {
   channel?: string;
   // Recording gate: false = live-only (no segments written). Omit = unchanged.
   recording_enabled?: boolean | null;
+  // Cascade gate: false = hidden from the GB28181 cascade catalog. Omit = unchanged.
+  cascade_enabled?: boolean | null;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;

@@ -269,6 +269,8 @@
   "cameras.recordFrom": "Record from",
   "cameras.recordTo": "to",
   "cameras.recordingDisabledHint": "Live-only mode: the camera stays connected for live preview and relay, but no recordings are saved (saves SD-card wear).",
+  "cameras.cascadeEnabled": "Expose to GB28181 cascade",
+  "cameras.cascadeDisabledHint": "When off, this camera is hidden from the cascade catalog — the upper platform cannot see or request it (the channel allocation is kept; re-enabling restores the same code)",
   "cameras.recordingEnabled": "Record video to disk",
   "cameras.recordingSchedule": "Recording schedule",
   "cameras.recordingScheduleHint": "time-based recording",

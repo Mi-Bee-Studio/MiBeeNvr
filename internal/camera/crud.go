@@ -606,6 +606,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 		cam.RecordingEnabled = updates.RecordingEnabled
 	}
+	if updates.CascadeEnabled != nil {
+		cam.CascadeEnabled = updates.CascadeEnabled
+	}
 	if updates.RecordingSchedule != nil {
 		cam.RecordingSchedule = updates.RecordingSchedule
 	}

@@ -33,6 +33,9 @@ func (s cascadeSource) Cameras() []cascade.CameraInfo {
 			ID:       cfg.ID,
 			Name:     cfg.Name,
 			Encoding: cfg.Encoding,
+			// Catalog convergence: cascade_enabled=false hides the camera from
+			// the upper platform entirely (catalog + INVITE gate).
+			CascadeHidden: cfg.CascadeEnabled != nil && !*cfg.CascadeEnabled,
 			// Brand/Model live only in DB rows (config.CameraConfig has no
 			// such fields); the catalog falls back to MiBee/MiBeeNvr.
 		})
