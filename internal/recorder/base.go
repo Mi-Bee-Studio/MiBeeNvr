@@ -75,6 +75,14 @@ type BaseConfig struct {
 	// users running the NVR purely as a live/relay gateway, no SD-card writes).
 	// Defaults to true (nil => record); set to a pointer to false to opt out.
 	RecordEnabled *bool
+
+	// Adaptive enables dynamic-timelapse write density (issue #435,
+	// recording_mode: adaptive). Non-nil arms the per-connection adaptive
+	// tracker in writeFrames: sustained calm → sparse keyframe writing, any
+	// activity spike → GOP-buffer flush + full-rate resume. H.264/H.265 only
+	// (the signal is P-frame size vs baseline). Nil = plain continuous
+	// recording with zero added per-frame cost.
+	Adaptive *AdaptiveConfig
 }
 
 // rtspConnector is implemented by concrete RTSP recorders to provide the
@@ -281,6 +289,17 @@ type baseRecorder struct {
 	// Stream fan-out to HLS, WebRTC, etc. Initialized by camera manager
 	// via initStreamHub(). Non-blocking broadcasts.
 	Hub *model.StreamHub
+
+	// Adaptive write-density state (issue #435). Tier 3: created and owned
+	// exclusively by the writeFrames goroutine when cfg.Adaptive != nil;
+	// nil otherwise. Never touched by other goroutines.
+	adaptive *adaptiveTracker
+
+	// audioSparse gates DISK writes of audio while the adaptive tracker is in
+	// sparse (timelapse) mode. Read by the audio RTP callbacks on their own
+	// goroutines — hence atomic. Live-preview audio (Hub.BroadcastAudio) is
+	// never gated.
+	audioSparse atomic.Bool
 
 	// Throttled logging for storage health failures.
 	lastHealthLogAt time.Time
@@ -496,6 +515,16 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 	defer b.recoverPanic("writeFrames")
 	defer close(done)
 
+	// Adaptive write-density tracker (issue #435). Rebuilt per connection so
+	// a reconnect always starts in NORMAL mode with a fresh baseline (a
+	// reconnect storm can't oscillate the mode). nil when Adaptive recording
+	// is not configured — the gate below is then a single nil check per frame.
+	if b.cfg.Adaptive != nil {
+		b.adaptive = newAdaptiveTracker(*b.cfg.Adaptive, b.cfg.CameraID, b.log)
+		b.audioSparse.Store(false)
+	}
+	sparseAudio := false
+
 	for data := range b.frameCh {
 		// Always parse NALUs to capture codec parameter sets (VPS/SPS/PPS), even
 		// in live-only mode (RecordEnabled=false). Live preview (HLS/WebRTC/WS)
@@ -532,6 +561,38 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 		// Step 4: Skip non-VCL NALUs (SEI, delimiter, etc.).
 		if !b.driver.isVCL(typ) {
 			continue
+		}
+
+		// Step 4.5: adaptive write-density gate (issue #435). While the
+		// compressed-domain activity signal is calm, only sparse keyframes
+		// reach the disk; on a spike the retained GOP ring is flushed and
+		// full-rate writing resumes through the normal path below.
+		if b.adaptive != nil {
+			now := time.Now()
+			isIDR := b.driver.isIDR(typ)
+			spike, flush := b.adaptive.observe(nalu, isIDR, now)
+			if b.adaptive.mode == adaptiveTimelapse {
+				if spike {
+					// Activity burst: resume full-rate writing. The flushed
+					// GOP (complete reference chain since the last IDR) is
+					// written first so the resume has no missing references.
+					b.writeFlushedGOP(flush)
+				} else if !b.adaptive.shouldWriteSparse(isIDR, now) {
+					// Sparse: the frame is retained in the GOP ring, not
+					// written; a later spike can still flush it.
+					if sa := b.adaptive.mode == adaptiveTimelapse; sa != sparseAudio {
+						sparseAudio = sa
+						b.audioSparse.Store(sa)
+					}
+					continue
+				}
+				// Periodic sparse keyframe: falls through to the normal write
+				// path (Step 7's IDR requirement is satisfied by definition).
+			}
+			if sa := b.adaptive.mode == adaptiveTimelapse; sa != sparseAudio {
+				sparseAudio = sa
+				b.audioSparse.Store(sa)
+			}
 		}
 
 		// Step 5: Storage health check — skip recording but keep stream alive.
@@ -580,6 +641,56 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			b.closeCurrentSegment()
 		}
 	}
+}
+
+// writeFlushedGOP writes the adaptive tracker's retained GOP frames (the
+// complete reference chain since the last IDR) into the current or a fresh
+// segment, back-dating the segment start so pts values stay non-negative.
+// Called only from writeFrames on the TIMELAPSE→NORMAL transition; frames
+// always start with an IDR (guaranteed by adaptiveTracker.takeGOP).
+func (b *baseRecorder) writeFlushedGOP(frames []gopFrame) {
+	if len(frames) == 0 {
+		return
+	}
+	if isStorageFailed(b.store, b.cfg.CameraID) {
+		b.handleStorageFailure()
+		return
+	}
+	if !b.driver.paramSetsReady(b) {
+		return
+	}
+	for _, f := range frames {
+		if b.muxer == nil {
+			if !f.isIDR {
+				continue // never start a segment on a P frame
+			}
+			if !b.createNewSegment() {
+				return
+			}
+			// createNewSegment stamps segStart with "now"; back-date it to
+			// the first flushed frame so pts = at - segStart >= 0. Published
+			// under mu like every segStart write (the audio callback reads it).
+			b.mu.Lock()
+			b.segStart = f.at
+			b.mu.Unlock()
+			b.lastFrameTime = f.at
+		}
+		pts := f.at.Sub(b.segStart)
+		dur := f.at.Sub(b.lastFrameTime)
+		if dur < time.Millisecond {
+			dur = time.Millisecond
+		}
+		if err := b.muxer.WriteSample(b.trackID, f.nalu, pts, dur); err != nil {
+			b.log.Error("failed to write flushed sample",
+				"camera_id", b.cfg.CameraID, "error", err)
+			continue
+		}
+		b.lastFrameTime = f.at
+		b.frameCount++
+	}
+	// The triggering (current) frame follows via the normal write path; its
+	// duration is computed against the last flushed frame's timestamp, and
+	// the segment-rollover check runs there with a fresh clock reading.
 }
 
 // ---------------------------------------------------------------------------

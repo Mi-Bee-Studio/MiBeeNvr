@@ -72,6 +72,20 @@ type CameraConfig struct {
 	// Issue #36.
 	RecordingEnabled *bool `yaml:"recording_enabled,omitempty" json:"recording_enabled,omitempty"`
 
+	// RecordingMode selects the write-density strategy (issue #435):
+	//   "" | "continuous" — record every frame (default, current behavior)
+	//   "adaptive"        — dynamic timelapse: while the compressed-domain
+	//                       activity signal (P-frame size baseline) stays calm
+	//                       for CalmThreshold, only one keyframe per
+	//                       TimelapseInterval is written; any activity spike
+	//                       flushes the retained GOP pre-buffer and resumes
+	//                       full-rate recording. H.264/H.265 cameras only.
+	RecordingMode string `yaml:"recording_mode,omitempty" json:"recording_mode,omitempty"`
+
+	// Adaptive holds the tuning knobs for recording_mode: adaptive. Nil uses
+	// the defaults in recorder.DefaultAdaptiveConfig.
+	Adaptive *AdaptiveRecordingConfig `yaml:"adaptive,omitempty" json:"adaptive,omitempty"`
+
 	// Recording schedule: restrict recording to specific time ranges (e.g. daytime only).
 	// When nil or disabled, records 24/7. Uses the same TimeRange/ScheduleConfig
 	// pattern as timelapse scheduling.
@@ -103,6 +117,24 @@ type CameraConfig struct {
 	// Per-camera push-in retention override. nil = follow global retention,
 	// 0 = live-only (no recording), N = keep N days. Only meaningful for srt/rtmp.
 	PushRetentionDays *int `yaml:"push_retention_days,omitempty" json:"push_retention_days,omitempty"`
+}
+
+// AdaptiveRecordingConfig tunes recording_mode: adaptive (issue #435).
+// Durations are strings ("60s") parsed at wire-up, mirroring the
+// frame_watchdog_timeout convention.
+type AdaptiveRecordingConfig struct {
+	// CalmThreshold is how long the activity signal must stay calm before the
+	// recorder drops to sparse keyframe writing. Default "60s". Range 10s–30m.
+	CalmThreshold string `yaml:"calm_threshold,omitempty" json:"calm_threshold,omitempty"`
+	// TimelapseInterval is the keyframe cadence while in sparse mode.
+	// Default "30s". Range 5s–10m.
+	TimelapseInterval string `yaml:"timelapse_interval,omitempty" json:"timelapse_interval,omitempty"`
+	// SpikeFactor is how many (MAD-floored) deviations above the P-frame size
+	// baseline count as an activity spike. Default 3.0. Range 1.5–10.
+	SpikeFactor float64 `yaml:"spike_factor,omitempty" json:"spike_factor,omitempty"`
+	// GOPBufferBytes caps the in-memory GOP pre-buffer that makes the
+	// timelapse→normal transition seamless. Default 16MB. Range 1–64MB.
+	GOPBufferBytes int64 `yaml:"gop_buffer_bytes,omitempty" json:"gop_buffer_bytes,omitempty"`
 }
 
 // PushTargetConfig defines one push-out (relay) destination for a camera.

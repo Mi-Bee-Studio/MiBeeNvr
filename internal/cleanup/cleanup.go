@@ -50,7 +50,8 @@ type CleanupManager struct {
 	activeCameraProvider       func() []config.CameraConfig
 	ffprobePath                string // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
 	eventBus                   *event.EventBus
-	consecutivePassiveFailures int // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
+	consecutivePassiveFailures int  // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
+	motionAwareDisk            bool // disk-threshold path deletes boring-first (issue #435); default true
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -68,12 +69,13 @@ func NewCleanupManager(db *storage.DB, store *storage.Manager, cfg config.Cleanu
 	}
 
 	return &CleanupManager{
-		db:            db,
-		store:         store,
-		retention:     time.Duration(cfg.RetentionDays) * 24 * time.Hour,
-		diskThreshold: cfg.DiskThresholdPercent,
-		interval:      interval,
-		metrics:       m,
+		db:              db,
+		store:           store,
+		retention:       time.Duration(cfg.RetentionDays) * 24 * time.Hour,
+		diskThreshold:   cfg.DiskThresholdPercent,
+		interval:        interval,
+		metrics:         m,
+		motionAwareDisk: cfg.MotionAwareDiskCleanupEnabled(),
 	}, nil
 }
 

@@ -104,6 +104,18 @@ type CleanupConfig struct {
 	RetentionDays        int    `yaml:"retention_days"`         // default 30
 	CheckInterval        string `yaml:"check_interval"`         // default "1h"
 	DiskThresholdPercent int    `yaml:"disk_threshold_percent"` // default 85 (HDD perf cliff near 90%+ full)
+	// MotionAwareDiskCleanup orders disk-threshold deletion boring-first
+	// (issue #435): static segments (motion_score≈0) are deleted before
+	// active ones; unanalyzed segments rank neutrally. Default ON (nil=true)
+	// because the disk-pressure path is a best-effort eviction — the user's
+	// "keep N days" expectation is governed by the time-retention path, which
+	// this flag does not touch.
+	MotionAwareDiskCleanup *bool `yaml:"motion_aware_disk_cleanup,omitempty"`
+}
+
+// MotionAwareDiskCleanupEnabled resolves the flag with default-on semantics.
+func (c CleanupConfig) MotionAwareDiskCleanupEnabled() bool {
+	return c.MotionAwareDiskCleanup == nil || *c.MotionAwareDiskCleanup
 }
 
 type AuthConfig struct {

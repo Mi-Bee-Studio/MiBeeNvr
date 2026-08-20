@@ -409,7 +409,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				aid := r.audioTrackID
 				start := r.segStart
 				r.mu.Unlock()
-				if m != nil && aid > 0 {
+				if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse (adaptive-timelapse) mode drops disk audio, live audio continues
 					pts := time.Since(start)
 					dur := 1024 * time.Second / time.Duration(audioForma.ClockRate())
 					if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
@@ -435,7 +435,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			aid := r.audioTrackID
 			start := r.segStart
 			r.mu.Unlock()
-			if m != nil && aid > 0 {
+			if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse (adaptive-timelapse) mode drops disk audio, live audio continues
 				pts := time.Since(start)
 				// g711SampleRate from the immutable snapshot (race-free read
 				// from this RTP-callback goroutine, #226).

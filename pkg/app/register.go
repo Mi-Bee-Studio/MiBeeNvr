@@ -190,6 +190,16 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 4.3. motion-score — offline compressed-domain activity scoring
+	// (issue #435). Subscribes to SegmentCompleted; started before cleanup so
+	// scores exist by the time disk-threshold ordering consults them, and
+	// stopped (reverse order) before the merge services it observes.
+	if deps.motionAnalyzer != nil {
+		if err := a.Register(deps.motionAnalyzer); err != nil {
+			return fmt.Errorf("register motion-score: %w", err)
+		}
+	}
+
 	// 5. transcode (optional)
 	if deps.transcodeMgr != nil {
 		if err := a.Register(&serviceFunc{

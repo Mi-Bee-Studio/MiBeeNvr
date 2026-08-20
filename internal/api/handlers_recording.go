@@ -69,6 +69,15 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	// AI class filter: only recordings that have an AI event with this class_name.
 	filter.AiClass = r.URL.Query().Get("ai_class")
 
+	// Motion filters (issue #435): ?min_motion_score=0.2 keeps only segments
+	// with activity; ?activity=static|motion|scene_cut matches flags.
+	if v := r.URL.Query().Get("min_motion_score"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			filter.MinMotionScore = &f
+		}
+	}
+	filter.Activity = r.URL.Query().Get("activity")
+
 	// List + cached count. Cursor-based requests still get the total from cache.
 	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
@@ -126,6 +135,12 @@ func (h *Handler) handleTimelineSegments(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	filter.AiClass = r.URL.Query().Get("ai_class")
+	if v := r.URL.Query().Get("min_motion_score"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			filter.MinMotionScore = &f
+		}
+	}
+	filter.Activity = r.URL.Query().Get("activity")
 
 	segments, total, err := h.db.ListRecordingTimelineSegments(r.Context(), filter)
 	if err != nil {
