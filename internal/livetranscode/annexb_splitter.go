@@ -237,10 +237,19 @@ func extractNalus(buf []byte, codes []startCode, codec Codec) ([]naluInfo, error
 //
 // An AU boundary is determined when:
 //   - An AUD (access unit delimiter) NALU is encountered
-//   - An IDR NALU is encountered (starts a new GOP/picture)
-//   - A VPS NALU is encountered in H.265 (starts a new sequence)
-//   - An SPS or PPS is encountered after VCL data (param set change mid-stream)
-//   - A VCL NALU (non-IDR) follows another VCL NALU (new picture)
+//   - A VCL slice with first_mb_in_slice == 0 (H.264) /
+//     first_slice_segment_in_pic_flag set (H.265) follows VCL data — the first
+//     slice of a new picture
+//   - A VPS/SPS/PPS NALU is encountered after VCL data (param set change
+//     mid-stream prefixes the next picture)
+//
+// A picture may span several slice NALUs: every slice of an IDR picture is NAL
+// type 5 (H.264) / 19|20 (H.265) and every P-picture slice is type 1 (H.264) /
+// 0|1 (H.265), so "VCL follows VCL" is NOT a picture boundary — libx264
+// sliced-threads emits 1080p frames as 4 slice NALUs, and a VCL-follows-VCL
+// rule shreds each such frame into per-slice AUs that no decoder can decode
+// individually (found via the RTMP relay publishing one message per NALU,
+// 2026-08-20).
 func groupAccessUnits(nalus []naluInfo, codec Codec) []AccessUnit {
 	if len(nalus) == 0 {
 		return nil
@@ -267,19 +276,14 @@ func groupAccessUnits(nalus []naluInfo, codec Codec) []AccessUnit {
 
 		switch codec {
 		case CodecH264:
-			if typ == h264NALUTypeAUD || typ == h264NALUTypeIDR {
-				// AUD and IDR always start a new AU.
-				// Flush previous AU only if it has VCL data (we have a complete picture).
+			if typ == h264NALUTypeAUD {
+				// AUD always starts a new AU.
 				if seenVCL {
 					flushAU()
 				}
 				currentAU = append(currentAU, nalu)
-				if typ == h264NALUTypeIDR {
-					seenVCL = true
-				}
 			} else if isVCLH264(typ) {
-				// Non-IDR VCL (type 1-4): if we already have a VCL, this is a new picture.
-				if seenVCL {
+				if seenVCL && h264StartsPicture(nalu.data) {
 					flushAU()
 				}
 				currentAU = append(currentAU, nalu)
@@ -296,21 +300,18 @@ func groupAccessUnits(nalus []naluInfo, codec Codec) []AccessUnit {
 			}
 
 		case CodecH265:
-			if typ == h265NALUTypeAUD || typ == h265NALUTypeIDR_W_RADL || typ == h265NALUTypeIDR_N_LP {
+			if typ == h265NALUTypeAUD {
 				if seenVCL {
 					flushAU()
 				}
 				currentAU = append(currentAU, nalu)
-				if typ == h265NALUTypeIDR_W_RADL || typ == h265NALUTypeIDR_N_LP {
-					seenVCL = true
-				}
 			} else if typ == h265NALUTypeVPS || typ == h265NALUTypeSPS || typ == h265NALUTypePPS {
 				if seenVCL {
 					flushAU()
 				}
 				currentAU = append(currentAU, nalu)
 			} else if isVCLH265(typ) {
-				if seenVCL {
+				if seenVCL && h265StartsPicture(nalu.data) {
 					flushAU()
 				}
 				currentAU = append(currentAU, nalu)
@@ -325,6 +326,32 @@ func groupAccessUnits(nalus []naluInfo, codec Codec) []AccessUnit {
 	flushAU()
 
 	return aus
+}
+
+// h264StartsPicture reports whether an H.264 VCL NALU is the first slice of a
+// new picture: first_mb_in_slice == 0 — the first bit of the byte after the
+// NAL header (ue(v)==0 encodes to a single 1 bit). Continuation slices of a
+// multi-slice picture carry first_mb_in_slice != 0 (leading zero bits). The
+// inspected byte follows the NAL header byte, which is nonzero for VCL types,
+// so it can never be an emulation-prevention byte. Undersized NALUs are
+// treated as picture starts: they cannot be verified as continuations, and
+// emitting early is the safer failure mode.
+func h264StartsPicture(nalu []byte) bool {
+	if len(nalu) < 2 {
+		return true
+	}
+	return nalu[1]&0x80 != 0
+}
+
+// h265StartsPicture reports whether an H.265 VCL NALU is the first slice
+// segment of a new picture: first_slice_segment_in_pic_flag — the first bit of
+// the byte after the 2-byte NAL header. nuh_temporal_id_plus1 keeps header
+// byte 1 nonzero, so the inspected byte is never an emulation-prevention byte.
+func h265StartsPicture(nalu []byte) bool {
+	if len(nalu) < 3 {
+		return true
+	}
+	return nalu[2]&0x80 != 0
 }
 
 // --------------- Param set extraction ---------------
