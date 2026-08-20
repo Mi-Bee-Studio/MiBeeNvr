@@ -85,12 +85,13 @@ func TestSplitH264Basic(t *testing.T) {
 
 func TestSplitH265Basic(t *testing.T) {
 	// Stream: [VPS SPS PPS IDR] [P] [P] -> 3 AUs
+	// Slice payloads start with first_slice_segment_in_pic_flag set (0x80 bit).
 	vps := h265NAL(32, []byte{0x01, 0x02, 0x03})
 	sps := h265NAL(33, []byte{0x04, 0x05, 0x06})
 	pps := h265NAL(34, []byte{0x07, 0x08})
-	idr := h265NAL(19, []byte{0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19})
-	p1 := h265NAL(1, []byte{0x20, 0x21, 0x22})
-	p2 := h265NAL(1, []byte{0x30, 0x31, 0x32})
+	idr := h265NAL(19, []byte{0x90, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19})
+	p1 := h265NAL(1, []byte{0xa0, 0x21, 0x22})
+	p2 := h265NAL(1, []byte{0xb0, 0x31, 0x32})
 
 	data := annexB(CodecH265, vps, sps, pps, idr, p1, p2)
 	aus, ps, err := SplitAnnexB(data, CodecH265)
@@ -113,6 +114,56 @@ func TestSplitH265Basic(t *testing.T) {
 	require.Equal(t, vps, ps.VPS)
 	require.Equal(t, sps, ps.SPS)
 	require.Equal(t, pps, ps.PPS)
+}
+
+// TestSplitH264MultiSlicePicture reproduces the 2026-08-20 relay failure:
+// libx264 sliced-threads emits each 1080p frame as 4 slice NALUs (every IDR
+// slice is NAL type 5, every P slice type 1). The pictures must stay whole —
+// the old VCL-follows-VCL boundary split them into per-slice AUs, which the
+// RTMP relay then published as separate messages that no receiver could
+// decode.
+func TestSplitH264MultiSlicePicture(t *testing.T) {
+	sps := h264NAL(7, []byte{0x64, 0x00})
+	pps := h264NAL(8, []byte{0xe8, 0x43})
+	// IDR picture: first slice first_mb==0 (0x88), three continuations (0x08).
+	idrS1 := h264NAL(5, []byte{0x88, 0x84, 0x01})
+	idrS2 := h264NAL(5, []byte{0x08, 0x84, 0x02})
+	idrS3 := h264NAL(5, []byte{0x08, 0x84, 0x03})
+	idrS4 := h264NAL(5, []byte{0x08, 0x84, 0x04})
+	// P picture: same multi-slice shape with type-1 NALUs.
+	pS1 := h264NAL(1, []byte{0x88, 0x11})
+	pS2 := h264NAL(1, []byte{0x08, 0x12})
+
+	data := annexB(CodecH264, sps, pps, idrS1, idrS2, idrS3, idrS4, pS1, pS2)
+	aus, _, err := SplitAnnexB(data, CodecH264)
+	require.NoError(t, err)
+
+	requireAULen(t, aus, 2)
+	// AU[0]: SPS + PPS + all four IDR slices in one picture.
+	requireAUNALUCount(t, aus[0], 6)
+	require.Equal(t, idrS4, aus[0][5], "last IDR slice stays in the same AU")
+	// AU[1]: both P slices.
+	requireAUNALUCount(t, aus[1], 2)
+}
+
+// TestSplitH265MultiSlicePicture is the H.265 counterpart: multi-slice
+// pictures (first_slice_segment_in_pic_flag set only on the first slice).
+func TestSplitH265MultiSlicePicture(t *testing.T) {
+	vps := h265NAL(32, []byte{0x01})
+	sps := h265NAL(33, []byte{0x02})
+	pps := h265NAL(34, []byte{0x03})
+	idrS1 := h265NAL(19, []byte{0x80, 0x11})
+	idrS2 := h265NAL(19, []byte{0x00, 0x12})
+	pS1 := h265NAL(1, []byte{0x80, 0x21})
+	pS2 := h265NAL(1, []byte{0x00, 0x22})
+
+	data := annexB(CodecH265, vps, sps, pps, idrS1, idrS2, pS1, pS2)
+	aus, _, err := SplitAnnexB(data, CodecH265)
+	require.NoError(t, err)
+
+	requireAULen(t, aus, 2)
+	requireAUNALUCount(t, aus[0], 5) // VPS+SPS+PPS+2 IDR slices
+	requireAUNALUCount(t, aus[1], 2) // 2 P slices
 }
 
 func TestSplitH264EmulationPrevention(t *testing.T) {
@@ -145,11 +196,12 @@ func TestSplitH264EmulationPrevention(t *testing.T) {
 }
 
 func TestSplitH264MixedStartCodes(t *testing.T) {
-	// Mixed 3-byte and 4-byte start codes
+	// Mixed 3-byte and 4-byte start codes. Slice payloads start with
+	// first_mb_in_slice == 0 (top bit of the byte after the NAL header).
 	sps := h264NAL(7, []byte{0x01, 0x02})
 	pps := h264NAL(8, []byte{0x03, 0x04})
-	idr := h264NAL(5, []byte{0x05, 0x06})
-	p := h264NAL(1, []byte{0x07, 0x08})
+	idr := h264NAL(5, []byte{0x85, 0x06})
+	p := h264NAL(1, []byte{0x87, 0x08})
 
 	// Manually build buffer with alternating start codes
 	// 4-byte then 3-byte then 4-byte then 3-byte
@@ -234,8 +286,8 @@ func TestSplitParamSetsExtractionH265(t *testing.T) {
 	vps := h265NAL(32, []byte{0x01, 0x02})
 	sps := h265NAL(33, []byte{0x03, 0x04})
 	pps := h265NAL(34, []byte{0x05, 0x06})
-	idr := h265NAL(19, []byte{0x07, 0x08, 0x09, 0x0a})
-	p := h265NAL(1, []byte{0x0b, 0x0c})
+	idr := h265NAL(19, []byte{0x87, 0x88, 0x89, 0x8a})
+	p := h265NAL(1, []byte{0x8b, 0x8c})
 
 	data := annexB(CodecH265, vps, sps, pps, idr, p)
 	aus, ps, err := SplitAnnexB(data, CodecH265)
@@ -253,12 +305,12 @@ func TestSplitH264MultipleIDR(t *testing.T) {
 	// Stream: [SPS PPS IDR1] [P] [SPS PPS IDR2] [P] -> 4 AUs
 	sps1 := h264NAL(7, []byte{0x01})
 	pps1 := h264NAL(8, []byte{0x02})
-	idr1 := h264NAL(5, []byte{0x03, 0x04})
-	p1 := h264NAL(1, []byte{0x05, 0x06})
+	idr1 := h264NAL(5, []byte{0x83, 0x04})
+	p1 := h264NAL(1, []byte{0x85, 0x06})
 	sps2 := h264NAL(7, []byte{0x07})
 	pps2 := h264NAL(8, []byte{0x08})
-	idr2 := h264NAL(5, []byte{0x09, 0x0a})
-	p2 := h264NAL(1, []byte{0x0b, 0x0c})
+	idr2 := h264NAL(5, []byte{0x89, 0x0a})
+	p2 := h264NAL(1, []byte{0x8b, 0x0c})
 
 	data := annexB(CodecH264, sps1, pps1, idr1, p1, sps2, pps2, idr2, p2)
 	aus, ps, err := SplitAnnexB(data, CodecH264)
@@ -279,13 +331,13 @@ func TestSplitH265MultipleIDR(t *testing.T) {
 	vps1 := h265NAL(32, []byte{0x01})
 	sps1 := h265NAL(33, []byte{0x02})
 	pps1 := h265NAL(34, []byte{0x03})
-	idr1 := h265NAL(19, []byte{0x04, 0x05})
-	p1 := h265NAL(1, []byte{0x06, 0x07})
+	idr1 := h265NAL(19, []byte{0x84, 0x05})
+	p1 := h265NAL(1, []byte{0x86, 0x07})
 	vps2 := h265NAL(32, []byte{0x08})
 	sps2 := h265NAL(33, []byte{0x09})
 	pps2 := h265NAL(34, []byte{0x0a})
-	idr2 := h265NAL(20, []byte{0x0b, 0x0c})
-	p2 := h265NAL(1, []byte{0x0d, 0x0e})
+	idr2 := h265NAL(20, []byte{0x8b, 0x0c})
+	p2 := h265NAL(1, []byte{0x8d, 0x0e})
 
 	data := annexB(CodecH265, vps1, sps1, pps1, idr1, p1, vps2, sps2, pps2, idr2, p2)
 	aus, ps, err := SplitAnnexB(data, CodecH265)
@@ -423,8 +475,8 @@ func TestStreamParserH265Chunked(t *testing.T) {
 	vps := h265NAL(32, []byte{0x01, 0x02})
 	sps := h265NAL(33, []byte{0x03, 0x04})
 	pps := h265NAL(34, []byte{0x05, 0x06})
-	idr := h265NAL(19, []byte{0x07, 0x08, 0x09, 0x0a})
-	p := h265NAL(1, []byte{0x0b, 0x0c})
+	idr := h265NAL(19, []byte{0x87, 0x88, 0x89, 0x8a})
+	p := h265NAL(1, []byte{0x8b, 0x8c})
 
 	data := annexB(CodecH265, vps, sps, pps, idr, p)
 
