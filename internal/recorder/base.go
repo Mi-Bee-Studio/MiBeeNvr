@@ -588,6 +588,13 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 				}
 				// Periodic sparse keyframe: falls through to the normal write
 				// path (Step 7's IDR requirement is satisfied by definition).
+				// Stamp the cadence so the NEXT sparse write waits a full
+				// timelapse_interval — without this every IDR passes the
+				// shouldWriteSparse check and the sparse mode degenerates to
+				// one-keyframe-per-GOP (found on the Docker VM field test).
+				if isIDR {
+					b.adaptive.lastSparseWrite = now
+				}
 			}
 			if sa := b.adaptive.mode == adaptiveTimelapse; sa != sparseAudio {
 				sparseAudio = sa

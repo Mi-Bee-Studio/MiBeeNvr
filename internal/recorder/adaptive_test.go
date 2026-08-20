@@ -155,6 +155,33 @@ func TestAdaptiveTracker_ShouldWriteSparseCadence(t *testing.T) {
 	}
 }
 
+// TestAdaptiveTracker_SparseWriteStampsCadence pins the regression found on
+// the Docker VM field test: when the writeFrames gate lets a sparse keyframe
+// through it must stamp lastSparseWrite (mirrored here). Without the stamp
+// every IDR in every GOP passes shouldWriteSparse and sparse mode degenerates
+// to one keyframe per GOP.
+func TestAdaptiveTracker_SparseWriteStampsCadence(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: time.Second, TimelapseInterval: 10 * time.Second, SpikeFactor: 3.0, MaxGOPBuffer: 1 << 20}
+	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+	t0 := time.Now()
+	tr.lastSparseWrite = t0
+
+	// Keyframes at 2s GOP cadence (10 in a 20s window): with cadence stamping
+	// exactly the ones at t0+10s and t0+20s may pass (one per 10s interval).
+	// Without stamping all 10 would pass — that was the field-test bug.
+	passed := 0
+	for i := 1; i <= 10; i++ {
+		at := t0.Add(time.Duration(i*2) * time.Second)
+		if tr.shouldWriteSparse(true, at) {
+			passed++
+			tr.lastSparseWrite = at // the writeFrames gate does exactly this
+		}
+	}
+	if passed != 2 {
+		t.Fatalf("with cadence stamping, exactly 2 keyframes per 20s at 10s interval may pass, got %d", passed)
+	}
+}
+
 func TestAdaptiveTracker_BaselineRingBounded(t *testing.T) {
 	cfg := DefaultAdaptiveConfig()
 	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
