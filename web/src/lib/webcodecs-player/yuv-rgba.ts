@@ -22,14 +22,18 @@ export function yuv420ToRgba(
   vPlane: Uint8Array,
   width: number,
   height: number,
+  yStride: number = width,
+  uStride: number = width >> 1,
+  vStride: number = width >> 1,
 ): Uint8ClampedArray {
+  // Strides are the ROW BYTE LENGTHS of the source planes — decoders may pad
+  // rows beyond width (alignment). Passing the real stride is mandatory for
+  // padded planes; the defaults keep the historical tight-packing behavior.
   const rgba = new Uint8ClampedArray(width * height * 4);
-  const yStride = width;
-  const uvStride = width >> 1;
 
   for (let row = 0; row < height; row++) {
     const yRowOffset = row * yStride;
-    const uvRowOffset = (row >> 1) * uvStride;
+    const uvRowOffset = (row >> 1) * uStride;
     const rgbaRowOffset = row * width * 4;
 
     for (let col = 0; col < width; col++) {
@@ -39,7 +43,7 @@ export function yuv420ToRgba(
       // BT.601 full-range YUV → RGB
       const y = yPlane[yIdx] - 16;
       const u = uPlane[uvIdx] - 128;
-      const v = vPlane[uvIdx] - 128;
+      const v = vPlane[(row >> 1) * vStride + (col >> 1)] - 128;
 
       let r = 1.164 * y + 1.596 * v;
       let g = 1.164 * y - 0.392 * u - 0.813 * v;
