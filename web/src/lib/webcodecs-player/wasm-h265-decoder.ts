@@ -46,6 +46,25 @@ export class WasmH265Decoder {
   private _width = 0;
   private _height = 0;
 
+  // ── Throughput & integrity degradation ──────────────────────────────
+  // wasm H.265 on weak CPUs decodes high resolutions at a small fraction of
+  // the source frame rate (measured ~0.2fps for 4K vs 15-25fps input on an
+  // ARM-class box). An ever-growing backlog then corrupts output (users see
+  // bottom-half green/white concealment). Two guards keep the picture honest:
+  //  - _skipUntilKeyframe: after a failed push the reference chain is broken;
+  //    P-frames decoded against missing references display as concealment.
+  //    Skip everything until the next IDR.
+  //  - _keyframeOnly: when decode cost persistently exceeds the frame budget,
+  //    decode keyframes only — a stable still image per GOP instead of a
+  //    backlog of corrupted halves. Releases if decoding becomes cheap again
+  //    (e.g. the stream resolution dropped).
+  private _skipUntilKeyframe = false;
+  private _keyframeOnly = false;
+  private _decodeMsEma = 0;
+  private _decodeCount = 0;
+  private _frameIntervalMs = 0;
+  private _lastPts = 0;
+
   /**
    * Initialize the WASM decoder with codec parameters.
    * Loads the WASM module lazily on first call.
@@ -92,8 +111,30 @@ export class WasmH265Decoder {
    *          WasmFrame (raw RGBA + dimensions) so the caller can render via
    *          Canvas2D putImageData without depending on the VideoFrame API.
    */
-  decode(nalus: Uint8Array[], pts: number, _isKeyframe: boolean): VideoFrame | WasmFrame | null {
+  decode(nalus: Uint8Array[], pts: number, isKeyframe: boolean): VideoFrame | WasmFrame | null {
     if (!this._initialized || !this._decoder || !this._module) return null;
+
+    // Track the source frame interval (90kHz PTS → ms) as the decode budget.
+    if (this._lastPts > 0 && pts > this._lastPts) {
+      const interval = (pts - this._lastPts) / 90;
+      if (interval > 1 && interval < 10000) {
+        this._frameIntervalMs = this._frameIntervalMs
+          ? this._frameIntervalMs * 0.9 + interval * 0.1
+          : interval;
+      }
+    }
+    this._lastPts = pts;
+
+    if (this._skipUntilKeyframe && !isKeyframe) return null;
+    if (this._keyframeOnly && !isKeyframe) return null;
+
+    const t0 = performance.now();
+    const produced = this._decodePushed(nalus, pts);
+    this._noteDecodeMs(performance.now() - t0);
+    return produced;
+  }
+
+  private _decodePushed(nalus: Uint8Array[], pts: number): VideoFrame | WasmFrame | null {
 
     // Push each NAL unit. pushNal() expects ONE NAL WITHOUT a start code — the
     // decoder treats the whole buffer as a single NAL payload (whereas pushData()
@@ -105,12 +146,19 @@ export class WasmH265Decoder {
     for (const nalu of nalus) {
       const err = this._decoder.pushNal(nalu, BigInt(pts));
       if (!this._module.isOk(err)) {
-        // Push failed — likely need more data or parameter sets
+        // Push failed: the reference chain is now broken — decoding subsequent
+        // P-frames displays as bottom-half concealment. Skip to the next IDR.
+        this._skipUntilKeyframe = true;
         return null;
       }
       this._decoder.pushEndOfNal();
     }
     this._decoder.pushEndOfFrame();
+
+    // In degraded mode damaged pictures are worse than a stale one: suppress
+    // warned pictures (they carry concealed regions) so the tile keeps the
+    // last clean frame instead of flashing corruption.
+    const suppressWarned = this._keyframeOnly || this._skipUntilKeyframe;
 
     // Decode and extract frame
     let more = true;
@@ -128,8 +176,12 @@ export class WasmH265Decoder {
           // Still try to retrieve any picture produced before the warning.
           const warnImage = this._decoder.getNextPicture();
           if (warnImage) {
-            const produced = this._emitFrame(warnImage, pts);
-            if (produced) return produced;
+            if (suppressWarned) {
+              warnImage.delete();
+            } else {
+              const produced = this._emitFrame(warnImage, pts);
+              if (produced) return produced;
+            }
           }
           continue;
         }
@@ -142,10 +194,28 @@ export class WasmH265Decoder {
 
       // Must delete image to prevent ERROR_IMAGE_BUFFER_FULL — done by _emitFrame
       const produced = this._emitFrame(image, pts);
-      if (produced) return produced;
+      if (produced) {
+        // A clean picture proves the chain recovered.
+        this._skipUntilKeyframe = false;
+        return produced;
+      }
     }
 
     return null;
+  }
+
+  /** Update decode-cost EMA and toggle keyframe-only mode on sustained overload. */
+  private _noteDecodeMs(ms: number): void {
+    this._decodeCount++;
+    this._decodeMsEma = this._decodeMsEma ? this._decodeMsEma * 0.8 + ms * 0.2 : ms;
+    if (this._decodeCount < 4) return; // let the EMA and frame interval settle
+    const budget = this._frameIntervalMs || 66;
+    if (!this._keyframeOnly && this._decodeMsEma > budget * 1.5) {
+      this._keyframeOnly = true;
+    } else if (this._keyframeOnly && this._decodeMsEma < budget * 0.5) {
+      // Cheap again (resolution drop / faster machine) — try full rate back.
+      this._keyframeOnly = false;
+    }
   }
 
   /** Reset decoder state (discard pending data, keep config). */
@@ -172,7 +242,12 @@ export class WasmH265Decoder {
         const y = image.getImagePlane(0);
         const u = image.getImagePlane(1);
         const v = image.getImagePlane(2);
-        const rgba = yuv420ToRgba(y.bytes, u.bytes, v.bytes, this._width, this._height);
+        // Plane strides: libde265 may pad rows beyond width; reading with
+        // tight strides on padded planes skews or corrupts the image.
+        const rgba = yuv420ToRgba(
+          y.bytes, u.bytes, v.bytes, this._width, this._height,
+          y.stride || this._width, u.stride || (this._width >> 1), v.stride || (this._width >> 1),
+        );
         if (typeof VideoFrame !== 'undefined') {
           // WebCodecs available (HTTPS/localhost): wrap in a synthetic VideoFrame
           // for compatibility with the WebGL2/WebGPU rendering pipeline.
