@@ -277,6 +277,7 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 			sm.portManager.Recycle(port)
 			return nil, fmt.Errorf("gb28181: failed to bind UDP port %d: %w", port, err)
 		}
+		setUDPReadBuffer(conn)
 		sess.conn = conn
 		ctx, cancel := context.WithCancel(context.Background())
 		if err := receiver.Start(ctx, conn); err != nil {
@@ -644,6 +645,7 @@ func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, 
 		sm.portManager.Recycle(port)
 		return nil, fmt.Errorf("gb28181: failed to bind UDP port %d: %w", port, err)
 	}
+	setUDPReadBuffer(conn)
 
 	// Feed complete AUs to the sink (AU grouping preserved for muxing)
 	receiver.AUCallback = func(au [][]byte, ptsTicks int64, isIDR bool) {
