@@ -86,6 +86,15 @@ type CameraConfig struct {
 	// See internal/autodiscover/ for the discovery engine.
 	ActivationState string `yaml:"activation_state,omitempty" json:"activation_state,omitempty"`
 
+	// CascadeEnabled gates this camera's participation in the GB28181 cascade
+	// catalog (lower-platform role): nil or true (default) = advertised to the
+	// upper platform and forwardable on INVITE; false = hidden from the
+	// aggregated catalog and INVITEs for its channel are refused ("目录收敛" —
+	// expose only a chosen subset of cameras to the upper platform). The
+	// persisted channel-ID allocation is kept, so re-enabling restores the
+	// same channel code and the upper's bindings survive.
+	CascadeEnabled *bool `yaml:"cascade_enabled,omitempty" json:"cascade_enabled,omitempty"`
+
 	// Push-out targets (relay): forward this camera's live stream to remote
 	// destinations (another NVR's RTMP/SRT ingest, a live platform, a backup).
 	// Applies to ANY camera protocol — the engine subscribes to the camera's

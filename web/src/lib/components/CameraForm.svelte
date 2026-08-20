@@ -87,6 +87,7 @@
   // Recording gate — when off, the recorder stays connected for live preview
   // and relay but writes NO segments to disk (live-only / stream-forward mode).
   let formRecordingEnabled = $state(true);
+  let formCascadeEnabled = $state(true);
   // Xiaomi two-way audio
   let formTwoWayAudioEnabled = $state(false);
   // IP self-healing: candidate CIDRs to scan when this camera's IP changes.
@@ -293,6 +294,7 @@ let validationErrors = $state<Record<string, string>>({});
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
     formRecordingEnabled = camera.recording_enabled ?? true;
+    formCascadeEnabled = camera.cascade_enabled ?? true;
     formTwoWayAudioEnabled = camera.two_way_audio_enabled ?? false;
     formSubnetHints = (camera.subnet_hints ?? []).join('\n');
     formStreamKey = camera.stream_key || '';
@@ -561,6 +563,7 @@ async function performCameraSave() {
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
             recording_enabled: formRecordingEnabled,
+            cascade_enabled: formCascadeEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
@@ -623,6 +626,7 @@ async function performCameraSave() {
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
             recording_enabled: formRecordingEnabled,
+            cascade_enabled: formCascadeEnabled,
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
@@ -803,6 +807,23 @@ async function performCameraSave() {
     </div>
     {#if !formRecordingEnabled}
       <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
+    {/if}
+
+    <!-- Cascade catalog toggle: when off, the camera is hidden from the
+         GB28181 cascade upper platform (catalog + INVITE). -->
+    <div class="flex items-center gap-2">
+      <input
+        id="cam-cascade"
+        type="checkbox"
+        class="checkbox"
+        bind:checked={formCascadeEnabled}
+      />
+      <label for="cam-cascade" class="input-label cursor-pointer">
+        {t('cameras.cascadeEnabled')}
+      </label>
+    </div>
+    {#if !formCascadeEnabled}
+      <p class="text-xs th-text-muted -mt-1">{t('cameras.cascadeDisabledHint')}</p>
     {/if}
 
     <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras) -->

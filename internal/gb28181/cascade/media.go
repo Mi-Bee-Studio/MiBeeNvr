@@ -167,6 +167,14 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		_, _ = s.srv.RespondOnRequest(req, 404, "Unknown Channel", "", nil)
 		return
 	}
+	if cam, ok := s.cameraInfo(cameraID); ok && cam.CascadeHidden {
+		// Catalog convergence: the channel was allocated once (allocation rows
+		// persist) but the camera is now hidden — the upper may still hold the
+		// stale binding and INVITE it. Refuse like an unknown channel.
+		slog.Info("gb28181-cascade: INVITE for hidden camera refused", "channel", channelID, "camera", cameraID)
+		_, _ = s.srv.RespondOnRequest(req, 404, "Unknown Channel", "", nil)
+		return
+	}
 	hub := s.src.Hub(cameraID)
 	if hub == nil {
 		_, _ = s.srv.RespondOnRequest(req, 500, "Stream Unavailable", "", nil)

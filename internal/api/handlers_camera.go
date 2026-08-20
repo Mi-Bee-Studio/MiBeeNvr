@@ -72,6 +72,7 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.DarkFrameFilterEnabled = cam.DarkFrameFilterEnabled
 		row.DarkFrameThreshold = cam.DarkFrameThreshold
 		row.RecordingEnabled = cam.RecordingEnabled
+		row.CascadeEnabled = cam.CascadeEnabled
 		row.RecordingSchedule = cam.RecordingSchedule
 		if cam.Protocol == "gb28181" {
 			gb := cam.GB28181
@@ -292,6 +293,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		AudioEnabled   *bool                         `json:"audio_enabled"`
 		// Recording gate: false = live-only (no segments written). nil = record.
 		RecordingEnabled *bool `json:"recording_enabled"`
+		// Cascade gate: false = hidden from the GB28181 cascade catalog and
+		// INVITEs refused. nil = default (exposed).
+		CascadeEnabled *bool `json:"cascade_enabled"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     string `json:"stream_key"`
 		SRTPassphrase string `json:"srt_passphrase"`
@@ -478,6 +482,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Channel:           body.Channel,
 		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
 		RecordingEnabled:  body.RecordingEnabled,
+		CascadeEnabled:    body.CascadeEnabled,
 		StreamKey:         body.StreamKey,
 		SRTPassphrase:     body.SRTPassphrase,
 		SRTStreamID:       body.SRTStreamID,
@@ -663,6 +668,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		DarkFrameThreshold     *int  `json:"dark_frame_threshold"`
 		// Recording gate: false = live-only (no segments written). nil = unchanged.
 		RecordingEnabled *bool `json:"recording_enabled"`
+		// Cascade gate: false = hidden from the GB28181 cascade catalog and
+		// INVITEs refused. nil = unchanged.
+		CascadeEnabled *bool `json:"cascade_enabled"`
 		// Recording schedule
 		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
 		// Push/ingest fields (SRT/RTMP)
@@ -735,6 +743,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		DarkFrameFilterEnabled: body.DarkFrameFilterEnabled,
 		DarkFrameThreshold:     body.DarkFrameThreshold,
 		RecordingEnabled:       body.RecordingEnabled,
+		CascadeEnabled:         body.CascadeEnabled,
 		RecordingSchedule:      body.RecordingSchedule,
 		StreamKey:              body.StreamKey,
 		SRTPassphrase:          body.SRTPassphrase,

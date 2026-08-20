@@ -59,6 +59,10 @@ type CameraUpdate struct {
 	DarkFrameThreshold     *int
 	// RecordingEnabled gates segment writes (false = live-only). nil = unchanged.
 	RecordingEnabled *bool
+	// CascadeEnabled gates GB28181 cascade exposure (false = hidden from the
+	// upper platform's catalog and INVITEs refused). nil = unchanged. Takes
+	// effect at the next catalog response / INVITE — no recorder restart.
+	CascadeEnabled *bool
 	// Recording schedule
 	RecordingSchedule *config.ScheduleConfig
 	// Push/ingest camera fields (SRT/RTMP). nil = unchanged.

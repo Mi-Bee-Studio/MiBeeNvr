@@ -40,6 +40,10 @@ type CameraInfo struct {
 	// Encoding is the camera's configured codec ("h264"|"h265"|"" unknown) —
 	// the preferred PSM type; sniffed from the first NAL when empty.
 	Encoding string
+	// CascadeHidden excludes the camera from the aggregated catalog and makes
+	// INVITEs for its channel fail with 404 (catalog convergence: expose only
+	// a chosen subset to the upper platform).
+	CascadeHidden bool
 }
 
 // CameraSource supplies the local camera list and their stream hubs. The

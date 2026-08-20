@@ -73,6 +73,48 @@ func TestCatalogItemsAllocatesAndPersists(t *testing.T) {
 	require.Equal(t, "34020000001320000003", items3[2].DeviceID)
 }
 
+// TestCatalogHiddenCamerasExcluded verifies catalog convergence: cameras with
+// CascadeHidden are absent from the aggregated catalog, while their persisted
+// channel allocation is kept — re-enabling restores the same channel code.
+func TestCatalogHiddenCamerasExcluded(t *testing.T) {
+	db := newCascadeTestDB(t)
+	svc := New(testCfg(), fakeSource{cams: []CameraInfo{
+		{ID: "front", Name: "Front"},
+		{ID: "back", Name: "Back"},
+	}}, db)
+
+	// First pass: both cameras visible, channels allocated.
+	items, err := svc.catalogItems()
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	// Hide "back": it disappears from the catalog...
+	svcHidden := New(testCfg(), fakeSource{cams: []CameraInfo{
+		{ID: "front", Name: "Front"},
+		{ID: "back", Name: "Back", CascadeHidden: true},
+	}}, db)
+	itemsHidden, err := svcHidden.catalogItems()
+	require.NoError(t, err)
+	require.Len(t, itemsHidden, 1)
+	require.Equal(t, "34020000001320000001", itemsHidden[0].DeviceID, "front keeps its channel")
+
+	// ...and re-enabling restores the SAME channel (allocation persisted).
+	svcAgain := New(testCfg(), fakeSource{cams: []CameraInfo{
+		{ID: "front", Name: "Front"},
+		{ID: "back", Name: "Back"},
+	}}, db)
+	itemsAgain, err := svcAgain.catalogItems()
+	require.NoError(t, err)
+	require.Len(t, itemsAgain, 2)
+	require.Equal(t, "34020000001320000002", itemsAgain[1].DeviceID, "back's channel is stable across hide/show")
+
+	// The hidden camera's channel still resolves to its camera — the INVITE
+	// gate must refuse it with 404 rather than silently forwarding.
+	camID, ok := svcHidden.cameraOfChannel("34020000001320000002")
+	require.True(t, ok)
+	require.Equal(t, "back", camID)
+}
+
 func TestCameraOfChannel(t *testing.T) {
 	db := newCascadeTestDB(t)
 	svc := New(testCfg(), fakeSource{cams: []CameraInfo{{ID: "front", Name: "Front"}}}, db)
