@@ -3,6 +3,7 @@ package psmux
 import (
 	"fmt"
 	"net"
+	"sync"
 )
 
 // RTPMTU is the max RTP payload size per packet — 1400 fits any Ethernet path.
@@ -17,6 +18,14 @@ type RTPPacketizer struct {
 	seq        uint16
 	payloadTyp byte
 	sent       uint64
+
+	// mu serializes Send: one burst's packets must occupy a contiguous,
+	// strictly increasing sequence-number block — cascade sessions call Send
+	// for video AUs and audio frames from two hub callback goroutines, and an
+	// unsynchronized seq++ interleaved bursts mid-packet-block (duplicate/
+	// out-of-order seqs → the upper platform's contiguous drain broke → video
+	// AUs truncated at PES-chunk boundaries; 2026-08-21).
+	mu sync.Mutex
 }
 
 func NewRTPPacketizer(conn *net.UDPConn, dst *net.UDPAddr, ssrc uint32, initialSeq uint16) *RTPPacketizer {
@@ -24,7 +33,11 @@ func NewRTPPacketizer(conn *net.UDPConn, dst *net.UDPAddr, ssrc uint32, initialS
 }
 
 // Send fragments and sends one PS burst; ts is the 90kHz AU timestamp.
+// Atomic per burst: all fragments hold one contiguous seq block and the
+// marker lands only on the final fragment.
 func (p *RTPPacketizer) Send(ps []byte, tsTicks int64) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	total := len(ps)
 	for off := 0; off < total; off += RTPMTU {
 		end := off + RTPMTU

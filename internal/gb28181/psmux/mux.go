@@ -7,6 +7,7 @@ package psmux
 
 import (
 	"encoding/binary"
+	"sync"
 )
 
 // PSM stream types (GB/T 28181 附录 C — same values as the demuxer).
@@ -34,11 +35,20 @@ type Muxer struct {
 	videoType byte // 0 until set
 	audioType byte // 0 = no audio track
 	psmDirty  bool // PSM (re)sent on next IDR
+
+	// mu serializes writers: GB28181 cascade sessions feed video AUs and
+	// G.711 frames from two hub callback goroutines. Unsynchronized calls
+	// raced on psmDirty/videoType and could interleave PS bursts (truncated
+	// video AUs at PES-chunk boundaries on the receiver — observed as
+	// bottom-half green/white frames on the upper platform, 2026-08-21).
+	mu sync.Mutex
 }
 
 func New() *Muxer { return &Muxer{psmDirty: true} }
 
 func (m *Muxer) SetVideoCodec(codec string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	switch codec {
 	case "h265":
 		m.videoType = streamTypeH265
@@ -50,6 +60,8 @@ func (m *Muxer) SetVideoCodec(codec string) {
 
 // SetAudioCodec declares the audio track in the PSM ("" removes it).
 func (m *Muxer) SetAudioCodec(codec string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	switch codec {
 	case "g711a":
 		m.audioType = streamTypeG711A
@@ -64,6 +76,8 @@ func (m *Muxer) SetAudioCodec(codec string) {
 // WriteAU returns the PS bytes for one video access unit (Annex-B NALUs).
 // isIDR governs system-header + PSM inclusion.
 func (m *Muxer) WriteAU(annexB []byte, pts int64, isIDR bool) []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	out := packHeader(pts)
 	if isIDR {
 		out = append(out, systemHeader(m.videoType, m.audioType)...)
@@ -97,6 +111,8 @@ func (m *Muxer) WriteAU(annexB []byte, pts int64, isIDR bool) []byte {
 
 // WriteAudio returns the PS bytes for one G.711 frame (raw codec bytes).
 func (m *Muxer) WriteAudio(payload []byte, pts int64) []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	out := packHeader(pts)
 	out = append(out, audioPES(payload, pts)...)
 	return out
