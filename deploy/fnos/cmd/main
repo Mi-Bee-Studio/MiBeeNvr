@@ -84,9 +84,6 @@ choose_registry() {
 }
 
 ensure_image() {
-  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    return 0
-  fi
   local arch=""
   case "${TRIM_SYS_ARCH:-}" in
     # fnOS reports "x86" for x86_64 hosts (it ships no 32-bit x86 build, so
@@ -106,6 +103,11 @@ ensure_image() {
   fi
   if [ ! -f "$tar" ]; then
     # ONLINE package: no bundled tar — pull from the best registry instead.
+    # Inspect-first skip is fine here: an online-installed tag can only have
+    # come from a pull of this same version.
+    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+      return 0
+    fi
     local reg
     reg="$(choose_registry)" || {
       echo "[mibee-nvr] Both ghcr.io and the ACR mirror are unreachable. Check the network and retry start." > "$LOG"
@@ -127,10 +129,25 @@ ensure_image() {
     docker tag "$remote" "$IMAGE" || return 1
     return 0
   fi
-  log "loading $tar"
+  # OFFLINE package: a tag named $IMAGE existing is NOT proof it is the
+  # bundled image — test boxes carry historical mibee-nvr:<version> tags from
+  # earlier numbering eras, and skipping the load on tag-exists once ran a
+  # stale pre-fix image through a fresh install (blank desktop app, #411
+  # regression). Gate on the bundled tar's identity instead: load runs once
+  # per package (marker in PKGVAR, which survives upgrades), so fnOS's ~20s
+  # status polls never reload.
+  local marker="${TRIM_PKGVAR:-/tmp}/mibee-nvr-image.marker"
+  local want
+  want="$(stat -c '%s_%Y' "$tar" 2>/dev/null)"
+  if [ -n "$want" ] && [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "$want" ] \
+     && docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    return 0
+  fi
+  log "loading $tar (marker=${want:-unknown})"
   docker load -i "$tar" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1
   log "docker load exit=$?"
   docker image inspect "$IMAGE" >/dev/null 2>&1 || { log "image still missing after load"; return 1; }
+  [ -n "$want" ] && [ -n "${TRIM_PKGVAR:-}" ] && echo "$want" > "$marker"
   return 0
 }
 
