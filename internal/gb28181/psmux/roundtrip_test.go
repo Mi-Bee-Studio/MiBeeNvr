@@ -130,3 +130,48 @@ func TestRTPPacketizerFragmentation(t *testing.T) {
 	require.Equal(t, payload, joined)
 	require.EqualValues(t, 3, p.Sent())
 }
+
+// TestRoundTripVideoWithAppendedAudio mirrors the cascade's audio-in-burst
+// muxing: audio PES appended AFTER the video PES chunks inside ONE PS burst.
+// The demuxer must yield the complete video NALs (nothing truncated at a PES
+// boundary) plus the audio frames.
+func TestRoundTripVideoWithAppendedAudio(t *testing.T) {
+	mux := New()
+	mux.SetVideoCodec("h264")
+	mux.SetAudioCodec("g711a")
+
+	// One large NALU with an Annex-B start code (the demuxer splits the ES by
+	// start codes) — payload avoids accidental start-code byte triples.
+	nalu := make([]byte, 2*maxPESPayload+1234) // forces PES chunking
+	for i := range nalu {
+		nalu[i] = byte(i*7 + 1)
+	}
+	nalu[0] = 0x65 // IDR slice header byte (content irrelevant to the demuxer)
+	video := append([]byte{0, 0, 0, 1}, nalu...)
+	audio := make([]byte, 320)
+	for i := range audio {
+		audio[i] = byte(i)
+	}
+
+	ps := mux.WriteAU(video, 90000, true)
+	ps = mux.AppendAudioPES(ps, audio, 90320)
+
+	dmx := gb.NewPSDemuxer()
+	nalus, err := dmx.FeedAU(ps, 90320, true)
+	if err != nil {
+		t.Fatalf("FeedAU: %v", err)
+	}
+	var got []byte
+	for _, n := range nalus {
+		got = append(got, n...)
+	}
+	if len(got) != len(nalu) {
+		t.Fatalf("video ES truncated: got %d bytes, want %d", len(got), len(video))
+	}
+	for i := range nalu {
+		if got[i] != nalu[i] {
+			t.Fatalf("video ES mismatch at %d", i)
+		}
+	}
+	_ = dmx.DrainAudio() // audio path exercised; content checked by audio roundtrip
+}

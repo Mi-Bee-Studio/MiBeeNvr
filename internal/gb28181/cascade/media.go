@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,7 +46,20 @@ type mediaSession struct {
 	audioSubID   string
 	audioLawWarn bool // one-shot: audio present but law unknown/unsupported
 
+	// audioMu guards audioPending: G.711 frames buffered by the audio
+	// callback goroutine until the next video AU's PS burst muxes them in.
+	audioMu sync.Mutex
+	// audioPending holds frames awaiting the next video AU burst (see
+	// Muxer.AppendAudioPES for why audio must ride inside video bursts).
+	audioPending []audioPendingFrame
+
 	closed atomic.Bool
+}
+
+// audioPendingFrame is one buffered G.711 frame awaiting the next video AU.
+type audioPendingFrame struct {
+	pts  int64
+	data []byte
 }
 
 // inviteSDP is the subset of an INVITE's SDP the cascade cares about.
@@ -286,7 +300,22 @@ func (ms *mediaSession) run(hub *model.StreamHub) {
 			ms.codecHint = sniffCodec(au[0])
 			ms.mux.SetVideoCodec(ms.codecHint)
 		}
-		if err := ms.rtp.Send(ms.mux.WriteAU(annexB, pts, auIsIDR(au, ms.codecHint)), pts); err != nil {
+		// Take the audio buffered since the last video AU and mux it into
+		// THIS PS burst — one RTP stream, one marker per access unit. A
+		// standalone audio burst carries its own marker, and receivers treat
+		// ANY marker as an AU boundary: an audio burst slipping between a
+		// large video AU's RTP packets truncated the frame at the last
+		// completed PES (IDRs cut at exactly ~maxPESPayload with garbage
+		// tails; 2026-08-21).
+		ms.audioMu.Lock()
+		pending := ms.audioPending
+		ms.audioPending = nil
+		ms.audioMu.Unlock()
+		ps := ms.mux.WriteAU(annexB, pts, auIsIDR(au, ms.codecHint))
+		for _, f := range pending {
+			ps = ms.mux.AppendAudioPES(ps, f.data, f.pts)
+		}
+		if err := ms.rtp.Send(ps, pts); err != nil {
 			ms.teardown("send error")
 		}
 	})
@@ -324,8 +353,27 @@ func (ms *mediaSession) run(hub *model.StreamHub) {
 			}
 			return
 		}
-		if err := ms.rtp.Send(ms.mux.WriteAudio(data, pts), pts); err != nil {
-			ms.teardown("audio send error")
+		// Buffer (do NOT Send): the next video AU muxes this frame in via
+		// AppendAudioPES. If video ever stalls (>~180ms of audio queued),
+		// flush standalone so audio does not buffer forever — the marker
+		// hazard only exists while video packets are in flight around it.
+		ms.audioMu.Lock()
+		ms.audioPending = append(ms.audioPending, audioPendingFrame{pts: pts, data: append([]byte(nil), data...)})
+		standalone := len(ms.audioPending) > 9
+		var flush []audioPendingFrame
+		if standalone {
+			flush = ms.audioPending
+			ms.audioPending = nil
+		}
+		ms.audioMu.Unlock()
+		if standalone {
+			out := ms.mux.WriteAudio(nil, pts)
+			for _, f := range flush {
+				out = ms.mux.AppendAudioPES(out, f.data, f.pts)
+			}
+			if err := ms.rtp.Send(out, pts); err != nil {
+				ms.teardown("audio send error")
+			}
 		}
 	}); err != nil {
 		slog.Warn("gb28181-cascade: hub audio subscribe failed", "camera", ms.camera, "error", err)
