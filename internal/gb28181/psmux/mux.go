@@ -203,6 +203,19 @@ func audioPES(payload []byte, pts int64) []byte {
 	return append(pes, payload...)
 }
 
+// AppendAudioPES appends one G.711 frame as a self-describing audio PES to an
+// existing PS burst (typically the current video AU's). GB28181 media is ONE
+// RTP stream: audio must ride INSIDE the video AU's burst so the burst-final
+// RTP marker truly delimits the access unit. A standalone audio Send would
+// carry its own marker mid-video-AU — receivers treat any marker as an AU
+// boundary and truncate the video frame at the last completed PES (observed
+// as IDRs cut at exactly ~maxPESPayload with garbage-tail NALUs, 2026-08-21).
+func (m *Muxer) AppendAudioPES(ps []byte, payload []byte, pts int64) []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append(ps, audioPES(payload, pts)...)
+}
+
 // encodePTS packs a 33-bit PTS into the 5-byte MPEG form ('0010' prefix).
 func encodePTS(pts int64) []byte {
 	p := uint64(pts) & 0x1FFFFFFFF
