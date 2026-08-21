@@ -400,7 +400,7 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 	if len(r.jitterBuffer) >= r.maxJitterPackets {
 		// Force flush to make room. Mid-AU: the demuxer only accumulates
 		// (complete=false) — partial NALUs are never emitted.
-		r.emitAccessUnitsLocked(false)
+		r.emitAccessUnitsLocked()
 	}
 
 	// Store packet
@@ -409,30 +409,37 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 
 	// Marker bit indicates AU boundary - emit complete AU
 	if pkt.Header.Marker {
-		r.emitAccessUnitsLocked(true)
+		r.emitAccessUnitsLocked()
 	}
 
 	return nil
 }
 
 // emitAccessUnitsLocked reassembles packets in sequence order and emits
-// complete access units. Must be called with jitterBufferMu held. complete
-// marks whether this emission ends on a marker (real AU boundary).
+// complete access units. Must be called with jitterBufferMu held. An emission
+// ends an access unit only when the drained run's final packet carries the RTP
+// marker bit (see endedOnMarker below).
 //
 // Loss recovery: when the packet at baseSeq is missing (UDP loss), the
 // contiguous drain below would stall forever. Instead the gap is skipped —
 // baseSeq advances to the lowest buffered sequence number — so the stream
 // continues (the partial AU is dropped, which the PS demuxer tolerates)
 // instead of freezing and growing the buffer without bound.
-func (r *Receiver) emitAccessUnitsLocked(complete bool) {
+func (r *Receiver) emitAccessUnitsLocked() {
 	if len(r.jitterBuffer) == 0 {
 		return
 	}
 
-	// Build ordered list of packets by sequence number,
-	// starting from the oldest received (lowest seq number).
+	// Build the ordered, CONTIGUOUS run of packets by sequence number starting
+	// at baseSeq. The loop runs until the run breaks at a gap — comparing
+	// against len(r.jitterBuffer) as the bound would be wrong: entries are
+	// deleted as they are collected, so the bound shrinks in lockstep and the
+	// drain stops after half the run. Undersized mid-AU feeds delayed PES
+	// completion until after the marker packet, and the marker feed then
+	// extracted the AU with its final PES still pending — every large frame
+	// (H.264 IDR ≥ maxPESPayload) was cut at the first PES chunk (#444).
 	var packets []*rtp.Packet
-	for len(packets) < len(r.jitterBuffer) {
+	for {
 		targetSeq := r.baseSeq + uint16(len(packets))
 		pkt, ok := r.jitterBuffer[targetSeq]
 		if !ok {
@@ -452,14 +459,26 @@ func (r *Receiver) emitAccessUnitsLocked(complete bool) {
 		r.packetsDroppedU++
 		logger.Debug("gb28181: RTP packet loss — skipping gap",
 			"camera_id", r.cameraID, "from_seq", r.baseSeq, "to_seq", next)
+		// The AU in flight lost bytes on the wire — its pending PES/ES
+		// reassembly would complete from mismatched halves (a frame with a
+		// hole decodes as half-frame corruption). Drop it; the stream resyncs
+		// at the next AU boundary.
+		r.demuxer.DropPartialVideo()
 		r.baseSeq = next
 		// Re-run so the buffered packets above the gap are emitted now.
-		r.emitAccessUnitsLocked(complete)
+		r.emitAccessUnitsLocked()
 		return
 	}
 
 	// Advance base sequence to account for emitted packets
 	r.baseSeq += uint16(len(packets))
+
+	// A real AU boundary exists only when the drained run ENDS on the marker
+	// packet. Passing the caller's `complete` blindly was wrong twice: a
+	// force-flush run could end exactly on a burst-final marker (harmless), but
+	// a marker-triggered drain that stopped at a sequence gap mid-burst, or a
+	// teardown flush, claimed completeness for a run the wire never finished.
+	endedOnMarker := packets[len(packets)-1].Header.Marker
 
 	// Stitch payloads across packets (cross-packet byte stitching)
 	var auPayload []byte
@@ -478,7 +497,7 @@ func (r *Receiver) emitAccessUnitsLocked(complete bool) {
 	r.ptsClock.Store(ptsTicks)
 
 	// Feed to Stage 2: PS demuxer
-	nalus, err := r.demuxer.FeedAU(auPayload, ptsTicks, complete)
+	nalus, err := r.demuxer.FeedAU(auPayload, ptsTicks, endedOnMarker)
 	if err != nil {
 		logger.Debug("gb28181: PS demux error", "camera_id", r.cameraID, "error", err)
 		return
@@ -570,9 +589,10 @@ func (r *Receiver) flushJitterBuffer() {
 	r.jitterBufferMu.Lock()
 	defer r.jitterBufferMu.Unlock()
 
-	// Emit any remaining packets as one AU (stream end = boundary)
+	// Emit any remaining packets (a run ending without a marker extracts
+	// nothing here — the demuxer.Flush below drains the residual bytes).
 	if len(r.jitterBuffer) > 0 {
-		r.emitAccessUnitsLocked(true)
+		r.emitAccessUnitsLocked()
 	}
 
 	// Flush demuxer residual data

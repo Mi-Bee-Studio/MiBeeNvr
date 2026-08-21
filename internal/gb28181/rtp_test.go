@@ -137,7 +137,11 @@ func TestReceiverUDPBasic(t *testing.T) {
 		return receivedFrames.Load() > 0
 	}, 2*time.Second, 10*time.Millisecond, "consumer should receive frame")
 
-	require.Equal(t, int64(1), receivedFrames.Load())
+	// The first burst carries no marker, so both bursts drain as one run on
+	// the marker packet and splitAUsByFrame recovers one AU per frame (the
+	// documented lost-marker recovery). Both frames share the marker packet's
+	// timestamp — the drain ends there.
+	require.Equal(t, int64(2), receivedFrames.Load())
 	require.True(t, receivedPTS.Load() > 0)
 }
 
