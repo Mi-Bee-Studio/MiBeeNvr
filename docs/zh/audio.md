@@ -45,6 +45,8 @@ cameras:
 
 ## 实时试听
 
+![直播页的试听与对讲控制](images/live-ptz.webp)
+
 ### Web UI 试听
 
 1. 在 Web 界面打开摄像头

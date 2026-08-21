@@ -2,6 +2,8 @@
 
 This guide covers ONVIF (Open Network Video Interface Forum) integration with MiBee NVR, including camera discovery, management, PTZ control, and troubleshooting.
 
+![Live page of a PTZ-capable camera](images/live-ptz.webp)
+
 ## What is ONVIF and Profile S Overview
 
 ONVIF is an open industry standard for network video products, enabling different manufacturers' IP cameras to work together. MiBee N implements ONVIF Profile S, which focuses on core video streaming functionality:

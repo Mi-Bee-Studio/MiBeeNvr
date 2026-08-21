@@ -45,6 +45,8 @@ cameras:
 
 ## Live Listening
 
+![Listen / talk-back controls on the live page](images/live-ptz.webp)
+
 ### Web UI Listening
 
 1. Open a camera in the web interface.

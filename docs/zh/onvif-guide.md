@@ -2,6 +2,8 @@
 
 本指南介绍 MiBee NVR 与 ONVIF（开放网络视频接口论坛）的集成，包括摄像头发现、管理、PTZ 控制和故障排除。
 
+![支持云台的摄像头直播页](images/live-ptz.webp)
+
 ## 什么是 ONVIF 和 Profile S 概述
 
 ONVIF 是网络视频产品的开放行业标准，使不同制造商的 IP 摄像头能够协同工作。MiBee NVR 主要实现 ONVIF Profile S，专注于核心视频流功能：

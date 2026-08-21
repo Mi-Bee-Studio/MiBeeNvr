@@ -17,6 +17,8 @@ MiBee NVR supports two push-stream protocols for ingesting camera feeds — SRT 
 
 ## SRT Push-Stream Ingest
 
+![Streaming (SRT/RTMP) toggles in Settings](images/settings-streaming.webp)
+
 ### Enable SRT Server
 
 ```yaml

@@ -4,6 +4,8 @@
 
 ## Set up relay in the Web UI (recommended — no config editing needed)
 
+![Relay outputs section in the camera edit form](images/relay-edit.webp)
+
 Most users only need the web interface. Below: forward one camera to **Bilibili Live**.
 
 ### Step 1: Get the push URL (with stream key) from your platform
