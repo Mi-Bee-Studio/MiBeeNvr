@@ -408,6 +408,9 @@ func TestHealth_CameraAggregation_OfflineStatus(t *testing.T) {
 		},
 	}
 	h := setupHealthHandler(t, mgr)
+	// Aggregation only counts cameras present in the active camera list (#420).
+	require.NoError(t, h.db.UpsertCamera(context.Background(), "cam-1", "Cam 1", "rtsp", "h264", "rtsp://host/s1", "", "", "", "", "", ""))
+	require.NoError(t, h.db.UpsertCamera(context.Background(), "cam-2", "Cam 2", "rtsp", "h264", "rtsp://host/s2", "", "", "", "", "", ""))
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -672,4 +675,37 @@ func TestStability_Camera_RequiresAuth(t *testing.T) {
 	// With auth → 200
 	rr = doRequest(t, h.Routes(), "GET", "/api/health/stability/cam1", nil, "admin", "password123")
 	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+// GET /api/health camera aggregation must skip cameras that no longer appear
+// in the active camera list (#420). An archived camera (e.g. the device-self
+// pseudo-channel camera retired once its catalog arrived, #416) — or a deleted
+// one — keeps its last health entry forever; left in the aggregate, its stale
+// error status pins the system degraded eternally.
+func TestHealth_AggregateSkipsRetiredCameras(t *testing.T) {
+	t.Parallel()
+	mgr := &mockHealthManager{
+		allHealth: map[string]*model.CameraHealth{
+			"cam-live":     {CameraID: "cam-live", LatestStatus: "recording", Score: 90},
+			"cam-archived": {CameraID: "cam-archived", LatestStatus: "error", Score: 5},
+			"cam-deleted":  {CameraID: "cam-deleted", LatestStatus: "unhealthy", Score: 10},
+		},
+	}
+	h := setupHealthHandler(t, mgr)
+	ctx := context.Background()
+	require.NoError(t, h.db.UpsertCamera(ctx, "cam-live", "Live Cam", "rtsp", "h264", "rtsp://host/s", "", "", "", "", "", ""))
+	require.NoError(t, h.db.UpsertCamera(ctx, "cam-archived", "Archived Cam", "rtsp", "h264", "rtsp://host/s2", "", "", "", "", "", ""))
+	require.NoError(t, h.db.ArchiveCameraDB(ctx, "cam-archived"))
+	// "cam-deleted" is never inserted: its row is gone, the health entry remains.
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp HealthResponse
+	parseJSON(t, rr, &resp)
+	require.NotNil(t, resp.Cameras)
+	require.Equal(t, 1, resp.Cameras.Total)
+	require.Equal(t, 1, resp.Cameras.Recording)
+	require.Equal(t, 0, resp.Cameras.Error)
+	require.Equal(t, "ok", resp.Status)
 }
