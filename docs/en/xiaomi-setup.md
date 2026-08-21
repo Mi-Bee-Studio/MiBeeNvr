@@ -38,11 +38,9 @@ MiBee NVR provides comprehensive support for Xiaomi cloud cameras through the CS
 
 ```yaml
 xiaomi:
-  enabled: true
   user_id: "123456789"
   token: "your_passToken_here"
   region: "cn"
-  auto_discovery: true
 
 cameras:
   - id: "xiaomi_c200_front"
@@ -62,11 +60,11 @@ cameras:
 
 | Field | Required | Type | Default | Description |
 |-------|----------|------|---------|-------------|
-| `enabled` | Yes | boolean | false | Enable Xiaomi integration |
-| `user_id` | Yes | string | - | Xiaomi user ID |
+| `user_id` | Yes | string | - | Xiaomi user ID (written automatically after the first `/api/xiaomi/auth` login) |
 | `token` | Yes | string | - | Xiaomi passToken |
 | `region` | No | string | "cn" | Region code (cn, sg, de, etc.) |
-| `auto_discovery` | No | boolean | true | Enable automatic device discovery |
+
+> The `xiaomi:` section has no on/off switch — integration is active whenever credentials are configured. LAN auto-discovery is controlled by the top-level [`auto_discover`](./configuration.md) setting and is separate from Xiaomi-account discovery (the Web UI scan panel).
 
 ### Camera Configuration Options
 
@@ -77,30 +75,18 @@ cameras:
 | `protocol` | Yes | string | "xiaomi" | Must be "xiaomi" |
 | `encoding` | Yes | string | "h264" | Video encoding (h264, h265) |
 | `did` | Yes | string | - | Xiaomi device ID |
-| `vendor` | Yes | string | "cs2" | Must be "cs2" |
+| `vendor` | No | string | "cs2" | Transport implementation ("cs2"; legacy TUTK models are selected automatically) |
+| `channel` | No | string | "" | Dual-lens camera lens selection ("" or "0" = main lens, "1" = secondary) |
+| `quality` | No | string | "auto" | Stream quality ("auto" = HD with SD fallback, "hd", "sd") |
 | `enabled` | No | boolean | true | Enable camera recording |
 
 ### Advanced Configuration
 
 ```yaml
 xiaomi:
-  enabled: true
   user_id: "123456789"
   token: "your_passToken_here"
   region: "cn"
-  auto_discovery: true
-  connection_timeout: "30s"
-  read_timeout: "60s"
-  retry_attempts: 3
-  retry_delay: "10s"
-  
-  # Performance settings
-  max_concurrent_cameras: 10
-  segment_buffer_size: "10MB"
-  
-  # Security settings
-  encrypt_credentials: true
-  credential_rotation_days: 90
 
 cameras:
   - id: "xiaomi_c300_living_room"
@@ -109,20 +95,22 @@ cameras:
     encoding: "h264"
     did: "device_id_12345"
     vendor: "cs2"
+    channel: "0"            # dual-lens camera: main lens ("1" = secondary)
+    quality: "auto"         # automatic HD → SD fallback
     enabled: true
     # Optimized settings for 2K cameras
     hls_max_fps: 20
     sample_interval: 1
-    segment_duration: "30s"
-    
-    # Auto backup settings
-    snapshot_interval: "5m"
-    snapshot_quality: "high"
-    
-    # Alert settings
-    motion_detection: true
-    push_notifications: false
+    # Stream health / watchdog (optional)
+    frame_watchdog_timeout: "30s"
 ```
+
+> Xiaomi integration has no dedicated timeout/retry/concurrency options; connection behavior is managed by
+> the transport layer (CS2/TUTK), and unhealthy streams are handled by the camera-level
+> `frame_watchdog_timeout` and `health_overrides` (see [configuration.md](./configuration.md)).
+> For snapshots/timelapse use the `timelapse:` section (see [timelapse.md](./timelapse.md)) — there are no
+> `snapshot_interval` / `motion_detection` / `push_notifications` keys: the NVR itself does not perform motion
+> detection; alerting comes from AI-backend events.
 
 ## Setup Methods
 
