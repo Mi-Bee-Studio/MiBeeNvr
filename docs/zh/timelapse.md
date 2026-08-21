@@ -158,6 +158,8 @@ cameras:
 
 ## 统一录制界面
 
+![录像页的延时摄影视图](images/timelapse-view.webp)
+
 MiBee NVR 将延时摄影和常规录制合并到统一 Library 页面，具有增强的导航和过滤功能。
 
 ### 视图模式

@@ -140,6 +140,8 @@ cameras:
 
 6. **Add to NVR**: Click "Add to NVR" for each selected camera
 
+![Xiaomi device scan panel](images/xiaomi-scan.webp)
+
 7. **Configure**: Customize settings for each camera (retention, quality, etc.)
 
 8. **Save**: Click "Save Configuration" to apply changes

@@ -143,6 +143,10 @@ There are three ways to set the admin password:
 
 ## Adding Your First Camera
 
+![Cameras page](images/cameras.webp)
+
+![Surveillance grid](images/surveillance.webp)
+
 MiBee NVR uses a **separate transport + encoding** format for camera protocols:
 
 - **Transport**: `rtsp`, `http`, `onvif`, `xiaomi`, `timelapse`

@@ -2,6 +2,8 @@
 
 MiBee NVR uses a YAML configuration file to control all aspects of its operation. Below is a comprehensive reference of all available options, their defaults, and usage examples.
 
+![General settings page](images/settings-general.webp)
+
 ## Configuration File Structure
 
 ```yaml

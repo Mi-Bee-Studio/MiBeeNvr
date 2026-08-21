@@ -174,6 +174,8 @@ cameras:
 
 ## Unified Recordings Interface
 
+![Timelapse view on the Recordings page](images/timelapse-view.webp)
+
 MiBee NVR merges timelapse and regular recordings into a unified Library page with enhanced navigation and filtering capabilities.
 
 ### View Modes

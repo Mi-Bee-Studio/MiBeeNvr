@@ -17,6 +17,8 @@ MiBee NVR 支持 SRT 和 RTMP 两种推流协议接入摄像头，适用于跨�
 
 ## SRT 推流接入
 
+![设置中的直播（SRT/RTMP）开关](images/settings-streaming.webp)
+
 ### 启用 SRT 服务器
 
 ```yaml
