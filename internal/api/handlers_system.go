@@ -137,22 +137,33 @@ func (h *Handler) aggregateCameraHealth(r *http.Request) *CameraHealthSummary {
 		allHealth = map[string]*model.CameraHealth{}
 	}
 
-	// Build camera name lookup from DB
-	nameLookup := map[string]string{}
+	// Active-camera lookup from DB. ListCameras excludes archived rows, so it
+	// doubles as the filter that keeps retired cameras out of the aggregate:
+	// an archived camera (e.g. the auto-enrolled device-self pseudo-channel
+	// camera retired once its catalog arrived, #416) keeps its last health
+	// entry forever and would pin the system degraded eternally (#420). When
+	// the lookup is unavailable (no DB / query error) we count everything
+	// rather than reporting an empty system.
+	var active map[string]string // nil = unknown, count all
 	if h.db != nil {
-		cameras, err := h.db.ListCameras(r.Context())
-		if err == nil {
+		if cameras, err := h.db.ListCameras(r.Context()); err == nil {
+			active = make(map[string]string, len(cameras))
 			for _, c := range cameras {
-				nameLookup[c.ID] = c.Name
+				active[c.ID] = c.Name
 			}
 		}
 	}
 
-	summary := &CameraHealthSummary{Total: len(allHealth)}
+	summary := &CameraHealthSummary{}
 	for id, ch := range allHealth {
+		if active != nil {
+			if _, ok := active[id]; !ok {
+				continue
+			}
+		}
 		detail := CameraHealthDetail{
 			ID:     id,
-			Name:   nameLookup[id],
+			Name:   active[id],
 			Score:  ch.Score,
 			Status: ch.LatestStatus,
 		}
@@ -169,6 +180,7 @@ func (h *Handler) aggregateCameraHealth(r *http.Request) *CameraHealthSummary {
 			summary.Offline++
 		}
 	}
+	summary.Total = len(summary.Details)
 
 	return summary
 }
