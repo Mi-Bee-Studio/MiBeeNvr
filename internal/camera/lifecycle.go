@@ -58,6 +58,12 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 					}
 				} else {
 					logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
+					// GB28181 recorders are passive — pull media with a SIP
+					// INVITE now that the recorder exists. This also heals a
+					// session wired before startup finished (catalog-driven
+					// INVITE racing camera-manager boot): the recycle inside
+					// replaces the orphan-hub binding with this recorder.
+					cm.autoInviteGB28181(cam)
 					// Notify health manager of new camera with per-camera overrides
 					var hOverrides *config.ResolvedHealthOverrides
 					if cm.cfg.Health.Enabled {
