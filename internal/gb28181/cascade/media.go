@@ -31,8 +31,8 @@ type mediaSession struct {
 	camera  string // local camera ID
 	upper   *upper // owning upper platform (#370 dialog routing)
 
-	conn *net.UDPConn
-	dst  *net.UDPAddr
+	conn net.Conn     // UDP socket or the dialed TCP media connection
+	dst  *net.UDPAddr // nil for TCP media
 	ssrc uint32
 
 	mux       *psmux.Muxer
@@ -66,6 +66,7 @@ type audioPendingFrame struct {
 type inviteSDP struct {
 	host  string
 	port  int
+	tcp   bool // m= line negotiated TCP/RTP/AVP (upper's tcp-passive offer)
 	ssrc  uint32
 	name  string // s= session name ("Play"|"Playback")
 	t0    int64  // t= start, Unix seconds (NTP-era values normalized)
@@ -88,6 +89,9 @@ func sdpFromInvite(body []byte) (inviteSDP, error) {
 			sd.host = strings.TrimSpace(strings.TrimPrefix(line, "c=IN IP4"))
 		case strings.HasPrefix(line, "m=video "):
 			fields := strings.Fields(line)
+			if len(fields) >= 3 && fields[2] == "TCP/RTP/AVP" {
+				sd.tcp = true
+			}
 			if len(fields) >= 2 {
 				sd.port, _ = strconv.Atoi(fields[1])
 			}
@@ -211,11 +215,28 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 	}
 	s.mu.Unlock()
 
-	dst := &net.UDPAddr{IP: net.ParseIP(sd.host), Port: sd.port}
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
-	if err != nil {
-		_, _ = s.srv.RespondOnRequest(req, 500, "Internal Error", "", nil)
-		return
+	// Media transport: the upper's tcp-passive offer (TCP/RTP/AVP +
+	// a=setup:passive) means WE connect — TCP retransmission survives lossy
+	// hops that shred back-to-back UDP bursts (4K IDR bursts lost ~10% of
+	// packets on one deployment's switch, truncating every keyframe at a PES
+	// boundary; 2026-08-21). UDP offers keep the classic socket.
+	var conn net.Conn
+	var dst *net.UDPAddr
+	if sd.tcp {
+		conn, err = net.DialTimeout("tcp", net.JoinHostPort(sd.host, strconv.Itoa(sd.port)), 5*time.Second)
+		if err != nil {
+			slog.Warn("gb28181-cascade: TCP media dial failed", "channel", channelID, "upper", sd.host, "error", err)
+			_, _ = s.srv.RespondOnRequest(req, 500, "Internal Error", "", nil)
+			return
+		}
+		slog.Info("gb28181-cascade: TCP media connected", "channel", channelID, "upper", conn.RemoteAddr())
+	} else {
+		dst = &net.UDPAddr{IP: net.ParseIP(sd.host), Port: sd.port}
+		conn, err = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if err != nil {
+			_, _ = s.srv.RespondOnRequest(req, 500, "Internal Error", "", nil)
+			return
+		}
 	}
 
 	ms := &mediaSession{
@@ -229,11 +250,23 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		ms.codecHint = cam.Encoding
 		ms.mux.SetVideoCodec(cam.Encoding)
 	}
-	ms.rtp = psmux.NewRTPPacketizer(conn, dst, sd.ssrc, uint16(time.Now().UnixNano()&0xFFFF))
+	if sd.tcp {
+		ms.rtp = psmux.NewRTPPacketizerTCP(conn, sd.ssrc, uint16(time.Now().UnixNano()&0xFFFF))
+	} else {
+		ms.rtp = psmux.NewRTPPacketizer(conn, dst, sd.ssrc, uint16(time.Now().UnixNano()&0xFFFF))
+	}
 	ms.sdpBody = fmt.Sprintf(
 		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=Play\r\nc=IN IP4 %s\r\nt=0 0\r\n"+
 			"m=video %d RTP/AVP 96\r\na=sendonly\r\na=rtpmap:96 PS/90000\r\ny=%d\r\n",
 		ms.localHost(), ms.localHost(), ms.localPort(), sd.ssrc)
+	if sd.tcp {
+		// Answer as the TCP-active side: we dialed, per the offer's setup:passive.
+		ms.sdpBody = fmt.Sprintf(
+			"v=0\r\no=- 0 0 IN IP4 %s\r\ns=Play\r\nc=IN IP4 %s\r\nt=0 0\r\n"+
+				"m=video %d TCP/RTP/AVP 96\r\na=sendonly\r\na=setup:active\r\na=connection:new\r\n"+
+				"a=rtpmap:96 PS/90000\r\ny=%d\r\n",
+			ms.localHost(), ms.localHost(), ms.localPort(), sd.ssrc)
+	}
 
 	s.mu.Lock()
 	s.sessions[callID] = ms

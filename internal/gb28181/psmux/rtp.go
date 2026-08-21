@@ -1,6 +1,7 @@
 package psmux
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -12,8 +13,8 @@ const RTPMTU = 1400
 // RTPPacketizer fragments a PS byte stream across RTP/UDP packets: PT 96,
 // 90kHz timestamps, marker on the last packet of each PS burst (access unit).
 type RTPPacketizer struct {
-	conn       *net.UDPConn
-	dst        *net.UDPAddr
+	conn       net.Conn
+	dst        *net.UDPAddr // nil → TCP media (RFC 4571 framing)
 	ssrc       uint32
 	seq        uint16
 	payloadTyp byte
@@ -28,8 +29,15 @@ type RTPPacketizer struct {
 	mu sync.Mutex
 }
 
-func NewRTPPacketizer(conn *net.UDPConn, dst *net.UDPAddr, ssrc uint32, initialSeq uint16) *RTPPacketizer {
+func NewRTPPacketizer(conn net.Conn, dst *net.UDPAddr, ssrc uint32, initialSeq uint16) *RTPPacketizer {
 	return &RTPPacketizer{conn: conn, dst: dst, ssrc: ssrc, seq: initialSeq, payloadTyp: 96}
+}
+
+// NewRTPPacketizerTCP builds a TCP-media packetizer: dst is nil, each RTP
+// packet is framed with a 2-byte big-endian length prefix (RFC 4571 — the
+// platform-side receiver auto-detects RFC4571 and 0x24 framings).
+func NewRTPPacketizerTCP(conn net.Conn, ssrc uint32, initialSeq uint16) *RTPPacketizer {
+	return &RTPPacketizer{conn: conn, ssrc: ssrc, seq: initialSeq, payloadTyp: 96}
 }
 
 // Send fragments and sends one PS burst; ts is the 90kHz AU timestamp.
@@ -63,8 +71,18 @@ func (p *RTPPacketizer) Send(ps []byte, tsTicks int64) error {
 		pkt[11] = byte(p.ssrc)
 		pkt = append(pkt, ps[off:end]...)
 		p.seq++
-		if _, err := p.conn.WriteToUDP(pkt, p.dst); err != nil {
-			return fmt.Errorf("psmux: rtp send: %w", err)
+		if p.dst != nil {
+			if _, err := p.conn.(*net.UDPConn).WriteToUDP(pkt, p.dst); err != nil {
+				return fmt.Errorf("psmux: rtp send: %w", err)
+			}
+		} else {
+			// TCP media: RFC 4571 framing (2-byte length prefix).
+			framed := make([]byte, 2+len(pkt))
+			binary.BigEndian.PutUint16(framed, uint16(len(pkt)))
+			copy(framed[2:], pkt)
+			if _, err := p.conn.Write(framed); err != nil {
+				return fmt.Errorf("psmux: rtp send (tcp): %w", err)
+			}
 		}
 		p.sent++
 	}
