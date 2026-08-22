@@ -34,7 +34,7 @@ curl -u username:password \
 
 **Response:** SSE stream (`text/event-stream`). 15-second heartbeat keepalive.
 
-```
+```text
 event: camera.status
 data: {"topic":"camera.status","data":{"camera_id":"front-door","status":"recording"}}
 

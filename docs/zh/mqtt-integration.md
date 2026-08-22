@@ -208,21 +208,21 @@ curl -u admin:password http://localhost:9090/api/system/health
 #### 常见问题
 
 **连接失败**
-```
+```text
 WARN: mqtt connection failed: connection refused
 ```
 **解决方案**：检查代理 URL，确保代理正在运行
 **调试**：使用 `mosquitto_pub -h 192.168.1.100 -t test -m hello` 进行测试
 
 **认证失败**
-```
+```text
 WARN: mqtt authentication failed
 ```
 **解决方案**：验证配置中的用户名和密码
 **调试**：使用凭据测试：`mosquitto_pub -u user -P pass -h broker -t test -m hello`
 
 **消息未处理**
-```
+```text
 WARN: invalid mqtt message payload format
 ```
 **解决方案**：确保 JSON 负载包含 `action` 字段
@@ -241,7 +241,7 @@ mqtt:
 
 多个摄像头可以在同一个代理上被触发：
 
-```
+```text
 security/trigger/camera1
 security/trigger/camera2
 security/trigger/camera3

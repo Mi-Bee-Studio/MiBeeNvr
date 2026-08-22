@@ -137,7 +137,7 @@ mirror --reverse /recordings/front-door/ ./local-folder/
 
 WebDAV 和 FTP 访问的目录结构：
 
-```
+```text
 /
 ├── recordings/                   # 录像文件
 │   ├── front-door/               # 摄像头 ID

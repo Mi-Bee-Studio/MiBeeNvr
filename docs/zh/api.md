@@ -63,7 +63,7 @@ curl -N "http://localhost:9090/api/events?filter=segment."
 
 事件负载为嵌套结构，业务字段在 `Data` 内（含 `recording_id`）：
 
-```
+```text
 data: {"Topic":"segment.completed","Data":{ ... }}
 ```
 

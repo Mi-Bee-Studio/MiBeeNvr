@@ -803,20 +803,20 @@ docker logs -f mibee-nvr-container
 #### Common Log Patterns
 
 **Camera Connection Issues**:
-```
+```text
 WARN: camera connection failed: rtsp://...: connection refused
 WARN: camera authentication failed for camera_id
 ERROR: camera stream error: read timeout
 ```
 
 **Storage Issues**:
-```
+```text
 WARN: storage directory not writable: /var/lib/mibee-nvr
 ERROR: cannot write recording file: no space left on device
 ```
 
 **Configuration Issues**:
-```
+```text
 ERROR: validation failed: camera[].url has invalid format
 ERROR: validation failed: cleanup.retention_days must be between 1 and 3650
 ```

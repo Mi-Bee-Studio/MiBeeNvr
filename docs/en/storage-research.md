@@ -96,7 +96,7 @@ Migrations are embedded in `Init()` (`internal/storage/db.go:50–379`), each us
 
 Configured in `New()` (`internal/storage/db.go:42`):
 
-```
+```text
 _pragma=journal_mode(WAL)
 _pragma=synchronous(NORMAL)
 _pragma=busy_timeout(15000)
@@ -463,7 +463,7 @@ WAL files grow with write activity. Regular checkpointing keeps WAL size managea
 
 For SQLite-based scaling beyond 500K rows, consider **manual partitioning by time**:
 
-```
+```text
 recordings_2025_01
 recordings_2025_02
 recordings_2025_03

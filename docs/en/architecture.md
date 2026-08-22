@@ -15,7 +15,7 @@ Both reuse the existing `StreamHub` frame bus so they slot into the recording + 
 
 Every camera owns a `*model.StreamHub` — a frame fan-out bus. Producers call `hub.Broadcast(pts, au, isIDR)`; consumers call `hub.Subscribe(id, callback)`. The hub runs each consumer's callback in a dedicated goroutine (non-blocking; drops on full buffer).
 
-```
+```text
                      ┌─────────────────────────────────────────┐
                      │              StreamHub                   │
    RTSP recorder ──▶ │  Broadcast(pts, au, isIDR)              │ ──▶ HLS muxer
@@ -44,7 +44,7 @@ A remote publisher (ffmpeg, OBS, a phone, another NVR) pushes a stream to the NV
 
 ### Data flow (RTMP example)
 
-```
+```text
 Publisher ──RTMP──▶ RTMP Server (handlePublisher)
                        │  OnDataH264(au, pts)
                        ├─▶ NALUProvider ──▶ IngestRecorder.WriteNALU(au, pts, isIDR)
@@ -81,7 +81,7 @@ The NVR forwards a camera's live stream to remote RTMP/RTSP targets. RTSP target
 
 ### Data flow
 
-```
+```text
 Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
                       │  cb(pts, au)
                       ▼
@@ -193,7 +193,7 @@ rtmp:
 
 ## 6. Network Topology Examples
 
-```
+```text
 A) Push-in: remote camera → NVR
    [Remote Cam/ffmpeg] ──push RTMP/SRT──▶ [NVR (public IP / port-forwarded)]
 
@@ -246,7 +246,7 @@ When playing back a recording, the browser's native `<video>`/`<audio>` element 
 Live preview audio uses a custom binary WebSocket protocol defined in `internal/wsstream/`. The wire format consists of two frame types:
 
 1. **AudioCodecInfo** (type 0x05, sent once when audio stream starts):
-```
+```text
 {type:1}{codec:1}{sample_rate:4_BE}{channels:1}
 ```
 - Total: 7 bytes
@@ -256,7 +256,7 @@ Live preview audio uses a custom binary WebSocket protocol defined in `internal/
 - `channels`: 1 = mono, 2 = stereo
 
 2. **AudioFrame** (type 0x03, per RTP packet):
-```
+```text
 {type:1}{pts:8_BE}{codec:1}{data_len:4_BE}{data}
 ```
 - Total: 14 + data_len bytes
@@ -309,7 +309,7 @@ Live preview audio playback uses the Web Audio API for gapless, low-latency audi
 
 ### 7.9 Data Flow
 
-```
+```text
 Camera (RTSP SDP / Xiaomi MISS)
     │  Detect audio track (G.711 μ-law, A-law, AAC, Opus)
     │  Set g711MULaw flag, g711SampleRate, audioMuxerConfig
