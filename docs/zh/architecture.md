@@ -15,7 +15,7 @@
 
 每个摄像头都持有一个 `*model.StreamHub` —— 一个帧扇出总线。生产者调用 `hub.Broadcast(pts, au, isIDR)`;消费者调用 `hub.Subscribe(id, callback)`。hub 在一个独立的 goroutine 中运行每个消费者的回调(非阻塞;缓冲区满时丢弃)。
 
-```
+```text
                      ┌─────────────────────────────────────────┐
                      │              StreamHub                   │
    RTSP recorder ──▶ │  Broadcast(pts, au, isIDR)              │ ──▶ HLS muxer
@@ -44,7 +44,7 @@
 
 ### 数据流(RTMP 示例)
 
-```
+```text
 Publisher ──RTMP──▶ RTMP Server (handlePublisher)
                        │  OnDataH264(au, pts)
                        ├─▶ NALUProvider ──▶ IngestRecorder.WriteNALU(au, pts, isIDR)
@@ -81,7 +81,7 @@ NVR 将摄像头的直播流转发到远端 RTMP/RTSP 目标。RTSP 目标使用
 
 ### 数据流
 
-```
+```text
 Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
                       │  cb(pts, au)
                       ▼
@@ -193,7 +193,7 @@ rtmp:
 
 ## 6. 网络拓扑示例
 
-```
+```text
 A) Push-in: remote camera → NVR
    [Remote Cam/ffmpeg] ──push RTMP/SRT──▶ [NVR (public IP / port-forwarded)]
 
@@ -289,7 +289,7 @@ G.711 使用 `rtplpcm.Decoder`（返回原始 8-bit 字节，不做解压），A
 
 ### 7.9 数据流图
 
-```
+```text
 Camera (RTSP SDP / Xiaomi MISS)
     │  检测音频轨道 (G.711 μ-law, A-law, Opus)
     ▼

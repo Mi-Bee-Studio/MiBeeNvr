@@ -27,7 +27,7 @@ The endpoint rides the main HTTP listener — no extra port.
 Cameras → Add → protocol **WHIP (WebRTC push)**, set a **stream key** (e.g.
 `door-cam`). The form shows the endpoint URL:
 
-```
+```text
 http://<nvr-ip>:9090/whip/door-cam
 ```
 

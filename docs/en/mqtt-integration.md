@@ -208,21 +208,21 @@ Look for `"mqtt": {"status": "ok"}` in the response.
 #### Common Issues
 
 **Connection Failed**
-```
+```text
 WARN: mqtt connection failed: connection refused
 ```
 - **Solution**: Check broker URL, ensure broker is running
 - **Debug**: Test with `mosquitto_pub -h 192.168.1.100 -t test -m hello`
 
 **Authentication Failed**
-```
+```text
 WARN: mqtt authentication failed
 ```
 - **Solution**: Verify username and password in configuration
 - **Debug**: Test with credentials: `mosquitto_pub -u user -P pass -h broker -t test -m hello`
 
 **Message Not Processed**
-```
+```text
 WARN: invalid mqtt message payload format
 ```
 - **Solution**: Ensure JSON payload contains `action` field
@@ -241,7 +241,7 @@ mqtt:
 
 Multiple cameras can be triggered on the same broker:
 
-```
+```text
 security/trigger/camera1
 security/trigger/camera2
 security/trigger/camera3

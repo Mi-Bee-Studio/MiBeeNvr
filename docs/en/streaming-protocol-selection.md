@@ -61,7 +61,7 @@ On mount, each route (`Surveillance.svelte`, `LiveView.svelte`):
 1. **Probes device capabilities once** via `probeCaps()` (`web/src/lib/player/capabilities-cache.ts`) — `webCodecs`, `mseH265`, `wasmH265`, `webgpu`, `webgl2`, `hevcDecode`. The result is cached in `sessionStorage` for the tab session so it's never re-run in a reactive path (re-probing in a Svelte `$effect` was the root cause of the WS reconnect storm — see `wasm-player-design.md`).
 2. **Fetches `/api/cameras/{id}/protocols`** in parallel for each camera (`Promise.allSettled`), non-blocking.
 3. **Builds an ordered candidate chain** per camera via `buildCandidateChain(camera, resp, caps, opts)` (`web/src/lib/stream-selection.ts`). This returns **every** playable mode for that camera's codec + browser caps, latency-optimal first:
-   ```
+   ```text
    PREFERENCE_ORDER = [wasm, webrtc, flv, hls, mjpeg]
    wasm   ← frontend-only, gated on WebCodecs (any codec) or libde265 WASM (H.265 on HTTP)
    webrtc ← backend available + H.264 only (H.265 excluded by codec gate)

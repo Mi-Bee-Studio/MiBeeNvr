@@ -979,7 +979,7 @@ The camera card shows a badge with active/total targets (e.g. `↑ 2/2`). In the
 
 The most common use case — sending a camera from one NVR to another across the internet, with NO FFmpeg:
 
-```
+```text
 [Camera] ──RTSP──▶ [NVR-A] ──push-out relay (RTMP)──▶ [NVR-B (push-in ingest)] ──▶ records + live
 ```
 

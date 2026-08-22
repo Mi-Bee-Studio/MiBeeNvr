@@ -6,7 +6,7 @@ MiBee NVR exposes a comprehensive set of Prometheus metrics at the `/metrics` HT
 
 ### Endpoint
 
-```
+```text
 GET /metrics
 ```
 
