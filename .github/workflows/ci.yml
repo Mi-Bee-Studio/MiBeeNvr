@@ -55,6 +55,8 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+      - name: Lint markdown fences (MD040)
+        run: npx --yes markdownlint-cli2
   build:
     runs-on: ubuntu-latest
     # Run in parallel with test — build validates compilation; test validates correctness.

@@ -6,7 +6,7 @@ MiBee NVR 在 `/metrics` HTTP 端点暴露了一整套 Prometheus 指标，可�
 
 ### 端点
 
-```
+```text
 GET /metrics
 ```
 

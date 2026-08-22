@@ -60,7 +60,7 @@ HTTPS 或 localhost）；HLS/HTTP-FLV/MJPEG 轮询不承载直播音频。录像
 1. **一次性探测设备能力**，通过 `probeCaps()`（`web/src/lib/player/capabilities-cache.ts`）——`webCodecs`、`mseH265`、`wasmH265`、`webgpu`、`webgl2`、`hevcDecode`。结果缓存到 `sessionStorage`（tab 会话级），因此绝不在反应式路径里重复探测（在 Svelte `$effect` 里重复探测正是 WS 重连风暴的根因——见 `wasm-player-design.md`）。
 2. **并行拉取** `/api/cameras/{id}/protocols`（`Promise.allSettled`），非阻塞。
 3. **构建有序候选链**，通过 `buildCandidateChain(camera, resp, caps, opts)`（`web/src/lib/stream-selection.ts`）。返回该摄像头的编码+浏览器能力下**所有**可播放模式，延迟最优在前：
-   ```
+   ```text
    PREFERENCE_ORDER = [wasm, webrtc, flv, hls, mjpeg]
    wasm   ← 仅前端模式，门控：WebCodecs（任意编码）或 libde265 WASM（HTTP 上的 H.265）
    webrtc ← 后端 available + 仅 H.264（H.265 被编码门控排除）

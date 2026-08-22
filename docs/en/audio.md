@@ -100,7 +100,7 @@ cameras:
 
 Audio is recorded in sync with video and stored in the same MP4 segments:
 
-```
+```text
 recordings/
 ├── front-door/
 │   ├── 2026-08-18/

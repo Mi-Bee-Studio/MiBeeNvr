@@ -137,7 +137,7 @@ mirror --reverse /recordings/front-door/ ./local-folder/
 
 The directory structure served by WebDAV and FTP:
 
-```
+```text
 /
 ├── recordings/                   # Recording files
 │   ├── front-door/               # Camera ID

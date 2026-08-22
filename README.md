@@ -236,7 +236,7 @@ Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `0.11.0` (exact 
 
 ## Project Structure
 
-```
+```text
 cmd/mibee-nvr/       # CLI entry point + app lifecycle
 internal/            # Core packages (43 Go modules)
 web/                # Svelte 5 SPA frontend

@@ -33,7 +33,7 @@ srt:
 
 Set up the camera or encoder to push its stream to the NVR:
 
-```
+```text
 SRT URL: srt://your-nvr-address:9000?streamid=#!:r=camera-id,m=publish
 ```
 
@@ -93,7 +93,7 @@ rtmp:
 
 Set up the camera or encoder to push via RTMP:
 
-```
+```text
 RTMP URL: rtmp://your-nvr-address:1935/live/camera-id
 ```
 

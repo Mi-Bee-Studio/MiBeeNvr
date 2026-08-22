@@ -59,7 +59,7 @@ If false-box lingering is severe, lower `max_age` to 3–5 in the Advanced secti
 
 ### Scenario A: Edge devices (RPi 3B/4, Banana Pi M5) — smoothness first
 
-```
+```yaml
 confidence_threshold: 0.65
 frame_skip_rate: 10
 model: yolo11n.onnx
@@ -70,7 +70,7 @@ model: yolo11n.onnx
 
 ### Scenario B: Desktop/laptop browser (x86, WebGPU) — sensitivity first
 
-```
+```yaml
 confidence_threshold: 0.5
 frame_skip_rate: 3
 model: yolo11s.onnx (optional, more precise)
@@ -81,7 +81,7 @@ model: yolo11s.onnx (optional, more precise)
 
 ### Scenario C: Security monitoring (missing a detection is costly) — high recall
 
-```
+```yaml
 confidence_threshold: 0.45–0.5
 frame_skip_rate: 5–8
 detection classes: person + common security targets
@@ -92,7 +92,7 @@ ROI: only entry/aisle areas
 
 ### Scenario D: Clean demo (false positives are costly) — high precision
 
-```
+```yaml
 confidence_threshold: 0.75–0.8
 frame_skip_rate: 5
 detection classes: person only

@@ -700,7 +700,7 @@ xiaomi:
 ### Common Issues
 
 #### "Auth Failed" Error
-```
+```text
 ERROR: xiaomi authentication failed: invalid credentials
 ```
 **Causes**:
@@ -722,7 +722,7 @@ curl -X POST https://api.io.mi.com/login \
 ```
 
 #### "Device Not Found" Error
-```
+```text
 ERROR: xiaomi device not found: device_id_12345
 ```
 **Causes**:
@@ -745,7 +745,7 @@ curl -u admin:password http://localhost:9090/api/xiaomi/cameras/device_id_12345/
 ```
 
 #### "Recording Failed" Error
-```
+```text
 ERROR: xiaomi recording failed: device offline
 ```
 **Causes**:

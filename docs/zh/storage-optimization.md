@@ -12,7 +12,7 @@ MiBee NVR 的所有元数据存储在一个启用了 **WAL (Write-Ahead Log，�
 
 ### 组件分层
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │  API 请求处理层                           │
 ├─────────────────────────────────────────┤
@@ -73,7 +73,7 @@ func New(dbPath string) (*DB, error) {
 
 ### 完整 DSN 字符串
 
-```
+```text
 file:/mnt/data/nvr/mibee-nvr.db?_pragma=journal_mode(WAL)&
   _pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)&
   _pragma=cache_size(-20000)&_pragma=mmap_size(268435456)
@@ -299,7 +299,7 @@ PRAGMA incremental_vacuum(256);  -- 每周期约 2MB
 
 ### 流程图
 
-```
+```text
 各录制器创建段文件（状态 = 'pending'）
     │
     ▼
@@ -360,7 +360,7 @@ d.db.SetConnMaxLifetime(0) // 本地 SQLite，无过期连接
 
 ### WAL 读取并发
 
-```
+```text
 写入者 (WAL)：INSERT/UPDATE/DELETE → 追加到 WAL 文件
 读取者 1/2：  SELECT               → 从主 DB + WAL 索引读取，并发
 ```
@@ -426,7 +426,7 @@ d.db.SetConnMaxLifetime(0) // 本地 SQLite，无过期连接
 
 ### 决策树
 
-```
+```text
 当前数据库大小？
 │
 ├─ < 100MB → 无需操作。当前配置已足够。
@@ -467,7 +467,7 @@ CREATE TABLE recordings_2026_01 (
 
 ### 长期策略
 
-```
+```text
 阶段 1 (当前)：SQLite 单文件，WAL 模式，优化索引
 阶段 2 (T8)：  基于时间的分区表或独立 DB 文件
 阶段 3 (T12)： 迁移到 PostgreSQL + pgx 驱动

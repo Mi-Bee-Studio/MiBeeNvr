@@ -96,7 +96,7 @@ MiBee NVR 存储层使用 SQLite 数据库，采用 `modernc.org/sqlite` 纯 Go 
 
 在 `New()` 中配置（`internal/storage/db.go:42`）：
 
-```
+```text
 _pragma=journal_mode(WAL)
 _pragma=synchronous(NORMAL)
 _pragma=busy_timeout(15000)
@@ -461,7 +461,7 @@ WAL 文件随写入活动增长。定期检查点保持 WAL 大小可控：
 
 对于超过 500K 行的基于 SQLite 的扩展，考虑**按时间手动分区**：
 
-```
+```text
 recordings_2025_01
 recordings_2025_02
 recordings_2025_03
