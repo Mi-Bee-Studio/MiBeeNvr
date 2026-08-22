@@ -107,7 +107,7 @@ func TestOpenDatabase_DecoupledFromRoot(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Storage.RootDir = root
-	db, err := openDatabase(cfg)
+	db, err := openDatabase(cfg, filepath.Join(tmp, "mibee-nvr.yaml"))
 	if err != nil {
 		t.Fatalf("openDatabase: %v", err)
 	}
@@ -117,5 +117,46 @@ func TestOpenDatabase_DecoupledFromRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "mibee-nvr.db")); !os.IsNotExist(err) {
 		t.Fatalf("recording root must stay db-free: %v", err)
+	}
+	if cfg.Storage.DBPath != "" {
+		t.Fatalf("docker installs must not pin db_path, got %q", cfg.Storage.DBPath)
+	}
+}
+
+// Bare metal (no NVR_DATA_DIR): openDatabase PINS the resolved db location
+// into the config so a later root switch cannot re-resolve the DB under the
+// new root (which would boot into an empty database).
+func TestOpenDatabase_PinsBareMetalDBPath(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "root")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NVR_DATA_DIR", "")
+	configPath := filepath.Join(tmp, "mibee-nvr.yaml")
+
+	cfg := &config.Config{}
+	cfg.Storage.RootDir = root
+	db, err := openDatabase(cfg, configPath)
+	if err != nil {
+		t.Fatalf("openDatabase: %v", err)
+	}
+	db.Close()
+
+	want := filepath.Join(root, "mibee-nvr.db")
+	if cfg.Storage.DBPath != want {
+		t.Fatalf("db_path pin = %q, want %q", cfg.Storage.DBPath, want)
+	}
+	saved, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if saved.Storage.DBPath != want {
+		t.Fatalf("persisted db_path = %q, want %q", saved.Storage.DBPath, want)
+	}
+	// With the pin in place, switching the root keeps resolving the SAME db.
+	cfg.Storage.RootDir = filepath.Join(tmp, "new-root")
+	if got := resolveDBPath(cfg); got != want {
+		t.Fatalf("after root switch, resolveDBPath = %q, want pinned %q", got, want)
 	}
 }

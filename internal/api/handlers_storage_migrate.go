@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -162,6 +163,104 @@ func (h *Handler) handleGetCameraStorageRoot(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleAddStorageCandidate adds a recording-root candidate AT RUNTIME
+// (POST /api/storage/candidates, body {path}) — adding storage must not
+// require a restart. The path must already exist as a directory (the mount
+// point of the new disk) and be writable (ProbeDir). Persisted to the config;
+// on platforms that deliver candidates via NVR_STORAGE_CANDIDATES (fnOS) the
+// env stays the boot-time truth — the response flags env_managed so the UI
+// can explain that.
+func (h *Handler) handleAddStorageCandidate(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		WriteError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	path := strings.TrimRight(strings.TrimSpace(body.Path), "/")
+	if path == "" || !strings.HasPrefix(path, "/") {
+		WriteError(w, http.StatusBadRequest, "path must be an absolute directory")
+		return
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		WriteError(w, http.StatusBadRequest, "path does not exist or is not a directory: "+path)
+		return
+	}
+	if path == strings.TrimRight(h.config.Storage.RootDir, "/") {
+		WriteError(w, http.StatusBadRequest, "path is already the current recording root")
+		return
+	}
+	for _, c := range h.config.Storage.Candidates {
+		if path == strings.TrimRight(c, "/") {
+			WriteError(w, http.StatusBadRequest, "path is already in the available storages")
+			return
+		}
+	}
+	if err := storage.ProbeDir(path); err != nil {
+		WriteError(w, http.StatusBadRequest, "directory is not writable: "+err.Error())
+		return
+	}
+	h.config.Storage.Candidates = append(h.config.Storage.Candidates, path)
+	if err := config.Save(h.configPath, h.config); err != nil {
+		// roll back the in-memory add so UI and config stay consistent
+		h.config.Storage.Candidates = h.config.Storage.Candidates[:len(h.config.Storage.Candidates)-1]
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "added", "path": path,
+		"env_managed": os.Getenv("NVR_STORAGE_CANDIDATES") != "",
+	})
+}
+
+// handleRemoveStorageCandidate drops a candidate (DELETE
+// /api/storage/candidates?path=...). Refuses while the path is in use as the
+// default root or any per-camera override.
+func (h *Handler) handleRemoveStorageCandidate(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		WriteError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+	path := strings.TrimRight(strings.TrimSpace(r.URL.Query().Get("path")), "/")
+	if path == "" {
+		WriteError(w, http.StatusBadRequest, "path query parameter required")
+		return
+	}
+	if path == strings.TrimRight(h.config.Storage.RootDir, "/") {
+		WriteError(w, http.StatusBadRequest, "cannot remove the current recording root")
+		return
+	}
+	for _, root := range h.config.Storage.CameraRoots {
+		if path == strings.TrimRight(root, "/") {
+			WriteError(w, http.StatusBadRequest, "path is in use as a per-camera storage override")
+			return
+		}
+	}
+	idx := -1
+	for i, c := range h.config.Storage.Candidates {
+		if path == strings.TrimRight(c, "/") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		WriteError(w, http.StatusNotFound, "path is not an available storage")
+		return
+	}
+	h.config.Storage.Candidates = append(h.config.Storage.Candidates[:idx],
+		h.config.Storage.Candidates[idx+1:]...)
+	if err := config.Save(h.configPath, h.config); err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "path": path})
 }
 
 // handleStartStorageMigrate is the batch entry (POST /api/storage/migrate,
