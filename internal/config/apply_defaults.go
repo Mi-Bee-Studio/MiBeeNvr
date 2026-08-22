@@ -63,6 +63,13 @@ func applyConfigDefaults(cfg *Config) {
 	// storage locations the host platform granted the app (fnOS user-authorized
 	// directories, mounted by the lifecycle script under /media/*). Informational
 	// only — surfaced via /api/storage/candidates for the settings UI.
+	//
+	// Stale-entry pruning: when the env var is ABSENT, persisted candidates
+	// that no longer exist on disk are dropped — a granted-and-later-removed
+	// platform mount used to linger in the yaml forever and keep offering a
+	// dead choice in the settings UI (switching to it crash-looped the app at
+	// db init). Entries from a present env var are kept verbatim: the env is
+	// the platform's current truth, re-delivered on every start.
 	if env := strings.TrimSpace(os.Getenv("NVR_STORAGE_CANDIDATES")); env != "" {
 		var candidates []string
 		for _, p := range strings.Split(env, ":") {
@@ -73,6 +80,14 @@ func applyConfigDefaults(cfg *Config) {
 		if len(candidates) > 0 {
 			cfg.Storage.Candidates = candidates
 		}
+	} else {
+		var kept []string
+		for _, p := range cfg.Storage.Candidates {
+			if info, err := os.Stat(p); err == nil && info.IsDir() {
+				kept = append(kept, p)
+			}
+		}
+		cfg.Storage.Candidates = kept
 	}
 	// Device identity (#330): the name defaults to the system hostname and is
 	// intentionally NOT persisted (an explicit server.device_name overrides it;

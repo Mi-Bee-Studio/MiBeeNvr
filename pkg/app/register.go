@@ -22,6 +22,21 @@ import (
 // reading constructed managers from deps. Returns an error if any registration
 // fails (the caller invokes deps' cleanup func on failure).
 func registerServices(a *App, deps *appDeps) error {
+	// 0. storage migrator — background worker, stopped early
+	if err := a.Register(&serviceFunc{
+		name: "storage-migrator",
+		startFunc: func(_ context.Context) error {
+			deps.migrationMgr.Start()
+			return nil
+		},
+		stopFunc: func() error {
+			deps.migrationMgr.Stop()
+			return nil
+		},
+	}); err != nil {
+		return err
+	}
+
 	// 1. db — registered first so it stops last
 	if err := a.Register(&serviceFunc{
 		name: "db",
