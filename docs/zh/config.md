@@ -28,6 +28,7 @@ storage:
 auth:
   username: "admin"
   password_hash: ""          # mibee-nvr hash-password <密码> 生成
+  # local_bypass: false      # 宿主机本机浏览器（localhost）免登录，默认关；仅在 loopback + Host 为 localhost 时生效；反代/容器部署严禁开启
 
 cameras: []                  # 摄像头列表（推荐 Web UI 维护，见下）
 

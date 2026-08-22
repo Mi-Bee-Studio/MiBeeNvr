@@ -28,6 +28,7 @@ storage:
 auth:
   username: "admin"
   password_hash: ""          # generate with: mibee-nvr hash-password <password>
+  # local_bypass: false      # skip login for browsers on the host (localhost); default off; loopback + localhost Host only; NEVER enable behind a proxy/Docker
 
 cameras: []                  # camera list (prefer maintaining via web UI, see below)
 

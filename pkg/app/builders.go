@@ -187,9 +187,17 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 
 	// Step 4: Auth middleware
 	authmw.SetAuthMetrics(m)
+	// LocalBypass is opt-in (default false): only bare-metal installs that open
+	// http://localhost on the host itself should enable it. Reverse-proxy and
+	// Docker published-port deployments must leave it off — there every proxied
+	// request arrives from loopback and would otherwise bypass auth entirely.
+	// The closure reads cfg on every call (like GetUsername/GetHash) so a future
+	// runtime toggle of local_bypass takes effect immediately; freezing the bool
+	// at startup would keep the bypass active after a disable — fail-open.
 	authMW, effectiveHash := authmw.NewAuthMiddleware(authmw.AuthProvider{
 		GetUsername: func() string { return cfg.Auth.Username },
 		GetHash:     func() string { return cfg.Auth.PasswordHash },
+		LocalBypass: func() bool { return cfg.Auth.LocalBypass != nil && *cfg.Auth.LocalBypass },
 	}, cfg.Auth.Password, authmw.AuthRateLimitConfig{
 		Enabled:       cfg.Auth.RateLimit.Enabled != nil && *cfg.Auth.RateLimit.Enabled,
 		MaxFailures:   cfg.Auth.RateLimit.MaxFailures,

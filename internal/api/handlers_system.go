@@ -122,6 +122,17 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// SetupRequired — true when no password is configured
 	resp.SetupRequired = h.config != nil && h.config.Auth.PasswordHash == "" && h.config.Auth.Password == ""
 
+	// LocalAccess — true only when the request is genuinely from a browser on
+	// the NVR host machine: a loopback connection with a loopback Host header,
+	// no proxy/gateway headers, AND the operator enabled auth.local_bypass.
+	// Reuses middleware.IsBypassEligible so this cannot drift from the auth
+	// middleware's own gate. Kept strict for reverse-proxy and Docker published-
+	// port deployments, where every request arrives from 127.0.0.1 and would
+	// otherwise be misreported as local (and the frontend would skip the login
+	// page for remote users).
+	localBypass := h.config != nil && h.config.Auth.LocalBypass != nil && *h.config.Auth.LocalBypass
+	resp.LocalAccess = localBypass && middleware.IsBypassEligible(r)
+
 	// Stable device identity for LAN clients (#330)
 	if h.config != nil {
 		resp.DeviceID = h.config.Server.DeviceID

@@ -16,6 +16,7 @@ auth:
   username: "admin"
   password_hash: ""
   password: ""
+  local_bypass: false          # 运行在 NVR 宿主机本机的浏览器（localhost）免登录（默认关）
 cameras:
   - id: "cam1"
     name: "摄像头名称"
@@ -186,6 +187,14 @@ version: "1.0"
 - **描述**: 明文密码，方便初始设置。首次运行时，服务器会自动哈希此值并写入到 `password_hash`，然后清除 `password` 字段
 - **优先级**: 仅在 `password_hash` 为空时使用
 - **示例**: `"admin123"`
+
+### `auth.local_bypass`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 允许运行在 NVR 宿主机本机的浏览器（loopback 连接 `127.0.0.1` / `::1`，且请求不带任何代理转发头）跳过登录页直接访问 Web UI。前端通过 `/api/health` 的 `local_access` 字段感知并跳过登录页。
+- **重要安全警告**: 仅**裸机（systemd/原生二进制）部署**适用。**反向代理（Caddy/nginx）与 Docker 端口映射部署严禁开启**——这两种拓扑下所有请求都会从 `127.0.0.1` 到达服务器，开启本开关会让**所有远程客户端绕过认证**。
+- **生效条件**（三者缺一不可）: `local_bypass: true`、请求来源为 loopback（RemoteAddr 127.0.0.1/::1）、**Host 头为 `localhost`/`127.0.0.1`/`[::1]`**（去掉端口后）、无 `X-Forwarded-For`/`X-Real-IP`/`Forwarded` 代理头。用宿主机局域网 IP 或主机名访问**不会** bypass（有意保守，兼防恶意网页与 DNS rebinding）。
+- **示例**: `local_bypass: true`
 
 ## 摄像头配置
 

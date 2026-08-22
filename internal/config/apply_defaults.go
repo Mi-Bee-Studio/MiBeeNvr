@@ -125,6 +125,14 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Auth.RateLimit.WindowMinutes == 0 {
 		cfg.Auth.RateLimit.WindowMinutes = 1
 	}
+	// Auth - local bypass defaults to OFF. Enabling it lets browsers on the NVR
+	// host machine (loopback, no proxy headers) skip the login page, but it MUST
+	// stay off behind a reverse proxy or Docker published port — there every
+	// proxied request arrives from 127.0.0.1 and would bypass auth entirely.
+	if cfg.Auth.LocalBypass == nil {
+		v := false
+		cfg.Auth.LocalBypass = &v
+	}
 	// FTP
 	if cfg.FTP.Enabled == nil {
 		// set default to true only if not configured by user
