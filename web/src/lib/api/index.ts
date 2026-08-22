@@ -219,6 +219,8 @@ export {
   getSettings,
   updateSettings,
   getStorageCandidates,
+  addStorageCandidate,
+  removeStorageCandidate,
   startStorageMigrate,
   getStorageMigrateStatus,
   getCameraStorageRoot,

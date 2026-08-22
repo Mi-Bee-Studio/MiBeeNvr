@@ -3,7 +3,7 @@
   // Part of the unified settings shell (#153): no save button here; the
   // shell drives save/reset via the settingsForm coordinator.
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getStats, getStorageCandidates, startStorageMigrate, getStorageMigrateStatus } from '$lib/api';
+  import { getSettings, updateSettings, getStats, getStorageCandidates, addStorageCandidate, removeStorageCandidate, startStorageMigrate, getStorageMigrateStatus } from '$lib/api';
   import type { SettingsConfig, StorageStats, StorageCandidatesResponse, StorageMigrateStatusResponse, MigrationJob } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -186,6 +186,38 @@
     validationErrors = {};
   }
 
+  // ── Runtime candidate management (#395): add a mounted path / drop an
+  // unused one WITHOUT restarting — the dropdown picks changes up live.
+  let newCandidatePath = $state('');
+  let addingCandidate = $state(false);
+
+  async function addCandidate() {
+    const path = newCandidatePath.trim();
+    if (!path || addingCandidate) return;
+    addingCandidate = true;
+    try {
+      await addStorageCandidate(path);
+      newCandidatePath = '';
+      storageCandidates = await getStorageCandidates().catch(() => storageCandidates);
+      showToast(t('settings.storageAdded'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.storageAddFailed'), 'error');
+    } finally {
+      addingCandidate = false;
+    }
+  }
+
+  async function removeCandidate(path: string) {
+    try {
+      await removeStorageCandidate(path);
+      storageCandidates = await getStorageCandidates().catch(() => storageCandidates);
+      if (storageRoot === path) storageRoot = storageCandidates?.current ?? storageRoot;
+      showToast(t('settings.storageRemoved'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.storageRemoveFailed'), 'error');
+    }
+  }
+
   // ── Storage migration (#395 rework) ──
   // Batch entry: switching the default is hot; per-camera history moves in
   // the background (idle-time, rate-limited) — the user is never blocked.
@@ -303,6 +335,39 @@
         <p class="text-xs th-text-muted mt-2">{t('settings.storageRootNoCandidates')}</p>
       {:else}
         <p class="text-xs th-text-muted mt-2">{storageCandidates?.restart_hint}</p>
+      {/if}
+      <!-- Runtime candidate management: add a mounted path without a restart -->
+      <div class="mt-3 flex gap-2">
+        <input
+          class="input flex-1 font-mono text-xs"
+          placeholder="/mnt/disk2/nvr"
+          bind:value={newCandidatePath}
+          aria-label={t('settings.storageAddPath')}
+          onkeydown={(e) => { if (e.key === 'Enter') addCandidate(); }}
+        />
+        <button class="btn btn-sm shrink-0" disabled={!newCandidatePath.trim() || addingCandidate} onclick={addCandidate}>
+          {t('settings.storageAdd')}
+        </button>
+      </div>
+      <p class="text-xs th-text-muted mt-1">{t('settings.storageAddPathHint')}</p>
+      {#if storageCandidates?.env_managed}
+        <p class="text-xs th-text-muted mt-1">{t('settings.storageEnvManagedHint')}</p>
+      {/if}
+      {#if storageCandidates && storageCandidates.candidates.length > 1}
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          {#each storageCandidates.candidates as c (c.path)}
+            {#if c.path !== storageCandidates.current}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs th-bg-secondary border th-border font-mono">
+                {c.path}
+                <button
+                  class="th-text-muted hover:th-color-danger"
+                  aria-label={t('settings.storageRemove', { path: c.path })}
+                  onclick={() => removeCandidate(c.path)}
+                >✕</button>
+              </span>
+            {/if}
+          {/each}
+        </div>
       {/if}
       {#if migrateTargetSelected}
         <div class="mt-4 p-3 rounded-lg th-bg-secondary border th-border">

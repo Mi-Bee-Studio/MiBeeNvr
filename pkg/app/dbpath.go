@@ -30,8 +30,9 @@ func dataDir() string {
 
 // resolveDBPath picks where the database lives: explicit config override,
 // then the data volume, then (bare-metal installs without NVR_DATA_DIR) the
-// recording root. Resolved dynamically at boot — never persisted unless the
-// user set storage.db_path explicitly.
+// recording root. Resolved dynamically at boot — except that the bare-metal
+// root fallback is pinned into the config on first boot (see openDatabase),
+// so a later root switch can never re-resolve the DB under the NEW root.
 func resolveDBPath(cfg *config.Config) string {
 	if p := strings.TrimSpace(cfg.Storage.DBPath); p != "" {
 		return p
@@ -105,10 +106,20 @@ func sqlString(s string) string {
 }
 
 // openDatabase opens (and initializes) the NVR database at its resolved
-// location, after running the one-time legacy adoption.
-func openDatabase(cfg *config.Config) (*storage.DB, error) {
+// location, after running the one-time legacy adoption. On bare-metal
+// installs (no NVR_DATA_DIR, no explicit db_path) the resolved location is
+// PINNED into the config: without the pin, switching the recording root
+// would make the next boot resolve the DB under the new root and silently
+// start from an empty database.
+func openDatabase(cfg *config.Config, configPath string) (*storage.DB, error) {
 	adoptDatabase(cfg)
 	dbPath := resolveDBPath(cfg)
+	if cfg.Storage.DBPath == "" && dataDir() == "" && configPath != "" {
+		cfg.Storage.DBPath = dbPath
+		if err := config.Save(configPath, cfg); err != nil {
+			slog.Warn("failed to persist the pinned database path", "error", err)
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
