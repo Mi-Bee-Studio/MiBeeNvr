@@ -93,7 +93,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 
 	// Step 1: Open database (decoupled from the recording root; adopts a
 	// legacy root-bound DB once, see dbpath.go).
-	db, err := openDatabase(cfg)
+	db, err := openDatabase(cfg, configPath)
 	if err != nil {
 		return nil, nil, err
 	}

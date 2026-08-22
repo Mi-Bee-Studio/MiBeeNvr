@@ -146,10 +146,37 @@ export interface StorageCandidatesResponse {
   current: string;
   candidates: Array<{ path: string; label: string }>;
   restart_hint: string;
+  /** True when NVR_STORAGE_CANDIDATES is set: the platform (e.g. fnOS
+   *  authorized dirs) owns the list at boot — manually added paths are
+   *  session-only until properly authorized on the platform. */
+  env_managed?: boolean;
 }
 
 export async function getStorageCandidates(signal?: AbortSignal): Promise<StorageCandidatesResponse> {
   return apiRequest<StorageCandidatesResponse>('/storage/candidates', { signal });
+}
+
+/** Add a recording-root candidate at RUNTIME (no restart): the path must
+ *  exist as a directory (the new disk's mount point) and be writable. */
+export async function addStorageCandidate(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ status: string; path: string; env_managed?: boolean }> {
+  return apiRequest('/storage/candidates', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+    signal,
+  });
+}
+
+export async function removeStorageCandidate(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest(`/storage/candidates?path=${encodeURIComponent(path)}`, {
+    method: 'DELETE',
+    signal,
+  });
 }
 
 // Storage migration (#395 rework): hot per-camera storage switching with a
