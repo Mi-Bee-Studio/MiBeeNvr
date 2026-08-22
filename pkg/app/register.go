@@ -25,8 +25,8 @@ func registerServices(a *App, deps *appDeps) error {
 	// 0. storage migrator — background worker, stopped early
 	if err := a.Register(&serviceFunc{
 		name: "storage-migrator",
-		startFunc: func(_ context.Context) error {
-			deps.migrationMgr.Start()
+		startFunc: func(ctx context.Context) error {
+			deps.migrationMgr.Start(ctx)
 			return nil
 		},
 		stopFunc: func() error {

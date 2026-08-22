@@ -19,43 +19,17 @@ import (
 // under the recording root moves with it.
 func (d *DB) RewritePathPrefix(ctx context.Context, oldRoot, newRoot string) (int64, error) {
 	return d.withConn(ctx, func(conn *sql.Conn) (int64, error) {
-		var tables []string
-		rows, err := conn.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+		tables, err := listUserTables(ctx, conn)
 		if err != nil {
 			return 0, err
 		}
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				rows.Close()
-				return 0, err
-			}
-			tables = append(tables, name)
-		}
-		rows.Close()
-
 		pattern := likeEscape(oldRoot) + `/%`
 		var total int64
 		for _, table := range tables {
-			info, err := conn.QueryContext(ctx, "PRAGMA table_info("+quoteIdent(table)+")")
+			pathCols, err := tablePathCols(ctx, conn, table)
 			if err != nil {
 				return total, err
 			}
-			var pathCols []string
-			for info.Next() {
-				var cid int
-				var name, colType string
-				var notNull, pk int
-				var dflt sql.NullString
-				if err := info.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
-					info.Close()
-					return total, err
-				}
-				if strings.HasSuffix(name, "_path") || name == "path" {
-					pathCols = append(pathCols, name)
-				}
-			}
-			info.Close()
 			for _, col := range pathCols {
 				q := fmt.Sprintf(
 					`UPDATE %s SET %s = %s || substr(%s, %d) WHERE %s LIKE %s ESCAPE '\'`,
@@ -72,6 +46,47 @@ func (d *DB) RewritePathPrefix(ctx context.Context, oldRoot, newRoot string) (in
 		}
 		return total, nil
 	})
+}
+
+// listUserTables returns all non-internal table names.
+func listUserTables(ctx context.Context, conn *sql.Conn) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		tables = append(tables, name)
+	}
+	return tables, rows.Err()
+}
+
+// tablePathCols returns the path-ish columns (…_path / path) of one table.
+func tablePathCols(ctx context.Context, conn *sql.Conn, table string) ([]string, error) {
+	info, err := conn.QueryContext(ctx, "PRAGMA table_info("+quoteIdent(table)+")")
+	if err != nil {
+		return nil, err
+	}
+	defer info.Close()
+	var cols []string
+	for info.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := info.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		if strings.HasSuffix(name, "_path") || name == "path" {
+			cols = append(cols, name)
+		}
+	}
+	return cols, info.Err()
 }
 
 // CountPathPrefix returns how many recordings rows still reference the given

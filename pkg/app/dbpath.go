@@ -96,7 +96,7 @@ func vacuumInto(srcDB, dstDB string) error {
 		return err
 	}
 	defer db.Close()
-	_, err = db.Exec("VACUUM INTO " + sqlString(dstDB))
+	_, err = db.ExecContext(context.Background(), "VACUUM INTO "+sqlString(dstDB))
 	return err
 }
 

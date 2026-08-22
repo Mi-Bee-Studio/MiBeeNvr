@@ -104,14 +104,16 @@ func New(db DB, store Store, rateBytes func() int, window func() string) *Migrat
 }
 
 // Enqueue adds (or replaces) the background migration of one camera's
-// recordings to toRoot. Returns the job.
+// recordings to toRoot. Returns a snapshot of the job — callers must never
+// hold live pointers into the queue (the worker mutates jobs under m.mu).
 func (m *Migrator) Enqueue(cameraID, toRoot string, deleteSource bool) *Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Replace any pending/running job for the same camera+target.
-	for _, j := range append(m.queue[:0:0], m.queue...) {
+	for _, j := range m.queue {
 		if j.CameraID == cameraID && j.ToRoot == toRoot && (j.State == "queued" || j.State == "running" || j.State == "paused") {
-			return j
+			cp := *j
+			return &cp
 		}
 	}
 	job := &Job{
@@ -122,31 +124,34 @@ func (m *Migrator) Enqueue(cameraID, toRoot string, deleteSource bool) *Job {
 		EnqueuedAt:   time.Now(),
 	}
 	m.queue = append(m.queue, job)
-	return job
+	cp := *job
+	return &cp
 }
 
-// Status returns the active queue plus the last finished jobs.
+// Status returns the active queue plus the last finished jobs, as snapshot
+// copies (see Enqueue). Newest last, history capped at 20.
 func (m *Migrator) Status() (state string, jobs []*Job) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	state = "idle"
-	all := append(m.queue[:0:0], m.queue...)
-	all = append(all, m.history...)
-	for _, j := range all {
-		if j.State == "queued" || j.State == "running" || j.State == "paused" {
-			state = "running"
-			break
-		}
-	}
-	// newest last, cap history at 20
 	if len(m.history) > 20 {
 		m.history = m.history[len(m.history)-20:]
+	}
+	state = "idle"
+	all := make([]*Job, 0, len(m.queue)+len(m.history))
+	for _, src := range [2][]*Job{m.queue, m.history} {
+		for _, j := range src {
+			cp := *j
+			all = append(all, &cp)
+			if j.State == "queued" || j.State == "running" || j.State == "paused" {
+				state = "running"
+			}
+		}
 	}
 	return state, all
 }
 
-// Start launches the worker goroutine. Idempotent.
-func (m *Migrator) Start() {
+// Start launches the worker goroutine bound to ctx. Idempotent.
+func (m *Migrator) Start(ctx context.Context) {
 	m.mu.Lock()
 	if m.started {
 		m.mu.Unlock()
@@ -155,7 +160,7 @@ func (m *Migrator) Start() {
 	m.started = true
 	m.mu.Unlock()
 	m.wg.Add(1)
-	go m.run()
+	go m.run(ctx)
 }
 
 // Stop cancels the worker and waits for the in-flight file to finish.
@@ -168,7 +173,7 @@ func (m *Migrator) Stop() {
 	m.wg.Wait()
 }
 
-func (m *Migrator) run() {
+func (m *Migrator) run(ctx context.Context) {
 	defer m.wg.Done()
 	for {
 		job := m.next()
@@ -176,11 +181,13 @@ func (m *Migrator) run() {
 			select {
 			case <-m.stopCh:
 				return
+			case <-ctx.Done():
+				return
 			case <-time.After(2 * time.Second):
 			}
 			continue
 		}
-		m.process(context.Background(), job)
+		m.process(ctx, job)
 	}
 }
 

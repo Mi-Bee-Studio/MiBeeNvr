@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -208,7 +209,9 @@ func (h *Handler) handleStartStorageMigrate(w http.ResponseWriter, r *http.Reque
 	h.config.Storage.RootDir = target
 	h.config.Storage.CameraRoots = nil
 	if err := config.Save(h.configPath, h.config); err != nil {
-		h.store.SetRootDir(from)
+		if rerr := h.store.SetRootDir(from); rerr != nil {
+			slog.Warn("storage root rollback failed after config-save error", "error", rerr)
+		}
 		h.config.Storage.RootDir = from
 		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return

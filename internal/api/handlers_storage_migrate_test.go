@@ -31,9 +31,11 @@ func setupMigrationHandler(t *testing.T) (*Handler, *migration.Migrator, string)
 	if err := db.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	rec := &model.Recording{ID: "r1", CameraID: "cam-one",
+	rec := &model.Recording{
+		ID: "r1", CameraID: "cam-one",
 		FilePath: filepath.Join(oldRoot, "cam-one", "seg.mp4"),
-		Format:   "h264", StartedAt: time.Now().Add(-time.Hour), EndedAt: time.Now(), Duration: 60, FileSize: 3}
+		Format:   "h264", StartedAt: time.Now().Add(-time.Hour), EndedAt: time.Now(), Duration: 60, FileSize: 3,
+	}
 	if err := db.InsertRecording(context.Background(), rec); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +83,7 @@ func TestCameraStorageRoot_SwitchAndBackgroundMigrate(t *testing.T) {
 	}
 
 	// Run the background migration to completion.
-	mig.Start()
+	mig.Start(context.Background())
 	defer mig.Stop()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {

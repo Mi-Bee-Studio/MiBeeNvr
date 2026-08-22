@@ -25,8 +25,11 @@ func ProbeDir(dir string) error {
 	}
 	f.Close()
 	data, err := os.ReadFile(path)
-	if err != nil || string(data) != "probe" {
-		return fmt.Errorf("cannot read back files in %q: %v", dir, err)
+	if err != nil {
+		return fmt.Errorf("cannot read back files in %q: %w", dir, err)
+	}
+	if string(data) != "probe" {
+		return fmt.Errorf("read-back verification failed in %q", dir)
 	}
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("cannot delete files in %q: %w", dir, err)
