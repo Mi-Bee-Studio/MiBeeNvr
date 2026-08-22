@@ -22,9 +22,14 @@ import (
 // Manager handles file system storage for camera recordings.
 // It provides atomic writes via a .tmp → rename pattern.
 type Manager struct {
-	rootDir string
-	metrics *metrics.Metrics
-	mu      sync.Mutex
+	// rootDir is hot-swappable (storage switch/migration, no restart): reads
+	// go through currentRoot(), writes through SetRootDir. cameraRoots holds
+	// per-camera overrides (RootFor); nil disables per-camera routing.
+	rootMu      sync.RWMutex
+	rootDir     string
+	cameraRoots map[string]string
+	metrics     *metrics.Metrics
+	mu          sync.Mutex
 
 	// Health tracking (per-camera)
 	healthMu      sync.Mutex
@@ -60,12 +65,114 @@ func NewManager(rootDir string, opts ...*metrics.Metrics) (*Manager, error) {
 
 // RootDir returns the root directory path.
 func (m *Manager) RootDir() string {
+	return m.currentRoot()
+}
+
+// currentRoot reads the hot-swappable recording root.
+func (m *Manager) currentRoot() string {
+	m.rootMu.RLock()
+	defer m.rootMu.RUnlock()
 	return m.rootDir
+}
+
+// SetRootDir atomically switches where NEW recording segments are written
+// (storage switch/migration without restart). In-flight segments keep their
+// absolute paths and finish where they started. The directory is created if
+// missing; on error the previous root stays in effect.
+func (m *Manager) SetRootDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("storage: root directory path must not be empty")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("storage: failed to create root directory %q: %w", dir, err)
+	}
+	m.rootMu.Lock()
+	m.rootDir = dir
+	m.rootMu.Unlock()
+	return nil
+}
+
+// SetCameraRoot points one camera's NEW segments at a different root ("" =
+// back to the default). Takes effect at the next segment rotation.
+func (m *Manager) SetCameraRoot(cameraID, root string) {
+	m.rootMu.Lock()
+	if m.cameraRoots == nil {
+		m.cameraRoots = make(map[string]string)
+	}
+	if root == "" {
+		delete(m.cameraRoots, cameraID)
+	} else {
+		m.cameraRoots[cameraID] = root
+	}
+	m.rootMu.Unlock()
+}
+
+// CameraRoot returns the explicit override for a camera ("" = none).
+func (m *Manager) CameraRoot(cameraID string) string {
+	m.rootMu.RLock()
+	defer m.rootMu.RUnlock()
+	return m.cameraRoots[cameraID]
+}
+
+// RootFor resolves the recording root for a camera: the per-camera override
+// when it still exists on disk, else the default root. Directory access is
+// stat-cached per call (segment-granularity — a few calls per minute per
+// camera), so a vanished override mount degrades that camera to the default
+// instead of failing every segment write.
+func (m *Manager) RootFor(cameraID string) string {
+	m.rootMu.RLock()
+	override := m.cameraRoots[cameraID]
+	def := m.rootDir
+	m.rootMu.RUnlock()
+	if override != "" && override != def {
+		if _, err := os.Stat(override); err == nil {
+			return override
+		}
+		logger.Warn("camera storage override unavailable — recording to the default root",
+			"camera_id", cameraID, "override", override)
+	}
+	return def
+}
+
+// Roots returns the distinct active roots (default + existing overrides).
+func (m *Manager) Roots() []string {
+	m.rootMu.RLock()
+	def := m.rootDir
+	overrides := make([]string, 0, len(m.cameraRoots))
+	for _, r := range m.cameraRoots {
+		overrides = append(overrides, r)
+	}
+	m.rootMu.RUnlock()
+	seen := map[string]bool{}
+	var roots []string
+	for _, r := range append([]string{def}, overrides...) {
+		if r == "" || seen[r] {
+			continue
+		}
+		if _, err := os.Stat(r); err != nil {
+			continue
+		}
+		seen[r] = true
+		roots = append(roots, r)
+	}
+	return roots
+}
+
+// GetRootUsage returns total/free bytes of the filesystem containing root —
+// the capacity gate for per-camera migrations.
+func (m *Manager) GetRootUsage(root string) (total, free int64, err error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(root, &stat); err != nil {
+		return 0, 0, fmt.Errorf("storage: failed to stat %q: %w", root, err)
+	}
+	total = int64(stat.Blocks * uint64(stat.Bsize))
+	free = int64(stat.Bfree * uint64(stat.Bsize))
+	return total, free, nil
 }
 
 // EnsureCameraDir creates the directory for a camera if it doesn't exist.
 func (m *Manager) EnsureCameraDir(cameraID string) error {
-	dir := filepath.Join(m.rootDir, cameraID)
+	dir := filepath.Join(m.RootFor(cameraID), cameraID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("storage: failed to create camera dir %q: %w", dir, err)
 	}
@@ -88,7 +195,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 	// ~120/hour, dramatically improving ext4 readdir/stat performance on
 	// slow USB HDD storage. Old flat-layout files coexist until naturally
 	// aged out by retention.
-	hourDir := filepath.Join(m.rootDir, cameraID, now.Format("200601"), now.Format("02"), now.Format("15"))
+	hourDir := filepath.Join(m.RootFor(cameraID), cameraID, now.Format("200601"), now.Format("02"), now.Format("15"))
 	if err := os.MkdirAll(hourDir, 0o755); err != nil {
 		m.recordWriteFailure(cameraID)
 		return "", "", fmt.Errorf("storage: failed to create hour bucket dir: %w", err)
@@ -273,7 +380,7 @@ func (m *Manager) unregisterTempPath(tempPath string) {
 
 // ListFiles lists all recording files (non-.tmp) for a camera.
 func (m *Manager) ListFiles(cameraID string) ([]string, error) {
-	cameraDir := filepath.Join(m.rootDir, cameraID)
+	cameraDir := filepath.Join(m.currentRoot(), cameraID)
 
 	// Return an explicit error for a nonexistent camera directory —
 	// filepath.WalkDir would otherwise silently return an empty result.
@@ -312,7 +419,7 @@ func (m *Manager) ListFiles(cameraID string) ([]string, error) {
 // Use this (not ListFiles) when you need to count or inspect segments — the
 // segment directory IS the unit of a recording segment, regardless of format.
 func (m *Manager) ListSegments(cameraID string) ([]string, error) {
-	cameraDir := filepath.Join(m.rootDir, cameraID)
+	cameraDir := filepath.Join(m.currentRoot(), cameraID)
 
 	// Return an explicit error for a nonexistent camera directory —
 	// filepath.WalkDir would otherwise silently return an empty result.
@@ -388,7 +495,7 @@ func isSegmentEntry(name string) bool {
 
 // ListCameraDirEntries returns all entries in a camera's storage directory.
 func (m *Manager) ListCameraDirEntries(cameraID string) ([]os.DirEntry, error) {
-	cameraDir := filepath.Join(m.rootDir, cameraID)
+	cameraDir := filepath.Join(m.currentRoot(), cameraID)
 	entries, err := os.ReadDir(cameraDir)
 	if err != nil {
 		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraID, err)
@@ -432,9 +539,13 @@ func (m *Manager) DeleteFile(path string) error {
 
 // DeleteCameraDir removes the entire directory for a camera.
 func (m *Manager) DeleteCameraDir(cameraID string) error {
-	dir := filepath.Join(m.rootDir, cameraID)
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("storage: failed to remove camera dir %q: %w", dir, err)
+	// A camera may have recorded on several roots over its lifetime —
+	// remove its directory from every active root.
+	for _, root := range m.Roots() {
+		dir := filepath.Join(root, cameraID)
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("storage: failed to remove camera dir %q: %w", dir, err)
+		}
 	}
 	return nil
 }
@@ -443,7 +554,7 @@ func (m *Manager) DeleteCameraDir(cameraID string) error {
 func (m *Manager) GetDiskUsage() (total int64, used int64, err error) {
 	var stat syscall.Statfs_t
 
-	if err := syscall.Statfs(m.rootDir, &stat); err != nil {
+	if err := syscall.Statfs(m.currentRoot(), &stat); err != nil {
 		return 0, 0, fmt.Errorf("storage: failed to stat filesystem: %w", err)
 	}
 
@@ -465,7 +576,7 @@ func (m *Manager) GetDiskUsage() (total int64, used int64, err error) {
 
 // IsAvailable checks whether the root directory is accessible.
 func (m *Manager) IsAvailable() bool {
-	_, err := os.Stat(m.rootDir)
+	_, err := os.Stat(m.currentRoot())
 	return err == nil
 }
 
@@ -482,49 +593,52 @@ func (m *Manager) IsAvailable() bool {
 // a new write). Callers that don't need the result immediately should run it in
 // a goroutine to avoid blocking startup.
 func (m *Manager) CleanupTempFiles() error {
-	entries, err := os.ReadDir(m.rootDir)
-	if err != nil {
-		return fmt.Errorf("storage: read root dir %q: %w", m.rootDir, err)
-	}
 	var firstErr error
-	for _, entry := range entries {
-		// Only descend into camera directories (prefix "cam-"). Everything else
-		// at the root (hls/, recordings/, bin/, certs/, *.db, config files,
-		// top-level *.tmp backups, etc.) is out of scope for segment cleanup.
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "cam-") {
+	for _, root := range m.Roots() {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			logger.Warn("temp cleanup: cannot read root", "root", root, "error", err)
 			continue
 		}
-		camDir := filepath.Join(m.rootDir, entry.Name())
-		if err := filepath.WalkDir(camDir, func(path string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return nil // skip inaccessible entries
+		for _, entry := range entries {
+			// Only descend into camera directories (prefix "cam-"). Everything else
+			// at the root (hls/, recordings/, bin/, certs/, *.db, config files,
+			// top-level *.tmp backups, etc.) is out of scope for segment cleanup.
+			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "cam-") {
+				continue
 			}
-			if !d.IsDir() {
-				// Remove .tmp files
-				if strings.HasSuffix(d.Name(), ".tmp") {
-					if err := os.Remove(path); err != nil {
-						// Don't abort the whole walk on a single failure (file
-						// may be in use); record and continue.
-						logger.Warn("temp cleanup: failed to remove temp file", "path", path, "error", err)
+			camDir := filepath.Join(root, entry.Name())
+			if err := filepath.WalkDir(camDir, func(path string, d os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return nil // skip inaccessible entries
+				}
+				if !d.IsDir() {
+					// Remove .tmp files
+					if strings.HasSuffix(d.Name(), ".tmp") {
+						if err := os.Remove(path); err != nil {
+							// Don't abort the whole walk on a single failure (file
+							// may be in use); record and continue.
+							logger.Warn("temp cleanup: failed to remove temp file", "path", path, "error", err)
+						}
 					}
+					return nil
+				}
+				// Don't remove the camera dir itself, and skip .tmp directories
+				if path == camDir {
+					return nil
+				}
+				if strings.HasSuffix(d.Name(), ".tmp") {
+					if err := os.RemoveAll(path); err != nil {
+						logger.Warn("temp cleanup: failed to remove temp dir", "path", path, "error", err)
+					}
+					return filepath.SkipDir
 				}
 				return nil
-			}
-			// Don't remove the camera dir itself, and skip .tmp directories
-			if path == camDir {
-				return nil
-			}
-			if strings.HasSuffix(d.Name(), ".tmp") {
-				if err := os.RemoveAll(path); err != nil {
-					logger.Warn("temp cleanup: failed to remove temp dir", "path", path, "error", err)
+			}); err != nil {
+				logger.Warn("temp cleanup: walk error", "dir", camDir, "error", err)
+				if firstErr == nil {
+					firstErr = err
 				}
-				return filepath.SkipDir
-			}
-			return nil
-		}); err != nil {
-			logger.Warn("temp cleanup: walk error", "dir", camDir, "error", err)
-			if firstErr == nil {
-				firstErr = err
 			}
 		}
 	}
@@ -536,34 +650,36 @@ func (m *Manager) CleanupTempFiles() error {
 // Uses per-camera incremental commits to avoid holding the write lock too long.
 // Context timeout is checked between camera directories.
 func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs map[string]bool) (int, error) {
-	entries, err := os.ReadDir(m.rootDir)
-	if err != nil {
-		return 0, err
-	}
-
 	skippedDirs := map[string]bool{"hls": true, "recordings": true, "logs": true, "backups": true, "bin": true}
 	totalReconciled := 0
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		dirName := entry.Name()
-		if skippedDirs[dirName] || !cameraIDs[dirName] {
-			continue
-		}
-
-		// Check context timeout between cameras
-		if ctx.Err() != nil {
-			return totalReconciled, ctx.Err()
-		}
-
-		reconciled, err := m.reconcileCameraDir(ctx, db, dirName)
+	for _, root := range m.Roots() {
+		entries, err := os.ReadDir(root)
 		if err != nil {
-			logger.Warn("reconcile: error processing camera dir", "dir", dirName, "error", err)
+			logger.Warn("reconcile: cannot read root", "root", root, "error", err)
 			continue
 		}
-		totalReconciled += reconciled
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			dirName := entry.Name()
+			if skippedDirs[dirName] || !cameraIDs[dirName] {
+				continue
+			}
+
+			// Check context timeout between cameras
+			if ctx.Err() != nil {
+				return totalReconciled, ctx.Err()
+			}
+
+			reconciled, err := m.reconcileCameraDir(ctx, db, dirName)
+			if err != nil {
+				logger.Warn("reconcile: error processing camera dir", "dir", dirName, "error", err)
+				continue
+			}
+			totalReconciled += reconciled
+		}
 	}
 
 	if totalReconciled > 0 {
@@ -646,7 +762,7 @@ func parseRecordingName(name, cameraIDHint string) (recordingNameInfo, bool) {
 // Only after both gates does the function call f.Info() (one stat per
 // surviving entry) and, for MJPEG dirs, the per-frame Walk.
 func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string) (int, error) {
-	files, err := os.ReadDir(filepath.Join(m.rootDir, dirName))
+	files, err := os.ReadDir(filepath.Join(m.currentRoot(), dirName))
 	if err != nil {
 		return 0, err
 	}
@@ -676,7 +792,7 @@ func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string
 			// Only legit recording-named dirs reach here, so this Walk is now
 			// bounded to actual frame dirs (tens of entries), not date trees.
 			format = model.FormatMJPEG
-			dirPath := filepath.Join(m.rootDir, dirName, name)
+			dirPath := filepath.Join(m.currentRoot(), dirName, name)
 			filepath.Walk(dirPath, func(path string, walkFI os.FileInfo, walkErr error) error {
 				if walkErr != nil || walkFI.IsDir() {
 					return nil
@@ -702,7 +818,7 @@ func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string
 		cameraOrphans = append(cameraOrphans, model.Recording{
 			ID:          info.nanoID,
 			CameraID:    dirName,
-			FilePath:    filepath.Join(m.rootDir, dirName, name),
+			FilePath:    filepath.Join(m.currentRoot(), dirName, name),
 			Format:      format,
 			StartedAt:   info.startedAt,
 			EndedAt:     info.startedAt,
