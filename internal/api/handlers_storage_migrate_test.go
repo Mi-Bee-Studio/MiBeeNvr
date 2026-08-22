@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,70 @@ func TestCameraStorageRoot_Get(t *testing.T) {
 	}
 	if resp.EffectiveRoot != oldRoot || resp.DefaultRoot != oldRoot {
 		t.Fatalf("roots = %+v", resp)
+	}
+}
+
+// Candidates can be added AT RUNTIME (no restart) and removed again — with
+// in-use paths (default root / per-camera override) protected.
+func TestStorageCandidates_AddRemove(t *testing.T) {
+	h, _, oldRoot := setupMigrationHandler(t)
+	extra := t.TempDir()
+
+	add := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/storage/candidates", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		h.handleAddStorageCandidate(w, req)
+		return w
+	}
+
+	// Happy path: appears in config + in the candidates listing.
+	if w := add(`{"path": "` + extra + `"}`); w.Code != http.StatusOK {
+		t.Fatalf("add status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if len(h.config.Storage.Candidates) != 1 || h.config.Storage.Candidates[0] != extra {
+		t.Fatalf("candidates = %v", h.config.Storage.Candidates)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/storage/candidates", nil)
+	w := httptest.NewRecorder()
+	h.handleStorageCandidates(w, req)
+	if !strings.Contains(w.Body.String(), extra) {
+		t.Fatalf("candidates response missing the added path: %s", w.Body.String())
+	}
+
+	// Rejections: duplicate, non-existent dir, relative path, current root.
+	if w := add(`{"path": "` + extra + `"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate status = %d", w.Code)
+	}
+	if w := add(`{"path": "/no/such/dir"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing dir status = %d", w.Code)
+	}
+	if w := add(`{"path": "relative/path"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("relative path status = %d", w.Code)
+	}
+	if w := add(`{"path": "` + oldRoot + `"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("current-root status = %d", w.Code)
+	}
+
+	// Removal: refuses the current root and per-camera overrides, removes the free one.
+	rm := func(q string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodDelete, "/api/storage/candidates?path="+q, nil)
+		w := httptest.NewRecorder()
+		h.handleRemoveStorageCandidate(w, req)
+		return w
+	}
+	if w := rm(url.QueryEscape(oldRoot)); w.Code != http.StatusBadRequest {
+		t.Fatalf("remove current root status = %d", w.Code)
+	}
+	h.config.Storage.CameraRoots = map[string]string{"cam-one": extra}
+	if w := rm(url.QueryEscape(extra)); w.Code != http.StatusBadRequest {
+		t.Fatalf("remove in-use override status = %d", w.Code)
+	}
+	h.config.Storage.CameraRoots = nil
+	if w := rm(url.QueryEscape(extra)); w.Code != http.StatusOK {
+		t.Fatalf("remove status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if len(h.config.Storage.Candidates) != 0 {
+		t.Fatalf("candidates after remove = %v", h.config.Storage.Candidates)
 	}
 }
 

@@ -804,10 +804,12 @@ func (h *Handler) handleStorageCandidates(w http.ResponseWriter, r *http.Request
 		Current     string      `json:"current"`
 		Candidates  []candidate `json:"candidates"`
 		RestartHint string      `json:"restart_hint"`
+		EnvManaged  bool        `json:"env_managed"`
 	}{
 		Current:     h.config.Storage.RootDir,
 		Candidates:  []candidate{{Path: h.config.Storage.RootDir, Label: "current"}},
 		RestartHint: "切换立即生效：新录像将写入所选位置（无需重启）",
+		EnvManaged:  os.Getenv("NVR_STORAGE_CANDIDATES") != "",
 	}
 	seen := map[string]bool{h.config.Storage.RootDir: true}
 	for _, p := range h.config.Storage.Candidates {
@@ -1487,6 +1489,8 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Get("/api/settings", h.handleGetSettings)
 	r.Put("/api/settings", h.handleUpdateSettings)
 	r.Get("/api/storage/candidates", h.handleStorageCandidates)
+	r.Post("/api/storage/candidates", h.handleAddStorageCandidate)
+	r.Delete("/api/storage/candidates", h.handleRemoveStorageCandidate)
 	r.Post("/api/storage/migrate", h.handleStartStorageMigrate)
 	r.Get("/api/storage/migrate/status", h.handleStorageMigrateStatus)
 	r.Get("/api/cameras/{id}/storage-root", h.handleGetCameraStorageRoot)
