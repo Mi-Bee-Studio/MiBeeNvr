@@ -13,6 +13,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -67,6 +68,22 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 		Quality:       cfg.Quality,
 		EventBus:      p.eventBus,
 		RecordEnabled: cfg.RecordingEnabled,
+	}
+	// Adaptive write-density (issue #435/#468): recording_mode: adaptive was
+	// silently ignored by the Xiaomi recorder until the gate was ported.
+	// Config validation (ValidateCameraRecordingMode) already restricts it to
+	// h264/h265 cameras.
+	if cfg.RecordingMode == "adaptive" {
+		var a *config.AdaptiveRecordingConfig
+		if cfg.Adaptive != nil {
+			a = cfg.Adaptive
+		}
+		calm, interval, spike, gop := "", "", 0.0, int64(0)
+		if a != nil {
+			calm, interval, spike, gop = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes
+		}
+		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop)
+		recCfg.Adaptive = &ac
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }

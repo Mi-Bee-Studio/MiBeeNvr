@@ -78,7 +78,7 @@ export interface AdaptiveRecordingConfig {
   calm_threshold?: string;
   /** Keyframe cadence while sparse. Default '30s'. */
   timelapse_interval?: string;
-  /** Activity spike sensitivity (MAD deviations above baseline). Default 3.0. */
+  /** Activity spike sensitivity (MAD deviations above baseline). Default 5.0. */
   spike_factor?: number;
   /** Seamless-transition GOP pre-buffer cap in bytes. Default 16MB. */
   gop_buffer_bytes?: number;

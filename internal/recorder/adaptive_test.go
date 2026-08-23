@@ -196,3 +196,173 @@ func TestAdaptiveTracker_BaselineRingBounded(t *testing.T) {
 		t.Fatalf("baseline ring grew to %d, cap %d", len(tr.pSizes), adaptivePWindow)
 	}
 }
+
+// feedNoisyCalm simulates a static scene whose encoder still emits isolated
+// oversized P-frames (issue #466): every gapSeconds a single spike frame is
+// injected between small frames. Isolated spikes must NOT reset the calm
+// accumulation, so TIMELAPSE is still entered once CalmThreshold elapses.
+func feedNoisyCalm(t *testing.T, tr *adaptiveTracker, t0 time.Time, seconds int, gapSeconds time.Duration, spikeFactor float64) time.Time {
+	t.Helper()
+	step := 50 * time.Millisecond
+	end := t0
+	for elapsed := time.Duration(0); elapsed < time.Duration(seconds)*time.Second; elapsed += gapSeconds {
+		// small frames up to the spike point
+		for d := time.Duration(0); d < gapSeconds; d += step {
+			buf := make([]byte, 800)
+			buf[0] = 0x41
+			tr.observe(buf, false, end.Add(d))
+		}
+		end = end.Add(gapSeconds)
+		// one isolated spike well above the classify threshold
+		big := make([]byte, int(800*(spikeFactor+2)))
+		big[0] = 0x41
+		tr.observe(big, false, end)
+		end = end.Add(step)
+	}
+	return end
+}
+
+func TestAdaptiveTracker_IsolatedSpikesDoNotResetCalm(t *testing.T) {
+	cfg := DefaultAdaptiveConfig() // SpikeFactor 5.0, CalmThreshold 60s
+	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+
+	t0 := time.Now()
+	// Baseline must exist before classify produces spikes: warm up calmly.
+	end := feedCalm(t, tr, t0, 100) // 5s of small frames
+	// 50s with an isolated spike every 10s (last at ~55s). With the OLD
+	// single-spike rule the calm timer reset on every spike, pushing TIMELAPSE
+	// past ~115s; now the isolated spikes are ignored and calm accumulates
+	// across them. The window stays under the 60s threshold so entry happens
+	// only in the trailing calm stretch below.
+	end = feedNoisyCalm(t, tr, end, 50, 10*time.Second, cfg.SpikeFactor)
+	// Pure calm crosses the 60s mark and enters TIMELAPSE; with no spike after
+	// entry the mode holds (single-spike exit is exercised by its own test).
+	feedCalm(t, tr, end, 400) // 20s
+	if tr.mode != adaptiveTimelapse {
+		t.Fatalf("mode = %v, want timelapse — isolated noise spikes must not block entry", tr.mode)
+	}
+}
+
+func TestAdaptiveTracker_SpikeBurstResetsCalm(t *testing.T) {
+	cfg := DefaultAdaptiveConfig()
+	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+
+	t0 := time.Now()
+	end := feedCalm(t, tr, t0, 100) // warm up baseline
+	// Repeated bursts (2 spikes 100ms apart) every 10s for 80s — each burst
+	// resets calmSince, so the 60s threshold is never reached.
+	for elapsed := time.Duration(0); elapsed < 80*time.Second; elapsed += 10 * time.Second {
+		at := end.Add(elapsed)
+		for d := time.Duration(0); d < 10*time.Second; d += 50 * time.Millisecond {
+			buf := make([]byte, 800)
+			buf[0] = 0x41
+			tr.observe(buf, false, at.Add(d))
+		}
+		for i := range 2 { // clustered spikes = motion burst
+			big := make([]byte, int(800*(cfg.SpikeFactor+2)))
+			big[0] = 0x41
+			tr.observe(big, false, at.Add(10*time.Second+time.Duration(i)*100*time.Millisecond))
+		}
+	}
+	if tr.mode != adaptiveNormal {
+		t.Fatalf("mode = %v, want normal — motion bursts must keep resetting calm", tr.mode)
+	}
+}
+
+func TestAdaptiveTracker_TimelapseExitRequiresFreshCalmWindow(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: 10 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 3.0, MaxGOPBuffer: 16 << 20}
+	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+
+	t0 := time.Now()
+	idr := bytes.Repeat([]byte{0x65}, 30000)
+	tr.observe(idr, true, t0)
+	end := feedCalm(t, tr, t0.Add(50*time.Millisecond), 500) // 25s calm > 10s → TIMELAPSE
+	if tr.mode != adaptiveTimelapse {
+		t.Fatalf("mode = %v, want timelapse after sustained calm", tr.mode)
+	}
+
+	// Single isolated spike exits TIMELAPSE...
+	big := make([]byte, 300000)
+	big[0] = 0x41
+	_, flush := tr.observe(big, false, end)
+	if tr.mode != adaptiveNormal {
+		t.Fatalf("mode = %v, want normal after spike", tr.mode)
+	}
+	if flush == nil {
+		t.Fatal("expected GOP flush on timelapse exit")
+	}
+	// ...and the exit must reset the calm window: the very next calm frame
+	// must NOT re-enter TIMELAPSE instantly (no oscillation).
+	buf := make([]byte, 800)
+	buf[0] = 0x41
+	tr.observe(buf, false, end.Add(60*time.Millisecond))
+	if tr.mode != adaptiveNormal {
+		t.Fatalf("mode = %v, want normal — exit must require a fresh CalmThreshold before re-entry", tr.mode)
+	}
+}
+
+func TestDefaultAdaptiveConfig_SpikeFactorCalibrated(t *testing.T) {
+	cfg := DefaultAdaptiveConfig()
+	if cfg.SpikeFactor != 5.0 {
+		t.Fatalf("default SpikeFactor = %v, want 5.0 (issue #466 real-camera calibration)", cfg.SpikeFactor)
+	}
+}
+
+func TestAdaptiveGate_SparseSkipAndFlushFacade(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: 10 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 3.0, MaxGOPBuffer: 16 << 20}
+	g := NewAdaptiveGate(cfg, "cam", testAdaptiveLogger())
+
+	// Warm up: IDR + 25s calm (> 10s) enters timelapse.
+	t0 := time.Now()
+	idr := bytes.Repeat([]byte{0x65}, 30000)
+	if _, skip, _ := g.Observe(idr, true, t0); skip {
+		t.Fatal("IDR in NORMAL must not be skipped")
+	}
+	end := t0
+	for i := range 500 { // 25s @ 20fps
+		buf := make([]byte, 800)
+		buf[0] = 0x41
+		g.Observe(buf, false, end.Add(time.Duration(i)*50*time.Millisecond))
+	}
+	end = end.Add(25 * time.Second)
+	if !g.Timelapse() {
+		t.Fatal("want timelapse after sustained calm")
+	}
+
+	// Sparse mode: P frames skipped, sparse keyframes pass.
+	p := make([]byte, 800)
+	p[0] = 0x41
+	if _, skip, _ := g.Observe(p, false, end); !skip {
+		t.Fatal("P frame in timelapse must be skipped")
+	}
+	// Entry stamped the cadence clock, so the first sparse keyframe passes only
+	// after a full TimelapseInterval (30s) from entry (~t0+10s).
+	if _, skip, _ := g.Observe(idr, true, end.Add(31*time.Second)); skip {
+		t.Fatal("sparse keyframe after a full interval must pass")
+	}
+
+	// Spike: no skip, GOP flush returned, back to NORMAL.
+	big := make([]byte, 300000)
+	big[0] = 0x41
+	_, skip, flush := g.Observe(big, false, end.Add(2*time.Second))
+	if skip {
+		t.Fatal("spike frame must be written")
+	}
+	if len(flush) == 0 || !flush[0].IsIDR {
+		t.Fatal("expected GOP flush starting with IDR")
+	}
+	if g.Timelapse() {
+		t.Fatal("spike must exit timelapse")
+	}
+}
+
+func TestResolveAdaptiveConfig_DefaultsAndOverrides(t *testing.T) {
+	ac := ResolveAdaptiveConfig("", "", 0, 0)
+	if ac != (AdaptiveConfig{CalmThreshold: 60 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 16 << 20}) {
+		t.Fatalf("defaults wrong: %+v", ac)
+	}
+	ac = ResolveAdaptiveConfig("2m", "10s", 7.5, 1<<20)
+	if ac.CalmThreshold != 2*time.Minute || ac.TimelapseInterval != 10*time.Second || ac.SpikeFactor != 7.5 || ac.MaxGOPBuffer != 1<<20 {
+		t.Fatalf("overrides wrong: %+v", ac)
+	}
+}

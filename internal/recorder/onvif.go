@@ -43,6 +43,13 @@ type ONVIFConfig struct {
 	// Start time — without this, recording_enabled=false had no effect on ONVIF
 	// cameras (the delegate always recorded).
 	RecordEnabled *bool
+	// Adaptive enables dynamic-timelapse write density (issue #435) on the
+	// H.264/H.265 delegates. Without forwarding it here, recording_mode:
+	// adaptive on ONVIF cameras was silently ignored by the delegate (issue
+	// #467) — the config validated and the UI showed adaptive, but the
+	// recorder wrote continuously. Ignored for MJPEG/JPEG delegates (the
+	// compressed-domain signal requires differential encoding).
+	Adaptive *AdaptiveConfig
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI
@@ -653,6 +660,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 			EventBus:             r.cfg.EventBus,
 			RecordEnabled:        r.cfg.RecordEnabled,
+			Adaptive:             r.cfg.Adaptive,
 		}
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub
@@ -741,6 +749,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 			EventBus:             r.cfg.EventBus,
 			RecordEnabled:        r.cfg.RecordEnabled,
+			Adaptive:             r.cfg.Adaptive,
 		}
 		rec := NewH264Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub

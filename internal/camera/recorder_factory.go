@@ -21,21 +21,13 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	// recorder's resolved form, defaulting unspecified fields (issue #435). The
 	// config layer has already validated ranges.
 	resolveAdaptiveConfig := func(a *config.AdaptiveRecordingConfig) *recorder.AdaptiveConfig {
-		ac := recorder.DefaultAdaptiveConfig()
+		var calm, interval string
+		var spike float64
+		var gop int64
 		if a != nil {
-			if d, err := time.ParseDuration(a.CalmThreshold); err == nil && d > 0 {
-				ac.CalmThreshold = d
-			}
-			if d, err := time.ParseDuration(a.TimelapseInterval); err == nil && d > 0 {
-				ac.TimelapseInterval = d
-			}
-			if a.SpikeFactor > 0 {
-				ac.SpikeFactor = a.SpikeFactor
-			}
-			if a.GOPBufferBytes > 0 {
-				ac.MaxGOPBuffer = a.GOPBufferBytes
-			}
+			calm, interval, spike, gop = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes
 		}
+		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop)
 		return &ac
 	}
 
@@ -143,6 +135,11 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			AVI:            cam.HTTPJPEGAVI,
 			EventBus:       cm.eventBus,
 			RecordEnabled:  cam.RecordingEnabled,
+		}
+		if cam.RecordingMode == "adaptive" {
+			// Validated by config.ValidateCameraRecordingMode (h264/h265 only);
+			// createDelegate ignores it for MJPEG/JPEG encodings.
+			onvifCfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
 		}
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			onvifCfg.FrameWatchdogTimeout = d
