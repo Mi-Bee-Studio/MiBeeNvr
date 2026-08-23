@@ -366,3 +366,54 @@ func TestResolveAdaptiveConfig_DefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("overrides wrong: %+v", ac)
 	}
 }
+
+func TestAdaptiveGate_FlushSkipsWrittenFrames(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: 10 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 3.0, MaxGOPBuffer: 16 << 20}
+	g := NewAdaptiveGate(cfg, "cam", testAdaptiveLogger())
+	t0 := time.Now()
+
+	// IDR + calm → timelapse.
+	idr := bytes.Repeat([]byte{0x65}, 30000)
+	g.Observe(idr, true, t0)
+	end := t0.Add(50 * time.Millisecond)
+	for i := range 500 { // 25s calm
+		buf := make([]byte, 800)
+		buf[0] = 0x41
+		g.Observe(buf, false, end.Add(time.Duration(i)*50*time.Millisecond))
+	}
+	end = end.Add(25 * time.Second)
+	if !g.Timelapse() {
+		t.Fatal("want timelapse")
+	}
+
+	// A sparse keyframe is written after the interval: the caller marks it.
+	g.Observe(idr, true, end)             // skipped (within interval)
+	if _, skip, _ := g.Observe(idr, true, end.Add(31*time.Second)); skip {
+		t.Fatal("sparse keyframe must pass")
+	}
+	g.MarkLastWritten() // caller wrote it successfully
+
+	// Skipped P frames accumulate unwritten.
+	p := make([]byte, 800)
+	p[0] = 0x41
+	for i := range 5 {
+		g.Observe(p, false, end.Add((31+time.Duration(i))*time.Second))
+	}
+
+	// Spike exits timelapse: the flush must carry the sparse IDR as Written
+	// (skip into the existing segment) and the skipped P frames as unwritten.
+	big := make([]byte, 300000)
+	big[0] = 0x41
+	_, _, flush := g.Observe(big, false, end.Add(37*time.Second))
+	if len(flush) < 6 {
+		t.Fatalf("flush = %d frames, want >= 6", len(flush))
+	}
+	if !flush[0].IsIDR || !flush[0].Written {
+		t.Fatal("flush anchor must be the written sparse IDR (skipped on disk re-write)")
+	}
+	for i, f := range flush[1:] {
+		if f.Written {
+			t.Fatalf("flush frame %d must be unwritten (it was skipped in sparse mode)", i+1)
+		}
+	}
+}

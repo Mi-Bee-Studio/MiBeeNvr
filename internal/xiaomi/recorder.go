@@ -722,6 +722,10 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 	r.frameCount++
+	if r.adaptive != nil {
+		// Frame now on disk; a later flush into this segment must skip it (#473).
+		r.adaptive.MarkLastWritten()
+	}
 
 	// Forward to HLS (non-blocking)
 	r.forwardHLS(nalu)
@@ -846,6 +850,10 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 	r.frameCount++
+	if r.adaptive != nil {
+		// Frame now on disk; a later flush into this segment must skip it (#473).
+		r.adaptive.MarkLastWritten()
+	}
 
 	// Forward to HLS (non-blocking)
 	r.forwardHLS(nalu)
@@ -981,6 +989,11 @@ func (r *XiaomiRecorder) writeFlushedGOP(frames []recorder.AdaptiveFrame) {
 		return
 	}
 	for _, f := range frames {
+		if f.Written {
+			// Already on disk in this segment — re-writing duplicates the ring's
+			// IDR anchor (issue #473).
+			continue
+		}
 		pts := f.At.Sub(r.segStart)
 		if pts < 0 {
 			pts = 0

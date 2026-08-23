@@ -650,6 +650,11 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			continue
 		}
 		b.frameCount++
+		if b.adaptive != nil {
+			// The frame just observed into the GOP ring is now on disk; a later
+			// timelapse-exit flush into this segment must skip it (issue #473).
+			b.adaptive.markTailWritten()
+		}
 
 		// Step 10: Check segment duration rollover.
 		if time.Since(b.segStart) >= b.cfg.SegmentDur {
@@ -675,6 +680,12 @@ func (b *baseRecorder) writeFlushedGOP(frames []gopFrame) {
 		return
 	}
 	for _, f := range frames {
+		if b.muxer != nil && f.written {
+			// Already on disk in the current segment (normal-path write or the
+			// sparse keyframe itself) — re-writing it duplicated the ring's IDR
+			// anchor (duplicate POC / dts collision, issue #473).
+			continue
+		}
 		if b.muxer == nil {
 			if !f.isIDR {
 				continue // never start a segment on a P frame

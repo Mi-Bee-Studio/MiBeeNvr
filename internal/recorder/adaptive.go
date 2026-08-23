@@ -83,6 +83,13 @@ type gopFrame struct {
 	nalu  []byte
 	isIDR bool
 	at    time.Time
+	// written marks frames already on disk in the CURRENT segment (normal-path
+	// writes and sparse keyframes). The timelapse-exit flush must skip them
+	// when writing into the existing segment — re-writing the sparse IDR (the
+	// ring's anchor) produced duplicate POC / dts collisions (issue #473).
+	// A flush that CREATES a fresh segment still writes the whole ring: the
+	// IDR there lands in a new file, which is not a duplicate.
+	written bool
 }
 
 // adaptiveTracker holds the live activity signal and mode state. It is owned
@@ -238,6 +245,13 @@ func (t *adaptiveTracker) spikeBurst(now time.Time) bool {
 	return false
 }
 
+// markTailWritten flags the newest retained frame as already on disk.
+func (t *adaptiveTracker) markTailWritten() {
+	if n := len(t.gop); n > 0 {
+		t.gop[n-1].written = true
+	}
+}
+
 // shouldWriteSparse reports whether a frame observed in TIMELAPSE mode may
 // reach the muxer: keyframes only, at most one per TimelapseInterval.
 func (t *adaptiveTracker) shouldWriteSparse(isIDR bool, now time.Time) bool {
@@ -269,7 +283,8 @@ func (t *adaptiveTracker) appendGOP(nalu []byte, isIDR bool, now time.Time) {
 
 // takeGOP detaches the retained GOP for flushing. Returns nil when the ring
 // is broken (overflowed) or does not start with an IDR (not independently
-// decodable).
+// decodable). Callers skip already-written frames when flushing into an
+// existing segment (issue #473).
 func (t *adaptiveTracker) takeGOP() []gopFrame {
 	frames := t.gop
 	t.gop = nil
@@ -351,6 +366,10 @@ type AdaptiveFrame struct {
 	Nalu  []byte
 	IsIDR bool
 	At    time.Time
+	// Written: the frame is already on disk in the current segment — skip it
+	// when flushing into the existing segment (issue #473); include it when
+	// the flush creates a fresh segment.
+	Written bool
 }
 
 // AdaptiveGate is the exported per-connection adaptive-recording gate for
@@ -388,7 +407,7 @@ func (g *AdaptiveGate) Observe(nalu []byte, isIDR bool, now time.Time) (spike, s
 		// the current frame. Keyed on the flush return, not on mode — observe()
 		// has already switched to NORMAL (same fix as writeFrames).
 		for _, f := range fl {
-			flush = append(flush, AdaptiveFrame{Nalu: f.nalu, IsIDR: f.isIDR, At: f.at})
+			flush = append(flush, AdaptiveFrame{Nalu: f.nalu, IsIDR: f.isIDR, At: f.at, Written: f.written})
 		}
 	}
 	if g.t.mode == adaptiveTimelapse && !spike {
@@ -406,6 +425,15 @@ func (g *AdaptiveGate) Observe(nalu []byte, isIDR bool, now time.Time) (spike, s
 // gate DISK audio writes, which sparse mode drops; live audio continues).
 func (g *AdaptiveGate) Timelapse() bool {
 	return g.t.mode == adaptiveTimelapse
+}
+
+// MarkLastWritten records that the most recently observed frame was
+// successfully written to the current segment, so a later timelapse-exit
+// flush skips it (issue #473). Callers invoke it after a successful muxer
+// write of the frame Observe just classified. No-op when the ring is empty
+// or was detached by a flush.
+func (g *AdaptiveGate) MarkLastWritten() {
+	g.t.markTailWritten()
 }
 
 // ResolveAdaptiveConfig builds a resolved AdaptiveConfig from optional
