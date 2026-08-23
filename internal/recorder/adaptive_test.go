@@ -387,7 +387,7 @@ func TestAdaptiveGate_FlushSkipsWrittenFrames(t *testing.T) {
 	}
 
 	// A sparse keyframe is written after the interval: the caller marks it.
-	g.Observe(idr, true, end)             // skipped (within interval)
+	g.Observe(idr, true, end) // skipped (within interval)
 	if _, skip, _ := g.Observe(idr, true, end.Add(31*time.Second)); skip {
 		t.Fatal("sparse keyframe must pass")
 	}
