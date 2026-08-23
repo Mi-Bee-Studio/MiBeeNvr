@@ -100,3 +100,25 @@ export async function getHealthCameras(): Promise<HealthCamerasResponse> {
   }
   return response.json();
 }
+
+// ─── Stability (#469: QualityTracker data — uptime/MTBF/trend per camera) ───
+
+/** Per-camera connection stability over the rolling 24h window. */
+export interface CameraStability {
+  uptime_percent: number;
+  total_failures: number;
+  mtbf: string;
+  avg_session: string;
+  last_failure?: string;
+  current_status: string;
+  trend: 'stable' | 'degrading' | 'improving';
+}
+
+export interface StabilityResponse {
+  cameras: Record<string, CameraStability>;
+}
+
+/** Fetch stability data for all cameras (GET /api/health/stability). */
+export async function getStability(): Promise<StabilityResponse> {
+  return apiRequest<StabilityResponse>('/health/stability');
+}

@@ -77,6 +77,11 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 	}
 
 	// Phase 4: loopback diagnostics (pprof) — registered last, stopped first.
+	// Always on: during an incident (e.g. the 2026-08-17 OOM post-mortem) a
+	// flag-gated listener is exactly as useless as an absent one. Remote
+	// (non-loopback) exposure is separately gated by
+	// observability.enable_pprof, which mounts /debug/pprof on the main
+	// authenticated router — see router.go (#469).
 	if err := a.Register(&pprofService{srv: pprofServer()}); err != nil {
 		cleanup()
 		return nil, err

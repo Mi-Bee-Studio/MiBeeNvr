@@ -3,6 +3,7 @@
   import { t } from '$lib/i18n';
   import { Maximize, Minimize, AlertCircle, RefreshCw, Volume2, VolumeX, Volume } from 'lucide-svelte';
   import { getTokenForUrl, API_BASE } from '$lib/api';
+  import { sendTelemetry } from '$lib/telemetry';
   import type { StreamState } from '$lib/hls-errors';
   import { getPlaybackTier, detectWebCodecs, detectWebGL2 } from '$lib/webcodecs-player/capabilities';
   import { decodeVideoFrame } from '$lib/webcodecs-player/protocol';
@@ -103,6 +104,22 @@ let webgpuRenderer: WebGPURenderer | null = null;
   // the P2P connection before frames flow — 10s was too aggressive and caused
   // premature demotion to HLS (which can't play H.265 in most browsers → black).
   const NO_MEDIA_TIMEOUT_MS = 30000;
+  // End-to-end live latency (#469): EMA over (browser now − hub ingest stamp)
+  // relayed in each VideoFrame; reported to /api/telemetry every 10s.
+  let liveLatencyMs = $state<number | null>(null);
+  let lastLatencyReport = 0;
+
+  function trackLiveLatency(ingestAtMs?: number): void {
+    if (!ingestAtMs) return;
+    const now = Date.now();
+    const sample = now - ingestAtMs;
+    if (sample < 0 || sample > 60_000) return; // clock-skew / stale-replay guard
+    liveLatencyMs = liveLatencyMs == null ? sample : liveLatencyMs * 0.9 + sample * 0.1;
+    if (now - lastLatencyReport >= 10_000) {
+      lastLatencyReport = now;
+      sendTelemetry('live_latency', cameraId, Math.round(liveLatencyMs), { protocol: 'ws' });
+    }
+  }
   // AI detection overlay state
   let detections: Detection[] = $state([]);
   let aiOverlayVisible = $derived(detections.length > 0);
@@ -500,6 +517,7 @@ function handleWebGpuLost() {
           // ConnectionManager decide: reconnect (to grab a keyframe on the fresh
           // stream) or, after repeated stalls, report offline so the orchestrator
           // demotes to another protocol.
+          sendTelemetry('playback_stall', cameraId, undefined, { protocol: 'ws', kind: 'decode' });
           if (cm) {
             cm.handleDecoderStall();
           }
@@ -586,6 +604,7 @@ function handleWebGpuLost() {
         if (noMediaTimer) { clearTimeout(noMediaTimer); noMediaTimer = null; }
         try {
           const frame = decodeVideoFrame(data);
+          trackLiveLatency(frame.ingestAtMs);
           worker.postMessage({
             type: 'video-frame',
             data: {
@@ -1058,6 +1077,18 @@ onDestroy(() => {
     <div class="flex items-center gap-2">
       <span class="text-white text-sm font-medium truncate">{cameraName || cameraId}</span>
       <span class="text-white/50 text-xs">WebCodecs</span>
+      {#if liveLatencyMs != null}
+        <span
+          class="text-xs tabular-nums {liveLatencyMs > 3000
+            ? 'text-red-400/80'
+            : liveLatencyMs > 1000
+              ? 'text-yellow-400/80'
+              : 'text-green-400/70'}"
+          title={t('flow.liveLatency')}
+        >
+          {(liveLatencyMs / 1000).toFixed(1)}s
+        </span>
+      {/if}
       {#if aiInitializing}
         <span class="text-yellow-400/70 text-xs flex items-center gap-1">
           <span class="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse"></span>

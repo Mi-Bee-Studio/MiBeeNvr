@@ -272,6 +272,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Use(h.authMW)
 		h.registerRecordingRoutes(r)
 		h.registerCameraRoutes(r)
+		h.registerFlowRoutes(r)
 		h.registerSystemRoutes(r)
 		h.registerMergeRoutes(r)
 		h.registerTimelapseRoutes(r)

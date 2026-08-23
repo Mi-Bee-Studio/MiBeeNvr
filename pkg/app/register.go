@@ -16,6 +16,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 )
 
 // registerServices registers all services on the App in start/stop order,
@@ -112,6 +113,22 @@ func registerServices(a *App, deps *appDeps) error {
 		},
 	}); err != nil {
 		return fmt.Errorf("register health: %w", err)
+	}
+
+	// 3.1 recording integrity auditor (#469): rate-limited mediaprobe sampling
+	// of closed segments. Nil-safe when bus/metrics are absent; stops before
+	// health in reverse order (no ordering dependency — it only reads files).
+	auditor := health.NewRecordingAuditor(deps.eventBus, deps.metrics)
+	if err := a.Register(&serviceFunc{
+		name: "recording-auditor",
+		startFunc: func(ctx context.Context) error {
+			return auditor.Start(ctx)
+		},
+		stopFunc: func() error {
+			return auditor.Stop()
+		},
+	}); err != nil {
+		return fmt.Errorf("register recording-auditor: %w", err)
 	}
 
 	// 3.5. auto-discover (optional, default OFF). Continuously discovers ONVIF

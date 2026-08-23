@@ -16,6 +16,7 @@
     surveillance: () => import('./routes/Surveillance.svelte'),
     settings: () => import('./routes/Settings.svelte'),
     dashboard: () => import('./routes/Dashboard.svelte'),
+    flow: () => import('./routes/Flow.svelte'),
     'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
     'ai-events': () => import('./routes/AIEvents.svelte'),
   };
@@ -150,6 +151,9 @@ function parseRoute(hash: string) {
     if (segments[0] === 'dashboard') {
       const tab = segments[1] === 'health' ? 'health' : segments[1] === 'transcoding' ? 'transcoding' : 'storage';
       return { route: 'dashboard', params: { tab } };
+    }
+    if (segments[0] === 'flow') {
+      return { route: 'flow', params: {} };
     }
     if (segments[0] === 'surveillance') {
       return { route: 'surveillance', params: {} };

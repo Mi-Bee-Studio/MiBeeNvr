@@ -16,6 +16,13 @@ import (
 // frames are dropped silently to protect the recording pipeline.
 type FrameCallback func(pts int64, au [][]byte)
 
+// MsgCallback receives the full FrameMsg — an opt-in variant of FrameCallback
+// for consumers that need per-frame metadata (notably IngestAt, used by
+// wsstream to relay end-to-end live latency). Kept separate so the widely
+// implemented FrameCallback signature (and its pkg/streamhub mirror) stays
+// stable (#469).
+type MsgCallback func(msg FrameMsg)
+
 // AudioCallback is called for each decoded audio frame.
 // Implementations MUST be non-blocking — if the internal buffer is full,
 // frames are dropped silently to protect the recording/streaming pipeline.
@@ -47,25 +54,66 @@ func (c *audioConsumer) drain() {
 	}
 }
 
+// queuedFrame pairs a frame with its enqueue time so the consumer's drain
+// goroutine can measure queue dwell latency without touching the producer
+// hot path.
+type queuedFrame struct {
+	msg        FrameMsg
+	enqueuedAt int64 // unix nano
+}
+
 // consumerEntry holds a subscribed consumer with its own buffered channel,
-// drain goroutine, and per-consumer drop counter.
+// drain goroutine, and per-consumer counters.
 type consumerEntry struct {
-	cb     FrameCallback
-	ch     chan FrameMsg
-	done   chan struct{} // closed when drain goroutine exits
-	drops  atomic.Int64
-	sends  atomic.Int64 // tracks successful sends for drop rate calculation
-	sendMu sync.RWMutex // protects ch from close-during-send race
-	closed bool
+	cb           FrameCallback
+	cbMsg        MsgCallback // set instead of cb for SubscribeMsg consumers
+	ch           chan queuedFrame
+	done         chan struct{} // closed when drain goroutine exits
+	drops        atomic.Int64
+	sends        atomic.Int64 // tracks successful sends for drop rate calculation
+	idrDrops     atomic.Int64 // IDR frames lost in trySendIDR fallback
+	bytes        atomic.Int64 // sum of NALU lengths delivered
+	dwellSumNS   atomic.Int64 // cumulative enqueue→drain latency
+	dwellCount   atomic.Int64
+	dwellMaxNS   atomic.Int64
+	subscribedAt time.Time
+	lastSendAt   atomic.Int64 // unix nano of last successful enqueue
+	sendMu       sync.RWMutex // protects ch from close-during-send race
+	closed       bool
 }
 
 // drain reads frames from the consumer's channel and calls the callback.
-// This decouples the Broadcast path from slow consumers.
+// This decouples the Broadcast path from slow consumers. Dwell is measured
+// here (consumer goroutine) rather than at enqueue so the producer path
+// stays lock- and syscall-free.
 func (e *consumerEntry) drain() {
 	defer close(e.done)
-	for msg := range e.ch {
-		e.cb(msg.PTS, msg.AU)
+	for qf := range e.ch {
+		if ns := time.Now().UnixNano() - qf.enqueuedAt; ns > 0 {
+			e.dwellSumNS.Add(ns)
+			e.dwellCount.Add(1)
+			for {
+				cur := e.dwellMaxNS.Load()
+				if ns <= cur || e.dwellMaxNS.CompareAndSwap(cur, ns) {
+					break
+				}
+			}
+		}
+		if e.cbMsg != nil {
+			e.cbMsg(qf.msg)
+		} else {
+			e.cb(qf.msg.PTS, qf.msg.AU)
+		}
 	}
+}
+
+// frameSize returns the total byte size of a frame's NAL units.
+func frameSize(au [][]byte) int {
+	n := 0
+	for _, nalu := range au {
+		n += len(nalu)
+	}
+	return n
 }
 
 // StreamHub distributes frames from a single source to multiple consumers.
@@ -79,10 +127,11 @@ type StreamHub struct {
 	audioConsumers     map[string]*audioConsumer
 	consumerBufferSize int // buffered channel size per video consumer (default: 150)
 
-	// OnDrop is an optional callback invoked when a frame is dropped for a consumer
-	// due to buffer overflow. The consumerID identifies which consumer's buffer was full.
-	// This can be used for observability (e.g., Prometheus counters).
-	OnDrop func(consumerID string)
+	// onDrops holds drop callbacks; AddOnDrop appends. Historically OnDrop was
+	// a single field, which let the HLS manager silently overwrite the camera
+	// manager's Prometheus wiring (#469 Phase 0) — a callback list makes
+	// multi-subscriber instrumentation compositional.
+	onDrops []func(consumerID string, isIDR bool)
 	// OnDropRate is an optional callback invoked when a consumer's drop rate
 	// exceeds the warn threshold. The callback receives the consumer ID and current
 	// drop rate (drops / (drops + sends), range [0.0, 1.0]).
@@ -99,6 +148,15 @@ type StreamHub struct {
 	// OnAudioDrop is an optional callback invoked when an audio frame is dropped.
 	OnAudioDrop func(cameraID string)
 	cameraID    string // set by SetCameraID after construction
+	// source labels the producing side (recorder type) for flow-path display.
+	// Guarded by mu; set via SetSource.
+	source string
+
+	// Hub-level counters, updated on the Broadcast hot path with atomics only.
+	framesIn         atomic.Int64
+	bytesIn          atomic.Int64
+	lastFrameAt      atomic.Int64 // unix nano of last video frame
+	lastAudioFrameAt atomic.Int64 // unix nano of last audio frame
 
 	// IDR fast-start cache — stores the most recent N keyframe access units so a
 	// newly-subscribed consumer can begin decoding immediately, without waiting up
@@ -160,6 +218,38 @@ func (h *StreamHub) SetCameraID(id string) {
 	h.cameraID = id
 }
 
+// SetSource labels the producing side (e.g. "h264", "xiaomi", "srt-push")
+// for flow-path display. Optional; empty means unlabeled.
+func (h *StreamHub) SetSource(source string) {
+	h.mu.Lock()
+	h.source = source
+	h.mu.Unlock()
+}
+
+// AddOnDrop registers an additional drop callback. Multiple registrants
+// (camera manager Prometheus wiring, per-protocol managers) all receive
+// drop events; see the onDrops field comment for why this is a list.
+func (h *StreamHub) AddOnDrop(cb func(consumerID string, isIDR bool)) {
+	if cb == nil {
+		return
+	}
+	h.mu.Lock()
+	h.onDrops = append(h.onDrops, cb)
+	h.mu.Unlock()
+}
+
+// fireOnDrop invokes all registered drop callbacks. Called on the (rare)
+// drop path only — safe to copy the slice under mu there.
+func (h *StreamHub) fireOnDrop(consumerID string, isIDR bool) {
+	h.mu.Lock()
+	cbs := make([]func(string, bool), len(h.onDrops))
+	copy(cbs, h.onDrops)
+	h.mu.Unlock()
+	for _, cb := range cbs {
+		cb(consumerID, isIDR)
+	}
+}
+
 // Subscribe registers a consumer with the given unique ID and callback.
 // Returns an error if a consumer with the same ID already exists.
 // The callback is called from a dedicated goroutine — it may block without
@@ -180,9 +270,10 @@ func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
 	}
 
 	entry := &consumerEntry{
-		cb:   cb,
-		ch:   make(chan FrameMsg, h.consumerBufferSize),
-		done: make(chan struct{}),
+		cb:           cb,
+		ch:           make(chan queuedFrame, h.consumerBufferSize),
+		done:         make(chan struct{}),
+		subscribedAt: time.Now(),
 	}
 	h.consumers[id] = entry
 	// Capture the replay candidate under the lock (consistent snapshot with the
@@ -200,7 +291,35 @@ func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
 	// full (the consumer still receives live frames normally).
 	if replay != nil {
 		select {
-		case entry.ch <- *replay:
+		case entry.ch <- queuedFrame{msg: *replay, enqueuedAt: time.Now().UnixNano()}:
+		default:
+		}
+	}
+	return nil
+}
+
+// SubscribeMsg registers a consumer that receives the full FrameMsg (including
+// IngestAt wallclock). Same semantics as Subscribe; see MsgCallback.
+func (h *StreamHub) SubscribeMsg(id string, cb MsgCallback) error {
+	h.mu.Lock()
+	if _, ok := h.consumers[id]; ok {
+		h.mu.Unlock()
+		return fmt.Errorf("consumer %q already subscribed", id)
+	}
+	entry := &consumerEntry{
+		cbMsg:        cb,
+		ch:           make(chan queuedFrame, h.consumerBufferSize),
+		done:         make(chan struct{}),
+		subscribedAt: time.Now(),
+	}
+	h.consumers[id] = entry
+	replay := h.latestCompleteIDRLocked()
+	h.mu.Unlock()
+
+	go entry.drain()
+	if replay != nil {
+		select {
+		case entry.ch <- queuedFrame{msg: *replay, enqueuedAt: time.Now().UnixNano()}:
 		default:
 		}
 	}
@@ -288,6 +407,13 @@ func (h *StreamHub) Unsubscribe(id string) {
 //
 // Broadcast does NOT block the caller beyond a 50ms timeout for IDR protection.
 func (h *StreamHub) Broadcast(pts int64, au [][]byte, isIDR bool) {
+	// Hub-level counters: atomics only on the hot path; the periodic stats
+	// flusher and Snapshot() read them without locks.
+	now := time.Now().UnixNano()
+	h.framesIn.Add(1)
+	h.bytesIn.Add(int64(frameSize(au)))
+	h.lastFrameAt.Store(now)
+
 	// Compute trace ID: only meaningful for IDR frames.
 	traceID := "no-trace"
 	if isIDR {
@@ -338,19 +464,27 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 	}
 	h.mu.Unlock()
 
+	size := int64(frameSize(au))
+	now := time.Now().UnixNano()
 	for _, e := range entries {
 		e.entry.sendMu.RLock()
 		if e.entry.closed {
 			e.entry.sendMu.RUnlock()
 			continue
 		}
-		msg := FrameMsg{PTS: pts, AU: au, IsKeyframe: isIDR}
+		msg := FrameMsg{PTS: pts, AU: au, IsKeyframe: isIDR, IngestAt: now}
 		select {
-		case e.entry.ch <- msg:
+		case e.entry.ch <- queuedFrame{msg: msg, enqueuedAt: now}:
 			e.entry.sends.Add(1)
+			e.entry.bytes.Add(size)
+			e.entry.lastSendAt.Store(now)
 		default:
 			if isIDR {
-				h.trySendIDR(e.entry.ch, msg)
+				if h.trySendIDR(e.id, e.entry, msg) {
+					e.entry.sends.Add(1)
+					e.entry.bytes.Add(size)
+					e.entry.lastSendAt.Store(now)
+				}
 			} else {
 				e.entry.drops.Add(1)
 				slog.Warn(
@@ -362,9 +496,7 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 					"queue_depth", len(e.entry.ch),
 					"consumer", e.id,
 				)
-				if h.OnDrop != nil {
-					h.OnDrop(e.id)
-				}
+				h.fireOnDrop(e.id, false)
 				h.checkDropRate(e.id, e.entry)
 			}
 		}
@@ -472,9 +604,11 @@ func (h *StreamHub) resetJitterBufferTimer() {
 }
 
 // trySendIDR attempts to deliver an IDR frame by draining the oldest non-IDR
-// frame from the channel and retrying. It uses a 50ms timeout to avoid blocking
-// the caller for too long. Falls back to dropping if space cannot be made.
-func (h *StreamHub) trySendIDR(ch chan FrameMsg, msg FrameMsg) {
+// frame from the channel and retrying. Every evicted non-IDR frame counts as a
+// drop (it is genuinely lost); if no space can be made, the IDR itself is
+// dropped and counted in idrDrops. Returns true if the IDR was enqueued.
+func (h *StreamHub) trySendIDR(consumerID string, entry *consumerEntry, msg FrameMsg) bool {
+	ch := entry.ch
 	// Drain one oldest frame (non-blocking). If it was an IDR, put it back
 	// and try to drain the next one. We want to preserve IDRs.
 	// Limit scan to channel capacity to avoid infinite loop when buffer is all IDRs.
@@ -482,39 +616,40 @@ func (h *StreamHub) trySendIDR(ch chan FrameMsg, msg FrameMsg) {
 	for range bufCap {
 		select {
 		case old := <-ch:
-			if old.IsKeyframe {
+			if old.msg.IsKeyframe {
 				// Don't evict IDR frames; try non-blocking re-enqueue.
 				select {
 				case ch <- old:
 					// Re-enqueued, continue scanning for non-IDR.
 				default:
 					// Buffer still full after re-enqueue; stop.
-					return
+					return false
 				}
 			} else {
-				// Successfully drained a non-IDR frame — space available.
+				// Successfully drained a non-IDR frame — it is evicted for the
+				// IDR, which counts as a drop for this consumer (#469).
+				entry.drops.Add(1)
 				// Non-blocking send should succeed immediately.
 				select {
-				case ch <- msg:
-					return
+				case ch <- queuedFrame{msg: msg, enqueuedAt: time.Now().UnixNano()}:
+					return true
 				default:
 					// Race: space taken. Fall through to timeout.
-					return
+					return false
 				}
 			}
 		default:
 			// Channel empty — shouldn't happen since send was blocked.
-			return
+			return false
 		}
 	}
 
 	// All frames in buffer were IDRs (or scan limit reached).
 	// Drop the IDR frame as last resort — consumer already has IDRs buffered.
-	select {
-	case ch <- msg:
-	default:
-		// Buffer is all IDRs — non-IDR space unavailable. Frame dropped.
-	}
+	entry.idrDrops.Add(1)
+	entry.drops.Add(1)
+	h.fireOnDrop(consumerID, true)
+	return false
 }
 
 // Drops returns the total number of frames dropped for the given consumer
@@ -650,6 +785,7 @@ func (h *StreamHub) UnsubscribeAudio(id string) {
 //
 // BroadcastAudio does NOT wait for any consumer to process the frame.
 func (h *StreamHub) BroadcastAudio(pts int64, codec AudioCodec, data []byte) {
+	h.lastAudioFrameAt.Store(time.Now().UnixNano())
 	// Observability: fire audio broadcast callback
 	if h.OnBroadcastAudio != nil {
 		h.OnBroadcastAudio(h.cameraID, string(codec))
@@ -679,9 +815,7 @@ func (h *StreamHub) BroadcastAudio(pts int64, codec AudioCodec, data []byte) {
 			if h.OnAudioDrop != nil {
 				h.OnAudioDrop(h.cameraID)
 			}
-			if h.OnDrop != nil {
-				h.OnDrop(e.id)
-			}
+			h.fireOnDrop(e.id, false)
 		}
 		e.entry.sendMu.RUnlock()
 	}
@@ -705,4 +839,107 @@ func (h *StreamHub) AudioConsumerCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.audioConsumers)
+}
+
+// ConsumerStats is a point-in-time view of one hub consumer, served by the
+// flow-path API (/api/streams) and the periodic Prometheus flusher.
+type ConsumerStats struct {
+	ID             string    `json:"id"`
+	Sends          int64     `json:"sends"`
+	Drops          int64     `json:"drops"`
+	IDRDrops       int64     `json:"idr_drops"`
+	DropRate       float64   `json:"drop_rate"`
+	Bytes          int64     `json:"bytes"`
+	BufferDepth    int       `json:"buffer_depth"`
+	BufferCapacity int       `json:"buffer_capacity"`
+	SubscribedAt   time.Time `json:"subscribed_at"`
+	LastSendAt     time.Time `json:"last_send_at"`
+	DwellAvgMS     float64   `json:"dwell_avg_ms"`
+	DwellMaxMS     float64   `json:"dwell_max_ms"`
+}
+
+// HubStats is a point-in-time view of a StreamHub. The /api/streams endpoint
+// serializes it directly; frontends compute fps/bitrate by diffing cumulative
+// counters (frames_in / bytes_in) between polls, keeping the hub hot path
+// free of any rate computation.
+type HubStats struct {
+	CameraID         string          `json:"camera_id"`
+	Source           string          `json:"source"`
+	FramesIn         int64           `json:"frames_in"`
+	BytesIn          int64           `json:"bytes_in"`
+	LastFrameAt      time.Time       `json:"last_frame_at"`
+	LastAudioFrameAt time.Time       `json:"last_audio_frame_at"`
+	Consumers        []ConsumerStats `json:"consumers"`
+	AudioConsumers   int             `json:"audio_consumers"`
+	JitterActive     bool            `json:"jitter_active"`
+}
+
+// unixNanoToTime converts an atomic unix-nano stamp to time.Time,
+// mapping 0 (unset) to the zero time.
+func unixNanoToTime(ns int64) time.Time {
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
+// Snapshot returns a point-in-time copy of hub and per-consumer counters.
+// Safe to call concurrently with Broadcast — only mu is taken briefly to copy
+// the consumer map; all counters are atomics.
+func (h *StreamHub) Snapshot() HubStats {
+	type entryWithID struct {
+		id    string
+		entry *consumerEntry
+	}
+	h.mu.Lock()
+	entries := make([]entryWithID, 0, len(h.consumers))
+	for id, entry := range h.consumers {
+		entries = append(entries, entryWithID{id: id, entry: entry})
+	}
+	source := h.source
+	audioCount := len(h.audioConsumers)
+	h.mu.Unlock()
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
+	consumers := make([]ConsumerStats, 0, len(entries))
+	for _, e := range entries {
+		sends := e.entry.sends.Load()
+		drops := e.entry.drops.Load()
+		total := sends + drops
+		rate := 0.0
+		if total > 0 {
+			rate = float64(drops) / float64(total)
+		}
+		dwellCount := e.entry.dwellCount.Load()
+		dwellAvgMS := 0.0
+		if dwellCount > 0 {
+			dwellAvgMS = float64(e.entry.dwellSumNS.Load()) / float64(dwellCount) / 1e6
+		}
+		consumers = append(consumers, ConsumerStats{
+			ID:             e.id,
+			Sends:          sends,
+			Drops:          drops,
+			IDRDrops:       e.entry.idrDrops.Load(),
+			DropRate:       rate,
+			Bytes:          e.entry.bytes.Load(),
+			BufferDepth:    len(e.entry.ch),
+			BufferCapacity: cap(e.entry.ch),
+			SubscribedAt:   e.entry.subscribedAt,
+			LastSendAt:     unixNanoToTime(e.entry.lastSendAt.Load()),
+			DwellAvgMS:     dwellAvgMS,
+			DwellMaxMS:     float64(e.entry.dwellMaxNS.Load()) / 1e6,
+		})
+	}
+
+	return HubStats{
+		CameraID:         h.cameraID,
+		Source:           source,
+		FramesIn:         h.framesIn.Load(),
+		BytesIn:          h.bytesIn.Load(),
+		LastFrameAt:      unixNanoToTime(h.lastFrameAt.Load()),
+		LastAudioFrameAt: unixNanoToTime(h.lastAudioFrameAt.Load()),
+		Consumers:        consumers,
+		AudioConsumers:   audioCount,
+		JitterActive:     h.jitterBufferEnabled.Load(),
+	}
 }

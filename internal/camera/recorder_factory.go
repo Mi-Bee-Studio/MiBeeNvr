@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -234,7 +233,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	}
 
 	// Initialize StreamHub for frame fan-out on all recorders
-	initStreamHub(rec, cam.ID, cam.Protocol, &cm.frameSampleCounter, cm.metrics)
+	initStreamHub(rec, cam.ID, cm.metrics)
 	// Register the recorder's hub in the central registry so that push ingest
 	// servers (SRT listener / RTMP server) share the SAME hub object and their
 	// frames reach the live consumers (HLS/WebRTC/FLV/WS) attached on demand.
@@ -251,73 +250,58 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 }
 
 // initStreamHub sets a new StreamHub on the recorder if it has a Hub field.
-// It also sets the cameraID for structured logging and wires up the OnBroadcast callback.
-func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleCounter *uint64, m *metrics.Metrics) {
+// It sets the cameraID for structured logging, labels the hub source for the
+// flow-path view, and wires the standard observability callbacks (shared with
+// push hubs via wireHubMetrics).
+func initStreamHub(rec model.Recorder, cameraID string, m *metrics.Metrics) {
 	var hub *model.StreamHub
+	source := ""
 	switch r := rec.(type) {
 	case *recorder.H264Recorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "h264"
 	case *recorder.H265Recorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "h265"
 	case *recorder.ONVIFRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "onvif"
 	case *recorder.MJPEGRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "mjpeg"
 	case *recorder.HTTPJPEGRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "http-jpeg"
 	case *xiaomi.XiaomiRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "xiaomi"
 	case *recorder.TimelapseRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "timelapse"
 	case *recorder.StubRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "stub"
 	case *recorder.IngestRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "ingest"
 	case *recorder.GB28181Recorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "gb28181"
 	}
 	if hub != nil {
 		hub.SetCameraID(cameraID)
-		if m != nil {
-			hub.OnBroadcast = func(cid string, isIDR bool) {
-				m.StreamHubFramesInTotal.WithLabelValues(cid).Inc()
-				if sampleCounter != nil {
-					count := atomic.AddUint64(sampleCounter, 1)
-					if count%100 == 0 {
-						start := time.Now()
-						m.FrameProcessingDurationSeconds.WithLabelValues(cid, protocol).Observe(time.Since(start).Seconds())
-					}
-				}
-			}
-			hub.OnDrop = func(consumerID string) {
-				m.StreamHubFramesDropped.WithLabelValues(cameraID, consumerID, "false").Inc()
-			}
-			hub.OnBroadcastAudio = func(cid string, codec string) {
-				m.AudioFramesTotal.WithLabelValues(cid, codec).Inc()
-			}
-			hub.OnAudioDrop = func(cid string) {
-				m.AudioFramesDroppedTotal.WithLabelValues(cid).Inc()
-			}
-			hub.OnBufferDepth = func(cid, consumerID string, depth int) {
-				m.StreamHubBufferDepth.WithLabelValues(cid, consumerID).Set(float64(depth))
-			}
-			hub.OnJitterBufferDepth = func(cid string, depth int) {
-				m.JitterBufferDepth.WithLabelValues(cid).Set(float64(depth))
-			}
-			hub.OnJitterReorder = func(cid string) {
-				m.JitterBufferReordersTotal.WithLabelValues(cid).Inc()
-			}
-		}
+		hub.SetSource(source)
+		wireHubMetrics(hub, cameraID, m)
 	}
 }
 

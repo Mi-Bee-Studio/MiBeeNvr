@@ -1,0 +1,106 @@
+{
+  "title": "MiBee NVR — Stream Flow & Quality",
+  "uid": "mibee-nvr-flow",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-3h", "to": "now" },
+  "refresh": "30s",
+  "tags": ["mibee-nvr", "observability"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS",
+        "type": "datasource",
+        "query": "prometheus"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Stream FPS by camera",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [{ "expr": "nvr_stream_fps", "legendFormat": "{{camera_id}}" }]
+    },
+    {
+      "id": 2,
+      "title": "Ingest bitrate by camera (kbps)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [{ "expr": "nvr_stream_bitrate_kbps", "legendFormat": "{{camera_id}}" }]
+    },
+    {
+      "id": 3,
+      "title": "Hub fan-out rate by consumer (frames/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [{ "expr": "rate(nvr_streamhub_frames_sent_total[1m]) * 60", "legendFormat": "{{camera_id}}/{{consumer}}" }]
+    },
+    {
+      "id": 4,
+      "title": "Hub drop rate by consumer (drops/s, IDR split)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "rate(nvr_streamhub_frames_dropped_total[1m]) * 60", "legendFormat": "{{camera_id}}/{{consumer}} idr={{is_idr}}" }
+      ],
+      "description": "Non-zero here means a consumer can't keep up. is_idr=true drops are the most damaging (decoder can't recover until next GOP)."
+    },
+    {
+      "id": 5,
+      "title": "Consumer queue dwell avg (ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [{ "expr": "nvr_streamhub_hop_dwell_ms_avg", "legendFormat": "{{camera_id}}/{{consumer}}" }],
+      "description": "Enqueue→drain time in the per-consumer buffer (cap 150 frames ≈ 7.5s @20fps). Sustained growth = consumer backpressure."
+    },
+    {
+      "id": 6,
+      "title": "Player-reported live latency (ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [{ "expr": "nvr_playback_live_latency_ms", "legendFormat": "{{camera_id}}/{{protocol}}" }],
+      "description": "Browser beacon: hub ingest wallclock vs player clock. End-to-end last-mile visibility (#469)."
+    },
+    {
+      "id": 7,
+      "title": "Protocol drop rates (ws / flv / webrtc / hls)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "rate(nvr_ws_frames_dropped_total[1m]) * 60", "legendFormat": "ws {{camera_id}}" },
+        { "expr": "rate(nvr_flv_frames_dropped_total[1m]) * 60", "legendFormat": "flv {{camera_id}}" },
+        { "expr": "rate(nvr_webrtc_frames_dropped_total[1m]) * 60", "legendFormat": "webrtc {{camera_id}}" },
+        { "expr": "rate(nvr_hls_frames_dropped_total[1m]) * 60", "legendFormat": "hls {{camera_id}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Segment write duration p95 (s) — SD degradation",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (camera_id, le) (rate(nvr_segment_write_duration_seconds_bucket[15m])))", "legendFormat": "{{camera_id}}" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Recording audit outcomes (5m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [{ "expr": "increase(nvr_recording_audit_total[5m])", "legendFormat": "{{camera_id}} {{result}}" }],
+      "description": "mediaprobe sampling of closed segments. result != ok = zero-duration or unparseable moov."
+    },
+    {
+      "id": 10,
+      "title": "Camera reconnects + backoff",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        { "expr": "increase(nvr_camera_reconnect_attempts_total[5m])", "legendFormat": "reconnects {{camera_id}}" },
+        { "expr": "nvr_camera_reconnect_backoff_seconds", "legendFormat": "backoff {{camera_id}}" }
+      ]
+    }
+  ]
+}

@@ -214,6 +214,43 @@ func TestEncodeDecodeVideoFrame_Keyframe(t *testing.T) {
 	}
 }
 
+// TestEncodeDecodeVideoFrame_IngestAtRoundtrip verifies the trailing
+// ingest-at wallclock extension (#469): encoded frames carry it, decode
+// recovers it, and the legacy no-extension form still decodes (older server).
+func TestEncodeDecodeVideoFrame_IngestAtRoundtrip(t *testing.T) {
+	vf := &VideoFrame{
+		PTS:        90000,
+		IsKeyframe: true,
+		NALUs:      [][]byte{{0x65, 0x01}},
+		IngestAt:   1755950400123,
+	}
+	encoded, err := EncodeVideoFrame(vf)
+	if err != nil {
+		t.Fatalf("EncodeVideoFrame: %v", err)
+	}
+	decoded, err := decodeVideoFrame(encoded)
+	if err != nil {
+		t.Fatalf("decodeVideoFrame: %v", err)
+	}
+	if decoded.IngestAt != 1755950400123 {
+		t.Errorf("IngestAt = %d, want 1755950400123", decoded.IngestAt)
+	}
+
+	// Legacy form: strip the trailing 8 bytes — decode must still work and
+	// leave IngestAt unset (backwards compatibility).
+	legacy := encoded[:len(encoded)-8]
+	decodedLegacy, err := decodeVideoFrame(legacy)
+	if err != nil {
+		t.Fatalf("decodeVideoFrame(legacy): %v", err)
+	}
+	if decodedLegacy.IngestAt != 0 {
+		t.Errorf("legacy IngestAt = %d, want 0", decodedLegacy.IngestAt)
+	}
+	if decodedLegacy.PTS != vf.PTS || len(decodedLegacy.NALUs) != 1 {
+		t.Errorf("legacy decode lost frame fields")
+	}
+}
+
 func TestEncodeDecodeVideoFrame_Delta(t *testing.T) {
 	vf := &VideoFrame{
 		PTS:        90000, // 1 second at 90kHz

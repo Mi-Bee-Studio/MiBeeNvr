@@ -468,6 +468,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		wsstream.WithMaxViewers(cfg.WebSocket.MaxViewers),
 		wsstream.WithWriteBufSize(cfg.WebSocket.WriteBufSize),
 		wsstream.WithIdleTimeout(cfg.WebSocket.IdleTimeout),
+		wsstream.WithMetrics(m),
 	)
 	slog.Info("WebSocket stream manager initialized", "max_viewers", cfg.WebSocket.MaxViewers, "write_buf_size", cfg.WebSocket.WriteBufSize, "idle_timeout", cfg.WebSocket.IdleTimeout)
 	deps.wsMgr = wsMgr
