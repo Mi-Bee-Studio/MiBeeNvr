@@ -16,6 +16,13 @@ import (
 func (t *PushTarget) connectRTMP(ctx context.Context) error {
 	sps, pps, isH264 := t.spsProvider()
 	if !isH264 {
+		// MJPEG/JPEG sources can never feed the H.265 transcode path — fail
+		// fast with a clear per-target error instead of a doomed transcoder
+		// (#423).
+		if t.isJPEGSource() {
+			t.setStatus(StatusError, "source is "+t.sourceCodec()+"; RTMP push requires H.264/H.265")
+			return errPermanent
+		}
 		// H.265 source — transcode if policy allows.
 		if t.Config.TranscodePolicy == "off" {
 			t.setStatus(StatusError, "source is not H.264 (RTMP target requires H.264)")

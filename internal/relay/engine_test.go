@@ -594,3 +594,55 @@ func TestPushTarget_Status_TranscodeRuntime(t *testing.T) {
 	st := target.Status()
 	assert.Equal(t, "idle", st.TranscodeStatus)
 }
+
+// JPEG sources (MJPEG/JPEG recorders) can never feed the H.265 transcode
+// path — connectRTMP/connectRTSP must fail fast with a clear per-target
+// error instead of engaging a doomed transcoder (#423).
+func TestConnectRTMP_JPEGSourceFailsFast(t *testing.T) {
+	for _, codec := range []string{"mjpeg", "jpeg"} {
+		target := NewPushTarget("test-cam", PushTargetConfig{
+			ID: "t1", URL: "rtmp://invalid/does/not/matter",
+			Protocol: "rtmp", TranscodePolicy: "auto",
+		}, nil, func() ([]byte, []byte, bool) {
+			return nil, nil, false // not H.264 — the JPEG trap path
+		})
+		target.SetSourceCodecProvider(func() string { return codec })
+
+		err := target.connectRTMP(context.Background())
+		require.Equal(t, errPermanent, err)
+		require.Equal(t, StatusError, target.status)
+		require.Contains(t, target.errMsg, "source is "+codec)
+		require.Contains(t, target.errMsg, "requires H.264/H.265")
+	}
+}
+
+func TestConnectRTSP_JPEGSourceFailsFast(t *testing.T) {
+	target := NewPushTarget("test-cam", PushTargetConfig{
+		ID: "t1", URL: "rtsp://invalid/does/not/matter",
+		Protocol: "rtsp", TranscodePolicy: "auto",
+	}, nil, func() ([]byte, []byte, bool) {
+		return nil, nil, false // not H.264 — the JPEG trap path
+	})
+	target.SetSourceCodecProvider(func() string { return "mjpeg" })
+
+	err := target.connectRTSP(context.Background())
+	require.Equal(t, errPermanent, err)
+	require.Equal(t, StatusError, target.status)
+	require.Contains(t, target.errMsg, "source is mjpeg")
+}
+
+// Without a source-codec provider the legacy behavior is preserved: a
+// non-H.264 source with TranscodePolicy "off" gets the generic message.
+func TestConnectRTMP_NoSourceCodecProviderKeepsLegacyBehavior(t *testing.T) {
+	target := NewPushTarget("test-cam", PushTargetConfig{
+		ID: "t1", URL: "rtmp://invalid/does/not/matter",
+		Protocol: "rtmp", TranscodePolicy: "off",
+	}, nil, func() ([]byte, []byte, bool) {
+		return nil, nil, false
+	})
+
+	err := target.connectRTMP(context.Background())
+	require.Equal(t, errPermanent, err)
+	require.Equal(t, StatusError, target.status)
+	require.Contains(t, target.errMsg, "source is not H.264")
+}
