@@ -358,7 +358,7 @@ func TestAdaptiveGate_SparseSkipAndFlushFacade(t *testing.T) {
 
 func TestResolveAdaptiveConfig_DefaultsAndOverrides(t *testing.T) {
 	ac := ResolveAdaptiveConfig("", "", 0, 0)
-	if ac != (AdaptiveConfig{CalmThreshold: 60 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 16 << 20}) {
+	if ac != (AdaptiveConfig{CalmThreshold: 60 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 32 << 20}) {
 		t.Fatalf("defaults wrong: %+v", ac)
 	}
 	ac = ResolveAdaptiveConfig("2m", "10s", 7.5, 1<<20)
