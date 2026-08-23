@@ -67,6 +67,98 @@ func migrateAIEventsInTx(ctx context.Context, tx *sql.Tx, newRecordingID string,
 	return nil
 }
 
+// motionAgg accumulates motion info across recordings being merged so the
+// merged row inherits a duration-weighted motion_score and the union of
+// activity flags (#458). Unanalyzed sources (score < 0) contribute their
+// flags but not the average; a set of only-unanalyzed sources keeps the
+// merged row unanalyzed (-1) — treating them as 0 would mislabel a merged
+// hour as "static" and make motion-aware cleanup evict it first.
+type motionAgg struct {
+	weightedSum  float64
+	totalDur     float64
+	analyzed     int
+	simpleSum    float64
+	flags        map[string]struct{}
+	flagsOrdered []string
+}
+
+func (a *motionAgg) add(score float64, flags string, dur float64) {
+	if a.flags == nil {
+		a.flags = make(map[string]struct{})
+	}
+	for _, f := range strings.Split(flags, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			if _, dup := a.flags[f]; !dup {
+				a.flags[f] = struct{}{}
+				a.flagsOrdered = append(a.flagsOrdered, f)
+			}
+		}
+	}
+	if score < 0 {
+		return
+	}
+	if dur < 0 {
+		dur = 0
+	}
+	a.weightedSum += score * dur
+	a.totalDur += dur
+	a.simpleSum += score
+	a.analyzed++
+}
+
+// result returns the aggregated (score, flags). Score falls back to a simple
+// average when every analyzed source has zero duration.
+func (a *motionAgg) result() (float64, string) {
+	if a.analyzed == 0 {
+		return model.MotionScoreUnanalyzed, ""
+	}
+	var score float64
+	if a.totalDur > 0 {
+		score = a.weightedSum / a.totalDur
+	} else {
+		score = a.simpleSum / float64(a.analyzed)
+	}
+	return score, strings.Join(a.flagsOrdered, ",")
+}
+
+// aggregateSourceMotion loads the motion columns of the given recording IDs
+// within tx and folds them into agg.
+func aggregateSourceMotion(ctx context.Context, tx *sql.Tx, ids []string, agg *motionAgg) error {
+	for _, chunk := range chunkIDs(ids, batchUpdateChunkSize) {
+		if err := aggregateSourceMotionChunk(ctx, tx, chunk, agg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func aggregateSourceMotionChunk(ctx context.Context, tx *sql.Tx, chunk []string, agg *motionAgg) error {
+	placeholders := make([]string, len(chunk))
+	args := make([]interface{}, 0, len(chunk))
+	for i, id := range chunk {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	q := `SELECT motion_score, COALESCE(activity_flags, ''), COALESCE(duration, 0) FROM recordings WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("load source motion columns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var score, dur float64
+		var flags string
+		if err := rows.Scan(&score, &flags, &dur); err != nil {
+			return fmt.Errorf("scan source motion columns: %w", err)
+		}
+		agg.add(score, flags, dur)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate source motion columns: %w", err)
+	}
+	return nil
+}
+
 // MergeAndReplaceRecordings atomically inserts a merged recording and deletes old recordings in a single transaction.
 // This reduces SQLITE_BUSY contention compared to separate INSERT + SetMerged + DeleteBatch calls.
 func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Recording, oldIDs []string) error {
@@ -79,8 +171,16 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	}
 	defer tx.Rollback()
 
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);`
-	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, model.MergeStatusMerged, merged.MergeTier, 100, merged.MergeQuality)
+	// Propagate motion info from the source segments into the merged row
+	// (duration-weighted score + flag union) before they are deleted (#458).
+	var agg motionAgg
+	if err := aggregateSourceMotion(ctx, tx, oldIDs, &agg); err != nil {
+		return err
+	}
+	motionScore, motionFlags := agg.result()
+
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, activity_flags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
+	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, model.MergeStatusMerged, merged.MergeTier, 100, merged.MergeQuality, motionScore, motionFlags)
 	if err != nil {
 		return err
 	}
@@ -162,20 +262,36 @@ func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recordi
 	}
 	defer tx.Rollback()
 
+	// Propagate motion info into the merged row (#458):
+	// - create: fold the source segments' scores (duration-weighted) + flags
+	// - append: fold the EXISTING merged row's aggregate together with the
+	//   newly-appended sources, so a growing bucket keeps a representative
+	//   score for its whole content rather than only the latest append.
+	var agg motionAgg
+	if existingMergedID != "" {
+		if err := aggregateSourceMotion(ctx, tx, []string{existingMergedID}, &agg); err != nil {
+			return err
+		}
+	}
+	if err := aggregateSourceMotion(ctx, tx, sourceIDs, &agg); err != nil {
+		return err
+	}
+	motionScore, motionFlags := agg.result()
+
 	if existingMergedID == "" {
 		// Case 1: Create — INSERT new merged recording.
-		q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);`
+		q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, activity_flags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
 		_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format,
 			timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize,
-			merged.FrameCount, model.MergeStatusMerged, "rolling", 100, merged.MergeQuality)
+			merged.FrameCount, model.MergeStatusMerged, "rolling", 100, merged.MergeQuality, motionScore, motionFlags)
 		if err != nil {
 			return err
 		}
 	} else {
 		// Case 2: Append — UPDATE existing merged recording.
-		q := `UPDATE recordings SET file_path = ?, ended_at = ?, duration = ?, file_size = ?, frame_count = ?, merge_quality = ? WHERE id = ?;`
+		q := `UPDATE recordings SET file_path = ?, ended_at = ?, duration = ?, file_size = ?, frame_count = ?, merge_quality = ?, motion_score = ?, activity_flags = ? WHERE id = ?;`
 		_, err = tx.ExecContext(ctx, q, merged.FilePath, timeToDB(merged.EndedAt), merged.Duration,
-			merged.FileSize, merged.FrameCount, merged.MergeQuality, existingMergedID)
+			merged.FileSize, merged.FrameCount, merged.MergeQuality, motionScore, motionFlags, existingMergedID)
 		if err != nil {
 			return err
 		}

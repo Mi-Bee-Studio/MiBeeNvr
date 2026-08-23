@@ -137,3 +137,108 @@ func TestTimelineSegmentsCarryMotionScore(t *testing.T) {
 	require.Equal(t, 1, total)
 	require.InDelta(t, 0.66, segs[0].MotionScore, 1e-9)
 }
+
+// Merge/rolling-merge must propagate motion info into the merged row before
+// the source rows are deleted (#458): duration-weighted score + flag union.
+// All-unanalyzed sources keep the merged row unanalyzed (-1) so motion-aware
+// cleanup does not mislabel it as static.
+func TestMergePropagatesMotionScore(t *testing.T) {
+	ctx := context.Background()
+	db := newMotionTestDB(t)
+
+	// Two analyzed sources: 30s @ 0.2 static + 60s @ 0.8 motion.
+	insertMotionTestRecording(t, db, "src-a", 2*time.Minute)
+	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "src-a", 0.2, "static"))
+	r, err := db.GetRecording(ctx, "src-a")
+	require.NoError(t, err)
+	r.Duration = 30
+	require.NoError(t, db.UpdateRecording(ctx, r))
+
+	insertMotionTestRecording(t, db, "src-b", time.Minute)
+	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "src-b", 0.8, "motion,scene_cut"))
+	r, err = db.GetRecording(ctx, "src-b")
+	require.NoError(t, err)
+	r.Duration = 60
+	require.NoError(t, db.UpdateRecording(ctx, r))
+
+	merged := &model.Recording{
+		ID: "merged-1", CameraID: "cam-1", FilePath: "/x/merged-1.mp4",
+		Format: model.FormatH264, StartedAt: time.Now().UTC().Add(-3 * time.Minute),
+		EndedAt: time.Now().UTC(), Duration: 90, FileSize: 3000, FrameCount: 1800,
+	}
+	require.NoError(t, db.MergeAndReplaceRecordings(ctx, merged, []string{"src-a", "src-b"}))
+
+	got, err := db.GetRecording(ctx, "merged-1")
+	require.NoError(t, err)
+	// (0.2*30 + 0.8*60) / 90 = 0.6
+	require.InDelta(t, 0.6, got.MotionScore, 1e-9)
+	require.Contains(t, got.ActivityFlags, "static")
+	require.Contains(t, got.ActivityFlags, "motion")
+	require.Contains(t, got.ActivityFlags, "scene_cut")
+}
+
+func TestRollingMergePropagatesMotionScore(t *testing.T) {
+	ctx := context.Background()
+	db := newMotionTestDB(t)
+
+	// Bucket create from one analyzed + one unanalyzed source.
+	insertMotionTestRecording(t, db, "rs-1", 2*time.Minute)
+	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "rs-1", 0.6, "motion"))
+	r, _ := db.GetRecording(ctx, "rs-1")
+	r.Duration = 30
+	require.NoError(t, db.UpdateRecording(ctx, r))
+	insertMotionTestRecording(t, db, "rs-2", time.Minute) // stays unanalyzed (-1)
+
+	merged := &model.Recording{
+		ID: "roll-1", CameraID: "cam-1", FilePath: "/x/roll-1.mp4",
+		Format: model.FormatH264, StartedAt: time.Now().UTC().Add(-3 * time.Minute),
+		EndedAt: time.Now().UTC(), Duration: 60, FileSize: 2000, FrameCount: 1200,
+	}
+	require.NoError(t, db.RollingReplaceRecordings(ctx, merged, "", []string{"rs-1", "rs-2"}))
+
+	got, err := db.GetRecording(ctx, "roll-1")
+	require.NoError(t, err)
+	// Only the analyzed source weights the average: 0.6.
+	require.InDelta(t, 0.6, got.MotionScore, 1e-9)
+	require.Equal(t, "motion", got.ActivityFlags)
+
+	// Append: 60s of 0.6 existing + 30s of 0.3 new → (0.6*60+0.3*30)/90 = 0.5.
+	insertMotionTestRecording(t, db, "rs-3", 0)
+	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "rs-3", 0.3, "static"))
+	r, _ = db.GetRecording(ctx, "rs-3")
+	r.Duration = 30
+	require.NoError(t, db.UpdateRecording(ctx, r))
+
+	merged2 := &model.Recording{
+		ID: "roll-1", CameraID: "cam-1", FilePath: "/x/roll-1.mp4",
+		Format: model.FormatH264, StartedAt: got.StartedAt, EndedAt: time.Now().UTC(),
+		Duration: 90, FileSize: 3000, FrameCount: 1800,
+	}
+	require.NoError(t, db.RollingReplaceRecordings(ctx, merged2, "roll-1", []string{"rs-3"}))
+
+	got, err = db.GetRecording(ctx, "roll-1")
+	require.NoError(t, err)
+	require.InDelta(t, 0.5, got.MotionScore, 1e-9)
+	require.Contains(t, got.ActivityFlags, "motion")
+	require.Contains(t, got.ActivityFlags, "static")
+}
+
+func TestMergeAllUnanalyzedStaysUnanalyzed(t *testing.T) {
+	ctx := context.Background()
+	db := newMotionTestDB(t)
+
+	insertMotionTestRecording(t, db, "un-1", 2*time.Minute)
+	insertMotionTestRecording(t, db, "un-2", time.Minute)
+
+	merged := &model.Recording{
+		ID: "merged-un", CameraID: "cam-1", FilePath: "/x/merged-un.mp4",
+		Format: model.FormatH264, StartedAt: time.Now().UTC().Add(-3 * time.Minute),
+		EndedAt: time.Now().UTC(), Duration: 60, FileSize: 2000, FrameCount: 1200,
+	}
+	require.NoError(t, db.MergeAndReplaceRecordings(ctx, merged, []string{"un-1", "un-2"}))
+
+	got, err := db.GetRecording(ctx, "merged-un")
+	require.NoError(t, err)
+	require.Equal(t, model.MotionScoreUnanalyzed, got.MotionScore)
+	require.Empty(t, got.ActivityFlags)
+}

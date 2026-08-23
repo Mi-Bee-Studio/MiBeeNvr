@@ -138,3 +138,39 @@ func TestValidate_GB28181(t *testing.T) {
 		require.Equal(t, "auto", cfg.GB28181.TCPFraming)
 	})
 }
+
+// TestApplyDefaults_GB28181MediaTransport locks the tcp-passive default (#460):
+// UDP media measured ~16% frame loss on a real GB camera, so tcp-passive is the
+// safe default. The legacy tcp_mode bool must NOT influence the choice (an
+// explicit false is indistinguishable from unset) and explicit values win.
+func TestApplyDefaults_GB28181MediaTransport(t *testing.T) {
+	t.Run("empty defaults to tcp-passive", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		require.Equal(t, "tcp-passive", cfg.GB28181.MediaTransport)
+	})
+
+	t.Run("legacy tcp_mode true or false does not override the default", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.GB28181.TCPMode = true
+		cfg.ApplyDefaults()
+		require.Equal(t, "tcp-passive", cfg.GB28181.MediaTransport)
+
+		cfg = &Config{}
+		cfg.GB28181.TCPMode = false
+		cfg.ApplyDefaults()
+		require.Equal(t, "tcp-passive", cfg.GB28181.MediaTransport)
+	})
+
+	t.Run("explicit media_transport is preserved", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.GB28181.MediaTransport = "udp"
+		cfg.ApplyDefaults()
+		require.Equal(t, "udp", cfg.GB28181.MediaTransport)
+
+		cfg = &Config{}
+		cfg.GB28181.MediaTransport = "tcp-active"
+		cfg.ApplyDefaults()
+		require.Equal(t, "tcp-active", cfg.GB28181.MediaTransport)
+	})
+}

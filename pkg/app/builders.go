@@ -498,6 +498,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	}
 	relayMgr.SetFFmpegPath(relayFFmpegPath)
 	relayMgr.SetHardwareCap(relayHwCap)
+	// Wire the source-codec resolver so push targets fail fast on MJPEG/JPEG
+	// sources instead of engaging the H.265 transcode path that can never
+	// decode them (#423).
+	relayMgr.SetSourceCodecProvider(camMgr.GetSourceCodec)
 	// Wire the source-URL resolver used by FFmpeg relay mode. Without this,
 	// connectViaFFmpeg() sees an empty provider, cannot resolve the camera's
 	// RTSP URL, and returns errPermanent on every retry (the 'permanent relay
