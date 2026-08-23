@@ -119,7 +119,8 @@ func (sm *SessionManager) SetTCPFraming(fn func() string) {
 	sm.mu.Unlock()
 }
 
-// MediaTransport snapshots the configured media transport (UDP default).
+// MediaTransport snapshots the configured media transport (tcp-passive
+// default since #460; falls back to MediaUDP for unknown values).
 func (sm *SessionManager) MediaTransport() string {
 	sm.mu.Lock()
 	fn := sm.mediaTransportFunc
