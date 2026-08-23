@@ -99,6 +99,48 @@ func (cm *CameraManager) GetSPS(cameraID string) (sps, pps []byte, isH264 bool) 
 	return nil, nil, false
 }
 
+// GetSourceCodec returns the source camera's current video encoding as a
+// model.Format string ("h264", "h265", "mjpeg", "jpeg"; "" = unknown — no
+// recorder, or a recorder type without a meaningful single codec). Used by the
+// relay manager so push targets can fail fast on sources the transcode path
+// cannot handle (MJPEG/JPEG, #423).
+func (cm *CameraManager) GetSourceCodec(cameraID string) string {
+	rec := cm.GetRecorder(cameraID)
+	if rec == nil {
+		return ""
+	}
+	switch r := rec.(type) {
+	case *recorder.H264Recorder:
+		return string(model.FormatH264)
+	case *recorder.H265Recorder:
+		return string(model.FormatH265)
+	case *recorder.MJPEGRecorder:
+		return string(model.FormatMJPEG)
+	case *recorder.HTTPJPEGRecorder:
+		return string(model.EncJPEG)
+	case *recorder.ONVIFRecorder:
+		if d := r.Delegate(); d != nil {
+			switch d.(type) {
+			case *recorder.H264Recorder:
+				return string(model.FormatH264)
+			case *recorder.H265Recorder:
+				return string(model.FormatH265)
+			case *recorder.HTTPJPEGRecorder:
+				return string(model.EncJPEG)
+			}
+		}
+		return ""
+	}
+	// Generic fallback: recorders that probe their codec at runtime (GB28181,
+	// Ingest/SRT, Xiaomi) implement model.HLSProvider.CodecParams.
+	if cp, ok := rec.(model.HLSProvider); ok {
+		if c, _, _, _ := cp.CodecParams(); c != "" {
+			return string(c)
+		}
+	}
+	return ""
+}
+
 // GetCodecInfo returns the source camera's current video and audio codec
 // parameters as a single CodecInfo struct. Used by the relay engine to
 // initialize target tracks with complete codec information.
