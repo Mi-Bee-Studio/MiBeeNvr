@@ -21,7 +21,7 @@
   // a cast — both Recording and RecordingTimelineSegment satisfy it.
   type TimelineRecording = Pick<
     Recording,
-    'id' | 'camera_id' | 'started_at' | 'ended_at' | 'duration' | 'format' | 'merge_status'
+    'id' | 'camera_id' | 'started_at' | 'ended_at' | 'duration' | 'format' | 'merge_status' | 'motion_score'
   >;
 
   // Minimal shape of an AI event used for timeline markers. Decoupled from the
@@ -63,6 +63,7 @@
     endSec: number;
     format: string;
     merged: boolean;
+    motionScore: number; // -1 = not analyzed (#435)
   }
 
   const DAY_SECONDS = 86400;
@@ -97,6 +98,7 @@
           endSec,
           format: r.format,
           merged: r.merge_status === 'merged' || r.merge_status === 'daily_merged',
+          motionScore: r.motion_score ?? -1,
         });
         segs.push({ id: r.id, startSec, endSec });
         coverageSec += endSec - startSec;
@@ -249,6 +251,24 @@
     return parts.join(' · ');
   }
 
+  // ── Motion heat (#435) ──
+  // When on, video bands with an analyzed motion_score are colored by activity
+  // (green = calm → red = busy) instead of the flat per-format color, turning
+  // each row into an activity heat strip. Bands without a score (or non-video
+  // formats like timelapse/mjpeg) keep their format color.
+  let showHeat = $state(true);
+  const rowsHaveHeat = $derived(rows.some((r) => r.bands.some((b) => b.motionScore >= 0)));
+
+  function heatColor(score: number): string {
+    const hue = Math.max(0, Math.round(120 - Math.min(1, Math.max(0, score)) * 120));
+    return `hsl(${hue} 65% 42%)`;
+  }
+  function bandHeatStyle(band: CoverageBand): string | undefined {
+    if (!showHeat || band.motionScore < 0) return undefined;
+    if (band.format !== 'h264' && band.format !== 'h265') return undefined;
+    return `background: ${heatColor(band.motionScore)}`;
+  }
+
   // ── Format → color (matches gallery card format conventions) ──
   function bandClass(band: CoverageBand): string {
     const fmt = band.format;
@@ -354,6 +374,17 @@
   <div class="space-y-1">
     <!-- Hour scale header -->
     <div class="flex items-center pl-[160px] sm:pl-[200px] pr-2 mb-1 select-none">
+      {#if rowsHaveHeat}
+        <button
+          type="button"
+          class="absolute -translate-x-full mr-2 text-[10px] px-1.5 py-0.5 rounded border th-border th-text-secondary whitespace-nowrap {showHeat ? 'heat-toggle-active' : ''}"
+          style="position: relative; left: -8px"
+          onclick={() => (showHeat = !showHeat)}
+          title={t('recordings.heatToggleHint')}
+        >
+          🌡 {t('recordings.heatToggle')}
+        </button>
+      {/if}
       <div class="relative h-5 w-full">
         {#each hourTicks as h}
           <span
@@ -408,7 +439,7 @@
             {#each row.bands as band (band.recordingId + band.startSec)}
               <div
                 class="absolute top-0 bottom-0 band {bandClass(band)}"
-                style="left: {(band.startSec / DAY_SECONDS) * 100}%; width: {((band.endSec - band.startSec) / DAY_SECONDS) * 100}%"
+                style="left: {(band.startSec / DAY_SECONDS) * 100}%; width: {((band.endSec - band.startSec) / DAY_SECONDS) * 100}%; {bandHeatStyle(band) ?? ''}"
                 onmouseenter={(e) => onBandEnter(e, band, row.camera.id)}
                 onmouseleave={onBandLeave}
                 role="presentation"
@@ -480,7 +511,7 @@
     class="fixed z-50 pointer-events-none px-2 py-1 rounded bg-black/85 dark:bg-white/90 text-white dark:text-black text-[11px] tabular-nums shadow-lg"
     style="left: {tooltipX}px; top: {tooltipY - 36}px; transform: translateX(-50%)"
   >
-    {bandTimeRange(hoveredBand)} · {formatLength(hoveredBand.endSec - hoveredBand.startSec)} · {hoveredBand.format}
+    {bandTimeRange(hoveredBand)} · {formatLength(hoveredBand.endSec - hoveredBand.startSec)} · {hoveredBand.format}{#if hoveredBand.motionScore >= 0} · {t('recordings.motionShort')} {hoveredBand.motionScore.toFixed(2)}{/if}
   </div>
 {/if}
 
@@ -510,6 +541,13 @@
   .band:hover {
     opacity: 0.75;
   }
+  /* Motion-heat toggle (#435) */
+  .heat-toggle-active {
+    background: linear-gradient(90deg, hsl(120 65% 42%), hsl(60 65% 42%), hsl(0 65% 42%));
+    color: #fff;
+    border-color: transparent;
+  }
+
   /* Format colors — distinguishable, accessible against track bg */
   .band-video {
     background: #3b82f6; /* blue-500 */

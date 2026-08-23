@@ -65,6 +65,11 @@ type CameraUpdate struct {
 	CascadeEnabled *bool
 	// Recording schedule
 	RecordingSchedule *config.ScheduleConfig
+	// RecordingMode selects the write-density strategy (#435): ""/"continuous"
+	// or "adaptive". nil = unchanged. Changing it (or Adaptive params) requires
+	// a recorder restart — the mode is read at recorder construction.
+	RecordingMode *string
+	Adaptive      *config.AdaptiveRecordingConfig
 	// Push/ingest camera fields (SRT/RTMP). nil = unchanged.
 	StreamKey     *string
 	SRTPassphrase *string

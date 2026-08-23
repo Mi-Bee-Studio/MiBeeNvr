@@ -8,6 +8,9 @@ import { apiRequest } from './client';
 export interface CleanupConfig {
   retention_days: number;
   disk_threshold_percent: number;
+  // Motion-aware disk cleanup (#435): when the disk threshold is hit, evict
+  // boring (low motion_score) segments first. Absent = on (server default).
+  motion_aware_disk_cleanup?: boolean;
   // Optional on writes: omit (or send "") to keep the server's current value.
   // The cleanup settings UI no longer exposes this field (1h backend default is
   // optimal), so we never send it on save — sending "" used to 400 the whole

@@ -42,6 +42,11 @@ export interface Camera {
   // Cascade gate: false = hidden from the GB28181 cascade catalog (upper
   // platform cannot see or invite it). undefined = exposed.
   cascade_enabled?: boolean | null;
+  // Recording mode (#435): 'continuous' (default) or 'adaptive' — dynamic
+  // timelapse that drops to sparse keyframes while the compressed-domain
+  // activity signal stays calm. 'adaptive' holds the tuning knobs (nil = defaults).
+  recording_mode?: string;
+  adaptive?: AdaptiveRecordingConfig;
   // Xiaomi two-way audio enable flag
   two_way_audio_enabled?: boolean;
   // Push/ingest fields (SRT/RTMP cameras)
@@ -65,6 +70,18 @@ export interface Camera {
     channel_id: string;
     manufacturer?: string;
   };
+}
+
+/** Tuning knobs for recording_mode: 'adaptive' (#435). */
+export interface AdaptiveRecordingConfig {
+  /** How long activity must stay calm before sparse keyframe mode. Default '60s'. */
+  calm_threshold?: string;
+  /** Keyframe cadence while sparse. Default '30s'. */
+  timelapse_interval?: string;
+  /** Activity spike sensitivity (MAD deviations above baseline). Default 3.0. */
+  spike_factor?: number;
+  /** Seamless-transition GOP pre-buffer cap in bytes. Default 16MB. */
+  gop_buffer_bytes?: number;
 }
 
 /** One push-out relay destination (RTMP/RTSP) for a camera. */
@@ -149,6 +166,9 @@ export interface CreateCameraRequest {
   recording_enabled?: boolean | null;
   // Cascade gate: false = hidden from the GB28181 cascade catalog. Omit = exposed.
   cascade_enabled?: boolean | null;
+  // Recording mode (#435). Omit = continuous.
+  recording_mode?: string;
+  adaptive?: AdaptiveRecordingConfig;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -192,6 +212,9 @@ export interface UpdateCameraRequest {
   recording_enabled?: boolean | null;
   // Cascade gate: false = hidden from the GB28181 cascade catalog. Omit = unchanged.
   cascade_enabled?: boolean | null;
+  // Recording mode (#435). Omit = unchanged. Changing it restarts the recorder.
+  recording_mode?: string;
+  adaptive?: AdaptiveRecordingConfig;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;

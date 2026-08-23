@@ -74,6 +74,8 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.RecordingEnabled = cam.RecordingEnabled
 		row.CascadeEnabled = cam.CascadeEnabled
 		row.RecordingSchedule = cam.RecordingSchedule
+		row.RecordingMode = cam.RecordingMode
+		row.Adaptive = cam.Adaptive
 		if cam.Protocol == "gb28181" {
 			gb := cam.GB28181
 			row.GB28181 = &gb
@@ -296,6 +298,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		// Cascade gate: false = hidden from the GB28181 cascade catalog and
 		// INVITEs refused. nil = default (exposed).
 		CascadeEnabled *bool `json:"cascade_enabled"`
+		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
+		RecordingMode string                          `json:"recording_mode"`
+		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     string `json:"stream_key"`
 		SRTPassphrase string `json:"srt_passphrase"`
@@ -467,6 +472,16 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Same boundary validation for the recording mode (#435, #402 class).
+	if err := config.ValidateCameraRecordingMode(config.CameraConfig{
+		ID:            body.Name,
+		Encoding:      enc,
+		RecordingMode: body.RecordingMode,
+		Adaptive:      body.Adaptive,
+	}); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	cam := config.CameraConfig{
 		Name:              body.Name,
@@ -483,6 +498,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
 		RecordingEnabled:  body.RecordingEnabled,
 		CascadeEnabled:    body.CascadeEnabled,
+		RecordingMode:     body.RecordingMode,
+		Adaptive:          body.Adaptive,
 		StreamKey:         body.StreamKey,
 		SRTPassphrase:     body.SRTPassphrase,
 		SRTStreamID:       body.SRTStreamID,
@@ -673,6 +690,10 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		CascadeEnabled *bool `json:"cascade_enabled"`
 		// Recording schedule
 		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
+		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
+		// Validated at this boundary with the startup rules (#402 class).
+		RecordingMode *string                         `json:"recording_mode"`
+		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     *string `json:"stream_key"`
 		SRTPassphrase *string `json:"srt_passphrase"`
@@ -745,12 +766,43 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingEnabled:       body.RecordingEnabled,
 		CascadeEnabled:         body.CascadeEnabled,
 		RecordingSchedule:      body.RecordingSchedule,
+		RecordingMode:          body.RecordingMode,
+		Adaptive:               body.Adaptive,
 		StreamKey:              body.StreamKey,
 		SRTPassphrase:          body.SRTPassphrase,
 		SRTStreamID:            body.SRTStreamID,
 		PushTargets:            body.PushTargets,
 		PushRetentionDays:      body.PushRetentionDays,
 		GB28181:                body.GB28181.toConfigPtr(),
+	}
+
+	// Validate recording mode + adaptive tuning with the same rules the
+	// startup path enforces, resolved against the camera's CURRENT encoding
+	// (or the new one, when the same request changes it) — adaptive needs
+	// h264/h265.
+	if body.RecordingMode != nil || body.Adaptive != nil {
+		probe := config.CameraConfig{ID: id}
+		if h.config != nil {
+			for _, cam := range h.config.Cameras {
+				if cam.ID == id {
+					probe = cam
+					break
+				}
+			}
+		}
+		if body.Encoding != nil && *body.Encoding != "" {
+			probe.Encoding = *body.Encoding
+		}
+		if body.RecordingMode != nil {
+			probe.RecordingMode = *body.RecordingMode
+		}
+		if body.Adaptive != nil {
+			probe.Adaptive = body.Adaptive
+		}
+		if err := config.ValidateCameraRecordingMode(probe); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Validate URL format if URL is being updated (skip for ONVIF and push cameras).

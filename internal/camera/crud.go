@@ -612,6 +612,20 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.RecordingSchedule != nil {
 		cam.RecordingSchedule = updates.RecordingSchedule
 	}
+	if updates.RecordingMode != nil {
+		if *updates.RecordingMode != cam.RecordingMode {
+			needsRestart = true
+		}
+		cam.RecordingMode = *updates.RecordingMode
+	}
+	if updates.Adaptive != nil {
+		// Params are read at recorder construction; only a real change needs
+		// the restart (the edit form re-sends the whole object on every save).
+		if cam.Adaptive == nil || *cam.Adaptive != *updates.Adaptive {
+			needsRestart = true
+		}
+		cam.Adaptive = updates.Adaptive
+	}
 
 	// Persist to database
 	if cm.db != nil {

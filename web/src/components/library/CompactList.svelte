@@ -64,6 +64,13 @@
   let allSelected = $derived(recordings.length > 0 && selectedIds.size === recordings.length);
   let someSelected = $derived(selectedIds.size > 0 && !allSelected);
 
+  // Motion heat (#435): map the compressed-domain activity score in [0,1] to a
+  // green (calm) → red (busy) hue. -1/undefined = not analyzed → no badge.
+  function motionBadgeStyle(score: number): string {
+    const hue = Math.max(0, Math.round(120 - Math.min(1, score) * 120));
+    return `background-color: hsl(${hue} 65% 42%)`;
+  }
+
   // --- Helpers ---
   function getCameraName(cameraId: string): string {
     const cam = cameras.find((c) => c.id === cameraId);
@@ -357,6 +364,15 @@
                   <span class="badge badge-success">{t('recordings.merged')}</span>
                 {:else}
                   <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
+                {/if}
+                {#if recording.motion_score !== undefined && recording.motion_score >= 0}
+                  <span
+                    class="badge text-white"
+                    style={motionBadgeStyle(recording.motion_score)}
+                    title="{t('recordings.motionScore')}: {recording.motion_score.toFixed(2)}{recording.activity_flags ? ` · ${recording.activity_flags}` : ''}"
+                  >
+                    {t('recordings.motionShort')} {recording.motion_score.toFixed(2)}
+                  </span>
                 {/if}
                 {#if recording.format === 'timelapse'}
                   <span class="badge bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300">

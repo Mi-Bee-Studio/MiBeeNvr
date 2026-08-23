@@ -23,6 +23,8 @@
   // Form state — cleanup
   let retentionDays = $state(30);
   let diskThresholdPercent = $state(90);
+  // Motion-aware disk cleanup (#435): evict boring segments first at threshold.
+  let motionAwareCleanup = $state(true);
 
   // Form state — WebDAV
   let webdavEnabled = $state(false);
@@ -45,7 +47,7 @@
   let isDirty = $derived.by(() => {
     if (loading) return false;
     const current = JSON.stringify({
-      storageRoot, retentionDays, diskThresholdPercent, webdavEnabled, webdavReadWrite,
+      storageRoot, retentionDays, diskThresholdPercent, motionAwareCleanup, webdavEnabled, webdavReadWrite,
     });
     return current !== originalSnapshot;
   });
@@ -63,7 +65,7 @@
 
   function captureSnapshot() {
     originalSnapshot = JSON.stringify({
-      storageRoot, retentionDays, diskThresholdPercent, webdavEnabled, webdavReadWrite,
+      storageRoot, retentionDays, diskThresholdPercent, motionAwareCleanup, webdavEnabled, webdavReadWrite,
     });
     originalRetentionDays = retentionDays;
     originalStorageRoot = storageRoot;
@@ -106,6 +108,7 @@
       const settings = await getSettings();
       retentionDays = settings.cleanup.retention_days;
       diskThresholdPercent = settings.cleanup.disk_threshold_percent;
+      motionAwareCleanup = settings.cleanup.motion_aware_disk_cleanup ?? true;
       webdavEnabled = settings.webdav.enabled;
       webdavReadWrite = settings.webdav.read_write;
       storageRoot = settings.storage?.root_dir ?? '';
@@ -139,6 +142,7 @@
         cleanup: {
           retention_days: retentionDays,
           disk_threshold_percent: diskThresholdPercent,
+          motion_aware_disk_cleanup: motionAwareCleanup,
           // check_interval intentionally omitted: this panel no longer exposes
           // it (1h backend default is optimal). Sending "" used to 400 the save
           // (#294) because the server runs time.ParseDuration("") on it. The
@@ -445,6 +449,16 @@
           <p class="text-xs th-text-muted mt-1">{diskThresholdPercent}% {t('settings.diskRemaining')} {diskGbEstimate}</p>
         {/if}
       </div>
+    </div>
+    <!-- Motion-aware eviction (#435): when the disk threshold is hit, boring
+         (low activity) segments are deleted first. -->
+    <div class="mt-6">
+      <span class="input-label">{t('settings.motionAwareCleanup')}</span>
+      <div class="flex items-center gap-3 mt-2">
+        <Toggle checked={motionAwareCleanup} onChange={(v) => { motionAwareCleanup = v; }} label={t('settings.motionAwareCleanup')} />
+        <span class="text-sm th-text-secondary">{motionAwareCleanup ? t('settings.motionAwareCleanupOn') : t('settings.motionAwareCleanupOff')}</span>
+      </div>
+      <p class="text-xs th-text-muted mt-1">{t('settings.motionAwareCleanupHint')}</p>
     </div>
     <!-- check_interval removed (#153): backend default (1h) is optimal. -->
   </SettingsCard>
