@@ -1198,7 +1198,7 @@ func TestCameraConnectionErrorMetrics(t *testing.T) {
 	}
 }
 
-func TestFrameProcessingDuration_1in100Sampling(t *testing.T) {
+func TestHubStatsFlusherExportsSends(t *testing.T) {
 	m := metrics.NewMetrics()
 	mgr := NewCameraManager(testConfig(), nil, nil, "", m)
 
@@ -1215,26 +1215,44 @@ func TestFrameProcessingDuration_1in100Sampling(t *testing.T) {
 	hub := h264Rec.Hub
 	require.NotNil(t, hub)
 
-	// Simulate 500 frames — expect ~5 histogram samples (1/100 sampling)
-	for i := range 500 {
+	// Subscribe a consumer so per-consumer sends accumulate.
+	require.NoError(t, hub.Subscribe("test-consumer", func(int64, [][]byte) {}))
+
+	// Register the hub in the manager snapshot so the flusher can see it.
+	mgr.apply(func(s *snapshot) *snapshot {
+		s.hubs[cfg.Cameras[0].ID] = hub
+		return s
+	})
+
+	// First flush seeds per-consumer baselines (exports nothing).
+	mgr.flushHubStats()
+
+	// Simulate 50 frames (< consumer buffer of 150, so none drop).
+	for i := range 50 {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, i == 0)
 	}
 
-	// Gather metrics and verify sample count
+	// Second flush exports the delta accumulated since the first.
+	mgr.flushHubStats()
+
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
 
-	var samples int
+	var sent, dwellAvgFound bool
 	for _, f := range families {
-		if f.GetName() == "nvr_frame_processing_duration_seconds" {
+		switch f.GetName() {
+		case "nvr_streamhub_frames_sent_total":
 			for _, metric := range f.GetMetric() {
-				samples += int(metric.GetHistogram().GetSampleCount())
+				if metric.GetCounter().GetValue() >= 50 {
+					sent = true
+				}
 			}
+		case "nvr_streamhub_hop_dwell_ms_avg":
+			dwellAvgFound = true
 		}
 	}
-
-	// 500 frames / 100 = 5 samples, allow ±1 for edge cases
-	require.InDelta(t, 5, samples, 1, "expected ~5 histogram samples for 500 frames")
+	require.True(t, sent, "expected nvr_streamhub_frames_sent_total >= 50 for test-consumer")
+	require.True(t, dwellAvgFound, "expected nvr_streamhub_hop_dwell_ms_avg gauge family")
 }
 
 // --- autoPopulateSnapshotURL tests ---

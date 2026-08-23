@@ -1086,15 +1086,18 @@ func (m *Manager) StopAll() {
 }
 
 // SubscribeToHub subscribes the HLS manager to a StreamHub for the given camera.
-// It sets the HLS consumer callback ("hls") and configures the OnDrop callback
-// to increment the hls_frames_dropped_total Prometheus counter.
+// It sets the HLS consumer callback ("hls") and registers an additional drop
+// callback to increment the hls_frames_dropped_total Prometheus counter.
+// #469: uses AddOnDrop (callback list) — the old direct assignment silently
+// destroyed the camera manager's hub-level Prometheus wiring as soon as any
+// HLS subscriber attached.
 func (m *Manager) SubscribeToHub(cameraID string, hub *model.StreamHub, isH265 bool) error {
 	if m.metrics != nil {
-		hub.OnDrop = func(id string) {
+		hub.AddOnDrop(func(id string, isIDR bool) {
 			if id == "hls" {
 				m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
 			}
-		}
+		})
 	}
 	if isH265 {
 		return hub.Subscribe("hls", func(pts int64, au [][]byte) {

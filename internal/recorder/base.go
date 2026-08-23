@@ -772,6 +772,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 	if b.muxer == nil {
 		return
 	}
+	finishStart := time.Now()
 	if err := b.muxer.Close(); err != nil {
 		b.log.Error("failed to close muxer",
 			"camera_id", b.cfg.CameraID, "error", err)
@@ -847,6 +848,11 @@ func (b *baseRecorder) closeCurrentSegment() {
 		b.recordSegmentCreated()
 		if fileSize > 0 {
 			b.recordBytes(fileSize)
+		}
+		// Segment finalize wall time (muxer close + fsync/rename + DB insert):
+		// sustained growth is the SD-card/USB degradation early-warning (#469).
+		if b.mtrics != nil {
+			b.mtrics.ObserveSegmentWrite(b.cfg.CameraID, time.Since(finishStart))
 		}
 	}
 

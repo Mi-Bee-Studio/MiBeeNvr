@@ -131,16 +131,15 @@ type CameraManager struct {
 	// store) AND cfg.Cameras mutation + persistConfig disk writes. It is the
 	// ONLY mutex covering registry state, and it is held only for nanosecond map
 	// copies plus millisecond disk writes — never for network I/O or rec.Start.
-	configMu           sync.Mutex
-	onvifClients       map[string]*onvif.Client            // camera_id → cached ONVIF client
-	onvifMu            sync.Mutex                          // protects onvifClients
-	errorDetails       map[string]*model.CameraErrorDetail // cameraID → latest error detail
-	errorDetailsMu     sync.RWMutex                        // protects errorDetails
-	eventSubscribers   map[string]onvif.EventSubscriber    // camera_id → event subscriber
-	deviceInfoCache    map[string]*onvif.DeviceInfo        // camera_id → cached device info
-	deviceInfoMu       sync.RWMutex                        // protects deviceInfoCache
-	frameSampleCounter uint64                              // atomic: 1/100 sampling for frame processing duration
-	eventBus           *event.EventBus                     // event bus for publishing segment events
+	configMu         sync.Mutex
+	onvifClients     map[string]*onvif.Client            // camera_id → cached ONVIF client
+	onvifMu          sync.Mutex                          // protects onvifClients
+	errorDetails     map[string]*model.CameraErrorDetail // cameraID → latest error detail
+	errorDetailsMu   sync.RWMutex                        // protects errorDetails
+	eventSubscribers map[string]onvif.EventSubscriber    // camera_id → event subscriber
+	deviceInfoCache  map[string]*onvif.DeviceInfo        // camera_id → cached device info
+	deviceInfoMu     sync.RWMutex                        // protects deviceInfoCache
+	eventBus         *event.EventBus                     // event bus for publishing segment events
 	// relayMgr (optional) is notified when a camera's push-out targets change so
 	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
 	// import cycle.
@@ -163,6 +162,14 @@ type CameraManager struct {
 	// DB write with a 15s timeout ctx; without joining them in Stop, those
 	// writes could race the DB/config teardown that Stop initiates (#163).
 	onvifEnsureWg sync.WaitGroup
+	// Hub stats flusher state (#469): periodic exporter of hub per-consumer
+	// atomics to Prometheus. The maps are touched only by the flusher goroutine;
+	// hubFlusherMu guards the stop channel against start/stop callers.
+	hubFlusherOnce sync.Once
+	hubFlusherMu   sync.Mutex
+	hubFlusherStop chan struct{}
+	hubFlushLast   map[string][2]int64 // camera\x00consumer → last flushed {sends, bytes}
+	hubBytesLast   map[string]int64    // camera → last flushed hub bytesIn
 }
 
 // RelayManager is the subset of *relay.Manager the camera manager calls. Kept
@@ -218,6 +225,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		onvifClients:       make(map[string]*onvif.Client),
 		eventSubscribers:   make(map[string]onvif.EventSubscriber),
 		deviceInfoCache:    make(map[string]*onvif.DeviceInfo),
+		hubFlushLast:       make(map[string][2]int64),
+		hubBytesLast:       make(map[string]int64),
 		eventBus:           eb,
 	}
 	// Publish the initial immutable snapshot. Config pointers seed the configs

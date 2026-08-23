@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getHealthEvents, getHealthCameras, listCameras } from '$lib/api';
-  import type { HealthEvent, HealthEventsResponse, Camera, CameraHealthDetail } from '$lib/api';
+  import { getHealthEvents, getHealthCameras, listCameras, getStability } from '$lib/api';
+  import type { HealthEvent, HealthEventsResponse, Camera, CameraHealthDetail, CameraStability } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { AlertCircle, Activity } from 'lucide-svelte';
@@ -134,6 +134,17 @@
     }
   }
 
+  // Stability (#469): uptime/MTBF/trend per camera — QualityTracker 24h window.
+  let stability = $state<Record<string, CameraStability>>({});
+  async function loadStability() {
+    try {
+      const res = await getStability();
+      stability = res.cameras ?? {};
+    } catch {
+      // Non-fatal: stability row simply stays hidden.
+    }
+  }
+
   let currentPage = $derived(Math.floor(page * pageSize / pageSize) + 1);
   let totalPages = $derived(Math.ceil(total / pageSize));
 
@@ -181,6 +192,7 @@
 
   onMount(() => {
     loadCameras();
+    loadStability();
   });
 </script>
 
@@ -238,6 +250,17 @@
                   {scoreLabel(detail.score)}
                 </span>
               </div>
+              {#if stability[id]}
+                <div class="mt-2 text-[10px] th-text-secondary flex flex-wrap gap-x-2 justify-center tabular-nums">
+                  <span title={t('health.stability.uptime')}>{stability[id].uptime_percent.toFixed(1)}%</span>
+                  <span title={t('health.stability.mtbf')}>MTBF {stability[id].mtbf}</span>
+                  {#if stability[id].trend === 'degrading'}
+                    <span class="text-red-400">↓</span>
+                  {:else if stability[id].trend === 'improving'}
+                    <span class="text-green-400">↑</span>
+                  {/if}
+                </div>
+              {/if}
             </div>
             {#if expandedCamera === id && detail.score_factors && Object.keys(detail.score_factors).length > 0}
               <div class="card factor-breakdown mt-1 p-3 border" style="border-color: {scoreBorderColor(detail.score)}">

@@ -11,50 +11,70 @@ import (
 type Metrics struct {
 	Registry *prometheus.Registry
 
-	RecordingBytesTotal            *prometheus.CounterVec // labels: camera_id, codec
-	ActiveCameras                  prometheus.Gauge
-	ActiveRecordings               prometheus.Gauge
-	SegmentsCreated                *prometheus.CounterVec // labels: camera_id, codec
-	CleanupDeleted                 *prometheus.CounterVec // labels: reason
-	StorageUsedBytes               prometheus.Gauge
-	StorageTotalBytes              prometheus.Gauge
-	RecordingCount                 prometheus.Gauge
-	CameraErrors                   *prometheus.CounterVec   // labels: camera_id, error_type
-	StorageWriteErrors             prometheus.Counter       // total storage write I/O errors
-	HLSFramesDropped               *prometheus.CounterVec   // labels: camera_id
-	HLSWriteErrors                 *prometheus.CounterVec   // labels: camera_id
-	HLSMuxerRestarts               *prometheus.CounterVec   // labels: camera_id
-	HLSActiveStreams               *prometheus.GaugeVec     // labels: camera_id
-	HLSSegmentSizeBytes            *prometheus.HistogramVec // labels: camera_id
-	HLSIdleEvictions               *prometheus.CounterVec   // labels: camera_id
-	WebRTCActivePeers              *prometheus.GaugeVec     // labels: camera_id
-	WebRTCFramesSent               *prometheus.CounterVec   // labels: camera_id
-	WebRTCFramesDropped            *prometheus.CounterVec   // labels: camera_id
-	WebRTCConnectionStateChanges   *prometheus.CounterVec   // labels: camera_id, state
-	FLVActiveStreams               *prometheus.GaugeVec     // labels: camera_id
-	FLVFramesSent                  *prometheus.CounterVec   // labels: camera_id
-	FLVFramesDropped               *prometheus.CounterVec   // labels: camera_id
-	FLVGOPCacheHits                *prometheus.CounterVec   // labels: camera_id
-	FLVGOPCacheMisses              *prometheus.CounterVec   // labels: camera_id
-	XiaomiDisconnects              *prometheus.CounterVec   // labels: camera_id, reason
-	XiaomiReconnects               *prometheus.CounterVec   // labels: camera_id
-	TranscodingJobsTotal           *prometheus.CounterVec   // labels: codec_from, codec_to, encoder, crf, status
-	TranscodingActiveJobs          prometheus.Gauge
-	TranscodingDurationSeconds     *prometheus.HistogramVec // labels: codec_from, codec_to, encoder
-	TranscodingBytesProcessed      prometheus.Counter
-	TranscodingFFmpegStatus        prometheus.Gauge
-	RemoteLogSentTotal             prometheus.Counter
-	RemoteLogDroppedTotal          prometheus.Counter
-	RemoteLogBatchSize             prometheus.Histogram
-	StreamHubFramesDropped         *prometheus.CounterVec   // labels: camera_id, consumer, is_idr
-	StreamHubBufferDepth           *prometheus.GaugeVec     // labels: camera_id, consumer
-	StreamHubFramesInTotal         *prometheus.CounterVec   // labels: camera_id
-	AudioFramesTotal               *prometheus.CounterVec   // labels: camera_id, codec
-	AudioFramesDroppedTotal        *prometheus.CounterVec   // labels: camera_id
-	FrameProcessingDurationSeconds *prometheus.HistogramVec // labels: camera_id, protocol
-	JitterBufferDepth              *prometheus.GaugeVec     // labels: camera_id
-	JitterBufferReordersTotal      *prometheus.CounterVec   // labels: camera_id
-	RecorderRingBufferDropsTotal   *prometheus.CounterVec   // labels: camera_id
+	RecordingBytesTotal          *prometheus.CounterVec // labels: camera_id, codec
+	ActiveCameras                prometheus.Gauge
+	ActiveRecordings             prometheus.Gauge
+	SegmentsCreated              *prometheus.CounterVec // labels: camera_id, codec
+	CleanupDeleted               *prometheus.CounterVec // labels: reason
+	StorageUsedBytes             prometheus.Gauge
+	StorageTotalBytes            prometheus.Gauge
+	RecordingCount               prometheus.Gauge
+	CameraErrors                 *prometheus.CounterVec   // labels: camera_id, error_type
+	StorageWriteErrors           prometheus.Counter       // total storage write I/O errors
+	HLSFramesDropped             *prometheus.CounterVec   // labels: camera_id
+	HLSWriteErrors               *prometheus.CounterVec   // labels: camera_id
+	HLSMuxerRestarts             *prometheus.CounterVec   // labels: camera_id
+	HLSActiveStreams             *prometheus.GaugeVec     // labels: camera_id
+	HLSSegmentSizeBytes          *prometheus.HistogramVec // labels: camera_id
+	HLSIdleEvictions             *prometheus.CounterVec   // labels: camera_id
+	WebRTCActivePeers            *prometheus.GaugeVec     // labels: camera_id
+	WebRTCFramesSent             *prometheus.CounterVec   // labels: camera_id
+	WebRTCFramesDropped          *prometheus.CounterVec   // labels: camera_id
+	WebRTCConnectionStateChanges *prometheus.CounterVec   // labels: camera_id, state
+	FLVActiveStreams             *prometheus.GaugeVec     // labels: camera_id
+	FLVFramesSent                *prometheus.CounterVec   // labels: camera_id
+	FLVFramesDropped             *prometheus.CounterVec   // labels: camera_id
+	FLVGOPCacheHits              *prometheus.CounterVec   // labels: camera_id
+	FLVGOPCacheMisses            *prometheus.CounterVec   // labels: camera_id
+	XiaomiDisconnects            *prometheus.CounterVec   // labels: camera_id, reason
+	XiaomiReconnects             *prometheus.CounterVec   // labels: camera_id
+	TranscodingJobsTotal         *prometheus.CounterVec   // labels: codec_from, codec_to, encoder, crf, status
+	TranscodingActiveJobs        prometheus.Gauge
+	TranscodingDurationSeconds   *prometheus.HistogramVec // labels: codec_from, codec_to, encoder
+	TranscodingBytesProcessed    prometheus.Counter
+	TranscodingFFmpegStatus      prometheus.Gauge
+	RemoteLogSentTotal           prometheus.Counter
+	RemoteLogDroppedTotal        prometheus.Counter
+	RemoteLogBatchSize           prometheus.Histogram
+	StreamHubFramesDropped       *prometheus.CounterVec // labels: camera_id, consumer, is_idr
+	StreamHubBufferDepth         *prometheus.GaugeVec   // labels: camera_id, consumer
+	StreamHubFramesInTotal       *prometheus.CounterVec // labels: camera_id
+	AudioFramesTotal             *prometheus.CounterVec // labels: camera_id, codec
+	AudioFramesDroppedTotal      *prometheus.CounterVec // labels: camera_id
+	// Periodic-flush hub metrics (#469): per-consumer sends/bytes/dwell are
+	// accumulated in StreamHub atomics on the hot path and exported here by the
+	// camera manager's flusher goroutine (never per-frame).
+	StreamHubFramesSentTotal       *prometheus.CounterVec // labels: camera_id, consumer
+	StreamHubBytesInTotal          *prometheus.CounterVec // labels: camera_id
+	StreamHubHopDwellAvgMS         *prometheus.GaugeVec   // labels: camera_id, consumer
+	StreamHubHopDwellMaxMS         *prometheus.GaugeVec   // labels: camera_id, consumer
+	StreamHubDropRateExceededTotal *prometheus.CounterVec // labels: camera_id, consumer — drop rate crossed warn threshold
+	WSActiveStreams                *prometheus.GaugeVec   // labels: camera_id
+	WSFramesSent                   *prometheus.CounterVec // labels: camera_id
+	WSFramesDropped                *prometheus.CounterVec // labels: camera_id
+	JitterBufferDepth              *prometheus.GaugeVec   // labels: camera_id
+	JitterBufferReordersTotal      *prometheus.CounterVec // labels: camera_id
+	JitterBufferFlushesTotal       *prometheus.CounterVec // labels: camera_id
+	RecorderRingBufferDropsTotal   *prometheus.CounterVec // labels: camera_id
+
+	// Playback telemetry (#469 Phase 3) — aggregated from browser beacons
+	// (POST /api/telemetry), the only source of true end-to-end live latency.
+	PlaybackLiveLatencyMS *prometheus.GaugeVec   // labels: camera_id, protocol
+	PlaybackStallsTotal   *prometheus.CounterVec // labels: camera_id, protocol
+
+	// Segment write + audit metrics (#469 Phase 5)
+	SegmentWriteDurationSeconds *prometheus.HistogramVec // labels: camera_id — SD-card degradation early warning
+	RecordingAuditTotal         *prometheus.CounterVec   // labels: camera_id, result (ok|zero_duration|probe_error)
 	// Health→Prometheus bridge metrics (stream stats)
 	StreamFPS                *prometheus.GaugeVec // labels: camera_id
 	StreamBitrateKbps        *prometheus.GaugeVec // labels: camera_id
@@ -312,11 +332,73 @@ func NewMetrics() *Metrics {
 		Help: "Total audio frames dropped due to buffer overflow, partitioned by camera.",
 	}, []string{"camera_id"})
 
-	frameProcessingDurationSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "nvr_frame_processing_duration_seconds",
-		Help:    "Time to process a frame through the pipeline, partitioned by camera and protocol.",
-		Buckets: []float64{0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	// Periodic-flush hub metrics (#469): the hot path only touches StreamHub
+	// atomics; this camera-manager flusher exports them to Prometheus.
+	streamHubFramesSentTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_streamhub_frames_sent_total",
+		Help: "Total frames delivered to a hub consumer, partitioned by camera and consumer (periodic flush from hub atomics).",
+	}, []string{"camera_id", "consumer"})
+
+	streamHubBytesInTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_streamhub_bytes_in_total",
+		Help: "Total video bytes broadcast into StreamHub, partitioned by camera (periodic flush from hub atomics).",
+	}, []string{"camera_id"})
+
+	streamHubHopDwellAvgMS := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_streamhub_hop_dwell_ms_avg",
+		Help: "Average enqueue→drain dwell in a consumer's queue (ms), by camera and consumer.",
+	}, []string{"camera_id", "consumer"})
+
+	streamHubHopDwellMaxMS := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_streamhub_hop_dwell_ms_max",
+		Help: "Maximum enqueue→drain dwell in a consumer's queue (ms), by camera and consumer.",
+	}, []string{"camera_id", "consumer"})
+
+	streamHubDropRateExceededTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_streamhub_drop_rate_exceeded_total",
+		Help: "Times a consumer's drop rate crossed the warn threshold, partitioned by camera and consumer.",
+	}, []string{"camera_id", "consumer"})
+
+	wsActiveStreams := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_ws_active_streams",
+		Help: "Active WebSocket streams, partitioned by camera.",
+	}, []string{"camera_id"})
+
+	wsFramesSent := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_ws_frames_sent_total",
+		Help: "Total WebSocket frames sent, partitioned by camera.",
+	}, []string{"camera_id"})
+
+	wsFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_ws_frames_dropped_total",
+		Help: "Total WebSocket frames dropped due to buffer full, partitioned by camera.",
+	}, []string{"camera_id"})
+
+	jitterBufferFlushesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_jitter_buffer_flushes_total",
+		Help: "Total jitter buffer flushes (capacity or timeout reached), partitioned by camera.",
+	}, []string{"camera_id"})
+
+	playbackLiveLatencyMS := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_playback_live_latency_ms",
+		Help: "Player-reported end-to-end live latency (ms): hub ingest wallclock relayed via WS vs. browser clock, by camera and protocol.",
 	}, []string{"camera_id", "protocol"})
+
+	playbackStallsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_playback_stalls_total",
+		Help: "Player-reported playback stalls (buffering/freezes), by camera and protocol.",
+	}, []string{"camera_id", "protocol"})
+
+	segmentWriteDurationSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "nvr_segment_write_duration_seconds",
+		Help:    "Duration of MP4 segment file writes, partitioned by camera — SD-card degradation early warning.",
+		Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+	}, []string{"camera_id"})
+
+	recordingAuditTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_recording_audit_total",
+		Help: "Recording integrity audit outcomes (mediaprobe on closed segments), by camera and result (ok|zero_duration|probe_error).",
+	}, []string{"camera_id", "result"})
 
 	jitterBufferDepth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "nvr_jitter_buffer_depth",
@@ -517,6 +599,19 @@ func NewMetrics() *Metrics {
 		flvFramesDropped,
 		flvGOPCacheHits,
 		flvGOPCacheMisses,
+		streamHubFramesSentTotal,
+		streamHubBytesInTotal,
+		streamHubHopDwellAvgMS,
+		streamHubHopDwellMaxMS,
+		streamHubDropRateExceededTotal,
+		wsActiveStreams,
+		wsFramesSent,
+		wsFramesDropped,
+		jitterBufferFlushesTotal,
+		playbackLiveLatencyMS,
+		playbackStallsTotal,
+		segmentWriteDurationSeconds,
+		recordingAuditTotal,
 		xiaomiDisconnects,
 		xiaomiReconnects,
 		transcodingJobsTotal,
@@ -532,7 +627,6 @@ func NewMetrics() *Metrics {
 		streamHubFramesInTotal,
 		audioFramesTotal,
 		audioFramesDroppedTotal,
-		frameProcessingDurationSeconds,
 		jitterBufferDepth,
 		jitterBufferReordersTotal,
 		recorderRingBufferDropsTotal,
@@ -614,7 +708,19 @@ func NewMetrics() *Metrics {
 		StreamHubFramesInTotal:         streamHubFramesInTotal,
 		AudioFramesTotal:               audioFramesTotal,
 		AudioFramesDroppedTotal:        audioFramesDroppedTotal,
-		FrameProcessingDurationSeconds: frameProcessingDurationSeconds,
+		StreamHubFramesSentTotal:       streamHubFramesSentTotal,
+		StreamHubBytesInTotal:          streamHubBytesInTotal,
+		StreamHubHopDwellAvgMS:         streamHubHopDwellAvgMS,
+		StreamHubHopDwellMaxMS:         streamHubHopDwellMaxMS,
+		StreamHubDropRateExceededTotal: streamHubDropRateExceededTotal,
+		WSActiveStreams:                wsActiveStreams,
+		WSFramesSent:                   wsFramesSent,
+		WSFramesDropped:                wsFramesDropped,
+		JitterBufferFlushesTotal:       jitterBufferFlushesTotal,
+		PlaybackLiveLatencyMS:          playbackLiveLatencyMS,
+		PlaybackStallsTotal:            playbackStallsTotal,
+		SegmentWriteDurationSeconds:    segmentWriteDurationSeconds,
+		RecordingAuditTotal:            recordingAuditTotal,
 		JitterBufferDepth:              jitterBufferDepth,
 		JitterBufferReordersTotal:      jitterBufferReordersTotal,
 		RecorderRingBufferDropsTotal:   recorderRingBufferDropsTotal,
@@ -725,4 +831,39 @@ func (m *Metrics) IncStorageWriteErrors() {
 		return
 	}
 	m.StorageWriteErrors.Inc()
+}
+
+// SetPlaybackLiveLatency records a player-reported end-to-end live latency
+// (ms) for a camera+protocol, aggregated from /api/telemetry beacons.
+func (m *Metrics) SetPlaybackLiveLatency(cameraID, protocol string, latencyMS float64) {
+	if m == nil || m.PlaybackLiveLatencyMS == nil {
+		return
+	}
+	m.PlaybackLiveLatencyMS.WithLabelValues(cameraID, protocol).Set(latencyMS)
+}
+
+// IncPlaybackStall records a player-reported playback stall (buffering/freeze).
+func (m *Metrics) IncPlaybackStall(cameraID, protocol string) {
+	if m == nil || m.PlaybackStallsTotal == nil {
+		return
+	}
+	m.PlaybackStallsTotal.WithLabelValues(cameraID, protocol).Inc()
+}
+
+// ObserveSegmentWrite records the wall time to persist one MP4 segment —
+// sustained growth is the SD-card/USB degradation early-warning signal.
+func (m *Metrics) ObserveSegmentWrite(cameraID string, d time.Duration) {
+	if m == nil || m.SegmentWriteDurationSeconds == nil {
+		return
+	}
+	m.SegmentWriteDurationSeconds.WithLabelValues(cameraID).Observe(d.Seconds())
+}
+
+// IncRecordingAudit records one recording-integrity audit outcome
+// (ok | zero_duration | probe_error).
+func (m *Metrics) IncRecordingAudit(cameraID, result string) {
+	if m == nil || m.RecordingAuditTotal == nil {
+		return
+	}
+	m.RecordingAuditTotal.WithLabelValues(cameraID, result).Inc()
 }

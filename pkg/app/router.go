@@ -72,6 +72,18 @@ func buildRouter(
 		r.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
 	}
 
+	// Remote pprof diagnostics (#469): when observability.enable_pprof is set,
+	// expose /debug/pprof/* behind the main auth middleware so profiles can be
+	// captured without an SSH tunnel to the loopback listener. Off by default —
+	// profiles contain runtime state, keep them loopback-only unless asked for.
+	if cfg.Observability.EnablePprof {
+		r.Group(func(r chi.Router) {
+			r.Use(authMW)
+			r.Mount("/debug/pprof", http.DefaultServeMux)
+		})
+		slog.Info("remote pprof diagnostics enabled at /debug/pprof (authenticated)")
+	}
+
 	r.Mount("/", handler.Routes())
 
 	// WebDAV

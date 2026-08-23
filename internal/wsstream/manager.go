@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/gorilla/websocket"
 )
@@ -58,6 +59,11 @@ type streamEntry struct {
 	hubSubID  string
 	dropCount atomic.Int64
 
+	// Cached Prometheus counters (#469): resolved once at registration so the
+	// per-frame path pays only an atomic Inc, never a WithLabelValues lookup.
+	sentCounter prometheusCounter
+	dropCounter prometheusCounter
+
 	// Audio fields (zero-value = no audio)
 	audioCodec      byte                  // wire format codec byte
 	audioSampleRate uint32                // sample rate in Hz
@@ -66,6 +72,17 @@ type streamEntry struct {
 	audioCh         chan model.AudioFrame // audio frame channel, nil if no audio
 	audioSubID      string                // StreamHub audio subscription ID
 }
+
+// prometheusCounter is the minimal counter interface (satisfied by
+// prometheus.Counter) — keeps streamEntry free of a direct dependency and
+// trivially nil-safe via the noop implementation.
+type prometheusCounter interface {
+	Inc()
+}
+
+type noopCounter struct{}
+
+func (noopCounter) Inc() {}
 
 // upgrader is the WebSocket upgrader used by ServeWS.
 var upgrader = websocket.Upgrader{
@@ -84,10 +101,20 @@ type Manager struct {
 	maxViewers   int
 	writeBufSize int
 	idleTimeout  time.Duration
+	metrics      *metrics.Metrics // optional (#469)
 }
 
 // Option configures a Manager.
 type Option func(*Manager)
+
+// WithMetrics wires Prometheus counters for active streams, frames sent and
+// dropped (#469 — WS previously had zero metrics despite being the default
+// live protocol candidate).
+func WithMetrics(m *metrics.Metrics) Option {
+	return func(mgr *Manager) {
+		mgr.metrics = m
+	}
+}
 
 // WithMaxViewers sets the maximum concurrent viewers per stream.
 func WithMaxViewers(n int) Option {
@@ -152,13 +179,23 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 		hub:     hub,
 		audioCh: nil, // lazily allocated in SetAudioInfo
 	}
+	// Resolve cached counters once; per-frame path only Inc()s (#469).
+	if m.metrics != nil {
+		entry.sentCounter = m.metrics.WSFramesSent.WithLabelValues(camID)
+		entry.dropCounter = m.metrics.WSFramesDropped.WithLabelValues(camID)
+		m.metrics.WSActiveStreams.WithLabelValues(camID).Inc()
+	} else {
+		entry.sentCounter = noopCounter{}
+		entry.dropCounter = noopCounter{}
+	}
 
-	// Subscribe to recorder's StreamHub for live frames
+	// Subscribe to recorder's StreamHub for live frames. SubscribeMsg (full
+	// FrameMsg) so IngestAt wallclock reaches the wire for e2e latency (#469).
 	if hub != nil {
 		hubSubID := "ws-" + camID
 		entry.hubSubID = hubSubID
-		_ = hub.Subscribe(hubSubID, func(pts int64, au [][]byte) {
-			m.writeFrame(camID, pts, au)
+		_ = hub.SubscribeMsg(hubSubID, func(msg model.FrameMsg) {
+			m.writeFrameMsg(camID, msg)
 		})
 	}
 
@@ -216,6 +253,9 @@ func (m *Manager) UnregisterStream(camID string) {
 		v.cancel()
 	}
 	entry.viewerMu.Unlock()
+	if m.metrics != nil {
+		m.metrics.WSActiveStreams.WithLabelValues(camID).Dec()
+	}
 	wsLogger.Load().Info("WebSocket stream unregistered", "camera_id", camID)
 	if cnt := entry.dropCount.Load(); cnt > 0 {
 		wsLogger.Load().Info("stream drop count", "camera_id", camID, "total_drops", cnt)
@@ -298,10 +338,16 @@ func (m *Manager) RebindHub(camID string, hub *model.StreamHub) {
 		// Unsubscribe OUTSIDE m.mu (drain calls writeFrame → RLock).
 		oldHub.Unsubscribe(subID)
 	}
-	_ = hub.Subscribe(subID, func(pts int64, au [][]byte) {
-		m.writeFrame(camID, pts, au)
+	_ = hub.SubscribeMsg(subID, func(msg model.FrameMsg) {
+		m.writeFrameMsg(camID, msg)
 	})
 	wsLogger.Load().Info("WebSocket stream rebound to new StreamHub", "camera_id", camID)
+}
+
+// ViewerCount returns the number of active viewers for a stream (public —
+// used by the /api/streams flow view, #469).
+func (m *Manager) ViewerCount(camID string) int {
+	return m.viewerCount(camID)
 }
 
 // viewerCount returns the number of active viewers for a stream.
@@ -319,18 +365,22 @@ func (m *Manager) viewerCount(camID string) int {
 
 // writeH264 queues an H.264 access unit for WebSocket output. Non-blocking.
 func (m *Manager) writeH264(camID string, pts int64, au [][]byte) {
-	m.writeFrame(camID, pts, au)
+	m.writeFrameMsg(camID, model.FrameMsg{PTS: pts, AU: au, IngestAt: time.Now().UnixNano()})
 }
 
 // writeH265 queues an H.265 access unit for WebSocket output. Non-blocking.
 func (m *Manager) writeH265(camID string, pts int64, au [][]byte) {
-	m.writeFrame(camID, pts, au)
+	m.writeFrameMsg(camID, model.FrameMsg{PTS: pts, AU: au, IngestAt: time.Now().UnixNano()})
 }
 
-func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
+// writeFrameMsg queues a full FrameMsg (carrying IngestAt) for WebSocket
+// output. Non-blocking; counts sent/dropped via cached Prometheus counters.
+func (m *Manager) writeFrameMsg(camID string, msg model.FrameMsg) {
+	au := msg.AU
 	if len(au) == 0 {
 		return
 	}
+	pts := msg.PTS
 
 	m.mu.RLock()
 	entry, ok := m.streams[camID]
@@ -376,7 +426,8 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 		traceID = fmt.Sprintf("%s-%d", camID, pts)
 	}
 	select {
-	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
+	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe, IngestAt: msg.IngestAt}:
+		entry.sentCounter.Inc()
 		slog.Debug(
 			"frame_trace",
 			"trace_id", traceID,
@@ -387,6 +438,7 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	default:
 		// Buffer full, drop frame
 		cnt := entry.dropCount.Add(1)
+		entry.dropCounter.Inc()
 		slog.Debug(
 			"frame_trace",
 			"trace_id", traceID,
@@ -488,6 +540,7 @@ func (m *Manager) distributeVideoFrame(entry *streamEntry, camID string, msg mod
 		PTS:        msg.PTS,
 		IsKeyframe: msg.IsKeyframe,
 		NALUs:      msg.AU,
+		IngestAt:   msg.IngestAt / 1e6, // unix nano → ms on the wire
 	})
 	if err != nil {
 		wsLogger.Load().Warn("WebSocket encode frame error", "camera_id", camID, "error", err)
@@ -505,6 +558,7 @@ func (m *Manager) distributeVideoFrame(entry *streamEntry, camID string, msg mod
 		default:
 			// Slow client — drop frame
 			cnt := entry.dropCount.Add(1)
+			entry.dropCounter.Inc()
 			if cnt%100 == 0 {
 				wsLogger.Load().Warn("frames dropped", "camera_id", camID, "total_drops", cnt)
 			}

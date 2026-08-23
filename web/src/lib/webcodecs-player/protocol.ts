@@ -55,12 +55,18 @@ export interface CodecInfo {
 /**
  * VideoFrame: a single video frame with its NAL units.
  * Binary wire format:
- *   {type:2}{pts:8}{is_keyframe:1}{nalu_count:2}{nalu1_len:4}{nalu1}...
+ *   {type:2}{pts:8}{is_keyframe:1}{nalu_count:2}{nalu1_len:4}{nalu1}...[ingest_at:8_BE]
+ *
+ * The trailing ingest_at (unix ms wallclock stamped at hub entry, #469) is a
+ * backwards-compatible extension: older servers omit it; older clients stop
+ * parsing at the last NALU and ignore the remaining bytes. Present when ≥8
+ * bytes remain after the NALUs — used to measure end-to-end live latency.
  */
 export interface VideoFrame {
   pts: number; // 90kHz clock, fits in JS safe integer range
   isKeyframe: boolean;
   nalus: Uint8Array[];
+  ingestAtMs?: number; // unix ms wallclock at hub entry; undefined when server omits it
 }
 
 /**
@@ -177,7 +183,14 @@ export function decodeVideoFrame(data: ArrayBuffer): VideoFrame {
     off += naluLen;
   }
 
-  return { pts, isKeyframe, nalus };
+  // Trailing ingest_at extension (#469): present when ≥8 bytes remain.
+  let ingestAtMs: number | undefined;
+  if (data.byteLength - off >= 8) {
+    const v = Number(dv.getBigInt64(off));
+    if (v > 0) ingestAtMs = v;
+  }
+
+  return { pts, isKeyframe, nalus, ingestAtMs };
 }
 
 // ─── AudioCodecInfo Decode ────────────────────────────────────────────────

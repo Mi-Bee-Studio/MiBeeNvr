@@ -148,6 +148,24 @@ func (cm *CameraManager) snapshotHub(cameraID string) *model.StreamHub {
 	return cm.loadSnapshot().hubs[cameraID]
 }
 
+// snapshotHubs returns a copy of the camera_id → hub map for iteration
+// (stats flusher, flow-path API). Copy avoids holding the snapshot while
+// iterating.
+func (cm *CameraManager) snapshotHubs() map[string]*model.StreamHub {
+	s := cm.loadSnapshot()
+	hubs := make(map[string]*model.StreamHub, len(s.hubs))
+	for id, hub := range s.hubs {
+		hubs[id] = hub
+	}
+	return hubs
+}
+
+// Hubs is the public read-only view of all registered StreamHubs, used by the
+// /api/streams flow-path endpoint (#469).
+func (cm *CameraManager) Hubs() map[string]*model.StreamHub {
+	return cm.snapshotHubs()
+}
+
 // snapshotConfig returns the CameraConfig pointer for cameraID, or nil.
 func (cm *CameraManager) snapshotConfig(cameraID string) *config.CameraConfig {
 	return cm.loadSnapshot().configs[cameraID]
