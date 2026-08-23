@@ -105,15 +105,26 @@ func TestStreamHub_AddOnDropFiresAllCallbacks(t *testing.T) {
 		mu.Unlock()
 	})
 
-	// Blocking consumer so the buffer (size 1) overflows.
+	// Blocking consumer so the buffer (size 1) overflows. firstRecv parks the
+	// drain goroutine INSIDE the callback, so subsequent broadcasts face a
+	// deterministic buffer state (no race between fill and drain).
 	block := make(chan struct{})
+	firstRecv := make(chan struct{})
+	var gotFirst sync.Once
 	require.NoError(t, hub.Subscribe("stuck", func(pts int64, au [][]byte) {
+		gotFirst.Do(func() { close(firstRecv) })
 		<-block
 	}))
 
-	hub.Broadcast(1, [][]byte{{0x01}}, false) // fills the buffer
-	hub.Broadcast(2, [][]byte{{0x02}}, false) // overflows → drop (isIDR=false)
-	hub.Broadcast(3, [][]byte{{0x03}}, false) // another drop
+	hub.Broadcast(1, [][]byte{{0x01}}, false) // consumed by drain (parks in cb)
+	select {
+	case <-firstRecv:
+	case <-time.After(2 * time.Second):
+		t.Fatal("drain did not receive the first frame")
+	}
+	hub.Broadcast(2, [][]byte{{0x02}}, false) // fills the buffer
+	hub.Broadcast(3, [][]byte{{0x03}}, false) // overflows → drop (isIDR=false)
+	hub.Broadcast(4, [][]byte{{0x04}}, false) // another drop
 
 	require.Eventually(t, func() bool {
 		mu.Lock()
@@ -132,8 +143,13 @@ func TestStreamHub_TrySendIDRCountsEvictedAndIDRDrops(t *testing.T) {
 	hub.SetCameraID("cam-idr")
 	hub.consumerBufferSize = 3
 
+	// Same determinism trick as above: park drain inside the callback after
+	// the first frame so the buffer fill state is exact.
 	block := make(chan struct{})
+	firstRecv := make(chan struct{})
+	var gotFirst sync.Once
 	require.NoError(t, hub.Subscribe("stuck", func(pts int64, au [][]byte) {
+		gotFirst.Do(func() { close(firstRecv) })
 		<-block
 	}))
 	defer func() {
@@ -142,8 +158,14 @@ func TestStreamHub_TrySendIDRCountsEvictedAndIDRDrops(t *testing.T) {
 		hub.Unsubscribe("stuck")
 	}()
 
-	// Fill the buffer with 3 non-IDR frames.
-	for i := range 3 {
+	hub.Broadcast(0, [][]byte{{0x00}}, false) // consumed by drain (parks in cb)
+	select {
+	case <-firstRecv:
+	case <-time.After(2 * time.Second):
+		t.Fatal("drain did not receive the first frame")
+	}
+	// Fill the buffer (capacity 3) with 3 more non-IDR frames.
+	for i := 1; i <= 3; i++ {
 		hub.Broadcast(int64(i), [][]byte{{byte(i)}}, false)
 	}
 	require.Equal(t, int64(0), hub.Drops("stuck"))
@@ -154,11 +176,11 @@ func TestStreamHub_TrySendIDRCountsEvictedAndIDRDrops(t *testing.T) {
 	snap := hub.Snapshot()
 	c := snap.Consumers[0]
 	require.Equal(t, int64(1), c.Drops, "evicted non-IDR must count as a drop")
-	require.Equal(t, int64(4), c.Sends, "3 initial + 1 IDR enqueued")
+	require.Equal(t, int64(5), c.Sends, "1 parked + 3 buffered + 1 IDR enqueued")
 	require.Equal(t, int64(0), c.IDRDrops)
 
-	// Buffer now holds [f1, f2, IDR] — fill remaining space with IDRs only,
-	// so the next IDR finds no evictable non-IDR frame and is itself dropped.
+	// Buffer now holds [f2, f3, IDR] — send more IDRs only, so an IDR
+	// eventually finds no evictable non-IDR frame and is itself dropped.
 	hub.Broadcast(901, [][]byte{{0x65}}, true)
 	hub.Broadcast(902, [][]byte{{0x65}}, true)
 	hub.Broadcast(903, [][]byte{{0x65}}, true)
