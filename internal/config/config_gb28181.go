@@ -34,10 +34,12 @@ type GB28181ServerConfig struct {
 	// CatalogInterval is how often the platform refreshes the device catalog.
 	CatalogInterval string `yaml:"catalog_interval"` // default "30m"
 
-	// TCPMode forces TCP media transport (passive). Default false (UDP).
+	// TCPMode forces TCP media transport (passive).
 	//
-	// Deprecated: superseded by MediaTransport — kept as a YAML-compat
-	// alias (true → "tcp-passive").
+	// Deprecated: superseded by MediaTransport — no longer influences the
+	// default (which is now "tcp-passive", #460) because an explicit
+	// `tcp_mode: false` is indistinguishable from unset. Kept as a YAML-compat
+	// no-op; set media_transport explicitly instead.
 	TCPMode bool `yaml:"tcp_mode"`
 
 	// TCPFraming selects the TCP-passive framing: "rfc4571" (2-byte length
@@ -45,10 +47,11 @@ type GB28181ServerConfig struct {
 	TCPFraming string `yaml:"tcp_framing"` // default "auto"
 
 	// MediaTransport selects the RTP media transport for INVITE sessions:
-	// "udp" (default), "tcp-passive" (NVR listens, device connects — the
-	// Hikvision/Dahua default), or "tcp-active" (NVR dials the device's
-	// answer address). Signaling transport is independent (SIPTransport).
-	MediaTransport string `yaml:"media_transport"` // default "udp"
+	// "tcp-passive" (default — NVR listens, device connects; UDP measured ~16%
+	// frame loss on real GB cameras, #460), "udp", or "tcp-active" (NVR dials
+	// the device's answer address). Signaling transport is independent
+	// (SIPTransport).
+	MediaTransport string `yaml:"media_transport"` // default "tcp-passive"
 
 	// SIPTransport selects the SIP signaling listener: "udp" (default) or
 	// "tcp". "tcp" adds a SIP-over-TCP listener alongside UDP — devices pick

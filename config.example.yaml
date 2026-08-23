@@ -380,7 +380,10 @@ observability:
 #   realm: "3402000000"             # SIP digest auth realm (10-digit area code)
 #   password: ""                    # digest password; EMPTY = no auth (see guide)
 #   port_range: "30000-30050"       # RTP media port pool
-#   media_transport: "udp"          # udp | tcp-passive | tcp-active
+#   media_transport: "tcp-passive" # udp | tcp-passive | tcp-active
+#                                  # tcp-passive is the default: UDP media measured
+#                                  # ~16% frame loss on real GB cameras (macroblock
+#                                  # corruption until the next IDR) — see #460
 #   subscribe_catalog: true         # realtime channel-change NOTIFY
 #   subscribe_alarm: true           # alarm subscription
 #   subscribe_mobile_position: false
