@@ -64,7 +64,13 @@ func DefaultAdaptiveConfig() AdaptiveConfig {
 		CalmThreshold:     60 * time.Second,
 		TimelapseInterval: 30 * time.Second,
 		SpikeFactor:       5.0,
-		MaxGOPBuffer:      16 << 20, // 16MB ≈ 64s @ 2Mbps — far above any sane GOP
+		// 32MB: the ring must hold one full camera GOP. 16MB was sized for
+		// ~4s GOPs; a 2K H.265 camera whose IDR interval approaches the 30s
+		// timelapse cadence (~12-15MB average, more with motion spikes)
+		// overflows it, breaking the ring — the next timelapse exit then
+		// flushes nothing and its P-frames land with dangling references
+		// ("Could not find ref with POC" at decode, issue #485 field data).
+		MaxGOPBuffer: 32 << 20, // ≈ 75s @ 3.5Mbps — above a 30s GOP at 2K
 	}
 }
 
@@ -158,7 +164,7 @@ func newAdaptiveTracker(cfg AdaptiveConfig, camID string, log *slog.Logger) *ada
 		cfg.TimelapseInterval = 30 * time.Second
 	}
 	if cfg.MaxGOPBuffer <= 0 {
-		cfg.MaxGOPBuffer = 16 << 20
+		cfg.MaxGOPBuffer = 32 << 20
 	}
 	return &adaptiveTracker{
 		cfg:       cfg,
@@ -347,7 +353,15 @@ func (t *adaptiveTracker) appendGOP(nalu []byte, isIDR bool, now time.Time) {
 	size := int64(len(nalu))
 	if t.gopBytes+size > t.cfg.MaxGOPBuffer {
 		// Pathological GOP (e.g. intra-refresh encoders with no discrete
-		// IDR): retaining is pointless — degrade to no-flush transitions.
+		// IDR, or an IDR interval long enough to overflow the cap): retaining
+		// is pointless — degrade to no-flush transitions. The next exit
+		// writes its P-frames with dangling references (decode artifacts
+		// until the following IDR), so make the condition observable.
+		if !t.gopBroken {
+			t.log.Warn("adaptive GOP pre-buffer overflowed — timelapse exits will flush nothing until the next IDR",
+				"gop_bytes", t.gopBytes, "max_gop_buffer", t.cfg.MaxGOPBuffer,
+				"hint", "raise adaptive.gop_buffer_bytes for this camera")
+		}
 		t.gopBroken = true
 		t.gop = t.gop[:0]
 		t.gopBytes = 0

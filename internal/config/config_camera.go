@@ -144,7 +144,9 @@ type AdaptiveRecordingConfig struct {
 	// never goes sparse (issue #475 field data).
 	SpikeFactor float64 `yaml:"spike_factor,omitempty" json:"spike_factor,omitempty"`
 	// GOPBufferBytes caps the in-memory GOP pre-buffer that makes the
-	// timelapse→normal transition seamless. Default 16MB. Range 1–64MB.
+	// timelapse→normal transition seamless. Default 32MB (must hold one full
+	// camera GOP — 2K cameras with IDR intervals near the 30s timelapse
+	// cadence overflow 16MB and lose the flush, issue #485). Range 1–64MB.
 	GOPBufferBytes int64 `yaml:"gop_buffer_bytes,omitempty" json:"gop_buffer_bytes,omitempty"`
 }
 
