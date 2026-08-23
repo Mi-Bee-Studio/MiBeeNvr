@@ -7,6 +7,11 @@
 //	NORMAL ──(activity signal calm for CalmThreshold)──▶ TIMELAPSE
 //	TIMELAPSE ──(single P-frame size spike)──▶ NORMAL + GOP flush
 //
+// While in NORMAL, only a spike BURST (2+ oversized P-frames within 2s) resets
+// the calm accumulation — real motion produces clustered spikes, while
+// encoders emit isolated oversized P-frames even in fully static scenes
+// (issue #466 field data). Exiting TIMELAPSE takes a single spike.
+//
 // In TIMELAPSE mode only one keyframe per TimelapseInterval reaches the muxer
 // (audio is dropped too); everything else is skipped on disk but retained in
 // an in-memory GOP ring — the frames since the last IDR, which form a
@@ -40,11 +45,19 @@ type AdaptiveConfig struct {
 }
 
 // DefaultAdaptiveConfig mirrors the validated ranges in config.validate.
+//
+// SpikeFactor 5.0 is calibrated on real-camera capture (issue #466): H.264/H.265
+// encoders emit isolated oversized P-frames in fully static scenes (noise /
+// intra-refresh / AEC adjustments), so a 3.0 threshold flags ~1.3% of P-frames
+// as spikes on a motionless indoor camera — combined with the single-spike
+// calm reset that made TIMELAPSE unreachable (max measured spike-free stretch
+// 50s < 60s CalmThreshold). 5.0 keeps a genuinely busy camera in NORMAL while
+// letting a static one go sparse.
 func DefaultAdaptiveConfig() AdaptiveConfig {
 	return AdaptiveConfig{
 		CalmThreshold:     60 * time.Second,
 		TimelapseInterval: 30 * time.Second,
-		SpikeFactor:       3.0,
+		SpikeFactor:       5.0,
 		MaxGOPBuffer:      16 << 20, // 16MB ≈ 64s @ 2Mbps — far above any sane GOP
 	}
 }
@@ -86,7 +99,14 @@ type adaptiveTracker struct {
 	median    float64
 	mad       float64
 	lastCalc  time.Time
-	calmSince time.Time // last spike (or start); sustained calm enters TIMELAPSE
+	calmSince time.Time // last motion burst (or start); sustained calm enters TIMELAPSE
+
+	// Spike-burst detection (issue #466): only CLUSTERED spikes (>=2 within
+	// adaptiveBurstWindow) reset the calm accumulation while in NORMAL — real
+	// motion produces runs of consecutive oversized P-frames, encoder noise
+	// produces isolated single spikes. Exiting TIMELAPSE still happens on any
+	// single spike (better to over-record than to miss an event start).
+	recentSpikes []time.Time
 
 	// Sparse-mode write cadence.
 	lastSparseWrite time.Time
@@ -104,7 +124,7 @@ type adaptiveTracker struct {
 // TIMELAPSE entry requires a full CalmThreshold of calm after connect.
 func newAdaptiveTracker(cfg AdaptiveConfig, camID string, log *slog.Logger) *adaptiveTracker {
 	if cfg.SpikeFactor <= 0 {
-		cfg.SpikeFactor = 3.0
+		cfg.SpikeFactor = 5.0
 	}
 	if cfg.CalmThreshold <= 0 {
 		cfg.CalmThreshold = 60 * time.Second
@@ -125,6 +145,18 @@ func newAdaptiveTracker(cfg AdaptiveConfig, camID string, log *slog.Logger) *ada
 
 const adaptivePWindow = 1200 // rolling baseline samples (~60s @ 20fps)
 
+const (
+	// adaptiveBurstWindow is how close two P-frame spikes must be to count as
+	// a motion burst (vs isolated encoder noise). Real motion produces
+	// consecutive/clustered spikes; static-scene encoder noise produces single
+	// spikes separated by seconds (issue #466 field data: isolated spikes up
+	// to 1.3% of P-frames on a motionless camera, max spike-free stretch 50s).
+	adaptiveBurstWindow = 2 * time.Second
+	// adaptiveBurstCount is the spike count within the window that resets the
+	// calm accumulation.
+	adaptiveBurstCount = 2
+)
+
 // observe ingests one VCL NALU (without start code), updates the activity
 // baseline and GOP ring, and executes mode transitions. It returns whether
 // this frame is an activity spike, and — on the TIMELAPSE→NORMAL transition —
@@ -142,23 +174,68 @@ func (t *adaptiveTracker) observe(nalu []byte, isIDR bool, now time.Time) (spike
 	if !isIDR {
 		spike = t.classify(size, now)
 		if spike {
-			t.calmSince = now
+			t.recordSpike(now)
 		}
 	}
 
 	switch t.mode {
 	case adaptiveNormal:
+		// Only a spike BURST (clustered oversized P-frames) counts as motion
+		// and resets the calm accumulation; an isolated spike is encoder
+		// noise and must not keep a static camera recording at full rate
+		// forever (issue #466).
+		if spike && t.spikeBurst(now) {
+			t.calmSince = now
+		}
 		if now.Sub(t.calmSince) >= t.cfg.CalmThreshold {
 			t.setMode(adaptiveTimelapse, now)
 			t.lastSparseWrite = now
 		}
 	case adaptiveTimelapse:
 		if spike {
+			// Any single spike exits sparse mode. The exit itself is evidence
+			// of activity, so a fresh CalmThreshold window is required before
+			// re-entering TIMELAPSE (prevents spike → exit → instant re-entry
+			// oscillation, since the burst rule above does not fire on
+			// isolated spikes).
+			t.calmSince = now
 			flush = t.takeGOP()
 			t.setMode(adaptiveNormal, now)
 		}
 	}
 	return spike, flush
+}
+
+// recordSpike appends a spike timestamp, trimming entries outside the burst
+// window.
+func (t *adaptiveTracker) recordSpike(now time.Time) {
+	cutoff := now.Add(-adaptiveBurstWindow)
+	drop := 0
+	for _, at := range t.recentSpikes {
+		if at.Before(cutoff) {
+			drop++
+			continue
+		}
+		break
+	}
+	t.recentSpikes = append(t.recentSpikes[drop:drop:drop], now)
+}
+
+// spikeBurst reports whether the recent spikes within the burst window reach
+// adaptiveBurstCount (a motion burst, not isolated noise).
+func (t *adaptiveTracker) spikeBurst(now time.Time) bool {
+	cutoff := now.Add(-adaptiveBurstWindow)
+	n := 0
+	for i := len(t.recentSpikes) - 1; i >= 0; i-- {
+		if t.recentSpikes[i].Before(cutoff) {
+			break
+		}
+		n++
+		if n >= adaptiveBurstCount {
+			return true
+		}
+	}
+	return false
 }
 
 // shouldWriteSparse reports whether a frame observed in TIMELAPSE mode may
@@ -266,4 +343,88 @@ func (t *adaptiveTracker) setMode(m adaptiveMode, now time.Time) {
 		"mode", m.String(), "transitions", t.transitions,
 		"calm_threshold", t.cfg.CalmThreshold.String(),
 		"timelapse_interval", t.cfg.TimelapseInterval.String())
+}
+
+// AdaptiveFrame is one retained GOP frame exposed to plugin-style recorders
+// outside this package (see AdaptiveGate).
+type AdaptiveFrame struct {
+	Nalu  []byte
+	IsIDR bool
+	At    time.Time
+}
+
+// AdaptiveGate is the exported per-connection adaptive-recording gate for
+// recorders that do not inherit baseRecorder (e.g. the Xiaomi MISS recorder,
+// issue #468). It wraps adaptiveTracker with the same semantics as the
+// writeFrames gate: sustained calm drops write density to one keyframe per
+// TimelapseInterval; an activity spike flushes the retained GOP and resumes
+// full-rate writing. Rebuild per connection so a reconnect always starts in
+// NORMAL mode with a fresh baseline.
+type AdaptiveGate struct {
+	t *adaptiveTracker
+}
+
+// NewAdaptiveGate arms an adaptive gate; cfg is resolved camera config
+// (recorder.DefaultAdaptiveConfig for unset fields).
+func NewAdaptiveGate(cfg AdaptiveConfig, camID string, log *slog.Logger) *AdaptiveGate {
+	return &AdaptiveGate{t: newAdaptiveTracker(cfg, camID, log)}
+}
+
+// Observe classifies one VCL NALU (without start code) and returns the write
+// decision:
+//
+//	spike — the frame is an activity spike (diagnostics)
+//	skip  — drop the frame's DISK write (sparse mode); live fan-out is the
+//	        caller's business and must keep flowing
+//	flush — retained GOP frames to write BEFORE the current frame (non-empty
+//	        only on the timelapse→normal exit; starts with an IDR)
+//
+// After a non-skip sparse keyframe write, the caller need not stamp anything —
+// the cadence is stamped here, mirroring the base recorder.
+func (g *AdaptiveGate) Observe(nalu []byte, isIDR bool, now time.Time) (spike, skip bool, flush []AdaptiveFrame) {
+	spike, fl := g.t.observe(nalu, isIDR, now)
+	if len(fl) > 0 {
+		// Timelapse exit: hand the retained GOP to the caller to write BEFORE
+		// the current frame. Keyed on the flush return, not on mode — observe()
+		// has already switched to NORMAL (same fix as writeFrames).
+		for _, f := range fl {
+			flush = append(flush, AdaptiveFrame{Nalu: f.nalu, IsIDR: f.isIDR, At: f.at})
+		}
+	}
+	if g.t.mode == adaptiveTimelapse && !spike {
+		if !g.t.shouldWriteSparse(isIDR, now) {
+			return spike, true, flush
+		}
+		if isIDR {
+			g.t.lastSparseWrite = now
+		}
+	}
+	return spike, false, flush
+}
+
+// Timelapse reports whether the gate is in sparse mode (callers use it to
+// gate DISK audio writes, which sparse mode drops; live audio continues).
+func (g *AdaptiveGate) Timelapse() bool {
+	return g.t.mode == adaptiveTimelapse
+}
+
+// ResolveAdaptiveConfig builds a resolved AdaptiveConfig from optional
+// overrides, defaulting unset fields. Shared by the camera-manager factory
+// (RTSP/ONVIF paths) and plugin-style recorders (Xiaomi) so both resolve
+// identically. String durations follow the frame_watchdog_timeout convention.
+func ResolveAdaptiveConfig(calmThreshold, timelapseInterval string, spikeFactor float64, gopBufferBytes int64) AdaptiveConfig {
+	ac := DefaultAdaptiveConfig()
+	if d, err := time.ParseDuration(calmThreshold); err == nil && d > 0 {
+		ac.CalmThreshold = d
+	}
+	if d, err := time.ParseDuration(timelapseInterval); err == nil && d > 0 {
+		ac.TimelapseInterval = d
+	}
+	if spikeFactor > 0 {
+		ac.SpikeFactor = spikeFactor
+	}
+	if gopBufferBytes > 0 {
+		ac.MaxGOPBuffer = gopBufferBytes
+	}
+	return ac
 }

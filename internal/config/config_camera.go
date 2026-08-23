@@ -130,7 +130,8 @@ type AdaptiveRecordingConfig struct {
 	// Default "30s". Range 5s–10m.
 	TimelapseInterval string `yaml:"timelapse_interval,omitempty" json:"timelapse_interval,omitempty"`
 	// SpikeFactor is how many (MAD-floored) deviations above the P-frame size
-	// baseline count as an activity spike. Default 3.0. Range 1.5–10.
+	// baseline count as an activity spike. Default 5.0 (real-camera noise
+	// calibration, issue #466). Range 1.5–10.
 	SpikeFactor float64 `yaml:"spike_factor,omitempty" json:"spike_factor,omitempty"`
 	// GOPBufferBytes caps the in-memory GOP pre-buffer that makes the
 	// timelapse→normal transition seamless. Default 16MB. Range 1–64MB.

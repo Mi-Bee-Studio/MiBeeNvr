@@ -571,13 +571,21 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			now := time.Now()
 			isIDR := b.driver.isIDR(typ)
 			spike, flush := b.adaptive.observe(nalu, isIDR, now)
-			if b.adaptive.mode == adaptiveTimelapse {
-				if spike {
-					// Activity burst: resume full-rate writing. The flushed
-					// GOP (complete reference chain since the last IDR) is
-					// written first so the resume has no missing references.
-					b.writeFlushedGOP(flush)
-				} else if !b.adaptive.shouldWriteSparse(isIDR, now) {
+			if len(flush) > 0 {
+				// Activity burst exiting timelapse: resume full-rate writing with
+				// the flushed GOP (complete reference chain since the last IDR)
+				// FIRST, so the resume has no missing references. This must be
+				// keyed on the flush return, not on mode: observe() has already
+				// switched to NORMAL by the time it returns, so the previous
+				// `if mode == adaptiveTimelapse { if spike { writeFlushedGOP } }`
+				// never ran — the exit frame was written with dangling references
+				// (decode artifacts until the next IDR) and the retained pre-buffer
+				// was silently dropped (found via the AdaptiveGate facade test,
+				// issue #466 field test).
+				b.writeFlushedGOP(flush)
+			}
+			if b.adaptive.mode == adaptiveTimelapse && !spike {
+				if !b.adaptive.shouldWriteSparse(isIDR, now) {
 					// Sparse: the frame is retained in the GOP ring, not
 					// written; a later spike can still flush it.
 					if sa := b.adaptive.mode == adaptiveTimelapse; sa != sparseAudio {

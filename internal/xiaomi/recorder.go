@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -76,6 +77,10 @@ type XiaomiRecorderConfig struct {
 	// HLS) but no segments are written to disk. Matches baseRecorder.RecordEnabled
 	// semantics so recording_enabled=false takes effect on Xiaomi cameras.
 	RecordEnabled *bool
+	// Adaptive enables dynamic-timelapse write density (issue #435; wired for
+	// Xiaomi cameras in issue #468 — previously recording_mode: adaptive was
+	// silently ignored by this recorder). Nil = plain continuous recording.
+	Adaptive *recorder.AdaptiveConfig
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -119,6 +124,15 @@ type XiaomiRecorder struct {
 	// MISS client reference for external commands (MotorControl, GetDeviceInfo).
 	missClient *MISSClient
 	missMu     sync.Mutex
+
+	// Adaptive write-density gate (issue #435/#468). Rebuilt per connection in
+	// connectAndRecord so a reconnect always starts in NORMAL mode; nil when
+	// adaptive recording is not configured. Owned by the video NALU processing
+	// path.
+	adaptive *recorder.AdaptiveGate
+	// audioSparse gates DISK writes of audio while the adaptive gate is in
+	// sparse (timelapse) mode; live audio broadcast continues.
+	audioSparse atomic.Bool
 }
 
 // Interface compliance check.
@@ -527,6 +541,13 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	r.pps = nil
 	r.vps = nil
 	r.audioCodecID = 0
+	// Rebuild the adaptive gate per connection: a reconnect always starts in
+	// NORMAL mode with a fresh activity baseline (a reconnect storm can't
+	// oscillate the mode).
+	if r.cfg.Adaptive != nil {
+		r.adaptive = recorder.NewAdaptiveGate(*r.cfg.Adaptive, r.cfg.CameraID, xiaomiLogger)
+		r.audioSparse.Store(false)
+	}
 
 	var lastTimestamp uint64
 
@@ -638,6 +659,21 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 
+	// Adaptive write-density gate (issue #435/#468) — see processH265NALU.
+	if r.adaptive != nil {
+		now := time.Now()
+		isIDR := naluType == 5
+		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
+		r.audioSparse.Store(r.adaptive.Timelapse())
+		if len(flush) > 0 {
+			r.writeFlushedGOP(flush)
+		}
+		if skip {
+			r.forwardHLS(nalu)
+			return
+		}
+	}
+
 	if r.muxer == nil {
 		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH264))
 		if err != nil {
@@ -741,6 +777,25 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	// Wait for IDR frame (types 19=IDR_W_RADL, 20=IDR_N_LP).
 	if r.muxer == nil && naluType != 19 && naluType != 20 {
 		return
+	}
+
+	// Adaptive write-density gate (issue #435/#468): while the compressed-domain
+	// activity signal is calm only sparse keyframes reach the disk; on a spike
+	// the retained GOP ring is flushed first so the resume has no missing
+	// references. Live fan-out (forwardHLS → StreamHub) keeps flowing for every
+	// frame — the gate changes write density, never the connection.
+	if r.adaptive != nil {
+		now := time.Now()
+		isIDR := naluType == 19 || naluType == 20
+		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
+		r.audioSparse.Store(r.adaptive.Timelapse())
+		if len(flush) > 0 {
+			r.writeFlushedGOP(flush)
+		}
+		if skip {
+			r.forwardHLS(nalu)
+			return
+		}
 	}
 
 	if r.muxer == nil {
@@ -903,13 +958,43 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	aid := r.audioTrackID
 	start := r.segStart
 	r.mu.Unlock()
-	if m != nil && aid > 0 {
+	// Sparse (adaptive-timelapse) mode drops DISK audio, live audio continues
+	// (mirrors the built-in H264/H265 recorders).
+	if m != nil && aid > 0 && !r.audioSparse.Load() {
 		pts := time.Since(start)
 		// Audio frame duration: 20ms (G.711 and Opus both use 20ms frames).
 		dur := 20 * time.Millisecond
 		if err := m.WriteAudioSample(aid, payload, pts, dur); err != nil {
 			xiaomiLogger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
 		}
+	}
+}
+
+// writeFlushedGOP writes the adaptive gate's retained GOP frames (complete
+// reference chain since the last IDR) into the current segment on the
+// timelapse→normal transition, mirroring baseRecorder.writeFlushedGOP. If the
+// segment just rotated (muxer == nil) the flush is dropped — the triggering
+// frame itself still creates a fresh segment on its IDR, so at worst one
+// pre-buffer is lost at a rotation boundary; no corrupt references result.
+func (r *XiaomiRecorder) writeFlushedGOP(frames []recorder.AdaptiveFrame) {
+	if r.muxer == nil {
+		return
+	}
+	for _, f := range frames {
+		pts := f.At.Sub(r.segStart)
+		if pts < 0 {
+			pts = 0
+		}
+		dur := f.At.Sub(r.lastFrameTime)
+		if dur < time.Millisecond {
+			dur = time.Millisecond
+		}
+		if err := r.muxer.WriteSample(r.trackID, f.Nalu, pts, dur); err != nil {
+			xiaomiLogger.Error("failed to write flushed sample", "camera_id", r.cfg.CameraID, "error", err)
+			continue
+		}
+		r.lastFrameTime = f.At
+		r.frameCount++
 	}
 }
 
