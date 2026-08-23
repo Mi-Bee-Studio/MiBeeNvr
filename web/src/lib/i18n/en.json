@@ -1713,7 +1713,6 @@
   "settings.motionAwareCleanupOn": "Evicts boring segments first",
   "settings.motionAwareCleanupOff": "Evicts oldest first",
   "settings.motionAwareCleanupHint": "When the disk threshold is hit, delete the lowest-motion (calmest) recordings first; off = oldest-first.",
-  "nav.flow": "Flow",
   "flow.title": "Stream Flow",
   "flow.subtitle": "Live frame pipeline: producer → StreamHub → consumers (fps/bitrate derived by diffing polls)",
   "flow.updatedAt": "Updated",
@@ -1732,5 +1731,11 @@
   "flow.noViewers": "no viewers",
   "flow.liveLatency": "end-to-end latency",
   "health.stability.uptime": "24h uptime",
-  "health.stability.mtbf": "mean time between failures"
+  "health.stability.mtbf": "mean time between failures",
+  "dashboard.tab.flow": "Flow",
+  "detail.activity.title": "Activity",
+  "detail.activity.score": "activity score",
+  "detail.activity.noScore": "not analyzed",
+  "detail.activity.current": "current",
+  "detail.activity.hint": "green=calm → red=busy; click to jump to that recording"
 }
