@@ -75,6 +75,7 @@ type Metrics struct {
 	// Segment write + audit metrics (#469 Phase 5)
 	SegmentWriteDurationSeconds *prometheus.HistogramVec // labels: camera_id — SD-card degradation early warning
 	RecordingAuditTotal         *prometheus.CounterVec   // labels: camera_id, result (ok|zero_duration|probe_error)
+	RecordingDeepCheckTotal     *prometheus.CounterVec   // labels: camera_id, result (ok|decode_error) — ffmpeg decode sampling, ≤1/h/camera (#489)
 	// Health→Prometheus bridge metrics (stream stats)
 	StreamFPS                *prometheus.GaugeVec // labels: camera_id
 	StreamBitrateKbps        *prometheus.GaugeVec // labels: camera_id
@@ -400,6 +401,11 @@ func NewMetrics() *Metrics {
 		Help: "Recording integrity audit outcomes (mediaprobe on closed segments), by camera and result (ok|zero_duration|probe_error).",
 	}, []string{"camera_id", "result"})
 
+	recordingDeepCheckTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_recording_deepcheck_total",
+		Help: "Decode-level deep check outcomes (ffmpeg -v error sampling, ≤1/hour/camera, #489), by camera and result (ok|decode_error). Absent entirely when no ffmpeg is configured.",
+	}, []string{"camera_id", "result"})
+
 	jitterBufferDepth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "nvr_jitter_buffer_depth",
 		Help: "Current number of frames in the jitter buffer, partitioned by camera.",
@@ -612,6 +618,7 @@ func NewMetrics() *Metrics {
 		playbackStallsTotal,
 		segmentWriteDurationSeconds,
 		recordingAuditTotal,
+		recordingDeepCheckTotal,
 		xiaomiDisconnects,
 		xiaomiReconnects,
 		transcodingJobsTotal,
@@ -721,6 +728,7 @@ func NewMetrics() *Metrics {
 		PlaybackStallsTotal:            playbackStallsTotal,
 		SegmentWriteDurationSeconds:    segmentWriteDurationSeconds,
 		RecordingAuditTotal:            recordingAuditTotal,
+		RecordingDeepCheckTotal:        recordingDeepCheckTotal,
 		JitterBufferDepth:              jitterBufferDepth,
 		JitterBufferReordersTotal:      jitterBufferReordersTotal,
 		RecorderRingBufferDropsTotal:   recorderRingBufferDropsTotal,
@@ -866,4 +874,13 @@ func (m *Metrics) IncRecordingAudit(cameraID, result string) {
 		return
 	}
 	m.RecordingAuditTotal.WithLabelValues(cameraID, result).Inc()
+}
+
+// IncRecordingDeepCheck records one decode-level deep check outcome
+// (ok | decode_error) — ffmpeg sampling per #489.
+func (m *Metrics) IncRecordingDeepCheck(cameraID, result string) {
+	if m == nil || m.RecordingDeepCheckTotal == nil {
+		return
+	}
+	m.RecordingDeepCheckTotal.WithLabelValues(cameraID, result).Inc()
 }

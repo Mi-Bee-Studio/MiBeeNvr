@@ -8,6 +8,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -25,6 +26,13 @@ type FlowCamera struct {
 	Width    int            `json:"width,omitempty"`
 	Height   int            `json:"height,omitempty"`
 	Viewers  map[string]int `json:"viewers"`
+	// LastFrameAgeS is seconds since the hub's last video frame, or nil when
+	// the camera never delivered one. Unlike the cumulative frames_in/bytes_in
+	// counters, this is an INSTANT staleness signal: a camera that died
+	// mid-stream still shows frames_in > 0 (historical total), so external
+	// threshold checks (last_frame_age_s > N ⇒ stream stalled) need this
+	// field (#490 — field-validation feedback).
+	LastFrameAgeS *float64 `json:"last_frame_age_s"`
 }
 
 // registerFlowRoutes registers the flow-path observability endpoints (#469).
@@ -72,6 +80,14 @@ func (h *Handler) buildFlowCamera(cameraID string, hub *model.StreamHub, status 
 		HubStats: hub.Snapshot(),
 		Status:   string(status),
 		Viewers:  map[string]int{},
+	}
+	// Instant staleness signal (#490): nil = never had a frame.
+	if !fc.LastFrameAt.IsZero() {
+		age := time.Since(fc.LastFrameAt).Seconds()
+		if age < 0 {
+			age = 0
+		}
+		fc.LastFrameAgeS = &age
 	}
 	if cfg := h.camMgr.GetCameraConfig(cameraID); cfg != nil {
 		fc.Name = cfg.Name
