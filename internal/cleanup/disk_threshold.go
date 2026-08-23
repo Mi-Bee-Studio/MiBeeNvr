@@ -30,8 +30,15 @@ func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 
 	// Fetch recordings in batches of 50 until usage drops below threshold.
 	// Uses BatchDeleteRecordingsWithFiles instead of row-by-row deleteRecording.
+	// With motion-aware ordering (issue #435) the eviction prefers boring
+	// segments: static first, unanalyzed neutral, active last — age still
+	// breaks ties, so within one score band behavior matches the legacy path.
+	fetch := cm.db.ListOldestRecordings
+	if cm.motionAwareDisk {
+		fetch = cm.db.ListOldestRecordingsMotionAware
+	}
 	for {
-		batch, err := cm.db.ListOldestRecordings(ctx, 50)
+		batch, err := fetch(ctx, 50)
 		if err != nil {
 			return err
 		}

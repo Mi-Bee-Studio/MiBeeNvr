@@ -490,7 +490,7 @@ func (d *DB) ListRecordingsByMergeStatus(ctx context.Context, statuses []string,
 		placeholders[i] = "?"
 		args = append(args, s)
 	}
-	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings WHERE merge_status IN (" +
+	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, motion_score, activity_flags FROM recordings WHERE merge_status IN (" +
 		strings.Join(placeholders, ",") + ")"
 	if cameraID != "" {
 		q += " AND camera_id=?"
@@ -531,7 +531,7 @@ func (d *DB) ListRecordingsByMergeStatus(ctx context.Context, statuses []string,
 //
 // Reset these to pending (via SetMergeStatus) to re-queue them for merging.
 func (d *DB) ListFakeMergedRecordings(ctx context.Context, cameraID string, limit int, maxDurationSec float64) ([]*model.Recording, error) {
-	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings WHERE merge_status='merged' AND (merge_path IS NULL OR merge_path='')"
+	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, motion_score, activity_flags FROM recordings WHERE merge_status='merged' AND (merge_path IS NULL OR merge_path='')"
 	args := []any{}
 	if cameraID != "" {
 		q += " AND camera_id=?"

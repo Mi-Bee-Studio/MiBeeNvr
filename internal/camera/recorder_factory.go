@@ -17,6 +17,28 @@ import (
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
+	// resolveAdaptiveConfig parses the YAML adaptive-recording overrides into the
+	// recorder's resolved form, defaulting unspecified fields (issue #435). The
+	// config layer has already validated ranges.
+	resolveAdaptiveConfig := func(a *config.AdaptiveRecordingConfig) *recorder.AdaptiveConfig {
+		ac := recorder.DefaultAdaptiveConfig()
+		if a != nil {
+			if d, err := time.ParseDuration(a.CalmThreshold); err == nil && d > 0 {
+				ac.CalmThreshold = d
+			}
+			if d, err := time.ParseDuration(a.TimelapseInterval); err == nil && d > 0 {
+				ac.TimelapseInterval = d
+			}
+			if a.SpikeFactor > 0 {
+				ac.SpikeFactor = a.SpikeFactor
+			}
+			if a.GOPBufferBytes > 0 {
+				ac.MaxGOPBuffer = a.GOPBufferBytes
+			}
+		}
+		return &ac
+	}
+
 	var rec model.Recorder
 	switch cam.Protocol {
 	case "xiaomi":
@@ -44,6 +66,9 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
 			}
+			if cam.RecordingMode == "adaptive" {
+				h264Cfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
+			}
 			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
@@ -59,6 +84,9 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
+			}
+			if cam.RecordingMode == "adaptive" {
+				h265Cfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
 			}
 			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 		case string(model.FormatMJPEG):

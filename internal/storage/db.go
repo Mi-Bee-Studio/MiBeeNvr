@@ -218,8 +218,12 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // v32: added gb28181_devices + gb28181_channels (GB28181 platform-role device
 // catalog, issue #315).
 //
+// v33: added recordings.motion_score + recordings.activity_flags (issue #435 —
+// compressed-domain boring-segment detection). Both columns are also ensured
+// via idempotent ALTER for databases created before v33.
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "32"
+const currentSchemaVersion = "33"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -279,6 +283,8 @@ func (d *DB) Init(ctx context.Context) error {
         ai_status TEXT DEFAULT NULL,
         ai_processed_at TEXT DEFAULT NULL,
         ai_error TEXT DEFAULT NULL,
+        motion_score REAL DEFAULT -1,
+        activity_flags TEXT DEFAULT '',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (camera_id) REFERENCES cameras(id)
     );`
@@ -467,6 +473,14 @@ func (d *DB) Init(ctx context.Context) error {
 		_, _ = d.db.ExecContext(ctx, drop)
 	}
 
+	// ── Column backfill for pre-v33 databases (issue #435) ──
+	// The baseline CREATE TABLE above only carries the final column set for
+	// NEW databases; an existing recordings table gets the motion columns via
+	// idempotent ALTER. Default -1 = unanalyzed (model.MotionScoreUnanalyzed).
+	if err := d.ensureRecordingsMotionColumns(ctx); err != nil {
+		return err
+	}
+
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value=? WHERE key='schema_version'", currentSchemaVersion)
 
 	// Enable auto_vacuum = INCREMENTAL for fresh databases (no-op for existing).
@@ -475,6 +489,37 @@ func (d *DB) Init(ctx context.Context) error {
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 
+	return nil
+}
+
+// ensureRecordingsMotionColumns adds the motion-score columns (issue #435) to
+// recordings tables created before schema v33. Idempotent: checks pragma
+// table_info before each ALTER, so re-running on a current database is a no-op.
+func (d *DB) ensureRecordingsMotionColumns(ctx context.Context) error {
+	var motionColExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='motion_score'`,
+	).Scan(&motionColExists); err != nil {
+		return fmt.Errorf("check motion_score column: %w", err)
+	}
+	if motionColExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE recordings ADD COLUMN motion_score REAL DEFAULT -1`); err != nil {
+			return fmt.Errorf("add motion_score column: %w", err)
+		}
+	}
+	var flagsColExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='activity_flags'`,
+	).Scan(&flagsColExists); err != nil {
+		return fmt.Errorf("check activity_flags column: %w", err)
+	}
+	if flagsColExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE recordings ADD COLUMN activity_flags TEXT DEFAULT ''`); err != nil {
+			return fmt.Errorf("add activity_flags column: %w", err)
+		}
+	}
 	return nil
 }
 

@@ -41,6 +41,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
@@ -109,6 +110,12 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 
 	// Step 2.1: Event bus
 	deps.eventBus = event.NewEventBus(64)
+
+	// Step 2.2: Motion-score analyzer (issue #435) — subscribes to
+	// SegmentCompleted and scores finished H.264/H.265 segments in the
+	// compressed domain (per-frame sizes only, no decode). Constructed early
+	// so registerServices can start it before the first segments complete.
+	deps.motionAnalyzer = motion.NewAnalyzer(db, deps.eventBus, cfg.Storage.RootDir, motion.DefaultOptions())
 
 	// Step 2.5: Remote log handler (if enabled)
 	if cfg.RemoteLog.Enabled {

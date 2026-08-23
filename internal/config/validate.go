@@ -429,6 +429,47 @@ func validateConfigDetails(cfg *Config) error {
 		}
 	}
 
+	// Validate per-camera recording mode (issue #435)
+	for _, cam := range cfg.Cameras {
+		switch cam.RecordingMode {
+		case "", "continuous", "adaptive":
+		default:
+			return fmt.Errorf("cameras.%s.recording_mode must be \"continuous\" or \"adaptive\" (got %q)", cam.ID, cam.RecordingMode)
+		}
+		if cam.RecordingMode != "adaptive" {
+			continue
+		}
+		if cam.Encoding != "h264" && cam.Encoding != "h265" {
+			return fmt.Errorf("cameras.%s.recording_mode=adaptive requires differential encoding (h264/h265), got encoding %q", cam.ID, cam.Encoding)
+		}
+		if a := cam.Adaptive; a != nil {
+			if a.CalmThreshold != "" {
+				d, err := time.ParseDuration(a.CalmThreshold)
+				if err != nil {
+					return fmt.Errorf("cameras.%s.adaptive.calm_threshold invalid duration: %w", cam.ID, err)
+				}
+				if d < 10*time.Second || d > 30*time.Minute {
+					return fmt.Errorf("cameras.%s.adaptive.calm_threshold must be 10s–30m, got %s", cam.ID, a.CalmThreshold)
+				}
+			}
+			if a.TimelapseInterval != "" {
+				d, err := time.ParseDuration(a.TimelapseInterval)
+				if err != nil {
+					return fmt.Errorf("cameras.%s.adaptive.timelapse_interval invalid duration: %w", cam.ID, err)
+				}
+				if d < 5*time.Second || d > 10*time.Minute {
+					return fmt.Errorf("cameras.%s.adaptive.timelapse_interval must be 5s–10m, got %s", cam.ID, a.TimelapseInterval)
+				}
+			}
+			if a.SpikeFactor != 0 && (a.SpikeFactor < 1.5 || a.SpikeFactor > 10) {
+				return fmt.Errorf("cameras.%s.adaptive.spike_factor must be 1.5–10, got %v", cam.ID, a.SpikeFactor)
+			}
+			if a.GOPBufferBytes != 0 && (a.GOPBufferBytes < 1<<20 || a.GOPBufferBytes > 64<<20) {
+				return fmt.Errorf("cameras.%s.adaptive.gop_buffer_bytes must be 1MB–64MB, got %d", cam.ID, a.GOPBufferBytes)
+			}
+		}
+	}
+
 	// Validate per-camera timelapse configuration
 	for _, cam := range cfg.Cameras {
 		if cam.Timelapse == nil {

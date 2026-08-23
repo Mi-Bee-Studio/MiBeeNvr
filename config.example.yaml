@@ -74,6 +74,19 @@ cameras: []
 #                                   #   recording_schedule    — time-window recording (still writes when "on")
 #                                   #   activation_state: "pending_activation" — does not connect at all
 #                                   #   push_retention_days: 0 — cleanup policy only (segments are written first)
+#     # recording_mode: "adaptive"  # Write-density strategy (default "continuous" = record every frame).
+#                                   # "adaptive" = dynamic timelapse (issue #435): while the compressed-domain
+#                                   # activity signal (P-frame size vs rolling baseline) stays calm, only one
+#                                   # keyframe per adaptive.timelapse_interval is written (audio is dropped
+#                                   # too); any activity spike flushes the retained GOP buffer and resumes
+#                                   # full-rate recording — no frame gap at the transition. Static scenes
+#                                   # play back as a natural timelapse; storage drops ~10-600x during calm
+#                                   # periods. H.264/H.265 cameras only (MJPEG has no differential signal).
+#     # adaptive:                   # Tuning for recording_mode: adaptive (defaults shown)
+#     #   calm_threshold: "60s"     # Sustained calm before dropping to sparse mode (10s–30m)
+#     #   timelapse_interval: "30s" # Keyframe cadence while sparse (5s–10m)
+#     #   spike_factor: 3.0         # MAD-floored deviations above baseline = activity spike (1.5–10)
+#     #   gop_buffer_bytes: 16777216 # Cap for the retained GOP buffer (1MB–64MB, default 16MB)
 #     audio_enabled: false          # Enable audio recording (default: false)
 #     frame_watchdog_timeout: "30s"  # Timeout before declaring camera unhealthy (default: 30s)
 #     timelapse:                      # Per-camera timelapse recording (see full reference below)
@@ -137,6 +150,10 @@ cleanup:
   retention_days: 30               # Delete recordings older than N days (1-3650)
   check_interval: "1h"             # How often to check for expired recordings
   disk_threshold_percent: 85       # Start cleanup when disk usage exceeds N% (50-99). 85 avoids the HDD perf cliff near 90%+ full.
+  # motion_aware_disk_cleanup: true # Order disk-threshold deletion boring-first (issue #435): static
+                                   # segments (motion_score≈0) are evicted before active ones; unanalyzed
+                                   # segments rank neutrally. Default true. The time-retention path above
+                                   # is NOT affected — "keep N days" keeps its exact meaning.
 
 # Segment merging — combine short segments into longer recordings
 # Two independent systems:
