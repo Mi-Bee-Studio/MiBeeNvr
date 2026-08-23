@@ -75,8 +75,14 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
+      # Frontend unit tests (vitest). Without this step the suite rots silently —
+      # the orchestrator fixtures went stale for weeks after the /protocols JSON
+      # field casing changed (#332) because nothing in CI ran vitest.
+      - name: Test frontend
+        run: cd web && npm ci && npm test
+
       - name: Build frontend
-        run: cd web && npm ci && npm run build
+        run: cd web && npm run build
 
       - name: Build
         run: |
