@@ -417,3 +417,75 @@ func TestAdaptiveGate_FlushSkipsWrittenFrames(t *testing.T) {
 		}
 	}
 }
+
+func TestAdaptiveTracker_BurstGatedExit(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: 10 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 3.0, MaxGOPBuffer: 16 << 20}
+	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+	t0 := time.Now()
+	idr := bytes.Repeat([]byte{0x65}, 30000)
+	tr.observe(idr, true, t0)
+	end := feedCalm(t, tr, t0.Add(50*time.Millisecond), 500) // 25s → TIMELAPSE
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("want timelapse")
+	}
+
+	// Thresholds for the 800-byte calm baseline: median=800, MAD=0 → floor=64.
+	// spike thr = 800+3*64 = 992; major thr = 800+2*3*64 = 1184.
+	isolated := make([]byte, 1100) // 992 < 1100 < 1184: spike but not major
+	isolated[0] = 0x41
+
+	// Isolated noise spikes (far apart) must NOT exit timelapse (#475).
+	tr.observe(isolated, false, end)
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("isolated non-major spike must not exit timelapse")
+	}
+	tr.observe(isolated, false, end.Add(61*time.Second))
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("still timelapse after a second isolated spike")
+	}
+
+	// A spike burst (two within 2s) exits.
+	tr.observe(isolated, false, end.Add(130*time.Second))
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("first spike of a pair must not exit alone")
+	}
+	tr.observe(isolated, false, end.Add(131*time.Second))
+	if tr.mode == adaptiveTimelapse {
+		t.Fatal("spike burst (2 within 2s) must exit timelapse")
+	}
+
+	// A MAJOR single spike (scene-cut scale) exits alone — the light-on /
+	// person-appearing guard.
+	feedCalm(t, tr, end.Add(131*time.Second), 800) // 40s > 10s calm → re-enter
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("want timelapse re-entry after calm")
+	}
+	major := make([]byte, 8000) // >> 1184
+	major[0] = 0x41
+	// Flush is nil here by design: the burst exit already detached the
+	// IDR-anchored ring and no IDR has arrived since, so there is nothing
+	// independently decodable to flush (takeGOP returns nil). Only the exit
+	// itself is asserted.
+	tr.observe(major, false, end.Add(175*time.Second))
+	if tr.mode == adaptiveTimelapse {
+		t.Fatal("major single spike must exit timelapse")
+	}
+}
+
+func TestAdaptiveTracker_SpikeRetention(t *testing.T) {
+	tr := &adaptiveTracker{}
+	now := time.Now()
+	tr.recordSpike(now)
+	tr.recordSpike(now.Add(100 * time.Millisecond))
+	if len(tr.recentSpikes) != 2 {
+		t.Fatalf("recentSpikes = %d entries, want 2 (retention must survive a zero-drop append)", len(tr.recentSpikes))
+	}
+	if !tr.spikeBurst(now.Add(100 * time.Millisecond)) {
+		t.Fatal("two spikes within the burst window must register as a burst")
+	}
+	// A spike after the window keeps only itself.
+	tr.recordSpike(now.Add(10 * time.Second))
+	if len(tr.recentSpikes) != 1 || !tr.recentSpikes[0].Equal(now.Add(10*time.Second)) {
+		t.Fatalf("recentSpikes = %v, want only the newest", tr.recentSpikes)
+	}
+}

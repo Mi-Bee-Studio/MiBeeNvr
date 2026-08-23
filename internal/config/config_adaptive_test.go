@@ -56,7 +56,7 @@ func TestValidateRecordingMode_AdaptiveRanges(t *testing.T) {
 		{"interval too short", &AdaptiveRecordingConfig{TimelapseInterval: "1s"}, "timelapse_interval"},
 		{"interval too long", &AdaptiveRecordingConfig{TimelapseInterval: "11m"}, "timelapse_interval"},
 		{"spike too low", &AdaptiveRecordingConfig{SpikeFactor: 1.0}, "spike_factor"},
-		{"spike too high", &AdaptiveRecordingConfig{SpikeFactor: 11}, "spike_factor"},
+		{"spike too high", &AdaptiveRecordingConfig{SpikeFactor: 25}, "spike_factor"},
 		{"buffer too small", &AdaptiveRecordingConfig{GOPBufferBytes: 1 << 10}, "gop_buffer_bytes"},
 		{"buffer too large", &AdaptiveRecordingConfig{GOPBufferBytes: 128 << 20}, "gop_buffer_bytes"},
 		{"bad duration", &AdaptiveRecordingConfig{CalmThreshold: "abc"}, "calm_threshold"},

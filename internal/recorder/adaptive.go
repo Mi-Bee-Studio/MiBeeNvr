@@ -105,6 +105,7 @@ type adaptiveTracker struct {
 	pSizes    []float64
 	median    float64
 	mad       float64
+	floor     float64 // MAD-floored deviation floor from the last recompute
 	lastCalc  time.Time
 	calmSince time.Time // last motion burst (or start); sustained calm enters TIMELAPSE
 
@@ -162,6 +163,14 @@ const (
 	// adaptiveBurstCount is the spike count within the window that resets the
 	// calm accumulation.
 	adaptiveBurstCount = 2
+	// adaptiveMajorFactor scales the spike threshold for a MAJOR spike — a
+	// single frame large enough to exit timelapse on its own (scene cut,
+	// light-on, person appearing): size > median + majorFactor*threshold.
+	// Guards the burst-gated exit against missing one-frame scene changes
+	// (issue #475 field data: an empty room's noise spikes stay under 2x a
+	// factor-10 threshold while real scene cuts clear it by an order of
+	// magnitude).
+	adaptiveMajorFactor = 2.0
 )
 
 // observe ingests one VCL NALU (without start code), updates the activity
@@ -199,12 +208,18 @@ func (t *adaptiveTracker) observe(nalu []byte, isIDR bool, now time.Time) (spike
 			t.lastSparseWrite = now
 		}
 	case adaptiveTimelapse:
-		if spike {
-			// Any single spike exits sparse mode. The exit itself is evidence
-			// of activity, so a fresh CalmThreshold window is required before
-			// re-entering TIMELAPSE (prevents spike → exit → instant re-entry
-			// oscillation, since the burst rule above does not fire on
-			// isolated spikes).
+		// Exit is burst-gated like entry (issue #475 field data: on a camera
+		// confirmed recording an empty scene all day, every isolated noise
+		// spike exited sparse mode and cost a fresh CalmThreshold of full-rate
+		// writing — timelapse share 2% where the scene was 100% static). A
+		// single MAJOR spike (scene-cut scale) still exits alone: one-frame
+		// scene changes (light on, person appearing) must resume recording
+		// immediately. Real motion always clusters, so the burst path covers it.
+		if spike && (t.spikeBurst(now) || t.majorSpike(size)) {
+			// The exit itself is evidence of activity, so a fresh CalmThreshold
+			// window is required before re-entering TIMELAPSE (prevents spike →
+			// exit → instant re-entry oscillation, since the entry reset does
+			// not fire on isolated spikes).
 			t.calmSince = now
 			flush = t.takeGOP()
 			t.setMode(adaptiveNormal, now)
@@ -225,7 +240,18 @@ func (t *adaptiveTracker) recordSpike(now time.Time) {
 		}
 		break
 	}
-	t.recentSpikes = append(t.recentSpikes[drop:drop:drop], now)
+	// Shift retained spikes left in place, then append. The previous
+	// `append(t.recentSpikes[drop:drop:drop], now)` silently DISCARDED the
+	// retained tail when drop == 0 (full-slice expr caps capacity at 0), so
+	// only the newest spike ever survived and spikeBurst never saw a pair —
+	// the burst rules (entry calm-reset and, from #475, the timelapse exit)
+	// were dead in production from #468 until the burst-gated-exit unit test
+	// caught it.
+	if drop > 0 {
+		n := copy(t.recentSpikes, t.recentSpikes[drop:])
+		t.recentSpikes = t.recentSpikes[:n]
+	}
+	t.recentSpikes = append(t.recentSpikes, now)
 }
 
 // spikeBurst reports whether the recent spikes within the burst window reach
@@ -315,11 +341,17 @@ func (t *adaptiveTracker) classify(size int, now time.Time) bool {
 	if t.median <= 0 {
 		return false
 	}
-	floor := t.mad
-	if minFloor := t.median * 0.08; floor < minFloor {
-		floor = minFloor
+	t.floor = t.mad
+	if minFloor := t.median * 0.08; t.floor < minFloor {
+		t.floor = minFloor
 	}
-	return float64(size) > t.median+t.cfg.SpikeFactor*floor
+	return float64(size) > t.median+t.cfg.SpikeFactor*t.floor
+}
+
+// majorSpike reports whether the frame is a scene-cut-scale outlier: big
+// enough to leave timelapse on its own despite the burst-gated exit.
+func (t *adaptiveTracker) majorSpike(size int) bool {
+	return t.median > 0 && float64(size) > t.median+adaptiveMajorFactor*t.cfg.SpikeFactor*t.floor
 }
 
 // recomputeBaseline derives median and MAD over the retained size window.
