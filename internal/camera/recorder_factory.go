@@ -29,6 +29,15 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop)
 		return &ac
 	}
+	// resolveAudioTriggerConfig resolves the audio-trigger overrides (issue
+	// #478); nil when not armed. G.711-only at the recorder level.
+	resolveAudioTriggerConfig := func(a *config.CameraAudioTriggerConfig) *recorder.AudioTriggerConfig {
+		if a == nil || !a.Enabled {
+			return nil
+		}
+		at := recorder.ResolveAudioTriggerConfig(a.MinDBFS, a.PreCaptureS)
+		return &at
+	}
 
 	var rec model.Recorder
 	switch cam.Protocol {
@@ -60,6 +69,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if cam.RecordingMode == "adaptive" {
 				h264Cfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
 			}
+			h264Cfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
 			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
@@ -79,6 +89,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			if cam.RecordingMode == "adaptive" {
 				h265Cfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
 			}
+			h265Cfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
 			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 		case string(model.FormatMJPEG):
 			mjpegCfg := recorder.MJPEGConfig{
@@ -139,6 +150,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			// Validated by config.ValidateCameraRecordingMode (h264/h265 only);
 			// createDelegate ignores it for MJPEG/JPEG encodings.
 			onvifCfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
+			onvifCfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
 		}
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			onvifCfg.FrameWatchdogTimeout = d

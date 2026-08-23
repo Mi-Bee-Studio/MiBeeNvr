@@ -33,6 +33,7 @@
         VideoPresetOverrides,
         RelayCapabilities,
         AdaptiveRecordingConfig,
+        CameraAudioTriggerConfig,
     } from '$lib/api';
     import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
@@ -101,6 +102,12 @@
   let formAdaptiveTimelapseInterval = $state('');
   let formAdaptiveSpikeFactor = $state('');
   let formAdaptiveGopBufferMB = $state('');
+  // Audio trigger (#478): loudness input on top of the adaptive gate. Only
+  // meaningful (and only sent) for adaptive + G.711 cameras.
+  let formAudioTriggerEnabled = $state(false);
+  let formAudioMinDBFS = $state('');
+  let formAudioPreCaptureS = $state('');
+  let formAudioTriggerWasEnabled = $state(false);
 
   // Per-camera storage location (hot switch + background migration)
   let camStorageRoot = $state('');
@@ -376,6 +383,12 @@ let validationErrors = $state<Record<string, string>>({});
     formAdaptiveGopBufferMB = camera.adaptive?.gop_buffer_bytes
       ? String(Math.round(camera.adaptive.gop_buffer_bytes / (1024 * 1024)))
       : '';
+    formAudioTriggerEnabled = camera.audio_trigger?.enabled ?? false;
+    formAudioTriggerWasEnabled = formAudioTriggerEnabled;
+    formAudioMinDBFS =
+      typeof camera.audio_trigger?.min_dbfs === 'number' ? String(camera.audio_trigger.min_dbfs) : '';
+    formAudioPreCaptureS =
+      typeof camera.audio_trigger?.pre_capture_s === 'number' ? String(camera.audio_trigger.pre_capture_s) : '';
     formTwoWayAudioEnabled = camera.two_way_audio_enabled ?? false;
     formSubnetHints = (camera.subnet_hints ?? []).join('\n');
     formStreamKey = camera.stream_key || '';
@@ -634,6 +647,22 @@ function buildAdaptivePayload() {
     return p;
 }
 
+// Audio-trigger payload (#478): explicitly {enabled:false} when the mode left
+// adaptive or the checkbox is off (nil = unchanged server-side, which could
+// leave a stale armed config behind).
+function buildAudioTriggerPayload(): CameraAudioTriggerConfig | undefined {
+    if (formRecordingMode !== 'adaptive') {
+        return formAudioTriggerWasEnabled ? { enabled: false } : undefined;
+    }
+    if (!formAudioTriggerEnabled) return { enabled: false };
+    const p: CameraAudioTriggerConfig = { enabled: true };
+    const dbfs = parseFloat(formAudioMinDBFS);
+    if (!Number.isNaN(dbfs) && dbfs < 0) p.min_dbfs = dbfs;
+    const pcs = parseInt(formAudioPreCaptureS, 10);
+    if (!Number.isNaN(pcs) && pcs > 0) p.pre_capture_s = pcs;
+    return p;
+}
+
 async function performCameraSave() {
     if (editingCamera) {
         const data: UpdateCameraRequest = {
@@ -665,6 +694,7 @@ async function performCameraSave() {
             cascade_enabled: formCascadeEnabled,
             recording_mode: formRecordingMode,
             adaptive: buildAdaptivePayload(),
+            audio_trigger: buildAudioTriggerPayload(),
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
@@ -730,6 +760,7 @@ async function performCameraSave() {
             cascade_enabled: formCascadeEnabled,
             recording_mode: formRecordingMode,
             adaptive: buildAdaptivePayload(),
+            audio_trigger: buildAudioTriggerPayload(),
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
@@ -942,6 +973,30 @@ async function performCameraSave() {
           </div>
         </div>
         <p class="text-xs th-text-muted -mt-1">{t('cameras.adaptiveParamsHint')}</p>
+        <div class="flex items-center gap-2">
+          <input
+            id="cam-audio-trigger"
+            type="checkbox"
+            class="checkbox"
+            bind:checked={formAudioTriggerEnabled}
+          />
+          <label for="cam-audio-trigger" class="input-label cursor-pointer">
+            {t('cameras.audioTrigger')}
+          </label>
+        </div>
+        {#if formAudioTriggerEnabled}
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="cam-audio-dbfs" class="input-label">{t('cameras.audioTriggerMinDBFS')}</label>
+              <input id="cam-audio-dbfs" class="input" type="number" step="1" min="-90" max="0" placeholder="-45" bind:value={formAudioMinDBFS} />
+            </div>
+            <div>
+              <label for="cam-audio-precap" class="input-label">{t('cameras.audioTriggerPreCapture')}</label>
+              <input id="cam-audio-precap" class="input" type="number" step="1" min="0" max="30" placeholder="3" bind:value={formAudioPreCaptureS} />
+            </div>
+          </div>
+        {/if}
+        <p class="text-xs th-text-muted -mt-1">{t('cameras.audioTriggerHint')}</p>
       {/if}
     {/if}
 
