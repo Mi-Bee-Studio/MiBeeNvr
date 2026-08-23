@@ -609,7 +609,8 @@ func TestConnectRTMP_JPEGSourceFailsFast(t *testing.T) {
 		target.SetSourceCodecProvider(func() string { return codec })
 
 		err := target.connectRTMP(context.Background())
-		require.Equal(t, errPermanent, err)
+		require.ErrorIs(t, err, errPermanent)
+		require.Contains(t, err.Error(), "source is "+codec)
 		require.Equal(t, StatusError, target.status)
 		require.Contains(t, target.errMsg, "source is "+codec)
 		require.Contains(t, target.errMsg, "requires H.264/H.265")
@@ -626,7 +627,8 @@ func TestConnectRTSP_JPEGSourceFailsFast(t *testing.T) {
 	target.SetSourceCodecProvider(func() string { return "mjpeg" })
 
 	err := target.connectRTSP(context.Background())
-	require.Equal(t, errPermanent, err)
+	require.ErrorIs(t, err, errPermanent)
+	require.Contains(t, err.Error(), "source is mjpeg")
 	require.Equal(t, StatusError, target.status)
 	require.Contains(t, target.errMsg, "source is mjpeg")
 }

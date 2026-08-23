@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -20,10 +21,12 @@ func (t *PushTarget) connectRTSP(ctx context.Context) error {
 	if !isH264 {
 		// MJPEG/JPEG sources can never feed the H.265 transcode path — fail
 		// fast with a clear per-target error instead of a doomed transcoder
-		// (#423).
+		// (#423). Wrapped so the detail survives the Run loop's err.Error()
+		// surfacing (see connect_rtmp.go).
 		if t.isJPEGSource() {
-			t.setStatus(StatusError, "source is "+t.sourceCodec()+"; RTSP push requires H.264/H.265")
-			return errPermanent
+			msg := "source is " + t.sourceCodec() + "; RTSP push requires H.264/H.265"
+			t.setStatus(StatusError, msg)
+			return fmt.Errorf("%w: %s", errPermanent, msg)
 		}
 		// H.265 source — transcode if policy allows.
 		if t.Config.TranscodePolicy == "off" {
