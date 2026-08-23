@@ -32,6 +32,7 @@
         PushTargetStatus as PushTargetStatusType,
         VideoPresetOverrides,
         RelayCapabilities,
+        AdaptiveRecordingConfig,
     } from '$lib/api';
     import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
@@ -92,6 +93,14 @@
   // and relay but writes NO segments to disk (live-only / stream-forward mode).
   let formRecordingEnabled = $state(true);
   let formCascadeEnabled = $state(true);
+  // Recording mode (#435): continuous, or adaptive — dynamic timelapse that
+  // drops to sparse keyframes while the compressed-domain activity signal
+  // stays calm and returns to full recording on activity.
+  let formRecordingMode = $state<'continuous' | 'adaptive'>('continuous');
+  let formAdaptiveCalmThreshold = $state('');
+  let formAdaptiveTimelapseInterval = $state('');
+  let formAdaptiveSpikeFactor = $state('');
+  let formAdaptiveGopBufferMB = $state('');
 
   // Per-camera storage location (hot switch + background migration)
   let camStorageRoot = $state('');
@@ -360,6 +369,13 @@ let validationErrors = $state<Record<string, string>>({});
     formAudioEnabled = camera.audio_enabled ?? false;
     formRecordingEnabled = camera.recording_enabled ?? true;
     formCascadeEnabled = camera.cascade_enabled ?? true;
+    formRecordingMode = camera.recording_mode === 'adaptive' ? 'adaptive' : 'continuous';
+    formAdaptiveCalmThreshold = camera.adaptive?.calm_threshold ?? '';
+    formAdaptiveTimelapseInterval = camera.adaptive?.timelapse_interval ?? '';
+    formAdaptiveSpikeFactor = camera.adaptive?.spike_factor ? String(camera.adaptive.spike_factor) : '';
+    formAdaptiveGopBufferMB = camera.adaptive?.gop_buffer_bytes
+      ? String(Math.round(camera.adaptive.gop_buffer_bytes / (1024 * 1024)))
+      : '';
     formTwoWayAudioEnabled = camera.two_way_audio_enabled ?? false;
     formSubnetHints = (camera.subnet_hints ?? []).join('\n');
     formStreamKey = camera.stream_key || '';
@@ -603,6 +619,21 @@ async function handleSubmit() {
     }
 }
 
+// Adaptive-recording payload (#435): only sent when the mode is adaptive, and
+// only the params the user actually filled (blank = backend default). Eligible
+// only for differential encodings — the backend rejects adaptive + jpeg/mjpeg.
+function buildAdaptivePayload() {
+    if (formRecordingMode !== 'adaptive') return undefined;
+    const p: AdaptiveRecordingConfig = {};
+    if (formAdaptiveCalmThreshold.trim()) p.calm_threshold = formAdaptiveCalmThreshold.trim();
+    if (formAdaptiveTimelapseInterval.trim()) p.timelapse_interval = formAdaptiveTimelapseInterval.trim();
+    const spike = parseFloat(formAdaptiveSpikeFactor);
+    if (!Number.isNaN(spike) && spike > 0) p.spike_factor = spike;
+    const mb = parseInt(formAdaptiveGopBufferMB, 10);
+    if (!Number.isNaN(mb) && mb > 0) p.gop_buffer_bytes = mb * 1024 * 1024;
+    return p;
+}
+
 async function performCameraSave() {
     if (editingCamera) {
         const data: UpdateCameraRequest = {
@@ -632,6 +663,8 @@ async function performCameraSave() {
             audio_enabled: formAudioEnabled,
             recording_enabled: formRecordingEnabled,
             cascade_enabled: formCascadeEnabled,
+            recording_mode: formRecordingMode,
+            adaptive: buildAdaptivePayload(),
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
@@ -695,6 +728,8 @@ async function performCameraSave() {
             audio_enabled: formAudioEnabled,
             recording_enabled: formRecordingEnabled,
             cascade_enabled: formCascadeEnabled,
+            recording_mode: formRecordingMode,
+            adaptive: buildAdaptivePayload(),
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
@@ -875,6 +910,39 @@ async function performCameraSave() {
     </div>
     {#if !formRecordingEnabled}
       <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
+    {:else if formEncoding === 'h264' || formEncoding === 'h265'}
+      <!-- Recording mode (#435): continuous or adaptive (motion-aware sparse) -->
+      <div>
+        <label for="cam-recording-mode" class="input-label">{t('cameras.recordingMode')}</label>
+        <select id="cam-recording-mode" class="input" bind:value={formRecordingMode}>
+          <option value="continuous">{t('cameras.recordingModeContinuous')}</option>
+          <option value="adaptive">{t('cameras.recordingModeAdaptive')}</option>
+        </select>
+        <p class="text-xs th-text-muted mt-1">
+          {formRecordingMode === 'adaptive' ? t('cameras.recordingModeAdaptiveHint') : t('cameras.recordingModeHint')}
+        </p>
+      </div>
+      {#if formRecordingMode === 'adaptive'}
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="cam-adaptive-calm" class="input-label">{t('cameras.adaptiveCalmThreshold')}</label>
+            <input id="cam-adaptive-calm" class="input" type="text" placeholder="60s" bind:value={formAdaptiveCalmThreshold} />
+          </div>
+          <div>
+            <label for="cam-adaptive-interval" class="input-label">{t('cameras.adaptiveTimelapseInterval')}</label>
+            <input id="cam-adaptive-interval" class="input" type="text" placeholder="30s" bind:value={formAdaptiveTimelapseInterval} />
+          </div>
+          <div>
+            <label for="cam-adaptive-spike" class="input-label">{t('cameras.adaptiveSpikeFactor')}</label>
+            <input id="cam-adaptive-spike" class="input" type="number" step="0.1" min="1.5" max="10" placeholder="3.0" bind:value={formAdaptiveSpikeFactor} />
+          </div>
+          <div>
+            <label for="cam-adaptive-gop" class="input-label">{t('cameras.adaptiveGopBufferMB')}</label>
+            <input id="cam-adaptive-gop" class="input" type="number" step="1" min="1" max="64" placeholder="16" bind:value={formAdaptiveGopBufferMB} />
+          </div>
+        </div>
+        <p class="text-xs th-text-muted -mt-1">{t('cameras.adaptiveParamsHint')}</p>
+      {/if}
     {/if}
 
     <!-- Cascade catalog toggle: when off, the camera is hidden from the

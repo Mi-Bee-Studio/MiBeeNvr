@@ -434,6 +434,9 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"retention_days":         h.config.Cleanup.RetentionDays,
 			"check_interval":         h.config.Cleanup.CheckInterval,
 			"disk_threshold_percent": h.config.Cleanup.DiskThresholdPercent,
+			// Motion-aware disk cleanup (#435): when the disk threshold is
+			// hit, evict boring (low motion_score) segments first. nil = on.
+			"motion_aware_disk_cleanup": h.config.Cleanup.MotionAwareDiskCleanup == nil || *h.config.Cleanup.MotionAwareDiskCleanup,
 		},
 		"webdav": map[string]any{
 			"enabled":     h.config.WebDAV.Enabled != nil && *h.config.WebDAV.Enabled,
@@ -550,6 +553,9 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			RetentionDays        *int    `json:"retention_days"`
 			DiskThresholdPercent *int    `json:"disk_threshold_percent"`
 			CheckInterval        *string `json:"check_interval"`
+			// Motion-aware disk cleanup toggle (#435): evict boring segments
+			// first when the disk threshold is hit. nil = unchanged.
+			MotionAwareDiskCleanup *bool `json:"motion_aware_disk_cleanup"`
 		} `json:"cleanup"`
 		Storage *struct {
 			// Recording root directory (#395). Takes effect on the NEXT start —
@@ -622,6 +628,9 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				}
 				h.config.Cleanup.CheckInterval = trimmed
 			}
+		}
+		if body.Cleanup.MotionAwareDiskCleanup != nil {
+			h.config.Cleanup.MotionAwareDiskCleanup = body.Cleanup.MotionAwareDiskCleanup
 		}
 	}
 

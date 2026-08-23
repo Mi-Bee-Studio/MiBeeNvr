@@ -144,6 +144,7 @@ export type {
   TimeRange,
   CameraRecordingStats,
   RelayCapabilities,
+  AdaptiveRecordingConfig,
   // Xiaomi PTZ
   XiaomiPtzMoveRequest,
   XiaomiDeviceInfo,
