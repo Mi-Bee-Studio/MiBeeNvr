@@ -10,11 +10,34 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// tutkLogger matches the log vocabulary used during issue #167 field testing
+// ("tutk-transport" component) so testers' log-grep instructions stay stable.
+var tutkLogger = slog.Default().With("component", "tutk-transport")
+
+// Keepalive cadence for idle TUTK sessions (issue #167: Kalay devices/relays
+// drop the session after ~10-20s of client silence). We keep the read deadline
+// short so the worker wakes up regularly and can emit an alive signal.
+// Var (not const) so tests can shorten it.
+var (
+	keepaliveInterval = 2 * time.Second
+	tickInterval      = 30 * time.Second
+)
+
+// keepaliveEnabled gates the experimental active keepalive. TUTK has no
+// documented keepalive; Session25 counters (0x09) are the client's usual
+// "alive" signal and are reused here as a periodic unsolicited packet.
+// Disable with TUTK_KEEPALIVE=off if a camera misbehaves (issue #167).
+func keepaliveEnabled() bool {
+	return os.Getenv("TUTK_KEEPALIVE") != "off"
+}
 
 // Dial establishes a TUTK P2P connection to a device identified by UID.
 // host: IP address with optional port (default 32761).
@@ -36,6 +59,7 @@ func Dial(host, uid, username, password string) (*Conn, error) {
 	c := &Conn{
 		UDPConn:     udpConn,
 		addr:        addr,
+		uid:         uid,
 		idleTimeout: 30 * time.Second,
 		lastData:    time.Now(),
 	}
@@ -65,6 +89,8 @@ func Dial(host, uid, username, password string) (*Conn, error) {
 		return nil, err
 	}
 
+	tutkLogger.Info("tutk: session established", "uid", uid, "session_ver", c.ver[0], "keepalive", keepaliveEnabled())
+
 	go c.worker()
 
 	return c, nil
@@ -74,6 +100,7 @@ func Dial(host, uid, username, password string) (*Conn, error) {
 type Conn struct {
 	*net.UDPConn
 	addr    *net.UDPAddr
+	uid     string
 	session Session
 
 	ver    []byte
@@ -207,30 +234,67 @@ func (c *Conn) Error() error {
 }
 
 func (c *Conn) worker() {
-	defer c.workerExitGuard()
+	established := time.Now()
+	var keepalivesSent, pktsRecv uint64
+
+	// Declared before the exit guard so it runs after it (LIFO) and can log
+	// the final error the guard may have set.
+	defer func() {
+		tutkLogger.Info("tutk: connection lost",
+			"uid", c.uid, "reason", c.getErr().Error(),
+			"alive", time.Since(established).Round(time.Second).String(),
+			"keepalives_sent", keepalivesSent, "pkts", pktsRecv)
+	}()
 	defer c.session.Close()
+	defer c.workerExitGuard()
 
 	buf := make([]byte, 1200)
+	lastTick := time.Now()
+	// Periodic INFO heartbeat so field-test logs show liveness both while
+	// data flows (called from the read path) and during silence (timeout path).
+	tick := func(idle time.Duration) {
+		if time.Since(lastTick) >= tickInterval {
+			lastTick = time.Now()
+			tutkLogger.Info("tutk: keepalive tick",
+				"uid", c.uid, "sent", keepalivesSent, "pkts", pktsRecv,
+				"last_data_ago", idle.Round(time.Second).String())
+		}
+	}
 
 	for {
-		_ = c.UDPConn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+		// Short deadline doubles as the keepalive timer: on active streams the
+		// read returns with data well before the deadline; on silence it wakes
+		// us up every keepaliveInterval to emit a client-alive signal.
+		wakeup := keepaliveInterval
+		if c.idleTimeout < wakeup {
+			wakeup = c.idleTimeout // short idleTimeout (tests): wake up sooner
+		}
+		_ = c.UDPConn.SetReadDeadline(time.Now().Add(wakeup))
 
 		n, err := c.Read(buf)
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				c.mu.Lock()
-				idle := time.Since(c.lastData) > c.idleTimeout
+				idle := time.Since(c.lastData)
 				c.mu.Unlock()
-				if idle {
+
+				if idle > c.idleTimeout {
 					c.setErr(fmt.Errorf("tutk: no data for %v", c.idleTimeout))
 					return
 				}
+				if idle >= keepaliveInterval && c.sendKeepalive() {
+					keepalivesSent++
+				}
+				tick(idle)
 				continue
 			}
 			c.setErr(fmt.Errorf("tutk: %w", err))
 			return
 		}
+
+		pktsRecv++
+		tick(0)
 
 		switch c.handleMsg(buf[:n]) {
 		case msgUnknown:
@@ -243,6 +307,24 @@ func (c *Conn) worker() {
 			}
 		}
 	}
+}
+
+// sendKeepalive emits an unsolicited Session25 counters message (channel 0)
+// as a client-alive signal while the camera is silent. Session16 has no
+// counters builder, so those connections stay passive (as before).
+func (c *Conn) sendKeepalive() bool {
+	if !keepaliveEnabled() {
+		return false
+	}
+	s25, ok := c.session.(*Session25)
+	if !ok {
+		return false
+	}
+	if err := s25.SessionWrite(0, s25.msgAckCounters()); err != nil {
+		tutkLogger.Warn("tutk: keepalive write failed", "uid", c.uid, "error", err)
+		return false
+	}
+	return true
 }
 
 // workerExitGuard ensures c.err is set when worker() exits.
