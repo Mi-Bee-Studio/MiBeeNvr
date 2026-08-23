@@ -348,11 +348,17 @@ func applyConfigDefaults(cfg *Config) {
 		cfg.GB28181.TCPFraming = "auto"
 	}
 	if strings.TrimSpace(cfg.GB28181.MediaTransport) == "" {
-		if cfg.GB28181.TCPMode {
-			cfg.GB28181.MediaTransport = "tcp-passive" // legacy tcp_mode alias
-		} else {
-			cfg.GB28181.MediaTransport = "udp"
-		}
+		// Default tcp-passive (#460): UDP media measured ~16% frame loss on a
+		// real GB camera (back-to-back IDR bursts overflow NIC/softirq paths —
+		// each loss breaks the P-frame reference chain until the next IDR,
+		// perceived as macroblock corruption), while tcp-passive delivered
+		// complete IDRs and <1% loss on the same LAN. tcp-passive is also the
+		// Hikvision/Dahua default across NAT. Devices without TCP media support
+		// can opt back with media_transport: "udp".
+		// The legacy tcp_mode alias no longer influences the choice: it is a
+		// bool, so an explicit `tcp_mode: false` is indistinguishable from
+		// unset and honoring it would reinstate the UDP default for everyone.
+		cfg.GB28181.MediaTransport = "tcp-passive"
 	}
 	if strings.TrimSpace(cfg.GB28181.SIPTransport) == "" {
 		cfg.GB28181.SIPTransport = "udp"

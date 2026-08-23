@@ -33,7 +33,7 @@ gb28181:
   port_range: "30000-30050"
   heartbeat_interval: "60s"
   catalog_interval: "30m"
-  media_transport: "udp"        # udp | tcp-passive | tcp-active
+  media_transport: "tcp-passive"  # udp | tcp-passive | tcp-active (default tcp-passive, see below)
   subscribe_catalog: true       # real-time channel-change push
   subscribe_alarm: true         # alarm subscription
   subscribe_mobile_position: false
@@ -45,7 +45,7 @@ gb28181:
 - `server_id`: the NVR's 20-digit GB/T 28181 platform serial (must match the device side exactly)
 - `realm`: the SIP digest-auth realm (usually your 10-digit area code)
 - `password`: the SIP digest secret. **Empty = no authentication** (any device that can reach port 5060 can register — see Security)
-- `media_transport`: RTP transport — `udp` (default), `tcp-passive` (NVR listens, device connects — the Hikvision/Dahua NAT default), or `tcp-active` (NVR dials the device's answer address)
+- `media_transport`: RTP transport — `tcp-passive` (default; NVR listens, device connects — the Hikvision/Dahua NAT default), `udp`, or `tcp-active` (NVR dials the device's answer address). **Why TCP is the default (#460)**: UDP media measured ~16% frame loss on a real GB camera (IDR-sized bursts overflow the NIC/softirq path; each loss breaks the P-frame reference chain — macroblock corruption until the next IDR), while TCP measured <1% on the same LAN. Older devices without TCP media support can opt back into `udp`.
 
 ### Step 2: Configure the camera
 
@@ -120,7 +120,7 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 | `port_range` | string | `"30000-30050"` | RTP media port pool (`"start-end"`) |
 | `heartbeat_interval` | string | `"60s"` | Expected device heartbeat interval |
 | `catalog_interval` | string | `"30m"` | Catalog poll interval (fallback when subscribed) |
-| `media_transport` | string | `"udp"` | `udp` / `tcp-passive` / `tcp-active` |
+| `media_transport` | string | `"tcp-passive"` | `tcp-passive` / `udp` / `tcp-active` (why TCP, see above — #460) |
 | `sip_transport` | string | `"udp"` | Signaling transport: `udp` (add `tcp` listener optionally) |
 | `tcp_framing` | string | `"auto"` | TCP framing: `rfc4571` / `0x24` / `auto` |
 | `subscribe_catalog` | bool | `true` | Catalog subscription (real-time channel push) |
@@ -129,7 +129,7 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 | `subscribe_expires` | string | `"3600s"` | Subscription lifetime (auto-renewed at 80%) |
 | `allowed_device_ids` | `[]string` | `[]` | Registration allowlist (empty = allow all) |
 
-> `tcp_mode` (bool) is a legacy alias of `media_transport`, kept for YAML compatibility.
+> `tcp_mode` (bool) is a legacy alias of `media_transport`, kept for YAML compatibility. It no longer influences the default (tcp-passive since v0.12.0, #460) — set `media_transport: "udp"` explicitly for UDP.
 
 ### Camera
 
@@ -255,6 +255,14 @@ Directions: `up/down/left/right/up-left/up-right/down-left/down-right/zoom-in/zo
 2. Behind NAT, switch to `media_transport: tcp-passive`
 3. On TCP framing errors, try `tcp_framing: rfc4571 / 0x24 / auto`
 4. Codec: H.264/H.265 auto-detected, no configuration needed
+
+### Macroblock corruption / tearing (blurry bottom half)
+
+Typical symptom: a region of the frame (often the bottom half) turns into macroblock garbage, recovers with the next keyframe seconds later, then repeats. Root cause: **UDP media packet loss** (IDR-sized bursts overflow the path; each loss breaks the P-frame reference chain — #460 measured up to 16% frame loss):
+
+1. Confirm `media_transport` is the default `tcp-passive` (switch back if it was changed to `udp`)
+2. Still corrupted on TCP → check `tcp_framing` (try `rfc4571` / `0x24` / `auto` in turn)
+3. Cross-check the receiver logs' `gap_skipped` / `AU ended mid-PES` counters to locate the loss
 
 ### No audio
 
