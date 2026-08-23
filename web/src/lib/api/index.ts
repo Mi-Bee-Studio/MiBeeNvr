@@ -145,6 +145,7 @@ export type {
   CameraRecordingStats,
   RelayCapabilities,
   AdaptiveRecordingConfig,
+  CameraAudioTriggerConfig,
   // Xiaomi PTZ
   XiaomiPtzMoveRequest,
   XiaomiDeviceInfo,

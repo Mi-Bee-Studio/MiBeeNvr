@@ -718,14 +718,26 @@ func validatePortRange(r string) error {
 }
 
 // ValidateCameraRecordingMode checks one camera's recording_mode + adaptive
-// tuning block (issue #435). Shared by the startup config validation and the
-// camera create/update API boundaries so an invalid value is rejected at the
-// wire instead of bricking the next restart.
+// tuning block (issue #435) + audio_trigger block (issue #478). Shared by the
+// startup config validation and the camera create/update API boundaries so an
+// invalid value is rejected at the wire instead of bricking the next restart.
 func ValidateCameraRecordingMode(cam CameraConfig) error {
 	switch cam.RecordingMode {
 	case "", "continuous", "adaptive":
 	default:
 		return fmt.Errorf("cameras.%s.recording_mode must be \"continuous\" or \"adaptive\" (got %q)", cam.ID, cam.RecordingMode)
+	}
+	if cam.AudioTrigger != nil && cam.AudioTrigger.Enabled {
+		if cam.RecordingMode != "adaptive" {
+			return fmt.Errorf("cameras.%s.audio_trigger requires recording_mode: adaptive (got %q)", cam.ID, cam.RecordingMode)
+		}
+		at := cam.AudioTrigger
+		if at.MinDBFS != 0 && (at.MinDBFS < -90 || at.MinDBFS > 0) {
+			return fmt.Errorf("cameras.%s.audio_trigger.min_dbfs must be -90–0 dBFS, got %v", cam.ID, at.MinDBFS)
+		}
+		if at.PreCaptureS < 0 || at.PreCaptureS > 30 {
+			return fmt.Errorf("cameras.%s.audio_trigger.pre_capture_s must be 0–30, got %d", cam.ID, at.PreCaptureS)
+		}
 	}
 	if cam.RecordingMode != "adaptive" {
 		return nil

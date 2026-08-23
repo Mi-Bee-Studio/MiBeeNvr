@@ -70,6 +70,10 @@ type CameraUpdate struct {
 	// a recorder restart — the mode is read at recorder construction.
 	RecordingMode *string
 	Adaptive      *config.AdaptiveRecordingConfig
+	// AudioTrigger arms loudness-triggered recording (#478) on adaptive
+	// cameras. nil = unchanged; {enabled:false} disarms. Changes require a
+	// recorder restart (read at recorder construction).
+	AudioTrigger *config.CameraAudioTriggerConfig
 	// Push/ingest camera fields (SRT/RTMP). nil = unchanged.
 	StreamKey     *string
 	SRTPassphrase *string

@@ -86,6 +86,14 @@ type CameraConfig struct {
 	// the defaults in recorder.DefaultAdaptiveConfig.
 	Adaptive *AdaptiveRecordingConfig `yaml:"adaptive,omitempty" json:"adaptive,omitempty"`
 
+	// AudioTrigger arms loudness-triggered recording (issue #478) for
+	// recording_mode: adaptive cameras: a loud 1-second G.711 window defers
+	// timelapse entry and exits timelapse with a GOP + pre-trigger-audio
+	// back-fill, so an abnormal sound on a static picture is recorded with
+	// audio. G.711 (µ-law/A-law) cameras only — AAC/Opus have no decoder in
+	// the static build (the recorder logs that the trigger stays inactive).
+	AudioTrigger *CameraAudioTriggerConfig `yaml:"audio_trigger,omitempty" json:"audio_trigger,omitempty"`
+
 	// Recording schedule: restrict recording to specific time ranges (e.g. daytime only).
 	// When nil or disabled, records 24/7. Uses the same TimeRange/ScheduleConfig
 	// pattern as timelapse scheduling.
@@ -138,6 +146,19 @@ type AdaptiveRecordingConfig struct {
 	// GOPBufferBytes caps the in-memory GOP pre-buffer that makes the
 	// timelapse→normal transition seamless. Default 16MB. Range 1–64MB.
 	GOPBufferBytes int64 `yaml:"gop_buffer_bytes,omitempty" json:"gop_buffer_bytes,omitempty"`
+}
+
+// CameraAudioTriggerConfig tunes audio_trigger (issue #478).
+type CameraAudioTriggerConfig struct {
+	// Enabled arms the loudness input. When false the recorder behaves
+	// exactly as before #478.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// MinDBFS is the loudness threshold over a 1-second window, in dBFS
+	// (20·log10(rms/32768)). Default -45. Range -90–0 (0 = default).
+	MinDBFS float64 `yaml:"min_dbfs,omitempty" json:"min_dbfs,omitempty"`
+	// PreCaptureS is how many seconds of pre-trigger audio a timelapse-exit
+	// flush back-fills into the segment. Default 3. Range 0–30.
+	PreCaptureS int `yaml:"pre_capture_s,omitempty" json:"pre_capture_s,omitempty"`
 }
 
 // PushTargetConfig defines one push-out (relay) destination for a camera.

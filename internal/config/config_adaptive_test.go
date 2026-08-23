@@ -68,3 +68,41 @@ func TestValidateRecordingMode_AdaptiveRanges(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateAudioTrigger(t *testing.T) {
+	base := func(at *CameraAudioTriggerConfig) *Config {
+		cfg := adaptiveTestConfig("adaptive", "h265", nil)
+		cfg.Cameras[0].AudioTrigger = at
+		return cfg
+	}
+	if err := Validate(base(&CameraAudioTriggerConfig{Enabled: true, MinDBFS: -45, PreCaptureS: 3})); err != nil {
+		t.Fatalf("valid audio_trigger rejected: %v", err)
+	}
+	if err := Validate(base(nil)); err != nil {
+		t.Fatalf("nil audio_trigger rejected: %v", err)
+	}
+	cases := []struct {
+		name string
+		at   *CameraAudioTriggerConfig
+		want string
+	}{
+		{"requires adaptive mode", &CameraAudioTriggerConfig{Enabled: true}, "adaptive"}, // set via continuous below
+		{"dbfs too low", &CameraAudioTriggerConfig{Enabled: true, MinDBFS: -100}, "min_dbfs"},
+		{"dbfs positive", &CameraAudioTriggerConfig{Enabled: true, MinDBFS: 3}, "min_dbfs"},
+		{"precap negative", &CameraAudioTriggerConfig{Enabled: true, PreCaptureS: -1}, "pre_capture_s"},
+		{"precap too large", &CameraAudioTriggerConfig{Enabled: true, PreCaptureS: 31}, "pre_capture_s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			if tc.name == "requires adaptive mode" {
+				cfg := adaptiveTestConfig("continuous", "h265", nil)
+				cfg.Cameras[0].AudioTrigger = tc.at
+				err = Validate(cfg)
+			} else {
+				err = Validate(base(tc.at))
+			}
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
