@@ -253,7 +253,7 @@ func TestAdaptiveTracker_SpikeBurstResetsCalm(t *testing.T) {
 	// resets calmSince, so the 60s threshold is never reached.
 	for elapsed := time.Duration(0); elapsed < 80*time.Second; elapsed += 10 * time.Second {
 		at := end.Add(elapsed)
-		for d := time.Duration(0); d < 10*time.Second; d += 50*time.Millisecond {
+		for d := time.Duration(0); d < 10*time.Second; d += 50 * time.Millisecond {
 			buf := make([]byte, 800)
 			buf[0] = 0x41
 			tr.observe(buf, false, at.Add(d))
