@@ -370,3 +370,33 @@ func TestWorkerSendsKeepaliveWhenIdle(t *testing.T) {
 	default:
 	}
 }
+
+// TestStaleWriteDeadlineKillsWrites is the regression test for issue #167's
+// root cause: Dial used to arm a combined SetDeadline(5s) for the handshake
+// and never cleared it, so every outbound packet after dial+5s (per-frame
+// counters ACKs, MISS commands, keepalives) failed with a silent
+// "write udp: i/o timeout". The camera, starved of ACKs, stopped streaming
+// ~20s later. This test pins the failure mechanism: a stale write deadline
+// breaks keepalive writes; clearing the deadline restores them.
+func TestStaleWriteDeadlineKillsWrites(t *testing.T) {
+	c, camera := newKeepaliveTestConn(t)
+
+	// Simulate the old Dial: deadline set 5s ago and forgotten.
+	_ = c.UDPConn.SetDeadline(time.Now().Add(-5 * time.Second))
+
+	if c.sendKeepalive() {
+		t.Fatal("sendKeepalive should fail under a stale write deadline")
+	}
+
+	// Fix under test: handshake clears the deadline before the worker runs.
+	_ = c.UDPConn.SetDeadline(time.Time{})
+
+	if !c.sendKeepalive() {
+		t.Fatal("sendKeepalive should succeed after deadline is cleared")
+	}
+
+	msg := readDecoded(t, camera)
+	if string(msg[msgHhrSize:msgHhrSize+4]) != "\x09\x00\x0b\x00" {
+		t.Errorf("expected counters keepalive, got cmd %x", msg[msgHhrSize:msgHhrSize+4])
+	}
+}

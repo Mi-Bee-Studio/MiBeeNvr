@@ -22,9 +22,11 @@ import (
 // ("tutk-transport" component) so testers' log-grep instructions stay stable.
 var tutkLogger = slog.Default().With("component", "tutk-transport")
 
-// Keepalive cadence for idle TUTK sessions (issue #167: Kalay devices/relays
-// drop the session after ~10-20s of client silence). We keep the read deadline
-// short so the worker wakes up regularly and can emit an alive signal.
+// Keepalive hardening for idle TUTK sessions. Root cause of the ~10-20s
+// disconnect loop (issue #167) was a stale handshake WRITE deadline that
+// silently killed all post-handshake writes (ACKs included) — fixed in Dial.
+// The periodic counters packet below is defense-in-depth so a silent camera
+// still hears from us, plus the tick/lost logs that exposed the bug.
 // Var (not const) so tests can shorten it.
 var (
 	keepaliveInterval = 2 * time.Second
@@ -66,7 +68,13 @@ func Dial(host, uid, username, password string) (*Conn, error) {
 
 	sid := GenSessionID()
 
-	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	// Handshake read timeout — READ side only. A write deadline here would
+	// silently kill every post-handshake outbound packet (per-frame counters
+	// ACKs, MISS commands, keepalives) once it expires ~5s in: the camera then
+	// starves for ACKs and stops streaming ~20s later — issue #167's disconnect
+	// loop. UDP writes never block, so a write deadline buys nothing.
+	// (Same pattern as cs2Handshake, which clears its deadline afterwards.)
+	_ = c.UDPConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 	if addr.Port != 10001 {
 		err = c.connectDirect(uid, sid)
@@ -88,6 +96,10 @@ func Dial(host, uid, username, password string) (*Conn, error) {
 		_ = c.Close()
 		return nil, err
 	}
+
+	// Handshake done — clear any lingering deadline before the worker takes
+	// over (it manages its own read deadline). Mirrors cs2.go's handshake.
+	_ = c.UDPConn.SetDeadline(time.Time{})
 
 	tutkLogger.Info("tutk: session established", "uid", uid, "session_ver", c.ver[0], "keepalive", keepaliveEnabled())
 
