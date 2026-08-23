@@ -626,6 +626,14 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 		cam.Adaptive = updates.Adaptive
 	}
+	if updates.AudioTrigger != nil {
+		// Same restart semantics as Adaptive (issue #478): the runtime is
+		// armed at recorder construction. {enabled:false} disarms.
+		if cam.AudioTrigger == nil || *cam.AudioTrigger != *updates.AudioTrigger {
+			needsRestart = true
+		}
+		cam.AudioTrigger = updates.AudioTrigger
+	}
 
 	// Persist to database
 	if cm.db != nil {

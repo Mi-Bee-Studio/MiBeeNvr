@@ -4,13 +4,18 @@
 // live compressed-domain activity signal, never the connection: the recorder
 // stays connected and keeps feeding the StreamHub at all times.
 //
-//	NORMAL ──(activity signal calm for CalmThreshold)──▶ TIMELAPSE
-//	TIMELAPSE ──(single P-frame size spike)──▶ NORMAL + GOP flush
+//	NORMAL ──(activity signal calm for CalmThreshold AND audio quiet)──▶ TIMELAPSE
+//	TIMELAPSE ──(spike burst / major spike / loud audio)──▶ NORMAL + GOP flush
 //
 // While in NORMAL, only a spike BURST (2+ oversized P-frames within 2s) resets
 // the calm accumulation — real motion produces clustered spikes, while
 // encoders emit isolated oversized P-frames even in fully static scenes
 // (issue #466 field data). Exiting TIMELAPSE takes a single spike.
+//
+// Audio is an OR-input on the same state machine (issue #478): a loud 1-second
+// G.711 window (or an external semantic event via the trigger API) defers
+// TIMELAPSE entry and — while sparse — exits with the same GOP flush, so an
+// abnormal sound on a motionless picture is still recorded, with audio.
 //
 // In TIMELAPSE mode only one keyframe per TimelapseInterval reaches the muxer
 // (audio is dropped too); everything else is skipped on disk but retained in
@@ -31,6 +36,7 @@ package recorder
 import (
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -58,7 +64,13 @@ func DefaultAdaptiveConfig() AdaptiveConfig {
 		CalmThreshold:     60 * time.Second,
 		TimelapseInterval: 30 * time.Second,
 		SpikeFactor:       5.0,
-		MaxGOPBuffer:      16 << 20, // 16MB ≈ 64s @ 2Mbps — far above any sane GOP
+		// 32MB: the ring must hold one full camera GOP. 16MB was sized for
+		// ~4s GOPs; a 2K H.265 camera whose IDR interval approaches the 30s
+		// timelapse cadence (~12-15MB average, more with motion spikes)
+		// overflows it, breaking the ring — the next timelapse exit then
+		// flushes nothing and its P-frames land with dangling references
+		// ("Could not find ref with POC" at decode, issue #485 field data).
+		MaxGOPBuffer: 32 << 20, // ≈ 75s @ 3.5Mbps — above a 30s GOP at 2K
 	}
 }
 
@@ -83,6 +95,13 @@ type gopFrame struct {
 	nalu  []byte
 	isIDR bool
 	at    time.Time
+	// written marks frames already on disk in the CURRENT segment (normal-path
+	// writes and sparse keyframes). The timelapse-exit flush must skip them
+	// when writing into the existing segment — re-writing the sparse IDR (the
+	// ring's anchor) produced duplicate POC / dts collisions (issue #473).
+	// A flush that CREATES a fresh segment still writes the whole ring: the
+	// IDR there lands in a new file, which is not a duplicate.
+	written bool
 }
 
 // adaptiveTracker holds the live activity signal and mode state. It is owned
@@ -98,6 +117,7 @@ type adaptiveTracker struct {
 	pSizes    []float64
 	median    float64
 	mad       float64
+	floor     float64 // MAD-floored deviation floor from the last recompute
 	lastCalc  time.Time
 	calmSince time.Time // last motion burst (or start); sustained calm enters TIMELAPSE
 
@@ -117,6 +137,17 @@ type adaptiveTracker struct {
 	gopBytes  int64
 	gopBroken bool
 
+	// Audio-trigger input (issue #478). Written by the audio callback (or
+	// the external trigger API handler) via audioLoud, read by observe() on
+	// the video goroutine. lastLoud defers TIMELAPSE entry by CalmThreshold;
+	// a seq bump observed while in TIMELAPSE exits with a GOP flush.
+	// audioSeqSeen consumes events seen in NORMAL so they cannot fire a
+	// stale exit after a later entry.
+	audioMu       sync.Mutex
+	audioLastLoud time.Time
+	audioSeq      uint64
+	audioSeqSeen  uint64
+
 	transitions int // diagnostics: mode switches observed
 }
 
@@ -133,7 +164,7 @@ func newAdaptiveTracker(cfg AdaptiveConfig, camID string, log *slog.Logger) *ada
 		cfg.TimelapseInterval = 30 * time.Second
 	}
 	if cfg.MaxGOPBuffer <= 0 {
-		cfg.MaxGOPBuffer = 16 << 20
+		cfg.MaxGOPBuffer = 32 << 20
 	}
 	return &adaptiveTracker{
 		cfg:       cfg,
@@ -155,6 +186,14 @@ const (
 	// adaptiveBurstCount is the spike count within the window that resets the
 	// calm accumulation.
 	adaptiveBurstCount = 2
+	// adaptiveMajorFactor scales the spike threshold for a MAJOR spike — a
+	// single frame large enough to exit timelapse on its own (scene cut,
+	// light-on, person appearing): size > median + majorFactor*threshold.
+	// Guards the burst-gated exit against missing one-frame scene changes
+	// (issue #475 field data: an empty room's noise spikes stay under 2x a
+	// factor-10 threshold while real scene cuts clear it by an order of
+	// magnitude).
+	adaptiveMajorFactor = 2.0
 )
 
 // observe ingests one VCL NALU (without start code), updates the activity
@@ -178,6 +217,13 @@ func (t *adaptiveTracker) observe(nalu []byte, isIDR bool, now time.Time) (spike
 		}
 	}
 
+	// Consume the audio-trigger input (issue #478): an event seen while in
+	// NORMAL must not fire a stale exit after a later TIMELAPSE entry, so the
+	// sequence number is consumed on EVERY frame regardless of mode.
+	audioLastLoud, audioSeq := t.audioSnapshot()
+	audioEvent := audioSeq != t.audioSeqSeen
+	t.audioSeqSeen = audioSeq
+
 	switch t.mode {
 	case adaptiveNormal:
 		// Only a spike BURST (clustered oversized P-frames) counts as motion
@@ -187,23 +233,57 @@ func (t *adaptiveTracker) observe(nalu []byte, isIDR bool, now time.Time) (spike
 		if spike && t.spikeBurst(now) {
 			t.calmSince = now
 		}
-		if now.Sub(t.calmSince) >= t.cfg.CalmThreshold {
-			t.setMode(adaptiveTimelapse, now)
+		// Entering TIMELAPSE requires BOTH the video signal and the audio to
+		// have been calm for CalmThreshold (audioLastLoud's zero value lets a
+		// never-loud stream enter immediately once the video is calm).
+		if now.Sub(t.calmSince) >= t.cfg.CalmThreshold &&
+			now.Sub(audioLastLoud) >= t.cfg.CalmThreshold {
+			t.setMode(adaptiveTimelapse, now, "calm")
 			t.lastSparseWrite = now
 		}
 	case adaptiveTimelapse:
-		if spike {
-			// Any single spike exits sparse mode. The exit itself is evidence
-			// of activity, so a fresh CalmThreshold window is required before
-			// re-entering TIMELAPSE (prevents spike → exit → instant re-entry
-			// oscillation, since the burst rule above does not fire on
-			// isolated spikes).
+		// Exit is burst-gated like entry (issue #475 field data: on a camera
+		// confirmed recording an empty scene all day, every isolated noise
+		// spike exited sparse mode and cost a fresh CalmThreshold of full-rate
+		// writing — timelapse share 2% where the scene was 100% static). A
+		// single MAJOR spike (scene-cut scale) still exits alone: one-frame
+		// scene changes (light on, person appearing) must resume recording
+		// immediately. Real motion always clusters, so the burst path covers
+		// it. A loud-audio event (issue #478) exits ungated — sound IS the
+		// signal, and over-recording beats missing the event.
+		if audioEvent {
 			t.calmSince = now
 			flush = t.takeGOP()
-			t.setMode(adaptiveNormal, now)
+			t.setMode(adaptiveNormal, now, "audio")
+		} else if spike && (t.spikeBurst(now) || t.majorSpike(size)) {
+			// The exit itself is evidence of activity, so a fresh CalmThreshold
+			// window is required before re-entering TIMELAPSE (prevents spike →
+			// exit → instant re-entry oscillation, since the entry reset does
+			// not fire on isolated spikes).
+			t.calmSince = now
+			flush = t.takeGOP()
+			t.setMode(adaptiveNormal, now, "activity")
 		}
 	}
 	return spike, flush
+}
+
+// audioLoud records a loud-audio event (audio-trigger window or external
+// trigger API) at at; hold extends how long TIMELAPSE entry stays deferred
+// (semantic events carry their own confidence window). Thread-safe: called
+// from the audio callback or an API handler goroutine.
+func (t *adaptiveTracker) audioLoud(at time.Time, hold time.Duration) {
+	t.audioMu.Lock()
+	t.audioLastLoud = at.Add(hold)
+	t.audioSeq++
+	t.audioMu.Unlock()
+}
+
+// audioSnapshot reads the cross-thread audio-trigger state.
+func (t *adaptiveTracker) audioSnapshot() (lastLoud time.Time, seq uint64) {
+	t.audioMu.Lock()
+	defer t.audioMu.Unlock()
+	return t.audioLastLoud, t.audioSeq
 }
 
 // recordSpike appends a spike timestamp, trimming entries outside the burst
@@ -218,7 +298,18 @@ func (t *adaptiveTracker) recordSpike(now time.Time) {
 		}
 		break
 	}
-	t.recentSpikes = append(t.recentSpikes[drop:drop:drop], now)
+	// Shift retained spikes left in place, then append. The previous
+	// `append(t.recentSpikes[drop:drop:drop], now)` silently DISCARDED the
+	// retained tail when drop == 0 (full-slice expr caps capacity at 0), so
+	// only the newest spike ever survived and spikeBurst never saw a pair —
+	// the burst rules (entry calm-reset and, from #475, the timelapse exit)
+	// were dead in production from #468 until the burst-gated-exit unit test
+	// caught it.
+	if drop > 0 {
+		n := copy(t.recentSpikes, t.recentSpikes[drop:])
+		t.recentSpikes = t.recentSpikes[:n]
+	}
+	t.recentSpikes = append(t.recentSpikes, now)
 }
 
 // spikeBurst reports whether the recent spikes within the burst window reach
@@ -238,6 +329,13 @@ func (t *adaptiveTracker) spikeBurst(now time.Time) bool {
 	return false
 }
 
+// markTailWritten flags the newest retained frame as already on disk.
+func (t *adaptiveTracker) markTailWritten() {
+	if n := len(t.gop); n > 0 {
+		t.gop[n-1].written = true
+	}
+}
+
 // shouldWriteSparse reports whether a frame observed in TIMELAPSE mode may
 // reach the muxer: keyframes only, at most one per TimelapseInterval.
 func (t *adaptiveTracker) shouldWriteSparse(isIDR bool, now time.Time) bool {
@@ -255,7 +353,15 @@ func (t *adaptiveTracker) appendGOP(nalu []byte, isIDR bool, now time.Time) {
 	size := int64(len(nalu))
 	if t.gopBytes+size > t.cfg.MaxGOPBuffer {
 		// Pathological GOP (e.g. intra-refresh encoders with no discrete
-		// IDR): retaining is pointless — degrade to no-flush transitions.
+		// IDR, or an IDR interval long enough to overflow the cap): retaining
+		// is pointless — degrade to no-flush transitions. The next exit
+		// writes its P-frames with dangling references (decode artifacts
+		// until the following IDR), so make the condition observable.
+		if !t.gopBroken {
+			t.log.Warn("adaptive GOP pre-buffer overflowed — timelapse exits will flush nothing until the next IDR",
+				"gop_bytes", t.gopBytes, "max_gop_buffer", t.cfg.MaxGOPBuffer,
+				"hint", "raise adaptive.gop_buffer_bytes for this camera")
+		}
 		t.gopBroken = true
 		t.gop = t.gop[:0]
 		t.gopBytes = 0
@@ -269,7 +375,8 @@ func (t *adaptiveTracker) appendGOP(nalu []byte, isIDR bool, now time.Time) {
 
 // takeGOP detaches the retained GOP for flushing. Returns nil when the ring
 // is broken (overflowed) or does not start with an IDR (not independently
-// decodable).
+// decodable). Callers skip already-written frames when flushing into an
+// existing segment (issue #473).
 func (t *adaptiveTracker) takeGOP() []gopFrame {
 	frames := t.gop
 	t.gop = nil
@@ -300,11 +407,17 @@ func (t *adaptiveTracker) classify(size int, now time.Time) bool {
 	if t.median <= 0 {
 		return false
 	}
-	floor := t.mad
-	if minFloor := t.median * 0.08; floor < minFloor {
-		floor = minFloor
+	t.floor = t.mad
+	if minFloor := t.median * 0.08; t.floor < minFloor {
+		t.floor = minFloor
 	}
-	return float64(size) > t.median+t.cfg.SpikeFactor*floor
+	return float64(size) > t.median+t.cfg.SpikeFactor*t.floor
+}
+
+// majorSpike reports whether the frame is a scene-cut-scale outlier: big
+// enough to leave timelapse on its own despite the burst-gated exit.
+func (t *adaptiveTracker) majorSpike(size int) bool {
+	return t.median > 0 && float64(size) > t.median+adaptiveMajorFactor*t.cfg.SpikeFactor*t.floor
 }
 
 // recomputeBaseline derives median and MAD over the retained size window.
@@ -332,15 +445,17 @@ func (t *adaptiveTracker) recomputeBaseline() {
 	t.median, t.mad = med, mad
 }
 
-// setMode switches write density with a log line for observability.
-func (t *adaptiveTracker) setMode(m adaptiveMode, now time.Time) {
+// setMode switches write density with a log line for observability. reason
+// names the trigger ("calm", "activity", "audio").
+func (t *adaptiveTracker) setMode(m adaptiveMode, now time.Time, reason string) {
 	if t.mode == m {
 		return
 	}
 	t.mode = m
 	t.transitions++
 	t.log.Info("adaptive recording mode switch",
-		"mode", m.String(), "transitions", t.transitions,
+		"mode", m.String(), "reason", reason,
+		"transitions", t.transitions,
 		"calm_threshold", t.cfg.CalmThreshold.String(),
 		"timelapse_interval", t.cfg.TimelapseInterval.String())
 }
@@ -351,6 +466,10 @@ type AdaptiveFrame struct {
 	Nalu  []byte
 	IsIDR bool
 	At    time.Time
+	// Written: the frame is already on disk in the current segment — skip it
+	// when flushing into the existing segment (issue #473); include it when
+	// the flush creates a fresh segment.
+	Written bool
 }
 
 // AdaptiveGate is the exported per-connection adaptive-recording gate for
@@ -388,7 +507,7 @@ func (g *AdaptiveGate) Observe(nalu []byte, isIDR bool, now time.Time) (spike, s
 		// the current frame. Keyed on the flush return, not on mode — observe()
 		// has already switched to NORMAL (same fix as writeFrames).
 		for _, f := range fl {
-			flush = append(flush, AdaptiveFrame{Nalu: f.nalu, IsIDR: f.isIDR, At: f.at})
+			flush = append(flush, AdaptiveFrame{Nalu: f.nalu, IsIDR: f.isIDR, At: f.at, Written: f.written})
 		}
 	}
 	if g.t.mode == adaptiveTimelapse && !spike {
@@ -406,6 +525,24 @@ func (g *AdaptiveGate) Observe(nalu []byte, isIDR bool, now time.Time) (spike, s
 // gate DISK audio writes, which sparse mode drops; live audio continues).
 func (g *AdaptiveGate) Timelapse() bool {
 	return g.t.mode == adaptiveTimelapse
+}
+
+// AudioLoud records a loud-audio event (or an external semantic trigger, see
+// the /api/cameras/{id}/adaptive/trigger endpoint) at at; hold extends how
+// long TIMELAPSE entry stays deferred. Thread-safe — the mode transition
+// itself is executed by the next Observe on the video path, together with
+// the GOP flush (issue #478).
+func (g *AdaptiveGate) AudioLoud(at time.Time, hold time.Duration) {
+	g.t.audioLoud(at, hold)
+}
+
+// MarkLastWritten records that the most recently observed frame was
+// successfully written to the current segment, so a later timelapse-exit
+// flush skips it (issue #473). Callers invoke it after a successful muxer
+// write of the frame Observe just classified. No-op when the ring is empty
+// or was detached by a flush.
+func (g *AdaptiveGate) MarkLastWritten() {
+	g.t.markTailWritten()
 }
 
 // ResolveAdaptiveConfig builds a resolved AdaptiveConfig from optional

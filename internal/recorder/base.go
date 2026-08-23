@@ -83,6 +83,13 @@ type BaseConfig struct {
 	// (the signal is P-frame size vs baseline). Nil = plain continuous
 	// recording with zero added per-frame cost.
 	Adaptive *AdaptiveConfig
+
+	// AudioTrigger arms loudness-triggered recording (issue #478) on top of
+	// Adaptive: a loud 1-second G.711 window defers timelapse entry and exits
+	// timelapse with a GOP + pre-trigger-audio back-fill. Only meaningful
+	// with Adaptive non-nil; cameras streaming AAC/Opus audio log that the
+	// trigger stays inactive (no pure-Go decoder).
+	AudioTrigger *AudioTriggerConfig
 }
 
 // rtspConnector is implemented by concrete RTSP recorders to provide the
@@ -290,10 +297,19 @@ type baseRecorder struct {
 	// via initStreamHub(). Non-blocking broadcasts.
 	Hub *model.StreamHub
 
-	// Adaptive write-density state (issue #435). Tier 3: created and owned
-	// exclusively by the writeFrames goroutine when cfg.Adaptive != nil;
-	// nil otherwise. Never touched by other goroutines.
+	// Adaptive write-density state (issue #435). Tier 3: created by
+	// resetAdaptive (connectAndRecord, BEFORE the writeFrames goroutine and
+	// the audio RTP callbacks start — goroutine creation provides the
+	// happens-before) and thereafter owned by the writeFrames goroutine,
+	// except the mutex-guarded audio-trigger input. nil when cfg.Adaptive is
+	// nil. Rebuilt per connection.
 	adaptive *adaptiveTracker
+
+	// audioTrig is the audio-trigger runtime (issue #478) — 1s G.711 RMS
+	// windows fed by the audio RTP callback plus the pre-trigger ring drained
+	// by writeFrames at a timelapse exit. nil unless Adaptive is armed AND
+	// AudioTrigger is enabled. Rebuilt per connection by resetAdaptive.
+	audioTrig *AudioTriggerRuntime
 
 	// audioSparse gates DISK writes of audio while the adaptive tracker is in
 	// sparse (timelapse) mode. Read by the audio RTP callbacks on their own
@@ -515,14 +531,13 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 	defer b.recoverPanic("writeFrames")
 	defer close(done)
 
-	// Adaptive write-density tracker (issue #435). Rebuilt per connection so
-	// a reconnect always starts in NORMAL mode with a fresh baseline (a
-	// reconnect storm can't oscillate the mode). nil when Adaptive recording
-	// is not configured — the gate below is then a single nil check per frame.
-	if b.cfg.Adaptive != nil {
-		b.adaptive = newAdaptiveTracker(*b.cfg.Adaptive, b.cfg.CameraID, b.log)
-		b.audioSparse.Store(false)
-	}
+	// Adaptive write-density tracker: armed by resetAdaptive() in
+	// connectAndRecord BEFORE this goroutine starts (the audio RTP callbacks
+	// read b.adaptive/b.audioTrig — creating them here raced the callbacks).
+	// Rebuilt per connection so a reconnect always starts in NORMAL mode with
+	// a fresh baseline (a reconnect storm can't oscillate the mode). nil when
+	// Adaptive recording is not configured — the gate below is then a single
+	// nil check per frame.
 	sparseAudio := false
 
 	for data := range b.frameCh {
@@ -583,6 +598,11 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 				// was silently dropped (found via the AdaptiveGate facade test,
 				// issue #466 field test).
 				b.writeFlushedGOP(flush)
+				// Pre-trigger audio back-fill (issue #478): a loud window (or
+				// external trigger) caused this exit — write the retained
+				// unwritten ring samples so the segment carries PreCapture
+				// seconds of sound before the trigger.
+				b.flushAudioRing()
 			}
 			if b.adaptive.mode == adaptiveTimelapse && !spike {
 				if !b.adaptive.shouldWriteSparse(isIDR, now) {
@@ -650,6 +670,11 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			continue
 		}
 		b.frameCount++
+		if b.adaptive != nil {
+			// The frame just observed into the GOP ring is now on disk; a later
+			// timelapse-exit flush into this segment must skip it (issue #473).
+			b.adaptive.markTailWritten()
+		}
 
 		// Step 10: Check segment duration rollover.
 		if time.Since(b.segStart) >= b.cfg.SegmentDur {
@@ -675,6 +700,12 @@ func (b *baseRecorder) writeFlushedGOP(frames []gopFrame) {
 		return
 	}
 	for _, f := range frames {
+		if b.muxer != nil && f.written {
+			// Already on disk in the current segment (normal-path write or the
+			// sparse keyframe itself) — re-writing it duplicated the ring's IDR
+			// anchor (duplicate POC / dts collision, issue #473).
+			continue
+		}
 		if b.muxer == nil {
 			if !f.isIDR {
 				continue // never start a segment on a P frame
@@ -706,6 +737,100 @@ func (b *baseRecorder) writeFlushedGOP(frames []gopFrame) {
 	// The triggering (current) frame follows via the normal write path; its
 	// duration is computed against the last flushed frame's timestamp, and
 	// the segment-rollover check runs there with a fresh clock reading.
+}
+
+// resetAdaptive (re)arms the per-connection adaptive state: the tracker and,
+// when audio_trigger is configured, the loudness runtime. Called from
+// connectAndRecord BEFORE the writeFrames goroutine and the audio RTP
+// callbacks start — goroutine creation provides the happens-before, so both
+// pointers are stable for the connection's lifetime.
+func (b *baseRecorder) resetAdaptive() {
+	if b.cfg.Adaptive == nil {
+		b.adaptive = nil
+		b.audioTrig = nil
+		return
+	}
+	b.adaptive = newAdaptiveTracker(*b.cfg.Adaptive, b.cfg.CameraID, b.log)
+	b.audioSparse.Store(false)
+	if b.cfg.AudioTrigger != nil && b.cfg.AudioTrigger.Enabled {
+		b.audioTrig = NewAudioTriggerRuntime(*b.cfg.AudioTrigger, b.cfg.CameraID, b.log)
+		b.log.Info("audio trigger armed",
+			"min_dbfs", b.cfg.AudioTrigger.MinDBFS,
+			"pre_capture", b.cfg.AudioTrigger.PreCapture.String(),
+			"codec", "g711")
+	} else {
+		b.audioTrig = nil
+	}
+}
+
+// audioTriggerIngest feeds one decoded G.711 packet (audio RTP callback
+// goroutine) into the loudness meter + pre-trigger ring; a loud window
+// pokes the tracker's cross-thread audio input.
+func (b *baseRecorder) audioTriggerIngest(muLaw bool, payload []byte, sampleRate int, at time.Time) {
+	if b.audioTrig == nil || b.adaptive == nil {
+		return
+	}
+	if sampleRate <= 0 {
+		sampleRate = 8000
+	}
+	dur := time.Duration(len(payload)) * time.Second / time.Duration(sampleRate)
+	b.audioTrig.Ingest(muLaw, payload, dur, at, func(loudAt time.Time) {
+		b.adaptive.audioLoud(loudAt, 0)
+	})
+}
+
+// audioTriggerMarkWritten flags the newest retained audio packet as written
+// by the live path (audio RTP callback goroutine, after a successful
+// WriteAudioSample — the audio twin of markTailWritten).
+func (b *baseRecorder) audioTriggerMarkWritten() {
+	if b.audioTrig != nil {
+		b.audioTrig.MarkWritten()
+	}
+}
+
+// flushAudioRing back-fills pre-trigger audio at a timelapse→normal exit:
+// unwritten ring samples are written into the current segment's audio track,
+// pts-rebased to the (possibly just back-dated) segStart. Samples predating
+// the segment are dropped — at worst a fraction of a second at a rotation
+// boundary, mirroring the video flush's rotation semantics.
+func (b *baseRecorder) flushAudioRing() {
+	if b.audioTrig == nil {
+		return
+	}
+	b.mu.Lock()
+	m := b.muxer
+	aid := b.audioTrackID
+	start := b.segStart
+	b.mu.Unlock()
+	if m == nil || aid <= 0 {
+		b.audioTrig.Drain() // nowhere to write — drop the backlog
+		return
+	}
+	for _, s := range b.audioTrig.Drain() {
+		if s.Written {
+			continue
+		}
+		pts := s.At.Sub(start)
+		if pts < 0 {
+			continue
+		}
+		if err := m.WriteAudioSample(aid, s.Data, pts, s.Dur); err != nil {
+			b.log.Error("failed to write pre-trigger audio sample",
+				"camera_id", b.cfg.CameraID, "error", err)
+			return
+		}
+	}
+}
+
+// AudioTriggerEvent injects an external audio-activity event (issue #478:
+// semantic classifiers run outside the NVR — POST /api/cameras/{id}/adaptive/
+// trigger lands here). hold extends how long TIMELAPSE entry stays deferred.
+func (b *baseRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) error {
+	if b.adaptive == nil {
+		return fmt.Errorf("camera %s is not in adaptive recording mode", b.cfg.CameraID)
+	}
+	b.adaptive.audioLoud(at, hold)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

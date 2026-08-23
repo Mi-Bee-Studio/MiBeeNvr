@@ -47,6 +47,9 @@ export interface Camera {
   // activity signal stays calm. 'adaptive' holds the tuning knobs (nil = defaults).
   recording_mode?: string;
   adaptive?: AdaptiveRecordingConfig;
+  // Loudness trigger for adaptive recording (#478); only effective with
+  // recording_mode 'adaptive'.
+  audio_trigger?: CameraAudioTriggerConfig;
   // Xiaomi two-way audio enable flag
   two_way_audio_enabled?: boolean;
   // Push/ingest fields (SRT/RTMP cameras)
@@ -82,6 +85,16 @@ export interface AdaptiveRecordingConfig {
   spike_factor?: number;
   /** Seamless-transition GOP pre-buffer cap in bytes. Default 16MB. */
   gop_buffer_bytes?: number;
+}
+
+/** Loudness trigger knobs for recording_mode: 'adaptive' (#478). */
+export interface CameraAudioTriggerConfig {
+  /** Arm the loudness input. */
+  enabled: boolean;
+  /** 1s-window loudness threshold in dBFS. Default -45. Range -90..0. */
+  min_dbfs?: number;
+  /** Seconds of pre-trigger audio back-filled on a timelapse exit. Default 3. */
+  pre_capture_s?: number;
 }
 
 /** One push-out relay destination (RTMP/RTSP) for a camera. */
@@ -169,6 +182,9 @@ export interface CreateCameraRequest {
   // Recording mode (#435). Omit = continuous.
   recording_mode?: string;
   adaptive?: AdaptiveRecordingConfig;
+  // Loudness trigger for adaptive recording (#478); only effective with
+  // recording_mode 'adaptive'.
+  audio_trigger?: CameraAudioTriggerConfig;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -215,6 +231,9 @@ export interface UpdateCameraRequest {
   // Recording mode (#435). Omit = unchanged. Changing it restarts the recorder.
   recording_mode?: string;
   adaptive?: AdaptiveRecordingConfig;
+  // Loudness trigger for adaptive recording (#478); only effective with
+  // recording_mode 'adaptive'.
+  audio_trigger?: CameraAudioTriggerConfig;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;

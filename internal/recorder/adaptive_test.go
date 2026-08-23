@@ -358,11 +358,134 @@ func TestAdaptiveGate_SparseSkipAndFlushFacade(t *testing.T) {
 
 func TestResolveAdaptiveConfig_DefaultsAndOverrides(t *testing.T) {
 	ac := ResolveAdaptiveConfig("", "", 0, 0)
-	if ac != (AdaptiveConfig{CalmThreshold: 60 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 16 << 20}) {
+	if ac != (AdaptiveConfig{CalmThreshold: 60 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 32 << 20}) {
 		t.Fatalf("defaults wrong: %+v", ac)
 	}
 	ac = ResolveAdaptiveConfig("2m", "10s", 7.5, 1<<20)
 	if ac.CalmThreshold != 2*time.Minute || ac.TimelapseInterval != 10*time.Second || ac.SpikeFactor != 7.5 || ac.MaxGOPBuffer != 1<<20 {
 		t.Fatalf("overrides wrong: %+v", ac)
+	}
+}
+
+func TestAdaptiveGate_FlushSkipsWrittenFrames(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: 10 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 3.0, MaxGOPBuffer: 16 << 20}
+	g := NewAdaptiveGate(cfg, "cam", testAdaptiveLogger())
+	t0 := time.Now()
+
+	// IDR + calm → timelapse.
+	idr := bytes.Repeat([]byte{0x65}, 30000)
+	g.Observe(idr, true, t0)
+	end := t0.Add(50 * time.Millisecond)
+	for i := range 500 { // 25s calm
+		buf := make([]byte, 800)
+		buf[0] = 0x41
+		g.Observe(buf, false, end.Add(time.Duration(i)*50*time.Millisecond))
+	}
+	end = end.Add(25 * time.Second)
+	if !g.Timelapse() {
+		t.Fatal("want timelapse")
+	}
+
+	// A sparse keyframe is written after the interval: the caller marks it.
+	g.Observe(idr, true, end) // skipped (within interval)
+	if _, skip, _ := g.Observe(idr, true, end.Add(31*time.Second)); skip {
+		t.Fatal("sparse keyframe must pass")
+	}
+	g.MarkLastWritten() // caller wrote it successfully
+
+	// Skipped P frames accumulate unwritten.
+	p := make([]byte, 800)
+	p[0] = 0x41
+	for i := range 5 {
+		g.Observe(p, false, end.Add((31+time.Duration(i))*time.Second))
+	}
+
+	// Spike exits timelapse: the flush must carry the sparse IDR as Written
+	// (skip into the existing segment) and the skipped P frames as unwritten.
+	big := make([]byte, 300000)
+	big[0] = 0x41
+	_, _, flush := g.Observe(big, false, end.Add(37*time.Second))
+	if len(flush) < 6 {
+		t.Fatalf("flush = %d frames, want >= 6", len(flush))
+	}
+	if !flush[0].IsIDR || !flush[0].Written {
+		t.Fatal("flush anchor must be the written sparse IDR (skipped on disk re-write)")
+	}
+	for i, f := range flush[1:] {
+		if f.Written {
+			t.Fatalf("flush frame %d must be unwritten (it was skipped in sparse mode)", i+1)
+		}
+	}
+}
+
+func TestAdaptiveTracker_BurstGatedExit(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: 10 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 3.0, MaxGOPBuffer: 16 << 20}
+	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+	t0 := time.Now()
+	idr := bytes.Repeat([]byte{0x65}, 30000)
+	tr.observe(idr, true, t0)
+	end := feedCalm(t, tr, t0.Add(50*time.Millisecond), 500) // 25s → TIMELAPSE
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("want timelapse")
+	}
+
+	// Thresholds for the 800-byte calm baseline: median=800, MAD=0 → floor=64.
+	// spike thr = 800+3*64 = 992; major thr = 800+2*3*64 = 1184.
+	isolated := make([]byte, 1100) // 992 < 1100 < 1184: spike but not major
+	isolated[0] = 0x41
+
+	// Isolated noise spikes (far apart) must NOT exit timelapse (#475).
+	tr.observe(isolated, false, end)
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("isolated non-major spike must not exit timelapse")
+	}
+	tr.observe(isolated, false, end.Add(61*time.Second))
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("still timelapse after a second isolated spike")
+	}
+
+	// A spike burst (two within 2s) exits.
+	tr.observe(isolated, false, end.Add(130*time.Second))
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("first spike of a pair must not exit alone")
+	}
+	tr.observe(isolated, false, end.Add(131*time.Second))
+	if tr.mode == adaptiveTimelapse {
+		t.Fatal("spike burst (2 within 2s) must exit timelapse")
+	}
+
+	// A MAJOR single spike (scene-cut scale) exits alone — the light-on /
+	// person-appearing guard.
+	feedCalm(t, tr, end.Add(131*time.Second), 800) // 40s > 10s calm → re-enter
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("want timelapse re-entry after calm")
+	}
+	major := make([]byte, 8000) // >> 1184
+	major[0] = 0x41
+	// Flush is nil here by design: the burst exit already detached the
+	// IDR-anchored ring and no IDR has arrived since, so there is nothing
+	// independently decodable to flush (takeGOP returns nil). Only the exit
+	// itself is asserted.
+	tr.observe(major, false, end.Add(175*time.Second))
+	if tr.mode == adaptiveTimelapse {
+		t.Fatal("major single spike must exit timelapse")
+	}
+}
+
+func TestAdaptiveTracker_SpikeRetention(t *testing.T) {
+	tr := &adaptiveTracker{}
+	now := time.Now()
+	tr.recordSpike(now)
+	tr.recordSpike(now.Add(100 * time.Millisecond))
+	if len(tr.recentSpikes) != 2 {
+		t.Fatalf("recentSpikes = %d entries, want 2 (retention must survive a zero-drop append)", len(tr.recentSpikes))
+	}
+	if !tr.spikeBurst(now.Add(100 * time.Millisecond)) {
+		t.Fatal("two spikes within the burst window must register as a burst")
+	}
+	// A spike after the window keeps only itself.
+	tr.recordSpike(now.Add(10 * time.Second))
+	if len(tr.recentSpikes) != 1 || !tr.recentSpikes[0].Equal(now.Add(10*time.Second)) {
+		t.Fatalf("recentSpikes = %v, want only the newest", tr.recentSpikes)
 	}
 }
