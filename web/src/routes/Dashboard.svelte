@@ -4,9 +4,10 @@
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2 } from 'lucide-svelte';
+  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2, Radio } from 'lucide-svelte';
   import { loadChart, createTrendChart } from '$lib/charts';
   import Tab from '$lib/components/Tab.svelte';
+  import FlowPanel from '$lib/components/FlowPanel.svelte';
   import HealthHistory from './HealthHistory.svelte';
   import TranscodingHistory from './TranscodingHistory.svelte';
   import AiStatusCard from '../components/AiStatusCard.svelte';
@@ -23,6 +24,7 @@
   let tabs = $derived([
     { id: 'storage', label: t('dashboard.tab.storage'), icon: HardDrive },
     { id: 'health', label: t('dashboard.tab.health'), icon: Activity },
+    { id: 'flow', label: t('dashboard.tab.flow'), icon: Radio },
     { id: 'transcoding', label: t('dashboard.tab.transcoding'), icon: Cpu },
   ]);
 
@@ -491,6 +493,8 @@
       <div class="health-tab-content">
         <HealthHistory />
       </div>
+    {:else if activeTab === 'flow'}
+      <FlowPanel />
     {:else if activeTab === 'transcoding'}
       <TranscodingHistory />
     {/if}

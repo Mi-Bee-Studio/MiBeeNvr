@@ -5,7 +5,7 @@
   import type { FlowStream } from '$lib/api/flow';
   import type { Camera, HealthEvent } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Activity, Users, Gauge, Radio } from 'lucide-svelte';
+  import { Users, Gauge, Radio } from 'lucide-svelte';
 
   const POLL_INTERVAL = 2000;
   const EVENTS_REFRESH = 30_000;
@@ -120,9 +120,8 @@
   }
 </script>
 
-<div class="flow-page">
+<div class="flow-panel">
   <div class="flow-header">
-    <h1><Activity size={22} /> {t('flow.title')}</h1>
     <p class="subtitle">{t('flow.subtitle')}</p>
     {#if lastUpdated}
       <span class="updated">{t('flow.updatedAt')}: {lastUpdated.toLocaleTimeString()}</span>
@@ -225,10 +224,8 @@
 </div>
 
 <style>
-  .flow-page {
-    padding: 1.5rem;
-    max-width: 1200px;
-    margin: 0 auto;
+  .flow-panel {
+    margin-top: 1rem;
   }
   .flow-header {
     display: flex;

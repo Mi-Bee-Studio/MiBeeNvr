@@ -1712,7 +1712,6 @@
   "settings.motionAwareCleanupOn": "优先删除安静片段",
   "settings.motionAwareCleanupOff": "按时间顺序删除",
   "settings.motionAwareCleanupHint": "磁盘达到阈值时，优先删除活动分最低（画面安静）的录像；关闭后按最旧优先删除。",
-  "nav.flow": "链路",
   "flow.title": "视频链路",
   "flow.subtitle": "实时帧流水线:采集 → StreamHub → 消费者(fps/码率由两次轮询差分计算)",
   "flow.updatedAt": "更新于",
@@ -1731,5 +1730,11 @@
   "flow.noViewers": "无观看者",
   "flow.liveLatency": "端到端延迟",
   "health.stability.uptime": "24h 在线率",
-  "health.stability.mtbf": "平均无故障时间"
+  "health.stability.mtbf": "平均无故障时间",
+  "dashboard.tab.flow": "链路",
+  "detail.activity.title": "活动热力",
+  "detail.activity.score": "活动分",
+  "detail.activity.noScore": "未分析",
+  "detail.activity.current": "本段",
+  "detail.activity.hint": "绿=平静 → 红=活跃;点击跳转该录像"
 }

@@ -50,5 +50,8 @@ export interface FlowStreamsResponse {
 
 /** Fetch the flow-path snapshot for all cameras. */
 export async function getFlowStreams(): Promise<FlowStreamsResponse> {
-  return apiRequest<FlowStreamsResponse>('/api/streams');
+  // NOTE: apiRequest prepends API_BASE which already ends in /api — the
+  // endpoint must NOT start with /api (the original '/api/streams' produced
+  // /api/api/streams → 404 in production).
+  return apiRequest<FlowStreamsResponse>('/streams');
 }

@@ -22,6 +22,7 @@
   import MergePanel from './recordings/MergePanel.svelte';
   import PlaybackPanel from './recordings/PlaybackPanel.svelte';
   import MetaEditor from './recordings/MetaEditor.svelte';
+  import RecordingActivityStrip from './recordings/RecordingActivityStrip.svelte';
 
   let { recordingId = '' } = $props();
   let currentId = $state('');
@@ -348,6 +349,9 @@
             oncrosssegment={handleCrossSegment}
           />
         </div>
+
+        <!-- Activity heat strip: this recording's motion score in the day's context -->
+        <RecordingActivityStrip {recording} />
 
         <!-- Recording info + actions + transcode status -->
         <MetaEditor
