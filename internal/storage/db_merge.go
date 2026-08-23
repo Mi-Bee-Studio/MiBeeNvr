@@ -125,31 +125,36 @@ func (a *motionAgg) result() (float64, string) {
 // within tx and folds them into agg.
 func aggregateSourceMotion(ctx context.Context, tx *sql.Tx, ids []string, agg *motionAgg) error {
 	for _, chunk := range chunkIDs(ids, batchUpdateChunkSize) {
-		placeholders := make([]string, len(chunk))
-		args := make([]interface{}, 0, len(chunk))
-		for i, id := range chunk {
-			placeholders[i] = "?"
-			args = append(args, id)
+		if err := aggregateSourceMotionChunk(ctx, tx, chunk, agg); err != nil {
+			return err
 		}
-		q := `SELECT motion_score, COALESCE(activity_flags, ''), COALESCE(duration, 0) FROM recordings WHERE id IN (` + strings.Join(placeholders, ",") + `)`
-		rows, err := tx.QueryContext(ctx, q, args...)
-		if err != nil {
-			return fmt.Errorf("load source motion columns: %w", err)
+	}
+	return nil
+}
+
+func aggregateSourceMotionChunk(ctx context.Context, tx *sql.Tx, chunk []string, agg *motionAgg) error {
+	placeholders := make([]string, len(chunk))
+	args := make([]interface{}, 0, len(chunk))
+	for i, id := range chunk {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	q := `SELECT motion_score, COALESCE(activity_flags, ''), COALESCE(duration, 0) FROM recordings WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("load source motion columns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var score, dur float64
+		var flags string
+		if err := rows.Scan(&score, &flags, &dur); err != nil {
+			return fmt.Errorf("scan source motion columns: %w", err)
 		}
-		for rows.Next() {
-			var score, dur float64
-			var flags string
-			if err := rows.Scan(&score, &flags, &dur); err != nil {
-				rows.Close()
-				return fmt.Errorf("scan source motion columns: %w", err)
-			}
-			agg.add(score, flags, dur)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf("iterate source motion columns: %w", err)
-		}
-		rows.Close()
+		agg.add(score, flags, dur)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate source motion columns: %w", err)
 	}
 	return nil
 }
