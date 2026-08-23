@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Stage 1: Build frontend SPA (native, no QEMU) ----
-FROM --platform=$BUILDPLATFORM node:22-slim AS frontend
+FROM --platform=$BUILDPLATFORM node:24-slim AS frontend
 
 WORKDIR /build/web
 

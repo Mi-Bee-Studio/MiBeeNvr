@@ -91,9 +91,10 @@ function setupCacheMock() {
         // Response constructor stringifies it ("[object Blob]", 13 bytes) —
         // the cache "hit" returns garbage, ORT session creation fails, and the
         // runtime's self-heal path purges + re-fetches, breaking the
-        // caches-model test. Node 24+ accepts it, so this only failed in CI
-        // (which pins Node 22). ArrayBuffer bodies are native to undici on
-        // every version.
+        // caches-model test. CI and dev environments now standardize on
+        // Node 24 (which accepts a Blob), but anyone running the suite on
+        // Node 22 would hit this again. ArrayBuffer bodies are native to
+        // undici on every version.
         return new Response(cached.slice(0), { status: 200 });
       }
       return undefined;
