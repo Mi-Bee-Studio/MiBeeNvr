@@ -57,26 +57,38 @@ func TestRebindHub(t *testing.T) {
 	// hub's, not the stale one.)
 	broadcastFrame(t, oldHub, 2000, [][]byte{{0xAA}})
 	broadcastFrame(t, newHub, 3000, [][]byte{{0xFF, 0xD8, 0x01}})
+	// Assert by DECODED identity (type + pts), never by scanning raw bytes:
+	// every video-frame message ends with the 8-byte IngestAt wallclock
+	// (#469), whose bytes cycle through 0x00-0xFF — a raw scan for the 0xAA
+	// marker false-positives ~0.4% of runs purely on timestamp luck (bit us on
+	// two consecutive main-branch CI runs).
 	msg, err := readMessage(t, conn)
 	if err != nil {
 		t.Fatalf("frame after rebind: %v", err)
 	}
-	for _, b := range msg {
-		if b == 0xAA {
-			t.Fatalf("stale frame from old hub leaked after rebind: % X", msg)
-		}
+	vf, err := decodeVideoFrame(msg)
+	if err != nil {
+		t.Fatalf("decode frame after rebind: %v", err)
 	}
-	// The next message (if any) also must not carry the stale marker.
+	if vf.PTS != 3000 {
+		t.Fatalf("first frame after rebind has pts=%d, want 3000 (new hub) — old-hub frame leaked", vf.PTS)
+	}
+	// Queued messages (if any) also must not be the stale frame.
 	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	for {
 		_, msg2, err := conn.ReadMessage()
 		if err != nil {
 			break // timeout/closed — done
 		}
-		for _, b := range msg2 {
-			if b == 0xAA {
-				t.Fatalf("stale frame from old hub leaked after rebind (queued): % X", msg2)
-			}
+		if len(msg2) == 0 || msg2[0] != MsgTypeVideoFrame {
+			continue
+		}
+		vf2, err := decodeVideoFrame(msg2)
+		if err != nil {
+			t.Fatalf("decode queued frame: %v", err)
+		}
+		if vf2.PTS == 2000 {
+			t.Fatalf("stale frame from old hub leaked after rebind (queued): pts=%d", vf2.PTS)
 		}
 	}
 }
