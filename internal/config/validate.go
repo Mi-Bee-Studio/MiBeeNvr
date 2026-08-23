@@ -755,8 +755,8 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 			return fmt.Errorf("cameras.%s.adaptive.timelapse_interval must be 5s–10m, got %s", cam.ID, a.TimelapseInterval)
 		}
 	}
-	if a.SpikeFactor != 0 && (a.SpikeFactor < 1.5 || a.SpikeFactor > 10) {
-		return fmt.Errorf("cameras.%s.adaptive.spike_factor must be 1.5–10, got %v", cam.ID, a.SpikeFactor)
+	if a.SpikeFactor != 0 && (a.SpikeFactor < 1.5 || a.SpikeFactor > 20) {
+		return fmt.Errorf("cameras.%s.adaptive.spike_factor must be 1.5–20, got %v", cam.ID, a.SpikeFactor)
 	}
 	if a.GOPBufferBytes != 0 && (a.GOPBufferBytes < 1<<20 || a.GOPBufferBytes > 64<<20) {
 		return fmt.Errorf("cameras.%s.adaptive.gop_buffer_bytes must be 1MB–64MB, got %d", cam.ID, a.GOPBufferBytes)

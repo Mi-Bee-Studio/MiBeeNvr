@@ -934,7 +934,7 @@ async function performCameraSave() {
           </div>
           <div>
             <label for="cam-adaptive-spike" class="input-label">{t('cameras.adaptiveSpikeFactor')}</label>
-            <input id="cam-adaptive-spike" class="input" type="number" step="0.1" min="1.5" max="10" placeholder="5.0" bind:value={formAdaptiveSpikeFactor} />
+            <input id="cam-adaptive-spike" class="input" type="number" step="0.1" min="1.5" max="20" placeholder="5.0" bind:value={formAdaptiveSpikeFactor} />
           </div>
           <div>
             <label for="cam-adaptive-gop" class="input-label">{t('cameras.adaptiveGopBufferMB')}</label>
