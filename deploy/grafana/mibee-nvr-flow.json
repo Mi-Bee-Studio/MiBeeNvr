@@ -89,8 +89,11 @@
       "title": "Recording audit outcomes (5m)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
-      "targets": [{ "expr": "increase(nvr_recording_audit_total[5m])", "legendFormat": "{{camera_id}} {{result}}" }],
-      "description": "mediaprobe sampling of closed segments. result != ok = zero-duration or unparseable moov."
+      "targets": [
+        { "expr": "increase(nvr_recording_audit_total[5m])", "legendFormat": "audit {{camera_id}} {{result}}" },
+        { "expr": "increase(nvr_recording_deepcheck_total[5m])", "legendFormat": "deepcheck {{camera_id}} {{result}}" }
+      ],
+      "description": "mediaprobe sampling of closed segments (result != ok = zero-duration or unparseable moov) and hourly ffmpeg decode-level deep checks (result != ok = reference-chain corruption, #489)."
     },
     {
       "id": 10,

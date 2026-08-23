@@ -88,3 +88,33 @@ func TestHandleCameraFlow_NotFound(t *testing.T) {
 	rr := doRequest(t, h.Routes(), http.MethodGet, "/api/cameras/nope/flow", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
+
+func TestHandleCameraFlow_LastFrameAgeS(t *testing.T) {
+	h, camMgr := newFlowTestHandler(t)
+
+	// Camera with frames flowing: age must be a small positive number.
+	hub := camMgr.GetOrCreateHub("flow-live")
+	require.NotNil(t, hub)
+	hub.Broadcast(1, [][]byte{{0x65}}, true)
+
+	rr := doRequest(t, h.Routes(), http.MethodGet, "/api/cameras/flow-live/flow", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp struct {
+		LastFrameAgeS *float64 `json:"last_frame_age_s"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotNil(t, resp.LastFrameAgeS, "active camera must report last_frame_age_s")
+	require.GreaterOrEqual(t, *resp.LastFrameAgeS, float64(0))
+	require.Less(t, *resp.LastFrameAgeS, float64(5), "age should be near zero right after a frame")
+
+	// Camera with a hub but no frames ever: age must be null (#490).
+	empty := camMgr.GetOrCreateHub("flow-silent")
+	require.NotNil(t, empty)
+	rr2 := doRequest(t, h.Routes(), http.MethodGet, "/api/cameras/flow-silent/flow", nil, "", "")
+	require.Equal(t, http.StatusOK, rr2.Code)
+	var resp2 struct {
+		LastFrameAgeS *float64 `json:"last_frame_age_s"`
+	}
+	require.NoError(t, json.NewDecoder(rr2.Body).Decode(&resp2))
+	require.Nil(t, resp2.LastFrameAgeS, "never-had-a-frame camera must report null")
+}

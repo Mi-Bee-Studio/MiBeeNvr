@@ -59,6 +59,14 @@ groups:
           summary: "NVR: {{ $labels.camera_id }} recording audit found {{ $value }} bad segments in 30m"
           description: "mediaprobe flagged zero-duration or unparseable segments. Run `mibee-nvr repair duration --dry-run` to inspect."
 
+      - alert: NVRRecordingDeepCheckFailures
+        expr: increase(nvr_recording_deepcheck_total{result!="ok"}[6h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVR: {{ $labels.camera_id }} decode-level deep check found corrupt video"
+          description: "ffmpeg -v error sampling found decode errors (e.g. missing/duplicate POC, broken slices) within the last 6h — the kind of corruption structure probes cannot see (#488/#489). Inspect the segment and recent merges."
+
       - alert: NVRCameraFlapping
         expr: increase(nvr_camera_reconnect_attempts_total[15m]) > 10
         labels:

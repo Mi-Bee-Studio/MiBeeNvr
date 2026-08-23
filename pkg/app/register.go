@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os/exec"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
@@ -115,10 +116,14 @@ func registerServices(a *App, deps *appDeps) error {
 		return fmt.Errorf("register health: %w", err)
 	}
 
-	// 3.1 recording integrity auditor (#469): rate-limited mediaprobe sampling
-	// of closed segments. Nil-safe when bus/metrics are absent; stops before
-	// health in reverse order (no ordering dependency — it only reads files).
-	auditor := health.NewRecordingAuditor(deps.eventBus, deps.metrics)
+	// 3.1 recording integrity auditor (#469 + #489 deep check): rate-limited
+	// mediaprobe sampling of closed segments, plus an hourly-per-camera ffmpeg
+	// decode-level deep check when a binary is available (FFmpeg stays
+	// OPTIONAL — no binary, no deep check). Nil-safe when bus/metrics are
+	// absent; stops before health in reverse order (no ordering dependency —
+	// it only reads files).
+	auditor := health.NewRecordingAuditor(deps.eventBus, deps.metrics,
+		health.WithFFmpegPath(resolveFFmpegPath(deps.cfg.Transcoding.FFmpegPath)))
 	if err := a.Register(&serviceFunc{
 		name: "recording-auditor",
 		startFunc: func(ctx context.Context) error {
@@ -626,4 +631,16 @@ func registerValues(a *App, deps *appDeps) error {
 		return fmt.Errorf("register http-server value: %w", err)
 	}
 	return nil
+}
+
+// resolveFFmpegPath returns the configured ffmpeg binary, falls back to PATH,
+// or "" (deep check disabled) when ffmpeg is absent — FFmpeg is optional.
+func resolveFFmpegPath(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if p, err := exec.LookPath("ffmpeg"); err == nil {
+		return p
+	}
+	return ""
 }
