@@ -1,0 +1,9 @@
+{
+  // Docs are rendered verbatim by the website docs center (markdown-it + highlight.js).
+  // Fences without a language tag lose syntax highlighting — MD040 only, keep it focused.
+  "config": {
+    "default": false,
+    "MD040": true
+  },
+  "globs": ["docs/zh/**/*.md", "docs/en/**/*.md", "README.md", "README.zh.md"]
+}

@@ -781,3 +781,29 @@ func TestRetireDeviceSelfChannel_NoRealChannels(t *testing.T) {
 }
 
 func (f *fakeEnroller) GB28181RecordingWanted(deviceID, channelID string) bool { return false }
+
+// TestServer_InviteChannel_DefersWhenRecorderNotRunning: a channel bound to
+// a camera whose recorder isn't up yet must NOT be INVITE'd. The media would
+// feed an orphan hub nobody consumes while the receiver keeps draining, so no
+// watchdog ever recycles the dead-wired session (the boot race where a lower
+// platform hammering re-REGISTER gets its catalog-driven INVITE in before
+// camera-manager startup finishes).
+func TestServer_InviteChannel_DefersWhenRecorderNotRunning(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+
+	const chID = "34020000001320000021"
+	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+	dm.RegisterChannel(testDeviceID, &gb28181.Channel{DeviceID: testDeviceID, ID: chID})
+
+	// Bound camera (fakeEnroller resolves the binding) but no recorder:
+	// GB28181NALUWriter always returns nil.
+	fe := &fakeEnroller{}
+	_ = fe.EnsureGB28181Camera(testDeviceID, chID, "", "")
+	srv.SetCameraEnroller(fe)
+
+	err := srv.InviteChannel(testDeviceID, chID)
+	require.ErrorContains(t, err, "not running")
+	// Nothing half-open must be left behind.
+	require.Nil(t, srv.sessionMgr.GetReceiver(chID))
+}

@@ -12,7 +12,7 @@ MiBee NVR stores all metadata in a single SQLite database with **WAL (Write-Ahea
 
 ### Component Layers
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │  Internal API Handlers                   │
 ├─────────────────────────────────────────┤
@@ -73,7 +73,7 @@ func New(dbPath string) (*DB, error) {
 
 ### Full DSN String
 
-```
+```text
 file:/mnt/data/nvr/mibee-nvr.db?_pragma=journal_mode(WAL)&
   _pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)&
   _pragma=cache_size(-20000)&_pragma=mmap_size(268435456)
@@ -295,7 +295,7 @@ PRAGMA incremental_vacuum(256);  -- ~2MB per cycle
 
 ### Flow
 
-```
+```text
 Recordings created (status = 'pending')
     │
     ▼
@@ -374,7 +374,7 @@ All `QueryContext`/`QueryRowContext` calls route through `readConn()` (falls bac
 
 ### WAL Read Concurrency
 
-```
+```text
 Writer (WAL):  INSERT/UPDATE/DELETE  →  appends to WAL file
 Reader 1/2/3:  SELECT (read pool)    →  reads from main DB + WAL index, concurrent
 ```
@@ -445,7 +445,7 @@ All implemented and wired. `nvr_sqlite_*` metrics are updated on a **60-second t
 
 ### Decision Tree
 
-```
+```text
 Current DB Size?
 │
 ├─ < 100MB → No action needed. Current config sufficient.
@@ -486,7 +486,7 @@ Stay on SQLite if: recordings <500K, DB <5GB, single NVR instance, RAM <1GB, SD 
 
 ### Long-Term Strategy
 
-```
+```text
 Phase 1 (Current): SQLite single-file, WAL mode, optimized indexes
 Phase 2 (T8):      Time-based partition tables or separate DB files
 Phase 3 (T12):     PostgreSQL migration with pgx driver

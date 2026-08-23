@@ -20,6 +20,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
@@ -50,13 +51,14 @@ type appDeps struct {
 	configPath string
 
 	// Storage + observability
-	db         *storage.DB
-	store      *storage.Manager
-	metrics    *metrics.Metrics
-	eventBus   *event.EventBus
-	authMW     func(http.Handler) http.Handler
-	remoteLogH *remotelog.Handler
-	appLoc     *time.Location
+	db           *storage.DB
+	store        *storage.Manager
+	migrationMgr *migration.Migrator
+	metrics      *metrics.Metrics
+	eventBus     *event.EventBus
+	authMW       func(http.Handler) http.Handler
+	remoteLogH   *remotelog.Handler
+	appLoc       *time.Location
 
 	// Merge / transcode / timelapse
 	mergeMgr              *merge.MergeManager

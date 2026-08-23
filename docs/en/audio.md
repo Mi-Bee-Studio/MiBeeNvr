@@ -45,6 +45,8 @@ cameras:
 
 ## Live Listening
 
+![Listen / talk-back controls on the live page](images/live-ptz.webp)
+
 ### Web UI Listening
 
 1. Open a camera in the web interface.
@@ -98,7 +100,7 @@ cameras:
 
 Audio is recorded in sync with video and stored in the same MP4 segments:
 
-```
+```text
 recordings/
 ├── front-door/
 │   ├── 2026-08-18/

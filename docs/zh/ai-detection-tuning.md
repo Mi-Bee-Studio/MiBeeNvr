@@ -59,7 +59,7 @@
 
 ### 场景 A：边缘设备（树莓派 3B/4、Banana Pi M5）— 省电流畅优先
 
-```
+```yaml
 confidence_threshold: 0.65
 frame_skip_rate: 10
 模型: yolo11n.onnx
@@ -70,7 +70,7 @@ frame_skip_rate: 10
 
 ### 场景 B：桌面/笔记本浏览器（x86，WebGPU）— 灵敏度优先
 
-```
+```yaml
 confidence_threshold: 0.5
 frame_skip_rate: 3
 模型: yolo11s.onnx（可选，精度更高）
@@ -81,7 +81,7 @@ frame_skip_rate: 3
 
 ### 场景 C：安防布防（漏检代价高）— 高召回
 
-```
+```yaml
 confidence_threshold: 0.45–0.5
 frame_skip_rate: 5–8
 检测类别: person + 常见安防目标
@@ -92,7 +92,7 @@ ROI: 仅划入入口/通道等关键区域
 
 ### 场景 D：降噪演示（误检代价高）— 高精度
 
-```
+```yaml
 confidence_threshold: 0.75–0.8
 frame_skip_rate: 5
 检测类别: 仅 person

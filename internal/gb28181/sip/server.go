@@ -592,6 +592,18 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 		}
 	}
 
+	// A bound camera whose recorder isn't running must not be INVITE'd: the
+	// media would feed an orphan hub nobody consumes, and since the receiver
+	// keeps draining packets the stall watchdog never fires — the session
+	// wedges with zero frames ever reaching the recorder. That is exactly the
+	// boot race where a lower platform hammering re-REGISTER gets its
+	// catalog-driven INVITE in before camera-manager startup finishes. Defer
+	// instead: the recorder-start auto-INVITE establishes the session (and
+	// recycles any wedged one) once the recorder exists.
+	if cameraID != "" && onAU == nil {
+		return fmt.Errorf("gb28181: recorder for camera %q not running — deferring INVITE for channel %s", cameraID, channelID)
+	}
+
 	// Allocate port, create SDP, start receiver.
 	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil, onAU, onAudio)
 	if err != nil {

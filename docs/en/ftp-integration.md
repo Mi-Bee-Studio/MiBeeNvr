@@ -59,7 +59,7 @@ ftp:
 
 FTP 服务器可通过 `ftp://localhost:2121` 访问，文件结构如下：
 
-```
+```text
 ftp://localhost:2121/
 ├── recordings/
 │   ├── h264/
@@ -194,7 +194,7 @@ lftp -u ftp_user,ftp_password localhost:2121 -e "set ftp:parallel 4; mirror -P 4
 
 #### VLC 媒体播放器
 
-```
+```text
 # 直接播放录像
 ftp://ftp_user:ftp_password@localhost:2121/recordings/h264/camera_1/1704123456789012345.mp4
 
@@ -204,7 +204,7 @@ ftp://ftp_user:ftp_password@localhost:2121/snapshots/camera_1/
 
 #### PotPlayer
 
-```
+```text
 # 播放录像
 ftp://ftp_user:ftp_password@localhost:2121/recordings/h264/camera_1/1704123456789012345.mp4
 ```
@@ -642,25 +642,25 @@ echo "FTP 清理完成"
 ### 常见问题
 
 **连接被拒绝**
-```
+```text
 ftp: Connection refused
 ```
 **解决方案**：确保 FTP 服务器已启用并运行在正确端口
 
 **认证失败**
-```
+```text
 530 Login incorrect.
 ```
 **解决方案**：检查用户名和密码配置
 
 **被动模式失败**
-```
+```text
 425 Can't open data connection.
 ```
 **解决方案**：检查被动模式端口范围是否正确，确保防火墙允许相关端口
 
 **传输超时**
-```
+```text
 i/o timeout
 ```
 **解决方案**：检查网络连接，增加超时设置

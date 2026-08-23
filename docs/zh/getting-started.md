@@ -142,6 +142,10 @@ make cross
 
 ## 添加第一个摄像头
 
+![摄像头管理页](images/cameras.webp)
+
+![监控大屏](images/surveillance.webp)
+
 MiBee NVR 使用**独立的传输协议 + 编码格式**配置摄像头：
 
 - **传输协议**：`rtsp`、`http`、`onvif`、`xiaomi`、`timelapse`

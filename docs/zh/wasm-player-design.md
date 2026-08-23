@@ -16,7 +16,7 @@ WASM + WebCodecs 统一播放器与 AI 检测系统是一个现代的、分层�
 
 该系统实现了复杂的分级回退架构，能够自动适应浏览器功能：
 
-```
+```text
 ┌─ 第1级：WebGPU（零拷贝硬件） ──────────────────────────────────┐
 │  WebCodecs 解码 → WebGPU 纹理（importExternalTexture）→ 渲染   │
 │  ONNX Runtime WebGPU 执行提供商（AI，5-10ms/帧）               │
@@ -42,7 +42,7 @@ WASM + WebCodecs 统一播放器与 AI 检测系统是一个现代的、分层�
 
 ### 数据流架构
 
-```
+```text
 摄像头 → RTSP 录制器 → StreamHub → WebSocket → 浏览器 Worker →
 视频解码器 → 渲染器 → Canvas
                                                     ↓
@@ -81,7 +81,7 @@ export function getPlaybackTier(): PlaybackTier {
 
 在流开始时发送一次的编解码器配置数据的二进制线格式：
 
-```
+```text
 [type:1byte][codec:1byte][profile:1byte][level:1byte][sps_len:2bytes_BE][sps:N][pps_len:2bytes_BE][pps:N][vps_len:2bytes_BE][vps:N]
 ```
 
@@ -101,7 +101,7 @@ export function getPlaybackTier(): PlaybackTier {
 
 带有 NAL 单元的单个视频帧的二进制线格式：
 
-```
+```text
 [type:1byte][pts:8bytes_BE][is_keyframe:1byte][nalu_count:2bytes_BE][nalu1_len:4bytes_BE][nalu1]...
 ```
 

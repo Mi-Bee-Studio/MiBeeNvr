@@ -3,8 +3,8 @@
   // Part of the unified settings shell (#153): no save button here; the
   // shell drives save/reset via the settingsForm coordinator.
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getStats, getStorageCandidates } from '$lib/api';
-  import type { SettingsConfig, StorageStats, StorageCandidatesResponse } from '$lib/api';
+  import { getSettings, updateSettings, getStats, getStorageCandidates, addStorageCandidate, removeStorageCandidate, startStorageMigrate, getStorageMigrateStatus } from '$lib/api';
+  import type { SettingsConfig, StorageStats, StorageCandidatesResponse, StorageMigrateStatusResponse, MigrationJob } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
@@ -186,6 +186,92 @@
     validationErrors = {};
   }
 
+  // ── Runtime candidate management (#395): add a mounted path / drop an
+  // unused one WITHOUT restarting — the dropdown picks changes up live.
+  let newCandidatePath = $state('');
+  let addingCandidate = $state(false);
+
+  async function addCandidate() {
+    const path = newCandidatePath.trim();
+    if (!path || addingCandidate) return;
+    addingCandidate = true;
+    try {
+      await addStorageCandidate(path);
+      newCandidatePath = '';
+      storageCandidates = await getStorageCandidates().catch(() => storageCandidates);
+      showToast(t('settings.storageAdded'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.storageAddFailed'), 'error');
+    } finally {
+      addingCandidate = false;
+    }
+  }
+
+  async function removeCandidate(path: string) {
+    try {
+      await removeStorageCandidate(path);
+      storageCandidates = await getStorageCandidates().catch(() => storageCandidates);
+      if (storageRoot === path) storageRoot = storageCandidates?.current ?? storageRoot;
+      showToast(t('settings.storageRemoved'), 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : t('settings.storageRemoveFailed'), 'error');
+    }
+  }
+
+  // ── Storage migration (#395 rework) ──
+  // Batch entry: switching the default is hot; per-camera history moves in
+  // the background (idle-time, rate-limited) — the user is never blocked.
+  let migrating = $state(false);
+  let migrateDeleteSource = $state(true);
+  let migrateJobs = $state<MigrationJob[]>([]);
+  let migrateError = $state('');
+  let migratePoll: ReturnType<typeof setInterval> | undefined;
+
+  // The batch action can only target a candidate that differs from the saved root.
+  let migrateTargetSelected = $derived.by(() =>
+    !!storageRoot && !!originalStorageRoot && storageRoot !== originalStorageRoot,
+  );
+
+  function applyMigrateStatus(st: StorageMigrateStatusResponse) {
+    migrateJobs = st.jobs.filter((j) => j.state !== 'done' && j.state !== 'failed');
+    if (st.state === 'idle') {
+      migrating = false;
+      if (migratePoll) {
+        clearInterval(migratePoll);
+        migratePoll = undefined;
+      }
+      const failed = st.jobs.filter((j) => j.state === 'failed');
+      if (failed.length) {
+        migrateError = failed[0].error || t('settings.migrateFailed');
+      }
+    }
+  }
+
+  async function pollMigration() {
+    try {
+      applyMigrateStatus(await getStorageMigrateStatus());
+    } catch {
+      /* transient poll failure — the next tick retries */
+    }
+  }
+
+  async function startMigration() {
+    if (!storageRoot || storageRoot === originalStorageRoot || migrating) return;
+    migrating = true;
+    migrateError = '';
+    migrateJobs = [];
+    try {
+      await startStorageMigrate(storageRoot, migrateDeleteSource);
+      showToast(t('settings.migrateStarted'), 'success');
+      await loadAll();
+      migratePoll = setInterval(pollMigration, 1000);
+      pollMigration();
+    } catch (e) {
+      migrating = false;
+      migrateError = e instanceof Error ? e.message : t('settings.migrateFailed');
+    }
+  }
+
   let unregister: (() => void) | undefined;
   onMount(() => {
     loadAll();
@@ -207,7 +293,10 @@
     });
   });
 
-  onDestroy(() => unregister?.());
+  onDestroy(() => {
+    unregister?.();
+    if (migratePoll) clearInterval(migratePoll);
+  });
 </script>
 
 {#if loading}
@@ -246,6 +335,73 @@
         <p class="text-xs th-text-muted mt-2">{t('settings.storageRootNoCandidates')}</p>
       {:else}
         <p class="text-xs th-text-muted mt-2">{storageCandidates?.restart_hint}</p>
+      {/if}
+      <!-- Runtime candidate management: add a mounted path without a restart -->
+      <div class="mt-3 flex gap-2">
+        <input
+          class="input flex-1 font-mono text-xs"
+          placeholder="/mnt/disk2/nvr"
+          bind:value={newCandidatePath}
+          aria-label={t('settings.storageAddPath')}
+          onkeydown={(e) => { if (e.key === 'Enter') addCandidate(); }}
+        />
+        <button class="btn btn-sm shrink-0" disabled={!newCandidatePath.trim() || addingCandidate} onclick={addCandidate}>
+          {t('settings.storageAdd')}
+        </button>
+      </div>
+      <p class="text-xs th-text-muted mt-1">{t('settings.storageAddPathHint')}</p>
+      {#if storageCandidates?.env_managed}
+        <p class="text-xs th-text-muted mt-1">{t('settings.storageEnvManagedHint')}</p>
+      {/if}
+      {#if storageCandidates && storageCandidates.candidates.length > 1}
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          {#each storageCandidates.candidates as c (c.path)}
+            {#if c.path !== storageCandidates.current}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs th-bg-secondary border th-border font-mono">
+                {c.path}
+                <button
+                  class="th-text-muted hover:th-color-danger"
+                  aria-label={t('settings.storageRemove', { path: c.path })}
+                  onclick={() => removeCandidate(c.path)}
+                >✕</button>
+              </span>
+            {/if}
+          {/each}
+        </div>
+      {/if}
+      {#if migrateTargetSelected}
+        <div class="mt-4 p-3 rounded-lg th-bg-secondary border th-border">
+          <p class="text-xs th-text-secondary">{t('settings.migrateDesc')}</p>
+          <div class="flex items-center gap-3 mt-2 flex-wrap">
+            <button class="btn btn-primary btn-sm" disabled={migrating} onclick={startMigration}>
+              {migrating ? t('settings.migrateRunning') : t('settings.migrateButton')}
+            </button>
+            <label class="flex items-center gap-1.5 text-xs th-text-secondary cursor-pointer">
+              <input type="checkbox" bind:checked={migrateDeleteSource} disabled={migrating} />
+              {t('settings.migrateDeleteSource')}
+            </label>
+          </div>
+          {#if migrating && migrateJobs.length > 0}
+            <div class="mt-3 space-y-2">
+              {#each migrateJobs as job (job.camera_id)}
+                <div>
+                  <div class="flex justify-between text-xs th-text-muted">
+                    <span>{job.camera_id}{#if job.state === 'paused'} · {t('cameras.storageMigrationPaused')}{/if}</span>
+                    <span>{t('settings.migrateProgress', {
+                      done: String(job.done_files ?? 0),
+                      total: String(job.total_files ?? 0),
+                      mb: ((job.done_bytes ?? 0) / (1024 * 1024)).toFixed(1),
+                    })}</span>
+                  </div>
+                  <progress class="w-full" max={Math.max(job.total_files ?? 1, 1)} value={job.done_files ?? 0}></progress>
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#if migrateError}
+            <p class="th-color-danger text-xs mt-2" aria-live="polite">{migrateError}</p>
+          {/if}
+        </div>
       {/if}
     </div>
   </SettingsCard>

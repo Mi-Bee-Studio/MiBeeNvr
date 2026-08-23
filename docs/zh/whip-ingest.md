@@ -26,7 +26,7 @@ whip:
 摄像头 → 添加 → 协议选 **WHIP (WebRTC push)**，设置**流密钥**（如
 `door-cam`）。表单会显示推流地址：
 
-```
+```text
 http://<nvr-ip>:9090/whip/door-cam
 ```
 

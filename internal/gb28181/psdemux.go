@@ -364,11 +364,38 @@ feedLoop:
 	// boundary (RTP marker): the trailing NALU ends exactly there. Mid-AU
 	// flushes keep accumulating — emitting a truncated trailing NALU would
 	// corrupt the frame and desync the stream.
-	if complete && len(d.esBuf) > 0 {
-		nalus = append(nalus, extractNALUs(d.esBuf, d.naluType)...)
-		d.esBuf = nil
+	//
+	// A marker with a video PES still pending means the burst ended mid-PES —
+	// its bytes never arrived (wire loss truncated the burst, or a sender bug
+	// ended the burst early). The pending PES can never complete: emitting the
+	// esBuf would hand downstream a partial frame (decoders conceal the missing
+	// half — the half-green/half-white screen class), and carrying the stale
+	// PES forward splices unrelated bursts. Drop the partial AU and resync at
+	// the next marker.
+	if complete {
+		if len(d.videoPesBuf) > 0 {
+			logger.Warn("gb28181: AU ended mid-PES — dropping partial frame and resyncing",
+				"pending_pes_bytes", len(d.videoPesBuf), "es_bytes", len(d.esBuf))
+			d.videoPesBuf = nil
+			d.esBuf = nil
+			return nil, nil
+		}
+		if len(d.esBuf) > 0 {
+			nalus = append(nalus, extractNALUs(d.esBuf, d.naluType)...)
+			d.esBuf = nil
+		}
 	}
 	return nalus, nil
+}
+
+// DropPartialVideo discards the in-progress video AU (pending PES + ES
+// accumulation). Called by Stage 1 after detected packet loss: the
+// reassembled bytes have a hole, and PES reassembly would otherwise "complete"
+// a frame from mismatched halves — a decoded partial frame shows up as
+// half-frame corruption (green/white blocks) downstream.
+func (d *PSDemuxer) DropPartialVideo() {
+	d.videoPesBuf = nil
+	d.esBuf = nil
 }
 
 // Flush returns any remaining buffered NALUs from incomplete PES data.

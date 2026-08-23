@@ -324,6 +324,40 @@ func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleC
 	}
 }
 
+// autoInviteGB28181 recycles any live session for the camera's channel and
+// re-INVITEs so the session's AU callback binds THIS recorder instance — GB
+// recorders are passive and produce no media without a SIP INVITE. Fired on
+// every GB28181 recorder start, including camera-manager boot: a lower
+// platform hammering re-REGISTER mid-boot can get its catalog-driven INVITE
+// in before the recorder exists, and that session's orphan-hub wiring would
+// stick forever (the receiver keeps draining, so no watchdog ever recycles
+// it). No-op for non-GB cameras or when the inviter isn't wired.
+func (cm *CameraManager) autoInviteGB28181(cam config.CameraConfig) {
+	if cam.Protocol != string(model.ProtoGB28181) || cm.gb28181Inviter == nil {
+		return
+	}
+	deviceID, channelID := cam.GB28181.DeviceID, cam.GB28181.ChannelID
+	if channelID == "" {
+		return // no channel binding to invite on
+	}
+	cameraID := cam.ID
+	inviter := cm.gb28181Inviter
+	ender := cm.gb28181SessionEnder
+	// Run detached: INVITE involves network I/O (and Bye + re-INVITE churn)
+	// that must not delay recorder startup.
+	go func() {
+		// A recorder restart replaces the recorder instance, but a live
+		// session's AU callback still feeds the OLD one — recycle the session
+		// first so the INVITE below binds the new recorder.
+		if ender != nil {
+			_ = ender.ByeChannelByID(channelID)
+		}
+		if err := inviter.InviteChannel(deviceID, channelID); err != nil {
+			logger.Warn("gb28181: auto-INVITE failed", "camera_id", cameraID, "error", err)
+		}
+	}()
+}
+
 // startRecorder creates and starts a recorder for the given camera config.
 //
 // Concurrency: safe to call from any goroutine. All registry mutations go
@@ -454,22 +488,7 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	cm.healthMgr.OnCameraAdded(cam.ID, rec, overrides)
 	logger.Info("started recorder for camera", "camera_id", cam.ID)
 
-	// Auto-INVITE GB28181 cameras: the recorder is passive and needs the SIP
-	// server to send an INVITE before any RTP media flows. Run in a goroutine
-	// so the recorder start returns promptly (INVITE involves network I/O).
-	if cam.Protocol == string(model.ProtoGB28181) && cm.gb28181Inviter != nil {
-		go func() {
-			// A recorder restart replaces the recorder instance, but a live
-			// session's AU callback still feeds the OLD one — recycle the
-			// session first so the INVITE below binds the new recorder.
-			if cm.gb28181SessionEnder != nil {
-				_ = cm.gb28181SessionEnder.ByeChannelByID(cam.GB28181.ChannelID)
-			}
-			if err := cm.gb28181Inviter.InviteChannel(cam.GB28181.DeviceID, cam.GB28181.ChannelID); err != nil {
-				logger.Warn("gb28181: auto-INVITE failed", "camera_id", cam.ID, "error", err)
-			}
-		}()
-	}
+	cm.autoInviteGB28181(cam)
 
 	// For ONVIF cameras without a valid stable_id yet, auto-populate it
 	// asynchronously so IP self-healing (internal/rediscovery) can later

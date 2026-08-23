@@ -98,14 +98,14 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 
 ## Screenshots
 
-![Login](docs/images/login-light.png)  
-*Login page with dark/light theme toggle and authentication*
+![Surveillance grid](docs/en/images/surveillance.webp)  
+*Surveillance grid: multi-camera live view (WebCodecs / MJPEG) with health scores and AI overlay*
 
-![Dashboard](docs/images/dashboard-light.png)  
-*Dashboard with live camera feeds, recording status, and system metrics*
+![Recordings timeline](docs/en/images/recordings.webp)  
+*Recordings: per-camera timeline with AI event markers; list and timelapse views available*
 
-![Settings](docs/images/settings-light.png)  
-*Settings panel for camera configuration and system management*
+![Cameras page](docs/en/images/cameras.webp)  
+*Cameras: discovery scanning, start/stop, and push-out relay management in one place*
 
 ## Features
 
@@ -192,11 +192,10 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 |----------|-------------|
 | [Getting Started](docs/en/getting-started.md) | Installation, first camera setup |
 | [Upgrade Guide](docs/en/upgrade-guide.md) | Breaking changes & migration steps between versions |
-| [升级指南](docs/zh/upgrade-guide.md) | 版本间的破坏性变更与迁移步骤 |
 | [Configuration](docs/en/configuration.md) | Full config reference |
 | [API Reference](docs/en/api/README.md) | REST API documentation |
 | [MediaMTX Guide](docs/en/mediamtx-guide.md) | MediaMTX integration for CSI cameras |
-| [Deployment](docs/en/deployment.md) | systemd, reverse proxy, cross-compile, and per-platform **NAS** guides (unRAID / fnOS / iStoreOS / Synology / QNAP / 极空间) |
+| [Deployment](docs/en/deployment.md) | systemd, reverse proxy, cross-compile, and per-platform **NAS** guides (unRAID / fnOS / iStoreOS / Synology / QNAP / ZSpace) |
 | [Auto-update (Docker)](docs/en/deployment-autoupdate.md) | Manual + optional Watchtower auto-updates and rollback |
 | [Xiaomi Setup](docs/en/xiaomi-setup.md) | Xiaomi cloud camera integration |
 | [ONVIF Guide](docs/en/onvif-guide.md) | ONVIF camera setup, PTZ control, troubleshooting |
@@ -208,9 +207,7 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | [Transcoding](docs/en/transcoding.md) | FFmpeg transcoding setup |
 | [Prometheus Metrics](docs/en/metrics.md) | Complete Prometheus metric reference with types, labels, and examples |
 | [Relay Guide](docs/en/relay-guide.md) | RTMP live platform relay configuration and troubleshooting |
-| [转发指南](docs/zh/relay-guide.md) | RTMP 直播平台转发配置和故障排除 |
 | [Remote Access](docs/en/remote-access.md) | External/4G access via Tailscale, Cloudflare Tunnel, and WebRTC ICE/STUN/TURN config |
-| [远程访问](docs/zh/remote-access.md) | 外网/4G 访问:Tailscale、Cloudflare Tunnel 及 WebRTC ICE/STUN/TURN 配置 |
 
 ## Build & Deploy
 
@@ -239,7 +236,7 @@ Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `0.11.0` (exact 
 
 ## Project Structure
 
-```
+```text
 cmd/mibee-nvr/       # CLI entry point + app lifecycle
 internal/            # Core packages (43 Go modules)
 web/                # Svelte 5 SPA frontend

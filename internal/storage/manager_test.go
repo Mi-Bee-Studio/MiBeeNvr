@@ -575,15 +575,16 @@ func TestCleanupTempFiles_ScopesToCameraDirs(t *testing.T) {
 	}
 }
 
-// TestCleanupTempFiles_HandlesNonExistentRoot guards the top-level ReadDir
-// against a missing root (e.g. misconfigured storage.root_dir). Must return an
-// error, not panic.
+// TestCleanupTempFiles_HandlesNonExistentRoot guards against a missing root
+// (e.g. misconfigured storage.root_dir or an unmounted multi-volume root).
+// Multi-root semantics: non-existent roots are skipped, not fatal — cleanup
+// must neither panic nor fail because one root vanished.
 func TestCleanupTempFiles_HandlesNonExistentRoot(t *testing.T) {
 	m, _ := NewManager(t.TempDir())
 	m.rootDir = filepath.Join(t.TempDir(), "does-not-exist")
 
 	err := m.CleanupTempFiles()
-	require.Error(t, err, "missing root dir should return error")
+	require.NoError(t, err, "missing root dir must be skipped, not an error")
 }
 
 // TestCleanupTempFiles_PreservesNormalFilesUnderCamera is a regression guard:

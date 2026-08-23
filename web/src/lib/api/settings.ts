@@ -146,10 +146,105 @@ export interface StorageCandidatesResponse {
   current: string;
   candidates: Array<{ path: string; label: string }>;
   restart_hint: string;
+  /** True when NVR_STORAGE_CANDIDATES is set: the platform (e.g. fnOS
+   *  authorized dirs) owns the list at boot — manually added paths are
+   *  session-only until properly authorized on the platform. */
+  env_managed?: boolean;
 }
 
 export async function getStorageCandidates(signal?: AbortSignal): Promise<StorageCandidatesResponse> {
   return apiRequest<StorageCandidatesResponse>('/storage/candidates', { signal });
+}
+
+/** Add a recording-root candidate at RUNTIME (no restart): the path must
+ *  exist as a directory (the new disk's mount point) and be writable. */
+export async function addStorageCandidate(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ status: string; path: string; env_managed?: boolean }> {
+  return apiRequest('/storage/candidates', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+    signal,
+  });
+}
+
+export async function removeStorageCandidate(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest(`/storage/candidates?path=${encodeURIComponent(path)}`, {
+    method: 'DELETE',
+    signal,
+  });
+}
+
+// Storage migration (#395 rework): hot per-camera storage switching with a
+// background idle-time migrator. The database stays on the data volume; only
+// files move and stored paths are rewritten — no restart involved.
+
+export interface MigrationJob {
+  camera_id: string;
+  to_root: string;
+  delete_source: boolean;
+  state: 'queued' | 'running' | 'paused' | 'done' | 'failed';
+  detail?: string;
+  error?: string;
+  total_files?: number;
+  done_files?: number;
+  total_bytes?: number;
+  done_bytes?: number;
+}
+
+export interface StorageMigrateStatusResponse {
+  state: 'idle' | 'running';
+  jobs: MigrationJob[];
+}
+
+/** Batch entry: switch the DEFAULT storage (hot) and enqueue a background
+ *  migration per camera that has recordings elsewhere. */
+export async function startStorageMigrate(
+  target: string,
+  deleteSource: boolean,
+  signal?: AbortSignal,
+): Promise<{ status: string; target: string; jobs_enqueued: number }> {
+  return apiRequest('/storage/migrate', {
+    method: 'POST',
+    body: JSON.stringify({ target, delete_source: deleteSource }),
+    signal,
+  });
+}
+
+export async function getStorageMigrateStatus(signal?: AbortSignal): Promise<StorageMigrateStatusResponse> {
+  return apiRequest<StorageMigrateStatusResponse>('/storage/migrate/status', { signal });
+}
+
+export interface CameraStorageRoot {
+  camera_id: string;
+  override_root: string;
+  effective_root: string;
+  default_root: string;
+  migration?: MigrationJob;
+}
+
+export async function getCameraStorageRoot(cameraId: string, signal?: AbortSignal): Promise<CameraStorageRoot> {
+  return apiRequest<CameraStorageRoot>(`/cameras/${cameraId}/storage-root`, { signal });
+}
+
+/** Switch ONE camera's storage (hot) and optionally enqueue the background
+ *  migration of its history. root = "" returns it to the default storage. */
+export async function setCameraStorageRoot(
+  cameraId: string,
+  root: string,
+  migrate: boolean,
+  deleteSource: boolean,
+  signal?: AbortSignal,
+): Promise<{ status: string; camera_id: string; storage_root: string; migration?: MigrationJob }> {
+  return apiRequest(`/cameras/${cameraId}/storage-root`, {
+    method: 'PUT',
+    body: JSON.stringify({ root, migrate, delete_source: deleteSource }),
+    signal,
+  });
 }
 
 // --- Global merge settings ---

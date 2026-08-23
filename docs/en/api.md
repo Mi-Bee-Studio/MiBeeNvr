@@ -63,7 +63,7 @@ curl -N "http://localhost:9090/api/events?filter=segment."
 
 The payload is nested — business fields live inside `Data` (including `recording_id`):
 
-```
+```text
 data: {"Topic":"segment.completed","Data":{ ... }}
 ```
 

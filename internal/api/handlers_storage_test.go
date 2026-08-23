@@ -20,7 +20,11 @@ func TestStorageCandidatesEndpoint(t *testing.T) {
 	h := TestHandler(db, store)
 	h.config = &config.Config{}
 	h.config.Storage.RootDir = "/data"
-	h.config.Storage.Candidates = []string{"/media/WDC", "/data"} // duplicate ignored
+	// Candidates must exist on disk: the endpoint live-filters entries whose
+	// mount vanished (stale-choice bug). Use a real dir; the /data duplicate
+	// must be ignored.
+	extra := t.TempDir()
+	h.config.Storage.Candidates = []string{extra, "/data"} // duplicate ignored
 
 	req := httptest.NewRequest(http.MethodGet, "/api/storage/candidates", nil)
 	rec := httptest.NewRecorder()
@@ -43,10 +47,20 @@ func TestStorageCandidatesEndpoint(t *testing.T) {
 		t.Fatalf("current = %q, want /data", resp.Current)
 	}
 	if len(resp.Candidates) != 2 {
-		t.Fatalf("candidates = %+v, want 2 (current + /media/WDC)", resp.Candidates)
+		t.Fatalf("candidates = %+v, want 2 (current + %s)", resp.Candidates, extra)
 	}
-	if resp.Candidates[1].Path != "/media/WDC" || resp.Candidates[1].Label != "WDC" {
+	if resp.Candidates[1].Path != extra || resp.Candidates[1].Label != filepath.Base(extra) {
 		t.Fatalf("unexpected candidate: %+v", resp.Candidates[1])
+	}
+	// A candidate whose directory does not exist must NOT be offered.
+	h.config.Storage.Candidates = []string{filepath.Join(extra, "unplugged")}
+	rec2 := httptest.NewRecorder()
+	h.handleStorageCandidates(rec2, req)
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Candidates) != 1 {
+		t.Fatalf("stale candidate should be filtered, got %+v", resp.Candidates)
 	}
 }
 
@@ -77,8 +91,8 @@ func TestUpdateSettingsStorageRoot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !resp.RestartRequired {
-		t.Fatal("restart_required must be true when root_dir changes")
+	if resp.RestartRequired {
+		t.Fatal("a hot switch between mounted candidates must not require a restart")
 	}
 	if h.config.Storage.RootDir != newRoot {
 		t.Fatalf("config root = %q, want %q", h.config.Storage.RootDir, newRoot)

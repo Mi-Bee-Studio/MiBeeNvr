@@ -45,6 +45,8 @@ cameras:
 
 ## 实时试听
 
+![直播页的试听与对讲控制](images/live-ptz.webp)
+
 ### Web UI 试听
 
 1. 在 Web 界面打开摄像头
@@ -98,7 +100,7 @@ cameras:
 
 音频与视频同步录制，存储在相同的 MP4 片段中：
 
-```
+```text
 recordings/
 ├── front-door/
 │   ├── 2026-08-18/

@@ -21,9 +21,14 @@
 
 ## 截图
 
-![登录页](docs/images/login-light.png)
-![仪表盘](docs/images/dashboard-light.png)
-![设置页](docs/images/settings-light.png)
+![监控大屏](docs/zh/images/surveillance.webp)
+*监控大屏：多宫格实时画面（WebCodecs / MJPEG），叠加健康分与 AI 检测*
+
+![录像时间轴](docs/zh/images/recordings.webp)
+*录像页：时间轴 + AI 事件标记，支持列表 / 延时摄影视图*
+
+![摄像头管理](docs/zh/images/cameras.webp)
+*摄像头页：扫描发现、启停、转推输出一站式管理*
 
 ## 核心功能
 
@@ -197,7 +202,7 @@ make docker-release
 
 ## 项目结构
 
-```
+```text
 cmd/mibee-nvr/       # 程序入口
 internal/            # 核心模块（43 个）
   ai/               # AI 配置 + ROI 区域存储（推理在浏览器端，见 web/src/lib/ai-detection/）

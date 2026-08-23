@@ -51,7 +51,7 @@ webdav:
 
 The WebDAV server can be accessed at `http://localhost:9090/dav`, with the following file structure:
 
-```
+```text
 /dav/
 ├── recordings/
 │   ├── h264/
@@ -162,7 +162,7 @@ vlc http://localhost:9090/dav/snapshots/camera_1/
 
 #### PotPlayer
 
-```
+```text
 # Play recording
 http://localhost:9090/dav/recordings/h264/camera_1/1704123456789012345.mp4
 
@@ -277,25 +277,25 @@ ufw deny to any port 9090
 ### Common Issues
 
 **Connection Refused**
-```
+```text
 curl: (7) Failed to connect to localhost port 9090: Connection refused
 ```
 **Solution**: Ensure WebDAV is enabled and running
 
 **Authentication Failed**
-```
+```text
 HTTP/1.1 401 Unauthorized
 ```
 **Solution**: Check if username and password are correct
 
 **Permission Error**
-```
+```text
 HTTP/1.1 403 Forbidden
 ```
 **Solution**: Check read-write mode settings, confirm directory permissions
 
 **Timeout Error**
-```
+```text
 curl: (28) Operation timed out after 30001 milliseconds
 ```
 **Solution**: Network issue, check connection or increase timeout

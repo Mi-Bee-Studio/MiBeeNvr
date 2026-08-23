@@ -6,6 +6,8 @@
 
 大多数用户只需要在网页界面操作。下面以把一个摄像头推到 **哔哩哔哩直播** 为例。
 
+![摄像头编辑中的转推输出配置](images/relay-edit.webp)
+
 ### 第 1 步：拿到目标平台的推流地址（含直播密钥）
 
 在直播平台（如 [哔哩哔哩直播创作中心](https://link.bilibili.com/p/center/index)）开通直播间后，平台会给你一个**推流地址**和一个**直播密钥（stream key）**。两者拼起来才是完整的推流 URL：
@@ -390,7 +392,6 @@ tail -f /var/log/mibee-nvr.log | grep relay
 # 检查流密钥认证（如果适用）
 curl -H "Authorization: Bearer YOUR_KEY" -X GET https://api.bilibili.com/x/web-interface/nav
 ```
-```
 
 ## FFmpeg 转发模式（兼容性）
 
@@ -424,7 +425,6 @@ cameras:
         enabled: true
         use_ffmpeg: true        # ← 启用 FFmpeg 转发
         # source_url: ""        # 可选：覆盖自动解析的源地址
-```
 
 启用 `use_ffmpeg: true` 后：
 - 转发器启动 `ffmpeg -rtsp_transport tcp -i <摄像头地址> -c copy -f flv <目标地址>`

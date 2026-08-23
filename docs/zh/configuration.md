@@ -2,6 +2,8 @@
 
 MiBee NVR 使用 YAML 格式的配置文件来控制所有功能模块。以下是所有可用选项的完整参考，包含默认值和使用示例。
 
+![通用设置页](images/settings-general.webp)
+
 ## 配置文件结构
 
 ```yaml

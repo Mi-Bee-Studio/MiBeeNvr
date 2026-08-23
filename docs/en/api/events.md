@@ -20,7 +20,7 @@ curl -u username:password \
 
 **Response:** SSE stream (`text/event-stream`) with 15-second heartbeat keepalive.
 
-```
+```text
 event: onvif.discovery
 data: {"topic":"onvif.discovery","data":{"device":"192.168.1.104"}}
 
@@ -41,7 +41,7 @@ curl -u username:password \
 
 **Response:** SSE stream (`text/event-stream`) with 15-second heartbeat keepalive.
 
-```
+```text
 event: camera.status
 data: {"topic":"camera.status","data":{"camera_id":"front-door","status":"recording"}}
 
