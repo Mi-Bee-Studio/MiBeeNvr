@@ -24,6 +24,8 @@
   let rate = $state({ fps: 0, kbps: 0 });
   let prevC: Record<string, { sends: number; at: number }> = {};
   let cRates = $state<Record<string, number>>({});
+  let centered = false;
+  let rootEl: HTMLDivElement | null = $state(null);
 
   const isRecording = $derived(['recording', 'active'].includes(status.toLowerCase()));
   const hasLiveViewer = $derived(
@@ -84,6 +86,14 @@
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
+    // Re-center once the tree has actually rendered — the parent's
+    // scrollIntoView at click time runs against the title-only skeleton
+    // (first poll is still in flight), leaving the grown tree half out of
+    // view.
+    if (!centered) {
+      centered = true;
+      requestAnimationFrame(() => rootEl?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    }
   }
 
   onMount(() => {
@@ -95,7 +105,7 @@
   });
 </script>
 
-<div class="cam-flow">
+<div class="cam-flow" bind:this={rootEl}>
   <div class="flow-title"><Radio size={12} /> {t('flow.treeTitle')}{name ? ` · ${name}` : ''}</div>
   {#if error}
     <div class="flow-error">{error}</div>
