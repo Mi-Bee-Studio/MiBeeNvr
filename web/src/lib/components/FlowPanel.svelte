@@ -5,7 +5,7 @@
   import type { FlowStream } from '$lib/api/flow';
   import type { Camera, HealthEvent } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { Users, Gauge, Radio } from 'lucide-svelte';
+  import { Users, Gauge, Radio, Pause, Play } from 'lucide-svelte';
 
   const POLL_INTERVAL = 2000;
   const EVENTS_REFRESH = 30_000;
@@ -15,6 +15,15 @@
   let healthEvents = $state<Record<string, HealthEvent[]>>({});
   let error = $state('');
   let lastUpdated = $state<Date | null>(null);
+
+  // Freeze mode: while paused, polling stops and the UI holds a static
+  // snapshot so the user can read and analyze without numbers flashing.
+  // `userPaused` is the explicit toggle; `tabHidden` auto-pauses when the
+  // dashboard tab is in the background. Polling runs only when neither is set.
+  let userPaused = $state(false);
+  let tabHidden = $state(false);
+  let expanded = $state<Record<string, boolean>>({});
+  const paused = $derived(userPaused || tabHidden);
 
   // Derived rates: diff cumulative counters across polls.
   // prev holds {framesIn, bytesIn, at} per camera from the previous poll.
@@ -31,7 +40,10 @@
 
   function ageMs(iso: string): number {
     if (!iso) return Number.POSITIVE_INFINITY;
-    return Date.now() - new Date(iso).getTime();
+    // Anchor to the snapshot time, not Date.now(), so frozen cards show the
+    // age as of the pause instead of a ticking counter over stale data.
+    const ref = lastUpdated ? lastUpdated.getTime() : Date.now();
+    return ref - new Date(iso).getTime();
   }
 
   function fmtAge(ms: number): string {
@@ -107,11 +119,16 @@
     poll();
     refreshEvents();
     listCameras().then((cs) => (cameras = cs)).catch(() => {});
-    const pollTimer = setInterval(poll, POLL_INTERVAL);
+    const pollTimer = setInterval(() => {
+      if (!paused) poll();
+    }, POLL_INTERVAL);
     const evTimer = setInterval(refreshEvents, EVENTS_REFRESH);
+    const onVisibility = () => (tabHidden = document.hidden);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       clearInterval(pollTimer);
       clearInterval(evTimer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   });
 
@@ -123,9 +140,21 @@
 <div class="flow-panel">
   <div class="flow-header">
     <p class="subtitle">{t('flow.subtitle')}</p>
-    {#if lastUpdated}
-      <span class="updated">{t('flow.updatedAt')}: {lastUpdated.toLocaleTimeString()}</span>
-    {/if}
+    <div class="header-actions">
+      {#if paused}
+        <span class="paused-badge">{t('flow.pausedAt')}: {lastUpdated?.toLocaleTimeString() ?? '—'}</span>
+      {/if}
+      <button class="pause-btn" onclick={() => (userPaused = !userPaused)} title={userPaused ? t('flow.resume') : t('flow.pause')}>
+        {#if userPaused}
+          <Play size={13} /> {t('flow.resume')}
+        {:else}
+          <Pause size={13} /> {t('flow.pause')}
+        {/if}
+      </button>
+      {#if !paused && lastUpdated}
+        <span class="updated">{t('flow.updatedAt')}: {lastUpdated.toLocaleTimeString()}</span>
+      {/if}
+    </div>
   </div>
 
   {#if error}
@@ -140,8 +169,9 @@
 
   <div class="flow-grid">
     {#each streams as s (s.camera_id)}
-      <div class="flow-card">
-        <div class="card-head">
+      <div class="flow-card" class:collapsed={expanded[s.camera_id] === false}>
+        <div class="card-head" onclick={() => (expanded[s.camera_id] = expanded[s.camera_id] === false)} role="button" tabindex="0"
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expanded[s.camera_id] = expanded[s.camera_id] === false; } }}>
           <div class="cam-title">
             <span class="status-dot" style="background: {statusColor(s.status)}"></span>
             <span class="cam-name">{cameraName(s.camera_id)}</span>
@@ -152,9 +182,14 @@
               <span class="chip">{s.encoding}{#if s.width && s.height}&nbsp;{s.width}×{s.height}{/if}</span>
             {/if}
             <span class="chip viewers"><Users size={12} /> {viewerSummary(s)}</span>
+            {#if expanded[s.camera_id] === false}
+              <span class="chip">{rates[s.camera_id]?.fps ?? 0} fps · {s.consumers.length}</span>
+            {/if}
+            <span class="chev">{expanded[s.camera_id] ? '▾' : '▸'}</span>
           </div>
         </div>
 
+        {#if expanded[s.camera_id] !== false}
         <div class="hub-row">
           <div class="hub-node">
             <Radio size={14} />
@@ -218,6 +253,7 @@
             {/each}
           </div>
         {/if}
+        {/if}
       </div>
     {/each}
   </div>
@@ -246,6 +282,34 @@
     font-size: 0.875rem;
     margin: 0;
     flex-basis: 100%;
+  }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-left: auto;
+  }
+  .pause-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: rgba(128, 128, 128, 0.12);
+    color: var(--text-secondary);
+    border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+    border-radius: 8px;
+    padding: 0.25rem 0.7rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .pause-btn:hover {
+    background: rgba(128, 128, 128, 0.22);
+  }
+  .paused-badge {
+    color: var(--color-warning);
+    font-size: 0.75rem;
+    background: rgba(245, 158, 11, 0.12);
+    border-radius: 999px;
+    padding: 0.15rem 0.6rem;
   }
   .updated {
     color: var(--text-tertiary);
@@ -285,6 +349,15 @@
     gap: 0.5rem;
     flex-wrap: wrap;
     margin-bottom: 0.6rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .flow-card.collapsed .card-head {
+    margin-bottom: 0;
+  }
+  .chev {
+    color: var(--text-tertiary);
+    font-size: 0.8rem;
   }
   .cam-title {
     display: flex;
