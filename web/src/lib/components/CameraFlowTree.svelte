@@ -1,9 +1,7 @@
-/**
- * Single-camera flow tree — embedded in the health tab's expanded camera
- * card. Polls /api/streams only while mounted (i.e. while the card is
- * expanded), renders the fixed-layout source → hub → consumers diagram.
- */
 <script lang="ts">
+  // Single-camera flow tree — rendered inside the dashboard's camera-health
+  // list when a row is expanded. Polls /api/streams only while mounted
+  // (i.e. while the row is expanded); layout is fixed, only numbers refresh.
   import { onMount } from 'svelte';
   import { getFlowStreams } from '$lib/api/flow';
   import type { FlowStream } from '$lib/api/flow';

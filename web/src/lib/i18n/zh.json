@@ -1731,6 +1731,7 @@
   "flow.buffer": "缓冲",
   "flow.dwell": "驻留 avg/max",
   "flow.noConsumers": "无消费者(仅录制)",
+  "flow.expandHint": "展开链路排查",
   "flow.treeTitle": "链路详情",
   "flow.emptyCamera": "该相机暂无活动流",
   "flow.noViewers": "无观看者",

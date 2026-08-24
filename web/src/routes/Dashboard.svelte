@@ -7,6 +7,7 @@
   import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2 } from 'lucide-svelte';
   import { loadChart, createTrendChart } from '$lib/charts';
   import Tab from '$lib/components/Tab.svelte';
+  import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
   import HealthHistory from './HealthHistory.svelte';
   import TranscodingHistory from './TranscodingHistory.svelte';
   import AiStatusCard from '../components/AiStatusCard.svelte';
@@ -52,6 +53,8 @@
   let health = $state<HealthResponse | null>(null);
   let healthCameras = $state<Record<string, CameraHealthDetail>>({});
   let healthError = $state('');
+  // Camera whose flow tree is expanded in the camera-health list.
+  let expandedFlow = $state<string | null>(null);
 
   // Compute health summary from health cameras
   let healthSummary = $derived.by(() => {
@@ -433,7 +436,7 @@
         <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
       {:else}
         <div class="space-y-1">
-          {#each cameraHealthEntries as cam}
+          {#each cameraHealthEntries as cam (cam.id)}
             <div class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors">
               <!-- Status dot -->
               <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {statusColor(cam.status)}"></span>
@@ -452,7 +455,31 @@
               {:else}
                 <span class="text-xs th-text-muted tabular-nums min-w-[2rem] text-right">--</span>
               {/if}
+
+              <!-- Expand: live flow tree for troubleshooting this camera -->
+              <button
+                class="expand-btn"
+                aria-expanded={expandedFlow === cam.id}
+                title={t('flow.expandHint')}
+                onclick={() => (expandedFlow = expandedFlow === cam.id ? null : cam.id)}
+              >
+                {expandedFlow === cam.id ? '▾' : '▸'}
+              </button>
             </div>
+            {#if expandedFlow === cam.id}
+              {#if cam.factors && Object.keys(cam.factors).length > 0}
+                <div class="factors">
+                  {#each Object.entries(cam.factors) as [factor, impact]}
+                    <span style="color: {impact < 0 ? 'var(--color-danger)' : 'var(--color-success)'}">
+                      {factor}: {impact < 0 ? '' : '+'}{impact}
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+              <div class="flow-expand">
+                <CameraFlowTree cameraId={cam.id} name={cam.name} />
+              </div>
+            {/if}
           {/each}
         </div>
       {/if}
@@ -498,6 +525,30 @@
 </div>
 
 <style>
+  .expand-btn {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0 0.3rem;
+    line-height: 1;
+  }
+  .expand-btn:hover {
+    color: var(--text-primary);
+  }
+  .factors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+    font-size: 11px;
+    padding: 0.25rem 0 0 1.3rem;
+  }
+  .flow-expand {
+    border-left: 2px solid var(--border, rgba(128, 128, 128, 0.25));
+    margin: 0.35rem 0 0.5rem 0.45rem;
+    padding-left: 0.6rem;
+  }
   .health-tab-content > :global(:first-child) {
     padding-top: 0 !important;
   }
