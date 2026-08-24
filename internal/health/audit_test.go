@@ -398,7 +398,7 @@ func TestRecordingAuditor_DeepCheckRealErrorsSurviveFilter(t *testing.T) {
 		FilePath: newValidMP4Path(t, "corrupt.mp4"),
 	})
 
-	require.Eventually(t, func() bool { return deepCheckResult(t, m, "decode_error") }, 3*time.Second, 20 * time.Millisecond,
+	require.Eventually(t, func() bool { return deepCheckResult(t, m, "decode_error") }, 3*time.Second, 20*time.Millisecond,
 		"real decode errors must survive the benign filter")
 }
 

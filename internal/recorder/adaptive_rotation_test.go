@@ -92,7 +92,7 @@ func TestH264Adaptive_TLExitFlushAfterRotation(t *testing.T) {
 	const cam = "h264-adaptive-poc"
 	rec := NewH264Recorder(H264Config{
 		CameraID:   cam,
-		RTSPURL:    "rtsp://ignored", // never connected — writeFrames driven directly
+		RTSPURL:    "rtsp://ignored",       // never connected — writeFrames driven directly
 		SegmentDur: 200 * time.Millisecond, // rotate mid-NORMAL, before TL entry
 		RingBufCap: 256,
 		Adaptive: &AdaptiveConfig{

@@ -248,12 +248,12 @@ func (a *RecordingAuditor) maybeDeepCheck(seg event.SegmentCompleted) {
 		slog.Warn("recording deep check failed",
 			"camera_id", seg.CameraID, "file", seg.FilePath, "error", err, "stderr", firstLine(stderr))
 	default:
-		if real := filterDeepCheckStderr(stderr); real != "" {
+		if realErrs := filterDeepCheckStderr(stderr); realErrs != "" {
 			// ffmpeg exited 0 but printed real error-level lines — corruption
 			// (e.g. reference-chain issues that don't abort the decode).
 			a.metrics.IncRecordingDeepCheck(seg.CameraID, "decode_error")
 			slog.Warn("recording deep check found decode errors",
-				"camera_id", seg.CameraID, "file", seg.FilePath, "stderr", firstLine(real))
+				"camera_id", seg.CameraID, "file", seg.FilePath, "stderr", firstLine(realErrs))
 		} else {
 			a.metrics.IncRecordingDeepCheck(seg.CameraID, "ok")
 		}
