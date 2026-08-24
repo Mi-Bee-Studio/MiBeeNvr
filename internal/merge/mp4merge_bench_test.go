@@ -163,7 +163,7 @@ func BenchmarkMergeMP4Segments(b *testing.B) {
 			b.ResetTimer()
 			for i := range b.N {
 				outputPath := filepath.Join(dir, fmt.Sprintf("merged_%d.mp4", i))
-				if err := MergeMP4Segments(
+				if _, err := MergeMP4Segments(
 					context.Background(), infos, outputPath,
 				); err != nil {
 					b.Fatal(err)
@@ -250,7 +250,7 @@ func BenchmarkMergeMP4Segments_LargeNALs(b *testing.B) {
 		b.ResetTimer()
 		for i := range b.N {
 			outputPath := filepath.Join(dir, fmt.Sprintf("merged_%d.mp4", i))
-			if err := MergeMP4Segments(
+			if _, err := MergeMP4Segments(
 				context.Background(), infos, outputPath,
 			); err != nil {
 				b.Fatal(err)
@@ -316,7 +316,7 @@ func BenchmarkRollingMergeSimulation(b *testing.B) {
 
 			outputPath := filepath.Join(dir, fmt.Sprintf("rolling_%03d.mp4", appendIdx))
 			start := time.Now()
-			if err := MergeMP4Segments(
+			if _, err := MergeMP4Segments(
 				context.Background(),
 				[]*SegmentInfo{mergedInfo, newInfo},
 				outputPath,

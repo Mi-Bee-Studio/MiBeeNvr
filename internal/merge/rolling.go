@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -808,6 +809,9 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 				rollingLogger.Warn("backfill MP4: batch merge failed",
 					"camera_id", cameraID, "error", err)
 			}
+			// Backfill batches also bypass the in-memory bucket state (see
+			// mergeSegments) — drop any stale bucket to avoid double coverage.
+			r.buckets.Delete(cameraID)
 			merged += n
 
 			rollingLogger.Info("backfill MP4 progress",
@@ -824,10 +828,11 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 
 // mergeBatchMP4 merges a batch of MP4 segments into output file(s).
 // Uses ParseSegment + MergeMP4Segments (the same as the periodic MergeManager).
-// The batch is first split into consecutive audio-homogeneous runs: a batch
-// that straddles an audio toggle boundary (audio_enabled flipped, codec
-// renegotiated) must not merge across it — MergeMP4Segments' mixed-audio
-// policy would silently drop the audio from the whole output.
+// The batch is first split into consecutive merge-compatible runs (codec +
+// SPS/PPS/VPS + audio): a batch that straddles a parameter-set or audio toggle
+// boundary must not merge across it — a codec/SPS change hard-fails the merge
+// and an audio change trips the mixed-audio policy that silently drops the
+// audio from the whole output.
 // Returns the number of segments successfully merged.
 func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
 	// Parse all segments.
@@ -858,7 +863,7 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 	}
 
 	merged := 0
-	for _, run := range splitRunsByAudioKey(parsedRecs, infos) {
+	for _, run := range splitRunsByCompatKey(parsedRecs, infos) {
 		if len(run.infos) < 2 {
 			// Lone segment in its audio run — no merge partner within the run.
 			// Mark it merged; the file stays as a standalone recording.
@@ -882,19 +887,34 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 	return merged, nil
 }
 
-// segmentRun is a consecutive, audio-homogeneous slice of a parsed batch.
+// segmentRun is a consecutive, merge-compatible slice of a parsed batch.
 type segmentRun struct {
 	recs   []*model.Recording
 	infos  []*SegmentInfo
 	keyStr string
 }
 
-// splitRunsByAudioKey splits a parsed batch into consecutive runs sharing the
-// same segmentAudioKey. recs and infos are parallel slices (same length).
-func splitRunsByAudioKey(recs []*model.Recording, infos []*SegmentInfo) []segmentRun {
+// segmentCompatKey is the merge-compatibility key for a parsed segment:
+// codec + parameter sets + audio state. Segments with different keys cannot
+// be merged into one MP4 — a codec/SPS change mid-run made the old
+// audio-only split hard-fail the WHOLE run inside MergeMP4Segments and
+// permanently mark it incompatible (#488 follow-up).
+func segmentCompatKey(info *SegmentInfo) string {
+	h := sha256.New()
+	h.Write([]byte(info.Codec))
+	h.Write(info.SPS)
+	h.Write(info.PPS)
+	h.Write(info.VPS)
+	return hex.EncodeToString(h.Sum(nil)) + "|" + segmentAudioKey(info)
+}
+
+// splitRunsByCompatKey splits a parsed batch into consecutive runs sharing the
+// same segmentCompatKey (codec + SPS/PPS/VPS + audio). recs and infos are
+// parallel slices (same length).
+func splitRunsByCompatKey(recs []*model.Recording, infos []*SegmentInfo) []segmentRun {
 	var runs []segmentRun
 	for i, info := range infos {
-		key := segmentAudioKey(info)
+		key := segmentCompatKey(info)
 		if len(runs) > 0 && runs[len(runs)-1].keyStr == key {
 			last := &runs[len(runs)-1]
 			last.recs = append(last.recs, recs[i])
@@ -925,7 +945,8 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 	}
 
 	// Merge.
-	if err := MergeMP4Segments(ctx, infos, tempPath); err != nil {
+	stats, err := MergeMP4Segments(ctx, infos, tempPath)
+	if err != nil {
 		os.Remove(tempPath)
 		// Mark these as incompatible so we don't retry forever.
 		ids := make([]string, len(recs))
@@ -936,6 +957,34 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 			return r.db.SetMergeStatus(ctx, ids, model.MergeStatusIncompatible)
 		})
 		return 0, fmt.Errorf("merge: %w", err)
+	}
+	// Keyframe-less segments are not in the output: mark them incompatible and
+	// exclude them from the DB replacement + source deletion below (#488).
+	if len(stats.SkippedNoKeyframe) > 0 {
+		skipIDs := make([]string, 0, len(stats.SkippedNoKeyframe))
+		for _, idx := range stats.SkippedNoKeyframe {
+			skipIDs = append(skipIDs, recs[idx].ID)
+		}
+		_ = storage.RetryOnBusy(ctx, func() error {
+			return r.db.SetMergeStatus(ctx, skipIDs, model.MergeStatusIncompatible)
+		})
+		rollingLogger.Warn("audio run merge skipped keyframe-less segments",
+			"camera_id", cameraID, "skipped", len(skipIDs))
+	}
+	if len(stats.Included) != len(recs) {
+		keepRecs := make([]*model.Recording, 0, len(stats.Included))
+		keepInfos := make([]*SegmentInfo, 0, len(stats.Included))
+		keepPaths := make([]string, 0, len(stats.Included))
+		for _, idx := range stats.Included {
+			keepRecs = append(keepRecs, recs[idx])
+			keepInfos = append(keepInfos, infos[idx])
+			keepPaths = append(keepPaths, recs[idx].FilePath)
+		}
+		recs, infos, sourcePaths = keepRecs, keepInfos, keepPaths
+	}
+	if len(recs) == 0 {
+		os.Remove(tempPath)
+		return 0, ErrNoKeyframe
 	}
 
 	fi, err := os.Stat(tempPath)
@@ -1361,6 +1410,11 @@ func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID st
 		} else {
 			rollingLogger.Info("rolling MP4 batch merged",
 				"camera_id", cameraID, "segments", n)
+			// The batch produced standalone output files that are NOT tracked
+			// by the in-memory bucket state. Drop the stale bucket so the next
+			// single-segment append builds a fresh bucket instead of appending
+			// over the batch's time range (double-covered timeline).
+			r.buckets.Delete(cameraID)
 		}
 	} else {
 		for _, seg := range mp4Segs {
@@ -1420,6 +1474,28 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	newInfo, err := ParseSegment(seg.filePath)
 	if err != nil {
 		return fmt.Errorf("parse new segment: %w", err)
+	}
+
+	// Keyframe alignment (#488): a segment that starts mid-GOP (adaptive TL-exit
+	// flush, reconnect micro-segment) references frames that get deleted with
+	// the previous source file — merging it verbatim produced the gray-screen
+	// merged recordings. Align its head to the first keyframe. A keyframe-less
+	// segment is undecodable in ANY merged context — mark it incompatible and
+	// leave it standalone instead of poisoning the bucket.
+	if dropped, ok := AlignToKeyframe(newInfo); !ok {
+		rollingLogger.Warn("segment has no keyframe sample, marking incompatible",
+			"camera_id", seg.cameraID, "recording_id", seg.recordingID,
+			"samples", newInfo.SampleCount)
+		if markErr := storage.RetryOnBusy(ctx, func() error {
+			return r.db.SetMergeStatus(ctx, []string{seg.recordingID}, model.MergeStatusIncompatible)
+		}); markErr != nil {
+			rollingLogger.Warn("failed to mark keyframe-less segment",
+				"recording_id", seg.recordingID, "error", markErr)
+		}
+		return nil
+	} else if dropped > 0 {
+		rollingLogger.Info("keyframe alignment dropped leading samples",
+			"camera_id", seg.cameraID, "recording_id", seg.recordingID, "dropped", dropped)
 	}
 
 	// Compute SPS/PPS compatibility key.
@@ -1517,6 +1593,20 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	} else {
 		// Append to existing bucket: merge [bucketFile + newSegment].
 		outputPath, mergedRecID, err = r.appendToBucket(ctx, seg, newInfo, bucket)
+		if err != nil && strings.Contains(err.Error(), "bucket keyframe-less") {
+			// Legacy corrupt bucket (written before keyframe alignment, no
+			// keyframe-bearing sample left): drop the in-memory state and
+			// rebuild the bucket from this segment alone.
+			rollingLogger.Warn("bucket has no keyframe-bearing samples, rebuilding bucket",
+				"camera_id", seg.cameraID, "old_bucket", bucket.mergedFilePath)
+			bucket.mergedFilePath = ""
+			bucket.mergedRecID = ""
+			bucket.spsKey = ""
+			bucket.audioKey = ""
+			bucket.segmentCount = 0
+			bucket.mergedFileSize = 0
+			outputPath, mergedRecID, err = r.createBucket(ctx, seg, newInfo)
+		}
 	}
 
 	if err != nil {
@@ -1571,8 +1661,8 @@ func (r *RollingMergeCoordinator) createBucket(
 		return "", "", fmt.Errorf("create bucket output: %w", derr)
 	}
 
-	// Merge single segment into the bucket file.
-	if err := MergeMP4Segments(ctx, []*SegmentInfo{info}, tempPath); err != nil {
+	// Merge single segment into the bucket file (pre-aligned by mergeOneSegment).
+	if _, err := MergeMP4Segments(ctx, []*SegmentInfo{info}, tempPath); err != nil {
 		os.Remove(tempPath)
 		return "", "", fmt.Errorf("merge initial segment: %w", err)
 	}
@@ -1652,10 +1742,19 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		return "", "", fmt.Errorf("create append output: %w", derr)
 	}
 
-	// Merge [bucket + newSegment].
-	if err := MergeMP4Segments(ctx, []*SegmentInfo{bucketInfo, newInfo}, tempPath); err != nil {
+	// Merge [bucket + newSegment]. The new segment was pre-aligned by
+	// mergeOneSegment; the bucket head is re-aligned inside the merge
+	// (self-heals pre-fix buckets whose first sample was a P-frame). A bucket
+	// with NO keyframe-bearing sample at all (legacy corrupt data) aborts the
+	// append with a distinct error so mergeOneSegment can rebuild the bucket.
+	stats, mergeErr := MergeMP4Segments(ctx, []*SegmentInfo{bucketInfo, newInfo}, tempPath)
+	if mergeErr != nil {
 		os.Remove(tempPath)
-		return "", "", fmt.Errorf("merge append: %w", err)
+		return "", "", fmt.Errorf("merge append: %w", mergeErr)
+	}
+	if len(stats.Included) != 2 {
+		os.Remove(tempPath)
+		return "", "", fmt.Errorf("append dropped a segment (bucket keyframe-less): included=%d/2", len(stats.Included))
 	}
 
 	fi, err := os.Stat(tempPath)

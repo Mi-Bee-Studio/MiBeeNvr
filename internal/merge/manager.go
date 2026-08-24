@@ -439,11 +439,37 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			continue
 		}
 
-		if err := MergeMP4Segments(ctx, segmentInfos, tempPath); err != nil {
+		stats, err := MergeMP4Segments(ctx, segmentInfos, tempPath)
+		if err != nil {
 			logger.Error("failed to merge MP4 segments", "camera_id", cameraID, "error", err)
 			os.Remove(tempPath)
 			m.metrics.RecordMergeFailure("merge_error")
 			continue
+		}
+		// Keyframe-less segments were skipped by the merge (#488): mark them
+		// incompatible and exclude them from the replacement/deletion set —
+		// their samples are NOT in the output.
+		if len(stats.SkippedNoKeyframe) > 0 {
+			skipIDs := make([]string, 0, len(stats.SkippedNoKeyframe))
+			for _, idx := range stats.SkippedNoKeyframe {
+				skipIDs = append(skipIDs, recordings[idx].ID)
+			}
+			if err := storage.RetryOnBusy(ctx, func() error {
+				return m.db.SetMergeStatus(ctx, skipIDs, model.MergeStatusIncompatible)
+			}); err != nil {
+				logger.Warn("failed to mark keyframe-less segments", "error", err)
+			}
+			logger.Warn("periodic merge skipped keyframe-less segments",
+				"camera_id", cameraID, "skipped", len(skipIDs))
+			if len(stats.Included) > 0 {
+				keepRecs := make([]*model.Recording, 0, len(stats.Included))
+				keepInfos := make([]*SegmentInfo, 0, len(stats.Included))
+				for _, idx := range stats.Included {
+					keepRecs = append(keepRecs, recordings[idx])
+					keepInfos = append(keepInfos, segmentInfos[idx])
+				}
+				recordings, segmentInfos = keepRecs, keepInfos
+			}
 		}
 
 		// Verify merged file exists and has content.
