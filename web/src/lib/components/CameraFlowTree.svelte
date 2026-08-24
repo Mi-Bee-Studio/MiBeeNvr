@@ -167,11 +167,11 @@
   .node {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: 0.1rem;
     border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
-    border-radius: 10px;
-    padding: 0.45rem 0.7rem;
-    width: 190px;
+    border-radius: 8px;
+    padding: 0.3rem 0.55rem;
+    width: 180px;
     box-sizing: border-box;
     font-variant-numeric: tabular-nums;
     flex-shrink: 0;
@@ -181,10 +181,10 @@
     align-items: center;
     gap: 0.3rem;
     font-weight: 600;
-    font-size: 0.78rem;
+    font-size: 0.74rem;
   }
   .node-line {
-    font-size: 0.72rem;
+    font-size: 0.68rem;
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
@@ -226,7 +226,7 @@
     padding-left: 0.7rem;
   }
   .tree-link {
-    width: 22px;
+    width: 18px;
     height: 0;
     border-top: 2px solid rgba(125, 130, 140, 0.7);
     flex-shrink: 0;
@@ -236,18 +236,19 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 0.35rem;
-    padding-left: 24px;
+    gap: 0.3rem;
+    padding-left: 20px;
     flex-shrink: 0;
-    height: 190px;
+    /* Fits up to 3 consumer nodes without scrolling (node ≈ 65px). */
+    height: 205px;
     overflow-y: auto;
   }
   .branches::before {
     content: '';
     position: absolute;
     left: 0;
-    top: 14px;
-    bottom: 14px;
+    top: 10px;
+    bottom: 10px;
     border-left: 2px solid rgba(125, 130, 140, 0.7);
   }
   .branch {
@@ -256,9 +257,9 @@
   .branch::before {
     content: '';
     position: absolute;
-    left: -24px;
+    left: -20px;
     top: 50%;
-    width: 24px;
+    width: 20px;
     border-top: 2px solid rgba(125, 130, 140, 0.7);
   }
 </style>

@@ -150,12 +150,14 @@
   }
 
   // Toggle a camera's flow tree and scroll the expanded panel into view so
-  // the user never has to hunt for it manually.
+  // the user never has to hunt for it manually. 'center' puts the whole
+  // block (factors + tree) in the middle of the viewport — 'nearest' left
+  // the tail end below the fold.
   async function toggleFlow(camId: string): Promise<void> {
     expandedFlow = expandedFlow === camId ? null : camId;
     if (expandedFlow === camId) {
       await tick();
-      document.getElementById(`flow-${camId}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      document.getElementById(`flow-${camId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }
 
