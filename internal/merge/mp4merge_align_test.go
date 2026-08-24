@@ -125,7 +125,7 @@ func TestAlignToKeyframe_TrimsAudioHeadWithVideo(t *testing.T) {
 		AudioTimescale:   8000,
 		AudioSampleCount: 10,
 	}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		seg.AudioSamples = append(seg.AudioSamples, SampleEntry{Offset: int64(200 + i), Size: 4, Duration: 184})
 	}
 
