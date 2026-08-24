@@ -1103,6 +1103,15 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 	if r.muxer == nil {
 		return
 	}
+	// The retained rings' `written` markings refer to the segment being
+	// closed; a later flush into a fresh segment must write those frames
+	// instead of skipping them (issue #498 — mirrors baseRecorder).
+	if r.adaptive != nil {
+		r.adaptive.ClearWritten()
+	}
+	if r.audioTrig != nil {
+		r.audioTrig.ClearWritten()
+	}
 	if err := r.muxer.Close(); err != nil {
 		xiaomiLogger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)
 		if r.curTempPath != "" {

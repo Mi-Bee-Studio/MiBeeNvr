@@ -897,6 +897,16 @@ func (b *baseRecorder) closeCurrentSegment() {
 	if b.muxer == nil {
 		return
 	}
+	// The retained GOP/audio rings' `written` markings refer to the segment
+	// being closed; a later timelapse-exit flush into a FRESH segment must
+	// write those frames instead of skipping them (issue #498: mid-GOP frames
+	// existed only in the closed file, so the skip produced missing refs).
+	if b.adaptive != nil {
+		b.adaptive.clearWritten()
+	}
+	if b.audioTrig != nil {
+		b.audioTrig.ClearWritten()
+	}
 	finishStart := time.Now()
 	if err := b.muxer.Close(); err != nil {
 		b.log.Error("failed to close muxer",
@@ -995,6 +1005,14 @@ func (b *baseRecorder) closeCurrentSegment() {
 // when storage recovers.
 func (b *baseRecorder) handleStorageFailure() {
 	if b.muxer != nil {
+		// The discarded segment's frames are on nowhere on disk — same
+		// written-flag reset as a clean rotation (issue #498).
+		if b.adaptive != nil {
+			b.adaptive.clearWritten()
+		}
+		if b.audioTrig != nil {
+			b.audioTrig.ClearWritten()
+		}
 		b.muxer.Close()
 		os.Remove(b.curTempPath)
 		b.mu.Lock()

@@ -190,6 +190,18 @@ func (r *audioRing) markWritten() {
 	}
 }
 
+// clearWritten forgets the on-disk markings when the segment they were
+// written to closes — a later flush into a fresh segment must not skip
+// samples that only exist in the closed file (issue #498, the audio twin
+// of adaptiveTracker.clearWritten).
+func (r *audioRing) clearWritten() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.s {
+		r.s[i].Written = false
+	}
+}
+
 // drain returns all retained packets (oldest first) and clears the ring.
 func (r *audioRing) drain() []AudioSample {
 	r.mu.Lock()
@@ -255,6 +267,12 @@ func (rt *AudioTriggerRuntime) Ingest(muLaw bool, payload []byte, dur time.Durat
 // MarkWritten flags the newest retained packet as written by the live path.
 func (rt *AudioTriggerRuntime) MarkWritten() {
 	rt.ring.markWritten()
+}
+
+// ClearWritten forgets the per-segment written markings after the caller's
+// current segment closes (issue #498 — see audioRing.clearWritten).
+func (rt *AudioTriggerRuntime) ClearWritten() {
+	rt.ring.clearWritten()
 }
 
 // Drain returns the retained pre-trigger packets (oldest first) and clears

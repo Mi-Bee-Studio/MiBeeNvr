@@ -25,7 +25,10 @@ package health
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -216,23 +219,82 @@ func (a *RecordingAuditor) maybeDeepCheck(seg event.SegmentCompleted) {
 	}
 	a.lastDeepCheck[seg.CameraID] = time.Now()
 
+	// The rolling merge consumes source files within ~35s of completion
+	// (issue #492 field data): by the time the hourly deep check fires, the
+	// file may already be gone. That is not a decode failure — classify it
+	// separately so ok/decode_error stay meaningful.
+	if _, err := os.Stat(seg.FilePath); err != nil {
+		a.metrics.IncRecordingDeepCheck(seg.CameraID, "vanished")
+		slog.Debug("recording deep check skipped: source file already consumed",
+			"camera_id", seg.CameraID, "file", seg.FilePath)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(a.baseCtx, deepCheckTimeout)
 	defer cancel()
 	stderr, err := a.deepCheckNow(ctx, seg.FilePath)
 	switch {
+	case ctx.Err() != nil:
+		// Shutdown or hard timeout raced the verdict — do not score it.
+		return
+	case err != nil && isVanishedStderr(stderr):
+		// ffmpeg could not open the INPUT: the rolling merge consumed the
+		// source between the event and the probe (issue #492 field data).
+		a.metrics.IncRecordingDeepCheck(seg.CameraID, "vanished")
+		slog.Debug("recording deep check skipped: source file already consumed",
+			"camera_id", seg.CameraID, "file", seg.FilePath)
 	case err != nil:
 		a.metrics.IncRecordingDeepCheck(seg.CameraID, "decode_error")
 		slog.Warn("recording deep check failed",
 			"camera_id", seg.CameraID, "file", seg.FilePath, "error", err, "stderr", firstLine(stderr))
-	case stderr != "":
-		// ffmpeg exited 0 but printed error-level lines — still corruption
-		// (e.g. reference-chain issues that don't abort the decode).
-		a.metrics.IncRecordingDeepCheck(seg.CameraID, "decode_error")
-		slog.Warn("recording deep check found decode errors",
-			"camera_id", seg.CameraID, "file", seg.FilePath, "stderr", firstLine(stderr))
 	default:
-		a.metrics.IncRecordingDeepCheck(seg.CameraID, "ok")
+		if real := filterDeepCheckStderr(stderr); real != "" {
+			// ffmpeg exited 0 but printed real error-level lines — corruption
+			// (e.g. reference-chain issues that don't abort the decode).
+			a.metrics.IncRecordingDeepCheck(seg.CameraID, "decode_error")
+			slog.Warn("recording deep check found decode errors",
+				"camera_id", seg.CameraID, "file", seg.FilePath, "stderr", firstLine(real))
+		} else {
+			a.metrics.IncRecordingDeepCheck(seg.CameraID, "ok")
+		}
 	}
+}
+
+// isVanishedStderr reports whether ffmpeg's failure output says the INPUT
+// file could not be opened — the rolling merge consumed the source between
+// the segment event and the probe (issue #492), which is not a decode defect.
+func isVanishedStderr(stderr string) bool {
+	return strings.Contains(stderr, "Error opening input") ||
+		strings.Contains(stderr, "No such file or directory")
+}
+
+// filterDeepCheckStderr strips benign error-level lines from ffmpeg's stderr
+// so a healthy recording can still score ok:
+//
+//   - "non monotonically increasing dts" — the null muxer warns because the
+//     MP4 samples carry pts==dts by muxer design; virtually every real
+//     recording trips it, so without the filter `ok` was structurally
+//     unreachable (issue #492 field data: 28 steady-state checks, ok=0).
+//   - "Last message repeated N times" notices inherit the verdict of the
+//     line they repeat — dropped only when that line was dropped.
+func filterDeepCheckStderr(stderr string) string {
+	var kept []string
+	prevDropped := false
+	for _, line := range strings.Split(stderr, "\n") {
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "non monotonically increasing dts") {
+			prevDropped = true
+			continue
+		}
+		if prevDropped && strings.Contains(line, "Last message repeated") {
+			continue
+		}
+		prevDropped = false
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // runFFmpegDeepCheck decodes up to deepCheckSampleDur of the file, discarding
@@ -266,9 +328,26 @@ func firstLine(s string) string {
 
 // probe runs mediaprobe on one segment and records the outcome.
 func (a *RecordingAuditor) probe(seg event.SegmentCompleted) {
+	if _, err := os.Stat(seg.FilePath); err != nil {
+		// The rolling merge already consumed the source before the spaced
+		// probe reached it (issue #487 field data: probe_error grew on files
+		// deleted between event and probe) — expected on rolling-merge
+		// cameras, not a probe failure.
+		a.metrics.IncRecordingAudit(seg.CameraID, "vanished")
+		slog.Debug("recording audit: source file already consumed",
+			"camera_id", seg.CameraID, "file", seg.FilePath)
+		return
+	}
 	info, err := mediaprobe.ProbeMP4(seg.FilePath)
 	switch {
 	case err != nil:
+		if errors.Is(err, fs.ErrNotExist) {
+			// Vanished between the stat above and the open — same race.
+			a.metrics.IncRecordingAudit(seg.CameraID, "vanished")
+			slog.Debug("recording audit: source file vanished mid-probe",
+				"camera_id", seg.CameraID, "file", seg.FilePath)
+			return
+		}
 		a.metrics.IncRecordingAudit(seg.CameraID, "probe_error")
 		slog.Warn("recording audit: probe failed",
 			"camera_id", seg.CameraID, "file", seg.FilePath, "error", err)
