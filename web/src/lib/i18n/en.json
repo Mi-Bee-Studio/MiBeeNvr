@@ -1732,6 +1732,8 @@
   "flow.buffer": "buffer",
   "flow.dwell": "dwell avg/max",
   "flow.noConsumers": "no consumers (recording only)",
+  "flow.treeTitle": "Flow details",
+  "flow.emptyCamera": "No active flow for this camera",
   "flow.noViewers": "no viewers",
   "flow.liveLatency": "end-to-end latency",
   "health.stability.uptime": "24h uptime",

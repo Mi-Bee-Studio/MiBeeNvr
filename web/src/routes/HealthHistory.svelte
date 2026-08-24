@@ -6,6 +6,7 @@
   import { formatDate } from '$lib/format';
   import { AlertCircle, Activity } from 'lucide-svelte';
   import Pagination from '../components/Pagination.svelte';
+  import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
 
   let events = $state<HealthEvent[]>([]);
   let total = $state(0);
@@ -262,13 +263,20 @@
                 </div>
               {/if}
             </div>
-            {#if expandedCamera === id && detail.score_factors && Object.keys(detail.score_factors).length > 0}
-              <div class="card factor-breakdown mt-1 p-3 border" style="border-color: {scoreBorderColor(detail.score)}">
-                {#each Object.entries(detail.score_factors) as [factor, impact]}
-                  <div class="factor-item" style="color: {impact < 0 ? 'var(--color-danger)' : 'var(--color-success)'}">
-                    <span class="font-medium">{factor}</span>: {impact < 0 ? '' : '+'}{impact}
-                  </div>
-                {/each}
+            {#if expandedCamera === id}
+              {#if detail.score_factors && Object.keys(detail.score_factors).length > 0}
+                <div class="card factor-breakdown mt-1 p-3 border" style="border-color: {scoreBorderColor(detail.score)}">
+                  {#each Object.entries(detail.score_factors) as [factor, impact]}
+                    <div class="factor-item" style="color: {impact < 0 ? 'var(--color-danger)' : 'var(--color-success)'}">
+                      <span class="font-medium">{factor}</span>: {impact < 0 ? '' : '+'}{impact}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+              <!-- Full-width detail row: live flow tree for troubleshooting
+                   (mount = poll starts; collapse = poll stops). -->
+              <div class="card expanded-detail mt-1 p-3 border" style="border-color: {scoreBorderColor(detail.score)}">
+                <CameraFlowTree cameraId={id} name={getCameraName(id)} />
               </div>
             {/if}
           {/each}
@@ -411,5 +419,11 @@
 
   .factor-item + .factor-item {
     margin-top: 2px;
+  }
+
+  /* Expanded flow detail spans the whole grid row so the tree fits without
+     horizontal scrolling on desktop. */
+  .expanded-detail {
+    grid-column: 1 / -1;
   }
 </style>
