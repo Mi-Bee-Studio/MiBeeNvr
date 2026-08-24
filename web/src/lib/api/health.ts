@@ -84,7 +84,7 @@ export interface CameraHealthDetail {
   camera_id: string;
   latest_status: string;
   score: number;
-  score_factors?: Record<string, number>;
+  score_factors?: string[];
 }
 
 // Health cameras response (map of camera ID to detail)

@@ -104,7 +104,7 @@
 
   // Build enriched camera health entries (camera info + health detail)
   let cameraHealthEntries = $derived.by(() => {
-    const entries: { id: string; name: string; status: string; score: number; factors?: Record<string, number>; recording_enabled?: boolean | null }[] = [];
+    const entries: { id: string; name: string; status: string; score: number; factors?: string[]; recording_enabled?: boolean | null }[] = [];
     for (const cam of cameras) {
       const detail = healthCameras[cam.id];
       entries.push({
@@ -123,6 +123,41 @@
     });
     return entries;
   });
+
+  // Translate a raw backend factor string ("recent_anomalies: -15 (4
+  // anomalies in last hour (>3))") into a friendly localized line.
+  const factorNames: Record<string, string> = {
+    offline_duration: 'offlineDuration',
+    recent_anomalies: 'recentAnomalies',
+    low_uptime: 'lowUptime',
+  };
+
+  function friendlyFactor(raw: string): string {
+    const m = raw.match(/^(\w+):\s*([+-]\d+)\s*\((.*)\)$/);
+    if (!m) return raw;
+    const [, name, impact, detail] = m;
+    const label = factorNames[name] ? t(`health.factor.${factorNames[name]}`) : name;
+    let text: string;
+    let d: RegExpMatchArray | null;
+    if ((d = detail.match(/^offline for (.+) \(>5min\)$/))) text = t('health.factor.d.offline5', { d: d[1] });
+    else if ((d = detail.match(/^offline for (.+) \(>30min\)$/))) text = t('health.factor.d.offline30', { d: d[1] });
+    else if ((d = detail.match(/^(\d+) anomalies in last hour \(>10\)$/))) text = t('health.factor.d.anomalies10', { n: d[1] });
+    else if ((d = detail.match(/^(\d+) anomalies in last hour \(>3\)$/))) text = t('health.factor.d.anomalies3', { n: d[1] });
+    else if ((d = detail.match(/^uptime ([\d.]+)% \(<80%\)$/))) text = t('health.factor.d.uptime80', { p: d[1] });
+    else if ((d = detail.match(/^uptime ([\d.]+)% \(<95%\)$/))) text = t('health.factor.d.uptime95', { p: d[1] });
+    else text = detail;
+    return `${label} ${impact} · ${text}`;
+  }
+
+  // Toggle a camera's flow tree and scroll the expanded panel into view so
+  // the user never has to hunt for it manually.
+  async function toggleFlow(camId: string): Promise<void> {
+    expandedFlow = expandedFlow === camId ? null : camId;
+    if (expandedFlow === camId) {
+      await tick();
+      document.getElementById(`flow-${camId}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
 
   function statusColor(status: string): string {
     const s = status.toLowerCase();
@@ -461,22 +496,21 @@
                 class="expand-btn"
                 aria-expanded={expandedFlow === cam.id}
                 title={t('flow.expandHint')}
-                onclick={() => (expandedFlow = expandedFlow === cam.id ? null : cam.id)}
+                onclick={() => toggleFlow(cam.id)}
               >
                 {expandedFlow === cam.id ? '▾' : '▸'}
               </button>
             </div>
             {#if expandedFlow === cam.id}
-              {#if cam.factors && Object.keys(cam.factors).length > 0}
+              {#if cam.factors && cam.factors.length > 0}
                 <div class="factors">
-                  {#each Object.entries(cam.factors) as [factor, impact]}
-                    <span style="color: {impact < 0 ? 'var(--color-danger)' : 'var(--color-success)'}">
-                      {factor}: {impact < 0 ? '' : '+'}{impact}
-                    </span>
+                  {#each cam.factors as raw}
+                    {@const f = friendlyFactor(raw)}
+                    <span style="color: {f.includes('-') ? 'var(--color-danger)' : 'var(--color-success)'}">{f}</span>
                   {/each}
                 </div>
               {/if}
-              <div class="flow-expand">
+              <div class="flow-expand" id="flow-{cam.id}">
                 <CameraFlowTree cameraId={cam.id} name={cam.name} />
               </div>
             {/if}
