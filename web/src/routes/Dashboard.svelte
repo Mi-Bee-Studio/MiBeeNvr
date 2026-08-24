@@ -472,9 +472,31 @@
       {:else if cameraHealthEntries.length === 0}
         <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
       {:else}
+        <!-- Detail slot lives ABOVE the list in a fixed position: the list
+             re-sorts by score every 30s poll, which used to drag an inline
+             expanded panel around and out of view. -->
+        {#if expandedFlow}
+          {@const active = cameraHealthEntries.find((c) => c.id === expandedFlow)}
+          {#if active}
+            <div class="flow-expand" id="flow-{active.id}">
+              {#if active.factors && active.factors.length > 0}
+                <div class="factors">
+                  {#each active.factors as raw}
+                    {@const f = friendlyFactor(raw)}
+                    <span style="color: {f.includes('-') ? 'var(--color-danger)' : 'var(--color-success)'}">{f}</span>
+                  {/each}
+                </div>
+              {/if}
+              <CameraFlowTree cameraId={active.id} name={active.name} status={active.status} recordingEnabled={active.recording_enabled !== false} />
+            </div>
+          {/if}
+        {/if}
         <div class="space-y-1">
           {#each cameraHealthEntries as cam (cam.id)}
-            <div class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors">
+            <div
+              class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors"
+              class:row-active={expandedFlow === cam.id}
+            >
               <!-- Status dot -->
               <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {statusColor(cam.status)}"></span>
 
@@ -503,19 +525,6 @@
                 {expandedFlow === cam.id ? '▾' : '▸'}
               </button>
             </div>
-            {#if expandedFlow === cam.id}
-              {#if cam.factors && cam.factors.length > 0}
-                <div class="factors">
-                  {#each cam.factors as raw}
-                    {@const f = friendlyFactor(raw)}
-                    <span style="color: {f.includes('-') ? 'var(--color-danger)' : 'var(--color-success)'}">{f}</span>
-                  {/each}
-                </div>
-              {/if}
-              <div class="flow-expand" id="flow-{cam.id}">
-                <CameraFlowTree cameraId={cam.id} name={cam.name} status={cam.status} recordingEnabled={cam.recording_enabled !== false} />
-              </div>
-            {/if}
           {/each}
         </div>
       {/if}
@@ -581,9 +590,14 @@
     padding: 0.25rem 0 0 1.3rem;
   }
   .flow-expand {
-    border-left: 2px solid var(--border, rgba(128, 128, 128, 0.25));
-    margin: 0.35rem 0 0.5rem 0.45rem;
-    padding-left: 0.6rem;
+    border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.6rem;
+    background: var(--bg-secondary, transparent);
+  }
+  .row-active {
+    background: var(--bg-tertiary, rgba(128, 128, 128, 0.12));
   }
   .health-tab-content > :global(:first-child) {
     padding-top: 0 !important;
