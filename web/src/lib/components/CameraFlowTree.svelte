@@ -8,7 +8,12 @@
   import { t } from '$lib/i18n';
   import { Radio } from 'lucide-svelte';
 
-  let { cameraId, name = '' }: { cameraId: string; name?: string } = $props();
+  let {
+    cameraId,
+    name = '',
+    status = '',
+    recordingEnabled = true,
+  }: { cameraId: string; name?: string; status?: string; recordingEnabled?: boolean } = $props();
 
   const POLL_INTERVAL = 2000;
 
@@ -19,6 +24,11 @@
   let rate = $state({ fps: 0, kbps: 0 });
   let prevC: Record<string, { sends: number; at: number }> = {};
   let cRates = $state<Record<string, number>>({});
+
+  const isRecording = $derived(['recording', 'active'].includes(status.toLowerCase()));
+  const hasLiveViewer = $derived(
+    !!stream?.consumers.some((c) => /^(ws|webrtc|flv|hls)/.test(consumerKind(c.id))),
+  );
 
   function lastFrameAge(iso: string): number {
     const t = iso ? new Date(iso).getTime() : 0;
@@ -118,6 +128,18 @@
       <div class="tree-link"></div>
 
       <div class="branches">
+        <!-- Recording-to-disk is not a hub consumer (the recorder IS the
+             producer and writes segments directly), but users expect the
+             full pipeline — always show the branch. -->
+        {#if recordingEnabled}
+          <div class="branch">
+            <div class="node node-con" class:con-off={!isRecording}>
+              <span class="node-title">{t('flow.recordDisk')}</span>
+              <span class="node-line">{isRecording ? t('flow.recording') : t('flow.recordOff')}</span>
+              <span class="node-line dim">{rate.kbps} kbps → {t('flow.disk')}</span>
+            </div>
+          </div>
+        {/if}
         {#each stream.consumers as c (c.id)}
           <div class="branch">
             <div class="node node-con" class:con-warn={c.drop_rate > 0.01} class:con-danger={c.drop_rate > 0.05}>
@@ -133,6 +155,17 @@
         {:else}
           <div class="branch"><div class="node node-con dim">{t('flow.noConsumers')}</div></div>
         {/each}
+        <!-- Surveillance grid only appears as a real consumer (ws/…) while
+             someone is watching; show a dim placeholder otherwise so the
+             branch is always visible. -->
+        {#if !hasLiveViewer}
+          <div class="branch">
+            <div class="node node-con con-off">
+              <span class="node-title">{t('flow.surveillance')}</span>
+              <span class="node-line dim">{t('flow.notWatching')}</span>
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
   {/if}
@@ -214,6 +247,9 @@
     border-color: rgba(239, 68, 68, 0.55);
     background: rgba(239, 68, 68, 0.05);
   }
+  .node-con.con-off {
+    opacity: 0.55;
+  }
   .hub-col {
     display: flex;
     flex-direction: column;
@@ -239,8 +275,10 @@
     gap: 0.3rem;
     padding-left: 20px;
     flex-shrink: 0;
-    /* Fits up to 3 consumer nodes without scrolling (node ≈ 65px). */
-    height: 205px;
+    /* Auto-height so the common case (≤5 branches: recording + 3 consumers
+       + surveillance ghost) never scrolls; hard cap keeps pathological
+       consumer counts bounded. */
+    max-height: 340px;
     overflow-y: auto;
   }
   .branches::before {

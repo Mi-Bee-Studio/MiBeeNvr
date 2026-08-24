@@ -513,7 +513,7 @@
                 </div>
               {/if}
               <div class="flow-expand" id="flow-{cam.id}">
-                <CameraFlowTree cameraId={cam.id} name={cam.name} />
+                <CameraFlowTree cameraId={cam.id} name={cam.name} status={cam.status} recordingEnabled={cam.recording_enabled !== false} />
               </div>
             {/if}
           {/each}
