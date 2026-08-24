@@ -18,6 +18,7 @@
     clearMergedCodecCache,
   } from '$lib/api';
   import { AlertTriangle, RefreshCw } from 'lucide-svelte';
+  import { parseTimelineMap, wallToFileSec } from '$lib/timeline-map';
 
   import MergePanel from './recordings/MergePanel.svelte';
   import PlaybackPanel from './recordings/PlaybackPanel.svelte';
@@ -168,7 +169,13 @@
     if (!recording || !recording.started_at) return;
     const startedAtMs = Date.parse(recording.started_at);
     if (!Number.isFinite(startedAtMs)) return;
-    const offsetSec = Math.max(0, Math.floor((pendingTimelineSeekAtMs - startedAtMs) / 1000));
+    // #496: timelapse-compressed recordings keep the wall clock only in the
+    // row's timeline map — resolve ?at= through it so AI-event deep links
+    // land on the right frame of the (much shorter) file.
+    const wallOffsetSec = Math.max(0, (pendingTimelineSeekAtMs - startedAtMs) / 1000);
+    const offsetSec = Math.floor(
+      wallToFileSec(parseTimelineMap(recording.timeline_map), wallOffsetSec)
+    );
     pendingTimelineSeekAtMs = null;
     if (pendingTimelineSeekOffset == null) pendingTimelineSeekOffset = offsetSec;
   });

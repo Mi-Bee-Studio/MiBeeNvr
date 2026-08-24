@@ -683,7 +683,9 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		now := time.Now()
 		isIDR := naluType == 5
 		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
-		r.audioSparse.Store(r.adaptive.Timelapse())
+		// Ambient-audio cameras keep the disk audio track through sparse mode
+		// (#496); the merge renders the ambient span into the atmosphere bed.
+		r.audioSparse.Store(r.adaptive.Timelapse() && !r.cfg.Adaptive.AmbientAudio)
 		if len(flush) > 0 {
 			r.writeFlushedGOP(flush)
 			// Pre-trigger audio back-fill (issue #478), mirroring the built-in
@@ -815,7 +817,9 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		now := time.Now()
 		isIDR := naluType == 19 || naluType == 20
 		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
-		r.audioSparse.Store(r.adaptive.Timelapse())
+		// Ambient-audio cameras keep the disk audio track through sparse mode
+		// (#496); the merge renders the ambient span into the atmosphere bed.
+		r.audioSparse.Store(r.adaptive.Timelapse() && !r.cfg.Adaptive.AmbientAudio)
 		if len(flush) > 0 {
 			r.writeFlushedGOP(flush)
 			// Pre-trigger audio back-fill (issue #478), mirroring the built-in

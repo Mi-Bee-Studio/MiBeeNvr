@@ -78,11 +78,11 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 		if cfg.Adaptive != nil {
 			a = cfg.Adaptive
 		}
-		calm, interval, spike, gop := "", "", 0.0, int64(0)
+		calm, interval, spike, gop, ambient := "", "", 0.0, int64(0), false
 		if a != nil {
-			calm, interval, spike, gop = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes
+			calm, interval, spike, gop, ambient = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio
 		}
-		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop)
+		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient)
 		recCfg.Adaptive = &ac
 		// Audio-trigger (issue #478): only meaningful on top of adaptive, and
 		// only for G.711 cameras — the recorder logs Opus as inactive.

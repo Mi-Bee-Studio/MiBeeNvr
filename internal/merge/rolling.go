@@ -1019,6 +1019,7 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 		FrameCount:   totalFrames,
 		MergeStatus:  model.MergeStatusMerged,
 		MergeQuality: ComputeMergeQuality(recs[0].StartedAt, recs[len(recs)-1].EndedAt, durSec, r.resolveRollingConfig(cameraID).MinDuration.Seconds()),
+		TimelineMap:  stats.TimelineMapJSON(),
 	}
 
 	ids := make([]string, len(recs))
@@ -1662,7 +1663,8 @@ func (r *RollingMergeCoordinator) createBucket(
 	}
 
 	// Merge single segment into the bucket file (pre-aligned by mergeOneSegment).
-	if _, err := MergeMP4Segments(ctx, []*SegmentInfo{info}, tempPath); err != nil {
+	stats, err := MergeMP4Segments(ctx, []*SegmentInfo{info}, tempPath)
+	if err != nil {
 		os.Remove(tempPath)
 		return "", "", fmt.Errorf("merge initial segment: %w", err)
 	}
@@ -1689,10 +1691,14 @@ func (r *RollingMergeCoordinator) createBucket(
 		Format:      model.Format(seg.format),
 		StartedAt:   seg.startedAt,
 		EndedAt:     seg.endedAt,
-		Duration:    info.TotalDuration.Seconds(),
+		// Wall-clock span (#496): the file timeline may be timelapse-compressed;
+		// the row keeps reporting real time so storage accounting and the UI's
+		// wall-clock math stay on the real axis.
+		Duration:    statsWallDuration(stats, info.TotalDuration.Seconds()),
 		FileSize:    fi.Size(),
 		FrameCount:  info.SampleCount,
 		MergeStatus: model.MergeStatusMerged,
+		TimelineMap: stats.TimelineMapJSON(),
 	}
 
 	if err := storage.RetryOnBusy(ctx, func() error {
@@ -1773,10 +1779,10 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		return "", "", fmt.Errorf("finalize append (rename): %w", err)
 	}
 
-	// Calculate updated metadata.
-	totalDur := bucketInfo.TotalDuration + newInfo.TotalDuration
+	// Calculate updated metadata. Duration stays on the wall-clock axis (#496):
+	// the bucket file's parsed durations shrink with each timelapse-compressed
+	// append, so the wall span comes from the merge stats' input sums instead.
 	totalFrames := bucketInfo.SampleCount + newInfo.SampleCount
-	totalDurSec := math.Round(totalDur.Seconds()*1000) / 1000
 
 	mergedRecID = bucket.mergedRecID
 	mergedRec := &model.Recording{
@@ -1786,10 +1792,11 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		Format:      model.Format(seg.format),
 		StartedAt:   bucket.windowStart,
 		EndedAt:     seg.endedAt,
-		Duration:    totalDurSec,
+		Duration:    statsWallDuration(stats, totalDurFallbackSec(bucketInfo, newInfo)),
 		FileSize:    fi.Size(),
 		FrameCount:  totalFrames,
 		MergeStatus: model.MergeStatusMerged,
+		TimelineMap: stats.TimelineMapJSON(),
 	}
 
 	// UPDATE the merged row + DELETE the source segment row, in one transaction.
@@ -1847,4 +1854,22 @@ func bytesEqual(a, b []byte) bool {
 		}
 	}
 	return true
+}
+
+// statsWallDuration picks the product's wall-clock span from the merge stats
+// (sum of input sample durations — unaffected by #496 timelapse dwell
+// compression), falling back to the caller's parsed-duration estimate when no
+// map was collected.
+func statsWallDuration(stats MergeStats, fallback float64) float64 {
+	if w := stats.WallDurationSec(); w > 0 {
+		return math.Round(w*1000) / 1000
+	}
+	return fallback
+}
+
+// totalDurFallbackSec is the pre-stats duration estimate for a bucket append:
+// the parsed bucket file plus the new input. Correct on the real-time axis
+// (no compression yet), and only used when stats carry no wall map.
+func totalDurFallbackSec(bucketInfo, newInfo *SegmentInfo) float64 {
+	return math.Round((bucketInfo.TotalDuration + newInfo.TotalDuration).Seconds()*1000) / 1000
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -54,11 +55,64 @@ type MergeStats struct {
 	// LeadingDropped maps input index → count of leading video samples dropped
 	// to reach that segment's first keyframe.
 	LeadingDropped map[int]int
+	// TimelapseFrames counts sparse dwell samples rewritten to
+	// TimelapseFrameDur — the compressed-timeline fix for #496.
+	TimelapseFrames int
+	// AmbientSamples counts synthesized atmosphere-bed samples rendered from
+	// compressed spans' continuous ambient audio (#496 audio phase).
+	AmbientSamples int
+	// WallToFile maps the product's wall-clock span onto its (possibly
+	// compressed) file timeline: cumulative [wallSeconds, fileSeconds] pairs
+	// at every input boundary, len == len(segments)+1 (starts at [0,0]).
+	// Piecewise-linear: within an input, wall time maps onto file time at that
+	// input's (possibly rewritten) rate. Callers with no UI plumbing may
+	// ignore it; it is always populated.
+	WallToFile [][2]float64
 }
 
 // ErrNoKeyframe is returned when no input segment carries a keyframe sample —
 // nothing decodable can be produced from the inputs.
 var ErrNoKeyframe = errors.New("no keyframe-bearing segments")
+
+// TimelineMapJSON renders WallToFile as the compact JSON stored on the
+// product row ("[[0,0],[126.3,2.5],...]"). Empty when no map was collected.
+func (s MergeStats) TimelineMapJSON() string {
+	if len(s.WallToFile) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(s.WallToFile)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// WallDurationSec returns the product's wall-clock span (the last WallToFile
+// point's wall component) — the merge-time companion of the row's
+// started_at..ended_at, unaffected by dwell compression.
+func (s MergeStats) WallDurationSec() float64 {
+	if n := len(s.WallToFile); n > 0 {
+		return s.WallToFile[n-1][0]
+	}
+	return 0
+}
+// Timelapse dwell compression (#496): adaptive sparse mode stores one keyframe
+// per timelapse_interval (~30s) ON THE REAL-TIME AXIS, so any player — the SPA
+// included, and crucially a DOWNLOADED file in a local player — freezes each
+// frame for the whole gap. A video sample whose duration exceeds
+// TimelapseGapThreshold is such a dwell; in segments WITHOUT an audio track
+// (sparse mode drops disk audio, so TL segments never carry one) the dwell is
+// rewritten to TimelapseFrameDur, making normal 1× playback feel like the
+// timelapse it is. Segments WITH audio keep real durations: their audio track
+// has its own timeline, and rewriting video there would desync it.
+//
+// Vars (not consts) so tooling and tests can inject alternative cadences —
+// the field-test flow generated per-camera sample clips at different frame
+// durations before fixing the default.
+var (
+	TimelapseGapThreshold = 2 * time.Second
+	TimelapseFrameDur     = 100 * time.Millisecond
+)
 
 // AlignToKeyframe trims seg's leading video samples up to (and including the
 // position of) its first keyframe and trims the audio head by the same wall
@@ -332,6 +386,8 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	var currentOffset int64
 	var allVideoSamples []mergedSample
 
+	stats.WallToFile = append(stats.WallToFile, [2]float64{0, 0})
+	var wallSec, fileSec float64
 	for _, seg := range segments {
 		if seg.FilePath == "" {
 			return stats, fmt.Errorf("segment has empty FilePath")
@@ -341,6 +397,16 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		if err != nil {
 			return stats, fmt.Errorf("open segment %s: %w", seg.FilePath, err)
 		}
+
+		// Sparse dwell compression (#496): no-audio segments (adaptive
+		// timelapse drops the disk audio track) have their >2s dwell samples
+		// rewritten to timelapseFrameDur so 1×/downloaded playback shows a
+		// timelapse instead of a frozen frame. Audio-bearing segments keep
+		// real durations — their audio track would desync.
+		ts := float64(seg.Timescale)
+		compress := !seg.HasAudio && seg.Timescale > 0
+		gapTicks := float64(seg.Timescale) * TimelapseGapThreshold.Seconds()
+		frameTicks := uint32(float64(seg.Timescale) * TimelapseFrameDur.Seconds())
 
 		for _, s := range seg.Samples {
 			select {
@@ -357,25 +423,85 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 				return stats, fmt.Errorf("copy sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
 			}
 
+			dur := s.Duration
+			if compress && float64(dur) > gapTicks {
+				dur = frameTicks
+				stats.TimelapseFrames++
+			}
+			if ts > 0 {
+				wallSec += float64(s.Duration) / ts
+				fileSec += float64(dur) / ts
+			}
+
 			allVideoSamples = append(allVideoSamples, mergedSample{
 				offset:     sampleAbsOffset,
 				size:       s.Size,
-				duration:   s.Duration,
+				duration:   dur,
 				isKeyFrame: s.IsKeyFrame,
 			})
 			currentOffset += int64(s.Size)
 		}
 
 		src.Close()
+		stats.WallToFile = append(stats.WallToFile, [2]float64{wallSec, fileSec})
 	}
 
-	// Stream audio samples after video samples.
+	// Stream audio samples after video samples. Spans whose video timeline was
+	// compressed (#496) get their audio rendered by envelope mixdown instead of
+	// verbatim copy — see ambient_audio.go; non-G.711 compressed spans drop
+	// their audio (logged), uncompressed spans keep it byte-for-byte.
 	var allAudioSamples []mergedSample
 	if hasAudio {
-		for _, seg := range segments {
+		for segIdx, seg := range segments {
 			if len(seg.AudioSamples) == 0 {
 				continue
 			}
+
+			spanWall := stats.WallToFile[segIdx+1][0] - stats.WallToFile[segIdx][0]
+			spanFile := stats.WallToFile[segIdx+1][1] - stats.WallToFile[segIdx][1]
+			compressedSpan := spanWall > 0 && spanFile > 0 && spanWall > 1.5*spanFile
+
+			if compressedSpan {
+				if seg.AudioCodec != "g711" {
+					logger.Warn("merge: dropping audio of a compressed span with unsupported codec (g711 only)",
+						"path", seg.FilePath, "codec", seg.AudioCodec)
+					continue
+				}
+				src, err := os.Open(seg.FilePath)
+				if err != nil {
+					return stats, fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)
+				}
+				raw := make([]byte, 0, 1<<16)
+				for _, s := range seg.AudioSamples {
+					chunk := make([]byte, s.Size)
+					if _, err := src.ReadAt(chunk, s.Offset); err != nil {
+						src.Close()
+						return stats, fmt.Errorf("read audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, err)
+					}
+					raw = append(raw, chunk...)
+				}
+				src.Close()
+
+				nOut := int(spanFile*float64(seg.AudioTimescale) + 0.5)
+				bed := mixdownAmbient(seg.G711MULaw, raw, nOut)
+				if len(bed) > 0 {
+					bedOffset := currentOffset + mdatDataStart
+					if _, err := out.Write(bed); err != nil {
+						return stats, fmt.Errorf("write ambient bed: %w", err)
+					}
+					for i := range bed {
+						allAudioSamples = append(allAudioSamples, mergedSample{
+							offset:   bedOffset + int64(i),
+							size:     1,
+							duration: 1, // one tick per G.711 byte on the audio timescale
+						})
+					}
+					currentOffset += int64(len(bed))
+					stats.AmbientSamples += len(bed)
+				}
+				continue
+			}
+
 			src, err := os.Open(seg.FilePath)
 			if err != nil {
 				return stats, fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)

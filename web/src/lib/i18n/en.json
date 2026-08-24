@@ -1693,6 +1693,8 @@
   "cameras.adaptiveParamsHint": "Leave blank for defaults (60s / 30s / 5.0 / 16MB).",
   "cameras.audioTrigger": "Audio-triggered recording",
   "cameras.audioTriggerHint": "Abnormal sounds (glass breaking, shouting, alarms) instantly resume full-rate recording and keep the audio track. G.711 cameras only (inactive for AAC/Opus).",
+  "cameras.ambientAudio": "Record ambient audio continuously while sparse (atmosphere bed)",
+  "cameras.ambientAudioHint": "Lays a quiet ambient bed under compressed timelapse playback (~28.8MB/h storage, G.711 cameras only)",
   "cameras.audioTriggerMinDBFS": "Loudness threshold (dBFS)",
   "cameras.audioTriggerPreCapture": "Pre-capture audio (s)",
   "recordings.motionScore": "Motion score",

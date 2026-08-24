@@ -607,8 +607,10 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			if b.adaptive.mode == adaptiveTimelapse && !spike {
 				if !b.adaptive.shouldWriteSparse(isIDR, now) {
 					// Sparse: the frame is retained in the GOP ring, not
-					// written; a later spike can still flush it.
-					if sa := b.adaptive.mode == adaptiveTimelapse; sa != sparseAudio {
+					// written; a later spike can still flush it. Ambient-audio
+					// cameras keep writing the audio track (#496): the merge
+					// renders it into the compressed timeline's atmosphere bed.
+					if sa := b.adaptive.mode == adaptiveTimelapse && !b.cfg.Adaptive.AmbientAudio; sa != sparseAudio {
 						sparseAudio = sa
 						b.audioSparse.Store(sa)
 					}
@@ -624,7 +626,7 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 					b.adaptive.lastSparseWrite = now
 				}
 			}
-			if sa := b.adaptive.mode == adaptiveTimelapse; sa != sparseAudio {
+			if sa := b.adaptive.mode == adaptiveTimelapse && !b.cfg.Adaptive.AmbientAudio; sa != sparseAudio {
 				sparseAudio = sa
 				b.audioSparse.Store(sa)
 			}

@@ -148,6 +148,11 @@ type AdaptiveRecordingConfig struct {
 	// camera GOP — 2K cameras with IDR intervals near the 30s timelapse
 	// cadence overflow 16MB and lose the flush, issue #485). Range 1–64MB.
 	GOPBufferBytes int64 `yaml:"gop_buffer_bytes,omitempty" json:"gop_buffer_bytes,omitempty"`
+	// AmbientAudio keeps recording the audio track continuously while sparse
+	// (#496 audio phase): the merge compresses the ambient span into a quiet
+	// continuous atmosphere bed under the timelapse video (event spans keep
+	// real audio). G.711 cameras only; ~28.8MB/h storage while sparse.
+	AmbientAudio bool `yaml:"ambient_audio,omitempty" json:"ambient_audio,omitempty"`
 }
 
 // CameraAudioTriggerConfig tunes audio_trigger (issue #478).

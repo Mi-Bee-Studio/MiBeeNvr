@@ -1692,6 +1692,8 @@
   "cameras.adaptiveParamsHint": "留空使用默认值（60s / 30s / 5.0 / 16MB）。",
   "cameras.audioTrigger": "音频触发录像",
   "cameras.audioTriggerHint": "异常声音（玻璃破碎/呼喊/警报）立即恢复全速录像并保留音频轨。仅支持 G.711 音频相机（AAC/Opus 相机不生效）。",
+  "cameras.ambientAudio": "无人时段连续录制环境声（合成延时氛围层）",
+  "cameras.ambientAudioHint": "延时无人段回放时铺低音量环境声氛围层（约 28.8MB/小时存储，仅 G.711 相机）",
   "cameras.audioTriggerMinDBFS": "响度阈值 (dBFS)",
   "cameras.audioTriggerPreCapture": "预录音频 (秒)",
   "recordings.motionScore": "活动分",

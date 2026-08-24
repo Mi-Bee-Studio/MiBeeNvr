@@ -102,6 +102,8 @@
   let formAdaptiveTimelapseInterval = $state('');
   let formAdaptiveSpikeFactor = $state('');
   let formAdaptiveGopBufferMB = $state('');
+  let formAmbientAudio = $state(false);
+  let formAdaptiveWasAmbient = false;
   // Audio trigger (#478): loudness input on top of the adaptive gate. Only
   // meaningful (and only sent) for adaptive + G.711 cameras.
   let formAudioTriggerEnabled = $state(false);
@@ -383,6 +385,8 @@ let validationErrors = $state<Record<string, string>>({});
     formAdaptiveGopBufferMB = camera.adaptive?.gop_buffer_bytes
       ? String(Math.round(camera.adaptive.gop_buffer_bytes / (1024 * 1024)))
       : '';
+    formAmbientAudio = camera.adaptive?.ambient_audio ?? false;
+    formAdaptiveWasAmbient = formAmbientAudio;
     formAudioTriggerEnabled = camera.audio_trigger?.enabled ?? false;
     formAudioTriggerWasEnabled = formAudioTriggerEnabled;
     formAudioMinDBFS =
@@ -636,8 +640,13 @@ async function handleSubmit() {
 // only the params the user actually filled (blank = backend default). Eligible
 // only for differential encodings — the backend rejects adaptive + jpeg/mjpeg.
 function buildAdaptivePayload() {
-    if (formRecordingMode !== 'adaptive') return undefined;
+    if (formRecordingMode !== 'adaptive') {
+        // Leaving adaptive: explicitly clear a previously-armed ambient flag
+        // (nil = unchanged server-side, which could leave it stale).
+        return formAdaptiveWasAmbient ? { ambient_audio: false } : undefined;
+    }
     const p: AdaptiveRecordingConfig = {};
+    p.ambient_audio = formAmbientAudio;
     if (formAdaptiveCalmThreshold.trim()) p.calm_threshold = formAdaptiveCalmThreshold.trim();
     if (formAdaptiveTimelapseInterval.trim()) p.timelapse_interval = formAdaptiveTimelapseInterval.trim();
     const spike = parseFloat(formAdaptiveSpikeFactor);
@@ -997,6 +1006,20 @@ async function performCameraSave() {
           </div>
         {/if}
         <p class="text-xs th-text-muted -mt-1">{t('cameras.audioTriggerHint')}</p>
+        <div class="flex items-center gap-2">
+          <input
+            id="cam-ambient-audio"
+            type="checkbox"
+            class="checkbox"
+            bind:checked={formAmbientAudio}
+          />
+          <label for="cam-ambient-audio" class="input-label cursor-pointer">
+            {t('cameras.ambientAudio')}
+          </label>
+        </div>
+        {#if formAmbientAudio}
+          <p class="text-xs th-text-muted -mt-1">{t('cameras.ambientAudioHint')}</p>
+        {/if}
       {/if}
     {/if}
 

@@ -46,8 +46,15 @@ import (
 type AdaptiveConfig struct {
 	CalmThreshold     time.Duration // sustained calm before dropping to sparse mode
 	TimelapseInterval time.Duration // keyframe cadence while sparse
-	SpikeFactor       float64       // MAD-floored deviations above baseline = spike
+	SpikeFactor        float64       // MAD-floored deviations above baseline = spike
 	MaxGOPBuffer      int64         // byte cap of the retained GOP ring
+	// AmbientAudio keeps the disk audio track recording CONTINUOUSLY while in
+	// sparse mode (#496 audio phase): the video timeline is compressed at
+	// merge time and the merge renders the ambient span into a quiet
+	// continuous atmosphere bed (envelope mixdown) instead of dropping it.
+	// Costs ~28.8MB/h (G.711); enable per camera. Event (full-rate) spans
+	// always keep their real audio either way.
+	AmbientAudio bool
 }
 
 // DefaultAdaptiveConfig mirrors the validated ranges in config.validate.
@@ -573,7 +580,7 @@ func (g *AdaptiveGate) ClearWritten() {
 // overrides, defaulting unset fields. Shared by the camera-manager factory
 // (RTSP/ONVIF paths) and plugin-style recorders (Xiaomi) so both resolve
 // identically. String durations follow the frame_watchdog_timeout convention.
-func ResolveAdaptiveConfig(calmThreshold, timelapseInterval string, spikeFactor float64, gopBufferBytes int64) AdaptiveConfig {
+func ResolveAdaptiveConfig(calmThreshold, timelapseInterval string, spikeFactor float64, gopBufferBytes int64, ambientAudio bool) AdaptiveConfig {
 	ac := DefaultAdaptiveConfig()
 	if d, err := time.ParseDuration(calmThreshold); err == nil && d > 0 {
 		ac.CalmThreshold = d
@@ -587,5 +594,6 @@ func ResolveAdaptiveConfig(calmThreshold, timelapseInterval string, spikeFactor 
 	if gopBufferBytes > 0 {
 		ac.MaxGOPBuffer = gopBufferBytes
 	}
+	ac.AmbientAudio = ambientAudio
 	return ac
 }

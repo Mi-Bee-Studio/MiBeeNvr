@@ -113,12 +113,12 @@ func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
 }
 
 func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, error) {
-	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, ai_status, ai_processed_at, ai_error, motion_score, activity_flags FROM recordings WHERE id=?;`, id)
+	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, ai_status, ai_processed_at, ai_error, motion_score, activity_flags, timeline_map FROM recordings WHERE id=?;`, id)
 	var r model.Recording
 	var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr, mergeQualityStr sql.NullString
 	var mergeProgress sql.NullInt64
-	var aiStatus, aiProcessedAt, aiError sql.NullString
-	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived, &aiStatus, &aiProcessedAt, &aiError, &r.MotionScore, &r.ActivityFlags); err != nil {
+	var aiStatus, aiProcessedAt, aiError, timelineMap sql.NullString
+	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived, &aiStatus, &aiProcessedAt, &aiError, &r.MotionScore, &r.ActivityFlags, &timelineMap); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -126,6 +126,9 @@ func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, err
 	}
 	r.StartedAt = scanTime(startedAtStr)
 	r.EndedAt = scanTime(endedAtStr)
+	if timelineMap.Valid {
+		r.TimelineMap = timelineMap.String
+	}
 	if mergePathStr.Valid {
 		r.MergePath = mergePathStr.String
 	}
