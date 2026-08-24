@@ -1720,6 +1720,7 @@
   "flow.pausedAt": "已冻结快照",
   "flow.empty": "暂无活动流 — 摄像头离线或未启动",
   "flow.hub": "Hub",
+  "flow.source": "采集源",
   "flow.lastFrame": "最近帧",
   "flow.jitter": "抖动缓冲",
   "flow.totalIn": "累计入站",

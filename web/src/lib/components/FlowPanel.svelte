@@ -29,6 +29,9 @@
   // prev holds {framesIn, bytesIn, at} per camera from the previous poll.
   let prev: Record<string, { framesIn: number; bytesIn: number; at: number }> = {};
   let rates = $state<Record<string, { fps: number; kbps: number }>>({});
+  // Per-consumer send rate (msg/s), diffed the same way as hub rates.
+  let prevC: Record<string, { sends: number; at: number }> = {};
+  let cRates = $state<Record<string, number>>({});
 
   function statusColor(status: string): string {
     const s = status.toLowerCase();
@@ -39,11 +42,14 @@
   }
 
   function ageMs(iso: string): number {
-    if (!iso) return Number.POSITIVE_INFINITY;
+    // Zero-value timestamps (never-seen-a-frame hubs) serialize as epoch-ish
+    // dates — treat anything before 2001 as "no data" instead of a huge age.
+    const t = iso ? new Date(iso).getTime() : 0;
+    if (!Number.isFinite(t) || t < 978307200000) return Number.POSITIVE_INFINITY;
     // Anchor to the snapshot time, not Date.now(), so frozen cards show the
     // age as of the pause instead of a ticking counter over stale data.
     const ref = lastUpdated ? lastUpdated.getTime() : Date.now();
-    return ref - new Date(iso).getTime();
+    return ref - t;
   }
 
   function fmtAge(ms: number): string {
@@ -80,10 +86,11 @@
       const res = await getFlowStreams();
       const now = Date.now();
       const nextRates: Record<string, { fps: number; kbps: number }> = {};
+      const nextCRates: Record<string, number> = {};
       for (const s of res.streams) {
         const p = prev[s.camera_id];
-        if (p && now > p.at) {
-          const dt = (now - p.at) / 1000;
+        const dt = p && now > p.at ? (now - p.at) / 1000 : 0;
+        if (dt > 0) {
           const fps = Math.max(0, (s.frames_in - p.framesIn) / dt);
           const kbps = Math.max(0, ((s.bytes_in - p.bytesIn) / dt) / 128);
           nextRates[s.camera_id] = { fps: Math.round(fps * 10) / 10, kbps: Math.round(kbps) };
@@ -91,9 +98,22 @@
           nextRates[s.camera_id] = rates[s.camera_id] ?? { fps: 0, kbps: 0 };
         }
         prev[s.camera_id] = { framesIn: s.frames_in, bytesIn: s.bytes_in, at: now };
+        for (const c of s.consumers) {
+          const key = `${s.camera_id}/${c.id}`;
+          const pc = prevC[key];
+          if (pc && dt > 0) {
+            nextCRates[key] = Math.round(Math.max(0, (c.sends - pc.sends) / dt) * 10) / 10;
+          } else {
+            nextCRates[key] = cRates[key] ?? 0;
+          }
+          prevC[key] = { sends: c.sends, at: now };
+        }
       }
       rates = nextRates;
-      streams = res.streams;
+      cRates = nextCRates;
+      // The backend returns streams in map-iteration order, which is not
+      // stable across polls — sort deterministically so cards never shuffle.
+      streams = [...res.streams].sort((a, b) => a.camera_id.localeCompare(b.camera_id));
       error = '';
       lastUpdated = new Date();
     } catch (e) {
@@ -190,57 +210,49 @@
         </div>
 
         {#if expanded[s.camera_id] !== false}
-        <div class="hub-row">
-          <div class="hub-node">
-            <Radio size={14} />
-            <span class="node-label">{t('flow.hub')}</span>
-            <span class="node-metric">{rates[s.camera_id]?.fps ?? 0} fps</span>
-            <span class="node-metric">{rates[s.camera_id]?.kbps ?? 0} kbps</span>
-            <span class="node-metric {ageMs(s.last_frame_at) > 10_000 ? 'metric-warn' : ''}">
-              {t('flow.lastFrame')}: {fmtAge(ageMs(s.last_frame_at))}
-            </span>
-            {#if s.jitter_active}<span class="chip chip-warn">{t('flow.jitter')}</span>{/if}
+        <div class="tree">
+          <div class="node node-src">
+            <span class="node-title">{t('flow.source')}</span>
+            <span class="node-line">{s.source}</span>
+            {#if s.encoding}
+              <span class="node-line dim">{s.encoding}{#if s.width && s.height} {s.width}×{s.height}{/if}</span>
+            {/if}
           </div>
-          <div class="arrow">→</div>
-          <div class="total-out">
-            {t('flow.totalIn')}: {s.frames_in} · {fmtBytes(s.bytes_in)}
+
+          <div class="tree-link"></div>
+
+          <div class="hub-col">
+            <div class="node node-hub">
+              <span class="node-title"><Radio size={12} /> {t('flow.hub')}</span>
+              <span class="node-line">{rates[s.camera_id]?.fps ?? 0} fps · {rates[s.camera_id]?.kbps ?? 0} kbps</span>
+              <span class="node-line dim {ageMs(s.last_frame_at) > 10_000 ? 'metric-warn' : ''}">
+                {t('flow.lastFrame')}: {fmtAge(ageMs(s.last_frame_at))}
+              </span>
+              {#if s.jitter_active}<span class="node-line metric-warn">{t('flow.jitter')}</span>{/if}
+            </div>
+            <div class="node-total dim">{t('flow.totalIn')}: {s.frames_in} · {fmtBytes(s.bytes_in)}</div>
+          </div>
+
+          <div class="tree-link"></div>
+
+          <div class="branches">
+            {#each s.consumers as c (c.id)}
+              <div class="branch">
+                <div class="node node-con" class:con-warn={c.drop_rate > 0.01} class:con-danger={c.drop_rate > 0.05}>
+                  <span class="node-title">
+                    {consumerKind(c.id)}
+                    <span class="dim">{cRates[`${s.camera_id}/${c.id}`] ?? 0}/s</span>
+                    {#if c.idr_drops > 0}<span class="idr-drops">{c.idr_drops} IDR</span>{/if}
+                  </span>
+                  <span class="node-line">{t('flow.sends')} {c.sends} · {t('flow.dropRate')} {(c.drop_rate * 100).toFixed(1)}%</span>
+                  <span class="node-line dim">{t('flow.buffer')} {c.buffer_depth}/{c.buffer_capacity} · {c.dwell_avg_ms.toFixed(0)}/{c.dwell_max_ms.toFixed(0)} ms</span>
+                </div>
+              </div>
+            {:else}
+              <div class="branch"><div class="node node-con dim">{t('flow.noConsumers')}</div></div>
+            {/each}
           </div>
         </div>
-
-        <table class="consumers">
-          <thead>
-            <tr>
-              <th>{t('flow.consumer')}</th>
-              <th>{t('flow.sends')}</th>
-              <th>{t('flow.drops')}</th>
-              <th>{t('flow.dropRate')}</th>
-              <th>{t('flow.buffer')}</th>
-              <th>{t('flow.dwell')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each s.consumers as c (c.id)}
-              <tr>
-                <td>
-                  <span class="consumer-kind">{consumerKind(c.id)}</span>
-                  <span class="consumer-id">{c.id}</span>
-                </td>
-                <td>{c.sends}</td>
-                <td class="{c.drops > 0 ? 'cell-warn' : ''}">
-                  {c.drops}{#if c.idr_drops > 0}&nbsp;<span class="idr-drops">({c.idr_drops} IDR)</span>{/if}
-                </td>
-                <td class="{c.drop_rate > 0.05 ? 'cell-danger' : c.drop_rate > 0.01 ? 'cell-warn' : ''}">
-                  {(c.drop_rate * 100).toFixed(1)}%
-                </td>
-                <td>{c.buffer_depth}/{c.buffer_capacity}</td>
-                <td>{c.dwell_avg_ms.toFixed(1)} / {c.dwell_max_ms.toFixed(0)} ms</td>
-              </tr>
-            {/each}
-            {#if s.consumers.length === 0}
-              <tr><td colspan="6" class="no-consumers">{t('flow.noConsumers')}</td></tr>
-            {/if}
-          </tbody>
-        </table>
 
         {#if healthEvents[s.camera_id]?.length}
           <div class="events-strip">
@@ -341,6 +353,10 @@
     border: 1px solid var(--border, rgba(128, 128, 128, 0.2));
     border-radius: 12px;
     padding: 1rem;
+    /* Stable card height regardless of events-strip presence — keeps the
+       dashboard grid from reflowing when data changes. */
+    min-height: 318px;
+    box-sizing: border-box;
   }
   .card-head {
     display: flex;
@@ -394,82 +410,118 @@
     background: rgba(245, 158, 11, 0.15);
     color: var(--color-warning);
   }
-  .hub-row {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    margin-bottom: 0.6rem;
-  }
-  .hub-node {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    border: 1px dashed var(--border, rgba(128, 128, 128, 0.35));
-    border-radius: 8px;
-    padding: 0.35rem 0.6rem;
-  }
-  .node-label {
-    font-weight: 600;
-    font-size: 0.8rem;
-  }
-  .node-metric {
-    font-size: 0.78rem;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
   .metric-warn {
     color: var(--color-warning);
-  }
-  .arrow {
-    color: var(--text-tertiary);
-  }
-  .total-out {
-    font-size: 0.75rem;
-    color: var(--text-tertiary);
-    font-variant-numeric: tabular-nums;
-  }
-  .consumers {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.78rem;
-    font-variant-numeric: tabular-nums;
-  }
-  .consumers th {
-    text-align: left;
-    color: var(--text-tertiary);
-    font-weight: 500;
-    padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.2));
-  }
-  .consumers td {
-    padding: 0.3rem 0.5rem;
-    border-bottom: 1px solid rgba(128, 128, 128, 0.08);
-  }
-  .consumer-kind {
-    font-weight: 600;
-    margin-right: 0.35rem;
-  }
-  .consumer-id {
-    color: var(--text-tertiary);
-    font-size: 0.7rem;
-  }
-  .cell-warn {
-    color: var(--color-warning);
-  }
-  .cell-danger {
-    color: var(--color-danger);
-    font-weight: 600;
   }
   .idr-drops {
     color: var(--color-danger);
     font-size: 0.7rem;
   }
-  .no-consumers {
+  /* ── Fixed flow tree: source ─ hub ─ consumer branches ──────────────
+     Node POSITIONS are pure CSS layout and never depend on the data —
+     polling only rewrites the metric text inside the nodes, so the
+     diagram stays visually still while numbers refresh. */
+  .tree {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 0.3rem 0;
+  }
+  .node {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    border: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+    border-radius: 10px;
+    padding: 0.45rem 0.7rem;
+    /* Fixed width so changing metric text can never reflow the diagram. */
+    width: 190px;
+    box-sizing: border-box;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+  .node-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-weight: 600;
+    font-size: 0.78rem;
+  }
+  .node-line {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dim {
     color: var(--text-tertiary);
-    text-align: center;
-    padding: 0.6rem 0;
+  }
+  .node-src {
+    border-style: dashed;
+  }
+  .node-hub {
+    border-color: rgba(59, 130, 246, 0.45);
+    background: rgba(59, 130, 246, 0.06);
+  }
+  .node-con.con-warn {
+    border-color: rgba(245, 158, 11, 0.5);
+  }
+  .node-con.con-danger {
+    border-color: rgba(239, 68, 68, 0.55);
+    background: rgba(239, 68, 68, 0.05);
+  }
+  .hub-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    align-items: flex-start;
+    flex-shrink: 0;
+  }
+  .node-total {
+    font-size: 0.68rem;
+    padding-left: 0.7rem;
+  }
+  .tree-link {
+    width: 22px;
+    height: 0;
+    border-top: 2px solid rgba(125, 130, 140, 0.7);
+    flex-shrink: 0;
+  }
+  .branches {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.35rem;
+    padding-left: 24px;
+    flex-shrink: 0;
+    /* Fixed height: consumer count changes must not resize the card and
+       reflow the dashboard grid. Extra consumers scroll. */
+    height: 190px;
+    overflow-y: auto;
+  }
+  /* Vertical spine the consumer twigs branch off. */
+  .branches::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 14px;
+    bottom: 14px;
+    border-left: 2px solid rgba(125, 130, 140, 0.7);
+  }
+  .branch {
+    position: relative;
+  }
+  .branch::before {
+    content: '';
+    position: absolute;
+    left: -24px;
+    top: 50%;
+    width: 24px;
+    border-top: 2px solid rgba(125, 130, 140, 0.7);
   }
   .events-strip {
     display: flex;

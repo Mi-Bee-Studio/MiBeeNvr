@@ -1721,6 +1721,7 @@
   "flow.pausedAt": "Frozen snapshot",
   "flow.empty": "No active streams — cameras offline or not started",
   "flow.hub": "Hub",
+  "flow.source": "Source",
   "flow.lastFrame": "last frame",
   "flow.jitter": "jitter buffer",
   "flow.totalIn": "total in",
