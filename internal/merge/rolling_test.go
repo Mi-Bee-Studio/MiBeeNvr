@@ -396,10 +396,10 @@ func TestBackfillMP4_MixedAudioBatchSplitsRuns(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestSplitRunsByAudioKey — unit test for the run splitter.
+// TestSplitRunsByCompatKey — unit test for the run splitter.
 // ---------------------------------------------------------------------------
 
-func TestSplitRunsByAudioKey(t *testing.T) {
+func TestSplitRunsByCompatKey(t *testing.T) {
 	none := &SegmentInfo{HasAudio: false}
 	g711u := &SegmentInfo{HasAudio: true, AudioCodec: "g711", G711MULaw: true, AudioTimescale: 8000}
 	g711a := &SegmentInfo{HasAudio: true, AudioCodec: "g711", G711MULaw: false, AudioTimescale: 8000}
@@ -428,19 +428,19 @@ func TestSplitRunsByAudioKey(t *testing.T) {
 			return aac
 		}
 	})
-	runs := splitRunsByAudioKey(recs, infos)
+	runs := splitRunsByCompatKey(recs, infos)
 	require.Len(t, runs, 4)
 	require.Equal(t, []int{2, 2, 1, 1}, []int{len(runs[0].infos), len(runs[1].infos), len(runs[2].infos), len(runs[3].infos)})
-	require.Equal(t, "none", runs[0].keyStr)
-	require.Equal(t, segmentAudioKey(g711u), runs[1].keyStr)
-	require.Equal(t, "none", runs[2].keyStr)
-	require.Equal(t, segmentAudioKey(aac), runs[3].keyStr)
+	require.Equal(t, segmentCompatKey(none), runs[0].keyStr)
+	require.Equal(t, segmentCompatKey(g711u), runs[1].keyStr)
+	require.Equal(t, segmentCompatKey(none), runs[2].keyStr)
+	require.Equal(t, segmentCompatKey(aac), runs[3].keyStr)
 	// A-law vs μ-law must be different keys (config bytes differ).
 	require.NotEqual(t, segmentAudioKey(g711u), segmentAudioKey(g711a))
 
 	// All-homogeneous batch → single run.
 	recs, infos = mk(3, func(int) *SegmentInfo { return g711u })
-	runs = splitRunsByAudioKey(recs, infos)
+	runs = splitRunsByCompatKey(recs, infos)
 	require.Len(t, runs, 1)
 	require.Len(t, runs[0].infos, 3)
 }

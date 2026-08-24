@@ -44,13 +44,126 @@ type mergedSample struct {
 	isKeyFrame bool
 }
 
+// MergeStats reports how a merge consumed its inputs after keyframe alignment.
+type MergeStats struct {
+	// Included holds the input indexes whose samples are present in the output.
+	Included []int
+	// SkippedNoKeyframe holds input indexes dropped entirely: their video track
+	// had no keyframe sample, so they cannot join a merged reference chain (#488).
+	SkippedNoKeyframe []int
+	// LeadingDropped maps input index → count of leading video samples dropped
+	// to reach that segment's first keyframe.
+	LeadingDropped map[int]int
+}
+
+// ErrNoKeyframe is returned when no input segment carries a keyframe sample —
+// nothing decodable can be produced from the inputs.
+var ErrNoKeyframe = errors.New("no keyframe-bearing segments")
+
+// AlignToKeyframe trims seg's leading video samples up to (and including the
+// position of) its first keyframe and trims the audio head by the same wall
+// duration so A/V still start together. A segment that starts mid-GOP
+// references frames that live only in the PREVIOUS source file; once that file
+// is deleted after the merge, players conceal every such P-frame with gray
+// until the next IDR (#488: user-visible gray screens in downloaded merged
+// recordings). Mutates seg in place (Samples/SampleCount/TotalDuration and the
+// audio head). Returns the number of leading video samples dropped and false
+// when the segment has no keyframe at all — callers must then keep the segment
+// standalone (mark incompatible) instead of merging it.
+func AlignToKeyframe(seg *SegmentInfo) (dropped int, ok bool) {
+	first := -1
+	for i, s := range seg.Samples {
+		if s.IsKeyFrame {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return 0, false
+	}
+	if first == 0 {
+		return 0, true
+	}
+	var droppedDur uint64
+	for _, s := range seg.Samples[:first] {
+		droppedDur += uint64(s.Duration)
+	}
+	seg.Samples = seg.Samples[first:]
+	seg.SampleCount = len(seg.Samples)
+	if seg.Timescale > 0 {
+		droppedSec := float64(droppedDur) / float64(seg.Timescale)
+		seg.TotalDuration -= time.Duration(droppedSec * float64(time.Second))
+		trimAudioHead(seg, droppedSec)
+	}
+	return first, true
+}
+
+// trimAudioHead drops leading audio samples whose midpoint falls before the
+// video head moved by droppedSec, keeping A/V start roughly aligned after a
+// keyframe trim.
+func trimAudioHead(seg *SegmentInfo, droppedSec float64) {
+	if len(seg.AudioSamples) == 0 || seg.AudioTimescale == 0 || droppedSec <= 0 {
+		return
+	}
+	var cum float64
+	cut := 0
+	for i, s := range seg.AudioSamples {
+		d := float64(s.Duration) / float64(seg.AudioTimescale)
+		if cum+d/2 <= droppedSec {
+			cum += d
+			cut = i + 1
+		} else {
+			break
+		}
+	}
+	if cut > 0 {
+		seg.AudioSamples = seg.AudioSamples[cut:]
+		if seg.AudioSampleCount >= cut {
+			seg.AudioSampleCount -= cut
+		} else {
+			seg.AudioSampleCount = 0
+		}
+	}
+}
+
 // MergeMP4Segments performs a streaming merge of multiple MP4 segments into a single output file.
 // All segments must share the same codec and SPS/PPS (for H.264) or VPS/SPS/PPS (for H.265).
 // The output file is written to outputPath directly (caller handles temp→final rename).
-func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath string) error {
+//
+// Keyframe alignment (#488): before stitching, every segment's leading video
+// samples are dropped up to its first keyframe (audio head trimmed by the same
+// duration), and segments with no keyframe at all are skipped and reported in
+// the returned MergeStats. Without this, a segment that starts mid-GOP (e.g. an
+// adaptive TL-exit flush segment or a reconnect micro-segment) contributes
+// P-frames whose references exist only in an already-deleted source file —
+// players conceal them with gray until the next IDR. Input SegmentInfos are
+// mutated to their aligned state so callers' duration/frame metadata matches
+// what actually landed in the output.
+func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath string) (MergeStats, error) {
+	stats := MergeStats{LeadingDropped: map[int]int{}}
 	if len(segments) == 0 {
-		return fmt.Errorf("no segments to merge")
+		return stats, fmt.Errorf("no segments to merge")
 	}
+
+	aligned := make([]*SegmentInfo, 0, len(segments))
+	for i, seg := range segments {
+		dropped, ok := AlignToKeyframe(seg)
+		if !ok {
+			stats.SkippedNoKeyframe = append(stats.SkippedNoKeyframe, i)
+			logger.Warn("merge: skipping keyframe-less segment (would corrupt the merged reference chain)",
+				"path", seg.FilePath, "samples", seg.SampleCount)
+			continue
+		}
+		if dropped > 0 {
+			stats.LeadingDropped[i] = dropped
+		}
+		stats.Included = append(stats.Included, i)
+		aligned = append(aligned, seg)
+	}
+	if len(aligned) == 0 {
+		return stats, ErrNoKeyframe
+	}
+	segments = aligned
 
 	first := segments[0]
 	codec := first.Codec
@@ -58,14 +171,14 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	// Validate all segments share the same codec and SPS/PPS.
 	for i, seg := range segments {
 		if seg.Codec != codec {
-			return fmt.Errorf("segment %d: codec mismatch (%s vs %s)", i, seg.Codec, codec)
+			return stats, fmt.Errorf("segment %d: codec mismatch (%s vs %s)", i, seg.Codec, codec)
 		}
 		if i > 0 {
 			if !bytes.Equal(seg.SPS, first.SPS) || !bytes.Equal(seg.PPS, first.PPS) {
-				return fmt.Errorf("segment %d: SPS/PPS mismatch", i)
+				return stats, fmt.Errorf("segment %d: SPS/PPS mismatch", i)
 			}
 			if codec == "h265" && !bytes.Equal(seg.VPS, first.VPS) {
-				return fmt.Errorf("segment %d: VPS mismatch", i)
+				return stats, fmt.Errorf("segment %d: VPS mismatch", i)
 			}
 		}
 	}
@@ -104,19 +217,19 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 
 	// Validate that segments have samples.
 	if first.SampleCount == 0 && (!hasAudio || first.AudioSampleCount == 0) {
-		return fmt.Errorf("first segment has empty sample table")
+		return stats, fmt.Errorf("first segment has empty sample table")
 	}
 
 	out, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("create output: %w", err)
+		return stats, fmt.Errorf("create output: %w", err)
 	}
 	defer out.Close()
 
 	// Step 1: Write ftyp box.
 	ftypSize, err := writeMergeFtyp(out, codec)
 	if err != nil {
-		return fmt.Errorf("write ftyp: %w", err)
+		return stats, fmt.Errorf("write ftyp: %w", err)
 	}
 
 	// Step 2: Calculate moov size by writing to a buffer with placeholder offsets.
@@ -181,7 +294,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	moovBuf := &bytesWriter{}
 	moovW := mp4.NewWriter(moovBuf)
 	if err := writeMergeMoov(moovW, videoTrack, audioTrack, 0, 0); err != nil {
-		return fmt.Errorf("calculate moov size: %w", err)
+		return stats, fmt.Errorf("calculate moov size: %w", err)
 	}
 	moovSize := moovBuf.len()
 	// Add headroom for stts entry expansion — real video may have varying frame durations
@@ -202,7 +315,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	moovOffset := ftypSize
 	moovPlaceholder := make([]byte, moovSize)
 	if _, err := out.Write(moovPlaceholder); err != nil {
-		return fmt.Errorf("write moov placeholder: %w", err)
+		return stats, fmt.Errorf("write moov placeholder: %w", err)
 	}
 
 	// Step 4: Write mdat box header (size placeholder + "mdat").
@@ -210,7 +323,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	var mdatHeader [8]byte
 	copy(mdatHeader[4:8], "mdat")
 	if _, err := out.Write(mdatHeader[:]); err != nil {
-		return fmt.Errorf("write mdat header: %w", err)
+		return stats, fmt.Errorf("write mdat header: %w", err)
 	}
 	mdatDataStart := mdatHeaderOffset + 8
 
@@ -221,19 +334,19 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 
 	for _, seg := range segments {
 		if seg.FilePath == "" {
-			return fmt.Errorf("segment has empty FilePath")
+			return stats, fmt.Errorf("segment has empty FilePath")
 		}
 
 		src, err := os.Open(seg.FilePath)
 		if err != nil {
-			return fmt.Errorf("open segment %s: %w", seg.FilePath, err)
+			return stats, fmt.Errorf("open segment %s: %w", seg.FilePath, err)
 		}
 
 		for _, s := range seg.Samples {
 			select {
 			case <-ctx.Done():
 				src.Close()
-				return ctx.Err()
+				return stats, ctx.Err()
 			default:
 			}
 			sampleAbsOffset := currentOffset + mdatDataStart
@@ -241,7 +354,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			_, copyErr := copySampleData(src, out, s.Offset, int64(s.Size), buf)
 			if copyErr != nil {
 				src.Close()
-				return fmt.Errorf("copy sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
+				return stats, fmt.Errorf("copy sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
 			}
 
 			allVideoSamples = append(allVideoSamples, mergedSample{
@@ -265,14 +378,14 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			}
 			src, err := os.Open(seg.FilePath)
 			if err != nil {
-				return fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)
+				return stats, fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)
 			}
 
 			for _, s := range seg.AudioSamples {
 				select {
 				case <-ctx.Done():
 					src.Close()
-					return ctx.Err()
+					return stats, ctx.Err()
 				default:
 				}
 				sampleAbsOffset := currentOffset + mdatDataStart
@@ -280,7 +393,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 				_, copyErr := copySampleData(src, out, s.Offset, int64(s.Size), buf)
 				if copyErr != nil {
 					src.Close()
-					return fmt.Errorf("copy audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
+					return stats, fmt.Errorf("copy audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
 				}
 
 				allAudioSamples = append(allAudioSamples, mergedSample{
@@ -298,20 +411,20 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	// Step 6: Patch mdat box size.
 	mdatBoxSize := uint64(8 + currentOffset)
 	if mdatBoxSize > math.MaxUint32 {
-		return fmt.Errorf("mdat box size %d exceeds MaxUint32", mdatBoxSize)
+		return stats, fmt.Errorf("mdat box size %d exceeds MaxUint32", mdatBoxSize)
 	}
 	if _, err := out.Seek(mdatHeaderOffset, io.SeekStart); err != nil {
-		return fmt.Errorf("seek to mdat header: %w", err)
+		return stats, fmt.Errorf("seek to mdat header: %w", err)
 	}
 	var sizeBuf [4]byte
 	binary.BigEndian.PutUint32(sizeBuf[:], uint32(mdatBoxSize))
 	if _, err := out.Write(sizeBuf[:]); err != nil {
-		return fmt.Errorf("write mdat size: %w", err)
+		return stats, fmt.Errorf("write mdat size: %w", err)
 	}
 
 	// Step 7: Go back and write the real moov box at the placeholder position.
 	if _, err := out.Seek(moovOffset, io.SeekStart); err != nil {
-		return fmt.Errorf("seek to moov: %w", err)
+		return stats, fmt.Errorf("seek to moov: %w", err)
 	}
 
 	// Calculate total video duration in timescale units.
@@ -320,7 +433,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		totalVideoDuration += uint64(s.duration)
 	}
 	if totalVideoDuration > math.MaxUint32 {
-		return fmt.Errorf("DurationV0 overflow: video duration %d exceeds MaxUint32", totalVideoDuration)
+		return stats, fmt.Errorf("DurationV0 overflow: video duration %d exceeds MaxUint32", totalVideoDuration)
 	}
 	videoTrack.duration = uint32(totalVideoDuration)
 	videoTrack.samples = allVideoSamples
@@ -332,7 +445,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			totalAudioDuration += uint64(s.duration)
 		}
 		if totalAudioDuration > math.MaxUint32 {
-			return fmt.Errorf("DurationV0 overflow: audio duration %d exceeds MaxUint32", totalAudioDuration)
+			return stats, fmt.Errorf("DurationV0 overflow: audio duration %d exceeds MaxUint32", totalAudioDuration)
 		}
 		audioTrack.duration = uint32(totalAudioDuration)
 		audioTrack.samples = allAudioSamples
@@ -351,11 +464,11 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		}
 	}
 	if err := writeMergeMoov(moovWriter, videoTrack, audioTrack, videoChunkOffset, audioChunkOffset); err != nil {
-		return fmt.Errorf("write moov: %w", err)
+		return stats, fmt.Errorf("write moov: %w", err)
 	}
 
 	if moovOut.remaining < 0 {
-		return fmt.Errorf("moov box overflow: calculated %d, actual %d", moovSize, moovSize-moovOut.remaining)
+		return stats, fmt.Errorf("moov box overflow: calculated %d, actual %d", moovSize, moovSize-moovOut.remaining)
 	}
 
 	// If the real moov is smaller than the reserved space, pad with a "free" box.
@@ -365,16 +478,16 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		binary.BigEndian.PutUint32(padBuf[0:4], uint32(moovOut.remaining))
 		copy(padBuf[4:8], "free")
 		if _, err := out.Write(padBuf); err != nil {
-			return fmt.Errorf("write moov padding: %w", err)
+			return stats, fmt.Errorf("write moov padding: %w", err)
 		}
 	}
 
 	// Sync and close.
 	if err := out.Sync(); err != nil {
-		return fmt.Errorf("sync output: %w", err)
+		return stats, fmt.Errorf("sync output: %w", err)
 	}
 
-	return nil
+	return stats, nil
 }
 
 // copySampleData copies size bytes from src at offset to dst using the provided buffer.
