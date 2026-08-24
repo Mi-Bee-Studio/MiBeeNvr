@@ -77,8 +77,13 @@ func TestAdaptiveTracker_SpikeReturnsFlushAndResumesNormal(t *testing.T) {
 	if len(flush) == 0 || !flush[0].isIDR {
 		t.Fatal("flush must start with the retained IDR")
 	}
-	if len(flush) != 507 { // IDR + 500 calm + 5 sparse + the spike frame itself (appended before takeGOP)
-		t.Fatalf("flush = %d frames, want 507", len(flush))
+	if len(flush) != 506 { // IDR + 500 calm + 5 sparse; the spike (trigger) frame itself is
+		// NOT part of the flush — the caller writes it via the normal write path
+		// right after (including it double-wrote every exit frame, issue #498)
+		t.Fatalf("flush = %d frames, want 506", len(flush))
+	}
+	if last := flush[len(flush)-1]; bytes.Equal(last.nalu, spike) {
+		t.Fatal("flush must exclude the trigger frame — the caller writes it via the normal path (issue #498)")
 	}
 	if len(tr.gop) != 0 {
 		t.Fatalf("gop ring must be detached after flush, has %d", len(tr.gop))
