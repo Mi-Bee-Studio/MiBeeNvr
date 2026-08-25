@@ -69,6 +69,8 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.PushRetentionDays = cam.PushRetentionDays
 		row.StableID = cam.StableID
 		row.SubnetHints = cam.SubnetHints
+		row.SubProfileToken = cam.SubProfileToken
+		row.SubStreamURL = cam.SubStreamURL
 		row.DarkFrameFilterEnabled = cam.DarkFrameFilterEnabled
 		row.DarkFrameThreshold = cam.DarkFrameThreshold
 		row.RecordingEnabled = cam.RecordingEnabled

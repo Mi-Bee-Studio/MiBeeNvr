@@ -64,6 +64,11 @@ type CameraRow struct {
 	// Persisted in DB via UpsertCamera / UpdateCameraStableID.
 	StableID    string   `json:"stable_id,omitempty"`
 	SubnetHints []string `json:"subnet_hints,omitempty"`
+	// Sub-stream fields (#512), injected from YAML at API response time —
+	// the edit form round-trips them so a save can't silently clear an
+	// auto-discovered sub_profile_token.
+	SubProfileToken string `json:"sub_profile_token,omitempty"`
+	SubStreamURL    string `json:"sub_stream_url,omitempty"`
 	// Dark frame filtering (injected from YAML at API response time)
 	DarkFrameFilterEnabled bool `json:"dark_frame_filter_enabled"`
 	DarkFrameThreshold     int  `json:"dark_frame_threshold"`
