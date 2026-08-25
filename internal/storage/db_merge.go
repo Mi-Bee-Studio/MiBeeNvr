@@ -179,8 +179,8 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	}
 	motionScore, motionFlags := agg.result()
 
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, activity_flags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
-	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, model.MergeStatusMerged, merged.MergeTier, 100, merged.MergeQuality, motionScore, motionFlags)
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, activity_flags, timeline_map) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
+	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, model.MergeStatusMerged, merged.MergeTier, 100, merged.MergeQuality, motionScore, motionFlags, merged.TimelineMap)
 	if err != nil {
 		return err
 	}
@@ -280,18 +280,18 @@ func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recordi
 
 	if existingMergedID == "" {
 		// Case 1: Create — INSERT new merged recording.
-		q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, activity_flags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
+		q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, activity_flags, timeline_map) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
 		_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format,
 			timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize,
-			merged.FrameCount, model.MergeStatusMerged, "rolling", 100, merged.MergeQuality, motionScore, motionFlags)
+			merged.FrameCount, model.MergeStatusMerged, "rolling", 100, merged.MergeQuality, motionScore, motionFlags, merged.TimelineMap)
 		if err != nil {
 			return err
 		}
 	} else {
 		// Case 2: Append — UPDATE existing merged recording.
-		q := `UPDATE recordings SET file_path = ?, ended_at = ?, duration = ?, file_size = ?, frame_count = ?, merge_quality = ?, motion_score = ?, activity_flags = ? WHERE id = ?;`
+		q := `UPDATE recordings SET file_path = ?, ended_at = ?, duration = ?, file_size = ?, frame_count = ?, merge_quality = ?, motion_score = ?, activity_flags = ?, timeline_map = ? WHERE id = ?;`
 		_, err = tx.ExecContext(ctx, q, merged.FilePath, timeToDB(merged.EndedAt), merged.Duration,
-			merged.FileSize, merged.FrameCount, merged.MergeQuality, motionScore, motionFlags, existingMergedID)
+			merged.FileSize, merged.FrameCount, merged.MergeQuality, motionScore, motionFlags, merged.TimelineMap, existingMergedID)
 		if err != nil {
 			return err
 		}

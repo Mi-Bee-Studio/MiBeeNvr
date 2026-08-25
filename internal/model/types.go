@@ -68,6 +68,13 @@ type Recording struct {
 	// vocabulary: "static", "motion", "scene_cut".
 	MotionScore   float64 `json:"motion_score"`
 	ActivityFlags string  `json:"activity_flags,omitempty"`
+	// TimelineMap (#496) is set on rolling-merge products whose sparse
+	// timelapse dwells were compressed to a fast cadence: compact JSON
+	// "[[wallSec,fileSec],...]" breakpoints mapping the recording's
+	// wall-clock span onto the (shorter) file timeline. Clients resolve
+	// wall-clock seeks (?at=, day-timeline clicks) through it; empty for
+	// uncompressed recordings (identity mapping).
+	TimelineMap string `json:"timeline_map,omitempty"`
 }
 
 // MotionScoreUnanalyzed marks a recording the motion analyzer has not scored

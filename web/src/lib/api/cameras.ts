@@ -85,6 +85,10 @@ export interface AdaptiveRecordingConfig {
   spike_factor?: number;
   /** Seamless-transition GOP pre-buffer cap in bytes. Default 16MB. */
   gop_buffer_bytes?: number;
+  /** Keep the audio track recording continuously while sparse (#496): the
+   *  merge renders it into a quiet atmosphere bed under the compressed
+   *  timelapse video. G.711 cameras only; ~28.8MB/h while sparse. */
+  ambient_audio?: boolean;
 }
 
 /** Loudness trigger knobs for recording_mode: 'adaptive' (#478). */

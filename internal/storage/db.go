@@ -285,6 +285,7 @@ func (d *DB) Init(ctx context.Context) error {
         ai_error TEXT DEFAULT NULL,
         motion_score REAL DEFAULT -1,
         activity_flags TEXT DEFAULT '',
+        timeline_map TEXT DEFAULT '',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (camera_id) REFERENCES cameras(id)
     );`
@@ -518,6 +519,18 @@ func (d *DB) ensureRecordingsMotionColumns(ctx context.Context) error {
 		if _, err := d.db.ExecContext(ctx,
 			`ALTER TABLE recordings ADD COLUMN activity_flags TEXT DEFAULT ''`); err != nil {
 			return fmt.Errorf("add activity_flags column: %w", err)
+		}
+	}
+	var mapColExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='timeline_map'`,
+	).Scan(&mapColExists); err != nil {
+		return fmt.Errorf("check timeline_map column: %w", err)
+	}
+	if mapColExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE recordings ADD COLUMN timeline_map TEXT DEFAULT ''`); err != nil {
+			return fmt.Errorf("add timeline_map column: %w", err)
 		}
 	}
 	return nil

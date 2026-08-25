@@ -23,10 +23,11 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		var calm, interval string
 		var spike float64
 		var gop int64
+		var ambient bool
 		if a != nil {
-			calm, interval, spike, gop = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes
+			calm, interval, spike, gop, ambient = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio
 		}
-		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop)
+		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient)
 		return &ac
 	}
 	// resolveAudioTriggerConfig resolves the audio-trigger overrides (issue
