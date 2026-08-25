@@ -219,3 +219,67 @@ func TestCoordinatorSkipCameras(t *testing.T) {
 	require.Zero(t, pushed["rec-skipped"], "skip_cameras camera must not be pushed")
 	require.Equal(t, 1, pushed["rec-delivered"])
 }
+
+// #515: a consumer-reported skip list (heartbeat field) must stop pushes for
+// those cameras without any NVR-side config; clearing the list (or an old
+// consumer never sending it) restores full push.
+func TestCoordinatorHeartbeatSkipCameras(t *testing.T) {
+	var mu sync.Mutex
+	pushed := map[string]int{}
+	visionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pushed[r.Header.Get("X-Recording-Id")]++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer visionSrv.Close()
+
+	bus := event.NewEventBus(64)
+	cfg := config.VisionConfig{Enabled: true, URL: visionSrv.URL}
+	c := NewCoordinator(
+		func() config.VisionConfig { return cfg },
+		func() string { return t.TempDir() },
+		bus,
+		nil,
+	)
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(c.Stop)
+
+	// Heartbeat declares a skip list BEFORE any segment flows.
+	c.Health().RecordHeartbeat(HeartbeatStatus{Status: "healthy", SkipCameras: []string{"cam-hbskip"}})
+
+	dir := t.TempDir()
+	publish := func(cam, rec string) {
+		p := filepath.Join(dir, rec+".mp4")
+		require.NoError(t, os.WriteFile(p, make([]byte, 8), 0o644))
+		bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID: cam, FilePath: p, Format: "mp4",
+			FileSize: 8, RecordingID: rec,
+		})
+	}
+	publish("cam-hbskip", "rec-hb-skipped")
+	publish("cam-ok", "rec-hb-delivered")
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return pushed["rec-hb-delivered"] == 1
+	}, 5*time.Second, 50*time.Millisecond, "non-skipped camera must be pushed")
+
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	require.Zero(t, pushed["rec-hb-skipped"], "heartbeat-reported skip camera must not be pushed")
+	mu.Unlock()
+
+	// Consumer clears the list → pushes resume for the same camera.
+	c.Health().RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	publish("cam-hbskip", "rec-hb-resumed")
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return pushed["rec-hb-resumed"] == 1
+	}, 5*time.Second, 50*time.Millisecond, "cleared skip list must resume pushes")
+
+	// SkipCamera semantics without a heartbeat ever received: no skips.
+	require.False(t, NewHealthTracker(60).SkipCamera("any"))
+}

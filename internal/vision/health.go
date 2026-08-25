@@ -11,6 +11,10 @@ type HeartbeatStatus struct {
 	Device         string `json:"device"`          // "cuda" / "cpu"
 	QueueDepth     int    `json:"queue_depth"`     // 待处理段数
 	ProcessedCount int    `json:"processed_count"` // 累计已处理段数
+	// SkipCameras 是消费者声明不处理的相机 ID(#515):编码不支持(如 MJPEG/JPEG)
+	// 或处理容量取舍。NVR 对这些相机停推(含离线补偿),省下纯浪费的上传带宽。
+	// 字段缺省/为空 = 不跳过任何相机(向后兼容旧版本消费者)。
+	SkipCameras []string `json:"skip_cameras,omitempty"`
 }
 
 // HealthTracker 追踪 Vision 的心跳健康状态。
@@ -67,6 +71,19 @@ func (h *HealthTracker) IsHealthy() bool {
 		return false
 	}
 	return time.Since(h.lastSeen) < h.timeout
+}
+
+// SkipCamera 报告相机是否在消费者最近一次心跳声明的跳单里(#515)。
+// 以最后一次心跳为准:字段缺省(旧消费者)或清空即恢复全推。
+func (h *HealthTracker) SkipCamera(cameraID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, c := range h.status.SkipCameras {
+		if c == cameraID {
+			return true
+		}
+	}
+	return false
 }
 
 // Snapshot 返回当前健康状态、最后心跳时间和状态详情。

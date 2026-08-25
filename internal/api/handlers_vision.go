@@ -35,6 +35,9 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 		Device         string `json:"device"`
 		QueueDepth     int    `json:"queue_depth"`
 		ProcessedCount int    `json:"processed_count"`
+		// SkipCameras(#515): 消费者声明不处理的相机,NVR 停推(含离线补偿)。
+		// 缺省/为空 = 全推(向后兼容)。
+		SkipCameras []string `json:"skip_cameras"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -46,6 +49,7 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 		Device:         body.Device,
 		QueueDepth:     body.QueueDepth,
 		ProcessedCount: body.ProcessedCount,
+		SkipCameras:    body.SkipCameras,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -66,11 +70,12 @@ func (h *Handler) handleVisionStatus(w http.ResponseWriter, r *http.Request) {
 
 	healthy, lastSeen, status := h.visionCoordinator.Health().Snapshot()
 	resp := map[string]interface{}{
-		"enabled":     true,
-		"healthy":     healthy,
-		"device":      status.Device,
-		"queue_depth": status.QueueDepth,
-		"processed":   status.ProcessedCount,
+		"enabled":      true,
+		"healthy":      healthy,
+		"device":       status.Device,
+		"queue_depth":  status.QueueDepth,
+		"processed":    status.ProcessedCount,
+		"skip_cameras": status.SkipCameras, // #515: 消费者声明的跳单(空=nil=全推)
 	}
 	// Omit the zero time — no heartbeat has ever been received. Rendering it
 	// would surface "0001-01-01" in the UI (#328).
