@@ -1,15 +1,9 @@
 package recorder
 
-// Regression tests for issue #498 (original-segment POC damage), found during
-// the #435 adaptive-recording field test on real cameras:
-//
-//	Bug A — the timelapse-exit flush carried the TRIGGER frame (observe
-//	         appended it before takeGOP); the normal write path wrote it
-//	         again right after → "Duplicate POC" in every exit segment.
-//	Bug B — gopFrame.written is a per-SEGMENT marking but survived segment
-//	         rotation; a flush landing in a FRESH segment skipped mid-GOP
-//	         frames that existed only in the closed file → "Could not find
-//	         ref with POC".
+// Regression tests for issue #498 (original-segment POC damage) and #506
+// (timestamp collapse): writeFrames driven end-to-end with SYNTHETIC arrival
+// timestamps — no real-time pacing needed since the #506 arrival-time
+// refactor, which also makes burst drains keep real spacing.
 
 import (
 	"bytes"
@@ -33,7 +27,6 @@ func TestAdaptiveTracker_ClearWrittenResetsRingFlags(t *testing.T) {
 		buf[0] = 0x41
 		tr.observe(buf, false, time.Now().Add(time.Duration(i+1)*50*time.Millisecond))
 	}
-	// Simulate normal-path writes: everything retained is on disk.
 	for i := range tr.gop {
 		tr.gop[i].written = true
 	}
@@ -54,9 +47,6 @@ func TestAdaptiveTracker_TakeGOPWithOnlyTriggerRingReturnsNil(t *testing.T) {
 	cfg := DefaultAdaptiveConfig()
 	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
 
-	// The trigger IS the IDR: observe() resets the ring to [IDR] and the exit
-	// path calls takeGOP — nothing remains that needs flushing (the caller
-	// writes the IDR itself via the normal path).
 	idr := bytes.Repeat([]byte{0x65}, 30000)
 	tr.mode = adaptiveTimelapse
 	_, flush := tr.observe(idr, true, time.Now())
@@ -72,8 +62,6 @@ func TestAudioRing_ClearWrittenResetsFlags(t *testing.T) {
 	r.markWritten()
 	require.True(t, r.drain()[0].Written)
 
-	// Refill and clear — the rotation twin must forget the closed segment's
-	// markings just like the video ring.
 	r.append(true, []byte{3, 4}, 250*time.Microsecond, now.Add(time.Millisecond))
 	r.markWritten()
 	r.clearWritten()
@@ -82,28 +70,27 @@ func TestAudioRing_ClearWrittenResetsFlags(t *testing.T) {
 	}
 }
 
-// TestH264Adaptive_TLExitFlushAfterRotation drives writeFrames end-to-end
-// through the exact field sequence that produced corrupted originals:
-// normal-rate writing → segment rotation (stale written flags) → timelapse
-// entry → spike exit whose flush must land in a FRESH segment containing the
-// complete retained GOP, with the trigger frame written exactly once.
+// feedStudio drives writeFrames through the exact field sequence that
+// produced corrupted originals: normal-rate writing → segment rotation
+// (stale written flags) → timelapse entry → spike exit whose flush lands in
+// a FRESH segment containing the complete retained GOP, trigger written once.
 func TestH264Adaptive_TLExitFlushAfterRotation(t *testing.T) {
 	mgr := newTestManager(t)
 	const cam = "h264-adaptive-poc"
 	rec := NewH264Recorder(H264Config{
 		CameraID:   cam,
-		RTSPURL:    "rtsp://ignored",       // never connected — writeFrames driven directly
-		SegmentDur: 200 * time.Millisecond, // rotate mid-NORMAL, before TL entry
+		RTSPURL:    "rtsp://ignored",
+		SegmentDur: 200 * time.Millisecond,
 		RingBufCap: 256,
 		Adaptive: &AdaptiveConfig{
 			CalmThreshold:     400 * time.Millisecond,
-			TimelapseInterval: time.Hour, // no sparse keyframes inside the window
-			SpikeFactor:       3.0,
+			TimelapseInterval: time.Hour,
+			SpikeFactor:        3.0,
 			MaxGOPBuffer:      8 << 20,
 		},
 	}, mgr)
 	b := rec.baseRecorder
-	b.frameCh = make(chan []byte, 256) // normally created in connectAndRecord
+	b.frameCh = make(chan framePacket, 256)
 	b.resetAdaptive()
 
 	done := make(chan struct{})
@@ -113,53 +100,42 @@ func TestH264Adaptive_TLExitFlushAfterRotation(t *testing.T) {
 		<-done
 	}()
 
-	send := func(nal []byte) {
-		b.frameCh <- append(append([]byte{}, 0, 0, 0, 1), nal...)
+	send := func(nal []byte, at time.Time) {
+		b.frameCh <- framePacket{data: append(append([]byte{}, 0, 0, 0, 1), nal...), at: at}
 	}
 
-	// Parameter sets + IDR anchor (padded to a realistic keyframe size).
-	send(testSPS)
-	send(testPPS)
+	// Synthetic arrival axis: 20ms per frame.
+	t0 := time.Now()
+	send(testSPS, t0)
+	send(testPPS, t0)
 	idr := append(append([]byte{}, testIDR...), bytes.Repeat([]byte{0x11}, 20000)...)
-	send(idr)
+	send(idr, t0)
 
-	// 35 calm P-frames at 20ms (700ms total): rotation fires at ~200ms
-	// (frames written to segment 1, flags marked), timelapse entry at ~400ms,
-	// the rest is sparse-skipped but retained.
 	const totalPs = 35
 	for i := range totalPs {
 		p := append([]byte{0x41}, bytes.Repeat([]byte{0x22}, 799)...)
-		p[len(p)-2] = byte(i >> 8) // unique per frame — adjacent-duplicate
-		p[len(p)-1] = byte(i)      // detection must not false-positive
-		send(p)
-		time.Sleep(20 * time.Millisecond)
+		p[len(p)-2] = byte(i >> 8)
+		p[len(p)-1] = byte(i)
+		send(p, t0.Add(time.Duration(i+1)*20*time.Millisecond))
 	}
 
-	// Major spike (300KB vs 800B baseline): single-frame timelapse exit.
 	spike := append([]byte{0x41}, bytes.Repeat([]byte{0x33}, 299999)...)
-	send(spike)
+	send(spike, t0.Add(time.Duration(totalPs+1)*20*time.Millisecond))
 
-	// Let the writer drain, then collect the finalized segments.
-	require.Eventually(t, func() bool { return len(b.frameCh) == 0 }, 3*time.Second, 10*time.Millisecond)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return len(b.frameCh) == 0 }, 5*time.Second, 5*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	files, err := mgr.ListFiles(cam)
 	require.NoError(t, err)
 	require.Len(t, files, 2, "rotation + exit flush must produce exactly 2 segments")
-	sort.Strings(files) // nano-suffixed names sort chronologically
+	sort.Strings(files)
 
 	seg1, err := merge.ParseSegment(files[0])
 	require.NoError(t, err)
-	// Bug B precondition: frames WERE written pre-rotation (their written
-	// flags went stale when segment 1 closed).
 	require.GreaterOrEqual(t, seg1.SampleCount, 3, "segment 1 must hold the IDR plus pre-rotation P-frames")
 
 	seg2, err := merge.ParseSegment(files[1])
 	require.NoError(t, err)
-	// The exit flush must carry the whole retained ring (IDR + every P since
-	// connect — rotation cleared the stale flags) plus the trigger written
-	// once by the normal path. Bug B skipped the pre-rotation frames here;
-	// Bug A wrote the trigger twice.
 	require.True(t, seg2.Samples[0].IsKeyFrame, "flush segment must start at the ring's IDR anchor")
 	require.Equal(t, 1+totalPs+1, seg2.SampleCount,
 		"fresh-segment flush must contain IDR + all %d retained P-frames + trigger", totalPs)
@@ -175,9 +151,65 @@ func TestH264Adaptive_TLExitFlushAfterRotation(t *testing.T) {
 			spikeCount++
 		}
 		if i > 0 && bytes.Equal(prev, sample) {
-			t.Fatalf("segments %d/%d are identical — a frame was written twice (size=%d tail=%x)", i-1, i, len(sample), sample[len(sample)-4:])
+			t.Fatalf("segments %d/%d are identical — a frame was written twice", i-1, i)
 		}
 		prev = sample
 	}
 	require.Equal(t, 1, spikeCount, "trigger frame must be on disk exactly once")
+}
+
+// TestH264Adaptive_BurstDrainKeepsArrivalSpacing (#506): a writer stall
+// back-pressures the channel; the drained burst must keep its ARRIVAL spacing
+// in the output timeline instead of collapsing onto the drain millisecond.
+func TestH264Adaptive_BurstDrainKeepsArrivalSpacing(t *testing.T) {
+	mgr := newTestManager(t)
+	const cam = "h264-adaptive-burst"
+	rec := NewH264Recorder(H264Config{
+		CameraID:   cam,
+		RTSPURL:    "rtsp://ignored",
+		SegmentDur: time.Hour,
+		RingBufCap: 512,
+	}, mgr)
+	b := rec.baseRecorder
+	b.frameCh = make(chan framePacket, 512)
+
+	// The writer is NOT running: enqueue 60 IDR-anchored frames whose arrival
+	// times span 1.2s (20ms apart) — the stalled-writer backlog.
+	t0 := time.Now()
+	b.frameCh <- framePacket{data: append(append([]byte{}, 0, 0, 0, 1), testSPS...), at: t0}
+	b.frameCh <- framePacket{data: append(append([]byte{}, 0, 0, 0, 1), testPPS...), at: t0}
+	for i := range 60 {
+		p := append([]byte{0x41}, bytes.Repeat([]byte{0x44}, 799)...)
+		p[len(p)-1] = byte(i)
+		at := t0.Add(time.Duration(i+1) * 20 * time.Millisecond)
+		if i == 0 {
+			p = append(append([]byte{}, testIDR...), bytes.Repeat([]byte{0x11}, 4000)...)
+		}
+		b.frameCh <- framePacket{data: append(append([]byte{}, 0, 0, 0, 1), p...), at: at}
+	}
+
+	done := make(chan struct{})
+	go b.writeFrames(done)
+	// All packets carry pre-computed arrival times spanning 1.2s while the
+	// writer consumes them in microseconds — the stalled-writer burst drain.
+	for len(b.frameCh) > 0 {
+		time.Sleep(time.Millisecond)
+	}
+	close(b.frameCh)
+	<-done
+	b.closeCurrentSegment() // finalize the still-open segment for listing
+
+	files, err := mgr.ListFiles(cam)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	seg, err := merge.ParseSegment(files[0])
+	require.NoError(t, err)
+	require.Equal(t, 60, seg.SampleCount)
+
+	// The pre-#506 bug: the whole backlog drained within microseconds wrote
+	// 1ms-clamped durations, collapsing the timeline to ~60ms. Arrival-based
+	// durations must span ≈ the 1.2s of real arrivals.
+	got := seg.TotalDuration.Truncate(10 * time.Millisecond)
+	require.GreaterOrEqual(t, got, 1100*time.Millisecond,
+		"drained backlog must keep its arrival spacing (got %s)", seg.TotalDuration)
 }
