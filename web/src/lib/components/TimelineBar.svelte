@@ -73,13 +73,49 @@
     return result;
   });
 
-  // Format → color class
+  // Format → color class (only used for formats that never get motion analysis;
+  // video segments are filled by their heat color below)
   const formatColor: Record<string, string> = {
-    h264: '#3b82f6', // blue
-    h265: '#a855f7', // purple
     mjpeg: '#f97316', // orange
-    timelapse: '#10b981', // emerald
   };
+
+  // Heat coloring (#435): video segments are filled by their motion score
+  // (green = calm → red = busy) — identical to DayTimeline and the former
+  // standalone activity strip, so every day-axis in the app reads the same.
+  // The codec of a segment stays available in its tooltip and in the player
+  // header; only the h264-vs-h265 at-a-glance distinction is given up.
+  const UNANALYZED_COLOR = 'rgba(96, 165, 250, 0.55)';
+
+  function heatColor(score: number): string {
+    const hue = Math.max(0, Math.round(120 - Math.min(1, Math.max(0, score)) * 120));
+    return `hsl(${hue} 65% 42%)`;
+  }
+
+  function isVideoFormat(fmt?: string): boolean {
+    return fmt === 'h264' || fmt === 'h265' || fmt === 'timelapse';
+  }
+
+  function segmentFill(rec: RecordingTimelineSegment): string {
+    if (isVideoFormat(rec.format)) {
+      return (rec.motion_score ?? -1) >= 0 ? heatColor(rec.motion_score!) : UNANALYZED_COLOR;
+    }
+    return formatColor[rec.format] || '#6b7280';
+  }
+
+  function segmentScoreLabel(rec: RecordingTimelineSegment): string {
+    if (!isVideoFormat(rec.format)) return '';
+    const score = (rec.motion_score ?? -1) >= 0 ? rec.motion_score!.toFixed(2) : t('timeline.unanalyzed');
+    return ` · ${t('timeline.score')}: ${score}`;
+  }
+
+  // Current recording's activity badge (moved from the standalone activity strip)
+  const currentScore = $derived.by(() => {
+    if (!currentRecording || !isVideoFormat(currentRecording.format)) return null;
+    return (currentRecording.motion_score ?? -1) >= 0 ? currentRecording.motion_score! : null;
+  });
+  const hasUnanalyzed = $derived(
+    segments.some((s) => isVideoFormat(s.rec.format) && (s.rec.motion_score ?? -1) < 0),
+  );
 
   // --- Dynamic time window (auto-scale to actual recordings) ---
 
@@ -340,15 +376,29 @@
 <div class="timeline-container">
   <div class="timeline-header">
     <span class="timeline-title">{t('timeline.title')}</span>
-    <span class="timeline-summary">
-      {#if loading}
-        {t('timeline.loading')}
-      {:else if error}
-        <span class="th-color-danger">{error}</span>
-      {:else}
-        {segments.length} {t('timeline.segments')} · {formatLength(totalRecordedSec)}{#if gaps.length > 0} · <span class="th-color-danger">⚠ {gaps.length} {t('timeline.frameDrops', { default: '断帧' })}</span>{/if} · {windowLabel}
+    <div class="timeline-meta">
+      <span class="timeline-summary">
+        {#if loading}
+          {t('timeline.loading')}
+        {:else if error}
+          <span class="th-color-danger">{error}</span>
+        {:else}
+          {segments.length} {t('timeline.segments')} · {formatLength(totalRecordedSec)}{#if gaps.length > 0} · <span class="th-color-danger">⚠ {gaps.length} {t('timeline.frameDrops', { default: '断帧' })}</span>{/if} · {windowLabel}
+        {/if}
+      </span>
+      {#if currentScore != null}
+        <span
+          class="score-badge"
+          style="background: {heatColor(currentScore)}"
+          title={t('timeline.score')}
+        >
+          {currentScore.toFixed(2)}
+        </span>
+        {#if currentRecording?.activity_flags}
+          <span class="flags-label">{currentRecording.activity_flags}</span>
+        {/if}
       {/if}
-    </span>
+    </div>
   </div>
 
   {#if !loading && !error}
@@ -381,8 +431,8 @@
           {#each regularSegments as seg (seg.rec.id)}
             <div
               class="timeline-segment"
-              style="left: {msToPct(seg.startSec)}%; width: {Math.max(0.5, msToPct(seg.endSec) - msToPct(seg.startSec))}%; background: {formatColor[seg.rec.format] || '#6b7280'};"
-              title="{formatDate(seg.rec.started_at)} · {seg.rec.format} · {formatLength((seg.endSec - seg.startSec) / 1000)}"
+              style="left: {msToPct(seg.startSec)}%; width: {Math.max(0.5, msToPct(seg.endSec) - msToPct(seg.startSec))}%; background: {segmentFill(seg.rec)};"
+              title="{formatDate(seg.rec.started_at)} · {seg.rec.format} · {formatLength((seg.endSec - seg.startSec) / 1000)}{segmentScoreLabel(seg.rec)}"
             ></div>
           {/each}
 
@@ -442,8 +492,8 @@
           {#each timelapseSegments as seg (seg.rec.id)}
             <div
               class="timeline-segment"
-              style="left: {msToPct(seg.startSec)}%; width: {Math.max(0.5, msToPct(seg.endSec) - msToPct(seg.startSec))}%; background: {formatColor.timelapse};"
-              title="{formatDate(seg.rec.started_at)} · timelapse · {formatLength((seg.endSec - seg.startSec) / 1000)}"
+              style="left: {msToPct(seg.startSec)}%; width: {Math.max(0.5, msToPct(seg.endSec) - msToPct(seg.startSec))}%; background: {segmentFill(seg.rec)};"
+              title="{formatDate(seg.rec.started_at)} · timelapse · {formatLength((seg.endSec - seg.startSec) / 1000)}{segmentScoreLabel(seg.rec)}"
             ></div>
           {/each}
 
@@ -464,14 +514,23 @@
 
     <!-- Legend -->
     <div class="timeline-legend">
-      {#each Object.entries(formatColor) as [fmt, color]}
-        {#if segments.some((s) => s.rec.format === fmt)}
-          <span class="legend-item">
-            <span class="legend-dot" style="background: {color};"></span>
-            {fmt.toUpperCase()}
-          </span>
-        {/if}
-      {/each}
+      <span class="legend-item">
+        {t('timeline.heatCalm')}
+        <span class="legend-gradient"></span>
+        {t('timeline.heatBusy')}
+      </span>
+      {#if hasUnanalyzed}
+        <span class="legend-item">
+          <span class="legend-dot" style="background: {UNANALYZED_COLOR};"></span>
+          {t('timeline.unanalyzed')}
+        </span>
+      {/if}
+      {#if segments.some((s) => s.rec.format === 'mjpeg')}
+        <span class="legend-item">
+          <span class="legend-dot" style="background: {formatColor.mjpeg};"></span>
+          MJPEG
+        </span>
+      {/if}
     </div>
   {/if}
 </div>
@@ -501,6 +560,24 @@
     font-size: 0.7rem;
     color: var(--text-muted, #9ca3af);
     font-variant-numeric: tabular-nums;
+  }
+  .timeline-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .score-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: #fff;
+    padding: 0 0.4rem;
+    border-radius: 9999px;
+    font-variant-numeric: tabular-nums;
+  }
+  .flags-label {
+    font-size: 0.65rem;
+    color: var(--text-muted, #9ca3af);
   }
   .timeline-track-wrapper {
     position: relative;
@@ -653,5 +730,17 @@
     width: 8px;
     height: 8px;
     border-radius: 2px;
+  }
+  .legend-gradient {
+    display: inline-block;
+    width: 36px;
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(
+      90deg,
+      hsl(120 65% 42%),
+      hsl(60 65% 42%),
+      hsl(0 65% 42%)
+    );
   }
 </style>
