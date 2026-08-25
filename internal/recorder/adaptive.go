@@ -46,7 +46,7 @@ import (
 type AdaptiveConfig struct {
 	CalmThreshold     time.Duration // sustained calm before dropping to sparse mode
 	TimelapseInterval time.Duration // keyframe cadence while sparse
-	SpikeFactor        float64       // MAD-floored deviations above baseline = spike
+	SpikeFactor       float64       // MAD-floored deviations above baseline = spike
 	MaxGOPBuffer      int64         // byte cap of the retained GOP ring
 	// AmbientAudio keeps the disk audio track recording CONTINUOUSLY while in
 	// sparse mode (#496 audio phase): the video timeline is compressed at

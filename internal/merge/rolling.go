@@ -1685,12 +1685,12 @@ func (r *RollingMergeCoordinator) createBucket(
 	// Create merged recording row and delete the source segment row.
 	mergedRecID = strconv.FormatInt(time.Now().UnixNano(), 10)
 	mergedRec := &model.Recording{
-		ID:          mergedRecID,
-		CameraID:    seg.cameraID,
-		FilePath:    finalPath,
-		Format:      model.Format(seg.format),
-		StartedAt:   seg.startedAt,
-		EndedAt:     seg.endedAt,
+		ID:        mergedRecID,
+		CameraID:  seg.cameraID,
+		FilePath:  finalPath,
+		Format:    model.Format(seg.format),
+		StartedAt: seg.startedAt,
+		EndedAt:   seg.endedAt,
 		// Wall-clock span (#496): the file timeline may be timelapse-compressed;
 		// the row keeps reporting real time so storage accounting and the UI's
 		// wall-clock math stay on the real axis.
@@ -1871,5 +1871,5 @@ func statsWallDuration(stats MergeStats, fallback float64) float64 {
 // the parsed bucket file plus the new input. Correct on the real-time axis
 // (no compression yet), and only used when stats carry no wall map.
 func totalDurFallbackSec(bucketInfo, newInfo *SegmentInfo) float64 {
-	return math.Round((bucketInfo.TotalDuration + newInfo.TotalDuration).Seconds()*1000) / 1000
+	return math.Round((bucketInfo.TotalDuration+newInfo.TotalDuration).Seconds()*1000) / 1000
 }

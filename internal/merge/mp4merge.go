@@ -96,6 +96,7 @@ func (s MergeStats) WallDurationSec() float64 {
 	}
 	return 0
 }
+
 // Timelapse dwell compression (#496): adaptive sparse mode stores one keyframe
 // per timelapse_interval (~30s) ON THE REAL-TIME AXIS, so any player — the SPA
 // included, and crucially a DOWNLOADED file in a local player — freezes each

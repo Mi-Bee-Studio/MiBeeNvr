@@ -125,7 +125,7 @@ func mixdownAmbient(muLaw bool, in []byte, nOut int) []byte {
 	env := make([]float64, nOut)
 	for j := range nOut {
 		lo := j * len(in) / nOut
-		hi := (j+1) * len(in) / nOut
+		hi := (j + 1) * len(in) / nOut
 		if hi <= lo {
 			hi = lo + 1
 		}
