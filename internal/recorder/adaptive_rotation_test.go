@@ -85,7 +85,7 @@ func TestH264Adaptive_TLExitFlushAfterRotation(t *testing.T) {
 		Adaptive: &AdaptiveConfig{
 			CalmThreshold:     400 * time.Millisecond,
 			TimelapseInterval: time.Hour,
-			SpikeFactor:        3.0,
+			SpikeFactor:       3.0,
 			MaxGOPBuffer:      8 << 20,
 		},
 	}, mgr)
