@@ -246,6 +246,19 @@ type codecDriver interface {
 // each take the muxer's own mutex), so concurrent video (writeFrames) and
 // audio (RTP callback) writes are safe by construction — the concern in #226
 // was the audio *config* fields, now migrated to the Tier-2 snapshot.
+// framePacket pairs one channel-delivered unit with its ARRIVAL time
+// (#506). Recording timestamps, rotation checks and the adaptive cadence
+// must follow arrival time, never the consumption-time wall clock: when the
+// writer goroutine blocks (big-segment finalize, SD stall, reconnect
+// backpressure) and then drains a backlog in a burst, consumption-time
+// timestamps collapse onto the same millisecond — collapsed dts breaks the
+// decode reference chain (field-found: duplicate-dts runs immediately before
+// missing-ref POC errors on cameras with TCP-timeout flaps).
+type framePacket struct {
+	data []byte
+	at   time.Time
+}
+
 type baseRecorder struct {
 	// driver provides codec-specific behavior (NAL parsing, track creation).
 	driver codecDriver
@@ -297,7 +310,7 @@ type baseRecorder struct {
 	audio atomic.Pointer[audioConfig]
 
 	// Frame pipeline (written from RTP callback goroutine, read from writeFrames).
-	frameCh chan []byte
+	frameCh chan framePacket
 	dropped atomic.Int64
 	lastPTS atomic.Int64 // for PTS monotonicity check
 
@@ -548,7 +561,12 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 	// nil check per frame.
 	sparseAudio := false
 
-	for data := range b.frameCh {
+	for pkt := range b.frameCh {
+		// pkt.at is the unit's ARRIVAL time (#506) — every timestamp decision
+		// below (adaptive cadence, sample pts/duration, rotation) uses it so a
+		// backlog burst drained after a writer stall keeps real spacing instead
+		// of collapsing onto one wall-clock millisecond.
+		data := pkt.data
 		// Always parse NALUs to capture codec parameter sets (VPS/SPS/PPS), even
 		// in live-only mode (RecordEnabled=false). Live preview (HLS/WebRTC/WS)
 		// needs these via getCodecParams(); if we skip parsing here, the codec
@@ -591,7 +609,7 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 		// reach the disk; on a spike the retained GOP ring is flushed and
 		// full-rate writing resumes through the normal path below.
 		if b.adaptive != nil {
-			now := time.Now()
+			now := pkt.at
 			isIDR := b.driver.isIDR(typ)
 			spike, flush := b.adaptive.observe(nalu, isIDR, now)
 			if len(flush) > 0 {
@@ -658,21 +676,23 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			continue
 		}
 
-		// Step 8: Create new segment if needed.
+		// Step 8: Create new segment if needed (anchored to this frame's
+		// arrival so pts start at zero for the first sample).
 		if b.muxer == nil {
-			if !b.createNewSegment() {
+			if !b.createNewSegment(pkt.at) {
 				continue
 			}
 		}
 
-		// Step 9: Write the NALU sample to the muxer.
-		now := time.Now()
-		pts := now.Sub(b.segStart)
-		duration := now.Sub(b.lastFrameTime)
+		// Step 9: Write the NALU sample to the muxer. pts/duration follow the
+		// frame's ARRIVAL time (#506) — a drained backlog keeps its real
+		// spacing instead of collapsing onto the drain moment.
+		pts := pkt.at.Sub(b.segStart)
+		duration := pkt.at.Sub(b.lastFrameTime)
 		if duration < time.Millisecond {
 			duration = time.Millisecond
 		}
-		b.lastFrameTime = now
+		b.lastFrameTime = pkt.at
 
 		if err := b.muxer.WriteSample(b.trackID, nalu, pts, duration); err != nil {
 			b.log.Error("failed to write sample",
@@ -686,8 +706,8 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			b.adaptive.markTailWritten()
 		}
 
-		// Step 10: Check segment duration rollover.
-		if time.Since(b.segStart) >= b.cfg.SegmentDur {
+		// Step 10: Check segment duration rollover (on the arrival axis).
+		if pkt.at.Sub(b.segStart) >= b.cfg.SegmentDur {
 			b.closeCurrentSegment()
 		}
 	}
@@ -720,15 +740,11 @@ func (b *baseRecorder) writeFlushedGOP(frames []gopFrame) {
 			if !f.isIDR {
 				continue // never start a segment on a P frame
 			}
-			if !b.createNewSegment() {
+			// The segment anchors to the flushed IDR's own capture time so
+			// pts = at - segStart >= 0 for the whole flushed chain (#473/#506).
+			if !b.createNewSegment(f.at) {
 				return
 			}
-			// createNewSegment stamps segStart with "now"; back-date it to
-			// the first flushed frame so pts = at - segStart >= 0. Published
-			// under mu like every segStart write (the audio callback reads it).
-			b.mu.Lock()
-			b.segStart = f.at
-			b.mu.Unlock()
 			b.lastFrameTime = f.at
 		}
 		pts := f.at.Sub(b.segStart)
@@ -850,7 +866,7 @@ func (b *baseRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) error
 // createNewSegment creates a new MP4 segment via the store, adds the
 // codec-specific video track (and audio track if configured), and stores
 // the muxer + segment metadata. Returns false on failure.
-func (b *baseRecorder) createNewSegment() bool {
+func (b *baseRecorder) createNewSegment(at time.Time) bool {
 	tempPath, finalPath, err := b.store.CreateSegment(b.cfg.CameraID, string(b.driver.segmentFormat()))
 	if err != nil {
 		b.log.Error("failed to create segment",
@@ -885,15 +901,16 @@ func (b *baseRecorder) createNewSegment() bool {
 	// RTP callback (a different goroutine) observes an aligned triplet. Earlier
 	// audioTrackID was assigned outside this lock, so a callback could see a
 	// non-zero trackID before muxer was published (torn view) — fixed (#226).
+	// segStart anchors to the creating frame's ARRIVAL time (#506).
 	b.mu.Lock()
 	b.muxer = m
-	b.segStart = time.Now()
+	b.segStart = at
 	b.audioTrackID = audioTrackID
 	b.ambientFile = b.openAmbientSidecar(finalPath)
 	b.mu.Unlock()
 	b.curTempPath = tempPath
 	b.curFinalPath = finalPath
-	b.lastFrameTime = b.segStart
+	b.lastFrameTime = at
 	b.frameCount = 0
 	return true
 }
