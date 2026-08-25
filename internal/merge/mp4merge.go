@@ -398,13 +398,14 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			return stats, fmt.Errorf("open segment %s: %w", seg.FilePath, err)
 		}
 
-		// Sparse dwell compression (#496): no-audio segments (adaptive
-		// timelapse drops the disk audio track) have their >2s dwell samples
-		// rewritten to timelapseFrameDur so 1×/downloaded playback shows a
-		// timelapse instead of a frozen frame. Audio-bearing segments keep
-		// real durations — their audio track would desync.
+		// Sparse dwell compression (#496): segments' >2s dwell samples are
+		// rewritten to TimelapseFrameDur so 1×/downloaded playback shows a
+		// timelapse instead of a frozen frame. Applies to audio-bearing
+		// segments too — the audio phase below renders such a span's G.711
+		// ambient audio onto the compressed timeline (envelope mixdown) or
+		// drops it for non-G.711 codecs.
 		ts := float64(seg.Timescale)
-		compress := !seg.HasAudio && seg.Timescale > 0
+		compress := seg.Timescale > 0
 		gapTicks := float64(seg.Timescale) * TimelapseGapThreshold.Seconds()
 		frameTicks := uint32(float64(seg.Timescale) * TimelapseFrameDur.Seconds())
 
@@ -563,6 +564,13 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	}
 	videoTrack.duration = uint32(totalVideoDuration)
 	videoTrack.samples = allVideoSamples
+
+	// A merged product where every span was compressed with a dropped
+	// non-G.711 track has zero audio samples — emit no audio track at all.
+	if hasAudio && len(allAudioSamples) == 0 {
+		hasAudio = false
+		audioTrack = nil
+	}
 
 	// Set real audio track data.
 	if hasAudio {

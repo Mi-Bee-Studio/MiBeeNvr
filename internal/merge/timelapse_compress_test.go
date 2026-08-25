@@ -84,10 +84,11 @@ func TestMergeMP4Segments_CompressesSparseDwells(t *testing.T) {
 	require.NotEmpty(t, stats.TimelineMapJSON())
 }
 
-// TestMergeMP4Segments_AudioBearingSpansNotCompressed: the same sparse
-// dwell durations in a segment WITH an audio track must stay real — rewriting
-// video there would desync the verbatim audio.
-func TestMergeMP4Segments_AudioBearingSpansNotCompressed(t *testing.T) {
+// TestMergeMP4Segments_CompressedAACSpanDropsAudio: a sparse-dwell segment
+// carrying a NON-G.711 audio track gets its video compressed and the span's
+// audio dropped (the envelope mixdown is G.711-only) — the output carries no
+// audio track at all when nothing else contributes one.
+func TestMergeMP4Segments_CompressedAACSpanDropsAudio(t *testing.T) {
 	dir := t.TempDir()
 	vps := []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5d, 0xac, 0x59}
 	sps := []byte{0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5d, 0xa0, 0x02, 0x80, 0x80, 0x2d, 0x16, 0x59, 0x59, 0xa4, 0x93, 0x2b, 0x80, 0x40, 0x00, 0x00, 0x07, 0x92}
@@ -108,12 +109,18 @@ func TestMergeMP4Segments_AudioBearingSpansNotCompressed(t *testing.T) {
 		info.Samples[i].Duration = uint32(30 * ts)
 	}
 
-	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, filepath.Join(dir, "out.mp4"))
+	origFrame := TimelapseFrameDur
+	TimelapseFrameDur = 100 * time.Millisecond
+	t.Cleanup(func() { TimelapseFrameDur = origFrame })
+
+	stats, err := MergeMP4Segments(context.Background(), []*SegmentInfo{info}, filepath.Join(dir, "out.mp4"))
 	require.NoError(t, err)
+	require.Equal(t, 2, stats.TimelapseFrames)
 	out, err := ParseSegment(filepath.Join(dir, "out.mp4"))
 	require.NoError(t, err)
 	got := time.Duration(out.Samples[0].Duration) * time.Second / time.Duration(out.Timescale)
-	require.Equal(t, 30*time.Second, got, "audio-bearing segment must keep real durations")
+	require.Equal(t, 100*time.Millisecond, got, "sparse dwells compress even with an audio track")
+	require.False(t, out.HasAudio, "compressed AAC span's audio must be dropped")
 }
 
 // TestMixdownAmbient: silence stays silent, loud input renders a bed of the
