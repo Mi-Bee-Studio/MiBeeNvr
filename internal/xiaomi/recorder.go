@@ -716,8 +716,11 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		}
 		r.trackID = trackID
 
-		// Add audio track if audio codec detected (G.711 or Opus).
-		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
+		// Add audio track only when audio is enabled AND the camera keeps
+		// audio in recordings (default off — #496 follow-up, issue #520).
+		// Live audio and the audio trigger read the pre-disk path and do not
+		// need the track.
+		if r.cfg.AudioEnabled && r.cfg.AudioInRecordings && r.audioCodecID > 0 {
 			codec, cfg, ok := buildAudioMuxerConfig(r.audioCodecID)
 			if ok {
 				aID, err := r.muxer.AddAudioTrack(codec, cfg)
@@ -850,8 +853,9 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		}
 		r.trackID = trackID
 
-		// Add audio track if audio codec detected (same as H264 path).
-		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
+		// Add audio track if audio codec detected (same gating as H264 path:
+		// enabled AND kept in recordings — issue #520).
+		if r.cfg.AudioEnabled && r.cfg.AudioInRecordings && r.audioCodecID > 0 {
 			codec, cfg, ok := buildAudioMuxerConfig(r.audioCodecID)
 			if ok {
 				aID, err := r.muxer.AddAudioTrack(codec, cfg)
