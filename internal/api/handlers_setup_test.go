@@ -184,6 +184,50 @@ func TestHandleSetup_PreservesPreconfiguredFields(t *testing.T) {
 	require.NotEmpty(t, saved.Auth.PasswordHash)
 }
 
+// TestHandleSetup_UncreatableStoragePath locks in the #434 fix: a wizard
+// storage path the app user cannot create (classically a container HOST path
+// like /vol1/...) must be rejected at setup time instead of being saved and
+// crash-looping the next restart.
+func TestHandleSetup_UncreatableStoragePath(t *testing.T) {
+	t.Parallel()
+	h, _ := setupTestHandlerForSetup(t)
+
+	// A regular file as a parent directory makes MkdirAll fail (ENOTDIR)
+	// deterministically regardless of uid.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("file"), 0o644))
+
+	body := setupRequest{Username: "admin", Password: "testpassword123", StoragePath: filepath.Join(blocker, "sub")}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handleSetup(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "cannot create storage path")
+	// Setup did not complete — no credentials were persisted.
+	require.Empty(t, h.config.Auth.PasswordHash)
+}
+
+func TestHandleSetup_RelativeStoragePathRejected(t *testing.T) {
+	t.Parallel()
+	h, _ := setupTestHandlerForSetup(t)
+
+	body := setupRequest{Username: "admin", Password: "testpassword123", StoragePath: "relative/path"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handleSetup(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "absolute path")
+	require.Empty(t, h.config.Auth.PasswordHash)
+}
+
 func TestHandleSetup_TokenIsValid(t *testing.T) {
 	t.Parallel()
 	h, _ := setupTestHandlerForSetup(t)

@@ -37,8 +37,10 @@ if [ "$(id -u)" = "0" ]; then
     if [ -f "$CONFIG_FILE" ]; then
         CONFIG_ROOT=$(grep -E '^\s+root_dir:' "$CONFIG_FILE" 2>/dev/null | sed 's/.*root_dir:\s*//' | tr -d '"' | tr -d "'")
         if [ -n "$CONFIG_ROOT" ] && [ "$CONFIG_ROOT" != "$NVR_DATA_DIR" ]; then
-            echo "[entrypoint] WARNING: config storage.root_dir=$CONFIG_ROOT but Docker volume is at $NVR_DATA_DIR"
-            echo "[entrypoint] If that root cannot host the database, the app falls back to this volume on startup."
+            echo "[entrypoint] WARNING: config storage.root_dir=$CONFIG_ROOT but the data volume is at $NVR_DATA_DIR"
+            echo "[entrypoint] This is fine ONLY if that path is itself a mounted volume. A HOST path"
+            echo "[entrypoint] (e.g. /vol1/...) does not exist inside the container; the app will then"
+            echo "[entrypoint] log an error and fall back to $NVR_DATA_DIR instead of crash-looping (#434)."
         fi
     fi
 

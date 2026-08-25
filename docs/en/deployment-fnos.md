@@ -77,6 +77,26 @@ writes the same version into both `manifest` and the compose `${VERSION}`.
   微信群), contact the community lead, submit the `.fpk` + screenshots per staff
   guidance. See [fnOS publish docs](https://github.com/ckcoding/fnnas-docs/blob/main/docs/quick-started/publish-application.md).
 
+## Uninstall, reinstall, and where the config lives
+
+Uninstalling without checking **删除应用数据** (delete app data) keeps the app
+data volume — recordings, DB, and `mibee-nvr.yaml` all persist, and a reinstall
+reuses the old config. Find the host-side mount source via
+`docker inspect mibee-nvr` (the source of `/data`); the config file is at
+`<that path>/mibee-nvr.yaml`.
+
+The storage path must be a **container-side** path (default `/data`), never a
+HOST path like `/vol1/...` — the container has no such mount and the non-root
+process cannot create it. Older builds (≤ v0.11.0) did not validate this in the
+setup wizard; a config with a host path crash-looped the next restart on
+`mkdir: permission denied`
+([#434](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/434)). Current builds
+defend twice: the wizard probes creatability before saving, and at startup an
+unusable `root_dir` inside a container logs an ERROR and falls back to the data
+volume instead of crash-looping. To unbrick an old install: uninstall with
+"delete app data" checked, or edit `storage.root_dir` back to `/data` in the
+data volume's `mibee-nvr.yaml` and restart the container.
+
 ## Update flow
 
 Bump `manifest.version` + image tag, rebuild the `.fpk`; the platform runs
