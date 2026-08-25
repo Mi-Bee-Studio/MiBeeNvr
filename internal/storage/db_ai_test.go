@@ -80,3 +80,45 @@ func TestListAIEventsEmptyWhenNoRows(t *testing.T) {
 	require.Equal(t, 0, total)
 	require.Empty(t, got)
 }
+
+// TestAIEventCreatedAtRFC3339 pins the API contract fix: created_at must come
+// back as RFC3339 with an explicit UTC offset. SQLite datetime('now') stores a
+// zoneless "YYYY-MM-DD HH:MM:SS"; clients (JS Date.parse, ISO parsers) read
+// that as LOCAL time, which shifted AI-event display and event→recording deep
+// links by the browser's UTC offset (8h on a CST deployment).
+func TestAIEventCreatedAtRFC3339(t *testing.T) {
+	dir := t.TempDir()
+	db, err := New(filepath.Join(dir, "t.db"))
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.InsertAIEvent(ctx, &AIEvent{CameraID: "cam-tz", EventType: "loitering", Severity: "info"})
+	require.NoError(t, err)
+
+	events, _, err := db.ListAIEvents(ctx, AIEventFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	require.Regexp(t, `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`, events[0].CreatedAt,
+		"created_at must be RFC3339 UTC, not a zoneless SQLite string")
+
+	single, err := db.GetAIEvent(ctx, events[0].ID)
+	require.NoError(t, err)
+	require.Regexp(t, `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`, single.CreatedAt)
+}
+
+func TestAICreatedAtToRFC3339(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"2026-08-25 06:19:51", "2026-08-25T06:19:51Z"},
+		{"2026-08-25 06:19:51.123456", "2026-08-25T06:19:51.123456Z"},
+		{"2026-08-25T06:19:51Z", "2026-08-25T06:19:51Z"},
+		{"2026-08-25T06:19:51+08:00", "2026-08-24T22:19:51Z"}, // offset honored, normalized to UTC
+		{"", ""},
+		{"garbage", "garbage"}, // unparsable passthrough, never mangled
+	}
+	for _, c := range cases {
+		require.Equal(t, c.want, aiCreatedAtToRFC3339(c.in), "input %q", c.in)
+	}
+}

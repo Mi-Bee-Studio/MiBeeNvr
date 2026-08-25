@@ -152,6 +152,14 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	if seg.Format == "timelapse" {
 		return
 	}
+	// 配置显式排除的相机(MJPEG/JPEG 等外部消费者无法解码的编码):推送纯浪费
+	// 带宽与 CPU,直接跳过(离线补偿重推走同一路径,一并跳过)。
+	if vcfg.ShouldSkipCamera(seg.CameraID) {
+		slog.Debug("vision push skipped by skip_cameras config",
+			"camera_id", seg.CameraID,
+			"recording_id", seg.RecordingID)
+		return
+	}
 
 	// 解析段文件的绝对路径。NVR 的 file_path 已经是绝对路径(/mnt/data/nvr/...)。
 	absPath := seg.FilePath

@@ -252,6 +252,8 @@ observability:
 #   url: "http://192.168.63.110:9091"   # Consumer base address
 #   heartbeat_timeout_secs: 60          # Consider consumer offline after this long without a heartbeat
 #   push_mode: "notify"                 # "notify" = tell consumer to fetch; "upload" = push video bytes
+#   skip_cameras:                       # Cameras never pushed (e.g. MJPEG/JPEG encodings the
+#     - "cam-mjpeg-0000"                # consumer cannot decode) — saves the upload bandwidth
 
 # Per-device API keys for the external AI consumer (Bearer tokens, "mbv_" prefix).
 # Managed via Settings → Features in the Web UI (generate/revoke, hot-reloaded,

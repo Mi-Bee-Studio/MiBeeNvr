@@ -15,7 +15,7 @@
   import { getRecordingsTimeline, type Recording, type RecordingTimelineSegment } from '$lib/api';
   import { listAIEvents, type AIEvent } from '$lib/api/ai-events';
   import { t } from '$lib/i18n';
-  import { formatDate } from '$lib/format';
+  import { formatDate, parseServerDate } from '$lib/format';
   import { findSegmentAt, formatLength as formatLengthUtil, type TimelineSegment } from '$lib/timeline-utils';
 
   let {
@@ -448,7 +448,7 @@
           <!-- AI event markers -->
           {#if showEvents}
             {#each aiEvents as evt}
-              {@const evtMs = Date.parse(evt.created_at)}
+              {@const evtMs = parseServerDate(evt.created_at).getTime()}
               {@const evtColor = eventColor(evt)}
               <div
                 class="timeline-event-marker"

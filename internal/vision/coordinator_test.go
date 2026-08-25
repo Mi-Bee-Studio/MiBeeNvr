@@ -167,3 +167,55 @@ func TestRecordingToSegment(t *testing.T) {
 	require.Equal(t, "2026-08-16T12:00:00Z", seg.StartedAt)
 	require.Equal(t, "2026-08-16T12:00:30Z", seg.EndedAt)
 }
+
+// skip_cameras: cameras the config excludes (e.g. encodings the external
+// consumer cannot process) must never be pushed — neither live nor via the
+// offline-compensation path (handleSegment is shared).
+func TestCoordinatorSkipCameras(t *testing.T) {
+	var mu sync.Mutex
+	pushed := map[string]int{}
+	visionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pushed[r.Header.Get("X-Recording-Id")]++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer visionSrv.Close()
+
+	bus := event.NewEventBus(64)
+	cfg := config.VisionConfig{Enabled: true, URL: visionSrv.URL, SkipCameras: []string{"cam-skip"}}
+	c := NewCoordinator(
+		func() config.VisionConfig { return cfg },
+		func() string { return t.TempDir() },
+		bus,
+		nil,
+	)
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(c.Stop)
+	// Healthy heartbeat → live pushes flow.
+	c.Health().RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+
+	dir := t.TempDir()
+	publish := func(cam, rec string) {
+		p := filepath.Join(dir, rec+".mp4")
+		require.NoError(t, os.WriteFile(p, make([]byte, 8), 0o644))
+		bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID: cam, FilePath: p, Format: "mp4",
+			FileSize: 8, RecordingID: rec,
+		})
+	}
+	publish("cam-skip", "rec-skipped")
+	publish("cam-ok", "rec-delivered")
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return pushed["rec-delivered"] == 1
+	}, 5*time.Second, 50*time.Millisecond, "non-skipped camera must be pushed")
+
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Zero(t, pushed["rec-skipped"], "skip_cameras camera must not be pushed")
+	require.Equal(t, 1, pushed["rec-delivered"])
+}

@@ -53,7 +53,16 @@ func scanAIFields(r *model.Recording, aiStatus, aiProcessedAt, aiError sql.NullS
 	if aiStatus.Valid {
 		r.AIStatus = aiStatus.String
 	}
-	r.AIProcessedAt = scanTime(aiProcessedAt)
+	// NULL stays a nil pointer: a zero time.Time would serialize as
+	// "0001-01-01T00:00:00Z" (omitempty cannot omit structs), which clients
+	// have mistaken for a real processing timestamp.
+	if aiProcessedAt.Valid && aiProcessedAt.String != "" {
+		if t, err := parseTime(aiProcessedAt.String); err == nil {
+			r.AIProcessedAt = &t
+		} else {
+			logger.Warn("scanAIFields: failed to parse ai_processed_at", "value", aiProcessedAt.String, "error", err)
+		}
+	}
 	if aiError.Valid {
 		r.AIError = aiError.String
 	}
@@ -1056,12 +1065,15 @@ func (d *DB) ListZeroDurationRecordings(ctx context.Context, cameraID string, li
 }
 
 // UpdateRecordingAIStatus sets the AI processing status for a recording.
-// status: "pending", "processing", "done", "failed", "skipped"
-// errMsg: optional error description (for "failed" status)
+// Terminal statuses (completed — what the API handler validates and external
+// consumers send — plus the legacy "done"/"skipped" spellings) stamp
+// ai_processed_at. The list previously held only "done", which the handler
+// rejects, so ai_processed_at was NEVER stamped on successful processing.
+// Non-terminal statuses (pending/processing) leave it untouched.
 func (d *DB) UpdateRecordingAIStatus(ctx context.Context, id, status, errMsg string) error {
 	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
 	_, err := d.db.ExecContext(ctx,
-		`UPDATE recordings SET ai_status=?, ai_error=?, ai_processed_at=CASE WHEN ? IN ('done','failed','skipped') THEN ? ELSE ai_processed_at END WHERE id=?;`,
+		`UPDATE recordings SET ai_status=?, ai_error=?, ai_processed_at=CASE WHEN ? IN ('completed','done','failed','skipped') THEN ? ELSE ai_processed_at END WHERE id=?;`,
 		status, errMsg, status, now, id)
 	return err
 }

@@ -239,3 +239,35 @@ func TestCountCacheKeyIncludesAiClass(t *testing.T) {
 	require.NotEqual(t, noClass, withCar, "AiClass=car must not share the cache key of the unfiltered query")
 	require.NotEqual(t, withPerson, withCar, "different AiClass values must produce different cache keys")
 }
+
+// TestUpdateRecordingAIStatusStampsProcessedAt: the API handler only accepts
+// "completed" (not "done"), so the terminal-status list must include it —
+// previously ai_processed_at was never stamped on successful processing.
+func TestUpdateRecordingAIStatusStampsProcessedAt(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, db.InsertRecording(ctx, &model.Recording{
+		ID: "rec-aistat", CameraID: "cam-1", FilePath: "/x.mp4", Format: model.FormatH264,
+		StartedAt: now, EndedAt: now.Add(time.Second), Duration: 1,
+	}))
+
+	// Non-terminal: no stamp.
+	require.NoError(t, db.UpdateRecordingAIStatus(ctx, "rec-aistat", "processing", ""))
+	rec, err := db.GetRecording(ctx, "rec-aistat")
+	require.NoError(t, err)
+	require.Nil(t, rec.AIProcessedAt, "processing must not stamp ai_processed_at")
+
+	// Terminal via the API's vocabulary: stamps.
+	require.NoError(t, db.UpdateRecordingAIStatus(ctx, "rec-aistat", "completed", ""))
+	rec, err = db.GetRecording(ctx, "rec-aistat")
+	require.NoError(t, err)
+	require.NotNil(t, rec.AIProcessedAt, "completed must stamp ai_processed_at")
+	require.WithinDuration(t, time.Now().UTC(), *rec.AIProcessedAt, time.Minute)
+
+	// Legacy "done" spelling still stamps (backward tolerance).
+	require.NoError(t, db.UpdateRecordingAIStatus(ctx, "rec-aistat", "failed", "boom"))
+	rec, err = db.GetRecording(ctx, "rec-aistat")
+	require.NoError(t, err)
+	require.NotNil(t, rec.AIProcessedAt, "failed must stamp ai_processed_at")
+}
