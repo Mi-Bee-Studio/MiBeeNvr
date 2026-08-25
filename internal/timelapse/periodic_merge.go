@@ -526,10 +526,17 @@ func (m *PeriodicMergeManager) goConcatMerge(ctx context.Context, segments []mod
 		"total_frames", totalFrames,
 	)
 
-	// merge.MergeMP4Segments validates codec/SPS/PPS/VPS/audio consistency.
-	if err := merge.MergeMP4Segments(ctx, segInfos, outputPath); err != nil {
+	// merge.MergeMP4Segments validates codec/SPS/PPS/VPS/audio consistency and
+	// keyframe-aligns every segment head (#488); keyframe-less segments are
+	// skipped and reported in stats.
+	stats, err := merge.MergeMP4Segments(ctx, segInfos, outputPath)
+	if err != nil {
 		_ = os.Remove(outputPath)
 		return fmt.Errorf("go concat merge: %w", err)
+	}
+	if len(stats.SkippedNoKeyframe) > 0 {
+		slog.Warn("periodic merge: skipped keyframe-less segments",
+			"skipped", len(stats.SkippedNoKeyframe), "total", len(segInfos))
 	}
 
 	// Report 100% progress — Go concat is fast (streaming copy), no granular progress.

@@ -27,6 +27,7 @@
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
   import { parseVodPlaylist, entryAt, nearestEntryByWallClock, mediaTimeFor, type VodEntry } from '$lib/vod-playlist';
+  import { parseTimelineMap, wallToFileSec, fileToWallSec } from '$lib/timeline-map';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
   import AviPlayback from '../../components/AviPlayback.svelte';
   import TimelineBar from '$lib/components/TimelineBar.svelte';
@@ -428,10 +429,17 @@
         const cur = entryAt(vodMap, t);
         if (cur) {
           vodRebuilds++;
+          // #496: inside the current recording, media seconds advance slower
+          // than wall seconds when its timeline is timelapse-compressed —
+          // convert before resuming so a session rebuild lands at the same
+          // wall-clock moment. Other entries keep the identity estimate.
+          const resumeMap = cur.rid === recording?.id ? parseTimelineMap(recording?.timeline_map) : null;
           vodResume = {
             rid: cur.rid,
             offset: Math.max(0, t - cur.mediaStart),
-            wallMs: cur.wallStart ? cur.wallStart + Math.max(0, t - cur.mediaStart) * 1000 : 0,
+            wallMs: cur.wallStart
+              ? cur.wallStart + Math.max(0, fileToWallSec(resumeMap, t - cur.mediaStart)) * 1000
+              : 0,
           };
           console.warn('VOD HLS fatal error, rebuilding continuous session', data);
           teardownContinuous();
@@ -686,7 +694,11 @@
     // Continuous mode: every target maps into the single media timeline —
     // cross-recording, cross-gap, anything. No source switch, no reload.
     if (continuousMode && continuousReady) {
-      const mt = mediaTimeFor(vodMap, recordingId, offsetSeconds);
+      // #496: timeline offsets are wall-clock seconds within the target
+      // recording; the current recording's compressed file maps them onto
+      // its (shorter) media axis.
+      const seekMap = recordingId === recording.id ? parseTimelineMap(recording.timeline_map) : null;
+      const mt = mediaTimeFor(vodMap, recordingId, wallToFileSec(seekMap, offsetSeconds));
       if (mt != null && videoEl) {
         void recordTimelineSeek(recording.camera_id, 'segment');
         videoEl.currentTime = mt;

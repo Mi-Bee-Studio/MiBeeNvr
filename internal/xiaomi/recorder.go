@@ -60,18 +60,19 @@ type XiaomiCloudConfig struct {
 
 // XiaomiRecorderConfig holds configuration for the Xiaomi recorder.
 type XiaomiRecorderConfig struct {
-	CameraID     string
-	DID          string            // Device ID extracted from xiaomi:// URL (e.g. "655448418")
-	Model        string            // Camera model (e.g. ModelC200, ModelC300)
-	CloudCfg     XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
-	SegmentDur   time.Duration
-	DB           RecordingDB
-	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
-	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
-	IdleTimeout  time.Duration
-	Channel      string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
-	Quality      string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
-	EventBus     *event.EventBus
+	CameraID          string
+	DID               string            // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	Model             string            // Camera model (e.g. ModelC200, ModelC300)
+	CloudCfg          XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
+	SegmentDur        time.Duration
+	DB                RecordingDB
+	ErrReporter       ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
+	AudioEnabled      bool          // Capture and broadcast audio via StreamHub when true
+	AudioInRecordings bool          // Keep the audio track in recorded segments (default off)
+	IdleTimeout       time.Duration
+	Channel           string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+	Quality           string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
+	EventBus          *event.EventBus
 	// RecordEnabled gates disk writes. nil or true = record normally;
 	// false = "live-only" mode — the stream stays connected (for live preview /
 	// HLS) but no segments are written to disk. Matches baseRecorder.RecordEnabled
@@ -683,7 +684,9 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		now := time.Now()
 		isIDR := naluType == 5
 		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
-		r.audioSparse.Store(r.adaptive.Timelapse())
+		// Ambient-audio cameras keep the disk audio track through sparse mode
+		// (#496); the merge renders the ambient span into the atmosphere bed.
+		r.audioSparse.Store(r.adaptive.Timelapse() && !r.cfg.Adaptive.AmbientAudio)
 		if len(flush) > 0 {
 			r.writeFlushedGOP(flush)
 			// Pre-trigger audio back-fill (issue #478), mirroring the built-in
@@ -815,7 +818,9 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		now := time.Now()
 		isIDR := naluType == 19 || naluType == 20
 		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
-		r.audioSparse.Store(r.adaptive.Timelapse())
+		// Ambient-audio cameras keep the disk audio track through sparse mode
+		// (#496); the merge renders the ambient span into the atmosphere bed.
+		r.audioSparse.Store(r.adaptive.Timelapse() && !r.cfg.Adaptive.AmbientAudio)
 		if len(flush) > 0 {
 			r.writeFlushedGOP(flush)
 			// Pre-trigger audio back-fill (issue #478), mirroring the built-in
@@ -1102,6 +1107,15 @@ func (r *XiaomiRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) err
 func (r *XiaomiRecorder) closeCurrentSegment() {
 	if r.muxer == nil {
 		return
+	}
+	// The retained rings' `written` markings refer to the segment being
+	// closed; a later flush into a fresh segment must write those frames
+	// instead of skipping them (issue #498 — mirrors baseRecorder).
+	if r.adaptive != nil {
+		r.adaptive.ClearWritten()
+	}
+	if r.audioTrig != nil {
+		r.audioTrig.ClearWritten()
 	}
 	if err := r.muxer.Close(); err != nil {
 		xiaomiLogger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)

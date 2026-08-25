@@ -48,6 +48,17 @@ type AdaptiveConfig struct {
 	TimelapseInterval time.Duration // keyframe cadence while sparse
 	SpikeFactor       float64       // MAD-floored deviations above baseline = spike
 	MaxGOPBuffer      int64         // byte cap of the retained GOP ring
+	// AmbientArchive additionally keeps the raw G.711 stream as a sidecar file
+	// beside each segment for post-production (only meaningful with
+	// AmbientAudio; default off).
+	AmbientArchive bool
+	// AmbientAudio keeps the disk audio track recording CONTINUOUSLY while in
+	// sparse mode (#496 audio phase): the video timeline is compressed at
+	// merge time and the merge renders the ambient span into a quiet
+	// continuous atmosphere bed (envelope mixdown) instead of dropping it.
+	// Costs ~28.8MB/h (G.711); enable per camera. Event (full-rate) spans
+	// always keep their real audio either way.
+	AmbientAudio bool
 }
 
 // DefaultAdaptiveConfig mirrors the validated ranges in config.validate.
@@ -373,18 +384,34 @@ func (t *adaptiveTracker) appendGOP(nalu []byte, isIDR bool, now time.Time) {
 	t.gopBytes += size
 }
 
-// takeGOP detaches the retained GOP for flushing. Returns nil when the ring
-// is broken (overflowed) or does not start with an IDR (not independently
-// decodable). Callers skip already-written frames when flushing into an
-// existing segment (issue #473).
+// takeGOP detaches the retained GOP for flushing, EXCLUDING the current frame
+// — observe() just appended it (the trigger), and every caller writes that
+// frame itself via the normal write path right after the flush, so including
+// it here wrote it twice (one duplicate POC per timelapse exit, issue #498).
+// When the trigger is itself the IDR (ring == [IDR]) nothing remains that
+// needs flushing. Returns nil when the remainder is broken (overflowed ring)
+// or not independently decodable (does not start with an IDR). Callers skip
+// already-written frames when flushing into an existing segment (issue #473).
 func (t *adaptiveTracker) takeGOP() []gopFrame {
 	frames := t.gop
 	t.gop = nil
 	t.gopBytes = 0
-	if t.gopBroken || len(frames) == 0 || !frames[0].isIDR {
+	if t.gopBroken || len(frames) <= 1 || !frames[0].isIDR {
 		return nil
 	}
-	return frames
+	return frames[:len(frames)-1]
+}
+
+// clearWritten forgets every ring frame's on-disk marking. `written` means
+// "on disk in the CURRENT segment"; when that segment closes (rotation,
+// storage failure), the frames live in a closed file and a later
+// timelapse-exit flush that lands in a FRESH segment must write the whole
+// ring. Treating pre-rotation flags as current skipped mid-GOP frames that
+// were never in the new file ("Could not find ref with POC", issue #498).
+func (t *adaptiveTracker) clearWritten() {
+	for i := range t.gop {
+		t.gop[i].written = false
+	}
 }
 
 // classify updates the rolling baseline and reports whether the observed
@@ -545,11 +572,19 @@ func (g *AdaptiveGate) MarkLastWritten() {
 	g.t.markTailWritten()
 }
 
+// ClearWritten forgets the per-segment written markings after the caller's
+// current segment closes (rotation, storage failure) — a later flush into a
+// FRESH segment must write the whole retained ring instead of skipping
+// frames that only exist in the closed file (issue #498).
+func (g *AdaptiveGate) ClearWritten() {
+	g.t.clearWritten()
+}
+
 // ResolveAdaptiveConfig builds a resolved AdaptiveConfig from optional
 // overrides, defaulting unset fields. Shared by the camera-manager factory
 // (RTSP/ONVIF paths) and plugin-style recorders (Xiaomi) so both resolve
 // identically. String durations follow the frame_watchdog_timeout convention.
-func ResolveAdaptiveConfig(calmThreshold, timelapseInterval string, spikeFactor float64, gopBufferBytes int64) AdaptiveConfig {
+func ResolveAdaptiveConfig(calmThreshold, timelapseInterval string, spikeFactor float64, gopBufferBytes int64, ambientAudio, ambientArchive bool) AdaptiveConfig {
 	ac := DefaultAdaptiveConfig()
 	if d, err := time.ParseDuration(calmThreshold); err == nil && d > 0 {
 		ac.CalmThreshold = d
@@ -563,5 +598,7 @@ func ResolveAdaptiveConfig(calmThreshold, timelapseInterval string, spikeFactor 
 	if gopBufferBytes > 0 {
 		ac.MaxGOPBuffer = gopBufferBytes
 	}
+	ac.AmbientAudio = ambientAudio
+	ac.AmbientArchive = ambientArchive
 	return ac
 }

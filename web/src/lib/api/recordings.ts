@@ -24,6 +24,9 @@ export interface Recording {
   // Motion score (#435): compressed-domain activity score in [0,1]; -1 =
   // not yet analyzed. activity_flags: comma-separated "static"/"motion"/"scene_cut".
   motion_score?: number;
+  /** #496: piecewise wall→file timeline map (JSON "[[wallSec,fileSec],…]")
+   *  for timelapse-compressed recordings; absent = real-time axis. */
+  timeline_map?: string;
   activity_flags?: string;
 }
 

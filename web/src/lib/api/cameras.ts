@@ -36,6 +36,8 @@ export interface Camera {
   transcoding?: CameraTranscodingConfig;
   channel?: string;
   audio_enabled?: boolean;
+  /** Keep the real audio track in recorded segments (default off). */
+  audio_in_recordings?: boolean;
   // Recording gate: false = live-only (no segments written to disk; the recorder
   // stays connected for live preview + relay + health). undefined = record.
   recording_enabled?: boolean | null;
@@ -85,6 +87,14 @@ export interface AdaptiveRecordingConfig {
   spike_factor?: number;
   /** Seamless-transition GOP pre-buffer cap in bytes. Default 16MB. */
   gop_buffer_bytes?: number;
+  /** Keep the audio track recording continuously while sparse (#496): the
+   *  merge renders it into a quiet atmosphere bed under the compressed
+   *  timelapse video. G.711 cameras only; ~28.8MB/h while sparse. */
+  ambient_audio?: boolean;
+  /** Compressed-timeline frame cadence preset (ms): 100/300/500, 0 = default 100. */
+  timelapse_frame_ms?: number;
+  /** Keep the raw ambient G.711 as a sidecar file for post-production. */
+  ambient_archive?: boolean;
 }
 
 /** Loudness trigger knobs for recording_mode: 'adaptive' (#478). */

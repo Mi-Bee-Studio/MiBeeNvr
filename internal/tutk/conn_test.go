@@ -256,3 +256,147 @@ func TestIdleTimeoutBehavior(t *testing.T) {
 		t.Errorf("unexpected error: %s", errStr)
 	}
 }
+
+// newKeepaliveTestConn builds a Conn wired to a fake camera UDP socket for
+// keepalive wire-format tests. Returns the client Conn and the fake camera.
+func newKeepaliveTestConn(t *testing.T) (*Conn, *net.UDPConn) {
+	t.Helper()
+
+	camera, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("camera ListenUDP: %v", err)
+	}
+	t.Cleanup(func() { _ = camera.Close() })
+
+	client, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatalf("client ListenUDP: %v", err)
+	}
+
+	c := &Conn{
+		UDPConn:     client,
+		addr:        camera.LocalAddr().(*net.UDPAddr),
+		uid:         "TESTUID",
+		idleTimeout: 30 * time.Second,
+		lastData:    time.Now(),
+	}
+	c.session = NewSession25(c, GenSessionID())
+	return c, camera
+}
+
+// readDecoded reads one obfuscated packet from the fake camera and reverses
+// the wire obfuscation.
+func readDecoded(t *testing.T, camera *net.UDPConn) []byte {
+	t.Helper()
+
+	buf := make([]byte, 1200)
+	_ = camera.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err := camera.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("camera ReadFromUDP: %v", err)
+	}
+	msg := buf[:n]
+	ReverseTransCodePartial(msg, msg)
+	return msg
+}
+
+func TestSendKeepaliveWireFormat(t *testing.T) {
+	c, camera := newKeepaliveTestConn(t)
+
+	if !c.sendKeepalive() {
+		t.Fatal("sendKeepalive should report success on Session25")
+	}
+
+	msg := readDecoded(t, camera)
+	if len(msg) < msgHhrSize+4 {
+		t.Fatalf("keepalive packet too short: %d bytes", len(msg))
+	}
+
+	// Header: client-request marker at [8:11] and channel-0 dispatch shape.
+	if string(msg[8:11]) != "\x07\x04\x21" {
+		t.Errorf("keepalive header [8:11] = %x, want 070421", msg[8:11])
+	}
+	// Payload starts at 28 with the counters command 09 00 0b 00.
+	if string(msg[msgHhrSize:msgHhrSize+4]) != "\x09\x00\x0b\x00" {
+		t.Errorf("keepalive cmd = %x, want 09000b00", msg[msgHhrSize:msgHhrSize+4])
+	}
+}
+
+func TestSendKeepaliveGating(t *testing.T) {
+	c, _ := newKeepaliveTestConn(t)
+
+	t.Run("session16 has no counters builder", func(t *testing.T) {
+		c16 := &Conn{UDPConn: c.UDPConn, addr: c.addr, uid: c.uid}
+		c16.session = NewSession16(&mockConn{}, GenSessionID())
+		if c16.sendKeepalive() {
+			t.Error("sendKeepalive should be a no-op on Session16")
+		}
+	})
+
+	t.Run("env off", func(t *testing.T) {
+		t.Setenv("TUTK_KEEPALIVE", "off")
+		if c.sendKeepalive() {
+			t.Error("sendKeepalive should be disabled via TUTK_KEEPALIVE=off")
+		}
+	})
+}
+
+func TestWorkerSendsKeepaliveWhenIdle(t *testing.T) {
+	orig := keepaliveInterval
+	keepaliveInterval = 100 * time.Millisecond
+	t.Cleanup(func() { keepaliveInterval = orig })
+
+	c, camera := newKeepaliveTestConn(t)
+
+	done := make(chan struct{})
+	go func() {
+		c.worker()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		_ = c.UDPConn.Close() // unblocks worker read; it will exit via error
+		<-done
+	})
+
+	// With no inbound data the worker should emit several keepalives.
+	first := readDecoded(t, camera)
+	if string(first[msgHhrSize:msgHhrSize+4]) != "\x09\x00\x0b\x00" {
+		t.Errorf("expected counters keepalive, got cmd %x", first[msgHhrSize:msgHhrSize+4])
+	}
+
+	select {
+	case <-done:
+		t.Fatal("worker exited prematurely — idle timeout should be 30s")
+	default:
+	}
+}
+
+// TestStaleWriteDeadlineKillsWrites is the regression test for issue #167's
+// root cause: Dial used to arm a combined SetDeadline(5s) for the handshake
+// and never cleared it, so every outbound packet after dial+5s (per-frame
+// counters ACKs, MISS commands, keepalives) failed with a silent
+// "write udp: i/o timeout". The camera, starved of ACKs, stopped streaming
+// ~20s later. This test pins the failure mechanism: a stale write deadline
+// breaks keepalive writes; clearing the deadline restores them.
+func TestStaleWriteDeadlineKillsWrites(t *testing.T) {
+	c, camera := newKeepaliveTestConn(t)
+
+	// Simulate the old Dial: deadline set 5s ago and forgotten.
+	_ = c.UDPConn.SetDeadline(time.Now().Add(-5 * time.Second))
+
+	if c.sendKeepalive() {
+		t.Fatal("sendKeepalive should fail under a stale write deadline")
+	}
+
+	// Fix under test: handshake clears the deadline before the worker runs.
+	_ = c.UDPConn.SetDeadline(time.Time{})
+
+	if !c.sendKeepalive() {
+		t.Fatal("sendKeepalive should succeed after deadline is cleared")
+	}
+
+	msg := readDecoded(t, camera)
+	if string(msg[msgHhrSize:msgHhrSize+4]) != "\x09\x00\x0b\x00" {
+		t.Errorf("expected counters keepalive, got cmd %x", msg[msgHhrSize:msgHhrSize+4])
+	}
+}

@@ -106,3 +106,31 @@ func TestValidateAudioTrigger(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateTimelapseFrameMs(t *testing.T) {
+	ok := func(ms int) *Config {
+		c := adaptiveTestConfig("adaptive", "h264", nil)
+		c.Cameras[0].Adaptive = &AdaptiveRecordingConfig{TimelapseFrameMs: ms}
+		return c
+	}
+	for _, ms := range []int{0, 100, 300, 500} {
+		if err := Validate(ok(ms)); err != nil {
+			t.Fatalf("timelapse_frame_ms=%d must validate: %v", ms, err)
+		}
+	}
+	for _, ms := range []int{50, 200, 1000} {
+		if err := Validate(ok(ms)); err == nil {
+			t.Fatalf("timelapse_frame_ms=%d must be rejected", ms)
+		}
+	}
+	// ambient_archive requires ambient_audio
+	c := ok(100)
+	c.Cameras[0].Adaptive.AmbientArchive = true
+	if err := Validate(c); err == nil {
+		t.Fatal("ambient_archive without ambient_audio must be rejected")
+	}
+	c.Cameras[0].Adaptive.AmbientAudio = true
+	if err := Validate(c); err != nil {
+		t.Fatalf("ambient_archive with ambient_audio must validate: %v", err)
+	}
+}

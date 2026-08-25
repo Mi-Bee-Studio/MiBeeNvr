@@ -32,6 +32,7 @@ type ONVIFConfig struct {
 	SegmentDur           time.Duration
 	DB                   RecordingDB
 	AudioEnabled         bool
+	AudioInRecordings    bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
 	ONVIFEndpoint        string        // ONVIF device endpoint URL (for HTTP MJPEG probe base)
 	EventBus             *event.EventBus
@@ -678,6 +679,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			RingBufCap:           DefaultRingBufCap,
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
+			AudioInRecordings:    r.cfg.AudioInRecordings,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 			EventBus:             r.cfg.EventBus,
 			RecordEnabled:        r.cfg.RecordEnabled,
@@ -768,6 +770,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			RingBufCap:           DefaultRingBufCap,
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
+			AudioInRecordings:    r.cfg.AudioInRecordings,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 			EventBus:             r.cfg.EventBus,
 			RecordEnabled:        r.cfg.RecordEnabled,

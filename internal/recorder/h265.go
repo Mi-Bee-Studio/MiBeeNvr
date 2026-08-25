@@ -348,7 +348,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	}
 
 	frameAlive := make(chan struct{}, 1)
-	r.frameCh = make(chan []byte, r.cfg.RingBufCap)
+	r.frameCh = make(chan framePacket, r.cfg.RingBufCap)
 	r.dropped.Store(0)
 	// Arm the adaptive tracker + audio-trigger runtime BEFORE the writer
 	// goroutine and the audio callbacks start (issue #478: the audio
@@ -381,12 +381,13 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		if r.Hub != nil {
 			r.Hub.Broadcast(int64(pkt.Timestamp), au, nalutil.IsIDR(au, true))
 		}
+		at := time.Now() // one arrival stamp for the whole AU (#506)
 		for _, nalu := range au {
 			data := make([]byte, 4+len(nalu))
 			copy(data, []byte{0x00, 0x00, 0x00, 0x01})
 			copy(data[4:], nalu)
 			select {
-			case r.frameCh <- data:
+			case r.frameCh <- framePacket{data: data, at: at}:
 			default:
 				d := r.dropped.Add(1)
 				if r.mtrics != nil {
@@ -418,7 +419,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				aid := r.audioTrackID
 				start := r.segStart
 				r.mu.Unlock()
-				if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse (adaptive-timelapse) mode drops disk audio, live audio continues
+				if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse drops disk audio; the track exists only when AudioInRecordings is on
 					pts := time.Since(start)
 					dur := 1024 * time.Second / time.Duration(audioForma.ClockRate())
 					if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
@@ -446,12 +447,13 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				g711Rate = a.g711SampleRate
 			}
 			r.audioTriggerIngest(g711Forma.MULaw, data, g711Rate, time.Now())
+			r.writeAmbientArchive(data) // raw sidecar when adaptive.ambient_archive is on
 			r.mu.Lock()
 			m := r.muxer
 			aid := r.audioTrackID
 			start := r.segStart
 			r.mu.Unlock()
-			if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse (adaptive-timelapse) mode drops disk audio, live audio continues
+			if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse drops disk audio; the track exists only when AudioInRecordings is on
 				pts := time.Since(start)
 				// g711SampleRate from the immutable snapshot (race-free read
 				// from this RTP-callback goroutine, #226).

@@ -56,14 +56,19 @@ import (
 // recorders. H264Config and H265Config embed BaseConfig to eliminate the
 // duplication of these fields across the H.264 and H.265 recorder configs.
 type BaseConfig struct {
-	CameraID               string
-	RTSPURL                string
-	Username               string
-	Password               string
-	SegmentDur             time.Duration
-	RingBufCap             int
-	DB                     RecordingDB
-	AudioEnabled           bool
+	CameraID     string
+	RTSPURL      string
+	Username     string
+	Password     string
+	SegmentDur   time.Duration
+	RingBufCap   int
+	DB           RecordingDB
+	AudioEnabled bool
+	// AudioInRecordings keeps the camera's real audio track in recorded
+	// segments (event spans in merged products). Default false — recordings
+	// are video-only unless enabled per camera; live preview and the audio
+	// trigger run off the pre-disk path and are unaffected.
+	AudioInRecordings      bool
 	FrameWatchdogTimeout   time.Duration // default 30s (0 = use defaultFrameWatchdogTimeout)
 	EventBus               *event.EventBus
 	DarkFrameFilterEnabled bool // skip dark/night segments (MJPEG/AVI only)
@@ -241,6 +246,19 @@ type codecDriver interface {
 // each take the muxer's own mutex), so concurrent video (writeFrames) and
 // audio (RTP callback) writes are safe by construction — the concern in #226
 // was the audio *config* fields, now migrated to the Tier-2 snapshot.
+// framePacket pairs one channel-delivered unit with its ARRIVAL time
+// (#506). Recording timestamps, rotation checks and the adaptive cadence
+// must follow arrival time, never the consumption-time wall clock: when the
+// writer goroutine blocks (big-segment finalize, SD stall, reconnect
+// backpressure) and then drains a backlog in a burst, consumption-time
+// timestamps collapse onto the same millisecond — collapsed dts breaks the
+// decode reference chain (field-found: duplicate-dts runs immediately before
+// missing-ref POC errors on cameras with TCP-timeout flaps).
+type framePacket struct {
+	data []byte
+	at   time.Time
+}
+
 type baseRecorder struct {
 	// driver provides codec-specific behavior (NAL parsing, track creation).
 	driver codecDriver
@@ -266,9 +284,12 @@ type baseRecorder struct {
 	// RTP callbacks under mu). muxer is published together with segStart and
 	// audioTrackID in createNewSegment so the audio callback observes an
 	// aligned (muxer, trackID, segStart) triplet.
-	muxer         *muxer.MP4Muxer
-	trackID       int
-	audioTrackID  int
+	muxer        *muxer.MP4Muxer
+	trackID      int
+	audioTrackID int
+	// ambientFile is the raw G.711 sidecar handle (nil unless
+	// adaptive.ambient_audio+ambient_archive; guarded by mu like muxer).
+	ambientFile   *os.File
 	curFinalPath  string
 	curTempPath   string
 	segStart      time.Time
@@ -289,7 +310,7 @@ type baseRecorder struct {
 	audio atomic.Pointer[audioConfig]
 
 	// Frame pipeline (written from RTP callback goroutine, read from writeFrames).
-	frameCh chan []byte
+	frameCh chan framePacket
 	dropped atomic.Int64
 	lastPTS atomic.Int64 // for PTS monotonicity check
 
@@ -540,7 +561,12 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 	// nil check per frame.
 	sparseAudio := false
 
-	for data := range b.frameCh {
+	for pkt := range b.frameCh {
+		// pkt.at is the unit's ARRIVAL time (#506) — every timestamp decision
+		// below (adaptive cadence, sample pts/duration, rotation) uses it so a
+		// backlog burst drained after a writer stall keeps real spacing instead
+		// of collapsing onto one wall-clock millisecond.
+		data := pkt.data
 		// Always parse NALUs to capture codec parameter sets (VPS/SPS/PPS), even
 		// in live-only mode (RecordEnabled=false). Live preview (HLS/WebRTC/WS)
 		// needs these via getCodecParams(); if we skip parsing here, the codec
@@ -583,7 +609,7 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 		// reach the disk; on a spike the retained GOP ring is flushed and
 		// full-rate writing resumes through the normal path below.
 		if b.adaptive != nil {
-			now := time.Now()
+			now := pkt.at
 			isIDR := b.driver.isIDR(typ)
 			spike, flush := b.adaptive.observe(nalu, isIDR, now)
 			if len(flush) > 0 {
@@ -607,8 +633,10 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			if b.adaptive.mode == adaptiveTimelapse && !spike {
 				if !b.adaptive.shouldWriteSparse(isIDR, now) {
 					// Sparse: the frame is retained in the GOP ring, not
-					// written; a later spike can still flush it.
-					if sa := b.adaptive.mode == adaptiveTimelapse; sa != sparseAudio {
+					// written; a later spike can still flush it. Ambient-audio
+					// cameras keep writing the audio track (#496): the merge
+					// renders it into the compressed timeline's atmosphere bed.
+					if sa := b.adaptive.mode == adaptiveTimelapse && !b.cfg.Adaptive.AmbientAudio; sa != sparseAudio {
 						sparseAudio = sa
 						b.audioSparse.Store(sa)
 					}
@@ -624,7 +652,7 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 					b.adaptive.lastSparseWrite = now
 				}
 			}
-			if sa := b.adaptive.mode == adaptiveTimelapse; sa != sparseAudio {
+			if sa := b.adaptive.mode == adaptiveTimelapse && !b.cfg.Adaptive.AmbientAudio; sa != sparseAudio {
 				sparseAudio = sa
 				b.audioSparse.Store(sa)
 			}
@@ -648,21 +676,23 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			continue
 		}
 
-		// Step 8: Create new segment if needed.
+		// Step 8: Create new segment if needed (anchored to this frame's
+		// arrival so pts start at zero for the first sample).
 		if b.muxer == nil {
-			if !b.createNewSegment() {
+			if !b.createNewSegment(pkt.at) {
 				continue
 			}
 		}
 
-		// Step 9: Write the NALU sample to the muxer.
-		now := time.Now()
-		pts := now.Sub(b.segStart)
-		duration := now.Sub(b.lastFrameTime)
+		// Step 9: Write the NALU sample to the muxer. pts/duration follow the
+		// frame's ARRIVAL time (#506) — a drained backlog keeps its real
+		// spacing instead of collapsing onto the drain moment.
+		pts := pkt.at.Sub(b.segStart)
+		duration := pkt.at.Sub(b.lastFrameTime)
 		if duration < time.Millisecond {
 			duration = time.Millisecond
 		}
-		b.lastFrameTime = now
+		b.lastFrameTime = pkt.at
 
 		if err := b.muxer.WriteSample(b.trackID, nalu, pts, duration); err != nil {
 			b.log.Error("failed to write sample",
@@ -676,8 +706,8 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			b.adaptive.markTailWritten()
 		}
 
-		// Step 10: Check segment duration rollover.
-		if time.Since(b.segStart) >= b.cfg.SegmentDur {
+		// Step 10: Check segment duration rollover (on the arrival axis).
+		if pkt.at.Sub(b.segStart) >= b.cfg.SegmentDur {
 			b.closeCurrentSegment()
 		}
 	}
@@ -710,15 +740,11 @@ func (b *baseRecorder) writeFlushedGOP(frames []gopFrame) {
 			if !f.isIDR {
 				continue // never start a segment on a P frame
 			}
-			if !b.createNewSegment() {
+			// The segment anchors to the flushed IDR's own capture time so
+			// pts = at - segStart >= 0 for the whole flushed chain (#473/#506).
+			if !b.createNewSegment(f.at) {
 				return
 			}
-			// createNewSegment stamps segStart with "now"; back-date it to
-			// the first flushed frame so pts = at - segStart >= 0. Published
-			// under mu like every segStart write (the audio callback reads it).
-			b.mu.Lock()
-			b.segStart = f.at
-			b.mu.Unlock()
 			b.lastFrameTime = f.at
 		}
 		pts := f.at.Sub(b.segStart)
@@ -840,7 +866,7 @@ func (b *baseRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) error
 // createNewSegment creates a new MP4 segment via the store, adds the
 // codec-specific video track (and audio track if configured), and stores
 // the muxer + segment metadata. Returns false on failure.
-func (b *baseRecorder) createNewSegment() bool {
+func (b *baseRecorder) createNewSegment(at time.Time) bool {
 	tempPath, finalPath, err := b.store.CreateSegment(b.cfg.CameraID, string(b.driver.segmentFormat()))
 	if err != nil {
 		b.log.Error("failed to create segment",
@@ -857,11 +883,11 @@ func (b *baseRecorder) createNewSegment() bool {
 	}
 	b.trackID = trackID
 
-	// Add audio track if audio config is available (read the immutable snapshot
-	// once — the audio config is set during connectAndRecord and read here from
-	// writeFrames; the snapshot makes this race-free, #226).
+	// Add audio track if audio config is available AND the camera keeps audio
+	// in recordings (default off — #496 follow-up). Live preview and the audio
+	// trigger read the pre-disk path and do not need the track.
 	var audioTrackID int
-	if a := b.audioSnapshot(); a != nil && len(a.muxerConfig) > 0 && a.codec != "" {
+	if a := b.audioSnapshot(); a != nil && len(a.muxerConfig) > 0 && a.codec != "" && b.cfg.AudioInRecordings {
 		aID, err := m.AddAudioTrack(a.codec, a.muxerConfig)
 		if err != nil {
 			b.log.Error("failed to add audio track",
@@ -875,16 +901,62 @@ func (b *baseRecorder) createNewSegment() bool {
 	// RTP callback (a different goroutine) observes an aligned triplet. Earlier
 	// audioTrackID was assigned outside this lock, so a callback could see a
 	// non-zero trackID before muxer was published (torn view) — fixed (#226).
+	// segStart anchors to the creating frame's ARRIVAL time (#506).
 	b.mu.Lock()
 	b.muxer = m
-	b.segStart = time.Now()
+	b.segStart = at
 	b.audioTrackID = audioTrackID
+	b.ambientFile = b.openAmbientSidecar(finalPath)
 	b.mu.Unlock()
 	b.curTempPath = tempPath
 	b.curFinalPath = finalPath
-	b.lastFrameTime = b.segStart
+	b.lastFrameTime = at
 	b.frameCount = 0
 	return true
+}
+
+// openAmbientSidecar opens the raw ambient-audio archive file
+// (<final>.g711) when adaptive.ambient_audio + ambient_archive are both on
+// (#496 playability option): the merge only carries the atmosphere bed, the
+// sidecar keeps the untouched recording for post-production. Called under mu
+// from createNewSegment; nil when disabled.
+func (b *baseRecorder) openAmbientSidecar(finalPath string) *os.File {
+	if b.cfg.Adaptive == nil || !b.cfg.Adaptive.AmbientAudio || !b.cfg.Adaptive.AmbientArchive {
+		return nil
+	}
+	f, err := os.OpenFile(finalPath+".g711", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		b.log.Warn("ambient archive sidecar unavailable", "camera_id", b.cfg.CameraID, "error", err)
+		return nil
+	}
+	return f
+}
+
+// writeAmbientArchive appends raw G.711 bytes to the sidecar (audio RTP
+// callback goroutine; snapshots the handle under mu like the muxer).
+func (b *baseRecorder) writeAmbientArchive(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	b.mu.Lock()
+	f := b.ambientFile
+	b.mu.Unlock()
+	if f == nil {
+		return
+	}
+	if _, err := f.Write(data); err != nil {
+		b.log.Warn("ambient archive write failed", "camera_id", b.cfg.CameraID, "error", err)
+	}
+}
+
+// closeAmbientSidecar closes the sidecar (segment lifecycle paths, under mu).
+func (b *baseRecorder) closeAmbientSidecar() {
+	if b.ambientFile != nil {
+		if err := b.ambientFile.Close(); err != nil {
+			b.log.Warn("ambient archive close failed", "camera_id", b.cfg.CameraID, "error", err)
+		}
+		b.ambientFile = nil
+	}
 }
 
 // closeCurrentSegment finalizes the current segment: closes the muxer,
@@ -897,7 +969,20 @@ func (b *baseRecorder) closeCurrentSegment() {
 	if b.muxer == nil {
 		return
 	}
+	// The retained GOP/audio rings' `written` markings refer to the segment
+	// being closed; a later timelapse-exit flush into a FRESH segment must
+	// write those frames instead of skipping them (issue #498: mid-GOP frames
+	// existed only in the closed file, so the skip produced missing refs).
+	if b.adaptive != nil {
+		b.adaptive.clearWritten()
+	}
+	if b.audioTrig != nil {
+		b.audioTrig.ClearWritten()
+	}
 	finishStart := time.Now()
+	b.mu.Lock()
+	b.closeAmbientSidecar()
+	b.mu.Unlock()
 	if err := b.muxer.Close(); err != nil {
 		b.log.Error("failed to close muxer",
 			"camera_id", b.cfg.CameraID, "error", err)
@@ -984,6 +1069,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 	b.mu.Lock()
 	b.muxer = nil
 	b.audioTrackID = 0
+	b.closeAmbientSidecar()
 	b.mu.Unlock()
 	b.curTempPath = ""
 	b.curFinalPath = ""
@@ -995,8 +1081,18 @@ func (b *baseRecorder) closeCurrentSegment() {
 // when storage recovers.
 func (b *baseRecorder) handleStorageFailure() {
 	if b.muxer != nil {
+		// The discarded segment's frames are on nowhere on disk — same
+		// written-flag reset as a clean rotation (issue #498).
+		if b.adaptive != nil {
+			b.adaptive.clearWritten()
+		}
+		if b.audioTrig != nil {
+			b.audioTrig.ClearWritten()
+		}
+		b.closeAmbientSidecar()
 		b.muxer.Close()
 		os.Remove(b.curTempPath)
+		os.Remove(b.curFinalPath + ".g711")
 		b.mu.Lock()
 		b.muxer = nil
 		b.curTempPath = ""

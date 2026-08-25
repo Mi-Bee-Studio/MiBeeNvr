@@ -55,7 +55,7 @@ func TestMergeMP4Segments_SameSPS(t *testing.T) {
 
 	// Merge
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err)
 
 	// Verify output file exists and has content
@@ -94,7 +94,7 @@ func TestMergeMP4Segments_DifferentSPS(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SPS/PPS mismatch")
 }
@@ -113,7 +113,7 @@ func TestMergeMP4Segments_SingleSegment(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
 	require.NoError(t, err)
 
 	// Verify merged file is parseable and has same samples
@@ -125,7 +125,7 @@ func TestMergeMP4Segments_SingleSegment(t *testing.T) {
 
 func TestMergeMP4Segments_EmptyList(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "merged.mp4")
-	err := MergeMP4Segments(context.Background(), nil, outputPath)
+	_, err := MergeMP4Segments(context.Background(), nil, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no segments")
 }
@@ -138,8 +138,11 @@ func TestMergeMP4Segments_ThreeSegments(t *testing.T) {
 	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
 	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
 
+	// seg2 starts mid-GOP: its two leading P-frames must be dropped by the
+	// keyframe alignment (the OLD behavior — stitching them in with dangling
+	// references — is exactly the #488 gray-screen corruption).
 	seg1 := createH264SegmentWithSamples(t, dir, "seg1.mp4", sps, pps, [][]byte{idrNAL})
-	seg2 := createH264SegmentWithSamples(t, dir, "seg2.mp4", sps, pps, [][]byte{pNAL, pNAL})
+	seg2 := createH264SegmentWithSamples(t, dir, "seg2.mp4", sps, pps, [][]byte{pNAL, pNAL, idrNAL, pNAL})
 	seg3 := createH264SegmentWithSamples(t, dir, "seg3.mp4", sps, pps, [][]byte{idrNAL, pNAL})
 
 	info1, err := ParseSegment(seg1)
@@ -150,18 +153,22 @@ func TestMergeMP4Segments_ThreeSegments(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2, info3}, outputPath)
+	stats, err := MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2, info3}, outputPath)
 	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 2}, stats.Included)
+	require.Equal(t, 2, stats.LeadingDropped[1])
 
 	merged, err := ParseSegment(outputPath)
 	require.NoError(t, err)
-	// 1 + 2 + 2 = 5 samples
+	// 1 + (4-2 aligned) + 2 = 5 samples
 	require.Equal(t, 5, merged.SampleCount)
 	require.Equal(t, 165*time.Millisecond, merged.TotalDuration)
 
-	// Keyframes at positions 0 and 3 (seg1 IDR + seg3 IDR)
+	// Keyframes at the start of every segment run: seg1 IDR (0), seg2's
+	// aligned IDR (1), seg3 IDR (3). Sample 1 must be the keyframe — a merged
+	// stream whose runs start on P-frames is the #488 corruption shape.
 	require.True(t, merged.Samples[0].IsKeyFrame)
-	require.False(t, merged.Samples[1].IsKeyFrame)
+	require.True(t, merged.Samples[1].IsKeyFrame)
 	require.False(t, merged.Samples[2].IsKeyFrame)
 	require.True(t, merged.Samples[3].IsKeyFrame)
 	require.False(t, merged.Samples[4].IsKeyFrame)
@@ -176,8 +183,10 @@ func TestMergeMP4Segments_H265(t *testing.T) {
 	idrNAL := []byte{0x27, 0x01, 0xaf, 0x15, 0x6a}
 	pNAL := []byte{0x03, 0x20, 0x10, 0x00}
 
+	// seg2 starts with a P-frame — the head is dropped by keyframe alignment
+	// (#488), so its IDR lands directly after seg1's IDR.
 	seg1 := createH265SegmentWithSamples(t, dir, "h265_seg1.mp4", vps, sps, pps, [][]byte{idrNAL})
-	seg2 := createH265SegmentWithSamples(t, dir, "h265_seg2.mp4", vps, sps, pps, [][]byte{pNAL, pNAL})
+	seg2 := createH265SegmentWithSamples(t, dir, "h265_seg2.mp4", vps, sps, pps, [][]byte{pNAL, idrNAL, pNAL})
 
 	info1, err := ParseSegment(seg1)
 	require.NoError(t, err)
@@ -185,14 +194,16 @@ func TestMergeMP4Segments_H265(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged_h265.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err)
 
 	merged, err := ParseSegment(outputPath)
 	require.NoError(t, err)
 	require.Equal(t, "h265", merged.Codec)
-	require.Equal(t, 3, merged.SampleCount)
+	require.Equal(t, 3, merged.SampleCount) // 1 + (3-1 aligned)
 	require.Equal(t, 99*time.Millisecond, merged.TotalDuration)
+	// The second run must start at the aligned IDR, not a dangling P-frame.
+	require.True(t, merged.Samples[1].IsKeyFrame)
 }
 
 // createH265SegmentWithSamples creates an H.265 MP4 with the given VPS/SPS/PPS and NALU samples.
@@ -340,7 +351,7 @@ func TestMergeMP4Segments_WithAudio(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err)
 
 	merged, err := ParseSegment(outputPath)
@@ -382,7 +393,7 @@ func TestMergeMP4Segments_AudioConfigMismatch(t *testing.T) {
 	// (video-only output). This handles camera reconnect scenarios where
 	// audio negotiation changes mid-session.
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err, "merge should succeed with audio dropped")
 
 	// Verify output is video-only (no audio).
@@ -414,7 +425,7 @@ func TestMergeMP4Segments_MixedAudioPresence(t *testing.T) {
 	// This is the real-world scenario: camera reconnected after audio_enabled
 	// was toggled, or G.711 negotiation succeeded/failed mid-session.
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err, "merge should succeed with audio dropped")
 
 	// Verify output is video-only.
@@ -433,10 +444,12 @@ func TestMergeMP4Segments_H265WithAudio(t *testing.T) {
 	idrNAL := []byte{0x27, 0x01, 0xaf, 0x15, 0x6a}
 	pNAL := []byte{0x03, 0x20, 0x10, 0x00}
 
+	// seg2 starts at an IDR so the audio counts stay exact; the mid-GOP head
+	// + audio-head trim path is covered by TestAlignToKeyframe_TrimsAudioHead.
 	seg1 := createH265SegmentWithAudio(t, dir, "h265_seg1.mp4", vps, sps, pps,
 		[][]byte{idrNAL}, testAudioConfig, [][]byte{testAACFrame, testAACFrame})
 	seg2 := createH265SegmentWithAudio(t, dir, "h265_seg2.mp4", vps, sps, pps,
-		[][]byte{pNAL, pNAL}, testAudioConfig, [][]byte{testAACFrame})
+		[][]byte{idrNAL, pNAL}, testAudioConfig, [][]byte{testAACFrame})
 
 	info1, err := ParseSegment(seg1)
 	require.NoError(t, err)
@@ -444,7 +457,7 @@ func TestMergeMP4Segments_H265WithAudio(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged_h265.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.NoError(t, err)
 
 	merged, err := ParseSegment(outputPath)
@@ -479,7 +492,7 @@ func TestMergeMP4Segments_CodecMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{h264Info, h265Info}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{h264Info, h265Info}, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "codec mismatch")
 }
@@ -502,7 +515,7 @@ func TestMergeMP4Segments_VPSMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "VPS mismatch")
 }
@@ -520,9 +533,11 @@ func TestMergeMP4Segments_EmptyFirstSegment(t *testing.T) {
 		PPS:   pps,
 	}
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err := MergeMP4Segments(context.Background(), []*SegmentInfo{emptyInfo}, outputPath)
+	_, err := MergeMP4Segments(context.Background(), []*SegmentInfo{emptyInfo}, outputPath)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "empty sample table")
+	// Since keyframe alignment (#488) an empty/segment sample-less segment is
+	// classified as keyframe-less rather than hitting the sample-table check.
+	require.ErrorIs(t, err, ErrNoKeyframe)
 }
 
 func TestMergeMP4Segments_ContextCancelled(t *testing.T) {
@@ -541,7 +556,7 @@ func TestMergeMP4Segments_ContextCancelled(t *testing.T) {
 	cancel()
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(ctx, []*SegmentInfo{info}, outputPath)
+	_, err = MergeMP4Segments(ctx, []*SegmentInfo{info}, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "context canceled")
 }
@@ -560,7 +575,7 @@ func TestMergeMP4Segments_SpsParseWarning(t *testing.T) {
 	require.NoError(t, err)
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
 	require.NoError(t, err)
 
 	merged, err := ParseSegment(outputPath)
@@ -582,7 +597,7 @@ func TestMergeMP4Segments_EmptyFilePath(t *testing.T) {
 	info.FilePath = ""
 
 	outputPath := filepath.Join(dir, "merged.mp4")
-	err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outputPath)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty FilePath")
 }
