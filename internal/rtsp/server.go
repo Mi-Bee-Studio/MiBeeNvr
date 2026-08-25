@@ -165,19 +165,29 @@ func NewServer(cfg Config, provider StreamProvider) *Server {
 	return s
 }
 
-// Start binds the RTSP listener and blocks serving until Stop/Close or a
-// fatal listener error. Run in a goroutine (mirrors the RTMP server shape).
+// Start binds the RTSP listener (blocking) and spawns the serve loop. The
+// whole gortsplib Start runs under s.mu so a concurrent Stop either sees the
+// server fully initialized (Close is safe) or not started at all — gortsplib
+// panics on Close-during-Start, and App.Stop can race the service's start
+// goroutine on fast shutdowns (CI TestRunFree_StopJoinsBackgroundGoroutines).
 func (s *Server) Start(_ context.Context) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.stopped {
-		s.mu.Unlock()
 		return nil
 	}
+	if err := s.gs.Start(); err != nil {
+		return err
+	}
 	s.started = true
-	s.mu.Unlock()
+	go func() {
+		if err := s.gs.Wait(); err != nil {
+			rtspLogger.Error("rtsp output server terminated", "error", err)
+		}
+	}()
 	rtspLogger.Info("rtsp output server listening", "addr", s.cfg.Addr,
 		"auth", s.cfg.Username != "" || s.cfg.Password != "")
-	return s.gs.StartAndWait()
+	return nil
 }
 
 // Stop tears the server down: closes all camera streams (disconnecting their
