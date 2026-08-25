@@ -422,3 +422,236 @@ func TestStartAuthCacheCleanup_Idempotent(t *testing.T) {
 	wg.Wait()
 	// Reaching here without panicking/deadlocking is the success condition.
 }
+
+// TestIsLocalIP verifies the loopback classification used by the local-access
+// bypass. IsLocalIP deliberately matches ONLY loopback — NIC addresses must NOT
+// be treated as local, because behind a reverse proxy or Docker published port
+// every remote request arrives from 127.0.0.1 and would otherwise be trusted.
+func TestIsLocalIP(t *testing.T) {
+	// Loopback (both families, with and without port/brackets).
+	for _, addr := range []string{
+		"127.0.0.1",
+		"127.0.0.1:9090",
+		"127.0.0.1:12345",
+		"::1",
+		"[::1]",
+		"[::1]:9090",
+		"localhost", // not an IP literal → false (hostname resolution is NOT attempted)
+	} {
+		expect := addr != "localhost"
+		if got := IsLocalIP(addr); got != expect {
+			t.Errorf("IsLocalIP(%q) = %v, want %v", addr, got, expect)
+		}
+	}
+
+	// IPv4-mapped IPv6 loopback must classify as local (canonicalized to ::1).
+	if !IsLocalIP("::ffff:127.0.0.1") {
+		t.Error("IsLocalIP should accept ::ffff:127.0.0.1 (IPv4-mapped loopback)")
+	}
+
+	// Remote / invalid inputs must never classify as local — including the
+	// machine's OWN non-loopback NIC address: a proxied request's RemoteAddr is
+	// the proxy's address, so NIC IPs must not grant the bypass.
+	for _, addr := range []string{
+		"",
+		" ",
+		"192.0.2.1",
+		"192.0.2.1:1234",
+		"8.8.8.8:53",
+		"2001:db8::1",
+		"[2001:db8::1]:9090",
+		"no-such-host",
+		"169.254.0.1", // link-local — not loopback
+	} {
+		if IsLocalIP(addr) {
+			t.Errorf("IsLocalIP(%q) = true, want false", addr)
+		}
+	}
+}
+
+// TestHasProxyHeaders verifies that requests carrying evidence of an upstream
+// proxy/gateway are detected, so the local bypass is refused for them.
+func TestHasProxyHeaders(t *testing.T) {
+	if HasProxyHeaders(nil) {
+		t.Error("HasProxyHeaders(nil) = true, want false")
+	}
+
+	base := httptest.NewRequest(http.MethodGet, "/", nil)
+	if HasProxyHeaders(base) {
+		t.Error("plain request must not be flagged as proxied")
+	}
+
+	for _, h := range []string{"X-Forwarded-For", "X-Real-IP", "Forwarded"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set(h, "198.51.100.7")
+		if !HasProxyHeaders(req) {
+			t.Errorf("HasProxyHeaders with %s = false, want true", h)
+		}
+	}
+}
+
+// TestLocalRequestBypassesAuth verifies that a loopback request with a loopback
+// Host header bypasses auth ONLY when the operator opted in via
+// AuthProvider.LocalBypass. The bypass is opt-in (default disabled) so reverse-
+// proxy and Docker published-port deployments — where every request arrives
+// from 127.0.0.1 — never inherit it.
+func TestLocalRequestBypassesAuth(t *testing.T) {
+	hash, _ := HashPassword("secret")
+	provider := staticProvider("admin", hash)
+	provider.LocalBypass = func() bool { return true }
+	mw, _ := NewAuthMiddleware(provider, "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, tc := range []struct{ remote, host string }{
+		{"127.0.0.1:1234", "localhost:9090"},
+		{"127.0.0.1:1234", "127.0.0.1:9090"},
+		{"[::1]:1234", "[::1]:9090"},
+		{"[::1]:1234", "localhost:9090"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/cameras", nil)
+		req.RemoteAddr = tc.remote
+		req.Host = tc.host
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("loopback request from %s with Host %s should bypass auth, got %d", tc.remote, tc.host, w.Code)
+		}
+	}
+}
+
+// TestLocalBypassRequiresLoopbackHost verifies the Host check: even with a
+// loopback RemoteAddr and local_bypass enabled, a request whose Host names a
+// non-loopback origin (a malicious web page, a LAN IP, or a DNS-rebinding
+// domain) must NOT bypass auth.
+func TestLocalBypassRequiresLoopbackHost(t *testing.T) {
+	hash, _ := HashPassword("secret")
+	provider := staticProvider("admin", hash)
+	provider.LocalBypass = func() bool { return true }
+	mw, _ := NewAuthMiddleware(provider, "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, host := range []string{
+		"example.com",       // default httptest host — a normal web page
+		"evil.com:9090",     // attacker-controlled page
+		"192.168.1.50:9090", // LAN IP reached from the host
+		"10.0.0.5:9090",     // private IP via hosts-file rebinding
+		"nvr.local:9090",    // hostname resolving to loopback (DNS rebinding)
+		"",                  // empty Host
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/cameras", nil)
+		req.RemoteAddr = "127.0.0.1:1234" // loopback transport
+		req.Host = host
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code,
+			"loopback RemoteAddr with Host %q must NOT bypass auth", host)
+	}
+}
+
+// TestLocalBypassDisabledByDefault verifies the safe default: without an
+// explicit LocalBypass(true), a loopback request still requires credentials.
+func TestLocalBypassDisabledByDefault(t *testing.T) {
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("admin", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Host = "localhost:9090" // even a loopback Host does not grant bypass
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusUnauthorized, w.Code,
+		"loopback request must NOT bypass when LocalBypass is unset (default off)")
+
+	// Explicit credentials still work on loopback.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/cameras", nil)
+	req2.RemoteAddr = "127.0.0.1:1234"
+	req2.Host = "localhost:9090"
+	req2.Header.Set("Authorization", "Basic "+basic("admin", "secret"))
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code, "valid credentials on loopback must pass")
+}
+
+// TestLocalBypassRefusedWhenProxied verifies the critical security guard: a
+// loopback RemoteAddr WITH proxy/gateway headers (reverse-proxy topology) must
+// NEVER bypass auth, even when local_bypass is enabled.
+func TestLocalBypassRefusedWhenProxied(t *testing.T) {
+	hash, _ := HashPassword("secret")
+	provider := staticProvider("admin", hash)
+	provider.LocalBypass = func() bool { return true }
+	mw, _ := NewAuthMiddleware(provider, "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, h := range []string{"X-Forwarded-For", "X-Real-IP", "Forwarded"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/cameras", nil)
+		req.RemoteAddr = "127.0.0.1:1234" // proxy's connection source
+		req.Header.Set(h, "198.51.100.7")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code,
+			"proxied request on loopback with %s must NOT bypass auth", h)
+	}
+}
+
+// TestLocalRequestSeesSetupRequired verifies the setup check runs BEFORE the
+// local bypass: even a loopback request hits 503 SETUP_REQUIRED while no
+// password is configured, so the first-time wizard is always shown.
+func TestLocalRequestSeesSetupRequired(t *testing.T) {
+	provider := staticProvider("admin", "")
+	provider.LocalBypass = func() bool { return true }
+	mw, _ := NewAuthMiddleware(provider, "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"loopback request without a configured password must see SETUP_REQUIRED")
+	require.Contains(t, w.Body.String(), "setup required")
+}
+
+// TestRemoteRequestStillRequiresAuth verifies the bypass does NOT apply to
+// remote clients: requests from a non-local RemoteAddr are still rejected
+// without valid credentials.
+func TestRemoteRequestStillRequiresAuth(t *testing.T) {
+	hash, _ := HashPassword("secret")
+	mw, _ := NewAuthMiddleware(staticProvider("admin", hash), "", AuthRateLimitConfig{})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// No credentials.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.168.1.50:1234"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusUnauthorized, w.Code, "remote request without credentials must be rejected")
+
+	// With valid credentials.
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	req2.RemoteAddr = "192.168.1.50:1234"
+	req2.Header.Set("Authorization", "Basic "+basic("admin", "secret"))
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code, "remote request with valid credentials must pass")
+
+	// Wrong password must still fail.
+	req3 := httptest.NewRequest(http.MethodGet, "/", nil)
+	req3.RemoteAddr = "192.168.1.50:1234"
+	req3.Header.Set("Authorization", "Basic "+basic("admin", "wrong"))
+	w3 := httptest.NewRecorder()
+	handler.ServeHTTP(w3, req3)
+	require.Equal(t, http.StatusUnauthorized, w3.Code, "remote request with wrong credentials must be rejected")
+}

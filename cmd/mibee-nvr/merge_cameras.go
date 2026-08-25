@@ -281,8 +281,16 @@ func runMergeCameras() int {
 
 	// EXECUTE MODE below.
 
-	if isPortOpen("localhost:9090") {
-		fmt.Fprintln(os.Stderr, "Error: NVR appears to be running on port 9090.")
+	// Detect a running NVR by probing the ACTUAL configured listen address, not
+	// a hard-coded :9090 — operators can remap server.listen (e.g. :9191) to
+	// avoid a host-port conflict, and probing the wrong port would let the merge
+	// run while the NVR is live, corrupting the SQLite DB via concurrent access.
+	// Use the configured host too: when server.listen binds a specific NIC IP
+	// (e.g. 192.168.1.5:9090), probe that IP; wildcard binds (":9090",
+	// "0.0.0.0:9090") fall back to localhost.
+	probeAddr := net.JoinHostPort(listenHostOf(cfg.Server.Listen), listenPortOf(cfg.Server.Listen))
+	if isPortOpen(probeAddr) {
+		fmt.Fprintf(os.Stderr, "Error: NVR appears to be running on %s.\n", probeAddr)
 		fmt.Fprintln(os.Stderr, "  Please stop the NVR first (systemctl stop mibee-nvr)")
 		fmt.Fprintln(os.Stderr, "  before running merge-cameras --execute.")
 		return 1
@@ -560,6 +568,42 @@ func isPortOpen(addr string) bool {
 	}
 	conn.Close()
 	return true
+}
+
+// listenHostOf extracts the host portion from a server.listen address such as
+// ":9090", "0.0.0.0:9090", "192.168.1.5:8080", "localhost:9090", or a bare
+// "9090". A blank/unspecified host (":9090", "0.0.0.0:9090", "[::]:9090") maps
+// to "localhost" so the running-instance probe connects to a reachable loopback
+// address; an explicit host (a NIC IP or hostname) is returned verbatim.
+func listenHostOf(listen string) string {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		// Bare port (no colon) — no host specified.
+		return "localhost"
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return "localhost"
+	}
+	return host
+}
+
+// listenPortOf extracts the numeric port from a server.listen address such as
+// ":9090", "0.0.0.0:9090", "192.168.1.5:8080", or a bare "9090". Falls back to
+// "9090" (the default listen port) on any parse failure so the running-instance
+// probe still targets something reasonable.
+func listenPortOf(listen string) string {
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		// Bare port (no colon) — treat the whole value as the port.
+		if t := strings.TrimSpace(listen); t != "" && !strings.Contains(t, ":") {
+			port = t
+		}
+	}
+	if port == "" {
+		port = "9090"
+	}
+	return port
 }
 
 func printMergeCamerasUsage() {

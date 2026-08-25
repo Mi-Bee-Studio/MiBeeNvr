@@ -16,6 +16,7 @@ auth:
   username: "admin"
   password_hash: ""
   password: ""
+  local_bypass: false             # Skip login for browsers on the NVR host machine (localhost) (default off)
 cameras:
   - id: "cam1"
     name: "Camera Name"
@@ -227,6 +228,14 @@ version: "1.0"
 - **Description**: Plaintext password for convenient initial setup. On first run, the server auto-hashes this value and writes it to `password_hash`, then clears the `password` field.
 - **Priority**: Only used when `password_hash` is empty
 - **Example**: `"admin123"`
+
+### `auth.local_bypass`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Allows browsers running on the NVR host machine itself (loopback connections `127.0.0.1` / `::1` with no proxy/gateway headers) to skip the login page. The frontend learns this via the `local_access` field of `/api/health`.
+- **Security warning**: For **bare-metal (systemd / native binary) deployments only**. **NEVER enable behind a reverse proxy (Caddy/nginx) or Docker published ports** — in those topologies every request arrives from `127.0.0.1`, so enabling this would let ALL remote clients bypass authentication.
+- **Required conditions** (all three): `local_bypass: true`, the request originates from loopback (RemoteAddr 127.0.0.1/::1), **the Host header is `localhost` / `127.0.0.1` / `[::1]` after stripping the port**, and no `X-Forwarded-For` / `X-Real-IP` / `Forwarded` proxy header is present. Access via the host LAN IP or hostname does NOT bypass (intentionally conservative; also blocks malicious web pages and DNS rebinding).
+- **Example**: `local_bypass: true`
 
 ## Camera Configuration
 

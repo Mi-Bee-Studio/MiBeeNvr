@@ -57,6 +57,11 @@ export interface HealthResponse {
   checks: Record<string, HealthCheck>;
   uptime: string;
   setup_required?: boolean;
+  // True only when the backend considers this request "local": a loopback
+  // connection (RemoteAddr 127.0.0.1/::1) with a loopback Host header and no
+  // proxy/gateway headers, AND auth.local_bypass enabled. The SPA uses it to
+  // skip the login page for local access.
+  local_access?: boolean;
 }
 
 export interface SystemStats {
@@ -156,9 +161,36 @@ function maybeApplyRenewedToken(response: Response): void {
   localStorage.setItem(TOKEN_KEY, JSON.stringify({ token: renewed, expiresAt } as StoredSession));
 }
 
-// Check if user is authenticated (has a non-expired session token).
+// Local-access bypass state. When true, the browser is running on the machine
+// that hosts the NVR itself AND the operator enabled auth.local_bypass: the
+// backend then skips credential checks for loopback requests with no
+// proxy/gateway headers, and the SPA mirrors that by skipping the login page.
+// (The exact gate lives in internal/middleware/auth.go — IsLocalIP only
+// matches loopback, HasProxyHeaders blocks proxied requests, and the provider
+// toggles on auth.local_bypass.)
+let localBypass = false;
+
+// Query /api/health (public) to learn whether the backend considers the current
+// request local (see /api/health local_access). Called once during app
+// bootstrap, before the router gates on isAuthenticated(). Bounded by a 3s
+// timeout so a hung backend cannot block mount() forever.
+export async function checkLocalBypass(): Promise<boolean> {
+  try {
+    const health = await healthCheck(AbortSignal.timeout(3000));
+    if (health.local_access) {
+      localBypass = true;
+    }
+  } catch {
+    // Health check failed or timed out — leave localBypass false; the login
+    // page will show.
+  }
+  return localBypass;
+}
+
+// Check if user is authenticated (has a non-expired session token, OR the
+// browser is running on the NVR host machine and local access is bypassed).
 export function isAuthenticated(): boolean {
-  return getToken() !== null;
+  return getToken() !== null || localBypass;
 }
 
 // Get the Authorization header value for API calls: "Bearer <session-token>".
@@ -183,10 +215,25 @@ export const API_BASE = `${APP_BASE}/api`;
 export async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
 
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
   };
+  if (options.headers) {
+    // HeadersInit may be a Headers object, an array of [name, value] tuples, or
+    // a plain record — normalize each form into the mutable record so the
+    // Authorization header can be added below.
+    if (options.headers instanceof Headers) {
+      options.headers.forEach((v, k) => {
+        headers[k] = v;
+      });
+    } else if (Array.isArray(options.headers)) {
+      for (const [k, v] of options.headers) {
+        headers[k] = v;
+      }
+    } else {
+      Object.assign(headers, options.headers);
+    }
+  }
 
   const authHeader = getAuthHeader();
   if (authHeader) {

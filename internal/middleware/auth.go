@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,6 +14,89 @@ import (
 )
 
 var logger = slog.Default().With("component", "auth")
+
+// IsLocalIP reports whether addr is a loopback address of this machine
+// (127.0.0.1 or ::1). addr may be a bare IP ("127.0.0.1"), an IPv6 address
+// with brackets ("[::1]"), or an IP with a port suffix ("127.0.0.1:9090",
+// "[::1]:9090").
+//
+// Deliberately limited to LOOPBACK only. When a request arrives through a
+// reverse proxy, a load balancer, or a Docker published port, RemoteAddr
+// observes the proxy's connection source IP — commonly 127.0.0.1 or a
+// docker-proxy address — so trusting the machine's NIC addresses (or RemoteAddr
+// in general) would let any remote client masquerade as "local" and bypass
+// authentication. A loopback RemoteAddr combined with the ABSENCE of any
+// forwarding headers (see HasProxyHeaders) is the only signal safe enough to
+// act on, and even then the middleware only applies the bypass when explicitly
+// enabled (AuthProvider.LocalBypass).
+func IsLocalIP(addr string) bool {
+	host := strings.TrimSpace(addr)
+	if host == "" {
+		return false
+	}
+	// Strip an IPv6 bracket pair ("[::1]" from "[::1]:9090").
+	if strings.HasPrefix(host, "[") {
+		if idx := strings.Index(host, "]"); idx != -1 {
+			host = host[1:idx]
+		}
+	}
+	// Strip a trailing ":port" for plain IPv4 ("127.0.0.1:9090"). Bare IPv6
+	// with a port but without brackets ("::1:9090") is invalid and fails to
+	// parse — callers must bracket it ("[::1]:9090").
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// HasProxyHeaders reports whether the request carries evidence of an upstream
+// proxy or gateway: X-Forwarded-For, X-Real-IP, or the RFC 7239 Forwarded
+// header. When any of these is present, r.RemoteAddr observes the PROXY's
+// address rather than the client's, so a loopback RemoteAddr is no longer proof
+// of a local browser and the local-auth bypass must not apply.
+func HasProxyHeaders(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	return r.Header.Get("X-Forwarded-For") != "" ||
+		r.Header.Get("X-Real-IP") != "" ||
+		r.Header.Get("Forwarded") != ""
+}
+
+// IsBypassEligible reports whether a request qualifies for the local-access
+// bypass. All three conditions must hold:
+//
+//  1. no proxy/gateway headers (HasProxyHeaders) — blocks reverse proxies,
+//     which terminate TLS and forward to loopback with RemoteAddr=127.0.0.1;
+//  2. RemoteAddr is an actual loopback connection (IsLocalIP) — the request
+//     truly came from a program on this machine;
+//  3. the request's Host header names a loopback address (localhost / 127.0.0.1 /
+//     ::1) after stripping the port. This blocks two threats that RemoteAddr
+//     alone cannot: a malicious web page open in the host's browser (it can
+//     reach http://localhost:9090 — especially WebSocket — from any origin;
+//     the Host will be its own page's host, not localhost), and DNS rebinding
+//     (the browser resolves an attacker domain to 127.0.0.1, keeping Host =
+//     attacker.com while RemoteAddr becomes loopback).
+//
+// The operator additionally opts in via AuthProvider.LocalBypass; this function
+// only judges the request's transport/origin characteristics. Kept as one shared
+// helper so the middleware and `handleHealth`'s local_access field cannot drift
+// apart.
+func IsBypassEligible(r *http.Request) bool {
+	if r == nil || HasProxyHeaders(r) || !IsLocalIP(r.RemoteAddr) {
+		return false
+	}
+	host := strings.TrimSpace(r.Host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	// Accept the explicit loopback literals AND the "localhost" hostname
+	// (browsers opening http://localhost:9090 send Host: localhost:9090).
+	// Hostnames are otherwise NOT resolved, so a rebinding / external name
+	// never passes.
+	return strings.EqualFold(strings.Trim(host, "[]"), "localhost") || IsLocalIP(host)
+}
 
 const (
 	authCacheTTL = 5 * time.Minute
@@ -38,9 +122,19 @@ type AuthRateLimitConfig struct {
 
 // AuthProvider returns the current username and effective password hash.
 // Used by the auth middleware to dynamically read credentials (e.g. after setup).
+//
+// LocalBypass, when non-nil and returning true, allows requests originating
+// from the NVR host machine's own loopback (and carrying NO proxy/gateway
+// headers) to skip credential checks — the "browser on the host machine"
+// convenience. It defaults to OFF (nil = disabled) so reverse-proxy and Docker
+// published-port deployments can never be tricked into treating a proxied
+// connection as local. See NewAuthMiddleware for the full bypass conditions.
 type AuthProvider struct {
 	GetUsername func() string
 	GetHash     func() string
+	// LocalBypass reports whether the local-access bypass is enabled. Called on
+	// every local-looking request; nil means disabled.
+	LocalBypass func() bool
 }
 
 // NewAuthMiddleware returns a middleware that protects endpoints with HTTP Basic auth.
@@ -109,8 +203,6 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 			}
 
 			// Dynamic hash: prefer provider's current value (supports setup),
-
-			// Dynamic hash: prefer provider's current value (supports setup),
 			// fall back to auto-hashed value from initialization.
 			currentHash := provider.GetHash()
 			if strings.TrimSpace(currentHash) == "" {
@@ -119,12 +211,36 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 			currentUsername := provider.GetUsername()
 
 			if strings.TrimSpace(currentHash) == "" {
-				// No password configured — reject all requests with setup guidance
+				// No password configured — reject all requests with setup
+				// guidance, even local ones: the first-time setup wizard must
+				// be shown until a password actually exists.
 				recordAuthAttempt("no_password")
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("WWW-Authenticate", `Basic realm="MiBee NVR"`)
 				w.WriteHeader(http.StatusServiceUnavailable)
 				w.Write([]byte(`{"error":"setup required","code":"SETUP_REQUIRED"}`))
+				return
+			}
+
+			// Local-machine access bypass (placed AFTER the setup check so a
+			// password-less install still forces the setup wizard). It applies
+			// only when:
+			//   1. IsBypassEligible — loopback RemoteAddr + loopback Host header
+			//      + no proxy/gateway headers. The Host check blocks malicious web
+			//      pages open in the host's browser (they can reach
+			//      http://localhost:9090, especially WebSocket, from any origin)
+			//      and DNS-rebinding attacks whose Host stays attacker-controlled
+			//      while RemoteAddr resolves to loopback;
+			//   2. the operator explicitly enabled it via AuthProvider
+			//      (LocalBypass). Default OFF — reverse-proxy and Docker
+			//      published-port deployments must never auto-bypass.
+			if IsBypassEligible(r) &&
+				provider.LocalBypass != nil && provider.LocalBypass() {
+				recordAuthAttempt("success")
+				if rateLimit.Enabled {
+					authFailures.Delete(ip)
+				}
+				next.ServeHTTP(w, r)
 				return
 			}
 

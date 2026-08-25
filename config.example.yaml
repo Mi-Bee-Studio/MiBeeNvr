@@ -47,6 +47,20 @@ auth:
   username: "admin"
   password_hash: ""  # Use `mibee-nvr hash-password <password>` to generate
   # password: ""      # Or set plaintext here (auto-hashed on first start)
+  # local_bypass: false  # DEFAULT FALSE. When true, a browser running on the NVR
+  #                      # host machine itself skips the login page — only when the
+  #                      # connection is loopback AND Host is localhost/127.0.0.1
+  #                      # /[::1] with no proxy headers. LAN-IP/hostname access
+  #                      # does NOT bypass (blocks malicious pages & DNS rebinding).
+  #                      # ONLY enable on bare metal (systemd/native) installs.
+  #                      # MUST stay off behind a reverse proxy (Caddy/nginx) or
+  #                      # Docker published ports: there every proxied request
+  #                      # arrives from 127.0.0.1, and enabling this would bypass
+  #                      # auth for ALL remote clients.
+  # rate_limit:              # Optional auth-failure rate limiting (default off)
+  #   enabled: false         #   enable to throttle brute-force attempts
+  #   max_failures: 20       #   lock an IP after this many failures
+  #   window_minutes: 1      #   within this many minutes
 
 # Camera configuration — add your cameras here
 # Each camera must have a unique ID and valid URL with scheme + host

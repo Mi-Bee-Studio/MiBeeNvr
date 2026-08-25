@@ -151,6 +151,14 @@ type AuthConfig struct {
 	PasswordHash string          `yaml:"password_hash"`
 	Password     string          `yaml:"password"`
 	RateLimit    RateLimitConfig `yaml:"rate_limit"`
+	// LocalBypass lets browsers running on the NVR host machine itself
+	// (loopback connections with no proxy/gateway headers) skip the login page.
+	// Defaults to false — reverse-proxy and Docker published-port deployments
+	// MUST keep it off: in those topologies every proxied request reaches the
+	// server from 127.0.0.1, and enabling this would bypass auth for ALL remote
+	// clients. On bare metal (systemd/native), opening http://localhost:9090 on
+	// the host is the only loopback access, so opting in is safe.
+	LocalBypass *bool `yaml:"local_bypass"` // default false
 }
 
 // RateLimitConfig controls auth failure rate limiting.

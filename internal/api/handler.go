@@ -50,7 +50,13 @@ type HealthResponse struct {
 	Checks        map[string]HealthCheck `json:"checks"`
 	Uptime        string                 `json:"uptime"`
 	SetupRequired bool                   `json:"setup_required"`
-	Cameras       *CameraHealthSummary   `json:"cameras,omitempty"`
+	// LocalAccess is true only when the request is genuinely from a browser on
+	// the NVR host machine: a loopback connection with no proxy/gateway headers
+	// AND auth.local_bypass is enabled. The frontend uses it to skip the login
+	// page for local access. Derived from middleware.IsLocalIP + HasProxyHeaders
+	// + config.Auth.LocalBypass in handleHealth.
+	LocalAccess bool                 `json:"local_access"`
+	Cameras     *CameraHealthSummary `json:"cameras,omitempty"`
 	// DeviceID / DeviceName give LAN clients a stable identity to anchor on
 	// instead of an IP address (#330). Empty until the config provides them
 	// (the ID is generated and persisted on first config load).
