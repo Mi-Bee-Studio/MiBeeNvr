@@ -100,8 +100,10 @@ func (ts *testServer) waitReady() {
 	tcp := gortsplib.ProtocolTCP
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		c := &gortsplib.Client{Scheme: u.Scheme, Host: u.Host, Protocol: &tcp,
-			ReadTimeout: time.Second, WriteTimeout: time.Second}
+		c := &gortsplib.Client{
+			Scheme: u.Scheme, Host: u.Host, Protocol: &tcp,
+			ReadTimeout: time.Second, WriteTimeout: time.Second,
+		}
 		if err := c.Start(); err == nil {
 			_, err := c.Options(u)
 			c.Close()
@@ -121,8 +123,10 @@ func dialClient(t *testing.T, rawURL string) *gortsplib.Client {
 	u, err := base.ParseURL(rawURL)
 	require.NoError(t, err)
 	tcp := gortsplib.ProtocolTCP
-	c := &gortsplib.Client{Scheme: u.Scheme, Host: u.Host, Protocol: &tcp,
-		ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second}
+	c := &gortsplib.Client{
+		Scheme: u.Scheme, Host: u.Host, Protocol: &tcp,
+		ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
 	require.NoError(t, c.Start())
 	t.Cleanup(c.Close)
 	return c
