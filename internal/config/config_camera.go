@@ -4,24 +4,35 @@ package config
 // top-level Config aggregate and Validate/ApplyDefaults entry points.
 
 type CameraConfig struct {
-	ID             string                   `yaml:"id"`
-	Name           string                   `yaml:"name"`
-	Protocol       string                   `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
-	Encoding       string                   `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
-	URL            string                   `yaml:"url"`
-	Username       string                   `yaml:"username"`
-	Password       string                   `yaml:"password"`
-	ONVIFEndpoint  string                   `yaml:"onvif_endpoint"`
-	ProfileToken   string                   `yaml:"profile_token"`
-	StreamEncoding string                   `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
-	SubStreamURL   string                   `yaml:"sub_stream_url"`
-	SnapshotURL    string                   `yaml:"snapshot_url"`
-	SampleInterval int                      `yaml:"sample_interval"`
-	HLSMaxFPS      int                      `yaml:"hls_max_fps"`
-	Merge          *MergeConfig             `yaml:"merge"`
-	Transcoding    *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
-	Timelapse      *CameraTimelapseConfig   `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
-	AudioEnabled   bool                     `yaml:"audio_enabled"`
+	ID             string `yaml:"id"`
+	Name           string `yaml:"name"`
+	Protocol       string `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
+	Encoding       string `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
+	URL            string `yaml:"url"`
+	Username       string `yaml:"username"`
+	Password       string `yaml:"password"`
+	ONVIFEndpoint  string `yaml:"onvif_endpoint"`
+	ProfileToken   string `yaml:"profile_token"`
+	StreamEncoding string `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
+	// Sub-stream fields (#512, phase 1): the sub stream is a lower-resolution
+	// secondary feed for future consumers (grid preview, cascade, external AI
+	// push). Neither field affects the main recording pipeline.
+	// SubStreamURL is a manual rtsp:// URL to the camera's sub stream
+	// (protocol-agnostic fallback; also consumed by HLS low-res streaming).
+	SubStreamURL string `yaml:"sub_stream_url,omitempty" json:"sub_stream_url,omitempty"`
+	// SubProfileToken is the ONVIF secondary profile token, auto-discovered
+	// once the recorder is online (highest-pixel profile strictly below the
+	// main profile's resolution) and persisted. Fill-once: an existing value
+	// (manual or discovered) is not overwritten — clear it to re-trigger
+	// discovery. Stays empty on single-profile cameras.
+	SubProfileToken string                   `yaml:"sub_profile_token,omitempty" json:"sub_profile_token,omitempty"`
+	SnapshotURL     string                   `yaml:"snapshot_url"`
+	SampleInterval  int                      `yaml:"sample_interval"`
+	HLSMaxFPS       int                      `yaml:"hls_max_fps"`
+	Merge           *MergeConfig             `yaml:"merge"`
+	Transcoding     *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
+	Timelapse       *CameraTimelapseConfig   `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
+	AudioEnabled    bool                     `yaml:"audio_enabled"`
 	// AudioInRecordings keeps the camera's real audio track in recorded
 	// segments (event spans in merged products; live preview and the audio
 	// trigger are unaffected). Default false — recordings are video-only

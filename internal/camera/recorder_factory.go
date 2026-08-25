@@ -504,6 +504,12 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.ProfileToken) == "" {
 		cm.launchTrackedEnsure(cm.ensureProfileToken, cam.ID)
 	}
+	// Sub-stream auto-discovery (#512): resolve and persist the ONVIF
+	// secondary profile once. Fill-once — a manual sub_profile_token is
+	// never overwritten.
+	if cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF) {
+		cm.launchTrackedEnsure(cm.ensureSubProfileToken, cam.ID)
+	}
 	// For ONVIF cameras without a resolved encoding, persist the probe result
 	// (RTSP DESCRIBE / ONVIF profile) so a later device outage doesn't leave
 	// encoding="" — which makes the frontend lose the codec and storm through

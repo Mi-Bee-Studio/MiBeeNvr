@@ -527,6 +527,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.ProfileToken != nil {
 		cam.ProfileToken = *updates.ProfileToken
 	}
+	if updates.SubProfileToken != nil {
+		cam.SubProfileToken = *updates.SubProfileToken
+	}
+	if updates.SubStreamURL != nil {
+		cam.SubStreamURL = *updates.SubStreamURL
+	}
 	if updates.StreamEncoding != nil {
 		if *updates.StreamEncoding != cam.StreamEncoding {
 			needsRestart = true

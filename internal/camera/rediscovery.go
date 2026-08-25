@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rediscovery"
 )
@@ -522,4 +523,100 @@ func (cm *CameraManager) RediscoverAndReconnect(ctx context.Context, cameraID st
 		return false, fmt.Errorf("rediscovery: failed to restart recorder: %w", rerr)
 	}
 	return true, nil
+}
+
+// ensureSubProfileToken auto-discovers and persists the ONVIF sub-stream
+// profile token (#512, phase 1). Mirrors ensureProfileToken's polling shape,
+// with two differences:
+//   - it runs its own GetProfiles (the main-token resolution may have been
+//     satisfied from the persisted config without a profile round-trip), and
+//   - it is fill-once: an existing sub_profile_token (manual or previously
+//     discovered) is left untouched — clear the field to re-trigger discovery.
+func (cm *CameraManager) ensureSubProfileToken(cameraID string) {
+	// Wait for the recorder to come online (same gate as ensureProfileToken —
+	// a camera that never connects has no trustworthy profile list either).
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	var onvifRec *recorder.ONVIFRecorder
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		rec := cm.GetRecorder(cameraID)
+		if rec == nil {
+			continue
+		}
+		if rec.Status() != model.StatusRecording {
+			continue
+		}
+		var ok bool
+		onvifRec, ok = rec.(*recorder.ONVIFRecorder)
+		if !ok {
+			return // not an ONVIF recorder
+		}
+		break
+	}
+
+	// Snapshot the config under the lock; do the network round-trip outside it.
+	cm.configMu.Lock()
+	mainToken, subToken, endpoint, username, password := "", "", "", "", ""
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID {
+			c := &cm.cfg.Cameras[i]
+			mainToken = c.ProfileToken
+			subToken = c.SubProfileToken
+			endpoint = c.ONVIFEndpoint
+			username = c.Username
+			password = c.Password
+			if endpoint == "" {
+				endpoint = c.URL
+			}
+			break
+		}
+	}
+	cm.configMu.Unlock()
+	if subToken != "" {
+		return // fill-once: manual or already discovered
+	}
+	if mainToken == "" {
+		mainToken = onvifRec.ResolvedProfileToken()
+	}
+	if mainToken == "" {
+		return // main profile never resolved — nothing to select below
+	}
+
+	client := cm.reuseOrCreateONVIFClient(cameraID, endpoint, username, password)
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil || len(profiles) == 0 {
+		if err != nil {
+			logger.Debug("sub-profile discovery GetProfiles failed", "camera_id", cameraID, "error", err)
+		}
+		return
+	}
+	sub := onvif.SelectSubProfile(profiles, mainToken)
+	if sub == "" {
+		return // single-profile camera — no sub-stream capability
+	}
+
+	cm.configMu.Lock()
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID {
+			if cm.cfg.Cameras[i].SubProfileToken != "" { // raced a manual write
+				cm.configMu.Unlock()
+				return
+			}
+			cm.cfg.Cameras[i].SubProfileToken = sub
+			break
+		}
+	}
+	cm.configMu.Unlock()
+	if err := cm.persistConfig(); err != nil {
+		logger.Warn("failed to persist auto-discovered sub_profile_token", "camera_id", cameraID, "error", err)
+	} else {
+		logger.Info("auto-persisted sub_profile_token for camera", "camera_id", cameraID, "sub_profile_token", sub)
+	}
 }

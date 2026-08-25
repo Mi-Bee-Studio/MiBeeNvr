@@ -275,24 +275,27 @@ func (p *gb28181ChannelPayload) toConfigPtr() *config.GB28181ChannelConfig {
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name           string                        `json:"name"`
-		Protocol       string                        `json:"protocol"`
-		URL            string                        `json:"url"`
-		Username       string                        `json:"username"`
-		Password       string                        `json:"password"`
-		Enabled        *bool                         `json:"enabled"`
-		Description    string                        `json:"description"`
-		Location       string                        `json:"location"`
-		Brand          string                        `json:"brand"`
-		Model          string                        `json:"model"`
-		SerialNumber   string                        `json:"serial_number"`
-		ONVIFEndpoint  string                        `json:"onvif_endpoint"`
-		ProfileToken   string                        `json:"profile_token"`
-		StreamEncoding string                        `json:"stream_encoding"`
-		Encoding       string                        `json:"encoding"`
-		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
-		Channel        string                        `json:"channel"`
-		AudioEnabled   *bool                         `json:"audio_enabled"`
+		Name          string `json:"name"`
+		Protocol      string `json:"protocol"`
+		URL           string `json:"url"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		Enabled       *bool  `json:"enabled"`
+		Description   string `json:"description"`
+		Location      string `json:"location"`
+		Brand         string `json:"brand"`
+		Model         string `json:"model"`
+		SerialNumber  string `json:"serial_number"`
+		ONVIFEndpoint string `json:"onvif_endpoint"`
+		ProfileToken  string `json:"profile_token"`
+		// Sub-stream (#512): manual sub profile token + manual sub stream URL.
+		SubProfileToken string                        `json:"sub_profile_token"`
+		SubStreamURL    string                        `json:"sub_stream_url"`
+		StreamEncoding  string                        `json:"stream_encoding"`
+		Encoding        string                        `json:"encoding"`
+		Timelapse       *config.CameraTimelapseConfig `json:"timelapse"`
+		Channel         string                        `json:"channel"`
+		AudioEnabled    *bool                         `json:"audio_enabled"`
 		// Keep the camera's real audio track in recorded segments (default off).
 		AudioInRecordings *bool `json:"audio_in_recordings"`
 		// Recording gate: false = live-only (no segments written). nil = record.
@@ -427,6 +430,11 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid URL format")
 		return
 	}
+	// Sub-stream URL must be RTSP when provided (#512).
+	if body.SubStreamURL != "" && !strings.HasPrefix(body.SubStreamURL, "rtsp://") && !strings.HasPrefix(body.SubStreamURL, "rtsps://") {
+		WriteError(w, http.StatusBadRequest, "sub_stream_url must be an rtsp:// or rtsps:// URL")
+		return
+	}
 	// 0.10.0+: combined protocol strings are no longer accepted.
 	proto := body.Protocol
 	enc := body.Encoding
@@ -496,6 +504,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Password:          body.Password,
 		ONVIFEndpoint:     body.ONVIFEndpoint,
 		ProfileToken:      body.ProfileToken,
+		SubProfileToken:   body.SubProfileToken,
+		SubStreamURL:      body.SubStreamURL,
 		StreamEncoding:    body.StreamEncoding,
 		Timelapse:         body.Timelapse,
 		Channel:           body.Channel,
@@ -667,25 +677,29 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var body struct {
-		Name           *string                         `json:"name"`
-		URL            *string                         `json:"url"`
-		Protocol       *string                         `json:"protocol"`
-		Encoding       *string                         `json:"encoding"`
-		Username       *string                         `json:"username"`
-		Password       *string                         `json:"password"`
-		Enabled        *bool                           `json:"enabled"`
-		Description    *string                         `json:"description"`
-		Location       *string                         `json:"location"`
-		Brand          *string                         `json:"brand"`
-		Model          *string                         `json:"model"`
-		SerialNumber   *string                         `json:"serial_number"`
-		RetentionDays  *int                            `json:"retention_days"`
-		ONVIFEndpoint  *string                         `json:"onvif_endpoint"`
-		ProfileToken   *string                         `json:"profile_token"`
-		StreamEncoding *string                         `json:"stream_encoding"`
-		Transcoding    *config.CameraTranscodingConfig `json:"transcoding"`
-		Channel        *string                         `json:"channel"`
-		AudioEnabled   *bool                           `json:"audio_enabled"`
+		Name           *string `json:"name"`
+		URL            *string `json:"url"`
+		Protocol       *string `json:"protocol"`
+		Encoding       *string `json:"encoding"`
+		Username       *string `json:"username"`
+		Password       *string `json:"password"`
+		Enabled        *bool   `json:"enabled"`
+		Description    *string `json:"description"`
+		Location       *string `json:"location"`
+		Brand          *string `json:"brand"`
+		Model          *string `json:"model"`
+		SerialNumber   *string `json:"serial_number"`
+		RetentionDays  *int    `json:"retention_days"`
+		ONVIFEndpoint  *string `json:"onvif_endpoint"`
+		ProfileToken   *string `json:"profile_token"`
+		StreamEncoding *string `json:"stream_encoding"`
+		// Sub-stream (#512): manual sub profile token (ONVIF) and manual sub
+		// stream URL (any RTSP-capable protocol). No recorder restart.
+		SubProfileToken *string                         `json:"sub_profile_token"`
+		SubStreamURL    *string                         `json:"sub_stream_url"`
+		Transcoding     *config.CameraTranscodingConfig `json:"transcoding"`
+		Channel         *string                         `json:"channel"`
+		AudioEnabled    *bool                           `json:"audio_enabled"`
 		// Dark frame filtering
 		DarkFrameFilterEnabled *bool `json:"dark_frame_filter_enabled"`
 		DarkFrameThreshold     *int  `json:"dark_frame_threshold"`
@@ -717,6 +731,12 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.SubStreamURL != nil && strings.TrimSpace(*body.SubStreamURL) != "" &&
+		!strings.HasPrefix(*body.SubStreamURL, "rtsp://") && !strings.HasPrefix(*body.SubStreamURL, "rtsps://") {
+		WriteError(w, http.StatusBadRequest, "sub_stream_url must be an rtsp:// or rtsps:// URL")
 		return
 	}
 
@@ -765,6 +785,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RetentionDays:          body.RetentionDays,
 		ONVIFEndpoint:          body.ONVIFEndpoint,
 		ProfileToken:           body.ProfileToken,
+		SubProfileToken:        body.SubProfileToken,
+		SubStreamURL:           body.SubStreamURL,
 		StreamEncoding:         body.StreamEncoding,
 		Transcoding:            body.Transcoding,
 		Channel:                body.Channel,
