@@ -4,27 +4,32 @@ package config
 // top-level Config aggregate and Validate/ApplyDefaults entry points.
 
 type CameraConfig struct {
-	ID                   string                   `yaml:"id"`
-	Name                 string                   `yaml:"name"`
-	Protocol             string                   `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
-	Encoding             string                   `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
-	URL                  string                   `yaml:"url"`
-	Username             string                   `yaml:"username"`
-	Password             string                   `yaml:"password"`
-	ONVIFEndpoint        string                   `yaml:"onvif_endpoint"`
-	ProfileToken         string                   `yaml:"profile_token"`
-	StreamEncoding       string                   `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
-	SubStreamURL         string                   `yaml:"sub_stream_url"`
-	SnapshotURL          string                   `yaml:"snapshot_url"`
-	SampleInterval       int                      `yaml:"sample_interval"`
-	HLSMaxFPS            int                      `yaml:"hls_max_fps"`
-	Merge                *MergeConfig             `yaml:"merge"`
-	Transcoding          *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
-	Timelapse            *CameraTimelapseConfig   `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
-	AudioEnabled         bool                     `yaml:"audio_enabled"`
-	HealthOverrides      HealthOverrides          `yaml:"health_overrides,omitempty"`
-	FrameWatchdogTimeout string                   `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
-	HTTPJPEGAVI          bool                     `yaml:"http_jpeg_avi"`                    // write AVI single-file instead of MJPEG directory
+	ID             string                   `yaml:"id"`
+	Name           string                   `yaml:"name"`
+	Protocol       string                   `yaml:"protocol"` // rtsp_h264, rtsp_mjpeg, http_jpeg
+	Encoding       string                   `yaml:"encoding"` // h264, h265, mjpeg, jpeg (independent of protocol)
+	URL            string                   `yaml:"url"`
+	Username       string                   `yaml:"username"`
+	Password       string                   `yaml:"password"`
+	ONVIFEndpoint  string                   `yaml:"onvif_endpoint"`
+	ProfileToken   string                   `yaml:"profile_token"`
+	StreamEncoding string                   `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
+	SubStreamURL   string                   `yaml:"sub_stream_url"`
+	SnapshotURL    string                   `yaml:"snapshot_url"`
+	SampleInterval int                      `yaml:"sample_interval"`
+	HLSMaxFPS      int                      `yaml:"hls_max_fps"`
+	Merge          *MergeConfig             `yaml:"merge"`
+	Transcoding    *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
+	Timelapse      *CameraTimelapseConfig   `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
+	AudioEnabled   bool                     `yaml:"audio_enabled"`
+	// AudioInRecordings keeps the camera's real audio track in recorded
+	// segments (event spans in merged products; live preview and the audio
+	// trigger are unaffected). Default false — recordings are video-only
+	// unless explicitly enabled per camera.
+	AudioInRecordings    bool            `yaml:"audio_in_recordings,omitempty" json:"audio_in_recordings,omitempty"`
+	HealthOverrides      HealthOverrides `yaml:"health_overrides,omitempty"`
+	FrameWatchdogTimeout string          `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
+	HTTPJPEGAVI          bool            `yaml:"http_jpeg_avi"`                    // write AVI single-file instead of MJPEG directory
 
 	// StableID is a hardware-level stable identifier (ONVIF serial number) used to
 	// re-acquire the SAME camera after its IP changes (e.g. after an AP reboot when
@@ -153,6 +158,14 @@ type AdaptiveRecordingConfig struct {
 	// continuous atmosphere bed under the timelapse video (event spans keep
 	// real audio). G.711 cameras only; ~28.8MB/h storage while sparse.
 	AmbientAudio bool `yaml:"ambient_audio,omitempty" json:"ambient_audio,omitempty"`
+	// TimelapseFrameMs is the compressed-timeline cadence the merge writes
+	// sparse dwell samples at: preset 100 / 300 / 500 ms, 0/unset = 100.
+	TimelapseFrameMs int `yaml:"timelapse_frame_ms,omitempty" json:"timelapse_frame_ms,omitempty"`
+	// AmbientArchive additionally keeps the raw continuous ambient audio as a
+	// sidecar file (<segment>.g711) beside the recording for post-production
+	// (the merged product still only carries the atmosphere bed). Only
+	// meaningful with ambient_audio; default false.
+	AmbientArchive bool `yaml:"ambient_archive,omitempty" json:"ambient_archive,omitempty"`
 }
 
 // CameraAudioTriggerConfig tunes audio_trigger (issue #478).

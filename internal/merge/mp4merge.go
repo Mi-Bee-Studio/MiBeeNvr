@@ -194,7 +194,10 @@ func trimAudioHead(seg *SegmentInfo, droppedSec float64) {
 // players conceal them with gray until the next IDR. Input SegmentInfos are
 // mutated to their aligned state so callers' duration/frame metadata matches
 // what actually landed in the output.
-func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath string) (MergeStats, error) {
+// MergeMP4Segments merges aligned segments into outputPath. The optional
+// frameDur overrides the package default TimelapseFrameDur — callers with a
+// per-camera cadence (adaptive.timelapse_frame_ms) pass it through.
+func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath string, frameDur ...time.Duration) (MergeStats, error) {
 	stats := MergeStats{LeadingDropped: map[int]int{}}
 	if len(segments) == 0 {
 		return stats, fmt.Errorf("no segments to merge")
@@ -407,8 +410,12 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		// drops it for non-G.711 codecs.
 		ts := float64(seg.Timescale)
 		compress := seg.Timescale > 0
+		cadence := TimelapseFrameDur
+		if len(frameDur) > 0 && frameDur[0] > 0 {
+			cadence = frameDur[0]
+		}
 		gapTicks := float64(seg.Timescale) * TimelapseGapThreshold.Seconds()
-		frameTicks := uint32(float64(seg.Timescale) * TimelapseFrameDur.Seconds())
+		frameTicks := uint32(float64(seg.Timescale) * cadence.Seconds())
 
 		for _, s := range seg.Samples {
 			select {

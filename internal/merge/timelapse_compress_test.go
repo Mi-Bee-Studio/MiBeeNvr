@@ -84,6 +84,26 @@ func TestMergeMP4Segments_CompressesSparseDwells(t *testing.T) {
 	require.NotEmpty(t, stats.TimelineMapJSON())
 }
 
+// TestMergeMP4Segments_CadenceOverride: the per-camera preset (300ms) wins
+// over the package default.
+func TestMergeMP4Segments_CadenceOverride(t *testing.T) {
+	dir := t.TempDir()
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+	sparse := createH264SegmentWithDurations(t, dir, "s.mp4", sps, pps,
+		[][]byte{idr, idr}, []time.Duration{30 * time.Second, 30 * time.Second})
+	info, err := ParseSegment(sparse)
+	require.NoError(t, err)
+
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info}, filepath.Join(dir, "o.mp4"), 300*time.Millisecond)
+	require.NoError(t, err)
+	out, err := ParseSegment(filepath.Join(dir, "o.mp4"))
+	require.NoError(t, err)
+	got := time.Duration(out.Samples[0].Duration) * time.Second / time.Duration(out.Timescale)
+	require.Equal(t, 300*time.Millisecond, got, "explicit cadence must override the default")
+}
+
 // TestMergeMP4Segments_CompressedAACSpanDropsAudio: a sparse-dwell segment
 // carrying a NON-G.711 audio track gets its video compressed and the span's
 // audio dropped (the envelope mixdown is G.711-only) — the output carries no

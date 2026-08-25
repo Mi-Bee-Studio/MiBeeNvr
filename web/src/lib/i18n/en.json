@@ -1742,5 +1742,11 @@
   "detail.activity.score": "activity score",
   "detail.activity.noScore": "not analyzed",
   "detail.activity.current": "current",
-  "detail.activity.hint": "green=calm → red=busy; click to jump to that recording"
+  "detail.activity.hint": "green=calm → red=busy; click to jump to that recording",
+  "cameras.audioInRecordings": "Keep audio in recordings",
+  "cameras.audioInRecordingsHint": "Default off: recordings are video-only (live preview and the audio trigger are unaffected)",
+  "cameras.ambientArchive": "Archive raw ambient audio",
+  "cameras.ambientArchiveHint": "Saves the raw G.711 ambience as a sidecar file for post-production",
+  "cameras.timelapseFrameMs": "Timelapse frame gap",
+  "cameras.timelapseFrameMsDefault": "Default (0.1s)"
 }

@@ -773,5 +773,13 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 	if a.GOPBufferBytes != 0 && (a.GOPBufferBytes < 1<<20 || a.GOPBufferBytes > 64<<20) {
 		return fmt.Errorf("cameras.%s.adaptive.gop_buffer_bytes must be 1MB–64MB, got %d", cam.ID, a.GOPBufferBytes)
 	}
+	switch a.TimelapseFrameMs {
+	case 0, 100, 300, 500:
+	default:
+		return fmt.Errorf("cameras.%s.adaptive.timelapse_frame_ms must be one of 100/300/500, got %d", cam.ID, a.TimelapseFrameMs)
+	}
+	if a.AmbientArchive && !a.AmbientAudio {
+		return fmt.Errorf("cameras.%s.adaptive.ambient_archive requires ambient_audio", cam.ID)
+	}
 	return nil
 }

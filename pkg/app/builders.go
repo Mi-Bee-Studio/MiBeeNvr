@@ -245,6 +245,14 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			}
 			return nil
 		},
+		func(cameraID string) *config.AdaptiveRecordingConfig {
+			for _, c := range cfg.Cameras {
+				if c.ID == cameraID {
+					return c.Adaptive
+				}
+			}
+			return nil
+		},
 		func() []config.CameraConfig { return cfg.Cameras },
 		m,
 	)
@@ -259,6 +267,14 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			for _, c := range cfg.Cameras {
 				if c.ID == cameraID {
 					return c.Merge
+				}
+			}
+			return nil
+		},
+		func(cameraID string) *config.AdaptiveRecordingConfig {
+			for _, c := range cfg.Cameras {
+				if c.ID == cameraID {
+					return c.Adaptive
 				}
 			}
 			return nil
