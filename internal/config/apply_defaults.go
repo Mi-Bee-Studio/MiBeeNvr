@@ -124,6 +124,15 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Server.RTSP.Port == 0 {
 		cfg.Server.RTSP.Port = 8554
 	}
+	// Sub-stream ingest (#513): zero-cost until a quality=sub consumer
+	// arrives; defaults keep an idle session warm briefly so UI grid
+	// close/reopen doesn't churn the camera.
+	if cfg.Server.SubStream.IdleTimeoutS == 0 {
+		cfg.Server.SubStream.IdleTimeoutS = 30
+	}
+	if cfg.Server.SubStream.ReadyTimeoutS == 0 {
+		cfg.Server.SubStream.ReadyTimeoutS = 8
+	}
 	// Storage
 	if strings.TrimSpace(cfg.Storage.RootDir) == "" {
 		cfg.Storage.RootDir = "/var/lib/mibee-nvr"

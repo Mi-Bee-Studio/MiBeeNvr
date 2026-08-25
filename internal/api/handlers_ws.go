@@ -8,17 +8,29 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
 )
 
 // --- WebSocket streaming endpoint ---
 
-// handleStreamWS handles GET /api/cameras/{id}/stream/ws
+// handleStreamWS handles GET /api/cameras/{id}/stream/ws[?quality=main|sub]
 // It upgrades the HTTP connection to a WebSocket and streams binary-encoded
 // video frames (CodecInfo first, then VideoFrame messages).
+// quality=sub (#513) registers the entry under the camera's "/sub" key and
+// streams the on-demand sub-stream; it falls back to main when the camera has
+// no usable sub-stream (X-Stream-Quality response header reports the outcome).
 func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+
+	// Validate request parameters before service availability (a bad
+	// quality= must not masquerade as "streaming unavailable").
+	quality, qerr := parseQuality(r)
+	if qerr != nil {
+		WriteError(w, http.StatusBadRequest, qerr.Error())
+		return
+	}
 
 	if h.wsMgr == nil {
 		WriteError(w, http.StatusServiceUnavailable, "WebSocket streaming not available")
@@ -37,75 +49,124 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// quality=sub: acquire the on-demand pull and hold the reference for the
+	// whole ServeWS lifetime (the handler blocks until the viewer leaves).
+	key := id
+	var subSrc *substream.Source
+	if quality == qualitySub && h.camMgr != nil {
+		subSrc = h.acquireSub(w, r, id)
+		if subSrc != nil {
+			key = subKey(id)
+			defer h.camMgr.ReleaseSubStream(id)
+		}
+	}
+
 	// On-demand registration: if WebSocket stream not registered, register it.
 	// An already-active entry may be subscribed to a STALE StreamHub (the
-	// recorder reconnected and got a fresh hub) — rebind before serving, or
-	// the viewer would sit on a dead hub with zero frames forever.
-	if h.wsMgr.IsActive(id) && h.camMgr != nil {
-		if rec := h.camMgr.GetRecorder(id); rec != nil {
+	// recorder reconnected and got a fresh hub — or the sub-stream puller was
+	// recycled and restarted) — rebind before serving, or the viewer would
+	// sit on a dead hub with zero frames forever.
+	if h.wsMgr.IsActive(key) && h.camMgr != nil {
+		if subSrc != nil {
+			if h.wsMgr.ActiveHub(key) != subSrc.Hub() {
+				h.wsMgr.RebindHub(key, subSrc.Hub())
+			}
+		} else if rec := h.camMgr.GetRecorder(id); rec != nil {
 			if hub := getStreamHub(rec); hub != nil && hub != h.wsMgr.ActiveHub(id) {
 				h.wsMgr.RebindHub(id, hub)
 			}
 		}
 	}
-	if !h.wsMgr.IsActive(id) {
+	if !h.wsMgr.IsActive(key) {
 		if h.camMgr == nil {
 			WriteError(w, http.StatusNotFound, "WebSocket stream not active")
 			return
 		}
-		rec := h.camMgr.GetRecorder(id)
-		if rec == nil {
-			slog.Warn("WS: recorder not running", "camera_id", id)
-			WriteError(w, http.StatusBadRequest, "camera recorder not running")
-			return
-		}
 
-		codec, sps, pps, vps := getCodecParams(rec)
-		// Normalize JPEG/MJPEG codec names for wsstream: both "jpeg" and "mjpeg"
-		// map to wsstream.CodecMJPEG ("mjpeg") since the wire protocol treats
-		// them identically (complete JPEG frames in VideoFrame.NALUs[0]).
-		if codec == model.EncJPEG {
-			codec = model.FormatMJPEG
-		}
-		slog.Info("WS: on-demand register", "camera_id", id, "codec", codec, "has_sps", sps != nil, "has_pps", pps != nil)
-		// MJPEG cameras don't have SPS/PPS — skip the keyframe wait.
-		if codec != model.FormatMJPEG {
-			if sps == nil || pps == nil {
-				// Recorder is active but hasn't received a keyframe yet.
-				// Poll for up to 5 seconds (typical keyframe interval is 1-4s).
+		var codec model.Format
+		var sps, pps, vps []byte
+		var hub *model.StreamHub
+		if subSrc != nil {
+			// Sub-stream: parameters come from the pull's SDP/in-band
+			// snapshot; the main recorder need not be running at all.
+			codec, sps, pps, vps = subSrc.CodecParams()
+			hub = subSrc.Hub()
+			if codec != model.FormatH264 && codec != model.FormatH265 {
+				// Pull came up without usable video parameters (still
+				// warming up) — poll briefly like the main path below.
 				const wsCodecWait = 5 * time.Second
 				const wsCodecPoll = 200 * time.Millisecond
 				deadline := time.Now().Add(wsCodecWait)
-				for sps == nil || pps == nil {
+				for (codec != model.FormatH264 && codec != model.FormatH265) ||
+					sps == nil || pps == nil {
 					if time.Now().After(deadline) {
-						slog.Warn("WS: timed out waiting for codec params", "camera_id", id)
+						slog.Warn("WS: timed out waiting for sub-stream codec params", "camera_id", id)
 						WriteError(w, http.StatusServiceUnavailable, "waiting for video stream")
 						return
 					}
 					time.Sleep(wsCodecPoll)
-					codec, sps, pps, vps = getCodecParams(rec)
+					codec, sps, pps, vps = subSrc.CodecParams()
 				}
-				slog.Info("WS: codec params available after poll", "camera_id", id, "codec", codec)
 			}
+		} else {
+			rec := h.camMgr.GetRecorder(id)
+			if rec == nil {
+				slog.Warn("WS: recorder not running", "camera_id", id)
+				WriteError(w, http.StatusBadRequest, "camera recorder not running")
+				return
+			}
+
+			codec, sps, pps, vps = getCodecParams(rec)
+			// Normalize JPEG/MJPEG codec names for wsstream: both "jpeg" and "mjpeg"
+			// map to wsstream.CodecMJPEG ("mjpeg") since the wire protocol treats
+			// them identically (complete JPEG frames in VideoFrame.NALUs[0]).
+			if codec == model.EncJPEG {
+				codec = model.FormatMJPEG
+			}
+			slog.Info("WS: on-demand register", "camera_id", id, "codec", codec, "has_sps", sps != nil, "has_pps", pps != nil)
+			// MJPEG cameras don't have SPS/PPS — skip the keyframe wait.
+			if codec != model.FormatMJPEG {
+				if sps == nil || pps == nil {
+					// Recorder is active but hasn't received a keyframe yet.
+					// Poll for up to 5 seconds (typical keyframe interval is 1-4s).
+					const wsCodecWait = 5 * time.Second
+					const wsCodecPoll = 200 * time.Millisecond
+					deadline := time.Now().Add(wsCodecWait)
+					for sps == nil || pps == nil {
+						if time.Now().After(deadline) {
+							slog.Warn("WS: timed out waiting for codec params", "camera_id", id)
+							WriteError(w, http.StatusServiceUnavailable, "waiting for video stream")
+							return
+						}
+						time.Sleep(wsCodecPoll)
+						codec, sps, pps, vps = getCodecParams(rec)
+					}
+					slog.Info("WS: codec params available after poll", "camera_id", id, "codec", codec)
+				}
+			}
+			hub = getStreamHub(rec)
 		}
 
-		hub := getStreamHub(rec)
-		if err := h.wsMgr.RegisterStream(id, codec, sps, pps, vps, hub); err != nil {
+		if err := h.wsMgr.RegisterStream(key, codec, sps, pps, vps, hub); err != nil {
 			if !errors.Is(err, wsstream.ErrStreamExists) {
-				slog.Error("WS: failed to register", "camera_id", id, "error", err)
+				slog.Error("WS: failed to register", "camera_id", id, "key", key, "error", err)
 				WriteError(w, http.StatusInternalServerError, "failed to register WebSocket stream")
 				return
 			}
 		}
 		// Configure audio streaming if the recorder provides audio
-		setupAudioForWS(h, id, rec)
-
+		// (main-stream entries only — the sub-stream pull is video-only).
+		if subSrc == nil {
+			if rec := h.camMgr.GetRecorder(id); rec != nil {
+				setupAudioForWS(h, id, rec)
+			}
+		}
 	}
 
-	slog.Info("WS: serving", "camera_id", id)
+	slog.Info("WS: serving", "camera_id", id, "key", key)
 
 	// Serve WebSocket stream (blocks until client disconnects)
-	if err := h.wsMgr.ServeWS(id, w, r); err != nil {
+	if err := h.wsMgr.ServeWS(key, w, r); err != nil {
 		if errors.Is(err, wsstream.ErrStreamNotActive) {
 			WriteError(w, http.StatusNotFound, "WebSocket stream not active")
 			return

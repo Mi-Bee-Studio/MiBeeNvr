@@ -494,6 +494,31 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	relayMgr := relay.NewManager(camMgr.GetHub, camMgr.GetSPS)
 	camMgr.SetRelayManager(relayMgr)
 
+	// Step 7.6c: sub-stream recycle callback (#513). When the on-demand
+	// puller for a camera is torn down (idle/failed/camera lifecycle), drop
+	// the egress entries registered under the camera's "/sub" key so stale
+	// entries don't sit subscribed to a dead hub. The hub comparison gates a
+	// race where a new viewer re-acquires and rebinds the entry between the
+	// recycle decision and this callback — an entry already on a FRESH hub
+	// belongs to the new pull generation and must survive. WS/FLV
+	// unregister their own hub consumers; the HLS entry does not track its
+	// hub consumer ID, so it is unsubscribed explicitly here.
+	if subMgr := camMgr.SubStreams(); subMgr != nil {
+		subMgr.SetOnRecycle(func(cameraID string, recycledHub *model.StreamHub) {
+			key := cameraID + "/sub"
+			if wsMgr.ActiveHub(key) == recycledHub {
+				wsMgr.UnregisterStream(key)
+			}
+			if flvMgr != nil && flvMgr.ActiveHub(key) == recycledHub {
+				flvMgr.UnregisterStream(key)
+			}
+			if hlsMgr.ActiveHub(key) == recycledHub {
+				hlsMgr.StopStream(key)
+				recycledHub.Unsubscribe("hls")
+			}
+		})
+	}
+
 	// Wire transcoding dependencies for relay targets (H.265→H.264 transcode).
 	// These must be set before Start so targets can resolve presets and hardware caps.
 	relayFFmpegPath := cfg.Transcoding.FFmpegPath

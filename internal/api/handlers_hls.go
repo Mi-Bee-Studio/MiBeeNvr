@@ -12,6 +12,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/go-chi/chi/v5"
 )
@@ -31,8 +32,31 @@ func subscribeHLS(hub *model.StreamHub, cameraID string, hlsMgr *hls.Manager, is
 	return hlsMgr.SubscribeToHub(cameraID, hub, isH265)
 }
 
+// hlsSubPathPrefix is the URL path marker selecting the sub-stream for HLS.
+// HLS is served under a path wildcard (/stream/*) and playlists reference
+// segments with RELATIVE URLs — the segment requests must resolve to the same
+// entry the playlist came from, so quality rides in the PATH
+// (/api/cameras/{id}/stream/sub/index.m3u8), not a query parameter that
+// segment fetches would drop.
+const hlsSubPathPrefix = "/stream/sub/"
+
 func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+
+	// Validate request parameters before service availability. quality
+	// negotiation (#513): the path form (/stream/sub/…) selects the
+	// sub-stream; an explicit ?quality= on HLS is rejected because segments
+	// cannot carry it (they would fall back to the main entry and desync the
+	// playlist).
+	if q := r.URL.Query().Get("quality"); q != "" {
+		if _, err := parseQuality(r); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		WriteError(w, http.StatusBadRequest,
+			"HLS quality selection uses the path form /stream/sub/index.m3u8 (segments cannot carry a query parameter)")
+		return
+	}
 
 	if h.hlsMgr == nil || h.camMgr == nil {
 		WriteError(w, http.StatusInternalServerError, "HLS not available")
@@ -50,14 +74,28 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If stream not active, start it
-	if !h.hlsMgr.IsActive(id) {
-		rec := h.camMgr.GetRecorder(id)
-		if rec == nil {
-			WriteError(w, http.StatusBadRequest, "camera recorder not running")
-			return
+	key := id
+	var subSrc *substream.Source
+	if strings.Contains(r.URL.Path, hlsSubPathPrefix) {
+		// Hold the reference for this request only. Playlist polling re-
+		// acquires well inside the idle timeout, so an active player keeps
+		// the puller warm; once polling stops, the idle timeout recycles it.
+		if src := h.acquireSub(w, r, id); src != nil {
+			subSrc = src
+			key = subKey(id)
+			defer h.camMgr.ReleaseSubStream(id)
 		}
+		if strings.HasSuffix(r.URL.Path, ".m3u8") {
+			// (acquireSub already set the header; re-affirm for playlists
+			// because hls.js inspects only these responses.)
+			if subSrc == nil {
+				w.Header().Set("X-Stream-Quality", qualityMain)
+			}
+		}
+	}
 
+	// If stream not active, start it
+	if !h.hlsMgr.IsActive(key) {
 		// Get camera config for HLS options
 		camCfg := h.camMgr.GetCameraConfig(id)
 		hlsMaxFPS := 0
@@ -65,160 +103,66 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			hlsMaxFPS = camCfg.HLSMaxFPS
 		}
 
-		// Try H264 recorder first
-		if h264Rec, ok := rec.(*recorder.H264Recorder); ok {
-			sps := h264Rec.SPS()
-			pps := h264Rec.PPS()
+		var codec model.Format
+		var sps, pps, vps []byte
+		var hub *model.StreamHub
+		if subSrc != nil {
+			// Sub-stream: parameters from the pull's SDP/in-band snapshot;
+			// the main recorder need not be running at all.
+			codec, sps, pps, vps = subSrc.CodecParams()
+			hub = subSrc.Hub()
+		} else {
+			rec := h.camMgr.GetRecorder(id)
+			if rec == nil {
+				WriteError(w, http.StatusBadRequest, "camera recorder not running")
+				return
+			}
+			codec, sps, pps, vps = getCodecParams(rec)
+			hub = getStreamHub(rec)
+		}
+
+		switch codec {
+		case model.FormatH264:
 			if sps == nil || pps == nil {
 				WriteError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
 				return
 			}
-
-			err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
-			if err != nil {
+			if err := h.hlsMgr.StartStream(key, sps, pps, hlsMaxFPS); err != nil {
 				if errors.Is(err, hls.ErrMaxStreamsReached) {
 					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 				} else {
-					logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
+					logger.Error("failed to start HLS stream", "camera_id", id, "key", key, "error", err)
 					WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 				}
 				return
 			}
-
-			// Check if sub-stream URL is configured
-			if camCfg != nil && camCfg.SubStreamURL != "" {
-				fallback := func() {
-					_ = subscribeHLS(h264Rec.Hub, id, h.hlsMgr, false)
-				}
-				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, false, fallback); subErr != nil {
-					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
-					fallback()
-				}
-				// Sub-stream reader is running — do NOT subscribe hub on recorder
-			} else {
-				_ = subscribeHLS(h264Rec.Hub, id, h.hlsMgr, false)
-			}
-		} else if h265Rec, ok := rec.(*recorder.H265Recorder); ok {
-			vps := h265Rec.VPS()
-			sps := h265Rec.SPS()
-			pps := h265Rec.PPS()
-			if vps == nil || sps == nil || pps == nil {
+			_ = subscribeHLS(hub, key, h.hlsMgr, false)
+		case model.FormatH265:
+			if sps == nil || pps == nil || vps == nil {
 				WriteError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
 				return
 			}
-
-			err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
-			if err != nil {
+			if err := h.hlsMgr.StartStreamH265(key, vps, sps, pps, hlsMaxFPS); err != nil {
 				if errors.Is(err, hls.ErrMaxStreamsReached) {
 					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 				} else {
-					logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
+					logger.Error("failed to start HLS H265 stream", "camera_id", id, "key", key, "error", err)
 					WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 				}
 				return
 			}
-
-			// Check if sub-stream URL is configured
-			if camCfg != nil && camCfg.SubStreamURL != "" {
-				fallback := func() {
-					_ = subscribeHLS(h265Rec.Hub, id, h.hlsMgr, true)
-				}
-				if subErr := h.hlsMgr.StartSubStreamReader(id, camCfg.SubStreamURL, true, fallback); subErr != nil {
-					logger.Warn("failed to start HLS sub-stream reader, falling back to main stream", "camera_id", id, "error", subErr)
-					fallback()
-				}
-			} else {
-				_ = subscribeHLS(h265Rec.Hub, id, h.hlsMgr, true)
-			}
-		} else if onvifRec, ok := rec.(*recorder.ONVIFRecorder); ok {
-			// ONVIF recorder delegates to H264/H265 internally
-			delegate := onvifRec.Delegate()
-			if delegate == nil {
-				WriteError(w, http.StatusServiceUnavailable, "ONVIF recorder delegate not available yet")
-				return
-			}
-			// Unwrap the delegate and handle as H264/H265
-			if h264Rec, ok := delegate.(*recorder.H264Recorder); ok {
-				sps := h264Rec.SPS()
-				pps := h264Rec.PPS()
-				if sps == nil || pps == nil {
-					WriteError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
-					return
-				}
-				err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
-				if err != nil {
-					if errors.Is(err, hls.ErrMaxStreamsReached) {
-						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
-					} else {
-						WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
-					}
-					return
-				}
-				_ = subscribeHLS(h264Rec.Hub, id, h.hlsMgr, false)
-			} else if h265Rec, ok := delegate.(*recorder.H265Recorder); ok {
-				vps := h265Rec.VPS()
-				sps := h265Rec.SPS()
-				pps := h265Rec.PPS()
-				if vps == nil || sps == nil || pps == nil {
-					WriteError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
-					return
-				}
-				err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
-				if err != nil {
-					if errors.Is(err, hls.ErrMaxStreamsReached) {
-						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
-					} else {
-						WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
-					}
-					return
-				}
-				_ = subscribeHLS(h265Rec.Hub, id, h.hlsMgr, true)
-			} else {
-				writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
-				return
-			}
-		} else if provider, ok := rec.(model.HLSProvider); ok {
-			codec, sps, pps, vps := provider.CodecParams()
-			if sps == nil || pps == nil {
-				WriteError(w, http.StatusServiceUnavailable, "codec params not ready yet, waiting for video stream")
-				return
-			}
-			switch codec {
-			case model.FormatH264:
-				err := h.hlsMgr.StartStream(id, sps, pps, hlsMaxFPS)
-				if err != nil {
-					if errors.Is(err, hls.ErrMaxStreamsReached) {
-						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
-					} else {
-						logger.Error("failed to start HLS stream", "camera_id", id, "error", err)
-						WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
-					}
-					return
-				}
-				_ = subscribeHLS(getRecorderHub(rec), id, h.hlsMgr, false)
-			case model.FormatH265:
-				if vps == nil {
-					WriteError(w, http.StatusServiceUnavailable, "VPS not ready yet, waiting for video stream")
-					return
-				}
-				err := h.hlsMgr.StartStreamH265(id, vps, sps, pps, hlsMaxFPS)
-				if err != nil {
-					if errors.Is(err, hls.ErrMaxStreamsReached) {
-						writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
-					} else {
-						logger.Error("failed to start HLS H265 stream", "camera_id", id, "error", err)
-						WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
-					}
-					return
-				}
-				_ = subscribeHLS(getRecorderHub(rec), id, h.hlsMgr, true)
-			default:
-				writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
-				return
-			}
-		} else {
+			_ = subscribeHLS(hub, key, h.hlsMgr, true)
+		default:
 			writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
 			return
+		}
+	} else if subSrc != nil {
+		// Active entry, but it may be subscribed to a hub from a previous
+		// puller generation (recycled + restarted since) — rebind, mirroring
+		// the WS endpoint's recovery.
+		codec, _, _, _ := subSrc.CodecParams()
+		if h.hlsMgr.ActiveHub(key) != subSrc.Hub() {
+			h.hlsMgr.RebindHub(key, subSrc.Hub(), codec == model.FormatH265)
 		}
 	}
 	// Issue the stream cookie on playlist fetches (#331): media players that
@@ -230,7 +174,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	// every playlist fetch, so players polling the playlist stay fresh.
 	setStreamCookieOnPlaylist(w, r, id)
 	// Proxy to muxer handler
-	if !h.hlsMgr.Handle(id, w, r) {
+	if !h.hlsMgr.Handle(key, w, r) {
 		WriteError(w, http.StatusServiceUnavailable, "HLS stream not available")
 		return
 	}
@@ -270,7 +214,7 @@ func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.hlsMgr.IsActive(id) {
+	if !h.hlsMgr.IsActive(id) && !h.hlsMgr.IsActive(subKey(id)) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "not active"})
 		return
 	}
@@ -286,6 +230,14 @@ func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.hlsMgr.StopStream(id)
+	// Stop the sub-stream entry too and release its pull reference (#513) —
+	// the on-demand puller otherwise idles out up to idle_timeout_s later.
+	if h.hlsMgr.IsActive(subKey(id)) {
+		if hub := h.hlsMgr.ActiveHub(subKey(id)); hub != nil {
+			hub.Unsubscribe("hls")
+		}
+		h.hlsMgr.StopStream(subKey(id))
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 

@@ -318,6 +318,10 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	cm.stopTimelapseFramePoller(cameraID)
 	// Stop dual-mode timelapse schedule monitor
 	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+	// Tear the on-demand sub-stream pull down with the camera (#513).
+	if cm.subStreams != nil {
+		cm.subStreams.StopCamera(cameraID)
+	}
 
 	return nil
 }
@@ -729,6 +733,18 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 				logger.Error("failed to start recorder", "error", err)
 			}
 		}
+	}
+
+	// Sub-stream target inputs changed (protocol/credentials/endpoint/sub
+	// fields) → recycle the on-demand pull so the next Acquire re-resolves
+	// from the new config (#513). Runs for sub-only changes too, which need
+	// no recorder restart. Compared against savedCam outside configMu
+	// instead of scattering change flags through the apply block above.
+	if cm.subStreams != nil &&
+		(savedCam.Protocol != camCopy.Protocol || savedCam.Username != camCopy.Username ||
+			savedCam.Password != camCopy.Password || savedCam.ONVIFEndpoint != camCopy.ONVIFEndpoint ||
+			savedCam.SubStreamURL != camCopy.SubStreamURL || savedCam.SubProfileToken != camCopy.SubProfileToken) {
+		cm.subStreams.StopCamera(cameraID)
 	}
 
 	// Auto-populate SnapshotURL for ONVIF cameras (non-blocking)

@@ -239,6 +239,13 @@ func (cm *CameraManager) Stop() error {
 	// Stop / the caller above (#163). Bounded by the ensure* 15s timeout.
 	cm.onvifEnsureWg.Wait()
 
+	// Stop every on-demand sub-stream pull (#513) — runs AFTER recorders so
+	// recycle callbacks can still touch protocol managers safely (they are
+	// idempotent against already-stopped entries anyway).
+	if cm.subStreams != nil {
+		cm.subStreams.Stop()
+	}
+
 	// Stop the hub stats flusher (#469).
 	cm.stopHubStatsFlusher()
 
@@ -359,6 +366,11 @@ func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {
 
 		// Stop dual-mode timelapse schedule monitor if running
 		cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+
+		// Tear the on-demand sub-stream pull down with the camera (#513).
+		if cm.subStreams != nil {
+			cm.subStreams.StopCamera(cameraID)
+		}
 
 		return nil
 	})

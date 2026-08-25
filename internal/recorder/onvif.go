@@ -174,7 +174,7 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 	// The stream URI's host may lag behind the ONVIF endpoint after a DHCP
 	// reassignment (device still advertises its old IP). Rewrite it to the
 	// known-good endpoint host so the RTSP dial reaches the right address.
-	if fixed := rewriteStaleStreamHost(rtspURL, r.cfg.ONVIFEndpoint); fixed != rtspURL {
+	if fixed := RewriteStaleStreamHost(rtspURL, r.cfg.ONVIFEndpoint); fixed != rtspURL {
 		onvifRecLogger.Info("rewrote stale stream URI host to match ONVIF endpoint",
 			"camera_id", r.cfg.CameraID, "old", rtspURL, "new", fixed)
 		rtspURL = fixed
@@ -453,7 +453,7 @@ func deriveRTSPURL(httpURL string) string {
 	return u.String()
 }
 
-// rewriteStaleStreamHost fixes a GetStreamUri response whose host lags behind
+// RewriteStaleStreamHost fixes a GetStreamUri response whose host lags behind
 // the ONVIF endpoint we are actually connected to. After a DHCP reassignment the
 // camera's GetStreamUri often still returns the OLD IP (e.g. rtsp://192.168.63.200
 // while the ONVIF service is reachable at .199). The library's fixLocalhostURL
@@ -462,7 +462,9 @@ func deriveRTSPURL(httpURL string) string {
 // Port is preserved from the stream URI (RTSP commonly lives on 554, distinct
 // from the ONVIF port). Returns rtspURL unchanged if either URL fails to parse
 // or the hosts already agree.
-func rewriteStaleStreamHost(rtspURL, onvifEndpoint string) string {
+// Exported for the camera manager's sub-stream resolver (#513) — same
+// GetStreamUri staleness applies to secondary-profile URIs.
+func RewriteStaleStreamHost(rtspURL, onvifEndpoint string) string {
 	if rtspURL == "" || onvifEndpoint == "" {
 		return rtspURL
 	}
