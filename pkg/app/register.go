@@ -397,6 +397,29 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 10c. rtsp output server (#522, optional — default on). Start runs in a
+	// goroutine: a bind failure (port taken by e.g. MediaMTX) must log, not
+	// take the app down.
+	if deps.rtspServer != nil {
+		if err := a.Register(&serviceFunc{
+			name: "rtsp",
+			startFunc: func(ctx context.Context) error {
+				go func() {
+					if err := deps.rtspServer.Start(ctx); err != nil {
+						slog.Error("rtsp", "error", err)
+					}
+				}()
+				return nil
+			},
+			stopFunc: func() error {
+				_ = deps.rtspServer.Stop()
+				return nil
+			},
+		}); err != nil {
+			return fmt.Errorf("register rtsp: %w", err)
+		}
+	}
+
 	// 11. srt (optional)
 	if deps.srtListener != nil {
 		if err := a.Register(&serviceFunc{

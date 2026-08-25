@@ -21,6 +21,17 @@ server:
   #   udp:
   #     enabled: true   # answer "MIBEE-NVR-DISCv1?" probes on UDP 49090
   #     port: 49090
+  # Built-in RTSP output server: every camera gets a pull URL
+  # rtsp://<NVR-IP>:8554/<camera_id> that third-party platforms (e.g. Synology
+  # Surveillance Station) can fill in as a camera source. H.264/H.265 are
+  # served natively (no transcoding). Docker deployments must publish the port
+  # (e.g. -p 8554:8554). A bind failure (port already in use) only logs an
+  # error; the rest of the NVR keeps working.
+  # rtsp:
+  #   enabled: true
+  #   port: 8554
+  #   # username: ""   # optional credentials; empty = open on the LAN
+  #   # password: ""
 
 # HTTP security response headers.
 # frame_ancestors controls who may embed the Web UI in an <iframe> via the CSP

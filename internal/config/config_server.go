@@ -47,6 +47,23 @@ type ServerConfig struct {
 	// Discovery controls how the NVR announces itself on the LAN for clients
 	// that cannot rely on subnet scanning or multicast (mDNS).
 	Discovery DiscoveryConfig `yaml:"discovery"`
+	// RTSP is the built-in RTSP output server (#522): serves
+	// rtsp://<host>:<port>/<camera_id> pull URLs that third-party platforms
+	// (Synology Surveillance Station etc.) fill in as camera sources (#499).
+	RTSP RTSPOutputConfig `yaml:"rtsp"`
+}
+
+// RTSPOutputConfig configures the RTSP output server (PLAY direction only,
+// video-only H.264/H.265 native — no transcoding). Frames come from the same
+// live hubs the FLV/HLS/WS endpoints consume.
+type RTSPOutputConfig struct {
+	Enabled *bool `yaml:"enabled"` // default true
+	Port    int   `yaml:"port"`    // default 8554
+	// Username/Password enable basic/digest auth when set; clients then use
+	// rtsp://user:pass@host/<camera>. Both empty = open access, matching the
+	// HTTP-FLV live endpoint's LAN posture.
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
 }
 
 // DiscoveryConfig groups LAN self-announcement mechanisms.
