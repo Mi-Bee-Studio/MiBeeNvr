@@ -294,7 +294,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Channel        string                        `json:"channel"`
 		AudioEnabled   *bool                         `json:"audio_enabled"`
 		// Keep the camera's real audio track in recorded segments (default off).
-		AudioInRecordings *bool                      `json:"audio_in_recordings"`
+		AudioInRecordings *bool `json:"audio_in_recordings"`
 		// Recording gate: false = live-only (no segments written). nil = record.
 		RecordingEnabled *bool `json:"recording_enabled"`
 		// Cascade gate: false = hidden from the GB28181 cascade catalog and

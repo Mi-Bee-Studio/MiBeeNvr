@@ -54,16 +54,16 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		switch cam.Encoding {
 		case string(model.FormatH264):
 			h264Cfg := recorder.H264Config{
-				CameraID:      cam.ID,
-				RTSPURL:       cam.URL,
-				Username:      cam.Username,
-				Password:      cam.Password,
-				SegmentDur:    segDur,
-				DB:            cm.db,
-				AudioEnabled:  cam.AudioEnabled,
-				AudioInRecordings:  cam.AudioInRecordings,
-				EventBus:      cm.eventBus,
-				RecordEnabled: cam.RecordingEnabled,
+				CameraID:          cam.ID,
+				RTSPURL:           cam.URL,
+				Username:          cam.Username,
+				Password:          cam.Password,
+				SegmentDur:        segDur,
+				DB:                cm.db,
+				AudioEnabled:      cam.AudioEnabled,
+				AudioInRecordings: cam.AudioInRecordings,
+				EventBus:          cm.eventBus,
+				RecordEnabled:     cam.RecordingEnabled,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
@@ -75,16 +75,16 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
-				CameraID:      cam.ID,
-				RTSPURL:       cam.URL,
-				Username:      cam.Username,
-				Password:      cam.Password,
-				SegmentDur:    segDur,
-				DB:            cm.db,
-				AudioEnabled:  cam.AudioEnabled,
-				AudioInRecordings:  cam.AudioInRecordings,
-				EventBus:      cm.eventBus,
-				RecordEnabled: cam.RecordingEnabled,
+				CameraID:          cam.ID,
+				RTSPURL:           cam.URL,
+				Username:          cam.Username,
+				Password:          cam.Password,
+				SegmentDur:        segDur,
+				DB:                cm.db,
+				AudioEnabled:      cam.AudioEnabled,
+				AudioInRecordings: cam.AudioInRecordings,
+				EventBus:          cm.eventBus,
+				RecordEnabled:     cam.RecordingEnabled,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
@@ -136,19 +136,19 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		}
 		onvifClient := cm.reuseOrCreateONVIFClient(cam.ID, onvifEndpoint, cam.Username, cam.Password)
 		onvifCfg := recorder.ONVIFConfig{
-			CameraID:       cam.ID,
-			ProfileToken:   cam.ProfileToken,
-			StreamEncoding: cam.StreamEncoding,
-			Username:       cam.Username,
-			Password:       cam.Password,
-			SegmentDur:     segDur,
-			DB:             cm.db,
-			AudioEnabled:   cam.AudioEnabled,
-				AudioInRecordings: cam.AudioInRecordings,
-			ONVIFEndpoint:  onvifEndpoint,
-			AVI:            cam.HTTPJPEGAVI,
-			EventBus:       cm.eventBus,
-			RecordEnabled:  cam.RecordingEnabled,
+			CameraID:          cam.ID,
+			ProfileToken:      cam.ProfileToken,
+			StreamEncoding:    cam.StreamEncoding,
+			Username:          cam.Username,
+			Password:          cam.Password,
+			SegmentDur:        segDur,
+			DB:                cm.db,
+			AudioEnabled:      cam.AudioEnabled,
+			AudioInRecordings: cam.AudioInRecordings,
+			ONVIFEndpoint:     onvifEndpoint,
+			AVI:               cam.HTTPJPEGAVI,
+			EventBus:          cm.eventBus,
+			RecordEnabled:     cam.RecordingEnabled,
 		}
 		if cam.RecordingMode == "adaptive" {
 			// Validated by config.ValidateCameraRecordingMode (h264/h265 only);

@@ -35,16 +35,16 @@ type mergeLock struct {
 
 // MergeManager handles periodic merging of consecutive MP4 segments.
 type MergeManager struct {
-	mu           sync.RWMutex
-	status       MergeStatus
-	db           *storage.DB
-	store        *storage.Manager
-	getGlobalCfg func() config.MergeConfig
-	getCameraCfg func(cameraID string) *config.MergeConfig
+	mu             sync.RWMutex
+	status         MergeStatus
+	db             *storage.DB
+	store          *storage.Manager
+	getGlobalCfg   func() config.MergeConfig
+	getCameraCfg   func(cameraID string) *config.MergeConfig
 	getAdaptiveCfg func(cameraID string) *config.AdaptiveRecordingConfig
-	cameras      func() []config.CameraConfig
-	mergeLocks   sync.Map // map[string]*mergeLock — per-camera merge mutex
-	metrics      *metrics.Metrics
+	cameras        func() []config.CameraConfig
+	mergeLocks     sync.Map // map[string]*mergeLock — per-camera merge mutex
+	metrics        *metrics.Metrics
 }
 
 // NewMergeManager creates a new MergeManager with the given dependencies.

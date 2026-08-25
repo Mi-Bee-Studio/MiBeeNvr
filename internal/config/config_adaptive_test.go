@@ -107,7 +107,6 @@ func TestValidateAudioTrigger(t *testing.T) {
 	}
 }
 
-
 func TestValidateTimelapseFrameMs(t *testing.T) {
 	ok := func(ms int) *Config {
 		c := adaptiveTestConfig("adaptive", "h264", nil)

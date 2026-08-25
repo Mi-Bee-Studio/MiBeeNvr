@@ -137,8 +137,8 @@ type RollingMergeCoordinator struct {
 	// getAdaptiveCfg resolves the per-camera adaptive config (the compressed
 	// timeline cadence lives there); nil = package default.
 	getAdaptiveCfg func(cameraID string) *config.AdaptiveRecordingConfig
-	cameras      func() []config.CameraConfig
-	metrics      *metrics.Metrics
+	cameras        func() []config.CameraConfig
+	metrics        *metrics.Metrics
 
 	mergeLocks sync.Map // map[string]*mergeLock — per-camera non-blocking mutex
 
@@ -211,15 +211,15 @@ func NewRollingMergeCoordinator(
 	eventBus *event.EventBus,
 ) *RollingMergeCoordinator {
 	return &RollingMergeCoordinator{
-		db:           db,
-		store:        store,
-		getGlobalCfg: getGlobalCfg,
-		getCameraCfg: getCameraCfg,
+		db:             db,
+		store:          store,
+		getGlobalCfg:   getGlobalCfg,
+		getCameraCfg:   getCameraCfg,
 		getAdaptiveCfg: getAdaptiveCfg,
-		cameras:       cameras,
-		metrics:      m,
-		eventBus:     eventBus,
-		eventCh:      make(chan event.Event, 128), // buffered: bursts of segment closes
+		cameras:        cameras,
+		metrics:        m,
+		eventBus:       eventBus,
+		eventCh:        make(chan event.Event, 128), // buffered: bursts of segment closes
 	}
 }
 

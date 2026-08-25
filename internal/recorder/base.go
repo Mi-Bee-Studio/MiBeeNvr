@@ -56,19 +56,19 @@ import (
 // recorders. H264Config and H265Config embed BaseConfig to eliminate the
 // duplication of these fields across the H.264 and H.265 recorder configs.
 type BaseConfig struct {
-	CameraID               string
-	RTSPURL                string
-	Username               string
-	Password               string
-	SegmentDur             time.Duration
-	RingBufCap             int
-	DB                     RecordingDB
-	AudioEnabled           bool
+	CameraID     string
+	RTSPURL      string
+	Username     string
+	Password     string
+	SegmentDur   time.Duration
+	RingBufCap   int
+	DB           RecordingDB
+	AudioEnabled bool
 	// AudioInRecordings keeps the camera's real audio track in recorded
 	// segments (event spans in merged products). Default false — recordings
 	// are video-only unless enabled per camera; live preview and the audio
 	// trigger run off the pre-disk path and are unaffected.
-	AudioInRecordings    bool
+	AudioInRecordings      bool
 	FrameWatchdogTimeout   time.Duration // default 30s (0 = use defaultFrameWatchdogTimeout)
 	EventBus               *event.EventBus
 	DarkFrameFilterEnabled bool // skip dark/night segments (MJPEG/AVI only)
@@ -271,12 +271,12 @@ type baseRecorder struct {
 	// RTP callbacks under mu). muxer is published together with segStart and
 	// audioTrackID in createNewSegment so the audio callback observes an
 	// aligned (muxer, trackID, segStart) triplet.
-	muxer         *muxer.MP4Muxer
-	trackID       int
-	audioTrackID  int
+	muxer        *muxer.MP4Muxer
+	trackID      int
+	audioTrackID int
 	// ambientFile is the raw G.711 sidecar handle (nil unless
 	// adaptive.ambient_audio+ambient_archive; guarded by mu like muxer).
-	ambientFile *os.File
+	ambientFile   *os.File
 	curFinalPath  string
 	curTempPath   string
 	segStart      time.Time
