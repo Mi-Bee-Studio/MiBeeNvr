@@ -55,6 +55,13 @@ func (cm *CameraManager) resolveSubTarget(ctx context.Context, cameraID string) 
 		client := cm.reuseOrCreateONVIFClient(cameraID, endpoint, cam.Username, cam.Password)
 		uriCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
+		// reuseOrCreateONVIFClient hands out cached UNCONNECTED clients —
+		// Connect is idempotent and shares the recorder's session.
+		if !client.IsReady() {
+			if cerr := client.Connect(uriCtx); cerr != nil {
+				return substream.Target{}, false, fmt.Errorf("onvif connect for sub-stream URI: %w", cerr)
+			}
+		}
 		info, err := client.GetStreamURI(uriCtx, token)
 		if err != nil {
 			return substream.Target{}, false, fmt.Errorf("onvif GetStreamUri(sub profile): %w", err)

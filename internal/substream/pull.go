@@ -136,9 +136,15 @@ func (m *Manager) pullOnce(ctx context.Context, e *entry, backoff *time.Duration
 		h264f  *format.H264
 		h265f  *format.H265
 	)
-	if m264 := desc.FindFormat(&h264f); m264 != nil && len(h264f.SPS) > 0 && len(h264f.PPS) > 0 {
+	// SDP parameter sets are an ACCELERATOR, not a requirement: cameras that
+	// emit them only in-band present an SDP without sprop-parameter-sets, and
+	// rejecting those here misclassified a perfectly good sub stream as
+	// "no video track" (observed on an M5 ONVIF camera, #513 field test).
+	// Without SDP params the source becomes ready on the first in-band
+	// parameter set (refreshParamSets publishes and closes ready).
+	if m264 := desc.FindFormat(&h264f); m264 != nil {
 		medi, isH265, codec = m264, false, model.FormatH264
-	} else if m265 := desc.FindFormat(&h265f); m265 != nil && len(h265f.SPS) > 0 && len(h265f.PPS) > 0 {
+	} else if m265 := desc.FindFormat(&h265f); m265 != nil {
 		medi, isH265, codec = m265, true, model.FormatH265
 	}
 	if medi == nil {
@@ -146,12 +152,11 @@ func (m *Manager) pullOnce(ctx context.Context, e *entry, backoff *time.Duration
 		return errNoVideo
 	}
 
-	// SDP parameter sets make the source READY immediately — egress endpoints
-	// can register players without waiting for an in-band keyframe. In-band
-	// sets refresh the snapshot during the session.
 	if isH265 {
-		e.src.publishParams(codec, h265f.SPS, h265f.PPS, h265f.VPS)
-	} else {
+		if len(h265f.SPS) > 0 && len(h265f.PPS) > 0 && len(h265f.VPS) > 0 {
+			e.src.publishParams(codec, h265f.SPS, h265f.PPS, h265f.VPS)
+		}
+	} else if len(h264f.SPS) > 0 && len(h264f.PPS) > 0 {
 		e.src.publishParams(codec, h264f.SPS, h264f.PPS, nil)
 	}
 
@@ -270,8 +275,11 @@ func (m *Manager) pullOnce(ctx context.Context, e *entry, backoff *time.Duration
 
 // refreshParamSets publishes in-band SPS/PPS(/VPS) when they differ from the
 // current snapshot (encoder reconfigured mid-session — resolution change,
-// profile change). AUs are passed through unfiltered, matching main
-// recorders: in-band parameter sets inside IDR AUs reach consumers as-is.
+// profile change). Missing pieces carry forward from the current snapshot:
+// some cameras emit the parameter sets in SEPARATE access units ([SPS][PPS]
+// [IDR]), so each AU only has to complete the set eventually. AUs are passed
+// through unfiltered, matching main recorders: in-band parameter sets inside
+// IDR AUs reach consumers as-is.
 func refreshParamSets(src *Source, codec model.Format, au [][]byte) {
 	var sps, pps, vps []byte
 	if codec == model.FormatH265 {
@@ -279,15 +287,27 @@ func refreshParamSets(src *Source, codec model.Format, au [][]byte) {
 	} else {
 		sps, pps = nalutil.ExtractParamSetsH264(au)
 	}
+	cur := src.params.Load()
+	if cur != nil {
+		if len(vps) == 0 {
+			vps = cur.vps
+		}
+		if len(sps) == 0 {
+			sps = cur.sps
+		}
+		if len(pps) == 0 {
+			pps = cur.pps
+		}
+	}
 	if len(sps) == 0 || len(pps) == 0 || (codec == model.FormatH265 && len(vps) == 0) {
 		return
 	}
-	cur := src.params.Load()
-	if cur == nil ||
-		!nalutil.EqualParamSets(cur.sps, sps) || !nalutil.EqualParamSets(cur.pps, pps) ||
-		(codec == model.FormatH265 && !nalutil.EqualParamSets(cur.vps, vps)) {
-		src.publishParams(codec, sps, pps, vps)
+	if cur != nil &&
+		nalutil.EqualParamSets(cur.sps, sps) && nalutil.EqualParamSets(cur.pps, pps) &&
+		nalutil.EqualParamSets(cur.vps, vps) {
+		return
 	}
+	src.publishParams(codec, sps, pps, vps)
 }
 
 // injectCredentials embeds user:pass userinfo into an rtsp:// URL that lacks
