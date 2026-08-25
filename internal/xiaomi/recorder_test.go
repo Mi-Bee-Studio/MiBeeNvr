@@ -713,6 +713,7 @@ func TestXiaomiRecorderAudioForwardWhenEnabled(t *testing.T) {
 		CameraID:     "test-cam",
 		DID:          "test-device",
 		AudioEnabled: true,
+		AudioInRecordings: true,
 	}, &noopSegmentStore{})
 
 	r.Hub = model.NewStreamHub()
@@ -789,6 +790,7 @@ func TestXiaomiRecorderAudioUnknownCodecSkipped(t *testing.T) {
 		CameraID:     "test-cam",
 		DID:          "test-device",
 		AudioEnabled: true,
+		AudioInRecordings: true,
 	}, &noopSegmentStore{})
 
 	r.Hub = model.NewStreamHub()
@@ -822,6 +824,7 @@ func TestXiaomiRecorderAudioNilHub(t *testing.T) {
 		CameraID:     "test-cam",
 		DID:          "test-device",
 		AudioEnabled: true,
+		AudioInRecordings: true,
 	}, &noopSegmentStore{})
 
 	r.codec = model.FormatH264

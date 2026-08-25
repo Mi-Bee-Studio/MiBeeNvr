@@ -23,11 +23,11 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		var calm, interval string
 		var spike float64
 		var gop int64
-		var ambient bool
+		var ambient, archive bool
 		if a != nil {
-			calm, interval, spike, gop, ambient = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio
+			calm, interval, spike, gop, ambient, archive = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio, a.AmbientArchive
 		}
-		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient)
+		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient, archive)
 		return &ac
 	}
 	// resolveAudioTriggerConfig resolves the audio-trigger overrides (issue
@@ -61,6 +61,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:    segDur,
 				DB:            cm.db,
 				AudioEnabled:  cam.AudioEnabled,
+				AudioInRecordings:  cam.AudioInRecordings,
 				EventBus:      cm.eventBus,
 				RecordEnabled: cam.RecordingEnabled,
 			}
@@ -81,6 +82,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:    segDur,
 				DB:            cm.db,
 				AudioEnabled:  cam.AudioEnabled,
+				AudioInRecordings:  cam.AudioInRecordings,
 				EventBus:      cm.eventBus,
 				RecordEnabled: cam.RecordingEnabled,
 			}
@@ -142,6 +144,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			SegmentDur:     segDur,
 			DB:             cm.db,
 			AudioEnabled:   cam.AudioEnabled,
+				AudioInRecordings: cam.AudioInRecordings,
 			ONVIFEndpoint:  onvifEndpoint,
 			AVI:            cam.HTTPJPEGAVI,
 			EventBus:       cm.eventBus,

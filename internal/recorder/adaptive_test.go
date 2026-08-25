@@ -362,11 +362,11 @@ func TestAdaptiveGate_SparseSkipAndFlushFacade(t *testing.T) {
 }
 
 func TestResolveAdaptiveConfig_DefaultsAndOverrides(t *testing.T) {
-	ac := ResolveAdaptiveConfig("", "", 0, 0, false)
+	ac := ResolveAdaptiveConfig("", "", 0, 0, false, false)
 	if ac != (AdaptiveConfig{CalmThreshold: 60 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 32 << 20}) {
 		t.Fatalf("defaults wrong: %+v", ac)
 	}
-	ac = ResolveAdaptiveConfig("2m", "10s", 7.5, 1<<20, true)
+	ac = ResolveAdaptiveConfig("2m", "10s", 7.5, 1<<20, true, false)
 	if ac.CalmThreshold != 2*time.Minute || ac.TimelapseInterval != 10*time.Second || ac.SpikeFactor != 7.5 || ac.MaxGOPBuffer != 1<<20 || !ac.AmbientAudio {
 		t.Fatalf("overrides wrong: %+v", ac)
 	}

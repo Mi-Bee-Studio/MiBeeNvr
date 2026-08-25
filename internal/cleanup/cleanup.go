@@ -364,6 +364,10 @@ func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, re
 		if err := cm.store.DeleteFile(rec.FilePath); err != nil {
 			logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
 		}
+		// Ambient archive sidecar shares the recording's lifetime (#496).
+		if err := os.Remove(rec.FilePath + ".g711"); err != nil && !os.IsNotExist(err) {
+			logger.Warn("failed to delete ambient sidecar", "file_path", rec.FilePath+".g711", "error", err)
+		}
 	}
 
 	// 6. Publish segment.deleted events for successfully deleted recordings

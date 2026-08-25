@@ -1741,5 +1741,11 @@
   "detail.activity.score": "活动分",
   "detail.activity.noScore": "未分析",
   "detail.activity.current": "本段",
-  "detail.activity.hint": "绿=平静 → 红=活跃;点击跳转该录像"
+  "detail.activity.hint": "绿=平静 → 红=活跃;点击跳转该录像",
+  "cameras.audioInRecordings": "录像保留音频轨",
+  "cameras.audioInRecordingsHint": "默认不保留：录像文件为纯视频（直播与音频触发不受影响）",
+  "cameras.ambientArchive": "原始环境声留档",
+  "cameras.ambientArchiveHint": "无人时段的原始 G.711 声音另存为附属文件供后期处理",
+  "cameras.timelapseFrameMs": "延时帧距",
+  "cameras.timelapseFrameMsDefault": "默认（0.1s）"
 }

@@ -101,7 +101,7 @@ func (e *mergeTestEnv) insertMergeableRecording(t *testing.T, id string, cameraI
 
 // newTestMergeManager creates a MergeManager with the given config for testing.
 func newTestMergeManager(db *storage.DB, store *storage.Manager, cfg config.MergeConfig, cameras []config.CameraConfig) *MergeManager {
-	return NewMergeManager(db, store, func() config.MergeConfig { return cfg }, func(string) *config.MergeConfig { return nil }, func() []config.CameraConfig { return cameras }, nil)
+	return NewMergeManager(db, store, func() config.MergeConfig { return cfg }, func(string) *config.MergeConfig { return nil }, func(string) *config.AdaptiveRecordingConfig { return nil }, func() []config.CameraConfig { return cameras }, nil)
 }
 
 func TestRunOnce_NoCameras(t *testing.T) {
@@ -398,6 +398,7 @@ func TestHotReload_PerCameraConfig(t *testing.T) {
 			}
 			return nil
 		},
+		nil, // no per-camera adaptive config
 		func() []config.CameraConfig { return []config.CameraConfig{{ID: cameraID}} },
 		nil,
 	)
@@ -1109,6 +1110,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
+			nil, // no per-camera adaptive config in test
 			func() []config.CameraConfig { return cameras },
 			m,
 		)
@@ -1168,6 +1170,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
+			nil, // no per-camera adaptive config in test
 			func() []config.CameraConfig { return cameras },
 			m,
 		)
@@ -1227,6 +1230,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			env.db, env.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
+			nil, // no per-camera adaptive config in test
 			func() []config.CameraConfig { return cameras },
 			m,
 		)
@@ -1293,6 +1297,7 @@ func TestIntegration_FullMergeWorkflow(t *testing.T) {
 			concEnv.db, concEnv.store,
 			func() config.MergeConfig { return cfg },
 			func(string) *config.MergeConfig { return nil },
+			nil, // no per-camera adaptive config in test
 			func() []config.CameraConfig { return cameras },
 			concM,
 		)

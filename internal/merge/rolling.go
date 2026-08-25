@@ -134,6 +134,9 @@ type RollingMergeCoordinator struct {
 	store        *storage.Manager
 	getGlobalCfg func() config.MergeConfig
 	getCameraCfg func(cameraID string) *config.MergeConfig
+	// getAdaptiveCfg resolves the per-camera adaptive config (the compressed
+	// timeline cadence lives there); nil = package default.
+	getAdaptiveCfg func(cameraID string) *config.AdaptiveRecordingConfig
 	cameras      func() []config.CameraConfig
 	metrics      *metrics.Metrics
 
@@ -202,6 +205,7 @@ func NewRollingMergeCoordinator(
 	store *storage.Manager,
 	getGlobalCfg func() config.MergeConfig,
 	getCameraCfg func(cameraID string) *config.MergeConfig,
+	getAdaptiveCfg func(cameraID string) *config.AdaptiveRecordingConfig,
 	cameras func() []config.CameraConfig,
 	m *metrics.Metrics,
 	eventBus *event.EventBus,
@@ -211,7 +215,8 @@ func NewRollingMergeCoordinator(
 		store:        store,
 		getGlobalCfg: getGlobalCfg,
 		getCameraCfg: getCameraCfg,
-		cameras:      cameras,
+		getAdaptiveCfg: getAdaptiveCfg,
+		cameras:       cameras,
 		metrics:      m,
 		eventBus:     eventBus,
 		eventCh:      make(chan event.Event, 128), // buffered: bursts of segment closes
@@ -219,6 +224,20 @@ func NewRollingMergeCoordinator(
 }
 
 // resolveRollingConfig returns the effective rolling config for a camera.
+// resolveTimelapseCadence returns the per-camera compressed-timeline frame
+// duration (adaptive.timelapse_frame_ms presets 100/300/500ms); zero = the
+// merge package default.
+func (r *RollingMergeCoordinator) resolveTimelapseCadence(cameraID string) time.Duration {
+	if r.getAdaptiveCfg == nil {
+		return 0
+	}
+	a := r.getAdaptiveCfg(cameraID)
+	if a == nil || a.TimelapseFrameMs == 0 {
+		return 0
+	}
+	return time.Duration(a.TimelapseFrameMs) * time.Millisecond
+}
+
 func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingMergeConfig {
 	global := r.getGlobalCfg()
 	perCamera := r.getCameraCfg(cameraID)
@@ -945,7 +964,7 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 	}
 
 	// Merge.
-	stats, err := MergeMP4Segments(ctx, infos, tempPath)
+	stats, err := MergeMP4Segments(ctx, infos, tempPath, r.resolveTimelapseCadence(cameraID))
 	if err != nil {
 		os.Remove(tempPath)
 		// Mark these as incompatible so we don't retry forever.
@@ -1663,7 +1682,7 @@ func (r *RollingMergeCoordinator) createBucket(
 	}
 
 	// Merge single segment into the bucket file (pre-aligned by mergeOneSegment).
-	stats, err := MergeMP4Segments(ctx, []*SegmentInfo{info}, tempPath)
+	stats, err := MergeMP4Segments(ctx, []*SegmentInfo{info}, tempPath, r.resolveTimelapseCadence(seg.cameraID))
 	if err != nil {
 		os.Remove(tempPath)
 		return "", "", fmt.Errorf("merge initial segment: %w", err)
@@ -1710,6 +1729,7 @@ func (r *RollingMergeCoordinator) createBucket(
 
 	// Delete the source segment file (DB already committed).
 	r.store.DeleteFile(seg.filePath)
+	os.Remove(seg.filePath + ".g711") // ambient archive sidecar (#496)
 
 	return finalPath, mergedRecID, nil
 }
@@ -1753,7 +1773,7 @@ func (r *RollingMergeCoordinator) appendToBucket(
 	// (self-heals pre-fix buckets whose first sample was a P-frame). A bucket
 	// with NO keyframe-bearing sample at all (legacy corrupt data) aborts the
 	// append with a distinct error so mergeOneSegment can rebuild the bucket.
-	stats, mergeErr := MergeMP4Segments(ctx, []*SegmentInfo{bucketInfo, newInfo}, tempPath)
+	stats, mergeErr := MergeMP4Segments(ctx, []*SegmentInfo{bucketInfo, newInfo}, tempPath, r.resolveTimelapseCadence(seg.cameraID))
 	if mergeErr != nil {
 		os.Remove(tempPath)
 		return "", "", fmt.Errorf("merge append: %w", mergeErr)
@@ -1814,6 +1834,7 @@ func (r *RollingMergeCoordinator) appendToBucket(
 
 	// Delete the source segment file.
 	r.store.DeleteFile(seg.filePath)
+	os.Remove(seg.filePath + ".g711") // ambient archive sidecar (#496)
 
 	// Delete the PREVIOUS bucket file (each append creates a new file via
 	// store.CreateSegment, so the old bucket path is now orphaned). Only
@@ -1821,6 +1842,7 @@ func (r *RollingMergeCoordinator) appendToBucket(
 	// CreateSegment generates unique timestamps).
 	if bucket.mergedFilePath != "" && bucket.mergedFilePath != finalPath {
 		r.store.DeleteFile(bucket.mergedFilePath)
+		os.Remove(bucket.mergedFilePath + ".g711")
 	}
 
 	return finalPath, mergedRecID, nil

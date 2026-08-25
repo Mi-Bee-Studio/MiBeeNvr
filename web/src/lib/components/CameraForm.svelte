@@ -90,6 +90,7 @@
   let formStreamEncoding = $state('');
   let formChannel = $state('');
   let formAudioEnabled = $state(false);
+  let formAudioInRecordings = $state(false);
   // Recording gate — when off, the recorder stays connected for live preview
   // and relay but writes NO segments to disk (live-only / stream-forward mode).
   let formRecordingEnabled = $state(true);
@@ -103,6 +104,8 @@
   let formAdaptiveSpikeFactor = $state('');
   let formAdaptiveGopBufferMB = $state('');
   let formAmbientAudio = $state(false);
+  let formAmbientArchive = $state(false);
+  let formTimelapseFrameMs = $state('');
   let formAdaptiveWasAmbient = false;
   // Audio trigger (#478): loudness input on top of the adaptive gate. Only
   // meaningful (and only sent) for adaptive + G.711 cameras.
@@ -271,6 +274,7 @@ let validationErrors = $state<Record<string, string>>({});
     validationErrors = {};
     formChannel = '';
     formAudioEnabled = false;
+    formAudioInRecordings = false;
     formTwoWayAudioEnabled = false;
     formSubnetHints = '';
     formDarkFrameFilterEnabled = false;
@@ -376,6 +380,7 @@ let validationErrors = $state<Record<string, string>>({});
     }
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
+    formAudioInRecordings = camera.audio_in_recordings ?? false;
     formRecordingEnabled = camera.recording_enabled ?? true;
     formCascadeEnabled = camera.cascade_enabled ?? true;
     formRecordingMode = camera.recording_mode === 'adaptive' ? 'adaptive' : 'continuous';
@@ -386,6 +391,8 @@ let validationErrors = $state<Record<string, string>>({});
       ? String(Math.round(camera.adaptive.gop_buffer_bytes / (1024 * 1024)))
       : '';
     formAmbientAudio = camera.adaptive?.ambient_audio ?? false;
+    formAmbientArchive = camera.adaptive?.ambient_archive ?? false;
+    formTimelapseFrameMs = camera.adaptive?.timelapse_frame_ms ? String(camera.adaptive.timelapse_frame_ms) : '';
     formAdaptiveWasAmbient = formAmbientAudio;
     formAudioTriggerEnabled = camera.audio_trigger?.enabled ?? false;
     formAudioTriggerWasEnabled = formAudioTriggerEnabled;
@@ -653,6 +660,10 @@ function buildAdaptivePayload() {
     if (!Number.isNaN(spike) && spike > 0) p.spike_factor = spike;
     const mb = parseInt(formAdaptiveGopBufferMB, 10);
     if (!Number.isNaN(mb) && mb > 0) p.gop_buffer_bytes = mb * 1024 * 1024;
+    p.ambient_audio = formAmbientAudio;
+    p.ambient_archive = formAmbientAudio && formAmbientArchive;
+    const fms = parseInt(formTimelapseFrameMs, 10);
+    if (!Number.isNaN(fms) && fms > 0) p.timelapse_frame_ms = fms;
     return p;
 }
 
@@ -699,6 +710,7 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            audio_in_recordings: formAudioInRecordings,
             recording_enabled: formRecordingEnabled,
             cascade_enabled: formCascadeEnabled,
             recording_mode: formRecordingMode,
@@ -765,6 +777,7 @@ async function performCameraSave() {
             },
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
+            audio_in_recordings: formAudioInRecordings,
             recording_enabled: formRecordingEnabled,
             cascade_enabled: formCascadeEnabled,
             recording_mode: formRecordingMode,
@@ -981,6 +994,15 @@ async function performCameraSave() {
             <input id="cam-adaptive-gop" class="input" type="number" step="1" min="1" max="64" placeholder="16" bind:value={formAdaptiveGopBufferMB} />
           </div>
         </div>
+        <div>
+          <label for="cam-adaptive-framems" class="input-label">{t('cameras.timelapseFrameMs')}</label>
+          <select id="cam-adaptive-framems" class="input" bind:value={formTimelapseFrameMs}>
+            <option value="">{t('cameras.timelapseFrameMsDefault')}</option>
+            <option value="100">0.1s</option>
+            <option value="300">0.3s</option>
+            <option value="500">0.5s</option>
+          </select>
+        </div>
         <p class="text-xs th-text-muted -mt-1">{t('cameras.adaptiveParamsHint')}</p>
         <div class="flex items-center gap-2">
           <input
@@ -1019,6 +1041,18 @@ async function performCameraSave() {
         </div>
         {#if formAmbientAudio}
           <p class="text-xs th-text-muted -mt-1">{t('cameras.ambientAudioHint')}</p>
+          <div class="flex items-center gap-2">
+            <input
+              id="cam-ambient-archive"
+              type="checkbox"
+              class="checkbox"
+              bind:checked={formAmbientArchive}
+            />
+            <label for="cam-ambient-archive" class="input-label cursor-pointer">
+              {t('cameras.ambientArchive')}
+            </label>
+          </div>
+          <p class="text-xs th-text-muted -mt-1">{t('cameras.ambientArchiveHint')}</p>
         {/if}
       {/if}
     {/if}
@@ -1103,6 +1137,20 @@ async function performCameraSave() {
           {t('cameras.audioEnabled')}
         </label>
       </div>
+      {#if formAudioEnabled}
+        <div class="flex items-center gap-2 -mt-1">
+          <input
+            id="cam-audio-in-recordings"
+            type="checkbox"
+            class="checkbox"
+            bind:checked={formAudioInRecordings}
+          />
+          <label for="cam-audio-in-recordings" class="input-label cursor-pointer">
+            {t('cameras.audioInRecordings')}
+          </label>
+        </div>
+        <p class="text-xs th-text-muted -mt-1">{t('cameras.audioInRecordingsHint')}</p>
+      {/if}
     {/if}
 
     <!-- Xiaomi two-way audio toggle -->

@@ -41,6 +41,7 @@ type MergeManager struct {
 	store        *storage.Manager
 	getGlobalCfg func() config.MergeConfig
 	getCameraCfg func(cameraID string) *config.MergeConfig
+	getAdaptiveCfg func(cameraID string) *config.AdaptiveRecordingConfig
 	cameras      func() []config.CameraConfig
 	mergeLocks   sync.Map // map[string]*mergeLock — per-camera merge mutex
 	metrics      *metrics.Metrics
@@ -54,6 +55,7 @@ func NewMergeManager(
 	store *storage.Manager,
 	getGlobalCfg func() config.MergeConfig,
 	getCameraCfg func(cameraID string) *config.MergeConfig,
+	getAdaptiveCfg func(cameraID string) *config.AdaptiveRecordingConfig,
 	cameras func() []config.CameraConfig,
 	m *metrics.Metrics,
 ) *MergeManager {
@@ -70,6 +72,19 @@ func NewMergeManager(
 // acquireMergeLock attempts to acquire a non-blocking per-camera merge lock.
 // Returns a release function and true if the lock was acquired.
 // Returns nil, false if another merge is already in progress for this camera.
+// resolveTimelapseCadence mirrors RollingMergeCoordinator's per-camera
+// compressed-timeline cadence (adaptive.timelapse_frame_ms).
+func (m *MergeManager) resolveTimelapseCadence(cameraID string) time.Duration {
+	if m.getAdaptiveCfg == nil {
+		return 0
+	}
+	a := m.getAdaptiveCfg(cameraID)
+	if a == nil || a.TimelapseFrameMs == 0 {
+		return 0
+	}
+	return time.Duration(a.TimelapseFrameMs) * time.Millisecond
+}
+
 func (m *MergeManager) acquireMergeLock(cameraID string) (release func(), ok bool) {
 	lock := &mergeLock{}
 	actual, _ := m.mergeLocks.LoadOrStore(cameraID, lock)
@@ -439,7 +454,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			continue
 		}
 
-		stats, err := MergeMP4Segments(ctx, segmentInfos, tempPath)
+		stats, err := MergeMP4Segments(ctx, segmentInfos, tempPath, m.resolveTimelapseCadence(cameraID))
 		if err != nil {
 			logger.Error("failed to merge MP4 segments", "camera_id", cameraID, "error", err)
 			os.Remove(tempPath)

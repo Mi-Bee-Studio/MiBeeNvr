@@ -227,6 +227,7 @@ func TestH265Recorder_AudioBroadcast(t *testing.T) {
 		SegmentDur:   5 * time.Minute,
 		RingBufCap:   100,
 		AudioEnabled: true,
+		AudioInRecordings: true,
 	}, mgr)
 	rec.Hub = hub
 
@@ -326,6 +327,7 @@ func TestH265Recorder_AudioEnabled_NoAudioInStream(t *testing.T) {
 		SegmentDur:   5 * time.Minute,
 		RingBufCap:   100,
 		AudioEnabled: true,
+		AudioInRecordings: true,
 	}, mgr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

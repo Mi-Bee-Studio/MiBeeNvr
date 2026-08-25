@@ -293,6 +293,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
 		Channel        string                        `json:"channel"`
 		AudioEnabled   *bool                         `json:"audio_enabled"`
+		// Keep the camera's real audio track in recorded segments (default off).
+		AudioInRecordings *bool                      `json:"audio_in_recordings"`
 		// Recording gate: false = live-only (no segments written). nil = record.
 		RecordingEnabled *bool `json:"recording_enabled"`
 		// Cascade gate: false = hidden from the GB28181 cascade catalog and
@@ -498,6 +500,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Timelapse:         body.Timelapse,
 		Channel:           body.Channel,
 		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
+		AudioInRecordings: body.AudioInRecordings != nil && *body.AudioInRecordings,
 		RecordingEnabled:  body.RecordingEnabled,
 		CascadeEnabled:    body.CascadeEnabled,
 		RecordingMode:     body.RecordingMode,

@@ -22,6 +22,7 @@ func newTestRollingCoordinator(env *mergeTestEnv, cfg config.MergeConfig, bus *e
 		env.db, env.store,
 		func() config.MergeConfig { return cfg },
 		func(string) *config.MergeConfig { return nil },
+		nil, // no per-camera adaptive config in test
 		func() []config.CameraConfig { return nil },
 		nil,
 		bus,
@@ -38,6 +39,7 @@ func newTestRollingCoordinatorWithCameras(env *mergeTestEnv, cfg config.MergeCon
 		env.db, env.store,
 		func() config.MergeConfig { return cfg },
 		func(string) *config.MergeConfig { return nil },
+		nil, // no per-camera adaptive config in test
 		func() []config.CameraConfig { return cameras },
 		nil,
 		bus,

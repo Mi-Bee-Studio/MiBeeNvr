@@ -430,7 +430,7 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				aid := r.audioTrackID
 				start := r.segStart
 				r.mu.Unlock()
-				if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse (adaptive-timelapse) mode drops disk audio, live audio continues
+				if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse drops disk audio; the track exists only when AudioInRecordings is on
 					pts := time.Since(start)
 					dur := 1024 * time.Second / time.Duration(audioForma.ClockRate())
 					if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
@@ -458,12 +458,13 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				g711Rate = a.g711SampleRate
 			}
 			r.audioTriggerIngest(g711Forma.MULaw, data, g711Rate, time.Now())
+			r.writeAmbientArchive(data) // raw sidecar when adaptive.ambient_archive is on
 			r.mu.Lock()
 			m := r.muxer
 			aid := r.audioTrackID
 			start := r.segStart
 			r.mu.Unlock()
-			if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse (adaptive-timelapse) mode drops disk audio, live audio continues
+			if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse drops disk audio; the track exists only when AudioInRecordings is on
 				pts := time.Since(start)
 				// g711SampleRate is read from the immutable audio snapshot
 				// (this callback runs on the RTP reader goroutine, concurrently

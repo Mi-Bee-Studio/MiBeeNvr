@@ -245,6 +245,7 @@ func TestH264Characterization_AudioCapturedInSegment(t *testing.T) {
 		SegmentDur:   5 * time.Minute,
 		RingBufCap:   100,
 		AudioEnabled: true,
+		AudioInRecordings: true,
 	}, mgr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -662,6 +663,7 @@ func TestH265Characterization_AudioCapturedInSegment(t *testing.T) {
 		SegmentDur:   5 * time.Minute,
 		RingBufCap:   100,
 		AudioEnabled: true,
+		AudioInRecordings: true,
 	}, mgr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

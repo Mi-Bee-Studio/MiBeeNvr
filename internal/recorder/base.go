@@ -64,6 +64,11 @@ type BaseConfig struct {
 	RingBufCap             int
 	DB                     RecordingDB
 	AudioEnabled           bool
+	// AudioInRecordings keeps the camera's real audio track in recorded
+	// segments (event spans in merged products). Default false — recordings
+	// are video-only unless enabled per camera; live preview and the audio
+	// trigger run off the pre-disk path and are unaffected.
+	AudioInRecordings    bool
 	FrameWatchdogTimeout   time.Duration // default 30s (0 = use defaultFrameWatchdogTimeout)
 	EventBus               *event.EventBus
 	DarkFrameFilterEnabled bool // skip dark/night segments (MJPEG/AVI only)
@@ -269,6 +274,9 @@ type baseRecorder struct {
 	muxer         *muxer.MP4Muxer
 	trackID       int
 	audioTrackID  int
+	// ambientFile is the raw G.711 sidecar handle (nil unless
+	// adaptive.ambient_audio+ambient_archive; guarded by mu like muxer).
+	ambientFile *os.File
 	curFinalPath  string
 	curTempPath   string
 	segStart      time.Time
@@ -859,11 +867,11 @@ func (b *baseRecorder) createNewSegment() bool {
 	}
 	b.trackID = trackID
 
-	// Add audio track if audio config is available (read the immutable snapshot
-	// once — the audio config is set during connectAndRecord and read here from
-	// writeFrames; the snapshot makes this race-free, #226).
+	// Add audio track if audio config is available AND the camera keeps audio
+	// in recordings (default off — #496 follow-up). Live preview and the audio
+	// trigger read the pre-disk path and do not need the track.
 	var audioTrackID int
-	if a := b.audioSnapshot(); a != nil && len(a.muxerConfig) > 0 && a.codec != "" {
+	if a := b.audioSnapshot(); a != nil && len(a.muxerConfig) > 0 && a.codec != "" && b.cfg.AudioInRecordings {
 		aID, err := m.AddAudioTrack(a.codec, a.muxerConfig)
 		if err != nil {
 			b.log.Error("failed to add audio track",
@@ -881,12 +889,57 @@ func (b *baseRecorder) createNewSegment() bool {
 	b.muxer = m
 	b.segStart = time.Now()
 	b.audioTrackID = audioTrackID
+	b.ambientFile = b.openAmbientSidecar(finalPath)
 	b.mu.Unlock()
 	b.curTempPath = tempPath
 	b.curFinalPath = finalPath
 	b.lastFrameTime = b.segStart
 	b.frameCount = 0
 	return true
+}
+
+// openAmbientSidecar opens the raw ambient-audio archive file
+// (<final>.g711) when adaptive.ambient_audio + ambient_archive are both on
+// (#496 playability option): the merge only carries the atmosphere bed, the
+// sidecar keeps the untouched recording for post-production. Called under mu
+// from createNewSegment; nil when disabled.
+func (b *baseRecorder) openAmbientSidecar(finalPath string) *os.File {
+	if b.cfg.Adaptive == nil || !b.cfg.Adaptive.AmbientAudio || !b.cfg.Adaptive.AmbientArchive {
+		return nil
+	}
+	f, err := os.OpenFile(finalPath+".g711", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		b.log.Warn("ambient archive sidecar unavailable", "camera_id", b.cfg.CameraID, "error", err)
+		return nil
+	}
+	return f
+}
+
+// writeAmbientArchive appends raw G.711 bytes to the sidecar (audio RTP
+// callback goroutine; snapshots the handle under mu like the muxer).
+func (b *baseRecorder) writeAmbientArchive(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	b.mu.Lock()
+	f := b.ambientFile
+	b.mu.Unlock()
+	if f == nil {
+		return
+	}
+	if _, err := f.Write(data); err != nil {
+		b.log.Warn("ambient archive write failed", "camera_id", b.cfg.CameraID, "error", err)
+	}
+}
+
+// closeAmbientSidecar closes the sidecar (segment lifecycle paths, under mu).
+func (b *baseRecorder) closeAmbientSidecar() {
+	if b.ambientFile != nil {
+		if err := b.ambientFile.Close(); err != nil {
+			b.log.Warn("ambient archive close failed", "camera_id", b.cfg.CameraID, "error", err)
+		}
+		b.ambientFile = nil
+	}
 }
 
 // closeCurrentSegment finalizes the current segment: closes the muxer,
@@ -910,6 +963,9 @@ func (b *baseRecorder) closeCurrentSegment() {
 		b.audioTrig.ClearWritten()
 	}
 	finishStart := time.Now()
+	b.mu.Lock()
+	b.closeAmbientSidecar()
+	b.mu.Unlock()
 	if err := b.muxer.Close(); err != nil {
 		b.log.Error("failed to close muxer",
 			"camera_id", b.cfg.CameraID, "error", err)
@@ -996,6 +1052,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 	b.mu.Lock()
 	b.muxer = nil
 	b.audioTrackID = 0
+	b.closeAmbientSidecar()
 	b.mu.Unlock()
 	b.curTempPath = ""
 	b.curFinalPath = ""
@@ -1015,8 +1072,10 @@ func (b *baseRecorder) handleStorageFailure() {
 		if b.audioTrig != nil {
 			b.audioTrig.ClearWritten()
 		}
+		b.closeAmbientSidecar()
 		b.muxer.Close()
 		os.Remove(b.curTempPath)
+		os.Remove(b.curFinalPath + ".g711")
 		b.mu.Lock()
 		b.muxer = nil
 		b.curTempPath = ""
