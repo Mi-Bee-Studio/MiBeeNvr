@@ -12,6 +12,7 @@
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![ARM](https://img.shields.io/badge/ARM-0091BD?style=flat&logo=arm&logoColor=white)](https://www.arm.com/)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=flat)](LICENSE)
+[![Contributors](https://img.shields.io/github/contributors/Mi-Bee-Studio/MiBeeNvr?style=flat&label=Contributors)](https://github.com/Mi-Bee-Studio/MiBeeNvr/graphs/contributors)
 
 > **Turn any low-power ARM device into a professional NVR in 60 seconds.**  
 > Single binary, zero dependencies, no cloud required. Runs on low-power ARM devices with a 512MB memory budget.
@@ -253,6 +254,10 @@ For full project details, see the [architecture overview](docs/en/architecture.m
 1. Run `make lint` before submitting (golangci-lint v2; run `make lint-install` first)
 2. Add tests for new features
 3. Write clear commit messages
+
+Thanks to everyone who has contributed:
+
+[![Contributors](https://contrib.rocks/image?repo=Mi-Bee-Studio/MiBeeNvr)](https://github.com/Mi-Bee-Studio/MiBeeNvr/graphs/contributors)
 
 ## License
 
