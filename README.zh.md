@@ -12,6 +12,7 @@
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![ARM](https://img.shields.io/badge/ARM-0091BD?style=flat&logo=arm&logoColor=white)](https://www.arm.com/)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=flat)](LICENSE)
+[![Contributors](https://img.shields.io/github/contributors/Mi-Bee-Studio/MiBeeNvr?style=flat&label=Contributors)](https://github.com/Mi-Bee-Studio/MiBeeNvr/graphs/contributors)
 
 轻量级、易上手的网络视频录像机，单文件部署，零配置烦恼——下载即用。
 
@@ -244,6 +245,10 @@ docs/                # 文档（中文/英文）
 1. 提交前运行 `make lint`
 2. 新功能附带测试
 3. 清晰的提交信息
+
+感谢所有贡献者：
+
+[![Contributors](https://contrib.rocks/image?repo=Mi-Bee-Studio/MiBeeNvr)](https://github.com/Mi-Bee-Studio/MiBeeNvr/graphs/contributors)
 
 ## 许可证
 
