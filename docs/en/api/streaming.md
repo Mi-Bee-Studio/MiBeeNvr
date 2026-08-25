@@ -282,3 +282,66 @@ curl -u username:password \
   "default": "webrtc"
 }
 ```
+
+## Flow Snapshot
+
+**Endpoint:** `GET /api/streams`
+
+Returns a real-time snapshot of every camera's video pipeline (source → StreamHub → consumers). Powers the flow-diagnosis tree in the dashboard's camera-status list. Counters are cumulative — callers diff two polls to derive fps / bitrate / per-consumer send rates (the backend hot path never computes rates).
+
+**Request:**
+```bash
+curl -u username:password http://localhost:9090/api/streams
+```
+
+**Response:**
+```json
+{
+  "streams": [
+    {
+      "camera_id": "front-door",
+      "source": "rtsp",
+      "frames_in": 10240,
+      "bytes_in": 955630592,
+      "last_frame_at": "2026-08-25T06:00:00Z",
+      "jitter_active": false,
+      "name": "Front Door",
+      "status": "recording",
+      "encoding": "h264",
+      "width": 1920,
+      "height": 1080,
+      "viewers": { "ws": 1 },
+      "last_frame_age_s": 0.04,
+      "consumers": [
+        {
+          "id": "ws-front-door",
+          "sends": 5120,
+          "drops": 0,
+          "idr_drops": 0,
+          "drop_rate": 0,
+          "buffer_depth": 0,
+          "buffer_capacity": 150,
+          "dwell_avg_ms": 0.4,
+          "dwell_max_ms": 3
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `last_frame_age_s`: seconds since the last frame (`null` when no frame has ever arrived) — a more direct "just broke" signal than cumulative counters.
+- `consumers[].id` prefixes identify the consumer type: `ws-`/`webrtc-`/`flv-`/`hls` (live viewing), `health-stats-`/`health-freeze-` (health monitoring), `keyframe-extractor-` (timelapse), `relay-*` (relays), `cascade-` (cascades).
+
+**Per-camera endpoint:** `GET /api/cameras/{id}/flow` returns the single entry for one camera.
+
+## Camera Recording Stats
+
+**Endpoint:** `GET /api/cameras/{id}/stats`
+
+Returns one camera's recording count and total on-disk size (non-archived). The "storage usage" line in the expanded flow tree uses this endpoint.
+
+**Response:**
+```json
+{ "recording_count": 95, "total_size": 553675776 }
+```

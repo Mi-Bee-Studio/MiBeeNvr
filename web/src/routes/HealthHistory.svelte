@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getHealthEvents, getHealthCameras, listCameras, getStability } from '$lib/api';
-  import type { HealthEvent, HealthEventsResponse, Camera, CameraHealthDetail, CameraStability } from '$lib/api';
+  import { getHealthEvents, listCameras } from '$lib/api';
+  import type { HealthEvent, HealthEventsResponse, Camera } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { AlertCircle, Activity } from 'lucide-svelte';
@@ -14,10 +14,7 @@
   let cameraFilter = $state('');
   let eventTypeFilter = $state('');
   let cameras = $state<Camera[]>([]);
-  let healthData = $state<Record<string, CameraHealthDetail>>({});
-  let healthLoading = $state(true);
   let page = $state(0);
-  let expandedCamera = $state<string | null>(null);
   const pageSize = 20;
 
   const eventTypes = [
@@ -28,38 +25,6 @@
     { value: 'freeze_detected', label: () => t('health.eventTypes.freezeDetected') },
     { value: 'freeze_recovered', label: () => t('health.eventTypes.freezeRecovered') },
   ];
-
-  function scoreColor(score: number): string {
-    if (score >= 80) return 'var(--color-success)';
-    if (score >= 30) return 'var(--color-warning)';
-    return 'var(--color-danger)';
-  }
-
-  function scoreBgColor(score: number): string {
-    if (score >= 80) return 'rgba(16, 185, 129, 0.1)';
-    if (score >= 30) return 'rgba(245, 158, 11, 0.1)';
-    return 'rgba(239, 68, 68, 0.1)';
-  }
-
-  function scoreBorderColor(score: number): string {
-    if (score >= 80) return 'rgba(16, 185, 129, 0.25)';
-    if (score >= 30) return 'rgba(245, 158, 11, 0.25)';
-    return 'rgba(239, 68, 68, 0.25)';
-  }
-
-  function scoreLabel(score: number): string {
-    if (score >= 80) return t('health.score.excellent');
-    if (score >= 30) return t('health.score.good');
-    return t('health.score.poor');
-  }
-
-  function statusDotColor(status: string): string {
-    const s = status.toLowerCase();
-    if (s === 'recording' || s === 'active' || s === 'healthy') return 'var(--color-success)';
-    if (s === 'reconnecting' || s === 'warning') return 'var(--color-warning)';
-    if (s === 'error' || s === 'failed' || s === 'unhealthy') return 'var(--color-danger)';
-    return 'var(--text-tertiary)';
-  }
 
   function statusLabel(status: string): string {
     const s = status.toLowerCase();
@@ -94,8 +59,6 @@
     return camera ? camera.name : cameraId;
   }
 
-  let healthEntries = $derived(Object.entries(healthData));
-
   async function loadEvents() {
     loading = true;
     error = '';
@@ -120,28 +83,6 @@
       cameras = await listCameras();
     } catch (e) {
       console.warn('Failed to load cameras:', e);
-    }
-  }
-
-  async function loadHealth() {
-    healthLoading = true;
-    try {
-      healthData = await getHealthCameras();
-    } catch (e) {
-      console.warn('Failed to load health cameras:', e);
-    } finally {
-      healthLoading = false;
-    }
-  }
-
-  // Stability (#469): uptime/MTBF/trend per camera — QualityTracker 24h window.
-  let stability = $state<Record<string, CameraStability>>({});
-  async function loadStability() {
-    try {
-      const res = await getStability();
-      stability = res.cameras ?? {};
-    } catch {
-      // Non-fatal: stability row simply stays hidden.
     }
   }
 
@@ -177,109 +118,13 @@
     };
   });
 
-  let healthTimer: ReturnType<typeof setInterval> | null = null;
-
-  // Load health on mount; poll at 60s (not 30s) to avoid stacking with the
-  // Dashboard's own 30s /api/health/cameras poll when this tab is active.
-  // Health scores change slowly; 60s is sufficient for the detail view.
-  $effect(() => {
-    loadHealth();
-    healthTimer = setInterval(loadHealth, 60000);
-    return () => {
-      if (healthTimer) clearInterval(healthTimer);
-    };
-  });
-
   onMount(() => {
     loadCameras();
-    loadStability();
   });
 </script>
 
 <div class="min-h-screen th-bg-primary pt-[68px]">
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-
-    <!-- Health Score Cards -->
-    <div class="mb-6">
-      <h3 class="text-sm font-semibold th-text-secondary uppercase tracking-wider mb-3">{t('health.score')}</h3>
-      {#if healthLoading && healthEntries.length === 0}
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-          {#each Array(4) as _}
-            <div class="card p-4 animate-pulse">
-              <div class="h-4 w-20 th-bg-tertiary rounded mb-3"></div>
-              <div class="h-8 w-16 th-bg-tertiary rounded mx-auto mb-2"></div>
-              <div class="h-3 w-12 th-bg-tertiary rounded mx-auto"></div>
-            </div>
-          {/each}
-        </div>
-      {:else if healthEntries.length > 0}
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-          {#each healthEntries as [id, detail] (id)}
-            <div
-              class="card p-4 border transition-all duration-200 hover:scale-[1.02] cursor-pointer"
-              style="border-color: {scoreBorderColor(detail.score)}"
-              role="button"
-              tabindex="0"
-              aria-expanded={expandedCamera === id}
-              onclick={() => expandedCamera = expandedCamera === id ? null : id}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expandedCamera = expandedCamera === id ? null : id; } }}
-            >
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-sm font-medium th-text-primary truncate" title={getCameraName(id)}>
-                  {getCameraName(id)}
-                </span>
-                <span
-                  class="inline-block w-2 h-2 rounded-full flex-shrink-0"
-                  style="background-color: {statusDotColor(detail.latest_status)}"
-                  title={statusLabel(detail.latest_status)}
-                ></span>
-              </div>
-              <div class="text-center my-1">
-                <span
-                  class="text-2xl font-bold tabular-nums"
-                  style="color: {scoreColor(detail.score)}"
-                >
-                  {detail.score}
-                </span>
-              </div>
-              <div class="text-center">
-                <span
-                  class="text-[10px] font-medium px-2 py-0.5 rounded-full"
-                  style="background: {scoreBgColor(detail.score)}; color: {scoreColor(detail.score)}"
-                >
-                  {scoreLabel(detail.score)}
-                </span>
-              </div>
-              {#if stability[id]}
-                <div class="mt-2 text-[10px] th-text-secondary flex flex-wrap gap-x-2 justify-center tabular-nums">
-                  <span title={t('health.stability.uptime')}>{stability[id].uptime_percent.toFixed(1)}%</span>
-                  <span title={t('health.stability.mtbf')}>MTBF {stability[id].mtbf}</span>
-                  {#if stability[id].trend === 'degrading'}
-                    <span class="text-red-400">↓</span>
-                  {:else if stability[id].trend === 'improving'}
-                    <span class="text-green-400">↑</span>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-            {#if expandedCamera === id && detail.score_factors && Object.keys(detail.score_factors).length > 0}
-              <div class="card factor-breakdown mt-1 p-3 border" style="border-color: {scoreBorderColor(detail.score)}">
-                {#each Object.entries(detail.score_factors) as [factor, impact]}
-                  <div class="factor-item" style="color: {impact < 0 ? 'var(--color-danger)' : 'var(--color-success)'}">
-                    <span class="font-medium">{factor}</span>: {impact < 0 ? '' : '+'}{impact}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          {/each}
-        </div>
-      {:else}
-        <div class="card p-6 text-center th-text-secondary">
-          <Activity size={24} class="mx-auto mb-2 opacity-50" />
-          <span class="text-sm">{t('health.noCameras')}</span>
-        </div>
-      {/if}
-    </div>
 
     <!-- Filters -->
     <div class="card p-5 mb-6 border th-border space-y-3">
@@ -400,16 +245,3 @@
     </div>
   </main>
 </div>
-
-<style>
-  .factor-breakdown {
-    background: var(--bg-secondary, rgba(0, 0, 0, 0.15));
-    font-size: 11px;
-    line-height: 1.6;
-    border-radius: 6px;
-  }
-
-  .factor-item + .factor-item {
-    margin-top: 2px;
-  }
-</style>

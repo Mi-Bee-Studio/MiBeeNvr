@@ -148,18 +148,18 @@ function parseRoute(hash: string) {
     }
 
     if (segments[0] === 'dashboard') {
-      const tab = segments[1] === 'health'
+      // 'flow' tab no longer exists — the per-camera flow tree lives in the
+      // health tab's expanded camera cards now.
+      const tab = segments[1] === 'health' || segments[1] === 'flow'
         ? 'health'
-        : segments[1] === 'flow'
-          ? 'flow'
-          : segments[1] === 'transcoding'
-            ? 'transcoding'
-            : 'storage';
+        : segments[1] === 'transcoding'
+          ? 'transcoding'
+          : 'storage';
       return { route: 'dashboard', params: { tab } };
     }
-    // Legacy standalone flow route → dashboard tab.
+    // Legacy standalone flow route → health tab.
     if (segments[0] === 'flow') {
-      return { route: 'dashboard', params: { tab: 'flow' } };
+      return { route: 'dashboard', params: { tab: 'health' } };
     }
     if (segments[0] === 'surveillance') {
       return { route: 'surveillance', params: {} };

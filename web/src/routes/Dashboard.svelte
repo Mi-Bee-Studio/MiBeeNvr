@@ -4,10 +4,10 @@
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2, Radio } from 'lucide-svelte';
+  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2 } from 'lucide-svelte';
   import { loadChart, createTrendChart } from '$lib/charts';
   import Tab from '$lib/components/Tab.svelte';
-  import FlowPanel from '$lib/components/FlowPanel.svelte';
+  import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
   import HealthHistory from './HealthHistory.svelte';
   import TranscodingHistory from './TranscodingHistory.svelte';
   import AiStatusCard from '../components/AiStatusCard.svelte';
@@ -24,7 +24,6 @@
   let tabs = $derived([
     { id: 'storage', label: t('dashboard.tab.storage'), icon: HardDrive },
     { id: 'health', label: t('dashboard.tab.health'), icon: Activity },
-    { id: 'flow', label: t('dashboard.tab.flow'), icon: Radio },
     { id: 'transcoding', label: t('dashboard.tab.transcoding'), icon: Cpu },
   ]);
 
@@ -54,6 +53,12 @@
   let health = $state<HealthResponse | null>(null);
   let healthCameras = $state<Record<string, CameraHealthDetail>>({});
   let healthError = $state('');
+  // Camera whose flow tree is expanded in the camera-health list.
+  let expandedFlow = $state<string | null>(null);
+  // Row order frozen at expand time: the live list re-sorts by score every
+  // 30s poll, which would drag an inline expanded panel around. While a row
+  // is expanded we keep the order it had when the user clicked.
+  let orderSnapshot = $state<string[] | null>(null);
 
   // Compute health summary from health cameras
   let healthSummary = $derived.by(() => {
@@ -103,7 +108,7 @@
 
   // Build enriched camera health entries (camera info + health detail)
   let cameraHealthEntries = $derived.by(() => {
-    const entries: { id: string; name: string; status: string; score: number; factors?: Record<string, number>; recording_enabled?: boolean | null }[] = [];
+    const entries: { id: string; name: string; status: string; score: number; factors?: string[]; recording_enabled?: boolean | null }[] = [];
     for (const cam of cameras) {
       const detail = healthCameras[cam.id];
       entries.push({
@@ -115,13 +120,58 @@
         recording_enabled: cam.recording_enabled,
       });
     }
-    // Sort: unhealthy first (lowest score), then by name
-    entries.sort((a, b) => {
-      if (a.score !== b.score) return a.score - b.score;
-      return a.name.localeCompare(b.name);
-    });
+    // Sort: unhealthy first (lowest score), then by name — unless a row is
+    // expanded, in which case the frozen order wins (see orderSnapshot).
+    if (expandedFlow && orderSnapshot) {
+      const idx = new Map(orderSnapshot.map((id, i) => [id, i]));
+      entries.sort((a, b) => (idx.get(a.id) ?? 1e9) - (idx.get(b.id) ?? 1e9));
+    } else {
+      entries.sort((a, b) => {
+        if (a.score !== b.score) return a.score - b.score;
+        return a.name.localeCompare(b.name);
+      });
+    }
     return entries;
   });
+
+  // Translate a raw backend factor string ("recent_anomalies: -15 (4
+  // anomalies in last hour (>3))") into a friendly localized line.
+  const factorNames: Record<string, string> = {
+    offline_duration: 'offlineDuration',
+    recent_anomalies: 'recentAnomalies',
+    low_uptime: 'lowUptime',
+  };
+
+  function friendlyFactor(raw: string): string {
+    const m = raw.match(/^(\w+):\s*([+-]\d+)\s*\((.*)\)$/);
+    if (!m) return raw;
+    const [, name, impact, detail] = m;
+    const label = factorNames[name] ? t(`health.factor.${factorNames[name]}`) : name;
+    let text: string;
+    let d: RegExpMatchArray | null;
+    if ((d = detail.match(/^offline for (.+) \(>5min\)$/))) text = t('health.factor.d.offline5', { d: d[1] });
+    else if ((d = detail.match(/^offline for (.+) \(>30min\)$/))) text = t('health.factor.d.offline30', { d: d[1] });
+    else if ((d = detail.match(/^(\d+) anomalies in last hour \(>10\)$/))) text = t('health.factor.d.anomalies10', { n: d[1] });
+    else if ((d = detail.match(/^(\d+) anomalies in last hour \(>3\)$/))) text = t('health.factor.d.anomalies3', { n: d[1] });
+    else if ((d = detail.match(/^uptime ([\d.]+)% \(<80%\)$/))) text = t('health.factor.d.uptime80', { p: d[1] });
+    else if ((d = detail.match(/^uptime ([\d.]+)% \(<95%\)$/))) text = t('health.factor.d.uptime95', { p: d[1] });
+    else text = detail;
+    return `${label} ${impact} · ${text}`;
+  }
+
+  // Toggle a camera's flow tree and scroll the expanded panel into view so
+  // the user never has to hunt for it manually. 'center' puts the whole
+  // block (factors + tree) in the middle of the viewport — 'nearest' left
+  // the tail end below the fold.
+  async function toggleFlow(camId: string): Promise<void> {
+    if (expandedFlow === camId) {
+      expandedFlow = null;
+      orderSnapshot = null;
+      return;
+    }
+    orderSnapshot = cameraHealthEntries.map((e) => e.id);
+    expandedFlow = camId;
+  }
 
   function statusColor(status: string): string {
     const s = status.toLowerCase();
@@ -435,8 +485,11 @@
         <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
       {:else}
         <div class="space-y-1">
-          {#each cameraHealthEntries as cam}
-            <div class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors">
+          {#each cameraHealthEntries as cam (cam.id)}
+            <div
+              class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors"
+              class:row-active={expandedFlow === cam.id}
+            >
               <!-- Status dot -->
               <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {statusColor(cam.status)}"></span>
 
@@ -454,7 +507,30 @@
               {:else}
                 <span class="text-xs th-text-muted tabular-nums min-w-[2rem] text-right">--</span>
               {/if}
+
+              <!-- Expand: live flow tree for troubleshooting this camera -->
+              <button
+                class="expand-btn"
+                aria-expanded={expandedFlow === cam.id}
+                title={t('flow.expandHint')}
+                onclick={() => toggleFlow(cam.id)}
+              >
+                {expandedFlow === cam.id ? '▾' : '▸'}
+              </button>
             </div>
+            {#if expandedFlow === cam.id}
+              <div class="flow-expand" id="flow-{cam.id}">
+                {#if cam.factors && cam.factors.length > 0}
+                  <div class="factors">
+                    {#each cam.factors as raw}
+                      {@const f = friendlyFactor(raw)}
+                      <span style="color: {f.includes('-') ? 'var(--color-danger)' : 'var(--color-success)'}">{f}</span>
+                    {/each}
+                  </div>
+                {/if}
+                <CameraFlowTree cameraId={cam.id} name={cam.name} status={cam.status} recordingEnabled={cam.recording_enabled !== false} />
+              </div>
+            {/if}
           {/each}
         </div>
       {/if}
@@ -493,8 +569,6 @@
       <div class="health-tab-content">
         <HealthHistory />
       </div>
-    {:else if activeTab === 'flow'}
-      <FlowPanel />
     {:else if activeTab === 'transcoding'}
       <TranscodingHistory />
     {/if}
@@ -502,6 +576,35 @@
 </div>
 
 <style>
+  .expand-btn {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0 0.3rem;
+    line-height: 1;
+  }
+  .expand-btn:hover {
+    color: var(--text-primary);
+  }
+  .factors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+    font-size: 11px;
+    padding: 0.25rem 0 0 1.3rem;
+  }
+  .flow-expand {
+    border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.6rem;
+    background: var(--bg-secondary, transparent);
+  }
+  .row-active {
+    background: var(--bg-tertiary, rgba(128, 128, 128, 0.12));
+  }
   .health-tab-content > :global(:first-child) {
     padding-top: 0 !important;
   }
