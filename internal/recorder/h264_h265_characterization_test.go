@@ -240,11 +240,11 @@ func TestH264Characterization_AudioCapturedInSegment(t *testing.T) {
 	mgr := newTestManager(t)
 
 	rec := NewH264Recorder(H264Config{
-		CameraID:     "h264-char-audio",
-		RTSPURL:      srv.rtspURL,
-		SegmentDur:   5 * time.Minute,
-		RingBufCap:   100,
-		AudioEnabled: true,
+		CameraID:          "h264-char-audio",
+		RTSPURL:           srv.rtspURL,
+		SegmentDur:        5 * time.Minute,
+		RingBufCap:        100,
+		AudioEnabled:      true,
 		AudioInRecordings: true,
 	}, mgr)
 
@@ -658,11 +658,11 @@ func TestH265Characterization_AudioCapturedInSegment(t *testing.T) {
 	mgr := newTestManager(t)
 
 	rec := NewH265Recorder(H265Config{
-		CameraID:     "h265-char-audio",
-		RTSPURL:      srv.rtspURL,
-		SegmentDur:   5 * time.Minute,
-		RingBufCap:   100,
-		AudioEnabled: true,
+		CameraID:          "h265-char-audio",
+		RTSPURL:           srv.rtspURL,
+		SegmentDur:        5 * time.Minute,
+		RingBufCap:        100,
+		AudioEnabled:      true,
 		AudioInRecordings: true,
 	}, mgr)
 

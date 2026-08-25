@@ -643,11 +643,11 @@ func TestH264Recorder_AudioBroadcast(t *testing.T) {
 	hub := model.NewStreamHub()
 
 	rec := NewH264Recorder(H264Config{
-		CameraID:     "cam-audio",
-		RTSPURL:      srv.rtspURL,
-		SegmentDur:   5 * time.Minute,
-		RingBufCap:   100,
-		AudioEnabled: true,
+		CameraID:          "cam-audio",
+		RTSPURL:           srv.rtspURL,
+		SegmentDur:        5 * time.Minute,
+		RingBufCap:        100,
+		AudioEnabled:      true,
 		AudioInRecordings: true,
 	}, mgr)
 	rec.Hub = hub
@@ -743,11 +743,11 @@ func TestH264Recorder_AudioEnabled_NoAudioInStream(t *testing.T) {
 	mgr := newTestManager(t)
 
 	rec := NewH264Recorder(H264Config{
-		CameraID:     "cam-videoonly",
-		RTSPURL:      srv.rtspURL,
-		SegmentDur:   5 * time.Minute,
-		RingBufCap:   100,
-		AudioEnabled: true,
+		CameraID:          "cam-videoonly",
+		RTSPURL:           srv.rtspURL,
+		SegmentDur:        5 * time.Minute,
+		RingBufCap:        100,
+		AudioEnabled:      true,
 		AudioInRecordings: true,
 	}, mgr)
 

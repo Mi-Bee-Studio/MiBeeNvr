@@ -58,17 +58,17 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 	}
 
 	recCfg := XiaomiRecorderConfig{
-		CameraID:      cfg.ID,
-		DID:           did,
-		CloudCfg:      cloudCfg,
-		SegmentDur:    30 * time.Second,
-		DB:            db,
-		AudioEnabled:  cfg.AudioEnabled,
+		CameraID:          cfg.ID,
+		DID:               did,
+		CloudCfg:          cloudCfg,
+		SegmentDur:        30 * time.Second,
+		DB:                db,
+		AudioEnabled:      cfg.AudioEnabled,
 		AudioInRecordings: cfg.AudioInRecordings,
-		Channel:       cfg.Channel,
-		Quality:       cfg.Quality,
-		EventBus:      p.eventBus,
-		RecordEnabled: cfg.RecordingEnabled,
+		Channel:           cfg.Channel,
+		Quality:           cfg.Quality,
+		EventBus:          p.eventBus,
+		RecordEnabled:     cfg.RecordingEnabled,
 	}
 	// Adaptive write-density (issue #435/#468): recording_mode: adaptive was
 	// silently ignored by the Xiaomi recorder until the gate was ported.

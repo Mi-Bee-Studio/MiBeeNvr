@@ -60,19 +60,19 @@ type XiaomiCloudConfig struct {
 
 // XiaomiRecorderConfig holds configuration for the Xiaomi recorder.
 type XiaomiRecorderConfig struct {
-	CameraID     string
-	DID          string            // Device ID extracted from xiaomi:// URL (e.g. "655448418")
-	Model        string            // Camera model (e.g. ModelC200, ModelC300)
-	CloudCfg     XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
-	SegmentDur   time.Duration
-	DB           RecordingDB
-	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
-	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
-	AudioInRecordings bool     // Keep the audio track in recorded segments (default off)
-	IdleTimeout  time.Duration
-	Channel      string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
-	Quality      string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
-	EventBus     *event.EventBus
+	CameraID          string
+	DID               string            // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	Model             string            // Camera model (e.g. ModelC200, ModelC300)
+	CloudCfg          XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
+	SegmentDur        time.Duration
+	DB                RecordingDB
+	ErrReporter       ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
+	AudioEnabled      bool          // Capture and broadcast audio via StreamHub when true
+	AudioInRecordings bool          // Keep the audio track in recorded segments (default off)
+	IdleTimeout       time.Duration
+	Channel           string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+	Quality           string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
+	EventBus          *event.EventBus
 	// RecordEnabled gates disk writes. nil or true = record normally;
 	// false = "live-only" mode — the stream stays connected (for live preview /
 	// HLS) but no segments are written to disk. Matches baseRecorder.RecordEnabled
