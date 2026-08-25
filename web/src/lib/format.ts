@@ -1,10 +1,31 @@
 import { state } from './i18n';
 
 /**
+ * Parse a server timestamp into a Date, treating zoneless timestamps as UTC.
+ *
+ * Several API surfaces (e.g. AI events) return SQLite timestamps like
+ * "2026-08-25 06:19:51" — a UTC value with NO offset. `Date.parse`/`new Date`
+ * read such strings as LOCAL time, shifting every display and deep link by the
+ * browser's UTC offset (8h on a CST deployment). Strings that already carry an
+ * offset (Z / +hh:mm) parse unchanged.
+ */
+export function parseServerDate(dateStr: string): Date {
+  if (
+    typeof dateStr === 'string' &&
+    /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(dateStr) &&
+    !/(?:Z|[+-]\d{2}:?\d{2})\s*$/.test(dateStr)
+  ) {
+    return new Date(dateStr.trim().replace(' ', 'T') + 'Z');
+  }
+  return new Date(dateStr);
+}
+
+/**
  * Format a date string in a locale-aware manner.
  */
 export function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
+  const date = parseServerDate(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
   const lang = state.currentLang === 'zh' ? 'zh-CN' : 'en-US';
   return date.toLocaleString(lang, {
     month: 'short',
@@ -39,7 +60,7 @@ export function formatDuration(seconds: number): string {
  * Falls back to formatDate for anything older than a week.
  */
 export function formatRelativeTime(dateStr: string, now: Date = new Date()): string {
-  const date = new Date(dateStr);
+  const date = parseServerDate(dateStr);
   if (isNaN(date.getTime())) return dateStr;
   const lang = state.currentLang === 'zh' ? 'zh-CN' : 'en-US';
   const rtf = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });

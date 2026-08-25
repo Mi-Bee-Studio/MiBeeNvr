@@ -26,4 +26,19 @@ type VisionConfig struct {
 	//   "upload" — 发送压缩视频字节流(Remote 跨主机部署)
 	// 默认 "notify"。
 	PushMode string `yaml:"push_mode" json:"pushMode"`
+
+	// SkipCameras 永不推送的相机 ID 列表。用于外部消费者明确无法消费的相机
+	// (如 MJPEG/JPEG 编码——视频字节流对其无意义,推送只是白白消耗带宽与 CPU)。
+	// 跳过的段不会推送,也不计入离线补偿重推窗口。
+	SkipCameras []string `yaml:"skip_cameras" json:"skipCameras"`
+}
+
+// ShouldSkipCamera 报告 camera_id 是否在 SkipCameras 列表中。
+func (v VisionConfig) ShouldSkipCamera(cameraID string) bool {
+	for _, c := range v.SkipCameras {
+		if c == cameraID {
+			return true
+		}
+	}
+	return false
 }

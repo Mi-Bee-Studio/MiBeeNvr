@@ -13,6 +13,7 @@
   import type { Recording, Camera } from '$lib/api';
   import { classLabel, eventTypeLabel } from '$lib/ai-labels';
   import { t } from '$lib/i18n';
+import { parseServerDate } from '$lib/format';
   import { Clock } from 'lucide-svelte';
 
   // Minimal shape DayTimeline actually reads from each recording. Accepting this
@@ -145,7 +146,7 @@
     for (const [camId, evs] of byCam) {
       // Sort by time ascending so clustering is order-independent.
       const sorted = evs
-        .map((e) => ({ e, ms: Date.parse(e.created_at) }))
+        .map((e) => ({ e, ms: parseServerDate(e.created_at).getTime() }))
         .filter((x) => Number.isFinite(x.ms))
         .sort((a, b) => a.ms - b.ms);
       const markers: AIMarker[] = [];

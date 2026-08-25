@@ -138,12 +138,30 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 		e.BBox = bbox.String
 		e.SnapshotPath = snapshotPath.String
 		e.Metadata = metadata.String
+		e.CreatedAt = aiCreatedAtToRFC3339(e.CreatedAt)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
 	return events, total, nil
+}
+
+// aiCreatedAtToRFC3339 normalizes the zoneless UTC timestamps SQLite's
+// datetime('now') writes ("2006-01-02 15:04:05") to RFC3339. A bare
+// "YYYY-MM-DD HH:MM:SS" is ambiguous — JS Date.parse and most ISO parsers
+// treat it as LOCAL time, which shifted event display and event→recording
+// deep links by the server's UTC offset (8h on a CST deployment).
+func aiCreatedAtToRFC3339(s string) string {
+	if s == "" {
+		return s
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05", time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return s
 }
 
 // GetAIEvent returns a single AI event by ID.
@@ -169,6 +187,7 @@ func (d *DB) GetAIEvent(ctx context.Context, id int64) (*AIEvent, error) {
 	e.BBox = bbox.String
 	e.SnapshotPath = snapshotPath.String
 	e.Metadata = metadata.String
+	e.CreatedAt = aiCreatedAtToRFC3339(e.CreatedAt)
 	return &e, nil
 }
 

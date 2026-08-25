@@ -7,7 +7,7 @@
   import { findSegmentAt } from '$lib/timeline-utils';
   import { getMiBeeVisionConnected, getMiBeeVisionLoaded, refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
   import { t } from '$lib/i18n';
-  import { formatDate } from '$lib/format';
+  import { formatDate, parseServerDate } from '$lib/format';
   import { showToast } from '$lib/toast';
   import { classLabel, eventTypeLabel, severityLabel, zoneLabel } from '$lib/ai-labels';
   import { AlertCircle, Brain, ChevronDown, Play, Settings } from 'lucide-svelte';
@@ -110,8 +110,11 @@
   let jumping = $state(false);
 
   function eventEpochMs(evt: AIEvent): number {
+    // created_at/frame_timestamp may arrive zoneless (UTC per server clock);
+    // parseServerDate pins them to UTC — plain Date.parse reads them as local
+    // time and shifts the jump target by the browser's UTC offset.
     const ts = evt.frame_timestamp || evt.created_at;
-    return Date.parse(ts);
+    return parseServerDate(ts).getTime();
   }
 
   function canJump(evt: AIEvent): boolean {

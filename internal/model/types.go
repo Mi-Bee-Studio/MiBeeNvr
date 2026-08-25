@@ -57,9 +57,9 @@ type Recording struct {
 	Archived      bool      `json:"archived"`
 	// AI processing state (MiBeeVision integration). DB columns exist since v21
 	// but were previously not mapped to Go — this fixes the断层.
-	AIStatus      string    `json:"ai_status,omitempty"` // pending, processing, completed, failed
-	AIProcessedAt time.Time `json:"ai_processed_at,omitempty"`
-	AIError       string    `json:"ai_error,omitempty"`
+	AIStatus      string     `json:"ai_status,omitempty"`       // pending, processing, completed, failed
+	AIProcessedAt *time.Time `json:"ai_processed_at,omitempty"` // nil = never processed; a zero time.Time serializes as 0001-01-01 (omitempty can't omit structs), which clients misread
+	AIError       string     `json:"ai_error,omitempty"`
 	// Motion score (issue #435): compressed-domain activity score in [0,1]
 	// computed by the offline motion analyzer from the per-frame size series
 	// (P-frame size = motion proxy, no decode). MotionScoreUnanalyzed (-1)
