@@ -270,3 +270,66 @@ curl -u username:password \
   "default": "webrtc"
 }
 ```
+
+## 流链路快照
+
+**端点：** `GET /api/streams`
+
+获取所有相机视频管线的实时快照（采集 → StreamHub → 消费者）。用于仪表盘"摄像头状态"的链路诊断树。计数值为累计值——调用方对两次轮询做差分即可得到 fps / 码率 / 消费者发送速率（后端热路径不做速率计算）。
+
+**请求：**
+```bash
+curl -u username:password http://localhost:9090/api/streams
+```
+
+**响应：**
+```json
+{
+  "streams": [
+    {
+      "camera_id": "front-door",
+      "source": "rtsp",
+      "frames_in": 10240,
+      "bytes_in": 955630592,
+      "last_frame_at": "2026-08-25T06:00:00Z",
+      "jitter_active": false,
+      "name": "前门",
+      "status": "recording",
+      "encoding": "h264",
+      "width": 1920,
+      "height": 1080,
+      "viewers": { "ws": 1 },
+      "last_frame_age_s": 0.04,
+      "consumers": [
+        {
+          "id": "ws-front-door",
+          "sends": 5120,
+          "drops": 0,
+          "idr_drops": 0,
+          "drop_rate": 0,
+          "buffer_depth": 0,
+          "buffer_capacity": 150,
+          "dwell_avg_ms": 0.4,
+          "dwell_max_ms": 3
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `last_frame_age_s`：最近一帧距现在的秒数（从未收到帧为 `null`）——判断"刚断流"比累计计数更直观。
+- `consumers[].id` 前缀标识消费者类型：`ws-`/`webrtc-`/`flv-`/`hls`（直播观看）、`health-stats-`/`health-freeze-`（健康检测）、`keyframe-extractor-`（延时摄影）、`relay-*`（转发）、`cascade-`（级联）。
+
+**单相机端点：** `GET /api/cameras/{id}/flow` 返回同一结构中的单个条目。
+
+## 相机录像统计
+
+**端点：** `GET /api/cameras/{id}/stats`
+
+获取单台相机的录像条数与总占用（未归档部分）。链路诊断树展开时显示"存储占用"即来自此接口。
+
+**响应：**
+```json
+{ "recording_count": 95, "total_size": 553675776 }
+```

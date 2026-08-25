@@ -55,6 +55,10 @@
   let healthError = $state('');
   // Camera whose flow tree is expanded in the camera-health list.
   let expandedFlow = $state<string | null>(null);
+  // Row order frozen at expand time: the live list re-sorts by score every
+  // 30s poll, which would drag an inline expanded panel around. While a row
+  // is expanded we keep the order it had when the user clicked.
+  let orderSnapshot = $state<string[] | null>(null);
 
   // Compute health summary from health cameras
   let healthSummary = $derived.by(() => {
@@ -116,11 +120,17 @@
         recording_enabled: cam.recording_enabled,
       });
     }
-    // Sort: unhealthy first (lowest score), then by name
-    entries.sort((a, b) => {
-      if (a.score !== b.score) return a.score - b.score;
-      return a.name.localeCompare(b.name);
-    });
+    // Sort: unhealthy first (lowest score), then by name — unless a row is
+    // expanded, in which case the frozen order wins (see orderSnapshot).
+    if (expandedFlow && orderSnapshot) {
+      const idx = new Map(orderSnapshot.map((id, i) => [id, i]));
+      entries.sort((a, b) => (idx.get(a.id) ?? 1e9) - (idx.get(b.id) ?? 1e9));
+    } else {
+      entries.sort((a, b) => {
+        if (a.score !== b.score) return a.score - b.score;
+        return a.name.localeCompare(b.name);
+      });
+    }
     return entries;
   });
 
@@ -154,11 +164,13 @@
   // block (factors + tree) in the middle of the viewport — 'nearest' left
   // the tail end below the fold.
   async function toggleFlow(camId: string): Promise<void> {
-    expandedFlow = expandedFlow === camId ? null : camId;
     if (expandedFlow === camId) {
-      await tick();
-      document.getElementById(`flow-${camId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      expandedFlow = null;
+      orderSnapshot = null;
+      return;
     }
+    orderSnapshot = cameraHealthEntries.map((e) => e.id);
+    expandedFlow = camId;
   }
 
   function statusColor(status: string): string {
@@ -472,25 +484,6 @@
       {:else if cameraHealthEntries.length === 0}
         <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
       {:else}
-        <!-- Detail slot lives ABOVE the list in a fixed position: the list
-             re-sorts by score every 30s poll, which used to drag an inline
-             expanded panel around and out of view. -->
-        {#if expandedFlow}
-          {@const active = cameraHealthEntries.find((c) => c.id === expandedFlow)}
-          {#if active}
-            <div class="flow-expand" id="flow-{active.id}">
-              {#if active.factors && active.factors.length > 0}
-                <div class="factors">
-                  {#each active.factors as raw}
-                    {@const f = friendlyFactor(raw)}
-                    <span style="color: {f.includes('-') ? 'var(--color-danger)' : 'var(--color-success)'}">{f}</span>
-                  {/each}
-                </div>
-              {/if}
-              <CameraFlowTree cameraId={active.id} name={active.name} status={active.status} recordingEnabled={active.recording_enabled !== false} />
-            </div>
-          {/if}
-        {/if}
         <div class="space-y-1">
           {#each cameraHealthEntries as cam (cam.id)}
             <div
@@ -525,6 +518,19 @@
                 {expandedFlow === cam.id ? '▾' : '▸'}
               </button>
             </div>
+            {#if expandedFlow === cam.id}
+              <div class="flow-expand" id="flow-{cam.id}">
+                {#if cam.factors && cam.factors.length > 0}
+                  <div class="factors">
+                    {#each cam.factors as raw}
+                      {@const f = friendlyFactor(raw)}
+                      <span style="color: {f.includes('-') ? 'var(--color-danger)' : 'var(--color-success)'}">{f}</span>
+                    {/each}
+                  </div>
+                {/if}
+                <CameraFlowTree cameraId={cam.id} name={cam.name} status={cam.status} recordingEnabled={cam.recording_enabled !== false} />
+              </div>
+            {/if}
           {/each}
         </div>
       {/if}

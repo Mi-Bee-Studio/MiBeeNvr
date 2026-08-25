@@ -3,9 +3,10 @@
   // list when a row is expanded. Polls /api/streams only while mounted
   // (i.e. while the row is expanded); layout is fixed, only numbers refresh.
   import { onMount } from 'svelte';
-  import { getFlowStreams } from '$lib/api/flow';
+  import { getFlowStreams, getCameraRecordingStats } from '$lib/api';
   import type { FlowStream } from '$lib/api/flow';
   import { t } from '$lib/i18n';
+  import { formatFileSize } from '$lib/format';
   import { Radio } from 'lucide-svelte';
 
   let {
@@ -27,10 +28,17 @@
   let centered = false;
   let rootEl: HTMLDivElement | null = $state(null);
 
-  const isRecording = $derived(['recording', 'active'].includes(status.toLowerCase()));
+  // 'healthy' is the health-tracker's status for a camera that is streaming
+  // and writing segments — the recorder status and health status use
+  // different vocabularies, both mean "recording" here.
+  const isRecording = $derived(['recording', 'active', 'healthy'].includes(status.toLowerCase()));
   const hasLiveViewer = $derived(
     !!stream?.consumers.some((c) => /^(ws|webrtc|flv|hls)/.test(consumerKind(c.id))),
   );
+  // Is anything actually flowing into the hub right now? Drives the
+  // green/gray/orange state coloring of every node.
+  const live = $derived(rate.fps > 0);
+  const frameStale = $derived(live && lastFrameAge(stream?.last_frame_at ?? '') > 10_000);
 
   function lastFrameAge(iso: string): number {
     const t = iso ? new Date(iso).getTime() : 0;
@@ -58,6 +66,22 @@
     }
     return id;
   }
+
+  // Localize consumer kinds — raw IDs like "health-stats" mean nothing to users.
+  const kindI18n: Record<string, string> = {
+    'ws': 'ws', 'ws-audio': 'wsAudio', 'webrtc': 'webrtc', 'webrtc-audio': 'webrtcAudio',
+    'flv': 'flv', 'hls': 'hls', 'health-stats': 'healthStats', 'health-freeze': 'healthFreeze',
+    'keyframe-extractor': 'keyframeExtractor', 'relay-rtsp': 'relayRtsp', 'relay-rtmp': 'relayRtmp',
+    'relay-transcode': 'relayTranscode', 'cascade': 'cascade',
+  };
+
+  function kindLabel(id: string): string {
+    const kind = consumerKind(id);
+    return kindI18n[kind] ? t(`flow.kind.${kindI18n[kind]}`) : kind;
+  }
+
+  // Per-camera disk usage for this camera (fetched once per expansion).
+  let storage = $state<{ count: number; bytes: number } | null>(null);
 
   async function poll(): Promise<void> {
     try {
@@ -98,6 +122,9 @@
 
   onMount(() => {
     poll();
+    getCameraRecordingStats(cameraId)
+      .then((s) => (storage = { count: s.recording_count, bytes: s.total_size }))
+      .catch(() => {});
     const timer = setInterval(() => {
       if (!document.hidden) poll();
     }, POLL_INTERVAL);
@@ -106,14 +133,19 @@
 </script>
 
 <div class="cam-flow" bind:this={rootEl}>
-  <div class="flow-title"><Radio size={12} /> {t('flow.treeTitle')}{name ? ` · ${name}` : ''}</div>
+  <div class="flow-title">
+    <span class="title-left"><Radio size={12} /> {t('flow.treeTitle')}{name ? ` · ${name}` : ''}</span>
+    {#if storage}
+      <span class="storage">{t('flow.storageUsage')}: {formatFileSize(storage.bytes)} · {storage.count} {t('flow.segments')}</span>
+    {/if}
+  </div>
   {#if error}
     <div class="flow-error">{error}</div>
   {:else if !stream}
     <div class="flow-empty">{t('flow.emptyCamera')}</div>
   {:else}
     <div class="tree">
-      <div class="node node-src">
+      <div class="node node-src" class:con-off={!live}>
         <span class="node-title">{t('flow.source')}</span>
         <span class="node-line">{stream.source}</span>
         {#if stream.encoding}
@@ -125,9 +157,9 @@
 
       <div class="hub-col">
         <div class="node node-hub">
-          <span class="node-title"><Radio size={12} /> {t('flow.hub')}</span>
-          <span class="node-line">{rate.fps} fps · {rate.kbps} kbps</span>
-          <span class="node-line dim">
+          <span class="node-title"><Radio size={12} /> {t('flow.hubLabel')}</span>
+          <span class="node-line" class:ok-text={live} class:t-off={!live}>{rate.fps} fps · {rate.kbps} kbps</span>
+          <span class="node-line dim" class:t-warn={frameStale}>
             {t('flow.lastFrame')}: {fmtAge(lastFrameAge(stream.last_frame_at))}
           </span>
           {#if stream.jitter_active}<span class="node-line warn">{t('flow.jitter')}</span>{/if}
@@ -143,22 +175,33 @@
              full pipeline — always show the branch. -->
         {#if recordingEnabled}
           <div class="branch">
-            <div class="node node-con" class:con-off={!isRecording}>
-              <span class="node-title">{t('flow.recordDisk')}</span>
-              <span class="node-line">{isRecording ? t('flow.recording') : t('flow.recordOff')}</span>
+            <div class="node node-con" class:con-off={!isRecording || !live}>
+              <span class="node-title" class:t-off={!isRecording} class:t-warn={isRecording && !live} class:ok-text={isRecording && live}>{t('flow.recordDisk')}</span>
+              <span class="node-line" class:t-off={!isRecording} class:t-warn={isRecording && !live} class:ok-text={isRecording && live}>
+                {#if !isRecording}{t('flow.recordOff')}{:else if live}{t('flow.recording')}{:else}{t('flow.noFrames')}{/if}
+              </span>
               <span class="node-line dim">{rate.kbps} kbps → {t('flow.disk')}</span>
             </div>
           </div>
         {/if}
         {#each stream.consumers as c (c.id)}
+          {@const rate_ = cRates[c.id] ?? 0}
           <div class="branch">
             <div class="node node-con" class:con-warn={c.drop_rate > 0.01} class:con-danger={c.drop_rate > 0.05}>
-              <span class="node-title">
-                {consumerKind(c.id)}
-                <span class="dim">{cRates[c.id] ?? 0}/s</span>
+              <span
+                class="node-title"
+                class:t-danger={c.drop_rate > 0.05}
+                class:t-warn={c.drop_rate > 0.01 && c.drop_rate <= 0.05}
+                class:ok-text={c.drop_rate <= 0.01 && rate_ > 0}
+                class:t-off={rate_ === 0}
+              >
+                {kindLabel(c.id)}
+                <span class="dim">{rate_}/s</span>
                 {#if c.idr_drops > 0}<span class="idr-drops">{c.idr_drops} IDR</span>{/if}
               </span>
-              <span class="node-line">{t('flow.sends')} {c.sends} · {t('flow.dropRate')} {(c.drop_rate * 100).toFixed(1)}%</span>
+              <span class="node-line" class:t-danger={c.drop_rate > 0.05} class:t-warn={c.drop_rate > 0.01 && c.drop_rate <= 0.05}>
+                {t('flow.sends')} {c.sends} · {t('flow.dropRate')} {(c.drop_rate * 100).toFixed(1)}%
+              </span>
               <span class="node-line dim">{t('flow.buffer')} {c.buffer_depth}/{c.buffer_capacity} · {c.dwell_avg_ms.toFixed(0)}/{c.dwell_max_ms.toFixed(0)} ms</span>
             </div>
           </div>
@@ -171,7 +214,7 @@
         {#if !hasLiveViewer}
           <div class="branch">
             <div class="node node-con con-off">
-              <span class="node-title">{t('flow.surveillance')}</span>
+              <span class="node-title t-off">{t('flow.surveillance')}</span>
               <span class="node-line dim">{t('flow.notWatching')}</span>
             </div>
           </div>
@@ -186,12 +229,25 @@
     margin-top: 0.5rem;
   }
   .flow-title {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 0.3rem;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
     font-weight: 600;
     font-size: 0.78rem;
     margin-bottom: 0.4rem;
+  }
+  .title-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .storage {
+    font-weight: 400;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
   }
   .flow-error {
     color: var(--color-danger);
@@ -238,6 +294,20 @@
   }
   .warn {
     color: var(--color-warning);
+  }
+  /* State coloring — green = flowing, gray = idle, orange = trouble,
+     red = severe. Applied to node text so status reads at a glance. */
+  .ok-text {
+    color: var(--color-success);
+  }
+  .t-warn {
+    color: var(--color-warning);
+  }
+  .t-danger {
+    color: var(--color-danger);
+  }
+  .t-off {
+    color: var(--text-tertiary);
   }
   .idr-drops {
     color: var(--color-danger);

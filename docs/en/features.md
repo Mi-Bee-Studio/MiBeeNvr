@@ -103,6 +103,7 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 
 - Modern Svelte 5 SPA, **English / 中文**, light & dark themes, installable PWA
 - Setup wizard (3 minutes to first recording), dashboard, surveillance grid, recording library, timelapse, AI events, health page, stats page
+- **Per-camera flow diagnosis**: expand any camera in the dashboard's camera-status list into a flow tree (source → hub → recording / live viewing / health checks / relays), color-coded at a glance — green = active, gray = idle, orange = trouble (e.g. marked recording but no frames inflow), red = heavy frame drops; includes plain-language health-score factor breakdown and this camera's storage usage
 - Fully responsive — the phone browser gets the complete experience, not a stripped one
 
 ![Dashboard](images/dashboard.webp)
