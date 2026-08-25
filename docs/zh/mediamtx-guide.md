@@ -129,7 +129,7 @@ logging:
 
 ### 集成架构
 
-```
+```text
 摄像头 → MediaMTX → MiBee NVR
        ↓    ↓         ↓
     RTSP  WebRTC     HTTP JPEG
@@ -533,7 +533,7 @@ paths:
 
 ### 1. 部署架构
 
-```
+```text
 摄像头 → MediaMTX (负载均衡) → MiBee NVR
          ↓
       监控节点

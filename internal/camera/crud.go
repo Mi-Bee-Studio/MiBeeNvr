@@ -612,6 +612,28 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.RecordingSchedule != nil {
 		cam.RecordingSchedule = updates.RecordingSchedule
 	}
+	if updates.RecordingMode != nil {
+		if *updates.RecordingMode != cam.RecordingMode {
+			needsRestart = true
+		}
+		cam.RecordingMode = *updates.RecordingMode
+	}
+	if updates.Adaptive != nil {
+		// Params are read at recorder construction; only a real change needs
+		// the restart (the edit form re-sends the whole object on every save).
+		if cam.Adaptive == nil || *cam.Adaptive != *updates.Adaptive {
+			needsRestart = true
+		}
+		cam.Adaptive = updates.Adaptive
+	}
+	if updates.AudioTrigger != nil {
+		// Same restart semantics as Adaptive (issue #478): the runtime is
+		// armed at recorder construction. {enabled:false} disarms.
+		if cam.AudioTrigger == nil || *cam.AudioTrigger != *updates.AudioTrigger {
+			needsRestart = true
+		}
+		cam.AudioTrigger = updates.AudioTrigger
+	}
 
 	// Persist to database
 	if cm.db != nil {

@@ -177,12 +177,15 @@ type Handler struct {
 	frameListCache    map[string]*frameListEntry
 	gb28181DeviceMgr  *gb28181.DeviceManager
 	gb28181SessionMgr *gb28181.SessionManager
-	gb28181PTZ        *gb28181.PTZController
-	gb28181Catalog    *gb28181.CatalogController
-	gb28181Inviter    GB28181InviteSender
-	gb28181Bye        GB28181ByeSender
-	gb28181Cascade    GB28181CascadeStatus
-	gb28181Loc        *time.Location // GB naive-clock zone (nil → Local)
+	// Storage-migration (handlers_storage_migrate.go): the background
+	// idle-time migrator service. Nil in tests — the endpoints degrade.
+	migrationMgr   StorageMigrator
+	gb28181PTZ     *gb28181.PTZController
+	gb28181Catalog *gb28181.CatalogController
+	gb28181Inviter GB28181InviteSender
+	gb28181Bye     GB28181ByeSender
+	gb28181Cascade GB28181CascadeStatus
+	gb28181Loc     *time.Location // GB naive-clock zone (nil → Local)
 	// vodMgr serves the on-demand HLS VOD fragmenter for recording playback
 	// (#321 Phase 2). Self-contained (owns its segment cache) — constructed
 	// here rather than threaded through NewHandler's positional params.
@@ -275,6 +278,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Use(h.authMW)
 		h.registerRecordingRoutes(r)
 		h.registerCameraRoutes(r)
+		h.registerFlowRoutes(r)
 		h.registerSystemRoutes(r)
 		h.registerMergeRoutes(r)
 		h.registerTimelapseRoutes(r)

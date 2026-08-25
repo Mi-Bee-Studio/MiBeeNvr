@@ -60,7 +60,33 @@ type Recording struct {
 	AIStatus      string    `json:"ai_status,omitempty"` // pending, processing, completed, failed
 	AIProcessedAt time.Time `json:"ai_processed_at,omitempty"`
 	AIError       string    `json:"ai_error,omitempty"`
+	// Motion score (issue #435): compressed-domain activity score in [0,1]
+	// computed by the offline motion analyzer from the per-frame size series
+	// (P-frame size = motion proxy, no decode). MotionScoreUnanalyzed (-1)
+	// means the analyzer has not processed this recording yet — cleanup
+	// ordering treats unanalyzed as neutral. ActivityFlags is a comma-separated
+	// vocabulary: "static", "motion", "scene_cut".
+	MotionScore   float64 `json:"motion_score"`
+	ActivityFlags string  `json:"activity_flags,omitempty"`
+	// TimelineMap (#496) is set on rolling-merge products whose sparse
+	// timelapse dwells were compressed to a fast cadence: compact JSON
+	// "[[wallSec,fileSec],...]" breakpoints mapping the recording's
+	// wall-clock span onto the (shorter) file timeline. Clients resolve
+	// wall-clock seeks (?at=, day-timeline clicks) through it; empty for
+	// uncompressed recordings (identity mapping).
+	TimelineMap string `json:"timeline_map,omitempty"`
 }
+
+// MotionScoreUnanalyzed marks a recording the motion analyzer has not scored
+// yet (DB default). Distinct from 0 (analyzed, fully static).
+const MotionScoreUnanalyzed = -1.0
+
+// Motion activity flag vocabulary (recordings.activity_flags).
+const (
+	ActivityFlagStatic   = "static"    // no meaningful activity — boring segment
+	ActivityFlagMotion   = "motion"    // activity above threshold
+	ActivityFlagSceneCut = "scene_cut" // bitrate discontinuity (scene change / exposure step)
+)
 
 // TimelapseMerge represents one periodic-merge output for a camera — the
 // multi-hour / multi-day timelapse video synthesized from many short timelapse
@@ -108,6 +134,7 @@ type TimelineSegment struct {
 	Duration    float64   `json:"duration"`
 	Format      Format    `json:"format"`
 	MergeStatus string    `json:"merge_status"`
+	MotionScore float64   `json:"motion_score"`
 }
 
 type Segment struct {
@@ -143,6 +170,12 @@ type RecordingFilter struct {
 	// recording_id. Empty = no AI filter. Requires ai_events.class_name to be populated by
 	// the AI event ingest path.
 	AiClass string
+	// MinMotionScore filters to recordings with motion_score >= the value
+	// (issue #435). nil = no filter. Unanalyzed recordings (score -1) never pass.
+	MinMotionScore *float64
+	// Activity filters by activity_flags membership (e.g. "static", "motion",
+	// "scene_cut"). Empty = no filter.
+	Activity string
 	// Cursor enables keyset (seek) pagination for O(1) deep-page performance.
 	// When set AND the sort is the default (started_at DESC), ListRecordings uses
 	// WHERE started_at < cursor instead of OFFSET, avoiding the O(N) scan-skip that

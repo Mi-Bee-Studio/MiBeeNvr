@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,8 +134,11 @@ type RollingMergeCoordinator struct {
 	store        *storage.Manager
 	getGlobalCfg func() config.MergeConfig
 	getCameraCfg func(cameraID string) *config.MergeConfig
-	cameras      func() []config.CameraConfig
-	metrics      *metrics.Metrics
+	// getAdaptiveCfg resolves the per-camera adaptive config (the compressed
+	// timeline cadence lives there); nil = package default.
+	getAdaptiveCfg func(cameraID string) *config.AdaptiveRecordingConfig
+	cameras        func() []config.CameraConfig
+	metrics        *metrics.Metrics
 
 	mergeLocks sync.Map // map[string]*mergeLock — per-camera non-blocking mutex
 
@@ -201,23 +205,39 @@ func NewRollingMergeCoordinator(
 	store *storage.Manager,
 	getGlobalCfg func() config.MergeConfig,
 	getCameraCfg func(cameraID string) *config.MergeConfig,
+	getAdaptiveCfg func(cameraID string) *config.AdaptiveRecordingConfig,
 	cameras func() []config.CameraConfig,
 	m *metrics.Metrics,
 	eventBus *event.EventBus,
 ) *RollingMergeCoordinator {
 	return &RollingMergeCoordinator{
-		db:           db,
-		store:        store,
-		getGlobalCfg: getGlobalCfg,
-		getCameraCfg: getCameraCfg,
-		cameras:      cameras,
-		metrics:      m,
-		eventBus:     eventBus,
-		eventCh:      make(chan event.Event, 128), // buffered: bursts of segment closes
+		db:             db,
+		store:          store,
+		getGlobalCfg:   getGlobalCfg,
+		getCameraCfg:   getCameraCfg,
+		getAdaptiveCfg: getAdaptiveCfg,
+		cameras:        cameras,
+		metrics:        m,
+		eventBus:       eventBus,
+		eventCh:        make(chan event.Event, 128), // buffered: bursts of segment closes
 	}
 }
 
 // resolveRollingConfig returns the effective rolling config for a camera.
+// resolveTimelapseCadence returns the per-camera compressed-timeline frame
+// duration (adaptive.timelapse_frame_ms presets 100/300/500ms); zero = the
+// merge package default.
+func (r *RollingMergeCoordinator) resolveTimelapseCadence(cameraID string) time.Duration {
+	if r.getAdaptiveCfg == nil {
+		return 0
+	}
+	a := r.getAdaptiveCfg(cameraID)
+	if a == nil || a.TimelapseFrameMs == 0 {
+		return 0
+	}
+	return time.Duration(a.TimelapseFrameMs) * time.Millisecond
+}
+
 func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingMergeConfig {
 	global := r.getGlobalCfg()
 	perCamera := r.getCameraCfg(cameraID)
@@ -808,6 +828,9 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 				rollingLogger.Warn("backfill MP4: batch merge failed",
 					"camera_id", cameraID, "error", err)
 			}
+			// Backfill batches also bypass the in-memory bucket state (see
+			// mergeSegments) — drop any stale bucket to avoid double coverage.
+			r.buckets.Delete(cameraID)
 			merged += n
 
 			rollingLogger.Info("backfill MP4 progress",
@@ -824,10 +847,11 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 
 // mergeBatchMP4 merges a batch of MP4 segments into output file(s).
 // Uses ParseSegment + MergeMP4Segments (the same as the periodic MergeManager).
-// The batch is first split into consecutive audio-homogeneous runs: a batch
-// that straddles an audio toggle boundary (audio_enabled flipped, codec
-// renegotiated) must not merge across it — MergeMP4Segments' mixed-audio
-// policy would silently drop the audio from the whole output.
+// The batch is first split into consecutive merge-compatible runs (codec +
+// SPS/PPS/VPS + audio): a batch that straddles a parameter-set or audio toggle
+// boundary must not merge across it — a codec/SPS change hard-fails the merge
+// and an audio change trips the mixed-audio policy that silently drops the
+// audio from the whole output.
 // Returns the number of segments successfully merged.
 func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
 	// Parse all segments.
@@ -858,7 +882,7 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 	}
 
 	merged := 0
-	for _, run := range splitRunsByAudioKey(parsedRecs, infos) {
+	for _, run := range splitRunsByCompatKey(parsedRecs, infos) {
 		if len(run.infos) < 2 {
 			// Lone segment in its audio run — no merge partner within the run.
 			// Mark it merged; the file stays as a standalone recording.
@@ -882,19 +906,34 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 	return merged, nil
 }
 
-// segmentRun is a consecutive, audio-homogeneous slice of a parsed batch.
+// segmentRun is a consecutive, merge-compatible slice of a parsed batch.
 type segmentRun struct {
 	recs   []*model.Recording
 	infos  []*SegmentInfo
 	keyStr string
 }
 
-// splitRunsByAudioKey splits a parsed batch into consecutive runs sharing the
-// same segmentAudioKey. recs and infos are parallel slices (same length).
-func splitRunsByAudioKey(recs []*model.Recording, infos []*SegmentInfo) []segmentRun {
+// segmentCompatKey is the merge-compatibility key for a parsed segment:
+// codec + parameter sets + audio state. Segments with different keys cannot
+// be merged into one MP4 — a codec/SPS change mid-run made the old
+// audio-only split hard-fail the WHOLE run inside MergeMP4Segments and
+// permanently mark it incompatible (#488 follow-up).
+func segmentCompatKey(info *SegmentInfo) string {
+	h := sha256.New()
+	h.Write([]byte(info.Codec))
+	h.Write(info.SPS)
+	h.Write(info.PPS)
+	h.Write(info.VPS)
+	return hex.EncodeToString(h.Sum(nil)) + "|" + segmentAudioKey(info)
+}
+
+// splitRunsByCompatKey splits a parsed batch into consecutive runs sharing the
+// same segmentCompatKey (codec + SPS/PPS/VPS + audio). recs and infos are
+// parallel slices (same length).
+func splitRunsByCompatKey(recs []*model.Recording, infos []*SegmentInfo) []segmentRun {
 	var runs []segmentRun
 	for i, info := range infos {
-		key := segmentAudioKey(info)
+		key := segmentCompatKey(info)
 		if len(runs) > 0 && runs[len(runs)-1].keyStr == key {
 			last := &runs[len(runs)-1]
 			last.recs = append(last.recs, recs[i])
@@ -925,7 +964,8 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 	}
 
 	// Merge.
-	if err := MergeMP4Segments(ctx, infos, tempPath); err != nil {
+	stats, err := MergeMP4Segments(ctx, infos, tempPath, r.resolveTimelapseCadence(cameraID))
+	if err != nil {
 		os.Remove(tempPath)
 		// Mark these as incompatible so we don't retry forever.
 		ids := make([]string, len(recs))
@@ -936,6 +976,34 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 			return r.db.SetMergeStatus(ctx, ids, model.MergeStatusIncompatible)
 		})
 		return 0, fmt.Errorf("merge: %w", err)
+	}
+	// Keyframe-less segments are not in the output: mark them incompatible and
+	// exclude them from the DB replacement + source deletion below (#488).
+	if len(stats.SkippedNoKeyframe) > 0 {
+		skipIDs := make([]string, 0, len(stats.SkippedNoKeyframe))
+		for _, idx := range stats.SkippedNoKeyframe {
+			skipIDs = append(skipIDs, recs[idx].ID)
+		}
+		_ = storage.RetryOnBusy(ctx, func() error {
+			return r.db.SetMergeStatus(ctx, skipIDs, model.MergeStatusIncompatible)
+		})
+		rollingLogger.Warn("audio run merge skipped keyframe-less segments",
+			"camera_id", cameraID, "skipped", len(skipIDs))
+	}
+	if len(stats.Included) != len(recs) {
+		keepRecs := make([]*model.Recording, 0, len(stats.Included))
+		keepInfos := make([]*SegmentInfo, 0, len(stats.Included))
+		keepPaths := make([]string, 0, len(stats.Included))
+		for _, idx := range stats.Included {
+			keepRecs = append(keepRecs, recs[idx])
+			keepInfos = append(keepInfos, infos[idx])
+			keepPaths = append(keepPaths, recs[idx].FilePath)
+		}
+		recs, infos, sourcePaths = keepRecs, keepInfos, keepPaths
+	}
+	if len(recs) == 0 {
+		os.Remove(tempPath)
+		return 0, ErrNoKeyframe
 	}
 
 	fi, err := os.Stat(tempPath)
@@ -970,6 +1038,7 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 		FrameCount:   totalFrames,
 		MergeStatus:  model.MergeStatusMerged,
 		MergeQuality: ComputeMergeQuality(recs[0].StartedAt, recs[len(recs)-1].EndedAt, durSec, r.resolveRollingConfig(cameraID).MinDuration.Seconds()),
+		TimelineMap:  stats.TimelineMapJSON(),
 	}
 
 	ids := make([]string, len(recs))
@@ -1361,6 +1430,11 @@ func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID st
 		} else {
 			rollingLogger.Info("rolling MP4 batch merged",
 				"camera_id", cameraID, "segments", n)
+			// The batch produced standalone output files that are NOT tracked
+			// by the in-memory bucket state. Drop the stale bucket so the next
+			// single-segment append builds a fresh bucket instead of appending
+			// over the batch's time range (double-covered timeline).
+			r.buckets.Delete(cameraID)
 		}
 	} else {
 		for _, seg := range mp4Segs {
@@ -1420,6 +1494,28 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	newInfo, err := ParseSegment(seg.filePath)
 	if err != nil {
 		return fmt.Errorf("parse new segment: %w", err)
+	}
+
+	// Keyframe alignment (#488): a segment that starts mid-GOP (adaptive TL-exit
+	// flush, reconnect micro-segment) references frames that get deleted with
+	// the previous source file — merging it verbatim produced the gray-screen
+	// merged recordings. Align its head to the first keyframe. A keyframe-less
+	// segment is undecodable in ANY merged context — mark it incompatible and
+	// leave it standalone instead of poisoning the bucket.
+	if dropped, ok := AlignToKeyframe(newInfo); !ok {
+		rollingLogger.Warn("segment has no keyframe sample, marking incompatible",
+			"camera_id", seg.cameraID, "recording_id", seg.recordingID,
+			"samples", newInfo.SampleCount)
+		if markErr := storage.RetryOnBusy(ctx, func() error {
+			return r.db.SetMergeStatus(ctx, []string{seg.recordingID}, model.MergeStatusIncompatible)
+		}); markErr != nil {
+			rollingLogger.Warn("failed to mark keyframe-less segment",
+				"recording_id", seg.recordingID, "error", markErr)
+		}
+		return nil
+	} else if dropped > 0 {
+		rollingLogger.Info("keyframe alignment dropped leading samples",
+			"camera_id", seg.cameraID, "recording_id", seg.recordingID, "dropped", dropped)
 	}
 
 	// Compute SPS/PPS compatibility key.
@@ -1517,6 +1613,20 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	} else {
 		// Append to existing bucket: merge [bucketFile + newSegment].
 		outputPath, mergedRecID, err = r.appendToBucket(ctx, seg, newInfo, bucket)
+		if err != nil && strings.Contains(err.Error(), "bucket keyframe-less") {
+			// Legacy corrupt bucket (written before keyframe alignment, no
+			// keyframe-bearing sample left): drop the in-memory state and
+			// rebuild the bucket from this segment alone.
+			rollingLogger.Warn("bucket has no keyframe-bearing samples, rebuilding bucket",
+				"camera_id", seg.cameraID, "old_bucket", bucket.mergedFilePath)
+			bucket.mergedFilePath = ""
+			bucket.mergedRecID = ""
+			bucket.spsKey = ""
+			bucket.audioKey = ""
+			bucket.segmentCount = 0
+			bucket.mergedFileSize = 0
+			outputPath, mergedRecID, err = r.createBucket(ctx, seg, newInfo)
+		}
 	}
 
 	if err != nil {
@@ -1571,8 +1681,9 @@ func (r *RollingMergeCoordinator) createBucket(
 		return "", "", fmt.Errorf("create bucket output: %w", derr)
 	}
 
-	// Merge single segment into the bucket file.
-	if err := MergeMP4Segments(ctx, []*SegmentInfo{info}, tempPath); err != nil {
+	// Merge single segment into the bucket file (pre-aligned by mergeOneSegment).
+	stats, err := MergeMP4Segments(ctx, []*SegmentInfo{info}, tempPath, r.resolveTimelapseCadence(seg.cameraID))
+	if err != nil {
 		os.Remove(tempPath)
 		return "", "", fmt.Errorf("merge initial segment: %w", err)
 	}
@@ -1593,16 +1704,20 @@ func (r *RollingMergeCoordinator) createBucket(
 	// Create merged recording row and delete the source segment row.
 	mergedRecID = strconv.FormatInt(time.Now().UnixNano(), 10)
 	mergedRec := &model.Recording{
-		ID:          mergedRecID,
-		CameraID:    seg.cameraID,
-		FilePath:    finalPath,
-		Format:      model.Format(seg.format),
-		StartedAt:   seg.startedAt,
-		EndedAt:     seg.endedAt,
-		Duration:    info.TotalDuration.Seconds(),
+		ID:        mergedRecID,
+		CameraID:  seg.cameraID,
+		FilePath:  finalPath,
+		Format:    model.Format(seg.format),
+		StartedAt: seg.startedAt,
+		EndedAt:   seg.endedAt,
+		// Wall-clock span (#496): the file timeline may be timelapse-compressed;
+		// the row keeps reporting real time so storage accounting and the UI's
+		// wall-clock math stay on the real axis.
+		Duration:    statsWallDuration(stats, info.TotalDuration.Seconds()),
 		FileSize:    fi.Size(),
 		FrameCount:  info.SampleCount,
 		MergeStatus: model.MergeStatusMerged,
+		TimelineMap: stats.TimelineMapJSON(),
 	}
 
 	if err := storage.RetryOnBusy(ctx, func() error {
@@ -1614,6 +1729,7 @@ func (r *RollingMergeCoordinator) createBucket(
 
 	// Delete the source segment file (DB already committed).
 	r.store.DeleteFile(seg.filePath)
+	os.Remove(seg.filePath + ".g711") // ambient archive sidecar (#496)
 
 	return finalPath, mergedRecID, nil
 }
@@ -1652,10 +1768,19 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		return "", "", fmt.Errorf("create append output: %w", derr)
 	}
 
-	// Merge [bucket + newSegment].
-	if err := MergeMP4Segments(ctx, []*SegmentInfo{bucketInfo, newInfo}, tempPath); err != nil {
+	// Merge [bucket + newSegment]. The new segment was pre-aligned by
+	// mergeOneSegment; the bucket head is re-aligned inside the merge
+	// (self-heals pre-fix buckets whose first sample was a P-frame). A bucket
+	// with NO keyframe-bearing sample at all (legacy corrupt data) aborts the
+	// append with a distinct error so mergeOneSegment can rebuild the bucket.
+	stats, mergeErr := MergeMP4Segments(ctx, []*SegmentInfo{bucketInfo, newInfo}, tempPath, r.resolveTimelapseCadence(seg.cameraID))
+	if mergeErr != nil {
 		os.Remove(tempPath)
-		return "", "", fmt.Errorf("merge append: %w", err)
+		return "", "", fmt.Errorf("merge append: %w", mergeErr)
+	}
+	if len(stats.Included) != 2 {
+		os.Remove(tempPath)
+		return "", "", fmt.Errorf("append dropped a segment (bucket keyframe-less): included=%d/2", len(stats.Included))
 	}
 
 	fi, err := os.Stat(tempPath)
@@ -1674,10 +1799,10 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		return "", "", fmt.Errorf("finalize append (rename): %w", err)
 	}
 
-	// Calculate updated metadata.
-	totalDur := bucketInfo.TotalDuration + newInfo.TotalDuration
+	// Calculate updated metadata. Duration stays on the wall-clock axis (#496):
+	// the bucket file's parsed durations shrink with each timelapse-compressed
+	// append, so the wall span comes from the merge stats' input sums instead.
 	totalFrames := bucketInfo.SampleCount + newInfo.SampleCount
-	totalDurSec := math.Round(totalDur.Seconds()*1000) / 1000
 
 	mergedRecID = bucket.mergedRecID
 	mergedRec := &model.Recording{
@@ -1687,10 +1812,11 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		Format:      model.Format(seg.format),
 		StartedAt:   bucket.windowStart,
 		EndedAt:     seg.endedAt,
-		Duration:    totalDurSec,
+		Duration:    statsWallDuration(stats, totalDurFallbackSec(bucketInfo, newInfo)),
 		FileSize:    fi.Size(),
 		FrameCount:  totalFrames,
 		MergeStatus: model.MergeStatusMerged,
+		TimelineMap: stats.TimelineMapJSON(),
 	}
 
 	// UPDATE the merged row + DELETE the source segment row, in one transaction.
@@ -1708,6 +1834,7 @@ func (r *RollingMergeCoordinator) appendToBucket(
 
 	// Delete the source segment file.
 	r.store.DeleteFile(seg.filePath)
+	os.Remove(seg.filePath + ".g711") // ambient archive sidecar (#496)
 
 	// Delete the PREVIOUS bucket file (each append creates a new file via
 	// store.CreateSegment, so the old bucket path is now orphaned). Only
@@ -1715,6 +1842,7 @@ func (r *RollingMergeCoordinator) appendToBucket(
 	// CreateSegment generates unique timestamps).
 	if bucket.mergedFilePath != "" && bucket.mergedFilePath != finalPath {
 		r.store.DeleteFile(bucket.mergedFilePath)
+		os.Remove(bucket.mergedFilePath + ".g711")
 	}
 
 	return finalPath, mergedRecID, nil
@@ -1748,4 +1876,22 @@ func bytesEqual(a, b []byte) bool {
 		}
 	}
 	return true
+}
+
+// statsWallDuration picks the product's wall-clock span from the merge stats
+// (sum of input sample durations — unaffected by #496 timelapse dwell
+// compression), falling back to the caller's parsed-duration estimate when no
+// map was collected.
+func statsWallDuration(stats MergeStats, fallback float64) float64 {
+	if w := stats.WallDurationSec(); w > 0 {
+		return math.Round(w*1000) / 1000
+	}
+	return fallback
+}
+
+// totalDurFallbackSec is the pre-stats duration estimate for a bucket append:
+// the parsed bucket file plus the new input. Correct on the real-time axis
+// (no compression yet), and only used when stats carry no wall map.
+func totalDurFallbackSec(bucketInfo, newInfo *SegmentInfo) float64 {
+	return math.Round((bucketInfo.TotalDuration+newInfo.TotalDuration).Seconds()*1000) / 1000
 }

@@ -35,6 +35,9 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 		return fmt.Errorf("camera manager: invalid segment duration %q: %w", cm.cfg.Storage.SegmentDuration, err)
 	}
 
+	// Periodic exporter of hub per-consumer atomics to Prometheus (#469).
+	cm.startHubStatsFlusher()
+
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cam.StableID); err != nil {
@@ -235,6 +238,9 @@ func (cm *CameraManager) Stop() error {
 	// them here prevents those writes from racing the teardown performed by
 	// Stop / the caller above (#163). Bounded by the ensure* 15s timeout.
 	cm.onvifEnsureWg.Wait()
+
+	// Stop the hub stats flusher (#469).
+	cm.stopHubStatsFlusher()
 
 	return nil
 }

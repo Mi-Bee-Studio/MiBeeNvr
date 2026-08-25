@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -226,6 +227,13 @@ func (c *MISSClient) StartMedia(channel, quality string, audioEnabled bool) erro
 	// enableaudio: "1" = on, "0" = off (default on for most cameras)
 	audioFlag := "0"
 	if audioEnabled {
+		audioFlag = "1"
+	}
+	// Issue #167 field-test knob: go2rtc always sends enableaudio=1; we send 0
+	// when per-camera audio is disabled. Some firmwares treat an audio-less
+	// session differently, so XIAOMI_MISS_ENABLEAUDIO=1 forces the flag on
+	// without changing how packets are consumed locally.
+	if os.Getenv("XIAOMI_MISS_ENABLEAUDIO") == "1" {
 		audioFlag = "1"
 	}
 

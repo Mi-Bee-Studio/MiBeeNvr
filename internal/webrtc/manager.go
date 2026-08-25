@@ -1018,6 +1018,12 @@ func (m *Manager) activePeerCount(camID string) int {
 	return len(m.camPeers[camID])
 }
 
+// PeerCount returns the number of active WHEP peers for the given camera
+// (public — used by the /api/streams flow view, #469).
+func (m *Manager) PeerCount(camID string) int {
+	return m.activePeerCount(camID)
+}
+
 // totalPeerCount returns the total number of active WHEP sessions across all cameras.
 func (m *Manager) totalPeerCount() int {
 	m.mu.RLock()

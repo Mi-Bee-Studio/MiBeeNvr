@@ -86,7 +86,16 @@ function setupCacheMock() {
     match: vi.fn().mockImplementation(async (url: string) => {
       const cached = mockCacheStore.get(url);
       if (cached) {
-        return new Response(new Blob([cached]), { status: 200 });
+        // Build the hit Response with an ArrayBuffer body, NOT a Blob: under
+        // Node 22's jsdom environment the global Blob is jsdom's, and undici's
+        // Response constructor stringifies it ("[object Blob]", 13 bytes) —
+        // the cache "hit" returns garbage, ORT session creation fails, and the
+        // runtime's self-heal path purges + re-fetches, breaking the
+        // caches-model test. CI and dev environments now standardize on
+        // Node 24 (which accepts a Blob), but anyone running the suite on
+        // Node 22 would hit this again. ArrayBuffer bodies are native to
+        // undici on every version.
+        return new Response(cached.slice(0), { status: 200 });
       }
       return undefined;
     }),
@@ -380,9 +389,7 @@ describe('AiRuntime', () => {
 
     it('does NOT self-heal on non-corrupt session errors', async () => {
       // A generic WebGPU/runtime failure must NOT trigger a re-download.
-      mockOrtModule.InferenceSession.create = vi
-        .fn()
-        .mockRejectedValue(new Error('WebGPU adapter unavailable'));
+      mockOrtModule.InferenceSession.create = vi.fn().mockRejectedValue(new Error('WebGPU adapter unavailable'));
       setupFetchWithResponse(new ArrayBuffer(1024));
 
       const rt = new AiRuntime();

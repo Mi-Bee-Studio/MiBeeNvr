@@ -429,6 +429,13 @@ func validateConfigDetails(cfg *Config) error {
 		}
 	}
 
+	// Validate per-camera recording mode (issue #435)
+	for _, cam := range cfg.Cameras {
+		if err := ValidateCameraRecordingMode(cam); err != nil {
+			return err
+		}
+	}
+
 	// Validate per-camera timelapse configuration
 	for _, cam := range cfg.Cameras {
 		if cam.Timelapse == nil {
@@ -706,6 +713,73 @@ func validatePortRange(r string) error {
 	}
 	if start > end {
 		return fmt.Errorf("start port %d must be <= end port %d", start, end)
+	}
+	return nil
+}
+
+// ValidateCameraRecordingMode checks one camera's recording_mode + adaptive
+// tuning block (issue #435) + audio_trigger block (issue #478). Shared by the
+// startup config validation and the camera create/update API boundaries so an
+// invalid value is rejected at the wire instead of bricking the next restart.
+func ValidateCameraRecordingMode(cam CameraConfig) error {
+	switch cam.RecordingMode {
+	case "", "continuous", "adaptive":
+	default:
+		return fmt.Errorf("cameras.%s.recording_mode must be \"continuous\" or \"adaptive\" (got %q)", cam.ID, cam.RecordingMode)
+	}
+	if cam.AudioTrigger != nil && cam.AudioTrigger.Enabled {
+		if cam.RecordingMode != "adaptive" {
+			return fmt.Errorf("cameras.%s.audio_trigger requires recording_mode: adaptive (got %q)", cam.ID, cam.RecordingMode)
+		}
+		at := cam.AudioTrigger
+		if at.MinDBFS != 0 && (at.MinDBFS < -90 || at.MinDBFS > 0) {
+			return fmt.Errorf("cameras.%s.audio_trigger.min_dbfs must be -90–0 dBFS, got %v", cam.ID, at.MinDBFS)
+		}
+		if at.PreCaptureS < 0 || at.PreCaptureS > 30 {
+			return fmt.Errorf("cameras.%s.audio_trigger.pre_capture_s must be 0–30, got %d", cam.ID, at.PreCaptureS)
+		}
+	}
+	if cam.RecordingMode != "adaptive" {
+		return nil
+	}
+	if cam.Encoding != "h264" && cam.Encoding != "h265" {
+		return fmt.Errorf("cameras.%s.recording_mode=adaptive requires differential encoding (h264/h265), got encoding %q", cam.ID, cam.Encoding)
+	}
+	a := cam.Adaptive
+	if a == nil {
+		return nil
+	}
+	if a.CalmThreshold != "" {
+		d, err := time.ParseDuration(a.CalmThreshold)
+		if err != nil {
+			return fmt.Errorf("cameras.%s.adaptive.calm_threshold invalid duration: %w", cam.ID, err)
+		}
+		if d < 10*time.Second || d > 30*time.Minute {
+			return fmt.Errorf("cameras.%s.adaptive.calm_threshold must be 10s–30m, got %s", cam.ID, a.CalmThreshold)
+		}
+	}
+	if a.TimelapseInterval != "" {
+		d, err := time.ParseDuration(a.TimelapseInterval)
+		if err != nil {
+			return fmt.Errorf("cameras.%s.adaptive.timelapse_interval invalid duration: %w", cam.ID, err)
+		}
+		if d < 5*time.Second || d > 10*time.Minute {
+			return fmt.Errorf("cameras.%s.adaptive.timelapse_interval must be 5s–10m, got %s", cam.ID, a.TimelapseInterval)
+		}
+	}
+	if a.SpikeFactor != 0 && (a.SpikeFactor < 1.5 || a.SpikeFactor > 20) {
+		return fmt.Errorf("cameras.%s.adaptive.spike_factor must be 1.5–20, got %v", cam.ID, a.SpikeFactor)
+	}
+	if a.GOPBufferBytes != 0 && (a.GOPBufferBytes < 1<<20 || a.GOPBufferBytes > 64<<20) {
+		return fmt.Errorf("cameras.%s.adaptive.gop_buffer_bytes must be 1MB–64MB, got %d", cam.ID, a.GOPBufferBytes)
+	}
+	switch a.TimelapseFrameMs {
+	case 0, 100, 300, 500:
+	default:
+		return fmt.Errorf("cameras.%s.adaptive.timelapse_frame_ms must be one of 100/300/500, got %d", cam.ID, a.TimelapseFrameMs)
+	}
+	if a.AmbientArchive && !a.AmbientAudio {
+		return fmt.Errorf("cameras.%s.adaptive.ambient_archive requires ambient_audio", cam.ID)
 	}
 	return nil
 }

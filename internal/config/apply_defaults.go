@@ -63,6 +63,13 @@ func applyConfigDefaults(cfg *Config) {
 	// storage locations the host platform granted the app (fnOS user-authorized
 	// directories, mounted by the lifecycle script under /media/*). Informational
 	// only — surfaced via /api/storage/candidates for the settings UI.
+	//
+	// Stale-entry pruning: when the env var is ABSENT, persisted candidates
+	// that no longer exist on disk are dropped — a granted-and-later-removed
+	// platform mount used to linger in the yaml forever and keep offering a
+	// dead choice in the settings UI (switching to it crash-looped the app at
+	// db init). Entries from a present env var are kept verbatim: the env is
+	// the platform's current truth, re-delivered on every start.
 	if env := strings.TrimSpace(os.Getenv("NVR_STORAGE_CANDIDATES")); env != "" {
 		var candidates []string
 		for _, p := range strings.Split(env, ":") {
@@ -73,6 +80,14 @@ func applyConfigDefaults(cfg *Config) {
 		if len(candidates) > 0 {
 			cfg.Storage.Candidates = candidates
 		}
+	} else {
+		var kept []string
+		for _, p := range cfg.Storage.Candidates {
+			if info, err := os.Stat(p); err == nil && info.IsDir() {
+				kept = append(kept, p)
+			}
+		}
+		cfg.Storage.Candidates = kept
 	}
 	// Device identity (#330): the name defaults to the system hostname and is
 	// intentionally NOT persisted (an explicit server.device_name overrides it;
@@ -341,11 +356,17 @@ func applyConfigDefaults(cfg *Config) {
 		cfg.GB28181.TCPFraming = "auto"
 	}
 	if strings.TrimSpace(cfg.GB28181.MediaTransport) == "" {
-		if cfg.GB28181.TCPMode {
-			cfg.GB28181.MediaTransport = "tcp-passive" // legacy tcp_mode alias
-		} else {
-			cfg.GB28181.MediaTransport = "udp"
-		}
+		// Default tcp-passive (#460): UDP media measured ~16% frame loss on a
+		// real GB camera (back-to-back IDR bursts overflow NIC/softirq paths —
+		// each loss breaks the P-frame reference chain until the next IDR,
+		// perceived as macroblock corruption), while tcp-passive delivered
+		// complete IDRs and <1% loss on the same LAN. tcp-passive is also the
+		// Hikvision/Dahua default across NAT. Devices without TCP media support
+		// can opt back with media_transport: "udp".
+		// The legacy tcp_mode alias no longer influences the choice: it is a
+		// bool, so an explicit `tcp_mode: false` is indistinguishable from
+		// unset and honoring it would reinstate the UDP default for everyone.
+		cfg.GB28181.MediaTransport = "tcp-passive"
 	}
 	if strings.TrimSpace(cfg.GB28181.SIPTransport) == "" {
 		cfg.GB28181.SIPTransport = "udp"

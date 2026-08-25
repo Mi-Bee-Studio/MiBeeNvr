@@ -20,6 +20,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
@@ -49,13 +51,14 @@ type appDeps struct {
 	configPath string
 
 	// Storage + observability
-	db         *storage.DB
-	store      *storage.Manager
-	metrics    *metrics.Metrics
-	eventBus   *event.EventBus
-	authMW     func(http.Handler) http.Handler
-	remoteLogH *remotelog.Handler
-	appLoc     *time.Location
+	db           *storage.DB
+	store        *storage.Manager
+	migrationMgr *migration.Migrator
+	metrics      *metrics.Metrics
+	eventBus     *event.EventBus
+	authMW       func(http.Handler) http.Handler
+	remoteLogH   *remotelog.Handler
+	appLoc       *time.Location
 
 	// Merge / transcode / timelapse
 	mergeMgr              *merge.MergeManager
@@ -64,6 +67,7 @@ type appDeps struct {
 	rollingMergeMgr       *timelapse.RollingMergeManager // timelapse rolling merge (wired to API handler)
 	mergeScheduler        *timelapse.MergeScheduler
 	visionMgr             *vision.Coordinator // NVR→Vision push coordinator
+	motionAnalyzer        *motion.Analyzer    // offline motion-score service (issue #435)
 
 	// Camera + health + relay
 	camMgr    *camera.CameraManager

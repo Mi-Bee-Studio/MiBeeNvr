@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -17,6 +16,30 @@ import (
 // createRecorder creates a recorder for the given camera config.
 // Returns nil for unknown protocols.
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
+	// resolveAdaptiveConfig parses the YAML adaptive-recording overrides into the
+	// recorder's resolved form, defaulting unspecified fields (issue #435). The
+	// config layer has already validated ranges.
+	resolveAdaptiveConfig := func(a *config.AdaptiveRecordingConfig) *recorder.AdaptiveConfig {
+		var calm, interval string
+		var spike float64
+		var gop int64
+		var ambient, archive bool
+		if a != nil {
+			calm, interval, spike, gop, ambient, archive = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio, a.AmbientArchive
+		}
+		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient, archive)
+		return &ac
+	}
+	// resolveAudioTriggerConfig resolves the audio-trigger overrides (issue
+	// #478); nil when not armed. G.711-only at the recorder level.
+	resolveAudioTriggerConfig := func(a *config.CameraAudioTriggerConfig) *recorder.AudioTriggerConfig {
+		if a == nil || !a.Enabled {
+			return nil
+		}
+		at := recorder.ResolveAudioTriggerConfig(a.MinDBFS, a.PreCaptureS)
+		return &at
+	}
+
 	var rec model.Recorder
 	switch cam.Protocol {
 	case "xiaomi":
@@ -31,35 +54,45 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		switch cam.Encoding {
 		case string(model.FormatH264):
 			h264Cfg := recorder.H264Config{
-				CameraID:      cam.ID,
-				RTSPURL:       cam.URL,
-				Username:      cam.Username,
-				Password:      cam.Password,
-				SegmentDur:    segDur,
-				DB:            cm.db,
-				AudioEnabled:  cam.AudioEnabled,
-				EventBus:      cm.eventBus,
-				RecordEnabled: cam.RecordingEnabled,
+				CameraID:          cam.ID,
+				RTSPURL:           cam.URL,
+				Username:          cam.Username,
+				Password:          cam.Password,
+				SegmentDur:        segDur,
+				DB:                cm.db,
+				AudioEnabled:      cam.AudioEnabled,
+				AudioInRecordings: cam.AudioInRecordings,
+				EventBus:          cm.eventBus,
+				RecordEnabled:     cam.RecordingEnabled,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
 			}
+			if cam.RecordingMode == "adaptive" {
+				h264Cfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
+			}
+			h264Cfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
 			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
 		case string(model.FormatH265):
 			h265Cfg := recorder.H265Config{
-				CameraID:      cam.ID,
-				RTSPURL:       cam.URL,
-				Username:      cam.Username,
-				Password:      cam.Password,
-				SegmentDur:    segDur,
-				DB:            cm.db,
-				AudioEnabled:  cam.AudioEnabled,
-				EventBus:      cm.eventBus,
-				RecordEnabled: cam.RecordingEnabled,
+				CameraID:          cam.ID,
+				RTSPURL:           cam.URL,
+				Username:          cam.Username,
+				Password:          cam.Password,
+				SegmentDur:        segDur,
+				DB:                cm.db,
+				AudioEnabled:      cam.AudioEnabled,
+				AudioInRecordings: cam.AudioInRecordings,
+				EventBus:          cm.eventBus,
+				RecordEnabled:     cam.RecordingEnabled,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
 			}
+			if cam.RecordingMode == "adaptive" {
+				h265Cfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
+			}
+			h265Cfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
 			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
 		case string(model.FormatMJPEG):
 			mjpegCfg := recorder.MJPEGConfig{
@@ -103,18 +136,25 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		}
 		onvifClient := cm.reuseOrCreateONVIFClient(cam.ID, onvifEndpoint, cam.Username, cam.Password)
 		onvifCfg := recorder.ONVIFConfig{
-			CameraID:       cam.ID,
-			ProfileToken:   cam.ProfileToken,
-			StreamEncoding: cam.StreamEncoding,
-			Username:       cam.Username,
-			Password:       cam.Password,
-			SegmentDur:     segDur,
-			DB:             cm.db,
-			AudioEnabled:   cam.AudioEnabled,
-			ONVIFEndpoint:  onvifEndpoint,
-			AVI:            cam.HTTPJPEGAVI,
-			EventBus:       cm.eventBus,
-			RecordEnabled:  cam.RecordingEnabled,
+			CameraID:          cam.ID,
+			ProfileToken:      cam.ProfileToken,
+			StreamEncoding:    cam.StreamEncoding,
+			Username:          cam.Username,
+			Password:          cam.Password,
+			SegmentDur:        segDur,
+			DB:                cm.db,
+			AudioEnabled:      cam.AudioEnabled,
+			AudioInRecordings: cam.AudioInRecordings,
+			ONVIFEndpoint:     onvifEndpoint,
+			AVI:               cam.HTTPJPEGAVI,
+			EventBus:          cm.eventBus,
+			RecordEnabled:     cam.RecordingEnabled,
+		}
+		if cam.RecordingMode == "adaptive" {
+			// Validated by config.ValidateCameraRecordingMode (h264/h265 only);
+			// createDelegate ignores it for MJPEG/JPEG encodings.
+			onvifCfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
+			onvifCfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
 		}
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			onvifCfg.FrameWatchdogTimeout = d
@@ -209,7 +249,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	}
 
 	// Initialize StreamHub for frame fan-out on all recorders
-	initStreamHub(rec, cam.ID, cam.Protocol, &cm.frameSampleCounter, cm.metrics)
+	initStreamHub(rec, cam.ID, cm.metrics)
 	// Register the recorder's hub in the central registry so that push ingest
 	// servers (SRT listener / RTMP server) share the SAME hub object and their
 	// frames reach the live consumers (HLS/WebRTC/FLV/WS) attached on demand.
@@ -226,73 +266,58 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 }
 
 // initStreamHub sets a new StreamHub on the recorder if it has a Hub field.
-// It also sets the cameraID for structured logging and wires up the OnBroadcast callback.
-func initStreamHub(rec model.Recorder, cameraID string, protocol string, sampleCounter *uint64, m *metrics.Metrics) {
+// It sets the cameraID for structured logging, labels the hub source for the
+// flow-path view, and wires the standard observability callbacks (shared with
+// push hubs via wireHubMetrics).
+func initStreamHub(rec model.Recorder, cameraID string, m *metrics.Metrics) {
 	var hub *model.StreamHub
+	source := ""
 	switch r := rec.(type) {
 	case *recorder.H264Recorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "h264"
 	case *recorder.H265Recorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "h265"
 	case *recorder.ONVIFRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "onvif"
 	case *recorder.MJPEGRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "mjpeg"
 	case *recorder.HTTPJPEGRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "http-jpeg"
 	case *xiaomi.XiaomiRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "xiaomi"
 	case *recorder.TimelapseRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "timelapse"
 	case *recorder.StubRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "stub"
 	case *recorder.IngestRecorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "ingest"
 	case *recorder.GB28181Recorder:
 		hub = model.NewStreamHub()
 		r.Hub = hub
+		source = "gb28181"
 	}
 	if hub != nil {
 		hub.SetCameraID(cameraID)
-		if m != nil {
-			hub.OnBroadcast = func(cid string, isIDR bool) {
-				m.StreamHubFramesInTotal.WithLabelValues(cid).Inc()
-				if sampleCounter != nil {
-					count := atomic.AddUint64(sampleCounter, 1)
-					if count%100 == 0 {
-						start := time.Now()
-						m.FrameProcessingDurationSeconds.WithLabelValues(cid, protocol).Observe(time.Since(start).Seconds())
-					}
-				}
-			}
-			hub.OnDrop = func(consumerID string) {
-				m.StreamHubFramesDropped.WithLabelValues(cameraID, consumerID, "false").Inc()
-			}
-			hub.OnBroadcastAudio = func(cid string, codec string) {
-				m.AudioFramesTotal.WithLabelValues(cid, codec).Inc()
-			}
-			hub.OnAudioDrop = func(cid string) {
-				m.AudioFramesDroppedTotal.WithLabelValues(cid).Inc()
-			}
-			hub.OnBufferDepth = func(cid, consumerID string, depth int) {
-				m.StreamHubBufferDepth.WithLabelValues(cid, consumerID).Set(float64(depth))
-			}
-			hub.OnJitterBufferDepth = func(cid string, depth int) {
-				m.JitterBufferDepth.WithLabelValues(cid).Set(float64(depth))
-			}
-			hub.OnJitterReorder = func(cid string) {
-				m.JitterBufferReordersTotal.WithLabelValues(cid).Inc()
-			}
-		}
+		hub.SetSource(source)
+		wireHubMetrics(hub, cameraID, m)
 	}
 }
 

@@ -144,6 +144,8 @@ export type {
   TimeRange,
   CameraRecordingStats,
   RelayCapabilities,
+  AdaptiveRecordingConfig,
+  CameraAudioTriggerConfig,
   // Xiaomi PTZ
   XiaomiPtzMoveRequest,
   XiaomiDeviceInfo,
@@ -219,6 +221,12 @@ export {
   getSettings,
   updateSettings,
   getStorageCandidates,
+  addStorageCandidate,
+  removeStorageCandidate,
+  startStorageMigrate,
+  getStorageMigrateStatus,
+  getCameraStorageRoot,
+  setCameraStorageRoot,
   getMergeSettings,
   updateMergeSettings,
   getMergeStatus,
@@ -256,7 +264,7 @@ export { xiaomiAuth, xiaomiDevices, xiaomiCaptcha, xiaomiVerify, xiaomiSync } fr
 export type { XiaomiDevice, XiaomiDevicesResponse, XiaomiAuthResponse } from './xiaomi';
 
 // Health — camera health status and events
-export { getHealthStatus, getHealthEvents, getCameraHealth, getHealthCameras } from './health';
+export { getHealthStatus, getHealthEvents, getCameraHealth, getHealthCameras, getStability } from './health';
 export type {
   HealthStatus,
   HealthEventType,
@@ -267,7 +275,13 @@ export type {
   HealthEventsParams,
   CameraHealthDetail,
   HealthCamerasResponse,
+  CameraStability,
+  StabilityResponse,
 } from './health';
+
+// Flow — video pipeline flow-path observability (#469)
+export { getFlowStreams } from './flow';
+export type { FlowStream, FlowConsumer, FlowStreamsResponse } from './flow';
 
 // Transcoding — hardware check, FFmpeg, task management
 export {

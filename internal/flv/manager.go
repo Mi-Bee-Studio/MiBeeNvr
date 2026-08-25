@@ -194,6 +194,12 @@ func (m *Manager) IsActive(camID string) bool {
 	return ok
 }
 
+// ViewerCount returns the number of active FLV viewers for a stream (public —
+// used by the /api/streams flow view, #469).
+func (m *Manager) ViewerCount(camID string) int {
+	return m.viewerCount(camID)
+}
+
 // viewerCount returns the number of active viewers for a stream.
 func (m *Manager) viewerCount(camID string) int {
 	m.mu.RLock()

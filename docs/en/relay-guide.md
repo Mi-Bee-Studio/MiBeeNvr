@@ -392,7 +392,6 @@ tail -f /var/log/mibee-nvr.log | grep relay
 # Check stream key authentication (if applicable)
 curl -H "Authorization: Bearer YOUR_KEY" -X GET https://api.bilibili.com/x/web-interface/nav
 ```
-```
 
 ## FFmpeg Relay Mode (Compatibility)
 
@@ -426,7 +425,6 @@ cameras:
         enabled: true
         use_ffmpeg: true        # ← Enable FFmpeg relay
         # source_url: ""        # Optional: override auto-resolved source URL
-```
 
 When `use_ffmpeg: true`:
 - The relay spawns `ffmpeg -rtsp_transport tcp -i <camera_url> -c copy -f flv <target_url>`

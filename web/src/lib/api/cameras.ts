@@ -36,12 +36,22 @@ export interface Camera {
   transcoding?: CameraTranscodingConfig;
   channel?: string;
   audio_enabled?: boolean;
+  /** Keep the real audio track in recorded segments (default off). */
+  audio_in_recordings?: boolean;
   // Recording gate: false = live-only (no segments written to disk; the recorder
   // stays connected for live preview + relay + health). undefined = record.
   recording_enabled?: boolean | null;
   // Cascade gate: false = hidden from the GB28181 cascade catalog (upper
   // platform cannot see or invite it). undefined = exposed.
   cascade_enabled?: boolean | null;
+  // Recording mode (#435): 'continuous' (default) or 'adaptive' — dynamic
+  // timelapse that drops to sparse keyframes while the compressed-domain
+  // activity signal stays calm. 'adaptive' holds the tuning knobs (nil = defaults).
+  recording_mode?: string;
+  adaptive?: AdaptiveRecordingConfig;
+  // Loudness trigger for adaptive recording (#478); only effective with
+  // recording_mode 'adaptive'.
+  audio_trigger?: CameraAudioTriggerConfig;
   // Xiaomi two-way audio enable flag
   two_way_audio_enabled?: boolean;
   // Push/ingest fields (SRT/RTMP cameras)
@@ -65,6 +75,36 @@ export interface Camera {
     channel_id: string;
     manufacturer?: string;
   };
+}
+
+/** Tuning knobs for recording_mode: 'adaptive' (#435). */
+export interface AdaptiveRecordingConfig {
+  /** How long activity must stay calm before sparse keyframe mode. Default '60s'. */
+  calm_threshold?: string;
+  /** Keyframe cadence while sparse. Default '30s'. */
+  timelapse_interval?: string;
+  /** Activity spike sensitivity (MAD deviations above baseline). Default 5.0. */
+  spike_factor?: number;
+  /** Seamless-transition GOP pre-buffer cap in bytes. Default 16MB. */
+  gop_buffer_bytes?: number;
+  /** Keep the audio track recording continuously while sparse (#496): the
+   *  merge renders it into a quiet atmosphere bed under the compressed
+   *  timelapse video. G.711 cameras only; ~28.8MB/h while sparse. */
+  ambient_audio?: boolean;
+  /** Compressed-timeline frame cadence preset (ms): 100/300/500, 0 = default 100. */
+  timelapse_frame_ms?: number;
+  /** Keep the raw ambient G.711 as a sidecar file for post-production. */
+  ambient_archive?: boolean;
+}
+
+/** Loudness trigger knobs for recording_mode: 'adaptive' (#478). */
+export interface CameraAudioTriggerConfig {
+  /** Arm the loudness input. */
+  enabled: boolean;
+  /** 1s-window loudness threshold in dBFS. Default -45. Range -90..0. */
+  min_dbfs?: number;
+  /** Seconds of pre-trigger audio back-filled on a timelapse exit. Default 3. */
+  pre_capture_s?: number;
 }
 
 /** One push-out relay destination (RTMP/RTSP) for a camera. */
@@ -149,6 +189,12 @@ export interface CreateCameraRequest {
   recording_enabled?: boolean | null;
   // Cascade gate: false = hidden from the GB28181 cascade catalog. Omit = exposed.
   cascade_enabled?: boolean | null;
+  // Recording mode (#435). Omit = continuous.
+  recording_mode?: string;
+  adaptive?: AdaptiveRecordingConfig;
+  // Loudness trigger for adaptive recording (#478); only effective with
+  // recording_mode 'adaptive'.
+  audio_trigger?: CameraAudioTriggerConfig;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -192,6 +238,12 @@ export interface UpdateCameraRequest {
   recording_enabled?: boolean | null;
   // Cascade gate: false = hidden from the GB28181 cascade catalog. Omit = unchanged.
   cascade_enabled?: boolean | null;
+  // Recording mode (#435). Omit = unchanged. Changing it restarts the recorder.
+  recording_mode?: string;
+  adaptive?: AdaptiveRecordingConfig;
+  // Loudness trigger for adaptive recording (#478); only effective with
+  // recording_mode 'adaptive'.
+  audio_trigger?: CameraAudioTriggerConfig;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;

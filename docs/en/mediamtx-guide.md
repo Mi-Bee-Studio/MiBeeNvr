@@ -523,7 +523,7 @@ paths:
 
 ### Deployment Architecture
 
-```
+```text
 camera → MediaMTX (load balancing) → MiBee NVR
          ↓
       monitoring node

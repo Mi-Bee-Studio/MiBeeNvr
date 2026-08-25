@@ -185,11 +185,14 @@ func decodeCodecInfo(data []byte) (*CodecInfo, error) {
 //
 // Wire format:
 //
-//	{type:2}{pts:8bytes_BE}{is_keyframe:1byte}{nalu_count:2bytes}{nalu1_len:4bytes}{nalu1}...
+//	{type:2}{pts:8bytes_BE}{is_keyframe:1byte}{nalu_count:2bytes}{nalu1_len:4bytes}{nalu1}...[ingest_at:8bytes_BE]
 //
 // All multi-byte integers are big-endian.
 // PTS is in 90kHz clock (matching StreamHub convention).
 // NALUs do NOT include start codes.
+// The trailing ingest_at (hub-entry wallclock, unix ms; #469) is a
+// backwards-compatible extension — clients written before it stop parsing at
+// the last NALU and ignore the remaining bytes.
 func EncodeVideoFrame(vf *VideoFrame) ([]byte, error) {
 	if vf == nil {
 		return nil, errors.New("wsstream: nil VideoFrame")
@@ -199,8 +202,8 @@ func EncodeVideoFrame(vf *VideoFrame) ([]byte, error) {
 		return nil, fmt.Errorf("wsstream: too many NALUs: %d", len(vf.NALUs))
 	}
 
-	// type(1) + pts(8) + isKeyframe(1) + naluCount(2)
-	size := 1 + 8 + 1 + 2
+	// type(1) + pts(8) + isKeyframe(1) + naluCount(2) + ingestAt(8)
+	size := 1 + 8 + 1 + 2 + 8
 	for _, nalu := range vf.NALUs {
 		size += 4 + len(nalu) // naluLen(4) + nalu
 	}
@@ -230,6 +233,7 @@ func EncodeVideoFrame(vf *VideoFrame) ([]byte, error) {
 		copy(buf[offset:], nalu)
 		offset += len(nalu)
 	}
+	binary.BigEndian.PutUint64(buf[offset:], uint64(vf.IngestAt))
 	return buf, nil
 }
 
@@ -265,6 +269,11 @@ func decodeVideoFrame(data []byte) (*VideoFrame, error) {
 		copy(nalu, data[offset:offset+naluLen])
 		vf.NALUs = append(vf.NALUs, nalu)
 		offset += naluLen
+	}
+
+	// Trailing ingest_at extension (#469): present when ≥8 bytes remain.
+	if len(data)-offset >= 8 {
+		vf.IngestAt = int64(binary.BigEndian.Uint64(data[offset : offset+8]))
 	}
 
 	return vf, nil

@@ -164,13 +164,14 @@ func TestRunFree_ServiceOrder(t *testing.T) {
 	t.Logf("service count = %d", len(svcs))
 
 	// With all optionals disabled, expected core services:
-	// db, startup-bg, camera, health, merge, rolling-merge, mergeScheduler, cleanup,
-	// archive-deleter, ws, hls, api-handler, pprof-loopback
+	// storage-migrator, db, startup-bg, camera, health, merge, rolling-merge,
+	// mergeScheduler, cleanup, archive-deleter, ws, hls, api-handler, pprof-loopback
 	// (health is always created even when Health.Enabled=false)
 	// (rolling-merge is always registered but only does work when Merge.RollingEnabled=true)
+	// (storage-migrator runs the background per-camera recording migration worker)
 	// (startup-bg joins the two RunFree background goroutines; api-handler closes
 	// tracked timelapse-merge goroutines — both added for #143 TempDir flake fix)
-	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "archive-deleter", "ws", "hls", "api-handler", "pprof-loopback"}
+	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "ws", "hls", "api-handler", "pprof-loopback"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}
@@ -202,7 +203,7 @@ func TestRunFree_ServiceOrder_GB28181Enabled(t *testing.T) {
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
 
-	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "archive-deleter", "srt", "gb28181", "ws", "hls", "api-handler", "pprof-loopback"}
+	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "srt", "gb28181", "ws", "hls", "api-handler", "pprof-loopback"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}
@@ -258,7 +259,7 @@ func TestRunFree_ServiceOrder_DiscoveryEnabled(t *testing.T) {
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
 
-	expected := []string{"db", "startup-bg", "camera", "health", "merge", "rolling-merge", "mergeScheduler", "cleanup", "archive-deleter", "discovery", "mdns", "ws", "hls", "api-handler", "pprof-loopback"}
+	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "discovery", "mdns", "ws", "hls", "api-handler", "pprof-loopback"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}

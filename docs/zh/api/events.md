@@ -20,7 +20,7 @@ curl -u username:password \
 
 **响应：** SSE 流（`text/event-stream`），15 秒心跳保活。
 
-```
+```text
 event: onvif.discovery
 data: {"topic":"onvif.discovery","data":{"device":"192.168.1.104"}}
 
@@ -41,7 +41,7 @@ curl -u username:password \
 
 **响应：** SSE 流（`text/event-stream`），15 秒心跳保活。
 
-```
+```text
 event: camera.status
 data: {"topic":"camera.status","data":{"camera_id":"front-door","status":"recording"}}
 

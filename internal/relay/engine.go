@@ -49,6 +49,12 @@ type VideoPresetOverrides struct {
 // source is H.264 (RTMP targets require H.264; H.265 sources are rejected).
 type SPSProvider func() (sps, pps []byte, isH264 bool)
 
+// SourceCodecProvider returns the source camera's current video encoding as a
+// model.Format string ("h264", "h265", "mjpeg", "jpeg", ...; "" = unknown).
+// The relay uses it to fail fast on sources the transcode path can never
+// handle (MJPEG/JPEG — #423) instead of engaging a doomed H.265 decoder.
+type SourceCodecProvider func() string
+
 // StreamURLProvider returns the source camera's stream URL (e.g. rtsp://...)
 // for FFmpeg relay mode. If it returns empty, SourceURL from config is used.
 type StreamURLProvider func(cameraID string) string
@@ -63,6 +69,7 @@ type PushTarget struct {
 	hub               *model.StreamHub
 	spsProvider       SPSProvider
 	codecInfoProvider func() model.CodecInfo
+	sourceCodec       SourceCodecProvider
 
 	mu     sync.RWMutex
 	status RelayStatus
@@ -106,6 +113,28 @@ func NewPushTarget(cameraID string, cfg PushTargetConfig, hub *model.StreamHub, 
 // targets. Should be set before Run.
 func (t *PushTarget) SetCodecInfoProvider(p func() model.CodecInfo) {
 	t.codecInfoProvider = p
+}
+
+// SetSourceCodecProvider wires an optional source-codec provider used to fail
+// fast on video encodings the transcode path cannot handle (#423). Should be
+// set before Run; unset keeps the legacy behavior (non-H.264 is treated as
+// H.265).
+func (t *PushTarget) SetSourceCodecProvider(p SourceCodecProvider) {
+	t.sourceCodec = p
+}
+
+// isJPEGSource reports whether the source video is MJPEG/JPEG. Unknown codec
+// ("" — provider unset or recorder not yet resolved) returns false so the
+// existing behavior is preserved.
+func (t *PushTarget) isJPEGSource() bool {
+	if t.sourceCodec == nil {
+		return false
+	}
+	switch t.sourceCodec() {
+	case string(model.FormatMJPEG), string(model.EncJPEG):
+		return true
+	}
+	return false
 }
 
 // SetPresetRegistry wires the preset registry for transcode path resolution.

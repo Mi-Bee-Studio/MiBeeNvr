@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -59,23 +60,32 @@ type XiaomiCloudConfig struct {
 
 // XiaomiRecorderConfig holds configuration for the Xiaomi recorder.
 type XiaomiRecorderConfig struct {
-	CameraID     string
-	DID          string            // Device ID extracted from xiaomi:// URL (e.g. "655448418")
-	Model        string            // Camera model (e.g. ModelC200, ModelC300)
-	CloudCfg     XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
-	SegmentDur   time.Duration
-	DB           RecordingDB
-	ErrReporter  ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
-	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
-	IdleTimeout  time.Duration
-	Channel      string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
-	Quality      string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
-	EventBus     *event.EventBus
+	CameraID          string
+	DID               string            // Device ID extracted from xiaomi:// URL (e.g. "655448418")
+	Model             string            // Camera model (e.g. ModelC200, ModelC300)
+	CloudCfg          XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
+	SegmentDur        time.Duration
+	DB                RecordingDB
+	ErrReporter       ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
+	AudioEnabled      bool          // Capture and broadcast audio via StreamHub when true
+	AudioInRecordings bool          // Keep the audio track in recorded segments (default off)
+	IdleTimeout       time.Duration
+	Channel           string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
+	Quality           string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
+	EventBus          *event.EventBus
 	// RecordEnabled gates disk writes. nil or true = record normally;
 	// false = "live-only" mode — the stream stays connected (for live preview /
 	// HLS) but no segments are written to disk. Matches baseRecorder.RecordEnabled
 	// semantics so recording_enabled=false takes effect on Xiaomi cameras.
 	RecordEnabled *bool
+	// Adaptive enables dynamic-timelapse write density (issue #435; wired for
+	// Xiaomi cameras in issue #468 — previously recording_mode: adaptive was
+	// silently ignored by this recorder). Nil = plain continuous recording.
+	Adaptive *recorder.AdaptiveConfig
+	// AudioTrigger arms loudness-triggered recording (issue #478) on top of
+	// Adaptive. G.711 (PCMU/PCMA) cameras only — Xiaomi Opus audio has no
+	// pure-Go decoder, those cameras log the trigger as inactive.
+	AudioTrigger *recorder.AudioTriggerConfig
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -119,6 +129,22 @@ type XiaomiRecorder struct {
 	// MISS client reference for external commands (MotorControl, GetDeviceInfo).
 	missClient *MISSClient
 	missMu     sync.Mutex
+
+	// Adaptive write-density gate (issue #435/#468). Rebuilt per connection in
+	// connectAndRecord so a reconnect always starts in NORMAL mode; nil when
+	// adaptive recording is not configured. Owned by the video NALU processing
+	// path.
+	// Adaptive write-density gate (issue #435/#468) — nil in continuous mode.
+	adaptive *recorder.AdaptiveGate
+	// audioTrig is the audio-trigger runtime (issue #478), rebuilt per
+	// connection alongside the gate. nil unless Adaptive is armed AND
+	// AudioTrigger is enabled.
+	audioTrig *recorder.AudioTriggerRuntime
+	// opusTrigWarned suppresses the per-packet "Opus unsupported" warning.
+	opusTrigWarned bool
+	// audioSparse gates DISK writes of audio while the adaptive gate is in
+	// sparse (timelapse) mode; live audio broadcast continues.
+	audioSparse atomic.Bool
 }
 
 // Interface compliance check.
@@ -527,6 +553,21 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	r.pps = nil
 	r.vps = nil
 	r.audioCodecID = 0
+	// Rebuild the adaptive gate per connection: a reconnect always starts in
+	// NORMAL mode with a fresh activity baseline (a reconnect storm can't
+	// oscillate the mode). The audio-trigger runtime follows the gate.
+	if r.cfg.Adaptive != nil {
+		r.adaptive = recorder.NewAdaptiveGate(*r.cfg.Adaptive, r.cfg.CameraID, xiaomiLogger)
+		r.audioSparse.Store(false)
+		if r.cfg.AudioTrigger != nil && r.cfg.AudioTrigger.Enabled {
+			r.audioTrig = recorder.NewAudioTriggerRuntime(*r.cfg.AudioTrigger, r.cfg.CameraID, xiaomiLogger)
+		} else {
+			r.audioTrig = nil
+		}
+	} else {
+		r.adaptive = nil
+		r.audioTrig = nil
+	}
 
 	var lastTimestamp uint64
 
@@ -638,6 +679,27 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 
+	// Adaptive write-density gate (issue #435/#468) — see processH265NALU.
+	if r.adaptive != nil {
+		now := time.Now()
+		isIDR := naluType == 5
+		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
+		// Ambient-audio cameras keep the disk audio track through sparse mode
+		// (#496); the merge renders the ambient span into the atmosphere bed.
+		r.audioSparse.Store(r.adaptive.Timelapse() && !r.cfg.Adaptive.AmbientAudio)
+		if len(flush) > 0 {
+			r.writeFlushedGOP(flush)
+			// Pre-trigger audio back-fill (issue #478), mirroring the built-in
+			// recorders: write the retained unwritten ring samples so the
+			// segment carries pre_capture seconds of sound before the trigger.
+			r.flushAudioRing()
+		}
+		if skip {
+			r.forwardHLS(nalu)
+			return
+		}
+	}
+
 	if r.muxer == nil {
 		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH264))
 		if err != nil {
@@ -686,6 +748,10 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 	r.frameCount++
+	if r.adaptive != nil {
+		// Frame now on disk; a later flush into this segment must skip it (#473).
+		r.adaptive.MarkLastWritten()
+	}
 
 	// Forward to HLS (non-blocking)
 	r.forwardHLS(nalu)
@@ -743,6 +809,31 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 
+	// Adaptive write-density gate (issue #435/#468): while the compressed-domain
+	// activity signal is calm only sparse keyframes reach the disk; on a spike
+	// the retained GOP ring is flushed first so the resume has no missing
+	// references. Live fan-out (forwardHLS → StreamHub) keeps flowing for every
+	// frame — the gate changes write density, never the connection.
+	if r.adaptive != nil {
+		now := time.Now()
+		isIDR := naluType == 19 || naluType == 20
+		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
+		// Ambient-audio cameras keep the disk audio track through sparse mode
+		// (#496); the merge renders the ambient span into the atmosphere bed.
+		r.audioSparse.Store(r.adaptive.Timelapse() && !r.cfg.Adaptive.AmbientAudio)
+		if len(flush) > 0 {
+			r.writeFlushedGOP(flush)
+			// Pre-trigger audio back-fill (issue #478), mirroring the built-in
+			// recorders: write the retained unwritten ring samples so the
+			// segment carries pre_capture seconds of sound before the trigger.
+			r.flushAudioRing()
+		}
+		if skip {
+			r.forwardHLS(nalu)
+			return
+		}
+	}
+
 	if r.muxer == nil {
 		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH265))
 		if err != nil {
@@ -791,6 +882,10 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		return
 	}
 	r.frameCount++
+	if r.adaptive != nil {
+		// Frame now on disk; a later flush into this segment must skip it (#473).
+		r.adaptive.MarkLastWritten()
+	}
 
 	// Forward to HLS (non-blocking)
 	r.forwardHLS(nalu)
@@ -897,26 +992,130 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 		r.Hub.BroadcastAudio(pts, audioCodec, payload)
 	}
 
+	// Audio-trigger input (issue #478): loudness window + pre-trigger ring for
+	// the G.711 codecs. Opus has no pure-Go decoder — log once that the
+	// trigger stays inactive for such cameras.
+	if r.audioTrig != nil && r.adaptive != nil {
+		if codecID == missCodecPCMU || codecID == missCodecPCMA {
+			gate := r.adaptive
+			trig := r.audioTrig
+			trig.Ingest(codecID == missCodecPCMU, payload, 20*time.Millisecond, time.Now(),
+				func(at time.Time) { gate.AudioLoud(at, 0) })
+		} else if codecID == missCodecOPUS && !r.opusTrigWarned {
+			r.opusTrigWarned = true
+			xiaomiLogger.Warn("audio_trigger enabled but camera audio is Opus - trigger stays inactive (G.711 required)", "camera_id", r.cfg.CameraID)
+		}
+	}
+
 	// Write audio to MP4 muxer if audio track is available.
 	r.mu.Lock()
 	m := r.muxer
 	aid := r.audioTrackID
 	start := r.segStart
 	r.mu.Unlock()
-	if m != nil && aid > 0 {
+	// Sparse (adaptive-timelapse) mode drops DISK audio, live audio continues
+	// (mirrors the built-in H264/H265 recorders).
+	if m != nil && aid > 0 && !r.audioSparse.Load() {
 		pts := time.Since(start)
 		// Audio frame duration: 20ms (G.711 and Opus both use 20ms frames).
 		dur := 20 * time.Millisecond
 		if err := m.WriteAudioSample(aid, payload, pts, dur); err != nil {
 			xiaomiLogger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
+		} else if r.audioTrig != nil {
+			r.audioTrig.MarkWritten()
 		}
 	}
+}
+
+// writeFlushedGOP writes the adaptive gate's retained GOP frames (complete
+// reference chain since the last IDR) into the current segment on the
+// timelapse→normal transition, mirroring baseRecorder.writeFlushedGOP. If the
+// segment just rotated (muxer == nil) the flush is dropped — the triggering
+// frame itself still creates a fresh segment on its IDR, so at worst one
+// pre-buffer is lost at a rotation boundary; no corrupt references result.
+func (r *XiaomiRecorder) writeFlushedGOP(frames []recorder.AdaptiveFrame) {
+	if r.muxer == nil {
+		return
+	}
+	for _, f := range frames {
+		if f.Written {
+			// Already on disk in this segment — re-writing duplicates the ring's
+			// IDR anchor (issue #473).
+			continue
+		}
+		pts := f.At.Sub(r.segStart)
+		if pts < 0 {
+			pts = 0
+		}
+		dur := f.At.Sub(r.lastFrameTime)
+		if dur < time.Millisecond {
+			dur = time.Millisecond
+		}
+		if err := r.muxer.WriteSample(r.trackID, f.Nalu, pts, dur); err != nil {
+			xiaomiLogger.Error("failed to write flushed sample", "camera_id", r.cfg.CameraID, "error", err)
+			continue
+		}
+		r.lastFrameTime = f.At
+		r.frameCount++
+	}
+}
+
+// flushAudioRing back-fills pre-trigger audio at a timelapse→normal exit,
+// mirroring baseRecorder.flushAudioRing: unwritten ring samples go into the
+// current segment's audio track, pts-rebased to the current segStart; samples
+// predating the segment are dropped.
+func (r *XiaomiRecorder) flushAudioRing() {
+	if r.audioTrig == nil {
+		return
+	}
+	r.mu.Lock()
+	m := r.muxer
+	aid := r.audioTrackID
+	start := r.segStart
+	r.mu.Unlock()
+	if m == nil || aid <= 0 {
+		r.audioTrig.Drain() // nowhere to write — drop the backlog
+		return
+	}
+	for _, s := range r.audioTrig.Drain() {
+		if s.Written {
+			continue
+		}
+		pts := s.At.Sub(start)
+		if pts < 0 {
+			continue
+		}
+		if err := m.WriteAudioSample(aid, s.Data, pts, s.Dur); err != nil {
+			xiaomiLogger.Error("failed to write pre-trigger audio sample", "camera_id", r.cfg.CameraID, "error", err)
+			return
+		}
+	}
+}
+
+// AudioTriggerEvent injects an external audio-activity event (issue #478;
+// POST /api/cameras/{id}/adaptive/trigger). hold extends how long TIMELAPSE
+// entry stays deferred.
+func (r *XiaomiRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) error {
+	if r.adaptive == nil {
+		return fmt.Errorf("camera %s is not in adaptive recording mode", r.cfg.CameraID)
+	}
+	r.adaptive.AudioLoud(at, hold)
+	return nil
 }
 
 // closeCurrentSegment finalizes the current MP4 segment.
 func (r *XiaomiRecorder) closeCurrentSegment() {
 	if r.muxer == nil {
 		return
+	}
+	// The retained rings' `written` markings refer to the segment being
+	// closed; a later flush into a fresh segment must write those frames
+	// instead of skipping them (issue #498 — mirrors baseRecorder).
+	if r.adaptive != nil {
+		r.adaptive.ClearWritten()
+	}
+	if r.audioTrig != nil {
+		r.audioTrig.ClearWritten()
 	}
 	if err := r.muxer.Close(); err != nil {
 		xiaomiLogger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)

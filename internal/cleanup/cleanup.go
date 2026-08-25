@@ -50,7 +50,8 @@ type CleanupManager struct {
 	activeCameraProvider       func() []config.CameraConfig
 	ffprobePath                string // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
 	eventBus                   *event.EventBus
-	consecutivePassiveFailures int // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
+	consecutivePassiveFailures int  // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
+	motionAwareDisk            bool // disk-threshold path deletes boring-first (issue #435); default true
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -68,12 +69,13 @@ func NewCleanupManager(db *storage.DB, store *storage.Manager, cfg config.Cleanu
 	}
 
 	return &CleanupManager{
-		db:            db,
-		store:         store,
-		retention:     time.Duration(cfg.RetentionDays) * 24 * time.Hour,
-		diskThreshold: cfg.DiskThresholdPercent,
-		interval:      interval,
-		metrics:       m,
+		db:              db,
+		store:           store,
+		retention:       time.Duration(cfg.RetentionDays) * 24 * time.Hour,
+		diskThreshold:   cfg.DiskThresholdPercent,
+		interval:        interval,
+		metrics:         m,
+		motionAwareDisk: cfg.MotionAwareDiskCleanupEnabled(),
 	}, nil
 }
 
@@ -361,6 +363,10 @@ func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, re
 		}
 		if err := cm.store.DeleteFile(rec.FilePath); err != nil {
 			logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
+		}
+		// Ambient archive sidecar shares the recording's lifetime (#496).
+		if err := os.Remove(rec.FilePath + ".g711"); err != nil && !os.IsNotExist(err) {
+			logger.Warn("failed to delete ambient sidecar", "file_path", rec.FilePath+".g711", "error", err)
 		}
 	}
 

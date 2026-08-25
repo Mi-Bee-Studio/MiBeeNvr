@@ -15,6 +15,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 
 	"github.com/go-chi/chi/v5"
 
@@ -444,6 +445,9 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"retention_days":         h.config.Cleanup.RetentionDays,
 			"check_interval":         h.config.Cleanup.CheckInterval,
 			"disk_threshold_percent": h.config.Cleanup.DiskThresholdPercent,
+			// Motion-aware disk cleanup (#435): when the disk threshold is
+			// hit, evict boring (low motion_score) segments first. nil = on.
+			"motion_aware_disk_cleanup": h.config.Cleanup.MotionAwareDiskCleanup == nil || *h.config.Cleanup.MotionAwareDiskCleanup,
 		},
 		"webdav": map[string]any{
 			"enabled":     h.config.WebDAV.Enabled != nil && *h.config.WebDAV.Enabled,
@@ -560,6 +564,9 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			RetentionDays        *int    `json:"retention_days"`
 			DiskThresholdPercent *int    `json:"disk_threshold_percent"`
 			CheckInterval        *string `json:"check_interval"`
+			// Motion-aware disk cleanup toggle (#435): evict boring segments
+			// first when the disk threshold is hit. nil = unchanged.
+			MotionAwareDiskCleanup *bool `json:"motion_aware_disk_cleanup"`
 		} `json:"cleanup"`
 		Storage *struct {
 			// Recording root directory (#395). Takes effect on the NEXT start —
@@ -633,6 +640,9 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				h.config.Cleanup.CheckInterval = trimmed
 			}
 		}
+		if body.Cleanup.MotionAwareDiskCleanup != nil {
+			h.config.Cleanup.MotionAwareDiskCleanup = body.Cleanup.MotionAwareDiskCleanup
+		}
 	}
 
 	// Update storage root (#395) — next-start semantics, see body.Storage.
@@ -648,17 +658,28 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			dir = "/"
 		}
 		if dir != h.config.Storage.RootDir {
-			// The path must exist or be creatable at next start; probe now so
-			// typos fail fast instead of bricking the next boot. Ignore errors
-			// on setups where the dir only materializes after a platform
-			// remount — MkdirAll failing is then reported, not fatal.
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				WriteError(w, http.StatusBadRequest, fmt.Sprintf("cannot create %q: %v", dir, err))
+			// Preflight the target with a real SQLite round-trip (create dir,
+			// create+drop a table under the same WAL/mmap pragmas the NVR DB
+			// uses). MkdirAll alone accepted paths that later crash-looped the
+			// app at db init — some platforms (fnOS external storage) take
+			// plain file creation but reject the syscalls SQLite needs.
+			if err := storage.ProbeRoot(dir); err != nil {
+				WriteError(w, http.StatusBadRequest,
+					fmt.Sprintf("storage root not usable: %v (the recording root must host the NVR database)", err))
 				return
 			}
 			h.config.Storage.RootDir = dir
+			// Hot switch: NEW segments immediately go to the new root (the DB
+			// is decoupled and stays on the data volume; in-flight segments
+			// finish where they started). No restart needed.
+			if h.store != nil {
+				if err := h.store.SetRootDir(dir); err != nil {
+					WriteError(w, http.StatusBadRequest, fmt.Sprintf("cannot switch recording root: %v", err))
+					return
+				}
+			}
 			storageChanged = true
-			logger.Info("storage root_dir updated (effective after restart)", "new_root", dir)
+			logger.Info("storage root_dir switched (hot)", "new_root", dir)
 		}
 	}
 
@@ -780,7 +801,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if storageChanged {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "restart_required": true})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "restart_required": false})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -803,14 +824,22 @@ func (h *Handler) handleStorageCandidates(w http.ResponseWriter, r *http.Request
 		Current     string      `json:"current"`
 		Candidates  []candidate `json:"candidates"`
 		RestartHint string      `json:"restart_hint"`
+		EnvManaged  bool        `json:"env_managed"`
 	}{
 		Current:     h.config.Storage.RootDir,
 		Candidates:  []candidate{{Path: h.config.Storage.RootDir, Label: "current"}},
-		RestartHint: "changing the recording root takes effect after restart",
+		RestartHint: "切换立即生效：新录像将写入所选位置（无需重启）",
+		EnvManaged:  os.Getenv("NVR_STORAGE_CANDIDATES") != "",
 	}
 	seen := map[string]bool{h.config.Storage.RootDir: true}
 	for _, p := range h.config.Storage.Candidates {
 		if p == "" || seen[p] {
+			continue
+		}
+		// Live existence filter: a mount revoked or unplugged since boot must
+		// not keep offering a dead choice here (the startup-time prune in
+		// config.ApplyDefaults only covers the persisted list).
+		if info, err := os.Stat(p); err != nil || !info.IsDir() {
 			continue
 		}
 		seen[p] = true
@@ -1480,6 +1509,12 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Get("/api/settings", h.handleGetSettings)
 	r.Put("/api/settings", h.handleUpdateSettings)
 	r.Get("/api/storage/candidates", h.handleStorageCandidates)
+	r.Post("/api/storage/candidates", h.handleAddStorageCandidate)
+	r.Delete("/api/storage/candidates", h.handleRemoveStorageCandidate)
+	r.Post("/api/storage/migrate", h.handleStartStorageMigrate)
+	r.Get("/api/storage/migrate/status", h.handleStorageMigrateStatus)
+	r.Get("/api/cameras/{id}/storage-root", h.handleGetCameraStorageRoot)
+	r.Put("/api/cameras/{id}/storage-root", h.handleSetCameraStorageRoot)
 	r.Post("/api/settings/api-keys", h.handleGenerateAPIKey)
 	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
 	r.Get("/api/settings/merge", h.handleGetMergeSettings)

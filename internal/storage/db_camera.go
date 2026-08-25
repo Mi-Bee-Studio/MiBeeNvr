@@ -72,6 +72,12 @@ type CameraRow struct {
 	RecordingEnabled *bool `json:"recording_enabled,omitempty"`
 	// Recording schedule (injected from YAML at API response time)
 	RecordingSchedule *config.ScheduleConfig `json:"recording_schedule,omitempty"`
+	// Recording mode (injected from YAML at API response time, #435): ""
+	// / "continuous" = normal segments; "adaptive" = dynamic timelapse that
+	// drops to sparse keyframes while the compressed-domain activity signal
+	// stays calm. Adaptive holds its tuning knobs (nil = recorder defaults).
+	RecordingMode string                          `json:"recording_mode,omitempty"`
+	Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive,omitempty"`
 	// Cascade gate (injected from YAML at API response time): false = hidden
 	// from the GB28181 cascade catalog, INVITEs refused. nil = exposed.
 	CascadeEnabled *bool `json:"cascade_enabled,omitempty"`

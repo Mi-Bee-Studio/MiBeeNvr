@@ -303,6 +303,11 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 						muxerConfig: enc,
 					})
 					h265Logger.Info("AAC audio track detected", "camera_id", r.cfg.CameraID)
+					if r.cfg.AudioTrigger != nil && r.cfg.AudioTrigger.Enabled {
+						// issue #478: no pure-Go AAC decoder in the static build — the
+						// loudness trigger only supports G.711 (mu/A-law).
+						h265Logger.Warn("audio_trigger enabled but camera audio is AAC - trigger stays inactive (G.711 required)", "camera_id", r.cfg.CameraID)
+					}
 				}
 			}
 		}
@@ -343,8 +348,12 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	}
 
 	frameAlive := make(chan struct{}, 1)
-	r.frameCh = make(chan []byte, r.cfg.RingBufCap)
+	r.frameCh = make(chan framePacket, r.cfg.RingBufCap)
 	r.dropped.Store(0)
+	// Arm the adaptive tracker + audio-trigger runtime BEFORE the writer
+	// goroutine and the audio callbacks start (issue #478: the audio
+	// callback reads both — creating them inside writeFrames raced it).
+	r.resetAdaptive()
 	writerDone := make(chan struct{})
 	go r.writeFrames(writerDone)
 
@@ -372,12 +381,13 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		if r.Hub != nil {
 			r.Hub.Broadcast(int64(pkt.Timestamp), au, nalutil.IsIDR(au, true))
 		}
+		at := time.Now() // one arrival stamp for the whole AU (#506)
 		for _, nalu := range au {
 			data := make([]byte, 4+len(nalu))
 			copy(data, []byte{0x00, 0x00, 0x00, 0x01})
 			copy(data[4:], nalu)
 			select {
-			case r.frameCh <- data:
+			case r.frameCh <- framePacket{data: data, at: at}:
 			default:
 				d := r.dropped.Add(1)
 				if r.mtrics != nil {
@@ -409,7 +419,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 				aid := r.audioTrackID
 				start := r.segStart
 				r.mu.Unlock()
-				if m != nil && aid > 0 {
+				if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse drops disk audio; the track exists only when AudioInRecordings is on
 					pts := time.Since(start)
 					dur := 1024 * time.Second / time.Duration(audioForma.ClockRate())
 					if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
@@ -430,19 +440,23 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			if r.Hub != nil {
 				r.Hub.BroadcastAudio(int64(pkt.Timestamp), model.AudioG711, data)
 			}
+			// Audio-trigger input (issue #478): loudness window + pre-trigger
+			// ring. Runs in sparse mode too — that is the whole point.
+			g711Rate := 8000
+			if a := r.audioSnapshot(); a != nil && a.g711SampleRate > 0 {
+				g711Rate = a.g711SampleRate
+			}
+			r.audioTriggerIngest(g711Forma.MULaw, data, g711Rate, time.Now())
+			r.writeAmbientArchive(data) // raw sidecar when adaptive.ambient_archive is on
 			r.mu.Lock()
 			m := r.muxer
 			aid := r.audioTrackID
 			start := r.segStart
 			r.mu.Unlock()
-			if m != nil && aid > 0 {
+			if m != nil && aid > 0 && !r.audioSparse.Load() { // sparse drops disk audio; the track exists only when AudioInRecordings is on
 				pts := time.Since(start)
 				// g711SampleRate from the immutable snapshot (race-free read
 				// from this RTP-callback goroutine, #226).
-				g711Rate := 8000
-				if a := r.audioSnapshot(); a != nil && a.g711SampleRate > 0 {
-					g711Rate = a.g711SampleRate
-				}
 				dur := time.Duration(len(data)) * time.Second / time.Duration(g711Rate)
 				if dur < time.Millisecond {
 					dur = time.Millisecond
@@ -451,6 +465,8 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 					if err.Error() != "muxer is closed" {
 						h265Logger.Error("failed to write G.711 audio sample", "camera_id", r.cfg.CameraID, "error", err)
 					}
+				} else {
+					r.audioTriggerMarkWritten()
 				}
 			}
 		})

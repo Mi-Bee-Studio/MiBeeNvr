@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,16 +17,16 @@ import (
 // progress/error/quality) or AI columns. Pair every SELECT that uses it with
 // scanRecordingRow; both must stay in sync. (#224 — mirrors the
 // selectTimelapseMergeColumns / scanTimelapseMerge pattern in db_timelapse_merge.go.)
-const selectRecordingColumns = `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings`
+const selectRecordingColumns = `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived, motion_score, activity_flags FROM recordings`
 
-// scanRecordingRow scans one row of selectRecordingColumns (11 cols) via the
+// scanRecordingRow scans one row of selectRecordingColumns (13 cols) via the
 // shared scanner interface (satisfied by *sql.Row and *sql.Rows), then applies
 // the time/merge_status defaulting. It replaces the per-call-site
 // rows.Scan(...) + scanRecording(...) duplication across ~10 list paths (#224).
 func scanRecordingRow(s scanner) (*model.Recording, error) {
 	var r model.Recording
 	var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-	if err := s.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived); err != nil {
+	if err := s.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &r.Archived, &r.MotionScore, &r.ActivityFlags); err != nil {
 		return nil, err
 	}
 	scanRecording(&r, startedAtStr, endedAtStr, mergeStatusStr)
@@ -112,12 +113,12 @@ func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
 }
 
 func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, error) {
-	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, ai_status, ai_processed_at, ai_error FROM recordings WHERE id=?;`, id)
+	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, ai_status, ai_processed_at, ai_error, motion_score, activity_flags, timeline_map FROM recordings WHERE id=?;`, id)
 	var r model.Recording
 	var startedAtStr, endedAtStr, mergePathStr, mergeTierStr, mergeErrorStr, mergeQualityStr sql.NullString
 	var mergeProgress sql.NullInt64
-	var aiStatus, aiProcessedAt, aiError sql.NullString
-	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived, &aiStatus, &aiProcessedAt, &aiError); err != nil {
+	var aiStatus, aiProcessedAt, aiError, timelineMap sql.NullString
+	if err := row.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &r.MergeStatus, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived, &aiStatus, &aiProcessedAt, &aiError, &r.MotionScore, &r.ActivityFlags, &timelineMap); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -125,6 +126,9 @@ func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, err
 	}
 	r.StartedAt = scanTime(startedAtStr)
 	r.EndedAt = scanTime(endedAtStr)
+	if timelineMap.Valid {
+		r.TimelineMap = timelineMap.String
+	}
 	if mergePathStr.Valid {
 		r.MergePath = mergePathStr.String
 	}
@@ -227,7 +231,7 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 		}
 	}
 
-	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived FROM recordings"
+	sqlstr := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, motion_score, activity_flags FROM recordings"
 	if len(where) > 0 {
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -260,7 +264,7 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 func (d *DB) ListRecordingsForVisionRepush(ctx context.Context, since, until time.Time, limit int) ([]model.Recording, error) {
 	defer d.observeQuery("ListRecordingsForVisionRepush", time.Now())
 	rows, err := d.readConn().QueryContext(ctx, `
-		SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived
+		SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, motion_score, activity_flags
 		FROM recordings
 		WHERE ended_at>=? AND ended_at<=?
 			AND format != 'timelapse'
@@ -373,6 +377,13 @@ func countCacheKey(f model.RecordingFilter) string {
 	// AiClass must be part of the key: without it, ?ai_class=person collides
 	// with the unfiltered count cache entry and returns the wrong total.
 	b.WriteString(f.AiClass)
+	b.WriteByte('|')
+	// Motion filters (issue #435) participate in the key for the same reason.
+	if f.MinMotionScore != nil {
+		b.WriteString(strconv.FormatFloat(*f.MinMotionScore, 'g', -1, 64))
+	}
+	b.WriteByte('|')
+	b.WriteString(f.Activity)
 	return b.String()
 }
 
@@ -430,6 +441,19 @@ func recordingsFilterWhere(filter model.RecordingFilter) ([]string, []any) {
 		where = append(where, "EXISTS(SELECT 1 FROM ai_events WHERE ai_events.recording_id = recordings.id AND ai_events.class_name = ?)")
 		args = append(args, filter.AiClass)
 	}
+	// Motion filters (issue #435). Unanalyzed recordings (motion_score < 0)
+	// never pass a MinMotionScore filter; the activity LIKE matches the
+	// comma-separated flags vocabulary (static/motion/scene_cut).
+	if filter.MinMotionScore != nil {
+		where = append(where, "motion_score >= ?")
+		args = append(args, *filter.MinMotionScore)
+	}
+	if filter.Activity != "" {
+		// ESCAPE '\' pairs with escapeLike — flag values contain underscores
+		// (scene_cut) that must match literally, not as the single-char wildcard.
+		where = append(where, `activity_flags LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLike(filter.Activity)+"%")
+	}
 	return where, args
 }
 
@@ -455,8 +479,8 @@ func scanRecordingRows(rows *sql.Rows) ([]model.Recording, error) {
 		var r model.Recording
 		var startedAtStr, endedAtStr, mergeStatusStr, mergePathStr, mergeTierStr, mergeErrorStr, mergeQualityStr sql.NullString
 		var mergeProgress sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived); err != nil {
-			return nil, fmt.Errorf("count recordings cached: %w", err)
+		if err := rows.Scan(&r.ID, &r.CameraID, &r.FilePath, &r.Format, &startedAtStr, &endedAtStr, &r.Duration, &r.FileSize, &r.FrameCount, &mergeStatusStr, &mergePathStr, &mergeTierStr, &mergeProgress, &mergeErrorStr, &mergeQualityStr, &r.Archived, &r.MotionScore, &r.ActivityFlags); err != nil {
+			return nil, fmt.Errorf("scan recordings: %w", err)
 		}
 		if mergeStatusStr.Valid && mergeStatusStr.String != "" {
 			r.MergeStatus = mergeStatusStr.String
@@ -523,8 +547,9 @@ func (d *DB) ListRecordingTimelineSegments(ctx context.Context, filter model.Rec
 	defer d.observeQuery("ListRecordingTimelineSegments", time.Now())
 	where, args := recordingsFilterWhere(filter)
 
-	// 7-column projection — omit file_path/merge_*/file_size/frame_count/etc.
-	sqlstr := "SELECT id, camera_id, started_at, ended_at, duration, format, merge_status FROM recordings"
+	// 8-column projection — omit file_path/merge_*/file_size/frame_count/etc.
+	// motion_score lets the timeline render an activity heat strip (issue #435).
+	sqlstr := "SELECT id, camera_id, started_at, ended_at, duration, format, merge_status, motion_score FROM recordings"
 	if len(where) > 0 {
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -543,7 +568,7 @@ func (d *DB) ListRecordingTimelineSegments(ctx context.Context, filter model.Rec
 	for rows.Next() {
 		var s model.TimelineSegment
 		var startedAtStr, endedAtStr, mergeStatusStr sql.NullString
-		if err := rows.Scan(&s.ID, &s.CameraID, &startedAtStr, &endedAtStr, &s.Duration, &s.Format, &mergeStatusStr); err != nil {
+		if err := rows.Scan(&s.ID, &s.CameraID, &startedAtStr, &endedAtStr, &s.Duration, &s.Format, &mergeStatusStr, &s.MotionScore); err != nil {
 			return nil, 0, err
 		}
 		s.StartedAt = scanTime(startedAtStr)
@@ -859,6 +884,30 @@ func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recor
 	return res, nil
 }
 
+// ListOldestRecordingsMotionAware is ListOldestRecordings with boring-first
+// ordering for the disk-threshold cleanup path (issue #435): static segments
+// (motion_score≈0) are deleted first, active segments (score→1) last, and
+// unanalyzed segments (-1) rank neutrally in between at 0.5. Age remains the
+// tiebreaker within the same score band.
+func (d *DB) ListOldestRecordingsMotionAware(ctx context.Context, limit int) ([]model.Recording, error) {
+	sqlstr := selectRecordingColumns + ` WHERE ended_at IS NOT NULL AND archived=0
+		ORDER BY (CASE WHEN motion_score < 0 THEN 0.5 ELSE motion_score END) ASC, ended_at ASC LIMIT ?;`
+	rows, err := d.readConn().QueryContext(ctx, sqlstr, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list oldest recordings motion-aware: %w", err)
+	}
+	defer rows.Close()
+	var res []model.Recording
+	for rows.Next() {
+		r, err := scanRecordingRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list oldest recordings motion-aware: %w", err)
+		}
+		res = append(res, *r)
+	}
+	return res, nil
+}
+
 // ListRecordingPathsByCamera returns the basenames of all file_path values for a camera's recordings.
 func (d *DB) ListRecordingPathsByCamera(ctx context.Context, cameraID string) (map[string]bool, error) {
 	rows, err := d.readConn().QueryContext(ctx, `SELECT file_path FROM recordings WHERE camera_id=?`, cameraID)
@@ -1021,6 +1070,16 @@ func (d *DB) UpdateRecordingAIStatus(ctx context.Context, id, status, errMsg str
 func (d *DB) GetRecordingAIStatus(ctx context.Context, id string) (status string, err error) {
 	err = d.readConn().QueryRowContext(ctx, `SELECT COALESCE(ai_status, '') FROM recordings WHERE id=?`, id).Scan(&status)
 	return
+}
+
+// UpdateRecordingMotionScore persists the compressed-domain activity score and
+// activity flags for a recording (issue #435). Written by the offline motion
+// analyzer after a segment completes.
+func (d *DB) UpdateRecordingMotionScore(ctx context.Context, id string, score float64, flags string) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE recordings SET motion_score=?, activity_flags=? WHERE id=?`,
+		score, flags, id)
+	return err
 }
 
 // BatchGetRecordingAIStatus returns a map of recording ID to AI status for a batch of IDs.

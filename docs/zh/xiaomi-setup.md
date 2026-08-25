@@ -719,7 +719,7 @@ xiaomi:
 
 #### "身份验证失败"错误
 
-```
+```text
 错误: 小米身份验证失败: 无效凭据
 ```
 
@@ -744,7 +744,7 @@ curl -X POST https://api.io.mi.com/login \
 
 #### "设备未找到"错误
 
-```
+```text
 错误: 小米设备未找到: device_id_12345
 ```
 
@@ -770,7 +770,7 @@ curl -u admin:password http://localhost:9090/api/xiaomi/cameras/device_id_12345/
 
 #### "录制失败"错误
 
-```
+```text
 错误: 小米录制失败: 设备离线
 ```
 

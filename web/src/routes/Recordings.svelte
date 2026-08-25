@@ -109,6 +109,9 @@
   // AI class filter: '' = all, 'person' / 'car' / ... = only recordings with such an event.
   // Populated from ai_events written by the external AI backend; requires that backend running.
   let aiClass = $state('');
+  // Motion filters (#435): activity flag membership + minimum motion score.
+  let activityFilter = $state('');
+  let minMotionScore = $state('');
   let cameras = $state<Camera[]>([]);
 
   // ── Date/time state ──
@@ -343,6 +346,8 @@ let selectedPresetCamera = $state<string>('');
     mergedFilter = '';
     showArchived = false;
     aiClass = '';
+    activityFilter = '';
+    minMotionScore = '';
     selectedDate = null;
     offset = 0;
   }
@@ -393,6 +398,8 @@ let selectedPresetCamera = $state<string>('');
       merged: mergedFilter === 'true' ? true : mergedFilter === 'false' ? false : undefined,
       archived: showArchived ? true : undefined,
       ai_class: aiClass || undefined,
+      activity: activityFilter || undefined,
+      min_motion_score: minMotionScore !== '' && !Number.isNaN(Number(minMotionScore)) ? Number(minMotionScore) : undefined,
     };
   }
 
@@ -894,7 +901,7 @@ let selectedPresetCamera = $state<string>('');
 
   // Calendar summary: reload when month or filters change (independent of selected date)
   $effect(() => {
-    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, aiClass, currentMonth];
+    const _ = [cameraId, formatPill, searchQuery, mergedFilter, showArchived, aiClass, activityFilter, minMotionScore, currentMonth];
     clearTimeout(calLoadTimeout);
     calLoadTimeout = window.setTimeout(() => loadCalendarSummary(), 100);
     return () => clearTimeout(calLoadTimeout);
@@ -903,7 +910,7 @@ let selectedPresetCamera = $state<string>('');
   // Watch list mode pagination/sort → reload list data
   $effect(() => {
     if (viewMode === 'list') {
-      const _ = [offset, limit, sortBy, sortOrder, cameraId, formatPill, searchQuery, mergedFilter, showArchived, aiClass];
+      const _ = [offset, limit, sortBy, sortOrder, cameraId, formatPill, searchQuery, mergedFilter, showArchived, aiClass, activityFilter, minMotionScore];
       clearTimeout(listLoadTimeout);
       listLoadTimeout = window.setTimeout(() => loadListData(), 100);
       return () => clearTimeout(listLoadTimeout);
@@ -919,7 +926,7 @@ let selectedPresetCamera = $state<string>('');
   let timelineLoadTimeout: number;
   $effect(() => {
     if (viewMode === 'timeline' || viewMode === 'timelapse') {
-      const _ = [selectedDate, aiClass];
+      const _ = [selectedDate, aiClass, activityFilter, minMotionScore];
       clearTimeout(timelineLoadTimeout);
       timelineLoadTimeout = window.setTimeout(() => loadTimelineData(), 100);
       return () => clearTimeout(timelineLoadTimeout);
@@ -1043,6 +1050,28 @@ let selectedPresetCamera = $state<string>('');
               <option value="">{t('recordings.aiClassAll')}</option>
               <option value="person">{t('recordings.aiClassPerson')}</option>
               <option value="car">{t('recordings.aiClassCar')}</option>
+            </select>
+          </div>
+          <div class="min-w-[130px]">
+            <label for="activity-filter" class="input-label" title={t('recordings.activityHint')}>
+              {t('recordings.activityFilter')}
+            </label>
+            <select id="activity-filter" class="input" bind:value={activityFilter}>
+              <option value="">{t('recordings.activityAll')}</option>
+              <option value="motion">{t('recordings.activityMotion')}</option>
+              <option value="static">{t('recordings.activityStatic')}</option>
+              <option value="scene_cut">{t('recordings.activitySceneCut')}</option>
+            </select>
+          </div>
+          <div class="min-w-[120px]">
+            <label for="min-motion" class="input-label" title={t('recordings.minMotionHint')}>
+              {t('recordings.minMotionScore')}
+            </label>
+            <select id="min-motion" class="input" bind:value={minMotionScore}>
+              <option value="">{t('recordings.minMotionAny')}</option>
+              {#each ['0.05', '0.1', '0.2', '0.3', '0.5'] as v}
+                <option value={v}>{t('recordings.minMotionAtLeast')} {v}</option>
+              {/each}
             </select>
           </div>
           <div class="flex-1 min-w-[180px]">

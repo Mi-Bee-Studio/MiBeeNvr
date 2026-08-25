@@ -38,7 +38,7 @@ if [ "$(id -u)" = "0" ]; then
         CONFIG_ROOT=$(grep -E '^\s+root_dir:' "$CONFIG_FILE" 2>/dev/null | sed 's/.*root_dir:\s*//' | tr -d '"' | tr -d "'")
         if [ -n "$CONFIG_ROOT" ] && [ "$CONFIG_ROOT" != "$NVR_DATA_DIR" ]; then
             echo "[entrypoint] WARNING: config storage.root_dir=$CONFIG_ROOT but Docker volume is at $NVR_DATA_DIR"
-            echo "[entrypoint] The app will auto-fix this on startup."
+            echo "[entrypoint] If that root cannot host the database, the app falls back to this volume on startup."
         fi
     fi
 

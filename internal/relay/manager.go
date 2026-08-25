@@ -28,14 +28,21 @@ type SPSCameraProvider func(cameraID string) (sps, pps []byte, isH264 bool)
 // Backed by CameraManager.GetCodecInfo in production.
 type CodecInfoProvider func(cameraID string) model.CodecInfo
 
+// SourceCameraCodecProvider returns the source camera's current video encoding
+// ("h264"/"h265"/"mjpeg"/"jpeg"; "" = unknown) by camera id. Backed by
+// CameraManager.GetSourceCodec in production; used by push targets to fail
+// fast on sources the transcode path cannot handle (#423).
+type SourceCameraCodecProvider func(cameraID string) string
+
 // Manager owns the lifecycle of all push-out targets across all cameras.
 // Each (cameraID, targetID) pair maps to at most one running *PushTarget.
 // Manager is nil-safe at the call sites: when no relays are configured, main.go
 // passes a no-op manager so camera Add/Update/Remove don't need nil checks.
 type Manager struct {
-	hubProvider       CameraHubProvider
-	spsProvider       SPSCameraProvider
-	codecInfoProvider CodecInfoProvider // optional, for audio-aware targets
+	hubProvider         CameraHubProvider
+	spsProvider         SPSCameraProvider
+	codecInfoProvider   CodecInfoProvider         // optional, for audio-aware targets
+	sourceCodecProvider SourceCameraCodecProvider // optional, for JPEG fail-fast (#423)
 
 	mu      sync.Mutex
 	targets map[string]*runningTarget // key = cameraID + "/" + targetID
@@ -68,6 +75,14 @@ func NewManager(hubProvider CameraHubProvider, spsProvider SPSCameraProvider) *M
 func (m *Manager) SetCodecInfoProvider(p CodecInfoProvider) {
 	m.mu.Lock()
 	m.codecInfoProvider = p
+	m.mu.Unlock()
+}
+
+// SetSourceCodecProvider wires an optional SourceCameraCodecProvider for use by
+// push targets (JPEG fail-fast, #423). Should be set before Start.
+func (m *Manager) SetSourceCodecProvider(p SourceCameraCodecProvider) {
+	m.mu.Lock()
+	m.sourceCodecProvider = p
 	m.mu.Unlock()
 }
 
@@ -211,6 +226,9 @@ func (m *Manager) SetCameraTargets(cameraID string, cfgs []config.PushTargetConf
 		t := NewPushTarget(cameraID, c, hub, sps)
 		if m.codecInfoProvider != nil {
 			t.SetCodecInfoProvider(func() model.CodecInfo { return m.codecInfoProvider(cameraID) })
+		}
+		if m.sourceCodecProvider != nil {
+			t.SetSourceCodecProvider(func() string { return m.sourceCodecProvider(cameraID) })
 		}
 		if m.presetRegistry != nil {
 			t.SetPresetRegistry(m.presetRegistry)

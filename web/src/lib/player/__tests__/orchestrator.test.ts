@@ -9,19 +9,24 @@ import type { Camera, ProtocolsResponse } from '$lib/stream-selection';
 const H264_CAMERA: Camera = { id: 'cam-1', name: 'T', protocol: 'rtsp', encoding: 'h264' } as Camera;
 
 // Backend offers webrtc < flv < hls — a full chain for an H.264 camera.
+// NOTE: field names are lowercase snake_case, matching the /protocols JSON
+// (ProtocolDetail json tags, #332). An earlier fixture used Go's capitalized
+// default field names (Protocol/Available) — pre-#332 wire format — which
+// made `available` resolve to an empty set and the chain come out [] on
+// every registration (18 tests red, unnoticed because CI didn't run vitest).
 const H264_RESP: ProtocolsResponse = {
   encoding: 'h264',
   default: 'webrtc',
   protocols: [
-    { Protocol: 'webrtc', Available: true, Reason: '' },
-    { Protocol: 'flv', Available: true, Reason: '' },
-    { Protocol: 'll-hls', Available: true, Reason: '' },
-    { Protocol: 'hls', Available: true, Reason: '' },
+    { protocol: 'webrtc', available: true, reason: '' },
+    { protocol: 'flv', available: true, reason: '' },
+    { protocol: 'll-hls', available: true, reason: '' },
+    { protocol: 'hls', available: true, reason: '' },
     // wasm is advertised by the backend's WSStreamHandler (always registered,
     // see pkg/app/run.go). Including it here matches real /protocols output so
     // the wasm mode (gated on caps AND availability) can lead the chain when
     // the browser supports WebCodecs.
-    { Protocol: 'wasm', Available: true, Reason: '' },
+    { protocol: 'wasm', available: true, reason: '' },
   ],
 };
 
@@ -198,22 +203,29 @@ describe('PlayerOrchestrator — degrade', () => {
       sessionStorage.setItem(
         'mibee_nvr_device_caps',
         JSON.stringify({
-          webCodecs: true, hevcDecode: true, webgpu: true, webgl2: true,
-          mseH265: false, wasmH265: true, probedAt: Date.now(),
+          webCodecs: true,
+          hevcDecode: true,
+          webgpu: true,
+          webgl2: true,
+          mseH265: false,
+          wasmH265: true,
+          probedAt: Date.now(),
         }),
       );
-    } catch { /* sessionStorage may be unavailable */ }
+    } catch {
+      /* sessionStorage may be unavailable */
+    }
     const o = createPlayerOrchestrator();
     const H265_CAM: Camera = { id: 'cam-h80', name: 'H80', protocol: 'onvif', encoding: 'h265' } as Camera;
     const H265_RESP: ProtocolsResponse = {
       encoding: 'h265',
       default: 'hls',
       protocols: [
-        { Protocol: 'hls', Available: true, Reason: '' },
-        { Protocol: 'll-hls', Available: true, Reason: '' },
-        { Protocol: 'wasm', Available: true, Reason: '' },
-        { Protocol: 'webrtc', Available: false, Reason: 'H.265' },
-        { Protocol: 'flv', Available: false, Reason: 'H.265' },
+        { protocol: 'hls', available: true, reason: '' },
+        { protocol: 'll-hls', available: true, reason: '' },
+        { protocol: 'wasm', available: true, reason: '' },
+        { protocol: 'webrtc', available: false, reason: 'H.265' },
+        { protocol: 'flv', available: false, reason: 'H.265' },
       ],
     };
     // No MSE H.265 → only wasm is usable → single-element chain, like H80.

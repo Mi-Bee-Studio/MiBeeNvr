@@ -37,6 +37,11 @@ type VideoFrame struct {
 	PTS        int64    // presentation timestamp in 90kHz clock
 	IsKeyframe bool     // true for IDR frames
 	NALUs      [][]byte // access unit NALUs without start codes
+	// IngestAt is the hub-entry wallclock (unix ms) relayed from
+	// model.FrameMsg.IngestAt so the browser can measure end-to-end live
+	// latency (#469). Appended to the wire format as a trailing 8-byte field —
+	// backwards-compatible; older clients stop parsing at the last NALU.
+	IngestAt int64
 }
 
 // Audio codec byte constants for wire format.

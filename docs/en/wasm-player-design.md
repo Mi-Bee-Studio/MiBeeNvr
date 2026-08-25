@@ -16,7 +16,7 @@ The WASM + WebCodecs Unified Player & AI Detection system is a modern, tiered vi
 
 The system implements a sophisticated three-tier fallback architecture that automatically adapts to browser capabilities:
 
-```
+```text
 ┌─ Tier 1: WebGPU (Zero-Copy Hardware) ──────────────────────────────────┐
 │  WebCodecs decode → WebGPU texture (importExternalTexture) → Render    │
 │  ONNX Runtime WebGPU execution provider (AI, 5-10ms/frame)               │
@@ -42,7 +42,7 @@ The system implements a sophisticated three-tier fallback architecture that auto
 
 ### Data Flow Architecture
 
-```
+```text
 Camera → RTSP Recorder → StreamHub → WebSocket → Browser Worker → 
 VideoDecoder → Renderer → Canvas
                                                     ↓
@@ -81,7 +81,7 @@ The system uses a custom WebSocket binary protocol with efficient framing for vi
 
 Binary wire format for codec configuration data sent once at stream start:
 
-```
+```text
 [type:1byte][codec:1byte][profile:1byte][level:1byte][sps_len:2bytes_BE][sps:N][pps_len:2bytes_BE][pps:N][vps_len:2bytes_BE][vps:N]
 ```
 
@@ -101,7 +101,7 @@ Binary wire format for codec configuration data sent once at stream start:
 
 Binary wire format for individual video frames with NAL units:
 
-```
+```text
 [type:1byte][pts:8bytes_BE][is_keyframe:1byte][nalu_count:2bytes_BE][nalu1_len:4bytes_BE][nalu1]...
 ```
 

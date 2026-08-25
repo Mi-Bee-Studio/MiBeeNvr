@@ -32,6 +32,7 @@ type ONVIFConfig struct {
 	SegmentDur           time.Duration
 	DB                   RecordingDB
 	AudioEnabled         bool
+	AudioInRecordings    bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
 	ONVIFEndpoint        string        // ONVIF device endpoint URL (for HTTP MJPEG probe base)
 	EventBus             *event.EventBus
@@ -43,6 +44,16 @@ type ONVIFConfig struct {
 	// Start time — without this, recording_enabled=false had no effect on ONVIF
 	// cameras (the delegate always recorded).
 	RecordEnabled *bool
+	// Adaptive enables dynamic-timelapse write density (issue #435) on the
+	// H.264/H.265 delegates. Without forwarding it here, recording_mode:
+	// adaptive on ONVIF cameras was silently ignored by the delegate (issue
+	// #467) — the config validated and the UI showed adaptive, but the
+	// recorder wrote continuously. Ignored for MJPEG/JPEG delegates (the
+	// compressed-domain signal requires differential encoding).
+	Adaptive *AdaptiveConfig
+	// AudioTrigger arms loudness-triggered recording (issue #478) on the
+	// delegates, on top of Adaptive. G.711 cameras only.
+	AudioTrigger *AudioTriggerConfig
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI
@@ -286,6 +297,24 @@ func (r *ONVIFRecorder) Delegate() model.Recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.delegate
+}
+
+// AudioTriggerEvent forwards an external audio-activity event (issue #478) to
+// the current delegate — the adaptive gate lives on the codec-specific
+// recorder the ONVIF shell delegates to (same pattern as the Adaptive config
+// forwarding, issue #467).
+func (r *ONVIFRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) error {
+	d := r.Delegate()
+	if d == nil {
+		return fmt.Errorf("camera %s has no active stream delegate", r.cfg.CameraID)
+	}
+	trig, ok := d.(interface {
+		AudioTriggerEvent(at time.Time, hold time.Duration) error
+	})
+	if !ok {
+		return fmt.Errorf("camera %s does not support audio triggers (codec delegate without adaptive gate)", r.cfg.CameraID)
+	}
+	return trig.AudioTriggerEvent(at, hold)
 }
 
 // detectEncoding determines the stream encoding in priority order:
@@ -650,9 +679,12 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			RingBufCap:           DefaultRingBufCap,
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
+			AudioInRecordings:    r.cfg.AudioInRecordings,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 			EventBus:             r.cfg.EventBus,
 			RecordEnabled:        r.cfg.RecordEnabled,
+			Adaptive:             r.cfg.Adaptive,
+			AudioTrigger:         r.cfg.AudioTrigger,
 		}
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub
@@ -738,9 +770,12 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			RingBufCap:           DefaultRingBufCap,
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
+			AudioInRecordings:    r.cfg.AudioInRecordings,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
 			EventBus:             r.cfg.EventBus,
 			RecordEnabled:        r.cfg.RecordEnabled,
+			Adaptive:             r.cfg.Adaptive,
+			AudioTrigger:         r.cfg.AudioTrigger,
 		}
 		rec := NewH264Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub

@@ -74,6 +74,8 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.RecordingEnabled = cam.RecordingEnabled
 		row.CascadeEnabled = cam.CascadeEnabled
 		row.RecordingSchedule = cam.RecordingSchedule
+		row.RecordingMode = cam.RecordingMode
+		row.Adaptive = cam.Adaptive
 		if cam.Protocol == "gb28181" {
 			gb := cam.GB28181
 			row.GB28181 = &gb
@@ -291,11 +293,18 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Timelapse      *config.CameraTimelapseConfig `json:"timelapse"`
 		Channel        string                        `json:"channel"`
 		AudioEnabled   *bool                         `json:"audio_enabled"`
+		// Keep the camera's real audio track in recorded segments (default off).
+		AudioInRecordings *bool `json:"audio_in_recordings"`
 		// Recording gate: false = live-only (no segments written). nil = record.
 		RecordingEnabled *bool `json:"recording_enabled"`
 		// Cascade gate: false = hidden from the GB28181 cascade catalog and
 		// INVITEs refused. nil = default (exposed).
 		CascadeEnabled *bool `json:"cascade_enabled"`
+		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
+		RecordingMode string                          `json:"recording_mode"`
+		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
+		// Audio trigger (#478): loudness input for adaptive recording.
+		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     string `json:"stream_key"`
 		SRTPassphrase string `json:"srt_passphrase"`
@@ -467,6 +476,16 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Same boundary validation for the recording mode (#435, #402 class).
+	if err := config.ValidateCameraRecordingMode(config.CameraConfig{
+		ID:            body.Name,
+		Encoding:      enc,
+		RecordingMode: body.RecordingMode,
+		Adaptive:      body.Adaptive,
+	}); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	cam := config.CameraConfig{
 		Name:              body.Name,
@@ -481,8 +500,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Timelapse:         body.Timelapse,
 		Channel:           body.Channel,
 		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
+		AudioInRecordings: body.AudioInRecordings != nil && *body.AudioInRecordings,
 		RecordingEnabled:  body.RecordingEnabled,
 		CascadeEnabled:    body.CascadeEnabled,
+		RecordingMode:     body.RecordingMode,
+		Adaptive:          body.Adaptive,
+		AudioTrigger:      body.AudioTrigger,
 		StreamKey:         body.StreamKey,
 		SRTPassphrase:     body.SRTPassphrase,
 		SRTStreamID:       body.SRTStreamID,
@@ -673,6 +696,12 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		CascadeEnabled *bool `json:"cascade_enabled"`
 		// Recording schedule
 		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
+		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
+		// Validated at this boundary with the startup rules (#402 class).
+		RecordingMode *string                         `json:"recording_mode"`
+		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
+		// Audio trigger (#478): loudness input for adaptive recording.
+		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
 		// Push/ingest fields (SRT/RTMP)
 		StreamKey     *string `json:"stream_key"`
 		SRTPassphrase *string `json:"srt_passphrase"`
@@ -745,12 +774,47 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingEnabled:       body.RecordingEnabled,
 		CascadeEnabled:         body.CascadeEnabled,
 		RecordingSchedule:      body.RecordingSchedule,
+		RecordingMode:          body.RecordingMode,
+		Adaptive:               body.Adaptive,
+		AudioTrigger:           body.AudioTrigger,
 		StreamKey:              body.StreamKey,
 		SRTPassphrase:          body.SRTPassphrase,
 		SRTStreamID:            body.SRTStreamID,
 		PushTargets:            body.PushTargets,
 		PushRetentionDays:      body.PushRetentionDays,
 		GB28181:                body.GB28181.toConfigPtr(),
+	}
+
+	// Validate recording mode + adaptive tuning with the same rules the
+	// startup path enforces, resolved against the camera's CURRENT encoding
+	// (or the new one, when the same request changes it) — adaptive needs
+	// h264/h265.
+	if body.RecordingMode != nil || body.Adaptive != nil || body.AudioTrigger != nil {
+		probe := config.CameraConfig{ID: id}
+		if h.config != nil {
+			for _, cam := range h.config.Cameras {
+				if cam.ID == id {
+					probe = cam
+					break
+				}
+			}
+		}
+		if body.Encoding != nil && *body.Encoding != "" {
+			probe.Encoding = *body.Encoding
+		}
+		if body.RecordingMode != nil {
+			probe.RecordingMode = *body.RecordingMode
+		}
+		if body.Adaptive != nil {
+			probe.Adaptive = body.Adaptive
+		}
+		if body.AudioTrigger != nil {
+			probe.AudioTrigger = body.AudioTrigger
+		}
+		if err := config.ValidateCameraRecordingMode(probe); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Validate URL format if URL is being updated (skip for ONVIF and push cameras).
@@ -1314,6 +1378,59 @@ func probeONVIFEncoding(ctx context.Context, endpoint, username, password string
 // registerCameraRoutes registers all /api/cameras* routes (including nested
 // stream, ONVIF, PTZ, snapshot, merge-config, timelapse config, events, and
 // Xiaomi sub-routes) on the given (already auth-protected) router.
+// handleAdaptiveTrigger handles POST /api/cameras/{id}/adaptive/trigger
+// (issue #478): an external audio-activity event (e.g. a semantic classifier
+// running outside the NVR) forces the camera's adaptive gate out of timelapse
+// with the same GOP + pre-trigger back-fill as a loud window. Body:
+// {"source": "...", "hold": "10s", "dbfs": -23.4} — source/dbfs are
+// diagnostics only; hold (optional duration, 0–10m) extends how long
+// timelapse entry stays deferred after the event.
+func (h *Handler) handleAdaptiveTrigger(w http.ResponseWriter, r *http.Request) {
+	if h.camMgr == nil {
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Source string  `json:"source"`
+		Hold   string  `json:"hold"`
+		DBFS   float64 `json:"dbfs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var hold time.Duration
+	if body.Hold != "" {
+		d, err := time.ParseDuration(body.Hold)
+		if err != nil || d < 0 || d > 10*time.Minute {
+			WriteError(w, http.StatusBadRequest, "hold must be a duration between 0 and 10m")
+			return
+		}
+		hold = d
+	}
+	rec := h.camMgr.GetRecorder(id)
+	if rec == nil {
+		WriteError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+	trig, ok := rec.(interface {
+		AudioTriggerEvent(at time.Time, hold time.Duration) error
+	})
+	if !ok {
+		WriteError(w, http.StatusBadRequest, "camera does not support adaptive triggers")
+		return
+	}
+	if err := trig.AudioTriggerEvent(time.Now(), hold); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err)
+		return
+	}
+	logger.Info("external adaptive trigger",
+		"camera_id", id, "source", body.Source,
+		"hold", hold.String(), "dbfs", body.DBFS)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "triggered"})
+}
+
 func (h *Handler) registerCameraRoutes(r chi.Router) {
 	r.Route("/api/cameras", func(r chi.Router) {
 		r.Get("/", h.handleListCameras)
@@ -1336,6 +1453,8 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Get("/latest-frame", h.handleLatestFrame)
 			// Per-camera protocols
 			r.Get("/protocols", h.handleCameraProtocols)
+			// Flow-path snapshot (#469)
+			r.Get("/flow", h.handleCameraFlow)
 			// GB28181 voice intercom (talk): WS ingest + status (#341)
 			r.Get("/gb28181/talk", h.handleGB28181TalkWS)
 			r.Get("/gb28181/talk/status", h.handleGB28181TalkStatus)
@@ -1377,6 +1496,10 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Post("/activate", h.handleActivateCamera)
 			// Manually trigger IP self-healing for a camera whose address changed.
 			r.Post("/rediscover", h.handleRediscoverCamera)
+			// External adaptive-recording trigger (issue #478): a semantic
+			// classifier running outside the NVR (or a test) forces a
+			// timelapse→normal transition with the usual GOP + audio back-fill.
+			r.Post("/adaptive/trigger", h.handleAdaptiveTrigger)
 			// Xiaomi-specific PTZ and device info endpoints
 			r.Route("/xiaomi", func(r chi.Router) {
 				r.Post("/ptz/move", h.handleXiaomiPTZMove)

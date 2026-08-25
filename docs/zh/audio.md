@@ -100,7 +100,7 @@ cameras:
 
 音频与视频同步录制，存储在相同的 MP4 片段中：
 
-```
+```text
 recordings/
 ├── front-door/
 │   ├── 2026-08-18/

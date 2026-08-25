@@ -13,6 +13,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -57,16 +58,39 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 	}
 
 	recCfg := XiaomiRecorderConfig{
-		CameraID:      cfg.ID,
-		DID:           did,
-		CloudCfg:      cloudCfg,
-		SegmentDur:    30 * time.Second,
-		DB:            db,
-		AudioEnabled:  cfg.AudioEnabled,
-		Channel:       cfg.Channel,
-		Quality:       cfg.Quality,
-		EventBus:      p.eventBus,
-		RecordEnabled: cfg.RecordingEnabled,
+		CameraID:          cfg.ID,
+		DID:               did,
+		CloudCfg:          cloudCfg,
+		SegmentDur:        30 * time.Second,
+		DB:                db,
+		AudioEnabled:      cfg.AudioEnabled,
+		AudioInRecordings: cfg.AudioInRecordings,
+		Channel:           cfg.Channel,
+		Quality:           cfg.Quality,
+		EventBus:          p.eventBus,
+		RecordEnabled:     cfg.RecordingEnabled,
+	}
+	// Adaptive write-density (issue #435/#468): recording_mode: adaptive was
+	// silently ignored by the Xiaomi recorder until the gate was ported.
+	// Config validation (ValidateCameraRecordingMode) already restricts it to
+	// h264/h265 cameras.
+	if cfg.RecordingMode == "adaptive" {
+		var a *config.AdaptiveRecordingConfig
+		if cfg.Adaptive != nil {
+			a = cfg.Adaptive
+		}
+		calm, interval, spike, gop, ambient, archive := "", "", 0.0, int64(0), false, false
+		if a != nil {
+			calm, interval, spike, gop, ambient, archive = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio, a.AmbientArchive
+		}
+		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient, archive)
+		recCfg.Adaptive = &ac
+		// Audio-trigger (issue #478): only meaningful on top of adaptive, and
+		// only for G.711 cameras — the recorder logs Opus as inactive.
+		if cfg.AudioTrigger != nil && cfg.AudioTrigger.Enabled {
+			at := recorder.ResolveAudioTriggerConfig(cfg.AudioTrigger.MinDBFS, cfg.AudioTrigger.PreCaptureS)
+			recCfg.AudioTrigger = &at
+		}
 	}
 	return NewXiaomiRecorder(recCfg, store, opts...)
 }

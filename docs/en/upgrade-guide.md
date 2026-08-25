@@ -92,7 +92,7 @@ grep -nE 'protocol:\s*".*_(h264|h265|mjpeg|jpeg)"' /path/to/mibee-nvr.yaml
 
 The exact startup error you'll see if you forget this:
 
-```
+```text
 camera[0].protocol "rtsp_h264": combined format is no longer supported in
 0.10.0+; split into separate protocol ("rtsp") and encoding fields
 ```

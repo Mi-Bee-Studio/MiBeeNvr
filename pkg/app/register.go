@@ -12,16 +12,33 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os/exec"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 )
 
 // registerServices registers all services on the App in start/stop order,
 // reading constructed managers from deps. Returns an error if any registration
 // fails (the caller invokes deps' cleanup func on failure).
 func registerServices(a *App, deps *appDeps) error {
+	// 0. storage migrator — background worker, stopped early
+	if err := a.Register(&serviceFunc{
+		name: "storage-migrator",
+		startFunc: func(ctx context.Context) error {
+			deps.migrationMgr.Start(ctx)
+			return nil
+		},
+		stopFunc: func() error {
+			deps.migrationMgr.Stop()
+			return nil
+		},
+	}); err != nil {
+		return err
+	}
+
 	// 1. db — registered first so it stops last
 	if err := a.Register(&serviceFunc{
 		name: "db",
@@ -97,6 +114,26 @@ func registerServices(a *App, deps *appDeps) error {
 		},
 	}); err != nil {
 		return fmt.Errorf("register health: %w", err)
+	}
+
+	// 3.1 recording integrity auditor (#469 + #489 deep check): rate-limited
+	// mediaprobe sampling of closed segments, plus an hourly-per-camera ffmpeg
+	// decode-level deep check when a binary is available (FFmpeg stays
+	// OPTIONAL — no binary, no deep check). Nil-safe when bus/metrics are
+	// absent; stops before health in reverse order (no ordering dependency —
+	// it only reads files).
+	auditor := health.NewRecordingAuditor(deps.eventBus, deps.metrics,
+		health.WithFFmpegPath(resolveFFmpegPath(deps.cfg.Transcoding.FFmpegPath)))
+	if err := a.Register(&serviceFunc{
+		name: "recording-auditor",
+		startFunc: func(ctx context.Context) error {
+			return auditor.Start(ctx)
+		},
+		stopFunc: func() error {
+			return auditor.Stop()
+		},
+	}); err != nil {
+		return fmt.Errorf("register recording-auditor: %w", err)
 	}
 
 	// 3.5. auto-discover (optional, default OFF). Continuously discovers ONVIF
@@ -187,6 +224,16 @@ func registerServices(a *App, deps *appDeps) error {
 			},
 		}); err != nil {
 			return fmt.Errorf("register vision-push: %w", err)
+		}
+	}
+
+	// 4.3. motion-score — offline compressed-domain activity scoring
+	// (issue #435). Subscribes to SegmentCompleted; started before cleanup so
+	// scores exist by the time disk-threshold ordering consults them, and
+	// stopped (reverse order) before the merge services it observes.
+	if deps.motionAnalyzer != nil {
+		if err := a.Register(deps.motionAnalyzer); err != nil {
+			return fmt.Errorf("register motion-score: %w", err)
 		}
 	}
 
@@ -584,4 +631,16 @@ func registerValues(a *App, deps *appDeps) error {
 		return fmt.Errorf("register http-server value: %w", err)
 	}
 	return nil
+}
+
+// resolveFFmpegPath returns the configured ffmpeg binary, falls back to PATH,
+// or "" (deep check disabled) when ffmpeg is absent — FFmpeg is optional.
+func resolveFFmpegPath(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if p, err := exec.LookPath("ffmpeg"); err == nil {
+		return p
+	}
+	return ""
 }

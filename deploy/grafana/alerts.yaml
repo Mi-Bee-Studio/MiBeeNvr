@@ -1,0 +1,76 @@
+# MiBee NVR — Prometheus alerting rules (#469).
+#
+# Load into Prometheus:
+#   rule_files:
+#     - /etc/prometheus/rules/mibee-nvr.yaml
+#
+# Run Prometheus + Grafana on a sidecar host (Docker VM or any LAN machine),
+# scraping the NVR's /metrics endpoint — never co-located with the NVR process
+# on the RPi-class box (memory budget).
+
+groups:
+  - name: mibee-nvr-stream-quality
+    interval: 30s
+    rules:
+      - alert: NVRSustainedConsumerDropRate
+        expr: |
+          sum by (camera_id, consumer) (rate(nvr_streamhub_frames_dropped_total[2m]))
+            / clamp_min(sum by (camera_id, consumer) (rate(nvr_streamhub_frames_sent_total[2m]) + rate(nvr_streamhub_frames_dropped_total[2m])), 0.001)
+            > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVR: {{ $labels.camera_id }} consumer {{ $labels.consumer }} drops >10% of frames"
+          description: "Sustained hub fan-out drop rate above 10% for 5 minutes. The consumer cannot keep up — check its drain path or raise its buffer."
+
+      - alert: NVRIDRDrops
+        expr: increase(nvr_streamhub_frames_dropped_total{is_idr="true"}[5m]) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVR: {{ $labels.camera_id }} lost {{ $value }} IDR frames in 5m"
+          description: "IDR frames dropped at the hub (buffer exhausted by all-IDR backlog). Viewers will freeze until the next GOP."
+
+      - alert: NVRLiveLatencyHigh
+        expr: nvr_playback_live_latency_ms > 5000
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVR: {{ $labels.camera_id }} live latency {{ $value | printf \"%.0f\" }}ms via {{ $labels.protocol }}"
+          description: "Player-reported end-to-end latency above 5s — pipeline backpressure or network congestion on the viewing path."
+
+      - alert: NVRSegmentWriteSlow
+        expr: |
+          histogram_quantile(0.95, sum by (camera_id, le) (rate(nvr_segment_write_duration_seconds_bucket[15m]))) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVR: {{ $labels.camera_id }} segment writes p95 > 5s"
+          description: "SD card / USB disk degradation early warning — segment finalization is slow enough to risk frame backlog in the recorder ring buffer."
+
+      - alert: NVRRecordingAuditFailures
+        expr: increase(nvr_recording_audit_total{result!="ok"}[30m]) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVR: {{ $labels.camera_id }} recording audit found {{ $value }} bad segments in 30m"
+          description: "mediaprobe flagged zero-duration or unparseable segments. Run `mibee-nvr repair duration --dry-run` to inspect."
+
+      - alert: NVRRecordingDeepCheckFailures
+        expr: increase(nvr_recording_deepcheck_total{result!="ok"}[6h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVR: {{ $labels.camera_id }} decode-level deep check found corrupt video"
+          description: "ffmpeg -v error sampling found decode errors (e.g. missing/duplicate POC, broken slices) within the last 6h — the kind of corruption structure probes cannot see (#488/#489). Inspect the segment and recent merges."
+
+      - alert: NVRCameraFlapping
+        expr: increase(nvr_camera_reconnect_attempts_total[15m]) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVR: {{ $labels.camera_id }} reconnected {{ $value }} times in 15m"
+          description: "Camera connection is unstable — check camera health page, network, or rediscovery logs."

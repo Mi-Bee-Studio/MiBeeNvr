@@ -70,7 +70,7 @@ func cmdDownloadModel() {
 	var modelDir string
 	cfg, err := config.Load(cfgPath)
 	if err == nil && cfg != nil {
-		modelDir = filepath.Join(cfg.Storage.RootDir, "models")
+		modelDir = cfg.Storage.ModelsDir()
 	} else {
 		// Auto-detect data directory
 		dataDir := os.Getenv("NVR_DATA_DIR")

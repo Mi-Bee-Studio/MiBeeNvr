@@ -33,7 +33,7 @@ gb28181:
   port_range: "30000-30050"
   heartbeat_interval: "60s"
   catalog_interval: "30m"
-  media_transport: "udp"        # udp | tcp-passive | tcp-active
+  media_transport: "tcp-passive"  # udp | tcp-passive | tcp-active（默认 tcp-passive，见下）
   subscribe_catalog: true       # 通道变更实时推送
   subscribe_alarm: true         # 报警订阅
   subscribe_mobile_position: false
@@ -45,7 +45,7 @@ gb28181:
 - `server_id`：NVR 的 20 位 GB/T 28181 平台编号（设备端需完全一致）
 - `realm`：SIP 摘要认证域（通常为 10 位区域码）
 - `password`：SIP 摘要认证密码。**留空 = 不鉴权**（任何能访问 5060 端口的设备都可注册，见"安全考虑"）
-- `media_transport`：RTP 媒体传输 —— `udp`（默认）、`tcp-passive`（NVR 监听、设备连接，海康/大华 NAT 默认）、`tcp-active`（NVR 拨向设备应答地址）
+- `media_transport`：RTP 媒体传输 —— `tcp-passive`（默认，NVR 监听、设备连接，海康/大华 NAT 默认）、`udp`、`tcp-active`（NVR 拨向设备应答地址）。**默认使用 TCP 的原因（#460）**：实测 UDP 媒体在真实 GB 相机上丢帧率约 16%（IDR 突发包触发网卡/软中断路径丢包，每次丢帧打断 P 帧参考链，表现为花屏/马赛克直到下个 IDR）；同一网络 TCP 丢帧 <1%。个别不支持 TCP 媒体的老设备可改回 `udp`。
 
 ### 步骤 2：配置摄像机
 
@@ -120,7 +120,7 @@ cameras:
 | `port_range` | string | `"30000-30050"` | RTP 媒体端口池（`"start-end"`） |
 | `heartbeat_interval` | string | `"60s"` | 期望的设备心跳间隔 |
 | `catalog_interval` | string | `"30m"` | 目录轮询间隔（订阅开启时仅作兜底） |
-| `media_transport` | string | `"udp"` | 媒体传输：`udp` / `tcp-passive` / `tcp-active` |
+| `media_transport` | string | `"tcp-passive"` | 媒体传输：`tcp-passive` / `udp` / `tcp-active`（默认 TCP 的原因见上文，#460） |
 | `sip_transport` | string | `"udp"` | 信令传输：`udp`（可叠加 `tcp` 监听） |
 | `tcp_framing` | string | `"auto"` | TCP 组帧：`"rfc4571"`、`"0x24"`、`"auto"` |
 | `subscribe_catalog` | bool | `true` | 目录订阅（通道变更实时推送） |
@@ -129,7 +129,7 @@ cameras:
 | `subscribe_expires` | string | `"3600s"` | 订阅有效期（80% 时自动续订） |
 | `allowed_device_ids` | `[]string` | `[]` | 注册白名单（空 = 允许所有） |
 
-> `tcp_mode`（bool）是 `media_transport` 的旧别名，保留仅为 YAML 兼容。
+> `tcp_mode`（bool）是 `media_transport` 的旧别名，保留仅为 YAML 兼容，**已不再影响默认值**（v0.12.0 起默认即 `tcp-passive`，#460）；需要 UDP 请显式设置 `media_transport: "udp"`。
 
 ### 相机配置
 
@@ -255,6 +255,14 @@ curl -X POST http://localhost:9090/api/gb28181/channels/34020000001320000001/ptz
 2. NAT 场景切换 `media_transport: tcp-passive`
 3. TCP 组帧报错时依次尝试 `tcp_framing: rfc4571 / 0x24 / auto`
 4. 编码：H.264/H.265 自动探测，无需配置
+
+### 花屏 / 马赛克（图像下半截模糊有码）
+
+典型症状：画面某区域（常见下半屏）出现马赛克/色块，数秒后随下一个关键帧恢复，周而复始。根因是 **UDP 媒体丢帧**（IDR 突发包触发丢包 → P 帧参考链断裂，#460 实测丢帧率可达 16%）：
+
+1. 确认 `media_transport` 为默认的 `tcp-passive`（若曾被改为 `udp` 请改回）
+2. 已是 TCP 仍花屏 → 检查 `tcp_framing`（依次尝试 `rfc4571` / `0x24` / `auto`）
+3. 服务器端可对照接收日志中的 `gap_skipped` / `AU ended mid-PES` 计数定位丢包位置
 
 ### 音频无声
 

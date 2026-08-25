@@ -710,9 +710,10 @@ func TestMissCodecToAudio(t *testing.T) {
 func TestXiaomiRecorderAudioForwardWhenEnabled(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID:     "test-cam",
-		DID:          "test-device",
-		AudioEnabled: true,
+		CameraID:          "test-cam",
+		DID:               "test-device",
+		AudioEnabled:      true,
+		AudioInRecordings: true,
 	}, &noopSegmentStore{})
 
 	r.Hub = model.NewStreamHub()
@@ -786,9 +787,10 @@ func TestXiaomiRecorderAudioSkippedWhenDisabled(t *testing.T) {
 func TestXiaomiRecorderAudioUnknownCodecSkipped(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID:     "test-cam",
-		DID:          "test-device",
-		AudioEnabled: true,
+		CameraID:          "test-cam",
+		DID:               "test-device",
+		AudioEnabled:      true,
+		AudioInRecordings: true,
 	}, &noopSegmentStore{})
 
 	r.Hub = model.NewStreamHub()
@@ -819,9 +821,10 @@ func TestXiaomiRecorderAudioUnknownCodecSkipped(t *testing.T) {
 func TestXiaomiRecorderAudioNilHub(t *testing.T) {
 	t.Helper()
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID:     "test-cam",
-		DID:          "test-device",
-		AudioEnabled: true,
+		CameraID:          "test-cam",
+		DID:               "test-device",
+		AudioEnabled:      true,
+		AudioInRecordings: true,
 	}, &noopSegmentStore{})
 
 	r.codec = model.FormatH264

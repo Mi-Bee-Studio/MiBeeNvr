@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -98,12 +99,51 @@ type StorageConfig struct {
 	// Populated from the NVR_STORAGE_CANDIDATES env var; purely informational
 	// for the backend — the recording root remains root_dir.
 	Candidates []string `yaml:"candidates,omitempty"`
+	// DBPath pins where the SQLite database lives. Empty (the normal case) =
+	// resolve dynamically: the data volume (NVR_DATA_DIR) when the platform
+	// provides one, else the recording root (bare-metal installs). The DB is
+	// deliberately decoupled from the recording root (#395 rework): the root
+	// can be switched/migrated hot while the DB stays put.
+	DBPath string `yaml:"db_path,omitempty"`
+	// CameraRoots maps cameraID → recording-root override. Cameras without an
+	// entry record to the default root (root_dir). The override takes effect
+	// for NEW segments immediately (hot); historical files move via the
+	// background idle migrator.
+	CameraRoots map[string]string `yaml:"camera_roots,omitempty"`
+	// MigrationRateMB caps the background migrator's copy rate (MB/s) so it
+	// never competes with recording IO. 0 = library default (15).
+	MigrationRateMB int `yaml:"migration_rate_mb,omitempty"`
+	// MigrationWindow restricts background migration to a local-time window,
+	// e.g. "22:00-06:00". Empty = always allowed (rate-limited).
+	MigrationWindow string `yaml:"migration_window,omitempty"`
+}
+
+// ModelsDir resolves where ONNX models live: the data volume when the
+// platform provides one (docker-entrypoint seeds NVR_DATA_DIR/models), else
+// the recording root. Consistent with docker-entrypoint.sh and download_model.
+func (s StorageConfig) ModelsDir() string {
+	if dd := os.Getenv("NVR_DATA_DIR"); dd != "" {
+		return filepath.Join(dd, "models")
+	}
+	return filepath.Join(s.RootDir, "models")
 }
 
 type CleanupConfig struct {
 	RetentionDays        int    `yaml:"retention_days"`         // default 30
 	CheckInterval        string `yaml:"check_interval"`         // default "1h"
 	DiskThresholdPercent int    `yaml:"disk_threshold_percent"` // default 85 (HDD perf cliff near 90%+ full)
+	// MotionAwareDiskCleanup orders disk-threshold deletion boring-first
+	// (issue #435): static segments (motion_score≈0) are deleted before
+	// active ones; unanalyzed segments rank neutrally. Default ON (nil=true)
+	// because the disk-pressure path is a best-effort eviction — the user's
+	// "keep N days" expectation is governed by the time-retention path, which
+	// this flag does not touch.
+	MotionAwareDiskCleanup *bool `yaml:"motion_aware_disk_cleanup,omitempty"`
+}
+
+// MotionAwareDiskCleanupEnabled resolves the flag with default-on semantics.
+func (c CleanupConfig) MotionAwareDiskCleanupEnabled() bool {
+	return c.MotionAwareDiskCleanup == nil || *c.MotionAwareDiskCleanup
 }
 
 type AuthConfig struct {

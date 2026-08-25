@@ -39,7 +39,9 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
@@ -62,6 +64,7 @@ import (
 // cleanup at each construction step.
 func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), error) {
 	deps := &appDeps{cfg: cfg, configPath: configPath}
+	ctx := context.Background()
 
 	// Step -1: Stable device identity (#330) — generate + persist the
 	// device_id on first startup so LAN clients can anchor on an ID instead
@@ -70,22 +73,30 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		slog.Warn("failed to persist device identity", "path", configPath, "error", err)
 	}
 
-	// Step 0: Ensure storage root directory exists
+	// Step 0: Ensure the recording root exists. The DB no longer lives here
+	// (it stays on the data volume, see dbpath.go), so an unusable root only
+	// degrades recording — the app still boots. If the root cannot even be
+	// created, fall back to the data volume so the NVR keeps recording
+	// SOMEWHERE instead of refusing to start (the "auto-fix" the entrypoint
+	// promises). The revert is persisted so the next boot is clean.
 	if err := os.MkdirAll(cfg.Storage.RootDir, 0o755); err != nil {
-		return nil, nil, fmt.Errorf("create storage dir %s: %w", cfg.Storage.RootDir, err)
+		if dd := dataDir(); dd != "" && dd != cfg.Storage.RootDir {
+			slog.Error("recording root unusable — falling back to the data volume",
+				"configured_root", cfg.Storage.RootDir, "data_dir", dd, "error", err)
+			cfg.Storage.RootDir = dd
+			if err := config.Save(configPath, cfg); err != nil {
+				slog.Warn("failed to persist root fallback", "error", err)
+			}
+		} else {
+			return nil, nil, fmt.Errorf("create storage dir %s: %w", cfg.Storage.RootDir, err)
+		}
 	}
 
-	// Step 1: Open database
-	dbPath := filepath.Join(cfg.Storage.RootDir, "mibee-nvr.db")
-	db, err := storage.New(dbPath)
+	// Step 1: Open database (decoupled from the recording root; adopts a
+	// legacy root-bound DB once, see dbpath.go).
+	db, err := openDatabase(cfg, configPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("db open: %w", err)
-	}
-
-	ctx := context.Background()
-	if err := db.Init(ctx); err != nil {
-		db.Close()
-		return nil, nil, fmt.Errorf("db init: %w", err)
+		return nil, nil, err
 	}
 	deps.db = db
 
@@ -99,6 +110,12 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 
 	// Step 2.1: Event bus
 	deps.eventBus = event.NewEventBus(64)
+
+	// Step 2.2: Motion-score analyzer (issue #435) — subscribes to
+	// SegmentCompleted and scores finished H.264/H.265 segments in the
+	// compressed domain (per-frame sizes only, no decode). Constructed early
+	// so registerServices can start it before the first segments complete.
+	deps.motionAnalyzer = motion.NewAnalyzer(db, deps.eventBus, cfg.Storage.RootDir, motion.DefaultOptions())
 
 	// Step 2.5: Remote log handler (if enabled)
 	if cfg.RemoteLog.Enabled {
@@ -130,6 +147,17 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		return nil, nil, fmt.Errorf("storage: %w", err)
 	}
 	deps.store = store
+
+	// Step 3.5: Background storage migrator (idle-time, rate-limited; the
+	// runtime config getters keep rate/window live without restart).
+	// Seed per-camera storage overrides from the persisted config — the
+	// manager map is runtime state, the yaml is the source of truth.
+	for camID, camRoot := range cfg.Storage.CameraRoots {
+		store.SetCameraRoot(camID, camRoot)
+	}
+	deps.migrationMgr = migration.New(db, store,
+		func() int { return cfg.Storage.MigrationRateMB * 1024 * 1024 },
+		func() string { return cfg.Storage.MigrationWindow })
 
 	// Cleanup temp files from previous crash. Run in background — on large
 	// storage trees (100k+ files) the walk can take 20+ seconds, and leftover
@@ -225,6 +253,14 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			}
 			return nil
 		},
+		func(cameraID string) *config.AdaptiveRecordingConfig {
+			for _, c := range cfg.Cameras {
+				if c.ID == cameraID {
+					return c.Adaptive
+				}
+			}
+			return nil
+		},
 		func() []config.CameraConfig { return cfg.Cameras },
 		m,
 	)
@@ -239,6 +275,14 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			for _, c := range cfg.Cameras {
 				if c.ID == cameraID {
 					return c.Merge
+				}
+			}
+			return nil
+		},
+		func(cameraID string) *config.AdaptiveRecordingConfig {
+			for _, c := range cfg.Cameras {
+				if c.ID == cameraID {
+					return c.Adaptive
 				}
 			}
 			return nil
@@ -400,7 +444,12 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	})
 
 	// Step 7: HLS manager
+	// HLS is a transient live-stream cache — keep it on the data volume so
+	// the recordings volume holds only recordings (and survives root switches).
 	hlsDataDir := filepath.Join(cfg.Storage.RootDir, "hls")
+	if dd := dataDir(); dd != "" {
+		hlsDataDir = filepath.Join(dd, "hls")
+	}
 	hlsMgr := hls.NewManagerWithOpts(context.Background(), hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, m)
 	// Low-Latency HLS is always enabled — the muxer supports fMP4 LL mode
 	// unconditionally. Whether a given browser can play a given codec over
@@ -443,6 +492,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		wsstream.WithMaxViewers(cfg.WebSocket.MaxViewers),
 		wsstream.WithWriteBufSize(cfg.WebSocket.WriteBufSize),
 		wsstream.WithIdleTimeout(cfg.WebSocket.IdleTimeout),
+		wsstream.WithMetrics(m),
 	)
 	slog.Info("WebSocket stream manager initialized", "max_viewers", cfg.WebSocket.MaxViewers, "write_buf_size", cfg.WebSocket.WriteBufSize, "idle_timeout", cfg.WebSocket.IdleTimeout)
 	deps.wsMgr = wsMgr
@@ -473,6 +523,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	}
 	relayMgr.SetFFmpegPath(relayFFmpegPath)
 	relayMgr.SetHardwareCap(relayHwCap)
+	// Wire the source-codec resolver so push targets fail fast on MJPEG/JPEG
+	// sources instead of engaging the H.265 transcode path that can never
+	// decode them (#423).
+	relayMgr.SetSourceCodecProvider(camMgr.GetSourceCodec)
 	// Wire the source-URL resolver used by FFmpeg relay mode. Without this,
 	// connectViaFFmpeg() sees an empty provider, cannot resolve the camera's
 	// RTSP URL, and returns errPermanent on every retry (the 'permanent relay
@@ -709,6 +763,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// ---- Build HTTP router ----
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, configPath, deps.mergeMgr, cloudProxy, mergeScheduler, deps.gb28181DevMgr, deps.gb28181SessionMgr)
+	handler.SetStorageMigrator(deps.migrationMgr)
 
 	// Live API key store: seeded from config, updated in place by the
 	// generate/revoke handlers so key changes apply without restart (#335).

@@ -43,7 +43,7 @@ func newLiveOnlyBaseRecorder(t *testing.T, recordDisabled bool) (*baseRecorder, 
 		store:   store,
 		driver:  H264NALDriver{},
 		log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		frameCh: make(chan []byte, 32),
+		frameCh: make(chan framePacket, 32),
 	}
 	return b, store
 }
@@ -65,9 +65,9 @@ func TestWriteFrames_LiveOnlyDrainsWithoutRecording(t *testing.T) {
 	done := make(chan struct{})
 	go b.writeFrames(done)
 
-	b.frameCh <- sps
-	b.frameCh <- pps
-	b.frameCh <- idr
+	b.frameCh <- framePacket{data: sps, at: time.Now()}
+	b.frameCh <- framePacket{data: pps, at: time.Now()}
+	b.frameCh <- framePacket{data: idr, at: time.Now()}
 	// Give the goroutine a moment to process.
 	time.Sleep(50 * time.Millisecond)
 	close(b.frameCh)
@@ -92,9 +92,9 @@ func TestWriteFrames_RecordingEnabledCreatesSegment(t *testing.T) {
 	done := make(chan struct{})
 	go b.writeFrames(done)
 
-	b.frameCh <- sps
-	b.frameCh <- pps
-	b.frameCh <- idr
+	b.frameCh <- framePacket{data: sps, at: time.Now()}
+	b.frameCh <- framePacket{data: pps, at: time.Now()}
+	b.frameCh <- framePacket{data: idr, at: time.Now()}
 	time.Sleep(50 * time.Millisecond)
 	close(b.frameCh)
 	<-done

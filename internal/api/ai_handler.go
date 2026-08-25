@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -318,7 +317,7 @@ type aiModelInfo struct {
 // Mirrors the directory used by the public GET /models/{filename} file server
 // (handler.go handleServeModel), so the listed URLs are directly loadable.
 func (h *AIHandler) handleAIModels(w http.ResponseWriter, r *http.Request) {
-	modelDir := filepath.Join(h.config.Storage.RootDir, "models")
+	modelDir := h.config.Storage.ModelsDir()
 	entries, err := os.ReadDir(modelDir)
 	if err != nil {
 		// Directory missing (e.g. download-model never run) → return an empty

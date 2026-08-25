@@ -396,13 +396,26 @@ func (m *Manager) GetCameraHealth(cameraID string) *model.CameraHealth {
 	recorderStatus := m.knownRecorderStatus(cameraID)
 	offlineDur := m.conn.GetOfflineDuration(cameraID)
 	anomalyCount := m.pipeline.GetAnomalyCount(cameraID)
-	score := ComputeHealthScore(recorderStatus, offlineDur, anomalyCount, 100.0)
+	score := ComputeHealthScore(recorderStatus, offlineDur, anomalyCount, m.uptimeForScore(cameraID))
 	return &model.CameraHealth{
 		CameraID:     cameraID,
 		LatestStatus: status,
 		Score:        score.Score,
 		ScoreFactors: formatFactors(score.Factors),
 	}
+}
+
+// uptimeForScore returns the QualityTracker's real 24h uptime percentage for
+// the health score (#469 Phase 4 — was hardcoded 100.0, so the low_uptime
+// factor could never fire). Cameras with no tracker data yet (status
+// "unknown") get a neutral 100% instead of the raw 0% — a brand-new camera
+// must not be penalized as if it had been down all day.
+func (m *Manager) uptimeForScore(cameraID string) float64 {
+	q := m.qualityTracker.GetQuality(cameraID)
+	if q.CurrentStatus == "unknown" {
+		return 100.0
+	}
+	return q.UptimePercent
 }
 
 // GetAllHealth returns health status for all monitored cameras.
@@ -427,7 +440,7 @@ func (m *Manager) GetAllHealth() map[string]*model.CameraHealth {
 		recorderStatus := m.knownRecorderStatus(camID)
 		offlineDur := m.conn.GetOfflineDuration(camID)
 		anomalyCount := m.pipeline.GetAnomalyCount(camID)
-		score := ComputeHealthScore(recorderStatus, offlineDur, anomalyCount, 100.0)
+		score := ComputeHealthScore(recorderStatus, offlineDur, anomalyCount, m.uptimeForScore(camID))
 		result[camID] = &model.CameraHealth{
 			CameraID:     camID,
 			LatestStatus: status,

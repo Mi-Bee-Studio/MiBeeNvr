@@ -2638,6 +2638,7 @@ func TestHandleMergeStatus_WithManager(t *testing.T) {
 		db, store,
 		func() config.MergeConfig { return cfg.Merge },
 		func(cameraID string) *config.MergeConfig { return nil },
+		func(cameraID string) *config.AdaptiveRecordingConfig { return nil },
 		func() []config.CameraConfig { return cfg.Cameras },
 		nil,
 	)
@@ -2666,6 +2667,7 @@ func TestHandleMergePending_WithManager(t *testing.T) {
 		db, store,
 		func() config.MergeConfig { return cfg.Merge },
 		func(cameraID string) *config.MergeConfig { return nil },
+		func(cameraID string) *config.AdaptiveRecordingConfig { return nil },
 		func() []config.CameraConfig { return cfg.Cameras },
 		nil,
 	)

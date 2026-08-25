@@ -33,7 +33,7 @@ srt:
 
 摄像头或编码器需要配置推流到 NVR：
 
-```
+```text
 SRT URL: srt://你的NVR地址:9000?streamid=#!:r=摄像头ID,m=publish
 ```
 
@@ -93,7 +93,7 @@ rtmp:
 
 摄像头或编码器配置 RTMP 推流：
 
-```
+```text
 RTMP URL: rtmp://你的NVR地址:1935/live/摄像头ID
 ```
 

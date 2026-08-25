@@ -21,6 +21,13 @@ export interface Recording {
   archived?: boolean;
   merge_tier?: string;
   merge_error?: string;
+  // Motion score (#435): compressed-domain activity score in [0,1]; -1 =
+  // not yet analyzed. activity_flags: comma-separated "static"/"motion"/"scene_cut".
+  motion_score?: number;
+  /** #496: piecewise wall→file timeline map (JSON "[[wallSec,fileSec],…]")
+   *  for timelapse-compressed recordings; absent = real-time axis. */
+  timeline_map?: string;
+  activity_flags?: string;
 }
 
 export interface FrameInfo {
@@ -100,6 +107,8 @@ export async function listRecordings(
     archived?: boolean;
     cursor?: string; // keyset cursor (started_at of last row on prev page) for O(1) deep paging
     ai_class?: string; // "person" / "car" / ... — filter to recordings with an AI event of this class
+    min_motion_score?: number; // keep only segments with motion_score >= this (#435)
+    activity?: string; // match activity_flags membership: static | motion | scene_cut
     signal?: AbortSignal;
   } = {},
 ): Promise<RecordingListResponse> {
@@ -118,6 +127,8 @@ export async function listRecordings(
   if (params.archived !== undefined) queryParams.set('archived', String(params.archived));
   if (params.cursor) queryParams.set('cursor', params.cursor);
   if (params.ai_class) queryParams.set('ai_class', params.ai_class);
+  if (params.min_motion_score !== undefined) queryParams.set('min_motion_score', String(params.min_motion_score));
+  if (params.activity) queryParams.set('activity', params.activity);
 
   const query = queryParams.toString();
   const endpoint = query ? `/recordings?${query}` : '/recordings';
@@ -180,6 +191,7 @@ export interface RecordingTimelineSegment {
   duration: number;
   format: Recording['format'];
   merge_status: Recording['merge_status'];
+  motion_score?: number; // -1 = not analyzed (#435)
 }
 
 export interface RecordingTimelineResponse {
