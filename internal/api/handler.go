@@ -547,6 +547,10 @@ type cameraProtocolsResponse struct {
 	// address third-party platforms (Synology etc.) fill in as a camera
 	// source. Nil when the server is disabled.
 	RTSP *rtspEndpointDetail `json:"rtsp,omitempty"`
+	// SubStream reports the camera's sub-stream capability (#512): where a
+	// lower-resolution secondary feed exists (or can be configured), for
+	// consumers like grid preview, cascade and external AI push.
+	SubStream subStreamDetail `json:"sub_stream"`
 }
 
 // rtspEndpointDetail describes the RTSP pull endpoint for one camera.
@@ -554,6 +558,13 @@ type rtspEndpointDetail struct {
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"`
 	URL       string `json:"url,omitempty"`
+}
+
+// subStreamDetail describes the sub-stream capability of one camera.
+type subStreamDetail struct {
+	Available bool   `json:"available"`
+	Source    string `json:"source,omitempty"` // "onvif" (auto-discovered) | "manual" (URL set)
+	Reason    string `json:"reason,omitempty"` // why not, when unavailable
 }
 
 // handleCameraProtocols handles GET /api/cameras/{id}/protocols.
@@ -631,7 +642,41 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		Encoding:  encoding,
 		Default:   defaultProto,
 		RTSP:      h.rtspEndpointFor(r, id, model.Format(encoding)),
+		SubStream: h.subStreamDetailFor(id),
 	})
+}
+
+// subStreamDetailFor derives the camera's sub-stream capability (#512) from
+// its protocol and configured/discovered sub fields. "Available" means a
+// consumer can request a sub stream today; unavailable reasons guide the UI.
+func (h *Handler) subStreamDetailFor(cameraID string) subStreamDetail {
+	var cam *config.CameraConfig
+	if h.camMgr != nil {
+		cam = h.camMgr.GetCameraConfig(cameraID)
+	}
+	if cam == nil {
+		return subStreamDetail{Reason: "camera config unavailable"}
+	}
+	switch {
+	case cam.SubStreamURL != "":
+		return subStreamDetail{Available: true, Source: "manual"}
+	case cam.SubProfileToken != "":
+		return subStreamDetail{Available: true, Source: "onvif"}
+	}
+	switch cam.Protocol {
+	case "onvif":
+		// Discovery runs once after the recorder comes online; until then (or
+		// on single-profile cameras) there is no sub stream to consume.
+		return subStreamDetail{Reason: "no secondary ONVIF profile discovered (single-stream camera, or discovery pending)"}
+	case "rtsp_h264", "rtsp_mjpeg", string(model.ProtoRTSP):
+		return subStreamDetail{Reason: "set sub_stream_url to use this camera's sub stream"}
+	case "gb28181":
+		return subStreamDetail{Reason: "GB28181 sub-channel selection not supported yet"}
+	default:
+		// xiaomi (proprietary single stream), srt/rtmp push (publisher owns
+		// the encode), http_jpeg/mjpeg (already low-bitrate stills).
+		return subStreamDetail{Reason: "protocol does not expose a sub stream"}
+	}
 }
 
 // rtspEndpointFor builds the RTSP output-server entry for the protocols

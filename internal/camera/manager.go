@@ -51,9 +51,14 @@ type CameraUpdate struct {
 	ONVIFEndpoint  *string
 	ProfileToken   *string
 	StreamEncoding *string
-	Channel        *string
-	Transcoding    *config.CameraTranscodingConfig
-	AudioEnabled   *bool
+	// Sub-stream fields (#512): manual overrides for the sub profile token
+	// (ONVIF) and the sub stream URL (any RTSP-capable protocol). They do not
+	// restart the recorder — sub consumers pick them up on their next start.
+	SubProfileToken *string
+	SubStreamURL    *string
+	Channel         *string
+	Transcoding     *config.CameraTranscodingConfig
+	AudioEnabled    *bool
 	// Dark frame filtering
 	DarkFrameFilterEnabled *bool
 	DarkFrameThreshold     *int

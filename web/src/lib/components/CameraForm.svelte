@@ -35,7 +35,7 @@
         AdaptiveRecordingConfig,
         CameraAudioTriggerConfig,
     } from '$lib/api';
-    import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy } from 'lucide-svelte';
+    import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy, Layers } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
     import { showToast } from '$lib/toast';
     import { copyText } from '$lib/clipboard';
@@ -88,6 +88,9 @@
   let formSerialNumber = $state('');
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
+  // Sub-stream (#512): manual sub RTSP URL + ONVIF sub profile token.
+  let formSubStreamURL = $state('');
+  let formSubProfileToken = $state('');
   let formChannel = $state('');
   let formAudioEnabled = $state(false);
   let formAudioInRecordings = $state(false);
@@ -266,6 +269,8 @@ let validationErrors = $state<Record<string, string>>({});
     formSerialNumber = '';
     formRetentionDays = 0;
     formStreamEncoding = '';
+    formSubStreamURL = '';
+    formSubProfileToken = '';
     formTranscodingEnabled = false;
     formTranscodingCodec = 'h264';
     formTranscodingPreset = 'ultrafast';
@@ -362,6 +367,8 @@ let validationErrors = $state<Record<string, string>>({});
     formSerialNumber = camera.serial_number || '';
     formRetentionDays = camera.retention_days || 0;
     formStreamEncoding = camera.stream_encoding || '';
+    formSubStreamURL = camera.sub_stream_url || '';
+    formSubProfileToken = camera.sub_profile_token || '';
     formTranscodingEnabled = camera.transcoding?.enabled ?? false;
     formTranscodingCodec = !h265Available ? 'h264' : (camera.transcoding?.target_codec || 'h264');
     formTranscodingPreset = camera.transcoding?.preset || 'ultrafast';
@@ -696,6 +703,8 @@ async function performCameraSave() {
             serial_number: formSerialNumber || undefined,
             retention_days: formRetentionDays,
             stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
+            sub_stream_url: formProtocol === 'onvif' || formProtocol === 'rtsp' ? (formSubStreamURL.trim() || '') : undefined,
+            sub_profile_token: formProtocol === 'onvif' ? (formSubProfileToken.trim() || '') : undefined,
             // onvif/xiaomi/gb28181 auto-detect codec from the live stream and
             // ignore the stored value, so don't send one (avoids writing a
             // stale label). rtsp/http/srt/rtmp send formEncoding — it drives
@@ -760,6 +769,8 @@ async function performCameraSave() {
             serial_number: formSerialNumber || undefined,
             retention_days: formRetentionDays,
             stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
+            sub_stream_url: formProtocol === 'onvif' || formProtocol === 'rtsp' ? (formSubStreamURL.trim() || '') : undefined,
+            sub_profile_token: formProtocol === 'onvif' ? (formSubProfileToken.trim() || '') : undefined,
             // onvif/xiaomi/gb28181 auto-detect codec from the live stream and
             // ignore the stored value, so don't send one (avoids writing a
             // stale label). rtsp/http/srt/rtmp send formEncoding — it drives
@@ -1273,6 +1284,41 @@ async function performCameraSave() {
       <div class="md:col-span-2 p-3 rounded-md th-bg-hover border th-border text-sm">
         <p class="th-text-secondary">{t('cameras.pushHint')}</p>
       </div>
+    {/if}
+
+    <!-- Sub-stream (#512): secondary low-res feed for future consumers -->
+    {#if formProtocol === 'onvif' || formProtocol === 'rtsp'}
+    <div class="md:col-span-2">
+      <details class="rounded-md border th-border">
+        <summary class="cursor-pointer p-3 flex items-center gap-2 th-bg-hover">
+          <Layers size={16} class="th-text-secondary" />
+          <span class="font-medium th-text-primary">{t('cameras.subStreamTitle')}</span>
+          {#if formSubStreamURL.trim() || formSubProfileToken.trim()}
+            <span class="text-xs px-2 py-0.5 rounded-full th-bg-muted th-text-secondary">✓</span>
+          {/if}
+        </summary>
+        <div class="p-3 border-t th-border space-y-3">
+          <p class="text-xs th-text-muted">{t('cameras.subStreamHint')}</p>
+          <div>
+            <label class="label" for="cam-sub-url">
+              <span class="text-xs th-text-secondary">{t('cameras.subStreamUrl')}</span>
+            </label>
+            <input id="cam-sub-url" type="text" class="input" bind:value={formSubStreamURL}
+              placeholder={t('cameras.subStreamUrlPlaceholder')} />
+          </div>
+          {#if formProtocol === 'onvif'}
+          <div>
+            <label class="label" for="cam-sub-token">
+              <span class="text-xs th-text-secondary">{t('cameras.subProfileToken')}</span>
+            </label>
+            <input id="cam-sub-token" type="text" class="input" bind:value={formSubProfileToken}
+              placeholder={t('cameras.subProfileTokenPlaceholder')} />
+            <p class="text-xs th-text-muted mt-1">{t('cameras.subProfileTokenHint')}</p>
+          </div>
+          {/if}
+        </div>
+      </details>
+    </div>
     {/if}
 
     <!-- Push-out (relay) targets: forward this camera's stream to remote destinations -->

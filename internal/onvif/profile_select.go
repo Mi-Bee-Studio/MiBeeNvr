@@ -71,3 +71,56 @@ func looksLikeMain(token, name string) bool {
 	}
 	return false
 }
+
+// SelectSubProfile picks the best secondary ("sub") profile for sub-stream
+// consumers (#512): the highest-pixel profile OTHER than the main one whose
+// resolution is strictly LOWER than the main profile's. A same-resolution
+// second profile is the same stream under another token (the Amcrest
+// IP4M-1051 pattern) — not a sub stream. Returns "" when the camera has no
+// distinct secondary profile (single-profile devices stay empty; consumers
+// treat that as "no sub-stream capability").
+func SelectSubProfile(profiles []DeviceProfile, mainToken string) string {
+	mainPixels := 0
+	for _, p := range profiles {
+		if p.Token == mainToken {
+			mainPixels = profilePixels(p)
+			break
+		}
+	}
+	if mainPixels <= 0 {
+		return ""
+	}
+	best := -1
+	bestPixels := 0
+	for i, p := range profiles {
+		if p.Token == mainToken {
+			continue
+		}
+		pixels := profilePixels(p)
+		if pixels <= 0 || pixels >= mainPixels {
+			continue
+		}
+		if pixels > bestPixels {
+			best, bestPixels = i, pixels
+		} else if pixels == bestPixels && best >= 0 &&
+			looksLikeSub(p.Token, p.Name) && !looksLikeSub(profiles[best].Token, profiles[best].Name) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return ""
+	}
+	return profiles[best].Token
+}
+
+// looksLikeSub reports whether the token/name suggests a secondary stream.
+// Case-insensitive English and Chinese cues, mirroring looksLikeMain.
+func looksLikeSub(token, name string) bool {
+	s := strings.ToLower(token + " " + name)
+	for _, cue := range []string{"sub", "secondary", "辅流", "辅码流", "子码流", "extra"} {
+		if strings.Contains(s, cue) {
+			return true
+		}
+	}
+	return false
+}
