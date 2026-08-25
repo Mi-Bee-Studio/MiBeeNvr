@@ -160,6 +160,13 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 			"recording_id", seg.RecordingID)
 		return
 	}
+	// 消费者心跳声明的跳单(#515):与静态配置取并集生效。
+	if c.health.SkipCamera(seg.CameraID) {
+		slog.Debug("vision push skipped by consumer-reported skip list",
+			"camera_id", seg.CameraID,
+			"recording_id", seg.RecordingID)
+		return
+	}
 
 	// 解析段文件的绝对路径。NVR 的 file_path 已经是绝对路径(/mnt/data/nvr/...)。
 	absPath := seg.FilePath
