@@ -802,7 +802,7 @@ func TestRewriteStaleStreamHost(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, rewriteStaleStreamHost(tc.rtspURL, tc.onvifEndpoint))
+			require.Equal(t, tc.want, RewriteStaleStreamHost(tc.rtspURL, tc.onvifEndpoint))
 		})
 	}
 }

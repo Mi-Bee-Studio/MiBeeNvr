@@ -2,11 +2,14 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
@@ -337,6 +340,55 @@ func getStreamHub(rec model.Recorder) *model.StreamHub {
 // SetStreamRegistry sets the stream registry on the handler for protocol queries.
 func (h *Handler) SetStreamRegistry(reg *StreamRegistry) {
 	h.streamRegistry = reg
+}
+
+// --- Stream quality negotiation (#513) ---
+
+// Quality values for the live egress endpoints. "main" is the default;
+// "sub" selects the camera's on-demand sub-stream (falls back to main when
+// the camera has none — callers detect the fallback via X-Stream-Quality).
+const (
+	qualityMain = "main"
+	qualitySub  = "sub"
+)
+
+// parseQuality parses the ?quality= parameter ("" and "main" → main).
+func parseQuality(r *http.Request) (string, error) {
+	switch q := r.URL.Query().Get("quality"); q {
+	case "", qualityMain:
+		return qualityMain, nil
+	case qualitySub:
+		return qualitySub, nil
+	default:
+		return "", fmt.Errorf("invalid quality %q (supported: main, sub)", q)
+	}
+}
+
+// subKey is the protocol-manager stream key under which a camera's sub-stream
+// egress is registered. Managers key entries by an opaque string, so the
+// suffixed key reuses all of their machinery (viewer caps, GOP cache, idle
+// watchdogs) without any per-quality plumbing inside them.
+func subKey(cameraID string) string { return cameraID + "/" + qualitySub }
+
+// acquireSub attempts the on-demand sub-stream acquisition and reports
+// whether egress should serve the sub entry. On any failure (no sub config,
+// pull not ready) it falls back to main — quality negotiation degrades, never
+// hard-fails — and logs the reason. The header tells the client which quality
+// it actually got.
+func (h *Handler) acquireSub(w http.ResponseWriter, r *http.Request, cameraID string) *substream.Source {
+	if h.camMgr == nil {
+		w.Header().Set("X-Stream-Quality", qualityMain)
+		return nil
+	}
+	src, err := h.camMgr.AcquireSubStream(r.Context(), cameraID)
+	if err != nil {
+		streamLogger.Info("quality=sub unavailable, serving main stream",
+			"camera_id", cameraID, "reason", err.Error())
+		w.Header().Set("X-Stream-Quality", qualityMain)
+		return nil
+	}
+	w.Header().Set("X-Stream-Quality", qualitySub)
+	return src
 }
 
 // --- WebRTCStreamHandler ---

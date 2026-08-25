@@ -27,6 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
@@ -101,11 +102,15 @@ type CameraUpdate struct {
 }
 
 type CameraManager struct {
-	cfg                *config.Config
-	store              *storage.Manager
-	db                 *storage.DB
-	configPath         string
-	metrics            *metrics.Metrics
+	cfg        *config.Config
+	store      *storage.Manager
+	db         *storage.DB
+	configPath string
+	metrics    *metrics.Metrics
+	// subStreams pulls camera sub-streams on demand (#513). Constructed here,
+	// torn down with the manager; per-camera teardown rides the camera
+	// lifecycle (StopCamera/RemoveCamera/UpdateCamera).
+	subStreams         *substream.Manager
 	mergeMgr           *merge.MergeManager                     // segment merge manager (nil = no merge)
 	timelapseMergeMgr  *timelapse.RollingMergeManager          // timelapse rolling merge (nil = no merge)
 	transcodeMgr       *transcoding.TranscodeManager           // transcoding manager (nil = no transcoding)
@@ -238,6 +243,16 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		hubBytesLast:       make(map[string]int64),
 		eventBus:           eb,
 	}
+	cm.subStreams = newSubStreamManager(
+		substream.Config{
+			Resolver: cm.resolveSubTarget,
+			WireHub: func(hub *model.StreamHub, cameraID string) {
+				wireHubMetrics(hub, cameraID, m)
+			},
+		},
+		subIdleTimeoutS(cfg),
+		subReadyTimeoutS(cfg),
+	)
 	// Publish the initial immutable snapshot. Config pointers seed the configs
 	// map from cfg.Cameras so GetCameraConfig works before Start() runs. The
 	// recorders/hubs maps start empty (populated as recorders start). Guard

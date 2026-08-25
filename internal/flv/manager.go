@@ -186,6 +186,54 @@ func (m *Manager) unregisterStream(camID string) {
 	}
 }
 
+// UnregisterStream is the exported teardown for a single stream — used by the
+// sub-stream recycler (#513) to drop a camera's "/sub" entry when the on-demand
+// puller is torn down. Mirrors wsstream.UnregisterStream.
+func (m *Manager) UnregisterStream(camID string) { m.unregisterStream(camID) }
+
+// ActiveHub returns the StreamHub the registered entry is currently
+// subscribed to (nil when the stream is not active).
+func (m *Manager) ActiveHub(camID string) *model.StreamHub {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.streams[camID]
+	if !ok {
+		return nil
+	}
+	return entry.hub
+}
+
+// RebindHub re-subscribes an active stream to a new StreamHub. The sub-stream
+// puller (#513) restarts with a FRESH hub after each idle recycle; without a
+// rebind the entry keeps listening to the dead hub and every viewer goes
+// black forever. Mirrors wsstream.Manager.RebindHub.
+func (m *Manager) RebindHub(camID string, hub *model.StreamHub) {
+	if hub == nil {
+		return
+	}
+	m.mu.Lock()
+	entry, ok := m.streams[camID]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	oldHub := entry.hub
+	entry.hub = hub
+	subID := entry.hubSubID
+	m.mu.Unlock()
+
+	if oldHub != nil && subID != "" {
+		oldHub.Unsubscribe(subID)
+	}
+	if hub.Subscribe(subID, func(pts int64, au [][]byte) {
+		m.writeFrame(camID, pts, au)
+	}) != nil {
+		flvLogger.Warn("FLV rebind: hub subscribe failed", "camera_id", camID)
+		return
+	}
+	flvLogger.Info("FLV stream rebound to new StreamHub", "camera_id", camID)
+}
+
 // IsActive returns whether a stream is registered.
 func (m *Manager) IsActive(camID string) bool {
 	m.mu.RLock()

@@ -65,6 +65,10 @@ type streamEntry struct {
 	lastErrorTime     time.Time
 	backoff           time.Duration
 	observedSegments  map[string]bool
+	// hub is the StreamHub the entry's "hls" consumer is subscribed to.
+	// Set by SubscribeToHub; compared by the sub-stream recycler (#513) to
+	// decide whether this entry still belongs to a recycled pull generation.
+	hub *model.StreamHub
 	// wg tracks the writeLoop + idleWatchdog goroutines so stopStreamLocked
 	// can join them before returning. Without this, the goroutines briefly
 	// outlive the entry (they touch entry.mux / entry.dirPath), leaking
@@ -1092,6 +1096,11 @@ func (m *Manager) StopAll() {
 // destroyed the camera manager's hub-level Prometheus wiring as soon as any
 // HLS subscriber attached.
 func (m *Manager) SubscribeToHub(cameraID string, hub *model.StreamHub, isH265 bool) error {
+	m.mu.Lock()
+	if entry, ok := m.streams[cameraID]; ok {
+		entry.hub = hub
+	}
+	m.mu.Unlock()
 	if m.metrics != nil {
 		hub.AddOnDrop(func(id string, isIDR bool) {
 			if id == "hls" {
@@ -1107,6 +1116,46 @@ func (m *Manager) SubscribeToHub(cameraID string, hub *model.StreamHub, isH265 b
 	return hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		_ = m.WriteH264(cameraID, pts, au)
 	})
+}
+
+// ActiveHub returns the StreamHub the entry's "hls" consumer is currently
+// subscribed to (nil when the stream is not active). The sub-stream recycler
+// (#513) compares this against the recycled hub to avoid stopping an entry
+// that already rebound to a fresh pull generation.
+func (m *Manager) ActiveHub(cameraID string) *model.StreamHub {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.streams[cameraID]
+	if !ok {
+		return nil
+	}
+	return entry.hub
+}
+
+// RebindHub re-subscribes an active HLS entry to a new StreamHub — used when
+// the sub-stream puller restarted with a fresh hub (#513). The muxer's track
+// parameters stay from registration; puller restarts preserve the camera's
+// parameter sets in practice, and the recycle path stops the entry anyway, so
+// the rebind is only a short-window safety net.
+func (m *Manager) RebindHub(cameraID string, hub *model.StreamHub, isH265 bool) {
+	if hub == nil {
+		return
+	}
+	m.mu.RLock()
+	entry, ok := m.streams[cameraID]
+	oldHub := (*model.StreamHub)(nil)
+	if ok {
+		oldHub = entry.hub
+	}
+	m.mu.RUnlock()
+	if !ok || oldHub == hub {
+		return
+	}
+	if oldHub != nil {
+		oldHub.Unsubscribe("hls")
+	}
+	_ = m.SubscribeToHub(cameraID, hub, isH265)
+	hlsLogger.Info("HLS stream rebound to new StreamHub", "camera_id", cameraID)
 }
 
 func (m *Manager) idleWatchdog(ctx context.Context, cameraID string) {

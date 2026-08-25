@@ -51,6 +51,21 @@ type ServerConfig struct {
 	// rtsp://<host>:<port>/<camera_id> pull URLs that third-party platforms
 	// (Synology Surveillance Station etc.) fill in as camera sources (#499).
 	RTSP RTSPOutputConfig `yaml:"rtsp"`
+	// SubStream tunes the on-demand sub-stream ingest (#513): secondary
+	// profiles are pulled over RTSP only while egress consumers (WS/FLV/HLS
+	// quality=sub) hold references, then torn down after the idle timeout.
+	SubStream SubStreamServerConfig `yaml:"substream"`
+}
+
+// SubStreamServerConfig tunes the on-demand sub-stream puller. All fields
+// optional; zero values fall back to the defaults below.
+type SubStreamServerConfig struct {
+	// IdleTimeoutS: how long a sub-stream with zero consumers keeps its RTSP
+	// session before recycling (default 30).
+	IdleTimeoutS int `yaml:"idle_timeout_s,omitempty"`
+	// ReadyTimeoutS: how long a quality=sub request waits for the pull's
+	// first keyframe before erroring (default 8).
+	ReadyTimeoutS int `yaml:"ready_timeout_s,omitempty"`
 }
 
 // RTSPOutputConfig configures the RTSP output server (PLAY direction only,

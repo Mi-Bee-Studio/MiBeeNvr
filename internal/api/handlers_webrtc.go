@@ -18,6 +18,18 @@ import (
 func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
+	// quality=sub is not wired for WHEP yet (#513 v1): WHEP sessions outlive
+	// the creating HTTP request, so the sub-stream puller's reference count
+	// has no anchor to decrement on session close — the manager needs a
+	// session-scoped release hook first. Clients get an explicit error and
+	// can use ws/flv/hls sub endpoints meanwhile. Validated before service
+	// availability so the contract is observable even with WebRTC disabled.
+	if q := r.URL.Query().Get("quality"); q != "" && q != qualityMain {
+		WriteError(w, http.StatusBadRequest,
+			"quality=sub is not supported for WebRTC yet; use stream/ws, stream.flv (?quality=sub) or stream/sub/index.m3u8")
+		return
+	}
+
 	if h.webrtcMgr == nil {
 		WriteError(w, http.StatusServiceUnavailable, "WebRTC not available")
 		return

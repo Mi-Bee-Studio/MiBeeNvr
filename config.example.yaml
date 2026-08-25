@@ -33,6 +33,17 @@ server:
   #   # username: ""   # optional credentials; empty = open on the LAN
   #   # password: ""
 
+  # Sub-stream on-demand ingest (#513): a camera's secondary (lower-
+  # resolution) stream is pulled over RTSP only while live consumers watch it
+  # (stream/ws / stream.flv with ?quality=sub, or the HLS path
+  # /api/cameras/{id}/stream/sub/index.m3u8) and torn down after
+  # idle_timeout_s with no consumers. Requires the camera to expose a sub
+  # stream — an ONVIF secondary profile (auto-discovered) or a manual
+  # sub_stream_url in the camera config.
+  # substream:
+  #   idle_timeout_s: 30    # keep an idle pull warm this long before recycling
+  #   ready_timeout_s: 8    # how long a quality=sub request waits for first video
+
 # HTTP security response headers.
 # frame_ancestors controls who may embed the Web UI in an <iframe> via the CSP
 # frame-ancestors directive. A space-separated list of sources, e.g.
