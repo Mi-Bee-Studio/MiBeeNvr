@@ -45,6 +45,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
@@ -622,6 +623,22 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			}
 		}
 		slog.Info("WHIP ingest endpoint enabled", "path", "/whip/{streamKey}")
+	}
+
+	// Step 7.7c: RTSP output server (#522/#499) — serves
+	// rtsp://<host>:<port>/<camera_id> pull URLs for third-party platforms.
+	// Enabled by default; a bind failure only logs (see register.go).
+	if cfg.Server.RTSP.Enabled != nil && *cfg.Server.RTSP.Enabled {
+		deps.rtspServer = rtsp.NewServer(
+			rtsp.Config{
+				Addr:     fmt.Sprintf(":%d", cfg.Server.RTSP.Port),
+				Username: cfg.Server.RTSP.Username,
+				Password: cfg.Server.RTSP.Password,
+			},
+			rtspStreamProvider(camMgr),
+		)
+		slog.Info("RTSP output server configured", "port", cfg.Server.RTSP.Port,
+			"auth", cfg.Server.RTSP.Username != "" || cfg.Server.RTSP.Password != "")
 	}
 
 	// Step 7.8: SRT listener (optional)

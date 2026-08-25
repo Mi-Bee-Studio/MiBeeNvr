@@ -43,6 +43,7 @@ services:
       # If port 9090 is taken on your host (e.g. Synology DSM), change ONLY
       # the left side, e.g. "8080:9090" → access via http://HOST_IP:8080.
       - "9090:9090"   # Web UI / API
+      - "8554:8554"   # RTSP pull (rtsp://HOST:8554/<camera_id>)
       - "2121:2121"   # FTP
       - "2122-2140:2122-2140"  # FTP passive ports
     volumes:

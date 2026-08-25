@@ -25,6 +25,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
@@ -85,6 +86,7 @@ type appDeps struct {
 	rtmpServer        *rtmp.Server
 	srtListener       *srt.Listener
 	whipServer        *whip.Server
+	rtspServer        *rtsp.Server
 	gb28181Server     *sip.Server
 	gb28181Cascade    *cascade.Service
 	gb28181DevMgr     *gb28181.DeviceManager

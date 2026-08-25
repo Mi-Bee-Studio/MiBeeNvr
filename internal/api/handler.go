@@ -24,6 +24,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
@@ -542,6 +543,17 @@ type cameraProtocolsResponse struct {
 	Protocols []ProtocolDetail `json:"protocols"`
 	Encoding  string           `json:"encoding"`
 	Default   string           `json:"default"`
+	// RTSP exposes the built-in RTSP output server pull URL (#522) — the
+	// address third-party platforms (Synology etc.) fill in as a camera
+	// source. Nil when the server is disabled.
+	RTSP *rtspEndpointDetail `json:"rtsp,omitempty"`
+}
+
+// rtspEndpointDetail describes the RTSP pull endpoint for one camera.
+type rtspEndpointDetail struct {
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 // handleCameraProtocols handles GET /api/cameras/{id}/protocols.
@@ -618,7 +630,29 @@ func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) 
 		Protocols: protocols,
 		Encoding:  encoding,
 		Default:   defaultProto,
+		RTSP:      h.rtspEndpointFor(r, id, model.Format(encoding)),
 	})
+}
+
+// rtspEndpointFor builds the RTSP output-server entry for the protocols
+// response (#522): available when the server is enabled, the camera's codec
+// is servable (H.264/H.265), and its parameter sets have been detected. The
+// URL targets the requesting host so it is directly copy-pasteable.
+func (h *Handler) rtspEndpointFor(r *http.Request, cameraID string, codec model.Format) *rtspEndpointDetail {
+	if h.config == nil || h.config.Server.RTSP.Enabled == nil || !*h.config.Server.RTSP.Enabled {
+		return nil
+	}
+	detail := &rtspEndpointDetail{}
+	switch codec {
+	case model.FormatH264, model.FormatH265:
+		// Parameter readiness mirrors the RTSP server's own gate — an idle or
+		// warming-up camera still gets the URL (clients retry DESCRIBE).
+		detail.Available = true
+		detail.URL = rtsp.URLFor(r.Host, h.config.Server.RTSP.Port, cameraID)
+	default:
+		detail.Reason = "codec not servable over RTSP (H.264/H.265 only)"
+	}
+	return detail
 }
 
 // handleCapabilities handles GET /api/capabilities.

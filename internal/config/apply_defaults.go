@@ -113,6 +113,17 @@ func applyConfigDefaults(cfg *Config) {
 		enabled := true
 		cfg.Server.Discovery.MDNS.Enabled = &enabled
 	}
+	// RTSP output server (#522): on by default — same LAN exposure posture as
+	// the public HTTP-FLV live endpoint, and the #499 promise is
+	// works-out-of-the-box pull URLs. A bind failure (e.g. MediaMTX already on
+	// 8554) logs an error without affecting the rest of the app.
+	if cfg.Server.RTSP.Enabled == nil {
+		enabled := true
+		cfg.Server.RTSP.Enabled = &enabled
+	}
+	if cfg.Server.RTSP.Port == 0 {
+		cfg.Server.RTSP.Port = 8554
+	}
 	// Storage
 	if strings.TrimSpace(cfg.Storage.RootDir) == "" {
 		cfg.Storage.RootDir = "/var/lib/mibee-nvr"
