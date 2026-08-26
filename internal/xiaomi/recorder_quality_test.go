@@ -59,7 +59,7 @@ func TestQualityFailuresSeparatedByStableWindowsNeverDowngrade(t *testing.T) {
 
 	// Three no-media failures, each preceded by a connection that streamed
 	// past the stable window — every failure starts a fresh sequence (count 1).
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		r.handleQualityFailure(noMediaErr(), true)
 		require.Equal(t, 1, r.noMediaFailCount, "iteration %d: counter should reset to 0 then count 1", i)
 	}
@@ -98,7 +98,7 @@ func TestQualityDowngradeOnlyInAutoMode(t *testing.T) {
 	r := makeQualityTestRecorder(t)
 	r.cfg.Quality = "hd" // pinned — auto fallback disarmed
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		r.handleQualityFailure(noMediaErr(), false)
 	}
 	require.Equal(t, "hd", r.currentQuality, "pinned hd must not auto-downgrade")
@@ -108,7 +108,7 @@ func TestQualityNonNoMediaFailuresDoNotAccumulate(t *testing.T) {
 	t.Helper()
 	r := makeQualityTestRecorder(t)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		r.handleQualityFailure(errors.New("cs2: EOF"), false)
 	}
 	require.Equal(t, 0, r.noMediaFailCount, "EOF failures are not no-media failures")
@@ -178,7 +178,7 @@ func TestQualityUpgradeOscillationBounded(t *testing.T) {
 
 		// HD refuses again: three rapid no-media failures downgrade.
 		r.mediaStart = time.Time{}
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			r.handleQualityFailure(noMediaErr(), false)
 		}
 		require.Equal(t, "sd", r.currentQuality)

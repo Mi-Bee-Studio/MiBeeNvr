@@ -99,8 +99,8 @@ type XiaomiRecorderConfig struct {
 	DB                RecordingDB
 	HealthDB          HealthEventWriter // Optional: persists quality-change health events (issue #502)
 	ErrReporter       ErrorReporter     // Optional: reports detailed errors (e.g. TUTK incompatibility)
-	AudioEnabled      bool          // Capture and broadcast audio via StreamHub when true
-	AudioInRecordings bool          // Keep the audio track in recorded segments (default off)
+	AudioEnabled      bool              // Capture and broadcast audio via StreamHub when true
+	AudioInRecordings bool              // Keep the audio track in recorded segments (default off)
 	IdleTimeout       time.Duration
 	Channel           string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
 	Quality           string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
