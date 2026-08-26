@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
@@ -428,8 +429,8 @@ func (h *StreamHub) Broadcast(pts int64, au [][]byte, isIDR bool) {
 		traceID = fmt.Sprintf("%s-%d", h.cameraID, pts)
 	}
 
-	slog.Debug(
-		"frame_trace",
+	frametrace.Log(
+		h.cameraID,
 		"trace_id", traceID,
 		"camera_id", h.cameraID,
 		"stage", "streamhub_in",
@@ -495,8 +496,8 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 				}
 			} else {
 				e.entry.drops.Add(1)
-				slog.Warn(
-					"frame_trace",
+				frametrace.LogDrop(
+					h.cameraID,
 					"trace_id", "no-trace",
 					"camera_id", h.cameraID,
 					"stage", "streamhub_drop",
