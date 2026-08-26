@@ -7,6 +7,9 @@
   import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
   import { sendTelemetry } from '$lib/telemetry';
+  import { apiRequest } from '$lib/api';
+  import { LiveLatencyTracker, latencyBadgeClass } from '$lib/live-latency.svelte';
+  import { FLVIngestParser, createTeeLoader } from '$lib/flv-ingest-clock';
   import type { StreamState } from '$lib/hls-errors';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
   import { createStateDispatcher } from '$lib/player/dispatch';
@@ -33,6 +36,40 @@
      *  return false (or omit) to let this player fall back to a snapshot. */
     onProtocolFailed?: () => boolean;
   } = $props();
+
+  // End-to-end live latency (#481): the backend rides the hub-ingest
+  // wallclock offset in each video tag's StreamID field (see
+  // flv-ingest-clock.ts); combine with the clock base from the flow API.
+  const latency = new LiveLatencyTracker(cameraId, 'flv');
+  const flvParser = new FLVIngestParser();
+  let flvClockMs = 0;
+  let latencyTimer: ReturnType<typeof setInterval> | null = null;
+  let clockTimer: ReturnType<typeof setInterval> | null = null;
+
+  function startLatencyTracking() {
+    if (latencyTimer) return;
+    latencyTimer = setInterval(() => {
+      const delta = flvParser.latestDeltaMs;
+      if (flvClockMs > 0 && delta != null) latency.track(flvClockMs + delta);
+    }, 2000);
+    const pollClock = async () => {
+      try {
+        const flow = await apiRequest<{ flv_clock_ms?: number }>(`/cameras/${cameraId}/flow`);
+        if (flow?.flv_clock_ms) flvClockMs = flow.flv_clock_ms;
+      } catch {
+        /* flow snapshot unavailable — latency display pauses, playback unaffected */
+      }
+    };
+    void pollClock();
+    clockTimer = setInterval(pollClock, 15_000);
+  }
+
+  function stopLatencyTracking() {
+    if (latencyTimer) clearInterval(latencyTimer);
+    if (clockTimer) clearInterval(clockTimer);
+    latencyTimer = null;
+    clockTimer = null;
+  }
 
   // Reconnection coordinator from Dashboard context
   const coordinator = getContext<ReconnectCoordinator | undefined>('reconnect-coordinator');
@@ -303,6 +340,11 @@ let videoEventAc: AbortController | null = null;
       const url = `${API_BASE}/cameras/${cameraId}/stream.flv${quality === 'sub' ? '?quality=sub' : ''}`;
       const authHeader = getAuthHeader();
 
+      const teeLoader = createTeeLoader(
+        mpegts.default,
+        (chunk) => flvParser.feed(chunk),
+        authHeader ? { Authorization: authHeader } : undefined,
+      );
       const player = mpegts.default.createPlayer({
         type: 'flv',
         isLive: true,
@@ -311,6 +353,7 @@ let videoEventAc: AbortController | null = null;
         hasVideo: true,
         cors: false,
       }, {
+        customLoader: teeLoader,
         headers: authHeader ? { Authorization: authHeader } : undefined,
         enableStashBuffer: false,
         stashInitialSize: 128,
@@ -325,6 +368,7 @@ let videoEventAc: AbortController | null = null;
       mpegtsPlayer = player;
       streamState = 'buffering';
       reconnectAttempts = 0;
+      startLatencyTracking();
 
       player.attachMediaElement(videoEl);
       player.load();
@@ -440,6 +484,7 @@ let videoEventAc: AbortController | null = null;
   onDestroy(() => {
     destroyed = true;
     stopSnapshotMode();
+    stopLatencyTracking();
     if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
     if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
@@ -528,6 +573,14 @@ let videoEventAc: AbortController | null = null;
     >
       {t('live.videoUnsupportedTag')}
     </video>
+    {#if latency.value != null}
+      <span
+        class="absolute top-1.5 left-2 text-xs tabular-nums z-20 {latencyBadgeClass(latency.value)}"
+        title={t('flow.liveLatency')}
+      >
+        {(latency.value / 1000).toFixed(1)}s
+      </span>
+    {/if}
   {/if}
 
   <!-- Overlay -->
