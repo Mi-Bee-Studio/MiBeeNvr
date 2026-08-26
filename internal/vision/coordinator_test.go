@@ -43,6 +43,7 @@ func TestCoordinatorPauseWindowTracking(t *testing.T) {
 		func() string { return t.TempDir() },
 		bus,
 		nil, // no DB → compensation disabled, but pause tracking still runs
+		nil, // no sub-layer provider
 	)
 
 	require.True(t, c.takePausedSince().IsZero(), "no pause before any skip")
@@ -104,6 +105,7 @@ func TestCoordinatorOfflineCompensation(t *testing.T) {
 		func() string { return t.TempDir() },
 		bus,
 		rp,
+		nil, // no sub-layer provider
 	)
 	require.NoError(t, c.Start(context.Background()))
 	t.Cleanup(c.Stop)
@@ -189,6 +191,7 @@ func TestCoordinatorSkipCameras(t *testing.T) {
 		func() string { return t.TempDir() },
 		bus,
 		nil,
+		nil, // no sub-layer provider
 	)
 	require.NoError(t, c.Start(context.Background()))
 	t.Cleanup(c.Stop)
@@ -241,6 +244,7 @@ func TestCoordinatorHeartbeatSkipCameras(t *testing.T) {
 		func() string { return t.TempDir() },
 		bus,
 		nil,
+		nil, // no sub-layer provider
 	)
 	require.NoError(t, c.Start(context.Background()))
 	t.Cleanup(c.Stop)
