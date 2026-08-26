@@ -770,3 +770,91 @@ func TestWriteFrame_IngestStyleAU_KeyframeDetected(t *testing.T) {
 		return len(entry.gopCache.frames) == 1 && entry.gopCache.frames[0].isKeyframe
 	}, 2*time.Second, 20*time.Millisecond, "ingest-style [SPS,PPS,IDR] AU must land in the GOP cache as a keyframe")
 }
+
+// --- ServeFLV stall regression (#539) ---
+//
+// stalledWriter blocks inside Write for the test duration, emulating a client
+// whose kernel socket buffer is full (probe read a few KB then half-closed).
+type stalledWriter struct {
+	mu      sync.Mutex
+	header  http.Header
+	release chan struct{}
+}
+
+func newStalledWriter() *stalledWriter {
+	return &stalledWriter{header: make(http.Header), release: make(chan struct{})}
+}
+
+func (w *stalledWriter) Header() http.Header { return w.header }
+func (w *stalledWriter) Write(p []byte) (int, error) {
+	<-w.release
+	return len(p), nil
+}
+func (w *stalledWriter) WriteHeader(int) {}
+
+// A stalled client must not wedge the camera's FLV pipeline: with the old
+// lock-held writes, the stalled ServeFLV blocked while holding viewerMu, so
+// ViewerCount (/api/streams) and every subsequent ServeFLV queued behind it.
+func TestServeFLV_StalledClientDoesNotWedgePipeline(t *testing.T) {
+	mgr, hub := newTestManagerWithHub(t)
+	require.NoError(t, mgr.RegisterStream("cam1", model.FormatH264, minimalSPS, minimalPPS, nil, hub))
+	// Prime the GOP cache so ServeFLV has a replay to (stall on) write.
+	hub.Broadcast(1000, [][]byte{minimalSPS, minimalPPS, idrNALU}, true)
+	require.Eventually(t, func() bool {
+		mgr.mu.RLock()
+		defer mgr.mu.RUnlock()
+		e, ok := mgr.streams["cam1"]
+		if !ok {
+			return false
+		}
+		e.gopMu.RLock()
+		defer e.gopMu.RUnlock()
+		return len(e.gopCache.frames) > 0
+	}, 3*time.Second, 20*time.Millisecond)
+
+	sw := newStalledWriter()
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras/cam1/stream.flv", nil).WithContext(ctx)
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() { done <- mgr.ServeFLV("cam1", sw, req) }()
+
+	// The viewer must be registered promptly (registration no longer waits
+	// on any client write).
+	require.Eventually(t, func() bool { return mgr.ViewerCount("cam1") == 1 },
+		2*time.Second, 20*time.Millisecond)
+
+	// /api/streams' ViewerCount must answer WHILE the stalled serve is stuck
+	// in its (lock-free) write — the old code deadlocked here.
+	counted := make(chan int, 1)
+	go func() { counted <- mgr.ViewerCount("cam1") }()
+	select {
+	case n := <-counted:
+		require.Equal(t, 1, n)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ViewerCount wedged behind a stalled ServeFLV client")
+	}
+
+	// A second serve must reach its own write path (not queue on the lock).
+	sw2 := newStalledWriter()
+	done2 := make(chan error, 1)
+	go func() { done2 <- mgr.ServeFLV("cam1", sw2, req) }()
+	require.Eventually(t, func() bool { return mgr.ViewerCount("cam1") == 2 },
+		2*time.Second, 20*time.Millisecond)
+
+	// Release both stalled writers, then cancel the request contexts — the
+	// serves are streaming loops, they end with their ctx.
+	close(sw.release)
+	close(sw2.release)
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, 3*time.Second, 50*time.Millisecond, "first serve did not finish after release")
+	require.Eventually(t, func() bool { return mgr.ViewerCount("cam1") == 0 },
+		3*time.Second, 50*time.Millisecond, "viewers not cleaned up after disconnect")
+}
