@@ -199,7 +199,7 @@ func TestServeWS_CodecInfoFirstMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -228,7 +228,7 @@ func TestServeWS_CodecInfoH265(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -254,7 +254,7 @@ func TestServeWS_FrameStreaming(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -294,7 +294,7 @@ func TestServeWS_MultipleFrames(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -336,7 +336,7 @@ func TestServeWS_NonexistentStream(t *testing.T) {
 	m := NewManager()
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		err := m.ServeWS("nonexistent", w, r)
+		err := m.ServeWS("nonexistent", "", w, r)
 		require.ErrorIs(t, err, ErrStreamNotActive)
 	})
 	server := httptest.NewServer(handler)
@@ -356,7 +356,7 @@ func TestServeWS_MaxViewers(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -392,7 +392,7 @@ func TestServeWS_DisconnectCleanup(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -420,7 +420,7 @@ func TestNonBlockingChannelDrop(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -479,7 +479,7 @@ func TestFrameDropCounter(t *testing.T) {
 
 	// Start HTTP server and connect a viewer
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("test-cam", w, r)
+		_ = m.ServeWS("test-cam", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -548,7 +548,7 @@ func TestIdleTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -575,7 +575,7 @@ func TestServeWS_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r.Clone(ctx))
+		_ = m.ServeWS("cam1", "", w, r.Clone(ctx))
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -601,7 +601,7 @@ func TestUnregisterStream_DisconnectsViewers(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -627,7 +627,7 @@ func TestGoroutineCleanup(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -656,7 +656,7 @@ func TestNoGoroutineLeakOnViewerDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -695,7 +695,7 @@ func TestMultipleViewers(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -757,7 +757,7 @@ func TestServeWS_ConcurrentStreams(t *testing.T) {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		camID := r.URL.Query().Get("cam")
-		_ = m.ServeWS(camID, w, r)
+		_ = m.ServeWS(camID, "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -809,7 +809,7 @@ func TestWriteFrame_H265KeyframeDetection(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -845,7 +845,7 @@ func TestManagerInterface(t *testing.T) {
 		viewerCount(camID string) int
 		writeH264(camID string, pts int64, au [][]byte)
 		writeH265(camID string, pts int64, au [][]byte)
-		ServeWS(camID string, w http.ResponseWriter, r *http.Request) error
+		ServeWS(camID string, quality string, w http.ResponseWriter, r *http.Request) error
 		StopAll()
 	} = (*Manager)(nil)
 }
@@ -869,7 +869,7 @@ func TestServeWS_NoConcurrentWriteOnUnregister(t *testing.T) {
 	require.NoError(t, m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub))
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -925,7 +925,7 @@ func TestServeWS_EOSDeliveredBeforeClose(t *testing.T) {
 	require.NoError(t, m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub))
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -966,7 +966,7 @@ func TestServeWS_NoConcurrentWriteOnIdle(t *testing.T) {
 	require.NoError(t, m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub))
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -1025,4 +1025,77 @@ func BenchmarkEncodeVideoFrame(b *testing.B) {
 	for range b.N {
 		_, _ = EncodeVideoFrame(vf)
 	}
+}
+
+// ─── QualityInfo first message (#541) ────────────────────────────────────
+//
+// The WS 101 upgrade response cannot carry X-Stream-Quality (gorilla writes
+// its own header set), so the negotiated quality must arrive in-band. These
+// tests pin the wire contract: non-empty quality → QualityInfo precedes
+// CodecInfo; empty quality → behavior unchanged (CodecInfo first).
+
+func TestServeWS_QualityInfoFirstMessage(t *testing.T) {
+	m := NewManager()
+	hub := newTestHub(t)
+	require.NoError(t, m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.ServeWS("cam1", "sub", w, r)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	conn := dialWS(t, "ws"+strings.TrimPrefix(server.URL, "http")+"/")
+	defer conn.Close()
+
+	msg, err := readMessage(t, conn)
+	require.NoError(t, err)
+	assert.Equal(t, MsgTypeQualityInfo, msg[0])
+
+	qi, err := decodeQualityInfo(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "sub", qi.Quality)
+
+	// CodecInfo follows immediately.
+	msg2, err := readMessage(t, conn)
+	require.NoError(t, err)
+	assert.Equal(t, MsgTypeCodecInfo, msg2[0])
+}
+
+func TestServeWS_EmptyQualitySkipsQualityInfo(t *testing.T) {
+	m := NewManager()
+	hub := newTestHub(t)
+	require.NoError(t, m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = m.ServeWS("cam1", "", w, r)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	conn := dialWS(t, "ws"+strings.TrimPrefix(server.URL, "http")+"/")
+	defer conn.Close()
+
+	msg, err := readMessage(t, conn)
+	require.NoError(t, err)
+	assert.Equal(t, MsgTypeCodecInfo, msg[0], "no negotiation → CodecInfo stays first")
+}
+
+func TestEncodeDecodeQualityInfo(t *testing.T) {
+	// Round-trip both negotiated values.
+	for _, q := range []string{"main", "sub"} {
+		data, err := EncodeQualityInfo(&QualityInfo{Quality: q})
+		require.NoError(t, err)
+		qi, err := decodeQualityInfo(data)
+		require.NoError(t, err)
+		assert.Equal(t, q, qi.Quality)
+	}
+
+	// Truncated / wrong-type payloads must error, not panic.
+	_, err := decodeQualityInfo([]byte{MsgTypeQualityInfo})
+	assert.Error(t, err)
+	_, err = decodeQualityInfo([]byte{MsgTypeQualityInfo, 4, 'm', 'a'})
+	assert.Error(t, err)
+	_, err = decodeQualityInfo([]byte{MsgTypeCodecInfo, 4, 'm', 'a', 'i', 'n'})
+	assert.Error(t, err)
 }

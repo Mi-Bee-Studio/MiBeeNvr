@@ -13,8 +13,8 @@
  */
 
 import { MsgType } from './protocol';
-import type { CodecInfo, AudioCodecInfo, AudioFrame } from './protocol';
-import { decodeAudioCodecInfo, decodeAudioFrame } from './protocol';
+import type { CodecInfo, AudioCodecInfo, AudioFrame, QualityInfo } from './protocol';
+import { decodeAudioCodecInfo, decodeAudioFrame, decodeQualityInfo } from './protocol';
 import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -40,6 +40,13 @@ export interface ConnectionManagerOptions {
   onCameraOffline?: () => void;
   /** Optional callback when AudioCodecInfo message received */
   onAudioCodecInfo?: (info: AudioCodecInfo) => void;
+  /**
+   * Optional callback when QualityInfo message received (#541). Fired once
+   * per connection (first in-band message) — reports 'main' when the server
+   * fell back from a requested sub-stream, since the 101 upgrade response
+   * cannot carry X-Stream-Quality.
+   */
+  onQualityInfo?: (info: QualityInfo) => void;
   /** Optional callback for each AudioFrame */
   onAudioFrame?: (frame: AudioFrame) => void;
   /** Optional reconnect coordinator for thundering herd prevention */
@@ -284,6 +291,12 @@ export class ConnectionManager {
           } catch {
             // parse error — ignore
           }
+        } else if (msgType === MsgType.QualityInfo) {
+          try {
+            this._opts.onQualityInfo?.(decodeQualityInfo(data));
+          } catch {
+            // parse error — ignore
+          }
         } else if (msgType === MsgType.AudioFrame) {
           try {
             this._opts.onAudioFrame?.(decodeAudioFrame(data));
@@ -354,8 +367,11 @@ export class ConnectionManager {
         // orchestrator demotes. Unlike the zombie/handshake counters above,
         // this check is immune to reconnect-cycle resets — _firstConnectTime is
         // stamped once and _everReceivedFrame is never cleared by a reconnect.
-        if (!this._everReceivedFrame && this._firstConnectTime > 0 &&
-            Date.now() - this._firstConnectTime > NO_MEDIA_TOTAL_MS) {
+        if (
+          !this._everReceivedFrame &&
+          this._firstConnectTime > 0 &&
+          Date.now() - this._firstConnectTime > NO_MEDIA_TOTAL_MS
+        ) {
           this._setState('offline');
           this._opts.onCameraOffline?.();
           return; // do NOT reconnect — let the orchestrator demote
@@ -543,12 +559,19 @@ export class ConnectionManager {
         this._zombieMissCount = 0;
 
         // Wall-clock guard also applies here (OPEN + no frames).
-        if (!this._everReceivedFrame && this._firstConnectTime > 0 &&
-            Date.now() - this._firstConnectTime > NO_MEDIA_TOTAL_MS) {
+        if (
+          !this._everReceivedFrame &&
+          this._firstConnectTime > 0 &&
+          Date.now() - this._firstConnectTime > NO_MEDIA_TOTAL_MS
+        ) {
           this._stopZombieDetection();
           this._setState('offline');
           this._opts.onCameraOffline?.();
-          try { if (this._ws) this._ws.close(1000); } catch { /* closed */ }
+          try {
+            if (this._ws) this._ws.close(1000);
+          } catch {
+            /* closed */
+          }
           return;
         }
 

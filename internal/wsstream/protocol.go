@@ -279,6 +279,44 @@ func decodeVideoFrame(data []byte) (*VideoFrame, error) {
 	return vf, nil
 }
 
+// ─── QualityInfo encode/decode ───────────────────────────────────────
+
+// EncodeQualityInfo encodes a QualityInfo into binary wire format.
+//
+// Wire format:
+//
+//	{type:1}{quality_len:1}{quality}
+//
+// quality is the ASCII string "main" or "sub" (#541).
+func EncodeQualityInfo(qi *QualityInfo) ([]byte, error) {
+	if qi == nil {
+		return nil, errors.New("wsstream: nil QualityInfo")
+	}
+	if len(qi.Quality) > 255 {
+		return nil, fmt.Errorf("wsstream: quality string too long: %d", len(qi.Quality))
+	}
+	buf := make([]byte, 2+len(qi.Quality))
+	buf[0] = MsgTypeQualityInfo
+	buf[1] = byte(len(qi.Quality))
+	copy(buf[2:], qi.Quality)
+	return buf, nil
+}
+
+// decodeQualityInfo decodes binary wire format into a QualityInfo.
+func decodeQualityInfo(data []byte) (*QualityInfo, error) {
+	if len(data) < 2 {
+		return nil, fmt.Errorf("wsstream: quality info too short: %d bytes", len(data))
+	}
+	if data[0] != MsgTypeQualityInfo {
+		return nil, fmt.Errorf("wsstream: expected message type 0x06, got 0x%02x", data[0])
+	}
+	qLen := int(data[1])
+	if 2+qLen > len(data) {
+		return nil, fmt.Errorf("wsstream: quality info truncated at quality string")
+	}
+	return &QualityInfo{Quality: string(data[2 : 2+qLen])}, nil
+}
+
 // ─── AudioCodecInfo encode ────────────────────────────────────────────
 
 // EncodeAudioCodecInfo encodes an AudioCodecInfo into binary wire format.

@@ -7,6 +7,7 @@ const (
 	MsgTypeAudioFrame     byte = 0x03 // audio_frame: server→client
 	MsgTypeKeyframeReq    byte = 0x04 // keyframe_request: client→server
 	MsgTypeAudioCodecInfo byte = 0x05 // audio_codec_info: server→client, sent before audio frames
+	MsgTypeQualityInfo    byte = 0x06 // quality_info: server→client, sent once at stream start (#541)
 	MsgTypeEOS            byte = 0xFF // eos: server→client, camera went offline
 )
 
@@ -66,6 +67,16 @@ type AudioCodecInfo struct {
 	// wire extension (config_len + config appended in EncodeAudioCodecInfo) is
 	// backwards-compatible.
 	Config []byte
+}
+
+// QualityInfo reports which stream variant the server is actually serving
+// ("main" or "sub"). Sent once as the first message on viewer connect when
+// quality negotiation applies (#541) — the WebSocket 101 upgrade response
+// cannot carry the X-Stream-Quality header (the upgrader writes its own
+// header set), so the negotiated outcome travels in-band instead. Clients
+// that don't know the type ignore the message (backwards-compatible).
+type QualityInfo struct {
+	Quality string // "main" or "sub"
 }
 
 // AudioFrameData contains a single audio frame's presentation timestamp,

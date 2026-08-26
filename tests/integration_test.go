@@ -1486,11 +1486,19 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	// Wait for the WebSocket connection to be established
 	time.Sleep(200 * time.Millisecond)
 
-	// --- Step 6: Read and verify CodecInfo (first message) ---
+	// --- Step 6: Read and verify QualityInfo + CodecInfo (first messages) ---
+	// QualityInfo (#541) precedes CodecInfo: the WS 101 upgrade response
+	// cannot carry X-Stream-Quality, so the negotiated quality travels in-band.
 	_, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(msg), 2, "QualityInfo message too short: %d bytes", len(msg))
+	require.Equal(t, wsstream.MsgTypeQualityInfo, msg[0], "first message should be QualityInfo")
+	require.Equal(t, "main", string(msg[2:]), "default request serves main stream")
+
+	_, msg, err = conn.ReadMessage()
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(msg), 5, "CodecInfo message too short: %d bytes", len(msg))
-	require.Equal(t, wsstream.MsgTypeCodecInfo, msg[0], "first message should be CodecInfo")
+	require.Equal(t, wsstream.MsgTypeCodecInfo, msg[0], "second message should be CodecInfo")
 
 	// --- Step 7: Broadcast frames via hub and verify VideoFrame messages ---
 	idrNALU := []byte{0x65, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}
