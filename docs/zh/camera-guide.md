@@ -996,8 +996,11 @@ cameras:
 
 最常见的场景 —— 把摄像头从一台 NVR 送到另一台，跨互联网，**无 FFmpeg**：
 
-```text
-[摄像头] ──RTSP──▶ [NVR-A] ──转推 (RTMP)──▶ [NVR-B (推流接入)] ──▶ 录像 + 直播
+```mermaid
+flowchart LR
+    Cam["摄像头"] -- RTSP --> A["NVR-A"]
+    A -- "转推 (RTMP)" --> B["NVR-B（推流接入）"]
+    B --> Out["录像 + 直播"]
 ```
 
 1. 在 **NVR-B**（接收方）：启用 RTMP 接入，添加一个推流摄像头，设好 stream key（如 `front-door-relay`）。

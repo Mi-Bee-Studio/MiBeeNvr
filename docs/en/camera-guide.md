@@ -979,8 +979,11 @@ The camera card shows a badge with active/total targets (e.g. `↑ 2/2`). In the
 
 The most common use case — sending a camera from one NVR to another across the internet, with NO FFmpeg:
 
-```text
-[Camera] ──RTSP──▶ [NVR-A] ──push-out relay (RTMP)──▶ [NVR-B (push-in ingest)] ──▶ records + live
+```mermaid
+flowchart LR
+    Cam["Camera"] -- RTSP --> A["NVR-A"]
+    A -- "push-out relay (RTMP)" --> B["NVR-B (push-in ingest)"]
+    B --> Out["Records + live"]
 ```
 
 1. On **NVR-B** (the receiver): enable RTMP ingest, add a push-in camera with a stream key (e.g. `front-door-relay`).
