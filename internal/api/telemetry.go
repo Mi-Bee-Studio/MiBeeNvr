@@ -58,13 +58,13 @@ func (h *Handler) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Aggregate before the raw log line — metrics survive log rotation.
-	if apiMetrics != nil && req.CameraID != "" {
+	if m := currentAPIMetrics(); m != nil && req.CameraID != "" {
 		protocol := telemetryProtocol(req.Details)
 		switch req.Event {
 		case "live_latency":
-			apiMetrics.SetPlaybackLiveLatency(req.CameraID, protocol, float64(req.DurationMs))
+			m.SetPlaybackLiveLatency(req.CameraID, protocol, float64(req.DurationMs))
 		case "playback_stall":
-			apiMetrics.IncPlaybackStall(req.CameraID, protocol)
+			m.IncPlaybackStall(req.CameraID, protocol)
 		}
 	}
 

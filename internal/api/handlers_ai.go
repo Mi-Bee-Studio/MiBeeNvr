@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -13,12 +14,22 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// apiMetrics holds the optional metrics instance for AI event tracking.
-var apiMetrics *metrics.Metrics
+// apiMetricsPtr holds the optional metrics instance for AI event tracking.
+// Atomic: tests swap it via SetAPIMetrics from a parallel test's cleanup while
+// other parallel tests are still serving requests that read it — a plain
+// pointer write raced those readers under -race.
+var apiMetricsPtr atomic.Pointer[metrics.Metrics]
 
 // SetAPIMetrics injects the Prometheus metrics instance into the API package.
 func SetAPIMetrics(m *metrics.Metrics) {
-	apiMetrics = m
+	apiMetricsPtr.Store(m)
+}
+
+// currentAPIMetrics snapshots the metrics instance for a single request's
+// instrumentation — readers must not touch the global repeatedly (each Load
+// may observe a different instance mid-test).
+func currentAPIMetrics() *metrics.Metrics {
+	return apiMetricsPtr.Load()
 }
 
 // handleCreateAIEvent accepts AI detection events from MiBeeVision (POST /api/ai/events).
@@ -93,8 +104,8 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 
 	id, err := h.db.InsertAIEvent(r.Context(), aiEvent)
 	if err != nil {
-		if apiMetrics != nil {
-			apiMetrics.AIEventsErrorsTotal.Inc()
+		if m := currentAPIMetrics(); m != nil {
+			m.AIEventsErrorsTotal.Inc()
 		}
 		logger.Error("failed to store AI event", "error", err, "path", r.URL.Path)
 		WriteError(w, http.StatusInternalServerError, "failed to store AI event")
@@ -102,8 +113,8 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record metrics
-	if apiMetrics != nil {
-		apiMetrics.AIEventsReceivedTotal.WithLabelValues(body.CameraID, body.EventType).Inc()
+	if m := currentAPIMetrics(); m != nil {
+		m.AIEventsReceivedTotal.WithLabelValues(body.CameraID, body.EventType).Inc()
 	}
 
 	// Publish ai.event.created event for SSE subscribers
