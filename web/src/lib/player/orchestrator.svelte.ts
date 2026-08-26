@@ -80,6 +80,11 @@ export interface CameraSlot {
   health: HealthState;
   /** True when the chain is pinned by a user override (no auto-adapt). */
   pinned: boolean;
+  /** Sub-stream capability from the last /protocols response (#513). Kept in
+   *  the REACTIVE slot (not `internal`) — H.265 cameras mount their wasm
+   *  player before the response arrives, and a non-reactive read would pin
+   *  the quality resolution to 'main' forever. */
+  sub: SubStreamDetail | null;
 }
 
 /** Callback fired when the active mode for a camera changes (degrade/upgrade). */
@@ -204,6 +209,7 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
       activeIndex: patch.activeIndex ?? prev?.activeIndex ?? 0,
       health: patch.health ?? prev?.health ?? health('ok'),
       pinned: patch.pinned ?? prev?.pinned ?? false,
+      sub: patch.sub ?? prev?.sub ?? null,
     };
     slots = { ...slots, [cameraId]: next };
     return next;
@@ -218,7 +224,7 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
     // now out of range, reset to the head. A pinned override always resets to 0.
     const prev = slots[cameraId];
     let activeIndex = pinned ? 0 : Math.min(prev?.activeIndex ?? 0, Math.max(0, chain.length - 1));
-    setSlot(cameraId, { chain, activeIndex, pinned, health: prev?.health ?? health('ok') }, prev);
+    setSlot(cameraId, { chain, activeIndex, pinned, sub: reg.resp?.sub_stream ?? null, health: prev?.health ?? health('ok') }, prev);
     clearTimers(it);
     it.okSince = null;
     it.cooldowns = {};
@@ -463,9 +469,10 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
   }
 
   function subStreamDetail(cameraId: string): SubStreamDetail | null {
-    const it = internal.get(cameraId);
-    const sub = it?.lastRegistration.resp?.sub_stream;
-    return sub ?? null;
+    // Read the REACTIVE slot (not the internal registration) — see the
+    // CameraSlot.sub comment: players mount before /protocols resolves and
+    // must re-resolve quality when it lands.
+    return slots[cameraId]?.sub ?? null;
   }
 
   function slot(cameraId: string): CameraSlot | null {
