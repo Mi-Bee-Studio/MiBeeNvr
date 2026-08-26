@@ -18,6 +18,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
 	"github.com/pion/rtp"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
@@ -377,9 +378,24 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 			}
 		}
 		r.lastPTS.Store(int64(pkt.Timestamp))
+		// Producer-side ingest breadcrumb (#482): the frame left the RTSP
+		// transport and is about to enter the hub / recorder. Frames lost
+		// between here and streamhub_in would be invisible otherwise.
+		isIDR := nalutil.IsIDR(au, true)
+		traceID := "no-trace"
+		if isIDR {
+			traceID = fmt.Sprintf("%s-%d", r.cfg.CameraID, pkt.Timestamp)
+		}
+		frametrace.Log(
+			r.cfg.CameraID,
+			"trace_id", traceID,
+			"camera_id", r.cfg.CameraID,
+			"stage", "ingest",
+			"is_idr", isIDR,
+		)
 		// Fan-out to all stream consumers (HLS, WebRTC, etc.)
 		if r.Hub != nil {
-			r.Hub.Broadcast(int64(pkt.Timestamp), au, nalutil.IsIDR(au, true))
+			r.Hub.Broadcast(int64(pkt.Timestamp), au, isIDR)
 		}
 		at := time.Now() // one arrival stamp for the whole AU (#506)
 		for _, nalu := range au {

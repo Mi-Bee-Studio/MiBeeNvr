@@ -14,6 +14,7 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
@@ -539,16 +540,16 @@ func (m *Manager) WriteH264(key string, pts int64, au [][]byte) {
 		// Non-blocking send — drop frame if buffer full
 		select {
 		case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
-			slog.Debug(
-				"frame_trace",
+			frametrace.Log(
+				key,
 				"trace_id", traceID,
 				"camera_id", key,
 				"stage", "webrtc_recv",
 				"is_idr", isKeyframe,
 			)
 		default:
-			slog.Debug(
-				"frame_trace",
+			frametrace.Log(
+				key,
 				"trace_id", traceID,
 				"camera_id", key,
 				"stage", "webrtc_drop",

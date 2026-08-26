@@ -23,6 +23,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph265"
 	"github.com/pion/rtp"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
@@ -568,8 +569,8 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 			if isIDR {
 				traceID = fmt.Sprintf("%s-%d", cameraID, frame.pts)
 			}
-			slog.Debug(
-				"frame_trace",
+			frametrace.Log(
+				cameraID,
 				"trace_id", traceID,
 				"camera_id", cameraID,
 				"stage", "hls_recv",
@@ -590,8 +591,8 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 				}
 			}
 			if err := writeFrameToMuxer(entry.isH265, entry.mux, entry.track, frame.au, frame.pts, cameraID); err != nil {
-				slog.Warn(
-					"frame_trace",
+				frametrace.LogDrop(
+					cameraID,
 					"trace_id", traceID,
 					"camera_id", cameraID,
 					"stage", "hls_error",
@@ -600,8 +601,8 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 				)
 				m.handleWriteError(ctx, cameraID, entry, err)
 			} else {
-				slog.Debug(
-					"frame_trace",
+				frametrace.Log(
+					cameraID,
 					"trace_id", traceID,
 					"camera_id", cameraID,
 					"stage", "hls_write",
@@ -927,8 +928,8 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 		if isIDR {
 			traceID = fmt.Sprintf("%s-%d", cameraID, pts)
 		}
-		slog.Debug(
-			"frame_trace",
+		frametrace.Log(
+			cameraID,
 			"trace_id", traceID,
 			"camera_id", cameraID,
 			"stage", "hls_drop",
@@ -954,8 +955,8 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 		if isIDR {
 			traceID = fmt.Sprintf("%s-%d", cameraID, pts)
 		}
-		slog.Debug(
-			"frame_trace",
+		frametrace.Log(
+			cameraID,
 			"trace_id", traceID,
 			"camera_id", cameraID,
 			"stage", "hls_drop",

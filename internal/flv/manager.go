@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
@@ -301,16 +302,16 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 	// Non-blocking send
 	select {
 	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
-		slog.Debug(
-			"frame_trace",
+		frametrace.Log(
+			camID,
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "flv_recv",
 			"is_idr", isKeyframe,
 		)
 	default:
-		slog.Debug(
-			"frame_trace",
+		frametrace.Log(
+			camID,
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "flv_drop",

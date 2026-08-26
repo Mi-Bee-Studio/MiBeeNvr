@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/gorilla/websocket"
@@ -428,8 +429,8 @@ func (m *Manager) writeFrameMsg(camID string, msg model.FrameMsg) {
 	select {
 	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe, IngestAt: msg.IngestAt}:
 		entry.sentCounter.Inc()
-		slog.Debug(
-			"frame_trace",
+		frametrace.Log(
+			camID,
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "ws_recv",
@@ -439,8 +440,8 @@ func (m *Manager) writeFrameMsg(camID string, msg model.FrameMsg) {
 		// Buffer full, drop frame
 		cnt := entry.dropCount.Add(1)
 		entry.dropCounter.Inc()
-		slog.Debug(
-			"frame_trace",
+		frametrace.LogDrop(
+			camID,
 			"trace_id", traceID,
 			"camera_id", camID,
 			"stage", "ws_drop",
