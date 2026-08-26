@@ -253,6 +253,10 @@ const (
 	HealthEventStreamAnomaly      HealthEventType = "stream_anomaly"
 	HealthEventFreezeDetected     HealthEventType = "freeze_detected"
 	HealthEventFreezeRecovered    HealthEventType = "freeze_recovered"
+	// HealthEventQualityChanged marks a Xiaomi auto quality transition
+	// (HD→SD fallback after repeated no-media failures, or the bounded
+	// SD→HD recovery probe). Issue #502.
+	HealthEventQualityChanged HealthEventType = "quality_changed"
 )
 
 // HealthReporter is the interface for reporting health events.

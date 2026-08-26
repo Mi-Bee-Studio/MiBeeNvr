@@ -23,6 +23,11 @@ const (
 	// activation_state, source}. The frontend subscribes via
 	// /api/events?filter=camera. to refresh its camera list and toast the user.
 	TopicCameraAdded = "camera.added"
+	// TopicCameraQuality is published when a Xiaomi recorder's auto quality
+	// state machine transitions (HD→SD fallback or the bounded SD→HD recovery
+	// probe, issue #502). Payload: map[string]any{camera_id, from, to, reason,
+	// model}. Surfaces via /api/events?filter=camera. like camera.added.
+	TopicCameraQuality = "camera.quality"
 	// TopicGB28181Alarm is published when a GB/T 28181 device pushes an alarm
 	// notification (SUBSCRIBE/NOTIFY Alarm, or a MESSAGE-delivered alarm).
 	// Payload: event.GB28181AlarmEvent. Surfaces via /api/events SSE.

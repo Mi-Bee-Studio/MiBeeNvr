@@ -320,10 +320,14 @@ func GetDeviceList(session *CloudSession) ([]CloudDevice, error) {
 	return raw.List, nil
 }
 
-func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, error) {
+// ResolveMISSURL resolves the miss:// P2P URL for a Xiaomi camera. The second
+// return value is the camera model: the passed-in model when set, otherwise
+// backfilled from the cloud device list (callers can cache it — issue #502:
+// production logs showed model="" because nobody persisted the lookup).
+func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, string, error) {
 	session, err := SignInWithToken(xiaomiCfg.UserID, xiaomiCfg.Token, xiaomiCfg.Region)
 	if err != nil {
-		return "", fmt.Errorf("xiaomi cloud auth: %w", err)
+		return "", model, fmt.Errorf("xiaomi cloud auth: %w", err)
 	}
 
 	// Get device LAN IP from cloud device list.
@@ -344,13 +348,13 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	}
 
 	if deviceIP == "" {
-		return "", fmt.Errorf("xiaomi: device %s has no LAN IP (not on local network or offline)", did)
+		return "", model, fmt.Errorf("xiaomi: device %s has no LAN IP (not on local network or offline)", did)
 	}
 
 	// Generate client key pair for key exchange.
 	clientPublic, clientPrivate, err := GenerateKey()
 	if err != nil {
-		return "", fmt.Errorf("generate key: %w", err)
+		return "", model, fmt.Errorf("generate key: %w", err)
 	}
 
 	// Call cloud API to get device's public key and authentication sign.
@@ -380,9 +384,10 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 		if strings.Contains(err.Error(), "no available vendor") {
 			cloudLogger.Info("legacy TUTK-only camera detected, using devicepass API",
 				"did", did, "model", model)
-			return getLegacyURL(c, did, model, deviceIP, clientPublic, clientPrivate)
+			missURL, legacyErr := getLegacyURL(c, did, model, deviceIP, clientPublic, clientPrivate)
+			return missURL, model, legacyErr
 		}
-		return "", fmt.Errorf("miss_get_vendor API: %w", err)
+		return "", model, fmt.Errorf("miss_get_vendor API: %w", err)
 	}
 
 	var resp struct {
@@ -396,7 +401,7 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 		Sign      string `json:"sign"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
-		return "", fmt.Errorf("parse miss_get_vendor response: %w", err)
+		return "", model, fmt.Errorf("parse miss_get_vendor response: %w", err)
 	}
 
 	// Map vendor ID to name (CS2=4).
@@ -426,7 +431,7 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 
 	cloudLogger.Info("resolved xiaomi MISS URL", "did", did, "ip", deviceIP, "vendor", vendorName, "model", model)
 
-	return missURL.String(), nil
+	return missURL.String(), model, nil
 }
 
 // getLegacyURL resolves MISS URL for legacy TUTK-only cameras via the /device/devicepass API.
