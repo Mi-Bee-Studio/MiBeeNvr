@@ -353,3 +353,54 @@ func TestSubLayerFilenameInfo(t *testing.T) {
 	_, codec = subLayerFilenameInfo("junk.mp4")
 	require.Empty(t, codec)
 }
+
+// Regression: teardown must not deadlock against a live frame dispatch. The
+// recorder's cleanup used to call Hub.Unsubscribe while holding r.smu, while
+// the consumer drain goroutine was inside onFrame blocked on the same lock —
+// Unsubscribe waits synchronously for the drain, so stop hung forever (CI:
+// internal/vision timed out after 5m inside this package's cleanup). Stop is
+// exercised mid-stream, several rounds, to hit the in-flight-dispatch window.
+func TestSubLayer_StopUnderFrameLoad(t *testing.T) {
+	for round := range 6 {
+		url := newTestSource(t)
+		subMgr := newSubStreamManager(t, url)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("ok"))
+		}))
+		root := t.TempDir()
+		cfg := config.VisionConfig{
+			Enabled:             true,
+			URL:                 srv.URL,
+			SubLayerCameras:     []string{"cam-1"},
+			SubLayerSegmentSecs: 1,
+			// Push rarely: this test exercises stop, not the sweep.
+			SubLayerPushIntervalSecs: 3600,
+		}
+		bus := event.NewEventBus(64)
+		c := NewCoordinator(
+			func() config.VisionConfig { return cfg },
+			func() string { return root },
+			bus,
+			nil,
+			managerProvider{subMgr},
+		)
+		require.NoError(t, c.Start(context.Background()))
+		c.Health().RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+
+		segDir := filepath.Join(root, subLayerDir, "cam-1")
+		require.Eventually(t, func() bool {
+			files, _ := listSubLayerFiles(segDir)
+			return len(files) >= 1
+		}, 15*time.Second, 100*time.Millisecond, "round %d: no sub segment materialized", round)
+
+		// Frames are flowing into onFrame right now — stop must return.
+		done := make(chan struct{})
+		go func() { c.Stop(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(20 * time.Second):
+			t.Fatalf("round %d: Stop deadlocked against in-flight frame dispatch", round)
+		}
+		srv.Close()
+	}
+}
