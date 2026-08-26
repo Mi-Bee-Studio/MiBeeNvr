@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -246,7 +247,11 @@ func TestSubLayer_RecordPushAndMainHandoff(t *testing.T) {
 	mu.Unlock()
 	require.Equal(t, "sub", first["layer"], "sub pushes carry X-Layer: sub")
 	require.Equal(t, "cam-1", first["camera"])
-	require.Equal(t, "rec-main-1", first["recording"], "sub pushes join the main recording id")
+	// The join carries a uniqueness suffix: one main recording spans multiple
+	// sub segments, and consumers dedup by X-Recording-Id — an unsuffixed id
+	// would drop every sub segment after the first (#514 field finding).
+	require.True(t, strings.HasPrefix(first["recording"], "rec-main-1#"),
+		"sub pushes join the main recording id with a # suffix, got %q", first["recording"])
 	require.Equal(t, "h264", first["format"])
 
 	// Pushed ⇒ deleted (disk queue drains).

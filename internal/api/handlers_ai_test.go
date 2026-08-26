@@ -6,6 +6,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -108,6 +109,34 @@ func TestAI_CreateEvent_DefaultSeverity(t *testing.T) {
 	b, _ := json.Marshal(map[string]string{"camera_id": "cam-1", "event_type": "loitering"})
 	rr := doRequest(t, routes, "POST", "/api/ai/events", bytes.NewBuffer(b), "admin", "p")
 	require.Equal(t, http.StatusCreated, rr.Code, "body=%s", rr.Body.String())
+}
+
+// Sub-layer pushes identify as "<mainRecordingID>#<subStartNano>" (#514) —
+// events reported against them must map back onto the main recording id.
+func TestAI_CreateEvent_StripsSubLayerSuffix(t *testing.T) {
+	t.Parallel()
+	h, routes := aiTestHandler(t, "admin", "p", "vision")
+
+	b, _ := json.Marshal(map[string]string{
+		"camera_id":    "cam-test",
+		"recording_id": "1787716624636592991#1787716544377969513",
+		"event_type":   "zone_intrusion",
+	})
+	rr := doRequest(t, routes, "POST", "/api/ai/events", bytes.NewBuffer(b), "admin", "p")
+	require.Equal(t, http.StatusCreated, rr.Code, "body=%s", rr.Body.String())
+
+	events, _, err := h.db.ListAIEvents(context.Background(), storage.AIEventFilter{CameraID: "cam-test", Limit: 10})
+	require.NoError(t, err)
+	require.NotEmpty(t, events)
+	var found bool
+	for _, e := range events {
+		if e.CameraID == "cam-test" {
+			require.Equal(t, "1787716624636592991", e.RecordingID,
+				"the #<nano> suffix must be stripped before storage")
+			found = true
+		}
+	}
+	require.True(t, found, "event row not found")
 }
 
 func TestAI_ListEvents_Empty(t *testing.T) {

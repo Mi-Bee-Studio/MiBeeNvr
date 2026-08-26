@@ -292,15 +292,21 @@ func (m *SubLayerManager) registerMeta(seg SubSegment) {
 	m.mu.Unlock()
 }
 
-// joinRecordingID picks the payload recording id: the latest main recording
-// for the camera when one exists (ai_status/ai_processed_at keep working),
-// else a synthetic id so the consumer can still dedup/report.
+// joinRecordingID picks the payload recording id: the covering main
+// recording for the camera when one exists (ai_status/ai_processed_at keep
+// working), else a synthetic id so the consumer can still dedup/report.
+//
+// The main id carries a "#<subStartNano>" suffix: consumers dedup pushes by
+// X-Recording-Id, and one 60s main recording spans multiple 30s sub segments
+// — an unsuffixed join would make every sub segment after the first look
+// like a duplicate re-push and get dropped. The NVR strips the suffix where
+// the id flows back in (AI event writeback), so the join semantics survive.
 func (m *SubLayerManager) joinRecordingID(cameraID string, startedAt time.Time) string {
 	m.mu.Lock()
 	id := m.mainIDs[cameraID]
 	m.mu.Unlock()
 	if id != "" {
-		return id
+		return id + "#" + strconv.FormatInt(startedAt.UnixNano(), 10)
 	}
 	return "sub-" + strconv.FormatInt(startedAt.UnixNano(), 10)
 }
