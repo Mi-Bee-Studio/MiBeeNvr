@@ -520,12 +520,22 @@ func (r *subLayerRecorder) run(ctx context.Context) {
 		r.smu.Lock()
 		r.stopped = ctx.Err() != nil
 		r.closeSegmentLocked()
-		r.unsubscribeLocked()
+		// Unsubscribe must run OUTSIDE smu: it waits for the hub's drain
+		// goroutine, which may be parked in onFrame's smu.Lock() — holding
+		// the mutex here self-deadlocks Stop (seen as the vision package's
+		// intermittent "test timed out" CI flake). stopped=true (set above)
+		// makes any in-flight onFrame return as soon as it gets the mutex.
+		unsubID := r.subID
+		r.subID = ""
+		unsubSrc := r.src
 		if holding {
 			r.mgr.provider.ReleaseSubStream(r.cameraID)
 			holding = false
 		}
 		r.smu.Unlock()
+		if unsubID != "" && unsubSrc != nil {
+			unsubSrc.Hub().Unsubscribe(unsubID)
+		}
 		if ctx.Err() != nil {
 			break
 		}
@@ -580,13 +590,6 @@ func (r *subLayerRecorder) record(ctx context.Context) error {
 				return fmt.Errorf("sub-stream source failed (no video track)")
 			}
 		}
-	}
-}
-
-func (r *subLayerRecorder) unsubscribeLocked() {
-	if r.src != nil && r.subID != "" {
-		r.src.Hub().Unsubscribe(r.subID)
-		r.subID = ""
 	}
 }
 
