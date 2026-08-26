@@ -26,7 +26,7 @@ func TestRebindHub(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = m.ServeWS("cam1", w, r)
+		_ = m.ServeWS("cam1", "", w, r)
 	})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()

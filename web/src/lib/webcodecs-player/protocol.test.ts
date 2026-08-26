@@ -4,6 +4,7 @@ import {
   AudioCodecId,
   decodeAudioCodecInfo,
   decodeAudioFrame,
+  decodeQualityInfo,
   type AudioCodecInfo,
 } from './protocol';
 
@@ -18,7 +19,12 @@ import {
  */
 
 /** Build a wire-format AudioCodecInfo packet (mirrors the Go encoder). */
-function buildAudioCodecInfoPacket(codec: number, sampleRate: number, channels: number, config?: Uint8Array): ArrayBuffer {
+function buildAudioCodecInfoPacket(
+  codec: number,
+  sampleRate: number,
+  channels: number,
+  config?: Uint8Array,
+): ArrayBuffer {
   const configLen = config ? config.length : 0;
   const buf = new ArrayBuffer(9 + configLen);
   const dv = new DataView(buf);

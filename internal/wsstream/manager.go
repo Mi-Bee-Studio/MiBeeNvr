@@ -615,7 +615,11 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 // ServeWS handles a WebSocket upgrade request for a camera stream.
 // On connect, it sends CodecInfo as the first message, then streams
 // VideoFrame messages as they arrive from the StreamHub.
-func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) error {
+// When quality is non-empty ("main"/"sub"), a QualityInfo message is sent
+// BEFORE CodecInfo so clients can detect sub→main fallback — the 101
+// upgrade response cannot carry X-Stream-Quality (#541). Clients that don't
+// know the message type ignore it.
+func (m *Manager) ServeWS(camID, quality string, w http.ResponseWriter, r *http.Request) error {
 	m.mu.RLock()
 	entry, ok := m.streams[camID]
 	m.mu.RUnlock()
@@ -660,6 +664,22 @@ func (m *Manager) ServeWS(camID string, w http.ResponseWriter, r *http.Request) 
 
 	// Check for audio-only mode (?audio_only=1 skips video frames)
 	audioOnly := r.URL.Query().Get("audio_only") == "1"
+
+	// QualityInfo first (#541): the WS 101 upgrade response discards headers
+	// set before Upgrade(), so X-Stream-Quality can't reach WS clients — send
+	// the negotiated quality in-band instead. Sent even to audio-only viewers;
+	// skipped entirely when the caller passes an empty quality (no negotiation).
+	if quality != "" {
+		qiData, err := EncodeQualityInfo(&QualityInfo{Quality: quality})
+		if err != nil {
+			conn.Close()
+			return err
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, qiData); err != nil {
+			conn.Close()
+			return err
+		}
+	}
 
 	// Send CodecInfo as first message (skip for audio-only viewers)
 	if !audioOnly {
@@ -852,7 +872,7 @@ var _ interface {
 	viewerCount(camID string) int
 	writeH264(camID string, pts int64, au [][]byte)
 	writeH265(camID string, pts int64, au [][]byte)
-	ServeWS(camID string, w http.ResponseWriter, r *http.Request) error
+	ServeWS(camID string, quality string, w http.ResponseWriter, r *http.Request) error
 	SetAudioInfo(camID string, codec string, muLaw bool, sampleRate int, channels int, config []byte) error
 	StopAll()
 } = (*Manager)(nil)

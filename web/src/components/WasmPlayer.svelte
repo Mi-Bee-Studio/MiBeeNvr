@@ -25,6 +25,7 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
     tabVisible = true,
     quality = 'main',
     onFallbackNeeded,
+    onQualityServed,
   }: {
     cameraId: string;
     cameraName: string;
@@ -34,10 +35,14 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
     expanded?: boolean;
     tabVisible?: boolean;
     /** Stream quality (#513) — 'sub' appends ?quality=sub to the WS URL; the
-     *  server falls back to main (X-Stream-Quality header) when the camera has
-     *  no sub stream. The decoder is configured from the SERVER's codec info,
-     *  so a sub stream whose codec differs from the main is handled. */
+     *  server falls back to main when the camera has no sub stream. The
+     *  decoder is configured from the SERVER's codec info, so a sub stream
+     *  whose codec differs from the main is handled. */
     quality?: 'main' | 'sub';
+    /** Fired once per connection with the quality the server actually served
+     *  ('main' | 'sub', #541) — reported in-band because the WS 101 upgrade
+     *  response cannot carry X-Stream-Quality. */
+    onQualityServed?: (served: 'main' | 'sub') => void;
     onFallbackNeeded?: (fallback: 'hls') => void;
   } = $props();
 
@@ -577,6 +582,11 @@ function handleWebGpuLost() {
       url: buildWsUrl(),
       onStateChange: (state: ConnectionState) => {
         updateState(state);
+      },
+      onQualityInfo: (info) => {
+        if (info.quality === 'main' || info.quality === 'sub') {
+          onQualityServed?.(info.quality);
+        }
       },
       onCodecInfo: (ci) => {
         if (!worker) return;

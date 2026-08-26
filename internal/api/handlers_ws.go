@@ -20,7 +20,9 @@ import (
 // video frames (CodecInfo first, then VideoFrame messages).
 // quality=sub (#513) registers the entry under the camera's "/sub" key and
 // streams the on-demand sub-stream; it falls back to main when the camera has
-// no usable sub-stream (X-Stream-Quality response header reports the outcome).
+// no usable sub-stream. Unlike FLV/HLS/WHEP there is no X-Stream-Quality
+// response header here (the 101 upgrade writes its own headers) — the
+// negotiated outcome is reported in-band as the first WS message (#541).
 func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -51,12 +53,17 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 
 	// quality=sub: acquire the on-demand pull and hold the reference for the
 	// whole ServeWS lifetime (the handler blocks until the viewer leaves).
+	// acquireSub stamps X-Stream-Quality for the pre-upgrade error paths, but
+	// the 101 upgrade response discards headers — the negotiated outcome is
+	// re-sent to the client in-band as the first WS message (#541).
 	key := id
+	servedQuality := qualityMain
 	var subSrc *substream.Source
 	if quality == qualitySub && h.camMgr != nil {
 		subSrc = h.acquireSub(w, r, id)
 		if subSrc != nil {
 			key = subKey(id)
+			servedQuality = qualitySub
 			defer h.camMgr.ReleaseSubStream(id)
 		}
 	}
@@ -163,10 +170,12 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	slog.Info("WS: serving", "camera_id", id, "key", key)
+	slog.Info("WS: serving", "camera_id", id, "key", key, "quality", servedQuality)
 
-	// Serve WebSocket stream (blocks until client disconnects)
-	if err := h.wsMgr.ServeWS(key, w, r); err != nil {
+	// Serve WebSocket stream (blocks until client disconnects). servedQuality
+	// is emitted as the first in-band message so clients detect sub→main
+	// fallback even though the 101 upgrade response drops headers (#541).
+	if err := h.wsMgr.ServeWS(key, servedQuality, w, r); err != nil {
 		if errors.Is(err, wsstream.ErrStreamNotActive) {
 			WriteError(w, http.StatusNotFound, "WebSocket stream not active")
 			return

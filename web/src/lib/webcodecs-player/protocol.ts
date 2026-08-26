@@ -7,6 +7,7 @@
  *   0x03 = audio_frame   (server → client)
  *   0x04 = keyframe_req  (client → server)
  *   0x05 = audio_codec_info (server → client)
+ *   0x06 = quality_info  (server → client, #541)
  *   0xff = eos           (server → client)
  *
  * All multi-byte integers are big-endian (network byte order).
@@ -22,6 +23,7 @@ export const MsgType = {
   AudioFrame: 0x03,
   KeyframeReq: 0x04,
   AudioCodecInfo: 0x05,
+  QualityInfo: 0x06,
   EOS: 0xff,
 } as const;
 
@@ -191,6 +193,35 @@ export function decodeVideoFrame(data: ArrayBuffer): VideoFrame {
   }
 
   return { pts, isKeyframe, nalus, ingestAtMs };
+}
+
+// ─── QualityInfo Decode (#541) ────────────────────────────────────────────
+
+/**
+ * QualityInfo: which stream variant the server is actually serving.
+ * Binary wire format: {type:1}{quality_len:1}{quality}
+ * Sent once as the FIRST message on connect — the WS 101 upgrade response
+ * cannot carry the X-Stream-Quality header, so the negotiated outcome
+ * (sub requested but main served = fallback) travels in-band instead.
+ */
+export interface QualityInfo {
+  quality: string; // 'main' | 'sub'
+}
+
+/** Decode a binary ArrayBuffer to a QualityInfo. */
+export function decodeQualityInfo(data: ArrayBuffer): QualityInfo {
+  if (data.byteLength < 2) {
+    throw new Error(`QualityInfo too short: ${data.byteLength} bytes`);
+  }
+  const dv = new DataView(data);
+  if (dv.getUint8(0) !== MsgType.QualityInfo) {
+    throw new Error(`Expected msg type 0x06, got 0x${dv.getUint8(0).toString(16)}`);
+  }
+  const len = dv.getUint8(1);
+  if (2 + len > data.byteLength) {
+    throw new Error('QualityInfo truncated at quality string');
+  }
+  return { quality: new TextDecoder().decode(new Uint8Array(data, 2, len)) };
 }
 
 // ─── AudioCodecInfo Decode ────────────────────────────────────────────────
