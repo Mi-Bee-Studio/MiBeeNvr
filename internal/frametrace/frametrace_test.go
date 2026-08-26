@@ -26,6 +26,7 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Unlock()
 	return nil
 }
+
 func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &prefixedHandler{inner: h, attrs: attrs}
 }
@@ -48,6 +49,7 @@ func (p *prefixedHandler) Handle(_ context.Context, r slog.Record) error {
 	r.AddAttrs(p.attrs...)
 	return p.inner.Handle(context.Background(), r)
 }
+
 func (p *prefixedHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &prefixedHandler{inner: p.inner, attrs: append(append([]slog.Attr{}, p.attrs...), attrs...)}
 }
@@ -93,7 +95,7 @@ func TestSamplingWindow(t *testing.T) {
 
 func TestEnableClampsAndDefaults(t *testing.T) {
 	until := Enable("cam1", time.Hour)
-	assert.LessOrEqual(t, until.Sub(time.Now()), MaxDuration, "duration clamped to MaxDuration")
+	assert.LessOrEqual(t, time.Until(until), MaxDuration, "duration clamped to MaxDuration")
 
 	until2 := Enable("cam1", 0) // zero → default
 	assert.True(t, Active("cam1"))
