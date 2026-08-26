@@ -416,8 +416,8 @@ func (h *Handler) handleTimelineSeekEvent(w http.ResponseWriter, r *http.Request
 	if cameraID == "" {
 		cameraID = "unknown"
 	}
-	if apiMetrics != nil {
-		apiMetrics.TimelineSeeksTotal.WithLabelValues(cameraID, seekType).Inc()
+	if m := currentAPIMetrics(); m != nil {
+		m.TimelineSeeksTotal.WithLabelValues(cameraID, seekType).Inc()
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
 }

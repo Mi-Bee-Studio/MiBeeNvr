@@ -40,6 +40,7 @@ import {
   type CameraMode,
   type BrowserCaps,
   type ProtocolsResponse,
+  type SubStreamDetail,
 } from '$lib/stream-selection';
 import { getCaps } from './capabilities-cache';
 import { clearCameraProtocolOverride } from '$lib/preferences';
@@ -110,6 +111,13 @@ export interface PlayerOrchestrator {
    * black screen (issue #108: H80 stored as h264 but streaming h265).
    */
   resolvedEncoding(cameraId: string): string;
+  /**
+   * The camera's sub-stream capability from the last /protocols response
+   * (#513) — CameraPlayer resolves the quality preference against it via
+   * effectiveQuality. Null when the camera isn't registered or the response
+   * carried no sub_stream block.
+   */
+  subStreamDetail(cameraId: string): SubStreamDetail | null;
   /** Reactive snapshot for debugging / the upgrade badge. */
   slot(cameraId: string): CameraSlot | null;
   /** Subscribe to degrade/upgrade events (for toasts). */
@@ -454,6 +462,12 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
     return resolveEncoding(it.lastRegistration.camera, it.lastRegistration.resp);
   }
 
+  function subStreamDetail(cameraId: string): SubStreamDetail | null {
+    const it = internal.get(cameraId);
+    const sub = it?.lastRegistration.resp?.sub_stream;
+    return sub ?? null;
+  }
+
   function slot(cameraId: string): CameraSlot | null {
     return slots[cameraId] ?? null;
   }
@@ -480,6 +494,7 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
     setTabVisible,
     activeMode,
     resolvedEncoding,
+    subStreamDetail,
     slot,
     onModeChange,
     coordinator,

@@ -5,28 +5,33 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/go-chi/chi/v5"
 )
 
 // --- WHEP (WebRTC-HTTP Egress Protocol) endpoints ---
 
-// handleCreateWHEPSession handles POST /api/cameras/{id}/stream/webrtc
+// handleCreateWHEPSession handles POST /api/cameras/{id}/stream/webrtc[?quality=main|sub]
 // It accepts an SDP offer and returns an SDP answer with a session URL.
+// quality=sub (#513) registers the session under the camera's "/sub" stream
+// key and feeds it from the on-demand sub-stream puller. WebRTC carries H.264
+// only, so a non-H.264 sub-stream falls back to the main stream (the
+// X-Stream-Quality response header reports what was actually served). The
+// sub-stream reference acquired here is released when the session ends —
+// the webrtc manager's onSessionEnd hook is the per-session anchor, since
+// WHEP sessions outlive this HTTP request.
 func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	// quality=sub is not wired for WHEP yet (#513 v1): WHEP sessions outlive
-	// the creating HTTP request, so the sub-stream puller's reference count
-	// has no anchor to decrement on session close — the manager needs a
-	// session-scoped release hook first. Clients get an explicit error and
-	// can use ws/flv/hls sub endpoints meanwhile. Validated before service
-	// availability so the contract is observable even with WebRTC disabled.
-	if q := r.URL.Query().Get("quality"); q != "" && q != qualityMain {
-		WriteError(w, http.StatusBadRequest,
-			"quality=sub is not supported for WebRTC yet; use stream/ws, stream.flv (?quality=sub) or stream/sub/index.m3u8")
+	// Validate request parameters before service availability (a bad
+	// quality= must not masquerade as "streaming unavailable").
+	quality, qerr := parseQuality(r)
+	if qerr != nil {
+		WriteError(w, http.StatusBadRequest, qerr.Error())
 		return
 	}
 
@@ -63,6 +68,23 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// quality=sub: acquire the on-demand pull and try to serve it. The
+	// reference pairs with the manager's onSessionEnd release; every path
+	// that does NOT create a session must release inline.
+	if quality == qualitySub && h.camMgr != nil {
+		if subSrc := h.acquireSub(w, r, id); subSrc != nil {
+			if h.tryServeWHEPSub(w, r, id, subSrc, offerSDP) {
+				return
+			}
+			// Sub stream unusable over WebRTC (non-H.264 codec or session
+			// creation failed) — release and fall through to the main path.
+			// acquireSub already stamped X-Stream-Quality: sub; rewrite it so
+			// the client sees the fallback.
+			w.Header().Set("X-Stream-Quality", qualityMain)
+			h.camMgr.ReleaseSubStream(id)
+		}
+	}
+
 	// On-demand StreamHub registration for WebRTC. The recorder's SPS picks
 	// the offered H.264 profile variant (High-profile streams need the
 	// 640028 track or browsers reject every frame — see webrtc.NewManager).
@@ -94,9 +116,52 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Build session URL for Location header
-	sessionURL := "/api/cameras/" + id + "/stream/webrtc/" + sessionID
+	writeWHEPAnswer(w, id, answerSDP, sessionID)
+}
 
+// tryServeWHEPSub attempts a quality=sub WHEP session against the acquired
+// sub-stream source. It reports whether the session was created (and the
+// response written); callers must release the sub-stream reference when it
+// returns false. On success the release is owned by the webrtc manager's
+// onSessionEnd hook.
+func (h *Handler) tryServeWHEPSub(w http.ResponseWriter, r *http.Request, id string, subSrc *substream.Source, offerSDP []byte) bool {
+	// WebRTC tracks are H.264-only — a sub-stream the camera encodes as
+	// H.265 (common: many devices switch codec families between profiles)
+	// cannot be served here. Poll briefly like the WS path: acquire waits
+	// for readiness, but codec params can lag by a keyframe interval.
+	codec, sps, _, _ := subSrc.CodecParams()
+	const whepCodecWait = 5 * time.Second
+	const whepCodecPoll = 200 * time.Millisecond
+	deadline := time.Now().Add(whepCodecWait)
+	for codec != model.FormatH264 || sps == nil {
+		if time.Now().After(deadline) {
+			logger.Info("WHEP: sub-stream not servable over WebRTC, falling back to main",
+				"camera_id", id, "codec", string(codec))
+			return false
+		}
+		time.Sleep(whepCodecPoll)
+		codec, sps, _, _ = subSrc.CodecParams()
+	}
+
+	key := subKey(id)
+	h.webrtcMgr.RegisterStream(key, subSrc.Hub(), sps)
+	answerSDP, sessionID, err := h.webrtcMgr.CreateWHEPSession(key, offerSDP)
+	if err != nil {
+		if !errors.Is(err, webrtc.ErrMaxPeersReached) {
+			logger.Error("failed to create sub WHEP session", "camera_id", id, "error", err)
+		}
+		return false
+	}
+
+	writeWHEPAnswer(w, id, answerSDP, sessionID)
+	return true
+}
+
+// writeWHEPAnswer emits the 201 + SDP + session Location for a created
+// WHEP session. The session URL carries the camera id (quality is a creation
+// parameter only — DELETE resolves by session id).
+func writeWHEPAnswer(w http.ResponseWriter, cameraID string, answerSDP []byte, sessionID string) {
+	sessionURL := "/api/cameras/" + cameraID + "/stream/webrtc/" + sessionID
 	w.Header().Set("Content-Type", "application/sdp")
 	w.Header().Set("Location", sessionURL)
 	w.WriteHeader(http.StatusCreated)

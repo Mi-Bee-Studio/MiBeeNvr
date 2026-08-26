@@ -1056,3 +1056,56 @@ func TestAudioForwarding(t *testing.T) {
 		t.Fatal("no audio RTP packets received within timeout")
 	}
 }
+
+// TestSubStreamKeySessions verifies quality=sub session bucketing (#513):
+// sessions under camID+"/sub" live independently of the main bucket (per-key
+// peer limits, camera-level PeerCount totals) and DeleteWHEPSession fires
+// onSessionEnd with the suffixed key so the app layer can release the
+// sub-stream puller reference.
+func TestSubStreamKeySessions(t *testing.T) {
+	mgr := newTestManager(t)
+	defer mgr.StopAll()
+
+	var mu sync.Mutex
+	var ended []string
+	mgr.SetOnSessionEnd(func(key string) {
+		mu.Lock()
+		defer mu.Unlock()
+		ended = append(ended, key)
+	})
+
+	mainHub := model.NewStreamHub()
+	subHub := model.NewStreamHub()
+	mgr.RegisterStream("cam-1", mainHub, nil)
+	subKey := "cam-1" + model.SubStreamKeySuffix
+	mgr.RegisterStream(subKey, subHub, nil)
+	require.Equal(t, subHub, mgr.RegisteredHub(subKey), "sub key registered on its own hub")
+	require.Equal(t, mainHub, mgr.RegisteredHub("cam-1"), "main key registration unaffected")
+
+	clientMain := newTestClient(t, false)
+	defer clientMain.close()
+	offerMain := createOfferSDP(t, clientMain.pc)
+	_, sidMain := connectWHEP(t, mgr, "cam-1", clientMain.pc, offerMain)
+
+	clientSub := newTestClient(t, false)
+	defer clientSub.close()
+	offerSub := createOfferSDP(t, clientSub.pc)
+	_, sidSub := connectWHEP(t, mgr, subKey, clientSub.pc, offerSub)
+
+	// Camera-level count spans both quality buckets.
+	require.Equal(t, 2, mgr.PeerCount("cam-1"))
+
+	// Deleting the sub session reports the SUFFIXED key — the release anchor
+	// the app wiring matches against.
+	require.NoError(t, mgr.DeleteWHEPSession(sidSub))
+	require.Equal(t, 1, mgr.PeerCount("cam-1"))
+	mu.Lock()
+	require.Equal(t, []string{subKey}, ended)
+	mu.Unlock()
+
+	require.NoError(t, mgr.DeleteWHEPSession(sidMain))
+	require.Equal(t, 0, mgr.PeerCount("cam-1"))
+	mu.Lock()
+	require.Equal(t, []string{subKey, "cam-1"}, ended)
+	mu.Unlock()
+}

@@ -17,6 +17,7 @@
     expanded = false,
     tabVisible = true,
     hasAudio = false,
+    quality = 'main',
     onProtocolFailed,
   }: {
     cameraId: string;
@@ -24,6 +25,9 @@
     expanded?: boolean;
     tabVisible?: boolean;
     hasAudio?: boolean;
+    /** Stream quality (#513) — 'sub' appends ?quality=sub; the server falls
+     *  back to main when the camera has no usable sub stream. */
+    quality?: 'main' | 'sub';
     /** Called when the player exhausts reconnects. Return true if the parent
      *  is demoting to another real-time protocol (it will remount this player);
      *  return false (or omit) to let this player fall back to a snapshot. */
@@ -296,7 +300,7 @@ let videoEventAc: AbortController | null = null;
         return;
       }
 
-      const url = `${API_BASE}/cameras/${cameraId}/stream.flv`;
+      const url = `${API_BASE}/cameras/${cameraId}/stream.flv${quality === 'sub' ? '?quality=sub' : ''}`;
       const authHeader = getAuthHeader();
 
       const player = mpegts.default.createPlayer({

@@ -46,7 +46,8 @@ type peerEntry struct {
 	audioClock   int                            // RTP clock rate for audio PTS→duration
 	lastAudioPTS int64
 	cancel       context.CancelFunc
-	camID        string
+	camID        string // owning camera (no quality suffix) — logging/metrics
+	streamKey    string // camPeers/hubSubs key: camID or camID+model.SubStreamKeySuffix (#513)
 	sessionID    string
 	lastUsed     time.Time
 	frameCh      chan model.FrameMsg
@@ -169,10 +170,10 @@ func (ct *congestionTracker) shouldSkipFrame(isIDR bool) bool {
 type Manager struct {
 	mu            sync.RWMutex
 	peers         map[string]*peerEntry       // sessionID -> entry
-	camPeers      map[string][]string         // camID -> []sessionID
-	hubSubs       map[string]*hubSubscription // camID -> subscription info
-	streamProfile map[string]string           // cameraID → H.264 fmtp variant (fmtpForProfile)
-	audioCfgs     map[string]audioConfig      // cameraID → negotiated audio (absent = video-only)
+	camPeers      map[string][]string         // streamKey -> []sessionID (main key or camID+"/sub")
+	hubSubs       map[string]*hubSubscription // streamKey -> subscription info
+	streamProfile map[string]string           // streamKey → H.264 fmtp variant (fmtpForProfile)
+	audioCfgs     map[string]audioConfig      // camID → negotiated audio (absent = video-only; main key only)
 	stopped       bool
 	api           *webrtc.API
 	maxPeers      int
@@ -182,6 +183,12 @@ type Manager struct {
 	iceServers    []webrtc.ICEServer // STUN/TURN servers for cross-network ICE; nil = LAN-only
 	drainWg       sync.WaitGroup     // tracks RTCP drain goroutines for clean shutdown
 	mets          *metrics.Metrics
+	// onSessionEnd (set once at wiring time) fires after a WHEP session was
+	// deleted, with the session's stream key. The app layer uses it to drop
+	// the sub-stream puller reference acquired for that session (#513) —
+	// WHEP sessions outlive their creating HTTP request, so this is the only
+	// reliable per-session release anchor.
+	onSessionEnd func(streamKey string)
 }
 
 // audioConfig is the per-camera audio wire format for WHEP tracks (#372).
@@ -349,17 +356,20 @@ func (m *Manager) CanHandle(codec model.Format) bool {
 	return codec == model.FormatH264
 }
 
-// RegisterStream subscribes to the recorder's StreamHub for live frames.
-// If hub is nil, this is a no-op. Safe to call multiple times for the same camID.
-// sps (optional, the recorder's codec params) selects the H.264 profile
-// variant offered for this camera's track — see NewManager's codec list.
-func (m *Manager) RegisterStream(camID string, hub *model.StreamHub, sps []byte) {
+// RegisterStream subscribes to a StreamHub for live frames. key is normally
+// the camera ID (main stream) but may carry the sub-stream suffix
+// (camID+model.SubStreamKeySuffix) when the api handler serves quality=sub —
+// main and sub entries then coexist as independent buckets. If hub is nil,
+// this is a no-op. Safe to call multiple times for the same key.
+// sps (optional, the stream's codec params) selects the H.264 profile
+// variant offered for this stream's track — see NewManager's codec list.
+func (m *Manager) RegisterStream(key string, hub *model.StreamHub, sps []byte) {
 	if hub == nil {
 		return
 	}
 	m.mu.Lock()
-	m.streamProfile[camID] = fmtpForProfile(sps)
-	if sub, ok := m.hubSubs[camID]; ok {
+	m.streamProfile[key] = fmtpForProfile(sps)
+	if sub, ok := m.hubSubs[key]; ok {
 		if sub.hub == hub {
 			m.mu.Unlock()
 			return // already registered on this hub
@@ -371,13 +381,25 @@ func (m *Manager) RegisterStream(camID string, hub *model.StreamHub, sps []byte)
 		sub.hub.Unsubscribe(sub.subID)
 		m.mu.Lock()
 	}
-	subID := "webrtc-" + camID
+	subID := "webrtc-" + key
 	_ = hub.Subscribe(subID, func(pts int64, au [][]byte) {
-		m.WriteH264(camID, pts, au)
+		m.WriteH264(key, pts, au)
 	})
-	m.hubSubs[camID] = &hubSubscription{hub: hub, subID: subID}
+	m.hubSubs[key] = &hubSubscription{hub: hub, subID: subID}
 	m.mu.Unlock()
-	logger.Info("WebRTC stream registered", "camera_id", camID)
+	logger.Info("WebRTC stream registered", "stream_key", key)
+}
+
+// RegisteredHub returns the StreamHub a stream key is currently subscribed to,
+// or nil when the key has no registration. Callers use it to detect a stale
+// hub (recycled sub-stream puller) before unregistering (#513).
+func (m *Manager) RegisteredHub(key string) *model.StreamHub {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if sub, ok := m.hubSubs[key]; ok {
+		return sub.hub
+	}
+	return nil
 }
 
 // SetAudioInfo configures the audio track offered for a camera's WHEP
@@ -443,19 +465,19 @@ func fmtpForProfile(sps []byte) string {
 	return base + "42001f"
 }
 
-// UnregisterStream unsubscribes from the recorder's StreamHub.
-func (m *Manager) UnregisterStream(camID string) {
+// UnregisterStream unsubscribes from the StreamHub registered under key.
+func (m *Manager) UnregisterStream(key string) {
 	m.mu.Lock()
-	sub, ok := m.hubSubs[camID]
+	sub, ok := m.hubSubs[key]
 	if ok {
-		delete(m.hubSubs, camID)
+		delete(m.hubSubs, key)
 	}
-	delete(m.audioCfgs, camID)
+	delete(m.audioCfgs, key)
 	m.mu.Unlock()
 	if ok {
 		sub.hub.Unsubscribe(sub.subID)
-		sub.hub.UnsubscribeAudio("webrtc-audio-" + camID)
-		logger.Info("WebRTC stream unregistered", "camera_id", camID)
+		sub.hub.UnsubscribeAudio("webrtc-audio-" + key)
+		logger.Info("WebRTC stream unregistered", "stream_key", key)
 	}
 }
 
@@ -483,11 +505,13 @@ func (m *Manager) WriteAudio(camID string, pts int64, data []byte) {
 }
 
 // WriteH264 queues an H.264 access unit for async writing to all WHEP peers
-// for the given camera. This is non-blocking — frames are dropped if a peer's
-// buffer is full to protect the recording pipeline.
-func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
+// registered under the stream key (main camera ID or a sub-stream key — the
+// hub subscription closures pass whichever key they registered under). This
+// is non-blocking — frames are dropped if a peer's buffer is full to protect
+// the recording pipeline.
+func (m *Manager) WriteH264(key string, pts int64, au [][]byte) {
 	m.mu.RLock()
-	sids := m.camPeers[camID]
+	sids := m.camPeers[key]
 	if len(sids) == 0 {
 		m.mu.RUnlock()
 		return
@@ -509,7 +533,7 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 		isKeyframe := nalutil.IsIDR(au, false)
 		traceID := "no-trace"
 		if isKeyframe {
-			traceID = fmt.Sprintf("%s-%d", camID, pts)
+			traceID = fmt.Sprintf("%s-%d", key, pts)
 		}
 
 		// Non-blocking send — drop frame if buffer full
@@ -518,7 +542,7 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 			slog.Debug(
 				"frame_trace",
 				"trace_id", traceID,
-				"camera_id", camID,
+				"camera_id", key,
 				"stage", "webrtc_recv",
 				"is_idr", isKeyframe,
 			)
@@ -526,7 +550,7 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 			slog.Debug(
 				"frame_trace",
 				"trace_id", traceID,
-				"camera_id", camID,
+				"camera_id", key,
 				"stage", "webrtc_drop",
 				"is_idr", isKeyframe,
 				"session_id", entry.sessionID,
@@ -535,11 +559,11 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 			dropCount := atomic.AddUint64(&entry.drops, 1)
 			entry.congestion.recordDropped()
 			if m.mets != nil {
-				m.mets.WebRTCFramesDropped.WithLabelValues(camID).Inc()
+				m.mets.WebRTCFramesDropped.WithLabelValues(key).Inc()
 			}
 			if dropCount%100 == 0 {
 				logger.Warn("WebRTC frames dropped",
-					"camera_id", camID,
+					"camera_id", key,
 					"session_id", entry.sessionID,
 					"total_drops", dropCount)
 			}
@@ -547,15 +571,19 @@ func (m *Manager) WriteH264(camID string, pts int64, au [][]byte) {
 	}
 }
 
-// CreateWHEPSession creates a new WHEP session for the given camera.
-// It processes the SDP offer, creates a PeerConnection with H.264 video only,
-// and returns the SDP answer and session ID.
-func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []byte, sessionID string, err error) {
+// CreateWHEPSession creates a new WHEP session for the given stream. streamKey
+// is normally the camera ID (main stream); the api handler passes the
+// sub-stream key (camID+model.SubStreamKeySuffix) for quality=sub sessions —
+// main and sub sessions live in independent peer buckets. It processes the SDP
+// offer, creates a PeerConnection with H.264 video only, and returns the SDP
+// answer and session ID.
+func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSDP []byte, sessionID string, err error) {
+	camID := strings.TrimSuffix(streamKey, model.SubStreamKeySuffix)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check peer limit for this camera
-	if len(m.camPeers[camID]) >= m.maxPeers {
+	// Check peer limit for this stream
+	if len(m.camPeers[streamKey]) >= m.maxPeers {
 		return nil, "", ErrMaxPeersReached
 	}
 
@@ -572,7 +600,7 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 	// Create H.264 video track. The SDP fmtp mirrors the camera's actual
 	// stream profile so browsers negotiate a decoder that accepts it.
 	// (CreateWHEPSession already holds m.mu — do not re-lock.)
-	profileFmtp := m.streamProfile[camID]
+	profileFmtp := m.streamProfile[streamKey]
 	if profileFmtp == "" {
 		profileFmtp = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
 	}
@@ -723,6 +751,7 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 		audioClock: audioClock,
 		cancel:     cancel,
 		camID:      camID,
+		streamKey:  streamKey,
 		sessionID:  sid,
 		lastUsed:   time.Now(),
 		frameCh:    make(chan model.FrameMsg, m.frameBufSize),
@@ -733,9 +762,9 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 	}
 
 	m.peers[sid] = entry
-	m.camPeers[camID] = append(m.camPeers[camID], sid)
+	m.camPeers[streamKey] = append(m.camPeers[streamKey], sid)
 	if m.mets != nil {
-		m.mets.WebRTCActivePeers.WithLabelValues(camID).Set(float64(len(m.camPeers[camID])))
+		m.mets.WebRTCActivePeers.WithLabelValues(camID).Set(float64(len(m.camPeers[streamKey])))
 	}
 
 	// Start async frame writer goroutine
@@ -749,7 +778,7 @@ func (m *Manager) CreateWHEPSession(camID string, offerSDP []byte) (answerSDP []
 	// Start idle watchdog goroutine
 	go m.idleWatchdog(ctx, entry)
 
-	logger.Info("WHEP session created", "camera_id", camID, "session_id", sid, "audio", audioTrack != nil)
+	logger.Info("WHEP session created", "camera_id", camID, "stream_key", streamKey, "session_id", sid, "audio", audioTrack != nil)
 	if audioTrack == nil {
 		// Video-only peer: pion leaves the offered audio m-line answerable
 		// (port 9 + engine codecs) even without a track — reject it
@@ -770,26 +799,28 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 	}
 	delete(m.peers, sessionID)
 
-	// Remove session from camera's peer list
-	sids := m.camPeers[entry.camID]
+	// Remove session from its stream's peer list
+	sids := m.camPeers[entry.streamKey]
 	for i, sid := range sids {
 		if sid == sessionID {
-			m.camPeers[entry.camID] = append(sids[:i], sids[i+1:]...)
+			m.camPeers[entry.streamKey] = append(sids[:i], sids[i+1:]...)
 			break
 		}
 	}
+	camID := entry.camID
+	key := entry.streamKey
 	if m.mets != nil {
-		if len(m.camPeers[entry.camID]) == 0 {
-			m.mets.WebRTCActivePeers.DeleteLabelValues(entry.camID)
+		cameraTotal := len(m.camPeers[camID]) + len(m.camPeers[camID+model.SubStreamKeySuffix])
+		if cameraTotal == 0 {
+			m.mets.WebRTCActivePeers.DeleteLabelValues(camID)
 		} else {
-			m.mets.WebRTCActivePeers.WithLabelValues(entry.camID).Set(float64(len(m.camPeers[entry.camID])))
+			m.mets.WebRTCActivePeers.WithLabelValues(camID).Set(float64(cameraTotal))
 		}
 	}
-	if len(m.camPeers[entry.camID]) == 0 {
-		delete(m.camPeers, entry.camID)
+	if len(m.camPeers[key]) == 0 {
+		delete(m.camPeers, key)
 	}
-	camID := entry.camID
-	_, hasSub := m.hubSubs[camID]
+	_, hasSub := m.hubSubs[key]
 	m.mu.Unlock()
 
 	if hasSub {
@@ -801,10 +832,10 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 				m.mu.RUnlock()
 				return
 			}
-			remaining := len(m.camPeers[camID])
+			remaining := len(m.camPeers[key])
 			m.mu.RUnlock()
 			if remaining == 0 {
-				m.UnregisterStream(camID)
+				m.UnregisterStream(key)
 			}
 		}()
 	}
@@ -814,7 +845,15 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 		_ = entry.pc.Close()
 	}
 
-	logger.Info("WHEP session deleted", "camera_id", entry.camID, "session_id", sessionID)
+	// Session-scoped teardown hook (#513): the api handler acquires a
+	// sub-stream reference per quality=sub session; this is the symmetric
+	// release anchor. Fired once per successful delete — the map delete under
+	// the lock guarantees single delivery.
+	if m.onSessionEnd != nil {
+		m.onSessionEnd(key)
+	}
+
+	logger.Info("WHEP session deleted", "camera_id", entry.camID, "stream_key", key, "session_id", sessionID)
 	return nil
 }
 
@@ -1011,17 +1050,25 @@ func (m *Manager) idleWatchdog(ctx context.Context, entry *peerEntry) {
 	}
 }
 
-// activePeerCount returns the number of active WHEP peers for the given camera.
+// activePeerCount returns the number of active WHEP peers for the given
+// camera across BOTH quality buckets (main + sub) — viewers count per camera,
+// not per stream key.
 func (m *Manager) activePeerCount(camID string) int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.camPeers[camID])
+	return len(m.camPeers[camID]) + len(m.camPeers[camID+model.SubStreamKeySuffix])
 }
 
 // PeerCount returns the number of active WHEP peers for the given camera
 // (public — used by the /api/streams flow view, #469).
 func (m *Manager) PeerCount(camID string) int {
 	return m.activePeerCount(camID)
+}
+
+// SetOnSessionEnd registers the per-session teardown hook fired from
+// DeleteWHEPSession (#513). Set once at wiring time, before traffic arrives.
+func (m *Manager) SetOnSessionEnd(cb func(streamKey string)) {
+	m.onSessionEnd = cb
 }
 
 // totalPeerCount returns the total number of active WHEP sessions across all cameras.

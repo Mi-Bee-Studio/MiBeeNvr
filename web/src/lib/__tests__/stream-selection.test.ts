@@ -7,6 +7,7 @@ import {
   isProtocolUsable,
   isAudioCapable,
   buildCandidateChain,
+  effectiveQuality,
   EMPTY_CAPS,
   type ProtocolsResponse,
 } from '$lib/stream-selection';
@@ -388,5 +389,57 @@ describe('buildCandidateChain', () => {
     const cam = makeCamera({ protocol: 'rtsp', encoding: 'h264' });
     const chain = buildCandidateChain(cam, null, EMPTY_CAPS);
     expect(chain.map((c) => c.mode)).toEqual(['hls']);
+  });
+});
+
+// ─── effectiveQuality (#513) ────────────────────────────────────────────────
+
+describe('effectiveQuality', () => {
+  const sub = { available: true };
+  const capsNoMSE = { h265MSE: false };
+  const capsMSE = { h265MSE: true };
+
+  it('stays on main when the preference is main', () => {
+    expect(effectiveQuality('wasm', 'main', sub, capsNoMSE)).toBe('main');
+  });
+
+  it('stays on main when the camera has no sub stream', () => {
+    expect(effectiveQuality('wasm', 'sub', { available: false }, capsNoMSE)).toBe('main');
+    expect(effectiveQuality('webrtc', 'sub', null, capsNoMSE)).toBe('main');
+  });
+
+  it('uses sub for webrtc and wasm regardless of sub codec', () => {
+    // WHEP falls back server-side for non-H.264 subs; the WS player's decoder
+    // is driven by the server's codec info.
+    expect(effectiveQuality('webrtc', 'sub', sub, capsNoMSE)).toBe('sub');
+    expect(effectiveQuality('wasm', 'sub', { available: true, codec: 'h265' }, capsNoMSE)).toBe('sub');
+  });
+
+  it('uses sub for flv/hls when the known sub codec is h264', () => {
+    expect(effectiveQuality('flv', 'sub', { available: true, codec: 'h264' }, capsNoMSE)).toBe('sub');
+    expect(effectiveQuality('hls', 'sub', { available: true, codec: 'h264' }, capsNoMSE)).toBe('sub');
+  });
+
+  it('blocks sub for flv/hls when the sub codec is h265 and MSE cannot decode it', () => {
+    // The black-tile guard: mpegts.js/hls.js on Chromium MSE cannot decode
+    // H.265 — serving the H.265 sub would render permanent black.
+    expect(effectiveQuality('flv', 'sub', { available: true, codec: 'h265' }, capsNoMSE)).toBe('main');
+    expect(effectiveQuality('hls', 'sub', { available: true, codec: 'h265' }, capsNoMSE)).toBe('main');
+  });
+
+  it('blocks sub for flv/hls while the sub codec is unknown (not yet pulled)', () => {
+    expect(effectiveQuality('flv', 'sub', sub, capsNoMSE)).toBe('main');
+    expect(effectiveQuality('hls', 'sub', sub, capsNoMSE)).toBe('main');
+  });
+
+  it('uses sub for flv/hls when MSE decodes H.265 (codec unknown is fine)', () => {
+    expect(effectiveQuality('flv', 'sub', sub, capsMSE)).toBe('sub');
+    expect(effectiveQuality('hls', 'sub', { available: true, codec: 'h265' }, capsMSE)).toBe('sub');
+  });
+
+  it('returns main for modes without a quality dimension', () => {
+    for (const mode of ['mjpeg', 'snapshot', 'unsupported', null] as const) {
+      expect(effectiveQuality(mode as any, 'sub', sub, capsMSE)).toBe('main');
+    }
   });
 });

@@ -19,6 +19,7 @@
     tabVisible = true,
     onProtocolFailed,
     hasAudio = false,
+    quality = 'main',
   }: {
     cameraId: string;
     cameraName: string;
@@ -30,6 +31,10 @@
     /** Whether this camera can produce an audio track. When false the audio
      *  button is hidden (MJPEG/JPEG cameras are video-only; audio_enabled off). */
     hasAudio?: boolean;
+    /** Stream quality (#513) — 'sub' appends ?quality=sub to the WHEP POST;
+     *  the server falls back to the main stream (X-Stream-Quality header)
+     *  when the sub stream isn't H.264 (WebRTC tracks are H.264-only). */
+    quality?: 'main' | 'sub';
   } = $props();
 
   // Reconnection coordinator from Dashboard context
@@ -460,12 +465,15 @@ let destroyed = false;
       const whepTimeout = setTimeout(() => whepAbort.abort(), 10000);
       let response: Response;
       try {
-        response = await fetch(`${API_BASE}/cameras/${cameraId}/stream/webrtc`, {
+      response = await fetch(
+        `${API_BASE}/cameras/${cameraId}/stream/webrtc${quality === 'sub' ? '?quality=sub' : ''}`,
+        {
           method: 'POST',
           headers,
           body: peerConnection.localDescription!.sdp,
           signal: whepAbort.signal,
-        });
+        },
+      );
       } finally {
         clearTimeout(whepTimeout);
       }

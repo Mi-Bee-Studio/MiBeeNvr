@@ -11,6 +11,14 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
+// SubStreamKeySuffix is appended to a camera ID to form the protocol-manager
+// stream key under which a camera's on-demand sub-stream egress is registered
+// (#513). Managers key entries by opaque strings, so the suffixed key reuses
+// their machinery unchanged; the suffix lives here so the webrtc manager
+// (camera-level peer counts) and the app wiring (session-end → sub-stream
+// release) agree with the api layer's subKey helper.
+const SubStreamKeySuffix = "/sub"
+
 // FrameCallback is called for each decoded video frame.
 // Implementations MUST be non-blocking — if the internal buffer is full,
 // frames are dropped silently to protect the recording pipeline.
