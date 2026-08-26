@@ -63,6 +63,7 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 		CloudCfg:          cloudCfg,
 		SegmentDur:        30 * time.Second,
 		DB:                db,
+		HealthDB:          db, // quality-change health events (issue #502)
 		AudioEnabled:      cfg.AudioEnabled,
 		AudioInRecordings: cfg.AudioInRecordings,
 		Channel:           cfg.Channel,
