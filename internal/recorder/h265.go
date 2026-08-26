@@ -349,7 +349,9 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	}
 
 	frameAlive := make(chan struct{}, 1)
-	r.frameCh = make(chan framePacket, r.cfg.RingBufCap)
+	ch := make(chan framePacket, r.cfg.RingBufCap)
+	r.frameCh = ch
+	r.frameChPtr.Store(&ch)
 	r.dropped.Store(0)
 	// Arm the adaptive tracker + audio-trigger runtime BEFORE the writer
 	// goroutine and the audio callbacks start (issue #478: the audio

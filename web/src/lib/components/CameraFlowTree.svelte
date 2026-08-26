@@ -181,6 +181,28 @@
                 {#if !isRecording}{t('flow.recordOff')}{:else if live}{t('flow.recording')}{:else}{t('flow.noFrames')}{/if}
               </span>
               <span class="node-line dim">{rate.kbps} kbps → {t('flow.disk')}</span>
+              {#if stream.recording}
+                {#if stream.recording.segmenting && stream.recording.segment_dur_s}
+                  <span class="node-line dim">
+                    {t('flow.segProgress', {
+                      elapsed: stream.recording.segment_elapsed_s?.toFixed(0) ?? '0',
+                      dur: stream.recording.segment_dur_s.toFixed(0),
+                      frames: stream.recording.segment_frames ?? 0,
+                    })}
+                  </span>
+                {/if}
+                {#if stream.recording.ring_buf_cap > 0}
+                  <span
+                    class="node-line dim"
+                    class:t-warn={stream.recording.ring_buf_len / stream.recording.ring_buf_cap > 0.5}
+                  >
+                    {t('flow.ringWater', { len: stream.recording.ring_buf_len, cap: stream.recording.ring_buf_cap })}
+                  </span>
+                {/if}
+              {/if}
+              {#if stream.merge_pending !== undefined && stream.merge_pending > 0}
+                <span class="node-line dim">{t('flow.mergePending', { n: stream.merge_pending })}</span>
+              {/if}
             </div>
           </div>
         {/if}

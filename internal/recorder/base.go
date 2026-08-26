@@ -311,8 +311,12 @@ type baseRecorder struct {
 
 	// Frame pipeline (written from RTP callback goroutine, read from writeFrames).
 	frameCh chan framePacket
-	dropped atomic.Int64
-	lastPTS atomic.Int64 // for PTS monotonicity check
+	// frameChPtr is the race-free read side of frameCh for RecordingStats:
+	// the plain field is reassigned at run() start while stats readers (the
+	// flow API) may sample concurrently; senders keep using frameCh directly.
+	frameChPtr atomic.Pointer[chan framePacket]
+	dropped    atomic.Int64
+	lastPTS    atomic.Int64 // for PTS monotonicity check
 
 	// Stream fan-out to HLS, WebRTC, etc. Initialized by camera manager
 	// via initStreamHub(). Non-blocking broadcasts.
@@ -1157,4 +1161,49 @@ func (b *baseRecorder) recoverPanic(where string) {
 			"panic", panicErr,
 			"stack", string(buf))
 	}
+}
+
+// RecordingStats is the recording-branch snapshot for the flow API (#480):
+// current segment progress plus the frameCh ring-buffer water level. All
+// reads are lock-light (mutex only for the segment triplet, atomics for the
+// ring) so the flow endpoint can poll it without disturbing recording.
+type RecordingStats struct {
+	// Segmenting is true while an MP4 segment is open.
+	Segmenting bool `json:"segmenting"`
+	// SegmentDurS is the configured target segment duration in seconds.
+	SegmentDurS float64 `json:"segment_dur_s,omitempty"`
+	// SegmentElapsedS is how long the current segment has been recording
+	// (arrival axis). Progress = elapsed / segment_dur_s.
+	SegmentElapsedS float64 `json:"segment_elapsed_s,omitempty"`
+	// SegmentFrames is the number of samples written into the current segment.
+	SegmentFrames int64 `json:"segment_frames,omitempty"`
+	// RingLen/RingCap is the frameCh watermark (len/cap) — how close the
+	// recorder's write loop is to falling behind the RTP callback rate.
+	RingLen int `json:"ring_buf_len"`
+	RingCap int `json:"ring_buf_cap"`
+	// RingDropsTotal mirrors nvr_recorder_ring_buffer_drops_total.
+	RingDropsTotal int64 `json:"ring_buf_drops_total"`
+}
+
+// RecordingStats snapshots the recording branch. Implemented on baseRecorder,
+// so every recorder embedding it (H.264/H.265) exposes it; the flow handler
+// discovers it via the RecordingStatsProvider interface and simply omits the
+// section for recorders that don't.
+func (b *baseRecorder) RecordingStats() RecordingStats {
+	st := RecordingStats{
+		SegmentDurS:    b.cfg.SegmentDur.Seconds(),
+		RingCap:        b.cfg.RingBufCap,
+		RingDropsTotal: b.dropped.Load(),
+	}
+	if ch := b.frameChPtr.Load(); ch != nil {
+		st.RingLen = len(*ch)
+	}
+	b.mu.Lock()
+	if b.muxer != nil {
+		st.Segmenting = true
+		st.SegmentElapsedS = time.Since(b.segStart).Seconds()
+		st.SegmentFrames = int64(b.frameCount)
+	}
+	b.mu.Unlock()
+	return st
 }
