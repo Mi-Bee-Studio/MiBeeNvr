@@ -44,6 +44,10 @@ type FlowCamera struct {
 	// queue for this camera (#480; mirrors nvr_merge_pending_segments).
 	// Omitted when the merge manager isn't wired.
 	MergePending *int `json:"merge_pending,omitempty"`
+	// FLVClockMs is the wallclock base (unix ms) the FLV tag StreamID
+	// ingest deltas are measured from — players combine it with the delta
+	// to compute end-to-end live latency (#481). 0/omitted = no FLV entry.
+	FLVClockMs int64 `json:"flv_clock_ms,omitempty"`
 }
 
 // recordingStatsProvider is implemented by recorders embedding baseRecorder
@@ -151,6 +155,7 @@ func (h *Handler) buildFlowCamera(cameraID string, hub *model.StreamHub, status 
 	}
 	if h.flvMgr != nil {
 		fc.Viewers["flv"] = h.flvMgr.ViewerCount(cameraID)
+		fc.FLVClockMs = h.flvMgr.ClockMs(cameraID)
 	}
 	if h.webrtcMgr != nil {
 		fc.Viewers["webrtc"] = h.webrtcMgr.PeerCount(cameraID)

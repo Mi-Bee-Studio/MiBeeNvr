@@ -141,7 +141,7 @@ func TestVideoFrameTag_H264(t *testing.T) {
 	pts := int64(90000) // 1 second at 90kHz
 	isKeyframe := true
 
-	tag := videoFrameTag(model.FormatH264, nalus, pts, isKeyframe)
+	tag := videoFrameTag(model.FormatH264, nalus, pts, isKeyframe, flvIngestUnknown)
 	require.NotNil(t, tag)
 
 	// Tag type: video
@@ -175,7 +175,7 @@ func TestVideoFrameTag_H265(t *testing.T) {
 	pts := int64(45000)
 	isKeyframe := true
 
-	tag := videoFrameTag(model.FormatH265, nalus, pts, isKeyframe)
+	tag := videoFrameTag(model.FormatH265, nalus, pts, isKeyframe, flvIngestUnknown)
 	require.NotNil(t, tag)
 
 	// FrameType + CodecID: 0x1C (keyframe + HEVC)
@@ -189,7 +189,7 @@ func TestVideoFrameTag_NonKeyframe(t *testing.T) {
 	pts := int64(3000)
 	isKeyframe := false
 
-	tag := videoFrameTag(model.FormatH264, nalus, pts, isKeyframe)
+	tag := videoFrameTag(model.FormatH264, nalus, pts, isKeyframe, flvIngestUnknown)
 
 	// FrameType + CodecID: 0x27 (inter-frame + AVC)
 	require.Equal(t, byte(0x27), tag[11])

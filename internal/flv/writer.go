@@ -25,6 +25,12 @@ const (
 	avcPacketTypeEndOfSequence  = 0x02
 )
 
+// flvIngestUnknown is the StreamID sentinel for "no ingest wallclock"
+// (source had no IngestAt, or the offset exceeded the 3-byte ms range —
+// ~4.6h, which only multi-day streams can exceed). Players treat it as
+// "latency unknown" and keep the last known value (#481).
+const flvIngestUnknown = 0xFFFFFF
+
 // Frame type masks.
 const (
 	frameTypeKeyframe   = 0x10
@@ -210,7 +216,7 @@ func h265SequenceHeader(vps, sps, pps []byte) []byte {
 // videoData slice, then the flvTag buffer). The shared buffer is sent to multiple viewers
 // and cached in gopCache, so a sync.Pool is unsafe here — but collapsing the build into
 // one allocation still cuts per-frame GC pressure by ~⅔.
-func videoFrameTag(codec model.Format, nalus [][]byte, pts int64, isKeyframe bool) []byte {
+func videoFrameTag(codec model.Format, nalus [][]byte, pts int64, isKeyframe bool, ingestDeltaMs int64) []byte {
 	// Convert PTS from 90kHz to milliseconds
 	tsMs := pts / 90
 
@@ -236,10 +242,11 @@ func videoFrameTag(codec model.Format, nalus [][]byte, pts int64, isKeyframe boo
 	buf[5] = byte(ts >> 8)
 	buf[6] = byte(ts)
 	buf[7] = byte(tsMs >> 24) // timestamp extended
-	// StreamID: always 0
-	buf[8] = 0x00
-	buf[9] = 0x00
-	buf[10] = 0x00
+	// StreamID: spec-required 0; we carry the ingest wallclock offset here
+	// (#481) — receivers ignore the field, our player demuxes it.
+	buf[8] = byte(ingestDeltaMs >> 16)
+	buf[9] = byte(ingestDeltaMs >> 8)
+	buf[10] = byte(ingestDeltaMs)
 
 	// Video tag data starting at offset 11: frameType+codecID + packetType + compositionTime
 	var frameTypeAndCodec byte

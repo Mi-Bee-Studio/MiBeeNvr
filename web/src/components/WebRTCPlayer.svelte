@@ -8,6 +8,8 @@
   import { getSnapshotUrl } from '$lib/api/cameras';
   import { captureFrame } from '$lib/freeze-frame';
   import { sendTelemetry } from '$lib/telemetry';
+  import { apiRequest } from '$lib/api';
+  import { LiveLatencyTracker, latencyBadgeClass } from '$lib/live-latency.svelte';
   import type { StreamState } from '$lib/hls-errors';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
   import { createStateDispatcher } from '$lib/player/dispatch';
@@ -36,6 +38,38 @@
      *  when the sub stream isn't H.264 (WebRTC tracks are H.264-only). */
     quality?: 'main' | 'sub';
   } = $props();
+
+  // Approximate end-to-end live latency (#481): WebRTC has no in-band
+  // ingest stamp readable from the browser (RTP header extensions aren't
+  // exposed), so we use the camera's hub-ingest age from the flow snapshot
+  // — captures camera→NVR staleness; the jitter-buffer adds ~100-300ms
+  // on top. Displayed with the same badge/thresholds as the exact paths.
+  const latency = new LiveLatencyTracker(cameraId, 'webrtc');
+  let latencyTimer: ReturnType<typeof setInterval> | null = null;
+  let lastIngestAtMs = 0;
+
+  function startLatencyTracking() {
+    if (latencyTimer) return;
+    const poll = async () => {
+      try {
+        const flow = await apiRequest<{ last_frame_at?: string }>('/cameras/' + cameraId + '/flow');
+        const at = flow?.last_frame_at ? Date.parse(flow.last_frame_at) : 0;
+        if (at > 0) lastIngestAtMs = at;
+      } catch {
+        /* flow unavailable — latency pauses */
+      }
+    };
+    void poll();
+    latencyTimer = setInterval(() => {
+      void poll();
+      latency.track(lastIngestAtMs);
+    }, 3000);
+  }
+
+  function stopLatencyTracking() {
+    if (latencyTimer) clearInterval(latencyTimer);
+    latencyTimer = null;
+  }
 
   // Reconnection coordinator from Dashboard context
   const coordinator = getContext<ReconnectCoordinator | undefined>('reconnect-coordinator');
@@ -388,6 +422,7 @@ let destroyed = false;
           const onPlaying = () => {
             firstFramePlayed = true;
             reconnectAttempts = 0;
+            startLatencyTracking();
             // A real frame arrived — clear the connection-establishment timeout.
             if (connectTimeoutTimer) { clearTimeout(connectTimeoutTimer); connectTimeoutTimer = null; }
             videoEl?.removeEventListener('playing', onPlaying);
@@ -574,6 +609,7 @@ let destroyed = false;
   onDestroy(() => {
     destroyed = true;
     stopSnapshotMode();
+    stopLatencyTracking();
     if (coordinatedTimer) { clearTimeout(coordinatedTimer); coordinatedTimer = null; }
     if (coordinator) coordinator.cancelRequest(cameraId);
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
@@ -662,6 +698,14 @@ let destroyed = false;
     >
       {t('live.videoUnsupportedTag')}
     </video>
+    {#if latency.value != null}
+      <span
+        class="absolute top-1.5 left-2 text-xs tabular-nums z-20 {latencyBadgeClass(latency.value)}"
+        title={t('flow.liveLatency')}
+      >
+        ≈{(latency.value / 1000).toFixed(1)}s
+      </span>
+    {/if}
   {/if}
 
   <!-- Overlay -->

@@ -15,6 +15,7 @@
   import { captureFrame } from '$lib/freeze-frame';
   import type { ReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
   import { createStateDispatcher } from '$lib/player/dispatch';
+  import { LiveLatencyTracker, latencyBadgeClass } from '$lib/live-latency.svelte';
 
   let {
     cameraId,
@@ -67,6 +68,24 @@
   let streamState: StreamState | 'loading' = $state('loading');
   let videoEl: HTMLVideoElement | undefined = $state();
   let hlsInstance: any = null;
+  // Approximate live latency (#481): HLS has no in-band ingest stamp —
+  // hls.js `latency` (playlist edge − playhead, i.e. buffered segments ×
+  // duration) is the accepted approximation. Live protocol only.
+  const latency = new LiveLatencyTracker(cameraId, 'hls');
+  let latencyTimer: ReturnType<typeof setInterval> | null = null;
+
+  function startLatencyTracking() {
+    if (latencyTimer || !hlsInstance) return;
+    latencyTimer = setInterval(() => {
+      const l = hlsInstance?.latency;
+      if (typeof l === 'number' && l > 0) latency.trackLatencyMs(l * 1000);
+    }, 2000);
+  }
+
+  function stopLatencyTracking() {
+    if (latencyTimer) clearInterval(latencyTimer);
+    latencyTimer = null;
+  }
   let HlsConstructor: any = null;
   let recreateAttempts = { value: 0 };
   let zombieCleanup: (() => void) | null = null;
@@ -279,6 +298,7 @@
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         videoEl?.play().catch(() => {});
+        if (protocol === 'hls') startLatencyTracking();
       });
     } catch (e) { console.warn('HLS init failed:', e);
 streamState = 'error';
@@ -346,6 +366,7 @@ streamState = 'error';
     if (freezeClearTimer) { clearTimeout(freezeClearTimer); freezeClearTimer = null; }
     frozenFrameUrl = null;
     stateDispatcher.dispose();
+    stopLatencyTracking();
     destroyCurrentHls();
     destroyCurrentHls();
   });
@@ -407,6 +428,14 @@ streamState = 'error';
   >
     {t('live.videoUnsupportedTag')}
   </video>
+  {#if protocol === 'hls' && latency.value != null}
+    <span
+      class="absolute top-1.5 left-2 text-xs tabular-nums z-20 {latencyBadgeClass(latency.value)}"
+      title={t('flow.liveLatency')}
+    >
+      ≈{(latency.value / 1000).toFixed(1)}s
+    </span>
+  {/if}
 
   <!-- Overlay layer with CSS transition -->
   <div
