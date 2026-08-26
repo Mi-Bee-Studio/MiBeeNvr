@@ -31,13 +31,13 @@ type deadlineRecorder struct {
 	deadlineCalls int
 }
 
-func (d *deadlineRecorder) Write(b []byte) (int, error)         { d.written += len(b); return len(b), nil }
-func (d *deadlineRecorder) Read(_ []byte) (int, error)          { return 0, io.EOF }
-func (d *deadlineRecorder) Close() error                        { return nil }
-func (d *deadlineRecorder) LocalAddr() net.Addr                 { return nil }
-func (d *deadlineRecorder) RemoteAddr() net.Addr                { return nil }
-func (d *deadlineRecorder) SetDeadline(_ time.Time) error       { return nil }
-func (d *deadlineRecorder) SetReadDeadline(_ time.Time) error   { return nil }
+func (d *deadlineRecorder) Write(b []byte) (int, error)       { d.written += len(b); return len(b), nil }
+func (d *deadlineRecorder) Read(_ []byte) (int, error)        { return 0, io.EOF }
+func (d *deadlineRecorder) Close() error                      { return nil }
+func (d *deadlineRecorder) LocalAddr() net.Addr               { return nil }
+func (d *deadlineRecorder) RemoteAddr() net.Addr              { return nil }
+func (d *deadlineRecorder) SetDeadline(_ time.Time) error     { return nil }
+func (d *deadlineRecorder) SetReadDeadline(_ time.Time) error { return nil }
 func (d *deadlineRecorder) SetWriteDeadline(t time.Time) error {
 	d.deadlineCalls++
 	d.deadlineSet = true
