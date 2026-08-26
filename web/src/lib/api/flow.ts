@@ -42,6 +42,19 @@ export interface FlowStream {
   width?: number;
   height?: number;
   viewers: Record<string, number>;
+  /** Recording-branch snapshot (#480); absent when the recorder doesn't
+   *  expose stats or no recorder is running. */
+  recording?: {
+    segmenting: boolean;
+    segment_dur_s?: number;
+    segment_elapsed_s?: number;
+    segment_frames?: number;
+    ring_buf_len: number;
+    ring_buf_cap: number;
+    ring_buf_drops_total: number;
+  };
+  /** Segments waiting in the rolling-merge queue (#480). */
+  merge_pending?: number;
 }
 
 export interface FlowStreamsResponse {
