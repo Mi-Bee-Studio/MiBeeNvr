@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,6 +52,10 @@ type streamEntry struct {
 	cancel    context.CancelFunc
 	hub       *model.StreamHub
 	hubSubID  string
+	// clockBase is the unix-ms wallclock this entry's FLV tag StreamID
+	// deltas are measured from (#481). Fixed at registration so the shared
+	// per-frame tag encodes a viewer-independent ingest offset.
+	clockBase atomic.Int64
 }
 
 // viewerConn represents a connected FLV client.
@@ -145,12 +150,15 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 		hub:       hub,
 	}
 
-	// Subscribe to recorder's StreamHub for live frames
+	// Subscribe with the full FrameMsg so the hub-entry wallclock (IngestAt)
+	// reaches the wire — the StreamID field of every video tag carries the
+	// ingest offset from clockBase (#481, end-to-end latency for FLV).
+	entry.clockBase.Store(time.Now().UnixMilli())
 	if hub != nil {
 		hubSubID := "flv-" + camID
 		entry.hubSubID = hubSubID
-		_ = hub.Subscribe(hubSubID, func(pts int64, au [][]byte) {
-			m.writeFrame(camID, pts, au)
+		_ = hub.SubscribeMsg(hubSubID, func(msg model.FrameMsg) {
+			m.writeFrameMsg(camID, msg)
 		})
 	}
 
@@ -227,8 +235,8 @@ func (m *Manager) RebindHub(camID string, hub *model.StreamHub) {
 	if oldHub != nil && subID != "" {
 		oldHub.Unsubscribe(subID)
 	}
-	if hub.Subscribe(subID, func(pts int64, au [][]byte) {
-		m.writeFrame(camID, pts, au)
+	if hub.SubscribeMsg(subID, func(msg model.FrameMsg) {
+		m.writeFrameMsg(camID, msg)
 	}) != nil {
 		flvLogger.Warn("FLV rebind: hub subscribe failed", "camera_id", camID)
 		return
@@ -274,6 +282,13 @@ func (m *Manager) writeH265(camID string, pts int64, au [][]byte) {
 }
 
 func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
+	m.writeFrameMsg(camID, model.FrameMsg{PTS: pts, AU: au})
+}
+
+// writeFrameMsg queues a full FrameMsg (carrying the hub-entry IngestAt
+// wallclock for the latency piggyback, #481). Non-blocking.
+func (m *Manager) writeFrameMsg(camID string, msg model.FrameMsg) {
+	pts, au := msg.PTS, msg.AU
 	if len(au) == 0 {
 		return
 	}
@@ -301,7 +316,7 @@ func (m *Manager) writeFrame(camID string, pts int64, au [][]byte) {
 
 	// Non-blocking send
 	select {
-	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
+	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe, IngestAt: msg.IngestAt}:
 		frametrace.Log(
 			camID,
 			"trace_id", traceID,
@@ -328,7 +343,16 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 		case <-ctx.Done():
 			return
 		case msg := <-entry.frameCh:
-			tag := videoFrameTag(entry.codec, msg.AU, msg.PTS, msg.IsKeyframe)
+			// Ingest offset (ms from clockBase) rides in the tag StreamID
+			// field — spec-receivers ignore it, our player reads it (#481).
+			// 0xFFFFFF = unknown (no IngestAt / out of the 4.6h 3-byte range).
+			var delta int64 = flvIngestUnknown
+			if msg.IngestAt > 0 {
+				if d := msg.IngestAt/1e6 - entry.clockBase.Load(); d >= 0 && d < flvIngestUnknown {
+					delta = d
+				}
+			}
+			tag := videoFrameTag(entry.codec, msg.AU, msg.PTS, msg.IsKeyframe, delta)
 
 			// Update GOP cache on keyframe
 			if msg.IsKeyframe {
@@ -371,6 +395,20 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 			entry.viewerMu.Unlock()
 		}
 	}
+}
+
+// ClockMs returns the entry's ingest-clock base (unix ms) that the tag
+// StreamID deltas are measured from, or 0 when the stream is not active.
+// The flow API surfaces it so players can turn a delta into a wallclock
+// (#481).
+func (m *Manager) ClockMs(camID string) int64 {
+	m.mu.RLock()
+	entry, ok := m.streams[camID]
+	m.mu.RUnlock()
+	if !ok {
+		return 0
+	}
+	return entry.clockBase.Load()
 }
 
 // ServeFLV handles an HTTP request for FLV live streaming.
@@ -452,7 +490,10 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 		return err
 	}
 
-	// Set response headers
+	// Set response headers. X-Stream-Wallclock-Ms anchors the StreamID
+	// ingest deltas for clients that read response headers (#481); the
+	// flow API exposes the same value for the rest.
+	w.Header().Set("X-Stream-Wallclock-Ms", strconv.FormatInt(entry.clockBase.Load(), 10))
 	w.Header().Set("Content-Type", "video/x-flv")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
