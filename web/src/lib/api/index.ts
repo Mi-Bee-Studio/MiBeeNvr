@@ -9,6 +9,7 @@ export {
   clearToken,
   getTokenForUrl,
   isAuthenticated,
+  isLocalBypass,
   login,
   logout,
   healthCheck,

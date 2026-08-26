@@ -193,6 +193,13 @@ export function isAuthenticated(): boolean {
   return getToken() !== null || localBypass;
 }
 
+// Whether the current browser session rides the auth.local_bypass loopback
+// exemption — there is no credential session to log out of, so the UI hides
+// the logout entry in this state (issue #516).
+export function isLocalBypass(): boolean {
+  return localBypass;
+}
+
 // Get the Authorization header value for API calls: "Bearer <session-token>".
 export function getAuthHeader(): string | null {
   const token = getToken();
