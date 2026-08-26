@@ -56,10 +56,13 @@ type Coordinator struct {
 	runCtx       context.Context // 供恢复回调 goroutine 使用(Start 时设置)
 	pausedSince  time.Time       // 推送暂停窗口起点(mu 保护;零值=未暂停)
 	compensating atomic.Bool     // 补偿重推 single-flight
+	// subLayer 是子码流分析层 (#514)。nil(未接 provider)时整个层停用。
+	subLayer *SubLayerManager
 }
 
-// NewCoordinator 创建推送协调器。db 可为 nil(禁用离线补偿)。
-func NewCoordinator(cfg func() config.VisionConfig, storageRoot func() string, eventBus *event.EventBus, db Repusher) *Coordinator {
+// NewCoordinator 创建推送协调器。db 可为 nil(禁用离线补偿);provider 可为
+// nil(禁用子码流分析层)。
+func NewCoordinator(cfg func() config.VisionConfig, storageRoot func() string, eventBus *event.EventBus, db Repusher, provider SubLayerProvider) *Coordinator {
 	vcfg := cfg()
 	c := &Coordinator{
 		health:      NewHealthTracker(vcfg.HeartbeatTimeoutSecs),
@@ -71,9 +74,20 @@ func NewCoordinator(cfg func() config.VisionConfig, storageRoot func() string, e
 			Timeout: 120 * time.Second, // 大文件传输可能需要较长时间
 		},
 	}
+	if provider != nil {
+		c.subLayer = NewSubLayerManager(provider, cfg, storageRoot, SubLayerDeps{
+			Push:    c.pushSubSegment,
+			Healthy: c.health.IsHealthy,
+		})
+	}
 	// 心跳恢复(不健康→健康)触发离线补偿重推 (#329)。
 	c.health.SetOnRecovery(c.compensateOffline)
 	return c
+}
+
+// SubLayer exposes the sub-layer manager (observability/tests). May be nil.
+func (c *Coordinator) SubLayer() *SubLayerManager {
+	return c.subLayer
 }
 
 // Health 返回 HealthTracker,供 API handler 记录心跳。
@@ -98,9 +112,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	c.wg.Add(1)
 	go c.eventLoop(ctx)
+	c.subLayer.Start(ctx)
 	slog.Info("vision coordinator started",
 		"push_mode", c.cfg().PushMode,
-		"vision_url", c.cfg().URL)
+		"vision_url", c.cfg().URL,
+		"sub_layer_cameras", len(c.cfg().SubLayerCameras))
 	return nil
 }
 
@@ -109,6 +125,7 @@ func (c *Coordinator) Stop() {
 	if c == nil {
 		return
 	}
+	c.subLayer.Stop()
 	c.mu.Lock()
 	if c.cancelFn != nil {
 		c.cancelFn()
@@ -143,6 +160,11 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	if !vcfg.Enabled || vcfg.URL == "" {
 		return
 	}
+	// Feed the sub-layer's recording-id join regardless of push outcome — a
+	// later sub segment must still map onto the covering main recording.
+	if c.subLayer != nil {
+		c.subLayer.NoteMainSegment(seg.CameraID, seg.RecordingID)
+	}
 	if !c.health.IsHealthy() {
 		c.markPaused()
 		slog.Debug("vision not healthy, skip push",
@@ -167,6 +189,15 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 			"recording_id", seg.RecordingID)
 		return
 	}
+	// 子流分析层相机 (#514):分析输入改由子流段提供(独立目录、磁盘即队
+	// 列),主流段不再推送——低分辨率段的解码成本才能让单消费者覆盖全部
+	// 高分辨率相机。
+	if vcfg.SubLayerCameraSet()[seg.CameraID] {
+		slog.Debug("vision push skipped — camera served by sub layer",
+			"camera_id", seg.CameraID,
+			"recording_id", seg.RecordingID)
+		return
+	}
 
 	// 解析段文件的绝对路径。NVR 的 file_path 已经是绝对路径(/mnt/data/nvr/...)。
 	absPath := seg.FilePath
@@ -174,53 +205,90 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 		absPath = filepath.Join(c.storageRoot(), absPath)
 	}
 
+	c.uploadSegment(ctx, absPath, seg.FileSize, map[string]string{
+		"X-Recording-Id": seg.RecordingID,
+		"X-Camera-Id":    seg.CameraID,
+		"X-Format":       seg.Format,
+		"X-Encoding":     seg.Encoding,
+		"X-Started-At":   seg.StartedAt,
+		"X-Ended-At":     seg.EndedAt,
+		"X-File-Size":    strconv.FormatInt(seg.FileSize, 10),
+	})
+}
+
+// uploadSegment POSTs a segment file's bytes to Vision. Headers carry the
+// metadata (Vision's minimal HTTP parser can't do chunked encoding — Content-
+// Length is set explicitly). Returns true on a 2xx response.
+func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSize int64, hdr map[string]string) bool {
 	file, err := os.Open(absPath)
 	if err != nil {
 		slog.Warn("open segment file for push failed",
 			"error", err,
-			"path", absPath,
-			"recording_id", seg.RecordingID)
-		return
+			"path", absPath)
+		return false
 	}
 	defer file.Close()
 
-	// POST 视频字节流到 Vision。元数据通过 HTTP headers 传递。
-	url := strings.TrimRight(vcfg.URL, "/") + "/vision/segment/upload"
+	url := strings.TrimRight(c.cfg().URL, "/") + "/vision/segment/upload"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, file)
 	if err != nil {
 		slog.Error("create upload request", "error", err)
-		return
+		return false
 	}
 	// 显式设置 Content-Length,避免 Go 使用 chunked encoding(Vision 的极简 HTTP 解析器不支持 chunked)。
-	req.ContentLength = seg.FileSize
+	req.ContentLength = fileSize
 	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("X-Recording-Id", seg.RecordingID)
-	req.Header.Set("X-Camera-Id", seg.CameraID)
-	req.Header.Set("X-Format", seg.Format)
-	req.Header.Set("X-Encoding", seg.Encoding)
-	req.Header.Set("X-Started-At", seg.StartedAt)
-	req.Header.Set("X-Ended-At", seg.EndedAt)
-	req.Header.Set("X-File-Size", strconv.FormatInt(seg.FileSize, 10))
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
 		slog.Warn("push video to vision failed",
 			"error", err,
-			"recording_id", seg.RecordingID)
-		return
+			"path", filepath.Base(absPath))
+		return false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
 		slog.Warn("vision returned non-success status",
 			"status", resp.StatusCode,
-			"recording_id", seg.RecordingID)
-	} else {
-		slog.Info("pushed video to vision",
-			"recording_id", seg.RecordingID,
+			"path", filepath.Base(absPath))
+		return false
+	}
+	slog.Info("pushed video to vision",
+		"camera_id", hdr["X-Camera-Id"],
+		"size_mb", fileSize/1024/1024)
+	return true
+}
+
+// pushSubSegment pushes one sub-layer segment (#514). Same transport/headers
+// as the main layer, plus X-Layer: sub; the recording id already carries the
+// joined MAIN recording so consumer-side dedup and ai_status semantics are
+// unchanged. Returns true when the consumer accepted it (caller deletes).
+func (c *Coordinator) pushSubSegment(ctx context.Context, seg SubSegment) bool {
+	vcfg := c.cfg()
+	if !vcfg.Enabled || vcfg.URL == "" || !c.health.IsHealthy() {
+		return false
+	}
+	ok := c.uploadSegment(ctx, seg.Path, seg.FileSize, map[string]string{
+		"X-Recording-Id": seg.RecordingID,
+		"X-Camera-Id":    seg.CameraID,
+		"X-Format":       seg.Codec,
+		"X-Encoding":     seg.Codec,
+		"X-Started-At":   seg.StartedAt.UTC().Format(time.RFC3339Nano),
+		"X-Ended-At":     seg.EndedAt.UTC().Format(time.RFC3339Nano),
+		"X-File-Size":    strconv.FormatInt(seg.FileSize, 10),
+		"X-Layer":        "sub",
+	})
+	if ok {
+		slog.Info("pushed sub-layer video to vision",
 			"camera_id", seg.CameraID,
+			"recording_id", seg.RecordingID,
 			"size_mb", seg.FileSize/1024/1024)
 	}
+	return ok
 }
 
 // markPaused records the start of a push-pause window (first segment skipped

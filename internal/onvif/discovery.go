@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/0x524a/onvif-go/discovery"
@@ -77,13 +78,20 @@ type deviceInfoEnvelope struct {
 }
 
 // discoverFunc is the backing implementation of Discover / DiscoverNoEnrich.
-// It is a package-level variable so that tests in this module can stub it out
-// (set discoverFunc = ...) to avoid the real UDP multicast WS-Discovery, which
-// is network-dependent and non-deterministic in CI sandboxes (issue #221:
+// It is a package-level indirection so that tests in this module can stub it
+// out to avoid the real UDP multicast WS-Discovery, which is
+// network-dependent and non-deterministic in CI sandboxes (issue #221:
 // TestONVIFDiscoverEndpoint assumed "no devices on the network" and asserted
 // len(devices)==0, which failed when a CI runner shared a LAN with a real ONVIF
-// camera). Production code must never reassign this; only test code does.
-var discoverFunc = discover
+// camera). Atomic: a parallel test's SetDiscoverFuncForTest restore races the
+// Discover calls other parallel tests are still serving (-race). Production
+// code must never reassign this; only test code does.
+var discoverFunc atomic.Pointer[func(ctx context.Context, timeout time.Duration, enrich bool) *DiscoveryResult]
+
+func init() {
+	defaultDiscover := discover
+	discoverFunc.Store(&defaultDiscover)
+}
 
 // SetDiscoverFuncForTest replaces the discovery implementation for the
 // duration of a test. Pass nil to restore the default (real WS-Discovery). It
@@ -98,12 +106,21 @@ var discoverFunc = discover
 //	})
 //	defer restore()
 func SetDiscoverFuncForTest(fn func(ctx context.Context, timeout time.Duration, enrich bool) *DiscoveryResult) (restore func()) {
-	prev := discoverFunc
+	prev := discoverFunc.Load()
 	if fn == nil {
-		fn = discover
+		defaultDiscover := discover
+		fn = defaultDiscover
 	}
-	discoverFunc = fn
-	return func() { discoverFunc = prev }
+	discoverFunc.Store(&fn)
+	return func() { discoverFunc.Store(prev) }
+}
+
+// callDiscover invokes the current discovery implementation.
+func callDiscover(ctx context.Context, timeout time.Duration, enrich bool) *DiscoveryResult {
+	if fn := discoverFunc.Load(); fn != nil {
+		return (*fn)(ctx, timeout, enrich)
+	}
+	return discover(ctx, timeout, enrich)
 }
 
 // Discover performs WS-Discovery to find ONVIF devices on the local network
@@ -118,7 +135,7 @@ func SetDiscoverFuncForTest(fn func(ctx context.Context, timeout time.Duration, 
 // Adder.HandleDiscovered) should use DiscoverNoEnrich to avoid a redundant
 // GetDeviceInformation round-trip per device (issue #161).
 func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
-	return discoverFunc(ctx, timeout, true)
+	return callDiscover(ctx, timeout, true)
 }
 
 // DiscoverNoEnrich is the same as Discover but WITHOUT the internal
@@ -130,7 +147,7 @@ func Discover(ctx context.Context, timeout time.Duration) *DiscoveryResult {
 // The returned devices have Endpoint/XAddrs/Scopes populated but
 // Manufacturer/Model/Firmware/Serial empty (filled in later by the caller).
 func DiscoverNoEnrich(ctx context.Context, timeout time.Duration) *DiscoveryResult {
-	return discoverFunc(ctx, timeout, false)
+	return callDiscover(ctx, timeout, false)
 }
 
 // discover is the shared core of Discover / DiscoverNoEnrich. When enrich is

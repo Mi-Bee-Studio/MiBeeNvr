@@ -308,20 +308,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	}
 	deps.transcodeMgr = transcodeMgr
 
-	// Step 5.6: Vision push coordinator (NVR → MiBeeVision active push).
-	// Subscribes to segment.completed; pushes segment info to Vision when healthy.
-	// Only active when [vision].enabled = true AND Vision sends heartbeats.
-	if cfg.Vision.Enabled {
-		deps.visionMgr = vision.NewCoordinator(
-			func() config.VisionConfig { return cfg.Vision },
-			func() string { return cfg.Storage.RootDir },
-			deps.eventBus,
-			db,
-		)
-		slog.Info("Vision push integration enabled",
-			"url", cfg.Vision.URL,
-			"push_mode", cfg.Vision.PushMode)
-	}
+	// Step 5.6: Vision push coordinator — moved below the camera manager
+	// construction (the sub-layer analysis tier needs it as its source
+	// provider, #514).
 
 	// Load display timezone for merge window alignment and camera scheduling.
 	appLoc := time.Local // Default: use server's local timezone
@@ -344,6 +333,25 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 
 	camMgr := camera.NewCameraManager(cfg, store, db, configPath, m, deps.mergeMgr, transcodeMgr, deps.rollingMergeMgr, appLoc, deps.eventBus)
 	deps.camMgr = camMgr
+
+	// Step 5.6b: Vision push coordinator (NVR → MiBeeVision active push).
+	// Subscribes to segment.completed; pushes segment info to Vision when healthy.
+	// Only active when [vision].enabled = true AND Vision sends heartbeats.
+	// Constructed AFTER the camera manager — the sub-layer analysis tier
+	// (#514) acquires its on-demand sub-stream sources through it.
+	if cfg.Vision.Enabled {
+		deps.visionMgr = vision.NewCoordinator(
+			func() config.VisionConfig { return cfg.Vision },
+			func() string { return cfg.Storage.RootDir },
+			deps.eventBus,
+			db,
+			camMgr,
+		)
+		slog.Info("Vision push integration enabled",
+			"url", cfg.Vision.URL,
+			"push_mode", cfg.Vision.PushMode,
+			"sub_layer_cameras", len(cfg.Vision.SubLayerCameras))
+	}
 
 	// Step 6.5: Health manager (after camera manager, before streaming)
 	healthMgr := health.NewManager(cfg.Health, db)

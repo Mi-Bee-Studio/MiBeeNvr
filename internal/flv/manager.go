@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -374,6 +375,15 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 // ServeFLV handles an HTTP request for FLV live streaming.
 // It writes the FLV header, sequence header, cached GOP, then live frames
 // until the client disconnects.
+//
+// Locking contract (#539): the ONLY work under entry.viewerMu is the viewer-
+// limit check, the viewer registration and the GOP-cache snapshot — every
+// w.Write happens OUTSIDE the lock, guarded by a write deadline. A stalled
+// client (kernel socket buffer full) used to block mid-GOP-replay while
+// holding viewerMu, wedging the camera's whole FLV pipeline: subsequent
+// ServeFLV (limit check) and the writeLoop frame fan-out queue on the same
+// mutex, and /api/streams (ViewerCount) hangs with them. One half-closed
+// client was enough (found live on M5: probe read 4KB then closed).
 func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request) error {
 	m.mu.RLock()
 	entry, ok := m.streams[camID]
@@ -383,66 +393,23 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 		return ErrStreamNotActive
 	}
 
-	// Check viewer limit
+	flusher, canFlush := w.(http.Flusher)
+	if !canFlush {
+		flvLogger.Warn("response writer does not support flush")
+	}
+	// Per-write deadline so a slow/stalled client times out instead of
+	// blocking this goroutine forever. Best-effort: middleware that wraps the
+	// ResponseWriter without Unwrap degrades to no deadline (the lock-free
+	// writes alone already prevent the global wedge).
+	rc := http.NewResponseController(w)
+
+	// Register the viewer (holds its slot) and snapshot the GOP cache under
+	// the lock — everything below is lock-free.
 	entry.viewerMu.Lock()
 	if len(entry.viewers) >= m.maxViewers {
 		entry.viewerMu.Unlock()
 		return ErrMaxViewers
 	}
-
-	flusher, canFlush := w.(http.Flusher)
-	if !canFlush {
-		flvLogger.Warn("response writer does not support flush")
-	}
-
-	// Set response headers
-	w.Header().Set("Content-Type", "video/x-flv")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.WriteHeader(http.StatusOK)
-
-	// Write FLV header + PreviousTagSize0
-	if _, err := w.Write(flvHeader()); err != nil {
-		return err
-	}
-	if _, err := w.Write(previousTagSize0()); err != nil {
-		return err
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-
-	// Write sequence header
-	if _, err := w.Write(entry.seqHeader); err != nil {
-		return err
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-
-	// Send cached GOP
-	entry.gopMu.RLock()
-	gopLen := len(entry.gopCache.frames)
-	for _, frame := range entry.gopCache.frames {
-		if _, err := w.Write(frame.tag); err != nil {
-			entry.gopMu.RUnlock()
-			return err
-		}
-	}
-	entry.gopMu.RUnlock()
-	if m.metrics != nil {
-		if gopLen > 0 {
-			m.metrics.FLVGOPCacheHits.WithLabelValues(camID).Inc()
-		} else {
-			m.metrics.FLVGOPCacheMisses.WithLabelValues(camID).Inc()
-		}
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-
-	// Register viewer
 	viewerID := entry.viewerSeq.Add(1)
 	viewerCh := make(chan []byte, m.writeBufSize)
 	viewer := &viewerConn{
@@ -457,9 +424,13 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 	if m.metrics != nil {
 		m.metrics.FLVActiveStreams.WithLabelValues(camID).Set(float64(len(entry.viewers)))
 	}
+	entry.gopMu.RLock()
+	gopFrames := make([]cachedFrame, len(entry.gopCache.frames))
+	copy(gopFrames, entry.gopCache.frames)
+	entry.gopMu.RUnlock()
 	entry.viewerMu.Unlock()
 
-	// Cleanup on exit
+	// Cleanup on exit — also the path for every write error below.
 	defer func() {
 		entry.viewerMu.Lock()
 		if m.metrics != nil {
@@ -474,6 +445,55 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 
 	flvLogger.Debug("FLV viewer connected", "camera_id", camID, "viewer_id", viewerID)
 
+	writeWithDeadline := func(p []byte) error {
+		_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_, err := w.Write(p)
+		return err
+	}
+
+	// Set response headers
+	w.Header().Set("Content-Type", "video/x-flv")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.WriteHeader(http.StatusOK)
+
+	// Write FLV header + PreviousTagSize0
+	if err := writeWithDeadline(flvHeader()); err != nil {
+		return err
+	}
+	if err := writeWithDeadline(previousTagSize0()); err != nil {
+		return err
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	// Write sequence header
+	if err := writeWithDeadline(entry.seqHeader); err != nil {
+		return err
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	// Replay the cached GOP snapshot (lock-free)
+	for _, frame := range gopFrames {
+		if err := writeWithDeadline(frame.tag); err != nil {
+			return err
+		}
+	}
+	if m.metrics != nil {
+		if len(gopFrames) > 0 {
+			m.metrics.FLVGOPCacheHits.WithLabelValues(camID).Inc()
+		} else {
+			m.metrics.FLVGOPCacheMisses.WithLabelValues(camID).Inc()
+		}
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+
 	// Write frames to client until disconnect
 	ctx := r.Context()
 	for {
@@ -484,7 +504,7 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 			if !ok {
 				return nil // channel closed
 			}
-			if _, err := w.Write(tag); err != nil {
+			if err := writeWithDeadline(tag); err != nil {
 				return err
 			}
 			if flusher != nil {

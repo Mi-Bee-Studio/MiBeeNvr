@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -74,6 +75,13 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 	severity := body.Severity
 	if severity == "" {
 		severity = "info"
+	}
+
+	// Sub-layer pushes (#514) identify as "<mainRecordingID>#<subStartNano>"
+	// so the consumer can dedup every sub segment; events reported against
+	// them map back onto the main recording row.
+	if i := strings.IndexByte(body.RecordingID, '#'); i >= 0 {
+		body.RecordingID = body.RecordingID[:i]
 	}
 
 	// Convert bbox to JSON string for storage
