@@ -113,7 +113,7 @@ func (a *LocalXiaomiAuth) CheckVendor(_ context.Context, did string) (string, er
 		Token:  a.cfg.Xiaomi.Token,
 		Region: a.cfg.Xiaomi.Region,
 	}
-	missURL, err := xiaomi.ResolveMISSURL(cloudCfg, did, "")
+	missURL, _, err := xiaomi.ResolveMISSURL(cloudCfg, did, "")
 	if err != nil {
 		return "", err
 	}
