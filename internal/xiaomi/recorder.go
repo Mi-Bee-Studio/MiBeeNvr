@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -41,6 +43,13 @@ type RecordingDB interface {
 	InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error
 }
 
+// HealthEventWriter persists camera health events (camera_health_events
+// table). *storage.DB satisfies it; wired via XiaomiRecorderConfig.HealthDB
+// so quality transitions land in the health event timeline (issue #502).
+type HealthEventWriter interface {
+	InsertHealthEvent(ctx context.Context, event model.HealthEvent) error
+}
+
 // ErrorReporter abstracts camera error reporting to avoid circular imports.
 // CameraManager satisfies this interface.
 type ErrorReporter interface {
@@ -49,7 +58,29 @@ type ErrorReporter interface {
 
 const (
 	defaultSegmentDur = 10 * time.Minute
+
+	// Quality auto-fallback/restore tuning (issue #502).
+	// A connection that streamed at least qualityStableResetWindow before
+	// dying counts as "stable" — it resets the no-media failure sequence, so
+	// three failures spread across stable periods never trigger a downgrade
+	// (defect A: the old counter accumulated across weeks).
+	qualityStableResetWindow = 5 * time.Minute
+	// After a downgrade, an SD connection that streams stably for at least
+	// qualityUpgradeStableWindow earns one probe attempt back at HD
+	// (defect B: quality previously never recovered without a restart).
+	qualityUpgradeStableWindow = 10 * time.Minute
+	// maxQualityUpgradeAttempts bounds the downgrade→upgrade cycle per
+	// recorder lifecycle, preventing a downgrade/upgrade oscillation storm
+	// (the 2K PTZ camera logged 131 SPS changes in one day — the recovery
+	// must not feed that).
+	maxQualityUpgradeAttempts = 2
 )
+
+// errQualityUpgradeProbe is returned by connectAndRecord when a stable SD
+// connection reaches the upgrade window and should be deliberately reconnected
+// at HD (issue #502 defect B). It is a planned reconnect, not a failure —
+// the run loop skips the error metrics/backoff for it.
+var errQualityUpgradeProbe = errors.New("quality upgrade probe")
 
 // XiaomiCloudConfig holds Xiaomi cloud API credentials for URL resolution.
 type XiaomiCloudConfig struct {
@@ -66,7 +97,8 @@ type XiaomiRecorderConfig struct {
 	CloudCfg          XiaomiCloudConfig // Cloud API credentials for MISS URL resolution
 	SegmentDur        time.Duration
 	DB                RecordingDB
-	ErrReporter       ErrorReporter // Optional: reports detailed errors (e.g. TUTK incompatibility)
+	HealthDB          HealthEventWriter // Optional: persists quality-change health events (issue #502)
+	ErrReporter       ErrorReporter     // Optional: reports detailed errors (e.g. TUTK incompatibility)
 	AudioEnabled      bool          // Capture and broadcast audio via StreamHub when true
 	AudioInRecordings bool          // Keep the audio track in recorded segments (default off)
 	IdleTimeout       time.Duration
@@ -122,9 +154,17 @@ type XiaomiRecorder struct {
 	streamStart time.Time        // For PTS rebase (used by forwardHLS)
 
 	currentQuality   string // effective quality for next connectAndRecord attempt
-	noMediaFailCount int    // consecutive "no media data" failures at current quality
+	noMediaFailCount int    // no-media failures since the last stable-streaming window (issue #502: true consecutive semantics)
 	connectFailCount int    // consecutive connect/handshake failures (miss connect i/o timeout etc.)
 	lastMissURL      string // last resolved MISS URL (for error messages naming the unreachable host)
+
+	// Quality state machine (issue #502). Owned by the run goroutine.
+	mediaStart      time.Time // when StartMedia succeeded for the current connection; zero while connecting
+	upgradeAttempts int       // SD→HD probe attempts consumed this recorder lifecycle
+	// Test-overridable tuning (defaults from the consts above).
+	stableResetWindow   time.Duration
+	upgradeStableWindow time.Duration
+	maxUpgradeAttempts  int
 
 	// MISS client reference for external commands (MotorControl, GetDeviceInfo).
 	missClient *MISSClient
@@ -208,10 +248,13 @@ func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*me
 		cfg.IdleTimeout = defaultIdleTimeout
 	}
 	return &XiaomiRecorder{
-		cfg:     cfg,
-		store:   store,
-		metrics: m,
-		status:  model.StatusStopped,
+		cfg:                 cfg,
+		store:               store,
+		metrics:             m,
+		status:              model.StatusStopped,
+		stableResetWindow:   qualityStableResetWindow,
+		upgradeStableWindow: qualityUpgradeStableWindow,
+		maxUpgradeAttempts:  maxQualityUpgradeAttempts,
 	}
 }
 
@@ -451,7 +494,13 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 		}
 
 		// Resolve xiaomi://deviceID to miss://... URL via cloud API.
-		missURL, err := ResolveMISSURL(r.cfg.CloudCfg, r.cfg.DID, r.cfg.Model)
+		missURL, resolvedModel, err := ResolveMISSURL(r.cfg.CloudCfg, r.cfg.DID, r.cfg.Model)
+		// Backfill the camera model from the cloud device list on first
+		// resolve — CameraConfig has no model field, so without this the
+		// quality/downgrade logs printed model="" (issue #502).
+		if r.cfg.Model == "" && resolvedModel != "" {
+			r.cfg.Model = resolvedModel
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -482,19 +531,25 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			r.recordXiaomiReconnect()
 		}
 
-		// Quality auto-fallback: if "no media data" errors persist at HD, downgrade to SD.
-		// Some models (isa.camera.hlc8) silently refuse HD streaming — go2rtc issue #2114.
-		if err != nil && strings.Contains(err.Error(), "no media data") {
-			r.noMediaFailCount++
-			if r.noMediaFailCount >= 3 && r.currentQuality == "hd" && (r.cfg.Quality == "" || r.cfg.Quality == "auto") {
-				r.currentQuality = "sd"
-				xiaomiLogger.Warn("auto-downgrading quality HD→SD after repeated no-media failures",
-					"camera_id", r.cfg.CameraID, "failures", r.noMediaFailCount, "model", r.cfg.Model)
-				r.noMediaFailCount = 0
-			}
-		} else if connected {
-			r.noMediaFailCount = 0
+		// Planned SD→HD upgrade probe (issue #502 defect B): a stable SD
+		// connection earned a reconnect at HD. Not a failure — reconnect
+		// immediately, skip the error metrics and backoff below.
+		if errors.Is(err, errQualityUpgradeProbe) {
+			r.currentQuality = "hd"
+			r.upgradeAttempts++
+			r.recordQualityChange("sd", "hd", fmt.Sprintf(
+				"stable SD streaming for %s, probe attempt %d/%d",
+				r.upgradeStableWindow, r.upgradeAttempts, r.maxUpgradeAttempts))
+			r.setStatus(model.StatusReconnecting)
+			continue
 		}
+
+		// Quality auto-fallback: if "no media data" errors persist at HD,
+		// downgrade to SD. Some models (isa.camera.hlc8) silently refuse HD
+		// streaming — go2rtc issue #2114. A connection that streamed stably
+		// before dying resets the failure sequence (issue #502 defect A).
+		streamedStable := !r.mediaStart.IsZero() && time.Since(r.mediaStart) >= r.stableResetWindow
+		r.handleQualityFailure(err, streamedStable)
 		retryCount++
 		// Track persistent connect failures and surface an actionable error to
 		// the user after the threshold (issue #48: "reconnecting" forever with no
@@ -517,8 +572,100 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 	}
 }
 
+// qualityAuto reports whether the auto HD↔SD state machine is armed (quality
+// unset or "auto"). Explicit "hd"/"sd" pins the quality — no transitions.
+func (r *XiaomiRecorder) qualityAuto() bool {
+	return r.cfg.Quality == "" || r.cfg.Quality == "auto"
+}
+
+// handleQualityFailure updates the no-media failure state after a connection
+// ended with err (issue #502 defect A). streamedStable means the connection
+// streamed at least stableResetWindow before dying — that counts as a stable
+// period and resets the failure sequence, so three failures separated by
+// stable periods never trigger a downgrade. Only failures WITHOUT a stable
+// period between them (rapid reconnect cycles) accumulate to the threshold.
+func (r *XiaomiRecorder) handleQualityFailure(err error, streamedStable bool) {
+	if streamedStable {
+		r.noMediaFailCount = 0
+	}
+	if err == nil || !strings.Contains(err.Error(), "no media data") {
+		return
+	}
+	r.noMediaFailCount++
+	if r.noMediaFailCount < 3 || r.currentQuality != "hd" || !r.qualityAuto() {
+		return
+	}
+	r.currentQuality = "sd"
+	r.noMediaFailCount = 0
+	r.recordQualityChange("hd", "sd", fmt.Sprintf(
+		"%d consecutive no-media failures without a ≥%s stable window",
+		3, r.stableResetWindow))
+}
+
+// shouldProbeUpgrade reports whether the current SD connection has streamed
+// stably long enough to earn one bounded SD→HD probe attempt (issue #502
+// defect B). Called from the read loop; the probe itself is a deliberate
+// teardown + reconnect at HD, bounded by maxUpgradeAttempts per recorder
+// lifecycle so a camera that refuses HD cannot oscillate forever.
+func (r *XiaomiRecorder) shouldProbeUpgrade(now time.Time) bool {
+	return r.currentQuality == "sd" && r.qualityAuto() &&
+		r.upgradeAttempts < r.maxUpgradeAttempts &&
+		!r.mediaStart.IsZero() &&
+		now.Sub(r.mediaStart) >= r.upgradeStableWindow
+}
+
+// recordQualityChange logs a quality transition and records it in the health
+// event stream — both the camera_health_events table (via HealthDB, wired in
+// plugin.go) and the camera.quality SSE topic (issue #502: the M5 incident
+// showed downgrades were invisible outside grep).
+func (r *XiaomiRecorder) recordQualityChange(from, to, reason string) {
+	cameraModel := r.cfg.Model
+	if cameraModel == "" {
+		cameraModel = r.cfg.DID
+	}
+	if to == "sd" {
+		xiaomiLogger.Warn("auto-downgrading quality HD→SD after repeated no-media failures",
+			"camera_id", r.cfg.CameraID, "reason", reason, "model", cameraModel)
+	} else {
+		xiaomiLogger.Info("auto-upgrading quality SD→HD after stable streaming",
+			"camera_id", r.cfg.CameraID, "reason", reason, "model", cameraModel)
+	}
+
+	status := model.HealthStatusHealthy
+	if to == "sd" {
+		status = model.HealthStatusWarning
+	}
+	meta, _ := json.Marshal(map[string]string{"from": from, "to": to, "model": cameraModel})
+	if r.cfg.HealthDB != nil {
+		evt := model.HealthEvent{
+			CameraID:  r.cfg.CameraID,
+			EventType: string(model.HealthEventQualityChanged),
+			Status:    string(status),
+			Message:   fmt.Sprintf("stream quality %s→%s: %s", from, to, reason),
+			Metadata:  string(meta),
+			CreatedAt: time.Now(),
+		}
+		if err := r.cfg.HealthDB.InsertHealthEvent(context.Background(), evt); err != nil {
+			xiaomiLogger.Warn("failed to record quality-change health event",
+				"camera_id", r.cfg.CameraID, "error", err)
+		}
+	}
+	if r.cfg.EventBus != nil {
+		r.cfg.EventBus.Publish(context.Background(), event.TopicCameraQuality, map[string]any{
+			"camera_id": r.cfg.CameraID,
+			"from":      from,
+			"to":        to,
+			"reason":    reason,
+			"model":     cameraModel,
+		})
+	}
+}
+
 // connectAndRecord connects to the Xiaomi camera, starts media, and records packets.
 func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (error, bool) {
+	// Zero until StartMedia succeeds — a failed connect must not inherit the
+	// previous connection's stable-streaming window (issue #502).
+	r.mediaStart = time.Time{}
 	client, err := NewMISSClient(missURL, r.cfg.IdleTimeout)
 	if err != nil {
 		return fmt.Errorf("miss connect: %w", err), false
@@ -542,6 +689,10 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	defer func() {
 		_ = client.StopMedia()
 	}()
+
+	// Media confirmed flowing — the stable-streaming window for the quality
+	// state machine starts here (issue #502).
+	r.mediaStart = time.Now()
 
 	r.setStatus(model.StatusRecording)
 	// Clear any previously-reported connect-failure detail now that we're live.
@@ -583,6 +734,14 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 		if err != nil {
 			r.closeCurrentSegment()
 			return fmt.Errorf("miss read: %w", err), false
+		}
+
+		// SD→HD upgrade probe (issue #502 defect B): a healthy SD connection
+		// never disconnects on its own, so the recovery must tear it down
+		// deliberately once the stable window has been earned.
+		if r.shouldProbeUpgrade(time.Now()) {
+			r.closeCurrentSegment()
+			return errQualityUpgradeProbe, true
 		}
 
 		// Handle audio packets when AudioEnabled.
