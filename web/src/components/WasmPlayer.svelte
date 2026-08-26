@@ -23,6 +23,7 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
     codec = 'h264',
     expanded = false,
     tabVisible = true,
+    quality = 'main',
     onFallbackNeeded,
   }: {
     cameraId: string;
@@ -32,6 +33,11 @@ import { WebGPURenderer } from '$lib/webgpu-renderer';
     codec?: string;
     expanded?: boolean;
     tabVisible?: boolean;
+    /** Stream quality (#513) — 'sub' appends ?quality=sub to the WS URL; the
+     *  server falls back to main (X-Stream-Quality header) when the camera has
+     *  no sub stream. The decoder is configured from the SERVER's codec info,
+     *  so a sub stream whose codec differs from the main is handled. */
+    quality?: 'main' | 'sub';
     onFallbackNeeded?: (fallback: 'hls') => void;
   } = $props();
 
@@ -548,12 +554,19 @@ function handleWebGpuLost() {
   function buildWsUrl(): string {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     let url = `${proto}//${location.host}${API_BASE}/cameras/${cameraId}/stream/ws`;
+    const params: string[] = [];
     // ?token= carries the bare session token (mbs_...), NOT a "Bearer ..." header —
     // the backend auth middleware reads ?token= directly. getTokenForUrl returns
     // the token without the "Bearer " prefix.
     const token = getTokenForUrl();
     if (token) {
-      url += `?token=${encodeURIComponent(token)}`;
+      params.push(`token=${encodeURIComponent(token)}`);
+    }
+    if (quality === 'sub') {
+      params.push('quality=sub');
+    }
+    if (params.length > 0) {
+      url += `?${params.join('&')}`;
     }
     return url;
   }

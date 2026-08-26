@@ -13,6 +13,7 @@
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { isAudioCapable, type ProtocolsResponse } from '$lib/stream-selection';
   import { getCameraProtocolOverride } from '$lib/preferences';
+  import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -527,13 +528,28 @@
         <Video size={20} class="text-accent" />
         {t('surveillance.title')}
       </h1>
-      <button
-        class="btn btn-ghost p-2"
-        onclick={() => { configOpen = !configOpen; pendingCameraIds = [...selectedCameraIds]; }}
-        title={t('dashboard.configure')}
-      >
-        <Settings size={18} />
-      </button>
+      <div class="flex items-center gap-1">
+        <!-- Grid preview quality (#513): sub tiles save decode/bandwidth;
+             cameras without a sub stream silently stay on main. -->
+        <button
+          class="btn btn-ghost p-2 text-xs font-medium"
+          onclick={toggleGridQuality}
+          title={t('quality.tooltip')}
+        >
+          {#if getGridQuality() === 'sub'}
+            {t('quality.sub')}
+          {:else}
+            {t('quality.main')}
+          {/if}
+        </button>
+        <button
+          class="btn btn-ghost p-2"
+          onclick={() => { configOpen = !configOpen; pendingCameraIds = [...selectedCameraIds]; }}
+          title={t('dashboard.configure')}
+        >
+          <Settings size={18} />
+        </button>
+      </div>
     </div>
 
     <!-- Camera configuration panel -->
@@ -697,6 +713,7 @@
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
                 streamUrl={getStreamUrl(camera.id)}
+                quality={getGridQuality()}
               />
             {/if}
 

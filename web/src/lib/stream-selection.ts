@@ -38,10 +38,62 @@ export interface ProtocolDetail {
   reason: string;
 }
 
+/** Sub-stream capability reported by /protocols (#512/#513). `codec` is the
+ *  puller's observed codec once a sub pull has come up — it can differ from
+ *  the main stream's codec and is empty until first observed. */
+export interface SubStreamDetail {
+  available: boolean;
+  source?: string;
+  reason?: string;
+  codec?: string;
+}
+
 export interface ProtocolsResponse {
   protocols: ProtocolDetail[];
   encoding: string;
   default: string;
+  sub_stream?: SubStreamDetail;
+}
+
+// ─── Stream quality (main vs sub) — #513 ────────────────────────────────────
+
+export type StreamQuality = 'main' | 'sub';
+
+/**
+ * Resolve the quality a player should actually request, given the user's
+ * preference, the camera's sub-stream capability, and the concrete playback
+ * mode. Sub requests degrade to main (never fail) whenever the mode can't
+ * safely carry the sub stream:
+ *
+ *  - webrtc/wasm: always eligible. WHEP falls back to main server-side when
+ *    the sub isn't H.264, and the WS player's decoder is configured from the
+ *    SERVER's codec info (not the probed main-stream encoding), so a codec
+ *    switch between profiles is handled transparently.
+ *  - flv/hls: codec-sensitive — mpegts.js/hls.js decode via MSE, which on
+ *    Chromium cannot decode H.265. Gate on the KNOWN sub codec; while it is
+ *    unknown (sub never pulled since boot) these modes stay on main. After
+ *    any wasm/webrtc sub view the backend reports the codec and they unlock.
+ *  - mjpeg/snapshot/unsupported: no quality dimension.
+ */
+export function effectiveQuality(
+  mode: CameraMode | null,
+  pref: StreamQuality,
+  sub: SubStreamDetail | null | undefined,
+  caps: Pick<BrowserCaps, 'h265MSE'>,
+): StreamQuality {
+  if (pref !== 'sub') return 'main';
+  if (!sub?.available) return 'main';
+  switch (mode) {
+    case 'webrtc':
+    case 'wasm':
+      return 'sub';
+    case 'flv':
+    case 'hls':
+      if (caps.h265MSE) return 'sub';
+      return sub.codec === 'h264' ? 'sub' : 'main';
+    default:
+      return 'main';
+  }
 }
 
 /** Browser capability inputs that influence selection. */

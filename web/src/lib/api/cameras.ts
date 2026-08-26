@@ -750,6 +750,16 @@ export interface CameraProtocolDetail {
   Reason: string;
 }
 
+// Sub-stream capability block in the protocols response (#512/#513): where a
+// lower-resolution secondary feed exists. `codec` is the puller's observed
+// codec once a sub pull has come up (may differ from the main stream's).
+export interface CameraSubStreamDetail {
+  available: boolean;
+  source?: string;
+  reason?: string;
+  codec?: string;
+}
+
 // Response of GET /api/cameras/{id}/protocols — codec-aware per-camera protocol
 // ranking. The backend probes the RUNNING recorder for the real codec (correcting
 // ONVIF cameras that lie), then asks each registered stream handler CanHandle(codec).
@@ -758,6 +768,7 @@ export interface CameraProtocolsResponse {
   protocols: CameraProtocolDetail[];
   encoding: string;
   default: string;
+  sub_stream?: CameraSubStreamDetail;
 }
 
 // Fetch the available streaming protocols for a specific camera. The grid uses

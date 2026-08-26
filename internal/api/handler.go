@@ -565,6 +565,11 @@ type subStreamDetail struct {
 	Available bool   `json:"available"`
 	Source    string `json:"source,omitempty"` // "onvif" (auto-discovered) | "manual" (URL set)
 	Reason    string `json:"reason,omitempty"` // why not, when unavailable
+	// Codec is the sub-stream's ACTUAL codec once a pull has come up — it can
+	// differ from the main stream's (devices switching codec families between
+	// profiles are common). Empty until first observed; consumers gate on it
+	// when the decode path is codec-sensitive (e.g. MSE H.265 browsers).
+	Codec string `json:"codec,omitempty"`
 }
 
 // handleCameraProtocols handles GET /api/cameras/{id}/protocols.
@@ -659,9 +664,9 @@ func (h *Handler) subStreamDetailFor(cameraID string) subStreamDetail {
 	}
 	switch {
 	case cam.SubStreamURL != "":
-		return subStreamDetail{Available: true, Source: "manual"}
+		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "manual"}, cameraID)
 	case cam.SubProfileToken != "":
-		return subStreamDetail{Available: true, Source: "onvif"}
+		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "onvif"}, cameraID)
 	}
 	switch cam.Protocol {
 	case "onvif":
@@ -677,6 +682,23 @@ func (h *Handler) subStreamDetailFor(cameraID string) subStreamDetail {
 		// the encode), http_jpeg/mjpeg (already low-bitrate stills).
 		return subStreamDetail{Reason: "protocol does not expose a sub stream"}
 	}
+}
+
+// withSubStreamCodec decorates an availability verdict with the puller's
+// observed codec when a sub-stream source is currently alive — the /protocols
+// consumer (SPA quality gating) uses it to predict decodability before
+// requesting quality=sub.
+func (h *Handler) withSubStreamCodec(d subStreamDetail, cameraID string) subStreamDetail {
+	if !d.Available || h.camMgr == nil {
+		return d
+	}
+	for _, st := range h.camMgr.SubStreams().Snapshot() {
+		if st.CameraID == cameraID && st.Codec != "" {
+			d.Codec = string(st.Codec)
+			break
+		}
+	}
+	return d
 }
 
 // rtspEndpointFor builds the RTSP output-server entry for the protocols

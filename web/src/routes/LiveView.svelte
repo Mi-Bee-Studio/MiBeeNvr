@@ -18,7 +18,8 @@
   import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { getCameraProtocolOverride } from '$lib/preferences';
-  import type { ProtocolsResponse } from '$lib/stream-selection';
+  import type { ProtocolsResponse, StreamQuality } from '$lib/stream-selection';
+  import { getCameraQuality, setCameraQuality } from '$lib/stream-quality.svelte';
   let { cameraId = '' }: { cameraId?: string } = $props();
 
   let camera = $state<Camera | null>(null);
@@ -54,6 +55,15 @@
   });
   // The active mode the player renders, read reactively from the orchestrator.
   let activeMode = $derived(camera ? orchestrator.activeMode(camera.id) : null);
+
+  // Quality preference for this camera (#513). Defaults to main (detail view);
+  // a manual choice persists per camera. The switcher is only rendered when
+  // the camera actually HAS a sub stream.
+  let qualityPref = $state<StreamQuality>(getCameraQuality(cameraId));
+  function setQuality(q: StreamQuality): void {
+    qualityPref = q;
+    setCameraQuality(cameraId, q);
+  }
 
   // ONVIF capabilities
   let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
@@ -290,6 +300,26 @@
               selected={(activeMode ?? 'auto') as StreamingProtocol}
               onchange={handleProtocolChange}
             />
+            {#if cameraProtocolsResp?.sub_stream?.available}
+              <!-- Quality switcher (#513): main vs the camera's on-demand
+                   sub stream. The server falls back to main automatically
+                   when the sub can't be served for the active protocol. -->
+              <div class="flex items-center rounded-lg border th-border overflow-hidden text-xs">
+                <button
+                  class="px-2.5 py-1 {qualityPref === 'main' ? 'bg-[var(--color-primary)] text-white' : 'th-text-secondary hover:th-bg-secondary'}"
+                  onclick={() => setQuality('main')}
+                >
+                  {t('quality.main')}
+                </button>
+                <button
+                  class="px-2.5 py-1 {qualityPref === 'sub' ? 'bg-[var(--color-primary)] text-white' : 'th-text-secondary hover:th-bg-secondary'}"
+                  onclick={() => setQuality('sub')}
+                  title={t('quality.tooltip')}
+                >
+                  {t('quality.sub')}
+                </button>
+              </div>
+            {/if}
             <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
               {#if isFullscreen}
                 <Minimize size={16} />
@@ -327,6 +357,7 @@
                 expanded={true}
                 tabVisible={true}
                 streamUrl={`${API_BASE}/cameras/${cameraId}/stream/index.m3u8`}
+                quality={qualityPref}
               />
             {/if}
           </div>

@@ -31,10 +31,11 @@
   import WebRTCPlayer from './WebRTCPlayer.svelte';
   import FlvPlayer from './FlvPlayer.svelte';
   import MjpegLivePlayer from './MjpegLivePlayer.svelte';
-  import { isAudioCapable } from '$lib/stream-selection';
+  import { isAudioCapable, effectiveQuality, type StreamQuality } from '$lib/stream-selection';
   import { API_BASE } from '$lib/api';
   import type { Camera } from '$lib/api';
   import type { PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
+  import { getCaps } from '$lib/player/capabilities-cache';
   import { healthFromStreamState, healthFromConnectionState, type HealthState } from '$lib/player/health';
 
   let {
@@ -42,12 +43,16 @@
     expanded = false,
     tabVisible = true,
     streamUrl,
+    quality = 'main',
   }: {
     camera: Camera;
     expanded?: boolean;
     tabVisible?: boolean;
     /** HLS playlist URL (used only for the HLS mode). */
     streamUrl?: string;
+    /** Quality INTENT ('main' | 'sub') from the route — resolved against the
+     *  camera's sub capability + mode/browser constraints below (#513). */
+    quality?: StreamQuality;
   } = $props();
 
   const orchestrator = getContext<PlayerOrchestrator | undefined>('player-orchestrator');
@@ -74,6 +79,14 @@
     (orchestrator?.resolvedEncoding(cameraId) || camera.encoding || camera.stream_encoding || '').toLowerCase(),
   );
   let audioCapable = $derived(isAudioCapable(camera));
+
+  // Effective quality (#513): the route's preference resolved against the
+  // camera's sub-stream capability, the active mode, and browser codec caps.
+  // Degrades to 'main' whenever the sub can't be safely carried — players
+  // then just omit the quality parameter and stream the main feed.
+  let effQuality = $derived(
+    effectiveQuality(mode, quality, orchestrator?.subStreamDetail(cameraId), getCaps()),
+  );
 
   function report(h: HealthState): void {
     orchestrator?.reportHealth(cameraId, h);
@@ -149,68 +162,81 @@
   });
 
   function getHlsStreamUrl(): string {
+    // quality=sub uses the PATH form — HLS segments resolve relative URLs and
+    // cannot carry a query parameter (#513).
+    if (effQuality === 'sub') {
+      return `${API_BASE}/cameras/${cameraId}/stream/sub/index.m3u8`;
+    }
     return streamUrl ?? `${API_BASE}/cameras/${cameraId}/stream/index.m3u8`;
   }
 </script>
 
 <div class="contents" onstatechange={handleStateChange}>
-  {#if mode === 'wasm'}
-    {#if WasmPlayerComponent}
-      {@const WasmPlayer = WasmPlayerComponent}
-      <WasmPlayer
+  <!-- {#key effQuality}: a quality switch reconnects the underlying stream —
+       players rebuild their URLs at mount, so remounting is the uniform
+       teardown/reconnect for every protocol at once. -->
+  {#key effQuality}
+    {#if mode === 'wasm'}
+      {#if WasmPlayerComponent}
+        {@const WasmPlayer = WasmPlayerComponent}
+        <WasmPlayer
+          {cameraId}
+          {cameraName}
+          {codec}
+          {expanded}
+          {tabVisible}
+          quality={effQuality}
+          onFallbackNeeded={() => report(healthFromStreamState('error'))}
+        />
+      {:else if !wasmLoadFailed}
+        <!-- Loading the WebCodecs/AI chunk (~180KB) -->
+        <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+          <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
+        </div>
+      {:else}
+        <!-- Chunk failed to load — the effect above reports failure so the
+             orchestrator demotes to the next chain entry. -->
+        <div class="absolute inset-0 flex items-center justify-center bg-black/80">
+          <span class="text-white/40 text-xs">WebCodecs unavailable</span>
+        </div>
+      {/if}
+    {:else if mode === 'webrtc'}
+      <WebRTCPlayer
         {cameraId}
         {cameraName}
-        {codec}
         {expanded}
         {tabVisible}
-        onFallbackNeeded={() => report(healthFromStreamState('error'))}
+        quality={effQuality}
+        hasAudio={audioCapable}
+        onProtocolFailed={onPlayerFailed}
       />
-    {:else if !wasmLoadFailed}
-      <!-- Loading the WebCodecs/AI chunk (~180KB) -->
-      <div class="absolute inset-0 flex items-center justify-center bg-black/80">
-        <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
-      </div>
-    {:else}
-      <!-- Chunk failed to load — the effect above reports failure so the
-           orchestrator demotes to the next chain entry. -->
-      <div class="absolute inset-0 flex items-center justify-center bg-black/80">
-        <span class="text-white/40 text-xs">WebCodecs unavailable</span>
-      </div>
+    {:else if mode === 'flv'}
+      <FlvPlayer
+        {cameraId}
+        {cameraName}
+        {expanded}
+        {tabVisible}
+        quality={effQuality}
+        hasAudio={audioCapable}
+        onProtocolFailed={onPlayerFailed}
+      />
+    {:else if mode === 'hls'}
+      <VideoPlayer
+        {cameraId}
+        {cameraName}
+        streamUrl={getHlsStreamUrl()}
+        cameraProtocol={camera.protocol}
+        protocol="ll-hls"
+        {expanded}
+        {tabVisible}
+        hasAudio={audioCapable}
+      />
+    {:else if mode === 'mjpeg'}
+      <MjpegLivePlayer
+        {cameraId}
+        {cameraName}
+        {expanded}
+      />
     {/if}
-  {:else if mode === 'webrtc'}
-    <WebRTCPlayer
-      {cameraId}
-      {cameraName}
-      {expanded}
-      {tabVisible}
-      hasAudio={audioCapable}
-      onProtocolFailed={onPlayerFailed}
-    />
-  {:else if mode === 'flv'}
-    <FlvPlayer
-      {cameraId}
-      {cameraName}
-      {expanded}
-      {tabVisible}
-      hasAudio={audioCapable}
-      onProtocolFailed={onPlayerFailed}
-    />
-  {:else if mode === 'hls'}
-    <VideoPlayer
-      {cameraId}
-      {cameraName}
-      streamUrl={getHlsStreamUrl()}
-      cameraProtocol={camera.protocol}
-      protocol="ll-hls"
-      {expanded}
-      {tabVisible}
-      hasAudio={audioCapable}
-    />
-  {:else if mode === 'mjpeg'}
-    <MjpegLivePlayer
-      {cameraId}
-      {cameraName}
-      {expanded}
-    />
-  {/if}
+  {/key}
 </div>

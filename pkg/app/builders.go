@@ -457,6 +457,16 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			webrtc.WithMetrics(m),
 			webrtc.WithICEServers(webrtcICEServers(cfg.Streaming.WebRTC.ICEServers)),
 		)
+		// Per-session teardown anchor for quality=sub WHEP sessions (#513):
+		// the handler acquires one sub-stream reference per session (WHEP
+		// sessions outlive their HTTP request); this hook releases it when
+		// the session is deleted (viewer DELETE, connection-state failure, or
+		// the idle watchdog). Main-key sessions carry no suffix and no-op.
+		deps.webrtcMgr.SetOnSessionEnd(func(streamKey string) {
+			if id, isSub := strings.CutSuffix(streamKey, model.SubStreamKeySuffix); isSub {
+				camMgr.ReleaseSubStream(id)
+			}
+		})
 		slog.Info(
 			"WebRTC manager initialized",
 			"max_viewers", cfg.Streaming.WebRTC.MaxViewers,
@@ -502,10 +512,12 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// recycle decision and this callback — an entry already on a FRESH hub
 	// belongs to the new pull generation and must survive. WS/FLV
 	// unregister their own hub consumers; the HLS entry does not track its
-	// hub consumer ID, so it is unsubscribed explicitly here.
+	// hub consumer ID, so it is unsubscribed explicitly here. WHEP sessions
+	// ride the same gate: their hub subscription is dropped so a new viewer
+	// re-registers on the fresh pull (existing sessions idle-timeout).
 	if subMgr := camMgr.SubStreams(); subMgr != nil {
 		subMgr.SetOnRecycle(func(cameraID string, recycledHub *model.StreamHub) {
-			key := cameraID + "/sub"
+			key := cameraID + model.SubStreamKeySuffix
 			if wsMgr.ActiveHub(key) == recycledHub {
 				wsMgr.UnregisterStream(key)
 			}
@@ -515,6 +527,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			if hlsMgr.ActiveHub(key) == recycledHub {
 				hlsMgr.StopStream(key)
 				recycledHub.Unsubscribe("hls")
+			}
+			if deps.webrtcMgr != nil && deps.webrtcMgr.RegisteredHub(key) == recycledHub {
+				deps.webrtcMgr.UnregisterStream(key)
 			}
 		})
 	}

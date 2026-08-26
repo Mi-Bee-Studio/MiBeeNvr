@@ -390,11 +390,12 @@ func (m *Manager) Stop() {
 
 // SourceStatus is the observability snapshot served to the app layer.
 type SourceStatus struct {
-	CameraID    string    `json:"camera_id"`
-	State       string    `json:"state"`
-	Refs        int       `json:"refs"`
-	LastFrameAt time.Time `json:"last_frame_at"`
-	Consumers   int       `json:"consumers"`
+	CameraID    string       `json:"camera_id"`
+	State       string       `json:"state"`
+	Codec       model.Format `json:"codec,omitempty"` // actual stream codec (empty before first keyframe)
+	Refs        int          `json:"refs"`
+	LastFrameAt time.Time    `json:"last_frame_at"`
+	Consumers   int          `json:"consumers"`
 }
 
 // Snapshot returns the status of every active source.
@@ -402,9 +403,11 @@ func (m *Manager) Snapshot() []SourceStatus {
 	m.mu.Lock()
 	out := make([]SourceStatus, 0, len(m.sources))
 	for id, e := range m.sources {
+		codec, _, _, _ := e.src.CodecParams()
 		out = append(out, SourceStatus{
 			CameraID:    id,
 			State:       e.src.State(),
+			Codec:       codec,
 			Refs:        e.refs,
 			LastFrameAt: time.Unix(0, e.src.lastFrameAt.Load()),
 			Consumers:   e.src.hub.ConsumerCount(),

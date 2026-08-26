@@ -1,7 +1,7 @@
 package api
 
 // Tests for the quality negotiation surface (#513): parseQuality / subKey /
-// WHEP rejection of ?quality=sub. The full sub-stream egress path (acquire →
+// WHEP quality=sub contracts. The full sub-stream egress path (acquire →
 // register under "/sub" key → serve) needs a live RTSP sub source and is
 // exercised by the internal/substream round-trip tests plus on-device M5
 // verification.
@@ -44,9 +44,23 @@ func TestSubKey(t *testing.T) {
 	require.Equal(t, "cam-1/sub", subKey("cam-1"))
 }
 
-// WHEP must reject quality=sub with an explicit message pointing at the
-// endpoints that support it (#513 v1).
-func TestWHEP_RejectsSubQuality(t *testing.T) {
+// WHEP validates the quality parameter before service availability — a bad
+// value is a client contract error even when WebRTC is disabled.
+func TestWHEP_RejectsBadQuality(t *testing.T) {
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+
+	rr := doRequest(t, h.Routes(), "POST",
+		"/api/cameras/cam-1/stream/webrtc?quality=hd",
+		nil, "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+// With WebRTC unavailable (no manager wired), quality=sub degrades to the
+// same 503 the main path serves — negotiation never masquerades as a
+// protocol error.
+func TestWHEP_SubQualityWithoutManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	h := TestHandler(db, store)
@@ -54,8 +68,7 @@ func TestWHEP_RejectsSubQuality(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "POST",
 		"/api/cameras/cam-1/stream/webrtc?quality=sub",
 		nil, "", "")
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-	require.Contains(t, rr.Body.String(), "not supported for WebRTC")
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
 // WS endpoint validates the quality parameter before anything else.
