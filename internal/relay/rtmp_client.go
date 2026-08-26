@@ -137,7 +137,16 @@ func (c *rtmpPublishConn) Write(msg message.Message) error {
 	// or accepted by the companion as Type 1 during handshake.
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.setWriteDeadline()
 	return c.mrw.Write(msg)
+}
+
+// setWriteDeadline bounds the next outbound write (#429): a dead peer
+// (receiver restart, silently dropped NAT state) never RSTs, so once the
+// kernel send buffer fills a deadline-less write blocks forever and the
+// target wedges in status=streaming with kbps=0.
+func (c *rtmpPublishConn) setWriteDeadline() {
+	_ = c.nconn.SetWriteDeadline(time.Now().Add(relayWriteTimeout))
 }
 
 // buildFullMetadata takes gortmplib's sparse onMetaData payload
@@ -202,6 +211,7 @@ func (c *rtmpPublishConn) buildFullMetadata(orig amf0.Data) amf0.Data {
 func (c *rtmpPublishConn) writeRawMessage(chunkID, msgType byte, timeMS uint32, payload []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.setWriteDeadline()
 
 	bodyLen := uint32(len(payload))
 	cs := c.chunkSize
