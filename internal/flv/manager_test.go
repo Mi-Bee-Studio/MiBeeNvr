@@ -776,7 +776,6 @@ func TestWriteFrame_IngestStyleAU_KeyframeDetected(t *testing.T) {
 // stalledWriter blocks inside Write for the test duration, emulating a client
 // whose kernel socket buffer is full (probe read a few KB then half-closed).
 type stalledWriter struct {
-	mu      sync.Mutex
 	header  http.Header
 	release chan struct{}
 }
