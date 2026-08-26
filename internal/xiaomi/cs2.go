@@ -13,11 +13,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+var cs2Logger = slog.Default().With("component", "xiaomi-cs2")
 
 // CS2Dial establishes a CS2 P2P connection to a Xiaomi device.
 // transport: "udp" (default), "tcp", or "" (tries both).
@@ -74,8 +77,18 @@ type CS2Conn struct {
 
 	channels [4]*cs2DataChannel
 
-	cmdMu  sync.Mutex
-	cmdAck func()
+	cmdMu sync.Mutex
+	// cmdAck holds the ACK callback for an in-flight UDP WriteCommand.
+	// atomic: the worker goroutine reads/fires it without cmdMu while
+	// WriteCommand stores it under cmdMu (issue #503 race fix).
+	cmdAck atomic.Pointer[func()]
+	// LogKey identifies the peer in control-write failure logs
+	// ("model@host", set by the MISS layer). Empty = fall back to
+	// RemoteAddr. Worker-goroutine only (#503).
+	LogKey string
+	// writeFail counts consecutive control-write failures per frame name.
+	// Worker-goroutine only — no lock needed (#503).
+	writeFail map[string]int
 }
 
 const (
@@ -175,7 +188,7 @@ func (c *CS2Conn) worker() {
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				// TCP: send keepalive ping on each timeout wakeup.
 				if c.isTCP && time.Now().After(keepaliveTS) {
-					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
+					c.writeControl("keepalive-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
 					keepaliveTS = time.Now().Add(pingInterval)
 				}
 
@@ -204,7 +217,7 @@ func (c *CS2Conn) worker() {
 				// Send PING on data receive, matching official Mi Home app behavior.
 				// Ported from go2rtc: PING sent inside msgDrw handler, throttled to 1s.
 				if now := time.Now(); now.After(keepaliveTS) {
-					_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPing, 0, 0})
+					c.writeControl("data-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
 					keepaliveTS = now.Add(pingInterval)
 				}
 				err = channel.Push(buf[8:n])
@@ -218,7 +231,7 @@ func (c *CS2Conn) worker() {
 				if pushed >= 0 {
 					// For UDP we should send ACK.
 					ack := []byte{cs2Magic, cs2MsgDrwAck, 0, 6, cs2MagicDrw, ch, 0, 1, seqHI, seqLO}
-					_, _ = c.Conn.Write(ack)
+					c.writeControl("drw-ack", ack)
 				}
 			}
 
@@ -230,11 +243,11 @@ func (c *CS2Conn) worker() {
 		case cs2MsgPing:
 			// Camera probes client liveness with PING; we MUST reply PONG or it
 			// tears down the connection after its retry window (~6s). go2rtc parity.
-			_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgPong, 0, 0})
+			c.writeControl("pong", []byte{cs2Magic, cs2MsgPong, 0, 0})
 		case cs2MsgPong, cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP, cs2MsgClose, cs2MsgCloseAck: // skip
 		case cs2MsgDrwAck: // only for UDP
-			if c.cmdAck != nil {
-				c.cmdAck()
+			if fn := c.cmdAck.Load(); fn != nil {
+				(*fn)()
 			}
 		default:
 			// unknown message type, silently ignore
@@ -259,6 +272,51 @@ func (c *CS2Conn) setErr(err error) {
 	c.mu.Lock()
 	c.err = err
 	c.mu.Unlock()
+}
+
+// peer returns the log identity for control-write failures: the MISS layer's
+// model@host key when set, else the remote address (#503).
+func (c *CS2Conn) peer() string {
+	if c.LogKey != "" {
+		return c.LogKey
+	}
+	if c.Conn != nil {
+		if addr := c.RemoteAddr(); addr != nil {
+			return addr.String()
+		}
+	}
+	return "unknown-peer"
+}
+
+// writeControl sends an outbound keepalive/ACK control frame (#503). Write
+// failures here were silently dropped — an undelivered PONG is followed ~6s
+// later by the camera tearing down the connection and a dropped DrwAck by
+// camera-side retransmit stalls, so without a log line the ensuing EOF /
+// no-media storms cannot be attributed to our side vs the camera (#167
+// lesson: silent ACK-write drops made the TUTK starvation invisible).
+// A single failure logs at debug (flaky P2P links blip routinely); three or
+// more consecutive failures escalate to warn with the running count, so
+// dead-link evidence survives even at default INFO level.
+//
+// Worker-goroutine only.
+func (c *CS2Conn) writeControl(frame string, b []byte) {
+	if c.writeFail == nil {
+		c.writeFail = make(map[string]int)
+	}
+	if _, err := c.Conn.Write(b); err != nil {
+		c.writeFail[frame]++
+		if c.writeFail[frame] >= 3 {
+			cs2Logger.Warn("cs2: control write failed (consecutive)",
+				"peer", c.peer(), "frame", frame,
+				"consecutive_failures", c.writeFail[frame], "error", err)
+		} else {
+			cs2Logger.Debug("cs2: control write failed",
+				"peer", c.peer(), "frame", frame,
+				"consecutive_failures", c.writeFail[frame], "error", err)
+		}
+		return
+	}
+	c.writeFail[frame] = 0
 }
 
 func (c *CS2Conn) getErr() error {
@@ -320,10 +378,12 @@ func (c *CS2Conn) WriteCommand(cmd uint32, data []byte) error {
 	timeout := time.NewTicker(time.Second)
 	defer timeout.Stop()
 
-	c.cmdAck = func() {
+	fn := func() {
 		repeat.Store(0)
 		timeout.Reset(1)
 	}
+	c.cmdAck.Store(&fn)
+	defer c.cmdAck.Store(nil) // a late DrwAck must not fire a stale callback
 
 	for {
 		if _, err := c.Conn.Write(req); err != nil {

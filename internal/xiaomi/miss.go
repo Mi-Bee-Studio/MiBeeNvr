@@ -141,6 +141,12 @@ func NewMISSClient(rawURL string, idleTimeout time.Duration) (*MISSClient, error
 		return nil, err
 	}
 
+	// Identify the peer in CS2 control-write failure logs ("model@host",
+	// #503) so PONG/DrwAck write errors can be correlated with the camera.
+	if cs2c, ok := conn.(*CS2Conn); ok {
+		cs2c.LogKey = model + "@" + u.Host
+	}
+
 	// 3. Login with credentials.
 	err = missLogin(conn, query.Get("client_public"), query.Get("sign"))
 	if err != nil {
