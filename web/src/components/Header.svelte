@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { withBase } from '$lib/base-path';
-  import { logout, getSettings, getUpdateStatus } from '$lib/api';
+  import { logout, isLocalBypass, getSettings, getUpdateStatus } from '$lib/api';
   import { getMiBeeVisionConnected, refreshMiBeeVisionStatus } from '$lib/mibeevision-status';
   import { getEffectiveTheme } from '$lib/preferences';
   import LanguageSwitcher from './LanguageSwitcher.svelte';
@@ -176,10 +176,15 @@
     <div class="navbar-right">
       <ThemeToggle />
       <LanguageSwitcher />
-      <button class="btn btn-ghost logout-btn" onclick={logout}>
-        <LogOut size={20} />
-        <span>{t('nav.logout')}</span>
-      </button>
+      <!-- #516: under auth.local_bypass the loopback session is not a
+           credential — there is nothing to log out of, and clearing the
+           token just bounces back to the dashboard. Hide the entry. -->
+      {#if !isLocalBypass()}
+        <button class="btn btn-ghost logout-btn" onclick={logout}>
+          <LogOut size={20} />
+          <span>{t('nav.logout')}</span>
+        </button>
+      {/if}
     </div>
   </div>
 </header>
