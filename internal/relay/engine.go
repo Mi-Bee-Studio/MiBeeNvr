@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -16,6 +17,22 @@ import (
 )
 
 var engineLogger = slog.Default().With("component", "relay-engine")
+
+const (
+	// relayStallAfter is how long a target may report streaming with zero
+	// bytes sent before the connection is declared dead and reconnected
+	// (#429: after the receiver restarted, a target sat in streaming/kbps=0
+	// for hours — write errors were the only failure signal, and with no
+	// frames flowing there are no writes to fail).
+	relayStallAfter = 30 * time.Second
+	// relayStallPoll is the watchdog's sample interval.
+	relayStallPoll = 5 * time.Second
+	// relayWriteTimeout bounds each outbound RTMP write on the custom
+	// publish conn. Without it, a dead peer (receiver restart, silently
+	// dropped NAT state) lets writes block forever once the kernel send
+	// buffer fills (#429).
+	relayWriteTimeout = 10 * time.Second
+)
 
 // PushTargetConfig is the user-facing configuration for one push-out target.
 // Mirrors config.PushTargetConfig but kept local to avoid a config<->relay
@@ -96,6 +113,13 @@ type PushTarget struct {
 	activeDriftMonitor atomic.Pointer[DriftMonitor]
 	latestTemperatureC atomic.Int64
 	restartCount       atomic.Int64
+
+	// Stall watchdog threshold; overridable in tests, defaults to
+	// relayStallAfter (issue #429).
+	stallAfter time.Duration
+	// connectFn is the streaming attempt run under the stall watchdog;
+	// overridden in tests, nil = t.connectAndStream.
+	connectFn func(ctx context.Context) error
 }
 
 // NewPushTarget constructs an idle target. It does not connect until Run.
@@ -106,6 +130,7 @@ func NewPushTarget(cameraID string, cfg PushTargetConfig, hub *model.StreamHub, 
 		hub:         hub,
 		spsProvider: sps,
 		status:      StatusIdle,
+		stallAfter:  relayStallAfter,
 	}
 }
 
@@ -277,7 +302,7 @@ func (t *PushTarget) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		err := t.connectAndStream(ctx)
+		err := t.connectAndStreamWatched(ctx)
 		if ctx.Err() != nil {
 			return
 		}
@@ -291,6 +316,82 @@ func (t *PushTarget) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(bo):
+		}
+	}
+}
+
+// connectAndStreamWatched runs connectAndStream under the stall watchdog
+// (issue #429). Failure detection in the streaming loops is purely
+// write-error driven; when the source stalls or the peer dies without RST
+// there are no writes to fail, so the target sat in status=streaming with
+// kbps=0 for hours. The watchdog cancels the streaming context when no bytes
+// have been sent for stallAfter while the target reports streaming, turning
+// the silent stall into a normal reconnect-with-backoff.
+func (t *PushTarget) connectAndStreamWatched(ctx context.Context) error {
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stalled := make(chan struct{})
+	go t.stallMonitor(streamCtx, stalled, cancel)
+
+	inner := t.connectFn
+	if inner == nil {
+		inner = t.connectAndStream
+	}
+	err := inner(streamCtx)
+	select {
+	case <-stalled:
+		if ctx.Err() == nil {
+			return fmt.Errorf("stream stalled: no bytes sent for %v while streaming (dead target connection or stalled source)", t.stallAfter)
+		}
+	default:
+	}
+	return err
+}
+
+// stallMonitor samples bytesSent every relayStallPoll and cancels the
+// streaming context via cancel once the target has been streaming with a
+// frozen byte counter for stallAfter. The window resets while the target is
+// not yet streaming (connect/handshake phases have their own timeouts).
+// Exactly one of stalled is closed / cancel is called at most once, by this
+// goroutine alone.
+func (t *PushTarget) stallMonitor(ctx context.Context, stalled chan struct{}, cancel context.CancelFunc) {
+	poll := relayStallPoll
+	if t.stallAfter < 2*poll {
+		poll = max(t.stallAfter/2, 50*time.Millisecond)
+	}
+	lastBytes := t.bytesSent.Load()
+	lastChange := time.Now()
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.mu.RLock()
+			st := t.status
+			t.mu.RUnlock()
+			if st != StatusStreaming {
+				// Handshake/connect phase — reset the window.
+				lastBytes = t.bytesSent.Load()
+				lastChange = time.Now()
+				continue
+			}
+			cur := t.bytesSent.Load()
+			if cur != lastBytes {
+				lastBytes = cur
+				lastChange = time.Now()
+				continue
+			}
+			if time.Since(lastChange) >= t.stallAfter {
+				engineLogger.Warn("relay target stalled, forcing reconnect",
+					"camera_id", t.CameraID, "target_id", t.Config.ID,
+					"protocol", t.Config.Protocol, "stalled_for", time.Since(lastChange).Round(time.Second))
+				close(stalled)
+				cancel()
+				return
+			}
 		}
 	}
 }
