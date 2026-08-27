@@ -86,26 +86,27 @@ func TestCameraStorageRoot_SwitchAndBackgroundMigrate(t *testing.T) {
 	// Run the background migration to completion.
 	mig.Start(context.Background())
 	defer mig.Stop()
+	// "Done" requires the cam-one job to have been OBSERVED — under CI-runner
+	// load the first Status() snapshot can land before the queue is visible,
+	// and an idle+empty poll must keep waiting instead of reading as "nothing
+	// to migrate" (flaked on main as `job = <nil>` in 0.13s).
 	deadline := time.Now().Add(15 * time.Second)
+	var job *migration.Job
 	for time.Now().Before(deadline) {
 		state, jobs := mig.Status()
 		done := state == "idle"
 		for _, j := range jobs {
-			if j.CameraID == "cam-one" && j.State != "done" && j.State != "failed" {
-				done = false
+			if j.CameraID == "cam-one" {
+				job = j
+				if j.State != "done" && j.State != "failed" {
+					done = false
+				}
 			}
 		}
-		if done {
+		if done && job != nil {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
-	}
-	_, jobs := mig.Status()
-	var job *migration.Job
-	for _, j := range jobs {
-		if j.CameraID == "cam-one" {
-			job = j
-		}
 	}
 	if job == nil || job.State != "done" {
 		t.Fatalf("job = %+v", job)
