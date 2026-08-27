@@ -213,6 +213,11 @@
                     {t('flow.ringWater', { len: stream.recording.ring_buf_len, cap: stream.recording.ring_buf_cap })}
                   </span>
                 {/if}
+                {#if stream.recording.ring_buf_drops_total > 0}
+                  <span class="node-line t-warn">
+                    {t('flow.ringDrops', { n: stream.recording.ring_buf_drops_total })}
+                  </span>
+                {/if}
               {/if}
               {#if stream.merge_pending !== undefined && stream.merge_pending > 0}
                 <span class="node-line dim">{t('flow.mergePending', { n: stream.merge_pending })}</span>

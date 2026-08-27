@@ -42,6 +42,15 @@ type CameraConfig struct {
 	FrameWatchdogTimeout string          `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
 	HTTPJPEGAVI          bool            `yaml:"http_jpeg_avi"`                    // write AVI single-file instead of MJPEG directory
 
+	// RingBufCap overrides the recorder's frameCh capacity (issue #521). The
+	// frameCh ring absorbs write-loop stalls (segment finalize fsync, merge IO,
+	// lock contention); when it fills, frames are dropped (honest holes +
+	// nvr_recorder_ring_buffer_drops_total + the Flow page's overflow chip).
+	// 0 = recorder.DefaultRingBufCap (300). Raising it trades ~1KB of memory
+	// per slot for stall tolerance on cameras that show occasional drops.
+	// H.264/H.265 recorders only.
+	RingBufCap int `yaml:"ring_buf_cap,omitempty" json:"ring_buf_cap,omitempty"`
+
 	// StableID is a hardware-level stable identifier (ONVIF serial number) used to
 	// re-acquire the SAME camera after its IP changes (e.g. after an AP reboot when
 	// cameras roam across subnets with per-subnet DHCP). Empty = IP self-healing

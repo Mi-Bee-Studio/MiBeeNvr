@@ -2426,3 +2426,59 @@ func TestGetGB28181Recorder(t *testing.T) {
 	nilRec := mgr.GetGB28181Recorder("non-existent")
 	require.Nil(t, nilRec)
 }
+
+// recordingStatsProvider mirrors the flow handler's recorder capability probe.
+type recordingStatsProvider interface {
+	RecordingStats() recorder.RecordingStats
+}
+
+// TestCreateRecorder_RingBufCapOverride verifies per-camera ring_buf_cap
+// (issue #521) reaches the recorder's frameCh capacity: an explicit value is
+// used verbatim; 0 falls through to recorder.DefaultRingBufCap.
+func TestCreateRecorder_RingBufCapOverride(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "30s",
+		},
+	}
+	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	require.NoError(t, err)
+	defer store.CleanupTempFiles()
+
+	mgr := NewCameraManager(cfg, store, nil, "")
+	segDur, err := time.ParseDuration(cfg.Storage.SegmentDuration)
+	require.NoError(t, err)
+
+	statsOf := func(rec model.Recorder) recorder.RecordingStats {
+		sp, ok := rec.(recordingStatsProvider)
+		require.True(t, ok, "recorder should expose RecordingStats")
+		return sp.RecordingStats()
+	}
+
+	t.Run("explicit override", func(t *testing.T) {
+		t.Helper()
+		cam := config.CameraConfig{
+			ID: "cam-ring-override", Name: "Ring Override", Protocol: "rtsp",
+			Encoding: "h264", URL: "rtsp://127.0.0.1:8554/test", RingBufCap: 777,
+		}
+		rec := mgr.createRecorder(cam, segDur)
+		require.NotNil(t, rec)
+		require.Equal(t, 777, statsOf(rec).RingCap)
+	})
+
+	t.Run("zero falls back to default", func(t *testing.T) {
+		t.Helper()
+		cam := config.CameraConfig{
+			ID: "cam-ring-default", Name: "Ring Default", Protocol: "rtsp",
+			Encoding: "h264", URL: "rtsp://127.0.0.1:8554/test",
+		}
+		rec := mgr.createRecorder(cam, segDur)
+		require.NotNil(t, rec)
+		require.Equal(t, recorder.DefaultRingBufCap, statsOf(rec).RingCap)
+	})
+}
