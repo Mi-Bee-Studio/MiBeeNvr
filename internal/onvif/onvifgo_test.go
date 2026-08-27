@@ -3,7 +3,7 @@ package onvif
 import (
 	"testing"
 
-	"github.com/mickeyzzc/onvif-go/discovery"
+	"github.com/mickeyzzc/onvif-go/v2/discovery"
 	"github.com/stretchr/testify/require"
 )
 

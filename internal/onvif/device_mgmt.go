@@ -9,7 +9,7 @@ import (
 	"net"
 	"sync"
 
-	onvifgo "github.com/mickeyzzc/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2"
 )
 
 // ErrUnsupported indicates the operation is not supported.
@@ -120,7 +120,7 @@ func (d *DeviceManagerImpl) GetUsers(ctx context.Context) ([]ONVIFUser, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	users, err := d.client.Device().GetUsers(ctx)
+	users, err := d.client.Security().GetUsers(ctx)
 	if err == nil || !isAuthError(err) {
 		if err != nil {
 			return nil, fmt.Errorf("get users failed: %w", err)
@@ -145,7 +145,7 @@ func (d *DeviceManagerImpl) CreateUsers(ctx context.Context, users []ONVIFUser) 
 		}
 	}
 
-	if err := d.client.Device().CreateUsers(ctx, onvifUsers); err != nil {
+	if err := d.client.Security().CreateUsers(ctx, onvifUsers); err != nil {
 		return fmt.Errorf("create users failed: %w", err)
 	}
 
@@ -158,7 +158,7 @@ func (d *DeviceManagerImpl) DeleteUsers(ctx context.Context, usernames []string)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if err := d.client.Device().DeleteUsers(ctx, usernames); err != nil {
+	if err := d.client.Security().DeleteUsers(ctx, usernames); err != nil {
 		return fmt.Errorf("delete users failed: %w", err)
 	}
 
@@ -171,7 +171,7 @@ func (d *DeviceManagerImpl) SetUser(ctx context.Context, username, password stri
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if err := d.client.Device().SetUser(ctx, &onvifgo.User{
+	if err := d.client.Security().SetUser(ctx, &onvifgo.User{
 		Username: username,
 		Password: password,
 	}); err != nil {
