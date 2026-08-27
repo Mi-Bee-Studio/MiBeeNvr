@@ -79,21 +79,39 @@ func entryToDevice(e wsdEntry) *DiscoveredDevice {
 	}
 }
 
+// entryIfONVIF applies the shared ONVIF-ness gate (#266/#554) to a parsed
+// Hello/ProbeMatch entry: generic WS-Discovery responders (Windows machines,
+// NAS boxes, printers) announce Hellos with Types like "wsdiscovery:Device"
+// and non-ONVIF scopes — without this gate they auto-enroll as camera shells
+// that can never connect (the mickeybeessd/mickeybeehome zombies, #554).
+// Matching either signal (NetworkVideoTransmitter in Types, or an
+// onvif://www.onvif.org/ scope prefix) keeps the device, mirroring the active
+// Discover path's filter.
+func entryIfONVIF(e wsdEntry) *DiscoveredDevice {
+	if !isONVIFSignal(e.Types, strings.Fields(e.Scopes)) {
+		logger.Debug("dropping non-ONVIF WS-Discovery message",
+			"types", e.Types, "xaddrs", e.XAddrs)
+		return nil
+	}
+	return entryToDevice(e)
+}
+
 // parseWSDMessage parses a UDP datagram received on the WS-Discovery multicast
 // socket and returns the device it advertises, if any. It handles Hello (device
 // announcing itself on power-on) and ProbeMatches (a device answering someone
-// else's Probe). Returns nil for Bye, unmatched message types, and parse errors
-// — the caller treats nil as "ignore".
+// else's Probe); entries that carry no ONVIF signal are dropped at this
+// boundary (#554). Returns nil for Bye, unmatched message types, non-ONVIF
+// responders, and parse errors — the caller treats nil as "ignore".
 func parseWSDMessage(data []byte) *DiscoveredDevice {
 	var env helloEnvelope
 	if err := xml.Unmarshal(data, &env); err != nil {
 		return nil
 	}
 	if env.Body.Hello != nil {
-		return entryToDevice(*env.Body.Hello)
+		return entryIfONVIF(*env.Body.Hello)
 	}
 	if len(env.Body.ProbeMatches.ProbeMatch) > 0 {
-		return entryToDevice(env.Body.ProbeMatches.ProbeMatch[0])
+		return entryIfONVIF(env.Body.ProbeMatches.ProbeMatch[0])
 	}
 	return nil
 }
