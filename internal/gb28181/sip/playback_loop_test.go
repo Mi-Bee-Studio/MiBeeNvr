@@ -80,6 +80,33 @@ func (c *sipClient) respondRaw(req sip.Request, code int, reason, body, contentT
 	}
 }
 
+// answerRetransmits answers every retransmission of a server-initiated
+// request until the paired API call finishes. Rationale: gosip's client
+// transaction can race the FIRST 2xx response (response processed before
+// the transaction finishes installing → dropped); INVITE/BYE retransmit on
+// UDP, and answering the retransmission recovers deterministically — no
+// sleeps, no flakiness (#571).
+func (c *sipClient) answerRetransmits(method sip.RequestMethod, answer func(sip.Request), done <-chan error, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		req := c.nextRequest(150 * time.Millisecond)
+		if req != nil && req.Method() == method {
+			answer(req)
+		}
+		select {
+		case err := <-done:
+			return err
+		default:
+		}
+	}
+	select {
+	case err := <-done:
+		return err
+	default:
+		return fmt.Errorf("answerRetransmits: %s not completed within %s", method, timeout)
+	}
+}
+
 // sendMessage sends a server-directed MESSAGE (device → platform).
 func (c *sipClient) sendMessage(body string) {
 	c.t.Helper()
@@ -161,17 +188,29 @@ func fetchFlow(t *testing.T, download bool) {
 		}
 	}()
 
-	invite := client.awaitRequest(sip.INVITE, 5*time.Second)
 	sdpName := "Playback"
 	if download {
 		sdpName = "Download"
 	}
-	require.Contains(t, string(invite.Body()), "s="+sdpName, "fetch INVITE must name "+sdpName)
-	mediaPort := sdpMediaPort(t, string(invite.Body()))
-
-	// Answer 200 OK (echo the offered SDP — the device streams to our port).
-	client.respondRaw(invite, 200, "OK", string(invite.Body()), "application/sdp")
-	require.NoError(t, <-fetchDone)
+	var mediaPort int
+	var dialogID sip.CallID
+	err = client.answerRetransmits(sip.INVITE, func(invite sip.Request) {
+		// Both the catalog auto-INVITE (live) and the fetch INVITE arrive on
+		// this socket — answer every one; only the fetch INVITE names the
+		// session we stream media to.
+		if strings.Contains(string(invite.Body()), "s="+sdpName) {
+			if mediaPort == 0 {
+				mediaPort = sdpMediaPort(t, string(invite.Body()))
+				if id, ok := invite.CallID(); ok {
+					dialogID = *id
+				}
+			}
+		}
+		client.respondRaw(invite, 200, "OK", string(invite.Body()), "application/sdp")
+	}, fetchDone, 15*time.Second)
+	require.NoError(t, err)
+	require.NotZero(t, mediaPort, "fetch INVITE (s=%s) must have been answered", sdpName)
+	require.NotEmpty(t, dialogID.Value())
 
 	// Stream one IDR AU as RTP/PS to the platform's receive port.
 	media, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -193,10 +232,11 @@ func fetchFlow(t *testing.T, download bool) {
 	// INFO control: pause routes in-dialog to the device.
 	paused := make(chan error, 1)
 	go func() { paused <- srv.PlaybackControl(fakeChannelID, "pause", 0, 0) }()
-	info := client.awaitRequest(sip.INFO, 5*time.Second)
-	require.Contains(t, string(info.Body()), "PAUSE", "pause INFO must reach the device")
-	client.respondRaw(info, 200, "OK", "", "")
-	require.NoError(t, <-paused)
+	err = client.answerRetransmits(sip.INFO, func(info sip.Request) {
+		require.Contains(t, string(info.Body()), "PAUSE", "pause INFO must reach the device")
+		client.respondRaw(info, 200, "OK", "", "")
+	}, paused, 10*time.Second)
+	require.NoError(t, err)
 
 	// Device-side MediaStatus finished INFO ends the fetch (playback only —
 	// for downloads the platform keeps ownership of the stop). The INFO must
@@ -206,8 +246,7 @@ func fetchFlow(t *testing.T, download bool) {
 		require.True(t, ok, "active fetch must expose status")
 		require.True(t, st.Active)
 
-		dialogID, ok := invite.CallID()
-		require.True(t, ok)
+		require.NotEmpty(t, dialogID.Value())
 		var b strings.Builder
 		b.WriteString("INFO sip:" + testServerID + "@127.0.0.1 SIP/2.0\r\n")
 		fmt.Fprintf(&b, "From: <sip:%s@127.0.0.1>\r\n", fakeChannelID)
@@ -228,13 +267,22 @@ func fetchFlow(t *testing.T, download bool) {
 	}
 
 	// Stop (owner for downloads; idempotent after a finished playback). The
-	// teardown's BYE may land on the device socket — answer it when it does.
+	// teardown's BYE may land on the device socket — answer it (and its
+	// retransmissions) when it does; a finished playback may send no BYE at
+	// all, so the done channel is buffered-nil-safe: drain it separately.
 	stopped := make(chan error, 1)
 	go func() { stopped <- srv.StopPlayback(fakeChannelID) }()
-	if bye := client.nextRequest(2 * time.Second); bye != nil && bye.Method() == sip.BYE {
+	byeSeen := false
+	_ = client.answerRetransmits(sip.BYE, func(bye sip.Request) {
+		byeSeen = true
 		client.respondRaw(bye, 200, "OK", "", "")
+	}, stopped, 5*time.Second)
+	select {
+	case err := <-stopped:
+		require.NoError(t, err)
+	default:
 	}
-	require.NoError(t, <-stopped)
+	_ = byeSeen
 
 	require.Eventually(t, func() bool {
 		_, _, stops := sink.stats()
