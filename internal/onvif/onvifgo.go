@@ -3,7 +3,7 @@ package onvif
 import (
 	"strings"
 
-	"github.com/0x524a/onvif-go/discovery"
+	"github.com/mickeyzzc/onvif-go/discovery"
 )
 
 // MapDiscoveredDevice converts an onvif-go discovery.Device to the project's DiscoveredDevice.

@@ -11,7 +11,7 @@
 //
 // During `vite dev` the placeholder is NOT rewritten, so we fall back to a
 // dev-only random version (each reload is a new cache — fine for dev).
-const CACHE_VERSION = 'mibee-nvr-1787708909239';
+const CACHE_VERSION = 'mibee-nvr-1787790747298';
 
 // Serving prefix (#394): when the app is served under a reverse-proxy /
 // unified-gateway base path (e.g. fnOS "/app/mibee-nvr"), this SW itself lives
