@@ -104,6 +104,13 @@ type CameraEnroller interface {
 	// wants recording (alarm linkage leaves those sessions to the record
 	// loop, #355).
 	GB28181RecordingWanted(deviceID, channelID string) bool
+	// GB28181SubChannelID returns the persisted sub-channel code bound to a
+	// main channel's camera ("" = none), #560.
+	GB28181SubChannelID(deviceID, channelID string) string
+	// SetGB28181SubChannel persists the probed sub-channel code on the
+	// camera bound to a main channel (fill-once — never overwrites a
+	// non-empty value), #560.
+	SetGB28181SubChannel(deviceID, channelID, subChannelID string) error
 }
 
 // inviteDialog remembers the INVITE request and its final response for an
@@ -604,7 +611,34 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 		return fmt.Errorf("gb28181: recorder for camera %q not running — deferring INVITE for channel %s", cameraID, channelID)
 	}
 
-	// Allocate port, create SDP, start receiver.
+	if err := s.inviteCore(deviceID, ch, netAddr, serverHost, onAU, onAudio); err != nil {
+		return err
+	}
+
+	_ = s.sessionMgr.MarkPlaying(channelID)
+	if cameraID != "" {
+		if enrol := s.enroller(); enrol != nil {
+			enrol.OnGB28181Invite(cameraID)
+		}
+	}
+	// Session watchdog: some device firmwares emit SPS/PPS+IDR only at
+	// stream start and never again (recordings open segments on IDR), and
+	// some stall their stream mid-session — a zombie receiver then blocks
+	// every future auto-INVITE. Recycling the session forces a fresh stream
+	// (and a fresh IDR) from the device.
+	go s.watchSession(deviceID, channelID)
+	slog.Info("gb28181: INVITE answered, ACK sent", "channel", channelID, "device", deviceID)
+	return nil
+}
+
+// inviteCore establishes one media session for ch: allocates the RTP port and
+// receiver (building the SDP answer), sends the SIP INVITE, completes the
+// 2xx/ACK handshake and records the dialog. It is the shared machinery of the
+// recorder-oriented InviteChannel and the sub-stream puller's InviteSubChannel
+// (#560) — the caller supplies the AU/audio callbacks and owns post-answer
+// policy (watchdog, recorder notification, teardown).
+func (s *Server) inviteCore(deviceID string, ch *gb28181.Channel, netAddr, serverHost string, onAU func(au [][]byte, ptsTicks int64, isIDR bool), onAudio gb28181.AudioFrameHandler) error {
+	channelID := ch.ID
 	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil, onAU, onAudio)
 	if err != nil {
 		return fmt.Errorf("gb28181: session setup for %s: %w", channelID, err)
@@ -697,18 +731,6 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 		slog.Info("gb28181: INVITE confirmed via first RTP (non-compliant device response)", "channel", channelID, "device", deviceID)
 	}
 
-	_ = s.sessionMgr.MarkPlaying(channelID)
-	if cameraID != "" {
-		if enrol := s.enroller(); enrol != nil {
-			enrol.OnGB28181Invite(cameraID)
-		}
-	}
-	// Session watchdog: some device firmwares emit SPS/PPS+IDR only at
-	// stream start and never again (recordings open segments on IDR), and
-	// some stall their stream mid-session — a zombie receiver then blocks
-	// every future auto-INVITE. Recycling the session forces a fresh stream
-	// (and a fresh IDR) from the device.
-	go s.watchSession(deviceID, channelID)
 	slog.Info("gb28181: INVITE answered, ACK sent", "channel", channelID, "device", deviceID)
 	return nil
 }
@@ -1458,6 +1480,10 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 	// session. Also covers NVR restarts — cameras persist, sessions do
 	// not, and catalog channels are only known after this response.
 	go s.autoInviteDevice(deviceID)
+	// Sub-channel probing (#560): after the main sessions settle, probe the
+	// vendor-convention sub candidate per bound channel (silent on failure;
+	// re-registers persisted codes after an NVR restart).
+	go s.maybeProbeSubChannels(deviceID)
 
 	// Channel-level Manufacturer/Model backfill: the DeviceInfo response
 	// often races (and loses to) async auto-enrollment, but the catalog

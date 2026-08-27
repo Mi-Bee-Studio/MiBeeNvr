@@ -34,9 +34,12 @@ type ONVIFConfig struct {
 	AudioEnabled         bool
 	AudioInRecordings    bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
-	ONVIFEndpoint        string        // ONVIF device endpoint URL (for HTTP MJPEG probe base)
-	EventBus             *event.EventBus
-	AVI                  bool // when true, JPEG delegate writes AVI single-file
+	// RingBufCap overrides the delegate H.264/H.265 recorders' frameCh
+	// capacity (issue #521). 0 = recorder.DefaultRingBufCap.
+	RingBufCap    int
+	ONVIFEndpoint string // ONVIF device endpoint URL (for HTTP MJPEG probe base)
+	EventBus      *event.EventBus
+	AVI           bool // when true, JPEG delegate writes AVI single-file
 	// RecordEnabled gates segment writes for all delegate recorders (H264/H265/
 	// MJPEG/HTTP-JPEG). nil => record (default); pointer to false => live-only
 	// (recorder stays connected for live preview/relay/health but writes nothing).
@@ -678,7 +681,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			Username:             r.cfg.Username,
 			Password:             r.cfg.Password,
 			SegmentDur:           r.cfg.SegmentDur,
-			RingBufCap:           DefaultRingBufCap,
+			RingBufCap:           r.cfg.RingBufCap,
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
 			AudioInRecordings:    r.cfg.AudioInRecordings,
@@ -769,7 +772,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			Username:             r.cfg.Username,
 			Password:             r.cfg.Password,
 			SegmentDur:           r.cfg.SegmentDur,
-			RingBufCap:           DefaultRingBufCap,
+			RingBufCap:           r.cfg.RingBufCap,
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
 			AudioInRecordings:    r.cfg.AudioInRecordings,

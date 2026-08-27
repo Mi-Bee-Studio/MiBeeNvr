@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, getContext } from 'svelte';
+  import { onDestroy, getContext, untrack } from 'svelte';
   import { t } from '$lib/i18n';
   import { AlertCircle, RefreshCw, ImageIcon } from 'lucide-svelte';
   import CameraAudioButton from './CameraAudioButton.svelte';
@@ -100,6 +100,10 @@
   let videoEl: HTMLVideoElement | undefined = $state();
   let mpegtsPlayer: any = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Init generation: destroyPlayer() bumps it so an in-flight initFlv (still
+  // awaiting the mpegts.js import) aborts instead of resurrecting a player on
+  // a torn-down element (issue #549).
+  let initGeneration = 0;
   // Loading watchdog: a failed dynamic import or a wedged mpegts load() can
   // leave streamState at 'loading' forever with no network request issued
   // (observed on degraded GB28181 streams — the tile stuck at "connecting"
@@ -243,6 +247,7 @@ let videoEventAc: AbortController | null = null;
   }
 
   function destroyPlayer() {
+    initGeneration++;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -317,6 +322,7 @@ let videoEventAc: AbortController | null = null;
     }
 
     streamState = 'loading';
+    const gen = ++initGeneration;
     if (loadingWatchdog) clearTimeout(loadingWatchdog);
     loadingWatchdog = setTimeout(() => {
       loadingWatchdog = null;
@@ -329,7 +335,21 @@ let videoEventAc: AbortController | null = null;
 
     try {
       const mpegts = await import('mpegts.js');
-      if (destroyed) return;
+      // Stale-run guard: destroyPlayer() (reconnect, visibility rebuild,
+      // protocol switch) invalidates any initFlv still awaiting the import —
+      // without this the old coroutine attaches a player to a torn-down
+      // element and the two runs double-rebuild on every state transition.
+      if (destroyed || gen !== initGeneration) return;
+      if (snapshotMode || !videoEl) {
+        // The <video> lives in the {:else} branch of {#if snapshotMode} — it
+        // leaves the DOM (videoEl → undefined) when snapshot fallback flips the
+        // branch while the import is in flight. attachMediaElement(null) throws
+        // "Cannot set properties of null (setting 'src')".
+        if (!snapshotMode) {
+          setTimeout(() => { if (!destroyed && !snapshotMode) initFlv(); }, 250);
+        }
+        return;
+      }
 
       if (!mpegts.default.isSupported()) {
         console.warn('mpegts.js not supported');
@@ -470,14 +490,21 @@ let videoEventAc: AbortController | null = null;
         try { mpegtsPlayer.pause(); } catch { /* ignore */ }
       }
     } else {
-      // Tab visible — resume: rebuild stream for fresh state
-      if (!destroyed && streamState !== 'loading') {
-        stopSnapshotMode();
-        reconnectAttempts = 0;
-        captureFreezeFrame();
-        destroyPlayer();
-        initFlv();
-      }
+      // Tab visible — resume: rebuild stream for fresh state.
+      // untrack the streamState read: this effect must re-run ONLY on
+      // tabVisible flips. Reading it reactively made every loading→buffering
+      // transition re-run the rebuild branch → destroyPlayer()+initFlv() →
+      // buffering → … an infinite destroy/init churn that kept the FLV tile
+      // permanently black (issue #549). WebRTCPlayer has the same untrack.
+      untrack(() => {
+        if (!destroyed && streamState !== 'loading') {
+          stopSnapshotMode();
+          reconnectAttempts = 0;
+          captureFreezeFrame();
+          destroyPlayer();
+          initFlv();
+        }
+      });
     }
   });
 

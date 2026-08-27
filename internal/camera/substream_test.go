@@ -35,6 +35,12 @@ func TestResolveSubTarget(t *testing.T) {
 		{ID: "cam-onvif-manual", Protocol: "onvif", URL: "http://192.168.1.13/onvif/device_service", SubStreamURL: "rtsp://192.168.1.13:554/sub2"},
 		{ID: "cam-onvif-nothing", Protocol: "onvif", URL: "http://192.168.1.14/onvif/device_service"},
 		{ID: "cam-xiaomi", Protocol: "xiaomi"},
+		{
+			ID:       "cam-gb-sub",
+			Protocol: "gb28181",
+			GB28181:  config.GB28181ChannelConfig{DeviceID: "34020000001320000099", ChannelID: "34020000001320000001", SubChannelID: "34020000001320000002"},
+		},
+		{ID: "cam-gb-nosub", Protocol: "gb28181", GB28181: config.GB28181ChannelConfig{DeviceID: "34020000001320000098", ChannelID: "34020000001320000011"}},
 	}}
 	cm := NewCameraManager(cfg, nil, nil, "")
 
@@ -48,6 +54,21 @@ func TestResolveSubTarget(t *testing.T) {
 
 	// rtsp without sub_stream_url: not available.
 	_, ok, err = cm.resolveSubTarget(context.Background(), "cam-rtsp-nosub")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	// gb28181 with a probed sub channel (#560): the GB pull target carries
+	// the device/sub-channel pair, not an RTSP URL.
+	tgt, ok, err = cm.resolveSubTarget(context.Background(), "cam-gb-sub")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, substream.KindGB28181, tgt.Kind)
+	require.Equal(t, "34020000001320000099", tgt.GBDeviceID)
+	require.Equal(t, "34020000001320000002", tgt.GBChannelID)
+	require.Empty(t, tgt.URL)
+
+	// gb28181 without a probed sub: not available.
+	_, ok, err = cm.resolveSubTarget(context.Background(), "cam-gb-nosub")
 	require.NoError(t, err)
 	require.False(t, ok)
 

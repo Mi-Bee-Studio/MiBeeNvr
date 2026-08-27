@@ -41,7 +41,12 @@ func (m *Manager) pull(ctx context.Context, e *entry) {
 		if ctx.Err() != nil {
 			return
 		}
-		err := m.pullOnce(ctx, e, &backoff)
+		var err error
+		if e.target.Kind == KindGB28181 {
+			err = m.pullGBOnce(ctx, e, &backoff)
+		} else {
+			err = m.pullOnce(ctx, e, &backoff)
+		}
 		if ctx.Err() != nil {
 			return
 		}

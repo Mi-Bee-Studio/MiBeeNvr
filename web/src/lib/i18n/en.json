@@ -1749,6 +1749,7 @@
   "flow.expandHint": "Expand flow details",
   "flow.segProgress": "segment {elapsed}s/{dur}s · {frames} frames",
   "flow.ringWater": "ring buffer {len}/{cap}",
+  "flow.ringDrops": "ring overflow drops {n}",
   "flow.mergePending": "{n} pending merge",
   "flow.recordDisk": "Recording",
   "flow.recording": "Recording · writing segments to disk",

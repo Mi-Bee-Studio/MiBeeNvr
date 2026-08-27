@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,12 +50,18 @@ func testConfig(t *testing.T) config.GB28181ServerConfig {
 	}
 }
 
+// testPortBase hands each test server a disjoint 100-port window. A shared
+// fixed range (30000..30100) let one test's not-yet-recycled receiver make
+// the NEXT test's session bind fail — cascading failures (#571).
+var testPortBase atomic.Int32
+
 // startTestServer starts a Server on the config's address and registers a
 // cleanup that stops it.
 func startTestServer(t *testing.T, cfg config.GB28181ServerConfig) (*Server, *gb28181.DeviceManager) {
 	t.Helper()
+	base := int(20000 + 100*testPortBase.Add(1))
 	dm := gb28181.NewDeviceManager(60 * time.Second)
-	srv := NewServer(cfg, dm, gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), cfg.ServerID), nil)
+	srv := NewServer(cfg, dm, gb28181.NewSessionManager(gb28181.NewPortManager(uint16(base), uint16(base+99)), cfg.ServerID), nil)
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -619,9 +626,17 @@ func TestServer_Register_PortRotationKeepsAddressStable(t *testing.T) {
 // Mutex-guarded: mergeCatalogChannels calls it from spawned goroutines while
 // assertions read the recorded calls (-race clean).
 type fakeEnroller struct {
-	mu       sync.Mutex
-	enrolled []string // "deviceID/channelID"
-	archived []string // "deviceID/channelID"
+	mu           sync.Mutex
+	enrolled     []string // "deviceID/channelID"
+	archived     []string // "deviceID/channelID"
+	subSet       []string // "deviceID/channelID->subChannelID"
+	subPersisted map[string]string
+	// pbSink, when non-nil, is returned by NewGB28181PlaybackSink (playback
+	// fetch tests).
+	pbSink gb28181.AUWriter
+	// naluWriter, when non-nil, is returned by GB28181NALUWriter (live
+	// InviteChannel tests).
+	naluWriter func(au [][]byte, ptsTicks int64, isIDR bool)
 }
 
 func (f *fakeEnroller) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
@@ -642,13 +657,16 @@ func (f *fakeEnroller) GB28181CameraIDByChannel(deviceID, channelID string) (str
 	return "", false
 }
 
-func (f *fakeEnroller) GB28181NALUWriter(string) func([][]byte, int64, bool) { return nil }
+func (f *fakeEnroller) GB28181NALUWriter(string) func([][]byte, int64, bool) { return f.naluWriter }
 func (f *fakeEnroller) GB28181AudioWriter(string) func(string, []byte, []byte, int64, int) {
 	return nil
 }
 func (f *fakeEnroller) OnGB28181Invite(string) {}
 func (f *fakeEnroller) OnGB28181Bye(string)    {}
 func (f *fakeEnroller) NewGB28181PlaybackSink(string) (gb28181.AUWriter, error) {
+	if f.pbSink != nil {
+		return f.pbSink, nil
+	}
 	return nil, errors.New("not implemented in fake")
 }
 
@@ -781,6 +799,25 @@ func TestRetireDeviceSelfChannel_NoRealChannels(t *testing.T) {
 }
 
 func (f *fakeEnroller) GB28181RecordingWanted(deviceID, channelID string) bool { return false }
+
+func (f *fakeEnroller) GB28181SubChannelID(deviceID, channelID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.subPersisted[deviceID+"/"+channelID]
+}
+
+func (f *fakeEnroller) SetGB28181SubChannel(deviceID, channelID, subChannelID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.subSet = append(f.subSet, deviceID+"/"+channelID+"->"+subChannelID)
+	return nil
+}
+
+func (f *fakeEnroller) subSetEmpty() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.subSet) == 0
+}
 
 // TestServer_InviteChannel_DefersWhenRecorderNotRunning: a channel bound to
 // a camera whose recorder isn't up yet must NOT be INVITE'd. The media would

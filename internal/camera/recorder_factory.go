@@ -64,6 +64,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				AudioInRecordings: cam.AudioInRecordings,
 				EventBus:          cm.eventBus,
 				RecordEnabled:     cam.RecordingEnabled,
+				RingBufCap:        cam.RingBufCap,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
@@ -85,6 +86,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				AudioInRecordings: cam.AudioInRecordings,
 				EventBus:          cm.eventBus,
 				RecordEnabled:     cam.RecordingEnabled,
+				RingBufCap:        cam.RingBufCap,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
@@ -159,6 +161,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			onvifCfg.FrameWatchdogTimeout = d
 		}
+		onvifCfg.RingBufCap = cam.RingBufCap
 		rec = recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
 	case "timelapse":
 		frameSource := "auto"
@@ -182,6 +185,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 					SegmentDur:   segDur,
 					DB:           cm.db,
 					AudioEnabled: cam.AudioEnabled,
+					RingBufCap:   cam.RingBufCap,
 				}
 				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 					h264Cfg.FrameWatchdogTimeout = d
@@ -196,6 +200,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 					SegmentDur:   segDur,
 					DB:           cm.db,
 					AudioEnabled: cam.AudioEnabled,
+					RingBufCap:   cam.RingBufCap,
 				}
 				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 					h265Cfg.FrameWatchdogTimeout = d

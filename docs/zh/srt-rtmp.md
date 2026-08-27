@@ -41,7 +41,7 @@ SRT URL: srt://你的NVR地址:9000?streamid=#!:r=摄像头ID,m=publish
 
 ```bash
 # FFmpeg 推流测试
-ffmpeg -re -i input.mp4 -c:v libx264 -f mpegts \
+ffmpeg -re -i input.mp4 -c:v libx264 -bf 0 -f mpegts \
   "srt://192.168.1.50:9000?streamid=#!:r=test-cam,m=publish"
 ```
 
@@ -75,7 +75,7 @@ srt:
 推流端：
 
 ```bash
-ffmpeg -re -i input.mp4 -c:v libx264 -f mpegts \
+ffmpeg -re -i input.mp4 -c:v libx264 -bf 0 -f mpegts \
   "srt://192.168.1.50:9000?streamid=#!:r=test-cam,m=publish&passphrase=my-secret-key-123"
 ```
 
@@ -101,7 +101,7 @@ RTMP URL: rtmp://你的NVR地址:1935/live/摄像头ID
 
 ```bash
 # FFmpeg 推流测试
-ffmpeg -re -i input.mp4 -c:v libx264 -c:a aac -f flv \
+ffmpeg -re -i input.mp4 -c:v libx264 -bf 0 -c:a aac -f flv \
   "rtmp://192.168.1.50:1935/live/test-cam"
 ```
 
@@ -118,6 +118,18 @@ ffmpeg -re -i input.mp4 -c:v libx264 -c:a aac -f flv \
 |------|--------|------|
 | `port` | `1935` | RTMP 监听端口 |
 | `chunk_size` | `4096` | 分块大小 |
+
+## 编码器建议：关闭 B 帧（`-bf 0`）
+
+录像管线按「每帧编码即可写」的低延迟模型工作：录制器以帧到达顺序写入 MP4，`pts == dts`、不写 `ctts` 补偿表。监控相机几乎都输出 baseline/main 无 B 帧码流，此模型精确。但**通用编码器的默认配置会启用 B 帧**（如 `libx264` 默认 `bframes=3`）——B 帧的重建顺序 ≠ 显示顺序，按 pts==dts 写入会在播放时出现时序错乱观感，转封装（`-c copy`）时 ffmpeg 还会报 `co located POCs unavailable`（#435 长测实证）。
+
+推流接入（SRT/RTMP/WHIP，以及 RTSP 拉流的外部编码源）建议在编码端关闭 B 帧：
+
+```bash
+-c:v libx264 -bf 0        # FFmpeg
+```
+
+监控场景关闭 B 帧几乎没有码率损失（B 帧收益主要在点播 VOD），且与 NVR 的流式直写、按需 HLS、合并管线全部兼容。
 
 ## 推流转发（Push-Out）
 

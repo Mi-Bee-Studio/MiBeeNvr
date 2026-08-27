@@ -436,6 +436,15 @@ func validateConfigDetails(cfg *Config) error {
 		}
 	}
 
+	// Validate per-camera ring buffer capacity (issue #521): 0 = default, and
+	// the non-default range must stay sane — each slot is a framePacket, so an
+	// absurd cap is unbounded memory on a 512MB-class device.
+	for _, cam := range cfg.Cameras {
+		if cam.RingBufCap < 0 || cam.RingBufCap > 10000 {
+			return fmt.Errorf("cameras.%s.ring_buf_cap must be between 0 (default) and 10000 (got %d)", cam.ID, cam.RingBufCap)
+		}
+	}
+
 	// Validate per-camera timelapse configuration
 	for _, cam := range cfg.Cameras {
 		if cam.Timelapse == nil {
@@ -612,6 +621,14 @@ func validateConfigDetails(cfg *Config) error {
 		}
 		if _, err := time.ParseDuration(cfg.GB28181.HeartbeatInterval); err != nil {
 			return fmt.Errorf("gb28181.heartbeat_interval invalid duration: %w", err)
+		}
+		switch cfg.GB28181.SubChannelProbe {
+		case "", "auto", "on", "off":
+		default:
+			return fmt.Errorf("gb28181.sub_channel_probe must be auto/on/off (got %q)", cfg.GB28181.SubChannelProbe)
+		}
+		if cfg.GB28181.SubChannelProbeOffset < 0 || cfg.GB28181.SubChannelProbeOffset > 99 {
+			return fmt.Errorf("gb28181.sub_channel_probe_offset must be between 0 and 99 (got %d)", cfg.GB28181.SubChannelProbeOffset)
 		}
 		if _, err := time.ParseDuration(cfg.GB28181.CatalogInterval); err != nil {
 			return fmt.Errorf("gb28181.catalog_interval invalid duration: %w", err)

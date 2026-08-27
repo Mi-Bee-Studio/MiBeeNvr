@@ -369,6 +369,12 @@ func applyConfigDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.GB28181.CatalogInterval) == "" {
 		cfg.GB28181.CatalogInterval = "30m"
 	}
+	if strings.TrimSpace(cfg.GB28181.SubChannelProbe) == "" {
+		cfg.GB28181.SubChannelProbe = "auto"
+	}
+	if cfg.GB28181.SubChannelProbeOffset == 0 {
+		cfg.GB28181.SubChannelProbeOffset = 1
+	}
 	if strings.TrimSpace(cfg.GB28181.PortRange) == "" {
 		cfg.GB28181.PortRange = "30000-30050"
 	}

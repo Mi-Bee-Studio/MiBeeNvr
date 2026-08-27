@@ -865,6 +865,12 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		// Auto-INVITE when GB28181 recorders start (pull media on camera creation).
 		camMgr.SetGB28181Inviter(deps.gb28181Server)
 		camMgr.SetGB28181SessionEnder(deps.gb28181Server)
+		// GB sub-channel pull sessions (#560): the SIP server structurally
+		// implements substream.GBPuller (EnsureSubChannelRegistered +
+		// InviteSubChannel).
+		if subs := camMgr.SubStreams(); subs != nil {
+			subs.SetGBPuller(deps.gb28181Server)
+		}
 		// Naive GB device-clock timestamps follow the app timezone — hosts in
 		// a different zone than the devices (UTC container, CST cameras) would
 		// otherwise skew every record window by the TZ offset.
