@@ -98,8 +98,12 @@ func TestKnownOffsetVendor(t *testing.T) {
 // (a second trigger does not re-INVITE).
 func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 	t.Helper()
-	subProbeWait, subProbeTimeout = 20*time.Millisecond, 200*time.Millisecond
-	t.Cleanup(func() { subProbeWait, subProbeTimeout = 5*time.Second, 6*time.Second })
+	subProbeWait.Store(int64(20 * time.Millisecond))
+	subProbeTimeout.Store(int64(200 * time.Millisecond))
+	t.Cleanup(func() {
+		subProbeWait.Store(int64(5 * time.Second))
+		subProbeTimeout.Store(int64(6 * time.Second))
+	})
 
 	cfg := testConfig(t)
 	cfg.SubChannelProbe = "on"
@@ -156,8 +160,8 @@ func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 // manufacturer is unknown never gets probed.
 func TestProbeSubChannels_VendorGateAutoMode(t *testing.T) {
 	t.Helper()
-	subProbeWait = 10 * time.Millisecond
-	t.Cleanup(func() { subProbeWait = 5 * time.Second })
+	subProbeWait.Store(int64(10 * time.Millisecond))
+	t.Cleanup(func() { subProbeWait.Store(int64(5 * time.Second)) })
 
 	cfg := testConfig(t) // SubChannelProbe defaults empty → "auto" via ApplyDefaults? tests set explicit:
 	cfg.SubChannelProbe = "auto"
@@ -186,8 +190,8 @@ func TestProbeSubChannels_VendorGateAutoMode(t *testing.T) {
 // state) without any probe INVITE.
 func TestProbeSubChannels_PersistedCodeReregisters(t *testing.T) {
 	t.Helper()
-	subProbeWait = 10 * time.Millisecond
-	t.Cleanup(func() { subProbeWait = 5 * time.Second })
+	subProbeWait.Store(int64(10 * time.Millisecond))
+	t.Cleanup(func() { subProbeWait.Store(int64(5 * time.Second)) })
 
 	cfg := testConfig(t)
 	cfg.SubChannelProbe = "on"

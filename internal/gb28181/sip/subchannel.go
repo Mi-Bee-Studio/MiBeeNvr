@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
@@ -25,12 +26,17 @@ import (
 
 // subProbeWait delays probing after a catalog merge so the main channels'
 // auto-INVITE sessions settle first — single-stream firmwares would otherwise
-// see the probe INVITE race the main INVITE. Vars (not consts) so tests can
-// shrink them.
+// see the probe INVITE race the main INVITE. Atomic nanosecond counters (not
+// plain vars) so tests can shrink them without racing probe goroutines.
 var (
-	subProbeWait    = 5 * time.Second
-	subProbeTimeout = 6 * time.Second
+	subProbeWait    atomic.Int64
+	subProbeTimeout atomic.Int64
 )
+
+func init() {
+	subProbeWait.Store(int64(5 * time.Second))
+	subProbeTimeout.Store(int64(6 * time.Second))
+}
 
 // subProbed memoizes probed main channels for the process lifetime (success
 // AND failure — the probe never repeats within one boot; clearing the
@@ -121,7 +127,7 @@ func (s *Server) maybeProbeSubChannels(deviceID string) {
 		}
 		mainCh := ch
 		go func() {
-			time.Sleep(subProbeWait) // let the main INVITE settle first
+			time.Sleep(time.Duration(subProbeWait.Load())) // let the main INVITE settle first
 			// BOTH gates resolve INSIDE the delayed goroutine — at merge time
 			// the catalog-driven camera enrollment (EnsureGB28181Camera) is
 			// typically still in flight, and the DeviceInfo response carrying
@@ -215,7 +221,7 @@ func (s *Server) probeSubChannel(deviceID string, ch *gb28181.Channel, offset in
 		cameraID, _ := enrol.GB28181CameraIDByChannel(deviceID, ch.ID)
 		slog.Info("gb28181: sub-channel probed — sub stream available",
 			"device", deviceID, "channel", ch.ID, "sub_channel", candidate, "camera", cameraID)
-	case <-time.After(subProbeTimeout):
+	case <-time.After(time.Duration(subProbeTimeout.Load())):
 		release()
 		s.deviceMgr.UnregisterChannel(deviceID, candidate)
 		slog.Debug("gb28181: sub-channel probe timed out (silent — no sub stream)",

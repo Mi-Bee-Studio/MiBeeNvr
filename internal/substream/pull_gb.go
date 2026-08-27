@@ -11,6 +11,7 @@ package substream
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -35,14 +36,19 @@ func (m *Manager) pullGBOnce(ctx context.Context, e *entry, backoff *time.Durati
 
 	// Codec resolution from in-band parameter sets only — the GB SDP answer
 	// carries no codec information worth parsing (PS streams declare in-band).
+	// auMu guards codec/isH265: the AU callback runs on the RTP receiver's
+	// goroutine while the session-setup section below reads the resolved codec
+	// on this one (race-detector clean).
+	var auMu sync.Mutex
 	var codec model.Format
-	isH265 := false
+	var isH265 bool
 	var tsOffset int64
 	haveOffset := false
 	handleAU := func(au [][]byte, pktTS int64, _ bool) {
 		if ctx.Err() != nil {
 			return
 		}
+		auMu.Lock()
 		if codec == "" {
 			switch detectCodecGB(au) {
 			case model.FormatH264:
@@ -52,9 +58,11 @@ func (m *Manager) pullGBOnce(ctx context.Context, e *entry, backoff *time.Durati
 				isH265 = true
 			}
 			if codec == "" {
+				auMu.Unlock()
 				return // no parameter-set NALU yet — cannot publish or broadcast
 			}
 		}
+		curCodec, curH265 := codec, isH265
 		ts := pktTS
 		if !haveOffset {
 			haveOffset = true
@@ -63,13 +71,14 @@ func (m *Manager) pullGBOnce(ctx context.Context, e *entry, backoff *time.Durati
 			}
 		}
 		pts := ts + tsOffset
+		auMu.Unlock()
 		if minGap := e.lastPTS.Load() + 3600; pts < minGap { // ~40ms floor
 			pts = minGap
 		}
 		e.lastPTS.Store(pts)
-		refreshParamSets(src, codec, au)
+		refreshParamSets(src, curCodec, au)
 		src.lastFrameAt.Store(time.Now().UnixNano())
-		src.hub.Broadcast(pts, au, nalutil.IsIDR(au, isH265))
+		src.hub.Broadcast(pts, au, nalutil.IsIDR(au, curH265))
 	}
 
 	release, err := puller.InviteSubChannel(e.target.GBDeviceID, e.target.GBChannelID, handleAU)
@@ -78,10 +87,12 @@ func (m *Manager) pullGBOnce(ctx context.Context, e *entry, backoff *time.Durati
 	}
 
 	*backoff = time.Second
-	if src.State() != StateLive && codec != "" {
+	auMu.Lock()
+	resolved := codec
+	auMu.Unlock()
+	if resolved != "" {
 		src.state.Store(StateLive)
-	}
-	if codec == "" {
+	} else {
 		src.state.Store(StateStarting)
 	}
 	subLogger.Info("gb28181 sub-stream session up", "camera_id", cameraID,
