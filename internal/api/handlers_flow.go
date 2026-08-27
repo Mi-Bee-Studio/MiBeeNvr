@@ -48,6 +48,25 @@ type FlowCamera struct {
 	// ingest deltas are measured from — players combine it with the delta
 	// to compute end-to-end live latency (#481). 0/omitted = no FLV entry.
 	FLVClockMs int64 `json:"flv_clock_ms,omitempty"`
+	// Sub is the camera's on-demand sub-stream branch (#513): the low-res
+	// pull serving "流畅" viewers and the sub-layer analysis recorder (#514).
+	// Nil when the camera has no live sub-stream entry (never acquired, or
+	// idle recycled).
+	Sub *FlowSub `json:"sub,omitempty"`
+}
+
+// FlowSub mirrors FlowCamera for the sub-stream pull. HubStats carries the
+// sub hub's counters (frames_in/bytes_in/per-consumer fan-out) so the flow
+// tree renders both tiers with the same machinery.
+type FlowSub struct {
+	model.HubStats
+	State string       `json:"state"`
+	Codec model.Format `json:"codec,omitempty"`
+	Refs  int          `json:"refs"`
+	// LastFrameAgeS is seconds since the sub hub's last frame; nil when it
+	// never delivered one. A stale age while State is "live" is the early
+	// signal of a stalled camera-side second encoder.
+	LastFrameAgeS *float64 `json:"last_frame_age_s,omitempty"`
 }
 
 // recordingStatsProvider is implemented by recorders embedding baseRecorder
@@ -151,17 +170,42 @@ func (h *Handler) buildFlowCamera(cameraID string, hub *model.StreamHub, status 
 		}
 	}
 	if h.wsMgr != nil {
-		fc.Viewers["ws"] = h.wsMgr.ViewerCount(cameraID)
+		// WS/FLV egress registers sub-quality sessions under the suffixed
+		// key (camID/sub) — sum both entries so the flow view's viewer
+		// counts match reality. WHEP's PeerCount already sums both buckets.
+		fc.Viewers["ws"] = h.wsMgr.ViewerCount(cameraID) + h.wsMgr.ViewerCount(subKey(cameraID))
 	}
 	if h.flvMgr != nil {
-		fc.Viewers["flv"] = h.flvMgr.ViewerCount(cameraID)
+		fc.Viewers["flv"] = h.flvMgr.ViewerCount(cameraID) + h.flvMgr.ViewerCount(subKey(cameraID))
 		fc.FLVClockMs = h.flvMgr.ClockMs(cameraID)
 	}
 	if h.webrtcMgr != nil {
 		fc.Viewers["webrtc"] = h.webrtcMgr.PeerCount(cameraID)
 	}
-	if h.hlsMgr != nil && h.hlsMgr.IsActive(cameraID) {
+	if h.hlsMgr != nil && (h.hlsMgr.IsActive(cameraID) || h.hlsMgr.IsActive(subKey(cameraID))) {
 		fc.Viewers["hls"] = 1 // HLS muxer active; per-client tracking is CDN-shaped
+	}
+	// Sub-stream branch (#513 observability): the flow tree previously
+	// rendered only the main hub — the sub pull (its own hub + consumers
+	// like the vision sub-layer recorder and sub-quality egress) was
+	// invisible outside the journal.
+	if h.camMgr != nil {
+		if sm := h.camMgr.SubStreams(); sm != nil {
+			if st := sm.Status(cameraID); st != nil {
+				sub := &FlowSub{State: st.State, Codec: st.Codec, Refs: st.Refs}
+				if hub := sm.Hub(cameraID); hub != nil {
+					sub.HubStats = hub.Snapshot()
+				}
+				if !sub.LastFrameAt.IsZero() {
+					age := time.Since(sub.LastFrameAt).Seconds()
+					if age < 0 {
+						age = 0
+					}
+					sub.LastFrameAgeS = &age
+				}
+				fc.Sub = sub
+			}
+		}
 	}
 	return fc
 }

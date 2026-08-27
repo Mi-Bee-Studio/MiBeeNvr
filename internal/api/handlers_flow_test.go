@@ -68,6 +68,28 @@ func TestHandleListStreams_WithHub(t *testing.T) {
 	require.NotNil(t, resp.Streams[0].Viewers, "viewers map must serialize")
 }
 
+// The sub-stream branch (#513 observability) is omitted when the camera has
+// no live sub entry — never a zombie object — and appears with state/refs/hub
+// fan-out once the pull is active (covered end-to-end on-device; here only
+// the absence contract is cheap to prove).
+func TestHandleListStreams_SubBranchOmittedWithoutEntry(t *testing.T) {
+	h, camMgr := newFlowTestHandler(t)
+
+	hub := camMgr.GetOrCreateHub("flow-cam")
+	require.NotNil(t, hub)
+
+	rr := doRequest(t, h.Routes(), http.MethodGet, "/api/streams", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp struct {
+		Streams []map[string]any `json:"streams"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.Len(t, resp.Streams, 1)
+	_, hasSub := resp.Streams[0]["sub"]
+	require.False(t, hasSub, "sub must be omitted when no sub-stream entry exists")
+}
+
 func TestHandleCameraFlow(t *testing.T) {
 	h, camMgr := newFlowTestHandler(t)
 

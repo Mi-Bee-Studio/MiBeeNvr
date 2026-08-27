@@ -69,6 +69,9 @@ type CameraUpdate struct {
 	// upper platform's catalog and INVITEs refused). nil = unchanged. Takes
 	// effect at the next catalog response / INVITE — no recorder restart.
 	CascadeEnabled *bool
+	// CascadeSubStream forwards the camera's low-res tier to the upper
+	// platform (#512). nil = unchanged; applied at the next INVITE.
+	CascadeSubStream *bool
 	// Recording schedule
 	RecordingSchedule *config.ScheduleConfig
 	// RecordingMode selects the write-density strategy (#435): ""/"continuous"

@@ -305,6 +305,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		// Cascade gate: false = hidden from the GB28181 cascade catalog and
 		// INVITEs refused. nil = default (exposed).
 		CascadeEnabled *bool `json:"cascade_enabled"`
+		// Cascade tier: forward the sub-stream instead of main (#512).
+		CascadeSubStream bool `json:"cascade_sub_stream"`
 		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
 		RecordingMode string                          `json:"recording_mode"`
 		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
@@ -515,6 +517,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		AudioInRecordings: body.AudioInRecordings != nil && *body.AudioInRecordings,
 		RecordingEnabled:  body.RecordingEnabled,
 		CascadeEnabled:    body.CascadeEnabled,
+		CascadeSubStream:  body.CascadeSubStream,
 		RecordingMode:     body.RecordingMode,
 		Adaptive:          body.Adaptive,
 		AudioTrigger:      body.AudioTrigger,
@@ -710,6 +713,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// Cascade gate: false = hidden from the GB28181 cascade catalog and
 		// INVITEs refused. nil = unchanged.
 		CascadeEnabled *bool `json:"cascade_enabled"`
+		// Cascade tier: forward the sub-stream instead of main (#512).
+		CascadeSubStream *bool `json:"cascade_sub_stream"`
 		// Recording schedule
 		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
 		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
@@ -797,6 +802,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		DarkFrameThreshold:     body.DarkFrameThreshold,
 		RecordingEnabled:       body.RecordingEnabled,
 		CascadeEnabled:         body.CascadeEnabled,
+		CascadeSubStream:       body.CascadeSubStream,
 		RecordingSchedule:      body.RecordingSchedule,
 		RecordingMode:          body.RecordingMode,
 		Adaptive:               body.Adaptive,

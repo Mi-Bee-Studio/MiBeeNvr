@@ -98,6 +98,7 @@
   // and relay but writes NO segments to disk (live-only / stream-forward mode).
   let formRecordingEnabled = $state(true);
   let formCascadeEnabled = $state(true);
+  let formCascadeSubStream = $state(false);
   // Recording mode (#435): continuous, or adaptive — dynamic timelapse that
   // drops to sparse keyframes while the compressed-domain activity signal
   // stays calm and returns to full recording on activity.
@@ -390,6 +391,7 @@ let validationErrors = $state<Record<string, string>>({});
     formAudioInRecordings = camera.audio_in_recordings ?? false;
     formRecordingEnabled = camera.recording_enabled ?? true;
     formCascadeEnabled = camera.cascade_enabled ?? true;
+    formCascadeSubStream = camera.cascade_sub_stream ?? false;
     formRecordingMode = camera.recording_mode === 'adaptive' ? 'adaptive' : 'continuous';
     formAdaptiveCalmThreshold = camera.adaptive?.calm_threshold ?? '';
     formAdaptiveTimelapseInterval = camera.adaptive?.timelapse_interval ?? '';
@@ -722,6 +724,7 @@ async function performCameraSave() {
             audio_in_recordings: formAudioInRecordings,
             recording_enabled: formRecordingEnabled,
             cascade_enabled: formCascadeEnabled,
+            cascade_sub_stream: formCascadeSubStream,
             recording_mode: formRecordingMode,
             adaptive: buildAdaptivePayload(),
             audio_trigger: buildAudioTriggerPayload(),
@@ -791,6 +794,7 @@ async function performCameraSave() {
             audio_in_recordings: formAudioInRecordings,
             recording_enabled: formRecordingEnabled,
             cascade_enabled: formCascadeEnabled,
+            cascade_sub_stream: formCascadeSubStream,
             recording_mode: formRecordingMode,
             adaptive: buildAdaptivePayload(),
             audio_trigger: buildAudioTriggerPayload(),
@@ -1083,6 +1087,21 @@ async function performCameraSave() {
     </div>
     {#if !formCascadeEnabled}
       <p class="text-xs th-text-muted -mt-1">{t('cameras.cascadeDisabledHint')}</p>
+    {:else}
+      <div class="flex items-center gap-2 ml-5">
+        <input
+          id="cam-cascade-sub"
+          type="checkbox"
+          class="checkbox"
+          bind:checked={formCascadeSubStream}
+        />
+        <label for="cam-cascade-sub" class="input-label cursor-pointer text-sm">
+          {t('cameras.cascadeSubStream')}
+        </label>
+      </div>
+      {#if formCascadeSubStream}
+        <p class="text-xs th-text-muted -mt-1 ml-5">{t('cameras.cascadeSubStreamHint')}</p>
+      {/if}
     {/if}
 
     {#if editingCamera}

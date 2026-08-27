@@ -212,6 +212,136 @@ func TestRTSPServeH265(t *testing.T) {
 	}
 }
 
+// feedP pushes one synthetic non-keyframe AU through the hub.
+func (ts *testServer) feedP() {
+	ts.hub.Broadcast(0, [][]byte{{0x41, 0x01, 0x02, 0x03}}, false)
+}
+
+// firstNALType drains pkts until the first H.264 packet and returns the NAL
+// type it carries (7=SPS 8=PPS 5=IDR 1=P). STAP-A (24) aggregates several
+// NALs — the first sub-NAL decides.
+func firstNALType(t *testing.T, pkts <-chan *rtp.Packet) byte {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case p := <-pkts:
+			if len(p.Payload) > 0 {
+				typ := p.Payload[0] & 0x1F
+				if typ == 24 && len(p.Payload) >= 4 { // STAP-A: 1 hdr + 2 size + NAL
+					return p.Payload[3] & 0x1F
+				}
+				return typ
+			}
+		case <-time.After(300 * time.Millisecond):
+			select {
+			case <-deadline:
+				t.Fatal("no RTP packet received within 5s")
+			default:
+			}
+		}
+	}
+}
+
+// Mid-GOP joins must start at the GOP head (#524 phase 2): the shared-stream
+// fan-out used to write mid-GOP P-frames to freshly attached readers, whose
+// decoders logged reference-missing warnings until the next IDR. Now each
+// reader gets the cached GOP replayed — the first packet a late joiner
+// receives belongs to the keyframe AU.
+func TestRTSPMidGOPJoinStartsAtKeyframe(t *testing.T) {
+	ts := startTestServer(t, Config{})
+
+	// Reader A attaches first and sees the GOP head.
+	a := dialClient(t, ts.url)
+	descA, _, err := a.Describe(mustURL(t, ts.url))
+	require.NoError(t, err)
+	_, err = a.Setup(descA.BaseURL, descA.Medias[0], 0, 0)
+	require.NoError(t, err)
+	pktsA := make(chan *rtp.Packet, 32)
+	a.OnPacketRTP(descA.Medias[0], descA.Medias[0].Formats[0], func(pkt *rtp.Packet) {
+		select {
+		case pktsA <- pkt:
+		default:
+		}
+	})
+	_, err = a.Play(nil)
+	require.NoError(t, err)
+
+	ts.feedIDR()
+	for range 3 {
+		ts.feedP()
+	}
+	// Let the GOP cache settle before the late join.
+	time.Sleep(100 * time.Millisecond)
+
+	// Reader B joins mid-GOP: its first packet must be the replayed GOP head
+	// (SPS/PPS/IDR), never a bare P-frame.
+	b := dialClient(t, ts.url)
+	descB, _, err := b.Describe(mustURL(t, ts.url))
+	require.NoError(t, err)
+	_, err = b.Setup(descB.BaseURL, descB.Medias[0], 0, 0)
+	require.NoError(t, err)
+	pktsB := make(chan *rtp.Packet, 32)
+	b.OnPacketRTP(descB.Medias[0], descB.Medias[0].Formats[0], func(pkt *rtp.Packet) {
+		select {
+		case pktsB <- pkt:
+		default:
+		}
+	})
+	_, err = b.Play(nil)
+	require.NoError(t, err)
+
+	// The replay rides the first post-PLAY frame — feed one to trigger it.
+	ts.feedP()
+
+	switch n := firstNALType(t, pktsB); n {
+	case 7, 8, 5: // SPS / PPS / IDR — GOP head AU
+	default:
+		t.Fatalf("late joiner's first packet NAL type %d — mid-GOP P-frames leaked to a fresh reader", n)
+	}
+
+	// Existing reader A keeps receiving live frames after B joined.
+	ts.feedP()
+	select {
+	case <-pktsA:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reader A stopped receiving after another reader joined")
+	}
+}
+
+// With no replayable GOP (reader attaches before any keyframe arrived), the
+// reader stays silent until the next IDR instead of starting mid-GOP.
+func TestRTSPJoinBeforeFirstIDRWaitsForKeyframe(t *testing.T) {
+	ts := startTestServer(t, Config{})
+	// Provider becomes ready without any frame on the hub yet.
+	c := dialClient(t, ts.url)
+	desc, _, err := c.Describe(mustURL(t, ts.url))
+	require.NoError(t, err)
+	_, err = c.Setup(desc.BaseURL, desc.Medias[0], 0, 0)
+	require.NoError(t, err)
+	pkts := make(chan *rtp.Packet, 32)
+	c.OnPacketRTP(desc.Medias[0], desc.Medias[0].Formats[0], func(pkt *rtp.Packet) {
+		select {
+		case pkts <- pkt:
+		default:
+		}
+	})
+	_, err = c.Play(nil)
+	require.NoError(t, err)
+
+	ts.feedP()
+	select {
+	case p := <-pkts:
+		t.Fatalf("received a packet before any keyframe (NAL %d)", p.Payload[0]&0x1F)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	ts.feedIDR()
+	if n := firstNALType(t, pkts); n != 7 && n != 8 && n != 5 {
+		t.Fatalf("first packet after IDR is NAL %d, want SPS/PPS/IDR", n)
+	}
+}
+
 func TestRTSPUnknownCamera(t *testing.T) {
 	ts := startTestServer(t, Config{})
 	ts.known.Store(false)

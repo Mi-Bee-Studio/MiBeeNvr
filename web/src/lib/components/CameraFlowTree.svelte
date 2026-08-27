@@ -23,6 +23,8 @@
 
   let prev: { framesIn: number; bytesIn: number; at: number } | null = null;
   let rate = $state({ fps: 0, kbps: 0 });
+  let prevSub: { framesIn: number; bytesIn: number; at: number } | null = null;
+  let subRate = $state({ fps: 0, kbps: 0 });
   let prevC: Record<string, { sends: number; at: number }> = {};
   let cRates = $state<Record<string, number>>({});
   let centered = false;
@@ -61,7 +63,7 @@
   }
 
   function consumerKind(id: string): string {
-    for (const prefix of ['ws-audio-', 'ws-', 'flv-', 'webrtc-audio-', 'webrtc-', 'hls', 'health-stats-', 'health-freeze-', 'keyframe-extractor-', 'relay-rtsp-', 'relay-rtmp-', 'relay-transcode-', 'cascade-']) {
+    for (const prefix of ['vision-sublayer-', 'ws-audio-', 'ws-', 'flv-', 'webrtc-audio-', 'webrtc-', 'hls', 'health-stats-', 'health-freeze-', 'keyframe-extractor-', 'relay-rtsp-', 'relay-rtmp-', 'relay-transcode-', 'cascade-']) {
       if (id.startsWith(prefix)) return prefix.replace(/-$/, '');
     }
     return id;
@@ -73,6 +75,7 @@
     'flv': 'flv', 'hls': 'hls', 'health-stats': 'healthStats', 'health-freeze': 'healthFreeze',
     'keyframe-extractor': 'keyframeExtractor', 'relay-rtsp': 'relayRtsp', 'relay-rtmp': 'relayRtmp',
     'relay-transcode': 'relayTranscode', 'cascade': 'cascade',
+    'vision-sublayer': 'visionSublayer',
   };
 
   function kindLabel(id: string): string {
@@ -97,6 +100,17 @@
           };
         }
         prev = { framesIn: s.frames_in, bytesIn: s.bytes_in, at: now };
+        if (s.sub) {
+          if (prevSub && dt > 0) {
+            subRate = {
+              fps: Math.round((Math.max(0, (s.sub.frames_in - prevSub.framesIn) / dt)) * 10) / 10,
+              kbps: Math.round(Math.max(0, ((s.sub.bytes_in - prevSub.bytesIn) / dt) / 128)),
+            };
+          }
+          prevSub = { framesIn: s.sub.frames_in, bytesIn: s.sub.bytes_in, at: now };
+        } else {
+          prevSub = null;
+        }
         const next: Record<string, number> = {};
         for (const c of s.consumers) {
           const pc = prevC[c.id];
@@ -243,6 +257,31 @@
         {/if}
       </div>
     </div>
+
+    {#if stream.sub}
+      {@const subKinds = [...new Set(stream.sub.consumers.map((c) => kindLabel(c.id)))]}
+      <div class="sub-strip">
+        <div class="tree-link sub-link"></div>
+        <div class="node node-sub" class:con-off={subRate.fps === 0}>
+          <span class="node-title" class:ok-text={subRate.fps > 0}>
+            {t('flow.subStream')}
+            <span class="dim">{stream.sub.state}{stream.sub.codec ? ` · ${stream.sub.codec}` : ''}</span>
+          </span>
+          <span class="node-line" class:ok-text={subRate.fps > 0} class:t-off={subRate.fps === 0}>
+            {subRate.fps} fps · {subRate.kbps} kbps
+          </span>
+          <span class="node-line dim">
+            {t('flow.subRefs')} {stream.sub.refs} · {t('flow.consumer')} {stream.sub.consumers.length} · {t('flow.totalIn')} {stream.sub.frames_in}
+          </span>
+          <span class="node-line dim" class:t-warn={lastFrameAge(stream.sub.last_frame_at) > 10_000}>
+            {t('flow.lastFrame')}: {fmtAge(lastFrameAge(stream.sub.last_frame_at))}
+          </span>
+          {#if subKinds.length}
+            <span class="node-line dim">{subKinds.join(' · ')}</span>
+          {/if}
+        </div>
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -393,6 +432,21 @@
   }
   .branch {
     position: relative;
+  }
+  /* Sub-stream tier (#513): a parallel source+hub pair, rendered as a dashed
+     node under the main tree — visually a sibling source, not a consumer. */
+  .sub-strip {
+    display: flex;
+    align-items: center;
+    margin-top: 0.35rem;
+  }
+  .sub-link {
+    margin-right: 0;
+  }
+  .node-sub {
+    border-style: dashed;
+    border-color: rgba(168, 85, 247, 0.45);
+    background: rgba(168, 85, 247, 0.05);
   }
   .branch::before {
     content: '';

@@ -1,6 +1,7 @@
 package cascade
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -40,6 +41,12 @@ type mediaSession struct {
 	subID     string
 	sdpBody   string
 	codecHint string
+	// hub is the stream hub the session subscribed to — the sub hub for a
+	// sub-stream forward (#512), otherwise the camera's main hub. close()
+	// unsubscribes through it.
+	hub *model.StreamHub
+	// releaseSub drops the sub-stream reference acquired at INVITE (#512).
+	releaseSub func()
 	// withAudio: the upper's INVITE carried an audio m-line — hub audio
 	// frames are PS-muxed alongside video (#370).
 	withAudio    bool
@@ -198,6 +205,7 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		_, _ = s.srv.RespondOnRequest(req, 500, "Stream Unavailable", "", nil)
 		return
 	}
+	releaseSub, usingSub := s.selectForwardHub(&hub, cameraID)
 
 	// Supersede: a new-dialog INVITE for a channel that is already forwarding
 	// means the upper recycled the session (its BYE may be lost or still in
@@ -246,7 +254,11 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		mux:       psmux.New(),
 		withAudio: strings.Contains(string(req.Body()), "m=audio"),
 	}
-	if cam, ok := s.cameraInfo(cameraID); ok && cam.Encoding != "" {
+	ms.hub = hub
+	ms.releaseSub = releaseSub
+	// The main stream's codec is a wrong hint for the sub tier (profiles can
+	// differ) — sub forwards sniff the codec from the first NAL instead.
+	if cam, ok := s.cameraInfo(cameraID); ok && !usingSub && cam.Encoding != "" {
 		ms.codecHint = cam.Encoding
 		ms.mux.SetVideoCodec(cam.Encoding)
 	}
@@ -314,6 +326,27 @@ func (ms *mediaSession) localPort() int {
 }
 
 // run subscribes to the camera's hub and pumps frames until stopped.
+// selectForwardHub swaps *hub for the camera's on-demand sub-stream when the
+// camera opted into the low-res cascade tier (#512). Returns the reference's
+// release func (nil for main) and whether the sub tier is in use. Acquisition
+// failure (no sub config / pull not ready) degrades to main — quality
+// negotiation never fails the INVITE.
+func (s *Service) selectForwardHub(hub **model.StreamHub, cameraID string) (func(), bool) {
+	cam, ok := s.cameraInfo(cameraID)
+	if !ok || !cam.SubStream || s.subAcq == nil {
+		return nil, false
+	}
+	subHub, release, err := s.subAcq.AcquireSubHub(context.Background(), cameraID)
+	if err != nil || subHub == nil {
+		slog.Warn("gb28181-cascade: sub-stream forward unavailable, serving main",
+			"camera", cameraID, "reason", errString(err))
+		return nil, false
+	}
+	*hub = subHub
+	slog.Info("gb28181-cascade: forwarding sub-stream", "camera", cameraID)
+	return release, true
+}
+
 func (ms *mediaSession) run(hub *model.StreamHub) {
 	// Unique per dialog: the upper platform may re-INVITE the same channel in
 	// a NEW dialog while an old one lingers — a channel-only ID collides in
@@ -454,14 +487,18 @@ func (ms *mediaSession) teardown(reason string) {
 
 func (ms *mediaSession) close() {
 	ms.closed.Store(true)
-	if hub := ms.svc.src.Hub(ms.camera); hub != nil {
+	if ms.hub != nil {
 		if ms.audioSubID != "" {
-			hub.UnsubscribeAudio(ms.audioSubID)
+			ms.hub.UnsubscribeAudio(ms.audioSubID)
 			ms.audioSubID = ""
 		}
 		if ms.subID != "" {
-			hub.Unsubscribe(ms.subID)
+			ms.hub.Unsubscribe(ms.subID)
 		}
+	}
+	if ms.releaseSub != nil {
+		ms.releaseSub()
+		ms.releaseSub = nil
 	}
 	if ms.conn != nil {
 		_ = ms.conn.Close()
@@ -543,6 +580,13 @@ func auIsIDR(au [][]byte, codec string) bool {
 // bytes are ambiguous between the two syntaxes and h264 (by far the more
 // common source) wins. The camera's configured encoding takes precedence
 // over this fallback whenever known.
+func errString(err error) string {
+	if err == nil {
+		return "no source"
+	}
+	return err.Error()
+}
+
 func sniffCodec(firstNALU []byte) string {
 	if len(firstNALU) > 0 && (firstNALU[0] == 0x40 || firstNALU[0] == 0x42) {
 		return "h265"

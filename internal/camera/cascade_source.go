@@ -48,9 +48,10 @@ func (s cascadeSource) Cameras() []cascade.CameraInfo {
 			continue
 		}
 		out = append(out, cascade.CameraInfo{
-			ID:       cfg.ID,
-			Name:     cfg.Name,
-			Encoding: cfg.Encoding,
+			ID:        cfg.ID,
+			Name:      cfg.Name,
+			Encoding:  cfg.Encoding,
+			SubStream: cfg.CascadeSubStream,
 			// Catalog convergence: cascade_enabled=false hides the camera from
 			// the upper platform entirely (catalog + INVITE gate).
 			CascadeHidden: cfg.CascadeEnabled != nil && !*cfg.CascadeEnabled,

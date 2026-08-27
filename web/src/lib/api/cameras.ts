@@ -44,6 +44,8 @@ export interface Camera {
   // Cascade gate: false = hidden from the GB28181 cascade catalog (upper
   // platform cannot see or invite it). undefined = exposed.
   cascade_enabled?: boolean | null;
+  /** Cascade tier: forward the sub-stream instead of main (#512). */
+  cascade_sub_stream?: boolean | null;
   // Recording mode (#435): 'continuous' (default) or 'adaptive' — dynamic
   // timelapse that drops to sparse keyframes while the compressed-domain
   // activity signal stays calm. 'adaptive' holds the tuning knobs (nil = defaults).
@@ -189,6 +191,8 @@ export interface CreateCameraRequest {
   recording_enabled?: boolean | null;
   // Cascade gate: false = hidden from the GB28181 cascade catalog. Omit = exposed.
   cascade_enabled?: boolean | null;
+  /** Cascade tier: forward the sub-stream instead of main (#512). */
+  cascade_sub_stream?: boolean | null;
   // Recording mode (#435). Omit = continuous.
   recording_mode?: string;
   adaptive?: AdaptiveRecordingConfig;
@@ -238,6 +242,8 @@ export interface UpdateCameraRequest {
   recording_enabled?: boolean | null;
   // Cascade gate: false = hidden from the GB28181 cascade catalog. Omit = unchanged.
   cascade_enabled?: boolean | null;
+  /** Cascade tier: forward the sub-stream instead of main (#512). */
+  cascade_sub_stream?: boolean | null;
   // Recording mode (#435). Omit = unchanged. Changing it restarts the recorder.
   recording_mode?: string;
   adaptive?: AdaptiveRecordingConfig;
