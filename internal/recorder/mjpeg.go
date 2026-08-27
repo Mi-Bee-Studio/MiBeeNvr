@@ -504,7 +504,12 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 					continue
 				}
 				r.aviFile = f
+				// aviMuxer is read by the RTP audio callback under r.mu —
+				// publish it under the same lock (race found by
+				// TestMJPEGRecorderAudioDrop under -race on CI).
+				r.mu.Lock()
 				r.aviMuxer = avi.NewMuxer(f, w, h, r.g711SampleRate, r.g711MULaw)
+				r.mu.Unlock()
 				r.curTempPath = tempPath
 				r.curFinalPath = finalPath
 				r.segStart = time.Now()
@@ -522,15 +527,18 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 			}
 		}
 
-		if r.hasAudio && r.aviMuxer != nil {
-			// Write video frame to AVI muxer.
+		if r.hasAudio {
+			// Write video frame to AVI muxer (nil-check under the lock —
+			// segment rotation clears it concurrently from our own
+			// closeCurrentSegment, and the audio callback shares the muxer).
 			r.mu.Lock()
-			err := r.aviMuxer.WriteVideo(data, 0)
-			r.mu.Unlock()
-			if err != nil {
-				mjpegLogger.Error("failed to write video to AVI muxer", "camera_id", r.cfg.CameraID, "error", err)
-				continue
+			m := r.aviMuxer
+			if m != nil {
+				if err := m.WriteVideo(data, 0); err != nil {
+					mjpegLogger.Error("failed to write video to AVI muxer", "camera_id", r.cfg.CameraID, "error", err)
+				}
 			}
+			r.mu.Unlock()
 		} else {
 			if _, err := r.store.WriteFrame(r.curTempPath, data); err != nil {
 				mjpegLogger.Error("failed to write frame", "camera_id", r.cfg.CameraID, "error", err)
