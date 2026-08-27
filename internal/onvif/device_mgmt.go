@@ -9,7 +9,7 @@ import (
 	"net"
 	"sync"
 
-	onvifgo "github.com/mickeyzzc/onvif-go/v2"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
 // ErrUnsupported indicates the operation is not supported.
