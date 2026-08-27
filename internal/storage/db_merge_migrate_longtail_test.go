@@ -114,21 +114,26 @@ func TestMergeWindowMinAgeRespectsUTC(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 
-	// A window that ended 30 minutes ago. With minAge=1h it must NOT be
-	// eligible: on a UTC+N host a local-time cutoff would read as up to N
-	// hours later and wrongly include it (regression test for the #565-class
-	// cutoff bug in ListCameraMergeWindows/ListSingletonPendingRecordings).
-	end := time.Now().UTC().Add(-30 * time.Minute)
-	start := end.Add(-10 * time.Minute)
-	seedRec(t, db, &recSeed{id: "fresh-1", camera: "cam-1", format: "h264", started: start, ended: end})
-	seedRec(t, db, &recSeed{id: "fresh-2", camera: "cam-1", format: "h264", started: end, ended: end.Add(10 * time.Minute)})
+	// Hour-boundary-proof fixtures: anchor on the current UTC hour so the two
+	// segments always land in the SAME hour bucket and their ages are
+	// deterministic regardless of when in the hour the test runs.
+	// endB = anchor-2h is 2-3h old; endA = anchor-2h30m is 2.5-3.5h old.
+	anchor := time.Now().UTC().Truncate(time.Hour)
+	endA := anchor.Add(-150 * time.Minute)
+	endB := anchor.Add(-120 * time.Minute)
+	seedRec(t, db, &recSeed{id: "fresh-1", camera: "cam-1", format: "h264", started: endA.Add(-10 * time.Minute), ended: endA})
+	seedRec(t, db, &recSeed{id: "fresh-2", camera: "cam-1", format: "h264", started: endB.Add(-10 * time.Minute), ended: endB})
 
-	windows, err := db.ListCameraMergeWindows(ctx, "cam-1", time.Hour)
+	// minAge=3h: both segments are younger than the gate — must NOT be
+	// eligible. On a UTC+N host a local-time cutoff reads as up to N hours
+	// later and would wrongly include them (regression test for the
+	// #565-class cutoff bug in ListCameraMergeWindows/ListSingletonPendingRecordings).
+	windows, err := db.ListCameraMergeWindows(ctx, "cam-1", 3*time.Hour)
 	require.NoError(t, err)
 	require.Empty(t, windows, "window younger than minAge must not be eligible regardless of host timezone")
 
-	// Same segments with a tiny minAge become eligible.
-	windows, err = db.ListCameraMergeWindows(ctx, "cam-1", time.Minute)
+	// Same segments with minAge=1h become eligible.
+	windows, err = db.ListCameraMergeWindows(ctx, "cam-1", time.Hour)
 	require.NoError(t, err)
 	require.Len(t, windows, 1)
 }
