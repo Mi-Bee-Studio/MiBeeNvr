@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	onvifgo "github.com/mickeyzzc/onvif-go/v2"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 	"github.com/stretchr/testify/require"
 )
 

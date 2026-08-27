@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	onvifgo "github.com/mickeyzzc/onvif-go/v2"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
 var logger = slog.Default().With("component", "onvif-client")

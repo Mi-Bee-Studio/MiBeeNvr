@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"sync"
 
-	onvifgo "github.com/mickeyzzc/onvif-go/v2"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
 var ptzLogger = slog.Default().With("component", "onvif-ptz")
