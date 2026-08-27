@@ -64,6 +64,42 @@ func TestParseWSDMessage_ByeIgnored(t *testing.T) {
 	}
 }
 
+// windowsWSDHello mirrors the WS-Discovery Hello a Windows/WSD host sends when
+// it joins the network: Types "wsdiscovery:Device", vendor scopes, an XAddr on
+// :5000/wsd/. Before #554 these auto-enrolled as camera shells that could
+// never connect (the mickeybeessd/mickeybeehome zombies on M5).
+const windowsWSDHello = `<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><Hello xmlns="http://schemas.xmlsoap.org/ws/2005/04/discovery"><EndpointReference><Address>urn:uuid:a5d3d2d8-41ed-4a64-8c8b-0cc9cdbe62f8</Address></EndpointReference><Types>wsdiscovery:Device</Types><Scopes>http://schemas.xmlsoap.org/ws/2005/04/discovery/contract</Scopes><XAddrs>http://mickeybeessd:5000/wsd/a5d3d2d8-41ed-4a64-8c8b-0cc9cdbe62f8</XAddrs><MetadataVersion>1</MetadataVersion></Hello></s:Body></s:Envelope>`
+
+func TestParseWSDMessage_NonONVIFHelloDropped(t *testing.T) {
+	t.Helper()
+	if dev := parseWSDMessage([]byte(windowsWSDHello)); dev != nil {
+		t.Errorf("non-ONVIF WSD Hello must be dropped at the parse boundary (#554), got %+v", dev)
+	}
+}
+
+func TestParseWSDMessage_NeitherSignalDropped(t *testing.T) {
+	t.Helper()
+	// No Types and no ONVIF scope: a responder that advertises nothing ONVIF-ish.
+	const neither = `<?xml version="1.0"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><Hello xmlns="http://schemas.xmlsoap.org/ws/2005/04/discovery"><EndpointReference><Address>urn:uuid:x</Address></EndpointReference><XAddrs>http://192.168.1.99:80/onvif/device_service</XAddrs></Hello></s:Body></s:Envelope>`
+	if dev := parseWSDMessage([]byte(neither)); dev != nil {
+		t.Errorf("Hello without any ONVIF signal must be dropped, got %+v", dev)
+	}
+}
+
+func TestParseWSDMessage_ScopeOnlySignalKept(t *testing.T) {
+	t.Helper()
+	// Marginal implementations may leave Types empty but populate ONVIF scopes;
+	// matching either signal keeps the device (permissive gate, mirrors #266).
+	const scopeOnly = `<?xml version="1.0"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><Hello xmlns="http://schemas.xmlsoap.org/ws/2005/04/discovery"><EndpointReference><Address>urn:uuid:y</Address></EndpointReference><Scopes>onvif://www.onvif.org/name/MarginalCam</Scopes><XAddrs>http://192.168.1.98:80/onvif/device_service</XAddrs></Hello></s:Body></s:Envelope>`
+	dev := parseWSDMessage([]byte(scopeOnly))
+	if dev == nil {
+		t.Fatal("Hello with an ONVIF scope but empty Types must be kept")
+	}
+	if dev.Name != "MarginalCam" {
+		t.Errorf("Name = %q, want MarginalCam", dev.Name)
+	}
+}
+
 func TestParseWSDMessage_GarbageReturnsNil(t *testing.T) {
 	t.Helper()
 	cases := [][]byte{
