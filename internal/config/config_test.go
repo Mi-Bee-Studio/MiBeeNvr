@@ -1749,3 +1749,26 @@ server:
 	require.NoError(t, err)
 	assert.Nil(t, cfg2.Extensions)
 }
+
+// TestValidate_CameraRingBufCap verifies the per-camera ring_buf_cap bounds
+// (issue #521): 0 (default) and the sane positive range pass, negative or
+// absurd values are rejected.
+func TestValidate_CameraRingBufCap(t *testing.T) {
+	t.Helper()
+	base := func(capacity int) *Config {
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		cfg.Cameras = []CameraConfig{{
+			ID: "cam-a", Name: "A", Protocol: "rtsp", Encoding: "h264",
+			URL: "rtsp://127.0.0.1:8554/a", RingBufCap: capacity,
+		}}
+		return cfg
+	}
+	require.NoError(t, Validate(base(0)))
+	require.NoError(t, Validate(base(300)))
+	require.NoError(t, Validate(base(10000)))
+	err := Validate(base(-1))
+	require.ErrorContains(t, err, "ring_buf_cap")
+	err = Validate(base(10001))
+	require.ErrorContains(t, err, "ring_buf_cap")
+}

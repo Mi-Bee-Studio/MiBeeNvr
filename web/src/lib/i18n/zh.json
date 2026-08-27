@@ -1748,6 +1748,7 @@
   "flow.expandHint": "展开链路排查",
   "flow.segProgress": "分片 {elapsed}s/{dur}s · {frames} 帧",
   "flow.ringWater": "环形缓冲 {len}/{cap}",
+  "flow.ringDrops": "环形缓冲溢出丢帧 {n}",
   "flow.mergePending": "待合并 {n} 段",
   "flow.recordDisk": "录像落盘",
   "flow.recording": "录制中 · 分段写入磁盘",

@@ -460,6 +460,13 @@ cameras:
 - **Description**: Timeout before declaring a camera unhealthy when no frames are received. Per-camera override of the frame watchdog.
 - **Example**: `"30s"`, `"60s"`, `"120s"`
 
+### `cameras[].ring_buf_cap`
+- **Type**: int
+- **Optional**: Yes
+- **Default**: `0` (built-in default 300)
+- **Description**: Overrides the recorder's frame ring-buffer (frameCh) capacity (#521). The buffer absorbs write-loop stalls (segment-finalize fsync, merge IO, lock contention); when it fills, frames are dropped (`nvr_recorder_ring_buffer_drops_total` metric + the overflow counter on the flow page's recording branch). Raise it for cameras showing occasional drops to trade ~1KB of memory per slot for stall tolerance. H.264/H.265 recorders only. Range 0–10000.
+- **Example**: `600`, `1000`
+
 ### `cameras[].stream_key`
 - **Type**: string
 - **Optional**: Yes (push-in only)

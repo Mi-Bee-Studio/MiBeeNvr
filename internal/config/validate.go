@@ -436,6 +436,15 @@ func validateConfigDetails(cfg *Config) error {
 		}
 	}
 
+	// Validate per-camera ring buffer capacity (issue #521): 0 = default, and
+	// the non-default range must stay sane — each slot is a framePacket, so an
+	// absurd cap is unbounded memory on a 512MB-class device.
+	for _, cam := range cfg.Cameras {
+		if cam.RingBufCap < 0 || cam.RingBufCap > 10000 {
+			return fmt.Errorf("cameras.%s.ring_buf_cap must be between 0 (default) and 10000 (got %d)", cam.ID, cam.RingBufCap)
+		}
+	}
+
 	// Validate per-camera timelapse configuration
 	for _, cam := range cfg.Cameras {
 		if cam.Timelapse == nil {
