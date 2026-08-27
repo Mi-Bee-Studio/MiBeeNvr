@@ -57,6 +57,12 @@ jobs:
           version: v2.12.2
       - name: Lint markdown fences (MD040)
         run: npx --yes markdownlint-cli2
+
+      # Relative links must resolve inside the repo (#412): the website docs
+      # center syncs docs/{zh,en}/ and maps repo-relative links to site pages —
+      # a renamed file silently turns them into 404s without this check.
+      - name: Check docs relative links + zh/en parity
+        run: python3 scripts/check-docs-links.py
   build:
     runs-on: ubuntu-latest
     # Run in parallel with test — build validates compilation; test validates correctness.
