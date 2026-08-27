@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,12 +50,18 @@ func testConfig(t *testing.T) config.GB28181ServerConfig {
 	}
 }
 
+// testPortBase hands each test server a disjoint 100-port window. A shared
+// fixed range (30000..30100) let one test's not-yet-recycled receiver make
+// the NEXT test's session bind fail — cascading failures (#571).
+var testPortBase atomic.Int32
+
 // startTestServer starts a Server on the config's address and registers a
 // cleanup that stops it.
 func startTestServer(t *testing.T, cfg config.GB28181ServerConfig) (*Server, *gb28181.DeviceManager) {
 	t.Helper()
+	base := int(20000 + 100*testPortBase.Add(1))
 	dm := gb28181.NewDeviceManager(60 * time.Second)
-	srv := NewServer(cfg, dm, gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), cfg.ServerID), nil)
+	srv := NewServer(cfg, dm, gb28181.NewSessionManager(gb28181.NewPortManager(uint16(base), uint16(base+99)), cfg.ServerID), nil)
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

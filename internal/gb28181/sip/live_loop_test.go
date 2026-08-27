@@ -37,6 +37,10 @@ func TestInviteChannelLiveFlowAndBye(t *testing.T) {
 			mu.Unlock()
 		}
 	}}
+	// The catalog handler AUTO-INVITEs bound channels asynchronously (the
+	// production recovery flow) — answer its INVITE (and retransmissions)
+	// until the dialog is confirmed, rather than racing an explicit
+	// InviteChannel (which the existing receiver would make a no-op anyway).
 	require.NoError(t, enrol.EnsureGB28181Camera(testDeviceID, fakeChannelID, "Front Door", "127.0.0.1"))
 	srv.SetCameraEnroller(enrol)
 
@@ -47,17 +51,23 @@ func TestInviteChannelLiveFlowAndBye(t *testing.T) {
 	})
 	require.NoError(t, err)
 	client.sendMessage(string(catalog))
-	require.Eventually(t, func() bool { return len(dm.Channels(testDeviceID)) == 1 },
-		3*time.Second, 50*time.Millisecond, "catalog must register the channel")
 
-	invited := make(chan error, 1)
-	go func() { invited <- srv.InviteChannel(testDeviceID, fakeChannelID) }()
-
-	invite := client.awaitRequest(sip.INVITE, 5*time.Second)
-	require.Contains(t, string(invite.Body()), "a=recvonly", "live INVITE SDP is recvonly")
-	mediaPort := sdpMediaPort(t, string(invite.Body()))
-	client.respondRaw(invite, 200, "OK", string(invite.Body()), "application/sdp")
-	require.NoError(t, <-invited)
+	var mediaPort int
+	require.Eventually(t, func() bool {
+		req := client.nextRequest(150 * time.Millisecond)
+		if req != nil && req.Method() == sip.INVITE {
+			require.Contains(t, string(req.Body()), "a=recvonly", "live INVITE SDP is recvonly")
+			if mediaPort == 0 {
+				mediaPort = sdpMediaPort(t, string(req.Body()))
+			}
+			client.respondRaw(req, 200, "OK", string(req.Body()), "application/sdp")
+		}
+		srv.mu.Lock()
+		dlg := srv.dialogs[fakeChannelID]
+		srv.mu.Unlock()
+		return dlg != nil && mediaPort != 0
+	}, 10*time.Second, 10*time.Millisecond, "auto-INVITE must complete its handshake")
+	require.NotZero(t, mediaPort)
 
 	// Stream a couple of IDR AUs as RTP/PS to the platform's receive port.
 	media, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -88,9 +98,9 @@ func TestInviteChannelLiveFlowAndBye(t *testing.T) {
 	// the owning device → ByeChannel → sendByeForChannel).
 	byed := make(chan error, 1)
 	go func() { byed <- srv.ByeChannelByID(fakeChannelID) }()
-	bye := client.awaitRequest(sip.BYE, 5*time.Second)
-	client.respondRaw(bye, 200, "OK", "", "")
-	require.NoError(t, <-byed)
+	require.NoError(t, client.answerRetransmits(sip.BYE, func(bye sip.Request) {
+		client.respondRaw(bye, 200, "OK", "", "")
+	}, byed, 10*time.Second))
 
 	// With the session gone the blanket BYE is a no-op.
 	srv.ByeAllSessions()
