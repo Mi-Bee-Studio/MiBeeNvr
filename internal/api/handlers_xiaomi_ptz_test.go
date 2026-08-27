@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,7 +51,7 @@ func TestXiaomiPTZMove(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
 	require.Equal(t, "ok", resp["status"])
-	require.True(t, mockConn.writeCalled, "WriteCommand should have been called")
+	require.True(t, mockConn.writeCalled.Load(), "WriteCommand should have been called")
 }
 
 func TestXiaomiPTZStop(t *testing.T) {
@@ -86,7 +87,7 @@ func TestXiaomiPTZStop(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
 	require.Equal(t, "ok", resp["status"])
-	require.True(t, mockConn.writeCalled, "WriteCommand should have been called")
+	require.True(t, mockConn.writeCalled.Load(), "WriteCommand should have been called")
 }
 
 func TestXiaomiDeviceInfo(t *testing.T) {
@@ -234,28 +235,44 @@ func TestXiaomiPTZInvalidInput(t *testing.T) {
 
 // testMISSConn implements xiaomi.MISSConn for testing MotorControl and GetDeviceInfo.
 type testMISSConn struct {
-	writeCalled bool
+	// writeCalled / packetWrites are atomics: WriteCommand/WritePacket run
+	// on the recorder's goroutines while tests assert on them (#571
+	// race-clean rule).
+	writeCalled atomic.Bool
 	readCmdData []byte // data returned by ReadCommand for GetDeviceInfo
+	// protocol overrides the reported transport ("cs2" default); "tutk"
+	// unlocks the two-way-audio paths that CS2 refuses.
+	protocol string
+	// packetWrites counts WritePacket calls (media packets).
+	packetWrites atomic.Int32
 }
 
 func newTestMISSConn() *testMISSConn {
 	return &testMISSConn{}
 }
 
-func (m *testMISSConn) Protocol() string                     { return "cs2" }
+func (m *testMISSConn) Protocol() string {
+	if m.protocol != "" {
+		return m.protocol
+	}
+	return "cs2"
+}
 func (m *testMISSConn) Version() string                      { return "test" }
 func (m *testMISSConn) ReadCommand() (uint32, []byte, error) { return 0, m.readCmdData, nil }
 func (m *testMISSConn) WriteCommand(cmd uint32, data []byte) error {
-	m.writeCalled = true
+	m.writeCalled.Store(true)
 	_ = cmd
 	_ = data
 	return nil
 }
-func (m *testMISSConn) ReadPacket() ([]byte, []byte, error)   { return nil, nil, nil }
-func (m *testMISSConn) WritePacket(hdr, payload []byte) error { return nil }
-func (m *testMISSConn) RemoteAddr() net.Addr                  { return &testMISSAddr{} }
-func (m *testMISSConn) SetDeadline(t time.Time) error         { return nil }
-func (m *testMISSConn) Close() error                          { return nil }
+func (m *testMISSConn) ReadPacket() ([]byte, []byte, error) { return nil, nil, nil }
+func (m *testMISSConn) WritePacket(hdr, payload []byte) error {
+	m.packetWrites.Add(1)
+	return nil
+}
+func (m *testMISSConn) RemoteAddr() net.Addr          { return &testMISSAddr{} }
+func (m *testMISSConn) SetDeadline(t time.Time) error { return nil }
+func (m *testMISSConn) Close() error                  { return nil }
 
 // testMISSAddr implements net.Addr for the mock MISS conn.
 type testMISSAddr struct{}
