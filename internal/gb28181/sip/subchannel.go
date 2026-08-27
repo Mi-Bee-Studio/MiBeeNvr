@@ -110,18 +110,6 @@ func (s *Server) maybeProbeSubChannels(deviceID string) {
 		return
 	}
 
-	if mode != "on" {
-		mfr := ""
-		if dev, ok := s.deviceMgr.Device(deviceID); ok {
-			dev.Mu.RLock()
-			mfr = dev.Manufacturer
-			dev.Mu.RUnlock()
-		}
-		if !knownOffsetVendor(mfr) {
-			return
-		}
-	}
-
 	enrol := s.enroller()
 	if enrol == nil {
 		return
@@ -131,14 +119,30 @@ func (s *Server) maybeProbeSubChannels(deviceID string) {
 		if ch.SubProbe {
 			continue
 		}
-		cameraID, ok := enrol.GB28181CameraIDByChannel(deviceID, ch.ID)
-		if !ok {
-			continue // no camera bound — nothing to attach a sub stream to
-		}
 		mainCh := ch
 		go func() {
 			time.Sleep(subProbeWait) // let the main INVITE settle first
-			s.probeSubChannel(deviceID, mainCh, offset, cameraID)
+			// BOTH gates resolve INSIDE the delayed goroutine — at merge time
+			// the catalog-driven camera enrollment (EnsureGB28181Camera) is
+			// typically still in flight, and the DeviceInfo response carrying
+			// the manufacturer races the catalog response to the same
+			// millisecond. Resolving either at trigger time skipped every
+			// freshly-registered device.
+			if mode != "on" {
+				mfr := ""
+				if dev, ok := s.deviceMgr.Device(deviceID); ok {
+					dev.Mu.RLock()
+					mfr = dev.Manufacturer
+					dev.Mu.RUnlock()
+				}
+				if !knownOffsetVendor(mfr) {
+					return
+				}
+			}
+			if _, ok := enrol.GB28181CameraIDByChannel(deviceID, mainCh.ID); !ok {
+				return // no camera bound — nothing to attach a sub stream to
+			}
+			s.probeSubChannel(deviceID, mainCh, offset)
 		}()
 	}
 }
@@ -147,7 +151,7 @@ func (s *Server) maybeProbeSubChannels(deviceID string) {
 // derive the code, INVITE it with a throwaway frame signal, and persist on
 // first media. Every failure path is silent (Debug) — incapable devices must
 // show zero error state (#560 acceptance).
-func (s *Server) probeSubChannel(deviceID string, ch *gb28181.Channel, offset int, cameraID string) {
+func (s *Server) probeSubChannel(deviceID string, ch *gb28181.Channel, offset int) {
 	enrol := s.enroller()
 	if enrol == nil {
 		return
@@ -204,10 +208,11 @@ func (s *Server) probeSubChannel(deviceID string, ch *gb28181.Channel, offset in
 	case <-gotFrame:
 		release()
 		if err := enrol.SetGB28181SubChannel(deviceID, ch.ID, candidate); err != nil {
-			slog.Warn("gb28181: persist sub_channel_id failed", "camera", cameraID, "error", err)
+			slog.Warn("gb28181: persist sub_channel_id failed", "device", deviceID, "channel", ch.ID, "error", err)
 			s.deviceMgr.UnregisterChannel(deviceID, candidate)
 			return
 		}
+		cameraID, _ := enrol.GB28181CameraIDByChannel(deviceID, ch.ID)
 		slog.Info("gb28181: sub-channel probed — sub stream available",
 			"device", deviceID, "channel", ch.ID, "sub_channel", candidate, "camera", cameraID)
 	case <-time.After(subProbeTimeout):
