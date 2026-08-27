@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	onvifgo "github.com/mickeyzzc/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2"
 )
 
 var eventLogger = slog.Default().With("component", "onvif-events")

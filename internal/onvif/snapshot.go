@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	onvifgo "github.com/mickeyzzc/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2"
 )
 
 // SnapshotProviderImpl implements SnapshotProvider by delegating to onvif-go's media service.
