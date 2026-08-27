@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net"
 	"strings"
 	"sync"
@@ -87,6 +88,15 @@ type rtpEncoder interface {
 type rtspReader struct {
 	stream *gortsplib.ServerStream
 	media  *description.Media
+	// seq numbers this reader's stream emits. gortsplib sends the packet's
+	// own SequenceNumber (assigned by the shared encoder at Encode time), so
+	// without per-reader renumbering a replayed GOP (old seqs) followed by
+	// live frames (current seqs) — or an injected parameter AU — arrives with
+	// sequence jumps that strict RTP clients score as massive loss. Cloning
+	// the header and renumbering per reader also keeps one stream's SSRC
+	// rewrite (gortsplib mutates pkt.SSRC per stream) from clobbering the
+	// shared packet other readers are writing.
+	seq uint16
 	// active flips in OnPlay; frames are only written to PLAYing readers —
 	// a SETUP→TEARDOWN without PLAY must not receive or hold traffic.
 	active bool
@@ -180,12 +190,23 @@ func (cs *cameraStream) deliver(m model.FrameMsg) {
 		// the live AU alone is a clean start. Both rs flags are written only
 		// by this goroutine (the hub's single drain), so mutation under the
 		// read lock is race-free.
+		injectParams := false
 		if rs.replayPending {
 			rs.replayPending = false
-			if !m.IsKeyframe {
-				for _, e := range cs.gop {
+			if !m.IsKeyframe && len(cs.gop) > 0 {
+				for i, e := range cs.gop {
+					if i == 0 {
+						// In-band parameter sets ahead of any picture data:
+						// pullers don't reliably consume the SDP's sprop, and
+						// hub AUs don't consistently carry params per-IDR
+						// (recorder-dependent) — without this a replayed GOP
+						// head decodes as reference-missing noise.
+						cs.writeParamSets(rs, e.ts)
+					}
 					cs.writePkts(rs, e.pkts)
 				}
+			} else {
+				injectParams = true // replay skipped; the live AU opens the stream
 			}
 		}
 		if rs.skipUntilIDR {
@@ -193,6 +214,10 @@ func (cs *cameraStream) deliver(m model.FrameMsg) {
 				continue // mid-GOP join with no replayable GOP: wait for the IDR
 			}
 			rs.skipUntilIDR = false
+			injectParams = true
+		}
+		if injectParams {
+			cs.writeParamSets(rs, ts)
 		}
 		cs.writePkts(rs, pkts)
 	}
@@ -217,15 +242,51 @@ func (cs *cameraStream) deliver(m model.FrameMsg) {
 	cs.rmu.Unlock()
 }
 
-// writePkts pushes one AU's packets to a reader stream. A write error aborts
-// that reader's AU (the session is closing); other readers are unaffected.
+// writeParamSets pushes the camera's cached parameter sets as their own AU.
+// Cheap (three small NALs → one aggregation packet) and idempotent for
+// decoders when the following AU also carries them in-band.
+func (cs *cameraStream) writeParamSets(rs *rtspReader, ts uint32) {
+	var au [][]byte
+	switch cs.codec {
+	case model.FormatH264:
+		au = [][]byte{cs.sps, cs.pps}
+	case model.FormatH265:
+		au = [][]byte{cs.vps, cs.sps, cs.pps}
+	default:
+		return
+	}
+	pkts, err := cs.enc.Encode(au)
+	if err != nil {
+		return
+	}
+	for _, p := range pkts {
+		p.Timestamp = ts
+		if err := rs.write(p); err != nil {
+			return
+		}
+	}
+}
+
+// writePkts pushes one AU's packets to a reader stream via rs.write (header
+// clone + per-reader sequence renumbering). A write error aborts that
+// reader's AU (the session is closing); other readers are unaffected.
 func (cs *cameraStream) writePkts(rs *rtspReader, pkts []*rtp.Packet) {
 	for _, p := range pkts {
-		if err := rs.stream.WritePacketRTP(rs.media, p); err != nil {
+		if err := rs.write(p); err != nil {
 			rtspLogger.Warn("rtsp write failed", "camera_id", cs.cameraID, "error", err)
 			return
 		}
 	}
+}
+
+// write sends one packet on the reader's private stream with a locally
+// contiguous sequence number. The payload slice stays shared (read-only in
+// the write path); only the header is cloned.
+func (rs *rtspReader) write(pkt *rtp.Packet) error {
+	c := *pkt
+	c.SequenceNumber = rs.seq
+	rs.seq++
+	return rs.stream.WritePacketRTP(rs.media, &c)
 }
 
 func pktBytes(pkts []*rtp.Packet) int {
@@ -247,7 +308,7 @@ func (cs *cameraStream) addReader(sess *gortsplib.ServerSession) (*rtspReader, e
 	if err := stream.Initialize(); err != nil {
 		return nil, err
 	}
-	rs := &rtspReader{stream: stream, media: media}
+	rs := &rtspReader{stream: stream, media: media, seq: uint16(rand.Uint32())}
 	cs.rmu.Lock()
 	cs.sessReaders[sess] = rs
 	cs.rmu.Unlock()

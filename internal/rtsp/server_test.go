@@ -212,21 +212,35 @@ func TestRTSPServeH265(t *testing.T) {
 	}
 }
 
+// feedIDRBare pushes an IDR AU WITHOUT parameter sets — mirrors recorders
+// whose hub AUs carry the codec params only via CodecParams, not per-IDR
+// in-band (the case that motivated param-set injection on join).
+func (ts *testServer) feedIDRBare() {
+	ts.hub.Broadcast(0, [][]byte{{0x26, 0x01, 0x02, 0x03}}, true)
+}
+
 // feedP pushes one synthetic non-keyframe AU through the hub.
 func (ts *testServer) feedP() {
 	ts.hub.Broadcast(0, [][]byte{{0x41, 0x01, 0x02, 0x03}}, false)
 }
 
-// firstNALType drains pkts until the first H.264 packet and returns the NAL
-// type it carries (7=SPS 8=PPS 5=IDR 1=P). STAP-A (24) aggregates several
-// NALs — the first sub-NAL decides.
-func firstNALType(t *testing.T, pkts <-chan *rtp.Packet) byte {
+// firstNALType drains pkts until the first packet and returns the NAL type
+// it carries. h264: 7=SPS 8=PPS 5=IDR 1=P, STAP-A (24) aggregates several
+// NALs (first sub-NAL decides); h265: types shift by 1 bit, AP is 48.
+func firstNALType(t *testing.T, pkts <-chan *rtp.Packet, h265 bool) byte {
 	t.Helper()
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case p := <-pkts:
 			if len(p.Payload) > 0 {
+				if h265 {
+					typ := (p.Payload[0] >> 1) & 0x3F
+					if typ == 48 && len(p.Payload) >= 4 { // AP: 2 hdr + 2 size + NAL
+						return (p.Payload[4] >> 1) & 0x3F
+					}
+					return typ
+				}
 				typ := p.Payload[0] & 0x1F
 				if typ == 24 && len(p.Payload) >= 4 { // STAP-A: 1 hdr + 2 size + NAL
 					return p.Payload[3] & 0x1F
@@ -294,7 +308,7 @@ func TestRTSPMidGOPJoinStartsAtKeyframe(t *testing.T) {
 	// The replay rides the first post-PLAY frame — feed one to trigger it.
 	ts.feedP()
 
-	switch n := firstNALType(t, pktsB); n {
+	switch n := firstNALType(t, pktsB, false); n {
 	case 7, 8, 5: // SPS / PPS / IDR — GOP head AU
 	default:
 		t.Fatalf("late joiner's first packet NAL type %d — mid-GOP P-frames leaked to a fresh reader", n)
@@ -337,8 +351,63 @@ func TestRTSPJoinBeforeFirstIDRWaitsForKeyframe(t *testing.T) {
 	}
 
 	ts.feedIDR()
-	if n := firstNALType(t, pkts); n != 7 && n != 8 && n != 5 {
+	if n := firstNALType(t, pkts, false); n != 7 && n != 8 && n != 5 {
 		t.Fatalf("first packet after IDR is NAL %d, want SPS/PPS/IDR", n)
+	}
+}
+
+// Late joiners must receive the parameter sets IN-BAND before any picture
+// data even when the hub's IDR AUs don't carry them (recorder-dependent) —
+// the SDP sprop is not reliably consumed by every puller.
+func TestRTSPJoinInjectsParamSets(t *testing.T) {
+	ts := startTestServer(t, Config{})
+	ts.codec = model.FormatH265
+	ts.sps = tSPS265
+	ts.pps = tPPS265
+
+	a := dialClient(t, ts.url)
+	descA, _, err := a.Describe(mustURL(t, ts.url))
+	require.NoError(t, err)
+	_, err = a.Setup(descA.BaseURL, descA.Medias[0], 0, 0)
+	require.NoError(t, err)
+	pktsA := make(chan *rtp.Packet, 32)
+	a.OnPacketRTP(descA.Medias[0], descA.Medias[0].Formats[0], func(pkt *rtp.Packet) {
+		select {
+		case pktsA <- pkt:
+		default:
+		}
+	})
+	_, err = a.Play(nil)
+	require.NoError(t, err)
+
+	// GOP whose head carries no in-band params.
+	ts.hub.Broadcast(0, [][]byte{tVPS, tSPS265, tPPS265, {0x26, 0x01, 0x02}}, true) // first-ever AU seeds the encoder
+	for range 3 {
+		ts.feedIDRBare()
+		ts.feedP()
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	b := dialClient(t, ts.url)
+	descB, _, err := b.Describe(mustURL(t, ts.url))
+	require.NoError(t, err)
+	_, err = b.Setup(descB.BaseURL, descB.Medias[0], 0, 0)
+	require.NoError(t, err)
+	pktsB := make(chan *rtp.Packet, 64)
+	b.OnPacketRTP(descB.Medias[0], descB.Medias[0].Formats[0], func(pkt *rtp.Packet) {
+		select {
+		case pktsB <- pkt:
+		default:
+		}
+	})
+	_, err = b.Play(nil)
+	require.NoError(t, err)
+	ts.feedIDRBare() // trigger the deferred replay
+
+	switch n := firstNALType(t, pktsB, true); n {
+	case 32, 33, 34, 48: // VPS/SPS/PPS or an aggregation carrying them
+	default:
+		t.Fatalf("late joiner's first packet NAL type %d — parameter sets not injected before picture data", n)
 	}
 }
 

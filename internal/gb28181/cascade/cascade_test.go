@@ -289,87 +289,31 @@ type hubSource struct {
 
 func (f hubSource) Hub(string) *model.StreamHub { return f.hub }
 
-func TestSelectForwardHub(t *testing.T) {
-	mainHub := model.NewStreamHub()
-	subHub := model.NewStreamHub()
-
-	t.Run("sub camera uses the sub tier", func(t *testing.T) {
-		svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
-		acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
-		svc.SetSubStreamAcquirer(acq)
-
-		hub := mainHub
-		release, usingSub := svc.selectForwardHub(&hub, "cam-1")
-		require.True(t, usingSub)
-		require.Equal(t, subHub, hub, "forward must target the sub hub")
-		require.NotNil(t, release)
-		release()
-		select {
-		case <-acq.release:
-		default:
-			t.Fatal("release func not wired to the acquirer")
-		}
-	})
-
-	t.Run("main camera never touches the acquirer", func(t *testing.T) {
-		svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1"}}}, mainHub}, nil)
-		acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
-		svc.SetSubStreamAcquirer(acq)
-
-		hub := mainHub
-		release, usingSub := svc.selectForwardHub(&hub, "cam-1")
-		require.False(t, usingSub)
-		require.Equal(t, mainHub, hub)
-		require.Nil(t, release)
-		require.Zero(t, acq.calls)
-	})
-
-	t.Run("acquire failure degrades to main", func(t *testing.T) {
-		svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
-		svc.SetSubStreamAcquirer(&fakeSubAcquirer{err: errNoSubForTest, release: make(chan struct{}, 1)})
-
-		hub := mainHub
-		release, usingSub := svc.selectForwardHub(&hub, "cam-1")
-		require.False(t, usingSub)
-		require.Equal(t, mainHub, hub, "failed sub acquisition must fall back to main")
-		require.Nil(t, release)
-	})
-
-	t.Run("no acquirer wired stays on main", func(t *testing.T) {
-		svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
-		hub := mainHub
-		release, usingSub := svc.selectForwardHub(&hub, "cam-1")
-		require.False(t, usingSub)
-		require.Nil(t, release)
-	})
-}
-
-// errNoSubForTest keeps the failure path readable without importing substream.
 var errNoSubForTest = &testError{"no sub-stream configured"}
 
 type testError struct{ msg string }
 
 func (e *testError) Error() string { return e.msg }
 
-// A session created for a sub forward must unsubscribe from the SUB hub (not
-// the camera's main hub) and drop its acquisition reference on close.
-func TestMediaSessionSubStreamTeardown(t *testing.T) {
-	mainHub := model.NewStreamHub()
-	subHub := model.NewStreamHub()
+// A wanted sub forward subscribes to the SUB hub, records the swap, and drops
+// the acquisition reference on close.
+func TestMediaSessionSubStreamForward(t *testing.T) {
+	mainHub, subHub := model.NewStreamHub(), model.NewStreamHub()
 	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
 	acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
 	svc.SetSubStreamAcquirer(acq)
 
-	hub := mainHub
-	release, _ := svc.selectForwardHub(&hub, "cam-1")
 	ms := &mediaSession{
 		svc: svc, callID: "c1", channel: "ch", camera: "cam-1",
-		hub: hub, releaseSub: release, mux: psmux.New(),
+		wantSub: true, mux: psmux.New(),
 	}
+	ms.hub = mainHub
+	ms.run(mainHub)
 
-	ms.run(hub)
+	require.Equal(t, 1, acq.calls, "run must acquire the sub tier for a wanted camera")
 	require.Equal(t, 1, subHub.ConsumerCount(), "session must subscribe on the sub hub")
 	require.Equal(t, 0, mainHub.ConsumerCount(), "main hub untouched by the sub forward")
+	require.Equal(t, subHub, ms.hub, "session must record the swapped hub for close()")
 
 	ms.stop()
 	require.Equal(t, 0, subHub.ConsumerCount(), "close must unsubscribe from the sub hub")
@@ -378,4 +322,44 @@ func TestMediaSessionSubStreamTeardown(t *testing.T) {
 	default:
 		t.Fatal("close must drop the sub-stream reference")
 	}
+}
+
+// Acquisition failure degrades to a main-stream forward — never a dead session.
+func TestMediaSessionSubStreamFallbackToMain(t *testing.T) {
+	mainHub := model.NewStreamHub()
+	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+	svc.SetSubStreamAcquirer(&fakeSubAcquirer{err: errNoSubForTest, release: make(chan struct{}, 1)})
+
+	ms := &mediaSession{
+		svc: svc, callID: "c1", channel: "ch", camera: "cam-1",
+		wantSub: true, mux: psmux.New(),
+	}
+	ms.hub = mainHub
+	ms.run(mainHub)
+
+	require.Equal(t, 1, mainHub.ConsumerCount(), "failed acquisition must fall back to main")
+	require.Equal(t, mainHub, ms.hub)
+	ms.stop()
+	require.Equal(t, 0, mainHub.ConsumerCount())
+}
+
+// A BYE racing the acquisition: close() first ⇒ run drops the freshly granted
+// reference and never subscribes.
+func TestMediaSessionSubStreamCloseDuringAcquire(t *testing.T) {
+	mainHub, subHub := model.NewStreamHub(), model.NewStreamHub()
+	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+	acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
+	svc.SetSubStreamAcquirer(acq)
+
+	ms := &mediaSession{
+		svc: svc, callID: "c1", channel: "ch", camera: "cam-1",
+		wantSub: true, mux: psmux.New(),
+	}
+	ms.hub = mainHub
+	ms.closed.Store(true) // BYE won the race before run() acquired
+
+	ms.run(mainHub)
+	require.Equal(t, 0, acq.calls, "a session closed before the acquire must not pull the sub tier at all")
+	require.Equal(t, 0, subHub.ConsumerCount(), "closed session must not subscribe")
+	require.Equal(t, 0, mainHub.ConsumerCount(), "closed session must not subscribe to main either")
 }
