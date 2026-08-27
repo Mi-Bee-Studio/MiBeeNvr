@@ -347,3 +347,27 @@ func TestH265Recorder_AudioEnabled_NoAudioInStream(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected video recording even when no audio in stream")
 }
+
+// Regression: the H265 NAL driver's codecSnapshot call sites unpacked the
+// (sps, pps, vps) tuple as (vps, sps, pps), silently rotating the triplet on
+// every parameter re-store — the SDP sprop / RTSP param injection then served
+// VPS/SPS/PPS in each other's slots and pullers opened every join with
+// "SPS 0 does not exist" until the camera's bare parameter AUs healed it.
+func TestH265ParamSetLabelsNotRotated(t *testing.T) {
+	d := H265NALDriver{}
+	b := &baseRecorder{}
+
+	vps := []byte{0x40, 0x01, 0x0c}
+	sps := []byte{0x42, 0x01, 0x01}
+	pps := []byte{0x44, 0x01, 0xc1}
+
+	// Feed the triplet in camera order; each NAL re-stores the snapshot.
+	require.False(t, d.handleParamSet(b, vps, 32))
+	require.False(t, d.handleParamSet(b, sps, 33))
+	require.False(t, d.handleParamSet(b, pps, 34))
+
+	gotSPS, gotPPS, gotVPS := b.codecSnapshot()
+	require.Equal(t, sps, gotSPS, "SPS slot must hold the SPS")
+	require.Equal(t, pps, gotPPS, "PPS slot must hold the PPS")
+	require.Equal(t, vps, gotVPS, "VPS slot must hold the VPS")
+}
