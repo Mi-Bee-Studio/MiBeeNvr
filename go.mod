@@ -50,7 +50,7 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b // indirect
-	github.com/mickeyzzc/onvif-go/v2 v2.0.0-rc1
+	github.com/mickeyzzc/onvif-go/v2 v2.0.0-rc2
 	github.com/miekg/dns v1.1.41 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -87,5 +87,5 @@ require (
 )
 
 // onvif-go is our own maintained continuation of 0x524a/onvif-go
-// (github.com/mickeyzzc/onvif-go/v2, v2.0.0-rc1+): service-facade API, capability
+// (github.com/mickeyzzc/onvif-go/v2, client at /v2/onvif, v2.0.0-rc2+): service-facade API, capability
 // XAddr repair, clock-skew-aware WS-Security digest. No replace needed.
