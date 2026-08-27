@@ -44,7 +44,7 @@ func (d H265NALDriver) isIDR(typ int) bool          { return typ == 19 || typ ==
 func (d H265NALDriver) isParameterSet(typ int) bool { return typ == 32 || typ == 33 || typ == 34 }
 func (d H265NALDriver) isVCL(typ int) bool          { return typ < 32 }
 func (d H265NALDriver) paramSetsReady(b *baseRecorder) bool {
-	vps, sps, pps := b.codecSnapshot()
+	sps, pps, vps := b.codecSnapshot()
 	return vps != nil && sps != nil && pps != nil
 }
 
@@ -53,29 +53,34 @@ func (d H265NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) boo
 	// writeFrames goroutine, so load-then-store is race-free. We always rebuild
 	// and store the full triplet (VPS/SPS/PPS) so a concurrent reader (live
 	// preview via codecSnapshot) never sees a torn mix of old+new params (#219).
-	vps, sps, pps := b.codecSnapshot()
+	// codecSnapshot returns (sps, pps, vps): keep the labels aligned — the
+	// previous (vps, sps, pps) unpack silently rotated the triplet, and every
+	// re-store below wrote mislabeled bytes back into the snapshot (SDP sprop,
+	// the RTSP server's parameter injection, and the MP4 track config all
+	// served VPS/SPS/PPS in each other's slots).
+	sps, pps, vps := b.codecSnapshot()
 	switch typ {
 	case 32: // VPS
 		if vps != nil && !bytes.Equal(vps, nalu) {
 			b.log.Info("VPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.setCodecParams(nalu, sps, pps)
+			b.setCodecParams(sps, pps, nalu)
 			return true
 		}
-		b.setCodecParams(nalu, sps, pps)
+		b.setCodecParams(sps, pps, nalu)
 	case 33: // SPS
 		if sps != nil && !bytes.Equal(sps, nalu) {
 			b.log.Info("SPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.setCodecParams(vps, nalu, pps)
+			b.setCodecParams(nalu, pps, vps)
 			return true
 		}
-		b.setCodecParams(vps, nalu, pps)
+		b.setCodecParams(nalu, pps, vps)
 	case 34: // PPS
 		if pps != nil && !bytes.Equal(pps, nalu) {
 			b.log.Info("PPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.setCodecParams(vps, sps, nalu)
+			b.setCodecParams(sps, nalu, vps)
 			return true
 		}
-		b.setCodecParams(vps, sps, nalu)
+		b.setCodecParams(sps, nalu, vps)
 	}
 	return false
 }
@@ -93,7 +98,7 @@ func (d H265NALDriver) extractParamSets(b *baseRecorder, au [][]byte) {
 }
 
 func (d H265NALDriver) addTrack(m *muxer.MP4Muxer, b *baseRecorder) (int, error) {
-	vps, sps, pps := b.codecSnapshot()
+	sps, pps, vps := b.codecSnapshot()
 	return m.AddH265Track(vps, sps, pps)
 }
 
