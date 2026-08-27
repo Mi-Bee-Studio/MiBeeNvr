@@ -41,7 +41,7 @@ For example:
 
 ```bash
 # FFmpeg push-stream test
-ffmpeg -re -i input.mp4 -c:v libx264 -f mpegts \
+ffmpeg -re -i input.mp4 -c:v libx264 -bf 0 -f mpegts \
   "srt://192.168.1.50:9000?streamid=#!:r=test-cam,m=publish"
 ```
 
@@ -75,7 +75,7 @@ srt:
 Push source:
 
 ```bash
-ffmpeg -re -i input.mp4 -c:v libx264 -f mpegts \
+ffmpeg -re -i input.mp4 -c:v libx264 -bf 0 -f mpegts \
   "srt://192.168.1.50:9000?streamid=#!:r=test-cam,m=publish&passphrase=my-secret-key-123"
 ```
 
@@ -101,7 +101,7 @@ For example:
 
 ```bash
 # FFmpeg push-stream test
-ffmpeg -re -i input.mp4 -c:v libx264 -c:a aac -f flv \
+ffmpeg -re -i input.mp4 -c:v libx264 -bf 0 -c:a aac -f flv \
   "rtmp://192.168.1.50:1935/live/test-cam"
 ```
 
@@ -118,6 +118,18 @@ ffmpeg -re -i input.mp4 -c:v libx264 -c:a aac -f flv \
 |-----------|---------|-------------|
 | `port` | `1935` | RTMP listening port |
 | `chunk_size` | `4096` | Chunk size |
+
+## Encoder Recommendation: Disable B-Frames (`-bf 0`)
+
+The recording pipeline works on a write-as-encoded, low-latency model: the recorder writes frames to MP4 in arrival order with `pts == dts` and no `ctts` composition offsets. Surveillance cameras almost universally emit baseline/main streams without B-frames, where this model is exact. **Generic encoder defaults, however, enable B-frames** (e.g. `libx264` defaults to `bframes=3`) — with B-frames the decode order ≠ presentation order, so a pts==dts write produces out-of-order playback, and remuxing (`-c copy`) makes ffmpeg report `co located POCs unavailable` (verified in the #435 long-run test).
+
+For push-in sources (SRT/RTMP/WHIP, and externally-encoded RTSP pulls) disable B-frames at the encoder:
+
+```bash
+-c:v libx264 -bf 0        # FFmpeg
+```
+
+For surveillance, disabling B-frames costs almost no bitrate (their benefit is mainly VOD) and stays fully compatible with the NVR's streaming write path, on-demand HLS, and merge pipeline.
 
 ## Push-Out Relay
 
