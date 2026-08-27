@@ -128,6 +128,8 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 | `subscribe_mobile_position` | bool | `false` | Mobile-position subscription |
 | `subscribe_expires` | string | `"3600s"` | Subscription lifetime (auto-renewed at 80%) |
 | `allowed_device_ids` | `[]string` | `[]` | Registration allowlist (empty = allow all) |
+| `sub_channel_probe` | string | `"auto"` | Sub-channel prober mode: `auto` (probe only Hikvision/Dahua devices) / `on` (probe every device) / `off`, #560 |
+| `sub_channel_probe_offset` | int | `1` | Sub-channel candidate code = main channel code + this offset (Hikvision convention is +1; 0 disables probing). Range 0–99 |
 
 > `tcp_mode` (bool) is a legacy alias of `media_transport`, kept for YAML compatibility. It no longer influences the default (tcp-passive since v0.12.0, #460) — set `media_transport: "udp"` explicitly for UDP.
 
@@ -138,7 +140,18 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 | `protocol` | string | Must be `"gb28181"` |
 | `gb28181.device_id` | string | Device 20-digit code |
 | `gb28181.channel_id` | string | Channel 20-digit code |
+| `gb28181.sub_channel_id` | string | Probed sub-stream channel code (auto backfilled, fill-once; clear + restart to re-probe). When set, `?quality=sub` and sub-stream cascade forwarding work, #560 |
 | `audio_enabled` | bool | Audio toggle (default false; enables MP4 audio tracks + live audio) |
+
+## Sub-Stream (Sub-Channel Probing, #560)
+
+GB devices usually do NOT list their sub stream in the catalog — Hikvision-family devices expose it implicitly at a channel-code offset (main code +1). Once a device has registered and its main streams settled, the NVR probes the vendor-convention sub candidate once per bound camera (one extra INVITE, at most once per process lifetime):
+
+- **Success** (media flows on the candidate): the code is persisted to `gb28181.sub_channel_id` (fill-once), `/api/cameras/{id}/protocols` reports `sub_stream.available=true`, and `?quality=sub` (WS/FLV/HLS/WHEP grid + cascade sub forwarding) becomes usable
+- **Failure** (404/timeout/486): silently dropped — the camera keeps its no-sub-stream degradation path with **zero error state**
+- The offset is configurable (`sub_channel_probe_offset`, default 1); in `auto` mode only devices whose DeviceInfo manufacturer is Hikvision or Dahua are probed, leaving self-developed devices untouched
+- A persisted `sub_channel_id` is never overwritten; clear the field and restart the NVR to re-arm probing
+- Sibling codes already present in the catalog (e.g. channels 02/03 of a multi-channel NVR) are NEVER repurposed as sub streams
 
 ## Audio
 

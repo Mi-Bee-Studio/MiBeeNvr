@@ -27,4 +27,9 @@ type Channel struct {
 	// PTZType is the GB/T 28181-2016 § 5.4.12 PTZ capability code from the
 	// Catalog item: 0 = no PTZ, 1 = pan/tilt, 2 = pan/tilt + zoom.
 	PTZType int
+	// SubProbe marks a channel that was NOT in the device catalog but was
+	// registered by the sub-channel prober (#560) from the vendor-convention
+	// code offset. Catalog refreshes never list it, so the flag distinguishes
+	// "real channel the device advertises" from "synthetic pull target".
+	SubProbe bool
 }

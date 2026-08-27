@@ -128,6 +128,8 @@ cameras:
 | `subscribe_mobile_position` | bool | `false` | 移动位置订阅（静止相机无需开启） |
 | `subscribe_expires` | string | `"3600s"` | 订阅有效期（80% 时自动续订） |
 | `allowed_device_ids` | `[]string` | `[]` | 注册白名单（空 = 允许所有） |
+| `sub_channel_probe` | string | `"auto"` | 子通道探测模式：`auto`（仅探测厂商为海康/大华的设备）/ `on`（探测所有设备）/ `off`（关闭），#560 |
+| `sub_channel_probe_offset` | int | `1` | 子通道候选码 = 主通道码 + 该偏移（海康惯例 +1；0 = 禁用探测），范围 0–99 |
 
 > `tcp_mode`（bool）是 `media_transport` 的旧别名，保留仅为 YAML 兼容，**已不再影响默认值**（v0.12.0 起默认即 `tcp-passive`，#460）；需要 UDP 请显式设置 `media_transport: "udp"`。
 
@@ -139,6 +141,17 @@ cameras:
 | `gb28181.device_id` | string | 设备 20 位国标编码 |
 | `gb28181.channel_id` | string | 通道 20 位国标编码 |
 | `audio_enabled` | bool | 音频开关（默认 false，开启后录 MP4 音轨 + 直播音频） |
+| `gb28181.sub_channel_id` | string | 探测到的子码流通道编码（自动回填，fill-once；清空后重启可重新探测）。有值时 `?quality=sub` 与子流转发可用，#560 |
+
+## 子码流（子通道探测，#560）
+
+GB 设备的子码流通常**不在目录里**——海康系设备按通道编码偏移（主码流码 +1）隐式存在。NVR 在设备入册并稳定取流后，按厂商惯例对每个已绑定相机的主通道做一次子通道探测（一次额外 INVITE，进程生命周期内最多一次）：
+
+- **成功**（子通道有媒体流）：探测码自动落 `gb28181.sub_channel_id`（fill-once），`/api/cameras/{id}/protocols` 如实回报 `sub_stream.available=true`，`?quality=sub`（WS/FLV/HLS/WHEP 宫格与级联子流转发）即可用
+- **失败**（404/超时/486）：静默放弃，相机保持无子流的降级路径，**零错误状态**
+- 偏移量可配（`sub_channel_probe_offset`，默认 1）；`auto` 模式只对 DeviceInfo 厂商为海康（Hikvision/海康）/大华（Dahua/大华）的设备探测，自研设备零打扰
+- 已回填的 `sub_channel_id` 不会被覆盖；清空该字段并重启 NVR 可重新触发探测
+- 目录里已存在的兄弟通道码（如多通道 NVR 的 02/03）**绝不**会被当作子码流复用
 
 ## 音频
 

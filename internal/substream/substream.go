@@ -44,12 +44,39 @@ const (
 	StateFailed       = "failed"
 )
 
+// Pull target kinds: KindRTSP (default — Target.URL is dialed over RTSP) and
+// KindGB28181 (a probed GB28181 sub-channel INVITE'd via the GBPuller).
+const (
+	KindRTSP    = "rtsp"
+	KindGB28181 = "gb28181"
+)
+
 // Target describes where to pull a camera's sub-stream from. Credentials ride
 // separately so the puller can inject them into RTSP URLs that lack userinfo.
+// Kind KindGB28181 ignores URL/credentials and uses the GB device/channel pair
+// instead (#560).
 type Target struct {
 	URL      string
 	Username string
 	Password string
+	Kind     string // "" / KindRTSP / KindGB28181
+	// GBDeviceID/GBChannelID carry the probed sub-channel binding for
+	// KindGB28181 targets.
+	GBDeviceID  string
+	GBChannelID string
+}
+
+// GBPuller starts GB28181 sub-channel media sessions. Implemented by the SIP
+// server (internal/gb28181/sip) and injected at app wiring — the substream
+// package stays free of gb28181 imports.
+type GBPuller interface {
+	// EnsureSubChannelRegistered registers the probe-discovered channel code
+	// as an INVITEable pull target (idempotent; no-op when the catalog
+	// already lists it).
+	EnsureSubChannelRegistered(deviceID, channelID string) error
+	// InviteSubChannel establishes the media session feeding onAU; the
+	// returned func BYEs it.
+	InviteSubChannel(deviceID, channelID string, onAU func(au [][]byte, ptsTicks int64, isIDR bool)) (func(), error)
 }
 
 // Resolver maps a camera ID to its sub-stream pull target. ok=false means the
@@ -168,6 +195,9 @@ type Manager struct {
 	// (notably HLS's "hls" consumer — the HLS entry does not store its hub).
 	// Set once at wiring time via SetOnRecycle before traffic arrives.
 	onRecycle func(cameraID string, hub *model.StreamHub)
+	// gbPuller serves KindGB28181 targets (nil → those targets error and the
+	// source reconnects until wired). Set at app wiring via SetGBPuller.
+	gbPuller GBPuller
 }
 
 // NewManager creates a Manager. cfg.Resolver is required for Acquire to work.
@@ -184,6 +214,14 @@ func NewManager(cfg Config) *Manager {
 func (m *Manager) SetOnRecycle(fn func(cameraID string, hub *model.StreamHub)) {
 	m.mu.Lock()
 	m.onRecycle = fn
+	m.mu.Unlock()
+}
+
+// SetGBPuller wires the GB28181 sub-channel session starter (#560). Only call
+// during wiring, before the first Acquire.
+func (m *Manager) SetGBPuller(p GBPuller) {
+	m.mu.Lock()
+	m.gbPuller = p
 	m.mu.Unlock()
 }
 
@@ -226,7 +264,7 @@ func (m *Manager) Acquire(ctx context.Context, cameraID string) (*Source, error)
 	if err != nil {
 		return nil, fmt.Errorf("resolve sub-stream: %w", err)
 	}
-	if !ok || target.URL == "" {
+	if !ok || (target.URL == "" && target.Kind != KindGB28181) {
 		return nil, ErrNoSubStream
 	}
 

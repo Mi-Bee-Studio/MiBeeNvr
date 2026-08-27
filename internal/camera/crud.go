@@ -744,9 +744,10 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	// no recorder restart. Compared against savedCam outside configMu
 	// instead of scattering change flags through the apply block above.
 	if cm.subStreams != nil &&
-		(savedCam.Protocol != camCopy.Protocol || savedCam.Username != camCopy.Username ||
+		(savedCam.Protocol != camCopy.Protocol || savedCam.Username != cam.Username ||
 			savedCam.Password != camCopy.Password || savedCam.ONVIFEndpoint != camCopy.ONVIFEndpoint ||
-			savedCam.SubStreamURL != camCopy.SubStreamURL || savedCam.SubProfileToken != camCopy.SubProfileToken) {
+			savedCam.SubStreamURL != camCopy.SubStreamURL || savedCam.SubProfileToken != camCopy.SubProfileToken ||
+			savedCam.GB28181.SubChannelID != camCopy.GB28181.SubChannelID) {
 		cm.subStreams.StopCamera(cameraID)
 	}
 

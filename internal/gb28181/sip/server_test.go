@@ -619,9 +619,11 @@ func TestServer_Register_PortRotationKeepsAddressStable(t *testing.T) {
 // Mutex-guarded: mergeCatalogChannels calls it from spawned goroutines while
 // assertions read the recorded calls (-race clean).
 type fakeEnroller struct {
-	mu       sync.Mutex
-	enrolled []string // "deviceID/channelID"
-	archived []string // "deviceID/channelID"
+	mu           sync.Mutex
+	enrolled     []string // "deviceID/channelID"
+	archived     []string // "deviceID/channelID"
+	subSet       []string // "deviceID/channelID->subChannelID"
+	subPersisted map[string]string
 }
 
 func (f *fakeEnroller) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
@@ -781,6 +783,25 @@ func TestRetireDeviceSelfChannel_NoRealChannels(t *testing.T) {
 }
 
 func (f *fakeEnroller) GB28181RecordingWanted(deviceID, channelID string) bool { return false }
+
+func (f *fakeEnroller) GB28181SubChannelID(deviceID, channelID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.subPersisted[deviceID+"/"+channelID]
+}
+
+func (f *fakeEnroller) SetGB28181SubChannel(deviceID, channelID, subChannelID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.subSet = append(f.subSet, deviceID+"/"+channelID+"->"+subChannelID)
+	return nil
+}
+
+func (f *fakeEnroller) subSetEmpty() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.subSet) == 0
+}
 
 // TestServer_InviteChannel_DefersWhenRecorderNotRunning: a channel bound to
 // a camera whose recorder isn't up yet must NOT be INVITE'd. The media would
