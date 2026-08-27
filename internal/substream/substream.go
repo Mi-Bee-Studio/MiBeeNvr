@@ -416,3 +416,34 @@ func (m *Manager) Snapshot() []SourceStatus {
 	m.mu.Unlock()
 	return out
 }
+
+// Status returns the live source status for one camera, or nil when the
+// camera has no sub-stream entry (never acquired, or recycled).
+func (m *Manager) Status(cameraID string) *SourceStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.sources[cameraID]
+	if !ok {
+		return nil
+	}
+	codec, _, _, _ := e.src.CodecParams()
+	return &SourceStatus{
+		CameraID:    cameraID,
+		State:       e.src.State(),
+		Codec:       codec,
+		Refs:        e.refs,
+		LastFrameAt: time.Unix(0, e.src.lastFrameAt.Load()),
+		Consumers:   e.src.hub.ConsumerCount(),
+	}
+}
+
+// Hub returns the camera's sub-stream hub — nil when no entry exists. The
+// flow view reads its full consumer fan-out (sends/drops/dwell per consumer).
+func (m *Manager) Hub(cameraID string) *model.StreamHub {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.sources[cameraID]; ok {
+		return e.src.hub
+	}
+	return nil
+}

@@ -753,6 +753,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// aggregated into its catalog and forwarded (PS mux) on INVITE.
 	if cfg.GB28181Cascade.Enabled {
 		deps.gb28181Cascade = cascade.New(cfg.GB28181Cascade, camera.NewCascadeSource(camMgr, db), db)
+		deps.gb28181Cascade.SetSubStreamAcquirer(camera.NewCascadeSubAcquirer(camMgr))
 		slog.Info("GB28181 cascade client configured",
 			"upper", cfg.GB28181Cascade.ServerAddr, "device", cfg.GB28181Cascade.LocalDeviceID)
 	}

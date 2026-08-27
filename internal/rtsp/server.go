@@ -79,8 +79,44 @@ type rtpEncoder interface {
 	Encode(au [][]byte) ([]*rtp.Packet, error)
 }
 
-// cameraStream is the per-camera serving state: one gortsplib ServerStream
-// fanned out to all its readers, fed by a StreamHub subscription.
+// rtspReader is one attached RTSP session's private egress. Each reader owns
+// its own ServerStream so mid-GOP joins can be gated per reader (#524 phase
+// 2): the shared-stream fan-out wrote P-frames to sessions that never saw the
+// GOP head, and pullers' decoders logged reference-missing warnings until the
+// next IDR.
+type rtspReader struct {
+	stream *gortsplib.ServerStream
+	media  *description.Media
+	// active flips in OnPlay; frames are only written to PLAYing readers —
+	// a SETUP→TEARDOWN without PLAY must not receive or hold traffic.
+	active bool
+	// skipUntilIDR gates a reader that joined with no replayable GOP: it
+	// stays silent until the next keyframe instead of starting mid-GOP.
+	skipUntilIDR bool
+	// replayPending marks a freshly PLAYing reader that should receive the
+	// cached GOP before its first live frame. The replay cannot run inside
+	// OnPlay — gortsplib drops stream writes until the session has finished
+	// the PLAY handshake — so the first post-PLAY deliver performs it.
+	replayPending bool
+}
+
+// gopEntry is one encoded access unit in the replay buffer.
+type gopEntry struct {
+	pkts []*rtp.Packet
+	ts   uint32
+}
+
+// GOP replay buffer caps: beyond these (pathological long-GOP cameras) the
+// buffer invalidates itself and new readers fall back to skip-until-IDR —
+// replaying a truncated GOP would reintroduce the reference-missing frames.
+const (
+	gopMaxFrames = 512
+	gopMaxBytes  = 8 << 20
+)
+
+// cameraStream is the per-camera serving state: per-reader ServerStreams fed
+// by one StreamHub subscription, plus a GOP cache so joining readers get an
+// instant, clean picture instead of waiting out the current GOP.
 type cameraStream struct {
 	cameraID string
 	codec    model.Format
@@ -90,9 +126,18 @@ type cameraStream struct {
 	hub      *model.StreamHub
 	subID    string
 
-	stream *gortsplib.ServerStream
+	stream *gortsplib.ServerStream // template stream: DESCRIBE/SDP source, never written
 	media  *description.Media
 	enc    rtpEncoder
+
+	// rmu guards readers/gop. deliver takes the read side; reader
+	// attach/activate/detach take the write side.
+	rmu         sync.RWMutex
+	sessReaders map[*gortsplib.ServerSession]*rtspReader
+	// gop caches the encoded packets since the last keyframe; nil while no
+	// complete GOP head has been seen (or after a cap overflow).
+	gop      []gopEntry
+	gopBytes int
 
 	// tsOrigin is the IngestAt (unix ns) of the first delivered frame; RTP
 	// timestamps derive from it at 90 kHz. Recorder hubs carry heterogeneous
@@ -123,10 +168,135 @@ func (cs *cameraStream) deliver(m model.FrameMsg) {
 	}
 	for _, p := range pkts {
 		p.Timestamp = ts
-		if err := cs.stream.WritePacketRTP(cs.media, p); err != nil {
+	}
+
+	cs.rmu.RLock()
+	for _, rs := range cs.sessReaders {
+		if !rs.active {
+			continue
+		}
+		// Fresh reader: replay the cached GOP so its decode starts at a GOP
+		// head. A keyframe arriving right now makes the replay redundant —
+		// the live AU alone is a clean start. Both rs flags are written only
+		// by this goroutine (the hub's single drain), so mutation under the
+		// read lock is race-free.
+		if rs.replayPending {
+			rs.replayPending = false
+			if !m.IsKeyframe {
+				for _, e := range cs.gop {
+					cs.writePkts(rs, e.pkts)
+				}
+			}
+		}
+		if rs.skipUntilIDR {
+			if !m.IsKeyframe {
+				continue // mid-GOP join with no replayable GOP: wait for the IDR
+			}
+			rs.skipUntilIDR = false
+		}
+		cs.writePkts(rs, pkts)
+	}
+	cs.rmu.RUnlock()
+
+	cs.rmu.Lock()
+	// GOP cache maintenance: a keyframe opens a fresh GOP; P-frames append.
+	// Overflow (frames or bytes) invalidates the buffer until the next IDR —
+	// a truncated replay is exactly the corruption the gating exists to fix.
+	if m.IsKeyframe {
+		cs.gop = append(cs.gop[:0], gopEntry{pkts: pkts, ts: ts})
+		cs.gopBytes = pktBytes(pkts)
+	} else if cs.gop != nil {
+		if len(cs.gop) >= gopMaxFrames || cs.gopBytes+pktBytes(pkts) > gopMaxBytes {
+			cs.gop = nil
+			cs.gopBytes = 0
+		} else {
+			cs.gop = append(cs.gop, gopEntry{pkts: pkts, ts: ts})
+			cs.gopBytes += pktBytes(pkts)
+		}
+	}
+	cs.rmu.Unlock()
+}
+
+// writePkts pushes one AU's packets to a reader stream. A write error aborts
+// that reader's AU (the session is closing); other readers are unaffected.
+func (cs *cameraStream) writePkts(rs *rtspReader, pkts []*rtp.Packet) {
+	for _, p := range pkts {
+		if err := rs.stream.WritePacketRTP(rs.media, p); err != nil {
 			rtspLogger.Warn("rtsp write failed", "camera_id", cs.cameraID, "error", err)
 			return
 		}
+	}
+}
+
+func pktBytes(pkts []*rtp.Packet) int {
+	n := 0
+	for _, p := range pkts {
+		n += p.MarshalSize()
+	}
+	return n
+}
+
+// addReader creates the session's private stream (own SDP, same params as the
+// template). Inactive until PLAY.
+func (cs *cameraStream) addReader(sess *gortsplib.ServerSession) (*rtspReader, error) {
+	media, err := cs.buildMedia()
+	if err != nil {
+		return nil, err
+	}
+	stream := &gortsplib.ServerStream{Server: cs.stream.Server, Desc: &description.Session{Medias: []*description.Media{media}}}
+	if err := stream.Initialize(); err != nil {
+		return nil, err
+	}
+	rs := &rtspReader{stream: stream, media: media}
+	cs.rmu.Lock()
+	cs.sessReaders[sess] = rs
+	cs.rmu.Unlock()
+	return rs, nil
+}
+
+// activateReader runs in OnPlay: arm the freshly attached reader for a GOP
+// replay (#524) — or skip-until-IDR when no replayable GOP exists. The replay
+// itself happens on the reader's first post-PLAY frame inside deliver: writes
+// issued during OnPlay are dropped by gortsplib (the session is still
+// completing the PLAY handshake). The write lock orders the flag against the
+// in-flight deliver fan-out.
+func (cs *cameraStream) activateReader(sess *gortsplib.ServerSession) {
+	cs.rmu.Lock()
+	defer cs.rmu.Unlock()
+	rs, ok := cs.sessReaders[sess]
+	if !ok || rs.active {
+		return
+	}
+	if len(cs.gop) > 0 {
+		rs.replayPending = true
+	} else {
+		rs.skipUntilIDR = true
+	}
+	rs.active = true
+}
+
+// removeReader closes and forgets one session's stream.
+func (cs *cameraStream) removeReader(sess *gortsplib.ServerSession) {
+	cs.rmu.Lock()
+	rs := cs.sessReaders[sess]
+	delete(cs.sessReaders, sess)
+	cs.rmu.Unlock()
+	if rs != nil {
+		rs.stream.Close()
+	}
+}
+
+// closeReaders tears down every reader stream (camera teardown / Stop).
+func (cs *cameraStream) closeReaders() {
+	cs.rmu.Lock()
+	lst := make([]*rtspReader, 0, len(cs.sessReaders))
+	for _, rs := range cs.sessReaders {
+		lst = append(lst, rs)
+	}
+	cs.sessReaders = make(map[*gortsplib.ServerSession]*rtspReader)
+	cs.rmu.Unlock()
+	for _, rs := range lst {
+		rs.stream.Close()
 	}
 }
 
@@ -136,7 +306,7 @@ type Server struct {
 	provider StreamProvider
 	gs       *gortsplib.Server
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	streams map[string]*cameraStream
 	// sessions maps RTSP sessions to their camera stream for reader counting.
 	sessions map[*gortsplib.ServerSession]*cameraStream
@@ -219,6 +389,7 @@ func (s *Server) Stop() error {
 func (s *Server) teardownStream(cs *cameraStream) {
 	cs.closed.Store(true)
 	cs.hub.Unsubscribe(cs.subID)
+	cs.closeReaders()
 	cs.stream.Close()
 }
 
@@ -277,53 +448,20 @@ func (s *Server) streamFor(cameraID string) *cameraStream {
 	}
 
 	cs := &cameraStream{
-		cameraID: cameraID,
-		codec:    info.Codec,
-		sps:      bytes.Clone(info.SPS),
-		pps:      bytes.Clone(info.PPS),
-		vps:      bytes.Clone(info.VPS),
-		hub:      info.Hub,
-		subID:    "rtsp-" + cameraID,
+		cameraID:    cameraID,
+		codec:       info.Codec,
+		sps:         bytes.Clone(info.SPS),
+		pps:         bytes.Clone(info.PPS),
+		vps:         bytes.Clone(info.VPS),
+		hub:         info.Hub,
+		subID:       "rtsp-" + cameraID,
+		sessReaders: make(map[*gortsplib.ServerSession]*rtspReader),
 	}
 
-	var forma format.Format
-	switch info.Codec {
-	case model.FormatH264:
-		f := &format.H264{
-			PayloadTyp:        96,
-			SPS:               cs.sps,
-			PPS:               cs.pps,
-			PacketizationMode: 1,
-		}
-		enc, err := f.CreateEncoder()
-		if err != nil {
-			rtspLogger.Error("rtsp h264 encoder init failed", "camera_id", cameraID, "error", err)
-			return nil
-		}
-		forma = f
-		cs.enc = enc
-	case model.FormatH265:
-		f := &format.H265{
-			PayloadTyp: 96,
-			VPS:        cs.vps,
-			SPS:        cs.sps,
-			PPS:        cs.pps,
-		}
-		enc, err := f.CreateEncoder()
-		if err != nil {
-			rtspLogger.Error("rtsp h265 encoder init failed", "camera_id", cameraID, "error", err)
-			return nil
-		}
-		forma = f
-		cs.enc = enc
-	default:
+	media, err := cs.buildMedia()
+	if err != nil {
+		rtspLogger.Error("rtsp media init failed", "camera_id", cameraID, "error", err)
 		return nil
-	}
-
-	media := &description.Media{
-		Type:    description.MediaTypeVideo,
-		Control: "trackID=0",
-		Formats: []format.Format{forma},
 	}
 	desc := &description.Session{
 		Medias: []*description.Media{media},
@@ -345,6 +483,51 @@ func (s *Server) streamFor(cameraID string) *cameraStream {
 	s.streams[cameraID] = cs
 	rtspLogger.Info("rtsp stream serving", "camera_id", cameraID, "codec", string(info.Codec))
 	return cs
+}
+
+// buildMedia constructs a fresh video media (SDP) from the camera's current
+// parameter sets and, on first call, the shared per-camera RTP encoder.
+func (cs *cameraStream) buildMedia() (*description.Media, error) {
+	var forma format.Format
+	switch cs.codec {
+	case model.FormatH264:
+		f := &format.H264{
+			PayloadTyp:        96,
+			SPS:               cs.sps,
+			PPS:               cs.pps,
+			PacketizationMode: 1,
+		}
+		if cs.enc == nil {
+			enc, err := f.CreateEncoder()
+			if err != nil {
+				return nil, err
+			}
+			cs.enc = enc
+		}
+		forma = f
+	case model.FormatH265:
+		f := &format.H265{
+			PayloadTyp: 96,
+			VPS:        cs.vps,
+			SPS:        cs.sps,
+			PPS:        cs.pps,
+		}
+		if cs.enc == nil {
+			enc, err := f.CreateEncoder()
+			if err != nil {
+				return nil, err
+			}
+			cs.enc = enc
+		}
+		forma = f
+	default:
+		return nil, fmt.Errorf("unsupported codec %s", cs.codec)
+	}
+	return &description.Media{
+		Type:    description.MediaTypeVideo,
+		Control: "trackID=0",
+		Formats: []format.Format{forma},
+	}, nil
 }
 
 func (s *Server) authorized(conn *gortsplib.ServerConn, req *base.Request) bool {
@@ -372,6 +555,7 @@ func (s *Server) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 	delete(s.sessions, ctx.Session)
 	s.mu.Unlock()
 	if cs != nil {
+		cs.removeReader(ctx.Session)
 		cs.readers.Add(-1)
 	}
 }
@@ -406,11 +590,30 @@ func (s *Server) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 		cs.readers.Add(1)
 	}
 	s.mu.Unlock()
-	return &base.Response{StatusCode: base.StatusOK}, cs.stream, nil
+	rs, err := cs.addReader(ctx.Session)
+	if err != nil {
+		// The session cannot be served — uncount it so the reader gauge and
+		// the idle fast-path stay honest.
+		s.mu.Lock()
+		if s.sessions[ctx.Session] == cs {
+			delete(s.sessions, ctx.Session)
+			cs.readers.Add(-1)
+		}
+		s.mu.Unlock()
+		rtspLogger.Error("rtsp reader stream init failed", "camera_id", cs.cameraID, "error", err)
+		return &base.Response{StatusCode: base.StatusInternalServerError}, nil, err
+	}
+	return &base.Response{StatusCode: base.StatusOK}, rs.stream, nil
 }
 
 // OnPlay implements gortsplib.ServerHandlerOnPlay.
-func (s *Server) OnPlay(*gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
+func (s *Server) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
+	s.mu.RLock()
+	cs := s.sessions[ctx.Session]
+	s.mu.RUnlock()
+	if cs != nil {
+		cs.activateReader(ctx.Session)
+	}
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
@@ -122,4 +123,20 @@ func subReadyTimeoutS(cfg *config.Config) int {
 		return 0
 	}
 	return cfg.Server.SubStream.ReadyTimeoutS
+}
+
+// NewCascadeSubAcquirer adapts the manager's sub-stream tier to the cascade
+// client's SubStreamAcquirer (#512): one cascade INVITE holds one reference.
+func NewCascadeSubAcquirer(cm *CameraManager) cascade.SubStreamAcquirer {
+	return cascadeSubAcquirer{cm: cm}
+}
+
+type cascadeSubAcquirer struct{ cm *CameraManager }
+
+func (a cascadeSubAcquirer) AcquireSubHub(ctx context.Context, cameraID string) (*model.StreamHub, func(), error) {
+	src, err := a.cm.AcquireSubStream(ctx, cameraID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return src.Hub(), func() { a.cm.ReleaseSubStream(cameraID) }, nil
 }

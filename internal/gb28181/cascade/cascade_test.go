@@ -7,6 +7,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/psmux"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
@@ -261,4 +262,120 @@ func TestForwardDeviceControl_LensNotForwarded(t *testing.T) {
 		PTZCmd:   "A50F0108002000DD",
 	})
 	require.Equal(t, 1, forwarded)
+}
+
+// --- sub-stream forwarding (#512) -------------------------------------------------
+
+type fakeSubAcquirer struct {
+	hub     *model.StreamHub
+	err     error
+	calls   int
+	release chan struct{}
+}
+
+func (f *fakeSubAcquirer) AcquireSubHub(context.Context, string) (*model.StreamHub, func(), error) {
+	f.calls++
+	if f.err != nil {
+		return nil, nil, f.err
+	}
+	return f.hub, func() { f.release <- struct{}{} }, nil
+}
+
+// hubSource is a fakeSource whose Hub returns a real hub for one camera.
+type hubSource struct {
+	fakeSource
+	hub *model.StreamHub
+}
+
+func (f hubSource) Hub(string) *model.StreamHub { return f.hub }
+
+func TestSelectForwardHub(t *testing.T) {
+	mainHub := model.NewStreamHub()
+	subHub := model.NewStreamHub()
+
+	t.Run("sub camera uses the sub tier", func(t *testing.T) {
+		svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+		acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
+		svc.SetSubStreamAcquirer(acq)
+
+		hub := mainHub
+		release, usingSub := svc.selectForwardHub(&hub, "cam-1")
+		require.True(t, usingSub)
+		require.Equal(t, subHub, hub, "forward must target the sub hub")
+		require.NotNil(t, release)
+		release()
+		select {
+		case <-acq.release:
+		default:
+			t.Fatal("release func not wired to the acquirer")
+		}
+	})
+
+	t.Run("main camera never touches the acquirer", func(t *testing.T) {
+		svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1"}}}, mainHub}, nil)
+		acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
+		svc.SetSubStreamAcquirer(acq)
+
+		hub := mainHub
+		release, usingSub := svc.selectForwardHub(&hub, "cam-1")
+		require.False(t, usingSub)
+		require.Equal(t, mainHub, hub)
+		require.Nil(t, release)
+		require.Zero(t, acq.calls)
+	})
+
+	t.Run("acquire failure degrades to main", func(t *testing.T) {
+		svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+		svc.SetSubStreamAcquirer(&fakeSubAcquirer{err: errNoSubForTest, release: make(chan struct{}, 1)})
+
+		hub := mainHub
+		release, usingSub := svc.selectForwardHub(&hub, "cam-1")
+		require.False(t, usingSub)
+		require.Equal(t, mainHub, hub, "failed sub acquisition must fall back to main")
+		require.Nil(t, release)
+	})
+
+	t.Run("no acquirer wired stays on main", func(t *testing.T) {
+		svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+		hub := mainHub
+		release, usingSub := svc.selectForwardHub(&hub, "cam-1")
+		require.False(t, usingSub)
+		require.Nil(t, release)
+	})
+}
+
+// errNoSubForTest keeps the failure path readable without importing substream.
+var errNoSubForTest = &testError{"no sub-stream configured"}
+
+type testError struct{ msg string }
+
+func (e *testError) Error() string { return e.msg }
+
+// A session created for a sub forward must unsubscribe from the SUB hub (not
+// the camera's main hub) and drop its acquisition reference on close.
+func TestMediaSessionSubStreamTeardown(t *testing.T) {
+	mainHub := model.NewStreamHub()
+	subHub := model.NewStreamHub()
+	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+	acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
+	svc.SetSubStreamAcquirer(acq)
+
+	hub := mainHub
+	release, _ := svc.selectForwardHub(&hub, "cam-1")
+	ms := &mediaSession{
+		svc: svc, callID: "c1", channel: "ch", camera: "cam-1",
+		hub: hub, releaseSub: release, mux: psmux.New(),
+	}
+
+	ms.run(hub)
+	require.Equal(t, 1, subHub.ConsumerCount(), "session must subscribe on the sub hub")
+	require.Equal(t, 0, mainHub.ConsumerCount(), "main hub untouched by the sub forward")
+
+	ms.stop()
+	require.Equal(t, 0, subHub.ConsumerCount(), "close must unsubscribe from the sub hub")
+	select {
+	case <-acq.release:
+	default:
+		t.Fatal("close must drop the sub-stream reference")
+	}
 }

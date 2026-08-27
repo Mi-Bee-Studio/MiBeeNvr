@@ -133,6 +133,13 @@ type CameraConfig struct {
 	// same channel code and the upper's bindings survive.
 	CascadeEnabled *bool `yaml:"cascade_enabled,omitempty" json:"cascade_enabled,omitempty"`
 
+	// CascadeSubStream forwards the camera's on-demand SUB-stream to the
+	// GB28181 upper platform instead of the main stream (#512/#513): the
+	// low-res tier keeps the uplink bandwidth bounded for platforms that only
+	// need a preview. INVITE falls back to main when the camera has no
+	// sub-stream or its pull fails. Cameras without one are unaffected.
+	CascadeSubStream bool `yaml:"cascade_sub_stream,omitempty" json:"cascade_sub_stream,omitempty"`
+
 	// Push-out targets (relay): forward this camera's live stream to remote
 	// destinations (another NVR's RTMP/SRT ingest, a live platform, a backup).
 	// Applies to ANY camera protocol — the engine subscribes to the camera's
