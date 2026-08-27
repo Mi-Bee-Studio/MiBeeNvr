@@ -20,6 +20,10 @@
    * component renders nothing and the parent's snapshot/unsupported branch takes
    * over. The parent must call `orchestrator.registerCamera()` for each camera
    * and read `activeMode()` to decide whether to mount `<CameraPlayer>` at all.
+   * Unregistering is ALSO the parent's job (route unmount / camera leaving the
+   * grid) — this component unmounts transiently during a manual protocol switch
+   * (LiveView's switchingProtocol placeholder) and must NOT drop the slot there,
+   * or the page wedges on "live not supported" until reload (issue #549).
    *
    * The orchestrator owns degrade/upgrade decisions; players keep their own
    * internal resilience (HLS recreate, FLV retry, WebRTC ICE restart). This
@@ -154,11 +158,13 @@
   });
 
   onMount(() => {
-    return () => {
-      // On unmount, drop this camera from the orchestrator so its timers/cooldowns
-      // don't leak. The parent route owns the initial register() call.
-      orchestrator?.unregisterCamera(cameraId);
-    };
+    // NOTE: deliberately NO unregisterCamera() on unmount — this component
+    // unmounts transiently during a manual protocol switch (LiveView's
+    // switchingProtocol placeholder swaps it out for ~100ms); dropping the
+    // orchestrator slot there wedged the page on "live not supported"
+    // (issue #549). Both consumers own cleanup themselves: LiveView.onDestroy
+    // unregisters, Surveillance unregisters cameras leaving the grid and
+    // disposes the orchestrator on route destroy.
   });
 
   function getHlsStreamUrl(): string {

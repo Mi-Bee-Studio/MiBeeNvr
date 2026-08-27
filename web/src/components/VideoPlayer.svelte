@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, getContext } from 'svelte';
+  import { onDestroy, getContext, untrack } from 'svelte';
   import { t } from '$lib/i18n';
   import { Maximize, Minimize, AlertCircle, RefreshCw } from 'lucide-svelte';
   import CameraAudioButton from './CameraAudioButton.svelte';
@@ -350,12 +350,18 @@ streamState = 'error';
       // recreateAttempts and restart the death-loop (issue #112). Only a
       // streamUrl/camera change legitimately resets streamGaveUp (see the
       // streamUrl $effect prelude).
-      if (!destroyed && !streamGaveUp && streamState !== 'loading' && !hlsInstance) {
-        captureFreezeFrame();
-        recreateAttempts.value = 0;
-        streamState = 'loading';
-        initHls();
-      }
+      // untrack the state reads: this effect must re-run ONLY on tabVisible
+      // flips — a reactive streamState read re-triggers the rebuild on every
+      // loading→buffering transition (the destroy/init churn of issue #549;
+      // the !hlsInstance guard mostly masked it here, but don't rely on that).
+      untrack(() => {
+        if (!destroyed && !streamGaveUp && streamState !== 'loading' && !hlsInstance) {
+          captureFreezeFrame();
+          recreateAttempts.value = 0;
+          streamState = 'loading';
+          initHls();
+        }
+      });
     }
   });
 
