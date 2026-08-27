@@ -420,3 +420,52 @@ func (cm *CameraManager) GB28181RecordingWanted(deviceID, channelID string) bool
 	}
 	return cam.RecordingEnabled == nil || *cam.RecordingEnabled
 }
+
+// GB28181SubChannelID returns the persisted sub-channel code for the camera
+// bound to a main channel ("" when unbound or none), #560.
+func (cm *CameraManager) GB28181SubChannelID(deviceID, channelID string) string {
+	cameraID, ok := cm.GB28181CameraIDByChannel(deviceID, channelID)
+	if !ok {
+		return ""
+	}
+	cam := cm.snapshotConfig(cameraID)
+	if cam == nil {
+		return ""
+	}
+	return cam.GB28181.SubChannelID
+}
+
+// SetGB28181SubChannel persists the probed sub-channel code on the camera
+// bound to a main channel (#560). Fill-once: an existing value (manual or a
+// raced probe) always wins. YAML is the source of truth for GB28181 bindings
+// (the DB row injects it at API response time), so persisting means the
+// config file. The camera's on-demand sub puller re-resolves on its next
+// Acquire — no restart needed for a newly probed code.
+func (cm *CameraManager) SetGB28181SubChannel(deviceID, channelID, subChannelID string) error {
+	cameraID, ok := cm.GB28181CameraIDByChannel(deviceID, channelID)
+	if !ok {
+		return fmt.Errorf("camera bound to device %s channel %s not found", deviceID, channelID)
+	}
+	cm.configMu.Lock()
+	set := false
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].ID == cameraID {
+			if cm.cfg.Cameras[i].GB28181.SubChannelID != "" { // raced a manual write
+				cm.configMu.Unlock()
+				return nil
+			}
+			cm.cfg.Cameras[i].GB28181.SubChannelID = subChannelID
+			set = true
+			break
+		}
+	}
+	cm.configMu.Unlock()
+	if !set {
+		return fmt.Errorf("camera %s not found in config", cameraID)
+	}
+	if err := cm.persistConfig(); err != nil {
+		return fmt.Errorf("persist config: %w", err)
+	}
+	slog.Info("gb28181: persisted probed sub_channel_id", "camera", cameraID, "sub_channel_id", subChannelID)
+	return nil
+}

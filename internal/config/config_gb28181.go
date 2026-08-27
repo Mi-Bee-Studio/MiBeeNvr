@@ -34,6 +34,20 @@ type GB28181ServerConfig struct {
 	// CatalogInterval is how often the platform refreshes the device catalog.
 	CatalogInterval string `yaml:"catalog_interval"` // default "30m"
 
+	// SubChannelProbe gates the sub-channel prober (#560): "auto" (default —
+	// probe only devices whose DeviceInfo Manufacturer matches a known
+	// offset-convention vendor), "on" (probe every device), "off" (never).
+	// A probe is one extra INVITE per channel per process lifetime; failures
+	// are silent (no camera error state — the camera keeps its no-sub-stream
+	// degradation path).
+	SubChannelProbe string `yaml:"sub_channel_probe,omitempty"` // default "auto"
+
+	// SubChannelProbeOffset is the channel-code numeric offset the prober
+	// applies to a main channel code to derive the sub-channel candidate
+	// (Hikvision convention: +1). 0 disables probing regardless of
+	// SubChannelProbe. Range 1–99.
+	SubChannelProbeOffset int `yaml:"sub_channel_probe_offset,omitempty"` // default 1
+
 	// TCPMode forces TCP media transport (passive).
 	//
 	// Deprecated: superseded by MediaTransport — no longer influences the
@@ -129,4 +143,11 @@ type GB28181ChannelConfig struct {
 	DeviceID     string `yaml:"device_id,omitempty" json:"device_id,omitempty"`   // GB 20-digit device code
 	ChannelID    string `yaml:"channel_id,omitempty" json:"channel_id,omitempty"` // GB 20-digit channel code
 	Manufacturer string `yaml:"manufacturer,omitempty" json:"manufacturer,omitempty"`
+	// SubChannelID is the probed sub-stream channel code (#560): the vendor-
+	// convention offset of ChannelID (Hikvision: channel number +1) that the
+	// on-demand sub-stream puller INVITEs for quality=sub. Auto-populated by
+	// the probe (fill-once — an existing value is never overwritten, clearing
+	// it re-arms probing). Empty = no sub stream (negotiation falls back to
+	// main).
+	SubChannelID string `yaml:"sub_channel_id,omitempty" json:"sub_channel_id,omitempty"`
 }

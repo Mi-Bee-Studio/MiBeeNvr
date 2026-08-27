@@ -667,6 +667,8 @@ func (h *Handler) subStreamDetailFor(cameraID string) subStreamDetail {
 		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "manual"}, cameraID)
 	case cam.SubProfileToken != "":
 		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "onvif"}, cameraID)
+	case cam.Protocol == string(model.ProtoGB28181) && strings.TrimSpace(cam.GB28181.SubChannelID) != "":
+		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "gb-sub-channel"}, cameraID)
 	}
 	switch cam.Protocol {
 	case "onvif":
@@ -676,7 +678,10 @@ func (h *Handler) subStreamDetailFor(cameraID string) subStreamDetail {
 	case "rtsp_h264", "rtsp_mjpeg", string(model.ProtoRTSP):
 		return subStreamDetail{Reason: "set sub_stream_url to use this camera's sub stream"}
 	case "gb28181":
-		return subStreamDetail{Reason: "GB28181 sub-channel selection not supported yet"}
+		// Prober (#560) runs once per channel per boot after the catalog
+		// merges (vendor-gated in auto mode); no code = device has no
+		// usable sub channel — degrade to main, never an error state.
+		return subStreamDetail{Reason: "no sub-channel probed (device has no vendor-convention sub stream, or probe pending)"}
 	default:
 		// xiaomi (proprietary single stream), srt/rtmp push (publisher owns
 		// the encode), http_jpeg/mjpeg (already low-bitrate stills).

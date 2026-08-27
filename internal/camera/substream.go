@@ -23,12 +23,16 @@ import (
 // configs:
 //
 //   - rtsp protocol: sub_stream_url must be set manually.
+//
 //   - onvif protocol: sub_stream_url wins when present; otherwise the
 //     auto-discovered sub_profile_token (#512) is resolved via GetStreamUri,
 //     with the same DHCP-stale host rewriting the main stream path applies.
 //
-// Everything else (gb28131 sub-channels, push ingest, xiaomi) is not
-// supported yet — ok=false → ErrNoSubStream → the caller falls back to main.
+//   - gb28181 protocol: the probed sub_channel_id (#560) is served by the GB
+//     pull path (SIP INVITE to the vendor-convention sub-channel code).
+//
+// Everything else (push ingest, xiaomi) is not supported yet — ok=false →
+// ErrNoSubStream → the caller falls back to main.
 func (cm *CameraManager) resolveSubTarget(ctx context.Context, cameraID string) (substream.Target, bool, error) {
 	cam := cm.snapshotConfig(cameraID)
 	if cam == nil {
@@ -40,6 +44,18 @@ func (cm *CameraManager) resolveSubTarget(ctx context.Context, cameraID string) 
 			return substream.Target{}, false, nil
 		}
 		return substream.Target{URL: cam.SubStreamURL, Username: cam.Username, Password: cam.Password}, true, nil
+
+	case string(model.ProtoGB28181):
+		// Probed sub-channel (#560): the persisted code is INVITE'd on
+		// demand by the GB pull path. No code → ErrNoSubStream → main.
+		if sub := strings.TrimSpace(cam.GB28181.SubChannelID); sub != "" {
+			return substream.Target{
+				Kind:        substream.KindGB28181,
+				GBDeviceID:  cam.GB28181.DeviceID,
+				GBChannelID: sub,
+			}, true, nil
+		}
+		return substream.Target{}, false, nil
 
 	case string(model.ProtoONVIF):
 		if strings.TrimSpace(cam.SubStreamURL) != "" {

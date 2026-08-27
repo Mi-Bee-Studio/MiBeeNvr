@@ -622,6 +622,14 @@ func validateConfigDetails(cfg *Config) error {
 		if _, err := time.ParseDuration(cfg.GB28181.HeartbeatInterval); err != nil {
 			return fmt.Errorf("gb28181.heartbeat_interval invalid duration: %w", err)
 		}
+		switch cfg.GB28181.SubChannelProbe {
+		case "", "auto", "on", "off":
+		default:
+			return fmt.Errorf("gb28181.sub_channel_probe must be auto/on/off (got %q)", cfg.GB28181.SubChannelProbe)
+		}
+		if cfg.GB28181.SubChannelProbeOffset < 0 || cfg.GB28181.SubChannelProbeOffset > 99 {
+			return fmt.Errorf("gb28181.sub_channel_probe_offset must be between 0 and 99 (got %d)", cfg.GB28181.SubChannelProbeOffset)
+		}
 		if _, err := time.ParseDuration(cfg.GB28181.CatalogInterval); err != nil {
 			return fmt.Errorf("gb28181.catalog_interval invalid duration: %w", err)
 		}
