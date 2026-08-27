@@ -7,6 +7,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/psmux"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/require"
@@ -261,4 +262,104 @@ func TestForwardDeviceControl_LensNotForwarded(t *testing.T) {
 		PTZCmd:   "A50F0108002000DD",
 	})
 	require.Equal(t, 1, forwarded)
+}
+
+// --- sub-stream forwarding (#512) -------------------------------------------------
+
+type fakeSubAcquirer struct {
+	hub     *model.StreamHub
+	err     error
+	calls   int
+	release chan struct{}
+}
+
+func (f *fakeSubAcquirer) AcquireSubHub(context.Context, string) (*model.StreamHub, func(), error) {
+	f.calls++
+	if f.err != nil {
+		return nil, nil, f.err
+	}
+	return f.hub, func() { f.release <- struct{}{} }, nil
+}
+
+// hubSource is a fakeSource whose Hub returns a real hub for one camera.
+type hubSource struct {
+	fakeSource
+	hub *model.StreamHub
+}
+
+func (f hubSource) Hub(string) *model.StreamHub { return f.hub }
+
+var errNoSubForTest = &testError{"no sub-stream configured"}
+
+type testError struct{ msg string }
+
+func (e *testError) Error() string { return e.msg }
+
+// A wanted sub forward subscribes to the SUB hub, records the swap, and drops
+// the acquisition reference on close.
+func TestMediaSessionSubStreamForward(t *testing.T) {
+	mainHub, subHub := model.NewStreamHub(), model.NewStreamHub()
+	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+	acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
+	svc.SetSubStreamAcquirer(acq)
+
+	ms := &mediaSession{
+		svc: svc, callID: "c1", channel: "ch", camera: "cam-1",
+		wantSub: true, mux: psmux.New(),
+	}
+	ms.hub = mainHub
+	ms.run(mainHub)
+
+	require.Equal(t, 1, acq.calls, "run must acquire the sub tier for a wanted camera")
+	require.Equal(t, 1, subHub.ConsumerCount(), "session must subscribe on the sub hub")
+	require.Equal(t, 0, mainHub.ConsumerCount(), "main hub untouched by the sub forward")
+	require.Equal(t, subHub, ms.hub, "session must record the swapped hub for close()")
+
+	ms.stop()
+	require.Equal(t, 0, subHub.ConsumerCount(), "close must unsubscribe from the sub hub")
+	select {
+	case <-acq.release:
+	default:
+		t.Fatal("close must drop the sub-stream reference")
+	}
+}
+
+// Acquisition failure degrades to a main-stream forward — never a dead session.
+func TestMediaSessionSubStreamFallbackToMain(t *testing.T) {
+	mainHub := model.NewStreamHub()
+	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+	svc.SetSubStreamAcquirer(&fakeSubAcquirer{err: errNoSubForTest, release: make(chan struct{}, 1)})
+
+	ms := &mediaSession{
+		svc: svc, callID: "c1", channel: "ch", camera: "cam-1",
+		wantSub: true, mux: psmux.New(),
+	}
+	ms.hub = mainHub
+	ms.run(mainHub)
+
+	require.Equal(t, 1, mainHub.ConsumerCount(), "failed acquisition must fall back to main")
+	require.Equal(t, mainHub, ms.hub)
+	ms.stop()
+	require.Equal(t, 0, mainHub.ConsumerCount())
+}
+
+// A BYE racing the acquisition: close() first ⇒ run drops the freshly granted
+// reference and never subscribes.
+func TestMediaSessionSubStreamCloseDuringAcquire(t *testing.T) {
+	mainHub, subHub := model.NewStreamHub(), model.NewStreamHub()
+	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
+	acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
+	svc.SetSubStreamAcquirer(acq)
+
+	ms := &mediaSession{
+		svc: svc, callID: "c1", channel: "ch", camera: "cam-1",
+		wantSub: true, mux: psmux.New(),
+	}
+	ms.hub = mainHub
+	ms.closed.Store(true) // BYE won the race before run() acquired
+
+	ms.run(mainHub)
+	require.Equal(t, 0, acq.calls, "a session closed before the acquire must not pull the sub tier at all")
+	require.Equal(t, 0, subHub.ConsumerCount(), "closed session must not subscribe")
+	require.Equal(t, 0, mainHub.ConsumerCount(), "closed session must not subscribe to main either")
 }

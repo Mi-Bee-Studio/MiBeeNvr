@@ -55,6 +55,23 @@ export interface FlowStream {
   };
   /** Segments waiting in the rolling-merge queue (#480). */
   merge_pending?: number;
+  /** Sub-stream branch (#513): the on-demand low-res pull serving "流畅"
+   *  viewers and the sub-layer analysis recorder. Absent when no sub entry
+   *  is live (never acquired / idle recycled). */
+  sub?: FlowSub;
+}
+
+/** Sub-stream tier of the flow snapshot (mirrors backend FlowSub). */
+export interface FlowSub {
+  state: string;
+  codec?: string;
+  refs: number;
+  frames_in: number;
+  bytes_in: number;
+  last_frame_at: string;
+  consumers: FlowConsumer[];
+  /** Seconds since the sub hub's last frame; absent when it never framed. */
+  last_frame_age_s?: number;
 }
 
 export interface FlowStreamsResponse {

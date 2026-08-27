@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	onvifgo "github.com/0x524a/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go"
 )
 
 var logger = slog.Default().With("component", "onvif-client")
@@ -100,7 +100,7 @@ func (c *Client) GetDeviceInformation(ctx context.Context) (*DeviceInfo, error) 
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
-	info, err := c.client.GetDeviceInformation(ctx)
+	info, err := c.client.Device().GetDeviceInformation(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get device information: %w", err)
 	}
@@ -116,7 +116,7 @@ func (c *Client) GetProfiles(ctx context.Context) ([]DeviceProfile, error) {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
-	profiles, err := c.client.GetProfiles(ctx)
+	profiles, err := c.client.Media().GetProfiles(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get profiles: %w", err)
 	}
@@ -135,7 +135,7 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
-	uri, err := c.client.GetStreamURI(ctx, profileToken)
+	uri, err := c.client.Media().GetStreamURI(ctx, profileToken)
 	if err != nil {
 		return nil, fmt.Errorf("get stream URI: %w", err)
 	}
@@ -256,7 +256,7 @@ func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilitiesDetail
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
 
-	caps, err := c.client.GetCapabilities(ctx)
+	caps, err := c.client.Device().GetCapabilities(ctx)
 	if err != nil {
 		logger.Debug("failed to get capabilities from device, returning minimal capabilities", "error", err)
 		minimal := &DeviceCapabilitiesDetailed{}

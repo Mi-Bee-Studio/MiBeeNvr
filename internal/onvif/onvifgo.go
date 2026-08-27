@@ -3,7 +3,7 @@ package onvif
 import (
 	"strings"
 
-	"github.com/0x524a/onvif-go/discovery"
+	"github.com/mickeyzzc/onvif-go/discovery"
 )
 
 // MapDiscoveredDevice converts an onvif-go discovery.Device to the project's DiscoveredDevice.
@@ -52,14 +52,24 @@ func MapDiscoveredDevice(d *discovery.Device) DiscoveredDevice {
 // This avoids false-negative drops of marginal ONVIF implementations that
 // populate Scopes but leave Types empty (or vice versa).
 func isONVIFDevice(d *discovery.Device) bool {
-	for _, t := range d.Types {
+	return isONVIFSignal(strings.Join(d.Types, " "), d.Scopes)
+}
+
+// isONVIFSignal reports whether a WS-Discovery Types line (space-separated
+// QNames) or Scopes list carries an ONVIF device signal: a Types entry whose
+// local part contains NetworkVideoTransmitter, or any scope in the ONVIF
+// namespace. Shared by the active Discover path (ProbeMatch filtering, #266)
+// and the passive Hello listener (#554) so both ingress routes apply the same
+// permissive-but-real gate — matching either signal keeps the device.
+func isONVIFSignal(typesLine string, scopes []string) bool {
+	for _, t := range strings.Fields(typesLine) {
 		// Type entries are QNames like "dp0:NetworkVideoTransmitter"; match on
 		// the local part so the prefix (dp0 / tns / etc.) doesn't matter.
 		if strings.Contains(t, "NetworkVideoTransmitter") {
 			return true
 		}
 	}
-	for _, s := range d.Scopes {
+	for _, s := range scopes {
 		if strings.HasPrefix(s, "onvif://www.onvif.org/") {
 			return true
 		}

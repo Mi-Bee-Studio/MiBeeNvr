@@ -40,6 +40,10 @@ type CameraInfo struct {
 	// Encoding is the camera's configured codec ("h264"|"h265"|"" unknown) —
 	// the preferred PSM type; sniffed from the first NAL when empty.
 	Encoding string
+	// SubStream selects the camera's low-res tier for forwarding when true
+	// (#512): the INVITE acquires the on-demand sub-stream instead of the
+	// main hub, falling back to main when unavailable.
+	SubStream bool
 	// CascadeHidden excludes the camera from the aggregated catalog and makes
 	// INVITEs for its channel fail with 404 (catalog convergence: expose only
 	// a chosen subset to the upper platform).
@@ -51,6 +55,13 @@ type CameraInfo struct {
 type CameraSource interface {
 	Cameras() []CameraInfo
 	Hub(cameraID string) *model.StreamHub
+}
+
+// SubStreamAcquirer grants the cascade access to the on-demand sub-stream
+// tier (#513): one INVITE holds one reference for its lifetime. Nil (or an
+// error) falls back to main-stream forwarding.
+type SubStreamAcquirer interface {
+	AcquireSubHub(ctx context.Context, cameraID string) (hub *model.StreamHub, release func(), err error)
 }
 
 // upper is one upper-platform registration session (#370): its own REGISTER /
@@ -68,6 +79,8 @@ type Service struct {
 	cfg config.GB28181CascadeConfig
 	src CameraSource
 	db  *storage.DB
+	// subAcq serves sub-stream forwardings (#512); nil = main-only.
+	subAcq SubStreamAcquirer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -126,6 +139,10 @@ func buildUppers(cfg config.GB28181CascadeConfig) []*upper {
 	}
 	return uppers
 }
+
+// SetSubStreamAcquirer wires the on-demand sub-stream provider (#512). Call
+// once at wiring time, before Start.
+func (s *Service) SetSubStreamAcquirer(a SubStreamAcquirer) { s.subAcq = a }
 
 func New(cfg config.GB28181CascadeConfig, src CameraSource, db *storage.DB) *Service {
 	return &Service{

@@ -475,3 +475,39 @@ func TestInjectCredentialsAndRedact(t *testing.T) {
 	require.Equal(t, "rtsp://a:b@host/x", injectCredentials("rtsp://a:b@host/x", "admin", "secret"))
 	require.Equal(t, "rtsp://192.168.1.10:554/sub", redactURL(in))
 }
+
+// Status/Hub are the flow view's per-camera accessors (#513 observability):
+// nil before the first acquire, live entry with refs afterwards, nil again
+// once the idle recycle reclaims the source.
+func TestStatusAndHubPerCamera(t *testing.T) {
+	_, url := newTestSource(t, model.FormatH264)
+	m := newTestManager(t, url, nil)
+
+	require.Nil(t, m.Status("cam-1"), "no entry before first acquire")
+	require.Nil(t, m.Hub("cam-1"))
+
+	src, err := m.Acquire(context.Background(), "cam-1")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		st := m.Status("cam-1")
+		return st != nil && st.State == StateLive
+	}, 3*time.Second, 50*time.Millisecond)
+
+	st := m.Status("cam-1")
+	require.Equal(t, "cam-1", st.CameraID)
+	require.Equal(t, model.FormatH264, st.Codec)
+	require.Equal(t, 1, st.Refs)
+	require.NotNil(t, m.Hub("cam-1"))
+	require.Equal(t, src.Hub(), m.Hub("cam-1"))
+
+	_, err = m.Acquire(context.Background(), "cam-1")
+	require.NoError(t, err)
+	require.Equal(t, 2, m.Status("cam-1").Refs)
+
+	m.Release("cam-1")
+	m.Release("cam-1")
+	// Idle recycle (150ms fixture timeout) removes the entry — the flow view
+	// must stop rendering the sub branch instead of showing a zombie.
+	require.Eventually(t, func() bool { return m.Status("cam-1") == nil }, 3*time.Second, 50*time.Millisecond)
+	require.Nil(t, m.Hub("cam-1"))
+}
