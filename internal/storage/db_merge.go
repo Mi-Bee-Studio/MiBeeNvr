@@ -431,7 +431,11 @@ func (d *DB) ResetFailedMergeStatus(ctx context.Context, ids []string) (int64, e
 // ListCameraMergeWindows returns hourly merge windows for a camera with 2+ segments.
 // Only includes recordings older than minAge.
 func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge time.Duration) ([]MergeWindow, error) {
-	cutoff := time.Now().Add(-minAge).Format(sqliteTimeFormat)
+	// UTC is mandatory: ended_at is stored UTC (timeToDB), so a local-time
+	// cutoff would sit hours in the future of the intended instant on any
+	// non-UTC host and loosen the minAge gate (same class as the
+	// ListDarkRecordings bug, #565).
+	cutoff := time.Now().UTC().Add(-minAge).Format(sqliteTimeFormat)
 	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
 	rows, err := d.readConn().QueryContext(ctx, query, cameraID, cutoff)
 	if err != nil {
@@ -770,7 +774,11 @@ func (d *DB) UpdateMergeProgressBatch(ctx context.Context, ids []string, progres
 // older than minAge but are NOT part of any multi-segment merge window.
 // These are hour-boundary orphans that will never be merged.
 func (d *DB) ListSingletonPendingRecordings(ctx context.Context, cameraID string, minAge time.Duration) ([]*model.Recording, error) {
-	cutoff := time.Now().Add(-minAge).Format(sqliteTimeFormat)
+	// UTC is mandatory: ended_at is stored UTC (timeToDB), so a local-time
+	// cutoff would sit hours in the future of the intended instant on any
+	// non-UTC host and loosen the minAge gate (same class as the
+	// ListDarkRecordings bug, #565).
+	cutoff := time.Now().UTC().Add(-minAge).Format(sqliteTimeFormat)
 	query := `
 		WITH hour_buckets AS (
 			SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived,
