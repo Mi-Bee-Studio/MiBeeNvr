@@ -279,19 +279,25 @@ func TestLoopbackInviteLiveForwardAndBye(t *testing.T) {
 	require.Len(t, sessionIDs(svc), 1, "re-INVITE must not create a second session")
 
 	// Supersede: a new-dialog INVITE for the same channel tears the old one.
+	// The old session's removal is asynchronous (the 200 for the new INVITE
+	// can arrive first), so poll the observable end state (#571 rule).
 	invite2 := up.request(sip.INVITE, lbChannelOne, playSDP(t, "Play", false), "application/sdp")
 	res = up.roundTrip(invite2)
 	require.Equal(t, 200, int(res.StatusCode()))
-	live := sessionIDs(svc)
-	require.Len(t, live, 1, "one channel, one live forward")
-	require.NotEqual(t, first[0], live[0], "the superseding dialog must own the session")
+	require.Eventually(t, func() bool {
+		live := sessionIDs(svc)
+		return len(live) == 1 && live[0] != first[0]
+	}, 5*time.Second, 20*time.Millisecond, "the superseding dialog must own the session")
 
-	// BYE (in-dialog: the INVITE's Call-ID) tears the forward down.
+	// BYE (in-dialog: the INVITE's Call-ID) tears the forward down. The map
+	// delete runs after the 200 is sent — poll instead of asserting instantly
+	// (CI-runner flake: "BYE must remove the forward session").
 	byeID, ok := invite2.CallID()
 	require.True(t, ok)
 	res = up.roundTrip(up.requestDialog(sip.BYE, lbChannelOne, "", "", byeID))
 	require.Equal(t, 200, int(res.StatusCode()))
-	require.Empty(t, sessionIDs(svc), "BYE must remove the forward session")
+	require.Eventually(t, func() bool { return len(sessionIDs(svc)) == 0 },
+		5*time.Second, 20*time.Millisecond, "BYE must remove the forward session")
 }
 
 func TestLoopbackInviteHiddenCameraRefused(t *testing.T) {
@@ -413,7 +419,8 @@ func TestLoopbackPlaybackInviteAndControl(t *testing.T) {
 
 	res = up.roundTrip(up.requestDialog(sip.BYE, lbChannelOne, "", "", pbID))
 	require.Equal(t, 200, int(res.StatusCode()))
-	require.Empty(t, playbackIDs(svc), "BYE must tear the playback dialog down")
+	require.Eventually(t, func() bool { return len(playbackIDs(svc)) == 0 },
+		5*time.Second, 20*time.Millisecond, "BYE must tear the playback dialog down")
 }
 
 func TestLoopbackOptions(t *testing.T) {
