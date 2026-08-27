@@ -36,6 +36,34 @@ explicitly in your pull request so they can be reviewed before merge.
    (this file is gitignored — see the repository conventions in
    existing packages).
 
+## Writing tests that don't flake in CI (#571)
+
+These rules are distilled from the root causes of past recurring CI
+failures. Every new test must satisfy them:
+
+- **One SQLite instance per test.** Create the DB under `t.TempDir()`
+  (see the `newTestEnv` helper in `internal/cleanup/cleanup_test.go`).
+  Never share one `*storage.DB` across parallel tests — WAL writer
+  contention is what produced the historical `database is locked`
+  failures.
+- **Assert on observable state, never on elapsed time.** For async
+  work, poll the observable end state with `require.Eventually`
+  (generous timeout, short interval) instead of `time.Sleep` followed
+  by an assertion. The #559 storage-root migration flake was exactly
+  this: asserting "done" before the job had been observed.
+- **Race-clean or don't ship.** `go test -race ./internal/<pkg>/`
+  must pass locally before you push. Shared package-level state in
+  tests must be atomic or guarded.
+- **Backdate fixtures via SQL, and build timestamps in UTC.** When a
+  test needs "a record completed 2 hours ago", insert the row and then
+  `UPDATE ... SET completed_at = ?` with a UTC timestamp — never depend
+  on the test running fast. All DB times are stored UTC; comparing
+  them against a local-time `time.Now()` is a bug (see the
+  `ListDarkRecordings` timezone bug caught while writing these rules).
+- **Keep fixtures lightweight.** Prefer hermetic stubs (fake shell
+  scripts, `httptest`, UDP loopback) over real external processes so
+  CI wall-time stays flat as the suite grows.
+
 ## Commit / PR conventions
 
 - Branch from `main`; open a PR (squash-merge only, linear history).

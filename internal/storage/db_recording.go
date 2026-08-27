@@ -1127,7 +1127,10 @@ func (d *DB) BatchGetRecordingAIStatus(ctx context.Context, ids []string) (map[s
 // the given grace period (from ended_at). These are night/no-IR segments
 // excluded from merge and pending cleanup.
 func (d *DB) ListDarkRecordings(ctx context.Context, gracePeriod time.Duration) ([]model.Recording, error) {
-	cutoff := time.Now().Add(-gracePeriod).Format("2006-01-02 15:04:05.999999999")
+	// UTC is mandatory here: ended_at is stored UTC (timeToDB), so a local-time
+	// cutoff would sit hours in the future on non-UTC hosts and delete fresh
+	// dark segments immediately, voiding the grace period (found by #565 tests).
+	cutoff := time.Now().UTC().Add(-gracePeriod).Format("2006-01-02 15:04:05.999999999")
 	q := selectRecordingColumns + ` WHERE merge_status = 'dark' AND ended_at IS NOT NULL AND ended_at < ? ORDER BY ended_at ASC LIMIT 500;`
 	rows, err := d.readConn().QueryContext(ctx, q, cutoff)
 	if err != nil {
