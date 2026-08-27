@@ -17,7 +17,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.19.0
-	github.com/mickeyzzc/onvif-go v1.2.0
 	github.com/pion/interceptor v0.1.46
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.17
@@ -51,6 +50,7 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b // indirect
+	github.com/mickeyzzc/onvif-go/v2 v2.0.0-rc1
 	github.com/miekg/dns v1.1.41 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -87,5 +87,5 @@ require (
 )
 
 // onvif-go is our own maintained continuation of 0x524a/onvif-go
-// (github.com/mickeyzzc/onvif-go, v1.2.0+): service-facade API, capability
+// (github.com/mickeyzzc/onvif-go/v2, v2.0.0-rc1+): service-facade API, capability
 // XAddr repair, clock-skew-aware WS-Security digest. No replace needed.
