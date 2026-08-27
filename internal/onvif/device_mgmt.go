@@ -9,7 +9,7 @@ import (
 	"net"
 	"sync"
 
-	onvifgo "github.com/0x524a/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go"
 )
 
 // ErrUnsupported indicates the operation is not supported.
@@ -49,7 +49,7 @@ func (d *DeviceManagerImpl) SystemReboot(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	message, err := d.client.SystemReboot(ctx)
+	message, err := d.client.Device().SystemReboot(ctx)
 	if err != nil {
 		return fmt.Errorf("system reboot failed: %w", err)
 	}
@@ -63,7 +63,7 @@ func (d *DeviceManagerImpl) GetNetworkInterfaces(ctx context.Context) ([]Network
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	ifaces, err := d.client.GetNetworkInterfaces(ctx)
+	ifaces, err := d.client.Device().GetNetworkInterfaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get network interfaces failed: %w", err)
 	}
@@ -120,7 +120,7 @@ func (d *DeviceManagerImpl) GetUsers(ctx context.Context) ([]ONVIFUser, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	users, err := d.client.GetUsers(ctx)
+	users, err := d.client.Device().GetUsers(ctx)
 	if err == nil || !isAuthError(err) {
 		if err != nil {
 			return nil, fmt.Errorf("get users failed: %w", err)
@@ -145,7 +145,7 @@ func (d *DeviceManagerImpl) CreateUsers(ctx context.Context, users []ONVIFUser) 
 		}
 	}
 
-	if err := d.client.CreateUsers(ctx, onvifUsers); err != nil {
+	if err := d.client.Device().CreateUsers(ctx, onvifUsers); err != nil {
 		return fmt.Errorf("create users failed: %w", err)
 	}
 
@@ -158,7 +158,7 @@ func (d *DeviceManagerImpl) DeleteUsers(ctx context.Context, usernames []string)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if err := d.client.DeleteUsers(ctx, usernames); err != nil {
+	if err := d.client.Device().DeleteUsers(ctx, usernames); err != nil {
 		return fmt.Errorf("delete users failed: %w", err)
 	}
 
@@ -171,7 +171,7 @@ func (d *DeviceManagerImpl) SetUser(ctx context.Context, username, password stri
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if err := d.client.SetUser(ctx, &onvifgo.User{
+	if err := d.client.Device().SetUser(ctx, &onvifgo.User{
 		Username: username,
 		Password: password,
 	}); err != nil {

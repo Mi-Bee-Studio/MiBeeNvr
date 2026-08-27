@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	onvifgo "github.com/0x524a/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go"
 )
 
 var eventLogger = slog.Default().With("component", "onvif-events")
@@ -137,7 +137,7 @@ func (e *EventSubscriberImpl) Subscribe(ctx context.Context, cameraID string) er
 	}
 
 	// Create PullPoint subscription via onvif-go
-	sub, err := e.client.CreatePullPointSubscription(ctx, "", &e.subDuration, "")
+	sub, err := e.client.Events().CreatePullPointSubscription(ctx, "", &e.subDuration, "")
 	if err != nil {
 		// Some cameras advertise the event service in GetCapabilities but reject
 		// the actual subscription as unimplemented. Surface a sentinel so callers
@@ -192,7 +192,7 @@ func (e *EventSubscriberImpl) Unsubscribe(ctx context.Context, cameraID string) 
 
 	// Unsubscribe via onvif-go (fire-and-forget on error, nil client means test mode)
 	if e.client != nil {
-		if err := e.client.Unsubscribe(ctx, ps.subscriptionRef); err != nil {
+		if err := e.client.Events().Unsubscribe(ctx, ps.subscriptionRef); err != nil {
 			eventLogger.Warn("failed to unsubscribe from PullPoint",
 				"camera_id", cameraID,
 				"subscription_ref", ps.subscriptionRef,
@@ -279,7 +279,7 @@ func (e *EventSubscriberImpl) pollAndPublish(ctx context.Context, cameraID strin
 	}
 
 	// Pull messages from the subscription
-	messages, err := e.client.PullMessages(ctx, ps.subscriptionRef, e.pullTimeout, e.messageLimit)
+	messages, err := e.client.Events().PullMessages(ctx, ps.subscriptionRef, e.pullTimeout, e.messageLimit)
 	if err != nil {
 		eventLogger.Warn("PullMessages failed",
 			"camera_id", cameraID,
@@ -313,7 +313,7 @@ func (e *EventSubscriberImpl) pollAndPublish(ctx context.Context, cameraID strin
 
 // renewSubscription attempts to renew the PullPoint subscription before expiry.
 func (e *EventSubscriberImpl) renewSubscription(ctx context.Context, cameraID string, ps *pullPointSubscription) bool {
-	_, newTermination, err := e.client.RenewSubscription(ctx, ps.subscriptionRef, e.subDuration)
+	_, newTermination, err := e.client.Events().RenewSubscription(ctx, ps.subscriptionRef, e.subDuration)
 	if err != nil {
 		eventLogger.Warn("failed to renew PullPoint subscription",
 			"camera_id", cameraID,

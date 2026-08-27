@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"sync"
 
-	onvifgo "github.com/0x524a/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go"
 )
 
 var ptzLogger = slog.Default().With("component", "onvif-ptz")
@@ -51,7 +51,7 @@ func (p *PTZControllerImpl) ContinuousMove(ctx context.Context, velocity PTZVect
 
 	// Provide default timeout — some cameras reject ContinuousMove without it
 	timeout := "PT10S"
-	return p.client.ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), &timeout)
+	return p.client.PTZ().ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), &timeout)
 }
 
 // AbsoluteMove moves PTZ to an absolute position.
@@ -60,7 +60,7 @@ func (p *PTZControllerImpl) AbsoluteMove(ctx context.Context, position PTZVector
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	err := p.client.AbsoluteMove(ctx, p.profileToken, toOnvifPTZVector(position), nil)
+	err := p.client.PTZ().AbsoluteMove(ctx, p.profileToken, toOnvifPTZVector(position), nil)
 	if err == nil || !isAuthError(err) {
 		return err
 	}
@@ -74,7 +74,7 @@ func (p *PTZControllerImpl) RelativeMove(ctx context.Context, displacement PTZVe
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	err := p.client.RelativeMove(ctx, p.profileToken, toOnvifPTZVector(displacement), nil)
+	err := p.client.PTZ().RelativeMove(ctx, p.profileToken, toOnvifPTZVector(displacement), nil)
 	if err == nil || !isAuthError(err) {
 		return err
 	}
@@ -87,7 +87,7 @@ func (p *PTZControllerImpl) Stop(ctx context.Context, stopPanTilt, stopZoom bool
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.client.Stop(ctx, p.profileToken, stopPanTilt, stopZoom)
+	return p.client.PTZ().Stop(ctx, p.profileToken, stopPanTilt, stopZoom)
 }
 
 // GetStatus returns the current PTZ position and whether the camera is moving.
@@ -96,7 +96,7 @@ func (p *PTZControllerImpl) GetStatus(ctx context.Context) (position PTZVector, 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	status, err := p.client.GetStatus(ctx, p.profileToken)
+	status, err := p.client.PTZ().GetStatus(ctx, p.profileToken)
 	if err == nil || !isAuthError(err) {
 		return fromOnvifPTZStatus(status)
 	}
@@ -109,7 +109,7 @@ func (p *PTZControllerImpl) GetPresets(ctx context.Context) ([]PTZPreset, error)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	presets, err := p.client.GetPresets(ctx, p.profileToken)
+	presets, err := p.client.PTZ().GetPresets(ctx, p.profileToken)
 	if err != nil {
 		return nil, fmt.Errorf("get PTZ presets failed: %w", err)
 	}
@@ -132,7 +132,7 @@ func (p *PTZControllerImpl) SetPreset(ctx context.Context, name string) (string,
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	token, err := p.client.SetPreset(ctx, p.profileToken, name, "")
+	token, err := p.client.PTZ().SetPreset(ctx, p.profileToken, name, "")
 	if err == nil || !isAuthError(err) {
 		return token, err
 	}
@@ -145,7 +145,7 @@ func (p *PTZControllerImpl) GoToPreset(ctx context.Context, token string) error 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.client.GotoPreset(ctx, p.profileToken, token, nil)
+	return p.client.PTZ().GotoPreset(ctx, p.profileToken, token, nil)
 }
 
 // RemovePreset deletes a PTZ preset.
@@ -153,7 +153,7 @@ func (p *PTZControllerImpl) RemovePreset(ctx context.Context, token string) erro
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.client.RemovePreset(ctx, p.profileToken, token)
+	return p.client.PTZ().RemovePreset(ctx, p.profileToken, token)
 }
 
 // --- Type conversion helpers ---

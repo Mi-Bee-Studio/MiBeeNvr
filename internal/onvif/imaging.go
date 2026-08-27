@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	onvifgo "github.com/0x524a/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go"
 )
 
 var imagingLogger = slog.Default().With("component", "onvif-imaging")

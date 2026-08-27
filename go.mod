@@ -3,7 +3,6 @@ module github.com/Mi-Bee-Studio/MiBeeNvr
 go 1.26.2
 
 require (
-	github.com/0x524a/onvif-go v1.1.5
 	github.com/Eyevinn/hi264 v0.10.0
 	github.com/abema/go-mp4 v1.7.1
 	github.com/bluenviron/gohlslib/v2 v2.4.0
@@ -18,6 +17,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.19.0
+	github.com/mickeyzzc/onvif-go v1.2.0
 	github.com/pion/interceptor v0.1.46
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.17
@@ -76,7 +76,7 @@ require (
 	github.com/tevino/abool v0.0.0-20170917061928-9b9efcf221b5 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x-cray/logrus-prefixed-formatter v0.5.2 // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
@@ -86,15 +86,6 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-// Use our Mi-Bee-Studio fork of onvif-go, which:
-// 1. Rewrites stale advertised IPs in capability XAddrs (v1.1.7): fixServiceURL
-//    (superset of the old fixLocalhostURL) corrects any capability XAddr whose
-//    host disagrees with the device_service endpoint — the address we used to
-//    reach the camera, which is guaranteed current. Without this, after a camera
-//    IP change rediscovery finds the camera at its new IP but every service call
-//    (GetProfiles etc.) still hits the old, unreachable IP the camera advertises
-//    in GetCapabilities.
-// 2. Adds clock-skew-aware WS-Security digest (v1.1.6): SetClockSkew on the
-//    Client applies the device's time offset to the UsernameToken digest's
-//    Created timestamp, fixing Hikvision auth failures caused by clock divergence.
-replace github.com/0x524a/onvif-go => github.com/Mi-Bee-Studio/onvif-go v1.1.7
+// onvif-go is our own maintained continuation of 0x524a/onvif-go
+// (github.com/mickeyzzc/onvif-go, v1.2.0+): service-facade API, capability
+// XAddr repair, clock-skew-aware WS-Security digest. No replace needed.

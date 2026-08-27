@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/0x524a/onvif-go/discovery"
+	"github.com/mickeyzzc/onvif-go/discovery"
 )
 
 const defaultDiscoveryTimeout = 5 * time.Second

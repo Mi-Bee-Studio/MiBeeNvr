@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	onvifgo "github.com/0x524a/onvif-go"
+	onvifgo "github.com/mickeyzzc/onvif-go"
 )
 
 // SnapshotProviderImpl implements SnapshotProvider by delegating to onvif-go's media service.
@@ -28,7 +28,7 @@ func (s *SnapshotProviderImpl) GetSnapshotUri(ctx context.Context) (string, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	mediaURI, err := s.client.GetSnapshotURI(ctx, s.profileToken)
+	mediaURI, err := s.client.Media().GetSnapshotURI(ctx, s.profileToken)
 	if err != nil {
 		return "", fmt.Errorf("get snapshot URI failed: %w", err)
 	}
