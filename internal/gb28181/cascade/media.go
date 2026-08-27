@@ -420,7 +420,18 @@ func (ms *mediaSession) run(hub *model.StreamHub) {
 		ms.teardown("subscribe failed")
 		return
 	}
+	// Record the subscription under mu, re-checking closed: a concurrent
+	// close() that saw subID=="" must not leave this subscription orphaned
+	// (same interleave contract as the sub-hub swap above). Found by the
+	// loopback tests under -race (#566).
+	ms.mu.Lock()
+	if ms.closed.Load() {
+		ms.mu.Unlock()
+		hub.Unsubscribe(subID)
+		return
+	}
 	ms.subID = subID
+	ms.mu.Unlock()
 
 	// Audio upstream (#370): when the upper INVITEd with an audio m-line,
 	// subscribe to the hub's audio and PS-mux frames alongside video. Only
@@ -475,7 +486,14 @@ func (ms *mediaSession) run(hub *model.StreamHub) {
 		slog.Warn("gb28181-cascade: hub audio subscribe failed", "camera", ms.camera, "error", err)
 		return
 	}
+	ms.mu.Lock()
+	if ms.closed.Load() {
+		ms.mu.Unlock()
+		hub.UnsubscribeAudio(audioSubID)
+		return
+	}
 	ms.audioSubID = audioSubID
+	ms.mu.Unlock()
 }
 
 // onBye tears a forward or playback dialog down when the upper platform
@@ -521,14 +539,17 @@ func (ms *mediaSession) close() {
 	hub := ms.hub
 	releaseSub := ms.releaseSub
 	ms.releaseSub = nil
+	audioSubID := ms.audioSubID
+	subID := ms.subID
+	ms.audioSubID = ""
+	ms.subID = ""
 	ms.mu.Unlock()
 	if hub != nil {
-		if ms.audioSubID != "" {
-			hub.UnsubscribeAudio(ms.audioSubID)
-			ms.audioSubID = ""
+		if audioSubID != "" {
+			hub.UnsubscribeAudio(audioSubID)
 		}
-		if ms.subID != "" {
-			hub.Unsubscribe(ms.subID)
+		if subID != "" {
+			hub.Unsubscribe(subID)
 		}
 	}
 	if releaseSub != nil {

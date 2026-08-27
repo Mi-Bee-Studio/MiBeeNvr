@@ -624,6 +624,12 @@ type fakeEnroller struct {
 	archived     []string // "deviceID/channelID"
 	subSet       []string // "deviceID/channelID->subChannelID"
 	subPersisted map[string]string
+	// pbSink, when non-nil, is returned by NewGB28181PlaybackSink (playback
+	// fetch tests).
+	pbSink gb28181.AUWriter
+	// naluWriter, when non-nil, is returned by GB28181NALUWriter (live
+	// InviteChannel tests).
+	naluWriter func(au [][]byte, ptsTicks int64, isIDR bool)
 }
 
 func (f *fakeEnroller) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
@@ -644,13 +650,16 @@ func (f *fakeEnroller) GB28181CameraIDByChannel(deviceID, channelID string) (str
 	return "", false
 }
 
-func (f *fakeEnroller) GB28181NALUWriter(string) func([][]byte, int64, bool) { return nil }
+func (f *fakeEnroller) GB28181NALUWriter(string) func([][]byte, int64, bool) { return f.naluWriter }
 func (f *fakeEnroller) GB28181AudioWriter(string) func(string, []byte, []byte, int64, int) {
 	return nil
 }
 func (f *fakeEnroller) OnGB28181Invite(string) {}
 func (f *fakeEnroller) OnGB28181Bye(string)    {}
 func (f *fakeEnroller) NewGB28181PlaybackSink(string) (gb28181.AUWriter, error) {
+	if f.pbSink != nil {
+		return f.pbSink, nil
+	}
 	return nil, errors.New("not implemented in fake")
 }
 
