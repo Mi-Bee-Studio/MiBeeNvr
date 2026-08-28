@@ -486,26 +486,37 @@ func TestRollingMergeManager_ProgressCleanup(t *testing.T) {
 
 	mgr.StartSegmentMerge(ctx, "cam-cleanup", segmentDir, outputPath, "")
 
-	// The merge goroutine sleeps 100ms before merging, so the merge completes
-	// at roughly t=110ms. With a 100ms cleanup delay, cleanup fires at ~210ms.
-	// Check at 200ms — entry should still exist (before cleanup).
-	time.Sleep(200 * time.Millisecond)
-
-	info, ok := mgr.GetProgress("cam-cleanup")
-	if !ok {
-		t.Fatal("expected progress entry to exist after merge completion")
+	// Poll for the merge to reach "completed" — a fixed sleep here races the
+	// merge goroutine on loaded CI runners (slowMerger sleeps 100ms + does
+	// real merge work before the status flips; CI flake 2026-08-28).
+	deadline := time.Now().Add(5 * time.Second)
+	var lastStatus string
+	for {
+		info, ok := mgr.GetProgress("cam-cleanup")
+		if !ok {
+			t.Fatal("expected progress entry to exist after merge completion")
+		}
+		lastStatus = info.Status
+		if lastStatus == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("merge did not complete in time; last status %q", lastStatus)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if info.Status != "completed" {
-		t.Fatalf("expected status 'completed', got %q", info.Status)
-	}
 
-	// Wait past the cleanup delay (now at 400ms, well past the 210ms cleanup).
-	time.Sleep(200 * time.Millisecond)
-
-	// Progress should have been cleaned up.
-	_, ok = mgr.GetProgress("cam-cleanup")
-	if ok {
-		t.Fatal("expected progress entry to be cleaned up after delay")
+	// Poll for the progress entry to be removed by the cleanup delay.
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		_, ok := mgr.GetProgress("cam-cleanup")
+		if !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected progress entry to be cleaned up after delay")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

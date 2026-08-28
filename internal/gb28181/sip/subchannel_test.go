@@ -151,6 +151,35 @@ func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 	}
 	require.True(t, invited, "probe must INVITE the +1 candidate code")
 
+	// Answer the probe's teardown BYE like a real device would. Unanswered,
+	// gosip's BYE transaction stalls for Timer F (32s), and the channel
+	// unregistration (release → UnregisterChannel) then blows the Eventually
+	// budget below on loaded CI runners (flake 2026-08-28). The answerer
+	// exits on first BYE (or a short idle window), strictly before the
+	// memoized re-INVITE check below — which polls the same UDP socket and
+	// must not race another reader.
+	byeAnswered := make(chan struct{})
+	go func() {
+		defer close(byeAnswered)
+		gone := time.Now().Add(3 * time.Second)
+		for time.Now().Before(gone) {
+			req := client.nextRequest(300 * time.Millisecond)
+			if req == nil {
+				continue
+			}
+			if string(req.Method()) == "BYE" {
+				client.respond200(req)
+				return
+			}
+		}
+	}()
+	defer func() {
+		select {
+		case <-byeAnswered:
+		case <-time.After(2 * time.Second):
+		}
+	}()
+
 	// Timeout elapses → synthetic channel removed, nothing persisted. The
 	// 200ms probe timeout is a floor, not a ceiling: on a loaded CI runner the
 	// INVITE transaction teardown (release → SIP BYE) can take seconds, so the

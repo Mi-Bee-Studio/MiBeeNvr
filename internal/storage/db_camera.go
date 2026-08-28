@@ -189,6 +189,12 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 // elided, scheme/host lowercased) before storage so that dedup queries can use
 // a normalized comparison and a device discovered as "http://1.2.3.4/..." still
 // matches a later write of "http://1.2.3.4:80/..." (#175).
+//
+// A conflicting update deliberately does NOT touch the archived flag: the boot
+// sync (camera lifecycle) re-upserts every YAML entry, and a partially-failed
+// archive that left the config entry behind must stay archived instead of
+// being resurrected (see TestCascadeSource_ExcludesArchivedCameras). Deliberate
+// re-enrollment resurrects via AddCamera → UnarchiveCamera instead.
 func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, onvifEndpoint, profileToken, streamEncoding, stableID string) error {
 	q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, onvif_endpoint, profile_token, stream_encoding, stable_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)
 

@@ -15,6 +15,18 @@ func (d *DB) ArchiveCameraDB(ctx context.Context, cameraID string) error {
 	return err
 }
 
+// UnarchiveCamera clears the archived flag — the deliberate re-enrollment
+// counterpart of ArchiveCameraDB. Called from AddCamera only: a camera actively
+// (re-)added must be visible to ListCameras again. The boot-time YAML sync uses
+// plain UpsertCamera on purpose so partially-archived config residue stays
+// hidden (TestCascadeSource_ExcludesArchivedCameras).
+func (d *DB) UnarchiveCamera(ctx context.Context, cameraID string) error {
+	_, err := d.db.ExecContext(ctx,
+		"UPDATE cameras SET archived=0, archived_at=NULL WHERE id=?",
+		cameraID)
+	return err
+}
+
 // ArchiveAllRecordings marks all non-archived recordings for a camera as archived.
 // Returns the number of rows affected.
 func (d *DB) ArchiveAllRecordings(ctx context.Context, cameraID string) (int64, error) {
