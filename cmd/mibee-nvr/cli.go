@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -121,6 +122,9 @@ func cmdInit() {
 	}
 	if err := runInit(opts, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if errors.Is(err, errInitConfigExists) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 	os.Exit(0)
@@ -185,13 +189,17 @@ func parseInitArgs(args []string) initOptions {
 	return opts
 }
 
+// errInitConfigExists distinguishes the existing-config refusal — the CLI
+// contract (tests/cli_test.go) maps it to exit code 2.
+var errInitConfigExists = errors.New("config file already exists")
+
 // runInit validates the password and writes the initial config file.
 func runInit(opts initOptions, stdout io.Writer) error {
 	if len(opts.password) < 8 {
 		return fmt.Errorf("password must be at least 8 characters")
 	}
 	if _, err := os.Stat(opts.cfgPath); err == nil && !opts.force {
-		return fmt.Errorf("config file %s already exists (use --force to overwrite)", opts.cfgPath)
+		return fmt.Errorf("%w: %s (use --force to overwrite)", errInitConfigExists, opts.cfgPath)
 	}
 	if err := os.MkdirAll(opts.dataDir, 0o755); err != nil {
 		return fmt.Errorf("creating data directory: %w", err)

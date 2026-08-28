@@ -289,3 +289,12 @@ func TestMergeCamerasPureHelpers(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, b)
 }
+
+func TestRunInitExistingConfigSentinel(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nvr.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("x"), 0o644))
+	err := runInit(initOptions{password: "long-enough", cfgPath: cfgPath}, os.Stdout)
+	require.ErrorIs(t, err, errInitConfigExists, "cmdInit maps this to exit code 2")
+}
