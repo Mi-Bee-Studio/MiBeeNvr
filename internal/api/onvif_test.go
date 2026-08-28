@@ -27,7 +27,9 @@ func stubDiscoverEmpty(t *testing.T) {
 }
 
 func TestONVIFDiscoverEndpoint(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel: the discover tests share the process-global stub
+	// (stubDiscoverEmpty); a parallel sibling's cleanup would restore the
+	// real Discover mid-test (observed as a 5s multicast timeout flake).
 	stubDiscoverEmpty(t)
 	h := TestHandler(nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", nil)
@@ -48,7 +50,7 @@ func TestONVIFDiscoverEndpoint(t *testing.T) {
 }
 
 func TestONVIFDiscoverDefaultTimeout(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel — see TestONVIFDiscoverEndpoint (shared global stub).
 	stubDiscoverEmpty(t)
 	h := TestHandler(nil, nil)
 	body := `{}`
@@ -63,7 +65,7 @@ func TestONVIFDiscoverDefaultTimeout(t *testing.T) {
 }
 
 func TestONVIFDiscoverTimeoutTooLarge(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel — see TestONVIFDiscoverEndpoint (shared global stub).
 	h := TestHandler(nil, nil)
 	body := `{"timeout": 100}`
 	req := httptest.NewRequest(http.MethodPost, "/api/onvif/discover", strings.NewReader(body))
@@ -81,7 +83,7 @@ func TestONVIFDiscoverTimeoutTooLarge(t *testing.T) {
 }
 
 func TestONVIFDiscoverNegativeTimeout(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel — see TestONVIFDiscoverEndpoint (shared global stub).
 	stubDiscoverEmpty(t)
 	h := TestHandler(nil, nil)
 	body := `{"timeout": -1}`
