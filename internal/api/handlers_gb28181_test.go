@@ -9,8 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/stretchr/testify/require"
 )
 
 // Test helper function - must use t.Helper()
@@ -666,4 +669,67 @@ func TestAPI_GB28181_AuxSwitch_InvalidSwitch(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400 for switch 0, got %d", rr.Code)
 	}
+}
+
+func TestAPI_GB28181_ListChannels_EnrollBlockedHint(t *testing.T) {
+	t.Parallel()
+
+	type channelHint struct {
+		ID            string `json:"ID"`
+		EnrollBlocked string `json:"enroll_blocked"`
+	}
+
+	setup := func(t *testing.T, allowSameIP bool) *httptest.ResponseRecorder {
+		t.Helper()
+		db, store := setupTestDB(t)
+		ctx := t.Context()
+		now := time.Now()
+		require.NoError(t, db.UpsertGB28181Device(ctx, storage.GB28181Device{
+			ID: "device1", Name: "Dual Protocol Cam", Status: "online",
+			LastKeepalive: now, RegisteredAt: now,
+		}))
+		require.NoError(t, db.UpsertGB28181Channel(ctx, storage.GB28181Channel{
+			ID: "channel1", DeviceID: "device1", Name: "Ch 1", Status: "idle", UpdatedAt: now,
+		}))
+
+		cfg := &config.Config{
+			Storage: config.StorageConfig{RootDir: store.RootDir(), SegmentDuration: "30s"},
+			Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
+			GB28181: config.GB28181ServerConfig{AllowSameIPEnroll: allowSameIP},
+			Cameras: []config.CameraConfig{{
+				ID: "front-onvif", Name: "Front ONVIF", Protocol: "onvif",
+				ONVIFEndpoint: "http://192.168.63.240/onvif/device_service",
+			}},
+		}
+		camMgr := camera.NewCameraManager(cfg, store, db, "")
+		deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
+		deviceMgr.Register(&gb28181.Device{ID: "device1", NetAddr: "192.168.63.240:5060"})
+		sessionMgr := gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), "3402000000")
+		h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
+
+		return doRequest(t, h.Routes(), http.MethodGet, "/api/gb28181/devices/device1/channels", nil, "", "")
+	}
+
+	t.Run("blocked without flag", func(t *testing.T) {
+		t.Parallel()
+		rr := setup(t, false)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var channels []channelHint
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &channels))
+		require.Len(t, channels, 1)
+		require.Contains(t, channels[0].EnrollBlocked, "allow_same_ip_enroll",
+			"suppressed channel must explain itself and point at the opt-in")
+	})
+
+	t.Run("no hint with flag", func(t *testing.T) {
+		t.Parallel()
+		rr := setup(t, true)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var channels []channelHint
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &channels))
+		require.Len(t, channels, 1)
+		require.Empty(t, channels[0].EnrollBlocked)
+	})
 }

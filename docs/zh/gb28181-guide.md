@@ -128,6 +128,7 @@ cameras:
 | `subscribe_mobile_position` | bool | `false` | 移动位置订阅（静止相机无需开启） |
 | `subscribe_expires` | string | `"3600s"` | 订阅有效期（80% 时自动续订） |
 | `allowed_device_ids` | `[]string` | `[]` | 注册白名单（空 = 允许所有） |
+| `allow_same_ip_enroll` | bool | `false` | 允许同 IP 双协议并存：即使已有相机从该设备 IP 取流（或 ONVIF 序列号匹配），GB28181 通道仍自动建条目。适用于刻意让 ONVIF + GB28181 并存的场景，#596 |
 | `sub_channel_probe` | string | `"auto"` | 子通道探测模式：`auto`（仅探测厂商为海康/大华的设备）/ `on`（探测所有设备）/ `off`（关闭），#560 |
 | `sub_channel_probe_offset` | int | `1` | 子通道候选码 = 主通道码 + 该偏移（海康惯例 +1；0 = 禁用探测），范围 0–99 |
 

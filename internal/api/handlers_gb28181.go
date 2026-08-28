@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -79,6 +80,12 @@ func (h *Handler) handleListGB28181Devices(w http.ResponseWriter, r *http.Reques
 type gb28181ChannelResponse struct {
 	storage.GB28181Channel
 	PTZType int `json:"PTZType"`
+	// EnrollBlocked is non-empty when auto-enroll suppressed this channel via
+	// the cross-protocol dedup (#596) — another camera already streams from
+	// the device's IP. Computed at display time (mirrors
+	// EnsureGB28181Camera's L1 check); empty when enrolled, no collision, or
+	// gb28181.allow_same_ip_enroll is set.
+	EnrollBlocked string `json:"enroll_blocked,omitempty"`
 }
 
 // handleListGB28181Channels returns the channels for a specific GB28181 device.
@@ -116,10 +123,53 @@ func (h *Handler) handleListGB28181Channels(w http.ResponseWriter, r *http.Reque
 				out.PTZType = live.PTZType
 			}
 		}
+		out.EnrollBlocked = h.gbChannelEnrollBlocked(deviceID, ch.ID)
 		resp = append(resp, out)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// gbChannelEnrollBlocked explains why auto-enroll has not created a camera
+// for the channel ("" when it has, or when nothing blocks it). Mirrors the
+// L1 IP-collision branch of camera.EnsureGB28181Camera so the UI can surface
+// suppressed channels instead of leaving them invisible (#596).
+func (h *Handler) gbChannelEnrollBlocked(deviceID, channelID string) string {
+	if h.camMgr == nil {
+		return ""
+	}
+	if _, enrolled := h.camMgr.GB28181CameraIDByChannel(deviceID, channelID); enrolled {
+		return ""
+	}
+	if h.config != nil && h.config.GB28181.AllowSameIPEnroll {
+		return ""
+	}
+	srcIP := h.gbDeviceSourceIP(deviceID)
+	if srcIP == "" {
+		return ""
+	}
+	if existingID, ok := h.camMgr.CameraIDByHostIP(srcIP); ok {
+		return fmt.Sprintf("another camera (%s) already streams from this device IP — set gb28181.allow_same_ip_enroll to enroll both", existingID)
+	}
+	return ""
+}
+
+// gbDeviceSourceIP returns the host part of the device's SIP source address.
+func (h *Handler) gbDeviceSourceIP(deviceID string) string {
+	if h.gb28181DeviceMgr == nil {
+		return ""
+	}
+	d, ok := h.gb28181DeviceMgr.Device(deviceID)
+	if !ok {
+		return ""
+	}
+	d.Mu.RLock()
+	addr := d.NetAddr
+	d.Mu.RUnlock()
+	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
+		return host
+	}
+	return addr
 }
 
 // handleCatalogRefresh triggers a SIP MESSAGE catalog request to the device.

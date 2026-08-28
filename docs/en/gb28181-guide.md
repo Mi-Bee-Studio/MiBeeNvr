@@ -128,6 +128,7 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 | `subscribe_mobile_position` | bool | `false` | Mobile-position subscription |
 | `subscribe_expires` | string | `"3600s"` | Subscription lifetime (auto-renewed at 80%) |
 | `allowed_device_ids` | `[]string` | `[]` | Registration allowlist (empty = allow all) |
+| `allow_same_ip_enroll` | bool | `false` | Keep dual-protocol enrollment: auto-enroll a GB28181 channel even when another camera already streams from the device IP (or matches its ONVIF serial). For deliberate ONVIF + GB28181 side-by-side setups, #596 |
 | `sub_channel_probe` | string | `"auto"` | Sub-channel prober mode: `auto` (probe only Hikvision/Dahua devices) / `on` (probe every device) / `off`, #560 |
 | `sub_channel_probe_offset` | int | `1` | Sub-channel candidate code = main channel code + this offset (Hikvision convention is +1; 0 disables probing). Range 0–99 |
 
