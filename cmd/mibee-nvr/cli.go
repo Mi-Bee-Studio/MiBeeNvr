@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,101 +83,135 @@ func cmdHealth() {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)
 	}
-	resp, err := http.Get("http://localhost" + addr + "/api/health")
-	if err != nil {
+	if err := runHealth(addr); err != nil {
 		fmt.Fprintf(os.Stderr, "Health check failed: %v\n", err)
 		os.Exit(1)
 	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		fmt.Fprintf(os.Stderr, "Health check failed: HTTP %d\n", resp.StatusCode)
-		os.Exit(1)
-	}
-	resp.Body.Close()
 	os.Exit(0)
 }
 
+// runHealth probes the NVR health endpoint once and returns the failure.
+func runHealth(addr string) error {
+	resp, err := http.Get("http://localhost" + addr + "/api/health")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func cmdInit() {
-	var password, dataDir, listenAddr, cfgPath, username string
-	var force bool
-	for i := 2; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "--password":
-			i++
-			if i < len(os.Args) {
-				password = os.Args[i]
-			}
-		case "--data-dir":
-			i++
-			if i < len(os.Args) {
-				dataDir = os.Args[i]
-			}
-		case "--listen":
-			i++
-			if i < len(os.Args) {
-				listenAddr = os.Args[i]
-			}
-		case "--config":
-			i++
-			if i < len(os.Args) {
-				cfgPath = os.Args[i]
-			}
-		case "--username":
-			i++
-			if i < len(os.Args) {
-				username = os.Args[i]
-			}
-		case "--force":
-			force = true
-		}
-	}
-	if dataDir == "" {
-		dataDir = "/var/lib/mibee-nvr"
-	}
-	if listenAddr == "" {
-		listenAddr = ":9090"
-	}
-	if cfgPath == "" {
-		cfgPath = "mibee-nvr.yaml"
-	}
-	if username == "" {
-		username = "admin"
-	}
-	if password == "" {
+	opts := parseInitArgs(os.Args)
+
+	if opts.password == "" {
 		stat, _ := os.Stdin.Stat()
 		if (stat.Mode() & os.ModeCharDevice) != 0 {
 			fmt.Print("Enter password: ")
 			scanner := bufio.NewScanner(os.Stdin)
 			if scanner.Scan() {
-				password = scanner.Text()
+				opts.password = scanner.Text()
 			}
 		}
-		if password == "" {
+		if opts.password == "" {
 			fmt.Fprintln(os.Stderr, "Error: password is required (use --password or provide via terminal)")
 			os.Exit(1)
 		}
 	}
-	if len(password) < 8 {
-		fmt.Fprintln(os.Stderr, "Error: password must be at least 8 characters")
+	if err := runInit(opts, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if errors.Is(err, errInitConfigExists) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
-	if _, err := os.Stat(cfgPath); err == nil && !force {
-		fmt.Fprintf(os.Stderr, "Error: config file %s already exists (use --force to overwrite)\n", cfgPath)
-		os.Exit(2)
+	os.Exit(0)
+}
+
+// initOptions carries the parsed `init` subcommand flags.
+type initOptions struct {
+	password   string
+	dataDir    string
+	listenAddr string
+	cfgPath    string
+	username   string
+	force      bool
+}
+
+// parseInitArgs reads the init flags from a full argv (flags start at [2]).
+func parseInitArgs(args []string) initOptions {
+	var opts initOptions
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--password":
+			i++
+			if i < len(args) {
+				opts.password = args[i]
+			}
+		case "--data-dir":
+			i++
+			if i < len(args) {
+				opts.dataDir = args[i]
+			}
+		case "--listen":
+			i++
+			if i < len(args) {
+				opts.listenAddr = args[i]
+			}
+		case "--config":
+			i++
+			if i < len(args) {
+				opts.cfgPath = args[i]
+			}
+		case "--username":
+			i++
+			if i < len(args) {
+				opts.username = args[i]
+			}
+		case "--force":
+			opts.force = true
+		}
 	}
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
-		os.Exit(1)
+	if opts.dataDir == "" {
+		opts.dataDir = "/var/lib/mibee-nvr"
 	}
-	hash, err := authmw.HashPassword(password)
+	if opts.listenAddr == "" {
+		opts.listenAddr = ":9090"
+	}
+	if opts.cfgPath == "" {
+		opts.cfgPath = "mibee-nvr.yaml"
+	}
+	if opts.username == "" {
+		opts.username = "admin"
+	}
+	return opts
+}
+
+// errInitConfigExists distinguishes the existing-config refusal — the CLI
+// contract (tests/cli_test.go) maps it to exit code 2.
+var errInitConfigExists = errors.New("config file already exists")
+
+// runInit validates the password and writes the initial config file.
+func runInit(opts initOptions, stdout io.Writer) error {
+	if len(opts.password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+	if _, err := os.Stat(opts.cfgPath); err == nil && !opts.force {
+		return fmt.Errorf("%w: %s (use --force to overwrite)", errInitConfigExists, opts.cfgPath)
+	}
+	if err := os.MkdirAll(opts.dataDir, 0o755); err != nil {
+		return fmt.Errorf("creating data directory: %w", err)
+	}
+	hash, err := authmw.HashPassword(opts.password)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error hashing password: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hashing password: %w", err)
 	}
 	cfg := config.Config{
-		Server:        config.ServerConfig{Listen: listenAddr},
-		Storage:       config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
-		Auth:          config.AuthConfig{Username: username, PasswordHash: hash},
+		Server:        config.ServerConfig{Listen: opts.listenAddr},
+		Storage:       config.StorageConfig{RootDir: opts.dataDir, SegmentDuration: "30s"},
+		Auth:          config.AuthConfig{Username: opts.username, PasswordHash: hash},
 		Cameras:       []config.CameraConfig{},
 		Cleanup:       config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
 		FTP:           config.FTPConfig{Port: 2121, PassivePortRange: "2122-2140"},
@@ -189,17 +225,16 @@ func cmdInit() {
 			EnabledCameras:      []string{},
 		},
 	}
-	if err := config.Save(cfgPath, &cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
-		os.Exit(1)
+	if err := config.Save(opts.cfgPath, &cfg); err != nil {
+		return fmt.Errorf("saving config: %w", err)
 	}
-	fmt.Printf("Configuration saved to %s\n", cfgPath)
-	fmt.Printf("Data directory: %s\n", dataDir)
-	fmt.Println("\nNext steps:")
-	fmt.Printf("  1. Edit %s to add your cameras\n", cfgPath)
-	fmt.Printf("  2. Run: ./mibee-nvr -config %s\n", cfgPath)
-	fmt.Printf("  3. Open http://localhost%s in your browser\n", listenAddr)
-	os.Exit(0)
+	fmt.Fprintf(stdout, "Configuration saved to %s\n", opts.cfgPath)
+	fmt.Fprintf(stdout, "Data directory: %s\n", opts.dataDir)
+	_, _ = fmt.Fprintln(stdout, "\nNext steps:")
+	fmt.Fprintf(stdout, "  1. Edit %s to add your cameras\n", opts.cfgPath)
+	fmt.Fprintf(stdout, "  2. Run: ./mibee-nvr -config %s\n", opts.cfgPath)
+	fmt.Fprintf(stdout, "  3. Open http://localhost%s in your browser\n", opts.listenAddr)
+	return nil
 }
 
 func cmdHashPassword() {
@@ -207,13 +242,18 @@ func cmdHashPassword() {
 		fmt.Fprintln(os.Stderr, "Usage: mibee-nvr hash-password <password>")
 		os.Exit(1)
 	}
-	hash, err := authmw.HashPassword(os.Args[2])
+	hash, err := runHashPassword(os.Args[2])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println(hash)
 	os.Exit(0)
+}
+
+// runHashPassword hashes one password (bcrypt), verifying it round-trips.
+func runHashPassword(password string) (string, error) {
+	return authmw.HashPassword(password)
 }
 
 func cmdEncryptConfig() {
@@ -226,20 +266,29 @@ func cmdEncryptConfig() {
 			}
 		}
 	}
-	fields, err := config.EncryptConfigFile(cfgPath)
-	if err != nil {
+	if err := runEncryptConfig(cfgPath, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	os.Exit(0)
+}
+
+// runEncryptConfig encrypts the sensitive fields of a config file in place and
+// reports what was encrypted to stdout.
+func runEncryptConfig(cfgPath string, stdout io.Writer) error {
+	fields, err := config.EncryptConfigFile(cfgPath)
+	if err != nil {
+		return err
+	}
 	if len(fields) == 0 {
-		fmt.Println("No plaintext sensitive fields found. All fields are already encrypted or empty.")
+		_, _ = fmt.Fprintln(stdout, "No plaintext sensitive fields found. All fields are already encrypted or empty.")
 	} else {
-		fmt.Printf("Encrypted %d sensitive field(s) in %s:\n", len(fields), cfgPath)
+		fmt.Fprintf(stdout, "Encrypted %d sensitive field(s) in %s:\n", len(fields), cfgPath)
 		for _, f := range fields {
-			fmt.Printf("  - %s\n", f)
+			fmt.Fprintf(stdout, "  - %s\n", f)
 		}
 	}
-	os.Exit(0)
+	return nil
 }
 
 // dispatchSubcommand handles CLI subcommand dispatch.
@@ -287,26 +336,26 @@ func dispatchSubcommand(args []string) {
 //	--config   配置文件路径（默认 mibee-nvr.yaml）
 //	--dry-run  只统计不删除
 func cmdCleanup() {
-	var cfgPath, beforeDate string
-	var orphans, dryRun bool
-	for i := 2; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "--config":
-			i++
-			if i < len(os.Args) {
-				cfgPath = os.Args[i]
-			}
-		case "--before":
-			i++
-			if i < len(os.Args) {
-				beforeDate = os.Args[i]
-			}
-		case "--orphans":
-			orphans = true
-		case "--dry-run":
-			dryRun = true
-		case "--help", "-h":
-			fmt.Println(`cleanup — 录像清理工具
+	opts, help := parseCleanupArgs(os.Args)
+	if help {
+		os.Exit(0)
+	}
+	if err := runCleanup(opts); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+// cleanupOptions carries the parsed `cleanup` subcommand flags.
+type cleanupOptions struct {
+	cfgPath    string
+	beforeDate string
+	orphans    bool
+	dryRun     bool
+}
+
+const cleanupUsage = `cleanup — 录像清理工具
 
 用法:
   mibee-nvr cleanup [选项]
@@ -321,58 +370,79 @@ func cmdCleanup() {
   mibee-nvr cleanup --before 2026-08-07 --dry-run   # 预览清理7月数据
   mibee-nvr cleanup --before 2026-08-07              # 执行清理
   mibee-nvr cleanup --orphans --dry-run              # 预览孤儿文件
-  mibee-nvr cleanup --orphans                         # 清理孤儿文件`)
-			os.Exit(0)
+  mibee-nvr cleanup --orphans                         # 清理孤儿文件`
+
+// parseCleanupArgs reads the cleanup flags from a full argv. The boolean
+// result reports whether help was requested (caller prints and exits 0).
+func parseCleanupArgs(args []string) (cleanupOptions, bool) {
+	var opts cleanupOptions
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--config":
+			i++
+			if i < len(args) {
+				opts.cfgPath = args[i]
+			}
+		case "--before":
+			i++
+			if i < len(args) {
+				opts.beforeDate = args[i]
+			}
+		case "--orphans":
+			opts.orphans = true
+		case "--dry-run":
+			opts.dryRun = true
+		case "--help", "-h":
+			fmt.Println(cleanupUsage)
+			return opts, true
 		}
 	}
-
-	if cfgPath == "" {
-		cfgPath = "mibee-nvr.yaml"
+	if opts.cfgPath == "" {
+		opts.cfgPath = "mibee-nvr.yaml"
 	}
-	if beforeDate == "" && !orphans {
-		fmt.Fprintln(os.Stderr, "Error: 需要指定 --before 或 --orphans")
-		fmt.Fprintln(os.Stderr, "运行 mibee-nvr cleanup --help 查看用法")
-		os.Exit(1)
+	return opts, false
+}
+
+// runCleanup executes the cleanup modes against the configured storage root.
+func runCleanup(opts cleanupOptions) error {
+	if opts.beforeDate == "" && !opts.orphans {
+		return fmt.Errorf("需要指定 --before 或 --orphans（运行 mibee-nvr cleanup --help 查看用法）")
 	}
 
 	// 加载配置获取存储根目录。
-	cfg, err := config.Load(cfgPath)
+	cfg, err := config.Load(opts.cfgPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config %s: %v\n", cfgPath, err)
-		os.Exit(1)
+		return fmt.Errorf("loading config %s: %w", opts.cfgPath, err)
 	}
 	storageRoot := cfg.Storage.RootDir
 	dbPath := storageRoot + "/mibee-nvr.db"
 
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening DB: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("opening DB: %w", err)
 	}
+	defer db.Close()
 
 	ctx := context.Background()
 	dryRunSuffix := ""
-	if dryRun {
+	if opts.dryRun {
 		dryRunSuffix = " (--dry-run)"
 	}
 
 	// ── 模式 1: 按日期清理 ──
-	if beforeDate != "" {
-		fmt.Printf("=== 按日期清理 (before %s)%s ===\n", beforeDate, dryRunSuffix)
-		cleanupByDate(ctx, db, storageRoot, beforeDate, dryRun)
+	if opts.beforeDate != "" {
+		fmt.Printf("=== 按日期清理 (before %s)%s ===\n", opts.beforeDate, dryRunSuffix)
+		cleanupByDate(ctx, db, storageRoot, opts.beforeDate, opts.dryRun)
 	}
 
 	// ── 模式 2: 清理孤儿文件 ──
-	if orphans {
+	if opts.orphans {
 		fmt.Printf("\n=== 孤儿文件清理%s ===\n", dryRunSuffix)
-		cleanupOrphanFiles(ctx, db, storageRoot, dryRun)
+		cleanupOrphanFiles(ctx, db, storageRoot, opts.dryRun)
 	}
 
 	fmt.Println("\nCleanup complete.")
-	db.Close()
-	// CLI 子命令必须显式退出:dispatchSubcommand 在服务器启动之前调用,
-	// 直接 return 会误启动 NVR 服务。db 已显式 Close(见上)。
-	os.Exit(0)
+	return nil
 }
 
 // cleanupByDate 删除指定日期之前的录像（文件 + DB 行 + AI 事件）。

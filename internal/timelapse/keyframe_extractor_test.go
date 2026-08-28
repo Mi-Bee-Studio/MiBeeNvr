@@ -505,9 +505,12 @@ func TestKeyframeExtractor_StoresRecordingInDB(t *testing.T) {
 		time.Sleep(60 * time.Millisecond)
 	}
 
-	time.Sleep(150 * time.Millisecond)
-
-	// Should have at least one recording in DB.
+	// The DB insert lands asynchronously after segment close — poll instead
+	// of sleeping (#571; flaked on a slow CI runner as "got 0").
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && db.recordingCount() < 1 {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if db.recordingCount() < 1 {
 		t.Fatalf("expected at least 1 recording in DB, got %d", db.recordingCount())
 	}
@@ -802,9 +805,12 @@ func TestKeyframeExtractor_FormatTimelapse(t *testing.T) {
 		time.Sleep(60 * time.Millisecond)
 	}
 
-	time.Sleep(150 * time.Millisecond)
-
-	// Should have at least one recording in DB.
+	// The DB insert lands asynchronously after segment close — poll instead
+	// of sleeping (#571; flaked on a slow CI runner as "got 0").
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && db.recordingCount() < 1 {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if db.recordingCount() < 1 {
 		t.Fatalf("expected at least 1 recording in DB, got %d", db.recordingCount())
 	}

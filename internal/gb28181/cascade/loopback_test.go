@@ -409,7 +409,10 @@ func TestLoopbackPlaybackInviteAndControl(t *testing.T) {
 	res := up.roundTrip(pbInvite)
 	require.Equal(t, 200, int(res.StatusCode()))
 	require.Contains(t, string(res.Body()), "s=Playback")
-	require.Len(t, playbackIDs(svc), 1, "playback dialog must be registered")
+	// The dialog registers after the 200 is sent — poll the observable state
+	// (#571; flaked on a slow CI runner as "[ ] should have 1 item(s)").
+	require.Eventually(t, func() bool { return len(playbackIDs(svc)) == 1 },
+		5*time.Second, 20*time.Millisecond, "playback dialog must be registered")
 
 	// In-dialog INFO (playback INVITE's Call-ID) with a MANSRTSP pause control.
 	pbID, ok := pbInvite.CallID()
