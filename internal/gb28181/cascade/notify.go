@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/ghettovoice/gosip/sip"
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
 
 // catalogSub is one active catalog subscription (an upper's SUBSCRIBE dialog).

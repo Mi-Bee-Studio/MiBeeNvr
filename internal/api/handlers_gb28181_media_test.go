@@ -22,8 +22,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/gorilla/websocket"
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 	"github.com/stretchr/testify/require"
 )
 

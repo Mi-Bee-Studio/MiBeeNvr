@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
 
 // catalogItems builds the aggregated catalog: one channel per local camera,

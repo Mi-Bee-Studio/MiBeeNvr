@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
 
 // recordPageSize bounds the RecordItems carried by one SIP MESSAGE. SIP over

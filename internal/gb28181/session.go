@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
 
 // AUWriter receives access units (full NALU lists) from the demuxer.

@@ -3,7 +3,7 @@ package gb28181
 import (
 	"testing"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
 )

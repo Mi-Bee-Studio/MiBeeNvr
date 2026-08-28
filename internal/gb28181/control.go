@@ -8,7 +8,7 @@ package gb28181
 import (
 	"fmt"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
 
 // Valid RecordCmd values.
