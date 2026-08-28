@@ -151,11 +151,14 @@ func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 	}
 	require.True(t, invited, "probe must INVITE the +1 candidate code")
 
-	// Timeout elapses → synthetic channel removed, nothing persisted.
+	// Timeout elapses → synthetic channel removed, nothing persisted. The
+	// 200ms probe timeout is a floor, not a ceiling: on a loaded CI runner the
+	// INVITE transaction teardown (release → SIP BYE) can take seconds, so the
+	// wait budget is generous — green runs still finish in ~200ms.
 	require.Eventually(t, func() bool {
 		_, ok := dm.FindChannel(testDeviceID, candidate)
 		return !ok
-	}, 3*time.Second, 50*time.Millisecond, "synthetic sub-channel must be unregistered after probe timeout")
+	}, 10*time.Second, 50*time.Millisecond, "synthetic sub-channel must be unregistered after probe timeout")
 	require.True(t, fe.subSetEmpty(), "no sub_channel_id may be persisted on probe timeout")
 
 	// Memoized: re-running the probe path issues no second INVITE.
