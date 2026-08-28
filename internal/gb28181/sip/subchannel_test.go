@@ -41,6 +41,18 @@ func (c *sipClient) nextRequest(timeout time.Duration) sip.Request {
 	return nil
 }
 
+// resetSubProbeMemo wipes the process-lifetime probe memoization. The tests
+// below share one testDeviceID, and -count>1 (or any earlier test in the
+// package) leaves "already probed" entries behind — without this reset the
+// probe never fires and the tests fail on their second run (CI flake class).
+func resetSubProbeMemo(t *testing.T) {
+	t.Helper()
+	subProbed.Range(func(key, _ any) bool {
+		subProbed.Delete(key)
+		return true
+	})
+}
+
 // respond200 answers a server-initiated request with a bare 200 OK (no SDP —
 // the probe then times out waiting for media, which is exactly the negative
 // path under test). Raw-string construction mirroring gbsim's reply200 —
@@ -98,6 +110,7 @@ func TestKnownOffsetVendor(t *testing.T) {
 // (a second trigger does not re-INVITE).
 func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 	t.Helper()
+	resetSubProbeMemo(t)
 	subProbeWait.Store(int64(20 * time.Millisecond))
 	subProbeTimeout.Store(int64(200 * time.Millisecond))
 	t.Cleanup(func() {
@@ -160,6 +173,7 @@ func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 // manufacturer is unknown never gets probed.
 func TestProbeSubChannels_VendorGateAutoMode(t *testing.T) {
 	t.Helper()
+	resetSubProbeMemo(t)
 	subProbeWait.Store(int64(10 * time.Millisecond))
 	t.Cleanup(func() { subProbeWait.Store(int64(5 * time.Second)) })
 
@@ -190,6 +204,7 @@ func TestProbeSubChannels_VendorGateAutoMode(t *testing.T) {
 // state) without any probe INVITE.
 func TestProbeSubChannels_PersistedCodeReregisters(t *testing.T) {
 	t.Helper()
+	resetSubProbeMemo(t)
 	subProbeWait.Store(int64(10 * time.Millisecond))
 	t.Cleanup(func() { subProbeWait.Store(int64(5 * time.Second)) })
 
