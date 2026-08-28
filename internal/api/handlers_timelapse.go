@@ -702,9 +702,10 @@ func (h *Handler) handleRetryTimelapseMerge(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Fetch the recording from DB.
+	// Fetch the recording from DB. GetRecording returns (nil, nil) for a
+	// missing row (storage convention) — the nil check is not optional.
 	rec, err := h.db.GetRecording(r.Context(), recordingID)
-	if err != nil {
+	if err != nil || rec == nil {
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
