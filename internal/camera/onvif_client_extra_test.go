@@ -298,14 +298,22 @@ func TestSubscribeONVIFEventsLifecycle(t *testing.T) {
 
 func TestRediscoverAndReconnectGuards(t *testing.T) {
 	t.Parallel()
-	fake := newCamSOAPFake(t)
 	cfg := testConfig()
+	// The ONVIF camera's endpoint is a DEAD loopback port (not a fake): the
+	// scan-budget case below races the first probe (scanFor's select picks
+	// randomly between ctx.Done and scheduling, and a loopback probe can
+	// complete inside a 1ms budget). With connection-refused the probe can
+	// never match, so the guard outcome is deterministic whichever way the
+	// race resolves — and no probe can leave the machine.
 	cfg.Cameras = []config.CameraConfig{
-		fake.onvifCamera("onvif-redis"),
+		{
+			ID: "onvif-redis", Name: "onvif-redis", Protocol: "onvif", Encoding: "h264",
+			ONVIFEndpoint: "http://127.0.0.1:1/onvif/device_service", Username: "u", Password: "p",
+		},
 		{ID: "rtsp-cam", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://127.0.0.1:1/x"},
 	}
-	// Kill the scan before any probe fires: MaxDuration=1ms expires the scan
-	// context immediately → ErrNotFound → (false, nil) without touching the LAN.
+	// Bound the scan as extra insurance: expired budget + refused dials both
+	// converge on ErrNotFound.
 	cfg.Health.Rediscovery.MaxDuration = "1ms"
 	cfg.Health.Rediscovery.ProbeTimeout = "100ms"
 	cm, _, _, _ := newTestManagerWithCfg(t, cfg)
@@ -339,7 +347,6 @@ func TestRediscoverAndReconnectGuards(t *testing.T) {
 	found, err = cm.RediscoverAndReconnect(ctx, "onvif-redis")
 	require.NoError(t, err)
 	require.False(t, found)
-	require.Equal(t, 0, fake.callCount("GetDeviceInformation"), "no probe may leave the process in the guard tests")
 }
 
 func TestAccessorLongtail(t *testing.T) {
