@@ -99,8 +99,14 @@ func DetectDarkAVIFile(filePath string, threshold int) (bool, int, error) {
 		size   int32
 	}
 	var chunks []chunkInfo
-	pos := moviOffset + 8 // skip "movi" + size
-	moviEnd := moviOffset + int64(moviSize)
+	// moviOffset points at the "LIST" fourcc; the chunk stream starts after
+	// "LIST" + size + "movi" (12 bytes). moviSize counts the payload AFTER the
+	// LIST size field ("movi" fourcc + chunks), so the end is moviOffset+8+size.
+	// The previous +8 landed on the "movi" fourcc itself and misparsed every
+	// chunk header — no AVI ever yielded a video chunk and dark detection
+	// (found by the #585 test batch).
+	pos := moviOffset + 12
+	moviEnd := moviOffset + 8 + int64(moviSize)
 	for pos < moviEnd-8 {
 		if _, err := f.Seek(pos, io.SeekStart); err != nil {
 			break
