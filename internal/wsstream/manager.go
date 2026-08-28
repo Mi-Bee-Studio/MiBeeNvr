@@ -178,7 +178,11 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 		frameCh: make(chan model.FrameMsg, m.writeBufSize),
 		cancel:  cancel,
 		hub:     hub,
-		audioCh: nil, // lazily allocated in SetAudioInfo
+		// Pre-allocated (NOT lazily in SetAudioInfo): writeLoop reads this
+		// channel every select iteration without a lock, so a post-launch
+		// allocation would race it. An empty channel blocks in select exactly
+		// like a nil one until SetAudioInfo wires the hub side.
+		audioCh: make(chan model.AudioFrame, m.writeBufSize),
 	}
 	// Resolve cached counters once; per-frame path only Inc()s (#469).
 	if m.metrics != nil {
@@ -201,9 +205,12 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 	}
 
 	m.streams[camID] = entry
-	// NOTE: entry is fully constructed before writeLoop starts. Do NOT mutate
-	// entry fields after this point — writeLoop/getAudioCh read them without a
-	// lock, and a post-launch write (e.g. re-zeroing audioCh) is a data race.
+	// NOTE: entry is fully constructed before writeLoop starts. Structural
+	// fields (channels, hub, codecs) must not be mutated after this point —
+	// writeLoop/getAudioCh read them without a lock. The audio CONFIG fields
+	// (audioCodec/…) are the one sanctioned exception: SetAudioInfo writes
+	// them under viewerMu and the readers (distributeAudioFrame, ServeWS)
+	// take the same lock.
 	go m.writeLoop(ctx, camID, entry)
 
 	wsLogger.Load().Info("WebSocket stream registered", "camera_id", camID, "codec", string(codec), "hub", hub != nil)
@@ -486,6 +493,10 @@ func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRat
 		return fmt.Errorf("wsstream: unknown audio codec %q", codec)
 	}
 
+	// Write the config under viewerMu: distributeAudioFrame (writeLoop
+	// goroutine) and ServeWS read these fields concurrently — an unlocked
+	// post-launch write races them (caught by -race in the audio tests).
+	entry.viewerMu.Lock()
 	entry.audioCodec = codecByte
 	entry.audioSampleRate = uint32(sampleRate)
 	entry.audioChannels = uint8(channels)
@@ -495,11 +506,9 @@ func (m *Manager) SetAudioInfo(camID string, codec string, muLaw bool, sampleRat
 	} else {
 		entry.audioConfig = nil
 	}
+	entry.viewerMu.Unlock()
 
-	// Lazily allocate audio channel
-	if entry.audioCh == nil {
-		entry.audioCh = make(chan model.AudioFrame, m.writeBufSize)
-	}
+	// audioCh is pre-allocated at registration — nothing to do here.
 
 	// Subscribe to hub audio with callback that feeds into audioCh
 	if entry.hub != nil {
@@ -570,9 +579,12 @@ func (m *Manager) distributeVideoFrame(entry *streamEntry, camID string, msg mod
 
 // distributeAudioFrame encodes and distributes an audio frame to all viewers.
 func (m *Manager) distributeAudioFrame(entry *streamEntry, camID string, af model.AudioFrame) {
+	entry.viewerMu.Lock()
+	codec := entry.audioCodec
+	entry.viewerMu.Unlock()
 	encoded, err := EncodeAudioFrame(&AudioFrameData{
 		PTS:   af.PTS,
-		Codec: entry.audioCodec,
+		Codec: codec,
 		Data:  af.Data,
 	})
 	if err != nil {
@@ -696,13 +708,16 @@ func (m *Manager) ServeWS(camID, quality string, w http.ResponseWriter, r *http.
 	}
 
 	// Send AudioCodecInfo if audio is configured
-	if entry.audioCodec != 0 {
-		aci := &AudioCodecInfo{
-			Codec:      entry.audioCodec,
-			SampleRate: entry.audioSampleRate,
-			Channels:   entry.audioChannels,
-			Config:     entry.audioConfig,
-		}
+	entry.viewerMu.Lock()
+	audioConfigured := entry.audioCodec != 0
+	aci := &AudioCodecInfo{
+		Codec:      entry.audioCodec,
+		SampleRate: entry.audioSampleRate,
+		Channels:   entry.audioChannels,
+		Config:     entry.audioConfig,
+	}
+	entry.viewerMu.Unlock()
+	if audioConfigured {
 		aciData, err := EncodeAudioCodecInfo(aci)
 		if err != nil {
 			conn.Close()

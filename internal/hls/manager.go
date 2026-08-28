@@ -386,19 +386,25 @@ func (m *Manager) rebuildMuxer(cameraID string, entry *streamEntry, au [][]byte)
 // and feeds frames to the HLS muxer for the given camera.
 // If the sub-stream connection fails, it logs a warning and returns — the caller should fall back to main stream.
 func (m *Manager) StartSubStreamReader(cameraID, subStreamURL string, isH265 bool, fallbackFn func()) error {
-	m.mu.RLock()
+	// Hold the write lock across the dedup check AND the subStreamCancel
+	// assignment: readSubStream's exit path nils the same field under m.mu, so
+	// an unlocked check-then-set here races a just-exited reader (a second
+	// reader could be spawned on top of a live one). Caught by -race in the
+	// sub-stream pump tests.
+	m.mu.Lock()
 	entry, ok := m.streams[cameraID]
-	m.mu.RUnlock()
-
 	if !ok {
+		m.mu.Unlock()
 		return ErrStreamNotActive
 	}
 	if entry.subStreamCancel != nil {
+		m.mu.Unlock()
 		return nil // already running
 	}
 
 	ctx, cancel := context.WithCancel(m.ctx)
 	entry.subStreamCancel = cancel
+	m.mu.Unlock()
 
 	go m.readSubStream(ctx, cameraID, subStreamURL, isH265, entry, fallbackFn)
 
@@ -788,13 +794,13 @@ func isPersistentStorageError(err error) bool {
 // StopStream stops the HLS muxer for the given camera and cleans up temp files.
 func (m *Manager) StopStream(cameraID string) {
 	m.mu.Lock()
-	wg := m.stopStreamLocked(cameraID)
+	join := m.stopStreamLocked(cameraID)
 	m.mu.Unlock()
 	// Join writeLoop + idleWatchdog OUTSIDE m.mu. Joining under the lock would
 	// deadlock if idleWatchdog is concurrently in its own m.StopStream path
 	// (waiting on m.mu). See stopStreamLocked audit (#230).
-	if wg != nil {
-		wg.Wait()
+	if join != nil {
+		join()
 	}
 }
 
@@ -806,10 +812,10 @@ func (m *Manager) EvictStream(cameraID string) error {
 		m.mu.Unlock()
 		return ErrStreamNotActive
 	}
-	wg := m.stopStreamLocked(cameraID)
+	join := m.stopStreamLocked(cameraID)
 	m.mu.Unlock()
-	if wg != nil {
-		wg.Wait() // join outside m.mu — see StopStream (#230)
+	if join != nil {
+		join() // join outside m.mu — see StopStream (#230)
 	}
 	return nil
 }
@@ -842,33 +848,42 @@ func (m *Manager) evictLRULocked(newStreamID string) {
 	if m.metrics != nil {
 		m.metrics.HLSIdleEvictions.WithLabelValues(oldestID).Inc()
 	}
-	// Discard the returned WaitGroup: this runs under m.mu (EnsureStream holds
-	// the write lock), so joining here would deadlock with idleWatchdog's own
-	// m.StopStream path. The evicted goroutines exit within ≤ idleTimeout/2 of
-	// the cancel and only read their (already-closed) mux, so the brief leak is
-	// benign. StopStream/StopAll/EvictStream — the user-facing stop paths — do
-	// join. See stopStreamLocked audit (#230).
-	_ = m.stopStreamLocked(oldestID)
+	// This runs under m.mu (startStream holds the write lock), so joining
+	// inline would deadlock with idleWatchdog's own m.StopStream path. The
+	// teardown goroutine takes no locks beyond entry.mu: it waits for the
+	// evicted entry's goroutines to exit, then closes the muxer and removes
+	// the segment directory. StopStream/StopAll/EvictStream — the
+	// user-facing stop paths — join synchronously. See stopStreamLocked (#230).
+	if join := m.stopStreamLocked(oldestID); join != nil {
+		go join()
+	}
 }
 
 // stopStreamLocked stops a stream. Caller must hold m.mu write lock.
-// Returns the stopped entry's WaitGroup (non-nil if a stream was stopped) so
-// the caller can join writeLoop + idleWatchdog AFTER releasing m.mu. Joining
-// under m.mu would deadlock: idleWatchdog's idle-timeout path calls
+// Returns a teardown function (non-nil if a stream was stopped) that the
+// caller MUST invoke without m.mu held: it joins writeLoop + idleWatchdog and
+// only then closes the muxer and removes the segment directory. Closing the
+// muxer while writeLoop is still draining frameCh is a data race inside
+// gohlslib's bufio writer (caught by -race in the sub-stream pump tests), and
+// RemoveAll would delete files under an active writer.
+//
+// Joining under m.mu would deadlock: idleWatchdog's idle-timeout path calls
 // m.StopStream (m.mu.Lock), so a wait while holding m.mu can stall forever.
+// Callers that cannot leave m.mu before joining (evictLRULocked) run the
+// teardown in a goroutine instead — it takes no locks beyond entry.mu.
 //
 // # Lock-order audit (#230): no m.mu ↔ entry.mu cycle exists.
 //
 // Every site that takes entry.mu first releases m.mu:
 //   - writeFrame:   m.mu.RLock → read entry → m.mu.RUnlock → entry.mu.Lock …
 //   - idleWatchdog: m.mu.RLock → read entry → m.mu.RUnlock → entry.mu.Lock …
+//   - teardown:     runs after m.mu is released.
 //
-// And this method (under m.mu) NEVER takes entry.mu — it only calls
-// cancel/Close/RemoveAll. So the lock order is uniformly
-// m.mu → (release) → entry.mu, with no reverse acquisition. The idleWatchdog
-// does call m.StopStream (m.mu.Lock) on idle timeout, but by then it has
-// already released entry.mu, so there is no nested hold.
-func (m *Manager) stopStreamLocked(cameraID string) *sync.WaitGroup {
+// So the lock order is uniformly m.mu → (release) → entry.mu, with no reverse
+// acquisition. The idleWatchdog does call m.StopStream (m.mu.Lock) on idle
+// timeout, but by then it has already released entry.mu, so there is no
+// nested hold.
+func (m *Manager) stopStreamLocked(cameraID string) func() {
 	entry, ok := m.streams[cameraID]
 	if !ok {
 		return nil
@@ -879,19 +894,23 @@ func (m *Manager) stopStreamLocked(cameraID string) *sync.WaitGroup {
 		entry.subStreamCancel()
 		entry.subStreamCancel = nil
 	}
-	if entry.mux != nil {
-		entry.mux.Close()
-	}
-
-	// Clean up segment directory
-	os.RemoveAll(entry.dirPath)
 
 	delete(m.streams, cameraID)
 	if m.metrics != nil {
 		m.metrics.HLSActiveStreams.WithLabelValues(cameraID).Set(0)
 	}
 	hlsLogger.Info("HLS stream stopped", "camera_id", cameraID)
-	return &entry.wg
+
+	return func() {
+		entry.wg.Wait()
+		entry.mu.Lock()
+		if entry.mux != nil {
+			entry.mux.Close()
+			entry.mux = nil
+		}
+		entry.mu.Unlock()
+		_ = os.RemoveAll(entry.dirPath)
+	}
 }
 
 // WriteH264 queues an H264 access unit for async writing to the HLS stream.
@@ -1076,17 +1095,17 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 // StopAll stops all active HLS streams and cancels the manager context.
 func (m *Manager) StopAll() {
 	m.mu.Lock()
-	var wgs []*sync.WaitGroup
+	joins := make([]func(), 0, len(m.streams))
 	for id := range m.streams {
-		if wg := m.stopStreamLocked(id); wg != nil {
-			wgs = append(wgs, wg)
+		if join := m.stopStreamLocked(id); join != nil {
+			joins = append(joins, join)
 		}
 	}
 	m.cancel()
 	m.mu.Unlock()
-	// Join all goroutines outside m.mu — see StopStream (#230).
-	for _, wg := range wgs {
-		wg.Wait()
+	// Join all goroutines and tear down muxers outside m.mu — see StopStream (#230).
+	for _, join := range joins {
+		join()
 	}
 }
 

@@ -135,8 +135,23 @@ func (c *Client) measureClockSkew(ctx context.Context, endpoint string) time.Dur
 	// Account for half the round-trip (assume symmetric latency) to tighten the skew.
 	localNow := time.Now().UTC()
 
+	// Real devices return the response nested inside the SOAP Envelope. The
+	// root element of the document is therefore <Envelope>, and unmarshalling
+	// directly into systemDateTimeResponse (whose XMLName pins the root)
+	// fails with "expected element type <GetSystemDateAndTimeResponse> but
+	// have <Envelope>" — skew silently read as 0, disabling the whole
+	// clock-skew correction. Parse through an envelope wrapper instead (with
+	// a bare-root fallback for hypothetical unwrapped responders).
+	var env struct {
+		XMLName xml.Name `xml:"Envelope"`
+		Body    struct {
+			Response systemDateTimeResponse `xml:"GetSystemDateAndTimeResponse"`
+		} `xml:"Body"`
+	}
 	var parsed systemDateTimeResponse
-	if err := xml.Unmarshal(respBody, &parsed); err != nil {
+	if err := xml.Unmarshal(respBody, &env); err == nil {
+		parsed = env.Body.Response
+	} else if err := xml.Unmarshal(respBody, &parsed); err != nil {
 		return 0
 	}
 	d := parsed.Time.UTC.Date
