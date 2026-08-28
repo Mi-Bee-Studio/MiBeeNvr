@@ -353,3 +353,37 @@ func TestBatchDeleteRecordings_DeletesMergePath(t *testing.T) {
 	got, _ := db.GetRecording(context.Background(), "batch-merge")
 	require.Nil(t, got)
 }
+
+func TestListRecordings_ArchivedFilter(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	// Two cameras: cam-live keeps an active recording; cam-arch's recordings
+	// are archived via the real storage path (InsertRecording always writes
+	// archived=0, mirroring production where archiving happens post-insert).
+	seedRecording(t, db, makeRecording("rec-live", "cam-live", "h264", now, false))
+	seedRecording(t, db, makeRecording("rec-arch", "cam-arch", "h264", now.Add(-time.Hour), false))
+	n, err := db.ArchiveAllRecordings(t.Context(), "cam-arch")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	// Default: active recordings only (cam-arch hidden).
+	rr := doRequest(t, h.Routes(), "GET", "/api/recordings", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp recordingsResponse
+	parseJSON(t, rr, &resp)
+	require.Len(t, resp.Recordings, 1)
+	require.Equal(t, "rec-live", resp.Recordings[0].ID)
+
+	// archived=true: the archive view must reach archived rows — the param
+	// used to be dropped by handleListRecordings, hiding all archived data.
+	rr = doRequest(t, h.Routes(), "GET", "/api/recordings?archived=true", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	resp = recordingsResponse{}
+	parseJSON(t, rr, &resp)
+	require.Len(t, resp.Recordings, 1)
+	require.Equal(t, "rec-arch", resp.Recordings[0].ID)
+}

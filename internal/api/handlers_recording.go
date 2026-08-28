@@ -78,6 +78,15 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 	filter.Activity = r.URL.Query().Get("activity")
 
+	// Archived toggle: the frontend archive view sends ?archived=true to list
+	// recordings of archived cameras (the DB layer and count-cache key already
+	// support it — handleDailyRecordingSummary parses it too). Without this
+	// the param was silently dropped and archived recordings were unreachable.
+	if v := r.URL.Query().Get("archived"); v != "" {
+		archived := v == "true" || v == "1"
+		filter.Archived = &archived
+	}
+
 	// List + cached count. Cursor-based requests still get the total from cache.
 	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
