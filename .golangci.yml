@@ -139,7 +139,7 @@ linters:
       - source: 'fmt\.Sscanf\('
         linters: [errcheck]
       # rationale: Stdlib formatting — alternative error handling exists
-      - source: 'fmt\.Fprintf\('
+      - source: 'fmt\.Fprint(f|ln)?\('
         linters: [errcheck]
       # rationale: DB execution — errors handled by driver/logging mechanism
       - source: '\.Exec'
