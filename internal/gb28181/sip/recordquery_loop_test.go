@@ -69,6 +69,14 @@ func TestQueryChannelRecordsLoopback(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("QueryChannelRecords did not return after the device answer")
 	}
+
+	// Stop the SIP server BEFORE the raw-UDP client socket closes (teardown
+	// is LIFO: the client conn registered later would close first). With the
+	// client already gone, the server's transaction layer can race a
+	// transport error against transaction termination inside gosip — an
+	// upstream closechan/chansend race that -race flags on slow CI runners.
+	// Stopping here keeps server shutdown ahead of socket teardown.
+	_ = srv.Stop()
 }
 
 func mustAtoi(t *testing.T, s string) int {

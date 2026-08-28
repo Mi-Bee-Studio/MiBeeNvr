@@ -104,6 +104,10 @@ func TestInviteChannelLiveFlowAndBye(t *testing.T) {
 
 	// With the session gone the blanket BYE is a no-op.
 	srv.ByeAllSessions()
+
+	// Stop the server before the raw-UDP client socket teardown (LIFO) to
+	// avoid racing gosip transport errors against transaction termination.
+	_ = srv.Stop()
 }
 
 func TestOnDeviceOfflineTearsDown(t *testing.T) {
