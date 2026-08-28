@@ -60,12 +60,13 @@ func NewMergeManager(
 	m *metrics.Metrics,
 ) *MergeManager {
 	return &MergeManager{
-		db:           db,
-		store:        store,
-		getGlobalCfg: getGlobalCfg,
-		getCameraCfg: getCameraCfg,
-		cameras:      cameras,
-		metrics:      m,
+		db:             db,
+		store:          store,
+		getGlobalCfg:   getGlobalCfg,
+		getCameraCfg:   getCameraCfg,
+		getAdaptiveCfg: getAdaptiveCfg,
+		cameras:        cameras,
+		metrics:        m,
 	}
 }
 
