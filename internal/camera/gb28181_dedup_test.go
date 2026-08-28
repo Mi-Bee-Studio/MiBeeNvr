@@ -180,3 +180,39 @@ func TestResolveGBDeviceSerial_CachesAndPersists(t *testing.T) {
 	require.Equal(t, "NC00000001", serial)
 	require.Zero(t, calls)
 }
+
+func TestEnsureGB28181Camera_AllowSameIPEnrollBypassesDedup(t *testing.T) {
+	// #596: dual-protocol setups opt in via gb28181.allow_same_ip_enroll —
+	// both cross-protocol checks (L1 same-IP, L2 serial) are bypassed and
+	// the GB channel enrolls alongside the existing ONVIF camera.
+	t.Run("same ip L1", func(t *testing.T) {
+		restore := stubProbe("", false)
+		defer restore()
+
+		cfg := gbDedupConfig(t)
+		cfg.GB28181.AllowSameIPEnroll = true
+		mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
+
+		require.NoError(t, mgr.EnsureGB28181Camera(
+			"34020000001310000001", "34020000001320000001", "GB Channel", "192.168.63.240"))
+
+		id, ok := mgr.GB28181CameraIDByChannel("34020000001310000001", "34020000001320000001")
+		require.True(t, ok, "flag must bypass L1 IP dedup")
+		require.Equal(t, "gb-34020000001320000001", id)
+	})
+
+	t.Run("cross-interface serial L2", func(t *testing.T) {
+		restore := stubProbe("NC00000001", true)
+		defer restore()
+
+		cfg := gbDedupConfig(t)
+		cfg.GB28181.AllowSameIPEnroll = true
+		mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
+
+		require.NoError(t, mgr.EnsureGB28181Camera(
+			"34020000001310000001", "34020000001320000001", "GB Channel", "192.168.63.152"))
+
+		_, ok := mgr.GB28181CameraIDByChannel("34020000001310000001", "34020000001320000001")
+		require.True(t, ok, "flag must bypass L2 serial dedup")
+	})
+}

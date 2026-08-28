@@ -102,15 +102,16 @@ func (cm *CameraManager) GetGB28181Recorder(cameraID string) *recorder.GB28181Re
 // enabled — possibly on DIFFERENT interface IPs of the same device): before
 // creating, the manager resolves the device's ONVIF serial (fingerprint cache
 // → DB → live probe of the SIP source IP) and skips when a camera with that
-// serial already exists. sourceIP "" (unknown) skips dedup entirely. Manual
-// camera creation (API/web) is the escape hatch for deliberate dual-protocol
-// setups.
+// serial already exists. sourceIP "" (unknown) skips dedup entirely. Setting
+// gb28181.allow_same_ip_enroll disables both cross-protocol checks (#596 —
+// deliberate dual-protocol setups); manual camera creation (API/web, with
+// allow_duplicate) remains the escape hatch otherwise.
 func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
 	// Check if a camera for this channel already exists.
 	if _, ok := cm.GB28181CameraIDByChannel(deviceID, channelID); ok {
 		return nil // Already enrolled
 	}
-	if sourceIP != "" {
+	if sourceIP != "" && !cm.gbAllowSameIPEnroll() {
 		// L1: an existing pull camera streams from the same IP.
 		if existingID, ok := cm.CameraIDByHostIP(sourceIP); ok {
 			slog.Info("gb28181: auto-enroll skipped — another camera already streams from the device IP",
@@ -129,6 +130,9 @@ func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name, sourceIP
 				return nil
 			}
 		}
+	} else if sourceIP != "" {
+		slog.Info("gb28181: cross-protocol dedup bypassed by allow_same_ip_enroll",
+			"device", deviceID, "channel", channelID, "source_ip", sourceIP)
 	}
 
 	cameraName := name
@@ -146,6 +150,11 @@ func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name, sourceIP
 	}
 	_, err := cm.AddCamera(context.Background(), cam)
 	return err
+}
+
+// gbAllowSameIPEnroll reports the gb28181.allow_same_ip_enroll opt-in (#596).
+func (cm *CameraManager) gbAllowSameIPEnroll() bool {
+	return cm.cfg != nil && cm.cfg.GB28181.AllowSameIPEnroll
 }
 
 // gbSerialCache memoizes probed device serials (device_id → serial) for the

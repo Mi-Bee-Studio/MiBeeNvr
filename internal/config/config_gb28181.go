@@ -28,6 +28,17 @@ type GB28181ServerConfig struct {
 	// AllowedDeviceIDs restricts which devices may register. Empty = allow any.
 	AllowedDeviceIDs []string `yaml:"allowed_device_ids,omitempty"`
 
+	// AllowSameIPEnroll opts GB28181 auto-enroll out of the cross-protocol
+	// dedup (#596): when true, a channel whose device registers from an IP
+	// that already hosts another camera's stream (or whose probed ONVIF
+	// serial matches one — dual-NIC devices) is STILL auto-enrolled as its
+	// own camera. For deliberate dual-protocol setups (ONVIF + GB28181 side
+	// by side). Default false: one camera per physical device. Manual camera
+	// creation keeps its allow_duplicate escape hatch regardless.
+	// YAML-only knob — deliberately no Settings-UI toggle (self-selecting
+	// geek audience, same rationale as auth.local_bypass).
+	AllowSameIPEnroll bool `yaml:"allow_same_ip_enroll,omitempty"`
+
 	// HeartbeatInterval is how often devices are expected to send Keepalive.
 	HeartbeatInterval string `yaml:"heartbeat_interval"` // default "60s"
 
