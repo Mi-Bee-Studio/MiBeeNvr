@@ -74,8 +74,11 @@ func TestStallMonitorDetectsFrozenStream(t *testing.T) {
 
 	select {
 	case <-stalled:
-		// watchdog fired — ctx was canceled too
-		require.Error(t, ctx.Err())
+		// watchdog fired. stallMonitor closes(stalled) BEFORE calling
+		// cancel() — poll for the cancellation instead of asserting it
+		// synchronously (the two statements race on the test goroutine).
+		require.Eventually(t, func() bool { return ctx.Err() != nil },
+			2*time.Second, 5*time.Millisecond, "cancel must follow the stalled signal")
 	case <-time.After(3 * time.Second):
 		t.Fatal("watchdog did not fire on a frozen streaming target")
 	}

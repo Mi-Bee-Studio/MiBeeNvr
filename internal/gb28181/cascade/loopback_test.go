@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/manscdp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
@@ -387,6 +389,45 @@ func TestLoopbackRecordInfoQuery(t *testing.T) {
 	require.Contains(t, string(answer.Body()), "<SumNum>2</SumNum>", "both recordings must be reported")
 }
 
+// createPacedPlaybackSegment writes a REAL 5-sample H.264 MP4 (2s per sample)
+// and registers its recording row. The pump streams samples at realtime pace
+// from base=now, so the dialog stays alive for ~10s — long enough for the
+// in-dialog control assertions that follow.
+func createPacedPlaybackSegment(t *testing.T, db interface {
+	InsertRecording(ctx context.Context, r *model.Recording) error
+}, cameraID string, start time.Time,
+) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seg.mp4")
+
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	m := muxer.NewMP4Muxer(path)
+	trackID, err := m.AddH264Track(sps, pps)
+	require.NoError(t, err)
+	idr := []byte{0x65, 0x88, 0x84, 0x00, 0x01}
+	p := []byte{0x41, 0x9A, 0x33}
+	for i := range 5 {
+		nalu := p
+		if i == 0 || i == 3 {
+			nalu = idr
+		}
+		require.NoError(t, m.WriteSample(trackID, nalu, time.Duration(i)*2*time.Second, 2*time.Second))
+	}
+	require.NoError(t, m.Close())
+
+	require.NoError(t, db.InsertRecording(context.Background(), &model.Recording{
+		ID:        "pb-1",
+		CameraID:  cameraID,
+		FilePath:  path,
+		Format:    model.FormatH264,
+		StartedAt: start,
+		EndedAt:   start.Add(10 * time.Second),
+		Duration:  10,
+	}))
+}
+
 func TestLoopbackPlaybackInviteAndControl(t *testing.T) {
 	hub := model.NewStreamHub()
 	db := newCascadeTestDB(t)
@@ -394,16 +435,13 @@ func TestLoopbackPlaybackInviteAndControl(t *testing.T) {
 	_, err := svc.catalogItems()
 	require.NoError(t, err)
 
+	// A REAL paced segment, not a dead path: with a nonexistent file the pump
+	// skips the recording, hits "end of media", and self-unregisters within
+	// one DB query — racing (and under coverage load, beating) the ==1 poll
+	// below. Real samples pace from base=now, keeping the dialog alive for
+	// the whole test.
 	now := time.Now().UTC()
-	require.NoError(t, db.InsertRecording(context.Background(), &model.Recording{
-		ID:        "pb-1",
-		CameraID:  "cam-1",
-		FilePath:  "/tmp/nonexistent.mp4",
-		Format:    model.FormatH264,
-		StartedAt: now.Add(-10 * time.Minute),
-		EndedAt:   now.Add(-5 * time.Minute),
-		Duration:  300,
-	}))
+	createPacedPlaybackSegment(t, db, "cam-1", now.Add(-10*time.Minute))
 
 	pbInvite := up.request(sip.INVITE, lbChannelOne, playSDP(t, "Playback", true), "application/sdp")
 	res := up.roundTrip(pbInvite)
