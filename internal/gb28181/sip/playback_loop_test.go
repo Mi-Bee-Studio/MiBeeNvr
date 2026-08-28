@@ -288,6 +288,10 @@ func fetchFlow(t *testing.T, download bool) {
 		_, _, stops := sink.stats()
 		return stops >= 1
 	}, 5*time.Second, 50*time.Millisecond, "sink must be stopped with the fetch")
+
+	// Stop the server before the raw-UDP client socket teardown (LIFO) to
+	// avoid racing gosip transport errors against transaction termination.
+	_ = srv.Stop()
 }
 
 func appendAU(au [][]byte) []byte {
