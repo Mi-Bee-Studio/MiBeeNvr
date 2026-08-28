@@ -90,6 +90,13 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 					logger.Warn("failed to persist activation_state", "camera_id", cam.ID, "error", err)
 				}
 			}
+			// A deliberate (re-)add resurrects a previously archived row with
+			// this ID (GB28181 auto-enroll after device return, manual re-add).
+			// Boot-sync residue must NOT resurrect — that path stays on plain
+			// UpsertCamera (see TestCascadeSource_ExcludesArchivedCameras).
+			if err := cm.db.UnarchiveCamera(ctx, cam.ID); err != nil {
+				logger.Warn("failed to clear archived flag on re-add", "camera_id", cam.ID, "error", err)
+			}
 		}
 
 		// Persist config to disk (rollback on failure).

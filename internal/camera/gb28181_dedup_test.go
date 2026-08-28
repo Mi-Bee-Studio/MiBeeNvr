@@ -216,3 +216,39 @@ func TestEnsureGB28181Camera_AllowSameIPEnrollBypassesDedup(t *testing.T) {
 		require.True(t, ok, "flag must bypass L2 serial dedup")
 	})
 }
+
+// TestAddCamera_ResurrectsArchivedRow: a deliberate re-add (GB28181 auto-enroll
+// after the device returns, manual re-add) must clear the archived flag so the
+// camera is visible to ListCameras again. The boot YAML sync deliberately does
+// NOT do this — partially-archived config residue stays hidden
+// (TestCascadeSource_ExcludesArchivedCameras guards that side).
+func TestAddCamera_ResurrectsArchivedRow(t *testing.T) {
+	cfg := testConfig()
+	cfg.Cameras = nil
+	mgr, _, db, _ := newTestManagerWithCfg(t, cfg)
+	ctx := context.Background()
+
+	// Seed an archived DB row for a camera that is NOT in config (what
+	// ArchiveCamera leaves behind after it removes the config entry).
+	require.NoError(t, db.UpsertCamera(ctx, "gb-34020000001320000001", "Old", "gb28181", "", "", "", "", "", "", "", ""))
+	require.NoError(t, db.ArchiveCameraDB(ctx, "gb-34020000001320000001"))
+	rows, err := db.ListCameras(ctx)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+
+	// Device returns, auto-enroll re-adds the same channel camera.
+	_, err = mgr.AddCamera(ctx, config.CameraConfig{
+		ID:       "gb-34020000001320000001",
+		Name:     "Reborn",
+		Protocol: "gb28181",
+		GB28181:  config.GB28181ChannelConfig{DeviceID: "34020000001320000099", ChannelID: "34020000001320000001"},
+	})
+	require.NoError(t, err)
+
+	rows, err = db.ListCameras(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "re-added camera must be visible to ListCameras")
+	require.Equal(t, "gb-34020000001320000001", rows[0].ID)
+	require.False(t, rows[0].Archived)
+	require.Equal(t, "Reborn", rows[0].Name)
+}

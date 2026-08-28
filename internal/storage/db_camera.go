@@ -190,15 +190,15 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 // a normalized comparison and a device discovered as "http://1.2.3.4/..." still
 // matches a later write of "http://1.2.3.4:80/..." (#175).
 //
-// A conflicting update also clears the archived flag: config presence is the
-// source of truth for an ACTIVE camera (archiving removes the config entry),
-// so any re-add path (GB28181 auto-enroll after device return, manual re-add)
-// must resurrect a previously archived row — otherwise the camera records but
-// stays invisible to ListCameras (archived=0 filter).
+// A conflicting update deliberately does NOT touch the archived flag: the boot
+// sync (camera lifecycle) re-upserts every YAML entry, and a partially-failed
+// archive that left the config entry behind must stay archived instead of
+// being resurrected (see TestCascadeSource_ExcludesArchivedCameras). Deliberate
+// re-enrollment resurrects via AddCamera → UnarchiveCamera instead.
 func (d *DB) UpsertCamera(ctx context.Context, id, name, protocol, encoding, url, username, password string, onvifEndpoint, profileToken, streamEncoding, stableID string) error {
 	q := `INSERT INTO cameras(id, name, protocol, encoding, url, username, password, onvif_endpoint, profile_token, stream_encoding, stable_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)
 
-		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding, stable_id=excluded.stable_id, archived=0, archived_at=NULL;`
+		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, protocol=excluded.protocol, encoding=excluded.encoding, url=excluded.url, username=excluded.username, password=excluded.password, onvif_endpoint=excluded.onvif_endpoint, profile_token=excluded.profile_token, stream_encoding=excluded.stream_encoding, stable_id=excluded.stable_id;`
 
 	_, err := d.db.ExecContext(ctx, q, id, name, protocol, encoding, url, username, password, NormalizeOnvifEndpoint(onvifEndpoint), profileToken, streamEncoding, stableID)
 
