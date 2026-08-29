@@ -8,7 +8,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/psmux"
+	"github.com/mickeyzzc/gb28181-go/psmux"
 )
 
 // Regression coverage for #444: a large H.264 access unit spans multiple PES

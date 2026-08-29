@@ -24,6 +24,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/gorilla/websocket"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -161,7 +162,7 @@ func newGBMediaEnv(t *testing.T) (*Handler, *fakeGBMedia) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-	sessionMgr := gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), "3402000000")
+	sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 	t.Cleanup(h.Close)
 

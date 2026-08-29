@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	gb "github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/psmux"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/mickeyzzc/gb28181-go/platform"
+	"github.com/mickeyzzc/gb28181-go/psmux"
 	"github.com/stretchr/testify/require"
 )
 
@@ -143,7 +143,7 @@ func newPlaybackHarness(t *testing.T) (*playbackSession, func() [][]byte) {
 }
 
 // TestPlaybackStreamsRecordings round-trips a playback pass: local fMP4 →
-// psmux/RTP → platform-side PSDemuxer must reproduce every frame with
+// psmux/RTP → platform-side platform.PSDemuxer must reproduce every frame with
 // parameter sets ahead of each IDR.
 func TestPlaybackStreamsRecordings(t *testing.T) {
 	ps, collect := newPlaybackHarness(t)
@@ -162,7 +162,7 @@ func TestPlaybackStreamsRecordings(t *testing.T) {
 	aus := collect()
 	require.Len(t, aus, 5, "one PS AU per frame")
 
-	d := gb.NewPSDemuxer()
+	d := platform.NewPSDemuxer()
 	var nalus [][]byte
 	for i, au := range aus {
 		ns, err := d.FeedAU(au, int64(i)*2970, true)
@@ -196,7 +196,7 @@ func TestPlaybackSeekSkipsToKeyframe(t *testing.T) {
 	aus := collect()
 	require.Len(t, aus, 2, "seek lands on the second GOP only")
 
-	d := gb.NewPSDemuxer()
+	d := platform.NewPSDemuxer()
 	var first []byte
 	for i, au := range aus {
 		ns, err := d.FeedAU(au, int64(i)*2970, true)

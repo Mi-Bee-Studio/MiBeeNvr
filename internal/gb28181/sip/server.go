@@ -22,6 +22,7 @@ import (
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // SIP status codes emitted by this server. gosip's sip package defines no
@@ -585,14 +586,14 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 	// "gb-<channelID>" string guess (that only matches auto-enrolled
 	// cameras; manually created cameras have arbitrary IDs).
 	var onAU func(au [][]byte, ptsTicks int64, isIDR bool)
-	var onAudio gb28181.AudioFrameHandler
+	var onAudio platform.AudioFrameHandler
 	var cameraID string
 	if enrol := s.enroller(); enrol != nil {
 		if id, ok := enrol.GB28181CameraIDByChannel(deviceID, channelID); ok {
 			cameraID = id
 			onAU = enrol.GB28181NALUWriter(cameraID)
 			if w := enrol.GB28181AudioWriter(cameraID); w != nil {
-				onAudio = func(frame gb28181.AudioFrame) {
+				onAudio = func(frame platform.AudioFrame) {
 					w(frame.Codec, frame.Data, frame.Config, frame.PTSTicks, frame.Samples)
 				}
 			}
@@ -637,7 +638,7 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 // recorder-oriented InviteChannel and the sub-stream puller's InviteSubChannel
 // (#560) — the caller supplies the AU/audio callbacks and owns post-answer
 // policy (watchdog, recorder notification, teardown).
-func (s *Server) inviteCore(deviceID string, ch *gb28181.Channel, netAddr, serverHost string, onAU func(au [][]byte, ptsTicks int64, isIDR bool), onAudio gb28181.AudioFrameHandler) error {
+func (s *Server) inviteCore(deviceID string, ch *gb28181.Channel, netAddr, serverHost string, onAU func(au [][]byte, ptsTicks int64, isIDR bool), onAudio platform.AudioFrameHandler) error {
 	channelID := ch.ID
 	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil, onAU, onAudio)
 	if err != nil {

@@ -1,6 +1,7 @@
 package gb28181
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"sync"
@@ -8,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
-
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // Helper to build a test RTP packet with marker bit set.
@@ -39,14 +40,14 @@ func buildTestMPEGPSPayload() []byte {
 	// in Annex-B format, so the PS demuxer can detect the codec and
 	// extract the NALU.
 	idrNalu := []byte{0x65, 0x88, 0x84, 0x00, 0x40, 0xFF, 0xFE, 0xF8, 0x80, 0x80}
-	return buildPS([][]byte{idrNalu}, streamTypeH264)
+	return buildPS([][]byte{idrNalu}, 0x1B) // PS stream type: AVC (lib constant unexported)
 }
 
 func TestNewReceiver(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("test-cam", hub, pm)
 
 	require.Equal(t, "test-cam", rec.cameraID)
@@ -60,7 +61,7 @@ func TestReceiverStopWithoutStart(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("test", hub, pm)
 
 	err := rec.Stop()
@@ -71,7 +72,7 @@ func TestSetTCPMode(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("test", hub, pm)
 
 	rec.SetTCPMode(TCPModeRFC4571)
@@ -88,7 +89,7 @@ func TestReceiverUDPBasic(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("test-cam", hub, pm)
 
 	// Create UDP socket pair
@@ -149,7 +150,7 @@ func TestReceiverMetrics(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("metrics-test", hub, pm)
 
 	metrics := rec.Metrics()
@@ -162,7 +163,7 @@ func TestReceiverCodec(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("test", hub, pm)
 
 	// Initially unknown
@@ -173,7 +174,7 @@ func TestReceiverDoubleStop(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("test", hub, pm)
 
 	err := rec.Stop()
@@ -188,7 +189,7 @@ func TestReceiverStartStopRace(t *testing.T) {
 
 	for range 50 {
 		hub := streamhub.New()
-		pm := NewPortManager(50000, 50100)
+		pm := platform.NewPortManager(50000, 50100)
 		rec := NewReceiver("race-test", hub, pm)
 
 		serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -227,7 +228,7 @@ func TestReceiverJitterBufferMarkerBit(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("jitter-test", hub, pm)
 
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -280,7 +281,7 @@ func TestReceiverSequenceWrap(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("wrap-test", hub, pm)
 
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -336,7 +337,7 @@ func TestReceiverTCPModeRFC4571(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("tcp-test", hub, pm)
 	rec.SetTCPMode(TCPModeRFC4571)
 
@@ -397,7 +398,7 @@ func TestReceiverTCPMode0x24(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("tcp-0x24-test", hub, pm)
 	rec.SetTCPMode(TCPMode0x24)
 
@@ -460,7 +461,7 @@ func TestReceiverTCPModeAutoDetectRFC4571(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("auto-detect-test", hub, pm)
 	rec.SetTCPMode(TCPModeAuto)
 
@@ -524,7 +525,7 @@ func TestReceiverTCPModeAutoDetect0x24(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("auto-detect-0x24-test", hub, pm)
 	rec.SetTCPMode(TCPModeAuto)
 
@@ -590,7 +591,7 @@ func TestReceiverNALUCallback(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("callback-test", hub, pm)
 
 	// Set NALU callback
@@ -641,7 +642,7 @@ func TestReceiverStartNilConn(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("nil-conn-test", hub, pm)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -656,7 +657,7 @@ func TestReceiverMultipleAUs(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("multi-au-test", hub, pm)
 
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -703,7 +704,7 @@ func TestReceiverOutOrderPackets(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("ooo-test", hub, pm)
 
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -758,7 +759,7 @@ func TestReceiverMaxJitterBufferSize(t *testing.T) {
 	t.Helper()
 
 	hub := streamhub.New()
-	pm := NewPortManager(50000, 50010)
+	pm := platform.NewPortManager(50000, 50010)
 	rec := NewReceiver("jitter-size-test", hub, pm)
 	rec.maxJitterPackets = 4 // Reduce for testing
 
@@ -801,4 +802,76 @@ func TestReceiverMaxJitterBufferSize(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return auCount.Load() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// buildPS constructs a minimal PS packet around the given NALUs (moved here
+// from psdemux_test.go when the demuxer migrated to gb28181-go/platform).
+func buildPS(nalus [][]byte, streamType byte) []byte {
+	var ps bytes.Buffer
+
+	// Pack header: 00 00 01 BA (4) + 10 bytes of fixed fields
+	ps.Write([]byte{0x00, 0x00, 0x01, 0xBA})
+	ps.Write([]byte{0x44, 0x00, 0x04, 0x00, 0x04, 0x01, 0x01, 0x89, 0xC3, 0xF8})
+
+	// System header: 00 00 01 BB (4) + 2 bytes length + system header data
+	ps.Write([]byte{0x00, 0x00, 0x01, 0xBB})
+	systemHeader := []byte{
+		0x00, 0x09, // length (9 bytes after the length field)
+		0x01,                   // rate bound and audio/video bound
+		0xB9, 0xE0, 0xE0, 0x80, // rate bound (high) + audio bound + fixed flag
+		0xC0, 0x01, // stream 1 (audio)
+		0x00, 0x01, // STD buffer scale and size
+	}
+	ps.Write(systemHeader)
+
+	// Program Stream Map: 00 00 01 BC (4) + PSM data
+	ps.Write([]byte{0x00, 0x00, 0x01, 0xBC})
+
+	// PSM packet_length (2 bytes): body length = 10 bytes
+	ps.Write([]byte{0x00, 0x0A})
+
+	// PSM body per ISO/IEC 13818-1 program_stream_map:
+	// version (1) + reserved (1) + PS_info_length (2) +
+	// elementary_stream_map_length (2) + stream_info entry (4)
+	ps.Write([]byte{
+		0x02,       // version = 2
+		0xC0,       // reserved byte
+		0x00, 0x00, // PS_info_length = 0 (no PS_info)
+		0x00, 0x04, // elementary_stream_map_length = 4 (one entry)
+		// stream_info for video
+		streamType, // stream_type (0x1B for H.264, 0x24 for H.265)
+		0xE0,       // elementary_stream_id (video stream 0)
+		0x00, 0x00, // elementary_stream_info_length (0)
+	})
+
+	// Video PES: 00 00 01 E0 (4) + PES header + NALU payload
+	ps.Write([]byte{0x00, 0x00, 0x01, 0xE0})
+
+	// Calculate total NALU payload length with start codes
+	payloadLen := 0
+	for _, nalu := range nalus {
+		payloadLen += 4 // 4-byte start code
+		payloadLen += len(nalu)
+	}
+
+	// PES packet length = flags (2) + header_data_length (1) + payload_len
+	pesPacketLen := 3 + payloadLen
+
+	// PES header, standard layout (ITU-T H.222.0): byte6='10'+flags,
+	// byte7=PTS_DTS_flags (0 = no PTS), byte8=PES_header_data_length (0).
+	pesHeader := []byte{
+		byte(pesPacketLen >> 8), byte(pesPacketLen), // PES_packet_length (2 bytes)
+		0x80, // Byte 6: '10' marker + zero flags
+		0x00, // Byte 7: PTS_DTS_flags = '00' (no PTS in synthetic stream)
+		0x00, // Byte 8: PES_header_data_length (0)
+	}
+	ps.Write(pesHeader)
+
+	// Write NALUs with Annex-B start codes
+	for _, nalu := range nalus {
+		ps.Write([]byte{0x00, 0x00, 0x00, 0x01})
+		ps.Write(nalu)
+	}
+
+	return ps.Bytes()
 }

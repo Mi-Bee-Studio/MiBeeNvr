@@ -14,6 +14,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // AUWriter receives access units (full NALU lists) from the demuxer.
@@ -62,7 +63,7 @@ const tcpAcceptTimeout = 60 * time.Second
 // Each session maps a MiBee camera (represented by a Channel) to an RTP receiver.
 // Thread-safe: sessions map under mutex, channel state under atomics.
 type SessionManager struct {
-	portManager *PortManager
+	portManager *platform.PortManager
 	sessions    map[string]*session
 	// playbackSessions holds device-recording fetch sessions (s=Playback
 	// INVITEs) — keyed by channel like sessions but independent, so live
@@ -96,7 +97,7 @@ type SessionManager struct {
 }
 
 // NewSessionManager creates a SessionManager.
-func NewSessionManager(pm *PortManager, serverID string) *SessionManager {
+func NewSessionManager(pm *platform.PortManager, serverID string) *SessionManager {
 	return &SessionManager{
 		portManager:      pm,
 		sessions:         make(map[string]*session),
@@ -180,7 +181,7 @@ func (sm *SessionManager) SetFirstRTPHook(hook func(channelID string)) {
 //   - tcp-active: the offer declares a=setup:active; after the device's 200
 //     OK the caller must invoke ConnectActive with the answer SDP so the
 //     NVR dials the device's media address.
-func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr string, sdpOffer []byte, onAU func(au [][]byte, ptsTicks int64, isIDR bool), onAudio AudioFrameHandler) ([]byte, error) {
+func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr string, sdpOffer []byte, onAU func(au [][]byte, ptsTicks int64, isIDR bool), onAudio platform.AudioFrameHandler) ([]byte, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("gb28181: channel is nil")
 	}
@@ -571,7 +572,7 @@ func (sm *SessionManager) teardown(sess *session, resetStatus bool) {
 // as a UAC INVITE. Playback sessions live in a separate map from live
 // sessions — the same channel can record live and fetch playback at once.
 // onAudio (optional) receives demuxed PS audio frames.
-func (sm *SessionManager) InvitePlayback(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio AudioFrameHandler) ([]byte, error) {
+func (sm *SessionManager) InvitePlayback(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio platform.AudioFrameHandler) ([]byte, error) {
 	return sm.inviteFetch(channel, serverIP, start, end, sink, onAudio, false)
 }
 
@@ -580,12 +581,12 @@ func (sm *SessionManager) InvitePlayback(channel *Channel, serverIP string, star
 // transfer semantics — the device sends at file speed, not 1x pacing) and the
 // SSRC carries the download leading digit 2. Sessions share the fetch map
 // with playbacks: one fetch per channel regardless of kind.
-func (sm *SessionManager) InviteDownload(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio AudioFrameHandler) ([]byte, error) {
+func (sm *SessionManager) InviteDownload(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio platform.AudioFrameHandler) ([]byte, error) {
 	return sm.inviteFetch(channel, serverIP, start, end, sink, onAudio, true)
 }
 
 // inviteFetch is the shared playback/download session constructor.
-func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio AudioFrameHandler, download bool) ([]byte, error) {
+func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, end time.Time, sink AUWriter, onAudio platform.AudioFrameHandler, download bool) ([]byte, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("gb28181: channel is nil")
 	}

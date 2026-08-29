@@ -13,6 +13,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +35,7 @@ func setupGB28181TestHandler(t *testing.T) *Handler {
 	db, _ := setupTestDB(t)
 
 	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-	sessionMgr := gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), "3402000000")
+	sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 
 	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 	h.SetGB28181ByeSender(&fakeGBByeSender{})
@@ -317,7 +318,7 @@ func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 	t.Helper()
 	db, _ := setupTestDB(t)
 	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-	sessionMgr := gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), "3402000000")
+	sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 
 	ctx := context.Background()
@@ -476,7 +477,7 @@ func setupGB28181PTZHandler(t *testing.T) (*Handler, *fakePTZSender) {
 	db, _ := setupTestDB(t)
 
 	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-	sessionMgr := gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), "3402000000")
+	sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 
 	dev := &gb28181.Device{ID: "34020000001310000001", Name: "Front Gate", NetAddr: "192.168.1.50:5060"}
@@ -704,7 +705,7 @@ func TestAPI_GB28181_ListChannels_EnrollBlockedHint(t *testing.T) {
 		camMgr := camera.NewCameraManager(cfg, store, db, "")
 		deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
 		deviceMgr.Register(&gb28181.Device{ID: "device1", NetAddr: "192.168.63.240:5060"})
-		sessionMgr := gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), "3402000000")
+		sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 		h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 
 		return doRequest(t, h.Routes(), http.MethodGet, "/api/gb28181/devices/device1/channels", nil, "", "")

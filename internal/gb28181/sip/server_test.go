@@ -21,6 +21,7 @@ import (
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/ghettovoice/gosip/sip/parser"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,7 +62,7 @@ func startTestServer(t *testing.T, cfg config.GB28181ServerConfig) (*Server, *gb
 	t.Helper()
 	base := int(20000 + 100*testPortBase.Add(1))
 	dm := gb28181.NewDeviceManager(60 * time.Second)
-	srv := NewServer(cfg, dm, gb28181.NewSessionManager(gb28181.NewPortManager(uint16(base), uint16(base+99)), cfg.ServerID), nil)
+	srv := NewServer(cfg, dm, gb28181.NewSessionManager(platform.NewPortManager(uint16(base), uint16(base+99)), cfg.ServerID), nil)
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -235,7 +236,7 @@ func getChallenge(t *testing.T, res sip.Response) *sip.GenericHeader {
 }
 
 func TestServer_Name(t *testing.T) {
-	srv := NewServer(config.GB28181ServerConfig{}, gb28181.NewDeviceManager(time.Minute), gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), ""), nil)
+	srv := NewServer(config.GB28181ServerConfig{}, gb28181.NewDeviceManager(time.Minute), gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), ""), nil)
 	if got := srv.Name(); got != "gb28181" {
 		t.Fatalf("Name() = %q, want %q", got, "gb28181")
 	}
@@ -711,7 +712,7 @@ func TestServer_Register_SkipsDeviceSelfWhenCatalogChannelsPersisted(t *testing.
 	t.Cleanup(func() { _ = db.Close() })
 
 	dm := gb28181.NewDeviceManager(60 * time.Second)
-	srv := NewServer(cfg, dm, gb28181.NewSessionManager(gb28181.NewPortManager(30000, 30100), cfg.ServerID), db)
+	srv := NewServer(cfg, dm, gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), cfg.ServerID), db)
 	require.NoError(t, srv.Start(context.Background()))
 	t.Cleanup(func() { _ = srv.Stop() })
 

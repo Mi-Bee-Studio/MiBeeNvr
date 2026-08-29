@@ -32,7 +32,7 @@ require (
 )
 
 require (
-	github.com/mickeyzzc/gb28181-go v0.0.0-20260828151933-7d7a314ddf3a
+	github.com/mickeyzzc/gb28181-go v0.2.1
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )
