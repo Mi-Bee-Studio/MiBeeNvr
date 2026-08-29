@@ -14,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,7 +90,7 @@ func TestXiaomiRecorderAccessors(t *testing.T) {
 	t.Parallel()
 	rec := NewXiaomiRecorder(XiaomiRecorderConfig{CameraID: "c", DID: "1"}, newXiaomiTestStore(t))
 
-	rec.Hub = model.NewStreamHub() // wired by camera.initStreamHub in production
+	rec.Hub = streamhub.New() // wired by camera.initStreamHub in production
 	require.NotNil(t, rec.GetHub())
 	require.Nil(t, rec.SPS())
 	require.Nil(t, rec.PPS())

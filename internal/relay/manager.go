@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
@@ -15,7 +16,7 @@ var managerLogger = slog.Default().With("component", "relay-manager")
 
 // CameraHubProvider returns the StreamHub for a camera id (or nil). Backed by
 // CameraManager.GetHub in production.
-type CameraHubProvider func(cameraID string) *model.StreamHub
+type CameraHubProvider func(cameraID string) *streamhub.StreamHub
 
 // SPSCameraProvider returns the source camera's current SPS/PPS + H.264 flag,
 // looked up by camera id. The Manager adapts this per-target into the

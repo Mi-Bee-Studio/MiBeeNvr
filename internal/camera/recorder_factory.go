@@ -9,6 +9,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // createRecorder creates a recorder for the given camera config by looking
@@ -41,17 +42,17 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	return rec
 }
 
-// initStreamHub sets a new StreamHub on the recorder via the model.HubHost
+// initStreamHub sets a new StreamHub on the recorder via the streamhub.HubHost
 // interface. It sets the cameraID for structured logging, labels the hub
 // source for the flow-path view (from the recorder's own HubSource), and
 // wires the standard observability callbacks (shared with push hubs via
 // wireHubMetrics). Recorders without a hub (none today) are skipped.
 func initStreamHub(rec model.Recorder, cameraID string, m *metrics.Metrics) {
-	host, ok := rec.(model.HubHost)
+	host, ok := rec.(streamhub.HubHost)
 	if !ok {
 		return
 	}
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	host.SetHub(hub)
 	hub.SetCameraID(cameraID)
 	hub.SetSource(host.HubSource())

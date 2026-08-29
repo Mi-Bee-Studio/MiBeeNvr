@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // StubRecorder is a no-op recorder that implements model.Recorder.
@@ -19,14 +20,14 @@ type StubRecorder struct {
 	done   chan struct{}
 	status model.RecorderStatus
 
-	Hub *model.StreamHub
+	Hub *streamhub.StreamHub
 }
 
 // GetHub returns the StreamHub for frame fan-out. Always nil for StubRecorder.
-func (r *StubRecorder) GetHub() *model.StreamHub { return r.Hub }
+func (r *StubRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
-// SetHub wires the StreamHub for frame fan-out (model.HubHost).
-func (r *StubRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+// SetHub wires the StreamHub for frame fan-out (streamhub.HubHost).
+func (r *StubRecorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *StubRecorder) HubSource() string { return "stub" }

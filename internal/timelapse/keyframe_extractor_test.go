@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -161,7 +162,7 @@ func makeH265AU(nalTypes ...int) [][]byte {
 
 func TestKeyframeExtractor_StartStopLifecycle(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	// Simulate a regular recorder's hub by subscribing something.
 	hub.SetCameraID("cam-1")
@@ -207,7 +208,7 @@ func TestKeyframeExtractor_StartStopLifecycle(t *testing.T) {
 
 func TestKeyframeExtractor_SubscribesToHub(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -239,7 +240,7 @@ func TestKeyframeExtractor_SubscribesToHub(t *testing.T) {
 
 func TestKeyframeExtractor_NonBlockingCallback(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -276,7 +277,7 @@ func TestKeyframeExtractor_NonBlockingCallback(t *testing.T) {
 
 func TestKeyframeExtractor_CapturesIDRFrames(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -316,7 +317,7 @@ func TestKeyframeExtractor_CapturesIDRFrames(t *testing.T) {
 
 func TestKeyframeExtractor_FallsBackToPFrame(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -360,7 +361,7 @@ func TestKeyframeExtractor_FallsBackToPFrame(t *testing.T) {
 // that the merger would reject as "frames missing SPS".
 func TestKeyframeExtractor_SkipsCaptureWithoutParamSets(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -394,7 +395,7 @@ func TestKeyframeExtractor_SkipsCaptureWithoutParamSets(t *testing.T) {
 
 func TestKeyframeExtractor_H265IDRDetection(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -446,7 +447,7 @@ func TestKeyframeExtractor_H265IDRDetection(t *testing.T) {
 
 func TestKeyframeExtractor_SegmentRotation(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	// Short segment duration so we can test rotation.
@@ -482,7 +483,7 @@ func TestKeyframeExtractor_SegmentRotation(t *testing.T) {
 func TestKeyframeExtractor_StoresRecordingInDB(t *testing.T) {
 	store := newMockSegmentStore(t)
 	db := newMockRecordingDB()
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -534,7 +535,7 @@ func TestKeyframeExtractor_StoresRecordingInDB(t *testing.T) {
 
 func TestKeyframeExtractor_DoesNotBlockOriginalRecorder(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -579,7 +580,7 @@ func TestKeyframeExtractor_DoesNotBlockOriginalRecorder(t *testing.T) {
 
 func TestKeyframeExtractor_CapturesLatestIDRAfterInterval(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -624,7 +625,7 @@ func TestKeyframeExtractor_CapturesLatestIDRAfterInterval(t *testing.T) {
 
 func TestKeyframeExtractor_ProducesValidFrameFiles(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -690,7 +691,7 @@ func TestKeyframeExtractor_ProducesValidFrameFiles(t *testing.T) {
 func TestKeyframeExtractor_MultipleSegmentsOverTime(t *testing.T) {
 	store := newMockSegmentStore(t)
 	db := newMockRecordingDB()
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	// Very short segment duration for rapid rotation.
@@ -782,7 +783,7 @@ func countNALUs(data []byte) int {
 func TestKeyframeExtractor_FormatTimelapse(t *testing.T) {
 	store := newMockSegmentStore(t)
 	db := newMockRecordingDB()
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -840,7 +841,7 @@ func TestKeyframeExtractor_FormatTimelapse(t *testing.T) {
 // while frames continue arriving. This exercises the lifecycle-frames interaction.
 func TestKeyframeExtractor_ConcurrentStartStopDuringBroadcast(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{
@@ -886,7 +887,7 @@ func TestKeyframeExtractor_ConcurrentStartStopDuringBroadcast(t *testing.T) {
 // goroutines simultaneously while the extractor is actively capturing.
 func TestKeyframeExtractor_ConcurrentFrameBroadcast(t *testing.T) {
 	store := newMockSegmentStore(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID("cam-1")
 
 	ext := NewKeyframeExtractor(KeyframeExtractorConfig{

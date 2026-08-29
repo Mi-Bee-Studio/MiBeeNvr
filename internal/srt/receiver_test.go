@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 func TestNewReceiver(t *testing.T) {
@@ -26,7 +26,7 @@ func TestNewReceiver(t *testing.T) {
 		Passphrase: "test-password-123",
 		StreamID:   "test-stream",
 	}
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	rec := NewReceiver(stream, hub)
 
 	require.Equal(t, "test-cam", rec.cameraID)
@@ -38,7 +38,7 @@ func TestNewReceiver(t *testing.T) {
 func TestReceiverStopWithoutStart(t *testing.T) {
 	t.Helper()
 
-	rec := NewReceiver(config.SRTStream{CameraID: "test", Mode: "listener"}, model.NewStreamHub())
+	rec := NewReceiver(config.SRTStream{CameraID: "test", Mode: "listener"}, streamhub.New())
 	err := rec.Stop()
 	require.NoError(t, err)
 }
@@ -46,7 +46,7 @@ func TestReceiverStopWithoutStart(t *testing.T) {
 func TestReceiverFrameDistribution(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	stream := config.SRTStream{
 		CameraID: "dist-test",
 		Mode:     "listener",
@@ -96,7 +96,7 @@ func TestReceiverFrameDistribution(t *testing.T) {
 func TestStreamHubMultipleConsumers(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	var count1, count2 atomic.Int32
 
@@ -137,7 +137,7 @@ func TestListenerRegisterHub(t *testing.T) {
 	t.Helper()
 
 	ln := NewListener(config.SRTConfig{Port: 9002})
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	ln.registerHub("test-cam", hub)
 
@@ -153,7 +153,7 @@ func TestListenerUnregisterHub(t *testing.T) {
 	t.Helper()
 
 	ln := NewListener(config.SRTConfig{Port: 9003})
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	ln.registerHub("test-cam", hub)
 	ln.registerHubAndStopReceiver("test-cam")
 
@@ -249,7 +249,7 @@ func TestParseStreamIDEdgeCases(t *testing.T) {
 func TestReceiverMetrics(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	rec := NewReceiver(config.SRTStream{CameraID: "metrics-test", Mode: "listener"}, hub)
 
 	require.Equal(t, int64(0), rec.frameCount.Load())
@@ -263,7 +263,7 @@ func TestConnectCallback(t *testing.T) {
 	ln := NewListener(config.SRTConfig{Port: 9005})
 
 	var connectCalled atomic.Bool
-	ln.OnConnect = func(cameraID string, hub *model.StreamHub) {
+	ln.OnConnect = func(cameraID string, hub *streamhub.StreamHub) {
 		connectCalled.Store(true)
 	}
 
@@ -294,7 +294,7 @@ func TestListenerDoubleStop(t *testing.T) {
 func TestDisconnectCleanup(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	stream := config.SRTStream{
 		CameraID: "cleanup-test",
 		Mode:     "listener",
@@ -354,7 +354,7 @@ func TestReceiverStartStopRace(t *testing.T) {
 
 	for i := range 100 {
 		mock := &mockSRTConn{}
-		hub := model.NewStreamHub()
+		hub := streamhub.New()
 		rec := NewReceiver(config.SRTStream{
 			CameraID: fmt.Sprintf("race-test-%d", i),
 			Mode:     "listener",

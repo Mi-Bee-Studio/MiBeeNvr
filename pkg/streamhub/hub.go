@@ -2,8 +2,8 @@
 // external (out-of-module) consumers, primarily the commercial P2P module
 // that needs to subscribe to camera frames for WebRTC tracks.
 //
-// The concrete implementation lives at internal/model.StreamHub. Adapters
-// in internal/model satisfy this interface via HubBridge.
+// The concrete implementation lives at internal/streamhub.StreamHub.
+// Adapters in internal/streamhub satisfy this interface via HubAdapter.
 package streamhub
 
 // FrameCallback is invoked for each video access unit.

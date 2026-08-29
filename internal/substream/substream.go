@@ -4,7 +4,7 @@
 // is pulled over RTSP ONLY while consumers hold references — the pull stops
 // after an idle timeout with zero references, so a camera whose sub stream
 // is never watched costs nothing (#513). Decoded access units fan out through
-// a dedicated model.StreamHub, which egress endpoints (WS/FLV/HLS) consume
+// a dedicated streamhub.StreamHub, which egress endpoints (WS/FLV/HLS) consume
 // under the camera's "/sub" stream key.
 package substream
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var (
@@ -101,7 +102,7 @@ type Config struct {
 	FrameStallTimeout time.Duration
 	// WireHub attaches observability callbacks to each created hub (camera
 	// manager wires Prometheus; optional).
-	WireHub func(hub *model.StreamHub, cameraID string)
+	WireHub func(hub *streamhub.StreamHub, cameraID string)
 }
 
 func (c *Config) normalize() {
@@ -132,7 +133,7 @@ type params struct {
 // parameters egress endpoints need to register players.
 type Source struct {
 	cameraID    string
-	hub         *model.StreamHub
+	hub         *streamhub.StreamHub
 	params      atomic.Pointer[params]
 	ready       chan struct{}
 	readyOne    sync.Once
@@ -144,7 +145,7 @@ type Source struct {
 func (s *Source) CameraID() string { return s.cameraID }
 
 // Hub returns the fan-out hub for this sub-stream.
-func (s *Source) Hub() *model.StreamHub { return s.hub }
+func (s *Source) Hub() *streamhub.StreamHub { return s.hub }
 
 // CodecParams returns the current codec parameter snapshot. Before the first
 // keyframe the codec is "" — egress endpoints treat that as "not ready".
@@ -194,7 +195,7 @@ type Manager struct {
 	// unsubscribe protocol consumers the managers cannot reach themselves
 	// (notably HLS's "hls" consumer — the HLS entry does not store its hub).
 	// Set once at wiring time via SetOnRecycle before traffic arrives.
-	onRecycle func(cameraID string, hub *model.StreamHub)
+	onRecycle func(cameraID string, hub *streamhub.StreamHub)
 	// gbPuller serves KindGB28181 targets (nil → those targets error and the
 	// source reconnects until wired). Set at app wiring via SetGBPuller.
 	gbPuller GBPuller
@@ -211,7 +212,7 @@ func NewManager(cfg Config) *Manager {
 
 // SetOnRecycle registers the recycle callback (see Manager.onRecycle). Only
 // call during wiring, before the first Acquire.
-func (m *Manager) SetOnRecycle(fn func(cameraID string, hub *model.StreamHub)) {
+func (m *Manager) SetOnRecycle(fn func(cameraID string, hub *streamhub.StreamHub)) {
 	m.mu.Lock()
 	m.onRecycle = fn
 	m.mu.Unlock()
@@ -290,7 +291,7 @@ func (m *Manager) Acquire(ctx context.Context, cameraID string) (*Source, error)
 
 	src := &Source{
 		cameraID: cameraID,
-		hub:      model.NewStreamHub(),
+		hub:      streamhub.New(),
 		ready:    make(chan struct{}),
 	}
 	src.hub.SetCameraID(cameraID)
@@ -477,7 +478,7 @@ func (m *Manager) Status(cameraID string) *SourceStatus {
 
 // Hub returns the camera's sub-stream hub — nil when no entry exists. The
 // flow view reads its full consumer fan-out (sends/drops/dwell per consumer).
-func (m *Manager) Hub(cameraID string) *model.StreamHub {
+func (m *Manager) Hub(cameraID string) *streamhub.StreamHub {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e, ok := m.sources[cameraID]; ok {

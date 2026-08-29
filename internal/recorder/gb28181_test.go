@@ -12,6 +12,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +30,7 @@ func newGBRecorder(t *testing.T, cameraID, encoding string, segDur time.Duration
 		Store:         store,
 		RecordEnabled: true,
 	}, nil)
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID(cameraID)
 	require.NoError(t, rec.Start(context.Background()))
 	rec.OnInvite()
@@ -202,7 +203,7 @@ func TestGB28181Recorder_InterfaceCompliance(t *testing.T) {
 
 // TestGB28181Recorder_GetHub tests GetHub method.
 func TestGB28181Recorder_GetHub(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	rec := NewGB28181Recorder(GB28181Config{CameraID: "test-cam", Encoding: "h264"}, hub)
 
 	require.Equal(t, hub, rec.GetHub())
@@ -263,7 +264,7 @@ func TestGB28181Recorder_RecordDisabled(t *testing.T) {
 		Store:         store,
 		RecordEnabled: false,
 	}, nil)
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID("live-only")
 	require.NoError(t, rec.Start(context.Background()))
 	rec.OnInvite()
@@ -374,7 +375,7 @@ func TestGB28181Recorder_AudioIntoSegment(t *testing.T) {
 		RecordEnabled: true,
 		AudioEnabled:  true,
 	}, nil)
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID("audio-cam")
 	require.NoError(t, rec.Start(context.Background()))
 	rec.OnInvite()
@@ -437,7 +438,7 @@ func TestGB28181Recorder_HubAudioBroadcast(t *testing.T) {
 		RecordEnabled: true,
 		AudioEnabled:  true,
 	}, nil)
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID("hub-audio")
 	require.NoError(t, rec.Start(context.Background()))
 	rec.OnInvite()

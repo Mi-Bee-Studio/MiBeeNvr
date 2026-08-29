@@ -27,6 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
@@ -249,7 +250,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 	cm.subStreams = newSubStreamManager(
 		substream.Config{
 			Resolver: cm.resolveSubTarget,
-			WireHub: func(hub *model.StreamHub, cameraID string) {
+			WireHub: func(hub *streamhub.StreamHub, cameraID string) {
 				wireHubMetrics(hub, cameraID, m)
 			},
 		},

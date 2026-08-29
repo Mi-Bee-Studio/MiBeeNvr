@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // cascadeSource adapts the CameraManager to the cascade client's
@@ -82,6 +82,6 @@ func (s cascadeSource) activeCameraIDs() map[string]bool {
 
 // Hub returns the camera's stream hub (nil when the camera has no hub —
 // answered 500 to the upper platform's INVITE).
-func (s cascadeSource) Hub(cameraID string) *model.StreamHub {
+func (s cascadeSource) Hub(cameraID string) *streamhub.StreamHub {
 	return s.cm.GetHub(cameraID)
 }

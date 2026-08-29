@@ -28,6 +28,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // Parameter-set vectors borrowed from the substream package tests — real
@@ -307,7 +308,7 @@ func TestHubPumpAndRebind(t *testing.T) {
 	dir := m.streams["cam-hub"].dirPath
 	m.mu.RUnlock()
 
-	hub1 := model.NewStreamHub()
+	hub1 := streamhub.New()
 	require.NoError(t, m.SubscribeToHub("cam-hub", hub1, false))
 	require.Equal(t, hub1, m.ActiveHub("cam-hub"))
 	require.Nil(t, m.ActiveHub("cam-nope"))
@@ -321,7 +322,7 @@ func TestHubPumpAndRebind(t *testing.T) {
 		15*time.Second, 200*time.Millisecond, "hub broadcast never produced segments")
 
 	// Rebind to a fresh hub: old hub's consumer is removed, ActiveHub moves.
-	hub2 := model.NewStreamHub()
+	hub2 := streamhub.New()
 	m.RebindHub("cam-hub", hub2, false)
 	require.Equal(t, hub2, m.ActiveHub("cam-hub"))
 

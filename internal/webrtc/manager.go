@@ -18,6 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var logger = slog.Default().With("component", "webrtc-manager")
@@ -48,7 +49,7 @@ type peerEntry struct {
 	lastAudioPTS int64
 	cancel       context.CancelFunc
 	camID        string // owning camera (no quality suffix) — logging/metrics
-	streamKey    string // camPeers/hubSubs key: camID or camID+model.SubStreamKeySuffix (#513)
+	streamKey    string // camPeers/hubSubs key: camID or camID+streamhub.SubStreamKeySuffix (#513)
 	sessionID    string
 	lastUsed     time.Time
 	frameCh      chan model.FrameMsg
@@ -219,7 +220,7 @@ func (a audioConfig) capability() webrtc.RTPCodecCapability {
 
 // hubSubscription tracks a StreamHub subscription for a camera.
 type hubSubscription struct {
-	hub             *model.StreamHub
+	hub             *streamhub.StreamHub
 	subID           string
 	audioSubscribed bool // SetAudioInfo ran against this hub instance
 }
@@ -359,12 +360,12 @@ func (m *Manager) CanHandle(codec model.Format) bool {
 
 // RegisterStream subscribes to a StreamHub for live frames. key is normally
 // the camera ID (main stream) but may carry the sub-stream suffix
-// (camID+model.SubStreamKeySuffix) when the api handler serves quality=sub —
+// (camID+streamhub.SubStreamKeySuffix) when the api handler serves quality=sub —
 // main and sub entries then coexist as independent buckets. If hub is nil,
 // this is a no-op. Safe to call multiple times for the same key.
 // sps (optional, the stream's codec params) selects the H.264 profile
 // variant offered for this stream's track — see NewManager's codec list.
-func (m *Manager) RegisterStream(key string, hub *model.StreamHub, sps []byte) {
+func (m *Manager) RegisterStream(key string, hub *streamhub.StreamHub, sps []byte) {
 	if hub == nil {
 		return
 	}
@@ -394,7 +395,7 @@ func (m *Manager) RegisterStream(key string, hub *model.StreamHub, sps []byte) {
 // RegisteredHub returns the StreamHub a stream key is currently subscribed to,
 // or nil when the key has no registration. Callers use it to detect a stale
 // hub (recycled sub-stream puller) before unregistering (#513).
-func (m *Manager) RegisteredHub(key string) *model.StreamHub {
+func (m *Manager) RegisteredHub(key string) *streamhub.StreamHub {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if sub, ok := m.hubSubs[key]; ok {
@@ -574,12 +575,12 @@ func (m *Manager) WriteH264(key string, pts int64, au [][]byte) {
 
 // CreateWHEPSession creates a new WHEP session for the given stream. streamKey
 // is normally the camera ID (main stream); the api handler passes the
-// sub-stream key (camID+model.SubStreamKeySuffix) for quality=sub sessions —
+// sub-stream key (camID+streamhub.SubStreamKeySuffix) for quality=sub sessions —
 // main and sub sessions live in independent peer buckets. It processes the SDP
 // offer, creates a PeerConnection with H.264 video only, and returns the SDP
 // answer and session ID.
 func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSDP []byte, sessionID string, err error) {
-	camID := strings.TrimSuffix(streamKey, model.SubStreamKeySuffix)
+	camID := strings.TrimSuffix(streamKey, streamhub.SubStreamKeySuffix)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -811,7 +812,7 @@ func (m *Manager) DeleteWHEPSession(sessionID string) error {
 	camID := entry.camID
 	key := entry.streamKey
 	if m.mets != nil {
-		cameraTotal := len(m.camPeers[camID]) + len(m.camPeers[camID+model.SubStreamKeySuffix])
+		cameraTotal := len(m.camPeers[camID]) + len(m.camPeers[camID+streamhub.SubStreamKeySuffix])
 		if cameraTotal == 0 {
 			m.mets.WebRTCActivePeers.DeleteLabelValues(camID)
 		} else {
@@ -1057,7 +1058,7 @@ func (m *Manager) idleWatchdog(ctx context.Context, entry *peerEntry) {
 func (m *Manager) activePeerCount(camID string) int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.camPeers[camID]) + len(m.camPeers[camID+model.SubStreamKeySuffix])
+	return len(m.camPeers[camID]) + len(m.camPeers[camID+streamhub.SubStreamKeySuffix])
 }
 
 // PeerCount returns the number of active WHEP peers for the given camera

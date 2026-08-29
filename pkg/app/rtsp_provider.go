@@ -4,6 +4,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // rtspStreamProvider adapts the camera manager to the RTSP output server's
@@ -22,7 +23,7 @@ func rtspStreamProvider(camMgr *camera.CameraManager) rtsp.StreamProvider {
 		if provider, ok := unwrapRTSPDelegate(rec).(model.HLSProvider); ok {
 			info.Codec, info.SPS, info.PPS, info.VPS = provider.CodecParams()
 		}
-		if h, ok := rec.(interface{ GetHub() *model.StreamHub }); ok {
+		if h, ok := rec.(interface{ GetHub() *streamhub.StreamHub }); ok {
 			info.Hub = h.GetHub()
 		}
 		if info.Codec == "" || info.Hub == nil {

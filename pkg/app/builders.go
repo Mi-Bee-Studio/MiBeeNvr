@@ -39,7 +39,6 @@ import (
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
@@ -47,6 +46,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
@@ -471,7 +471,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		// the session is deleted (viewer DELETE, connection-state failure, or
 		// the idle watchdog). Main-key sessions carry no suffix and no-op.
 		deps.webrtcMgr.SetOnSessionEnd(func(streamKey string) {
-			if id, isSub := strings.CutSuffix(streamKey, model.SubStreamKeySuffix); isSub {
+			if id, isSub := strings.CutSuffix(streamKey, streamhub.SubStreamKeySuffix); isSub {
 				camMgr.ReleaseSubStream(id)
 			}
 		})
@@ -528,8 +528,8 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// ride the same gate: their hub subscription is dropped so a new viewer
 	// re-registers on the fresh pull (existing sessions idle-timeout).
 	if subMgr := camMgr.SubStreams(); subMgr != nil {
-		subMgr.SetOnRecycle(func(cameraID string, recycledHub *model.StreamHub) {
-			key := cameraID + model.SubStreamKeySuffix
+		subMgr.SetOnRecycle(func(cameraID string, recycledHub *streamhub.StreamHub) {
+			key := cameraID + streamhub.SubStreamKeySuffix
 			if wsMgr.ActiveHub(key) == recycledHub {
 				wsMgr.UnregisterStream(key)
 			}
@@ -595,7 +595,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			// CameraHubProvider: hand the publisher the SAME hub the recorder owns.
 			camMgr.GetOrCreateHub,
 			// OnPublisherConnect: mark the IngestRecorder as streaming.
-			func(cameraID string, _ *model.StreamHub) {
+			func(cameraID string, _ *streamhub.StreamHub) {
 				if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
 					ir.WriteConnected()
 				}
@@ -628,7 +628,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		deps.whipServer = whip.NewServer(
 			camMgr.ResolveWHIPKey,
 			camMgr.GetOrCreateHub,
-			func(cameraID string, _ *model.StreamHub) {
+			func(cameraID string, _ *streamhub.StreamHub) {
 				if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
 					ir.WriteConnected()
 				}
@@ -706,7 +706,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		}
 		deps.srtListener = srt.NewListener(cfg.SRT)
 		deps.srtListener.HubProvider = camMgr.GetOrCreateHub
-		deps.srtListener.OnConnect = func(cameraID string, _ *model.StreamHub) {
+		deps.srtListener.OnConnect = func(cameraID string, _ *streamhub.StreamHub) {
 			if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
 				ir.WriteConnected()
 			}

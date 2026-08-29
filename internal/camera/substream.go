@@ -16,6 +16,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 )
 
@@ -149,7 +150,7 @@ func NewCascadeSubAcquirer(cm *CameraManager) cascade.SubStreamAcquirer {
 
 type cascadeSubAcquirer struct{ cm *CameraManager }
 
-func (a cascadeSubAcquirer) AcquireSubHub(ctx context.Context, cameraID string) (*model.StreamHub, func(), error) {
+func (a cascadeSubAcquirer) AcquireSubHub(ctx context.Context, cameraID string) (*streamhub.StreamHub, func(), error) {
 	src, err := a.cm.AcquireSubStream(ctx, cameraID)
 	if err != nil {
 		return nil, nil, err

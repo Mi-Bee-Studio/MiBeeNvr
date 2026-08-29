@@ -1,4 +1,4 @@
-package model
+package streamhub
 
 import (
 	"context"
@@ -65,7 +65,7 @@ func attrInt(r slog.Record, key string) int64 {
 
 func newCaptureHub(t *testing.T, camID string) (*StreamHub, *captureHandler) {
 	t.Helper()
-	h := NewStreamHub()
+	h := New()
 	h.SetCameraID(camID)
 	h.consumerBufferSize = 5
 	ch := &captureHandler{}

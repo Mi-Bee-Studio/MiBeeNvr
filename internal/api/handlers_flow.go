@@ -14,13 +14,14 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/go-chi/chi/v5"
 )
 
 // FlowCamera is one camera's flow-path snapshot: the hub stats plus the
 // identity/quality context the flow view renders around them.
 type FlowCamera struct {
-	model.HubStats
+	streamhub.HubStats
 	Name     string         `json:"name"`
 	Status   string         `json:"status"`
 	Protocol string         `json:"protocol,omitempty"`
@@ -59,7 +60,7 @@ type FlowCamera struct {
 // sub hub's counters (frames_in/bytes_in/per-consumer fan-out) so the flow
 // tree renders both tiers with the same machinery.
 type FlowSub struct {
-	model.HubStats
+	streamhub.HubStats
 	State string       `json:"state"`
 	Codec model.Format `json:"codec,omitempty"`
 	Refs  int          `json:"refs"`
@@ -122,7 +123,7 @@ func (h *Handler) handleCameraFlow(w http.ResponseWriter, r *http.Request) {
 
 // buildFlowCamera assembles the flow view for one camera. Resolution is parsed
 // on this cold path (per API call) — never on the frame hot path.
-func (h *Handler) buildFlowCamera(cameraID string, hub *model.StreamHub, status model.RecorderStatus, mergeCounts map[string]int) FlowCamera {
+func (h *Handler) buildFlowCamera(cameraID string, hub *streamhub.StreamHub, status model.RecorderStatus, mergeCounts map[string]int) FlowCamera {
 	fc := FlowCamera{
 		HubStats: hub.Snapshot(),
 		Status:   string(status),

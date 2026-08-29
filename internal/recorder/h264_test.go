@@ -21,6 +21,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var (
@@ -595,7 +596,7 @@ type audioCollector struct {
 	done   chan struct{}
 }
 
-func newAudioCollector(hub *model.StreamHub, id string) *audioCollector {
+func newAudioCollector(hub *streamhub.StreamHub, id string) *audioCollector {
 	c := &audioCollector{done: make(chan struct{})}
 	hub.SubscribeAudio(id, func(pts int64, codec model.AudioCodec, data []byte) {
 		c.mu.Lock()
@@ -629,7 +630,7 @@ func (c *audioCollector) count() int {
 	return len(c.frames)
 }
 
-func (c *audioCollector) close(hub *model.StreamHub, id string) {
+func (c *audioCollector) close(hub *streamhub.StreamHub, id string) {
 	hub.UnsubscribeAudio(id)
 }
 
@@ -640,7 +641,7 @@ func TestH264Recorder_AudioBroadcast(t *testing.T) {
 	defer srv.close()
 
 	mgr := newTestManager(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	rec := NewH264Recorder(H264Config{
 		CameraID:          "cam-audio",
@@ -692,7 +693,7 @@ func TestH264Recorder_AudioDisabled_StillRecordsVideo(t *testing.T) {
 	defer srv.close()
 
 	mgr := newTestManager(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	rec := NewH264Recorder(H264Config{
 		CameraID:     "cam-noaudio",

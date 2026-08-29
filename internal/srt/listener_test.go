@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // mockConn implements srt.Conn for testing purposes.
@@ -44,7 +44,7 @@ func TestHandlePublishPanicCleanup(t *testing.T) {
 
 	// Set OnConnect to panic — simulates a failure after the receiver is added to the map.
 	// This exercises the defer-based panic recovery in handlePublish().
-	ln.OnConnect = func(cid string, hub *model.StreamHub) {
+	ln.OnConnect = func(cid string, hub *streamhub.StreamHub) {
 		panic("simulated panic for testing")
 	}
 

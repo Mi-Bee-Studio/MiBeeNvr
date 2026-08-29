@@ -7,8 +7,8 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/psmux"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
 	"github.com/stretchr/testify/require"
 )
@@ -17,8 +17,8 @@ type fakeSource struct {
 	cams []CameraInfo
 }
 
-func (f fakeSource) Cameras() []CameraInfo       { return f.cams }
-func (f fakeSource) Hub(string) *model.StreamHub { return nil }
+func (f fakeSource) Cameras() []CameraInfo           { return f.cams }
+func (f fakeSource) Hub(string) *streamhub.StreamHub { return nil }
 
 func newCascadeTestDB(t *testing.T) *storage.DB {
 	t.Helper()
@@ -267,13 +267,13 @@ func TestForwardDeviceControl_LensNotForwarded(t *testing.T) {
 // --- sub-stream forwarding (#512) -------------------------------------------------
 
 type fakeSubAcquirer struct {
-	hub     *model.StreamHub
+	hub     *streamhub.StreamHub
 	err     error
 	calls   int
 	release chan struct{}
 }
 
-func (f *fakeSubAcquirer) AcquireSubHub(context.Context, string) (*model.StreamHub, func(), error) {
+func (f *fakeSubAcquirer) AcquireSubHub(context.Context, string) (*streamhub.StreamHub, func(), error) {
 	f.calls++
 	if f.err != nil {
 		return nil, nil, f.err
@@ -284,10 +284,10 @@ func (f *fakeSubAcquirer) AcquireSubHub(context.Context, string) (*model.StreamH
 // hubSource is a fakeSource whose Hub returns a real hub for one camera.
 type hubSource struct {
 	fakeSource
-	hub *model.StreamHub
+	hub *streamhub.StreamHub
 }
 
-func (f hubSource) Hub(string) *model.StreamHub { return f.hub }
+func (f hubSource) Hub(string) *streamhub.StreamHub { return f.hub }
 
 var errNoSubForTest = &testError{"no sub-stream configured"}
 
@@ -298,7 +298,7 @@ func (e *testError) Error() string { return e.msg }
 // A wanted sub forward subscribes to the SUB hub, records the swap, and drops
 // the acquisition reference on close.
 func TestMediaSessionSubStreamForward(t *testing.T) {
-	mainHub, subHub := model.NewStreamHub(), model.NewStreamHub()
+	mainHub, subHub := streamhub.New(), streamhub.New()
 	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
 	acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
 	svc.SetSubStreamAcquirer(acq)
@@ -326,7 +326,7 @@ func TestMediaSessionSubStreamForward(t *testing.T) {
 
 // Acquisition failure degrades to a main-stream forward — never a dead session.
 func TestMediaSessionSubStreamFallbackToMain(t *testing.T) {
-	mainHub := model.NewStreamHub()
+	mainHub := streamhub.New()
 	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
 	svc.SetSubStreamAcquirer(&fakeSubAcquirer{err: errNoSubForTest, release: make(chan struct{}, 1)})
 
@@ -346,7 +346,7 @@ func TestMediaSessionSubStreamFallbackToMain(t *testing.T) {
 // A BYE racing the acquisition: close() first ⇒ run drops the freshly granted
 // reference and never subscribes.
 func TestMediaSessionSubStreamCloseDuringAcquire(t *testing.T) {
-	mainHub, subHub := model.NewStreamHub(), model.NewStreamHub()
+	mainHub, subHub := streamhub.New(), streamhub.New()
 	svc := New(testCfg(), hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", SubStream: true}}}, mainHub}, nil)
 	acq := &fakeSubAcquirer{hub: subHub, release: make(chan struct{}, 1)}
 	svc.SetSubStreamAcquirer(acq)

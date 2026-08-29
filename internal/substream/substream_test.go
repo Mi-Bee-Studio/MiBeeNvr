@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // Parameter-set vectors borrowed from the RTSP output server tests (real
@@ -361,8 +362,8 @@ func TestAcquireSharesSourceAcrossConsumers(t *testing.T) {
 	time.Sleep(400 * time.Millisecond) // > 3× idle timeout
 	require.NotEmpty(t, m.Snapshot())  // still there
 
-	recycled := make(chan *model.StreamHub, 1)
-	m.SetOnRecycle(func(id string, hub *model.StreamHub) {
+	recycled := make(chan *streamhub.StreamHub, 1)
+	m.SetOnRecycle(func(id string, hub *streamhub.StreamHub) {
 		if id == "cam-1" {
 			recycled <- hub
 		}

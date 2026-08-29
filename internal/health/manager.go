@@ -10,6 +10,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // Manager orchestrates all health monitoring layers:
@@ -452,9 +453,9 @@ func (m *Manager) GetAllHealth() map[string]*model.CameraHealth {
 }
 
 // getHub extracts the StreamHub from a recorder via type assertion.
-func getHub(recorder model.Recorder) *model.StreamHub {
+func getHub(recorder model.Recorder) *streamhub.StreamHub {
 	type hubber interface {
-		GetHub() *model.StreamHub
+		GetHub() *streamhub.StreamHub
 	}
 	if h, ok := recorder.(hubber); ok {
 		return h.GetHub()

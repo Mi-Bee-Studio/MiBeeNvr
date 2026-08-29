@@ -31,6 +31,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/gorilla/websocket"
@@ -1463,7 +1464,7 @@ func TestWebSocketStreamIntegration(t *testing.T) {
 	// so we can test the full WebSocket flow without a real camera.
 	sampleSPS := []byte{0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0xd8}
 	samplePPS := []byte{0x68, 0xce, 0x38, 0x80}
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	err = wsMgr.RegisterStream(cameraID, model.FormatH264, sampleSPS, samplePPS, nil, hub)
 	require.NoError(t, err)
 	require.True(t, wsMgr.IsActive(cameraID))

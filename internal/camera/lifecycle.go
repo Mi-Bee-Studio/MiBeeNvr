@@ -19,6 +19,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // Start creates and starts recorders for all enabled cameras in the config.
@@ -431,9 +432,9 @@ func (cm *CameraManager) stopCamerasByProtocol(protocol string) {
 
 // getRecorderHub safely extracts the StreamHub from a recorder using type assertion.
 // Returns nil if the recorder does not implement the hubber interface.
-func getRecorderHub(rec model.Recorder) *model.StreamHub {
+func getRecorderHub(rec model.Recorder) *streamhub.StreamHub {
 	type hubber interface {
-		GetHub() *model.StreamHub
+		GetHub() *streamhub.StreamHub
 	}
 	if h, ok := rec.(hubber); ok {
 		return h.GetHub()

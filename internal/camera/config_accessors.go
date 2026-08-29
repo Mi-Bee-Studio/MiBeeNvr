@@ -22,6 +22,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
@@ -350,7 +351,7 @@ func (cm *CameraManager) NewGB28181PlaybackSink(cameraID string) (gb28181.AUWrit
 		RecordEnabled: true,
 		AudioEnabled:  cam.AudioEnabled,
 	}, nil)
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID(cameraID)
 	if err := rec.Start(context.Background()); err != nil {
 		return nil, err

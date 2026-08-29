@@ -14,13 +14,14 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/stretchr/testify/require"
 )
 
 func newTestManager() *Manager {
 	return NewManager(
-		func(string) *model.StreamHub { return model.NewStreamHub() },
+		func(string) *streamhub.StreamHub { return streamhub.New() },
 		func(string) ([]byte, []byte, bool) { return []byte{0x67}, []byte{0x68}, true },
 	)
 }
@@ -112,7 +113,7 @@ func TestPushTarget_RunNilHub(t *testing.T) {
 
 func TestConnectAndStream_UnsupportedProtocol(t *testing.T) {
 	target := NewPushTarget("cam1", PushTargetConfig{ID: "t1", Protocol: "carrier-pigeon"},
-		model.NewStreamHub(), func() ([]byte, []byte, bool) { return nil, nil, true })
+		streamhub.New(), func() ([]byte, []byte, bool) { return nil, nil, true })
 	err := target.connectAndStream(context.Background())
 	require.ErrorIs(t, err, errPermanent)
 	st := target.Status()
@@ -124,7 +125,7 @@ func TestConnectAndStream_UnsupportedProtocol(t *testing.T) {
 // without any live server.
 func TestConnectRTSP_ConnectionRefused(t *testing.T) {
 	target := NewPushTarget("cam1", PushTargetConfig{ID: "t1", Protocol: "rtsp", URL: "rtsp://127.0.0.1:1/x"},
-		model.NewStreamHub(), func() ([]byte, []byte, bool) { return []byte{0x67}, []byte{0x68}, true })
+		streamhub.New(), func() ([]byte, []byte, bool) { return []byte{0x67}, []byte{0x68}, true })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	err := target.connectAndStream(ctx)

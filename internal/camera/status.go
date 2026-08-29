@@ -4,6 +4,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
@@ -67,7 +68,7 @@ func (cm *CameraManager) SetTestRecorder(cameraID string, rec model.Recorder) {
 // none exists. This is the read-only lookup consumed by HLS/WebRTC/FLV/WS
 // handlers (they fall back to getRecorderHub, but push-only cameras — srt/rtmp —
 // expose their hub through this registry). Lock-free read.
-func (cm *CameraManager) GetHub(cameraID string) *model.StreamHub {
+func (cm *CameraManager) GetHub(cameraID string) *streamhub.StreamHub {
 	return cm.snapshotHub(cameraID)
 }
 

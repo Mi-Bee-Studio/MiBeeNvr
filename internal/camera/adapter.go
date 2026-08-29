@@ -3,8 +3,9 @@ package camera
 import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	pkgcamera "github.com/Mi-Bee-Studio/MiBeeNvr/pkg/camera"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/pkg/streamhub"
+	pkgstreamhub "github.com/Mi-Bee-Studio/MiBeeNvr/pkg/streamhub"
 )
 
 // Compile-time assertions.
@@ -89,14 +90,14 @@ func (a *publicAdapter) Status(id string) (pkgcamera.Status, error) {
 //
 // Returns the frame distribution hub for the camera. The returned Hub
 // is shared across all callers; each must Subscribe under a unique
-// consumerID. The underlying *model.StreamHub is wrapped via
-// model.NewHubAdapter to satisfy the pkg/streamhub.Hub interface.
-func (a *publicAdapter) Hub(id string) (streamhub.Hub, error) {
+// consumerID. The underlying *streamhub.StreamHub is wrapped via
+// streamhub.NewHubAdapter to satisfy the pkg/streamhub.Hub interface.
+func (a *publicAdapter) Hub(id string) (pkgstreamhub.Hub, error) {
 	h := a.cm.GetHub(id)
 	if h == nil {
 		return nil, pkgcamera.NewNotFoundError(id)
 	}
-	return model.NewHubAdapter(h), nil
+	return streamhub.NewHubAdapter(h), nil
 }
 
 // cameraView adapts a *config.CameraConfig to the pkg/camera.Camera

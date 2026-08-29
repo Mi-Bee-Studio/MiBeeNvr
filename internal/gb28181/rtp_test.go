@@ -11,7 +11,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // Helper to build a test RTP packet with marker bit set.
@@ -45,7 +45,7 @@ func buildTestMPEGPSPayload() []byte {
 func TestNewReceiver(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("test-cam", hub, pm)
 
@@ -59,7 +59,7 @@ func TestNewReceiver(t *testing.T) {
 func TestReceiverStopWithoutStart(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("test", hub, pm)
 
@@ -70,7 +70,7 @@ func TestReceiverStopWithoutStart(t *testing.T) {
 func TestSetTCPMode(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("test", hub, pm)
 
@@ -87,7 +87,7 @@ func TestSetTCPMode(t *testing.T) {
 func TestReceiverUDPBasic(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("test-cam", hub, pm)
 
@@ -148,7 +148,7 @@ func TestReceiverUDPBasic(t *testing.T) {
 func TestReceiverMetrics(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("metrics-test", hub, pm)
 
@@ -161,7 +161,7 @@ func TestReceiverMetrics(t *testing.T) {
 func TestReceiverCodec(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("test", hub, pm)
 
@@ -172,7 +172,7 @@ func TestReceiverCodec(t *testing.T) {
 func TestReceiverDoubleStop(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("test", hub, pm)
 
@@ -187,7 +187,7 @@ func TestReceiverStartStopRace(t *testing.T) {
 	t.Helper()
 
 	for range 50 {
-		hub := model.NewStreamHub()
+		hub := streamhub.New()
 		pm := NewPortManager(50000, 50100)
 		rec := NewReceiver("race-test", hub, pm)
 
@@ -226,7 +226,7 @@ func TestReceiverStartStopRace(t *testing.T) {
 func TestReceiverJitterBufferMarkerBit(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("jitter-test", hub, pm)
 
@@ -279,7 +279,7 @@ func TestReceiverJitterBufferMarkerBit(t *testing.T) {
 func TestReceiverSequenceWrap(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("wrap-test", hub, pm)
 
@@ -335,7 +335,7 @@ func TestReceiverSequenceWrap(t *testing.T) {
 func TestReceiverTCPModeRFC4571(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("tcp-test", hub, pm)
 	rec.SetTCPMode(TCPModeRFC4571)
@@ -396,7 +396,7 @@ func TestReceiverTCPModeRFC4571(t *testing.T) {
 func TestReceiverTCPMode0x24(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("tcp-0x24-test", hub, pm)
 	rec.SetTCPMode(TCPMode0x24)
@@ -459,7 +459,7 @@ func TestReceiverTCPMode0x24(t *testing.T) {
 func TestReceiverTCPModeAutoDetectRFC4571(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("auto-detect-test", hub, pm)
 	rec.SetTCPMode(TCPModeAuto)
@@ -523,7 +523,7 @@ func TestReceiverTCPModeAutoDetectRFC4571(t *testing.T) {
 func TestReceiverTCPModeAutoDetect0x24(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("auto-detect-0x24-test", hub, pm)
 	rec.SetTCPMode(TCPModeAuto)
@@ -589,7 +589,7 @@ func TestReceiverTCPModeAutoDetect0x24(t *testing.T) {
 func TestReceiverNALUCallback(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("callback-test", hub, pm)
 
@@ -640,7 +640,7 @@ func TestReceiverNALUCallback(t *testing.T) {
 func TestReceiverStartNilConn(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("nil-conn-test", hub, pm)
 
@@ -655,7 +655,7 @@ func TestReceiverStartNilConn(t *testing.T) {
 func TestReceiverMultipleAUs(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("multi-au-test", hub, pm)
 
@@ -702,7 +702,7 @@ func TestReceiverMultipleAUs(t *testing.T) {
 func TestReceiverOutOrderPackets(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("ooo-test", hub, pm)
 
@@ -757,7 +757,7 @@ func TestReceiverOutOrderPackets(t *testing.T) {
 func TestReceiverMaxJitterBufferSize(t *testing.T) {
 	t.Helper()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	pm := NewPortManager(50000, 50010)
 	rec := NewReceiver("jitter-size-test", hub, pm)
 	rec.maxJitterPackets = 4 // Reduce for testing

@@ -5,6 +5,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
@@ -47,7 +48,7 @@ func TestInitStreamHubViaHubHost(t *testing.T) {
 	initStreamHub(rec, "test-cam", nil)
 	hub := rec.GetHub()
 	if hub == nil {
-		t.Fatal("initStreamHub did not set the hub via model.HubHost")
+		t.Fatal("initStreamHub did not set the hub via streamhub.HubHost")
 	}
 	// The recorder's own HubSource must label the hub (flow-path view).
 	if got := rec.HubSource(); got != "stub" {
@@ -61,14 +62,14 @@ func TestInitStreamHubViaHubHost(t *testing.T) {
 // Compile-time guards: every recorder type used by the builders must satisfy
 // the hub interfaces the camera manager relies on.
 var (
-	_ model.HubHost = (*recorder.H264Recorder)(nil)
-	_ model.HubHost = (*recorder.H265Recorder)(nil)
-	_ model.HubHost = (*recorder.ONVIFRecorder)(nil)
-	_ model.HubHost = (*recorder.MJPEGRecorder)(nil)
-	_ model.HubHost = (*recorder.HTTPJPEGRecorder)(nil)
-	_ model.HubHost = (*recorder.TimelapseRecorder)(nil)
-	_ model.HubHost = (*recorder.StubRecorder)(nil)
-	_ model.HubHost = (*recorder.IngestRecorder)(nil)
-	_ model.HubHost = (*recorder.GB28181Recorder)(nil)
-	_ model.HubHost = (*xiaomi.XiaomiRecorder)(nil)
+	_ streamhub.HubHost = (*recorder.H264Recorder)(nil)
+	_ streamhub.HubHost = (*recorder.H265Recorder)(nil)
+	_ streamhub.HubHost = (*recorder.ONVIFRecorder)(nil)
+	_ streamhub.HubHost = (*recorder.MJPEGRecorder)(nil)
+	_ streamhub.HubHost = (*recorder.HTTPJPEGRecorder)(nil)
+	_ streamhub.HubHost = (*recorder.TimelapseRecorder)(nil)
+	_ streamhub.HubHost = (*recorder.StubRecorder)(nil)
+	_ streamhub.HubHost = (*recorder.IngestRecorder)(nil)
+	_ streamhub.HubHost = (*recorder.GB28181Recorder)(nil)
+	_ streamhub.HubHost = (*xiaomi.XiaomiRecorder)(nil)
 )

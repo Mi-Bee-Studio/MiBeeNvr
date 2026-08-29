@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
 
@@ -35,7 +35,7 @@ type session struct {
 	deviceID  string
 	channel   *Channel
 	receiver  *Receiver
-	hub       *model.StreamHub
+	hub       *streamhub.StreamHub
 	port      uint16
 
 	mu     sync.Mutex
@@ -223,9 +223,9 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 
 	// Use the provided AU callback (from the recorder) instead of creating
 	// an orphaned hub. When onAU is nil (tests), fall back to a local hub.
-	var hub *model.StreamHub
+	var hub *streamhub.StreamHub
 	if onAU == nil {
-		hub = model.NewStreamHub()
+		hub = streamhub.New()
 		hub.SetCameraID(channel.ID)
 	}
 	receiver := NewReceiver(channel.ID, hub, sm.portManager)
@@ -628,7 +628,7 @@ func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, 
 	))
 
 	// Create StreamHub for this session
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	hub.SetCameraID(channel.ID)
 
 	// Create receiver
@@ -745,7 +745,7 @@ func (sm *SessionManager) SetPlaybackByeSender(sender func(channelID string) err
 }
 
 // GetHub returns the StreamHub for the given channelID, or nil if no active session.
-func (sm *SessionManager) GetHub(channelID string) *model.StreamHub {
+func (sm *SessionManager) GetHub(channelID string) *streamhub.StreamHub {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	if sess, ok := sm.sessions[channelID]; ok {

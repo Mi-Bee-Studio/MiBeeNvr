@@ -27,6 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var xiaomiLogger = slog.Default().With("component", "xiaomi-recorder")
@@ -150,8 +151,8 @@ type XiaomiRecorder struct {
 	// Audio state (probed from first audio packet)
 	audioCodecID uint32 // MISS codec ID for audio (0 = not detected yet)
 
-	Hub         *model.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
-	streamStart time.Time        // For PTS rebase (used by forwardHLS)
+	Hub         *streamhub.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
+	streamStart time.Time            // For PTS rebase (used by forwardHLS)
 
 	currentQuality   string // effective quality for next connectAndRecord attempt
 	noMediaFailCount int    // no-media failures since the last stable-streaming window (issue #502: true consecutive semantics)
@@ -191,10 +192,10 @@ type XiaomiRecorder struct {
 var _ model.Recorder = (*XiaomiRecorder)(nil)
 
 // GetHub returns the StreamHub for frame fan-out.
-func (r *XiaomiRecorder) GetHub() *model.StreamHub { return r.Hub }
+func (r *XiaomiRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
-// SetHub wires the StreamHub for frame fan-out (model.HubHost).
-func (r *XiaomiRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+// SetHub wires the StreamHub for frame fan-out (streamhub.HubHost).
+func (r *XiaomiRecorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *XiaomiRecorder) HubSource() string { return "xiaomi" }

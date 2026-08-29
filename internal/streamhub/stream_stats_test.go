@@ -1,4 +1,4 @@
-package model
+package streamhub
 
 // Tests for the #469 observability additions: Snapshot(), per-consumer
 // bytes/dwell, SubscribeMsg IngestAt relay, compositional drop callbacks,
@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStreamHub_Snapshot(t *testing.T) {
-	hub := NewStreamHub()
+	hub := New()
 	hub.SetCameraID("cam-snap")
 	hub.SetSource("h264")
 
@@ -54,7 +55,7 @@ func TestStreamHub_Snapshot(t *testing.T) {
 }
 
 func TestStreamHub_SnapshotEmpty(t *testing.T) {
-	hub := NewStreamHub()
+	hub := New()
 	hub.SetCameraID("cam-empty")
 	snap := hub.Snapshot()
 	require.Empty(t, snap.Consumers)
@@ -63,11 +64,11 @@ func TestStreamHub_SnapshotEmpty(t *testing.T) {
 }
 
 func TestStreamHub_SubscribeMsgRelaysIngestAt(t *testing.T) {
-	hub := NewStreamHub()
+	hub := New()
 	hub.SetCameraID("cam-msg")
 
-	got := make(chan FrameMsg, 4)
-	require.NoError(t, hub.SubscribeMsg("ws-cam-msg", func(msg FrameMsg) {
+	got := make(chan model.FrameMsg, 4)
+	require.NoError(t, hub.SubscribeMsg("ws-cam-msg", func(msg model.FrameMsg) {
 		got <- msg
 	}))
 
@@ -88,7 +89,7 @@ func TestStreamHub_SubscribeMsgRelaysIngestAt(t *testing.T) {
 func TestStreamHub_AddOnDropFiresAllCallbacks(t *testing.T) {
 	// Regression for the #469 Phase 0 bug: HLS assigning hub.OnDrop destroyed
 	// the camera manager's wiring. AddOnDrop must fan out to every registrant.
-	hub := NewStreamHub()
+	hub := New()
 	hub.SetCameraID("cam-drop")
 	hub.consumerBufferSize = 1
 
@@ -139,7 +140,7 @@ func TestStreamHub_AddOnDropFiresAllCallbacks(t *testing.T) {
 }
 
 func TestStreamHub_TrySendIDRCountsEvictedAndIDRDrops(t *testing.T) {
-	hub := NewStreamHub()
+	hub := New()
 	hub.SetCameraID("cam-idr")
 	hub.consumerBufferSize = 3
 
@@ -194,7 +195,7 @@ func TestStreamHub_TrySendIDRCountsEvictedAndIDRDrops(t *testing.T) {
 }
 
 func TestStreamHub_AudioDropFiresOnDrop(t *testing.T) {
-	hub := NewStreamHub()
+	hub := New()
 	hub.SetCameraID("cam-audio")
 
 	var fired int32
@@ -204,12 +205,12 @@ func TestStreamHub_AudioDropFiresOnDrop(t *testing.T) {
 	})
 
 	block := make(chan struct{})
-	require.NoError(t, hub.SubscribeAudio("audio-stuck", func(pts int64, codec AudioCodec, data []byte) {
+	require.NoError(t, hub.SubscribeAudio("audio-stuck", func(pts int64, codec model.AudioCodec, data []byte) {
 		<-block
 	}))
 	// audio buffer is 50 — overflow it
 	for i := range 60 {
-		hub.BroadcastAudio(int64(i), AudioG711U, []byte{0x00})
+		hub.BroadcastAudio(int64(i), model.AudioG711U, []byte{0x00})
 	}
 	require.GreaterOrEqual(t, fired, int32(1), "audio overflow should fire drop callbacks")
 	close(block)

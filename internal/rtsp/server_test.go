@@ -21,6 +21,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // Minimal-but-plausible parameter sets (contents are opaque to the server;
@@ -40,7 +41,7 @@ type testServer struct {
 	*Server
 	t       *testing.T
 	url     string
-	hub     *model.StreamHub
+	hub     *streamhub.StreamHub
 	codec   model.Format
 	sps     []byte
 	pps     []byte
@@ -58,7 +59,7 @@ func startTestServer(t *testing.T, cfg Config) *testServer {
 
 	ts := &testServer{
 		t:       t,
-		hub:     model.NewStreamHub(),
+		hub:     streamhub.New(),
 		codec:   model.FormatH264,
 		sps:     tSPS,
 		pps:     tPPS,
@@ -463,7 +464,7 @@ func TestRTSPStreamRebuildOnParamAndHubChange(t *testing.T) {
 	require.Equal(t, newSPS, cs2.media.Formats[0].(*format.H264).SPS, "SDP format must carry the new SPS")
 
 	// Recorder restart → new hub → full rebuild even with identical params.
-	ts.hub = model.NewStreamHub()
+	ts.hub = streamhub.New()
 	cs3 := s.streamFor("cam-1")
 	require.NotNil(t, cs3)
 	require.NotSame(t, cs2, cs3)

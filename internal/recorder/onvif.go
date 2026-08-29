@@ -18,6 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var onvifRecLogger = slog.Default().With("component", "onvif-recorder")
@@ -66,7 +67,7 @@ type ONVIFRecorder struct {
 	onvifClient onvif.DeviceClient
 	store       SegmentStore
 	metrics     *metrics.Metrics
-	Hub         *model.StreamHub // Frame fan-out, passed to delegate recorders
+	Hub         *streamhub.StreamHub // Frame fan-out, passed to delegate recorders
 
 	// newRecorder is a function that creates the delegate recorder.
 	// Overridable in tests to inject a mock recorder.
@@ -92,10 +93,10 @@ type ONVIFRecorder struct {
 }
 
 // GetHub returns the StreamHub for frame fan-out.
-func (r *ONVIFRecorder) GetHub() *model.StreamHub { return r.Hub }
+func (r *ONVIFRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
-// SetHub wires the StreamHub for frame fan-out (model.HubHost).
-func (r *ONVIFRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+// SetHub wires the StreamHub for frame fan-out (streamhub.HubHost).
+func (r *ONVIFRecorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *ONVIFRecorder) HubSource() string { return "onvif" }

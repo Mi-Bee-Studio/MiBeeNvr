@@ -10,29 +10,29 @@ import (
 	srt "github.com/datarhei/gosrt"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // Listener manages an SRT listener that accepts incoming connections,
 // maps them to cameras via streamid, and distributes frames via StreamHub.
 type Listener struct {
 	cfg       config.SRTConfig
-	hubs      map[string]*model.StreamHub // camera_id → StreamHub
-	receivers map[string]*Receiver        // camera_id → active receiver
+	hubs      map[string]*streamhub.StreamHub // camera_id → StreamHub
+	receivers map[string]*Receiver            // camera_id → active receiver
 	mu        sync.RWMutex
 	server    *srt.Server
 	running   bool
 
 	// OnConnect is called when a new connection is established.
 	// If nil, the listener auto-creates a StreamHub for unknown cameras.
-	OnConnect func(cameraID string, hub *model.StreamHub)
+	OnConnect func(cameraID string, hub *streamhub.StreamHub)
 
 	// HubProvider returns the shared StreamHub for a camera ID. When set, the
 	// listener uses the hub from the central registry (CameraManager) instead of
 	// a locally-created orphan hub, so pushed frames reach the live consumers
 	// (HLS/WebRTC/FLV/WS) and the IngestRecorder. If nil, the listener falls
 	// back to its internal hubs map (legacy behavior).
-	HubProvider func(cameraID string) *model.StreamHub
+	HubProvider func(cameraID string) *streamhub.StreamHub
 
 	// OnDisconnect is called when a publisher disconnects. Used to notify the
 	// IngestRecorder to close its in-flight segment and return to Idle.
@@ -49,14 +49,14 @@ type Listener struct {
 func NewListener(cfg config.SRTConfig) *Listener {
 	return &Listener{
 		cfg:       cfg,
-		hubs:      make(map[string]*model.StreamHub),
+		hubs:      make(map[string]*streamhub.StreamHub),
 		receivers: make(map[string]*Receiver),
 	}
 }
 
 // registerHub registers a StreamHub for a camera ID.
 // This is used to connect SRT streams to existing camera pipelines.
-func (l *Listener) registerHub(cameraID string, hub *model.StreamHub) {
+func (l *Listener) registerHub(cameraID string, hub *streamhub.StreamHub) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.hubs[cameraID] = hub
@@ -82,7 +82,7 @@ func (l *Listener) addr() net.Addr {
 // HubProvider (the CameraManager's central registry) so pushed frames reach the
 // recorder + live consumers; otherwise it falls back to the local hubs map.
 // Returns nil if neither has a hub. Caller must hold l.mu.
-func (l *Listener) getHubLocked(cameraID string) *model.StreamHub {
+func (l *Listener) getHubLocked(cameraID string) *streamhub.StreamHub {
 	if l.HubProvider != nil {
 		if hub := l.HubProvider(cameraID); hub != nil {
 			return hub
@@ -174,7 +174,7 @@ func (l *Listener) StartCallers() error {
 		if hub == nil {
 			logger.Warn("SRT caller: no hub registered for camera, creating new one",
 				"camera_id", stream.CameraID)
-			hub = model.NewStreamHub()
+			hub = streamhub.New()
 			l.hubs[stream.CameraID] = hub
 		}
 
@@ -214,7 +214,7 @@ func (l *Listener) handleConnect(req srt.ConnRequest) srt.ConnType {
 	// Find or create hub
 	hub := l.getHubLocked(cameraID)
 	if hub == nil {
-		hub = model.NewStreamHub()
+		hub = streamhub.New()
 		l.hubs[cameraID] = hub
 	}
 
@@ -254,7 +254,7 @@ func (l *Listener) handlePublish(conn srt.Conn) {
 	l.mu.Lock()
 	hub := l.getHubLocked(cameraID)
 	if hub == nil {
-		hub = model.NewStreamHub()
+		hub = streamhub.New()
 		l.hubs[cameraID] = hub
 	}
 

@@ -15,6 +15,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var ingestLogger = slog.Default().With("component", "ingest-recorder")
@@ -62,7 +63,7 @@ type IngestRecorder struct {
 	status model.RecorderStatus
 
 	// Hub is set by camera.initStreamHub (same pattern as H264Recorder.Hub).
-	Hub *model.StreamHub
+	Hub *streamhub.StreamHub
 
 	// auAsm regroups delivered NALUs into picture-complete AUs before fan-out
 	// (push publishers disagree on delivery granularity; see AUAssembler).
@@ -125,10 +126,10 @@ func NewIngestRecorder(cfg IngestConfig) *IngestRecorder {
 
 // GetHub returns the StreamHub for frame fan-out (satisfies the hubber interface
 // used by getRecorderHub across the API layer).
-func (r *IngestRecorder) GetHub() *model.StreamHub { return r.Hub }
+func (r *IngestRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
-// SetHub wires the StreamHub for frame fan-out (model.HubHost).
-func (r *IngestRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+// SetHub wires the StreamHub for frame fan-out (streamhub.HubHost).
+func (r *IngestRecorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *IngestRecorder) HubSource() string { return "ingest" }

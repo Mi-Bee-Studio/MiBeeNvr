@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
@@ -92,7 +93,7 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 
 		var codec model.Format
 		var sps, pps, vps []byte
-		var hub *model.StreamHub
+		var hub *streamhub.StreamHub
 		if subSrc != nil {
 			// Sub-stream: parameters come from the pull's SDP/in-band
 			// snapshot; the main recorder need not be running at all.

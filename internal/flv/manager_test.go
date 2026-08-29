@@ -14,6 +14,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // --- Test Helpers ---
@@ -25,9 +26,9 @@ func newTestManager(t *testing.T) *Manager {
 
 // newTestManagerWithHub creates a Manager and a StreamHub for integration testing.
 // The hub is passed to RegisterStream per-stream, not set on the Manager.
-func newTestManagerWithHub(t *testing.T) (*Manager, *model.StreamHub) {
+func newTestManagerWithHub(t *testing.T) (*Manager, *streamhub.StreamHub) {
 	t.Helper()
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	mgr := NewManager(WithMaxViewers(3), withWriteBufSize(10))
 	return mgr, hub
 }
