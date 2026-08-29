@@ -253,36 +253,15 @@ func (r *MJPEGRecorder) setStatus(s model.RecorderStatus) {
 func (r *MJPEGRecorder) run(ctx context.Context) {
 	defer close(r.done)
 	defer r.setStatus(model.StatusStopped)
-	var retryCount int
-	for {
-		err, connected := r.connectAndRecord(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		if connected {
-			retryCount = 0
-			if r.metrics != nil {
-				r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(0)
-			}
-		}
-		retryCount++
-		backoff := TieredBackoffWithJitter(retryCount)
-		storageFailed := isStorageFailed(r.store, r.cfg.CameraID)
-		if storageFailed {
-			backoff = StorageBackoffWithJitter()
-		}
-		if r.metrics != nil {
-			r.metrics.CameraReconnectBackoffSeconds.WithLabelValues(r.cfg.CameraID).Set(backoff.Seconds())
-		}
-		mjpegLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount, "storage_failed", storageFailed)
-		r.recordError("connection")
-		r.setStatus(model.StatusReconnecting)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-	}
+	runReconnectLoop(ctx, reconnectDeps{
+		CameraID:    r.cfg.CameraID,
+		Store:       r.store,
+		Metrics:     r.metrics,
+		Log:         mjpegLogger,
+		Connect:     r.connectAndRecord,
+		RecordError: r.recordError,
+		SetStatus:   r.setStatus,
+	})
 }
 
 func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {

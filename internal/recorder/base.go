@@ -491,9 +491,9 @@ func (b *baseRecorder) setStatus(s model.RecorderStatus) {
 // ---------------------------------------------------------------------------
 
 // run is the template method for the auto-reconnect loop. It wraps
-// connectAndRecord() (provided by the concrete recorder via self) with
-// exponential backoff + jitter. Panic recovery ensures the goroutine never
-// crashes silently.
+// connectAndRecord() (provided by the concrete recorder via self) with the
+// shared runReconnectLoop backoff/state cycle. Panic recovery ensures the
+// goroutine never crashes silently.
 //
 // This method is identical between H.264 and H.265 — the only difference is
 // the logger, which comes from b.log (set by the concrete constructor).
@@ -501,39 +501,15 @@ func (b *baseRecorder) run(ctx context.Context) {
 	defer b.recoverPanic("run")
 	defer close(b.done)
 	defer b.setStatus(model.StatusStopped)
-
-	var retryCount int
-	for {
-		err, connected := b.self.connectAndRecord(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		if connected {
-			retryCount = 0
-			if b.mtrics != nil {
-				b.mtrics.CameraReconnectBackoffSeconds.WithLabelValues(b.cfg.CameraID).Set(0)
-			}
-		}
-		retryCount++
-		backoff := TieredBackoffWithJitter(retryCount)
-		storageFailed := isStorageFailed(b.store, b.cfg.CameraID)
-		if storageFailed {
-			backoff = StorageBackoffWithJitter()
-		}
-		if b.mtrics != nil {
-			b.mtrics.CameraReconnectBackoffSeconds.WithLabelValues(b.cfg.CameraID).Set(backoff.Seconds())
-		}
-		b.log.Error("connection error, reconnecting",
-			"camera_id", b.cfg.CameraID, "error", err,
-			"backoff", backoff, "attempt", retryCount, "storage_failed", storageFailed)
-		b.recordError("connection")
-		b.setStatus(model.StatusReconnecting)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-	}
+	runReconnectLoop(ctx, reconnectDeps{
+		CameraID:    b.cfg.CameraID,
+		Store:       b.store,
+		Metrics:     b.mtrics,
+		Log:         b.log,
+		Connect:     b.self.connectAndRecord,
+		RecordError: b.recordError,
+		SetStatus:   b.setStatus,
+	})
 }
 
 // ---------------------------------------------------------------------------
