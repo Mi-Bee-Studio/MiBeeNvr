@@ -46,21 +46,21 @@ type GB28181Config struct {
 type GB28181Recorder struct {
 	cfg GB28181Config
 	// Hub is set by camera.initStreamHub (same pattern as H264Recorder.Hub).
-	Hub            *streamhub.StreamHub
-	mu             sync.Mutex
-	status         model.RecorderStatus
-	sps, pps, vps  []byte
-	codecType      string
+	Hub             *streamhub.StreamHub
+	mu              sync.Mutex
+	status          model.RecorderStatus
+	sps, pps, vps   []byte
+	codecType       string
 	codecDefinitive bool // codecType came from a parameter-set NALU, not the encoding fallback
-	muxer         *muxer.MP4Muxer
-	trackID       int
-	curTemp       string
-	curFinal      string
-	segStart      time.Time
-	lastFrameTime time.Time
-	frameCount    int
-	ptsBase       int64 // first AU's RTP timestamp (90kHz), PTS origin
-	lastPtsTicks  int64 // last written AU's RTP timestamp (monotonic guard)
+	muxer           *muxer.MP4Muxer
+	trackID         int
+	curTemp         string
+	curFinal        string
+	segStart        time.Time
+	lastFrameTime   time.Time
+	frameCount      int
+	ptsBase         int64 // first AU's RTP timestamp (90kHz), PTS origin
+	lastPtsTicks    int64 // last written AU's RTP timestamp (monotonic guard)
 
 	// Audio state (PS audio demux, #340). The audio track is added lazily on
 	// the first frame — GB28181 streams may start video-only and interleave
