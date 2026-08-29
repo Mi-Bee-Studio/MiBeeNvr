@@ -198,36 +198,28 @@ func (r *TimelapseRecorder) run(ctx context.Context) {
 	defer r.setStatus(model.StatusStopped)
 	defer r.closeCurrentSegment()
 
-	var retryCount int
-	for {
-		streamCtx, streamCancel := context.WithCancel(ctx)
-		r.mu.Lock()
-		r.cancelStream = streamCancel
-		r.mu.Unlock()
-		err, connected := r.connectAndStream(streamCtx)
-		r.mu.Lock()
-		r.cancelStream = nil
-		r.mu.Unlock()
-		streamCancel()
-
-		if ctx.Err() != nil {
-			return
-		}
-		if connected {
-			retryCount = 0
-		}
-		retryCount++
-		backoff := TieredBackoffWithJitter(retryCount)
-		timelapseLogger.Error("stream error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
-		r.recordError("connection")
-		r.setStatus(model.StatusReconnecting)
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-	}
+	runReconnectLoop(ctx, reconnectDeps{
+		CameraID: r.cfg.CameraID,
+		Store:    r.store,
+		Metrics:  r.metrics,
+		Log:      timelapseLogger,
+		Connect: func(streamCtx context.Context) (error, bool) {
+			// Inner cancellable ctx so the idle watchdog can kill just the
+			// current HTTP stream (not the whole reconnect loop).
+			streamCtx, streamCancel := context.WithCancel(streamCtx)
+			r.mu.Lock()
+			r.cancelStream = streamCancel
+			r.mu.Unlock()
+			err, connected := r.connectAndStream(streamCtx)
+			r.mu.Lock()
+			r.cancelStream = nil
+			r.mu.Unlock()
+			streamCancel()
+			return err, connected
+		},
+		RecordError: r.recordError,
+		SetStatus:   r.setStatus,
+	})
 }
 
 func (r *TimelapseRecorder) idleWatchdog(ctx context.Context) {
