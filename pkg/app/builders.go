@@ -29,8 +29,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/sip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
@@ -55,6 +55,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/whip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/mickeyzzc/gb28181-go/platform"
+	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
 )
 
 // buildAppDeps constructs every service dependency and returns it in an
@@ -746,9 +747,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			deps.gb28181Server.OnDeviceOffline(id)
 		})
 		deps.gb28181SessionMgr = newGB28181SessionManager(cfg.GB28181)
-		deps.gb28181Server = sip.NewServer(cfg.GB28181, deps.gb28181DevMgr, deps.gb28181SessionMgr, deps.db)
+		deps.gb28181Server = gbsip.NewServer(gb28181.SIPConfig(cfg.GB28181), deps.gb28181DevMgr, deps.gb28181SessionMgr, gb28181.NewDeviceStore(deps.db))
 		// Alarm notifications surface on the event bus (SSE /api/events).
-		deps.gb28181Server.SetEventBus(deps.eventBus)
+		deps.gb28181Server.SetEventBus(gb28181.NewEventBridge(deps.eventBus))
 		slog.Info("GB28181 SIP server configured", "sip_listen", cfg.GB28181.SIPListen)
 	}
 
@@ -862,7 +863,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		handler.SetGB28181Catalog(platform.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
 		handler.SetGB28181ByeSender(deps.gb28181Server)
-		handler.SetGB28181DeviceMedia(deps.gb28181Server)
+		handler.SetGB28181DeviceMedia(gb28181.ServerAdapter{Server: deps.gb28181Server})
 		handler.SetGB28181Timezone(appLoc)
 		// Auto-create cameras when GB28181 devices register, matching ONVIF auto-add.
 		deps.gb28181Server.SetCameraEnroller(camMgr)
