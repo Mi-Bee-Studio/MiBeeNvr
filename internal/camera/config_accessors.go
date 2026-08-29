@@ -17,13 +17,13 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // GB28181Inviter sends a SIP INVITE to start a media session for a GB28181
@@ -327,7 +327,7 @@ func (cm *CameraManager) OnGB28181Bye(cameraID string) {
 // pipeline — segments on disk, recordings rows, SegmentCompleted events —
 // attributed to cameraID. Independent of the live recorder so live streaming
 // and playback fetching coexist on the same camera.
-func (cm *CameraManager) NewGB28181PlaybackSink(cameraID string) (gb28181.AUWriter, error) {
+func (cm *CameraManager) NewGB28181PlaybackSink(cameraID string) (platform.AUWriter, error) {
 	cam := cm.snapshotConfig(cameraID)
 	if cam == nil || cam.Protocol != string(model.ProtoGB28181) {
 		return nil, fmt.Errorf("camera %q is not a GB28181 camera", cameraID)

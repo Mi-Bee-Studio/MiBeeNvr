@@ -12,9 +12,9 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,9 +32,9 @@ func setupDedupHandler(t *testing.T) *Handler {
 	require.NoError(t, camMgr.Start(ctx))
 	t.Cleanup(func() { _ = camMgr.Stop() })
 
-	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
+	deviceMgr := platform.NewDeviceManager(60 * time.Second)
 	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, nil)
-	deviceMgr.Register(&gb28181.Device{
+	deviceMgr.Register(&platform.Device{
 		ID:      "34020000001310000001",
 		NetAddr: "192.168.63.240:5060",
 	})

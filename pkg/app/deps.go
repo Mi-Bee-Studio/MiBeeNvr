@@ -12,7 +12,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/sip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
@@ -34,6 +33,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/whip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // appDeps holds every manager/handler/router constructed by buildAppDeps and
@@ -89,8 +89,8 @@ type appDeps struct {
 	rtspServer        *rtsp.Server
 	gb28181Server     *sip.Server
 	gb28181Cascade    *cascade.Service
-	gb28181DevMgr     *gb28181.DeviceManager
-	gb28181SessionMgr *gb28181.SessionManager
+	gb28181DevMgr     *platform.DeviceManager
+	gb28181SessionMgr *platform.SessionManager
 
 	// Cleanup
 	cleanupMgr     *cleanup.CleanupManager

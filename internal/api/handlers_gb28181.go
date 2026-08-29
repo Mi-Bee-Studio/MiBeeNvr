@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // --- GB28181 Device Handlers ---
@@ -258,7 +258,7 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if dev.Status.Load() == gb28181.DeviceOffline {
+	if dev.Status.Load() == platform.DeviceOffline {
 		WriteError(w, http.StatusConflict, "device is offline, cannot invite channel")
 		return
 	}
@@ -348,11 +348,11 @@ func (h *Handler) handlePTZChannel(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.gb28181PTZ.SendPTZ(channelID, req.Direction, req.Speed); err != nil {
 		switch {
-		case errors.Is(err, gb28181.ErrChannelNotFound):
+		case errors.Is(err, platform.ErrChannelNotFound):
 			WriteError(w, http.StatusNotFound, err.Error())
-		case errors.Is(err, gb28181.ErrDeviceOffline):
+		case errors.Is(err, platform.ErrDeviceOffline):
 			WriteError(w, http.StatusConflict, err.Error())
-		case errors.Is(err, gb28181.ErrPTZUnsupported), errors.Is(err, gb28181.ErrZoomUnsupported):
+		case errors.Is(err, platform.ErrPTZUnsupported), errors.Is(err, platform.ErrZoomUnsupported):
 			WriteError(w, http.StatusNotFound, "PTZ not supported")
 		default:
 			slog.Error("failed to send GB28181 PTZ command", "channel_id", channelID, "error", err)
@@ -398,14 +398,14 @@ func (h *Handler) handleChannelLensControl(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	switch req.Action {
-	case gb28181.FIIrisClose, gb28181.FIIrisOpen, gb28181.FIFocusNear, gb28181.FIFocusFar, gb28181.FILensStop:
+	case platform.FIIrisClose, platform.FIIrisOpen, platform.FIFocusNear, platform.FIFocusFar, platform.FILensStop:
 	default:
 		WriteError(w, http.StatusBadRequest, "unknown action: iris-open, iris-close, focus-near, focus-far, stop")
 		return
 	}
 	// 0x00 is a valid (slowest) FI speed, so an omitted speed defaults to
 	// mid-range instead of creeping like the PTZ default passthrough does.
-	if req.Speed == 0 && req.Action != gb28181.FILensStop {
+	if req.Speed == 0 && req.Action != platform.FILensStop {
 		req.Speed = 0x40
 	}
 
@@ -413,13 +413,13 @@ func (h *Handler) handleChannelLensControl(w http.ResponseWriter, r *http.Reques
 
 	if err := h.gb28181PTZ.SendFI(channelID, req.Action, req.Speed); err != nil {
 		switch {
-		case errors.Is(err, gb28181.ErrChannelNotFound):
+		case errors.Is(err, platform.ErrChannelNotFound):
 			WriteError(w, http.StatusNotFound, err.Error())
-		case errors.Is(err, gb28181.ErrDeviceOffline):
+		case errors.Is(err, platform.ErrDeviceOffline):
 			WriteError(w, http.StatusConflict, err.Error())
-		case errors.Is(err, gb28181.ErrPTZUnsupported):
+		case errors.Is(err, platform.ErrPTZUnsupported):
 			WriteError(w, http.StatusNotFound, "PTZ not supported")
-		case errors.Is(err, gb28181.ErrZoomUnsupported):
+		case errors.Is(err, platform.ErrZoomUnsupported):
 			WriteError(w, http.StatusNotFound, "lens control not supported")
 		default:
 			slog.Error("failed to send GB28181 lens command", "channel_id", channelID, "error", err)
@@ -465,9 +465,9 @@ func (h *Handler) handleChannelAuxSwitch(w http.ResponseWriter, r *http.Request)
 
 	if err := h.gb28181PTZ.SendAuxSwitch(channelID, byte(req.Switch), req.On); err != nil {
 		switch {
-		case errors.Is(err, gb28181.ErrChannelNotFound):
+		case errors.Is(err, platform.ErrChannelNotFound):
 			WriteError(w, http.StatusNotFound, err.Error())
-		case errors.Is(err, gb28181.ErrDeviceOffline):
+		case errors.Is(err, platform.ErrDeviceOffline):
 			WriteError(w, http.StatusConflict, err.Error())
 		default:
 			slog.Error("failed to send GB28181 aux switch command", "channel_id", channelID, "error", err)
@@ -550,8 +550,8 @@ func (h *Handler) handleGB28181PTZCreatePreset(w http.ResponseWriter, r *http.Re
 	// Best-effort SET on the device: the local row is created regardless —
 	// devices without firmware preset support still get goto/delete commands
 	// once the firmware catches up.
-	if err := h.gb28181PTZ.SendPTZPreset(channelID, gb28181.PresetSet, byte(presetNum)); err != nil &&
-		!errors.Is(err, gb28181.ErrPTZUnsupported) {
+	if err := h.gb28181PTZ.SendPTZPreset(channelID, platform.PresetSet, byte(presetNum)); err != nil &&
+		!errors.Is(err, platform.ErrPTZUnsupported) {
 		h.mapGB28181PTZError(w, err)
 		return
 	}
@@ -582,7 +582,7 @@ func (h *Handler) handleGB28181PTZGoToPreset(w http.ResponseWriter, r *http.Requ
 		WriteError(w, http.StatusBadRequest, "invalid preset token")
 		return
 	}
-	if err := h.gb28181PTZ.SendPTZPreset(channelID, gb28181.PresetCall, byte(presetNum)); err != nil {
+	if err := h.gb28181PTZ.SendPTZPreset(channelID, platform.PresetCall, byte(presetNum)); err != nil {
 		h.mapGB28181PTZError(w, err)
 		return
 	}
@@ -604,8 +604,8 @@ func (h *Handler) handleGB28181PTZDeletePreset(w http.ResponseWriter, r *http.Re
 		WriteError(w, http.StatusBadRequest, "invalid preset token")
 		return
 	}
-	if err := h.gb28181PTZ.SendPTZPreset(channelID, gb28181.PresetDelete, byte(presetNum)); err != nil &&
-		!errors.Is(err, gb28181.ErrPTZUnsupported) {
+	if err := h.gb28181PTZ.SendPTZPreset(channelID, platform.PresetDelete, byte(presetNum)); err != nil &&
+		!errors.Is(err, platform.ErrPTZUnsupported) {
 		h.mapGB28181PTZError(w, err)
 		return
 	}
@@ -621,11 +621,11 @@ func (h *Handler) handleGB28181PTZDeletePreset(w http.ResponseWriter, r *http.Re
 // mapGB28181PTZError maps PTZ controller errors to HTTP status codes.
 func (h *Handler) mapGB28181PTZError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, gb28181.ErrChannelNotFound):
+	case errors.Is(err, platform.ErrChannelNotFound):
 		WriteError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, gb28181.ErrDeviceOffline):
+	case errors.Is(err, platform.ErrDeviceOffline):
 		WriteError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, gb28181.ErrPTZUnsupported), errors.Is(err, gb28181.ErrZoomUnsupported):
+	case errors.Is(err, platform.ErrPTZUnsupported), errors.Is(err, platform.ErrZoomUnsupported):
 		WriteError(w, http.StatusNotFound, "PTZ not supported")
 	default:
 		slog.Error("failed to send GB28181 PTZ command", "error", err)
@@ -970,7 +970,7 @@ func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGB28181TalkStatus(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	if h.gb28181Media == nil {
-		writeJSON(w, http.StatusOK, gb28181.TalkStatus{Active: false})
+		writeJSON(w, http.StatusOK, platform.TalkStatus{Active: false})
 		return
 	}
 	writeJSON(w, http.StatusOK, h.gb28181Media.TalkStatusFor(cameraID))

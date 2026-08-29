@@ -11,7 +11,6 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
@@ -34,8 +33,8 @@ func setupGB28181TestHandler(t *testing.T) *Handler {
 	t.Helper()
 	db, _ := setupTestDB(t)
 
-	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-	sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
+	deviceMgr := platform.NewDeviceManager(60 * time.Second)
+	sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 
 	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 	h.SetGB28181ByeSender(&fakeGBByeSender{})
@@ -317,8 +316,8 @@ func TestAPI_GB28181_CatalogRefresh_MissingDeviceID(t *testing.T) {
 func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 	t.Helper()
 	db, _ := setupTestDB(t)
-	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-	sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
+	deviceMgr := platform.NewDeviceManager(60 * time.Second)
+	sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 
 	ctx := context.Background()
@@ -326,7 +325,7 @@ func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 
 	// Register device in BOTH the DeviceManager (source of truth for liveness)
 	// and the DB (persistence).
-	deviceMgr.Register(&gb28181.Device{ID: "device1", Name: "Test Device", NetAddr: "192.168.1.50:5060"})
+	deviceMgr.Register(&platform.Device{ID: "device1", Name: "Test Device", NetAddr: "192.168.1.50:5060"})
 	_ = h.db.UpsertGB28181Device(ctx, storage.GB28181Device{
 		ID:            "device1",
 		Name:          "Test Device",
@@ -339,7 +338,7 @@ func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 
 	// Wire a fake SIP sender + Catalog controller.
 	sender := &fakePTZSender{}
-	h.SetGB28181Catalog(gb28181.NewCatalogController(deviceMgr, sender))
+	h.SetGB28181Catalog(platform.NewCatalogController(deviceMgr, sender))
 
 	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/devices/device1/catalog-refresh", nil, "", "")
 
@@ -476,16 +475,16 @@ func setupGB28181PTZHandler(t *testing.T) (*Handler, *fakePTZSender) {
 	t.Helper()
 	db, _ := setupTestDB(t)
 
-	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-	sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
+	deviceMgr := platform.NewDeviceManager(60 * time.Second)
+	sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 
-	dev := &gb28181.Device{ID: "34020000001310000001", Name: "Front Gate", NetAddr: "192.168.1.50:5060"}
+	dev := &platform.Device{ID: "34020000001310000001", Name: "Front Gate", NetAddr: "192.168.1.50:5060"}
 	deviceMgr.Register(dev)
-	deviceMgr.RegisterChannel(dev.ID, &gb28181.Channel{ID: "34020000001320000001", Name: "Channel 1", Parental: 1, PTZType: 2})
+	deviceMgr.RegisterChannel(dev.ID, &platform.Channel{ID: "34020000001320000001", Name: "Channel 1", Parental: 1, PTZType: 2})
 
 	sender := &fakePTZSender{}
-	h.SetGB28181PTZ(gb28181.NewPTZController(deviceMgr, sender))
+	h.SetGB28181PTZ(platform.NewPTZController(deviceMgr, sender))
 	return h, sender
 }
 
@@ -580,7 +579,7 @@ func TestAPI_GB28181_PTZ_NotSupported(t *testing.T) {
 	h, _ := setupGB28181PTZHandler(t)
 
 	// Register a second channel on the same device with no PTZ capability.
-	h.gb28181DeviceMgr.RegisterChannel("34020000001310000001", &gb28181.Channel{ID: "34020000001320000002", Name: "No PTZ", Parental: 1, PTZType: 0})
+	h.gb28181DeviceMgr.RegisterChannel("34020000001310000001", &platform.Channel{ID: "34020000001320000002", Name: "No PTZ", Parental: 1, PTZType: 0})
 
 	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/channels/34020000001320000002/ptz", strings.NewReader(`{"direction":"up"}`), "", "")
 
@@ -703,9 +702,9 @@ func TestAPI_GB28181_ListChannels_EnrollBlockedHint(t *testing.T) {
 			}},
 		}
 		camMgr := camera.NewCameraManager(cfg, store, db, "")
-		deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-		deviceMgr.Register(&gb28181.Device{ID: "device1", NetAddr: "192.168.63.240:5060"})
-		sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
+		deviceMgr := platform.NewDeviceManager(60 * time.Second)
+		deviceMgr.Register(&platform.Device{ID: "device1", NetAddr: "192.168.63.240:5060"})
+		sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 		h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 
 		return doRequest(t, h.Routes(), http.MethodGet, "/api/gb28181/devices/device1/channels", nil, "", "")

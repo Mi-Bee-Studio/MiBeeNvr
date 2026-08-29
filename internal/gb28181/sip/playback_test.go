@@ -4,8 +4,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,9 +94,9 @@ func (s *stopCountingSink) Stop() error                                       { 
 func TestCountingSinkForwardsStop(t *testing.T) {
 	inner := &stopCountingSink{}
 	c := &countingSink{inner: inner}
-	st, ok := interface{}(c).(gb28181.Stopper)
+	st, ok := interface{}(c).(platform.Stopper)
 	if !ok {
-		t.Fatal("countingSink must satisfy gb28181.Stopper")
+		t.Fatal("countingSink must satisfy platform.Stopper")
 	}
 	if err := st.Stop(); err != nil {
 		t.Fatal(err)

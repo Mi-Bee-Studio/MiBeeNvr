@@ -7,11 +7,11 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/ghettovoice/gosip/sip/parser"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // readServerRequest reads from the client socket until a server-initiated
@@ -49,7 +49,7 @@ func TestServer_Message_TimeSync_Query(t *testing.T) {
 
 	// NetAddr points at the client socket so the async TimeSync response
 	// MESSAGE is receivable here.
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: client.conn.LocalAddr().String()})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: client.conn.LocalAddr().String()})
 
 	body, err := manscdp.Encode(manscdp.TimeSyncQuery{
 		CmdType:  manscdp.CmdTimeSync,
@@ -80,7 +80,7 @@ func TestServer_Notify_Catalog(t *testing.T) {
 	_, dm := startTestServer(t, cfg)
 	client := newSIPClient(t, cfg.SIPListen)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
 
 	body, err := manscdp.Encode(manscdp.CatalogNotify{
 		CmdType:  manscdp.CmdCatalog,
@@ -119,8 +119,8 @@ func TestServer_Notify_Alarm(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
-	dm.RegisterChannel(testDeviceID, &gb28181.Channel{ID: "34020000001320000021"})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+	dm.RegisterChannel(testDeviceID, &platform.Channel{ID: "34020000001320000021"})
 
 	body, err := manscdp.Encode(manscdp.Alarm{
 		CmdType:          manscdp.CmdAlarm,
@@ -164,7 +164,7 @@ func TestServer_Notify_MobilePosition(t *testing.T) {
 	srv, dm := startTestServer(t, cfg)
 	client := newSIPClient(t, cfg.SIPListen)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
 
 	body, err := manscdp.Encode(manscdp.MobilePosition{
 		CmdType:   manscdp.CmdMobilePosition,

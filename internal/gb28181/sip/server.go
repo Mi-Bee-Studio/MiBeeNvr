@@ -16,7 +16,6 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	gosip "github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/log"
@@ -90,7 +89,7 @@ type CameraEnroller interface {
 	// recording into the normal recordings pipeline for cameraID — used by
 	// playback INVITEs (#337). The sink must also implement Stopper so the
 	// session teardown finalizes the recording.
-	NewGB28181PlaybackSink(cameraID string) (gb28181.AUWriter, error)
+	NewGB28181PlaybackSink(cameraID string) (platform.AUWriter, error)
 	// GB28181PlaybackAudioWriter returns the playback sink's audio writer
 	// (nil when the camera has audio disabled).
 	GB28181PlaybackAudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int)
@@ -127,8 +126,8 @@ type inviteDialog struct {
 // are delegated to the hooks installed by the session manager.
 type Server struct {
 	cfg        config.GB28181ServerConfig
-	deviceMgr  *gb28181.DeviceManager
-	sessionMgr *gb28181.SessionManager
+	deviceMgr  *platform.DeviceManager
+	sessionMgr *platform.SessionManager
 	db         *storage.DB // nil in tests
 
 	gosipSrv gosip.Server
@@ -157,7 +156,7 @@ type Server struct {
 	subMu         sync.Mutex
 	subscriptions map[string]*gbSubscription           // deviceID|subject -> active SUBSCRIBE
 	alarmRing     map[string][]event.GB28181AlarmEvent // deviceID -> latest-first alarms
-	posRing       map[string][]gb28181.GBPosition      // deviceID -> latest-first positions
+	posRing       map[string][]platform.GBPosition     // deviceID -> latest-first positions
 	eventBus      *event.EventBus
 
 	// Talk sessions (#341): channelID -> active voice intercom.
@@ -194,7 +193,7 @@ func (s *Server) gbTZ() *time.Location {
 // parameter persists device registrations and catalog data so the REST API
 // (which reads from the DB) reflects live SIP state; pass nil to skip
 // persistence (test-only).
-func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager, sessionMgr *gb28181.SessionManager, db *storage.DB) *Server {
+func NewServer(cfg config.GB28181ServerConfig, deviceMgr *platform.DeviceManager, sessionMgr *platform.SessionManager, db *storage.DB) *Server {
 	s := &Server{
 		cfg:           cfg,
 		deviceMgr:     deviceMgr,
@@ -206,7 +205,7 @@ func NewServer(cfg config.GB28181ServerConfig, deviceMgr *gb28181.DeviceManager,
 		recordQueries: make(map[string]*pendingRecordQuery),
 		subscriptions: make(map[string]*gbSubscription),
 		alarmRing:     make(map[string][]event.GB28181AlarmEvent),
-		posRing:       make(map[string][]gb28181.GBPosition),
+		posRing:       make(map[string][]platform.GBPosition),
 		talks:         make(map[string]*talkSession),
 		perDeviceMu:   make(map[string]*sync.Mutex),
 	}
@@ -349,7 +348,7 @@ func (s *Server) catalogLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			for _, dev := range s.deviceMgr.AllDevices() {
-				if dev.Status.Load() != gb28181.DeviceOnline {
+				if dev.Status.Load() != platform.DeviceOnline {
 					continue
 				}
 				if err := s.requestCatalog(dev.ID); err != nil {
@@ -436,7 +435,7 @@ func (s *Server) enroller() CameraEnroller {
 }
 
 // SendMessage sends a SIP MESSAGE request carrying the given MANSCDP body to
-// deviceID. It implements gb28181.MessageSender so the PTZ controller can push
+// deviceID. It implements platform.MessageSender so the PTZ controller can push
 // DeviceControl commands to a registered device.
 func (s *Server) SendMessage(deviceID string, body []byte) error {
 	s.mu.Lock()
@@ -638,7 +637,7 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 // recorder-oriented InviteChannel and the sub-stream puller's InviteSubChannel
 // (#560) — the caller supplies the AU/audio callbacks and owns post-answer
 // policy (watchdog, recorder notification, teardown).
-func (s *Server) inviteCore(deviceID string, ch *gb28181.Channel, netAddr, serverHost string, onAU func(au [][]byte, ptsTicks int64, isIDR bool), onAudio platform.AudioFrameHandler) error {
+func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serverHost string, onAU func(au [][]byte, ptsTicks int64, isIDR bool), onAudio platform.AudioFrameHandler) error {
 	channelID := ch.ID
 	sdp, err := s.sessionMgr.Invite(ch, serverHost, netAddr, nil, onAU, onAudio)
 	if err != nil {
@@ -719,7 +718,7 @@ func (s *Server) inviteCore(deviceID string, ch *gb28181.Channel, netAddr, serve
 		}
 		// tcp-active: the device's answer SDP carries its media address —
 		// dial it now that the dialog is confirmed.
-		if s.cfg.MediaTransport == gb28181.MediaTCPActive {
+		if s.cfg.MediaTransport == platform.MediaTCPActive {
 			if err := s.sessionMgr.ConnectActiveTCP(channelID, []byte(resp.Body())); err != nil {
 				slog.Warn("gb28181: tcp-active media connect failed", "channel", channelID, "error", err)
 				_ = s.sessionMgr.Bye(channelID)
@@ -1117,7 +1116,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 				s.sessionMgr.ByeDevice(deviceID)
 			}
 		}
-		s.deviceMgr.Register(&gb28181.Device{
+		s.deviceMgr.Register(&platform.Device{
 			ID:      deviceID,
 			NetAddr: req.Source(),
 		})
@@ -1133,7 +1132,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		_, channelExists := s.deviceMgr.FindChannel(deviceID, deviceID)
 		selfSuperseded := !channelExists && s.deviceHasCatalogChannels(deviceID)
 		if !channelExists && !selfSuperseded {
-			s.deviceMgr.RegisterChannel(deviceID, &gb28181.Channel{
+			s.deviceMgr.RegisterChannel(deviceID, &platform.Channel{
 				ID:       deviceID,
 				DeviceID: deviceID,
 				Name:     "",
@@ -1224,8 +1223,8 @@ func (s *Server) queryDeviceDetails(deviceID string) {
 // requestCatalog sends a MANSCDP Catalog query to an online device.
 func (s *Server) requestCatalog(deviceID string) error {
 	dev, ok := s.deviceMgr.Device(deviceID)
-	if !ok || dev.Status.Load() != gb28181.DeviceOnline {
-		return gb28181.ErrDeviceOffline
+	if !ok || dev.Status.Load() != platform.DeviceOnline {
+		return platform.ErrDeviceOffline
 	}
 	sn := time.Now().UnixNano() % 100000
 	body := []byte(fmt.Sprintf(`<Query><CmdType>Catalog</CmdType><SN>%d</SN><DeviceID>%s</DeviceID></Query>`, sn, deviceID))
@@ -1417,11 +1416,11 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 		// Merge into the existing channel in place where possible so a
 		// catalog refresh updates names/PTZ without resetting the
 		// session status of an inviting/playing channel.
-		status := int32(gb28181.ChannelIdle)
+		status := int32(platform.ChannelIdle)
 		if existing, ok := s.deviceMgr.FindChannel(deviceID, item.DeviceID); ok {
 			status = existing.Status.Load()
 		}
-		ch := &gb28181.Channel{
+		ch := &platform.Channel{
 			ID:       item.DeviceID,
 			Name:     item.Name,
 			Parental: item.Parental,
@@ -1517,9 +1516,9 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 // channelStatusString maps a Channel status atom to its DB/API string.
 func channelStatusString(status int32) string {
 	switch status {
-	case gb28181.ChannelInviting:
+	case platform.ChannelInviting:
 		return "inviting"
-	case gb28181.ChannelPlaying:
+	case platform.ChannelPlaying:
 		return "playing"
 	default:
 		return "idle"
@@ -1553,7 +1552,7 @@ func (s *Server) retireDeviceSelfChannel(deviceID string, items []manscdp.Item) 
 	if !ok {
 		return
 	}
-	if ch.Status.Load() != int32(gb28181.ChannelIdle) {
+	if ch.Status.Load() != int32(platform.ChannelIdle) {
 		return // streaming (or mid-invite): leave it alone
 	}
 	s.deviceMgr.UnregisterChannel(deviceID, deviceID)

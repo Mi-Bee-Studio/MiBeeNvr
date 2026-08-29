@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/ghettovoice/gosip/sip/parser"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -126,7 +126,7 @@ func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 	srv.SetCameraEnroller(fe)
 	client := newSIPClient(t, cfg.SIPListen)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: deviceAddrOf(client)})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: deviceAddrOf(client)})
 
 	const mainCh = "34020000001320000071"
 	sendCatalog(t, client, cfg, []manscdp.Item{{DeviceID: mainCh, Name: "Probe Cam", Parental: 0}})
@@ -218,7 +218,7 @@ func TestProbeSubChannels_VendorGateAutoMode(t *testing.T) {
 	client := newSIPClient(t, cfg.SIPListen)
 
 	// gbsim-like manufacturer — not a known offset vendor.
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: deviceAddrOf(client), Manufacturer: "mibee-rec", Model: "X1"})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: deviceAddrOf(client), Manufacturer: "mibee-rec", Model: "X1"})
 
 	sendCatalog(t, client, cfg, []manscdp.Item{{DeviceID: "34020000001320000081", Name: "Gate Cam", Parental: 0}})
 	time.Sleep(200 * time.Millisecond)
@@ -251,7 +251,7 @@ func TestProbeSubChannels_PersistedCodeReregisters(t *testing.T) {
 	srv.SetCameraEnroller(fe)
 	client := newSIPClient(t, cfg.SIPListen)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: deviceAddrOf(client), Manufacturer: "Hikvision"})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: deviceAddrOf(client), Manufacturer: "Hikvision"})
 
 	sendCatalog(t, client, cfg, []manscdp.Item{{DeviceID: mainCh, Name: "Persist Cam", Parental: 0}})
 

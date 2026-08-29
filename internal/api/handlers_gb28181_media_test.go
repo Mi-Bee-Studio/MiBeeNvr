@@ -21,7 +21,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/gorilla/websocket"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
 	"github.com/mickeyzzc/gb28181-go/platform"
@@ -49,10 +48,10 @@ type fakeGBMedia struct {
 	talkActive   bool
 	talkWritten  [][]byte
 
-	playback *gb28181.PlaybackInfo
+	playback *platform.PlaybackInfo
 
 	alarms    []event.GB28181AlarmEvent
-	positions []gb28181.GBPosition
+	positions []platform.GBPosition
 }
 
 func (f *fakeGBMedia) QueryChannelRecords(_, _ string, _, _ time.Time) ([]manscdp.RecordItem, error) {
@@ -83,11 +82,11 @@ func (f *fakeGBMedia) StopPlayback(string) error {
 	return f.stopErr
 }
 
-func (f *fakeGBMedia) PlaybackStatusFor(channelID string) (gb28181.PlaybackInfo, bool) {
+func (f *fakeGBMedia) PlaybackStatusFor(channelID string) (platform.PlaybackInfo, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.playback == nil {
-		return gb28181.PlaybackInfo{}, false
+		return platform.PlaybackInfo{}, false
 	}
 	return *f.playback, true
 }
@@ -122,15 +121,15 @@ func (f *fakeGBMedia) WriteTalkAudio(_ string, alaw []byte) {
 	f.talkWritten = append(f.talkWritten, append([]byte(nil), alaw...))
 }
 
-func (f *fakeGBMedia) TalkStatusFor(cameraID string) gb28181.TalkStatus {
+func (f *fakeGBMedia) TalkStatusFor(cameraID string) platform.TalkStatus {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return gb28181.TalkStatus{Active: f.talkActive, CameraID: cameraID, Packets: int64(len(f.talkWritten))}
+	return platform.TalkStatus{Active: f.talkActive, CameraID: cameraID, Packets: int64(len(f.talkWritten))}
 }
 
 func (f *fakeGBMedia) GB28181Alarms(string) []event.GB28181AlarmEvent { return f.alarms }
 
-func (f *fakeGBMedia) GB28181Positions(string) []gb28181.GBPosition { return f.positions }
+func (f *fakeGBMedia) GB28181Positions(string) []platform.GBPosition { return f.positions }
 
 func (f *fakeGBMedia) wasStarted() bool    { f.mu.Lock(); defer f.mu.Unlock(); return f.started }
 func (f *fakeGBMedia) wasDownloaded() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.downloaded }
@@ -161,8 +160,8 @@ func newGBMediaEnv(t *testing.T) (*Handler, *fakeGBMedia) {
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
 
-	deviceMgr := gb28181.NewDeviceManager(60 * time.Second)
-	sessionMgr := gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
+	deviceMgr := platform.NewDeviceManager(60 * time.Second)
+	sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 	t.Cleanup(h.Close)
 
@@ -171,10 +170,10 @@ func newGBMediaEnv(t *testing.T) (*Handler, *fakeGBMedia) {
 	// Deterministic timezone for naive device timestamps.
 	h.SetGB28181Timezone(time.UTC)
 
-	dev := &gb28181.Device{ID: gbMediaDeviceID, Name: "Front Gate", NetAddr: "192.168.1.50:5060"}
+	dev := &platform.Device{ID: gbMediaDeviceID, Name: "Front Gate", NetAddr: "192.168.1.50:5060"}
 	deviceMgr.Register(dev)
-	deviceMgr.RegisterChannel(dev.ID, &gb28181.Channel{ID: gbMediaChannelID, Name: "Ch1", Parental: 1, PTZType: 2})
-	deviceMgr.RegisterChannel(dev.ID, &gb28181.Channel{ID: gbMediaZoomOnlyChannel, Name: "Ch2", Parental: 1, PTZType: 1})
+	deviceMgr.RegisterChannel(dev.ID, &platform.Channel{ID: gbMediaChannelID, Name: "Ch1", Parental: 1, PTZType: 2})
+	deviceMgr.RegisterChannel(dev.ID, &platform.Channel{ID: gbMediaZoomOnlyChannel, Name: "Ch2", Parental: 1, PTZType: 1})
 
 	cfg := &config.Config{Cameras: []config.CameraConfig{
 		{
@@ -189,7 +188,7 @@ func newGBMediaEnv(t *testing.T) (*Handler, *fakeGBMedia) {
 	}}
 	cm := camera.NewCameraManager(cfg, store, db, filepath.Join(t.TempDir(), "cameras.yaml"))
 	h.camMgr = cm
-	h.SetGB28181PTZ(gb28181.NewPTZController(deviceMgr, &fakePTZSender{}))
+	h.SetGB28181PTZ(platform.NewPTZController(deviceMgr, &fakePTZSender{}))
 
 	ctx := context.Background()
 	require.NoError(t, db.UpsertCamera(ctx, "gb-cam", "GB Cam", "gb28181", "h264", "", "", "", "", "", "", ""))
@@ -281,7 +280,7 @@ func TestGBChannelPlaybackLifecycle(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &idle))
 	require.False(t, idle.Active)
 
-	media.playback = &gb28181.PlaybackInfo{Active: true, Kind: "playback", ChannelID: gbMediaChannelID, Frames: 42, Paused: true, Scale: 2}
+	media.playback = &platform.PlaybackInfo{Active: true, Kind: "playback", ChannelID: gbMediaChannelID, Frames: 42, Paused: true, Scale: 2}
 	w = gbDo(t, h, http.MethodGet, path, "")
 	require.Equal(t, http.StatusOK, w.Code)
 	var active struct {
@@ -335,7 +334,7 @@ func TestGBTalkStatusAlarmsPositions(t *testing.T) {
 	h, media := newGBMediaEnv(t)
 
 	media.alarms = []event.GB28181AlarmEvent{{DeviceID: gbMediaDeviceID}}
-	media.positions = []gb28181.GBPosition{{DeviceID: gbMediaDeviceID, Longitude: "116.4", Latitude: "39.9"}}
+	media.positions = []platform.GBPosition{{DeviceID: gbMediaDeviceID, Longitude: "116.4", Latitude: "39.9"}}
 
 	w := gbDo(t, h, http.MethodGet, "/api/cameras/gb-cam/gb28181/talk/status", "")
 	require.Equal(t, http.StatusOK, w.Code)

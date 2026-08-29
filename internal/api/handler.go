@@ -17,7 +17,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -33,6 +32,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/go-chi/chi/v5"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 var logger = slog.Default().With("component", "api")
@@ -176,13 +176,13 @@ type Handler struct {
 	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
 	frameListMu       sync.Mutex
 	frameListCache    map[string]*frameListEntry
-	gb28181DeviceMgr  *gb28181.DeviceManager
-	gb28181SessionMgr *gb28181.SessionManager
+	gb28181DeviceMgr  *platform.DeviceManager
+	gb28181SessionMgr *platform.SessionManager
 	// Storage-migration (handlers_storage_migrate.go): the background
 	// idle-time migrator service. Nil in tests — the endpoints degrade.
 	migrationMgr   StorageMigrator
-	gb28181PTZ     *gb28181.PTZController
-	gb28181Catalog *gb28181.CatalogController
+	gb28181PTZ     *platform.PTZController
+	gb28181Catalog *platform.CatalogController
 	gb28181Inviter GB28181InviteSender
 	gb28181Bye     GB28181ByeSender
 	gb28181Cascade GB28181CascadeStatus
@@ -206,7 +206,7 @@ type frameListEntry struct {
 // pick up new frames promptly but long enough to collapse a burst of requests.
 const frameListCacheTTL = 500 * time.Millisecond
 
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *gb28181.DeviceManager, gb28181SessionMgr *gb28181.SessionManager) *Handler {
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *platform.DeviceManager, gb28181SessionMgr *platform.SessionManager) *Handler {
 	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, vodMgr: vod.NewManager()}
 }
 
@@ -795,13 +795,13 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetGB28181PTZ wires the GB28181 PTZ controller for the channel PTZ endpoint.
-func (h *Handler) SetGB28181PTZ(ptz *gb28181.PTZController) {
+func (h *Handler) SetGB28181PTZ(ptz *platform.PTZController) {
 	h.gb28181PTZ = ptz
 }
 
 // SetGB28181Catalog wires the GB28181 catalog controller for the device
 // catalog-refresh endpoint.
-func (h *Handler) SetGB28181Catalog(c *gb28181.CatalogController) {
+func (h *Handler) SetGB28181Catalog(c *platform.CatalogController) {
 	h.gb28181Catalog = c
 }
 
@@ -864,7 +864,7 @@ type GB28181DeviceMedia interface {
 	// StopPlayback stops a fetch (SIP BYE + finalize).
 	StopPlayback(channelID string) error
 	// PlaybackStatusFor reports fetch progress (ok=false when idle).
-	PlaybackStatusFor(channelID string) (gb28181.PlaybackInfo, bool)
+	PlaybackStatusFor(channelID string) (platform.PlaybackInfo, bool)
 	// PlaybackControl sends a MANSRTSP control (pause/resume/seek).
 	PlaybackControl(channelID, action string, scale, position float64) error
 	// StartTalk establishes a voice intercom with a channel (audio-only
@@ -875,11 +875,11 @@ type GB28181DeviceMedia interface {
 	// WriteTalkAudio packetizes one G.711 A-law frame to the device.
 	WriteTalkAudio(channelID string, alaw []byte)
 	// TalkStatusFor reports the intercom state of a camera.
-	TalkStatusFor(cameraID string) gb28181.TalkStatus
+	TalkStatusFor(cameraID string) platform.TalkStatus
 	// GB28181Alarms returns the device's recent alarms (latest first).
 	GB28181Alarms(deviceID string) []event.GB28181AlarmEvent
 	// GB28181Positions returns the device's recent mobile positions.
-	GB28181Positions(deviceID string) []gb28181.GBPosition
+	GB28181Positions(deviceID string) []platform.GBPosition
 }
 
 // SetGB28181DeviceMedia wires the SIP server for the device-recording

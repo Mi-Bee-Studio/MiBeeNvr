@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	gosip "github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
@@ -46,7 +45,7 @@ type pendingRecordQuery struct {
 
 // countingSink wraps a playback AUWriter with progress counters.
 type countingSink struct {
-	inner   gb28181.AUWriter
+	inner   platform.AUWriter
 	frames  atomic.Int64
 	lastPTS atomic.Int64
 }
@@ -56,7 +55,7 @@ type countingSink struct {
 // recordQueryTimeout elapses). Returns the accumulated items.
 func (s *Server) QueryChannelRecords(deviceID, channelID string, start, end time.Time) ([]manscdp.RecordItem, error) {
 	dev, ok := s.deviceMgr.Device(deviceID)
-	if !ok || dev.Status.Load() != gb28181.DeviceOnline {
+	if !ok || dev.Status.Load() != platform.DeviceOnline {
 		return nil, fmt.Errorf("gb28181: device %q not online", deviceID)
 	}
 
@@ -168,7 +167,7 @@ func (s *Server) startFetch(deviceID, channelID string, start, end time.Time, do
 
 	// Resolve the bound camera so the fetched recording attaches to it.
 	var cameraID string
-	var sink gb28181.AUWriter
+	var sink platform.AUWriter
 	var audioSink func(codec string, data, config []byte, ptsTicks int64, samples int)
 	enrol := s.enroller()
 	if enrol != nil {
@@ -382,16 +381,16 @@ func (s *Server) StopPlayback(channelID string) error {
 }
 
 // PlaybackStatusFor reports the fetch state for a channel.
-func (s *Server) PlaybackStatusFor(channelID string) (gb28181.PlaybackInfo, bool) {
+func (s *Server) PlaybackStatusFor(channelID string) (platform.PlaybackInfo, bool) {
 	s.pbMu.Lock()
 	st, ok := s.playbacks[channelID]
 	s.pbMu.Unlock()
 	if !ok {
-		return gb28181.PlaybackInfo{Active: false, ChannelID: channelID}, false
+		return platform.PlaybackInfo{Active: false, ChannelID: channelID}, false
 	}
-	var status gb28181.PlaybackInfo
+	var status platform.PlaybackInfo
 	s.pbMu.Lock()
-	status = gb28181.PlaybackInfo{
+	status = platform.PlaybackInfo{
 		Active:       true,
 		Kind:         st.kind,
 		ChannelID:    channelID,
@@ -579,7 +578,7 @@ func (c *countingSink) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 // a full-speed download finishes inside one segment and would persist
 // NOTHING (#378 live repro: 0-byte .tmp, no recordings row).
 func (c *countingSink) Stop() error {
-	if s, ok := c.inner.(gb28181.Stopper); ok {
+	if s, ok := c.inner.(platform.Stopper); ok {
 		return s.Stop()
 	}
 	return nil

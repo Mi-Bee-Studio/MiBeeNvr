@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 	"github.com/go-chi/chi/v5"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // --- ONVIF camera management endpoints ---
@@ -229,19 +229,19 @@ func (h *Handler) handleGB28181PTZMove(w http.ResponseWriter, r *http.Request, c
 	const speed = byte(128)
 	switch {
 	case zoom > 0:
-		h.sendGB28181PTZ(w, channelID, gb28181.DirZoomIn, speed)
+		h.sendGB28181PTZ(w, channelID, platform.DirZoomIn, speed)
 	case zoom < 0:
-		h.sendGB28181PTZ(w, channelID, gb28181.DirZoomOut, speed)
+		h.sendGB28181PTZ(w, channelID, platform.DirZoomOut, speed)
 	case tilt > 0:
-		h.sendGB28181PTZ(w, channelID, gb28181.DirUp, speed)
+		h.sendGB28181PTZ(w, channelID, platform.DirUp, speed)
 	case tilt < 0:
-		h.sendGB28181PTZ(w, channelID, gb28181.DirDown, speed)
+		h.sendGB28181PTZ(w, channelID, platform.DirDown, speed)
 	case pan > 0:
-		h.sendGB28181PTZ(w, channelID, gb28181.DirRight, speed)
+		h.sendGB28181PTZ(w, channelID, platform.DirRight, speed)
 	case pan < 0:
-		h.sendGB28181PTZ(w, channelID, gb28181.DirLeft, speed)
+		h.sendGB28181PTZ(w, channelID, platform.DirLeft, speed)
 	default:
-		h.sendGB28181PTZ(w, channelID, gb28181.DirStop, 0)
+		h.sendGB28181PTZ(w, channelID, platform.DirStop, 0)
 	}
 }
 
@@ -256,7 +256,7 @@ func (h *Handler) handleGB28181PTZStop(w http.ResponseWriter, r *http.Request, c
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
-	h.sendGB28181PTZ(w, channelID, gb28181.DirStop, 0)
+	h.sendGB28181PTZ(w, channelID, platform.DirStop, 0)
 }
 
 // gb28181ChannelID resolves the camera's configured GB28181 channel binding.
@@ -274,11 +274,11 @@ func (h *Handler) gb28181ChannelID(cameraID string) string {
 func (h *Handler) sendGB28181PTZ(w http.ResponseWriter, channelID, direction string, speed byte) {
 	if err := h.gb28181PTZ.SendPTZ(channelID, direction, speed); err != nil {
 		switch {
-		case errors.Is(err, gb28181.ErrChannelNotFound):
+		case errors.Is(err, platform.ErrChannelNotFound):
 			WriteError(w, http.StatusNotFound, err.Error())
-		case errors.Is(err, gb28181.ErrDeviceOffline):
+		case errors.Is(err, platform.ErrDeviceOffline):
 			WriteError(w, http.StatusConflict, err.Error())
-		case errors.Is(err, gb28181.ErrPTZUnsupported), errors.Is(err, gb28181.ErrZoomUnsupported):
+		case errors.Is(err, platform.ErrPTZUnsupported), errors.Is(err, platform.ErrZoomUnsupported):
 			WriteError(w, http.StatusNotFound, "PTZ not supported")
 		default:
 			logger.Error("failed to send GB28181 PTZ command", "channel_id", channelID, "error", err)

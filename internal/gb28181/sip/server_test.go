@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
@@ -58,11 +57,11 @@ var testPortBase atomic.Int32
 
 // startTestServer starts a Server on the config's address and registers a
 // cleanup that stops it.
-func startTestServer(t *testing.T, cfg config.GB28181ServerConfig) (*Server, *gb28181.DeviceManager) {
+func startTestServer(t *testing.T, cfg config.GB28181ServerConfig) (*Server, *platform.DeviceManager) {
 	t.Helper()
 	base := int(20000 + 100*testPortBase.Add(1))
-	dm := gb28181.NewDeviceManager(60 * time.Second)
-	srv := NewServer(cfg, dm, gb28181.NewSessionManager(platform.NewPortManager(uint16(base), uint16(base+99)), cfg.ServerID), nil)
+	dm := platform.NewDeviceManager(60 * time.Second)
+	srv := NewServer(cfg, dm, platform.NewSessionManager(platform.NewPortManager(uint16(base), uint16(base+99)), cfg.ServerID), nil)
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -236,7 +235,7 @@ func getChallenge(t *testing.T, res sip.Response) *sip.GenericHeader {
 }
 
 func TestServer_Name(t *testing.T) {
-	srv := NewServer(config.GB28181ServerConfig{}, gb28181.NewDeviceManager(time.Minute), gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), ""), nil)
+	srv := NewServer(config.GB28181ServerConfig{}, platform.NewDeviceManager(time.Minute), platform.NewSessionManager(platform.NewPortManager(30000, 30100), ""), nil)
 	if got := srv.Name(); got != "gb28181" {
 		t.Fatalf("Name() = %q, want %q", got, "gb28181")
 	}
@@ -286,7 +285,7 @@ func TestServer_Register_Flow(t *testing.T) {
 	if !ok {
 		t.Fatalf("device %s not registered", testDeviceID)
 	}
-	if dev.Status.Load() != gb28181.DeviceOnline {
+	if dev.Status.Load() != platform.DeviceOnline {
 		t.Fatalf("device status = %d, want online", dev.Status.Load())
 	}
 	dev.Mu.RLock()
@@ -378,7 +377,7 @@ func TestServer_Message_Keepalive(t *testing.T) {
 	client := newSIPClient(t, cfg.SIPListen)
 
 	// Register the device directly (MESSAGE bodies are not authenticated).
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
 
 	body, err := manscdp.Encode(manscdp.Keepalive{
 		CmdType:  manscdp.CmdKeepalive,
@@ -399,7 +398,7 @@ func TestServer_Message_Keepalive(t *testing.T) {
 	if !ok {
 		t.Fatalf("device not registered")
 	}
-	if dev.Status.Load() != gb28181.DeviceOnline {
+	if dev.Status.Load() != platform.DeviceOnline {
 		t.Fatalf("device status = %d, want online", dev.Status.Load())
 	}
 }
@@ -409,7 +408,7 @@ func TestServer_Message_Catalog(t *testing.T) {
 	_, dm := startTestServer(t, cfg)
 	client := newSIPClient(t, cfg.SIPListen)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
 
 	body, err := manscdp.Encode(manscdp.Catalog{
 		CmdType:  manscdp.CmdCatalog,
@@ -445,7 +444,7 @@ func TestServer_Message_DeviceInfo(t *testing.T) {
 	_, dm := startTestServer(t, cfg)
 	client := newSIPClient(t, cfg.SIPListen)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
 
 	body, err := manscdp.Encode(manscdp.DeviceInfo{
 		CmdType:      manscdp.CmdDeviceInfo,
@@ -634,7 +633,7 @@ type fakeEnroller struct {
 	subPersisted map[string]string
 	// pbSink, when non-nil, is returned by NewGB28181PlaybackSink (playback
 	// fetch tests).
-	pbSink gb28181.AUWriter
+	pbSink platform.AUWriter
 	// naluWriter, when non-nil, is returned by GB28181NALUWriter (live
 	// InviteChannel tests).
 	naluWriter func(au [][]byte, ptsTicks int64, isIDR bool)
@@ -664,7 +663,7 @@ func (f *fakeEnroller) GB28181AudioWriter(string) func(string, []byte, []byte, i
 }
 func (f *fakeEnroller) OnGB28181Invite(string) {}
 func (f *fakeEnroller) OnGB28181Bye(string)    {}
-func (f *fakeEnroller) NewGB28181PlaybackSink(string) (gb28181.AUWriter, error) {
+func (f *fakeEnroller) NewGB28181PlaybackSink(string) (platform.AUWriter, error) {
 	if f.pbSink != nil {
 		return f.pbSink, nil
 	}
@@ -711,8 +710,8 @@ func TestServer_Register_SkipsDeviceSelfWhenCatalogChannelsPersisted(t *testing.
 	require.NoError(t, db.Init(context.Background()))
 	t.Cleanup(func() { _ = db.Close() })
 
-	dm := gb28181.NewDeviceManager(60 * time.Second)
-	srv := NewServer(cfg, dm, gb28181.NewSessionManager(platform.NewPortManager(30000, 30100), cfg.ServerID), db)
+	dm := platform.NewDeviceManager(60 * time.Second)
+	srv := NewServer(cfg, dm, platform.NewSessionManager(platform.NewPortManager(30000, 30100), cfg.ServerID), db)
 	require.NoError(t, srv.Start(context.Background()))
 	t.Cleanup(func() { _ = srv.Stop() })
 
@@ -746,8 +745,8 @@ func TestRetireDeviceSelfChannel(t *testing.T) {
 	fe := &fakeEnroller{}
 	srv.SetCameraEnroller(fe)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:60000"})
-	dm.RegisterChannel(testDeviceID, &gb28181.Channel{ID: testDeviceID, DeviceID: testDeviceID})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:60000"})
+	dm.RegisterChannel(testDeviceID, &platform.Channel{ID: testDeviceID, DeviceID: testDeviceID})
 
 	srv.mergeCatalogChannels(testDeviceID, []manscdp.Item{
 		{DeviceID: testDeviceID + "1", Name: "Real Channel"},
@@ -768,17 +767,17 @@ func TestRetireDeviceSelfChannel_KeptWhenStreamingOrListed(t *testing.T) {
 	srv.SetCameraEnroller(fe)
 
 	// Playing device-self: kept.
-	dm.Register(&gb28181.Device{ID: "dev-a", NetAddr: "127.0.0.1:60001"})
-	chA := &gb28181.Channel{ID: "dev-a", DeviceID: "dev-a"}
-	chA.Status.Store(int32(gb28181.ChannelPlaying))
+	dm.Register(&platform.Device{ID: "dev-a", NetAddr: "127.0.0.1:60001"})
+	chA := &platform.Channel{ID: "dev-a", DeviceID: "dev-a"}
+	chA.Status.Store(int32(platform.ChannelPlaying))
 	dm.RegisterChannel("dev-a", chA)
 	srv.mergeCatalogChannels("dev-a", []manscdp.Item{{DeviceID: "dev-a-ch1"}})
 	_, ok := dm.FindChannel("dev-a", "dev-a")
 	require.True(t, ok, "playing device-self channel must be kept")
 
 	// Catalog lists the device ID itself: kept.
-	dm.Register(&gb28181.Device{ID: "dev-b", NetAddr: "127.0.0.1:60002"})
-	dm.RegisterChannel("dev-b", &gb28181.Channel{ID: "dev-b", DeviceID: "dev-b"})
+	dm.Register(&platform.Device{ID: "dev-b", NetAddr: "127.0.0.1:60002"})
+	dm.RegisterChannel("dev-b", &platform.Channel{ID: "dev-b", DeviceID: "dev-b"})
 	srv.mergeCatalogChannels("dev-b", []manscdp.Item{{DeviceID: "dev-b"}})
 	_, ok = dm.FindChannel("dev-b", "dev-b")
 	require.True(t, ok, "device-self listed in catalog must be kept")
@@ -792,8 +791,8 @@ func TestRetireDeviceSelfChannel_NoRealChannels(t *testing.T) {
 	srv, dm := startTestServer(t, cfg)
 	srv.SetCameraEnroller(&fakeEnroller{})
 
-	dm.Register(&gb28181.Device{ID: "dev-c", NetAddr: "127.0.0.1:60003"})
-	dm.RegisterChannel("dev-c", &gb28181.Channel{ID: "dev-c", DeviceID: "dev-c"})
+	dm.Register(&platform.Device{ID: "dev-c", NetAddr: "127.0.0.1:60003"})
+	dm.RegisterChannel("dev-c", &platform.Channel{ID: "dev-c", DeviceID: "dev-c"})
 	srv.mergeCatalogChannels("dev-c", []manscdp.Item{{DeviceID: "org-1", Parental: 1}})
 	_, ok := dm.FindChannel("dev-c", "dev-c")
 	require.True(t, ok, "parental-only catalog must not retire the device-self channel")
@@ -831,8 +830,8 @@ func TestServer_InviteChannel_DefersWhenRecorderNotRunning(t *testing.T) {
 	srv, dm := startTestServer(t, cfg)
 
 	const chID = "34020000001320000021"
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
-	dm.RegisterChannel(testDeviceID, &gb28181.Channel{DeviceID: testDeviceID, ID: chID})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+	dm.RegisterChannel(testDeviceID, &platform.Channel{DeviceID: testDeviceID, ID: chID})
 
 	// Bound camera (fakeEnroller resolves the binding) but no recorder:
 	// GB28181NALUWriter always returns nil.

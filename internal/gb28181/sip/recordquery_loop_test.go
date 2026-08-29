@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,10 +23,10 @@ func TestQueryChannelRecordsLoopback(t *testing.T) {
 	srv, dm := startTestServer(t, cfg)
 	client := newSIPClient(t, cfg.SIPListen)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: client.conn.LocalAddr().String()})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: client.conn.LocalAddr().String()})
 	dev, ok := dm.Device(testDeviceID)
 	require.True(t, ok)
-	dev.Status.Store(gb28181.DeviceOnline)
+	dev.Status.Store(platform.DeviceOnline)
 
 	start := time.Now().Add(-2 * time.Hour)
 	end := start.Add(time.Hour)
