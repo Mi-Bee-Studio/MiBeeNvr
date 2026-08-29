@@ -73,8 +73,12 @@ func TestCascadeSourceHub(t *testing.T) {
 	mgr, _, db, _ := newTestManager(t)
 	src := NewCascadeSource(mgr, db)
 	require.Nil(t, src.Hub("no-such"))
-	h := mgr.GetOrCreateHub("cam-h264")
-	require.Same(t, h, src.Hub("cam-h264"))
+	mgr.GetOrCreateHub("cam-h264")
+	h1 := src.Hub("cam-h264")
+	require.NotNil(t, h1)
+	// The cascade gets a process-lifetime FrameHub mirror (not the raw NVR
+	// stream hub); repeated calls return the SAME mirror via the bridge cache.
+	require.Same(t, h1, src.Hub("cam-h264"))
 }
 
 func TestSetHealthManager(t *testing.T) {

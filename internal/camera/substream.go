@@ -13,11 +13,12 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
+	"github.com/mickeyzzc/gb28181-go/platform"
+	gbcascade "github.com/mickeyzzc/gb28181-go/platform/cascade"
 )
 
 // resolveSubTarget implements the substream.Resolver contract against camera
@@ -144,16 +145,23 @@ func subReadyTimeoutS(cfg *config.Config) int {
 
 // NewCascadeSubAcquirer adapts the manager's sub-stream tier to the cascade
 // client's SubStreamAcquirer (#512): one cascade INVITE holds one reference.
-func NewCascadeSubAcquirer(cm *CameraManager) cascade.SubStreamAcquirer {
+func NewCascadeSubAcquirer(cm *CameraManager) gbcascade.SubStreamAcquirer {
 	return cascadeSubAcquirer{cm: cm}
 }
 
 type cascadeSubAcquirer struct{ cm *CameraManager }
 
-func (a cascadeSubAcquirer) AcquireSubHub(ctx context.Context, cameraID string) (*streamhub.StreamHub, func(), error) {
+func (a cascadeSubAcquirer) AcquireSubHub(ctx context.Context, cameraID string) (*platform.FrameHub, func(), error) {
 	src, err := a.cm.AcquireSubStream(ctx, cameraID)
 	if err != nil {
 		return nil, nil, err
 	}
-	return src.Hub(), func() { a.cm.ReleaseSubStream(cameraID) }, nil
+	// The sub hub is short-lived (one INVITE holds one reference): the
+	// forwarding bridge detaches with the sub-stream release.
+	libHub, detachBridge := gb28181.BridgeSubHub(src.Hub(), "cascade-sub-"+cameraID)
+	release := func() {
+		detachBridge()
+		a.cm.ReleaseSubStream(cameraID)
+	}
+	return libHub, release, nil
 }

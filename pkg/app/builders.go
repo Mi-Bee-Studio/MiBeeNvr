@@ -30,7 +30,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
@@ -55,6 +54,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/whip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/mickeyzzc/gb28181-go/platform"
+	gbcascade "github.com/mickeyzzc/gb28181-go/platform/cascade"
 	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
 )
 
@@ -757,7 +757,8 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// to the configured upper platform as a lower-level device; cameras are
 	// aggregated into its catalog and forwarded (PS mux) on INVITE.
 	if cfg.GB28181Cascade.Enabled {
-		deps.gb28181Cascade = cascade.New(cfg.GB28181Cascade, camera.NewCascadeSource(camMgr, db), db)
+		deps.gb28181Cascade = gbcascade.New(gb28181.CascadeConfig(cfg.GB28181Cascade), camera.NewCascadeSource(camMgr, db), gb28181.NewCascadeStore(db))
+		deps.gb28181Cascade.SetSegmentParser(gb28181.SegmentParser())
 		deps.gb28181Cascade.SetSubStreamAcquirer(camera.NewCascadeSubAcquirer(camMgr))
 		slog.Info("GB28181 cascade client configured",
 			"upper", cfg.GB28181Cascade.ServerAddr, "device", cfg.GB28181Cascade.LocalDeviceID)

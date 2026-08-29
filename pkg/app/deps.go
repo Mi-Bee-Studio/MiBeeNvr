@@ -12,7 +12,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
@@ -33,6 +32,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/whip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
 	"github.com/mickeyzzc/gb28181-go/platform"
+	gbcascade "github.com/mickeyzzc/gb28181-go/platform/cascade"
 	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
 )
 
@@ -88,7 +88,7 @@ type appDeps struct {
 	whipServer        *whip.Server
 	rtspServer        *rtsp.Server
 	gb28181Server     *gbsip.Server
-	gb28181Cascade    *cascade.Service
+	gb28181Cascade    *gbcascade.Service
 	gb28181DevMgr     *platform.DeviceManager
 	gb28181SessionMgr *platform.SessionManager
 
