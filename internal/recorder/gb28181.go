@@ -119,6 +119,12 @@ func (r *GB28181Recorder) GetHub() *model.StreamHub {
 	return r.Hub
 }
 
+// SetHub wires the StreamHub for frame fan-out (model.HubHost).
+func (r *GB28181Recorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+
+// HubSource labels the hub for the flow-path observability view.
+func (r *GB28181Recorder) HubSource() string { return "gb28181" }
+
 func (r *GB28181Recorder) CodecParams() (codec model.Format, sps, pps, vps []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

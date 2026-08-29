@@ -130,6 +130,12 @@ func jpegDimensions(data []byte) (width, height int, ok bool) {
 // GetHub returns the StreamHub for frame fan-out.
 func (r *MJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
 
+// SetHub wires the StreamHub for frame fan-out (model.HubHost).
+func (r *MJPEGRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+
+// HubSource labels the hub for the flow-path observability view.
+func (r *MJPEGRecorder) HubSource() string { return "mjpeg" }
+
 // LatestFrame returns the most recently decoded JPEG frame WITHOUT copying.
 // The returned slice is shared and must be treated as read-only by callers.
 // Returns nil if no frame has been decoded yet. Safe for concurrent use.

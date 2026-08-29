@@ -13,6 +13,16 @@ type Recorder interface {
 	Status() RecorderStatus
 }
 
+// HubHost is an optional interface implemented by recorders that carry a
+// StreamHub for frame fan-out. The camera manager wires a fresh hub via
+// SetHub at recorder creation; HubSource labels the hub for the flow-path
+// observability view. Adding a new recorder type means implementing this
+// interface on the type itself — no camera-manager type switch to extend.
+type HubHost interface {
+	SetHub(hub *StreamHub)
+	HubSource() string
+}
+
 // HLSProvider is an optional interface that recorders can implement
 // to support HLS live streaming. The api handler uses this interface
 // to obtain codec parameters for starting an HLS stream.

@@ -171,6 +171,9 @@ func (r *H264Recorder) Status() model.RecorderStatus {
 // GetHub returns the StreamHub for frame fan-out.
 func (r *H264Recorder) GetHub() *model.StreamHub { return r.Hub }
 
+// HubSource labels the hub for the flow-path observability view.
+func (r *H264Recorder) HubSource() string { return "h264" }
+
 // SPS returns the current H264 Sequence Parameter Set NAL unit (without start bytes).
 // Reads the atomic codec snapshot — safe for concurrent live-preview reads (#219).
 func (r *H264Recorder) SPS() []byte { s, _, _ := r.codecSnapshot(); return s }

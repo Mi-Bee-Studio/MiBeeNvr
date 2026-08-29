@@ -77,6 +77,12 @@ type TimelapseRecorder struct {
 // GetHub returns the StreamHub for frame fan-out (nil for timelapse — no live streaming).
 func (r *TimelapseRecorder) GetHub() *model.StreamHub { return r.Hub }
 
+// SetHub wires the StreamHub for frame fan-out (model.HubHost).
+func (r *TimelapseRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+
+// HubSource labels the hub for the flow-path observability view.
+func (r *TimelapseRecorder) HubSource() string { return "timelapse" }
+
 // incActive increments the active recordings gauge if metrics is available.
 func (r *TimelapseRecorder) incActive() {
 	if r.metrics != nil {

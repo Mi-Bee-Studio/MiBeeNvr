@@ -193,6 +193,12 @@ var _ model.Recorder = (*XiaomiRecorder)(nil)
 // GetHub returns the StreamHub for frame fan-out.
 func (r *XiaomiRecorder) GetHub() *model.StreamHub { return r.Hub }
 
+// SetHub wires the StreamHub for frame fan-out (model.HubHost).
+func (r *XiaomiRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+
+// HubSource labels the hub for the flow-path observability view.
+func (r *XiaomiRecorder) HubSource() string { return "xiaomi" }
+
 // SPS returns the current H.264/H.265 SPS NAL unit (without start bytes).
 func (r *XiaomiRecorder) SPS() []byte { return r.sps }
 

@@ -83,6 +83,12 @@ type HTTPJPEGRecorder struct {
 // GetHub returns the StreamHub for frame fan-out.
 func (r *HTTPJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
 
+// SetHub wires the StreamHub for frame fan-out (model.HubHost).
+func (r *HTTPJPEGRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+
+// HubSource labels the hub for the flow-path observability view.
+func (r *HTTPJPEGRecorder) HubSource() string { return "http-jpeg" }
+
 // StreamURL returns the MJPEG stream URL.
 func (r *HTTPJPEGRecorder) StreamURL() string { return r.cfg.URL }
 

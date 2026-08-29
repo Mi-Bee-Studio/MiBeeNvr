@@ -363,6 +363,10 @@ type codecParams struct {
 // single writer path (writeFrames via the driver's handleParamSet, and the SDP
 // pre-seed in connectAndRecord) — concurrent callers must not interleave
 // partial updates; build the full triplet first, then Store.
+// SetHub wires the StreamHub for frame fan-out (model.HubHost); shared by
+// every recorder embedding baseRecorder. HubSource stays leaf-specific.
+func (b *baseRecorder) SetHub(hub *model.StreamHub) { b.Hub = hub }
+
 func (b *baseRecorder) setCodecParams(sps, pps, vps []byte) {
 	b.codec.Store(&codecParams{
 		sps: append([]byte(nil), sps...),
