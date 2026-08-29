@@ -10,7 +10,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
 // StreamHandler is a protocol-agnostic interface for live streaming handlers.
@@ -311,28 +310,12 @@ func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byt
 	return
 }
 
-// getStreamHub extracts the StreamHub from a recorder.
-// Returns nil if the recorder doesn't have a Hub or it's not set.
+// getStreamHub extracts the StreamHub from a recorder via the GetHub()
+// interface (implemented by every recorder type). Returns nil if the recorder
+// doesn't implement it or the hub is not set.
 func getStreamHub(rec model.Recorder) *model.StreamHub {
 	if h, ok := rec.(interface{ GetHub() *model.StreamHub }); ok {
 		return h.GetHub()
-	}
-	actualRec := unwrapDelegate(rec)
-	switch r := actualRec.(type) {
-	case *recorder.H264Recorder:
-		return r.Hub
-	case *recorder.H265Recorder:
-		return r.Hub
-	case *recorder.MJPEGRecorder:
-		return r.Hub
-	case *recorder.HTTPJPEGRecorder:
-		return r.Hub
-	case *recorder.ONVIFRecorder:
-		return r.Hub
-	case *xiaomi.XiaomiRecorder:
-		return r.Hub
-	case *recorder.GB28181Recorder:
-		return r.Hub
 	}
 	return nil
 }

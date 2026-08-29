@@ -94,6 +94,12 @@ type ONVIFRecorder struct {
 // GetHub returns the StreamHub for frame fan-out.
 func (r *ONVIFRecorder) GetHub() *model.StreamHub { return r.Hub }
 
+// SetHub wires the StreamHub for frame fan-out (model.HubHost).
+func (r *ONVIFRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+
+// HubSource labels the hub for the flow-path observability view.
+func (r *ONVIFRecorder) HubSource() string { return "onvif" }
+
 // Compile-time check.
 var _ model.Recorder = (*ONVIFRecorder)(nil)
 

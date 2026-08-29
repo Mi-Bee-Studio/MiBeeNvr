@@ -9,247 +9,18 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
 
-// createRecorder creates a recorder for the given camera config.
-// Returns nil for unknown protocols.
+// createRecorder creates a recorder for the given camera config by looking
+// the protocol up in recorderBuilders. Returns nil for unknown protocols or
+// unsupported protocol/encoding pairs.
 func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
-	// resolveAdaptiveConfig parses the YAML adaptive-recording overrides into the
-	// recorder's resolved form, defaulting unspecified fields (issue #435). The
-	// config layer has already validated ranges.
-	resolveAdaptiveConfig := func(a *config.AdaptiveRecordingConfig) *recorder.AdaptiveConfig {
-		var calm, interval string
-		var spike float64
-		var gop int64
-		var ambient, archive bool
-		if a != nil {
-			calm, interval, spike, gop, ambient, archive = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio, a.AmbientArchive
-		}
-		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient, archive)
-		return &ac
+	build, ok := recorderBuilders[cam.Protocol]
+	if !ok {
+		return nil
 	}
-	// resolveAudioTriggerConfig resolves the audio-trigger overrides (issue
-	// #478); nil when not armed. G.711-only at the recorder level.
-	resolveAudioTriggerConfig := func(a *config.CameraAudioTriggerConfig) *recorder.AudioTriggerConfig {
-		if a == nil || !a.Enabled {
-			return nil
-		}
-		at := recorder.ResolveAudioTriggerConfig(a.MinDBFS, a.PreCaptureS)
-		return &at
-	}
-
-	var rec model.Recorder
-	switch cam.Protocol {
-	case "xiaomi":
-		plugin := &xiaomi.XiaomiPlugin{}
-		plugin.SetEventBus(cm.eventBus)
-		rec = plugin.NewRecorder(cam, cm.store, cm.db, cm.metrics)
-		// Wire ErrorReporter for TUTK vendor error detection
-		if xr, ok := rec.(*xiaomi.XiaomiRecorder); ok {
-			xr.SetErrorReporter(cm)
-		}
-	case string(model.ProtoRTSP):
-		switch cam.Encoding {
-		case string(model.FormatH264):
-			h264Cfg := recorder.H264Config{
-				CameraID:          cam.ID,
-				RTSPURL:           cam.URL,
-				Username:          cam.Username,
-				Password:          cam.Password,
-				SegmentDur:        segDur,
-				DB:                cm.db,
-				AudioEnabled:      cam.AudioEnabled,
-				AudioInRecordings: cam.AudioInRecordings,
-				EventBus:          cm.eventBus,
-				RecordEnabled:     cam.RecordingEnabled,
-				RingBufCap:        cam.RingBufCap,
-			}
-			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
-				h264Cfg.FrameWatchdogTimeout = d
-			}
-			if cam.RecordingMode == "adaptive" {
-				h264Cfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
-			}
-			h264Cfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
-			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
-		case string(model.FormatH265):
-			h265Cfg := recorder.H265Config{
-				CameraID:          cam.ID,
-				RTSPURL:           cam.URL,
-				Username:          cam.Username,
-				Password:          cam.Password,
-				SegmentDur:        segDur,
-				DB:                cm.db,
-				AudioEnabled:      cam.AudioEnabled,
-				AudioInRecordings: cam.AudioInRecordings,
-				EventBus:          cm.eventBus,
-				RecordEnabled:     cam.RecordingEnabled,
-				RingBufCap:        cam.RingBufCap,
-			}
-			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
-				h265Cfg.FrameWatchdogTimeout = d
-			}
-			if cam.RecordingMode == "adaptive" {
-				h265Cfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
-			}
-			h265Cfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
-			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
-		case string(model.FormatMJPEG):
-			mjpegCfg := recorder.MJPEGConfig{
-				CameraID:               cam.ID,
-				RTSPURL:                cam.URL,
-				SegmentDur:             segDur,
-				SampleInterval:         cam.SampleInterval,
-				DB:                     cm.db,
-				AudioEnabled:           cam.AudioEnabled,
-				EventBus:               cm.eventBus,
-				DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
-				DarkFrameThreshold:     cam.DarkFrameThreshold,
-				RecordEnabled:          cam.RecordingEnabled,
-			}
-			rec = recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
-		default:
-			return nil
-		}
-	case string(model.ProtoHTTP):
-		if cam.Encoding != string(model.EncJPEG) {
-			return nil
-		}
-		httpJpegCfg := recorder.HTTPJPEGConfig{
-			CameraID:               cam.ID,
-			URL:                    cam.URL,
-			SegmentDur:             segDur,
-			Username:               cam.Username,
-			Password:               cam.Password,
-			DB:                     cm.db,
-			AVI:                    cam.HTTPJPEGAVI,
-			EventBus:               cm.eventBus,
-			DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
-			DarkFrameThreshold:     cam.DarkFrameThreshold,
-			RecordEnabled:          cam.RecordingEnabled,
-		}
-		rec = recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
-	case string(model.ProtoONVIF):
-		onvifEndpoint := cam.ONVIFEndpoint
-		if onvifEndpoint == "" {
-			onvifEndpoint = cam.URL
-		}
-		onvifClient := cm.reuseOrCreateONVIFClient(cam.ID, onvifEndpoint, cam.Username, cam.Password)
-		onvifCfg := recorder.ONVIFConfig{
-			CameraID:          cam.ID,
-			ProfileToken:      cam.ProfileToken,
-			StreamEncoding:    cam.StreamEncoding,
-			Username:          cam.Username,
-			Password:          cam.Password,
-			SegmentDur:        segDur,
-			DB:                cm.db,
-			AudioEnabled:      cam.AudioEnabled,
-			AudioInRecordings: cam.AudioInRecordings,
-			ONVIFEndpoint:     onvifEndpoint,
-			AVI:               cam.HTTPJPEGAVI,
-			EventBus:          cm.eventBus,
-			RecordEnabled:     cam.RecordingEnabled,
-		}
-		if cam.RecordingMode == "adaptive" {
-			// Validated by config.ValidateCameraRecordingMode (h264/h265 only);
-			// createDelegate ignores it for MJPEG/JPEG encodings.
-			onvifCfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
-			onvifCfg.AudioTrigger = resolveAudioTriggerConfig(cam.AudioTrigger)
-		}
-		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
-			onvifCfg.FrameWatchdogTimeout = d
-		}
-		onvifCfg.RingBufCap = cam.RingBufCap
-		rec = recorder.NewONVIFRecorder(onvifCfg, onvifClient, cm.store, cm.metrics)
-	case "timelapse":
-		frameSource := "auto"
-		if cam.Timelapse != nil && cam.Timelapse.FrameSource != "" {
-			frameSource = cam.Timelapse.FrameSource
-		}
-		if cam.Timelapse == nil || !cam.Timelapse.Enabled {
-			return nil
-		}
-		switch frameSource {
-		case "snapshot":
-			rec = cm.createTimelapseSnapshotRecorder(cam, segDur)
-		case "rtsp_keyframe":
-			switch cam.Encoding {
-			case "h264", "":
-				h264Cfg := recorder.H264Config{
-					CameraID:     cam.ID,
-					RTSPURL:      cam.URL,
-					Username:     cam.Username,
-					Password:     cam.Password,
-					SegmentDur:   segDur,
-					DB:           cm.db,
-					AudioEnabled: cam.AudioEnabled,
-					RingBufCap:   cam.RingBufCap,
-				}
-				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
-					h264Cfg.FrameWatchdogTimeout = d
-				}
-				rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
-			case "h265":
-				h265Cfg := recorder.H265Config{
-					CameraID:     cam.ID,
-					RTSPURL:      cam.URL,
-					Username:     cam.Username,
-					Password:     cam.Password,
-					SegmentDur:   segDur,
-					DB:           cm.db,
-					AudioEnabled: cam.AudioEnabled,
-					RingBufCap:   cam.RingBufCap,
-				}
-				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
-					h265Cfg.FrameWatchdogTimeout = d
-				}
-				rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
-			default:
-				logger.Warn("unsupported encoding for rtsp_keyframe timelapse frame source", "camera_id", cam.ID, "encoding", cam.Encoding)
-				return nil
-			}
-		case "mjpeg", "auto", "":
-			rec = cm.createTimelapseMJPEGRecorder(cam, segDur)
-		default:
-			logger.Warn("unknown timelapse frame source", "camera_id", cam.ID, "frame_source", frameSource)
-			return nil
-		}
-	case string(model.ProtoGB28181):
-		enc := cam.Encoding
-		if enc == "" {
-			enc = string(model.FormatH264)
-		}
-		// Full recording pipeline: segments on disk, recordings DB rows,
-		// SegmentCompleted events, metrics — same guarantees as ingest cams.
-		rec = recorder.NewGB28181Recorder(recorder.GB28181Config{
-			CameraID:      cam.ID,
-			Encoding:      enc,
-			SegmentDur:    segDur,
-			Store:         cm.store,
-			DB:            cm.db,
-			Metrics:       cm.metrics,
-			EventBus:      cm.eventBus,
-			RecordEnabled: cam.RecordingEnabled == nil || *cam.RecordingEnabled,
-			AudioEnabled:  cam.AudioEnabled,
-		}, nil)
-	case string(model.ProtoSRT), string(model.ProtoRTMP), string(model.ProtoWHIP):
-		enc := cam.Encoding
-		if enc == "" {
-			enc = string(model.FormatH264)
-		}
-		rec = recorder.NewIngestRecorder(recorder.IngestConfig{
-			CameraID:      cam.ID,
-			Encoding:      enc,
-			SegmentDur:    segDur,
-			Store:         cm.store,
-			DB:            cm.db,
-			Metrics:       cm.metrics,
-			EventBus:      cm.eventBus,
-			RecordEnabled: cam.RecordingEnabled,
-		})
-	default:
+	rec := build(cm, cam, segDur)
+	if rec == nil {
 		return nil
 	}
 
@@ -270,60 +41,21 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	return rec
 }
 
-// initStreamHub sets a new StreamHub on the recorder if it has a Hub field.
-// It sets the cameraID for structured logging, labels the hub source for the
-// flow-path view, and wires the standard observability callbacks (shared with
-// push hubs via wireHubMetrics).
+// initStreamHub sets a new StreamHub on the recorder via the model.HubHost
+// interface. It sets the cameraID for structured logging, labels the hub
+// source for the flow-path view (from the recorder's own HubSource), and
+// wires the standard observability callbacks (shared with push hubs via
+// wireHubMetrics). Recorders without a hub (none today) are skipped.
 func initStreamHub(rec model.Recorder, cameraID string, m *metrics.Metrics) {
-	var hub *model.StreamHub
-	source := ""
-	switch r := rec.(type) {
-	case *recorder.H264Recorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "h264"
-	case *recorder.H265Recorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "h265"
-	case *recorder.ONVIFRecorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "onvif"
-	case *recorder.MJPEGRecorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "mjpeg"
-	case *recorder.HTTPJPEGRecorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "http-jpeg"
-	case *xiaomi.XiaomiRecorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "xiaomi"
-	case *recorder.TimelapseRecorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "timelapse"
-	case *recorder.StubRecorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "stub"
-	case *recorder.IngestRecorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "ingest"
-	case *recorder.GB28181Recorder:
-		hub = model.NewStreamHub()
-		r.Hub = hub
-		source = "gb28181"
+	host, ok := rec.(model.HubHost)
+	if !ok {
+		return
 	}
-	if hub != nil {
-		hub.SetCameraID(cameraID)
-		hub.SetSource(source)
-		wireHubMetrics(hub, cameraID, m)
-	}
+	hub := model.NewStreamHub()
+	host.SetHub(hub)
+	hub.SetCameraID(cameraID)
+	hub.SetSource(host.HubSource())
+	wireHubMetrics(hub, cameraID, m)
 }
 
 // autoInviteGB28181 recycles any live session for the camera's channel and

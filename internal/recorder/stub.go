@@ -25,6 +25,12 @@ type StubRecorder struct {
 // GetHub returns the StreamHub for frame fan-out. Always nil for StubRecorder.
 func (r *StubRecorder) GetHub() *model.StreamHub { return r.Hub }
 
+// SetHub wires the StreamHub for frame fan-out (model.HubHost).
+func (r *StubRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+
+// HubSource labels the hub for the flow-path observability view.
+func (r *StubRecorder) HubSource() string { return "stub" }
+
 // Start initializes the stub recorder. It returns immediately without error.
 func (r *StubRecorder) Start(_ context.Context) error {
 	r.mu.Lock()

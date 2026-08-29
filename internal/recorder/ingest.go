@@ -127,6 +127,12 @@ func NewIngestRecorder(cfg IngestConfig) *IngestRecorder {
 // used by getRecorderHub across the API layer).
 func (r *IngestRecorder) GetHub() *model.StreamHub { return r.Hub }
 
+// SetHub wires the StreamHub for frame fan-out (model.HubHost).
+func (r *IngestRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+
+// HubSource labels the hub for the flow-path observability view.
+func (r *IngestRecorder) HubSource() string { return "ingest" }
+
 // VPS returns the most recently captured H.265 VPS NAL unit (without start
 // code). Always nil for H.264 sources. Thread-safe.
 func (r *IngestRecorder) VPS() []byte {
