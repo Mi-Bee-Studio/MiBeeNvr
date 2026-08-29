@@ -481,7 +481,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Guard the API write boundary with the same protocol+encoding validation
-	// the startup path enforces: an invalid combo saved here (e.g. rtmp+h265
+	// the startup path enforces: an invalid combo saved here (e.g. http+h264
 	// from a non-UI client) bricks the NEXT restart with a fatal config
 	// validation error (#402 bug class).
 	if err := model.ValidateProtocolEncoding(proto, enc); err != nil {
@@ -874,7 +874,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 
 	// When protocol or encoding is being changed, validate the RESULTING combo
 	// against the same rules startup enforces — otherwise a partial update
-	// (e.g. encoding h265 on an rtmp camera) saves a config that fails fatally
+	// (e.g. encoding h264 on an http camera) saves a config that fails fatally
 	// on the next restart (#402 bug class).
 	if body.Protocol != nil || body.Encoding != nil {
 		proto, enc := "", ""

@@ -648,3 +648,35 @@ func TestConnectRTMP_NoSourceCodecProviderKeepsLegacyBehavior(t *testing.T) {
 	require.Equal(t, StatusError, target.status)
 	require.Contains(t, target.errMsg, "source is not H.264")
 }
+
+func TestConnectRTMP_H265PassthroughRouting(t *testing.T) {
+	// H.265 source + passthrough policy must route to the enhanced-RTMP hvc1
+	// publisher (#433). With no codec info provider wired the path fails
+	// permanently BEFORE dialing — proving the routing without a live server.
+	target := NewPushTarget("test-cam", PushTargetConfig{
+		ID: "t1", URL: "rtmp://invalid/does/not/matter",
+		Protocol: "rtmp", TranscodePolicy: "passthrough",
+	}, nil, func() ([]byte, []byte, bool) {
+		return nil, nil, false // H.265 source
+	})
+
+	err := target.connectRTMP(context.Background())
+	require.Error(t, err)
+	require.ErrorIs(t, err, errPermanent)
+	require.Equal(t, StatusError, target.status)
+	require.Contains(t, target.errMsg, "passthrough requires a codec info provider")
+
+	// With a provider but no VPS/SPS/PPS yet, the target waits as a permanent
+	// "not ready" error (matches the H.264 not-ready semantics).
+	target2 := NewPushTarget("test-cam", PushTargetConfig{
+		ID: "t1", URL: "rtmp://invalid/does/not/matter",
+		Protocol: "rtmp", TranscodePolicy: "passthrough",
+	}, nil, func() ([]byte, []byte, bool) {
+		return nil, nil, false
+	})
+	target2.SetCodecInfoProvider(func() model.CodecInfo { return model.CodecInfo{} })
+
+	err = target2.connectRTMP(context.Background())
+	require.ErrorIs(t, err, errPermanent)
+	require.Contains(t, target2.errMsg, "no H.265 VPS/SPS/PPS")
+}

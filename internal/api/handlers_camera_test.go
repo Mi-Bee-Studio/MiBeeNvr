@@ -648,14 +648,20 @@ func TestCreateCamera_XiaomiDefaultsEncodingHint(t *testing.T) {
 
 // TestCreateCamera_RejectsInvalidEncodingCombo: the create API enforces the
 // same protocol+encoding rules as startup validation, so a non-UI client
-// cannot save a combo (rtmp+h265) that bricks the next restart.
+// cannot save a combo (http+h264) that bricks the next restart. rtmp+h265 is
+// now VALID (enhanced-RTMP hvc1 ingest, #433) and must be accepted.
 func TestCreateCamera_RejectsInvalidEncodingCombo(t *testing.T) {
 	h := setupDedupHandler(t)
 
-	body := `{"name":"RTMP Cam","protocol":"rtmp","encoding":"h265","stream_key":"k1"}`
+	body := `{"name":"HTTP Cam","protocol":"http","encoding":"h264","url":"http://127.0.0.1:9/x.jpg"}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code, "body: %s", rr.Body.String())
 	require.Contains(t, rr.Body.String(), "not valid for protocol")
+
+	// Enhanced-RTMP H.265 ingest (#433): rtmp+h265 is accepted now.
+	h265 := `{"name":"RTMP H265 Cam","protocol":"rtmp","encoding":"h265","stream_key":"k265"}`
+	rr = doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(h265)), "", "")
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
 }
 
 // TestUpdateCamera_RejectsInvalidEncodingCombo: updating the encoding alone is

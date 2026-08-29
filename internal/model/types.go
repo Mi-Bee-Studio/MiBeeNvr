@@ -383,9 +383,10 @@ var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoTimelapse): {""}, // empty string for auto-detect
 	// Push/ingest protocols. SRT config-layer accepts h264/h265, but the current
 	// SRT MPEG-TS demuxer only emits H.264 NALUs (H.265 over SRT is a follow-up).
-	// RTMP is H.264 only (the classic RTMP spec; Enhanced-RTMP H.265 is rare).
+	// RTMP accepts H.265 via Enhanced-RTMP (hvc1 fourcc) — publishers must send
+	// the fourcc sequence header (our relay passthrough policy and FFmpeg do).
 	string(ProtoSRT):  {string(FormatH264), string(FormatH265)},
-	string(ProtoRTMP): {string(FormatH264)},
+	string(ProtoRTMP): {string(FormatH264), string(FormatH265)},
 	// WHIP (browser/OBS WebRTC push-in) is H.264 only — matches WHEP egress
 	// (browser WebRTC H.265 support is still fragmented).
 	string(ProtoWHIP): {string(FormatH264)},

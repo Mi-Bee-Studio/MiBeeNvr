@@ -391,3 +391,63 @@ func TestStreamHubBroadcastNonBlocking(t *testing.T) {
 		t.Fatal("Broadcast blocked — should be non-blocking")
 	}
 }
+
+// TestH265FrameExtraction verifies that an enhanced-RTMP (hvc1 fourcc) H.265
+// publisher is accepted and its frames broadcast to the StreamHub (#433).
+func TestH265FrameExtraction(t *testing.T) {
+	keys := testStreamKeys()
+
+	var receivedFrames [][]byte
+	var mu sync.Mutex
+	hub := model.NewStreamHub()
+	require.NoError(t, hub.Subscribe("test-h265", func(pts int64, au [][]byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		receivedFrames = append(receivedFrames, au...)
+	}))
+
+	srv, addr := startTestServer(t, testResolver(keys), func(string) *model.StreamHub {
+		return hub
+	}, nil, nil)
+
+	u, err := url.Parse("rtmp://" + addr + "/live/test-key-1")
+	require.NoError(t, err)
+	client := &gortmplib.Client{URL: u, Publish: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, client.Initialize(ctx))
+	defer client.Close()
+
+	track := &gortmplib.Track{Codec: &codecs.H265{
+		VPS: []byte{0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x78, 0x99, 0x98, 0x09},
+		SPS: []byte{0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x78, 0xa0, 0x03, 0xc0, 0x80, 0x10, 0xe5, 0x96, 0x66, 0x69, 0x24, 0xca, 0xe0, 0x10, 0x00, 0x00, 0x03, 0x00, 0x10, 0x00, 0x00, 0x03, 0x01, 0xe0, 0x80},
+		PPS: []byte{0x44, 0x01, 0xc1, 0x72, 0xb4, 0x62, 0x40},
+	}}
+	writer := &gortmplib.Writer{Conn: client, Tracks: []*gortmplib.Track{track}}
+	require.NoError(t, writer.Initialize())
+
+	require.Eventually(t, func() bool {
+		return srv.activePublishers() > 0
+	}, 5*time.Second, 100*time.Millisecond)
+
+	frameCtx, frameCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer frameCancel()
+	go func() {
+		for i := 0; ; i++ {
+			select {
+			case <-frameCtx.Done():
+				return
+			default:
+			}
+			idrAU := [][]byte{{0x26, 0x01, 0xaf, 0x09, 0x40, 0xc0, 0x00, 0x10}} // IDR_WPP slice
+			_ = writer.WriteH265(track, time.Duration(i*33)*time.Millisecond, time.Duration(i*33)*time.Millisecond, idrAU)
+			time.Sleep(33 * time.Millisecond)
+		}
+	}()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(receivedFrames) > 0
+	}, 10*time.Second, 100*time.Millisecond, "H.265 frames should be received")
+}

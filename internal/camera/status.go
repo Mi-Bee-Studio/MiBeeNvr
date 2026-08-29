@@ -84,9 +84,14 @@ func (cm *CameraManager) GetSPS(cameraID string) (sps, pps []byte, isH264 bool) 
 	case *recorder.H264Recorder:
 		return r.SPS(), r.PPS(), true
 	case *recorder.IngestRecorder:
-		_, s, p, _ := r.CodecParams()
+		f, s, p, _ := r.CodecParams()
 		if s == nil || p == nil {
-			return nil, nil, true
+			return nil, nil, f != model.FormatH265
+		}
+		if f == model.FormatH265 {
+			// H.265 param sets need the VPS for target-track init — callers
+			// wanting H.265 should use GetCodecInfo (which carries VPS).
+			return nil, nil, false
 		}
 		return s, p, true
 	case *recorder.ONVIFRecorder:
@@ -216,6 +221,21 @@ func (cm *CameraManager) GetCodecInfo(cameraID string) model.CodecInfo {
 			PPS:    r.PPS(),
 			VPS:    r.VPS(),
 			IsH264: xc != model.FormatH265,
+		}
+		if ai, ok := rec.(audioInfo); ok {
+			ci.AudioCodec = ai.AudioCodec()
+			ci.AudioConfig = ai.AudioConfig()
+			ci.AudioSampleRate = ai.AudioSampleRate()
+			ci.AudioChannels = ai.AudioChannels()
+		}
+		return ci
+	case *recorder.IngestRecorder:
+		f, _, _, _ := r.CodecParams()
+		ci := model.CodecInfo{
+			SPS:    r.SPS(),
+			PPS:    r.PPS(),
+			VPS:    r.VPS(),
+			IsH264: f != model.FormatH265,
 		}
 		if ai, ok := rec.(audioInfo); ok {
 			ci.AudioCodec = ai.AudioCodec()

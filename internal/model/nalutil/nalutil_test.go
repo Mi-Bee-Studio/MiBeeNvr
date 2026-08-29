@@ -238,3 +238,20 @@ func TestCrossCodec_H265_IDR_NotDetectedAsH264(t *testing.T) {
 		})
 	}
 }
+
+// TestIsKeyframeNALU_H265_RandomAccessPoints covers the full H.265 random
+// access range (16-23): BLA_W_LP(16) … IDR_N_LP(20), CRA_NUT(21). x265 emits
+// CRA for every keyframe after the first — CRA MUST count as a keyframe or
+// downstream segment rollover / IDR replay never fires again.
+func TestIsKeyframeNALU_H265_RandomAccessPoints(t *testing.T) {
+	for nalType := byte(16); nalType <= 23; nalType++ {
+		// first byte: nalType<<1 | layer-id high bit
+		nalu := []byte{nalType << 1, 0x01}
+		require.True(t, IsKeyframeNALU(nalu, true), "NAL type %d must be a keyframe", nalType)
+	}
+	// TRAIL_R (1), VPS (32), SPS (33), PPS (34) are not keyframes.
+	for _, nalType := range []byte{1, 32, 33, 34} {
+		nalu := []byte{nalType << 1, 0x01}
+		require.False(t, IsKeyframeNALU(nalu, true), "NAL type %d must not be a keyframe", nalType)
+	}
+}

@@ -4,17 +4,21 @@
 // This is the single source of truth for IDR/keyframe detection across the codebase.
 package nalutil
 
-// IsKeyframeNALU checks if a single NALU is an IDR frame.
+// IsKeyframeNALU checks if a single NALU is a keyframe (random access point).
 //
 // H.264: NAL type 5 = IDR (extract via nalu[0] & 0x1F)
-// H.265: NAL type 19 (IDR_W_RADL) and 20 (IDR_N_LP) = IDR (extract via (nalu[0] >> 1) & 0x3F)
+// H.265: NAL types 16-23 = BLA/IDR/CRA (extract via (nalu[0] >> 1) & 0x3F).
+// CRA_NUT (21) matters because encoders like x265 emit CRA — not IDR — for
+// every keyframe after the first; treating only 19/20 as keyframes makes a
+// recorder never see a second keyframe (no segment rollover, no live-preview
+// IDR fast-start replay).
 func IsKeyframeNALU(nalu []byte, isH265 bool) bool {
 	if len(nalu) == 0 {
 		return false
 	}
 	if isH265 {
 		naluType := (nalu[0] >> 1) & 0x3F
-		return naluType == 19 || naluType == 20
+		return naluType >= 16 && naluType <= 23
 	}
 	naluType := nalu[0] & 0x1F
 	return naluType == 5

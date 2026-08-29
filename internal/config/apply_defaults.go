@@ -514,8 +514,8 @@ func applyConfigDefaults(cfg *Config) {
 				cam.Encoding = "" // ONVIF auto-detects
 			case string(model.ProtoSRT), string(model.ProtoRTMP):
 				// Push cameras: encoding is derived from the published stream.
-				// Default to h264 (the only codec RTMP supports; SRT's current
-				// MPEG-TS demux is also H.264-only).
+				// Default to h264; RTMP H.265 (enhanced-RTMP hvc1, #433) and
+				// SRT H.265 must be declared explicitly via encoding: h265.
 				cam.Encoding = "h264"
 			}
 		}
