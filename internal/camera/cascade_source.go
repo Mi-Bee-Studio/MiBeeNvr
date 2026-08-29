@@ -3,9 +3,10 @@ package camera
 import (
 	"context"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
+	"github.com/mickeyzzc/gb28181-go/platform"
+	gbcascade "github.com/mickeyzzc/gb28181-go/platform/cascade"
 )
 
 // cascadeSource adapts the CameraManager to the cascade client's
@@ -23,7 +24,7 @@ type cascadeSource struct {
 // archived flag). The camera list API is DB-backed, so the catalog must gate
 // on the same set — an archived camera must never be advertised to the upper
 // platform as a playable channel.
-func NewCascadeSource(cm *CameraManager, db *storage.DB) cascade.CameraSource {
+func NewCascadeSource(cm *CameraManager, db *storage.DB) gbcascade.CameraSource {
 	return cascadeSource{cm: cm, db: db}
 }
 
@@ -31,10 +32,10 @@ func NewCascadeSource(cm *CameraManager, db *storage.DB) cascade.CameraSource {
 // are excluded (no PS mux story); everything else is offered — GB28181
 // cameras store encoding "" in config until their stream starts, so the
 // forwarder sniffs the codec from the first NAL when the hint is empty.
-func (s cascadeSource) Cameras() []cascade.CameraInfo {
+func (s cascadeSource) Cameras() []gbcascade.CameraInfo {
 	snap := s.cm.loadSnapshot()
 	active := s.activeCameraIDs()
-	out := make([]cascade.CameraInfo, 0, len(snap.configs))
+	out := make([]gbcascade.CameraInfo, 0, len(snap.configs))
 	for _, cfg := range snap.configs {
 		if cfg.Encoding == "mjpeg" || cfg.Encoding == "jpeg" {
 			continue
@@ -47,7 +48,7 @@ func (s cascadeSource) Cameras() []cascade.CameraInfo {
 			// not advertised to the upper platform.
 			continue
 		}
-		out = append(out, cascade.CameraInfo{
+		out = append(out, gbcascade.CameraInfo{
 			ID:        cfg.ID,
 			Name:      cfg.Name,
 			Encoding:  cfg.Encoding,
@@ -82,6 +83,6 @@ func (s cascadeSource) activeCameraIDs() map[string]bool {
 
 // Hub returns the camera's stream hub (nil when the camera has no hub —
 // answered 500 to the upper platform's INVITE).
-func (s cascadeSource) Hub(cameraID string) *streamhub.StreamHub {
-	return s.cm.GetHub(cameraID)
+func (s cascadeSource) Hub(cameraID string) *platform.FrameHub {
+	return gb28181.BridgeHub(s.cm.GetHub(cameraID))
 }
