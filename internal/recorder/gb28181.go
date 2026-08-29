@@ -46,20 +46,21 @@ type GB28181Config struct {
 type GB28181Recorder struct {
 	cfg GB28181Config
 	// Hub is set by camera.initStreamHub (same pattern as H264Recorder.Hub).
-	Hub           *streamhub.StreamHub
-	mu            sync.Mutex
-	status        model.RecorderStatus
-	sps, pps, vps []byte
-	codecType     string
-	muxer         *muxer.MP4Muxer
-	trackID       int
-	curTemp       string
-	curFinal      string
-	segStart      time.Time
-	lastFrameTime time.Time
-	frameCount    int
-	ptsBase       int64 // first AU's RTP timestamp (90kHz), PTS origin
-	lastPtsTicks  int64 // last written AU's RTP timestamp (monotonic guard)
+	Hub             *streamhub.StreamHub
+	mu              sync.Mutex
+	status          model.RecorderStatus
+	sps, pps, vps   []byte
+	codecType       string
+	codecDefinitive bool // codecType came from a parameter-set NALU, not the encoding fallback
+	muxer           *muxer.MP4Muxer
+	trackID         int
+	curTemp         string
+	curFinal        string
+	segStart        time.Time
+	lastFrameTime   time.Time
+	frameCount      int
+	ptsBase         int64 // first AU's RTP timestamp (90kHz), PTS origin
+	lastPtsTicks    int64 // last written AU's RTP timestamp (monotonic guard)
 
 	// Audio state (PS audio demux, #340). The audio track is added lazily on
 	// the first frame — GB28181 streams may start video-only and interleave
@@ -181,8 +182,22 @@ func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 		r.mu.Unlock()
 		return
 	}
-	if r.codecType == "" && len(au) > 0 {
-		r.codecType = detectCodec(au, r.cfg.Encoding)
+	if r.codecType == "" || !r.codecDefinitive {
+		if c, definitive := detectCodecDetailed(au, r.cfg.Encoding); c != "" {
+			// A definitive parameter-set detection overrides an earlier
+			// encoding fallback: a session whose first AUs were P-frames
+			// mid-GOP latches the configured guess (default h264) and would
+			// otherwise wait for the wrong parameter sets forever when the
+			// real stream is the other codec (MiBeeNvr #625 — FLV/WS 503
+			// on H.265 cascade channels).
+			if r.codecType == "" || definitive {
+				if r.codecType != "" && r.codecType != c {
+					r.closeCurrentSegmentLocked()
+				}
+				r.codecType = c
+			}
+			r.codecDefinitive = r.codecDefinitive || definitive
+		}
 	}
 	if r.codecType == "h264" {
 		newSPS, newPPS, changed := updateParamSetsH264(au, r.sps, r.pps)

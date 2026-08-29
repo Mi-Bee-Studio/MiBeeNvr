@@ -12,6 +12,15 @@ import (
 // forever for VPS/SPS/PPS that never came and never opened a segment. AUs
 // without parameter sets defer to the configured encoding hint.
 func detectCodec(au [][]byte, encoding string) string {
+	c, _ := detectCodecDetailed(au, encoding)
+	return c
+}
+
+// detectCodecDetailed is detectCodec with definitiveness: definitive=true
+// means the codec was decided from a parameter-set NALU (reliable);
+// definitive=false means it fell back to the configured encoding hint — a
+// later definitive observation must be allowed to override it (#625).
+func detectCodecDetailed(au [][]byte, encoding string) (codec string, definitive bool) {
 	for _, nalu := range au {
 		if len(nalu) == 0 {
 			continue
@@ -22,7 +31,7 @@ func detectCodec(au [][]byte, encoding string) string {
 		}
 		t264 := firstByte & 0x1F
 		if t264 == 7 || t264 == 8 || t264 == 9 { // SPS / PPS / AUD — definitive
-			return "h264"
+			return "h264", true
 		}
 		if t264 == 1 || t264 == 5 {
 			// H.264 slices collide with H.265 param-set slots under the
@@ -32,13 +41,13 @@ func detectCodec(au [][]byte, encoding string) string {
 		}
 		t265 := (firstByte >> 1) & 0x3F
 		if t265 == 32 || t265 == 33 || t265 == 34 { // VPS / SPS / PPS — definitive
-			return "h265"
+			return "h265", true
 		}
 	}
 	if encoding != "" {
-		return encoding
+		return encoding, false
 	}
-	return ""
+	return "", false
 }
 
 func updateParamSetsH264(au [][]byte, currentSPS, currentPPS []byte) (newSPS, newPPS []byte, changed bool) {

@@ -95,10 +95,8 @@ github.com/mattn/go-isatty v0.0.22 h1:j8l17JJ9i6VGPUFUYoTUKPSgKe/83EYU2zBC7YNKMw
 github.com/mattn/go-isatty v0.0.22/go.mod h1:ZXfXG4SQHsB/w3ZeOYbR0PrPwLy+n6xiMrJlRFqopa4=
 github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b h1:j7+1HpAFS1zy5+Q4qx1fWh90gTKwiN4QCGoY9TWyyO4=
 github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b/go.mod h1:01TrycV0kFyexm33Z7vhZRXopbI8J3TDReVlkTgMUxE=
-github.com/mickeyzzc/gb28181-go v0.0.0-20260828151933-7d7a314ddf3a h1:rPfS1DoDgV8KlGUZEUMZrms2Z1nG06lJ8VaWCvNVp3w=
-github.com/mickeyzzc/gb28181-go v0.0.0-20260828151933-7d7a314ddf3a/go.mod h1:iBdMyROOcouMICmXo4lhHWGpopr7AX1B8RAFkoupx5A=
-github.com/mickeyzzc/gb28181-go v0.2.1 h1:ckyg8QGr804UY72CWXZtCti5jflnha4VHMKNEpF1HsQ=
-github.com/mickeyzzc/gb28181-go v0.2.1/go.mod h1:0OCiIGFWsdx6HXEysdaWcGk+JD+fURhwQIwIsNH9/cQ=
+github.com/mickeyzzc/gb28181-go v0.2.2 h1:Lq0sW++Nn2hmNGjiT3uvKjADrwgTx9CFTzMKa42HyGo=
+github.com/mickeyzzc/gb28181-go v0.2.2/go.mod h1:0OCiIGFWsdx6HXEysdaWcGk+JD+fURhwQIwIsNH9/cQ=
 github.com/mickeyzzc/onvif-go/v2 v2.0.0-rc2 h1:mbHQKNzFOWrSamcEuMEvqgSEUa79nMUntCFaW8XamvE=
 github.com/mickeyzzc/onvif-go/v2 v2.0.0-rc2/go.mod h1:OmXWljqR4RIKMVVly/CxunWdyRCa4onMMGkt84SaQGQ=
 github.com/miekg/dns v1.1.41 h1:WMszZWJG0XmzbK9FEmzH2TVcqYzFesusSIB41b8KHxY=
