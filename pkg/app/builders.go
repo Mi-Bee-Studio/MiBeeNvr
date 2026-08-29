@@ -29,7 +29,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/cascade"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/sip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
@@ -735,9 +734,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	if cfg.GB28181.Enabled {
 		heartbeatInterval, err := time.ParseDuration(cfg.GB28181.HeartbeatInterval)
 		if err != nil {
-			heartbeatInterval = gb28181.DefaultHeartbeatInterval
+			heartbeatInterval = platform.DefaultHeartbeatInterval
 		}
-		deps.gb28181DevMgr = gb28181.NewDeviceManager(heartbeatInterval)
+		deps.gb28181DevMgr = platform.NewDeviceManager(heartbeatInterval)
 		deps.gb28181DevMgr.SetOfflineCallback(func(id string) {
 			if err := db.MarkDeviceOffline(context.Background(), id); err != nil {
 				slog.Warn("gb28181: failed to mark device offline in DB", "device", id, "error", err)
@@ -856,11 +855,11 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	handler.SetRelayManager(relayMgr)
 	// Wire GB28181 PTZ controller (sends DeviceControl via the SIP server) when
 	// the GB28181 platform server is enabled.
-	var gbPTZController *gb28181.PTZController
+	var gbPTZController *platform.PTZController
 	if deps.gb28181Server != nil {
-		gbPTZController = gb28181.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server)
+		gbPTZController = platform.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server)
 		handler.SetGB28181PTZ(gbPTZController)
-		handler.SetGB28181Catalog(gb28181.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
+		handler.SetGB28181Catalog(platform.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
 		handler.SetGB28181ByeSender(deps.gb28181Server)
 		handler.SetGB28181DeviceMedia(deps.gb28181Server)
@@ -971,7 +970,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 // port pool is parsed from PortRange ("start-end"); on parse failure the
 // default pool 30000-30050 is used (config validation already rejects bad
 // ranges, so this is defensive only).
-func newGB28181SessionManager(cfg config.GB28181ServerConfig) *gb28181.SessionManager {
+func newGB28181SessionManager(cfg config.GB28181ServerConfig) *platform.SessionManager {
 	start, end := uint16(30000), uint16(30050)
 	if parts := strings.SplitN(cfg.PortRange, "-", 2); len(parts) == 2 {
 		if s, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
@@ -981,7 +980,7 @@ func newGB28181SessionManager(cfg config.GB28181ServerConfig) *gb28181.SessionMa
 			end = uint16(e)
 		}
 	}
-	return gb28181.NewSessionManager(platform.NewPortManager(start, end), cfg.ServerID)
+	return platform.NewSessionManager(platform.NewPortManager(start, end), cfg.ServerID)
 }
 
 // validAPIKeysFromConfig extracts the non-revoked API keys (token → name)

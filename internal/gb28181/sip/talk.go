@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
 	"github.com/mickeyzzc/gb28181-go/platform"
@@ -255,14 +254,14 @@ func (s *Server) StopTalk(channelID string) error {
 
 // TalkStatusFor reports the active intercom state of a camera's channel
 // (nil-status when idle).
-func (s *Server) TalkStatusFor(cameraID string) gb28181.TalkStatus {
+func (s *Server) TalkStatusFor(cameraID string) platform.TalkStatus {
 	s.talkMu.Lock()
 	defer s.talkMu.Unlock()
 	for _, t := range s.talks {
 		if t.cameraID == cameraID {
 			t.mu.Lock()
 			defer t.mu.Unlock()
-			return gb28181.TalkStatus{
+			return platform.TalkStatus{
 				Active:    true,
 				CameraID:  t.cameraID,
 				ChannelID: t.channelID,
@@ -271,7 +270,7 @@ func (s *Server) TalkStatusFor(cameraID string) gb28181.TalkStatus {
 			}
 		}
 	}
-	return gb28181.TalkStatus{Active: false}
+	return platform.TalkStatus{Active: false}
 }
 
 // stopTalkOnBye ends a talk session whose BYE arrived from the device

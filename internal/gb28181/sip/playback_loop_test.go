@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/mickeyzzc/gb28181-go/psmux"
 	"github.com/stretchr/testify/require"
 )
@@ -166,7 +166,7 @@ func fetchFlow(t *testing.T, download bool) {
 	require.NoError(t, enrol.EnsureGB28181Camera(testDeviceID, fakeChannelID, "Front Door", "127.0.0.1"))
 	srv.SetCameraEnroller(enrol)
 
-	dm.Register(&gb28181.Device{ID: testDeviceID, NetAddr: client.conn.LocalAddr().String()})
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: client.conn.LocalAddr().String()})
 	catalog, err := manscdp.Encode(manscdp.Catalog{
 		CmdType: manscdp.CmdCatalog, SN: 1, DeviceID: testDeviceID, SumNum: 1,
 		Item: []manscdp.Item{{DeviceID: fakeChannelID, Name: "Front Door", Parental: 0}},

@@ -9,7 +9,7 @@ import (
 
 // GB28181Device is the persisted form of a registered GB28181 device
 // (e.g. a Hikvision NVR). Times are stored as UTC via timeToDB/scanTime.
-// The in-memory counterpart (internal/gb28181.Device) keeps liveness in
+// The in-memory counterpart (internal/platform.Device) keeps liveness in
 // atomics (UnixNano); conversion to these time.Time fields happens here.
 type GB28181Device struct {
 	ID            string

@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // subscription refresh cadence: a subscription is renewed at 80% of its
@@ -143,7 +143,7 @@ func (s *Server) subscribeLoop(ctx context.Context) {
 			s.subMu.Unlock()
 			for _, sub := range due {
 				dev, ok := s.deviceMgr.Device(sub.deviceID)
-				if !ok || dev.Status.Load() != gb28181.DeviceOnline { // offline: re-REGISTER resubscribes
+				if !ok || dev.Status.Load() != platform.DeviceOnline { // offline: re-REGISTER resubscribes
 					continue
 				}
 				if err := s.sendSubscribe(sub.deviceID, sub.subject); err != nil {
@@ -254,7 +254,7 @@ func (s *Server) GB28181Alarms(deviceID string) []event.GB28181AlarmEvent {
 
 // handleMobilePosition stores one position report in the per-device ring.
 func (s *Server) handleMobilePosition(p manscdp.MobilePosition) {
-	pos := gb28181.GBPosition{
+	pos := platform.GBPosition{
 		DeviceID:  p.DeviceID,
 		Time:      p.Time,
 		Longitude: p.Longitude,
@@ -265,7 +265,7 @@ func (s *Server) handleMobilePosition(p manscdp.MobilePosition) {
 		UpdatedAt: time.Now(),
 	}
 	s.subMu.Lock()
-	s.posRing[p.DeviceID] = append([]gb28181.GBPosition{pos}, s.posRing[p.DeviceID]...)
+	s.posRing[p.DeviceID] = append([]platform.GBPosition{pos}, s.posRing[p.DeviceID]...)
 	if len(s.posRing[p.DeviceID]) > maxPositionsPerDevice {
 		s.posRing[p.DeviceID] = s.posRing[p.DeviceID][:maxPositionsPerDevice]
 	}
@@ -275,10 +275,10 @@ func (s *Server) handleMobilePosition(p manscdp.MobilePosition) {
 }
 
 // GB28181Positions returns the device's most recent positions (latest first).
-func (s *Server) GB28181Positions(deviceID string) []gb28181.GBPosition {
+func (s *Server) GB28181Positions(deviceID string) []platform.GBPosition {
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
-	out := make([]gb28181.GBPosition, len(s.posRing[deviceID]))
+	out := make([]platform.GBPosition, len(s.posRing[deviceID]))
 	copy(out, s.posRing[deviceID])
 	return out
 }

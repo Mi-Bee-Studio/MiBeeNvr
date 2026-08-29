@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // subProbeWait delays probing after a catalog merge so the main channels'
@@ -54,7 +54,7 @@ func (s *Server) EnsureSubChannelRegistered(deviceID, channelID string) error {
 	if _, ok := s.deviceMgr.Device(deviceID); !ok {
 		return fmt.Errorf("gb28181: device %q not registered", deviceID)
 	}
-	s.deviceMgr.RegisterChannel(deviceID, &gb28181.Channel{
+	s.deviceMgr.RegisterChannel(deviceID, &platform.Channel{
 		DeviceID: deviceID,
 		ID:       channelID,
 		Name:     "sub " + channelID,
@@ -157,7 +157,7 @@ func (s *Server) maybeProbeSubChannels(deviceID string) {
 // derive the code, INVITE it with a throwaway frame signal, and persist on
 // first media. Every failure path is silent (Debug) — incapable devices must
 // show zero error state (#560 acceptance).
-func (s *Server) probeSubChannel(deviceID string, ch *gb28181.Channel, offset int) {
+func (s *Server) probeSubChannel(deviceID string, ch *platform.Channel, offset int) {
 	enrol := s.enroller()
 	if enrol == nil {
 		return

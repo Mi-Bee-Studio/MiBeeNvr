@@ -14,8 +14,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/go-chi/chi/v5"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,12 +54,12 @@ func TestGB28181ResolveChannelDevice(t *testing.T) {
 	require.False(t, ok)
 
 	// Register a device + channel → resolves to the owning device.
-	h.gb28181DeviceMgr.Register(&gb28181.Device{ID: "dev1", NetAddr: "127.0.0.1:9"})
+	h.gb28181DeviceMgr.Register(&platform.Device{ID: "dev1", NetAddr: "127.0.0.1:9"})
 	dev, _ := h.gb28181DeviceMgr.Device("dev1")
 	if dev != nil {
-		dev.Status.Store(gb28181.DeviceOnline)
+		dev.Status.Store(platform.DeviceOnline)
 	}
-	h.gb28181DeviceMgr.RegisterChannel("dev1", &gb28181.Channel{
+	h.gb28181DeviceMgr.RegisterChannel("dev1", &platform.Channel{
 		ID: "34020000001320000011", Name: "Front",
 	})
 	got, ok := h.resolveChannelDevice("34020000001320000011")
@@ -207,10 +207,10 @@ func TestMapGB28181PTZError(t *testing.T) {
 		err  error
 		want int
 	}{
-		{gb28181.ErrChannelNotFound, http.StatusNotFound},
-		{gb28181.ErrDeviceOffline, http.StatusConflict},
-		{gb28181.ErrPTZUnsupported, http.StatusNotFound},
-		{gb28181.ErrZoomUnsupported, http.StatusNotFound},
+		{platform.ErrChannelNotFound, http.StatusNotFound},
+		{platform.ErrDeviceOffline, http.StatusConflict},
+		{platform.ErrPTZUnsupported, http.StatusNotFound},
+		{platform.ErrZoomUnsupported, http.StatusNotFound},
 		{errors.New("generic"), http.StatusInternalServerError},
 	} {
 		w := httptest.NewRecorder()
