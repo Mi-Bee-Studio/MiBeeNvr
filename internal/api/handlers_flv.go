@@ -6,6 +6,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/go-chi/chi/v5"
 )
@@ -63,7 +64,7 @@ func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 
 		var codec model.Format
 		var sps, pps, vps []byte
-		var hub *model.StreamHub
+		var hub *streamhub.StreamHub
 		if subSrc != nil {
 			codec, sps, pps, vps = subSrc.CodecParams()
 			hub = subSrc.Hub()

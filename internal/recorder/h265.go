@@ -23,6 +23,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var h265Logger = slog.Default().With("component", "h265-recorder")
@@ -160,7 +161,7 @@ func (r *H265Recorder) Status() model.RecorderStatus {
 }
 
 // GetHub returns the StreamHub for frame fan-out.
-func (r *H265Recorder) GetHub() *model.StreamHub { return r.Hub }
+func (r *H265Recorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *H265Recorder) HubSource() string { return "h265" }

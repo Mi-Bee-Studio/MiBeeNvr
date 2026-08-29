@@ -16,6 +16,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // --- Annex B / AVCC conversion tests ---
@@ -417,7 +418,7 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 	r.codecOK = true
 	r.streamStart = time.Now()
 	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
+		r.Hub = streamhub.New()
 	}
 
 	var mu sync.Mutex
@@ -716,7 +717,7 @@ func TestXiaomiRecorderAudioForwardWhenEnabled(t *testing.T) {
 		AudioInRecordings: true,
 	}, &noopSegmentStore{})
 
-	r.Hub = model.NewStreamHub()
+	r.Hub = streamhub.New()
 	r.streamStart = time.Now()
 	r.codec = model.FormatH264
 	r.codecOK = true
@@ -760,7 +761,7 @@ func TestXiaomiRecorderAudioSkippedWhenDisabled(t *testing.T) {
 		AudioEnabled: false,
 	}, &noopSegmentStore{})
 
-	r.Hub = model.NewStreamHub()
+	r.Hub = streamhub.New()
 	r.streamStart = time.Now()
 	r.codec = model.FormatH264
 	r.codecOK = true
@@ -793,7 +794,7 @@ func TestXiaomiRecorderAudioUnknownCodecSkipped(t *testing.T) {
 		AudioInRecordings: true,
 	}, &noopSegmentStore{})
 
-	r.Hub = model.NewStreamHub()
+	r.Hub = streamhub.New()
 	r.streamStart = time.Now()
 	r.codec = model.FormatH264
 	r.codecOK = true

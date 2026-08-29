@@ -25,6 +25,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var mjpegLogger = slog.Default().With("component", "mjpeg-recorder")
@@ -68,7 +69,7 @@ type MJPEGRecorder struct {
 	frameCh         chan []byte
 	dropped         atomic.Int64
 	latestFrame     atomic.Pointer[[]byte] // cached latest JPEG frame for zero-copy polling
-	Hub             *model.StreamHub       // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
+	Hub             *streamhub.StreamHub   // Frame fan-out (nil for MJPEG — no HLS support, reserved for future consumers)
 	lastHealthLogAt time.Time              // throttled log for storage health failures
 
 	// Audio/AVI fields
@@ -128,10 +129,10 @@ func jpegDimensions(data []byte) (width, height int, ok bool) {
 }
 
 // GetHub returns the StreamHub for frame fan-out.
-func (r *MJPEGRecorder) GetHub() *model.StreamHub { return r.Hub }
+func (r *MJPEGRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
-// SetHub wires the StreamHub for frame fan-out (model.HubHost).
-func (r *MJPEGRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+// SetHub wires the StreamHub for frame fan-out (streamhub.HubHost).
+func (r *MJPEGRecorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *MJPEGRecorder) HubSource() string { return "mjpeg" }

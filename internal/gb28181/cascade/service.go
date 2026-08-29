@@ -24,8 +24,8 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	mbsip "github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/sip"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
@@ -54,14 +54,14 @@ type CameraInfo struct {
 // camera manager adapts to it (pkg/app wiring).
 type CameraSource interface {
 	Cameras() []CameraInfo
-	Hub(cameraID string) *model.StreamHub
+	Hub(cameraID string) *streamhub.StreamHub
 }
 
 // SubStreamAcquirer grants the cascade access to the on-demand sub-stream
 // tier (#513): one INVITE holds one reference for its lifetime. Nil (or an
 // error) falls back to main-stream forwarding.
 type SubStreamAcquirer interface {
-	AcquireSubHub(ctx context.Context, cameraID string) (hub *model.StreamHub, release func(), err error)
+	AcquireSubHub(ctx context.Context, cameraID string) (hub *streamhub.StreamHub, release func(), err error)
 }
 
 // upper is one upper-platform registration session (#370): its own REGISTER /

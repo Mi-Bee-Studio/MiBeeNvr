@@ -1,4 +1,4 @@
-package model
+package streamhub
 
 import (
 	"fmt"
@@ -7,13 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
 )
 
 // helper must be used in all test helpers (project convention).
 func newTestStreamHub(t *testing.T) *StreamHub {
 	t.Helper()
-	return NewStreamHub()
+	return New()
 }
 
 func TestStreamHub_SubscribeAndBroadcast(t *testing.T) {
@@ -244,7 +245,7 @@ type frameInfo struct {
 // audioFrameInfo holds a received audio frame for test assertions.
 type audioFrameInfo struct {
 	pts   int64
-	codec AudioCodec
+	codec model.AudioCodec
 	data  []byte
 }
 
@@ -260,7 +261,7 @@ func TestStreamHub_AudioSubscribeAndBroadcast(t *testing.T) {
 	// 3 audio consumers subscribe
 	for _, id := range []string{"audio-1", "audio-2", "audio-3"} {
 		cid := id
-		err := hub.SubscribeAudio(cid, func(pts int64, codec AudioCodec, data []byte) {
+		err := hub.SubscribeAudio(cid, func(pts int64, codec model.AudioCodec, data []byte) {
 			mu.Lock()
 			received[cid] = append(received[cid], audioFrameInfo{pts: pts, codec: codec, data: data})
 			mu.Unlock()
@@ -270,7 +271,7 @@ func TestStreamHub_AudioSubscribeAndBroadcast(t *testing.T) {
 
 	// Broadcast 5 audio frames
 	for i := range int64(5) {
-		hub.BroadcastAudio(i, AudioAAC, []byte{byte(i)})
+		hub.BroadcastAudio(i, model.AudioAAC, []byte{byte(i)})
 	}
 
 	// Wait for async delivery
@@ -290,7 +291,7 @@ func TestStreamHub_AudioSubscribeAndBroadcast(t *testing.T) {
 		require.Len(t, frames, 5, "%s should have 5 frames", id)
 		for i, f := range frames {
 			require.Equal(t, int64(i), f.pts, "%s frame %d pts mismatch", id, i)
-			require.Equal(t, AudioAAC, f.codec, "%s frame %d codec mismatch", id, i)
+			require.Equal(t, model.AudioAAC, f.codec, "%s frame %d codec mismatch", id, i)
 		}
 	}
 }
@@ -299,22 +300,22 @@ func TestStreamHub_AudioNonBlockingDrop(t *testing.T) {
 	hub := newTestStreamHub(t)
 
 	var slowReceived atomic.Int32
-	err := hub.SubscribeAudio("slow", func(pts int64, codec AudioCodec, data []byte) {
+	err := hub.SubscribeAudio("slow", func(pts int64, codec model.AudioCodec, data []byte) {
 		slowReceived.Add(1)
 		time.Sleep(50 * time.Millisecond)
 	})
 	require.NoError(t, err)
 
 	var fastReceived atomic.Int32
-	err = hub.SubscribeAudio("fast", func(pts int64, codec AudioCodec, data []byte) {
+	err = hub.SubscribeAudio("fast", func(pts int64, codec model.AudioCodec, data []byte) {
 		fastReceived.Add(1)
 	})
 	require.NoError(t, err)
 
 	// Broadcast should return quickly — not blocked by slow consumer
 	start := time.Now()
-	hub.BroadcastAudio(1, AudioAAC, []byte{0x01})
-	hub.BroadcastAudio(2, AudioAAC, []byte{0x02})
+	hub.BroadcastAudio(1, model.AudioAAC, []byte{0x01})
+	hub.BroadcastAudio(2, model.AudioAAC, []byte{0x02})
 	elapsed := time.Since(start)
 	require.Less(t, elapsed, 50*time.Millisecond, "BroadcastAudio should not block on slow consumers")
 
@@ -336,13 +337,13 @@ func TestStreamHub_AudioUnsubscribeNoLeak(t *testing.T) {
 	hub := newTestStreamHub(t)
 
 	var received atomic.Int32
-	err := hub.SubscribeAudio("leaky", func(pts int64, codec AudioCodec, data []byte) {
+	err := hub.SubscribeAudio("leaky", func(pts int64, codec model.AudioCodec, data []byte) {
 		received.Add(1)
 	})
 	require.NoError(t, err)
 
 	// Should receive before unsubscribe
-	hub.BroadcastAudio(1, AudioAAC, []byte{0x01})
+	hub.BroadcastAudio(1, model.AudioAAC, []byte{0x01})
 	require.Eventually(t, func() bool {
 		return received.Load() == 1
 	}, 2*time.Second, 10*time.Millisecond)
@@ -351,7 +352,7 @@ func TestStreamHub_AudioUnsubscribeNoLeak(t *testing.T) {
 	hub.UnsubscribeAudio("leaky")
 
 	// Should NOT receive after unsubscribe
-	hub.BroadcastAudio(2, AudioAAC, []byte{0x02})
+	hub.BroadcastAudio(2, model.AudioAAC, []byte{0x02})
 	time.Sleep(50 * time.Millisecond)
 	require.Equal(t, int32(1), received.Load(), "should not receive audio after unsubscribe")
 
@@ -361,10 +362,10 @@ func TestStreamHub_AudioUnsubscribeNoLeak(t *testing.T) {
 func TestStreamHub_AudioDoubleSubscribeError(t *testing.T) {
 	hub := newTestStreamHub(t)
 
-	err := hub.SubscribeAudio("dup", func(pts int64, codec AudioCodec, data []byte) {})
+	err := hub.SubscribeAudio("dup", func(pts int64, codec model.AudioCodec, data []byte) {})
 	require.NoError(t, err)
 
-	err = hub.SubscribeAudio("dup", func(pts int64, codec AudioCodec, data []byte) {})
+	err = hub.SubscribeAudio("dup", func(pts int64, codec model.AudioCodec, data []byte) {})
 	require.Error(t, err, "duplicate audio subscribe should return error")
 
 	hub.UnsubscribeAudio("dup")
@@ -381,7 +382,7 @@ func TestStreamHub_AudioDropTracking(t *testing.T) {
 
 	blockCh := make(chan struct{})
 	var received atomic.Int32
-	err := hub.SubscribeAudio("tiny", func(pts int64, codec AudioCodec, data []byte) {
+	err := hub.SubscribeAudio("tiny", func(pts int64, codec model.AudioCodec, data []byte) {
 		received.Add(1)
 		<-blockCh
 	})
@@ -389,7 +390,7 @@ func TestStreamHub_AudioDropTracking(t *testing.T) {
 
 	// Send many frames — buffer (50) will fill up, causing drops
 	for i := range 100 {
-		hub.BroadcastAudio(int64(i), AudioG711, []byte{byte(i)})
+		hub.BroadcastAudio(int64(i), model.AudioG711, []byte{byte(i)})
 	}
 
 	// Wait for buffer to fill
@@ -429,7 +430,7 @@ func TestStreamHub_AudioConcurrentSubscribeUnsubscribe(t *testing.T) {
 			defer wg.Done()
 			cid := fmt.Sprintf("audio-%d", id)
 			for range iterations {
-				_ = hub.SubscribeAudio(cid, func(pts int64, codec AudioCodec, data []byte) {})
+				_ = hub.SubscribeAudio(cid, func(pts int64, codec model.AudioCodec, data []byte) {})
 				hub.UnsubscribeAudio(cid)
 			}
 		}(i)
@@ -440,7 +441,7 @@ func TestStreamHub_AudioConcurrentSubscribeUnsubscribe(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := range iterations {
-				hub.BroadcastAudio(int64(j), AudioAAC, []byte{byte(id)})
+				hub.BroadcastAudio(int64(j), model.AudioAAC, []byte{byte(id)})
 			}
 		}(i)
 	}
@@ -725,7 +726,7 @@ func helperHighContention(t *testing.T, audio bool) {
 					}
 				}
 				if audio {
-					err := hub.SubscribeAudio(cid, func(pts int64, codec AudioCodec, data []byte) {
+					err := hub.SubscribeAudio(cid, func(pts int64, codec model.AudioCodec, data []byte) {
 						if id%3 == 0 {
 							time.Sleep(time.Microsecond)
 						}
@@ -752,7 +753,7 @@ func helperHighContention(t *testing.T, audio bool) {
 			for j := range iterations {
 				isIDR := j%10 == 0 // 10% IDR frames to exercise trySendIDR
 				if audio {
-					hub.BroadcastAudio(int64(j), AudioAAC, []byte{byte(id)})
+					hub.BroadcastAudio(int64(j), model.AudioAAC, []byte{byte(id)})
 				} else {
 					hub.Broadcast(int64(j), [][]byte{{byte(id)}}, isIDR)
 				}
@@ -795,7 +796,7 @@ func helperHighContention(t *testing.T, audio bool) {
 // helperDropRateHub creates a hub with small buffer for drop rate testing.
 func helperDropRateHub(t *testing.T) *StreamHub {
 	t.Helper()
-	hub := NewStreamHub()
+	hub := New()
 	hub.consumerBufferSize = 5
 	hub.SetCameraID("drop-rate-test-cam")
 	return hub

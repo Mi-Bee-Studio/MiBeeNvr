@@ -14,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/gorilla/websocket"
 )
 
@@ -56,7 +57,7 @@ type streamEntry struct {
 	viewerMu  sync.Mutex
 	frameCh   chan model.FrameMsg
 	cancel    context.CancelFunc
-	hub       *model.StreamHub
+	hub       *streamhub.StreamHub
 	hubSubID  string
 	dropCount atomic.Int64
 
@@ -160,7 +161,7 @@ func NewManager(opts ...Option) *Manager {
 
 // RegisterStream registers a camera stream for WebSocket output.
 // The recorder's StreamHub is used to receive live frames.
-func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error {
+func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *streamhub.StreamHub) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -313,7 +314,7 @@ func (m *Manager) IsActive(camID string) bool {
 
 // ActiveHub returns the StreamHub the registered entry is currently
 // subscribed to (nil when the stream is not active).
-func (m *Manager) ActiveHub(camID string) *model.StreamHub {
+func (m *Manager) ActiveHub(camID string) *streamhub.StreamHub {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry, ok := m.streams[camID]
@@ -327,7 +328,7 @@ func (m *Manager) ActiveHub(camID string) *model.StreamHub {
 // reconnect get a FRESH hub from the camera manager; without a rebind the
 // entry keeps listening to the dead hub and every viewer goes black forever
 // (observed on flaky MJPEG cameras whose recorder reconnects often).
-func (m *Manager) RebindHub(camID string, hub *model.StreamHub) {
+func (m *Manager) RebindHub(camID string, hub *streamhub.StreamHub) {
 	if hub == nil {
 		return
 	}
@@ -882,7 +883,7 @@ func (m *Manager) AudioUpstream(w http.ResponseWriter, r *http.Request, handler 
 
 // Ensure Manager satisfies expected interface.
 var _ interface {
-	RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error
+	RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *streamhub.StreamHub) error
 	UnregisterStream(camID string)
 	IsActive(camID string) bool
 	viewerCount(camID string) int

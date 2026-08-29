@@ -14,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var flvLogger = slog.Default().With("component", "flv-manager")
@@ -50,7 +51,7 @@ type streamEntry struct {
 	viewerMu  sync.Mutex
 	frameCh   chan model.FrameMsg
 	cancel    context.CancelFunc
-	hub       *model.StreamHub
+	hub       *streamhub.StreamHub
 	hubSubID  string
 	// clockBase is the unix-ms wallclock this entry's FLV tag StreamID
 	// deltas are measured from (#481). Fixed at registration so the shared
@@ -120,7 +121,7 @@ func NewManager(opts ...Option) *Manager {
 
 // RegisterStream registers a camera stream for FLV output.
 // The recorder's StreamHub is used to receive live frames.
-func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error {
+func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *streamhub.StreamHub) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -203,7 +204,7 @@ func (m *Manager) UnregisterStream(camID string) { m.unregisterStream(camID) }
 
 // ActiveHub returns the StreamHub the registered entry is currently
 // subscribed to (nil when the stream is not active).
-func (m *Manager) ActiveHub(camID string) *model.StreamHub {
+func (m *Manager) ActiveHub(camID string) *streamhub.StreamHub {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry, ok := m.streams[camID]
@@ -217,7 +218,7 @@ func (m *Manager) ActiveHub(camID string) *model.StreamHub {
 // puller (#513) restarts with a FRESH hub after each idle recycle; without a
 // rebind the entry keeps listening to the dead hub and every viewer goes
 // black forever. Mirrors wsstream.Manager.RebindHub.
-func (m *Manager) RebindHub(camID string, hub *model.StreamHub) {
+func (m *Manager) RebindHub(camID string, hub *streamhub.StreamHub) {
 	if hub == nil {
 		return
 	}

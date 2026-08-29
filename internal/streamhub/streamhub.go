@@ -1,4 +1,4 @@
-package model
+package streamhub
 
 import (
 	"fmt"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
@@ -25,22 +26,22 @@ const SubStreamKeySuffix = "/sub"
 // frames are dropped silently to protect the recording pipeline.
 type FrameCallback func(pts int64, au [][]byte)
 
-// MsgCallback receives the full FrameMsg — an opt-in variant of FrameCallback
+// MsgCallback receives the full model.FrameMsg — an opt-in variant of FrameCallback
 // for consumers that need per-frame metadata (notably IngestAt, used by
 // wsstream to relay end-to-end live latency). Kept separate so the widely
 // implemented FrameCallback signature (and its pkg/streamhub mirror) stays
 // stable (#469).
-type MsgCallback func(msg FrameMsg)
+type MsgCallback func(msg model.FrameMsg)
 
 // AudioCallback is called for each decoded audio frame.
 // Implementations MUST be non-blocking — if the internal buffer is full,
 // frames are dropped silently to protect the recording/streaming pipeline.
-type AudioCallback func(pts int64, codec AudioCodec, data []byte)
+type AudioCallback func(pts int64, codec model.AudioCodec, data []byte)
 
 // audioFrameMsg is an internal audio frame representation passed through consumer channels.
 type audioFrameMsg struct {
 	pts   int64
-	codec AudioCodec
+	codec model.AudioCodec
 	data  []byte
 }
 
@@ -67,7 +68,7 @@ func (c *audioConsumer) drain() {
 // goroutine can measure queue dwell latency without touching the producer
 // hot path.
 type queuedFrame struct {
-	msg        FrameMsg
+	msg        model.FrameMsg
 	enqueuedAt int64 // unix nano
 }
 
@@ -125,6 +126,16 @@ func frameSize(au [][]byte) int {
 	return n
 }
 
+// HubHost is an optional interface implemented by recorders that carry a
+// StreamHub for frame fan-out. The camera manager wires a fresh hub via
+// SetHub at recorder creation; HubSource labels the hub for the flow-path
+// observability view. Adding a new recorder type means implementing this
+// interface on the type itself — no camera-manager type switch to extend.
+type HubHost interface {
+	SetHub(hub *StreamHub)
+	HubSource() string
+}
+
 // StreamHub distributes frames from a single source to multiple consumers.
 // Each consumer is identified by a unique string ID and runs in its own goroutine
 // with a buffered channel, so slow consumers never block others.
@@ -178,19 +189,19 @@ type StreamHub struct {
 	// All access is guarded by h.mu (set in distributeFrame under h.mu; read &
 	// drained in Subscribe under h.mu), matching the locking discipline of
 	// consumers — no separate lock is needed.
-	idrCache     []FrameMsg
+	idrCache     []model.FrameMsg
 	idrCacheSize int // max cached IDRs (ring); 0 disables replay (legacy behavior)
 
 	// Jitter buffer state — only activated when out-of-order frames are detected.
 	jitterBufferEnabled  atomic.Bool
-	jitterBufferSize     int           // max frames to buffer before flush (default: 5)
-	jitterBufferTimeout  time.Duration // max wait before flushing partial buffer (default: 500ms)
-	jitterBuffer         []FrameMsg    // buffered frames awaiting reordering
-	jitterBufferMu       sync.Mutex    // protects jitter buffer state
-	jitterBufferTimer    *time.Timer   // timeout flush timer
-	jitterBufferLastPTS  int64         // last PTS seen, for disorder detection
-	jitterBufferReorders atomic.Int64  // total out-of-order detections
-	jitterBufferActive   atomic.Bool   // quick check if buffer may have frames
+	jitterBufferSize     int              // max frames to buffer before flush (default: 5)
+	jitterBufferTimeout  time.Duration    // max wait before flushing partial buffer (default: 500ms)
+	jitterBuffer         []model.FrameMsg // buffered frames awaiting reordering
+	jitterBufferMu       sync.Mutex       // protects jitter buffer state
+	jitterBufferTimer    *time.Timer      // timeout flush timer
+	jitterBufferLastPTS  int64            // last PTS seen, for disorder detection
+	jitterBufferReorders atomic.Int64     // total out-of-order detections
+	jitterBufferActive   atomic.Bool      // quick check if buffer may have frames
 	// OnJitterBufferFlush is called when jitter buffer flushes reordered frames.
 	// Receives cameraID and number of frames flushed.
 	OnJitterBufferFlush func(cameraID string, count int)
@@ -209,7 +220,7 @@ type StreamHub struct {
 const DefaultIDRCacheSize = 3
 
 // NewStreamHub creates a new StreamHub with no consumers.
-func NewStreamHub() *StreamHub {
+func New() *StreamHub {
 	return &StreamHub{
 		consumers:             make(map[string]*consumerEntry),
 		audioConsumers:        make(map[string]*audioConsumer),
@@ -307,7 +318,7 @@ func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
 	return nil
 }
 
-// SubscribeMsg registers a consumer that receives the full FrameMsg (including
+// SubscribeMsg registers a consumer that receives the full model.FrameMsg (including
 // IngestAt wallclock). Same semantics as Subscribe; see MsgCallback.
 func (h *StreamHub) SubscribeMsg(id string, cb MsgCallback) error {
 	h.mu.Lock()
@@ -349,9 +360,9 @@ func (h *StreamHub) cacheIDRLocked(pts int64, au [][]byte) {
 	if len(h.idrCache) >= h.idrCacheSize {
 		// Ring: drop oldest. copy-in-place keeps the backing array.
 		copy(h.idrCache, h.idrCache[1:])
-		h.idrCache[len(h.idrCache)-1] = FrameMsg{PTS: pts, AU: cp, IsKeyframe: true}
+		h.idrCache[len(h.idrCache)-1] = model.FrameMsg{PTS: pts, AU: cp, IsKeyframe: true}
 	} else {
-		h.idrCache = append(h.idrCache, FrameMsg{PTS: pts, AU: cp, IsKeyframe: true})
+		h.idrCache = append(h.idrCache, model.FrameMsg{PTS: pts, AU: cp, IsKeyframe: true})
 	}
 }
 
@@ -362,7 +373,7 @@ func (h *StreamHub) cacheIDRLocked(pts int64, au [][]byte) {
 // new consumer's channel AFTER releasing h.mu (see Subscribe) to avoid a
 // lock-order inversion: the consumer's drain callback may acquire an outer lock
 // (e.g. wsstream.Manager.mu) that the Subscribe caller still holds.
-func (h *StreamHub) latestCompleteIDRLocked() *FrameMsg {
+func (h *StreamHub) latestCompleteIDRLocked() *model.FrameMsg {
 	if h.idrCacheSize == 0 || len(h.idrCache) == 0 {
 		return nil
 	}
@@ -481,7 +492,7 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 			e.entry.sendMu.RUnlock()
 			continue
 		}
-		msg := FrameMsg{PTS: pts, AU: au, IsKeyframe: isIDR, IngestAt: now}
+		msg := model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isIDR, IngestAt: now}
 		select {
 		case e.entry.ch <- queuedFrame{msg: msg, enqueuedAt: now}:
 			e.entry.sends.Add(1)
@@ -545,7 +556,7 @@ func (h *StreamHub) detectDisorder(pts int64) bool {
 // bufferAndMaybeFlush adds a frame to the jitter buffer and flushes if full.
 func (h *StreamHub) bufferAndMaybeFlush(pts int64, au [][]byte, isIDR bool) {
 	h.jitterBufferMu.Lock()
-	h.jitterBuffer = append(h.jitterBuffer, FrameMsg{PTS: pts, AU: au, IsKeyframe: isIDR})
+	h.jitterBuffer = append(h.jitterBuffer, model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isIDR})
 	h.jitterBufferActive.Store(true)
 	if h.OnJitterBufferDepth != nil {
 		h.OnJitterBufferDepth(h.cameraID, len(h.jitterBuffer))
@@ -567,7 +578,7 @@ func (h *StreamHub) bufferAndMaybeFlush(pts int64, au [][]byte, isIDR bool) {
 
 // flushJitterBufferLocked sorts the jitter buffer by PTS and returns the sorted frames.
 // Must be called with jitterBufferMu held.
-func (h *StreamHub) flushJitterBufferLocked() []FrameMsg {
+func (h *StreamHub) flushJitterBufferLocked() []model.FrameMsg {
 	if len(h.jitterBuffer) == 0 {
 		return nil
 	}
@@ -616,7 +627,7 @@ func (h *StreamHub) resetJitterBufferTimer() {
 // frame from the channel and retrying. Every evicted non-IDR frame counts as a
 // drop (it is genuinely lost); if no space can be made, the IDR itself is
 // dropped and counted in idrDrops. Returns true if the IDR was enqueued.
-func (h *StreamHub) trySendIDR(consumerID string, entry *consumerEntry, msg FrameMsg) bool {
+func (h *StreamHub) trySendIDR(consumerID string, entry *consumerEntry, msg model.FrameMsg) bool {
 	ch := entry.ch
 	// Drain one oldest frame (non-blocking). If it was an IDR, put it back
 	// and try to drain the next one. We want to preserve IDRs.
@@ -793,7 +804,7 @@ func (h *StreamHub) UnsubscribeAudio(id string) {
 // drop counter is incremented atomically.
 //
 // BroadcastAudio does NOT wait for any consumer to process the frame.
-func (h *StreamHub) BroadcastAudio(pts int64, codec AudioCodec, data []byte) {
+func (h *StreamHub) BroadcastAudio(pts int64, codec model.AudioCodec, data []byte) {
 	h.lastAudioFrameAt.Store(time.Now().UnixNano())
 	// Observability: fire audio broadcast callback
 	if h.OnBroadcastAudio != nil {

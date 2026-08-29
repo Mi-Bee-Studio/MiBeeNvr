@@ -12,6 +12,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/go-chi/chi/v5"
@@ -24,7 +25,7 @@ import (
 // receives frames via the fan-out architecture.
 // It first unsubscribes any stale "hls" consumer left over from a previous
 // session (e.g. after idle eviction), then subscribes with the new callback.
-func subscribeHLS(hub *model.StreamHub, cameraID string, hlsMgr *hls.Manager, isH265 bool) error {
+func subscribeHLS(hub *streamhub.StreamHub, cameraID string, hlsMgr *hls.Manager, isH265 bool) error {
 	if hub == nil {
 		return nil // no hub, no subscription (shouldn't happen in practice)
 	}
@@ -105,7 +106,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 
 		var codec model.Format
 		var sps, pps, vps []byte
-		var hub *model.StreamHub
+		var hub *streamhub.StreamHub
 		if subSrc != nil {
 			// Sub-stream: parameters from the pull's SDP/in-band snapshot;
 			// the main recorder need not be running at all.
@@ -243,7 +244,7 @@ func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
 
 // getRecorderHub extracts the StreamHub from any recorder type.
 // Returns nil if the recorder doesn't have a Hub.
-func getRecorderHub(rec model.Recorder) *model.StreamHub {
+func getRecorderHub(rec model.Recorder) *streamhub.StreamHub {
 	switch r := rec.(type) {
 	case *recorder.H264Recorder:
 		return r.Hub

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/ghettovoice/gosip/sip/parser"
@@ -88,7 +88,7 @@ func serveRegistration(t *testing.T, up *upperSocket, stop <-chan struct{}) {
 }
 
 func TestLoopbackRegisterDigestDanceAndKeepalive(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	db := newCascadeTestDB(t)
 	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front"}}}, hub}, db)
 
@@ -106,7 +106,7 @@ func TestLoopbackRegisterDigestDanceAndKeepalive(t *testing.T) {
 }
 
 func TestLoopbackCatalogQueryAnswer(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	db := newCascadeTestDB(t)
 	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front"}}}, hub}, db)
 	_, err := svc.catalogItems()
@@ -138,7 +138,7 @@ func TestLoopbackDeviceInfoQueryAnswer(t *testing.T) {
 // TestLoopbackMediaPump drives real frames through the hub and asserts RTP
 // packets land on the INVITEd media address — the full forward path.
 func TestLoopbackMediaPump(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	db := newCascadeTestDB(t)
 	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front", Encoding: "h264"}}}, hub}, db)
 	_, err := svc.catalogItems()

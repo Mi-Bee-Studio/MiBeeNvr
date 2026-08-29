@@ -14,6 +14,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // --- Test Helpers ---
@@ -462,7 +463,7 @@ func TestWHEPAudioMuxing(t *testing.T) {
 	mgr := NewManager()
 	defer mgr.StopAll()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	mgr.RegisterStream("audio-cam", hub, nil)
 	require.NoError(t, mgr.SetAudioInfo("audio-cam", "g711", true, 8000, 1))
 	// AAC is not a WebRTC codec — the manager leaves the camera video-only.
@@ -497,7 +498,7 @@ func TestSetAudioInfoALaw(t *testing.T) {
 	mgr := NewManager()
 	defer mgr.StopAll()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	mgr.RegisterStream("alaw-cam", hub, nil)
 	require.NoError(t, mgr.SetAudioInfo("alaw-cam", "g711", false, 8000, 1))
 
@@ -522,7 +523,7 @@ func TestSetAudioInfoIdempotent(t *testing.T) {
 	mgr := NewManager()
 	defer mgr.StopAll()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	mgr.RegisterStream("cam", hub, nil)
 	require.NoError(t, mgr.SetAudioInfo("cam", "g711", true, 8000, 1))
 	require.NoError(t, mgr.SetAudioInfo("cam", "g711", true, 8000, 1))
@@ -662,7 +663,7 @@ func TestRegisterStream(t *testing.T) {
 	mgr := newTestManager(t)
 	defer mgr.StopAll()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	// Register should subscribe to hub
 	mgr.RegisterStream("test-cam", hub, nil)
@@ -697,7 +698,7 @@ func TestRegisterStreamDeliversFrames(t *testing.T) {
 	connectWHEP(t, mgr, "test-cam", client.pc, offerSDP)
 
 	// Register stream with a hub
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	mgr.RegisterStream("test-cam", hub, nil)
 
 	// Broadcast a frame through the hub
@@ -721,8 +722,8 @@ func TestRegisterStreamDeliversFrames(t *testing.T) {
 func TestStopAllCleansUpHubSubs(t *testing.T) {
 	mgr := newTestManager(t)
 
-	hub1 := model.NewStreamHub()
-	hub2 := model.NewStreamHub()
+	hub1 := streamhub.New()
+	hub2 := streamhub.New()
 
 	mgr.RegisterStream("cam-1", hub1, nil)
 	mgr.RegisterStream("cam-2", hub2, nil)
@@ -957,8 +958,8 @@ func TestFmtpForProfile(t *testing.T) {
 // from the dead hub: frozen video until a page reload).
 func TestRegisterStreamRebindsOnHubChange(t *testing.T) {
 	m := NewManager()
-	hub1 := model.NewStreamHub()
-	hub2 := model.NewStreamHub()
+	hub1 := streamhub.New()
+	hub2 := streamhub.New()
 
 	m.RegisterStream("cam-rebind", hub1, nil)
 	require.Same(t, hub1, m.hubSubs["cam-rebind"].hub)
@@ -983,7 +984,7 @@ func TestAudioForwarding(t *testing.T) {
 	mgr := newTestManager(t)
 	defer mgr.StopAll()
 
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	mgr.RegisterStream("audio-cam", hub, nil)
 	require.NoError(t, mgr.SetAudioInfo("audio-cam", "g711", true, 8000, 1))
 
@@ -1074,10 +1075,10 @@ func TestSubStreamKeySessions(t *testing.T) {
 		ended = append(ended, key)
 	})
 
-	mainHub := model.NewStreamHub()
-	subHub := model.NewStreamHub()
+	mainHub := streamhub.New()
+	subHub := streamhub.New()
 	mgr.RegisterStream("cam-1", mainHub, nil)
-	subKey := "cam-1" + model.SubStreamKeySuffix
+	subKey := "cam-1" + streamhub.SubStreamKeySuffix
 	mgr.RegisterStream(subKey, subHub, nil)
 	require.Equal(t, subHub, mgr.RegisteredHub(subKey), "sub key registered on its own hub")
 	require.Equal(t, mainHub, mgr.RegisteredHub("cam-1"), "main key registration unaffected")

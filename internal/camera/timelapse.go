@@ -9,6 +9,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
@@ -430,7 +431,7 @@ func (cm *CameraManager) startRecordingScheduleMonitor(ctx context.Context, came
 
 // startTimelapseKeyframeExtractor creates and starts a KeyframeExtractor for the given camera,
 // subscribing it to the provided StreamHub. The extractor is stored in the manager for lifecycle management.
-func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam config.CameraConfig, hub *model.StreamHub, rec model.Recorder) error {
+func (cm *CameraManager) startTimelapseKeyframeExtractor(cameraID string, cam config.CameraConfig, hub *streamhub.StreamHub, rec model.Recorder) error {
 	if effectiveDualModeFrameSource(cam) != "rtsp_keyframe" {
 		return nil
 	}

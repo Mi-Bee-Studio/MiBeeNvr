@@ -18,6 +18,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var audioTestSPS = []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
@@ -45,7 +46,7 @@ func TestViewerCountPaths(t *testing.T) {
 
 func TestSetAudioInfo(t *testing.T) {
 	m := NewManager()
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	require.NoError(t, m.RegisterStream("cam-aud", model.FormatH264, audioTestSPS, nil, nil, hub))
 
 	// Unknown camera.

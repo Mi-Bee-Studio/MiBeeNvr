@@ -9,6 +9,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 )
 
@@ -178,7 +179,7 @@ func (h *HLSStreamHandler) startFromProvider(
 	camID string,
 	codec model.Format,
 	sps, pps, vps []byte,
-	hub *model.StreamHub,
+	hub *streamhub.StreamHub,
 	provider model.HLSProvider,
 	opts StreamStartOptions,
 ) error {
@@ -211,7 +212,7 @@ func (h *HLSStreamHandler) startFromProvider(
 }
 
 // subscribeHub handles the sub-stream URL / main stream subscription logic.
-func (h *HLSStreamHandler) subscribeHub(camID string, hub *model.StreamHub, isH265 bool, opts StreamStartOptions) {
+func (h *HLSStreamHandler) subscribeHub(camID string, hub *streamhub.StreamHub, isH265 bool, opts StreamStartOptions) {
 	if hub == nil {
 		return
 	}
@@ -313,8 +314,8 @@ func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byt
 // getStreamHub extracts the StreamHub from a recorder via the GetHub()
 // interface (implemented by every recorder type). Returns nil if the recorder
 // doesn't implement it or the hub is not set.
-func getStreamHub(rec model.Recorder) *model.StreamHub {
-	if h, ok := rec.(interface{ GetHub() *model.StreamHub }); ok {
+func getStreamHub(rec model.Recorder) *streamhub.StreamHub {
+	if h, ok := rec.(interface{ GetHub() *streamhub.StreamHub }); ok {
 		return h.GetHub()
 	}
 	return nil

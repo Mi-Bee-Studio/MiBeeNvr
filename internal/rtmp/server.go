@@ -12,8 +12,8 @@ import (
 	"github.com/bluenviron/gortmplib"
 	"github.com/bluenviron/gortmplib/pkg/codecs"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var logger = slog.Default().With("component", "rtmp-server")
@@ -24,11 +24,11 @@ type StreamKeyResolver func(streamKey string) (cameraID string, ok bool)
 
 // CameraHubProvider returns the StreamHub for a given camera.
 // Returns nil if no hub is available for the camera.
-type CameraHubProvider func(cameraID string) *model.StreamHub
+type CameraHubProvider func(cameraID string) *streamhub.StreamHub
 
 // OnPublisherConnect is called when a publisher connects for a camera.
 // The implementation should set up the StreamHub and register the virtual camera.
-type OnPublisherConnect func(cameraID string, hub *model.StreamHub)
+type OnPublisherConnect func(cameraID string, hub *streamhub.StreamHub)
 
 // OnPublisherDisconnect is called when a publisher disconnects for a camera.
 // The implementation should clean up the virtual camera and hub.
@@ -67,7 +67,7 @@ type Server struct {
 
 type publisherEntry struct {
 	cameraID string
-	hub      *model.StreamHub
+	hub      *streamhub.StreamHub
 	cancel   context.CancelFunc
 }
 
@@ -197,7 +197,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 	hub := s.hubFn(cameraID)
 	if hub == nil {
-		hub = model.NewStreamHub()
+		hub = streamhub.New()
 	}
 
 	pCtx, pCancel := context.WithCancel(ctx)

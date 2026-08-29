@@ -17,6 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,14 +28,14 @@ type providerStub struct {
 	sps   []byte
 	pps   []byte
 	vps   []byte
-	hub   *model.StreamHub
+	hub   *streamhub.StreamHub
 }
 
 func (p *providerStub) CodecParams() (model.Format, []byte, []byte, []byte) {
 	return p.codec, p.sps, p.pps, p.vps
 }
 
-func (p *providerStub) GetHub() *model.StreamHub { return p.hub }
+func (p *providerStub) GetHub() *streamhub.StreamHub { return p.hub }
 
 // delegatingStub unwraps to an inner recorder (ONVIF-style).
 type delegatingStub struct {
@@ -230,7 +231,7 @@ func TestGetStreamHubs(t *testing.T) {
 	t.Parallel()
 
 	// GetHub interface path.
-	hub := &model.StreamHub{}
+	hub := &streamhub.StreamHub{}
 	require.Equal(t, hub, getStreamHub(&providerStub{hub: hub}))
 
 	// Recorders without a hub surface fall through to nil. (Concrete

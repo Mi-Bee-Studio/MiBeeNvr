@@ -5,6 +5,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // This file implements the copy-on-write snapshot registry that replaces the
@@ -35,7 +36,7 @@ import (
 // callers must go through apply() to publish a new pointer.
 type snapshot struct {
 	recorders    map[string]model.Recorder       // camera_id → running recorder (nil slot = not running)
-	hubs         map[string]*model.StreamHub     // camera_id → StreamHub (single source of truth for pull+push)
+	hubs         map[string]*streamhub.StreamHub // camera_id → StreamHub (single source of truth for pull+push)
 	configs      map[string]*config.CameraConfig // camera_id → config pointer (into cm.cfg.Cameras or a copy)
 	failedStarts map[string]error                // camera_id → last start failure (surfaced as StatusError to health)
 }
@@ -44,7 +45,7 @@ type snapshot struct {
 func newSnapshot() *snapshot {
 	return &snapshot{
 		recorders:    make(map[string]model.Recorder),
-		hubs:         make(map[string]*model.StreamHub),
+		hubs:         make(map[string]*streamhub.StreamHub),
 		configs:      make(map[string]*config.CameraConfig),
 		failedStarts: make(map[string]error),
 	}
@@ -55,7 +56,7 @@ func newSnapshot() *snapshot {
 func (s *snapshot) clone() *snapshot {
 	c := &snapshot{
 		recorders:    make(map[string]model.Recorder, len(s.recorders)),
-		hubs:         make(map[string]*model.StreamHub, len(s.hubs)),
+		hubs:         make(map[string]*streamhub.StreamHub, len(s.hubs)),
 		configs:      make(map[string]*config.CameraConfig, len(s.configs)),
 		failedStarts: make(map[string]error, len(s.failedStarts)),
 	}
@@ -144,16 +145,16 @@ func (cm *CameraManager) snapshotRecorder(cameraID string) model.Recorder {
 }
 
 // snapshotHub returns the StreamHub for cameraID, or nil.
-func (cm *CameraManager) snapshotHub(cameraID string) *model.StreamHub {
+func (cm *CameraManager) snapshotHub(cameraID string) *streamhub.StreamHub {
 	return cm.loadSnapshot().hubs[cameraID]
 }
 
 // snapshotHubs returns a copy of the camera_id → hub map for iteration
 // (stats flusher, flow-path API). Copy avoids holding the snapshot while
 // iterating.
-func (cm *CameraManager) snapshotHubs() map[string]*model.StreamHub {
+func (cm *CameraManager) snapshotHubs() map[string]*streamhub.StreamHub {
 	s := cm.loadSnapshot()
-	hubs := make(map[string]*model.StreamHub, len(s.hubs))
+	hubs := make(map[string]*streamhub.StreamHub, len(s.hubs))
 	for id, hub := range s.hubs {
 		hubs[id] = hub
 	}
@@ -162,7 +163,7 @@ func (cm *CameraManager) snapshotHubs() map[string]*model.StreamHub {
 
 // Hubs is the public read-only view of all registered StreamHubs, used by the
 // /api/streams flow-path endpoint (#469).
-func (cm *CameraManager) Hubs() map[string]*model.StreamHub {
+func (cm *CameraManager) Hubs() map[string]*streamhub.StreamHub {
 	return cm.snapshotHubs()
 }
 

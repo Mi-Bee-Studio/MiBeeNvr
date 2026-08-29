@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // --- Cloud constructor defaults ---
@@ -380,7 +381,7 @@ func TestXiaomiRecorderHLSFrameH265IDR(t *testing.T) {
 	r.sps = []byte{0x42, 0x01, 0x01}
 	r.pps = []byte{0x44, 0x01, 0xc1}
 	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
+		r.Hub = streamhub.New()
 	}
 
 	var mu sync.Mutex
@@ -418,7 +419,7 @@ func TestXiaomiRecorderHLSFrameUnknownCodec(t *testing.T) {
 	r.codecOK = true
 	r.streamStart = time.Now()
 	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
+		r.Hub = streamhub.New()
 	}
 
 	var mu sync.Mutex

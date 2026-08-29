@@ -27,6 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var hlsLogger = slog.Default().With("component", "hls-manager")
@@ -69,7 +70,7 @@ type streamEntry struct {
 	// hub is the StreamHub the entry's "hls" consumer is subscribed to.
 	// Set by SubscribeToHub; compared by the sub-stream recycler (#513) to
 	// decide whether this entry still belongs to a recycled pull generation.
-	hub *model.StreamHub
+	hub *streamhub.StreamHub
 	// wg tracks the writeLoop + idleWatchdog goroutines so stopStreamLocked
 	// can join them before returning. Without this, the goroutines briefly
 	// outlive the entry (they touch entry.mux / entry.dirPath), leaking
@@ -1115,7 +1116,7 @@ func (m *Manager) StopAll() {
 // #469: uses AddOnDrop (callback list) — the old direct assignment silently
 // destroyed the camera manager's hub-level Prometheus wiring as soon as any
 // HLS subscriber attached.
-func (m *Manager) SubscribeToHub(cameraID string, hub *model.StreamHub, isH265 bool) error {
+func (m *Manager) SubscribeToHub(cameraID string, hub *streamhub.StreamHub, isH265 bool) error {
 	m.mu.Lock()
 	if entry, ok := m.streams[cameraID]; ok {
 		entry.hub = hub
@@ -1142,7 +1143,7 @@ func (m *Manager) SubscribeToHub(cameraID string, hub *model.StreamHub, isH265 b
 // subscribed to (nil when the stream is not active). The sub-stream recycler
 // (#513) compares this against the recycled hub to avoid stopping an entry
 // that already rebound to a fresh pull generation.
-func (m *Manager) ActiveHub(cameraID string) *model.StreamHub {
+func (m *Manager) ActiveHub(cameraID string) *streamhub.StreamHub {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry, ok := m.streams[cameraID]
@@ -1157,13 +1158,13 @@ func (m *Manager) ActiveHub(cameraID string) *model.StreamHub {
 // parameters stay from registration; puller restarts preserve the camera's
 // parameter sets in practice, and the recycle path stops the entry anyway, so
 // the rebind is only a short-window safety net.
-func (m *Manager) RebindHub(cameraID string, hub *model.StreamHub, isH265 bool) {
+func (m *Manager) RebindHub(cameraID string, hub *streamhub.StreamHub, isH265 bool) {
 	if hub == nil {
 		return
 	}
 	m.mu.RLock()
 	entry, ok := m.streams[cameraID]
-	oldHub := (*model.StreamHub)(nil)
+	oldHub := (*streamhub.StreamHub)(nil)
 	if ok {
 		oldHub = entry.hub
 	}

@@ -12,8 +12,8 @@ import (
 	srt "github.com/datarhei/gosrt"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var logger = slog.Default().With("component", "srt-receiver")
@@ -26,7 +26,7 @@ type Receiver struct {
 	address    string
 	passphrase string
 	streamID   string
-	hub        *model.StreamHub
+	hub        *streamhub.StreamHub
 	conn       srt.Conn
 	done       chan struct{}
 	running    atomic.Bool
@@ -42,7 +42,7 @@ type Receiver struct {
 }
 
 // NewReceiver creates a new SRT receiver for the given stream configuration.
-func NewReceiver(stream config.SRTStream, hub *model.StreamHub) *Receiver {
+func NewReceiver(stream config.SRTStream, hub *streamhub.StreamHub) *Receiver {
 	return &Receiver{
 		cameraID:   stream.CameraID,
 		mode:       stream.Mode,

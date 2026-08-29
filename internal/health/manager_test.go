@@ -8,18 +8,19 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // --- Mocks ---
 
 // mockRecorder implements model.Recorder and supports GetHub().
 type mockRecorder struct {
-	hub    *model.StreamHub
+	hub    *streamhub.StreamHub
 	mu     sync.Mutex
 	status model.RecorderStatus
 }
 
-func (r *mockRecorder) GetHub() *model.StreamHub {
+func (r *mockRecorder) GetHub() *streamhub.StreamHub {
 	return r.hub
 }
 
@@ -33,7 +34,7 @@ func (r *mockRecorder) Status() model.RecorderStatus {
 
 func newMockRecorderWithHub() *mockRecorder {
 	return &mockRecorder{
-		hub:    model.NewStreamHub(),
+		hub:    streamhub.New(),
 		status: model.StatusRecording,
 	}
 }

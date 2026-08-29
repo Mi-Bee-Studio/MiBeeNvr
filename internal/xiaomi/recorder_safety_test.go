@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // --- processH264NALU: SPS/PPS detection and segment creation ---
@@ -252,7 +253,7 @@ func TestForwardHLSSetsSPSPPSOnH264IDR(t *testing.T) {
 	r.pps = []byte{0x68, 0xce}
 
 	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
+		r.Hub = streamhub.New()
 	}
 	var mu sync.Mutex
 	var receivedAU [][]byte
@@ -287,7 +288,7 @@ func TestForwardHLSSetsVPS_SPS_PPSOnH265IDR(t *testing.T) {
 	r.sps = []byte{0x42, 0x01}
 	r.pps = []byte{0x44, 0x01}
 	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
+		r.Hub = streamhub.New()
 	}
 
 	var mu sync.Mutex
@@ -320,7 +321,7 @@ func TestForwardHLSH264NonIDRNoPrefix(t *testing.T) {
 	r.sps = []byte{0x67}
 	r.pps = []byte{0x68}
 	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
+		r.Hub = streamhub.New()
 	}
 
 	var mu sync.Mutex
@@ -656,7 +657,7 @@ func TestHLSSubscribeConcurrent(t *testing.T) {
 	r.streamStart = time.Now()
 
 	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
+		r.Hub = streamhub.New()
 	}
 
 	var calls atomic.Int32

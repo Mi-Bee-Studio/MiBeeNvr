@@ -15,6 +15,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +39,7 @@ func TestH264ParamSetExtraction(t *testing.T) {
 	pps := []byte{0x68, 0xce, 0x38}
 	// One access unit carrying SPS(7), PPS(8), IDR(5) and a non-param NAL.
 	au := [][]byte{sps, pps, {0x65, 0x88}, {0x41, 0x10}}
-	rec.Hub = model.NewStreamHub() // wired by camera.initStreamHub in production
+	rec.Hub = streamhub.New() // wired by camera.initStreamHub in production
 	H264NALDriver{}.extractParamSets(rec.baseRecorder, au)
 
 	require.Equal(t, sps, rec.SPS())
@@ -122,7 +123,7 @@ func TestStorageHealthHelpers(t *testing.T) {
 
 func TestStubRecorderSurface(t *testing.T) {
 	t.Parallel()
-	s := &StubRecorder{Hub: model.NewStreamHub()}
+	s := &StubRecorder{Hub: streamhub.New()}
 	require.NoError(t, s.Start(context.Background()))
 	require.Equal(t, model.StatusRecording, s.Status())
 	require.NoError(t, s.Stop())

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 func TestActiveHubAndRebind(t *testing.T) {
@@ -24,13 +25,13 @@ func TestActiveHubAndRebind(t *testing.T) {
 
 	require.Nil(t, m.ActiveHub("cam-none"))
 
-	hub1 := model.NewStreamHub()
+	hub1 := streamhub.New()
 	require.NoError(t, m.RegisterStream("cam-flv", model.FormatH264, minimalSPS, minimalPPS, nil, hub1))
 	require.Equal(t, hub1, m.ActiveHub("cam-flv"))
 
 	// Rebind to a fresh hub: old hub's consumer is removed, frames now flow
 	// from the new hub (a probe consumer on hub2 sees broadcasts).
-	hub2 := model.NewStreamHub()
+	hub2 := streamhub.New()
 	m.RebindHub("cam-flv", hub2)
 	require.Equal(t, hub2, m.ActiveHub("cam-flv"))
 
@@ -62,13 +63,13 @@ func TestRebindHubUnsubscribesOldHub(t *testing.T) {
 	m := NewManager()
 	t.Cleanup(func() { m.UnregisterStream("cam-flv"); m.UnregisterStream("cam-old") })
 
-	hub1 := model.NewStreamHub()
+	hub1 := streamhub.New()
 	require.NoError(t, m.RegisterStream("cam-old", model.FormatH264, minimalSPS, minimalPPS, nil, hub1))
 
 	// While registered, the entry owns the "flv-cam-old" consumer slot on hub1.
 	require.Error(t, hub1.SubscribeMsg("flv-cam-old", func(model.FrameMsg) {}))
 
-	hub2 := model.NewStreamHub()
+	hub2 := streamhub.New()
 	m.RebindHub("cam-old", hub2)
 
 	// Rebinding released the old hub's consumer slot: the same ID can be

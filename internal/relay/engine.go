@@ -13,6 +13,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/livetranscode"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
@@ -83,7 +84,7 @@ type PushTarget struct {
 	CameraID string
 	Config   PushTargetConfig
 
-	hub               *model.StreamHub
+	hub               *streamhub.StreamHub
 	spsProvider       SPSProvider
 	codecInfoProvider func() model.CodecInfo
 	sourceCodec       SourceCodecProvider
@@ -123,7 +124,7 @@ type PushTarget struct {
 }
 
 // NewPushTarget constructs an idle target. It does not connect until Run.
-func NewPushTarget(cameraID string, cfg PushTargetConfig, hub *model.StreamHub, sps SPSProvider) *PushTarget {
+func NewPushTarget(cameraID string, cfg PushTargetConfig, hub *streamhub.StreamHub, sps SPSProvider) *PushTarget {
 	return &PushTarget{
 		CameraID:    cameraID,
 		Config:      cfg,

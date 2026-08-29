@@ -1,6 +1,7 @@
-package model
+package streamhub
 
 import (
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	pkgstreamhub "github.com/Mi-Bee-Studio/MiBeeNvr/pkg/streamhub"
 )
 
@@ -9,9 +10,9 @@ var _ pkgstreamhub.Hub = (*HubAdapter)(nil)
 
 // HubAdapter wraps *StreamHub to satisfy pkg/streamhub.Hub.
 //
-// StreamHub's native callback types (model.FrameCallback,
-// model.AudioCallback) are structurally similar but not identical to
-// pkg/streamhub's types — model.AudioCallback uses AudioCodec (a
+// StreamHub's native callback types (streamhub.FrameCallback,
+// streamhub.AudioCallback) are structurally similar but not identical to
+// pkg/streamhub's types — AudioCallback uses model.AudioCodec (a
 // defined string type) while pkg/streamhub uses plain string. The
 // adapter bridges these via zero-cost type conversions.
 //
@@ -42,9 +43,9 @@ func (a *HubAdapter) Unsubscribe(consumerID string) {
 
 // SubscribeAudio registers an audio frame callback. The pkg-streamhub
 // callback (which receives a plain string codec) is bridged to the
-// internal AudioCallback (which receives AudioCodec).
+// internal AudioCallback (which receives model.AudioCodec).
 func (a *HubAdapter) SubscribeAudio(consumerID string, cb pkgstreamhub.AudioCallback) error {
-	return a.Hub.SubscribeAudio(consumerID, func(pts int64, codec AudioCodec, data []byte) {
+	return a.Hub.SubscribeAudio(consumerID, func(pts int64, codec model.AudioCodec, data []byte) {
 		cb(pts, string(codec), data)
 	})
 }

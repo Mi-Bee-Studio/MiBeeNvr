@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // GetOrCreateHub returns the existing StreamHub for the camera ID, or creates a
@@ -29,20 +29,20 @@ import (
 // swap — hub construction + metrics wiring run inside apply but are pure CPU,
 // no I/O). Two concurrent GetOrCreateHub calls for the same camera return the
 // same hub: the second's apply sees the first's published snapshot.
-func (cm *CameraManager) GetOrCreateHub(cameraID string) *model.StreamHub {
+func (cm *CameraManager) GetOrCreateHub(cameraID string) *streamhub.StreamHub {
 	// Fast path: hub already exists (lock-free).
 	if hub := cm.snapshotHub(cameraID); hub != nil {
 		return hub
 	}
 	// Slow path: create under configMu.
-	var created *model.StreamHub
+	var created *streamhub.StreamHub
 	cm.apply(func(s *snapshot) *snapshot {
 		if existing, ok := s.hubs[cameraID]; ok {
 			// Another goroutine won the race inside apply — reuse its hub.
 			created = existing
 			return s
 		}
-		hub := model.NewStreamHub()
+		hub := streamhub.New()
 		hub.SetCameraID(cameraID)
 		hub.SetSource("push")
 		// Wire the same observability callbacks as initStreamHub so push hubs are
@@ -59,7 +59,7 @@ func (cm *CameraManager) GetOrCreateHub(cameraID string) *model.StreamHub {
 // (frame counters, drop counters, buffer-depth gauges). Shared by
 // initStreamHub and GetOrCreateHub so pull and push hubs are instrumented
 // identically (#469).
-func wireHubMetrics(hub *model.StreamHub, cameraID string, m *metrics.Metrics) {
+func wireHubMetrics(hub *streamhub.StreamHub, cameraID string, m *metrics.Metrics) {
 	if m == nil {
 		return
 	}

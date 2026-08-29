@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,12 +22,12 @@ import (
 
 // ─── helpers ─────────────────────────────────────────────────────────────
 
-func newTestHub(t *testing.T) *model.StreamHub {
+func newTestHub(t *testing.T) *streamhub.StreamHub {
 	t.Helper()
-	return model.NewStreamHub()
+	return streamhub.New()
 }
 
-func broadcastFrame(t *testing.T, hub *model.StreamHub, pts int64, au [][]byte) {
+func broadcastFrame(t *testing.T, hub *streamhub.StreamHub, pts int64, au [][]byte) {
 	t.Helper()
 	hub.Broadcast(pts, au, false)
 }
@@ -839,7 +840,7 @@ func TestWriteFrame_H265KeyframeDetection(t *testing.T) {
 // TestManagerInterface verifies the Manager satisfies expected interface.
 func TestManagerInterface(t *testing.T) {
 	var _ interface {
-		RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *model.StreamHub) error
+		RegisterStream(camID string, codec model.Format, sps, pps, vps []byte, hub *streamhub.StreamHub) error
 		UnregisterStream(camID string)
 		IsActive(camID string) bool
 		viewerCount(camID string) int
@@ -1000,7 +1001,7 @@ func TestServeWS_NoConcurrentWriteOnIdle(t *testing.T) {
 
 func BenchmarkWriteFrame(b *testing.B) {
 	m := NewManager(WithWriteBufSize(100))
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	_ = m.RegisterStream("cam1", model.FormatH264, sampleSPS, samplePPS, nil, hub)
 	defer m.StopAll()
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // ingestTestDB is a minimal RecordingDB that records inserted recordings in-memory.
@@ -48,7 +49,7 @@ func newIngestRecorder(t *testing.T, segDur time.Duration) (*IngestRecorder, *st
 		Store:      store,
 		DB:         db,
 	})
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID("push-cam")
 	require.NoError(t, rec.Start(context.Background()))
 	return rec, store, db
@@ -328,7 +329,7 @@ func TestIngestRecorder_AudioLiveOnly(t *testing.T) {
 		DB:            db,
 		RecordEnabled: &liveOnly,
 	})
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID("push-live")
 	require.NoError(t, rec.Start(context.Background()))
 	t.Cleanup(func() { _ = rec.Stop() })
@@ -377,7 +378,7 @@ func TestIngestRecorder_H265_RecordsSegment(t *testing.T) {
 		Store:      store,
 		DB:         db,
 	})
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID("push-cam-h265")
 	require.NoError(t, rec.Start(context.Background()))
 	t.Cleanup(func() { _ = rec.Stop() })

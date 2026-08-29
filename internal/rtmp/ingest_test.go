@@ -12,7 +12,7 @@ import (
 	"github.com/bluenviron/gortmplib/pkg/codecs"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // helper: start an RTMP server on a random port for testing
@@ -132,10 +132,10 @@ func TestStreamKeyResolution(t *testing.T) {
 	var mu sync.Mutex
 
 	resolv := testResolver(keys)
-	hubFn := func(cameraID string) *model.StreamHub {
-		return model.NewStreamHub()
+	hubFn := func(cameraID string) *streamhub.StreamHub {
+		return streamhub.New()
 	}
-	onConn := func(cameraID string, hub *model.StreamHub) {
+	onConn := func(cameraID string, hub *streamhub.StreamHub) {
 		mu.Lock()
 		resolved[cameraID] = true
 		mu.Unlock()
@@ -159,8 +159,8 @@ func TestStreamKeyResolution(t *testing.T) {
 func TestRTMPHandshake(t *testing.T) {
 	keys := testStreamKeys()
 
-	srv, addr := startTestServer(t, testResolver(keys), func(string) *model.StreamHub {
-		return model.NewStreamHub()
+	srv, addr := startTestServer(t, testResolver(keys), func(string) *streamhub.StreamHub {
+		return streamhub.New()
 	}, nil, nil)
 
 	// Basic TCP connect
@@ -179,7 +179,7 @@ func TestH264FrameExtraction(t *testing.T) {
 
 	var receivedFrames [][]byte
 	var mu sync.Mutex
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	// Subscribe a consumer to capture frames
 	err := hub.Subscribe("test", func(pts int64, au [][]byte) {
@@ -189,7 +189,7 @@ func TestH264FrameExtraction(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	hubFn := func(cameraID string) *model.StreamHub {
+	hubFn := func(cameraID string) *streamhub.StreamHub {
 		return hub
 	}
 
@@ -236,7 +236,7 @@ func TestH264FrameExtraction(t *testing.T) {
 // TestFrameDistributionToStreamHub tests that frames from RTMP are properly
 // distributed to multiple StreamHub consumers.
 func TestFrameDistributionToStreamHub(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	var mu sync.Mutex
 	consumer1Count := 0
@@ -281,8 +281,8 @@ func TestDisconnectCleanup(t *testing.T) {
 	disconnected := make(map[string]bool)
 	var mu sync.Mutex
 
-	hubFn := func(cameraID string) *model.StreamHub {
-		return model.NewStreamHub()
+	hubFn := func(cameraID string) *streamhub.StreamHub {
+		return streamhub.New()
 	}
 	onDisc := func(cameraID string) {
 		mu.Lock()
@@ -323,8 +323,8 @@ func TestDisconnectCleanup(t *testing.T) {
 func TestInvalidStreamKey(t *testing.T) {
 	keys := testStreamKeys()
 
-	srv, addr := startTestServer(t, testResolver(keys), func(string) *model.StreamHub {
-		return model.NewStreamHub()
+	srv, addr := startTestServer(t, testResolver(keys), func(string) *streamhub.StreamHub {
+		return streamhub.New()
 	}, nil, nil)
 
 	// Connect with invalid key — should not register
@@ -345,8 +345,8 @@ func TestInvalidStreamKey(t *testing.T) {
 func TestServerStartStop(t *testing.T) {
 	keys := testStreamKeys()
 
-	srv, _ := startTestServer(t, testResolver(keys), func(string) *model.StreamHub {
-		return model.NewStreamHub()
+	srv, _ := startTestServer(t, testResolver(keys), func(string) *streamhub.StreamHub {
+		return streamhub.New()
 	}, nil, nil)
 
 	require.NotNil(t, srv.addr())
@@ -362,7 +362,7 @@ func TestExtractStreamKey_NilURL(t *testing.T) {
 // TestStreamHubBroadcastNonBlocking tests that StreamHub.Broadcast does not
 // block even when consumer buffers are full.
 func TestStreamHubBroadcastNonBlocking(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	// Subscribe a slow consumer that never reads
 	err := hub.Subscribe("slow", func(pts int64, au [][]byte) {
@@ -399,14 +399,14 @@ func TestH265FrameExtraction(t *testing.T) {
 
 	var receivedFrames [][]byte
 	var mu sync.Mutex
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	require.NoError(t, hub.Subscribe("test-h265", func(pts int64, au [][]byte) {
 		mu.Lock()
 		defer mu.Unlock()
 		receivedFrames = append(receivedFrames, au...)
 	}))
 
-	srv, addr := startTestServer(t, testResolver(keys), func(string) *model.StreamHub {
+	srv, addr := startTestServer(t, testResolver(keys), func(string) *streamhub.StreamHub {
 		return hub
 	}, nil, nil)
 

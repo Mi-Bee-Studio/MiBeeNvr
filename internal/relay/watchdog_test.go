@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/bluenviron/gortmplib/pkg/bytecounter"
 	"github.com/stretchr/testify/require"
 )
@@ -54,7 +54,7 @@ func newWatchdogTarget(t *testing.T) *PushTarget {
 		Protocol: "rtmp",
 		URL:      "rtmp://127.0.0.1:1935/live/key",
 		Enabled:  true,
-	}, &model.StreamHub{}, func() ([]byte, []byte, bool) { return nil, nil, false })
+	}, &streamhub.StreamHub{}, func() ([]byte, []byte, bool) { return nil, nil, false })
 	require.NotNil(t, target)
 	target.stallAfter = 200 * time.Millisecond
 	return target

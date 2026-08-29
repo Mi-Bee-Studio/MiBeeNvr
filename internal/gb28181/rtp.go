@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/pion/rtp"
 )
 
@@ -42,7 +42,7 @@ const rtpReadBufSize = 65535
 // TCP passive mode: Accepts TCP connections with RFC 4571 or 0x24 framing.
 type Receiver struct {
 	cameraID    string
-	hub         *model.StreamHub
+	hub         *streamhub.StreamHub
 	portManager *PortManager
 	tcpMode     TCPMode
 
@@ -105,7 +105,7 @@ type Receiver struct {
 }
 
 // NewReceiver creates a new GB28181 RTP receiver.
-func NewReceiver(cameraID string, hub *model.StreamHub, portManager *PortManager) *Receiver {
+func NewReceiver(cameraID string, hub *streamhub.StreamHub, portManager *PortManager) *Receiver {
 	return &Receiver{
 		cameraID:         cameraID,
 		hub:              hub,

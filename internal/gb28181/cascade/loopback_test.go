@@ -20,6 +20,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/ghettovoice/gosip/sip/parser"
@@ -247,7 +248,7 @@ func TestServiceNameAndNoUpperStart(t *testing.T) {
 }
 
 func TestLoopbackInviteLiveForwardAndBye(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	db := newCascadeTestDB(t)
 	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front"}}}, hub}, db)
 	_, err := svc.catalogItems()
@@ -303,7 +304,7 @@ func TestLoopbackInviteLiveForwardAndBye(t *testing.T) {
 }
 
 func TestLoopbackInviteHiddenCameraRefused(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	db := newCascadeTestDB(t)
 	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front", CascadeHidden: true}}}, hub}, db)
 	_, err := svc.catalogItems()
@@ -325,7 +326,7 @@ func TestLoopbackInviteNoHub(t *testing.T) {
 
 func TestLoopbackSubscribeCatalogNotify(t *testing.T) {
 	db := newCascadeTestDB(t)
-	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front"}}}, model.NewStreamHub()}, db)
+	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front"}}}, streamhub.New()}, db)
 
 	sub := up.request(sip.SUBSCRIBE, testCfg().LocalDeviceID, "", "")
 	sub.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog"})
@@ -349,7 +350,7 @@ func TestLoopbackSubscribeCatalogNotify(t *testing.T) {
 }
 
 func TestLoopbackRecordInfoQuery(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	db := newCascadeTestDB(t)
 	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front"}}}, hub}, db)
 	_, err := svc.catalogItems()
@@ -429,7 +430,7 @@ func createPacedPlaybackSegment(t *testing.T, db interface {
 }
 
 func TestLoopbackPlaybackInviteAndControl(t *testing.T) {
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 	db := newCascadeTestDB(t)
 	svc, up := startLoopbackService(t, hubSource{fakeSource{cams: []CameraInfo{{ID: "cam-1", Name: "Front"}}}, hub}, db)
 	_, err := svc.catalogItems()

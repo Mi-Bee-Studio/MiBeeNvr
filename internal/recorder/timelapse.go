@@ -19,6 +19,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
@@ -70,15 +71,15 @@ type TimelapseRecorder struct {
 	segStart     time.Time
 	frameCount   int
 
-	Hub             *model.StreamHub
+	Hub             *streamhub.StreamHub
 	lastHealthLogAt time.Time // throttled log for storage health failures
 }
 
 // GetHub returns the StreamHub for frame fan-out (nil for timelapse — no live streaming).
-func (r *TimelapseRecorder) GetHub() *model.StreamHub { return r.Hub }
+func (r *TimelapseRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
-// SetHub wires the StreamHub for frame fan-out (model.HubHost).
-func (r *TimelapseRecorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+// SetHub wires the StreamHub for frame fan-out (streamhub.HubHost).
+func (r *TimelapseRecorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *TimelapseRecorder) HubSource() string { return "timelapse" }

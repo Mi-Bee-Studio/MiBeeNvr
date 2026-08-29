@@ -14,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var gb28181Logger = slog.Default().With("component", "gb28181-recorder")
@@ -45,7 +46,7 @@ type GB28181Config struct {
 type GB28181Recorder struct {
 	cfg GB28181Config
 	// Hub is set by camera.initStreamHub (same pattern as H264Recorder.Hub).
-	Hub           *model.StreamHub
+	Hub           *streamhub.StreamHub
 	mu            sync.Mutex
 	status        model.RecorderStatus
 	sps, pps, vps []byte
@@ -79,7 +80,7 @@ var (
 )
 
 // NewGB28181Recorder creates a recorder for a GB28181 channel camera.
-func NewGB28181Recorder(cfg GB28181Config, hub *model.StreamHub) *GB28181Recorder {
+func NewGB28181Recorder(cfg GB28181Config, hub *streamhub.StreamHub) *GB28181Recorder {
 	if cfg.SegmentDur < time.Millisecond {
 		cfg.SegmentDur = 10 * time.Minute
 	}
@@ -115,12 +116,12 @@ func (r *GB28181Recorder) Status() model.RecorderStatus {
 	return r.status
 }
 
-func (r *GB28181Recorder) GetHub() *model.StreamHub {
+func (r *GB28181Recorder) GetHub() *streamhub.StreamHub {
 	return r.Hub
 }
 
-// SetHub wires the StreamHub for frame fan-out (model.HubHost).
-func (r *GB28181Recorder) SetHub(hub *model.StreamHub) { r.Hub = hub }
+// SetHub wires the StreamHub for frame fan-out (streamhub.HubHost).
+func (r *GB28181Recorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *GB28181Recorder) HubSource() string { return "gb28181" }

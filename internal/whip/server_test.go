@@ -21,6 +21,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // --- test scaffolding ---
@@ -28,7 +29,7 @@ import (
 type testHarness struct {
 	server   *Server
 	router   *chi.Mux
-	hub      *model.StreamHub
+	hub      *streamhub.StreamHub
 	resolver map[string]string // streamKey → cameraID
 
 	mu          sync.Mutex
@@ -46,15 +47,15 @@ func newTestHarness(t *testing.T) *testHarness {
 	t.Helper()
 	h := &testHarness{
 		resolver: map[string]string{"test-key": "cam-whip"},
-		hub:      model.NewStreamHub(),
+		hub:      streamhub.New(),
 	}
 	h.server = NewServer(
 		func(key string) (string, bool) {
 			camID, ok := h.resolver[key]
 			return camID, ok
 		},
-		func(cameraID string) *model.StreamHub { return h.hub },
-		func(cameraID string, _ *model.StreamHub) {
+		func(cameraID string) *streamhub.StreamHub { return h.hub },
+		func(cameraID string, _ *streamhub.StreamHub) {
 			h.mu.Lock()
 			h.onConnCalls++
 			h.mu.Unlock()
@@ -389,7 +390,7 @@ func TestWHIPPushToRealRecorder(t *testing.T) {
 		Store:      store,
 		DB:         db,
 	})
-	rec.Hub = model.NewStreamHub()
+	rec.Hub = streamhub.New()
 	rec.Hub.SetCameraID("cam-whip")
 	require.NoError(t, rec.Start(context.Background()))
 	t.Cleanup(func() { _ = rec.Stop() })

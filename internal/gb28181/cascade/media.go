@@ -13,6 +13,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/psmux"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
 )
@@ -45,7 +46,7 @@ type mediaSession struct {
 	// sub-stream forward (#512), otherwise the camera's main hub. close()
 	// unsubscribes through it. Guarded by mu: run()'s async sub acquisition
 	// can swap it while a concurrent BYE runs close().
-	hub *model.StreamHub
+	hub *streamhub.StreamHub
 	// releaseSub drops the sub-stream reference acquired for the sub tier.
 	releaseSub func()
 	// wantSub: the camera opted into the low-res cascade tier; run()
@@ -336,7 +337,7 @@ func (ms *mediaSession) localPort() int {
 }
 
 // run subscribes to the camera's hub and pumps frames until stopped.
-func (ms *mediaSession) run(hub *model.StreamHub) {
+func (ms *mediaSession) run(hub *streamhub.StreamHub) {
 	// Sub-stream tier (#512): swap the forwarded hub for the on-demand
 	// low-res pull. Bounded by the manager's ready timeout; failure (no sub
 	// config / pull not ready) degrades to main — quality negotiation never

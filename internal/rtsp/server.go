@@ -27,6 +27,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/liberrors"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var rtspLogger = slog.Default().With("component", "rtsp-server")
@@ -38,7 +39,7 @@ type StreamInfo struct {
 	SPS   []byte
 	PPS   []byte
 	VPS   []byte // H.265 only
-	Hub   *model.StreamHub
+	Hub   *streamhub.StreamHub
 }
 
 // Ready reports whether the stream has everything needed to build an SDP.
@@ -133,7 +134,7 @@ type cameraStream struct {
 	sps      []byte
 	pps      []byte
 	vps      []byte
-	hub      *model.StreamHub
+	hub      *streamhub.StreamHub
 	subID    string
 
 	stream *gortsplib.ServerStream // template stream: DESCRIBE/SDP source, never written

@@ -32,7 +32,7 @@ import (
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var logger = slog.Default().With("component", "whip-server")
@@ -55,7 +55,7 @@ const (
 type StreamKeyResolver func(streamKey string) (cameraID string, ok bool)
 
 // CameraHubProvider returns the StreamHub for a camera (nil = create fresh).
-type CameraHubProvider func(cameraID string) *model.StreamHub
+type CameraHubProvider func(cameraID string) *streamhub.StreamHub
 
 // NALUCallback forwards an assembled H.264 access unit to the IngestRecorder.
 // ptsTicks is a 90 kHz value; isIDR marks keyframes.
@@ -72,7 +72,7 @@ type Server struct {
 	resolv StreamKeyResolver
 	hubFn  CameraHubProvider
 	// onConn/onDisc mirror the RTMP server lifecycle hooks.
-	onConn func(cameraID string, hub *model.StreamHub)
+	onConn func(cameraID string, hub *streamhub.StreamHub)
 	onDisc func(cameraID string)
 	// NALUProvider returns the recording callback for a camera (nil = record
 	// nothing, live-only passthrough). AudioProvider likewise for audio.
@@ -99,7 +99,7 @@ type Server struct {
 func NewServer(
 	resolv StreamKeyResolver,
 	hubFn CameraHubProvider,
-	onConn func(cameraID string, hub *model.StreamHub),
+	onConn func(cameraID string, hub *streamhub.StreamHub),
 	onDisc func(cameraID string),
 	iceServers []webrtc.ICEServer,
 ) *Server {
@@ -315,7 +315,7 @@ func (s *Server) createSession(cameraID, streamKey string, offerSDP []byte) ([]b
 
 	hub := s.hubFn(cameraID)
 	if hub == nil {
-		hub = model.NewStreamHub()
+		hub = streamhub.New()
 	}
 
 	var naluCB NALUCallback

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/bluenviron/gortmplib/pkg/amf0"
 	"github.com/bluenviron/gortmplib/pkg/bytecounter"
 	"github.com/bluenviron/gortmplib/pkg/message"
@@ -206,6 +206,6 @@ func TestConnectRTMPFullFlow(t *testing.T) {
 	}
 }
 
-func newHubForRelay() *model.StreamHub {
-	return model.NewStreamHub()
+func newHubForRelay() *streamhub.StreamHub {
+	return streamhub.New()
 }

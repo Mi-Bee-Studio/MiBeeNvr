@@ -14,6 +14,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var kfeLogger = slog.Default().With("component", "keyframe-extractor")
@@ -83,7 +84,7 @@ type KeyframeExtractor struct {
 	db         RecordingDB
 	mergeMgr   *RollingMergeManager
 	mu         sync.Mutex
-	hub        *model.StreamHub
+	hub        *streamhub.StreamHub
 	consumerID string
 
 	// Latest IDR frame access unit (deep-copied in callback).
@@ -151,7 +152,7 @@ func NewKeyframeExtractor(cfg KeyframeExtractorConfig) *KeyframeExtractor {
 // Start subscribes to the given StreamHub and begins the capture loop.
 // The hub must belong to an active recorder for the same camera.
 // Returns an error if the extractor is already running or if subscription fails.
-func (k *KeyframeExtractor) Start(ctx context.Context, hub *model.StreamHub) error {
+func (k *KeyframeExtractor) Start(ctx context.Context, hub *streamhub.StreamHub) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 

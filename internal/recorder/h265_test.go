@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 var (
@@ -219,7 +220,7 @@ func TestH265Recorder_AudioBroadcast(t *testing.T) {
 	defer srv.close()
 
 	mgr := newTestManager(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	rec := NewH265Recorder(H265Config{
 		CameraID:          "cam-audio-h265",
@@ -271,7 +272,7 @@ func TestH265Recorder_AudioDisabled_StillRecordsVideo(t *testing.T) {
 	defer srv.close()
 
 	mgr := newTestManager(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	rec := NewH265Recorder(H265Config{
 		CameraID:     "cam-noaudio-h265",

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // jitterLatency bounds how long the depacketizer waits for out-of-order or
@@ -24,7 +25,7 @@ const jitterLatency = 200 * time.Millisecond
 // segments). When no recorder is wired (live-only gateway without the camera
 // registered), frames fall back to a direct hub broadcast so live preview
 // still works.
-func (s *Server) handleVideoTrack(ctx context.Context, sess *session, hub *model.StreamHub, naluCB NALUCallback, track *webrtc.TrackRemote) {
+func (s *Server) handleVideoTrack(ctx context.Context, sess *session, hub *streamhub.StreamHub, naluCB NALUCallback, track *webrtc.TrackRemote) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Warn("WHIP video track handler panic recovered",
@@ -79,7 +80,7 @@ func (s *Server) handleVideoTrack(ctx context.Context, sess *session, hub *model
 // handleAudioTrack forwards Opus frames to the IngestRecorder (dual-write:
 // hub BroadcastAudio + MP4 WriteAudioSample inside the recorder). Non-Opus
 // audio tracks are drained but dropped — G.711 push-in has no producer today.
-func (s *Server) handleAudioTrack(ctx context.Context, sess *session, hub *model.StreamHub, track *webrtc.TrackRemote) {
+func (s *Server) handleAudioTrack(ctx context.Context, sess *session, hub *streamhub.StreamHub, track *webrtc.TrackRemote) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Warn("WHIP audio track handler panic recovered",

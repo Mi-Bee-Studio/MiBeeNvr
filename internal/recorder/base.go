@@ -50,6 +50,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // BaseConfig holds the shared configuration fields used by all RTSP video
@@ -320,7 +321,7 @@ type baseRecorder struct {
 
 	// Stream fan-out to HLS, WebRTC, etc. Initialized by camera manager
 	// via initStreamHub(). Non-blocking broadcasts.
-	Hub *model.StreamHub
+	Hub *streamhub.StreamHub
 
 	// Adaptive write-density state (issue #435). Tier 3: created by
 	// resetAdaptive (connectAndRecord, BEFORE the writeFrames goroutine and
@@ -363,9 +364,9 @@ type codecParams struct {
 // single writer path (writeFrames via the driver's handleParamSet, and the SDP
 // pre-seed in connectAndRecord) — concurrent callers must not interleave
 // partial updates; build the full triplet first, then Store.
-// SetHub wires the StreamHub for frame fan-out (model.HubHost); shared by
+// SetHub wires the StreamHub for frame fan-out (streamhub.HubHost); shared by
 // every recorder embedding baseRecorder. HubSource stays leaf-specific.
-func (b *baseRecorder) SetHub(hub *model.StreamHub) { b.Hub = hub }
+func (b *baseRecorder) SetHub(hub *streamhub.StreamHub) { b.Hub = hub }
 
 func (b *baseRecorder) setCodecParams(sps, pps, vps []byte) {
 	b.codec.Store(&codecParams{

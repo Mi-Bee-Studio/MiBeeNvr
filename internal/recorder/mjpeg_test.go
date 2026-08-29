@@ -22,6 +22,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // generateTestJPEG creates a valid 16x16 JPEG image for testing.
@@ -452,7 +453,7 @@ func TestMJPEGRecorderWithAudio(t *testing.T) {
 	defer srv.close()
 
 	mgr := newTestManager(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	rec := NewMJPEGRecorder(MJPEGConfig{
 		CameraID:     "cam-mjpeg-audio",
@@ -527,7 +528,7 @@ func TestMJPEGRecorderNoAudio(t *testing.T) {
 	defer srv.close()
 
 	mgr := newTestManager(t)
-	hub := model.NewStreamHub()
+	hub := streamhub.New()
 
 	rec := NewMJPEGRecorder(MJPEGConfig{
 		CameraID:     "cam-noaudio",
