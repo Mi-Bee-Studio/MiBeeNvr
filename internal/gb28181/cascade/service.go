@@ -23,12 +23,12 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	mbsip "github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181/sip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
 )
 
 // CameraInfo is the cascade's view of a local camera.
@@ -717,7 +717,7 @@ func newSIPServer(listen string) (gosip.Server, error) {
 	srv := gosip.NewServer(gosip.ServerConfig{
 		Host:      host,
 		UserAgent: "MiBeeNvr-GB28181-Cascade/1.0",
-	}, nil, nil, mbsip.SlogLogger(slog.Default().With("component", "gb28181_cascade")))
+	}, nil, nil, gbsip.SlogLogger(slog.Default().With("component", "gb28181_cascade")))
 	if err := srv.Listen("UDP", net.JoinHostPort(host, strconv.Itoa(port))); err != nil {
 		return nil, err
 	}
