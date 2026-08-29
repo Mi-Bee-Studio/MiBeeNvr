@@ -55,6 +55,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/whip"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/wsstream"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // buildAppDeps constructs every service dependency and returns it in an
@@ -980,7 +981,7 @@ func newGB28181SessionManager(cfg config.GB28181ServerConfig) *gb28181.SessionMa
 			end = uint16(e)
 		}
 	}
-	return gb28181.NewSessionManager(gb28181.NewPortManager(start, end), cfg.ServerID)
+	return gb28181.NewSessionManager(platform.NewPortManager(start, end), cfg.ServerID)
 }
 
 // validAPIKeysFromConfig extracts the non-revoked API keys (token → name)

@@ -19,6 +19,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // talkRTPPayloadType is PCMA (G.711 A-law) — the GB28181 talk default.
@@ -391,11 +392,11 @@ func sdpAudioCodec(sdp []byte) string {
 			}
 			switch strings.ToUpper(fields[1]) {
 			case "PCMA":
-				return gb28181.AudioCodecG711A
+				return platform.AudioCodecG711A
 			case "PCMU":
-				return gb28181.AudioCodecG711U
+				return platform.AudioCodecG711U
 			case "MPEG4-GENERIC":
-				return gb28181.AudioCodecAAC
+				return platform.AudioCodecAAC
 			}
 		}
 	}

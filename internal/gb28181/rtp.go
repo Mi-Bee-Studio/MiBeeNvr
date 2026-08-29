@@ -14,6 +14,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/pion/rtp"
 )
 
@@ -36,14 +37,14 @@ const rtpReadBufSize = 65535
 
 // Receiver manages GB/T 28181 RTP media reception.
 // It implements Stage 1 of the two-stage pipeline: RTP packet reassembly
-// into complete MPEG-PS access units. Stage 2 is PSDemuxer (psdemux.go).
+// into complete MPEG-PS access units. Stage 2 is platform.PSDemuxer (psdemux.go).
 //
-// UDP mode: Binds to a UDP port from PortManager.
+// UDP mode: Binds to a UDP port from platform.PortManager.
 // TCP passive mode: Accepts TCP connections with RFC 4571 or 0x24 framing.
 type Receiver struct {
 	cameraID    string
 	hub         *streamhub.StreamHub
-	portManager *PortManager
+	portManager *platform.PortManager
 	tcpMode     TCPMode
 
 	// Network connection
@@ -62,7 +63,7 @@ type Receiver struct {
 	packetsDroppedU  uint64 // count of gap-skipped packets (diagnostics)
 
 	// Stage 2: PS demux
-	demuxer *PSDemuxer
+	demuxer *platform.PSDemuxer
 
 	// OnFirstRTP fires once when the first RTP packet is received — used by
 	// the session layer to confirm a dialog without a matched SIP response
@@ -78,7 +79,7 @@ type Receiver struct {
 
 	// AudioCallback is invoked for each demuxed audio frame (G.711/AAC) from
 	// the PS stream. Non-blocking.
-	AudioCallback func(frame AudioFrame)
+	AudioCallback func(frame platform.AudioFrame)
 
 	// NALUCallback is invoked for each NALU extracted from PS demux.
 	// Kept for per-NALU consumers; when both are set, AUCallback is used.
@@ -105,7 +106,7 @@ type Receiver struct {
 }
 
 // NewReceiver creates a new GB28181 RTP receiver.
-func NewReceiver(cameraID string, hub *streamhub.StreamHub, portManager *PortManager) *Receiver {
+func NewReceiver(cameraID string, hub *streamhub.StreamHub, portManager *platform.PortManager) *Receiver {
 	return &Receiver{
 		cameraID:         cameraID,
 		hub:              hub,
@@ -114,7 +115,7 @@ func NewReceiver(cameraID string, hub *streamhub.StreamHub, portManager *PortMan
 		done:             make(chan struct{}),
 		jitterBuffer:     make(map[uint16]*rtp.Packet),
 		maxJitterPackets: 32,
-		demuxer:          NewPSDemuxer(),
+		demuxer:          platform.NewPSDemuxer(),
 	}
 }
 
@@ -132,7 +133,7 @@ func (r *Receiver) SetAudioCodecHint(codec string) {
 }
 
 // Start begins receiving RTP packets.
-// UDP mode: Binds to an available UDP port from PortManager.
+// UDP mode: Binds to an available UDP port from platform.PortManager.
 // TCP mode: Accepts an incoming TCP connection (conn must be non-nil).
 func (r *Receiver) Start(ctx context.Context, conn net.Conn) error {
 	if r.running.Load() {

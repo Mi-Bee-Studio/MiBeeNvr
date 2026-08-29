@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
 )
@@ -13,7 +14,7 @@ import (
 // BEFORE its (recycled) port is handed to another channel — otherwise the old
 // sender keeps streaming into the new tenant forever.
 func TestSessionManager_Invite_ReplacedSessionSendsBye(t *testing.T) {
-	pm := NewPortManager(55300, 55310)
+	pm := platform.NewPortManager(55300, 55310)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	byeCount := 0

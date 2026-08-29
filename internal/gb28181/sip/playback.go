@@ -19,6 +19,7 @@ import (
 	gosip "github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // recordQueryTimeout bounds how long QueryChannelRecords waits for the
@@ -199,9 +200,9 @@ func (s *Server) startFetch(deviceID, channelID string, start, end time.Time, do
 	serverHost := s.localIPFor(netAddr)
 
 	counter := &countingSink{inner: sink}
-	var onAudio gb28181.AudioFrameHandler
+	var onAudio platform.AudioFrameHandler
 	if audioSink != nil {
-		onAudio = func(frame gb28181.AudioFrame) {
+		onAudio = func(frame platform.AudioFrame) {
 			audioSink(frame.Codec, frame.Data, frame.Config, frame.PTSTicks, frame.Samples)
 		}
 	}
