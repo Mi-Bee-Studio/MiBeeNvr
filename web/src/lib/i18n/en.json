@@ -263,6 +263,7 @@
   "cameras.pushTranscodeForceSW": "Force software encode",
   "cameras.pushTranscodeHW": "HW",
   "cameras.pushTranscodeNA": "No transcode needed (H.264)",
+  "cameras.pushTranscodePassthrough": "H.265 passthrough (no transcode)",
   "cameras.pushTranscodeRejectH265": "Reject H.265 sources",
   "cameras.pushTranscodeSW": "SW",
   "cameras.pushTranscodeThrottled": "throttled",

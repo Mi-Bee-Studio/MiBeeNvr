@@ -45,8 +45,8 @@ type Config struct {
 	Addr string
 }
 
-// Server is an RTMP ingest server that receives H.264 streams and
-// distributes frames via StreamHub.
+// Server is an RTMP ingest server that receives H.264 or H.265
+// (enhanced-RTMP hvc1) streams and distributes frames via StreamHub.
 type Server struct {
 	cfg    Config
 	resolv StreamKeyResolver
@@ -243,16 +243,22 @@ func (s *Server) handlePublisher(ctx context.Context, sc *gortmplib.ServerConn, 
 		return
 	}
 
-	// Find H.264 track
+	// Find the video track: H.264 (classic AVC track) or H.265
+	// (enhanced-RTMP hvc1 fourcc).
 	var h264Track *gortmplib.Track
+	var h265Track *gortmplib.Track
 	for _, track := range r.Tracks() {
 		if _, ok := track.Codec.(*codecs.H264); ok {
 			h264Track = track
 			break
 		}
+		if _, ok := track.Codec.(*codecs.H265); ok {
+			h265Track = track
+			break
+		}
 	}
-	if h264Track == nil {
-		logger.Error("no H.264 track found", "camera_id", entry.cameraID)
+	if h264Track == nil && h265Track == nil {
+		logger.Error("no H.264/H.265 track found", "camera_id", entry.cameraID)
 		return
 	}
 
@@ -263,35 +269,53 @@ func (s *Server) handlePublisher(ctx context.Context, sc *gortmplib.ServerConn, 
 		recordCB = s.NALUProvider(entry.cameraID)
 	}
 
-	// Extract SPS/PPS from the RTMP AVCDecoderConfigurationRecord (carried
-	// out-of-band, NOT in VCL access units). Feed them to the IngestRecorder so
-	// it can (a) initialize MP4 segments and (b) prepend SPS/PPS to IDR frames
-	// for downstream consumers (HLS DTS extractor, WebRTC) that expect them
-	// in-band — matching the RTSP path.
-	if h264Codec, ok := h264Track.Codec.(*codecs.H264); ok && h264Codec.SPS != nil && recordCB != nil {
-		recordCB([][]byte{h264Codec.SPS, h264Codec.PPS}, 0, true)
+	// Extract parameter sets from the out-of-band RTMP sequence header
+	// (AVCDecoderConfigurationRecord for H.264, HEVCDecoderConfigurationRecord
+	// for enhanced-RTMP H.265 — carried NOT in VCL access units). Feed them to
+	// the IngestRecorder so it can (a) initialize MP4 segments and (b) prepend
+	// them to IDR frames for downstream consumers (HLS DTS extractor, WebRTC)
+	// that expect them in-band — matching the RTSP path.
+	if h264Track != nil {
+		if h264Codec, ok := h264Track.Codec.(*codecs.H264); ok && h264Codec.SPS != nil && recordCB != nil {
+			recordCB([][]byte{h264Codec.SPS, h264Codec.PPS}, 0, true)
+		}
+	}
+	if h265Track != nil {
+		if h265Codec, ok := h265Track.Codec.(*codecs.H265); ok &&
+			h265Codec.VPS != nil && h265Codec.SPS != nil && h265Codec.PPS != nil && recordCB != nil {
+			recordCB([][]byte{h265Codec.VPS, h265Codec.SPS, h265Codec.PPS}, 0, true)
+		}
 	}
 
 	// Clear deadline for continuous reading
 	conn.SetReadDeadline(time.Time{})
 
-	// Set up H.264 data callback. When an IngestRecorder is wired (the normal
-	// case), WriteNALU itself broadcasts to the camera's StreamHub — AND
-	// prepends cached SPS/PPS to IDR frames, which downstream consumers need.
-	// Broadcasting here too would deliver every AU twice (the hub in
-	// hubRegistry is the SAME object the recorder owns), so the direct
+	// Set up the video data callback. When an IngestRecorder is wired (the
+	// normal case), WriteNALU itself broadcasts to the camera's StreamHub —
+	// AND prepends cached parameter sets to IDR frames, which downstream
+	// consumers need. Broadcasting here too would deliver every AU twice (the
+	// hub in hubRegistry is the SAME object the recorder owns), so the direct
 	// broadcast is only the no-recorder fallback (live-only gateway).
-	r.OnDataH264(h264Track, func(pts time.Duration, dts time.Duration, au [][]byte) {
+	onData := func(pts time.Duration, dts time.Duration, au [][]byte, isH265 bool) {
 		// pts is time.Duration from stream start, convert to 90kHz clock ticks
 		// for compatibility with StreamHub's existing consumers (HLS, WebRTC, FLV).
 		ptsTicks := pts.Nanoseconds() * 90 / 1e6 // ns → 90kHz ticks
-		isIDR := nalutil.IsIDR(au, false)
+		isIDR := nalutil.IsIDR(au, isH265)
 		if recordCB != nil {
 			recordCB(au, ptsTicks, isIDR)
 		} else {
 			entry.hub.Broadcast(ptsTicks, au, isIDR)
 		}
-	})
+	}
+	if h265Track != nil {
+		r.OnDataH265(h265Track, func(pts time.Duration, dts time.Duration, au [][]byte) {
+			onData(pts, dts, au, true)
+		})
+	} else {
+		r.OnDataH264(h264Track, func(pts time.Duration, dts time.Duration, au [][]byte) {
+			onData(pts, dts, au, false)
+		})
+	}
 
 	// Read loop — runs until disconnect or context cancellation
 	for {

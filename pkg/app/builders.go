@@ -510,6 +510,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// that actually have enabled targets. Wired to the camera manager so Add/
 	// Update/Remove reconcile targets automatically.
 	relayMgr := relay.NewManager(camMgr.GetHub, camMgr.GetSPS)
+	// Codec info (video VPS/SPS/PPS + audio params) for relay targets — the
+	// H.265 passthrough policy (#433) needs the VPS alongside SPS/PPS, and
+	// audio-aware targets use the audio fields.
+	relayMgr.SetCodecInfoProvider(camMgr.GetCodecInfo)
 	camMgr.SetRelayManager(relayMgr)
 
 	// Step 7.6c: sub-stream recycle callback (#513). When the on-demand

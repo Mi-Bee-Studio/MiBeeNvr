@@ -27,7 +27,7 @@ var ingestLogger = slog.Default().With("component", "ingest-recorder")
 // irrelevant because the publisher connects to us.
 type IngestConfig struct {
 	CameraID   string
-	Encoding   string // "h264" (H.265 over SRT is a follow-up; RTMP is H.264 only)
+	Encoding   string // "h264" or "h265" (RTMP H.265 via enhanced-RTMP hvc1; SRT H.265 demux is a follow-up)
 	SegmentDur time.Duration
 
 	Store SegmentStore // satisfies *storage.Manager
@@ -44,7 +44,7 @@ type IngestConfig struct {
 	RecordEnabled *bool
 }
 
-// IngestRecorder records H.264 video pushed into the NVR via SRT/RTMP ingest.
+// IngestRecorder records H.264/H.265 video pushed into the NVR via SRT/RTMP ingest.
 //
 // Lifecycle: Start() enters the Idle (waiting) state — no network activity.
 // When a publisher connects, the ingest server calls WriteConnected(). Each
@@ -81,6 +81,7 @@ type IngestRecorder struct {
 	muxer      *muxer.MP4Muxer
 	trackID    int
 	sps, pps   []byte
+	vps        []byte // H.265 only (nil for H.264 sources)
 	curTemp    string
 	curFinal   string
 	segStart   time.Time
@@ -99,6 +100,17 @@ type IngestRecorder struct {
 
 var _ model.Recorder = (*IngestRecorder)(nil)
 
+// isH265 reports whether this recorder was configured for H.265 push ingest.
+func (r *IngestRecorder) isH265() bool { return r.cfg.Encoding == "h265" }
+
+// format is the recording format label derived from the configured encoding.
+func (r *IngestRecorder) format() model.Format {
+	if r.isH265() {
+		return model.FormatH265
+	}
+	return model.FormatH264
+}
+
 // NewIngestRecorder constructs an IngestRecorder. The Hub is injected later by
 // camera.initStreamHub (consistent with every other recorder).
 func NewIngestRecorder(cfg IngestConfig) *IngestRecorder {
@@ -114,6 +126,14 @@ func NewIngestRecorder(cfg IngestConfig) *IngestRecorder {
 // GetHub returns the StreamHub for frame fan-out (satisfies the hubber interface
 // used by getRecorderHub across the API layer).
 func (r *IngestRecorder) GetHub() *model.StreamHub { return r.Hub }
+
+// VPS returns the most recently captured H.265 VPS NAL unit (without start
+// code). Always nil for H.264 sources. Thread-safe.
+func (r *IngestRecorder) VPS() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.vps
+}
 
 // SPS returns the most recently captured H.264 SPS NAL unit (without start code).
 // nil until the publisher has sent a keyframe with param sets. Thread-safe.
@@ -132,12 +152,15 @@ func (r *IngestRecorder) PPS() []byte {
 }
 
 // CodecParams implements model.HLSProvider so the HLS handler can initialize a
-// stream from the SPS/PPS captured during ingest (push cameras). Returns H.264
-// with the current SPS/PPS (vps is nil for H.264). Returns nil params before the
-// publisher's first keyframe arrives.
+// stream from the parameter sets captured during ingest (push cameras). Returns
+// the configured format with the current SPS/PPS (+VPS for H.265). Returns nil
+// params before the publisher's first keyframe arrives.
 func (r *IngestRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.isH265() {
+		return model.FormatH265, r.sps, r.pps, r.vps
+	}
 	return model.FormatH264, r.sps, r.pps, nil
 }
 
@@ -325,13 +348,41 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, _ bool) {
 	r.cacheParamSets(au)
 }
 
-// cacheParamSets extracts SPS/PPS from an incoming delivery (any granularity)
-// and rotates the recording segment when they change. Runs on every WriteNALU
-// call so out-of-band parameter-set deliveries (the RTMP sequence-header feed,
-// which carries no VCL NALU and is never emitted by the assembler) are still
-// captured in time for HLS/FLV/WebRTC initialization. H.264 only — H.265 push
-// ingest is a follow-up (see IngestConfig.Encoding).
+// cacheParamSets extracts parameter sets from an incoming delivery (any
+// granularity) and rotates the recording segment when they change. Runs on
+// every WriteNALU call so out-of-band parameter-set deliveries (the RTMP
+// sequence-header feed, which carries no VCL NALU and is never emitted by the
+// assembler) are still captured in time for HLS/FLV/WebRTC initialization.
+// H.265 sources additionally cache the VPS (required by the hvc1/hvcC track
+// and by consumers that expect the full VPS/SPS/PPS triple in-band).
 func (r *IngestRecorder) cacheParamSets(au [][]byte) {
+	if r.isH265() {
+		vps, sps, pps := nalutil.ExtractParamSetsH265(au)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if vps != nil {
+			if r.vps != nil && !nalutil.EqualParamSets(r.vps, vps) {
+				ingestLogger.Info("VPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegmentLocked()
+			}
+			r.vps = append([]byte(nil), vps...)
+		}
+		if sps != nil {
+			if r.sps != nil && !nalutil.EqualParamSets(r.sps, sps) {
+				ingestLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegmentLocked()
+			}
+			r.sps = append([]byte(nil), sps...)
+		}
+		if pps != nil {
+			if r.pps != nil && !nalutil.EqualParamSets(r.pps, pps) {
+				ingestLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegmentLocked()
+			}
+			r.pps = append([]byte(nil), pps...)
+		}
+		return
+	}
 	sps, pps := nalutil.ExtractParamSetsH264(au)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -363,7 +414,7 @@ func (r *IngestRecorder) writeAssembledAU(au [][]byte, ptsTicks int64) {
 		}
 	}()
 
-	isIDR := nalutil.IsIDR(au, r.cfg.Encoding == "h265")
+	isIDR := nalutil.IsIDR(au, r.isH265())
 
 	// ---- Lock scope 1: status transition, shared-state snapshot ----
 	r.mu.Lock()
@@ -377,6 +428,7 @@ func (r *IngestRecorder) writeAssembledAU(au [][]byte, ptsTicks int64) {
 	hub := r.Hub
 	localSPS := r.sps
 	localPPS := r.pps
+	localVPS := r.vps
 	r.mu.Unlock()
 
 	// ---- Hub broadcast (outside lock, non-blocking by design) ----
@@ -389,11 +441,21 @@ func (r *IngestRecorder) writeAssembledAU(au [][]byte, ptsTicks int64) {
 	if hub != nil {
 		broadcastAU := au
 		if isIDR && localSPS != nil && localPPS != nil {
-			inSPS, inPPS := nalutil.ExtractParamSetsH264(au)
-			if inSPS == nil || inPPS == nil {
-				broadcastAU = make([][]byte, 0, len(au)+2)
-				broadcastAU = append(broadcastAU, localSPS, localPPS)
-				broadcastAU = append(broadcastAU, au...)
+			if r.isH265() {
+				// H.265 consumers need the full VPS/SPS/PPS triple in-band.
+				inVPS, inSPS, inPPS := nalutil.ExtractParamSetsH265(au)
+				if inVPS == nil || inSPS == nil || inPPS == nil {
+					broadcastAU = make([][]byte, 0, len(au)+3)
+					broadcastAU = append(broadcastAU, localVPS, localSPS, localPPS)
+					broadcastAU = append(broadcastAU, au...)
+				}
+			} else {
+				inSPS, inPPS := nalutil.ExtractParamSetsH264(au)
+				if inSPS == nil || inPPS == nil {
+					broadcastAU = make([][]byte, 0, len(au)+2)
+					broadcastAU = append(broadcastAU, localSPS, localPPS)
+					broadcastAU = append(broadcastAU, au...)
+				}
 			}
 		}
 		hub.Broadcast(ptsTicks, broadcastAU, isIDR)
@@ -408,16 +470,25 @@ func (r *IngestRecorder) writeAssembledAU(au [][]byte, ptsTicks int64) {
 		return
 	}
 
-	// ---- Find VCL NALU (type 1 non-IDR or type 5 IDR) to write to disk ----
+	// ---- Find VCL NALU to write to disk ----
+	// H.264: type 1 (non-IDR) or 5 (IDR). H.265: any VCL type (0-31, IDR/WPP
+	// slices are 16-21 — the AU carries one VCL NALU per picture here).
 	var vclNALU []byte
 	for _, nalu := range au {
 		if len(nalu) == 0 {
 			continue
 		}
-		naluType := nalu[0] & 0x1F
-		if naluType == 5 || naluType == 1 {
-			vclNALU = nalu
-			break
+		if r.isH265() {
+			if (nalu[0]>>1)&0x3F < 32 {
+				vclNALU = nalu
+				break
+			}
+		} else {
+			naluType := nalu[0] & 0x1F
+			if naluType == 5 || naluType == 1 {
+				vclNALU = nalu
+				break
+			}
 		}
 	}
 	if vclNALU == nil {
@@ -441,7 +512,7 @@ func (r *IngestRecorder) writeAssembledAU(au [][]byte, ptsTicks int64) {
 		return
 	}
 
-	if localSPS == nil || localPPS == nil {
+	if localSPS == nil || localPPS == nil || (r.isH265() && localVPS == nil) {
 		return
 	}
 
@@ -455,17 +526,28 @@ func (r *IngestRecorder) writeAssembledAU(au [][]byte, ptsTicks int64) {
 	r.mu.Unlock()
 
 	if curMux == nil {
-		tempPath, finalPath, err := r.cfg.Store.CreateSegment(r.cfg.CameraID, string(model.FormatH264))
+		format := r.format()
+		tempPath, finalPath, err := r.cfg.Store.CreateSegment(r.cfg.CameraID, string(format))
 		if err != nil {
 			ingestLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
 			return
 		}
 		newMux := muxer.NewMP4Muxer(tempPath)
-		newTrackID, err := newMux.AddH264Track(localSPS, localPPS)
-		if err != nil {
-			ingestLogger.Error("failed to add H264 track", "camera_id", r.cfg.CameraID, "error", err)
-			os.Remove(tempPath)
-			return
+		var newTrackID int
+		if r.isH265() {
+			newTrackID, err = newMux.AddH265Track(localVPS, localSPS, localPPS)
+			if err != nil {
+				ingestLogger.Error("failed to add H265 track", "camera_id", r.cfg.CameraID, "error", err)
+				os.Remove(tempPath)
+				return
+			}
+		} else {
+			newTrackID, err = newMux.AddH264Track(localSPS, localPPS)
+			if err != nil {
+				ingestLogger.Error("failed to add H264 track", "camera_id", r.cfg.CameraID, "error", err)
+				os.Remove(tempPath)
+				return
+			}
 		}
 		// Opus audio track (#369): config = 1 byte channels + 2 bytes PreSkip +
 		// 4 bytes InputSampleRate (big-endian) — see muxer.AddAudioTrack.
@@ -583,6 +665,7 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 	// Insert recording entry into the database.
 	var fileSize int64
 	var recordingID string
+	format := r.format()
 	if r.cfg.DB != nil && r.curFinal != "" {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
@@ -590,7 +673,7 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 			ID:         strconv.FormatInt(now.UnixNano(), 10),
 			CameraID:   r.cfg.CameraID,
 			FilePath:   r.curFinal,
-			Format:     model.FormatH264,
+			Format:     format,
 			StartedAt:  r.segStart,
 			EndedAt:    now,
 			Duration:   duration,
@@ -611,8 +694,8 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
 			CameraID:    r.cfg.CameraID,
 			FilePath:    r.curFinal,
-			Format:      string(model.FormatH264),
-			Encoding:    string(model.FormatH264),
+			Format:      string(format),
+			Encoding:    string(format),
 			StartedAt:   r.segStart.Format(time.RFC3339Nano),
 			EndedAt:     time.Now().Format(time.RFC3339Nano),
 			FileSize:    fileSize,
@@ -653,12 +736,12 @@ func (r *IngestRecorder) decActive() {
 
 func (r *IngestRecorder) recordSegmentCreated() {
 	if r.cfg.Metrics != nil {
-		r.cfg.Metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, "h264").Inc()
+		r.cfg.Metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, string(r.format())).Inc()
 	}
 }
 
 func (r *IngestRecorder) recordBytes(bytes int64) {
 	if r.cfg.Metrics != nil {
-		r.cfg.Metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, "h264").Add(float64(bytes))
+		r.cfg.Metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, string(r.format())).Add(float64(bytes))
 	}
 }

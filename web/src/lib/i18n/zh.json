@@ -256,6 +256,7 @@
   "cameras.pushTranscodeForceSW": "强制软件编码",
   "cameras.pushTranscodeHW": "硬件",
   "cameras.pushTranscodeNA": "无需转码（H.264 直推）",
+  "cameras.pushTranscodePassthrough": "H.265 直推（不转码）",
   "cameras.pushTranscodeRejectH265": "拒绝 H.265 源",
   "cameras.pushTranscodeSW": "软件",
   "cameras.pushTranscodeThrottled": "降速",

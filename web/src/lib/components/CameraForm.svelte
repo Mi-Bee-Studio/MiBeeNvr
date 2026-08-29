@@ -1386,9 +1386,10 @@ async function performCameraSave() {
                     <span class="text-xs th-text-muted whitespace-nowrap">{t('cameras.pushTranscodeNA')}</span>
                   {:else}
                     <select class="input w-auto" value={tgt.transcode_policy || 'auto'}
-                      onchange={(e) => updatePushTarget(tgt.id, { transcode_policy: (e.target as HTMLSelectElement).value as 'auto' | 'force_sw' | 'off' })}>
+                      onchange={(e) => updatePushTarget(tgt.id, { transcode_policy: (e.target as HTMLSelectElement).value as 'auto' | 'force_sw' | 'off' | 'passthrough' })}>
                       <option value="auto">{t('cameras.pushTranscodeAuto')}</option>
                       <option value="force_sw">{t('cameras.pushTranscodeForceSW')}</option>
+                      <option value="passthrough">{t('cameras.pushTranscodePassthrough')}</option>
                       <option value="off">{t('cameras.pushTranscodeRejectH265')}</option>
                     </select>
                   {/if}

@@ -215,10 +215,10 @@ func validateConfigDetails(cfg *Config) error {
 			}
 			// Validate transcode policy.
 			switch pt.TranscodePolicy {
-			case "", "auto", "force_sw", "off":
+			case "", "auto", "force_sw", "off", "passthrough":
 				// valid
 			default:
-				return fmt.Errorf("camera[%d].push_targets[%d].transcode_policy must be one of \"auto\", \"force_sw\", \"off\" (got %q)", i, j, pt.TranscodePolicy)
+				return fmt.Errorf("camera[%d].push_targets[%d].transcode_policy must be one of \"auto\", \"force_sw\", \"off\", \"passthrough\" (got %q)", i, j, pt.TranscodePolicy)
 			}
 			// Validate video preset overrides.
 			if pt.VideoPresetOverride != nil {

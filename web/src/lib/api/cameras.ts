@@ -117,7 +117,7 @@ export interface PushTargetConfig {
   url: string;
   enabled: boolean;
   platform?: string;
-  transcode_policy?: 'auto' | 'force_sw' | 'off';
+  transcode_policy?: 'auto' | 'force_sw' | 'off' | 'passthrough';
   video_preset_override?: VideoPresetOverrides;
   use_ffmpeg?: boolean;
 }

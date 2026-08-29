@@ -361,3 +361,90 @@ func TestIngestRecorder_SetAudioFormatLockedIn(t *testing.T) {
 	other.SetAudioFormat("g711", 8000, 1)
 	require.Empty(t, other.AudioCodec())
 }
+
+// TestIngestRecorder_H265_RecordsSegment verifies the H.265 push-ingest path
+// (#433, enhanced-RTMP hvc1): the VPS/SPS/PPS triple is cached, the segment is
+// created as an H.265 track, IDR broadcasts carry the param-set triple
+// in-band, and the recording row is format h265.
+func TestIngestRecorder_H265_RecordsSegment(t *testing.T) {
+	store, err := storage.NewManager(t.TempDir())
+	require.NoError(t, err)
+	db := &ingestTestDB{}
+	rec := NewIngestRecorder(IngestConfig{
+		CameraID:   "push-cam-h265",
+		Encoding:   "h265",
+		SegmentDur: 10 * time.Minute,
+		Store:      store,
+		DB:         db,
+	})
+	rec.Hub = model.NewStreamHub()
+	rec.Hub.SetCameraID("push-cam-h265")
+	require.NoError(t, rec.Start(context.Background()))
+	t.Cleanup(func() { _ = rec.Stop() })
+
+	// Out-of-band param-set feed first (mirrors the RTMP sequence-header feed
+	// in internal/rtmp/server.go), then the IDR picture, then P frames.
+	rec.WriteNALU([][]byte{testVPS265, testSPS265, testPPS265}, 0, true)
+	pFrame265 := []byte{0x02, 0x01, 0xaf, 0x09, 0x40, 0xc0, 0x00, 0x10} // TRAIL_R slice (NAL type 1)
+	rec.WriteNALU([][]byte{testIDR265}, 90, true)
+	for i := 2; i <= 6; i++ {
+		rec.WriteNALU([][]byte{pFrame265}, int64(i)*90, false)
+	}
+	require.Equal(t, model.StatusRecording, rec.Status())
+
+	// CodecParams must report the H.265 format with the full triple.
+	f, sps, pps, vps := rec.CodecParams()
+	require.Equal(t, model.FormatH265, f)
+	require.NotNil(t, sps)
+	require.NotNil(t, pps)
+	require.NotNil(t, vps)
+
+	// A subscriber sees IDR AUs carrying the VPS/SPS/PPS triple in-band.
+	var gotIDR bool
+	done := make(chan struct{})
+	subID := "ingest-h265-test"
+	require.NoError(t, rec.Hub.Subscribe(subID, func(_ int64, au [][]byte) {
+		if !gotIDR {
+			gotIDR = true
+			v, s, p := extractTripleForTest(au)
+			require.NotNil(t, v)
+			require.NotNil(t, s)
+			require.NotNil(t, p)
+			close(done)
+		}
+	}))
+	defer rec.Hub.Unsubscribe(subID)
+	// Push another IDR after subscribing so the hub delivers a fresh keyframe.
+	rec.WriteNALU([][]byte{testIDR265}, 700, true)
+	rec.WriteNALU([][]byte{pFrame265}, 800, false)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no IDR broadcast observed within timeout")
+	}
+	require.True(t, gotIDR)
+
+	require.NoError(t, rec.Stop())
+	require.Len(t, db.recordings, 1)
+	require.Equal(t, model.FormatH265, db.recordings[0].Format)
+	files := camFiles(t, store, "push-cam-h265")
+	require.NotEmpty(t, files)
+}
+
+// extractTripleForTest pulls VPS/SPS/PPS out of a broadcast AU (test helper).
+func extractTripleForTest(au [][]byte) (vps, sps, pps []byte) {
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		switch (nalu[0] >> 1) & 0x3F {
+		case 32:
+			vps = nalu
+		case 33:
+			sps = nalu
+		case 34:
+			pps = nalu
+		}
+	}
+	return
+}

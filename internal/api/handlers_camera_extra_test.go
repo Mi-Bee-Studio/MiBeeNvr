@@ -133,8 +133,9 @@ func TestCameraUpdate(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", "not json").Code)
 	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", `{"sub_stream_url":"http://x"}`).Code)
 	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", `{"stable_id":"1.2.3.4"}`).Code) // IP rejected (#216)
-	// Protocol-combo guard: encoding h265 on an rtmp camera is invalid (#402 class).
-	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", `{"encoding":"h265","protocol":"rtmp"}`).Code)
+	// Protocol-combo guard (#402 class): encoding h264 on an http camera is
+	// invalid. (rtmp+h265 is valid since enhanced-RTMP ingest, #433.)
+	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", `{"encoding":"h264","protocol":"http"}`).Code)
 	// Unknown camera → 404.
 	require.Equal(t, http.StatusNotFound, camDo(t, h, http.MethodPut, "/api/cameras/nope", `{"name":"x"}`).Code)
 }
