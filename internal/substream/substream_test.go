@@ -512,3 +512,65 @@ func TestStatusAndHubPerCamera(t *testing.T) {
 	require.Eventually(t, func() bool { return m.Status("cam-1") == nil }, 3*time.Second, 50*time.Millisecond)
 	require.Nil(t, m.Hub("cam-1"))
 }
+
+// TestPullReresolvesStaleTarget reproduces the camera-address-change trap:
+// the target resolved at Acquire time (a dead address) goes stale once the
+// camera record points elsewhere (ONVIF rediscovery). The pull loop must
+// re-resolve after consecutive failures and follow the camera to its new
+// address instead of dialing the old host forever — provided a reference
+// keeps the entry alive, exactly like a cascade INVITE session does.
+func TestPullReresolvesStaleTarget(t *testing.T) {
+	_, liveURL := newTestSource(t, model.FormatH264)
+
+	// An address that refuses connections instantly (the old camera host).
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	deadURL := "rtsp://" + ln.Addr().String() + "/sub"
+	ln.Close()
+
+	var cur atomic.Value
+	cur.Store(deadURL)
+	m := newTestManager(t, deadURL, func(c *Config) {
+		c.Resolver = func(context.Context, string) (Target, bool, error) {
+			return Target{URL: cur.Load().(string)}, true, nil
+		}
+		// The caller outlives the stale-target phase, like a live INVITE.
+		c.ReadyTimeout = 40 * time.Second
+	})
+
+	type acquireRes struct {
+		src *Source
+		err error
+	}
+	ch := make(chan acquireRes, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	go func() {
+		src, err := m.Acquire(ctx, "cam-move")
+		ch <- acquireRes{src, err}
+	}()
+
+	// The entry exists and is retrying the stale target.
+	require.Eventually(t, func() bool {
+		st := m.Status("cam-move")
+		return st != nil && (st.State == StateReconnecting || st.State == StateStarting)
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// The camera record now points at the new address (rediscovery moment).
+	cur.Store(liveURL)
+
+	// The pull loop must re-resolve within a few backoff cycles and the
+	// blocked acquire must come back live on the new target.
+	select {
+	case r := <-ch:
+		require.NoError(t, r.err)
+		require.NotNil(t, r.src)
+	case <-time.After(35 * time.Second):
+		t.Fatal("acquire did not recover after the target was re-resolved")
+	}
+	// ready closes on the first AU (RTP callback) which can precede the
+	// pullOnce state transition to live — poll for the terminal state.
+	require.Eventually(t, func() bool {
+		return m.Status("cam-move").State == StateLive
+	}, 3*time.Second, 20*time.Millisecond)
+}

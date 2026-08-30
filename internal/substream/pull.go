@@ -28,6 +28,13 @@ var errNoVideo = errors.New("no H.264/H.265 video track in sub-stream SDP")
 // or collapsing timestamp (see pullOnce).
 const sessionGapPTS = 90000
 
+// reresolveFails is the number of consecutive pull failures after which the
+// pull loop re-runs the target resolver: a target resolved at Acquire time
+// can go stale when the camera's address changes (ONVIF rediscovery updates
+// the camera record, but this loop would otherwise keep dialing the old
+// host forever while references keep the entry alive).
+const reresolveFails = 6
+
 // pull runs the reconnect loop for one source until the entry is cancelled.
 // Exits when ctx is done, or after a permanent failure (leaving the source in
 // StateFailed and scheduling a self-recycle so a later Acquire re-resolves
@@ -37,6 +44,7 @@ func (m *Manager) pull(ctx context.Context, e *entry) {
 
 	cameraID := e.src.cameraID
 	backoff := time.Second
+	fails := 0
 	for {
 		if ctx.Err() != nil {
 			return
@@ -45,7 +53,7 @@ func (m *Manager) pull(ctx context.Context, e *entry) {
 		if e.target.Kind == KindGB28181 {
 			err = m.pullGBOnce(ctx, e, &backoff)
 		} else {
-			err = m.pullOnce(ctx, e, &backoff)
+			err = m.pullOnce(ctx, e, &backoff, &fails)
 		}
 		if ctx.Err() != nil {
 			return
@@ -65,6 +73,18 @@ func (m *Manager) pull(ctx context.Context, e *entry) {
 		e.src.state.Store(StateReconnecting)
 		subLogger.Warn("sub-stream pull error, reconnecting", "camera_id", cameraID,
 			"error", err, "backoff", backoff.String())
+		fails++
+		if fails%reresolveFails == 0 && e.target.Kind != KindGB28181 && m.cfg.Resolver != nil {
+			rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			t, ok, rerr := m.cfg.Resolver(rctx, cameraID)
+			cancel()
+			if rerr == nil && ok && t.URL != "" && t.URL != e.target.URL {
+				subLogger.Info("sub-stream target re-resolved after failures", "camera_id", cameraID,
+					"old", redactURL(e.target.URL), "new", redactURL(t.URL))
+				e.target = t
+				backoff = time.Second
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -78,13 +98,13 @@ func (m *Manager) pull(ctx context.Context, e *entry) {
 
 // pullOnce dials the target, plays the video track, and blocks until the
 // session fails, stalls, or ctx is done. backoff is reset once the session
-// reaches PLAY.
+// reaches PLAY (fails likewise — consecutive-failure counting restarts).
 //
 // RTP timestamps are per-session random bases; downstream muxers
 // (FLV/HLS/WS) require a monotonic timeline, so each session is REBASED to
 // continue 1s after the previous session's high-water mark (entry.lastPTS —
 // same failure class as #506's dts collapse otherwise).
-func (m *Manager) pullOnce(ctx context.Context, e *entry, backoff *time.Duration) error {
+func (m *Manager) pullOnce(ctx context.Context, e *entry, backoff *time.Duration, fails *int) error {
 	rawURL := e.target.URL
 	if e.target.Username != "" {
 		rawURL = injectCredentials(rawURL, e.target.Username, e.target.Password)
@@ -243,6 +263,7 @@ func (m *Manager) pullOnce(ctx context.Context, e *entry, backoff *time.Duration
 	}
 	setupTimer.Stop()
 	*backoff = time.Second
+	*fails = 0
 	src.state.Store(StateLive)
 	subLogger.Info("sub-stream live", "camera_id", src.cameraID, "codec", string(codec), "url", redactURL(rawURL))
 
