@@ -3,10 +3,9 @@
   // list when a row is expanded. Polls /api/streams only while mounted
   // (i.e. while the row is expanded); layout is fixed, only numbers refresh.
   import { onMount } from 'svelte';
-  import { getFlowStreams, getCameraRecordingStats } from '$lib/api';
+  import { getFlowStreams } from '$lib/api';
   import type { FlowStream } from '$lib/api/flow';
   import { t } from '$lib/i18n';
-  import { formatFileSize } from '$lib/format';
   import { Radio } from 'lucide-svelte';
 
   let {
@@ -83,9 +82,6 @@
     return kindI18n[kind] ? t(`flow.kind.${kindI18n[kind]}`) : kind;
   }
 
-  // Per-camera disk usage for this camera (fetched once per expansion).
-  let storage = $state<{ count: number; bytes: number } | null>(null);
-
   async function poll(): Promise<void> {
     try {
       const res = await getFlowStreams();
@@ -136,9 +132,6 @@
 
   onMount(() => {
     poll();
-    getCameraRecordingStats(cameraId)
-      .then((s) => (storage = { count: s.recording_count, bytes: s.total_size }))
-      .catch(() => {});
     const timer = setInterval(() => {
       if (!document.hidden) poll();
     }, POLL_INTERVAL);
@@ -149,9 +142,6 @@
 <div class="cam-flow" bind:this={rootEl}>
   <div class="flow-title">
     <span class="title-left"><Radio size={12} /> {t('flow.treeTitle')}{name ? ` · ${name}` : ''}</span>
-    {#if storage}
-      <span class="storage">{t('flow.storageUsage')}: {formatFileSize(storage.bytes)} · {storage.count} {t('flow.segments')}</span>
-    {/if}
   </div>
   {#if error}
     <div class="flow-error">{error}</div>
@@ -308,12 +298,6 @@
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-  }
-  .storage {
-    font-weight: 400;
-    font-size: 0.72rem;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
   }
   .flow-error {
     color: var(--color-danger);

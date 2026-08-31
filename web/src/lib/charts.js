@@ -80,16 +80,23 @@ export function getChartThemeColors() {
  * @param {HTMLCanvasElement} canvas
  * @param {{ date: string; total_size: number; camera_sizes?: Record<string, number> }[]} trends
  * @param {string} [unitSuffix] - localized suffix for the y-axis title (e.g. "/day")
+ * @param {string[]} [cameraOrder] - explicit stacking/legend order for the
+ *   per-camera datasets (e.g. by total contribution). Names not present in the
+ *   data are ignored; cameras missing from the list fall back to data order.
  * @returns {import('chart.js').Chart | null}
  */
-export function createTrendChart(Chart, canvas, trends, unitSuffix = '/day') {
+export function createTrendChart(Chart, canvas, trends, unitSuffix = '/day', cameraOrder) {
   if (!canvas) return null;
 
   const { gridColor, textColor } = getChartThemeColors();
   const labels = trends.map((d) => d.date.slice(5)); // MM-DD
 
   // Collect all camera names across all days (for stable legend order).
-  const cameraNames = [...new Set(trends.flatMap((d) => Object.keys(d.camera_sizes || {})))];
+  const seen = [...new Set(trends.flatMap((d) => Object.keys(d.camera_sizes || {})))];
+  // Stack order = datasets order (index 0 at the bar base); the legend follows.
+  const cameraNames = cameraOrder
+    ? [...cameraOrder.filter((n) => seen.includes(n)), ...seen.filter((n) => !cameraOrder.includes(n))]
+    : seen;
   // Determine unit from the max single-day total.
   const maxDay = Math.max(...trends.map((d) => d.total_size), 0);
   const chartUnit = getChartUnit([maxDay]);
