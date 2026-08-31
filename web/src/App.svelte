@@ -17,7 +17,6 @@
     settings: () => import('./routes/Settings.svelte'),
     dashboard: () => import('./routes/Dashboard.svelte'),
     'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
-    'ai-events': () => import('./routes/AIEvents.svelte'),
   };
   import Header from './components/Header';
 
@@ -144,7 +143,9 @@ function parseRoute(hash: string) {
     }
 
     if (segments[0] === 'ai-events') {
-      return { route: 'ai-events', params: {} };
+      // AI Events is a dashboard sub-page now (dashboard/ai tab).
+      window.location.replace('#/dashboard/ai');
+      return parseRoute('#/dashboard/ai');
     }
 
     if (segments[0] === 'dashboard') {
@@ -154,7 +155,9 @@ function parseRoute(hash: string) {
         ? 'health'
         : segments[1] === 'transcoding'
           ? 'transcoding'
-          : 'storage';
+          : segments[1] === 'ai'
+            ? 'ai'
+            : 'storage';
       return { route: 'dashboard', params: { tab } };
     }
     // Legacy standalone flow route → health tab.
@@ -179,6 +182,8 @@ function parseRoute(hash: string) {
       window.location.replace('#/dashboard');
     } else if (window.location.hash === '#/status' || window.location.hash.startsWith('#/status/')) {
       window.location.replace('#/dashboard/health');
+    } else if (window.location.hash === '#/ai-events' || window.location.hash.startsWith('#/ai-events')) {
+      window.location.replace('#/dashboard/ai');
     } else if (window.location.hash === '#/timelapse' || window.location.hash.startsWith('#/timelapse')) {
       window.location.replace('#/recordings');
     }
@@ -202,6 +207,10 @@ function parseRoute(hash: string) {
     }
     if (hash === '#/status' || hash.startsWith('#/status/')) {
       window.location.replace('#/dashboard/health');
+      return;
+    }
+    if (hash === '#/ai-events' || hash.startsWith('#/ai-events')) {
+      window.location.replace('#/dashboard/ai');
       return;
     }
     if (hash === '#/timelapse' || hash.startsWith('#/timelapse')) {

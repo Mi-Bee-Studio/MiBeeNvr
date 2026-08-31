@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import { withBase } from '$lib/base-path';
   import { logout, isLocalBypass, getSettings, getUpdateStatus } from '$lib/api';
-  import { getMiBeeVisionConnected, refreshMiBeeVisionStatus } from '$lib/mibeevision-status';
+  import { refreshMiBeeVisionStatus } from '$lib/mibeevision-status';
   import { getEffectiveTheme } from '$lib/preferences';
   import LanguageSwitcher from './LanguageSwitcher.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
@@ -20,9 +20,6 @@
     showBack?: boolean;
     backLabel?: string;
   } = $props();
-
-  // MiBeeVision connection status (shared reactive store)
-  let miBeeVisionConnected = $derived(getMiBeeVisionConnected());
 
   // Version-check badge: a subtle dot on the Settings link when an update is
   // available. Polled once on mount + on focus (cheap; backend caches + uses
@@ -86,12 +83,13 @@
     window.removeEventListener('hashchange', handleHashChange);
   });
 
-  // Navigation items — AI Events only shown when MiBeeVision is configured
+  // Navigation items — AI Events lives under the Dashboard now (#/dashboard/ai
+  // tab, shown only when MiBeeVision is configured). refreshMiBeeVisionStatus
+  // in onMount still warms the shared store the Dashboard's tab visibility reads.
   let navItems = $derived([
     { href: '#/surveillance', labelKey: 'nav.surveillance', route: '/surveillance' },
     { href: '#/cameras', labelKey: 'nav.cameras', route: '/cameras' },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
-    ...(miBeeVisionConnected ? [{ href: '#/ai-events', labelKey: 'nav.aiEvents', route: '/ai-events' }] : []),
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings' },
   ]);

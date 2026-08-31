@@ -329,6 +329,18 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, trends)
 }
 
+// handleStatsCameras serves GET /api/stats/cameras — the per-camera storage
+// footprint (bytes + segment count) rendered on the Dashboard's storage-usage
+// card. Backed by a short-lived DB cache (see GetCameraStorageStats).
+func (h *Handler) handleStatsCameras(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.db.GetCameraStorageStats(r.Context())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to get camera storage stats")
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
 // --- Settings endpoints ---
 
 // protocolInfo describes a protocol for the /api/protocols endpoint.
@@ -459,6 +471,7 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Get("/api/stats", h.handleStats)
 	r.Get("/api/stats/system", h.handleSystemStats)
 	r.Get("/api/stats/trends", h.handleStatsTrends)
+	r.Get("/api/stats/cameras", h.handleStatsCameras)
 	r.Get("/api/settings", h.handleGetSettings)
 	r.Put("/api/settings", h.handleUpdateSettings)
 	r.Get("/api/storage/candidates", h.handleStorageCandidates)

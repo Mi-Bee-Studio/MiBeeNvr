@@ -312,6 +312,116 @@ func TestGetRecordingTrends_NilLocation(t *testing.T) {
 	require.Equal(t, trends, trendsUTC)
 }
 
+// TestGetCameraStorageStats verifies per-camera aggregation, archived flag
+// propagation, name fallback for cameras without a cameras row, and descending
+// size ordering.
+func TestGetCameraStorageStats(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	err = db.Init(ctx)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.db.ExecContext(ctx,
+		"INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
+		"cam1", "Front Door", "rtsp", "rtsp://192.168.1.10/stream")
+	require.NoError(t, err)
+
+	_, err = db.db.ExecContext(ctx,
+		"INSERT INTO cameras (id, name, protocol, url, archived) VALUES (?, ?, ?, ?, 1)",
+		"cam2", "Back Yard", "rtsp", "rtsp://192.168.1.11/stream")
+	require.NoError(t, err)
+	// Note: "cam3" has recordings but NO cameras row — name falls back to the id.
+
+	now := time.Now().UTC()
+	insertRec := func(id, camID string, size int64) {
+		t.Helper()
+		_, err := db.db.ExecContext(ctx,
+			`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, camID, "/test.mp4", "h264",
+			formatTime(now), formatTime(now.Add(60*time.Second)), 60.0, size, 60)
+		require.NoError(t, err)
+	}
+	insertRec("rec-1", "cam1", 1024)
+	insertRec("rec-2", "cam1", 2048)
+	insertRec("rec-3", "cam2", 8192)
+	insertRec("rec-4", "cam3", 512)
+
+	stats, err := db.GetCameraStorageStats(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 3)
+
+	// Largest consumer first.
+	require.Equal(t, "cam2", stats[0].CameraID)
+	require.Equal(t, "Back Yard", stats[0].CameraName)
+	require.True(t, stats[0].Archived)
+	require.Equal(t, 1, stats[0].Recordings)
+	require.Equal(t, int64(8192), stats[0].TotalBytes)
+
+	require.Equal(t, "cam1", stats[1].CameraID)
+	require.Equal(t, "Front Door", stats[1].CameraName)
+	require.False(t, stats[1].Archived)
+	require.Equal(t, 2, stats[1].Recordings)
+	require.Equal(t, int64(3072), stats[1].TotalBytes)
+
+	// No cameras row → id as name, not archived.
+	require.Equal(t, "cam3", stats[2].CameraID)
+	require.Equal(t, "cam3", stats[2].CameraName)
+	require.False(t, stats[2].Archived)
+}
+
+// TestGetCameraStorageStats_Cache verifies the TTL cache: inserts after the
+// first call are invisible until InvalidateStatsCache.
+func TestGetCameraStorageStats_Cache(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	err = db.Init(ctx)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.db.ExecContext(ctx,
+		`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"rec-1", "cam1", "/test.mp4", "h264",
+		formatTime(time.Now()), formatTime(time.Now().Add(60*time.Second)), 60.0, 1024, 60)
+	require.NoError(t, err)
+
+	stats, err := db.GetCameraStorageStats(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 1)
+
+	_, err = db.db.ExecContext(ctx,
+		`INSERT INTO recordings (id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"rec-2", "cam2", "/test.mp4", "h264",
+		formatTime(time.Now()), formatTime(time.Now().Add(60*time.Second)), 60.0, 4096, 60)
+	require.NoError(t, err)
+
+	// Cached — the new camera is invisible within the TTL.
+	stats, err = db.GetCameraStorageStats(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 1, "cached result should not reflect insert within TTL")
+
+	db.InvalidateStatsCache()
+	stats, err = db.GetCameraStorageStats(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+	require.Equal(t, "cam2", stats[0].CameraID, "largest consumer first after invalidation")
+}
+
 // TestGetRecordingTrends_CrossDate verifies recordings spanning multiple dates
 // are correctly grouped.
 func TestGetRecordingTrends_CrossDate(t *testing.T) {

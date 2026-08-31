@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -432,4 +433,40 @@ func TestStreamingSettings_RTMPAndSRT(t *testing.T) {
 	require.True(t, got.SRT.Enabled)
 	require.Equal(t, 9001, got.SRT.Port)
 	require.Equal(t, "cam-2", got.SRT.Streams[0].CameraID)
+}
+
+// --- handleStatsCameras tests ---
+
+func TestStatsCameras(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+
+	require.NoError(t, h.db.UpsertCamera(t.Context(), "cam-1", "Front Door", "rtsp", "h264", "rtsp://x", "", "", "", "", "", ""))
+
+	now := time.Now().UTC()
+	require.NoError(t, h.db.InsertRecording(t.Context(), &model.Recording{
+		ID: "rec-1", CameraID: "cam-1", FilePath: "/r1.mp4", Format: model.FormatH264,
+		StartedAt: now, EndedAt: now.Add(time.Minute), Duration: 60, FileSize: 2048,
+	}))
+	// Camera with recordings but no cameras row — must still aggregate (name = id).
+	require.NoError(t, h.db.InsertRecording(t.Context(), &model.Recording{
+		ID: "rec-2", CameraID: "cam-ghost", FilePath: "/r2.mp4", Format: model.FormatH264,
+		StartedAt: now, EndedAt: now.Add(time.Minute), Duration: 60, FileSize: 4096,
+	}))
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/stats/cameras", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var stats []model.CameraStorageStats
+	parseJSON(t, rr, &stats)
+	require.Len(t, stats, 2)
+	require.Equal(t, "cam-ghost", stats[0].CameraID, "largest consumer first")
+	require.Equal(t, "cam-ghost", stats[0].CameraName)
+	require.Equal(t, int64(4096), stats[0].TotalBytes)
+	require.Equal(t, "cam-1", stats[1].CameraID)
+	require.Equal(t, "Front Door", stats[1].CameraName)
+	require.Equal(t, int64(2048), stats[1].TotalBytes)
+	require.Equal(t, 1, stats[1].Recordings)
 }

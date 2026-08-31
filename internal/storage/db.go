@@ -59,6 +59,12 @@ type DB struct {
 	// effectively always fresh while eliminating the GROUP BY scan on every poll.
 	trendsMu    sync.Mutex
 	trendsCache map[string]*trendsCacheEntry
+
+	// cameraStatsCache memoizes GetCameraStorageStats (a GROUP BY over all
+	// recordings rows) with the same reasoning as trendsCache: the Dashboard
+	// polls every 30s and per-camera footprints drift by one segment at a time.
+	cameraStatsMu    sync.Mutex
+	cameraStatsCache *cameraStatsCacheEntry
 }
 
 // countCacheEntry holds a cached COUNT result and its expiry time.
@@ -70,6 +76,13 @@ type countCacheEntry struct {
 // trendsCacheEntry holds a cached GetRecordingTrends result and its expiry time.
 type trendsCacheEntry struct {
 	value    []model.DailyStats
+	expiryAt time.Time
+}
+
+// cameraStatsCacheEntry holds a cached GetCameraStorageStats result and its
+// expiry time.
+type cameraStatsCacheEntry struct {
+	value    []model.CameraStorageStats
 	expiryAt time.Time
 }
 

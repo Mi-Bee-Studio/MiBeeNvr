@@ -1,15 +1,17 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { getStats, listCameras, healthCheck, getSystemStats, getHealthCameras, getStatsTrends } from '$lib/api';
-  import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail } from '$lib/api';
+  import { getStats, listCameras, healthCheck, getSystemStats, getHealthCameras, getStatsTrends, getStatsCameras } from '$lib/api';
+  import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail, CameraStorageStats } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2 } from 'lucide-svelte';
+  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Database, Loader2, Brain } from 'lucide-svelte';
   import { loadChart, createTrendChart } from '$lib/charts';
   import Tab from '$lib/components/Tab.svelte';
   import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
   import HealthHistory from './HealthHistory.svelte';
   import TranscodingHistory from './TranscodingHistory.svelte';
+  import AIEvents from './AIEvents.svelte';
+  import { getMiBeeVisionConnected } from '$lib/mibeevision-status';
   import AiStatusCard from '../components/AiStatusCard.svelte';
 
   let { initialTab = 'storage' }: { initialTab?: string } = $props();
@@ -21,10 +23,16 @@
     activeTab = initialTab;
   });
 
+  // The AI Events tab exists only when MiBeeVision is configured (same
+  // visibility rule the old top-level nav item had — the page itself is a
+  // dashboard sub-page now).
+  let miBeeVisionConnected = $derived(getMiBeeVisionConnected());
+
   let tabs = $derived([
     { id: 'storage', label: t('dashboard.tab.storage'), icon: HardDrive },
     { id: 'health', label: t('dashboard.tab.health'), icon: Activity },
     { id: 'transcoding', label: t('dashboard.tab.transcoding'), icon: Cpu },
+    ...(miBeeVisionConnected ? [{ id: 'ai', label: t('dashboard.tab.ai'), icon: Brain }] : []),
   ]);
 
   function handleTabChange(tabId: string) {
@@ -53,6 +61,10 @@
   let health = $state<HealthResponse | null>(null);
   let healthCameras = $state<Record<string, CameraHealthDetail>>({});
   let healthError = $state('');
+  // Per-camera storage footprint (storage-usage card). Cached 2min server-side,
+  // so it rides the 30s poll without re-running the GROUP BY.
+  let cameraStorage = $state<CameraStorageStats[]>([]);
+  let cameraStorageError = $state(false);
   // Camera whose flow tree is expanded in the camera-health list.
   let expandedFlow = $state<string | null>(null);
   // Row order frozen at expand time: the live list re-sorts by score every
@@ -268,6 +280,32 @@
     }
   }
 
+  async function loadCameraStorage() {
+    try {
+      cameraStorage = await getStatsCameras();
+      cameraStorageError = false;
+    } catch (e) {
+      console.warn('Failed to load camera storage stats:', e);
+      cameraStorageError = true;
+    }
+  }
+
+  // Storage-usage rows: cameras with recordings (from the API, archived ones
+  // flagged) plus active cameras without any recordings shown as 0 B.
+  let cameraStorageRows = $derived.by(() => {
+    const seen = new Set(cameraStorage.map((s) => s.camera_id));
+    const rows = [...cameraStorage];
+    for (const cam of cameras) {
+      if (!seen.has(cam.id)) {
+        rows.push({ camera_id: cam.id, camera_name: cam.name || cam.id, archived: false, recordings: 0, total_bytes: 0 });
+      }
+    }
+    rows.sort((a, b) => b.total_bytes - a.total_bytes || a.camera_name.localeCompare(b.camera_name));
+    return rows;
+  });
+
+  let cameraStorageTotal = $derived(cameraStorage.reduce((sum, s) => sum + s.total_bytes, 0));
+
   // Trend chart loading — 14 days for a meaningful trend (was 7).
   async function loadTrends() {
     try {
@@ -304,6 +342,7 @@
       loadSystemStats(),
       loadHealth(),
       loadHealthCameras(),
+      loadCameraStorage(),
     ]).finally(() => { loading = false; });
 
     // Lazy-load trends after core data — storage is the default tab, so the chart
@@ -328,6 +367,7 @@
       loadCameras();
       loadSystemStats();
       loadHealthCameras();
+      loadCameraStorage();
     }, 30000);
 
     // Re-color existing chart on theme change WITHOUT refetching data.
@@ -536,6 +576,57 @@
       {/if}
     </div>
 
+    <!-- Camera Storage — per-camera footprint, sibling of the health card -->
+    <div class="card p-4 border th-border mb-6">
+      <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+        <Database size={16} class="text-accent" />
+        {t('dashboard.storageByCamera')}
+        {#if cameraStorageTotal > 0}
+          <span class="ml-auto text-xs th-text-muted font-normal tabular-nums">{formatFileSize(cameraStorageTotal)}</span>
+        {/if}
+      </h3>
+      {#if cameraStorageError}
+        <div class="flex items-center gap-2 text-sm th-text-muted py-2">
+          <AlertCircle size={14} class="th-text-secondary" />
+          <span>{t('common.error')}</span>
+        </div>
+      {:else if cameraStorageRows.length === 0}
+        <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
+      {:else}
+        <div class="space-y-1">
+          {#each cameraStorageRows as cam (cam.camera_id)}
+            <div class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors">
+              <!-- Camera name -->
+              <span class="text-sm th-text-primary flex-1 truncate">
+                {cam.camera_name}
+                {#if cam.archived}
+                  <span class="text-xs th-text-muted ml-1">({t('cameras.status.archived')})</span>
+                {/if}
+              </span>
+
+              <!-- Segment count -->
+              <span class="text-xs th-text-muted hidden sm:inline tabular-nums">
+                {t('dashboard.storageSegments', { n: cam.recordings })}
+              </span>
+
+              <!-- Share of total recordings storage -->
+              <div class="w-20 md:w-28 th-bg-tertiary rounded-full h-1.5 overflow-hidden flex-shrink-0">
+                {#if cameraStorageTotal > 0 && cam.total_bytes > 0}
+                  {@const pct = Math.min(100, (cam.total_bytes / cameraStorageTotal) * 100)}
+                  <div class="h-full rounded-full transition-all duration-500" style="width: {pct}%; background-color: {getUsageColor(pct)}"></div>
+                {/if}
+              </div>
+
+              <!-- Size -->
+              <span class="text-sm font-semibold th-text-primary tabular-nums min-w-[3.5rem] text-right">
+                {cam.total_bytes > 0 ? formatFileSize(cam.total_bytes) : '--'}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
     <!-- AI Status -->
     <AiStatusCard />
 
@@ -571,6 +662,10 @@
       </div>
     {:else if activeTab === 'transcoding'}
       <TranscodingHistory />
+    {:else if activeTab === 'ai'}
+      <div class="ai-tab-content">
+        <AIEvents />
+      </div>
     {/if}
   </main>
 </div>
@@ -611,5 +706,11 @@
 
   .health-tab-content > :global(.min-h-screen) {
     min-height: auto !important;
+  }
+
+  /* AIEvents ships its own page-level padding (p-4 md:p-6 max-w-6xl) — trim
+     the top padding so it aligns with the other tab contents. */
+  .ai-tab-content > :global(:first-child) {
+    padding-top: 0 !important;
   }
 </style>
