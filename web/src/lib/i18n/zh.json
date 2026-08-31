@@ -403,7 +403,6 @@
   "dashboard.snapshotError": "快照不可用",
   "dashboard.snapshotMode": "快照模式",
   "dashboard.storageByCamera": "存储占用",
-  "dashboard.storageSegments": "{n} 段",
   "dashboard.tab.ai": "AI 事件",
   "dashboard.tab.health": "健康历史",
   "dashboard.tab.storage": "存储趋势",

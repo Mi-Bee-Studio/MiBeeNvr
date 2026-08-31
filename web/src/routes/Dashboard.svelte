@@ -4,7 +4,7 @@
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail, CameraStorageStats } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Database, Loader2, Brain } from 'lucide-svelte';
+  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2, Brain } from 'lucide-svelte';
   import { loadChart, createTrendChart } from '$lib/charts';
   import Tab from '$lib/components/Tab.svelte';
   import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
@@ -61,10 +61,9 @@
   let health = $state<HealthResponse | null>(null);
   let healthCameras = $state<Record<string, CameraHealthDetail>>({});
   let healthError = $state('');
-  // Per-camera storage footprint (storage-usage card). Cached 2min server-side,
-  // so it rides the 30s poll without re-running the GROUP BY.
+  // Per-camera storage footprint (column in the camera-health card). Cached
+  // 2min server-side, so it rides the 30s poll without re-running the GROUP BY.
   let cameraStorage = $state<CameraStorageStats[]>([]);
-  let cameraStorageError = $state(false);
   // Camera whose flow tree is expanded in the camera-health list.
   let expandedFlow = $state<string | null>(null);
   // Row order frozen at expand time: the live list re-sorts by score every
@@ -118,9 +117,11 @@
     return map;
   });
 
-  // Build enriched camera health entries (camera info + health detail)
+  // Build enriched camera health entries (camera info + health detail +
+  // per-camera storage footprint from /api/stats/cameras)
   let cameraHealthEntries = $derived.by(() => {
-    const entries: { id: string; name: string; status: string; score: number; factors?: string[]; recording_enabled?: boolean | null }[] = [];
+    const storageById = new Map(cameraStorage.map((s) => [s.camera_id, s]));
+    const entries: { id: string; name: string; status: string; score: number; bytes: number; factors?: string[]; recording_enabled?: boolean | null }[] = [];
     for (const cam of cameras) {
       const detail = healthCameras[cam.id];
       entries.push({
@@ -128,6 +129,7 @@
         name: cam.name || cam.id,
         status: detail?.latest_status || cam.status || 'unknown',
         score: detail?.score ?? -1,
+        bytes: storageById.get(cam.id)?.total_bytes ?? 0,
         factors: detail?.score_factors,
         recording_enabled: cam.recording_enabled,
       });
@@ -283,30 +285,15 @@
   async function loadCameraStorage() {
     try {
       cameraStorage = await getStatsCameras();
-      cameraStorageError = false;
     } catch (e) {
-      console.warn('Failed to load camera storage stats:', e);
       // Keep the previous rows — a transient failure (e.g. the retention
-      // sweep contending with the GROUP BY) must not blank the card; the
-      // 30s poll retries. Only surface the error before the first load.
-      if (cameraStorage.length === 0) cameraStorageError = true;
+      // sweep contending with the GROUP BY) must not blank the column; the
+      // 30s poll retries.
+      console.warn('Failed to load camera storage stats:', e);
     }
   }
 
-  // Storage-usage rows: cameras with recordings (from the API, archived ones
-  // flagged) plus active cameras without any recordings shown as 0 B.
-  let cameraStorageRows = $derived.by(() => {
-    const seen = new Set(cameraStorage.map((s) => s.camera_id));
-    const rows = [...cameraStorage];
-    for (const cam of cameras) {
-      if (!seen.has(cam.id)) {
-        rows.push({ camera_id: cam.id, camera_name: cam.name || cam.id, archived: false, recordings: 0, total_bytes: 0 });
-      }
-    }
-    rows.sort((a, b) => b.total_bytes - a.total_bytes || a.camera_name.localeCompare(b.camera_name));
-    return rows;
-  });
-
+  // Total recording footprint — shown as a suffix in the health card header.
   let cameraStorageTotal = $derived(cameraStorage.reduce((sum, s) => sum + s.total_bytes, 0));
 
   // Trend chart loading — 14 days for a meaningful trend (was 7).
@@ -513,11 +500,16 @@
       {/if}
     </div>
 
-    <!-- Camera Health — per-camera status list -->
+    <!-- Camera Health — per-camera status list (with storage footprint column) -->
     <div class="card p-4 border th-border mb-6">
       <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
         <Activity size={16} class="text-accent" />
         {t('dashboard.healthSummary')}
+        {#if cameraStorageTotal > 0}
+          <span class="ml-auto text-xs th-text-muted font-normal tabular-nums" title={t('dashboard.storageByCamera')}>
+            {t('dashboard.storageByCamera')} {formatFileSize(cameraStorageTotal)}
+          </span>
+        {/if}
       </h3>
       {#if healthError}
         <div class="flex items-center gap-2 text-sm th-text-muted py-2">
@@ -541,6 +533,11 @@
 
               <!-- Status badge -->
               <span class="text-xs th-text-secondary hidden sm:inline">{statusLabel(cam.status, cam.recording_enabled)}</span>
+
+              <!-- Storage footprint -->
+              <span class="text-xs th-text-secondary hidden md:inline tabular-nums min-w-[4rem] text-right" title={t('dashboard.storageByCamera')}>
+                {cam.bytes > 0 ? formatFileSize(cam.bytes) : '--'}
+              </span>
 
               <!-- Health score -->
               {#if cam.score >= 0}
@@ -574,57 +571,6 @@
                 <CameraFlowTree cameraId={cam.id} name={cam.name} status={cam.status} recordingEnabled={cam.recording_enabled !== false} />
               </div>
             {/if}
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- Camera Storage — per-camera footprint, sibling of the health card -->
-    <div class="card p-4 border th-border mb-6">
-      <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
-        <Database size={16} class="text-accent" />
-        {t('dashboard.storageByCamera')}
-        {#if cameraStorageTotal > 0}
-          <span class="ml-auto text-xs th-text-muted font-normal tabular-nums">{formatFileSize(cameraStorageTotal)}</span>
-        {/if}
-      </h3>
-      {#if cameraStorageError}
-        <div class="flex items-center gap-2 text-sm th-text-muted py-2">
-          <AlertCircle size={14} class="th-text-secondary" />
-          <span>{t('common.error')}</span>
-        </div>
-      {:else if cameraStorageRows.length === 0}
-        <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
-      {:else}
-        <div class="space-y-1">
-          {#each cameraStorageRows as cam (cam.camera_id)}
-            <div class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors">
-              <!-- Camera name -->
-              <span class="text-sm th-text-primary flex-1 truncate">
-                {cam.camera_name}
-                {#if cam.archived}
-                  <span class="text-xs th-text-muted ml-1">({t('cameras.status.archived')})</span>
-                {/if}
-              </span>
-
-              <!-- Segment count -->
-              <span class="text-xs th-text-muted hidden sm:inline tabular-nums">
-                {t('dashboard.storageSegments', { n: cam.recordings })}
-              </span>
-
-              <!-- Share of total recordings storage -->
-              <div class="w-20 md:w-28 th-bg-tertiary rounded-full h-1.5 overflow-hidden flex-shrink-0">
-                {#if cameraStorageTotal > 0 && cam.total_bytes > 0}
-                  {@const pct = Math.min(100, (cam.total_bytes / cameraStorageTotal) * 100)}
-                  <div class="h-full rounded-full transition-all duration-500" style="width: {pct}%; background-color: {getUsageColor(pct)}"></div>
-                {/if}
-              </div>
-
-              <!-- Size -->
-              <span class="text-sm font-semibold th-text-primary tabular-nums min-w-[3.5rem] text-right">
-                {cam.total_bytes > 0 ? formatFileSize(cam.total_bytes) : '--'}
-              </span>
-            </div>
           {/each}
         </div>
       {/if}

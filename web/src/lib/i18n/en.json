@@ -410,7 +410,6 @@
   "dashboard.snapshotError": "Snapshot unavailable",
   "dashboard.snapshotMode": "Snapshot mode",
   "dashboard.storageByCamera": "Storage by Camera",
-  "dashboard.storageSegments": "{n} segments",
   "dashboard.tab.ai": "AI Events",
   "dashboard.tab.health": "Health History",
   "dashboard.tab.storage": "Storage Trends",
