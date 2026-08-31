@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount } from 'svelte';
   import { getStats, listCameras, healthCheck, getSystemStats, getHealthCameras, getStatsTrends, getStatsCameras } from '$lib/api';
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail, CameraStorageStats } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
   import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2, Brain } from 'lucide-svelte';
-  import { loadChart, createTrendChart } from '$lib/charts';
+  import TrendStackChart from '$lib/components/TrendStackChart.svelte';
   import Tab from '$lib/components/Tab.svelte';
   import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
   import HealthHistory from './HealthHistory.svelte';
@@ -42,7 +42,9 @@
     // Lazy-load trends only when the storage tab is opened, not on every 30s
     // poll. Daily aggregates change at most once per day — no need to fetch
     // them unless the user is actually looking at the chart.
-    if (tabId === 'storage' && !lastTrends) {
+    if (tabId === 'storage') {
+      // Re-fetch on every tab entry so camera add/rename/delete shows up
+      // without a page reload (backend 2min cache makes this cheap).
       loadTrends();
     }
   }
@@ -91,9 +93,7 @@
     return { online, warning, offline, total: entries.length };
   });
 
-  // Chart state
-  let ChartJs: any = null;
-  let trendChart: any = null;
+  // Trend data (rendered by TrendStackChart — pure SVG, no Chart.js)
   let lastTrends = $state<any>(null);
 
   function formatPercentage(used: number, total: number): string {
@@ -121,32 +121,59 @@
   // per-camera storage footprint from /api/stats/cameras)
   let cameraHealthEntries = $derived.by(() => {
     const storageById = new Map(cameraStorage.map((s) => [s.camera_id, s]));
-    const entries: { id: string; name: string; status: string; score: number; bytes: number; factors?: string[]; recording_enabled?: boolean | null }[] = [];
+    const entries: { id: string; name: string; status: string; score: number; bytes: number; segments: number; factors?: string[]; recording_enabled?: boolean | null }[] = [];
     for (const cam of cameras) {
       const detail = healthCameras[cam.id];
+      const st = storageById.get(cam.id);
       entries.push({
         id: cam.id,
         name: cam.name || cam.id,
         status: detail?.latest_status || cam.status || 'unknown',
         score: detail?.score ?? -1,
-        bytes: storageById.get(cam.id)?.total_bytes ?? 0,
+        bytes: st?.total_bytes ?? 0,
+        segments: st?.recordings ?? 0,
         factors: detail?.score_factors,
         recording_enabled: cam.recording_enabled,
       });
     }
-    // Sort: unhealthy first (lowest score), then by name — unless a row is
-    // expanded, in which case the frozen order wins (see orderSnapshot).
+    // Sort: by default unhealthy first (lowest score), then by name — the
+    // 段数/存储占用 headers can override with a click-to-sort (desc → asc →
+    // off). While a row is expanded, the frozen order wins (see orderSnapshot)
+    // so the expanded panel doesn't jump around.
     if (expandedFlow && orderSnapshot) {
       const idx = new Map(orderSnapshot.map((id, i) => [id, i]));
       entries.sort((a, b) => (idx.get(a.id) ?? 1e9) - (idx.get(b.id) ?? 1e9));
     } else {
       entries.sort((a, b) => {
+        if (healthSortKey === 'segments' || healthSortKey === 'bytes') {
+          const diff = healthSortKey === 'segments' ? a.segments - b.segments : a.bytes - b.bytes;
+          if (diff !== 0) return healthSortDir === 'desc' ? -diff : diff;
+          return a.name.localeCompare(b.name);
+        }
         if (a.score !== b.score) return a.score - b.score;
         return a.name.localeCompare(b.name);
       });
     }
     return entries;
   });
+
+  // Click-to-sort state for the camera-health columns (null = default
+  // health-score order). Cycle: desc → asc → default.
+  let healthSortKey = $state<'segments' | 'bytes' | null>(null);
+  let healthSortDir = $state<'desc' | 'asc'>('desc');
+
+  function toggleHealthSort(key: 'segments' | 'bytes') {
+    if (healthSortKey !== key) {
+      healthSortKey = key;
+      healthSortDir = 'desc';
+    } else if (healthSortDir === 'desc') {
+      healthSortDir = 'asc';
+    } else {
+      healthSortKey = null;
+    }
+    // Re-freeze the row order so an expanded panel doesn't jump.
+    if (expandedFlow) orderSnapshot = cameraHealthEntries.map((e) => e.id);
+  }
 
   // Translate a raw backend factor string ("recent_anomalies: -15 (4
   // anomalies in last hour (>3))") into a friendly localized line.
@@ -296,29 +323,25 @@
   // Total recording footprint — shown as a suffix in the health card header.
   let cameraStorageTotal = $derived(cameraStorage.reduce((sum, s) => sum + s.total_bytes, 0));
 
-  // Trend chart loading — 14 days for a meaningful trend (was 7).
+  // --- Storage-trend tab: single-camera filter + per-day independent sort ---
+  // The chart is a self-drawn SVG (TrendStackChart) — Chart.js cannot order
+  // segments per bar (its stacking order is global per dataset), but this
+  // chart needs EACH day's bar sorted by that day's bytes.
+  // '' = all cameras (stacked bars); a camera NAME isolates that camera's
+  // daily trend (trend camera_sizes are keyed by display name).
+  let trendCamera = $state('');
+  // true = biggest segment on top of each bar (per-day, independent).
+  let trendBigOnTop = $state(true);
+
+  // Trend data loading — 14 days for a meaningful trend (was 7).
   async function loadTrends() {
     try {
       const trends = await getStatsTrends(14);
       if (trends && trends.length > 0) {
-        if (!ChartJs) ChartJs = await loadChart();
-        await createChart(trends);
+        lastTrends = trends;
       }
     } catch (e) {
       console.error('Failed to load trends:', e);
-    }
-  }
-
-  async function createChart(trends: { date: string; total_size: number; camera_sizes?: Record<string, number> }[]) {
-    lastTrends = trends;
-    if (trendChart) { trendChart.destroy(); trendChart = null; }
-    // Wait for Svelte to flush the DOM — lastTrends was just set, so the canvas
-    // may not exist yet (the {:else if lastTrends} branch hasn't rendered). Without
-    // this, getElementById returns null and the chart never appears.
-    await tick();
-    const ctx = document.getElementById('dashboardTrendChart') as HTMLCanvasElement;
-    if (ctx) {
-      trendChart = createTrendChart(ChartJs, ctx, trends, t('dashboard.perDay'));
     }
   }
 
@@ -360,27 +383,10 @@
       loadCameraStorage();
     }, 30000);
 
-    // Re-color existing chart on theme change WITHOUT refetching data.
-    // The old code called loadTrends() (a full DB scan) just to change colors.
-    const observer = new MutationObserver(() => {
-      if (trendChart && lastTrends) {
-        void createChart(lastTrends); // canvas already in DOM; just re-render colors
-      }
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme']
-    });
-
     return () => {
       if (refreshInterval) clearInterval(refreshInterval);
       clearTimeout(quickSample);
-      observer.disconnect();
     };
-  });
-
-  onDestroy(() => {
-    if (trendChart) { trendChart.destroy(); trendChart = null; }
   });
 </script>
 
@@ -519,6 +525,28 @@
       {:else if cameraHealthEntries.length === 0}
         <p class="text-sm th-text-muted">{t('health.noCameras')}</p>
       {:else}
+        <!-- Column header: click 段数/存储占用 to sort (desc → asc → default).
+             Mirrors the row layout so the labels sit above their columns. -->
+        <div class="flex items-center gap-3 px-2 pb-1 text-[11px] th-text-muted select-none">
+          <span class="w-2 flex-shrink-0"></span>
+          <span class="flex-1"></span>
+          <span class="hidden sm:inline w-16"></span>
+          <button
+            class="sort-btn hidden md:flex items-center justify-end min-w-[5rem]"
+            onclick={() => toggleHealthSort('segments')}
+            title={t('dashboard.col.segmentsSortHint')}
+          >
+            {t('dashboard.col.segments')}<span class="sort-ind">{healthSortKey === 'segments' ? (healthSortDir === 'desc' ? '▼' : '▲') : '⇅'}</span>
+          </button>
+          <button
+            class="sort-btn hidden md:flex items-center justify-end min-w-[4.5rem]"
+            onclick={() => toggleHealthSort('bytes')}
+            title={t('dashboard.col.storageSortHint')}
+          >
+            {t('dashboard.col.storage')}<span class="sort-ind">{healthSortKey === 'bytes' ? (healthSortDir === 'desc' ? '▼' : '▲') : '⇅'}</span>
+          </button>
+          <span class="min-w-[2rem]"></span>
+        </div>
         <div class="space-y-1">
           {#each cameraHealthEntries as cam (cam.id)}
             <div
@@ -532,10 +560,14 @@
               <span class="text-sm th-text-primary flex-1 truncate">{cam.name}</span>
 
               <!-- Status badge -->
-              <span class="text-xs th-text-secondary hidden sm:inline">{statusLabel(cam.status, cam.recording_enabled)}</span>
+              <span class="text-xs th-text-secondary hidden sm:inline w-16 text-right truncate">{statusLabel(cam.status, cam.recording_enabled)}</span>
 
-              <!-- Storage footprint -->
-              <span class="text-xs th-text-secondary hidden md:inline tabular-nums min-w-[4rem] text-right" title={t('dashboard.storageByCamera')}>
+              <!-- Storage footprint: segments + bytes (fixed widths so the
+                   numeric columns line up across rows) -->
+              <span class="text-xs th-text-muted hidden md:flex items-center justify-end min-w-[5rem] tabular-nums whitespace-nowrap" title={t('dashboard.col.segments')}>
+                {cam.segments > 0 ? `${cam.segments} ${t('flow.segments')}` : '--'}
+              </span>
+              <span class="text-xs th-text-secondary hidden md:flex items-center justify-end min-w-[4.5rem] tabular-nums whitespace-nowrap" title={t('dashboard.col.storage')}>
                 {cam.bytes > 0 ? formatFileSize(cam.bytes) : '--'}
               </span>
 
@@ -593,10 +625,23 @@
           </div>
         {:else if lastTrends}
           <div class="card p-5 border th-border">
-            <p class="text-xs th-text-muted mb-3">{t('stats.recordingGrowthHint')}</p>
-            <div class="h-64 sm:h-72">
-              <canvas id="dashboardTrendChart"></canvas>
+            <div class="flex flex-wrap items-center gap-3 mb-3">
+              <button
+                class="btn btn-ghost text-xs"
+                title={t('dashboard.trend.perDaySortHint')}
+                onclick={() => (trendBigOnTop = !trendBigOnTop)}
+              >
+                {trendBigOnTop ? t('dashboard.trend.bigOnTop') : t('dashboard.trend.bigAtBottom')} ⇄
+              </button>
+              <p class="text-xs th-text-muted ml-auto hidden sm:block">{t('stats.recordingGrowthHint')}</p>
             </div>
+            <TrendStackChart
+              trends={lastTrends}
+              cameraFilter={trendCamera}
+              bigOnTop={trendBigOnTop}
+              legendHint={t('dashboard.trend.legendClick')}
+              onselect={(name) => (trendCamera = name)}
+            />
           </div>
         {:else}
           <div class="card p-8 text-center th-text-muted">
@@ -648,6 +693,25 @@
   }
   .row-active {
     background: var(--bg-tertiary, rgba(128, 128, 128, 0.12));
+  }
+  .sort-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted, var(--text-secondary));
+    cursor: pointer;
+    gap: 0.2rem;
+    white-space: nowrap;
+  }
+  .sort-btn:hover {
+    color: var(--text-primary);
+  }
+  .sort-ind {
+    font-size: 9px;
+    line-height: 1;
+    opacity: 0.7;
   }
   .health-tab-content > :global(:first-child) {
     padding-top: 0 !important;
