@@ -286,7 +286,10 @@
       cameraStorageError = false;
     } catch (e) {
       console.warn('Failed to load camera storage stats:', e);
-      cameraStorageError = true;
+      // Keep the previous rows — a transient failure (e.g. the retention
+      // sweep contending with the GROUP BY) must not blank the card; the
+      // 30s poll retries. Only surface the error before the first load.
+      if (cameraStorage.length === 0) cameraStorageError = true;
     }
   }
 
