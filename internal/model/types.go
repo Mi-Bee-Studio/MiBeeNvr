@@ -202,6 +202,18 @@ type StorageStats struct {
 	CameraCount    int   `json:"camera_count"`
 }
 
+// CameraStorageStats is the per-camera footprint shown on the Dashboard's
+// storage-usage card: bytes currently held by each camera's recordings plus
+// the segment count. Archived cameras keep their recordings on disk, so they
+// stay listed (flagged) until their data is cleaned up.
+type CameraStorageStats struct {
+	CameraID   string `json:"camera_id"`
+	CameraName string `json:"camera_name"`
+	Archived   bool   `json:"archived"`
+	Recordings int    `json:"recordings"`
+	TotalBytes int64  `json:"total_bytes"`
+}
+
 // DailyStats represents aggregated recording statistics for a single day.
 type DailyStats struct {
 	Date         string           `json:"date"`

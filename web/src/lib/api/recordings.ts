@@ -77,6 +77,14 @@ export interface DailyStats {
   camera_sizes?: Record<string, number>;
 }
 
+export interface CameraStorageStats {
+  camera_id: string;
+  camera_name: string;
+  archived: boolean;
+  recordings: number;
+  total_bytes: number;
+}
+
 export interface ArchiveGroup {
   id: string;
   name: string;
@@ -482,6 +490,10 @@ export async function getStats(signal?: AbortSignal): Promise<StorageStats> {
 
 export async function getStatsTrends(days: number = 7, signal?: AbortSignal): Promise<DailyStats[]> {
   return apiRequest<DailyStats[]>(`/stats/trends?days=${days}`, { signal });
+}
+
+export async function getStatsCameras(signal?: AbortSignal): Promise<CameraStorageStats[]> {
+  return apiRequest<CameraStorageStats[]>('/stats/cameras', { signal });
 }
 
 // --- Archives ---

@@ -114,10 +114,10 @@ func withHeavyQueryTimeout(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(ctx, heavyQueryTimeout)
 }
 
-// InvalidateStatsCache clears the cached CountRecordings and GetRecordingTrends
-// results. Call after bulk data changes (tests, migrations) that bypass the
-// normal insert path. Normal recording inserts/deletes rely on the short TTL
-// for natural expiry.
+// InvalidateStatsCache clears the cached CountRecordings, GetRecordingTrends
+// and GetCameraStorageStats results. Call after bulk data changes (tests,
+// migrations) that bypass the normal insert path. Normal recording
+// inserts/deletes rely on the short TTL for natural expiry.
 func (d *DB) InvalidateStatsCache() {
 	d.totalRecordingsMu.Lock()
 	d.totalRecordingsCachedAt = time.Time{}
@@ -126,6 +126,10 @@ func (d *DB) InvalidateStatsCache() {
 	d.trendsMu.Lock()
 	d.trendsCache = nil
 	d.trendsMu.Unlock()
+
+	d.cameraStatsMu.Lock()
+	d.cameraStatsCache = nil
+	d.cameraStatsMu.Unlock()
 }
 
 // trendsCacheTTL bounds how long GetRecordingTrends results are reused. Daily
@@ -265,6 +269,62 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int, loc *time.Locatio
 		expiryAt: time.Now().Add(trendsCacheTTL),
 	}
 	d.trendsMu.Unlock()
+
+	return result, nil
+}
+
+// GetCameraStorageStats returns the current per-camera storage footprint
+// (SUM of recording file sizes + segment count), largest consumer first.
+// Archived cameras stay included — their recordings still occupy disk. Results
+// are cached with the same TTL rationale as GetRecordingTrends: the Dashboard
+// polls every 30s while per-camera totals drift by one segment at a time.
+func (d *DB) GetCameraStorageStats(ctx context.Context) ([]model.CameraStorageStats, error) {
+	d.cameraStatsMu.Lock()
+	if d.cameraStatsCache != nil && time.Now().Before(d.cameraStatsCache.expiryAt) {
+		result := d.cameraStatsCache.value
+		d.cameraStatsMu.Unlock()
+		return result, nil
+	}
+	d.cameraStatsMu.Unlock()
+
+	ctx, cancel := withHeavyQueryTimeout(ctx)
+	defer cancel()
+	defer d.observeQuery("GetCameraStorageStats", time.Now())
+
+	// idx_recordings_camera_time covers (camera_id, …) so the GROUP BY is an
+	// index scan; the cameras LEFT JOIN supplies the display name + archived
+	// flag for cameras whose config row still exists.
+	rows, err := d.readConn().QueryContext(ctx, `SELECT r.camera_id,
+		COALESCE(c.name, r.camera_id) as camera_name,
+		COALESCE(c.archived, 0) as camera_archived,
+		COUNT(*) as cnt,
+		COALESCE(SUM(r.file_size), 0) as total_size
+	FROM recordings r LEFT JOIN cameras c ON r.camera_id = c.id
+	GROUP BY r.camera_id
+	ORDER BY total_size DESC, r.camera_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]model.CameraStorageStats, 0, 8)
+	for rows.Next() {
+		var s model.CameraStorageStats
+		if err := rows.Scan(&s.CameraID, &s.CameraName, &s.Archived, &s.Recordings, &s.TotalBytes); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	d.cameraStatsMu.Lock()
+	d.cameraStatsCache = &cameraStatsCacheEntry{
+		value:    result,
+		expiryAt: time.Now().Add(trendsCacheTTL),
+	}
+	d.cameraStatsMu.Unlock()
 
 	return result, nil
 }
