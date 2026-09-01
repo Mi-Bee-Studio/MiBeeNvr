@@ -1,6 +1,6 @@
 # API 概览
 
-> 适用于 MiBeeNvr v0.11.0 · 完整接口文档见仓库 [docs/zh/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/zh/api)
+> 适用于 MiBeeNvr v0.12.0 · 完整接口文档见仓库 [docs/zh/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/zh/api)
 
 MiBee NVR 的全部功能都可通过 REST API 驱动（Web UI 本身就是这套路 API 的消费者），并提供 SSE 实时事件流。本页是认证方式与核心端点速查。
 
@@ -42,13 +42,13 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 
 | 组 | 端点 | 说明 |
 |----|------|------|
-| 摄像头 | `GET/POST /api/cameras`、`GET/PUT/DELETE /api/cameras/{id}` | 摄像头 CRUD |
+| 摄像头 | `GET/POST /api/cameras`、`GET/PUT/DELETE /api/cameras/{id}`、`POST /api/cameras/{id}/adaptive/trigger`、`PUT/GET /api/cameras/{id}/storage-root` | 摄像头 CRUD、自适应录制外部触发、按相机存储根 |
 | 实时流 | `GET /api/cameras/{id}/stream.flv`、HLS / WebRTC / MJPEG 端点 | 拉流（FLV 需 BasicAuth） |
 | 录像 | `GET /api/recordings` | 列表 / 筛选 / 分页 |
 | 回放 | `GET /api/cameras/{id}/playback/playlist.m3u8` | 按录像回放 |
 | AI 事件 | `POST /api/ai/events`、`GET /api/ai/events`、`GET /api/ai/stats` | 外部 AI 后端写入（Bearer）与查询统计 |
 | 设置 | `GET/PUT /api/settings`、`POST /api/settings/api-keys` | 运行配置与密钥 |
-| 存储 | `GET /api/storage`（含 `candidates`） | 存储统计与可用卷 |
+| 存储 | `GET /api/storage`、`GET/POST/DELETE /api/storage/candidates`、`POST /api/storage/migrate` | 存储统计、候选卷管理、批量迁移（[存储管理](storage-management.md)） |
 | GB28181 | `/api/gb28181/*` | 设备 / 通道 / PTZ / 回放 |
 | 系统 | `GET /api/version`、`GET /api/capabilities`、`GET /api/stats` | 版本 / 能力 / 统计 |
 

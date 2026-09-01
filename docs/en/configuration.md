@@ -180,6 +180,17 @@ version: "1.0"
 - **Default**: both `true`; UDP port `49090`
 - **Description**: LAN self-announcement. mDNS/DNS-SD registers the `_mibee-nvr._tcp` service; the UDP responder answers `MIBEE-NVR-DISCv1?` broadcast probes with a JSON identity payload (covers multicast-restricted Wi-Fi). Bind failures are logged, never fatal.
 
+### `server.rtsp.enabled` / `server.rtsp.port`
+- **Type**: bool / int
+- **Default**: `true` / `8554`
+- **Description**: Built-in RTSP output server — every camera gets a stable pull URL `rtsp://<NVR-IP>:8554/<camera_id>` that third-party platforms (e.g. Synology Surveillance Station) can use directly as a camera source. H.264/H.265 served natively (no transcoding). Credentials optional (`username`/`password`; empty = open on the LAN). Docker deployments must publish the port (`-p 8554:8554`); a bind failure only logs an error — the rest of the NVR keeps working.
+- **See**: [Sub-streams · RTSP output](sub-stream.md#rtsp-output-third-party-platforms)
+
+### `server.substream.idle_timeout_s` / `server.substream.ready_timeout_s`
+- **Type**: int / int
+- **Default**: `30` / `8`
+- **Description**: On-demand sub-stream pull parameters — `idle_timeout_s` is how long an idle pull stays warm before recycling; `ready_timeout_s` is how long a `quality=sub` request waits for first video. See [Sub-streams](sub-stream.md).
+
 ## Storage Configuration
 
 ### `storage.root_dir`
@@ -203,6 +214,24 @@ version: "1.0"
   - **≤2 GB available RAM** (e.g. Raspberry Pi 3B): capped at **30s**
   - **>2 GB available RAM** (e.g. Banana Pi M5, x86): up to **2m** (120s), which halves the fragment count rolling merge must process
   - Values above the platform cap are **silently clamped** with a warning in the logs (they do not fail startup). On non-Linux hosts or if `/proc/meminfo` cannot be read, the conservative 30s cap applies.
+
+### `storage.db_path`
+- **Type**: string
+- **Optional**: yes
+- **Default**: `mibee-nvr.db` in the data directory
+- **Description**: SQLite database location. **Decoupled from the recording root** — switching `root_dir` / migrating recordings never moves the database (auto-pinned on bare-metal first boot, preventing an empty-DB foot-gun after a root switch). Docker deployments pin it to `NVR_DATA_DIR`.
+- **Generally leave unset**.
+
+### `storage.camera_roots`
+- **Type**: map (cameraID → path)
+- **Optional**: yes
+- **Description**: Per-camera recording-root overrides — mapped cameras record to the given directory, the rest to the default root. **Hot for new segments**; history moves via the background migrator. Also manageable at runtime via API / Web UI (see [Storage Management](storage-management.md)).
+- **Example**: `backyard: "/mnt/bigdisk/recordings"`
+
+### `storage.migration_rate_mb` / `storage.migration_window`
+- **Type**: int / string
+- **Default**: `15` / empty (always)
+- **Description**: The background migrator's copy rate cap (MB/s — never competes with recording IO) and its local-time window (e.g. `"22:00-06:00"`; empty = always, rate-limited).
 - **RPi Constraint**: Maximum 30 seconds on Raspberry Pi 3B
 - **Example**: `"30s"`, `"1m"`, `"5m"`
 
@@ -340,9 +369,15 @@ cameras:
 ### `cameras[].sub_stream_url`
 - **Type**: string
 - **Optional**: Yes
-- **Description**: RTSP URL of a lower-resolution sub-stream for live HLS preview. When configured, the Dashboard uses this stream instead of the main stream, reducing bandwidth usage.
+- **Description**: Manual RTSP address of the camera's low-resolution sub-stream — pulled on demand for explicit `quality=sub` viewing (grid "Smooth", live quality switcher, sub-stream cascade), see [Sub-streams](sub-stream.md). ONVIF cameras usually don't need this — the sub-stream profile is auto-discovered (`sub_profile_token`)
 - **Note**: Sub-stream must use the same codec (H.264/H.265) as the main stream
 - **Example**: `"rtsp://192.168.1.100:554/stream2"`
+
+### `cameras[].sub_profile_token`
+- **Type**: string
+- **Optional**: Yes
+- **Description**: ONVIF sub-stream profile token. **Blank = auto-discover** (picks the second-highest-resolution profile besides the main one; backfilled once — clear and save to re-discover). Manual values override the discovery result.
+- **Example**: `"SubStreamToken"`, `"Profile2"`
 
 ### `cameras[].snapshot_url`
 - **Type**: string
@@ -380,6 +415,68 @@ cameras:
 - **Supported Formats**: AAC (RTSP cameras), G.711 μ-law/A-law (ONVIF/Xiaomi cameras), Opus (Xiaomi cameras)
 - **Note**: Not supported for MJPEG or HTTP-JPEG cameras
 - **Example**: `true`, `false`
+
+### `cameras[].audio_in_recordings`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Whether recorded segments keep the camera's real audio track (event spans in merged products). Default off — recordings are video-only; live monitoring and the [audio trigger](adaptive-recording.md#audio-trigger) are unaffected by this flag.
+- **Example**: `true`, `false`
+
+### `cameras[].recording_mode`
+
+- **Type**: string
+- **Default**: `"continuous"`
+- **Values**: `"continuous"` (full-rate recording) / `"adaptive"` (motion-aware adaptive recording)
+- **Description**: Write-density strategy. In `adaptive` mode the camera writes one keyframe per `adaptive.timelapse_interval` while calm and instantly returns to full rate on activity / audio / external triggers (see [Adaptive Recording](adaptive-recording.md)). H.264/H.265 cameras only (MJPEG has no compressed-domain differential signal).
+- **Example**: `"adaptive"`
+
+### `cameras[].adaptive`
+
+- **Type**: object
+- **Optional**: yes (only meaningful with `recording_mode: "adaptive"`)
+- **Description**: Adaptive-recording tuning (all optional; defaults below — see [Adaptive Recording](adaptive-recording.md#tuning))
+- **Fields**:
+  - `calm_threshold` (string, default `"60s"`, range 10s–30m) — how long calm must last before going sparse
+  - `timelapse_interval` (string, default `"30s"`, range 5s–10m) — keyframe cadence while sparse
+  - `spike_factor` (float, default `5.0`, range 1.5–20) — activity sensitivity threshold
+  - `gop_buffer_bytes` (int, default `33554432`, range 1–64MB) — GOP pre-buffer cap
+  - `ambient_audio` (boolean, default `false`) — record ambient audio while sparse (merged into an atmosphere bed; G.711 only)
+  - `timelapse_frame_ms` (int, 100/300/500, default 100) — merged-product timelapse cadence
+  - `ambient_archive` (boolean, default `false`) — keep raw ambient audio as a `<segment>.g711` sidecar
+
+### `cameras[].audio_trigger`
+
+- **Type**: object
+- **Optional**: yes (only effective for `recording_mode: "adaptive"` cameras with G.711 audio)
+- **Description**: Loudness-triggered recording — abnormal sounds exit sparse mode with pre-trigger audio back-fill (see [Adaptive Recording · Audio Trigger](adaptive-recording.md#audio-trigger))
+- **Fields**:
+  - `enabled` (boolean, required) — arm the loudness input
+  - `min_dbfs` (float, default `-45`, range -90–0) — loudness threshold over a 1s window
+  - `pre_capture_s` (int, default `3`, range 0–30) — seconds of pre-trigger audio
+
+### `cameras[].recording_schedule`
+
+- **Type**: object
+- **Optional**: yes
+- **Description**: Recording time window (24/7 by default). Outside the window nothing is written to disk (live view unaffected).
+- **Fields**:
+  - `time_ranges` (array) — list of `{start: "09:00", end: "18:00"}`; overlaps auto-merge
+  - `days_of_week` (array of int) — 0=Sunday … 6=Saturday; empty = every day
+
+### `cameras[].cascade_enabled`
+
+- **Type**: boolean
+- **Default**: `true` (nil treated as true)
+- **Description**: GB28181 cascade catalog-convergence switch — `false` hides this camera from the upper platform's aggregated catalog and its channel's INVITEs answer 404. The channel-code allocation is kept, so re-enabling restores the same code (upper-platform bindings don't drift).
+- **Example**: `false`
+
+### `cameras[].cascade_sub_stream`
+
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Cascade forwarding rides the camera's **sub-stream** instead of main — the low-resolution tier keeps uplink bandwidth bounded for upper platforms that only need a preview. INVITE falls back to main when the camera has no sub-stream or its pull fails; cameras without one are unaffected.
+- **Example**: `true`
 
 
 ### `cameras[].did`
@@ -545,6 +642,16 @@ receives video-segment pushes and writes AI events back to the NVR.
 - **Type**: string
 - **Default**: `"notify"`
 - **Values**: `"notify"` (tell the consumer to fetch) / `"upload"` (the NVR pushes video bytes)
+
+### `vision.skip_cameras`
+- **Type**: array of string
+- **Default**: `[]`
+- **Description**: Camera IDs never pushed (e.g. MJPEG/JPEG encodings — pushing them is pointless). Skipped segments don't count toward the offline re-push window. Skip lists reported by consumer heartbeats merge (union) with this static list.
+
+### `vision.sub_layer_cameras`
+- **Type**: array of string
+- **Default**: `[]`
+- **Description**: Sub-stream analysis-layer cameras — listed cameras get an on-demand **sub-stream** pull recorded as independent low-res analysis segments (not in the recording library, not merged; deleted once consumed); pushes ride the sub-stream segments and main-stream segments are no longer pushed. Low-res segments decode at 1/4–1/16 the cost of main. Requires a sub-stream on the camera (`sub_profile_token` or `sub_stream_url`). Companion knobs: `sub_layer_segment_secs` (segment duration, default 60), `sub_layer_retention_secs` (on-disk bound, default 7200), `sub_layer_push_interval_secs` (push sweep cadence, default 20).
 
 ## GB28181 Configuration
 

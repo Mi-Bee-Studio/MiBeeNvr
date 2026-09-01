@@ -48,6 +48,113 @@ curl -u username:password \
 }
 ```
 
+## 按相机存储统计
+
+**端点：** `GET /api/stats/cameras`
+
+每路相机的录像段数与磁盘占用（仪表盘「存储趋势」子页的数据源；2 分钟缓存）。
+
+**响应：**
+```json
+[
+  {
+    "camera_id": "front-door",
+    "camera_name": "前门",
+    "archived": false,
+    "recordings": 1204,
+    "total_bytes": 68945475584
+  }
+]
+```
+
+## 存储候选卷管理
+
+### 列出候选卷
+
+**端点：** `GET /api/storage/candidates`
+
+**响应：**
+```json
+{
+  "current": "/var/lib/mibee-nvr",
+  "candidates": [
+    {"path": "/var/lib/mibee-nvr", "label": "current"},
+    {"path": "/media/nvr-recordings", "label": "nvr-recordings"}
+  ],
+  "restart_hint": "切换立即生效：新录像将写入所选位置（无需重启）",
+  "env_managed": false
+}
+```
+
+> `env_managed=true` 表示候选由部署平台管理（如飞牛授权目录，经 `NVR_STORAGE_CANDIDATES` 注入）——手动添加的路径重启后以平台列表为准。
+
+### 添加候选卷
+
+**端点：** `POST /api/storage/candidates`
+
+**请求体：**
+```json
+{"path": "/mnt/newdisk"}
+```
+
+**响应（200 OK）：** `{"status": "added", "path": "/mnt/newdisk"}`
+
+校验：路径须为绝对目录、已存在、可写；当前根与已被按相机覆盖占用的路径会被拒绝（400）。
+
+### 移除候选卷
+
+**端点：** `DELETE /api/storage/candidates?path=/mnt/newdisk`
+
+**响应：** `{"status": "removed", "path": "/mnt/newdisk"}`（当前根不可移除）
+
+## 批量录像迁移
+
+### 一键换盘
+
+**端点：** `POST /api/storage/migrate`
+
+热切换默认存储根 + 清除全部按相机覆盖 + 每路有历史录像的相机排入迁移队列（全程无需重启）。
+
+**请求体：**
+```json
+{"target": "/mnt/newdisk", "delete_source": true}
+```
+
+**响应（202 Accepted）：**
+```json
+{
+  "status": "updated",
+  "target": "/mnt/newdisk",
+  "jobs_enqueued": 3
+}
+```
+
+### 迁移状态
+
+**端点：** `GET /api/storage/migrate/status`
+
+**响应：**
+```json
+{
+  "state": "running",
+  "jobs": [
+    {
+      "camera_id": "backyard",
+      "to_root": "/mnt/newdisk",
+      "state": "running",
+      "total_files": 1200,
+      "done_files": 512,
+      "total_bytes": 20971520000,
+      "done_bytes": 8928000000
+    }
+  ]
+}
+```
+
+任务 `state`：`queued`（排队）/ `running`（迁移中）/ `paused`（等待迁移时间窗）/ `done` / `failed`。
+
+> 单相机粒度的存储根设置见[摄像头 API](cameras.md#按相机存储根)；整体说明见[存储管理](../storage-management.md)。
+
 ## 获取设置
 
 **端点：** `GET /api/settings`

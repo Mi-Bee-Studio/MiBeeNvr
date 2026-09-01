@@ -1,6 +1,6 @@
 # 配置参考
 
-> 适用于 MiBeeNvr v0.11.0 · 配置文件默认为 `mibee-nvr.yaml`（可用 `-config` 指定）
+> 适用于 MiBeeNvr v0.12.0 · 配置文件默认为 `mibee-nvr.yaml`（可用 `-config` 指定）
 
 MiBee NVR 的全部行为由一个 YAML 文件驱动。本页是**顶层键速查**；每个键的完整字段说明见仓库中的[完整配置参考](https://github.com/Mi-Bee-Studio/MiBeeNvr/blob/main/docs/zh/configuration.md)。
 

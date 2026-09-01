@@ -1,12 +1,12 @@
 # 产品介绍
 
-> 适用于 MiBeeNvr v0.11.0
+> 适用于 MiBeeNvr v0.12.0
 
 MiBee NVR 是一个用 Go 语言编写的轻量级、自托管网络视频录像机（NVR）。它将 IP 摄像头的视频流录制为 MP4 片段并保存到磁盘，提供现代化 Web 界面用于查看录像、管理摄像头和访问录制内容。
 
 ![监控大屏](images/surveillance.webp)
 
-![AI 事件页](images/ai-events.webp)
+![AI 事件页](images/dashboard-ai.webp)
 
 ![仪表盘](images/dashboard.webp)
 

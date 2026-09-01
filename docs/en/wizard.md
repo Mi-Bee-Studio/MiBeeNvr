@@ -1,6 +1,6 @@
 # Setup Wizard
 
-> For MiBeeNvr v0.11.0
+> For MiBeeNvr v0.12.0
 
 When MiBee NVR starts for the first time without an admin password, the web interface automatically opens a **single-page setup wizard** that configures the account, language, and storage location in one step.
 

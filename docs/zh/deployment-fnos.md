@@ -57,8 +57,8 @@ ONVIF WS-Discovery 使用 UDP 多播（`239.255.255.250:3702`），Docker 默认
 先安装 [`fnpack`](https://github.com/ckcoding/fnnas-docs/blob/main/docs/cli/fnpack.md)，然后：
 
 ```bash
-./deploy/fnos/build.sh 0.11.0              # 离线包：需要本地已构建双架构镜像
-./deploy/fnos/build.sh --online 0.11.0    # 在线包：不含镜像，无需 docker
+./deploy/fnos/build.sh 0.12.0              # 离线包：需要本地已构建双架构镜像
+./deploy/fnos/build.sh --online 0.12.0    # 在线包：不含镜像，无需 docker
 ```
 
 版本号必须是 `X.Y.Z`（fnOS 拒绝 pre-release 后缀），**并且**必须等于镜像 tag——不一致会在 NAS 拉镜像时报误导性的 `manifest unknown`。`build.sh` 会把同一个版本号写入 `manifest` 和 compose 的 `${VERSION}`，并把产物命名为确定性的

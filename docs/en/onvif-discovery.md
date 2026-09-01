@@ -1,6 +1,6 @@
 # ONVIF Auto-Discovery
 
-> For MiBeeNvr v0.11.0
+> For MiBeeNvr v0.12.0
 
 MiBee NVR automatically discovers IP cameras on your local network using the ONVIF protocol and detects their encoding format (H.264 / H.265) without manual configuration.
 

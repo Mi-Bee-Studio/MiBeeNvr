@@ -139,6 +139,17 @@ version: "1.0"
 - **默认**： 均为 `true`；UDP 端口 `49090`
 - **说明**： 局域网自通告。mDNS/DNS-SD 注册 `_mibee-nvr._tcp` 服务；UDP 应答器用 JSON 身份载荷回应 `MIBEE-NVR-DISCv1?` 广播探测（覆盖组播受限的 Wi-Fi）。绑定失败只记日志，绝不阻塞启动。
 
+### `server.rtsp.enabled` / `server.rtsp.port`
+- **类型**： bool / int
+- **默认**： `true` / `8554`
+- **说明**： 内置 RTSP 输出服务端——每路相机一个固定取流地址 `rtsp://<NVR-IP>:8554/<camera_id>`，第三方平台（如群晖 Surveillance Station）可直接填为摄像头源。H.264/H.265 原生输出（无转码）。凭据可选（`username`/`password`，空 = 局域网开放）。Docker 部署需发布端口（`-p 8554:8554`）；端口被占仅记录错误，不影响主服务。
+- **示例**： 见[子码流 · RTSP 输出](sub-stream.md#rtsp-输出第三方平台取流)
+
+### `server.substream.idle_timeout_s` / `server.substream.ready_timeout_s`
+- **类型**： int / int
+- **默认**： `30` / `8`
+- **说明**： 子码流按需拉取参数——`idle_timeout_s` 为无消费者后保持拉取多久再回收；`ready_timeout_s` 为 `quality=sub` 请求等待首帧就绪的超时。详见[子码流](sub-stream.md)。
+
 ## 存储配置
 
 ### `storage.root_dir`
@@ -164,6 +175,24 @@ version: "1.0"
   - 超过平台上限的值会被**静默钳制**并在日志中给出告警（不会导致启动失败）。在非 Linux 主机或无法读取 `/proc/meminfo` 时，应用保守的 30s 上限。
 - **RPi 限制**: 树莓派 3B 上最大 30 秒
 - **示例**: `"30s"`, `"1m"`, `"5m"`
+
+### `storage.db_path`
+- **类型**: string
+- **可选**: 是
+- **默认**: 数据目录下的 `mibee-nvr.db`
+- **描述**: SQLite 数据库位置。**与录像根目录解耦**——切换 `root_dir` / 迁移录像不会移动数据库（裸机部署首次启动自动固定，防换根后误建空库）。Docker 部署固定在 `NVR_DATA_DIR`。
+- **一般无需配置**。
+
+### `storage.camera_roots`
+- **类型**: map（cameraID → 路径）
+- **可选**: 是
+- **描述**: 按相机存储覆盖——映射内的相机录像写入指定目录，其余写默认根。**对新分段即时热生效**；历史文件用后台迁移器搬运。运行时也可经 API / Web UI 操作（见[存储管理](storage-management.md)）。
+- **示例**: `backyard: "/mnt/bigdisk/recordings"`
+
+### `storage.migration_rate_mb` / `storage.migration_window`
+- **类型**: int / string
+- **默认**: `15` / 空（全天）
+- **描述**: 后台录像迁移器的复制限速（MB/s，不与录制抢 IO）与迁移时间窗（本地时间，如 `"22:00-06:00"`；空 = 全天限速迁移）。
 
 ## 身份验证配置
 
@@ -297,9 +326,15 @@ cameras:
 ### `cameras[].sub_stream_url`
 - **类型**: string
 - **可选**: 是
-- **描述**: 实时 HLS 预览的低分辨率 RTSP 子流地址。配置后，仪表板将使用此流而不是主流，减少带宽使用
+- **描述**: 相机低分辨率子码流的手动 RTSP 地址——显式 `quality=sub` 观看（宫格「流畅」、直播画质切换、级联子码流上报）时按需拉取，见[子码流](sub-stream.md)。ONVIF 相机通常无需手填——连接后自动发现子流 profile（`sub_profile_token`）
 - **注意**: 子流必须使用与主流相同的编解码器（H.264/H.265）
 - **示例**: `"rtsp://192.168.1.100:554/stream2"`
+
+### `cameras[].sub_profile_token`
+- **类型**: string
+- **可选**: 是
+- **描述**: ONVIF 子码流 Profile Token。**留空 = 自动发现**（取主 profile 之外分辨率次高者，发现后回填一次；清空保存可重新发现）。手动填写可覆盖自动发现结果
+- **示例**: `"SubStreamToken"`, `"Profile2"`
 
 ### `cameras[].snapshot_url`
 - **类型**: string
@@ -337,6 +372,68 @@ cameras:
 - **支持格式**: AAC（RTSP 摄像头）、G.711 μ-law/A-law（ONVIF/小米摄像头）、Opus（小米摄像头）
 - **注意**: MJPEG 和 HTTP-JPEG 摄像头不支持
 - **示例**: `true`, `false`
+
+### `cameras[].audio_in_recordings`
+
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 录像文件是否保留相机真实音轨（合并产物的事件段）。默认不保留——录像为纯视频；直播试听与[音频触发](adaptive-recording.md#音频触发)不受此开关影响
+- **示例**: `true`, `false`
+
+### `cameras[].recording_mode`
+
+- **类型**: string
+- **默认**: `"continuous"`
+- **取值**: `"continuous"`（全帧率连续录制）/ `"adaptive"`（动静感知自适应录制）
+- **描述**: 写入密度策略。`adaptive` 模式下画面安静时只写每 `adaptive.timelapse_interval` 一个关键帧，活动 / 音频 / 外部触发立即恢复全帧率（详见[自适应录制](adaptive-recording.md)）。仅 H.264/H.265 相机（MJPEG 无压缩域差分信号）
+- **示例**: `"adaptive"`
+
+### `cameras[].adaptive`
+
+- **类型**: object
+- **可选**: 是（仅 `recording_mode: "adaptive"` 时有意义）
+- **描述**: 自适应录制调参（全部可选，以下为默认值；详见[自适应录制](adaptive-recording.md#参数调优)）
+- **字段**:
+  - `calm_threshold` (string, 默认 `"60s"`, 范围 10s–30m) — 平静判定时长
+  - `timelapse_interval` (string, 默认 `"30s"`, 范围 5s–10m) — 稀疏期关键帧间隔
+  - `spike_factor` (float, 默认 `5.0`, 范围 1.5–20) — 活动灵敏度阈值
+  - `gop_buffer_bytes` (int, 默认 `33554432`, 范围 1–64MB) — GOP 预缓冲上限
+  - `ambient_audio` (boolean, 默认 `false`) — 稀疏期连续录制环境声（合并时合成氛围层，仅 G.711）
+  - `timelapse_frame_ms` (int, 取值 100/300/500, 默认 100) — 合并产物的延时帧距
+  - `ambient_archive` (boolean, 默认 `false`) — 原始环境声另存 `<segment>.g711` 附属文件
+
+### `cameras[].audio_trigger`
+
+- **类型**: object
+- **可选**: 是（仅 `recording_mode: "adaptive"` 的 G.711 音频相机生效）
+- **描述**: 响度触发录像——异常声音让相机退出稀疏模式并回填预触发音频（详见[自适应录制 · 音频触发](adaptive-recording.md#音频触发)）
+- **字段**:
+  - `enabled` (boolean, required) — 启用响度输入
+  - `min_dbfs` (float, 默认 `-45`, 范围 -90–0) — 1 秒窗口响度阈值
+  - `pre_capture_s` (int, 默认 `3`, 范围 0–30) — 预录音频秒数
+
+### `cameras[].recording_schedule`
+
+- **类型**: object
+- **可选**: 是
+- **描述**: 录制时间窗（默认 24/7）。时间窗外不落盘（直播不受影响）
+- **字段**:
+  - `time_ranges` (array) — `{start: "09:00", end: "18:00"}` 列表，重叠自动合并
+  - `days_of_week` (array of int) — 0=周日 … 6=周六；空 = 每天
+
+### `cameras[].cascade_enabled`
+
+- **类型**: boolean
+- **默认**: `true`（nil 同 true）
+- **描述**: GB28181 下级级联的目录收敛开关——`false` 时该相机从上级平台聚合目录中隐藏，对其通道的 INVITE 返回 404。通道编码分配保留，重新开启即恢复原编码（上级绑定不漂移）
+- **示例**: `false`
+
+### `cameras[].cascade_sub_stream`
+
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 级联上报改走相机**子码流**（#512/#513）——低分辨率档让上行带宽可控。相机无子码流或拉取失败时 INVITE 自动回退主流；无子码流的相机不受影响
+- **示例**: `true`
 
 ### `cameras[].did`
 
@@ -449,6 +546,16 @@ cameras:
 - **类型**: string
 - **默认**: `"notify"`
 - **取值**: `"notify"`（通知消费者自行拉取）/ `"upload"`（NVR 直接推送视频字节）
+
+### `vision.skip_cameras`
+- **类型**: array of string
+- **默认**: `[]`
+- **描述**: 永不推送的相机 ID 列表（如 MJPEG/JPEG 编码——推送对其无意义）。跳过的段不计入离线补偿重推窗口。消费者心跳上报的跳单与该静态列表取并集生效。
+
+### `vision.sub_layer_cameras`
+- **类型**: array of string
+- **默认**: `[]`
+- **描述**: 子流分析层相机（#514）——列表内相机由 NVR 按需拉取**子码流**录成独立低清分析段（不进录像库、不参与合并；消费成功即删），推送改走子流段，主流段不再推送。低分辨率段解码成本为主流的 1/4~1/16。需要相机配置子码流（`sub_profile_token` 或 `sub_stream_url`）。配套参数：`sub_layer_segment_secs`（段时长，默认 60）、`sub_layer_retention_secs`（磁盘保留兜底，默认 7200）、`sub_layer_push_interval_secs`（推送扫描间隔，默认 20）。
 
 ## GB28181 配置
 

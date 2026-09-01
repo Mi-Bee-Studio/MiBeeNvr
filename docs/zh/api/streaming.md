@@ -115,7 +115,6 @@ WebSocket 实时流。升级为 WebSocket 连接，用于实时二进制帧流�
 wscat -c "ws://localhost:9090/api/cameras/front-door/stream/ws?audio_only=1" \
   -H "Authorization: Basic $(echo -n 'username:password' | base64)"
 ```
-
 ### 音频线缆格式
 
 WebSocket 音频流使用自定义二进制协议，包含以下帧类型：
@@ -228,6 +227,27 @@ const ws = new WebSocket(`ws://localhost:9090/api/cameras/${cameraId}/stream/ws?
 ```
 
 **响应：** WebSocket 升级。根据请求模式返回视频数据或音频数据的二进制帧。
+
+## 子码流选择（quality=sub）
+
+WS / FLV / HLS / WHEP 四个直播端点都支持**按需子码流**：加 `quality=sub` 即请求相机的低分辨率子码流（NVR 仅为该请求按需拉起子码流，无消费者后自动回收）：
+
+| 端点 | 子码流请求方式 |
+|------|----------------|
+| WebSocket | `GET /api/cameras/{id}/stream/ws?quality=sub` |
+| HTTP-FLV | `GET /api/cameras/{id}/stream.flv?quality=sub` |
+| HLS | 路径式 `GET /api/cameras/{id}/stream/sub/index.m3u8`（分片相对寻址无法带 query） |
+| WebRTC (WHEP) | `POST /api/cameras/{id}/stream/webrtc?quality=sub` |
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/front-door/stream.flv?quality=sub" \
+  -o sub.flv
+```
+
+- 响应头 `X-Stream-Quality: main|sub` 如实回报实际服务的流——相机没有子码流、或 H.265 子码流遇上仅支持 H.264 的 WebRTC 时自动**回退主流**
+- 相机子码流可用性见 `GET /api/cameras/{id}/protocols` 的 `sub_stream` 条目（`available` / `source` / `reason`）
+- 详见[子码流](../sub-stream.md)手册页
 
 ## 摄像头协议
 

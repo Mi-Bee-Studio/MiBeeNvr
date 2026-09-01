@@ -1,6 +1,6 @@
 # 树莓派摄像头接入
 
-> 适用于 MiBeeNvr v0.11.0
+> 适用于 MiBeeNvr v0.12.0
 
 MiBee NVR 支持通过 libcamera 直接连接树莓派 CSI 摄像头，也支持网络 RTSP / ONVIF 摄像头。
 

@@ -426,6 +426,7 @@ cameras:
         use_ffmpeg: true        # ← Enable FFmpeg relay
         # source_url: ""        # Optional: override auto-resolved source URL
 
+```
 When `use_ffmpeg: true`:
 - The relay spawns `ffmpeg -rtsp_transport tcp -i <camera_url> -c copy -f flv <target_url>`
 - The camera's RTSP URL is **auto-resolved** from the recorder (ONVIF cameras get

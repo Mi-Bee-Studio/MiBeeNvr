@@ -84,7 +84,7 @@ Think of 监控中心 as quick preview, MiBee NVR as AI analysis + long-term rec
 
 ## Updates & rollback
 
-See [Auto-update guide](deployment-autoupdate.md). `docker compose pull && up -d` from the project, or pin a tag (`mibeenvr:0.11.0`) for rollback. Data under your mapped path persists across recreation.
+See [Auto-update guide](deployment-autoupdate.md). `docker compose pull && up -d` from the project, or pin a tag (`mibeenvr:0.12.0`) for rollback. Data under your mapped path persists across recreation.
 
 ## Reaching the official app store (optional)
 

@@ -191,6 +191,8 @@ gb28181_cascade:
 - REGISTER + Digest、Expires 80% 续注、Keepalive；上级重启（keepalive 403）立即重注册
 - 目录应答聚合全部非 MJPEG 相机；H.264/H.265 由首帧 NAL 嗅探决定 PSM 类型
 - 上级 INVITE → 200 OK(sendonly) → 从 StreamHub 取流 → PS 复用 → RTP 推送；BYE/错误清理
+- **目录收敛**（`cameras[].cascade_enabled: false`）：该相机从聚合目录隐藏、对其通道的 INVITE 返回 404，但通道编码分配保留——重新开启即恢复原编码，上级绑定不漂移
+- **级联上报子码流**（`cameras[].cascade_sub_stream: true`）：INVITE 转发改走相机按需拉取的[子码流](sub-stream.md)——低分辨率档让上级预览不再吃满上行带宽；相机无子码流或拉取失败自动回退主流，无子码流的相机不受影响
 - v1 限制：**仅视频**（hub 音频暂不区分 G.711 A/μ 律）；单上级；不推送目录变更 NOTIFY（上级轮询兜底）
 
 ## 订阅与事件

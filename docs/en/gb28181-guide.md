@@ -191,6 +191,8 @@ Behavior:
 - REGISTER + Digest, re-registration at 80% of Expires, Keepalive; an upper restart (keepalive 403) triggers immediate re-registration
 - The catalog aggregates every non-MJPEG camera; H.264/H.265 is sniffed from the first NAL for the PSM type
 - Upper INVITE → 200 OK (sendonly) → StreamHub subscription → PS mux → RTP push; BYE/error teardown
+- **Catalog convergence** (`cameras[].cascade_enabled: false`): the camera is hidden from the aggregated catalog and its channel's INVITEs answer 404, but the channel-code allocation is kept — re-enabling restores the same code, upper-platform bindings don't drift
+- **Sub-stream cascading** (`cameras[].cascade_sub_stream: true`): INVITE forwarding rides the camera's on-demand [sub-stream](sub-stream.md) — the low-resolution tier keeps your uplink bounded for preview-only platforms; falls back to main when the camera has no sub-stream or the pull fails, and cameras without one are unaffected
 - v1 limits: **video only** (the hub's audio callback does not distinguish G.711 A/μ-law yet); single upper platform; no catalog-change NOTIFY pushes (the upper falls back to polling)
 
 ## Subscriptions and Events

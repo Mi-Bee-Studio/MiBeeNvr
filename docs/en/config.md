@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> For MiBeeNvr v0.11.0 · default config file `mibee-nvr.yaml` (override with `-config`)
+> For MiBeeNvr v0.12.0 · default config file `mibee-nvr.yaml` (override with `-config`)
 
 A single YAML file drives all of MiBee NVR. This page is a **top-level key cheat sheet**; for every field see the [full configuration reference](https://github.com/Mi-Bee-Studio/MiBeeNvr/blob/main/docs/en/configuration.md) in the repository.
 

@@ -78,7 +78,7 @@ ftp:
 
 ## 升级与回滚
 
-见[自动升级指南](deployment-autoupdate.md)。`docker compose pull` 后在应用程序里重新部署，或固定 tag（`mibeenvr:0.11.0`）以便可复现回滚。`/share/Container/mibee-nvr/data` 下的数据在重建中保持不变。
+见[自动升级指南](deployment-autoupdate.md)。`docker compose pull` 后在应用程序里重新部署，或固定 tag（`mibeenvr:0.12.0`）以便可复现回滚。`/share/Container/mibee-nvr/data` 下的数据在重建中保持不变。
 
 ## 原生 `.qpkg`——何时值得（可选）
 

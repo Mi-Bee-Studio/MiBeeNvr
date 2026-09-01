@@ -1,6 +1,6 @@
 # SRT / RTMP Push-Stream Ingest
 
-> For MiBeeNvr v0.11.0
+> For MiBeeNvr v0.12.0
 
 MiBee NVR supports two push-stream protocols for ingesting camera feeds — SRT and RTMP — suitable for cross-network and cross-platform video recording scenarios.
 

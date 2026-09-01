@@ -30,7 +30,7 @@ Pin the image tag to a specific release to make rollback trivial. The `mibeenvr`
 ```yaml
 services:
   mibee-nvr:
-    image: ghcr.io/mi-bee-studio/mibeenvr:0.11.0   # pinned, reproducible
+    image: ghcr.io/mi-bee-studio/mibeenvr:0.12.0   # pinned, reproducible
 ```
 
 To roll back, change the tag to the previous release and `docker compose up -d`. Avoid combining `:latest` with automatic cleanup if you want a rollback image to remain on the host.

@@ -1,6 +1,6 @@
 # WebDAV / FTP Storage
 
-> Applies to MiBeeNvr v0.11.0
+> Applies to MiBeeNvr v0.12.0
 
 MiBee NVR includes built-in WebDAV and FTP servers for accessing recording files in read-only or read-write mode.
 

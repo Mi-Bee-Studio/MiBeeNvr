@@ -1,6 +1,6 @@
 # 部署 FAQ — NAS 打包、端口冲突、自动升级
 
-> 适用于 v0.11.0+。覆盖各大 NAS 平台的升级机制与端口冲突防护。
+> 适用于 v0.12.0+。覆盖各大 NAS 平台的升级机制与端口冲突防护。
 > 英文版:`docs/en/deployment-faq.md`。
 
 ## 目录
@@ -52,7 +52,7 @@ docker compose --profile auto-update up -d   # 启动 Watchtower
 curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
 
 # 或指定版本
-sudo install.sh --version v0.11.0
+sudo install.sh --version v0.12.0
 ```
 
 ### 1.4 要不要做"应用内一键自升级"？

@@ -1,6 +1,6 @@
 # NAS 部署
 
-> 适用于 MiBeeNvr v0.11.0
+> 适用于 MiBeeNvr v0.12.0
 
 MiBee NVR 提供 6 大 NAS 系统的安装支持，通过一键安装脚本或套件管理器完成部署。
 

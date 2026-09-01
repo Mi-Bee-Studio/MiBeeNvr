@@ -4,7 +4,7 @@ MiBee NVR ships a complete troubleshooting and monitoring toolkit: the flow-path
 
 ## Flow View
 
-The per-camera flow tree on the Dashboard shows the full journey of a video frame: **producer → StreamHub → recording / live-protocol consumers / health / relay**.
+The per-camera flow tree on the Dashboard shows the full journey of a video frame: **producer → StreamHub → recording / live-protocol consumers / health / relay**. Cameras with a [sub-stream](sub-stream.md) additionally show a **dashed sub-stream branch** (independent puller and hub, differential fps/kbps + consumer types) — it appears with consumers and disappears on recycle.
 
 ### Column reference
 

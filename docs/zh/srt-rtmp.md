@@ -1,6 +1,6 @@
 # SRT / RTMP 推流接入
 
-> 适用于 MiBeeNvr v0.11.0
+> 适用于 MiBeeNvr v0.12.0
 
 MiBee NVR 支持 SRT 和 RTMP 两种推流协议接入摄像头，适用于跨网络、跨平台的视频录制场景。
 

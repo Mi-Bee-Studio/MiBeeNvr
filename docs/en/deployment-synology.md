@@ -73,7 +73,7 @@ ftp:
 
 ## Updates & rollback
 
-See [Auto-update guide](deployment-autoupdate.md). In short: `docker compose pull && up -d` from the project folder, or pin a tag (`mibeenvr:0.11.0`) for reproducible rollbacks. Data under `/volume1/docker/mibee-nvr/data` is never touched by recreation.
+See [Auto-update guide](deployment-autoupdate.md). In short: `docker compose pull && up -d` from the project folder, or pin a tag (`mibeenvr:0.12.0`) for reproducible rollbacks. Data under `/volume1/docker/mibee-nvr/data` is never touched by recreation.
 
 ## Native `.spk` package — when it's worth it (optional)
 

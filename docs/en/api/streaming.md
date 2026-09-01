@@ -241,6 +241,27 @@ ws.onmessage = (event) => {
 };
 ```
 
+## Sub-Stream Selection (quality=sub)
+
+All four live endpoints support **on-demand sub-streams**: adding `quality=sub` requests the camera's low-resolution sub-stream (the NVR pulls it just for that request and recycles it when the last consumer leaves):
+
+| Endpoint | Sub-stream request |
+|----------|--------------------|
+| WebSocket | `GET /api/cameras/{id}/stream/ws?quality=sub` |
+| HTTP-FLV | `GET /api/cameras/{id}/stream.flv?quality=sub` |
+| HLS | path form `GET /api/cameras/{id}/stream/sub/index.m3u8` (segments use relative addressing, no query possible) |
+| WebRTC (WHEP) | `POST /api/cameras/{id}/stream/webrtc?quality=sub` |
+
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/front-door/stream.flv?quality=sub" \
+  -o sub.flv
+```
+
+- The `X-Stream-Quality: main|sub` response header reports what was actually served — cameras without a sub-stream, or H.265 sub-streams on H.264-only WebRTC, silently **fall back to main**
+- Sub-stream availability is reported by the `sub_stream` entry of `GET /api/cameras/{id}/protocols` (`available` / `source` / `reason`)
+- See the [Sub-streams](../sub-stream.md) manual page
+
 ## Camera Protocols
 
 **Endpoint:** `GET /api/cameras/{id}/protocols`

@@ -1,6 +1,6 @@
 # Quick Start
 
-> For MiBeeNvr v0.11.0
+> For MiBeeNvr v0.12.0
 
 Get up and recording your first camera in 5 minutes.
 

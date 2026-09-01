@@ -1,6 +1,6 @@
 # Feature Overview
 
-> Applies to MiBeeNvr v0.11.0 (released 2026-08)
+> Applies to MiBeeNvr v0.12.0 (released 2026-08-31)
 
 Everything MiBee NVR can do, on one page. Each section links to its dedicated guide — treat this as the map, and dive into the spots that interest you.
 
@@ -21,7 +21,7 @@ Everything MiBee NVR can do, on one page. Each section links to its dedicated gu
 
 Zero-config discovery: ONVIF WS-Discovery scanning + mDNS/DNS-SD service advertisement + UDP broadcast responder — open the web UI in your LAN and both the NVR and cameras show up.
 
-## Live Viewing (9 Protocols)
+## Live Viewing
 
 | Protocol | Latency | Best for |
 |----------|---------|----------|
@@ -30,17 +30,22 @@ Zero-config discovery: ONVIF WS-Discovery scanning + mDNS/DNS-SD service adverti
 | HTTP-FLV | 1–3s | Browser-friendly long watching |
 | HLS / LL-HLS | 2–5s | Compatibility first, native iOS support |
 | WASM player | ~1s | **H.265 playback over plain HTTP** — no HTTPS, no client app |
+| RTSP output | Real-time | Third-party platforms (Synology Surveillance Station etc.) pull directly — one URL per camera, `rtsp://<NVR-IP>:8554/<camera_id>` |
 
 - **End-to-end H.265**: live view (WASM software decode / WebCodecs hardware decode, auto-selected), recording, playback and timelapse all support H.265
+- **[On-demand sub-streams](sub-stream.md)**: the grid's "Smooth" mode rides the low-resolution sub-stream and stops pulling when nobody watches — zero idle cost; ONVIF sub-streams auto-discovered, silent fallback to main
 - The frontend picks the best protocol per device automatically (WebCodecs → WebGPU → WASM fallback chain) — nothing to configure
 - MJPEG / JPEG cameras get a dedicated player (latest-frame polling with ETag 304 savings)
 
 ## Recording & Playback
 
 - **MP4 segment recording**: IDR-aligned segment starts (no black frames), audio muxed in (AAC / G.711 / Opus), atomic writes for crash safety
+- **[Adaptive recording](adaptive-recording.md)**: drop to timelapse-grade sparse writing while the scene is calm; activity, abnormal sounds or external triggers instantly restore full rate — 75%–98% less disk on static scenes, first frame of every event captured
+- **Audio-triggered recording**: abnormal sounds (breaking glass, shouting) trigger full-rate recording with pre-trigger audio back-fill (G.711 cameras)
 - **Continuous playback timeline**: double-buffered seamless segment chaining (no black flashes) + a full-day VOD timeline — scrub across recordings and gaps in one drag
 - **Rolling merge**: segments merged into larger files by policy, streaming with a 1MB buffer — memory-flat
-- **Retention**: per-camera retention days + disk watermark cleanup; AI-flagged recordings are protected from cleanup
+- **Retention**: per-camera retention days + disk watermark cleanup; AI-flagged recordings are protected from cleanup; optional **activity-aware cleanup** — at the watermark, the calmest segments go first, keeping more eventful footage on the same disk
+- **Activity retrieval**: every segment carries a compressed-domain motion score and flags — filter the library by motion / static / scene-cut or a minimum score, and toggle an **activity heat** timeline (green = calm → red = active)
 - **AVI frame browsing**: legacy-container recordings can be scrubbed frame by frame
 - **Timelapse v3**: standalone timelapse mode or frame extraction from recordings; natural-day / 1h / 8h / 24h / 7d / 30d merge windows, results indexed in the DB
 
@@ -54,7 +59,7 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 - PTZ direction / zoom / presets, voice intercom, time sync
 - Alarm / catalog / mobile-position subscriptions with alarm linkage
 - Device-side recording search (RecordInfo) + playback pull (speed control / seek)
-- **Lower-level cascade**: the NVR registers to an upper platform, forwards catalog/alarms; the upper platform can request NVR-local recordings
+- **Lower-level cascade**: the NVR registers to an upper platform, forwards catalog/alarms; the upper platform can request NVR-local recordings; per-camera catalog convergence and optional sub-stream cascading keep your uplink light
 
 > Off by default — enabling is opt-in. See the [GB/T 28181 guide](gb28181-guide.md).
 
@@ -66,7 +71,7 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 - **Health monitoring**: multi-level camera health checks, auto-remediation, blacklisting, IP-drift self-healing (re-discovers cameras by ONVIF serial number)
 - **SSE live events**: camera status, health events and segment completion stream to the UI in real time
 
-![AI events](images/ai-events.webp)
+![Dashboard · AI events tab](images/dashboard-ai.webp)
 
 ## Relay & Distribution
 
@@ -83,6 +88,7 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 ## Storage & Integrations
 
 - **SQLite (WAL)**: every bit of metadata in one file — tuned for SD cards (NORMAL sync + busy timeout), no external database
+- **[Per-camera storage & hot migration](storage-management.md)**: switch the recording root or assign per-camera disks at runtime; history migrates in a rate-limited background job (time-windowed) — no restarts; the DB stays decoupled from the recording root
 - **WebDAV server**: browse the recording library from any file manager (read-only or read-write)
 - **FTP server**: remote upload + camera auto-registration (point the camera at the FTP address and it joins)
 - **MQTT**: event publishing + trigger-based recording for home automation
@@ -102,8 +108,9 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 ## Web UI
 
 - Modern Svelte 5 SPA, **English / 中文**, light & dark themes, installable PWA
-- Setup wizard (3 minutes to first recording), dashboard, surveillance grid, recording library, timelapse, AI events, health page, stats page
-- **Per-camera flow diagnosis**: expand any camera in the dashboard's camera-status list into a flow tree (source → hub → recording / live viewing / health checks / relays), color-coded at a glance — green = active, gray = idle, orange = trouble (e.g. marked recording but no frames inflow), red = heavy frame drops; includes plain-language health-score factor breakdown and this camera's storage usage
+- Setup wizard (3 minutes to first recording), surveillance grid (header "Smooth / HD" sub-stream toggle), recording library (activity filters + heat timeline), timelapse, dashboard, health page, stats page
+- **Dashboard with four tabs**: storage trend (per-camera usage + stacked daily-write chart with a clickable legend), health history, transcoding history, AI events (shown when an external AI backend is configured)
+- **Per-camera flow diagnosis**: expand any camera in the dashboard's camera-status list into a flow tree (source → hub → recording / live viewing / health checks / relays / sub-stream), color-coded at a glance — green = active, gray = idle, orange = trouble (e.g. marked recording but no frames inflow), red = heavy frame drops; includes plain-language health-score factor breakdown and this camera's storage usage
 - Fully responsive — the phone browser gets the complete experience, not a stripped one
 
 ![Dashboard](images/dashboard.webp)
@@ -118,7 +125,7 @@ timeline
     v0.8 : Audio recording : Push-in / push-out : MiBeeVision AI integration
     v0.9 : Zero-config discovery : Setup wizard
     v0.10 : H.265 WASM live : Timelapse v3 : Auth modernization : NAS distribution
-    v0.11 : GB/T 28181 : Continuous playback timeline : LAN discovery
+    v0.11 : GB/T 28181 : Continuous playback timeline : LAN discovery : Adaptive recording : On-demand sub-streams : Per-camera storage
 ```
 
 ## Resource Baseline & Constraints

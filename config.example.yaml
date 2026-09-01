@@ -121,8 +121,33 @@ cameras: []
 #     # adaptive:                   # Tuning for recording_mode: adaptive (defaults shown)
 #     #   calm_threshold: "60s"     # Sustained calm before dropping to sparse mode (10s–30m)
 #     #   timelapse_interval: "30s" # Keyframe cadence while sparse (5s–10m)
-#     #   spike_factor: 3.0         # MAD-floored deviations above baseline = activity spike (1.5–10)
-#     #   gop_buffer_bytes: 16777216 # Cap for the retained GOP buffer (1MB–64MB, default 16MB)
+#     #   spike_factor: 5.0         # MAD-floored deviations above baseline = activity spike
+#     #                              # (1.5–20; default 5.0 = real-camera noise calibration.
+#     #                              # High-noise scenes — constant cloud movement, water
+#     #                              # glare — may need 10–15 before the scene goes sparse)
+#     #   gop_buffer_bytes: 33554432 # Cap for the retained GOP buffer (1MB–64MB, default
+#     #                              # 32MB — must hold one full camera GOP; 2K cameras with
+#     #                              # IDR intervals near the timelapse cadence overflow 16MB
+#     #                              # and lose the seamless transition flush)
+#     #   ambient_audio: false      # Keep recording audio continuously while sparse (#496):
+#     #                              # the merge renders it as a quiet continuous atmosphere
+#     #                              # bed under the timelapse video (event spans keep real
+#     #                              # audio). G.711 cameras only; ~28.8MB/h while sparse.
+#     #   timelapse_frame_ms: 100   # Compressed-timeline cadence the merge writes sparse
+#     #                              # dwell samples at: 100 / 300 / 500 ms (default 100)
+#     #   ambient_archive: false    # Additionally keep the raw continuous ambient audio as
+#     #                              # a sidecar file (<segment>.g711) for post-production.
+#     #                              # Only meaningful with ambient_audio.
+#     # audio_trigger:              # Loudness-triggered recording for adaptive cameras (#478):
+#     #   enabled: true             # a loud 1-second G.711 window defers timelapse entry and
+#     #                              # exits timelapse with a GOP + pre-trigger-audio back-fill,
+#     #                              # so an abnormal sound on a static picture is recorded
+#     #                              # WITH audio. G.711 (µ-law/A-law) cameras only.
+#     #   min_dbfs: -45             # Loudness threshold over a 1s window, dBFS (-90–0)
+#     #   pre_capture_s: 3          # Seconds of pre-trigger audio back-filled (0–30)
+#     # audio_in_recordings: false  # Keep the camera's real audio track in recorded segments
+#     #                              # (default false = recordings are video-only; live preview
+#     #                              # and the audio trigger are unaffected by this flag)
 #     audio_enabled: false          # Enable audio recording (default: false)
 #     frame_watchdog_timeout: "30s"  # Timeout before declaring camera unhealthy (default: 30s)
 #     timelapse:                      # Per-camera timelapse recording (see full reference below)
@@ -271,7 +296,7 @@ observability:
 # a healthy consumer receives video-segment pushes and writes AI events back.
 # vision:
 #   enabled: false                      # Enable the push integration (default: false)
-#   url: "http://192.168.63.110:9091"   # Consumer base address
+#   url: "http://192.168.1.110:9091"   # Consumer base address
 #   heartbeat_timeout_secs: 60          # Consider consumer offline after this long without a heartbeat
 #   push_mode: "notify"                 # "notify" = tell consumer to fetch; "upload" = push video bytes
 #   skip_cameras:                       # Cameras never pushed (e.g. MJPEG/JPEG encodings the
