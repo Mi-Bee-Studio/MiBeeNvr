@@ -57,6 +57,13 @@ func (c *Client) IsConfigured() bool {
 	return c.brokerURL != ""
 }
 
+// HasActionHandler reports whether trigger messages are dispatched to an
+// action callback. Production wiring must pass a non-nil onAction; this lets
+// assembly tests assert the trigger path is actually connected.
+func (c *Client) HasActionHandler() bool {
+	return c != nil && c.onAction != nil
+}
+
 // Start connects to the MQTT broker and subscribes to trigger events.
 // It blocks until ctx is cancelled. If MQTT is not configured, it returns immediately.
 func (c *Client) Start(ctx context.Context) error {
