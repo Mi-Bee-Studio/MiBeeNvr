@@ -1,6 +1,6 @@
 # API Overview
 
-> For MiBeeNvr v0.11.0 · full endpoint docs live in the repo at [docs/en/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/en/api)
+> For MiBeeNvr v0.12.0 · full endpoint docs live in the repo at [docs/en/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/en/api)
 
 Everything MiBee NVR does is drivable over its REST API (the web UI itself is a consumer of it), plus an SSE event stream. This page is an auth + core-endpoint cheat sheet.
 
@@ -42,13 +42,13 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 
 | Group | Endpoints | Notes |
 |-------|-----------|-------|
-| Cameras | `GET/POST /api/cameras`, `GET/PUT/DELETE /api/cameras/{id}` | camera CRUD |
+| Cameras | `GET/POST /api/cameras`, `GET/PUT/DELETE /api/cameras/{id}`, `POST /api/cameras/{id}/adaptive/trigger`, `PUT/GET /api/cameras/{id}/storage-root` | camera CRUD, adaptive-recording external trigger, per-camera storage root |
 | Live streams | `GET /api/cameras/{id}/stream.flv`, HLS / WebRTC / MJPEG endpoints | pull streams (FLV needs BasicAuth) |
 | Recordings | `GET /api/recordings` | list / filter / paginate |
 | Playback | `GET /api/cameras/{id}/playback/playlist.m3u8` | per-recording playback |
 | AI events | `POST /api/ai/events`, `GET /api/ai/events`, `GET /api/ai/stats` | write from external AI backends (Bearer) and query stats |
 | Settings | `GET/PUT /api/settings`, `POST /api/settings/api-keys` | runtime config and keys |
-| Storage | `GET /api/storage` (incl. `candidates`) | storage stats and available volumes |
+| Storage | `GET /api/storage`, `GET/POST/DELETE /api/storage/candidates`, `POST /api/storage/migrate` | storage stats, candidate volumes, batch migration ([Storage Management](storage-management.md)) |
 | GB28181 | `/api/gb28181/*` | devices / channels / PTZ / playback |
 | System | `GET /api/version`, `GET /api/capabilities`, `GET /api/stats` | version / capabilities / stats |
 

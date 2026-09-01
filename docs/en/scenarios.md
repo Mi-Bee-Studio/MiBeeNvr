@@ -93,7 +93,7 @@ The [AI tuning guide](ai-detection-tuning.md) has recommended values for four si
 - Events appear live on the **AI Events** page with boxed snapshots
 - MQTT integration forwards events to home-automation platforms (Home Assistant / Node-RED) to drive lights, speakers, notifications
 
-![AI events](images/ai-events.webp)
+![AI events](images/dashboard-ai.webp)
 
 **Tip**: detection compute comes from **whichever browser is watching** (WebGPU accelerated, WASM fallback) — old NVR hardware doesn't need an upgrade, and multiple viewers share the load.
 

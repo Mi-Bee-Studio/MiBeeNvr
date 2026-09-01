@@ -52,7 +52,7 @@ docker compose --profile auto-update up -d   # starts Watchtower
 curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
 
 # or pin a version
-sudo install.sh --version v0.11.0
+sudo install.sh --version v0.12.0
 ```
 
 ### 1.4 Should we build an in-app one-click self-upgrade?

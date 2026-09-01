@@ -83,7 +83,7 @@ ftp:
 
 ## 升级与回滚
 
-见[自动升级指南](deployment-autoupdate.md)。在项目里 `docker compose pull && up -d`，或固定 tag（`mibeenvr:0.11.0`）以便回滚。映射路径下的数据在重建中保持不变。
+见[自动升级指南](deployment-autoupdate.md)。在项目里 `docker compose pull && up -d`，或固定 tag（`mibeenvr:0.12.0`）以便回滚。映射路径下的数据在重建中保持不变。
 
 ## 进入官方应用商店（可选）
 

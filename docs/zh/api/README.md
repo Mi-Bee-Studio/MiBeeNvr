@@ -11,13 +11,13 @@
 | 身份验证 | [authentication.md](authentication.md) | 登录、设置、能力查询、Basic Auth 使用 |
 | 健康与系统 | [system.md](system.md) | 健康检查、就绪检查、系统统计 |
 | 健康监控 | [health-monitoring.md](health-monitoring.md) | 摄像头健康状态、稳定性评分、健康事件 |
-| 摄像头 | [cameras.md](cameras.md) | 摄像头增删改查、连接测试、启动/停止、快照 |
+| 摄像头 | [cameras.md](cameras.md) | 摄像头增删改查、连接测试、启动/停止、快照、自适应录制触发、按相机存储根 |
 | 流媒体 | [streaming.md](streaming.md) | HLS、WebRTC、HTTP-FLV、WebSocket 流媒体、摄像头协议 |
 | 摄像头统计与事件 | [camera-details.md](camera-details.md) | 录制统计、摄像头事件流（SSE） |
 | ONVIF | [onvif.md](onvif.md) | PTZ 控制、预置位、成像、网络、用户、发现 |
 | 录制 | [recordings.md](recordings.md) | 列出、获取、删除、下载录制文件、延时摄影帧 |
 | 归档 | [archives.md](archives.md) | 归档组、保留管理 |
-| 设置 | [settings.md](settings.md) | 系统统计、设置增删改查、合并/流媒体/转码设置、MiBeeVision 集成状态 |
+| 设置 | [settings.md](settings.md) | 系统统计、设置增删改查、合并/流媒体/转码设置、存储候选卷与批量迁移、MiBeeVision 集成状态 |
 | GB28181 | [../gb28181-guide.md](../gb28181-guide.md) | 国标平台：设备/通道、目录刷新、报警、云台、设备录像检索回放 |
 | 小米 | [xiaomi.md](xiaomi.md) | 云认证、验证码、设备管理 |
 | 合并与延时配置 | [merge.md](merge.md) | 合并状态、待处理计数、摄像头合并/延时配置 |

@@ -1,6 +1,6 @@
 # Audio
 
-> Applies to MiBeeNvr v0.11.0
+> Applies to MiBeeNvr v0.12.0
 
 MiBee NVR supports audio recording, live listening, and two-way talk-back.
 

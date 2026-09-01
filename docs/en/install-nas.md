@@ -1,6 +1,6 @@
 # NAS Deployment
 
-> For MiBeeNvr v0.11.0
+> For MiBeeNvr v0.12.0
 
 MiBee NVR supports 6 major NAS platforms, deployable through one-click install scripts or package managers.
 

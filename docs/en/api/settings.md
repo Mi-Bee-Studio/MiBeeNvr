@@ -48,6 +48,113 @@ curl -u username:password \
 }
 ```
 
+## Per-Camera Storage Statistics
+
+**Endpoint:** `GET /api/stats/cameras`
+
+Segment counts and disk usage per camera (the data source of the dashboard's "Storage trend" tab; 2-minute cache).
+
+**Response:**
+```json
+[
+  {
+    "camera_id": "front-door",
+    "camera_name": "Front Door",
+    "archived": false,
+    "recordings": 1204,
+    "total_bytes": 68945475584
+  }
+]
+```
+
+## Storage Candidates
+
+### List candidates
+
+**Endpoint:** `GET /api/storage/candidates`
+
+**Response:**
+```json
+{
+  "current": "/var/lib/mibee-nvr",
+  "candidates": [
+    {"path": "/var/lib/mibee-nvr", "label": "current"},
+    {"path": "/media/nvr-recordings", "label": "nvr-recordings"}
+  ],
+  "restart_hint": "Switching applies immediately: new recordings go to the selected location (no restart)",
+  "env_managed": false
+}
+```
+
+> `env_managed=true` means candidates are managed by the deploy platform (e.g. fnOS authorized dirs, injected via `NVR_STORAGE_CANDIDATES`) — manually added paths defer to the platform list after a restart.
+
+### Add a candidate
+
+**Endpoint:** `POST /api/storage/candidates`
+
+**Request Body:**
+```json
+{"path": "/mnt/newdisk"}
+```
+
+**Response (200 OK):** `{"status": "added", "path": "/mnt/newdisk"}`
+
+Validation: the path must be an absolute existing writable directory; the current root and paths in use as per-camera overrides are rejected (400).
+
+### Remove a candidate
+
+**Endpoint:** `DELETE /api/storage/candidates?path=/mnt/newdisk`
+
+**Response:** `{"status": "removed", "path": "/mnt/newdisk"}` (the current root cannot be removed)
+
+## Batch Recording Migration
+
+### One-shot disk swap
+
+**Endpoint:** `POST /api/storage/migrate`
+
+Hot-switches the default storage root + clears all per-camera overrides + enqueues every camera with history (no restart at any point).
+
+**Request Body:**
+```json
+{"target": "/mnt/newdisk", "delete_source": true}
+```
+
+**Response (202 Accepted):**
+```json
+{
+  "status": "updated",
+  "target": "/mnt/newdisk",
+  "jobs_enqueued": 3
+}
+```
+
+### Migration status
+
+**Endpoint:** `GET /api/storage/migrate/status`
+
+**Response:**
+```json
+{
+  "state": "running",
+  "jobs": [
+    {
+      "camera_id": "backyard",
+      "to_root": "/mnt/newdisk",
+      "state": "running",
+      "total_files": 1200,
+      "done_files": 512,
+      "total_bytes": 20971520000,
+      "done_bytes": 8928000000
+    }
+  ]
+}
+```
+
+Job `state`: `queued` / `running` / `paused` (waiting for the migration window) / `done` / `failed`.
+
+> Per-camera storage roots: see the [Cameras API](cameras.md#per-camera-storage-root); the full picture lives in [Storage Management](../storage-management.md).
+
 ## Get Settings
 
 **Endpoint:** `GET /api/settings`

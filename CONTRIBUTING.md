@@ -30,11 +30,32 @@ explicitly in your pull request so they can be reviewed before merge.
 3. Frontend rules: Svelte 5 runes only (no legacy `$:` reactive
    syntax), plain Vite + hash routing (no SvelteKit patterns), no
    `@ts-ignore`.
-4. Add tests for new features; bug fixes should include a regression
-   test where practical.
+4. Development follows **test-driven development** — see the next
+   section; PRs without their tests are not mergeable.
 5. New Go packages should ship their own `AGENTS.md` structure notes
    (this file is gitignored — see the repository conventions in
    existing packages).
+
+## Development process — TDD (required)
+
+All development work — new features, bug fixes, refactors — follows
+**test-first development**:
+
+1. **Write the failing test first** (red). It should encode the
+   issue's acceptance criteria and test the public behavior/contract,
+   not implementation internals.
+   - **Bug fix**: the test must reproduce the bug and fail on the
+     current code. A fix without a reproducing regression test will
+     not be merged — the repro test is how we prove the bug existed
+     and that the fix actually fixes it.
+   - **Refactor**: keep existing tests green throughout; add
+     characterization tests before changing uncovered code.
+2. **Make it pass** with the minimum implementation (green), then
+   refactor while the tests stay green.
+3. **The PR includes the tests** written in step 1. CI failing or
+   coverage dropping below the floor blocks the merge.
+4. New tests must also satisfy the anti-flake rules in the next
+   section.
 
 ## Writing tests that don't flake in CI (#571)
 

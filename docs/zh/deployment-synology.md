@@ -72,7 +72,7 @@ ftp:
 
 ## 升级与回滚
 
-见[自动升级指南](deployment-autoupdate.md)。简言之：在项目目录 `docker compose pull && up -d`，或固定 tag（`mibeenvr:0.11.0`）以便可复现回滚。`/volume1/docker/mibee-nvr/data` 下的数据不受重建影响。
+见[自动升级指南](deployment-autoupdate.md)。简言之：在项目目录 `docker compose pull && up -d`，或固定 tag（`mibeenvr:0.12.0`）以便可复现回滚。`/volume1/docker/mibee-nvr/data` 下的数据不受重建影响。
 
 ## 原生 `.spk` 套件——何时值得（可选）
 

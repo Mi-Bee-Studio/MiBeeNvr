@@ -426,6 +426,7 @@ cameras:
         use_ffmpeg: true        # ← 启用 FFmpeg 转发
         # source_url: ""        # 可选：覆盖自动解析的源地址
 
+```
 启用 `use_ffmpeg: true` 后：
 - 转发器启动 `ffmpeg -rtsp_transport tcp -i <摄像头地址> -c copy -f flv <目标地址>`
 - 摄像头的 RTSP 地址会**自动从录像器解析**（ONVIF 摄像头使用解析后的 RTSP 地址；

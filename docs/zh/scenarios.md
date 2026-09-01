@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install
 - 事件实时出现在「AI 事件」页，带目标框截图
 - 配合 MQTT 集成可以把事件推送到家庭自动化平台（Home Assistant / Node-RED）联动灯、音箱、通知
 
-![AI 事件](images/ai-events.webp)
+![AI 事件](images/dashboard-ai.webp)
 
 **小贴士**： 检测算力来自**看画面的那个浏览器**（WebGPU 加速，回退 WASM）——这意味着老旧 NVR 主机不用升级也能用 AI，多个人同时看就共享多份算力。
 

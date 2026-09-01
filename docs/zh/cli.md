@@ -1,6 +1,6 @@
 # CLI 用户手册
 
-> 适用于 MiBeeNvr v0.11.0 · 命令名 `mibee-nvr`（预编译包可能带架构后缀，如 `mibee-nvr-amd64`）
+> 适用于 MiBeeNvr v0.12.0 · 命令名 `mibee-nvr`（预编译包可能带架构后缀，如 `mibee-nvr-amd64`）
 
 MiBee NVR 是「单二进制 + 子命令」形态：**不带子命令直接运行即启动服务器**，带子命令则执行对应的管理工具后退出。
 

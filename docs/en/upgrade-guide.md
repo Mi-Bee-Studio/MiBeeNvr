@@ -6,12 +6,26 @@ This guide covers upgrade paths and breaking changes between MiBee NVR releases.
 
 | From → To | Status | Action required |
 |-----------|--------|-----------------|
+| **0.11.x → 0.12.0** | 🟢 **transparent (one caveat)** | No breaking API changes; automatic incremental DB migration; GB28181 default media transport switched to TCP-passive. See [0.11.x → 0.12.0](#011x--v0120). |
 | **0.10.x → 0.11.0** | 🟡 **Read the license + API changes** | License change (AGPL-3.0); one API response field rename; plain-HTTP AAC live-audio degradation. See [0.10.x → 0.11.0](#010x--v0110). |
 | **v0.9.1 → 0.10.0** | 🟡 **Action required** | Fix combined `protocol` strings; optional disk-space reclaim. See [v0.9.1 → v0.10.0](#v091--v0100). |
 | v0.9.0 → v0.9.1 | 🟢 Transparent | None. |
 | v0.8.x → v0.9.x | 🟡 Back up first | Large storage-layer refactor. Back up the DB, then upgrade. |
 | v0.8.x → 0.10.0 | 🟡 Two hops | Upgrade to v0.9.x first, then to 0.10.0. |
 | **< v0.9.x → 0.10.0** | 🔴 **Not supported (direct)** | You **must** upgrade to 0.9.x first — see [below](#below-v09x--v01000-not-supported-direct) for why. |
+
+---
+
+## 0.11.x → 0.12.0
+
+v0.12.0 brings the **sub-stream system** (on-demand pull + quality switching on every protocol + RTSP output), **adaptive recording** (motion-aware + audio trigger + activity scores), **per-camera storage with hot migration**, and **end-to-end stream observability** (flow tree / latency badge / frame trace). For existing deployments the upgrade is nearly transparent:
+
+- **No breaking API changes**; the `recordings` table gains `motion_score` / `activity_flags` / `timeline_map` columns — **migrated automatically on first boot**, no manual steps
+- ⚠️ **GB28181 default media transport is now TCP-passive** — measured ~16% frame loss over UDP. Deployments that explicitly configured `media_transport` in YAML are unaffected; unconfigured GB cameras switch to TCP pull on upgrade (supported by mainstream Hikvision/Dahua devices)
+- Building the frontend **from source** now needs Node 24; users of release artifacts are unaffected
+- New features are opt-in per camera (e.g. `recording_mode: adaptive`); leaving them off keeps 0.11.x behavior
+
+Full change list in the v0.12.0 notes on [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases).
 
 ---
 

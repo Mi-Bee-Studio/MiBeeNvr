@@ -62,8 +62,8 @@ and `docker pull`); the online build simply omits `app/images/`.
 Install [`fnpack`](https://github.com/ckcoding/fnnas-docs/blob/main/docs/cli/fnpack.md), then:
 
 ```bash
-./deploy/fnos/build.sh 0.11.0              # offline: needs both arch images built locally
-./deploy/fnos/build.sh --online 0.11.0    # online: no images bundled, no docker needed
+./deploy/fnos/build.sh 0.12.0              # offline: needs both arch images built locally
+./deploy/fnos/build.sh --online 0.12.0    # online: no images bundled, no docker needed
 ```
 
 The version must be `X.Y.Z` (fnOS rejects pre-release suffixes) **and** must equal

@@ -1,6 +1,6 @@
 # 录制与回放
 
-> 适用于 MiBeeNvr v0.11.0
+> 适用于 MiBeeNvr v0.12.0
 
 MiBee NVR 将摄像头视频流录制为 MP4 片段并保存到磁盘，提供 Web 界面用于回放、搜索和下载录像。
 
@@ -12,24 +12,37 @@ MiBee NVR 将摄像头视频流录制为 MP4 片段并保存到磁盘，提供 W
 4. **索引**：SQLite 数据库记录每个片段的元数据（时间、摄像头、文件路径等）
 5. **清理**：根据保留策略自动删除过期片段
 
+## 录制密度策略
+
+每路相机可选两种**录像模式**（`recording_mode`）：
+
+| 模式 | 行为 | 适用 |
+|------|------|------|
+| `continuous`（默认） | 全帧率连续录制 | 常规监控 |
+| `adaptive` | 动静感知——安静时段自动降为延时级稀疏写入，活动 / 音频 / 外部触发立即恢复全帧率 | 看家、楼道、仓库等长时间无人的场景，磁盘占用直降 75%+ |
+
+自适应模式的调参、音频触发、环境声氛围层与活动检索见 **[自适应录制](adaptive-recording.md)** 专页。
+
 ## 默认行为
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| 录制目录 | `/var/lib/mibee-nvr/recordings` | 数据目录下的子目录 |
-| 片段时长 | 1 分钟 | 可在配置文件中修改 |
-| 保留天数 | 30 天 | 超过天数自动删除 |
-| 磁盘占用 | ~1GB/天/摄像头 | 1080p H.264 预估 |
+| 录像目录 | `/var/lib/mibee-nvr`（`storage.root_dir`） | Docker 部署为数据卷（默认 `/data`） |
+| 片段时长 | 30 秒 | `storage.segment_duration` 可改（10s ~ 5m） |
+| 保留天数 | 30 天 | `cleanup.retention_days`，超过自动删除 |
+| 磁盘占用 | ~1GB/天/摄像头 | 1080p H.264 预估；自适应模式可再降 75%+ |
 
 ## 配置录制
 
 ### 录制设置
 
 ```yaml
-recording:
-  segment_duration: "1m"        # 片段时长（10s ~ 5m）
-  max_days: 30                  # 保留天数
-  storage_path: "/data"         # 存储根路径
+storage:
+  root_dir: "/var/lib/mibee-nvr"  # 录像存储根路径
+  segment_duration: "30s"          # 片段时长（10s ~ 5m）
+
+cleanup:
+  retention_days: 30               # 保留天数
 ```
 
 ### 片段时长选择
@@ -51,7 +64,7 @@ recording:
 ### 访问录像
 
 1. 打开 Web 界面，进入「**录像**」页
-2. 顶部工具栏可按类型筛选（**全部 / 视频 / 延时摄影 / MJPEG**）、按摄像头和 **AI 检测**（含人 / 含车）过滤，或用搜索框检索
+2. 顶部工具栏可按类型筛选（**全部 / 视频 / 延时摄影 / MJPEG**）、按摄像头和 **AI 检测**（含人 / 含车）过滤、按**活动**过滤（有活动 / 安静 / 场景切换，可设最低活动分），或用搜索框检索
 3. 通过月份切换器和日历选择日期，定位到有录像的一天
 4. 「**时间轴**」视图下点击或拖拽时间轴定位播放；「**列表**」视图下点击片段的「查看」进入回放
 
@@ -109,16 +122,24 @@ wget -r ftp://admin:password@192.168.1.50:2121/recordings/camera-id/
 
 ### 按时间范围导出
 
+没有一次导出整段区间的端点；按时间定位片段后逐段下载即可（合并后的长片段通常一段就是一整天）：
+
 ```bash
-# 使用 API 导出
+# 列出时间范围内的录像，逐段下载（支持 Range 断点续传）
 curl -u admin:password \
-  "http://192.168.1.50:9090/api/v1/recordings/export?camera_id=front-door&start=2026-08-18T00:00:00Z&end=2026-08-18T12:00:00Z" \
-  -o export.mp4
+  "http://192.168.1.50:9090/api/recordings?camera_id=front-door&start=2026-08-18T00:00:00Z&end=2026-08-18T12:00:00Z"
+
+curl -u admin:password \
+  -o segment.mp4 \
+  "http://192.168.1.50:9090/api/recordings/{id}/download"
 ```
 
 ## 存储统计
 
-在 Web UI 的「设置」→「存储」页面查看：
+两处查看：
+
+- 「**仪表盘**」→「存储趋势」：每摄像头占用 / 段数 / 占比，每日写入量堆叠趋势图（图例可点选隔离）
+- 「**设置**」→「存储」：存储路径、[候选卷与录像迁移](storage-management.md)
 
 ![存储设置页](images/settings-storage.webp)
 
@@ -148,44 +169,54 @@ curl -u admin:password \
 
 ### 录制日志
 
-```bash
-# 查看录制日志
-tail -f /var/lib/mibee-nvr/logs/recorder.log
+NVR 日志输出到标准输出（systemd 部署进 journald）：
 
-# Docker 用户
+```bash
+# systemd 部署：查看录制相关日志
+journalctl -u mibee-nvr -f | grep -i record
+
+# Docker 部署
 docker compose logs -f mibee-nvr | grep -i record
 ```
 
 ## 高级功能
 
-### 按需录制
+### 自适应录制
 
-只在检测到运动时录制：
+安静时段自动降为稀疏关键帧写入、有活动立即恢复全帧率——详见 **[自适应录制](adaptive-recording.md)**。
 
 ```yaml
 cameras:
   - id: "front-door"
-    recording:
-      mode: "motion"             # 按需录制
-      pre_buffer: "5s"           # 运动前缓冲
-      post_buffer: "10s"         # 运动后缓冲
+    recording_mode: "adaptive"   # 默认 "continuous"
 ```
 
-### 录制计划
+### 录制时间窗
 
-设置录制时间表：
+限制录像到特定时间段（如仅白天），时间窗外不落盘：
 
 ```yaml
 cameras:
   - id: "office-cam"
-    recording:
-      schedule:
-        - days: ["mon", "tue", "wed", "thu", "fri"]
-          hours: ["09:00-18:00"]
-          mode: "continuous"
-        - days: ["sat", "sun"]
-          mode: "motion"
+    recording_schedule:
+      time_ranges:
+        - start: "09:00"
+          end: "18:00"
+      days_of_week: [1, 2, 3, 4, 5]   # 0=周日 … 6=周六；空 = 每天
 ```
+
+### 外部事件触发录制
+
+MQTT 消息、脚本或 AI 后端可把相机拉回全帧率（配合自适应模式 = 事件驱动录制）：
+
+```bash
+curl -u admin:password -X POST \
+  http://192.168.1.50:9090/api/cameras/front-door/adaptive/trigger \
+  -H "Content-Type: application/json" \
+  -d '{"source": "automation", "hold": "30s"}'
+```
+
+MQTT 集成见 [MQTT 集成](mqtt-integration.md)。
 
 ## 常见问题
 
@@ -196,13 +227,8 @@ cameras:
 
 ### 录像文件损坏
 
-- 通常是录制过程中 NVR 异常终止导致
-- 启用录制完整性检查：
-
-```yaml
-recording:
-  integrity_check: true          # 启动时检查并修复损坏的片段
-```
+- NVR 的分段写入使用「临时文件 + 原子重命名」，录制中异常终止不会损坏已落盘的片段
+- 若个别文件仍无法播放，通常是**源流本身**断连瞬间的参考帧缺失——用 NVR 的 Web 回放验证（前端有容错解码）；确需修复可尝试 `ffmpeg -i input.mp4 -c copy output.mp4`
 
 ## 下一步
 

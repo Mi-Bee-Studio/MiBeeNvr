@@ -1,6 +1,6 @@
 # 音频
 
-> 适用于 MiBeeNvr v0.11.0
+> 适用于 MiBeeNvr v0.12.0
 
 MiBee NVR 支持音频录制、实时试听和双向对讲功能。
 

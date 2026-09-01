@@ -1,6 +1,6 @@
 # ONVIF 自动发现
 
-> 适用于 MiBeeNvr v0.11.0
+> 适用于 MiBeeNvr v0.12.0
 
 MiBee NVR 通过 ONVIF 协议自动发现局域网中的 IP 摄像头，并自动检测编码格式（H.264 / H.265）。
 

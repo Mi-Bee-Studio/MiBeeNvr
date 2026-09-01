@@ -79,7 +79,7 @@ ftp:
 
 ## Updates & rollback
 
-See [Auto-update guide](deployment-autoupdate.md). Redeploy from the Application after `docker compose pull`, or pin a tag (`mibeenvr:0.11.0`) for reproducible rollbacks. Data under `/share/Container/mibee-nvr/data` persists across recreation.
+See [Auto-update guide](deployment-autoupdate.md). Redeploy from the Application after `docker compose pull`, or pin a tag (`mibeenvr:0.12.0`) for reproducible rollbacks. Data under `/share/Container/mibee-nvr/data` persists across recreation.
 
 ## Native `.qpkg` — when it's worth it (optional)
 

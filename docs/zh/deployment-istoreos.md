@@ -75,7 +75,7 @@ ftp:
 ## 升级与回滚
 
 - **手动（推荐）：** `cd /mnt/sata1/mibee-nvr && docker compose pull && docker compose up -d`。
-- **固定 tag / 回滚：** 镜像 tag 锁到某个发布版本（`mibeenvr:0.11.0`），重建，并保留旧 tag 以便回滚。
+- **固定 tag / 回滚：** 镜像 tag 锁到某个发布版本（`mibeenvr:0.12.0`），重建，并保留旧 tag 以便回滚。
 - **自动升级：** 可选的 Watchtower profile——见[自动升级指南](deployment-autoupdate.md)。
 
 `/data` 下的数据（录像、数据库、配置、模型）不受容器重建影响。
