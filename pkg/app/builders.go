@@ -816,6 +816,13 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		healthMgr.SetMQTTClient(deps.mqttClient)
 	}
 
+	// Opt-in event-bus → MQTT forwarding (`{prefix}/event/<topic>`) so
+	// smart-home platforms consume NVR state without REST polling or an
+	// SSE bridge. mqtt.status_events must be explicitly enabled.
+	if cfg.MQTT.Enabled && cfg.MQTT.StatusEvents {
+		deps.mqttStatusPub = mqtt.NewStatusPublisher(deps.eventBus, deps.mqttClient)
+	}
+
 	// Step 10: Optional FTP server
 	if cfg.FTP.Enabled != nil && *cfg.FTP.Enabled {
 		ftpAddr := fmt.Sprintf(":%d", cfg.FTP.Port)
