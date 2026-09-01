@@ -72,7 +72,7 @@ ftp:
 mqtt:
   enabled: false
   broker: "tcp://localhost:1883"
-  topic: "mibeenr/trigger"
+  topic: "mibee"
   client_id: "mibee-nvr"
   username: ""
   password: ""
@@ -183,7 +183,7 @@ version: "1.0"
 ### `server.rtsp.enabled` / `server.rtsp.port`
 - **Type**: bool / int
 - **Default**: `true` / `8554`
-- **Description**: Built-in RTSP output server — every camera gets a stable pull URL `rtsp://<NVR-IP>:8554/<camera_id>` that third-party platforms (e.g. Synology Surveillance Station) can use directly as a camera source. H.264/H.265 served natively (no transcoding). Credentials optional (`username`/`password`; empty = open on the LAN). Docker deployments must publish the port (`-p 8554:8554`); a bind failure only logs an error — the rest of the NVR keeps working.
+- **Description**: Built-in RTSP output server — every camera gets a stable pull URL `rtsp://<NVR-IP>:8554/<camera_id>` that third-party platforms (e.g. Synology Surveillance Station) can use directly as a camera source. H.264/H.265 served natively (no transcoding, video only; MJPEG/JPEG cameras are not served). Credentials optional (`username`/`password`; empty = open on the LAN; setting both enables Basic/Digest auth — URL becomes `rtsp://user:pass@<NVR-IP>:8554/<camera_id>`). Docker deployments must publish the port (`-p 8554:8554`); a bind failure only logs an error — the rest of the NVR keeps working. See [Home Assistant Integration](./home-assistant.md).
 - **See**: [Sub-streams · RTSP output](sub-stream.md#rtsp-output-third-party-platforms)
 
 ### `server.substream.idle_timeout_s` / `server.substream.ready_timeout_s`
@@ -754,8 +754,8 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 ### `mqtt.topic`
 - **Type**: string
 - **Required**: Yes (if enabled)
-- **Description**: MQTT topic to subscribe to for recording triggers
-- **Example**: `"mibeenr/trigger"`, `"cameras/front-door/record"`
+- **Description**: Topic **prefix** (not a full topic). Trigger subscription is `{topic}/trigger/+`; status publishing uses `{topic}/health/{camera_id}` and `{topic}/event/{topic}`
+- **Example**: `"mibee"`, `"home/security"`
 
 ### `mqtt.client_id`
 - **Type**: string
@@ -774,6 +774,11 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Optional**: Yes
 - **Description**: MQTT broker authentication password
 - **Example**: `"mqtt-password"`
+
+### `mqtt.status_events`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Forward whitelisted events (segment completed, camera added/quality, storage health) to `{topic}/event/<event-topic>` so smart-home platforms can consume NVR state. See [MQTT Integration — Status Publishing](./mqtt-integration.md#status-publishing)
 
 ## WebDAV Configuration
 
@@ -1488,7 +1493,7 @@ ftp:
 mqtt:
   enabled: true
   broker: "tcp://192.168.1.100:1883"
-  topic: "mibeenr/trigger"
+  topic: "mibee"
 webdav:
   enabled: true
   read_write: false

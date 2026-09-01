@@ -1,13 +1,14 @@
 # MQTT 集成
 
-MiBee NVR 支持 MQTT 基于的录制触发，用于智能家居自动化和事件驱动录制。当接收到 MQTT 消息时，系统可以开始录制特定摄像头的视频。
+MiBee NVR 支持 MQTT 触发录制与状态发布，用于智能家居自动化和事件驱动录制。接收 MQTT 消息可以启动/停止摄像头录制；开启状态发布后，健康告警与录像事件也会推送到 MQTT。
 
 ## 概述
 
 - **协议**: MQTT (Message Queuing Telemetry Transport)
-- **主题模式**: `{prefix}/trigger/{camera_id}`
-- **负载**: 包含 `action` 字段的 JSON
-- **操作**: `record`, `stop`, `snapshot`
+- **触发（订阅）**: `{prefix}/trigger/{camera_id}`
+- **状态（发布）**: `{prefix}/health/{camera_id}`、`{prefix}/event/{topic}`（见[状态发布](#状态发布)）
+- **触发负载**: 包含 `action` 字段的 JSON
+- **触发操作**: `record`, `stop`（`snapshot` 尚未实现，收到后仅记录日志）
 - **自动重连**: 内置指数退避重连
 
 ## 配置
@@ -16,9 +17,10 @@ MiBee NVR 支持 MQTT 基于的录制触发，用于智能家居自动化和事�
 
 ```yaml
 mqtt:
-  broker_url: "tcp://192.168.1.100:1883"
+  enabled: true
+  broker: "tcp://192.168.1.100:1883"
   client_id: "mibee-nvr"
-  topic_prefix: "mibee"
+  topic: "mibee"
   username: "mqtt_user"
   password: "mqtt_password"
 ```
@@ -27,21 +29,25 @@ mqtt:
 
 | 字段 | 必需 | 类型 | 默认值 | 描述 |
 |------|------|------|--------|------|
-| `broker_url` | 是 | string | - | MQTT 代理地址（如 `tcp://192.168.1.100:1883`） |
+| `enabled` | 是 | bool | `false` | 启用 MQTT 客户端 |
+| `broker` | 是 | string | - | MQTT 代理地址（如 `tcp://192.168.1.100:1883`） |
 | `client_id` | 是 | string | - | MQTT 连接的唯一客户端 ID |
-| `topic_prefix` | 是 | string | - | 触发主题前缀（如 `mibee`） |
+| `topic` | 是 | string | - | 主题前缀（如 `mibee`），实际订阅 `{topic}/trigger/+` |
 | `username` | 否 | string | - | MQTT 用户名（如果代理需要认证） |
-| `password` | 否 | string | - | MQTT 密码（如果代理需要认证） |
+| `password` | 否 | string | - | MQTT 密码（可经 `mibee-nvr encrypt-config` 加密存储） |
+| `status_events` | 否 | bool | `false` | 将录像/摄像头事件转发到 `{topic}/event/<topic>`（见状态发布） |
 
 ### 完整配置示例
 
 ```yaml
 mqtt:
-  broker_url: "tcp://mqtt.example.com:1883"
+  enabled: true
+  broker: "tcp://mqtt.example.com:1883"
   client_id: "mibee-nvr-home"
-  topic_prefix: "home/security"
+  topic: "home/security"
   username: "smart_home_user"
   password: "secure_password_123"
+  status_events: true
 ```
 
 ## 使用方法
@@ -79,7 +85,7 @@ mqtt:
 
 #### 触发快照
 
-从特定摄像头拍摄快照：
+从特定摄像头拍摄快照（**尚未实现**：当前收到 `snapshot` 只会记录日志，不执行任何操作，快照落盘能力规划中）：
 
 ```json
 {
@@ -89,6 +95,40 @@ mqtt:
 
 **主题**: `home/security/trigger/front-door`  
 **消息**: `{"action": "snapshot"}`
+
+### 状态发布
+
+NVR 会将以下状态发布到 MQTT（均需 `mqtt.enabled: true`）：
+
+#### 健康告警 — `{prefix}/health/{camera_id}`
+
+门控：`mqtt.enabled: true` **且** `health.alerts.mqtt: true`。摄像头断连、码流冻结、连接恢复等健康事件会发布到该主题，负载为健康事件 JSON：
+
+```json
+{
+  "id": "evt-123",
+  "camera_id": "front-door",
+  "event_type": "connection_lost",
+  "status": "warning",
+  "message": "no frames for 30s",
+  "created_at": "2026-09-01T12:00:00Z"
+}
+```
+
+同一事件的重复告警受 `health.alerts.cooldown`（默认 5m）抑制；持续异常会升级为 `error`，恢复类事件（`connection_restored`、`freeze_recovered`）永不升级。
+
+#### 事件转发 — `{prefix}/event/{topic}`
+
+门控：`mqtt.enabled: true` **且** `mqtt.status_events: true`。以下事件总线主题会被原样转发（负载为对应事件的 JSON）：
+
+| 事件主题 | MQTT 主题 | 负载要点 |
+|----------|-----------|----------|
+| `segment.completed` | `{prefix}/event/segment.completed` | `camera_id`、`file_path`、`format`、`encoding`、`started_at`、`ended_at`、`file_size`、`recording_id` |
+| `camera.added` | `{prefix}/event/camera.added` | `camera_id`、`name`、`endpoint`、`source` |
+| `camera.quality` | `{prefix}/event/camera.quality` | `camera_id`、`from`、`to`、`reason` |
+| `storage.health.changed` | `{prefix}/event/storage.health.changed` | `camera_id`、`previous_state`、`current_state`、`message` |
+
+高频主题（如 AI 检测）刻意不在转发白名单内。消息 QoS 1、不保留（retain=false）；代理缓慢时事件会被丢弃（事件总线满即丢，不阻塞录制）。
 
 ### 集成示例
 

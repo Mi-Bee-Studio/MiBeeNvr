@@ -152,6 +152,7 @@ make build
 | [ONVIF 指南](docs/zh/onvif-guide.md) | ONVIF 摄像头设置、云台控制、故障排除 |
 | [FTP 集成](docs/zh/ftp-integration.md) | FTP 文件访问设置 |
 | [MQTT 集成](docs/zh/mqtt-integration.md) | MQTT 智能家居集成 |
+| [接入 Home Assistant](docs/zh/home-assistant.md) | Home Assistant 接入指南 |
 | [WebDAV 集成](docs/zh/webdav-integration.md) | WebDAV 文件访问设置 |
 | [故障排除](docs/zh/troubleshooting.md) | 常见问题与解决方案 |
 | [视频转码](docs/zh/transcoding.md) | FFmpeg 转码设置 |
