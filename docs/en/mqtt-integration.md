@@ -85,7 +85,7 @@ Stop recording on a specific camera:
 
 #### Trigger Snapshot
 
-Take a snapshot from a specific camera (**not implemented yet**: a `snapshot` action is currently only logged, nothing is executed; snapshot persistence is planned):
+Take a snapshot from a specific camera (**not implemented yet**: a `snapshot` action is currently only logged, nothing is executed; snapshot persistence is planned, see #656):
 
 ```json
 {
