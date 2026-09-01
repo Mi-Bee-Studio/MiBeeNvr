@@ -263,7 +263,7 @@ ftp:
 mqtt:
   enabled: false                   # Enable MQTT client
   broker: "tcp://localhost:1883"   # MQTT broker URL
-  topic: "mibeenr/trigger"         # MQTT topic to subscribe to
+  topic: "mibee"                    # Topic prefix: subscribes {topic}/trigger/+, publishes {topic}/health/...
   client_id: "mibee-nvr"           # MQTT client ID
   username: ""                     # MQTT broker authentication (optional)
   password: ""                     # MQTT broker password (optional, auto-encrypted if encryption key is set)

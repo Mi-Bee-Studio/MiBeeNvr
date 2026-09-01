@@ -63,7 +63,7 @@ ftp:
 mqtt:
   enabled: false
   broker: "tcp://localhost:1883"
-  topic: "mibeenr/trigger"
+  topic: "mibee"
   client_id: "mibee-nvr"
   username: ""
   password: ""
@@ -142,7 +142,7 @@ version: "1.0"
 ### `server.rtsp.enabled` / `server.rtsp.port`
 - **类型**： bool / int
 - **默认**： `true` / `8554`
-- **说明**： 内置 RTSP 输出服务端——每路相机一个固定取流地址 `rtsp://<NVR-IP>:8554/<camera_id>`，第三方平台（如群晖 Surveillance Station）可直接填为摄像头源。H.264/H.265 原生输出（无转码）。凭据可选（`username`/`password`，空 = 局域网开放）。Docker 部署需发布端口（`-p 8554:8554`）；端口被占仅记录错误，不影响主服务。
+- **说明**： 内置 RTSP 输出服务端——每路相机一个固定取流地址 `rtsp://<NVR-IP>:8554/<camera_id>`，第三方平台（如群晖 Surveillance Station）可直接填为摄像头源。H.264/H.265 原生输出（无转码、仅视频；MJPEG/JPEG 相机不供流）。凭据可选（`username`/`password`，空 = 局域网开放；同时设置后启用 Basic/Digest 鉴权，地址写 `rtsp://user:pass@<NVR-IP>:8554/<camera_id>`）。Docker 部署需发布端口（`-p 8554:8554`）；端口被占仅记录错误，不影响主服务。接入 Home Assistant 见 [接入 Home Assistant](./home-assistant.md)。
 - **示例**： 见[子码流 · RTSP 输出](sub-stream.md#rtsp-输出第三方平台取流)
 
 ### `server.substream.idle_timeout_s` / `server.substream.ready_timeout_s`
@@ -658,8 +658,8 @@ cameras:
 ### `mqtt.topic`
 - **类型**: string
 - **必需**: 是（如果启用）
-- **描述**: 订阅的 MQTT 主题（用于录制触发器）
-- **示例**: `"mibeenr/trigger"`, `"cameras/front-door/record"`
+- **描述**: 主题**前缀**（不是完整主题）。触发订阅为 `{topic}/trigger/+`；状态发布为 `{topic}/health/{camera_id}` 与 `{topic}/event/{topic}`
+- **示例**: `"mibee"`, `"home/security"`
 
 ### `mqtt.client_id`
 - **类型**: string
@@ -678,6 +678,11 @@ cameras:
 - **可选**: 是
 - **描述**: MQTT 代理身份验证密码
 - **示例**: `"mqtt-password"`
+
+### `mqtt.status_events`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 将白名单事件（录像段完成、摄像头新增/画质、存储健康）转发到 `{topic}/event/<事件主题>`，供智能家居平台消费 NVR 状态。详见 [MQTT 集成 — 状态发布](./mqtt-integration.md#状态发布)
 
 ## WebDAV 配置
 
@@ -1185,7 +1190,7 @@ ftp:
 mqtt:
   enabled: true
   broker: "tcp://192.168.1.100:1883"
-  topic: "mibeenr/trigger"
+  topic: "mibee"
 webdav:
   enabled: true
   read_write: false
