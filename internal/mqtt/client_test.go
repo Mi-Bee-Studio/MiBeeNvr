@@ -89,6 +89,16 @@ func TestIsConfigured(t *testing.T) {
 	assert.True(t, c.IsConfigured())
 }
 
+func TestHasActionHandler(t *testing.T) {
+	t.Helper()
+	cb := &mockCallback{}
+	withHandler := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", cb.callback)
+	assert.True(t, withHandler.HasActionHandler())
+
+	withoutHandler := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", nil)
+	assert.False(t, withoutHandler.HasActionHandler())
+}
+
 func TestNotConfiguredNoOp(t *testing.T) {
 	t.Helper()
 	c := NewClient("", "test", "mibee-nvr", "", "", nil)
