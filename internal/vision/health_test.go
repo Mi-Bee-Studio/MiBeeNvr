@@ -56,7 +56,7 @@ func TestHealthTracker_MetricsHistoryRing(t *testing.T) {
 	require.Len(t, h.MetricsHistory(since), 1)
 
 	// Ring cap: only the newest maxHistorySamples survive.
-	for i := 0; i < maxHistorySamples+10; i++ {
+	for i := range maxHistorySamples + 10 {
 		h.RecordHeartbeat(HeartbeatStatus{Status: "healthy", ProcessedCount: i})
 	}
 	all := h.MetricsHistory(time.Time{})

@@ -120,8 +120,8 @@ func (h *Handler) handleVisionStatus(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleVisionMetrics(w http.ResponseWriter, r *http.Request) {
 	if h.visionCoordinator == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"enabled":     false,
-			"points":      []vision.VisionSample{},
+			"enabled":      false,
+			"points":       []vision.VisionSample{},
 			"marked_total": 0,
 		})
 		return

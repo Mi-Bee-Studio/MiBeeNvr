@@ -1101,7 +1101,7 @@ func (d *DB) GetRecordingAIStatus(ctx context.Context, id string) (status string
 
 // MarkRecordingsSkippedByIDs marks the given recordings ai_status='skipped'
 // with the drop reason in ai_error (#671 — consumer-reported queue drops).
-// Only rows still in a non-terminal AI state ('', pending, processing) are
+// Only rows still in a non-terminal AI state (”, pending, processing) are
 // touched; completed/failed/skipped stay as-is. Returns rows marked.
 func (d *DB) MarkRecordingsSkippedByIDs(ctx context.Context, ids []string, aiErr string) (int64, error) {
 	defer d.observeQuery("MarkRecordingsSkippedByIDs", time.Now())

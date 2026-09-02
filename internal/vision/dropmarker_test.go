@@ -19,8 +19,8 @@ type fakeMarkerDB struct {
 }
 
 type idCall struct {
-	ids    []string
-	aiErr  string
+	ids   []string
+	aiErr string
 }
 
 type rangeCall struct {
@@ -85,8 +85,8 @@ func TestApplyDropsSanitizesReason(t *testing.T) {
 	fake := &fakeMarkerDB{idsResult: 1}
 	drops := &VisionDrops{Ranges: []VisionDropRange{{
 		CameraID: "cam-1", Reason: "Queue<FULL>; DROP TABLE", Count: 1,
-		From:     "2026-09-02T04:00:01Z", To: "2026-09-02T04:00:30Z",
-		IDs:      []string{"rec-x"},
+		From: "2026-09-02T04:00:01Z", To: "2026-09-02T04:00:30Z",
+		IDs: []string{"rec-x"},
 	}}}
 	ApplyDrops(context.Background(), fake, drops)
 	// Leading run of [a-z0-9_] only — injected characters can't ride along
@@ -97,10 +97,14 @@ func TestApplyDropsSanitizesReason(t *testing.T) {
 func TestApplyDropsSkipsMalformedRanges(t *testing.T) {
 	fake := &fakeMarkerDB{}
 	drops := &VisionDrops{Ranges: []VisionDropRange{
-		{CameraID: "cam-1", Reason: "queue_full", Count: 1,
-			From: "not-a-time", To: "also-not", IDs: []string{"rec-1"}},
-		{CameraID: "", Reason: "queue_full", Count: 1,
-			From: "2026-09-02T04:00:01Z", To: "2026-09-02T04:00:30Z"}, // no camera, no ids
+		{
+			CameraID: "cam-1", Reason: "queue_full", Count: 1,
+			From: "not-a-time", To: "also-not", IDs: []string{"rec-1"},
+		},
+		{
+			CameraID: "", Reason: "queue_full", Count: 1,
+			From: "2026-09-02T04:00:01Z", To: "2026-09-02T04:00:30Z",
+		}, // no camera, no ids
 	}}
 	marked := ApplyDrops(context.Background(), fake, drops)
 	// rec-1 still marked precisely (ids present, times unparseable);
