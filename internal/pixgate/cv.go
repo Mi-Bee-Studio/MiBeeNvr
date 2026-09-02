@@ -222,7 +222,7 @@ func (e *Engine) Process(gray []byte) EngineResult {
 		th = uint8(n)
 	}
 	e.diffSample = e.diffSample[:0]
-	for i := 0; i < GridW*GridH; i++ {
+	for i := range GridW * GridH {
 		d := float32(gray[i]) - e.bg[i]
 		if d < 0 {
 			d = -d
@@ -279,7 +279,7 @@ func (e *Engine) Process(gray []byte) EngineResult {
 	// change above the 28 threshold into an eternal trigger.
 	bgAlpha := float32(e.cfg.Alpha)
 	fgAlpha := bgAlpha / 5
-	for i := 0; i < GridW*GridH; i++ {
+	for i := range GridW * GridH {
 		a := bgAlpha
 		if e.fg[i] {
 			a = fgAlpha
@@ -366,9 +366,9 @@ func buildMaskBitmap(masks []Mask) []bool {
 	if len(masks) == 0 {
 		return m
 	}
-	for y := 0; y < GridH; y++ {
+	for y := range GridH {
 		ny := (float64(y) + 0.5) / GridH
-		for x := 0; x < GridW; x++ {
+		for x := range GridW {
 			nx := (float64(x) + 0.5) / GridW
 			for _, poly := range masks {
 				if pointInPolygon(nx, ny, poly) {
@@ -386,7 +386,7 @@ func pointInPolygon(x, y float64, poly Mask) bool {
 	inside := false
 	n := len(poly)
 	j := n - 1
-	for i := 0; i < n; i++ {
+	for i := range n {
 		xi, yi := poly[i][0], poly[i][1]
 		xj, yj := poly[j][0], poly[j][1]
 		if (yi > y) != (yj > y) && x < (xj-xi)*(y-yi)/(yj-yi)+xi {
@@ -421,7 +421,7 @@ func largestBlob(fg []bool) (area int, cx, cy float64) {
 		}
 	}
 
-	for y := 0; y < GridH; y++ {
+	for y := range GridH {
 		curRow = curRow[:0]
 		x := 0
 		for x < GridW {

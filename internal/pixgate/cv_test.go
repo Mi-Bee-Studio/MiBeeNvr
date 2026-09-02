@@ -27,7 +27,7 @@ func drawBlock(f []byte, x0, y0, w, h int, val byte) {
 func TestEngine_StaticSceneStaysQuiet(t *testing.T) {
 	e := NewEngine(EngineConfig{MinAreaPct: 1.5})
 	e.Process(frame(100)) // prime
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		r := e.Process(frame(100))
 		if r.Active {
 			t.Fatalf("static frame armed activity: %+v", r)
@@ -41,10 +41,10 @@ func TestEngine_RainNoiseStaysQuiet(t *testing.T) {
 	e := NewEngine(EngineConfig{MinAreaPct: 1.5}) // 1.5% of 19200 = 288 px
 	base := frame(100)
 	e.Process(base)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		f := frame(100)
 		// ~40 scattered 2×2 speckles = 160 px total, largest blob 4 px.
-		for s := 0; s < 40; s++ {
+		for s := range 40 {
 			drawBlock(f, (s*13+i*7)%GridW, (s*29)%GridH, 2, 2, 220)
 		}
 		if r := e.Process(f); r.Active {
@@ -98,7 +98,7 @@ func TestEngine_MaskExcludesRegion(t *testing.T) {
 		Masks:      []Mask{{{0, 0}, {0.4, 0}, {0.4, 1}, {0, 1}}},
 	})
 	e.Process(frame(100))
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		f := frame(100)
 		drawBlock(f, 10, 50, 30, 20, 220) // inside mask
 		if r := e.Process(f); r.Active || r.BlobAreaPct > 0.1 {
@@ -120,7 +120,7 @@ func TestEngine_FloodRefreshesBackground(t *testing.T) {
 		t.Fatal("flood must not arm activity")
 	}
 	// After the re-prime, quiet frames at the new level stay quiet.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if r := e.Process(frame(210)); r.Active {
 			t.Fatalf("post-flood quiet frame armed: %+v", r)
 		}
@@ -151,8 +151,8 @@ func TestEngine_StaticSceneChangeIsAbsorbed(t *testing.T) {
 				return f
 			}
 			armed := false
-			var quietAt = -1
-			for i := 0; i < 400; i++ {
+			quietAt := -1
+			for i := range 400 {
 				r := e.Process(lit())
 				if r.Active {
 					armed = true
@@ -167,7 +167,7 @@ func TestEngine_StaticSceneChangeIsAbsorbed(t *testing.T) {
 				t.Fatalf("static scene change never absorbed after 400 samples (the eternal-ghost bug)")
 			}
 			// And it stays quiet.
-			for i := 0; i < 5; i++ {
+			for range 5 {
 				if r := e.Process(lit()); r.Active {
 					t.Fatalf("re-armed after absorption at sample %d: %+v", quietAt, r)
 				}
@@ -189,7 +189,7 @@ func TestEngine_LightOffAbsorbed(t *testing.T) {
 		return f
 	}
 	armed := false
-	for i := 0; i < 400; i++ {
+	for range 400 {
 		r := e.Process(dark())
 		if r.Active {
 			armed = true
@@ -198,7 +198,7 @@ func TestEngine_LightOffAbsorbed(t *testing.T) {
 	if !armed {
 		t.Fatal("light-off must arm briefly")
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if r := e.Process(dark()); r.Active {
 			t.Fatal("light-off must be absorbed (darkening adaptation broken)")
 		}
@@ -212,7 +212,7 @@ func TestEngine_LightOffAbsorbed(t *testing.T) {
 func TestEngine_BackgroundConvergesExactly(t *testing.T) {
 	e := NewEngine(EngineConfig{MinAreaPct: 1.5})
 	e.Process(frame(100))
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if r := e.Process(frame(125)); r.Active {
 			t.Fatalf("sub-threshold step must stay quiet: %+v", r)
 		}
@@ -244,7 +244,7 @@ func TestEngine_GhostTimeoutAbsorbsStaticBlob(t *testing.T) {
 		return f
 	}
 	sawGhost := false
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		r := e.Process(lit())
 		if r.Ghost {
 			sawGhost = true
@@ -256,7 +256,7 @@ func TestEngine_GhostTimeoutAbsorbsStaticBlob(t *testing.T) {
 	if !sawGhost {
 		t.Fatal("static blob must hit the ghost timeout by sample 10")
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if r := e.Process(lit()); r.Active {
 			t.Fatalf("post-ghost frames must stay quiet: %+v", r)
 		}
@@ -269,7 +269,7 @@ func TestEngine_GhostTimeoutAbsorbsStaticBlob(t *testing.T) {
 func TestEngine_MovingBlobNeverGhostSuppressed(t *testing.T) {
 	e := NewEngine(EngineConfig{MinAreaPct: 1.5, GhostSamples: 10})
 	e.Process(frame(100))
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		f := frame(100)
 		drawBlock(f, 10+i*6, 50, 30, 20, 220)
 		r := e.Process(f)
@@ -294,7 +294,7 @@ func TestEngine_StandingPersonDuration(t *testing.T) {
 		drawBlock(f, 60, 50, 30, 20, 220)
 		return f
 	}
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		r := e.Process(person())
 		if i >= 2 && !r.Active {
 			t.Fatalf("standing person absorbed too fast: quiet at sample %d", i)

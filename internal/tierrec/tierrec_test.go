@@ -53,8 +53,6 @@ func TestSubRecorder_WritesLayerOneSegments(t *testing.T) {
 	root := t.TempDir()
 	store := &fakeStore{}
 	bus := event.NewEventBus(16)
-	var evMu sync.Mutex
-	var got []event.SegmentCompleted
 	subCh := make(chan event.Event, 4)
 	if err := bus.Subscribe(event.TopicSegmentCompleted, subCh, 4); err != nil {
 		t.Fatal(err)
@@ -117,13 +115,10 @@ func TestSubRecorder_WritesLayerOneSegments(t *testing.T) {
 		select {
 		case e := <-subCh:
 			if sc, ok := e.Data.(event.SegmentCompleted); ok && sc.Layer == model.LayerSub && sc.CameraID == "cam-sub" {
-				evMu.Lock()
-				got = append(got, sc)
-				evMu.Unlock()
 				return
 			}
 		case <-timeout:
-			t.Fatalf("SegmentCompleted with Layer=1 never arrived (got %v)", got)
+			t.Fatal("SegmentCompleted with Layer=1 never arrived")
 		}
 	}
 }

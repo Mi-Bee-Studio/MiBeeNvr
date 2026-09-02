@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -180,7 +181,6 @@ func (m *Manager) startCamera(ctx context.Context, cameraID string) {
 func (m *Manager) runCamera(ctx context.Context, cameraID string, r *camRun) {
 	defer close(r.done)
 	log := m.log.With("camera_id", cameraID)
-	holding := false
 	for ctx.Err() == nil {
 		acqCtx, cancel := context.WithTimeout(ctx, acquireTimeout)
 		src, err := m.cfg.Provider.AcquireSubStream(acqCtx, cameraID)
@@ -197,12 +197,10 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, r *camRun) {
 			}
 			continue
 		}
-		holding = true
 		rec := newSubRecorder(m, cameraID, src)
 		rec.record(ctx)
 		rec.close()
 		m.cfg.Provider.ReleaseSubStream(cameraID)
-		holding = false
 		if ctx.Err() != nil {
 			return
 		}
@@ -213,7 +211,6 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, r *camRun) {
 		case <-time.After(reacquireWait):
 		}
 	}
-	_ = holding
 }
 
 // subSource is the surface subRecorder needs from an acquired sub-stream —
@@ -420,7 +417,7 @@ func (r *subRecorder) closeSegmentLocked() {
 		rel = r.finalPath
 	}
 	rec := &model.Recording{
-		ID:          fmt.Sprintf("%d", r.startedAt.UnixNano()),
+		ID:          strconv.FormatInt(r.startedAt.UnixNano(), 10),
 		CameraID:    r.cameraID,
 		FilePath:    rel,
 		Format:      r.segCodec,

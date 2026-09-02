@@ -208,7 +208,7 @@ func TestManager_SuppressBlindsGate(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		Bus:     &fakePublisher{},
+		Bus: &fakePublisher{},
 		Cameras: map[string]CameraConfig{
 			"cam-1": {SampleFPS: 10, MinAreaPct: 1.5, Persist: 2, Hold: time.Second},
 		},

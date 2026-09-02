@@ -199,7 +199,7 @@ func (m *Manager) SegmentStats(cameraID string, start, end time.Time) (FGStats, 
 		st.SpanSec = d
 	}
 	var areaSum float64
-	for i := 0; i < r.count; i++ {
+	for i := range r.count {
 		s := r.ring[(r.head-1-i+len(r.ring)*2)%len(r.ring)]
 		if s.t.Before(start) || s.t.After(end) {
 			continue
