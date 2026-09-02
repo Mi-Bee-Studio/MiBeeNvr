@@ -25,6 +25,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
@@ -147,6 +148,11 @@ type XiaomiRecorder struct {
 	pps     []byte
 	vps     []byte // H265 only
 	codecOK bool   // true once codec type is determined
+	// paramGate bounds parameter-set-triggered segment rotations (#642): this
+	// model family alternates decode-equivalent SPS encodings (VUI/timing-only
+	// differences) per GOP — 188 rotations in 4.9h on production. Owned by the
+	// video NALU processing goroutine.
+	paramGate nalutil.ParamRotationGate
 
 	// Audio state (probed from first audio packet)
 	audioCodecID uint32 // MISS codec ID for audio (0 = not detected yet)
@@ -810,16 +816,28 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 	naluType := nalu[0] & 0x1F
 	switch naluType {
 	case 7: // SPS
-		if r.sps != nil && !bytes.Equal(r.sps, nalu) {
-			xiaomiLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
+		// r.muxer==nil guard: no open segment → just refresh the cache without
+		// consuming rotation budget (e.g. param sync right after connect).
+		if r.sps != nil && !bytes.Equal(r.sps, nalu) && r.muxer != nil {
+			// #642: decode-equivalent SPS variants (VUI/timing-only differences)
+			// never rotate; a real codec change rotates immediately.
+			if r.paramGate.ShouldRotateSPS(r.sps, nalu, false, time.Now()) {
+				xiaomiLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegment()
+			} else {
+				xiaomiLogger.Debug("SPS variant is decode-compatible, keeping segment open",
+					"camera_id", r.cfg.CameraID)
+			}
 		}
 		r.sps = append([]byte(nil), nalu...)
 		return
 	case 8: // PPS
-		if r.pps != nil && !bytes.Equal(r.pps, nalu) {
-			xiaomiLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
+		if r.pps != nil && !bytes.Equal(r.pps, nalu) && r.muxer != nil {
+			// No semantic PPS parser — rate-limit rapid variant alternation (#642).
+			if r.paramGate.ShouldRotateUnparsed(time.Now()) {
+				xiaomiLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegment()
+			}
 		}
 		r.pps = append([]byte(nil), nalu...)
 		return
@@ -936,23 +954,36 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	naluType := (nalu[0] >> 1) & 0x3F
 	switch naluType {
 	case 32: // VPS
-		if r.vps != nil && !bytes.Equal(r.vps, nalu) {
-			xiaomiLogger.Info("VPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
+		if r.vps != nil && !bytes.Equal(r.vps, nalu) && r.muxer != nil {
+			// No semantic VPS parser — rate-limit rapid variant alternation (#642).
+			if r.paramGate.ShouldRotateUnparsed(time.Now()) {
+				xiaomiLogger.Info("VPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegment()
+			}
 		}
 		r.vps = append([]byte(nil), nalu...)
 		return
 	case 33: // SPS
-		if r.sps != nil && !bytes.Equal(r.sps, nalu) {
-			xiaomiLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
+		if r.sps != nil && !bytes.Equal(r.sps, nalu) && r.muxer != nil {
+			// #642: decode-equivalent SPS variants never rotate; a real codec
+			// change rotates immediately.
+			if r.paramGate.ShouldRotateSPS(r.sps, nalu, true, time.Now()) {
+				xiaomiLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegment()
+			} else {
+				xiaomiLogger.Debug("SPS variant is decode-compatible, keeping segment open",
+					"camera_id", r.cfg.CameraID)
+			}
 		}
 		r.sps = append([]byte(nil), nalu...)
 		return
 	case 34: // PPS
-		if r.pps != nil && !bytes.Equal(r.pps, nalu) {
-			xiaomiLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
+		if r.pps != nil && !bytes.Equal(r.pps, nalu) && r.muxer != nil {
+			// No semantic PPS parser — rate-limit rapid variant alternation (#642).
+			if r.paramGate.ShouldRotateUnparsed(time.Now()) {
+				xiaomiLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegment()
+			}
 		}
 		r.pps = append([]byte(nil), nalu...)
 		return

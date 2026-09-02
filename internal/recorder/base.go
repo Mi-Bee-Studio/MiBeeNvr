@@ -49,6 +49,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
@@ -302,6 +303,12 @@ type baseRecorder struct {
 	// SPS/PPS/VPS concurrently with the writeFrames writer without a data race
 	// or torn triplet reads. vps is H.265-only; always nil for H.264.
 	codec atomic.Pointer[codecParams]
+
+	// paramGate bounds parameter-set-triggered segment rotations (#642):
+	// decode-compatible SPS variants (VUI/timing-only differences) never
+	// rotate; unclassifiable changes are rate-limited. Owned by the single
+	// writeFrames goroutine via the driver's handleParamSet.
+	paramGate nalutil.ParamRotationGate
 
 	// Audio configuration (Tier 2, #226): immutable snapshot behind
 	// atomic.Pointer, detected once during connectAndRecord and read by the

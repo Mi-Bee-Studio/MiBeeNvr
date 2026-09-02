@@ -1,6 +1,8 @@
 package recorder
 
 import (
+	"time"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 )
 
@@ -50,40 +52,52 @@ func detectCodecDetailed(au [][]byte, encoding string) (codec string, definitive
 	return "", false
 }
 
-func updateParamSetsH264(au [][]byte, currentSPS, currentPPS []byte) (newSPS, newPPS []byte, changed bool) {
+func updateParamSetsH264(au [][]byte, currentSPS, currentPPS []byte, gate *nalutil.ParamRotationGate, now time.Time) (newSPS, newPPS []byte, changed bool) {
 	sps, pps := nalutil.ExtractParamSetsH264(au)
 	if sps != nil {
 		newSPS = append([]byte(nil), sps...)
-		if currentSPS != nil && !nalutil.EqualParamSets(currentSPS, sps) {
+		// #642: decode-equivalent SPS variants (VUI/timing-only differences)
+		// don't rotate; unclassifiable changes are rate-limited.
+		if currentSPS != nil && !nalutil.EqualParamSets(currentSPS, sps) &&
+			gate.ShouldRotateSPS(currentSPS, sps, false, now) {
 			changed = true
 		}
 	}
 	if pps != nil {
 		newPPS = append([]byte(nil), pps...)
-		if currentPPS != nil && !nalutil.EqualParamSets(currentPPS, pps) {
+		// No semantic PPS parser — rate-limit rapid variant alternation (#642).
+		if currentPPS != nil && !nalutil.EqualParamSets(currentPPS, pps) &&
+			gate.ShouldRotateUnparsed(now) {
 			changed = true
 		}
 	}
 	return newSPS, newPPS, changed
 }
 
-func updateParamSetsH265(au [][]byte, currentVPS, currentSPS, currentPPS []byte) (newVPS, newSPS, newPPS []byte, changed bool) {
+func updateParamSetsH265(au [][]byte, currentVPS, currentSPS, currentPPS []byte, gate *nalutil.ParamRotationGate, now time.Time) (newVPS, newSPS, newPPS []byte, changed bool) {
 	vps, sps, pps := nalutil.ExtractParamSetsH265(au)
 	if vps != nil {
 		newVPS = append([]byte(nil), vps...)
-		if currentVPS != nil && !nalutil.EqualParamSets(currentVPS, vps) {
+		// No semantic VPS parser — rate-limit rapid variant alternation (#642).
+		if currentVPS != nil && !nalutil.EqualParamSets(currentVPS, vps) &&
+			gate.ShouldRotateUnparsed(now) {
 			changed = true
 		}
 	}
 	if sps != nil {
 		newSPS = append([]byte(nil), sps...)
-		if currentSPS != nil && !nalutil.EqualParamSets(currentSPS, sps) {
+		// #642: decode-equivalent SPS variants don't rotate; real codec
+		// changes rotate immediately.
+		if currentSPS != nil && !nalutil.EqualParamSets(currentSPS, sps) &&
+			gate.ShouldRotateSPS(currentSPS, sps, true, now) {
 			changed = true
 		}
 	}
 	if pps != nil {
 		newPPS = append([]byte(nil), pps...)
-		if currentPPS != nil && !nalutil.EqualParamSets(currentPPS, pps) {
+		// No semantic PPS parser — rate-limit rapid variant alternation (#642).
+		if currentPPS != nil && !nalutil.EqualParamSets(currentPPS, pps) &&
+			gate.ShouldRotateUnparsed(now) {
 			changed = true
 		}
 	}

@@ -60,26 +60,41 @@ func (d H265NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) boo
 	// the RTSP server's parameter injection, and the MP4 track config all
 	// served VPS/SPS/PPS in each other's slots).
 	sps, pps, vps := b.codecSnapshot()
+	// The muxer==nil guard keeps param sync at connect (SDP sprop seed vs
+	// first in-band delivery) from consuming rotation budget — there is no
+	// segment to protect yet, so the fresh bytes are just cached.
 	switch typ {
 	case 32: // VPS
-		if vps != nil && !bytes.Equal(vps, nalu) {
-			b.log.Info("VPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.setCodecParams(sps, pps, nalu)
-			return true
+		if vps != nil && !bytes.Equal(vps, nalu) && b.muxer != nil {
+			// No semantic VPS parser — rate-limit rapid variant alternation (#642).
+			if b.paramGate.ShouldRotateUnparsed(time.Now()) {
+				b.log.Info("VPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
+				b.setCodecParams(sps, pps, nalu)
+				return true
+			}
 		}
 		b.setCodecParams(sps, pps, nalu)
 	case 33: // SPS
-		if sps != nil && !bytes.Equal(sps, nalu) {
-			b.log.Info("SPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.setCodecParams(nalu, pps, vps)
-			return true
+		if sps != nil && !bytes.Equal(sps, nalu) && b.muxer != nil {
+			// #642: decode-equivalent SPS variants (VUI/timing-only differences)
+			// never rotate; a real codec change rotates immediately.
+			if b.paramGate.ShouldRotateSPS(sps, nalu, true, time.Now()) {
+				b.log.Info("SPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
+				b.setCodecParams(nalu, pps, vps)
+				return true
+			}
+			b.log.Debug("SPS variant is decode-compatible, keeping segment open",
+				"camera_id", b.cfg.CameraID)
 		}
 		b.setCodecParams(nalu, pps, vps)
 	case 34: // PPS
-		if pps != nil && !bytes.Equal(pps, nalu) {
-			b.log.Info("PPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.setCodecParams(sps, nalu, vps)
-			return true
+		if pps != nil && !bytes.Equal(pps, nalu) && b.muxer != nil {
+			// No semantic PPS parser — rate-limit rapid variant alternation (#642).
+			if b.paramGate.ShouldRotateUnparsed(time.Now()) {
+				b.log.Info("PPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
+				b.setCodecParams(sps, nalu, vps)
+				return true
+			}
 		}
 		b.setCodecParams(sps, nalu, vps)
 	}

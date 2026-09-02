@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
@@ -527,47 +528,76 @@ func TestH265Characterization_VPSChangeRotatesSegment(t *testing.T) {
 	require.GreaterOrEqual(t, n, 2, "VPS change should produce at least 2 segments, got %d", n)
 }
 
-// 2b. SPS change rotates segment (H265)
+// 2b. SPS change rotates segment (H265) — but only REAL codec changes (#642):
+// a decode-equivalent variant (VUI/decoration-only byte difference) must keep
+// the segment open, while a semantic change must rotate.
 func TestH265Characterization_SPSChangeRotatesSegment(t *testing.T) {
-	srv := newTestRTSPServerH265(t)
-	defer srv.close()
+	// Variant A: flip the trailing decoration byte — decode-equivalent, must
+	// NOT rotate (#642: production cameras alternate such variants per GOP).
+	compatSPS := make([]byte, len(testSPS265))
+	copy(compatSPS, testSPS265)
+	compatSPS[len(compatSPS)-1] ^= 0x01
+	require.Equal(t, nalutil.CompareSPS(testSPS265, compatSPS, true), nalutil.ParamCompatEqual,
+		"test fixture: trailing-byte flip must be decode-compatible")
 
-	mgr := newTestManager(t)
-
-	// Build a slightly different H265 SPS
-	altSPS := make([]byte, len(testSPS265))
-	copy(altSPS, testSPS265)
-	altSPS[len(altSPS)-1] ^= 0x01
-
-	rec := NewH265Recorder(H265Config{
-		CameraID:   "h265-char-sps",
-		RTSPURL:    srv.rtspURL,
-		SegmentDur: 5 * time.Minute,
-		RingBufCap: 200,
-	}, mgr)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	require.NoError(t, rec.Start(ctx))
-	srv.waitPlay(t, 5*time.Second)
-	time.Sleep(100 * time.Millisecond)
-
-	// Send initial frames
-	srv.sendFrames(3, 30*time.Millisecond)
-	time.Sleep(100 * time.Millisecond)
-
-	// Send frames with different SPS — should trigger segment rotation
-	for range 3 {
-		srv.sendAU([][]byte{testVPS265, altSPS, testPPS265, testIDR265})
-		time.Sleep(30 * time.Millisecond)
+	// Variant B: a byte flip that changes decode semantics — must rotate.
+	// Scan for one deterministically (fixed fixture, fixed scan order).
+	realSPS := make([]byte, len(testSPS265))
+	copy(realSPS, testSPS265)
+	found := false
+	for i := 2; i < len(realSPS); i++ { // skip the 2-byte NAL header
+		candidate := make([]byte, len(testSPS265))
+		copy(candidate, testSPS265)
+		candidate[i] ^= 0x01
+		if nalutil.CompareSPS(testSPS265, candidate, true) == nalutil.ParamCompatDifferent {
+			realSPS = candidate
+			found = true
+			break
+		}
 	}
-	time.Sleep(300 * time.Millisecond)
+	require.True(t, found, "test fixture: some byte flip must be a real semantic change")
 
-	require.NoError(t, rec.Stop())
+	for name, spsVariant := range map[string][]byte{"compatible": compatSPS, "real": realSPS} {
+		t.Run(name, func(t *testing.T) {
+			srv := newTestRTSPServerH265(t)
+			defer srv.close()
 
-	n := countFinalFiles(t, mgr, "h265-char-sps")
-	require.GreaterOrEqual(t, n, 2, "SPS change should produce at least 2 segments, got %d", n)
+			mgr := newTestManager(t)
+			rec := NewH265Recorder(H265Config{
+				CameraID:   "h265-char-sps-" + name,
+				RTSPURL:    srv.rtspURL,
+				SegmentDur: 5 * time.Minute,
+				RingBufCap: 200,
+			}, mgr)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			require.NoError(t, rec.Start(ctx))
+			srv.waitPlay(t, 5*time.Second)
+			time.Sleep(100 * time.Millisecond)
+
+			// Send initial frames
+			srv.sendFrames(3, 30*time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
+
+			// Send frames with the variant SPS
+			for range 3 {
+				srv.sendAU([][]byte{testVPS265, spsVariant, testPPS265, testIDR265})
+				time.Sleep(30 * time.Millisecond)
+			}
+			time.Sleep(300 * time.Millisecond)
+
+			require.NoError(t, rec.Stop())
+
+			n := countFinalFiles(t, mgr, "h265-char-sps-"+name)
+			if name == "compatible" {
+				require.Equal(t, 1, n, "decode-compatible SPS variant must NOT rotate the segment, got %d segments", n)
+			} else {
+				require.GreaterOrEqual(t, n, 2, "real SPS change must rotate the segment, got %d segments", n)
+			}
+		})
+	}
 }
 
 // 2c. PPS change rotates segment (H265)
