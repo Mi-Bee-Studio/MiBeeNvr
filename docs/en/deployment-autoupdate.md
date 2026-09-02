@@ -107,3 +107,58 @@ Notes:
 - `checksums.txt` covers the three bare binaries (amd64/arm64/armv7). The fnOS `.fpk` is distributed through the fnOS store channel; Docker images are integrity-protected by registry digests.
 - If a Release has no `checksums.txt.sig`, the signing secret was not configured (that release is unsigned) — step 1 alone still checks integrity.
 - A key rotation means newer Releases are signed with a new key; always take the public key from the repo's main branch.
+
+## Bare-metal auto-update (#647, systemd installs)
+
+Outside Docker, bare-metal installs (via install.sh) are the last online scenario that can be automated. The architecture deliberately avoids in-process self-replacement — the `mibee-nvr.service` sandbox (`User=nvr` + `ProtectSystem=strict`) already forbids the app from writing `/usr/local/bin`:
+
+```
+app (nvr user, sandboxed)              root helper (mibee-nvr-update.service)
+  sensing layer sees a new release
+  AND update.auto_apply: true
+  ├─ write /var/lib/mibee-nvr/update-request.json
+  └─ systemctl start mibee-nvr-update.service  →  mibee-nvr update --apply-request …
+                                                    ① prechecks (non-docker, strict semver step, disk ≥ 3× artifact)
+                                                    ② stream-download checksums + ed25519 sig + binary
+                                                    ③ sha256 + signature verify (any failure aborts, zero changes)
+                                                    ④ keep .prev → atomic binary replace
+                                                    ⑤ systemctl restart mibee-nvr
+                                                    ⑥ health gate: /api/health readiness probe
+                                                    ⑦ automatic .prev rollback + restart on failure
+                                                    ⑧ append to update-history.jsonl
+```
+
+A polkit rule (`/etc/polkit-1/rules.d/60-mibee-nvr-update.rules`, installed by the installer) authorizes the nvr user to start exactly this ONE unit — minimal privilege surface.
+
+### Enable
+
+```yaml
+update:
+  auto_apply: true   # default false: announce only, never execute
+```
+
+Permanently disabled conditions (even when enabled): `dev` builds, non-stable channels, candidate ≤ current (never downgrades), Docker deployments.
+
+### Manual upgrade (no polkit needed)
+
+```bash
+sudo mibee-nvr update              # upgrade to latest stable
+sudo mibee-nvr update --version v0.12.1
+mibee-nvr update --check           # status only, changes nothing
+```
+
+### Rollback
+
+The previous version is kept as `<binary>.prev`; the health gate rolls back automatically on failure. Manual rollback:
+
+```bash
+sudo systemctl stop mibee-nvr
+sudo cp /usr/local/bin/mibee-nvr.prev /usr/local/bin/mibee-nvr
+sudo systemctl start mibee-nvr
+```
+
+Upgrade history lives in `<data-dir>/update-history.jsonl` (time, from/to, result, failure reason).
+
+### Scope
+
+Only install.sh/systemd bare-metal installs. Docker belongs to Watchtower; fnOS/unRAID store installs belong to the platform's upgrade mechanism; offline environments should download manually (see the verification section above). On distros without polkit the automatic trigger is unavailable, but the `sudo mibee-nvr update` manual path still works.

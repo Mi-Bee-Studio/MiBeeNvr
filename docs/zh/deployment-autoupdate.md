@@ -107,3 +107,57 @@ openssl pkeyutl -verify -pubin -inkey release-signing.pub.pem \
 - `checksums.txt` 覆盖三个裸二进制(amd64/arm64/armv7);fnOS `.fpk` 由飞牛商店渠道分发,不在其列;Docker 镜像由 registry 摘要保证完整性。
 - 若某次 Release 没有 `checksums.txt.sig`,说明签名 Secret 未配置(该 Release 未签名),只做第 1 步完整性校验。
 - 密钥轮换意味着新 Release 用新公钥签发;以仓库 main 分支上的公钥为准。
+
+## 裸机自动升级(#647,systemd 安装)
+
+Docker 之外,`install.sh` 安装的裸机环境是最后一个可自动化的在线场景。架构刻意绕开进程内自我替换——`mibee-nvr.service` 的沙箱(`User=nvr` + `ProtectSystem=strict`)本来就禁止应用写 `/usr/local/bin`:
+
+```
+应用(nvr 用户,沙箱内)                root helper(mibee-nvr-update.service)
+  感知层发现新版 + update.auto_apply: true
+  ├─ 写请求文件 /var/lib/mibee-nvr/update-request.json
+  └─ systemctl start mibee-nvr-update.service   →  mibee-nvr update --apply-request …
+                                                    ① 前置检查(非 docker、semver 严格更新、磁盘 ≥ 产物×3)
+                                                    ② 流式下载校验和 + ed25519 签名 + 二进制
+                                                    ③ sha256 + 签名验证(失败即中止,系统零改动)
+                                                    ④ 保留 .prev → 原子替换二进制
+                                                    ⑤ systemctl restart mibee-nvr
+                                                    ⑥ 健康门禁:/api/health 就绪探针
+                                                    ⑦ 失败自动回滚 .prev 并重启
+                                                    ⑧ 升级历史落盘 update-history.jsonl
+```
+
+polkit 规则(`/etc/polkit-1/rules.d/60-mibee-nvr-update.rules`,installer 自动安装)只放行 nvr 用户**启动这一个 unit**,特权面最小。
+
+### 开启
+
+```yaml
+update:
+  auto_apply: true   # 默认 false,仅提示不执行
+```
+
+恒禁用条件(开了也不会执行):`dev` 构建、非 stable channel、候选版本 ≤ 当前(永不降级)、Docker 部署。
+
+### 手动升级(无需 polkit)
+
+```bash
+sudo mibee-nvr update              # 升级到最新 stable
+sudo mibee-nvr update --version v0.12.1
+mibee-nvr update --check           # 只看状态,零改动
+```
+
+### 回滚
+
+升级前自动保留上一版为 `<二进制>.prev`;健康门禁失败会**自动**回滚并重启。手动回滚:
+
+```bash
+sudo systemctl stop mibee-nvr
+sudo cp /usr/local/bin/mibee-nvr.prev /usr/local/bin/mibee-nvr
+sudo systemctl start mibee-nvr
+```
+
+升级记录在 `<数据目录>/update-history.jsonl`(时间、from/to、结果、失败原因)。
+
+### 适用边界
+
+仅适用 `install.sh`/systemd 裸机安装。Docker 归 Watchtower;fnOS/unRAID 等商店渠道归平台的升级机制;离线环境请手动下载(校验方法见上一节)。无 polkit 的老发行版上自动触发不可用,但 `sudo mibee-nvr update` 手动路径不受影响。

@@ -180,6 +180,39 @@ install_service() {
     info "Installed systemd service to ${SERVICE_FILE}."
 }
 
+# install_update_helper deploys the #647 self-update root helper: the one-shot
+# mibee-nvr-update.service unit plus the polkit rule authorizing the nvr user
+# to start exactly that unit. Best-effort — failures downgrade to a warning
+# (manual `sudo mibee-nvr update` still works without them), never abort the
+# install.
+install_update_helper() {
+    local helper_service="/etc/systemd/system/mibee-nvr-update.service"
+    local helper_url="https://raw.githubusercontent.com/${REPO}/main/deploy/mibee-nvr-update.service"
+    local polkit_rules="/etc/polkit-1/rules.d/60-mibee-nvr-update.rules"
+    local polkit_url="https://raw.githubusercontent.com/${REPO}/main/deploy/mibee-nvr-update-polkit.rules"
+
+    if ! download "$helper_url" "$helper_service"; then
+        warn "Failed to download mibee-nvr-update.service — auto-apply (update.auto_apply) unavailable."
+        warn "Manual upgrades via 'sudo mibee-nvr update' still work."
+        return 0
+    fi
+    chmod 644 "$helper_service"
+
+    if [[ -d /etc/polkit-1/rules.d ]]; then
+        if download "$polkit_url" "$polkit_rules"; then
+            chmod 644 "$polkit_rules"
+            # Some distros need a polkit restart to pick up new rules.
+            systemctl reload polkit 2>/dev/null || systemctl restart polkit 2>/dev/null || true
+            info "Installed self-update helper + polkit rule (opt-in auto-apply ready)."
+        else
+            warn "Polkit rule install failed — enable with: sudo systemctl start mibee-nvr-update.service (manual)."
+        fi
+    else
+        warn "No polkit rules dir (/etc/polkit-1/rules.d) — auto-apply trigger unavailable on this distro;"
+        warn "upgrade manually with: sudo mibee-nvr update"
+    fi
+}
+
 install_optional_ffmpeg() {
     # FFmpeg is OPTIONAL — only needed for H.265↔H.264 transcoding (storage
     # optimization + live relay transcode). All other features work without it.
@@ -280,6 +313,11 @@ do_uninstall() {
         info "Removed service file."
     fi
 
+    # Self-update helper artifacts (#647)
+    rm -f /etc/systemd/system/mibee-nvr-update.service
+    rm -f /etc/polkit-1/rules.d/60-mibee-nvr-update.rules
+    systemctl reload polkit 2>/dev/null || true
+
     if [[ -f "${BIN_PATH}" ]]; then
         rm -f "${BIN_PATH}"
         info "Removed binary."
@@ -352,6 +390,7 @@ do_install() {
     install_binary "$arch" "$version"
     init_config
     install_service
+    install_update_helper
     install_optional_ffmpeg
     enable_service
     wait_for_ready

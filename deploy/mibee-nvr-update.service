@@ -1,0 +1,18 @@
+[Unit]
+Description=MiBee NVR one-shot self-update (root helper, triggered by the app via polkit)
+# Only meaningful when the app wrote a request file; a manual `systemctl
+# start` without one exits immediately instead of re-running a stale upgrade.
+ConditionPathExists=/var/lib/mibee-nvr/update-request.json
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The binary is its own helper: this subcommand runs the full #647 pipeline
+# (guards → download → sha256+ed25519 verify → atomic replace with .prev
+# backup → restart mibee-nvr → health gate → rollback on failure) and
+# consumes the request file exactly once.
+ExecStart=/usr/local/bin/mibee-nvr update --apply-request /var/lib/mibee-nvr/update-request.json
+# Download + verify + health gate can legitimately take minutes on a slow
+# ARM box; don't let the default 90s kill a healthy upgrade.
+TimeoutStartSec=15min

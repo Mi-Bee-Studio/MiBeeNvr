@@ -159,15 +159,26 @@ func main() {
 	}
 	defer cancel()
 
-	// In-app version check (sensing layer only — never executes an upgrade).
-	// Polls GitHub Releases with ETag conditional requests (304s do not count
-	// against the unauth rate limit) and exposes the result at /api/update/check.
+	// In-app version check (sensing layer). Polls GitHub Releases with ETag
+	// conditional requests (304s do not count against the unauth rate limit)
+	// and exposes the result at /api/update/check.
 	if cfg.Update.IsEnabled() {
 		interval, err := time.ParseDuration(cfg.Update.CheckInterval)
 		if err != nil || interval < time.Minute {
 			interval = time.Hour
 		}
 		upd := update.New(appVersion, cfg.Update.Repo, cfg.Update.Channel, interval)
+		// Opt-in bare-metal auto-apply (#647): on the first sighting of a newer
+		// stable release, hand off to the root helper unit (polkit-authorized).
+		// Best-effort — trigger failures are logged, never fatal.
+		if cfg.Update.IsAutoApply() {
+			upd.SetOnAvailable(func(st update.Status) {
+				if err := update.TriggerAutoApply(appVersion, st, update.Deployment(),
+					cfg.Storage.RootDir, update.StartHelperUnit); err != nil {
+					slog.Warn("update: auto-apply trigger failed", "error", err)
+				}
+			})
+		}
 		upd.Start(ctx)
 		defer upd.Stop()
 		api.SetUpdateChecker(upd)

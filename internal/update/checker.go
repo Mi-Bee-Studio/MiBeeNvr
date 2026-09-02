@@ -76,6 +76,11 @@ type Checker struct {
 	cached *Status // latest known status (nil before first successful check)
 	etag   string  // sent as If-None-Match on the next poll
 
+	// onAvailable is invoked once per distinct newer tag discovered by a poll
+	// (#647 auto-apply hook). Guarded by mu; nil = no hook.
+	onAvailable     func(Status)
+	lastNotifiedTag string
+
 	stop chan struct{} // closed by Stop to end the poll loop
 }
 
@@ -113,6 +118,17 @@ func (c *Checker) Stop() {
 	default:
 		close(c.stop)
 	}
+}
+
+// SetOnAvailable registers a callback fired (on the poll goroutine) once per
+// distinct newer release tag — the #647 auto-apply entry point. The callback
+// must be non-blocking or spawn its own goroutine: it runs inside the poll
+// loop, and a slow callback would delay subsequent checks. Safe to call
+// before Start; setting it again replaces the previous hook.
+func (c *Checker) SetOnAvailable(fn func(Status)) {
+	c.mu.Lock()
+	c.onAvailable = fn
+	c.mu.Unlock()
 }
 
 // Status returns a snapshot of the latest check. Before the first successful
@@ -227,6 +243,15 @@ func (c *Checker) fetchAndCache(ctx context.Context) (Status, error) {
 	c.mu.Lock()
 	c.cached = &status
 	c.etag = resp.Header.Get("ETag")
+	// Fire the auto-apply hook once per distinct newer tag: repeated polls of
+	// the same release (the normal case) must not re-trigger the helper.
+	if status.UpdateAvailable && status.Latest != c.lastNotifiedTag && c.onAvailable != nil {
+		c.lastNotifiedTag = status.Latest
+		cb := c.onAvailable
+		c.mu.Unlock()
+		cb(status)
+		return status, nil
+	}
 	c.mu.Unlock()
 	return status, nil
 }

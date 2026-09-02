@@ -854,3 +854,10 @@ func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string
 
 	return reconciled, nil
 }
+
+// FreeSpace returns total and free bytes on the filesystem containing path.
+// Exported wrapper around the shared statfs helper so the self-update layer
+// (#647) can run its disk prechecks without constructing a Manager.
+func FreeSpace(path string) (total, free int64, err error) {
+	return statfsFree(path)
+}
