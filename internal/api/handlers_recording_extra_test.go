@@ -169,6 +169,34 @@ func TestRecordingAIStatus_SkippedAccepted(t *testing.T) {
 	require.NotNil(t, rec.AIProcessedAt)
 }
 
+func TestRecordingsListCarriesAIStatus(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+	routes := h.Routes()
+
+	now := time.Now()
+	seedRecording(t, db, makeRecording("list-done", "cam-1", "mp4", now, false))
+	seedRecording(t, db, makeRecording("list-skip", "cam-1", "mp4", now.Add(time.Minute), false))
+	seedRecording(t, db, makeRecording("list-none", "cam-1", "mp4", now.Add(2*time.Minute), false))
+	require.NoError(t, db.UpdateRecordingAIStatus(context.Background(), "list-done", "completed", ""))
+	_, err := db.MarkRecordingsSkippedByIDs(context.Background(), []string{"list-skip"}, "vision drop:ttl_expired")
+	require.NoError(t, err)
+
+	rr := doRequest(t, routes, http.MethodGet, "/api/recordings?limit=10", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp recordingsResponse
+	parseJSON(t, rr, &resp)
+	byID := map[string]string{}
+	for _, r := range resp.Recordings {
+		byID[r.ID] = r.AIStatus
+	}
+	require.Equal(t, "completed", byID["list-done"])
+	require.Equal(t, "skipped", byID["list-skip"], "队列丢弃标记在列表可见(#671 UI 徽章数据源)")
+	require.Empty(t, byID["list-none"])
+}
+
 func TestTimelineSeekEvent(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

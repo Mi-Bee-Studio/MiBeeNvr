@@ -93,6 +93,24 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		recordings = []model.Recording{}
 	}
 
+	// Attach AI processing status in one batched query (#671): the lite list
+	// SELECT doesn't carry ai_status, but the UI badges it (completed/skipped/
+	// failed/…) when the AI backend integration is in play. Single extra query
+	// per page, only when there are rows to annotate.
+	if len(recordings) > 0 {
+		ids := make([]string, 0, len(recordings))
+		for i := range recordings {
+			ids = append(ids, recordings[i].ID)
+		}
+		if statuses, err := h.db.BatchGetRecordingAIStatus(ctx, ids); err == nil {
+			for i := range recordings {
+				if s, ok := statuses[recordings[i].ID]; ok {
+					recordings[i].AIStatus = s
+				}
+			}
+		}
+	}
+
 	// Compute next_cursor for the frontend: the started_at of the last row in this page.
 	// The client passes it back as ?cursor= for O(1) deep pagination. Empty when no more rows.
 	nextCursor := ""
