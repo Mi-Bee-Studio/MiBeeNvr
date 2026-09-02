@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -80,10 +81,15 @@ type Config struct {
 	FFmpegPath string
 	// FFmpegArgs allows tests to substitute a fake frame source binary.
 	FFmpegArgs func(url string, fps float64) []string
-	Resolver   Resolver
-	Trigger    Trigger
-	Bus        Publisher
-	Log        *slog.Logger
+	// FrameStallTimeout aborts a sampler whose ffmpeg produces no decoded
+	// frame for this long — a wedged network read inside ffmpeg never exits
+	// on its own (2026-09-02 incident: pixgate silent from 02:01 until the
+	// 05:09 service restart). <=0 → 30s.
+	FrameStallTimeout time.Duration
+	Resolver          Resolver
+	Trigger           Trigger
+	Bus               Publisher
+	Log               *slog.Logger
 	// Cameras is the enabled set, refreshed via SetCameras.
 	Cameras map[string]CameraConfig
 }
@@ -468,11 +474,18 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, cfg CameraConf
 }
 
 // sampleFrames runs one ffmpeg process to completion, feeding each decoded
-// gray frame to fn (return false stops early). Returns frames consumed.
+// gray frame to fn (return false stops early). Returns frames consumed. A
+// source that stops producing frames without exiting (wedged network read)
+// is killed after the stall timeout and reported as an error so the caller's
+// backoff loop respawns it.
 func sampleFrames(ctx context.Context, cfg Config, target Target, fps float64, fn func([]byte) bool, frame []byte) (int, error) {
 	args := ffmpegArgs(target, fps)
 	if cfg.FFmpegArgs != nil {
 		args = cfg.FFmpegArgs(target.URL, fps)
+	}
+	stall := cfg.FrameStallTimeout
+	if stall <= 0 {
+		stall = 30 * time.Second
 	}
 	cmd := exec.CommandContext(ctx, cfg.FFmpegPath, args...)
 	stdout, err := cmd.StdoutPipe()
@@ -486,11 +499,46 @@ func sampleFrames(ctx context.Context, cfg Config, target Target, fps float64, f
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	}()
+
+	// Stall watchdog (2026-09-02 incident): a wedged source — ffmpeg blocked
+	// in a network read — never exits and never writes. Pipe read deadlines
+	// are not portable across the exec implementations, so the watchdog
+	// KILLS the process instead: the pipe closes and the pending ReadFull
+	// below returns on every platform. stalled distinguishes that kill from
+	// a source that died on its own.
+	var lastFrameNS atomic.Int64
+	var stalled atomic.Bool
+	lastFrameNS.Store(time.Now().UnixNano())
+	watchStop := make(chan struct{})
+	defer close(watchStop)
+	go func() {
+		t := time.NewTicker(stall / 3)
+		defer t.Stop()
+		for {
+			select {
+			case <-watchStop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if time.Since(time.Unix(0, lastFrameNS.Load())) > stall {
+					stalled.Store(true)
+					_ = cmd.Process.Kill()
+					return
+				}
+			}
+		}
+	}()
+
 	n := 0
 	for {
 		if _, err := io.ReadFull(stdout, frame); err != nil {
+			if stalled.Load() {
+				return n, fmt.Errorf("no frame for %s — sampler source stalled", stall)
+			}
 			return n, err
 		}
+		lastFrameNS.Store(time.Now().UnixNano())
 		n++
 		if !fn(frame) {
 			return n, nil
@@ -512,6 +560,10 @@ func ffmpegArgs(target Target, fps float64) []string {
 	return []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-rtsp_transport", "tcp",
+		// Socket-level read timeout (µs): a dead RTSP connection must fail
+		// inside ffmpeg, not hang the sampler process forever. Paired with
+		// the per-frame stall deadline in sampleFrames (belt and suspenders).
+		"-rw_timeout", "15000000", // 15s
 		"-i", u,
 		"-vf", fmt.Sprintf("fps=%.3f,scale=%d:%d", fps, GridW, GridH),
 		"-f", "rawvideo", "-pix_fmt", "gray",

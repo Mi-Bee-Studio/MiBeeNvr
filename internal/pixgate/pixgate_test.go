@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -234,5 +235,77 @@ func TestManager_SuppressBlindsGate(t *testing.T) {
 	}
 	if st.Valid != 0 {
 		t.Fatalf("suppressed samples must be invalid, got %d valid of %d", st.Valid, st.Samples)
+	}
+}
+
+// TestHelperStallProcess is not a real test: it is spawned as the fake ffmpeg
+// by TestSampleFramesStallKillsWedgedSource. It emits exactly one frame, then
+// blocks forever — the shape of an ffmpeg wedged in a network read.
+func TestHelperStallProcess(t *testing.T) {
+	if os.Getenv("GO_PIXGATE_HELPER") != "stall" {
+		return
+	}
+	if _, err := os.Stdout.Write(make([]byte, GridW*GridH)); err != nil {
+		os.Exit(1)
+	}
+	// Sleep-loop rather than select{}: without a pending timer the runtime's
+	// deadlock detector kills the process (panic → EOF on the pipe), which is
+	// the exited-source shape, not the wedged-source shape under test.
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+// TestSampleFramesStallKillsWedgedSource (2026-09-02 incident, 05:01 network
+// blip): a sampler source that emits one frame and then goes silent WITHOUT
+// exiting must be aborted after FrameStallTimeout instead of blocking
+// io.ReadFull forever (field shape: pixgate silent from 02:01 EOF-respawn
+// until the 05:09 service restart). Before the fix this test hangs.
+func TestSampleFramesStallKillsWedgedSource(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO_PIXGATE_HELPER", "stall")
+	cfg := Config{
+		FFmpegPath: exe,
+		FFmpegArgs: func(string, float64) []string {
+			return []string{"-test.run=TestHelperStallProcess"}
+		},
+		FrameStallTimeout: 300 * time.Millisecond,
+	}
+	fr := make([]byte, GridW*GridH)
+	n, serr := sampleFrames(context.Background(), cfg, Target{URL: "rtsp://example/stream"}, 10,
+		func([]byte) bool { return true }, fr)
+	if n != 1 {
+		t.Fatalf("frames = %d, want 1 (the first frame must arrive before the stall)", n)
+	}
+	if serr == nil || !strings.Contains(serr.Error(), "stall") {
+		t.Fatalf("want a stall error, got %v", serr)
+	}
+}
+
+// TestFFmpegArgsSocketReadTimeout: the ffmpeg invocation must carry a socket
+// read timeout (-rw_timeout) ahead of -i so a dead RTSP connection fails
+// inside ffmpeg instead of hanging the sampler process forever.
+func TestFFmpegArgsSocketReadTimeout(t *testing.T) {
+	args := ffmpegArgs(Target{URL: "rtsp://example/stream"}, 1)
+	iIdx, rwIdx := -1, -1
+	for k, a := range args {
+		if a == "-i" {
+			iIdx = k
+		}
+		if a == "-rw_timeout" {
+			rwIdx = k
+		}
+	}
+	if iIdx < 0 {
+		t.Fatal("args missing -i")
+	}
+	if rwIdx < 0 || rwIdx > iIdx {
+		t.Fatal("-rw_timeout must precede -i (it scopes the input socket)")
+	}
+	if rwIdx+1 >= len(args) {
+		t.Fatal("-rw_timeout has no value")
 	}
 }

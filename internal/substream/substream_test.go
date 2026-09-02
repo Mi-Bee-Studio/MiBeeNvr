@@ -10,6 +10,7 @@ package substream
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -61,6 +62,13 @@ type testSource struct {
 	done     chan struct{}
 	url      string
 	lastConn atomic.Pointer[gortsplib.ServerConn]
+	// connCount counts accepted connections — the reconnect assertion anchor
+	// for the silent-server test (a teardown + redial shows up as +1).
+	connCount atomic.Int32
+	// silent makes the writer stop emitting RTP while keeping the connection
+	// and the stream open — the half-open shape (no FIN, no data) a network
+	// blip leaves behind.
+	silent atomic.Bool
 
 	// streamReady gates the writer until the ServerStream exists. The stream
 	// is created lazily on the first DESCRIBE — ServerStream.Initialize
@@ -72,6 +80,7 @@ type testSource struct {
 
 func (s *testSource) OnConnOpen(ctx *gortsplib.ServerHandlerOnConnOpenCtx) {
 	s.lastConn.Store(ctx.Conn)
+	s.connCount.Add(1)
 }
 
 // ensureStream builds the ServerStream on the first request.
@@ -102,6 +111,15 @@ func (s *testSource) OnPlay(*gortsplib.ServerHandlerOnPlayCtx) (*base.Response, 
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
 
+// GoSilent stops emitting RTP while keeping the accepted connection and the
+// ServerStream alive — from the client this is indistinguishable from a
+// half-open TCP connection after a network blip. SetSilent(false) resumes.
+func (s *testSource) GoSilent()        { s.silent.Store(true) }
+func (s *testSource) SetSilent(v bool) { s.silent.Store(v) }
+
+// ConnCount reports how many client connections the server has accepted.
+func (s *testSource) ConnCount() int { return int(s.connCount.Load()) }
+
 // writeLoop alternates IDR (with in-band parameter sets) and P frames at
 // ~40ms cadence — a plausible low-res sub-stream.
 func (s *testSource) writeLoop() {
@@ -125,11 +143,13 @@ func (s *testSource) writeLoop() {
 		} else {
 			au = [][]byte{s.pSl}
 		}
-		pkts, err := s.enc.Encode(au)
-		if err == nil {
-			for _, p := range pkts {
-				p.Timestamp = ts
-				_ = s.stream.WritePacketRTP(s.media, p)
+		if !s.silent.Load() {
+			pkts, err := s.enc.Encode(au)
+			if err == nil {
+				for _, p := range pkts {
+					p.Timestamp = ts
+					_ = s.stream.WritePacketRTP(s.media, p)
+				}
 			}
 		}
 		ts += 3600 // 40ms @ 90kHz
@@ -278,18 +298,23 @@ func newTestManager(t *testing.T, url string, mut func(*Config)) *Manager {
 	return m
 }
 
+// recvFrameSeq disambiguates hub consumer names so a test can call recvFrame
+// more than once (the unsubscribe rides t.Cleanup, which runs only at the end).
+var recvFrameSeq atomic.Int64
+
 // recvFrame subscribes to the hub and returns the first frame matching pred
 // (timeout 5s).
 func recvFrame(t *testing.T, src *Source, pred func(model.FrameMsg) bool) model.FrameMsg {
 	t.Helper()
+	name := fmt.Sprintf("test-%d", recvFrameSeq.Add(1))
 	frames := make(chan model.FrameMsg, 64)
-	require.NoError(t, src.Hub().SubscribeMsg("test", func(m model.FrameMsg) {
+	require.NoError(t, src.Hub().SubscribeMsg(name, func(m model.FrameMsg) {
 		select {
 		case frames <- m:
 		default:
 		}
 	}))
-	t.Cleanup(func() { src.Hub().Unsubscribe("test") })
+	t.Cleanup(func() { src.Hub().Unsubscribe(name) })
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
@@ -343,6 +368,40 @@ func TestAcquireH265ReadyAndFrames(t *testing.T) {
 	mf := recvFrame(t, src, func(m model.FrameMsg) bool { return m.IsKeyframe })
 	require.NotEmpty(t, mf.AU)
 
+	m.Release("cam-1")
+}
+
+// TestPullSilentServerTornDownAndRedialed is the N1 regression test (incident
+// 2026-09-02 05:01): a live session whose server goes silent WITHOUT closing
+// the TCP connection — the half-open shape a network blip leaves behind — must
+// be torn down promptly (gortsplib's own TCP inactivity timeout via
+// ReadTimeout=DialTimeout, backed by the manager's FrameStallTimeout watchdog)
+// and redialed. The pull loop must never park in client.Wait() forever while
+// consumers starve. Teardown is observable as a fresh accepted connection; the
+// same Source/hub then recovers once data flows again.
+func TestPullSilentServerTornDownAndRedialed(t *testing.T) {
+	src, url := newTestSource(t, model.FormatH264)
+	m := newTestManager(t, url, func(c *Config) {
+		c.DialTimeout = 500 * time.Millisecond // → client ReadTimeout
+		c.FrameStallTimeout = 2 * time.Second
+		c.IdleTimeout = 30 * time.Second // keep the entry alive across the redial
+	})
+
+	s, err := m.Acquire(context.Background(), "cam-1")
+	require.NoError(t, err)
+	_ = recvFrame(t, s, func(fm model.FrameMsg) bool { return fm.IsKeyframe })
+	before := src.ConnCount()
+
+	src.GoSilent()
+
+	require.Eventually(t, func() bool { return src.ConnCount() >= before+1 },
+		10*time.Second, 100*time.Millisecond,
+		"silent half-open session was not torn down and redialed")
+
+	// Resume writing: the redialed session must deliver frames again on the
+	// SAME source (hub survives reconnection).
+	src.SetSilent(false)
+	_ = recvFrame(t, s, func(fm model.FrameMsg) bool { return fm.IsKeyframe })
 	m.Release("cam-1")
 }
 
