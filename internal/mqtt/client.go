@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
 )
+
+var clientLogger = slog.Default().With("component", "mqtt")
 
 // triggerMessage is the JSON payload of a camera trigger event.
 type triggerMessage struct {
@@ -36,8 +42,11 @@ type Client struct {
 	topicPrefix string
 	username    string
 	password    string
+	mu          sync.Mutex
 	mqttClient  mqtt.Client
 	onAction    func(cameraID string, action string)
+	// connectFn creates the paho client; overridable in tests. Nil = mqtt.NewClient.
+	connectFn func(opts *mqtt.ClientOptions) mqtt.Client
 }
 
 // NewClient creates a new MQTT trigger event subscriber.
@@ -57,6 +66,25 @@ func (c *Client) IsConfigured() bool {
 	return c.brokerURL != ""
 }
 
+// setMQTTClient / getMQTTClient guard the paho handle: Start writes it from
+// its service goroutine while Publish/Stop read it from arbitrary goroutines
+// (health pipeline, status publisher) — surfaced by the race detector under
+// the connect-retry loop (#661).
+func (c *Client) setMQTTClient(client mqtt.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mqttClient = client
+}
+
+func (c *Client) getMQTTClient() mqtt.Client {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mqttClient
+}
+
 // HasActionHandler reports whether trigger messages are dispatched to an
 // action callback. Production wiring must pass a non-nil onAction; this lets
 // assembly tests assert the trigger path is actually connected.
@@ -66,6 +94,12 @@ func (c *Client) HasActionHandler() bool {
 
 // Start connects to the MQTT broker and subscribes to trigger events.
 // It blocks until ctx is cancelled. If MQTT is not configured, it returns immediately.
+//
+// A broker that is unreachable at startup does not fail Start (#661): the
+// connect is retried with tiered backoff until it succeeds or ctx is done
+// (deployments must not depend on broker/NVR start order). On connect,
+// SetAutoReconnect + the OnConnect handler keep the trigger subscription
+// alive across broker restarts.
 func (c *Client) Start(ctx context.Context) error {
 	if !c.IsConfigured() {
 		return nil
@@ -87,11 +121,31 @@ func (c *Client) Start(ctx context.Context) error {
 			opts.SetPassword(c.password)
 		}
 	}
-	c.mqttClient = mqtt.NewClient(opts)
-	token := c.mqttClient.Connect()
-	token.Wait()
-	if err := token.Error(); err != nil {
-		return err
+
+	connect := c.connectFn
+	if connect == nil {
+		connect = mqtt.NewClient
+	}
+
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		client := connect(opts)
+		token := client.Connect()
+		token.Wait()
+		err := token.Error()
+		if err == nil {
+			c.setMQTTClient(client)
+			break
+		}
+		lastErr = err
+		delay := backoff.TieredBackoff(attempt)
+		clientLogger.Warn("mqtt broker unreachable, retrying",
+			"broker", c.brokerURL, "attempt", attempt+1, "error", lastErr, "retry_in", delay.String())
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("mqtt: connect abandoned (context done), last error: %w", lastErr)
+		case <-time.After(delay):
+		}
 	}
 
 	<-ctx.Done()
@@ -100,8 +154,8 @@ func (c *Client) Start(ctx context.Context) error {
 
 // Stop disconnects gracefully from the MQTT broker.
 func (c *Client) Stop() error {
-	if c.mqttClient != nil && c.mqttClient.IsConnected() {
-		c.mqttClient.Disconnect(1000)
+	if client := c.getMQTTClient(); client != nil && client.IsConnected() {
+		client.Disconnect(1000)
 	}
 	return nil
 }
@@ -127,7 +181,8 @@ func (c *Client) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 // Publish sends a JSON payload to an MQTT topic with QoS 1.
 // The topic is prefixed with the client's topic prefix.
 func (c *Client) Publish(topic string, payload any) error {
-	if c == nil || c.mqttClient == nil || !c.mqttClient.IsConnected() {
+	client := c.getMQTTClient()
+	if c == nil || client == nil || !client.IsConnected() {
 		return fmt.Errorf("mqtt client not connected")
 	}
 
@@ -137,7 +192,7 @@ func (c *Client) Publish(topic string, payload any) error {
 	}
 
 	fullTopic := c.topicPrefix + "/" + topic
-	token := c.mqttClient.Publish(fullTopic, 1, false, data)
+	token := client.Publish(fullTopic, 1, false, data)
 	token.Wait()
 	if token.Error() != nil {
 		return fmt.Errorf("mqtt publish: %w", token.Error())
@@ -148,7 +203,8 @@ func (c *Client) Publish(topic string, payload any) error {
 // PublishAIDetection publishes an AI detection event to the AI-specific MQTT topic.
 // The topic is "ai/{cameraID}" (prefixed by the client's topic prefix).
 func (c *Client) PublishAIDetection(ctx context.Context, cameraID string, event string, detections []AiDetectionObj) error {
-	if c == nil || c.mqttClient == nil || !c.mqttClient.IsConnected() {
+	client := c.getMQTTClient()
+	if c == nil || client == nil || !client.IsConnected() {
 		return fmt.Errorf("mqtt client not connected")
 	}
 

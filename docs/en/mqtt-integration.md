@@ -9,7 +9,7 @@ MiBee NVR supports MQTT recording triggers and status publishing for smart home 
 - **Status (publish)**: `{prefix}/health/{camera_id}`, `{prefix}/event/{topic}` (see [Status Publishing](#status-publishing))
 - **Trigger payload**: JSON with `action` field
 - **Actions**: `record`, `stop` (`snapshot` is not implemented yet — logged and ignored)
-- **Auto-reconnect**: Built-in with exponential backoff
+- **Auto-reconnect**: Built-in with exponential backoff; a broker that is unreachable at NVR startup is retried continuously (tiered 1s→5s→10s→60s backoff) — no start-order dependency
 
 ## Configuration
 
