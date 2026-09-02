@@ -140,11 +140,12 @@ func (t *mockToken) Error() error                     { return t.err }
 type mockPahoClient struct {
 	connected    bool
 	publishToken mqtt.Token
+	connectToken mqtt.Token
 }
 
 func (m *mockPahoClient) IsConnected() bool       { return m.connected }
 func (m *mockPahoClient) IsConnectionOpen() bool  { return m.connected }
-func (m *mockPahoClient) Connect() mqtt.Token     { return nil }
+func (m *mockPahoClient) Connect() mqtt.Token     { return m.connectToken }
 func (m *mockPahoClient) Disconnect(quiesce uint) {}
 func (m *mockPahoClient) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
 	return m.publishToken
