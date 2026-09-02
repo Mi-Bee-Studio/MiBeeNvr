@@ -86,3 +86,24 @@ Watchtower supports [Shoutrrr](https://containrrr.dev/shoutrrr/) notification UR
 | QNAP QTS | Container Station: rebuild, or Watchtower |
 
 See the per-platform deployment docs for specifics.
+
+## Verifying bare-metal release artifacts (#646)
+
+Every GitHub Release ships `checksums.txt` (SHA-256 over the bare binaries, `sha256sum` format) and `checksums.txt.sig` (a 64-byte raw ed25519 signature over checksums.txt). The signing private key lives in the repository secret; the public key is embedded in the binary (`internal/update/verify.go`) and distributed as PEM in the repo (`deploy/keys/release-signing.pub.pem`). Until the bare-metal auto-updater (#647) lands, verify manually:
+
+```bash
+# 1. Integrity: the downloaded mibee-nvr-<arch> matches checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+
+# 2. (Optional) Provenance: prove checksums.txt was produced by this project
+curl -fsSL -o release-signing.pub.pem \
+  https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/keys/release-signing.pub.pem
+openssl pkeyutl -verify -pubin -inkey release-signing.pub.pem \
+  -rawin -in checksums.txt -sigfile checksums.txt.sig
+```
+
+Notes:
+
+- `checksums.txt` covers the three bare binaries (amd64/arm64/armv7). The fnOS `.fpk` is distributed through the fnOS store channel; Docker images are integrity-protected by registry digests.
+- If a Release has no `checksums.txt.sig`, the signing secret was not configured (that release is unsigned) — step 1 alone still checks integrity.
+- A key rotation means newer Releases are signed with a new key; always take the public key from the repo's main branch.

@@ -86,3 +86,24 @@ Watchtower 支持 [Shoutrrr](https://containrrr.dev/shoutrrr/) 通知 URL。在 
 | 威联通 QTS | Container Station：重建，或 Watchtower |
 
 详见各平台部署文档。
+
+## 裸机安装的产物校验（#646）
+
+每次 GitHub Release 附带 `checksums.txt`(裸二进制的 SHA-256,`sha256sum` 格式)与 `checksums.txt.sig`(对 checksums.txt 的 ed25519 签名,64 字节原始签名)。签名私钥保存在仓库 Secret 中,公钥内嵌于程序内(`internal/update/verify.go`)并以 PEM 形式随仓库分发(`deploy/keys/release-signing.pub.pem`)。裸机自动升级(#647)落地前,可手动校验:
+
+```bash
+# 1. 校验完整性:下载的 mibee-nvr-<arch> 与 checksums.txt 对应
+sha256sum -c checksums.txt --ignore-missing
+
+# 2. (可选)校验来源:证明 checksums.txt 出自本项目,未被篡改
+curl -fsSL -o release-signing.pub.pem \
+  https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/deploy/keys/release-signing.pub.pem
+openssl pkeyutl -verify -pubin -inkey release-signing.pub.pem \
+  -rawin -in checksums.txt -sigfile checksums.txt.sig
+```
+
+注意:
+
+- `checksums.txt` 覆盖三个裸二进制(amd64/arm64/armv7);fnOS `.fpk` 由飞牛商店渠道分发,不在其列;Docker 镜像由 registry 摘要保证完整性。
+- 若某次 Release 没有 `checksums.txt.sig`,说明签名 Secret 未配置(该 Release 未签名),只做第 1 步完整性校验。
+- 密钥轮换意味着新 Release 用新公钥签发;以仓库 main 分支上的公钥为准。
