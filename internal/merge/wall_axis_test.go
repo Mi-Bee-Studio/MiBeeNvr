@@ -198,7 +198,7 @@ func TestWallAxis_PureTimelapseHour(t *testing.T) {
 	env, bus, r := wallEnv(t)
 	cam := "cam-s1"
 	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		publishWallSeg(t, env, bus, cam, fmt.Sprintf("s1-%d", i), base.Add(time.Duration(i)*61*time.Second), sparseSeg(2))
 		waitForBucketStable(t, r, cam, i+1, 5*time.Second)
 	}
@@ -220,12 +220,14 @@ func TestWallAxis_ModeSwitchInsideSegment(t *testing.T) {
 		return []wallSample{
 			{key: true, d: 30 * time.Second},
 			{key: true, d: 30 * time.Second},
-			{key: false, d: 33 * time.Millisecond}, {key: false, d: 33 * time.Millisecond},
-			{key: false, d: 33 * time.Millisecond}, {key: false, d: 33 * time.Millisecond},
+			{key: false, d: 33 * time.Millisecond},
+			{key: false, d: 33 * time.Millisecond},
+			{key: false, d: 33 * time.Millisecond},
+			{key: false, d: 33 * time.Millisecond},
 			{key: true, d: 30 * time.Second},
 		}
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		publishWallSeg(t, env, bus, cam, fmt.Sprintf("s2-%d", i), base.Add(time.Duration(i)*91*time.Second), mixed())
 		waitForBucketStable(t, r, cam, i+1, 5*time.Second)
 	}
@@ -253,7 +255,7 @@ func TestWallAxis_SmartCodecSlowCamera(t *testing.T) {
 	}
 	// slow(62.7s) → sparse(60s) → slow → sparse: 每段间隔 2s 防同窗派发。
 	at := base
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		var samples []wallSample
 		if i%2 == 0 {
 			samples = slow()
@@ -279,7 +281,7 @@ func TestWallAxis_DayNightCadenceSwitch(t *testing.T) {
 	cam := "cam-s4"
 	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
 	at := base
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		frameDur := 50 * time.Millisecond
 		if i%2 == 1 {
 			frameDur = 100 * time.Millisecond // 夜间 10fps

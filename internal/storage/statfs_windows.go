@@ -8,9 +8,7 @@ import "golang.org/x/sys/windows"
 // Windows variant via GetDiskFreeSpaceEx — keeps the package compilable (and
 // unit-testable) on dev Windows boxes; the NVR itself targets Linux.
 func statfsFree(path string) (total, free int64, err error) {
-	var (
-		freeCaller, totalC, freeC uint64
-	)
+	var freeCaller, totalC, freeC uint64
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return 0, 0, err

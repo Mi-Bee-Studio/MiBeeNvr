@@ -396,7 +396,7 @@ func TestCoordinatorUploadContentLengthMatchesFile(t *testing.T) {
 		got.headerSize = r.Header.Get("X-File-Size")
 		buf, _ := io.ReadAll(r.Body)
 		got.bodyLen = int64(len(buf))
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer visionSrv.Close()
 

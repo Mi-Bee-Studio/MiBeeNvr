@@ -246,8 +246,8 @@ func TestScoreSamples_SmoothSaturationNeverPins(t *testing.T) {
 	}
 	prev := -1.0
 	// Burst must stay under half the series or the median itself moves
-		// (inherent to any relative metric).
-		for _, burst := range []int{15, 60, 150, 250} {
+	// (inherent to any relative metric).
+	for _, burst := range []int{15, 60, 150, 250} {
 		res := ScoreSamples(mk(burst), DefaultOptions())
 		if res.Score >= 1 {
 			t.Fatalf("burst=%d: score must stay below 1, got %v", burst, res.Score)

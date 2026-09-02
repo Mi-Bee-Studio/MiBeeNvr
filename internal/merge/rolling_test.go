@@ -1489,7 +1489,7 @@ func TestRollingMerge_WallAxisSurvivesRepeatedAppends(t *testing.T) {
 			RecordingID: rec.ID,
 		})
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		publishSparse(i)
 		time.Sleep(300 * time.Millisecond)
 	}

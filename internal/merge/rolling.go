@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"runtime"
 	"sync"
 	"time"
@@ -629,31 +628,4 @@ func bytesEqual(a, b []byte) bool {
 		}
 	}
 	return true
-}
-
-// statsWallDuration picks the product's wall-clock span from the merge stats
-// (sum of input sample durations — unaffected by #496 timelapse dwell
-// compression), falling back to the caller's parsed-duration estimate when no
-// map was collected.
-
-// statsWallDuration picks the product's wall-clock span from the merge stats
-// (sum of input sample durations — unaffected by #496 timelapse dwell
-// compression), falling back to the caller's parsed-duration estimate when no
-// map was collected.
-func statsWallDuration(stats MergeStats, fallback float64) float64 {
-	if w := stats.WallDurationSec(); w > 0 {
-		return math.Round(w*1000) / 1000
-	}
-	return fallback
-}
-
-// totalDurFallbackSec is the pre-stats duration estimate for a bucket append:
-// the parsed bucket file plus the new input. Correct on the real-time axis
-// (no compression yet), and only used when stats carry no wall map.
-
-// totalDurFallbackSec is the pre-stats duration estimate for a bucket append:
-// the parsed bucket file plus the new input. Correct on the real-time axis
-// (no compression yet), and only used when stats carry no wall map.
-func totalDurFallbackSec(bucketInfo, newInfo *SegmentInfo) float64 {
-	return math.Round((bucketInfo.TotalDuration+newInfo.TotalDuration).Seconds()*1000) / 1000
 }
