@@ -314,6 +314,8 @@ func dispatchSubcommand(args []string) {
 		cmdMergeCameras()
 	case "eval-replay":
 		cmdEvalReplay()
+	case "update":
+		cmdUpdate()
 	case "cleanup":
 		cmdCleanup()
 	}

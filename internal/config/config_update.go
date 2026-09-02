@@ -24,6 +24,14 @@ type UpdateConfig struct {
 	// Repo is the "owner/name" GitHub repository to check.
 	// Default "Mi-Bee-Studio/MiBeeNvr".
 	Repo string `yaml:"repo"`
+	// AutoApply opt-in EXECUTION of bare-metal upgrades (#647). Default false:
+	// the sensing layer only announces updates. When true AND the deployment
+	// is bare-metal systemd (never docker/dev/beta), a newly detected stable
+	// release is installed via the mibee-nvr-update.service root helper
+	// (polkit-authorized), with sha256+ed25519 verification and automatic
+	// rollback to the previous binary if the upgraded service fails its
+	// health gate.
+	AutoApply *bool `yaml:"auto_apply"`
 }
 
 // IsEnabled returns whether the update check is enabled (default true).
@@ -32,4 +40,10 @@ func (c UpdateConfig) IsEnabled() bool {
 		return true
 	}
 	return *c.Enabled
+}
+
+// IsAutoApply returns whether bare-metal auto-apply is enabled (default
+// false — the sensing layer never executes upgrades unless explicitly opted in).
+func (c UpdateConfig) IsAutoApply() bool {
+	return c.AutoApply != nil && *c.AutoApply
 }

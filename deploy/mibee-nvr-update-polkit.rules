@@ -1,0 +1,17 @@
+// MiBee NVR self-update authorization (#647).
+// Install to /etc/polkit-1/rules.d/60-mibee-nvr-update.rules.
+//
+// Allows exactly ONE privileged action for the sandboxed app user: starting
+// the mibee-nvr-update.service one-shot helper. The helper itself is
+// mibee-nvr's own `update --apply-request` subcommand running as root — it
+// verifies sha256+ed25519 signatures before replacing anything, keeps a .prev
+// rollback binary, and rolls back automatically if the upgraded service fails
+// its health gate. Everything else (arbitrary units, stopping the NVR,
+// editing units) stays unauthorized for the nvr user.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "nvr" &&
+        action.lookup("unit") == "mibee-nvr-update.service") {
+        return polkit.Result.YES;
+    }
+});
