@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
@@ -345,9 +346,20 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 			"camera_id", seg.cameraID, "recording_id", seg.recordingID, "dropped", dropped)
 	}
 
-	// Compute SPS/PPS compatibility key.
+	// Compute SPS/PPS compatibility key. The SPS contributes its semantic
+	// decode key, not raw bytes (#642): cameras alternating decode-equivalent
+	// SPS encodings (VUI/timing-only differences) per GOP must not split/
+	// re-spawn buckets at segment granularity — with the raw bytes, bucket
+	// keys flip every segment whenever consecutive segments happened to be
+	// created under different variants. PPS/VPS have no semantic parser and
+	// stay raw (their variant flapping is rotation-rate-limited upstream).
+	// Unparseable SPS falls back to raw bytes (conservative split).
+	spsKeyBytes := newInfo.SPS
+	if key, ok := nalutil.SPSSemanticKey(newInfo.SPS, newInfo.Codec == "h265"); ok && key != "" {
+		spsKeyBytes = []byte(key)
+	}
 	h := sha256.New()
-	h.Write(newInfo.SPS)
+	h.Write(spsKeyBytes)
 	h.Write(newInfo.PPS)
 	h.Write(newInfo.VPS)
 	spsKey := hex.EncodeToString(h.Sum(nil))

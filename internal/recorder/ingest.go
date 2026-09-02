@@ -88,6 +88,14 @@ type IngestRecorder struct {
 	segStart   time.Time
 	lastFrame  time.Time
 	frameCount int
+	// paramGate bounds parameter-set-triggered segment rotations (#642) —
+	// decode-equivalent SPS variant flapping must not churn segments. Guarded
+	// by mu like the segment state above (WriteNALU callbacks are serialized
+	// by the listener, but keep it under the same lock discipline). Rotation
+	// is only consulted while a segment is open (muxer != nil), so the
+	// sequence-header→in-band param sync at publisher connect never consumes
+	// rotation budget.
+	paramGate nalutil.ParamRotationGate
 
 	// Audio (WHIP push-in, #369). The negotiated format is set via SetAudioFormat
 	// when the publisher's audio track is accepted; frames then arrive via
@@ -368,23 +376,33 @@ func (r *IngestRecorder) cacheParamSets(au [][]byte) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if vps != nil {
-			if r.vps != nil && !nalutil.EqualParamSets(r.vps, vps) {
-				ingestLogger.Info("VPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-				r.closeCurrentSegmentLocked()
+			if r.vps != nil && !nalutil.EqualParamSets(r.vps, vps) && r.muxer != nil {
+				// No semantic VPS parser — rate-limit rapid variant alternation (#642).
+				if r.paramGate.ShouldRotateUnparsed(time.Now()) {
+					ingestLogger.Info("VPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+					r.closeCurrentSegmentLocked()
+				}
 			}
 			r.vps = append([]byte(nil), vps...)
 		}
 		if sps != nil {
-			if r.sps != nil && !nalutil.EqualParamSets(r.sps, sps) {
-				ingestLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-				r.closeCurrentSegmentLocked()
+			if r.sps != nil && !nalutil.EqualParamSets(r.sps, sps) && r.muxer != nil {
+				// #642: decode-equivalent SPS variants never rotate; a real
+				// codec change rotates immediately.
+				if r.paramGate.ShouldRotateSPS(r.sps, sps, true, time.Now()) {
+					ingestLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+					r.closeCurrentSegmentLocked()
+				}
 			}
 			r.sps = append([]byte(nil), sps...)
 		}
 		if pps != nil {
-			if r.pps != nil && !nalutil.EqualParamSets(r.pps, pps) {
-				ingestLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-				r.closeCurrentSegmentLocked()
+			if r.pps != nil && !nalutil.EqualParamSets(r.pps, pps) && r.muxer != nil {
+				// No semantic PPS parser — rate-limit rapid variant alternation (#642).
+				if r.paramGate.ShouldRotateUnparsed(time.Now()) {
+					ingestLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+					r.closeCurrentSegmentLocked()
+				}
 			}
 			r.pps = append([]byte(nil), pps...)
 		}
@@ -394,16 +412,23 @@ func (r *IngestRecorder) cacheParamSets(au [][]byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sps != nil {
-		if r.sps != nil && !nalutil.EqualParamSets(r.sps, sps) {
-			ingestLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegmentLocked()
+		if r.sps != nil && !nalutil.EqualParamSets(r.sps, sps) && r.muxer != nil {
+			// #642: decode-equivalent SPS variants never rotate; a real codec
+			// change rotates immediately.
+			if r.paramGate.ShouldRotateSPS(r.sps, sps, false, time.Now()) {
+				ingestLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegmentLocked()
+			}
 		}
 		r.sps = append([]byte(nil), sps...)
 	}
 	if pps != nil {
-		if r.pps != nil && !nalutil.EqualParamSets(r.pps, pps) {
-			ingestLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegmentLocked()
+		if r.pps != nil && !nalutil.EqualParamSets(r.pps, pps) && r.muxer != nil {
+			// No semantic PPS parser — rate-limit rapid variant alternation (#642).
+			if r.paramGate.ShouldRotateUnparsed(time.Now()) {
+				ingestLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
+				r.closeCurrentSegmentLocked()
+			}
 		}
 		r.pps = append([]byte(nil), pps...)
 	}

@@ -78,17 +78,30 @@ func (d H264NALDriver) handleParamSet(b *baseRecorder, nalu []byte, typ int) boo
 	sps, pps, _ := b.codecSnapshot()
 	switch typ {
 	case 7: // SPS
-		if sps != nil && !bytes.Equal(sps, nalu) {
-			b.log.Info("SPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.setCodecParams(nalu, pps, nil)
-			return true
+		// The muxer==nil guard keeps param sync at connect (SDP sprop seed vs
+		// first in-band delivery) from consuming rotation budget — there is no
+		// segment to protect yet, so the fresh bytes are just cached.
+		if sps != nil && !bytes.Equal(sps, nalu) && b.muxer != nil {
+			// #642: cameras may alternate decode-equivalent SPS encodings
+			// (VUI/timing-only differences) per GOP — only rotate on a real
+			// codec change; always cache the fresh bytes for the next segment.
+			if b.paramGate.ShouldRotateSPS(sps, nalu, false, time.Now()) {
+				b.log.Info("SPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
+				b.setCodecParams(nalu, pps, nil)
+				return true
+			}
+			b.log.Debug("SPS variant is decode-compatible, keeping segment open",
+				"camera_id", b.cfg.CameraID)
 		}
 		b.setCodecParams(nalu, pps, nil)
 	case 8: // PPS
-		if pps != nil && !bytes.Equal(pps, nalu) {
-			b.log.Info("PPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
-			b.setCodecParams(sps, nalu, nil)
-			return true
+		if pps != nil && !bytes.Equal(pps, nalu) && b.muxer != nil {
+			// No semantic PPS parser — rate-limit rapid variant alternation.
+			if b.paramGate.ShouldRotateUnparsed(time.Now()) {
+				b.log.Info("PPS change detected, rotating segment", "camera_id", b.cfg.CameraID)
+				b.setCodecParams(sps, nalu, nil)
+				return true
+			}
 		}
 		b.setCodecParams(sps, nalu, nil)
 	}

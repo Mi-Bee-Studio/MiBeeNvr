@@ -12,6 +12,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
@@ -50,6 +51,7 @@ type GB28181Recorder struct {
 	mu              sync.Mutex
 	status          model.RecorderStatus
 	sps, pps, vps   []byte
+	paramGate       nalutil.ParamRotationGate // bounds param-set rotations (#642)
 	codecType       string
 	codecDefinitive bool // codecType came from a parameter-set NALU, not the encoding fallback
 	muxer           *muxer.MP4Muxer
@@ -200,7 +202,7 @@ func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 		}
 	}
 	if r.codecType == "h264" {
-		newSPS, newPPS, changed := updateParamSetsH264(au, r.sps, r.pps)
+		newSPS, newPPS, changed := updateParamSetsH264(au, r.sps, r.pps, &r.paramGate, time.Now())
 		if changed {
 			r.closeCurrentSegmentLocked()
 		}
@@ -211,7 +213,7 @@ func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 			r.pps = newPPS
 		}
 	} else if r.codecType == "h265" {
-		newVPS, newSPS, newPPS, changed := updateParamSetsH265(au, r.vps, r.sps, r.pps)
+		newVPS, newSPS, newPPS, changed := updateParamSetsH265(au, r.vps, r.sps, r.pps, &r.paramGate, time.Now())
 		if changed {
 			r.closeCurrentSegmentLocked()
 		}
