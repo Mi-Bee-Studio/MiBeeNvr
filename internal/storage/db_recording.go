@@ -1099,6 +1099,54 @@ func (d *DB) GetRecordingAIStatus(ctx context.Context, id string) (status string
 	return
 }
 
+// MarkRecordingsSkippedByIDs marks the given recordings ai_status='skipped'
+// with the drop reason in ai_error (#671 — consumer-reported queue drops).
+// Only rows still in a non-terminal AI state ('', pending, processing) are
+// touched; completed/failed/skipped stay as-is. Returns rows marked.
+func (d *DB) MarkRecordingsSkippedByIDs(ctx context.Context, ids []string, aiErr string) (int64, error) {
+	defer d.observeQuery("MarkRecordingsSkippedByIDs", time.Now())
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	var sb strings.Builder
+	sb.WriteString(`UPDATE recordings SET ai_status='skipped', ai_error=?, ai_processed_at=? WHERE id IN (`)
+	for range ids {
+		sb.WriteString("?,")
+	}
+	sbString := sb.String()
+	sbString = sbString[:len(sbString)-1] + `) AND COALESCE(ai_status,'') IN ('','pending','processing');`
+
+	args := make([]any, 0, len(ids)+2)
+	args = append(args, aiErr, time.Now().UTC().Format("2006-01-02 15:04:05.999999999"))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	res, err := d.db.ExecContext(ctx, sbString, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// MarkRecordingsSkippedByRange is the id-less fallback of
+// MarkRecordingsSkippedByIDs: mark every non-terminal recording of the given
+// camera whose started_at falls inside [from, to] (#671). Returns rows marked.
+func (d *DB) MarkRecordingsSkippedByRange(ctx context.Context, cameraID string, from, to time.Time, aiErr string) (int64, error) {
+	defer d.observeQuery("MarkRecordingsSkippedByRange", time.Now())
+	if cameraID == "" || to.Before(from) {
+		return 0, nil
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE recordings SET ai_status='skipped', ai_error=?, ai_processed_at=? WHERE camera_id=? AND started_at >= ? AND started_at <= ? AND COALESCE(ai_status,'') IN ('','pending','processing');`,
+		aiErr, time.Now().UTC().Format("2006-01-02 15:04:05.999999999"), cameraID, timeToDB(from), timeToDB(to))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // UpdateRecordingMotionScore persists the compressed-domain activity score,
 // absolute-size confidence (issue #634) and activity flags for a recording
 // (issue #435). Written by the offline motion analyzer after a segment
