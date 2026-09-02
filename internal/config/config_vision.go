@@ -53,6 +53,13 @@ type VisionConfig struct {
 	// SubLayerPushIntervalSecs 子流段推送扫描间隔(秒),默认 20。子流段不受
 	// 合并/删除窗口竞争,无需事件驱动——磁盘即队列,扫描推送。
 	SubLayerPushIntervalSecs int `yaml:"sub_layer_push_interval_secs" json:"subLayerPushIntervalSecs"`
+
+	// TieredCameras 分层录制(#637)相机的分析输入名单:列表内的相机其
+	// tierrec 子层段(layer=1,60s 低清连续录制)被推送给外部消费者做语义
+	// 门控,主流段不再推送(让位语义与 sub_layer_cameras 相同,但段来源是
+	// 正式录像库的 layer=1 行,非 #537 的临时 sublayer 目录)。skip_cameras
+	// 优先于此列表。
+	TieredCameras []string `yaml:"tiered_cameras" json:"tieredCameras"`
 }
 
 // ShouldSkipCamera 报告 camera_id 是否在 SkipCameras 列表中。
@@ -70,6 +77,18 @@ func (v VisionConfig) ShouldSkipCamera(cameraID string) bool {
 func (v VisionConfig) SubLayerCameraSet() map[string]bool {
 	set := make(map[string]bool, len(v.SubLayerCameras))
 	for _, c := range v.SubLayerCameras {
+		if !v.ShouldSkipCamera(c) {
+			set[c] = true
+		}
+	}
+	return set
+}
+
+// TieredCameraSet 返回分层录制分析输入的相机集合(nil/空 → 空 集)。skip_cameras
+// 优先,语义同 SubLayerCameraSet。
+func (v VisionConfig) TieredCameraSet() map[string]bool {
+	set := make(map[string]bool, len(v.TieredCameras))
+	for _, c := range v.TieredCameras {
 		if !v.ShouldSkipCamera(c) {
 			set[c] = true
 		}

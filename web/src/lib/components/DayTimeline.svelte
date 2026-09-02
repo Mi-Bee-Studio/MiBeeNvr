@@ -14,6 +14,7 @@
   import { classLabel, eventTypeLabel } from '$lib/ai-labels';
   import { t } from '$lib/i18n';
 import { parseServerDate } from '$lib/format';
+  import { effectiveMotion } from '$lib/motion';
   import { Clock } from 'lucide-svelte';
 
   // Minimal shape DayTimeline actually reads from each recording. Accepting this
@@ -65,6 +66,7 @@ import { parseServerDate } from '$lib/format';
     format: string;
     merged: boolean;
     motionScore: number; // -1 = not analyzed (#435)
+    motionConfidence: number; // -1 = pre-#634 row (#634)
   }
 
   const DAY_SECONDS = 86400;
@@ -100,6 +102,7 @@ import { parseServerDate } from '$lib/format';
           format: r.format,
           merged: r.merge_status === 'merged' || r.merge_status === 'daily_merged',
           motionScore: r.motion_score ?? -1,
+          motionConfidence: r.motion_confidence ?? -1,
         });
         segs.push({ id: r.id, startSec, endSec });
         coverageSec += endSec - startSec;
@@ -267,7 +270,10 @@ import { parseServerDate } from '$lib/format';
   function bandHeatStyle(band: CoverageBand): string | undefined {
     if (!showHeat || band.motionScore < 0) return undefined;
     if (band.format !== 'h264' && band.format !== 'h265') return undefined;
-    return `background: ${heatColor(band.motionScore)}`;
+    // #634: confidence-discounted score — a bitrate-starved segment's raw
+    // score is rate-control jitter, not activity.
+    const eff = effectiveMotion({ motion_score: band.motionScore, motion_confidence: band.motionConfidence }) ?? 0;
+    return `background: ${heatColor(eff)}`;
   }
 
   // ── Format → color (matches gallery card format conventions) ──
@@ -512,7 +518,7 @@ import { parseServerDate } from '$lib/format';
     class="fixed z-50 pointer-events-none px-2 py-1 rounded bg-black/85 dark:bg-white/90 text-white dark:text-black text-[11px] tabular-nums shadow-lg"
     style="left: {tooltipX}px; top: {tooltipY - 36}px; transform: translateX(-50%)"
   >
-    {bandTimeRange(hoveredBand)} · {formatLength(hoveredBand.endSec - hoveredBand.startSec)} · {hoveredBand.format}{#if hoveredBand.motionScore >= 0} · {t('recordings.motionShort')} {hoveredBand.motionScore.toFixed(2)}{/if}
+    {bandTimeRange(hoveredBand)} · {formatLength(hoveredBand.endSec - hoveredBand.startSec)} · {hoveredBand.format}{#if hoveredBand.motionScore >= 0} · {t('recordings.motionShort')} {(effectiveMotion({ motion_score: hoveredBand.motionScore, motion_confidence: hoveredBand.motionConfidence }) ?? 0).toFixed(2)}{/if}
   </div>
 {/if}
 

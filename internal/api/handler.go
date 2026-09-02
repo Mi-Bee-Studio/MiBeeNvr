@@ -180,8 +180,11 @@ type Handler struct {
 	gb28181SessionMgr *platform.SessionManager
 	// Storage-migration (handlers_storage_migrate.go): the background
 	// idle-time migrator service. Nil in tests — the endpoints degrade.
-	migrationMgr   StorageMigrator
-	gb28181PTZ     *platform.PTZController
+	migrationMgr StorageMigrator
+	gb28181PTZ   *platform.PTZController
+	// ptzSuppress blinds the pixgate pixel gate while a PTZ command moves
+	// the camera (global scene change must not read as activity).
+	ptzSuppress    func(cameraID string)
 	gb28181Catalog *platform.CatalogController
 	gb28181Inviter GB28181InviteSender
 	gb28181Bye     GB28181ByeSender
@@ -792,6 +795,19 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeFile(w, r, cleanPath)
+}
+
+// SetPTZSuppressor wires the pixgate suppression hook fired on every PTZ
+// command (move / stop / goto preset), all protocols.
+func (h *Handler) SetPTZSuppressor(f func(cameraID string)) {
+	h.ptzSuppress = f
+}
+
+// suppressPTZMotion fires the PTZ suppression hook if wired (nil-safe).
+func (h *Handler) suppressPTZMotion(cameraID string) {
+	if h.ptzSuppress != nil {
+		h.ptzSuppress(cameraID)
+	}
 }
 
 // SetGB28181PTZ wires the GB28181 PTZ controller for the channel PTZ endpoint.

@@ -29,14 +29,14 @@ func TestScoreSamples_StaticScene(t *testing.T) {
 
 func TestScoreSamples_ActiveScene(t *testing.T) {
 	// 600 frames at 20fps = 30s; 10% of frames are motion spikes (person
-	// walking through) — well above the 2% static threshold. 10% × gain 4 →
-	// score saturates at 0.4.
+	// walking through) — well above the 2% static threshold. 10% spikes on
+	// the smooth-saturation map (1-exp(-0.1*4)) ≈ 0.33.
 	s := staticSeries(600)
 	for i := 100; i < 160; i += 1 {
 		s[i].Size = 4000 // ~5x baseline: motion burst, below scene-cut line
 	}
 	res := ScoreSamples(s, DefaultOptions())
-	if res.Score < 0.35 {
+	if res.Score < 0.30 {
 		t.Fatalf("active scene should score high, got %v", res.Score)
 	}
 	if res.Flags[0] != "motion" {
@@ -111,7 +111,7 @@ func TestScoreSamples_KeyframesExcludedFromBaseline(t *testing.T) {
 		s = append(s, FrameSample{Size: sz})
 	}
 	res := ScoreSamples(s, DefaultOptions())
-	if res.Flags[0] != "motion" || res.Score < 0.35 {
+	if res.Flags[0] != "motion" || res.Score < 0.30 {
 		t.Fatalf("keyframe-polluted series should still detect motion, got flags=%v score=%v", res.Flags, res.Score)
 	}
 	found := false
@@ -154,5 +154,146 @@ func TestScoreSamples_ScoreClampedToOne(t *testing.T) {
 	res := ScoreSamples(s, DefaultOptions())
 	if res.Score > 1 {
 		t.Fatalf("score must clamp at 1, got %v", res.Score)
+	}
+}
+
+// TestScoreSamples_LowBitrateConfidenceDiscount reproduces the 2026-08-31
+// field finding (issue #634): an empty stairwell camera crushing its bitrate
+// to ~293 B/frame measured a 0.93 score — the relative spike ratio saturated
+// on rate-control jitter. The score stays (it measures SOMETHING), but the
+// absolute-size confidence must zero it out for consumers.
+func TestScoreSamples_LowBitrateConfidenceDiscount(t *testing.T) {
+	// ~293 B/frame median with jittery sizes — the night stairwell pattern.
+	s := make([]FrameSample, 400)
+	for i := range s {
+		base := 260.0
+		jitter := float64(i%7) * 25 // 0..150 bytes jitter
+		s[i].Size = uint32(base + jitter)
+	}
+	res := ScoreSamples(s, DefaultOptions())
+	if res.Confidence != 0 {
+		t.Fatalf("293B-median segment must have zero confidence, got %v", res.Confidence)
+	}
+	if res.Score*res.Confidence != 0 {
+		t.Fatalf("effective score must be 0, got %v×%v", res.Score, res.Confidence)
+	}
+}
+
+// TestScoreSamples_HealthyBitrateFullConfidence: a 2K stream at 2 Mbps /
+// 20 fps carries ~12.5 KB per P-frame — well above the trust anchor.
+func TestScoreSamples_HealthyBitrateFullConfidence(t *testing.T) {
+	s := make([]FrameSample, 300)
+	for i := range s {
+		s[i].Size = uint32(12500 + i%13*300)
+	}
+	res := ScoreSamples(s, DefaultOptions())
+	if res.Confidence != 1 {
+		t.Fatalf("12.5KB-median segment must have full confidence, got %v", res.Confidence)
+	}
+}
+
+// TestScoreSamples_ConfidenceRampMidpoint: 800 B median sits exactly halfway
+// between the 400/1200 anchors.
+func TestScoreSamples_ConfidenceRampMidpoint(t *testing.T) {
+	s := make([]FrameSample, 200)
+	for i := range s {
+		s[i].Size = uint32(800 + i%5*10)
+	}
+	res := ScoreSamples(s, DefaultOptions())
+	if res.Confidence < 0.47 || res.Confidence > 0.53 {
+		t.Fatalf("800B-median confidence should be ~0.5, got %v", res.Confidence)
+	}
+}
+
+// TestScoreSamples_ConfidenceDisabled: zero bounds keep the pre-#634
+// behavior (full trust) for callers that opt out.
+func TestScoreSamples_ConfidenceDisabled(t *testing.T) {
+	s := make([]FrameSample, 100)
+	for i := range s {
+		s[i].Size = uint32(300 + i%3*40)
+	}
+	opts := DefaultOptions()
+	opts.AbsMedianFloor = 0
+	opts.AbsMedianFull = 0
+	res := ScoreSamples(s, opts)
+	if res.Confidence != 1 {
+		t.Fatalf("disabled bounds must yield confidence 1, got %v", res.Confidence)
+	}
+}
+
+// TestScoreSamples_TooFewSamplesFullConfidence: the below-sample-floor
+// "static by construction" branch must not be discounted.
+func TestScoreSamples_TooFewSamplesFullConfidence(t *testing.T) {
+	s := []FrameSample{{Size: 100}, {Size: 100}, {Size: 100}}
+	res := ScoreSamples(s, DefaultOptions())
+	if res.Confidence != 1 || res.Flags[0] != "static" {
+		t.Fatalf("few-sample segment: got confidence=%v flags=%v", res.Confidence, res.Flags)
+	}
+}
+
+// TestScoreSamples_SmoothSaturationNeverPins: the 2026-09-01 exponential
+// map must never return exactly 1.0 and must stay strictly monotonic — the
+// old linear×Gain+clamp pinned everything above 25% spikes at 1.0, which is
+// exactly where night-noise vs rush-hour needed resolution.
+func TestScoreSamples_SmoothSaturationNeverPins(t *testing.T) {
+	mk := func(burst int) []FrameSample {
+		// Contiguous bursts (not lattices — the notch would flatten those).
+		s := staticSeries(600)
+		for i := 100; i < 100+burst; i++ {
+			s[i].Size = 4000
+		}
+		return s
+	}
+	prev := -1.0
+	// Burst must stay under half the series or the median itself moves
+		// (inherent to any relative metric).
+		for _, burst := range []int{15, 60, 150, 250} {
+		res := ScoreSamples(mk(burst), DefaultOptions())
+		if res.Score >= 1 {
+			t.Fatalf("burst=%d: score must stay below 1, got %v", burst, res.Score)
+		}
+		if res.Score <= prev {
+			t.Fatalf("monotonicity broken at burst=%d: %v after %v", burst, res.Score, prev)
+		}
+		prev = res.Score
+	}
+}
+
+// TestScoreSamples_PeriodicRefreshNotched reproduces the 2026-09-01 field
+// finding: a smart codec emits one 3-4x-median "P" frame every 2.0s (every
+// 20th sample at 10fps) with zero motion in the scene. The lattice is
+// isolated single frames — notched away, the segment reads static.
+func TestScoreSamples_PeriodicRefreshNotched(t *testing.T) {
+	s := staticSeries(600)
+	for i := 5; i < len(s); i += 20 {
+		s[i].Size = 4200 // isolated 5x frames on a 20-sample lattice
+	}
+	res := ScoreSamples(s, DefaultOptions())
+	if res.Flags[0] != "static" || res.Score > 0.01 {
+		// The lattice's FIRST frame has no predecessor to prove periodicity,
+		// so one spike legitimately survives the notch.
+		t.Fatalf("pure refresh lattice should read static ~0, got flags=%v score=%v", res.Flags, res.Score)
+	}
+
+	// Opt-out keeps the raw behavior for comparison.
+	opts := DefaultOptions()
+	opts.NotchPeriodic = false
+	raw := ScoreSamples(s, opts)
+	if raw.Flags[0] != "motion" {
+		t.Fatalf("without notch the lattice must classify as motion, got %v", raw.Flags)
+	}
+}
+
+// TestScoreSamples_MotionBurstNotNotched: adjacent spike runs are real
+// motion and must never be removed by the periodic notch, no matter how
+// regular the burst spacing looks under autocorrelation.
+func TestScoreSamples_MotionBurstNotNotched(t *testing.T) {
+	s := staticSeries(600)
+	for i := 100; i < 130; i++ { // one contiguous 30-frame run
+		s[i].Size = 4200
+	}
+	res := ScoreSamples(s, DefaultOptions())
+	if res.Flags[0] != "motion" || res.Score < 0.15 {
+		t.Fatalf("adjacent motion burst must survive notching, got flags=%v score=%v", res.Flags, res.Score)
 	}
 }

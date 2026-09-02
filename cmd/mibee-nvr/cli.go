@@ -312,6 +312,8 @@ func dispatchSubcommand(args []string) {
 		cmdDownloadModelFn()
 	case "merge-cameras":
 		cmdMergeCameras()
+	case "eval-replay":
+		cmdEvalReplay()
 	case "cleanup":
 		cmdCleanup()
 	}

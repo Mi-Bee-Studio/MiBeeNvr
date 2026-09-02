@@ -55,7 +55,7 @@ func TestUpdateRecordingMotionScore(t *testing.T) {
 	db := newMotionTestDB(t)
 	insertMotionTestRecording(t, db, "rec-1", 0)
 
-	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-1", 0.42, "motion,scene_cut"))
+	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-1", 0.42, 0.9, "motion,scene_cut"))
 
 	got, err := db.GetRecording(context.Background(), "rec-1")
 	require.NoError(t, err)
@@ -67,8 +67,8 @@ func TestListRecordingsMinMotionScoreFilter(t *testing.T) {
 	db := newMotionTestDB(t)
 	insertMotionTestRecording(t, db, "rec-static", 0)
 	insertMotionTestRecording(t, db, "rec-active", time.Minute)
-	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-static", 0.0, "static"))
-	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-active", 0.8, "motion"))
+	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-static", 0.0, 1.0, "static"))
+	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-active", 0.8, 1.0, "motion"))
 
 	minScore := 0.3
 	recs, err := db.ListRecordings(context.Background(), model.RecordingFilter{MinMotionScore: &minScore})
@@ -87,8 +87,8 @@ func TestListRecordingsActivityFilter(t *testing.T) {
 	db := newMotionTestDB(t)
 	insertMotionTestRecording(t, db, "rec-a", 0)
 	insertMotionTestRecording(t, db, "rec-b", time.Minute)
-	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-a", 0.0, "static"))
-	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-b", 0.9, "motion,scene_cut"))
+	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-a", 0.0, 1.0, "static"))
+	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-b", 0.9, 1.0, "motion,scene_cut"))
 
 	recs, err := db.ListRecordings(context.Background(), model.RecordingFilter{Activity: "static"})
 	require.NoError(t, err)
@@ -109,9 +109,9 @@ func TestListOldestRecordingsMotionAware_BoringFirst(t *testing.T) {
 	insertMotionTestRecording(t, db, "old-active", 3*time.Hour)
 	insertMotionTestRecording(t, db, "mid-unanalyzed", 2*time.Hour)
 	insertMotionTestRecording(t, db, "new-static", time.Hour)
-	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "old-active", 0.9, "motion"))
+	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "old-active", 0.9, 1.0, "motion"))
 	// mid-unanalyzed stays -1 (neutral rank 0.5)
-	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "new-static", 0.0, "static"))
+	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "new-static", 0.0, 1.0, "static"))
 
 	recs, err := db.ListOldestRecordingsMotionAware(context.Background(), 3)
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestListOldestRecordingsMotionAware_BoringFirst(t *testing.T) {
 func TestTimelineSegmentsCarryMotionScore(t *testing.T) {
 	db := newMotionTestDB(t)
 	insertMotionTestRecording(t, db, "rec-tl", 0)
-	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-tl", 0.66, "motion"))
+	require.NoError(t, db.UpdateRecordingMotionScore(context.Background(), "rec-tl", 0.66, 1.0, "motion"))
 
 	segs, total, err := db.ListRecordingTimelineSegments(context.Background(), model.RecordingFilter{})
 	require.NoError(t, err)
@@ -148,14 +148,14 @@ func TestMergePropagatesMotionScore(t *testing.T) {
 
 	// Two analyzed sources: 30s @ 0.2 static + 60s @ 0.8 motion.
 	insertMotionTestRecording(t, db, "src-a", 2*time.Minute)
-	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "src-a", 0.2, "static"))
+	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "src-a", 0.2, 1.0, "static"))
 	r, err := db.GetRecording(ctx, "src-a")
 	require.NoError(t, err)
 	r.Duration = 30
 	require.NoError(t, db.UpdateRecording(ctx, r))
 
 	insertMotionTestRecording(t, db, "src-b", time.Minute)
-	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "src-b", 0.8, "motion,scene_cut"))
+	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "src-b", 0.8, 1.0, "motion,scene_cut"))
 	r, err = db.GetRecording(ctx, "src-b")
 	require.NoError(t, err)
 	r.Duration = 60
@@ -183,7 +183,7 @@ func TestRollingMergePropagatesMotionScore(t *testing.T) {
 
 	// Bucket create from one analyzed + one unanalyzed source.
 	insertMotionTestRecording(t, db, "rs-1", 2*time.Minute)
-	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "rs-1", 0.6, "motion"))
+	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "rs-1", 0.6, 1.0, "motion"))
 	r, _ := db.GetRecording(ctx, "rs-1")
 	r.Duration = 30
 	require.NoError(t, db.UpdateRecording(ctx, r))
@@ -204,7 +204,7 @@ func TestRollingMergePropagatesMotionScore(t *testing.T) {
 
 	// Append: 60s of 0.6 existing + 30s of 0.3 new → (0.6*60+0.3*30)/90 = 0.5.
 	insertMotionTestRecording(t, db, "rs-3", 0)
-	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "rs-3", 0.3, "static"))
+	require.NoError(t, db.UpdateRecordingMotionScore(ctx, "rs-3", 0.3, 1.0, "static"))
 	r, _ = db.GetRecording(ctx, "rs-3")
 	r.Duration = 30
 	require.NoError(t, db.UpdateRecording(ctx, r))

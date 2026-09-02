@@ -26,6 +26,10 @@ type SegmentCompleted struct {
 	EndedAt     string `json:"ended_at"`
 	FileSize    int64  `json:"file_size"`
 	RecordingID string `json:"recording_id"`
+	// Layer marks the recording tier (#637): 0 = main, 1 = continuous
+	// sub-stream (tiered). Consumers that only handle main-stream segments
+	// (Vision push) filter on it; the motion analyzer scores both.
+	Layer int `json:"layer,omitempty"`
 }
 
 // SegmentDeleted is published when a recording segment is deleted (retention

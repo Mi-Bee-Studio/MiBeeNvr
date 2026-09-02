@@ -85,6 +85,8 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.CascadeEnabled = cam.CascadeEnabled
 		row.RecordingSchedule = cam.RecordingSchedule
 		row.RecordingMode = cam.RecordingMode
+		row.RecordingTier = cam.RecordingTier
+		row.Pixgate = cam.Pixgate
 		row.Adaptive = cam.Adaptive
 		if cam.Protocol == "gb28181" {
 			gb := cam.GB28181
@@ -384,6 +386,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
 		// Validated at this boundary with the startup rules (#402 class).
 		RecordingMode *string                         `json:"recording_mode"`
+		RecordingTier *string                         `json:"recording_tier"`
+		Pixgate       *config.CameraPixgateConfig     `json:"pixgate"`
 		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Audio trigger (#478): loudness input for adaptive recording.
 		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
@@ -469,6 +473,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		CascadeSubStream:       body.CascadeSubStream,
 		RecordingSchedule:      body.RecordingSchedule,
 		RecordingMode:          body.RecordingMode,
+		RecordingTier:          body.RecordingTier,
+		Pixgate:                body.Pixgate,
 		Adaptive:               body.Adaptive,
 		AudioTrigger:           body.AudioTrigger,
 		StreamKey:              body.StreamKey,

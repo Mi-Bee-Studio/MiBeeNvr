@@ -17,6 +17,7 @@ const (
 	TopicAIVehicle            = "ai.detection.vehicle"
 	TopicAIAnimal             = "ai.detection.animal"
 	TopicAIEventCreated       = "ai.event.created"
+	TopicPixgateActivity      = "pixgate.activity"
 	// TopicCameraAdded is published when a camera is created — both via the
 	// manual add path (source="manual") and the auto-discover engine
 	// (source="auto"). Payload: map[string]any{camera_id, name, endpoint,

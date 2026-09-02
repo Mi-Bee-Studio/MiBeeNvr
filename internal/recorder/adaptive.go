@@ -48,6 +48,27 @@ type AdaptiveConfig struct {
 	TimelapseInterval time.Duration // keyframe cadence while sparse
 	SpikeFactor       float64       // MAD-floored deviations above baseline = spike
 	MaxGOPBuffer      int64         // byte cap of the retained GOP ring
+	// NoiseFloorBytes is an ABSOLUTE per-frame byte floor (#635): a P-frame
+	// smaller than this can never be an exit-worthy spike, no matter how big
+	// it looks relative to an equally starved baseline. Guards cameras whose
+	// encoder crushes its bitrate (night mode, rate-control collapse) where
+	// the purely relative metric fires on jitter. 0 = disabled.
+	NoiseFloorBytes float64
+	// AutoNoiseFloor self-calibrates NoiseFloorBytes from TIMELAPSE dwell
+	// (#635): sparse-mode frames are known-static by construction, so their
+	// statistics reveal the camera's own noise level. The learned floor
+	// engages ONLY on bitrate-starved streams (TL-ring p50 < 2KB — the regime
+	// where rate-control jitter dominates), as min(p99×1.25, p50×8); healthy
+	// streams keep the legacy relative-only semantics unchanged. Default
+	// true; the zero value in hand-built configs means off (tests).
+	AutoNoiseFloor bool
+	// NoVideoExit disables the video-spike exit path (#638) — "resident
+	// timelapse": the camera stays sparse through video noise (rain, water
+	// glare, swaying foliage) and only audio events or external semantic
+	// triggers (trigger API / pixgate) can resume full-rate. Zero value =
+	// video exits enabled (legacy behavior); the resolver maps
+	// adaptive.video_exit: false onto it.
+	NoVideoExit bool
 	// AmbientArchive additionally keeps the raw G.711 stream as a sidecar file
 	// beside each segment for post-production (only meaningful with
 	// AmbientAudio; default off).
@@ -81,7 +102,9 @@ func DefaultAdaptiveConfig() AdaptiveConfig {
 		// overflows it, breaking the ring — the next timelapse exit then
 		// flushes nothing and its P-frames land with dangling references
 		// ("Could not find ref with POC" at decode, issue #485 field data).
-		MaxGOPBuffer: 32 << 20, // ≈ 75s @ 3.5Mbps — above a 30s GOP at 2K
+		MaxGOPBuffer:   32 << 20, // ≈ 75s @ 3.5Mbps — above a 30s GOP at 2K
+		AutoNoiseFloor: true,
+		NoVideoExit:    false,
 	}
 }
 
@@ -139,6 +162,13 @@ type adaptiveTracker struct {
 	// single spike (better to over-record than to miss an event start).
 	recentSpikes []time.Time
 
+	// Absolute noise floor (#635). tlSizes is a ring of P-frame byte sizes
+	// observed while in TIMELAPSE (known-static by construction); its p99
+	// ×1.25 (capped at 4× median) yields tlFloor, the self-calibrated ceiling
+	// below which a "spike" is the camera's own noise, not activity.
+	tlSizes []float64
+	tlFloor float64
+
 	// Sparse-mode write cadence.
 	lastSparseWrite time.Time
 
@@ -158,6 +188,7 @@ type adaptiveTracker struct {
 	audioLastLoud time.Time
 	audioSeq      uint64
 	audioSeqSeen  uint64
+	audioSource   string // "audio" (default) | "pixel" (#636) | "external"
 
 	transitions int // diagnostics: mode switches observed
 }
@@ -181,11 +212,62 @@ func newAdaptiveTracker(cfg AdaptiveConfig, camID string, log *slog.Logger) *ada
 		cfg:       cfg,
 		log:       log.With("component", "adaptive", "camera_id", camID),
 		pSizes:    make([]float64, 0, adaptivePWindow),
+		tlSizes:   make([]float64, 0, adaptivePWindow),
 		calmSince: time.Now(),
 	}
 }
 
+// noiseFloor is the effective absolute byte floor applied to spike
+// classification: max(explicit config floor, self-calibrated TL floor).
+func (t *adaptiveTracker) noiseFloor() float64 {
+	f := t.cfg.NoiseFloorBytes
+	if t.tlFloor > f {
+		f = t.tlFloor
+	}
+	return f
+}
+
+// adaptiveStarvedMedianBytes is the TIMELAPSE-dwell median below which a
+// stream is considered bitrate-starved (#635): below ~2KB per P-frame the
+// encoder's rate-control jitter dominates any separable activity signal, so
+// the self-calibrated floor engages. Above it, healthy streams keep the
+// legacy purely-relative semantics — zero behavior change by default, and
+// rain/glare separation on healthy streams is pixgate's job (#636), not the
+// compressed-domain gate's.
+const adaptiveStarvedMedianBytes = 2048
+
+// learnTlFloor recomputes the self-calibrated noise floor from the TIMELAPSE
+// dwell ring (#635). Called from the baseline recompute path (every ~2s) on
+// the video goroutine. Needs adaptiveAutoFloorMinSamples samples (~12s @
+// 20fps) before it engages, and only engages on bitrate-starved streams
+// (TL-ring p50 < adaptiveStarvedMedianBytes): there the floor is
+// min(p99×1.25, p50×8) — the ring's own noise ceiling, runaway-capped at 8×
+// its static level so the floor can never swallow what little real signal a
+// starved stream still carries.
+func (t *adaptiveTracker) learnTlFloor() {
+	if !t.cfg.AutoNoiseFloor || len(t.tlSizes) < adaptiveAutoFloorMinSamples {
+		return
+	}
+	s := append([]float64(nil), t.tlSizes...)
+	sort.Float64s(s)
+	p50 := s[len(s)/2]
+	if p50 >= adaptiveStarvedMedianBytes {
+		t.tlFloor = 0
+		return
+	}
+	p99 := s[int(float64(len(s)-1)*0.99)]
+	floor := p99 * 1.25
+	if capAt := p50 * 8; floor > capAt {
+		floor = capAt
+	}
+	t.tlFloor = floor
+}
+
 const adaptivePWindow = 1200 // rolling baseline samples (~60s @ 20fps)
+
+// adaptiveAutoFloorMinSamples is the TIMELAPSE-dwell sample count required
+// before the self-calibrated noise floor engages (#635): ~12s @ 20fps.
+const adaptiveAutoFloorMinSamples = 240
 
 const (
 	// adaptiveBurstWindow is how close two P-frame spikes must be to count as
@@ -223,6 +305,21 @@ func (t *adaptiveTracker) observe(nalu []byte, isIDR bool, now time.Time) (spike
 	t.appendGOP(nalu, isIDR, now)
 	if !isIDR {
 		spike = t.classify(size, now)
+		// Absolute noise floor (#635): a spike below the floor is the
+		// camera's own noise (starved bitrate / rate-control jitter), never
+		// an exit signal. The baseline above already ingested the sample, so
+		// the relative statistics stay honest.
+		if spike && t.noiseFloor() > 0 && float64(size) < t.noiseFloor() {
+			spike = false
+		}
+		// TIMELAPSE dwell = known-static window: feed the self-calibration
+		// ring (#635) regardless of the spike verdict.
+		if t.mode == adaptiveTimelapse {
+			t.tlSizes = append(t.tlSizes, float64(size))
+			if len(t.tlSizes) > adaptivePWindow {
+				t.tlSizes = t.tlSizes[len(t.tlSizes)-adaptivePWindow:]
+			}
+		}
 		if spike {
 			t.recordSpike(now)
 		}
@@ -240,8 +337,10 @@ func (t *adaptiveTracker) observe(nalu []byte, isIDR bool, now time.Time) (spike
 		// Only a spike BURST (clustered oversized P-frames) counts as motion
 		// and resets the calm accumulation; an isolated spike is encoder
 		// noise and must not keep a static camera recording at full rate
-		// forever (issue #466).
-		if spike && t.spikeBurst(now) {
+		// forever (issue #466). With VideoExit disabled (#638) the video
+		// signal never defers entry — the camera is resident-sparse and only
+		// audio/external triggers matter.
+		if spike && !t.cfg.NoVideoExit && t.spikeBurst(now) {
 			t.calmSince = now
 		}
 		// Entering TIMELAPSE requires BOTH the video signal and the audio to
@@ -262,11 +361,14 @@ func (t *adaptiveTracker) observe(nalu []byte, isIDR bool, now time.Time) (spike
 		// immediately. Real motion always clusters, so the burst path covers
 		// it. A loud-audio event (issue #478) exits ungated — sound IS the
 		// signal, and over-recording beats missing the event.
+		// With VideoExit disabled (#638) this whole path is inert: resident
+		// timelapse through rain/glare/foliage; audio + external triggers
+		// remain the only exits.
 		if audioEvent {
 			t.calmSince = now
 			flush = t.takeGOP()
-			t.setMode(adaptiveNormal, now, "audio")
-		} else if spike && (t.spikeBurst(now) || t.majorSpike(size)) {
+			t.setMode(adaptiveNormal, now, t.triggerSource())
+		} else if spike && !t.cfg.NoVideoExit && (t.spikeBurst(now) || t.majorSpike(size)) {
 			// The exit itself is evidence of activity, so a fresh CalmThreshold
 			// window is required before re-entering TIMELAPSE (prevents spike →
 			// exit → instant re-entry oscillation, since the entry reset does
@@ -284,9 +386,17 @@ func (t *adaptiveTracker) observe(nalu []byte, isIDR bool, now time.Time) (spike
 // (semantic events carry their own confidence window). Thread-safe: called
 // from the audio callback or an API handler goroutine.
 func (t *adaptiveTracker) audioLoud(at time.Time, hold time.Duration) {
+	t.audioLoudSrc(at, hold, "audio")
+}
+
+// audioLoudSrc is audioLoud with an explicit trigger source — "pixel" for
+// the pixgate CV gate (#636), "external" for the semantic trigger API — so
+// the mode-switch log attributes the exit correctly.
+func (t *adaptiveTracker) audioLoudSrc(at time.Time, hold time.Duration, source string) {
 	t.audioMu.Lock()
 	t.audioLastLoud = at.Add(hold)
 	t.audioSeq++
+	t.audioSource = source
 	t.audioMu.Unlock()
 }
 
@@ -295,6 +405,17 @@ func (t *adaptiveTracker) audioSnapshot() (lastLoud time.Time, seq uint64) {
 	t.audioMu.Lock()
 	defer t.audioMu.Unlock()
 	return t.audioLastLoud, t.audioSeq
+}
+
+// triggerSource reads the source recorded with the latest audioLoudSrc event
+// (default "audio") for the mode-switch log attribution.
+func (t *adaptiveTracker) triggerSource() string {
+	t.audioMu.Lock()
+	defer t.audioMu.Unlock()
+	if t.audioSource == "" {
+		return "audio"
+	}
+	return t.audioSource
 }
 
 // recordSpike appends a spike timestamp, trimming entries outside the burst
@@ -429,6 +550,7 @@ func (t *adaptiveTracker) classify(size int, now time.Time) bool {
 	// across a 2s window).
 	if now.Sub(t.lastCalc) >= 2*time.Second && len(t.pSizes) >= 24 {
 		t.recomputeBaseline()
+		t.learnTlFloor() // #635: self-calibrate the absolute noise floor
 		t.lastCalc = now
 	}
 	if t.median <= 0 {
@@ -484,7 +606,9 @@ func (t *adaptiveTracker) setMode(m adaptiveMode, now time.Time, reason string) 
 		"mode", m.String(), "reason", reason,
 		"transitions", t.transitions,
 		"calm_threshold", t.cfg.CalmThreshold.String(),
-		"timelapse_interval", t.cfg.TimelapseInterval.String())
+		"timelapse_interval", t.cfg.TimelapseInterval.String(),
+		"noise_floor_bytes", int64(t.noiseFloor()),
+		"video_exit", !t.cfg.NoVideoExit)
 }
 
 // AdaptiveFrame is one retained GOP frame exposed to plugin-style recorders
@@ -563,6 +687,12 @@ func (g *AdaptiveGate) AudioLoud(at time.Time, hold time.Duration) {
 	g.t.audioLoud(at, hold)
 }
 
+// PixelLoud injects a pixgate CV activity confirmation (#636) — same state
+// machine path as AudioLoud, attributed as reason=pixel.
+func (g *AdaptiveGate) PixelLoud(at time.Time, hold time.Duration) {
+	g.t.audioLoudSrc(at, hold, "pixel")
+}
+
 // MarkLastWritten records that the most recently observed frame was
 // successfully written to the current segment, so a later timelapse-exit
 // flush skips it (issue #473). Callers invoke it after a successful muxer
@@ -580,25 +710,49 @@ func (g *AdaptiveGate) ClearWritten() {
 	g.t.clearWritten()
 }
 
+// AdaptiveOverrides carries the optional per-camera adaptive tuning exactly
+// as parsed from config (zero values = "use the default"). Struct form keeps
+// the resolver signature stable as knobs are added (#635/#638).
+type AdaptiveOverrides struct {
+	CalmThreshold     string
+	TimelapseInterval string
+	SpikeFactor       float64
+	GOPBufferBytes    int64
+	AmbientAudio      bool
+	AmbientArchive    bool
+	NoiseFloorBytes   float64 // 0 = no explicit floor
+	AutoNoiseFloor    *bool   // nil = default (true)
+	VideoExit         *bool   // nil = default (true)
+}
+
 // ResolveAdaptiveConfig builds a resolved AdaptiveConfig from optional
 // overrides, defaulting unset fields. Shared by the camera-manager factory
 // (RTSP/ONVIF paths) and plugin-style recorders (Xiaomi) so both resolve
 // identically. String durations follow the frame_watchdog_timeout convention.
-func ResolveAdaptiveConfig(calmThreshold, timelapseInterval string, spikeFactor float64, gopBufferBytes int64, ambientAudio, ambientArchive bool) AdaptiveConfig {
+func ResolveAdaptiveConfig(ov AdaptiveOverrides) AdaptiveConfig {
 	ac := DefaultAdaptiveConfig()
-	if d, err := time.ParseDuration(calmThreshold); err == nil && d > 0 {
+	if d, err := time.ParseDuration(ov.CalmThreshold); err == nil && d > 0 {
 		ac.CalmThreshold = d
 	}
-	if d, err := time.ParseDuration(timelapseInterval); err == nil && d > 0 {
+	if d, err := time.ParseDuration(ov.TimelapseInterval); err == nil && d > 0 {
 		ac.TimelapseInterval = d
 	}
-	if spikeFactor > 0 {
-		ac.SpikeFactor = spikeFactor
+	if ov.SpikeFactor > 0 {
+		ac.SpikeFactor = ov.SpikeFactor
 	}
-	if gopBufferBytes > 0 {
-		ac.MaxGOPBuffer = gopBufferBytes
+	if ov.GOPBufferBytes > 0 {
+		ac.MaxGOPBuffer = ov.GOPBufferBytes
 	}
-	ac.AmbientAudio = ambientAudio
-	ac.AmbientArchive = ambientArchive
+	ac.AmbientAudio = ov.AmbientAudio
+	ac.AmbientArchive = ov.AmbientArchive
+	if ov.NoiseFloorBytes > 0 {
+		ac.NoiseFloorBytes = ov.NoiseFloorBytes
+	}
+	if ov.AutoNoiseFloor != nil {
+		ac.AutoNoiseFloor = *ov.AutoNoiseFloor
+	}
+	if ov.VideoExit != nil {
+		ac.NoVideoExit = !*ov.VideoExit
+	}
 	return ac
 }

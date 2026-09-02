@@ -270,7 +270,7 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 	}
 
 	// Merge.
-	stats, err := MergeMP4Segments(ctx, infos, tempPath, r.resolveTimelapseCadence(cameraID))
+	stats, err := MergeMP4Segments(ctx, infos, tempPath, r.resolveTimelapseCadence(cameraID), r.resolveTimelapseGap(cameraID))
 	if err != nil {
 		os.Remove(tempPath)
 		// Mark these as incompatible so we don't retry forever.

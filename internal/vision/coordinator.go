@@ -162,7 +162,9 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	}
 	// Feed the sub-layer's recording-id join regardless of push outcome — a
 	// later sub segment must still map onto the covering main recording.
-	if c.subLayer != nil {
+	// (Only main-layer segments define the join anchor; tierrec layer=1
+	// segments reference their own rows.)
+	if c.subLayer != nil && seg.Layer == model.LayerMain {
 		c.subLayer.NoteMainSegment(seg.CameraID, seg.RecordingID)
 	}
 	if !c.health.IsHealthy() {
@@ -185,6 +187,39 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	// 消费者心跳声明的跳单(#515):与静态配置取并集生效。
 	if c.health.SkipCamera(seg.CameraID) {
 		slog.Debug("vision push skipped by consumer-reported skip list",
+			"camera_id", seg.CameraID,
+			"recording_id", seg.RecordingID)
+		return
+	}
+	// 分层录制相机 (#637): 分析输入改由 tierrec 子层段(layer=1,60s 低清连续)
+	// 提供,主流段(稀疏 TL/全速)不再推送——让位语义与 #514 子流分析层相同。
+	tiered := vcfg.TieredCameraSet()[seg.CameraID]
+	if seg.Layer == model.LayerSub {
+		if !tiered {
+			slog.Debug("vision push skipped — sub-layer segment of a non-tiered camera",
+				"camera_id", seg.CameraID,
+				"recording_id", seg.RecordingID)
+			return
+		}
+		// tierrec 子层段直接推送(它是正式录像行,路径由 storageRoot 解析)。
+		absPath := seg.FilePath
+		if !filepath.IsAbs(absPath) {
+			absPath = filepath.Join(c.storageRoot(), absPath)
+		}
+		c.uploadSegment(ctx, absPath, seg.FileSize, map[string]string{
+			"X-Recording-Id": seg.RecordingID,
+			"X-Camera-Id":    seg.CameraID,
+			"X-Format":       seg.Format,
+			"X-Encoding":     seg.Encoding,
+			"X-Started-At":   seg.StartedAt,
+			"X-Ended-At":     seg.EndedAt,
+			"X-File-Size":    strconv.FormatInt(seg.FileSize, 10),
+			"X-Layer":        "sub",
+		})
+		return
+	}
+	if tiered {
+		slog.Debug("vision push skipped — camera served by tierrec sub layer",
 			"camera_id", seg.CameraID,
 			"recording_id", seg.RecordingID)
 		return
@@ -219,6 +254,13 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 // uploadSegment POSTs a segment file's bytes to Vision. Headers carry the
 // metadata (Vision's minimal HTTP parser can't do chunked encoding — Content-
 // Length is set explicitly). Returns true on a 2xx response.
+//
+// Content-Length MUST come from the file on disk, never from the event's
+// FileSize: producers count only media bytes while the muxer appends the moov
+// box at close (tierrec's 60s sub segments carry a constant ~10 KB moov), and
+// a short Content-Length against a longer body aborts the transfer client-
+// side ("ContentLength=X with Body length Y" — field data 2026-09-02: 530
+// consecutive tiered-push losses before this was found).
 func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSize int64, hdr map[string]string) bool {
 	file, err := os.Open(absPath)
 	if err != nil {
@@ -229,6 +271,16 @@ func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSiz
 	}
 	defer file.Close()
 
+	st, err := file.Stat()
+	if err != nil {
+		slog.Warn("stat segment file for push failed",
+			"error", err,
+			"path", absPath)
+		return false
+	}
+	realSize := st.Size()
+	hdr["X-File-Size"] = strconv.FormatInt(realSize, 10)
+
 	url := strings.TrimRight(c.cfg().URL, "/") + "/vision/segment/upload"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, file)
 	if err != nil {
@@ -236,7 +288,7 @@ func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSiz
 		return false
 	}
 	// 显式设置 Content-Length,避免 Go 使用 chunked encoding(Vision 的极简 HTTP 解析器不支持 chunked)。
-	req.ContentLength = fileSize
+	req.ContentLength = realSize
 	req.Header.Set("Content-Type", "application/octet-stream")
 	for k, v := range hdr {
 		req.Header.Set(k, v)
@@ -259,7 +311,7 @@ func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSiz
 	}
 	slog.Info("pushed video to vision",
 		"camera_id", hdr["X-Camera-Id"],
-		"size_mb", fileSize/1024/1024)
+		"size_mb", realSize/1024/1024)
 	return true
 }
 

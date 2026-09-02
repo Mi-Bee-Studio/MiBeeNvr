@@ -66,8 +66,14 @@ type Recording struct {
 	// means the analyzer has not processed this recording yet — cleanup
 	// ordering treats unanalyzed as neutral. ActivityFlags is a comma-separated
 	// vocabulary: "static", "motion", "scene_cut".
-	MotionScore   float64 `json:"motion_score"`
-	ActivityFlags string  `json:"activity_flags,omitempty"`
+	MotionScore float64 `json:"motion_score"`
+	// MotionConfidence (issue #634) discounts MotionScore on absolute-size
+	// grounds: the spike metric is purely relative, so a bitrate-starved
+	// segment (encoder jitter dominating) gets Confidence→0. Consumers rank
+	// or display score × confidence. MotionConfidenceUnanalyzed (-1) marks
+	// pre-v634 rows and segments below the analyzer's sample floor.
+	MotionConfidence float64 `json:"motion_confidence"`
+	ActivityFlags    string  `json:"activity_flags,omitempty"`
 	// TimelineMap (#496) is set on rolling-merge products whose sparse
 	// timelapse dwells were compressed to a fast cadence: compact JSON
 	// "[[wallSec,fileSec],...]" breakpoints mapping the recording's
@@ -75,11 +81,18 @@ type Recording struct {
 	// wall-clock seeks (?at=, day-timeline clicks) through it; empty for
 	// uncompressed recordings (identity mapping).
 	TimelineMap string `json:"timeline_map,omitempty"`
+	// Layer marks the recording tier (#637): LayerMain (0, default) = main-stream
+	// recording; LayerSub (1) = continuous sub-stream recording (tiered mode).
+	Layer int `json:"layer,omitempty"`
 }
 
 // MotionScoreUnanalyzed marks a recording the motion analyzer has not scored
 // yet (DB default). Distinct from 0 (analyzed, fully static).
 const MotionScoreUnanalyzed = -1.0
+
+// MotionConfidenceUnanalyzed marks rows scored before the confidence column
+// existed (schema < v34) — consumers treat it as full confidence (1.0).
+const MotionConfidenceUnanalyzed = -1.0
 
 // Motion activity flag vocabulary (recordings.activity_flags).
 const (
@@ -127,14 +140,15 @@ type TimelapseMerge struct {
 // duration (fallback when ended_at is null on the in-progress last segment),
 // format (color band), merge_status (pending "(N ⚠)" counter).
 type TimelineSegment struct {
-	ID          string    `json:"id"`
-	CameraID    string    `json:"camera_id"`
-	StartedAt   time.Time `json:"started_at"`
-	EndedAt     time.Time `json:"ended_at"`
-	Duration    float64   `json:"duration"`
-	Format      Format    `json:"format"`
-	MergeStatus string    `json:"merge_status"`
-	MotionScore float64   `json:"motion_score"`
+	ID               string    `json:"id"`
+	CameraID         string    `json:"camera_id"`
+	StartedAt        time.Time `json:"started_at"`
+	EndedAt          time.Time `json:"ended_at"`
+	Duration         float64   `json:"duration"`
+	Format           Format    `json:"format"`
+	MergeStatus      string    `json:"merge_status"`
+	MotionScore      float64   `json:"motion_score"`
+	MotionConfidence float64   `json:"motion_confidence"`
 }
 
 type Segment struct {
@@ -173,6 +187,9 @@ type RecordingFilter struct {
 	// MinMotionScore filters to recordings with motion_score >= the value
 	// (issue #435). nil = no filter. Unanalyzed recordings (score -1) never pass.
 	MinMotionScore *float64
+	// Layer selects the recording tier (#637): nil = main only (default — sub
+	// rows stay out of lists, timeline, merge and push); 0/1 = that exact layer.
+	Layer *int
 	// Activity filters by activity_flags membership (e.g. "static", "motion",
 	// "scene_cut"). Empty = no filter.
 	Activity string
@@ -451,3 +468,14 @@ type CameraHealth struct {
 	Score         int       `json:"score"`
 	ScoreFactors  []string  `json:"score_factors,omitempty"`
 }
+
+// Recording layers (#637, dual-stream tiered recording).
+const (
+	// LayerMain is the default tier: recordings from the camera's main stream.
+	LayerMain = 0
+	// LayerSub marks continuous sub-stream recordings (recording_tier:
+	// tiered). They are excluded from the default recordings list, rolling
+	// merge, and Vision push; playback and retention treat them like any
+	// other recording.
+	LayerSub = 1
+)

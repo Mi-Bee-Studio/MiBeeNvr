@@ -89,11 +89,28 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 				continue
 			}
 
+			// Skip non-main layers — tierrec sub-layer segments (#637) are
+			// standalone 60s archives on the sub-stream, never merge inputs.
+			// (Field bug 2026-09-01: without this the live bucket consumed
+			// every sub segment, splicing 480p frames into 2.5K merged output
+			// and deleting the sub rows/files.)
+			if sc.Layer != model.LayerMain {
+				continue
+			}
+
 			// Parse the segment's startedAt time for window calculation.
+			// (below) endedAt prefers the event's real end time — time.Now() inflated
+			// offline-compensation replays of old segments to hours of phantom wall
+			// time and desynced the row's wall axis (#496 append-fix, 2026-09-01).
 			startedAt, err := time.Parse(time.RFC3339Nano, sc.StartedAt)
 			if err != nil {
 				// Fallback: use now.
 				startedAt = time.Now()
+			}
+
+			endedAt := time.Now()
+			if t, perr := time.Parse(time.RFC3339Nano, sc.EndedAt); perr == nil && t.After(startedAt) {
+				endedAt = t
 			}
 
 			seg := pendingSegmentInfo{
@@ -102,7 +119,7 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 				format:      sc.Format,
 				cameraID:    sc.CameraID,
 				startedAt:   startedAt,
-				endedAt:     time.Now(),
+				endedAt:     endedAt,
 				fileSize:    sc.FileSize,
 			}
 
@@ -407,6 +424,9 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 		bucket.audioKey = ""
 		bucket.segmentCount = 0
 		bucket.mergedFileSize = 0
+		bucket.wallDurSec = 0
+		bucket.fileDurSec = 0
+		bucket.wallFile = nil
 		bucket.windowStart = windowStart
 		bucket.windowEnd = windowEnd
 	}
@@ -419,7 +439,7 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 		// First segment in this bucket — create the bucket file by merging
 		// the single segment (this normalizes it into the bucket format and
 		// creates the DB row that future appends will UPDATE).
-		outputPath, mergedRecID, err = r.createBucket(ctx, seg, newInfo)
+		outputPath, mergedRecID, err = r.createBucket(ctx, seg, newInfo, bucket)
 	} else {
 		// Append to existing bucket: merge [bucketFile + newSegment].
 		outputPath, mergedRecID, err = r.appendToBucket(ctx, seg, newInfo, bucket)
@@ -435,7 +455,10 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 			bucket.audioKey = ""
 			bucket.segmentCount = 0
 			bucket.mergedFileSize = 0
-			outputPath, mergedRecID, err = r.createBucket(ctx, seg, newInfo)
+			bucket.wallDurSec = 0
+			bucket.fileDurSec = 0
+			bucket.wallFile = nil
+			outputPath, mergedRecID, err = r.createBucket(ctx, seg, newInfo, bucket)
 		}
 	}
 

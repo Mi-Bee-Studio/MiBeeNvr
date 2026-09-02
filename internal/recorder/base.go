@@ -844,6 +844,18 @@ func (b *baseRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) error
 	return nil
 }
 
+// PixelTriggerEvent injects a pixel-domain activity confirmation from the
+// pixgate CV gate (issue #636): same exit path as the audio trigger (TL
+// exit + GOP flush + entry deferral), logged with reason=pixel so field
+// data can attribute exits correctly.
+func (b *baseRecorder) PixelTriggerEvent(at time.Time, hold time.Duration) error {
+	if b.adaptive == nil {
+		return fmt.Errorf("camera %s is not in adaptive recording mode", b.cfg.CameraID)
+	}
+	b.adaptive.audioLoudSrc(at, hold, "pixel")
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Segment lifecycle (shared)
 // ---------------------------------------------------------------------------

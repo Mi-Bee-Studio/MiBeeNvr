@@ -293,6 +293,7 @@ func (h *Handler) sendGB28181PTZ(w http.ResponseWriter, channelID, direction str
 
 func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
+	h.suppressPTZMotion(cameraID)
 	var req struct {
 		Mode string  `json:"mode"`
 		Pan  float64 `json:"pan"`
@@ -344,6 +345,7 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
+	h.suppressPTZMotion(cameraID)
 	if h.cameraProtocol(r, cameraID) == "gb28181" {
 		h.handleGB28181PTZStop(w, r, cameraID)
 		return
@@ -493,6 +495,7 @@ func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
+	h.suppressPTZMotion(cameraID)
 	token := chi.URLParam(r, "token")
 	if h.cameraProtocol(r, cameraID) == "gb28181" {
 		h.handleGB28181PTZGoToPreset(w, r, cameraID, token)

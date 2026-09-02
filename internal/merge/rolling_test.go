@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1333,4 +1334,196 @@ func TestRollingMerge_StopJoinsGoroutines(t *testing.T) {
 	buf := make([]byte, 1<<18)
 	n := runtime.Stack(buf, true)
 	t.Errorf("goroutine leak after Stop: RollingMergeCoordinator goroutine still alive. Stacks:\n%s", buf[:n])
+}
+
+// ---------------------------------------------------------------------------
+// TestRollingMerge_IgnoresSubLayerSegments — tierrec's 60s sub-layer archives
+// (Layer=LayerSub) must never enter the live merge pipeline. Field bug
+// 2026-09-01: the live event dispatch only filtered the timelapse format, so
+// every sub segment was consumed into the main-layer bucket — splicing 480p
+// frames into 2.5K merged output and deleting the sub rows/files.
+// ---------------------------------------------------------------------------
+
+func TestRollingMerge_IgnoresSubLayerSegments(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	r := newTestRollingCoordinator(env, cfg, bus)
+	require.NoError(t, r.Start(context.Background()))
+	defer r.Stop()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+
+	// A tierrec sub-layer segment: real file + row carrying Layer=LayerSub.
+	subCam := "cam-sub"
+	tempPath, finalPath, err := env.store.CreateSegment(subCam, "h264")
+	require.NoError(t, err)
+	segDir := filepath.Dir(tempPath)
+	segFile := createTestH264Segment(t, segDir)
+	data, err := os.ReadFile(segFile)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(tempPath, data, 0o644))
+	os.Remove(segFile)
+	require.NoError(t, env.store.CloseSegment(tempPath, finalPath))
+	fi, err := os.Stat(finalPath)
+	require.NoError(t, err)
+	rec := &model.Recording{
+		ID:         "rec-sub-1",
+		CameraID:   subCam,
+		FilePath:   finalPath,
+		Format:     model.FormatH264,
+		StartedAt:  now,
+		EndedAt:    now.Add(60 * time.Second),
+		Duration:   60,
+		FileSize:   fi.Size(),
+		FrameCount: 2,
+		Layer:      model.LayerSub,
+	}
+	require.NoError(t, env.db.InsertRecording(ctx, rec))
+
+	// The exact event shape tierrec publishes (Layer=LayerSub).
+	bus.Publish(ctx, event.TopicSegmentCompleted, event.SegmentCompleted{
+		CameraID:    subCam,
+		FilePath:    finalPath,
+		Format:      "h264",
+		Encoding:    "h264",
+		StartedAt:   now.Format(time.RFC3339Nano),
+		EndedAt:     time.Now().Format(time.RFC3339Nano),
+		RecordingID: "rec-sub-1",
+		Layer:       model.LayerSub,
+	})
+
+	// Positive control: a main-layer segment on another camera must merge —
+	// proves the event loop is live, so the sub-layer silence below is the
+	// filter working, not a dead loop.
+	mainCam := "cam-main"
+	mainPath := createAndInsertSegment(t, env, "rec-main-1", mainCam, now)
+	publishSegmentCompleted(t, bus, mainCam, "rec-main-1", mainPath, "h264", now)
+	waitForBucketStable(t, r, mainCam, 1, 5*time.Second)
+
+	// Ample time past the 50ms debounce for a (wrong) sub-layer pickup.
+	time.Sleep(300 * time.Millisecond)
+	if _, ok := r.buckets.Load(subCam); ok {
+		t.Fatal("live rolling merge must never form a bucket from sub-layer segments")
+	}
+	got, err := env.db.GetRecording(ctx, "rec-sub-1")
+	require.NoError(t, err)
+	require.Equal(t, model.MergeStatusPending, got.MergeStatus, "sub-layer row must stay pending")
+	require.Equal(t, model.LayerSub, got.Layer, "sub-layer row must keep its layer")
+	_, err = os.Stat(finalPath)
+	require.NoError(t, err, "sub-layer file must not be consumed")
+}
+
+// ---------------------------------------------------------------------------
+// TestRollingMerge_WallAxisSurvivesRepeatedAppends — 2026-09-01 field bug:
+// every append re-parses the bucket file whose TL dwells are ALREADY
+// compressed, so the per-merge stats read the compressed durations as wall
+// and the row's duration collapsed onto the file axis (day-timeline seek
+// desync, "TL 播放" broken). The bucket must accumulate the wall axis in
+// memory: after N appends of dwell-heavy sparse segments, the row's duration
+// keeps the full wall span while the file is compressed, and the timeline
+// map's last point maps wall→file monotonically.
+// ---------------------------------------------------------------------------
+func TestRollingMerge_WallAxisSurvivesRepeatedAppends(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	r := newTestRollingCoordinator(env, cfg, bus)
+	require.NoError(t, r.Start(context.Background()))
+	defer r.Stop()
+
+	cameraID := "cam-wall"
+	baseTime := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+
+	origFrame := TimelapseFrameDur
+	TimelapseFrameDur = 100 * time.Millisecond
+	t.Cleanup(func() { TimelapseFrameDur = origFrame })
+
+	// 三个稀疏源段: 每段 2 个 IDR、样本时长 30s 驻留 → 段墙钟 60s、压缩后文件 ~0.2s。
+	publishSparse := func(i int) {
+		t.Helper()
+		startedAt := baseTime.Add(time.Duration(i) * 61 * time.Second)
+		// 写到 store 管理的段路径:借 createAndInsertSegment 的目录习惯,直接落 env 目录。
+		path := createH264SegmentWithDurations(t, filepath.Dir(mustTempPath(t)), fmt.Sprintf("sparse-%d.mp4", i), sps, pps,
+			[][]byte{idr, idr},
+			[]time.Duration{30 * time.Second, 30 * time.Second})
+		fi, err := os.Stat(path)
+		require.NoError(t, err)
+		rec := &model.Recording{
+			ID:         fmt.Sprintf("rec-sparse-%d", i),
+			CameraID:   cameraID,
+			FilePath:   path,
+			Format:     model.FormatH264,
+			StartedAt:  startedAt,
+			EndedAt:    startedAt.Add(60 * time.Second),
+			Duration:   60,
+			FileSize:   fi.Size(),
+			FrameCount: 2,
+		}
+		require.NoError(t, env.db.InsertRecording(context.Background(), rec))
+		bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID:    cameraID,
+			FilePath:    path,
+			Format:      "h264",
+			Encoding:    "h264",
+			StartedAt:   startedAt.Format(time.RFC3339Nano),
+			EndedAt:     startedAt.Add(60 * time.Second).Format(time.RFC3339Nano),
+			FileSize:    fi.Size(),
+			RecordingID: rec.ID,
+		})
+	}
+	for i := 0; i < 3; i++ {
+		publishSparse(i)
+		time.Sleep(300 * time.Millisecond)
+	}
+	waitForBucketStable(t, r, cameraID, 3, 10*time.Second)
+
+	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, recs, 1, "one merged product")
+	got := recs[0]
+	full, err := env.db.GetRecording(context.Background(), got.ID)
+	require.NoError(t, err)
+	got = *full
+	// 墙钟轴: 3 段 × 60s = 180s(允许 keyframe 对齐的小损耗)。
+	t.Logf("DURATION=%v MAP=%s FILESIZE=%d FRAMES=%d", got.Duration, got.TimelineMap, got.FileSize, got.FrameCount)
+	require.InDelta(t, 180.0, got.Duration, 5.0,
+		"row duration must stay on the wall axis across appends, got %v", got.Duration)
+	// 文件轴被压缩 ≪ 墙钟,且 map 的末点把 180s 墙钟映射到文件时长。
+	var pairs [][2]float64
+	require.NoError(t, json.Unmarshal([]byte(got.TimelineMap), &pairs))
+	require.GreaterOrEqual(t, len(pairs), 4, "map must have per-append points: %+v", pairs)
+	last := pairs[len(pairs)-1]
+	require.InDelta(t, 180.0, last[0], 5.0, "map wall endpoint = row wall span: %+v", last)
+	require.Less(t, last[1], 30.0, "file axis must be compressed: %+v", last)
+	// 单调性。
+	for i := 1; i < len(pairs); i++ {
+		require.GreaterOrEqual(t, pairs[i][0], pairs[i-1][0])
+		require.GreaterOrEqual(t, pairs[i][1], pairs[i-1][1])
+	}
+}
+
+// mustTempPath gives a scratch directory for fixture files.
+func mustTempPath(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "x")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dir), 0o755))
+	return dir
 }

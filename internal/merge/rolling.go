@@ -224,6 +224,25 @@ type bucketInfo struct {
 	windowEnd      time.Time
 	segmentCount   int   // how many segments have been merged into this bucket
 	mergedFileSize int64 // current byte size of mergedFilePath (0 if no bucket yet)
+
+	// Wall/file axis accumulation (#496 append-fix, 2026-09-01): every append
+	// re-parses the bucket FILE, whose TL dwell samples are already compressed
+	// to the file cadence — per-merge stats therefore cannot recover the wall
+	// span (the compressed dwell time reads as wall and is silently lost, so
+	// the row's duration collapses onto the file axis and the day-timeline
+	// seek desyncs). Both axes are accumulated in memory instead; the row
+	// always carries the wall duration plus a monotonically grown wall→file
+	// map. Survives arbitrary camera frame pacing (smart-codec decimation,
+	// day/night fps switching) because each input's own contribution is taken
+	// from the merge stats of THAT append, before it is ever re-parsed.
+	wallDurSec float64
+	fileDurSec float64
+	wallFile   [][2]float64
+	// lastEnded is the wall time of the last input segment's end. The next
+	// append's wall contribution is lastEnded→ended — inter-segment GAPS
+	// (disconnects, TL pauses) stay visible on the wall axis, matching the
+	// row's started_at..ended_at span instead of silently shrinking it.
+	lastEnded time.Time
 }
 
 // segmentAudioKey derives the audio compatibility key for a parsed segment.
@@ -314,6 +333,28 @@ func (r *RollingMergeCoordinator) resolveTimelapseCadence(cameraID string) time.
 		return 0
 	}
 	return time.Duration(a.TimelapseFrameMs) * time.Millisecond
+}
+
+// resolveTimelapseGap returns this camera's dwell-compression gap threshold:
+// max(package default, half the timelapse interval). A TL dwell is ~one
+// interval long by construction, while a slow/smart-codec camera's NORMAL
+// inter-frame gap (e.g. 2.1s at 0.5fps static decimation) never approaches
+// its interval — the fixed 2s default mis-read such cameras' full-rate
+// footage as timelapse and fast-forwarded it (wall-axis suite S3, 2026-09-01).
+func (r *RollingMergeCoordinator) resolveTimelapseGap(cameraID string) time.Duration {
+	interval := 30 * time.Second
+	if r.getAdaptiveCfg != nil {
+		if a := r.getAdaptiveCfg(cameraID); a != nil && a.TimelapseInterval != "" {
+			if d, err := time.ParseDuration(a.TimelapseInterval); err == nil && d > 0 {
+				interval = d
+			}
+		}
+	}
+	half := interval / 2
+	if half < TimelapseGapThreshold {
+		return TimelapseGapThreshold
+	}
+	return half
 }
 
 func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingMergeConfig {

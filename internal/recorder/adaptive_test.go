@@ -362,11 +362,11 @@ func TestAdaptiveGate_SparseSkipAndFlushFacade(t *testing.T) {
 }
 
 func TestResolveAdaptiveConfig_DefaultsAndOverrides(t *testing.T) {
-	ac := ResolveAdaptiveConfig("", "", 0, 0, false, false)
-	if ac != (AdaptiveConfig{CalmThreshold: 60 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 32 << 20}) {
+	ac := ResolveAdaptiveConfig(AdaptiveOverrides{})
+	if ac != (AdaptiveConfig{CalmThreshold: 60 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 32 << 20, AutoNoiseFloor: true}) {
 		t.Fatalf("defaults wrong: %+v", ac)
 	}
-	ac = ResolveAdaptiveConfig("2m", "10s", 7.5, 1<<20, true, false)
+	ac = ResolveAdaptiveConfig(AdaptiveOverrides{CalmThreshold: "2m", TimelapseInterval: "10s", SpikeFactor: 7.5, GOPBufferBytes: 1 << 20, AmbientAudio: true})
 	if ac.CalmThreshold != 2*time.Minute || ac.TimelapseInterval != 10*time.Second || ac.SpikeFactor != 7.5 || ac.MaxGOPBuffer != 1<<20 || !ac.AmbientAudio {
 		t.Fatalf("overrides wrong: %+v", ac)
 	}
@@ -492,5 +492,162 @@ func TestAdaptiveTracker_SpikeRetention(t *testing.T) {
 	tr.recordSpike(now.Add(10 * time.Second))
 	if len(tr.recentSpikes) != 1 || !tr.recentSpikes[0].Equal(now.Add(10*time.Second)) {
 		t.Fatalf("recentSpikes = %v, want only the newest", tr.recentSpikes)
+	}
+}
+
+// feedP feeds n non-IDR frames of the given byte size at 20fps starting at
+// t0, returning the time after the last frame.
+func feedP(t *testing.T, tr *adaptiveTracker, t0 time.Time, n int, size int) time.Time {
+	t.Helper()
+	for i := range n {
+		buf := make([]byte, size)
+		buf[0] = 0x41 // non-IDR
+		tr.observe(buf, false, t0.Add(time.Duration(i)*50*time.Millisecond))
+	}
+	return t0.Add(time.Duration(n) * 50 * time.Millisecond)
+}
+
+// feedBurst feeds size-spiked P-frames densely (every 100ms — inside the 2s
+// burst window) to simulate clustered activity.
+func feedBurst(t *testing.T, tr *adaptiveTracker, t0 time.Time, n int, size int) time.Time {
+	t.Helper()
+	for i := range n {
+		buf := make([]byte, size)
+		buf[0] = 0x41
+		tr.observe(buf, false, t0.Add(time.Duration(i)*100*time.Millisecond))
+	}
+	return t0.Add(time.Duration(n) * 100 * time.Millisecond)
+}
+
+// TestAdaptiveTracker_ExplicitNoiseFloorSuppressesStarvedJitter (#635): a
+// bitrate-starved camera (300B static P-frames) whose rate-control catch-up
+// frames (2KB) arrive in bursts churns TIMELAPSE without an absolute floor;
+// with noise_floor_bytes above the jitter band the bursts are ignored.
+func TestAdaptiveTracker_ExplicitNoiseFloorSuppressesStarvedJitter(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		floor       float64
+		wantExitsTL bool
+	}{
+		{"floor off: jitter bursts exit TL", 0, true},
+		{"floor above jitter: TL retained", 2500, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := AdaptiveConfig{CalmThreshold: time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 1 << 20, NoiseFloorBytes: tc.floor}
+			tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+			t0 := time.Now()
+			end := feedP(t, tr, t0, 60, 300) // 3s calm → TL (threshold 1s)
+			if tr.mode != adaptiveTimelapse {
+				t.Fatalf("precondition: expected TL after calm, got %v", tr.mode)
+			}
+			feedBurst(t, tr, end, 4, 2000) // 2KB jitter burst (relative spikes)
+			exited := tr.mode == adaptiveNormal
+			if exited != tc.wantExitsTL {
+				t.Fatalf("TL after jitter burst = %v, want exited=%v", !exited, tc.wantExitsTL)
+			}
+		})
+	}
+}
+
+// TestAdaptiveTracker_AutoNoiseFloorEngagesOnlyWhenStarved (#635): the
+// self-calibrated floor learns from TIMELAPSE dwell and suppresses starved
+// jitter (300B static, 1.5KB jitter, p99 captured by ring), while a healthy
+// stream (12.5KB static) never grows a floor.
+func TestAdaptiveTracker_AutoNoiseFloorEngagesOnlyWhenStarved(t *testing.T) {
+	newTL := func(staticSize int) *adaptiveTracker {
+		cfg := AdaptiveConfig{CalmThreshold: time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 1 << 20, AutoNoiseFloor: true}
+		tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+		// Enter TL, then accumulate a long dwell ring: mostly static frames
+		// with ~2% isolated larger "jitter" frames (below major-spike scale
+		// for the starved case, spaced to avoid bursts).
+		t0 := time.Now()
+		end := feedP(t, tr, t0, 60, staticSize)
+		if tr.mode != adaptiveTimelapse {
+			t.Fatalf("precondition TL, got %v", tr.mode)
+		}
+		now := end
+		for i := range 600 {
+			size := staticSize
+			if i%50 == 0 {
+				size = staticSize * 5 // jitter band (isolated, 2% of ring)
+			}
+			buf := make([]byte, size)
+			buf[0] = 0x41
+			tr.observe(buf, false, now)
+			now = now.Add(50 * time.Millisecond)
+		}
+		return tr
+	}
+
+	starved := newTL(300) // p50 300B < 2KB → auto floor engages
+	if starved.tlFloor <= 0 {
+		t.Fatalf("starved stream should learn a floor, got %v", starved.tlFloor)
+	}
+	if starved.tlFloor > 300*8 {
+		t.Fatalf("floor must be capped at 8×p50 (2400), got %v", starved.tlFloor)
+	}
+	// A jitter burst at 1.5KB must no longer exit TL.
+	end := time.Now().Add(40 * time.Second)
+	feedBurst(t, starved, end, 4, 1500)
+	if starved.mode != adaptiveTimelapse {
+		t.Fatal("starved jitter burst must not exit TL once the auto floor engaged")
+	}
+
+	healthy := newTL(12500) // p50 12.5KB ≥ 2KB → no floor, legacy semantics
+	if healthy.tlFloor != 0 {
+		t.Fatalf("healthy stream must not grow an auto floor, got %v", healthy.tlFloor)
+	}
+}
+
+// TestAdaptiveTracker_NoVideoExitResidentTimelapse (#638): with the video
+// exit disabled, even a huge motion burst cannot leave sparse mode — only the
+// audio/external path (audioLoud) can.
+func TestAdaptiveTracker_NoVideoExitResidentTimelapse(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 1 << 20, NoVideoExit: true}
+	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+	t0 := time.Now()
+	end := feedP(t, tr, t0, 60, 800)
+	if tr.mode != adaptiveTimelapse {
+		t.Fatalf("precondition TL, got %v", tr.mode)
+	}
+
+	// Massive clustered spike burst — must NOT exit (resident timelapse).
+	feedBurst(t, tr, end, 6, 40000)
+	if tr.mode != adaptiveTimelapse {
+		t.Fatal("video burst must not exit TL with NoVideoExit set")
+	}
+
+	// External trigger (the audioLoud path shared with the trigger API) —
+	// must still exit with GOP flush.
+	tr.audioLoud(time.Now(), 0)
+	end2 := feedP(t, tr, time.Now().Add(time.Second), 2, 800)
+	_ = end2
+	if tr.mode != adaptiveNormal {
+		t.Fatal("external trigger must exit resident timelapse")
+	}
+}
+
+// TestAdaptiveTracker_NoVideoExitEntersDespiteNoise (#638): with video exits
+// disabled, NORMAL-mode spike bursts never defer entry, so the camera drops
+// to sparse after the first CalmThreshold even in a noisy scene.
+func TestAdaptiveTracker_NoVideoExitEntersDespiteNoise(t *testing.T) {
+	cfg := AdaptiveConfig{CalmThreshold: 2 * time.Second, TimelapseInterval: 30 * time.Second, SpikeFactor: 5.0, MaxGOPBuffer: 1 << 20, NoVideoExit: true}
+	tr := newAdaptiveTracker(cfg, "cam", testAdaptiveLogger())
+	// 4s of noisy stream: static 800B with a 3KB jitter frame every 20 —
+	// without NoVideoExit these bursts keep resetting calmSince.
+	t0 := time.Now()
+	now := t0
+	for i := range 80 {
+		size := 800
+		if i%20 == 0 {
+			size = 3000
+		}
+		buf := make([]byte, size)
+		buf[0] = 0x41
+		tr.observe(buf, false, now)
+		now = now.Add(50 * time.Millisecond)
+	}
+	if tr.mode != adaptiveTimelapse {
+		t.Fatalf("noisy scene with NoVideoExit should still enter TL after CalmThreshold, got %v", tr.mode)
 	}
 }

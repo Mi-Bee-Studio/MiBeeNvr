@@ -97,6 +97,15 @@ func (s MergeStats) WallDurationSec() float64 {
 	return 0
 }
 
+// FileDurationSec returns the product's post-compression file span (the last
+// WallToFile point's file component) — what a player will actually play.
+func (s MergeStats) FileDurationSec() float64 {
+	if n := len(s.WallToFile); n > 0 {
+		return s.WallToFile[n-1][1]
+	}
+	return 0
+}
+
 // Timelapse dwell compression (#496): adaptive sparse mode stores one keyframe
 // per timelapse_interval (~30s) ON THE REAL-TIME AXIS, so any player — the SPA
 // included, and crucially a DOWNLOADED file in a local player — freezes each
@@ -409,12 +418,17 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		// ambient audio onto the compressed timeline (envelope mixdown) or
 		// drops it for non-G.711 codecs.
 		ts := float64(seg.Timescale)
-		compress := seg.Timescale > 0
 		cadence := TimelapseFrameDur
 		if len(frameDur) > 0 && frameDur[0] > 0 {
 			cadence = frameDur[0]
 		}
-		gapTicks := float64(seg.Timescale) * TimelapseGapThreshold.Seconds()
+		gap := TimelapseGapThreshold
+		if len(frameDur) > 1 && frameDur[1] > 0 {
+			// Per-camera adaptive threshold (see resolveTimelapseGap): slow
+			// cameras' normal inter-frame gaps must not read as TL dwells.
+			gap = frameDur[1]
+		}
+		gapTicks := float64(seg.Timescale) * gap.Seconds()
 		frameTicks := uint32(float64(seg.Timescale) * cadence.Seconds())
 
 		for _, s := range seg.Samples {
@@ -433,7 +447,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			}
 
 			dur := s.Duration
-			if compress && float64(dur) > gapTicks {
+			if ts > 0 && float64(dur) > gapTicks {
 				dur = frameTicks
 				stats.TimelapseFrames++
 			}

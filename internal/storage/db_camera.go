@@ -81,8 +81,14 @@ type CameraRow struct {
 	// / "continuous" = normal segments; "adaptive" = dynamic timelapse that
 	// drops to sparse keyframes while the compressed-domain activity signal
 	// stays calm. Adaptive holds its tuning knobs (nil = recorder defaults).
-	RecordingMode string                          `json:"recording_mode,omitempty"`
-	Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive,omitempty"`
+	RecordingMode string `json:"recording_mode,omitempty"`
+	// RecordingTier marks the dual-stream tier (#637): ""/"single" or "tiered"
+	// (continuous sub-stream recording). Read by the tiered-recording service;
+	// changes apply on NVR restart.
+	RecordingTier string `json:"recording_tier,omitempty"`
+	// Pixgate config (#636): classic-CV gate over a sampled sub-stream decode.
+	Pixgate  *config.CameraPixgateConfig     `json:"pixgate,omitempty"`
+	Adaptive *config.AdaptiveRecordingConfig `json:"adaptive,omitempty"`
 	// Cascade gate (injected from YAML at API response time): false = hidden
 	// from the GB28181 cascade catalog, INVITEs refused. nil = exposed.
 	CascadeEnabled *bool `json:"cascade_enabled,omitempty"`

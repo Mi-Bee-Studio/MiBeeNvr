@@ -103,6 +103,7 @@ export type {
   CameraTranscodingConfig,
   Camera,
   CreateCameraRequest,
+  CameraPixgateConfig,
   UpdateCameraRequest,
   DiscoveredDevice,
   DiscoveryError,

@@ -24,9 +24,14 @@ export interface Recording {
   // Motion score (#435): compressed-domain activity score in [0,1]; -1 =
   // not yet analyzed. activity_flags: comma-separated "static"/"motion"/"scene_cut".
   motion_score?: number;
+  // #634: absolute-size confidence in [0,1] discounting the relative score on
+  // bitrate-starved segments; -1 = scored before the column existed (treat as 1).
+  motion_confidence?: number;
   /** #496: piecewise wall→file timeline map (JSON "[[wallSec,fileSec],…]")
    *  for timelapse-compressed recordings; absent = real-time axis. */
   timeline_map?: string;
+  /** #637: recording tier — 1 = continuous sub-stream (tiered mode); absent/0 = main. */
+  layer?: number;
   activity_flags?: string;
 }
 
@@ -200,6 +205,7 @@ export interface RecordingTimelineSegment {
   format: Recording['format'];
   merge_status: Recording['merge_status'];
   motion_score?: number; // -1 = not analyzed (#435)
+  motion_confidence?: number; // -1 = pre-#634 row, treat as 1
 }
 
 export interface RecordingTimelineResponse {

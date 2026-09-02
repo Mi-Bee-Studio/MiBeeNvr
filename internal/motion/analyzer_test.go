@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,20 +16,20 @@ import (
 // fakeScoreDB records UpdateRecordingMotionScore calls.
 type fakeScoreDB struct {
 	mu     sync.Mutex
-	scored map[string][2]any // id -> {score, flags}
+	scored map[string][3]any // id -> {score, confidence, flags}
 }
 
-func (f *fakeScoreDB) UpdateRecordingMotionScore(_ context.Context, id string, score float64, flags string) error {
+func (f *fakeScoreDB) UpdateRecordingMotionScore(_ context.Context, id string, score, confidence float64, flags string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.scored == nil {
-		f.scored = map[string][2]any{}
+		f.scored = map[string][3]any{}
 	}
-	f.scored[id] = [2]any{score, flags}
+	f.scored[id] = [3]any{score, confidence, flags}
 	return nil
 }
 
-func (f *fakeScoreDB) get(id string) ([2]any, bool) {
+func (f *fakeScoreDB) get(id string) ([3]any, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	v, ok := f.scored[id]
@@ -104,7 +105,7 @@ func TestAnalyzer_ScoresCompletedSegment(t *testing.T) {
 	})
 	got, _ := db.get("rec-static")
 	score := got[0].(float64)
-	flags := got[1].(string)
+	flags := got[2].(string)
 	if score != 0 || flags != "static" {
 		t.Fatalf("static segment: got score=%v flags=%q, want 0/static", score, flags)
 	}
@@ -236,5 +237,123 @@ func TestAnalyzer_MissingFileIsNonFatal(t *testing.T) {
 	})
 	if _, ok := db.get("rec-gone"); ok {
 		t.Fatal("missing file must not be scored")
+	}
+}
+
+// fakePixelSource serves canned FG windows per camera.
+type fakePixelSource struct {
+	w   FGWindow
+	ok  bool
+	got string // last cameraID
+}
+
+func (f *fakePixelSource) SegmentFG(cameraID string, start, end time.Time) (FGWindow, bool) {
+	f.got = cameraID
+	return f.w, f.ok
+}
+
+// publishScored drives one segment through the analyzer and waits for the
+// DB write, returning the persisted triple.
+func publishScored(t *testing.T, a *Analyzer, bus *event.EventBus, db *fakeScoreDB, id, cameraID, pattern string, times ...time.Time) [3]any {
+	t.Helper()
+	dir := t.TempDir()
+	segPath := filepath.Join(dir, id+".mp4")
+	writeTestSegment(t, segPath, pattern)
+	evt := event.SegmentCompleted{
+		CameraID:    cameraID,
+		FilePath:    segPath,
+		Format:      "h264",
+		RecordingID: id,
+	}
+	if len(times) >= 2 {
+		evt.StartedAt = times[0].Format(time.RFC3339Nano)
+		evt.EndedAt = times[1].Format(time.RFC3339Nano)
+	} else {
+		now := time.Now()
+		evt.StartedAt = now.Add(-time.Minute).Format(time.RFC3339Nano)
+		evt.EndedAt = now.Format(time.RFC3339Nano)
+	}
+	bus.Publish(context.Background(), event.TopicSegmentCompleted, evt)
+	waitFor(t, 3*time.Second, func() bool {
+		_, ok := db.get(id)
+		return ok
+	})
+	got, _ := db.get(id)
+	return got
+}
+
+// TestAnalyzer_PixelSourcePreferred: a byte-active segment whose FG window
+// says quiet must score LOW — the pixel signal wins (night-noise immunity,
+// the 2026-09-01 视通 field case).
+func TestAnalyzer_PixelSourcePreferred(t *testing.T) {
+	db := &fakeScoreDB{}
+	bus := event.NewEventBus(64)
+	a := NewAnalyzer(db, bus, "", DefaultOptions())
+	a.SetPixelSource(&fakePixelSource{
+		ok: true,
+		w:  FGWindow{Valid: 60, MeanAreaPct: 0.2, DutyCycle: 0, TrigAreaPct: 1.5, Coverage: 0.95},
+	})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Stop()
+
+	got := publishScored(t, a, bus, db, "rec-px-quiet", "cam-px", "active")
+	if got[0].(float64) > 0.1 {
+		t.Fatalf("pixel-quiet window must override byte activity, got score=%v", got[0])
+	}
+	if !strings.HasPrefix(got[2].(string), "static") {
+		t.Fatalf("expected static flags, got %v", got[2])
+	}
+}
+
+// TestAnalyzer_PixelActiveWindowScoresHigh: duty≈1 with mean area at 2× the
+// trigger → score ≥0.8 and motion.
+func TestAnalyzer_PixelActiveWindowScoresHigh(t *testing.T) {
+	db := &fakeScoreDB{}
+	bus := event.NewEventBus(64)
+	a := NewAnalyzer(db, bus, "", DefaultOptions())
+	a.SetPixelSource(&fakePixelSource{
+		ok: true,
+		w:  FGWindow{Valid: 60, MeanAreaPct: 3.0, DutyCycle: 1.0, TrigAreaPct: 1.5, Coverage: 0.9},
+	})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Stop()
+
+	got := publishScored(t, a, bus, db, "rec-px-active", "cam-px", "static")
+	if got[0].(float64) < 0.8 {
+		t.Fatalf("pixel-active window should score ≥0.8, got %v", got[0])
+	}
+	if got[1].(float64) < 0.85 {
+		t.Fatalf("confidence should follow coverage, got %v", got[1])
+	}
+	if !strings.HasPrefix(got[2].(string), "motion") {
+		t.Fatalf("expected motion flags, got %v", got[2])
+	}
+}
+
+// TestAnalyzer_PixelLowCoverageFallsBackToBytes: below the coverage gate the
+// byte score stays authoritative.
+func TestAnalyzer_PixelLowCoverageFallsBackToBytes(t *testing.T) {
+	db := &fakeScoreDB{}
+	bus := event.NewEventBus(64)
+	a := NewAnalyzer(db, bus, "", DefaultOptions())
+	a.SetPixelSource(&fakePixelSource{
+		ok: true,
+		w:  FGWindow{Valid: 20, MeanAreaPct: 0.1, DutyCycle: 0, TrigAreaPct: 1.5, Coverage: 0.3},
+	})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Stop()
+
+	got := publishScored(t, a, bus, db, "rec-px-thin", "cam-px", "active")
+	if got[0].(float64) < 0.3 {
+		t.Fatalf("thin pixel coverage must keep byte score, got %v", got[0])
+	}
+	if !strings.HasPrefix(got[2].(string), "motion") {
+		t.Fatalf("expected byte motion flags, got %v", got[2])
 	}
 }

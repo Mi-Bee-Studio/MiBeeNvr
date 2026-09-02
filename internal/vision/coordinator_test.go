@@ -1,11 +1,14 @@
 package vision
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -286,4 +289,135 @@ func TestCoordinatorHeartbeatSkipCameras(t *testing.T) {
 
 	// SkipCamera semantics without a heartbeat ever received: no skips.
 	require.False(t, NewHealthTracker(60).SkipCamera("any"))
+}
+
+// #637 tiered cameras: tierrec layer=1 sub segments are the analysis input —
+// pushed with X-Layer: sub; layer=0 main segments yield. Non-tiered cameras'
+// sub segments (should not exist today, defensive) are dropped.
+func TestCoordinatorTieredCamerasLayerRouting(t *testing.T) {
+	var mu sync.Mutex
+	pushed := map[string]string{} // recording id -> X-Layer header
+	visionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pushed[r.Header.Get("X-Recording-Id")] = r.Header.Get("X-Layer")
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer visionSrv.Close()
+
+	bus := event.NewEventBus(64)
+	cfg := config.VisionConfig{
+		Enabled:       true,
+		URL:           visionSrv.URL,
+		TieredCameras: []string{"cam-tiered"},
+	}
+	c := NewCoordinator(
+		func() config.VisionConfig { return cfg },
+		func() string { return t.TempDir() },
+		bus,
+		nil,
+		nil, // no sub-layer provider
+	)
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(c.Stop)
+	c.Health().RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+
+	dir := t.TempDir()
+	publish := func(cam, rec string, layer int) {
+		p := filepath.Join(dir, rec+".mp4")
+		require.NoError(t, os.WriteFile(p, make([]byte, 8), 0o644))
+		bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID: cam, FilePath: p, Format: "mp4",
+			FileSize: 8, RecordingID: rec, Layer: layer,
+		})
+	}
+	publish("cam-tiered", "rec-sub", model.LayerSub)
+	publish("cam-tiered", "rec-main", model.LayerMain)
+	publish("cam-other", "rec-other-sub", model.LayerSub)
+	publish("cam-other", "rec-other-main", model.LayerMain)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return pushed["rec-sub"] == "sub" && pushed["rec-other-main"] == ""
+	}, 5*time.Second, 50*time.Millisecond, "sub of tiered + main of non-tiered must be pushed")
+
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, "sub", pushed["rec-sub"], "tiered camera's sub segment must carry X-Layer: sub")
+	require.NotContains(t, pushed, "rec-main", "tiered camera's main segment must yield")
+	require.NotContains(t, pushed, "rec-other-sub", "non-tiered camera's sub segment must be dropped")
+	require.Equal(t, "", pushed["rec-other-main"], "non-tiered main pushes without X-Layer")
+}
+
+// 2026-09 Jetson incident: a wedged worker keeps heartbeating "degraded" —
+// the NVR must treat that as unhealthy (pause pushes) and fire the recovery
+// compensation when the status flips back to healthy.
+func TestHealthTrackerDegradedHeartbeat(t *testing.T) {
+	h := NewHealthTracker(60)
+	var fired atomic.Int32
+	h.SetOnRecovery(func() { fired.Add(1) })
+
+	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	require.True(t, h.IsHealthy())
+	require.Eventually(t, func() bool { return fired.Load() == 1 },
+		2*time.Second, 20*time.Millisecond)
+
+	// Worker wedges: fresh heartbeats, degraded status.
+	h.RecordHeartbeat(HeartbeatStatus{Status: "degraded", QueueDepth: 64})
+	require.False(t, h.IsHealthy(), "degraded heartbeat must read unhealthy")
+	healthy, _, st := h.Snapshot()
+	require.False(t, healthy)
+	require.Equal(t, "degraded", st.Status)
+
+	// Worker recovers: the degraded→healthy transition must fire recovery
+	// (compensates the paused window).
+	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
+	require.True(t, h.IsHealthy())
+	require.Eventually(t, func() bool { return fired.Load() == 2 },
+		2*time.Second, 20*time.Millisecond, "degraded→healthy must fire recovery")
+}
+
+// TestCoordinatorUploadContentLengthMatchesFile reproduces the 2026-09-02
+// field bug: tierrec's event FileSize counts media bytes only (the muxer
+// appends a ~10 KB moov at close), and a Content-Length short of the real
+// body aborted every tiered push client-side ("ContentLength=X with Body
+// length Y", 530 consecutive losses). The upload must stat the file and use
+// the on-disk size for both Content-Length and X-File-Size.
+func TestCoordinatorUploadContentLengthMatchesFile(t *testing.T) {
+	var got struct {
+		contentLength int64
+		headerSize    string
+		bodyLen       int64
+	}
+	visionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.contentLength = r.ContentLength
+		got.headerSize = r.Header.Get("X-File-Size")
+		buf, _ := io.ReadAll(r.Body)
+		got.bodyLen = int64(len(buf))
+		w.WriteHeader(200)
+	}))
+	defer visionSrv.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seg.mp4")
+	payload := bytes.Repeat([]byte{0xAB}, 40338) // media bytes + a fat 10338-byte "moov"
+	require.NoError(t, os.WriteFile(path, payload, 0o644))
+
+	c := NewCoordinator(
+		func() config.VisionConfig { return config.VisionConfig{Enabled: true, URL: visionSrv.URL} },
+		func() string { return dir },
+		event.NewEventBus(8),
+		nil, nil,
+	)
+	// Deliberately lie in the event-derived size AND header, as tierrec did.
+	ok := c.uploadSegment(context.Background(), path, 30000, map[string]string{
+		"X-File-Size": "30000",
+		"X-Camera-Id": "cam-x",
+	})
+	require.True(t, ok)
+	require.Equal(t, int64(len(payload)), got.contentLength, "Content-Length must be the on-disk size")
+	require.Equal(t, int64(len(payload)), got.bodyLen, "server must receive the whole file")
+	require.Equal(t, strconv.Itoa(len(payload)), got.headerSize, "X-File-Size must be corrected to the real size")
 }

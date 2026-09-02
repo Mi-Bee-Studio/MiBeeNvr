@@ -86,6 +86,24 @@ func (m *MergeManager) resolveTimelapseCadence(cameraID string) time.Duration {
 	return time.Duration(a.TimelapseFrameMs) * time.Millisecond
 }
 
+// resolveTimelapseGap mirrors RollingMergeCoordinator.resolveTimelapseGap —
+// see its comment for why the dwell threshold must adapt to the camera.
+func (m *MergeManager) resolveTimelapseGap(cameraID string) time.Duration {
+	interval := 30 * time.Second
+	if m.getAdaptiveCfg != nil {
+		if a := m.getAdaptiveCfg(cameraID); a != nil && a.TimelapseInterval != "" {
+			if d, err := time.ParseDuration(a.TimelapseInterval); err == nil && d > 0 {
+				interval = d
+			}
+		}
+	}
+	half := interval / 2
+	if half < TimelapseGapThreshold {
+		return TimelapseGapThreshold
+	}
+	return half
+}
+
 func (m *MergeManager) acquireMergeLock(cameraID string) (release func(), ok bool) {
 	lock := &mergeLock{}
 	actual, _ := m.mergeLocks.LoadOrStore(cameraID, lock)
@@ -455,7 +473,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			continue
 		}
 
-		stats, err := MergeMP4Segments(ctx, segmentInfos, tempPath, m.resolveTimelapseCadence(cameraID))
+		stats, err := MergeMP4Segments(ctx, segmentInfos, tempPath, m.resolveTimelapseCadence(cameraID), m.resolveTimelapseGap(cameraID))
 		if err != nil {
 			logger.Error("failed to merge MP4 segments", "camera_id", cameraID, "error", err)
 			os.Remove(tempPath)
