@@ -37,6 +37,7 @@ e2e-tests/
 .playwright-mcp/
 test-results/
 tmp/
+tmp-probe/
 package-lock.json
 
 # Test screenshots

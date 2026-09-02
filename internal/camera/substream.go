@@ -21,6 +21,13 @@ import (
 	gbcascade "github.com/mickeyzzc/gb28181-go/platform/cascade"
 )
 
+// ResolveSubStreamTarget is the exported wrapper over resolveSubTarget for
+// the pixgate sampler (#636): the same target resolution the live quality=sub
+// path uses.
+func (cm *CameraManager) ResolveSubStreamTarget(ctx context.Context, cameraID string) (substream.Target, bool, error) {
+	return cm.resolveSubTarget(ctx, cameraID)
+}
+
 // resolveSubTarget implements the substream.Resolver contract against camera
 // configs:
 //

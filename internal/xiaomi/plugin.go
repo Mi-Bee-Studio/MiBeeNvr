@@ -76,15 +76,21 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 	// Config validation (ValidateCameraRecordingMode) already restricts it to
 	// h264/h265 cameras.
 	if cfg.RecordingMode == "adaptive" {
-		var a *config.AdaptiveRecordingConfig
-		if cfg.Adaptive != nil {
-			a = cfg.Adaptive
+		ov := recorder.AdaptiveOverrides{}
+		if a := cfg.Adaptive; a != nil {
+			ov = recorder.AdaptiveOverrides{
+				CalmThreshold:     a.CalmThreshold,
+				TimelapseInterval: a.TimelapseInterval,
+				SpikeFactor:       a.SpikeFactor,
+				GOPBufferBytes:    a.GOPBufferBytes,
+				AmbientAudio:      a.AmbientAudio,
+				AmbientArchive:    a.AmbientArchive,
+				NoiseFloorBytes:   a.NoiseFloorBytes,
+				AutoNoiseFloor:    a.AutoNoiseFloor,
+				VideoExit:         a.VideoExit,
+			}
 		}
-		calm, interval, spike, gop, ambient, archive := "", "", 0.0, int64(0), false, false
-		if a != nil {
-			calm, interval, spike, gop, ambient, archive = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio, a.AmbientArchive
-		}
-		ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient, archive)
+		ac := recorder.ResolveAdaptiveConfig(ov)
 		recCfg.Adaptive = &ac
 		// Audio-trigger (issue #478): only meaningful on top of adaptive, and
 		// only for G.711 cameras — the recorder logs Opus as inactive.

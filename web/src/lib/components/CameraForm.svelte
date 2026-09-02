@@ -34,6 +34,7 @@
         RelayCapabilities,
         AdaptiveRecordingConfig,
         CameraAudioTriggerConfig,
+        CameraPixgateConfig,
     } from '$lib/api';
     import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy, Layers } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
@@ -111,6 +112,18 @@
   let formAmbientArchive = $state(false);
   let formTimelapseFrameMs = $state('');
   let formAdaptiveWasAmbient = false;
+  // Resident-timelapse + noise floor (#635/#638).
+  let formVideoExit = $state(true);
+  let formAutoNoiseFloor = $state(true);
+  let formNoiseFloorKB = $state('');
+  // Recording tier (#637): tiered = continuous sub-stream channel.
+  let formRecordingTier = $state('');
+  // Pixel-domain fine gate (#636).
+  let formPixgateEnabled = $state(false);
+  let formPixgateFPS = $state('');
+  let formPixgateMinArea = $state('');
+  let formPixgateHold = $state('');
+  let formPixgateWasEnabled = $state(false);
   // Audio trigger (#478): loudness input on top of the adaptive gate. Only
   // meaningful (and only sent) for adaptive + G.711 cameras.
   let formAudioTriggerEnabled = $state(false);
@@ -402,6 +415,18 @@ let validationErrors = $state<Record<string, string>>({});
     formAmbientAudio = camera.adaptive?.ambient_audio ?? false;
     formAmbientArchive = camera.adaptive?.ambient_archive ?? false;
     formTimelapseFrameMs = camera.adaptive?.timelapse_frame_ms ? String(camera.adaptive.timelapse_frame_ms) : '';
+    formVideoExit = camera.adaptive?.video_exit ?? true;
+    formAutoNoiseFloor = camera.adaptive?.auto_noise_floor ?? true;
+    formNoiseFloorKB =
+      camera.adaptive?.noise_floor_bytes && camera.adaptive.noise_floor_bytes > 0
+        ? String(Math.round(camera.adaptive.noise_floor_bytes / 1024))
+        : '';
+    formPixgateEnabled = camera.pixgate?.enabled ?? false;
+    formPixgateFPS = camera.pixgate?.sample_fps ? String(camera.pixgate.sample_fps) : '';
+    formPixgateMinArea = camera.pixgate?.min_area_pct ? String(camera.pixgate.min_area_pct) : '';
+    formPixgateHold = camera.pixgate?.hold ?? '';
+    formPixgateWasEnabled = formPixgateEnabled;
+    formRecordingTier = camera.recording_tier ?? '';
     formAdaptiveWasAmbient = formAmbientAudio;
     formAudioTriggerEnabled = camera.audio_trigger?.enabled ?? false;
     formAudioTriggerWasEnabled = formAudioTriggerEnabled;
@@ -673,6 +698,13 @@ function buildAdaptivePayload() {
     p.ambient_archive = formAmbientAudio && formAmbientArchive;
     const fms = parseInt(formTimelapseFrameMs, 10);
     if (!Number.isNaN(fms) && fms > 0) p.timelapse_frame_ms = fms;
+    // #638 resident timelapse / #635 noise floor: sent explicitly so the
+    // saved state always matches the form (nil = server default would leave
+    // a previously-disabled video_exit sticky after the user re-enables it).
+    p.video_exit = formVideoExit;
+    p.auto_noise_floor = formAutoNoiseFloor;
+    const nkb = parseFloat(formNoiseFloorKB);
+    if (!Number.isNaN(nkb) && nkb > 0) p.noise_floor_bytes = Math.round(nkb * 1024);
     return p;
 }
 
@@ -689,6 +721,22 @@ function buildAudioTriggerPayload(): CameraAudioTriggerConfig | undefined {
     if (!Number.isNaN(dbfs) && dbfs < 0) p.min_dbfs = dbfs;
     const pcs = parseInt(formAudioPreCaptureS, 10);
     if (!Number.isNaN(pcs) && pcs > 0) p.pre_capture_s = pcs;
+    return p;
+}
+
+// Pixgate payload (#636): same leaving-adaptive clearing semantics as the
+// audio trigger. Applies on NVR restart (documented in the hint).
+function buildPixgatePayload(): CameraPixgateConfig | undefined {
+    if (formRecordingMode !== 'adaptive') {
+        return formPixgateWasEnabled ? { enabled: false } : undefined;
+    }
+    if (!formPixgateEnabled) return { enabled: false };
+    const p: CameraPixgateConfig = { enabled: true };
+    const fps = parseFloat(formPixgateFPS);
+    if (!Number.isNaN(fps) && fps > 0) p.sample_fps = fps;
+    const area = parseFloat(formPixgateMinArea);
+    if (!Number.isNaN(area) && area > 0) p.min_area_pct = area;
+    if (formPixgateHold.trim()) p.hold = formPixgateHold.trim();
     return p;
 }
 
@@ -726,8 +774,10 @@ async function performCameraSave() {
             cascade_enabled: formCascadeEnabled,
             cascade_sub_stream: formCascadeSubStream,
             recording_mode: formRecordingMode,
+            recording_tier: formRecordingTier,
             adaptive: buildAdaptivePayload(),
             audio_trigger: buildAudioTriggerPayload(),
+            pixgate: buildPixgatePayload(),
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
@@ -796,8 +846,10 @@ async function performCameraSave() {
             cascade_enabled: formCascadeEnabled,
             cascade_sub_stream: formCascadeSubStream,
             recording_mode: formRecordingMode,
+            recording_tier: formRecordingTier,
             adaptive: buildAdaptivePayload(),
             audio_trigger: buildAudioTriggerPayload(),
+            pixgate: buildPixgatePayload(),
             two_way_audio_enabled: formProtocol === 'xiaomi' ? formTwoWayAudioEnabled : undefined,
             subnet_hints: formProtocol === 'onvif' ? parseSubnetHints(formSubnetHints) : undefined,
             stream_key: (formProtocol === 'rtmp' || formProtocol === 'whip') ? (formStreamKey || undefined) : undefined,
@@ -990,6 +1042,17 @@ async function performCameraSave() {
           {formRecordingMode === 'adaptive' ? t('cameras.recordingModeAdaptiveHint') : t('cameras.recordingModeHint')}
         </p>
       </div>
+      {#if formProtocol !== 'srt' && formProtocol !== 'rtmp' && formProtocol !== 'whip'}
+        <!-- Recording tier (#637): tiered adds a continuous sub-stream channel -->
+        <div>
+          <label for="cam-recording-tier" class="input-label">{t('cameras.recordingTier')}</label>
+          <select id="cam-recording-tier" class="input" bind:value={formRecordingTier}>
+            <option value="">{t('cameras.recordingTierSingle')}</option>
+            <option value="tiered">{t('cameras.recordingTierTiered')}</option>
+          </select>
+          <p class="text-xs th-text-muted mt-1">{t('cameras.recordingTierHint')}</p>
+        </div>
+      {/if}
       {#if formRecordingMode === 'adaptive'}
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -1008,6 +1071,26 @@ async function performCameraSave() {
             <label for="cam-adaptive-gop" class="input-label">{t('cameras.adaptiveGopBufferMB')}</label>
             <input id="cam-adaptive-gop" class="input" type="number" step="1" min="1" max="64" placeholder="16" bind:value={formAdaptiveGopBufferMB} />
           </div>
+          <div>
+            <label for="cam-adaptive-noisefloor" class="input-label">{t('cameras.adaptiveNoiseFloorKB')}</label>
+            <input id="cam-adaptive-noisefloor" class="input" type="number" step="0.5" min="0" placeholder="0" bind:value={formNoiseFloorKB} />
+          </div>
+          <div class="flex items-end gap-2 pb-1">
+            <input id="cam-adaptive-autonoise" type="checkbox" class="checkbox" bind:checked={formAutoNoiseFloor} />
+            <label for="cam-adaptive-autonoise" class="input-label cursor-pointer">{t('cameras.adaptiveAutoNoiseFloor')}</label>
+          </div>
+        </div>
+        <div class="flex items-start gap-2">
+          <input
+            id="cam-adaptive-videoexit"
+            type="checkbox"
+            class="checkbox mt-0.5"
+            bind:checked={formVideoExit}
+          />
+          <label for="cam-adaptive-videoexit" class="input-label cursor-pointer">
+            {t('cameras.adaptiveVideoExit')}
+            <span class="block text-xs th-text-muted font-normal">{t('cameras.adaptiveVideoExitHint')}</span>
+          </label>
         </div>
         <div>
           <label for="cam-adaptive-framems" class="input-label">{t('cameras.timelapseFrameMs')}</label>
@@ -1043,6 +1126,35 @@ async function performCameraSave() {
           </div>
         {/if}
         <p class="text-xs th-text-muted -mt-1">{t('cameras.audioTriggerHint')}</p>
+        <div class="flex items-start gap-2">
+          <input
+            id="cam-pixgate"
+            type="checkbox"
+            class="checkbox mt-0.5"
+            bind:checked={formPixgateEnabled}
+          />
+          <label for="cam-pixgate" class="input-label cursor-pointer">
+            {t('cameras.pixgate')}
+            <span class="block text-xs th-text-muted font-normal">{t('cameras.pixgateHint')}</span>
+          </label>
+        </div>
+        {#if formPixgateEnabled}
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label for="cam-pixgate-fps" class="input-label">{t('cameras.pixgateFPS')}</label>
+              <input id="cam-pixgate-fps" class="input" type="number" step="0.1" min="0.2" max="2" placeholder="1" bind:value={formPixgateFPS} />
+            </div>
+            <div>
+              <label for="cam-pixgate-area" class="input-label">{t('cameras.pixgateMinArea')}</label>
+              <input id="cam-pixgate-area" class="input" type="number" step="0.1" min="0.1" max="50" placeholder="1.5" bind:value={formPixgateMinArea} />
+            </div>
+            <div>
+              <label for="cam-pixgate-hold" class="input-label">{t('cameras.pixgateHold')}</label>
+              <input id="cam-pixgate-hold" class="input" type="text" placeholder="30s" bind:value={formPixgateHold} />
+            </div>
+          </div>
+          <p class="text-xs th-text-muted -mt-1">{t('cameras.pixgateApplyHint')}</p>
+        {/if}
         <div class="flex items-center gap-2">
           <input
             id="cam-ambient-audio"

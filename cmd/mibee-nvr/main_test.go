@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// recorder tracks which stub subcommand handlers were invoked.
-var recorder []string
+// dispatchRecorder tracks which stub subcommand handlers were invoked.
+var dispatchRecorder []string
 
 // TestSubcommandDispatch verifies that CLI subcommands are correctly dispatched.
 //
@@ -40,22 +40,22 @@ func TestSubcommandDispatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			recorder = nil
+			dispatchRecorder = nil
 
 			// Install recording stubs.
-			cmdEncryptConfigFn = func() { recorder = append(recorder, "encrypt-config") }
-			cmdDownloadModelFn = func() { recorder = append(recorder, "download-model") }
+			cmdEncryptConfigFn = func() { dispatchRecorder = append(dispatchRecorder, "encrypt-config") }
+			cmdDownloadModelFn = func() { dispatchRecorder = append(dispatchRecorder, "download-model") }
 
 			// Exercise dispatch.
 			dispatchSubcommand(tt.args)
 
-			if len(recorder) != len(tt.wantCalls) {
+			if len(dispatchRecorder) != len(tt.wantCalls) {
 				t.Fatalf("expected %d call(s), got %d: %v",
-					len(tt.wantCalls), len(recorder), recorder)
+					len(tt.wantCalls), len(dispatchRecorder), dispatchRecorder)
 			}
 			for i, want := range tt.wantCalls {
-				if recorder[i] != want {
-					t.Errorf("call %d: expected %q, got %q", i, want, recorder[i])
+				if dispatchRecorder[i] != want {
+					t.Errorf("call %d: expected %q, got %q", i, want, dispatchRecorder[i])
 				}
 			}
 		})
@@ -71,14 +71,14 @@ func TestUnrecognizedSubcommand(t *testing.T) {
 		cmdDownloadModelFn = origDl
 	})
 
-	recorder = nil
-	cmdEncryptConfigFn = func() { recorder = append(recorder, "encrypt-config") }
-	cmdDownloadModelFn = func() { recorder = append(recorder, "download-model") }
+	dispatchRecorder = nil
+	cmdEncryptConfigFn = func() { dispatchRecorder = append(dispatchRecorder, "encrypt-config") }
+	cmdDownloadModelFn = func() { dispatchRecorder = append(dispatchRecorder, "download-model") }
 
 	dispatchSubcommand([]string{"mibee-nvr", "unknown-command"})
 
-	if len(recorder) != 0 {
-		t.Errorf("expected 0 calls for unknown subcommand, got %v", recorder)
+	if len(dispatchRecorder) != 0 {
+		t.Errorf("expected 0 calls for unknown subcommand, got %v", dispatchRecorder)
 	}
 }
 
@@ -91,14 +91,14 @@ func TestNoArgs(t *testing.T) {
 		cmdDownloadModelFn = origDl
 	})
 
-	recorder = nil
-	cmdEncryptConfigFn = func() { recorder = append(recorder, "encrypt-config") }
-	cmdDownloadModelFn = func() { recorder = append(recorder, "download-model") }
+	dispatchRecorder = nil
+	cmdEncryptConfigFn = func() { dispatchRecorder = append(dispatchRecorder, "encrypt-config") }
+	cmdDownloadModelFn = func() { dispatchRecorder = append(dispatchRecorder, "download-model") }
 
 	dispatchSubcommand([]string{"mibee-nvr"})
 
-	if len(recorder) != 0 {
-		t.Errorf("expected 0 calls with no args, got %v", recorder)
+	if len(dispatchRecorder) != 0 {
+		t.Errorf("expected 0 calls with no args, got %v", dispatchRecorder)
 	}
 }
 

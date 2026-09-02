@@ -1273,6 +1273,15 @@ func (r *XiaomiRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) err
 	return nil
 }
 
+// PixelTriggerEvent injects a pixgate CV activity confirmation (#636).
+func (r *XiaomiRecorder) PixelTriggerEvent(at time.Time, hold time.Duration) error {
+	if r.adaptive == nil {
+		return fmt.Errorf("camera %s is not in adaptive recording mode", r.cfg.CameraID)
+	}
+	r.adaptive.PixelLoud(at, hold)
+	return nil
+}
+
 // closeCurrentSegment finalizes the current MP4 segment.
 func (r *XiaomiRecorder) closeCurrentSegment() {
 	if r.muxer == nil {

@@ -744,6 +744,18 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 	default:
 		return fmt.Errorf("cameras.%s.recording_mode must be \"continuous\" or \"adaptive\" (got %q)", cam.ID, cam.RecordingMode)
 	}
+	switch cam.RecordingTier {
+	case "", "single", "tiered":
+	default:
+		return fmt.Errorf("cameras.%s.recording_tier must be \"tiered\" (got %q)", cam.ID, cam.RecordingTier)
+	}
+	if cam.RecordingTier == "tiered" {
+		switch cam.Protocol {
+		case "rtsp", "onvif", "gb28181":
+		default:
+			return fmt.Errorf("cameras.%s.recording_tier: tiered requires an rtsp/onvif/gb28181 camera with a sub-stream (got protocol %q)", cam.ID, cam.Protocol)
+		}
+	}
 	if cam.AudioTrigger != nil && cam.AudioTrigger.Enabled {
 		if cam.RecordingMode != "adaptive" {
 			return fmt.Errorf("cameras.%s.audio_trigger requires recording_mode: adaptive (got %q)", cam.ID, cam.RecordingMode)
@@ -755,6 +767,9 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 		if at.PreCaptureS < 0 || at.PreCaptureS > 30 {
 			return fmt.Errorf("cameras.%s.audio_trigger.pre_capture_s must be 0–30, got %d", cam.ID, at.PreCaptureS)
 		}
+	}
+	if err := validatePixgate(cam); err != nil {
+		return err
 	}
 	if cam.RecordingMode != "adaptive" {
 		return nil
@@ -797,6 +812,52 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 	}
 	if a.AmbientArchive && !a.AmbientAudio {
 		return fmt.Errorf("cameras.%s.adaptive.ambient_archive requires ambient_audio", cam.ID)
+	}
+	if a.NoiseFloorBytes != 0 && (a.NoiseFloorBytes < 1 || a.NoiseFloorBytes > 8<<20) {
+		return fmt.Errorf("cameras.%s.adaptive.noise_floor_bytes must be 1–8388608 (bytes), got %v", cam.ID, a.NoiseFloorBytes)
+	}
+	return nil
+}
+
+// validatePixgate checks the per-camera pixel-gate config (#636).
+func validatePixgate(cam CameraConfig) error {
+	p := cam.Pixgate
+	if p == nil || !p.Enabled {
+		return nil
+	}
+	if p.SampleFPS != 0 && (p.SampleFPS < 0.2 || p.SampleFPS > 2) {
+		return fmt.Errorf("cameras.%s.pixgate.sample_fps must be 0.2–2, got %v", cam.ID, p.SampleFPS)
+	}
+	if p.MinAreaPct != 0 && (p.MinAreaPct < 0.1 || p.MinAreaPct > 50) {
+		return fmt.Errorf("cameras.%s.pixgate.min_area_pct must be 0.1–50, got %v", cam.ID, p.MinAreaPct)
+	}
+	if p.Persist != 0 && (p.Persist < 1 || p.Persist > 10) {
+		return fmt.Errorf("cameras.%s.pixgate.persist must be 1–10, got %d", cam.ID, p.Persist)
+	}
+	if p.Hold != "" {
+		d, err := time.ParseDuration(p.Hold)
+		if err != nil || d < time.Second || d > 10*time.Minute {
+			return fmt.Errorf("cameras.%s.pixgate.hold must be 1s–10m, got %q", cam.ID, p.Hold)
+		}
+	}
+	if p.GhostSecs != 0 && (p.GhostSecs < 0 || p.GhostSecs > 3600) {
+		return fmt.Errorf("cameras.%s.pixgate.ghost_secs must be 0–3600, got %v", cam.ID, p.GhostSecs)
+	}
+	for i, m := range p.Masks {
+		if len(m.Points) < 3 {
+			return fmt.Errorf("cameras.%s.pixgate.masks[%d] needs ≥3 points", cam.ID, i)
+		}
+		for _, pt := range m.Points {
+			if pt[0] < 0 || pt[0] > 1 || pt[1] < 0 || pt[1] > 1 {
+				return fmt.Errorf("cameras.%s.pixgate.masks[%d] points must be in [0,1]", cam.ID, i)
+			}
+		}
+	}
+	// The gate samples the sub-stream: it needs one to exist (a manual URL or
+	// a discoverable profile). The resolver failure at runtime is only a WARN,
+	// but an obviously-impossible combination is rejected up front.
+	if cam.Protocol == "srt" || cam.Protocol == "rtmp" || cam.Protocol == "whip" {
+		return fmt.Errorf("cameras.%s.pixgate requires an RTSP-reachable sub-stream (rtsp/onvif/gb28181 cameras)", cam.ID)
 	}
 	return nil
 }

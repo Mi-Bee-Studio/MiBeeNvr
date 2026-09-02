@@ -17,6 +17,7 @@
   import { t } from '$lib/i18n';
   import { formatDate, parseServerDate } from '$lib/format';
   import { findSegmentAt, formatLength as formatLengthUtil, type TimelineSegment } from '$lib/timeline-utils';
+  import { effectiveMotion } from '$lib/motion';
 
   let {
     cameraId,
@@ -97,21 +98,26 @@
 
   function segmentFill(rec: RecordingTimelineSegment): string {
     if (isVideoFormat(rec.format)) {
-      return (rec.motion_score ?? -1) >= 0 ? heatColor(rec.motion_score!) : UNANALYZED_COLOR;
+      const eff = effectiveMotion(rec);
+      return eff !== null ? heatColor(eff) : UNANALYZED_COLOR;
     }
     return formatColor[rec.format] || '#6b7280';
   }
 
   function segmentScoreLabel(rec: RecordingTimelineSegment): string {
     if (!isVideoFormat(rec.format)) return '';
-    const score = (rec.motion_score ?? -1) >= 0 ? rec.motion_score!.toFixed(2) : t('timeline.unanalyzed');
-    return ` · ${t('timeline.score')}: ${score}`;
+    const eff = effectiveMotion(rec);
+    if (eff === null) return ` · ${t('timeline.score')}: ${t('timeline.unanalyzed')}`;
+    const conf = rec.motion_confidence ?? -1;
+    // #634: flag low-confidence (bitrate-starved) segments in the tooltip.
+    const lowConf = conf >= 0 && conf < 0.5 ? ' ⚠' : '';
+    return ` · ${t('timeline.score')}: ${eff.toFixed(2)}${lowConf}`;
   }
 
   // Current recording's activity badge (moved from the standalone activity strip)
   const currentScore = $derived.by(() => {
     if (!currentRecording || !isVideoFormat(currentRecording.format)) return null;
-    return (currentRecording.motion_score ?? -1) >= 0 ? currentRecording.motion_score! : null;
+    return effectiveMotion(currentRecording);
   });
   const hasUnanalyzed = $derived(
     segments.some((s) => isVideoFormat(s.rec.format) && (s.rec.motion_score ?? -1) < 0),

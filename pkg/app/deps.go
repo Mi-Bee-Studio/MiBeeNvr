@@ -20,6 +20,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
@@ -69,6 +70,7 @@ type appDeps struct {
 	mergeScheduler        *timelapse.MergeScheduler
 	visionMgr             *vision.Coordinator // NVR→Vision push coordinator
 	motionAnalyzer        *motion.Analyzer    // offline motion-score service (issue #435)
+	pixgateMgr            *pixgate.Manager    // pixel-domain fine gate (issue #636)
 
 	// Camera + health + relay
 	camMgr    *camera.CameraManager

@@ -65,6 +65,14 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 	filter.Activity = r.URL.Query().Get("activity")
 
+	// Tier filter (#637): ?layer=1 selects the continuous sub-stream tier
+	// (the default list hides it); ?layer=0 forces main explicitly.
+	if v := r.URL.Query().Get("layer"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && (n == 0 || n == 1) {
+			filter.Layer = &n
+		}
+	}
+
 	// Archived toggle: the frontend archive view sends ?archived=true to list
 	// recordings of archived cameras (the DB layer and count-cache key already
 	// support it — handleDailyRecordingSummary parses it too). Without this

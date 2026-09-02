@@ -79,7 +79,14 @@ type CameraUpdate struct {
 	// or "adaptive". nil = unchanged. Changing it (or Adaptive params) requires
 	// a recorder restart — the mode is read at recorder construction.
 	RecordingMode *string
-	Adaptive      *config.AdaptiveRecordingConfig
+	// RecordingTier enables the continuous sub-stream recording channel
+	// (#637): ""/"single" or "tiered". nil = unchanged. Tier changes are read
+	// by the tiered-recording service — applies on NVR restart.
+	RecordingTier *string
+	// Pixgate arms the pixel-domain fine gate (#636). nil = unchanged;
+	// applies on NVR restart (the service reads config at boot).
+	Pixgate  *config.CameraPixgateConfig
+	Adaptive *config.AdaptiveRecordingConfig
 	// AudioTrigger arms loudness-triggered recording (#478) on adaptive
 	// cameras. nil = unchanged; {enabled:false} disarms. Changes require a
 	// recorder restart (read at recorder construction).

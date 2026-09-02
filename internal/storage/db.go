@@ -235,8 +235,12 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // compressed-domain boring-segment detection). Both columns are also ensured
 // via idempotent ALTER for databases created before v33.
 //
+// v34: added recordings.motion_confidence (issue #634 — absolute-size
+// confidence discounting the relative score on bitrate-starved segments).
+// Also ensured via idempotent ALTER; pre-v34 rows carry -1 = "full weight".
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "33"
+const currentSchemaVersion = "34"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -297,8 +301,10 @@ func (d *DB) Init(ctx context.Context) error {
         ai_processed_at TEXT DEFAULT NULL,
         ai_error TEXT DEFAULT NULL,
         motion_score REAL DEFAULT -1,
+        motion_confidence REAL DEFAULT -1,
         activity_flags TEXT DEFAULT '',
         timeline_map TEXT DEFAULT '',
+        layer INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (camera_id) REFERENCES cameras(id)
     );`
@@ -544,6 +550,30 @@ func (d *DB) ensureRecordingsMotionColumns(ctx context.Context) error {
 		if _, err := d.db.ExecContext(ctx,
 			`ALTER TABLE recordings ADD COLUMN timeline_map TEXT DEFAULT ''`); err != nil {
 			return fmt.Errorf("add timeline_map column: %w", err)
+		}
+	}
+	var confColExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='motion_confidence'`,
+	).Scan(&confColExists); err != nil {
+		return fmt.Errorf("check motion_confidence column: %w", err)
+	}
+	if confColExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE recordings ADD COLUMN motion_confidence REAL DEFAULT -1`); err != nil {
+			return fmt.Errorf("add motion_confidence column: %w", err)
+		}
+	}
+	var layerColExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name='layer'`,
+	).Scan(&layerColExists); err != nil {
+		return fmt.Errorf("check layer column: %w", err)
+	}
+	if layerColExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE recordings ADD COLUMN layer INTEGER DEFAULT 0`); err != nil {
+			return fmt.Errorf("add layer column: %w", err)
 		}
 	}
 	return nil

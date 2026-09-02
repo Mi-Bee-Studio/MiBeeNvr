@@ -638,6 +638,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 		cam.RecordingMode = *updates.RecordingMode
 	}
+	if updates.RecordingTier != nil {
+		cam.RecordingTier = *updates.RecordingTier
+	}
+	if updates.Pixgate != nil {
+		cam.Pixgate = updates.Pixgate
+	}
 	if updates.Adaptive != nil {
 		// Params are read at recorder construction; only a real change needs
 		// the restart (the edit form re-sends the whole object on every save).

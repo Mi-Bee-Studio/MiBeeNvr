@@ -327,6 +327,22 @@ func (r *ONVIFRecorder) AudioTriggerEvent(at time.Time, hold time.Duration) erro
 	return trig.AudioTriggerEvent(at, hold)
 }
 
+// PixelTriggerEvent forwards a pixgate CV activity confirmation (#636) to the
+// current delegate (same forwarding pattern as AudioTriggerEvent).
+func (r *ONVIFRecorder) PixelTriggerEvent(at time.Time, hold time.Duration) error {
+	d := r.Delegate()
+	if d == nil {
+		return fmt.Errorf("camera %s has no active stream delegate", r.cfg.CameraID)
+	}
+	trig, ok := d.(interface {
+		PixelTriggerEvent(at time.Time, hold time.Duration) error
+	})
+	if !ok {
+		return fmt.Errorf("camera %s does not support pixel triggers (codec delegate without adaptive gate)", r.cfg.CameraID)
+	}
+	return trig.PixelTriggerEvent(at, hold)
+}
+
 // detectEncoding determines the stream encoding in priority order:
 //  1. RTSP DESCRIBE probe (authoritative — what the stream actually carries)
 //  2. Manual config (StreamEncoding field) — fallback when DESCRIBE is unavailable

@@ -68,21 +68,24 @@ func migrateAIEventsInTx(ctx context.Context, tx *sql.Tx, newRecordingID string,
 }
 
 // motionAgg accumulates motion info across recordings being merged so the
-// merged row inherits a duration-weighted motion_score and the union of
-// activity flags (#458). Unanalyzed sources (score < 0) contribute their
-// flags but not the average; a set of only-unanalyzed sources keeps the
-// merged row unanalyzed (-1) — treating them as 0 would mislabel a merged
-// hour as "static" and make motion-aware cleanup evict it first.
+// merged row inherits a duration-weighted motion_score (+ confidence, #634)
+// and the union of activity flags (#458). Unanalyzed sources (score < 0)
+// contribute their flags but not the average; a set of only-unanalyzed
+// sources keeps the merged row unanalyzed (-1) — treating them as 0 would
+// mislabel a merged hour as "static" and make motion-aware cleanup evict it
+// first.
 type motionAgg struct {
 	weightedSum  float64
+	confSum      float64 // duration-weighted confidence accumulator
 	totalDur     float64
 	analyzed     int
 	simpleSum    float64
+	simpleConf   float64
 	flags        map[string]struct{}
 	flagsOrdered []string
 }
 
-func (a *motionAgg) add(score float64, flags string, dur float64) {
+func (a *motionAgg) add(score, conf float64, flags string, dur float64) {
 	if a.flags == nil {
 		a.flags = make(map[string]struct{})
 	}
@@ -103,22 +106,29 @@ func (a *motionAgg) add(score float64, flags string, dur float64) {
 	a.weightedSum += score * dur
 	a.totalDur += dur
 	a.simpleSum += score
+	if conf < 0 {
+		conf = 1 // pre-v634 sources: keep full weight
+	}
+	a.confSum += conf * dur
+	a.simpleConf += conf
 	a.analyzed++
 }
 
-// result returns the aggregated (score, flags). Score falls back to a simple
-// average when every analyzed source has zero duration.
-func (a *motionAgg) result() (float64, string) {
+// result returns the aggregated (score, confidence, flags). Score falls back
+// to a simple average when every analyzed source has zero duration.
+func (a *motionAgg) result() (float64, float64, string) {
 	if a.analyzed == 0 {
-		return model.MotionScoreUnanalyzed, ""
+		return model.MotionScoreUnanalyzed, model.MotionConfidenceUnanalyzed, ""
 	}
-	var score float64
+	var score, conf float64
 	if a.totalDur > 0 {
 		score = a.weightedSum / a.totalDur
+		conf = a.confSum / a.totalDur
 	} else {
 		score = a.simpleSum / float64(a.analyzed)
+		conf = a.simpleConf / float64(a.analyzed)
 	}
-	return score, strings.Join(a.flagsOrdered, ",")
+	return score, conf, strings.Join(a.flagsOrdered, ",")
 }
 
 // aggregateSourceMotion loads the motion columns of the given recording IDs
@@ -139,19 +149,19 @@ func aggregateSourceMotionChunk(ctx context.Context, tx *sql.Tx, chunk []string,
 		placeholders[i] = "?"
 		args = append(args, id)
 	}
-	q := `SELECT motion_score, COALESCE(activity_flags, ''), COALESCE(duration, 0) FROM recordings WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	q := `SELECT motion_score, COALESCE(motion_confidence, -1), COALESCE(activity_flags, ''), COALESCE(duration, 0) FROM recordings WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("load source motion columns: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var score, dur float64
+		var score, conf, dur float64
 		var flags string
-		if err := rows.Scan(&score, &flags, &dur); err != nil {
+		if err := rows.Scan(&score, &conf, &flags, &dur); err != nil {
 			return fmt.Errorf("scan source motion columns: %w", err)
 		}
-		agg.add(score, flags, dur)
+		agg.add(score, conf, flags, dur)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate source motion columns: %w", err)
@@ -177,10 +187,10 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 	if err := aggregateSourceMotion(ctx, tx, oldIDs, &agg); err != nil {
 		return err
 	}
-	motionScore, motionFlags := agg.result()
+	motionScore, motionConf, motionFlags := agg.result()
 
-	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, activity_flags, timeline_map) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
-	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, model.MergeStatusMerged, merged.MergeTier, 100, merged.MergeQuality, motionScore, motionFlags, merged.TimelineMap)
+	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, motion_confidence, activity_flags, timeline_map) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
+	_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize, merged.FrameCount, model.MergeStatusMerged, merged.MergeTier, 100, merged.MergeQuality, motionScore, motionConf, motionFlags, merged.TimelineMap)
 	if err != nil {
 		return err
 	}
@@ -276,22 +286,22 @@ func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recordi
 	if err := aggregateSourceMotion(ctx, tx, sourceIDs, &agg); err != nil {
 		return err
 	}
-	motionScore, motionFlags := agg.result()
+	motionScore, motionConf, motionFlags := agg.result()
 
 	if existingMergedID == "" {
 		// Case 1: Create — INSERT new merged recording.
-		q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, activity_flags, timeline_map) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
+		q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, merge_progress, merge_quality, motion_score, motion_confidence, activity_flags, timeline_map) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`
 		_, err = tx.ExecContext(ctx, q, merged.ID, merged.CameraID, merged.FilePath, merged.Format,
 			timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration, merged.FileSize,
-			merged.FrameCount, model.MergeStatusMerged, "rolling", 100, merged.MergeQuality, motionScore, motionFlags, merged.TimelineMap)
+			merged.FrameCount, model.MergeStatusMerged, "rolling", 100, merged.MergeQuality, motionScore, motionConf, motionFlags, merged.TimelineMap)
 		if err != nil {
 			return err
 		}
 	} else {
 		// Case 2: Append — UPDATE existing merged recording.
-		q := `UPDATE recordings SET file_path = ?, ended_at = ?, duration = ?, file_size = ?, frame_count = ?, merge_quality = ?, motion_score = ?, activity_flags = ?, timeline_map = ? WHERE id = ?;`
+		q := `UPDATE recordings SET file_path = ?, ended_at = ?, duration = ?, file_size = ?, frame_count = ?, merge_quality = ?, motion_score = ?, motion_confidence = ?, activity_flags = ?, timeline_map = ? WHERE id = ?;`
 		_, err = tx.ExecContext(ctx, q, merged.FilePath, timeToDB(merged.EndedAt), merged.Duration,
-			merged.FileSize, merged.FrameCount, merged.MergeQuality, motionScore, motionFlags, merged.TimelineMap, existingMergedID)
+			merged.FileSize, merged.FrameCount, merged.MergeQuality, motionScore, motionConf, motionFlags, merged.TimelineMap, existingMergedID)
 		if err != nil {
 			return err
 		}
@@ -329,7 +339,7 @@ func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recordi
 // excluding merged and incomplete segments.
 func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowStart, windowEnd time.Time) ([]*model.Recording, error) {
 	rows, err := d.readConn().QueryContext(ctx,
-		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
+		`SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND COALESCE(layer,0)=0 AND ended_at IS NOT NULL AND started_at >= ? AND started_at < ? ORDER BY started_at ASC;`,
 		cameraID, formatTime(windowStart), formatTime(windowEnd))
 	if err != nil {
 		return nil, err
@@ -366,7 +376,7 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 // fragments are left for the periodic MergeManager to digest gradually instead of
 // triggering an IO storm on the first boot after enabling rolling merge.
 func (d *DB) ListPendingSegmentsForRolling(ctx context.Context, cameraID string, includeFailed bool, limit int, since time.Time) ([]*model.Recording, error) {
-	query := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE merge_status = 'pending' AND ended_at IS NOT NULL AND format != 'timelapse'`
+	query := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE merge_status = 'pending' AND COALESCE(layer,0)=0 AND ended_at IS NOT NULL AND format != 'timelapse'`
 	args := []interface{}{}
 	if includeFailed {
 		query = strings.Replace(query, "merge_status = 'pending'", "merge_status IN ('pending', 'failed')", 1)
@@ -436,7 +446,7 @@ func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge
 	// non-UTC host and loosen the minAge gate (same class as the
 	// ListDarkRecordings bug, #565).
 	cutoff := time.Now().UTC().Add(-minAge).Format(sqliteTimeFormat)
-	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
+	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND COALESCE(layer,0)=0 AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
 	rows, err := d.readConn().QueryContext(ctx, query, cameraID, cutoff)
 	if err != nil {
 		return nil, err
@@ -610,7 +620,7 @@ func (d *DB) ListRecordingsByMergeStatus(ctx context.Context, statuses []string,
 		placeholders[i] = "?"
 		args = append(args, s)
 	}
-	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, motion_score, activity_flags FROM recordings WHERE merge_status IN (" +
+	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, motion_score, motion_confidence, activity_flags, COALESCE(layer,0) FROM recordings WHERE merge_status IN (" +
 		strings.Join(placeholders, ",") + ")"
 	if cameraID != "" {
 		q += " AND camera_id=?"
@@ -651,7 +661,7 @@ func (d *DB) ListRecordingsByMergeStatus(ctx context.Context, statuses []string,
 //
 // Reset these to pending (via SetMergeStatus) to re-queue them for merging.
 func (d *DB) ListFakeMergedRecordings(ctx context.Context, cameraID string, limit int, maxDurationSec float64) ([]*model.Recording, error) {
-	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, motion_score, activity_flags FROM recordings WHERE merge_status='merged' AND (merge_path IS NULL OR merge_path='')"
+	q := "SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, motion_score, motion_confidence, activity_flags, COALESCE(layer,0) FROM recordings WHERE merge_status='merged' AND (merge_path IS NULL OR merge_path='')"
 	args := []any{}
 	if cameraID != "" {
 		q += " AND camera_id=?"
@@ -786,7 +796,7 @@ func (d *DB) ListSingletonPendingRecordings(ctx context.Context, cameraID string
 					PARTITION BY camera_id, strftime('%Y-%m-%d %H', started_at), format
 				) as cnt
 			FROM recordings
-			WHERE camera_id = ? AND merge_status = 'pending' AND ended_at IS NOT NULL AND ended_at < ?
+			WHERE camera_id = ? AND merge_status = 'pending' AND COALESCE(layer,0)=0 AND ended_at IS NOT NULL AND ended_at < ?
 		)
 		SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived
 		FROM hour_buckets WHERE cnt = 1

@@ -9,6 +9,7 @@
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
   import Pagination from '../Pagination.svelte';
   import type { Recording, Camera } from '$lib/api';
+  import { effectiveMotion } from '$lib/motion';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
 
   interface Props {
@@ -366,12 +367,13 @@
                   <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
                 {/if}
                 {#if recording.motion_score !== undefined && recording.motion_score >= 0}
+                  {@const effScore = effectiveMotion(recording) ?? 0}
                   <span
                     class="badge text-white"
-                    style={motionBadgeStyle(recording.motion_score)}
-                    title="{t('recordings.motionScore')}: {recording.motion_score.toFixed(2)}{recording.activity_flags ? ` · ${recording.activity_flags}` : ''}"
+                    style={motionBadgeStyle(effScore)}
+                    title="{t('recordings.motionScore')}: {effScore.toFixed(2)}{(recording.motion_confidence ?? -1) >= 0 && recording.motion_confidence! < 0.5 ? ' ⚠' : ''}{recording.activity_flags ? ` · ${recording.activity_flags}` : ''}"
                   >
-                    {t('recordings.motionShort')} {recording.motion_score.toFixed(2)}
+                    {t('recordings.motionShort')} {effScore.toFixed(2)}
                   </span>
                 {/if}
                 {#if recording.format === 'timelapse'}

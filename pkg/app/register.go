@@ -13,11 +13,16 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tierrec"
 )
 
 // registerServices registers all services on the App in start/stop order,
@@ -234,6 +239,80 @@ func registerServices(a *App, deps *appDeps) error {
 	if deps.motionAnalyzer != nil {
 		if err := a.Register(deps.motionAnalyzer); err != nil {
 			return fmt.Errorf("register motion-score: %w", err)
+		}
+	}
+
+	// 4.3b. pixgate — pixel-domain fine gate (#636): classic CV over a ~1fps
+	// sampled decode of enabled cameras' sub-streams; confirmed activity
+	// fires the recorder pixel trigger (TL exit + GOP flush + hold). ffmpeg
+	// is optional — without it the service start is a no-op WARN.
+	if deps.camMgr != nil {
+		cams := pixgateCameras(deps.cfg)
+		if len(cams) > 0 {
+			m := pixgate.NewManager(pixgate.Config{
+				FFmpegPath: resolveFFmpegPath(deps.cfg.Transcoding.FFmpegPath),
+				Resolver: func(ctx context.Context, cameraID string) (pixgate.Target, bool, error) {
+					t, ok, err := deps.camMgr.ResolveSubStreamTarget(ctx, cameraID)
+					if err != nil || !ok {
+						return pixgate.Target{}, ok, err
+					}
+					return pixgate.Target{URL: t.URL, Username: t.Username, Password: t.Password, Kind: t.Kind}, true, nil
+				},
+				Trigger: func(cameraID string, hold time.Duration) error {
+					rec := deps.camMgr.GetRecorder(cameraID)
+					if rec == nil {
+						return fmt.Errorf("camera %s has no recorder", cameraID)
+					}
+					trig, ok := rec.(interface {
+						PixelTriggerEvent(at time.Time, hold time.Duration) error
+					})
+					if !ok {
+						return fmt.Errorf("camera %s does not support pixel triggers", cameraID)
+					}
+					return trig.PixelTriggerEvent(time.Now(), hold)
+				},
+				Bus:     deps.eventBus,
+				Cameras: cams,
+			})
+			deps.pixgateMgr = m
+			// Pixel-preferred activity scoring (2026-09-01): the motion
+			// analyzer prefers the pixgate FG time series over byte spikes
+			// whenever the window is well covered; PTZ commands blind the
+			// gate so a moving camera never reads as activity.
+			deps.motionAnalyzer.SetPixelSource(pixgateFGSource{m})
+			if deps.handler != nil {
+				deps.handler.SetPTZSuppressor(func(cameraID string) {
+					m.Suppress(cameraID, 8*time.Second)
+				})
+			}
+			if err := a.Register(m); err != nil {
+				return fmt.Errorf("register pixgate: %w", err)
+			}
+		}
+	}
+
+	// 4.3c. tiered-recording — continuous sub-stream channel (#637). One
+	// recorder per recording_tier: tiered camera; rows land as layer=1 and
+	// stay out of the default list/merge/push filters. Tier changes are read
+	// here at boot (restart to apply).
+	if deps.camMgr != nil {
+		var tiered []string
+		for _, cam := range deps.cfg.Cameras {
+			if cam.RecordingTier == "tiered" {
+				tiered = append(tiered, cam.ID)
+			}
+		}
+		if len(tiered) > 0 {
+			tm := tierrec.NewManager(tierrec.Config{
+				Provider:    deps.camMgr,
+				Store:       deps.db,
+				Bus:         deps.eventBus,
+				StorageRoot: deps.cfg.Storage.RootDir,
+			})
+			tm.SetCameras(tiered)
+			if err := a.Register(tm); err != nil {
+				return fmt.Errorf("register tiered-recording: %w", err)
+			}
 		}
 	}
 
@@ -681,4 +760,57 @@ func resolveFFmpegPath(configured string) string {
 		return p
 	}
 	return ""
+}
+
+// pixgateCameras extracts the resolved pixgate config per enabled camera
+// (#636). Hold is parsed here (config layer validated the range).
+func pixgateCameras(cfg *config.Config) map[string]pixgate.CameraConfig {
+	if cfg == nil {
+		return nil
+	}
+	cams := map[string]pixgate.CameraConfig{}
+	for _, cam := range cfg.Cameras {
+		p := cam.Pixgate
+		if p == nil || !p.Enabled {
+			continue
+		}
+		hold := 30 * time.Second
+		if p.Hold != "" {
+			if d, err := time.ParseDuration(p.Hold); err == nil {
+				hold = d
+			}
+		}
+		var masks []pixgate.Mask
+		for _, m := range p.Masks {
+			masks = append(masks, pixgate.Mask(m.Points))
+		}
+		cams[cam.ID] = pixgate.CameraConfig{
+			SampleFPS:  p.SampleFPS,
+			MinAreaPct: p.MinAreaPct,
+			Persist:    p.Persist,
+			Hold:       hold,
+			GhostSecs:  p.GhostSecs,
+			Masks:      masks,
+		}
+	}
+	return cams
+}
+
+// pixgateFGSource adapts *pixgate.Manager onto motion.PixelSource.
+type pixgateFGSource struct {
+	m *pixgate.Manager
+}
+
+func (p pixgateFGSource) SegmentFG(cameraID string, start, end time.Time) (motion.FGWindow, bool) {
+	s, ok := p.m.SegmentStats(cameraID, start, end)
+	if !ok {
+		return motion.FGWindow{}, false
+	}
+	return motion.FGWindow{
+		Valid:       s.Valid,
+		MeanAreaPct: s.MeanAreaPct,
+		DutyCycle:   s.DutyCycle,
+		TrigAreaPct: s.TrigAreaPct,
+		Coverage:    s.Coverage,
+	}, true
 }

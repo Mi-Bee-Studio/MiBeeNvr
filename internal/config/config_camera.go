@@ -107,6 +107,15 @@ type CameraConfig struct {
 	//                       full-rate recording. H.264/H.265 cameras only.
 	RecordingMode string `yaml:"recording_mode,omitempty" json:"recording_mode,omitempty"`
 
+	// RecordingTier adds a CONTINUOUS sub-stream recording channel (#637):
+	// "tiered" records the camera's low-bitrate sub-stream 24/7 as layer-1
+	// rows (never-miss baseline) while the main stream keeps its
+	// recording_mode density. Intended pairing for near-empty scenes:
+	// adaptive + video_exit: false (+ pixgate) so the main stream is
+	// event-only. "" = single-tier (default). Requires a sub-stream-capable
+	// protocol (rtsp/onvif/gb28181).
+	RecordingTier string `yaml:"recording_tier,omitempty" json:"recording_tier,omitempty"`
+
 	// Adaptive holds the tuning knobs for recording_mode: adaptive. Nil uses
 	// the defaults in recorder.DefaultAdaptiveConfig.
 	Adaptive *AdaptiveRecordingConfig `yaml:"adaptive,omitempty" json:"adaptive,omitempty"`
@@ -118,6 +127,12 @@ type CameraConfig struct {
 	// audio. G.711 (µ-law/A-law) cameras only — AAC/Opus have no decoder in
 	// the static build (the recorder logs that the trigger stays inactive).
 	AudioTrigger *CameraAudioTriggerConfig `yaml:"audio_trigger,omitempty" json:"audio_trigger,omitempty"`
+
+	// Pixgate arms the pixel-domain fine gate (#636) for this camera: classic
+	// CV over a ~1fps sampled decode of the sub-stream. Works standalone
+	// (exits timelapse on confirmed blobs) and pairs with video_exit: false
+	// (resident timelapse where pixgate becomes the video activity exit).
+	Pixgate *CameraPixgateConfig `yaml:"pixgate,omitempty" json:"pixgate,omitempty"`
 
 	// Recording schedule: restrict recording to specific time ranges (e.g. daytime only).
 	// When nil or disabled, records 24/7. Uses the same TimeRange/ScheduleConfig
@@ -193,6 +208,62 @@ type AdaptiveRecordingConfig struct {
 	// (the merged product still only carries the atmosphere bed). Only
 	// meaningful with ambient_audio; default false.
 	AmbientArchive bool `yaml:"ambient_archive,omitempty" json:"ambient_archive,omitempty"`
+	// NoiseFloorBytes is an ABSOLUTE per-frame byte floor (#635): P-frames
+	// smaller than this never count as exit spikes, guarding cameras whose
+	// encoder starves its bitrate (night mode / rate-control collapse) where
+	// the relative spike metric fires on jitter. 0/unset = disabled (the
+	// self-calibrating auto floor still applies unless auto_noise_floor:
+	// false). Range 0–8MB.
+	NoiseFloorBytes float64 `yaml:"noise_floor_bytes,omitempty" json:"noise_floor_bytes,omitempty"`
+	// AutoNoiseFloor self-calibrates the absolute floor from TIMELAPSE dwell
+	// (#635): sparse-mode frames are known-static, so their p99 size ×1.25
+	// (capped at 4× the rolling median) becomes the camera-specific noise
+	// ceiling. nil/unset = enabled.
+	AutoNoiseFloor *bool `yaml:"auto_noise_floor,omitempty" json:"auto_noise_floor,omitempty"`
+	// VideoExit gates the video-spike exit path (#638). false = "resident
+	// timelapse": the camera stays sparse through video noise (rain, water
+	// glare, foliage) and only audio events or external semantic triggers
+	// (POST /api/cameras/{id}/adaptive/trigger) resume full-rate. nil/unset
+	// = enabled (video exits work as before).
+	VideoExit *bool `yaml:"video_exit,omitempty" json:"video_exit,omitempty"`
+}
+
+// CameraPixgateConfig arms the pixel-domain fine gate (#636): a low-rate
+// sampled decode of the camera's SUB-stream feeding a classic-CV activity
+// gate (background model + blob area + ROI masks + persistence). Confirmed
+// activity triggers full-rate via the recorder's pixel trigger — the
+// NVR-internal answer to rain/glare noise the compressed-domain signal
+// cannot separate from real motion. Requires an RTSP-reachable sub-stream
+// and ffmpeg (optional dependency; the gate stays off without it).
+type CameraPixgateConfig struct {
+	// Enabled arms the gate for this camera.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// SampleFPS is the sampling rate (default 1; range 0.2–2).
+	SampleFPS float64 `yaml:"sample_fps,omitempty" json:"sample_fps,omitempty"`
+	// MinAreaPct is the largest-blob area as % of the analysis grid that
+	// counts as activity (default 1.5; range 0.1–50).
+	MinAreaPct float64 `yaml:"min_area_pct,omitempty" json:"min_area_pct,omitempty"`
+	// Persist is the consecutive active samples required to confirm
+	// (default 2; range 1–10).
+	Persist int `yaml:"persist,omitempty" json:"persist,omitempty"`
+	// Hold is how long each confirmed sample keeps full-rate armed
+	// (default "30s"; range 1s–10m).
+	Hold string `yaml:"hold,omitempty" json:"hold,omitempty"`
+	// GhostSecs is how long a STATIC blob (light switched on, parked car,
+	// lens water drop) may keep triggering before the background model
+	// absorbs it (default 300s; range 0–3600, 0 = default). A moving
+	// object is never absorbed.
+	GhostSecs float64 `yaml:"ghost_secs,omitempty" json:"ghost_secs,omitempty"`
+	// Masks are exclusion polygons in normalized [0,1] coordinates — sky,
+	// water, street: regions whose permanent shimmer must never read as
+	// activity.
+	Masks []PixgateMask `yaml:"masks,omitempty" json:"masks,omitempty"`
+}
+
+// PixgateMask is one ROI exclusion polygon.
+type PixgateMask struct {
+	Name   string       `yaml:"name,omitempty" json:"name,omitempty"`
+	Points [][2]float64 `yaml:"points" json:"points"`
 }
 
 // CameraAudioTriggerConfig tunes audio_trigger (issue #478).

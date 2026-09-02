@@ -33,14 +33,21 @@ var recorderBuilders = map[string]recorderBuilder{
 // recorder's resolved form, defaulting unspecified fields (issue #435). The
 // config layer has already validated ranges.
 func resolveAdaptiveConfig(a *config.AdaptiveRecordingConfig) *recorder.AdaptiveConfig {
-	var calm, interval string
-	var spike float64
-	var gop int64
-	var ambient, archive bool
+	ov := recorder.AdaptiveOverrides{}
 	if a != nil {
-		calm, interval, spike, gop, ambient, archive = a.CalmThreshold, a.TimelapseInterval, a.SpikeFactor, a.GOPBufferBytes, a.AmbientAudio, a.AmbientArchive
+		ov = recorder.AdaptiveOverrides{
+			CalmThreshold:     a.CalmThreshold,
+			TimelapseInterval: a.TimelapseInterval,
+			SpikeFactor:       a.SpikeFactor,
+			GOPBufferBytes:    a.GOPBufferBytes,
+			AmbientAudio:      a.AmbientAudio,
+			AmbientArchive:    a.AmbientArchive,
+			NoiseFloorBytes:   a.NoiseFloorBytes,
+			AutoNoiseFloor:    a.AutoNoiseFloor,
+			VideoExit:         a.VideoExit,
+		}
 	}
-	ac := recorder.ResolveAdaptiveConfig(calm, interval, spike, gop, ambient, archive)
+	ac := recorder.ResolveAdaptiveConfig(ov)
 	return &ac
 }
 

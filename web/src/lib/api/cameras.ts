@@ -54,6 +54,10 @@ export interface Camera {
   // Loudness trigger for adaptive recording (#478); only effective with
   // recording_mode 'adaptive'.
   audio_trigger?: CameraAudioTriggerConfig;
+  pixgate?: CameraPixgateConfig;
+  /** #637: ""/"single" (default) or "tiered" — continuous sub-stream recording.
+   *  Applies on NVR restart. */
+  recording_tier?: string;
   // Xiaomi two-way audio enable flag
   two_way_audio_enabled?: boolean;
   // Push/ingest fields (SRT/RTMP cameras)
@@ -97,6 +101,16 @@ export interface AdaptiveRecordingConfig {
   timelapse_frame_ms?: number;
   /** Keep the raw ambient G.711 as a sidecar file for post-production. */
   ambient_archive?: boolean;
+  /** #635: absolute per-frame byte floor — P-frames below it never count as
+   *  exit spikes (bitrate-starved cameras whose jitter masquerades as motion).
+   *  0/unset = off (the auto floor below still applies unless disabled). */
+  noise_floor_bytes?: number;
+  /** #635: self-calibrate the noise floor from timelapse dwell. Default true. */
+  auto_noise_floor?: boolean;
+  /** #638: false = resident timelapse — stay sparse through video noise
+   *  (rain/glare/foliage); only audio or external semantic triggers resume
+   *  full-rate. Default true. */
+  video_exit?: boolean;
 }
 
 /** Loudness trigger knobs for recording_mode: 'adaptive' (#478). */
@@ -195,10 +209,12 @@ export interface CreateCameraRequest {
   cascade_sub_stream?: boolean | null;
   // Recording mode (#435). Omit = continuous.
   recording_mode?: string;
+  recording_tier?: string;
   adaptive?: AdaptiveRecordingConfig;
   // Loudness trigger for adaptive recording (#478); only effective with
   // recording_mode 'adaptive'.
   audio_trigger?: CameraAudioTriggerConfig;
+  pixgate?: CameraPixgateConfig;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -246,10 +262,12 @@ export interface UpdateCameraRequest {
   cascade_sub_stream?: boolean | null;
   // Recording mode (#435). Omit = unchanged. Changing it restarts the recorder.
   recording_mode?: string;
+  recording_tier?: string;
   adaptive?: AdaptiveRecordingConfig;
   // Loudness trigger for adaptive recording (#478); only effective with
   // recording_mode 'adaptive'.
   audio_trigger?: CameraAudioTriggerConfig;
+  pixgate?: CameraPixgateConfig;
   // Push/ingest fields (SRT/RTMP)
   stream_key?: string;
   srt_passphrase?: string;
@@ -394,7 +412,7 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     // GB/T 28181 DeviceControl transport for gb28181 cameras.
     capabilities: { hls: true, ptz: true, snapshot: false, discovery: false, auth: false },
   },
-]
+];
 
 // --- Camera CRUD ---
 
@@ -894,10 +912,9 @@ export interface PTZPreset {
 export async function getPTZPresets(cameraId: string, signal?: AbortSignal): Promise<PTZPreset[]> {
   // The handler wraps the list: {"presets": [...]} — unwrap to the array the
   // consumers iterate (a raw object made the preset dropdown render empty).
-  const resp = await apiRequest<{ presets?: PTZPreset[] } | PTZPreset[]>(
-    `/cameras/${cameraId}/ptz/presets`,
-    { signal },
-  );
+  const resp = await apiRequest<{ presets?: PTZPreset[] } | PTZPreset[]>(`/cameras/${cameraId}/ptz/presets`, {
+    signal,
+  });
   return Array.isArray(resp) ? resp : (resp.presets ?? []);
 }
 
@@ -1159,4 +1176,16 @@ export async function stopTwoWayAudio(cameraId: string, signal?: AbortSignal): P
 export function getAudioUpstreamWS(cameraId: string): string {
   const base = API_BASE.replace(/\/api$/, '');
   return `${base}/api/ws/camera/${cameraId}/audio-upstream`;
+}
+
+/** Pixel-domain fine gate (#636): classic CV over a ~1fps sampled decode of
+ *  the camera's sub-stream; confirmed activity triggers full-rate. Requires
+ *  an RTSP-reachable sub-stream + ffmpeg; enable/disable applies on restart. */
+export interface CameraPixgateConfig {
+  enabled: boolean;
+  sample_fps?: number;
+  min_area_pct?: number;
+  persist?: number;
+  hold?: string;
+  masks?: { name?: string; points: [number, number][] }[];
 }
