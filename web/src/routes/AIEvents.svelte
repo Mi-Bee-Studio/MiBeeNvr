@@ -12,6 +12,7 @@
   import { classLabel, eventTypeLabel, severityLabel, zoneLabel } from '$lib/ai-labels';
   import { AlertCircle, Brain, ChevronDown, Play, Settings } from 'lucide-svelte';
   import Pagination from '../components/Pagination.svelte';
+  import VisionMonitorPanel from '../lib/components/VisionMonitorPanel.svelte';
 
   let events = $state<AIEvent[]>([]);
   let total = $state(0);
@@ -208,6 +209,9 @@
       <p class="text-sm th-text-muted">{t('aiEvents.subtitle')}</p>
     </div>
   </div>
+
+  <!-- Consumer monitor (heartbeat v2 metrics, #671) -->
+  <VisionMonitorPanel />
 
   <!-- Filters -->
   <div class="flex flex-wrap gap-3 mb-4">

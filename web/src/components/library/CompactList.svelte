@@ -95,6 +95,22 @@
     return 'badge-neutral';
   }
 
+  // AI processing state badge (#671). Only meaningful states render — the
+  // field is absent for recordings the AI backend never touched.
+  function aiBadgeClass(status: string): string {
+    switch (status) {
+      case 'completed': return 'badge-success';
+      case 'processing': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 animate-pulse';
+      case 'failed': return 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300';
+      case 'skipped': return 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300';
+      default: return 'badge-neutral';
+    }
+  }
+
+  function aiBadgeLabel(status: string): string {
+    return t(`recordings.ai.${status}`);
+  }
+
   // --- Transcoding ---
   function isTranscodingRecording(recordingId: string): TranscodeTask | undefined {
     if (!transcodingStatus?.recent_results) return undefined;
@@ -365,6 +381,14 @@
                   <span class="badge badge-success">{t('recordings.merged')}</span>
                 {:else}
                   <span class="badge badge-neutral">{t('recordings.originalSegment')}</span>
+                {/if}
+                {#if recording.ai_status && recording.ai_status !== 'pending'}
+                  <span
+                    class="badge {aiBadgeClass(recording.ai_status)} text-xs"
+                    title={recording.ai_status === 'skipped' ? t('recordings.ai.skippedHint') : t('recordings.ai.title')}
+                  >
+                    {aiBadgeLabel(recording.ai_status)}
+                  </span>
                 {/if}
                 {#if recording.motion_score !== undefined && recording.motion_score >= 0}
                   {@const effScore = effectiveMotion(recording) ?? 0}

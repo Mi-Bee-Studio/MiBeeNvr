@@ -33,6 +33,9 @@ export interface Recording {
   /** #637: recording tier — 1 = continuous sub-stream (tiered mode); absent/0 = main. */
   layer?: number;
   activity_flags?: string;
+  /** #671: AI backend processing state — processing/completed/failed/skipped
+   *  ('skipped' = consumer-reported queue drop). Absent = never processed. */
+  ai_status?: 'processing' | 'completed' | 'failed' | 'skipped' | 'pending';
 }
 
 export interface FrameInfo {
