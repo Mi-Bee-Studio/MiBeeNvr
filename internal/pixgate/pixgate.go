@@ -560,10 +560,10 @@ func ffmpegArgs(target Target, fps float64) []string {
 	return []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-rtsp_transport", "tcp",
-		// Socket-level read timeout (µs): a dead RTSP connection must fail
-		// inside ffmpeg, not hang the sampler process forever. Paired with
-		// the per-frame stall deadline in sampleFrames (belt and suspenders).
-		"-rw_timeout", "15000000", // 15s
+		// NOTE: no -rw_timeout here — M5's ffmpeg 4.4 rejects the option
+		// outright ("Option rw_timeout not found"), killing the sampler with
+		// zero frames. Wedged network reads are handled portably by the stall
+		// watchdog in sampleFrames (kill + respawn).
 		"-i", u,
 		"-vf", fmt.Sprintf("fps=%.3f,scale=%d:%d", fps, GridW, GridH),
 		"-f", "rawvideo", "-pix_fmt", "gray",

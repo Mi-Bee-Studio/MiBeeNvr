@@ -285,27 +285,25 @@ func TestSampleFramesStallKillsWedgedSource(t *testing.T) {
 	}
 }
 
-// TestFFmpegArgsSocketReadTimeout: the ffmpeg invocation must carry a socket
-// read timeout (-rw_timeout) ahead of -i so a dead RTSP connection fails
-// inside ffmpeg instead of hanging the sampler process forever.
-func TestFFmpegArgsSocketReadTimeout(t *testing.T) {
+// TestFFmpegArgsNoUnsupportedOptions: the sampler args must only use options
+// portable across the fleet's ffmpeg builds. -rw_timeout looked like a second
+// line of defense against wedged RTSP reads, but M5's ffmpeg 4.4 rejects it
+// outright ("Option rw_timeout not found" → Error opening input → sampler
+// EOF-loop with zero frames, deployed 2026-09-02 11:56 and caught live) — the
+// stall watchdog in sampleFrames is the portable defense.
+func TestFFmpegArgsNoUnsupportedOptions(t *testing.T) {
 	args := ffmpegArgs(Target{URL: "rtsp://example/stream"}, 1)
-	iIdx, rwIdx := -1, -1
-	for k, a := range args {
-		if a == "-i" {
-			iIdx = k
-		}
-		if a == "-rw_timeout" {
-			rwIdx = k
+	for _, banned := range []string{"-rw_timeout", "-stimeout", "-timeout"} {
+		for _, a := range args {
+			if a == banned {
+				t.Fatalf("ffmpegArgs must not use %s (rejected by ffmpeg 4.4 on M5): %v", banned, args)
+			}
 		}
 	}
-	if iIdx < 0 {
-		t.Fatal("args missing -i")
-	}
-	if rwIdx < 0 || rwIdx > iIdx {
-		t.Fatal("-rw_timeout must precede -i (it scopes the input socket)")
-	}
-	if rwIdx+1 >= len(args) {
-		t.Fatal("-rw_timeout has no value")
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"-rtsp_transport tcp", "-i rtsp://example/stream", "-f rawvideo", "-pix_fmt gray"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("args missing %q: %v", want, args)
+		}
 	}
 }
