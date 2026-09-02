@@ -19,12 +19,17 @@ func TestStart_UnconfiguredNoop(t *testing.T) {
 	require.NoError(t, c.Stop(), "Stop without a client is a clean no-op")
 }
 
-func TestStart_UnreachableBrokerFailsFast(t *testing.T) {
+// TestStart_UnreachableBrokerRetriesUntilCtxDone: since #661 an unreachable
+// broker no longer fails Start — it retries with backoff until the context
+// is done, then surfaces the last dial error without hanging.
+func TestStart_UnreachableBrokerRetriesUntilCtxDone(t *testing.T) {
 	c := NewClient("tcp://127.0.0.1:1", "cid", "nvr", "", "", nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
+	start := time.Now()
 	err := c.Start(ctx)
-	require.Error(t, err, "connection-refused broker must surface the dial error")
+	require.Error(t, err, "context done before connecting must surface the dial error")
+	require.Less(t, time.Since(start), 5*time.Second, "must not hang past the context deadline")
 }
 
 func TestPublishAIDetection_NotConnected(t *testing.T) {

@@ -203,6 +203,7 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | [Camera Guide](docs/en/camera-guide.md) | Camera setup, protocols, troubleshooting |
 | [FTP Integration](docs/en/ftp-integration.md) | FTP file access setup |
 | [MQTT Integration](docs/en/mqtt-integration.md) | MQTT smart home integration |
+| [Home Assistant](docs/en/home-assistant.md) | Home Assistant integration guide |
 | [WebDAV Integration](docs/en/webdav-integration.md) | WebDAV file access setup |
 | [Troubleshooting](docs/en/troubleshooting.md) | Common issues and solutions |
 | [Transcoding](docs/en/transcoding.md) | FFmpeg transcoding setup |

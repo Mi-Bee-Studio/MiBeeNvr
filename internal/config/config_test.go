@@ -1772,3 +1772,31 @@ func TestValidate_CameraRingBufCap(t *testing.T) {
 	err = Validate(base(10001))
 	require.ErrorContains(t, err, "ring_buf_cap")
 }
+
+func TestMQTTStatusEventsConfig(t *testing.T) {
+	t.Helper()
+
+	// Round-trip: status_events survives Save/Load.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mibee-nvr.yaml")
+	original := &Config{
+		MQTT: MQTTConfig{
+			Enabled:      true,
+			Broker:       "tcp://mqtt.local:1883",
+			Topic:        "mibee",
+			ClientID:     "mibee-nvr",
+			StatusEvents: true,
+		},
+	}
+	original.ApplyDefaults()
+	require.NoError(t, Save(path, original))
+
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	require.True(t, loaded.MQTT.StatusEvents, "status_events=true should round-trip")
+
+	// Default: opt-in, off unless explicitly enabled.
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	require.False(t, cfg.MQTT.StatusEvents, "default mqtt.status_events should be false")
+}

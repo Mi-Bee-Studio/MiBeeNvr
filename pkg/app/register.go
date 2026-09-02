@@ -416,6 +416,21 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 8.5 mqtt-status (optional): event-bus → MQTT forwarding
+	if deps.mqttStatusPub != nil {
+		if err := a.Register(&serviceFunc{
+			name: "mqtt-status",
+			startFunc: func(ctx context.Context) error {
+				return deps.mqttStatusPub.Start(ctx)
+			},
+			stopFunc: func() error {
+				return deps.mqttStatusPub.Stop()
+			},
+		}); err != nil {
+			return fmt.Errorf("register mqtt-status: %w", err)
+		}
+	}
+
 	// 9. ftp (optional)
 	if deps.ftpServer != nil {
 		if err := a.Register(&serviceFunc{

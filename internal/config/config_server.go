@@ -208,6 +208,10 @@ type MQTTConfig struct {
 	ClientID string `yaml:"client_id"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+	// StatusEvents forwards whitelisted event-bus topics (segment completed,
+	// camera added/quality, storage health) to `{topic}/event/<event-topic>`.
+	// Opt-in, matching health.alerts.mqtt's posture. default false
+	StatusEvents bool `yaml:"status_events"`
 }
 
 // ObservabilityConfig defines observability settings

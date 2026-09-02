@@ -805,14 +805,22 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	deps.cleanupMgr = cleanupMgr
 	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)
 
-	// Step 9: Optional MQTT client
+	// Step 9: Optional MQTT client. The trigger dispatcher wires
+	// record/stop actions to the camera manager (camMgr is built at Step 5.6).
 	if cfg.MQTT.Enabled {
-		deps.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, nil)
+		deps.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, mqtt.NewActionDispatcher(deps.camMgr))
 	}
 
 	// Wire MQTT client into health manager for event publishing
 	if healthMgr != nil && deps.mqttClient != nil {
 		healthMgr.SetMQTTClient(deps.mqttClient)
+	}
+
+	// Opt-in event-bus → MQTT forwarding (`{prefix}/event/<topic>`) so
+	// smart-home platforms consume NVR state without REST polling or an
+	// SSE bridge. mqtt.status_events must be explicitly enabled.
+	if cfg.MQTT.Enabled && cfg.MQTT.StatusEvents {
+		deps.mqttStatusPub = mqtt.NewStatusPublisher(deps.eventBus, deps.mqttClient)
 	}
 
 	// Step 10: Optional FTP server

@@ -464,3 +464,59 @@ func TestRunFree_DoesNotBlockOnStorageScan(t *testing.T) {
 	}
 	t.Logf("RunFree returned in %v with seeded storage tree", elapsed)
 }
+
+// TestRunFree_ServiceOrder_MQTTStatusEvents asserts the mqtt and mqtt-status
+// services register in their slots (after archive-deleter, before rtsp) when
+// mqtt.enabled + mqtt.status_events are both on.
+func TestRunFree_ServiceOrder_MQTTStatusEvents(t *testing.T) {
+	t.Helper()
+	cfg, _ := minimalConfig(t)
+
+	cfg.MQTT.Enabled = true
+	cfg.MQTT.Broker = "tcp://127.0.0.1:1" // unreachable: connect happens in Start, not registration
+	cfg.MQTT.StatusEvents = true
+
+	a, err := RunFree(cfg, filepath.Join(cfg.Storage.RootDir, "mibee-nvr.yaml"))
+	if err != nil {
+		t.Fatalf("RunFree: %v", err)
+	}
+
+	svcs := a.Services()
+	t.Logf("observed Services() = %v", svcs)
+
+	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "mqtt", "mqtt-status", "rtsp", "ws", "hls", "api-handler", "pprof-loopback"}
+	if len(svcs) != len(expected) {
+		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
+	}
+	for i, want := range expected {
+		if i >= len(svcs) {
+			t.Errorf("Services()[%d] missing, want %q", i, want)
+			continue
+		}
+		if svcs[i] != want {
+			t.Errorf("Services()[%d] = %q, want %q", i, svcs[i], want)
+		}
+	}
+}
+
+// TestRunFree_ServiceOrder_MQTTStatusEventsDisabled asserts mqtt-status stays
+// absent when status_events is off (opt-in), even with mqtt.enabled=true.
+func TestRunFree_ServiceOrder_MQTTStatusEventsDisabled(t *testing.T) {
+	t.Helper()
+	cfg, _ := minimalConfig(t)
+
+	cfg.MQTT.Enabled = true
+	cfg.MQTT.Broker = "tcp://127.0.0.1:1"
+	cfg.MQTT.StatusEvents = false
+
+	a, err := RunFree(cfg, filepath.Join(cfg.Storage.RootDir, "mibee-nvr.yaml"))
+	if err != nil {
+		t.Fatalf("RunFree: %v", err)
+	}
+
+	for _, name := range a.Services() {
+		if name == "mqtt-status" {
+			t.Errorf("Services() contains %q, want absent when mqtt.status_events=false", name)
+		}
+	}
+}
