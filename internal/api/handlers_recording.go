@@ -384,12 +384,9 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 // handleUpdateRecordingAIStatus allows MiBeeVision to update the AI processing
 // status of a recording. Requires API Key authentication.
 // PATCH /api/recordings/{id}/ai-status  body: {"ai_status":"completed", "ai_error":""}
-// Valid ai_status values: pending, processing, completed, failed.
-
-// handleUpdateRecordingAIStatus allows MiBeeVision to update the AI processing
-// status of a recording. Requires API Key authentication.
-// PATCH /api/recordings/{id}/ai-status  body: {"ai_status":"completed", "ai_error":""}
-// Valid ai_status values: pending, processing, completed, failed.
+// Valid ai_status values: pending, processing, completed, failed, skipped.
+// 'skipped' (#671) = consumer-reported queue drop: terminal, stamps
+// ai_processed_at, reason goes in ai_error.
 func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.Request) {
 	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
 		WriteError(w, http.StatusUnauthorized, "API key required")
@@ -412,10 +409,10 @@ func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.R
 
 	// Validate ai_status value.
 	switch body.AIStatus {
-	case "pending", "processing", "completed", "failed":
+	case "pending", "processing", "completed", "failed", "skipped":
 		// ok
 	default:
-		WriteError(w, http.StatusBadRequest, "invalid ai_status; must be one of: pending, processing, completed, failed")
+		WriteError(w, http.StatusBadRequest, "invalid ai_status; must be one of: pending, processing, completed, failed, skipped")
 		return
 	}
 

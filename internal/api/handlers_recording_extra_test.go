@@ -149,6 +149,26 @@ func TestRecordingCRUD_VisionPaths(t *testing.T) {
 	require.Equal(t, "completed", rec.AIStatus)
 }
 
+func TestRecordingAIStatus_SkippedAccepted(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+	routes := withAPIKey("vision", h.Routes())
+	seedRecording(t, db, makeRecording("skip-1", "cam-1", "mp4", time.Now(), false))
+
+	// 'skipped' = consumer-reported queue drop (#671): terminal, stamps
+	// ai_processed_at, carries the reason in ai_error.
+	rr := doRequest(t, routes, http.MethodPatch, "/api/recordings/skip-1/ai-status",
+		strings.NewReader(`{"ai_status":"skipped","ai_error":"vision drop:queue_full"}`), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	rec, err := db.GetRecording(context.Background(), "skip-1")
+	require.NoError(t, err)
+	require.Equal(t, "skipped", rec.AIStatus)
+	require.Equal(t, "vision drop:queue_full", rec.AIError)
+	require.NotNil(t, rec.AIProcessedAt)
+}
+
 func TestTimelineSeekEvent(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
