@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -161,12 +160,10 @@ func (m *Manager) Roots() []string {
 // GetRootUsage returns total/free bytes of the filesystem containing root —
 // the capacity gate for per-camera migrations.
 func (m *Manager) GetRootUsage(root string) (total, free int64, err error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(root, &stat); err != nil {
+	total, free, err = statfsFree(root)
+	if err != nil {
 		return 0, 0, fmt.Errorf("storage: failed to stat %q: %w", root, err)
 	}
-	total = int64(stat.Blocks * uint64(stat.Bsize))
-	free = int64(stat.Bfree * uint64(stat.Bsize))
 	return total, free, nil
 }
 
@@ -552,16 +549,11 @@ func (m *Manager) DeleteCameraDir(cameraID string) error {
 
 // GetDiskUsage returns total and used disk space for the filesystem containing rootDir.
 func (m *Manager) GetDiskUsage() (total int64, used int64, err error) {
-	var stat syscall.Statfs_t
-
-	if err := syscall.Statfs(m.currentRoot(), &stat); err != nil {
+	var free int64
+	total, free, err = statfsFree(m.currentRoot())
+	if err != nil {
 		return 0, 0, fmt.Errorf("storage: failed to stat filesystem: %w", err)
 	}
-
-	// Total space in bytes
-	total = int64(stat.Blocks * uint64(stat.Bsize))
-	// Free space in bytes
-	free := int64(stat.Bfree * uint64(stat.Bsize))
 	// Used = total - free
 	used = total - free
 
