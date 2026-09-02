@@ -53,12 +53,16 @@ func wallEnv(t *testing.T) (*mergeTestEnv, *event.EventBus, *RollingMergeCoordin
 		RollingWindow:   "1h",
 	}
 	r := newTestRollingCoordinator(env, cfg, bus)
-	require.NoError(t, r.Start(context.Background()))
-	t.Cleanup(r.Stop)
 
+	// TimelapseFrameDur 的恢复必须排在 r.Stop 之后执行(t.Cleanup 是 LIFO,
+	// 先注册的后执行):若协调器尚未停止就恢复全局变量,其合并 goroutine 仍在
+	// 读取该值 → data race(2026-09-02 CI -race 抓到)。
 	orig := TimelapseFrameDur
 	TimelapseFrameDur = 100 * time.Millisecond
 	t.Cleanup(func() { TimelapseFrameDur = orig })
+
+	require.NoError(t, r.Start(context.Background()))
+	t.Cleanup(r.Stop)
 	return env, bus, r
 }
 
