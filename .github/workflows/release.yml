@@ -52,6 +52,33 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-armv7 ./cmd/mibee-nvr/ &
           wait
 
+      # ---- Artifact integrity (#646) ------------------------------------------
+      # checksums.txt (sha256sum format) + a raw 64-byte ed25519 signature over
+      # it, verified in-process by internal/update (pure Go, stdlib ed25519 —
+      # the interop contract is locked by TestVerifyChecksumsSignature_OpenSSLInterop).
+      # The matching public key is embedded in internal/update/verify.go and
+      # shipped as PEM in deploy/keys/release-signing.pub.pem.
+      # If RELEASE_SIGNING_KEY is unset the checksums still upload, unsigned —
+      # a missing secret must never block a release (same policy as the ACR
+      # mirror job).
+      - name: Generate checksums and signature
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          sha256sum mibee-nvr-amd64 mibee-nvr-arm64 mibee-nvr-armv7 > checksums.txt
+          cat checksums.txt
+          if [ -n "${SIGNING_KEY}" ]; then
+            printf '%s' "$SIGNING_KEY" | base64 -d > "$RUNNER_TEMP/release-signing.key"
+            openssl pkeyutl -sign -inkey "$RUNNER_TEMP/release-signing.key" \
+              -rawin -in checksums.txt -out checksums.txt.sig
+            rm -f "$RUNNER_TEMP/release-signing.key"
+            echo "SIGNED=true" >> "$GITHUB_ENV"
+            echo "checksums.txt.sig created"
+          else
+            echo "::warning::RELEASE_SIGNING_KEY secret not set — checksums.txt uploaded WITHOUT ed25519 signature"
+          fi
+
       - name: Update release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -62,6 +89,14 @@ jobs:
             mibee-nvr-amd64
             mibee-nvr-arm64
             mibee-nvr-armv7
+            checksums.txt
+
+      - name: Attach release signature
+        if: env.SIGNED == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: checksums.txt.sig
+          append_body: false
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
