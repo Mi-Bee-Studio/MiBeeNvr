@@ -112,7 +112,7 @@ openssl pkeyutl -verify -pubin -inkey release-signing.pub.pem \
 
 Docker 之外,`install.sh` 安装的裸机环境是最后一个可自动化的在线场景。架构刻意绕开进程内自我替换——`mibee-nvr.service` 的沙箱(`User=nvr` + `ProtectSystem=strict`)本来就禁止应用写 `/usr/local/bin`:
 
-```
+```text
 应用(nvr 用户,沙箱内)                root helper(mibee-nvr-update.service)
   感知层发现新版 + update.auto_apply: true
   ├─ 写请求文件 /var/lib/mibee-nvr/update-request.json

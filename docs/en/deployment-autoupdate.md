@@ -112,7 +112,7 @@ Notes:
 
 Outside Docker, bare-metal installs (via install.sh) are the last online scenario that can be automated. The architecture deliberately avoids in-process self-replacement — the `mibee-nvr.service` sandbox (`User=nvr` + `ProtectSystem=strict`) already forbids the app from writing `/usr/local/bin`:
 
-```
+```text
 app (nvr user, sandboxed)              root helper (mibee-nvr-update.service)
   sensing layer sees a new release
   AND update.auto_apply: true
