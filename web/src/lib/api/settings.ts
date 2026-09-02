@@ -364,6 +364,24 @@ export async function revokeAPIKey(name: string): Promise<{ status: string }> {
 
 // --- MiBeeVision consumer health (#328) ---
 
+// Runtime metrics block carried by heartbeat v2 (#671). All optional — an
+// older consumer reports none of these.
+export interface VisionMetrics {
+  queue_capacity?: number;
+  decode_workers?: number;
+  workers_busy?: number;
+  received_total?: number;
+  dropped_total?: number;
+  dropped_queue_full?: number;
+  dropped_ttl?: number;
+  events_emitted?: number;
+  seg_ms_p50?: number;
+  seg_ms_p90?: number;
+  decoded_queue_depth?: number;
+  mem_available_mb?: number;
+  load1?: number;
+}
+
 // Mirrors GET /api/vision/status. When the vision integration is disabled the
 // backend returns only { enabled: false }; all other fields are optional.
 export interface VisionStatus {
@@ -373,8 +391,34 @@ export interface VisionStatus {
   device?: string;
   queue_depth?: number;
   processed?: number;
+  metrics?: VisionMetrics;
+  /** Recordings marked ai_status='skipped' from consumer drop reports. */
+  drops_marked_total?: number;
 }
 
 export async function getVisionStatus(signal?: AbortSignal): Promise<VisionStatus> {
   return apiRequest<VisionStatus>('/vision/status', { signal });
+}
+
+// One heartbeat sample in the in-memory history ring (#671) — the data source
+// for dashboard sparklines.
+export interface VisionSample {
+  ts: string;
+  queue_depth: number;
+  processed_count: number;
+  dropped_total: number;
+  decode_workers: number;
+  workers_busy: number;
+  events_emitted: number;
+}
+
+export interface VisionMetricsResponse {
+  enabled: boolean;
+  points: VisionSample[];
+  marked_total: number;
+}
+
+/** GET /api/vision/metrics?hours= — heartbeat history ring (~24h @ 30s). */
+export async function getVisionMetrics(hours = 24, signal?: AbortSignal): Promise<VisionMetricsResponse> {
+  return apiRequest<VisionMetricsResponse>(`/vision/metrics?hours=${hours}`, { signal });
 }
