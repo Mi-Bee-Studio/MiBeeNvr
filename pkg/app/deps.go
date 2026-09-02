@@ -82,6 +82,7 @@ type appDeps struct {
 
 	// Ingest listeners (optional)
 	mqttClient        *mqtt.Client
+	mqttStatusPub     *mqtt.StatusPublisher
 	ftpServer         *ftp.Server
 	rtmpServer        *rtmp.Server
 	srtListener       *srt.Listener
