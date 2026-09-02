@@ -154,9 +154,16 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 		if offline < timeout {
 			return nil // brief reconnect blip — let the recorder's own backoff handle it
 		}
-		// Stuck in reconnect long enough — fall through to restart logic.
-		slog.Info("auto-remediate: recorder stuck in reconnecting, triggering restart",
-			"camera_id", cameraID, "offline_duration", offline, "threshold", timeout)
+		// Stuck in reconnect long enough — fall through to restart logic. A
+		// blacklisted camera cannot be restarted (the blacklist gate below will
+		// skip it), so don't announce a restart that will never happen; the
+		// skip stays visible as CheckAll's single "skipped" line with the
+		// blacklist expiry. The blacklist branch itself (periodic rediscovery
+		// rescan) still runs — only the log is suppressed (#645).
+		if !r.IsBlacklisted(cameraID) {
+			slog.Info("auto-remediate: recorder stuck in reconnecting, triggering restart",
+				"camera_id", cameraID, "offline_duration", offline, "threshold", timeout)
+		}
 	} else if status != string(model.StatusError) {
 		return nil
 	}

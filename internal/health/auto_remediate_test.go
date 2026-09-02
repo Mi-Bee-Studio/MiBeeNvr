@@ -1,7 +1,10 @@
 package health
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -149,6 +152,51 @@ func TestAutoRemediator_ReconnectingBelowTimeoutIgnored(t *testing.T) {
 	}
 	if got := mock.callCount(t); got != 0 {
 		t.Fatalf("expected 0 restart calls for brief reconnecting, got %d", got)
+	}
+}
+
+// TestAutoRemediator_BlacklistedReconnectingNoFalseRestartAnnouncement covers
+// #645: a blacklisted camera stuck in reconnecting must NOT log "triggering
+// restart" — the blacklist gate below blocks the restart moments later, so on
+// the 10s health tick the announcement is a false claim spammed forever
+// (production: 303 log lines/hour, all no-ops). The skip stays observable as
+// exactly one line per tick: CheckAll's "auto-remediate skipped" WARN carrying
+// the blacklist expiry. The periodic blacklist rescan must still dispatch.
+//
+// Sequential (no t.Parallel): swaps the global default slog logger.
+func TestAutoRemediator_BlacklistedReconnectingNoFalseRestartAnnouncement(t *testing.T) {
+	cfg := config.HealthAutoRemediationConfig{
+		Enabled:            true,
+		MaxRestartsPerHour: 3,
+		CooldownMinutes:    0,
+		BlacklistHours:     1,
+		GlobalMaxPerMin:    100,
+	}
+	r, mock, _ := newTestRemediatorWithConfig(t, cfg)
+	r.SetOfflineDurationFn(func(string) time.Duration { return 15 * time.Minute }) // > 10min default
+	blacklistCamera(t, r, "cam-1")
+	restartsBefore := mock.callCount(t)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	// One health tick for a blacklisted, reconnecting camera — the exact
+	// production scenario from the issue.
+	r.CheckAll(map[string]string{"cam-1": string(model.StatusReconnecting)})
+
+	if got := mock.callCount(t); got != restartsBefore {
+		t.Fatalf("blacklist must still block restarts: %d calls before, %d after", restartsBefore, got)
+	}
+	if strings.Contains(buf.String(), "triggering restart") {
+		t.Fatalf("blacklisted camera must not announce a restart that cannot happen; log:\n%s", buf.String())
+	}
+	if n := strings.Count(buf.String(), "auto-remediate skipped"); n != 1 {
+		t.Fatalf("expected exactly 1 skip line per tick, got %d; log:\n%s", n, buf.String())
+	}
+	if !strings.Contains(buf.String(), "blacklisted until") {
+		t.Fatalf("skip line must carry the blacklist expiry; log:\n%s", buf.String())
 	}
 }
 
