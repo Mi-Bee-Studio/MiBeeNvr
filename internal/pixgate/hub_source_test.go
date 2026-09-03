@@ -110,6 +110,52 @@ func writeFakeStdinFFmpeg(t *testing.T) (script string, stdinDump, argsDump stri
 	return script, filepath.Join(dir, "stdin.bin"), filepath.Join(dir, "args.txt")
 }
 
+// eofGatedFFmpeg emulates the REAL field behavior from issue #688 (M5
+// ffmpeg 7.1.5): with `-f hevc -i pipe:0` and a held-open stdin, decoded
+// rawvideo frames stay buffered inside ffmpeg — stdout only carries them
+// AFTER stdin reaches EOF. The eager fakeStdinFFmpeg above never trips this,
+// which is exactly why CI stayed green while the field sampler stalled.
+const eofGatedFFmpeg = `#!/bin/sh
+printf '%s\n' "$@" >> "$ARGS_DUMP"
+exec 3<&0
+cat <&3 >> "$STDIN_DUMP"
+dd if=/dev/zero bs=19200 count=3 2>/dev/null
+`
+
+func writeFakeEOFGatedFFmpeg(t *testing.T) (script string, stdinDump, argsDump string) {
+	t.Helper()
+	dir := t.TempDir()
+	script = filepath.Join(dir, "eof-gated-ffmpeg")
+	require.NoError(t, os.WriteFile(script, []byte(eofGatedFFmpeg), 0o755))
+	return script, filepath.Join(dir, "stdin.bin"), filepath.Join(dir, "args.txt")
+}
+
+// TestSampleFramesHub_BatchCloseFlushesEOFGatedDecoder pins issue #688: a
+// single sampleFramesHub call must deliver decoded frames even when the
+// decoder only flushes at stdin EOF — i.e. the feed must close stdin within
+// the batch window instead of holding the pipe open for the whole run.
+func TestSampleFramesHub_BatchCloseFlushesEOFGatedDecoder(t *testing.T) {
+	t.Helper()
+	script, stdinDump, argsDump := writeFakeEOFGatedFFmpeg(t)
+	hub := streamhub.New()
+	hub.Broadcast(1, h264KeyAU(0xCC), true) // cached-IDR replay feeds the probe
+
+	cfg := Config{
+		FFmpegPath:        script,
+		Env:               []string{"STDIN_DUMP=" + stdinDump, "ARGS_DUMP=" + argsDump},
+		FrameStallTimeout: 4 * time.Second, // tight: the default 30s would make the pre-fix failure slow
+		HubBatchWindow:    time.Second,
+	}
+	n, err := sampleFramesHub(context.Background(), cfg, &stubHubSource{hub: hub}, 1,
+		func([]byte) bool { return true }, make([]byte, GridW*GridH))
+	require.NoError(t, err, "EOF-gated decoder (issue #688): stdin must be batch-closed to flush frames, not held open until the stall watchdog kills ffmpeg")
+	assert.GreaterOrEqual(t, n, 1, "flushed frames must be decoded and delivered")
+
+	raw, err := os.ReadFile(stdinDump)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), string(annexB(h264KeyAU(0xCC))), "seed keyframe must still be forwarded")
+}
+
 // --- sampleFramesHub ----------------------------------------------------------
 
 func TestSampleFramesHub_ForwardsKeyframesOnlyAsAnnexB(t *testing.T) {
