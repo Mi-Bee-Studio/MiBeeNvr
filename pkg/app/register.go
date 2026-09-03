@@ -16,12 +16,15 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tierrec"
 )
 
@@ -246,11 +249,24 @@ func registerServices(a *App, deps *appDeps) error {
 	// sampled decode of enabled cameras' sub-streams; confirmed activity
 	// fires the recorder pixel trigger (TL exit + GOP flush + hold). ffmpeg
 	// is optional — without it the service start is a no-op WARN.
+	//
+	// The sampler prefers the SHARED sub-stream hub (#643): ffmpeg reads
+	// sampled keyframes over stdin from the same refcounted pull the live
+	// quality=sub egress uses — no duplicate camera connection, decode
+	// bounded to the sample rate instead of the whole stream. Direct RTSP
+	// stays the fallback (xiaomi / push ingest / MJPEG subs).
 	if deps.camMgr != nil {
 		cams := pixgateCameras(deps.cfg)
 		if len(cams) > 0 {
 			m := pixgate.NewManager(pixgate.Config{
 				FFmpegPath: resolveFFmpegPath(deps.cfg.Transcoding.FFmpegPath),
+				HubResolver: func(ctx context.Context, cameraID string) (pixgate.HubSource, bool, error) {
+					src, err := deps.camMgr.AcquireSubStream(ctx, cameraID)
+					if err != nil {
+						return nil, false, err
+					}
+					return &subStreamHubSource{src: src, camMgr: deps.camMgr, cameraID: cameraID}, true, nil
+				},
 				Resolver: func(ctx context.Context, cameraID string) (pixgate.Target, bool, error) {
 					t, ok, err := deps.camMgr.ResolveSubStreamTarget(ctx, cameraID)
 					if err != nil || !ok {
@@ -814,3 +830,15 @@ func (p pixgateFGSource) SegmentFG(cameraID string, start, end time.Time) (motio
 		Coverage:    s.Coverage,
 	}, true
 }
+
+// subStreamHubSource adapts the refcounted substream.Source onto
+// pixgate.HubSource: Release drops the camera-manager reference so the shared
+// pull stops after its idle timeout when nobody else holds it (#643).
+type subStreamHubSource struct {
+	src      *substream.Source
+	camMgr   *camera.CameraManager
+	cameraID string
+}
+
+func (s *subStreamHubSource) Hub() *streamhub.StreamHub { return s.src.Hub() }
+func (s *subStreamHubSource) Release()                  { s.camMgr.ReleaseSubStream(s.cameraID) }
