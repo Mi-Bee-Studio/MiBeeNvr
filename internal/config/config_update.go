@@ -32,6 +32,15 @@ type UpdateConfig struct {
 	// rollback to the previous binary if the upgraded service fails its
 	// health gate.
 	AutoApply *bool `yaml:"auto_apply"`
+	// DownloadMirror is a base URL that replaces "https://github.com" for
+	// release-artifact downloads (#649) — bare-metal auto-upgrade reliability
+	// on networks where GitHub is slow/unreachable. The
+	// {repo}/releases/download/... path is preserved underneath it, so a
+	// ghproxy-style prefix or a self-hosted path-preserving mirror both fit.
+	// The version CHECK still goes to the GitHub API. Empty (default) =
+	// GitHub official. All artifacts (binary + checksums + signature) come
+	// from the same origin; mirror failures never fall back to GitHub.
+	DownloadMirror string `yaml:"download_mirror"`
 }
 
 // IsEnabled returns whether the update check is enabled (default true).

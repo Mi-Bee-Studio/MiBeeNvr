@@ -56,8 +56,10 @@ type runUpdateArgs struct {
 }
 
 // applyFn is overridable in tests (the real one runs the full root pipeline).
-var applyFn = func(req update.Request) error {
-	return (&update.Applier{}).Apply(context.Background(), req)
+// The download mirror from config (#649) applies to ALL artifacts; empty
+// mirror keeps GitHub official URLs.
+var applyFn = func(req update.Request, mirror string) error {
+	return (&update.Applier{Mirror: mirror}).Apply(context.Background(), req)
 }
 
 // healthFn resolves the health-probe URL for the running config (tests).
@@ -140,7 +142,7 @@ func runUpdate(args runUpdateArgs, out io.Writer) error {
 		DataDir:    dataDir,
 		HealthURL:  healthFn(cfg),
 	}
-	if err := applyFn(req); err != nil {
+	if err := applyFn(req, cfg.Update.DownloadMirror); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "upgraded to %s — health gate passed\n", target)

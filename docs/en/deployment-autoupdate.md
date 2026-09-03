@@ -159,6 +159,21 @@ sudo systemctl start mibee-nvr
 
 Upgrade history lives in `<data-dir>/update-history.jsonl` (time, from/to, result, failure reason).
 
+### Mainland-China networks: download mirror (#649)
+
+Both `api.github.com` and `github.com/releases/download` are frequently slow or unreachable from mainland-China networks. Configure a download mirror:
+
+```yaml
+update:
+  download_mirror: "https://your-mirror.example/https://github.com"   # prefix replacing https://github.com
+```
+
+Rules:
+
+- The mirror is a **prefix that replaces `https://github.com`** — the `{repo}/releases/download/...` path structure is preserved underneath it, so ghproxy-style prefix proxies and self-hosted path-preserving mirrors both fit. Version **checking** still goes to the GitHub API.
+- The binary, `checksums.txt` and the signature all download from the **same origin** — the trust chain is never spliced (official signature + mirror binary is a forbidden combination).
+- A mirror failure **fails the apply with a clear error** — never a fallback to GitHub. Empty (default) behaves exactly as before.
+
 ### Scope
 
 Only install.sh/systemd bare-metal installs. Docker belongs to Watchtower; fnOS/unRAID store installs belong to the platform's upgrade mechanism; offline environments should download manually (see the verification section above). On distros without polkit the automatic trigger is unavailable, but the `sudo mibee-nvr update` manual path still works.

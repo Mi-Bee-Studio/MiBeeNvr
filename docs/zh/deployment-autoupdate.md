@@ -158,6 +158,21 @@ sudo systemctl start mibee-nvr
 
 升级记录在 `<数据目录>/update-history.jsonl`(时间、from/to、结果、失败原因)。
 
+### 国内网络:下载镜像源(#649)
+
+`api.github.com` 与 `github.com/releases/download` 在国内网络经常不可达或极慢,可配置下载镜像:
+
+```yaml
+update:
+  download_mirror: "https://your-mirror.example/https://github.com"   # 替换 https://github.com 的前缀
+```
+
+规则:
+
+- 镜像地址是**替换 `https://github.com` 的前缀**,其下保留 `{repo}/releases/download/...` 路径结构——ghproxy 类前缀代理与自建路径保持镜像都适用;版本**检测**仍走 GitHub API
+- 二进制、`checksums.txt`、签名**同源镜像**下载——信任链不拼接(官方签名 + 镜像二进制是被禁止的组合)
+- 镜像失败**直接报错拒绝安装**,不会回退官方源;留空(默认)行为与现状完全一致
+
 ### 适用边界
 
 仅适用 `install.sh`/systemd 裸机安装。Docker 归 Watchtower;fnOS/unRAID 等商店渠道归平台的升级机制;离线环境请手动下载(校验方法见上一节)。无 polkit 的老发行版上自动触发不可用,但 `sudo mibee-nvr update` 手动路径不受影响。
