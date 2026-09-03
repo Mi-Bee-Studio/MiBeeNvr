@@ -59,6 +59,16 @@ type AIDetection struct {
 	ClassLabel string     `json:"class_label"`
 }
 
+// CameraSnapshotEvent is published when a snapshot is captured and persisted
+// under {storage_root}/snapshots/ (TopicCameraSnapshot). FilePath is relative
+// to the storage root for cross-server compatibility.
+type CameraSnapshotEvent struct {
+	CameraID  string    `json:"camera_id"`
+	FilePath  string    `json:"file_path"`
+	Timestamp time.Time `json:"timestamp"`
+	Trigger   string    `json:"trigger"` // e.g. "mqtt"
+}
+
 // GB28181AlarmEvent is published when a GB/T 28181 device pushes an alarm
 // notification (TopicGB28181Alarm).
 type GB28181AlarmEvent struct {

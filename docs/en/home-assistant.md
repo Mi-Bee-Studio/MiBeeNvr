@@ -59,8 +59,8 @@ camera:
 
 About `still_image_url`:
 
-- `GET /api/cameras/{id}/latest-frame` only works for JPEG-family cameras (HTTP-JPEG/MJPEG); H.264/H.265 cameras return 404.
-- For H.264/H.265 cameras use `GET /api/cameras/{id}/snapshot` (proxies the camera's own snapshot URL; requires a device with ONVIF snapshot support) or the vendor's snapshot URL directly.
+- `GET /api/cameras/{id}/latest-frame` returns the latest frame directly for JPEG-family cameras (HTTP-JPEG/MJPEG); for H.264/H.265 cameras it returns a decoded JPEG when the optional FFmpeg is installed on the NVR host (~10s cache), and 404 otherwise.
+- H.264/H.265 cameras without FFmpeg can use `GET /api/cameras/{id}/snapshot` (proxies the camera's own snapshot URL; requires a device with ONVIF snapshot support) or the vendor's snapshot URL directly.
 
 ## Option A': MJPEG/JPEG Cameras (e.g. ESP32 cameras)
 
@@ -93,7 +93,7 @@ mqtt:
   password: "mqtt_password"
 ```
 
-The NVR subscribes to `mibee/trigger/{camera_id}` and supports `record` (start recording) and `stop` (stop recording); `snapshot` is not implemented yet. HA automation example:
+The NVR subscribes to `mibee/trigger/{camera_id}` and supports `record` (start recording), `stop` (stop recording), and `snapshot` (persist a snapshot and publish a `camera.snapshot` event). HA automation example:
 
 ```yaml
 automation:
@@ -169,8 +169,8 @@ The card runs an embedded go2rtc to convert RTSP→WebRTC (it does not consume t
 ## Known Limitations & Security Notes
 
 - RTSP output has no authentication by default — anyone on the LAN can pull streams. Either configure `server.rtsp.username/password` or keep the NVR on a trusted network.
-- The MQTT trigger's `snapshot` action is not implemented yet (logged and ignored).
-- `latest-frame` only works for JPEG-family cameras; H.264/H.265 cameras use the `snapshot` endpoint or the vendor's snapshot URL instead.
+- The MQTT-triggered `snapshot` action persists snapshots to `{storage_root}/snapshots/{camera_id}/` and publishes a `camera.snapshot` event when `mqtt.status_events` is enabled.
+- `latest-frame` works directly for JPEG-family cameras; H.264/H.265 cameras need the optional FFmpeg on the NVR host (otherwise use the `snapshot` endpoint or the vendor's snapshot URL).
 - Neither the RTSP output nor the WebRTC card covers MJPEG/JPEG cameras (use Option A').
 - There is no app-level push-notification loop from NVR to HA; build notification automations in HA (e.g. triggered by the health topic).
 

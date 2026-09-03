@@ -59,8 +59,8 @@ camera:
 
 关于 `still_image_url`：
 
-- `GET /api/cameras/{id}/latest-frame` 仅对 JPEG 系相机（HTTP-JPEG/MJPEG）有效，H.264/H.265 相机返回 404。
-- H.264/H.265 相机可用 `GET /api/cameras/{id}/snapshot`（转发相机自身的快照 URL，仅 ONVIF 快照能力的设备可用），或直接填相机厂商的快照地址。
+- `GET /api/cameras/{id}/latest-frame` 对 JPEG 系相机（HTTP-JPEG/MJPEG）直接返回最新帧；H.264/H.265 相机在 NVR 所在主机装有可选 FFmpeg 时也能返回解码后的 JPEG（约 10 秒缓存），无 FFmpeg 则返回 404。
+- 无 FFmpeg 的 H.264/H.265 相机可用 `GET /api/cameras/{id}/snapshot`（转发相机自身的快照 URL，仅 ONVIF 快照能力的设备可用），或直接填相机厂商的快照地址。
 
 ## 方案 A'：MJPEG/JPEG 相机（如 ESP32 摄像头）
 
@@ -93,7 +93,7 @@ mqtt:
   password: "mqtt_password"
 ```
 
-NVR 订阅 `mibee/trigger/{camera_id}`，支持 `record`（开始录制）与 `stop`（停止录制）；`snapshot` 尚未实现。HA 自动化示例：
+NVR 订阅 `mibee/trigger/{camera_id}`，支持 `record`（开始录制）、`stop`（停止录制）与 `snapshot`（快照落盘并发布 `camera.snapshot` 事件）。HA 自动化示例：
 
 ```yaml
 automation:
@@ -169,8 +169,8 @@ muted: true
 ## 已知限制与安全注意事项
 
 - RTSP 输出默认无鉴权，局域网内任何设备都能拉流。要么配置 `server.rtsp.username/password`，要么确保 NVR 处于可信网络。
-- MQTT 触发的 `snapshot` 动作尚未实现（仅记录日志）。
-- `latest-frame` 仅 JPEG 系相机可用；H.264/H.265 相机的静态图用 `snapshot` 端点或相机自身快照 URL 替代。
+- MQTT 触发的 `snapshot` 动作会将快照落盘到 `{存储根目录}/snapshots/{camera_id}/`，并在开启 `mqtt.status_events` 时发布 `camera.snapshot` 事件。
+- `latest-frame` 对 JPEG 系相机直接可用；H.264/H.265 相机需 NVR 主机装有可选 FFmpeg（否则用 `snapshot` 端点或相机自身快照 URL 替代）。
 - RTSP 输出与 WebRTC 卡片方案均不覆盖 MJPEG/JPEG 相机（用方案 A'）。
 - NVR → HA 没有应用级推送通知闭环，告警通知需在 HA 里自行搭自动化（可订阅健康主题触发）。
 

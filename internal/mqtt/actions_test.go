@@ -57,7 +57,7 @@ func (f *fakeLifecycle) stopped() []string {
 func TestActionDispatcher_Record_StartsCamera(t *testing.T) {
 	t.Helper()
 	fake := &fakeLifecycle{}
-	dispatch := NewActionDispatcher(fake)
+	dispatch := NewActionDispatcher(fake, nil)
 
 	dispatch("cam-1", "record")
 
@@ -71,7 +71,7 @@ func TestActionDispatcher_Record_StartsCamera(t *testing.T) {
 func TestActionDispatcher_Stop_StopsCamera(t *testing.T) {
 	t.Helper()
 	fake := &fakeLifecycle{}
-	dispatch := NewActionDispatcher(fake)
+	dispatch := NewActionDispatcher(fake, nil)
 
 	dispatch("cam-1", "stop")
 
@@ -85,7 +85,7 @@ func TestActionDispatcher_Stop_StopsCamera(t *testing.T) {
 func TestActionDispatcher_UnknownAction_NoCalls(t *testing.T) {
 	t.Helper()
 	fake := &fakeLifecycle{}
-	dispatch := NewActionDispatcher(fake)
+	dispatch := NewActionDispatcher(fake, nil)
 
 	dispatch("cam-1", "reboot")
 
@@ -97,7 +97,7 @@ func TestActionDispatcher_UnknownAction_NoCalls(t *testing.T) {
 func TestActionDispatcher_Snapshot_LogsOnly(t *testing.T) {
 	t.Helper()
 	fake := &fakeLifecycle{}
-	dispatch := NewActionDispatcher(fake)
+	dispatch := NewActionDispatcher(fake, nil)
 
 	dispatch("cam-1", "snapshot")
 
@@ -109,7 +109,7 @@ func TestActionDispatcher_Snapshot_LogsOnly(t *testing.T) {
 func TestActionDispatcher_AlreadyRunning_Idempotent(t *testing.T) {
 	t.Helper()
 	fake := &fakeLifecycle{startErr: &model.CameraAlreadyRunningError{CameraID: "cam-1"}}
-	dispatch := NewActionDispatcher(fake)
+	dispatch := NewActionDispatcher(fake, nil)
 
 	dispatch("cam-1", "record")
 
@@ -125,7 +125,7 @@ func TestActionDispatcher_AlreadyRunning_Idempotent(t *testing.T) {
 func TestActionDispatcher_StartError_NotFatal(t *testing.T) {
 	t.Helper()
 	fake := &fakeLifecycle{startErr: errors.New("dial timeout")}
-	dispatch := NewActionDispatcher(fake)
+	dispatch := NewActionDispatcher(fake, nil)
 
 	dispatch("cam-1", "record")
 	require.Eventually(t, func() bool {
@@ -142,7 +142,7 @@ func TestActionDispatcher_StartError_NotFatal(t *testing.T) {
 func TestActionDispatcher_NonBlocking(t *testing.T) {
 	t.Helper()
 	fake := &fakeLifecycle{blockFor: 300 * time.Millisecond}
-	dispatch := NewActionDispatcher(fake)
+	dispatch := NewActionDispatcher(fake, nil)
 
 	start := time.Now()
 	dispatch("cam-1", "record")
@@ -153,7 +153,7 @@ func TestActionDispatcher_NonBlocking(t *testing.T) {
 
 func TestActionDispatcher_NilLifecycle_Noop(t *testing.T) {
 	t.Helper()
-	dispatch := NewActionDispatcher(nil)
+	dispatch := NewActionDispatcher(nil, nil)
 
 	dispatch("cam-1", "record")
 	dispatch("cam-1", "stop")

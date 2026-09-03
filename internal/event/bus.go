@@ -33,6 +33,11 @@ const (
 	// notification (SUBSCRIBE/NOTIFY Alarm, or a MESSAGE-delivered alarm).
 	// Payload: event.GB28181AlarmEvent. Surfaces via /api/events SSE.
 	TopicGB28181Alarm = "gb28181.alarm"
+	// TopicCameraSnapshot is published when a snapshot is captured and
+	// persisted to storage (#656, MQTT trigger). Payload:
+	// event.CameraSnapshotEvent. Forwarded to MQTT via mqtt.status_events
+	// so smart-home automations can react.
+	TopicCameraSnapshot = "camera.snapshot"
 )
 
 var ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")

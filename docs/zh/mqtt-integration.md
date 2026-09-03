@@ -8,7 +8,7 @@ MiBee NVR 支持 MQTT 触发录制与状态发布，用于智能家居自动化�
 - **触发（订阅）**: `{prefix}/trigger/{camera_id}`
 - **状态（发布）**: `{prefix}/health/{camera_id}`、`{prefix}/event/{topic}`（见[状态发布](#状态发布)）
 - **触发负载**: 包含 `action` 字段的 JSON
-- **触发操作**: `record`, `stop`（`snapshot` 尚未实现，收到后仅记录日志）
+- **触发操作**: `record`, `stop`, `snapshot`（快照落盘并发布 `camera.snapshot` 事件）
 - **自动重连**: 内置指数退避重连；代理在 NVR 启动时尚不可达也会持续重试（1s→5s→10s→60s 分层退避），不要求代理先于 NVR 启动
 
 ## 配置
@@ -85,13 +85,15 @@ mqtt:
 
 #### 触发快照
 
-从特定摄像头拍摄快照（**尚未实现**：当前收到 `snapshot` 只会记录日志，不执行任何操作，快照落盘能力规划中，见 #656）：
+从特定摄像头拍摄一张快照并落盘（#656）：
 
 ```json
 {
   "action": "snapshot"
 }
 ```
+
+捕获按能力依次尝试：JPEG 系摄像头（HTTP-JPEG/MJPEG）直接取录像器最新帧；H.264/H.265 摄像头经一次性 StreamHub 订阅（缓存 IDR 立即回放，无需等待下个 GOP）后由可选 FFmpeg 解码为 JPEG，FFmpeg 缺失时回退到摄像头配置的 `snapshot_url`（携带摄像头凭据）。快照以原子写（临时文件 → 重命名）保存到 `{存储根目录}/snapshots/{camera_id}/{时间戳}.jpg`，成功后发布 `camera.snapshot` 事件（见下方事件转发表）。
 
 **主题**: `home/security/trigger/front-door`  
 **消息**: `{"action": "snapshot"}`
@@ -127,6 +129,7 @@ NVR 会将以下状态发布到 MQTT（均需 `mqtt.enabled: true`）：
 | `camera.added` | `{prefix}/event/camera.added` | `camera_id`、`name`、`endpoint`、`source` |
 | `camera.quality` | `{prefix}/event/camera.quality` | `camera_id`、`from`、`to`、`reason` |
 | `storage.health.changed` | `{prefix}/event/storage.health.changed` | `camera_id`、`previous_state`、`current_state`、`message` |
+| `camera.snapshot` | `{prefix}/event/camera.snapshot` | `camera_id`、`file_path`（相对存储根目录）、`timestamp`、`trigger` |
 
 高频主题（如 AI 检测）刻意不在转发白名单内。消息 QoS 1、不保留（retain=false）；代理缓慢时事件会被丢弃（事件总线满即丢，不阻塞录制）。
 

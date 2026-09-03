@@ -24,6 +24,9 @@ var statusTopics = []string{
 	event.TopicCameraAdded,
 	event.TopicCameraQuality,
 	event.TopicStorageHealthChanged,
+	// Persisted snapshot metadata (file_path relative to storage root) so
+	// smart-home automations can react to MQTT-triggered captures (#656).
+	event.TopicCameraSnapshot,
 }
 
 var statusLogger = slog.Default().With("component", "mqtt-status")

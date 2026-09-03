@@ -42,6 +42,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/snapshot"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
@@ -805,10 +806,28 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	deps.cleanupMgr = cleanupMgr
 	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)
 
+	// Shared snapshot capturer (#657): FFmpeg-gated hub-IDR decode for
+	// H.264/H.265 cameras + device snapshot-URL fallback. Wired into the
+	// latest-frame API below and the MQTT snapshot runner (Step 9). Every
+	// consumer degrades gracefully when FFmpeg is absent — the decode just
+	// fails and callers fall back / answer 404.
+	snapCapturer := &snapshot.Capturer{
+		Decode:   transcoding.DecodeAUToJPEG,
+		Client:   http.DefaultClient,
+		Recorder: deps.camMgr,
+		Config:   deps.camMgr,
+	}
+
 	// Step 9: Optional MQTT client. The trigger dispatcher wires
-	// record/stop actions to the camera manager (camMgr is built at Step 5.6).
+	// record/stop actions to the camera manager (camMgr is built at Step 5.6)
+	// and the snapshot action to the capture→persist→event runner (#656).
 	if cfg.MQTT.Enabled {
-		deps.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, mqtt.NewActionDispatcher(deps.camMgr))
+		deps.snapRunner = &snapshot.Runner{
+			Source:  snapCapturer,
+			Storage: &snapshot.Persistor{Root: store.RootDir()},
+			Bus:     deps.eventBus,
+		}
+		deps.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, mqtt.NewActionDispatcher(deps.camMgr, deps.snapRunner))
 	}
 
 	// Wire MQTT client into health manager for event publishing
@@ -850,6 +869,8 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	handler.SetHealthManager(healthMgr)
 	handler.SetStabilityProvider(healthMgr)
 	handler.SetEventBus(deps.eventBus)
+	// FFmpeg-gated snapshot capturer for the latest-frame endpoint (#657).
+	handler.SetSnapshotCapturer(snapCapturer)
 	api.SetAPIMetrics(m)
 	if deps.rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(deps.rollingMergeMgr)
