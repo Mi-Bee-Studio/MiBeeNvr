@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"log/slog"
 	"sync"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
-var ptzLogger = slog.Default().With("component", "onvif-ptz")
+var ptzLogger = slogx.Component("onvif-ptz")
 
 // PTZControllerImpl implements PTZController by delegating to onvif-go's PTZ service.
 // It wraps an onvif-go Client and stores the profile token internally.

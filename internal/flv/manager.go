@@ -3,12 +3,13 @@ package flv
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -17,7 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var flvLogger = slog.Default().With("component", "flv-manager")
+var flvLogger = slogx.Component("flv-manager")
 
 const (
 	defaultMaxViewers   = 10

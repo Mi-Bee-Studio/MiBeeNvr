@@ -2,13 +2,14 @@ package recorder
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -18,7 +19,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var ingestLogger = slog.Default().With("component", "ingest-recorder")
+var ingestLogger = slogx.Component("ingest-recorder")
 
 // IngestConfig holds configuration for the IngestRecorder.
 //

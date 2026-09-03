@@ -4,17 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
 )
 
-var clientLogger = slog.Default().With("component", "mqtt")
+var clientLogger = slogx.Component("mqtt")
 
 // triggerMessage is the JSON payload of a camera trigger event.
 type triggerMessage struct {

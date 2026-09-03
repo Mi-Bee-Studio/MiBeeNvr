@@ -12,13 +12,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-var logger = slog.Default().With("component", "merge-manager")
+var logger = slogx.Component("merge-manager")
 
 // MergeStatus holds the current status of the merge manager.
 type MergeStatus struct {

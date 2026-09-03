@@ -12,10 +12,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
@@ -35,7 +36,7 @@ var (
 	ErrStopped = errors.New("sub-stream manager stopped")
 )
 
-var subLogger = slog.Default().With("component", "substream")
+var subLogger = slogx.Component("substream")
 
 // Pull states reported by Source.State / Manager.Snapshot.
 const (

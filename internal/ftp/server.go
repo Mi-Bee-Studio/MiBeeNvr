@@ -5,12 +5,13 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	ftpserverlib "github.com/fclairamb/ftpserverlib"
 	"github.com/google/uuid"
@@ -20,7 +21,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-var logger = slog.Default().With("component", "ftp")
+var logger = slogx.Component("ftp")
 
 // Server implements an FTP server for camera file uploads using ftpserverlib.
 // It satisfies the ftpserverlib.MainDriver interface for authentication and

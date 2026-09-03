@@ -20,16 +20,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 )
 
-var cloudLogger = slog.Default().With("component", "xiaomi-cloud")
+var cloudLogger = slogx.Component("xiaomi-cloud")
 
 // pendingClouds stores Cloud objects that are awaiting captcha/verify continuation.
 var (

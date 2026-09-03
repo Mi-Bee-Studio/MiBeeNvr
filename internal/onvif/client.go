@@ -5,16 +5,17 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
-var logger = slog.Default().With("component", "onvif-client")
+var logger = slogx.Component("onvif-client")
 
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 

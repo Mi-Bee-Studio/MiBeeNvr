@@ -331,7 +331,10 @@ func (r *AutoRemediator) IsBlacklisted(cameraID string) bool {
 func (r *AutoRemediator) CheckAll(statuses map[string]string) {
 	for cameraID, status := range statuses {
 		if err := r.Check(cameraID, status); err != nil {
-			slog.Warn("auto-remediate skipped", "camera_id", cameraID, "error", err)
+			// Debug since #685: blacklisted cameras repeat this every scan
+			// cycle (10% of M5's 24h volume at WARN); state transitions are
+			// already logged where they happen.
+			slog.Debug("auto-remediate skipped", "camera_id", cameraID, "error", err)
 		}
 	}
 }

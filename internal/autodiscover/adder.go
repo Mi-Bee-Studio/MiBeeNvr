@@ -21,10 +21,11 @@ package autodiscover
 
 import (
 	"context"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -33,7 +34,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-var logger = slog.Default().With("component", "autodiscover")
+var logger = slogx.Component("autodiscover")
 
 // dedupWindow suppresses repeated discovery of the same device within this
 // interval. WS-Discovery Hello is sent periodically (some firmware every ~30s)

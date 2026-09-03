@@ -11,10 +11,11 @@ package cleanup
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -23,7 +24,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-var logger = slog.Default().With("component", "cleanup")
+var logger = slogx.Component("cleanup")
 
 // CleanupManager handles periodic cleanup of old recordings.
 // It supports two cleanup strategies:

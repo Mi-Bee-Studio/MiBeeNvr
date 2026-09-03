@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/google/uuid"
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
@@ -21,7 +23,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var logger = slog.Default().With("component", "webrtc-manager")
+var logger = slogx.Component("webrtc-manager")
 
 const (
 	defaultMaxPeers       = 2

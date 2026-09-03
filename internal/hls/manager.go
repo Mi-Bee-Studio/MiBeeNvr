@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/bluenviron/gohlslib/v2"
 	"github.com/bluenviron/gohlslib/v2/pkg/codecs"
@@ -30,7 +31,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var hlsLogger = slog.Default().With("component", "hls-manager")
+var hlsLogger = slogx.Component("hls-manager")
 
 const (
 	defaultIdleTimeout    = 60 * time.Second

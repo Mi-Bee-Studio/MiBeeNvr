@@ -5,9 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -26,7 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var h265Logger = slog.Default().With("component", "h265-recorder")
+var h265Logger = slogx.Component("h265-recorder")
 
 // H265Config is a type alias for BaseConfig.
 // This allows flat struct literals (e.g., H265Config{CameraID: "..."}) while

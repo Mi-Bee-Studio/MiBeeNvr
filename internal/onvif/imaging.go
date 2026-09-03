@@ -6,15 +6,16 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
-var imagingLogger = slog.Default().With("component", "onvif-imaging")
+var imagingLogger = slogx.Component("onvif-imaging")
 
 // ImagingControllerImpl implements ImagingController by delegating to onvif-go's imaging service
 // via raw SOAP requests.

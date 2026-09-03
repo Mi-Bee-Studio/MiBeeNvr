@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
-var eventLogger = slog.Default().With("component", "onvif-events")
+var eventLogger = slogx.Component("onvif-events")
 
 // ErrEventsNotSupported indicates the device does not implement the ONVIF event
 // PullPoint subscription (some cameras advertise the event service in

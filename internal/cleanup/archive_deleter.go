@@ -7,13 +7,14 @@ package cleanup
 
 import (
 	"context"
-	"log/slog"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-var archiveDeleterLogger = slog.Default().With("component", "archive-deleter")
+var archiveDeleterLogger = slogx.Component("archive-deleter")
 
 // ArchiveDeleter polls for pending archive cleanup tasks and processes them
 // serially (disk I/O is the bottleneck). Tasks are tracked in the

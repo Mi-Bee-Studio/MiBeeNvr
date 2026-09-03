@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"os"
 	"runtime"
@@ -21,6 +20,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -31,7 +32,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var xiaomiLogger = slog.Default().With("component", "xiaomi-recorder")
+var xiaomiLogger = slogx.Component("xiaomi-recorder")
 
 // SegmentStore abstracts storage operations needed by the recorder.
 type SegmentStore interface {

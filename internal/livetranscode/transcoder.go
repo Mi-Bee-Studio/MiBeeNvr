@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -14,6 +13,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
@@ -84,7 +85,7 @@ type LiveTranscoder struct {
 	monitorWg sync.WaitGroup
 }
 
-var ltLogger = slog.Default().With("component", "livetranscode")
+var ltLogger = slogx.Component("livetranscode")
 
 // ---------------------------------------------------------------------------
 // Constructor

@@ -3,8 +3,9 @@ package mqtt
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -35,7 +36,7 @@ const (
 // start can legitimately take seconds; 30s leaves room for slow devices).
 const actionTimeout = 30 * time.Second
 
-var actionLogger = slog.Default().With("component", "mqtt-trigger")
+var actionLogger = slogx.Component("mqtt-trigger")
 
 // NewActionDispatcher maps MQTT trigger actions to camera lifecycle
 // operations and returns the onAction callback for NewClient. Each action

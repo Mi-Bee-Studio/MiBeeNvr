@@ -2,12 +2,13 @@ package recorder
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"runtime"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -18,7 +19,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var gb28181Logger = slog.Default().With("component", "gb28181-recorder")
+var gb28181Logger = slogx.Component("gb28181-recorder")
 
 // GB28181Config configures the passive GB28181 recorder. It mirrors
 // IngestConfig: Store/DB/Metrics/EventBus wire the recorder into the normal

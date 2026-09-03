@@ -3,12 +3,13 @@ package recorder
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -21,7 +22,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var onvifRecLogger = slog.Default().With("component", "onvif-recorder")
+var onvifRecLogger = slogx.Component("onvif-recorder")
 
 // ONVIFConfig holds configuration for the ONVIF recorder.
 type ONVIFConfig struct {
