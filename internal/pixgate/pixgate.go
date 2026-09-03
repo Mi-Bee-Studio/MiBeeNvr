@@ -12,6 +12,7 @@ package pixgate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -81,6 +82,15 @@ type Config struct {
 	FFmpegPath string
 	// FFmpegArgs allows tests to substitute a fake frame source binary.
 	FFmpegArgs func(url string, fps float64) []string
+	// HubResolver resolves a camera to the SHARED sub-stream hub source
+	// (preferred, #643): the sampler feeds ffmpeg over stdin instead of
+	// opening its own RTSP pull. ok=false → legacy direct sampler.
+	HubResolver func(ctx context.Context, cameraID string) (HubSource, bool, error)
+	// HubFFmpegArgs allows tests to substitute the stdin-decode invocation.
+	HubFFmpegArgs func(codec string) []string
+	// Env appends extra environment entries for the sampler binary (tests
+	// point fake ffmpeg fixtures at their dump files). Nil inherits.
+	Env []string
 	// FrameStallTimeout aborts a sampler whose ffmpeg produces no decoded
 	// frame for this long — a wedged network read inside ffmpeg never exits
 	// on its own (2026-09-02 incident: pixgate silent from 02:01 until the
@@ -391,11 +401,29 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, cfg CameraConf
 	ghostSamples := int(math.Ceil(cfg.GhostSecs * cfg.SampleFPS))
 	m.ensureRing(cameraID, cfg)
 
-	target, ok, err := m.cfg.Resolver(ctx, cameraID)
-	if err != nil || !ok || target.URL == "" || (target.Kind != "" && target.Kind != "rtsp") {
-		log.Warn("pixgate: no RTSP sub-stream target; gate disabled",
-			"ok", ok, "kind", target.Kind, "error", err)
-		return
+	// Source selection (#643): the SHARED sub-stream hub is preferred —
+	// ffmpeg reads sampled keyframes over stdin, no extra camera connection,
+	// decode bounded to the sample rate. Direct RTSP stays as the fallback
+	// (no hub resolver wired, no shared source, or an unsupported hub codec).
+	useHub := false
+	if m.cfg.HubResolver != nil {
+		if src, err := m.acquireHub(ctx, cameraID); err == nil && src.Hub() != nil {
+			src.Release() // the per-attempt acquire below re-establishes the reference
+			useHub = true
+		} else {
+			log.Debug("pixgate: shared hub unavailable, using direct RTSP", "error", err)
+		}
+	}
+
+	var target Target
+	if !useHub {
+		t, ok, err := m.cfg.Resolver(ctx, cameraID)
+		if err != nil || !ok || t.URL == "" || (t.Kind != "" && t.Kind != "rtsp") {
+			log.Warn("pixgate: no RTSP sub-stream target; gate disabled",
+				"ok", ok, "kind", t.Kind, "error", err)
+			return
+		}
+		target = t
 	}
 
 	engine := NewEngine(EngineConfig{
@@ -409,54 +437,78 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, cfg CameraConf
 	wasActive := false
 	wasSuppressed := false
 	backoff := time.Second
-	interval := time.Duration(float64(time.Second) / cfg.SampleFPS)
+
+	sample := func(gray []byte) bool {
+		now := time.Now()
+		// PTZ / external suppression window: drain the pipe, record the
+		// sample as invalid, keep the model untouched. The first frame
+		// after the window re-primes (the scene moved on purpose).
+		if until := m.suppressedUntil(cameraID); now.Before(until) {
+			wasSuppressed = true
+			m.recordFG(cameraID, now, 0, false)
+			return ctx.Err() == nil
+		}
+		if wasSuppressed {
+			engine.Reprime()
+			wasSuppressed = false
+			wasActive = false
+		}
+		res := engine.Process(gray)
+		if res == (EngineResult{}) {
+			// Prime frame — carries no activity evidence.
+			return ctx.Err() == nil
+		}
+		m.recordFG(cameraID, now, res.BlobAreaPct, !res.Flood && !res.Ghost)
+		if res.Ghost {
+			log.Info("pixgate: static foreground absorbed into background (ghost suppression)",
+				"area_pct", res.BlobAreaPct, "cx", res.CX, "cy", res.CY)
+		}
+		if res.Active {
+			// Every active sample re-arms the hold — continuous
+			// activity keeps full-rate, a single confirmation exits
+			// TIMELAPSE for at least Hold.
+			if terr := m.cfg.Trigger(cameraID, cfg.Hold); terr != nil {
+				log.Debug("pixgate trigger rejected", "error", terr)
+			}
+		}
+		if res.Active != wasActive || res.Active || res.Ghost {
+			if m.cfg.Bus != nil {
+				m.cfg.Bus.Publish(ctx, event.TopicPixgateActivity, Event{
+					CameraID: cameraID, Active: res.Active,
+					AreaPct: res.BlobAreaPct, CX: res.CX, CY: res.CY,
+					Flood: res.Flood, Ghost: res.Ghost, SampleSec: cfg.SampleFPS,
+				})
+			}
+		}
+		wasActive = res.Active
+		return ctx.Err() == nil
+	}
 
 	for ctx.Err() == nil {
-		n, err := sampleFrames(ctx, m.cfg, target, cfg.SampleFPS, func(gray []byte) bool {
-			now := time.Now()
-			// PTZ / external suppression window: drain the pipe, record the
-			// sample as invalid, keep the model untouched. The first frame
-			// after the window re-primes (the scene moved on purpose).
-			if until := m.suppressedUntil(cameraID); now.Before(until) {
-				wasSuppressed = true
-				m.recordFG(cameraID, now, 0, false)
-				return ctx.Err() == nil
+		var n int
+		var err error
+		if useHub {
+			var src HubSource
+			src, err = m.acquireHub(ctx, cameraID)
+			if err == nil {
+				n, err = sampleFramesHub(ctx, m.cfg, src, cfg.SampleFPS, sample, frame)
+				src.Release()
 			}
-			if wasSuppressed {
-				engine.Reprime()
-				wasSuppressed = false
-				wasActive = false
-			}
-			res := engine.Process(gray)
-			if res == (EngineResult{}) {
-				// Prime frame — carries no activity evidence.
-				return ctx.Err() == nil
-			}
-			m.recordFG(cameraID, now, res.BlobAreaPct, !res.Flood && !res.Ghost)
-			if res.Ghost {
-				log.Info("pixgate: static foreground absorbed into background (ghost suppression)",
-					"area_pct", res.BlobAreaPct, "cx", res.CX, "cy", res.CY)
-			}
-			if res.Active {
-				// Every active sample re-arms the hold — continuous
-				// activity keeps full-rate, a single confirmation exits
-				// TIMELAPSE for at least Hold.
-				if terr := m.cfg.Trigger(cameraID, cfg.Hold); terr != nil {
-					log.Debug("pixgate trigger rejected", "error", terr)
+			if errors.Is(err, ErrHubUnsupportedCodec) {
+				log.Warn("pixgate: hub codec unsupported (MJPEG sub stream?), falling back to direct RTSP sampler")
+				useHub = false
+				t, ok, rerr := m.cfg.Resolver(ctx, cameraID)
+				if rerr != nil || !ok || t.URL == "" || (t.Kind != "" && t.Kind != "rtsp") {
+					log.Warn("pixgate: no RTSP sub-stream target; gate disabled",
+						"ok", ok, "kind", t.Kind, "error", rerr)
+					return
 				}
+				target = t
+				continue
 			}
-			if res.Active != wasActive || res.Active || res.Ghost {
-				if m.cfg.Bus != nil {
-					m.cfg.Bus.Publish(ctx, event.TopicPixgateActivity, Event{
-						CameraID: cameraID, Active: res.Active,
-						AreaPct: res.BlobAreaPct, CX: res.CX, CY: res.CY,
-						Flood: res.Flood, Ghost: res.Ghost, SampleSec: cfg.SampleFPS,
-					})
-				}
-			}
-			wasActive = res.Active
-			return ctx.Err() == nil
-		}, frame)
+		} else {
+			n, err = sampleFrames(ctx, m.cfg, target, cfg.SampleFPS, sample, frame)
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -470,7 +522,26 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, cfg CameraConf
 			backoff *= 2
 		}
 	}
-	_ = interval
+}
+
+// acquireHub resolves the camera's SHARED sub-stream source (refcounted —
+// Release exactly once per successful call).
+func (m *Manager) acquireHub(ctx context.Context, cameraID string) (HubSource, error) {
+	if m.cfg.HubResolver == nil {
+		return nil, errors.New("pixgate: no hub resolver wired")
+	}
+	src, ok, err := m.cfg.HubResolver(ctx, cameraID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || src == nil {
+		return nil, fmt.Errorf("pixgate: camera %s has no shared sub-stream source", cameraID)
+	}
+	if src.Hub() == nil {
+		src.Release()
+		return nil, errors.New("pixgate: shared source carries no hub")
+	}
+	return src, nil
 }
 
 // sampleFrames runs one ffmpeg process to completion, feeding each decoded
@@ -569,4 +640,10 @@ func ffmpegArgs(target Target, fps float64) []string {
 		"-f", "rawvideo", "-pix_fmt", "gray",
 		"pipe:1",
 	}
+}
+
+// HasHubResolver reports whether the shared-hub sampler feed is wired —
+// observable wiring guard for the pkg/app regression tests (#643).
+func (m *Manager) HasHubResolver() bool {
+	return m.cfg.HubResolver != nil
 }
