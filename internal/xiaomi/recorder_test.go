@@ -182,6 +182,18 @@ func TestXiaomiRecorderStopWithoutStart(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// assertRecorderRunning accepts either running state. Start() sets Recording
+// synchronously, but the run goroutine can flip to Reconnecting (the expected
+// credential-less connect failure) before the assertion executes — exact-value
+// assertions race on loaded CI runners (observed on PR #679's CI run).
+func assertRecorderRunning(t *testing.T, r *XiaomiRecorder) {
+	t.Helper()
+	require.Contains(t,
+		[]model.RecorderStatus{model.StatusRecording, model.StatusReconnecting},
+		r.Status(),
+		"recorder must be in a running state right after Start()")
+}
+
 func TestXiaomiRecorderStartAndStop(t *testing.T) {
 	t.Helper()
 	store := &noopSegmentStore{}
@@ -194,7 +206,7 @@ func TestXiaomiRecorderStartAndStop(t *testing.T) {
 	ctx := context.Background()
 	err := r.Start(ctx)
 	require.NoError(t, err)
-	require.Equal(t, model.StatusRecording, r.Status())
+	assertRecorderRunning(t, r)
 
 	// Stop should wait for goroutine to finish.
 	err = r.Stop()
