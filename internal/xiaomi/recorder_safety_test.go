@@ -607,7 +607,7 @@ func TestRecorderStartStopIdempotent(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, r.Start(ctx))
-	require.Equal(t, model.StatusRecording, r.Status())
+	assertRecorderRunning(t, r)
 
 	require.NoError(t, r.Stop())
 	require.Equal(t, model.StatusStopped, r.Status())
