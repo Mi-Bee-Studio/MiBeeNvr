@@ -51,6 +51,14 @@ const (
 	// stderrCap bounds ffmpeg's stderr capture (loglevel error keeps it tiny;
 	// the cap is a paranoia guard for spammy builds).
 	stderrCap = 8 << 10
+	// defaultHubBatchWindow is how long one hub-fed ffmpeg batch keeps its
+	// stdin open before closing (issue #688): real ffmpeg builds flush
+	// decoded rawvideo only at stdin EOF, so the sampler runs in bounded
+	// batches — feed keyframes for the window, close stdin, drain the
+	// flushed frames, let the run loop spawn the next batch. Spawn cost is
+	// ~tens of ms per multi-second batch, and sample latency stays bounded
+	// by window + flush delay.
+	defaultHubBatchWindow = 5 * time.Second
 )
 
 var hubSubSeq atomic.Int64
@@ -197,8 +205,13 @@ probe:
 	}
 
 	// Forwarder: seed with the probe keyframe, then throttle live keyframes
-	// to the sample rate. Exits when auCh closes (after Unsubscribe) or the
-	// stdin write breaks (ffmpeg gone).
+	// to the sample rate. Exits when auCh closes (after Unsubscribe), the
+	// batch window elapses (#688: closing stdin makes ffmpeg flush its
+	// buffered decoded frames), or the stdin write breaks (ffmpeg gone).
+	batchWindow := cfg.HubBatchWindow
+	if batchWindow <= 0 {
+		batchWindow = defaultHubBatchWindow
+	}
 	fwdDone = make(chan struct{})
 	go func() {
 		defer close(fwdDone)
@@ -211,17 +224,29 @@ probe:
 			return
 		}
 		last := time.Now()
-		for m := range auCh {
-			if !m.IsKeyframe {
-				continue
-			}
-			if time.Since(last) < interval {
-				continue
-			}
-			if _, err := stdin.Write(annexB(m.AU)); err != nil {
+		batch := time.NewTimer(batchWindow)
+		defer batch.Stop()
+		for {
+			select {
+			case m, ok := <-auCh:
+				if !ok {
+					return
+				}
+				if !m.IsKeyframe {
+					continue
+				}
+				if time.Since(last) < interval {
+					continue
+				}
+				if _, err := stdin.Write(annexB(m.AU)); err != nil {
+					return
+				}
+				last = time.Now()
+			case <-batch.C:
+				// Batch window elapsed: close stdin (the deferred Close above)
+				// so an EOF-gated ffmpeg flushes its decoded frames (#688).
 				return
 			}
-			last = time.Now()
 		}
 	}()
 
@@ -260,6 +285,13 @@ probe:
 			}
 			if ctx.Err() != nil {
 				return n, ctx.Err()
+			}
+			// #688 batch-close: stdin closed at the window boundary → ffmpeg
+			// flushed its frames and exited. EOF with a silent stderr is a
+			// clean batch completion; stderr content still means a decode
+			// failure the caller must see (and back off from).
+			if (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) && stderr.String() == "" {
+				return n, nil
 			}
 			return n, fmt.Errorf("ffmpeg stdin decode ended: %w; stderr: %s", err, stderr.String())
 		}

@@ -96,10 +96,17 @@ type Config struct {
 	// on its own (2026-09-02 incident: pixgate silent from 02:01 until the
 	// 05:09 service restart). <=0 → 30s.
 	FrameStallTimeout time.Duration
-	Resolver          Resolver
-	Trigger           Trigger
-	Bus               Publisher
-	Log               *slog.Logger
+	// HubBatchWindow bounds how long ONE hub-fed ffmpeg batch keeps its
+	// stdin open before closing it (issue #688: real ffmpeg builds buffer
+	// decoded rawvideo until stdin EOF — an indefinitely-open pipe yields
+	// zero stdout frames and trips the stall watchdog forever; observed on
+	// M5 ffmpeg 7.1.5). The batch closes, the buffered frames flush, and
+	// the caller's run loop respawns the next batch. <=0 → defaultHubBatchWindow.
+	HubBatchWindow time.Duration
+	Resolver       Resolver
+	Trigger        Trigger
+	Bus            Publisher
+	Log            *slog.Logger
 	// Cameras is the enabled set, refreshed via SetCameras.
 	Cameras map[string]CameraConfig
 }
@@ -511,6 +518,13 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, cfg CameraConf
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		if err == nil && n > 0 {
+			// #688 batch-close: a hub batch ran to completion and delivered
+			// frames — respawn the next batch immediately, no backoff (the
+			// batch window already paces the loop).
+			backoff = time.Second
+			continue
 		}
 		log.Warn("pixgate sampler stopped", "frames", n, "error", err, "retry_in", backoff)
 		select {
