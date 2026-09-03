@@ -87,8 +87,10 @@ func TestRunUpdate_ApplyPath(t *testing.T) {
 
 	prevApply := applyFn
 	var applied []update.Request
-	applyFn = func(req update.Request) error {
+	var mirrors []string
+	applyFn = func(req update.Request, mirror string) error {
 		applied = append(applied, req)
+		mirrors = append(mirrors, mirror)
 		return nil
 	}
 	t.Cleanup(func() { applyFn = prevApply })
@@ -129,7 +131,7 @@ func TestRunUpdate_ApplyRequestConsumedExactlyOnce(t *testing.T) {
 	}
 
 	prevApply := applyFn
-	applyFn = func(update.Request) error { return errPipelineFailureForTest }
+	applyFn = func(update.Request, string) error { return errPipelineFailureForTest }
 	t.Cleanup(func() { applyFn = prevApply })
 
 	err = runUpdate(runUpdateArgs{cfgPath: cfgPath, applyRequest: reqPath}, os.Stderr)

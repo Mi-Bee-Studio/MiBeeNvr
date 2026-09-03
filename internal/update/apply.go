@@ -43,9 +43,19 @@ type Request struct {
 // injectable seam (tests fake all of them; production defaults are the real
 // system operations). Not goroutine-safe — one run at a time.
 type Applier struct {
-	// ReleaseBase overrides the download base URL
-	// (https://github.com/{repo}/releases/download) — tests point it at an
-	// httptest server; a future mirror (#649) can point it at a CDN.
+	// Mirror is a download-mirror base that replaces "https://github.com"
+	// (#649, config update.download_mirror) — the {repo}/releases/download
+	// path is preserved underneath it, so a ghproxy-style prefix mirror or a
+	// self-hosted path-preserving mirror both fit. Empty = GitHub official.
+	// ALL artifacts (binary, checksums.txt, signature) come from the SAME
+	// origin: mixing a mirror binary with officially-signed checksums would
+	// keep the signature valid while swapping the bytes it vouches for. A
+	// mirror failure therefore fails CLOSED — never a silent fallback to
+	// GitHub.
+	Mirror string
+
+	// ReleaseBase overrides the full download base URL (mirror/tag already
+	// resolved) — tests point it at an httptest server.
 	ReleaseBase string
 
 	// DeploymentOverride replaces Deployment() (tests).
@@ -203,6 +213,9 @@ func (a *Applier) guards(req Request) error {
 func (a *Applier) releaseBase(req Request) string {
 	if a.ReleaseBase != "" {
 		return strings.TrimRight(a.ReleaseBase, "/")
+	}
+	if m := strings.TrimRight(a.Mirror, "/"); m != "" {
+		return fmt.Sprintf("%s/%s/releases/download/%s", m, req.Repo, req.TargetTag)
 	}
 	return fmt.Sprintf("https://github.com/%s/releases/download/%s", req.Repo, req.TargetTag)
 }

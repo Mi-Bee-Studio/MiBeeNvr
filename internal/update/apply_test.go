@@ -427,3 +427,66 @@ func TestTriggerAutoApply(t *testing.T) {
 		t.Fatalf("ineligible status must not trigger the helper, got %v", started)
 	}
 }
+
+// #649: a configured download mirror must serve ALL artifacts (binary,
+// checksums, signature) — the trust chain may never mix origins — and a
+// mirror failure must NOT silently fall back to GitHub.
+func TestApplier_MirrorSameOriginAndNoFallback(t *testing.T) {
+	// Official GitHub side: would serve a GOOD artifact, but must never be hit.
+	official := newFakeArtifact(t, []byte("genuine official artifact"), true)
+
+	// Mirror side: serves checksums+sig but the binary endpoint 404s — the
+	// classic broken-mirror case that must fail loudly, not fall back.
+	var mirrorBinaryHits, mirrorMetaHits int
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/mibee-nvr-") {
+			mirrorBinaryHits++
+			if r.Method == http.MethodHead || r.Method == http.MethodGet {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		mirrorMetaHits++
+		if strings.HasSuffix(r.URL.Path, "checksums.txt") {
+			fmt.Fprint(w, sha256Line("mibee-nvr-"+testArch(), []byte("genuine official artifact")))
+			return
+		}
+		fmt.Fprint(w, "mirror-signature")
+	}))
+	defer mirror.Close()
+
+	a, rec := newTestApplier(t, official)
+	// Mirror replaces https://github.com — the {repo}/releases/... path is
+	// preserved underneath it. Clear the helper's ReleaseBase so the mirror
+	// derivation runs.
+	a.ReleaseBase = ""
+	a.Mirror = mirror.URL
+	req := testRequest(t, official)
+
+	err := a.Apply(context.Background(), req)
+	if err == nil {
+		t.Fatal("broken mirror must fail the apply")
+	}
+	if mirrorBinaryHits == 0 && mirrorMetaHits == 0 {
+		t.Fatal("mirror must have been contacted")
+	}
+	if official.binaryHits != 0 {
+		t.Fatal("must NOT fall back to the official origin when a mirror is configured")
+	}
+	if rec.restarts != 0 {
+		t.Fatal("no system change on mirror failure")
+	}
+}
+
+// Empty mirror (the default) keeps today's behavior: GitHub official URLs.
+func TestApplier_NoMirrorUsesOfficial(t *testing.T) {
+	fa := newFakeArtifact(t, []byte("artifact"), true)
+	a, _ := newTestApplier(t, fa)
+	a.ReleaseBase = "" // production default path
+	req := testRequest(t, fa)
+
+	base := a.releaseBase(req)
+	if !strings.HasPrefix(base, "https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/download/v9.9.9") {
+		t.Fatalf("default base must be GitHub official, got %s", base)
+	}
+}
