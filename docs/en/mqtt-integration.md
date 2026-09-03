@@ -8,7 +8,7 @@ MiBee NVR supports MQTT recording triggers and status publishing for smart home 
 - **Trigger (subscribe)**: `{prefix}/trigger/{camera_id}`
 - **Status (publish)**: `{prefix}/health/{camera_id}`, `{prefix}/event/{topic}` (see [Status Publishing](#status-publishing))
 - **Trigger payload**: JSON with `action` field
-- **Actions**: `record`, `stop` (`snapshot` is not implemented yet — logged and ignored)
+- **Actions**: `record`, `stop`, `snapshot` (persisted to storage + `camera.snapshot` event)
 - **Auto-reconnect**: Built-in with exponential backoff; a broker that is unreachable at NVR startup is retried continuously (tiered 1s→5s→10s→60s backoff) — no start-order dependency
 
 ## Configuration
@@ -85,13 +85,15 @@ Stop recording on a specific camera:
 
 #### Trigger Snapshot
 
-Take a snapshot from a specific camera (**not implemented yet**: a `snapshot` action is currently only logged, nothing is executed; snapshot persistence is planned, see #656):
+Capture one snapshot from a specific camera and persist it (#656):
 
 ```json
 {
   "action": "snapshot"
 }
 ```
+
+Capture tries each capability in order: JPEG-family cameras (HTTP-JPEG/MJPEG) answer from the recorder's latest frame; H.264/H.265 cameras go through a one-shot StreamHub subscription (the cached IDR replays immediately — no GOP wait) decoded to JPEG by the optional FFmpeg, falling back to the camera's configured `snapshot_url` (with the camera's credentials) when FFmpeg is absent. The JPEG is persisted atomically (temp file → rename) to `{storage_root}/snapshots/{camera_id}/{timestamp}.jpg`, and a `camera.snapshot` event is published on success (see the event forwarding table below).
 
 **Topic**: `home/security/trigger/front-door`  
 **Message**: `{"action": "snapshot"}`
@@ -127,6 +129,7 @@ Gating: `mqtt.enabled: true` **and** `mqtt.status_events: true`. The following e
 | `camera.added` | `{prefix}/event/camera.added` | `camera_id`, `name`, `endpoint`, `source` |
 | `camera.quality` | `{prefix}/event/camera.quality` | `camera_id`, `from`, `to`, `reason` |
 | `storage.health.changed` | `{prefix}/event/storage.health.changed` | `camera_id`, `previous_state`, `current_state`, `message` |
+| `camera.snapshot` | `{prefix}/event/camera.snapshot` | `camera_id`, `file_path` (relative to storage root), `timestamp`, `trigger` |
 
 High-frequency topics (e.g. AI detections) are deliberately excluded from the whitelist. Messages use QoS 1 and retain=false; events are dropped when the broker is slow (the event bus drops on overflow and never blocks recording).
 

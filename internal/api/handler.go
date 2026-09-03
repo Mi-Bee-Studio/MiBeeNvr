@@ -128,6 +128,13 @@ type snapshotCache struct {
 	timestamp time.Time
 }
 
+// SnapshotCapturer captures one JPEG for a camera — satisfied by
+// *snapshot.Capturer (FFmpeg-gated decode + device snapshot-URL fallback,
+// #657). Interface keeps the handler testable with a stub.
+type SnapshotCapturer interface {
+	Capture(cameraID string) ([]byte, error)
+}
+
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
@@ -143,6 +150,7 @@ type Handler struct {
 	configPath        string
 	snapshotMu        sync.RWMutex
 	snapshots         map[string]*snapshotCache // cameraID -> cached snapshot
+	snapCapturer      SnapshotCapturer
 	mergeMgr          *merge.MergeManager
 	rollingMergeMgr   *merge.RollingMergeCoordinator
 	healthMgr         HealthManager
@@ -493,6 +501,19 @@ func (h *Handler) SetStabilityProvider(p StabilityProvider) {
 // SetDownloader sets the FFmpeg downloader on the handler.
 func (h *Handler) SetDownloader(d TranscodeDownloader) {
 	h.downloader = d
+}
+
+// SetSnapshotCapturer wires the FFmpeg-gated snapshot capturer used by the
+// latest-frame endpoint for H.264/H.265 cameras (#657). Without it the
+// endpoint keeps its JPEG-recorder-only behavior.
+func (h *Handler) SetSnapshotCapturer(c SnapshotCapturer) {
+	h.snapCapturer = c
+}
+
+// HasSnapshotCapturer reports whether the snapshot capturer is wired —
+// observable wiring guard for the pkg/app regression tests.
+func (h *Handler) HasSnapshotCapturer() bool {
+	return h.snapCapturer != nil
 }
 
 // SetEventBus sets the event bus on the handler.

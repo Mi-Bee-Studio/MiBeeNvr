@@ -24,6 +24,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/snapshot"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
@@ -85,6 +86,7 @@ type appDeps struct {
 	// Ingest listeners (optional)
 	mqttClient        *mqtt.Client
 	mqttStatusPub     *mqtt.StatusPublisher
+	snapRunner        *snapshot.Runner // MQTT snapshot trigger: capture → persist → event (#656)
 	ftpServer         *ftp.Server
 	rtmpServer        *rtmp.Server
 	srtListener       *srt.Listener

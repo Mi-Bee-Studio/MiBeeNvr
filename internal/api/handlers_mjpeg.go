@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
@@ -130,32 +131,61 @@ func (h *Handler) handleLatestFrame(w http.ResponseWriter, r *http.Request) {
 	w.Write(frame)
 }
 
-// getLatestFrameFromRecorder extracts the latest JPEG frame from a camera's recorder.
+// latestFrameCacheTTL bounds how long a decoded snapshot serves repeated
+// latest-frame polls before re-capturing. Var so tests can manipulate expiry.
+var latestFrameCacheTTL = 10 * time.Second
+
+// getLatestFrameFromRecorder extracts the latest JPEG frame from a camera's
+// recorder. JPEG-family recorders answer from their frame cache; everything
+// else (H.264/H.265, or no live recorder) goes through the FFmpeg-gated
+// snapshot capturer with the shared snapshot TTL cache (#657).
 func (h *Handler) getLatestFrameFromRecorder(cameraID string) []byte {
-	if h.camMgr == nil {
-		return nil
-	}
+	if h.camMgr != nil {
+		if rec := h.camMgr.GetRecorder(cameraID); rec != nil {
+			// Unwrap delegate layers (ONVIF → inner recorder)
+			for {
+				type delegater interface{ Delegate() model.Recorder }
+				if u, ok := rec.(delegater); ok {
+					if d := u.Delegate(); d != nil {
+						rec = d
+						continue
+					}
+				}
+				break
+			}
 
-	rec := h.camMgr.GetRecorder(cameraID)
-	if rec == nil {
-		return nil
-	}
-
-	// Unwrap delegate layers (ONVIF → inner recorder)
-	for {
-		type delegater interface{ Delegate() model.Recorder }
-		if u, ok := rec.(delegater); ok {
-			if d := u.Delegate(); d != nil {
-				rec = d
-				continue
+			type latestFramer interface{ LatestFrame() []byte }
+			if lr, ok := rec.(latestFramer); ok {
+				return lr.LatestFrame()
 			}
 		}
-		break
+	}
+	return h.getDecodedLatestFrame(cameraID)
+}
+
+// getDecodedLatestFrame captures one frame via the snapshot capturer (hub IDR
+// decode → device snapshot URL) and caches it. Any failure degrades to nil —
+// the endpoint answers 404, never 500 (FFmpeg stays optional).
+func (h *Handler) getDecodedLatestFrame(cameraID string) []byte {
+	if h.snapCapturer == nil {
+		return nil
 	}
 
-	type latestFramer interface{ LatestFrame() []byte }
-	if lr, ok := rec.(latestFramer); ok {
-		return lr.LatestFrame()
+	h.snapshotMu.RLock()
+	cached, ok := h.snapshots[cameraID]
+	h.snapshotMu.RUnlock()
+	if ok && time.Since(cached.timestamp) < latestFrameCacheTTL {
+		return cached.data
 	}
-	return nil
+
+	frame, err := h.snapCapturer.Capture(cameraID)
+	if err != nil || len(frame) == 0 {
+		mjpegLogger.Debug("latest-frame capture unavailable", "camera_id", cameraID, "error", err)
+		return nil
+	}
+
+	h.snapshotMu.Lock()
+	h.snapshots[cameraID] = &snapshotCache{data: frame, timestamp: time.Now()}
+	h.snapshotMu.Unlock()
+	return frame
 }

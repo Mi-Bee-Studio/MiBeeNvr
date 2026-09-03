@@ -184,3 +184,27 @@ func TestStatusPublisher_Name(t *testing.T) {
 	p := NewStatusPublisher(newStatusTestBus(t), &mockStatusMQTT{})
 	assert.Equal(t, "mqtt-status", p.Name())
 }
+
+func TestStatusPublisher_ForwardsCameraSnapshot(t *testing.T) {
+	t.Helper()
+	bus := newStatusTestBus(t)
+	mock := &mockStatusMQTT{}
+	p := NewStatusPublisher(bus, mock)
+	require.NoError(t, p.Start(context.Background()))
+	defer func() { require.NoError(t, p.Stop()) }()
+
+	snap := event.CameraSnapshotEvent{
+		CameraID:  "front-door",
+		FilePath:  "snapshots/front-door/20260903-103005.123.jpg",
+		Timestamp: time.Date(2026, 9, 3, 10, 30, 5, 0, time.UTC),
+		Trigger:   "mqtt",
+	}
+	bus.Publish(context.Background(), event.TopicCameraSnapshot, snap)
+
+	require.Eventually(t, func() bool {
+		return mock.calls() == 1
+	}, 15*time.Second, 50*time.Millisecond)
+	topic, got := mock.last()
+	assert.Equal(t, "event/camera.snapshot", topic)
+	assert.Equal(t, snap, got)
+}
