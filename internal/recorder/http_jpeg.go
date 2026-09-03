@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -26,7 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var httpJpegLogger = slog.Default().With("component", "http-jpeg-recorder")
+var httpJpegLogger = slogx.Component("http-jpeg-recorder")
 
 // HTTPJPEGConfig holds configuration for the HTTP JPEG recorder.
 type HTTPJPEGConfig struct {

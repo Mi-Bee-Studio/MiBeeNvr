@@ -3,11 +3,12 @@ package rtmp
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/bluenviron/gortmplib"
 	"github.com/bluenviron/gortmplib/pkg/codecs"
@@ -16,7 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var logger = slog.Default().With("component", "rtmp-server")
+var logger = slogx.Component("rtmp-server")
 
 // StreamKeyResolver maps a stream key to a camera ID.
 // Returns empty string if the stream key is not recognized.

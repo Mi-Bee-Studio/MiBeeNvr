@@ -3,12 +3,13 @@ package relay
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/livetranscode"
@@ -17,7 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
-var engineLogger = slog.Default().With("component", "relay-engine")
+var engineLogger = slogx.Component("relay-engine")
 
 const (
 	// relayStallAfter is how long a target may report streaming with zero

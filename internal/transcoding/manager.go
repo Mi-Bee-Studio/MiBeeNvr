@@ -8,13 +8,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
-var mgrLogger = slog.Default().With("component", "transcode-manager")
+var mgrLogger = slogx.Component("transcode-manager")
 
 // Package-level disabled reason — set by main.go when NewTranscodeManager fails.
 // Used by GetStatus() nil path and API handler to report why transcoding is disabled.

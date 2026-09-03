@@ -160,7 +160,8 @@ func TestAutoRemediator_ReconnectingBelowTimeoutIgnored(t *testing.T) {
 // restart" — the blacklist gate below blocks the restart moments later, so on
 // the 10s health tick the announcement is a false claim spammed forever
 // (production: 303 log lines/hour, all no-ops). The skip stays observable as
-// exactly one line per tick: CheckAll's "auto-remediate skipped" WARN carrying
+// exactly one line per tick: CheckAll's "auto-remediate skipped" Debug line
+// (#685 demoted from WARN — blacklisted cameras repeat it every scan) carrying
 // the blacklist expiry. The periodic blacklist rescan must still dispatch.
 //
 // Sequential (no t.Parallel): swaps the global default slog logger.
@@ -179,7 +180,7 @@ func TestAutoRemediator_BlacklistedReconnectingNoFalseRestartAnnouncement(t *tes
 
 	var buf bytes.Buffer
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(prev)
 
 	// One health tick for a blacklisted, reconnecting camera — the exact

@@ -10,13 +10,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/pion/rtp"
 
@@ -31,7 +32,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var rtspLogger = slog.Default().With("component", "rtsp-server")
+var rtspLogger = slogx.Component("rtsp-server")
 
 // StreamInfo is the current live-stream state of one camera, as resolved by
 // the StreamProvider on demand.

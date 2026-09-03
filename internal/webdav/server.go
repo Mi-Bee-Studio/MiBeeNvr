@@ -4,13 +4,14 @@ package webdav
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -19,7 +20,7 @@ import (
 	"golang.org/x/net/webdav"
 )
 
-var webdavLogger = slog.Default().With("component", "webdav")
+var webdavLogger = slogx.Component("webdav")
 
 // Server provides a WebDAV server for browsing and optionally uploading camera recordings.
 type Server struct {

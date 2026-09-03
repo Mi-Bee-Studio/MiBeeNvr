@@ -3,17 +3,18 @@ package api
 import (
 	"fmt"
 	"hash/crc32"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 )
 
-var mjpegLogger = slog.Default().With("component", "mjpeg-proxy")
+var mjpegLogger = slogx.Component("mjpeg-proxy")
 
 // handleMjpegStreamURL returns the MJPEG stream URL for a camera.
 // GET /api/cameras/{id}/stream.mjpeg

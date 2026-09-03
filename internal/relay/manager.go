@@ -2,9 +2,10 @@ package relay
 
 import (
 	"context"
-	"log/slog"
 	"sort"
 	"sync"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -12,7 +13,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
-var managerLogger = slog.Default().With("component", "relay-manager")
+var managerLogger = slogx.Component("relay-manager")
 
 // CameraHubProvider returns the StreamHub for a camera id (or nil). Backed by
 // CameraManager.GetHub in production.

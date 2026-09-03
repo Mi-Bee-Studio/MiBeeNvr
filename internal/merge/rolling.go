@@ -3,10 +3,11 @@ package merge
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -16,7 +17,7 @@ import (
 )
 
 // rollingLogger is the slog handle for the rolling merge coordinator.
-var rollingLogger = slog.Default().With("component", "rolling-merge")
+var rollingLogger = slogx.Component("rolling-merge")
 
 // backfillBatchPauseForArch returns the inter-batch pause for backfill merges.
 // On ARM (RPi 3B: 4× Cortex-A53 @ 1.2GHz, USB-bound IO) we slow down to avoid

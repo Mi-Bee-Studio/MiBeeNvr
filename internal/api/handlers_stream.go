@@ -3,8 +3,9 @@ package api
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -257,7 +258,7 @@ func (h *HLSStreamHandler) StopStream(camID string) error {
 	return h.StopStreamWithRecorder(camID, nil)
 }
 
-var streamLogger = slog.Default().With("component", "stream-handler")
+var streamLogger = slogx.Component("stream-handler")
 
 // unwrapper is an interface for recorders that delegate to an inner recorder.
 // This avoids importing recorder.ONVIFRecorder directly in the stream handler.

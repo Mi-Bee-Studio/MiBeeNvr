@@ -4,18 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	_ "modernc.org/sqlite"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
-var logger = slog.Default().With("component", "storage")
+var logger = slogx.Component("storage")
 
 // escapeLike escapes LIKE special characters (% and _) with backslash.
 // This prevents SQL injection via LIKE wildcards while allowing literal searches.

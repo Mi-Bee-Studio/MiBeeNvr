@@ -2,8 +2,9 @@ package mqtt
 
 import (
 	"context"
-	"log/slog"
 	"sync"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 )
@@ -29,7 +30,7 @@ var statusTopics = []string{
 	event.TopicCameraSnapshot,
 }
 
-var statusLogger = slog.Default().With("component", "mqtt-status")
+var statusLogger = slogx.Component("mqtt-status")
 
 // StatusPublisher forwards whitelisted event-bus topics to MQTT so smart-home
 // platforms (Home Assistant etc.) can consume NVR state without REST polling

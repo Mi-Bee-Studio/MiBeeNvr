@@ -3,17 +3,18 @@ package middleware
 import (
 	"context"
 	"encoding/base64"
-	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
-var logger = slog.Default().With("component", "auth")
+var logger = slogx.Component("auth")
 
 // IsLocalIP reports whether addr is a loopback address of this machine
 // (127.0.0.1 or ::1). addr may be a bare IP ("127.0.0.1"), an IPv6 address

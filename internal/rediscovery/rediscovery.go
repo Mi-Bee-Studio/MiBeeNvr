@@ -23,7 +23,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/url"
 	"strconv"
@@ -31,11 +30,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 )
 
-var logger = slog.Default().With("component", "rediscovery")
+var logger = slogx.Component("rediscovery")
 
 // Sentinel errors.
 var (

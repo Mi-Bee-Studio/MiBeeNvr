@@ -10,17 +10,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 )
 
 // tutkLogger matches the log vocabulary used during issue #167 field testing
 // ("tutk-transport" component) so testers' log-grep instructions stay stable.
-var tutkLogger = slog.Default().With("component", "tutk-transport")
+var tutkLogger = slogx.Component("tutk-transport")
 
 // Keepalive hardening for idle TUTK sessions. Root cause of the ~10-20s
 // disconnect loop (issue #167) was a stale handshake WRITE deadline that
@@ -262,12 +263,13 @@ func (c *Conn) worker() {
 
 	buf := make([]byte, 1200)
 	lastTick := time.Now()
-	// Periodic INFO heartbeat so field-test logs show liveness both while
-	// data flows (called from the read path) and during silence (timeout path).
+	// Periodic heartbeat (Debug since #685 — INFO ticked once a second and
+	// dominated field logs) showing liveness both while data flows and
+	// during silence.
 	tick := func(idle time.Duration) {
 		if time.Since(lastTick) >= tickInterval {
 			lastTick = time.Now()
-			tutkLogger.Info("tutk: keepalive tick",
+			tutkLogger.Debug("tutk: keepalive tick",
 				"uid", c.uid, "sent", keepalivesSent, "pkts", pktsRecv,
 				"last_data_ago", idle.Round(time.Second).String())
 		}

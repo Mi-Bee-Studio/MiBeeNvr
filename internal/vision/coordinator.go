@@ -309,7 +309,7 @@ func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSiz
 			"path", filepath.Base(absPath))
 		return false
 	}
-	slog.Info("pushed video to vision",
+	slog.Debug("pushed video to vision",
 		"camera_id", hdr["X-Camera-Id"],
 		"size_mb", realSize/1024/1024)
 	return true

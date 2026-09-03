@@ -4,10 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/url"
 	"strings"
 	"sync/atomic"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	srt "github.com/datarhei/gosrt"
 
@@ -16,7 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var logger = slog.Default().With("component", "srt-receiver")
+var logger = slogx.Component("srt-receiver")
 
 // Receiver manages an SRT connection and distributes H.264 frames to a StreamHub.
 // It handles both listener mode (receiving pushes) and caller mode (pulling from remote).

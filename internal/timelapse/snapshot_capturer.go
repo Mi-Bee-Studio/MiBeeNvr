@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,11 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
-var snapshotCapturerLogger = slog.Default().With("component", "snapshot-capturer")
+var snapshotCapturerLogger = slogx.Component("snapshot-capturer")
 
 // SnapshotCapturerConfig holds configuration for the HTTP snapshot capturer.
 type SnapshotCapturerConfig struct {

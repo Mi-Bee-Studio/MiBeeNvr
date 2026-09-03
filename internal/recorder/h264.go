@@ -5,9 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -26,7 +27,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var h264Logger = slog.Default().With("component", "h264-recorder")
+var h264Logger = slogx.Component("h264-recorder")
 
 // SegmentStore abstracts the storage operations needed by the recorder.
 // *storage.Manager satisfies this interface.

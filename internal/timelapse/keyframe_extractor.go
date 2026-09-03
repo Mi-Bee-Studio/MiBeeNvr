@@ -4,7 +4,6 @@ package timelapse
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,12 +11,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var kfeLogger = slog.Default().With("component", "keyframe-extractor")
+var kfeLogger = slogx.Component("keyframe-extractor")
 
 // SegmentStore defines the segment lifecycle interface needed by KeyframeExtractor.
 // This is a subset of the recorder.SegmentStore interface — defined locally to

@@ -18,9 +18,10 @@ package vod
 import (
 	"container/list"
 	"fmt"
-	"log/slog"
 	"os"
 	"sync"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"golang.org/x/sync/singleflight"
 
@@ -28,7 +29,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
-var logger = slog.Default().With("component", "vod")
+var logger = slogx.Component("vod")
 
 // segmentCache caches parsed sample tables per recording. Parsing a 1-hour
 // recording (~90k samples + per-sample keyframe probes) costs 100–300ms; the

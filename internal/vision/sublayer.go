@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -55,7 +56,7 @@ const (
 	subLayerMinSampleDur = time.Millisecond
 )
 
-var subLayerLogger = slog.Default().With("component", "vision-sublayer")
+var subLayerLogger = slogx.Component("vision-sublayer")
 
 // SubLayerProvider abstracts the camera manager's on-demand sub-stream source
 // (AcquireSubStream/ReleaseSubStream) so the vision package doesn't import the

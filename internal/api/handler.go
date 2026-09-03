@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -35,7 +36,7 @@ import (
 	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
-var logger = slog.Default().With("component", "api")
+var logger = slogx.Component("api")
 
 var appStartTime = time.Now()
 

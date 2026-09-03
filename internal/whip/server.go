@@ -20,12 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -35,7 +36,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
-var logger = slog.Default().With("component", "whip-server")
+var logger = slogx.Component("whip-server")
 
 const (
 	// offerMaxSize bounds the request body (SDP offers are a few KB).

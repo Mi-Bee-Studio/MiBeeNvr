@@ -14,10 +14,11 @@ package camera
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -33,7 +34,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
-var logger = slog.Default().With("component", "camera-manager")
+var logger = slogx.Component("camera-manager")
 
 // CameraUpdate holds optional fields for updating a camera.
 // Only non-nil fields will be applied.

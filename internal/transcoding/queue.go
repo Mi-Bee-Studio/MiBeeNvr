@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -25,7 +27,7 @@ import (
 // Implementations handle post-processing like DB registration or file cleanup.
 type CompletionFunc func(task *storage.TranscodeTask, success bool)
 
-var queueLogger = slog.Default().With("component", "transcode-queue")
+var queueLogger = slogx.Component("transcode-queue")
 
 // progressUpdateInterval controls how often progress is written to the database.
 // FFmpeg emits progress lines multiple times per second; writing every line

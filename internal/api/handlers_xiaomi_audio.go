@@ -5,14 +5,15 @@
 package api
 
 import (
-	"log/slog"
 	"net/http"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 	"github.com/go-chi/chi/v5"
 )
 
-var xiaomiAudioLogger = slog.Default().With("component", "xiaomi-audio")
+var xiaomiAudioLogger = slogx.Component("xiaomi-audio")
 
 // startTwoWayAudioResponse is returned on successful two-way audio start.
 type startTwoWayAudioResponse struct {

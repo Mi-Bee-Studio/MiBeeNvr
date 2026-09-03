@@ -50,8 +50,18 @@ func RequestLogger(logger *slog.Logger, skipPaths ...string) func(next http.Hand
 			start := time.Now()
 			ww := &StatusRecorder{ResponseWriter: w, Status: http.StatusOK}
 			next.ServeHTTP(ww, r.WithContext(ctx))
+			// Level by outcome (#685, M5 field evidence: routine 2xx polling
+			// was 26% of the 24h log volume): success is Debug material, a
+			// 4xx deserves a look, a 5xx is a real problem.
+			level := slog.LevelDebug
+			switch {
+			case ww.Status >= http.StatusInternalServerError:
+				level = slog.LevelWarn
+			case ww.Status >= http.StatusBadRequest:
+				level = slog.LevelInfo
+			}
 			logger.LogAttrs(
-				ctx, slog.LevelInfo, "request",
+				ctx, level, "request",
 				slog.String("trace_id", tid),
 				slog.String("method", r.Method),
 				slog.String("path", normalizePath(r.URL.Path)),

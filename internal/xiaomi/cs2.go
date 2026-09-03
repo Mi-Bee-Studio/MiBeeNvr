@@ -13,14 +13,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 )
 
-var cs2Logger = slog.Default().With("component", "xiaomi-cs2")
+var cs2Logger = slogx.Component("xiaomi-cs2")
 
 // CS2Dial establishes a CS2 P2P connection to a Xiaomi device.
 // transport: "udp" (default), "tcp", or "" (tries both).
