@@ -582,7 +582,9 @@ func sampleFrames(ctx context.Context, cfg Config, target Target, fps float64, f
 	}
 	defer func() {
 		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		// cmd.Wait (not just Process.Wait) retires exec.CommandContext's
+		// watchCtx goroutine — os-level reaping leaks it (#691: ~600/h on M5).
+		_ = cmd.Wait()
 	}()
 
 	// Stall watchdog (2026-09-02 incident): a wedged source — ffmpeg blocked

@@ -150,8 +150,12 @@ func sampleFramesHub(ctx context.Context, cfg Config, src HubSource, fps float64
 			close(watchStop)
 		}
 		if cmd != nil {
-			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+			if cmd.Process != nil { // pipe setup failed before Start — nothing spawned
+				_ = cmd.Process.Kill()
+			}
+			// cmd.Wait (not just Process.Wait) retires exec.CommandContext's
+			// watchCtx goroutine — os-level reaping leaks it (#691: ~600/h on M5).
+			_ = cmd.Wait()
 		}
 	}()
 
