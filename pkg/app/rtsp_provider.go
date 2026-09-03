@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
@@ -22,6 +23,13 @@ func rtspStreamProvider(camMgr *camera.CameraManager) rtsp.StreamProvider {
 		var info rtsp.StreamInfo
 		if provider, ok := unwrapRTSPDelegate(rec).(model.HLSProvider); ok {
 			info.Codec, info.SPS, info.PPS, info.VPS = provider.CodecParams()
+		} else {
+			// MJPEG-family recorders carry no parameter sets — every JPEG
+			// frame is standalone (#658).
+			switch unwrapRTSPDelegate(rec).(type) {
+			case *recorder.MJPEGRecorder, *recorder.HTTPJPEGRecorder:
+				info.Codec = model.FormatMJPEG
+			}
 		}
 		if h, ok := rec.(interface{ GetHub() *streamhub.StreamHub }); ok {
 			info.Hub = h.GetHub()
