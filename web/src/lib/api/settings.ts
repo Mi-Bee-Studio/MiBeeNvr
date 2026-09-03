@@ -135,7 +135,10 @@ export async function getSettings(signal?: AbortSignal): Promise<SettingsConfig>
   return apiRequest<SettingsConfig>('/settings', { signal });
 }
 
-export async function updateSettings(settings: SettingsConfig, signal?: AbortSignal): Promise<{ status: string; restart_required?: boolean }> {
+export async function updateSettings(
+  settings: SettingsConfig,
+  signal?: AbortSignal,
+): Promise<{ status: string; restart_required?: boolean }> {
   return apiRequest<{ status: string; restart_required?: boolean }>('/settings', {
     method: 'PUT',
     body: JSON.stringify(settings),
@@ -172,10 +175,7 @@ export async function addStorageCandidate(
   });
 }
 
-export async function removeStorageCandidate(
-  path: string,
-  signal?: AbortSignal,
-): Promise<{ status: string }> {
+export async function removeStorageCandidate(path: string, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest(`/storage/candidates?path=${encodeURIComponent(path)}`, {
     method: 'DELETE',
     signal,

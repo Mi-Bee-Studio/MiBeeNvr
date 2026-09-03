@@ -65,6 +65,10 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"mibeevision": map[string]any{
 			"api_keys": buildAPIKeyInfo(h.config.APIKeys, h.apiKeyLastUsed()),
 		},
+		"update": map[string]any{
+			// Bare-metal auto-apply toggle (#648 UI switch, #647 execution).
+			"auto_apply": h.config.Update.IsAutoApply(),
+		},
 		"timezone":         h.config.Timezone,
 		"timezone_display": tzDisplay,
 		"server": map[string]any{
@@ -196,6 +200,10 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		Server   *struct {
 			Listen *string `json:"listen"`
 		} `json:"server"`
+		Update *struct {
+			// AutoApply toggles bare-metal auto-upgrade (#647/#648). nil = unchanged.
+			AutoApply *bool `json:"auto_apply"`
+		} `json:"update"`
 		GB28181 *struct {
 			Enabled           *bool     `json:"enabled"`
 			SIPListen         *string   `json:"sip_listen"`
@@ -221,6 +229,11 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	// Update auto-apply toggle (#648): takes effect on the next check cycle.
+	if body.Update != nil && body.Update.AutoApply != nil {
+		h.config.Update.AutoApply = body.Update.AutoApply
 	}
 
 	// Update cleanup settings

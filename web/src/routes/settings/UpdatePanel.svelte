@@ -1,16 +1,55 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { getUpdateStatus, refreshUpdateStatus } from '$lib/api';
-  import type { UpdateStatus } from '$lib/api';
+  import { onMount, onDestroy } from 'svelte';
+  import {
+    getUpdateStatus,
+    refreshUpdateStatus,
+    applyUpdate,
+    getApplyStatus,
+    getUpdateHistory,
+    getSettings,
+    updateSettings,
+  } from '$lib/api';
+  import type { UpdateStatus, UpdateApplyStatus, UpdateHistoryEntry } from '$lib/api';
   import { t } from '$lib/i18n';
   import { withBase } from '$lib/base-path';
   import { showToast } from '$lib/toast';
-  import { RefreshCw, CheckCircle2, ArrowUpCircle, ExternalLink } from 'lucide-svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import Toggle from '$lib/components/Toggle.svelte';
+  import {
+    RefreshCw,
+    CheckCircle2,
+    ArrowUpCircle,
+    ExternalLink,
+    Download,
+    History,
+    Loader2,
+  } from 'lucide-svelte';
 
   let status = $state<UpdateStatus | null>(null);
   let loading = $state(true);
   let checking = $state(false);
   let error = $state('');
+
+  // Upgrade execution (#648). The apply state survives the mid-upgrade process
+  // restart — it is polled from the backend's lifecycle files, never held here.
+  let applyStatus = $state<UpdateApplyStatus | null>(null);
+  let showApplyConfirm = $state(false);
+  let showAutoConfirm = $state(false);
+  let autoApply = $state(false);
+  let history = $state<UpdateHistoryEntry[]>([]);
+  let historyOpen = $state(false);
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let applyInProgress = $derived(
+    applyStatus?.state === 'requested' || applyStatus?.state === 'applying'
+  );
+  let canApply = $derived(
+    !!status &&
+      status.update_available &&
+      status.deployment !== 'docker' &&
+      status.current !== '' &&
+      status.current !== 'dev'
+  );
 
   // True when current is a real version (not "dev"/empty) — used to avoid
   // "up to date" false confidence on local builds.
@@ -18,12 +57,24 @@
 
   onMount(async () => {
     try {
-      status = await getUpdateStatus();
+      const [st, settings, applySt] = await Promise.all([
+        getUpdateStatus(),
+        getSettings().catch(() => null),
+        getApplyStatus().catch(() => null),
+      ]);
+      status = st;
+      if (settings?.update) autoApply = settings.update.auto_apply ?? false;
+      if (applySt) applyStatus = applySt;
+      if (applyInProgress) startPolling();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
+  });
+
+  onDestroy(() => {
+    if (pollTimer) clearTimeout(pollTimer);
   });
 
   async function checkNow() {
@@ -36,6 +87,75 @@
       showToast(t('common.failed'), 'error');
     } finally {
       checking = false;
+    }
+  }
+
+  // --- One-click upgrade (#648) ---
+
+  async function confirmApply() {
+    showApplyConfirm = false;
+    try {
+      applyStatus = await applyUpdate();
+      startPolling();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), 'error');
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
+      try {
+        applyStatus = await getApplyStatus();
+        if (applyInProgress) {
+          startPolling();
+          return;
+        }
+        // Terminal state reached. Success means THIS page is served by the OLD
+        // process — prompt a reload instead of trusting stale UI state.
+        if (applyStatus?.state === 'success') {
+          await refreshUpdateStatus().then((st) => (status = st)).catch(() => {});
+          loadHistory();
+        }
+      } catch {
+        // The process restarts mid-upgrade: connection refused is EXPECTED.
+        // Keep polling until it answers again (bounded by user navigation).
+        startPolling();
+      }
+    }, 2000);
+  }
+
+  async function toggleAutoApply(v: boolean) {
+    if (v) {
+      // Enabling needs a second confirmation (process auto-restarts).
+      showAutoConfirm = true;
+      return;
+    }
+    autoApply = false;
+    await saveAutoApply(false);
+  }
+
+  async function confirmAutoApply() {
+    showAutoConfirm = false;
+    autoApply = true;
+    await saveAutoApply(true);
+  }
+
+  async function saveAutoApply(v: boolean) {
+    try {
+      await updateSettings({ cleanup: undefined, webdav: undefined, update: { auto_apply: v } } as never);
+      showToast(t('common.saved'), 'success');
+    } catch (e) {
+      autoApply = !v;
+      showToast(e instanceof Error ? e.message : String(e), 'error');
+    }
+  }
+
+  async function loadHistory() {
+    try {
+      history = await getUpdateHistory();
+    } catch {
+      history = [];
     }
   }
 
@@ -170,19 +290,111 @@
             {t('about.upgradeBinary')}
           {/if}
         </p>
-        {#if status.html_url}
-          <a
-            href={status.html_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="inline-flex items-center gap-1.5 mt-3 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
+        <div class="flex items-center gap-4 mt-3">
+          {#if canApply}
+            <button
+              class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              onclick={() => (showApplyConfirm = true)}
+              disabled={applyInProgress}
+            >
+              <Download size={16} />
+              {t('about.applyNow')} → {status.latest}
+            </button>
+          {/if}
+          {#if status.html_url}
+            <a
+              href={status.html_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              <ExternalLink size={14} />
+              {t('about.viewRelease')}
+            </a>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
+    <!-- Apply progress / result (#648) — state survives the process restart -->
+    {#if applyStatus && applyStatus.state !== 'idle'}
+      <div
+        class="p-4 rounded-lg border space-y-2 text-sm
+        {applyStatus.state === 'success'
+          ? 'bg-green-50 dark:bg-green-950/40 border-green-200 dark:border-green-900 text-green-700 dark:text-green-300'
+          : applyStatus.state === 'failed' || applyStatus.state === 'failed_rolled_back'
+            ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900 text-red-700 dark:text-red-300'
+            : 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900 text-blue-700 dark:text-blue-300'}"
+      >
+        <div class="flex items-center gap-2 font-medium">
+          {#if applyInProgress}
+            <Loader2 size={16} class="animate-spin" />
+            {applyStatus.state === 'applying' ? t('about.applyState.applying') : t('about.applyState.requested')}
+          {:else if applyStatus.state === 'success'}
+            <CheckCircle2 size={16} />
+            {t('about.applyState.success')} ({applyStatus.from} → {applyStatus.to})
+          {:else}
+            <ArrowUpCircle size={16} />
+            {applyStatus.state === 'failed_rolled_back' ? t('about.applyState.failed_rolled_back') : t('about.applyState.failed')}
+          {/if}
+        </div>
+        {#if applyStatus.error}
+          <p class="font-mono text-xs opacity-80">{applyStatus.error}</p>
+        {/if}
+        {#if applyStatus.state === 'success'}
+          <p>{t('about.applyRestarted')}</p>
+          <button
+            class="px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-700"
+            onclick={() => window.location.reload()}
           >
-            <ExternalLink size={14} />
-            {t('about.viewRelease')}
-          </a>
+            {t('about.refreshPage')}
+          </button>
         {/if}
       </div>
     {/if}
+
+    <!-- Auto-apply toggle (#648) — bare-metal only, opt-in, double-confirm -->
+    {#if status.deployment !== 'docker' && hasVersion}
+      <div class="p-4 rounded-lg th-bg-secondary border th-border-primary">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-sm font-medium th-text-primary">{t('about.autoApply')}</div>
+            <p class="text-xs th-text-tertiary mt-1">{t('about.autoApplyHint')}</p>
+          </div>
+          <Toggle checked={autoApply} onChange={toggleAutoApply} label={t('about.autoApply')} />
+        </div>
+      </div>
+    {/if}
+
+    <!-- Upgrade history (#648) -->
+    <details
+      class="p-4 rounded-lg th-bg-secondary border th-border-primary"
+      ontoggle={(e) => {
+        historyOpen = (e.currentTarget as HTMLDetailsElement).open;
+        if (historyOpen && history.length === 0) loadHistory();
+      }}
+    >
+      <summary class="flex items-center gap-2 text-sm font-medium th-text-primary cursor-pointer select-none">
+        <History size={15} />
+        {t('about.updateHistory')}
+      </summary>
+      <div class="mt-3 space-y-1 text-xs" class:hidden={!historyOpen}>
+        {#if history.length === 0}
+          <p class="th-text-tertiary">{t('about.historyEmpty')}</p>
+        {:else}
+          {#each history as row (row.time + row.to)}
+            <div class="flex items-center gap-2 th-text-secondary">
+              <span class="font-mono">{row.from} → {row.to}</span>
+              <span class={row.result === 'ok' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                {t(`about.result.${row.result}`)}
+              </span>
+              <span class="th-text-tertiary">{fmtTime(row.time)}</span>
+              {#if row.error}<span class="th-text-tertiary truncate max-w-xs" title={row.error}>{row.error}</span>{/if}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </details>
 
     <!-- Changelog -->
     {#if status.changelog}
@@ -206,6 +418,28 @@
         {checking ? t('about.checking') : t('about.checkNow')}
       </button>
     </div>
+  {/if}
+
+  <!-- Upgrade confirmation (#648): target version + restart warning -->
+  {#if showApplyConfirm && status}
+    <ConfirmDialog
+      title={t('about.applyConfirmTitle')}
+      message={t('about.applyConfirmBody', { version: status.latest })}
+      variant="primary"
+      onconfirm={confirmApply}
+      oncancel={() => (showApplyConfirm = false)}
+    />
+  {/if}
+
+  <!-- Auto-apply double confirmation (#648) -->
+  {#if showAutoConfirm}
+    <ConfirmDialog
+      title={t('about.autoApplyConfirmTitle')}
+      message={t('about.autoApplyConfirmBody')}
+      variant="primary"
+      onconfirm={confirmAutoApply}
+      oncancel={() => (showAutoConfirm = false)}
+    />
   {/if}
 </div>
 

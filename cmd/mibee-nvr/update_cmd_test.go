@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
@@ -125,7 +124,7 @@ func TestRunUpdate_ApplyRequestConsumedExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reqPath, err := update.WriteRequest(dir, "v9.9.9", time.Now())
+	reqPath, err := update.WriteRequest(dir, update.AutoRequest{TargetTag: "v9.9.9"})
 	if err != nil {
 		t.Fatal(err)
 	}

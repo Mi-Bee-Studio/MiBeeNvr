@@ -298,3 +298,7 @@ func Deployment() string {
 	}
 	return "binary"
 }
+
+// SetEndpoint overrides the GitHub API endpoint. Test seam only — production
+// callers always use the default api.github.com URL.
+func (c *Checker) SetEndpoint(url string) { c.endpoint = url }

@@ -40,3 +40,43 @@ export async function getUpdateStatus(): Promise<UpdateStatus> {
 export async function refreshUpdateStatus(): Promise<UpdateStatus> {
   return apiRequest<UpdateStatus>('/update/check', { method: 'POST' });
 }
+
+/** Cross-restart apply state of the bare-metal upgrade pipeline (#648). */
+export interface UpdateApplyStatus {
+  /** idle | requested | applying | success | failed | failed_rolled_back */
+  state: string;
+  id?: string;
+  from?: string;
+  to?: string;
+  error?: string;
+  time?: string;
+  /** Mirror of update.auto_apply for the Settings toggle. */
+  auto_apply?: boolean;
+}
+
+/** One update-history.jsonl row (newest first). */
+export interface UpdateHistoryEntry {
+  time: string;
+  from: string;
+  to: string;
+  result: 'ok' | 'failed' | string;
+  error?: string;
+}
+
+/**
+ * Trigger a bare-metal upgrade via the root helper (#648). Returns
+ * {id, state:"requested"|...}; 409 when docker/no-update — thrown as ApiError.
+ */
+export async function applyUpdate(): Promise<UpdateApplyStatus> {
+  return apiRequest<UpdateApplyStatus>('/update/apply', { method: 'POST' });
+}
+
+/** Poll the cross-restart apply state (safe during the mid-upgrade restart). */
+export async function getApplyStatus(): Promise<UpdateApplyStatus> {
+  return apiRequest<UpdateApplyStatus>('/update/apply/status');
+}
+
+/** Recent upgrade history rows, newest first. */
+export async function getUpdateHistory(): Promise<UpdateHistoryEntry[]> {
+  return apiRequest<UpdateHistoryEntry[]>('/update/history');
+}
