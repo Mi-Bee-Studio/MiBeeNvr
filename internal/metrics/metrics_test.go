@@ -630,3 +630,35 @@ func TestMergeMetrics_FailureReasons(t *testing.T) {
 	}
 	t.Fatal("expected nvr_merge_failures_total metric family")
 }
+
+// runtimeMetricNames returns the exact metric family names in the registry —
+// the acceptance list for issue #644 (goroutines / GC / memstats / process).
+func registryMetricNames(t *testing.T, m *Metrics) map[string]bool {
+	t.Helper()
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, f := range families {
+		names[f.GetName()] = true
+	}
+	return names
+}
+
+// TestRegistryExposesIssue644RuntimeMetrics pins the #644 acceptance list:
+// goroutine count, GC timing, memory stats, and process CPU/RSS must all be
+// scrapeable from /api/metrics.
+func TestRegistryExposesIssue644RuntimeMetrics(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	names := registryMetricNames(t, NewMetrics())
+
+	for _, want := range []string{
+		"go_goroutines",
+		"go_gc_duration_seconds",
+		"go_memstats_alloc_bytes",
+		"nvr_process_cpu_seconds_total",
+		"nvr_process_resident_memory_bytes",
+	} {
+		require.True(t, names[want], "expected metric %q in registry (issue #644 acceptance)", want)
+	}
+}
