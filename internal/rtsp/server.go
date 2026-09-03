@@ -24,6 +24,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmjpeg"
 	"github.com/bluenviron/gortsplib/v5/pkg/liberrors"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -52,8 +53,10 @@ func (i StreamInfo) Ready() bool {
 		return len(i.SPS) > 0 && len(i.PPS) > 0
 	case model.FormatH265:
 		return len(i.VPS) > 0 && len(i.SPS) > 0 && len(i.PPS) > 0
+	case model.FormatMJPEG:
+		return true // every JPEG frame is standalone — no parameter sets
 	default:
-		return false // mjpeg/jpeg cameras are not served over RTSP yet
+		return false
 	}
 }
 
@@ -79,6 +82,19 @@ type Config struct {
 // rtpEncoder abstracts rtph264.Encoder / rtph265.Encoder.
 type rtpEncoder interface {
 	Encode(au [][]byte) ([]*rtp.Packet, error)
+}
+
+// mjpegAUEncoder adapts rtpmjpeg.Encoder (single image) onto the AU-shaped
+// rtpEncoder contract: MJPEG AUs are one-element slices holding a whole JPEG.
+type mjpegAUEncoder struct {
+	enc *rtpmjpeg.Encoder
+}
+
+func (m *mjpegAUEncoder) Encode(au [][]byte) ([]*rtp.Packet, error) {
+	if len(au) == 0 {
+		return nil, fmt.Errorf("mjpeg: empty AU")
+	}
+	return m.enc.Encode(au[0])
 }
 
 // rtspReader is one attached RTSP session's private egress. Each reader owns
@@ -580,6 +596,16 @@ func (cs *cameraStream) buildMedia() (*description.Media, error) {
 				return nil, err
 			}
 			cs.enc = enc
+		}
+		forma = f
+	case model.FormatMJPEG:
+		f := &format.MJPEG{}
+		if cs.enc == nil {
+			enc, err := f.CreateEncoder()
+			if err != nil {
+				return nil, err
+			}
+			cs.enc = &mjpegAUEncoder{enc: enc}
 		}
 		forma = f
 	default:

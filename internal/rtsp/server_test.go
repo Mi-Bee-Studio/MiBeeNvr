@@ -476,10 +476,10 @@ func TestRTSPNotReady(t *testing.T) {
 	ts.sps = nil // camera warming up
 	require.Nil(t, ts.Server.streamFor("cam-1"))
 
-	// MJPEG cameras are not servable.
+	// MJPEG cameras ARE servable since #658 (RTP/JPEG, no parameter sets).
 	ts.sps = tSPS
 	ts.codec = model.FormatMJPEG
-	require.Nil(t, ts.Server.streamFor("cam-1"))
+	require.NotNil(t, ts.Server.streamFor("cam-1"))
 }
 
 func TestCameraIDFromPath(t *testing.T) {
