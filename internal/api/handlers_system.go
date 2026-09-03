@@ -499,4 +499,8 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Get("/api/version", h.handleVersion)
 	r.Get("/api/update/check", h.handleUpdateCheck)
 	r.Post("/api/update/check", h.handleUpdateCheck)
+	// Upgrade execution (#648) — BasicAuth-protected like the rest of /api.
+	r.Post("/api/update/apply", h.handleUpdateApply)
+	r.Get("/api/update/apply/status", h.handleUpdateApplyStatus)
+	r.Get("/api/update/history", h.handleUpdateHistory)
 }

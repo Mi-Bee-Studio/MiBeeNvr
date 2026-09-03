@@ -340,7 +340,15 @@ export type {
 } from './ai';
 
 // Update / version check (sensing layer only — never executes an upgrade)
-export { getVersion, getUpdateStatus, refreshUpdateStatus } from './update';
+export {
+  getVersion,
+  getUpdateStatus,
+  refreshUpdateStatus,
+  applyUpdate,
+  getApplyStatus,
+  getUpdateHistory,
+} from './update';
+export type { UpdateApplyStatus, UpdateHistoryEntry } from './update';
 export type { UpdateStatus } from './update';
 
 export {

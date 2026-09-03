@@ -88,12 +88,14 @@ func runUpdate(args runUpdateArgs, out io.Writer) error {
 
 	// Root-helper entry: consume the request file exactly once.
 	target := args.version
+	applyID := ""
 	if args.applyRequest != "" {
 		reqFile, err := update.ReadRequest(args.applyRequest)
 		if err != nil {
 			return fmt.Errorf("update: read request file: %w", err)
 		}
 		target = reqFile.TargetTag
+		applyID = reqFile.ID
 		defer func() {
 			// Remove on ANY outcome (success or failure): a failed attempt is
 			// logged in the history file; a stale request must never re-run
@@ -135,6 +137,7 @@ func runUpdate(args runUpdateArgs, out io.Writer) error {
 
 	fmt.Fprintf(out, "upgrading %s → %s (binary %s)\n", appVersion, target, binPath)
 	req := update.Request{
+		ID:         applyID,
 		Current:    appVersion,
 		TargetTag:  target,
 		Repo:       repo,

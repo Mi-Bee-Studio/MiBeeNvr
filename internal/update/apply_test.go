@@ -301,7 +301,7 @@ func TestApplier_Apply_Guards(t *testing.T) {
 // helper reads it and deletes it after a successful run.
 func TestRequestFileRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	path, err := WriteRequest(dir, "v9.9.9", time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC))
+	path, err := WriteRequest(dir, AutoRequest{TargetTag: "v9.9.9", RequestedAt: time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,5 +488,113 @@ func TestApplier_NoMirrorUsesOfficial(t *testing.T) {
 	base := a.releaseBase(req)
 	if !strings.HasPrefix(base, "https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/download/v9.9.9") {
 		t.Fatalf("default base must be GitHub official, got %s", base)
+	}
+}
+
+// The apply-lifecycle state file (#648): the helper persists its progress so
+// the API can report a cross-restart status (the app itself restarts mid-way).
+func TestApplyLifecycleFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// No state yet → zero value with ok=false.
+	if _, ok := ReadLastApply(dir); ok {
+		t.Fatal("empty data dir must report no last-apply state")
+	}
+
+	// Writing states updates the file atomically; readers see the latest.
+	if err := WriteLastApply(dir, LastApply{ID: "abc", State: "applying", From: "v1.0.0", To: "v9.9.9"}); err != nil {
+		t.Fatal(err)
+	}
+	st, ok := ReadLastApply(dir)
+	if !ok || st.State != "applying" || st.ID != "abc" {
+		t.Fatalf("state round trip failed: %+v ok=%v", st, ok)
+	}
+	if err := WriteLastApply(dir, LastApply{ID: "abc", State: "success", From: "v1.0.0", To: "v9.9.9"}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = ReadLastApply(dir)
+	if st.State != "success" {
+		t.Fatalf("latest state must win: %+v", st)
+	}
+}
+
+// History rows read newest-first for the UI.
+func TestReadHistory(t *testing.T) {
+	dir := t.TempDir()
+	if rows, err := ReadHistory(dir, 10); err != nil || len(rows) != 0 {
+		t.Fatalf("empty history must be empty: %v %v", rows, err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, historyFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		fmt.Fprintf(f, `{"time":"t%d","from":"v1.0.%d","to":"v9.9.9","result":"ok"}`+"\n", i, i)
+	}
+	f.Close()
+
+	rows, err := ReadHistory(dir, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("limit must cap rows: %d", len(rows))
+	}
+	if rows[0].From != "v1.0.3" || rows[1].From != "v1.0.2" {
+		t.Fatalf("rows must be newest-first: %+v", rows)
+	}
+
+	// A corrupt trailing line (crash mid-write) must not poison the rest.
+	f2, _ := os.OpenFile(filepath.Join(dir, historyFile), os.O_WRONLY|os.O_APPEND, 0o644)
+	f2.WriteString(`{"broken`)
+	f2.Close()
+	rows, err = ReadHistory(dir, 10)
+	if err != nil {
+		t.Fatalf("corrupt tail line must be skipped, not fatal: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 valid rows, got %d", len(rows))
+	}
+}
+
+// The full pipeline writes the lifecycle file at each stage.
+func TestApplier_WritesLifecycleStates(t *testing.T) {
+	fa := newFakeArtifact(t, []byte("new binary"), true)
+	a, _ := newTestApplier(t, fa)
+	req := testRequest(t, fa)
+	req.ID = "apply-42"
+
+	if err := a.Apply(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	st, ok := ReadLastApply(req.DataDir)
+	if !ok || st.ID != "apply-42" || st.State != "success" || st.From != "v1.0.0" || st.To != "v9.9.9" {
+		t.Fatalf("terminal state wrong: %+v ok=%v", st, ok)
+	}
+
+	// Health-gate failure → failed_rolled_back.
+	a2, _ := newTestApplier(t, fa)
+	a2.HealthWait = func(context.Context, string, time.Duration) error { return errors.New("down") }
+	req2 := testRequest(t, fa)
+	req2.ID = "apply-43"
+	_ = a2.Apply(context.Background(), req2)
+	st2, _ := ReadLastApply(req2.DataDir)
+	if st2.State != "failed_rolled_back" {
+		t.Fatalf("rollback state wrong: %+v", st2)
+	}
+
+	// Pre-replace failure (tampered artifact) → failed, system untouched.
+	fa2 := newFakeArtifact(t, []byte("forged"), true)
+	fa2.checksums = sha256Line("mibee-nvr-"+testArch(), []byte("genuine"))
+	a3, _ := newTestApplier(t, fa2)
+	req3 := testRequest(t, fa2)
+	req3.ID = "apply-44"
+	_ = a3.Apply(context.Background(), req3)
+	st3, _ := ReadLastApply(req3.DataDir)
+	if st3.State != "failed" {
+		t.Fatalf("verification-failure state wrong: %+v", st3)
+	}
+	if st3.Error == "" {
+		t.Fatal("failure state must carry the error message")
 	}
 }

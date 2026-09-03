@@ -31,6 +31,7 @@ import (
 
 // Request describes one upgrade run.
 type Request struct {
+	ID         string // apply id (echoed into history + lifecycle state, #648)
 	Current    string // running version (appVersion, e.g. "v0.11.0")
 	TargetTag  string // release tag to install (e.g. "v0.12.0")
 	Repo       string // "owner/name"
@@ -102,6 +103,15 @@ type historyRow struct {
 type AutoRequest struct {
 	TargetTag   string `json:"target_tag"`
 	RequestedAt string `json:"requested_at"`
+	// ID ties the request to its history/lifecycle records (#648).
+	ID string `json:"id,omitempty"`
+	// Manual marks a UI-button trigger (vs the automatic sensing hook).
+	Manual bool `json:"manual,omitempty"`
+}
+
+// NewApplyID returns a fresh apply id (time-based, unique per trigger).
+func NewApplyID() string {
+	return fmt.Sprintf("apply-%x", time.Now().UnixNano())
 }
 
 const (
@@ -115,7 +125,9 @@ const (
 // Any pre-replace failure leaves the system untouched.
 func (a *Applier) Apply(ctx context.Context, req Request) error {
 	a.log = slog.Default().With("component", "update-apply", "to", req.TargetTag)
+	a.lifecycle(req, "applying", "")
 	if err := a.guards(req); err != nil {
+		a.lifecycle(req, "failed", err.Error())
 		return err
 	}
 
@@ -139,6 +151,7 @@ func (a *Applier) Apply(ctx context.Context, req Request) error {
 		return fmt.Errorf("update: download checksums.txt.sig: %w", err)
 	}
 	if err := a.signVerify()(checksums, sig); err != nil {
+		a.lifecycle(req, "failed", err.Error())
 		return fmt.Errorf("update: signature verification failed (artifact may be corrupted or tampered with): %w", err)
 	}
 
@@ -154,6 +167,7 @@ func (a *Applier) Apply(ctx context.Context, req Request) error {
 	}
 	if err := a.digestVerify()(checksums, assetName(), data); err != nil {
 		_ = os.Remove(tmpPath)
+		a.lifecycle(req, "failed", err.Error())
 		return fmt.Errorf("update: artifact verification failed, system left untouched: %w", err)
 	}
 
@@ -175,14 +189,18 @@ func (a *Applier) Apply(ctx context.Context, req Request) error {
 
 	if err := a.restart()(ctx); err != nil {
 		a.rollback(req, prevPath)
+		a.lifecycle(req, "failed_rolled_back", err.Error())
+		a.appendHistory(req, "failed", "restart failed: "+err.Error())
 		return fmt.Errorf("update: restart service failed (rollback performed): %w", err)
 	}
 	if err := a.healthWait()(ctx, req.HealthURL, a.healthTimeout()); err != nil {
 		a.rollback(req, prevPath)
+		a.lifecycle(req, "failed_rolled_back", "health gate: "+err.Error())
 		a.appendHistory(req, "failed", "health gate: "+err.Error())
 		return fmt.Errorf("update: health gate after upgrade failed — rollback to %s performed: %w", req.Current, err)
 	}
 
+	a.lifecycle(req, "success", "")
 	a.appendHistory(req, "ok", "")
 	a.log.Info("update applied", "from", req.Current, "to", req.TargetTag)
 	return nil
@@ -330,6 +348,16 @@ func (a *Applier) rollback(req Request, prevPath string) {
 	a.log.Warn("rollback complete — previous version restored", "version", req.Current)
 }
 
+// lifecycle persists the cross-restart apply state (#648). Best-effort:
+// state-file failures are logged but never mask the pipeline outcome.
+func (a *Applier) lifecycle(req Request, state, errMsg string) {
+	if err := WriteLastApply(req.DataDir, LastApply{
+		ID: req.ID, State: state, From: req.Current, To: req.TargetTag, Error: errMsg,
+	}); err != nil {
+		a.log.Warn("lifecycle state write failed", "error", err)
+	}
+}
+
 func (a *Applier) appendHistory(req Request, result, errMsg string) {
 	row := historyRow{
 		Time:   a.now().UTC().Format(time.RFC3339),
@@ -436,11 +464,16 @@ func pollHealth(ctx context.Context, url string, timeout time.Duration) error {
 // WriteRequest atomically writes the auto-apply request into dataDir and
 // returns its path. The nvr user owns the data dir (ReadWritePaths), so this
 // is the ONE file the sandboxed app may use to ask root for an upgrade.
-func WriteRequest(dataDir, targetTag string, now time.Time) (string, error) {
+func WriteRequest(dataDir string, req AutoRequest) (string, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", err
 	}
-	req := AutoRequest{TargetTag: targetTag, RequestedAt: now.UTC().Format(time.RFC3339)}
+	if req.RequestedAt == "" {
+		req.RequestedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if req.ID == "" {
+		req.ID = NewApplyID()
+	}
 	b, err := json.Marshal(req)
 	if err != nil {
 		return "", err
@@ -506,7 +539,7 @@ func TriggerAutoApply(currentVersion string, st Status, deployment, dataDir stri
 		return fmt.Errorf("update: auto-apply not eligible (deployment=%s channel=%s latest=%q current=%q)",
 			deployment, st.Channel, st.Latest, currentVersion)
 	}
-	if _, err := WriteRequest(dataDir, st.Latest, time.Now()); err != nil {
+	if _, err := WriteRequest(dataDir, AutoRequest{TargetTag: st.Latest}); err != nil {
 		return fmt.Errorf("update: write auto-apply request: %w", err)
 	}
 	const helperUnit = "mibee-nvr-update.service"
@@ -522,4 +555,85 @@ func TriggerAutoApply(currentVersion string, st Status, deployment, dataDir stri
 // start` (not `isolate`) so the request is one policy check.
 func StartHelperUnit(unit string) error {
 	return exec.Command("systemctl", "start", unit).Run()
+}
+
+// --- Apply lifecycle state (#648) ---
+
+// LastApply is the cross-restart apply state the root helper persists to the
+// data dir (update-last-apply.json). The app restarts mid-upgrade, so the API
+// cannot hold this in memory — the file IS the source of truth. States:
+// applying → success | failed | failed_rolled_back.
+type LastApply struct {
+	ID        string `json:"id"`
+	State     string `json:"state"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Error     string `json:"error,omitempty"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+const lastApplyFile = "update-last-apply.json"
+
+// WriteLastApply atomically persists the apply state (temp → rename).
+func WriteLastApply(dataDir string, st LastApply) error {
+	if st.UpdatedAt == "" {
+		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	b, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dataDir, lastApplyFile)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ReadLastApply returns the persisted state; ok=false when absent/unreadable.
+func ReadLastApply(dataDir string) (LastApply, bool) {
+	var st LastApply
+	b, err := os.ReadFile(filepath.Join(dataDir, lastApplyFile))
+	if err != nil {
+		return st, false
+	}
+	return st, json.Unmarshal(b, &st) == nil
+}
+
+// HistoryEntry is one update-history.jsonl row (exported for the API/UI).
+type HistoryEntry struct {
+	Time   string `json:"time"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Result string `json:"result"`
+	Error  string `json:"error,omitempty"`
+}
+
+// ReadHistory returns up to limit history rows, NEWEST first. A corrupt line
+// (torn write) is skipped rather than failing the whole read.
+func ReadHistory(dataDir string, limit int) ([]HistoryEntry, error) {
+	b, err := os.ReadFile(filepath.Join(dataDir, historyFile))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var rows []HistoryEntry
+	for line := range strings.Lines(string(b)) {
+		var row HistoryEntry
+		if json.Unmarshal([]byte(strings.TrimSpace(line)), &row) != nil {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	// Newest last on disk → reverse for the UI.
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
 }
