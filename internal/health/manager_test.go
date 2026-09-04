@@ -39,6 +39,16 @@ func newMockRecorderWithHub() *mockRecorder {
 	}
 }
 
+// addCamera registers a camera and guarantees OnCameraRemoved at test end —
+// OnCameraAdded subscribes hub drain goroutines that goleak (TestMain) flags
+// if the test never removes the camera. Idempotent cleanup: double removal
+// is a no-op.
+func addCamera(t *testing.T, m *Manager, id string, rec model.Recorder) {
+	t.Helper()
+	m.OnCameraAdded(id, rec, nil)
+	t.Cleanup(func() { m.OnCameraRemoved(id, rec) })
+}
+
 // newMockRecorderWithoutHub returns a recorder that doesn't implement GetHub.
 type mockRecorderNoHub struct{}
 
@@ -133,7 +143,7 @@ func TestManagerOnCameraAdded(t *testing.T) {
 	m := newTestManager(t, newTestManagerConfig())
 	rec := newMockRecorderWithHub()
 
-	m.OnCameraAdded("cam-1", rec, nil)
+	addCamera(t, m, "cam-1", rec)
 
 	// Verify StreamHub has subscribers
 	if count := rec.hub.ConsumerCount(); count != 2 {
@@ -165,7 +175,7 @@ func TestManagerMetricsOnly_OnCameraAdded(t *testing.T) {
 	}
 	rec := newMockRecorderWithHub()
 
-	m.OnCameraAdded("cam-1", rec, nil)
+	addCamera(t, m, "cam-1", rec)
 
 	// Metrics-only mode: only stats subscriber, no freeze subscriber.
 	if count := rec.hub.ConsumerCount(); count != 1 {
@@ -179,7 +189,7 @@ func TestManagerOnCameraAddedNoHub(t *testing.T) {
 	rec := &mockRecorderNoHub{}
 
 	// Should not panic when recorder has no hub
-	m.OnCameraAdded("cam-1", rec, nil)
+	addCamera(t, m, "cam-1", rec)
 
 	// Connection monitor should still track the camera
 	m.conn.mu.Lock()
@@ -196,7 +206,7 @@ func TestManagerOnCameraRemoved(t *testing.T) {
 	rec := newMockRecorderWithHub()
 
 	// Add first
-	m.OnCameraAdded("cam-1", rec, nil)
+	addCamera(t, m, "cam-1", rec)
 	if count := rec.hub.ConsumerCount(); count != 2 {
 		t.Fatalf("expected 2 consumers after add, got %d", count)
 	}
@@ -238,7 +248,7 @@ func TestManagerOnStatusChange(t *testing.T) {
 	t.Helper()
 	m := newTestManager(t, newTestManagerConfig())
 	rec := newMockRecorderWithHub()
-	m.OnCameraAdded("cam-1", rec, nil)
+	addCamera(t, m, "cam-1", rec)
 
 	// Simulate status change to error
 	m.OnStatusChange("cam-1", string(model.StatusError))
@@ -307,7 +317,7 @@ func TestManagerStartStopNil(t *testing.T) {
 func TestManagerOnCameraAddedNil(t *testing.T) {
 	t.Helper()
 	var m *Manager
-	m.OnCameraAdded("cam-1", newMockRecorderWithHub(), nil) // Should not panic
+	addCamera(t, m, "cam-1", newMockRecorderWithHub()) // Should not panic
 }
 
 func TestManagerOnCameraRemovedNil(t *testing.T) {
@@ -411,9 +421,16 @@ func TestManagerDoubleStart(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("first Start returned error: %v", err)
 	}
-	// Second start should work without panic (overwrites cancel)
+	// Second Start must be an idempotent no-op: spawning a second loop would
+	// orphan the first (leak — guarded by the package goleak TestMain).
 	if err := m.Start(ctx); err != nil {
 		t.Fatalf("second Start returned error: %v", err)
+	}
+	m.Stop()
+
+	// Restart after Stop re-arms the loop for another full cycle.
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("restart after Stop returned error: %v", err)
 	}
 	m.Stop()
 }
@@ -431,7 +448,7 @@ func TestManager_StatusPolling(t *testing.T) {
 
 	// Add camera (sets initial status in conn and knownStatuses)
 	rec := newMockRecorderWithHub()
-	m.OnCameraAdded("cam-1", rec, nil)
+	addCamera(t, m, "cam-1", rec)
 
 	// Initial poll — no transition expected
 	m.pollStatuses()
@@ -480,7 +497,7 @@ func TestManagerOnStatusChangeResetsCollector(t *testing.T) {
 	t.Helper()
 	m := newTestManager(t, newTestManagerConfig())
 	rec := newMockRecorderWithHub()
-	m.OnCameraAdded("cam-1", rec, nil)
+	addCamera(t, m, "cam-1", rec)
 
 	// Simulate frames to set lastIDRTime on the collector
 	cb := m.collector.OnFrame("cam-1")

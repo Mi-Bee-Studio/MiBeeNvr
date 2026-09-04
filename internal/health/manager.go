@@ -136,10 +136,18 @@ func (m *Manager) Start(ctx context.Context) error {
 		return nil
 	}
 
+	// Idempotent: a second Start while running must not spawn another loop —
+	// it would overwrite m.cancel/m.done and orphan the first goroutine
+	// forever (leak caught by the package goleak TestMain).
+	if m.cancel != nil {
+		return nil
+	}
+
 	// Metrics-only mode: just run the collector loop, no alert cleanup.
 	if m.metricsOnly {
 		childCtx, cancel := context.WithCancel(ctx)
 		m.cancel = cancel
+		m.done = make(chan struct{})
 		go m.run(childCtx)
 		slog.Info("health manager started (metrics-only mode — stream stats active, alerts disabled)")
 		return nil
@@ -158,6 +166,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	childCtx, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
+	m.done = make(chan struct{})
 
 	// Wire offline-duration lookup so auto-remediation can gate reconnecting-
 	// triggered restarts on ReconnectingTimeoutMinutes (m.conn is set in the
@@ -205,6 +214,7 @@ func (m *Manager) Stop() {
 	}
 	m.cancel()
 	<-m.done
+	m.cancel = nil // allow Start-after-Stop restart (run() re-arms done)
 	slog.Info("health manager stopped")
 }
 
