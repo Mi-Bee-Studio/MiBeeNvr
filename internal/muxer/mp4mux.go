@@ -1,9 +1,11 @@
 package muxer
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -35,14 +37,25 @@ type track struct {
 	samples     []sample
 }
 
-// sample represents a single media sample (one NAL unit).
+// sample is one media sample's FILE placement record. The media bytes
+// themselves are streamed to the output file at WriteSample time (#521 root
+// fix) — only the placement metadata stays in memory (~24 bytes/sample vs
+// the old whole-frame copies, which turned Close into a tens-of-MB burst
+// write and froze the recorder's write loop 15-50s on congested SD/eMMC).
 type sample struct {
-	data     []byte
-	pts      time.Duration
+	offset   int64 // absolute file offset of the stored sample
+	size     uint32
 	duration time.Duration
 }
 
-// MP4Muxer writes H.264 video data into an MP4 file using abema/go-mp4.
+// MP4Muxer writes H.264/H.265 video (+audio) into an MP4 file using
+// abema/go-mp4.
+//
+// Layout is streamed (#521): ftyp | mdat | moov. Media bytes are appended to
+// the file as samples arrive (buffered, so writes spread naturally across
+// the segment's lifetime); Close() flushes, patches the mdat size field, and
+// appends the moov with per-sample chunk offsets (tracks interleave in
+// arrival order, so each sample is its own chunk).
 //
 // Usage:
 //
@@ -51,11 +64,15 @@ type sample struct {
 //	m.WriteSample(trackID, nalData, pts, duration)
 //	m.Close()
 type MP4Muxer struct {
-	filePath      string
-	file          *os.File
-	mu            sync.Mutex
-	tracks        []*track
-	nextTrackID   int
+	filePath    string
+	file        *os.File
+	bw          *bufio.Writer
+	mdatSizeOff int64 // file offset of mdat's 4-byte size field (patched at Close)
+	payloadN    int64 // media bytes streamed so far (mdat payload size)
+	mu          sync.Mutex
+	tracks      []*track
+	nextTrackID int
+	// totalDuration accumulates every sample's duration (both Write methods).
 	totalDuration time.Duration
 	closed        bool
 }
@@ -195,28 +212,13 @@ func (m *MP4Muxer) WriteSample(trackID int, data []byte, pts time.Duration, dura
 		return errors.New("muxer is closed")
 	}
 
-	var t *track
-	for _, tr := range m.tracks {
-		if tr.id == trackID {
-			t = tr
-			break
-		}
-	}
+	t := m.trackByID(trackID)
 	if t == nil {
 		return fmt.Errorf("track %d not found", trackID)
 	}
 
-	dataCopy := make([]byte, len(data))
-	copy(dataCopy, data)
-
-	t.samples = append(t.samples, sample{
-		data:     dataCopy,
-		pts:      pts,
-		duration: duration,
-	})
-
-	m.totalDuration += duration
-	return nil
+	_ = pts // arrival timestamp is not part of the MP4 timeline (durations are)
+	return m.appendSample(t, data, duration)
 }
 
 // WriteAudioSample writes a raw AAC frame as a sample to the specified audio track.
@@ -228,13 +230,7 @@ func (m *MP4Muxer) WriteAudioSample(trackID int, data []byte, pts time.Duration,
 		return errors.New("muxer is closed")
 	}
 
-	var t *track
-	for _, tr := range m.tracks {
-		if tr.id == trackID {
-			t = tr
-			break
-		}
-	}
+	t := m.trackByID(trackID)
 	if t == nil {
 		return fmt.Errorf("track %d not found", trackID)
 	}
@@ -242,16 +238,99 @@ func (m *MP4Muxer) WriteAudioSample(trackID int, data []byte, pts time.Duration,
 		return fmt.Errorf("track %d is not an audio track", trackID)
 	}
 
-	dataCopy := make([]byte, len(data))
-	copy(dataCopy, data)
+	_ = pts
+	return m.appendSample(t, data, duration)
+}
+
+// trackByID resolves the 1-based track ID. Callers hold m.mu.
+func (m *MP4Muxer) trackByID(trackID int) *track {
+	for _, tr := range m.tracks {
+		if tr.id == trackID {
+			return tr
+		}
+	}
+	return nil
+}
+
+// mdatStcoLimit caps the mdat payload at the 32-bit stco offset space minus
+// the box header — a single segment approaching 4 GiB is already far past
+// the segment-duration policy, and silently wrapping offsets would corrupt
+// every chunk pointer.
+const mdatStcoLimit = int64(0xFFFFFFFF) - 8
+
+// appendSample streams one sample's bytes to the output file and records its
+// placement. Video samples get a 4-byte big-endian NAL length prefix; audio
+// samples are written raw. Callers hold m.mu.
+func (m *MP4Muxer) appendSample(t *track, data []byte, duration time.Duration) error {
+	if err := m.ensureOpen(); err != nil {
+		return err
+	}
+
+	size := uint32(len(data))
+	if !t.isAudio {
+		size += 4
+	}
+	if m.payloadN+int64(size) > mdatStcoLimit {
+		return errors.New("segment mdat exceeds 4GiB stco offset limit — rotate earlier")
+	}
+	if !t.isAudio {
+		var lenBuf [4]byte
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(data)))
+		if _, err := m.bw.Write(lenBuf[:]); err != nil {
+			return fmt.Errorf("stream sample prefix: %w", err)
+		}
+	}
+	if _, err := m.bw.Write(data); err != nil {
+		return fmt.Errorf("stream sample: %w", err)
+	}
+
+	// Absolute offset of this sample inside the file: mdat box starts at
+	// mdatSizeOff; its payload at +8 (past the size+type header).
+	offset := m.mdatSizeOff + 8 + m.payloadN
+	m.payloadN += int64(size)
 
 	t.samples = append(t.samples, sample{
-		data:     dataCopy,
-		pts:      pts,
+		offset:   offset,
+		size:     size,
 		duration: duration,
 	})
-
 	m.totalDuration += duration
+	return nil
+}
+
+// ensureOpen lazily creates the output file and writes the ftyp box plus the
+// mdat header with a placeholder size (patched at Close). Tracks must all be
+// registered before the first sample — writeFtyp derives brands from them;
+// every caller adds tracks immediately after construction. Callers hold m.mu.
+func (m *MP4Muxer) ensureOpen() error {
+	if m.file != nil {
+		return nil
+	}
+	f, err := os.Create(m.filePath)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+
+	// ftyp first (small, written through directly).
+	ftypSize, err := writeFtyp(mp4.NewWriter(f), m.tracks)
+	if err != nil {
+		f.Close()
+		return fmt.Errorf("write ftyp: %w", err)
+	}
+
+	// mdat header with a zero size placeholder — Close() seeks back and
+	// patches it once the payload length is known.
+	var hdr [8]byte
+	bt := mp4.StrToBoxType("mdat")
+	copy(hdr[4:8], bt[:])
+	if _, err := f.Write(hdr[:]); err != nil {
+		f.Close()
+		return fmt.Errorf("write mdat header: %w", err)
+	}
+
+	m.file = f
+	m.bw = bufio.NewWriterSize(f, 512*1024)
+	m.mdatSizeOff = ftypSize // offset of mdat's SIZE field (box starts here)
 	return nil
 }
 
@@ -262,7 +341,12 @@ func (m *MP4Muxer) Duration() time.Duration {
 	return m.totalDuration
 }
 
-// Close finalizes the MP4 file by writing ftyp + moov + mdat atoms.
+// Close finalizes the streamed MP4 (#521): flushes the buffered media,
+// patches the mdat size placeholder, and appends the moov. The only burst I/O
+// left is the (small) moov — media bytes went out incrementally during the
+// segment, so Close no longer hands the kernel tens of MB of dirty pages at
+// once (the 15-50s writeFrames stalls behind the old accumulate-then-dump
+// layout).
 func (m *MP4Muxer) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -276,52 +360,39 @@ func (m *MP4Muxer) Close() error {
 		return nil
 	}
 
-	f, err := os.Create(m.filePath)
-	if err != nil {
-		return fmt.Errorf("create file: %w", err)
-	}
-	m.file = f
-	defer f.Close()
-
-	// Step 1: Calculate moov size by writing to a buffer (with placeholder stco=0).
-	buf := &bytesWriter{}
-	bw := mp4.NewWriter(buf)
-	if err := writeMoov(bw, m.tracks, 0); err != nil {
-		return fmt.Errorf("calculate moov size: %w", err)
-	}
-	moovSize := buf.len()
-
-	// Step 2: Write ftyp to the real file.
-	w := mp4.NewWriter(f)
-	ftypSize, err := writeFtyp(w, m.tracks)
-	if err != nil {
-		return fmt.Errorf("write ftyp: %w", err)
+	// Zero-sample edge (tracks registered, no media arrived): still produce
+	// the artifact so callers' cleanup/DB paths see a well-formed file.
+	if m.file == nil {
+		if err := m.ensureOpen(); err != nil {
+			return err
+		}
 	}
 
-	// Step 3: mdat data starts at ftypSize + moovSize + 8 (mdat header).
-	mdatDataOffset := int64(ftypSize) + int64(moovSize) + 8
+	if err := m.bw.Flush(); err != nil {
+		m.file.Close()
+		return fmt.Errorf("flush media: %w", err)
+	}
 
-	// Step 4: Write moov with correct stco offset.
-	if err := writeMoov(w, m.tracks, mdatDataOffset); err != nil {
+	// Patch the mdat size field (box header 8 + payload).
+	var sizeBuf [4]byte
+	binary.BigEndian.PutUint32(sizeBuf[:], uint32(8+m.payloadN))
+	if _, err := m.file.WriteAt(sizeBuf[:], m.mdatSizeOff); err != nil {
+		m.file.Close()
+		return fmt.Errorf("patch mdat size: %w", err)
+	}
+
+	// Append moov at EOF. It sits after the mdat, so per-sample offsets are
+	// already final — no placeholder/sizing pass needed (the old layout had
+	// to size moov first because stco offsets pointed INTO the file ahead).
+	if _, err := m.file.Seek(0, io.SeekEnd); err != nil {
+		m.file.Close()
+		return fmt.Errorf("seek to moov: %w", err)
+	}
+	if err := writeMoov(mp4.NewWriter(m.file), m.tracks); err != nil {
+		m.file.Close()
 		return fmt.Errorf("write moov: %w", err)
 	}
-
-	// Step 5: Write mdat box.
-	mdatData := collectMdatData(m.tracks)
-	mdatBoxSize := uint64(8 + len(mdatData))
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: mdatBoxSize})
-	if err != nil {
-		return fmt.Errorf("start mdat: %w", err)
-	}
-	if _, err := w.Write(mdatData); err != nil {
-		return fmt.Errorf("write mdat data: %w", err)
-	}
-	if _, err := w.EndBox(); err != nil {
-		return fmt.Errorf("end mdat: %w", err)
-	}
-	_ = bi
-
-	return nil
+	return m.file.Close()
 }
 
 // --- Box writing functions ---
@@ -375,7 +446,7 @@ func writeFtyp(w *mp4.Writer, tracks []*track) (int64, error) {
 	return end - start, nil
 }
 
-func writeMoov(w *mp4.Writer, tracks []*track, chunkOffset int64) error {
+func writeMoov(w *mp4.Writer, tracks []*track) error {
 	_, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("moov")})
 	if err != nil {
 		return err
@@ -384,15 +455,13 @@ func writeMoov(w *mp4.Writer, tracks []*track, chunkOffset int64) error {
 		return err
 	}
 
-	// Calculate per-track chunk offsets within mdat.
-	// Samples are written in track order, so each track's
-	// data follows the previous track's data.
-	off := chunkOffset
+	// Per-sample chunk offsets are recorded on each track's samples at
+	// WriteSample time (streaming layout: tracks interleave in arrival
+	// order, so a track's samples are not contiguous — one chunk each).
 	for _, tr := range tracks {
-		if err := writeTrak(w, tr, off); err != nil {
+		if err := writeTrak(w, tr); err != nil {
 			return err
 		}
-		off += int64(trackMdatSize(tr))
 	}
 
 	_, err = w.EndBox()
@@ -437,7 +506,7 @@ func writeMvhd(w *mp4.Writer, tracks []*track) error {
 	return err
 }
 
-func writeTrak(w *mp4.Writer, tr *track, chunkOffset int64) error {
+func writeTrak(w *mp4.Writer, tr *track) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("trak")})
 	if err != nil {
 		return err
@@ -468,7 +537,7 @@ func writeTrak(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	_ = bi2
 
 	// mdia
-	if err := writeMdia(w, tr, chunkOffset); err != nil {
+	if err := writeMdia(w, tr); err != nil {
 		return err
 	}
 
@@ -477,7 +546,7 @@ func writeTrak(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	return err
 }
 
-func writeMdia(w *mp4.Writer, tr *track, chunkOffset int64) error {
+func writeMdia(w *mp4.Writer, tr *track) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdia")})
 	if err != nil {
 		return err
@@ -523,7 +592,7 @@ func writeMdia(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	_ = bi3
 
 	// minf
-	if err := writeMinf(w, tr, chunkOffset); err != nil {
+	if err := writeMinf(w, tr); err != nil {
 		return err
 	}
 
@@ -532,7 +601,7 @@ func writeMdia(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	return err
 }
 
-func writeMinf(w *mp4.Writer, tr *track, chunkOffset int64) error {
+func writeMinf(w *mp4.Writer, tr *track) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("minf")})
 	if err != nil {
 		return err
@@ -598,7 +667,7 @@ func writeMinf(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	_ = bi3
 
 	// stbl
-	if err := writeStbl(w, tr, chunkOffset); err != nil {
+	if err := writeStbl(w, tr); err != nil {
 		return err
 	}
 
@@ -607,7 +676,7 @@ func writeMinf(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	return err
 }
 
-func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
+func writeStbl(w *mp4.Writer, tr *track) error {
 	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stbl")})
 	if err != nil {
 		return err
@@ -670,13 +739,14 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	}
 	_ = bi6
 
-	// stsc (all samples in one chunk)
+	// stsc (streaming layout: every sample is its own chunk — tracks
+	// interleave in arrival order, so per-track contiguity is impossible)
 	bi7, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stsc")})
 	if err != nil {
 		return err
 	}
 	stscEntries := []mp4.StscEntry{
-		{FirstChunk: 1, SamplesPerChunk: uint32(len(tr.samples)), SampleDescriptionIndex: 1},
+		{FirstChunk: 1, SamplesPerChunk: 1, SampleDescriptionIndex: 1},
 	}
 	if len(tr.samples) == 0 {
 		stscEntries = nil
@@ -696,11 +766,7 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	}
 	sizes := make([]uint32, len(tr.samples))
 	for i, s := range tr.samples {
-		sz := uint32(len(s.data))
-		if !tr.isAudio {
-			sz += 4 // 4-byte NAL length prefix for video
-		}
-		sizes[i] = sz
+		sizes[i] = s.size
 	}
 	if _, err := mp4.Marshal(w, &mp4.Stsz{SampleSize: 0, SampleCount: uint32(len(sizes)), EntrySize: sizes}, mp4.Context{}); err != nil {
 		return err
@@ -710,15 +776,19 @@ func writeStbl(w *mp4.Writer, tr *track, chunkOffset int64) error {
 	}
 	_ = bi8
 
-	// stco
+	// stco (one offset per sample — offsets are absolute, recorded at
+	// WriteSample time when the bytes hit the file)
 	bi9, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stco")})
 	if err != nil {
 		return err
 	}
 	stco := &mp4.Stco{EntryCount: 0, ChunkOffset: nil}
 	if len(tr.samples) > 0 {
-		stco.EntryCount = 1
-		stco.ChunkOffset = []uint32{uint32(chunkOffset)}
+		stco.ChunkOffset = make([]uint32, len(tr.samples))
+		for i, s := range tr.samples {
+			stco.ChunkOffset[i] = uint32(s.offset)
+		}
+		stco.EntryCount = uint32(len(tr.samples))
 	}
 	if _, err := mp4.Marshal(w, stco, mp4.Context{}); err != nil {
 		return err
@@ -1024,81 +1094,12 @@ func buildEsds(audioConfig []byte) *mp4.Esds {
 
 // --- Helpers ---
 
-// trackMdatSize returns the total bytes this track's samples occupy in the mdat box.
-// Video samples include a 4-byte NAL length prefix per sample.
-func trackMdatSize(tr *track) int {
-	total := 0
-	for _, s := range tr.samples {
-		if tr.isAudio {
-			total += len(s.data)
-		} else {
-			total += 4 + len(s.data) // 4-byte NAL length prefix
-		}
-	}
-	return total
-}
-
 func trackDurationMs(tr *track) uint32 {
 	d := uint32(0)
 	for _, s := range tr.samples {
 		d += uint32(s.duration.Milliseconds())
 	}
 	return d
-}
-
-func collectMdatData(tracks []*track) []byte {
-	var buf []byte
-	var lenBuf [4]byte
-	for _, tr := range tracks {
-		for _, s := range tr.samples {
-			if tr.isAudio {
-				// Audio samples are written raw (no length prefix)
-				buf = append(buf, s.data...)
-			} else {
-				// Video samples get a 4-byte big-endian NAL length prefix
-				binary.BigEndian.PutUint32(lenBuf[:], uint32(len(s.data)))
-				buf = append(buf, lenBuf[:]...)
-				buf = append(buf, s.data...)
-			}
-		}
-	}
-	return buf
-}
-
-// bytesWriter implements io.WriteSeeker backed by a byte buffer.
-// Used to pre-calculate moov box size.
-type bytesWriter struct {
-	data []byte
-	pos  int64
-}
-
-func (b *bytesWriter) Write(p []byte) (int, error) {
-	if b.pos+int64(len(p)) > int64(len(b.data)) {
-		grow := b.pos + int64(len(p)) - int64(len(b.data))
-		b.data = append(b.data, make([]byte, grow)...)
-	}
-	copy(b.data[b.pos:], p)
-	b.pos += int64(len(p))
-	return len(p), nil
-}
-
-func (b *bytesWriter) Seek(offset int64, whence int) (int64, error) {
-	switch whence {
-	case 0: // SeekStart
-		b.pos = offset
-	case 1: // SeekCurrent
-		b.pos += offset
-	case 2: // SeekEnd
-		b.pos = int64(len(b.data)) + offset
-	}
-	if b.pos < 0 {
-		b.pos = 0
-	}
-	return b.pos, nil
-}
-
-func (b *bytesWriter) len() int64 {
-	return int64(len(b.data))
 }
 
 // --- SPS Resolution Parser ---
