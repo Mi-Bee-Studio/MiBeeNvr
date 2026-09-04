@@ -2,7 +2,7 @@
   import { onMount, onDestroy, setContext } from 'svelte';
   import { getCamera, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, API_BASE } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity } from 'lucide-svelte';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import TwoWayAudioButton from '../components/TwoWayAudioButton.svelte';
   import CameraPlayer from '../components/CameraPlayer.svelte';
@@ -15,6 +15,7 @@
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
+  import { copyText } from '$lib/clipboard';
   import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { getCameraProtocolOverride } from '$lib/preferences';
@@ -131,8 +132,7 @@
       }
       // Persist the probed response so the ProtocolSwitcher can read the REAL
       // (recorder-probed) encoding instead of the possibly-stale DB value.
-      cameraProtocolsResp = resp;
-      if (camera) {
+      cameraProtocolsResp = resp;      if (camera) {
         cameraRegistered = true;
         orchestrator.registerCamera(
           makeRegistration(camera, resp, {
@@ -152,6 +152,18 @@
 
   function goBack() {
     window.location.hash = '#/cameras';
+  }
+
+  // Copy the built-in RTSP output pull URL (#686) — server-assembled from the
+  // protocols response (request host + optional credentials).
+  async function copyRtspUrl() {
+    const url = cameraProtocolsResp?.rtsp?.url;
+    if (!url) {
+      showToast(cameraProtocolsResp?.rtsp?.reason || t('cameras.copyRtspUnavailable'), 'error');
+      return;
+    }
+    const ok = await copyText(url);
+    showToast(ok ? t('cameras.copyRtspCopied') : t('cameras.copyRtspFailed'), ok ? 'success' : 'error');
   }
 
   function toggleFullscreen() {
@@ -319,6 +331,14 @@
                   {t('quality.sub')}
                 </button>
               </div>
+            {/if}
+            {#if cameraProtocolsResp?.rtsp?.url}
+              <!-- Copy the RTSP pull URL for third-party players (#686) -->
+              <button onclick={copyRtspUrl} class="btn btn-ghost btn-sm flex items-center gap-1"
+                title={t('cameras.copyRtsp')} aria-label={t('cameras.copyRtsp')}>
+                <Link size={16} />
+                <span class="hidden sm:inline text-xs">RTSP</span>
+              </button>
             {/if}
             <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
               {#if isFullscreen}

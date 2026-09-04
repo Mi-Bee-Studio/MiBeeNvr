@@ -1,11 +1,11 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { normalizeProtocol } from '$lib/api';
+  import { normalizeProtocol, getCameraProtocols } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
   import { showToast } from '$lib/toast';
   import { copyText } from '$lib/clipboard';
-  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff, Copy, X } from 'lucide-svelte';
+  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff, Copy, Link, X } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -59,6 +59,29 @@
       showToast(t('cameras.pushOutUrlCopied'), 'success');
     } else {
       showToast(t('cameras.pushOutUrlCopyFailed'), 'error');
+    }
+  }
+
+  // Copy the built-in RTSP output pull URL (#686). The URL is assembled
+  // server-side on demand (request host + optional credentials), so it is
+  // always fresh — no cached copy on the card.
+  let rtspCopying = $state(false);
+  async function copyRtspUrl() {
+    if (rtspCopying) return;
+    rtspCopying = true;
+    try {
+      const resp = await getCameraProtocols(camera.id);
+      const url = resp.rtsp?.url;
+      if (!url) {
+        showToast(resp.rtsp?.reason || t('cameras.copyRtspUnavailable'), 'error');
+        return;
+      }
+      const ok = await copyText(url);
+      showToast(ok ? t('cameras.copyRtspCopied') : t('cameras.copyRtspFailed'), ok ? 'success' : 'error');
+    } catch {
+      showToast(t('cameras.copyRtspFailed'), 'error');
+    } finally {
+      rtspCopying = false;
     }
   }
 
@@ -414,6 +437,23 @@ let healthShowWarningIcon = $derived(
           <RefreshCw size={14} />
         </button>
      {/if}
+
+     <!-- Copy RTSP pull URL (#686): server assembles rtsp://[creds@]host:port/<id>
+          on click; toasts the reason when the output server is off/unservable. -->
+      <button
+        class="btn btn-ghost px-2 py-1 text-sm"
+        onclick={copyRtspUrl}
+        disabled={rtspCopying}
+        title={t('cameras.copyRtsp')}
+        aria-label={t('cameras.copyRtsp')}
+      >
+        {#if rtspCopying}
+          <Loader2 size={14} class="animate-spin" />
+        {:else}
+          <Link size={14} />
+        {/if}
+        <span class="hidden sm:inline-flex ml-1.5 text-xs">RTSP</span>
+      </button>
 
       {#if isHls}
         <a

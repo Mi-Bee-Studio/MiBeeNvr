@@ -496,3 +496,17 @@ func TestURLFor(t *testing.T) {
 	require.Equal(t, "rtsp://nas.local:8554/cam-9", URLFor("nas.local", 8554, "cam-9"))
 	require.Equal(t, "rtsp://[::1]:8554/cam-9", URLFor("[::1]:9090", 8554, "cam-9"))
 }
+
+func TestURLForAuth(t *testing.T) {
+	t.Parallel()
+	// No credentials → identical to URLFor (no userinfo separator).
+	require.Equal(t, "rtsp://192.168.1.5:8554/cam-9", URLForAuth("192.168.1.5:9090", 8554, "cam-9", "", ""))
+	// Username only → user@host.
+	require.Equal(t, "rtsp://admin@nas.local:8554/cam-9", URLForAuth("nas.local", 8554, "cam-9", "admin", ""))
+	// Username+password with URI-reserved characters → percent-encoded.
+	require.Equal(t,
+		"rtsp://admin:p%40ss%3Aw@192.168.1.5:8554/cam-9",
+		URLForAuth("192.168.1.5:9090", 8554, "cam-9", "admin", "p@ss:w"))
+	// Bare IPv6 host gets bracketed with userinfo present.
+	require.Equal(t, "rtsp://admin:pw@[::1]:8554/cam-9", URLForAuth("[::1]:9090", 8554, "cam-9", "admin", "pw"))
+}

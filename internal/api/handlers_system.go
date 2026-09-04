@@ -491,6 +491,8 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Put("/api/settings/auto-discover", h.handleUpdateAutoDiscoverSettings)
 	r.Get("/api/settings/transcoding", h.handleGetTranscodingSettings)
 	r.Put("/api/settings/transcoding", h.handleUpdateTranscodingSettings)
+	r.Get("/api/settings/rtsp-output", h.handleGetRtspOutputSettings)
+	r.Put("/api/settings/rtsp-output", h.handleUpdateRtspOutputSettings)
 	r.Post("/api/backup", h.handleBackup)
 	r.Get("/api/backups", h.handleListBackups)
 	r.Get("/api/protocols", h.handleProtocols)

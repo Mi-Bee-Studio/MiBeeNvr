@@ -330,6 +330,43 @@ export async function updateAutoDiscoverSettings(
   });
 }
 
+// --- RTSP output server settings (#686) ---
+
+// GET response. The password itself is never returned — password_configured
+// tells the UI whether one is set (mirrors gb28181/auto-discover masking).
+export interface RtspOutputSettings {
+  enabled: boolean;
+  port: number;
+  username: string;
+  password_configured: boolean;
+}
+
+// PUT body: all fields optional (omitted = unchanged). password blank/omitted
+// keeps the current one; clear_credentials wipes username+password (open
+// access). Changes take effect after an NVR restart.
+export interface RtspOutputUpdate {
+  enabled?: boolean;
+  port?: number;
+  username?: string;
+  password?: string;
+  clear_credentials?: boolean;
+}
+
+export async function getRtspOutputSettings(signal?: AbortSignal): Promise<RtspOutputSettings> {
+  return apiRequest<RtspOutputSettings>('/settings/rtsp-output', { signal });
+}
+
+export async function updateRtspOutputSettings(
+  config: RtspOutputUpdate,
+  signal?: AbortSignal,
+): Promise<{ status: string; restart_required: boolean }> {
+  return apiRequest<{ status: string; restart_required: boolean }>('/settings/rtsp-output', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+    signal,
+  });
+}
+
 // --- Streaming settings ---
 
 export async function getStreamingSettings(signal?: AbortSignal): Promise<StreamingConfig> {
