@@ -658,6 +658,7 @@ func TestLiveTranscoder_RealFFmpeg(t *testing.T) {
 
 	err = lt.Start(ctx)
 	require.NoError(t, err)
+	defer lt.Stop() // goleak: cancel() alone does not join the transcoder goroutines
 
 	// Write a minimal H.265 AU with valid start codes
 	au := AccessUnit{

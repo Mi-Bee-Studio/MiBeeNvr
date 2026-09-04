@@ -12,6 +12,14 @@ import (
 )
 
 // helper must be used in all test helpers (project convention).
+// subscribeCleanup subscribes and guarantees Unsubscribe at test end —
+// goleak (TestMain) fails the package on leaked drain goroutines otherwise.
+func subscribeCleanup(t *testing.T, hub *StreamHub, id string, cb func(pts int64, au [][]byte)) {
+	t.Helper()
+	require.NoError(t, hub.Subscribe(id, cb))
+	t.Cleanup(func() { hub.Unsubscribe(id) })
+}
+
 func newTestStreamHub(t *testing.T) *StreamHub {
 	t.Helper()
 	return New()
@@ -36,6 +44,7 @@ func TestStreamHub_SubscribeAndBroadcast(t *testing.T) {
 			mu.Unlock()
 		})
 		require.NoError(t, err)
+		t.Cleanup(func() { hub.Unsubscribe(cid) })
 	}
 
 	// Broadcast 5 frames
@@ -267,6 +276,7 @@ func TestStreamHub_AudioSubscribeAndBroadcast(t *testing.T) {
 			mu.Unlock()
 		})
 		require.NoError(t, err)
+		t.Cleanup(func() { hub.UnsubscribeAudio(cid) })
 	}
 
 	// Broadcast 5 audio frames
@@ -1150,11 +1160,11 @@ func TestStreamHub_ReplaysIDROnSubscribe(t *testing.T) {
 		mu       sync.Mutex
 		received []frameInfo
 	)
-	require.NoError(t, hub.Subscribe("late", func(pts int64, au [][]byte) {
+	subscribeCleanup(t, hub, "late", func(pts int64, au [][]byte) {
 		mu.Lock()
 		received = append(received, frameInfo{pts: pts, au: au})
 		mu.Unlock()
-	}))
+	})
 
 	require.Eventually(t, func() bool {
 		mu.Lock()
@@ -1179,11 +1189,11 @@ func TestStreamHub_ReplaysH264IDR(t *testing.T) {
 		mu       sync.Mutex
 		received []frameInfo
 	)
-	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+	subscribeCleanup(t, hub, "c1", func(pts int64, au [][]byte) {
 		mu.Lock()
 		received = append(received, frameInfo{pts: pts, au: au})
 		mu.Unlock()
-	}))
+	})
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -1205,11 +1215,11 @@ func TestStreamHub_NoReplayWhenCacheEmpty(t *testing.T) {
 		mu       sync.Mutex
 		received []frameInfo
 	)
-	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+	subscribeCleanup(t, hub, "c1", func(pts int64, au [][]byte) {
 		mu.Lock()
 		received = append(received, frameInfo{pts: pts, au: au})
 		mu.Unlock()
-	}))
+	})
 
 	// Give the drain goroutine a moment, then assert nothing arrived.
 	time.Sleep(50 * time.Millisecond)
@@ -1238,11 +1248,11 @@ func TestStreamHub_IDRCacheRingSize(t *testing.T) {
 		mu       sync.Mutex
 		received []frameInfo
 	)
-	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+	subscribeCleanup(t, hub, "c1", func(pts int64, au [][]byte) {
 		mu.Lock()
 		received = append(received, frameInfo{pts: pts, au: au})
 		mu.Unlock()
-	}))
+	})
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -1281,11 +1291,11 @@ func TestStreamHub_ReplaySkipsIncompleteIDR(t *testing.T) {
 		mu       sync.Mutex
 		received []frameInfo
 	)
-	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+	subscribeCleanup(t, hub, "c1", func(pts int64, au [][]byte) {
 		mu.Lock()
 		received = append(received, frameInfo{pts: pts, au: au})
 		mu.Unlock()
-	}))
+	})
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -1309,11 +1319,11 @@ func TestStreamHub_NoReplayWhenAllIncomplete(t *testing.T) {
 		mu       sync.Mutex
 		received []frameInfo
 	)
-	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+	subscribeCleanup(t, hub, "c1", func(pts int64, au [][]byte) {
 		mu.Lock()
 		received = append(received, frameInfo{pts: pts, au: au})
 		mu.Unlock()
-	}))
+	})
 	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1331,11 +1341,11 @@ func TestStreamHub_DisabledIDRCacheNoReplay(t *testing.T) {
 		mu       sync.Mutex
 		received []frameInfo
 	)
-	require.NoError(t, hub.Subscribe("c1", func(pts int64, au [][]byte) {
+	subscribeCleanup(t, hub, "c1", func(pts int64, au [][]byte) {
 		mu.Lock()
 		received = append(received, frameInfo{pts: pts, au: au})
 		mu.Unlock()
-	}))
+	})
 	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
