@@ -71,7 +71,7 @@ describe('VisionMonitorPanel', () => {
     expect(getByText('88')).toBeTruthy();
   });
 
-  it('renders sparklines when history has multiple samples', async () => {
+  it('renders axis-labelled charts when history has multiple samples', async () => {
     const points = [0, 1, 2, 3].map((i) => ({
       ts: `2026-09-02T04:0${i}:00Z`,
       queue_depth: i,
@@ -84,11 +84,18 @@ describe('VisionMonitorPanel', () => {
     mockFetches(statusWithMetrics, { enabled: true, points, marked_total: 2 });
     const { container } = render(VisionMonitorPanel);
     await waitFor(() =>
-      expect(container.querySelector('[data-testid="vm-spark-queue"]')).toBeTruthy(),
+      expect(container.querySelector('[data-testid="vm-chart-queue"]')).toBeTruthy(),
     );
-    expect(container.querySelector('[data-testid="vm-spark-drop"]')).toBeTruthy();
-    const poly = container.querySelector('[data-testid="vm-spark-queue"] polyline');
-    expect(poly?.getAttribute('points').split(' ')).toHaveLength(4);
+    expect(container.querySelector('[data-testid="vm-chart-drop"]')).toBeTruthy();
+    // Charts carry y-axis tick text (0 baseline) — the readability fix (#692).
+    const queueChart = container.querySelector('[data-testid="vm-chart-queue"]');
+    expect(queueChart?.querySelector('svg[data-testid="vm-timechart"]')).toBeTruthy();
+    const yTexts = [...(queueChart?.querySelectorAll('text.vm-y') ?? [])].map(
+      (el) => el.textContent ?? '',
+    );
+    expect(yTexts).toContain('0');
+    const poly = queueChart?.querySelector('polyline');
+    expect(poly?.getAttribute('points').trim().split(/\s+/).length).toBe(4);
   });
 
   it('shows the legacy note when metrics are absent (old consumer)', async () => {
