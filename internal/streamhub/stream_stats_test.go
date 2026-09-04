@@ -26,6 +26,7 @@ func TestStreamHub_Snapshot(t *testing.T) {
 		received++
 		mu.Unlock()
 	}))
+	t.Cleanup(func() { hub.Unsubscribe("consumer-a") })
 
 	hub.Broadcast(100, [][]byte{make([]byte, 10), make([]byte, 5)}, false)
 	hub.Broadcast(200, [][]byte{make([]byte, 20)}, true)
@@ -71,6 +72,7 @@ func TestStreamHub_SubscribeMsgRelaysIngestAt(t *testing.T) {
 	require.NoError(t, hub.SubscribeMsg("ws-cam-msg", func(msg model.FrameMsg) {
 		got <- msg
 	}))
+	t.Cleanup(func() { hub.Unsubscribe("ws-cam-msg") })
 
 	before := time.Now().UnixNano()
 	hub.Broadcast(1000, [][]byte{{0x65, 0x01}}, true)

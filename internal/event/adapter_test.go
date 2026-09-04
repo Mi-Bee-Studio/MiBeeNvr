@@ -52,6 +52,7 @@ func TestBusAdapter_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
+	t.Cleanup(func() { adapter.Unsubscribe("test.topic", ch) })
 
 	adapter.Publish(context.Background(), "test.topic", "hello")
 
@@ -76,6 +77,7 @@ func TestBusAdapter_PrefixMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubscribeByPrefix failed: %v", err)
 	}
+	t.Cleanup(func() { adapter.UnsubscribeByPrefix("test.", ch) })
 
 	adapter.Publish(context.Background(), "test.one", "one")
 	adapter.Publish(context.Background(), "test.two", "two")
@@ -112,6 +114,7 @@ func TestBusAdapter_UnsubscribeStopsDelivery(t *testing.T) {
 
 	ch := make(chan pkgeventbus.Event, 16)
 	err := adapter.Subscribe("unsub", ch, 16)
+	t.Cleanup(func() { adapter.Unsubscribe("unsub", ch) })
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
@@ -135,6 +138,7 @@ func TestBusAdapter_UnsubscribeByPrefixIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubscribeByPrefix failed: %v", err)
 	}
+	t.Cleanup(func() { adapter.UnsubscribeByPrefix("test.", ch) })
 
 	adapter.UnsubscribeByPrefix("test.", ch)
 	adapter.UnsubscribeByPrefix("test.", ch)
@@ -150,6 +154,7 @@ func TestBusAdapter_PrefixMatch_EmptyMatchesAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubscribeByPrefix failed: %v", err)
 	}
+	t.Cleanup(func() { adapter.UnsubscribeByPrefix("", ch) })
 
 	adapter.Publish(context.Background(), "any.topic", "hello")
 
