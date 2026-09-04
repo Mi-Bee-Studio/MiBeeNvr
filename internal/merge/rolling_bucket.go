@@ -63,6 +63,9 @@ func (r *RollingMergeCoordinator) createBucket(
 	bucket.wallDurSec = wallSec
 	bucket.fileDurSec = fileSec
 	bucket.lastEnded = seg.endedAt
+	// The row's started_at anchors at this segment's start; later appends may
+	// move it backward (out-of-order arrival, #698) but never forward.
+	bucket.rowStart = seg.startedAt
 	bucket.wallFile = stats.WallToFile
 	if len(bucket.wallFile) == 0 {
 		bucket.wallFile = [][2]float64{{0, 0}, {wallSec, fileSec}}
@@ -187,9 +190,27 @@ func (r *RollingMergeCoordinator) appendToBucket(
 	if segWall := seg.endedAt.Sub(seg.startedAt).Seconds(); deltaWall < segWall {
 		deltaWall = segWall
 	}
-	bucket.lastEnded = seg.endedAt
+	// Out-of-order guard (#698): lastEnded only ever advances, and an earlier
+	// segment extends the row's start backward. Before this, a swapped merge
+	// order (later segment first) wrote ended_at < started_at — an inverted
+	// row that broke every timeline invariant downstream.
+	if seg.endedAt.After(bucket.lastEnded) {
+		bucket.lastEnded = seg.endedAt
+	}
+	if !bucket.rowStart.IsZero() && seg.startedAt.Before(bucket.rowStart) {
+		bucket.rowStart = seg.startedAt
+	}
 	bucket.wallDurSec += deltaWall
 	bucket.fileDurSec += deltaFile
+	// I1 (duration == wall span): when the backward extension outpaces the
+	// accumulated deltas (an earlier segment arrives late and its gap was
+	// never counted), clamp the wall axis up to the full row span. No-op in
+	// the ordered flow, where the gap rule already keeps them equal.
+	if !bucket.rowStart.IsZero() {
+		if span := bucket.lastEnded.Sub(bucket.rowStart).Seconds(); span > bucket.wallDurSec {
+			bucket.wallDurSec = span
+		}
+	}
 	if len(bucket.wallFile) == 0 {
 		bucket.wallFile = [][2]float64{{0, 0}}
 	}
@@ -197,14 +218,22 @@ func (r *RollingMergeCoordinator) appendToBucket(
 
 	totalFrames := bucketInfo.SampleCount + newInfo.SampleCount
 
+	rowStart := bucket.rowStart
+	if rowStart.IsZero() {
+		// Legacy in-flight bucket (created before rowStart was tracked): the
+		// row's true start is unknown here; pass the segment-relative value —
+		// the DB update applies min(started_at, ?) so the stored start can
+		// only move backward, never shrink coverage.
+		rowStart = seg.startedAt
+	}
 	mergedRecID = bucket.mergedRecID
 	mergedRec := &model.Recording{
 		ID:          mergedRecID,
 		CameraID:    seg.cameraID,
 		FilePath:    finalPath,
 		Format:      model.Format(seg.format),
-		StartedAt:   bucket.windowStart,
-		EndedAt:     seg.endedAt,
+		StartedAt:   rowStart,
+		EndedAt:     bucket.lastEnded,
 		Duration:    bucket.wallDurSec,
 		FileSize:    fi.Size(),
 		FrameCount:  totalFrames,

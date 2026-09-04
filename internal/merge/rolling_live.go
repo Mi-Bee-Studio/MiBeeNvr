@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -172,6 +173,15 @@ type pendingSegmentInfo struct {
 // It acquires a per-camera non-blocking lock; if a merge is already in progress,
 // the segments are left for the next periodic merge pass (MergeManager) as a fallback.
 func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID string, segs []pendingSegmentInfo) {
+	// Chronological order, always (#698): dispatch order follows lock
+	// acquisition, which does NOT follow event order under load — a swapped
+	// batch fed recs[0]/recs[last] an inverted range and wrote ended_at <
+	// started_at rows. Sorting here fixes the batch path (2+ segments) and
+	// the bucket path's create-vs-append sequencing within one dispatch.
+	sort.SliceStable(segs, func(i, j int) bool {
+		return segs[i].startedAt.Before(segs[j].startedAt)
+	})
+
 	// For real-time events, use BLOCKING lock acquisition instead of try-lock.
 	// The backfill path uses try-lock (skips if busy), so real-time events
 	// will eventually get the lock. We wait with a timeout (2 min) to avoid

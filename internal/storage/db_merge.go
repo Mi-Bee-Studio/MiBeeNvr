@@ -298,9 +298,13 @@ func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recordi
 			return err
 		}
 	} else {
-		// Case 2: Append — UPDATE existing merged recording.
-		q := `UPDATE recordings SET file_path = ?, ended_at = ?, duration = ?, file_size = ?, frame_count = ?, merge_quality = ?, motion_score = ?, motion_confidence = ?, activity_flags = ?, timeline_map = ? WHERE id = ?;`
-		_, err = tx.ExecContext(ctx, q, merged.FilePath, timeToDB(merged.EndedAt), merged.Duration,
+		// Case 2: Append — UPDATE existing merged recording. started_at/ended_at
+		// use SQL min()/max(): appends may extend the row backward when an
+		// out-of-order earlier segment arrives (#698), and the endpoints must
+		// never invert or shrink the covered range. The canonical time format
+		// (big-endian, zero-padded) makes lexicographic min/max time-correct.
+		q := `UPDATE recordings SET file_path = ?, started_at = min(started_at, ?), ended_at = max(ended_at, ?), duration = ?, file_size = ?, frame_count = ?, merge_quality = ?, motion_score = ?, motion_confidence = ?, activity_flags = ?, timeline_map = ? WHERE id = ?;`
+		_, err = tx.ExecContext(ctx, q, merged.FilePath, timeToDB(merged.StartedAt), timeToDB(merged.EndedAt), merged.Duration,
 			merged.FileSize, merged.FrameCount, merged.MergeQuality, motionScore, motionConf, motionFlags, merged.TimelineMap, existingMergedID)
 		if err != nil {
 			return err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -258,6 +259,26 @@ func splitRunsByCompatKey(recs []*model.Recording, infos []*SegmentInfo) []segme
 // mergeAudioRun merges one audio-homogeneous run into a single output file and
 // updates the DB atomically. Returns the number of source segments merged.
 func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID string, recs []*model.Recording, infos []*SegmentInfo) (int, error) {
+	// Chronological order, always (#698): the row anchors on recs[0].StartedAt
+	// and recs[last].EndedAt, and the merged FILE plays in input order — an
+	// unsorted run inverts the row range AND the playback order. mergeSegments
+	// sorts before dispatch; this guards backfill and any future caller.
+	if len(recs) == len(infos) && len(recs) > 1 {
+		idx := make([]int, len(recs))
+		for i := range idx {
+			idx[i] = i
+		}
+		sort.SliceStable(idx, func(a, b int) bool { return recs[idx[a]].StartedAt.Before(recs[idx[b]].StartedAt) })
+		if !sort.IntsAreSorted(idx) {
+			sortedRecs := make([]*model.Recording, len(recs))
+			sortedInfos := make([]*SegmentInfo, len(infos))
+			for i, j := range idx {
+				sortedRecs[i], sortedInfos[i] = recs[j], infos[j]
+			}
+			recs, infos = sortedRecs, sortedInfos
+		}
+	}
+
 	sourcePaths := make([]string, 0, len(recs))
 	for _, rec := range recs {
 		sourcePaths = append(sourcePaths, rec.FilePath)

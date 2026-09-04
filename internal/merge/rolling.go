@@ -242,7 +242,15 @@ type bucketInfo struct {
 	// append's wall contribution is lastEnded→ended — inter-segment GAPS
 	// (disconnects, TL pauses) stay visible on the wall axis, matching the
 	// row's started_at..ended_at span instead of silently shrinking it.
+	// Kept as a MAX across appends: an out-of-order earlier segment must not
+	// drag it backward (#698).
 	lastEnded time.Time
+	// rowStart is the merged row's started_at (the first bucket segment's
+	// start; set by createBucket). On out-of-order appends it moves BACKWARD
+	// to cover the earlier segment — the row must never end before it starts
+	// (#698: a swapped merge order produced ended_at < started_at rows).
+	// Zero only for in-flight buckets created before this field existed.
+	rowStart time.Time
 }
 
 // segmentAudioKey derives the audio compatibility key for a parsed segment.
