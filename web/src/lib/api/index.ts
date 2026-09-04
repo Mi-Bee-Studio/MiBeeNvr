@@ -239,6 +239,8 @@ export {
   updateFeatures,
   getStreamingSettings,
   updateStreamingSettings,
+  getRtspOutputSettings,
+  updateRtspOutputSettings,
   generateAPIKey,
   revokeAPIKey,
   getVisionStatus,
@@ -259,6 +261,8 @@ export type {
   RTMPConfig,
   SRTStreamConfig,
   SRTConfig,
+  RtspOutputSettings,
+  RtspOutputUpdate,
   VisionStatus,
 } from './settings';
 

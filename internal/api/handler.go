@@ -732,22 +732,23 @@ func (h *Handler) withSubStreamCodec(d subStreamDetail, cameraID string) subStre
 }
 
 // rtspEndpointFor builds the RTSP output-server entry for the protocols
-// response (#522): available when the server is enabled, the camera's codec
-// is servable (H.264/H.265), and its parameter sets have been detected. The
-// URL targets the requesting host so it is directly copy-pasteable.
+// response (#522): available when the server is enabled and the camera's codec
+// is servable (H.264/H.265/MJPEG). The URL targets the requesting host (with
+// configured credentials embedded, #686) so it is directly copy-pasteable.
 func (h *Handler) rtspEndpointFor(r *http.Request, cameraID string, codec model.Format) *rtspEndpointDetail {
 	if h.config == nil || h.config.Server.RTSP.Enabled == nil || !*h.config.Server.RTSP.Enabled {
 		return nil
 	}
 	detail := &rtspEndpointDetail{}
 	switch codec {
-	case model.FormatH264, model.FormatH265:
+	case model.FormatH264, model.FormatH265, model.FormatMJPEG:
 		// Parameter readiness mirrors the RTSP server's own gate — an idle or
 		// warming-up camera still gets the URL (clients retry DESCRIBE).
 		detail.Available = true
-		detail.URL = rtsp.URLFor(r.Host, h.config.Server.RTSP.Port, cameraID)
+		detail.URL = rtsp.URLForAuth(r.Host, h.config.Server.RTSP.Port, cameraID,
+			h.config.Server.RTSP.Username, h.config.Server.RTSP.Password)
 	default:
-		detail.Reason = "codec not servable over RTSP (H.264/H.265 only)"
+		detail.Reason = "codec not servable over RTSP (H.264/H.265/MJPEG only)"
 	}
 	return detail
 }

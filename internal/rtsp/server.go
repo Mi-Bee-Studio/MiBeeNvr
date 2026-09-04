@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -726,13 +727,29 @@ func cameraIDFromPath(p string) string {
 // host is a host or host:port (the port is dropped — the RTSP server has its
 // own); bare IPv6 hosts are bracketed.
 func URLFor(host string, port int, cameraID string) string {
+	return URLForAuth(host, port, cameraID, "", "")
+}
+
+// URLForAuth builds the pull URL with optional credentials (#686): when
+// username is non-empty the userinfo "user[:pass]@" is embedded (URI-escaped,
+// so passwords with reserved characters stay copy-pasteable); empty credentials
+// produce the same URL as URLFor.
+func URLForAuth(host string, port int, cameraID, username, password string) string {
 	if h, _, err := splitHostPort(host); err == nil {
 		host = h
 	}
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		host = "[" + host + "]"
 	}
-	return fmt.Sprintf("rtsp://%s:%d/%s", host, port, cameraID)
+	userinfo := ""
+	if username != "" {
+		if password != "" {
+			userinfo = url.UserPassword(username, password).String() + "@"
+		} else {
+			userinfo = url.User(username).String() + "@"
+		}
+	}
+	return fmt.Sprintf("rtsp://%s%s:%d/%s", userinfo, host, port, cameraID)
 }
 
 func splitHostPort(hostport string) (string, string, error) {

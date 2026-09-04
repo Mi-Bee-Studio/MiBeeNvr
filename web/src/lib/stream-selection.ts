@@ -48,11 +48,20 @@ export interface SubStreamDetail {
   codec?: string;
 }
 
+/** RTSP output-server pull URL block (#522/#686): url embeds credentials when
+ * the server has them configured, host targets whoever asked. */
+export interface RtspEndpointDetail {
+  available: boolean;
+  reason?: string;
+  url?: string;
+}
+
 export interface ProtocolsResponse {
   protocols: ProtocolDetail[];
   encoding: string;
   default: string;
   sub_stream?: SubStreamDetail;
+  rtsp?: RtspEndpointDetail;
 }
 
 // ─── Stream quality (main vs sub) — #513 ────────────────────────────────────

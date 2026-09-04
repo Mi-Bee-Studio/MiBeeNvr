@@ -784,6 +784,15 @@ export interface CameraSubStreamDetail {
   codec?: string;
 }
 
+// RTSP output-server pull endpoint in the protocols response (#522/#686):
+// url is server-assembled (request host + optional credentials) and directly
+// copy-pasteable into VLC/Synology.
+export interface RtspEndpointDetail {
+  available: boolean;
+  reason?: string;
+  url?: string;
+}
+
 // Response of GET /api/cameras/{id}/protocols — codec-aware per-camera protocol
 // ranking. The backend probes the RUNNING recorder for the real codec (correcting
 // ONVIF cameras that lie), then asks each registered stream handler CanHandle(codec).
@@ -793,6 +802,7 @@ export interface CameraProtocolsResponse {
   encoding: string;
   default: string;
   sub_stream?: CameraSubStreamDetail;
+  rtsp?: RtspEndpointDetail;
 }
 
 // Fetch the available streaming protocols for a specific camera. The grid uses
