@@ -7,12 +7,14 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/stretchr/testify/require"
 )
@@ -180,4 +182,81 @@ func TestVision_HeartbeatV2UnparseableRangeTimesStill200(t *testing.T) {
 	rr := doRequest(t, routes, http.MethodPost, "/api/vision/heartbeat", strings.NewReader(body), "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), `"ack_drops":9`)
+}
+
+// 多实例心跳归因:携带 Bearer API Key 的心跳落到 key 关联的实例
+// (vision.instances[].api_key_name);未关联的 key/匿名落 default。
+// GET /api/vision/status 的 instances[] 按实例展开健康状态。
+func TestVision_HeartbeatInstanceAttribution(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+
+	keyStore := middleware.NewAPIKeyStore()
+	keyStore.SetKeys(map[string]string{
+		"mbv_testkey0001": "key-a",
+		"mbv_testkey0002": "key-b",
+	})
+	h.SetAPIKeyStore(keyStore)
+
+	enabled := true
+	h.SetVisionCoordinator(vision.NewCoordinator(
+		func() config.VisionConfig {
+			return config.VisionConfig{
+				HeartbeatTimeoutSecs: 30,
+				Instances: []config.VisionInstance{
+					{Name: "a", URL: "http://a:9091", APIKeyName: "key-a"},
+					{Name: "b", URL: "http://b:9091", APIKeyName: "key-b", Enabled: &enabled},
+				},
+			}
+		},
+		func() string { return store.RootDir() },
+		event.NewEventBus(4),
+		nil, nil,
+	))
+	// 生产链路里 APIKey 中间件挂在根路由(Routes() 之外)——测试手动补一层,
+	// 否则 Bearer 不会被识别、归因永远落 default。
+	routes := middleware.APIKeyAuthMiddleware(keyStore, h.Routes())
+
+	beat := func(key, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/vision/heartbeat", strings.NewReader(body))
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		rr := httptest.NewRecorder()
+		routes.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// key-a 的心跳 → 只实例 a 健康。
+	rr := beat("mbv_testkey0001", `{"status":"healthy","device":"cuda-a"}`)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"push_enabled":true`)
+
+	// key-b 的心跳带 degraded → 实例 b 不健康(但请求本身成功)。
+	rr = beat("mbv_testkey0002", `{"status":"degraded","device":"cuda-b"}`)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"push_enabled":false`)
+
+	rr = doRequest(t, routes, http.MethodGet, "/api/vision/status", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp struct {
+		Instances []vision.InstanceStatus `json:"instances"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Instances, 2)
+	require.Equal(t, "a", resp.Instances[0].Name)
+	require.True(t, resp.Instances[0].Healthy)
+	require.Equal(t, "cuda-a", resp.Instances[0].Device)
+	require.Equal(t, "b", resp.Instances[1].Name)
+	require.False(t, resp.Instances[1].Healthy)
+	require.Equal(t, "cuda-b", resp.Instances[1].Device)
+
+	// ?instance=b 的 metrics 端点返回实例 b 的采样。
+	req := httptest.NewRequest(http.MethodGet, "/api/vision/metrics?instance=b", nil)
+	rr = httptest.NewRecorder()
+	routes.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"instance":"b"`)
 }

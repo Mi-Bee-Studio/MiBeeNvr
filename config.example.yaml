@@ -296,7 +296,18 @@ observability:
 # a healthy consumer receives video-segment pushes and writes AI events back.
 # vision:
 #   enabled: false                      # Enable the push integration (default: false)
-#   url: "http://192.168.1.110:9091"   # Consumer base address
+#   url: "http://192.168.1.110:9091"   # Legacy single consumer base address. When
+#                                       # `instances` is empty this URL becomes the
+#                                       # implicit instance "default" — existing
+#                                       # single-instance setups need no change.
+#   instances:                          # Multiple consumers (each with its own model
+#     - name: jetson-y26                # config). Per-instance heartbeat health,
+#       url: "http://192.168.1.110:9091"# offline compensation, and push fan-out.
+#       api_key_name: "jetson"          # API key name used to attribute heartbeats /
+#       enabled: true                   # events / ai_status reports to this instance.
+#     - name: lab-v8                    # Cameras route via cameras[].vision_targets
+#       url: "http://192.168.1.50:9091" # (empty = ALL enabled instances).
+#       api_key_name: "lab"
 #   heartbeat_timeout_secs: 60          # Consider consumer offline after this long without a heartbeat
 #   push_mode: "notify"                 # "notify" = tell consumer to fetch; "upload" = push video bytes
 #   skip_cameras:                       # Cameras never pushed (e.g. MJPEG/JPEG encodings the

@@ -11,6 +11,10 @@
   // ring (~24h @ 30s). Mounted at the top of the dashboard Vision tab; renders
   // nothing until the first successful fetch.
 
+  // instance: render ONE named consumer instance (multi-instance); empty =
+  // the legacy top-level view (= default instance).
+  let { instance = '' }: { instance?: string } = $props();
+
   let status = $state<VisionStatus | null>(null);
   let points = $state<VisionSample[]>([]);
   let failed = $state(false);
@@ -20,7 +24,10 @@
 
   async function refresh() {
     try {
-      const [s, m] = await Promise.all([getVisionStatus(), getVisionMetrics(HISTORY_HOURS)]);
+      const [s, m] = await Promise.all([
+        getVisionStatus(),
+        getVisionMetrics(HISTORY_HOURS, instance || undefined),
+      ]);
       status = s;
       points = m.points ?? [];
       failed = false;
@@ -28,6 +35,14 @@
       failed = true;
     }
   }
+
+  // The per-instance view: header/tile fields come from the named instance's
+  // status block instead of the top-level (default) one.
+  let view = $derived.by(() => {
+    if (!status) return null;
+    if (!instance) return status;
+    return status.instances?.find((i) => i.name === instance) ?? null;
+  });
 
   onMount(() => {
     refresh();
@@ -77,26 +92,26 @@
   };
 </script>
 
-{#if status?.enabled}
-  <div class="vision-monitor th-bg-elevated" data-testid="vision-monitor-panel">
+{#if status?.enabled && view}
+  <div class="vision-monitor th-bg-elevated" data-testid={'vision-monitor-panel' + (instance ? `-${instance}` : '')}>
     <div class="vm-head">
       <div class="vm-title">
         <BrainCircuit size={16} />
-        <span>{t('visionMonitor.title')}</span>
+        <span>{t('visionMonitor.title')}{instance ? ` · ${instance}` : ''}</span>
       </div>
       <div class="vm-status">
-        {#if status.healthy}
+        {#if view.healthy}
           <span class="dot dot-ok"></span>
           <span>{t('visionMonitor.healthy')}</span>
         {:else}
           <span class="dot dot-bad"></span>
           <span>{t('visionMonitor.degraded')}</span>
         {/if}
-        {#if status.device}
-          <span class="vm-chip">{status.device}</span>
+        {#if view.device}
+          <span class="vm-chip">{view.device}</span>
         {/if}
-        {#if status.last_seen}
-          <span class="vm-chip">{t('visionMonitor.lastSeen', { time: fmtSeen(status.last_seen) })}</span>
+        {#if view.last_seen}
+          <span class="vm-chip">{t('visionMonitor.lastSeen', { time: fmtSeen(view.last_seen) })}</span>
         {/if}
         <span class="vm-range">{t('visionMonitor.sampleNote')}</span>
       </div>
@@ -106,12 +121,12 @@
       <p class="vm-error">{t('visionMonitor.refreshFailed')}</p>
     {/if}
 
-    {#if status.metrics}
-      {@const m = status.metrics}
+    {#if view.metrics}
+      {@const m = view.metrics}
       <div class="vm-tiles">
         <div class="vm-tile" data-testid="vm-tile-queue">
           <span class="vm-k">{t('visionMonitor.queue')}</span>
-          <span class="vm-v">{status.queue_depth ?? 0}<span class="vm-sub">/{m.queue_capacity ?? '?'}</span></span>
+          <span class="vm-v">{view.queue_depth ?? 0}<span class="vm-sub">/{m.queue_capacity ?? '?'}</span></span>
         </div>
         <div class="vm-tile" data-testid="vm-tile-decoded">
           <span class="vm-k">{t('visionMonitor.decodedQueue')}</span>
@@ -123,7 +138,7 @@
         </div>
         <div class="vm-tile">
           <span class="vm-k">{t('visionMonitor.processed')}</span>
-          <span class="vm-v">{status.processed ?? '-'}</span>
+          <span class="vm-v">{view.processed ?? '-'}</span>
         </div>
         <div class="vm-tile">
           <span class="vm-k">{t('visionMonitor.hits')}</span>
@@ -140,7 +155,7 @@
         </div>
         <div class="vm-tile">
           <span class="vm-k">{t('visionMonitor.marked')}</span>
-          <span class="vm-v">{status.drops_marked_total ?? 0}</span>
+          <span class="vm-v">{view.drops_marked_total ?? 0}</span>
         </div>
         {#if m.mem_available_mb}
           <div class="vm-tile" class:vm-warn={m.mem_available_mb < 600}>

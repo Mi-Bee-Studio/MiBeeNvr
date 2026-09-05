@@ -13,6 +13,7 @@
   import { AlertCircle, Brain, ChevronDown, Play, Settings } from 'lucide-svelte';
   import Pagination from '../components/Pagination.svelte';
   import VisionMonitorPanel from '../lib/components/VisionMonitorPanel.svelte';
+  import { getVisionStatus } from '$lib/api';
 
   let events = $state<AIEvent[]>([]);
   let total = $state(0);
@@ -20,6 +21,10 @@
   let error = $state('');
   let cameraFilter = $state('');
   let eventTypeFilter = $state('');
+  let sourceFilter = $state('');
+  // Vision consumer instances (multi-instance): drives the per-instance
+  // monitor panels and the source filter options.
+  let visionInstanceNames = $state<string[]>([]);
   let cameras = $state<Camera[]>([]);
   let page = $state(0);
   let expandedEvent = $state<number | null>(null);
@@ -63,6 +68,7 @@
       const resp = await listAIEvents({
         camera_id: cameraFilter || undefined,
         event_type: eventTypeFilter || undefined,
+        source: sourceFilter || undefined,
         limit: pageSize,
         offset: page * pageSize,
       });
@@ -174,6 +180,12 @@
   const miBeeVisionLoaded = $derived(getMiBeeVisionLoaded());
 
   onMount(async () => {
+    try {
+      const vs = await getVisionStatus();
+      visionInstanceNames = (vs.instances ?? []).map((i) => i.name);
+    } catch {
+      visionInstanceNames = [];
+    }
     await refreshMiBeeVisionStatus();
     if (!getMiBeeVisionConnected()) return;
     try {
@@ -211,7 +223,13 @@
   </div>
 
   <!-- Consumer monitor (heartbeat v2 metrics, #671) -->
-  <VisionMonitorPanel />
+  {#if visionInstanceNames.length > 1}
+    {#each visionInstanceNames as insName (insName)}
+      <VisionMonitorPanel instance={insName} />
+    {/each}
+  {:else}
+    <VisionMonitorPanel />
+  {/if}
 
   <!-- Filters -->
   <div class="flex flex-wrap gap-3 mb-4">
@@ -226,6 +244,15 @@
         <option value={et.value}>{et.label}</option>
       {/each}
     </select>
+
+    {#if visionInstanceNames.length > 0}
+      <select class="input" bind:value={sourceFilter} onchange={onFilterChange} aria-label={t('aiEvents.sourceFilter')}>
+        <option value="">{t('aiEvents.allSources')}</option>
+        {#each visionInstanceNames as n (n)}
+          <option value={n}>{n}</option>
+        {/each}
+      </select>
+    {/if}
   </div>
 
   <!-- Stats summary (when camera selected) -->
@@ -273,7 +300,7 @@
               <!-- Severity badge -->
               <span class="px-2 py-0.5 rounded text-xs font-medium border {severityColors[evt.severity] || severityColors.info}">
                 {severityLabel(evt.severity)}
-              </span>
+              </span> {#if evt.source}<span class="px-2 py-0.5 rounded text-xs th-bg-muted th-text-secondary" data-testid="ai-event-source">{evt.source}</span>{/if}
               <!-- Event info -->
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">

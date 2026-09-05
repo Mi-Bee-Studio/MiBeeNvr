@@ -595,6 +595,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.PushTargets != nil {
 		cam.PushTargets = *updates.PushTargets
 	}
+	if updates.VisionTargets != nil {
+		cam.VisionTargets = *updates.VisionTargets
+	}
 	if updates.PushRetentionDays != nil {
 		cam.PushRetentionDays = updates.PushRetentionDays
 	}

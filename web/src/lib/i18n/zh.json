@@ -1890,5 +1890,20 @@
   "visionMonitor.unitDropsPerMin": "段/分",
   "visionMonitor.lastSeen": "最近心跳 {time}",
   "visionMonitor.sampleNote": "近 24h · ~30s 采样 · 15s 刷新",
-  "visionMonitor.noData": "暂无数据"
+  "visionMonitor.noData": "暂无数据",
+  "settings.mibeevision.instances.title": "消费端实例",
+  "settings.mibeevision.instances.add": "添加实例",
+  "settings.mibeevision.instances.hint": "每个实例是一个独立的 AI 分析后端(可挂不同模型);相机未指定路由时推送给全部启用实例。实例的 API Key 用于心跳/事件/状态归因。",
+  "settings.mibeevision.instances.empty": "未配置实例——单实例部署使用下方兼容地址(合成 default 实例)。",
+  "settings.mibeevision.instances.name": "实例名",
+  "settings.mibeevision.instances.url": "地址(http://…:9091)",
+  "settings.mibeevision.instances.apiKey": "关联 API Key",
+  "settings.mibeevision.instances.noKey": "不关联(落 default)",
+  "settings.mibeevision.instances.enabled": "启用",
+  "cameras.visionRoutingTitle": "AI 分析路由",
+  "cameras.visionRoutingAll": "全部",
+  "cameras.visionRoutingHint": "选择该摄像头的录像推送给哪些 Vision 实例;不勾选 = 全部启用实例。",
+  "cameras.visionRoutingDisabled": "已停用",
+  "aiEvents.sourceFilter": "来源实例",
+  "aiEvents.allSources": "全部来源"
 }

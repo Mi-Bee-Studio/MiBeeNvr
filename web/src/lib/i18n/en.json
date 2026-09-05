@@ -1891,5 +1891,20 @@
   "visionMonitor.unitDropsPerMin": "segs/min",
   "visionMonitor.lastSeen": "Last heartbeat {time}",
   "visionMonitor.sampleNote": "Last 24h · ~30s samples · 15s refresh",
-  "visionMonitor.noData": "No data"
+  "visionMonitor.noData": "No data",
+  "settings.mibeevision.instances.title": "Consumer instances",
+  "settings.mibeevision.instances.add": "Add instance",
+  "settings.mibeevision.instances.hint": "Each instance is an independent AI analysis backend (can run a different model); cameras without explicit routing push to all enabled instances. The instance's API key attributes heartbeats/events/status reports.",
+  "settings.mibeevision.instances.empty": "No instances configured — a single-instance setup uses the legacy address above (implicit \"default\" instance).",
+  "settings.mibeevision.instances.name": "Instance name",
+  "settings.mibeevision.instances.url": "Address (http://…:9091)",
+  "settings.mibeevision.instances.apiKey": "Linked API key",
+  "settings.mibeevision.instances.noKey": "None (→ default)",
+  "settings.mibeevision.instances.enabled": "Enabled",
+  "cameras.visionRoutingTitle": "AI analysis routing",
+  "cameras.visionRoutingAll": "all",
+  "cameras.visionRoutingHint": "Choose which vision instances receive this camera's recordings; unchecked = all enabled instances.",
+  "cameras.visionRoutingDisabled": "disabled",
+  "aiEvents.sourceFilter": "Source instance",
+  "aiEvents.allSources": "All sources"
 }

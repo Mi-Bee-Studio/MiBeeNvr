@@ -4,7 +4,9 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,4 +123,85 @@ func TestAICreatedAtToRFC3339(t *testing.T) {
 	for _, c := range cases {
 		require.Equal(t, c.want, aiCreatedAtToRFC3339(c.in), "input %q", c.in)
 	}
+}
+
+// v35 多实例归因:source(API Key 名)随事件落库、列表可按 source 过滤。
+func TestAIEventSourceRoundTripAndFilter(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	mk := func(source string) *AIEvent {
+		return &AIEvent{CameraID: "cam-1", EventType: "person", Severity: "info", Source: source}
+	}
+	_, err := db.InsertAIEvent(ctx, mk("jetson-y26"))
+	require.NoError(t, err)
+	_, err = db.InsertAIEvent(ctx, mk("vm-v8"))
+	require.NoError(t, err)
+	_, err = db.InsertAIEvent(ctx, mk("")) // 旧版消费者不带 key
+	require.NoError(t, err)
+
+	all, total, err := db.ListAIEvents(ctx, AIEventFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, 3, total)
+	sources := map[string]bool{}
+	for _, e := range all {
+		sources[e.Source] = true
+	}
+	require.True(t, sources["jetson-y26"] && sources["vm-v8"] && sources[""],
+		"all three sources must round-trip, got %v", sources)
+
+	only, total, err := db.ListAIEvents(ctx, AIEventFilter{Limit: 10, Source: "vm-v8"})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Equal(t, "vm-v8", only[0].Source)
+}
+
+// 多实例聚合卫兵:completed 不被 failed/skipped/processing 降级;
+// skipped 可被 completed 升级(补推后真实处理完成的场景)。
+func TestUpdateRecordingAIStatusAggregateGuard(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	rec := &model.Recording{
+		ID: "rec-guard", CameraID: "cam-1", FilePath: "/x/a.mp4",
+		Format:    model.FormatH264,
+		StartedAt: time.Now().Add(-time.Minute), EndedAt: time.Now(),
+		MergeStatus: model.MergeStatusPending,
+	}
+	require.NoError(t, db.InsertRecording(ctx, rec))
+
+	set := func(status string) string {
+		require.NoError(t, db.UpdateRecordingAIStatus(ctx, "rec-guard", status, ""))
+		got, err := db.GetRecordingAIStatus(ctx, "rec-guard")
+		require.NoError(t, err)
+		return got
+	}
+
+	require.Equal(t, "processing", set("processing"))
+	require.Equal(t, "failed", set("failed"))
+	// 另一实例 completed 胜出(最高优先级)。
+	require.Equal(t, "completed", set("completed"))
+	// completed 之后:failed/skipped/processing 全部不得降级。
+	require.Equal(t, "completed", set("failed"))
+	require.Equal(t, "completed", set("skipped"))
+	require.Equal(t, "completed", set("processing"))
+
+	// failed 之上 skipped 可写入(丢弃优先于历史失败);再被 completed 升级。
+	rec2 := &model.Recording{
+		ID: "rec-guard2", CameraID: "cam-1", FilePath: "/x/b.mp4",
+		Format:    model.FormatH264,
+		StartedAt: time.Now().Add(-time.Minute), EndedAt: time.Now(),
+		MergeStatus: model.MergeStatusPending,
+	}
+	require.NoError(t, db.InsertRecording(ctx, rec2))
+	set2 := func(status string) string {
+		require.NoError(t, db.UpdateRecordingAIStatus(ctx, "rec-guard2", status, ""))
+		got, err := db.GetRecordingAIStatus(ctx, "rec-guard2")
+		require.NoError(t, err)
+		return got
+	}
+	require.Equal(t, "failed", set2("failed"))
+	require.Equal(t, "skipped", set2("skipped"), "skipped outranks failed")
+	require.Equal(t, "skipped", set2("failed"))
+	require.Equal(t, "completed", set2("completed"), "re-processing after a drop upgrades to completed")
+	require.Equal(t, "completed", set2("skipped"))
 }

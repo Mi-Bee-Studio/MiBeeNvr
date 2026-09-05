@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -64,6 +65,13 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		},
 		"mibeevision": map[string]any{
 			"api_keys": buildAPIKeyInfo(h.config.APIKeys, h.apiKeyLastUsed()),
+		},
+		"vision": map[string]any{
+			"enabled":                h.config.Vision.Enabled,
+			"url":                    h.config.Vision.URL,
+			"push_mode":              h.config.Vision.PushMode,
+			"heartbeat_timeout_secs": h.config.Vision.HeartbeatTimeoutSecs,
+			"instances":              h.config.Vision.Instances,
 		},
 		"update": map[string]any{
 			// Bare-metal auto-apply toggle (#648 UI switch, #647 execution).
@@ -196,6 +204,13 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			PathPrefix *string `json:"path_prefix"`
 			ReadWrite  *bool   `json:"read_write"`
 		} `json:"webdav"`
+		Vision *struct {
+			// 多实例消费端配置(整表替换)。实例名唯一/URL http(s) 在此校验;
+			// 删除仍被相机路由引用的实例会被 400 拒绝(先解路由再删)。
+			Enabled   *bool                    `json:"enabled"`
+			URL       *string                  `json:"url"`
+			Instances *[]config.VisionInstance `json:"instances"`
+		} `json:"vision"`
 		Timezone *string `json:"timezone"`
 		Server   *struct {
 			Listen *string `json:"listen"`
@@ -322,6 +337,59 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if body.WebDAV.ReadWrite != nil {
 			h.config.WebDAV.ReadWrite = *body.WebDAV.ReadWrite
 		}
+	}
+
+	// Update vision consumer instances (multi-instance routing). The
+	// coordinator reads cfg live (same pointer), so changes apply without a
+	// restart; instance health trackers survive edits (reconciled by name).
+	if body.Vision != nil {
+		if body.Vision.Instances != nil {
+			seen := make(map[string]bool, len(*body.Vision.Instances))
+			for i, ins := range *body.Vision.Instances {
+				if strings.TrimSpace(ins.Name) == "" {
+					WriteError(w, http.StatusBadRequest, fmt.Sprintf("vision.instances[%d].name is required", i))
+					return
+				}
+				if seen[ins.Name] {
+					WriteError(w, http.StatusBadRequest, fmt.Sprintf("vision.instances[%d] duplicate name %q", i, ins.Name))
+					return
+				}
+				seen[ins.Name] = true
+				u, perr := url.Parse(ins.URL)
+				if perr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+					WriteError(w, http.StatusBadRequest, fmt.Sprintf("vision.instances[%d].url must be an http(s) URL, got %q", i, ins.URL))
+					return
+				}
+			}
+			// Removing an instance still referenced by a camera's routing
+			// would silently strand that camera — reject with the offenders.
+			known := seen
+			known["default"] = true
+			var stranded []string
+			for _, cam := range h.config.Cameras {
+				for _, name := range cam.VisionTargets {
+					if !known[name] {
+						stranded = append(stranded, cam.ID+"→"+name)
+						break
+					}
+				}
+			}
+			if len(stranded) > 0 {
+				WriteError(w, http.StatusBadRequest,
+					"cameras still route to removed vision instances: "+strings.Join(stranded, ", "))
+				return
+			}
+			h.config.Vision.Instances = *body.Vision.Instances
+		}
+		if body.Vision.URL != nil {
+			h.config.Vision.URL = strings.TrimSpace(*body.Vision.URL)
+		}
+		if body.Vision.Enabled != nil {
+			h.config.Vision.Enabled = *body.Vision.Enabled
+		}
+		logger.Info("vision settings updated",
+			"instances", len(h.config.Vision.EffectiveInstances()),
+			"enabled", h.config.Vision.Enabled)
 	}
 
 	// Update timezone

@@ -103,6 +103,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		// Push-out relay targets + retention
 		PushTargets       []config.PushTargetConfig `json:"push_targets"`
 		PushRetentionDays *int                      `json:"push_retention_days"`
+		// Vision instance routing (empty = all enabled instances).
+		VisionTargets []string `json:"vision_targets"`
 		// IP self-healing: stable hardware ID (ONVIF serial) + candidate subnets.
 		StableID    string   `json:"stable_id"`
 		SubnetHints []string `json:"subnet_hints"`
@@ -116,6 +118,21 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	// vision_targets must reference existing vision instances (see update path).
+	if len(body.VisionTargets) > 0 && h.config != nil {
+		known := make(map[string]bool, len(h.config.Vision.Instances)+1)
+		for _, ins := range h.config.Vision.EffectiveInstances() {
+			known[ins.Name] = true
+		}
+		for _, name := range body.VisionTargets {
+			if !known[name] {
+				WriteError(w, http.StatusBadRequest,
+					"vision_targets references unknown vision instance: "+name)
+				return
+			}
+		}
 	}
 	if body.Name == "" {
 		WriteError(w, http.StatusBadRequest, "name is required")
@@ -310,6 +327,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		SRTStreamID:       body.SRTStreamID,
 		PushTargets:       body.PushTargets,
 		PushRetentionDays: body.PushRetentionDays,
+		VisionTargets:     body.VisionTargets,
 		StableID:          body.StableID,
 		SubnetHints:       body.SubnetHints,
 	}

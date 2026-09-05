@@ -169,6 +169,11 @@ type CameraConfig struct {
 	// Applies to ANY camera protocol — the engine subscribes to the camera's
 	// StreamHub, so no re-pull happens. Each entry is one independent target.
 	PushTargets []PushTargetConfig `yaml:"push_targets,omitempty" json:"push_targets,omitempty"`
+	// VisionTargets names the vision instances this camera's recordings are
+	// pushed to (multi-instance routing). Empty = all enabled instances (the
+	// single-instance default). Names must exist in vision.instances; validated
+	// at the API layer with a 400 for unknown names.
+	VisionTargets []string `yaml:"vision_targets,omitempty" json:"vision_targets,omitempty"`
 	// Per-camera push-in retention override. nil = follow global retention,
 	// 0 = live-only (no recording), N = keep N days. Only meaningful for srt/rtmp.
 	PushRetentionDays *int `yaml:"push_retention_days,omitempty" json:"push_retention_days,omitempty"`

@@ -108,6 +108,8 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 		BBox:           bboxStr,
 		SnapshotPath:   body.SnapshotPath,
 		Metadata:       metadataStr,
+		// 写入方实例归因(多 Vision 接入):API Key 名落库,列表按 source 过滤。
+		Source: middleware.APIKeyNameFromContext(r.Context()),
 	}
 
 	id, err := h.db.InsertAIEvent(r.Context(), aiEvent)
@@ -151,6 +153,7 @@ func (h *Handler) handleListAIEvents(w http.ResponseWriter, r *http.Request) {
 	f := storage.AIEventFilter{
 		CameraID:  r.URL.Query().Get("camera_id"),
 		EventType: r.URL.Query().Get("event_type"),
+		Source:    r.URL.Query().Get("source"),
 	}
 	f.Limit, f.Offset = parsePagination(r, 0, 0) // no default/cap; ListAIEvents clamps to 50 internally
 	// Time-range filtering for timeline overlay support.

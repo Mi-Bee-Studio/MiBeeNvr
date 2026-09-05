@@ -3,7 +3,12 @@
 // NVR 在段刚落盘时,直接把视频文件字节流 POST 给 Vision(不是通知 file_path 让 Vision 下载)。
 // 这样视频数据在 NVR 合并进程删除原文件之前就已经到了 Vision 手里——彻底消除 404。
 //
-// 推送条件:Vision 心跳健康(HealthTracker.IsHealthy)。
+// 多实例(vision.instances):NVR 可同时接入多个 Vision 消费端,每实例独立的
+// 地址/心跳健康/暂停窗/离线补偿;相机按 vision_instances 路由(空 = 全部启用
+// 实例),推送对路由内全部实例扇出,单实例失败不影响其它。实例身份由心跳/
+// 事件/ai_status 回传携带的 API Key 名归因(api_key_name 关联,缺省落 default)。
+//
+// 推送条件:目标实例心跳健康(HealthTracker.IsHealthy)。
 // 未启用时(enabled=false)退化为现有 SSE 模式(向后兼容)。
 package vision
 
@@ -41,31 +46,55 @@ type Repusher interface {
 	ListRecordingsForVisionRepush(ctx context.Context, since, until time.Time, limit int) ([]model.Recording, error)
 }
 
-// Coordinator 订阅 segment.completed 事件,在 Vision 健康时把视频文件推送给 Vision。
-type Coordinator struct {
+// instance 是一个 Vision 消费端实例的运行时状态。配置变化时按 name 对账
+// 保留(心跳历史/暂停窗跨配置编辑存活)。
+type instance struct {
+	// name 创建后不变;url/apiKeyName 由 reconcile 在 instMu 内写、路由快照
+	// (routedInstances) 同锁内拷贝读取——推路径只见不可变值拷贝。
+	name         string
+	url          string
+	apiKeyName   string
 	health       *HealthTracker
-	eventBus     *event.EventBus
-	eventCh      chan event.Event
-	cfg          func() config.VisionConfig
-	storageRoot  func() string // 返回 NVR 录像根目录,用于解析段的绝对路径
-	db           Repusher      // nil → 补偿重推禁用(测试/降级部署)
-	client       *http.Client
-	wg           sync.WaitGroup
-	cancelFn     context.CancelFunc
-	mu           sync.Mutex
-	runCtx       context.Context // 供恢复回调 goroutine 使用(Start 时设置)
-	pausedSince  time.Time       // 推送暂停窗口起点(mu 保护;零值=未暂停)
-	compensating atomic.Bool     // 补偿重推 single-flight
+	compensating atomic.Bool // 该实例的补偿重推 single-flight
+}
+
+// routeTarget 是推送路径使用的实例快照(值类型,字段在 instMu 内复制——
+// 与 reconcile 的字段写不竞态)。
+type routeTarget struct {
+	name   string
+	url    string
+	health *HealthTracker
+}
+
+// Coordinator 订阅 segment.completed 事件,把视频文件推送给路由命中的各个
+// Vision 实例。
+type Coordinator struct {
+	eventBus      *event.EventBus
+	eventCh       chan event.Event
+	cfg           func() config.VisionConfig
+	storageRoot   func() string // 返回 NVR 录像根目录,用于解析段的绝对路径
+	db            Repusher      // nil → 补偿重推禁用(测试/降级部署)
+	client        *http.Client
+	wg            sync.WaitGroup
+	cancelFn      context.CancelFunc
+	mu            sync.Mutex
+	runCtx        context.Context                // 供恢复回调 goroutine 使用(Start 时设置)
+	cameraTargets func(cameraID string) []string // nil → 相机未配置路由(全部实例)
+	// instMu 保护 insts/order;reconcileInstances 按配置对账。
+	instMu sync.Mutex
+	insts  map[string]*instance
+	order  []string // 配置顺序的实例名
+	// paused 是各实例的推送暂停窗口起点(mu 保护;缺键=未暂停)。
+	paused map[string]time.Time
 	// subLayer 是子码流分析层 (#514)。nil(未接 provider)时整个层停用。
 	subLayer *SubLayerManager
 }
 
 // NewCoordinator 创建推送协调器。db 可为 nil(禁用离线补偿);provider 可为
-// nil(禁用子码流分析层)。
+// nil(禁用子码流分析层)。相机路由解析器由 builders 通过 SetCameraTargets
+// 注入(nil = 全部实例)。
 func NewCoordinator(cfg func() config.VisionConfig, storageRoot func() string, eventBus *event.EventBus, db Repusher, provider SubLayerProvider) *Coordinator {
-	vcfg := cfg()
 	c := &Coordinator{
-		health:      NewHealthTracker(vcfg.HeartbeatTimeoutSecs),
 		eventBus:    eventBus,
 		cfg:         cfg,
 		storageRoot: storageRoot,
@@ -73,26 +102,225 @@ func NewCoordinator(cfg func() config.VisionConfig, storageRoot func() string, e
 		client: &http.Client{
 			Timeout: 120 * time.Second, // 大文件传输可能需要较长时间
 		},
+		insts:  map[string]*instance{},
+		paused: map[string]time.Time{},
 	}
 	if provider != nil {
 		c.subLayer = NewSubLayerManager(provider, cfg, storageRoot, SubLayerDeps{
 			Push:    c.pushSubSegment,
-			Healthy: c.health.IsHealthy,
+			Healthy: c.anyInstanceHealthy,
 		})
 	}
-	// 心跳恢复(不健康→健康)触发离线补偿重推 (#329)。
-	c.health.SetOnRecovery(c.compensateOffline)
 	return c
+}
+
+// SetCameraTargets 注入相机 → vision 实例名的解析器(camera.vision_targets)。
+// nil 或返回 nil 表示该相机走默认路由(全部启用实例)。
+func (c *Coordinator) SetCameraTargets(fn func(cameraID string) []string) {
+	c.cameraTargets = fn
+}
+
+// reconcileInstances 按当前配置对账实例集:新增的建 tracker,消失的丢弃,
+// 同名保留(健康状态/心跳历史/暂停窗跨配置编辑存活)。
+func (c *Coordinator) reconcileInstances() {
+	vcfg := c.cfg()
+	want := vcfg.EffectiveInstances()
+	c.instMu.Lock()
+	defer c.instMu.Unlock()
+	if c.insts == nil {
+		c.insts = map[string]*instance{}
+	}
+	seen := make(map[string]bool, len(want))
+	order := make([]string, 0, len(want))
+	for _, ins := range want {
+		seen[ins.Name] = true
+		order = append(order, ins.Name)
+		if old, ok := c.insts[ins.Name]; ok {
+			old.url = ins.URL
+			old.apiKeyName = ins.APIKeyName
+			continue
+		}
+		h := NewHealthTracker(vcfg.HeartbeatTimeoutSecs)
+		// 心跳恢复(不健康→健康)触发该实例的离线补偿重推 (#329)。
+		name := ins.Name
+		h.SetOnRecovery(func() { c.compensateOffline(name) })
+		c.insts[ins.Name] = &instance{
+			name:       ins.Name,
+			url:        ins.URL,
+			apiKeyName: ins.APIKeyName,
+			health:     h,
+		}
+	}
+	for name := range c.insts {
+		if !seen[name] {
+			delete(c.insts, name)
+		}
+	}
+	c.order = order
+}
+
+// defaultInstance 返回兼容视角的"默认实例":优先名为 default 的(legacy 单
+// 实例合成名),否则配置顺序第一个。无实例时返回 nil。
+func (c *Coordinator) defaultInstance() *instance {
+	c.reconcileInstances()
+	c.instMu.Lock()
+	defer c.instMu.Unlock()
+	if d, ok := c.insts["default"]; ok {
+		return d
+	}
+	for _, name := range c.order {
+		if c.insts[name] != nil {
+			return c.insts[name]
+		}
+	}
+	return nil
+}
+
+// Health 返回默认实例的 HealthTracker,供 API handler/旧测试记录心跳。
+// 单实例部署即唯一实例;多实例部署心跳应走 RecordHeartbeat 按 key 归因。
+// 无实例时返回一个临时 tracker(永不健康,行为同旧版未配置)。
+func (c *Coordinator) Health() *HealthTracker {
+	if ins := c.defaultInstance(); ins != nil {
+		return ins.health
+	}
+	return NewHealthTracker(c.cfg().HeartbeatTimeoutSecs)
+}
+
+// RecordHeartbeat 按 API Key 名把心跳归因到实例(找不到 key 关联或匿名 →
+// default 实例,兼容旧版消费者)。返回实例名;"" 表示当前没有任何实例
+// (集成未启用)。
+func (c *Coordinator) RecordHeartbeat(apiKeyName string, st HeartbeatStatus) string {
+	ins := c.instanceByAPIKey(apiKeyName)
+	if ins == nil {
+		return ""
+	}
+	ins.health.RecordHeartbeat(st)
+	return ins.name
+}
+
+// instanceByAPIKey 按 api_key_name 查实例;key 为空或未命中时落 default。
+func (c *Coordinator) instanceByAPIKey(key string) *instance {
+	c.reconcileInstances()
+	c.instMu.Lock()
+	defer c.instMu.Unlock()
+	if key != "" {
+		for _, name := range c.order {
+			if ins := c.insts[name]; ins != nil && ins.apiKeyName == key {
+				return ins
+			}
+		}
+		slog.Debug("vision heartbeat key matches no instance, attributing to default",
+			"api_key_name", key)
+	}
+	if d, ok := c.insts["default"]; ok {
+		return d
+	}
+	for _, name := range c.order {
+		if c.insts[name] != nil {
+			return c.insts[name]
+		}
+	}
+	return nil
+}
+
+// routedInstances 解析一台相机当前的推送目标实例(路由配置 + 实例启用态;
+// 健康与否在推送时逐实例判断)。
+func (c *Coordinator) routedInstances(cameraID string) []routeTarget {
+	vcfg := c.cfg()
+	var targets []string
+	if c.cameraTargets != nil {
+		targets = c.cameraTargets(cameraID)
+	}
+	routed := vcfg.RouteFor(targets)
+	c.instMu.Lock()
+	defer c.instMu.Unlock()
+	out := make([]routeTarget, 0, len(routed))
+	for _, ins := range routed {
+		if live := c.insts[ins.Name]; live != nil {
+			out = append(out, routeTarget{name: live.name, url: live.url, health: live.health})
+		}
+	}
+	return out
+}
+
+// anyInstanceHealthy 报告是否至少一个启用实例健康(子层扫描门控用)。
+func (c *Coordinator) anyInstanceHealthy() bool {
+	for _, ins := range c.routedInstances("") {
+		if ins.health.IsHealthy() {
+			return true
+		}
+	}
+	return false
+}
+
+// InstanceStatus 一个实例的对外状态快照(供 /api/vision/status)。
+type InstanceStatus struct {
+	Name        string         `json:"name"`
+	URL         string         `json:"url"`
+	Healthy     bool           `json:"healthy"`
+	LastSeen    *time.Time     `json:"last_seen,omitempty"`
+	Device      string         `json:"device,omitempty"`
+	QueueDepth  int            `json:"queue_depth,omitempty"`
+	Processed   int            `json:"processed,omitempty"`
+	SkipCameras []string       `json:"skip_cameras,omitempty"`
+	Metrics     *VisionMetrics `json:"metrics,omitempty"`
+	MarkedDrops int64          `json:"drops_marked_total,omitempty"`
+}
+
+// InstancesStatus 返回全部生效实例的状态(配置顺序)。
+func (c *Coordinator) InstancesStatus() []InstanceStatus {
+	c.reconcileInstances()
+	c.instMu.Lock()
+	defer c.instMu.Unlock()
+	out := make([]InstanceStatus, 0, len(c.order))
+	for _, name := range c.order {
+		ins := c.insts[name]
+		if ins == nil {
+			continue
+		}
+		st := InstanceStatus{Name: ins.name, URL: ins.url}
+		healthy, lastSeen, hs := ins.health.Snapshot()
+		st.Healthy = healthy
+		if !lastSeen.IsZero() {
+			t := lastSeen
+			st.LastSeen = &t
+		}
+		st.Device = hs.Device
+		st.QueueDepth = hs.QueueDepth
+		st.Processed = hs.ProcessedCount
+		st.SkipCameras = hs.SkipCameras
+		st.Metrics = hs.Metrics
+		st.MarkedDrops = ins.health.MarkedDropTotal()
+		out = append(out, st)
+	}
+	return out
+}
+
+// InstanceByName 按名取实例的 HealthTracker(供 /api/vision/metrics?instance=)。
+// 未知名或未指定时回落 default 实例。
+func (c *Coordinator) InstanceByName(name string) (*HealthTracker, string) {
+	c.reconcileInstances()
+	c.instMu.Lock()
+	defer c.instMu.Unlock()
+	if name != "" {
+		if ins := c.insts[name]; ins != nil {
+			return ins.health, ins.name
+		}
+	}
+	if d, ok := c.insts["default"]; ok {
+		return d.health, d.name
+	}
+	for _, n := range c.order {
+		if c.insts[n] != nil {
+			return c.insts[n].health, c.insts[n].name
+		}
+	}
+	return nil, ""
 }
 
 // SubLayer exposes the sub-layer manager (observability/tests). May be nil.
 func (c *Coordinator) SubLayer() *SubLayerManager {
 	return c.subLayer
-}
-
-// Health 返回 HealthTracker,供 API handler 记录心跳。
-func (c *Coordinator) Health() *HealthTracker {
-	return c.health
 }
 
 // Start 订阅 segment.completed 并启动事件处理循环。
@@ -115,7 +343,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	c.subLayer.Start(ctx)
 	slog.Info("vision coordinator started",
 		"push_mode", c.cfg().PushMode,
-		"vision_url", c.cfg().URL,
+		"instances", len(c.InstancesStatus()),
 		"sub_layer_cameras", len(c.cfg().SubLayerCameras))
 	return nil
 }
@@ -154,10 +382,14 @@ func (c *Coordinator) eventLoop(ctx context.Context) {
 	}
 }
 
-// handleSegment 把段视频文件直接推送给 Vision。
+// handleSegment 把段视频文件推送给相机路由命中的各个 Vision 实例。
 func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentCompleted) {
 	vcfg := c.cfg()
-	if !vcfg.Enabled || vcfg.URL == "" {
+	if !vcfg.Enabled {
+		return
+	}
+	routed := c.routedInstances(seg.CameraID)
+	if len(routed) == 0 {
 		return
 	}
 	// Feed the sub-layer's recording-id join regardless of push outcome — a
@@ -167,12 +399,6 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	if c.subLayer != nil && seg.Layer == model.LayerMain {
 		c.subLayer.NoteMainSegment(seg.CameraID, seg.RecordingID)
 	}
-	if !c.health.IsHealthy() {
-		c.markPaused()
-		slog.Debug("vision not healthy, skip push",
-			"recording_id", seg.RecordingID)
-		return
-	}
 	if seg.Format == "timelapse" {
 		return
 	}
@@ -180,13 +406,6 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	// 带宽与 CPU,直接跳过(离线补偿重推走同一路径,一并跳过)。
 	if vcfg.ShouldSkipCamera(seg.CameraID) {
 		slog.Debug("vision push skipped by skip_cameras config",
-			"camera_id", seg.CameraID,
-			"recording_id", seg.RecordingID)
-		return
-	}
-	// 消费者心跳声明的跳单(#515):与静态配置取并集生效。
-	if c.health.SkipCamera(seg.CameraID) {
-		slog.Debug("vision push skipped by consumer-reported skip list",
 			"camera_id", seg.CameraID,
 			"recording_id", seg.RecordingID)
 		return
@@ -206,7 +425,7 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 		if !filepath.IsAbs(absPath) {
 			absPath = filepath.Join(c.storageRoot(), absPath)
 		}
-		c.uploadSegment(ctx, absPath, seg.FileSize, map[string]string{
+		c.fanout(ctx, routed, absPath, seg.FileSize, map[string]string{
 			"X-Recording-Id": seg.RecordingID,
 			"X-Camera-Id":    seg.CameraID,
 			"X-Format":       seg.Format,
@@ -240,7 +459,7 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 		absPath = filepath.Join(c.storageRoot(), absPath)
 	}
 
-	c.uploadSegment(ctx, absPath, seg.FileSize, map[string]string{
+	c.fanout(ctx, routed, absPath, seg.FileSize, map[string]string{
 		"X-Recording-Id": seg.RecordingID,
 		"X-Camera-Id":    seg.CameraID,
 		"X-Format":       seg.Format,
@@ -251,9 +470,40 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	})
 }
 
-// uploadSegment POSTs a segment file's bytes to Vision. Headers carry the
-// metadata (Vision's minimal HTTP parser can't do chunked encoding — Content-
-// Length is set explicitly). Returns true on a 2xx response.
+// fanout 逐实例推送(健康检查+消费者跳单+上传各自独立,失败互不影响)。
+func (c *Coordinator) fanout(ctx context.Context, routed []routeTarget, absPath string, fileSize int64, hdr map[string]string) {
+	for _, rt := range routed {
+		c.pushToInstance(ctx, rt, absPath, fileSize, hdr)
+	}
+}
+
+// pushToInstance 单实例推送:无地址(default 合成、URL 未配)→ 静默跳过;
+// 不健康 → 记暂停窗(补偿重推的窗口锚点)并跳过;该实例心跳声明的跳单
+// (#515)→ 跳过;否则上传。
+func (c *Coordinator) pushToInstance(ctx context.Context, rt routeTarget, absPath string, fileSize int64, hdr map[string]string) bool {
+	if rt.url == "" {
+		return false
+	}
+	if !rt.health.IsHealthy() {
+		c.markPausedFor(rt.name)
+		slog.Debug("vision instance not healthy, skip push",
+			"instance", rt.name,
+			"recording_id", hdr["X-Recording-Id"])
+		return false
+	}
+	if rt.health.SkipCamera(hdr["X-Camera-Id"]) {
+		slog.Debug("vision push skipped by consumer-reported skip list",
+			"instance", rt.name,
+			"camera_id", hdr["X-Camera-Id"],
+			"recording_id", hdr["X-Recording-Id"])
+		return false
+	}
+	return c.uploadSegment(ctx, rt.url, absPath, fileSize, hdr)
+}
+
+// uploadSegment POSTs a segment file's bytes to a Vision instance. Headers
+// carry the metadata (Vision's minimal HTTP parser can't do chunked encoding —
+// Content-Length is set explicitly). Returns true on a 2xx response.
 //
 // Content-Length MUST come from the file on disk, never from the event's
 // FileSize: producers count only media bytes while the muxer appends the moov
@@ -261,7 +511,7 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 // a short Content-Length against a longer body aborts the transfer client-
 // side ("ContentLength=X with Body length Y" — field data 2026-09-02: 530
 // consecutive tiered-push losses before this was found).
-func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSize int64, hdr map[string]string) bool {
+func (c *Coordinator) uploadSegment(ctx context.Context, baseURL string, absPath string, fileSize int64, hdr map[string]string) bool {
 	file, err := os.Open(absPath)
 	if err != nil {
 		slog.Warn("open segment file for push failed",
@@ -281,7 +531,7 @@ func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSiz
 	realSize := st.Size()
 	hdr["X-File-Size"] = strconv.FormatInt(realSize, 10)
 
-	url := strings.TrimRight(c.cfg().URL, "/") + "/vision/segment/upload"
+	url := strings.TrimRight(baseURL, "/") + "/vision/segment/upload"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, file)
 	if err != nil {
 		slog.Error("create upload request", "error", err)
@@ -315,86 +565,136 @@ func (c *Coordinator) uploadSegment(ctx context.Context, absPath string, fileSiz
 	return true
 }
 
-// pushSubSegment pushes one sub-layer segment (#514). Same transport/headers
-// as the main layer, plus X-Layer: sub; the recording id already carries the
-// joined MAIN recording so consumer-side dedup and ai_status semantics are
-// unchanged. Returns true when the consumer accepted it (caller deletes).
+// pushSubSegment pushes one sub-layer segment (#514) to every routed instance.
+// Same transport/headers as the main layer, plus X-Layer: sub; the recording
+// id already carries the joined MAIN recording so consumer-side dedup and
+// ai_status semantics are unchanged. Returns true (caller deletes) only when
+// EVERY currently-healthy routed instance accepted it — an offline instance's
+// copy waits on disk for its recovery (TTL-bounded); zero healthy instances
+// keeps the file too.
 func (c *Coordinator) pushSubSegment(ctx context.Context, seg SubSegment) bool {
 	vcfg := c.cfg()
-	if !vcfg.Enabled || vcfg.URL == "" || !c.health.IsHealthy() {
+	if !vcfg.Enabled {
 		return false
 	}
-	ok := c.uploadSegment(ctx, seg.Path, seg.FileSize, map[string]string{
-		"X-Recording-Id": seg.RecordingID,
-		"X-Camera-Id":    seg.CameraID,
-		"X-Format":       seg.Codec,
-		"X-Encoding":     seg.Codec,
-		"X-Started-At":   seg.StartedAt.UTC().Format(time.RFC3339Nano),
-		"X-Ended-At":     seg.EndedAt.UTC().Format(time.RFC3339Nano),
-		"X-File-Size":    strconv.FormatInt(seg.FileSize, 10),
-		"X-Layer":        "sub",
-	})
-	if ok {
-		slog.Info("pushed sub-layer video to vision",
+	routed := c.routedInstances(seg.CameraID)
+	if len(routed) == 0 {
+		return false
+	}
+	healthy, accepted := 0, 0
+	for _, rt := range routed {
+		if !rt.health.IsHealthy() {
+			continue
+		}
+		healthy++
+		if c.pushToInstance(ctx, rt, seg.Path, seg.FileSize, map[string]string{
+			"X-Recording-Id": seg.RecordingID,
+			"X-Camera-Id":    seg.CameraID,
+			"X-Format":       seg.Codec,
+			"X-Encoding":     seg.Codec,
+			"X-Started-At":   seg.StartedAt.UTC().Format(time.RFC3339Nano),
+			"X-Ended-At":     seg.EndedAt.UTC().Format(time.RFC3339Nano),
+			"X-File-Size":    strconv.FormatInt(seg.FileSize, 10),
+			"X-Layer":        "sub",
+		}) {
+			accepted++
+		}
+	}
+	if healthy > 0 && accepted == healthy {
+		slog.Info("pushed sub-layer video to vision instances",
 			"camera_id", seg.CameraID,
 			"recording_id", seg.RecordingID,
+			"instances", accepted,
 			"size_mb", seg.FileSize/1024/1024)
+		return true
 	}
-	return ok
+	return false
 }
 
-// markPaused records the start of a push-pause window (first segment skipped
-// while Vision is unhealthy). The timestamp bounds the offline-compensation
-// query when Vision recovers (#329).
-func (c *Coordinator) markPaused() {
+// markPausedFor records the start of an instance's push-pause window (first
+// segment skipped while that instance is unhealthy). The timestamp bounds the
+// offline-compensation query when the instance recovers (#329).
+func (c *Coordinator) markPausedFor(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.pausedSince.IsZero() {
-		c.pausedSince = time.Now()
+	if _, ok := c.paused[name]; !ok {
+		c.paused[name] = time.Now()
 		slog.Info("vision push paused — offline window starts (segments will be compensated on recovery)",
-			"since", c.pausedSince)
+			"instance", name,
+			"since", c.paused[name])
 	}
 }
 
-// rearmPaused restores the pause window with the given start (used when
-// Vision drops again mid-compensation, so the next recovery retries the
+// rearmPausedFor restores the pause window with the given start (used when the
+// instance drops again mid-compensation, so the next recovery retries the
 // remainder instead of only the new gap).
-func (c *Coordinator) rearmPaused(since time.Time) {
+func (c *Coordinator) rearmPausedFor(name string, since time.Time) {
 	c.mu.Lock()
-	c.pausedSince = since
+	c.paused[name] = since
 	c.mu.Unlock()
 }
 
-// takePausedSince returns and clears the pause-window start.
-func (c *Coordinator) takePausedSince() time.Time {
+// takePausedSinceFor returns and clears the instance's pause-window start.
+func (c *Coordinator) takePausedSinceFor(name string) time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	since := c.pausedSince
-	c.pausedSince = time.Time{}
+	since, ok := c.paused[name]
+	delete(c.paused, name)
+	if !ok {
+		return time.Time{}
+	}
 	return since
 }
 
-// compensateOffline re-pushes segments that completed while Vision was
-// offline. Triggered by the health tracker's recovery callback — a heartbeat
-// after an unhealthy gap. New segments keep flowing through the event loop
-// concurrently; Vision dedups by X-Recording-Id, so overlap is harmless.
-func (c *Coordinator) compensateOffline() {
+// takePausedSince 兼容访问器:default 实例的暂停窗(旧测试用)。
+func (c *Coordinator) takePausedSince() time.Time {
+	if ins := c.defaultInstance(); ins != nil {
+		return c.takePausedSinceFor(ins.name)
+	}
+	return time.Time{}
+}
+
+func (c *Coordinator) markPaused() {
+	if ins := c.defaultInstance(); ins != nil {
+		c.markPausedFor(ins.name)
+	}
+}
+
+func (c *Coordinator) rearmPaused(since time.Time) {
+	if ins := c.defaultInstance(); ins != nil {
+		c.rearmPausedFor(ins.name, since)
+	}
+}
+
+// compensateOffline re-pushes segments that completed while ONE instance was
+// offline. Triggered by that instance's health tracker recovery callback.
+// The re-push routes through handleSegment, so every currently-routed healthy
+// instance receives it again — overlap with never-offline instances is
+// harmless (consumers dedup by X-Recording-Id) and keeps the single-code-path
+// property; the bandwidth cost is bounded by repushWindow.
+func (c *Coordinator) compensateOffline(name string) {
 	c.mu.Lock()
 	ctx := c.runCtx
 	c.mu.Unlock()
 	if ctx == nil || ctx.Err() != nil {
 		return
 	}
-	since := c.takePausedSince()
+	c.instMu.Lock()
+	ins := c.insts[name]
+	c.instMu.Unlock()
+	if ins == nil {
+		return
+	}
+	since := c.takePausedSinceFor(name)
 	if since.IsZero() || c.db == nil {
 		return
 	}
-	// Only one compensation run at a time (heartbeats can flap).
-	if !c.compensating.CompareAndSwap(false, true) {
-		c.rearmPaused(since)
+	// Only one compensation run per instance at a time (heartbeats can flap).
+	if !ins.compensating.CompareAndSwap(false, true) {
+		c.rearmPausedFor(name, since)
 		return
 	}
-	defer c.compensating.Store(false)
+	defer ins.compensating.Store(false)
 
 	if time.Since(since) > repushWindow {
 		since = time.Now().Add(-repushWindow)
@@ -402,15 +702,16 @@ func (c *Coordinator) compensateOffline() {
 
 	recs, err := c.db.ListRecordingsForVisionRepush(ctx, since, time.Now(), repushMax)
 	if err != nil {
-		c.rearmPaused(since)
-		slog.Warn("vision compensation lookup failed", "error", err)
+		c.rearmPausedFor(name, since)
+		slog.Warn("vision compensation lookup failed", "error", err, "instance", name)
 		return
 	}
 	if len(recs) == 0 {
-		slog.Debug("vision recovered — nothing to compensate")
+		slog.Debug("vision recovered — nothing to compensate", "instance", name)
 		return
 	}
 	slog.Info("vision recovered — re-pushing segments missed while offline",
+		"instance", name,
 		"count", len(recs), "since", since)
 
 	pushed := 0
@@ -418,11 +719,12 @@ func (c *Coordinator) compensateOffline() {
 		if ctx.Err() != nil {
 			return
 		}
-		if !c.health.IsHealthy() {
+		if !ins.health.IsHealthy() {
 			// Dropped again mid-compensation: restore the window so the next
 			// recovery retries the remainder.
-			c.rearmPaused(since)
+			c.rearmPausedFor(name, since)
 			slog.Warn("vision unhealthy during compensation — stopping early",
+				"instance", name,
 				"pushed", pushed, "total", len(recs))
 			return
 		}
@@ -431,7 +733,9 @@ func (c *Coordinator) compensateOffline() {
 		// Pace the burst so a long offline gap doesn't storm Vision.
 		time.Sleep(repushPacing)
 	}
-	slog.Info("vision offline compensation finished", "pushed", pushed, "window", time.Since(since).Round(time.Second))
+	slog.Info("vision offline compensation finished",
+		"instance", name,
+		"pushed", pushed, "window", time.Since(since).Round(time.Second))
 }
 
 // recordingToSegment synthesizes the push payload from a DB recording row.
