@@ -349,8 +349,16 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			db,
 			camMgr,
 		)
+		// 多实例路由:相机的 vision_targets(空 = 全部启用实例)。
+		deps.visionMgr.SetCameraTargets(func(cameraID string) []string {
+			if cam := camMgr.GetCameraConfig(cameraID); cam != nil {
+				return cam.VisionTargets
+			}
+			return nil
+		})
 		slog.Info("Vision push integration enabled",
 			"url", cfg.Vision.URL,
+			"instances", len(cfg.Vision.EffectiveInstances()),
 			"push_mode", cfg.Vision.PushMode,
 			"sub_layer_cameras", len(cfg.Vision.SubLayerCameras))
 	}

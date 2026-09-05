@@ -88,6 +88,24 @@ func validateConfigDetails(cfg *Config) error {
 	if p := cfg.Server.Discovery.UDP.Port; p < 0 || p > 65535 {
 		return fmt.Errorf("server.discovery.udp.port must be between 1 and 65535, got %d", p)
 	}
+	// Vision 多实例:名称唯一必填;URL 合法 http(s)(legacy url 字段为空的
+	// "default 合成"不算显式实例,跳过 URL 检查)。
+	visionNames := make(map[string]bool, len(cfg.Vision.Instances)+1)
+	for i, ins := range cfg.Vision.Instances {
+		if strings.TrimSpace(ins.Name) == "" {
+			return fmt.Errorf("vision.instances[%d].name is required", i)
+		}
+		if visionNames[ins.Name] {
+			return fmt.Errorf("vision.instances[%d] duplicate name %q", i, ins.Name)
+		}
+		visionNames[ins.Name] = true
+		u, uerr := url.Parse(ins.URL)
+		if uerr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("vision.instances[%d].url must be an http(s) URL, got %q", i, ins.URL)
+		}
+	}
+	// legacy 合成名 default 与显式实例同坐标系:相机可路由到 "default"。
+	visionNames["default"] = true
 	// cameras must have id and url
 	seen := make(map[string]int)
 	for i, c := range cfg.Cameras {
@@ -161,6 +179,13 @@ func validateConfigDetails(cfg *Config) error {
 		}
 
 		// Validate IP self-healing fields (stable_id + subnet_hints).
+		// 相机的 vision_targets 必须引用已定义实例——typo 会让该相机静默
+		// 失去推送路由。
+		for j, name := range c.VisionTargets {
+			if !visionNames[name] {
+				return fmt.Errorf("camera[%d].vision_targets[%d] references unknown vision instance %q", i, j, name)
+			}
+		}
 		// A non-empty stable_id that fails IsValidStableID (IP, URL, all-zero
 		// MAC — frozen in YAML by a prior firmware glitch, see #216) is logged
 		// as a WARNING, NOT a hard error. Hard-erroring would brick startup on

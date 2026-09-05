@@ -99,6 +99,9 @@ type CameraUpdate struct {
 	// Push-out relay targets (replace the whole list when set). nil = unchanged.
 	PushTargets       *[]config.PushTargetConfig
 	PushRetentionDays *int
+	// Vision instance routing (replace the whole list when set; empty = all
+	// enabled instances). nil = unchanged.
+	VisionTargets *[]string
 	// IP self-healing: stable hardware ID (ONVIF serial) + candidate subnets.
 	// nil = unchanged. Empty string/nil slice = clear.
 	StableID    *string

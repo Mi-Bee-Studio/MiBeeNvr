@@ -1085,12 +1085,42 @@ func (d *DB) ListZeroDurationRecordings(ctx context.Context, cameraID string, li
 // ai_processed_at. The list previously held only "done", which the handler
 // rejects, so ai_processed_at was NEVER stamped on successful processing.
 // Non-terminal statuses (pending/processing) leave it untouched.
+//
+// Multi-instance aggregate guard: with several vision consumers processing
+// the same recording, the single ai_status column must never regress —
+// writes are ranked (completed > skipped > failed > pending/processing/”)
+// and only land when their rank EXCEEDS the current one. A consumer retry
+// flow (failed → processing → completed) therefore shows "failed" until the
+// final "completed" lands, and one instance's completed result is never
+// clobbered by another's failed/skipped report.
 func (d *DB) UpdateRecordingAIStatus(ctx context.Context, id, status, errMsg string) error {
 	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+	rank := aiStatusRank(status)
+	const currentRank = `CASE COALESCE(ai_status,'') WHEN 'completed' THEN 3 WHEN 'skipped' THEN 2 WHEN 'failed' THEN 1 ELSE 0 END`
 	_, err := d.db.ExecContext(ctx,
-		`UPDATE recordings SET ai_status=?, ai_error=?, ai_processed_at=CASE WHEN ? IN ('completed','done','failed','skipped') THEN ? ELSE ai_processed_at END WHERE id=?;`,
-		status, errMsg, status, now, id)
+		`UPDATE recordings SET
+			ai_status = CASE WHEN ? >= (`+currentRank+`) THEN ? ELSE ai_status END,
+			ai_error = CASE WHEN ? >= (`+currentRank+`) THEN ? ELSE ai_error END,
+			ai_processed_at = CASE WHEN ? >= (`+currentRank+`) AND ? IN ('completed','done','failed','skipped') THEN ? ELSE ai_processed_at END
+		WHERE id=?;`,
+		rank, status,
+		rank, errMsg,
+		rank, status, now, id)
 	return err
+}
+
+// aiStatusRank maps an ai_status value to its aggregate precedence.
+func aiStatusRank(status string) int {
+	switch status {
+	case "completed":
+		return 3
+	case "skipped":
+		return 2
+	case "failed":
+		return 1
+	default: // pending / processing / ''
+		return 0
+	}
 }
 
 // GetRecordingAIStatus returns the AI processing status of a recording.

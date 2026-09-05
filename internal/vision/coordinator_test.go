@@ -412,7 +412,7 @@ func TestCoordinatorUploadContentLengthMatchesFile(t *testing.T) {
 		nil, nil,
 	)
 	// Deliberately lie in the event-derived size AND header, as tierrec did.
-	ok := c.uploadSegment(context.Background(), path, 30000, map[string]string{
+	ok := c.uploadSegment(context.Background(), visionSrv.URL, path, 30000, map[string]string{
 		"X-File-Size": "30000",
 		"X-Camera-Id": "cam-x",
 	})
@@ -420,4 +420,164 @@ func TestCoordinatorUploadContentLengthMatchesFile(t *testing.T) {
 	require.Equal(t, int64(len(payload)), got.contentLength, "Content-Length must be the on-disk size")
 	require.Equal(t, int64(len(payload)), got.bodyLen, "server must receive the whole file")
 	require.Equal(t, strconv.Itoa(len(payload)), got.headerSize, "X-File-Size must be corrected to the real size")
+}
+
+// ---- 多实例(vision.instances)----
+
+// 双实例扇出:一台相机(未配 vision_targets)的段推给全部启用实例;
+// 显式配置 vision_targets 的相机只推指定实例;一台实例离线不影响另一台。
+func TestCoordinatorMultiInstanceFanout(t *testing.T) {
+	var mu sync.Mutex
+	got := map[string]map[string]int{} // server -> recording id -> count
+	mkSrv := func(name string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			if got[name] == nil {
+				got[name] = map[string]int{}
+			}
+			got[name][r.Header.Get("X-Recording-Id")]++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		}))
+	}
+	srvA, srvB := mkSrv("a"), mkSrv("b")
+	defer srvA.Close()
+	defer srvB.Close()
+
+	enabled := true
+	bus := event.NewEventBus(64)
+	cfg := config.VisionConfig{
+		Enabled: true,
+		Instances: []config.VisionInstance{
+			{Name: "a", URL: srvA.URL, APIKeyName: "key-a"},
+			{Name: "b", URL: srvB.URL, APIKeyName: "key-b", Enabled: &enabled},
+		},
+	}
+	c := NewCoordinator(
+		func() config.VisionConfig { return cfg },
+		func() string { return t.TempDir() },
+		bus,
+		nil,
+		nil,
+	)
+	targets := map[string][]string{"cam-pinned": {"b"}}
+	c.SetCameraTargets(func(cameraID string) []string { return targets[cameraID] })
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(c.Stop)
+
+	// 心跳按 API key 名归因:两条 key 分别落到各自实例。
+	require.Equal(t, "a", c.RecordHeartbeat("key-a", HeartbeatStatus{Status: "healthy"}))
+	require.Equal(t, "b", c.RecordHeartbeat("key-b", HeartbeatStatus{Status: "healthy"}))
+
+	dir := t.TempDir()
+	publish := func(cam, rec string) {
+		p := filepath.Join(dir, rec+".mp4")
+		require.NoError(t, os.WriteFile(p, make([]byte, 8), 0o644))
+		bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+			CameraID: cam, FilePath: p, Format: "mp4",
+			FileSize: 8, RecordingID: rec,
+		})
+	}
+	publish("cam-broadcast", "rec-broadcast")
+	publish("cam-pinned", "rec-pinned")
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return got["a"]["rec-broadcast"] == 1 && got["b"]["rec-broadcast"] == 1 &&
+			got["a"]["rec-pinned"] == 0 && got["b"]["rec-pinned"] == 1
+	}, 5*time.Second, 50*time.Millisecond, "broadcast must reach both, pinned only b")
+
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, got["a"]["rec-broadcast"], "no duplicates to a")
+	require.Equal(t, 1, got["b"]["rec-broadcast"], "no duplicates to b")
+	require.NotContains(t, got["a"], "rec-pinned", "pinned camera must not reach a")
+}
+
+// 单实例故障隔离:b 离线(无心跳)时段只到 a;b 的暂停窗记账,恢复后补推。
+func TestCoordinatorMultiInstanceIsolation(t *testing.T) {
+	var mu sync.Mutex
+	count := map[string]int{}
+	mkSrv := func(name string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			count[name]++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		}))
+	}
+	srvA, srvB := mkSrv("a"), mkSrv("b")
+	defer srvA.Close()
+	defer srvB.Close()
+
+	bus := event.NewEventBus(64)
+	cfg := config.VisionConfig{
+		Enabled: true,
+		Instances: []config.VisionInstance{
+			{Name: "a", URL: srvA.URL},
+			{Name: "b", URL: srvB.URL},
+		},
+	}
+	c := NewCoordinator(
+		func() config.VisionConfig { return cfg },
+		func() string { return t.TempDir() },
+		bus,
+		nil,
+		nil,
+	)
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(c.Stop)
+
+	// 只有 a 健康(匿名心跳落 default=第一个实例)。
+	require.Equal(t, "a", c.RecordHeartbeat("", HeartbeatStatus{Status: "healthy"}))
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "seg.mp4")
+	require.NoError(t, os.WriteFile(p, make([]byte, 8), 0o644))
+	bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+		CameraID: "cam1", FilePath: p, Format: "mp4",
+		FileSize: 8, RecordingID: "rec-iso",
+	})
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return count["a"] == 1
+	}, 5*time.Second, 50*time.Millisecond, "healthy instance a must receive the push")
+
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	require.Zero(t, count["b"], "offline instance b must not be attempted")
+	mu.Unlock()
+
+	// 匿名心跳归因 default(第一个实例)——旧行为兼容。
+	// 指名 key 归因未配置 key 的实例也落 default。
+	require.Equal(t, "a", c.RecordHeartbeat("unknown-key", HeartbeatStatus{Status: "healthy"}))
+}
+
+// InstancesStatus 按配置顺序展开,含健康与 last_seen。
+func TestCoordinatorInstancesStatus(t *testing.T) {
+	cfg := config.VisionConfig{
+		Enabled: true,
+		URL:     "http://jetson:9091", // legacy → default
+	}
+	c := NewCoordinator(
+		func() config.VisionConfig { return cfg },
+		func() string { return t.TempDir() },
+		event.NewEventBus(8),
+		nil, nil,
+	)
+	st := c.InstancesStatus()
+	require.Len(t, st, 1)
+	require.Equal(t, "default", st[0].Name)
+	require.False(t, st[0].Healthy)
+	require.Nil(t, st[0].LastSeen, "no heartbeat yet — omit zero time")
+
+	c.RecordHeartbeat("", HeartbeatStatus{Status: "healthy", Device: "cuda"})
+	st = c.InstancesStatus()
+	require.True(t, st[0].Healthy)
+	require.NotNil(t, st[0].LastSeen)
+	require.Equal(t, "cuda", st[0].Device)
 }

@@ -241,7 +241,7 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // Also ensured via idempotent ALTER; pre-v34 rows carry -1 = "full weight".
 //
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "34"
+const currentSchemaVersion = "35"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -357,6 +357,7 @@ func (d *DB) Init(ctx context.Context) error {
 		bbox TEXT,
 		snapshot_path TEXT,
 		metadata TEXT,
+		source TEXT DEFAULT '',
 		created_at TEXT DEFAULT (datetime('now'))
 	)`
 	timelapseMergesSQL := `CREATE TABLE IF NOT EXISTS timelapse_merges (
@@ -575,6 +576,19 @@ func (d *DB) ensureRecordingsMotionColumns(ctx context.Context) error {
 		if _, err := d.db.ExecContext(ctx,
 			`ALTER TABLE recordings ADD COLUMN layer INTEGER DEFAULT 0`); err != nil {
 			return fmt.Errorf("add layer column: %w", err)
+		}
+	}
+	// v35: AI 事件来源实例(多 Vision 接入,事件按 API Key 名归因;空=旧数据/匿名)。
+	var aiSourceColExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('ai_events') WHERE name='source'`,
+	).Scan(&aiSourceColExists); err != nil {
+		return fmt.Errorf("check ai_events.source column: %w", err)
+	}
+	if aiSourceColExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE ai_events ADD COLUMN source TEXT DEFAULT ''`); err != nil {
+			return fmt.Errorf("add ai_events.source column: %w", err)
 		}
 	}
 	return nil

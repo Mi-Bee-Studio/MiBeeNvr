@@ -6,12 +6,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/go-chi/chi/v5"
 )
 
 // registerVisionPublicRoutes 注册无需认证的 Vision 端点(与 SSE 一样在 public 组)。
 // 心跳是 Vision 的"我在"信号,不应要求 BasicAuth(Vision 只有 API Key)。
+// 若请求恰好携带了 API Key(心跳 v2 客户端都会带),则用于多实例归因。
 func (h *Handler) registerVisionPublicRoutes(r chi.Router) {
 	r.Post("/api/vision/heartbeat", h.handleVisionHeartbeat)
 }
@@ -22,9 +24,12 @@ func (h *Handler) registerVisionRoutes(r chi.Router) {
 	r.Get("/api/vision/metrics", h.handleVisionMetrics)
 }
 
-// handleVisionHeartbeat 接收 MiBeeVision 的心跳报告。
-// Vision 每 30 秒 POST 一次,NVR 据此判断 Vision 是否健康。
-// 只有健康的 Vision 才会收到段推送。
+// handleVisionHeartbeat 接收 MiBeeVision 实例的心跳报告。
+// Vision 每 30 秒 POST 一次,NVR 据此判断实例是否健康。
+// 只有健康的实例才会收到段推送。
+//
+// 多实例归因:请求携带的 Bearer API Key 名匹配 vision.instances[].api_key_name
+// 时心跳记到该实例;匿名/未匹配落到 default 实例(兼容旧版单实例部署)。
 //
 // 心跳 v2 (#671) 增加两个可选块(旧版本消费者不带,完全向后兼容):
 //   - drops:批量丢弃报告(压缩范围)。收到即把受影响录像标记
@@ -55,7 +60,11 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.visionCoordinator.Health().RecordHeartbeat(vision.HeartbeatStatus{
+	keyName := ""
+	if middleware.IsAPIKeyAuthenticated(r.Context()) {
+		keyName = middleware.APIKeyNameFromContext(r.Context())
+	}
+	insName := h.visionCoordinator.RecordHeartbeat(keyName, vision.HeartbeatStatus{
 		Status:         body.Status,
 		Device:         body.Device,
 		QueueDepth:     body.QueueDepth,
@@ -67,12 +76,17 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 
 	resp := map[string]interface{}{
 		"ok":           true,
-		"push_enabled": h.visionCoordinator.Health().IsHealthy(),
+		"push_enabled": false,
+	}
+	if tracker, _ := h.visionCoordinator.InstanceByName(insName); tracker != nil {
+		resp["push_enabled"] = tracker.IsHealthy()
 	}
 	if body.Drops != nil {
 		if h.db != nil {
 			if marked := vision.ApplyDrops(r.Context(), h.db, body.Drops); marked > 0 {
-				h.visionCoordinator.Health().NoteMarkedDrops(marked)
+				if tracker, _ := h.visionCoordinator.InstanceByName(insName); tracker != nil {
+					tracker.NoteMarkedDrops(marked)
+				}
 			}
 		}
 		// ack = "已收到并消费这份报告"。即使个别范围数据坏掉被跳过,
@@ -83,7 +97,8 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleVisionStatus 返回 Vision 集成的当前状态(供 NVR Web UI 展示)。
-// 这个端点在 authMW 保护组内,只有登录用户可访问。
+// 顶层字段保持单实例时代的形状(= default 实例),多实例部署附加
+// instances[] 数组逐实例展开。
 func (h *Handler) handleVisionStatus(w http.ResponseWriter, r *http.Request) {
 	if h.visionCoordinator == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -100,6 +115,7 @@ func (h *Handler) handleVisionStatus(w http.ResponseWriter, r *http.Request) {
 		"queue_depth":  status.QueueDepth,
 		"processed":    status.ProcessedCount,
 		"skip_cameras": status.SkipCameras, // #515: 消费者声明的跳单(空=nil=全推)
+		"instances":    h.visionCoordinator.InstancesStatus(),
 	}
 	if status.Metrics != nil {
 		resp["metrics"] = status.Metrics
@@ -116,7 +132,7 @@ func (h *Handler) handleVisionStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleVisionMetrics 返回心跳历史采样环(内存,约 24h @ 30s),供仪表盘
-// 趋势图。?hours=1..168(默认 24)。
+// 趋势图。?hours=1..168(默认 24);?instance=NAME 指定实例(默认 default)。
 func (h *Handler) handleVisionMetrics(w http.ResponseWriter, r *http.Request) {
 	if h.visionCoordinator == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -139,10 +155,21 @@ func (h *Handler) handleVisionMetrics(w http.ResponseWriter, r *http.Request) {
 	if hours > 168 {
 		hours = 168
 	}
+	tracker, name := h.visionCoordinator.InstanceByName(r.URL.Query().Get("instance"))
+	if tracker == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"enabled":      true,
+			"instance":     "",
+			"points":       []vision.VisionSample{},
+			"marked_total": 0,
+		})
+		return
+	}
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"enabled":      true,
-		"points":       h.visionCoordinator.Health().MetricsHistory(since),
-		"marked_total": h.visionCoordinator.Health().MarkedDropTotal(),
+		"instance":     name,
+		"points":       tracker.MetricsHistory(since),
+		"marked_total": tracker.MarkedDropTotal(),
 	})
 }

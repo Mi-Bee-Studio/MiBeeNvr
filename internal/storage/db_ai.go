@@ -24,18 +24,19 @@ type AIEvent struct {
 	BBox           string  `json:"bbox,omitempty"` // JSON array [x1,y1,x2,y2] normalized
 	SnapshotPath   string  `json:"snapshot_path,omitempty"`
 	Metadata       string  `json:"metadata,omitempty"` // JSON
+	Source         string  `json:"source,omitempty"`   // 写入方 API Key 名(多 Vision 实例归因;空=旧数据/匿名)
 	CreatedAt      string  `json:"created_at"`
 }
 
 // InsertAIEvent stores a new AI event from MiBeeVision.
 func (d *DB) InsertAIEvent(ctx context.Context, e *AIEvent) (int64, error) {
-	q := `INSERT INTO ai_events (camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+	q := `INSERT INTO ai_events (camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	result, err := d.db.ExecContext(
 		ctx, q,
 		e.CameraID, e.RecordingID, e.EventType, e.Severity,
 		e.ZoneName, e.ClassName, e.Confidence, e.FrameIdx,
-		e.FrameTimestamp, e.BBox, e.SnapshotPath, e.Metadata,
+		e.FrameTimestamp, e.BBox, e.SnapshotPath, e.Metadata, e.Source,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert ai event: %w", err)
@@ -53,6 +54,7 @@ type AIEventFilter struct {
 	CameraID    string
 	RecordingID string // filter by recording_id (used by merge migration tests + NVR UI)
 	EventType   string
+	Source      string     // filter by writer instance (API key name, v35)
 	StartTime   *time.Time // inclusive lower bound on created_at
 	EndTime     *time.Time // inclusive upper bound on created_at
 	AscOrder    bool       // order by created_at ASC (for timeline overlay)
@@ -87,6 +89,10 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 		where = append(where, "event_type = ?")
 		args = append(args, f.EventType)
 	}
+	if f.Source != "" {
+		where = append(where, "source = ?")
+		args = append(args, f.Source)
+	}
 	if f.StartTime != nil {
 		where = append(where, "created_at >= ?")
 		args = append(args, f.StartTime.Format("2006-01-02 15:04:05.999999999"))
@@ -114,7 +120,7 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 	}
 
 	// Data
-	dataQ := `SELECT id, camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, created_at
+	dataQ := `SELECT id, camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, source, created_at
 		FROM ai_events` + whereClause + orderClause + ` LIMIT ? OFFSET ?`
 	rows, err := d.readConn().QueryContext(ctx, dataQ, append(args, f.Limit, f.Offset)...)
 	if err != nil {
@@ -125,10 +131,10 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 	var events []AIEvent
 	for rows.Next() {
 		var e AIEvent
-		var recordingID, zoneName, className, frameTS, bbox, snapshotPath, metadata sql.NullString
+		var recordingID, zoneName, className, frameTS, bbox, snapshotPath, metadata, source sql.NullString
 		if err := rows.Scan(&e.ID, &e.CameraID, &recordingID, &e.EventType, &e.Severity,
 			&zoneName, &className, &e.Confidence, &e.FrameIdx, &frameTS,
-			&bbox, &snapshotPath, &metadata, &e.CreatedAt); err != nil {
+			&bbox, &snapshotPath, &metadata, &source, &e.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		e.RecordingID = recordingID.String
@@ -138,6 +144,7 @@ func (d *DB) ListAIEvents(ctx context.Context, f AIEventFilter) ([]AIEvent, int,
 		e.BBox = bbox.String
 		e.SnapshotPath = snapshotPath.String
 		e.Metadata = metadata.String
+		e.Source = source.String
 		e.CreatedAt = aiCreatedAtToRFC3339(e.CreatedAt)
 		events = append(events, e)
 	}
@@ -166,14 +173,14 @@ func aiCreatedAtToRFC3339(s string) string {
 
 // GetAIEvent returns a single AI event by ID.
 func (d *DB) GetAIEvent(ctx context.Context, id int64) (*AIEvent, error) {
-	q := `SELECT id, camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, created_at
+	q := `SELECT id, camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, source, created_at
 		FROM ai_events WHERE id = ?`
 	row := d.readConn().QueryRowContext(ctx, q, id)
 	var e AIEvent
-	var recordingID, zoneName, className, frameTS, bbox, snapshotPath, metadata sql.NullString
+	var recordingID, zoneName, className, frameTS, bbox, snapshotPath, metadata, source sql.NullString
 	err := row.Scan(&e.ID, &e.CameraID, &recordingID, &e.EventType, &e.Severity,
 		&zoneName, &className, &e.Confidence, &e.FrameIdx, &frameTS,
-		&bbox, &snapshotPath, &metadata, &e.CreatedAt)
+		&bbox, &snapshotPath, &metadata, &source, &e.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -187,6 +194,7 @@ func (d *DB) GetAIEvent(ctx context.Context, id int64) (*AIEvent, error) {
 	e.BBox = bbox.String
 	e.SnapshotPath = snapshotPath.String
 	e.Metadata = metadata.String
+	e.Source = source.String
 	e.CreatedAt = aiCreatedAtToRFC3339(e.CreatedAt)
 	return &e, nil
 }

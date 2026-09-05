@@ -15,7 +15,15 @@ type VisionConfig struct {
 
 	// URL Vision 服务的基地址,如 "http://192.168.63.110:9091"。
 	// NVR 将 POST 到 {URL}/vision/segment/notify。
+	//
+	// 多实例部署时此字段退化为兼容显示字段,实际推送目标以 instances 为准;
+	// instances 为空且 URL 非空时,运行时合成为名为 "default" 的单实例。
 	URL string `yaml:"url" json:"url"`
+
+	// Instances 多个 Vision 消费端实例。每个实例独立的地址/身份/启停;
+	// 相机可通过 camera.vision_targets 选择接哪些实例(空=全部启用实例)。
+	// 不同实例可挂不同模型配置,实现按场景分流分析。
+	Instances []VisionInstance `yaml:"instances,omitempty" json:"instances,omitempty"`
 
 	// HeartbeatTimeoutSecs 心跳超时(秒)。超过此时间未收到 Vision 心跳,
 	// NVR 认为 Vision 不健康,暂停推送。默认 60。
@@ -60,6 +68,71 @@ type VisionConfig struct {
 	// 正式录像库的 layer=1 行,非 #537 的临时 sublayer 目录)。skip_cameras
 	// 优先于此列表。
 	TieredCameras []string `yaml:"tiered_cameras" json:"tieredCameras"`
+}
+
+// VisionInstance 一个 Vision 消费端实例的接入描述。
+type VisionInstance struct {
+	// Name 实例名(稳定标识,相机 vision_targets 引用它;唯一)。
+	Name string `yaml:"name" json:"name"`
+
+	// URL 实例基地址,NVR POST 到 {URL}/vision/segment/upload。
+	URL string `yaml:"url" json:"url"`
+
+	// APIKeyName 关联的 API Key 名(可选)。心跳/事件/ai_status 回传携带
+	// 该 key 时,NVR 据此把回传归因到本实例。缺省时回传归因到 default 实例。
+	APIKeyName string `yaml:"api_key_name,omitempty" json:"apiKeyName,omitempty"`
+
+	// Enabled 是否参与推送(nil/true=启用)。禁用的实例保留配置但不出现在
+	// 路由目标中。
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+// EnabledOrDefault 报告实例是否启用(nil 视为启用,兼容省略写法)。
+func (i VisionInstance) EnabledOrDefault() bool {
+	return i.Enabled == nil || *i.Enabled
+}
+
+// EffectiveInstances 返回生效的实例列表(保持配置顺序)。
+// instances 为空时合成单实例 "default"(URL 取 legacy 字段,可为空——
+// "Vision 先部署、NVR 还没配地址"的阶段心跳仍可记录,推送自然空转):
+// 现有单实例部署零变化。instances 与 URL 同时配置时 instances 优先。
+func (v VisionConfig) EffectiveInstances() []VisionInstance {
+	if len(v.Instances) > 0 {
+		return v.Instances
+	}
+	return []VisionInstance{{Name: "default", URL: v.URL}}
+}
+
+// EnabledInstances 返回启用中的实例(EffectiveInstances 过滤 enabled)。
+func (v VisionConfig) EnabledInstances() []VisionInstance {
+	all := v.EffectiveInstances()
+	out := make([]VisionInstance, 0, len(all))
+	for _, ins := range all {
+		if ins.EnabledOrDefault() {
+			out = append(out, ins)
+		}
+	}
+	return out
+}
+
+// RouteFor 解析一台相机的推送目标实例。cameraTargets 为空 → 全部启用实例
+// (默认广播,单实例部署即"推给唯一实例");非空 → 按其顺序返回已知且启用的
+// 实例(未知名称忽略——配置校验层负责提前 400,运行时容错防 typo 瘫痪)。
+func (v VisionConfig) RouteFor(cameraTargets []string) []VisionInstance {
+	if len(cameraTargets) == 0 {
+		return v.EnabledInstances()
+	}
+	byName := make(map[string]VisionInstance, len(v.Instances)+1)
+	for _, ins := range v.EffectiveInstances() {
+		byName[ins.Name] = ins
+	}
+	out := make([]VisionInstance, 0, len(cameraTargets))
+	for _, name := range cameraTargets {
+		if ins, ok := byName[name]; ok && ins.EnabledOrDefault() {
+			out = append(out, ins)
+		}
+	}
+	return out
 }
 
 // ShouldSkipCamera 报告 camera_id 是否在 SkipCameras 列表中。

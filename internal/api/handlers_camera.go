@@ -398,6 +398,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// Push-out relay targets (replace whole list) + retention
 		PushTargets       *[]config.PushTargetConfig `json:"push_targets"`
 		PushRetentionDays *int                       `json:"push_retention_days"`
+		// Vision instance routing (replace whole list; empty = all enabled
+		// instances). Unknown names are rejected with a 400.
+		VisionTargets *[]string `json:"vision_targets"`
 		// IP self-healing: stable hardware ID (ONVIF serial) + candidate subnets.
 		StableID    *string   `json:"stable_id"`
 		SubnetHints *[]string `json:"subnet_hints"`
@@ -413,6 +416,22 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		!strings.HasPrefix(*body.SubStreamURL, "rtsp://") && !strings.HasPrefix(*body.SubStreamURL, "rtsps://") {
 		WriteError(w, http.StatusBadRequest, "sub_stream_url must be an rtsp:// or rtsps:// URL")
 		return
+	}
+
+	// vision_targets must reference existing vision instances — a typo would
+	// silently route the camera nowhere (empty resolved route), so reject it.
+	if body.VisionTargets != nil && h.config != nil {
+		known := make(map[string]bool, len(h.config.Vision.Instances)+1)
+		for _, ins := range h.config.Vision.EffectiveInstances() {
+			known[ins.Name] = true
+		}
+		for _, name := range *body.VisionTargets {
+			if !known[name] {
+				WriteError(w, http.StatusBadRequest,
+					"vision_targets references unknown vision instance: "+name)
+				return
+			}
+		}
 	}
 
 	// Reject a dirty stable_id at the API boundary (see #216). nil/empty means
@@ -482,6 +501,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		SRTStreamID:            body.SRTStreamID,
 		PushTargets:            body.PushTargets,
 		PushRetentionDays:      body.PushRetentionDays,
+		VisionTargets:          body.VisionTargets,
 		GB28181:                body.GB28181.toConfigPtr(),
 	}
 
