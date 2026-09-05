@@ -74,6 +74,7 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.SRTPassphrase = cam.SRTPassphrase
 		row.SRTStreamID = cam.SRTStreamID
 		row.PushTargets = cam.PushTargets
+		row.VisionTargets = cam.VisionTargets
 		row.PushRetentionDays = cam.PushRetentionDays
 		row.StableID = cam.StableID
 		row.SubnetHints = cam.SubnetHints

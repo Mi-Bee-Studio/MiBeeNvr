@@ -59,6 +59,7 @@ type CameraRow struct {
 	SRTStreamID   string `json:"srt_stream_id,omitempty"`
 	// Push-out relay targets + retention, injected from YAML at API response time.
 	PushTargets       []config.PushTargetConfig `json:"push_targets,omitempty"`
+	VisionTargets     []string                  `json:"vision_targets,omitempty"`
 	PushRetentionDays *int                      `json:"push_retention_days,omitempty"`
 	// StableID is the ONVIF serial number used for IP self-healing.
 	// Persisted in DB via UpsertCamera / UpdateCameraStableID.
