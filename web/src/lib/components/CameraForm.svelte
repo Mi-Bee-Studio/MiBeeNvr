@@ -17,6 +17,7 @@
         getCameraStorageRoot,
         setCameraStorageRoot,
         getStorageMigrateStatus,
+        getSettings,
     } from '$lib/api';
     import type {
         Camera,
@@ -36,7 +37,7 @@
         CameraAudioTriggerConfig,
         CameraPixgateConfig,
     } from '$lib/api';
-    import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy, Layers } from 'lucide-svelte';
+    import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy, Layers, Brain } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
     import { showToast } from '$lib/toast';
     import { copyText } from '$lib/clipboard';
@@ -156,6 +157,23 @@
   let formPushRetentionDays = $state<number | null>(null);
   // Push-out relay targets
   let formPushTargets = $state<PushTargetConfig[]>([]);
+  // Vision instance routing: which analysis consumers receive this camera's
+  // recordings. Empty selection = all enabled instances.
+  let formVisionTargets = $state<string[]>([]);
+  let visionInstanceOptions = $state<Array<{ name: string; enabled: boolean }>>([]);
+
+  async function loadVisionInstanceOptions() {
+    try {
+      const settings = await getSettings();
+      const instances = settings.vision?.instances;
+      visionInstanceOptions = instances?.length
+        ? instances.map((i) => ({ name: i.name, enabled: i.enabled ?? true }))
+        // Legacy single-instance deployment: the implicit "default" instance.
+        : [{ name: 'default', enabled: true }];
+    } catch {
+      visionInstanceOptions = [];
+    }
+  }
   // Push-out live status (fetched when editing)
   let pushStatus = $state<PushTargetStatusType[]>([]);
   let pushStatusTimer: ReturnType<typeof setInterval> | null = null;
@@ -214,6 +232,7 @@ let validationErrors = $state<Record<string, string>>({});
 
   // Populate form when editingCamera changes
   $effect(() => {
+    loadVisionInstanceOptions();
     if (editingCamera) {
       populateForm(editingCamera);
       loadMergeConfig(editingCamera.id);
@@ -309,6 +328,7 @@ let validationErrors = $state<Record<string, string>>({});
     formPushRetentionDays = null;
     formPushTargets = [];
     pushStatus = [];
+    formVisionTargets = [];
   }
 
   async function loadCameraStorage(cameraId: string) {
@@ -443,6 +463,7 @@ let validationErrors = $state<Record<string, string>>({});
     formGB28181ChannelID = camera.gb28181?.channel_id || '';
     formPushRetentionDays = camera.push_retention_days ?? null;
     formPushTargets = (camera.push_targets ?? []).map((p) => ({ ...p }));
+    formVisionTargets = camera.vision_targets ? [...camera.vision_targets] : [];
     // Start polling push-out status while editing (only if there are targets).
     startPushStatusPolling(camera.id);
   }
@@ -481,6 +502,12 @@ let validationErrors = $state<Record<string, string>>({});
   function removePushTarget(id: string) {
     formPushTargets = formPushTargets.filter((t) => t.id !== id);
   }
+  function toggleVisionTarget(name: string, checked: boolean) {
+    formVisionTargets = checked
+      ? [...new Set([...formVisionTargets, name])]
+      : formVisionTargets.filter((n) => n !== name);
+  }
+
   function updatePushTarget(id: string, patch: Partial<PushTargetConfig>) {
     formPushTargets = formPushTargets.map((t) => (t.id === id ? { ...t, ...patch } : t));
   }
@@ -785,6 +812,7 @@ async function performCameraSave() {
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
             gb28181: formProtocol === 'gb28181' ? { device_id: formGB28181DeviceID, channel_id: formGB28181ChannelID } : undefined,
             push_targets: formPushTargets.length > 0 ? formPushTargets : [],
+            vision_targets: formVisionTargets,
             push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp' || formProtocol === 'whip') ? formPushRetentionDays : undefined,
             dark_frame_filter_enabled: formDarkFrameFilterEnabled,
             dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
@@ -857,6 +885,7 @@ async function performCameraSave() {
             srt_stream_id: formProtocol === 'srt' ? (formSRTStreamID || undefined) : undefined,
             gb28181: formProtocol === 'gb28181' ? { device_id: formGB28181DeviceID, channel_id: formGB28181ChannelID } : undefined,
             push_targets: formPushTargets.length > 0 ? formPushTargets : undefined,
+            vision_targets: formVisionTargets,
             push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp' || formProtocol === 'whip') ? formPushRetentionDays : undefined,
             dark_frame_filter_enabled: formDarkFrameFilterEnabled,
             dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
@@ -1447,6 +1476,41 @@ async function performCameraSave() {
             <p class="text-xs th-text-muted mt-1">{t('cameras.subProfileTokenHint')}</p>
           </div>
           {/if}
+        </div>
+      </details>
+    </div>
+    {/if}
+
+    <!-- AI analysis routing: which vision consumer instances receive this
+         camera's recordings. No selection = all enabled instances. -->
+    {#if visionInstanceOptions.length > 0}
+    <div class="md:col-span-2">
+      <details class="rounded-md border th-border">
+        <summary class="cursor-pointer p-3 flex items-center gap-2 th-bg-hover">
+          <Brain size={16} class="th-text-secondary" />
+          <span class="font-medium th-text-primary">{t('cameras.visionRoutingTitle')}</span>
+          {#if formVisionTargets.length > 0}
+            <span class="text-xs px-2 py-0.5 rounded-full th-bg-muted th-text-secondary">{formVisionTargets.length}</span>
+          {:else}
+            <span class="text-xs px-2 py-0.5 rounded-full th-bg-muted th-text-secondary">{t('cameras.visionRoutingAll')}</span>
+          {/if}
+        </summary>
+        <div class="p-3 border-t th-border space-y-2">
+          <p class="text-xs th-text-muted">{t('cameras.visionRoutingHint')}</p>
+          {#each visionInstanceOptions as ins (ins.name)}
+            <label class="flex items-center gap-2 text-sm th-text-primary cursor-pointer" data-testid="vision-target-{ins.name}">
+              <input
+                type="checkbox"
+                class="checkbox"
+                checked={formVisionTargets.includes(ins.name)}
+                onchange={(e) => toggleVisionTarget(ins.name, (e.currentTarget as HTMLInputElement).checked)}
+              />
+              <span>{ins.name}</span>
+              {#if !ins.enabled}
+                <span class="badge badge-warning ml-1">{t('cameras.visionRoutingDisabled')}</span>
+              {/if}
+            </label>
+          {/each}
         </div>
       </details>
     </div>

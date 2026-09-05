@@ -21,6 +21,8 @@ export interface AIEvent {
   bbox?: string; // JSON array [x1,y1,x2,y2]
   snapshot_path?: string;
   metadata?: string;
+  /** Writer instance (API key name) — multi-instance attribution; empty = legacy/anonymous. */
+  source?: string;
   created_at: string;
 }
 
@@ -45,6 +47,7 @@ export interface AIEventStatsResponse {
 export interface AIEventFilter {
   camera_id?: string;
   event_type?: string;
+  source?: string;
   start?: string;
   end?: string;
   asc?: boolean;
@@ -56,6 +59,7 @@ export async function listAIEvents(filter: AIEventFilter = {}): Promise<AIEventL
   const params = new URLSearchParams();
   if (filter.camera_id) params.set('camera_id', filter.camera_id);
   if (filter.event_type) params.set('event_type', filter.event_type);
+  if (filter.source) params.set('source', filter.source);
   if (filter.start) params.set('start', filter.start);
   if (filter.end) params.set('end', filter.end);
   if (filter.asc) params.set('asc', 'true');

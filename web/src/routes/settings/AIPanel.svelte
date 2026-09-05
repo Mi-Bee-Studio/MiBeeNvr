@@ -2,8 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { getAiSettings, saveAiSettings, detectAiBackend, listCameras, getAiStatus, updateAiConfig, listAiModels } from '$lib/api';
   import { getPerCameraAiSettings, savePerCameraAiSettings, getAIZones, createAIZone, deleteAIZone } from '$lib/api';
-  import { getSettings, generateAPIKey, revokeAPIKey, getVisionStatus } from '$lib/api';
-  import type { VisionStatus } from '$lib/api';
+  import { getSettings, generateAPIKey, revokeAPIKey, getVisionStatus, updateVisionSettings } from '$lib/api';
+  import type { VisionStatus, VisionInstanceConfig, VisionSettingsConfig } from '$lib/api';
   import { refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
   import { formatRelativeTime } from '$lib/format';
   import type { Camera, Zone, PerCameraAiState, AiModelInfo } from '$lib/api';
@@ -79,6 +79,41 @@
     }
   }
 
+  // Vision consumer instances (multi-instance routing): editable list saved
+  // through PUT /settings {vision.instances} (whole-table replace).
+  let visionInstances = $state<VisionInstanceConfig[]>([]);
+  let originalVisionInstances: string = '[]';
+  let visionInstancesLoaded = $state(false);
+
+  function loadVisionInstances(settings: { vision?: VisionSettingsConfig }) {
+    visionInstances = (settings.vision?.instances ?? []).map((i) => ({ ...i }));
+    originalVisionInstances = JSON.stringify(visionInstances);
+    visionInstancesLoaded = true;
+  }
+
+  const visionInstancesDirty = $derived(
+    visionInstancesLoaded && JSON.stringify(visionInstances) !== originalVisionInstances
+  );
+
+  function addVisionInstance() {
+    visionInstances = [
+      ...visionInstances,
+      { name: '', url: 'http://', api_key_name: '', enabled: true },
+    ];
+  }
+
+  function removeVisionInstance(idx: number) {
+    visionInstances = visionInstances.filter((_, i) => i !== idx);
+  }
+
+  function updateVisionInstance(idx: number, patch: Partial<VisionInstanceConfig>) {
+    visionInstances = visionInstances.map((ins, i) => (i === idx ? { ...ins, ...patch } : ins));
+  }
+
+  // Per-instance health dot source (from the polled status).
+  const instanceHealth = (name: string): boolean | undefined =>
+    visionStatus?.instances?.find((i) => i.name === name)?.healthy;
+
   // Compare two enabled-classes values for isDirty (order-insensitive).
   function classesEqual(a: string[] | null, b: string[] | null): boolean {
     if (!a && !b) return true;
@@ -96,7 +131,8 @@
       aiEmaAlpha !== originalEmaAlpha ||
       aiMaxAge !== originalMaxAge ||
       !classesEqual(aiEnabledClasses, originalEnabledClasses) ||
-      aiModelUrl !== originalModelUrl
+      aiModelUrl !== originalModelUrl ||
+      visionInstancesDirty
     )
   );
 
@@ -144,6 +180,19 @@
   }
 
   async function performSave() {
+    if (visionInstancesDirty) {
+      // Whole-table replace; the backend rejects unknown/duplicate names and
+      // instances still referenced by camera routing (400 with detail).
+      const cleaned = visionInstances.map((i) => ({
+        name: i.name.trim(),
+        url: i.url.trim(),
+        api_key_name: i.api_key_name?.trim() || undefined,
+        enabled: i.enabled ?? true,
+      }));
+      await updateVisionSettings({ instances: cleaned });
+      visionInstances = cleaned.map((i) => ({ ...i }));
+      originalVisionInstances = JSON.stringify(visionInstances);
+    }
     await updateAiConfig({
       enabled: aiEnabled,
       confidence_threshold: aiConfidenceThreshold,
@@ -173,6 +222,7 @@
   }
 
   function resetForm() {
+    visionInstances = JSON.parse(originalVisionInstances) as VisionInstanceConfig[];
     aiEnabled = originalAiEnabled;
     aiConfidenceThreshold = originalConfidence;
     aiFrameSkip = originalFrameSkip;
@@ -187,6 +237,7 @@
     mibeeVisionLoading = true;
     try {
       const settings = await getSettings();
+      loadVisionInstances(settings);
       const cfg = settings.mibeevision;
       if (cfg && cfg.api_keys) {
         mibeeVisionKeys = cfg.api_keys.map((k) => ({
@@ -660,6 +711,72 @@
           {/if}
         </div>
       {/if}
+
+      <!-- Consumer instances (multi-instance routing): each row is one
+           external consumer with its own address + API key identity. Empty
+           per-camera routing = all enabled instances. -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-medium th-text-primary">{t('settings.mibeevision.instances.title')}</span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick={addVisionInstance}>
+            <Plus size={14} />
+            {t('settings.mibeevision.instances.add')}
+          </button>
+        </div>
+        <p class="text-xs th-text-tertiary">{t('settings.mibeevision.instances.hint')}</p>
+        {#if visionInstances.length === 0}
+          <p class="text-xs th-text-tertiary">{t('settings.mibeevision.instances.empty')}</p>
+        {:else}
+          <div class="space-y-2">
+            {#each visionInstances as ins, idx (idx)}
+              <div class="p-3 rounded-md border th-border grid grid-cols-1 md:grid-cols-[1fr_2fr_1fr_auto_auto] gap-2 items-center">
+                <input
+                  type="text"
+                  class="input"
+                  placeholder={t('settings.mibeevision.instances.name')}
+                  bind:value={ins.name}
+                  onchange={() => updateVisionInstance(idx, { name: ins.name })}
+                  data-testid="vision-instance-name-{idx}"
+                />
+                <input
+                  type="text"
+                  class="input"
+                  placeholder={t('settings.mibeevision.instances.url')}
+                  bind:value={ins.url}
+                  onchange={() => updateVisionInstance(idx, { url: ins.url })}
+                  data-testid="vision-instance-url-{idx}"
+                />
+                <select
+                  class="input"
+                  bind:value={ins.api_key_name}
+                  onchange={() => updateVisionInstance(idx, { api_key_name: ins.api_key_name })}
+                  aria-label={t('settings.mibeevision.instances.apiKey')}
+                >
+                  <option value="">{t('settings.mibeevision.instances.noKey')}</option>
+                  {#each mibeeVisionKeys.filter((k) => !k.revoked) as key (key.name)}
+                    <option value={key.name}>{key.name}</option>
+                  {/each}
+                </select>
+                <label class="flex items-center gap-1 text-xs th-text-secondary cursor-pointer">
+                  <input type="checkbox" class="checkbox" bind:checked={ins.enabled} />
+                  {t('settings.mibeevision.instances.enabled')}
+                </label>
+                <div class="flex items-center gap-2">
+                  {#if instanceHealth(ins.name) !== undefined}
+                    <span
+                      class="inline-block h-2.5 w-2.5 rounded-full {instanceHealth(ins.name) ? 'bg-green-500' : 'bg-red-500'}"
+                      title={instanceHealth(ins.name) ? t('settings.mibeevision.consumerOnline') : t('settings.mibeevision.consumerOffline')}
+                    ></span>
+                  {/if}
+                  <button type="button" class="btn btn-ghost btn-sm th-color-danger" onclick={() => removeVisionInstance(idx)}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
 
       <!-- Generate new key -->
       <div class="flex gap-2">

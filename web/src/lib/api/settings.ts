@@ -79,11 +79,32 @@ export interface MiBeeVisionConfig {
   }>;
 }
 
+/** One vision consumer instance (multi-instance routing). */
+export interface VisionInstanceConfig {
+  name: string;
+  url: string;
+  /** API key name used to attribute heartbeats/events/ai_status reports. */
+  api_key_name?: string;
+  /** undefined = enabled (omitted in YAML round-trips). */
+  enabled?: boolean;
+}
+
+/** The `vision` settings section (push integration). */
+export interface VisionSettingsConfig {
+  enabled?: boolean;
+  /** Legacy single-consumer URL; becomes the implicit instance "default". */
+  url?: string;
+  push_mode?: string;
+  heartbeat_timeout_secs?: number;
+  instances?: VisionInstanceConfig[];
+}
+
 export interface SettingsConfig {
   cleanup: CleanupConfig;
   webdav: WebDAVConfig;
   streaming?: StreamingConfig;
   mibeevision?: MiBeeVisionConfig;
+  vision?: VisionSettingsConfig;
   gb28181?: GB28181Config;
   timezone?: string; // "Local", "UTC", or IANA timezone name
   timezone_display?: string; // Human-readable timezone label (e.g. "Asia/Shanghai (UTC+8)")
@@ -431,10 +452,38 @@ export interface VisionStatus {
   metrics?: VisionMetrics;
   /** Recordings marked ai_status='skipped' from consumer drop reports. */
   drops_marked_total?: number;
+  /** Per-instance runtime state (multi-instance); always ≥1 entry ("default"). */
+  instances?: VisionInstanceStatus[];
+}
+
+/** One instance's status block inside GET /api/vision/status. */
+export interface VisionInstanceStatus {
+  name: string;
+  url: string;
+  healthy: boolean;
+  last_seen?: string;
+  device?: string;
+  queue_depth?: number;
+  processed?: number;
+  skip_cameras?: string[];
+  metrics?: VisionMetrics;
+  drops_marked_total?: number;
 }
 
 export async function getVisionStatus(signal?: AbortSignal): Promise<VisionStatus> {
   return apiRequest<VisionStatus>('/vision/status', { signal });
+}
+
+/** PUT /settings {vision} — partial update (nil fields unchanged). */
+export async function updateVisionSettings(
+  config: VisionSettingsConfig,
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>('/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ vision: config }),
+    signal,
+  });
 }
 
 // One heartbeat sample in the in-memory history ring (#671) — the data source
@@ -451,11 +500,14 @@ export interface VisionSample {
 
 export interface VisionMetricsResponse {
   enabled: boolean;
+  instance?: string;
   points: VisionSample[];
   marked_total: number;
 }
 
-/** GET /api/vision/metrics?hours= — heartbeat history ring (~24h @ 30s). */
-export async function getVisionMetrics(hours = 24, signal?: AbortSignal): Promise<VisionMetricsResponse> {
-  return apiRequest<VisionMetricsResponse>(`/vision/metrics?hours=${hours}`, { signal });
+/** GET /api/vision/metrics?hours=[&instance=] — heartbeat history ring (~24h @ 30s). */
+export async function getVisionMetrics(hours = 24, instance?: string, signal?: AbortSignal): Promise<VisionMetricsResponse> {
+  const q = new URLSearchParams({ hours: String(hours) });
+  if (instance) q.set('instance', instance);
+  return apiRequest<VisionMetricsResponse>(`/vision/metrics?${q.toString()}`, { signal });
 }

@@ -49,13 +49,21 @@ type Repusher interface {
 // instance 是一个 Vision 消费端实例的运行时状态。配置变化时按 name 对账
 // 保留(心跳历史/暂停窗跨配置编辑存活)。
 type instance struct {
-	name       string
-	url        string
-	apiKeyName string
-	health     *HealthTracker
-	// pausedSince 是该实例的推送暂停窗口起点(Coordinator.mu 保护;零值=未暂停)。
-	pausedSince  time.Time
+	// name 创建后不变;url/apiKeyName 由 reconcile 在 instMu 内写、路由快照
+	// (routedInstances) 同锁内拷贝读取——推路径只见不可变值拷贝。
+	name         string
+	url          string
+	apiKeyName   string
+	health       *HealthTracker
 	compensating atomic.Bool // 该实例的补偿重推 single-flight
+}
+
+// routeTarget 是推送路径使用的实例快照(值类型,字段在 instMu 内复制——
+// 与 reconcile 的字段写不竞态)。
+type routeTarget struct {
+	name   string
+	url    string
+	health *HealthTracker
 }
 
 // Coordinator 订阅 segment.completed 事件,把视频文件推送给路由命中的各个
@@ -76,6 +84,8 @@ type Coordinator struct {
 	instMu sync.Mutex
 	insts  map[string]*instance
 	order  []string // 配置顺序的实例名
+	// paused 是各实例的推送暂停窗口起点(mu 保护;缺键=未暂停)。
+	paused map[string]time.Time
 	// subLayer 是子码流分析层 (#514)。nil(未接 provider)时整个层停用。
 	subLayer *SubLayerManager
 }
@@ -92,7 +102,8 @@ func NewCoordinator(cfg func() config.VisionConfig, storageRoot func() string, e
 		client: &http.Client{
 			Timeout: 120 * time.Second, // 大文件传输可能需要较长时间
 		},
-		insts: map[string]*instance{},
+		insts:  map[string]*instance{},
+		paused: map[string]time.Time{},
 	}
 	if provider != nil {
 		c.subLayer = NewSubLayerManager(provider, cfg, storageRoot, SubLayerDeps{
@@ -214,7 +225,7 @@ func (c *Coordinator) instanceByAPIKey(key string) *instance {
 
 // routedInstances 解析一台相机当前的推送目标实例(路由配置 + 实例启用态;
 // 健康与否在推送时逐实例判断)。
-func (c *Coordinator) routedInstances(cameraID string) []*instance {
+func (c *Coordinator) routedInstances(cameraID string) []routeTarget {
 	vcfg := c.cfg()
 	var targets []string
 	if c.cameraTargets != nil {
@@ -223,10 +234,10 @@ func (c *Coordinator) routedInstances(cameraID string) []*instance {
 	routed := vcfg.RouteFor(targets)
 	c.instMu.Lock()
 	defer c.instMu.Unlock()
-	out := make([]*instance, 0, len(routed))
+	out := make([]routeTarget, 0, len(routed))
 	for _, ins := range routed {
 		if live := c.insts[ins.Name]; live != nil {
-			out = append(out, live)
+			out = append(out, routeTarget{name: live.name, url: live.url, health: live.health})
 		}
 	}
 	return out
@@ -460,34 +471,34 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 }
 
 // fanout 逐实例推送(健康检查+消费者跳单+上传各自独立,失败互不影响)。
-func (c *Coordinator) fanout(ctx context.Context, routed []*instance, absPath string, fileSize int64, hdr map[string]string) {
-	for _, ins := range routed {
-		c.pushToInstance(ctx, ins, absPath, fileSize, hdr)
+func (c *Coordinator) fanout(ctx context.Context, routed []routeTarget, absPath string, fileSize int64, hdr map[string]string) {
+	for _, rt := range routed {
+		c.pushToInstance(ctx, rt, absPath, fileSize, hdr)
 	}
 }
 
 // pushToInstance 单实例推送:无地址(default 合成、URL 未配)→ 静默跳过;
 // 不健康 → 记暂停窗(补偿重推的窗口锚点)并跳过;该实例心跳声明的跳单
 // (#515)→ 跳过;否则上传。
-func (c *Coordinator) pushToInstance(ctx context.Context, ins *instance, absPath string, fileSize int64, hdr map[string]string) bool {
-	if ins.url == "" {
+func (c *Coordinator) pushToInstance(ctx context.Context, rt routeTarget, absPath string, fileSize int64, hdr map[string]string) bool {
+	if rt.url == "" {
 		return false
 	}
-	if !ins.health.IsHealthy() {
-		c.markPausedFor(ins)
+	if !rt.health.IsHealthy() {
+		c.markPausedFor(rt.name)
 		slog.Debug("vision instance not healthy, skip push",
-			"instance", ins.name,
+			"instance", rt.name,
 			"recording_id", hdr["X-Recording-Id"])
 		return false
 	}
-	if ins.health.SkipCamera(hdr["X-Camera-Id"]) {
+	if rt.health.SkipCamera(hdr["X-Camera-Id"]) {
 		slog.Debug("vision push skipped by consumer-reported skip list",
-			"instance", ins.name,
+			"instance", rt.name,
 			"camera_id", hdr["X-Camera-Id"],
 			"recording_id", hdr["X-Recording-Id"])
 		return false
 	}
-	return c.uploadSegment(ctx, ins.url, absPath, fileSize, hdr)
+	return c.uploadSegment(ctx, rt.url, absPath, fileSize, hdr)
 }
 
 // uploadSegment POSTs a segment file's bytes to a Vision instance. Headers
@@ -571,12 +582,12 @@ func (c *Coordinator) pushSubSegment(ctx context.Context, seg SubSegment) bool {
 		return false
 	}
 	healthy, accepted := 0, 0
-	for _, ins := range routed {
-		if !ins.health.IsHealthy() {
+	for _, rt := range routed {
+		if !rt.health.IsHealthy() {
 			continue
 		}
 		healthy++
-		if c.pushToInstance(ctx, ins, seg.Path, seg.FileSize, map[string]string{
+		if c.pushToInstance(ctx, rt, seg.Path, seg.FileSize, map[string]string{
 			"X-Recording-Id": seg.RecordingID,
 			"X-Camera-Id":    seg.CameraID,
 			"X-Format":       seg.Codec,
@@ -603,52 +614,55 @@ func (c *Coordinator) pushSubSegment(ctx context.Context, seg SubSegment) bool {
 // markPausedFor records the start of an instance's push-pause window (first
 // segment skipped while that instance is unhealthy). The timestamp bounds the
 // offline-compensation query when the instance recovers (#329).
-func (c *Coordinator) markPausedFor(ins *instance) {
+func (c *Coordinator) markPausedFor(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if ins.pausedSince.IsZero() {
-		ins.pausedSince = time.Now()
+	if _, ok := c.paused[name]; !ok {
+		c.paused[name] = time.Now()
 		slog.Info("vision push paused — offline window starts (segments will be compensated on recovery)",
-			"instance", ins.name,
-			"since", ins.pausedSince)
+			"instance", name,
+			"since", c.paused[name])
 	}
 }
 
 // rearmPausedFor restores the pause window with the given start (used when the
 // instance drops again mid-compensation, so the next recovery retries the
 // remainder instead of only the new gap).
-func (c *Coordinator) rearmPausedFor(ins *instance, since time.Time) {
+func (c *Coordinator) rearmPausedFor(name string, since time.Time) {
 	c.mu.Lock()
-	ins.pausedSince = since
+	c.paused[name] = since
 	c.mu.Unlock()
 }
 
 // takePausedSinceFor returns and clears the instance's pause-window start.
-func (c *Coordinator) takePausedSinceFor(ins *instance) time.Time {
+func (c *Coordinator) takePausedSinceFor(name string) time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	since := ins.pausedSince
-	ins.pausedSince = time.Time{}
+	since, ok := c.paused[name]
+	delete(c.paused, name)
+	if !ok {
+		return time.Time{}
+	}
 	return since
 }
 
 // takePausedSince 兼容访问器:default 实例的暂停窗(旧测试用)。
 func (c *Coordinator) takePausedSince() time.Time {
 	if ins := c.defaultInstance(); ins != nil {
-		return c.takePausedSinceFor(ins)
+		return c.takePausedSinceFor(ins.name)
 	}
 	return time.Time{}
 }
 
 func (c *Coordinator) markPaused() {
 	if ins := c.defaultInstance(); ins != nil {
-		c.markPausedFor(ins)
+		c.markPausedFor(ins.name)
 	}
 }
 
 func (c *Coordinator) rearmPaused(since time.Time) {
 	if ins := c.defaultInstance(); ins != nil {
-		c.rearmPausedFor(ins, since)
+		c.rearmPausedFor(ins.name, since)
 	}
 }
 
@@ -671,13 +685,13 @@ func (c *Coordinator) compensateOffline(name string) {
 	if ins == nil {
 		return
 	}
-	since := c.takePausedSinceFor(ins)
+	since := c.takePausedSinceFor(name)
 	if since.IsZero() || c.db == nil {
 		return
 	}
 	// Only one compensation run per instance at a time (heartbeats can flap).
 	if !ins.compensating.CompareAndSwap(false, true) {
-		c.rearmPausedFor(ins, since)
+		c.rearmPausedFor(name, since)
 		return
 	}
 	defer ins.compensating.Store(false)
@@ -688,7 +702,7 @@ func (c *Coordinator) compensateOffline(name string) {
 
 	recs, err := c.db.ListRecordingsForVisionRepush(ctx, since, time.Now(), repushMax)
 	if err != nil {
-		c.rearmPausedFor(ins, since)
+		c.rearmPausedFor(name, since)
 		slog.Warn("vision compensation lookup failed", "error", err, "instance", name)
 		return
 	}
@@ -708,7 +722,7 @@ func (c *Coordinator) compensateOffline(name string) {
 		if !ins.health.IsHealthy() {
 			// Dropped again mid-compensation: restore the window so the next
 			// recovery retries the remainder.
-			c.rearmPausedFor(ins, since)
+			c.rearmPausedFor(name, since)
 			slog.Warn("vision unhealthy during compensation — stopping early",
 				"instance", name,
 				"pushed", pushed, "total", len(recs))

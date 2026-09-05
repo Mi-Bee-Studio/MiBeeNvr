@@ -244,6 +244,7 @@ export {
   generateAPIKey,
   revokeAPIKey,
   getVisionStatus,
+  updateVisionSettings,
 } from './settings';
 
 export type {
@@ -264,6 +265,9 @@ export type {
   RtspOutputSettings,
   RtspOutputUpdate,
   VisionStatus,
+  VisionInstanceConfig,
+  VisionSettingsConfig,
+  VisionInstanceStatus,
 } from './settings';
 
 // Xiaomi — cloud auth, devices, sync

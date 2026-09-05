@@ -46,6 +46,8 @@ export interface Camera {
   cascade_enabled?: boolean | null;
   /** Cascade tier: forward the sub-stream instead of main (#512). */
   cascade_sub_stream?: boolean | null;
+  /** Vision instance names this camera pushes to (empty/undefined = all enabled instances). */
+  vision_targets?: string[];
   // Recording mode (#435): 'continuous' (default) or 'adaptive' — dynamic
   // timelapse that drops to sparse keyframes while the compressed-domain
   // activity signal stays calm. 'adaptive' holds the tuning knobs (nil = defaults).
@@ -207,6 +209,8 @@ export interface CreateCameraRequest {
   cascade_enabled?: boolean | null;
   /** Cascade tier: forward the sub-stream instead of main (#512). */
   cascade_sub_stream?: boolean | null;
+  /** Vision instance names this camera pushes to (empty/undefined = all enabled instances). */
+  vision_targets?: string[];
   // Recording mode (#435). Omit = continuous.
   recording_mode?: string;
   recording_tier?: string;
@@ -260,6 +264,8 @@ export interface UpdateCameraRequest {
   cascade_enabled?: boolean | null;
   /** Cascade tier: forward the sub-stream instead of main (#512). */
   cascade_sub_stream?: boolean | null;
+  /** Vision instance names this camera pushes to (empty/undefined = all enabled instances). */
+  vision_targets?: string[];
   // Recording mode (#435). Omit = unchanged. Changing it restarts the recorder.
   recording_mode?: string;
   recording_tier?: string;
