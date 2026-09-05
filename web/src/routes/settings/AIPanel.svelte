@@ -98,7 +98,7 @@
   function addVisionInstance() {
     visionInstances = [
       ...visionInstances,
-      { name: '', url: 'http://', api_key_name: '', enabled: true },
+      { name: '', url: 'http://', apiKeyName: '', enabled: true },
     ];
   }
 
@@ -186,7 +186,7 @@
       const cleaned = visionInstances.map((i) => ({
         name: i.name.trim(),
         url: i.url.trim(),
-        api_key_name: i.api_key_name?.trim() || undefined,
+        apiKeyName: i.apiKeyName?.trim() || undefined,
         enabled: i.enabled ?? true,
       }));
       await updateVisionSettings({ instances: cleaned });
@@ -748,8 +748,8 @@
                 />
                 <select
                   class="input"
-                  bind:value={ins.api_key_name}
-                  onchange={() => updateVisionInstance(idx, { api_key_name: ins.api_key_name })}
+                  bind:value={ins.apiKeyName}
+                  onchange={() => updateVisionInstance(idx, { apiKeyName: ins.apiKeyName })}
                   aria-label={t('settings.mibeevision.instances.apiKey')}
                 >
                   <option value="">{t('settings.mibeevision.instances.noKey')}</option>

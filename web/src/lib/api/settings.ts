@@ -83,8 +83,9 @@ export interface MiBeeVisionConfig {
 export interface VisionInstanceConfig {
   name: string;
   url: string;
-  /** API key name used to attribute heartbeats/events/ai_status reports. */
-  api_key_name?: string;
+  /** API key name used to attribute heartbeats/events/ai_status reports.
+   *  JSON wire tag is camelCase (Go struct tag); YAML uses api_key_name. */
+  apiKeyName?: string;
   /** undefined = enabled (omitted in YAML round-trips). */
   enabled?: boolean;
 }
