@@ -29,6 +29,28 @@ type reconnectDeps struct {
 
 	// SetStatus transitions the recorder status (thread-safe).
 	SetStatus func(model.RecorderStatus)
+
+	// MinBackoff floors every retry delay (after jitter, before the storage
+	// override is applied via max). Zero = the shared tier ladder as-is.
+	// The HTTP JPEG puller sets 5s (#711): ESP32-class MJPEG cameras treat
+	// sub-5s reconnects as hammering (camera-side anti-hammer guard answers
+	// 503 with exponential backoff), and their single-slot HTTP server
+	// already collapses under a 1-2s reconnect storm.
+	MinBackoff time.Duration
+}
+
+// nextBackoff computes one retry delay: the tiered ladder + jitter (storage
+// failures get the flat ~60s storage backoff), floored at min. The floor
+// never shortens a longer tier or the storage backoff (#711).
+func nextBackoff(retryCount int, storageFailed bool, min time.Duration) time.Duration {
+	b := TieredBackoffWithJitter(retryCount)
+	if storageFailed {
+		b = StorageBackoffWithJitter()
+	}
+	if b < min {
+		b = min
+	}
+	return b
 }
 
 // runReconnectLoop is the shared auto-reconnect cycle: call Connect, on
@@ -51,11 +73,8 @@ func runReconnectLoop(ctx context.Context, d reconnectDeps) {
 			}
 		}
 		retryCount++
-		backoff := TieredBackoffWithJitter(retryCount)
 		storageFailed := isStorageFailed(d.Store, d.CameraID)
-		if storageFailed {
-			backoff = StorageBackoffWithJitter()
-		}
+		backoff := nextBackoff(retryCount, storageFailed, d.MinBackoff)
 		if d.Metrics != nil {
 			d.Metrics.CameraReconnectBackoffSeconds.WithLabelValues(d.CameraID).Set(backoff.Seconds())
 		}

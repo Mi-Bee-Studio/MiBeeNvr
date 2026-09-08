@@ -279,6 +279,12 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 		Store:    r.store,
 		Metrics:  r.metrics,
 		Log:      httpJpegLogger,
+		// ESP32-class MJPEG cameras (MiBeeCam family) treat sub-5s reconnects
+		// as hammering — their single-slot HTTP stream server collapses and
+		// the firmware's anti-hammer guard answers 503 with exponential
+		// backoff (#711). The shared tier-1 (1s+jitter) amplifies stream-death
+		// into a 1-2s reconnect storm; floor every retry at 5s.
+		MinBackoff: 5 * time.Second,
 		Connect: func(streamCtx context.Context) (error, bool) {
 			// Inner cancellable ctx so the idle watchdog can kill just the
 			// current HTTP stream (not the whole reconnect loop).
