@@ -56,13 +56,15 @@ mqtt:
 
 #### Trigger Recording
 
-Start recording on a specific camera for a set duration:
+Start the given camera (equivalent to the UI 启动 button): connect and begin pulling its stream.
 
 ```json
 {
   "action": "record"
 }
 ```
+
+> Note: whether segments are actually written still depends on the camera's recording toggle (`recording_enabled`) — when disabled the camera is live-only (streaming, preview and health monitoring work, no segments are written). For a live-only camera, `record` brings up the live stream rather than writing footage.
 
 **Topic**: `home/security/trigger/front-door`  
 **Message**: `{"action": "record"}`

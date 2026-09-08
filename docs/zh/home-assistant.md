@@ -93,7 +93,7 @@ mqtt:
   password: "mqtt_password"
 ```
 
-NVR 订阅 `mibee/trigger/{camera_id}`，支持 `record`（开始录制）、`stop`（停止录制）与 `snapshot`（快照落盘并发布 `camera.snapshot` 事件）。HA 自动化示例：
+NVR 订阅 `mibee/trigger/{camera_id}`，支持 `record`（启动摄像头取流；是否写盘由相机「启用录制」开关决定）、`stop`（停止取流）与 `snapshot`（快照落盘并发布 `camera.snapshot` 事件）。HA 自动化示例：
 
 ```yaml
 automation:
