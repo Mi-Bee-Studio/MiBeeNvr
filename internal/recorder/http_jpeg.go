@@ -62,6 +62,14 @@ type HTTPJPEGRecorder struct {
 	done         chan struct{}
 	watchdogDone chan struct{}
 
+	// adoptedResp/adoptedCancel hold a probe's already-open MJPEG response
+	// (#723): the ONVIF recorder probes candidate URLs before handing over,
+	// and re-dialing the just-probed URL trips ESP32 anti-hammer guards
+	// (<5s between connections arms them). Consumed by the first
+	// connectAndStream; later reconnects dial normally. Guarded by mu.
+	adoptedResp   *http.Response
+	adoptedCancel context.CancelFunc
+
 	lastFrameTime   atomic.Int64 // Unix timestamp of last received frame
 	curTempPath     string
 	curFinalPath    string
@@ -253,6 +261,7 @@ func (r *HTTPJPEGRecorder) Stop() error {
 	if r.watchdogDone != nil {
 		<-r.watchdogDone
 	}
+	r.discardAdoptedStream() // covers never-started recorders holding an adopted probe
 	r.decActive()
 	return nil
 }
@@ -273,6 +282,7 @@ func (r *HTTPJPEGRecorder) run(ctx context.Context) {
 	defer close(r.done)
 	defer r.setStatus(model.StatusStopped)
 	defer r.closeCurrentSegment()
+	defer r.discardAdoptedStream()
 
 	runReconnectLoop(ctx, reconnectDeps{
 		CameraID: r.cfg.CameraID,
@@ -333,6 +343,38 @@ func (r *HTTPJPEGRecorder) idleWatchdog(ctx context.Context) {
 	}
 }
 
+// AdoptStream hands the recorder an already-open MJPEG response — typically
+// the ONVIF recorder's probe connection — so the first stream cycle continues
+// it instead of re-dialing the URL (#723: two TCP connects within the ESP32
+// anti-hammer window arm the device's guard). The cancel func releases the
+// detached request context once the response is done.
+func (r *HTTPJPEGRecorder) AdoptStream(resp *http.Response, cancel context.CancelFunc) {
+	if resp == nil {
+		return
+	}
+	r.mu.Lock()
+	r.adoptedResp = resp
+	r.adoptedCancel = cancel
+	r.mu.Unlock()
+}
+
+// discardAdoptedStream closes a never-consumed adopted response (recorder
+// stopped before the first connect cycle ran).
+func (r *HTTPJPEGRecorder) discardAdoptedStream() {
+	r.mu.Lock()
+	resp := r.adoptedResp
+	cancel := r.adoptedCancel
+	r.adoptedResp = nil
+	r.adoptedCancel = nil
+	r.mu.Unlock()
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
+}
+
 // connectAndStream opens an HTTP connection to the MJPEG stream and parses frames.
 func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 	defer func() {
@@ -343,18 +385,35 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		}
 	}()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.cfg.URL, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err), false
-	}
-	if r.cfg.Username != "" {
-		req.SetBasicAuth(r.cfg.Username, r.cfg.Password)
-	}
+	// Prefer an adopted probe connection (#723): continuing it avoids a
+	// second TCP dial within the device's anti-hammer window. Consumed once;
+	// reconnects after this stream ends dial normally (through the ≥5s
+	// reconnect floor).
+	r.mu.Lock()
+	resp := r.adoptedResp
+	adoptedCancel := r.adoptedCancel
+	r.adoptedResp = nil
+	r.adoptedCancel = nil
+	r.mu.Unlock()
+	if resp != nil {
+		httpJpegLogger.Info("continuing probed MJPEG connection", "camera_id", r.cfg.CameraID, "url", r.cfg.URL)
+		if adoptedCancel != nil {
+			defer adoptedCancel()
+		}
+	} else {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.cfg.URL, nil)
+		if err != nil {
+			return fmt.Errorf("create request: %w", err), false
+		}
+		if r.cfg.Username != "" {
+			req.SetBasicAuth(r.cfg.Username, r.cfg.Password)
+		}
 
-	httpJpegLogger.Info("connecting to MJPEG stream", "camera_id", r.cfg.CameraID, "url", r.cfg.URL)
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("http connect: %w", err), false
+		httpJpegLogger.Info("connecting to MJPEG stream", "camera_id", r.cfg.CameraID, "url", r.cfg.URL)
+		resp, err = r.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("http connect: %w", err), false
+		}
 	}
 	defer resp.Body.Close()
 

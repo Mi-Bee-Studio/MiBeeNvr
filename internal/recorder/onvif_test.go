@@ -510,9 +510,12 @@ func TestONVIFRecorder_ProbeHTTPMJPEG_Success(t *testing.T) {
 	r.cfg.ONVIFEndpoint = server.URL + "/onvif/device_service"
 	r.rtspURL = "rtsp://192.168.1.100/stream"
 
-	url, err := r.probeHTTPMJPEG(context.Background())
+	url, resp, probeCancel, err := r.probeHTTPMJPEG(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, server.URL+"/stream", url)
+	require.NotNil(t, resp, "probe hit must return the open response for adoption (#723)")
+	_ = resp.Body.Close()
+	probeCancel()
 }
 
 func TestONVIFRecorder_ProbeHTTPMJPEG_FallbackPaths(t *testing.T) {
@@ -532,9 +535,11 @@ func TestONVIFRecorder_ProbeHTTPMJPEG_FallbackPaths(t *testing.T) {
 	r.cfg.ONVIFEndpoint = server.URL + "/onvif/device_service"
 	r.rtspURL = "rtsp://192.168.1.100/stream"
 
-	url, err := r.probeHTTPMJPEG(context.Background())
+	url, resp, probeCancel, err := r.probeHTTPMJPEG(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, server.URL+"/mjpeg", url)
+	_ = resp.Body.Close()
+	probeCancel()
 }
 
 func TestONVIFRecorder_ProbeHTTPMJPEG_NoStream(t *testing.T) {
@@ -549,7 +554,7 @@ func TestONVIFRecorder_ProbeHTTPMJPEG_NoStream(t *testing.T) {
 	r.cfg.ONVIFEndpoint = server.URL + "/onvif/device_service"
 	r.rtspURL = "rtsp://192.168.1.100/stream"
 
-	_, err := r.probeHTTPMJPEG(context.Background())
+	_, _, _, err := r.probeHTTPMJPEG(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no MJPEG stream found")
 }
