@@ -169,3 +169,14 @@ type deviceMediaShape interface {
 }
 
 var _ deviceMediaShape = ServerAdapter{}
+
+// gb28181-go v0.3.0 made the library identity-neutral; the NVR re-asserts its
+// product identity so vendor platforms that fingerprint the User-Agent and
+// upper platforms displaying DeviceInfo see MiBeeNvr, not "gb28181-go".
+func TestSIPConfigIdentifiesNVR(t *testing.T) {
+	cfg := config.GB28181ServerConfig{Enabled: true, ServerID: "34020000002000000001"}
+	out := SIPConfig(cfg)
+	if out.UserAgent != "MiBeeNvr" {
+		t.Fatalf("SIP server UserAgent must identify the NVR, got %q", out.UserAgent)
+	}
+}

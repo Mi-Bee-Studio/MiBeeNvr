@@ -21,8 +21,12 @@ import (
 // lives in the library.
 
 // CascadeConfig maps the NVR YAML config onto the library's cascade.Config.
-// The library struct is a documented superset (DeviceName/Manufacturer/Model
-// fall back to the MiBee NVR identity when zero).
+// The library struct is a documented superset. Since gb28181-go v0.3.0 the
+// library is IDENTITY-NEUTRAL: DeviceInfo answers and the SIP User-Agent
+// fall back to "GB28181 Platform"/"gb28181-go/cascade", never a product name
+// — so the MiBee identity is set explicitly here (v0.2.x had it baked in).
+// Catalog item defaults stay neutral ("Unknown"): cascaded cameras are
+// mostly third-party brands, and a "MiBee" default would mislabel them.
 func CascadeConfig(cfg config.GB28181CascadeConfig) gbcascade.Config {
 	out := gbcascade.Config{
 		Enabled:           cfg.Enabled,
@@ -34,6 +38,10 @@ func CascadeConfig(cfg config.GB28181CascadeConfig) gbcascade.Config {
 		SIPListen:         cfg.SIPListen,
 		HeartbeatInterval: cfg.HeartbeatInterval,
 		RegisterExpires:   cfg.RegisterExpires,
+		DeviceName:        "MiBee NVR",
+		Manufacturer:      "MiBee",
+		Model:             "MiBeeNvr",
+		UserAgent:         "MiBeeNvr",
 	}
 	for _, u := range cfg.Upstreams {
 		out.Upstreams = append(out.Upstreams, gbcascade.Upstream{

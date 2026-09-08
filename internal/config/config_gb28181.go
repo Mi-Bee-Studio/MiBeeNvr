@@ -109,6 +109,33 @@ type GB28181ServerConfig struct {
 	// hold the stream for the configured duration, then BYE — unless the
 	// channel's camera wants recording (then the stream stays).
 	AlarmLinkage *GB28181AlarmLinkageConfig `yaml:"alarm_linkage,omitempty"`
+
+	// Security35114 opts into GB 35114-2017 A-level secure registration
+	// (#707): REGISTER handshakes with SM2-signed Capability/Bidirection
+	// auth + keyed-SM3 Note integrity. Only active in binaries built with
+	// `-tags gb35114`; default builds log a warning when enabled. Digest
+	// devices (Password) keep working alongside — the two paths never
+	// interfere (library regression-tested).
+	Security35114 GB35114SecurityConfig `yaml:"security35114,omitempty"`
+}
+
+// GB35114SecurityConfig is the gb28181.security35114 section (#707). Certs
+// are GM/T 0015-2012 SM2 PEM files. A-level only; B/C need SVAC hardware and
+// are out of scope.
+type GB35114SecurityConfig struct {
+	// Enabled activates the GB35114 REGISTER authenticator.
+	Enabled bool `yaml:"enabled"`
+
+	// PlatformCert / PlatformKey are the platform's SM2 signing certificate
+	// and private key (required — Bidirection challenges sign with them).
+	PlatformCert string `yaml:"platform_cert"`
+	PlatformKey  string `yaml:"platform_key"`
+
+	// DeviceCertsDir holds pre-provisioned device certificates, one file per
+	// device named <deviceID>.pem. Optional — devices can instead announce
+	// their certificate via the Capability cnonce (trust-on-first-use);
+	// pre-provisioning is the stricter policy.
+	DeviceCertsDir string `yaml:"device_certs_dir"`
 }
 
 // GB28181AlarmLinkageConfig is the alarm→stream linkage block.

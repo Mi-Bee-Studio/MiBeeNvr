@@ -756,7 +756,15 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			deps.gb28181Server.OnDeviceOffline(id)
 		})
 		deps.gb28181SessionMgr = newGB28181SessionManager(cfg.GB28181)
-		deps.gb28181Server = gbsip.NewServer(gb28181.SIPConfig(cfg.GB28181), deps.gb28181DevMgr, deps.gb28181SessionMgr, gb28181.NewDeviceStore(deps.db))
+		sipCfg := gb28181.SIPConfig(cfg.GB28181)
+		// GB 35114 A-level seam (#707): no-op in default builds, wires the
+		// SM2 REGISTER authenticator under -tags gb35114. Boot-fatal when the
+		// section is enabled but the certificates don't load — a half-configured
+		// security layer must not come up silently.
+		if err := gb28181.ApplySecurity35114(&sipCfg, cfg.GB28181); err != nil {
+			return nil, nil, err
+		}
+		deps.gb28181Server = gbsip.NewServer(sipCfg, deps.gb28181DevMgr, deps.gb28181SessionMgr, gb28181.NewDeviceStore(deps.db))
 		// Alarm notifications surface on the event bus (SSE /api/events).
 		deps.gb28181Server.SetEventBus(gb28181.NewEventBridge(deps.eventBus))
 		slog.Info("GB28181 SIP server configured", "sip_listen", cfg.GB28181.SIPListen)

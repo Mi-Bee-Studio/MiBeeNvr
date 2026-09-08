@@ -125,7 +125,10 @@ func TestBridgeHubForwardsVideoAndAudio(t *testing.T) {
 	require.Same(t, lib, BridgeHub(nvr), "bridge must be cached per hub")
 
 	gotVideo := make(chan [2]any, 4)
-	require.NoError(t, lib.Subscribe("consumer-1", func(pts int64, au [][]byte) {
+	// gb28181-go v0.3.0 added the isIDR flag to FrameCallback (#29) — the
+	// bridge forwards it as false; assert that too.
+	require.NoError(t, lib.Subscribe("consumer-1", func(pts int64, au [][]byte, isIDR bool) {
+		require.False(t, isIDR, "bridge must forward isIDR=false (host adapter never reads it)")
 		gotVideo <- [2]any{pts, au}
 	}))
 	gotAudio := make(chan [3]any, 4)
@@ -159,7 +162,7 @@ func TestBridgeSubHubDetaches(t *testing.T) {
 	require.NotNil(t, lib)
 
 	got := make(chan int64, 4)
-	require.NoError(t, lib.Subscribe("consumer", func(pts int64, _ [][]byte) { got <- pts }))
+	require.NoError(t, lib.Subscribe("consumer", func(pts int64, _ [][]byte, _ bool) { got <- pts }))
 	nvr.Broadcast(1, [][]byte{{0x01}}, true)
 	select {
 	case <-got:
@@ -174,5 +177,20 @@ func TestBridgeSubHubDetaches(t *testing.T) {
 	case <-got:
 		t.Fatal("frame must not arrive after detach")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// gb28181-go v0.3.0 dropped the baked-in MiBee identity for neutrality — the
+// adapter sets it explicitly. Catalog defaults stay neutral (third-party cams).
+func TestCascadeConfigIdentifiesNVR(t *testing.T) {
+	out := CascadeConfig(config.GB28181CascadeConfig{Enabled: true})
+	if out.DeviceName != "MiBee NVR" || out.Manufacturer != "MiBee" || out.Model != "MiBeeNvr" {
+		t.Fatalf("cascade DeviceInfo identity must be MiBee, got %q/%q/%q", out.Manufacturer, out.DeviceName, out.Model)
+	}
+	if out.UserAgent != "MiBeeNvr" {
+		t.Fatalf("cascade UserAgent must identify the NVR, got %q", out.UserAgent)
+	}
+	if out.CatalogDefaultManufacturer != "" || out.CatalogDefaultModel != "" {
+		t.Fatal("catalog item defaults must stay neutral (third-party cameras)")
 	}
 }
