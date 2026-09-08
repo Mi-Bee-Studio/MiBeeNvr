@@ -400,10 +400,23 @@ func (r *TimelapseRecorder) closeCurrentSegment() {
 		timelapseLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
 	}
 
+	// Segment-loss gate (2026-09-08 incident): when the final directory never
+	// materialized, a DB row would be a permanent 404 entry — skip the
+	// insert, merge trigger, and metrics instead.
+	segmentFinalized := false
+	if r.curFinalPath != "" {
+		if _, err := os.Stat(r.curFinalPath); err == nil {
+			segmentFinalized = true
+		} else {
+			timelapseLogger.Warn("segment missing after finalize — recording row skipped",
+				"camera_id", r.cfg.CameraID, "path", r.curFinalPath)
+		}
+	}
+
 	// Insert recording entry into database
 	var recordingID string
 	var totalSize int64
-	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
+	if r.cfg.DB != nil && segmentFinalized && r.frameCount > 0 {
 		now := time.Now()
 		recordingID = strconv.FormatInt(now.UnixNano(), 10)
 		duration := now.Sub(r.segStart).Seconds()
@@ -430,12 +443,12 @@ func (r *TimelapseRecorder) closeCurrentSegment() {
 		}
 	}
 
-	if r.frameCount > 0 {
+	if r.frameCount > 0 && segmentFinalized {
 		r.recordSegmentCreated()
 	}
 
 	// Trigger async rolling merge if merge manager is configured.
-	if r.mergeMgr != nil && r.curFinalPath != "" && r.frameCount > 0 {
+	if r.mergeMgr != nil && segmentFinalized && r.frameCount > 0 {
 		r.mergeMgr.StartSegmentMerge(context.Background(), r.cfg.CameraID, r.curFinalPath, r.curFinalPath+".mp4", recordingID)
 	}
 

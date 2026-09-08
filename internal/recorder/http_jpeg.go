@@ -561,6 +561,19 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 		httpJpegLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
 	}
 
+	// Segment-loss gate (2026-09-08 incident): when the final file/directory
+	// never materialized, a DB row would be a permanent 404 entry — skip the
+	// insert, event, and metrics instead.
+	segmentFinalized := false
+	if r.curFinalPath != "" {
+		if _, err := os.Stat(r.curFinalPath); err == nil {
+			segmentFinalized = true
+		} else {
+			httpJpegLogger.Warn("segment missing after finalize — recording row skipped",
+				"camera_id", r.cfg.CameraID, "path", r.curFinalPath)
+		}
+	}
+
 	// Insert recording entry into database
 	var totalSize int64
 	var recordingID string
@@ -568,7 +581,7 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 	if r.cfg.AVI {
 		segFormat = model.FormatAVI
 	}
-	if r.cfg.DB != nil && r.curFinalPath != "" && r.frameCount > 0 {
+	if r.cfg.DB != nil && segmentFinalized && r.frameCount > 0 {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
@@ -636,7 +649,7 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 		})
 	}
 
-	if r.frameCount > 0 {
+	if r.frameCount > 0 && segmentFinalized {
 		r.recordSegmentCreated()
 	}
 

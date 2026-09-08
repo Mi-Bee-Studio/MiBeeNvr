@@ -1,19 +1,24 @@
 package cleanup
 
 // This file holds the database self-repair strategies:
-//   - staleRecordCleanup: MJPEG recordings stuck in merge_status='pending'
-//     whose directory no longer exists → marked 'failed'.
+//   - staleRecordCleanup: recordings stuck in merge_status='pending' whose
+//     file no longer exists (and never did — ghost rows) → deleted, once
+//     older than ghostPendingGrace.
 //   - repairZeroDurationRecordings: recordings with duration=0 are re-probed
 //     (pure-Go mediaprobe, ffprobe fallback) and updated with the real duration.
 //
 // Both run once per RunOnce cycle.
 //
-// Extracted from cleanup.go (#227).
+// Extracted from cleanup.go (#227); ghost-row sweep generalized from the
+// MJPEG-only 'failed' marking (2026-09-08 incident: the startup temp-cleanup
+// scan deleted an in-flight segment temp; the recorder still inserted its DB
+// row and the entry became a permanent 404 in the recordings list).
 
 import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,48 +27,54 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
-// staleRecordCleanup scans DB for MJPEG recordings with merge_status='pending'
-// whose directory on disk no longer exists, and marks them as merge_status='failed'.
+// ghostPendingGrace is how long a pending row with a missing file survives
+// before the sweep deletes it. The guard window tolerates temporarily
+// unmounted storage (per-camera root override hiccup): files come back on
+// remount and must not take their metadata with them.
+const ghostPendingGrace = 24 * time.Hour
+
+// staleRecordCleanup deletes ghost rows: merge_status='pending' recordings
+// whose file does not exist on disk and are older than ghostPendingGrace.
+// Such rows can never merge or play — they are permanent 404 entries and
+// endless retry fuel for the merge pipeline.
 func (cm *CleanupManager) staleRecordCleanup(ctx context.Context) {
-	cameras, err := cm.activeCameraIDs(ctx)
+	cutoff := time.Now().Add(-ghostPendingGrace)
+	recordings, err := cm.db.ListStalePendingRecordings(ctx, cutoff, 500)
 	if err != nil {
-		logger.Warn("stale record cleanup: failed to list cameras", "error", err)
+		logger.Warn("stale record cleanup: failed to list pending recordings", "error", err)
 		return
 	}
-	var totalFixed int
-	for _, cam := range cameras {
-		totalFixed += cm.fixStaleMJPEGRecords(ctx, cam)
+	var ghostIDs []string
+	for i := range recordings {
+		if !cm.recordingFileMissing(&recordings[i]) {
+			continue
+		}
+		ghostIDs = append(ghostIDs, recordings[i].ID)
 	}
-	if totalFixed > 0 {
-		logger.Info("stale MJPEG records marked as failed", "fixed", totalFixed)
+	if len(ghostIDs) == 0 {
+		return
 	}
+	if _, err := cm.db.DeleteRecordingsBatch(ctx, ghostIDs); err != nil {
+		logger.Warn("stale record cleanup: failed to delete ghost rows", "error", err)
+		return
+	}
+	logger.Info("deleted ghost pending recordings (file missing)", "count", len(ghostIDs))
 }
 
-// fixStaleMJPEGRecords checks pending MJPEG recordings for a camera and marks
-// those with missing directories as failed. Returns count of fixed records.
-func (cm *CleanupManager) fixStaleMJPEGRecords(ctx context.Context, cameraID string) int {
-	recordings, err := cm.db.ListPendingMJPEGRecordings(ctx, cameraID)
-	if err != nil {
-		logger.Warn("stale record cleanup: failed to list pending MJPEG recordings",
-			"camera_id", cameraID, "error", err)
-		return 0
+// recordingFileMissing reports whether a recording's file is absent. Main
+// recorders store absolute paths; tierrec sub-layer rows store paths
+// relative to the storage root. Stat errors other than NotExist are treated
+// as present (conservative — never delete metadata on a stat failure).
+func (cm *CleanupManager) recordingFileMissing(rec *model.Recording) bool {
+	path := rec.FilePath
+	if path == "" {
+		return true
 	}
-	var staleIDs []string
-	for _, rec := range recordings {
-		if _, err := os.Stat(rec.FilePath); os.IsNotExist(err) {
-			staleIDs = append(staleIDs, rec.ID)
-		}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(cm.store.RootDir(), path)
 	}
-	if len(staleIDs) == 0 {
-		return 0
-	}
-	if err := cm.db.SetMergeStatus(ctx, staleIDs, model.MergeStatusFailed); err != nil {
-		logger.Warn("stale record cleanup: failed to update merge status",
-			"camera_id", cameraID, "error", err)
-		return 0
-	}
-	logger.Info("stale MJPEG records marked failed", "camera_id", cameraID, "count", len(staleIDs))
-	return len(staleIDs)
+	_, err := os.Stat(path)
+	return err != nil && os.IsNotExist(err)
 }
 
 // repairZeroDurationRecordings fixes recordings with duration=0 by probing actual

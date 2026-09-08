@@ -204,9 +204,16 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 	case "h264", "h265":
 		tempPath = filepath.Join(hourDir, uuid+".tmp")
 		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, ts, uuid))
+		// Register BEFORE the file exists: the startup temp-cleanup scan
+		// must never observe an unregistered in-flight segment. Registration
+		// happens-before creation, so once the .tmp is visible on disk it is
+		// already protected (2026-09-08 incident: the scan deleted an active
+		// segment temp mid-write).
+		m.registerTempPath(tempPath, cameraID)
 		f, err := os.Create(tempPath)
 		if err != nil {
 			m.recordWriteFailure(cameraID)
+			m.unregisterTempPath(tempPath)
 			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)
 		}
 		f.Close()
@@ -215,17 +222,21 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		tempPath = filepath.Join(hourDir, uuid+".tmp")
 		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s", cameraID, ts, uuid))
 
+		m.registerTempPath(tempPath, cameraID)
 		if err := os.MkdirAll(tempPath, 0o755); err != nil {
 			m.recordWriteFailure(cameraID)
+			m.unregisterTempPath(tempPath)
 			return "", "", fmt.Errorf("storage: failed to create temp dir: %w", err)
 		}
 
 	case "avi":
 		tempPath = filepath.Join(hourDir, uuid+".tmp")
 		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s.avi", cameraID, ts, uuid))
+		m.registerTempPath(tempPath, cameraID)
 		f, err := os.Create(tempPath)
 		if err != nil {
 			m.recordWriteFailure(cameraID)
+			m.unregisterTempPath(tempPath)
 			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)
 		}
 		f.Close()
@@ -233,12 +244,39 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		return "", "", fmt.Errorf("storage: unsupported format %q", format)
 	}
 
-	// Register tempPath → cameraID mapping for WriteFrame health tracking.
+	return tempPath, finalPath, nil
+}
+
+// RegisterActiveTemp marks tempPath as an in-flight segment owned by
+// cameraID, protecting it from CleanupTempFiles. For temps created via
+// CreateSegment this happens automatically; writers that create their own
+// .tmp files under cam-* trees (e.g. tierrec) must call this themselves for
+// the segment's whole open→finalize window.
+func (m *Manager) RegisterActiveTemp(tempPath, cameraID string) {
+	m.registerTempPath(tempPath, cameraID)
+}
+
+// UnregisterActiveTemp releases the protection granted by RegisterActiveTemp
+// (or CreateSegment) — call once the segment's fate is sealed (renamed to
+// final, or removed).
+func (m *Manager) UnregisterActiveTemp(tempPath string) {
+	m.unregisterTempPath(tempPath)
+}
+
+// registerTempPath records the tempPath → cameraID mapping for health
+// tracking and cleanup protection.
+func (m *Manager) registerTempPath(tempPath, cameraID string) {
 	m.segMapMu.Lock()
 	m.segmentCameraMap[tempPath] = cameraID
 	m.segMapMu.Unlock()
+}
 
-	return tempPath, finalPath, nil
+// isActiveTemp reports whether tempPath belongs to an in-flight segment.
+func (m *Manager) isActiveTemp(tempPath string) bool {
+	m.segMapMu.RLock()
+	_, ok := m.segmentCameraMap[tempPath]
+	m.segMapMu.RUnlock()
+	return ok
 }
 
 // recordFinalizeFailure feeds a finalize-path error into health tracking —
@@ -580,10 +618,16 @@ func (m *Manager) IsAvailable() bool {
 // scan bounded: on a production tree with 100k+ files it avoids walking the
 // HLS shard directories entirely.
 //
-// This function is safe to call concurrently with recording (each segment uses
-// a unique uuid path; a leftover .tmp from a previous crash never collides with
-// a new write). Callers that don't need the result immediately should run it in
-// a goroutine to avoid blocking startup.
+// Active in-flight segments (registered via CreateSegment or
+// RegisterActiveTemp) are never touched: the scan runs concurrently with
+// recording, and deleting a live temp loses the whole segment — the final
+// rename then fails and the recorder's DB row becomes a permanent 404 entry
+// (2026-09-08 production incident). Registration happens-before file
+// creation, so any .tmp visible on disk without a registration is a genuine
+// crash leftover.
+//
+// Callers that don't need the result immediately should run it in a
+// goroutine to avoid blocking startup.
 func (m *Manager) CleanupTempFiles() error {
 	var firstErr error
 	for _, root := range m.Roots() {
@@ -607,6 +651,9 @@ func (m *Manager) CleanupTempFiles() error {
 				if !d.IsDir() {
 					// Remove .tmp files
 					if strings.HasSuffix(d.Name(), ".tmp") {
+						if m.isActiveTemp(path) {
+							return nil // in-flight segment — protected
+						}
 						if err := os.Remove(path); err != nil {
 							// Don't abort the whole walk on a single failure (file
 							// may be in use); record and continue.
@@ -620,6 +667,9 @@ func (m *Manager) CleanupTempFiles() error {
 					return nil
 				}
 				if strings.HasSuffix(d.Name(), ".tmp") {
+					if m.isActiveTemp(path) {
+						return filepath.SkipDir // in-flight MJPEG/timelapse segment — protected
+					}
 					if err := os.RemoveAll(path); err != nil {
 						logger.Warn("temp cleanup: failed to remove temp dir", "path", path, "error", err)
 					}

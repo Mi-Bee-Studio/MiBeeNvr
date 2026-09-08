@@ -1011,10 +1011,23 @@ func (b *baseRecorder) closeCurrentSegment() {
 		}
 	}
 
-	// Insert recording entry into database
+	// Segment-loss gate: when the final file never materialized (vanished
+	// temp — e.g. the startup temp-cleanup scan racing segment creation,
+	// 2026-09-08 incident), any DB row would be a permanent 404 entry.
+	// Skip the insert, event, and metrics instead.
 	var fileSize int64
 	var recordingID string
-	if b.cfg.DB != nil && b.curFinalPath != "" {
+	finalExists := false
+	if b.curFinalPath != "" {
+		if info, err := os.Stat(b.curFinalPath); err == nil {
+			finalExists = true
+			fileSize = info.Size()
+		} else {
+			b.log.Warn("segment file missing after finalize — recording row skipped",
+				"camera_id", b.cfg.CameraID, "path", b.curFinalPath)
+		}
+	}
+	if b.cfg.DB != nil && finalExists {
 		now := time.Now()
 		duration := now.Sub(b.segStart).Seconds()
 		rec := &model.Recording{
@@ -1026,12 +1039,9 @@ func (b *baseRecorder) closeCurrentSegment() {
 			EndedAt:    now,
 			Duration:   duration,
 			FrameCount: b.frameCount,
+			FileSize:   fileSize,
 		}
 		recordingID = rec.ID
-		if info, err := os.Stat(b.curFinalPath); err == nil {
-			fileSize = info.Size()
-			rec.FileSize = fileSize
-		}
 		if err := b.cfg.DB.InsertRecordingWithRetry(
 			context.Background(), rec, 3, 500*time.Millisecond,
 		); err != nil {
@@ -1058,7 +1068,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 	}
 
 	// Update metrics for completed segment
-	if b.frameCount > 0 && b.curFinalPath != "" {
+	if b.frameCount > 0 && finalExists {
 		b.recordSegmentCreated()
 		if fileSize > 0 {
 			b.recordBytes(fileSize)

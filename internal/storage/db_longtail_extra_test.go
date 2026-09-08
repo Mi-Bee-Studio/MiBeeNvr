@@ -271,21 +271,27 @@ func TestMigrationCapacityQueries(t *testing.T) {
 	require.True(t, paths["/mnt/data/nvr/a.mp4"])
 }
 
-func TestPendingMJPEGRecordings(t *testing.T) {
+func TestStalePendingRecordings(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
 	ctx := context.Background()
-	now := time.Now().UTC()
+	base := time.Date(2025, 6, 1, 10, 0, 0, 0, time.UTC)
+	cutoff := base.Add(24 * time.Hour)
 
-	seedLongRec(t, db, "mj", "cam", "mjpeg", "pending", "/p/mj", now)
-	seedLongRec(t, db, "jp", "cam", "jpeg", "pending", "/p/jp", now)
-	seedLongRec(t, db, "h", "cam", "h264", "pending", "/p/h", now)
-	seedLongRec(t, db, "mj-done", "cam", "mjpeg", "merged", "/p/md", now)
-	seedLongRec(t, db, "mj-other", "cam2", "mjpeg", "pending", "/p/mo", now)
+	seedLongRec(t, db, "old-pending", "cam", "h264", "pending", "/p/old", base)
+	seedLongRec(t, db, "new-pending", "cam", "h264", "pending", "/p/new", base.Add(48*time.Hour))
+	seedLongRec(t, db, "old-merged", "cam", "mjpeg", "merged", "/p/md", base)
+	seedLongRec(t, db, "old-other-cam", "cam2", "mjpeg", "pending", "/p/mo", base)
 
-	rows, err := db.ListPendingMJPEGRecordings(ctx, "cam")
+	rows, err := db.ListStalePendingRecordings(ctx, cutoff, 100)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
+	got := map[string]bool{}
+	for _, r := range rows {
+		got[r.ID] = true
+	}
+	require.True(t, got["old-pending"])
+	require.True(t, got["old-other-cam"])
 }
 
 func TestInsertRecordingWithRetryFastFail(t *testing.T) {

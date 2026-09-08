@@ -160,24 +160,30 @@ func insertPendingMJPEG(t *testing.T, env *testEnv, id string, onDisk bool) stri
 	return fullPath
 }
 
-func TestStaleRecordCleanup_MarksMissingMJPEGFailed(t *testing.T) {
+func TestStaleRecordCleanup_DeletesMissingMJPEGRows(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
 	defer env.close(t)
 
-	insertPendingMJPEG(t, env, "stale-mjpeg", false) // file gone → stale
+	insertPendingMJPEG(t, env, "stale-mjpeg", false) // file gone → ghost
 	insertPendingMJPEG(t, env, "live-mjpeg", true)   // file present → untouched
+
+	// The sweep only fires past the grace window — backdate both rows via
+	// SQL (never rely on the test running fast).
+	old := time.Now().UTC().Add(-48 * time.Hour).Format("2006-01-02 15:04:05.999999999")
+	_, err := env.db.DB().ExecContext(ctx,
+		`UPDATE recordings SET started_at=? WHERE id IN ('stale-mjpeg','live-mjpeg');`, old)
+	require.NoError(t, err)
 
 	cfg := defaultCleanupConfig()
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, cm.fixStaleMJPEGRecords(ctx, "cam1"), "exactly the missing-file record should be fixed")
+	cm.staleRecordCleanup(ctx)
 
 	stale, err := env.db.GetRecording(ctx, "stale-mjpeg")
 	require.NoError(t, err)
-	require.NotNil(t, stale)
-	require.Equal(t, model.MergeStatusFailed, stale.MergeStatus, "stale MJPEG record should be marked failed")
+	require.Nil(t, stale, "stale MJPEG record (file missing, past grace) should be deleted")
 
 	live, err := env.db.GetRecording(ctx, "live-mjpeg")
 	require.NoError(t, err)
