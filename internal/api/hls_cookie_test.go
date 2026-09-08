@@ -3,10 +3,9 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
-
-	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/stretchr/testify/require"
