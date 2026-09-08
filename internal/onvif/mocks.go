@@ -299,6 +299,10 @@ func (m *MockEventSubscriber) GetEventMessages(ctx context.Context) ([]ONVIFEven
 	return m.Events, m.Error
 }
 
+func (m *MockEventSubscriber) Status(cameraID string) EventSubscriptionStatus {
+	return EventSubscriptionStatus{Subscribed: m.SubscribeCalls > m.UnsubscribeCalls, State: StateActive}
+}
+
 var _ EventSubscriber = (*MockEventSubscriber)(nil)
 
 // MockDeviceManager is a testable DeviceManager.

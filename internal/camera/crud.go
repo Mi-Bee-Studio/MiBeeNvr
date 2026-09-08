@@ -237,6 +237,10 @@ func tryFillStableIDFromONVIFWithClient(ctx context.Context, cam *config.CameraC
 // RemoveCamera removes a camera from the manager, stops its recorder, and removes it from config.
 // Does NOT delete the camera record from the database.
 func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) error {
+	// Drop the camera-side ONVIF event subscription (#711) first — it survives
+	// recorder teardown by design and must not outlive the camera itself.
+	_ = cm.UnsubscribeONVIFEvents(ctx, cameraID)
+
 	// Snapshot the recorder + hub + aux components (lock-free / auxMu) so we can
 	// stop them OUTSIDE any lock after the config/snapshot removal, AND restore
 	// them on a persistConfig rollback.
@@ -644,6 +648,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.RecordingTier != nil {
 		cam.RecordingTier = *updates.RecordingTier
 	}
+	if updates.MotionSource != nil {
+		cam.MotionSource = *updates.MotionSource
+	}
 	if updates.Pixgate != nil {
 		cam.Pixgate = updates.Pixgate
 	}
@@ -784,6 +791,11 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if hasSchedule {
 		cm.startRecordingScheduleMonitor(context.Background(), cameraID)
 	}
+
+	// Reconcile the camera-side ONVIF motion subscription with the (possibly
+	// changed) motion_source (#711). Async like the relay reconcile above —
+	// Subscribe dials the camera.
+	go cm.EnsureMotionSubscription(context.Background(), camCopy)
 
 	// Return a snapshot — we no longer hold configMu, so returning the live
 	// pointer into cm.cfg.Cameras would race with concurrent mutations.

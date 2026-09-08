@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,5 +62,56 @@ func TestSetStreamCookieOnPlaylist(t *testing.T) {
 		cookies := rr.Result().Cookies()
 		require.Len(t, cookies, 1)
 		require.Equal(t, fresh, cookies[0].Value, "cookie must carry the freshly-renewed token")
+	})
+}
+
+// API-key callers get the same stream-cookie channel as session-token callers
+// (#706): playlist authenticated with ?api_key= (or Bearer mbv_) hands the
+// player a cookie so relative segment URLs — which do NOT inherit the query
+// per RFC 3986 — can authenticate. iOS AVPlayer is the motivating client.
+func TestSetStreamCookieOnPlaylistAPIKey(t *testing.T) {
+	t.Parallel()
+
+	mkAPIKeyReq := func(path string, ctxOK bool) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, path+"?api_key=mbv_"+strings.Repeat("a", 40), nil)
+		if ctxOK {
+			r = r.WithContext(middleware.WithAPIKeyName(r.Context(), "dad-phone"))
+		}
+		return r
+	}
+
+	t.Run("api-key playlist sets cookie carrying the key", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, mkAPIKeyReq("/api/cameras/cam-1/stream/index.m3u8", true), "cam-1")
+
+		cookies := rr.Result().Cookies()
+		require.Len(t, cookies, 1)
+		c := cookies[0]
+		require.Equal(t, middleware.StreamCookieName, c.Name)
+		require.Equal(t, "mbv_"+strings.Repeat("a", 40), c.Value)
+		require.Equal(t, "/api/cameras/cam-1/", c.Path)
+		require.Equal(t, int(middleware.StreamCookieAPIKeyTTL.Seconds()), c.MaxAge,
+			"api-key cookie is session-scale, not forever")
+		require.True(t, c.HttpOnly)
+		require.Equal(t, http.SameSiteLaxMode, c.SameSite)
+	})
+
+	t.Run("api_key in URL but NOT validated must not mint a cookie", func(t *testing.T) {
+		// Echoing unvalidated key material into a cookie would persist a
+		// possibly-invalid credential beyond the single request.
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, mkAPIKeyReq("/api/cameras/cam-1/stream/index.m3u8", false), "cam-1")
+		require.Empty(t, rr.Result().Cookies())
+	})
+
+	t.Run("session token still wins over api key", func(t *testing.T) {
+		token, _ := middleware.SignSessionToken("admin", "$2a$10$somehash", time.Now())
+		r := mkAPIKeyReq("/api/cameras/cam-1/stream/index.m3u8", true)
+		r.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		setStreamCookieOnPlaylist(rr, r, "cam-1")
+		cookies := rr.Result().Cookies()
+		require.Len(t, cookies, 1)
+		require.Equal(t, token, cookies[0].Value)
 	})
 }

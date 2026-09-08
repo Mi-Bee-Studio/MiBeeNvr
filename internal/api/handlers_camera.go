@@ -87,6 +87,7 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.RecordingSchedule = cam.RecordingSchedule
 		row.RecordingMode = cam.RecordingMode
 		row.RecordingTier = cam.RecordingTier
+		row.MotionSource = cam.MotionSource
 		row.Pixgate = cam.Pixgate
 		row.Adaptive = cam.Adaptive
 		if cam.Protocol == "gb28181" {
@@ -386,10 +387,12 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
 		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
 		// Validated at this boundary with the startup rules (#402 class).
-		RecordingMode *string                         `json:"recording_mode"`
-		RecordingTier *string                         `json:"recording_tier"`
-		Pixgate       *config.CameraPixgateConfig     `json:"pixgate"`
-		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
+		RecordingMode *string `json:"recording_mode"`
+		RecordingTier *string `json:"recording_tier"`
+		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
+		MotionSource *string                         `json:"motion_source"`
+		Pixgate      *config.CameraPixgateConfig     `json:"pixgate"`
+		Adaptive     *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Audio trigger (#478): loudness input for adaptive recording.
 		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
 		// Push/ingest fields (SRT/RTMP)
@@ -494,6 +497,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingSchedule:      body.RecordingSchedule,
 		RecordingMode:          body.RecordingMode,
 		RecordingTier:          body.RecordingTier,
+		MotionSource:           body.MotionSource,
 		Pixgate:                body.Pixgate,
 		Adaptive:               body.Adaptive,
 		AudioTrigger:           body.AudioTrigger,
@@ -781,6 +785,10 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			// classifier running outside the NVR (or a test) forces a
 			// timelapse→normal transition with the usual GOP + audio back-fill.
 			r.Post("/adaptive/trigger", h.handleAdaptiveTrigger)
+			// Camera-side ONVIF motion subscription diagnostics (#711): the
+			// "订阅挂了 or 相机没事件" discriminator for the camera form's
+			// status line.
+			r.Get("/onvif-events", h.handleONVIFEventsStatus)
 			// Xiaomi-specific PTZ and device info endpoints
 			r.Route("/xiaomi", func(r chi.Router) {
 				r.Post("/ptz/move", h.handleXiaomiPTZMove)

@@ -863,6 +863,17 @@ func (b *baseRecorder) PixelTriggerEvent(at time.Time, hold time.Duration) error
 	return nil
 }
 
+// MotionTriggerEvent injects a camera-side ONVIF MotionAlarm confirmation
+// (issue #711): same exit path as the audio/pixel triggers, attributed
+// reason=onvif_motion so field data can attribute exits correctly.
+func (b *baseRecorder) MotionTriggerEvent(at time.Time, hold time.Duration) error {
+	if b.adaptive == nil {
+		return fmt.Errorf("camera %s is not in adaptive recording mode", b.cfg.CameraID)
+	}
+	b.adaptive.audioLoudSrc(at, hold, "onvif_motion")
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Segment lifecycle (shared)
 // ---------------------------------------------------------------------------

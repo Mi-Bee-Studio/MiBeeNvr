@@ -1800,3 +1800,33 @@ func TestMQTTStatusEventsConfig(t *testing.T) {
 	cfg.ApplyDefaults()
 	require.False(t, cfg.MQTT.StatusEvents, "default mqtt.status_events should be false")
 }
+
+// TestValidateCameraMotionSource (#711): the motion-source allowlist plus the
+// protocol gate for camera:onvif.
+func TestValidateCameraMotionSource(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		source  string
+		proto   string
+		wantErr bool
+	}{
+		{"empty defaults to nvr", "", "onvif", false},
+		{"explicit nvr", "nvr", "onvif", false},
+		{"camera:onvif on onvif camera", "camera:onvif", "onvif", false},
+		{"camera:onvif on rtsp camera rejected", "camera:onvif", "rtsp", true},
+		{"camera:onvif on http camera rejected", "camera:onvif", "http", true},
+		{"garbage value rejected", "camera:csi", "onvif", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cam := CameraConfig{ID: "cam-1", Protocol: tc.proto, MotionSource: tc.source}
+			err := ValidateCameraRecordingMode(cam)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

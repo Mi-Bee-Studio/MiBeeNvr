@@ -64,23 +64,20 @@ func (m *mockEventClient) RenewSubscription(ctx context.Context, subscriptionRef
 	return time.Now(), time.Now().Add(24 * time.Hour), nil
 }
 
-// helperNewEventSubscriberWithMock creates an EventSubscriberImpl with a mock client
-// that bypasses the *onvifgo.Client requirement.
+// helperNewEventSubscriberWithMock creates an EventSubscriberImpl driven by an
+// in-memory fake of the events service (the eventsAPI seam). Defaults are
+// applied BEFORE the caller's options so explicit opts win. A nil mock is
+// replaced by an empty one — a typed-nil interface would panic on method call.
 func helperNewEventSubscriberWithMock(mock *mockEventClient, opts ...EventSubscriberOption) *EventSubscriberImpl {
-	// We can't pass mock directly since it's not *onvifgo.Client.
-	// Instead, we create the struct directly.
-	es := &EventSubscriberImpl{
-		subscriptions: make(map[string]*pullPointSubscription),
-		stopCh:        make(map[string]chan struct{}),
-		pollInterval:  100 * time.Millisecond, // Fast for tests
-		pullTimeout:   1 * time.Second,
-		messageLimit:  10,
-		subDuration:   1 * time.Hour,
+	if mock == nil {
+		mock = &mockEventClient{}
 	}
-	for _, opt := range opts {
-		opt(es)
-	}
-	return es
+	all := append([]EventSubscriberOption{
+		WithPullTimeout(1 * time.Second),
+		WithSubscriptionDuration(1 * time.Hour),
+		withResubscribeBackoff(30 * time.Millisecond),
+	}, opts...)
+	return newEventSubscriber(mock, all...)
 }
 
 // --- Tests ---
@@ -110,9 +107,9 @@ func TestNewEventSubscriber_WithOptions(t *testing.T) {
 	es := helperNewEventSubscriberWithMock(
 		nil,
 		WithEventCallback(cb),
-		withPollInterval(2*time.Second),
-		withPullTimeout(10*time.Second),
-		withSubscriptionDuration(12*time.Hour),
+		WithPollInterval(2*time.Second),
+		WithPullTimeout(10*time.Second),
+		WithSubscriptionDuration(12*time.Hour),
 	)
 
 	require.NotNil(t, es)
@@ -311,7 +308,7 @@ func TestEventSubscriberImpl_EventCallbackReceivesEvents(t *testing.T) {
 	es := helperNewEventSubscriberWithMock(
 		nil,
 		WithEventCallback(cb),
-		withPollInterval(50*time.Millisecond),
+		WithPollInterval(50*time.Millisecond),
 	)
 
 	es.mu.Lock()

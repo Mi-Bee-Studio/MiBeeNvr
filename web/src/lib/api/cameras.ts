@@ -213,6 +213,9 @@ export interface CreateCameraRequest {
   vision_targets?: string[];
   // Recording mode (#435). Omit = continuous.
   recording_mode?: string;
+  /** Motion signal source (#711): "nvr" (default) or "camera:onvif"
+   *  (Pull-Point MotionAlarm subscription). */
+  motion_source?: string;
   recording_tier?: string;
   adaptive?: AdaptiveRecordingConfig;
   // Loudness trigger for adaptive recording (#478); only effective with
@@ -268,6 +271,9 @@ export interface UpdateCameraRequest {
   vision_targets?: string[];
   // Recording mode (#435). Omit = unchanged. Changing it restarts the recorder.
   recording_mode?: string;
+  /** Motion signal source (#711): "nvr" (default) or "camera:onvif".
+   *  Reconciles immediately (no restart). */
+  motion_source?: string;
   recording_tier?: string;
   adaptive?: AdaptiveRecordingConfig;
   // Loudness trigger for adaptive recording (#478); only effective with
