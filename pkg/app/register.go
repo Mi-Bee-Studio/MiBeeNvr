@@ -23,6 +23,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tierrec"
@@ -312,6 +313,10 @@ func registerServices(a *App, deps *appDeps) error {
 	// stay out of the default list/merge/push filters. Tier changes are read
 	// here at boot (restart to apply).
 	if deps.camMgr != nil {
+		// Compile-time guard: the storage manager must keep satisfying the
+		// tierrec temp-protection interface, or in-flight tierrec segments
+		// lose their cleanup-scan protection (2026-09-08 incident class).
+		var _ tierrec.TempRegistry = (*storage.Manager)(nil)
 		var tiered []string
 		for _, cam := range deps.cfg.Cameras {
 			if cam.RecordingTier == "tiered" {
@@ -320,10 +325,11 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 		if len(tiered) > 0 {
 			tm := tierrec.NewManager(tierrec.Config{
-				Provider:    deps.camMgr,
-				Store:       deps.db,
-				Bus:         deps.eventBus,
-				StorageRoot: deps.cfg.Storage.RootDir,
+				Provider:     deps.camMgr,
+				Store:        deps.db,
+				Bus:          deps.eventBus,
+				StorageRoot:  deps.cfg.Storage.RootDir,
+				TempRegistry: deps.store,
 			})
 			tm.SetCameras(tiered)
 			if err := a.Register(tm); err != nil {

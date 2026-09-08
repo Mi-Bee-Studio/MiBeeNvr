@@ -59,6 +59,15 @@ type Store interface {
 	InsertRecording(ctx context.Context, r *model.Recording) error
 }
 
+// TempRegistry tells the storage manager's temp-cleanup scan that a .tmp
+// under a cam-* tree is an in-flight tierrec segment, not a crash leftover
+// (2026-09-08 incident: the startup scan deleted an active segment temp
+// mid-write). Satisfied by *storage.Manager; nil disables protection.
+type TempRegistry interface {
+	RegisterActiveTemp(tempPath, cameraID string)
+	UnregisterActiveTemp(tempPath string)
+}
+
 // Config configures the Manager.
 type Config struct {
 	Provider Provider
@@ -69,7 +78,10 @@ type Config struct {
 	StorageRoot string
 	// SegmentDur overrides the rotation window (tests).
 	SegmentDur time.Duration
-	Log        *slog.Logger
+	// TempRegistry protects in-flight segment temps from the storage
+	// manager's startup temp-cleanup scan (optional; nil in tests).
+	TempRegistry TempRegistry
+	Log          *slog.Logger
 }
 
 // Manager runs one sub-stream recorder per tiered camera.
@@ -367,6 +379,12 @@ func (r *subRecorder) openSegmentLocked(codec model.Format, sps, pps, vps []byte
 	tmp := filepath.Join(hourDir, fmt.Sprintf("%d%s", id, tmpSuffix))
 	final := filepath.Join(hourDir, fmt.Sprintf("%s%s_%s_%d.mp4", subFilePrefix, r.cameraID, ts, id))
 
+	// Register BEFORE the muxer creates the file: once the .tmp is visible
+	// on disk it is already protected from the startup temp-cleanup scan.
+	if r.mgr.cfg.TempRegistry != nil {
+		r.mgr.cfg.TempRegistry.RegisterActiveTemp(tmp, r.cameraID)
+	}
+
 	m := muxer.NewMP4Muxer(tmp)
 	var (
 		trackID int
@@ -381,6 +399,10 @@ func (r *subRecorder) openSegmentLocked(codec model.Format, sps, pps, vps []byte
 		err = fmt.Errorf("unsupported codec %q", codec)
 	}
 	if err != nil {
+		// No segment ever materialized — release the protection registration.
+		if r.mgr.cfg.TempRegistry != nil {
+			r.mgr.cfg.TempRegistry.UnregisterActiveTemp(tmp)
+		}
 		return err
 	}
 	r.mux = m
@@ -403,6 +425,12 @@ func (r *subRecorder) closeSegmentLocked() {
 	}
 	_ = r.mux.Close()
 	r.mux = nil
+	// The temp's fate is sealed below (removed or renamed) — release the
+	// cleanup protection so a crash between here and the rename still leaves
+	// a reclaimable orphan.
+	if r.tmpPath != "" && r.mgr.cfg.TempRegistry != nil {
+		r.mgr.cfg.TempRegistry.UnregisterActiveTemp(r.tmpPath)
+	}
 	if r.frames == 0 {
 		_ = os.Remove(r.tmpPath)
 		return

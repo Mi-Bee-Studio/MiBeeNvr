@@ -43,11 +43,12 @@ type CleanupManager struct {
 	transcodeHistoryRetention time.Duration // 0 = disabled
 	// activeCameraProvider returns the live set of cameras the user has
 	// configured (cfg.Cameras, the yaml source of truth). When set,
-	// directory-scanning cleanup (orphanFileCleanup, staleRecordCleanup)
-	// iterates only these IDs, skipping orphan dirs from cameras removed
-	// from yaml but still present on disk / in the DB cache. nil = legacy
-	// behaviour (fall back to db.ListCameras). Injected from pkg/app/run.go
-	// — mirrors the provider pattern used by the merge coordinators.
+	// directory-scanning cleanup (orphanFileCleanup) iterates only these
+	// IDs, skipping orphan dirs from cameras removed from yaml but still
+	// present on disk / in the DB cache. nil = legacy behaviour (fall back
+	// to db.ListCameras). Injected from pkg/app/run.go — mirrors the
+	// provider pattern used by the merge coordinators. (staleRecordCleanup
+	// no longer uses it: the ghost-row sweep queries pending rows directly.)
 	activeCameraProvider       func() []config.CameraConfig
 	ffprobePath                string // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
 	eventBus                   *event.EventBus

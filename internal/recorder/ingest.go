@@ -695,11 +695,23 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 		}
 	}
 
-	// Insert recording entry into the database.
+	// Segment-loss gate (2026-09-08 incident): when the final file never
+	// materialized, a DB row would be a permanent 404 entry — skip the
+	// insert, event, and metrics instead.
 	var fileSize int64
 	var recordingID string
+	finalExists := false
+	if r.curFinal != "" {
+		if info, err := os.Stat(r.curFinal); err == nil {
+			finalExists = true
+			fileSize = info.Size()
+		} else {
+			ingestLogger.Warn("segment file missing after finalize — recording row skipped",
+				"camera_id", r.cfg.CameraID, "path", r.curFinal)
+		}
+	}
 	format := r.format()
-	if r.cfg.DB != nil && r.curFinal != "" {
+	if r.cfg.DB != nil && finalExists {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
@@ -711,12 +723,9 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 			EndedAt:    now,
 			Duration:   duration,
 			FrameCount: r.frameCount,
+			FileSize:   fileSize,
 		}
 		recordingID = rec.ID
-		if info, err := os.Stat(r.curFinal); err == nil {
-			fileSize = info.Size()
-			rec.FileSize = fileSize
-		}
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			ingestLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
@@ -737,7 +746,7 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 	}
 
 	// Update metrics for the completed segment.
-	if r.frameCount > 0 && r.curFinal != "" {
+	if r.frameCount > 0 && finalExists {
 		r.recordSegmentCreated()
 		if fileSize > 0 {
 			r.recordBytes(fileSize)

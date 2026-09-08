@@ -591,15 +591,29 @@ func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 		}
 	}
 
-	// Insert the recording row so the segment is visible to playback, merge,
-	// timelapse, and retention cleanup.
+	// Segment-loss gate (2026-09-08 incident): when the final file never
+	// materialized, a DB row would be a permanent 404 entry — skip the
+	// insert, event, and metrics instead.
 	var fileSize int64
 	var recordingID string
+	finalExists := false
+	if r.curFinal != "" {
+		if info, err := os.Stat(r.curFinal); err == nil {
+			finalExists = true
+			fileSize = info.Size()
+		} else {
+			gb28181Logger.Warn("segment file missing after finalize — recording row skipped",
+				"camera_id", r.cfg.CameraID, "path", r.curFinal)
+		}
+	}
+
+	// Insert the recording row so the segment is visible to playback, merge,
+	// timelapse, and retention cleanup.
 	format := model.FormatH264
 	if r.codecType == "h265" {
 		format = model.FormatH265
 	}
-	if r.cfg.DB != nil && r.curFinal != "" {
+	if r.cfg.DB != nil && finalExists {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
@@ -611,12 +625,9 @@ func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 			EndedAt:    now,
 			Duration:   duration,
 			FrameCount: r.frameCount,
+			FileSize:   fileSize,
 		}
 		recordingID = rec.ID
-		if info, err := os.Stat(r.curFinal); err == nil {
-			fileSize = info.Size()
-			rec.FileSize = fileSize
-		}
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			gb28181Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
@@ -637,7 +648,7 @@ func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 	}
 
 	// Update metrics for the completed segment.
-	if r.frameCount > 0 && r.curFinal != "" && r.cfg.Metrics != nil {
+	if r.frameCount > 0 && finalExists && r.cfg.Metrics != nil {
 		r.cfg.Metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, r.codecType).Inc()
 		if fileSize > 0 {
 			r.cfg.Metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, r.codecType).Add(float64(fileSize))

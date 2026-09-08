@@ -972,20 +972,30 @@ func (d *DB) PathIsRecordingFile(ctx context.Context, cameraID, fullpath string)
 	return true, nil
 }
 
-// ListPendingMJPEGRecordings returns recordings for a camera where format IN ('mjpeg','jpeg')
-// AND merge_status='pending' AND ended_at IS NOT NULL.
-func (d *DB) ListPendingMJPEGRecordings(ctx context.Context, cameraID string) ([]model.Recording, error) {
-	sqlstr := selectRecordingColumns + ` WHERE camera_id = ? AND format IN ('mjpeg','jpeg') AND merge_status = 'pending' AND ended_at IS NOT NULL;`
-	rows, err := d.readConn().QueryContext(ctx, sqlstr, cameraID)
+// ListStalePendingRecordings returns up to limit pending recordings (any
+// format, any camera) whose started_at is older than the cutoff, excluding
+// archived rows and rows with an active AI status (protected from cleanup
+// like retention). The caller stats each row's file and deletes the ones
+// that never existed — the ghost-row sweep for the 2026-09-08 incident
+// class (pending row + missing file = permanent 404 entry).
+func (d *DB) ListStalePendingRecordings(ctx context.Context, cutoff time.Time, limit int) ([]model.Recording, error) {
+	defer d.observeQuery("ListStalePendingRecordings", time.Now())
+	if limit <= 0 {
+		limit = 500
+	}
+	sqlstr := selectRecordingColumns + ` WHERE merge_status = 'pending' AND archived = 0
+		AND (ai_status IS NULL OR ai_status = '')
+		AND started_at < ? ORDER BY started_at LIMIT ?;`
+	rows, err := d.readConn().QueryContext(ctx, sqlstr, timeToDB(cutoff), limit)
 	if err != nil {
-		return nil, fmt.Errorf("list pending mjpeg recordings: %w", err)
+		return nil, fmt.Errorf("list stale pending recordings: %w", err)
 	}
 	defer rows.Close()
 	var res []model.Recording
 	for rows.Next() {
 		r, err := scanRecordingRow(rows)
 		if err != nil {
-			return nil, fmt.Errorf("list pending mjpeg recordings: %w", err)
+			return nil, fmt.Errorf("list stale pending recordings: %w", err)
 		}
 		res = append(res, *r)
 	}
