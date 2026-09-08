@@ -234,9 +234,18 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 			sortOrder = "desc"
 		}
 		if sortBy == "started_at" && strings.EqualFold(sortOrder, "desc") {
-			where = append(where, "started_at < ?")
-			args = append(args, filter.Cursor)
-			useKeyset = true
+			// The API hands cursors out as RFC3339Nano but started_at is stored in
+			// sqliteTimeFormat (space-separated). Bound raw, SQLite compares TEXT
+			// lexicographically and ' ' (0x20) sorts below 'T' (0x54) at offset 10 —
+			// every stored row compared "less than" every cursor, so each page
+			// silently re-served page 1 (#704). Re-format through the storage format
+			// like the start/end filters do; an unparseable cursor falls back to
+			// OFFSET paging instead of matching nothing.
+			if t, err := time.Parse(time.RFC3339, filter.Cursor); err == nil {
+				where = append(where, "started_at < ?")
+				args = append(args, formatTime(t))
+				useKeyset = true
+			}
 		}
 	}
 
