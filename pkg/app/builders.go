@@ -912,6 +912,20 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	if deps.gb28181Server != nil {
 		gbPTZController = platform.NewPTZController(deps.gb28181DevMgr, deps.gb28181Server)
 		handler.SetGB28181PTZ(gbPTZController)
+		// GB/T 28181-2022 on-demand snapshot + manual record (#708): the
+		// DeviceControl sender (snapshot/record handlers) and the session
+		// registry backing the public upload endpoint. Frames persist under
+		// the storage root like any snapshot and publish camera.snapshot.
+		handler.SetGB28181Commander(gbPTZController)
+		gbSnapMgr := gb28181.NewSnapshotSessionManager(
+			&snapshot.Persistor{Root: store.RootDir()},
+			30*time.Second,
+			gb28181.WithSnapshotPublisher(func(topic string, data any) {
+				deps.eventBus.Publish(context.Background(), topic, data)
+			}),
+		)
+		gbSnapMgr.Start()
+		handler.SetGB28181SnapshotManager(gbSnapMgr)
 		handler.SetGB28181Catalog(platform.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
 		handler.SetGB28181ByeSender(deps.gb28181Server)
