@@ -42,13 +42,13 @@ type reconnectDeps struct {
 // nextBackoff computes one retry delay: the tiered ladder + jitter (storage
 // failures get the flat ~60s storage backoff), floored at min. The floor
 // never shortens a longer tier or the storage backoff (#711).
-func nextBackoff(retryCount int, storageFailed bool, min time.Duration) time.Duration {
+func nextBackoff(retryCount int, storageFailed bool, floor time.Duration) time.Duration {
 	b := TieredBackoffWithJitter(retryCount)
 	if storageFailed {
 		b = StorageBackoffWithJitter()
 	}
-	if b < min {
-		b = min
+	if b < floor {
+		b = floor
 	}
 	return b
 }

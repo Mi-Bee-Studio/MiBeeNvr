@@ -147,17 +147,17 @@ func TestNextBackoffFloor(t *testing.T) {
 
 	t.Run("floor raises low tiers only", func(t *testing.T) {
 		t.Parallel()
-		const min = 5 * time.Second
+		const floor = 5 * time.Second
 		for range 25 {
-			if b := nextBackoff(1, false, min); b < min {
-				t.Fatalf("attempt-1 backoff must respect the %s floor, got %s", min, b)
+			if b := nextBackoff(1, false, floor); b < min {
+				t.Fatalf("attempt-1 backoff must respect the %s floor, got %s", floor, b)
 			}
-			if b := nextBackoff(4, false, min); b < min {
-				t.Fatalf("attempt-4 backoff must respect the %s floor, got %s", min, b)
+			if b := nextBackoff(4, false, floor); b < min {
+				t.Fatalf("attempt-4 backoff must respect the %s floor, got %s", floor, b)
 			}
 		}
 		// High tiers already exceed the floor — untouched.
-		if b := nextBackoff(25, false, min); b < time.Minute {
+		if b := nextBackoff(25, false, floor); b < time.Minute {
 			t.Fatalf("attempt-25 backoff must stay at the 60s tier, got %s", b)
 		}
 	})
