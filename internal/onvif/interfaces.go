@@ -54,6 +54,9 @@ type EventSubscriber interface {
 	Subscribe(ctx context.Context, cameraID string) error
 	Unsubscribe(ctx context.Context, cameraID string) error
 	GetEventMessages(ctx context.Context) ([]ONVIFEvent, error)
+	// Status reports per-camera subscription diagnostics (the "订阅挂了 or
+	// 相机没事件" discriminator for the UI diagnostics line, #711).
+	Status(cameraID string) EventSubscriptionStatus
 }
 
 // DeviceManager manages device-level operations on an ONVIF device.

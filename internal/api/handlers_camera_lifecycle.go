@@ -209,3 +209,16 @@ func (h *Handler) handleAdaptiveTrigger(w http.ResponseWriter, r *http.Request) 
 		"hold", hold.String(), "dbfs", body.DBFS)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "triggered"})
 }
+
+// handleONVIFEventsStatus reports the camera-side ONVIF event subscription
+// diagnostics (#711): subscribed/state, event counters, last event and last
+// error — enough to tell "the camera emits nothing" from "the subscription
+// died" at a glance.
+func (h *Handler) handleONVIFEventsStatus(w http.ResponseWriter, r *http.Request) {
+	if h.camMgr == nil {
+		WriteError(w, http.StatusInternalServerError, "camera manager not available")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	writeJSON(w, http.StatusOK, h.camMgr.ONVIFEventsStatus(id))
+}

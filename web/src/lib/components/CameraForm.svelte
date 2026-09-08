@@ -47,6 +47,7 @@
     import ImagingPanel from '$lib/components/ImagingPanel.svelte';
     import PresetManager from '$lib/components/PresetManager.svelte';
     import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
+  import MotionSubscriptionStatus from '$lib/components/MotionSubscriptionStatus.svelte';
     import DeviceManagement from '$lib/components/DeviceManagement.svelte';
     import { startBackfill, getUntranscodedRecordingCount } from '$lib/api/transcoding';
     import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -105,6 +106,7 @@
   // drops to sparse keyframes while the compressed-domain activity signal
   // stays calm and returns to full recording on activity.
   let formRecordingMode = $state<'continuous' | 'adaptive'>('continuous');
+  let formMotionSource = $state<'nvr' | 'camera:onvif'>('nvr');
   let formAdaptiveCalmThreshold = $state('');
   let formAdaptiveTimelapseInterval = $state('');
   let formAdaptiveSpikeFactor = $state('');
@@ -426,6 +428,7 @@ let validationErrors = $state<Record<string, string>>({});
     formCascadeEnabled = camera.cascade_enabled ?? true;
     formCascadeSubStream = camera.cascade_sub_stream ?? false;
     formRecordingMode = camera.recording_mode === 'adaptive' ? 'adaptive' : 'continuous';
+    formMotionSource = camera.motion_source === 'camera:onvif' ? 'camera:onvif' : 'nvr';
     formAdaptiveCalmThreshold = camera.adaptive?.calm_threshold ?? '';
     formAdaptiveTimelapseInterval = camera.adaptive?.timelapse_interval ?? '';
     formAdaptiveSpikeFactor = camera.adaptive?.spike_factor ? String(camera.adaptive.spike_factor) : '';
@@ -801,6 +804,7 @@ async function performCameraSave() {
             cascade_enabled: formCascadeEnabled,
             cascade_sub_stream: formCascadeSubStream,
             recording_mode: formRecordingMode,
+            motion_source: formProtocol === 'onvif' ? formMotionSource : undefined,
             recording_tier: formRecordingTier,
             adaptive: buildAdaptivePayload(),
             audio_trigger: buildAudioTriggerPayload(),
@@ -874,6 +878,7 @@ async function performCameraSave() {
             cascade_enabled: formCascadeEnabled,
             cascade_sub_stream: formCascadeSubStream,
             recording_mode: formRecordingMode,
+            motion_source: formProtocol === 'onvif' ? formMotionSource : undefined,
             recording_tier: formRecordingTier,
             adaptive: buildAdaptivePayload(),
             audio_trigger: buildAudioTriggerPayload(),
@@ -1057,6 +1062,23 @@ async function performCameraSave() {
         {t('cameras.recordingEnabled')}
       </label>
     </div>
+      {#if formProtocol === 'onvif'}
+        <!-- Motion source (#711): NVR-side detectors or the camera's own
+             Pull-Point MotionAlarm subscription (mibee_cam WiFi-CSI). -->
+        <div>
+          <label for="cam-motion-source" class="input-label">{t('cameras.motionSource')}</label>
+          <select id="cam-motion-source" class="input" bind:value={formMotionSource}>
+            <option value="nvr">{t('cameras.motionSourceNvr')}</option>
+            <option value="camera:onvif">{t('cameras.motionSourceCamera')}</option>
+          </select>
+          <p class="text-xs th-text-muted mt-1">
+            {formMotionSource === 'camera:onvif' ? t('cameras.motionSourceCameraHint') : t('cameras.motionSourceNvrHint')}
+          </p>
+          {#if formMotionSource === 'camera:onvif' && editingCamera}
+            <MotionSubscriptionStatus cameraId={editingCamera.id} />
+          {/if}
+        </div>
+      {/if}
     {#if !formRecordingEnabled}
       <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
     {:else if formEncoding === 'h264' || formEncoding === 'h265'}

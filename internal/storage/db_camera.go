@@ -83,6 +83,9 @@ type CameraRow struct {
 	// drops to sparse keyframes while the compressed-domain activity signal
 	// stays calm. Adaptive holds its tuning knobs (nil = recorder defaults).
 	RecordingMode string `json:"recording_mode,omitempty"`
+	// MotionSource selects the camera's motion signal (#711): ""/"nvr" or
+	// "camera:onvif" (Pull-Point MotionAlarm subscription).
+	MotionSource string `json:"motion_source,omitempty"`
 	// RecordingTier marks the dual-stream tier (#637): ""/"single" or "tiered"
 	// (continuous sub-stream recording). Read by the tiered-recording service;
 	// changes apply on NVR restart.

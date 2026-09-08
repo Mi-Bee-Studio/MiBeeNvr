@@ -1906,5 +1906,19 @@
   "cameras.visionRoutingHint": "Choose which vision instances receive this camera's recordings; unchecked = all enabled instances.",
   "cameras.visionRoutingDisabled": "disabled",
   "aiEvents.sourceFilter": "Source instance",
-  "aiEvents.allSources": "All sources"
+  "aiEvents.allSources": "All sources",
+  "cameras.motionSource": "Motion detection source",
+  "cameras.motionSourceNvr": "NVR-side detection",
+  "cameras.motionSourceCamera": "Camera-side (ONVIF events)",
+  "cameras.motionSourceNvrHint": "The NVR detects activity from the video stream itself (adaptive compressed-domain signal / pixel gate).",
+  "cameras.motionSourceCameraHint": "Subscribe to the camera's ONVIF MotionAlarm events (e.g. mibee_cam WiFi-CSI): motion immediately triggers recording / exits timelapse.",
+  "cameras.motionSubState": "Subscription",
+  "cameras.motionSubLoading": "querying…",
+  "cameras.motionSubActive": "active",
+  "cameras.motionSubResubscribing": "resubscribing",
+  "cameras.motionSubUnsupported": "unsupported by device",
+  "cameras.motionSubIdle": "not subscribed",
+  "cameras.motionSubEvents": "events",
+  "cameras.motionSubLastEvent": "last event",
+  "cameras.motionSubError": "last error"
 }

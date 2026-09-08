@@ -97,6 +97,15 @@ type CameraConfig struct {
 	// Issue #36.
 	RecordingEnabled *bool `yaml:"recording_enabled,omitempty" json:"recording_enabled,omitempty"`
 
+	// MotionSource selects where the camera's motion signal comes from
+	// (#711): "" | "nvr" — the NVR's own detectors (adaptive spikes, pixgate;
+	// the default, current behavior). "camera:onvif" — subscribe to the
+	// camera's ONVIF Pull-Point event service; tns1:VideoSource/MotionAlarm
+	// events (mibee_cam WiFi-CSI contract v1.5 §13, or a standard camera's
+	// motion detection) drive the recorder via the shared trigger surface and
+	// exit adaptive timelapse with reason=onvif_motion. ONVIF protocol only.
+	MotionSource string `yaml:"motion_source,omitempty" json:"motion_source,omitempty"`
+
 	// RecordingMode selects the write-density strategy (issue #435):
 	//   "" | "continuous" — record every frame (default, current behavior)
 	//   "adaptive"        — dynamic timelapse: while the compressed-domain
