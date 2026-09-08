@@ -612,10 +612,62 @@ func probeRTSPEncodingFor(rtspURL, username, password string) string {
 
 // probeHTTPMJPEG probes the ONVIF device for an HTTP MJPEG stream by trying
 // candidate URLs and checking for multipart/x-mixed-replace Content-Type.
-func (r *ONVIFRecorder) probeHTTPMJPEG(ctx context.Context) (string, error) {
+// probeMJPEGHeaders dials testURL and waits for the response headers only.
+// The request runs on a context detached from the caller so that a hit can be
+// adopted by the recorder as its live stream connection (#723: re-dialing the
+// just-probed URL within the device's anti-hammer window arms its guard). On
+// timeout or caller cancellation the detached request is cancelled and its
+// response, if any, is closed.
+func probeMJPEGHeaders(ctx context.Context, client *http.Client, testURL string) (*http.Response, context.CancelFunc, error) {
+	detached, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(detached, http.MethodGet, testURL, nil)
+	if err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Connection", "close")
+	req.Close = true
+
+	type probeResult struct {
+		resp *http.Response
+		err  error
+	}
+	ch := make(chan probeResult, 1)
+	go func() {
+		resp, err := client.Do(req) //nolint:bodyclose // ownership transfers via the channel: caller adopts or closes
+		ch <- probeResult{resp, err}
+	}()
+
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			cancel()
+			return nil, nil, r.err
+		}
+		return r.resp, cancel, nil
+	case <-timer.C:
+		cancel()
+		if r := <-ch; r.resp != nil {
+			_ = r.resp.Body.Close()
+		}
+		return nil, nil, fmt.Errorf("probe timed out waiting for response headers")
+	case <-ctx.Done():
+		cancel()
+		go func() {
+			if r := <-ch; r.resp != nil {
+				_ = r.resp.Body.Close()
+			}
+		}()
+		return nil, nil, ctx.Err()
+	}
+}
+
+func (r *ONVIFRecorder) probeHTTPMJPEG(ctx context.Context) (string, *http.Response, context.CancelFunc, error) {
 	onvifURL, err := url.Parse(r.cfg.ONVIFEndpoint)
 	if err != nil {
-		return "", fmt.Errorf("parse ONVIF endpoint: %w", err)
+		return "", nil, nil, fmt.Errorf("parse ONVIF endpoint: %w", err)
 	}
 
 	// Extract path from rtspURL (e.g., /stream from rtsp://host:554/stream)
@@ -647,11 +699,12 @@ func (r *ONVIFRecorder) probeHTTPMJPEG(ctx context.Context) (string, error) {
 		"http://" + onvifURL.Host,
 	}
 
+	// Header-wait is bounded per candidate by probeMJPEGHeaders' timer, NOT a
+	// client Timeout — a hit is handed to the recorder as a live connection
+	// and must not carry a body-read deadline (#723).
 	client := &http.Client{
-		Timeout: 3 * time.Second,
-		Transport: &http.Transport{
-			DisableKeepAlives: true,
-		},
+		Timeout:   0,
+		Transport: &http.Transport{DisableKeepAlives: true},
 	}
 
 	onvifRecLogger.Info("probing HTTP MJPEG", "camera_id", r.cfg.CameraID, "bases", baseURLs, "candidates", candidates)
@@ -659,28 +712,23 @@ func (r *ONVIFRecorder) probeHTTPMJPEG(ctx context.Context) (string, error) {
 	for _, base := range baseURLs {
 		for _, path := range candidates {
 			testURL := base + path
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
-			if err != nil {
-				continue
-			}
-			req.Header.Set("Connection", "close")
-			req.Close = true
-
-			resp, err := client.Do(req)
+			resp, probeCancel, err := probeMJPEGHeaders(ctx, client, testURL)
 			if err != nil {
 				onvifRecLogger.Debug("HTTP MJPEG probe candidate failed", "camera_id", r.cfg.CameraID, "url", testURL, "error", err)
 				continue
 			}
 			ct := resp.Header.Get("Content-Type")
-			resp.Body.Close()
-			onvifRecLogger.Debug("HTTP MJPEG probe response", "camera_id", r.cfg.CameraID, "url", testURL, "content_type", ct)
-			if strings.Contains(ct, "multipart/x-mixed-replace") {
-				onvifRecLogger.Info("HTTP MJPEG stream found", "camera_id", r.cfg.CameraID, "url", testURL)
-				return testURL, nil
+			if !strings.Contains(ct, "multipart/x-mixed-replace") {
+				_ = resp.Body.Close()
+				probeCancel()
+				onvifRecLogger.Debug("HTTP MJPEG probe response", "camera_id", r.cfg.CameraID, "url", testURL, "content_type", ct)
+				continue
 			}
+			onvifRecLogger.Info("HTTP MJPEG stream found", "camera_id", r.cfg.CameraID, "url", testURL)
+			return testURL, resp, probeCancel, nil
 		}
 	}
-	return "", fmt.Errorf("no MJPEG stream found at any candidate URL")
+	return "", nil, nil, fmt.Errorf("no MJPEG stream found at any candidate URL")
 }
 
 // guessMJPEGURL constructs a best-guess HTTP MJPEG URL from the ONVIF endpoint
@@ -764,7 +812,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 	case "JPEG":
 		// 1. Try cached HTTP MJPEG URL (caller holds mu, no need to re-lock)
 		if r.httpJPEGURL != "" {
-			return r.newHTTPJPEGRecorder(r.httpJPEGURL)
+			return r.newHTTPJPEGRecorder(r.httpJPEGURL, nil, nil)
 		}
 
 		// 2. Try ONVIF GetStreamUri with Protocol=HTTP.
@@ -781,7 +829,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			} else if info != nil && strings.HasPrefix(info.URI, "http://") {
 				onvifRecLogger.Info("ONVIF returned HTTP stream URI", "camera_id", r.cfg.CameraID, "url", info.URI)
 				r.httpJPEGURL = info.URI
-				return r.newHTTPJPEGRecorder(info.URI)
+				return r.newHTTPJPEGRecorder(info.URI, nil, nil)
 			} else if info != nil {
 				onvifRecLogger.Debug("ONVIF HTTP protocol returned non-HTTP URI, ignoring", "camera_id", r.cfg.CameraID, "url", info.URI)
 			}
@@ -791,11 +839,14 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 		//    NOTE: ONVIF client may hold an active HTTP connection to the same
 		//    device (ESP32-S3 web servers often support only 1-2 concurrent
 		//    connections). The probe may fail due to connection exhaustion.
+		//    A hit hands its open response to the recorder (#723) so the
+		//    probe connection becomes the stream connection — re-dialing the
+		//    just-probed URL within the anti-hammer window arms the guard.
 		probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if httpURL, err := r.probeHTTPMJPEG(probeCtx); err == nil {
+		if httpURL, resp, probeCancel, err := r.probeHTTPMJPEG(probeCtx); err == nil { //nolint:bodyclose // resp ownership moves into the recorder via newHTTPJPEGRecorder
 			r.httpJPEGURL = httpURL
-			return r.newHTTPJPEGRecorder(httpURL)
+			return r.newHTTPJPEGRecorder(httpURL, resp, probeCancel)
 		}
 
 		// 4. Probe failed (likely connection exhaustion on ESP32-S3).
@@ -804,7 +855,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 		guessURL := r.guessMJPEGURL()
 		onvifRecLogger.Info("HTTP MJPEG probe failed, using best-guess URL", "camera_id", r.cfg.CameraID, "url", guessURL)
 		r.httpJPEGURL = guessURL
-		return r.newHTTPJPEGRecorder(guessURL)
+		return r.newHTTPJPEGRecorder(guessURL, nil, nil)
 	default: // H264 or unknown
 		cfg := H264Config{
 			CameraID:             r.cfg.CameraID,
@@ -828,8 +879,10 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 	}
 }
 
-// newHTTPJPEGRecorder creates an HTTPJPEGRecorder with the given URL.
-func (r *ONVIFRecorder) newHTTPJPEGRecorder(httpURL string) model.Recorder {
+// newHTTPJPEGRecorder creates an HTTPJPEGRecorder for the given URL. An
+// adopted response (non-nil) continues the probe's already-open connection
+// instead of re-dialing (#723).
+func (r *ONVIFRecorder) newHTTPJPEGRecorder(httpURL string, adopted *http.Response, adoptedCancel context.CancelFunc) model.Recorder {
 	cfg := HTTPJPEGConfig{
 		CameraID:      r.cfg.CameraID,
 		URL:           httpURL,
@@ -843,6 +896,9 @@ func (r *ONVIFRecorder) newHTTPJPEGRecorder(httpURL string) model.Recorder {
 	}
 	rec := NewHTTPJPEGRecorder(cfg, r.store, r.metrics)
 	rec.Hub = r.Hub
+	if adopted != nil {
+		rec.AdoptStream(adopted, adoptedCancel)
+	}
 	return rec
 }
 
