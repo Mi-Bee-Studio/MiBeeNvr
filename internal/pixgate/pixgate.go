@@ -444,6 +444,11 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, cfg CameraConf
 	wasActive := false
 	wasSuppressed := false
 	backoff := time.Second
+	srcLabel := "hub"
+	if !useHub {
+		srcLabel = "rtsp"
+	}
+	var stats pixgateStats
 
 	sample := func(gray []byte) bool {
 		now := time.Now()
@@ -466,6 +471,16 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, cfg CameraConf
 			return ctx.Err() == nil
 		}
 		m.recordFG(cameraID, now, res.BlobAreaPct, !res.Flood && !res.Ghost)
+		if line, emit := stats.observe(now, res.BlobAreaPct, !res.Flood && !res.Ghost, res.Active); emit {
+			// #699 field visibility: the normal path is silent, which left
+			// TL-stuck cameras undiagnosable from the journal alone.
+			log.Info("pixgate stats",
+				"source", srcLabel,
+				"samples", line.Samples,
+				"valid", line.Valid,
+				"active", line.Active,
+				"last_area_pct", line.LastAreaPct)
+		}
 		if res.Ghost {
 			log.Info("pixgate: static foreground absorbed into background (ghost suppression)",
 				"area_pct", res.BlobAreaPct, "cx", res.CX, "cy", res.CY)
