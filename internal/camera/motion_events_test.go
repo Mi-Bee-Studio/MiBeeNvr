@@ -27,9 +27,9 @@ type fakeMotionRecorder struct {
 	lastHold    time.Duration
 }
 
-func (f *fakeMotionRecorder) Start(ctx context.Context) error  { return nil }
-func (f *fakeMotionRecorder) Stop() error                      { return nil }
-func (f *fakeMotionRecorder) Status() model.RecorderStatus     { return model.StatusRecording }
+func (f *fakeMotionRecorder) Start(ctx context.Context) error { return nil }
+func (f *fakeMotionRecorder) Stop() error                     { return nil }
+func (f *fakeMotionRecorder) Status() model.RecorderStatus    { return model.StatusRecording }
 func (f *fakeMotionRecorder) MotionTriggerEvent(at time.Time, hold time.Duration) error {
 	f.motionCalls++
 	f.lastHold = hold

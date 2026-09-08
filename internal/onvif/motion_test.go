@@ -13,8 +13,8 @@ func TestParseMotionAlarm(t *testing.T) {
 		ma, ok := ParseMotionAlarm(ONVIFEvent{
 			Topic: "tns1:VideoSource/MotionAlarm",
 			Data: map[string]any{
-				"State":        "true",
-				"Score":        "87",
+				"State":         "true",
+				"Score":         "87",
 				"source.Source": "CSI",
 			},
 		})

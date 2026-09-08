@@ -180,9 +180,9 @@ type CameraManager struct {
 	// eventSubscriberFactory overrides subscriber construction (test seam
 	// for the #711 motion wiring; nil = per-camera ONVIF client path).
 	eventSubscriberFactory func(ctx context.Context, cameraID string, cb onvif.EventCallback) (onvif.EventSubscriber, error)
-	deviceInfoCache  map[string]*onvif.DeviceInfo        // camera_id → cached device info
-	deviceInfoMu     sync.RWMutex                        // protects deviceInfoCache
-	eventBus         *event.EventBus                     // event bus for publishing segment events
+	deviceInfoCache        map[string]*onvif.DeviceInfo // camera_id → cached device info
+	deviceInfoMu           sync.RWMutex                 // protects deviceInfoCache
+	eventBus               *event.EventBus              // event bus for publishing segment events
 	// relayMgr (optional) is notified when a camera's push-out targets change so
 	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
 	// import cycle.

@@ -390,9 +390,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingMode *string `json:"recording_mode"`
 		RecordingTier *string `json:"recording_tier"`
 		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
-		MotionSource *string `json:"motion_source"`
-		Pixgate       *config.CameraPixgateConfig     `json:"pixgate"`
-		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
+		MotionSource *string                         `json:"motion_source"`
+		Pixgate      *config.CameraPixgateConfig     `json:"pixgate"`
+		Adaptive     *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Audio trigger (#478): loudness input for adaptive recording.
 		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
 		// Push/ingest fields (SRT/RTMP)

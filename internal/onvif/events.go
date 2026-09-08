@@ -255,8 +255,8 @@ func (e *EventSubscriberImpl) createSubscriptionLocked(ctx context.Context, came
 			eventLogger.Info("device does not support ONVIF events; skipping subscription",
 				"camera_id", cameraID, "error", err)
 			e.subscriptions[cameraID] = &pullPointSubscription{
-				active:  false,
-				state:   StateUnsupported,
+				active:    false,
+				state:     StateUnsupported,
 				lastError: err.Error(),
 			}
 			return nil, fmt.Errorf("%w (camera %q): %w", ErrEventsNotSupported, cameraID, err)
@@ -377,14 +377,14 @@ func (e *EventSubscriberImpl) SetEventCallback(cb EventCallback) {
 
 // EventSubscriptionStatus is the per-camera subscription diagnostic snapshot.
 type EventSubscriptionStatus struct {
-	Subscribed           bool      `json:"subscribed"`
-	State                string    `json:"state"`
-	SubscriptionRef      string    `json:"subscription_ref,omitempty"`
-	TerminationTime      time.Time `json:"termination_time,omitempty"`
-	PollInterval         string    `json:"poll_interval,omitempty"`
-	EventCount           int64     `json:"event_count"`
-	LastEventAt          time.Time `json:"last_event_at,omitempty"`
-	LastError            string    `json:"last_error,omitempty"`
+	Subscribed            bool      `json:"subscribed"`
+	State                 string    `json:"state"`
+	SubscriptionRef       string    `json:"subscription_ref,omitempty"`
+	TerminationTime       time.Time `json:"termination_time,omitempty"`
+	PollInterval          string    `json:"poll_interval,omitempty"`
+	EventCount            int64     `json:"event_count"`
+	LastEventAt           time.Time `json:"last_event_at,omitempty"`
+	LastError             string    `json:"last_error,omitempty"`
 	ConsecutivePollErrors int       `json:"consecutive_poll_errors"`
 }
 
