@@ -149,10 +149,10 @@ func TestNextBackoffFloor(t *testing.T) {
 		t.Parallel()
 		const floor = 5 * time.Second
 		for range 25 {
-			if b := nextBackoff(1, false, floor); b < min {
+			if b := nextBackoff(1, false, floor); b < floor {
 				t.Fatalf("attempt-1 backoff must respect the %s floor, got %s", floor, b)
 			}
-			if b := nextBackoff(4, false, floor); b < min {
+			if b := nextBackoff(4, false, floor); b < floor {
 				t.Fatalf("attempt-4 backoff must respect the %s floor, got %s", floor, b)
 			}
 		}
