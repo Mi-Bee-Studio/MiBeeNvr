@@ -88,6 +88,12 @@ func (s *APIKeyStore) LastUsed() map[string]time.Time {
 	return out
 }
 
+// StreamCookieAPIKeyTTL bounds the lifetime of an API-key-valued stream cookie
+// (#706). Unlike session tokens, API keys themselves do not expire — the cookie
+// must. One viewing session's worth; playlist fetches re-issue it continuously,
+// so a live player never notices, while a forgotten cookie dies on its own.
+const StreamCookieAPIKeyTTL = time.Hour
+
 // APIKeyAuthMiddleware validates Bearer tokens with the "mbv_" prefix against
 // the live API key store. It runs alongside BasicAuth — if the request has a
 // Bearer token, API Key auth is attempted first; otherwise BasicAuth handles
@@ -109,7 +115,20 @@ func APIKeyAuthMiddleware(store *APIKeyStore, next http.Handler) http.Handler {
 			// a failed Bearer match, so query-param-only requests never
 			// authenticated.
 			token = qk
-		} else {
+		} else if streamCookieEligible(r) {
+			// The mbs_session stream cookie may carry an API key for media
+			// fetches (#706): players that cannot attach headers per request
+			// (iOS AVPlayer on HLS segments) got the cookie from an
+			// api-key-authenticated playlist response. Only mbv_-shaped values
+			// take this path — mbs_ session values fall through untouched to
+			// the session middleware. The GET/HEAD + media-extension gate is
+			// the same one that governs session-token cookies, so the cookie
+			// can never authorize anything but read-only media fetches.
+			if c, err := r.Cookie(StreamCookieName); err == nil && strings.HasPrefix(c.Value, APIKeyPrefix) {
+				token = c.Value
+			}
+		}
+		if token == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -148,6 +167,23 @@ func WithAPIKeyName(ctx context.Context, name string) context.Context {
 // IsAPIKeyAuthenticated reports whether the request was authenticated via API Key.
 func IsAPIKeyAuthenticated(ctx context.Context) bool {
 	return APIKeyNameFromContext(ctx) != ""
+}
+
+// APIKeyFromRequest returns the raw mbv_ key the request presented, from the
+// Bearer header or the ?api_key= query — mirroring the two extraction paths of
+// APIKeyAuthMiddleware. Callers must ALSO check IsAPIKeyAuthenticated before
+// trusting the value: presence in the request proves nothing, only the
+// middleware's store lookup does (#706: the playlist handler refuses to echo
+// an unvalidated key into a cookie).
+func APIKeyFromRequest(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer "+APIKeyPrefix) {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	if qk := r.URL.Query().Get("api_key"); strings.HasPrefix(qk, APIKeyPrefix) {
+		return qk
+	}
+	return ""
 }
 
 // GenerateAPIKey creates a new random API key with the mbv_ prefix.

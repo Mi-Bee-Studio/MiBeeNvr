@@ -359,7 +359,10 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("http status %d", resp.StatusCode), false
+		return &HTTPStatusError{
+			Code:       resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}, false
 	}
 
 	ct := resp.Header.Get("Content-Type")
@@ -735,4 +738,31 @@ func readUntilBoundary(reader *bufio.Reader, buf *bytes.Buffer, boundary []byte)
 			return data, nil
 		}
 	}
+}
+
+// HTTPStatusError is a non-200 stream response. RetryAfter carries the
+// server's Retry-After hint when present (seconds form): the mibee_cam
+// anti-hammer guard sends the remaining cooldown on 503 so clients can wait
+// out the window instead of re-triggering its renewal (#711).
+type HTTPStatusError struct {
+	Code       int
+	RetryAfter time.Duration
+}
+
+func (e *HTTPStatusError) Error() string { return fmt.Sprintf("http status %d", e.Code) }
+
+// RetryAfterHint exposes the cooldown for the reconnect loop (longer wins).
+func (e *HTTPStatusError) RetryAfterHint() time.Duration { return e.RetryAfter }
+
+// parseRetryAfter parses the delta-seconds form of Retry-After. The HTTP-date
+// form is treated as absent — no known camera firmware uses it.
+func parseRetryAfter(v string) time.Duration {
+	if v == "" {
+		return 0
+	}
+	secs, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
 }

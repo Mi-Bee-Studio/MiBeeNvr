@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -96,4 +97,76 @@ func TestBuildAPIKeyInfoNoStore(t *testing.T) {
 	require.Equal(t, false, info[0]["revoked"])
 	_, hasLastUsed := info[0]["last_used"]
 	require.False(t, hasLastUsed, "no store wired → no last_used field")
+}
+
+// mintExpectStatus posts a generate request and returns (key, statusCode).
+func mintExpectStatus(t *testing.T, h *Handler, name string) (string, int) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{"name": name})
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/api-keys", bytes.NewReader(b))
+	rec := httptest.NewRecorder()
+	h.handleGenerateAPIKey(rec, req)
+	var resp struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	return resp.Key, rec.Code
+}
+
+// Duplicate ACTIVE names are rejected at mint time (409) — a name that only
+// exists in revoked history can be reused for re-pairing (#705).
+func TestGenerateAPIKeyRejectsDuplicateActiveName(t *testing.T) {
+	t.Parallel()
+	h, _ := setupAPIKeyTestHandler(t)
+
+	_, code := mintExpectStatus(t, h, "dad-phone")
+	require.Equal(t, http.StatusCreated, code)
+
+	_, code = mintExpectStatus(t, h, "dad-phone")
+	require.Equal(t, http.StatusConflict, code, "duplicate active name must be rejected")
+
+	// Re-using the name after revocation is the re-pairing flow — allowed.
+	deleteRevokeKey(t, h, "dad-phone")
+	_, code = mintExpectStatus(t, h, "dad-phone")
+	require.Equal(t, http.StatusCreated, code, "revoked name must be reusable")
+}
+
+// Revoke-by-name must mark ALL entries with that name — legacy/restored configs
+// can carry duplicates, and stopping at the first match left the newer key
+// authorized while reporting success (#705).
+func TestRevokeAPIKeyMarksAllDuplicates(t *testing.T) {
+	t.Parallel()
+	h, keyStore := setupAPIKeyTestHandler(t)
+
+	// Simulate a restored config with two active entries sharing a name.
+	h.config.APIKeys = []config.APIKeyConfig{
+		{Key: "mbv_" + strings.Repeat("a", 40), Name: "tablet"},
+		{Key: "mbv_" + strings.Repeat("b", 40), Name: "tablet"},
+	}
+	h.syncAPIKeyStore()
+	_, ok := keyStore.Lookup("mbv_" + strings.Repeat("a", 40))
+	require.True(t, ok)
+
+	r := chi.NewRouter()
+	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
+	req := httptest.NewRequest(http.MethodDelete, "/api/settings/api-keys/tablet", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Status string `json:"status"`
+		Count  int    `json:"count"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, "revoked", resp.Status)
+	require.Equal(t, 2, resp.Count, "both duplicate entries must be revoked")
+
+	for _, k := range h.config.APIKeys {
+		require.True(t, k.Revoked, "config entry %s must be revoked", k.Name)
+	}
+	_, ok = keyStore.Lookup("mbv_" + strings.Repeat("a", 40))
+	require.False(t, ok, "first duplicate must stop authenticating")
+	_, ok = keyStore.Lookup("mbv_" + strings.Repeat("b", 40))
+	require.False(t, ok, "second duplicate must stop authenticating")
 }
