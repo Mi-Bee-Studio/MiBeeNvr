@@ -151,3 +151,21 @@ func TestONVIFEventsStatusEmpty(t *testing.T) {
 	require.False(t, st.Subscribed)
 	require.Empty(t, st.State)
 }
+
+// A failed subscription is discarded with its subscriber — the manager-level
+// error memory must still surface "unsupported" / "resubscribing" in the
+// diagnostics so the UI can tell a dead subscription from a never-attempted
+// one (#711).
+func TestONVIFEventsStatusRemembersFailure(t *testing.T) {
+	t.Parallel()
+	cm := NewCameraManager(testConfig(), nil, nil, "")
+
+	cm.onvifMu.Lock()
+	cm.motionSubErrors["cam-x"] = "onvif: device does not support event pull-point subscription: Action not supported"
+	cm.motionSubErrors["cam-y"] = "dial tcp timeout"
+	cm.onvifMu.Unlock()
+
+	require.Equal(t, onvif.StateUnsupported, cm.ONVIFEventsStatus("cam-x").State)
+	require.NotEmpty(t, cm.ONVIFEventsStatus("cam-x").LastError)
+	require.Equal(t, onvif.StateResubscribing, cm.ONVIFEventsStatus("cam-y").State)
+}

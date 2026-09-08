@@ -22,6 +22,14 @@ var eventLogger = slogx.Component("onvif-events")
 // repeatedly attempting a subscription that will never succeed.
 var ErrEventsNotSupported = errors.New("onvif: device does not support event pull-point subscription")
 
+// IsEventsNotSupportedError reports whether an error string (e.g. a recorded
+// last-subscription failure) represents the device rejecting event
+// subscription as unimplemented — the camera-manager diagnostics use it to
+// label a camera "unsupported" without re-probing it.
+func IsEventsNotSupported(errOrMsg string) bool {
+	return isEventsNotSupportedError(errors.New(errOrMsg))
+}
+
 // isEventsNotSupportedError reports whether err represents the device rejecting
 // event subscription as unimplemented. Devices phrase this variously:
 // "Action Not Implemented", "ActionNotSupported", "NotImplemented", etc.

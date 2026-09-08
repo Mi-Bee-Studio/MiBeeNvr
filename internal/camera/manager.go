@@ -170,6 +170,10 @@ type CameraManager struct {
 	errorDetails     map[string]*model.CameraErrorDetail // cameraID → latest error detail
 	errorDetailsMu   sync.RWMutex                        // protects errorDetails
 	eventSubscribers map[string]onvif.EventSubscriber    // camera_id → event subscriber
+	// motionSubErrors remembers the last camera:onvif subscription failure
+	// per camera (#711) — a failed subscriber is discarded, but the UI
+	// diagnostics must still say "device does not implement events".
+	motionSubErrors map[string]string
 	// motionAction is the shared trigger-dispatcher entry (#711) used for
 	// camera-side ONVIF MotionAlarm events; nil = motion actions dropped.
 	motionAction func(cameraID, action string)
@@ -263,6 +267,7 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		errorDetails:       make(map[string]*model.CameraErrorDetail),
 		onvifClients:       make(map[string]*onvif.Client),
 		eventSubscribers:   make(map[string]onvif.EventSubscriber),
+		motionSubErrors:    make(map[string]string),
 		deviceInfoCache:    make(map[string]*onvif.DeviceInfo),
 		hubFlushLast:       make(map[string][2]int64),
 		hubBytesLast:       make(map[string]int64),

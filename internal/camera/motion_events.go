@@ -89,10 +89,24 @@ func (cm *CameraManager) EnsureMotionSubscription(ctx context.Context, cam confi
 	factory := cm.eventSubscriberFactory
 	cm.onvifMu.Unlock()
 
+	// Remember the last subscription outcome so the diagnostics endpoint can
+	// tell "device does not implement events" from "never attempted" even
+	// though a failed subscriber is discarded (its tombstone dies with it).
+	recordOutcome := func(err error) {
+		cm.onvifMu.Lock()
+		if err != nil {
+			cm.motionSubErrors[cam.ID] = err.Error()
+		} else {
+			delete(cm.motionSubErrors, cam.ID)
+		}
+		cm.onvifMu.Unlock()
+	}
+
 	if !want {
 		if exists {
 			_ = cm.UnsubscribeONVIFEvents(ctx, cam.ID)
 		}
+		recordOutcome(nil)
 		return
 	}
 	if exists {
@@ -105,11 +119,13 @@ func (cm *CameraManager) EnsureMotionSubscription(ctx context.Context, cam confi
 	if factory != nil {
 		sub, err := factory(ctx, cameraID, cb)
 		if err != nil {
+			recordOutcome(err)
 			logger.Warn("camera:onvif motion subscription failed",
 				"camera_id", cameraID, "error", err)
 			return
 		}
 		if err := sub.Subscribe(ctx, cameraID); err != nil {
+			recordOutcome(err)
 			logger.Info("camera:onvif motion subscription not established",
 				"camera_id", cameraID, "error", err)
 			return
@@ -117,6 +133,7 @@ func (cm *CameraManager) EnsureMotionSubscription(ctx context.Context, cam confi
 		cm.onvifMu.Lock()
 		cm.eventSubscribers[cameraID] = sub
 		cm.onvifMu.Unlock()
+		recordOutcome(nil)
 		logger.Info("subscribed to camera-side ONVIF motion events", "camera_id", cameraID)
 		return
 	}
@@ -125,18 +142,31 @@ func (cm *CameraManager) EnsureMotionSubscription(ctx context.Context, cam confi
 	// trigger latency low (mibee_cam contract suggests 0.5–1s; the 120s
 	// device-side expiry gives huge headroom).
 	if err := cm.SubscribeONVIFEvents(ctx, cameraID, cb, onvif.WithPollInterval(time.Second)); err != nil {
+		recordOutcome(err)
 		logger.Info("camera:onvif motion subscription not established",
 			"camera_id", cameraID, "error", err)
+		return
 	}
+	recordOutcome(nil)
 }
 
 // ONVIFEventsStatus reports the per-camera subscription diagnostics.
 func (cm *CameraManager) ONVIFEventsStatus(cameraID string) onvif.EventSubscriptionStatus {
 	cm.onvifMu.Lock()
 	sub := cm.eventSubscribers[cameraID]
+	lastErr := cm.motionSubErrors[cameraID]
 	cm.onvifMu.Unlock()
 	if sub == nil {
-		return onvif.EventSubscriptionStatus{}
+		st := onvif.EventSubscriptionStatus{}
+		if lastErr != "" {
+			st.LastError = lastErr
+			if onvif.IsEventsNotSupported(lastErr) {
+				st.State = onvif.StateUnsupported
+			} else {
+				st.State = onvif.StateResubscribing
+			}
+		}
+		return st
 	}
 	return sub.Status(cameraID)
 }
