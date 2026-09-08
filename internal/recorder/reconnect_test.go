@@ -184,10 +184,8 @@ func TestRunReconnectLoopAppliesMinBackoff(t *testing.T) {
 			mu.Lock()
 			attempts = append(attempts, time.Now())
 			mu.Unlock()
-			if len(attempts) >= 2 {
-				// Cancel from inside Connect is racy; the caller cancels via
-				// the gap watcher below. Keep failing here.
-			}
+			// Exit is driven by the gap watcher below (cancelling from inside
+			// Connect would race the loop's own ctx read).
 			return errors.New("boom"), false
 		},
 	}
