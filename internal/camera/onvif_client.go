@@ -230,7 +230,7 @@ func intPtrOrZero(i *int) int {
 // SubscribeONVIFEvents subscribes to PullPoint events for the given camera.
 // The eventCallback is invoked when events are received.
 // Returns error if camera is not found, not ONVIF, or subscription fails.
-func (cm *CameraManager) SubscribeONVIFEvents(ctx context.Context, cameraID string, eventCallback onvif.EventCallback) error {
+func (cm *CameraManager) SubscribeONVIFEvents(ctx context.Context, cameraID string, eventCallback onvif.EventCallback, opts ...onvif.EventSubscriberOption) error {
 	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
 	if err != nil {
 		return err
@@ -243,7 +243,7 @@ func (cm *CameraManager) SubscribeONVIFEvents(ctx context.Context, cameraID stri
 		return nil // Already subscribed
 	}
 
-	sub := client.NewEventSubscriber(onvif.WithEventCallback(eventCallback))
+	sub := client.NewEventSubscriber(append([]onvif.EventSubscriberOption{onvif.WithEventCallback(eventCallback)}, opts...)...)
 	if sub == nil {
 		return fmt.Errorf("camera %q: failed to create event subscriber", cameraID)
 	}

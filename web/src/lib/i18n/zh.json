@@ -1905,5 +1905,19 @@
   "cameras.visionRoutingHint": "选择该摄像头的录像推送给哪些 Vision 实例;不勾选 = 全部启用实例。",
   "cameras.visionRoutingDisabled": "已停用",
   "aiEvents.sourceFilter": "来源实例",
-  "aiEvents.allSources": "全部来源"
+  "aiEvents.allSources": "全部来源",
+  "cameras.motionSource": "运动侦测来源",
+  "cameras.motionSourceNvr": "NVR 侧侦测",
+  "cameras.motionSourceCamera": "相机侧侦测（ONVIF 事件）",
+  "cameras.motionSourceNvrHint": "NVR 从视频流自行侦测活动（自适应压缩域信号 / 像素门控）。",
+  "cameras.motionSourceCameraHint": "订阅相机的 ONVIF MotionAlarm 事件（如 mibee_cam 的 WiFi CSI 感知）：有人活动时立即触发录像 / 退出延时模式。",
+  "cameras.motionSubState": "订阅",
+  "cameras.motionSubLoading": "查询中…",
+  "cameras.motionSubActive": "正常",
+  "cameras.motionSubResubscribing": "重建中",
+  "cameras.motionSubUnsupported": "设备不支持",
+  "cameras.motionSubIdle": "未订阅",
+  "cameras.motionSubEvents": "已收事件",
+  "cameras.motionSubLastEvent": "最近事件",
+  "cameras.motionSubError": "最近错误"
 }

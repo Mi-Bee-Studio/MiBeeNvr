@@ -84,6 +84,10 @@ type CameraUpdate struct {
 	// (#637): ""/"single" or "tiered". nil = unchanged. Tier changes are read
 	// by the tiered-recording service — applies on NVR restart.
 	RecordingTier *string
+	// MotionSource (#711): ""/"nvr" (NVR-side detectors) or "camera:onvif"
+	// (subscribe to the camera's Pull-Point MotionAlarm events). nil =
+	// unchanged; the subscription reconciles immediately (no restart).
+	MotionSource *string
 	// Pixgate arms the pixel-domain fine gate (#636). nil = unchanged;
 	// applies on NVR restart (the service reads config at boot).
 	Pixgate  *config.CameraPixgateConfig
@@ -166,6 +170,12 @@ type CameraManager struct {
 	errorDetails     map[string]*model.CameraErrorDetail // cameraID → latest error detail
 	errorDetailsMu   sync.RWMutex                        // protects errorDetails
 	eventSubscribers map[string]onvif.EventSubscriber    // camera_id → event subscriber
+	// motionAction is the shared trigger-dispatcher entry (#711) used for
+	// camera-side ONVIF MotionAlarm events; nil = motion actions dropped.
+	motionAction func(cameraID, action string)
+	// eventSubscriberFactory overrides subscriber construction (test seam
+	// for the #711 motion wiring; nil = per-camera ONVIF client path).
+	eventSubscriberFactory func(ctx context.Context, cameraID string, cb onvif.EventCallback) (onvif.EventSubscriber, error)
 	deviceInfoCache  map[string]*onvif.DeviceInfo        // camera_id → cached device info
 	deviceInfoMu     sync.RWMutex                        // protects deviceInfoCache
 	eventBus         *event.EventBus                     // event bus for publishing segment events

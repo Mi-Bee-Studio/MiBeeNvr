@@ -94,8 +94,8 @@ func TestEventSubscriberLifecycle(t *testing.T) {
 	// which lacks IsSubscribed) — same construction path the wrapper takes.
 	sub := NewEventSubscriber(client.client,
 		WithEventCallback(func(e ONVIFEvent) { eventsCh <- e }),
-		withPollInterval(30*time.Millisecond),
-		withPullTimeout(500*time.Millisecond),
+		WithPollInterval(30*time.Millisecond),
+		WithPullTimeout(500*time.Millisecond),
 	)
 	require.NotNil(t, sub)
 	require.False(t, sub.IsSubscribed("cam-1"))
@@ -146,7 +146,7 @@ func TestEventSubscriberSubscribeError(t *testing.T) {
 	client := NewClient(srv.URL, "admin", "pw")
 	require.NoError(t, client.Connect(context.Background()))
 
-	sub := NewEventSubscriber(client.client, withPollInterval(10*time.Millisecond))
+	sub := NewEventSubscriber(client.client, WithPollInterval(10*time.Millisecond))
 	err := sub.Subscribe(context.Background(), "cam-err")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "PullPoint subscription")
@@ -164,7 +164,7 @@ func TestEventSubscriberRenewalLoop(t *testing.T) {
 	eventsCh := make(chan ONVIFEvent, 4)
 	sub := NewEventSubscriber(client.client,
 		WithEventCallback(func(e ONVIFEvent) { eventsCh <- e }),
-		withPollInterval(20*time.Millisecond),
+		WithPollInterval(20*time.Millisecond),
 	)
 	require.NoError(t, sub.Subscribe(context.Background(), "cam-renew"))
 

@@ -777,11 +777,23 @@ func validatePortRange(r string) error {
 	return nil
 }
 
+// MotionSourceCameraONVIF selects the camera-side ONVIF Pull-Point
+// MotionAlarm subscription as this camera's motion signal (#711).
+const MotionSourceCameraONVIF = "camera:onvif"
+
 // ValidateCameraRecordingMode checks one camera's recording_mode + adaptive
 // tuning block (issue #435) + audio_trigger block (issue #478). Shared by the
 // startup config validation and the camera create/update API boundaries so an
 // invalid value is rejected at the wire instead of bricking the next restart.
 func ValidateCameraRecordingMode(cam CameraConfig) error {
+	switch cam.MotionSource {
+	case "", "nvr", MotionSourceCameraONVIF:
+	default:
+		return fmt.Errorf("cameras.%s.motion_source must be \"nvr\" or \"camera:onvif\" (got %q)", cam.ID, cam.MotionSource)
+	}
+	if cam.MotionSource == MotionSourceCameraONVIF && cam.Protocol != "onvif" {
+		return fmt.Errorf("cameras.%s.motion_source=camera:onvif requires an onvif protocol camera (got %q)", cam.ID, cam.Protocol)
+	}
 	switch cam.RecordingMode {
 	case "", "continuous", "adaptive":
 	default:

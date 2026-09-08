@@ -893,6 +893,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	handler.SetSnapshotCapturer(snapCapturer)
 	// Shared trigger dispatcher (MQTT + webhook, #709).
 	handler.SetTriggerDispatcher(triggerDispatcher)
+	// Camera-side ONVIF MotionAlarm events ride the same action surface
+	// (#711) — record triggers behave identically to MQTT/webhook.
+	deps.camMgr.SetMotionActionHandler(triggerDispatcher)
 	api.SetAPIMetrics(m)
 	if deps.rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(deps.rollingMergeMgr)

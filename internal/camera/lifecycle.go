@@ -139,6 +139,12 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			}
 		}
 	}
+	// Camera-side ONVIF motion subscriptions (#711): async like the relay
+	// replay below — Subscribe dials the camera and must not delay boot.
+	for _, cam := range cm.cfg.Cameras {
+		c := cam
+		go cm.EnsureMotionSubscription(ctx, c)
+	}
 	// Start recording schedule monitors for cameras with a recording_schedule configured.
 	for _, cam := range cm.cfg.Cameras {
 		if cam.RecordingSchedule != nil && len(cam.RecordingSchedule.TimeRanges) > 0 {
@@ -211,6 +217,9 @@ func (cm *CameraManager) Stop() error {
 		return fmt.Errorf("camera manager: %d recorder(s) failed to stop", len(errs))
 	}
 
+	// Tear down camera-side ONVIF event subscriptions (#711) before dropping
+	// the shared ONVIF clients they ride on.
+	cm.StopAllONVIFEvents(context.Background())
 	cm.closeAllONVIFClients()
 
 	// Stop all timelapse schedule monitors

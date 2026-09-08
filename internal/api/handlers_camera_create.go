@@ -92,7 +92,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		// Cascade tier: forward the sub-stream instead of main (#512).
 		CascadeSubStream bool `json:"cascade_sub_stream"`
 		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
-		RecordingMode string                          `json:"recording_mode"`
+		RecordingMode string `json:"recording_mode"`
+		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
+		MotionSource string `json:"motion_source"`
 		Adaptive      *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Audio trigger (#478): loudness input for adaptive recording.
 		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
@@ -320,6 +322,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		CascadeEnabled:    body.CascadeEnabled,
 		CascadeSubStream:  body.CascadeSubStream,
 		RecordingMode:     body.RecordingMode,
+		MotionSource:      body.MotionSource,
 		Adaptive:          body.Adaptive,
 		AudioTrigger:      body.AudioTrigger,
 		StreamKey:         body.StreamKey,
