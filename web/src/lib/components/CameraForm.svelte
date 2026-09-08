@@ -1062,20 +1062,6 @@ async function performCameraSave() {
         {t('cameras.recordingEnabled')}
       </label>
     </div>
-    {#if !formRecordingEnabled}
-      <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
-    {:else if formEncoding === 'h264' || formEncoding === 'h265'}
-      <!-- Recording mode (#435): continuous or adaptive (motion-aware sparse) -->
-      <div>
-        <label for="cam-recording-mode" class="input-label">{t('cameras.recordingMode')}</label>
-        <select id="cam-recording-mode" class="input" bind:value={formRecordingMode}>
-          <option value="continuous">{t('cameras.recordingModeContinuous')}</option>
-          <option value="adaptive">{t('cameras.recordingModeAdaptive')}</option>
-        </select>
-        <p class="text-xs th-text-muted mt-1">
-          {formRecordingMode === 'adaptive' ? t('cameras.recordingModeAdaptiveHint') : t('cameras.recordingModeHint')}
-        </p>
-      </div>
       {#if formProtocol === 'onvif'}
         <!-- Motion source (#711): NVR-side detectors or the camera's own
              Pull-Point MotionAlarm subscription (mibee_cam WiFi-CSI). -->
@@ -1093,6 +1079,20 @@ async function performCameraSave() {
           {/if}
         </div>
       {/if}
+    {#if !formRecordingEnabled}
+      <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
+    {:else if formEncoding === 'h264' || formEncoding === 'h265'}
+      <!-- Recording mode (#435): continuous or adaptive (motion-aware sparse) -->
+      <div>
+        <label for="cam-recording-mode" class="input-label">{t('cameras.recordingMode')}</label>
+        <select id="cam-recording-mode" class="input" bind:value={formRecordingMode}>
+          <option value="continuous">{t('cameras.recordingModeContinuous')}</option>
+          <option value="adaptive">{t('cameras.recordingModeAdaptive')}</option>
+        </select>
+        <p class="text-xs th-text-muted mt-1">
+          {formRecordingMode === 'adaptive' ? t('cameras.recordingModeAdaptiveHint') : t('cameras.recordingModeHint')}
+        </p>
+      </div>
       {#if formProtocol !== 'srt' && formProtocol !== 'rtmp' && formProtocol !== 'whip'}
         <!-- Recording tier (#637): tiered adds a continuous sub-stream channel -->
         <div>
