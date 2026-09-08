@@ -46,8 +46,11 @@ func TestBuildAppDeps_MQTTSnapshotRunnerWired(t *testing.T) {
 	}
 }
 
-// TestBuildAppDeps_MQTTDisabled_NoSnapRunner mirrors MQTTDisabled_NoClient.
-func TestBuildAppDeps_MQTTDisabled_NoSnapRunner(t *testing.T) {
+// TestBuildAppDeps_MQTTDisabled_SnapRunnerStillBuilt: since #709 the
+// snapshot runner is hoisted out of the mqtt.enabled conditional — the HTTP
+// webhook trigger needs snapshot actions without MQTT. Only the MQTT client
+// stays conditional.
+func TestBuildAppDeps_MQTTDisabled_SnapRunnerStillBuilt(t *testing.T) {
 	t.Helper()
 	cfg, configPath := minimalConfig(t)
 	cfg.MQTT.Enabled = false
@@ -58,7 +61,10 @@ func TestBuildAppDeps_MQTTDisabled_NoSnapRunner(t *testing.T) {
 	}
 	defer cleanup()
 
-	if deps.snapRunner != nil {
-		t.Fatal("deps.snapRunner should be nil with mqtt.enabled=false")
+	if deps.snapRunner == nil {
+		t.Fatal("deps.snapRunner must be built even with mqtt.enabled=false (webhook trigger snapshot, #709)")
+	}
+	if deps.mqttClient != nil {
+		t.Fatal("deps.mqttClient should be nil with mqtt.enabled=false")
 	}
 }

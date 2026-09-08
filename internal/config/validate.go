@@ -88,6 +88,16 @@ func validateConfigDetails(cfg *Config) error {
 	if p := cfg.Server.Discovery.UDP.Port; p < 0 || p > 65535 {
 		return fmt.Errorf("server.discovery.udp.port must be between 1 and 65535, got %d", p)
 	}
+	// Webhook trigger (issue #709): an enabled endpoint without a secret would
+	// mount a signature check that can never pass — fail fast at config load.
+	if cfg.Trigger.Webhook.Enabled {
+		if strings.TrimSpace(cfg.Trigger.Webhook.Secret) == "" {
+			return fmt.Errorf("trigger.webhook.enabled is true but trigger.webhook.secret is empty")
+		}
+		if cfg.Trigger.Webhook.ReplayWindowS < 0 {
+			return fmt.Errorf("trigger.webhook.replay_window_s must be >= 0, got %d", cfg.Trigger.Webhook.ReplayWindowS)
+		}
+	}
 	// Vision 多实例:名称唯一必填;URL 合法 http(s)(legacy url 字段为空的
 	// "default 合成"不算显式实例,跳过 URL 检查)。
 	visionNames := make(map[string]bool, len(cfg.Vision.Instances)+1)

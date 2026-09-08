@@ -154,6 +154,10 @@ func decryptConfig(cfg *Config, key []byte) {
 	if v, err := Decrypt(cfg.MQTT.Password, key); err == nil {
 		cfg.MQTT.Password = v
 	}
+	// Webhook trigger secret (#709)
+	if v, err := Decrypt(cfg.Trigger.Webhook.Secret, key); err == nil {
+		cfg.Trigger.Webhook.Secret = v
+	}
 	// Xiaomi credentials
 	if v, err := Decrypt(cfg.Xiaomi.UserID, key); err == nil {
 		cfg.Xiaomi.UserID = v
@@ -197,6 +201,14 @@ func encryptConfig(cfg *Config, key []byte) []string {
 		if v, err := Encrypt(cfg.MQTT.Password, key); err == nil {
 			cfg.MQTT.Password = v
 			encrypted = append(encrypted, "mqtt.password")
+		}
+	}
+
+	// Webhook trigger secret (#709)
+	if cfg.Trigger.Webhook.Secret != "" && !IsEncrypted(cfg.Trigger.Webhook.Secret) {
+		if v, err := Encrypt(cfg.Trigger.Webhook.Secret, key); err == nil {
+			cfg.Trigger.Webhook.Secret = v
+			encrypted = append(encrypted, "trigger.webhook.secret")
 		}
 	}
 
@@ -244,6 +256,9 @@ func SensitiveFieldPaths(cfg *Config) []string {
 	}
 	if cfg.MQTT.Password != "" && !IsEncrypted(cfg.MQTT.Password) {
 		fields = append(fields, "mqtt.password")
+	}
+	if cfg.Trigger.Webhook.Secret != "" && !IsEncrypted(cfg.Trigger.Webhook.Secret) {
+		fields = append(fields, "trigger.webhook.secret")
 	}
 	if cfg.Xiaomi.UserID != "" && !IsEncrypted(cfg.Xiaomi.UserID) {
 		fields = append(fields, "xiaomi.user_id")
