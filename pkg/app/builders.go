@@ -826,16 +826,20 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		Config:   deps.camMgr,
 	}
 
-	// Step 9: Optional MQTT client. The trigger dispatcher wires
-	// record/stop actions to the camera manager (camMgr is built at Step 5.6)
-	// and the snapshot action to the capture→persist→event runner (#656).
+	// Step 9: Optional MQTT client + shared trigger dispatcher. The dispatcher
+	// wires record/stop actions to the camera manager (camMgr is built at Step
+	// 5.6) and the snapshot action to the capture→persist→event runner (#656).
+	// Built unconditionally so the HTTP webhook trigger (#709) works without
+	// MQTT — both trigger sources share this ONE dispatcher (identical action
+	// semantics by construction).
+	deps.snapRunner = &snapshot.Runner{
+		Source:  snapCapturer,
+		Storage: &snapshot.Persistor{Root: store.RootDir()},
+		Bus:     deps.eventBus,
+	}
+	triggerDispatcher := mqtt.NewActionDispatcher(deps.camMgr, deps.snapRunner)
 	if cfg.MQTT.Enabled {
-		deps.snapRunner = &snapshot.Runner{
-			Source:  snapCapturer,
-			Storage: &snapshot.Persistor{Root: store.RootDir()},
-			Bus:     deps.eventBus,
-		}
-		deps.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, mqtt.NewActionDispatcher(deps.camMgr, deps.snapRunner))
+		deps.mqttClient = mqtt.NewClient(cfg.MQTT.Broker, cfg.MQTT.ClientID, cfg.MQTT.Topic, cfg.MQTT.Username, cfg.MQTT.Password, triggerDispatcher)
 	}
 
 	// Wire MQTT client into health manager for event publishing
@@ -879,6 +883,8 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	handler.SetEventBus(deps.eventBus)
 	// FFmpeg-gated snapshot capturer for the latest-frame endpoint (#657).
 	handler.SetSnapshotCapturer(snapCapturer)
+	// Shared trigger dispatcher (MQTT + webhook, #709).
+	handler.SetTriggerDispatcher(triggerDispatcher)
 	api.SetAPIMetrics(m)
 	if deps.rollingMergeMgr != nil {
 		handler.SetTimelapseMergeMgr(deps.rollingMergeMgr)

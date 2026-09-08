@@ -268,6 +268,16 @@ mqtt:
   username: ""                     # MQTT broker authentication (optional)
   password: ""                     # MQTT broker password (optional, auto-encrypted if encryption key is set)
 
+# HTTP webhook trigger — external systems (sensors, automation platforms) POST a
+# signed request instead of speaking MQTT. Same actions as the MQTT trigger.
+#   POST /api/trigger/webhook/{camera_id}?action=record|stop|snapshot
+#   X-MiBee-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>
+trigger:
+  webhook:
+    enabled: false                 # Mount the endpoint (public, rate-limited, signature-verified)
+    secret: ""                     # Pre-shared HMAC secret (required when enabled, auto-encrypted if encryption key is set)
+    replay_window_s: 300           # Max age of the signed timestamp, both directions (default 300)
+
 # WebDAV server — file access over WebDAV protocol
 # Shares recordings directory over HTTP
 webdav:

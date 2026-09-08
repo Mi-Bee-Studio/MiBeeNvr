@@ -204,6 +204,10 @@ type Handler struct {
 	// here rather than threaded through NewHandler's positional params.
 	vodMgr       *vod.Manager
 	gb28181Media GB28181DeviceMedia
+	// triggerDispatcher maps a trigger action (record/stop/snapshot) to camera
+	// lifecycle ops (#709). The SAME func feeds the MQTT client — wired once
+	// in builders.go so HTTP webhook and MQTT triggers share semantics.
+	triggerDispatcher func(cameraID, action string)
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -327,6 +331,8 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 		r.Get("/api/events", h.handleEvents)
 		// Vision heartbeat (public, rate-limited — Vision has no BasicAuth)
 		h.registerVisionPublicRoutes(r)
+		// Webhook trigger (public, rate-limited — HMAC signature is the credential, #709)
+		h.registerTriggerRoutes(r)
 	})
 }
 
