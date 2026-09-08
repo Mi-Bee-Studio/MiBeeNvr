@@ -185,13 +185,36 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 // for an HLS playlist (path ends in .m3u8) and was authenticated with a
 // session token. A freshly-renewed token (X-Renewed-Token) takes precedence
 // so the cookie outlives the original token's remaining lifetime.
+// API-key callers (#706) get the same channel with the key itself as the
+// cookie value: relative segment URLs do not inherit the playlist's
+// ?api_key= query, and players like iOS AVPlayer cannot attach headers to
+// every segment request. The value is only echoed when the auth middleware
+// actually validated the key (IsAPIKeyAuthenticated), and the cookie stays
+// scoped to this camera's subtree + GET/HEAD media fetches — no more power
+// than the ?api_key= playlist URL already granted.
 func setStreamCookieOnPlaylist(w http.ResponseWriter, r *http.Request, cameraID string) {
 	if !strings.HasSuffix(r.URL.Path, ".m3u8") {
 		return
 	}
 	tok := middleware.SessionTokenFromRequest(r)
 	if tok == "" {
-		return // BasicAuth/API-key callers: nothing to hand out
+		if !middleware.IsAPIKeyAuthenticated(r.Context()) {
+			return // BasicAuth/unauthenticated callers: nothing to hand out
+		}
+		key := middleware.APIKeyFromRequest(r)
+		if key == "" {
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     middleware.StreamCookieName,
+			Value:    key,
+			Path:     "/api/cameras/" + cameraID + "/",
+			MaxAge:   int(middleware.StreamCookieAPIKeyTTL.Seconds()),
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.TLS != nil,
+		})
+		return
 	}
 	if renewed := w.Header().Get(middleware.RenewedTokenHeader); renewed != "" {
 		tok = renewed
