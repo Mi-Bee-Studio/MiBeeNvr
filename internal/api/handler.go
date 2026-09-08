@@ -18,6 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -208,6 +209,10 @@ type Handler struct {
 	// lifecycle ops (#709). The SAME func feeds the MQTT client — wired once
 	// in builders.go so HTTP webhook and MQTT triggers share semantics.
 	triggerDispatcher func(cameraID, action string)
+	// gb28181Commander sends DeviceControl commands (#708 snapshot/record).
+	gb28181Commander gbCommander
+	// gb28181SnapMgr tracks on-demand snapshot sessions (#708).
+	gb28181SnapMgr *gb28181.SnapshotSessionManager
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -333,6 +338,11 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 		h.registerVisionPublicRoutes(r)
 		// Webhook trigger (public, rate-limited — HMAC signature is the credential, #709)
 		h.registerTriggerRoutes(r)
+		// GB28181 snapshot upload (public, rate-limited — the session ID in
+		// the URL is the credential; devices cannot BasicAuth, #708)
+		if h.gb28181SnapMgr != nil {
+			r.Post("/api/gb28181/snapshot/upload", h.handleGB28181SnapshotUpload)
+		}
 	})
 }
 
@@ -959,6 +969,9 @@ func (h *Handler) registerGB28181Routes(r chi.Router) {
 			r.Post("/download", h.handleChannelDownloadStart)
 			r.Get("/download", h.handleChannelPlaybackStatus)
 			r.Delete("/download", h.handleChannelPlaybackStop)
+			// GB/T 28181-2022 on-demand capture (#708)
+			r.Post("/snapshot", h.handleGB28181ChannelSnapshot)
+			r.Post("/record", h.handleGB28181ChannelRecord)
 		})
 	})
 }
