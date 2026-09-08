@@ -21,12 +21,17 @@ import (
 // fields stay zero until the NVR config grows them).
 func SIPConfig(cfg config.GB28181ServerConfig) gbsip.Config {
 	out := gbsip.Config{
-		Enabled:                 cfg.Enabled,
-		SIPListen:               cfg.SIPListen,
-		ServerID:                cfg.ServerID,
-		Realm:                   cfg.Realm,
-		Password:                cfg.Password,
-		PortRange:               cfg.PortRange,
+		Enabled:   cfg.Enabled,
+		SIPListen: cfg.SIPListen,
+		ServerID:  cfg.ServerID,
+		Realm:     cfg.Realm,
+		Password:  cfg.Password,
+		PortRange: cfg.PortRange,
+		// gb28181-go v0.3.0 made the library neutral (DefaultUserAgent is
+		// "gb28181-go", never a product name). The NVR identifies itself —
+		// vendor platforms fingerprint the UA and upper platforms surface it
+		// in device info.
+		UserAgent:               "MiBeeNvr",
 		AllowedDeviceIDs:        cfg.AllowedDeviceIDs,
 		AllowSameIPEnroll:       cfg.AllowSameIPEnroll,
 		HeartbeatInterval:       cfg.HeartbeatInterval,
