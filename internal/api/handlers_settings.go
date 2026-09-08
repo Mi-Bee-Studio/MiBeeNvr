@@ -574,6 +574,16 @@ func (h *Handler) handleGenerateAPIKey(w http.ResponseWriter, r *http.Request) {
 		name = "mibeevision"
 	}
 
+	// Reject duplicate ACTIVE names (#705): two live entries sharing a name make
+	// revoke-by-name ambiguous and the settings list confusing. Names that exist
+	// only in revoked history stay reusable (re-pairing flow).
+	for _, existing := range h.config.APIKeys {
+		if existing.Name == name && !existing.Revoked {
+			WriteError(w, http.StatusConflict, "an active API key with this name already exists")
+			return
+		}
+	}
+
 	key := middleware.GenerateAPIKey()
 	h.config.APIKeys = append(h.config.APIKeys, config.APIKeyConfig{
 		Key:  key,
@@ -610,15 +620,17 @@ func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found := false
+	// Mark ALL entries with the matching name (#705): restored/legacy configs can
+	// carry duplicates, and stopping at the first match left the newer key
+	// authorized while reporting success.
+	count := 0
 	for i := range h.config.APIKeys {
 		if h.config.APIKeys[i].Name == name {
 			h.config.APIKeys[i].Revoked = true
-			found = true
-			break
+			count++
 		}
 	}
-	if !found {
+	if count == 0 {
 		WriteError(w, http.StatusNotFound, "API key not found")
 		return
 	}
@@ -629,6 +641,6 @@ func (h *Handler) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	h.syncAPIKeyStore()
 
-	logger.Info("API key revoked", "name", name)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+	logger.Info("API key revoked", "name", name, "count", count)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "revoked", "count": count})
 }
