@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"context"
 	"testing"
 	"time"
@@ -270,4 +271,50 @@ func TestUpdateRecordingAIStatusStampsProcessedAt(t *testing.T) {
 	rec, err = db.GetRecording(ctx, "rec-aistat")
 	require.NoError(t, err)
 	require.NotNil(t, rec.AIProcessedAt, "failed must stamp ai_processed_at")
+}
+
+// TestListRecordingsCursorPagination (#704): the cursor handed out by the API
+// is RFC3339Nano ("2026-09-06T04:06:52.145295Z") while started_at is stored in
+// sqliteTimeFormat ("2006-01-02 15:04:05.999999999"). Bound raw, the predicate
+// compared 'T' (0x54) against ' ' (0x20) lexicographically — every stored row
+// sorted below every cursor, so page 2 silently returned page 1 again.
+func TestListRecordingsCursorPagination(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC)
+	for i := range 5 {
+		require.NoError(t, db.InsertRecording(ctx, &model.Recording{
+			ID: fmt.Sprintf("cur-%d", i), CameraID: "camA", FilePath: fmt.Sprintf("/c%d.mp4", i),
+			Format: model.FormatH264,
+			// Distinct sub-second offsets so RFC3339Nano cursors can't collide.
+			StartedAt: base.Add(time.Duration(i) * time.Minute).Add(time.Duration(i*7) * time.Millisecond),
+		}))
+	}
+
+	// Page 1: rows cur-4..cur-2 (started_at DESC, limit 3).
+	page1, err := db.ListRecordings(ctx, model.RecordingFilter{Limit: 3})
+	require.NoError(t, err)
+	require.Len(t, page1, 3)
+	require.Equal(t, "cur-4", page1[0].ID)
+
+	// Cursor formatted exactly like the API handler formats it (RFC3339Nano).
+	cursor := page1[len(page1)-1].StartedAt.Format(time.RFC3339Nano)
+
+	page2, err := db.ListRecordings(ctx, model.RecordingFilter{Limit: 3, Cursor: cursor})
+	require.NoError(t, err)
+	require.Len(t, page2, 2, "page 2 must advance past the cursor")
+	require.Equal(t, "cur-1", page2[0].ID)
+	require.Equal(t, "cur-0", page2[1].ID)
+
+	seen := map[string]bool{}
+	for _, r := range append(append([]model.Recording{}, page1...), page2...) {
+		require.False(t, seen[r.ID], "pages must be disjoint, %s repeated", r.ID)
+		seen[r.ID] = true
+	}
+
+	// An unparseable cursor must not zero out the result set (falls back to
+	// OFFSET paging semantics rather than matching nothing).
+	junk, err := db.ListRecordings(ctx, model.RecordingFilter{Limit: 3, Cursor: "not-a-timestamp"})
+	require.NoError(t, err)
+	require.Len(t, junk, 3, "unparseable cursor falls back to offset paging, still returns a page")
 }
