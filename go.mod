@@ -33,8 +33,10 @@ require (
 
 require go.uber.org/goleak v1.3.0
 
+require github.com/emmansun/gmsm v0.44.1
+
 require (
-	github.com/mickeyzzc/gb28181-go v0.2.2
+	github.com/mickeyzzc/gb28181-go v0.6.1-0.20260908035749-1da718699599
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )

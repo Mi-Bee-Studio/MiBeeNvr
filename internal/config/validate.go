@@ -623,6 +623,14 @@ func validateConfigDetails(cfg *Config) error {
 		if strings.TrimSpace(cfg.GB28181.Password) == "" {
 			return fmt.Errorf("gb28181.password is required when gb28181.enabled=true")
 		}
+		// GB35114 A-level (#707): enabled requires the platform signing
+		// identity; fail at config load rather than at first REGISTER.
+		if cfg.GB28181.Security35114.Enabled {
+			if strings.TrimSpace(cfg.GB28181.Security35114.PlatformCert) == "" ||
+				strings.TrimSpace(cfg.GB28181.Security35114.PlatformKey) == "" {
+				return fmt.Errorf("gb28181.security35114.enabled is true but platform_cert/platform_key are missing")
+			}
+		}
 		if err := validatePortRange(cfg.GB28181.PortRange); err != nil {
 			return fmt.Errorf("gb28181.port_range invalid: %w", err)
 		}
