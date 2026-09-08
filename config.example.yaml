@@ -483,6 +483,18 @@ observability:
 #   subscribe_alarm: true           # alarm subscription
 #   subscribe_mobile_position: false
 #   allowed_device_ids: []          # empty = allow all registering devices
+#   # GB 35114-2017 A-level secure registration (#707). Only active in binaries
+#   # built with `-tags gb35114` (official builds are not; source builders opt
+#   # in). Digest devices (password above) keep working alongside. Certs are
+#   # GM/T 0015-2012 SM2 PEM files.
+#   security35114:
+#     enabled: false
+#     platform_cert: "/etc/mibee-nvr/gb35114/platform_cert.pem"
+#     platform_key: "/etc/mibee-nvr/gb35114/platform_key.pem"
+#     # Optional: pre-provisioned device certs, one file per device named
+#     # <deviceID>.pem. Empty = devices announce via Capability cnonce
+#     # (trust-on-first-use; pre-provisioning is the stricter policy).
+#     device_certs_dir: ""
 
 # GB/T 28181 lower-platform cascade (v0.11.0+, OFF by default): register this
 # NVR to an upper GB/T 28181 platform and forward its cameras as channels.
