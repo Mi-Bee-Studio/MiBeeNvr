@@ -288,9 +288,3 @@ func (m *SnapshotSessionManager) Sweep() {
 		}
 	}
 }
-
-func (m *SnapshotSessionManager) evict(sessionID string) {
-	m.mu.Lock()
-	delete(m.sessions, sessionID)
-	m.mu.Unlock()
-}
