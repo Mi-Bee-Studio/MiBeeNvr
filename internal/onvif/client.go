@@ -30,6 +30,12 @@ type Client struct {
 
 	cachedCapabilities *DeviceCapabilitiesDetailed
 	capsMu             sync.Mutex
+
+	// mediaRoute is the advertised media XAddr for trt:* raw SOAP, resolved
+	// once via GetServices (#723). Guarded by mu — getRawStreamURI callers
+	// already hold it.
+	mediaRoute         string
+	mediaRouteResolved bool
 }
 
 // NewClient creates a new ONVIF client for a specific device.
@@ -180,6 +186,8 @@ func (c *Client) GetStreamURIWithProtocol(ctx context.Context, profileToken, pro
 
 // getRawStreamURI sends a raw SOAP GetStreamUri request and parses the response.
 // This works around XML namespace parsing issues in onvif-go with some devices.
+// The request is routed to the device's advertised media endpoint when one is
+// known (#723): minimal devices reject trt:* on device_service.
 func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol string) (string, error) {
 	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
@@ -198,7 +206,28 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
   </s:Body>
 </s:Envelope>`, protocol, profileToken)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(soapBody))
+	// Resolve the media endpoint, best-effort: a definitive "no media
+	// advertised" is cached; transport errors are retried on the next raw
+	// media call. On failure we keep the legacy device-endpoint behavior
+	// (strict devices fault trt:* there, and callers fall back to other
+	// transports).
+	if c.mediaRoute == "" && !c.mediaRouteResolved {
+		if m, err := resolveMediaEndpoint(ctx, c.endpoint); err != nil {
+			logger.Debug("GetServices media endpoint resolution failed, using device endpoint", "device", c.endpoint, "error", err)
+		} else {
+			c.mediaRouteResolved = true
+			if m != "" {
+				c.mediaRoute = m
+				logger.Info("routing media SOAP actions to advertised media endpoint", "device", c.endpoint, "media", m)
+			}
+		}
+	}
+	endpoint := c.endpoint
+	if c.mediaRoute != "" {
+		endpoint = c.mediaRoute
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
