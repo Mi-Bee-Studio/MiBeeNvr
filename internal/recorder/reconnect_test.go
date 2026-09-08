@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/stretchr/testify/require"
 )
 
 // runReconnectLoopHarness wires runReconnectLoop to record every observable
@@ -229,4 +231,94 @@ func TestRunReconnectLoopAppliesMinBackoff(t *testing.T) {
 	if gap := attempts[1].Sub(attempts[0]); gap < 2500*time.Millisecond {
 		t.Fatalf("inter-attempt gap must respect the 2.5s floor, got %s", gap)
 	}
+}
+
+// TestHTTPStatusErrorRetryAfter (#711): the camera-side anti-hammer guard
+// answers 503 with a Retry-After header (remaining cooldown seconds). The
+// reconnect loop must wait that long — longer wins over the ladder/floor —
+// or the two backoff systems interlock into a permanent 503 (their window
+// renews on ANY rehit; our ladder caps at 60s < their 300s window).
+func TestHTTPStatusErrorRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parseRetryAfter seconds form", func(t *testing.T) {
+		t.Parallel()
+		require.Equal(t, 40*time.Second, parseRetryAfter("40"))
+		require.Equal(t, time.Second, parseRetryAfter("1"))
+		require.Zero(t, parseRetryAfter(""))
+		require.Zero(t, parseRetryAfter("next tuesday"))
+		// HTTP-date form is not used by the camera firmware — treated as absent.
+		require.Zero(t, parseRetryAfter("Wed, 21 Oct 2026 07:28:00 GMT"))
+	})
+
+	t.Run("backoffFor honors Retry-After over ladder and floor", func(t *testing.T) {
+		t.Parallel()
+		err := &HTTPStatusError{Code: http.StatusServiceUnavailable, RetryAfter: 300 * time.Second}
+		for range 10 {
+			b := backoffFor(err, 1, false, 5*time.Second)
+			require.GreaterOrEqual(t, b, 300*time.Second, "Retry-After must win over ladder+floor")
+		}
+		// Longer ladder (60s tier) still raised to the hint.
+		require.GreaterOrEqual(t, backoffFor(err, 99, false, 0), 300*time.Second)
+	})
+
+	t.Run("backoffFor caps hostile Retry-After", func(t *testing.T) {
+		t.Parallel()
+		err := &HTTPStatusError{Code: http.StatusServiceUnavailable, RetryAfter: 24 * time.Hour}
+		require.LessOrEqual(t, backoffFor(err, 1, false, 0), retryAfterCap)
+	})
+
+	t.Run("plain errors keep the ladder", func(t *testing.T) {
+		t.Parallel()
+		require.Less(t, backoffFor(errors.New("dial fail"), 1, false, 0), 2*time.Second)
+	})
+
+	t.Run("loop waits out the advertised cooldown", func(t *testing.T) {
+		t.Parallel()
+		var mu sync.Mutex
+		attempts := make([]time.Time, 0, 2)
+		h := &runReconnectLoopHarness{
+			connect: func(int) (error, bool) {
+				mu.Lock()
+				attempts = append(attempts, time.Now())
+				mu.Unlock()
+				return &HTTPStatusError{Code: http.StatusServiceUnavailable, RetryAfter: 2 * time.Second}, false
+			},
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runReconnectLoop(ctx, reconnectDeps{
+				CameraID:    "test-cam",
+				Log:         slog.Default(),
+				Connect:     h.Connect,
+				RecordError: h.RecordError,
+				SetStatus:   h.SetStatus,
+				MinBackoff:  50 * time.Millisecond,
+			})
+		}()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			mu.Lock()
+			n := len(attempts)
+			mu.Unlock()
+			if n >= 2 {
+				cancel()
+				break
+			}
+			if time.Now().After(deadline) {
+				cancel()
+				t.Fatal("second connect attempt never happened")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		<-done
+		mu.Lock()
+		defer mu.Unlock()
+		if gap := attempts[1].Sub(attempts[0]); gap < 2*time.Second {
+			t.Fatalf("inter-attempt gap must respect Retry-After 2s, got %s", gap)
+		}
+	})
 }
