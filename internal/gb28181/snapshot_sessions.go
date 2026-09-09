@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
 )
 
 // GB/T 28181-2022 platform-side on-demand snapshot sessions (#708): the
@@ -266,6 +268,36 @@ func (m *SnapshotSessionManager) Finish(sessionID string, successCount int) {
 	default:
 		s.outcome = SnapshotPartial
 	}
+}
+
+// SubscribeFinished wires the library's UploadSnapShotFinished notify
+// (platform/sip event bus, topic gb28181.snapshot.finished — lib PR #54)
+// onto Finish: the device's own completion report closes the session
+// immediately instead of waiting out the TTL sweep (#708 loop closure).
+// The consumer goroutine unwinds with the manager's Stop.
+func (m *SnapshotSessionManager) SubscribeFinished(bus *gbsip.EventBus) {
+	if bus == nil {
+		return
+	}
+	ch := make(chan gbsip.Event, 16)
+	_ = bus.Subscribe(gbsip.TopicGB28181SnapshotFinished, ch, 16)
+	go func() {
+		for {
+			select {
+			case <-m.sweepStop:
+				return
+			case ev, ok := <-ch:
+				if !ok {
+					return
+				}
+				fin, valid := ev.Data.(gbsip.GB28181SnapshotFinishedEvent)
+				if !valid {
+					continue
+				}
+				m.Finish(fin.SessionID, fin.SuccessCount)
+			}
+		}
+	}()
 }
 
 // Sweep expires sessions past their deadline. Also evicts terminal sessions

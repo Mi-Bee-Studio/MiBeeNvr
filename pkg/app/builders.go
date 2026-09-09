@@ -741,6 +741,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// ingest listeners (SRT) and before cleanup; registered as the "gb28181"
 	// service between srt and ws. The DeviceManager heartbeat checker is owned
 	// by the SIP server's service lifecycle.
+	var gbLibEvents *gbsip.EventBus // library event bus — also feeds the snapshot manager below
 	if cfg.GB28181.Enabled {
 		heartbeatInterval, err := time.ParseDuration(cfg.GB28181.HeartbeatInterval)
 		if err != nil {
@@ -766,7 +767,8 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		}
 		deps.gb28181Server = gbsip.NewServer(sipCfg, deps.gb28181DevMgr, deps.gb28181SessionMgr, gb28181.NewDeviceStore(deps.db))
 		// Alarm notifications surface on the event bus (SSE /api/events).
-		deps.gb28181Server.SetEventBus(gb28181.NewEventBridge(deps.eventBus))
+		gbLibEvents = gb28181.NewEventBridge(deps.eventBus)
+		deps.gb28181Server.SetEventBus(gbLibEvents)
 		slog.Info("GB28181 SIP server configured", "sip_listen", cfg.GB28181.SIPListen)
 	}
 
@@ -928,6 +930,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			}),
 		)
 		gbSnapMgr.Start()
+		// #708 loop closure: the device's UploadSnapShotFinished notify
+		// (gb28181-go PR #54) closes snapshot sessions on completion instead
+		// of timing out after the 30s TTL.
+		gbSnapMgr.SubscribeFinished(gbLibEvents)
 		handler.SetGB28181SnapshotManager(gbSnapMgr)
 		handler.SetGB28181Catalog(platform.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
