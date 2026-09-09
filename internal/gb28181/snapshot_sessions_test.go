@@ -1,12 +1,14 @@
 package gb28181
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
 	"github.com/stretchr/testify/require"
 )
 
@@ -162,4 +164,41 @@ func TestSnapshotSessionManager_EventPayload(t *testing.T) {
 	require.Equal(t, "cam-gb", ev["camera_id"])
 	require.Equal(t, "gb28181", ev["trigger"])
 	require.True(t, strings.HasPrefix(fmt.Sprint(ev["file_path"]), "snapshots/cam-gb/"))
+}
+
+func TestSnapshotSessionManager_SubscribeFinished(t *testing.T) {
+	m, _, _, _ := newTestSnapshotManager(t)
+	sess, err := m.CreateSession("34020000011320000001", "34020000001320000002", "cam-gb", 2)
+	require.NoError(t, err)
+
+	bus := gbsip.NewEventBus(16)
+	m.SubscribeFinished(bus)
+
+	// The device's own completion notify (lib PR #54): 2 of 2 uploaded.
+	bus.Publish(context.Background(), gbsip.TopicGB28181SnapshotFinished, gbsip.GB28181SnapshotFinishedEvent{
+		DeviceID:     "34020000011320000001",
+		SessionID:    sess.ID,
+		FileIDs:      []string{"f1", "f2"},
+		SuccessCount: 2,
+	})
+	require.Eventually(t, func() bool { return sess.Outcome() == SnapshotComplete },
+		2*time.Second, 10*time.Millisecond)
+
+	// Stray/late notifies for unknown sessions and non-matching payloads are
+	// no-ops, not panics.
+	bus.Publish(context.Background(), gbsip.TopicGB28181SnapshotFinished,
+		gbsip.GB28181SnapshotFinishedEvent{SessionID: strings.Repeat("f", 32)})
+	bus.Publish(context.Background(), gbsip.TopicGB28181SnapshotFinished, "garbage")
+	time.Sleep(50 * time.Millisecond)
+
+	// Partial report maps to the partial outcome.
+	sess2, err := m.CreateSession("34020000011320000001", "34020000001320000002", "cam-gb", 2)
+	require.NoError(t, err)
+	bus.Publish(context.Background(), gbsip.TopicGB28181SnapshotFinished,
+		gbsip.GB28181SnapshotFinishedEvent{SessionID: sess2.ID, SuccessCount: 1})
+	require.Eventually(t, func() bool { return sess2.Outcome() == SnapshotPartial },
+		2*time.Second, 10*time.Millisecond)
+
+	// Stop unwinds the subscription goroutine.
+	m.Stop()
 }
