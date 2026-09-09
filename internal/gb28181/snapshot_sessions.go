@@ -9,7 +9,13 @@ import (
 	"time"
 
 	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 )
+
+// snapshotSessionsLogger is the component logger for the snapshot session
+// registry (component=gb28181-snapshot, matching the command sender).
+var snapshotSessionsLogger = slogx.Component("gb28181-snapshot")
 
 // GB/T 28181-2022 platform-side on-demand snapshot sessions (#708): the
 // platform sends DeviceControl(SnapShotCmd) with an UploadURL + SessionID;
@@ -246,19 +252,20 @@ func (m *SnapshotSessionManager) Receive(sessionID string, jpeg []byte) (string,
 // length; 0 = whole exchange failed per A.2.5.7). The session stays
 // registered (marked terminal) until Sweep evicts it, so a straggler upload
 // lands on ErrSnapshotSessionClosed rather than a misleading unknown-ID.
-func (m *SnapshotSessionManager) Finish(sessionID string, successCount int) {
+// Returns true when a live session was closed by this call.
+func (m *SnapshotSessionManager) Finish(sessionID string, successCount int) bool {
 	m.mu.Lock()
 	s, ok := m.sessions[sessionID]
 	if !ok {
 		m.mu.Unlock()
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m.mu.Unlock()
 
 	if s.outcome != "" {
-		return
+		return false
 	}
 	switch {
 	case successCount <= 0:
@@ -268,6 +275,7 @@ func (m *SnapshotSessionManager) Finish(sessionID string, successCount int) {
 	default:
 		s.outcome = SnapshotPartial
 	}
+	return true
 }
 
 // SubscribeFinished wires the library's UploadSnapShotFinished notify
@@ -294,7 +302,12 @@ func (m *SnapshotSessionManager) SubscribeFinished(bus *gbsip.EventBus) {
 				if !valid {
 					continue
 				}
-				m.Finish(fin.SessionID, fin.SuccessCount)
+				if m.Finish(fin.SessionID, fin.SuccessCount) {
+					snapshotSessionsLogger.Info("snapshot session closed by device notify",
+						"session_id", fin.SessionID,
+						"device_id", fin.DeviceID,
+						"success_count", fin.SuccessCount)
+				}
 			}
 		}
 	}()
