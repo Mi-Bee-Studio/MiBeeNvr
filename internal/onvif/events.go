@@ -408,15 +408,22 @@ func (e *EventSubscriberImpl) run(cameraID string, stopCh <-chan struct{}) {
 		if ps == nil {
 			return // Unsubscribe removed us
 		}
-		if ps.state == StateUnsupported {
+		// Lifecycle fields must be read as a locked snapshot: Unsubscribe()
+		// and setPS mutate them under e.mu, and reading them on the raw
+		// pointer raced with Unsubscribe (CI -race catch, 2026-09-09).
+		state, active, ok := e.lifecycleOf(cameraID)
+		if !ok {
+			return // Unsubscribe removed us between the two lookups
+		}
+		if state == StateUnsupported {
 			return // tombstone — never retry
 		}
-		if !ps.active || ps.state != StateActive {
+		if !active || state != StateActive {
 			// Rebuild path: create a fresh subscription (the device's
 			// single-subscription model means the new create replaces any
-			// stale server-side state — later client wins).
-			newPS, err := e.rebuildSubscription(cameraID, ps)
-			if err != nil {
+			// stale server-side state — later client wins). The old pointer
+			// is only read for its immutable subscriptionRef.
+			if err := e.rebuildSubscription(cameraID, ps); err != nil {
 				if errors.Is(err, ErrEventsNotSupported) {
 					return
 				}
@@ -426,11 +433,10 @@ func (e *EventSubscriberImpl) run(cameraID string, stopCh <-chan struct{}) {
 				backoff = min(backoff*2, resubscribeMaxBackoff)
 				continue
 			}
-			ps = newPS
 			backoff = resubscribeMinBackoff
 		}
 
-		if !e.pollLoop(cameraID, ps, stopCh) {
+		if !e.pollLoop(cameraID, stopCh) {
 			return // stopCh closed
 		}
 		// pollLoop hit a terminal condition — brief backoff, then rebuild.
@@ -444,7 +450,7 @@ func (e *EventSubscriberImpl) run(cameraID string, stopCh <-chan struct{}) {
 
 // rebuildSubscription tears down the current subscription server-side and
 // installs a fresh one in the registry (keeping the same stop channel).
-func (e *EventSubscriberImpl) rebuildSubscription(cameraID string, old *pullPointSubscription) (*pullPointSubscription, error) {
+func (e *EventSubscriberImpl) rebuildSubscription(cameraID string, old *pullPointSubscription) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if old.subscriptionRef != "" && e.events != nil {
@@ -460,20 +466,21 @@ func (e *EventSubscriberImpl) rebuildSubscription(cameraID string, old *pullPoin
 	if err != nil {
 		e.mu.Unlock()
 		e.setPS(cameraID, func(p *pullPointSubscription) { p.lastError = err.Error() })
-		return nil, err
+		return err
 	}
 	e.subscriptions[cameraID] = fresh
 	e.mu.Unlock()
 	eventLogger.Info("rebuilt PullPoint subscription",
 		"camera_id", cameraID, "subscription_ref", fresh.subscriptionRef,
 		"granted", fresh.grantedDur.String())
-	return fresh, nil
+	return nil
 }
 
 // pollLoop ticks PullMessages until a terminal condition (subscription expired
 // or terminalPollFailures consecutive errors) or stop. Returns false only when
-// stopCh closed; true means "resubscribe and continue".
-func (e *EventSubscriberImpl) pollLoop(cameraID string, ps *pullPointSubscription, stopCh <-chan struct{}) bool {
+// stopCh closed; true means "resubscribe and continue". All subscription-state
+// access goes through the locked *Of/setPS helpers — never a raw pointer.
+func (e *EventSubscriberImpl) pollLoop(cameraID string, stopCh <-chan struct{}) bool {
 	ticker := time.NewTicker(e.pollInterval)
 	defer ticker.Stop()
 
@@ -570,6 +577,20 @@ func (e *EventSubscriberImpl) subLocked(cameraID string) *pullPointSubscription 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.subscriptions[cameraID]
+}
+
+// lifecycleOf returns a lock-consistent snapshot of the subscription's
+// decision fields. run() must use this instead of reading ps.state/ps.active
+// on the raw pointer: Unsubscribe() and setPS mutate those fields under e.mu
+// (reading them unlocked raced with Unsubscribe — CI -race catch, 2026-09-09).
+func (e *EventSubscriberImpl) lifecycleOf(cameraID string) (state string, active bool, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ps, exists := e.subscriptions[cameraID]
+	if !exists {
+		return "", false, false
+	}
+	return ps.state, ps.active, true
 }
 
 func (e *EventSubscriberImpl) setPS(cameraID string, fn func(p *pullPointSubscription)) {
