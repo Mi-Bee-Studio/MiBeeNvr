@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { isAuthenticated, healthCheck } from '$lib/api';
+  import { isAuthenticated, healthCheck, tryGatewaySession } from '$lib/api';
   import { t } from '$lib/i18n';
   import { WifiOff } from 'lucide-svelte';
   // Route loader map — lazy loaded on demand
@@ -63,6 +63,19 @@
     } catch {
       // Health check failed — ignore, user stays on login page
     }
+  }
+
+  // Backgrounded-window expiry recovery: the 2h session token only renews
+  // on live requests, so a window hidden past its TTL (fnOS desktop app
+  // minimized overnight) wakes up unauthenticated and the route guard would
+  // dump the user at the login wall despite the gateway session being alive.
+  // On wake, silently re-run the gateway SSO bootstrap. No-op when already
+  // authenticated or after an explicit logout (flag inside tryGatewaySession).
+  function handleVisibilityWake() {
+    if (document.visibilityState !== 'visible' || isAuthenticated()) return;
+    void tryGatewaySession().then((ok) => {
+      if (ok && currentRoute === 'login') window.location.hash = '#/surveillance';
+    });
   }
 
 
@@ -236,6 +249,7 @@ function parseRoute(hash: string) {
     updateRoute();
     checkSetupRequired();
     window.addEventListener('hashchange', updateRoute);
+    document.addEventListener('visibilitychange', handleVisibilityWake);
 
     // Network detection
     isOffline = !navigator.onLine;
@@ -246,6 +260,7 @@ function parseRoute(hash: string) {
 
     return () => {
       window.removeEventListener('hashchange', updateRoute);
+      document.removeEventListener('visibilitychange', handleVisibilityWake);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('nvr-api-offline', handleApiOffline);
