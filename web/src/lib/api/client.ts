@@ -19,6 +19,15 @@ import { APP_BASE } from '$lib/base-path';
 const TOKEN_KEY = 'mibee_nvr_token';
 // Renewed-token response header (must match internal/middleware/token.go).
 const RENEWED_TOKEN_HEADER = 'X-Renewed-Token';
+// sessionStorage flag marking an EXPLICIT logout. The token TTL is 2h with
+// sliding renewal only on live requests, so a window backgrounded past the TTL
+// (e.g. the fnOS desktop app minimized overnight) wakes up unauthenticated and
+// must re-mint via gateway SSO instead of hitting the login wall. An explicit
+// logout must NOT be auto-bounced back in by that recovery path — the flag
+// says "the user chose to leave" and survives reloads within the window
+// (sessionStorage), while a fresh window/app relaunch starts clean and resumes
+// SSO as before.
+const LOGOUT_FLAG = 'mibee_nvr_logged_out';
 
 export interface AuthCredentials {
   username: string;
@@ -118,6 +127,9 @@ export function storeToken(token: string, expiresAtIso?: string): void {
   }
   const session: StoredSession = { token, expiresAt };
   localStorage.setItem(TOKEN_KEY, JSON.stringify(session));
+  // Any successful token mint means the user is (back) in — drop the explicit
+  // logout marker so wake-up SSO recovery resumes for this window.
+  sessionStorage.removeItem(LOGOUT_FLAG);
 }
 
 // Get the raw session token, or null if absent/expired. Expired tokens are
@@ -392,6 +404,7 @@ export async function login(username: string, password: string, signal?: AbortSi
 
 // Logout
 export function logout(): void {
+  sessionStorage.setItem(LOGOUT_FLAG, '1');
   clearToken();
   window.location.hash = '#/login';
 }
@@ -407,6 +420,10 @@ export function logout(): void {
 // the synchronous isAuthenticated() route gate sees the stored token.
 export async function tryGatewaySession(): Promise<boolean> {
   if (getToken()) return true;
+  // Explicit logout wins over gateway SSO: never bounce the user straight
+  // back into a session they chose to end. The flag is cleared by the next
+  // successful storeToken (manual login) and by a fresh window (sessionStorage).
+  if (sessionStorage.getItem(LOGOUT_FLAG)) return false;
   try {
     const response = await fetch(`${API_BASE}/auth/gateway-session`, {
       signal: AbortSignal.timeout(5000),

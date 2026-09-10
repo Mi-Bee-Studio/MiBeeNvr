@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { login, isAuthenticated } from '$lib/api';
+  import { onMount } from 'svelte';
+  import { login, isAuthenticated, tryGatewaySession } from '$lib/api';
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
@@ -19,6 +20,20 @@
   if (isAuthenticated()) {
     window.location.hash = '#/surveillance';
   }
+
+  // Landing here with a dead token is the backgrounded-window expiry path
+  // (window hidden past the 2h TTL → no sliding renewal → route guard dumps
+  // the user at this wall). Behind the fnOS gateway the NAS session is still
+  // valid — re-mint and go straight back in instead of demanding credentials
+  // the SSO user never has. Direct-port deployments 401 the endpoint and
+  // show the form as before; an explicit logout is respected via the
+  // logged-out flag inside tryGatewaySession.
+  onMount(() => {
+    if (isAuthenticated()) return;
+    void tryGatewaySession().then((ok) => {
+      if (ok) window.location.hash = '#/surveillance';
+    });
+  });
 
   function validateUsername() {
     if (!username.trim()) {
