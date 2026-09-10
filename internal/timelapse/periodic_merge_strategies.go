@@ -394,8 +394,11 @@ func (m *PeriodicMergeManager) runPerCodecMerge(ctx context.Context, segments []
 
 		// Opt-in source cleanup: delete the group's source video recordings
 		// only after its output was produced. Never on failure — that would
-		// lose data with no timelapse to show for it.
-		if m.deleteRecordingsAfterMerge && m.sourceDeleter != nil {
+		// lose data with no timelapse to show for it — and never while the
+		// window is still open (a mid-day manual preview merge must not delete
+		// the morning's sources: the scheduled re-run at window close would
+		// then rebuild the output from only the surviving evening segments).
+		if m.deleteRecordingsAfterMerge && m.sourceDeleter != nil && !m.mergeWindowStillOpen() {
 			if srcs := extractedSources[codec]; len(srcs) > 0 {
 				deleted, err := m.sourceDeleter.DeleteRecordings(ctx, srcs, "timelapse_source_merged")
 				if err != nil {
