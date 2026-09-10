@@ -44,6 +44,14 @@ type CameraTimelapseConfig struct {
 	// raw frame directories (frame_*.h264 / .h265 / .jpg) are always preserved
 	// regardless of this flag — only the rolling-merge .mp4 outputs are pruned.
 	RetainIntermediateMP4 *bool `yaml:"retain_intermediate_mp4,omitempty" json:"retain_intermediate_mp4,omitempty"`
+	// DeleteRecordingsAfterMerge deletes the source video recordings (DB rows
+	// + files) in the merge window after a periodic merge has successfully
+	// folded their frames into a timelapse output. Opt-in, default false —
+	// distinct from DeleteOriginal (which only removes timelapse frame dirs).
+	// Useful for fragment-heavy cameras (MJPEG/HTTP-JPEG) where the timelapse
+	// output replaces the raw segments. Recordings being processed by
+	// MiBeeVision are always skipped. Never applied when the merge failed.
+	DeleteRecordingsAfterMerge bool `yaml:"delete_recordings_after_merge,omitempty" json:"delete_recordings_after_merge,omitempty"`
 }
 
 // RetainIntermediateMP4Value returns the effective bool value of

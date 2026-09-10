@@ -480,3 +480,26 @@ func TestTimelapseConfig_DeprecatedFieldsIgnored(t *testing.T) {
 	err := Validate(cfg)
 	require.NoError(t, err)
 }
+
+func TestTimelapseConfig_DeleteRecordingsAfterMerge(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{Cameras: []CameraConfig{
+		{
+			ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
+			Timelapse: &CameraTimelapseConfig{
+				Enabled:                    true,
+				DeleteRecordingsAfterMerge: true,
+			},
+		},
+		{
+			ID: "cam2", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.11/stream",
+			Timelapse: &CameraTimelapseConfig{
+				Enabled: true,
+			},
+		},
+	}}
+	cfg.ApplyDefaults()
+	require.NoError(t, Validate(cfg))
+	require.True(t, cfg.Cameras[0].Timelapse.DeleteRecordingsAfterMerge)
+	require.False(t, cfg.Cameras[1].Timelapse.DeleteRecordingsAfterMerge) // opt-in, default false
+}

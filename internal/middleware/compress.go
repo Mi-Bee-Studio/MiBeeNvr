@@ -123,6 +123,7 @@ func shouldSkipCompression(contentType string) bool {
 	case strings.HasPrefix(ct, "video/"),
 		strings.HasPrefix(ct, "image/"),
 		strings.HasPrefix(ct, "audio/"),
+		strings.HasPrefix(ct, "multipart/"), // JPEG frame batches — already-compressed payloads; the frontend streams the raw parts
 		ct == "application/zip",
 		ct == "application/gzip",
 		ct == "application/x-gzip",

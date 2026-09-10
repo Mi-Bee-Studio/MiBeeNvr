@@ -42,15 +42,16 @@ func (h *Handler) handleGetCameraTimelapse(w http.ResponseWriter, r *http.Reques
 	// Return timelapse config (nil means disabled/no config)
 	if tl == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"enabled":          false,
-			"interval":         "30s",
-			"frame_source":     "auto",
-			"paused":           false,
-			"delete_original":  false,
-			"merge_output_fps": 30,
-			"merge_mode":       "auto",
-			"daily_merge":      true,
-			"merge_duration":   "natural-day",
+			"enabled":                       false,
+			"interval":                      "30s",
+			"frame_source":                  "auto",
+			"paused":                        false,
+			"delete_original":               false,
+			"delete_recordings_after_merge": false,
+			"merge_output_fps":              30,
+			"merge_mode":                    "auto",
+			"daily_merge":                   true,
+			"merge_duration":                "natural-day",
 		})
 		return
 	}
@@ -453,7 +454,10 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 		}),
 		timelapse.WithRetainIntermediateMP4(retainMP4),
 		timelapse.WithIntermediateMP4Pruner(h.db),
+		timelapse.WithExtractionInterval(h.timelapseExtractionInterval(cameraID)),
+		timelapse.WithDeleteRecordingsAfterMerge(h.timelapseDeleteAfterMerge(cameraID)),
 	)
+	mgr.SetSourceRecordingDeleter(h.timelapseSourceDeleter)
 
 	// Run the merge on a Handler-tracked goroutine (mergeWg + mergeCtx) so
 	// Handler.Close can cancel + join it during shutdown. Previously this used
@@ -867,7 +871,10 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 			timelapse.WithDurationLabel(body.Duration),
 			timelapse.WithRetainIntermediateMP4(retainMP4),
 			timelapse.WithIntermediateMP4Pruner(h.db),
+			timelapse.WithExtractionInterval(h.timelapseExtractionInterval(cameraID)),
+			timelapse.WithDeleteRecordingsAfterMerge(h.timelapseDeleteAfterMerge(cameraID)),
 		)
+		mgr.SetSourceRecordingDeleter(h.timelapseSourceDeleter)
 
 		// Launch merge in background (Handler-tracked so Close can join it).
 		h.startMergeGoroutine(func(ctx context.Context) {
@@ -1055,6 +1062,7 @@ func (h *Handler) registerTimelapseRoutes(r chi.Router) {
 	r.Get("/api/timelapse/merges", h.handleListTimelapseMerges)
 	r.Get("/api/timelapse/merges/{id}", h.handleGetTimelapseMerge)
 	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
+	r.Get("/api/timelapse/merges/{id}/frames", h.handleTimelapseMergeFrames)
 	r.Delete("/api/timelapse/merges/{id}", h.handleDeleteTimelapseMerge)
 	r.Post("/api/timelapse/{id}/merge", h.handleTimelapseMerge)
 	r.Delete("/api/timelapse/{id}/merge", h.handleTimelapseMergeCancel)

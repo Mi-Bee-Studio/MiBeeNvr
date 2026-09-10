@@ -362,22 +362,24 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 //   - JPEG group: periodic_WINDOW.mp4
 //   - H264 group: periodic_WINDOW_h264.mp4
 //   - H265 group: periodic_WINDOW_h265.mp4
-func (m *PeriodicMergeManager) runPerCodecMerge(ctx context.Context, segments []model.Recording, cameraID, windowLabel string) error {
+//
+// extractedSources maps group name → source video recordings folded into that
+// group (from extractRecordingFrames); may be nil. When
+// delete_recordings_after_merge is enabled and a source deleter is wired, a
+// group's sources are deleted only after that group's merge succeeds.
+func (m *PeriodicMergeManager) runPerCodecMerge(ctx context.Context, segments []model.Recording, extractedSources map[string][]model.Recording, cameraID, windowLabel string) error {
 	// Map each segment to its codec group.
 	// Timelapse and MJPEG/AVI extracted frames are JPEG-based and can be grouped.
 	groups := make(map[string][]model.Recording)
 	for _, seg := range segments {
-		codec := string(seg.Format)
-		if codec == string(model.FormatTimelapse) || codec == "" {
-			codec = "jpeg" // timelapse JPEG frames
-		}
+		codec := codecGroupName(seg.Format)
 		groups[codec] = append(groups[codec], seg)
 	}
 
 	var lastErr error
 	for codec, segs := range groups {
 		suffix := ""
-		if codec != "jpeg" {
+		if codec != codecGroupJPEG {
 			suffix = "_" + codec
 		}
 		outputFilename := fmt.Sprintf("periodic_%s%s.mp4", windowLabel, suffix)
@@ -387,7 +389,40 @@ func (m *PeriodicMergeManager) runPerCodecMerge(ctx context.Context, segments []
 			slog.Warn("periodic merge: per-codec merge failed",
 				"codec", codec, "camera_id", cameraID, "error", err)
 			lastErr = err
+			continue
+		}
+
+		// Opt-in source cleanup: delete the group's source video recordings
+		// only after its output was produced. Never on failure — that would
+		// lose data with no timelapse to show for it.
+		if m.deleteRecordingsAfterMerge && m.sourceDeleter != nil {
+			if srcs := extractedSources[codec]; len(srcs) > 0 {
+				deleted, err := m.sourceDeleter.DeleteRecordings(ctx, srcs, "timelapse_source_merged")
+				if err != nil {
+					slog.Warn("periodic merge: source recording deletion failed",
+						"camera_id", cameraID, "count", len(srcs), "error", err)
+				} else {
+					slog.Info("periodic merge: deleted source recordings after merge",
+						"camera_id", cameraID, "codec", codec, "deleted", len(deleted))
+				}
+			}
 		}
 	}
 	return lastErr
+}
+
+// codecGroupJPEG is the suffix-less codec group name for JPEG-based output.
+const codecGroupJPEG = "jpeg"
+
+// codecGroupName maps a segment format to its codec group name. Timelapse,
+// MJPEG and AVI segments all carry JPEG frames and merge into one suffix-less
+// "jpeg" group (output periodic_<window>.mp4, codec "mjpeg" in the DB row);
+// other formats keep their suffixed groups.
+func codecGroupName(f model.Format) string {
+	switch f {
+	case model.FormatTimelapse, model.FormatMJPEG, model.FormatAVI, "":
+		return codecGroupJPEG
+	default:
+		return string(f)
+	}
 }

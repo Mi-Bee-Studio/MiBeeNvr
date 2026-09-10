@@ -1907,6 +1907,8 @@
   "cameras.visionRoutingDisabled": "disabled",
   "aiEvents.sourceFilter": "Source instance",
   "aiEvents.allSources": "All sources",
+  "timelapse.deleteRecordingsAfterMerge": "Delete source recordings after merge",
+  "timelapse.deleteRecordingsAfterMergeHint": "After a successful periodic merge, delete the source recordings in the window (AI-processing ones are skipped; never on failure). Great for fragment-heavy MJPEG cameras.",
   "cameras.motionSource": "Motion detection source",
   "cameras.motionSourceNvr": "NVR-side detection",
   "cameras.motionSourceCamera": "Camera-side (ONVIF events)",

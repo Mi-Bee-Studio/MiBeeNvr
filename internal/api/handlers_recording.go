@@ -615,6 +615,8 @@ func (h *Handler) registerRecordingRoutes(r chi.Router) {
 			r.Get("/frames", h.handleListFrames)
 			r.Get("/playback", h.handlePlayback)
 			r.Get("/timelapse-frames", h.handleTimelapseFrames)
+			// Batch endpoint registered BEFORE the {filename} wildcard.
+			r.Get("/timelapse-frames/batch", h.handleTimelapseFramesBatch)
 			r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
 			r.Post("/retry-merge", h.handleRetryTimelapseMerge)
 		})

@@ -54,6 +54,32 @@ cameras:
       output_fps: 30
 ```
 
+### MJPEG / HTTP-JPEG 摄像头（ESP32 类）
+
+开启录像（`recording_enabled`）的 MJPEG 相机同样支持双模延时：周期合并会直接从录像段目录里按 `interval` 采样 JPEG 帧（此前该路径对 MJPEG 相机无效）。断连碎片不影响采样——按绝对时间跨段连续采样，空洞自动跳过。
+
+```yaml
+cameras:
+  - name: "MiBeeCam"
+    protocol: "onvif"
+    encoding: "jpeg"
+    url: "http://192.168.63.148/onvif/device_service"
+    recording_enabled: true
+
+    timelapse:
+      enabled: true
+      interval: "30s"                        # 采样间隔：每 30s 取 1 帧（默认 30s）
+      merge_duration: "natural-day"          # 每个自然日一条延时视频
+      merge_output_fps: 30                   # 输出回放帧率（24h ≈ 96 秒视频）
+      delete_recordings_after_merge: true    # 合并成功后删除窗口内源录像段（可选）
+```
+
+要点：
+
+- **`interval` 是延时压缩旋钮**：输出时长 ≈ 窗口时长 ÷ interval × (1 / `merge_output_fps`)。所有格式的双模相机统一使用该语义。
+- **`delete_recordings_after_merge`**（默认 false）：周期合并成功后删除窗口内源录像段，真正减少文件数。AI 处理中的录像会跳过；合并失败绝不删除。`delete_original` 只删 timelapse 帧目录，两者互不影响。
+- 历史日期可用 `POST /api/timelapse/{cameraId}/merge?date=YYYY-MM-DD&duration=natural-day` 补跑。
+
 ### 独立延时摄影配置
 
 创建带有独立 RTSP 源的专用延时摄影摄像头：

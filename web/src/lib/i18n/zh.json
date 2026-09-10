@@ -1906,6 +1906,8 @@
   "cameras.visionRoutingDisabled": "已停用",
   "aiEvents.sourceFilter": "来源实例",
   "aiEvents.allSources": "全部来源",
+  "timelapse.deleteRecordingsAfterMerge": "合并后删除源录像",
+  "timelapse.deleteRecordingsAfterMergeHint": "周期延时合并成功后删除窗口内源录像段（AI 处理中的跳过；合并失败不删）。适合碎片多的 MJPEG 相机减少文件数。",
   "cameras.motionSource": "运动侦测来源",
   "cameras.motionSourceNvr": "NVR 侧侦测",
   "cameras.motionSourceCamera": "相机侧侦测（ONVIF 事件）",

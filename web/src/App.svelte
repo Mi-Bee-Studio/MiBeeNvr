@@ -197,7 +197,7 @@ function parseRoute(hash: string) {
       window.location.replace('#/dashboard/health');
     } else if (window.location.hash === '#/ai-events' || window.location.hash.startsWith('#/ai-events')) {
       window.location.replace('#/dashboard/ai');
-    } else if (window.location.hash === '#/timelapse' || window.location.hash.startsWith('#/timelapse')) {
+    } else if (window.location.hash === '#/timelapse' || window.location.hash.startsWith('#/timelapse/')) {
       window.location.replace('#/recordings');
     }
   }
@@ -226,7 +226,7 @@ function parseRoute(hash: string) {
       window.location.replace('#/dashboard/ai');
       return;
     }
-    if (hash === '#/timelapse' || hash.startsWith('#/timelapse')) {
+    if (hash === '#/timelapse' || hash.startsWith('#/timelapse/')) {
       window.location.replace('#/recordings');
       return;
     }

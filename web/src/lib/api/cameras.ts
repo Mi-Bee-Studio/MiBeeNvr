@@ -1113,6 +1113,7 @@ export interface TimelapseConfig {
   schedule: ScheduleConfig | null;
   paused: boolean;
   delete_original: boolean;
+  delete_recordings_after_merge?: boolean;
   merge_enabled?: boolean;
   merge_mode?: string;
   daily_merge?: boolean;

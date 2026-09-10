@@ -102,6 +102,25 @@ type PeriodicMergeManager struct {
 	// (legacy callers / tests) — in that case the row uses duration.String().
 	durationLabel string
 
+	// extractionInterval is the per-camera timelapse.interval — how often a
+	// frame is sampled from source video recordings when recording_enabled=true.
+	// Zero/negative falls back to defaultExtractionInterval at the use site.
+	// This is the timelapse compression knob (30s default → 24h becomes ~96s
+	// of output at 30fps), NOT the output playback fps (m.fps).
+	extractionInterval time.Duration
+
+	// deleteRecordingsAfterMerge implements the per-camera
+	// delete_recordings_after_merge config: when true (and a sourceDeleter is
+	// wired), source video recordings are deleted after their frames have been
+	// successfully folded into a periodic-merge output. Never on merge failure.
+	deleteRecordingsAfterMerge bool
+
+	// sourceDeleter deletes source recordings (DB rows + disk files) for the
+	// deleteRecordingsAfterMerge behavior. nil = deletion disabled. Production
+	// wiring adapts cleanup.CleanupManager.BatchDeleteRecordingsWithFiles,
+	// which skips recordings being processed by MiBeeVision.
+	sourceDeleter SourceRecordingDeleter
+
 	// runCtx holds per-Run metadata (camera/window/label) that finalizeMerge
 	// needs to write the timelapse_merges DB row. Set at the top of Run under
 	// runCtxMu. Empty runCtx.cameraID signals "no DB recording" (legacy mode
@@ -124,10 +143,63 @@ type periodicRunContext struct {
 	durationLabel string
 }
 
+// SourceRecordingDeleter deletes source video recordings (DB rows + disk
+// files) after their frames have been folded into a periodic-merge output.
+// Implementations must skip recordings protected by MiBeeVision processing —
+// the production adapter wraps cleanup.CleanupManager.BatchDeleteRecordingsWithFiles.
+type SourceRecordingDeleter interface {
+	DeleteRecordings(ctx context.Context, recordings []model.Recording, reason string) ([]string, error)
+}
+
 // Option configures PeriodicMergeManager behavior.
 
 // Option configures PeriodicMergeManager behavior.
 type Option func(*PeriodicMergeManager)
+
+// WithExtractionInterval sets the frame-sampling interval used when extracting
+// timelapse frames from video recordings (per-camera timelapse.interval,
+// default 30s). Smaller interval → denser timelapse; this is independent of
+// the output playback fps.
+func WithExtractionInterval(d time.Duration) Option {
+	return func(m *PeriodicMergeManager) {
+		m.extractionInterval = d
+	}
+}
+
+// WithDeleteRecordingsAfterMerge enables the per-camera
+// delete_recordings_after_merge behavior: source video recordings in the
+// window are deleted after a successful periodic merge (opt-in, default off).
+// A source deleter must also be wired (SetSourceRecordingDeleter).
+func WithDeleteRecordingsAfterMerge(enabled bool) Option {
+	return func(m *PeriodicMergeManager) {
+		m.deleteRecordingsAfterMerge = enabled
+	}
+}
+
+// SetSourceRecordingDeleter wires the deleter used by
+// delete_recordings_after_merge. Wired post-construction because the cleanup
+// manager is built after the periodic-merge managers in app assembly.
+// Deletion runs only when BOTH the flag (WithDeleteRecordingsAfterMerge) and
+// this deleter are set.
+func (m *PeriodicMergeManager) SetSourceRecordingDeleter(d SourceRecordingDeleter) {
+	m.sourceDeleter = d
+}
+
+// ExtractionInterval returns the effective frame-sampling interval (the
+// configured timelapse.interval, or the 30s default when unset). Exposed for
+// wiring regression tests.
+func (m *PeriodicMergeManager) ExtractionInterval() time.Duration {
+	if m.extractionInterval <= 0 {
+		return defaultExtractionInterval
+	}
+	return m.extractionInterval
+}
+
+// HasSourceDeleter reports whether a source-recording deleter is wired.
+// Exposed for wiring regression tests.
+func (m *PeriodicMergeManager) HasSourceDeleter() bool {
+	return m.sourceDeleter != nil
+}
 
 // WithRecordingEnabledProvider sets a function that reports if a camera has
 // recording_enabled=true. When true, Run will extract frames from video
@@ -324,14 +396,16 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 	//   - MJPEG ✅ (same JPEG extraction as AVI)
 	//   - MPEG-TS ✗ (no moov/stss boxes, too expensive to probe)
 	recordingEnabled := m.recordingEnabledProvider != nil && m.recordingEnabledProvider(cameraID)
+	var extractedSources map[string][]model.Recording
 	if recordingEnabled {
-		videoSegs, dirs, err := m.extractRecordingFrames(ctx, cameraID, startTime, endTime)
+		videoSegs, dirs, sources, err := m.extractRecordingFrames(ctx, cameraID, startTime, endTime)
 		if err != nil {
 			slog.Warn("periodic merge: recording frame extraction failed",
 				"camera_id", cameraID, "error", err)
 		}
 		tmpDirs = append(tmpDirs, dirs...)
 		segments = append(segments, videoSegs...)
+		extractedSources = sources
 	}
 
 	// 2. Handle no segments.
@@ -348,8 +422,9 @@ func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.
 		// 3b. Per-codec merge: group segments by codec type and run separate
 		// pipelines to avoid mixing incompatible codecs (e.g. H264+H265)
 		// in a single merge output. Temporary directories are cleaned up
-		// via the deferred function above.
-		return m.runPerCodecMerge(ctx, segments, cameraID, windowLabel)
+		// via the deferred function above. extractedSources feeds the opt-in
+		// delete_recordings_after_merge cleanup per group.
+		return m.runPerCodecMerge(ctx, segments, extractedSources, cameraID, windowLabel)
 	}
 
 	// 3. Build output path.

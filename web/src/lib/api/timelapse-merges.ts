@@ -7,6 +7,7 @@
  * (migration v28) so the frontend can discover, play, and delete them.
  */
 import { apiRequest, getAuthHeader, API_BASE, ApiRequestError } from './client';
+import { fetchFrameBatch, type FrameBatch } from '$lib/multipart';
 
 export interface TimelapseMerge {
   id: number;
@@ -76,6 +77,20 @@ export async function getTimelapseMerge(id: number | string, signal?: AbortSigna
  */
 export function getTimelapseMergeDownloadUrl(id: number | string): string {
   return `${API_BASE}/timelapse/merges/${id}/download`;
+}
+
+/**
+ * Fetch a batch of JPEG frames sliced from an MJPEG (mjpa) merge output as
+ * one multipart/mixed response. Used by the canvas sequence player for
+ * codec=mjpeg merges (browsers cannot decode mjpa via <video>).
+ */
+export function fetchTimelapseMergeFrameBatch(
+  id: number | string,
+  offset: number,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<FrameBatch> {
+  return fetchFrameBatch(`/timelapse/merges/${id}/frames`, offset, limit, signal);
 }
 
 /**

@@ -37,6 +37,7 @@ import (
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
@@ -415,6 +416,13 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			if cam.Timelapse.MergeOutputFPS > 0 {
 				fps = cam.Timelapse.MergeOutputFPS
 			}
+			// Frame-sampling interval for recording→timelapse extraction
+			// (timelapse.interval, default 30s via ApplyDefaults). This is the
+			// timelapse compression knob, independent of the output fps above.
+			extractInterval := 30 * time.Second
+			if d, err := time.ParseDuration(cam.Timelapse.Interval); err == nil && d > 0 {
+				extractInterval = d
+			}
 			periodicMergeManagers[cam.ID] = timelapse.NewPeriodicMergeManager(
 				db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc,
 				timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
@@ -434,6 +442,8 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 				// merge folds them in, unless the camera opts to retain them.
 				timelapse.WithRetainIntermediateMP4(cam.Timelapse.RetainIntermediateMP4Value()),
 				timelapse.WithIntermediateMP4Pruner(db),
+				timelapse.WithExtractionInterval(extractInterval),
+				timelapse.WithDeleteRecordingsAfterMerge(cam.Timelapse.DeleteRecordingsAfterMerge),
 			)
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
 			slog.Info(
@@ -443,6 +453,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			)
 		}
 	}
+	deps.periodicMergeManagers = periodicMergeManagers
 	mergeScheduler.SetRunFunc(func(ctx context.Context, cameraID string, refTime time.Time) error {
 		manager, ok := periodicMergeManagers[cameraID]
 		if !ok {
@@ -824,6 +835,16 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	deps.cleanupMgr = cleanupMgr
 	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)
 
+	// Wire the opt-in delete_recordings_after_merge source deleter into the
+	// periodic-merge managers. The per-camera enable flags were applied at
+	// manager construction; the mechanism is wired here because the cleanup
+	// manager is built after them. BatchDeleteRecordingsWithFiles skips
+	// recordings being processed by MiBeeVision.
+	tlSourceDeleter := timelapseSourceDeleter{cm: cleanupMgr}
+	for _, mgr := range periodicMergeManagers {
+		mgr.SetSourceRecordingDeleter(tlSourceDeleter)
+	}
+
 	// Shared snapshot capturer (#657): FFmpeg-gated hub-IDR decode for
 	// H.264/H.265 cameras + device snapshot-URL fallback. Wired into the
 	// latest-frame API below and the MQTT snapshot runner (Step 9). Every
@@ -910,6 +931,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	aiMgr := ai.NewManager(aiConfigFromConfig(cfg.AI), deps.eventBus)
 	ah := api.NewAIHandler(aiMgr, cfg, configPath)
 	handler.SetAIHandler(ah)
+	// Manual merges (POST /api/timelapse/{id}/merge, batch-merge) get the same
+	// opt-in delete_recordings_after_merge mechanism as the scheduled path.
+	handler.SetTimelapseSourceDeleter(tlSourceDeleter)
 	handler.SetRelayManager(relayMgr)
 	// Wire GB28181 PTZ controller (sends DeviceControl via the SIP server) when
 	// the GB28181 platform server is enabled.
@@ -1040,6 +1064,16 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		db.Close()
 	}
 	return deps, cleanup, nil
+}
+
+// timelapseSourceDeleter adapts cleanup.CleanupManager to the timelapse
+// package's SourceRecordingDeleter interface. Used by the opt-in
+// delete_recordings_after_merge behavior for periodic merges (scheduled path
+// and the API manual-merge path).
+type timelapseSourceDeleter struct{ cm *cleanup.CleanupManager }
+
+func (d timelapseSourceDeleter) DeleteRecordings(ctx context.Context, recordings []model.Recording, reason string) ([]string, error) {
+	return d.cm.BatchDeleteRecordingsWithFiles(ctx, recordings, reason)
 }
 
 // newGB28181SessionManager builds the media SessionManager from config. The

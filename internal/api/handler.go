@@ -181,6 +181,11 @@ type Handler struct {
 	visionCoordinator *vision.Coordinator
 	apiKeyStore       *middleware.APIKeyStore
 	whipServer        *whip.Server
+	// timelapseSourceDeleter backs the opt-in delete_recordings_after_merge
+	// behavior in manual merges. Wired post-construction
+	// (SetTimelapseSourceDeleter) because the cleanup manager is built after
+	// the handler in app assembly; nil = deletion disabled.
+	timelapseSourceDeleter timelapse.SourceRecordingDeleter
 	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
 	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
 	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
@@ -570,6 +575,44 @@ func (h *Handler) SetAPIKeyStore(s *middleware.APIKeyStore) {
 // SetAIHandler sets the AI handler on the Handler.
 func (h *Handler) SetAIHandler(ah *AIHandler) {
 	h.aiHandler = ah
+}
+
+// SetTimelapseSourceDeleter wires the deleter used by the opt-in
+// delete_recordings_after_merge behavior in manual merges. Wired
+// post-construction because the cleanup manager is built after the handler
+// in app assembly.
+func (h *Handler) SetTimelapseSourceDeleter(d timelapse.SourceRecordingDeleter) {
+	h.timelapseSourceDeleter = d
+}
+
+// HasTimelapseSourceDeleter reports whether the timelapse source deleter is
+// wired. Exposed for wiring regression tests.
+func (h *Handler) HasTimelapseSourceDeleter() bool {
+	return h.timelapseSourceDeleter != nil
+}
+
+// timelapseExtractionInterval returns the camera's timelapse.interval for
+// recording→timelapse frame sampling (manual merges; default 30s).
+func (h *Handler) timelapseExtractionInterval(cameraID string) time.Duration {
+	if h.camMgr != nil {
+		if cam := h.camMgr.GetCameraConfig(cameraID); cam != nil && cam.Timelapse != nil {
+			if d, err := time.ParseDuration(cam.Timelapse.Interval); err == nil && d > 0 {
+				return d
+			}
+		}
+	}
+	return 30 * time.Second
+}
+
+// timelapseDeleteAfterMerge reports the camera's delete_recordings_after_merge
+// flag for manual merges (default false).
+func (h *Handler) timelapseDeleteAfterMerge(cameraID string) bool {
+	if h.camMgr != nil {
+		if cam := h.camMgr.GetCameraConfig(cameraID); cam != nil && cam.Timelapse != nil {
+			return cam.Timelapse.DeleteRecordingsAfterMerge
+		}
+	}
+	return false
 }
 
 // SetRelayManager wires the relay manager for the relay-presets endpoints.
