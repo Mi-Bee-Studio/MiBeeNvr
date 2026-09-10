@@ -101,11 +101,14 @@ func TestStartRecorder_LatestFramePollerSkippedWhenRecordingEnabled(t *testing.T
 				}},
 			}
 			require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+			db, err := storage.New(filepath.Join(tmpDir, "test.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { db.Close() })
 			store, err := storage.NewManager(cfg.Storage.RootDir)
 			require.NoError(t, err)
 			t.Cleanup(func() { store.CleanupTempFiles() })
 
-			mgr := NewCameraManager(cfg, store, nil, "")
+			mgr := NewCameraManager(cfg, store, db, "")
 			t.Cleanup(func() { _ = mgr.Stop() })
 
 			segDur, _ := time.ParseDuration(cfg.Storage.SegmentDuration)
@@ -145,11 +148,14 @@ func TestStartRecorder_LatestFramePollerRunsWhenRecordingDisabled(t *testing.T) 
 		}},
 	}
 	require.NoError(t, os.MkdirAll(cfg.Storage.RootDir, 0o755))
+	db, err := storage.New(filepath.Join(tmpDir, "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
 	store, err := storage.NewManager(cfg.Storage.RootDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { store.CleanupTempFiles() })
 
-	mgr := NewCameraManager(cfg, store, nil, "")
+	mgr := NewCameraManager(cfg, store, db, "")
 	t.Cleanup(func() { _ = mgr.Stop() })
 
 	segDur, _ := time.ParseDuration(cfg.Storage.SegmentDuration)
