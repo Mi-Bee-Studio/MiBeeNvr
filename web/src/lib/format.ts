@@ -74,6 +74,21 @@ export function formatRelativeTime(dateStr: string, now: Date = new Date()): str
 }
 
 /**
+ * Format a timelapse-merge window_start as a row label. Day-aligned windows
+ * (natural-day / 24h / 7d / 30d) always start at midnight, so the label shows
+ * the date only; sub-day windows (1h / 8h / 12h) repeat within a day and need
+ * the HH:mm part to tell rows apart.
+ */
+export function formatMergeWindowLabel(windowStart: string, durationLabel: string): string {
+  const date = parseServerDate(windowStart);
+  if (isNaN(date.getTime())) return windowStart;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const datePart = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  if (['natural-day', '24h', '7d', '30d'].includes(durationLabel)) return datePart;
+  return `${datePart} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
  * Format bytes to a human-readable file size string.
  * e.g. "1.50 GB"
  */

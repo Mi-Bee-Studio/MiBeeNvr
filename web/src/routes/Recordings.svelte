@@ -20,7 +20,7 @@
 
   import type { Recording, Camera, RecordingDaySummary, RecordingTimelineSegment } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { formatDate } from '$lib/format';
+  import { formatDate, formatFileSize, formatMergeWindowLabel } from '$lib/format';
   import { showToast } from '$lib/toast';
   import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass, Server } from 'lucide-svelte';
   import GB28181DeviceRecords from '$lib/components/GB28181DeviceRecords.svelte';
@@ -256,6 +256,56 @@ const timelapsePresets: Array<{ key: string; labelKey: string; duration: string 
 // selectedPresetCamera is the camera the preset buttons act on. Defaults to
 // the URL ?camera= param or the first camera in the list.
 let selectedPresetCamera = $state<string>('');
+
+// ── Merge history state ──
+// The preset buttons only reach the MOST RECENT completed merge per window
+// type (limit:1, window_start DESC) — earlier days would be unreachable
+// without this list. One row per completed merge; click plays it.
+let mergeHistory = $state<TimelapseMerge[]>([]);
+let mergeHistoryLoading = $state(false);
+let mergeHistoryCamera = $state(''); // camera the loaded list belongs to
+let mergeHistoryDirty = $state(false); // a merge completed since the last load
+
+// Short duration-label translations for history rows (the settings editor uses
+// longer variants like "自然日（按午夜对齐）").
+const mergeDurationLabelKeys: Record<string, string> = {
+  '1h': 'timelapseMerge.duration1h',
+  '8h': 'timelapseMerge.duration8h',
+  '12h': 'timelapseMerge.duration12h',
+  '24h': 'timelapseMerge.duration24h',
+  '7d': 'timelapseMerge.duration7d',
+  '30d': 'timelapseMerge.duration30d',
+  'natural-day': 'timelapseMerge.durationNaturalDay',
+};
+
+function mergeDurationLabel(durationLabel: string): string {
+  const key = mergeDurationLabelKeys[durationLabel];
+  return key ? t(key) : durationLabel;
+}
+
+async function loadMergeHistory(cameraId: string) {
+  mergeHistoryLoading = true;
+  try {
+    const resp = await listTimelapseMerges({ camera_id: cameraId, status: 'completed', limit: 30 });
+    mergeHistory = resp.merges;
+    mergeHistoryCamera = cameraId;
+    mergeHistoryDirty = false;
+  } catch {
+    // Non-fatal: the list stays empty until the camera/view changes again.
+  } finally {
+    mergeHistoryLoading = false;
+  }
+}
+
+// Load (or refresh) the history whenever the timelapse view becomes visible,
+// the preset camera changes, or a preset generation just completed.
+$effect(() => {
+  if (viewMode !== 'timelapse') return;
+  const cameraId = selectedPresetCamera || cameras[0]?.id;
+  if (!cameraId) return;
+  if (!mergeHistoryDirty && mergeHistoryCamera === cameraId) return;
+  void loadMergeHistory(cameraId);
+});
 
 
   // ── Derived ──
@@ -793,6 +843,7 @@ let selectedPresetCamera = $state<string>('');
             if (signal.aborted) return;
             presetMergeProgress = data.progress ?? 0;
             if (data.status === 'completed') {
+              mergeHistoryDirty = true; // refresh the history list if still mounted
               // Find the merge row for this window+duration and navigate to it.
               void findAndPlayMerge(cameraId, duration, refTime).then(resolve, reject);
             } else if (data.status === 'failed') {
@@ -1216,6 +1267,46 @@ let selectedPresetCamera = $state<string>('');
             <p class="text-[10px] th-text-tertiary mt-2">
               {t('timelapseMerge.generatePrompt')}
             </p>
+          </div>
+
+          <!-- Completed-merge history: every generated merge for the selected
+               camera is reachable here, not just the latest one per preset. -->
+          <div class="card p-3 border th-border mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium th-text-secondary">
+                {t('timelapseMerge.historyTitle')} · {getCameraName(selectedPresetCamera || cameras[0]?.id || '')}
+              </span>
+              {#if mergeHistoryLoading}
+                <span class="text-[10px] th-text-tertiary flex items-center gap-1">
+                  <Hourglass size={10} class="animate-pulse" />
+                  {t('common.loading')}
+                </span>
+              {/if}
+            </div>
+            {#if !mergeHistoryLoading && mergeHistory.length === 0}
+              <p class="text-xs th-text-tertiary">{t('timelapseMerge.historyEmpty')}</p>
+            {:else}
+              <div class="flex flex-col gap-1 max-h-72 overflow-y-auto">
+                {#each mergeHistory as m (m.id)}
+                  <button
+                    class="flex items-center justify-between gap-2 w-full px-2 py-1.5 rounded text-left hover:bg-black/5 dark:hover:bg-white/10"
+                    onclick={() => {
+                      window.location.hash = `#/timelapse-merge/${m.id}`;
+                    }}
+                  >
+                    <span class="flex items-center gap-2 min-w-0">
+                      <span class="text-xs font-mono th-text-secondary shrink-0">
+                        {formatMergeWindowLabel(m.window_start, m.duration_label)}
+                      </span>
+                      <span class="text-[10px] th-text-tertiary shrink-0">{mergeDurationLabel(m.duration_label)}</span>
+                    </span>
+                    <span class="text-[10px] th-text-tertiary shrink-0">
+                      {m.frame_count} {t('timelapseMerge.framesUnit')} · {formatFileSize(m.file_size)}
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
           </div>
 
           <div class="card p-4 border th-border">
