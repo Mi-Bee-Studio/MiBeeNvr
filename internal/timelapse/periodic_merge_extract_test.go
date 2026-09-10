@@ -254,3 +254,49 @@ func TestPeriodicMerge_DeleteSkippedOnMergeFailure(t *testing.T) {
 		t.Errorf("DeleteRecordings must not be called when the merge failed, got %d calls", deleter.callCount())
 	}
 }
+
+// TestPeriodicMerge_DeleteSkippedForOpenWindow: a manual merge of TODAY's
+// still-open window must NOT delete source recordings even with the flag on —
+// the scheduled re-run at window close would otherwise regenerate the output
+// from only the surviving (post-preview) segments and lose the morning.
+func TestPeriodicMerge_DeleteSkippedForOpenWindow(t *testing.T) {
+	t.Helper()
+	dataDir := t.TempDir()
+	cameraID := "test-cam"
+	// Reference time INSIDE the window being merged (natural-day: today).
+	windowStart := time.Now().Truncate(time.Hour)
+
+	dirA := filepath.Join(dataDir, "segA")
+	writeMJPEGDirFixture(t, dirA, windowStart, 60, time.Second, 0)
+
+	lister := &mockRecordingListerMultiFormat{
+		videoSegments: []model.Recording{
+			{ID: "vid-open-1", CameraID: cameraID, FilePath: dirA, Format: model.FormatMJPEG, StartedAt: windowStart},
+		},
+	}
+
+	deleter := &fakeSourceDeleter{}
+	mgr := NewPeriodicMergeManager(
+		lister, newTrackDB(), NewGoMerger(), 30, dataDir, 24*time.Hour, nil,
+		WithRecordingEnabledProvider(func(string) bool { return true }),
+		WithExtractionInterval(10*time.Second),
+		WithDeleteRecordingsAfterMerge(true),
+	)
+	mgr.SetSourceRecordingDeleter(deleter)
+
+	// Merge a window whose end is in the FUTURE (today, still recording).
+	if err := mgr.Run(context.Background(), cameraID, windowStart.Add(time.Minute)); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	if deleter.callCount() != 0 {
+		t.Errorf("DeleteRecordings must not run for an open (not-yet-elapsed) window, got %d calls", deleter.callCount())
+	}
+
+	// The output itself must still be produced (preview use case). The
+	// natural-day window label is the (local) midnight of the reference day.
+	label := time.Now().Format("2006-01-02") + "_000000"
+	if _, err := os.Stat(filepath.Join(dataDir, cameraID, "periodic_"+label+".mp4")); err != nil {
+		t.Errorf("expected preview output for open window (label %s): %v", label, err)
+	}
+}

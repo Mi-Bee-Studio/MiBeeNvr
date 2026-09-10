@@ -201,6 +201,15 @@ func (m *PeriodicMergeManager) HasSourceDeleter() bool {
 	return m.sourceDeleter != nil
 }
 
+// mergeWindowStillOpen reports whether the current Run's window end is in the
+// future (e.g. a mid-day manual preview of a natural-day window). Source
+// deletion must be suppressed in that case — see runPerCodecMerge.
+func (m *PeriodicMergeManager) mergeWindowStillOpen() bool {
+	m.runCtxMu.Lock()
+	defer m.runCtxMu.Unlock()
+	return !m.runCtx.endTime.IsZero() && m.runCtx.endTime.After(time.Now())
+}
+
 // WithRecordingEnabledProvider sets a function that reports if a camera has
 // recording_enabled=true. When true, Run will extract frames from video
 // recordings in the merge window and include them in the timelapse output.
