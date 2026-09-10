@@ -341,3 +341,32 @@ func TestEventSubscriberImplImplementsEventSubscriber(t *testing.T) {
 	// Compile-time check: EventSubscriberImpl must implement EventSubscriber
 	var _ EventSubscriber = (*EventSubscriberImpl)(nil)
 }
+
+// TestEventSubscriberImpl_RunLifecycleReadsUnderLock is the regression test
+// for the CI -race catch (2026-09-09, PR #730 run): run() read ps.active /
+// ps.state on the raw subscription pointer while Unsubscribe() wrote them
+// under e.mu. Failing polls drive pollLoop to its terminal condition every
+// few milliseconds, so run() re-reads the lifecycle fields each cycle; the
+// Subscribe/Unsubscribe churn from this goroutine supplies the concurrent
+// writer. Under -race the old unlocked reads trip the detector quickly.
+func TestEventSubscriberImpl_RunLifecycleReadsUnderLock(t *testing.T) {
+	mock := &mockEventClient{
+		pullMessagesFn: func(_ context.Context, _ string, _ time.Duration, _ int) ([]onvifgo.NotificationMessage, error) {
+			return nil, fmt.Errorf("poll boom")
+		},
+	}
+	sub := helperNewEventSubscriberWithMock(mock,
+		WithPollInterval(time.Millisecond),
+		withResubscribeBackoff(time.Millisecond),
+	)
+	defer sub.StopAll(context.Background())
+
+	const cam = "cam-race"
+	for i := range 100 {
+		require.NoError(t, sub.Subscribe(context.Background(), cam))
+		// Vary the unsubscribe offset across the ~2ms poll-terminal cycle so
+		// the write collides with run()'s loop-top reads at some phase.
+		time.Sleep(time.Duration(i%4) * time.Millisecond)
+		require.NoError(t, sub.Unsubscribe(context.Background(), cam))
+	}
+}
