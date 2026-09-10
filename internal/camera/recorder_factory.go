@@ -194,10 +194,23 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 				"camera_id", cam.ID)
 		}
 	} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
-		if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
-			logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
-		} else if poller != nil {
-			cm.setFramePoller(cam.ID, poller)
+		// Same dual-mode guard as the rtsp_keyframe branch above (and
+		// startCamera in lifecycle.go): with recording_enabled=true (nil =
+		// default), timelapse frames come from recorded segments via
+		// PeriodicMergeManager. Starting the live poller here made every
+		// reconnect of a disconnect-heavy JPEG camera spawn a poller that
+		// spammed ~150s/6-frame timelapse fragments into the recordings list
+		// (206 segments in 9h observed on production).
+		recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+		if !recordingEnabled {
+			if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+				logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+			} else if poller != nil {
+				cm.setFramePoller(cam.ID, poller)
+			}
+		} else {
+			logger.Debug("timelapse latest-frame poller skipped: recording enabled (frames from PeriodicMergeManager)",
+				"camera_id", cam.ID)
 		}
 	}
 
