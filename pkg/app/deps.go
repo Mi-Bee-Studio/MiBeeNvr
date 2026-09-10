@@ -69,9 +69,10 @@ type appDeps struct {
 	transcodeMgr          *transcoding.TranscodeManager
 	rollingMergeMgr       *timelapse.RollingMergeManager // timelapse rolling merge (wired to API handler)
 	mergeScheduler        *timelapse.MergeScheduler
-	visionMgr             *vision.Coordinator // NVR→Vision push coordinator
-	motionAnalyzer        *motion.Analyzer    // offline motion-score service (issue #435)
-	pixgateMgr            *pixgate.Manager    // pixel-domain fine gate (issue #636)
+	periodicMergeManagers map[string]*timelapse.PeriodicMergeManager // per-camera (nil Timelapse = absent); asserted by wiring tests
+	visionMgr             *vision.Coordinator                        // NVR→Vision push coordinator
+	motionAnalyzer        *motion.Analyzer                           // offline motion-score service (issue #435)
+	pixgateMgr            *pixgate.Manager                           // pixel-domain fine gate (issue #636)
 
 	// Camera + health + relay
 	camMgr    *camera.CameraManager

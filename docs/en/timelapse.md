@@ -54,6 +54,32 @@ cameras:
       merge_output_fps: 30
 ```
 
+### MJPEG / HTTP-JPEG Cameras (ESP32-class)
+
+MJPEG cameras with recording enabled (`recording_enabled`) also support dual-mode timelapse: the periodic merge samples JPEG frames directly from the recording segment directories at `interval` (this path previously produced nothing for MJPEG cameras). Disconnect fragments don't matter — sampling is continuous across segments in absolute time and gaps are skipped automatically.
+
+```yaml
+cameras:
+  - name: "MiBeeCam"
+    protocol: "onvif"
+    encoding: "jpeg"
+    url: "http://192.168.63.148/onvif/device_service"
+    recording_enabled: true
+
+    timelapse:
+      enabled: true
+      interval: "30s"                        # sampling: one frame every 30s (default)
+      merge_duration: "natural-day"          # one timelapse per calendar day
+      merge_output_fps: 30                   # output playback fps (24h ≈ 96s video)
+      delete_recordings_after_merge: true    # delete source recordings after merge (optional)
+```
+
+Notes:
+
+- **`interval` is the timelapse compression knob**: output duration ≈ window ÷ interval × (1 / `merge_output_fps`). This semantics applies uniformly to dual-mode cameras of every format.
+- **`delete_recordings_after_merge`** (default false): after a successful periodic merge, the source video recordings inside the window are deleted, truly reducing the file count. Recordings being processed by MiBeeVision are skipped; nothing is ever deleted when the merge fails. `delete_original` only removes timelapse frame directories — the two are independent.
+- Historical days can be backfilled with `POST /api/timelapse/{cameraId}/merge?date=YYYY-MM-DD&duration=natural-day`.
+
 ### Standalone Timelapse Configuration
 
 Create dedicated timelapse cameras with separate RTSP sources:

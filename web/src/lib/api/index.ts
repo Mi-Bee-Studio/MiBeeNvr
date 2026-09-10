@@ -177,6 +177,7 @@ export {
   setArchiveRetention,
   getArchiveCleanupStatus,
   getTimelapseFrames,
+  fetchRecordingFrameBatch,
   loadTimelapseFrameBlob,
   triggerTimelapseMerge,
   batchMergeTimelapse,
@@ -214,6 +215,7 @@ export {
   listTimelapseMerges,
   getTimelapseMerge,
   getTimelapseMergeDownloadUrl,
+  fetchTimelapseMergeFrameBatch,
   probeTimelapseMergeCodec,
   deleteTimelapseMerge,
 } from './timelapse-merges';

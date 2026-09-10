@@ -1026,7 +1026,7 @@ func TestRecordingFrameExtractor_IntervalTooLarge(t *testing.T) {
 func TestRecordingFrameExtractor_InvalidFormat(t *testing.T) {
 	tmpDir := t.TempDir()
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames("dummy", model.FormatMJPEG, time.Second, tmpDir)
+	_, err := extractor.ExtractFrames("dummy", model.Format("mpegts"), time.Second, tmpDir)
 	if err == nil {
 		t.Error("expected error for unsupported format, got nil")
 	}
@@ -1430,5 +1430,271 @@ func TestRecordingFrameExtractor_AVI_FrameCountPrecision(t *testing.T) {
 	expected := 20
 	if n < expected-1 || n > expected+1 {
 		t.Errorf("expected ~%d frames (tolerance ±1), got %d", expected, n)
+	}
+}
+
+// --- Test MJPEG directory frame extraction + window sampler ---
+
+// writeMJPEGDirFixture writes n timestamped JPEG frames into dir, one every
+// step starting at start (mirrors storage.Manager.WriteFrame naming:
+// local-time "20060102_150405.000.jpg"). base differentiates frame bytes
+// between recordings so overwrites are detectable.
+func writeMJPEGDirFixture(t *testing.T, dir string, start time.Time, n int, step time.Duration, base byte) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	for i := range n {
+		ts := start.Add(time.Duration(i) * step)
+		name := ts.Format("20060102_150405.000") + ".jpg"
+		if err := os.WriteFile(filepath.Join(dir, name), buildTestJPEG(t, base+byte(i)), 0o644); err != nil {
+			t.Fatalf("write frame %s: %v", name, err)
+		}
+	}
+}
+
+// frameMarker extracts the per-frame marker byte written by buildTestJPEG.
+// The scan data starts right after the SOS header (0xFF 0xDA ... 14 bytes).
+func frameMarker(t *testing.T, path string) byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	idx := bytes.Index(data, []byte{0xFF, 0xDA})
+	if idx < 0 || idx+14 >= len(data) {
+		t.Fatalf("%s: SOS marker not found or truncated", path)
+	}
+	return data[idx+14]
+}
+
+func TestFrameSampler(t *testing.T) {
+	start := time.Date(2026, 9, 9, 10, 0, 0, 0, time.Local)
+	end := start.Add(1 * time.Hour)
+	s := NewFrameSampler(10*time.Second, start, end)
+
+	// First frame at window start is taken.
+	if !s.ShouldTake(start) {
+		t.Error("frame at window start should be taken")
+	}
+	// Frame 5s later: next target is start+10s → skipped.
+	if s.ShouldTake(start.Add(5 * time.Second)) {
+		t.Error("frame 5s after taken frame should be skipped")
+	}
+	// Frame exactly at next target: taken.
+	if !s.ShouldTake(start.Add(10 * time.Second)) {
+		t.Error("frame at next target should be taken")
+	}
+	// Gap clamping: after a 5-minute outage the first returning frame is
+	// taken immediately (no catch-up burst), and the following 1s frame is not.
+	if !s.ShouldTake(start.Add(5 * time.Minute)) {
+		t.Error("first frame after a gap should be taken")
+	}
+	if s.ShouldTake(start.Add(5*time.Minute + time.Second)) {
+		t.Error("frame 1s after gap-recovery frame should be skipped")
+	}
+	// Beyond window end: never taken.
+	if s.ShouldTake(end.Add(5 * time.Second)) {
+		t.Error("frame beyond window end should be skipped")
+	}
+}
+
+func TestRecordingFrameExtractor_MJPEGDir_Legacy(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir := filepath.Join(tmpDir, "seg_mjpeg")
+	outputDir := filepath.Join(tmpDir, "frames")
+
+	// 60 frames, one per second (mirrors a low-fps MJPEG camera segment).
+	start := time.Date(2026, 9, 9, 10, 0, 0, 0, time.Local)
+	writeMJPEGDirFixture(t, dir, start, 60, time.Second, 0)
+
+	extractor := NewRecordingFrameExtractor()
+	n, err := extractor.ExtractFrames(dir, model.FormatMJPEG, 15*time.Second, outputDir)
+	if err != nil {
+		t.Fatalf("ExtractFrames failed: %v", err)
+	}
+	// Legacy relative sampling: first frame taken, then one per 15s → 0,15,30,45 = 4.
+	if n != 4 {
+		t.Errorf("expected 4 frames, got %d", n)
+	}
+	matches, _ := filepath.Glob(filepath.Join(outputDir, "frame_*.jpg"))
+	if len(matches) != 4 {
+		t.Errorf("expected 4 frame files, got %d", len(matches))
+	}
+}
+
+func TestRecordingFrameExtractor_MJPEGDir_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir := filepath.Join(tmpDir, "empty_seg")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	extractor := NewRecordingFrameExtractor()
+	_, err := extractor.ExtractFrames(dir, model.FormatMJPEG, time.Second, tmpDir)
+	if err == nil {
+		t.Error("expected error for MJPEG dir with no frames, got nil")
+	}
+}
+
+// TestRecordingFrameExtractor_MJPEGDir_Window is the core fragmented-camera
+// scenario: two short segments (disconnect in between) share one output dir,
+// one FrameSampler and continuing numbering — no overwrite, chronological
+// order, gap-aware sampling.
+func TestRecordingFrameExtractor_MJPEGDir_Window(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "frames")
+	windowStart := time.Date(2026, 9, 9, 10, 0, 0, 0, time.Local)
+	windowEnd := windowStart.Add(24 * time.Hour)
+
+	// Segment A: 60s @ 1fps starting at window start, marker bytes 0..59.
+	dirA := filepath.Join(tmpDir, "segA")
+	writeMJPEGDirFixture(t, dirA, windowStart, 60, time.Second, 0)
+	// Segment B after a 4-minute outage: 60s @ 1fps from 10:05, markers 100..159.
+	dirB := filepath.Join(tmpDir, "segB")
+	writeMJPEGDirFixture(t, dirB, windowStart.Add(5*time.Minute), 60, time.Second, 100)
+
+	extractor := NewRecordingFrameExtractor()
+	sampler := NewFrameSampler(10*time.Second, windowStart, windowEnd)
+
+	nA, err := extractor.ExtractWindowFrames(dirA, model.FormatMJPEG, windowStart, sampler, 0, outputDir)
+	if err != nil {
+		t.Fatalf("ExtractWindowFrames A failed: %v", err)
+	}
+	// A: targets 10:00:00, :10, :20, :30, :40, :50 → 6 frames.
+	if nA != 6 {
+		t.Errorf("segment A: expected 6 frames, got %d", nA)
+	}
+
+	nB, err := extractor.ExtractWindowFrames(dirB, model.FormatMJPEG, windowStart.Add(5*time.Minute), sampler, nA, outputDir)
+	if err != nil {
+		t.Fatalf("ExtractWindowFrames B failed: %v", err)
+	}
+	// B: gap-clamped — 10:05:00 taken immediately, then :10,:20,:30,:40,:50 → 6 frames.
+	if nB != 6 {
+		t.Errorf("segment B: expected 6 frames, got %d", nB)
+	}
+
+	total := nA + nB
+	matches, _ := filepath.Glob(filepath.Join(outputDir, "frame_*.jpg"))
+	if len(matches) != total {
+		t.Errorf("expected %d frame files, got %d", total, len(matches))
+	}
+
+	// No overwrite: frame_000006 is A's last sampled frame (10:00:50, marker 50),
+	// frame_000007 is B's first (10:05:00, marker 100).
+	if got := frameMarker(t, filepath.Join(outputDir, "frame_000006.jpg")); got != 50 {
+		t.Errorf("frame_000006 marker = %d, want 50 (segment A 10:00:50)", got)
+	}
+	if got := frameMarker(t, filepath.Join(outputDir, "frame_000007.jpg")); got != 100 {
+		t.Errorf("frame_000007 marker = %d, want 100 (segment B 10:05:00)", got)
+	}
+}
+
+// TestRecordingFrameExtractor_AVI_Window verifies window sampling +
+// startIndex continuation for AVI recordings (PTS offset by recording start).
+func TestRecordingFrameExtractor_AVI_Window(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "frames")
+	windowStart := time.Date(2026, 9, 9, 10, 0, 0, 0, time.Local)
+
+	buildAVI := func(name string, frames int, base byte) string {
+		path := filepath.Join(tmpDir, name)
+		var buf bytes.Buffer
+		m := avi.NewVideoOnlyMuxer(&buf, 64, 48)
+		for i := range frames {
+			if err := m.WriteVideo(buildTestJPEG(t, base+byte(i)), int64(i)*100*1000); err != nil { // 10fps
+				t.Fatalf("WriteVideo %d: %v", i, err)
+			}
+		}
+		if err := m.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+			t.Fatalf("write AVI: %v", err)
+		}
+		return path
+	}
+
+	// Recording A: 100 frames. The AVI muxer pins dwMicroSecPerFrame=33333µs
+	// (30fps), so PTS = i*33.3ms → recording spans ~3.33s (markers 0..99).
+	aviA := buildAVI("a.avi", 100, 0)
+	// Recording B 2 minutes later (markers 100..199).
+	recBStart := windowStart.Add(2 * time.Minute)
+	aviB := buildAVI("b.avi", 100, 100)
+
+	extractor := NewRecordingFrameExtractor()
+	sampler := NewFrameSampler(time.Second, windowStart, windowStart.Add(time.Hour))
+
+	nA, err := extractor.ExtractWindowFrames(aviA, model.FormatAVI, windowStart, sampler, 0, outputDir)
+	if err != nil {
+		t.Fatalf("A failed: %v", err)
+	}
+	// A: absolute targets 10:00:00/01/02/03 → 4 frames.
+	if nA != 4 {
+		t.Errorf("A: expected 4 frames, got %d", nA)
+	}
+	nB, err := extractor.ExtractWindowFrames(aviB, model.FormatAVI, recBStart, sampler, nA, outputDir)
+	if err != nil {
+		t.Fatalf("B failed: %v", err)
+	}
+	// B: next target after A's last (10:00:03+1s) is long past — first frame at
+	// 10:02:00 taken, then :01/:02/:03 → 4 frames.
+	if nB != 4 {
+		t.Errorf("B: expected 4 frames, got %d", nB)
+	}
+
+	// Continuation: frame_000005 must be B's first frame (marker 100), proving
+	// no overwrite of A's frame_000005 slot... rather, that B starts at 5.
+	if got := frameMarker(t, filepath.Join(outputDir, "frame_000005.jpg")); got != 100 {
+		t.Errorf("frame_000005 marker = %d, want 100 (recording B first frame)", got)
+	}
+	matches, _ := filepath.Glob(filepath.Join(outputDir, "frame_*.jpg"))
+	if len(matches) != nA+nB {
+		t.Errorf("expected %d files, got %d", nA+nB, len(matches))
+	}
+}
+
+// TestRecordingFrameExtractor_H264_Window verifies window sampling + startIndex
+// continuation for H264 MP4 recordings.
+func TestRecordingFrameExtractor_H264_Window(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "frames")
+	windowStart := time.Date(2026, 9, 9, 10, 0, 0, 0, time.Local)
+
+	// 3 keyframes 1s apart (timescale 30 → duration 30 each).
+	samples := []testSample{
+		{data: buildH264IDRSample(), isKeyFrame: true, duration: 30},
+		{data: buildH264IDRSample(), isKeyFrame: true, duration: 30},
+		{data: buildH264IDRSample(), isKeyFrame: true, duration: 30},
+	}
+	mp4A := createTestMP4(t, tmpDir, "a.h264.mp4", false, samples, 30)
+	mp4B := createTestMP4(t, tmpDir, "b.h264.mp4", false, samples, 30)
+
+	extractor := NewRecordingFrameExtractor()
+	sampler := NewFrameSampler(2*time.Second, windowStart, windowStart.Add(time.Hour))
+
+	// A: targets 0s and 2s → frames 1 and 3 → 2 extracted.
+	nA, err := extractor.ExtractWindowFrames(mp4A, model.FormatH264, windowStart, sampler, 0, outputDir)
+	if err != nil {
+		t.Fatalf("A failed: %v", err)
+	}
+	if nA != 2 {
+		t.Errorf("A: expected 2 frames, got %d", nA)
+	}
+	// B starts 60s later: first frame taken (gap clamp) at rel 0s, rel 1s
+	// skipped, rel 2s taken → 2 extracted, numbering continues at 3.
+	recBStart := windowStart.Add(time.Minute)
+	nB, err := extractor.ExtractWindowFrames(mp4B, model.FormatH264, recBStart, sampler, nA, outputDir)
+	if err != nil {
+		t.Fatalf("B failed: %v", err)
+	}
+	if nB != 2 {
+		t.Errorf("B: expected 2 frames, got %d", nB)
+	}
+	for i := 1; i <= nA+nB; i++ {
+		name := filepath.Join(outputDir, fmt.Sprintf("frame_%06d.h264", i))
+		if _, err := os.Stat(name); err != nil {
+			t.Errorf("missing %s: %v", name, err)
+		}
 	}
 }

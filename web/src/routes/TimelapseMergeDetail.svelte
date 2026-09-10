@@ -3,6 +3,7 @@
   import {
     getTimelapseMerge,
     getTimelapseMergeDownloadUrl,
+    fetchTimelapseMergeFrameBatch,
     deleteTimelapseMerge,
   } from '$lib/api';
   import type { TimelapseMerge } from '$lib/api';
@@ -13,6 +14,7 @@
   import { formatFileSize } from '$lib/format';
   import { AlertTriangle, ArrowLeft, Download, Trash2, RefreshCw, Loader2 } from 'lucide-svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import MjpegSequencePlayer from '$lib/components/MjpegSequencePlayer.svelte';
 
   // Route prop — the numeric id of the timelapse_merge row.
   let { mergeId = '' } = $props();
@@ -175,8 +177,16 @@
 
         <!-- Player / status -->
         <div class="card border th-border overflow-hidden">
-            {#if merge.status === 'completed' && videoUrl}
-            {#if videoError === 'src_not_supported'}
+            {#if merge.status === 'completed' && (videoUrl || merge.codec === 'mjpeg')}
+            {#if merge.codec === 'mjpeg'}
+              <!-- MJPEG (mjpa) output: browsers can't decode it via <video> —
+                   play as a batched JPEG sequence on canvas instead. -->
+              <MjpegSequencePlayer
+                frameCount={merge.frame_count}
+                fps={merge.fps > 0 ? merge.fps : 30}
+                fetchBatch={(offset, limit, signal) => fetchTimelapseMergeFrameBatch(merge.id, offset, limit, signal)}
+              />
+            {:else if videoError === 'src_not_supported'}
               <div class="p-8 text-center">
                 <AlertTriangle size={40} class="mx-auto mb-3 th-color-warning" />
                 <p class="th-text-primary mb-2">{videoErrorMsg}</p>
@@ -288,11 +298,13 @@
   </main>
 </div>
 
-<ConfirmDialog
-  bind:open={deleteConfirm}
-  title={t('detail.delete')}
-  message={t('timelapseMerge.deleteConfirm')}
-  confirmLabel={t('detail.delete')}
-  cancelLabel={t('common.cancel')}
-  onConfirm={handleDelete}
-/>
+{#if deleteConfirm}
+  <ConfirmDialog
+    title={t('detail.delete')}
+    message={t('timelapseMerge.deleteConfirm')}
+    confirmText={t('detail.delete')}
+    cancelText={t('common.cancel')}
+    onconfirm={handleDelete}
+    oncancel={() => (deleteConfirm = false)}
+  />
+{/if}

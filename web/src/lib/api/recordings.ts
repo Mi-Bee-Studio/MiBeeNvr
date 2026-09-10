@@ -2,6 +2,7 @@
  * Recording API — list, download, frames, stats, archives
  */
 import { apiRequest, apiRequestBlob, apiHeadHeader, getAuthHeader, API_BASE, ApiRequestError } from './client';
+import { fetchFrameBatch, type FrameBatch } from '$lib/multipart';
 
 // --- Types ---
 
@@ -374,6 +375,20 @@ export async function loadTimelapseFrameBlob(
 ): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/timelapse-frames/${filename}`, { signal });
   return URL.createObjectURL(blob);
+}
+
+/**
+ * Fetch a batch of JPEG frames for an MJPEG/timelapse/AVI recording as one
+ * multipart/mixed response (N frames per request — the smooth-playback path
+ * used by the canvas sequence player).
+ */
+export function fetchRecordingFrameBatch(
+  recordingId: string,
+  offset: number,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<FrameBatch> {
+  return fetchFrameBatch(`/recordings/${recordingId}/timelapse-frames/batch`, offset, limit, signal);
 }
 export async function loadFrameBlob(recordingId: string, frameIndex: number, signal?: AbortSignal): Promise<string> {
   const blob = await apiRequestBlob(`/recordings/${recordingId}/download?frame=${frameIndex}`, { signal });

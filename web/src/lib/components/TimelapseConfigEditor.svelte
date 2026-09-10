@@ -256,6 +256,21 @@
             <label for="timelapse-delete-original" class="th-text-secondary text-sm">{t('timelapse.deleteOriginal')}</label>
           </div>
 
+          <!-- Delete source recordings after periodic merge (opt-in) -->
+          <div class="flex items-center gap-2 md:col-span-2">
+            <input
+              id="timelapse-delete-recordings"
+              type="checkbox"
+              class="accent-[var(--color-accent)]"
+              checked={config.delete_recordings_after_merge}
+              onchange={(e) => updateField('delete_recordings_after_merge', (e.target as HTMLInputElement).checked)}
+            />
+            <label for="timelapse-delete-recordings" class="th-text-secondary text-sm">
+              {t('timelapse.deleteRecordingsAfterMerge')}
+              <span class="block text-xs th-text-tertiary">{t('timelapse.deleteRecordingsAfterMergeHint')}</span>
+            </label>
+          </div>
+
           <!-- Schedule Section -->
           <div class="md:col-span-2 border-t th-border pt-4 mt-2">
             <div class="flex items-center justify-between mb-3">

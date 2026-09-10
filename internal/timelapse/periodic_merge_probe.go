@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -156,28 +157,27 @@ func probeVideoFrameCount(ctx context.Context, filePath string) (int, error) {
 	return count, nil
 }
 
-// extractRecordingFrames queries video-format recordings in the merge window
-// and extracts frames into per-codec temporary directories. Returns synthetic
-// Recording entries for each codec group and the list of temp dirs to clean up.
-//
-// Supported formats for frame extraction:
-//   - H264 ✅ (keyframe-sync H.264 IDR samples from MP4)
-//   - H265 ✅ (IRAP NAL type 19/20 sync samples from MP4)
-//   - AVI ✅  (MJPEG JPEG frames via internal/avi demuxer)
-//   - MJPEG ✅ (same JPEG extraction as AVI)
-//   - MPEG-TS ✗ (no moov/stss boxes, too expensive to probe)
+// defaultExtractionInterval is the frame-sampling fallback when the camera's
+// timelapse.interval is not wired (legacy constructions / tests).
+const defaultExtractionInterval = 30 * time.Second
 
 // extractRecordingFrames queries video-format recordings in the merge window
-// and extracts frames into per-codec temporary directories. Returns synthetic
-// Recording entries for each codec group and the list of temp dirs to clean up.
+// and extracts frames into per-codec temporary directories using ONE shared
+// absolute-time FrameSampler per codec group — so fragmented recordings
+// (disconnect-heavy MJPEG cameras) sample continuously across segments without
+// overwriting each other's frame numbering.
+//
+// Returns synthetic Recording entries for each codec group, the temp dirs to
+// clean up, and the source recordings per codec group (used by the opt-in
+// delete_recordings_after_merge cleanup after a successful merge).
 //
 // Supported formats for frame extraction:
 //   - H264 ✅ (keyframe-sync H.264 IDR samples from MP4)
 //   - H265 ✅ (IRAP NAL type 19/20 sync samples from MP4)
 //   - AVI ✅  (MJPEG JPEG frames via internal/avi demuxer)
-//   - MJPEG ✅ (same JPEG extraction as AVI)
+//   - MJPEG ✅ (timestamped JPEG directory — frame times from filenames)
 //   - MPEG-TS ✗ (no moov/stss boxes, too expensive to probe)
-func (m *PeriodicMergeManager) extractRecordingFrames(ctx context.Context, cameraID string, startTime, endTime time.Time) ([]model.Recording, []string, error) {
+func (m *PeriodicMergeManager) extractRecordingFrames(ctx context.Context, cameraID string, startTime, endTime time.Time) ([]model.Recording, []string, map[string][]model.Recording, error) {
 	videoFormats := []model.Format{model.FormatH264, model.FormatH265, model.FormatAVI, model.FormatMJPEG}
 	recs, err := m.store.ListRecordings(ctx, model.RecordingFilter{
 		CameraID:  cameraID,
@@ -186,17 +186,22 @@ func (m *PeriodicMergeManager) extractRecordingFrames(ctx context.Context, camer
 		EndTime:   endTime,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("list video recordings: %w", err)
+		return nil, nil, nil, fmt.Errorf("list video recordings: %w", err)
 	}
 	if len(recs) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
-	// Map recording format to extraction codec (grouping key).
-	// MJPEG recordings produce JPEG frames like AVI.
+	// Chronological order is load-bearing: the shared sampler walks recordings
+	// in time order, and continuing frame numbering must not go backwards.
+	sort.Slice(recs, func(i, j int) bool { return recs[i].StartedAt.Before(recs[j].StartedAt) })
+
+	// MJPEG/AVI recordings both yield JPEG frames — join them into one
+	// suffix-less "jpeg" group (same mapping runPerCodecMerge applies to
+	// timelapse segments), so the output is periodic_<window>.mp4.
 	codecKey := func(f model.Format) model.Format {
-		if f == model.FormatMJPEG {
-			return model.FormatAVI // MJPEG → JPEG extraction like AVI
+		if f == model.FormatMJPEG || f == model.FormatAVI {
+			return model.FormatTimelapse
 		}
 		return f
 	}
@@ -209,33 +214,45 @@ func (m *PeriodicMergeManager) extractRecordingFrames(ctx context.Context, camer
 	}
 
 	extractor := NewRecordingFrameExtractor()
-	// Determine extraction interval based on FPS. At least 1 frame per recording.
-	interval := time.Second / time.Duration(m.fps)
+	// Sampling cadence = per-camera timelapse.interval (the timelapse
+	// compression knob), NOT 1/output-fps — sampling every frame would just
+	// copy the whole window instead of producing a timelapse.
+	interval := m.extractionInterval
 	if interval <= 0 {
-		interval = 100 * time.Millisecond // default 10fps
+		interval = defaultExtractionInterval
 	}
 
 	var segments []model.Recording
 	var tmpDirs []string
+	sourcesByGroup := make(map[string][]model.Recording)
 
-	for codec, recs := range codecRecordings {
+	for codec, codecRecs := range codecRecordings {
 		tmpDir, err := os.MkdirTemp("", fmt.Sprintf("periodic_extract_%s_*", codec))
 		if err != nil {
 			// Clean up previously created dirs on error.
 			for _, d := range tmpDirs {
 				os.RemoveAll(d)
 			}
-			return nil, nil, fmt.Errorf("create temp dir for %s: %w", codec, err)
+			return nil, nil, nil, fmt.Errorf("create temp dir for %s: %w", codec, err)
 		}
 		tmpDirs = append(tmpDirs, tmpDir)
 
-		for _, rec := range recs {
-			n, err := extractor.ExtractFrames(rec.FilePath, codec, interval, tmpDir)
+		// One shared window sampler + continuing frame index across ALL
+		// recordings in the group — fixes the frame_000001 overwrite that
+		// destroyed all but the last recording's frames.
+		sampler := NewFrameSampler(interval, startTime, endTime)
+		frameIdx := 0
+		groupSources := make([]model.Recording, 0, len(codecRecs))
+
+		for _, rec := range codecRecs {
+			n, err := extractor.ExtractWindowFrames(rec.FilePath, rec.Format, rec.StartedAt, sampler, frameIdx, tmpDir)
 			if err != nil {
 				slog.Warn("periodic merge: frame extraction failed, skipping recording",
 					"recording_id", rec.ID, "format", rec.Format, "error", err)
 				continue
 			}
+			frameIdx += n
+			groupSources = append(groupSources, rec)
 			slog.Debug("periodic merge: extracted frames from recording",
 				"recording_id", rec.ID, "format", rec.Format, "frames", n, "dir", tmpDir)
 		}
@@ -258,9 +275,10 @@ func (m *PeriodicMergeManager) extractRecordingFrames(ctx context.Context, camer
 			Format:      codec,
 			MergeStatus: "", // unmerged raw segment
 		})
+		sourcesByGroup[codecGroupName(codec)] = groupSources
 	}
 
-	return segments, tmpDirs, nil
+	return segments, tmpDirs, sourcesByGroup, nil
 }
 
 // runPerCodecMerge groups segments by codec type and runs a separate merge

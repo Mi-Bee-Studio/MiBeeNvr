@@ -21,11 +21,12 @@
     clearMergedCodecCache,
     listRecordings,
     getTimelapseFrames,
-    loadTimelapseFrameBlob,
+    fetchRecordingFrameBatch,
     recordTimelineSeek,
   } from '$lib/api';
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
+  import MjpegSequencePlayer from '$lib/components/MjpegSequencePlayer.svelte';
   import { parseVodPlaylist, entryAt, nearestEntryByWallClock, mediaTimeFor, type VodEntry } from '$lib/vod-playlist';
   import { parseTimelineMap, wallToFileSec, fileToWallSec } from '$lib/timeline-map';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
@@ -128,6 +129,9 @@
   let transcodePollTimer = $state<ReturnType<typeof setInterval> | null>(null);
 
   // --- Timelapse player state ---
+  // Frames are fetched + rendered by MjpegSequencePlayer (multipart batches on
+  // canvas); timelapseFrames is metadata only (count + per-frame timestamps
+  // for the timeline seek / timestamp display).
   let timelapseFrames = $state<TimelapseFrame[]>([]);
   let tlCurrentFrame = $state(0);
   let tlIsPlaying = $state(false);
@@ -135,20 +139,8 @@
   let tlLoading = $state(false);
   let tlError = $state('');
   const tlSpeeds = [1, 2, 4];
-  let tlPlayTimeout: ReturnType<typeof setTimeout> | null = null;
-  let tlBlobCache = $state<Map<number, string>>(new Map());
   let tlAbortController: AbortController | null = null;
   let tlLoop = $state(false);
-  let tlSeekLoading = $state(false);
-  let tlSeekTimeout: ReturnType<typeof setTimeout> | null = null;
-
-  interface PrefetchedSegment {
-    recordingId: string;
-    frames: TimelapseFrame[];
-    blobCache: Map<number, string>;
-  }
-  let prefetchedNextSegment: PrefetchedSegment | null = null;
-  let prefetchingNextSegment = false;
 
   let formatLabel = $derived.by(() => {
     if (!recording) return '';
@@ -923,33 +915,23 @@
     if (transcodePollTimer) { clearInterval(transcodePollTimer); transcodePollTimer = null; }
   }
 
-  // --- Timelapse JPEG cycler ---
+  // --- Timelapse JPEG cycler (MjpegSequencePlayer-backed) ---
   async function initTimelapsePlayer() {
     tlLoading = true;
     tlError = '';
     tlIsPlaying = false;
     tlCurrentFrame = 0;
-    stopTimelapsePlayback();
     tlAbortController?.abort();
     tlAbortController = new AbortController();
     const signal = tlAbortController.signal;
-    tlBlobCache.forEach(url => URL.revokeObjectURL(url));
-    tlBlobCache = new Map();
-    prefetchedNextSegment = null;
-    prefetchingNextSegment = false;
     try {
       timelapseFrames = await getTimelapseFrames(currentId, signal);
-      if (timelapseFrames.length > 0) {
-        if (pendingTimelineSeekOffset != null) {
-          // Cross-segment timeline seek: land on the frame nearest the
-          // requested offset instead of the segment start.
-          const target = frameIndexAtOffset(pendingTimelineSeekOffset);
-          pendingTimelineSeekOffset = null;
-          tlSeek(target);
-        } else {
-          await ensureFrameCached(0, signal);
-        }
-        prefetchAhead(pendingTimelineSeekOffset == null ? 0 : tlCurrentFrame, signal);
+      if (timelapseFrames.length > 0 && pendingTimelineSeekOffset != null) {
+        // Cross-segment timeline seek: land on the frame nearest the
+        // requested offset instead of the segment start.
+        const target = frameIndexAtOffset(pendingTimelineSeekOffset);
+        pendingTimelineSeekOffset = null;
+        tlSeek(target);
       }
     } catch (e) {
       if (signal.aborted) return;
@@ -961,146 +943,25 @@
     }
   }
 
-  async function ensureFrameCached(index: number, signal?: AbortSignal) {
-    if (tlBlobCache.has(index) || !timelapseFrames[index]) return;
-    if (signal?.aborted) return;
-    try {
-      const blobUrl = await loadTimelapseFrameBlob(currentId, timelapseFrames[index].filename, signal);
-      if (signal?.aborted) return;
-      tlBlobCache.set(index, blobUrl);
-      if (tlBlobCache.size >= 500) {
-        const keys = [...tlBlobCache.keys()].sort((a, b) => a - b);
-        const toEvict = keys.slice(0, keys.length - 400);
-        for (const k of toEvict) {
-          const url = tlBlobCache.get(k);
-          if (url) URL.revokeObjectURL(url);
-          tlBlobCache.delete(k);
-        }
-      }
-    } catch (e) {
-      if (signal?.aborted) return;
-      console.warn('Failed to load timelapse frame:', index, e);
-    }
-  }
-
-  async function prefetchAhead(fromIndex: number, signal?: AbortSignal) {
-    const windowSize = 200;
-    const batchSize = 20;
-    const end = Math.min(fromIndex + windowSize, timelapseFrames.length);
-    for (let i = fromIndex; i < end; i += batchSize) {
-      if (signal?.aborted) return;
-      const batch = [];
-      for (let j = i; j < Math.min(i + batchSize, end); j++) {
-        if (!tlBlobCache.has(j)) batch.push(ensureFrameCached(j, signal));
-      }
-      await Promise.all(batch);
-    }
-  }
-
-  function stopTimelapsePlayback() {
-    if (tlPlayTimeout) { clearTimeout(tlPlayTimeout); tlPlayTimeout = null; }
-  }
-
-  function playNextFrame() {
-    if (!tlIsPlaying) return;
-    const signal = tlAbortController?.signal;
-    if (signal?.aborted) return;
-    const next = tlCurrentFrame + 1;
-
-    if (timelapseFrames.length > 0 && next >= timelapseFrames.length * 0.8 && !prefetchedNextSegment && !prefetchingNextSegment) {
-      prefetchNextSegmentFrames();
-    }
-
-    if (next >= timelapseFrames.length) {
-      if (tlLoop) {
-        tlCurrentFrame = 0;
-        tlPlayTimeout = setTimeout(playNextFrame, 50);
-        return;
-      }
-      // Seamless chain: if the next segment was prefetched, adopt its frames.
-      if (prefetchedNextSegment && prefetchedNextSegment.frames.length > 0) {
-        const pre = prefetchedNextSegment;
-        prefetchedNextSegment = null;
-        timelapseFrames = pre.frames;
-        tlBlobCache.forEach(url => URL.revokeObjectURL(url));
-        tlBlobCache = pre.blobCache;
-        tlCurrentFrame = 0;
-        clearMergedCodecCache(pre.recordingId);
-        // Claim the adopted segment BEFORE the host swaps the recording prop —
-        // the recording-change effect must skip so the adopted playback is not
-        // re-initialized (which would stomp the chain back to the old segment).
-        lastLoadedId = pre.recordingId;
-        // Reload the recording metadata in the background so the side panel /
-        // timeline update, without interrupting the cycler.
-        void getRecording(pre.recordingId).then(r => { if (r) oncrosssegment?.(r); });
-        const fps = 10 * tlSpeed;
-        const delay = Math.max(0, (1000 / fps) - 10);
-        tlPlayTimeout = setTimeout(playNextFrame, delay);
-        return;
-      }
-      // No prefetch → fall back to the host's next-segment navigation.
-      tlIsPlaying = false;
-      ongotonext();
-      return;
-    }
-    tlCurrentFrame = next;
-    const loadPromise = tlBlobCache.has(next) ? Promise.resolve() : ensureFrameCached(next, signal);
-    prefetchAhead(next + 1, signal);
-    loadPromise.then(() => {
-      if (signal?.aborted) return;
-      const fps = 10 * tlSpeed;
-      const delay = Math.max(0, (1000 / fps) - 10);
-      tlPlayTimeout = setTimeout(playNextFrame, delay);
-    });
-  }
-
-  async function prefetchNextSegmentFrames() {
-    if (!recording || prefetchedNextSegment || prefetchingNextSegment) return;
-    prefetchingNextSegment = true;
-    try {
-      const next = await loadNextRecording();
-      if (!next) return;
-      const frames = await getTimelapseFrames(next.id);
-      if (frames.length === 0) return;
-      const blobCache = new Map<number, string>();
-      const batchSize = Math.min(20, frames.length);
-      await Promise.all(
-        Array.from({ length: batchSize }, (_, i) =>
-          loadTimelapseFrameBlob(next.id, frames[i].filename)
-            .then(url => blobCache.set(i, url))
-            .catch(() => {})
-        )
-      );
-      prefetchedNextSegment = { recordingId: next.id, frames, blobCache };
-    } catch { /* silent */ } finally {
-      prefetchingNextSegment = false;
-    }
+  // The sequence player reports end-of-sequence; navigate to the next segment
+  // (batch fetching makes the transition one request, not N).
+  function handleSequenceEnded() {
+    ongotonext();
   }
 
   function tlTogglePlay() {
     if (tlIsPlaying) {
       tlIsPlaying = false;
-      stopTimelapsePlayback();
     } else {
       if (timelapseFrames.length === 0) return;
+      // Restart from the top when play is pressed at the end.
+      if (tlCurrentFrame >= timelapseFrames.length - 1) tlCurrentFrame = 0;
       tlIsPlaying = true;
-      stopTimelapsePlayback();
-      playNextFrame();
     }
   }
   function tlSetSpeed(speed: number) { tlSpeed = speed; }
   function tlSeek(index: number) {
-    const target = Math.max(0, Math.min(index, timelapseFrames.length - 1));
-    tlCurrentFrame = target;
-    const signal = tlAbortController?.signal;
-    if (!tlBlobCache.has(target)) {
-      tlSeekTimeout = setTimeout(() => { tlSeekLoading = true; }, 500);
-      ensureFrameCached(target, signal).finally(() => {
-        if (tlSeekTimeout) { clearTimeout(tlSeekTimeout); tlSeekTimeout = null; }
-        tlSeekLoading = false;
-      });
-    }
-    prefetchAhead(target + 1, signal);
+    tlCurrentFrame = Math.max(0, Math.min(index, timelapseFrames.length - 1));
   }
   function tlToggleLoop() { tlLoop = !tlLoop; }
   function toggleFullscreen() {
@@ -1184,14 +1045,11 @@
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }
 
-  // Cleanup on destroy: abort in-flight requests, revoke blob URLs, clear timers.
+  // Cleanup on destroy: abort in-flight requests, clear timers.
   onDestroy(() => {
     teardownContinuous();
     tlAbortController?.abort();
     tlAbortController = null;
-    tlBlobCache.forEach(url => URL.revokeObjectURL(url));
-    tlBlobCache = new Map();
-    stopTimelapsePlayback();
     if (formatBadgeTimeout) { clearTimeout(formatBadgeTimeout); formatBadgeTimeout = null; }
     if (videoStallTimeout) { clearTimeout(videoStallTimeout); videoStallTimeout = null; }
     stopTranscodePoll();
@@ -1201,29 +1059,26 @@
   export function handleKeyAction(key: string) {
     if (!recording) return;
     const f = recording.format;
+    // mjpeg and timelapse formats both play through the sequence player
+    // (playbackMode === 'timelapse') — shared control path.
+    const seq = f === 'mjpeg' || f === 'timelapse';
     if (key === 'space') {
-      if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('togglePlay');
-      else if (f === 'timelapse') tlTogglePlay();
+      if (seq) tlTogglePlay();
       else { const v = videoEl; if (v) { if (v.paused) void v.play(); else v.pause(); } }
     } else if (key === 'arrowleft') {
-      if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('prevFrame');
-      else if (f === 'timelapse') tlSeek(tlCurrentFrame - 1);
+      if (seq) tlSeek(tlCurrentFrame - 1);
       else { const v = videoEl; if (v) v.currentTime = Math.max(0, v.currentTime - 5); }
     } else if (key === 'arrowright') {
-      if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('nextFrame');
-      else if (f === 'timelapse') tlSeek(tlCurrentFrame + 1);
+      if (seq) tlSeek(tlCurrentFrame + 1);
       else { const v = videoEl; if (v) v.currentTime = Math.min(v.duration, v.currentTime + 5); }
     } else if (key === 'f') {
-      if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('toggleFullscreen');
-      else if (f === 'timelapse') toggleFullscreen();
+      if (seq) toggleFullscreen();
       else toggleVideoFullscreen();
     } else if (key === 'l') {
-      if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('toggleLoop');
-      else if (f === 'timelapse') tlToggleLoop();
+      if (seq) tlToggleLoop();
       else if (f === 'h264' || f === 'h265') toggleVideoLoop();
     } else if (key === 'home') {
-      if (f === 'mjpeg') mjpegPlayer?.handleKeyAction('home');
-      else if (f === 'timelapse') tlSeek(0);
+      if (seq) tlSeek(0);
       else if (f === 'h264' || f === 'h265') setVideoSpeed(1);
     }
   }
@@ -1391,25 +1246,23 @@
       </div>
     </div>
   {:else}
-    <!-- Frame display -->
-    <div class="timelapse-container relative max-h-[75vh] overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
-      {#if timelapseFrames[tlCurrentFrame]}
-        {@const frame = timelapseFrames[tlCurrentFrame]}
-        {#if tlBlobCache.has(tlCurrentFrame)}
-          <img src={tlBlobCache.get(tlCurrentFrame)} alt={frame.filename} class="max-w-full max-h-[75vh]" style="transition: opacity 0.2s ease-in-out" />
-        {:else if tlCurrentFrame > 0 && tlBlobCache.has(tlCurrentFrame - 1)}
-          <img src={tlBlobCache.get(tlCurrentFrame - 1)} alt={frame.filename} class="max-w-full max-h-[75vh] opacity-50" style="transition: opacity 0.3s ease-in-out" />
-          {#if tlSeekLoading}
-            <div class="absolute inset-0 flex items-center justify-center bg-black/30">
-              <div class="spinner spinner-lg"></div>
-            </div>
-          {/if}
-        {:else}
-          <div class="flex items-center justify-center h-64 bg-black">
-            <div class="spinner spinner-lg"></div>
-          </div>
-        {/if}
-      {/if}
+    <!-- Frame display: multipart batch fetch + canvas rendering (no per-frame
+         GETs, no <img src> swaps → no stutter, no flicker). Keyed by recording
+         so caches reset on segment change. -->
+    <div class="timelapse-container relative overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
+      {#key currentId}
+        <MjpegSequencePlayer
+          frameCount={timelapseFrames.length}
+          fps={10}
+          fetchBatch={(offset, limit, signal) => fetchRecordingFrameBatch(currentId, offset, limit, signal)}
+          bind:currentIndex={tlCurrentFrame}
+          bind:playing={tlIsPlaying}
+          bind:speed={tlSpeed}
+          loop={tlLoop}
+          showControls={false}
+          onEnded={handleSequenceEnded}
+        />
+      {/key}
     </div>
 
     <!-- Inline merge controls -->
