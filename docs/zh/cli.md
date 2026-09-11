@@ -33,6 +33,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`encrypt-config`](#encrypt-config-加密敏感字段) | 加密配置中的明文密码 |
 | [`download-model`](#download-model-下载-ai-模型) | 下载浏览器端 AI 检测模型 |
 | [`merge-cameras`](#merge-cameras-合并摄像头) | 合并两个重复的摄像头条目 |
+| [`timelapse-merge`](#timelapse-merge-录像转延时合并) | 把任意时段的录像批量转成延时合并产物 |
 | [`repair`](#repair-数据修复) | 数据修复工具集（7 个子命令） |
 | [`cleanup`](#cleanup-录像清理) | 按日期 / 孤儿文件清理录像 |
 
@@ -121,6 +122,39 @@ mibee-nvr merge-cameras --source cam-old --target cam-new --execute
 | `--execute` | 真正执行（默认 dry-run 仅预览） |
 | `--force` | 存在孤儿记录时仍然继续 |
 | `--config <path>` | 配置文件路径（默认 `mibee-nvr.yaml`） |
+
+## timelapse-merge — 录像转延时合并
+
+把**任意时段、任意摄像头**的既有录像（H264 / H265 / AVI / MJPEG）批量转成周期延时合并产物 —— `POST /api/timelapse/{id}/merge` 的 CLI 版，进程内直连数据库执行。采样间隔、输出帧率、源录像删除都是**本次运行覆盖值，不改摄像头配置**：
+
+```bash
+# 预览：所有 JPEG 摄像头、2026-08-26 起的全部录像
+mibee-nvr timelapse-merge --camera all --encoding jpeg --start 2026-08-26
+
+# 执行：1 秒采样 + 合并成功后删除源录像
+mibee-nvr timelapse-merge --camera all --encoding jpeg --start 2026-08-26 \
+  --interval 1s --delete-sources --execute
+```
+
+行为要点：
+
+- 按窗口（默认 `natural-day`，即自然日）枚举日期范围，逐窗口执行；已完成的窗口自动跳过（可安全重跑续传），尚未闭合的窗口跳过。
+- `--delete-sources` 仅在对应窗口合并**成功后**删除源录像（DB 行 + 文件），MiBeeVision 处理中的录像始终跳过。
+- 命令可在 NVR 运行中执行（WAL 并发模型，与 cleanup/repair 一致）；但 timelapse 已启用的摄像头会被拒绝 —— 其窗口归服务器合并调度器所有，需 `--force` 或停服后运行。
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--camera <ids\|all>` | （必填） | 逗号分隔摄像头 ID 或 `all` |
+| `--encoding <enc>` | — | 配合 `--camera all` 按编码过滤（如 `jpeg`） |
+| `--start <YYYY-MM-DD>` | （必填） | 起始窗口日期（配置时区） |
+| `--end <YYYY-MM-DD>` | 昨天 | 结束窗口日期（含） |
+| `--duration <label>` | `natural-day` | 窗口大小：`8h` / `12h` / `24h` / `7d` / `30d` 等 |
+| `--interval <dur>` | 摄像头 `timelapse.interval`，缺省 30s | 帧采样间隔（如 `1s`） |
+| `--fps <n>` | 摄像头 `merge_output_fps`，缺省 10 | 输出播放帧率 |
+| `--delete-sources` / `--no-delete-sources` | 摄像头 `delete_recordings_after_merge` | 覆盖本次运行的源录像删除开关 |
+| `--execute` | dry-run | 真正执行 |
+| `--force` | — | NVR 运行中仍处理 timelapse 已启用的摄像头 |
+| `--config <path>` | `mibee-nvr.yaml` | 配置文件路径 |
 
 ## repair — 数据修复
 
