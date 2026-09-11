@@ -65,9 +65,9 @@ func TestHandleSystemStatsExtendedFields(t *testing.T) {
 			Iowait uint64 `json:"iowait"`
 		} `json:"cpu"`
 		Load *struct {
-			One      float64 `json:"one"`
-			Five     float64 `json:"five"`
-			Fifteen  float64 `json:"fifteen"`
+			One     float64 `json:"one"`
+			Five    float64 `json:"five"`
+			Fifteen float64 `json:"fifteen"`
 		} `json:"load"`
 		Disk *struct {
 			Path         string  `json:"path"`
