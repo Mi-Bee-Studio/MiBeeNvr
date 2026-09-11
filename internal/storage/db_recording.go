@@ -959,6 +959,35 @@ func (d *DB) ListRecordingPathsByCamera(ctx context.Context, cameraID string) (m
 	return result, nil
 }
 
+// ListRecordingArtifactPathsByCamera returns the FULL paths of every on-disk
+// artifact a camera's recordings still reference — file_path (source) and
+// merge_path (merged output) alike. The deep orphan scan (#117 leak class)
+// walks the nested trees once and needs the whole reference set up front;
+// a per-file query (PathIsRecordingFile) would be one SQL round-trip per
+// walked file. Empty/NULL paths are skipped.
+func (d *DB) ListRecordingArtifactPathsByCamera(ctx context.Context, cameraID string) (map[string]bool, error) {
+	rows, err := d.readConn().QueryContext(ctx,
+		`SELECT file_path, merge_path FROM recordings WHERE camera_id=?`, cameraID)
+	if err != nil {
+		return nil, fmt.Errorf("list recording artifact paths by camera: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[string]bool)
+	for rows.Next() {
+		var fp, mp *string
+		if err := rows.Scan(&fp, &mp); err != nil {
+			continue
+		}
+		if fp != nil && *fp != "" {
+			result[*fp] = true
+		}
+		if mp != nil && *mp != "" {
+			result[*mp] = true
+		}
+	}
+	return result, nil
+}
+
 // PathIsRecordingFile reports whether the given on-disk path is still
 // referenced by any recording row for the camera — either as the source
 // file_path or the merged-output merge_path. The comparison is on the full
