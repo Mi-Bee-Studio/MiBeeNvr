@@ -153,7 +153,9 @@ func TestValidateVisionInstances(t *testing.T) {
 		}}
 	})), "name is required")
 
-	// 相机路由引用未知实例 → 拒绝;引用 default/显式实例 → 通过。
+	// 相机路由引用未知实例 → 加载层降级 WARN + 剔除(2026-09-11 起;此前
+	// fatal 会把手改 yaml 的悬空引用 brick 成 systemd 崩溃循环);引用
+	// default/显式实例 → 通过且不动。API 写边界仍严格拒绝。
 	withCam := func(targets []string, instances []VisionInstance) *Config {
 		return base(func(c *Config) {
 			c.Vision = VisionConfig{Instances: instances}
@@ -163,9 +165,10 @@ func TestValidateVisionInstances(t *testing.T) {
 			}}
 		})
 	}
-	require.ErrorContains(t, Validate(withCam([]string{"ghost"},
-		[]VisionInstance{{Name: "a", URL: "http://a:9091"}})),
-		"unknown vision instance")
+	cfg := withCam([]string{"a", "ghost"},
+		[]VisionInstance{{Name: "a", URL: "http://a:9091"}})
+	require.NoError(t, Validate(cfg))
+	require.Equal(t, []string{"a"}, cfg.Cameras[0].VisionTargets)
 	require.NoError(t, Validate(withCam([]string{"a", "default"},
 		[]VisionInstance{{Name: "a", URL: "http://a:9091"}})))
 	require.NoError(t, Validate(withCam(nil, nil))) // legacy 全兼容
