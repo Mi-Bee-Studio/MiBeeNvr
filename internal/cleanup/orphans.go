@@ -141,7 +141,8 @@ func (cm *CleanupManager) deepOrphanCleanup(ctx context.Context, cameras []strin
 		var emptyableDirs []string
 		err = filepath.WalkDir(camRoot, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return nil // unreadable subtree: skip, never fail the walk
+				// Unreadable entry: skip it, never fail the walk.
+				return filepath.SkipDir
 			}
 			if path == camRoot {
 				return nil
@@ -160,8 +161,11 @@ func (cm *CleanupManager) deepOrphanCleanup(ctx context.Context, cameras []strin
 			if referencedUnder(normRefs, path, camRoot) {
 				return nil
 			}
-			info, err := d.Info()
-			if err != nil || time.Since(info.ModTime()) < time.Hour {
+			info, statErr := d.Info()
+			if statErr != nil {
+				return nil //nolint:nilerr // TODO(#744): unreadable entry — skip, never abort the walk
+			}
+			if time.Since(info.ModTime()) < time.Hour {
 				return nil
 			}
 			if !deepOrphanExt[strings.ToLower(filepath.Ext(path))] {
