@@ -77,6 +77,7 @@ export interface SystemStats {
   cpu: {
     total: number;
     idle: number;
+    iowait: number;
   };
   memory: {
     total: number;
@@ -86,6 +87,19 @@ export interface SystemStats {
   network: {
     bytes_sent: number;
     bytes_recv: number;
+  };
+  load?: {
+    one: number;
+    five: number;
+    fifteen: number;
+  };
+  disk?: {
+    path: string;
+    total_bytes: number;
+    free_bytes: number;
+    used_pct: number;
+    watermark_pct: number;
+    status: 'ok' | 'high' | 'unknown';
   };
   uptime: string;
   timestamp: number;

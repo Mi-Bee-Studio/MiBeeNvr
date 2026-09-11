@@ -69,24 +69,61 @@ func formatUptime(d time.Duration) string {
 
 // --- System stats helpers (Linux /proc) ---
 
-func readCPURaw() (total, idle uint64, err error) {
+// readCPURaw 读取 /proc/stat 聚合 cpu 行的累计 jiffies:total=全部计数器之和,
+// idle=第 4 计数器,iowait=第 5 计数器(客户端两次轮询差分得出 iowait%)。
+func readCPURaw() (total, idle, iowait uint64, err error) {
 	data, err := os.ReadFile("/proc/stat")
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
+	return parseProcStat(data)
+}
+
+// parseProcStat 是 readCPURaw 的纯函数内核(可测)。
+func parseProcStat(data []byte) (total, idle, iowait uint64, err error) {
 	lines := strings.Split(string(data), "\n")
 	if len(lines) == 0 {
-		return 0, 0, fmt.Errorf("empty /proc/stat")
+		return 0, 0, 0, fmt.Errorf("empty /proc/stat")
 	}
 	fields := strings.Fields(lines[0])
 	if len(fields) < 5 {
-		return 0, 0, fmt.Errorf("unexpected /proc/stat format")
+		return 0, 0, 0, fmt.Errorf("unexpected /proc/stat format")
 	}
 	for i := 1; i < len(fields); i++ {
 		v, _ := strconv.ParseUint(fields[i], 10, 64)
 		total += v
 	}
 	idle, _ = strconv.ParseUint(fields[4], 10, 64)
+	if len(fields) > 5 {
+		iowait, _ = strconv.ParseUint(fields[5], 10, 64)
+	}
+	return
+}
+
+// readLoadAvg 读取 /proc/loadavg 的 1/5/15 分钟负载。
+func readLoadAvg() (one, five, fifteen float64, err error) {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return parseLoadAvg(data)
+}
+
+// parseLoadAvg 是 readLoadAvg 的纯函数内核(可测)。
+func parseLoadAvg(data []byte) (one, five, fifteen float64, err error) {
+	fields := strings.Fields(string(data))
+	if len(fields) < 3 {
+		return 0, 0, 0, fmt.Errorf("unexpected /proc/loadavg format")
+	}
+	if one, err = strconv.ParseFloat(fields[0], 64); err != nil {
+		return 0, 0, 0, err
+	}
+	if five, err = strconv.ParseFloat(fields[1], 64); err != nil {
+		return 0, 0, 0, err
+	}
+	if fifteen, err = strconv.ParseFloat(fields[2], 64); err != nil {
+		return 0, 0, 0, err
+	}
 	return
 }
 
@@ -170,18 +207,48 @@ func readProcessRSS() uint64 {
 }
 
 func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
-	cpuTotal, cpuIdle, _ := readCPURaw()
+	cpuTotal, cpuIdle, cpuIowait, _ := readCPURaw()
 	memTotal, memAvailable, _ := readMemoryInfo()
 	netSent, netRecv, _ := readNetworkInfo()
 	processRSS := readProcessRSS()
 
-	writeJSON(w, http.StatusOK, SystemStats{
-		CPU:       CPUStats{Total: cpuTotal, Idle: cpuIdle},
+	resp := SystemStats{
+		CPU:       CPUStats{Total: cpuTotal, Idle: cpuIdle, Iowait: cpuIowait},
 		Memory:    MemoryStats{Total: memTotal, Available: memAvailable, ProcessRSS: processRSS},
 		Network:   NetworkStats{BytesSent: netSent, BytesRecv: netRecv},
 		Uptime:    formatUptime(time.Since(appStartTime)),
 		Timestamp: time.Now().Unix(),
-	})
+	}
+
+	if one, five, fifteen, err := readLoadAvg(); err == nil {
+		resp.Load = &LoadStats{One: one, Five: five, Fifteen: fifteen}
+	}
+
+	root := "/"
+	watermark := 90.0
+	if h.config != nil {
+		if h.config.Storage.RootDir != "" {
+			root = h.config.Storage.RootDir
+		}
+		if p := h.config.Cleanup.DiskThresholdPercent; p > 0 {
+			watermark = float64(p)
+		}
+	}
+	if total, free, ok := diskUsageFor(root); ok && total > 0 {
+		usedPct := (1 - float64(free)/float64(total)) * 100
+		status := "ok"
+		if usedPct >= watermark {
+			status = "high"
+		}
+		resp.Disk = &DiskStats{
+			Path: root, TotalBytes: total, FreeBytes: free,
+			UsedPct: usedPct, WatermarkPct: watermark, Status: status,
+		}
+	} else {
+		resp.Disk = &DiskStats{Path: root, WatermarkPct: watermark, Status: "unknown"}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleGetAutoDiscoverSettings returns the current auto_discover config. The

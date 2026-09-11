@@ -92,11 +92,34 @@ type SystemStats struct {
 	Network   NetworkStats `json:"network"`
 	Uptime    string       `json:"uptime"`
 	Timestamp int64        `json:"timestamp"`
+	// Load / Disk 补齐饱和观测(2026-09-11 M5 IO 饱和事故:73% iowait + 负载
+	// 15 在既有 CPU 瓦片上完全不可见——CPU 忙闲是低的)。nil = 不可用平台。
+	Load *LoadStats `json:"load,omitempty"`
+	Disk *DiskStats `json:"disk,omitempty"`
 }
 
 type CPUStats struct {
-	Total uint64 `json:"total"` // cumulative total jiffies
-	Idle  uint64 `json:"idle"`  // cumulative idle jiffies
+	Total  uint64 `json:"total"`  // cumulative total jiffies
+	Idle   uint64 `json:"idle"`   // cumulative idle jiffies
+	Iowait uint64 `json:"iowait"` // cumulative iowait jiffies (delta between polls = iowait%)
+}
+
+// LoadStats 是 /proc/loadavg 快照(1/5/15 分钟)。
+type LoadStats struct {
+	One     float64 `json:"one"`
+	Five    float64 `json:"five"`
+	Fifteen float64 `json:"fifteen"`
+}
+
+// DiskStats 是录像根的容量水位。WatermarkPct 取 cleanup.disk_threshold_percent
+// (清理已在执行的阈值),used_pct 越线即 status=high——录满盘前的可见预警。
+type DiskStats struct {
+	Path         string  `json:"path"`
+	TotalBytes   uint64  `json:"total_bytes"`
+	FreeBytes    uint64  `json:"free_bytes"`
+	UsedPct      float64 `json:"used_pct"`
+	WatermarkPct float64 `json:"watermark_pct"`
+	Status       string  `json:"status"` // ok | high | unknown
 }
 
 type MemoryStats struct {
