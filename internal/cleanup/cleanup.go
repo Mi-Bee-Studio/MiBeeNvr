@@ -41,6 +41,9 @@ type CleanupManager struct {
 	healthRetention           time.Duration
 	transcodeOrphanFn         func(ctx context.Context) error
 	transcodeHistoryRetention time.Duration // 0 = disabled
+	// deepOrphanLast timestamps the latest deep (nested-tree) orphan scan;
+	// the recursive walk is throttled to once per deepOrphanInterval.
+	deepOrphanLast time.Time
 	// activeCameraProvider returns the live set of cameras the user has
 	// configured (cfg.Cameras, the yaml source of truth). When set,
 	// directory-scanning cleanup (orphanFileCleanup) iterates only these
