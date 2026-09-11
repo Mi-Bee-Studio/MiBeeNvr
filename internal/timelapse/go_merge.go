@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image/jpeg"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -94,11 +95,34 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		}, err
 	}
 
+	// Passthrough (no re-encode): stream each frame from its file instead of
+	// loading the payload into memory. A 1s-interval day window is ~20k
+	// frames / ~1GB — the in-memory path OOM-killed 4GB devices in
+	// production. Only the tables (per-sample size/duration) are held.
+	if m.jpegQuality < 0 {
+		if err := muxer.addSampleFiles(frames, sampleDuration); err != nil {
+			_ = muxer.close()
+			return &MergeResult{Tier: TierGo, Error: err.Error()}, err
+		}
+		if err := muxer.close(); err != nil {
+			os.Remove(outputPath)
+			return &MergeResult{Tier: TierGo, Error: err.Error()}, err
+		}
+		framesMerged := len(frames)
+		return &MergeResult{
+			Tier:         TierGo,
+			OutputPath:   outputPath,
+			FramesMerged: framesMerged,
+			Duration:     float64(framesMerged) * sampleDuration.Seconds(),
+			Codec:        model.TimelapseMergeCodecMJPEG,
+		}, nil
+	}
+
 	// Read each JPEG and add as a sample.
 	for _, framePath := range frames {
 		select {
 		case <-ctx.Done():
-			muxer.close()
+			_ = muxer.close()
 			os.Remove(outputPath)
 			return &MergeResult{
 				Tier:  TierGo,
@@ -109,7 +133,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 
 		data, err := os.ReadFile(framePath)
 		if err != nil {
-			muxer.close()
+			_ = muxer.close()
 			return &MergeResult{
 				Tier:  TierGo,
 				Error: err.Error(),
@@ -120,7 +144,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		if m.jpegQuality >= 0 {
 			data, err = reencodeJPEG(data, m.jpegQuality)
 			if err != nil {
-				muxer.close()
+				_ = muxer.close()
 				return &MergeResult{
 					Tier:  TierGo,
 					Error: fmt.Sprintf("re-encode frame %s: %v", framePath, err),
@@ -129,7 +153,7 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		}
 
 		if err := muxer.addSample(data, sampleDuration); err != nil {
-			muxer.close()
+			_ = muxer.close()
 			return &MergeResult{
 				Tier:  TierGo,
 				Error: err.Error(),
@@ -137,7 +161,10 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 		}
 	}
 
-	muxer.close()
+	if err := muxer.close(); err != nil {
+		os.Remove(outputPath)
+		return &MergeResult{Tier: TierGo, Error: err.Error()}, err
+	}
 
 	framesMerged := len(frames)
 	return &MergeResult{
@@ -169,13 +196,27 @@ func listFrameFiles(dir string) ([]string, error) {
 // --- MJPEG MP4 Muxer ---
 
 // mjpegMuxer creates an MP4 file with an MJPEG video track.
+//
+// Samples either carry their bytes inline (re-encode path, bounded by the
+// caller's usage) or reference a source file streamed at close() time
+// (passthrough path) — the muxer itself never holds more than the per-sample
+// tables plus one shared copy buffer.
 type mjpegMuxer struct {
 	filePath string
 	samples  []mjpegSample
+	// width/height parsed from the first frame at add time (0 = unknown,
+	// writers fall back to 640×480).
+	width, height int
 }
 
 type mjpegSample struct {
-	data     []byte
+	data []byte // inline payload (re-encode path); nil for file-backed samples
+	// fromFile is the source JPEG streamed into mdat at close() time
+	// (passthrough path). Empty for inline samples.
+	fromFile string
+	// size is the sample's byte length — len(data) for inline samples, the
+	// source file's size for file-backed ones. Drives stsz + mdat sizing.
+	size     int
 	duration time.Duration
 }
 
@@ -184,27 +225,62 @@ func newMJPEGMuxer(filePath string) (*mjpegMuxer, error) {
 	return &mjpegMuxer{filePath: filePath}, nil
 }
 
-// addSample adds a JPEG frame as a sample.
+// addSample adds a JPEG frame as an inline sample.
 func (m *mjpegMuxer) addSample(data []byte, duration time.Duration) error {
-	dataCopy := make([]byte, len(data))
-	copy(dataCopy, data)
+	m.maybeParseDims(data)
 	m.samples = append(m.samples, mjpegSample{
-		data:     dataCopy,
+		data:     data,
+		size:     len(data),
 		duration: duration,
 	})
 	return nil
 }
 
-// close finalizes the MP4 file.
-func (m *mjpegMuxer) close() {
-	if len(m.samples) == 0 {
+// addSampleFiles registers frame files as file-backed samples: sizes are stat
+// once, dimensions parsed from the first frame only, and the JPEG bytes are
+// streamed from disk at close() — nothing but the tables is held in memory.
+func (m *mjpegMuxer) addSampleFiles(framePaths []string, duration time.Duration) error {
+	for i, p := range framePaths {
+		st, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("stat frame %s: %w", p, err)
+		}
+		if i == 0 {
+			if data, err := os.ReadFile(p); err == nil {
+				m.maybeParseDims(data)
+			}
+		}
+		m.samples = append(m.samples, mjpegSample{
+			fromFile: p,
+			size:     int(st.Size()),
+			duration: duration,
+		})
+	}
+	return nil
+}
+
+// maybeParseDims records the first frame's JPEG dimensions once.
+func (m *mjpegMuxer) maybeParseDims(data []byte) {
+	if len(m.samples) != 0 || (m.width != 0 && m.height != 0) {
 		return
+	}
+	if w, h := parseJPEGDimensions(data); w != 0 && h != 0 {
+		m.width, m.height = w, h
+	}
+}
+
+// close finalizes the MP4 file: ftyp + moov (tables) + mdat (frame bytes,
+// streamed sample-by-sample — inline payloads are written directly, file-
+// backed samples are copied from disk through one shared buffer).
+func (m *mjpegMuxer) close() error {
+	if len(m.samples) == 0 {
+		return nil
 	}
 
 	f, err := os.Create(m.filePath)
 	if err != nil {
 		slog.Error("create file for close", "path", m.filePath, "error", err)
-		return
+		return err
 	}
 	defer f.Close()
 
@@ -213,7 +289,7 @@ func (m *mjpegMuxer) close() {
 	bw := mp4.NewWriter(buf)
 	if err := m.writeMoov(bw, 0); err != nil {
 		slog.Error("calculate moov size for close", "path", m.filePath, "error", err)
-		return
+		return err
 	}
 	moovSize := buf.len()
 
@@ -222,7 +298,7 @@ func (m *mjpegMuxer) close() {
 	ftypSize, err := m.writeFtyp(w)
 	if err != nil {
 		slog.Error("write ftyp for close", "path", m.filePath, "error", err)
-		return
+		return err
 	}
 
 	// Step 3: mdat data starts at ftypSize + moovSize + 8 (mdat header).
@@ -231,26 +307,62 @@ func (m *mjpegMuxer) close() {
 	// Step 4: Write moov with correct stco offset.
 	if err := m.writeMoov(w, mdatDataOffset); err != nil {
 		slog.Error("write moov for close", "path", m.filePath, "error", err)
-		return
+		return err
 	}
 
-	// Step 5: Write mdat box.
-	mdatData := m.collectMdatData()
-	mdatBoxSize := uint64(8 + len(mdatData))
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: mdatBoxSize})
+	// Step 5: Write mdat box, streaming sample payloads.
+	var totalSize int64
+	for _, s := range m.samples {
+		totalSize += int64(s.size)
+	}
+	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: uint64(8 + totalSize)})
 	if err != nil {
 		slog.Error("start mdat for close", "path", m.filePath, "error", err)
-		return
+		return err
 	}
-	if _, err := w.Write(mdatData); err != nil {
-		slog.Error("write mdat data for close", "path", m.filePath, "error", err)
-		return
+	copyBuf := make([]byte, 256*1024)
+	for _, s := range m.samples {
+		if s.fromFile == "" {
+			if _, err := w.Write(s.data); err != nil {
+				slog.Error("write mdat data for close", "path", m.filePath, "error", err)
+				return err
+			}
+			continue
+		}
+		if err := copyFileToWriter(w, s.fromFile, copyBuf); err != nil {
+			slog.Error("stream mdat sample for close", "path", m.filePath, "frame", s.fromFile, "error", err)
+			return err
+		}
 	}
 	if _, err := w.EndBox(); err != nil {
 		slog.Error("end mdat box for close", "path", m.filePath, "error", err)
-		return
+		return err
 	}
 	_ = bi
+	return nil
+}
+
+// copyFileToWriter streams one file into w through the given reusable buffer.
+func copyFileToWriter(w io.Writer, path string, buf []byte) error {
+	src, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	for {
+		n, rerr := io.ReadFull(src, buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+			return nil
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
 }
 
 func (m *mjpegMuxer) writeFtyp(w *mp4.Writer) (int64, error) {
@@ -345,11 +457,8 @@ func (m *mjpegMuxer) writeTrak(w *mp4.Writer, chunkOffset int64) error {
 		duration += uint32(s.duration.Milliseconds())
 	}
 
-	// Try to extract dimensions from the first JPEG.
-	width, height := 0, 0
-	if len(m.samples) > 0 {
-		width, height = parseJPEGDimensions(m.samples[0].data)
-	}
+	// Dimensions parsed from the first frame at add time (0 = unparseable).
+	width, height := m.width, m.height
 	if width == 0 {
 		width = 640
 	}
@@ -573,7 +682,7 @@ func (m *mjpegMuxer) writeStbl(w *mp4.Writer, chunkOffset int64) error {
 	}
 	sizes := make([]uint32, n)
 	for i, s := range m.samples {
-		sizes[i] = uint32(len(s.data))
+		sizes[i] = uint32(s.size)
 	}
 	if _, err := mp4.Marshal(w, &mp4.Stsz{SampleSize: 0, SampleCount: uint32(n), EntrySize: sizes}, mp4.Context{}); err != nil {
 		return err
@@ -615,11 +724,8 @@ func (m *mjpegMuxer) writeMJPEGSampleEntry(w *mp4.Writer) error {
 		return err
 	}
 
-	// Extract dimensions from first JPEG.
-	width, height := 0, 0
-	if len(m.samples) > 0 {
-		width, height = parseJPEGDimensions(m.samples[0].data)
-	}
+	// Dimensions parsed from the first frame at add time (0 = unparseable).
+	width, height := m.width, m.height
 	if width == 0 {
 		width = 640
 	}
@@ -648,14 +754,6 @@ func (m *mjpegMuxer) writeMJPEGSampleEntry(w *mp4.Writer) error {
 	}
 	_ = bi
 	return nil
-}
-
-func (m *mjpegMuxer) collectMdatData() []byte {
-	var buf []byte
-	for _, s := range m.samples {
-		buf = append(buf, s.data...)
-	}
-	return buf
 }
 
 // --- Helpers ---
