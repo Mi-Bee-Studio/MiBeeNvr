@@ -524,9 +524,10 @@ func (c *Coordinator) pushToInstance(ctx context.Context, rt routeTarget, absPat
 	ok := c.uploadSegment(ctx, rt.url, absPath, fileSize, hdr)
 	justOpened, justClosed := rt.health.RecordPushOutcome(ok)
 	if justOpened {
+		_, fails, _ := rt.health.PushBreakerSnapshot()
 		slog.Warn("vision push breaker opened — consecutive push failures, backing off",
 			"instance", rt.name,
-			"consecutive_failures", func() int { _, f, _ := rt.health.PushBreakerSnapshot(); return f }())
+			"consecutive_failures", fails)
 	}
 	if !ok {
 		// 首个失败就锚定补偿窗——熔断打开前的失败段也不能丢。

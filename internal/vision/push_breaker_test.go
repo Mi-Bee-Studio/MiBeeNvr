@@ -77,7 +77,7 @@ func TestPushBreakerBackoffCapsAtMax(t *testing.T) {
 	h.pushBackoffMax = 40 * time.Millisecond
 	h.RecordHeartbeat(HeartbeatStatus{Status: "healthy"})
 
-	for i := 0; i < 8; i++ { // far past the cap's reach
+	for range 8 { // far past the cap's reach
 		h.RecordPushOutcome(false)
 	}
 	require.False(t, h.PushGate())
@@ -146,7 +146,7 @@ func TestCoordinatorPushBreakerEndToEnd(t *testing.T) {
 	}
 
 	fail.Store(true)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		c.handleSegment(context.Background(), seg)
 	}
 	require.Equal(t, int32(5), hits.Load(), "five failed pushes hit the server")
