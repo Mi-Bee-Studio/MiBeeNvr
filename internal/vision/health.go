@@ -115,10 +115,10 @@ func NewHealthTracker(timeoutSecs int) *HealthTracker {
 		timeoutSecs = 60
 	}
 	return &HealthTracker{
-		timeout:          time.Duration(timeoutSecs) * time.Second,
-		pushBreakerN:     pushBreakerThreshold,
-		pushBackoffBase:  pushBackoffBaseDef,
-		pushBackoffMax:   pushBackoffMaxDef,
+		timeout:         time.Duration(timeoutSecs) * time.Second,
+		pushBreakerN:    pushBreakerThreshold,
+		pushBackoffBase: pushBackoffBaseDef,
+		pushBackoffMax:  pushBackoffMaxDef,
 	}
 }
 
