@@ -285,7 +285,8 @@ func TestPeriodicMerge_DeleteSkippedForOpenWindow(t *testing.T) {
 	mgr.SetSourceRecordingDeleter(deleter)
 
 	// Merge a window whose end is in the FUTURE (today, still recording).
-	if err := mgr.Run(context.Background(), cameraID, windowStart.Add(time.Minute)); err != nil {
+	refTime := time.Now()
+	if err := mgr.Run(context.Background(), cameraID, refTime.Add(time.Minute)); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -294,8 +295,11 @@ func TestPeriodicMerge_DeleteSkippedForOpenWindow(t *testing.T) {
 	}
 
 	// The output itself must still be produced (preview use case). The
-	// natural-day window label is the (local) midnight of the reference day.
-	label := time.Now().Format("2006-01-02") + "_000000"
+	// manager aligns natural-day windows in UTC (loc=nil), so the label is
+	// the UTC calendar day of the reference time — NOT the local day (the
+	// two differ daily between local midnight and UTC midnight; deriving
+	// the label from time.Now() local flaked the test in that window).
+	label := refTime.UTC().Format("2006-01-02") + "_000000"
 	if _, err := os.Stat(filepath.Join(dataDir, cameraID, "periodic_"+label+".mp4")); err != nil {
 		t.Errorf("expected preview output for open window (label %s): %v", label, err)
 	}
