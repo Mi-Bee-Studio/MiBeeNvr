@@ -189,12 +189,28 @@ func validateConfigDetails(cfg *Config) error {
 		}
 
 		// Validate IP self-healing fields (stable_id + subnet_hints).
-		// 相机的 vision_targets 必须引用已定义实例——typo 会让该相机静默
-		// 失去推送路由。
-		for j, name := range c.VisionTargets {
-			if !visionNames[name] {
-				return fmt.Errorf("camera[%d].vision_targets[%d] references unknown vision instance %q", i, j, name)
+		// 相机的 vision_targets 引用已删除/改名的实例(手改 yaml 清理实例后
+		// 留下的悬空引用)降级为 WARN + 就地剔除,不再 fatal——硬拒绝会让一次
+		// 实例清理把整个 NVR brick 进 systemd 崩溃循环(2026-09-11 M5 实录,
+		// ~2min 录像中断)。与 #216 stable_id 同一原则:API 写边界保持严格
+		// (camera create/update 400、settings PUT 的搁浅相机检查),加载层
+		// 容错存量数据。全部引用悬空时列表清空 = RouteFor 的"广播全部启用
+		// 实例"语义——沿用运行时对空列表的既有定义,但显式告警路由面变宽。
+		keptVisionTargets := make([]string, 0, len(c.VisionTargets))
+		for _, name := range c.VisionTargets {
+			if visionNames[name] {
+				keptVisionTargets = append(keptVisionTargets, name)
+				continue
 			}
+			slog.Warn("camera vision_targets references unknown vision instance; dropping it",
+				"camera_idx", i, "camera_id", c.ID, "instance", name)
+		}
+		if len(keptVisionTargets) != len(c.VisionTargets) {
+			if len(keptVisionTargets) == 0 {
+				slog.Warn("camera lost every vision target to dangling references; routing falls back to broadcast (all enabled instances)",
+					"camera_idx", i, "camera_id", c.ID)
+			}
+			cfg.Cameras[i].VisionTargets = keptVisionTargets
 		}
 		// A non-empty stable_id that fails IsValidStableID (IP, URL, all-zero
 		// MAC — frozen in YAML by a prior firmware glitch, see #216) is logged

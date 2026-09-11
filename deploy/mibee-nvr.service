@@ -2,6 +2,11 @@
 Description=MiBee NVR - Network Video Recorder
 After=network.target
 Requires=network.target
+# Crash-loop fuse: a fatal config error (e.g. a hand-edited YAML) must not
+# hammer the box forever — 5 restarts within 2 minutes stop the unit until an
+# operator intervenes (`journalctl -u mibee-nvr` shows the validation error).
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple

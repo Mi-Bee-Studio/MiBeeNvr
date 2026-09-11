@@ -141,6 +141,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Snapshot the boot-validated config as the recovery point for
+	// shutdown-persist overwrites (running NVR re-serializes the YAML at
+	// shutdown, clobbering hand edits; older binaries zero unknown sections).
+	if err := config.WriteLastGoodBackup(*configPath); err != nil {
+		slog.Warn("failed to write last-good config snapshot", "error", err)
+	}
+
 	// Reconfigure logger with user settings after config load
 	logger = authmw.SetupLogger(cfg.Observability.LogLevel, cfg.Observability.LogFormat)
 	slog.SetDefault(logger)
