@@ -147,10 +147,17 @@ func (cm *CleanupManager) deepOrphanCleanup(ctx context.Context, cameras []strin
 				return nil
 			}
 			if d.IsDir() {
+				// A REFERENCED directory is a directory-form recording itself
+				// (MJPEG/timelapse frame dirs are stored as file_path on the
+				// row) — its contents are protected as a whole and it must
+				// never be pruned.
+				if normRefs[filepath.ToSlash(path)] {
+					return filepath.SkipDir
+				}
 				emptyableDirs = append(emptyableDirs, path)
 				return nil
 			}
-			if normRefs[filepath.ToSlash(path)] {
+			if referencedUnder(normRefs, path, camRoot) {
 				return nil
 			}
 			info, err := d.Info()
@@ -183,4 +190,23 @@ func (cm *CleanupManager) deepOrphanCleanup(ctx context.Context, cameras []strin
 		}
 	}
 	return deleted
+}
+
+// referencedUnder reports whether path itself OR any ancestor directory up to
+// camRoot is referenced. Directory-form recordings reference the DIRECTORY as
+// file_path while the frames inside are individual files — a file-only check
+// would shred every frame of every MJPEG/timelapse recording older than the
+// age rail. An ancestor hit therefore protects the whole subtree.
+func referencedUnder(refs map[string]bool, path, camRoot string) bool {
+	p := filepath.ToSlash(path)
+	for {
+		if refs[p] {
+			return true
+		}
+		parent := filepath.ToSlash(filepath.Dir(p))
+		if parent == p || p == filepath.ToSlash(camRoot) || len(parent) <= len(filepath.ToSlash(camRoot)) {
+			return false
+		}
+		p = parent
+	}
 }

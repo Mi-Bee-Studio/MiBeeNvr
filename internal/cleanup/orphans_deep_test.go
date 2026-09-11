@@ -168,3 +168,62 @@ func (e *testEnv) insertMergedRecording(t *testing.T, id, cameraID, filePathRel,
 	require.NoError(t, e.db.SetMergeResult(context.Background(), id,
 		rec.MergePath, "rolling"))
 }
+
+// TestDeepOrphanCleanup_ReferencedDirFormRecordingSurvives is THE regression
+// test for the near-miss found during the 2026-09-11 M5 field run: directory-
+// form recordings (MJPEG/timelapse) reference the DIRECTORY as file_path —
+// the frames inside are individual files that never appear in the reference
+// set. A file-only check would shred every frame of every old dir-form
+// recording (killed mid-walk in the field before reaching that class; 500
+// rows verified intact). The walk must protect a referenced directory's
+// whole subtree AND never prune the directory itself.
+func TestDeepOrphanCleanup_ReferencedDirFormRecordingSurvives(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	cfg := defaultCleanupConfig()
+	cfg.RetentionDays = 365
+	cm, err := NewCleanupManager(env.db, env.store, cfg)
+	require.NoError(t, err)
+
+	old := time.Now().Add(-2 * time.Hour)
+	// A dir-form recording: row references the DIRECTORY; old frames inside.
+	dirRel := "202609/11/08/cam1_20260911_080000_frames"
+	dirAbs := filepath.Join(env.store.RootDir(), "cam1", dirRel)
+	frame1 := filepath.Join(dirAbs, "frame_000001.h265")
+	frame2 := filepath.Join(dirAbs, "frame_000002.h265")
+	for _, f := range []string{frame1, frame2} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(f), 0o755))
+		require.NoError(t, os.WriteFile(f, []byte("frame"), 0o644))
+		require.NoError(t, os.Chtimes(f, old, old))
+	}
+	require.NoError(t, os.Chtimes(dirAbs, old, old))
+	rec := &model.Recording{
+		ID: "rec-dirform", CameraID: "cam1", FilePath: dirAbs,
+		Format: "timelapse", StartedAt: old.Add(-time.Minute), EndedAt: old,
+		Duration: 60, FileSize: 2048, MergeStatus: model.MergeStatusPending,
+	}
+	require.NoError(t, env.db.InsertRecording(context.Background(), rec))
+
+	// An ABANDONED dir-form segment next to it (no row) — its frames go.
+	abandoned := filepath.Join(env.store.RootDir(), "cam1", "202609", "10", "07", "cam1_20260910_073000_dead")
+	abandonedFrame := filepath.Join(abandoned, "frame_000001.h265")
+	require.NoError(t, os.MkdirAll(abandoned, 0o755))
+	require.NoError(t, os.WriteFile(abandonedFrame, []byte("frame"), 0o644))
+	require.NoError(t, os.Chtimes(abandonedFrame, old, old))
+	require.NoError(t, os.Chtimes(abandoned, old, old))
+
+	require.NoError(t, cm.RunOnce(context.Background()))
+
+	for _, f := range []string{frame1, frame2} {
+		_, err := os.Stat(f)
+		require.NoError(t, err, "frames of a referenced dir-form recording must survive")
+	}
+	_, err = os.Stat(dirAbs)
+	require.NoError(t, err, "the referenced recording directory itself must survive")
+	_, err = os.Stat(abandonedFrame)
+	require.True(t, os.IsNotExist(err), "an abandoned dir-form segment's frames must be reclaimed")
+	_, err = os.Stat(abandoned)
+	require.True(t, os.IsNotExist(err), "the emptied abandoned dir must be pruned")
+}
