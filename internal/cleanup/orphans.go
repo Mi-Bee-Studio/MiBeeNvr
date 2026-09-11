@@ -52,10 +52,13 @@ func (cm *CleanupManager) orphanFileCleanup(ctx context.Context) {
 	}
 	if time.Since(cm.deepOrphanLast) >= deepOrphanInterval {
 		cm.deepOrphanLast = time.Now()
+		start := time.Now()
 		deep := cm.deepOrphanCleanup(ctx, cameras)
-		if deep > 0 {
-			logger.Info("deep orphan cleanup: nested-tree artifacts reclaimed", "deleted", deep)
-		}
+		// Always log (#725 上线即量化): a zero-deletion run is the proof the
+		// leak class is being kept at zero, and the duration exposes the walk
+		// cost on slow disks.
+		logger.Info("deep orphan scan complete",
+			"cameras", len(cameras), "deleted", deep, "duration", time.Since(start))
 	}
 }
 
