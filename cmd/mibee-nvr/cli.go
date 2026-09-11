@@ -318,6 +318,8 @@ func dispatchSubcommand(args []string) {
 		cmdUpdate()
 	case "cleanup":
 		cmdCleanup()
+	case "validate-config":
+		cmdValidateConfig()
 	}
 }
 
