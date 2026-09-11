@@ -33,6 +33,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`encrypt-config`](#encrypt-config-encrypt-sensitive-fields) | Encrypt plaintext secrets in the config |
 | [`download-model`](#download-model-download-the-ai-model) | Download the browser-side AI model |
 | [`merge-cameras`](#merge-cameras-merge-cameras) | Merge two duplicate camera entries |
+| [`timelapse-merge`](#timelapse-merge-convert-recordings-to-timelapse) | Batch-convert recordings of any period/camera into timelapse merges |
 | [`repair`](#repair-data-repair) | Data repair toolkit (7 subcommands) |
 | [`cleanup`](#cleanup-recording-cleanup) | Delete recordings by date / orphan files |
 
@@ -121,6 +122,39 @@ Steps performed: back up the database → re-tag recordings/events and rewrite f
 | `--execute` | Actually perform the merge (default is dry-run preview) |
 | `--force` | Proceed even if orphan records exist |
 | `--config <path>` | Config file path (default `mibee-nvr.yaml`) |
+
+## timelapse-merge — Convert Recordings to Timelapse
+
+Batch-converts existing video recordings (H264/H265/AVI/MJPEG) of **any camera over any date range** into periodic timelapse merges — the CLI counterpart of `POST /api/timelapse/{id}/merge`, executed in-process against the storage DB. Sampling interval, output fps and source deletion are **per-run overrides that never mutate the camera config**:
+
+```bash
+# Preview: all JPEG cameras, everything since 2026-08-26
+mibee-nvr timelapse-merge --camera all --encoding jpeg --start 2026-08-26
+
+# Execute: 1-second sampling + delete sources after a successful merge
+mibee-nvr timelapse-merge --camera all --encoding jpeg --start 2026-08-26 \
+  --interval 1s --delete-sources --execute
+```
+
+Behavior notes:
+
+- Windows (default `natural-day`) are enumerated across the date range and merged one by one; windows with an existing completed merge are skipped (safe to re-run and resume), open windows are skipped.
+- `--delete-sources` deletes source recordings (DB rows + files) only after the window's merge **succeeded**; recordings being processed by MiBeeVision are always skipped.
+- The command may run while the NVR is live (WAL concurrency, same as cleanup/repair); cameras with timelapse enabled are refused though — their windows belong to the server's merge scheduler (use `--force` or stop the server).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--camera <ids\|all>` | (required) | Comma-separated camera IDs or `all` |
+| `--encoding <enc>` | — | With `--camera all`: filter by encoding (e.g. `jpeg`) |
+| `--start <YYYY-MM-DD>` | (required) | First window date (config timezone) |
+| `--end <YYYY-MM-DD>` | yesterday | Last window date (inclusive) |
+| `--duration <label>` | `natural-day` | Window size: `8h` / `12h` / `24h` / `7d` / `30d` … |
+| `--interval <dur>` | camera `timelapse.interval`, else 30s | Frame sampling interval (e.g. `1s`) |
+| `--fps <n>` | camera `merge_output_fps`, else 10 | Output playback fps |
+| `--delete-sources` / `--no-delete-sources` | camera `delete_recordings_after_merge` | Override source deletion for this run |
+| `--execute` | dry-run | Actually execute |
+| `--force` | — | Process timelapse-enabled cameras while the NVR is running |
+| `--config <path>` | `mibee-nvr.yaml` | Config file path |
 
 ## repair — Data Repair
 
