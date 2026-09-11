@@ -88,7 +88,26 @@ type HealthTracker struct {
 	onRecovery  func()
 	samples     []VisionSample // 心跳历史环(≤maxHistorySamples)
 	markedDrops int64          // 累计按丢弃报告标记为 skipped 的录像数
+
+	// 推送熔断(2026-09-11 vm-v8 实录):心跳健康只证明消费者进程活着,
+	// 不证明 NVR 配置的推送 URL 可达(隧道断/端口没监听/实例挪了网络位置
+	// 时心跳照常入站、推送照常出站失败)。连续上传失败达到阈值后熔断,
+	// 指数退避后半开探测恢复;心跳不重置熔断。
+	pushFails        int           // 连续推送失败数(成功即清零)
+	pushOpenUntil    time.Time     // 非零 = 熔断打开,在此之前拒绝推送
+	pushBreakerN     int           // 阈值(测试可调;默认 pushBreakerThreshold)
+	pushBackoffBase  time.Duration // 首次打开的退避(测试可调)
+	pushBackoffMax   time.Duration // 退避上限(测试可调)
+	pushTotalOpens   int64         // 累计打开次数(观测)
+	pushLastOpenedAt time.Time
 }
+
+// 推送熔断默认参数:5 连败打开,30s 起指数退避,封顶 10 分钟。
+const (
+	pushBreakerThreshold = 5
+	pushBackoffBaseDef   = 30 * time.Second
+	pushBackoffMaxDef    = 10 * time.Minute
+)
 
 // NewHealthTracker 创建健康追踪器。timeoutSecs ≤ 0 时默认 60 秒。
 func NewHealthTracker(timeoutSecs int) *HealthTracker {
@@ -96,7 +115,10 @@ func NewHealthTracker(timeoutSecs int) *HealthTracker {
 		timeoutSecs = 60
 	}
 	return &HealthTracker{
-		timeout: time.Duration(timeoutSecs) * time.Second,
+		timeout:          time.Duration(timeoutSecs) * time.Second,
+		pushBreakerN:     pushBreakerThreshold,
+		pushBackoffBase:  pushBackoffBaseDef,
+		pushBackoffMax:   pushBackoffMaxDef,
 	}
 }
 
@@ -203,6 +225,58 @@ func (h *HealthTracker) SkipCamera(cameraID string) bool {
 		}
 	}
 	return false
+}
+
+// RecordPushOutcome 记录一次推送结果,驱动熔断状态机。返回 (justOpened,
+// justClosed):本次调用刚打开 / 刚闭合熔断为 true(供调用方记日志与触发
+// 补偿)。心跳路径不经过这里——熔断与心跳健康正交(vm-v8 实录的核心)。
+func (h *HealthTracker) RecordPushOutcome(success bool) (justOpened, justClosed bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if success {
+		wasOpen := !h.pushOpenUntil.IsZero()
+		h.pushFails = 0
+		h.pushOpenUntil = time.Time{}
+		return false, wasOpen
+	}
+	h.pushFails++
+	if h.pushFails < h.pushBreakerN || h.pushOpenUntil.After(time.Now()) {
+		// 未达阈值,或半开探测失败(熔断本就开着):只累计,退避在下次
+		// 真正跨越阈值时按累计失败数计算。
+		return false, false
+	}
+	backoff := h.pushBackoffBase << min(h.pushFails-h.pushBreakerN, 20)
+	if backoff > h.pushBackoffMax || backoff <= 0 {
+		backoff = h.pushBackoffMax
+	}
+	h.pushOpenUntil = time.Now().Add(backoff)
+	h.pushTotalOpens++
+	h.pushLastOpenedAt = time.Now()
+	return true, false
+}
+
+// PushGate 报告当前是否允许发起推送:熔断关闭恒 true;打开且退避已过
+// true(半开,放行一次探测,结果由 RecordPushOutcome 决定去留)。
+func (h *HealthTracker) PushGate() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.pushOpenUntil.IsZero() || !time.Now().Before(h.pushOpenUntil)
+}
+
+// PushBreakerSnapshot 返回熔断观测状态:state closed/open/half-open、
+// 连续失败数、累计打开次数。
+func (h *HealthTracker) PushBreakerSnapshot() (state string, fails int, opens int64) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	switch {
+	case h.pushOpenUntil.IsZero():
+		state = "closed"
+	case time.Now().Before(h.pushOpenUntil):
+		state = "open"
+	default:
+		state = "half-open"
+	}
+	return state, h.pushFails, h.pushTotalOpens
 }
 
 // Snapshot 返回当前健康状态、最后心跳时间和状态详情。

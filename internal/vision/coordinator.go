@@ -86,6 +86,8 @@ type Coordinator struct {
 	order  []string // 配置顺序的实例名
 	// paused 是各实例的推送暂停窗口起点(mu 保护;缺键=未暂停)。
 	paused map[string]time.Time
+	// dirWarned 记录已对目录形/MJPEG 段告警过的相机(#726 每相机一次)。
+	dirWarned sync.Map
 	// subLayer 是子码流分析层 (#514)。nil(未接 provider)时整个层停用。
 	subLayer *SubLayerManager
 }
@@ -265,6 +267,9 @@ type InstanceStatus struct {
 	SkipCameras []string       `json:"skip_cameras,omitempty"`
 	Metrics     *VisionMetrics `json:"metrics,omitempty"`
 	MarkedDrops int64          `json:"drops_marked_total,omitempty"`
+	// 推送熔断观测(#737-A):closed/open/half-open + 连续失败数。
+	PushState string `json:"push_state,omitempty"`
+	PushFails int    `json:"push_fails,omitempty"`
 }
 
 // InstancesStatus 返回全部生效实例的状态(配置顺序)。
@@ -291,6 +296,7 @@ func (c *Coordinator) InstancesStatus() []InstanceStatus {
 		st.SkipCameras = hs.SkipCameras
 		st.Metrics = hs.Metrics
 		st.MarkedDrops = ins.health.MarkedDropTotal()
+		st.PushState, st.PushFails, _ = ins.health.PushBreakerSnapshot()
 		out = append(out, st)
 	}
 	return out
@@ -402,6 +408,14 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	if seg.Format == "timelapse" {
 		return
 	}
+	// #726: MJPEG/目录形段(帧序列目录)无法作为单文件字节流上传——推送
+	// 必然失败并进补偿队列无限重试(每段一次失败请求 + 一次磁盘读)。
+	// 按格式与实际路径形态双重拦截,每相机只 WARN 一次(建议配 skip_cameras
+	// 或由消费者心跳跳单声明)。
+	if seg.Format == "mjpeg" || isDirPath(c.storageRoot(), seg.FilePath) {
+		c.warnDirFormOnce(seg.CameraID, seg.Format)
+		return
+	}
 	// 配置显式排除的相机(MJPEG/JPEG 等外部消费者无法解码的编码):推送纯浪费
 	// 带宽与 CPU,直接跳过(离线补偿重推走同一路径,一并跳过)。
 	if vcfg.ShouldSkipCamera(seg.CameraID) {
@@ -478,8 +492,10 @@ func (c *Coordinator) fanout(ctx context.Context, routed []routeTarget, absPath 
 }
 
 // pushToInstance 单实例推送:无地址(default 合成、URL 未配)→ 静默跳过;
-// 不健康 → 记暂停窗(补偿重推的窗口锚点)并跳过;该实例心跳声明的跳单
-// (#515)→ 跳过;否则上传。
+// 不健康 → 记暂停窗(补偿重推的窗口锚点)并跳过;推送熔断打开 → 同样记
+// 暂停窗并跳过(退避过后的半开探测放行一次);该实例心跳声明的跳单
+// (#515)→ 跳过;否则上传并回填熔断结果——闭合瞬间触发有界补偿补齐
+// 熔断期间错过的段(与心跳恢复同路径)。
 func (c *Coordinator) pushToInstance(ctx context.Context, rt routeTarget, absPath string, fileSize int64, hdr map[string]string) bool {
 	if rt.url == "" {
 		return false
@@ -491,6 +507,13 @@ func (c *Coordinator) pushToInstance(ctx context.Context, rt routeTarget, absPat
 			"recording_id", hdr["X-Recording-Id"])
 		return false
 	}
+	if !rt.health.PushGate() {
+		c.markPausedFor(rt.name)
+		slog.Debug("vision push breaker open, skip push",
+			"instance", rt.name,
+			"recording_id", hdr["X-Recording-Id"])
+		return false
+	}
 	if rt.health.SkipCamera(hdr["X-Camera-Id"]) {
 		slog.Debug("vision push skipped by consumer-reported skip list",
 			"instance", rt.name,
@@ -498,7 +521,23 @@ func (c *Coordinator) pushToInstance(ctx context.Context, rt routeTarget, absPat
 			"recording_id", hdr["X-Recording-Id"])
 		return false
 	}
-	return c.uploadSegment(ctx, rt.url, absPath, fileSize, hdr)
+	ok := c.uploadSegment(ctx, rt.url, absPath, fileSize, hdr)
+	justOpened, justClosed := rt.health.RecordPushOutcome(ok)
+	if justOpened {
+		slog.Warn("vision push breaker opened — consecutive push failures, backing off",
+			"instance", rt.name,
+			"consecutive_failures", func() int { _, f, _ := rt.health.PushBreakerSnapshot(); return f }())
+	}
+	if !ok {
+		// 首个失败就锚定补偿窗——熔断打开前的失败段也不能丢。
+		c.markPausedFor(rt.name)
+	}
+	if justClosed {
+		slog.Info("vision push breaker closed — push path reachable again, compensating missed segments",
+			"instance", rt.name)
+		go c.compensateOffline(rt.name)
+	}
+	return ok
 }
 
 // uploadSegment POSTs a segment file's bytes to a Vision instance. Headers
@@ -609,6 +648,27 @@ func (c *Coordinator) pushSubSegment(ctx context.Context, seg SubSegment) bool {
 		return true
 	}
 	return false
+}
+
+// isDirPath 解析段的绝对路径并报告它是否是目录(相对路径按录像根拼接)。
+// stat 失败按非目录处理——文件缺失由上传路径按需报错。
+func isDirPath(storageRoot, p string) bool {
+	abs := p
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(storageRoot, abs)
+	}
+	fi, err := os.Stat(abs)
+	return err == nil && fi.IsDir()
+}
+
+// warnDirFormOnce 对目录形/MJPEG 段的相机打一次 WARN(#726):每段一条会
+// 刷屏且无行动价值,一次性墓碑提示配置 skip_cameras 或消费者跳单。
+func (c *Coordinator) warnDirFormOnce(cameraID, format string) {
+	if _, loaded := c.dirWarned.LoadOrStore(cameraID, true); loaded {
+		return
+	}
+	slog.Warn("vision push skipped — directory-form/MJPEG segment cannot be uploaded as a byte stream; add the camera to skip_cameras or have the consumer report it in its heartbeat skip list",
+		"camera_id", cameraID, "format", format)
 }
 
 // markPausedFor records the start of an instance's push-pause window (first
