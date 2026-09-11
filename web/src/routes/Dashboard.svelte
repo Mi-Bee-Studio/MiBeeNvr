@@ -57,6 +57,8 @@
   let prevSystemStats = $state<SystemStats | null>(null);
   let currentSystemStats = $state<SystemStats | null>(null);
   let cpuPercent = $state<string | null>(null);
+  let iowaitPercent = $state<string | null>(null);
+  let loadOne = $state<number | null>(null);
   let memoryPercent = $state<string | null>(null);
   let netRateUp = $state<string | null>(null);
   let netRateDown = $state<string | null>(null);
@@ -259,10 +261,17 @@
           const idleDelta = s.cpu.idle - prevSystemStats.cpu.idle;
           if (totalDelta > 0) {
             cpuPercent = ((totalDelta - idleDelta) / totalDelta * 100).toFixed(1) + '%';
+            const iowaitDelta = (s.cpu.iowait ?? 0) - (prevSystemStats.cpu.iowait ?? 0);
+            if (iowaitDelta >= 0) {
+              iowaitPercent = (iowaitDelta / totalDelta * 100).toFixed(1) + '%';
+            }
           }
           netRateUp = formatFileSize((s.network.bytes_sent - prevSystemStats.network.bytes_sent) / dt) + '/s';
           netRateDown = formatFileSize((s.network.bytes_recv - prevSystemStats.network.bytes_recv) / dt) + '/s';
         }
+      }
+      if (s.load) {
+        loadOne = s.load.one;
       }
       if (s.memory.total > 0) {
         memoryPercent = ((s.memory.total - s.memory.available) / s.memory.total * 100).toFixed(1) + '%';
@@ -426,6 +435,14 @@
                 <div class="h-full rounded-full transition-all duration-500" style="width: {cpuPercent}; background-color: {getUsageColor(parseFloat(cpuPercent))}"></div>
               {/if}
             </div>
+            {#if iowaitPercent && parseFloat(iowaitPercent) >= 20}
+              <span class="text-[10px] th-text-secondary" style="color: var(--color-warning)">
+                IO {iowaitPercent}
+              </span>
+            {/if}
+            {#if loadOne !== null}
+              <span class="text-[10px] th-text-secondary">load {loadOne.toFixed(2)}</span>
+            {/if}
           </div>
 
           <!-- Memory -->

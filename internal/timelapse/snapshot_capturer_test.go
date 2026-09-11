@@ -105,15 +105,14 @@ func TestSnapshotCapturer_CaptureJPEGFrame(t *testing.T) {
 	err := capturer.Start(ctx)
 	require.NoError(t, err)
 
-	// Let it capture a few frames
-	time.Sleep(200 * time.Millisecond)
+	// Wait (bounded) for at least 2 snapshots — poll the observable request
+	// count instead of a fixed sleep so a loaded runner doesn't flake.
+	require.Eventually(t, func() bool {
+		return requestCount.Load() >= 2
+	}, 5*time.Second, 50*time.Millisecond, "expected at least 2 HTTP requests (50ms interval)")
 
 	err = capturer.Stop()
 	require.NoError(t, err)
-
-	// Should have made at least 2 requests
-	assert.GreaterOrEqual(t, requestCount.Load(), int32(2),
-		"expected at least 2 HTTP requests (50ms interval over 200ms)")
 
 	// Should have created at least one segment
 	assert.GreaterOrEqual(t, store.segmentCount(), 1,
@@ -543,16 +542,16 @@ func TestSnapshotCapturer_SegmentRotation(t *testing.T) {
 	err := capturer.Start(ctx)
 	require.NoError(t, err)
 
-	// Wait enough time for at least one rotation
-	time.Sleep(300 * time.Millisecond)
+	// Wait (bounded) for at least one rotation — poll the observable segment
+	// count instead of a fixed sleep so a loaded runner doesn't flake.
+	require.Eventually(t, func() bool {
+		return store.segmentCount() >= 2
+	}, 5*time.Second, 30*time.Millisecond, "expected at least 2 segments with 100ms SegmentDur")
 
 	err = capturer.Stop()
 	require.NoError(t, err)
 
-	// Should have created multiple segments
 	t.Logf("segments created: %d, closed: %d", store.segmentCount(), store.closedCount())
-	assert.GreaterOrEqual(t, store.segmentCount(), 2,
-		"expected at least 2 segments with 100ms SegmentDur over 300ms")
 
 	// Check frames were written to each segment
 	for i, seg := range store.segments {
