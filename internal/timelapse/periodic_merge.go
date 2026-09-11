@@ -536,6 +536,16 @@ func (m *PeriodicMergeManager) runMergePipeline(ctx context.Context, segments []
 //   - 24h: aligned to 00:00 local time
 //   - 7d:  aligned to Monday 00:00 local time
 //   - 30d: aligned to 1st of month 00:00 local time
+//
+// MergeWindowFor returns the [start, end) periodic-merge window containing t
+// for the given duration, aligned per parseMergeRange's rules (natural-day →
+// local midnight, 8h → 00/08/16 local, 7d → Monday 00:00, 30d → 1st of month,
+// …). Exported so the timelapse-merge CLI can enumerate windows across a date
+// range without re-implementing the alignment table.
+func MergeWindowFor(t time.Time, dur time.Duration, loc *time.Location) (time.Time, time.Time) {
+	return parseMergeRange(t, dur, loc)
+}
+
 func parseMergeRange(t time.Time, dur time.Duration, loc *time.Location) (time.Time, time.Time) {
 	if loc == nil {
 		loc = time.UTC
