@@ -125,10 +125,11 @@ func TestProcReaders(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("/proc readers are Linux-only")
 	}
-	total, idle, err := readCPURaw()
+	total, idle, iowait, err := readCPURaw()
 	require.NoError(t, err)
 	require.Positive(t, total)
 	require.GreaterOrEqual(t, total, idle)
+	require.LessOrEqual(t, iowait, total)
 
 	memTotal, memAvail, err := readMemoryInfo()
 	require.NoError(t, err)
