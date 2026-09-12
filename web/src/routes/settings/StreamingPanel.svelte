@@ -128,7 +128,9 @@
           max_viewers: 10,
           idle_timeout: '5m',
         },
-        hls: { low_latency: true },
+        // No hls.low_latency here: the panel has no LL toggle, and the key is
+        // live since #772 — sending a hardcoded value would clobber an
+        // explicit `low_latency: false` from the config file on every save.
         rtmp: {
           enabled: streamingRtmpEnabled,
           port: streamingRtmpPort,

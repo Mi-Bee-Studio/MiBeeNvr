@@ -26,7 +26,7 @@ func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Requ
 			"gop_cache_size": h.config.Streaming.FLV.GOPCacheSize,
 		},
 		"hls": map[string]any{
-			"low_latency": h.config.HLS.LowLatency,
+			"low_latency": h.config.HLS.LowLatencyEnabled(),
 		},
 		// RTMP/SRT ingest settings. The streaming panel persisted nothing for
 		// them before: the PUT body had no rtmp/srt fields, so the UI switches
@@ -117,7 +117,10 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	}
 
 	if body.HLS != nil && body.HLS.LowLatency != nil {
-		h.config.HLS.LowLatency = *body.HLS.LowLatency
+		if h.config.HLS.LowLatency == nil {
+			h.config.HLS.LowLatency = new(bool)
+		}
+		*h.config.HLS.LowLatency = *body.HLS.LowLatency
 	}
 
 	if body.RTMP != nil {

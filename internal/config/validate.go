@@ -572,7 +572,7 @@ func validateConfigDetails(cfg *Config) error {
 		return fmt.Errorf("hls.max_streams must be between 1 and 20, got %d", cfg.HLS.MaxStreams)
 	}
 	// Validate LL-HLS configuration
-	if cfg.HLS.LowLatency {
+	if cfg.HLS.LowLatencyEnabled() {
 		if cfg.HLS.SegmentCount < 7 {
 			return fmt.Errorf("hls.segment_count must be >= 7 when low_latency is enabled, got %d", cfg.HLS.SegmentCount)
 		}

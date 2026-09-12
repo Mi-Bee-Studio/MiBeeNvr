@@ -94,13 +94,10 @@ curl -u admin:password \
 ### HLS Streaming Example
 
 ```bash
-# Get HLS playlist
+# Get the HLS playlist (segment URLs are referenced relatively by the
+# playlist — hand it to a player and it fetches them automatically)
 curl -u admin:password \
-  "http://localhost:9090/api/cameras/living-room/stream/stream.m3u8"
-
-# Get HLS segment  
-curl -u admin:password \
-  "http://localhost:9090/api/cameras/living-room/stream/segment_001.ts"
+  "http://localhost:9090/api/cameras/living-room/stream/index.m3u8"
 ```
 
 ### Xiaomi Camera Setup

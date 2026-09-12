@@ -76,7 +76,7 @@ hls:
   segment_max_size_mb: 10        # HLS 片段最大大小 (MB)
   segment_count: 7               # 每个流的片段数 (范围: 3-10)
   max_streams: 4                 # 最大并发流数 (范围: 1-20，RPi 限制: 4)
-  low_latency: false             # 启用低延迟 HLS (LL-HLS)
+  low_latency: true              # 低延迟 HLS (LL-HLS)，默认开启；false = 经典分段播放列表
   part_min_duration: "200ms"     # LL-HLS 分片时长 (范围: 100ms-1s)
 streaming:
   webrtc:
@@ -734,9 +734,12 @@ cameras:
 
 ### `hls.low_latency`
 - **类型**: boolean
-- **默认**: `false`
-- **描述**: 启用低延迟 HLS (LL-HLS)。启用后使用 gohlslib 的 Low-Latency HLS 变体
-- **注意**: 启用时 `hls.segment_count` 必须 >= 7
+- **默认**: `true`（不设置即视为开启）
+- **描述**: 启用低延迟 HLS (LL-HLS)。启用后使用 gohlslib 的 Low-Latency HLS 变体；
+  设为 `false` 时输出经典分段播放列表（H.264 → MPEG-TS，H.265 → fMP4），供普通
+  HLS 客户端消费。修改后需重启生效
+- **注意**: 启用时 `hls.segment_count` 必须 >= 7（未显式设置 `low_latency` 且
+  `segment_count` < 7 时，默认逻辑会自动将 `segment_count` 提升到 7）
 - **示例**: `true`, `false`
 
 ### `hls.part_min_duration`
