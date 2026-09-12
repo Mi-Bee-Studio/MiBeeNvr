@@ -10,7 +10,7 @@ package recorder
 //   - the cap stops one pathological segment (e.g. a 4GiB stco-limit run)
 //     from reserving absurd space for its successors.
 func segmentPreallocEstimate(lastSegBytes int64) int64 {
-	const floor = 4 << 20    // 4MiB — below this, extent churn is negligible
+	const floor = 4 << 20      // 4MiB — below this, extent churn is negligible
 	const capBytes = 512 << 20 // 512MiB — stco-limit headroom is 4GiB
 	if lastSegBytes < floor {
 		return 0
