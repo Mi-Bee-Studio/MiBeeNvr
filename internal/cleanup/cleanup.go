@@ -11,7 +11,9 @@ package cleanup
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,6 +59,15 @@ type CleanupManager struct {
 	eventBus                   *event.EventBus
 	consecutivePassiveFailures int  // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
 	motionAwareDisk            bool // disk-threshold path deletes boring-first (issue #435); default true
+
+	// Directory-form deletion pacing (#748): MJPEG/timelapse sources are frame
+	// directories holding up to hundreds of thousands of small files (a 1s
+	// natural-day window ≈ 600K). Unthrottled recursive removal saturates the
+	// ext4 journal (jbd2 D-state) and starves online recording IO for minutes
+	// even after the deleting process exits. When paced, every dirDeleteChunk
+	// unlinked files are followed by a ctx-aware dirDeleteSleep pause.
+	dirDeleteChunk int
+	dirDeleteSleep time.Duration
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -235,6 +246,58 @@ func (cm *CleanupManager) SetEventBus(bus *event.EventBus) {
 	cm.eventBus = bus
 }
 
+// SetDirectoryDeleteThrottle paces directory-form recording deletion (#748):
+// after every chunk files removed inside a frame directory (MJPEG/timelapse
+// trees with up to hundreds of thousands of small files), the deletion loop
+// sleeps for d so the ext4 journal (jbd2) can drain and online recording IO
+// is not starved. chunk <= 0 or d <= 0 disables pacing (legacy behavior).
+func (cm *CleanupManager) SetDirectoryDeleteThrottle(chunk int, d time.Duration) {
+	if cm == nil {
+		return
+	}
+	cm.dirDeleteChunk, cm.dirDeleteSleep = chunk, d
+}
+
+// deleteRecordingFile deletes one recording path, pacing directory-form
+// (frame-tree) deletions when throttling is configured. Plain files keep the
+// storage-manager semantics (including the .vodidx sidecar); paced directories
+// are unlinked file-by-file in chunks and the remaining empty tree is swept by
+// a final RemoveAll. A ctx cancellation mid-walk leaves a partially-deleted
+// tree — the orphan scanner reclaims it later.
+func (cm *CleanupManager) deleteRecordingFile(ctx context.Context, path string) error {
+	if cm.dirDeleteChunk <= 0 || cm.dirDeleteSleep <= 0 {
+		return cm.store.DeleteFile(path)
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return cm.store.DeleteFile(path)
+	}
+	n := 0
+	if err := filepath.WalkDir(path, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if err := os.Remove(p); err != nil {
+			return err
+		}
+		n++
+		if n%cm.dirDeleteChunk == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(cm.dirDeleteSleep):
+			}
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("paced delete %q: %w", path, err)
+	}
+	return os.RemoveAll(path)
+}
+
 // adaptiveBatchSleep sleeps between batch delete operations, adapting the sleep
 // duration based on the current WAL file size. Larger WAL = longer sleep to give
 // the checkpoint process time to catch up.
@@ -366,7 +429,7 @@ func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, re
 				logger.Warn("failed to delete merged file", "merge_path", rec.MergePath, "error", err)
 			}
 		}
-		if err := cm.store.DeleteFile(rec.FilePath); err != nil {
+		if err := cm.deleteRecordingFile(ctx, rec.FilePath); err != nil {
 			logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
 		}
 		// Ambient archive sidecar shares the recording's lifetime (#496).

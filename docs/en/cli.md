@@ -141,6 +141,9 @@ Behavior notes:
 - Windows (default `natural-day`) are enumerated across the date range and merged one by one; windows with an existing completed merge are skipped (safe to re-run and resume), open windows are skipped.
 - `--delete-sources` deletes source recordings (DB rows + files) only after the window's merge **succeeded**; recordings being processed by MiBeeVision are always skipped.
 - The command may run while the NVR is live (WAL concurrency, same as cleanup/repair); cameras with timelapse enabled are refused though — their windows belong to the server's merge scheduler (use `--force` or stop the server).
+- **Self-downgrades on execute** (nice 19 + lowest best-effort IO class; `--no-throttle` disables): merges at the NVR's default priority starve online recording (2026-09-12 incident: load 8-13 for 4.5h, recordings dropped 17→10; renicing after the fact could not undo the storm).
+- **Directory-form source deletion is rate-limited** (pause every 200 files, `--delete-throttle`): unlinking the millions of small files in MJPEG/timelapse frame directories saturates the ext4 journal (jbd2) for tens of minutes and slows all disk IO.
+- Merge intermediates (frame extract/copy dirs) are written under the **storage root** at `<root>/periodic-merge/tmp/`, never the system `/tmp` (a 1s-sampled natural-day window needs ~3.5-7GB and small root partitions hit ENOSPC); merge output is generated streaming (#747), so memory use is independent of window size.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -152,8 +155,10 @@ Behavior notes:
 | `--interval <dur>` | camera `timelapse.interval`, else 30s | Frame sampling interval (e.g. `1s`) |
 | `--fps <n>` | camera `merge_output_fps`, else 10 | Output playback fps |
 | `--delete-sources` / `--no-delete-sources` | camera `delete_recordings_after_merge` | Override source deletion for this run |
+| `--delete-throttle <dur>` | `200ms` | Pause between chunks when deleting directory-form sources; `0` disables |
 | `--execute` | dry-run | Actually execute |
 | `--force` | — | Process timelapse-enabled cameras while the NVR is running |
+| `--no-throttle` | — | Skip the automatic self-downgrade (nice 19 + IO best-effort) |
 | `--config <path>` | `mibee-nvr.yaml` | Config file path |
 
 ## repair — Data Repair
