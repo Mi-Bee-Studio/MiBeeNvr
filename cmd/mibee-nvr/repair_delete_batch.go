@@ -14,6 +14,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -22,6 +23,12 @@ import (
 // the transaction overhead, small enough that the writer lock is held well
 // under the 15s busy_timeout while the server records concurrently.
 const repairDeleteChunkSize = 300
+
+// repairIOBudget paces the CLI's file-reclaim I/O against the same shared
+// budget the server uses (#751). nil = off (default). Built from the YAML
+// io.budget_bytes_per_sec in cmdRepair so a CLI mass-delete against a live
+// server yields exactly like the server's own cleanup would.
+var repairIOBudget iobudget.Limiter
 
 // Seams for call-pattern and failure-injection tests (#753 TDD).
 var (
@@ -44,6 +51,7 @@ func deleteCandidatesInChunks(ctx context.Context, db *storage.DB, candidates []
 	progress func(deleted, total int),
 ) (deleted, failed int, freedBytes int64) {
 	total := len(candidates)
+	budgetAborted := false
 	for start := 0; start < total; start += repairDeleteChunkSize {
 		if ctx.Err() != nil {
 			break
@@ -75,6 +83,15 @@ func deleteCandidatesInChunks(ctx context.Context, db *storage.DB, candidates []
 		for _, r := range ok {
 			freedBytes += r.FileSize
 			deleted++
+			// Bill the reclaim to the shared budget (#751) before touching
+			// disk. On error (canceled ctx) stop billing but keep removing —
+			// pacing never changes deletion semantics.
+			if repairIOBudget != nil && !budgetAborted {
+				if err := repairIOBudget.Wait(ctx, iobudget.ConsumerRepair, r.FileSize); err != nil {
+					fmt.Fprintf(os.Stderr, "  io budget wait aborted (%v) — continuing unthrottled\n", err)
+					budgetAborted = true
+				}
+			}
 			// Best-effort file removal, after the DB row is gone (source of
 			// truth first; an orphan file is recoverable, a dangling row is not).
 			if r.FilePath != "" {

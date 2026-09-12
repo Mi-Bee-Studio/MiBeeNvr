@@ -202,6 +202,11 @@ func MergeAVISegments(ctx context.Context, segments []*model.Recording, store *s
 			// chunk.Data is already in memory from Demuxer; we copy it through the
 			// buffer to maintain the streaming pattern (though for Demuxer chunks
 			// the data is unavoidably in memory per-frame).
+			if err := waitIOBudget(ctx, int64(len(chunk.Data))); err != nil {
+				f.Close()
+				os.Remove(tempPath)
+				return nil, nil, err
+			}
 			if _, err := copyBytes(out, chunk.Data, buf); err != nil {
 				f.Close()
 				os.Remove(tempPath)

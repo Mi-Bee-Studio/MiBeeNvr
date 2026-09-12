@@ -245,7 +245,7 @@ func (m *PeriodicMergeManager) extractRecordingFrames(ctx context.Context, camer
 		groupSources := make([]model.Recording, 0, len(codecRecs))
 
 		for _, rec := range codecRecs {
-			n, err := extractor.ExtractWindowFrames(rec.FilePath, rec.Format, rec.StartedAt, sampler, frameIdx, tmpDir)
+			n, err := extractor.ExtractWindowFrames(ctx, rec.FilePath, rec.Format, rec.StartedAt, sampler, frameIdx, tmpDir)
 			if err != nil {
 				slog.Warn("periodic merge: frame extraction failed, skipping recording",
 					"recording_id", rec.ID, "format", rec.Format, "error", err)

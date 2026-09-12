@@ -21,6 +21,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -68,6 +69,11 @@ type CleanupManager struct {
 	// unlinked files are followed by a ctx-aware dirDeleteSleep pause.
 	dirDeleteChunk int
 	dirDeleteSleep time.Duration
+
+	// budget paces deletion/reclaim I/O against the process-wide background
+	// budget (#751). nil = budgeting off (default) — deletion runs with the
+	// time-slice pacing above only. Set once via SetIOBudget at startup.
+	budget iobudget.Limiter
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -258,6 +264,52 @@ func (cm *CleanupManager) SetDirectoryDeleteThrottle(chunk int, d time.Duration)
 	cm.dirDeleteChunk, cm.dirDeleteSleep = chunk, d
 }
 
+// SetIOBudget installs the shared background I/O budget (#751). Reclaim I/O
+// (file removals in batch deletes) is billed by estimated byte size so
+// deletion yields to foreground work on busy media. nil disables billing.
+func (cm *CleanupManager) SetIOBudget(l iobudget.Limiter) {
+	if cm == nil {
+		return
+	}
+	cm.budget = l
+}
+
+// HasIOBudget returns the installed limiter (nil when budgeting is off) —
+// wiring-regression observability.
+func (cm *CleanupManager) HasIOBudget() iobudget.Limiter {
+	if cm == nil {
+		return nil
+	}
+	return cm.budget
+}
+
+// estimatePathBytes sums the on-disk size of path (recursive for
+// directories). Unreadable entries contribute zero — an estimate is pacing
+// input, not accounting truth.
+func estimatePathBytes(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	if !info.IsDir() {
+		return info.Size()
+	}
+	var total int64
+	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil //nolint:nilerr // unreadable entries just don't count
+		}
+		if fi, err := d.Info(); err == nil {
+			total += fi.Size()
+		}
+		return nil
+	})
+	return total
+}
+
 // deleteRecordingFile deletes one recording path, pacing directory-form
 // (frame-tree) deletions when throttling is configured. Plain files keep the
 // storage-manager semantics (including the .vodidx sidecar); paced directories
@@ -420,9 +472,22 @@ func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, re
 	// the one playback loads; without this it leaks permanently because the
 	// orphan scanner never reaches the nested YYYYMM/DD/HH/ tree. Mirrors
 	// handleDeleteRecording / handleTimelapseDelete.
+	budgetAborted := false
 	for _, rec := range toDelete {
 		if !deletedSet[rec.ID] {
 			continue
+		}
+		// Bill the reclaim to the shared budget first (#751): the biggest
+		// deletes (multi-GB merged MP4s, 600K-file frame trees) are exactly
+		// the ones that must yield to foreground I/O. On a budget wait error
+		// (shutdown ctx cancelled) billing stops but removal continues
+		// best-effort — pacing never changes deletion semantics.
+		if cm.budget != nil && !budgetAborted {
+			est := estimatePathBytes(rec.FilePath) + estimatePathBytes(rec.MergePath)
+			if err := cm.budget.Wait(ctx, iobudget.ConsumerCleanup, est); err != nil {
+				budgetAborted = true
+				logger.Warn("io budget wait aborted; continuing file reclaim unthrottled", "error", err)
+			}
 		}
 		if rec.MergePath != "" {
 			if err := os.RemoveAll(rec.MergePath); err != nil {

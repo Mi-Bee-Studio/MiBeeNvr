@@ -32,6 +32,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -100,6 +101,31 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// Wire DB observability hooks: query-latency histogram + SQLITE_BUSY counter.
 	db.SetMetrics(m)
 	storage.SetBusyErrorHook(m.IncSQLiteBusyErrors)
+
+	// Step 2.15: Shared background I/O budget (#751) — merge, cleanup and
+	// timelapse extraction pace their bulk I/O against one process-wide
+	// token bucket so foreground work (recording writes, API file serving,
+	// SQLite) keeps its latency on busy media. Off by default
+	// (io.budget_bytes_per_sec: 0 → nil bucket, every consumer's fast path
+	// is a nil check). Cleanup receives it at Step 8 (manager construction);
+	// merge/timelapse are package-level setters applied here, before any of
+	// their managers exist.
+	ioBudget := iobudget.New(cfg.IO.BudgetBytesPerSec, cfg.IO.BudgetBurstBytes,
+		iobudget.WithObservers(
+			func(consumer string, d time.Duration) {
+				m.IOBudgetWaitSecondsTotal.WithLabelValues(consumer).Add(d.Seconds())
+			},
+			func(consumer string, n int64) {
+				m.IOBudgetChargedBytesTotal.WithLabelValues(consumer).Add(float64(n))
+			},
+		))
+	merge.SetIOBudget(ioBudget)
+	timelapse.SetIOBudget(ioBudget)
+	deps.ioBudget = ioBudget
+	if ioBudget != nil {
+		slog.Info("background I/O budget enabled",
+			"bytes_per_sec", cfg.IO.BudgetBytesPerSec, "burst_bytes", cfg.IO.BudgetBurstBytes)
+	}
 
 	// Step 2.1: Event bus
 	deps.eventBus = event.NewEventBus(64)
@@ -836,6 +862,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// the opt-in delete_recordings_after_merge cleanup cannot saturate the
 	// ext4 journal (jbd2) and starve online recording IO (#748).
 	cleanupMgr.SetDirectoryDeleteThrottle(200, 200*time.Millisecond)
+	// Bill reclaim I/O to the shared background budget (#751) when enabled.
+	if deps.ioBudget != nil {
+		cleanupMgr.SetIOBudget(deps.ioBudget)
+	}
 	deps.cleanupMgr = cleanupMgr
 	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)
 

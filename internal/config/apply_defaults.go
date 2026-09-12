@@ -253,6 +253,11 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Merge.BatchLimit <= 0 {
 		cfg.Merge.BatchLimit = 200
 	}
+	// IO budget defaults (#751): budget_bytes_per_sec stays 0 = disabled
+	// unless the operator opts in; burst defaults to one second of rate.
+	if cfg.IO.BudgetBytesPerSec > 0 && cfg.IO.BudgetBurstBytes == 0 {
+		cfg.IO.BudgetBurstBytes = cfg.IO.BudgetBytesPerSec
+	}
 	if cfg.Merge.CheckInterval == "" {
 		cfg.Merge.CheckInterval = "1h"
 	}

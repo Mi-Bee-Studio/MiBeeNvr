@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
@@ -135,6 +136,10 @@ func openDBFromConfig(cfgPath string) (*storage.DB, *config.Config, error) {
 	if err := config.Validate(cfg); err != nil {
 		return nil, nil, fmt.Errorf("config validation: %w", err)
 	}
+	// Share the operator's background I/O budget with the server (#751): a
+	// CLI mass-delete against a live server then yields exactly like the
+	// server's own cleanup. nil when unconfigured (default).
+	repairIOBudget = iobudget.New(cfg.IO.BudgetBytesPerSec, cfg.IO.BudgetBurstBytes)
 	dbPath := cfg.Storage.RootDir + "/mibee-nvr.db"
 	db, err := storage.New(dbPath)
 	if err != nil {
