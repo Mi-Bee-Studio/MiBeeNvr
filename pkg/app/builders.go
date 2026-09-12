@@ -132,10 +132,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// 200-files/200ms time-slice so fast media sprints and busy media backs
 	// off). Default tier 200 unlink/s per the #748 jbd2-saturation lesson.
 	if ioBudget != nil {
-		unlinkRate := cfg.IO.DeleteUnlinksPerSec
-		if unlinkRate == 0 {
-			unlinkRate = 200
-		}
+		unlinkRate := cfg.IO.DeleteUnlinksPerSec // default 200 applied by config defaults
 		deps.unlinkBudget = iobudget.New(unlinkRate, unlinkRate,
 			iobudget.WithObservers(
 				func(consumer string, d time.Duration) {

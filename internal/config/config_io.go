@@ -23,7 +23,7 @@ type IOConfig struct {
 	// unlinks per second while the I/O budget is enabled (#755) — a
 	// metadata-storm guardrail so the ext4 journal (jbd2) cannot saturate
 	// and self-sustain after the deleting process exits (#748 lesson).
-	// 0 (default) → 200/s at wiring time. Only meaningful together with
+	// 0 → default 200/s (applied when a budget is configured). Only meaningful together with
 	// budget_bytes_per_sec > 0; without a budget the legacy fixed
 	// time-slice pacing stays active (no default behavior change).
 	DeleteUnlinksPerSec int64 `yaml:"delete_unlinks_per_sec"`

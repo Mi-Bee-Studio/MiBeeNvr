@@ -17,6 +17,7 @@ func TestBuildAppDeps_IOBudgetWired(t *testing.T) {
 	cfg, configPath := minimalConfig(t)
 	cfg.IO.BudgetBytesPerSec = 8 << 20 // 8 MiB/s
 	cfg.IO.BudgetBurstBytes = 16 << 20
+	cfg.IO.DeleteUnlinksPerSec = 200 // config-defaults value (materialized by applyConfigDefaults on Load)
 
 	deps, cleanupFn, err := buildAppDeps(cfg, configPath)
 	if err != nil {

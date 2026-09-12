@@ -155,7 +155,15 @@ func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
 			// Stop's Wait can't race an Add-at-zero from a concurrent
 			// TriggerDue.
 			s.wg.Add(1)
-			// Run merge in background — do not block the loop
+			// Run merge in background — do not block the loop.
+			//
+			// Pass boundary−duration: parseMergeRange maps a refTime to the
+			// window CONTAINING it, so the boundary instant itself would select
+			// the window that just OPENED (empty — no segments, no merge row,
+			// delete_recordings_after_merge never fires). The 2026-09-13
+			// backlog incident: 30 days of daily merges silently produced
+			// nothing while two cameras accumulated 420GB of sources.
+			closedWindowRef := now.Add(-entry.duration)
 			go func(camID string, refTime time.Time) {
 				defer s.wg.Done()
 				if err := s.runFunc(ctx, camID, refTime); err != nil {
@@ -166,7 +174,7 @@ func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
 						"error", err,
 					)
 				}
-			}(id, now)
+			}(id, closedWindowRef)
 
 			// Recompute next run after this one
 			entry.nextRun = computeNextRun(now, entry.duration, s.loc)
