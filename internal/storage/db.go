@@ -537,6 +537,12 @@ func (d *DB) Init(ctx context.Context) error {
 	// Enable auto_vacuum = INCREMENTAL for fresh databases (no-op for existing).
 	_, _ = d.db.ExecContext(ctx, "PRAGMA auto_vacuum = INCREMENTAL")
 
+	// Cap the WAL high-water mark (#752): after a checkpoint the -wal file
+	// shrinks to at most this size, and crash-recovery replay is bounded by
+	// it. Set on the writer only (the checkpointing connection) — the DSN
+	// baseline stays frozen.
+	_, _ = d.db.ExecContext(ctx, fmt.Sprintf("PRAGMA journal_size_limit = %d", walJournalSizeLimit))
+
 	// Refresh query planner stats (incremental ANALYZE where needed). Cheap on startup.
 	_, _ = d.db.ExecContext(ctx, `PRAGMA optimize`)
 
