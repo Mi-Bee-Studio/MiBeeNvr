@@ -10,12 +10,14 @@ The MiBee NVR web interface is organized into five top-level pages plus the sing
 
 The default page after login — a live multi-camera grid:
 
-- **Grid layout**: the "Configure" button picks which cameras to show
+- **Grid layout**: the "Configure" button opens the **camera picker** to choose which cameras to show (up to 4)
 - **Header quality switch**: a **Smooth / HD** toggle for the whole grid — "Smooth" rides the camera's [sub-stream](sub-stream.md) (default), slashing bandwidth and decode load when viewing many cameras at once; cameras without one silently fall back to the main stream
 - **Per tile**: camera name, live badge, playback protocol (WebCodecs / MJPEG, etc.), and a **health score**
 - **Tile controls**: unmute (cameras with audio) and fullscreen
 - **AI overlay**: with [browser-side AI detection](ai-detection-tuning.md) enabled, detection boxes draw directly on the feed
 - **Click a tile** to open that camera's live page
+
+The picker is built for larger fleets: a **search box** filters by name / group; the **Online only** toggle hides offline cameras by default (already-selected offline ones stay visible so you can deselect them); cameras are organized into per-group sections with counts, and **Add group** fills the remaining grid slots with that group's cameras in order. The selected-chips strip shows pick order 1-4, each removable with ×.
 
 > H.265 cameras play in the browser via WASM decoding — no HTTPS or plugins needed; see [Streaming Protocol Selection](streaming-protocol-selection.md).
 
@@ -32,8 +34,18 @@ Full camera lifecycle management:
 | Live | open the live page |
 | Activate | some GB / ONVIF devices need activation first |
 | Archived | archived old cameras (replaced devices, record keeping) |
+| New Group | create groups to organize cameras — drag cards between groups; rename / delete / reorder from the group header |
 
 Cards show the run state (recording / live-only / stopped / reconnecting / unreachable) plus protocol and codec tags.
+
+### Camera Groups
+
+When the fleet grows, keep it organized:
+
+- **New Group** in the toolbar creates an empty group
+- Group headers **collapse / expand** on click (state persists across reloads), the pencil icon **renames inline** (member cameras follow), and the trash icon **deletes** the group (members fall back to "Ungrouped")
+- **Drag camera cards** between groups (empty groups show a dashed drop zone) and **drag group headers** to reorder; "Ungrouped" always sits last
+- The edit form's **Group** field (basic-info section) accepts a new name or picks from existing groups; leave it empty for ungrouped
 
 The edit form is organized into collapsible sections; beyond basic access settings these include:
 
@@ -46,7 +58,7 @@ The edit form is organized into collapsible sections; beyond basic access settin
 
 The search-and-playback center with three views:
 
-- **Timeline** (default): one track per camera for the day, AI events overlaid as markers; click / drag to position playback
+- **Timeline** (default): one track per camera for the day, AI events overlaid as markers and timelapse samples / merged timelapse segments drawn as bars (click a timelapse bar to play); click / drag to position playback
 - **List**: segment details (format, duration, size, merge status) with multi-select delete
 - **Timelapse**: dedicated timelapse view
 
@@ -79,6 +91,7 @@ Opened from the grid or a camera card at `#/live/{id}`:
 - **PTZ control**: pan/tilt/preset control for capable cameras (e.g. Xiaomi PTZ models)
 - **Two-way audio**: push-to-talk back to the camera (see [Audio](audio.md))
 - **Snapshot**: save the current frame
+- **Camera settings**: a collapsible panel at the bottom embeds this camera's edit form — adjust access parameters without navigating away; saving silently refreshes probes without interrupting playback
 
 ## Interface Preferences
 
