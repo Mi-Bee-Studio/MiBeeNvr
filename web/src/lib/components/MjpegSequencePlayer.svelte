@@ -15,7 +15,7 @@
    *
    * `currentIndex`/`playing`/`speed` are bindable so hosts can drive the
    * player with their own control bar (PlaybackPanel) or use the built-in
-   * minimal controls (TimelapseMergeDetail).
+   * minimal controls (the unified recording viewer).
    */
   import { onMount } from 'svelte';
   import { Play, Pause } from 'lucide-svelte';
@@ -34,6 +34,10 @@
     showControls?: boolean;
     /** Optional per-frame timestamp label. */
     frameTimestamp?: ((i: number) => string) | null;
+    /** Changing this resets caches/playhead WITHOUT unmounting the canvas —
+     *  hosts use it to swap in the next segment seamlessly (the last frame
+     *  stays on screen until the first new frame decodes). */
+    resetKey?: string | number;
     onEnded?: () => void;
     onError?: (message: string) => void;
   }
@@ -48,6 +52,7 @@
     loop = false,
     showControls = true,
     frameTimestamp = null,
+    resetKey = '',
     onEnded,
     onError,
   }: Props = $props();
@@ -76,9 +81,13 @@
     const existing = inflightBatches.get(batchStart);
     if (existing) return existing;
 
-    const signal = abort?.signal;
+    // Snapshot the controller: a reset() mid-flight must be able to detect
+    // that this response belongs to the PREVIOUS sequence and drop it.
+    const myAbort = abort;
+    const signal = myAbort?.signal;
     const p = fetchBatch(batchStart, BATCH, signal)
       .then((batch) => {
+        if (myAbort !== abort) return; // reset happened — stale sequence
         if (batch.total > 0 && batch.total !== total) total = batch.total;
         batch.frames.forEach((blob, k) => {
           blobCache.set(batch.offset + k, blob);
@@ -234,6 +243,31 @@
   $effect(() => {
     // Learn the total from the first batch when the host didn't know it.
     if (total === 0) void ensureBatch(0);
+  });
+
+  // Soft reset on resetKey change: clear every cache + cancel in-flight
+  // batches belonging to the previous sequence, then re-seed the new one —
+  // the canvas element (and its last painted frame) survives, so a host
+  // swapping segments this way shows NO loading flash. The pacing rAF loop
+  // is deliberately NOT cancelled here (effects run in declaration order —
+  // cancelling would freeze playback), and `ready` is deliberately kept
+  // true: flipping it would strobe the first-load spinner overlay on every
+  // segment hop (segments can be 3-6 frames — a hop every second).
+  $effect(() => {
+    resetKey;
+    abort?.abort();
+    abort = new AbortController();
+    for (const bmp of bitmaps.values()) bmp.close();
+    bitmaps.clear();
+    blobCache.clear();
+    fetchedBatches.clear();
+    inflightBatches.clear();
+    total = frameCount;
+    errorMsg = '';
+    currentIndex = 0;
+    acc = 0;
+    lastTs = 0;
+    ensureAround(0);
   });
 
   $effect(() => {

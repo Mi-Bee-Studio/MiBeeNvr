@@ -2,18 +2,22 @@
   /**
    * DayTimeline — a 24h multi-camera timeline view.
    *
-   * Each camera is one row with a fixed 00:00–24:00 axis. Recording coverage is
-   * drawn as colored bands (by format); gaps (≥30s) are left blank. Clicking or
-   * dragging resolves to a (recordingId, offset) via the shared findSegmentAt
-   * helper and fires onseek. This is the natural interaction model for 24/7
-   * continuous recording, as opposed to the per-segment card waterfall in the
-   * gallery (which only suits sparse event clips).
+   * Each camera is one row with a fixed 00:00–24:00 axis. The track is layered:
+   * video coverage bands (h264/h265/avi/mjpeg) render full-height as solid
+   * bands; raw timelapse segments render as a dotted sample ribbon along the
+   * bottom edge (a timelapse row's started_at→ended_at is its CAPTURE WINDOW,
+   * not continuous coverage — the dotted texture keeps point-sampling from
+   * masquerading as video gaps); completed periodic merges render as solid
+   * strips along the top edge and are the click-to-play entry into merged
+   * timelapse outputs. AI event markers overlay everything as vertical bars.
+   * Clicking or dragging the band area resolves to a (recordingId, offset) via
+   * the shared findSegmentAt helper and fires onseek.
    */
   import { findSegmentAt, parseDayStart, epochMsToDaySec, formatLength, type TimelineSegment } from '$lib/timeline-utils';
   import type { Recording, Camera } from '$lib/api';
   import { classLabel, eventTypeLabel } from '$lib/ai-labels';
   import { t } from '$lib/i18n';
-import { parseServerDate } from '$lib/format';
+import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI18nKeys } from '$lib/format';
   import { effectiveMotion } from '$lib/motion';
   import { Clock } from 'lucide-svelte';
 
@@ -40,23 +44,41 @@ import { parseServerDate } from '$lib/format';
     recording_id?: string;
   }
 
+  // Minimal shape of a completed periodic timelapse merge used for the top
+  // strip layer. Decoupled from the full TimelapseMerge so the page can pass a
+  // projected subset.
+  export interface TimelineMergeMark {
+    id: number;
+    camera_id: string;
+    window_start: string; // ISO timestamp
+    window_end: string; // ISO timestamp
+    duration_label: string; // "8h" / "natural-day" / "7d" / ...
+    frame_count: number;
+    file_size: number;
+  }
+
   interface Props {
     cameras: Camera[];
     recordings: TimelineRecording[];
     selectedDate: string; // YYYY-MM-DD
     onseek: (recordingId: string, offsetSeconds: number) => void;
     aiEvents?: TimelineAIEvent[]; // optional AI event markers overlay
+    merges?: TimelineMergeMark[]; // completed merges intersecting the day
+    onplaymerge?: (mergeId: number) => void; // click on a merge strip
   }
 
-  let { cameras, recordings, selectedDate, onseek, aiEvents }: Props = $props();
+  let { cameras, recordings, selectedDate, onseek, aiEvents, merges, onplaymerge }: Props = $props();
 
   // ── Derived: group recordings by camera, build TimelineSegment[] per camera ──
   interface CameraRow {
     camera: Camera;
-    segments: TimelineSegment[]; // seconds-from-midnight, for findSegmentAt
-    bands: CoverageBand[]; // render data
-    coverageSec: number; // total recorded seconds
+    segments: TimelineSegment[]; // seconds-from-midnight, for findSegmentAt (video only)
+    bands: CoverageBand[]; // render data (video formats only)
+    coverageSec: number; // total recorded seconds (video formats only)
     pendingCount: number; // un-merged segments (still fragments)
+    tlFrags: TLFragment[]; // raw timelapse segments (point samples)
+    tlRibbons: TLRibbon[]; // visually coalesced ranges of tlFrags
+    mergeStrips: MergeStrip[]; // completed merges intersecting the day (≤2 layers)
   }
 
   interface CoverageBand {
@@ -69,6 +91,34 @@ import { parseServerDate } from '$lib/format';
     motionConfidence: number; // -1 = pre-#634 row (#634)
   }
 
+  interface TLFragment {
+    recordingId: string;
+    startSec: number;
+    endSec: number;
+  }
+
+  // A dotted ribbon is a VISUAL coalescing of adjacent timelapse fragments.
+  // The #733 bug period wrote ~150s/6-frame fragments on every JPEG-camera
+  // reconnect (206/day observed) — rendering those individually would produce
+  // an unreadable mess of hairlines. Hit resolution stays per-fragment.
+  interface TLRibbon {
+    startSec: number;
+    endSec: number;
+    fragCount: number;
+  }
+
+  // Adjacent timelapse windows closer than this render as one ribbon.
+  const TL_RIBBON_GAP_SEC = 120;
+
+  interface MergeStrip {
+    merge: TimelineMergeMark;
+    startSec: number; // intersection of the merge window with the day
+    endSec: number;
+    layer: number; // 0 = topmost; overlapping windows stack, max 2 layers
+  }
+
+  const MERGE_STRIP_LAYERS = 2;
+
   const DAY_SECONDS = 86400;
   const dayStartMs = $derived(parseDayStart(selectedDate));
 
@@ -80,6 +130,13 @@ import { parseServerDate } from '$lib/format';
       list.push(r);
       byCam.set(r.camera_id, list);
     }
+    // Group merges by camera
+    const mergesByCam = new Map<string, TimelineMergeMark[]>();
+    for (const m of merges ?? []) {
+      const list = mergesByCam.get(m.camera_id) ?? [];
+      list.push(m);
+      mergesByCam.set(m.camera_id, list);
+    }
     const result: CameraRow[] = [];
     for (const cam of cameras) {
       const recs = (byCam.get(cam.id) ?? []).slice().sort(
@@ -87,6 +144,7 @@ import { parseServerDate } from '$lib/format';
       );
       const bands: CoverageBand[] = [];
       const segs: TimelineSegment[] = [];
+      const tlFrags: TLFragment[] = [];
       let coverageSec = 0;
       let pendingCount = 0;
       for (const r of recs) {
@@ -95,6 +153,12 @@ import { parseServerDate } from '$lib/format';
         const startSec = clampDay(epochMsToDaySec(startMs, dayStartMs));
         const endSec = clampDay(epochMsToDaySec(endMs, dayStartMs));
         if (endSec <= startSec) continue;
+        if (r.format === 'timelapse') {
+          // Timelapse rows never count as coverage — their span is a capture
+          // window of sparse point samples, not continuous recording.
+          tlFrags.push({ recordingId: r.id, startSec, endSec });
+          continue;
+        }
         bands.push({
           recordingId: r.id,
           startSec,
@@ -108,12 +172,65 @@ import { parseServerDate } from '$lib/format';
         coverageSec += endSec - startSec;
         if (r.merge_status === 'pending' || r.merge_status === '') pendingCount++;
       }
-      result.push({ camera: cam, segments: segs, bands, coverageSec, pendingCount });
+      result.push({
+        camera: cam,
+        segments: segs,
+        bands,
+        coverageSec,
+        pendingCount,
+        tlFrags,
+        tlRibbons: coalesceRibbons(tlFrags),
+        mergeStrips: buildMergeStrips(mergesByCam.get(cam.id) ?? []),
+      });
     }
     return result;
   });
 
-  const hasAnyRecordings = $derived(rows.some((r) => r.bands.length > 0));
+  function coalesceRibbons(frags: TLFragment[]): TLRibbon[] {
+    const sorted = frags.slice().sort((a, b) => a.startSec - b.startSec);
+    const ribbons: TLRibbon[] = [];
+    for (const f of sorted) {
+      const last = ribbons[ribbons.length - 1];
+      if (last && f.startSec - last.endSec <= TL_RIBBON_GAP_SEC) {
+        last.endSec = Math.max(last.endSec, f.endSec);
+        last.fragCount++;
+      } else {
+        ribbons.push({ startSec: f.startSec, endSec: f.endSec, fragCount: 1 });
+      }
+    }
+    return ribbons;
+  }
+
+  // Merge strips: intersect each merge window with the day, then stack
+  // overlapping windows greedily into ≤MERGE_STRIP_LAYERS layers (widest
+  // window first so day-scale merges sit on the top layer). Windows beyond
+  // the layer cap are dropped — the exhaustive list lives in the history card.
+  function buildMergeStrips(list: TimelineMergeMark[]): MergeStrip[] {
+    const spans = list
+      .map((m) => {
+        const ws = clampDay(epochMsToDaySec(parseServerDate(m.window_start).getTime(), dayStartMs));
+        const we = clampDay(epochMsToDaySec(parseServerDate(m.window_end).getTime(), dayStartMs));
+        return { merge: m, startSec: ws, endSec: we };
+      })
+      .filter((s) => s.endSec > s.startSec)
+      .sort((a, b) => b.endSec - b.startSec - (a.endSec - a.startSec));
+    const layers: Array<Array<{ startSec: number; endSec: number }>> = [];
+    const strips: MergeStrip[] = [];
+    for (const s of spans) {
+      let placed = false;
+      for (let li = 0; li < MERGE_STRIP_LAYERS && !placed; li++) {
+        const layer = layers[li] ?? (layers[li] = []);
+        if (layer.every((o) => s.startSec >= o.endSec || s.endSec <= o.startSec)) {
+          layer.push(s);
+          strips.push({ ...s, layer: li });
+          placed = true;
+        }
+      }
+    }
+    return strips.sort((a, b) => a.layer - b.layer || a.startSec - b.startSec);
+  }
+
+  const hasAnyRecordings = $derived(rows.some((r) => r.bands.length > 0 || r.tlFrags.length > 0));
 
   // ── AI event markers per camera row ──
   // Each event maps to a position on the 24h axis (seconds-from-midnight). High-
@@ -252,8 +369,97 @@ import { parseServerDate } from '$lib/format';
     const parts = [secToClock(marker.sec), eventTypeLabel(marker.event.event_type)];
     if (marker.event.class_name) parts.push(classLabel(marker.event.class_name));
     if (marker.count > 1) parts.push(`×${marker.count}`);
-    return parts.join(' · ');
+    return parts.join(' ');
   }
+
+  // ── Timelapse ribbon (raw point samples) ──
+  // Ribbon clicks resolve to the INDIVIDUAL fragment under the cursor even
+  // though neighboring fragments render coalesced; a click inside a coalesced
+  // gap snaps to the nearest fragment.
+  function resolveRibbonTarget(row: CameraRow, sec: number): { recordingId: string; offset: number } | null {
+    if (row.tlFrags.length === 0) return null;
+    let best: TLFragment | null = null;
+    let bestDist = Infinity;
+    for (const f of row.tlFrags) {
+      if (sec >= f.startSec && sec < f.endSec) {
+        return { recordingId: f.recordingId, offset: Math.floor(sec - f.startSec) };
+      }
+      const dist = sec < f.startSec ? f.startSec - sec : sec - f.endSec;
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = f;
+      }
+    }
+    if (!best) return null;
+    return { recordingId: best.recordingId, offset: Math.max(0, Math.floor(sec - best.startSec)) };
+  }
+
+  let hoveredRibbon = $state<TLRibbon | null>(null);
+  let hoveredRibbonCam = $state<string>('');
+  let ribbonTooltipX = $state(0);
+  let ribbonTooltipY = $state(0);
+
+  function onRibbonEnter(e: MouseEvent, ribbon: TLRibbon, camId: string) {
+    e.stopPropagation();
+    hoveredRibbon = ribbon;
+    hoveredRibbonCam = camId;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    ribbonTooltipX = rect.left + rect.width / 2;
+    ribbonTooltipY = rect.top;
+  }
+  function onRibbonLeave() {
+    hoveredRibbon = null;
+    hoveredRibbonCam = '';
+  }
+
+  function onRibbonClick(e: MouseEvent, row: CameraRow) {
+    e.stopPropagation();
+    // xToSec relies on trackEl, which is only assigned on track clicks —
+    // resolve the track (ribbon's parent) directly from the event target.
+    const track = (e.currentTarget as HTMLElement).parentElement;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const target = resolveRibbonTarget(row, ratio * DAY_SECONDS);
+    if (target) onseek(target.recordingId, target.offset);
+  }
+
+  // ── Merge strips (completed periodic merges, click-to-play) ──
+  function mergeDurationLabel(label: string): string {
+    const key = mergeDurationI18nKeys[label];
+    return key ? t(key) : label;
+  }
+
+  function stripTooltipLabel(strip: MergeStrip): string {
+    const m = strip.merge;
+    return [
+      formatMergeWindowLabel(m.window_start, m.duration_label),
+      mergeDurationLabel(m.duration_label),
+      `${m.frame_count} ${t('timelapseMerge.framesUnit')}`,
+      formatFileSize(m.file_size),
+    ].join(' · ');
+  }
+
+  let hoveredStrip = $state<MergeStrip | null>(null);
+  let stripTooltipX = $state(0);
+  let stripTooltipY = $state(0);
+
+  function onStripEnter(e: MouseEvent, strip: MergeStrip) {
+    e.stopPropagation();
+    hoveredStrip = strip;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    stripTooltipX = rect.left + rect.width / 2;
+    stripTooltipY = rect.top;
+  }
+  function onStripLeave() {
+    hoveredStrip = null;
+  }
+
+  function onStripClick(e: MouseEvent, strip: MergeStrip) {
+    e.stopPropagation();
+    onplaymerge?.(strip.merge.id);
+  }
+
 
   // ── Motion heat (#435) ──
   // When on, video bands with an analyzed motion_score are colored by activity
@@ -277,12 +483,13 @@ import { parseServerDate } from '$lib/format';
   }
 
   // ── Format → color (matches gallery card format conventions) ──
+  // timelapse formats never reach here — they render as the bottom dotted
+  // sample ribbon instead of a coverage band (see rows derived).
   function bandClass(band: CoverageBand): string {
     const fmt = band.format;
-    // blue=h264/h265, purple=avi, cyan=timelapse, gray=mjpeg
+    // blue=h264/h265, purple=avi, gray=mjpeg
     if (fmt === 'h264' || fmt === 'h265') return 'band-video';
     if (fmt === 'avi') return 'band-avi';
-    if (fmt === 'timelapse') return 'band-timelapse';
     if (fmt === 'mjpeg') return 'band-mjpeg';
     return 'band-video';
   }
@@ -406,6 +613,7 @@ import { parseServerDate } from '$lib/format';
 
     {#each rows as row (row.camera.id)}
       {@const hasRecs = row.bands.length > 0}
+      {@const hasAnyLayer = hasRecs || row.tlRibbons.length > 0 || row.mergeStrips.length > 0}
       <div class="flex items-center gap-2 group">
         <!-- Camera label -->
         <div class="w-[150px] sm:w-[190px] shrink-0 pr-2 text-right">
@@ -413,7 +621,11 @@ import { parseServerDate } from '$lib/format';
             {cameraName(row.camera)}
           </div>
           <div class="text-[10px] th-text-tertiary tabular-nums">
-            {coveragePct(row)}% · {row.bands.length}{#if row.pendingCount > 0} <span class="th-color-warning">({row.pendingCount} ⚠)</span>{/if}
+            {#if hasRecs}
+              {coveragePct(row)}% · {row.bands.length}{#if row.pendingCount > 0} <span class="th-color-warning">({row.pendingCount} ⚠)</span>{/if}{#if row.tlRibbons.length > 0} <span title={t('library.legendTimelapseSample')}>⏱</span>{/if}
+            {:else if row.tlFrags.length > 0}
+              ⏱ {row.tlFrags.length} {t('library.timelapseSegUnit')}
+            {/if}
           </div>
         </div>
 
@@ -438,17 +650,53 @@ import { parseServerDate } from '$lib/format';
             }
           }}
         >
-          {#if !hasRecs}
+          {#if !hasAnyLayer}
             <div class="absolute inset-0 flex items-center justify-center">
               <span class="text-[10px] th-text-tertiary opacity-50">—</span>
             </div>
           {:else}
-            {#each row.bands as band (band.recordingId + band.startSec)}
+            {#if hasRecs}
+              {#each row.bands as band (band.recordingId + band.startSec)}
+                <div
+                  class="absolute top-0 bottom-0 band {bandClass(band)}"
+                  style="left: {(band.startSec / DAY_SECONDS) * 100}%; width: {((band.endSec - band.startSec) / DAY_SECONDS) * 100}%; {bandHeatStyle(band) ?? ''}"
+                  onmouseenter={(e) => onBandEnter(e, band, row.camera.id)}
+                  onmouseleave={onBandLeave}
+                  role="presentation"
+                ></div>
+              {/each}
+            {/if}
+
+            <!-- Completed periodic merges: solid strips along the top edge —
+                 the click-to-play entry into merged timelapse outputs.
+                 mousedown MUST stop propagation: the track arms its drag-seek
+                 on mousedown, and a 1-2px hand jitter during the click would
+                 fire a video-seek navigation before this button's click. -->
+            {#each row.mergeStrips as strip (`ms-${strip.merge.id}`)}
+              <button
+                type="button"
+                class="merge-strip"
+                style="left: {(strip.startSec / DAY_SECONDS) * 100}%; width: {Math.max(0.4, ((strip.endSec - strip.startSec) / DAY_SECONDS) * 100)}%; top: {strip.layer * 9}px;"
+                onclick={(e) => onStripClick(e, strip)}
+                onmousedown={(e) => e.stopPropagation()}
+                onmouseenter={(e) => onStripEnter(e, strip)}
+                onmouseleave={onStripLeave}
+                title={stripTooltipLabel(strip)}
+                aria-label={stripTooltipLabel(strip)}
+              ></button>
+            {/each}
+
+            <!-- Raw timelapse point samples: dotted ribbon along the bottom
+                 edge. Clicks resolve to the individual fragment underneath
+                 (mousedown swallowed for the same drag-seek reason). -->
+            {#each row.tlRibbons as ribbon, i (`tlr-${row.camera.id}-${i}`)}
               <div
-                class="absolute top-0 bottom-0 band {bandClass(band)}"
-                style="left: {(band.startSec / DAY_SECONDS) * 100}%; width: {((band.endSec - band.startSec) / DAY_SECONDS) * 100}%; {bandHeatStyle(band) ?? ''}"
-                onmouseenter={(e) => onBandEnter(e, band, row.camera.id)}
-                onmouseleave={onBandLeave}
+                class="tl-ribbon"
+                style="left: {(ribbon.startSec / DAY_SECONDS) * 100}%; width: {Math.max(0.4, ((ribbon.endSec - ribbon.startSec) / DAY_SECONDS) * 100)}%"
+                onclick={(e) => onRibbonClick(e, row)}
+                onmousedown={(e) => e.stopPropagation()}
+                onmouseenter={(e) => onRibbonEnter(e, ribbon, row.camera.id)}
+                onmouseleave={onRibbonLeave}
                 role="presentation"
               ></div>
             {/each}
@@ -466,6 +714,7 @@ import { parseServerDate } from '$lib/format';
                   title={markerTooltipLabel(marker) + (reachable ? '' : ' · ' + t('library.aiMarkerNoRecording'))}
                   aria-label={markerTooltipLabel(marker)}
                   onclick={(e) => reachable && onMarkerClick(e, row, marker)}
+                  onmousedown={(e) => e.stopPropagation()}
                   onmouseenter={(e) => onMarkerEnter(e, marker, row.camera.id)}
                   onmouseleave={onMarkerLeave}
                   disabled={!reachable}
@@ -502,23 +751,44 @@ import { parseServerDate } from '$lib/format';
     {/each}
 
     <!-- Legend -->
-    <div class="flex items-center gap-4 pl-[160px] sm:pl-[200px] pt-3 text-[10px] th-text-tertiary">
+    <div class="flex items-center gap-4 pl-[160px] sm:pl-[200px] pt-3 text-[10px] th-text-tertiary flex-wrap">
       <span class="flex items-center gap-1"><span class="band-legend band-video"></span>{t('library.legendVideo')}</span>
       <span class="flex items-center gap-1"><span class="band-legend band-avi"></span>AVI</span>
-      <span class="flex items-center gap-1"><span class="band-legend band-timelapse"></span>Timelapse</span>
       <span class="flex items-center gap-1"><span class="band-legend band-mjpeg"></span>MJPEG</span>
+      <span class="flex items-center gap-1"><span class="band-legend tl-ribbon-legend"></span>{t('library.legendTimelapseSample')}</span>
+      <span class="flex items-center gap-1"><span class="band-legend merge-strip-legend"></span>{t('library.legendTimelapseMerge')}</span>
       <span class="ml-auto">{t('library.timelineHint')}</span>
     </div>
   </div>
 {/if}
 
-<!-- Hover tooltip (portal to body to avoid clipping) -->
+<!-- Band hover tooltip (portal to body to avoid clipping) -->
 {#if hoveredBand}
   <div
     class="fixed z-50 pointer-events-none px-2 py-1 rounded bg-black/85 dark:bg-white/90 text-white dark:text-black text-[11px] tabular-nums shadow-lg"
     style="left: {tooltipX}px; top: {tooltipY - 36}px; transform: translateX(-50%)"
   >
     {bandTimeRange(hoveredBand)} · {formatLength(hoveredBand.endSec - hoveredBand.startSec)} · {hoveredBand.format}{#if hoveredBand.motionScore >= 0} · {t('recordings.motionShort')} {(effectiveMotion({ motion_score: hoveredBand.motionScore, motion_confidence: hoveredBand.motionConfidence }) ?? 0).toFixed(2)}{/if}
+  </div>
+{/if}
+
+<!-- Timelapse sample ribbon hover tooltip -->
+{#if hoveredRibbon}
+  <div
+    class="fixed z-50 pointer-events-none px-2 py-1 rounded bg-black/85 dark:bg-white/90 text-white dark:text-black text-[11px] tabular-nums shadow-lg"
+    style="left: {ribbonTooltipX}px; top: {ribbonTooltipY - 36}px; transform: translateX(-50%)"
+  >
+    {secToClock(hoveredRibbon.startSec)} – {secToClock(hoveredRibbon.endSec)} · {t('library.legendTimelapseSample')} · {hoveredRibbon.fragCount} {t('library.timelapseSegUnit')}
+  </div>
+{/if}
+
+<!-- Merge strip hover tooltip -->
+{#if hoveredStrip}
+  <div
+    class="fixed z-50 pointer-events-none px-2 py-1 rounded bg-black/85 dark:bg-white/90 text-white dark:text-black text-[11px] tabular-nums shadow-lg"
+    style="left: {stripTooltipX}px; top: {stripTooltipY - 36}px; transform: translateX(-50%)"
+  >
+    {stripTooltipLabel(hoveredStrip)} · {t('library.mergeStripClickHint')}
   </div>
 {/if}
 
@@ -562,11 +832,65 @@ import { parseServerDate } from '$lib/format';
   .band-avi {
     background: #8b5cf6; /* violet-500 */
   }
-  .band-timelapse {
-    background: #06b6d4; /* cyan-500 */
-  }
   .band-mjpeg {
     background: #6b7280; /* gray-500 */
+  }
+  /* Raw timelapse point samples — dotted cyan ribbon along the track's bottom
+     edge. Dotted (vs the solid video bands) reads as "sampled", not coverage. */
+  .tl-ribbon {
+    position: absolute;
+    bottom: 0;
+    height: 6px;
+    min-width: 2px;
+    border-radius: 1px;
+    background-image: repeating-linear-gradient(90deg, rgba(6, 182, 212, 0.95) 0 3px, rgba(6, 182, 212, 0.25) 3px 6px);
+    cursor: pointer;
+    z-index: 3;
+  }
+  .tl-ribbon:hover {
+    background-image: repeating-linear-gradient(90deg, #06b6d4 0 3px, rgba(6, 182, 212, 0.5) 3px 6px);
+  }
+  /* Completed periodic merges — solid cyan strips along the top edge; the
+     click-to-play entry into merged timelapse outputs. 8px bar + an invisible
+     3px hit-extension above/below (clicks on the ::before land on the button)
+     so the entry is comfortably clickable without eating the track. */
+  .merge-strip {
+    position: absolute;
+    height: 8px;
+    min-width: 4px;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    border-radius: 1px;
+    background: linear-gradient(180deg, #22d3ee, #0891b2);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    z-index: 4;
+    transition: filter 0.12s, transform 0.12s;
+    transform-origin: top;
+  }
+  .merge-strip::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -3px;
+    bottom: -3px;
+  }
+  .merge-strip:hover {
+    filter: brightness(1.2);
+    transform: scaleY(1.3);
+  }
+  .merge-strip:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 1px;
+    z-index: 6;
+  }
+  .tl-ribbon-legend {
+    background-image: repeating-linear-gradient(90deg, #06b6d4 0 3px, rgba(6, 182, 212, 0.3) 3px 6px);
+  }
+  .merge-strip-legend {
+    background: linear-gradient(180deg, #22d3ee, #0891b2);
   }
   /* AI event markers — thin vertical bars with a triangular tip, sitting above
      the recording bands. Clickable (button) so keyboard/AT users can reach them. */

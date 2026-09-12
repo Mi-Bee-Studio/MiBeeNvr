@@ -138,7 +138,7 @@
   let tlSpeed = $state(1);
   let tlLoading = $state(false);
   let tlError = $state('');
-  const tlSpeeds = [1, 2, 4];
+  const tlSpeeds = [0.5, 1, 2, 4, 8, 16, 32];
   let tlAbortController: AbortController | null = null;
   let tlLoop = $state(false);
 
@@ -488,7 +488,9 @@
     }
     videoCurrentTime = video.currentTime;
     videoDuration = video.duration || 0;
-    if (video.duration && video.currentTime / video.duration > 0.8 && !nextRecordingId) prefetchNextRecording();
+      // Arm the standby early enough for high playback rates (at 32x the
+      // last 20% of a segment is ~1s — far too late to buffer the next).
+      if (video.duration && video.currentTime / video.duration > 0.5 && !nextRecordingId) prefetchNextRecording();
   }
 
   // Direct-playback URL for a recording, or null when it is not <video>-playable
@@ -750,8 +752,17 @@
     const video = e.target as HTMLVideoElement;
     videoDuration = video.duration || 0;
     if (pendingTimelineSeekOffset != null && video) {
-      video.currentTime = Math.min(pendingTimelineSeekOffset, video.duration || pendingTimelineSeekOffset);
+      const off = Math.min(pendingTimelineSeekOffset, video.duration || pendingTimelineSeekOffset);
+      // Offsets of ~0 get nudged one frame in as well: seeking forces the
+      // browser to decode + PAINT that frame, so a paused entry (user hasn't
+      // pressed play) shows a freeze-frame instead of a black canvas.
+      video.currentTime = off > 0.1 ? off : 0.04;
       pendingTimelineSeekOffset = null;
+      return;
+    }
+    // Freeze-frame the first frame on paused entry (same paint-on-seek trick).
+    if (video.paused && video.currentTime < 0.05) {
+      video.currentTime = 0.04;
     }
   }
   function handleVideoLoadedData(e: Event) {
@@ -917,10 +928,17 @@
 
   // --- Timelapse JPEG cycler (MjpegSequencePlayer-backed) ---
   async function initTimelapsePlayer() {
+    // Continuous chaining through the host fallback path: the segment switch
+    // was triggered by end-of-sequence, so playback must RESUME once the
+    // next segment's frames land — and the play button must not flip to
+    // "play" for the ~200ms load (a 3-hops/s strobe on fragmented cameras).
+    const resumeAfterLoad = seqChainPending;
+    seqChainPending = false;
     tlLoading = true;
     tlError = '';
-    tlIsPlaying = false;
+    if (!resumeAfterLoad) tlIsPlaying = false;
     tlCurrentFrame = 0;
+    seqNext = null;
     tlAbortController?.abort();
     tlAbortController = new AbortController();
     const signal = tlAbortController.signal;
@@ -933,6 +951,7 @@
         pendingTimelineSeekOffset = null;
         tlSeek(target);
       }
+      if (resumeAfterLoad && timelapseFrames.length > 0) tlIsPlaying = true;
     } catch (e) {
       if (signal.aborted) return;
       console.error('Failed to load timelapse frames:', e);
@@ -940,12 +959,106 @@
       timelapseFrames = [];
     } finally {
       tlLoading = false;
+      // Arm the next-segment prefetch as soon as this segment's frames are
+      // in — at 32x playback the 80%-trigger fires only ~0.1s before the
+      // end, far too late for the two prefetch round-trips.
+      if (!signal.aborted && timelapseFrames.length > 0) void prefetchNextSeq();
     }
   }
 
-  // The sequence player reports end-of-sequence; navigate to the next segment
-  // (batch fetching makes the transition one request, not N).
+  // --- Seamless sequence chaining (cycler modes: mjpeg/avi/timelapse) ---
+  // Mirror of the video double-buffer adoption: near the end of the current
+  // segment, prefetch the NEXT segment's frame list; on end, swap it in
+  // WITHOUT re-running the recording-change effect (lastLoadedId is set
+  // first) and WITHOUT unmounting the canvas (resetKey soft-reset) — the
+  // last frame stays on screen until the first new frame decodes. No
+  // spinner, no flash.
+  let seqNext: { rec: Recording; frames: TimelapseFrame[] } | null = null;
+  let seqPrefetching = false;
+
+  async function prefetchNextSeq() {
+    if (seqPrefetching || seqNext || !recording) return;
+    seqPrefetching = true;
+    try {
+      const next = await loadNextRecording();
+      if (!next || next.format !== recording.format) return;
+      const frames = await getTimelapseFrames(next.id);
+      if (frames.length > 0) seqNext = { rec: next, frames };
+    } catch {
+      /* silent — ended falls back to the host navigation */
+    } finally {
+      seqPrefetching = false;
+    }
+  }
+
+  // Backstop prefetch trigger at mid-segment (the primary arms are at load
+  // completion and after each seamless adoption).
+  $effect(() => {
+    if (playbackMode !== 'timelapse') return;
+    if (timelapseFrames.length > 0 && tlCurrentFrame >= timelapseFrames.length * 0.5) {
+      void prefetchNextSeq();
+    }
+  });
+
+  // Set by handleSequenceEnded's fallback path so initTimelapsePlayer knows
+  // to resume playback after the host-driven in-place segment switch loads.
+  let seqChainPending = false;
+
+  // Metadata-facing recording (TimelineBar's summary + current-segment
+  // chrome). Seamless chaining swaps `recording` up to ~3×/s on fragmented
+  // cameras — feeding that straight into the metadata UI recreates its DOM
+  // on every hop (observed: 462 summary + 347 container mutations in 12s),
+  // which reads as flashing. Id changes are throttled to 1/s with a
+  // trailing flush; playback-facing state keeps using `recording` directly.
+  let metaRec = $state<Recording | null>(null);
+  let metaRecFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  let metaRecLastSwap = 0;
+  $effect(() => {
+    const r = recording;
+    if (!r) {
+      metaRec = null;
+      return;
+    }
+    if (metaRec?.id === r.id) return;
+    const elapsed = Date.now() - metaRecLastSwap;
+    if (metaRecFlushTimer) {
+      clearTimeout(metaRecFlushTimer);
+      metaRecFlushTimer = null;
+    }
+    if (elapsed >= 1000) {
+      metaRec = r;
+      metaRecLastSwap = Date.now();
+    } else {
+      metaRecFlushTimer = setTimeout(() => {
+        metaRec = recording;
+        metaRecLastSwap = Date.now();
+        metaRecFlushTimer = null;
+      }, 1000 - elapsed);
+    }
+  });
+
+  // The sequence player reports end-of-sequence; chain seamlessly into the
+  // prefetched next segment (batch fetching makes the transition one
+  // request, not N). Mode changes (no same-format next) fall back to the
+  // host's in-place navigation — flagged so playback resumes after load.
   function handleSequenceEnded() {
+    if (seqNext) {
+      const { rec, frames } = seqNext;
+      seqNext = null;
+      // Suppress the recording-change effect — this is an adoption, not a
+      // reload (mirrors adoptStandby's contract with the host).
+      lastLoadedId = rec.id;
+      oncrosssegment?.(rec); // host swaps currentId/recording/URL in place
+      timelapseFrames = frames; // resetKey (currentId) soft-resets the canvas
+      tlCurrentFrame = 0;
+      pendingTimelineSeekOffset = null;
+      tlIsPlaying = true; // keep playing — no pause, no flash
+      // Re-arm the prefetch for the segment after the adopted one (deferred:
+      // the `recording` prop only reflects the host's swap after the flush).
+      queueMicrotask(() => void prefetchNextSeq());
+      return;
+    }
+    seqChainPending = true;
     ongotonext();
   }
 
@@ -1056,6 +1169,15 @@
   });
 
   // --- Public API (host's keyboard dispatcher forwards to these) ---
+  // Deterministic pause (both playback modes) — used when the host toggles
+  // this panel out of view (RecordingDetail's embedded merge-player mode):
+  // a hidden but playing element would keep consuming decode + audio.
+  export function pausePlayback() {
+    const v = videoEl;
+    if (v && !v.paused) v.pause();
+    tlIsPlaying = false;
+  }
+
   export function handleKeyAction(key: string) {
     if (!recording) return;
     const f = recording.format;
@@ -1177,6 +1299,7 @@
     duration={videoDuration}
     isPlaying={videoIsPlaying}
     playbackRate={videoSpeed}
+    speeds={[0.5, 1, 2, 4, 8, 16, 32]}
     buffered={videoBuffered}
     isLooping={videoLoop}
     ontoggleplay={() => { if (videoEl) { if (videoEl.paused) videoEl.play(); else videoEl.pause(); } }}
@@ -1198,7 +1321,7 @@
     <TimelineBar
       cameraId={recording.camera_id}
       date={timelineDate()}
-      currentRecording={recording}
+      currentRecording={metaRec}
       currentVideoTime={videoCurrentTime}
       onseek={handleTimelineSeek}
       showEvents={true}
@@ -1226,43 +1349,30 @@
     </div>
   </div>
 {:else if playbackMode === 'timelapse'}
-  {#if tlLoading}
-    <div class="flex items-center justify-center h-64 bg-black">
-      <div class="spinner spinner-lg"></div>
-      <span class="th-text-muted ml-3">{t('detail.loadingFrames')}</span>
-    </div>
-  {:else if tlError}
-    <div class="flex items-center justify-center h-64 bg-black">
-      <div class="text-center th-text-muted">
-        <AlertTriangle size={48} class="mx-auto mb-2" />
-        <p>{tlError}</p>
-      </div>
-    </div>
-  {:else if timelapseFrames.length === 0}
-    <div class="flex items-center justify-center h-64 bg-black">
-      <div class="text-center th-text-muted">
-        <HelpCircle size={48} class="mx-auto mb-2" />
-        <p>{t('detail.noFrames')}</p>
-      </div>
-    </div>
-  {:else}
+  {#if timelapseFrames.length > 0}
+    <!-- Frames known: keep the player mounted at ALL times (segment switches
+         included). Mid-switch loads hold the last painted frame with NO
+         overlay — a spinner strobing on every hop of short segments reads
+         as flashing; the first-load branch below covers the cold start. -->
+    <div class="relative">
     <!-- Frame display: multipart batch fetch + canvas rendering (no per-frame
-         GETs, no <img src> swaps → no stutter, no flicker). Keyed by recording
-         so caches reset on segment change. -->
+         GETs, no <img src> swaps → no stutter, no flicker). NOT keyed by
+         recording — the soft resetKey resets the caches while the canvas
+         element (and its last frame) survives, which is what makes the
+         seamless seq chaining flash-free. -->
     <div class="timelapse-container relative overflow-hidden flex items-center justify-center bg-black min-h-[200px]">
-      {#key currentId}
-        <MjpegSequencePlayer
-          frameCount={timelapseFrames.length}
-          fps={10}
-          fetchBatch={(offset, limit, signal) => fetchRecordingFrameBatch(currentId, offset, limit, signal)}
-          bind:currentIndex={tlCurrentFrame}
-          bind:playing={tlIsPlaying}
-          bind:speed={tlSpeed}
-          loop={tlLoop}
-          showControls={false}
-          onEnded={handleSequenceEnded}
-        />
-      {/key}
+      <MjpegSequencePlayer
+        frameCount={timelapseFrames.length}
+        fps={10}
+        fetchBatch={(offset, limit, signal) => fetchRecordingFrameBatch(currentId, offset, limit, signal)}
+        bind:currentIndex={tlCurrentFrame}
+        bind:playing={tlIsPlaying}
+        bind:speed={tlSpeed}
+        loop={tlLoop}
+        showControls={false}
+        resetKey={currentId}
+        onEnded={handleSequenceEnded}
+      />
     </div>
 
     <!-- Inline merge controls -->
@@ -1415,12 +1525,33 @@
       <TimelineBar
         cameraId={recording.camera_id}
         date={timelineDate()}
-        currentRecording={recording}
+        currentRecording={metaRec}
         currentVideoTime={cyclerOffsetSec()}
         onseek={handleCyclerTimelineSeek}
         showEvents={true}
       />
     {/if}
+    </div>
+  {:else if tlLoading}
+    <!-- First load: no frames known yet. -->
+    <div class="flex items-center justify-center h-64 bg-black">
+      <div class="spinner spinner-lg"></div>
+      <span class="th-text-muted ml-3">{t('detail.loadingFrames')}</span>
+    </div>
+  {:else if tlError}
+    <div class="flex items-center justify-center h-64 bg-black">
+      <div class="text-center th-text-muted">
+        <AlertTriangle size={48} class="mx-auto mb-2" />
+        <p>{tlError}</p>
+      </div>
+    </div>
+  {:else}
+    <div class="flex items-center justify-center h-64 bg-black">
+      <div class="text-center th-text-muted">
+        <HelpCircle size={48} class="mx-auto mb-2" />
+        <p>{t('detail.noFrames')}</p>
+      </div>
+    </div>
   {/if}
 {:else if playbackMode === 'avi'}
   <AviPlayback recordingId={currentId} />

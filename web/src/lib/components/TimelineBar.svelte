@@ -148,11 +148,20 @@
     return (offsetSec / windowSpanSec) * 100;
   });
 
-  // Load segments for the camera + date
+  // Load segments for the camera + date. Idempotence guard: Svelte 5 props
+  // are mutable sources — the parent template re-assigns them on EVERY
+  // parent render (even with equal values, e.g. while `currentVideoTime`
+  // updates per frame), which re-runs this effect ~13×/s during seamless
+  // chaining and rebuilds the whole bar (a visible strobe). Only reload
+  // when the load key actually changed.
+  let loadedKey = '';
   $effect(() => {
     const cid = cameraId;
     const d = date;
     if (!cid || !d) return;
+    const key = cid + '|' + d + '|' + (showEvents ? 1 : 0);
+    if (key === loadedKey) return;
+    loadedKey = key;
     void loadSegments(cid, d);
     if (showEvents) void loadAIEvents(cid, d);
   });

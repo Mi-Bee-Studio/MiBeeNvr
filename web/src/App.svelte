@@ -9,7 +9,10 @@
     setup: () => import('./routes/Setup.svelte'),
     recordings: () => import('./routes/Recordings.svelte'),
     'recording-detail': () => import('./routes/RecordingDetail.svelte'),
-    'timelapse-merge': () => import('./routes/TimelapseMergeDetail.svelte'),
+    // Unified viewer: the same RecordingDetail hosts both playback modes — a
+    // timelapse-merge URL just initializes it in merge mode (with the anchor
+    // recording embedded when one exists inside the merge window).
+    'timelapse-merge': () => import('./routes/RecordingDetail.svelte'),
     cameras: () => import('./routes/Cameras.svelte'),
     'cameras-detail': () => import('./routes/Cameras.svelte'),
     live: () => import('./routes/LiveView.svelte'),
@@ -302,7 +305,7 @@ function parseRoute(hash: string) {
     <module.default />
   {/await}
 {:else}
-  <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live'} />
+  <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'timelapse-merge' || currentRoute === 'live'} />
   <!-- Compute route props OUTSIDE the {#await} block so they update reactively
        when params change (even if currentRoute name stays the same, e.g.
        navigating from recording A to recording B). Inside {#await}, expressions

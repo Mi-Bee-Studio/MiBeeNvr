@@ -89,6 +89,21 @@ export function formatMergeWindowLabel(windowStart: string, durationLabel: strin
 }
 
 /**
+ * Short duration-label → i18n key map for timelapse merges (the settings
+ * editor uses longer variants like "自然日（按午夜对齐）"). Shared by the
+ * merge-history list and the timeline merge-strip tooltips.
+ */
+export const mergeDurationI18nKeys: Record<string, string> = {
+  '1h': 'timelapseMerge.duration1h',
+  '8h': 'timelapseMerge.duration8h',
+  '12h': 'timelapseMerge.duration12h',
+  '24h': 'timelapseMerge.duration24h',
+  '7d': 'timelapseMerge.duration7d',
+  '30d': 'timelapseMerge.duration30d',
+  'natural-day': 'timelapseMerge.durationNaturalDay',
+};
+
+/**
  * Format bytes to a human-readable file size string.
  * e.g. "1.50 GB"
  */
