@@ -38,7 +38,8 @@ import (
 //   - For rows with a separate merge_path (rolling/periodic merge output), the
 //     merge_path file is also removed so it doesn't linger as an orphan that
 //     orphan-cleanup can't sweep (it doesn't match the <cameraID>_* pattern).
-//   - --dry-run default; --execute to apply. 20ms throttle between deletes.
+//   - --dry-run default; --execute to apply. Chunked batch DELETE (300 rows/txn,
+//     #753) with per-row fallback; 20ms throttle between chunks.
 func runRepairDeleteByFormat() int {
 	opts := parseRepairFlags(3)
 	if opts.configPath == "__help__" {
@@ -216,48 +217,15 @@ func runRepairDeleteByFormat() int {
 		return 0
 	}
 
-	// --- Execute: per-row delete (DB first, then file + merge_path sibling) ---
+	// --- Execute: chunked batch delete (DB first, then files) — #753 ---
 	fmt.Println()
-	fmt.Println("Executing deletions...")
-	deleted := 0
-	deleteFailed := 0
-	var freedBytes int64
-	for i, r := range candidates {
-		if ctx.Err() != nil {
-			fmt.Fprintf(os.Stderr, "\nInterrupted by signal. Deleted %d of %d before stop.\n", deleted, len(candidates))
-			break
-		}
-		// DB row first (source of truth). On failure, do NOT touch the file —
-		// leaving an orphan file is recoverable; a dangling DB row is not.
-		if err := db.DeleteRecording(ctx, r.ID); err != nil {
-			fmt.Fprintf(os.Stderr, "  [%d/%d] DB DELETE FAILED %s: %v\n", i+1, len(candidates), r.ID, err)
-			deleteFailed++
-			continue
-		}
-		freedBytes += r.FileSize
-		deleted++
-		// Best-effort file removal. FilePath is a regular .mp4/.avi file for
-		// non-timelapse formats (we kept timelapse, so no frame-dir case here,
-		// but os.RemoveAll handles both safely).
-		if r.FilePath != "" {
-			_ = os.RemoveAll(r.FilePath)
-		}
-		// Also remove the merged-output sibling if it's a distinct file.
-		// Rolling/periodic merge produces <file_path>.mp4 (or a periodic_*.mp4)
-		// stored in merge_path — orphan-cleanup won't sweep these because they
-		// don't match the <cameraID>_* filename pattern.
-		if r.MergePath != "" && r.MergePath != r.FilePath {
-			_ = os.RemoveAll(r.MergePath)
-		}
-		if deleted%50 == 0 || deleted == len(candidates) {
-			fmt.Printf("  [%d/%d] deleted\n", deleted, len(candidates))
-		}
-		// Throttle: avoid IO spikes on RPi/SD-card during large deletes
-		// (matches repair fragments --force-delete cadence).
-		select {
-		case <-time.After(20 * time.Millisecond):
-		case <-ctx.Done():
-		}
+	fmt.Println("Executing deletions (batched)...")
+	deleted, deleteFailed, freedBytes := deleteCandidatesInChunks(ctx, db, candidates,
+		func(done, total int) {
+			fmt.Printf("  [%d/%d] deleted\n", done, total)
+		})
+	if ctx.Err() != nil {
+		fmt.Fprintf(os.Stderr, "\nInterrupted by signal. Deleted %d of %d before stop.\n", deleted, len(candidates))
 	}
 	fmt.Println()
 	fmt.Printf("Summary: %d deleted (%.2f GB freed), %d failed (of %d candidates)\n",
@@ -287,7 +255,8 @@ func runRepairDeleteByFormat() int {
 //     (recommended — never prune the most-recent window the periodic merger
 //     may still be working on).
 //   - --limit caps the count for bounded runs.
-//   - --dry-run default; --execute to apply. 20ms throttle between deletes.
+//   - --dry-run default; --execute to apply. Chunked batch DELETE (300 rows/txn,
+//     #753) with per-row fallback; 20ms throttle between chunks.
 
 func printRepairDeleteByFormatUsage() {
 	fmt.Print(`Usage: mibee-nvr repair delete-by-format [options]
@@ -307,7 +276,8 @@ Safety guards:
   - MiBeeVision-protected segments (ai_status='processing') are skipped.
   - DB row deleted first, then file (best-effort); merge_path siblings are
     also removed so rolling/periodic merge outputs don't linger as orphans.
-  - --dry-run default; --execute to apply. 20ms throttle between deletes.
+  - --dry-run default; --execute to apply. Chunked batch DELETE (300 rows per
+    transaction) with per-row fallback; 20ms throttle between chunks.
 
 Examples:
   # See what would be deleted for one camera (count, size, samples)
