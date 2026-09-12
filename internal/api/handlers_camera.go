@@ -410,6 +410,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		SubnetHints *[]string `json:"subnet_hints"`
 		// GB28181 SIP device/channel binding
 		GB28181 *gb28181ChannelPayload `json:"gb28181"`
+		// Group label (v36, camera-management grouping). nil = unchanged;
+		// empty string = ungroup.
+		Group *string `json:"group"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -508,6 +511,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		PushRetentionDays:      body.PushRetentionDays,
 		VisionTargets:          body.VisionTargets,
 		GB28181:                body.GB28181.toConfigPtr(),
+		Group:                  body.Group,
 	}
 
 	// Validate recording mode + adaptive tuning with the same rules the
@@ -717,6 +721,16 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 		r.Get("/", h.handleListCameras)
 		r.Post("/", h.handleCreateCamera)
 		r.Post("/test-connection", h.handleTestConnection)
+		// Group registry (v37) — empty-group persistence + rename/delete that
+		// walk the member cameras. /groups/order (v38) is registered before
+		// the /{name} param route; chi prefers the literal.
+		r.Route("/groups", func(r chi.Router) {
+			r.Get("/", h.handleListCameraGroups)
+			r.Post("/", h.handleCreateCameraGroup)
+			r.Put("/order", h.handleSetCameraGroupsOrder)
+			r.Put("/{name}", h.handleRenameCameraGroup)
+			r.Delete("/{name}", h.handleDeleteCameraGroup)
+		})
 		r.Route("/{id}", func(r chi.Router) {
 			r.Get("/", h.handleGetCamera)
 			r.Put("/", h.handleUpdateCamera)

@@ -61,6 +61,8 @@
     globalTranscodingEnabled?: boolean;
     h265Available?: boolean;
     onbackfillneeded?: (info: { cameraId: string; count: number; targetCodec: string }) => Promise<boolean>;
+    /** Existing group labels for the group input's datalist suggestions (v36). */
+    knownGroups?: string[];
   }
 
   let {
@@ -73,7 +75,13 @@
     onsave,
     oncancel,
     onbackfillneeded,
+    knownGroups = [],
   }: Props = $props();
+
+  // Unique suffix for this form instance's datalist id — the Cameras page can
+  // render more than one CameraForm (add + inline edit) and duplicate element
+  // ids would cross-wire the group suggestions.
+  const formUid = Math.random().toString(36).slice(2, 8);
 
   // Form state
   let formName = $state('');
@@ -86,6 +94,8 @@
   let saving = $state(false);
   let formDescription = $state('');
   let formLocation = $state('');
+  // Camera-management group label (v36). Empty = ungrouped.
+  let formGroup = $state('');
   let formBrand = $state('');
   let formModel = $state('');
   let formSerialNumber = $state('');
@@ -299,6 +309,7 @@ let validationErrors = $state<Record<string, string>>({});
     showPassword = false;
     formDescription = '';
     formLocation = '';
+    formGroup = '';
     formBrand = '';
     formModel = '';
     formSerialNumber = '';
@@ -398,6 +409,7 @@ let validationErrors = $state<Record<string, string>>({});
     showPassword = false;
     formDescription = camera.description || '';
     formLocation = camera.location || '';
+    formGroup = camera.group || '';
     formBrand = camera.brand || '';
     formModel = camera.model || '';
     formSerialNumber = camera.serial_number || '';
@@ -778,6 +790,7 @@ async function performCameraSave() {
             url: formUrl,
             description: formDescription || undefined,
             location: formLocation || undefined,
+            group: formGroup.trim(),
             brand: formBrand || undefined,
             model: formModel || undefined,
             serial_number: formSerialNumber || undefined,
@@ -849,6 +862,7 @@ async function performCameraSave() {
             url: formUrl,
             description: formDescription || undefined,
             location: formLocation || undefined,
+            group: formGroup.trim() || undefined,
             brand: formBrand || undefined,
             model: formModel || undefined,
             serial_number: formSerialNumber || undefined,
@@ -933,6 +947,20 @@ async function performCameraSave() {
       {#if validationErrors['protocol']}
         <p class="th-color-danger text-xs mt-1">{validationErrors['protocol']}</p>
       {/if}
+    </div>
+
+    <!-- Group (v37 camera-management grouping) — top-level, not buried in
+         advanced settings: it drives the management page's sections. The
+         datalist suggests existing groups. -->
+    <div>
+      <label for="cam-group" class="input-label">{t('cameras.group')}</label>
+      <input id="cam-group" type="text" class="input" list="{formUid}-group-options"
+        bind:value={formGroup} placeholder={t('cameras.groupPlaceholder')} />
+      <datalist id="{formUid}-group-options">
+        {#each knownGroups as g (g)}
+          <option value={g}></option>
+        {/each}
+      </datalist>
     </div>
 
     <!-- Encoding -->

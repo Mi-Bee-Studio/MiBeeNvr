@@ -688,6 +688,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 				logger.Error("failed to update camera metadata", "camera_id", cam.ID, "error", err)
 			}
 		}
+		// Group label (v36) — DB-only, never affects the recorder.
+		if updates.Group != nil {
+			if err := cm.db.UpdateCameraGroup(ctx, cam.ID, strings.TrimSpace(*updates.Group)); err != nil {
+				logger.Error("failed to update camera group", "camera_id", cam.ID, "error", err)
+			}
+		}
 	}
 
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)

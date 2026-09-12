@@ -240,8 +240,20 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // confidence discounting the relative score on bitrate-starved segments).
 // Also ensured via idempotent ALTER; pre-v34 rows carry -1 = "full weight".
 //
+// v35: added ai_events.source (multi-Vision attribution by API key name).
+//
+// v36: added cameras.group_name (camera management grouping — UI organization
+// only, never read by the recorder). Also ensured via idempotent ALTER.
+//
+// v37: added camera_groups (group registry — lets an EMPTY group survive with
+// no member camera; rename/delete walk the member cameras' group_name).
+//
+// v38: added camera_groups.position (drag-to-reorder persistence — the
+// management page sends the full named-group order). Also ensured via
+// idempotent ALTER.
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "35"
+const currentSchemaVersion = "38"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -279,6 +291,7 @@ func (d *DB) Init(ctx context.Context) error {
         stream_key TEXT DEFAULT '',
         srt_passphrase TEXT DEFAULT '',
         srt_stream_id TEXT DEFAULT '',
+        group_name TEXT DEFAULT '',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );`
 	recSQL := `CREATE TABLE IF NOT EXISTS recordings (
@@ -432,7 +445,13 @@ func (d *DB) Init(ctx context.Context) error {
 		probed_at DATETIME
 	);`
 
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL} {
+	camGroupsSQL := `CREATE TABLE IF NOT EXISTS camera_groups (
+        name TEXT PRIMARY KEY,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        position INTEGER NOT NULL DEFAULT 0
+    );`
+
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL, camGroupsSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
@@ -500,6 +519,16 @@ func (d *DB) Init(ctx context.Context) error {
 	// NEW databases; an existing recordings table gets the motion columns via
 	// idempotent ALTER. Default -1 = unanalyzed (model.MotionScoreUnanalyzed).
 	if err := d.ensureRecordingsMotionColumns(ctx); err != nil {
+		return err
+	}
+
+	// ── Column backfill for pre-v36 databases: cameras.group_name ──
+	if err := d.ensureCameraGroupNameColumn(ctx); err != nil {
+		return err
+	}
+
+	// ── Column backfill for pre-v38 databases: camera_groups.position ──
+	if err := d.ensureCameraGroupsPositionColumn(ctx); err != nil {
 		return err
 	}
 
@@ -589,6 +618,43 @@ func (d *DB) ensureRecordingsMotionColumns(ctx context.Context) error {
 		if _, err := d.db.ExecContext(ctx,
 			`ALTER TABLE ai_events ADD COLUMN source TEXT DEFAULT ''`); err != nil {
 			return fmt.Errorf("add ai_events.source column: %w", err)
+		}
+	}
+	return nil
+}
+
+// ensureCameraGroupNameColumn adds cameras.group_name (v36, camera management
+// grouping) to databases created before v36. Idempotent: checks pragma
+// table_info before the ALTER, so re-running on a current database is a no-op.
+func (d *DB) ensureCameraGroupNameColumn(ctx context.Context) error {
+	var colExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='group_name'`,
+	).Scan(&colExists); err != nil {
+		return fmt.Errorf("check cameras.group_name column: %w", err)
+	}
+	if colExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE cameras ADD COLUMN group_name TEXT DEFAULT ''`); err != nil {
+			return fmt.Errorf("add cameras.group_name column: %w", err)
+		}
+	}
+	return nil
+}
+
+// ensureCameraGroupsPositionColumn adds camera_groups.position (v38,
+// drag-to-reorder) to databases created before v38. Idempotent.
+func (d *DB) ensureCameraGroupsPositionColumn(ctx context.Context) error {
+	var colExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('camera_groups') WHERE name='position'`,
+	).Scan(&colExists); err != nil {
+		return fmt.Errorf("check camera_groups.position column: %w", err)
+	}
+	if colExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE camera_groups ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("add camera_groups.position column: %w", err)
 		}
 	}
 	return nil

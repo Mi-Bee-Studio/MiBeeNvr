@@ -104,6 +104,9 @@ type CameraRow struct {
 	// Without it the camera edit form cannot show the DeviceID/ChannelID a
 	// gb28181 camera is bound to (always-empty fields, forced re-entry).
 	GB28181 *config.GB28181ChannelConfig `json:"gb28181,omitempty"`
+	// GroupName is the camera-management grouping label (v36). UI organization
+	// only — the recorder never reads it. '' = ungrouped.
+	GroupName string `json:"group,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
@@ -111,7 +114,8 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
-		COALESCE(activation_state, 'active')
+		COALESCE(activation_state, 'active'),
+		COALESCE(group_name, '')
 		FROM cameras WHERE archived=0 ORDER BY id;`)
 	if err != nil {
 		return nil, err
@@ -128,7 +132,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
-			&c.ActivationState); err != nil {
+			&c.ActivationState, &c.GroupName); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -155,7 +159,8 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
-		COALESCE(activation_state, 'active')
+		COALESCE(activation_state, 'active'),
+		COALESCE(group_name, '')
 		FROM cameras WHERE archived=1 ORDER BY id;`)
 	if err != nil {
 		return nil, err
@@ -172,7 +177,7 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
-			&c.ActivationState); err != nil {
+			&c.ActivationState, &c.GroupName); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -282,13 +287,14 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 		merge_enabled, merge_check_interval, merge_window_size, merge_batch_limit, merge_min_segment_age, merge_min_segments_to_merge,
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
-		COALESCE(activation_state, 'active')
+		COALESCE(activation_state, 'active'),
+		COALESCE(group_name, '')
 		FROM cameras WHERE id = ?`, cameraID).Scan(
 		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.StableID, &c.RetentionDays, &c.Username, &c.HasPassword,
 		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
-		&c.ActivationState,
+		&c.ActivationState, &c.GroupName,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -340,6 +346,14 @@ func (d *DB) DeleteCameraRow(ctx context.Context, cameraID string) error {
 func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location, brand, model, serialNumber string, retentionDays int) error {
 	q := `UPDATE cameras SET description=?, location=?, brand=?, model=?, serial_number=?, retention_days=? WHERE id=?;`
 	_, err := d.db.ExecContext(ctx, q, description, location, brand, model, serialNumber, retentionDays, id)
+	return err
+}
+
+// UpdateCameraGroup sets the camera-management group label (v36). Empty string
+// removes the camera from its group (= ungrouped). Idempotent: does nothing if
+// the camera does not exist (0 rows affected).
+func (d *DB) UpdateCameraGroup(ctx context.Context, id, group string) error {
+	_, err := d.db.ExecContext(ctx, `UPDATE cameras SET group_name=? WHERE id=?;`, group, id)
 	return err
 }
 
@@ -597,4 +611,116 @@ func (d *DB) ReassignCameraData(ctx context.Context, sourceCameraID, targetCamer
 		return fmt.Errorf("reassign data commit: %w", err)
 	}
 	return nil
+}
+
+// ── Camera group registry (v37) ─────────────────────────────────────────────
+//
+// The registry exists so an EMPTY group can survive with no member camera
+// (created on the management page ahead of dragging cameras in). The
+// per-camera group_name column remains the membership source of truth —
+// ListCameraGroups returns only registered names, callers union it with the
+// names derived from cameras.
+
+// ListCameraGroups returns the registered group names in user-defined order
+// (position; ties fall back to creation order then name).
+func (d *DB) ListCameraGroups(ctx context.Context) ([]string, error) {
+	rows, err := d.readConn().QueryContext(ctx,
+		`SELECT name FROM camera_groups ORDER BY position, created_at, name;`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		res = append(res, name)
+	}
+	return res, rows.Err()
+}
+
+// UpsertCameraGroup registers a group name, appended AFTER the last existing
+// group (a fresh group belongs at the end, not interleaved). Idempotent:
+// re-registering an existing name keeps its position.
+func (d *DB) UpsertCameraGroup(ctx context.Context, name string) error {
+	_, err := d.db.ExecContext(ctx, `INSERT OR IGNORE INTO camera_groups(name, position)
+		VALUES(?, COALESCE((SELECT MAX(position) FROM camera_groups), -1) + 1);`, name)
+	return err
+}
+
+// SetCameraGroupsOrder stores the full named-group order (v38 drag-to-reorder):
+// each listed name gets position=index; unknown names are registered (a
+// derived-only group being reordered becomes persistent). Groups absent from
+// the list keep their old positions.
+func (d *DB) SetCameraGroupsOrder(ctx context.Context, names []string) error {
+	_, err := d.withConn(ctx, func(conn *sql.Conn) (int64, error) {
+		for i, name := range names {
+			if _, err := conn.ExecContext(ctx, `INSERT INTO camera_groups(name, position) VALUES(?, ?)
+				ON CONFLICT(name) DO UPDATE SET position=excluded.position;`, name, i); err != nil {
+				return 0, fmt.Errorf("set position of group %q: %w", name, err)
+			}
+		}
+		return 0, nil
+	})
+	return err
+}
+
+// RenameCameraGroup renames a group everywhere in one transaction: the
+// registry row (if any) and every member camera's group_name. Renaming onto
+// an existing name merges the two groups (both member sets land on the target
+// name; the source registry row is dropped). Works for derived-only groups
+// (cameras carry the label but no registry row exists — the target name gets
+// registered).
+func (d *DB) RenameCameraGroup(ctx context.Context, oldName, newName string) error {
+	if oldName == "" || newName == "" || oldName == newName {
+		return fmt.Errorf("rename requires non-empty, distinct group names")
+	}
+	_, err := d.withConn(ctx, func(conn *sql.Conn) (int64, error) {
+		if _, err := conn.ExecContext(ctx,
+			`UPDATE cameras SET group_name=? WHERE group_name=?;`, newName, oldName); err != nil {
+			return 0, fmt.Errorf("move member cameras: %w", err)
+		}
+		// Register the target WITHOUT clobbering an existing row (merge keeps
+		// the target's slot); a fresh row inherits the source's position, or
+		// appends after the last group when the source wasn't registered.
+		if _, err := conn.ExecContext(ctx, `INSERT INTO camera_groups(name, position)
+			VALUES(?,
+				COALESCE((SELECT position FROM camera_groups WHERE name=?),
+				         COALESCE((SELECT MAX(position) FROM camera_groups), -1) + 1))
+			ON CONFLICT(name) DO NOTHING;`, newName, oldName); err != nil {
+			return 0, fmt.Errorf("register target group: %w", err)
+		}
+		if _, err := conn.ExecContext(ctx,
+			`DELETE FROM camera_groups WHERE name=?;`, oldName); err != nil {
+			return 0, fmt.Errorf("drop source group row: %w", err)
+		}
+		return 0, nil
+	})
+	return err
+}
+
+// DeleteCameraGroup removes the registry row and ungroups every member
+// camera (their group_name is cleared to ”; the cameras themselves are
+// untouched). Works for derived-only groups too (registry miss is not an
+// error). Returns the number of cameras ungrouped.
+func (d *DB) DeleteCameraGroup(ctx context.Context, name string) (int64, error) {
+	if name == "" {
+		return 0, fmt.Errorf("group name cannot be empty")
+	}
+	ungrouped, err := d.withConn(ctx, func(conn *sql.Conn) (int64, error) {
+		res, err := conn.ExecContext(ctx,
+			`UPDATE cameras SET group_name='' WHERE group_name=?;`, name)
+		if err != nil {
+			return 0, fmt.Errorf("ungroup member cameras: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		if _, err := conn.ExecContext(ctx,
+			`DELETE FROM camera_groups WHERE name=?;`, name); err != nil {
+			return 0, fmt.Errorf("drop group row: %w", err)
+		}
+		return n, nil
+	})
+	return ungrouped, err
 }

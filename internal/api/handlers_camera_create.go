@@ -61,17 +61,19 @@ func (p *gb28181ChannelPayload) toConfigPtr() *config.GB28181ChannelConfig {
 
 func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name          string `json:"name"`
-		Protocol      string `json:"protocol"`
-		URL           string `json:"url"`
-		Username      string `json:"username"`
-		Password      string `json:"password"`
-		Enabled       *bool  `json:"enabled"`
-		Description   string `json:"description"`
-		Location      string `json:"location"`
-		Brand         string `json:"brand"`
-		Model         string `json:"model"`
-		SerialNumber  string `json:"serial_number"`
+		Name         string `json:"name"`
+		Protocol     string `json:"protocol"`
+		URL          string `json:"url"`
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		Enabled      *bool  `json:"enabled"`
+		Description  string `json:"description"`
+		Location     string `json:"location"`
+		Brand        string `json:"brand"`
+		Model        string `json:"model"`
+		SerialNumber string `json:"serial_number"`
+		// Group label (v36, camera-management grouping). Empty = ungrouped.
+		Group         string `json:"group"`
 		ONVIFEndpoint string `json:"onvif_endpoint"`
 		ProfileToken  string `json:"profile_token"`
 		// Sub-stream (#512): manual sub profile token + manual sub stream URL.
@@ -372,6 +374,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
 		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
 			logger.Warn("failed to set camera metadata", "camera_id", id, "error", err)
+		}
+	}
+	// Group label (v36) — DB-only metadata.
+	if g := strings.TrimSpace(body.Group); g != "" {
+		if err := h.db.UpdateCameraGroup(r.Context(), id, g); err != nil {
+			logger.Warn("failed to set camera group", "camera_id", id, "error", err)
 		}
 	}
 	// Persist push/ingest fields for srt/rtmp cameras.
