@@ -203,7 +203,7 @@ func ceilDivSeconds(deficit, rate int64) time.Duration {
 	if deficit <= 0 {
 		return time.Nanosecond
 	}
-	ns := (deficit * int64(time.Second) + rate - 1) / rate
+	ns := (deficit*int64(time.Second) + rate - 1) / rate
 	return time.Duration(max(ns, 1))
 }
 

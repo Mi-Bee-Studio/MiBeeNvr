@@ -95,7 +95,7 @@ type Metrics struct {
 	// I/O budget metrics (#751) — background-work pacing. Labels:
 	// consumer (merge/cleanup/repair/timelapse — bounded enum, no free-form
 	// values). Zero forever when io.budget_bytes_per_sec is unset (off).
-	IOBudgetWaitSecondsTotal *prometheus.CounterVec // labels: consumer — seconds background work spent parked on the shared budget
+	IOBudgetWaitSecondsTotal  *prometheus.CounterVec // labels: consumer — seconds background work spent parked on the shared budget
 	IOBudgetChargedBytesTotal *prometheus.CounterVec // labels: consumer — bytes billed against the shared budget
 
 	// Rolling merge metrics (quasi-real-time, event-driven)

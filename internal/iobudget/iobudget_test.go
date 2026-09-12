@@ -2,6 +2,7 @@ package iobudget
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -169,7 +170,7 @@ func TestWait_ContextCancelAborts(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Wait under cancelled ctx = %v, want context.Canceled", err)
 		}
 	case <-time.After(5 * time.Second):
@@ -251,7 +252,6 @@ func TestWait_ObserversSeeConsumerLabel(t *testing.T) {
 // contention.
 func TestWait_ConcurrentConservation(t *testing.T) {
 	const goroutines = 8
-	const perG = 120 // 3 charges × 40 each; total 960 ≤ capacity 1000
 	b, _, _ := newTestBucket(t, 1000, 1000) // clock stays frozen: no refill
 
 	var charged atomicInt64
