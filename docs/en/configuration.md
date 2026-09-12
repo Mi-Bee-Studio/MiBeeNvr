@@ -250,6 +250,9 @@ version: "1.0"
 
 #### Rotation cadence is an I/O switch
 
+> The warning threshold itself is configurable:
+> `storage.segment_duration_warn_below` (default `"60s"`, `"0s"` disables).
+
 Every rotation pays a fixed metadata cost — segment create, temp→final
 rename, fsync, and two DB rows. The shorter the global duration, the more
 often EVERY camera pays it: at 30s a 13-camera fleet rotates ~26

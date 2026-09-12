@@ -118,3 +118,45 @@ func TestCameraSegmentDurationOverride_Validated(t *testing.T) {
 		t.Errorf("zero per-camera override = %v, want segment_duration error", err)
 	}
 }
+
+// TestSegmentDuration_WarnThresholdConfigurable (#758): the threshold is a
+// config knob — raising it widens the warning, 0s silences it.
+func TestSegmentDuration_WarnThresholdConfigurable(t *testing.T) {
+	// 90s threshold: a 75s global (silent at stock 60s) now warns.
+	h := captureWarns(t)
+	cfg := durationTestConfig(t, "75s", "")
+	cfg.Storage.SegmentDurationWarnBelow = "90s"
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	found := false
+	for _, w := range h.warns {
+		if strings.Contains(w, "segment_duration") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("75s global must warn with warn_below=90s")
+	}
+
+	// 0s disables even the stock 30s case.
+	h2 := captureWarns(t)
+	cfg2 := durationTestConfig(t, "30s", "")
+	cfg2.Storage.SegmentDurationWarnBelow = "0s"
+	if err := Validate(cfg2); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	for _, w := range h2.warns {
+		if strings.Contains(w, "segment_duration") {
+			t.Errorf("warn_below=0s must disable the warning, got %q", w)
+		}
+	}
+}
+
+func TestSegmentDuration_WarnThresholdDefaultMaterialized(t *testing.T) {
+	cfg := &Config{}
+	applyConfigDefaults(cfg)
+	if cfg.Storage.SegmentDurationWarnBelow != "60s" {
+		t.Errorf("default warn_below = %q, want 60s", cfg.Storage.SegmentDurationWarnBelow)
+	}
+}

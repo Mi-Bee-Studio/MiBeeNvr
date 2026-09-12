@@ -293,6 +293,10 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Storage.PreallocMaxBytes == 0 {
 		cfg.Storage.PreallocMaxBytes = 512 << 20
 	}
+	// Short-rotation warning threshold default (#758).
+	if cfg.Storage.SegmentDurationWarnBelow == "" {
+		cfg.Storage.SegmentDurationWarnBelow = "60s"
+	}
 	// Merge defaults
 	if cfg.Merge.BatchLimit <= 0 {
 		cfg.Merge.BatchLimit = 200

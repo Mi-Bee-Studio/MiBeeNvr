@@ -376,9 +376,14 @@ func validateConfigDetails(cfg *Config) error {
 	}
 	// Short-global-duration footgun warning (#758): rotation cadence is an
 	// I/O switch — segment create/rename/fsync/DB rows all scale with it.
-	// Warn (not block) when continuous cameras run below 60s globally; the
-	// per-camera override is the targeted fix.
-	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err == nil && dur < 60*time.Second {
+	// Threshold is configurable (storage.segment_duration_warn_below,
+	// default 60s; 0s disables). Warn (not block); the per-camera override
+	// is the targeted fix.
+	warnBelow, errWarn := time.ParseDuration(cfg.Storage.SegmentDurationWarnBelow)
+	if errWarn != nil {
+		return fmt.Errorf("storage.segment_duration_warn_below invalid: %w", errWarn)
+	}
+	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err == nil && warnBelow > 0 && dur < warnBelow {
 		for _, cam := range cfg.Cameras {
 			if cam.RecordingMode == "" || cam.RecordingMode == "continuous" {
 				if cam.SegmentDuration != "" {
