@@ -37,26 +37,57 @@ var (
 // observability wiring can publish it after the fact.
 var applied atomic.Int64
 
+// AutoParams carries the operator-tunable auto-heuristic knobs (#756). The
+// zero value means "documented defaults" so hand-built configs and tests
+// need no initialization; config defaults materialize the same values.
+type AutoParams struct {
+	// PhysicalPercent is the share of physical RAM the heap may target
+	// (default 45). The rest stays for the page cache recording I/O
+	// depends on.
+	PhysicalPercent int
+	// CapBytes caps the physical tier on big hosts (default 1 GiB) — a
+	// conservatively sized NVR needs no more.
+	CapBytes int64
+	// CgroupPercent is the share taken from a cgroup memory ceiling
+	// (default 80).
+	CgroupPercent int
+}
+
+// defaultAutoParams fills the documented defaults for any zero field.
+func defaultAutoParams(p AutoParams) AutoParams {
+	if p.PhysicalPercent <= 0 {
+		p.PhysicalPercent = 45
+	}
+	if p.CapBytes <= 0 {
+		p.CapBytes = 1 << 30
+	}
+	if p.CgroupPercent <= 0 {
+		p.CgroupPercent = 80
+	}
+	return p
+}
+
 // ComputeLimit picks the GOMEMLIMIT value from the host situation:
 //
 //   - override > 0 wins (explicit operator intent);
-//   - otherwise the tightest of: 80% of the cgroup limit (when set and
-//     sane) and min(45% physical, 1GiB);
+//   - otherwise the tightest of: CgroupPercent% of the cgroup limit (when
+//     set and sane) and min(PhysicalPercent% physical, CapBytes);
 //   - 0 when nothing is known → caller leaves the Go default untouched.
 //
 // A cgroup "limit" far above physical RAM (v1 unlimited sentinel leaks
 // through as a huge number on misconfigured hosts) is ignored by the
 // cgroup-vs-physical min.
-func ComputeLimit(physical, cgroup, override int64) int64 {
+func ComputeLimit(physical, cgroup, override int64, p AutoParams) int64 {
 	if override > 0 {
 		return max(override, minLimitBytes)
 	}
+	p = defaultAutoParams(p)
 	var candidates []int64
 	if cgroup > 0 {
-		candidates = append(candidates, cgroup*8/10)
+		candidates = append(candidates, cgroup*int64(p.CgroupPercent)/100)
 	}
 	if physical > 0 {
-		candidates = append(candidates, min(physical*45/100, int64(1)<<30))
+		candidates = append(candidates, min(physical*int64(p.PhysicalPercent)/100, p.CapBytes))
 	}
 	if len(candidates) == 0 {
 		return 0

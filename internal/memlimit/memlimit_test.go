@@ -7,7 +7,7 @@ import (
 )
 
 func TestComputeLimit_OverrideWins(t *testing.T) {
-	if got := ComputeLimit(4<<30, 2<<30, 512<<20); got != 512<<20 {
+	if got := ComputeLimit(4<<30, 2<<30, 512<<20, AutoParams{}); got != 512<<20 {
 		t.Errorf("override: got %d, want 512MiB", got)
 	}
 }
@@ -24,33 +24,33 @@ func TestComputeLimit_PhysicalTiers(t *testing.T) {
 		{"16GiB server → capped at 1GiB", 16 << 30, 1 << 30},
 	}
 	for _, tc := range cases {
-		if got := ComputeLimit(tc.physical, 0, 0); got != tc.want {
+		if got := ComputeLimit(tc.physical, 0, 0, AutoParams{}); got != tc.want {
 			t.Errorf("%s: physical=%d got %d, want %d", tc.name, tc.physical, got, tc.want)
 		}
 	}
 }
 
 func TestComputeLimit_PhysicalUnknownSkips(t *testing.T) {
-	if got := ComputeLimit(0, 0, 0); got != 0 {
+	if got := ComputeLimit(0, 0, 0, AutoParams{}); got != 0 {
 		t.Errorf("physical+cgroup unknown: got %d, want 0 (leave Go default)", got)
 	}
 }
 
 func TestComputeLimit_CgroupEightyPercent(t *testing.T) {
 	want80 := int64(512<<20) * 8 / 10 // 429496729 ≈ 409.6MiB
-	if got := ComputeLimit(8<<30, 512<<20, 0); got != want80 {
+	if got := ComputeLimit(8<<30, 512<<20, 0, AutoParams{}); got != want80 {
 		t.Errorf("cgroup 512MiB on 8GiB host: got %d, want 80%% = %d", got, want80)
 	}
 	// Cgroup larger than physical (misconfigured host): physical tier wins.
 	want45 := int64(1<<30) * 45 / 100 // 483183820 = 460.8MiB
-	if got := ComputeLimit(1<<30, 8<<30, 0); got != want45 {
+	if got := ComputeLimit(1<<30, 8<<30, 0, AutoParams{}); got != want45 {
 		t.Errorf("cgroup 8GiB on 1GiB host: got %d, want physical 45%% = %d", got, want45)
 	}
 }
 
 func TestComputeLimit_SmallCgroupFloor(t *testing.T) {
 	// A 128MiB cgroup on any host must not round to zero — Go needs a floor.
-	if got := ComputeLimit(4<<30, 128<<20, 0); got < minLimitBytes {
+	if got := ComputeLimit(4<<30, 128<<20, 0, AutoParams{}); got < minLimitBytes {
 		t.Errorf("tiny cgroup: got %d, want >= floor %d", got, minLimitBytes)
 	}
 }
@@ -137,5 +137,18 @@ func TestPhysicalMemMissingFile(t *testing.T) {
 	t.Cleanup(func() { meminfoPath = prev })
 	if got := Physical(); got != 0 {
 		t.Errorf("Physical missing file: got %d, want 0", got)
+	}
+}
+
+func TestComputeLimit_CustomParams(t *testing.T) {
+	p := AutoParams{PhysicalPercent: 30, CapBytes: 256 << 20, CgroupPercent: 60}
+	// Physical tier: min(30% of 4GiB, 256MiB) = 256MiB.
+	if got := ComputeLimit(4<<30, 0, 0, p); got != 256<<20 {
+		t.Errorf("custom physical tier: got %d, want 256MiB", got)
+	}
+	// Cgroup tier wins when tighter: 60% of 384MiB = 241591910 < 256MiB cap.
+	want := int64(384<<20) * 6 / 10
+	if got := ComputeLimit(4<<30, 384<<20, 0, p); got != want {
+		t.Errorf("custom cgroup tier: got %d, want %d", got, want)
 	}
 }

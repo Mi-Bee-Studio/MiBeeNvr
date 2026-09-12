@@ -42,3 +42,39 @@ func TestMemoryConfig_Validate(t *testing.T) {
 		}
 	}
 }
+
+func TestMemoryConfig_AutoParamsDefaults(t *testing.T) {
+	cfg := &Config{}
+	applyConfigDefaults(cfg)
+	if cfg.Memory.AutoPhysicalPercent != 45 || cfg.Memory.AutoCapBytes != 1<<30 || cfg.Memory.AutoCgroupPercent != 80 {
+		t.Errorf("auto defaults = %d/%d/%d, want 45/1GiB/80",
+			cfg.Memory.AutoPhysicalPercent, cfg.Memory.AutoCapBytes, cfg.Memory.AutoCgroupPercent)
+	}
+
+	cfg = &Config{}
+	cfg.Memory.AutoPhysicalPercent = 30
+	applyConfigDefaults(cfg)
+	if cfg.Memory.AutoPhysicalPercent != 30 {
+		t.Errorf("explicit auto_physical_percent = %d, want preserved 30", cfg.Memory.AutoPhysicalPercent)
+	}
+}
+
+func TestMemoryConfig_AutoParamsValidate(t *testing.T) {
+	cfg := &Config{}
+	applyConfigDefaults(cfg)
+	cfg.Memory.AutoPhysicalPercent = 99
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "auto_physical_percent") {
+		t.Errorf("Validate(auto_physical_percent=99) = %v, want range error", err)
+	}
+
+	cfg = &Config{}
+	applyConfigDefaults(cfg)
+	cfg.Memory.AutoCgroupPercent = 0 // explicitly zero → "use default" is legal (defaults fill it)
+	cfg.Memory.AutoPhysicalPercent = 45
+	if err := Validate(cfg); err != nil {
+		if strings.Contains(err.Error(), "auto_") {
+			t.Errorf("Validate(zero auto cgroup) = %v, want no auto error", err)
+		}
+	}
+}

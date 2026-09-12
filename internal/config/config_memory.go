@@ -18,4 +18,11 @@ type MemoryConfig struct {
 	// restoring the Go runtime default. The native GOMEMLIMIT env var always
 	// wins over everything (it is applied by the runtime before main).
 	DisableAutoLimit bool `yaml:"disable_auto_limit"`
+
+	// Auto-heuristic knobs (#756) — defaults materialized by config defaults
+	// (45 / 1GiB / 80); every value is operator-tunable, nothing is hardcoded
+	// in wiring code.
+	AutoPhysicalPercent int   `yaml:"auto_physical_percent"` // share of physical RAM for the heap tier (default 45)
+	AutoCapBytes        int64 `yaml:"auto_cap_bytes"`        // cap of the physical tier on big hosts (default 1GiB)
+	AutoCgroupPercent   int   `yaml:"auto_cgroup_percent"`   // share taken from a cgroup ceiling (default 80)
 }

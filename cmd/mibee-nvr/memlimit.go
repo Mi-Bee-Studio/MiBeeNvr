@@ -50,7 +50,11 @@ func applyMemoryLimit(cfg *config.Config) {
 		return
 	}
 
-	limit := memlimit.ComputeLimit(memlimitPhysicalFn(), memlimitCgroupFn(), cfg.Memory.SoftLimitBytes)
+	limit := memlimit.ComputeLimit(memlimitPhysicalFn(), memlimitCgroupFn(), cfg.Memory.SoftLimitBytes, memlimit.AutoParams{
+		PhysicalPercent: cfg.Memory.AutoPhysicalPercent,
+		CapBytes:        cfg.Memory.AutoCapBytes,
+		CgroupPercent:   cfg.Memory.AutoCgroupPercent,
+	})
 	if limit <= 0 {
 		slog.Info("no reliable memory size detected — leaving Go runtime default (no GOMEMLIMIT)")
 		memlimit.RecordApplied(0)
