@@ -659,3 +659,107 @@ describe('CameraForm - gb28181 protocol (todo 18)', () => {
     expect(body.url).toBe('');
   });
 });
+
+describe('CameraForm - group field (v36 camera grouping)', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+  });
+
+  const groupedCam = {
+    id: 'cam-group-1',
+    name: 'Studio Cam',
+    protocol: 'rtsp',
+    encoding: 'h264',
+    url: 'rtsp://192.168.1.10/stream',
+    group: '室内',
+  };
+
+  it('prefills the group input when editing a grouped camera and suggests known groups', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, {
+      props: defaultProps({
+        editingCamera: groupedCam as any,
+        knownGroups: ['室内', '室外'],
+      }),
+    });
+
+    await vi.waitFor(() => {
+      const input = container.querySelector('#cam-group') as HTMLInputElement | null;
+      expect(input, 'group input should exist').toBeTruthy();
+      expect(input!.value).toBe('室内');
+    });
+    const datalist = container.querySelector('datalist');
+    expect(datalist, 'datalist should exist').toBeTruthy();
+    const opts = Array.from(datalist!.querySelectorAll('option'));
+    expect(opts.map(o => o.value)).toEqual(['室内', '室外']);
+  });
+
+  it('sends group in the update payload (empty string ungroups)', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: groupedCam as any }),
+    });
+
+    await vi.waitFor(() => {
+      expect((container.querySelector('#cam-group') as HTMLInputElement).value).toBe('室内');
+    });
+    const input = container.querySelector('#cam-group') as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: '' } });
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.save'),
+    );
+    await fireEvent.click(saveBtn!);
+
+    await vi.waitFor(() => {
+      const put = mockApiRequest.mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0] === '/cameras/cam-group-1',
+      );
+      expect(put, 'PUT /cameras/{id} should have been issued').toBeTruthy();
+      const body = JSON.parse((put![1] as RequestInit).body as string);
+      expect(body.group).toBe('');
+    });
+  });
+
+  it('sends group in the create payload and omits it when empty', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, { props: defaultProps() });
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-group')).toBeTruthy();
+    });
+    const nameInput = container.querySelector('#cam-name') as HTMLInputElement;
+    await fireEvent.input(nameInput, { target: { value: 'New Cam' } });
+    const urlInput = container.querySelector('#cam-url') as HTMLInputElement;
+    await fireEvent.input(urlInput, { target: { value: 'rtsp://192.168.1.99/stream' } });
+    const groupInput = container.querySelector('#cam-group') as HTMLInputElement;
+    await fireEvent.input(groupInput, { target: { value: ' 室外 ' } });
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.save'),
+    );
+    await fireEvent.click(saveBtn!);
+
+    await vi.waitFor(() => {
+      const create = mockApiRequest.mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0] === '/cameras',
+      );
+      expect(create, 'POST /cameras should have been issued').toBeTruthy();
+      const body = JSON.parse((create![1] as RequestInit).body as string);
+      expect(body.group).toBe('室外');
+    });
+  });
+});

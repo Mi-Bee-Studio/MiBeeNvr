@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy, setContext } from 'svelte';
-  import { getCamera, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, API_BASE } from '$lib/api';
-  import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link } from 'lucide-svelte';
+  import { getCamera, listCameras, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, xiaomiDevices, getTranscodingSettings, getTranscodingCheck, listCameraGroups, API_BASE } from '$lib/api';
+  import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo, XiaomiDevice } from '$lib/api';
+  import { startBackfill } from '$lib/api/transcoding';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings } from 'lucide-svelte';
+  import CameraForm from '$lib/components/CameraForm.svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import TwoWayAudioButton from '../components/TwoWayAudioButton.svelte';
   import CameraPlayer from '../components/CameraPlayer.svelte';
@@ -72,6 +75,116 @@
   let showImaging = $state(false);
   let showPresets = $state(false);
   let showEvents = $state(false);
+
+  // Camera settings panel (bottom of the page) — reuses CameraForm in edit
+  // mode so settings can be tweaked without leaving the live view. The form
+  // only mounts while the panel is open (its edit-mode init fires several API
+  // calls), and the aux data CameraForm needs is fetched lazily on first open.
+  let showSettings = $state(false);
+  let protocols = $state<ProtocolInfo[]>(DEFAULT_PROTOCOLS);
+  let xiaomiDeviceList = $state<XiaomiDevice[]>([]);
+  let globalTranscodingEnabled = $state(false);
+  let h265Available = $state(true);
+  // Existing group labels for the settings form's datalist (v36).
+  let knownGroups = $state<string[]>([]);
+  let settingsDataLoaded = false;
+  let backfillInfo = $state<{ cameraId: string; count: number; targetCodec: string; resolve: (value: boolean) => void } | null>(null);
+  let backfillLoading = $state(false);
+
+  async function ensureSettingsData() {
+    if (settingsDataLoaded) return;
+    settingsDataLoaded = true;
+    const names = new Set<string>();
+    try {
+      const cams = await listCameras();
+      for (const c of cams) {
+        const g = (c.group || '').trim();
+        if (g) names.add(g);
+      }
+    } catch { /* list unavailable — fall back to registry below */ }
+    try {
+      for (const g of await listCameraGroups()) names.add(g);
+    } catch { /* registry unavailable — datalist just stays camera-derived */ }
+    knownGroups = [...names].sort((a, b) => a.localeCompare(b, 'zh'));
+    try {
+      const res = await xiaomiDevices();
+      if (res.devices && res.devices.length > 0) {
+        xiaomiDeviceList = res.devices;
+      }
+    } catch { /* Xiaomi not authenticated */ }
+    try {
+      const ts = await getTranscodingSettings();
+      globalTranscodingEnabled = ts.enabled;
+      if (ts.enabled) {
+        try {
+          const check = await getTranscodingCheck();
+          h265Available = check.h265_encoder_type !== 'software';
+        } catch { h265Available = false; }
+      }
+    } catch { /* Transcoding may not be available */ }
+  }
+
+  // Quiet refresh after a settings save: re-fetch the camera + probed
+  // protocols so the header, quality switcher and RTSP copy button reflect
+  // the new values WITHOUT remounting the player (no loading spinner).
+  // Re-register with the orchestrator only when a fresh resp is available —
+  // a null resp would collapse the candidate chain (issue #108).
+  async function handleSettingsSave() {
+    showSettings = false;
+    try {
+      camera = await getCamera(cameraId);
+      let resp: ProtocolsResponse | null = null;
+      try {
+        resp = (await getCameraProtocols(cameraId)) as unknown as ProtocolsResponse;
+      } catch {
+        resp = null;
+      }
+      if (resp) cameraProtocolsResp = resp;
+      if (camera && resp) {
+        orchestrator.registerCamera(
+          makeRegistration(camera, resp, {
+            override: getCameraProtocolOverride(camera.id),
+            isHlsCapable: isHlsSupported(camera),
+            isUnsupported: false,
+          }),
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to refresh camera after settings save:', e);
+    }
+  }
+
+  function handleSettingsCancel() {
+    showSettings = false;
+  }
+
+  async function handleBackfillNeeded(info: { cameraId: string; count: number; targetCodec: string }): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      backfillInfo = { ...info, resolve };
+    });
+  }
+
+  async function handleBackfillConfirm() {
+    if (!backfillInfo) return;
+    backfillLoading = true;
+    try {
+      const result = await startBackfill(backfillInfo.cameraId);
+      showToast(t('transcoding.backfill.success', { count: String(result.enqueued) }), 'success');
+      backfillInfo.resolve(true);
+      backfillInfo = null;
+    } catch (e) {
+      console.warn('Backfill failed:', e);
+      showToast(t('transcoding.backfill.error'), 'error');
+    } finally {
+      backfillLoading = false;
+    }
+  }
+
+  function handleBackfillCancel() {
+    if (!backfillInfo) return;
+    backfillInfo.resolve(false);
+    backfillInfo = null;
+  }
 
   function isHlsSupported(cam: Camera): boolean {
     return getProtocolCapabilities(cam.protocol, protocolsMap).hls;
@@ -204,6 +317,13 @@
     }
   });
 
+  // Lazily fetch the CameraForm aux data the first time the settings panel opens
+  $effect(() => {
+    if (showSettings) {
+      ensureSettingsData();
+    }
+  });
+
   onMount(() => {
     if (!cameraId) {
       error = t('live.cameraIdRequired');
@@ -225,7 +345,10 @@
     // this does 1), so the null-registration often landed LAST and clobbered
     // the good chain. The protocolsMap it builds is enough on its own.
     listProtocols().then(list => {
-      if (list && list.length > 0) protocolsMap = buildProtocolsMap(list);
+      if (list && list.length > 0) {
+        protocols = list;
+        protocolsMap = buildProtocolsMap(list);
+      }
       // protocolsMap drives isHlsSupported(); if the global list changed the
       // camera's HLS capability vs. the DEFAULT_PROTOCOLS seed used during the
       // first registration in loadCamera, re-register now with the SAME probed
@@ -509,10 +632,61 @@
             </div>
           {/if}
         {/if}
+
+        <!-- Camera settings (collapsible) — edit this camera without leaving
+             the live view. CameraForm only mounts while open (its edit-mode
+             init issues several API calls); save quietly refreshes the page
+             state without remounting the player. -->
+        <details class="onvif-collapsible" bind:open={showSettings}>
+          <summary class="onvif-collapsible-summary">
+            <div class="onvif-collapsible-title-row">
+              {#if showSettings}
+                <ChevronDown size={16} />
+              {:else}
+                <ChevronRight size={16} />
+              {/if}
+              <Settings size={16} />
+              <span>{t('live.settings.title')}</span>
+            </div>
+          </summary>
+          <div class="onvif-collapsible-body">
+            {#if showSettings && camera}
+              <CameraForm
+                editingCamera={camera}
+                {protocols}
+                {protocolsMap}
+                {xiaomiDeviceList}
+                globalTranscodingEnabled={globalTranscodingEnabled}
+                h265Available={h265Available}
+                knownGroups={knownGroups}
+                onsave={handleSettingsSave}
+                oncancel={handleSettingsCancel}
+                onbackfillneeded={handleBackfillNeeded}
+              />
+            {/if}
+          </div>
+        </details>
       </div>
     {/if}
   </main>
 </div>
+
+<!-- Backfill Confirm Dialog (target codec change with untranscoded recordings) -->
+{#if backfillInfo}
+  <ConfirmDialog
+    title={t('transcoding.backfill.confirm_title', { camera: camera?.name || '' })}
+    message={t('transcoding.backfill.confirm_message', {
+      count: String(backfillInfo.count),
+      codec: backfillInfo.targetCodec.toUpperCase(),
+    })}
+    confirmText={t('transcoding.backfill.confirm_button')}
+    cancelText={t('recordings.cancel')}
+    onconfirm={handleBackfillConfirm}
+    oncancel={handleBackfillCancel}
+    variant="primary"
+    loading={backfillLoading}
+  />
+{/if}
 
 <style>
   .onvif-collapsible {

@@ -118,6 +118,10 @@ type CameraUpdate struct {
 	// DeviceID/ChannelID restarts the recorder (the SIP session must be
 	// re-INVITEd to the new channel).
 	GB28181 *config.GB28181ChannelConfig
+	// Group is the camera-management grouping label (v36, UI organization
+	// only). nil = unchanged; empty string = ungroup. DB-only — no recorder
+	// restart, not persisted to YAML.
+	Group *string
 }
 
 type CameraManager struct {

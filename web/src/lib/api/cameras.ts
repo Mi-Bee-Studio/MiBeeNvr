@@ -25,6 +25,8 @@ export interface Camera {
   brand?: string;
   model?: string;
   serial_number?: string;
+  /** Camera-management group label (v36). Empty/undefined = ungrouped. */
+  group?: string;
   status?: string;
   error_type?: string | null;
   error_detail?: string | null;
@@ -195,6 +197,8 @@ export interface CreateCameraRequest {
   password?: string;
   description?: string;
   location?: string;
+  /** Camera-management group label (v36). Empty/undefined = ungrouped. */
+  group?: string;
   brand?: string;
   model?: string;
   serial_number?: string;
@@ -252,6 +256,8 @@ export interface UpdateCameraRequest {
   password?: string;
   description?: string;
   location?: string;
+  /** Camera-management group label (v36). Empty string = ungroup. */
+  group?: string;
   brand?: string;
   model?: string;
   serial_number?: string;
@@ -538,6 +544,50 @@ export async function createCamera(data: CreateCameraRequest, signal?: AbortSign
 
 export async function getCamera(id: string, signal?: AbortSignal): Promise<Camera> {
   return apiRequest<Camera>(`/cameras/${id}`, { signal });
+}
+
+// ── Camera group registry (v37) ─────────────────────────────────────────────
+// The registry lets an empty group exist ahead of any member camera; rename/
+// delete walk the member cameras server-side. Per-camera moves (drag & drop)
+// go through updateCamera({group}) instead.
+
+export async function listCameraGroups(signal?: AbortSignal): Promise<string[]> {
+  const groups = await apiRequest<string[]>(`/cameras/groups`, { signal: signal ?? AbortSignal.timeout(15000) });
+  return Array.isArray(groups) ? groups : [];
+}
+
+export async function createCameraGroup(name: string, signal?: AbortSignal): Promise<void> {
+  await apiRequest<{ name: string }>(`/cameras/groups`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+    signal: signal ?? AbortSignal.timeout(15000),
+  });
+}
+
+export async function renameCameraGroup(oldName: string, newName: string, signal?: AbortSignal): Promise<void> {
+  await apiRequest<{ name: string }>(`/cameras/groups/${encodeURIComponent(oldName)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: newName }),
+    signal: signal ?? AbortSignal.timeout(15000),
+  });
+}
+
+/** Stores the full named-group order (drag-to-reorder, v38). */
+export async function setCameraGroupsOrder(names: string[], signal?: AbortSignal): Promise<void> {
+  await apiRequest<{ count: number }>(`/cameras/groups/order`, {
+    method: 'PUT',
+    body: JSON.stringify({ names }),
+    signal: signal ?? AbortSignal.timeout(15000),
+  });
+}
+
+/** Deletes the group and ungroups its member cameras. Returns the number ungrouped. */
+export async function deleteCameraGroup(name: string, signal?: AbortSignal): Promise<number> {
+  const resp = await apiRequest<{ ungrouped: number }>(`/cameras/groups/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    signal: signal ?? AbortSignal.timeout(15000),
+  });
+  return resp?.ungrouped ?? 0;
 }
 
 export async function updateCamera(id: string, data: UpdateCameraRequest, signal?: AbortSignal): Promise<Camera> {

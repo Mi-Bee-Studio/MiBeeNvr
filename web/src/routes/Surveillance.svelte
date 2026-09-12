@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, setContext } from 'svelte';
-  import { getDashboardCameras, getAuthHeader, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, API_BASE } from '$lib/api';
+  import { getDashboardCameras, getAuthHeader, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, listCameraGroups, API_BASE } from '$lib/api';
   import type { Camera, ProtocolInfo, CameraProtocolsResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
-  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause } from 'lucide-svelte';
+  import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, Search, Plus } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import CameraPlayer from '../components/CameraPlayer.svelte';
   import { formatDate } from '$lib/format';
@@ -118,12 +118,73 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
   }
 
+  // Camera picker (config panel) state — search + online-only filter +
+  // grouping. Sections mirror the management page's grouping: registry order,
+  // derived-only labels appended (zh collation), ungrouped last. With many
+  // cameras, scanning a flat checkbox list stops scaling; the filter + one
+  // click per group brings picking 4 tiles back to seconds.
+  let configSearch = $state('');
+  let onlineOnly = $state(true);
+  let registryGroups = $state<string[]>([]);
+
+  function isCameraOnline(c: Camera): boolean {
+    const st = (c.status || '').toLowerCase();
+    return st === 'recording' || st === 'active';
+  }
+
+  const pickerSections = $derived.by(() => {
+    const q = configSearch.trim().toLowerCase();
+    const filtered = allCameras.filter(c => {
+      if (q) {
+        const name = (c.name || '').toLowerCase();
+        const group = (c.group || '').trim().toLowerCase();
+        if (!name.includes(q) && !group.includes(q)) return false;
+      }
+      // Online-only hides OFFLINE cameras, but a selected one stays visible
+      // (so the user can always see and uncheck what's already in the grid).
+      if (onlineOnly && !isCameraOnline(c) && !pendingCameraIds.includes(c.id)) return false;
+      return true;
+    });
+    const byGroup = new Map<string, Camera[]>();
+    for (const c of filtered) {
+      const g = (c.group || '').trim();
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g)!.push(c);
+    }
+    const inRegistry = new Set(registryGroups);
+    const derived = [...byGroup.keys()]
+      .filter(g => g !== '' && !inRegistry.has(g))
+      .sort((a, b) => a.localeCompare(b, 'zh'));
+    const sections: { name: string; cameras: Camera[] }[] = [];
+    for (const n of registryGroups) {
+      const cams = byGroup.get(n);
+      if (cams && cams.length > 0) sections.push({ name: n, cameras: cams });
+    }
+    for (const n of derived) sections.push({ name: n, cameras: byGroup.get(n)! });
+    const ungrouped = byGroup.get('');
+    if (ungrouped && ungrouped.length > 0) sections.push({ name: '', cameras: ungrouped });
+    return sections;
+  });
+
+  function addGroupToSelection(name: string): void {
+    const sec = pickerSections.find(s => s.name === name);
+    if (!sec) return;
+    for (const c of sec.cameras) {
+      if (pendingCameraIds.length >= 4) break;
+      if (!pendingCameraIds.includes(c.id)) pendingCameraIds = [...pendingCameraIds, c.id];
+    }
+  }
+
   function toggleCameraSelection(cameraId: string) {
     if (pendingCameraIds.includes(cameraId)) {
       pendingCameraIds = pendingCameraIds.filter(id => id !== cameraId);
     } else if (pendingCameraIds.length < 4) {
       pendingCameraIds = [...pendingCameraIds, cameraId];
     }
+  }
+
+  function clearPendingSelection(): void {
+    pendingCameraIds = [];
   }
 
   function applyCameraSelection() {
@@ -426,6 +487,10 @@
     } finally {
       loading = false;
     }
+    // Camera groups for the picker's grouped sections (best-effort).
+    try {
+      registryGroups = await listCameraGroups();
+    } catch (e) { console.warn('Failed to load camera groups:', e); }
     // Fetch camera health scores (public, no auth)
     try {
       const healthData = await getHealthCameras();
@@ -555,23 +620,100 @@
     <!-- Camera configuration panel -->
     {#if configOpen}
       <div class="card p-4 mb-4">
-        <h3 class="text-sm font-semibold th-text-primary mb-3">{t('dashboard.selectCameras')}</h3>
-        <p class="text-xs th-text-secondary mb-3">{t('dashboard.maxCameras')}</p>
-        <div class="space-y-1 max-h-48 overflow-y-auto mb-4">
-          {#each allCameras as camera}
-            <label class="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[var(--bg-tertiary)] cursor-pointer transition-colors">
-              <input
-                type="checkbox"
-                checked={pendingCameraIds.includes(camera.id)}
-                onchange={() => toggleCameraSelection(camera.id)}
-                disabled={!pendingCameraIds.includes(camera.id) && pendingCameraIds.length >= 4}
-                class="accent-[var(--color-primary)]"
-              />
-              <span class="text-sm th-text-primary">{camera.name || camera.id}</span>
-              <span class="text-xs th-text-muted ml-auto">{camera.protocol}</span>
-            </label>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold th-text-primary">{t('dashboard.selectCameras')}</h3>
+          <span class="text-xs th-text-muted">{pendingCameraIds.length} / 4 · {t('dashboard.maxCameras')}</span>
+        </div>
+
+        <!-- Toolbar: search + online-only filter + clear -->
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <div class="relative flex-1 min-w-[180px]">
+            <Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 th-text-muted pointer-events-none" />
+            <input
+              type="text"
+              class="input pl-8 py-1.5 text-sm"
+              placeholder={t('dashboard.searchCameras')}
+              bind:value={configSearch}
+            />
+          </div>
+          <label class="flex items-center gap-1.5 text-xs th-text-secondary cursor-pointer whitespace-nowrap select-none">
+            <input type="checkbox" bind:checked={onlineOnly} class="accent-[var(--color-primary)]" />
+            {t('dashboard.onlineOnly')}
+          </label>
+          <button
+            class="btn btn-ghost text-xs px-2 py-1"
+            onclick={clearPendingSelection}
+            disabled={pendingCameraIds.length === 0}
+          >
+            {t('dashboard.clearSelection')}
+          </button>
+        </div>
+
+        <!-- Selected chips (ordered — grid position order) -->
+        {#if pendingCameraIds.length > 0}
+          <div class="flex flex-wrap gap-1.5 mb-3">
+            {#each pendingCameraIds as id, i (id)}
+              {@const chipCam = allCameras.find(c => c.id === id)}
+              <span class="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-[var(--color-primary)] text-white text-xs">
+                <span class="opacity-70">{i + 1}.</span>
+                {chipCam?.name || id}
+                <button
+                  type="button"
+                  class="p-0.5 rounded-full hover:bg-white/20 transition-colors"
+                  onclick={() => toggleCameraSelection(id)}
+                  aria-label={t('dashboard.removeCamera')}
+                  title={t('dashboard.removeCamera')}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            {/each}
+          </div>
+        {/if}
+
+        <!-- Grouped, filtered camera list -->
+        <div class="space-y-0.5 max-h-72 overflow-y-auto mb-4">
+          {#each pickerSections as sec (sec.name)}
+            <div class="pt-1.5">
+              <div class="flex items-center gap-2 px-2 py-1 sticky top-0 bg-[var(--bg-elevated)] z-[1]">
+                <span class="text-[11px] font-semibold th-text-secondary tracking-wide">{sec.name || t('cameras.groupUngrouped')}</span>
+                <span class="text-[11px] th-text-muted">{sec.cameras.length}</span>
+                <div class="flex-1 border-t th-border opacity-50"></div>
+                {#if pendingCameraIds.length < 4}
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-0.5 text-[11px] hover:underline"
+                    style="color: var(--color-primary);"
+                    onclick={() => addGroupToSelection(sec.name)}
+                    title={t('dashboard.addGroupHint')}
+                  >
+                    <Plus size={11} />
+                    {t('dashboard.addGroup')}
+                  </button>
+                {/if}
+              </div>
+              {#each sec.cameras as camera (camera.id)}
+                {@const online = isCameraOnline(camera)}
+                <label class="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[var(--bg-tertiary)] cursor-pointer transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={pendingCameraIds.includes(camera.id)}
+                    onchange={() => toggleCameraSelection(camera.id)}
+                    disabled={!pendingCameraIds.includes(camera.id) && pendingCameraIds.length >= 4}
+                    class="accent-[var(--color-primary)]"
+                  />
+                  <span class="w-1.5 h-1.5 rounded-full shrink-0 {online ? 'bg-emerald-500' : 'bg-gray-400'}"
+                    title={online ? t('cameras.statusRecording') : t('cameras.statusStopped')}></span>
+                  <span class="text-sm th-text-primary truncate">{camera.name || camera.id}</span>
+                  <span class="text-xs th-text-muted ml-auto shrink-0">{camera.protocol}</span>
+                </label>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-xs th-text-muted px-2 py-6 text-center">{t('dashboard.noMatch')}</p>
           {/each}
         </div>
+
         <div class="flex justify-end gap-2">
           <button
             class="btn btn-ghost text-sm px-3 py-1.5"

@@ -23,6 +23,8 @@
    onRetryMerge?: (camera: Camera) => void;
    onrediscover?: (camera: Camera) => void;
    onactivate?: (camera: Camera, credentials: { username: string; password: string }) => Promise<void>;
+   /** Enable drag-to-regroup (camera management page, v37). */
+   groupDraggable?: boolean;
  }
 
   let {
@@ -40,7 +42,8 @@
    mergeError = '',
    onRetryMerge,
    onrediscover,
-   onactivate
+   onactivate,
+   groupDraggable = false,
  }: Props = $props();
 
   let menuOpen = $state(false);
@@ -199,7 +202,13 @@ let healthShowWarningIcon = $derived(
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="card camera-card border th-border p-4 transition-all {menuOpen || pushTargetsOpen ? 'is-popover-open' : ''}"
+  class="card camera-card border th-border p-4 transition-all {menuOpen || pushTargetsOpen ? 'is-popover-open' : ''} {groupDraggable ? 'cursor-grab active:cursor-grabbing' : ''}"
+  draggable={groupDraggable ? 'true' : undefined}
+  ondragstart={groupDraggable ? (e: DragEvent) => {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData('application/x-mibee-camera', camera.id);
+    e.dataTransfer.effectAllowed = 'move';
+  } : undefined}
 >
   <!-- Top: Name + Status -->
   <div class="flex items-start justify-between gap-2 mb-3">
