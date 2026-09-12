@@ -6,7 +6,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-
 // TestBuildAppDeps_MemorySoftLimitGaugeSet: the #756 gauge publishes the
 // limit recorded by main.go's applyMemoryLimit (0 = not set is valid).
 func TestBuildAppDeps_MemorySoftLimitGaugeSet(t *testing.T) {
