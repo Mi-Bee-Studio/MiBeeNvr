@@ -26,7 +26,8 @@ mjpegmerge.go    # MergeMJPEGSegments() — directory-based JPEG file moves
 
 ## CONVENTIONS
 
-- **Streaming merge**: Fixed 1MB buffer (`mergeBufferSize = 1 << 20`). Sample data never fully loaded
+- **Streaming merge**: adaptive buffer (`mergeBufferSize()` — 1MB on <1.5GB-RAM hosts, 4MB above; #754). Sample data never fully loaded
+- **Page-cache hints (#754)**: merge sources get `fadvise.Sequential` at open and `fadvise.DontNeed` at the LAST consumer's close (video pass defers it when an audio pass will reopen the file). Hints are advisory — failures debug-log only
 - **Grouping**: Segments grouped by codec + SPS/PPS (H.264) or VPS/SPS/PPS (H.265) byte equality. Incompatible groups skipped
 - **Disk space check**: Requires 1.1x estimated merged size free. Skips camera if insufficient
 - **Batch limits**: `BatchLimit` (default 200) prevents runaway merges per pass

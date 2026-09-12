@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/fadvise"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -162,7 +163,13 @@ func collectAVIFrames(filePath string) ([]aviVideoFrame, int64, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("open AVI: %w", err)
 	}
-	defer f.Close()
+	// Read once, front-to-back (#754): readahead while demuxing, drop the
+	// cache at the end so read-once media stops evicting hot pages.
+	fadvise.Sequential(f)
+	defer func() {
+		fadvise.DontNeed(f)
+		f.Close()
+	}()
 
 	d, err := avi.NewDemuxer(f)
 	if err != nil {
@@ -442,12 +449,17 @@ func (e *RecordingFrameExtractor) extractMP4(filePath string, isH265 bool, inter
 		return 0, fmt.Errorf("create output dir: %w", err)
 	}
 
-	// Open file for seeking to sample offsets.
+	// Open file for seeking to sample offsets. One-pass read (#754):
+	// readahead while extracting, drop the cache at the end.
 	f, err := os.Open(filePath)
 	if err != nil {
 		return 0, fmt.Errorf("open MP4: %w", err)
 	}
-	defer f.Close()
+	fadvise.Sequential(f)
+	defer func() {
+		fadvise.DontNeed(f)
+		f.Close()
+	}()
 
 	ext := ".h264"
 	if isH265 {
@@ -512,7 +524,11 @@ func (e *RecordingFrameExtractor) extractMP4Window(recPath string, isH265 bool, 
 	if err != nil {
 		return 0, fmt.Errorf("open MP4: %w", err)
 	}
-	defer f.Close()
+	fadvise.Sequential(f)
+	defer func() {
+		fadvise.DontNeed(f)
+		f.Close()
+	}()
 
 	ext := ".h264"
 	if isH265 {
