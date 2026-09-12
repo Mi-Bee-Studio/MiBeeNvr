@@ -48,13 +48,23 @@ func registerServices(a *App, deps *appDeps) error {
 		return err
 	}
 
-	// 1. db — registered first so it stops last
+	// 1. db — registered first so it stops last. Start also launches the
+	// idle-window WAL checkpoint loop (#752); it owns a cancel derived from
+	// the start ctx because App.Stop does not cancel it — the service's Stop
+	// cancels first, then closes the DB (checkpoint+remove -wal happens on
+	// last-connection close).
 	if err := a.Register(&serviceFunc{
 		name: "db",
-		startFunc: func(_ context.Context) error {
+		startFunc: func(ctx context.Context) error {
+			walCtx, walCancel := context.WithCancel(ctx)
+			deps.dbStopWAL = walCancel
+			deps.db.StartWALMaintenance(walCtx)
 			return nil
 		},
 		stopFunc: func() error {
+			if deps.dbStopWAL != nil {
+				deps.dbStopWAL()
+			}
 			deps.db.Close()
 			return nil
 		},

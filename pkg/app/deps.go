@@ -55,6 +55,7 @@ type appDeps struct {
 
 	// Storage + observability
 	db           *storage.DB
+	dbStopWAL    context.CancelFunc // cancels the db service's WAL maintenance loop (#752)
 	store        *storage.Manager
 	migrationMgr *migration.Migrator
 	metrics      *metrics.Metrics
