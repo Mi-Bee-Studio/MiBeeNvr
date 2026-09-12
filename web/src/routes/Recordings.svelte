@@ -20,7 +20,7 @@
 
   import type { Recording, Camera, RecordingDaySummary, RecordingTimelineSegment } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { formatDate, formatFileSize, formatMergeWindowLabel } from '$lib/format';
+  import { formatDate, formatFileSize, formatMergeWindowLabel, mergeDurationI18nKeys, parseServerDate } from '$lib/format';
   import { showToast } from '$lib/toast';
   import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass, Server } from 'lucide-svelte';
   import GB28181DeviceRecords from '$lib/components/GB28181DeviceRecords.svelte';
@@ -39,20 +39,21 @@
   import { Brain } from 'lucide-svelte';
 
   // ── URL params initialization ──
-  // Timeline is the default view for continuous 24/7 recording (the natural
-  // interaction model). List falls back to per-segment cards, which suit
-  // sparse event clips but not thousands of 30s fragments. Timelapse is its
-  // own view because timelapse segments are sparse point-samples (not coverage)
-  // and mixing them with video bands distorts the perceived recording gaps.
-  let initialViewMode: 'timeline' | 'list' | 'timelapse' | 'device' = 'timeline';
+  // Timeline is the default (and only day-axis) view for continuous 24/7
+  // recording — raw timelapse samples and completed merges render as their own
+  // layers inside it (dotted ribbon / top strips in DayTimeline). List falls
+  // back to per-segment cards, which suit sparse event clips but not thousands
+  // of 30s fragments.
+  let initialViewMode: 'timeline' | 'list' | 'device' = 'timeline';
   let initialFormat = 'All';
   let initialCameraId = '';
   let initialDate: string | null = null;
   try {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
     const v = params.get('view');
-    if (v === 'list' || v === 'timeline' || v === 'timelapse' || v === 'device') initialViewMode = v;
-    // Legacy ?view=gallery URLs (gallery view was removed) silently fall back
+    if (v === 'list' || v === 'timeline' || v === 'device') initialViewMode = v;
+    // Legacy ?view=gallery / ?view=timelapse URLs (gallery view was removed;
+    // the timelapse view was folded INTO the timeline) silently fall back
     // to the default timeline view rather than rendering an empty page.
     const f = params.get('format');
     if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) initialFormat = f;
@@ -74,6 +75,7 @@
   interface DayCacheEntry {
     recordings: typeof timelineRecordings;
     events: typeof aiTimelineEvents;
+    merges: typeof dayMerges;
     at: number;
   }
   let dayCache: { key: string; entry: DayCacheEntry } | null = null;
@@ -86,8 +88,13 @@
     return null;
   }
 
-  function putDayCache(key: string, recordings: typeof timelineRecordings, events: typeof aiTimelineEvents) {
-    dayCache = { key, entry: { recordings, events, at: Date.now() } };
+  function putDayCache(
+    key: string,
+    recordings: typeof timelineRecordings,
+    events: typeof aiTimelineEvents,
+    merges: typeof dayMerges,
+  ) {
+    dayCache = { key, entry: { recordings, events, merges, at: Date.now() } };
   }
 
   // Prefetch the detail route chunk on first pointer interaction so the
@@ -139,7 +146,7 @@
   let currentPageNum = $state(1);
 
   // ── View mode ──
-  let viewMode = $state<'timeline' | 'list' | 'timelapse' | 'device'>(initialViewMode);
+  let viewMode = $state<'timeline' | 'list' | 'device'>(initialViewMode);
 
   // ── Timeline data (all recordings for the selected day, grouped by camera in-component) ──
   // Uses the lightweight RecordingTimelineSegment (7 fields) from
@@ -171,12 +178,16 @@
     return cam?.protocol === 'gb28181' && cam.gb28181?.device_id ? cam.gb28181.device_id : '';
   });
 
-  // Slices of the day's recordings keyed off the active view: the Timeline tab
-  // shows video bands only (no cyan timelapse noise), the Timelapse tab shows
-  // timelapse bands only. We fetch all formats once (loadTimelineData) and slice
-  // in-component to avoid a second network round-trip and keep totals consistent.
-  let timelineRecordingsVideo = $derived(timelineRecordings.filter(r => r.format !== 'timelapse'));
-  let timelineRecordingsTimelapse = $derived(timelineRecordings.filter(r => r.format === 'timelapse'));
+  // The day's recordings feed DayTimeline whole: video formats render as
+  // coverage bands, timelapse-format rows render as the bottom dotted sample
+  // ribbon (in-component). One fetch, no client slicing.
+
+  // ── Day merges (top strips in DayTimeline) ──
+  // Completed periodic merges whose window INTERSECTS the selected day, across
+  // all cameras. Fetched alongside the day's recordings; DayTimeline buckets
+  // by camera and draws one click-to-play strip per merge.
+  let dayMerges = $state<TimelapseMerge[]>([]);
+  let dayMergesAbortController: AbortController | null = null;
 
   // ── Selection ──
   let selectedIds = $state<Set<string>>(new Set());
@@ -260,26 +271,25 @@ let selectedPresetCamera = $state<string>('');
 // ── Merge history state ──
 // The preset buttons only reach the MOST RECENT completed merge per window
 // type (limit:1, window_start DESC) — earlier days would be unreachable
-// without this list. One row per completed merge; click plays it.
+// without this list. One row per completed merge; click plays it. Lives in a
+// collapsible card under the timeline.
 let mergeHistory = $state<TimelapseMerge[]>([]);
 let mergeHistoryLoading = $state(false);
 let mergeHistoryCamera = $state(''); // camera the loaded list belongs to
 let mergeHistoryDirty = $state(false); // a merge completed since the last load
+let historyOpen = $state(
+  (() => {
+    try { return localStorage.getItem('mibee_nvr_tl_history_open') === '1'; } catch { return false; }
+  })(),
+);
 
-// Short duration-label translations for history rows (the settings editor uses
-// longer variants like "自然日（按午夜对齐）").
-const mergeDurationLabelKeys: Record<string, string> = {
-  '1h': 'timelapseMerge.duration1h',
-  '8h': 'timelapseMerge.duration8h',
-  '12h': 'timelapseMerge.duration12h',
-  '24h': 'timelapseMerge.duration24h',
-  '7d': 'timelapseMerge.duration7d',
-  '30d': 'timelapseMerge.duration30d',
-  'natural-day': 'timelapseMerge.durationNaturalDay',
-};
+function toggleHistoryOpen() {
+  historyOpen = !historyOpen;
+  try { localStorage.setItem('mibee_nvr_tl_history_open', historyOpen ? '1' : '0'); } catch {}
+}
 
 function mergeDurationLabel(durationLabel: string): string {
-  const key = mergeDurationLabelKeys[durationLabel];
+  const key = mergeDurationI18nKeys[durationLabel];
   return key ? t(key) : durationLabel;
 }
 
@@ -297,10 +307,10 @@ async function loadMergeHistory(cameraId: string) {
   }
 }
 
-// Load (or refresh) the history whenever the timelapse view becomes visible,
-// the preset camera changes, or a preset generation just completed.
+// Load (or refresh) the history whenever the card is opened, the preset
+// camera changes, or a preset generation just completed.
 $effect(() => {
-  if (viewMode !== 'timelapse') return;
+  if (!historyOpen) return;
   const cameraId = selectedPresetCamera || cameras[0]?.id;
   if (!cameraId) return;
   if (!mergeHistoryDirty && mergeHistoryCamera === cameraId) return;
@@ -492,6 +502,7 @@ $effect(() => {
     if (!selectedDate) {
       timelineRecordings = [];
       aiTimelineEvents = [];
+      dayMerges = [];
       return;
     }
     // Instant paint from the session cache (returning from a detail page),
@@ -501,14 +512,16 @@ $effect(() => {
     if (cached && timelineRecordings !== cached.recordings) {
       timelineRecordings = cached.recordings;
       aiTimelineEvents = cached.events;
+      dayMerges = cached.merges;
     }
     if (timelineAbortController) timelineAbortController.abort();
     timelineAbortController = new AbortController();
     timelineLoading = true;
-    // Kick off the AI events fetch in parallel (best-effort, never blocks the
-    // recordings render). One call covers ALL cameras for the day (no camera_id
-    // filter) — DayTimeline buckets events per-row in-component.
+    // Kick off the AI events + day-merges fetches in parallel (best-effort,
+    // never block the recordings render). One call each covers ALL cameras for
+    // the day (no camera_id filter) — DayTimeline buckets per-row in-component.
     void loadDayAIEvents(selectedDate);
+    void loadDayMerges(selectedDate);
     try {
       const dayStart = new Date(selectedDate + 'T00:00:00');
       const dayEnd = new Date(selectedDate + 'T23:59:59.999');
@@ -524,7 +537,7 @@ $effect(() => {
       });
       timelineRecordings = response.segments;
       timelineTruncated = response.truncated;
-      putDayCache(cacheKey, timelineRecordings, aiTimelineEvents);
+      putDayCache(cacheKey, timelineRecordings, aiTimelineEvents, dayMerges);
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
       // Non-fatal: timeline stays stale on error
@@ -539,7 +552,7 @@ $effect(() => {
   async function loadDayAIEvents(date: string) {
     if (!getMiBeeVisionConnected()) {
       aiTimelineEvents = [];
-    if (dayCache && dayCache.key === date) putDayCache(date, timelineRecordings, aiTimelineEvents);
+    if (dayCache && dayCache.key === date) putDayCache(date, timelineRecordings, aiTimelineEvents, dayMerges);
       return;
     }
     if (aiEventsAbortController) aiEventsAbortController.abort();
@@ -565,6 +578,38 @@ $effect(() => {
       // Events are an overlay, not critical — fail silent.
       aiTimelineEvents = [];
     }
+  }
+
+  // Best-effort fetch of the completed merges INTERSECTING the selected day,
+  // across all cameras. The API bounds window_start only (end=<dayEnd>), so a
+  // merge started before the day but still covering it (7d/30d windows) is
+  // client-filtered by window_end ≥ dayStart. 200 newest rows is far beyond
+  // any realistic day's merge count.
+  async function loadDayMerges(date: string) {
+    if (dayMergesAbortController) dayMergesAbortController.abort();
+    dayMergesAbortController = new AbortController();
+    try {
+      const [y, m, d] = date.split('-').map(Number);
+      const dayStartMs = new Date(y, m - 1, d, 0, 0, 0).getTime();
+      const dayEndISO = new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
+      const resp = await listTimelapseMerges({
+        end: dayEndISO,
+        status: 'completed',
+        limit: 200,
+        signal: dayMergesAbortController.signal,
+      });
+      dayMerges = resp.merges.filter(
+        (mm) => parseServerDate(mm.window_end).getTime() >= dayStartMs - 1,
+      );
+    } catch (e) {
+      // Overlay, not critical — fail silent (keep stale on abort).
+      if (!(e instanceof DOMException && e.name === 'AbortError')) dayMerges = [];
+    }
+  }
+
+  // Play a completed merge from a timeline strip click.
+  function handlePlayMerge(mergeId: number) {
+    window.location.hash = `#/timelapse-merge/${mergeId}`;
   }
 
   // Seek from the timeline → navigate to the recording detail with the clicked
@@ -844,6 +889,7 @@ $effect(() => {
             presetMergeProgress = data.progress ?? 0;
             if (data.status === 'completed') {
               mergeHistoryDirty = true; // refresh the history list if still mounted
+              if (selectedDate) void loadDayMerges(selectedDate); // new top strip
               // Find the merge row for this window+duration and navigate to it.
               void findAndPlayMerge(cameraId, duration, refTime).then(resolve, reject);
             } else if (data.status === 'failed') {
@@ -972,11 +1018,10 @@ $effect(() => {
   // apply here — the timeline shows all cameras for the whole day; the coverage
   // bands are colored by format). AI class DOES apply (e.g. "含人" narrows the day's
   // bands to recordings with person events). viewMode gating avoids fetching when
-  // neither timeline-viewing tab is visible (same lazy pattern as list). The Timelapse
-  // tab reuses the same day fetch and slices off the timelapse-format rows.
+  // the timeline tab is not visible (same lazy pattern as list).
   let timelineLoadTimeout: number;
   $effect(() => {
-    if (viewMode === 'timeline' || viewMode === 'timelapse') {
+    if (viewMode === 'timeline') {
       const _ = [selectedDate, aiClass, activityFilter, minMotionScore];
       clearTimeout(timelineLoadTimeout);
       timelineLoadTimeout = window.setTimeout(() => loadTimelineData(), 100);
@@ -1020,9 +1065,9 @@ $effect(() => {
       try {
         const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
         const v = params.get('view');
-        if (v === 'timeline' || v === 'list' || v === 'timelapse' || v === 'device') viewMode = v;
-        // Legacy ?view=gallery (gallery view removed) falls back to default
-        // timeline via the initial value — no explicit handling needed.
+        if (v === 'timeline' || v === 'list' || v === 'device') viewMode = v;
+        // Legacy ?view=gallery / ?view=timelapse (both folded into the
+        // timeline view) fall back to default timeline via the initial value.
         const f = params.get('format');
         if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) formatPill = f;
         const c = params.get('camera');
@@ -1035,9 +1080,9 @@ $effect(() => {
     return () => window.removeEventListener('hashchange', handler);
   });
 
-  // Auto-select today's date when in a timeline-viewing mode and no date selected
+  // Auto-select today's date when in the timeline view and no date selected
   $effect(() => {
-    if ((viewMode === 'timeline' || viewMode === 'timelapse') && !selectedDate) {
+    if (viewMode === 'timeline' && !selectedDate) {
       const today = new Date();
       const y = today.getFullYear();
       const m = String(today.getMonth() + 1).padStart(2, '0');
@@ -1160,13 +1205,6 @@ $effect(() => {
           {t('library.viewTimeline')}
         </button>
         <button
-          class="btn btn-sm {viewMode === 'timelapse' ? 'btn-primary' : 'btn-ghost'}"
-          onclick={() => viewMode = 'timelapse'}
-        >
-          <Hourglass size={16} class="mr-1" />
-          {t('library.viewTimelapse')}
-        </button>
-        <button
           class="btn btn-sm {viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}"
           onclick={() => viewMode = 'list'}
         >
@@ -1195,7 +1233,8 @@ $effect(() => {
           <button onclick={loadCalendarSummary} class="btn btn-primary btn-sm">{t('common.retry')}</button>
         </div>
       {:else if viewMode === 'timeline'}
-        <!-- ── Timeline view (video recordings only; timelapse has its own tab) ── -->
+        <!-- ── Timeline view (layered: video bands + timelapse sample ribbon +
+             merge strips — the former separate timelapse tab folded in) ── -->
         {#if timelineLoading && timelineRecordings.length === 0}
           <div class="card p-12 text-center border th-border">
             <div class="flex justify-center mb-4 th-text-tertiary">
@@ -1205,7 +1244,41 @@ $effect(() => {
           </div>
         {:else}
           <div class="card p-4 border th-border">
-            <p class="text-xs th-text-tertiary mb-2">{t('library.videoOnly')}</p>
+            <!-- Toolbar: layer legend hint (left) + timelapse preset generation
+                 (right) — play (or generate) a long-window merged timelapse. -->
+            <div class="flex items-center gap-2 flex-wrap pb-2 mb-3 border-b th-border">
+              <span class="text-[10px] th-text-tertiary">{t('library.timelineLayersHint')}</span>
+              <div class="ml-auto flex items-center gap-2 flex-wrap">
+                <span class="text-xs th-text-tertiary">{t('timelapseMerge.title')}:</span>
+                <!-- Camera picker for presets -->
+                <select
+                  class="input input-xs w-auto"
+                  bind:value={selectedPresetCamera}
+                  disabled={presetGenerating}
+                  aria-label={t('timelapseMerge.camera')}
+                >
+                  {#each cameras as cam}
+                    <option value={cam.id}>{cam.name || cam.id}</option>
+                  {/each}
+                </select>
+                {#each timelapsePresets as preset}
+                  <button
+                    class="btn btn-sm {presetGenerating ? 'btn-ghost' : 'btn-secondary'}"
+                    disabled={presetGenerating || cameras.length === 0}
+                    onclick={() => handlePresetClick(preset)}
+                    title={t(preset.labelKey)}
+                  >
+                    {t(preset.labelKey)}
+                  </button>
+                {/each}
+                {#if presetGenerating}
+                  <span class="text-xs th-text-secondary flex items-center gap-1">
+                    <Hourglass size={12} class="animate-pulse" />
+                    {presetMergeProgress}%
+                  </span>
+                {/if}
+              </div>
+            </div>
             {#if timelineTruncated}
               <div class="flex items-start gap-2 mb-3 p-2 rounded border text-xs th-text-secondary"
                    style="background: rgba(234, 179, 8, 0.08); border-color: rgba(234, 179, 8, 0.35);">
@@ -1215,116 +1288,69 @@ $effect(() => {
             {/if}
             <DayTimeline
               {cameras}
-              recordings={timelineRecordingsVideo}
+              recordings={timelineRecordings}
               selectedDate={selectedDate || ''}
               onseek={handleTimelineSeek}
               aiEvents={showAIMarkers && miBeeVisionConnected ? aiTimelineEvents : []}
+              merges={dayMerges}
+              onplaymerge={handlePlayMerge}
             />
           </div>
-        {/if}
-      {:else if viewMode === 'timelapse'}
-        <!-- ── Timelapse view (timelapse-format recordings only) ── -->
-        {#if timelineLoading && timelineRecordings.length === 0}
-          <div class="card p-12 text-center border th-border">
-            <div class="flex justify-center mb-4 th-text-tertiary">
-              <Hourglass size={48} class="animate-pulse" />
-            </div>
-            <p class="th-text-secondary">{t('common.loading')}</p>
-          </div>
-        {:else}
-          <!-- Preset range buttons: play (or generate) a long-window timelapse -->
-          <div class="card p-3 border th-border mb-3">
-            <div class="flex items-center gap-2 flex-wrap">
-              <span class="text-xs th-text-tertiary mr-1">{t('timelapseMerge.title')}:</span>
-              <!-- Camera picker for presets -->
-              <select
-                class="input input-xs w-auto"
-                bind:value={selectedPresetCamera}
-                disabled={presetGenerating}
-                aria-label={t('timelapseMerge.camera')}
-              >
-                {#each cameras as cam}
-                  <option value={cam.id}>{cam.name || cam.id}</option>
-                {/each}
-              </select>
-              {#each timelapsePresets as preset}
-                <button
-                  class="btn btn-sm {presetGenerating ? 'btn-ghost' : 'btn-secondary'}"
-                  disabled={presetGenerating || cameras.length === 0}
-                  onclick={() => handlePresetClick(preset)}
-                  title={t(preset.labelKey)}
-                >
-                  {t(preset.labelKey)}
-                </button>
-              {/each}
-              {#if presetGenerating}
-                <span class="text-xs th-text-secondary flex items-center gap-1">
-                  <Hourglass size={12} class="animate-pulse" />
-                  {presetMergeProgress}%
-                </span>
-              {/if}
-            </div>
-            <p class="text-[10px] th-text-tertiary mt-2">
-              {t('timelapseMerge.generatePrompt')}
-            </p>
-          </div>
 
-          <!-- Completed-merge history: every generated merge for the selected
-               camera is reachable here, not just the latest one per preset. -->
-          <div class="card p-3 border th-border mb-3">
-            <div class="flex items-center justify-between mb-2">
+          <!-- Completed-merge history (collapsible): every generated merge for
+               the selected camera is reachable here, not just the latest one
+               per preset — the archive behind the timeline's top strips. -->
+          <div class="card border th-border mt-3">
+            <button
+              type="button"
+              class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-black/5 dark:hover:bg-white/5 rounded-t"
+              onclick={toggleHistoryOpen}
+              aria-expanded={historyOpen}
+            >
               <span class="text-xs font-medium th-text-secondary">
                 {t('timelapseMerge.historyTitle')} · {getCameraName(selectedPresetCamera || cameras[0]?.id || '')}
               </span>
-              {#if mergeHistoryLoading}
-                <span class="text-[10px] th-text-tertiary flex items-center gap-1">
-                  <Hourglass size={10} class="animate-pulse" />
-                  {t('common.loading')}
-                </span>
-              {/if}
-            </div>
-            {#if !mergeHistoryLoading && mergeHistory.length === 0}
-              <p class="text-xs th-text-tertiary">{t('timelapseMerge.historyEmpty')}</p>
-            {:else}
-              <div class="flex flex-col gap-1 max-h-72 overflow-y-auto">
-                {#each mergeHistory as m (m.id)}
-                  <button
-                    class="flex items-center justify-between gap-2 w-full px-2 py-1.5 rounded text-left hover:bg-black/5 dark:hover:bg-white/10"
-                    onclick={() => {
-                      window.location.hash = `#/timelapse-merge/${m.id}`;
-                    }}
-                  >
-                    <span class="flex items-center gap-2 min-w-0">
-                      <span class="text-xs font-mono th-text-secondary shrink-0">
-                        {formatMergeWindowLabel(m.window_start, m.duration_label)}
-                      </span>
-                      <span class="text-[10px] th-text-tertiary shrink-0">{mergeDurationLabel(m.duration_label)}</span>
-                    </span>
-                    <span class="text-[10px] th-text-tertiary shrink-0">
-                      {m.frame_count} {t('timelapseMerge.framesUnit')} · {formatFileSize(m.file_size)}
-                    </span>
-                  </button>
-                {/each}
+              <span class="ml-auto flex items-center gap-2">
+                {#if mergeHistoryLoading}
+                  <span class="text-[10px] th-text-tertiary flex items-center gap-1">
+                    <Hourglass size={10} class="animate-pulse" />
+                    {t('common.loading')}
+                  </span>
+                {/if}
+                <span class="text-[10px] th-text-tertiary">{historyOpen ? '▾' : '▸'}</span>
+              </span>
+            </button>
+            {#if historyOpen}
+              <div class="px-3 pb-3">
+                {#if !mergeHistoryLoading && mergeHistory.length === 0}
+                  <p class="text-xs th-text-tertiary">{t('timelapseMerge.historyEmpty')}</p>
+                {:else}
+                  <div class="flex flex-col gap-1 max-h-72 overflow-y-auto">
+                    {#each mergeHistory as m (m.id)}
+                      <button
+                        class="flex items-center justify-between gap-2 w-full px-2 py-1.5 rounded text-left hover:bg-black/5 dark:hover:bg-white/10"
+                        onclick={() => {
+                          window.location.hash = `#/timelapse-merge/${m.id}`;
+                        }}
+                      >
+                        <span class="flex items-center gap-2 min-w-0">
+                          <span class="text-xs font-mono th-text-secondary shrink-0">
+                            {formatMergeWindowLabel(m.window_start, m.duration_label)}
+                          </span>
+                          <span class="text-[10px] th-text-tertiary shrink-0">{mergeDurationLabel(m.duration_label)}</span>
+                        </span>
+                        <span class="text-[10px] th-text-tertiary shrink-0">
+                          {m.frame_count} {t('timelapseMerge.framesUnit')} · {formatFileSize(m.file_size)}
+                        </span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                <p class="text-[10px] th-text-tertiary mt-2">
+                  {t('timelapseMerge.generatePrompt')}
+                </p>
               </div>
             {/if}
-          </div>
-
-          <div class="card p-4 border th-border">
-            <p class="text-xs th-text-tertiary mb-2">{t('library.timelapseOnly')}</p>
-            {#if timelineTruncated}
-              <div class="flex items-start gap-2 mb-3 p-2 rounded border text-xs th-text-secondary"
-                   style="background: rgba(234, 179, 8, 0.08); border-color: rgba(234, 179, 8, 0.35);">
-                <AlertCircle size={14} class="mt-0.5 shrink-0" style="color: #eab308;" />
-                <span>{t('library.timelineTruncated', { count: timelineRecordings.length })}</span>
-              </div>
-            {/if}
-            <DayTimeline
-              {cameras}
-              recordings={timelineRecordingsTimelapse}
-              selectedDate={selectedDate || ''}
-              onseek={handleTimelineSeek}
-              aiEvents={showAIMarkers && miBeeVisionConnected ? aiTimelineEvents : []}
-            />
           </div>
         {/if}
       {:else if viewMode === 'list'}
