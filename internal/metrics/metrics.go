@@ -809,7 +809,7 @@ func NewMetrics() *Metrics {
 		SQLiteFragmentationRatio:       sqliteFragmentationRatio,
 		SQLiteQueryDurationSeconds:     sqliteQueryDurationSeconds,
 		SQLiteTxnsTotal:                sqliteTxnsTotal,
-		SQLiteTxnDurationSeconds:      sqliteTxnDurationSeconds,
+		SQLiteTxnDurationSeconds:       sqliteTxnDurationSeconds,
 		SQLiteBusyErrorsTotal:          sqliteBusyErrorsTotal,
 		CleanupDurationSeconds:         cleanupDurationSeconds,
 		SQLiteOpenConnections:          sqliteOpenConnections,

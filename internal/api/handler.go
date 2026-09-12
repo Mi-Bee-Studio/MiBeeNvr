@@ -180,8 +180,8 @@ type SnapshotCapturer interface {
 
 type Handler struct {
 	// DB txn panel rate window (#759): previous /api/system/stats sample.
-	dbTxnMu   sync.Mutex
-	dbTxnPrev *dbTxnSample
+	dbTxnMu           sync.Mutex
+	dbTxnPrev         *dbTxnSample
 	db                *storage.DB
 	store             *storage.Manager
 	authMW            func(http.Handler) http.Handler
