@@ -364,6 +364,32 @@ func validateConfigDetails(cfg *Config) error {
 	if cfg.Storage.PreallocMaxBytes > 0 && cfg.Storage.PreallocMinBytes > cfg.Storage.PreallocMaxBytes {
 		return fmt.Errorf("storage.prealloc_min_bytes %d exceeds prealloc_max_bytes %d", cfg.Storage.PreallocMinBytes, cfg.Storage.PreallocMaxBytes)
 	}
+	// Per-camera segment_duration overrides (#758): must parse positive.
+	for _, cam := range cfg.Cameras {
+		if cam.SegmentDuration == "" {
+			continue
+		}
+		d, err := time.ParseDuration(cam.SegmentDuration)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("cameras[%s].segment_duration must be a positive duration, got %q", cam.ID, cam.SegmentDuration)
+		}
+	}
+	// Short-global-duration footgun warning (#758): rotation cadence is an
+	// I/O switch — segment create/rename/fsync/DB rows all scale with it.
+	// Warn (not block) when continuous cameras run below 60s globally; the
+	// per-camera override is the targeted fix.
+	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err == nil && dur < 60*time.Second {
+		for _, cam := range cfg.Cameras {
+			if cam.RecordingMode == "" || cam.RecordingMode == "continuous" {
+				if cam.SegmentDuration != "" {
+					continue // this camera already overrides locally
+				}
+				slog.Warn("storage.segment_duration below 60s with continuous-recording cameras — rotation amplifies metadata I/O (segment create/rename/fsync/DB rows ×N cameras); prefer 60-120s globally or a per-camera cameras[].segment_duration override",
+					"segment_duration", cfg.Storage.SegmentDuration, "first_camera", cam.ID)
+				break
+			}
+		}
+	}
 	// Validate retention_days
 	if cfg.Cleanup.RetentionDays < 1 || cfg.Cleanup.RetentionDays > 3650 {
 		return fmt.Errorf("cleanup.retention_days must be between 1 and 3650, got %d", cfg.Cleanup.RetentionDays)

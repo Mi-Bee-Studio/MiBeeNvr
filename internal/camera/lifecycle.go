@@ -31,8 +31,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 	cm.startStopMu.Lock()
 	defer cm.startStopMu.Unlock()
 
-	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
-	if err != nil {
+	if _, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration); err != nil {
 		return fmt.Errorf("camera manager: invalid segment duration %q: %w", cm.cfg.Storage.SegmentDuration, err)
 	}
 
@@ -49,7 +48,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 		switch cam.Protocol {
 		case string(model.ProtoRTSP), string(model.ProtoHTTP), string(model.ProtoGB28181):
-			rec := cm.createRecorder(cam, segDur)
+			rec := cm.createRecorder(cam, cm.segmentDurFor(cam))
 			if rec != nil {
 				cm.apply(func(s *snapshot) *snapshot {
 					s.recorders[cam.ID] = rec
@@ -115,7 +114,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 				}
 			}
 		case string(model.ProtoONVIF):
-			if err := cm.startRecorder(ctx, cam, segDur); err != nil {
+			if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
 				logger.Error("failed to start ONVIF recorder", "camera_id", cam.ID, "error", err)
 			} else {
 				logger.Info("started ONVIF recorder", "camera_id", cam.ID)
@@ -124,7 +123,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			// Push/ingest cameras: the recorder waits for an incoming publisher
 			// (it does not dial out). Its hub is registered in hubRegistry so the
 			// SRT listener / RTMP server can find it.
-			if err := cm.startRecorder(ctx, cam, segDur); err != nil {
+			if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
 				logger.Error("failed to start ingest recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "error", err)
 			} else {
 				logger.Info("started ingest recorder, awaiting publisher",
@@ -132,7 +131,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			}
 		default:
 			// Try plugin-registered protocols (e.g. xiaomi)
-			if err := cm.startRecorder(ctx, cam, segDur); err != nil {
+			if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
 				logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
 			} else {
 				logger.Info("started plugin recorder", "camera_id", cam.ID, "protocol", cam.Protocol)
@@ -272,10 +271,6 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	camCopy := *cam
-	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
-	if err != nil {
-		segDur = recorder.DefaultSegmentDur
-	}
 	return cm.withCameraLifecycle(cameraID, func() error {
 		// Stop existing recorder (snapshot it, remove from registry via apply,
 		// then Stop — rec.Stop can join a goroutine, runs under the per-camera
@@ -295,7 +290,7 @@ func (cm *CameraManager) RestartRecorder(ctx context.Context, cameraID string) e
 		}
 		// startRecorderLocked registers via apply; safe to call under the guard
 		// (it does not re-enter withCameraLifecycle).
-		return cm.startRecorderLocked(ctx, camCopy, segDur)
+		return cm.startRecorderLocked(ctx, camCopy, cm.segmentDurFor(camCopy))
 	})
 }
 
@@ -307,10 +302,6 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 		return &model.CameraNotFoundError{CameraID: cameraID}
 	}
 	camCopy := *cam
-	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)
-	if err != nil {
-		segDur = recorder.DefaultSegmentDur
-	}
 	return cm.withCameraLifecycle(cameraID, func() error {
 		// Check if already running — stale recorders (error/stopped) can be restarted
 		if rec := cm.snapshotRecorder(cameraID); rec != nil {
@@ -330,7 +321,7 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 				cm.metrics.ActiveCameras.Dec()
 			}
 		}
-		return cm.startRecorderLocked(ctx, camCopy, segDur)
+		return cm.startRecorderLocked(ctx, camCopy, cm.segmentDurFor(camCopy))
 	})
 }
 
@@ -469,4 +460,23 @@ func classifyError(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+// segmentDurFor resolves the effective segment rotation duration for one
+// camera (#758): the per-camera cameras[].segment_duration override when set
+// (validated at config load), else the global storage.segment_duration. A
+// bad override value (only possible with hand-built configs bypassing
+// validation) degrades to the global instead of failing recording.
+func (cm *CameraManager) segmentDurFor(cam config.CameraConfig) time.Duration {
+	if cam.SegmentDuration != "" {
+		if d, err := time.ParseDuration(cam.SegmentDuration); err == nil && d > 0 {
+			return d
+		}
+		logger.Warn("invalid per-camera segment_duration override, falling back to global",
+			"camera_id", cam.ID, "override", cam.SegmentDuration)
+	}
+	if d, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration); err == nil && d > 0 {
+		return d
+	}
+	return recorder.DefaultSegmentDur
 }

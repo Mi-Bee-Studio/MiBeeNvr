@@ -209,6 +209,24 @@ version: "1.0"
 - **描述**: 单段预分配上限，防止病态大段把后续段的预留空间也撑爆
 - **示例**: `536870912`
 
+#### 轮转节奏是 I/O 开关
+
+每次轮转都有一笔固定元数据成本——段创建、temp→final rename、fsync、每段 2 行
+DB 记录。全局时长越短，**所有**相机付费越频繁：30s × 13 路≈每分钟 26 次轮转；
+120s ≈ 6.5 次。连续录像建议全局 **60–120s**；单相机确需短轮转（如高时间分辨率
+timelapse 采样）时，用 **per-camera 覆盖**而不是缩短全局：
+
+```yaml
+storage:
+  segment_duration: "120s"
+cameras:
+  - id: timelapse-cam
+    segment_duration: "15s"   # 仅该相机生效（#758）
+```
+
+当全局值低于 60s 且存在未覆盖的 continuous 模式相机时，`config.Validate()`
+会输出警告——`mibee-nvr validate-config` 同样会呈现。
+
 ### `storage.db_path`
 - **类型**: string
 - **可选**: 是
