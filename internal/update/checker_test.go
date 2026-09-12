@@ -30,6 +30,15 @@ func TestIsNewer(t *testing.T) {
 		{"empty local build never reports update", "", "v0.10.0", false},
 		{"non-semver local build", "dirty-build", "v0.10.0", false},
 		{"non-semver remote", "v0.10.0", "latest", false},
+		// git-describe dev builds sit AHEAD of their base tag: the tag itself
+		// must not look "newer" (phantom update dot on main-built deploys).
+		{"describe build vs its base tag", "v0.12.0-61-g1f07d1ac", "v0.12.0", false},
+		{"describe build + local suffix vs base tag", "v0.12.0-61-g1f07d1ac-tlmerge-15", "v0.12.0", false},
+		{"describe build vs older tag", "v0.12.0-61-g1f07d1ac", "v0.11.9", false},
+		{"describe build vs genuinely newer release", "v0.12.0-61-g1f07d1ac", "v0.13.0", true},
+		{"describe build vs newer rc of a later minor", "v0.12.0-61-g1f07d1ac", "v0.13.0-rc1", true},
+		{"six-hex sha is not a describe build (strict semver)", "v0.12.0-61-g1f07d1", "v0.12.0", true},
+		{"not-a-describe suffix keeps semver order", "v0.10.0-beta.1", "v0.10.0", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -262,6 +262,10 @@ func (c *Checker) fetchAndCache(ctx context.Context) (Status, error) {
 //     avoids false positives on local/dev builds)
 //   - "v" prefix is optional (semver.Compare normalizes it)
 //   - prereleases: per semver, v1.0.0-beta < v1.0.0
+//   - git-describe dev builds (v1.2.0-61-g<sha>[-local]) sit AHEAD of their
+//     base tag even though semver orders prereleases below the release —
+//     the release tag itself must not look "newer" (otherwise every
+//     main-built deployment between releases shows a phantom update dot)
 //   - equal versions → false (no downgrades either)
 func isNewer(current, candidate string) bool {
 	cur := ensureV(strings.TrimSpace(current))
@@ -269,7 +273,48 @@ func isNewer(current, candidate string) bool {
 	if !semver.IsValid(cur) || !semver.IsValid(cand) {
 		return false
 	}
+	if isDescribeBuild(cur) {
+		// Compare against the BASE tag ("v1.2.0"): a describe build contains
+		// the tag plus N commits, so the tag and anything older are not newer.
+		base := cur[:len(cur)-len(semver.Prerelease(cur))-len(semver.Build(cur))]
+		return semver.Compare(cand, base) > 0
+	}
 	return semver.Compare(cand, cur) > 0
+}
+
+// isDescribeBuild reports whether v is a git-describe style dev build, i.e.
+// its prerelease starts with "<N>-g<sha>" (optionally with local suffix
+// segments after — e.g. "v0.12.0-61-g1f07d1ac-tlmerge-15" from `git
+// describe` + deploy naming). Distinguishes them from real prereleases
+// (-rc/-beta), which keep strict semver ordering.
+func isDescribeBuild(v string) bool {
+	pre := strings.TrimPrefix(semver.Prerelease(v), "-")
+	if pre == "" {
+		return false
+	}
+	// Prerelease identifiers are dot-separated; a describe suffix arrives as
+	// hyphenated identifiers "61-g1f07d1ac-tlmerge-15" (one identifier set
+	// when no dots, which is how git describe emits it).
+	first := strings.SplitN(pre, ".", 2)[0]
+	parts := strings.Split(first, "-")
+	if len(parts) < 2 || parts[0] == "" {
+		return false
+	}
+	for _, r := range parts[0] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	sha := strings.TrimPrefix(parts[1], "g")
+	if sha == parts[1] || len(sha) < 7 || len(sha) > 40 {
+		return false
+	}
+	for _, r := range sha {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // ensureV adds the "v" prefix that golang.org/x/mod/semver requires for
