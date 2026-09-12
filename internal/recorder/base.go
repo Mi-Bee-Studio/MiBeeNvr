@@ -298,6 +298,14 @@ type baseRecorder struct {
 	frameCount    int
 	lastFrameTime time.Time
 
+	// lastSegBytes feeds segment preallocation (#757): the previous
+	// segment's final size is the best estimate of the next one (same
+	// camera, same bitrate, same duration policy). Written only in
+	// closeCurrentSegment and read only in createNewSegment — both on the
+	// single writer goroutine. 0 = no estimate yet (first segment after
+	// start: no preallocation).
+	lastSegBytes int64
+
 	// Codec parameter sets (Tier 2, #219): immutable snapshot behind
 	// atomic.Pointer so the live-preview (HLS/WebRTC/WS) goroutines can read
 	// SPS/PPS/VPS concurrently with the writeFrames writer without a data race
@@ -889,6 +897,12 @@ func (b *baseRecorder) createNewSegment(at time.Time) bool {
 		return false
 	}
 	m := muxer.NewMP4Muxer(tempPath)
+	// Segment preallocation (#757): last segment's actual size × 1.1
+	// headroom, clamped, is the estimate for this one — contiguous extents,
+	// no per-append inode metadata transactions. No history yet → skip.
+	if est := segmentPreallocEstimate(b.lastSegBytes); est > 0 {
+		m.SetPreallocateBytes(est)
+	}
 	trackID, err := b.driver.addTrack(m, b)
 	if err != nil {
 		b.log.Error("failed to add video track",
@@ -1033,6 +1047,8 @@ func (b *baseRecorder) closeCurrentSegment() {
 		if info, err := os.Stat(b.curFinalPath); err == nil {
 			finalExists = true
 			fileSize = info.Size()
+			// Feed the next segment's preallocation estimate (#757).
+			b.lastSegBytes = fileSize
 		} else {
 			b.log.Warn("segment file missing after finalize — recording row skipped",
 				"camera_id", b.cfg.CameraID, "path", b.curFinalPath)
