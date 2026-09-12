@@ -87,7 +87,7 @@ func MergeMJPEGSegments(ctx context.Context, segments []*model.Recording, store 
 	})
 
 	// Step 5: Close the segment (atomic rename from temp to final).
-	if err := store.CloseSegment(tempPath, finalPath); err != nil {
+	if err := store.CloseSegmentMerged(tempPath, finalPath); err != nil {
 		return nil, sourceDirs, fmt.Errorf("close merged segment: %w", err)
 	}
 

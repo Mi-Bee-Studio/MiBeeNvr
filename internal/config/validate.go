@@ -348,6 +348,12 @@ func validateConfigDetails(cfg *Config) error {
 			cfg.Storage.SegmentDuration = capped
 		}
 	}
+	// Durability tier (#760): raw-segment fsync policy. "" = strict.
+	switch cfg.Storage.Durability {
+	case "", "strict", "relaxed":
+	default:
+		return fmt.Errorf("storage.durability must be \"strict\" or \"relaxed\" (empty = strict default), got %q", cfg.Storage.Durability)
+	}
 	// Validate retention_days
 	if cfg.Cleanup.RetentionDays < 1 || cfg.Cleanup.RetentionDays > 3650 {
 		return fmt.Errorf("cleanup.retention_days must be between 1 and 3650, got %d", cfg.Cleanup.RetentionDays)

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -35,6 +36,12 @@ type Manager struct {
 	// so cameras no longer serialize through one another.
 	statesMu      sync.RWMutex
 	segmentStates map[string]*segmentWriter
+
+	// durabilityRelaxed gates RAW-segment fsync (#760): false (default) =
+	// strict — every finalize syncs. true = relaxed: raw segments skip the
+	// proactive fsync (rename atomicity unchanged); merged/timelapse
+	// products always sync regardless (CloseSegmentMerged).
+	durabilityRelaxed atomic.Bool
 
 	// Health tracking (per-camera)
 	healthMu      sync.Mutex
@@ -310,6 +317,35 @@ func (m *Manager) recordFinalizeFailure(tempPath string, err error) {
 // handles (the MP4 muxer, merge outputs) fall back to the reopen-and-sync
 // path, preserving the original behavior.
 func (m *Manager) CloseSegment(tempPath, finalPath string) error {
+	return m.closeSegment(tempPath, finalPath, m.durabilityRelaxed.Load())
+}
+
+// CloseSegmentMerged finalizes a MERGE/TIMELAPSE PRODUCT segment. These are
+// long-term assets (#760): they always fsync, regardless of the durability
+// tier — only raw rolling segments may opt into relaxed.
+func (m *Manager) CloseSegmentMerged(tempPath, finalPath string) error {
+	return m.closeSegment(tempPath, finalPath, false)
+}
+
+// SetDurability selects the raw-segment durability tier: "strict" (default)
+// or "relaxed" (skip proactive fsync; see docs — a power loss may drop the
+// last seconds of raw segments on flash media). Unknown values keep strict.
+func (m *Manager) SetDurability(tier string) {
+	if m == nil {
+		return
+	}
+	m.durabilityRelaxed.Store(tier == "relaxed")
+}
+
+// DurabilityRelaxed reports the current tier (observability/wiring tests).
+func (m *Manager) DurabilityRelaxed() bool {
+	if m == nil {
+		return false
+	}
+	return m.durabilityRelaxed.Load()
+}
+
+func (m *Manager) closeSegment(tempPath, finalPath string, relaxed bool) error {
 	st, serr := m.stateFor(tempPath)
 	if serr != nil {
 		// No state and classification failed (external temp that is already
@@ -323,19 +359,22 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 	isDir := st.isDir
 
 	if isDir {
-		// Sync the directory for MJPEG
-		dirFd, err := os.Open(tempPath)
-		if err != nil {
-			m.recordFinalizeFailure(tempPath, err)
-			m.unregisterTempPath(tempPath)
-			return fmt.Errorf("storage: cannot open temp dir for sync: %w", err)
-		}
-		if err := dirFd.Sync(); err != nil {
+		// Sync the directory for MJPEG (strict tier only — #760: relaxed
+		// leaves directory-entry persistence to the FS commit interval).
+		if !relaxed {
+			dirFd, err := os.Open(tempPath)
+			if err != nil {
+				m.recordFinalizeFailure(tempPath, err)
+				m.unregisterTempPath(tempPath)
+				return fmt.Errorf("storage: cannot open temp dir for sync: %w", err)
+			}
+			if err := syncFileFn(dirFd); err != nil {
+				dirFd.Close()
+				m.RecordWriteFailureForPath(tempPath)
+				return fmt.Errorf("storage: failed to sync temp dir: %w", err)
+			}
 			dirFd.Close()
-			m.RecordWriteFailureForPath(tempPath)
-			return fmt.Errorf("storage: failed to sync temp dir: %w", err)
 		}
-		dirFd.Close()
 
 		// Atomic rename of directory
 		if err := os.Rename(tempPath, finalPath); err != nil {
@@ -349,19 +388,21 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 		// for externally written temps (muxer/merge outputs already closed
 		// their own handles before calling CloseSegment).
 		if st == nil || st.file == nil {
-			f, err := openFileFn(tempPath, os.O_WRONLY, 0)
-			if err != nil {
-				m.recordFinalizeFailure(tempPath, err)
-				m.unregisterTempPath(tempPath)
-				return fmt.Errorf("storage: cannot open temp file for sync: %w", err)
-			}
-			if err := f.Sync(); err != nil {
+			if !relaxed {
+				f, err := openFileFn(tempPath, os.O_WRONLY, 0)
+				if err != nil {
+					m.recordFinalizeFailure(tempPath, err)
+					m.unregisterTempPath(tempPath)
+					return fmt.Errorf("storage: cannot open temp file for sync: %w", err)
+				}
+				if err := syncFileFn(f); err != nil {
+					f.Close()
+					m.RecordWriteFailureForPath(tempPath)
+					return fmt.Errorf("storage: failed to sync temp file: %w", err)
+				}
 				f.Close()
-				m.RecordWriteFailureForPath(tempPath)
-				return fmt.Errorf("storage: failed to sync temp file: %w", err)
 			}
-			f.Close()
-		} else if err := st.finalize(); err != nil {
+		} else if err := st.finalize(relaxed); err != nil {
 			m.RecordWriteFailureForPath(tempPath)
 			return fmt.Errorf("storage: failed to finalize temp file: %w", err)
 		}

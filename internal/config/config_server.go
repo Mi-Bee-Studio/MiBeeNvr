@@ -124,6 +124,15 @@ func NormalizeBasePath(p string) string {
 type StorageConfig struct {
 	RootDir         string `yaml:"root_dir"`         // default "/mnt/data/nvr"
 	SegmentDuration string `yaml:"segment_duration"` // default "30s"
+	// Durability selects the raw-segment fsync tier (#760): "" or "strict"
+	// (default) — every segment finalize fsyncs (strongest guarantee);
+	// "relaxed" — raw segments skip the proactive fsync and rely on the
+	// filesystem commit interval (rename atomicity unchanged: a crash
+	// leaves either the complete pre-crash bytes or no final file). Merge
+	// and timelapse products always fsync in both tiers. Flash boards that
+	// can tolerate losing the last seconds of raw recording on power loss
+	// benefit most.
+	Durability string `yaml:"durability"`
 	// Candidates lists additional storage locations made available to the NVR
 	// by the host platform (#395): on fnOS these are the user-authorized
 	// directories (TRIM_DATA_ACCESSIBLE_PATHS), mounted into the container and

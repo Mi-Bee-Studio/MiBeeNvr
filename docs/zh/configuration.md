@@ -176,6 +176,16 @@ version: "1.0"
 - **RPi 限制**: 树莓派 3B 上最大 30 秒
 - **示例**: `"30s"`, `"1m"`, `"5m"`
 
+### `storage.durability`
+- **类型**: string
+- **默认**: `""`（= `strict`）
+- **取值**:
+  - `strict`（默认）—— 每个原始段 finalize 在 temp→final rename 前显式 `fsync`。最强崩溃保证：断电后 NVR 已确认落盘的数据都在介质上。
+  - `relaxed` —— 原始段跳过主动 `fsync`，交给文件系统提交间隔兜底（ext4 通常 5s）。temp→final **rename 保持原子性**：崩溃后要么是崩溃前的完整字节、要么没有 final 文件——绝不会出现截断/半成品段。代价：断电可能丢最后几秒（~最多 1 分钟）的原始滚动录像。
+- **两档恒为 strict**: 合并产物、timelapse 产物、数据库（WAL+NORMAL）、配置写入——长期资产保留 fsync。
+- **适合谁**: 闪存板（SD/eMMC，每段 fsync 是延迟尖峰 + 写放大来源——13 路 × 30s 段 ≈ 每分钟 26 次 fsync）；连续录像的 HDD 阵列。
+- **示例**: 在 `storage:` 节下写 `durability: "relaxed"`。
+
 ### `storage.db_path`
 - **类型**: string
 - **可选**: 是

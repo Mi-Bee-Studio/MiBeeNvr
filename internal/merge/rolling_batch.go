@@ -339,7 +339,7 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 		return 0, fmt.Errorf("output empty")
 	}
 
-	if err := r.store.CloseSegment(tempPath, finalPath); err != nil {
+	if err := r.store.CloseSegmentMerged(tempPath, finalPath); err != nil {
 		os.Remove(tempPath)
 		return 0, fmt.Errorf("finalize: %w", err)
 	}

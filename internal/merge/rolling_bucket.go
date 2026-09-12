@@ -45,7 +45,7 @@ func (r *RollingMergeCoordinator) createBucket(
 	}
 
 	// Atomic rename.
-	if err := r.store.CloseSegment(tempPath, finalPath); err != nil {
+	if err := r.store.CloseSegmentMerged(tempPath, finalPath); err != nil {
 		os.Remove(tempPath)
 		return "", "", fmt.Errorf("finalize bucket: %w", err)
 	}
