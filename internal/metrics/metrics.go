@@ -96,6 +96,10 @@ type Metrics struct {
 	RollingMergeLatencySeconds *prometheus.HistogramVec // labels: camera_id — time from segment close to merge complete
 	RollingMergeBucketSegments *prometheus.GaugeVec     // labels: camera_id — segments in current bucket
 
+	// Memory self-discipline (#756): the GOMEMLIMIT installed at startup
+	// (0 = not set — env var won, disabled by config, or unknown host).
+	MemorySoftLimitBytes prometheus.Gauge
+
 	// Auth metrics — track login attempts for security monitoring
 	AuthAttemptsTotal    *prometheus.CounterVec // labels: result (success/failure/no_password)
 	AuthRateLimitedTotal prometheus.Counter     // total requests blocked by rate limiter
@@ -474,6 +478,10 @@ func NewMetrics() *Metrics {
 		Name: "nvr_merge_pending_segments",
 		Help: "Number of segments pending merge, partitioned by camera.",
 	}, []string{"camera_id"})
+	memorySoftLimitBytes := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_memlimit_bytes",
+		Help: "Go runtime soft memory limit (GOMEMLIMIT) installed at startup; 0 = not set (#756).",
+	})
 
 	// Rolling merge metrics (quasi-real-time, event-driven)
 	rollingMergeLatencySeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -649,6 +657,7 @@ func NewMetrics() *Metrics {
 		mergeDurationSeconds,
 		mergeSizeBytes,
 		mergePendingSegments,
+		memorySoftLimitBytes,
 		rollingMergeLatencySeconds,
 		rollingMergeBucketSegments,
 		authAttemptsTotal,
@@ -744,6 +753,7 @@ func NewMetrics() *Metrics {
 		MergeDurationSeconds:           mergeDurationSeconds,
 		MergeSizeBytes:                 mergeSizeBytes,
 		MergePendingSegments:           mergePendingSegments,
+		MemorySoftLimitBytes:           memorySoftLimitBytes,
 		RollingMergeLatencySeconds:     rollingMergeLatencySeconds,
 		RollingMergeBucketSegments:     rollingMergeBucketSegments,
 		AuthAttemptsTotal:              authAttemptsTotal,

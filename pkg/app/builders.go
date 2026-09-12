@@ -32,6 +32,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/memlimit"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -65,6 +66,10 @@ import (
 // (cancel startup-bg goroutines + close the DB) the caller must invoke if it
 // bails out before App.Start — mirroring RunFree's historical `return nil, err`
 // cleanup at each construction step.
+// memlimitAppliedFn reads the applied GOMEMLIMIT for the metrics gauge —
+// seam for wiring tests (#756).
+var memlimitAppliedFn = memlimit.Applied
+
 func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), error) {
 	deps := &appDeps{cfg: cfg, configPath: configPath}
 	ctx := context.Background()
@@ -100,6 +105,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// Wire DB observability hooks: query-latency histogram + SQLITE_BUSY counter.
 	db.SetMetrics(m)
 	storage.SetBusyErrorHook(m.IncSQLiteBusyErrors)
+
+	// Publish the GOMEMLIMIT applied by main.go (#756) — builders run after
+	// applyMemoryLimit, so the recorded value is final. Seam for wiring tests.
+	m.MemorySoftLimitBytes.Set(float64(memlimitAppliedFn()))
 
 	// Step 2.1: Event bus
 	deps.eventBus = event.NewEventBus(64)

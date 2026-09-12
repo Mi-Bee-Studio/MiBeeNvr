@@ -152,6 +152,10 @@ func main() {
 	logger = authmw.SetupLogger(cfg.Observability.LogLevel, cfg.Observability.LogFormat)
 	slog.SetDefault(logger)
 
+	// Process memory self-discipline (#756): conservative GOMEMLIMIT before
+	// any manager starts allocating — env GOMEMLIMIT wins natively.
+	applyMemoryLimit(cfg)
+
 	a, err := app.RunFree(cfg, *configPath)
 	if err != nil {
 		slog.Error("init", "error", err)

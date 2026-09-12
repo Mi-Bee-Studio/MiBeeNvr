@@ -374,6 +374,14 @@ func validateConfigDetails(cfg *Config) error {
 			return fmt.Errorf("remote_log.format must be \"jsonline\" or \"loki\", got %q", cfg.RemoteLog.Format)
 		}
 	}
+	// Memory self-discipline (#756): 0 = automatic heuristic; an explicit
+	// value must clear the runtime floor or the GC would thrash.
+	if cfg.Memory.SoftLimitBytes < 0 {
+		return fmt.Errorf("memory.soft_limit_bytes must be >= 0 (0 = automatic), got %d", cfg.Memory.SoftLimitBytes)
+	}
+	if cfg.Memory.SoftLimitBytes > 0 && cfg.Memory.SoftLimitBytes < 64<<20 {
+		return fmt.Errorf("memory.soft_limit_bytes %d is below the 64MiB runtime floor — raise it or use 0 (automatic)", cfg.Memory.SoftLimitBytes)
+	}
 	if cfg.Merge.Enabled {
 		if _, err := time.ParseDuration(cfg.Merge.CheckInterval); err != nil {
 			return fmt.Errorf("invalid merge check_interval: %w", err)
