@@ -114,7 +114,7 @@ func MergeAVISegments(ctx context.Context, segments []*model.Recording, store *s
 	moviDataStart := int64(len(headerBuf)) // absolute output offset where chunk data goes
 
 	// ── Step 3: Stream movi chunks from all sources, tracking idx1 entries. ──
-	buf := make([]byte, mergeBufferSize)
+	buf := make([]byte, mergeBufferSize())
 	var entries []aviIndexEntry
 
 	// Metadata accumulator.

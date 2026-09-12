@@ -10,15 +10,50 @@ import (
 	"io"
 	"math"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/fadvise"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mp4util"
 	"github.com/abema/go-mp4"
 )
 
-const (
-	mergeBufferSize = 1 << 20 // 1MB buffer for sample data copying
-)
+// sysTotalMem is the physical-memory probe backing mergeBufferSize (seam for
+// tests). 0 = unknown → conservative buffer.
+var sysTotalMem = probeTotalMem
+
+// probeTotalMem reads MemTotal from /proc/meminfo (kB → bytes). Portable and
+// dependency-free; non-Linux / read failures return 0.
+func probeTotalMem() int64 {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "MemTotal:"); ok {
+			fields := strings.Fields(rest)
+			if len(fields) < 2 || fields[1] != "kB" {
+				continue
+			}
+			if kb, err := strconv.ParseInt(fields[0], 10, 64); err == nil {
+				return kb * 1024
+			}
+		}
+	}
+	return 0
+}
+
+// mergeBufferSize is the streaming copy buffer for sample data (#754): 1MB
+// on low-memory hosts (<1.5GB RAM — the RPi-3B design baseline) and 4MB on
+// roomier systems (¼ the syscalls per merged GB on SSD/eMMC). Single source
+// of truth for the merge copy buffer.
+func mergeBufferSize() int {
+	if sysTotalMem() >= int64(1536)<<20 {
+		return 4 << 20
+	}
+	return 1 << 20
+}
 
 // ComputeMergeQuality determines the quality classification for a merged recording.
 // quality is:
@@ -395,7 +430,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	mdatDataStart := mdatHeaderOffset + 8
 
 	// Step 5: Stream sample data from each segment into the output.
-	buf := make([]byte, mergeBufferSize)
+	buf := make([]byte, mergeBufferSize())
 	var currentOffset int64
 	var allVideoSamples []mergedSample
 
@@ -410,6 +445,10 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		if err != nil {
 			return stats, fmt.Errorf("open segment %s: %w", seg.FilePath, err)
 		}
+		// One-pass sequential read (#754): aggressive readahead while copying,
+		// and — only when no audio pass will reopen this file — drop the cache
+		// at the end so read-once media stops evicting hot pages.
+		fadvise.Sequential(src)
 
 		// Sparse dwell compression (#496): segments' >2s dwell samples are
 		// rewritten to TimelapseFrameDur so 1×/downloaded playback shows a
@@ -465,6 +504,10 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			currentOffset += int64(s.Size)
 		}
 
+		if !hasAudio || len(seg.AudioSamples) == 0 {
+			// Last consumer done (no audio pass will reopen): release cache.
+			fadvise.DontNeed(src)
+		}
 		src.Close()
 		stats.WallToFile = append(stats.WallToFile, [2]float64{wallSec, fileSec})
 	}
@@ -503,6 +546,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 					}
 					raw = append(raw, chunk...)
 				}
+				fadvise.DontNeed(src) // last consumer of this file is done
 				src.Close()
 
 				nOut := int(spanFile*float64(seg.AudioTimescale) + 0.5)
@@ -553,6 +597,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 				currentOffset += int64(s.Size)
 			}
 
+			fadvise.DontNeed(src) // last consumer of this file is done
 			src.Close()
 		}
 	}
