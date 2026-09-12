@@ -55,17 +55,19 @@ func tlmBoolPtr(b bool) *bool { return &b }
 
 // timelapseMergeFlags carries the parsed `timelapse-merge` subcommand flags.
 type timelapseMergeFlags struct {
-	cfgPath    string
-	camerasArg string // "all" or comma-separated camera IDs
-	encoding   string // optional encoding filter, only used with --camera all
-	start      string // YYYY-MM-DD (required)
-	end        string // YYYY-MM-DD (default: yesterday in config tz)
-	duration   string // window size label (default natural-day)
-	interval   string // frame sampling interval override (Go duration)
-	fps        int    // output fps override (0 = camera config / 10)
-	deleteSrc  *bool  // tri-state: nil = camera config default
-	execute    bool
-	force      bool
+	cfgPath     string
+	camerasArg  string // "all" or comma-separated camera IDs
+	encoding    string // optional encoding filter, only used with --camera all
+	start       string // YYYY-MM-DD (required)
+	end         string // YYYY-MM-DD (default: yesterday in config tz)
+	duration    string // window size label (default natural-day)
+	interval    string // frame sampling interval override (Go duration)
+	fps         int    // output fps override (0 = camera config / 10)
+	deleteSrc   *bool  // tri-state: nil = camera config default
+	execute     bool
+	force       bool
+	noThrottle  bool   // --no-throttle: skip the automatic nice/ionice self-downgrade
+	delThrottle string // --delete-throttle <dur>: per-chunk pause for directory-form source deletion ("0" = off)
 }
 
 const timelapseMergeUsage = `Usage: mibee-nvr timelapse-merge [options]
@@ -86,8 +88,10 @@ Options:
   --fps <n>                Output fps (default: camera merge_output_fps, else 10)
   --delete-sources         Delete source recordings after a successful merge
   --no-delete-sources      Never delete sources for this run
+  --delete-throttle <dur>  Pause between chunks when deleting directory-form sources (default 200ms, "0"=off)
   --execute                Execute (default: dry-run)
   --force                  Process timelapse-enabled cameras while the NVR is running
+  --no-throttle            Skip the automatic self-downgrade (nice 19 + io best-effort)
   --config <path>          Config file path (default: mibee-nvr.yaml)
 
 Examples:
@@ -109,6 +113,8 @@ func parseTimelapseMergeFlags(args []string) (timelapseMergeFlags, int) {
 			f.execute = false
 		case arg == "--force":
 			f.force = true
+		case arg == "--no-throttle":
+			f.noThrottle = true
 		case arg == "--delete-sources":
 			f.deleteSrc = tlmBoolPtr(true)
 		case arg == "--no-delete-sources":
@@ -140,6 +146,9 @@ func parseTimelapseMergeFlags(args []string) (timelapseMergeFlags, int) {
 				v, ok = parseFlag(args, &i, "config")
 			}
 			if !ok {
+				v, ok = parseFlag(args, &i, "delete-throttle")
+			}
+			if !ok {
 				fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n\n%s", arg, timelapseMergeUsage)
 				return f, 1
 			}
@@ -165,6 +174,8 @@ func parseTimelapseMergeFlags(args []string) (timelapseMergeFlags, int) {
 				f.fps = n
 			case strings.HasPrefix(arg, "--config"):
 				f.cfgPath = v
+			case strings.HasPrefix(arg, "--delete-throttle"):
+				f.delThrottle = v
 			}
 		}
 	}
@@ -178,6 +189,13 @@ func parseTimelapseMergeFlags(args []string) (timelapseMergeFlags, int) {
 		d, err := time.ParseDuration(f.interval)
 		if err != nil || d <= 0 {
 			fmt.Fprintf(os.Stderr, "Error: invalid --interval %q (must be a positive Go duration)\n", f.interval)
+			return f, 1
+		}
+	}
+	if f.delThrottle != "" {
+		d, err := time.ParseDuration(f.delThrottle)
+		if err != nil || d < 0 {
+			fmt.Fprintf(os.Stderr, "Error: invalid --delete-throttle %q (must be a non-negative Go duration, e.g. 200ms or 0)\n", f.delThrottle)
 			return f, 1
 		}
 	}
@@ -405,6 +423,27 @@ func runTimelapseMerge(f timelapseMergeFlags, stdout io.Writer, serverRunning bo
 		}()
 	}
 
+	// Self-downgrade before any heavy IO (#748): the 2026-09-12 incident had
+	// the CLI at the NVR's priority starving online recording (load 8-13,
+	// cameras 17→10) — renice after the fact could not undo the storm.
+	if f.execute && !f.noThrottle {
+		if err := selfThrottle(); err != nil {
+			fmt.Fprintf(stdout, "Notice: self-throttle unavailable (%v) — running at default priority\n", err)
+		} else {
+			_, _ = fmt.Fprintln(stdout, "Self-throttled: nice 19, io best-effort level 7 (--no-throttle to disable).")
+		}
+	}
+
+	// Directory-form source deletion pacing (#748): --delete-throttle pauses
+	// between chunks of frame-file unlinks so the ext4 journal keeps up.
+	delThrottle := 200 * time.Millisecond
+	if f.delThrottle != "" {
+		d, err := time.ParseDuration(f.delThrottle)
+		if err == nil {
+			delThrottle = d
+		}
+	}
+
 	var deleter timelapse.SourceRecordingDeleter
 	if f.execute {
 		store, err := storage.NewManager(cfg.Storage.RootDir)
@@ -416,6 +455,9 @@ func runTimelapseMerge(f timelapseMergeFlags, stdout io.Writer, serverRunning bo
 		if err != nil {
 			fmt.Fprintf(stdout, "Error creating cleanup manager: %v\n", err)
 			return 1
+		}
+		if delThrottle > 0 {
+			cleanupMgr.SetDirectoryDeleteThrottle(200, delThrottle)
 		}
 		deleter = cliSourceDeleter{cm: cleanupMgr}
 	}

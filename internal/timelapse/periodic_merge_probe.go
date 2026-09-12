@@ -227,7 +227,7 @@ func (m *PeriodicMergeManager) extractRecordingFrames(ctx context.Context, camer
 	sourcesByGroup := make(map[string][]model.Recording)
 
 	for codec, codecRecs := range codecRecordings {
-		tmpDir, err := os.MkdirTemp("", fmt.Sprintf("periodic_extract_%s_*", codec))
+		tmpDir, err := m.mkdirTemp(fmt.Sprintf("periodic_extract_%s_*", codec))
 		if err != nil {
 			// Clean up previously created dirs on error.
 			for _, d := range tmpDirs {

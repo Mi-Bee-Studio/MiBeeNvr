@@ -201,6 +201,38 @@ func (m *PeriodicMergeManager) HasSourceDeleter() bool {
 	return m.sourceDeleter != nil
 }
 
+// tempDirBase returns the parent directory for merge intermediate frame
+// directories (#746). Dense-sampling windows (e.g. 1s over a natural day ≈
+// 86,400 frames × 40–80KB, ×2 during extract+copy phases) need several GB —
+// the system /tmp usually sits on the small root partition and fills up
+// (ENOSPC on Banana Pi-class devices), so intermediates live under the merge
+// data dir on the storage root instead. Empty dataDir (never in production)
+// falls back to the os.MkdirTemp default.
+func (m *PeriodicMergeManager) tempDirBase() string {
+	if m.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(m.dataDir, "tmp")
+}
+
+// TempDirBase exposes the effective intermediate-frame directory base.
+// Exposed for wiring regression tests.
+func (m *PeriodicMergeManager) TempDirBase() string {
+	return m.tempDirBase()
+}
+
+// mkdirTemp creates a unique directory for merge intermediates under
+// tempDirBase (created on demand). Pattern semantics match os.MkdirTemp.
+func (m *PeriodicMergeManager) mkdirTemp(pattern string) (string, error) {
+	base := m.tempDirBase()
+	if base != "" {
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			return "", fmt.Errorf("create temp base %s: %w", base, err)
+		}
+	}
+	return os.MkdirTemp(base, pattern)
+}
+
 // mergeWindowStillOpen reports whether the current Run's window end is in the
 // future (e.g. a mid-day manual preview of a natural-day window). Source
 // deletion must be suppressed in that case — see runPerCodecMerge.

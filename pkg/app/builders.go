@@ -832,6 +832,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			cleanupMgr.SetTranscodeHistoryRetention(hr)
 		}
 	}
+	// Pace directory-form (MJPEG/timelapse frame-tree) recording deletion so
+	// the opt-in delete_recordings_after_merge cleanup cannot saturate the
+	// ext4 journal (jbd2) and starve online recording IO (#748).
+	cleanupMgr.SetDirectoryDeleteThrottle(200, 200*time.Millisecond)
 	deps.cleanupMgr = cleanupMgr
 	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)
 

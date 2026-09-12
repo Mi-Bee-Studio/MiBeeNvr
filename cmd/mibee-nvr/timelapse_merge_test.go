@@ -494,3 +494,27 @@ func TestTimelapseMergeWindowFor(t *testing.T) {
 	require.Equal(t, time.Date(2026, 9, 5, 8, 0, 0, 0, loc), s)
 	require.Equal(t, time.Date(2026, 9, 5, 16, 0, 0, 0, loc), e)
 }
+
+func TestParseTimelapseMergeFlags_ThrottleFlags(t *testing.T) {
+	t.Helper()
+	// Defaults: self-throttle on, delete pacing at the built-in 200ms.
+	f, code := parseTimelapseMergeFlags([]string{"mibee-nvr", "timelapse-merge", "--camera", "cam-1", "--start", "2026-09-04"})
+	require.Equal(t, -1, code)
+	require.False(t, f.noThrottle, "self-throttle is on by default")
+	require.Empty(t, f.delThrottle, "delete-throttle default = built-in 200ms")
+
+	// Explicit overrides.
+	f, code = parseTimelapseMergeFlags([]string{"mibee-nvr", "timelapse-merge", "--camera", "cam-1", "--start", "2026-09-04", "--no-throttle", "--delete-throttle", "500ms"})
+	require.Equal(t, -1, code)
+	require.True(t, f.noThrottle)
+	require.Equal(t, "500ms", f.delThrottle)
+
+	// "0" disables pacing.
+	f, code = parseTimelapseMergeFlags([]string{"mibee-nvr", "timelapse-merge", "--camera", "cam-1", "--start", "2026-09-04", "--delete-throttle", "0"})
+	require.Equal(t, -1, code)
+	require.Equal(t, "0", f.delThrottle)
+
+	// Invalid durations are rejected.
+	_, code = parseTimelapseMergeFlags([]string{"mibee-nvr", "timelapse-merge", "--camera", "cam-1", "--start", "2026-09-04", "--delete-throttle", "fast"})
+	require.Equal(t, 1, code, "invalid --delete-throttle must exit 1")
+}

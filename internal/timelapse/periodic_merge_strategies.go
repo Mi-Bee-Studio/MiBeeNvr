@@ -221,7 +221,7 @@ func (m *PeriodicMergeManager) goMergeSegments(ctx context.Context, segments []m
 		return fmt.Errorf("periodic merge: create output dir: %w", err)
 	}
 
-	tmpDir, err := os.MkdirTemp("", "periodic_go_merge_*")
+	tmpDir, err := m.mkdirTemp("periodic_go_merge_*")
 	if err != nil {
 		return fmt.Errorf("periodic merge: create temp dir: %w", err)
 	}
