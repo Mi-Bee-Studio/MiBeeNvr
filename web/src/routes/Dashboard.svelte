@@ -59,6 +59,7 @@
   let cpuPercent = $state<string | null>(null);
   let iowaitPercent = $state<string | null>(null);
   let loadOne = $state<number | null>(null);
+  let dbTxnTop = $state<Array<{ name: string; perSecond: number; avgMs: number; total: number }> | null>(null);
   let memoryPercent = $state<string | null>(null);
   let netRateUp = $state<string | null>(null);
   let netRateDown = $state<string | null>(null);
@@ -273,6 +274,16 @@
       if (s.load) {
         loadOne = s.load.one;
       }
+      if (s.db && s.db.sources?.length) {
+        dbTxnTop = s.db.sources.slice(0, 3).map((src) => ({
+          name: src.name,
+          perSecond: src.per_second,
+          avgMs: src.avg_ms,
+          total: src.total,
+        }));
+      } else {
+        dbTxnTop = null;
+      }
       if (s.memory.total > 0) {
         memoryPercent = ((s.memory.total - s.memory.available) / s.memory.total * 100).toFixed(1) + '%';
       }
@@ -442,6 +453,11 @@
             {/if}
             {#if loadOne !== null}
               <span class="text-[10px] th-text-secondary">load {loadOne.toFixed(2)}</span>
+            {/if}
+            {#if dbTxnTop}
+              <span class="text-[10px] th-text-secondary">
+                db {dbTxnTop[0].perSecond.toFixed(1)}/s ({dbTxnTop[0].name})
+              </span>
             {/if}
           </div>
 

@@ -69,6 +69,7 @@ func scanAIFields(r *model.Recording, aiStatus, aiProcessedAt, aiError sql.NullS
 }
 
 func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
+	defer d.observeTxn(ctx, "recording_insert", time.Now())
 	defer d.observeQuery("InsertRecording", time.Now())
 	q := `INSERT INTO recordings(id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_tier, layer) VALUES(?,?,?,?,?,?,?,?,?,?,?,?);`
 	mergeStatus := r.MergeStatus
@@ -83,6 +84,7 @@ func (d *DB) InsertRecording(ctx context.Context, r *model.Recording) error {
 // It retries up to maxRetries attempts with a fixed backoff between retries.
 // Non-SQLITE_BUSY errors are returned immediately without retry.
 func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, maxRetries int, backoff time.Duration) error {
+	defer d.observeTxn(ctx, "recording_insert", time.Now())
 	var lastErr error
 	for attempt := range maxRetries {
 		if attempt > 0 {
@@ -116,6 +118,7 @@ func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, m
 }
 
 func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
+	defer d.observeTxn(ctx, "api_write", time.Now())
 	q := `UPDATE recordings SET camera_id=?, file_path=?, format=?, started_at=?, ended_at=?, duration=?, file_size=?, frame_count=?, merge_status=?, merge_tier=? WHERE id=?;`
 	_, err := d.db.ExecContext(ctx, q, r.CameraID, r.FilePath, r.Format, timeToDB(r.StartedAt), timeToDB(r.EndedAt), r.Duration, r.FileSize, r.FrameCount, r.MergeStatus, r.MergeTier, r.ID)
 	return err
@@ -762,6 +765,7 @@ const orphanBatchSize = 500
 // Inserts are performed in batches of orphanBatchSize to avoid holding the
 // write lock for too long. Context timeout is checked between batches.
 func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Recording) (int, error) {
+	defer d.observeTxn(ctx, "recording_insert", time.Now())
 	if len(recordings) == 0 {
 		return 0, nil
 	}
@@ -808,6 +812,7 @@ func (d *DB) InsertOrphanRecordings(ctx context.Context, recordings []*model.Rec
 }
 
 func (d *DB) DeleteRecording(ctx context.Context, id string) error {
+	defer d.observeTxn(ctx, "api_write", time.Now())
 	_, err := d.db.ExecContext(ctx, `DELETE FROM recordings WHERE id=?;`, id)
 	return err
 }
@@ -816,6 +821,7 @@ func (d *DB) DeleteRecording(ctx context.Context, id string) error {
 // Returns the slice of IDs requested for deletion on success (nil on failure).
 // Uses a single IN clause to minimize transaction duration and SQLITE_BUSY contention.
 func (d *DB) DeleteRecordingsBatch(ctx context.Context, ids []string) ([]string, error) {
+	defer d.observeTxn(ctx, "api_write", time.Now())
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -839,6 +845,7 @@ func (d *DB) DeleteRecordingsBatch(ctx context.Context, ids []string) ([]string,
 }
 
 func (d *DB) SetMerged(ctx context.Context, id string, merged bool) error {
+	defer d.observeTxn(ctx, "recording_close", time.Now())
 	status := model.MergeStatusPending
 	if merged {
 		status = model.MergeStatusMerged
@@ -848,6 +855,7 @@ func (d *DB) SetMerged(ctx context.Context, id string, merged bool) error {
 }
 
 func (d *DB) CleanupIncomplete(ctx context.Context) error {
+	defer d.observeTxn(ctx, "api_write", time.Now())
 	_, err := d.db.ExecContext(ctx, `DELETE FROM recordings WHERE ended_at IS NULL;`)
 	return err
 }
@@ -1083,6 +1091,7 @@ func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recordin
 
 // UpdateRecordingDuration updates the duration and ended_at for a recording.
 func (d *DB) UpdateRecordingDuration(ctx context.Context, id string, duration float64, endedAt time.Time) error {
+	defer d.observeTxn(ctx, "recording_close", time.Now())
 	_, err := d.db.ExecContext(ctx, `UPDATE recordings SET duration=?, ended_at=? WHERE id=?;`, duration, timeToDB(endedAt), id)
 	return err
 }
@@ -1142,6 +1151,7 @@ func (d *DB) ListZeroDurationRecordings(ctx context.Context, cameraID string, li
 // final "completed" lands, and one instance's completed result is never
 // clobbered by another's failed/skipped report.
 func (d *DB) UpdateRecordingAIStatus(ctx context.Context, id, status, errMsg string) error {
+	defer d.observeTxn(ctx, "ai_event", time.Now())
 	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
 	rank := aiStatusRank(status)
 	const currentRank = `CASE COALESCE(ai_status,'') WHEN 'completed' THEN 3 WHEN 'skipped' THEN 2 WHEN 'failed' THEN 1 ELSE 0 END`

@@ -475,10 +475,14 @@ SQLite 元数据库的健康指标 — 写连接池、只读连接池与文件�
 | `nvr_sqlite_db_size_bytes` | Gauge | — | SQLite 数据库文件大小（字节） |
 | `nvr_sqlite_fragmentation_ratio` | Gauge | — | SQLite 碎片率（freelist_count / page_count） |
 | `nvr_sqlite_query_duration_seconds` | Histogram | `query_name` | SQLite 查询耗时（秒），按查询名称分区 |
+| `nvr_sqlite_txns_total` | Counter | `source` | 按来源计数的写事务（`recording_insert` / `recording_close` / `merge_status` / `ai_event` / `health` / `api_write` / `cleanup` / `repair`）——写热点排序（#759） |
+| `nvr_sqlite_txn_duration_seconds` | Histogram | `source` | 按来源的写事务耗时（秒）（#759） |
 | `nvr_sqlite_busy_errors_total` | Counter | — | 所有数据库操作中重试的 SQLITE_BUSY 错误总数 |
 | `nvr_memlimit_bytes` | Gauge | — | 启动时安装的 Go 运行时软内存上限（GOMEMLIMIT）；0 = 未设置（环境变量优先/配置禁用/主机内存未知）（#756） |
 
 **`nvr_sqlite_query_duration_seconds` 桶区间：** 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s。
+
+**`nvr_sqlite_txn_duration_seconds` 桶区间：** 0.5ms, 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 5s。
 
 **用途：**
 

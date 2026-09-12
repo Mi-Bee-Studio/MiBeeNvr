@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -417,38 +418,54 @@ func writeCodecFtyp(w *mp4.Writer, compatibleBrand [4]byte) (int64, error) {
 	return end - start, nil
 }
 
-// writeCodecMdat writes the mdat box with length-prefixed NALU sample data,
-// stripping parameter sets (which belong only in avcC/hvcC). isParamSet is the
-// codec-specific predicate (isH264ParamSet / isH265ParamSet). Including param
-// sets in sample data causes MEDIA_ERR_SRC_NOT_SUPPORTED in browsers.
-func writeCodecMdat(w *mp4.Writer, framePaths []string, ctx context.Context, isParamSet func([]byte) bool) error {
-	// First pass: compute total mdat payload size (excluding param sets).
-	var totalPayloadSize uint32
+// mdatHeaderSize returns the ISOBMFF header size for an mdat box holding
+// payload bytes: 16 (size=1 + 64-bit largesize) once the box would exceed the
+// 32-bit small-header limit, else 8. Callers need this BEFORE writeMoov —
+// the stco chunk offset depends on it (#mdat-4gb).
+func mdatHeaderSize(payload uint64) uint64 {
+	if payload+8 > math.MaxUint32 {
+		return 16
+	}
+	return 8
+}
+
+// computeMdatPayloadSize is the sizing pass of the codec mdat writer: the
+// total length-prefixed sample bytes (4-byte prefix per NALU), excluding
+// parameter sets. uint64 by design — a busy natural-day window exceeds 4GB
+// and the former uint32 accumulation wrapped, making go-mp4's EndBox fail
+// with "header size changed" (2026-09-13 incident, #mdat-4gb).
+func computeMdatPayloadSize(ctx context.Context, framePaths []string, isParamSet func([]byte) bool) (uint64, error) {
+	var total uint64
 	for _, path := range framePaths {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return 0, ctx.Err()
 		default:
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("read frame %s: %w", path, err)
+			return 0, fmt.Errorf("read frame %s: %w", path, err)
 		}
 		for _, nalu := range splitAnnexB(data) {
 			if isParamSet(nalu) {
 				continue
 			}
-			totalPayloadSize += 4 + uint32(len(nalu))
+			total += 4 + uint64(len(nalu))
 		}
 	}
+	return total, nil
+}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	mdatBoxSize := uint64(8 + totalPayloadSize)
+// writeCodecMdat writes the mdat box with length-prefixed NALU sample data,
+// stripping parameter sets (which belong only in avcC/hvcC). isParamSet is the
+// codec-specific predicate (isH264ParamSet / isH265ParamSet). Including param
+// sets in sample data causes MEDIA_ERR_SRC_NOT_SUPPORTED in browsers.
+//
+// payload is the caller-precomputed computeMdatPayloadSize result: it must be
+// known before writeMoov so the stco offset and the mdat header agree, and so
+// StartBox can open the 16-byte largesize header for >4GB boxes up front.
+func writeCodecMdat(w *mp4.Writer, framePaths []string, payload uint64, ctx context.Context, isParamSet func([]byte) bool) error {
+	mdatBoxSize := mdatHeaderSize(payload) + payload
 	_, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("mdat"), Size: mdatBoxSize})
 	if err != nil {
 		return fmt.Errorf("start mdat: %w", err)

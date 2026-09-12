@@ -103,6 +103,15 @@ export interface SystemStats {
   };
   uptime: string;
   timestamp: number;
+  // DB write-transaction panel (#759); nil until two poll samples exist.
+  db?: {
+    sources: Array<{
+      name: string;
+      total: number;
+      per_second: number;
+      avg_ms: number;
+    }>;
+  };
 }
 
 // --- Session token storage (localStorage) ---------------------------------

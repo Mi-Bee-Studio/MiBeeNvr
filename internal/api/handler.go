@@ -96,6 +96,22 @@ type SystemStats struct {
 	// 15 在既有 CPU 瓦片上完全不可见——CPU 忙闲是低的)。nil = 不可用平台。
 	Load *LoadStats `json:"load,omitempty"`
 	Disk *DiskStats `json:"disk,omitempty"`
+	// DB 写事务来源观测(#759):每来源累计数 + 每秒速率(服务端按两次采样
+	// 窗口计算)。nil = 尚无第二个采样窗口。
+	DB *DBTxnStats `json:"db,omitempty"`
+}
+
+// DBTxnStats 是按来源聚合的 DB 写事务面板数据(#759)。
+type DBTxnStats struct {
+	// Sources 按累计数降序(写热点排序一眼可见)。
+	Sources []DBTxnSource `json:"sources"`
+}
+
+type DBTxnSource struct {
+	Name      string  `json:"name"`
+	Total     int64   `json:"total"`
+	PerSecond float64 `json:"per_second"`
+	AvgMs     float64 `json:"avg_ms"`
 }
 
 type CPUStats struct {
@@ -163,6 +179,9 @@ type SnapshotCapturer interface {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
+	// DB txn panel rate window (#759): previous /api/system/stats sample.
+	dbTxnMu   sync.Mutex
+	dbTxnPrev *dbTxnSample
 	db                *storage.DB
 	store             *storage.Manager
 	authMW            func(http.Handler) http.Handler

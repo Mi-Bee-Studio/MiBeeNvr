@@ -98,6 +98,10 @@ const countCacheTTL = 2 * time.Second
 type QueryMetrics interface {
 	ObserveQueryDuration(queryName string, seconds float64)
 	IncSQLiteBusyErrors()
+	// ObserveTxn records one write transaction by source (#759):
+	// recording_insert / recording_close / merge_status / ai_event / health /
+	// api_write / cleanup / repair.
+	ObserveTxn(source string, seconds float64)
 }
 
 // DB returns the underlying write *sql.DB for advanced queries.

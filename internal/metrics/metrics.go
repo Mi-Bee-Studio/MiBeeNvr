@@ -123,6 +123,11 @@ type Metrics struct {
 	SQLiteDBSizeBytes          prometheus.Gauge
 	SQLiteFragmentationRatio   prometheus.Gauge
 	SQLiteQueryDurationSeconds *prometheus.HistogramVec // labels: query_name
+	// DB transaction source attribution (#759): write volume + latency by
+	// origin (recording_insert/recording_close/merge_status/ai_event/health/
+	// api_write/cleanup/repair) — the write-hotspot ranking surface.
+	SQLiteTxnsTotal            *prometheus.CounterVec   // labels: source
+	SQLiteTxnDurationSeconds   *prometheus.HistogramVec // labels: source
 	SQLiteBusyErrorsTotal      prometheus.Counter       // SQLITE_BUSY retries across all queries
 	CleanupDurationSeconds     prometheus.Histogram
 	SQLiteOpenConnections      prometheus.Gauge   // writer pool
@@ -557,6 +562,17 @@ func NewMetrics() *Metrics {
 		Help:    "SQLite query duration in seconds, partitioned by query name.",
 		Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 	}, []string{"query_name"})
+
+	sqliteTxnsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_sqlite_txns_total",
+		Help: "Write transactions by source (recording_insert/recording_close/merge_status/ai_event/health/api_write/cleanup/repair) — write-hotspot ranking (#759).",
+	}, []string{"source"})
+	sqliteTxnDurationSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "nvr_sqlite_txn_duration_seconds",
+		Help:    "Write transaction latency by source (#759).",
+		Buckets: []float64{0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
+	}, []string{"source"})
+
 	sqliteBusyErrorsTotal := prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "nvr_sqlite_busy_errors_total",
 		Help: "Total SQLITE_BUSY errors retried across all database operations.",
@@ -691,6 +707,8 @@ func NewMetrics() *Metrics {
 		sqliteDBSizeBytes,
 		sqliteFragmentationRatio,
 		sqliteQueryDurationSeconds,
+		sqliteTxnsTotal,
+		sqliteTxnDurationSeconds,
 		sqliteBusyErrorsTotal,
 		cleanupDurationSeconds,
 		sqliteOpenConnections,
@@ -790,6 +808,8 @@ func NewMetrics() *Metrics {
 		SQLiteDBSizeBytes:              sqliteDBSizeBytes,
 		SQLiteFragmentationRatio:       sqliteFragmentationRatio,
 		SQLiteQueryDurationSeconds:     sqliteQueryDurationSeconds,
+		SQLiteTxnsTotal:                sqliteTxnsTotal,
+		SQLiteTxnDurationSeconds:      sqliteTxnDurationSeconds,
 		SQLiteBusyErrorsTotal:          sqliteBusyErrorsTotal,
 		CleanupDurationSeconds:         cleanupDurationSeconds,
 		SQLiteOpenConnections:          sqliteOpenConnections,
@@ -806,6 +826,16 @@ func NewMetrics() *Metrics {
 
 // ObserveQueryDuration implements storage.QueryMetrics, recording a query latency into
 // the nvr_sqlite_query_duration_seconds histogram. Called from hot DB methods.
+// ObserveTxn implements storage.QueryMetrics (#759): one write transaction
+// by source. Bounded enum on the source label — see storage/txn_source.go.
+func (m *Metrics) ObserveTxn(source string, seconds float64) {
+	if m == nil || m.SQLiteTxnsTotal == nil {
+		return
+	}
+	m.SQLiteTxnsTotal.WithLabelValues(source).Inc()
+	m.SQLiteTxnDurationSeconds.WithLabelValues(source).Observe(seconds)
+}
+
 func (m *Metrics) ObserveQueryDuration(queryName string, seconds float64) {
 	if m == nil || m.SQLiteQueryDurationSeconds == nil {
 		return
