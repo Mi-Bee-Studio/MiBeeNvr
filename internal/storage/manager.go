@@ -28,7 +28,13 @@ type Manager struct {
 	rootDir     string
 	cameraRoots map[string]string
 	metrics     *metrics.Metrics
-	mu          sync.Mutex
+
+	// Per-segment writer states (#750), keyed by temp path: classification,
+	// camera attribution, retained FD + coalescing buffer for the append path.
+	// Replaces the former global write mutex — each state carries its own lock
+	// so cameras no longer serialize through one another.
+	statesMu      sync.RWMutex
+	segmentStates map[string]*segmentWriter
 
 	// Health tracking (per-camera)
 	healthMu      sync.Mutex
@@ -59,6 +65,7 @@ func NewManager(rootDir string, opts ...*metrics.Metrics) (*Manager, error) {
 		metrics:          m,
 		cameraHealths:    make(map[string]*cameraHealth),
 		segmentCameraMap: make(map[string]string),
+		segmentStates:    make(map[string]*segmentWriter),
 	}, nil
 }
 
@@ -210,6 +217,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		// already protected (2026-09-08 incident: the scan deleted an active
 		// segment temp mid-write).
 		m.registerTempPath(tempPath, cameraID)
+		m.registerWriterState(tempPath, cameraID, false)
 		f, err := os.Create(tempPath)
 		if err != nil {
 			m.recordWriteFailure(cameraID)
@@ -223,6 +231,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s", cameraID, ts, uuid))
 
 		m.registerTempPath(tempPath, cameraID)
+		m.registerWriterState(tempPath, cameraID, true)
 		if err := os.MkdirAll(tempPath, 0o755); err != nil {
 			m.recordWriteFailure(cameraID)
 			m.unregisterTempPath(tempPath)
@@ -233,6 +242,7 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 		tempPath = filepath.Join(hourDir, uuid+".tmp")
 		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s.avi", cameraID, ts, uuid))
 		m.registerTempPath(tempPath, cameraID)
+		m.registerWriterState(tempPath, cameraID, false)
 		f, err := os.Create(tempPath)
 		if err != nil {
 			m.recordWriteFailure(cameraID)
@@ -295,16 +305,24 @@ func (m *Manager) recordFinalizeFailure(tempPath string, err error) {
 }
 
 // CloseSegment atomically finalizes a segment by syncing and renaming .tmp to final path.
+// Segments with writer state (#750) finalize through the retained FD — any
+// coalesced bytes are flushed first; segments written through external
+// handles (the MP4 muxer, merge outputs) fall back to the reopen-and-sync
+// path, preserving the original behavior.
 func (m *Manager) CloseSegment(tempPath, finalPath string) error {
-	// Check if temp is a directory (MJPEG) or file (H.264)
-	info, err := os.Stat(tempPath)
-	if err != nil {
-		m.recordFinalizeFailure(tempPath, err)
+	st, serr := m.stateFor(tempPath)
+	if serr != nil {
+		// No state and classification failed (external temp that is already
+		// gone, or stat trouble) — identical to the pre-#750 behavior.
+		m.recordFinalizeFailure(tempPath, serr)
 		m.unregisterTempPath(tempPath)
-		return fmt.Errorf("storage: temp path not found: %w", err)
+		return fmt.Errorf("storage: temp path not found: %w", serr)
 	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	isDir := st.isDir
 
-	if info.IsDir() {
+	if isDir {
 		// Sync the directory for MJPEG
 		dirFd, err := os.Open(tempPath)
 		if err != nil {
@@ -326,19 +344,27 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 			return fmt.Errorf("storage: failed to rename temp dir to final: %w", err)
 		}
 	} else {
-		// Sync and close the file for H.264
-		f, err := os.OpenFile(tempPath, os.O_WRONLY, 0)
-		if err != nil {
-			m.recordFinalizeFailure(tempPath, err)
-			m.unregisterTempPath(tempPath)
-			return fmt.Errorf("storage: cannot open temp file for sync: %w", err)
-		}
-		if err := f.Sync(); err != nil {
+		// File form: finalize the retained FD when this segment wrote through
+		// WriteFrame (flushes the coalescing buffer); otherwise reopen-and-sync
+		// for externally written temps (muxer/merge outputs already closed
+		// their own handles before calling CloseSegment).
+		if st == nil || st.file == nil {
+			f, err := openFileFn(tempPath, os.O_WRONLY, 0)
+			if err != nil {
+				m.recordFinalizeFailure(tempPath, err)
+				m.unregisterTempPath(tempPath)
+				return fmt.Errorf("storage: cannot open temp file for sync: %w", err)
+			}
+			if err := f.Sync(); err != nil {
+				f.Close()
+				m.RecordWriteFailureForPath(tempPath)
+				return fmt.Errorf("storage: failed to sync temp file: %w", err)
+			}
 			f.Close()
+		} else if err := st.finalize(); err != nil {
 			m.RecordWriteFailureForPath(tempPath)
-			return fmt.Errorf("storage: failed to sync temp file: %w", err)
+			return fmt.Errorf("storage: failed to finalize temp file: %w", err)
 		}
-		f.Close()
 
 		// Atomic rename
 		if err := os.Rename(tempPath, finalPath); err != nil {
@@ -348,69 +374,77 @@ func (m *Manager) CloseSegment(tempPath, finalPath string) error {
 		}
 	}
 
-	// Success — unregister mapping.
+	// Success — unregister mapping (also drops the writer state).
 	m.unregisterTempPath(tempPath)
 	return nil
 }
 
 // WriteFrame writes data to a segment's temp path.
-// For H.264: appends data to the temp file.
+// For H.264/AVI: appends data through the segment's coalescing buffer (#750).
 // For MJPEG: creates a timestamped .jpg file in the temp directory.
+//
+// Classification and camera attribution come from the per-segment writer
+// state (registered at CreateSegment, or classified once lazily) — no
+// per-frame stat or path→camera map lookup. Locking is per segment, so
+// cameras do not serialize through a global mutex.
 func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	st, serr := m.stateFor(tempPath)
+	if serr != nil {
+		// Classification stat failed. A vanished temp is a rotation/cleanup
+		// artifact, not an I/O error — counting it escalates a healthy camera
+		// to Failed and the skip-before-write recorders then never record the
+		// successful write that would reset the state (#413). Anything else
+		// (permissions, EIO) is a real failure.
+		if errors.Is(serr, fs.ErrNotExist) {
+			slog.Warn("storage: temp segment vanished before write — frame dropped, storage healthy",
+				"path", tempPath)
+			return 0, fmt.Errorf("storage: temp path not accessible: %w", serr)
+		}
+		m.recordWriteFailure(m.lookupCameraByPath(tempPath))
+		return 0, fmt.Errorf("storage: temp path not accessible: %w", serr)
+	}
 
-	info, err := os.Stat(tempPath)
+	n, err := st.writeFrame(data)
 	if err != nil {
-		// A vanished temp is a rotation/cleanup artifact, not an I/O error —
-		// same rationale as the CloseSegment gate: counting it escalates a
-		// healthy camera to Failed and the skip-before-write recorders then
-		// never record the successful write that would reset the state.
+		// A vanished temp (or a write racing segment finalize) is a
+		// rotation/cleanup artifact, not an I/O error — same rationale
+		// as the classification gate above (#413).
 		if errors.Is(err, fs.ErrNotExist) {
 			slog.Warn("storage: temp segment vanished before write — frame dropped, storage healthy",
 				"path", tempPath)
-			return 0, fmt.Errorf("storage: temp path not accessible: %w", err)
+			m.dropWriterState(tempPath)
+			return n, err
 		}
-		m.RecordWriteFailureForPath(tempPath)
-		return 0, fmt.Errorf("storage: temp path not accessible: %w", err)
+		m.recordWriteFailure(st.cameraID)
+		return n, err
 	}
 
-	if info.IsDir() {
-		// MJPEG: write individual JPEG file with timestamp name
-		ts := time.Now().Format("20060102_150405.000")
-		jpgPath := filepath.Join(tempPath, ts+".jpg")
-		if err := os.WriteFile(jpgPath, data, 0o644); err != nil {
-			m.RecordWriteFailureForPath(tempPath)
-			return 0, fmt.Errorf("storage: failed to write JPEG frame: %w", err)
-		}
-		m.RecordWriteSuccessForPath(tempPath)
-		return 0, nil
-	}
-
-	// H.264: append to temp file
-	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		m.RecordWriteFailureForPath(tempPath)
-		return 0, fmt.Errorf("storage: failed to open temp file for writing: %w", err)
-	}
-	defer f.Close()
-
-	n, err := f.Write(data)
-	if err != nil {
-		m.RecordWriteFailureForPath(tempPath)
-		return n, fmt.Errorf("storage: write failed: %w", err)
-	}
-
-	m.RecordWriteSuccessForPath(tempPath)
+	m.recordWriteSuccess(st.cameraID)
 	return n, nil
 }
 
-// unregisterTempPath removes the tempPath → cameraID mapping.
+// unregisterTempPath removes the tempPath → cameraID mapping and drops the
+// per-segment writer state. The retained-FD close is a backstop: CloseSegment
+// (which holds the state lock while finalizing) normally closed it already,
+// hence the try-lock — a contended state is being finalized by its holder.
 // Safe for concurrent use.
 func (m *Manager) unregisterTempPath(tempPath string) {
 	m.segMapMu.Lock()
 	delete(m.segmentCameraMap, tempPath)
 	m.segMapMu.Unlock()
+
+	if st := m.peekWriterState(tempPath); st != nil && st.mu.TryLock() {
+		st.releaseLocked()
+		st.mu.Unlock()
+	}
+	m.dropWriterState(tempPath)
+}
+
+// peekWriterState returns the state without creating one (nil if absent).
+func (m *Manager) peekWriterState(tempPath string) *segmentWriter {
+	m.statesMu.RLock()
+	defer m.statesMu.RUnlock()
+	return m.segmentStates[tempPath]
 }
 
 // ListFiles lists all recording files (non-.tmp) for a camera.
