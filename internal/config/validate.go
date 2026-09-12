@@ -385,6 +385,12 @@ func validateConfigDetails(cfg *Config) error {
 	if cfg.IO.BudgetBytesPerSec == 0 && cfg.IO.BudgetBurstBytes > 0 {
 		return fmt.Errorf("io.budget_burst_bytes is set but io.budget_bytes_per_sec is 0 (disabled) — remove the burst or set a rate")
 	}
+	if cfg.IO.DeleteUnlinksPerSec < 0 {
+		return fmt.Errorf("io.delete_unlinks_per_sec must be >= 0 (0 = auto, 200/s default), got %d", cfg.IO.DeleteUnlinksPerSec)
+	}
+	if cfg.IO.BudgetBytesPerSec == 0 && cfg.IO.DeleteUnlinksPerSec > 0 {
+		return fmt.Errorf("io.delete_unlinks_per_sec is set but io.budget_bytes_per_sec is 0 (disabled) — the unlink guardrail only applies with a budget")
+	}
 	if cfg.Merge.Enabled {
 		if _, err := time.ParseDuration(cfg.Merge.CheckInterval); err != nil {
 			return fmt.Errorf("invalid merge check_interval: %w", err)

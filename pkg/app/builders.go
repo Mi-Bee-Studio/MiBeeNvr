@@ -127,6 +127,26 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 			"bytes_per_sec", cfg.IO.BudgetBytesPerSec, "burst_bytes", cfg.IO.BudgetBurstBytes)
 	}
 
+	// Unlink guardrail (#755): per-FILE rate limit for recursive frame-tree
+	// deletion, active only with the byte budget (replaces the fixed
+	// 200-files/200ms time-slice so fast media sprints and busy media backs
+	// off). Default tier 200 unlink/s per the #748 jbd2-saturation lesson.
+	if ioBudget != nil {
+		unlinkRate := cfg.IO.DeleteUnlinksPerSec
+		if unlinkRate == 0 {
+			unlinkRate = 200
+		}
+		deps.unlinkBudget = iobudget.New(unlinkRate, unlinkRate,
+			iobudget.WithObservers(
+				func(consumer string, d time.Duration) {
+					m.IOBudgetWaitSecondsTotal.WithLabelValues(consumer).Add(d.Seconds())
+				},
+				func(consumer string, n int64) {
+					m.IOBudgetChargedUnlinksTotal.WithLabelValues(consumer).Add(float64(n))
+				},
+			))
+	}
+
 	// Step 2.1: Event bus
 	deps.eventBus = event.NewEventBus(64)
 
@@ -862,9 +882,11 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// the opt-in delete_recordings_after_merge cleanup cannot saturate the
 	// ext4 journal (jbd2) and starve online recording IO (#748).
 	cleanupMgr.SetDirectoryDeleteThrottle(200, 200*time.Millisecond)
-	// Bill reclaim I/O to the shared background budget (#751) when enabled.
+	// Bill reclaim I/O to the shared background budget (#751) when enabled;
+	// the unlink guardrail replaces the fixed time-slice pacing above (#755).
 	if deps.ioBudget != nil {
 		cleanupMgr.SetIOBudget(deps.ioBudget)
+		cleanupMgr.SetUnlinkBudget(deps.unlinkBudget)
 	}
 	deps.cleanupMgr = cleanupMgr
 	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)

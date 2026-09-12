@@ -39,6 +39,16 @@ func TestBuildAppDeps_IOBudgetWired(t *testing.T) {
 	if deps.cleanupMgr.HasIOBudget() != deps.ioBudget {
 		t.Error("cleanup manager does not hold the shared bucket")
 	}
+	// Unlink guardrail (#755): active only with the budget, default tier.
+	if deps.unlinkBudget == nil {
+		t.Fatal("deps.unlinkBudget is nil with a budget configured")
+	}
+	if got := deps.unlinkBudget.Rate(); got != 200 {
+		t.Errorf("unlink guardrail rate = %d, want 200 (default tier)", got)
+	}
+	if deps.cleanupMgr.HasUnlinkBudget() != deps.unlinkBudget {
+		t.Error("cleanup manager does not hold the unlink guardrail")
+	}
 
 	// The merge/timelapse package-level setters are not directly observable
 	// without importing those packages' internals; charging itself is covered
@@ -66,7 +76,32 @@ func TestBuildAppDeps_IOBudgetDefaultOff(t *testing.T) {
 	if deps.ioBudget != nil {
 		t.Error("deps.ioBudget should be nil when io.budget_bytes_per_sec=0 (default off)")
 	}
+	if deps.unlinkBudget != nil {
+		t.Error("deps.unlinkBudget should be nil without a budget (legacy pacing stays)")
+	}
 	if deps.cleanupMgr.HasIOBudget() != nil {
 		t.Error("cleanup manager should have no budget when io section is unset")
+	}
+	if deps.cleanupMgr.HasUnlinkBudget() != nil {
+		t.Error("cleanup manager should have no unlink guardrail when io section is unset")
+	}
+}
+
+// TestBuildAppDeps_UnlinkGuardrailExplicitRate: an explicit
+// io.delete_unlinks_per_sec overrides the 200/s default tier.
+func TestBuildAppDeps_UnlinkGuardrailExplicitRate(t *testing.T) {
+	t.Helper()
+	cfg, configPath := minimalConfig(t)
+	cfg.IO.BudgetBytesPerSec = 1 << 20
+	cfg.IO.DeleteUnlinksPerSec = 50
+
+	deps, cleanupFn, err := buildAppDeps(cfg, configPath)
+	if err != nil {
+		t.Fatalf("buildAppDeps: %v", err)
+	}
+	defer cleanupFn()
+
+	if got := deps.unlinkBudget.Rate(); got != 50 {
+		t.Errorf("unlink guardrail rate = %d, want 50 (explicit override)", got)
 	}
 }

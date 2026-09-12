@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -74,6 +75,11 @@ type CleanupManager struct {
 	// budget (#751). nil = budgeting off (default) — deletion runs with the
 	// time-slice pacing above only. Set once via SetIOBudget at startup.
 	budget iobudget.Limiter
+	// unlinkBudget is the metadata-storm guardrail (#755): a per-FILE rate
+	// limit for recursive frame-tree deletion. When set it REPLACES the fixed
+	// dirDeleteChunk/dirDeleteSleep time-slice pacing (bytes are billed
+	// separately via budget). nil = legacy time-slice pacing.
+	unlinkBudget iobudget.Limiter
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -283,6 +289,25 @@ func (cm *CleanupManager) HasIOBudget() iobudget.Limiter {
 	return cm.budget
 }
 
+// SetUnlinkBudget installs the per-file unlink guardrail for directory-form
+// deletion (#755). When set, it replaces the fixed time-slice pacing
+// (SetDirectoryDeleteThrottle) — the medium tells us when it is busy instead
+// of a fixed sleep guessing. nil restores legacy pacing.
+func (cm *CleanupManager) SetUnlinkBudget(l iobudget.Limiter) {
+	if cm == nil {
+		return
+	}
+	cm.unlinkBudget = l
+}
+
+// HasUnlinkBudget returns the installed guardrail (nil when off).
+func (cm *CleanupManager) HasUnlinkBudget() iobudget.Limiter {
+	if cm == nil {
+		return nil
+	}
+	return cm.unlinkBudget
+}
+
 // estimatePathBytes sums the on-disk size of path (recursive for
 // directories). Unreadable entries contribute zero — an estimate is pacing
 // input, not accounting truth.
@@ -316,7 +341,15 @@ func estimatePathBytes(path string) int64 {
 // are unlinked file-by-file in chunks and the remaining empty tree is swept by
 // a final RemoveAll. A ctx cancellation mid-walk leaves a partially-deleted
 // tree — the orphan scanner reclaims it later.
+//
+// Pacing strategy (#755): when the per-file unlink guardrail is installed it
+// REPLACES the fixed chunk/sleep time-slice (one guardrail Wait per file —
+// fast media sprints, busy media backs off); without it the legacy
+// SetDirectoryDeleteThrottle pacing applies unchanged.
 func (cm *CleanupManager) deleteRecordingFile(ctx context.Context, path string) error {
+	if cm.unlinkBudget != nil {
+		return cm.deleteRecordingFileGuarded(ctx, path)
+	}
 	if cm.dirDeleteChunk <= 0 || cm.dirDeleteSleep <= 0 {
 		return cm.store.DeleteFile(path)
 	}
@@ -346,6 +379,33 @@ func (cm *CleanupManager) deleteRecordingFile(ctx context.Context, path string) 
 		return nil
 	}); err != nil {
 		return fmt.Errorf("paced delete %q: %w", path, err)
+	}
+	return os.RemoveAll(path)
+}
+
+// deleteRecordingFileGuarded is the #755 guardrail variant of
+// deleteRecordingFile: every file in the tree bills ONE unit to the unlink
+// budget before its unlink, replacing the fixed chunk/sleep pacing entirely.
+// The billing is ctx-cancellable (abort leaves a partial tree for the orphan
+// scanner — identical cancellation semantics to the legacy pacing).
+func (cm *CleanupManager) deleteRecordingFileGuarded(ctx context.Context, path string) error {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return cm.store.DeleteFile(path)
+	}
+	if err := filepath.WalkDir(path, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if err := cm.unlinkBudget.Wait(ctx, iobudget.ConsumerCleanup, 1); err != nil {
+			return err
+		}
+		return os.Remove(p)
+	}); err != nil {
+		return fmt.Errorf("guarded delete %q: %w", path, err)
 	}
 	return os.RemoveAll(path)
 }
@@ -467,16 +527,29 @@ func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, re
 		deletedSet[id] = true
 	}
 
+	// Directory-locality grouping (#755): reclaim same-directory recordings
+	// back-to-back so ext4 directory-entry metadata stays hot in cache and
+	// the inode/jbd2 changes coalesce into fewer journal transactions.
+	// Input order is temporal (retention-ordered) and uncorrelated with
+	// layout; sorting by dir does not change WHICH files die, only the
+	// visit order.
+	sorted := make([]model.Recording, 0, len(toDelete))
+	for _, rec := range toDelete {
+		if deletedSet[rec.ID] {
+			sorted = append(sorted, rec)
+		}
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return filepath.Dir(sorted[i].FilePath) < filepath.Dir(sorted[j].FilePath)
+	})
+
 	// 5. Delete files for successfully deleted recordings (best-effort).
 	// Reclaim the merged MP4 (merge_path) too — it is the largest artifact and
 	// the one playback loads; without this it leaks permanently because the
 	// orphan scanner never reaches the nested YYYYMM/DD/HH/ tree. Mirrors
 	// handleDeleteRecording / handleTimelapseDelete.
 	budgetAborted := false
-	for _, rec := range toDelete {
-		if !deletedSet[rec.ID] {
-			continue
-		}
+	for _, rec := range sorted {
 		// Bill the reclaim to the shared budget first (#751): the biggest
 		// deletes (multi-GB merged MP4s, 600K-file frame trees) are exactly
 		// the ones that must yield to foreground I/O. On a budget wait error

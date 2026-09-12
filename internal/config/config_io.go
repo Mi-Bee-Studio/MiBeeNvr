@@ -18,4 +18,13 @@ type IOConfig struct {
 	// single burst can consume without waiting). 0 (default) → one second of
 	// budget_bytes_per_sec.
 	BudgetBurstBytes int64 `yaml:"budget_burst_bytes"`
+
+	// DeleteUnlinksPerSec caps recursive frame-tree (MJPEG/timelapse)
+	// unlinks per second while the I/O budget is enabled (#755) — a
+	// metadata-storm guardrail so the ext4 journal (jbd2) cannot saturate
+	// and self-sustain after the deleting process exits (#748 lesson).
+	// 0 (default) → 200/s at wiring time. Only meaningful together with
+	// budget_bytes_per_sec > 0; without a budget the legacy fixed
+	// time-slice pacing stays active (no default behavior change).
+	DeleteUnlinksPerSec int64 `yaml:"delete_unlinks_per_sec"`
 }

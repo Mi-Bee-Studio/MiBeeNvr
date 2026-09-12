@@ -82,11 +82,19 @@ func TestNew_DisabledReturnsNil(t *testing.T) {
 	if got := New(-100, 1<<20); got != nil {
 		t.Errorf("New(rate<0) = %v, want nil (disabled)", got)
 	}
-	if got := New(1<<20, 0); got != nil {
-		t.Errorf("New(capacity=0) = %v, want nil (disabled)", got)
+	if got := New(1<<20, -5); got != nil {
+		t.Errorf("New(capacity<0) = %v, want nil (disabled)", got)
 	}
 	if got := New(1<<20, 1<<20); got == nil {
 		t.Errorf("New(valid) = nil, want bucket")
+	}
+	// Capacity 0 = one second of rate (documented config default).
+	b := New(1<<20, 0)
+	if b == nil {
+		t.Fatal("New(rate, capacity=0) = nil, want default-burst bucket")
+	}
+	if b.Capacity() != 1<<20 {
+		t.Errorf("default capacity = %d, want %d (one second of rate)", b.Capacity(), 1<<20)
 	}
 }
 
