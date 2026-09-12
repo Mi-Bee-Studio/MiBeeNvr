@@ -66,6 +66,9 @@ type BaseConfig struct {
 	RingBufCap   int
 	DB           RecordingDB
 	AudioEnabled bool
+	// Prealloc carries the storage.prealloc_* knobs (#757). Zero value =
+	// documented defaults (enabled, 10%% headroom, 4MiB floor, 512MiB cap).
+	Prealloc PreallocParams
 	// AudioInRecordings keeps the camera's real audio track in recorded
 	// segments (event spans in merged products). Default false — recordings
 	// are video-only unless enabled per camera; live preview and the audio
@@ -897,10 +900,10 @@ func (b *baseRecorder) createNewSegment(at time.Time) bool {
 		return false
 	}
 	m := muxer.NewMP4Muxer(tempPath)
-	// Segment preallocation (#757): last segment's actual size × 1.1
-	// headroom, clamped, is the estimate for this one — contiguous extents,
-	// no per-append inode metadata transactions. No history yet → skip.
-	if est := segmentPreallocEstimate(b.lastSegBytes); est > 0 {
+	// Segment preallocation (#757): last segment's actual size × headroom,
+	// clamped, is the estimate for this one — contiguous extents, no
+	// per-append inode metadata transactions. No history yet → skip.
+	if est := segmentPreallocEstimate(b.lastSegBytes, b.cfg.Prealloc); est > 0 {
 		m.SetPreallocateBytes(est)
 	}
 	trackID, err := b.driver.addTrack(m, b)

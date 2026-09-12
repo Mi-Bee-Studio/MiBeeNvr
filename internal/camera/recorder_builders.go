@@ -84,6 +84,7 @@ func (cm *CameraManager) buildRTSPRecorder(cam config.CameraConfig, segDur time.
 			Username:          cam.Username,
 			Password:          cam.Password,
 			SegmentDur:        segDur,
+			Prealloc:          preallocParamsFromConfig(cm.cfg),
 			DB:                cm.db,
 			AudioEnabled:      cam.AudioEnabled,
 			AudioInRecordings: cam.AudioInRecordings,
@@ -106,6 +107,7 @@ func (cm *CameraManager) buildRTSPRecorder(cam config.CameraConfig, segDur time.
 			Username:          cam.Username,
 			Password:          cam.Password,
 			SegmentDur:        segDur,
+			Prealloc:          preallocParamsFromConfig(cm.cfg),
 			DB:                cm.db,
 			AudioEnabled:      cam.AudioEnabled,
 			AudioInRecordings: cam.AudioInRecordings,
@@ -293,4 +295,19 @@ func (cm *CameraManager) buildIngestRecorder(cam config.CameraConfig, segDur tim
 		EventBus:      cm.eventBus,
 		RecordEnabled: cam.RecordingEnabled,
 	})
+}
+
+// preallocParamsFromConfig maps the storage.prealloc_* knobs onto the
+// recorder-side params (#757). Values are materialized by config defaults;
+// zero-value fields keep the recorder's documented defaults.
+func preallocParamsFromConfig(cfg *config.Config) recorder.PreallocParams {
+	if cfg == nil {
+		return recorder.PreallocParams{}
+	}
+	return recorder.PreallocParams{
+		Disabled:        !cfg.Storage.PreallocEnabled,
+		HeadroomPercent: cfg.Storage.PreallocHeadroomPercent,
+		MinBytes:        cfg.Storage.PreallocMinBytes,
+		MaxBytes:        cfg.Storage.PreallocMaxBytes,
+	}
 }

@@ -354,6 +354,16 @@ func validateConfigDetails(cfg *Config) error {
 	default:
 		return fmt.Errorf("storage.durability must be \"strict\" or \"relaxed\" (empty = strict default), got %q", cfg.Storage.Durability)
 	}
+	// Preallocation knobs (#757).
+	if cfg.Storage.PreallocHeadroomPercent < 0 || cfg.Storage.PreallocHeadroomPercent > 400 {
+		return fmt.Errorf("storage.prealloc_headroom_percent must be between 0 and 400, got %d", cfg.Storage.PreallocHeadroomPercent)
+	}
+	if cfg.Storage.PreallocMinBytes < 0 {
+		return fmt.Errorf("storage.prealloc_min_bytes must be >= 0, got %d", cfg.Storage.PreallocMinBytes)
+	}
+	if cfg.Storage.PreallocMaxBytes > 0 && cfg.Storage.PreallocMinBytes > cfg.Storage.PreallocMaxBytes {
+		return fmt.Errorf("storage.prealloc_min_bytes %d exceeds prealloc_max_bytes %d", cfg.Storage.PreallocMinBytes, cfg.Storage.PreallocMaxBytes)
+	}
 	// Validate retention_days
 	if cfg.Cleanup.RetentionDays < 1 || cfg.Cleanup.RetentionDays > 3650 {
 		return fmt.Errorf("cleanup.retention_days must be between 1 and 3650, got %d", cfg.Cleanup.RetentionDays)
