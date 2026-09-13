@@ -325,6 +325,65 @@ func (cm *CameraManager) StartCamera(ctx context.Context, cameraID string) error
 	})
 }
 
+// ManualRecord arms a timed forced-recording window on the camera (#660):
+// segments are written for d even when recording_enabled=false (live-only) —
+// the MQTT {"action":"record","duration":"60s"} semantics. A running recorder
+// is armed in place; a missing/stale one is started first (StartCamera
+// semantics). Recorders without the manual-window surface (push-ingest paths)
+// return an explicit error.
+func (cm *CameraManager) ManualRecord(ctx context.Context, cameraID string, d time.Duration) error {
+	cam := cm.snapshotConfig(cameraID)
+	if cam == nil {
+		return &model.CameraNotFoundError{CameraID: cameraID}
+	}
+	if d < time.Second {
+		return fmt.Errorf("manual record duration must be at least 1s, got %s", d)
+	}
+	camCopy := *cam
+	return cm.withCameraLifecycle(cameraID, func() error {
+		rec := cm.snapshotRecorder(cameraID)
+		if rec != nil {
+			status := rec.Status()
+			if status == model.StatusRecording || status == model.StatusReconnecting {
+				return armManualWindow(rec, cameraID, d)
+			}
+			// Stale recorder — stop and remove so we can start fresh.
+			cm.apply(func(s *snapshot) *snapshot {
+				delete(s.recorders, cameraID)
+				return s
+			})
+			if err := rec.Stop(); err != nil {
+				logger.Warn("failed to stop stale recorder", "camera_id", cameraID, "error", err)
+			}
+			if cm.metrics != nil {
+				cm.metrics.ActiveCameras.Dec()
+			}
+		}
+		if err := cm.startRecorderLocked(ctx, camCopy, cm.segmentDurFor(camCopy)); err != nil {
+			return err
+		}
+		fresh := cm.snapshotRecorder(cameraID)
+		if fresh == nil {
+			return fmt.Errorf("camera %s: recorder did not register", cameraID)
+		}
+		return armManualWindow(fresh, cameraID, d)
+	})
+}
+
+// armManualWindow type-asserts the recorder's manual-recording surface (#660)
+// — implemented by the base-shape recorders (H.264/H.265, MJPEG, HTTP-JPEG).
+func armManualWindow(rec model.Recorder, cameraID string, d time.Duration) error {
+	armed, ok := rec.(interface {
+		ArmManualRecording(time.Duration)
+	})
+	if !ok {
+		return fmt.Errorf("camera %s does not support manual recording windows", cameraID)
+	}
+	armed.ArmManualRecording(d)
+	logger.Info("manual recording window armed", "camera_id", cameraID, "duration", d)
+	return nil
+}
+
 // StopCamera manually stops the recorder for the given camera. Serialized
 // per-camera so it can't race a concurrent start/restart.
 func (cm *CameraManager) StopCamera(_ context.Context, cameraID string) error {

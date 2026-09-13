@@ -17,9 +17,14 @@ import (
 
 var clientLogger = slogx.Component("mqtt")
 
-// triggerMessage is the JSON payload of a camera trigger event.
+// triggerMessage is the JSON payload of a camera trigger event. Duration is
+// optional and only meaningful for action=record (#660): "60s" opens a timed
+// forced-recording window that writes segments even when the camera is
+// recording_enabled=false (live-only). Plain record keeps the legacy
+// semantics (start the recorder; disk writes stay gated by recording_enabled).
 type triggerMessage struct {
-	Action string `json:"action"`
+	Action   string `json:"action"`
+	Duration string `json:"duration,omitempty"`
 }
 
 // aiTriggerMessage is the JSON payload of an AI detection event.
@@ -45,13 +50,13 @@ type Client struct {
 	password    string
 	mu          sync.Mutex
 	mqttClient  mqtt.Client
-	onAction    func(cameraID string, action string)
+	onAction    func(cameraID string, action string, duration time.Duration)
 	// connectFn creates the paho client; overridable in tests. Nil = mqtt.NewClient.
 	connectFn func(opts *mqtt.ClientOptions) mqtt.Client
 }
 
 // NewClient creates a new MQTT trigger event subscriber.
-func NewClient(brokerURL, clientID, topicPrefix, username, password string, onAction func(cameraID, action string)) *Client {
+func NewClient(brokerURL, clientID, topicPrefix, username, password string, onAction func(cameraID, action string, duration time.Duration)) *Client {
 	return &Client{
 		brokerURL:   brokerURL,
 		clientID:    clientID,
@@ -175,7 +180,19 @@ func (c *Client) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 	}
 
 	if c.onAction != nil && tm.Action != "" {
-		c.onAction(cameraID, tm.Action)
+		// Optional duration (#660): invalid or non-positive values fall back
+		// to the legacy no-duration semantics with a WARN (typo'd automations
+		// must not silently record nothing).
+		var dur time.Duration
+		if tm.Duration != "" {
+			if d, err := time.ParseDuration(tm.Duration); err != nil || d <= 0 {
+				clientLogger.Warn("mqtt trigger: invalid duration ignored (expected e.g. \"60s\")",
+					"camera_id", cameraID, "duration", tm.Duration)
+			} else {
+				dur = d
+			}
+		}
+		c.onAction(cameraID, tm.Action, dur)
 	}
 }
 

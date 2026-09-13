@@ -66,6 +66,21 @@ Start the given camera (equivalent to the UI 启动 button): connect and begin p
 
 > Note: whether segments are actually written still depends on the camera's recording toggle (`recording_enabled`) — when disabled the camera is live-only (streaming, preview and health monitoring work, no segments are written). For a live-only camera, `record` brings up the live stream rather than writing footage.
 
+#### Timed forced recording (`duration`, #660)
+
+A bounded recording window that IGNORES the `recording_enabled` toggle — segments ARE written for the duration, then the in-flight segment is closed and the camera returns to live-only. Ideal for "live-only by default, record on events" setups (e.g. Home Assistant motion triggers):
+
+```json
+{
+  "action": "record",
+  "duration": "60s"
+}
+```
+
+- `duration` uses Go duration format (`"30s"`, `"5m"`); invalid or non-positive values fall back to plain `record` semantics with a WARN log
+- A not-running camera is started first (`record` semantics), then the window opens; a running camera is armed in place (repeated triggers extend to the LATER deadline, matching the audio/pixel trigger hold semantics)
+- Supported on H.264/H.265, MJPEG and HTTP-JPEG cameras; push-ingest cameras (SRT/RTMP) return an explicit error
+
 **Topic**: `home/security/trigger/front-door`  
 **Message**: `{"action": "record"}`
 

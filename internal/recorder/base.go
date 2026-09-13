@@ -285,6 +285,12 @@ type baseRecorder struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
+	// manual is the timed forced-recording window (#660); manualSegmentOpen
+	// tracks whether a windowed segment is in flight so its expiry closes it.
+	// Only touched from the writeFrames goroutine.
+	manual            manualRecordWindow
+	manualSegmentOpen bool
+
 	// Active segment state (Tier 1: written from writeFrames, read from audio
 	// RTP callbacks under mu). muxer is published together with segStart and
 	// audioTrackID in createNewSegment so the audio callback observes an
@@ -385,6 +391,14 @@ type codecParams struct {
 // SetHub wires the StreamHub for frame fan-out (streamhub.HubHost); shared by
 // every recorder embedding baseRecorder. HubSource stays leaf-specific.
 func (b *baseRecorder) SetHub(hub *streamhub.StreamHub) { b.Hub = hub }
+
+// ArmManualRecording opens (or extends) a timed forced-recording window
+// (#660): for the duration, segments are written even when RecordEnabled
+// is false (live-only). Used by MQTT {"action":"record","duration":"60s"}.
+func (b *baseRecorder) ArmManualRecording(d time.Duration) { b.manual.Arm(d) }
+
+// ManualRecordingActive reports whether a manual recording window covers now.
+func (b *baseRecorder) ManualRecordingActive() bool { return b.manual.Active(time.Now()) }
 
 func (b *baseRecorder) setCodecParams(sps, pps, vps []byte) {
 	b.codec.Store(&codecParams{
@@ -599,7 +613,17 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 		// (Reached AFTER parameter-set capture above, so live preview still has
 		// the codec params it needs.)
 		if b.cfg.RecordEnabled != nil && !*b.cfg.RecordEnabled {
-			continue
+			// Manual recording window (#660): an armed window overrides the
+			// live-only gate for its duration — segments are written, and the
+			// in-flight segment is closed when the window lapses.
+			if !b.manual.Active(pkt.at) {
+				if b.manualSegmentOpen {
+					b.closeCurrentSegment()
+					b.manualSegmentOpen = false
+				}
+				continue
+			}
+			b.manualSegmentOpen = true
 		}
 
 		// Step 4: Skip non-VCL NALUs (SEI, delimiter, etc.).

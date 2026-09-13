@@ -17,6 +17,7 @@ type fakeLifecycle struct {
 	mu       sync.Mutex
 	starts   []string
 	stops    []string
+	manuals  []manualCall
 	startErr error
 	stopErr  error
 	blockFor time.Duration
@@ -30,6 +31,13 @@ func (f *fakeLifecycle) StartCamera(_ context.Context, cameraID string) error {
 	defer f.mu.Unlock()
 	f.starts = append(f.starts, cameraID)
 	return f.startErr
+}
+
+func (f *fakeLifecycle) ManualRecord(_ context.Context, cameraID string, d time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.manuals = append(f.manuals, manualCall{cameraID, d})
+	return nil
 }
 
 func (f *fakeLifecycle) StopCamera(_ context.Context, cameraID string) error {
@@ -59,7 +67,7 @@ func TestActionDispatcher_Record_StartsCamera(t *testing.T) {
 	fake := &fakeLifecycle{}
 	dispatch := NewActionDispatcher(fake, nil)
 
-	dispatch("cam-1", "record")
+	dispatch("cam-1", "record", 0)
 
 	require.Eventually(t, func() bool {
 		return len(fake.started()) == 1
@@ -73,7 +81,7 @@ func TestActionDispatcher_Stop_StopsCamera(t *testing.T) {
 	fake := &fakeLifecycle{}
 	dispatch := NewActionDispatcher(fake, nil)
 
-	dispatch("cam-1", "stop")
+	dispatch("cam-1", "stop", 0)
 
 	require.Eventually(t, func() bool {
 		return len(fake.stopped()) == 1
@@ -87,7 +95,7 @@ func TestActionDispatcher_UnknownAction_NoCalls(t *testing.T) {
 	fake := &fakeLifecycle{}
 	dispatch := NewActionDispatcher(fake, nil)
 
-	dispatch("cam-1", "reboot")
+	dispatch("cam-1", "reboot", 0)
 
 	assert.Never(t, func() bool {
 		return len(fake.started())+len(fake.stopped()) > 0
@@ -99,7 +107,7 @@ func TestActionDispatcher_Snapshot_LogsOnly(t *testing.T) {
 	fake := &fakeLifecycle{}
 	dispatch := NewActionDispatcher(fake, nil)
 
-	dispatch("cam-1", "snapshot")
+	dispatch("cam-1", "snapshot", 0)
 
 	assert.Never(t, func() bool {
 		return len(fake.started())+len(fake.stopped()) > 0
@@ -111,7 +119,7 @@ func TestActionDispatcher_AlreadyRunning_Idempotent(t *testing.T) {
 	fake := &fakeLifecycle{startErr: &model.CameraAlreadyRunningError{CameraID: "cam-1"}}
 	dispatch := NewActionDispatcher(fake, nil)
 
-	dispatch("cam-1", "record")
+	dispatch("cam-1", "record", 0)
 
 	require.Eventually(t, func() bool {
 		return len(fake.started()) == 1
@@ -127,13 +135,13 @@ func TestActionDispatcher_StartError_NotFatal(t *testing.T) {
 	fake := &fakeLifecycle{startErr: errors.New("dial timeout")}
 	dispatch := NewActionDispatcher(fake, nil)
 
-	dispatch("cam-1", "record")
+	dispatch("cam-1", "record", 0)
 	require.Eventually(t, func() bool {
 		return len(fake.started()) == 1
 	}, 15*time.Second, 50*time.Millisecond)
 
 	// The dispatcher keeps working after a failed action.
-	dispatch("cam-1", "stop")
+	dispatch("cam-1", "stop", 0)
 	require.Eventually(t, func() bool {
 		return len(fake.stopped()) == 1
 	}, 15*time.Second, 50*time.Millisecond)
@@ -145,7 +153,7 @@ func TestActionDispatcher_NonBlocking(t *testing.T) {
 	dispatch := NewActionDispatcher(fake, nil)
 
 	start := time.Now()
-	dispatch("cam-1", "record")
+	dispatch("cam-1", "record", 0)
 	elapsed := time.Since(start)
 
 	assert.Less(t, elapsed, 50*time.Millisecond, "dispatcher must not block the paho handler goroutine")
@@ -155,8 +163,8 @@ func TestActionDispatcher_NilLifecycle_Noop(t *testing.T) {
 	t.Helper()
 	dispatch := NewActionDispatcher(nil, nil)
 
-	dispatch("cam-1", "record")
-	dispatch("cam-1", "stop")
-	dispatch("cam-1", "snapshot")
-	dispatch("cam-1", "bogus")
+	dispatch("cam-1", "record", 0)
+	dispatch("cam-1", "stop", 0)
+	dispatch("cam-1", "snapshot", 0)
+	dispatch("cam-1", "bogus", 0)
 }

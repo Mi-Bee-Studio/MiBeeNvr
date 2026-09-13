@@ -37,7 +37,7 @@ func TestActionDispatcher_Snapshot_RunsCapture(t *testing.T) {
 	fake := &fakeSnapshotRunner{path: "snapshots/cam-1/x.jpg"}
 	dispatch := NewActionDispatcher(&fakeLifecycle{}, fake)
 
-	dispatch("cam-1", "snapshot")
+	dispatch("cam-1", "snapshot", 0)
 
 	require.Eventually(t, func() bool {
 		return len(fake.recorded()) == 1
@@ -56,7 +56,7 @@ func TestActionDispatcher_Snapshot_OwnGoroutine(t *testing.T) {
 
 	returned := make(chan struct{})
 	go func() {
-		dispatch("cam-1", "snapshot")
+		dispatch("cam-1", "snapshot", 0)
 		close(returned)
 	}()
 	select {
@@ -88,7 +88,7 @@ func (b *blockingSnapshotRunner) RunSnapshot(_ context.Context, _ string, _ stri
 func TestActionDispatcher_Snapshot_NilRunner_NoPanic(t *testing.T) {
 	t.Helper()
 	dispatch := NewActionDispatcher(&fakeLifecycle{}, nil)
-	require.NotPanics(t, func() { dispatch("cam-1", "snapshot") })
+	require.NotPanics(t, func() { dispatch("cam-1", "snapshot", 0) })
 }
 
 func TestActionDispatcher_Snapshot_FailureLoggedNotFatal(t *testing.T) {
@@ -96,7 +96,7 @@ func TestActionDispatcher_Snapshot_FailureLoggedNotFatal(t *testing.T) {
 	fake := &fakeSnapshotRunner{err: errors.New("no frame")}
 	dispatch := NewActionDispatcher(&fakeLifecycle{}, fake)
 
-	require.NotPanics(t, func() { dispatch("cam-1", "snapshot") })
+	require.NotPanics(t, func() { dispatch("cam-1", "snapshot", 0) })
 
 	require.Eventually(t, func() bool {
 		return len(fake.recorded()) == 1
@@ -108,7 +108,7 @@ func TestActionDispatcher_Snapshot_DoesNotTouchLifecycle(t *testing.T) {
 	life := &fakeLifecycle{}
 	dispatch := NewActionDispatcher(life, &fakeSnapshotRunner{path: "p"})
 
-	dispatch("cam-1", "snapshot")
+	dispatch("cam-1", "snapshot", 0)
 
 	assert.Never(t, func() bool {
 		return len(life.started()) > 0 || len(life.stopped()) > 0

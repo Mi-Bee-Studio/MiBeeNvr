@@ -65,7 +65,7 @@ type motionTriggerable interface {
 // from pkg/app wiring after the dispatcher is built — the camera manager owns
 // the recorders, the dispatcher owns the camera manager, so the handler is
 // injected rather than constructed here.
-func (cm *CameraManager) SetMotionActionHandler(h func(cameraID, action string)) {
+func (cm *CameraManager) SetMotionActionHandler(h func(cameraID, action string, duration time.Duration)) {
 	cm.motionAction = h
 }
 
@@ -207,7 +207,7 @@ func (cm *CameraManager) onONVIFEvent(cameraID string, evt onvif.ONVIFEvent) {
 
 	// Same action surface as the MQTT (#660) and webhook (#709) triggers.
 	if cm.motionAction != nil {
-		cm.motionAction(cameraID, "record")
+		cm.motionAction(cameraID, "record", 0)
 	}
 
 	// Adaptive cameras: exit timelapse now (GOP + pre-capture backfill), the
