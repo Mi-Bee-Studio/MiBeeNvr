@@ -518,7 +518,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		}
 
 		// Atomic rename.
-		if err := m.store.CloseSegment(tempPath, finalPath); err != nil {
+		if err := m.store.CloseSegmentMerged(tempPath, finalPath); err != nil {
 			logger.Error("failed to finalize merged segment", "error", err)
 			os.Remove(tempPath)
 			m.metrics.RecordMergeFailure("io_error")

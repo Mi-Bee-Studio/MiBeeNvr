@@ -182,6 +182,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		db.Close()
 		return nil, nil, fmt.Errorf("storage: %w", err)
 	}
+	// Raw-segment durability tier (#760): strict (default) or relaxed
+	// (skip proactive fsync on raw segments; merge products always sync).
+	store.SetDurability(cfg.Storage.Durability)
 	deps.store = store
 
 	// Step 3.5: Background storage migrator (idle-time, rate-limited; the

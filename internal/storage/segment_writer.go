@@ -55,6 +55,7 @@ const (
 var (
 	statFn     = os.Stat
 	openFileFn = os.OpenFile
+	syncFileFn = (*os.File).Sync // fsync seam — durability-tier assertions (#760)
 )
 
 // errSegmentReleased is returned when the writer state was already finalized
@@ -171,7 +172,11 @@ func (s *segmentWriter) writeFrame(data []byte) (int, error) {
 // Called from CloseSegment with s.mu held. A nil FD (segment written through
 // an external handle — the MP4 muxer, merge outputs) is a no-op so the caller
 // falls back to its reopen-and-sync path.
-func (s *segmentWriter) finalize() error {
+// finalize flushes the coalescing buffer (mandatory in every tier — buffered
+// frames must reach the kernel before close/rename), then optionally fsyncs.
+// skipSync=true is the #760 relaxed tier: rename atomicity still guarantees a
+// crash leaves either the complete pre-crash bytes or no final file.
+func (s *segmentWriter) finalize(skipSync bool) error {
 	if s.bw != nil {
 		if err := s.bw.Flush(); err != nil {
 			return fmt.Errorf("storage: flush media: %w", err)
@@ -179,12 +184,14 @@ func (s *segmentWriter) finalize() error {
 		s.pending = 0
 	}
 	if s.file != nil {
-		if err := s.file.Sync(); err != nil {
-			s.file.Close()
-			s.file = nil
-			s.bw = nil
-			s.released = true
-			return fmt.Errorf("storage: failed to sync temp file: %w", err)
+		if !skipSync {
+			if err := syncFileFn(s.file); err != nil {
+				s.file.Close()
+				s.file = nil
+				s.bw = nil
+				s.released = true
+				return fmt.Errorf("storage: failed to sync temp file: %w", err)
+			}
 		}
 		if err := s.file.Close(); err != nil {
 			s.file = nil

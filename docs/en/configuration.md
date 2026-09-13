@@ -215,6 +215,16 @@ version: "1.0"
   - **>2 GB available RAM** (e.g. Banana Pi M5, x86): up to **2m** (120s), which halves the fragment count rolling merge must process
   - Values above the platform cap are **silently clamped** with a warning in the logs (they do not fail startup). On non-Linux hosts or if `/proc/meminfo` cannot be read, the conservative 30s cap applies.
 
+### `storage.durability`
+- **Type**: string
+- **Default**: `""` (= `strict`)
+- **Values**:
+  - `strict` (default) — every raw segment finalize performs an explicit `fsync` before the temp→final rename. Strongest crash guarantee: after a power loss, everything the NVR acknowledged exists on media.
+  - `relaxed` — raw segments skip the proactive `fsync` and rely on the filesystem's commit interval (typically 5s on ext4). The temp→final **rename stays atomic**: a crash leaves either the complete pre-crash bytes or no final file — never a truncated/half segment. The trade-off: the last seconds (~up to 1 minute) of raw rolling footage may be lost on power loss.
+- **Always strict regardless of tier**: merged recordings, timelapse products, the database (WAL+NORMAL) and config writes — long-term assets keep their fsync.
+- **Who benefits**: flash boards (SD/eMMC) where per-segment fsync is both a latency spike and write-amplification source (~26 fsync/min at 13 cameras × 30s segments); HDD arrays recording continuously.
+- **Example**: `durability: "relaxed"` under the `storage:` section.
+
 ### `storage.db_path`
 - **Type**: string
 - **Optional**: yes
