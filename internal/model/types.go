@@ -355,6 +355,12 @@ const (
 	// folded into a periodic-merge output (a "daily" / 8h / 24h / 7d / 30d
 	// window). Such segments are excluded from re-merge in subsequent windows.
 	MergeStatusDailyMerged = "daily_merged"
+	// MergeStatusSublayer marks a tierrec layer=1 sub-stream archive (#637).
+	// Sub-layer segments are standalone 60s recordings that never enter the
+	// merge pipeline — they are BORN terminal. Inserting them as 'pending'
+	// produced permanently-pending zombie rows that polluted every
+	// pending-based diagnostic (#763).
+	MergeStatusSublayer = "sublayer"
 )
 
 // TimelapseMergeStatus constants for the timelapse_merges table.

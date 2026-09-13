@@ -454,7 +454,7 @@ func (r *subRecorder) closeSegmentLocked() {
 		Duration:    ended.Sub(r.startedAt).Seconds(),
 		FileSize:    r.bytes,
 		FrameCount:  r.frames,
-		MergeStatus: model.MergeStatusPending,
+		MergeStatus: model.MergeStatusSublayer, // born terminal — never a merge input (#763)
 		Layer:       model.LayerSub,
 	}
 	if err := r.mgr.cfg.Store.InsertRecording(context.Background(), rec); err != nil {

@@ -556,6 +556,10 @@ sudo systemctl restart mibee-nvr
    curl -u admin:password http://localhost:9090/api/merge/pending
    ```
 
+   读 pending 口径时（API 或直接 SQL）注意：`layer=1` 行的 pending 不是合并积压——
+   分层录像的子流存档段从不进合并管线，v39 起写入即终态 `sublayer`；
+   只有 `layer=0` 的 `pending` 行是真实积压。
+
 ### 内存使用过高
 
 #### 摄像头消耗太多 RAM

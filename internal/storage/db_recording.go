@@ -1018,18 +1018,24 @@ func (d *DB) PathIsRecordingFile(ctx context.Context, cameraID, fullpath string)
 	return true, nil
 }
 
-// ListStalePendingRecordings returns up to limit pending recordings (any
-// format, any camera) whose started_at is older than the cutoff, excluding
-// archived rows and rows with an active AI status (protected from cleanup
-// like retention). The caller stats each row's file and deletes the ones
-// that never existed — the ghost-row sweep for the 2026-09-08 incident
-// class (pending row + missing file = permanent 404 entry).
+// ListStalePendingRecordings returns up to limit sweep-candidate recordings
+// (any format, any camera) whose started_at is older than the cutoff,
+// excluding archived rows and rows with an active AI status (protected from
+// cleanup like retention). The caller stats each row's file and deletes the
+// ones that never existed — the ghost-row sweep for the 2026-09-08 incident
+// class (candidate row + missing file = permanent 404 entry).
+//
+// Candidates are layer=0 'pending' rows PLUS terminal 'sublayer' rows
+// (#763): a sub-layer archive whose file vanished is just as much a ghost.
+// Pre-migration layer=1 'pending' zombies are NOT candidates — they are
+// healthy archives pending the v39 rewrite, and each one returned would
+// starve a real ghost of the sweep's LIMIT slot.
 func (d *DB) ListStalePendingRecordings(ctx context.Context, cutoff time.Time, limit int) ([]model.Recording, error) {
 	defer d.observeQuery("ListStalePendingRecordings", time.Now())
 	if limit <= 0 {
 		limit = 500
 	}
-	sqlstr := selectRecordingColumns + ` WHERE merge_status = 'pending' AND archived = 0
+	sqlstr := selectRecordingColumns + ` WHERE ((merge_status = 'pending' AND COALESCE(layer,0)=0) OR merge_status = 'sublayer') AND archived = 0
 		AND (ai_status IS NULL OR ai_status = '')
 		AND started_at < ? ORDER BY started_at LIMIT ?;`
 	rows, err := d.readConn().QueryContext(ctx, sqlstr, timeToDB(cutoff), limit)
