@@ -354,6 +354,43 @@ func TestValidate_RollingEnabledByDefault(t *testing.T) {
 		cfg.ApplyDefaults()
 		require.NoError(t, Validate(cfg))
 	})
+
+	t.Run("invalid_bucket_retain_rejected", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		cfg.Merge.RollingBucketRetain = 9
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "rolling_bucket_retain")
+	})
+
+	t.Run("invalid_bucket_idle_ttl_rejected", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		cfg.Merge.RollingBucketIdleTTL = "not-a-duration"
+		err := Validate(cfg)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "rolling_bucket_idle_ttl")
+	})
+
+	t.Run("zero_bucket_idle_ttl_allowed", func(t *testing.T) {
+		// "0" is the documented "disable idle eviction" sentinel.
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		cfg.Merge.RollingBucketIdleTTL = "0"
+		require.NoError(t, Validate(cfg))
+	})
+
+	t.Run("bucket_retention_defaults_materialized", func(t *testing.T) {
+		cfg := &Config{}
+		cfg.ApplyDefaults()
+		require.Equal(t, 2, cfg.Merge.RollingBucketRetain)
+		require.Equal(t, "10m", cfg.Merge.RollingBucketIdleTTL)
+		// Explicit retain of 1 (legacy single-bucket) survives defaults.
+		cfg.Merge.RollingBucketRetain = 1
+		cfg.ApplyDefaults()
+		require.Equal(t, 1, cfg.Merge.RollingBucketRetain)
+	})
 }
 
 func TestHLSSegmentCountDefault(t *testing.T) {

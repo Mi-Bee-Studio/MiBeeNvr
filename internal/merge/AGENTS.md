@@ -11,6 +11,7 @@ manager.go       # MergeManager — periodic merge loop, camera grouping, disk s
 mp4merge.go      # MergeMP4Segments() — placeholder moov, limitedWriter, in-place header patching
 parser.go        # ParseSegment() — extracts sample tables, codec params, keyframe flags from MP4
 mjpegmerge.go    # MergeMJPEGSegments() — directory-based JPEG file moves
+rolling*.go      # Rolling merge coordinator — per-camera window buckets, retention (#764)
 *_test.go        # Tests for each component
 ```
 
@@ -57,6 +58,8 @@ mjpegmerge.go    # MergeMJPEGSegments() — directory-based JPEG file moves
 | nvr_merge_duration_seconds | Histogram | — | Merge operation duration |
 | nvr_merge_size_bytes | Histogram | — | Merged file size |
 | nvr_merge_pending_segments | GaugeVec | camera_id | Pending segments per camera |
+| nvr_rolling_merge_bucket_finalized_total | CounterVec | reason | Buckets leaving the retained set (idle_ttl/capacity_lru/size_limit) — #764 retention |
+| nvr_rolling_merge_bucket_lifetime_seconds | HistogramVec | reason | Wall time from bucket creation to finalize (#764) |
 
 
 - **DO NOT** use null-byte string concatenation for SPS/PPS grouping — use SHA-256 hash (embedded null bytes cause false matches)

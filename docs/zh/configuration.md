@@ -54,6 +54,8 @@ merge:
   rolling_debounce: "5s"
   rolling_window: "1h"
   rolling_min_duration: "5m"
+  rolling_bucket_retain: 2           # 每相机保留的桶数（按参数集分键，#764）；1 = 旧单桶行为
+  rolling_bucket_idle_ttl: "10m"     # 桶空闲超过该时长即 finalize；"0" 关闭空闲淘汰
   rolling_backfill_max_segments: 500 # 启动回填上限（防 RPi IO 风暴）
   rolling_backfill_max_age: "72h"    # 只回填最近 N 小时的段
 ftp:
@@ -677,6 +679,19 @@ cameras:
 - **默认**: 3
 - **描述**: 触发合并所需的最小片段数
 - **示例**: `2`, `3`, `5`
+
+### `merge.rolling_bucket_retain`
+- **类型**: integer
+- **默认**: 2
+- **范围**: 0-8（0 = 默认值）
+- **描述**: 每相机保留的滚动合并桶数（按参数集分键，#764）。在质量档位间振荡的相机（如小米 HD/SD 重连风暴）会交替两个 SPS/PPS key；桶保留让切回原档位时直接**续用旧桶追加**，而不是 finalize + 重建 —— 消除微型合并输出风暴。`2` 恰好覆盖 HD/SD 两档；`1` 恢复旧单桶行为
+- **示例**: `1`, `2`, `3`
+
+### `merge.rolling_bucket_idle_ttl`
+- **类型**: string（时长）
+- **默认**: `"10m"`
+- **描述**: 保留桶超过该时长未收到追加即 finalize —— 相机已稳定在某一档位或停止录像，该桶不会再被续用。`"0"` 关闭空闲淘汰（仅按容量淘汰）
+- **示例**: `"10m"`, `"30m"`, `"0"`
 
 ## FTP 配置
 

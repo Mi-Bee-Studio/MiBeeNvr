@@ -30,6 +30,21 @@ type MergeConfig struct {
 	// further consolidated via POST /api/merge/consolidate. Default "5m".
 	RollingMinDuration string `yaml:"rolling_min_duration" json:"rolling_min_duration"`
 
+	// RollingBucketRetain is how many rolling buckets a camera keeps alive,
+	// keyed by parameter set (#764). Cameras oscillating between quality tiers
+	// (xiaomi HD/SD reconnect storms) alternate two SPS/PPS keys; with a single
+	// bucket every flip finalized and re-created the bucket — a micro-merge
+	// storm of tiny outputs and constant metadata churn. 2 retains exactly the
+	// HD/SD pair so flipping back appends to the existing bucket; 1 restores
+	// the legacy single-bucket behavior. Default 2.
+	RollingBucketRetain int `yaml:"rolling_bucket_retain" json:"rolling_bucket_retain"`
+
+	// RollingBucketIdleTTL finalizes a retained bucket that received no append
+	// for this long — the camera settled on one quality tier or stopped
+	// recording, so the other buckets will not be resumed. Default "10m";
+	// "0" disables idle eviction (capacity-based eviction only).
+	RollingBucketIdleTTL string `yaml:"rolling_bucket_idle_ttl" json:"rolling_bucket_idle_ttl"`
+
 	// RollingBackfill caps the startup backfill so a first boot after enabling
 	// rolling merge cannot trigger an IO storm on resource-constrained hosts
 	// (RPi 3B). MaxSegments=0 means unlimited (not recommended on RPi).
@@ -113,6 +128,12 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.RollingMinDuration != "" {
 		result.RollingMinDuration = perCamera.RollingMinDuration
+	}
+	if perCamera.RollingBucketRetain > 0 {
+		result.RollingBucketRetain = perCamera.RollingBucketRetain
+	}
+	if perCamera.RollingBucketIdleTTL != "" {
+		result.RollingBucketIdleTTL = perCamera.RollingBucketIdleTTL
 	}
 	if perCamera.RollingBackfillMaxSegments > 0 {
 		result.RollingBackfillMaxSegments = perCamera.RollingBackfillMaxSegments

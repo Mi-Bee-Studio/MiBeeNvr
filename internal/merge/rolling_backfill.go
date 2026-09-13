@@ -174,18 +174,24 @@ func (r *RollingMergeCoordinator) BackfillCamera(ctx context.Context, cameraID s
 			}); err != nil {
 				return 0, fmt.Errorf("reset failed status: %w", err)
 			}
-			// Clear the in-memory bucket state for this camera. The bucket may
+			// Clear the in-memory bucket state for this camera. The buckets may
 			// reference recordings that were just reset (failed→pending), and
 			// appending to a stale bucket would UPDATE a row that no longer
 			// represents the current merged file. Starting fresh forces
-			// createBucket, which is always safe.
+			// createBucket, which is always safe. All retained buckets (#764)
+			// are dropped — any of them may hold stale references.
 			if old, ok := r.buckets.LoadAndDelete(cameraID); ok {
-				bi := old.(*bucketInfo)
-				bi.mu.Lock()
-				bi.mergedFilePath = ""
-				bi.mergedRecID = ""
-				bi.segmentCount = 0
-				bi.mu.Unlock()
+				if set, ok := old.(*cameraBucketSet); ok {
+					set.mu.Lock()
+					for _, bi := range set.buckets {
+						bi.mu.Lock()
+						bi.mergedFilePath = ""
+						bi.mergedRecID = ""
+						bi.segmentCount = 0
+						bi.mu.Unlock()
+					}
+					set.mu.Unlock()
+				}
 			}
 		}
 	}

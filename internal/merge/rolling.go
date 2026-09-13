@@ -128,13 +128,20 @@ func checkDiskSpaceForMerge(store *storage.Manager, required int64) bool {
 }
 
 // RollingMergeConfig holds the effective rolling merge configuration for a camera.
-
-// RollingMergeConfig holds the effective rolling merge configuration for a camera.
 type RollingMergeConfig struct {
 	Enabled     bool
 	Debounce    time.Duration // delay after segment close before merging (batches rapid segments)
 	Window      time.Duration // bucket size (default 1h = natural-hour alignment)
 	MinDuration time.Duration // target minimum merged duration (default 5m); shorter → merge_quality='short'
+
+	// Bucket retention (#764): how many parameter-set-keyed buckets a camera
+	// keeps live (BucketRetain, default 2 = the HD/SD quality pair) and how
+	// long an append-less bucket survives (BucketIdleTTL, default 10m; 0 =
+	// capacity eviction only). Cameras oscillating between quality tiers flip
+	// SPS/PPS every reconnect; retention makes flipping back APPEND to the
+	// old bucket instead of finalizing + re-creating it (micro-merge storm).
+	BucketRetain  int
+	BucketIdleTTL time.Duration
 }
 
 // RollingMergeCoordinator is an event-driven rolling merge manager.
@@ -193,9 +200,15 @@ type RollingMergeCoordinator struct {
 
 	mergeLocks sync.Map // map[string]*mergeLock — per-camera non-blocking mutex
 
-	// bucketState tracks the current open bucket per camera for the active window.
-	// Key = cameraID, Value = *bucketInfo. Cleared on window rollover or SPS/PPS change.
-	buckets sync.Map // map[string]*bucketInfo
+	// bucketState tracks the retained buckets per camera for the active
+	// window(s). Key = cameraID, Value = *cameraBucketSet (#764: buckets are
+	// keyed by parameter set so quality-oscillating cameras resume their HD/SD
+	// buckets instead of finalizing + re-creating on every flip).
+	buckets sync.Map // map[string]*cameraBucketSet
+
+	// nowFn is the coordinator clock seam — retention TTL tests advance it
+	// deterministically. nil = time.Now.
+	nowFn func() time.Time
 
 	eventBus  *event.EventBus
 	eventCh   chan event.Event
@@ -251,6 +264,12 @@ type bucketInfo struct {
 	// (#698: a swapped merge order produced ended_at < started_at rows).
 	// Zero only for in-flight buckets created before this field existed.
 	rowStart time.Time
+
+	// createdAt / lastAppend drive the retention policy (#764): lifetime
+	// observability and idle-TTL eviction. Set at bucket creation and after
+	// every successful append; read under the set lock during selection.
+	createdAt  time.Time
+	lastAppend time.Time
 }
 
 // segmentAudioKey derives the audio compatibility key for a parsed segment.
@@ -388,6 +407,20 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 	if effective.RollingMinDuration != "" {
 		if d, err := time.ParseDuration(effective.RollingMinDuration); err == nil && d > 0 {
 			cfg.MinDuration = d
+		}
+	}
+	// Bucket retention (#764). ApplyDefaults materializes 2/"10m"; resolve
+	// inline for configs that skipped it (tests, hand-built values). An
+	// explicit retain of 1 preserves the legacy single-bucket behavior; TTL
+	// "0" or unparseable disables idle eviction (capacity only).
+	if effective.RollingBucketRetain > 0 {
+		cfg.BucketRetain = effective.RollingBucketRetain
+	} else {
+		cfg.BucketRetain = 2
+	}
+	if s := effective.RollingBucketIdleTTL; s != "" && s != "0" {
+		if d, err := time.ParseDuration(s); err == nil && d > 0 {
+			cfg.BucketIdleTTL = d
 		}
 	}
 	return cfg

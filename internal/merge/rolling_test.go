@@ -99,14 +99,14 @@ func createAndInsertSegment(t *testing.T, env *mergeTestEnv, recordingID, camera
 }
 
 // waitForBucketStable polls until the coordinator's bucket for a camera has the
-// expected segment count, or times out (merge is async).
+// expected segment count, or times out (merge is async). With retention (#764)
+// a camera holds a set of buckets; single-key cameras (all existing callers)
+// have exactly one, so the newest bucket's count is the observable.
 func waitForBucketStable(t *testing.T, r *RollingMergeCoordinator, cameraID string, expectedCount int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		bucketAny, ok := r.buckets.Load(cameraID)
-		if ok {
-			bi := bucketAny.(*bucketInfo)
+		if bi := r.newestBucket(cameraID); bi != nil {
 			bi.mu.Lock()
 			count := bi.segmentCount
 			bi.mu.Unlock()
@@ -217,9 +217,7 @@ func waitForBucketAudio(t *testing.T, r *RollingMergeCoordinator, cameraID strin
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		bucketAny, ok := r.buckets.Load(cameraID)
-		if ok {
-			bi := bucketAny.(*bucketInfo)
+		if bi := r.newestBucket(cameraID); bi != nil {
 			bi.mu.Lock()
 			count, key := bi.segmentCount, bi.audioKey
 			bi.mu.Unlock()
@@ -1199,10 +1197,10 @@ func TestRollingMerge_BucketSizeLimit(t *testing.T) {
 
 	// Simulate the bucket having grown near the 3 GiB limit. We can't actually
 	// write 3 GiB in a test, so directly set the tracked size on the bucket
-	// state — this is the same field mergeOneSegment checks.
-	bucketAny, ok := r.buckets.Load(cameraID)
-	require.True(t, ok, "bucket should exist after first segment")
-	bucket := bucketAny.(*bucketInfo)
+	// state — this is the same field selectBucket checks (#764 moved the size
+	// roll into bucket selection).
+	bucket := r.newestBucket(cameraID)
+	require.NotNil(t, bucket, "bucket should exist after first segment")
 	bucket.mu.Lock()
 	bucket.mergedFileSize = bucketSizeLimit + 1 // over the limit
 	bucket.mu.Unlock()
@@ -1215,24 +1213,25 @@ func TestRollingMerge_BucketSizeLimit(t *testing.T) {
 	publishSegmentCompleted(t, bus, cameraID, "seg-2", filePath2, "h264", seg2Time)
 
 	// Wait for the second segment to be processed. With the size-limit fix,
-	// the bucket rolls and segmentCount ends at 1. Without the fix, the bucket
-	// appends and segmentCount ends at 2. Poll until stable (count stops
-	// changing) — we can't use waitForBucketStable(count=1) because count=1
-	// is also the state BEFORE seg-2 is processed.
+	// the bucket rolls and the newest bucket is a DIFFERENT object (the
+	// oversized one was evicted from the retained set) with segmentCount=1;
+	// without the fix, the same bucket appends and reaches count=2. Poll
+	// until stable — count=1 alone is ambiguous (it's also the state BEFORE
+	// seg-2 is processed), so also require the pointer to have changed.
 	deadline := time.Now().Add(5 * time.Second)
 	var finalCount, finalSize int64
 	for time.Now().Before(deadline) {
-		bucket.mu.Lock()
-		c := bucket.segmentCount
-		s := bucket.mergedFileSize
-		bucket.mu.Unlock()
-		// seg-2 processed → either count=1 (rolled) or count=2 (appended).
-		// Also wait for size to be updated from the fake 3GiB value (stat
-		// after merge resets it to the real small file size).
-		if (c == 1 || c == 2) && s != bucketSizeLimit+1 {
-			finalCount = int64(c)
-			finalSize = s
-			break
+		nb := r.newestBucket(cameraID)
+		if nb != nil && nb != bucket {
+			nb.mu.Lock()
+			c, s := nb.segmentCount, nb.mergedFileSize
+			nb.mu.Unlock()
+			// New bucket rolled by seg-2: count=1 and a real (small) size.
+			if c == 1 && s != 0 && s != bucketSizeLimit+1 {
+				finalCount = int64(c)
+				finalSize = s
+				break
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
