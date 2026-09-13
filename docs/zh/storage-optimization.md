@@ -487,3 +487,4 @@ CREATE TABLE recordings_2026_01 (
 > - `internal/metrics/metrics.go` — 合并指标、存储指标
 > - `internal/storage/AGENTS.md` — 存储约定
 > - `docs/zh/metrics.md` — 完整指标参考
+> - [性能调优](performance.md) — fsync 分级 / 段预分配 / GOMEMLIMIT / 后台 I/O 预算的运维视角

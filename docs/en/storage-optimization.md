@@ -544,3 +544,4 @@ A multi-stage optimization targeting 500K–1M `recordings` rows. All changes ar
 > - `internal/metrics/metrics.go` — Merge/storage/SQLite metrics, ObserveQueryDuration/IncSQLiteBusyErrors
 > - `internal/storage/AGENTS.md` — Storage conventions
 > - `docs/en/metrics.md` — Complete metrics reference
+> - [Performance Tuning](performance.md) — the operator view of fsync tiers / segment preallocation / GOMEMLIMIT / background I/O budgeting

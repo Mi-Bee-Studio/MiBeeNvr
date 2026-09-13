@@ -230,6 +230,8 @@ cameras:
 当全局值低于 60s 且存在未覆盖的 continuous 模式相机时，`config.Validate()`
 会输出警告——`mibee-nvr validate-config` 同样会呈现。
 
+> 存储与内存的系统性调优（fsync 持久化分级、预分配、GOMEMLIMIT、后台 I/O 预算）见[性能调优](performance.md)。
+
 ### `storage.db_path`
 - **类型**: string
 - **可选**: 是
