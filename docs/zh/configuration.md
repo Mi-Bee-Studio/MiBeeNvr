@@ -684,6 +684,24 @@ cameras:
 - **默认**: `false`
 - **描述**: 将白名单事件（录像段完成、摄像头新增/画质、存储健康）转发到 `{topic}/event/<事件主题>`，供智能家居平台消费 NVR 状态。详见 [MQTT 集成 — 状态发布](./mqtt-integration.md#状态发布)
 
+## Webhook 触发配置
+
+### `trigger.webhook.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 挂载 HMAC 签名的 HTTP 触发端点 `POST /api/trigger/webhook/{camera_id}?action=record|stop|snapshot`（公开限流组，无 BasicAuth，凭据为签名）。详见 [Webhook 触发集成](./webhook-integration.md)
+
+### `trigger.webhook.secret`
+- **类型**: string
+- **可选**: 启用 webhook 触发时必填
+- **描述**: 预共享 HMAC-SHA256 密钥（第三方系统只持有这一把钥匙）。支持 encrypt-config 静态加密，与 `mqtt.password` 同机制
+- **示例**: `"whsec_xxx"`
+
+### `trigger.webhook.replay_window_s`
+- **类型**: int
+- **默认**: `300`
+- **描述**: 签名时间戳允许的偏移窗口（秒，双向校验）。被捕获的请求只在窗口内可重放
+
 ## WebDAV 配置
 
 ### `webdav.enabled`

@@ -378,39 +378,23 @@ curl -X GET http://localhost:9090/api/cameras/{id}/onvif/capabilities \
 }
 ```
 
-### 移动检测事件
+### 移动侦测（相机侧 MotionAlarm 订阅）
 
-当支持时，通过 ONVIF 订阅提供移动事件：
+部分摄像头通过 ONVIF 事件服务主动上报移动事件。把摄像头编辑表单的「**运动侦测来源**」设为「**相机侧侦测（ONVIF 事件）**」（`motion_source: camera:onvif`）后，NVR 与相机建立 Pull-Point 订阅：
 
-#### 订阅移动事件
-```bash
-curl -X POST http://localhost:9090/api/cameras/{id}/onvif/events/subscribe \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-token" \
-  -d '{
-    "topic": "tns1:MotionAlarm",
-    "filter": {
-      "SimpleItem": {
-        "Name": "RegionOfInterest",
-        "Value": "1"
-      }
-    }
-  }'
-```
+- 收到 `MotionAlarm State=true`：立即触发该摄像头录像（动作语义与 MQTT / [Webhook](webhook-integration.md) 触发一致）；自适应录像的摄像头同时退出延时模式（`reason=onvif_motion`），与音频触发同一条路径
+- 收到 `State=false`：不触发任何动作——自适应门控的平静逻辑会自行回到延时模式
+- 所有 ONVIF 事件同时转发到 SSE 事件总线（`onvif.*` 主题），Web 端的 ONVIF 事件面板可见
 
-### 事件限制
+订阅由 NVR 自动维护：到期自动续订、无拉取超时自动重建；相机不支持 Pull-Point 时单次探测后标记墓碑、不再重试。诊断端点 `GET /api/cameras/{id}/onvif-events` 可区分「订阅挂了」还是「相机没产生事件」（编辑表单的状态行就读它）。
 
-- **依赖摄像头**：仅支持 ONVIF 事件服务的摄像头
-- **需要固件**：通常需要特定固件版本
-- **协议差异**：不同制造商的实现不同
-- **MiBee NVR 集成**：目前支持基本事件订阅
+> NVR 停机期间相机上报的事件**不会回放补发**——录像决策不依赖历史事件回填。
 
 ### 替代移动检测
 
 对于不支持 ONVIF 事件服务的摄像头：
-- 使用摄像头内置的移动检测
-- 在 MiBee NVR 中配置外部移动检测
-- 使用第三方移动检测解决方案
+- 保持默认的「NVR 侧侦测」（`motion_source: nvr`）——NVR 从视频流自行侦测活动（见[自适应录像](adaptive-recording.md)）
+- 或用 [MQTT](mqtt-integration.md) / [Webhook](webhook-integration.md) 外部触发
 
 ## 设备管理
 

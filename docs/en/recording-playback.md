@@ -74,7 +74,8 @@ The Recordings page defaults to a per-camera timeline of the day's coverage, wit
 
 ![Recordings timeline](images/recordings.webp)
 
-- **Track fill**: that time range has recordings
+- **Track fill**: that time range has recordings; tracks use three legend types — **Video**, **Timelapse samples** (sparse raw timelapse segments), and **Timelapse** (merged timelapse footage)
+- **Timelapse bar playback**: click a merged timelapse bar to play it directly
 - **AI markers**: hover to see the event summary (category, target, hit count); click to jump to that moment
 - **now indicator**: the current time position
 
@@ -91,6 +92,12 @@ Switch to **List** for a paginated table showing camera, format (MP4 (HEVC) / JP
 Click **View** in the list to open the playback page: seek by dragging the progress bar, change playback speed, take snapshots, and download the file:
 
 ![Playback](images/playback.webp)
+
+Merged timelapse footage plays in the same place:
+
+- In **Timelapse playback** view, switch between **frame browsing** (seekable, continuous across segments) and the **original realtime stream** (keeps audio, not seekable)
+- Un-merged timelapse segments offer **Merge & Play** — live merge progress and ETA, with playback starting automatically once ready; the job can be cancelled and retried on failure
+- **Preview frames** thumbnails help you locate a moment quickly
 
 ### Searching Recordings
 

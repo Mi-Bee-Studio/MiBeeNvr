@@ -241,6 +241,10 @@ Directions: `up/down/left/right/up-left/up-right/down-left/down-right/zoom-in/zo
 - `POST /api/gb28181/channels/{id}/invite` / `bye` — manual stream start/stop
 - `POST /api/gb28181/channels/{id}/ptz` — PTZ control
 
+### On-demand snapshot & manual recording (GB/T 28181-2022)
+- `POST /api/gb28181/channels/{id}/snapshot` — send a SnapShotCmd to the device (`{"snap_num":1,"interval":0}`); the device POSTs JPEGs back to the public callback `POST /api/gb28181/snapshot/upload?session=<SessionID>`, frames land in `snapshots/gb-<channelID>/` and a `camera.snapshot` event fires; the session closes on the device's completion notify and is marked failed on timeout
+- `POST /api/gb28181/channels/{id}/record` — manually start / stop recording (`{"action":"start"}` / `{"action":"stop"}`, RecordCmd)
+
 ### Device-side recordings
 - See the previous section
 

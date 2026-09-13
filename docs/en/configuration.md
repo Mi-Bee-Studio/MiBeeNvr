@@ -780,6 +780,24 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Default**: `false`
 - **Description**: Forward whitelisted events (segment completed, camera added/quality, storage health) to `{topic}/event/<event-topic>` so smart-home platforms can consume NVR state. See [MQTT Integration — Status Publishing](./mqtt-integration.md#status-publishing)
 
+## Webhook Trigger Configuration
+
+### `trigger.webhook.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Mount the HMAC-signed HTTP trigger endpoint `POST /api/trigger/webhook/{camera_id}?action=record|stop|snapshot` (public rate-limited group, no BasicAuth — the signature is the credential). See [Webhook Trigger Integration](./webhook-integration.md)
+
+### `trigger.webhook.secret`
+- **Type**: string
+- **Optional**: required when the webhook trigger is enabled
+- **Description**: Pre-shared HMAC-SHA256 key (third parties only ever hold this one key). Supports encrypt-config at rest, same mechanism as `mqtt.password`
+- **Example**: `"whsec_xxx"`
+
+### `trigger.webhook.replay_window_s`
+- **Type**: int
+- **Default**: `300`
+- **Description**: Allowed timestamp skew window (seconds, checked in both directions). A captured request only replays inside the window
+
 ## WebDAV Configuration
 
 ### `webdav.enabled`
