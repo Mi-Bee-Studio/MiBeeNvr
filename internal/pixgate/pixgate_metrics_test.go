@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 // TestManager_MetricsRecorded (#699): the sampler's Prometheus telemetry is
@@ -68,40 +69,35 @@ func TestManager_MetricsRecorded(t *testing.T) {
 	defer m.Stop()
 	defer cancel()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	// Gate on the trigger (fixture sanity), then poll the METRICS themselves
+	// — absolute counts read at the trigger instant race the still-running
+	// sampler's frame delivery (a CI failure showed samples_total=2 at the
+	// trigger), so the assertions wait for the observable end state instead.
+	require.Eventually(t, func() bool {
 		mu.Lock()
-		f := fired
-		mu.Unlock()
-		if f > 0 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if fired == 0 {
-		t.Fatal("pixel trigger never fired — fixture regression")
-	}
+		defer mu.Unlock()
+		return fired > 0
+	}, 5*time.Second, 20*time.Millisecond, "pixel trigger never fired — fixture regression")
 
-	// Samples counted with the sampler's source label. The read races the
-	// still-running sampler — the trigger fires on the 2nd person sample, so
-	// at least prime-excluded (2 quiet + 2 person) samples have landed.
-	if got := testutil.ToFloat64(mt.PixgateSamplesTotal.WithLabelValues("cam-m", "rtsp")); got < 3 {
-		t.Fatalf("samples_total = %v, want ≥3 (counter must track samples)", got)
-	}
+	// Samples counted with the sampler's source label (the cat fixture
+	// streams 7 processed samples in a burst).
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(mt.PixgateSamplesTotal.WithLabelValues("cam-m", "rtsp")) >= 3
+	}, 5*time.Second, 20*time.Millisecond, "samples_total must track samples")
+
 	// Confirmed activity counted.
-	if got := testutil.ToFloat64(mt.PixgateTriggersTotal.WithLabelValues("cam-m")); got < 1 {
-		t.Fatalf("triggers_total = %v, want ≥1", got)
-	}
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(mt.PixgateTriggersTotal.WithLabelValues("cam-m")) >= 1
+	}, 5*time.Second, 20*time.Millisecond, "triggers_total must count the confirmed activity")
+
 	// Last-sample heartbeat: a fresh unix timestamp (within the test run).
-	ts := testutil.ToFloat64(mt.PixgateLastSampleTimestamp.WithLabelValues("cam-m"))
-	if ts < float64(time.Now().Add(-time.Minute).Unix()) {
-		t.Fatalf("last_sample_timestamp = %v, want a fresh heartbeat", ts)
-	}
-	// Last FG area mirrors the engine's verdict.
-	area := testutil.ToFloat64(mt.PixgateLastAreaPct.WithLabelValues("cam-m"))
-	if area < 0 {
-		t.Fatalf("last_area_pct = %v, want ≥0", area)
-	}
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(mt.PixgateLastSampleTimestamp.WithLabelValues("cam-m")) >=
+			float64(time.Now().Add(-time.Minute).Unix())
+	}, 5*time.Second, 20*time.Millisecond, "last_sample_timestamp must be a fresh heartbeat")
+
+	// Last FG area mirrors the engine's verdict (non-negative).
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(mt.PixgateLastAreaPct.WithLabelValues("cam-m")) >= 0
+	}, 5*time.Second, 20*time.Millisecond, "last_area_pct must be set")
 }
