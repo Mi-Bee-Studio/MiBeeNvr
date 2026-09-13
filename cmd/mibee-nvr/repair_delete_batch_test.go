@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,4 +212,71 @@ func TestRunRepairDeleteByFormat_ExecuteLargeSetEndState(t *testing.T) {
 	for i := range repairDeleteChunkSize + 10 {
 		require.NoFileExists(t, filepath.Join(dir, fmt.Sprintf("del_%04d.mp4", i)))
 	}
+}
+
+// --- I/O budget billing (#751) ---
+
+// fakeRepairBudget records Wait calls without blocking.
+type fakeRepairBudget struct {
+	mu     sync.Mutex
+	calls  []int64
+	consum []string
+}
+
+func (f *fakeRepairBudget) Wait(_ context.Context, consumer string, n int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, n)
+	f.consum = append(f.consum, consumer)
+	return nil
+}
+
+func (f *fakeRepairBudget) total() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var total int64
+	for _, n := range f.calls {
+		total += n
+	}
+	return total
+}
+
+// TestDeleteCandidatesInChunks_BudgetBillsFileSize: with a budget installed,
+// each reclaimed row bills its file size under the repair consumer.
+func TestDeleteCandidatesInChunks_BudgetBillsFileSize(t *testing.T) {
+	db, raw, recs := seedChunkTestDB(t, 5)
+	defer raw.Close()
+	defer db.Close()
+	// Give the seeded rows a nonzero size so the bill is observable.
+	var wantBilled int64
+	for i := range recs {
+		recs[i].FileSize = int64(1000 + i)
+		wantBilled += recs[i].FileSize
+	}
+
+	fb := &fakeRepairBudget{}
+	prev := repairIOBudget
+	repairIOBudget = fb
+	t.Cleanup(func() { repairIOBudget = prev })
+
+	deleted, failed, freed := deleteCandidatesInChunks(t.Context(), db, recs, func(int, int) {})
+	require.Equal(t, 5, deleted)
+	require.Zero(t, failed)
+	require.Equal(t, wantBilled, freed)
+	require.Equal(t, int64(wantBilled), fb.total(), "every reclaimed row's size billed to the budget")
+	require.Equal(t, "repair", fb.consum[0])
+}
+
+// TestDeleteCandidatesInChunks_NoBudgetUnchanged: nil budget (default) —
+// identical end state, zero billing.
+func TestDeleteCandidatesInChunks_NoBudgetUnchanged(t *testing.T) {
+	db, raw, recs := seedChunkTestDB(t, 3)
+	defer raw.Close()
+	defer db.Close()
+
+	require.Nil(t, repairIOBudget)
+	deleted, failed, _ := deleteCandidatesInChunks(t.Context(), db, recs, func(int, int) {})
+	require.Equal(t, 3, deleted)
+	require.Zero(t, failed)
+	require.Zero(t, countRowsLeft(t, raw))
 }

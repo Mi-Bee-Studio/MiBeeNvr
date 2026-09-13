@@ -374,6 +374,17 @@ func validateConfigDetails(cfg *Config) error {
 			return fmt.Errorf("remote_log.format must be \"jsonline\" or \"loki\", got %q", cfg.RemoteLog.Format)
 		}
 	}
+	// IO budget (#751): 0 = disabled; negative values are configuration
+	// mistakes, not "more unlimited".
+	if cfg.IO.BudgetBytesPerSec < 0 {
+		return fmt.Errorf("io.budget_bytes_per_sec must be >= 0 (0 disables budgeting), got %d", cfg.IO.BudgetBytesPerSec)
+	}
+	if cfg.IO.BudgetBurstBytes < 0 {
+		return fmt.Errorf("io.budget_burst_bytes must be >= 0 (0 defaults to one second of rate), got %d", cfg.IO.BudgetBurstBytes)
+	}
+	if cfg.IO.BudgetBytesPerSec == 0 && cfg.IO.BudgetBurstBytes > 0 {
+		return fmt.Errorf("io.budget_burst_bytes is set but io.budget_bytes_per_sec is 0 (disabled) — remove the burst or set a rate")
+	}
 	if cfg.Merge.Enabled {
 		if _, err := time.ParseDuration(cfg.Merge.CheckInterval); err != nil {
 			return fmt.Errorf("invalid merge check_interval: %w", err)

@@ -91,7 +91,7 @@ func TestRecordingFrameExtractor_AVI(t *testing.T) {
 	}
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(aviPath, model.FormatAVI, 100*time.Millisecond, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), aviPath, model.FormatAVI, 100*time.Millisecond, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractFrames failed: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestRecordingFrameExtractor_AVI_Empty(t *testing.T) {
 	}
 
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames(aviPath, model.FormatAVI, time.Second, outputDir)
+	_, err := extractor.ExtractFrames(t.Context(), aviPath, model.FormatAVI, time.Second, outputDir)
 	if err == nil {
 		t.Error("expected error for empty AVI, got nil")
 	}
@@ -176,7 +176,7 @@ func TestRecordingFrameExtractor_AVI_IntervalTooLarge(t *testing.T) {
 	}
 
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames(aviPath, model.FormatAVI, 10*time.Second, outputDir)
+	_, err := extractor.ExtractFrames(t.Context(), aviPath, model.FormatAVI, 10*time.Second, outputDir)
 	if err == nil {
 		t.Error("expected error when interval > duration, got nil")
 	}
@@ -858,7 +858,7 @@ func TestRecordingFrameExtractor_H264(t *testing.T) {
 	// Total duration = 30 samples * (1/30 sec) = 1 second.
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(mp4Path, model.FormatH264, 200*time.Millisecond, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), mp4Path, model.FormatH264, 200*time.Millisecond, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractFrames failed: %v", err)
 	}
@@ -922,7 +922,7 @@ func TestRecordingFrameExtractor_H265(t *testing.T) {
 	mp4Path := createTestMP4(t, tmpDir, "test.h265.mp4", true, samples, 30)
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(mp4Path, model.FormatH265, 200*time.Millisecond, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), mp4Path, model.FormatH265, 200*time.Millisecond, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractFrames failed: %v", err)
 	}
@@ -974,7 +974,7 @@ func TestRecordingFrameExtractor_H264_AllKeyframes(t *testing.T) {
 	mp4Path := createTestMP4(t, tmpDir, "allkf.h264.mp4", false, samples, 30)
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(mp4Path, model.FormatH264, 200*time.Millisecond, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), mp4Path, model.FormatH264, 200*time.Millisecond, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractFrames failed: %v", err)
 	}
@@ -999,7 +999,7 @@ func TestRecordingFrameExtractor_H264_EmptyMP4(t *testing.T) {
 	mp4Path := createTestMP4(t, tmpDir, "nokeyframes.h264.mp4", false, samples, 30)
 
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames(mp4Path, model.FormatH264, time.Second, outputDir)
+	_, err := extractor.ExtractFrames(t.Context(), mp4Path, model.FormatH264, time.Second, outputDir)
 	if err == nil {
 		t.Error("expected error for MP4 with no keyframes, got nil")
 	}
@@ -1016,7 +1016,7 @@ func TestRecordingFrameExtractor_IntervalTooLarge(t *testing.T) {
 	mp4Path := createTestMP4(t, tmpDir, "short.h264.mp4", false, samples, 30)
 
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames(mp4Path, model.FormatH264, 10*time.Second, outputDir)
+	_, err := extractor.ExtractFrames(t.Context(), mp4Path, model.FormatH264, 10*time.Second, outputDir)
 	if err == nil {
 		t.Error("expected error when interval > duration, got nil")
 	}
@@ -1026,7 +1026,7 @@ func TestRecordingFrameExtractor_IntervalTooLarge(t *testing.T) {
 func TestRecordingFrameExtractor_InvalidFormat(t *testing.T) {
 	tmpDir := t.TempDir()
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames("dummy", model.Format("mpegts"), time.Second, tmpDir)
+	_, err := extractor.ExtractFrames(t.Context(), "dummy", model.Format("mpegts"), time.Second, tmpDir)
 	if err == nil {
 		t.Error("expected error for unsupported format, got nil")
 	}
@@ -1035,7 +1035,7 @@ func TestRecordingFrameExtractor_InvalidFormat(t *testing.T) {
 // TestRecordingFrameExtractor_ZeroInterval tests error on zero interval.
 func TestRecordingFrameExtractor_ZeroInterval(t *testing.T) {
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames("dummy", model.FormatH264, 0, t.TempDir())
+	_, err := extractor.ExtractFrames(t.Context(), "dummy", model.FormatH264, 0, t.TempDir())
 	if err == nil {
 		t.Error("expected error for zero interval, got nil")
 	}
@@ -1045,7 +1045,7 @@ func TestRecordingFrameExtractor_ZeroInterval(t *testing.T) {
 func TestRecordingFrameExtractor_MissingFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames("/nonexistent/file.mp4", model.FormatH264, time.Second, tmpDir)
+	_, err := extractor.ExtractFrames(t.Context(), "/nonexistent/file.mp4", model.FormatH264, time.Second, tmpDir)
 	if err == nil {
 		t.Error("expected error for missing file, got nil")
 	}
@@ -1198,7 +1198,7 @@ func TestRecordingFrameExtractor_H264_ExactCount(t *testing.T) {
 	mp4Path := createTestMP4(t, tmpDir, "exact.h264.mp4", false, samples, 30)
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(mp4Path, model.FormatH264, 500*time.Millisecond, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), mp4Path, model.FormatH264, 500*time.Millisecond, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractFrames failed: %v", err)
 	}
@@ -1221,7 +1221,7 @@ func TestRecordingFrameExtractor_SingleFrameMP4(t *testing.T) {
 	mp4Path := createTestMP4(t, tmpDir, "single.h264.mp4", false, samples, 30)
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(mp4Path, model.FormatH264, time.Second, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), mp4Path, model.FormatH264, time.Second, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractFrames failed: %v", err)
 	}
@@ -1360,7 +1360,7 @@ func TestRecordingFrameExtractor_OutputNamingConvention(t *testing.T) {
 				filePath = createTestMP4(t, tmpDir, "test.mp4", isH265, samples, 30)
 			}
 
-			_, err := extractor.ExtractFrames(filePath, tt.format, 100*time.Millisecond, outputDir)
+			_, err := extractor.ExtractFrames(t.Context(), filePath, tt.format, 100*time.Millisecond, outputDir)
 			if err != nil {
 				t.Fatalf("ExtractFrames failed: %v", err)
 			}
@@ -1389,7 +1389,7 @@ func TestRecordingFrameExtractor_CorruptMP4(t *testing.T) {
 	}
 
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames(corruptPath, model.FormatH264, time.Second, outputDir)
+	_, err := extractor.ExtractFrames(t.Context(), corruptPath, model.FormatH264, time.Second, outputDir)
 	if err == nil {
 		t.Error("expected error for corrupt MP4, got nil")
 	}
@@ -1421,7 +1421,7 @@ func TestRecordingFrameExtractor_AVI_FrameCountPrecision(t *testing.T) {
 	}
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(aviPath, model.FormatAVI, 30*time.Second, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), aviPath, model.FormatAVI, 30*time.Second, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractFrames failed: %v", err)
 	}
@@ -1509,7 +1509,7 @@ func TestRecordingFrameExtractor_MJPEGDir_Legacy(t *testing.T) {
 	writeMJPEGDirFixture(t, dir, start, 60, time.Second, 0)
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(dir, model.FormatMJPEG, 15*time.Second, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), dir, model.FormatMJPEG, 15*time.Second, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractFrames failed: %v", err)
 	}
@@ -1530,7 +1530,7 @@ func TestRecordingFrameExtractor_MJPEGDir_Empty(t *testing.T) {
 		t.Fatal(err)
 	}
 	extractor := NewRecordingFrameExtractor()
-	_, err := extractor.ExtractFrames(dir, model.FormatMJPEG, time.Second, tmpDir)
+	_, err := extractor.ExtractFrames(t.Context(), dir, model.FormatMJPEG, time.Second, tmpDir)
 	if err == nil {
 		t.Error("expected error for MJPEG dir with no frames, got nil")
 	}
@@ -1556,7 +1556,7 @@ func TestRecordingFrameExtractor_MJPEGDir_Window(t *testing.T) {
 	extractor := NewRecordingFrameExtractor()
 	sampler := NewFrameSampler(10*time.Second, windowStart, windowEnd)
 
-	nA, err := extractor.ExtractWindowFrames(dirA, model.FormatMJPEG, windowStart, sampler, 0, outputDir)
+	nA, err := extractor.ExtractWindowFrames(t.Context(), dirA, model.FormatMJPEG, windowStart, sampler, 0, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractWindowFrames A failed: %v", err)
 	}
@@ -1565,7 +1565,7 @@ func TestRecordingFrameExtractor_MJPEGDir_Window(t *testing.T) {
 		t.Errorf("segment A: expected 6 frames, got %d", nA)
 	}
 
-	nB, err := extractor.ExtractWindowFrames(dirB, model.FormatMJPEG, windowStart.Add(5*time.Minute), sampler, nA, outputDir)
+	nB, err := extractor.ExtractWindowFrames(t.Context(), dirB, model.FormatMJPEG, windowStart.Add(5*time.Minute), sampler, nA, outputDir)
 	if err != nil {
 		t.Fatalf("ExtractWindowFrames B failed: %v", err)
 	}
@@ -1625,7 +1625,7 @@ func TestRecordingFrameExtractor_AVI_Window(t *testing.T) {
 	extractor := NewRecordingFrameExtractor()
 	sampler := NewFrameSampler(time.Second, windowStart, windowStart.Add(time.Hour))
 
-	nA, err := extractor.ExtractWindowFrames(aviA, model.FormatAVI, windowStart, sampler, 0, outputDir)
+	nA, err := extractor.ExtractWindowFrames(t.Context(), aviA, model.FormatAVI, windowStart, sampler, 0, outputDir)
 	if err != nil {
 		t.Fatalf("A failed: %v", err)
 	}
@@ -1633,7 +1633,7 @@ func TestRecordingFrameExtractor_AVI_Window(t *testing.T) {
 	if nA != 4 {
 		t.Errorf("A: expected 4 frames, got %d", nA)
 	}
-	nB, err := extractor.ExtractWindowFrames(aviB, model.FormatAVI, recBStart, sampler, nA, outputDir)
+	nB, err := extractor.ExtractWindowFrames(t.Context(), aviB, model.FormatAVI, recBStart, sampler, nA, outputDir)
 	if err != nil {
 		t.Fatalf("B failed: %v", err)
 	}
@@ -1674,7 +1674,7 @@ func TestRecordingFrameExtractor_H264_Window(t *testing.T) {
 	sampler := NewFrameSampler(2*time.Second, windowStart, windowStart.Add(time.Hour))
 
 	// A: targets 0s and 2s → frames 1 and 3 → 2 extracted.
-	nA, err := extractor.ExtractWindowFrames(mp4A, model.FormatH264, windowStart, sampler, 0, outputDir)
+	nA, err := extractor.ExtractWindowFrames(t.Context(), mp4A, model.FormatH264, windowStart, sampler, 0, outputDir)
 	if err != nil {
 		t.Fatalf("A failed: %v", err)
 	}
@@ -1684,7 +1684,7 @@ func TestRecordingFrameExtractor_H264_Window(t *testing.T) {
 	// B starts 60s later: first frame taken (gap clamp) at rel 0s, rel 1s
 	// skipped, rel 2s taken → 2 extracted, numbering continues at 3.
 	recBStart := windowStart.Add(time.Minute)
-	nB, err := extractor.ExtractWindowFrames(mp4B, model.FormatH264, recBStart, sampler, nA, outputDir)
+	nB, err := extractor.ExtractWindowFrames(t.Context(), mp4B, model.FormatH264, recBStart, sampler, nA, outputDir)
 	if err != nil {
 		t.Fatalf("B failed: %v", err)
 	}
