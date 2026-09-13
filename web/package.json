@@ -24,7 +24,7 @@
     "svelte": "^5.56.7",
     "tailwindcss": "^4.3.3",
     "vite": "^8.1.5",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@yume-chan/libde265": "^1.0.0",
