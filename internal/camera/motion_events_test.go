@@ -54,7 +54,7 @@ func TestOnMotionEventDispatchesPublishesAndTriggers(t *testing.T) {
 	})
 
 	var actionCam, action string
-	cm.SetMotionActionHandler(func(cameraID, act string) { actionCam, action = cameraID, act })
+	cm.SetMotionActionHandler(func(cameraID, act string, _ time.Duration) { actionCam, action = cameraID, act })
 
 	ch := make(chan event.Event, 8)
 	require.NoError(t, bus.SubscribeByPrefix("onvif.", ch, 16))
