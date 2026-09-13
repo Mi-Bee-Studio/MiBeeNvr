@@ -496,11 +496,13 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		hlsDataDir = filepath.Join(dd, "hls")
 	}
 	hlsMgr := hls.NewManagerWithOpts(context.Background(), hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, m)
-	// Low-Latency HLS is always enabled — the muxer supports fMP4 LL mode
-	// unconditionally. Whether a given browser can play a given codec over
-	// LL-HLS is a frontend concern (same browser-probe as HLS/FLV).
+	// Low-Latency HLS is wired to hls.low_latency (#772): it defaults to on
+	// (the SPA's hls.js mounts with lowLatencyMode and native iOS/AVPlayer
+	// players consume parts); an explicit `low_latency: false` switches egress
+	// to classic segment playlists (H264→MPEG-TS, H265→fMP4) for plain-HLS
+	// clients. Takes effect at startup.
 	partDur, _ := time.ParseDuration(cfg.HLS.PartMinDuration)
-	hlsMgr.SetLowLatency(true, partDur)
+	hlsMgr.SetLowLatency(cfg.HLS.LowLatencyEnabled(), partDur)
 	deps.hlsMgr = hlsMgr
 
 	// Step 7.5: WebRTC manager (H.264 only)

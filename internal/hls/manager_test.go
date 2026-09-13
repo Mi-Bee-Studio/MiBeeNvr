@@ -1758,8 +1758,10 @@ func TestRebuildMuxer_Success(t *testing.T) {
 	mgr.StopAll()
 }
 
-// TestRebuildMuxer_MissingParamSets fails gracefully when the IDR frame lacks SPS/PPS,
-// leaving the entry unchanged so writeLoop can retry on the next IDR.
+// TestRebuildMuxer_MissingParamSets verifies the #772 fallback: an IDR
+// without in-band SPS/PPS now rebuilds from the entry cache (SDP-only
+// cameras used to warn-loop here forever); only a cache that is ALSO empty
+// fails, leaving the entry unchanged so writeLoop retries on the next IDR.
 func TestRebuildMuxer_MissingParamSets(t *testing.T) {
 	t.Helper()
 	mgr := newTestManager(t)
@@ -1780,10 +1782,23 @@ func TestRebuildMuxer_MissingParamSets(t *testing.T) {
 	entry.consecutiveErrors = 5
 	entry.idrReceived = false
 
-	// IDR without SPS/PPS — rebuild cannot proceed.
+	// IDR without SPS/PPS — the entry cache (seeded at startStream) covers it.
 	idrOnly := [][]byte{{0x65, 0x88, 0x80, 0x40}}
 	ok := mgr.rebuildMuxer("test-cam", entry, idrOnly)
-	require.False(t, ok, "rebuild should fail without SPS/PPS")
+	require.True(t, ok, "rebuild should fall back to the cached parameter sets")
+
+	entry.mu.Lock()
+	require.NotNil(t, entry.mux, "muxer should be rebuilt from cached SPS/PPS")
+	entry.mux.Close()
+	entry.mux = nil
+	entry.track = nil
+	// Empty the cache too — now there is nothing to build a track from.
+	entry.sps = nil
+	entry.pps = nil
+	entry.mu.Unlock()
+
+	ok = mgr.rebuildMuxer("test-cam", entry, idrOnly)
+	require.False(t, ok, "rebuild must fail with no in-band and no cached params")
 
 	entry.mu.Lock()
 	require.Nil(t, entry.mux, "muxer should remain nil on failed rebuild")
@@ -1791,4 +1806,80 @@ func TestRebuildMuxer_MissingParamSets(t *testing.T) {
 	require.Equal(t, 5, entry.consecutiveErrors, "error counter unchanged on failed rebuild")
 
 	mgr.StopAll()
+}
+
+// --- #772: cached parameter-set injection helpers ---
+
+func TestWithCachedParamSets_H264PrependsMissing(t *testing.T) {
+	t.Helper()
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+	entry := &streamEntry{isH265: false, sps: sps, pps: pps}
+	au := [][]byte{idr}
+	out := withCachedParamSets(au, entry)
+	require.Len(t, out, 3)
+	require.Equal(t, sps, out[0])
+	require.Equal(t, pps, out[1])
+	require.Equal(t, idr, out[2])
+	require.Len(t, au, 1, "the hub-shared input AU must not be mutated")
+}
+
+func TestWithCachedParamSets_InBandWins(t *testing.T) {
+	t.Helper()
+	entry := &streamEntry{sps: []byte{0x67, 0x00}, pps: []byte{0x68, 0x00}}
+	freshSPS := []byte{0x67, 0x42, 0xc0, 0x0a}
+	freshPPS := []byte{0x68, 0xce, 0x38, 0x80}
+	au := [][]byte{freshSPS, freshPPS, {0x65, 0x88}}
+	out := withCachedParamSets(au, entry)
+	require.Len(t, out, 3, "no duplicates when the AU already carries params")
+	require.Equal(t, freshSPS, out[0])
+}
+
+func TestWithCachedParamSets_H265Order(t *testing.T) {
+	t.Helper()
+	entry := &streamEntry{
+		isH265: true,
+		vps:    []byte{0x40, 0x01, 0x0c},
+		sps:    []byte{0x42, 0x01, 0x01, 0x60},
+		pps:    []byte{0x44, 0x01, 0xc1, 0x73},
+	}
+	out := withCachedParamSets([][]byte{{0x26, 0x01, 0xaf}}, entry)
+	require.Len(t, out, 4)
+	require.Equal(t, byte(0x40), out[0][0], "VPS first")
+	require.Equal(t, byte(0x42), out[1][0], "then SPS")
+	require.Equal(t, byte(0x44), out[2][0], "then PPS")
+}
+
+func TestWithCachedParamSets_EmptyCacheNoop(t *testing.T) {
+	t.Helper()
+	entry := &streamEntry{}
+	out := withCachedParamSets([][]byte{{0x65, 0x88}}, entry)
+	require.Len(t, out, 1)
+}
+
+func TestRefreshParamCache_H264(t *testing.T) {
+	t.Helper()
+	entry := &streamEntry{sps: []byte{0x67, 0x00}, pps: []byte{0x68, 0x00}}
+	newSPS := []byte{0x67, 0x42, 0xc0, 0x0a}
+	newPPS := []byte{0x68, 0xce, 0x38, 0x80}
+	refreshParamCache(entry, [][]byte{newSPS, newPPS, {0x65, 0x88}})
+	require.Equal(t, newSPS, entry.sps)
+	require.Equal(t, newPPS, entry.pps)
+	// Non-param AUs leave the cache alone.
+	refreshParamCache(entry, [][]byte{{0x41, 0x9a}})
+	require.Equal(t, newSPS, entry.sps)
+	require.Equal(t, newPPS, entry.pps)
+}
+
+func TestRefreshParamCache_H265(t *testing.T) {
+	t.Helper()
+	entry := &streamEntry{isH265: true}
+	vps := []byte{0x40, 0x01, 0x0c}
+	sps := []byte{0x42, 0x01, 0x01, 0x60}
+	pps := []byte{0x44, 0x01, 0xc1, 0x73}
+	refreshParamCache(entry, [][]byte{vps, sps, pps, {0x26, 0x01, 0xaf}})
+	require.Equal(t, vps, entry.vps)
+	require.Equal(t, sps, entry.sps)
+	require.Equal(t, pps, entry.pps)
 }

@@ -3,12 +3,21 @@ package config
 // Streaming protocol configuration (HLS, WebRTC, FLV).
 
 type HLSConfig struct {
-	WriteBufferSize  int    `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
-	SegmentMaxSizeMB int    `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
-	SegmentCount     int    `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
-	MaxStreams       int    `yaml:"max_streams"`         // default 4 (RPi constraint)
-	LowLatency       bool   `yaml:"low_latency"`         // enable Low-Latency HLS (gohlslib MuxerVariantLowLatency)
-	PartMinDuration  string `yaml:"part_min_duration"`   // LL-HLS partial segment duration (default "200ms", range [100ms-1s])
+	WriteBufferSize  int `yaml:"write_buffer_size"`   // async frame buffer per stream (default 100)
+	SegmentMaxSizeMB int `yaml:"segment_max_size_mb"` // HLS segment max size in MB (default 10)
+	SegmentCount     int `yaml:"segment_count"`       // HLS segment count per stream (default 7, range [3,10])
+	MaxStreams       int `yaml:"max_streams"`         // default 4 (RPi constraint)
+	// LowLatency enables Low-Latency HLS (gohlslib MuxerVariantLowLatency).
+	// Pointer so "unset" (LL on — the deployed behavior since the muxer was
+	// force-enabled) is distinguishable from an explicit `low_latency: false`
+	// (classic segment playlists for plain-HLS clients, #772).
+	LowLatency      *bool  `yaml:"low_latency"`
+	PartMinDuration string `yaml:"part_min_duration"` // LL-HLS partial segment duration (default "200ms", range [100ms-1s])
+}
+
+// LowLatencyEnabled reports the effective LL-HLS setting; nil (unset) means on.
+func (c *HLSConfig) LowLatencyEnabled() bool {
+	return c.LowLatency == nil || *c.LowLatency
 }
 
 // StreamingConfig configures streaming protocol options (WebRTC, FLV, etc.)

@@ -64,7 +64,8 @@ export interface SRTConfig {
 export interface StreamingConfig {
   webrtc: WebRTCConfig;
   flv: FLVStreamingConfig;
-  hls: HLSStreamingConfig;
+  /** Omit when saving to keep the config-file value (#772 — no UI toggle yet). */
+  hls?: HLSStreamingConfig;
   rtmp?: RTMPConfig;
   srt?: SRTConfig;
 }
