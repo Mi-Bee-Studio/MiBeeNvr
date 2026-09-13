@@ -25,7 +25,7 @@ trigger:
 
 Header format:
 
-```
+```text
 X-MiBee-Signature: t=<unix-seconds>,v1=<hex(HMAC-SHA256(secret, "<t>.<body>"))>
 ```
 

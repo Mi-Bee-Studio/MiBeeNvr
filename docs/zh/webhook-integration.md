@@ -25,7 +25,7 @@ trigger:
 
 签名头格式：
 
-```
+```text
 X-MiBee-Signature: t=<unix-秒>,v1=<hex(HMAC-SHA256(secret, "<t>.<body>"))>
 ```
 
