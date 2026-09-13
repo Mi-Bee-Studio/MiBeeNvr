@@ -441,8 +441,10 @@ Track recording segment merge operations — both batch merges and the quasi-rea
 | `nvr_merge_pending_segments` | Gauge | `camera_id` | Number of segments pending merge, partitioned by camera |
 | `nvr_rolling_merge_latency_seconds` | Histogram | `camera_id` | Time from segment close to rolling merge completion |
 | `nvr_rolling_merge_bucket_segments` | Gauge | `camera_id` | Segments accumulated in the current rolling merge window bucket |
+| `nvr_rolling_merge_bucket_finalized_total` | Counter | `reason` | Rolling buckets leaving the retained set (#764). `reason`: `idle_ttl` / `capacity_lru` / `size_limit` (mdat cap roll) / `batch_reset` (batch merge paths drop the whole set) |
+| `nvr_rolling_merge_bucket_lifetime_seconds` | Histogram | `reason` | Wall time from bucket creation to finalize (seconds) — should lengthen markedly once a quality-oscillating camera stops micro-merging |
 
-**Buckets** for `nvr_merge_duration_seconds`: 0.5s, 1s, 5s, 10s, 30s, 60s, 300s, 600s. For `nvr_merge_size_bytes`: 10MB, 50MB, 100MB, 500MB, 1GB, 3GB. For `nvr_rolling_merge_latency_seconds`: 0.1s, 0.5s, 1s, 2s, 5s, 10s, 30s.
+**Buckets** for `nvr_merge_duration_seconds`: 0.5s, 1s, 5s, 10s, 30s, 60s, 300s, 600s. For `nvr_merge_size_bytes`: 10MB, 50MB, 100MB, 500MB, 1GB, 3GB. For `nvr_rolling_merge_latency_seconds`: 0.1s, 0.5s, 1s, 2s, 5s, 10s, 30s. For `nvr_rolling_merge_bucket_lifetime_seconds`: 1s, 5s, 15s, 1m, 5m, 15m, 1h, 6h.
 
 **Usage:**
 
@@ -455,6 +457,9 @@ histogram_quantile(0.99, rate(nvr_rolling_merge_latency_seconds_bucket[5m]))
 
 # Backlog of unmerged segments per camera
 nvr_merge_pending_segments
+
+# Bucket eviction rate by reason (reconnect-storm cameras should fall from high finalize rates)
+sum by (reason) (rate(nvr_rolling_merge_bucket_finalized_total[1h]))
 ```
 
 ---
@@ -558,6 +563,29 @@ Track DVR-style timeline seek operations during recording browsing.
 ```promql
 # Seek hot spots per camera
 topk(5, sum(rate(nvr_timeline_seeks_total[1h])) by (camera_id))
+```
+
+---
+
+## 20. Pixel Activity Gate Metrics
+
+Track the adaptive-recording pixel-activity gate (pixgate) sampler telemetry (#699). journald rotates logs away under disk pressure, so these metrics are the durable observation surface for sampler health.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_pixgate_samples_total` | Counter | `camera_id`, `source` | Samples processed. `source`: `hub` (main-stream mirror) / `rtsp` (dedicated sub-stream pull) |
+| `nvr_pixgate_triggers_total` | Counter | `camera_id` | Confirmed-activity full-rate exit invocations (every active sample re-arms the hold — 1:1 with Trigger calls) |
+| `nvr_pixgate_last_area_pct` | Gauge | `camera_id` | Largest foreground blob area of the most recent sample (% of grid) |
+| `nvr_pixgate_last_sample_timestamp_seconds` | Gauge | `camera_id` | Unix timestamp of the most recent sample — the sampler heartbeat |
+
+**Usage:** a stale heartbeat means the sampler is dead; a fresh heartbeat with low `area_pct` means the scene is quiet. This resolves the post-hoc "stuck in timelapse" diagnosis blind spot where the two were indistinguishable in logs.
+
+```promql
+# Sampler heartbeat staleness alert (no sample for 5 minutes)
+time() - nvr_pixgate_last_sample_timestamp_seconds > 300
+
+# Trigger frequency per camera
+topk(5, sum(rate(nvr_pixgate_triggers_total[1h])) by (camera_id))
 ```
 
 ---
