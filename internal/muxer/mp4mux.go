@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mp4util"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/prealloc"
 	"github.com/abema/go-mp4"
 )
 
@@ -75,6 +77,11 @@ type MP4Muxer struct {
 	// totalDuration accumulates every sample's duration (both Write methods).
 	totalDuration time.Duration
 	closed        bool
+	// preallocBytes is the whole-segment size estimate fallocate'd at open
+	// (#757): one contiguous extent instead of per-append growth metadata
+	// transactions. Close truncates the file back to the real content end.
+	// 0 = no preallocation. Hint, not a bound.
+	preallocBytes int64
 }
 
 // NewMP4Muxer creates a new MP4 muxer that will write to filePath.
@@ -82,6 +89,19 @@ func NewMP4Muxer(filePath string) *MP4Muxer {
 	return &MP4Muxer{
 		filePath:    filePath,
 		nextTrackID: 1,
+	}
+}
+
+// SetPreallocateBytes advises the muxer of the expected final segment size.
+// The file is fallocate'd to that size when opened (before the first sample
+// arrives); Close() truncates to the actual content length. Must be called
+// before the first WriteSample to take effect. Failures to preallocate are
+// logged-and-ignored (append-write status quo).
+func (m *MP4Muxer) SetPreallocateBytes(n int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.closed && m.file == nil && n > 0 {
+		m.preallocBytes = n
 	}
 }
 
@@ -331,6 +351,17 @@ func (m *MP4Muxer) ensureOpen() error {
 	m.file = f
 	m.bw = bufio.NewWriterSize(f, 512*1024)
 	m.mdatSizeOff = ftypSize // offset of mdat's SIZE field (box starts here)
+
+	// Whole-segment preallocation (#757): reserve the estimated extent up
+	// front so the append path stops paying per-growth inode metadata
+	// transactions and the segment lands contiguous. Degrades silently on
+	// filesystems without fallocate.
+	if m.preallocBytes > 0 {
+		if err := prealloc.Preallocate(f, m.preallocBytes); err != nil {
+			slog.Debug("segment preallocation unavailable, continuing append-only",
+				"path", m.filePath, "estimate", m.preallocBytes, "error", err)
+		}
+	}
 	return nil
 }
 
@@ -381,10 +412,12 @@ func (m *MP4Muxer) Close() error {
 		return fmt.Errorf("patch mdat size: %w", err)
 	}
 
-	// Append moov at EOF. It sits after the mdat, so per-sample offsets are
-	// already final — no placeholder/sizing pass needed (the old layout had
-	// to size moov first because stco offsets pointed INTO the file ahead).
-	if _, err := m.file.Seek(0, io.SeekEnd); err != nil {
+	// Append moov after the mdat payload. Position is COMPUTED, not
+	// SeekEnd — with preallocation (#757) the file size already includes
+	// the reserved extent, so EOF is not the content end. Per-sample
+	// offsets are already final (moov trails mdat).
+	moovStart := m.mdatSizeOff + 8 + m.payloadN
+	if _, err := m.file.Seek(moovStart, io.SeekStart); err != nil {
 		m.file.Close()
 		return fmt.Errorf("seek to moov: %w", err)
 	}
@@ -392,7 +425,26 @@ func (m *MP4Muxer) Close() error {
 		m.file.Close()
 		return fmt.Errorf("write moov: %w", err)
 	}
+
+	// THE zero-tail nail (#757): preallocation extended the file to the
+	// estimate — truncate back to the actual content end, or every
+	// crash-recovered segment carries a zero tail that inflates the probed
+	// duration. No-op without preallocation (offset == size).
+	if end, err := m.file.Seek(0, io.SeekCurrent); err == nil && end < m.preallocExpected() {
+		if err := m.file.Truncate(end); err != nil {
+			m.file.Close()
+			return fmt.Errorf("truncate preallocated tail: %w", err)
+		}
+	}
 	return m.file.Close()
+}
+
+// preallocExpected reports the file size the preallocation reserved (0 when
+// none). Close only needs to truncate when the content end is BELOW the
+// reserved size; seeking past it (overshoot) means the file already ends at
+// the content.
+func (m *MP4Muxer) preallocExpected() int64 {
+	return m.preallocBytes
 }
 
 // --- Box writing functions ---

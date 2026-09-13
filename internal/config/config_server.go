@@ -133,6 +133,15 @@ type StorageConfig struct {
 	// can tolerate losing the last seconds of raw recording on power loss
 	// benefit most.
 	Durability string `yaml:"durability"`
+	// Segment preallocation knobs (#757) — defaults materialized by config
+	// defaults; every value operator-tunable, nothing hardcoded in recorders.
+	// PreallocEnabled is a pointer so "unset" (default ON) is distinguishable
+	// from an explicit `prealloc_enabled: false` — same tri-state pattern as
+	// hls.low_latency (#772).
+	PreallocEnabled         *bool `yaml:"prealloc_enabled"`          // default true; explicit false restores pure append-write growth
+	PreallocHeadroomPercent int   `yaml:"prealloc_headroom_percent"` // default 10
+	PreallocMinBytes        int64 `yaml:"prealloc_min_bytes"`        // default 4MiB (below = skip)
+	PreallocMaxBytes        int64 `yaml:"prealloc_max_bytes"`        // default 512MiB
 	// Candidates lists additional storage locations made available to the NVR
 	// by the host platform (#395): on fnOS these are the user-authorized
 	// directories (TRIM_DATA_ACCESSIBLE_PATHS), mounted into the container and

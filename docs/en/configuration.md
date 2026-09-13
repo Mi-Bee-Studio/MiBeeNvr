@@ -224,6 +224,29 @@ version: "1.0"
 - **Always strict regardless of tier**: merged recordings, timelapse products, the database (WAL+NORMAL) and config writes — long-term assets keep their fsync.
 - **Who benefits**: flash boards (SD/eMMC) where per-segment fsync is both a latency spike and write-amplification source (~26 fsync/min at 13 cameras × 30s segments); HDD arrays recording continuously.
 - **Example**: `durability: "relaxed"` under the `storage:` section.
+### `storage.prealloc_enabled`
+- **Type**: boolean
+- **Default**: `true` (leaving it unset counts as enabled)
+- **Description**: whole-segment preallocation (fallocate) — the previous segment's final size estimates this one, reserved up front as one contiguous extent. This removes per-append inode metadata transactions, cuts write amplification on SD/eMMC, and improves merge/playback read locality. The reservation is a hint, not a bound — writes past it grow the file normally; filesystems without fallocate degrade to plain append writes. `false` restores pure append-write growth (takes effect after restart)
+- **Example**: `true`, `false`
+
+### `storage.prealloc_headroom_percent`
+- **Type**: int
+- **Default**: `10`
+- **Description**: growth margin over the previous segment's size (absorbs bitrate drift without re-growing mid-segment); range 0–400
+- **Example**: `10`, `25`
+
+### `storage.prealloc_min_bytes`
+- **Type**: int
+- **Default**: `4194304` (4MiB)
+- **Description**: preallocation floor — segments whose predecessor was smaller than this skip preallocation (tiny segments don't churn extents enough to matter); must not exceed `prealloc_max_bytes`
+- **Example**: `4194304`
+
+### `storage.prealloc_max_bytes`
+- **Type**: int
+- **Default**: `536870912` (512MiB)
+- **Description**: per-segment reservation cap so a pathological segment cannot reserve absurd space for its successors
+- **Example**: `536870912`
 
 ### `storage.db_path`
 - **Type**: string
