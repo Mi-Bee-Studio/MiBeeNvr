@@ -70,6 +70,12 @@ type HTTPJPEGRecorder struct {
 	adoptedResp   *http.Response
 	adoptedCancel context.CancelFunc
 
+	// manual is the timed forced-recording window (#660); manualSegmentOpen
+	// tracks an in-flight windowed segment for expiry close. Only touched
+	// from the frame loop goroutine.
+	manual            manualRecordWindow
+	manualSegmentOpen bool
+
 	lastFrameTime   atomic.Int64 // Unix timestamp of last received frame
 	curTempPath     string
 	curFinalPath    string
@@ -95,6 +101,14 @@ func (r *HTTPJPEGRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
 // SetHub wires the StreamHub for frame fan-out (streamhub.HubHost).
 func (r *HTTPJPEGRecorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
+
+// ArmManualRecording opens (or extends) a timed forced-recording window
+// (#660): for the duration, segments are written even when RecordEnabled
+// is false (live-only). Used by MQTT {"action":"record","duration":"60s"}.
+func (r *HTTPJPEGRecorder) ArmManualRecording(d time.Duration) { r.manual.Arm(d) }
+
+// ManualRecordingActive reports whether a manual recording window covers now.
+func (r *HTTPJPEGRecorder) ManualRecordingActive() bool { return r.manual.Active(time.Now()) }
 
 // HubSource labels the hub for the flow-path observability view.
 func (r *HTTPJPEGRecorder) HubSource() string { return "http-jpeg" }
@@ -502,7 +516,16 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		// Live-only mode: keep the latest-frame cache (so MJPEG live preview via
 		// /latest-frame polling works) but skip all segment I/O.
 		if r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled {
-			continue
+			// Manual recording window (#660): an armed window overrides the
+			// live-only gate for its duration.
+			if !r.manual.Active(time.Now()) {
+				if r.manualSegmentOpen {
+					r.closeCurrentSegment()
+					r.manualSegmentOpen = false
+				}
+				continue
+			}
+			r.manualSegmentOpen = true
 		}
 
 		if isStorageFailed(r.store, r.cfg.CameraID) {

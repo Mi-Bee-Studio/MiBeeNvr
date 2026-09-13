@@ -60,7 +60,7 @@ var webhookActions = map[string]bool{
 // SetTriggerDispatcher wires the trigger action dispatcher (the same
 // func(cameraID, action) the MQTT client uses — see mqtt.NewActionDispatcher).
 // Nil disables the endpoint (503 on call, route still mounted).
-func (h *Handler) SetTriggerDispatcher(dispatch func(cameraID, action string)) {
+func (h *Handler) SetTriggerDispatcher(dispatch func(cameraID, action string, duration time.Duration)) {
 	h.triggerDispatcher = dispatch
 }
 
@@ -128,7 +128,7 @@ func (h *Handler) handleTriggerWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// The dispatcher is internally async (per-action goroutine, 30s bounded),
 	// so this returns immediately; outcomes land in the structured log below.
-	h.triggerDispatcher(cameraID, action)
+	h.triggerDispatcher(cameraID, action, 0)
 	webhookLogger.Info("webhook trigger accepted",
 		"camera_id", cameraID, "action", action, "remote", remote, "body_bytes", len(body))
 	writeJSON(w, http.StatusAccepted, map[string]any{

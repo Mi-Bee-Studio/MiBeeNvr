@@ -13,13 +13,15 @@ import (
 type mockCallback struct {
 	cameraID string
 	action   string
+	duration time.Duration
 	called   bool
 }
 
-func (m *mockCallback) callback(cameraID, action string) {
+func (m *mockCallback) callback(cameraID, action string, duration time.Duration) {
 	m.called = true
 	m.cameraID = cameraID
 	m.action = action
+	m.duration = duration
 }
 
 // mockMessage implements mqtt.Message for testing.
@@ -216,3 +218,41 @@ func TestPublish_Success(t *testing.T) {
 }
 
 var _ mqtt.Client = (*mockPahoClient)(nil)
+
+// Duration payload parsing (#660): {"action":"record","duration":"60s"} opens
+// a timed forced-recording window; absent/invalid duration falls back to 0
+// (legacy record semantics).
+func TestParseDurationPayload(t *testing.T) {
+	t.Helper()
+
+	mk := func(payload string) (*Client, *mockCallback) {
+		cb := &mockCallback{}
+		c := NewClient("tcp://localhost:1883", "test", "mibee-nvr", "", "", cb.callback)
+		c.handleMessage(nil, &mockMessage{topic: "mibee-nvr/trigger/cam-d", payload: []byte(payload)})
+		return c, cb
+	}
+
+	t.Run("valid_duration", func(t *testing.T) {
+		_, cb := mk(`{"action": "record", "duration": "90s"}`)
+		assert.True(t, cb.called)
+		assert.Equal(t, 90*time.Second, cb.duration)
+	})
+
+	t.Run("absent_duration_is_zero", func(t *testing.T) {
+		_, cb := mk(`{"action": "record"}`)
+		assert.True(t, cb.called)
+		assert.Equal(t, time.Duration(0), cb.duration)
+	})
+
+	t.Run("invalid_duration_is_zero", func(t *testing.T) {
+		_, cb := mk(`{"action": "record", "duration": "not-a-duration"}`)
+		assert.True(t, cb.called)
+		assert.Equal(t, time.Duration(0), cb.duration)
+	})
+
+	t.Run("negative_duration_is_zero", func(t *testing.T) {
+		_, cb := mk(`{"action": "record", "duration": "-5s"}`)
+		assert.True(t, cb.called)
+		assert.Equal(t, time.Duration(0), cb.duration)
+	})
+}
