@@ -135,6 +135,7 @@ func (cm *CameraManager) buildRTSPRecorder(cam config.CameraConfig, segDur time.
 			DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
 			DarkFrameThreshold:     cam.DarkFrameThreshold,
 			RecordEnabled:          cam.RecordingEnabled,
+			Form:                   cam.MJPEGForm,
 		}
 		return recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 	default:
@@ -154,13 +155,21 @@ func (cm *CameraManager) buildHTTPJPEGRecorder(cam config.CameraConfig, segDur t
 		Username:               cam.Username,
 		Password:               cam.Password,
 		DB:                     cm.db,
-		AVI:                    cam.HTTPJPEGAVI,
+		AVI:                    !mjpegFormUsesDir(cam),
 		EventBus:               cm.eventBus,
 		DarkFrameFilterEnabled: cam.DarkFrameFilterEnabled,
 		DarkFrameThreshold:     cam.DarkFrameThreshold,
 		RecordEnabled:          cam.RecordingEnabled,
 	}
 	return recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
+}
+
+// mjpegFormUsesDir reports whether a camera explicitly opts out of the #761
+// default single-file AVI container form ("mjpeg_form: dir"). http_jpeg_avi
+// is deprecated and no longer consulted: AVI is the default for every
+// MJPEG/JPEG camera.
+func mjpegFormUsesDir(cam config.CameraConfig) bool {
+	return cam.MJPEGForm == config.MJPEGFormDir
 }
 
 // buildONVIFRecorder builds the ONVIF recorder (delegates to an inner
@@ -182,7 +191,7 @@ func (cm *CameraManager) buildONVIFRecorder(cam config.CameraConfig, segDur time
 		AudioEnabled:      cam.AudioEnabled,
 		AudioInRecordings: cam.AudioInRecordings,
 		ONVIFEndpoint:     onvifEndpoint,
-		AVI:               cam.HTTPJPEGAVI,
+		AVI:               !mjpegFormUsesDir(cam),
 		EventBus:          cm.eventBus,
 		RecordEnabled:     cam.RecordingEnabled,
 	}

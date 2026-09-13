@@ -32,6 +32,14 @@ import (
 var mjpegLogger = slogx.Component("mjpeg-recorder")
 
 // MJPEGConfig holds configuration for the MJPEG recorder.
+// MJPEG segment form (#761): "avi" writes one single-file AVI container per
+// segment (the default — eliminates the per-frame-file metadata churn); "dir"
+// is the legacy one-JPEG-file-per-frame directory form (explicit opt-out).
+const (
+	MJPEGFormAVI = "avi"
+	MJPEGFormDir = "dir"
+)
+
 type MJPEGConfig struct {
 	CameraID               string
 	RTSPURL                string
@@ -45,6 +53,10 @@ type MJPEGConfig struct {
 	// RecordEnabled gates segment writes (nil => record; ptr-to-false => live-only).
 	// See BaseConfig.RecordEnabled for details.
 	RecordEnabled *bool
+	// Form selects the video-only segment shape: "" or "avi" (default) →
+	// single-file AVI container; "dir" → legacy per-frame JPEG directory.
+	// Audio-enabled cameras always record AVI regardless of this field.
+	Form string
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
@@ -85,15 +97,35 @@ type MJPEGRecorder struct {
 	g711SampleRate int
 	aviMuxer       *avi.Muxer
 	aviFile        *os.File
+	// aviForm is the resolved video-only form (#761): true → single-file AVI
+	// container; false → legacy per-frame JPEG directory. Audio always adds
+	// AVI on top (useAVIContainer).
+	aviForm bool
+	// curIsAVI tracks whether the in-flight segment is an AVI file (audio or
+	// video-only form) — drives close-time branching (single-file stat vs
+	// directory walk). Only touched from the frame-loop goroutine.
+	curIsAVI bool
 }
 
 // segmentFormat returns the recording format for the current segment.
 func (r *MJPEGRecorder) segmentFormat() model.Format {
-	if r.hasAudio {
+	if r.useAVIContainer() {
 		return model.FormatAVI
 	}
 	return model.FormatMJPEG
 }
+
+// useAVIContainer reports whether segments take the single-file AVI shape:
+// always with G.711 audio, or whenever the configured form is not the legacy
+// per-frame directory (#761 default flip).
+func (r *MJPEGRecorder) useAVIContainer() bool {
+	return r.hasAudio || r.aviForm
+}
+
+// AVIContainer reports whether video-only segments take the single-file AVI
+// shape (#761). Exposed read-only for wiring tests (builder → config
+// resolution) — mirrors the pixgate MetricsWired precedent.
+func (r *MJPEGRecorder) AVIContainer() bool { return r.aviForm }
 
 // jpegDimensions extracts JPEG image dimensions from raw JPEG data.
 func jpegDimensions(data []byte) (width, height int, ok bool) {
@@ -200,18 +232,6 @@ func NewMJPEGRecorder(cfg MJPEGConfig, store SegmentStore, opts ...*metrics.Metr
 	if len(opts) > 0 {
 		m = opts[0]
 	}
-	// When audio is enabled, MJPEG goes through the AVI muxer (same as
-	// HTTPJPEGRecorder with AVI=true), which buffers all frames in RAM until
-	// segment close. Apply the same RAM-dependent cap to prevent OOM on
-	// low-memory hosts. See aviSegmentDurCap for rationale.
-	if cfg.AudioEnabled {
-		if durCap := aviSegmentDurCap(); cfg.SegmentDur > durCap {
-			mjpegLogger.Warn("AVI (audio) mode: SegmentDur capped by available RAM",
-				"camera_id", cfg.CameraID, "configured", cfg.SegmentDur, "capped_to", durCap,
-				"mem_available_mb", memAvailableMB())
-			cfg.SegmentDur = durCap
-		}
-	}
 	if cfg.SegmentDur == 0 {
 		cfg.SegmentDur = DefaultSegmentDur
 	}
@@ -219,7 +239,10 @@ func NewMJPEGRecorder(cfg MJPEGConfig, store SegmentStore, opts ...*metrics.Metr
 		cfg.SampleInterval = 1
 	}
 	return &MJPEGRecorder{
-		cfg:     cfg,
+		cfg: cfg,
+		// Resolve the segment form once (#761): everything but an explicit
+		// legacy opt-out records single-file AVI containers.
+		aviForm: cfg.Form != MJPEGFormDir,
 		store:   store,
 		metrics: m,
 		status:  model.StatusStopped,
@@ -495,8 +518,9 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		}
 
 		if r.curTempPath == "" {
-			if r.hasAudio {
-				// Create AVI file segment.
+			if r.useAVIContainer() {
+				// Create AVI file segment (#761: also the video-only default —
+				// one file per segment instead of one file per frame).
 				tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatAVI))
 				if err != nil {
 					mjpegLogger.Error("failed to create AVI segment", "camera_id", r.cfg.CameraID, "error", err)
@@ -516,12 +540,19 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 				r.aviFile = f
 				// aviMuxer is read by the RTP audio callback under r.mu —
 				// publish it under the same lock (race found by
-				// TestMJPEGRecorderAudioDrop under -race on CI).
+				// TestMJPEGRecorderAudioDrop under -race on CI). The muxer
+				// streams incrementally to the file (avi.Muxer WriterAt mode);
+				// only the 16-byte-per-frame index stays in RAM.
 				r.mu.Lock()
-				r.aviMuxer = avi.NewMuxer(f, w, h, r.g711SampleRate, r.g711MULaw)
+				if r.hasAudio {
+					r.aviMuxer = avi.NewMuxer(f, w, h, r.g711SampleRate, r.g711MULaw)
+				} else {
+					r.aviMuxer = avi.NewVideoOnlyMuxer(f, w, h)
+				}
 				r.mu.Unlock()
 				r.curTempPath = tempPath
 				r.curFinalPath = finalPath
+				r.curIsAVI = true
 				r.segStart = time.Now()
 				r.frameCount = 0
 			} else {
@@ -532,12 +563,14 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 				}
 				r.curTempPath = tempPath
 				r.curFinalPath = finalPath
+				r.curIsAVI = false
 				r.segStart = time.Now()
 				r.frameCount = 0
 			}
 		}
 
-		if r.hasAudio {
+		rotate := false
+		if r.useAVIContainer() {
 			// Write video frame to AVI muxer (nil-check under the lock —
 			// segment rotation clears it concurrently from our own
 			// closeCurrentSegment, and the audio callback shares the muxer).
@@ -547,6 +580,10 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 				if err := m.WriteVideo(data, 0); err != nil {
 					mjpegLogger.Error("failed to write video to AVI muxer", "camera_id", r.cfg.CameraID, "error", err)
 				}
+				// RIFF size fields are uint32: rotate before the 4GiB ceiling
+				// (size guard replaces the old RAM-based duration cap — the
+				// incremental muxer keeps memory flat regardless of duration).
+				rotate = m.TotalBytes() >= aviRotateBytes
 			}
 			r.mu.Unlock()
 		} else {
@@ -557,7 +594,7 @@ func (r *MJPEGRecorder) writeFrames(done chan struct{}) {
 		}
 		r.frameCount++
 
-		if time.Since(r.segStart) >= r.cfg.SegmentDur {
+		if rotate || time.Since(r.segStart) >= r.cfg.SegmentDur {
 			r.closeCurrentSegment()
 		}
 	}
@@ -568,8 +605,9 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		return
 	}
 
-	// For AVI mode: close muxer and file before renaming.
-	if r.hasAudio {
+	// For AVI segments (audio or video-only form): close muxer and file
+	// before renaming.
+	if r.curIsAVI {
 		r.mu.Lock()
 		if r.aviMuxer != nil {
 			if err := r.aviMuxer.Close(); err != nil {
@@ -622,7 +660,7 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		}
 		recordingID = rec.ID
 
-		if r.hasAudio {
+		if r.curIsAVI {
 			// AVI is a single file.
 			if info, err := os.Stat(r.curFinalPath); err == nil {
 				totalSize = info.Size()
@@ -645,7 +683,7 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		// Only runs when DarkFrameFilterEnabled is true and threshold > 0.
 		if r.cfg.DarkFrameFilterEnabled && r.cfg.DarkFrameThreshold > 0 && recordingID != "" {
 			var isDark bool
-			if r.hasAudio {
+			if r.curIsAVI {
 				// AVI format: single file with MJPEG video.
 				isDark, _, _ = DetectDarkAVIFile(r.curFinalPath, r.cfg.DarkFrameThreshold)
 			} else {
@@ -661,6 +699,7 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 				// enter the merge pipeline at all.
 				r.curTempPath = ""
 				r.curFinalPath = ""
+				r.curIsAVI = false
 				r.frameCount = 0
 				return
 			}
@@ -689,5 +728,6 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 
 	r.curTempPath = ""
 	r.curFinalPath = ""
+	r.curIsAVI = false
 	r.frameCount = 0
 }

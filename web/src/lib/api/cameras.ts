@@ -220,6 +220,9 @@ export interface CreateCameraRequest {
   /** Motion signal source (#711): "nvr" (default) or "camera:onvif"
    *  (Pull-Point MotionAlarm subscription). */
   motion_source?: string;
+  /** MJPEG segment shape (#761): "avi" (single-file AVI container, default)
+   *  or "dir" (legacy per-frame JPEG directory). Applies on restart. */
+  mjpeg_form?: string;
   recording_tier?: string;
   adaptive?: AdaptiveRecordingConfig;
   // Loudness trigger for adaptive recording (#478); only effective with
@@ -280,6 +283,9 @@ export interface UpdateCameraRequest {
   /** Motion signal source (#711): "nvr" (default) or "camera:onvif".
    *  Reconciles immediately (no restart). */
   motion_source?: string;
+  /** MJPEG segment shape (#761): "avi" (default) or "dir" (legacy
+   *  per-frame directory). Applies on restart. */
+  mjpeg_form?: string;
   recording_tier?: string;
   adaptive?: AdaptiveRecordingConfig;
   // Loudness trigger for adaptive recording (#478); only effective with

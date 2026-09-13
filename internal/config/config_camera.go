@@ -40,7 +40,20 @@ type CameraConfig struct {
 	AudioInRecordings    bool            `yaml:"audio_in_recordings,omitempty" json:"audio_in_recordings,omitempty"`
 	HealthOverrides      HealthOverrides `yaml:"health_overrides,omitempty"`
 	FrameWatchdogTimeout string          `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
-	HTTPJPEGAVI          bool            `yaml:"http_jpeg_avi"`                    // write AVI single-file instead of MJPEG directory
+	// MJPEGForm selects the MJPEG/JPEG recording segment shape (#761):
+	// "" or "avi" (default) — one single-file AVI container per segment
+	// (eliminates the per-frame-file metadata churn that dominated SD/eMMC
+	// write amplification); "dir" — legacy one-JPEG-file-per-frame directory
+	// (explicit opt-out). Applies to rtsp-mjpeg, http_jpeg, and ONVIF-JPEG
+	// cameras; audio-enabled MJPEG cameras always record AVI regardless.
+	// Supersedes http_jpeg_avi, whose value is no longer read.
+	MJPEGForm string `yaml:"mjpeg_form,omitempty" json:"mjpeg_form,omitempty"`
+
+	// HTTPJPEGAVI is DEPRECATED (#761): superseded by mjpeg_form. The value
+	// is no longer read — the AVI single-file container is the default for
+	// every MJPEG/JPEG camera; set mjpeg_form: dir for the legacy directory.
+	// Kept only so old configs parse without error.
+	HTTPJPEGAVI bool `yaml:"http_jpeg_avi,omitempty" json:"http_jpeg_avi,omitempty"`
 
 	// RingBufCap overrides the recorder's frameCh capacity (issue #521). The
 	// frameCh ring absorbs write-loop stalls (segment finalize fsync, merge IO,

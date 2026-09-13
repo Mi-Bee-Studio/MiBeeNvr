@@ -812,7 +812,9 @@ type recordingNameInfo struct {
 	cameraID  string
 	startedAt time.Time
 	nanoID    string
-	isMP4File bool // true for .mp4 files (H264), false for extension-less MJPEG dirs
+	// fileExt is "" for extension-less MJPEG dirs, ".mp4" or ".avi" for the
+	// single-file segment forms.
+	fileExt string
 }
 
 // parseRecordingName parses a cam-dir entry name into its recording fields,
@@ -832,15 +834,19 @@ type recordingNameInfo struct {
 // cam dir name); entries from other cameras are rejected. Pass "" to skip the
 // camera-ID check (only shape is validated).
 func parseRecordingName(name, cameraIDHint string) (recordingNameInfo, bool) {
-	isMP4 := strings.HasSuffix(name, ".mp4")
-	baseName := name
-	if isMP4 {
-		baseName = strings.TrimSuffix(name, ".mp4")
-	} else if filepath.Ext(name) != "" {
-		// Non-mp4 entry with an extension (.avi.tmp, .json, .tmp, ...) — not a
-		// recording name. Extension-less dirs are still candidates (MJPEG).
+	// Recording file forms: .mp4 (H264/H265) and .avi (MJPEG/JPEG container,
+	// the #761 default). Extension-less names are MJPEG dir candidates.
+	fileExt := ""
+	switch {
+	case strings.HasSuffix(name, ".mp4"):
+		fileExt = ".mp4"
+	case strings.HasSuffix(name, ".avi"):
+		fileExt = ".avi"
+	case filepath.Ext(name) != "":
+		// Any other extension (.json, .tmp, ...) — not a recording name.
 		return recordingNameInfo{}, false
 	}
+	baseName := strings.TrimSuffix(name, fileExt)
 	parts := strings.SplitN(baseName, "_", 4)
 	if len(parts) != 4 {
 		return recordingNameInfo{}, false
@@ -856,7 +862,7 @@ func parseRecordingName(name, cameraIDHint string) (recordingNameInfo, bool) {
 		cameraID:  parts[0],
 		startedAt: startedAt,
 		nanoID:    parts[3],
-		isMP4File: isMP4,
+		fileExt:   fileExt,
 	}, true
 }
 
@@ -922,13 +928,17 @@ func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string
 				continue
 			}
 		} else {
-			if !info.isMP4File {
-				continue // named like a recording but not .mp4 — shouldn't happen
+			if info.fileExt == "" {
+				continue // extension-less file — shouldn't happen (dirs only)
 			}
 			if fi.Size() == 0 {
 				continue
 			}
-			format = model.FormatH264
+			if info.fileExt == ".avi" {
+				format = model.FormatAVI
+			} else {
+				format = model.FormatH264
+			}
 			totalSize = fi.Size()
 		}
 

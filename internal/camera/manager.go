@@ -88,6 +88,10 @@ type CameraUpdate struct {
 	// (subscribe to the camera's Pull-Point MotionAlarm events). nil =
 	// unchanged; the subscription reconciles immediately (no restart).
 	MotionSource *string
+	// MJPEGForm (#761): ""/"avi" (single-file AVI container, the default) or
+	// "dir" (legacy per-frame JPEG directory). nil = unchanged; applies on
+	// NVR restart (resolved when the recorder is built).
+	MJPEGForm *string
 	// Pixgate arms the pixel-domain fine gate (#636). nil = unchanged;
 	// applies on NVR restart (the service reads config at boot).
 	Pixgate  *config.CameraPixgateConfig

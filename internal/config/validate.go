@@ -902,6 +902,14 @@ func validatePortRange(r string) error {
 // MotionAlarm subscription as this camera's motion signal (#711).
 const MotionSourceCameraONVIF = "camera:onvif"
 
+// MJPEG segment form values (#761): MJPEGFormAVI (also "") is the default
+// single-file AVI container per segment; MJPEGFormDir is the legacy
+// one-JPEG-file-per-frame directory opt-out.
+const (
+	MJPEGFormAVI = "avi"
+	MJPEGFormDir = "dir"
+)
+
 // ValidateCameraRecordingMode checks one camera's recording_mode + adaptive
 // tuning block (issue #435) + audio_trigger block (issue #478). Shared by the
 // startup config validation and the camera create/update API boundaries so an
@@ -914,6 +922,11 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 	}
 	if cam.MotionSource == MotionSourceCameraONVIF && cam.Protocol != "onvif" {
 		return fmt.Errorf("cameras.%s.motion_source=camera:onvif requires an onvif protocol camera (got %q)", cam.ID, cam.Protocol)
+	}
+	switch cam.MJPEGForm {
+	case "", MJPEGFormAVI, MJPEGFormDir:
+	default:
+		return fmt.Errorf("cameras.%s.mjpeg_form must be \"avi\" or \"dir\" (got %q)", cam.ID, cam.MJPEGForm)
 	}
 	switch cam.RecordingMode {
 	case "", "continuous", "adaptive":

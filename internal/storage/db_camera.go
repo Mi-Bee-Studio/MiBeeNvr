@@ -86,6 +86,10 @@ type CameraRow struct {
 	// MotionSource selects the camera's motion signal (#711): ""/"nvr" or
 	// "camera:onvif" (Pull-Point MotionAlarm subscription).
 	MotionSource string `json:"motion_source,omitempty"`
+	// MJPEGForm selects the MJPEG/JPEG segment shape (#761): ""/"avi"
+	// (single-file AVI container, default) or "dir" (legacy per-frame
+	// directory). Applies on NVR restart.
+	MJPEGForm string `json:"mjpeg_form,omitempty"`
 	// RecordingTier marks the dual-stream tier (#637): ""/"single" or "tiered"
 	// (continuous sub-stream recording). Read by the tiered-recording service;
 	// changes apply on NVR restart.

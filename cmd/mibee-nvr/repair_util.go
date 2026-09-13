@@ -15,6 +15,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 )
 
 // humanBytes formats a byte count as a human-readable string (KB/MB/GB).
@@ -108,4 +111,35 @@ func parseInt(s string) (int, error) {
 	var n int
 	_, err := fmt.Sscanf(s, "%d", &n)
 	return n, err
+}
+
+// estimateAVIDuration derives an AVI segment's duration from its container:
+// video frame count × dwMicroSecPerFrame (header-walk only, no payload I/O).
+// AVI is the default MJPEG/JPEG segment container since #761, so
+// zero-duration orphans of that form flow through here in `repair duration`.
+func estimateAVIDuration(filePath string) (float64, error) {
+	if !strings.HasSuffix(filePath, ".avi") {
+		return 0, fmt.Errorf("not an avi file: %s", filePath)
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("open avi: %w", err)
+	}
+	defer f.Close()
+	d, err := avi.NewDemuxer(f)
+	if err != nil {
+		return 0, fmt.Errorf("demux avi: %w", err)
+	}
+	frames, err := d.VideoFrameIndex()
+	if err != nil {
+		return 0, fmt.Errorf("index avi frames: %w", err)
+	}
+	if len(frames) == 0 {
+		return 0, fmt.Errorf("no video frames in %s", filePath)
+	}
+	us := d.MicroSecPerFrame()
+	if us == 0 {
+		us = 500000 // MJPEG nominal 2fps fallback
+	}
+	return float64(len(frames)) * float64(us) / 1e6, nil
 }
