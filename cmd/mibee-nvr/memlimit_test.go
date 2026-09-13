@@ -27,7 +27,6 @@ func TestApplyMemoryLimit_AutoFromPhysical(t *testing.T) {
 
 	want := int64(1 << 30) // 4GiB host → min(45%, 1GiB) cap
 	require.True(t, restore.called)
-	require.True(t, restore.called)
 	require.Equal(t, want, restore.applied)
 	require.Equal(t, want, memlimit.Applied())
 }

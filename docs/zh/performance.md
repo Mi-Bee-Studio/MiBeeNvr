@@ -52,11 +52,11 @@ memory:
 
 ### systemd / Docker 外层限额
 
-进程内上限是主机制；unit 限额是安全网（`deploy/mibee-nvr.service` 默认启用）：
+进程内上限是主机制；unit 限额是可选安全网（`deploy/mibee-nvr.service` 中默认**注释**——512MiB 基准取值直接开在更大内存的板上会 OOM，按板取消注释并调值）：
 
 ```ini
-MemoryHigh=450M   # 软限：内核回收而非杀死
-MemoryMax=550M    # 硬限兜底
+# MemoryHigh=450M   # 软限：内核回收而非杀死（1GB 板示例）
+# MemoryMax=550M    # 硬限兜底（4GB 板建议 1500M / 2G）
 ```
 
 数值按 512MiB 设计基准（RPi-3B 级）取值；4GB 板建议 `High=1500M` /

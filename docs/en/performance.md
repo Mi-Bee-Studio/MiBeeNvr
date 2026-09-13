@@ -57,11 +57,13 @@ harder. GOGC stays at its default; if you ever see GC thrash (rising
 ### systemd / Docker outer limits
 
 The in-process limit is the primary mechanism; the unit limits below are the
-safety net (`deploy/mibee-nvr.service` ships them active):
+optional safety net (commented out by default in `deploy/mibee-nvr.service` —
+the 512MiB-baseline values would OOM a bigger board if enabled verbatim;
+uncomment and size per board):
 
 ```ini
-MemoryHigh=450M   # soft: kernel reclaims instead of killing
-MemoryMax=550M    # hard backstop
+# MemoryHigh=450M   # soft: kernel reclaims instead of killing (1GB-board example)
+# MemoryMax=550M    # hard backstop (4GB board: 1500M / 2G)
 ```
 
 Values are sized for the 512MiB design baseline (RPi-3B class). On a 4GB

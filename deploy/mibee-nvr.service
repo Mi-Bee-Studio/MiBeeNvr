@@ -25,16 +25,17 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/mibee-nvr
 
-# Memory discipline (#756) — 512MiB design baseline (RPi-3B class):
-# MemoryHigh is a SOFT limit (kernel reclaims instead of OOM-killing),
-# MemoryMax the hard backstop. Adjust per board:
-#   1GB RAM board:  High=450M  Max=550M  (shipped values)
-#   4GB RAM board:  High=1500M Max=2G
-# The Go-side GOMEMLIMIT (set automatically at startup) keeps the heap well
-# below these — the unit limits are the outer safety net, not the primary
-# mechanism. See docs: Performance Tuning > Memory Tiering.
-MemoryHigh=450M
-MemoryMax=550M
+# Memory discipline (#756) — OPTIONAL outer safety net, left DISABLED by
+# default: these values are sized for the 512MiB design baseline (RPi-3B
+# class); enabling them verbatim on a bigger board (e.g. 4GB M5 with ~1.6GB
+# heap peaks) OOM-kills the service. The in-process GOMEMLIMIT (set
+# automatically at startup, see memory.* config) is the primary mechanism.
+# To enable per board, uncomment and size accordingly:
+#   1GB RAM board:  MemoryHigh=450M  MemoryMax=550M
+#   4GB RAM board:  MemoryHigh=1500M MemoryMax=2G
+# See docs: Performance Tuning > Memory Tiering.
+#MemoryHigh=450M
+#MemoryMax=550M
 
 [Install]
 WantedBy=multi-user.target

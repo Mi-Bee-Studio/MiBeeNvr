@@ -476,6 +476,7 @@ Health metrics for the SQLite metadata database — writer pool, read-only pool,
 | `nvr_sqlite_fragmentation_ratio` | Gauge | — | SQLite fragmentation ratio (freelist_count / page_count) |
 | `nvr_sqlite_query_duration_seconds` | Histogram | `query_name` | SQLite query duration in seconds, partitioned by query name |
 | `nvr_sqlite_busy_errors_total` | Counter | — | Total SQLITE_BUSY errors retried across all database operations |
+| `nvr_memlimit_bytes` | Gauge | — | Go runtime soft memory limit (GOMEMLIMIT) installed at startup; 0 = not set (env var won / disabled by config / host memory unknown) (#756) |
 
 **Buckets** for `nvr_sqlite_query_duration_seconds`: 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s.
 
