@@ -299,6 +299,7 @@ func registerServices(a *App, deps *appDeps) error {
 					return trig.PixelTriggerEvent(time.Now(), hold)
 				},
 				Bus:     deps.eventBus,
+				Metrics: deps.metrics,
 				Cameras: cams,
 			})
 			deps.pixgateMgr = m
