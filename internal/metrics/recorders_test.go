@@ -8,6 +8,8 @@ package metrics
 import (
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestRecorderMethodsNoPanic(t *testing.T) {
@@ -65,4 +67,28 @@ func requireNoPanic(t *testing.T, fn func()) {
 		}
 	}()
 	fn()
+}
+
+// TestObserveTxn (#759): write transactions land in the per-source counter
+// and histogram.
+func TestObserveTxn(t *testing.T) {
+	m := NewMetrics()
+
+	m.ObserveTxn("recording_insert", 0.01)
+	m.ObserveTxn("recording_insert", 0.02)
+	m.ObserveTxn("merge_status", 0.005)
+
+	if got := testutil.ToFloat64(m.SQLiteTxnsTotal.WithLabelValues("recording_insert")); got != 2 {
+		t.Errorf("recording_insert txns = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(m.SQLiteTxnsTotal.WithLabelValues("merge_status")); got != 1 {
+		t.Errorf("merge_status txns = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.SQLiteTxnsTotal.WithLabelValues("cleanup")); got != 0 {
+		t.Errorf("cleanup txns = %v, want 0", got)
+	}
+	// Histogram receives observations (count = 2 for recording_insert).
+	if c := testutil.CollectAndCount(m.SQLiteTxnDurationSeconds); c == 0 {
+		t.Error("txn duration histogram has no series")
+	}
 }

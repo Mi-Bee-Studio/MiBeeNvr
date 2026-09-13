@@ -72,6 +72,8 @@ func deleteCandidatesInChunks(ctx context.Context, db *storage.DB, candidates []
 		return filepath.Dir(sorted[i].FilePath) < filepath.Dir(sorted[j].FilePath)
 	})
 	budgetAborted := false
+	// Attribute the chunked deletes to repair (#759 txn sources).
+	ctx = storage.WithTxnSource(ctx, "repair")
 	for start := 0; start < total; start += repairDeleteChunkSize {
 		if ctx.Err() != nil {
 			break

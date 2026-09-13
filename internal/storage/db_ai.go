@@ -30,6 +30,7 @@ type AIEvent struct {
 
 // InsertAIEvent stores a new AI event from MiBeeVision.
 func (d *DB) InsertAIEvent(ctx context.Context, e *AIEvent) (int64, error) {
+	defer d.observeTxn(ctx, "ai_event", time.Now())
 	q := `INSERT INTO ai_events (camera_id, recording_id, event_type, severity, zone_name, class_name, confidence, frame_idx, frame_timestamp, bbox, snapshot_path, metadata, source)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	result, err := d.db.ExecContext(

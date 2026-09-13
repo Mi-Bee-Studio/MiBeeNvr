@@ -21,6 +21,7 @@ type HealthEventsFilter struct {
 
 // InsertHealthEvent inserts a new camera health event.
 func (d *DB) InsertHealthEvent(ctx context.Context, event model.HealthEvent) error {
+	defer d.observeTxn(ctx, "health", time.Now())
 	q := `INSERT INTO camera_health_events(camera_id, event_type, status, message, metadata, created_at) VALUES(?,?,?,?,?,?);`
 	_, err := d.db.ExecContext(ctx, q, event.CameraID, event.EventType, event.Status, event.Message, event.Metadata, formatTime(event.CreatedAt))
 	return err

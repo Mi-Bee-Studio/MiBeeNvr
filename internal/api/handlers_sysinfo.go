@@ -5,9 +5,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
 func (h *Handler) handleBackup(w http.ResponseWriter, r *http.Request) {
@@ -248,7 +251,61 @@ func (h *Handler) handleSystemStats(w http.ResponseWriter, r *http.Request) {
 		resp.Disk = &DiskStats{Path: root, WatermarkPct: watermark, Status: "unknown"}
 	}
 
+	resp.DB = h.dbTxnStats()
+
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// dbTxnPrev samples the previous /api/system/stats poll for rate math.
+type dbTxnSample struct {
+	at     time.Time
+	counts map[string]int64
+}
+
+// dbTxnStats derives the per-source DB write panel from storage's cumulative
+// counters (#759): totals since start + rates over the poll window (two
+// samples minimum). Handler-field state, single-writer per HTTP poll.
+func (h *Handler) dbTxnStats() *DBTxnStats {
+	counts, nanos := storage.TxnSnapshot()
+	now := time.Now()
+
+	h.dbTxnMu.Lock()
+	var prev dbTxnSample
+	rates := map[string]float64{}
+	if h.dbTxnPrev != nil {
+		prev = *h.dbTxnPrev
+		if dt := now.Sub(prev.at).Seconds(); dt > 0.5 {
+			for src, c := range counts {
+				if before, ok := prev.counts[src]; ok {
+					rates[src] = float64(c-before) / dt
+				}
+			}
+			h.dbTxnPrev = &dbTxnSample{at: now, counts: counts}
+		}
+	} else {
+		h.dbTxnPrev = &dbTxnSample{at: now, counts: counts}
+	}
+	h.dbTxnMu.Unlock()
+
+	_ = prev
+	out := &DBTxnStats{Sources: make([]DBTxnSource, 0, len(counts))}
+	for src, c := range counts {
+		if c == 0 {
+			continue
+		}
+		avgMs := 0.0
+		if nanos[src] > 0 {
+			avgMs = float64(nanos[src]/int64(time.Millisecond)) / float64(c)
+		}
+		out.Sources = append(out.Sources, DBTxnSource{
+			Name: src, Total: c, PerSecond: rates[src], AvgMs: avgMs,
+		})
+	}
+	sort.Slice(out.Sources, func(i, j int) bool { return out.Sources[i].Total > out.Sources[j].Total })
+	if len(out.Sources) == 0 {
+		return nil
+	}
+	return out
 }
 
 // handleGetAutoDiscoverSettings returns the current auto_discover config. The

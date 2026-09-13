@@ -456,6 +456,8 @@ func (cm *CleanupManager) BatchDeleteRecordingsWithFiles(ctx context.Context, re
 	if len(recordings) == 0 {
 		return nil, nil
 	}
+	// Attribute this batch's DB writes to cleanup (#759 txn sources).
+	ctx = storage.WithTxnSource(ctx, "cleanup")
 
 	// 1. Batch-fetch AI status (eliminates N+1)
 	ids := make([]string, len(recordings))

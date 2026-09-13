@@ -475,10 +475,14 @@ Health metrics for the SQLite metadata database — writer pool, read-only pool,
 | `nvr_sqlite_db_size_bytes` | Gauge | — | SQLite database file size in bytes |
 | `nvr_sqlite_fragmentation_ratio` | Gauge | — | SQLite fragmentation ratio (freelist_count / page_count) |
 | `nvr_sqlite_query_duration_seconds` | Histogram | `query_name` | SQLite query duration in seconds, partitioned by query name |
+| `nvr_sqlite_txns_total` | Counter | `source` | Write transactions counted by source (`recording_insert` / `recording_close` / `merge_status` / `ai_event` / `health` / `api_write` / `cleanup` / `repair`) — the write-hotspot ranking (#759) |
+| `nvr_sqlite_txn_duration_seconds` | Histogram | `source` | Write-transaction latency in seconds by source (#759) |
 | `nvr_sqlite_busy_errors_total` | Counter | — | Total SQLITE_BUSY errors retried across all database operations |
 | `nvr_memlimit_bytes` | Gauge | — | Go runtime soft memory limit (GOMEMLIMIT) installed at startup; 0 = not set (env var won / disabled by config / host memory unknown) (#756) |
 
 **Buckets** for `nvr_sqlite_query_duration_seconds`: 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s.
+
+**Buckets** for `nvr_sqlite_txn_duration_seconds`: 0.5ms, 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 5s.
 
 **Usage:**
 

@@ -164,6 +164,16 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	default:
 	}
 
+	// Payload must be known before moov — the stco chunk offset and the mdat
+	// header size (8 or 16 bytes past the 4GB box limit) depend on it
+	// (#mdat-4gb: wrapped uint32 sizing broke EndBox with "header size
+	// changed" on >4GB natural-day windows).
+	payload, err := computeMdatPayloadSize(ctx, frames, isH265ParamSet)
+	if err != nil {
+		return &MergeResult{Tier: TierGo, Error: err.Error()},
+			fmt.Errorf("compute mdat payload: %w", err)
+	}
+
 	// First pass: calculate moov size by writing to a buffer.
 	muxer := &codecMuxer{
 		frameCount:        len(frames),
@@ -207,8 +217,9 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 			fmt.Errorf("write ftyp: %w", err)
 	}
 
-	// mdat data starts after ftyp + moov + 8-byte mdat header.
-	mdatDataOffset := int64(ftypSize) + int64(moovSize) + 8
+	// mdat data starts after ftyp + moov + the mdat box header (8 or 16
+	// bytes depending on whether the box exceeds the 32-bit size limit).
+	mdatDataOffset := int64(ftypSize) + int64(moovSize) + int64(mdatHeaderSize(payload))
 
 	// Write moov with correct stco chunk offset.
 	muxer.chunkOffset = mdatDataOffset
@@ -226,7 +237,7 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	}
 
 	// Write mdat box (strips VPS/SPS/PPS from samples — they are in hvcC only).
-	if err := writeCodecMdat(w, frames, ctx, isH265ParamSet); err != nil {
+	if err := writeCodecMdat(w, frames, payload, ctx, isH265ParamSet); err != nil {
 		f.Close()
 		os.Remove(outputPath)
 		return &MergeResult{Tier: TierGo, Error: err.Error()}, err

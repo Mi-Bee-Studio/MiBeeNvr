@@ -425,6 +425,7 @@ func (d *DB) ListPendingSegmentsForRolling(ctx context.Context, cameraID string,
 // for the given recording IDs, allowing them to be re-processed by rolling/periodic merge.
 // Returns the number of rows affected.
 func (d *DB) ResetFailedMergeStatus(ctx context.Context, ids []string) (int64, error) {
+	defer d.observeTxn(ctx, "merge_status", time.Now())
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -517,6 +518,7 @@ func (d *DB) ClearCameraMerge(ctx context.Context, cameraID string) error {
 // Replaces the former per-row ExecContext loop (N IDs = N round-trips) with at most
 // ceil(len(ids)/batchUpdateChunkSize) statements, all in one transaction.
 func (d *DB) SetMergeStatus(ctx context.Context, ids []string, status string) error {
+	defer d.observeTxn(ctx, "merge_status", time.Now())
 	if len(ids) == 0 {
 		return nil
 	}
@@ -545,6 +547,7 @@ func (d *DB) SetMergeStatus(ctx context.Context, ids []string, status string) er
 
 // SetMergeResult updates merge_status to 'merged' and sets merge_path, merge_tier, and merge_progress for a recording.
 func (d *DB) SetMergeResult(ctx context.Context, id string, mergePath, mergeTier string) error {
+	defer d.observeTxn(ctx, "merge_status", time.Now())
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE recordings SET merge_status=?, merge_path=?, merge_tier=?, merge_progress=? WHERE id=?;`,
 		model.MergeStatusMerged, mergePath, mergeTier, 100, id)
