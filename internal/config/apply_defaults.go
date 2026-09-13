@@ -532,6 +532,12 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Health.Rediscovery.MaxDuration == "" {
 		cfg.Health.Rediscovery.MaxDuration = "30s"
 	}
+	// Non-standard ONVIF port sweep (last-known port is always probed first;
+	// see rediscovery.Config.portsFor). 8080 covers MiBeeCam/Hisilicon-style
+	// devices, 8899 TVT/视通-style.
+	if len(cfg.Health.Rediscovery.ProbePorts) == 0 {
+		cfg.Health.Rediscovery.ProbePorts = []int{80, 8080, 8899}
+	}
 
 	// Auto-discover defaults. The feature itself defaults to OFF (see
 	// AutoDiscoverEnabled); these only apply when the user turns it on.

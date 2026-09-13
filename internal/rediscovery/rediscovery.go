@@ -74,6 +74,49 @@ type Config struct {
 	MaxParallel  int           // concurrent probes (default 16)
 	ProbeTimeout time.Duration // per-IP probe timeout (default 2s)
 	MaxDuration  time.Duration // bound on a full scan (default 30s)
+	// ProbePorts is the non-standard-port sweep list used on top of the
+	// camera's last-known port. Empty → defaultProbePorts. See portsFor.
+	ProbePorts []int
+}
+
+const (
+	// maxProbePorts caps the resolved port list. Every extra port multiplies
+	// the probe budget (candidates × ports) against MaxDuration, so a runaway
+	// list cannot silently turn one 30s scan into a multi-minute one on the
+	// RPi. Mirrors the probe_ports validation cap in internal/config.
+	maxProbePorts = 8
+)
+
+// defaultProbePorts is the sweep table used when probe_ports is not
+// configured: 80 (standard), 8080 (MiBeeCam / Hisilicon-style), 8899
+// (TVT/视通-style NVRs). Bounded on purpose — see maxProbePorts.
+var defaultProbePorts = []int{80, 8080, 8899}
+
+// portsFor resolves the ordered probe-port list for one scan: lastKnown (the
+// port parsed from the camera's stored endpoint) always first — a camera that
+// changed IP almost certainly kept its port — then the sweep list
+// (defaultProbePorts when ProbePorts is empty; an explicit ProbePorts list
+// REPLACES the default table since the user knows their network). Duplicates
+// are removed and the result is capped at maxProbePorts.
+func (c Config) portsFor(lastKnown int) []int {
+	ports := make([]int, 0, maxProbePorts)
+	ports = append(ports, lastKnown)
+	sweep := c.ProbePorts
+	if len(sweep) == 0 {
+		sweep = defaultProbePorts
+	}
+	seen := map[int]bool{lastKnown: true}
+	for _, p := range sweep {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		ports = append(ports, p)
+		if len(ports) >= maxProbePorts {
+			break
+		}
+	}
+	return ports
 }
 
 // FromConfig converts a config.RediscoveryConfig into a resolved Config with
@@ -86,6 +129,9 @@ func FromConfig(cfg config.RediscoveryConfig) Config {
 	}
 	if c.MaxParallel <= 0 {
 		c.MaxParallel = 16
+	}
+	if len(cfg.ProbePorts) > 0 {
+		c.ProbePorts = append([]int(nil), cfg.ProbePorts...)
 	}
 	return c
 }
@@ -156,9 +202,13 @@ func (e *Engine) DiscoverByStableID(ctx context.Context, cam config.CameraConfig
 
 	port := onvifPortFromEndpoint(cam.ONVIFEndpoint, cam.URL)
 
+	// Resolve the ordered port sweep: last-known port first, then the
+	// configured/default non-standard-port table (capped — see portsFor).
+	ports := e.cfg.portsFor(port)
+
 	// Build candidate hosts, de-duplicated, preserving priority order so the
 	// last-known host is probed first.
-	candidates := buildCandidates(cam, port)
+	candidates := buildCandidates(cam)
 
 	if len(candidates) == 0 {
 		return nil, ErrNotFound
@@ -170,24 +220,33 @@ func (e *Engine) DiscoverByStableID(ctx context.Context, cam config.CameraConfig
 
 	logger.Info("rediscovery scan starting",
 		"camera_id", cam.ID, "stable_id", want, "candidates", len(candidates),
-		"port", port, "max_parallel", e.cfg.MaxParallel)
+		"ports", ports, "max_parallel", e.cfg.MaxParallel)
 
-	match := e.scanFor(scanCtx, candidates, port, want)
-	if match == "" {
+	match := e.scanFor(scanCtx, candidates, ports, want)
+	if match.host == "" {
 		return nil, ErrNotFound
 	}
 	return &Result{
-		NewEndpoint: fmt.Sprintf("http://%s:%d/onvif/device_service", match, port),
-		NewHost:     match,
-		Port:        port,
+		NewEndpoint: fmt.Sprintf("http://%s:%d/onvif/device_service", match.host, match.port),
+		NewHost:     match.host,
+		Port:        match.port,
 	}, nil
 }
 
+// scanMatch is one confirmed device location: candidate host + the port its
+// ONVIF device service answered on.
+type scanMatch struct {
+	host string
+	port int
+}
+
 // scanFor probes every candidate concurrently and returns the first host whose
-// reported ONVIF serial equals want, or "" if none match within the context.
-func (e *Engine) scanFor(ctx context.Context, hosts []string, port int, want string) string {
+// reported ONVIF serial equals want, or the zero scanMatch if none match within
+// the context. Each host's port list is probed sequentially in the given order
+// (last-known port first), so per-host probe order is deterministic.
+func (e *Engine) scanFor(ctx context.Context, hosts []string, ports []int, want string) scanMatch {
 	sem := make(chan struct{}, e.cfg.MaxParallel)
-	results := make(chan string, len(hosts))
+	results := make(chan scanMatch, len(hosts))
 	var wg sync.WaitGroup
 
 	for _, h := range hosts {
@@ -205,34 +264,39 @@ func (e *Engine) scanFor(ctx context.Context, hosts []string, port int, want str
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			probeCtx, cancel := context.WithTimeout(ctx, e.cfg.ProbeTimeout)
-			defer cancel()
-
-			dev, err := e.probe(probeCtx, host, port, e.cfg.ProbeTimeout)
-			if err != nil || dev == nil {
-				return
-			}
-			// DiscoveredDevice.UUID holds the serial number on the unicast
-			// GetDeviceInformation fallback path (see internal/onvif/discovery.go).
-			// But on the WS-Discovery ProbeMatch path, UUID is the device's
-			// EndpointReference Address (an urn:uuid:...) and dev.Serial is empty.
-			// When that happens, re-fetch the real serial via GetDeviceInformation
-			// so the match below can succeed (issue #121: previously this host was
-			// silently skipped because UUID != serial).
-			if strings.TrimSpace(dev.Serial) == "" && e.confirm != nil {
-				// Use a fresh timeout budget independent of probeCtx (whose budget
-				// the probe above may have largely consumed), so the confirmation
-				// call is not starved.
-				confirmCtx, confirmCancel := context.WithTimeout(ctx, e.cfg.ProbeTimeout)
-				e.confirm(confirmCtx, dev)
-				confirmCancel()
-			}
-			// Match against EITHER UUID (GetDeviceInformation path) or Serial
-			// (ProbeMatch + confirmation path).
-			if strings.TrimSpace(dev.UUID) == want || strings.TrimSpace(dev.Serial) == want {
-				select {
-				case results <- host:
-				default:
+			for _, port := range ports {
+				if ctx.Err() != nil {
+					return
+				}
+				probeCtx, cancel := context.WithTimeout(ctx, e.cfg.ProbeTimeout)
+				dev, err := e.probe(probeCtx, host, port, e.cfg.ProbeTimeout)
+				cancel()
+				if err != nil || dev == nil {
+					continue
+				}
+				// DiscoveredDevice.UUID holds the serial number on the unicast
+				// GetDeviceInformation fallback path (see internal/onvif/discovery.go).
+				// But on the WS-Discovery ProbeMatch path, UUID is the device's
+				// EndpointReference Address (an urn:uuid:...) and dev.Serial is empty.
+				// When that happens, re-fetch the real serial via GetDeviceInformation
+				// so the match below can succeed (issue #121: previously this host was
+				// silently skipped because UUID != serial).
+				if strings.TrimSpace(dev.Serial) == "" && e.confirm != nil {
+					// Use a fresh timeout budget independent of probeCtx (whose budget
+					// the probe above may have largely consumed), so the confirmation
+					// call is not starved.
+					confirmCtx, confirmCancel := context.WithTimeout(ctx, e.cfg.ProbeTimeout)
+					e.confirm(confirmCtx, dev)
+					confirmCancel()
+				}
+				// Match against EITHER UUID (GetDeviceInformation path) or Serial
+				// (ProbeMatch + confirmation path).
+				if strings.TrimSpace(dev.UUID) == want || strings.TrimSpace(dev.Serial) == want {
+					select {
+					case results <- scanMatch{host: host, port: port}:
+					default:
+					}
+					return
 				}
 			}
 		}(h)
@@ -243,16 +307,17 @@ func (e *Engine) scanFor(ctx context.Context, hosts []string, port int, want str
 	return firstHit(results)
 }
 
-func firstHit(results <-chan string) string {
-	for h := range results {
-		return h
+func firstHit(results <-chan scanMatch) scanMatch {
+	for m := range results {
+		return m
 	}
-	return ""
+	return scanMatch{}
 }
 
 // onvifPortFromEndpoint derives the ONVIF port from the configured endpoint(s).
 // Defaults to 80 when not specified. The ONVIF port is usually fixed per device
-// regardless of which IP it gets, so the last-known port is reused on the new IP.
+// regardless of which IP it gets, so the last-known port is tried first on the
+// new IP (see portsFor for the non-standard-port sweep behind it).
 func onvifPortFromEndpoint(onvifEndpoint, fallbackURL string) int {
 	for _, raw := range []string{onvifEndpoint, fallbackURL} {
 		raw = strings.TrimSpace(raw)

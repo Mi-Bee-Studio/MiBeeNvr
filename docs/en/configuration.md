@@ -1144,6 +1144,12 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Description**: While a camera is blacklisted, re-attempt IP rediscovery every N minutes. Without this, a camera that comes back online mid-blacklist (e.g. power restored) is not recovered until the full `blacklist_hours` elapses — rediscovery only scanned once at the blacklist moment. Each rescan is a bounded network sweep (≤30s, ≤16 parallel probes). Set to 0 to disable (legacy single-scan behavior).
 - **Example**: `5`, `10`, `0` (disabled)
 
+### `health.rediscovery.probe_ports`
+- **Type**: integer list
+- **Default**: `[80, 8080, 8899]`
+- **Description**: Non-standard ONVIF port sweep for IP self-healing. The camera's last-known port (parsed from its stored endpoint, default 80) is ALWAYS probed first; after that, each candidate host is also probed on this list — so a camera whose ONVIF service runs on a non-standard port (e.g. 8080 on MiBeeCam/Hisilicon-style devices, 8899 on TVT-style) is still relocated after an IP change even when its stored endpoint carries no port. An explicit list replaces the defaults. Capped at 8 entries: every extra port multiplies probe cost (candidates × ports) against `max_duration`.
+- **Example**: `[80, 8080, 8899]`, `[80, 8080]`
+
 ## Auto-Discover Configuration
 
 When enabled, the NVR discovers ONVIF cameras joining the LAN in the background and enrolls them automatically — no manual "scan" button needed (Hikvision-NVR-style plug-and-play). **Off by default**; opt in explicitly.

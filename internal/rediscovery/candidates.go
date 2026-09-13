@@ -15,7 +15,7 @@ import (
 // Only IPv4 hosts are emitted (ONVIF unicast probing is IPv4-oriented; the
 // public probe API validates IPs via net.ParseIP). Network and broadcast
 // addresses are skipped.
-func buildCandidates(cam config.CameraConfig, _ int) []string {
+func buildCandidates(cam config.CameraConfig) []string {
 	seen := make(map[string]struct{})
 	var out []string
 
