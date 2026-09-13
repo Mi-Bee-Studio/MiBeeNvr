@@ -275,6 +275,8 @@ A `config.Validate()` warning fires when the global value is below 60s and
 at least one continuous-mode camera has no override — `mibee-nvr
 validate-config` surfaces it too.
 
+> For systematic storage & memory tuning (fsync durability tiers, preallocation, GOMEMLIMIT, background I/O budgeting) see [Performance Tuning](performance.md).
+
 ### `storage.db_path`
 - **Type**: string
 - **Optional**: yes

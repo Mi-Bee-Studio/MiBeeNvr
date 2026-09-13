@@ -115,4 +115,5 @@ This exposes `/debug/pprof/*` (CPU/heap/goroutine profiles). The endpoint sits b
 
 - [metrics.md](metrics.md) — full Prometheus metric reference
 - [configuration.md](configuration.md) — `observability` settings
+- [performance.md](performance.md) — memory tiering & background I/O budgeting (incl. the `nvr_iobudget_*` / `nvr_memlimit_bytes` metrics)
 - [troubleshooting.md](troubleshooting.md) — common problems
