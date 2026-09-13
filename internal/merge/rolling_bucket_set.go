@@ -137,6 +137,26 @@ func (r *RollingMergeCoordinator) finalizeBucketLocked(cameraID string, b *bucke
 		"lifetime_s", lifetime.Seconds())
 }
 
+// dropBuckets removes a camera's entire retained set, accounting every
+// bucket as finalized under reason. The batch paths (2+ segments in one
+// debounce dispatch, backfill batches) produce standalone outputs covering
+// the timeline — retained buckets must not be appended over (double
+// coverage), and the finalize metric must not undercount: in production the
+// periodic backfill is the dominant eviction path (#764 follow-up).
+func (r *RollingMergeCoordinator) dropBuckets(cameraID, reason string) {
+	setAny, ok := r.buckets.LoadAndDelete(cameraID)
+	if !ok {
+		return
+	}
+	set := setAny.(*cameraBucketSet)
+	now := r.now()
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	for _, b := range set.buckets {
+		r.finalizeBucketLocked(cameraID, b, reason, now)
+	}
+}
+
 // dropBucketIfEmpty removes a bucket from its camera's set when a failed
 // merge left it in the never-created state (no file, no row). Keeping it
 // would waste a retention slot on a phantom bucket that can never match a

@@ -112,8 +112,10 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 					"camera_id", cameraID, "error", err)
 			}
 			// Backfill batches also bypass the in-memory bucket state (see
-			// mergeSegments) — drop any stale bucket to avoid double coverage.
-			r.buckets.Delete(cameraID)
+			// mergeSegments) — drop the retained set to avoid double coverage,
+			// with finalize accounting (this path runs every sweep in
+			// production and dominates eviction).
+			r.dropBuckets(cameraID, "batch_reset")
 			merged += n
 
 			rollingLogger.Info("backfill MP4 progress",
