@@ -41,3 +41,37 @@ func TestRunFree_PixgateHubResolverWired(t *testing.T) {
 		t.Fatal("pixgate manager has no hub resolver wired: sampler would keep its own RTSP pull + full-stream decode")
 	}
 }
+
+// TestRunFree_PixgateMetricsWired guards the #786 wiring: the sampler's
+// Prometheus telemetry (heartbeat + counters) must be handed the app metrics
+// instance. A deployed build silently ran with Config.Metrics=nil — samples
+// kept flowing (journal stats lines) while every nvr_pixgate_* series stayed
+// empty, exactly the observability gap the metrics exist to close.
+func TestRunFree_PixgateMetricsWired(t *testing.T) {
+	t.Helper()
+	cfg, _ := minimalConfig(t)
+	cfg.Cameras = []config.CameraConfig{{
+		ID:       "pg-cam",
+		Protocol: "rtsp",
+		Encoding: "h264",
+		URL:      "rtsp://127.0.0.1:1/sub",
+		Pixgate:  &config.CameraPixgateConfig{Enabled: true},
+	}}
+
+	a, err := RunFree(cfg, filepath.Join(cfg.Storage.RootDir, "mibee-nvr.yaml"))
+	if err != nil {
+		t.Fatalf("RunFree: %v", err)
+	}
+
+	svc := a.Get("pixgate")
+	if svc == nil {
+		t.Fatal("pixgate service not registered")
+	}
+	m, ok := svc.(*pixgate.Manager)
+	if !ok {
+		t.Fatalf("pixgate service is %T, want *pixgate.Manager", svc)
+	}
+	if !m.MetricsWired() {
+		t.Fatal("pixgate manager has no Metrics wired: nvr_pixgate_* series stay empty while the sampler runs")
+	}
+}

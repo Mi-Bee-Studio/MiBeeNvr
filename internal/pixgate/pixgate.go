@@ -692,3 +692,11 @@ func ffmpegArgs(target Target, fps float64) []string {
 func (m *Manager) HasHubResolver() bool {
 	return m.cfg.HubResolver != nil
 }
+
+// MetricsWired reports whether Prometheus telemetry is wired — observable
+// wiring guard (#786 follow-up: the field silently defaulted to nil in a
+// deployed build while samples kept flowing, leaving the heartbeat gauges
+// empty).
+func (m *Manager) MetricsWired() bool {
+	return m.cfg.Metrics != nil
+}

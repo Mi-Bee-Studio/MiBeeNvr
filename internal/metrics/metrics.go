@@ -760,6 +760,17 @@ func NewMetrics() *Metrics {
 		codecProbeTotal,
 		codecProbeDurationSeconds,
 		resolvedEncoding,
+
+		// Rolling bucket retention (#764) + pixgate sampler telemetry (#699).
+		// These were shipped UNREGISTERED in #783/#786 — the collectors
+		// counted silently while /metrics never exposed them (guarded by
+		// TestNewMetrics_RegistersRecentCollectors).
+		rollingBucketFinalizedTotal,
+		rollingBucketLifetimeSeconds,
+		pixgateSamplesTotal,
+		pixgateTriggersTotal,
+		pixgateLastAreaPct,
+		pixgateLastSampleTimestamp,
 	)
 
 	return &Metrics{
