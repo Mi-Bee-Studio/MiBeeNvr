@@ -513,6 +513,16 @@ func validateConfigDetails(cfg *Config) error {
 		if cfg.Merge.RollingBackfillConcurrency < 0 || cfg.Merge.RollingBackfillConcurrency > 16 {
 			return fmt.Errorf("merge.rolling_backfill_concurrency must be between 0 (auto) and 16, got %d", cfg.Merge.RollingBackfillConcurrency)
 		}
+		// Bucket retention (#764): retain is a small per-camera bucket count
+		// (each retains an open merge state); TTL "0" disables idle eviction.
+		if cfg.Merge.RollingBucketRetain < 0 || cfg.Merge.RollingBucketRetain > 8 {
+			return fmt.Errorf("merge.rolling_bucket_retain must be between 0 (default) and 8, got %d", cfg.Merge.RollingBucketRetain)
+		}
+		if cfg.Merge.RollingBucketIdleTTL != "" && cfg.Merge.RollingBucketIdleTTL != "0" {
+			if d, err := time.ParseDuration(cfg.Merge.RollingBucketIdleTTL); err != nil || d <= 0 {
+				return fmt.Errorf("invalid merge.rolling_bucket_idle_ttl %q: must be a positive duration or \"0\" to disable", cfg.Merge.RollingBucketIdleTTL)
+			}
+		}
 	}
 	// Validate transcoding configuration
 	if cfg.Transcoding.MaxWorkers < 1 || cfg.Transcoding.MaxWorkers > 4 {

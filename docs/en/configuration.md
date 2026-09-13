@@ -65,6 +65,8 @@ merge:
   batch_limit: 200
   min_segment_age: "10m"
   min_segments_to_merge: 3
+  rolling_bucket_retain: 2       # buckets kept per camera, keyed by parameter set (#764)
+  rolling_bucket_idle_ttl: "10m" # finalize a bucket with no append for this long; "0" disables
 ftp:
   enabled: true
   port: 2121
@@ -775,6 +777,19 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Default**: 3
 - **Description**: Minimum number of segments required to trigger a merge
 - **Example**: `2`, `3`, `5`
+
+### `merge.rolling_bucket_retain`
+- **Type**: integer
+- **Default**: 2
+- **Range**: 0-8 (0 = default)
+- **Description**: How many rolling-merge buckets a camera keeps alive, keyed by parameter set. Cameras oscillating between quality tiers (e.g. Xiaomi HD/SD flapping during reconnect storms) alternate two SPS/PPS keys; retention makes flipping back **append** to the existing bucket instead of finalizing + re-creating it — eliminating the micro-merge storm of tiny output files. `2` covers exactly the HD/SD pair; `1` restores the legacy single-bucket behavior
+- **Example**: `1`, `2`, `3`
+
+### `merge.rolling_bucket_idle_ttl`
+- **Type**: string (duration)
+- **Default**: `"10m"`
+- **Description**: Finalizes a retained bucket that received no append for this long — the camera settled on one quality tier or stopped recording, so the bucket will not be resumed. `"0"` disables idle eviction (capacity-based eviction only)
+- **Example**: `"10m"`, `"30m"`, `"0"`
 
 ## FTP Configuration
 

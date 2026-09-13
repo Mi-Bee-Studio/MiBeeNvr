@@ -381,77 +381,16 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	cfg := r.resolveRollingConfig(seg.cameraID)
 	windowStart, windowEnd := computeWindow(seg.startedAt, cfg.Window)
 
-	// Get or create the bucket for this camera.
-	bucketAny, _ := r.buckets.LoadOrStore(seg.cameraID, &bucketInfo{
-		windowStart: windowStart,
-		windowEnd:   windowEnd,
-	})
-	bucket := bucketAny.(*bucketInfo)
+	// Select the bucket with the retention policy (#764): a retained bucket
+	// with this exact key (params + audio + window) is resumed — flipping
+	// back to a previous quality tier APPENDS instead of finalizing + re-
+	// creating. Window rollover, SPS/PPS change, audio change and the size
+	// limit are all selection mismatches now; the matched-at-size-limit case
+	// size-rolls inside selectBucket.
+	bucket := r.selectBucket(seg.cameraID, spsKey, audioKey, windowStart, windowEnd, newInfo.MdatSize, cfg)
 
 	bucket.mu.Lock()
 	defer bucket.mu.Unlock()
-
-	// Check for window rollover, SPS/PPS change, or size limit → close old
-	// bucket, start new.
-	needNewBucket := false
-	if bucket.mergedFilePath != "" {
-		if !seg.startedAt.Before(bucket.windowEnd) && !seg.startedAt.Equal(bucket.windowStart) {
-			// Segment is in a new window — the old bucket is complete.
-			rollingLogger.Debug("window rollover, finalizing bucket",
-				"camera_id", seg.cameraID,
-				"old_window_end", bucket.windowEnd,
-				"new_window_start", windowStart)
-			needNewBucket = true
-		} else if bucket.spsKey != spsKey {
-			// Codec params changed (camera reconnect) — incompatible merge.
-			rollingLogger.Info("SPS/PPS changed, starting new bucket",
-				"camera_id", seg.cameraID,
-				"old_key", bucket.spsKey[:8],
-				"new_key", spsKey[:8])
-			needNewBucket = true
-		} else if bucket.audioKey != audioKey {
-			// Audio presence/config changed (audio_enabled toggled, G.711 ↔ AAC
-			// renegotiated). Merging across the boundary would trip the
-			// mixed-audio policy in MergeMP4Segments and drop audio — and the
-			// degraded bucket would poison every later append. Start a new
-			// bucket at the boundary instead: each side keeps its own intact
-			// audio state.
-			rollingLogger.Info("audio config changed, starting new bucket",
-				"camera_id", seg.cameraID,
-				"old_key", bucket.audioKey,
-				"new_key", audioKey)
-			needNewBucket = true
-		} else if bucket.mergedFileSize > 0 && bucket.mergedFileSize+newInfo.MdatSize > bucketSizeLimit {
-			// Bucket approaching the 4 GiB MP4 mdat hard limit. Finalize it
-			// and start a fresh bucket within the same window. Without this,
-			// high-bitrate cameras (2K云台 ~1.7MB/s → 6GB/hour) accumulate
-			// until MergeMP4Segments returns "mdat box size exceeds MaxUint32"
-			// and the segment is lost from the merge queue.
-			rollingLogger.Info("bucket size limit reached, starting new bucket",
-				"camera_id", seg.cameraID,
-				"bucket_size_mb", bucket.mergedFileSize>>20,
-				"new_segment_mb", newInfo.MdatSize>>20,
-				"limit_mb", bucketSizeLimit>>20,
-				"segment_count", bucket.segmentCount)
-			needNewBucket = true
-		}
-	}
-
-	if needNewBucket {
-		// The old bucket file is already finalized in the DB (each append updates it).
-		// Just reset the in-memory state to start fresh.
-		bucket.mergedFilePath = ""
-		bucket.mergedRecID = ""
-		bucket.spsKey = ""
-		bucket.audioKey = ""
-		bucket.segmentCount = 0
-		bucket.mergedFileSize = 0
-		bucket.wallDurSec = 0
-		bucket.fileDurSec = 0
-		bucket.wallFile = nil
-		bucket.windowStart = windowStart
-		bucket.windowEnd = windowEnd
-	}
 
 	// Perform the merge.
 	var outputPath string
@@ -485,6 +424,12 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	}
 
 	if err != nil {
+		// A failed create left a never-created bucket in the retained set —
+		// drop it so it doesn't waste a retention slot (it can never match a
+		// real segment: its keys are empty).
+		if bucket.mergedFilePath == "" && bucket.segmentCount == 0 {
+			r.dropBucketIfEmpty(seg.cameraID, bucket)
+		}
 		return err
 	}
 
@@ -494,6 +439,7 @@ func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendi
 	bucket.spsKey = spsKey
 	bucket.audioKey = audioKey
 	bucket.segmentCount++
+	bucket.lastAppend = r.now() // retention LRU/TTL clock (#764)
 	// Track merged file size for the bucketSizeLimit check on the next append.
 	// One stat per merged segment is cheap (the file was just written and its
 	// inode is hot in cache), and avoids the need to thread size through every

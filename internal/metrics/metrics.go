@@ -102,6 +102,11 @@ type Metrics struct {
 	// Rolling merge metrics (quasi-real-time, event-driven)
 	RollingMergeLatencySeconds *prometheus.HistogramVec // labels: camera_id — time from segment close to merge complete
 	RollingMergeBucketSegments *prometheus.GaugeVec     // labels: camera_id — segments in current bucket
+	// Rolling bucket retention (#764): finalizes per reason (idle_ttl /
+	// capacity_lru / size_limit) and bucket lifetime at finalize — the
+	// signals that verify quality-oscillating cameras stopped micro-merging.
+	RollingBucketFinalizedTotal  *prometheus.CounterVec   // labels: reason
+	RollingBucketLifetimeSeconds *prometheus.HistogramVec // labels: reason
 
 	// Memory self-discipline (#756): the GOMEMLIMIT installed at startup
 	// (0 = not set — env var won, disabled by config, or unknown host).
@@ -517,6 +522,15 @@ func NewMetrics() *Metrics {
 		Name: "nvr_rolling_merge_bucket_segments",
 		Help: "Number of segments accumulated in the current rolling merge window bucket.",
 	}, []string{"camera_id"})
+	rollingBucketFinalizedTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_rolling_merge_bucket_finalized_total",
+		Help: "Rolling buckets leaving the retained set, partitioned by reason (idle_ttl/capacity_lru/size_limit).",
+	}, []string{"reason"})
+	rollingBucketLifetimeSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "nvr_rolling_merge_bucket_lifetime_seconds",
+		Help:    "Wall time from bucket creation to finalize, partitioned by reason (#764).",
+		Buckets: []float64{1, 5, 15, 60, 300, 900, 3600, 21600},
+	}, []string{"reason"})
 
 	// Auth metrics — track login attempts for security monitoring
 	authAttemptsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -799,6 +813,8 @@ func NewMetrics() *Metrics {
 		MemorySoftLimitBytes:           memorySoftLimitBytes,
 		RollingMergeLatencySeconds:     rollingMergeLatencySeconds,
 		RollingMergeBucketSegments:     rollingMergeBucketSegments,
+		RollingBucketFinalizedTotal:    rollingBucketFinalizedTotal,
+		RollingBucketLifetimeSeconds:   rollingBucketLifetimeSeconds,
 		AuthAttemptsTotal:              authAttemptsTotal,
 		AuthRateLimitedTotal:           authRateLimitedTotal,
 		AIEventsReceivedTotal:          aiEventsReceivedTotal,
@@ -896,6 +912,19 @@ func (m *Metrics) UpdateRollingMergeBucketSegments(cameraID string, count int) {
 		return
 	}
 	m.RollingMergeBucketSegments.WithLabelValues(cameraID).Set(float64(count))
+}
+
+// RecordRollingBucketFinalized records a rolling bucket leaving the retained
+// set (#764) — reason is a bounded enum (idle_ttl/capacity_lru/size_limit),
+// lifetime is the wall time from bucket creation to finalize.
+func (m *Metrics) RecordRollingBucketFinalized(reason string, lifetime time.Duration) {
+	if m == nil || m.RollingBucketFinalizedTotal == nil {
+		return
+	}
+	m.RollingBucketFinalizedTotal.WithLabelValues(reason).Inc()
+	if m.RollingBucketLifetimeSeconds != nil {
+		m.RollingBucketLifetimeSeconds.WithLabelValues(reason).Observe(lifetime.Seconds())
+	}
 }
 
 // IncStorageWriteErrors increments the storage write errors counter.

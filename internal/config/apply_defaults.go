@@ -332,6 +332,16 @@ func applyConfigDefaults(cfg *Config) {
 		t := true
 		cfg.Merge.RollingEnabled = &t
 	}
+	// Bucket retention (#764): 2 covers the HD/SD quality pair of an
+	// oscillating camera; idle buckets are finalized after 10m without an
+	// append. Explicit rolling_bucket_retain: 1 is preserved (legacy
+	// single-bucket behavior).
+	if cfg.Merge.RollingBucketRetain <= 0 {
+		cfg.Merge.RollingBucketRetain = 2
+	}
+	if cfg.Merge.RollingBucketIdleTTL == "" {
+		cfg.Merge.RollingBucketIdleTTL = "10m"
+	}
 	// Backfill throttling — protects RPi 3B from an IO storm on the first boot
 	// after upgrading to a default-on rolling merge. MaxSegments caps the total
 	// rows loaded/merged at startup; MaxAge bounds it to recent segments so
