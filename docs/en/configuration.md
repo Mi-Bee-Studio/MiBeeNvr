@@ -461,7 +461,7 @@ cameras:
 - **Default**: `"avi"` (#761)
 - **Description**: Segment shape for MJPEG/JPEG cameras (rtsp+mjpeg, http_jpeg, ONVIF-JPEG). `"avi"` — one single-file AVI container per segment (the default; eliminates the per-frame-file metadata churn, turns recursive directory deletion into a single unlink, and slashes deep-scan/retention cost). `"dir"` — the legacy one-JPEG-file-per-frame directory form (explicit opt-out). Audio-enabled MJPEG cameras always record AVI regardless of this key. Changes apply on NVR restart. The old `http_jpeg_avi` key is deprecated — its value is no longer read (AVI IS the default; set `mjpeg_form: "dir"` for the directory form).
 - **Example**: `"avi"`, `"dir"`
-- **Existing segments**: directory-form history keeps playing/merging/cleaning unchanged — mixed forms coexist without migration.
+- **Existing segments**: directory-form history keeps playing/merging/cleaning unchanged — mixed forms coexist without migration. To converge them into container form, run `mibee-nvr repair mjpeg-containerize` (dry-run by default; `--execute` applies; `--camera`/`--limit` filters; `--keep-old` retains source dirs; each container is frame-verified before the DB row flips).
 
 ### `cameras[].hls_max_fps`
 - **Type**: integer
