@@ -115,4 +115,5 @@ observability:
 
 - [metrics.md](metrics.md) — 全部 Prometheus 指标明细
 - [configuration.md](configuration.md) — `observability` 配置项
+- [performance.md](performance.md) — 内存分层与后台 I/O 预算（含 `nvr_iobudget_*` / `nvr_memlimit_bytes` 指标）
 - [troubleshooting.md](troubleshooting.md) — 常见问题排查
