@@ -375,7 +375,7 @@ func MergeAVISegments(ctx context.Context, segments []*model.Recording, store *s
 	}
 
 	// ── Step 7: Atomic rename via CloseSegment. ──
-	if err := store.CloseSegment(tempPath, finalPath); err != nil {
+	if err := store.CloseSegmentMerged(tempPath, finalPath); err != nil {
 		os.Remove(tempPath)
 		return nil, nil, fmt.Errorf("close merged segment: %w", err)
 	}
