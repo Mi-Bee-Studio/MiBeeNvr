@@ -168,10 +168,27 @@ func (r *RollingMergeCoordinator) BackfillCamera(ctx context.Context, cameraID s
 			}
 		}
 		if len(failedIDs) > 0 {
+			// #788: this is the only merge entry point that historically did
+			// NOT hold the per-camera merge lock. The reset flips rows
+			// failed→pending and drops the retained bucket set while a live
+			// mergeOneSegment (mergeSegments holds this lock for every merge)
+			// may be mid-append: dropBuckets' finalize accounting reads bucket
+			// fields under set.mu that the merge writes under bucket.mu — no
+			// common lock, a -race-confirmed data race — and an in-flight
+			// append could resurrect the just-reset rows. Serialize with live
+			// merges by holding the same lock across the reset. It MUST be
+			// released before backfillCameraRecordings: backfillMP4 try-locks
+			// this very lock per batch and would skip everything if we still
+			// held it. Same blocking-with-deadline pattern as mergeSegments.
+			release, ok := r.acquireMergeLockBlocking(ctx, cameraID, 2*time.Minute)
+			if !ok {
+				return 0, fmt.Errorf("camera %s is busy merging; retry later", cameraID)
+			}
 			if err := storage.RetryOnBusy(ctx, func() error {
 				_, err := r.db.ResetFailedMergeStatus(ctx, failedIDs)
 				return err
 			}); err != nil {
+				release()
 				return 0, fmt.Errorf("reset failed status: %w", err)
 			}
 			// Clear the in-memory bucket state for this camera. The buckets may
@@ -182,6 +199,7 @@ func (r *RollingMergeCoordinator) BackfillCamera(ctx context.Context, cameraID s
 			// next selection can never resume an orphaned bucket, so the old
 			// per-bucket field reset is unnecessary.
 			r.dropBuckets(cameraID, "batch_reset")
+			release()
 		}
 	}
 

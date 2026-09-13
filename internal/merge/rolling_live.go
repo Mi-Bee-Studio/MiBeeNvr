@@ -323,6 +323,29 @@ func (r *RollingMergeCoordinator) acquireMergeLock(cameraID string) (release fun
 	return func() { l.mu.Unlock() }, true
 }
 
+// acquireMergeLockBlocking waits up to timeout for the per-camera merge lock
+// (500ms retry cadence; ctx cancels the wait). Returns the release func and
+// true, or nil/false on timeout/cancel — the caller decides whether skipping
+// is tolerable (mergeSegments: retry on the next segment) or an error
+// (BackfillCamera reset, #788).
+func (r *RollingMergeCoordinator) acquireMergeLockBlocking(ctx context.Context, cameraID string, timeout time.Duration) (release func(), ok bool) {
+	lockDeadline := time.Now().Add(timeout)
+	for {
+		release, ok := r.acquireMergeLock(cameraID)
+		if ok {
+			return release, true
+		}
+		if time.Now().After(lockDeadline) {
+			return nil, false
+		}
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
 // mergeOneSegment merges a single segment into the camera's current window bucket.
 
 // mergeOneSegment merges a single segment into the camera's current window bucket.

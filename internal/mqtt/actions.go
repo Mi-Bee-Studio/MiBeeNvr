@@ -16,6 +16,9 @@ import (
 type CameraLifecycle interface {
 	StartCamera(ctx context.Context, cameraID string) error
 	StopCamera(ctx context.Context, cameraID string) error
+	// ManualRecord arms a timed forced-recording window (#660) — segments are
+	// written for the duration even on recording_enabled=false cameras.
+	ManualRecord(ctx context.Context, cameraID string, d time.Duration) error
 }
 
 // SnapshotRunner captures a frame, persists it under the storage root, and
@@ -43,8 +46,8 @@ var actionLogger = slogx.Component("mqtt-trigger")
 // runs on its own goroutine: the paho message handler must never block
 // (internal/mqtt anti-pattern), and StartCamera dials the camera. The
 // snapshot action runs the SnapshotRunner (capture → persist → event, #656).
-func NewActionDispatcher(lifecycle CameraLifecycle, snap SnapshotRunner) func(cameraID, action string) {
-	return func(cameraID, action string) {
+func NewActionDispatcher(lifecycle CameraLifecycle, snap SnapshotRunner) func(cameraID, action string, duration time.Duration) {
+	return func(cameraID, action string, duration time.Duration) {
 		switch action {
 		case actionRecord, actionStop:
 			if lifecycle == nil {
@@ -56,7 +59,13 @@ func NewActionDispatcher(lifecycle CameraLifecycle, snap SnapshotRunner) func(ca
 				defer cancel()
 
 				var err error
-				if action == actionRecord {
+				if action == actionRecord && duration > 0 {
+					// Timed forced recording (#660): actual footage regardless
+					// of recording_enabled. A running camera is armed in
+					// place, so CameraAlreadyRunningError is not expected on
+					// this path.
+					err = lifecycle.ManualRecord(ctx, cameraID, duration)
+				} else if action == actionRecord {
 					err = lifecycle.StartCamera(ctx, cameraID)
 				} else {
 					err = lifecycle.StopCamera(ctx, cameraID)

@@ -180,7 +180,7 @@ type CameraManager struct {
 	motionSubErrors map[string]string
 	// motionAction is the shared trigger-dispatcher entry (#711) used for
 	// camera-side ONVIF MotionAlarm events; nil = motion actions dropped.
-	motionAction func(cameraID, action string)
+	motionAction func(cameraID, action string, duration time.Duration)
 	// eventSubscriberFactory overrides subscriber construction (test seam
 	// for the #711 motion wiring; nil = per-camera ONVIF client path).
 	eventSubscriberFactory func(ctx context.Context, cameraID string, cb onvif.EventCallback) (onvif.EventSubscriber, error)

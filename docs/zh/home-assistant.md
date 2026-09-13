@@ -93,7 +93,7 @@ mqtt:
   password: "mqtt_password"
 ```
 
-NVR 订阅 `mibee/trigger/{camera_id}`，支持 `record`（启动摄像头取流；是否写盘由相机「启用录制」开关决定）、`stop`（停止取流）与 `snapshot`（快照落盘并发布 `camera.snapshot` 事件）。HA 自动化示例：
+NVR 订阅 `mibee/trigger/{camera_id}`，支持 `record`（启动摄像头取流；是否写盘由相机「启用录制」开关决定，加 `duration` 可开限时强制录制窗口、不受开关限制）、`stop`（停止取流）与 `snapshot`（快照落盘并发布 `camera.snapshot` 事件）。HA 自动化示例（对仅直播相机建议带 `duration`，确保真正落盘，详见 [MQTT 集成](./mqtt-integration.md)）：
 
 ```yaml
 automation:
@@ -106,7 +106,7 @@ automation:
       - service: mqtt.publish
         data:
           topic: "mibee/trigger/front-door"
-          payload: '{"action": "record"}'
+          payload: '{"action": "record", "duration": "60s"}'
 ```
 
 ## 方案 C：状态回传（NVR → HA）

@@ -255,7 +255,7 @@ type Handler struct {
 	// triggerDispatcher maps a trigger action (record/stop/snapshot) to camera
 	// lifecycle ops (#709). The SAME func feeds the MQTT client — wired once
 	// in builders.go so HTTP webhook and MQTT triggers share semantics.
-	triggerDispatcher func(cameraID, action string)
+	triggerDispatcher func(cameraID, action string, duration time.Duration)
 	// gb28181Commander sends DeviceControl commands (#708 snapshot/record).
 	gb28181Commander gbCommander
 	// gb28181SnapMgr tracks on-demand snapshot sessions (#708).

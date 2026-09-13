@@ -90,7 +90,7 @@ func newDispatchRecorder() *dispatchRecorder {
 	return &dispatchRecorder{called: make(chan struct{}, 1)}
 }
 
-func (d *dispatchRecorder) record(cameraID, action string) {
+func (d *dispatchRecorder) record(cameraID, action string, _ time.Duration) {
 	d.mu.Lock()
 	d.calls = append(d.calls, [2]string{cameraID, action})
 	d.mu.Unlock()

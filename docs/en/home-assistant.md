@@ -93,7 +93,7 @@ mqtt:
   password: "mqtt_password"
 ```
 
-The NVR subscribes to `mibee/trigger/{camera_id}` and supports `record` (start recording), `stop` (stop recording), and `snapshot` (persist a snapshot and publish a `camera.snapshot` event). HA automation example:
+The NVR subscribes to `mibee/trigger/{camera_id}` and supports `record` (start the camera; whether segments are written follows the camera's `recording_enabled` toggle — add a `duration` to open a timed forced-recording window that ignores the toggle), `stop` (stop recording), and `snapshot` (persist a snapshot and publish a `camera.snapshot` event). HA automation example (prefer `duration` on live-only cameras so motion actually lands on disk — see [MQTT Integration](./mqtt-integration.md)):
 
 ```yaml
 automation:
@@ -106,7 +106,7 @@ automation:
       - service: mqtt.publish
         data:
           topic: "mibee/trigger/front-door"
-          payload: '{"action": "record"}'
+          payload: '{"action": "record", "duration": "60s"}'
 ```
 
 ## Option C: State Feed (NVR → HA)
