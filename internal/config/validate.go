@@ -380,6 +380,23 @@ func validateConfigDetails(cfg *Config) error {
 			return fmt.Errorf("remote_log.format must be \"jsonline\" or \"loki\", got %q", cfg.RemoteLog.Format)
 		}
 	}
+	// Memory self-discipline (#756): 0 = automatic heuristic; an explicit
+	// value must clear the runtime floor or the GC would thrash.
+	if cfg.Memory.SoftLimitBytes < 0 {
+		return fmt.Errorf("memory.soft_limit_bytes must be >= 0 (0 = automatic), got %d", cfg.Memory.SoftLimitBytes)
+	}
+	if cfg.Memory.SoftLimitBytes > 0 && cfg.Memory.SoftLimitBytes < 64<<20 {
+		return fmt.Errorf("memory.soft_limit_bytes %d is below the 64MiB runtime floor — raise it or use 0 (automatic)", cfg.Memory.SoftLimitBytes)
+	}
+	if p := cfg.Memory.AutoPhysicalPercent; p != 0 && (p < 5 || p > 95) {
+		return fmt.Errorf("memory.auto_physical_percent must be between 5 and 95, got %d", p)
+	}
+	if p := cfg.Memory.AutoCgroupPercent; p != 0 && (p < 5 || p > 100) {
+		return fmt.Errorf("memory.auto_cgroup_percent must be between 5 and 100, got %d", p)
+	}
+	if c := cfg.Memory.AutoCapBytes; c != 0 && c < 64<<20 {
+		return fmt.Errorf("memory.auto_cap_bytes %d is below the 64MiB runtime floor", c)
+	}
 	// IO budget (#751): 0 = disabled; negative values are configuration
 	// mistakes, not "more unlimited".
 	if cfg.IO.BudgetBytesPerSec < 0 {

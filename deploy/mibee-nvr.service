@@ -24,8 +24,18 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/mibee-nvr
-# Memory limit — uncomment for RPi 3B (905MB RAM)
-# MemoryMax=512M
+
+# Memory discipline (#756) — OPTIONAL outer safety net, left DISABLED by
+# default: these values are sized for the 512MiB design baseline (RPi-3B
+# class); enabling them verbatim on a bigger board (e.g. 4GB M5 with ~1.6GB
+# heap peaks) OOM-kills the service. The in-process GOMEMLIMIT (set
+# automatically at startup, see memory.* config) is the primary mechanism.
+# To enable per board, uncomment and size accordingly:
+#   1GB RAM board:  MemoryHigh=450M  MemoryMax=550M
+#   4GB RAM board:  MemoryHigh=1500M MemoryMax=2G
+# See docs: Performance Tuning > Memory Tiering.
+#MemoryHigh=450M
+#MemoryMax=550M
 
 [Install]
 WantedBy=multi-user.target

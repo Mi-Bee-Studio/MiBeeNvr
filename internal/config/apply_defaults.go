@@ -265,6 +265,17 @@ func applyConfigDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.Version) == "" {
 		cfg.Version = "1.0"
 	}
+	// Memory auto-heuristic defaults (#756): materialized so wiring code
+	// reads concrete values only — no magic constants outside config.
+	if cfg.Memory.AutoPhysicalPercent == 0 {
+		cfg.Memory.AutoPhysicalPercent = 45
+	}
+	if cfg.Memory.AutoCapBytes == 0 {
+		cfg.Memory.AutoCapBytes = 1 << 30
+	}
+	if cfg.Memory.AutoCgroupPercent == 0 {
+		cfg.Memory.AutoCgroupPercent = 80
+	}
 	// Merge defaults
 	if cfg.Merge.BatchLimit <= 0 {
 		cfg.Merge.BatchLimit = 200

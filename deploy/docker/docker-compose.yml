@@ -28,6 +28,14 @@ services:
     container_name: mibee-nvr
     restart: unless-stopped
 
+    # Memory discipline (#756) — uncomment and adjust per host RAM.
+    # The NVR sets a conservative internal GOMEMLIMIT automatically; these
+    # limits are the outer safety net (soft then hard). 512MiB-class values
+    # below match the RPi-3B design baseline; on a 4GB+ host use e.g.
+    #   mem_limit: 2g / memswap_limit: 2g   (compose v2 style)
+    #   or the deploy.resources block on Swarm.
+    # mem_limit: 550m
+
     # Uncomment the line below to use host networking.
     # This is required for ONVIF WS-Discovery auto-scan to work,
     # and may improve WebRTC/FLV streaming performance.
