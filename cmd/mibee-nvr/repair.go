@@ -50,6 +50,8 @@ func runRepair() int {
 		return runRepairReclaimOrphanMerges()
 	case "normalize-endpoints":
 		return runRepairNormalizeEndpoints()
+	case "mjpeg-containerize":
+		return runRepairMJPEGContainerize()
 	case "--help", "-h":
 		printRepairUsage()
 		return 0
@@ -195,6 +197,9 @@ Subcommands:
   normalize-endpoints   Canonicalize every camera's onvif_endpoint (elide default :80/:443,
                          lowercase scheme/host, strip trailing slash) so dedup queries match
                          across discovery paths. Fixes legacy rows written before #175.
+  mjpeg-containerize    Convert legacy dir-form MJPEG segments (one JPEG file per frame)
+                         into single-file AVI containers (#761), verifying each container
+                         before flipping the DB row; --keep-old retains the source dirs
 
 Common options:
   --dry-run      Report what would change without modifying (default)
