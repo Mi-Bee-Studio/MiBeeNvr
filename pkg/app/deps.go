@@ -14,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
@@ -63,6 +64,8 @@ type appDeps struct {
 	authMW       func(http.Handler) http.Handler
 	remoteLogH   *remotelog.Handler
 	appLoc       *time.Location
+	ioBudget     *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
+	unlinkBudget *iobudget.Bucket // recursive-deletion unlink guardrail (#755); nil = off
 
 	// Merge / transcode / timelapse
 	mergeMgr              *merge.MergeManager

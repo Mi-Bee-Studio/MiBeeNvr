@@ -479,7 +479,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			}
 			sampleAbsOffset := currentOffset + mdatDataStart
 
-			_, copyErr := copySampleData(src, out, s.Offset, int64(s.Size), buf)
+			_, copyErr := copySampleData(ctx, src, out, s.Offset, int64(s.Size), buf)
 			if copyErr != nil {
 				src.Close()
 				return stats, fmt.Errorf("copy sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
@@ -544,6 +544,10 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 						src.Close()
 						return stats, fmt.Errorf("read audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, err)
 					}
+					if err := waitIOBudget(ctx, int64(s.Size)); err != nil {
+						src.Close()
+						return stats, err
+					}
 					raw = append(raw, chunk...)
 				}
 				fadvise.DontNeed(src) // last consumer of this file is done
@@ -583,7 +587,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 				}
 				sampleAbsOffset := currentOffset + mdatDataStart
 
-				_, copyErr := copySampleData(src, out, s.Offset, int64(s.Size), buf)
+				_, copyErr := copySampleData(ctx, src, out, s.Offset, int64(s.Size), buf)
 				if copyErr != nil {
 					src.Close()
 					return stats, fmt.Errorf("copy audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
@@ -691,8 +695,11 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	return stats, nil
 }
 
-// copySampleData copies size bytes from src at offset to dst using the provided buffer.
-func copySampleData(src *os.File, dst io.Writer, offset, size int64, buf []byte) (int64, error) {
+// copySampleData copies size bytes from src at offset to dst using the
+// provided buffer. Each buffer-sized chunk is billed to the I/O budget (#751)
+// so a multi-GB merge under a small budget paces in fine-grained increments
+// (short waits, prompt ctx cancellation) instead of one long park.
+func copySampleData(ctx context.Context, src *os.File, dst io.Writer, offset, size int64, buf []byte) (int64, error) {
 	if _, err := src.Seek(offset, io.SeekStart); err != nil {
 		return 0, err
 	}
@@ -709,6 +716,9 @@ func copySampleData(src *os.File, dst io.Writer, offset, size int64, buf []byte)
 		}
 		if n == 0 {
 			break
+		}
+		if err := waitIOBudget(ctx, int64(n)); err != nil {
+			return written, err
 		}
 		nw, err := dst.Write(buf[:n])
 		if err != nil {

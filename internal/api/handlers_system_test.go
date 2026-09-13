@@ -429,10 +429,51 @@ func TestStreamingSettings_RTMPAndSRT(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
 	require.True(t, got.RTMP.Enabled)
 	require.Equal(t, 1936, got.RTMP.Port)
-	require.Equal(t, "front-door", got.RTMP.StreamKeys["cam-1"])
+	require.Equal(t, got.RTMP.StreamKeys["cam-1"], "front-door")
 	require.True(t, got.SRT.Enabled)
 	require.Equal(t, 9001, got.SRT.Port)
 	require.Equal(t, "cam-2", got.SRT.Streams[0].CameraID)
+}
+
+// TestStreamingSettings_HLSLowLatencyRoundTrip: the PUT persists the LL-HLS
+// flag and the GET reports the effective value; omitting the hls field from
+// the body leaves the stored value alone (the SPA panel saves without it,
+// #772).
+func TestStreamingSettings_HLSLowLatencyRoundTrip(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := newHandlerWithConfig(db, store, &config.Config{})
+
+	get := func(t *testing.T) bool {
+		t.Helper()
+		rr := doRequest(t, h.Routes(), "GET", "/api/settings/streaming", nil, "", "")
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			HLS struct {
+				LowLatency bool `json:"low_latency"`
+			} `json:"hls"`
+		}
+		require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+		return got.HLS.LowLatency
+	}
+
+	// Unset config → effective value is LL on (nil → true, #772 semantics).
+	require.True(t, get(t))
+
+	// Explicit false persists and round-trips.
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/streaming",
+		bytes.NewReader([]byte(`{"hls":{"low_latency":false}}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotNil(t, h.config.HLS.LowLatency)
+	require.False(t, *h.config.HLS.LowLatency)
+	require.False(t, get(t))
+
+	// A body without the hls section does not clobber the stored value.
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings/streaming",
+		bytes.NewReader([]byte(`{"webrtc":{"enabled":true}}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.False(t, get(t))
 }
 
 // --- handleStatsCameras tests ---

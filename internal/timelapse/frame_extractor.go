@@ -16,6 +16,7 @@
 package timelapse
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -51,8 +52,10 @@ func NewRecordingFrameExtractor() *RecordingFrameExtractor {
 // for H264/H265 MP4 files, frames are Annex-B NAL streams.
 //
 // Supported formats: model.FormatAVI, model.FormatH264, model.FormatH265.
+// ctx governs budget waits (#751) and aborts extraction promptly on cancel.
 // Returns the number of extracted frames and any error.
 func (e *RecordingFrameExtractor) ExtractFrames(
+	ctx context.Context,
 	filePath string,
 	format model.Format,
 	interval time.Duration,
@@ -67,13 +70,13 @@ func (e *RecordingFrameExtractor) ExtractFrames(
 
 	switch format {
 	case model.FormatAVI:
-		return e.extractAVI(filePath, interval, outputDir)
+		return e.extractAVI(ctx, filePath, interval, outputDir)
 	case model.FormatH264:
-		return e.extractMP4(filePath, false, interval, outputDir)
+		return e.extractMP4(ctx, filePath, false, interval, outputDir)
 	case model.FormatH265:
-		return e.extractMP4(filePath, true, interval, outputDir)
+		return e.extractMP4(ctx, filePath, true, interval, outputDir)
 	case model.FormatMJPEG:
-		return e.extractMJPEGDirRelative(filePath, interval, outputDir)
+		return e.extractMJPEGDirRelative(ctx, filePath, interval, outputDir)
 	default:
 		return 0, fmt.Errorf("unsupported format: %q", format)
 	}
@@ -122,6 +125,7 @@ func (s *FrameSampler) ShouldTake(ts time.Time) bool {
 // A recording that contributes zero frames (e.g. a disconnect fragment shorter
 // than the sampling interval) is NOT an error — (0, nil) is returned.
 func (e *RecordingFrameExtractor) ExtractWindowFrames(
+	ctx context.Context,
 	recPath string,
 	format model.Format,
 	recStart time.Time,
@@ -138,13 +142,13 @@ func (e *RecordingFrameExtractor) ExtractWindowFrames(
 
 	switch format {
 	case model.FormatMJPEG:
-		return e.extractMJPEGDirWindow(recPath, sampler, startIndex, outputDir)
+		return e.extractMJPEGDirWindow(ctx, recPath, sampler, startIndex, outputDir)
 	case model.FormatAVI:
-		return e.extractAVIWindow(recPath, recStart, sampler, startIndex, outputDir)
+		return e.extractAVIWindow(ctx, recPath, recStart, sampler, startIndex, outputDir)
 	case model.FormatH264:
-		return e.extractMP4Window(recPath, false, recStart, sampler, startIndex, outputDir)
+		return e.extractMP4Window(ctx, recPath, false, recStart, sampler, startIndex, outputDir)
 	case model.FormatH265:
-		return e.extractMP4Window(recPath, true, recStart, sampler, startIndex, outputDir)
+		return e.extractMP4Window(ctx, recPath, true, recStart, sampler, startIndex, outputDir)
 	default:
 		return 0, fmt.Errorf("unsupported format: %q", format)
 	}
@@ -157,8 +161,10 @@ type aviVideoFrame struct {
 }
 
 // collectAVIFrames reads all video chunks from an AVI file, returning them in
-// stream order plus the demuxer's dwMicroSecPerFrame.
-func collectAVIFrames(filePath string) ([]aviVideoFrame, int64, error) {
+// stream order plus the demuxer's dwMicroSecPerFrame. Chunk bytes are billed
+// to the I/O budget (#751) — this is the dominant read of the AVI extraction
+// path (the whole file is demuxed even though only sampled frames are kept).
+func collectAVIFrames(ctx context.Context, filePath string) ([]aviVideoFrame, int64, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open AVI: %w", err)
@@ -186,6 +192,9 @@ func collectAVIFrames(filePath string) ([]aviVideoFrame, int64, error) {
 			return nil, 0, fmt.Errorf("read AVI chunk: %w", err)
 		}
 		if chunk.Type == avi.ChunkVideo {
+			if err := waitIOBudget(ctx, int64(len(chunk.Data))); err != nil {
+				return nil, 0, err
+			}
 			frames = append(frames, aviVideoFrame{pts: chunk.PTS, data: chunk.Data})
 		}
 	}
@@ -195,8 +204,8 @@ func collectAVIFrames(filePath string) ([]aviVideoFrame, int64, error) {
 // extractAVI reads video chunks from an AVI file and extracts JPEG frames at
 // the given interval. Uses the AVI demuxer's dwMicroSecPerFrame to map chunk
 // positions to timestamps.
-func (e *RecordingFrameExtractor) extractAVI(filePath string, interval time.Duration, outputDir string) (int, error) {
-	frames, microSecPerFrame, err := collectAVIFrames(filePath)
+func (e *RecordingFrameExtractor) extractAVI(ctx context.Context, filePath string, interval time.Duration, outputDir string) (int, error) {
+	frames, microSecPerFrame, err := collectAVIFrames(ctx, filePath)
 	if err != nil {
 		return 0, err
 	}
@@ -225,8 +234,14 @@ func (e *RecordingFrameExtractor) extractAVI(filePath string, interval time.Dura
 
 	for _, fr := range frames {
 		if fr.pts >= nextTargetUs {
+			if err := ctx.Err(); err != nil {
+				return extracted, err
+			}
 			filename := fmt.Sprintf("frame_%06d.jpg", extracted+1)
 			framePath := filepath.Join(outputDir, filename)
+			if err := waitIOBudget(ctx, int64(len(fr.data))); err != nil {
+				return extracted, err
+			}
 			if err := os.WriteFile(framePath, fr.data, 0o644); err != nil {
 				return extracted, fmt.Errorf("write frame %d: %w", extracted+1, err)
 			}
@@ -245,8 +260,8 @@ func (e *RecordingFrameExtractor) extractAVI(filePath string, interval time.Dura
 // extractAVIWindow is the window-sampling variant of extractAVI: frame PTS are
 // offset by recStart into absolute time and tested against the shared sampler.
 // Zero extracted frames is not an error (short fragment).
-func (e *RecordingFrameExtractor) extractAVIWindow(recPath string, recStart time.Time, sampler *FrameSampler, startIndex int, outputDir string) (int, error) {
-	frames, _, err := collectAVIFrames(recPath)
+func (e *RecordingFrameExtractor) extractAVIWindow(ctx context.Context, recPath string, recStart time.Time, sampler *FrameSampler, startIndex int, outputDir string) (int, error) {
+	frames, _, err := collectAVIFrames(ctx, recPath)
 	if err != nil {
 		return 0, err
 	}
@@ -264,8 +279,14 @@ func (e *RecordingFrameExtractor) extractAVIWindow(recPath string, recStart time
 		if !sampler.ShouldTake(abs) {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return extracted, err
+		}
 		filename := fmt.Sprintf("frame_%06d.jpg", startIndex+extracted+1)
 		framePath := filepath.Join(outputDir, filename)
+		if err := waitIOBudget(ctx, int64(len(fr.data))); err != nil {
+			return extracted, err
+		}
 		if err := os.WriteFile(framePath, fr.data, 0o644); err != nil {
 			return extracted, fmt.Errorf("write frame %d: %w", startIndex+extracted+1, err)
 		}
@@ -331,7 +352,7 @@ func listMJPEGFrames(dirPath string) ([]mjpegFrameFile, error) {
 
 // writeSampledMJPEGFrames copies the sampled frames from dirPath into
 // outputDir with continuous numbering. Returns the number written.
-func writeSampledMJPEGFrames(dirPath string, frames []mjpegFrameFile, sampler *FrameSampler, startIndex int, outputDir string) (int, error) {
+func writeSampledMJPEGFrames(ctx context.Context, dirPath string, frames []mjpegFrameFile, sampler *FrameSampler, startIndex int, outputDir string) (int, error) {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return 0, fmt.Errorf("create output dir: %w", err)
 	}
@@ -344,6 +365,9 @@ func writeSampledMJPEGFrames(dirPath string, frames []mjpegFrameFile, sampler *F
 		if err != nil {
 			return extracted, fmt.Errorf("read frame %s: %w", fr.name, err)
 		}
+		if err := waitIOBudget(ctx, int64(len(data))); err != nil {
+			return extracted, err
+		}
 		filename := fmt.Sprintf("frame_%06d.jpg", startIndex+extracted+1)
 		if err := os.WriteFile(filepath.Join(outputDir, filename), data, 0o644); err != nil {
 			return extracted, fmt.Errorf("write frame %d: %w", startIndex+extracted+1, err)
@@ -355,13 +379,13 @@ func writeSampledMJPEGFrames(dirPath string, frames []mjpegFrameFile, sampler *F
 
 // extractMJPEGDirRelative is the legacy single-recording path: sampling is
 // anchored at the first frame's timestamp and steps by interval.
-func (e *RecordingFrameExtractor) extractMJPEGDirRelative(dirPath string, interval time.Duration, outputDir string) (int, error) {
+func (e *RecordingFrameExtractor) extractMJPEGDirRelative(ctx context.Context, dirPath string, interval time.Duration, outputDir string) (int, error) {
 	frames, err := listMJPEGFrames(dirPath)
 	if err != nil {
 		return 0, err
 	}
 	sampler := NewFrameSampler(interval, frames[0].ts, time.Time{})
-	extracted, err := writeSampledMJPEGFrames(dirPath, frames, sampler, 0, outputDir)
+	extracted, err := writeSampledMJPEGFrames(ctx, dirPath, frames, sampler, 0, outputDir)
 	if err != nil {
 		return extracted, err
 	}
@@ -373,12 +397,12 @@ func (e *RecordingFrameExtractor) extractMJPEGDirRelative(dirPath string, interv
 
 // extractMJPEGDirWindow is the window-sampling variant for MJPEG directories;
 // frame timestamps come from the filenames (absolute wall clock).
-func (e *RecordingFrameExtractor) extractMJPEGDirWindow(recPath string, sampler *FrameSampler, startIndex int, outputDir string) (int, error) {
+func (e *RecordingFrameExtractor) extractMJPEGDirWindow(ctx context.Context, recPath string, sampler *FrameSampler, startIndex int, outputDir string) (int, error) {
 	frames, err := listMJPEGFrames(recPath)
 	if err != nil {
 		return 0, err
 	}
-	return writeSampledMJPEGFrames(recPath, frames, sampler, startIndex, outputDir)
+	return writeSampledMJPEGFrames(ctx, recPath, frames, sampler, startIndex, outputDir)
 }
 
 // mp4SyncSample is a keyframe sample with its cumulative time in microseconds.
@@ -432,7 +456,7 @@ func collectMP4Syncs(filePath string, isH265 bool) ([]mp4SyncSample, [][]byte, t
 //
 // Output frames are self-contained Annex-B NAL streams with parameter sets
 // prepended from the codec config, compatible with H264GoMerger/H265GoMerger.
-func (e *RecordingFrameExtractor) extractMP4(filePath string, isH265 bool, interval time.Duration, outputDir string) (int, error) {
+func (e *RecordingFrameExtractor) extractMP4(ctx context.Context, filePath string, isH265 bool, interval time.Duration, outputDir string) (int, error) {
 	syncs, paramSets, totalDur, err := collectMP4Syncs(filePath, isH265)
 	if err != nil {
 		return 0, err
@@ -471,7 +495,7 @@ func (e *RecordingFrameExtractor) extractMP4(filePath string, isH265 bool, inter
 
 	for _, sync := range syncs {
 		if sync.cumTimeUs >= nextTargetUs {
-			extracted, err = writeSyncFrame(f, sync, paramSets, isH265, ext, outputDir, extracted, 0)
+			extracted, err = writeSyncFrame(ctx, f, sync, paramSets, isH265, ext, outputDir, extracted, 0)
 			if err != nil {
 				return extracted, err
 			}
@@ -488,7 +512,7 @@ func (e *RecordingFrameExtractor) extractMP4(filePath string, isH265 bool, inter
 
 // writeSyncFrame reads one keyframe sample and writes it as an Annex-B frame
 // file with the given absolute index (startIndex+ordinal+1).
-func writeSyncFrame(f *os.File, sync mp4SyncSample, paramSets [][]byte, isH265 bool, ext, outputDir string, ordinal, startIndex int) (int, error) {
+func writeSyncFrame(ctx context.Context, f *os.File, sync mp4SyncSample, paramSets [][]byte, isH265 bool, ext, outputDir string, ordinal, startIndex int) (int, error) {
 	// Read the sample data at its offset (length-prefixed NALUs).
 	sampleData := make([]byte, sync.size)
 	if _, err := f.ReadAt(sampleData, sync.offset); err != nil {
@@ -499,6 +523,9 @@ func writeSyncFrame(f *os.File, sync mp4SyncSample, paramSets [][]byte, isH265 b
 	// duplicate param sets from the sample data).
 	frameData := buildAnnexBFrame(sampleData, paramSets, isH265)
 
+	if err := waitIOBudget(ctx, int64(len(frameData))); err != nil {
+		return ordinal, err
+	}
 	filename := fmt.Sprintf("frame_%06d%s", startIndex+ordinal+1, ext)
 	framePath := filepath.Join(outputDir, filename)
 	if err := os.WriteFile(framePath, frameData, 0o644); err != nil {
@@ -510,7 +537,7 @@ func writeSyncFrame(f *os.File, sync mp4SyncSample, paramSets [][]byte, isH265 b
 // extractMP4Window is the window-sampling variant of extractMP4: keyframe
 // cumulative times are offset by recStart into absolute time and tested
 // against the shared sampler. Zero extracted frames is not an error.
-func (e *RecordingFrameExtractor) extractMP4Window(recPath string, isH265 bool, recStart time.Time, sampler *FrameSampler, startIndex int, outputDir string) (int, error) {
+func (e *RecordingFrameExtractor) extractMP4Window(ctx context.Context, recPath string, isH265 bool, recStart time.Time, sampler *FrameSampler, startIndex int, outputDir string) (int, error) {
 	syncs, paramSets, _, err := collectMP4Syncs(recPath, isH265)
 	if err != nil {
 		return 0, err
@@ -541,7 +568,7 @@ func (e *RecordingFrameExtractor) extractMP4Window(recPath string, isH265 bool, 
 		if !sampler.ShouldTake(abs) {
 			continue
 		}
-		extracted, err = writeSyncFrame(f, sync, paramSets, isH265, ext, outputDir, extracted, startIndex)
+		extracted, err = writeSyncFrame(ctx, f, sync, paramSets, isH265, ext, outputDir, extracted, startIndex)
 		if err != nil {
 			return extracted, err
 		}

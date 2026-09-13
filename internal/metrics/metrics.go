@@ -92,6 +92,13 @@ type Metrics struct {
 	MergeSizeBytes       prometheus.Histogram
 	MergePendingSegments *prometheus.GaugeVec // labels: camera_id
 
+	// I/O budget metrics (#751) — background-work pacing. Labels:
+	// consumer (merge/cleanup/repair/timelapse — bounded enum, no free-form
+	// values). Zero forever when io.budget_bytes_per_sec is unset (off).
+	IOBudgetWaitSecondsTotal    *prometheus.CounterVec // labels: consumer — seconds background work spent parked on the shared budget
+	IOBudgetChargedBytesTotal   *prometheus.CounterVec // labels: consumer — bytes billed against the shared budget
+	IOBudgetChargedUnlinksTotal *prometheus.CounterVec // labels: consumer — files billed against the unlink guardrail (#755)
+
 	// Rolling merge metrics (quasi-real-time, event-driven)
 	RollingMergeLatencySeconds *prometheus.HistogramVec // labels: camera_id — time from segment close to merge complete
 	RollingMergeBucketSegments *prometheus.GaugeVec     // labels: camera_id — segments in current bucket
@@ -456,6 +463,18 @@ func NewMetrics() *Metrics {
 		Name: "nvr_merge_attempts_total",
 		Help: "Total number of merge attempts.",
 	})
+	ioBudgetWaitSecondsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_iobudget_wait_seconds_total",
+		Help: "Seconds background consumers (merge/cleanup/repair/timelapse) spent waiting on the shared I/O budget.",
+	}, []string{"consumer"})
+	ioBudgetChargedBytesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_iobudget_bytes_charged_total",
+		Help: "Bytes billed to the shared I/O budget per background consumer.",
+	}, []string{"consumer"})
+	ioBudgetChargedUnlinksTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_iobudget_unlinks_charged_total",
+		Help: "Files billed to the recursive-deletion unlink guardrail per consumer (#755).",
+	}, []string{"consumer"})
 	mergeSuccessesTotal := prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "nvr_merge_successes_total",
 		Help: "Total number of successful merges.",
@@ -652,6 +671,9 @@ func NewMetrics() *Metrics {
 		cameraReconnectAttemptsTotal,
 		cameraReconnectBackoffSeconds,
 		mergeAttemptsTotal,
+		ioBudgetWaitSecondsTotal,
+		ioBudgetChargedBytesTotal,
+		ioBudgetChargedUnlinksTotal,
 		mergeSuccessesTotal,
 		mergeFailuresTotal,
 		mergeDurationSeconds,
@@ -748,6 +770,9 @@ func NewMetrics() *Metrics {
 		CameraReconnectAttemptsTotal:   cameraReconnectAttemptsTotal,
 		CameraReconnectBackoffSeconds:  cameraReconnectBackoffSeconds,
 		MergeAttemptsTotal:             mergeAttemptsTotal,
+		IOBudgetWaitSecondsTotal:       ioBudgetWaitSecondsTotal,
+		IOBudgetChargedBytesTotal:      ioBudgetChargedBytesTotal,
+		IOBudgetChargedUnlinksTotal:    ioBudgetChargedUnlinksTotal,
 		MergeSuccessesTotal:            mergeSuccessesTotal,
 		MergeFailuresTotal:             mergeFailuresTotal,
 		MergeDurationSeconds:           mergeDurationSeconds,

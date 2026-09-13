@@ -16,6 +16,7 @@ type Config struct {
 	Cleanup       CleanupConfig       `yaml:"cleanup"`
 	Merge         MergeConfig         `yaml:"merge"`
 	Memory        MemoryConfig        `yaml:"memory"`
+	IO            IOConfig            `yaml:"io"`
 	Auth          AuthConfig          `yaml:"auth"`
 	FTP           FTPConfig           `yaml:"ftp"`
 	MQTT          MQTTConfig          `yaml:"mqtt"`

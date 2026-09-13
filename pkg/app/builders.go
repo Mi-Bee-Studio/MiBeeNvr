@@ -33,6 +33,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/memlimit"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -109,6 +110,47 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// Publish the GOMEMLIMIT applied by main.go (#756) — builders run after
 	// applyMemoryLimit, so the recorded value is final. Seam for wiring tests.
 	m.MemorySoftLimitBytes.Set(float64(memlimitAppliedFn()))
+	// Step 2.15: Shared background I/O budget (#751) — merge, cleanup and
+	// timelapse extraction pace their bulk I/O against one process-wide
+	// token bucket so foreground work (recording writes, API file serving,
+	// SQLite) keeps its latency on busy media. Off by default
+	// (io.budget_bytes_per_sec: 0 → nil bucket, every consumer's fast path
+	// is a nil check). Cleanup receives it at Step 8 (manager construction);
+	// merge/timelapse are package-level setters applied here, before any of
+	// their managers exist.
+	ioBudget := iobudget.New(cfg.IO.BudgetBytesPerSec, cfg.IO.BudgetBurstBytes,
+		iobudget.WithObservers(
+			func(consumer string, d time.Duration) {
+				m.IOBudgetWaitSecondsTotal.WithLabelValues(consumer).Add(d.Seconds())
+			},
+			func(consumer string, n int64) {
+				m.IOBudgetChargedBytesTotal.WithLabelValues(consumer).Add(float64(n))
+			},
+		))
+	merge.SetIOBudget(ioBudget)
+	timelapse.SetIOBudget(ioBudget)
+	deps.ioBudget = ioBudget
+	if ioBudget != nil {
+		slog.Info("background I/O budget enabled",
+			"bytes_per_sec", cfg.IO.BudgetBytesPerSec, "burst_bytes", cfg.IO.BudgetBurstBytes)
+	}
+
+	// Unlink guardrail (#755): per-FILE rate limit for recursive frame-tree
+	// deletion, active only with the byte budget (replaces the fixed
+	// 200-files/200ms time-slice so fast media sprints and busy media backs
+	// off). Default tier 200 unlink/s per the #748 jbd2-saturation lesson.
+	if ioBudget != nil {
+		unlinkRate := cfg.IO.DeleteUnlinksPerSec // default 200 applied by config defaults
+		deps.unlinkBudget = iobudget.New(unlinkRate, unlinkRate,
+			iobudget.WithObservers(
+				func(consumer string, d time.Duration) {
+					m.IOBudgetWaitSecondsTotal.WithLabelValues(consumer).Add(d.Seconds())
+				},
+				func(consumer string, n int64) {
+					m.IOBudgetChargedUnlinksTotal.WithLabelValues(consumer).Add(float64(n))
+				},
+			))
+	}
 
 	// Step 2.1: Event bus
 	deps.eventBus = event.NewEventBus(64)
@@ -479,11 +521,13 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		hlsDataDir = filepath.Join(dd, "hls")
 	}
 	hlsMgr := hls.NewManagerWithOpts(context.Background(), hlsDataDir, cfg.HLS.WriteBufferSize, cfg.HLS.SegmentMaxSizeMB*1024*1024, cfg.HLS.SegmentCount, m)
-	// Low-Latency HLS is always enabled — the muxer supports fMP4 LL mode
-	// unconditionally. Whether a given browser can play a given codec over
-	// LL-HLS is a frontend concern (same browser-probe as HLS/FLV).
+	// Low-Latency HLS is wired to hls.low_latency (#772): it defaults to on
+	// (the SPA's hls.js mounts with lowLatencyMode and native iOS/AVPlayer
+	// players consume parts); an explicit `low_latency: false` switches egress
+	// to classic segment playlists (H264→MPEG-TS, H265→fMP4) for plain-HLS
+	// clients. Takes effect at startup.
 	partDur, _ := time.ParseDuration(cfg.HLS.PartMinDuration)
-	hlsMgr.SetLowLatency(true, partDur)
+	hlsMgr.SetLowLatency(cfg.HLS.LowLatencyEnabled(), partDur)
 	deps.hlsMgr = hlsMgr
 
 	// Step 7.5: WebRTC manager (H.264 only)
@@ -845,6 +889,12 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	// the opt-in delete_recordings_after_merge cleanup cannot saturate the
 	// ext4 journal (jbd2) and starve online recording IO (#748).
 	cleanupMgr.SetDirectoryDeleteThrottle(200, 200*time.Millisecond)
+	// Bill reclaim I/O to the shared background budget (#751) when enabled;
+	// the unlink guardrail replaces the fixed time-slice pacing above (#755).
+	if deps.ioBudget != nil {
+		cleanupMgr.SetIOBudget(deps.ioBudget)
+		cleanupMgr.SetUnlinkBudget(deps.unlinkBudget)
+	}
 	deps.cleanupMgr = cleanupMgr
 	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)
 

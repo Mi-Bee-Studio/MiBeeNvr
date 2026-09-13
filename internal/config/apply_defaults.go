@@ -217,7 +217,23 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.HLS.MaxStreams <= 0 {
 		cfg.HLS.MaxStreams = 4
 	}
-	// LL-HLS: low_latency defaults to false (zero value)
+	// LL-HLS defaults to on (#772): the muxer has run in LL mode since the
+	// feature landed (the config key was dead), and the SPA (hls.js
+	// lowLatencyMode) plus native iOS/AVPlayer players consume parts. An
+	// explicit `low_latency: false` selects classic segment playlists
+	// (H264→MPEG-TS, H265→fMP4) for plain-HLS clients; it takes effect after
+	// restart. The segment_count floor applies only to LL mode: when
+	// defaulting the flag on, raise an in-range count below the floor (3-6)
+	// instead of failing validation at startup — those deployments were
+	// already served LL with that count, and a wider live window is the safe
+	// migration. Out-of-range counts (<3) are left for Validate to reject.
+	if cfg.HLS.LowLatency == nil {
+		cfg.HLS.LowLatency = new(bool)
+		*cfg.HLS.LowLatency = true
+		if cfg.HLS.SegmentCount >= 3 && cfg.HLS.SegmentCount < 7 {
+			cfg.HLS.SegmentCount = 7
+		}
+	}
 	if strings.TrimSpace(cfg.HLS.PartMinDuration) == "" {
 		cfg.HLS.PartMinDuration = "200ms"
 	}
@@ -263,6 +279,18 @@ func applyConfigDefaults(cfg *Config) {
 	// Merge defaults
 	if cfg.Merge.BatchLimit <= 0 {
 		cfg.Merge.BatchLimit = 200
+	}
+	// IO budget defaults (#751): budget_bytes_per_sec stays 0 = disabled
+	// unless the operator opts in; burst defaults to one second of rate.
+	if cfg.IO.BudgetBytesPerSec > 0 {
+		if cfg.IO.BudgetBurstBytes == 0 {
+			cfg.IO.BudgetBurstBytes = cfg.IO.BudgetBytesPerSec
+		}
+		// Unlink guardrail default tier (#755): 200 files/s — the jbd2
+		// saturation lesson from #748. Explicit values win.
+		if cfg.IO.DeleteUnlinksPerSec == 0 {
+			cfg.IO.DeleteUnlinksPerSec = 200
+		}
 	}
 	if cfg.Merge.CheckInterval == "" {
 		cfg.Merge.CheckInterval = "1h"

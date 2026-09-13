@@ -43,7 +43,7 @@ func TestExtractorFadviseSequence(t *testing.T) {
 	defer restore()
 
 	extractor := NewRecordingFrameExtractor()
-	n, err := extractor.ExtractFrames(mp4Path, model.FormatH264, 200*time.Millisecond, outputDir)
+	n, err := extractor.ExtractFrames(t.Context(), mp4Path, model.FormatH264, 200*time.Millisecond, outputDir)
 	require.NoError(t, err)
 	require.Positive(t, n)
 

@@ -1,6 +1,6 @@
 # MQTT Integration
 
-MiBee NVR supports MQTT recording triggers and status publishing for smart home automation and event-driven recording. Incoming MQTT messages can start/stop camera recording; with status publishing enabled, health alerts and recording events are also pushed to MQTT.
+MiBee NVR supports MQTT recording triggers and status publishing for smart home automation and event-driven recording. Incoming MQTT messages can start/stop camera recording; with status publishing enabled, health alerts and recording events are also pushed to MQTT. For HTTP-only setups without an MQTT broker, see the [webhook trigger](webhook-integration.md).
 
 ## Overview
 

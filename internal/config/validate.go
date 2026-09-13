@@ -391,6 +391,23 @@ func validateConfigDetails(cfg *Config) error {
 	if c := cfg.Memory.AutoCapBytes; c != 0 && c < 64<<20 {
 		return fmt.Errorf("memory.auto_cap_bytes %d is below the 64MiB runtime floor", c)
 	}
+	// IO budget (#751): 0 = disabled; negative values are configuration
+	// mistakes, not "more unlimited".
+	if cfg.IO.BudgetBytesPerSec < 0 {
+		return fmt.Errorf("io.budget_bytes_per_sec must be >= 0 (0 disables budgeting), got %d", cfg.IO.BudgetBytesPerSec)
+	}
+	if cfg.IO.BudgetBurstBytes < 0 {
+		return fmt.Errorf("io.budget_burst_bytes must be >= 0 (0 defaults to one second of rate), got %d", cfg.IO.BudgetBurstBytes)
+	}
+	if cfg.IO.BudgetBytesPerSec == 0 && cfg.IO.BudgetBurstBytes > 0 {
+		return fmt.Errorf("io.budget_burst_bytes is set but io.budget_bytes_per_sec is 0 (disabled) — remove the burst or set a rate")
+	}
+	if cfg.IO.DeleteUnlinksPerSec < 0 {
+		return fmt.Errorf("io.delete_unlinks_per_sec must be >= 0 (0 = auto, 200/s default), got %d", cfg.IO.DeleteUnlinksPerSec)
+	}
+	if cfg.IO.BudgetBytesPerSec == 0 && cfg.IO.DeleteUnlinksPerSec > 0 {
+		return fmt.Errorf("io.delete_unlinks_per_sec is set but io.budget_bytes_per_sec is 0 (disabled) — the unlink guardrail only applies with a budget")
+	}
 	if cfg.Merge.Enabled {
 		if _, err := time.ParseDuration(cfg.Merge.CheckInterval); err != nil {
 			return fmt.Errorf("invalid merge check_interval: %w", err)
@@ -589,7 +606,7 @@ func validateConfigDetails(cfg *Config) error {
 		return fmt.Errorf("hls.max_streams must be between 1 and 20, got %d", cfg.HLS.MaxStreams)
 	}
 	// Validate LL-HLS configuration
-	if cfg.HLS.LowLatency {
+	if cfg.HLS.LowLatencyEnabled() {
 		if cfg.HLS.SegmentCount < 7 {
 			return fmt.Errorf("hls.segment_count must be >= 7 when low_latency is enabled, got %d", cfg.HLS.SegmentCount)
 		}

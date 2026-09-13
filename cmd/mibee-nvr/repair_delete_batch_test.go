@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,4 +212,172 @@ func TestRunRepairDeleteByFormat_ExecuteLargeSetEndState(t *testing.T) {
 	for i := range repairDeleteChunkSize + 10 {
 		require.NoFileExists(t, filepath.Join(dir, fmt.Sprintf("del_%04d.mp4", i)))
 	}
+}
+
+// --- I/O budget billing (#751) ---
+
+// fakeRepairBudget records Wait calls without blocking.
+type fakeRepairBudget struct {
+	mu     sync.Mutex
+	calls  []int64
+	consum []string
+}
+
+func (f *fakeRepairBudget) Wait(_ context.Context, consumer string, n int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, n)
+	f.consum = append(f.consum, consumer)
+	return nil
+}
+
+func (f *fakeRepairBudget) total() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var total int64
+	for _, n := range f.calls {
+		total += n
+	}
+	return total
+}
+
+// TestDeleteCandidatesInChunks_BudgetBillsFileSize: with a budget installed,
+// each reclaimed row bills its file size under the repair consumer.
+func TestDeleteCandidatesInChunks_BudgetBillsFileSize(t *testing.T) {
+	db, raw, recs := seedChunkTestDB(t, 5)
+	defer raw.Close()
+	defer db.Close()
+	// Give the seeded rows a nonzero size so the bill is observable.
+	var wantBilled int64
+	for i := range recs {
+		recs[i].FileSize = int64(1000 + i)
+		wantBilled += recs[i].FileSize
+	}
+
+	fb := &fakeRepairBudget{}
+	prev := repairIOBudget
+	repairIOBudget = fb
+	t.Cleanup(func() { repairIOBudget = prev })
+
+	deleted, failed, freed := deleteCandidatesInChunks(t.Context(), db, recs, func(int, int) {})
+	require.Equal(t, 5, deleted)
+	require.Zero(t, failed)
+	require.Equal(t, wantBilled, freed)
+	require.Equal(t, int64(wantBilled), fb.total(), "every reclaimed row's size billed to the budget")
+	require.Equal(t, "repair", fb.consum[0])
+}
+
+// TestDeleteCandidatesInChunks_NoBudgetUnchanged: nil budget (default) —
+// identical end state, zero billing.
+func TestDeleteCandidatesInChunks_NoBudgetUnchanged(t *testing.T) {
+	db, raw, recs := seedChunkTestDB(t, 3)
+	defer raw.Close()
+	defer db.Close()
+
+	require.Nil(t, repairIOBudget)
+	deleted, failed, _ := deleteCandidatesInChunks(t.Context(), db, recs, func(int, int) {})
+	require.Equal(t, 3, deleted)
+	require.Zero(t, failed)
+	require.Zero(t, countRowsLeft(t, raw))
+}
+
+// --- #755: fixed time-slice → budget replacement ---
+
+// TestDeleteCandidatesInChunks_SleepSkippedWhenBudgetOn: with a budget
+// installed the fixed inter-chunk sleep must be skipped (billing paces the
+// loop); without one (default) the legacy sleep stays.
+func TestDeleteCandidatesInChunks_SleepSkippedWhenBudgetOn(t *testing.T) {
+	sleepCalls := &atomic.Int64{}
+	prevSleep := repairChunkSleepFn
+	repairChunkSleepFn = func(ctx context.Context) {
+		sleepCalls.Add(1)
+		select {
+		case <-ctx.Done():
+		default:
+		}
+	}
+	t.Cleanup(func() { repairChunkSleepFn = prevSleep })
+
+	// Budget OFF (default): legacy sleep runs per chunk.
+	db1, raw1, recs1 := seedChunkTestDB(t, repairDeleteChunkSize+5)
+	prevBudget := repairIOBudget
+	repairIOBudget = nil
+	t.Cleanup(func() { repairIOBudget = prevBudget })
+	deleteCandidatesInChunks(t.Context(), db1, recs1, func(int, int) {})
+	require.Equal(t, int64(2), sleepCalls.Load(), "legacy pacing: one sleep per chunk")
+	db1.Close()
+	raw1.Close()
+
+	// Budget ON: no fixed sleep — billing paces instead.
+	sleepCalls.Store(0)
+	db2, raw2, recs2 := seedChunkTestDB(t, repairDeleteChunkSize+5)
+	fb := &fakeRepairBudget{}
+	repairIOBudget = fb
+	deleteCandidatesInChunks(t.Context(), db2, recs2, func(int, int) {})
+	require.Zero(t, sleepCalls.Load(), "fixed sleep must not run when budget paces")
+	require.Greater(t, fb.total(), int64(0), "budget billed in its place")
+	db2.Close()
+	raw2.Close()
+}
+
+// TestDeleteCandidatesInChunks_DirSortedReclaims: file reclaims visit
+// recordings grouped by directory (observable through billed FileSize
+// sequence — sizes unique per recording).
+func TestDeleteCandidatesInChunks_DirSortedReclaims(t *testing.T) {
+	// Build 3 recordings in interleaved dirs with unique sizes.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "mibee-nvr.db")
+	db, err := storage.New(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, db.Init(context.Background()))
+	raw, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	ctx := context.Background()
+	input := []struct {
+		id, rel string
+		size    int64
+	}{
+		{"a1", "cam1/h10/a1.mp4", 1001},
+		{"b1", "cam1/h11/b1.mp4", 2002},
+		{"a2", "cam1/h10/a2.mp4", 3003},
+	}
+	var recs []model.Recording
+	for _, in := range input {
+		f := filepath.Join(dir, in.rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(f), 0o755))
+		require.NoError(t, os.WriteFile(f, make([]byte, in.size), 0o644))
+		r := repairRec(in.id, "cam1", "h264", model.MergeStatusPending, old)
+		r.FilePath = f
+		r.FileSize = in.size
+		require.NoError(t, db.InsertRecording(ctx, r))
+		recs = append(recs, *r)
+	}
+
+	fb := &fakeRepairBudget{}
+	prev := repairIOBudget
+	repairIOBudget = fb
+	t.Cleanup(func() { repairIOBudget = prev })
+
+	deleteCandidatesInChunks(t.Context(), db, recs, func(int, int) {})
+
+	billed := fb.amounts()
+	require.Len(t, billed, 3)
+	pair := func(a, b int64) bool {
+		return (billed[0] == a && billed[1] == b) || (billed[0] == b && billed[1] == a)
+	}
+	require.True(t, pair(1001, 3003),
+		"reclaim order %v not directory-grouped (h10 pair must be adjacent)", billed)
+	db.Close()
+	raw.Close()
+}
+
+// amounts returns billed amounts in call order.
+func (f *fakeRepairBudget) amounts() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]int64, len(f.calls))
+	copy(out, f.calls)
+	return out
 }
