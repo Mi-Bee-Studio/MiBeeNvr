@@ -8,20 +8,27 @@ import (
 func TestPreallocDefaults(t *testing.T) {
 	cfg := &Config{}
 	applyConfigDefaults(cfg)
-	if !cfg.Storage.PreallocEnabled || cfg.Storage.PreallocHeadroomPercent != 10 ||
+	if cfg.Storage.PreallocEnabled == nil || !*cfg.Storage.PreallocEnabled ||
+		cfg.Storage.PreallocHeadroomPercent != 10 ||
 		cfg.Storage.PreallocMinBytes != 4<<20 || cfg.Storage.PreallocMaxBytes != 512<<20 {
 		t.Errorf("prealloc defaults = %v/%d/%d/%d, want true/10/4MiB/512MiB",
 			cfg.Storage.PreallocEnabled, cfg.Storage.PreallocHeadroomPercent,
 			cfg.Storage.PreallocMinBytes, cfg.Storage.PreallocMaxBytes)
 	}
 
-	// Explicit disable stays disabled.
+	// An explicit `prealloc_enabled: false` set ALONE must stay false — the
+	// pre-pointer version flipped it back on (bool zero-value ambiguity).
+	f := false
 	cfg = &Config{}
-	cfg.Storage.PreallocEnabled = false
-	cfg.Storage.PreallocHeadroomPercent = 10 // explicit any knob marks the section as set
+	cfg.Storage.PreallocEnabled = &f
 	applyConfigDefaults(cfg)
-	if cfg.Storage.PreallocEnabled {
-		t.Error("explicit prealloc_enabled=false must stay false")
+	if cfg.Storage.PreallocEnabled == nil || *cfg.Storage.PreallocEnabled {
+		t.Error("explicit prealloc_enabled=false must stay false even when set alone")
+	}
+
+	// Headroom still defaults while an explicit false is honored.
+	if cfg.Storage.PreallocHeadroomPercent != 10 {
+		t.Errorf("headroom default = %d, want 10", cfg.Storage.PreallocHeadroomPercent)
 	}
 }
 

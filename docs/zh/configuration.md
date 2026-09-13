@@ -185,6 +185,29 @@ version: "1.0"
 - **两档恒为 strict**: 合并产物、timelapse 产物、数据库（WAL+NORMAL）、配置写入——长期资产保留 fsync。
 - **适合谁**: 闪存板（SD/eMMC，每段 fsync 是延迟尖峰 + 写放大来源——13 路 × 30s 段 ≈ 每分钟 26 次 fsync）；连续录像的 HDD 阵列。
 - **示例**: 在 `storage:` 节下写 `durability: "relaxed"`。
+### `storage.prealloc_enabled`
+- **类型**: boolean
+- **默认**: `true`（不设置即视为开启）
+- **描述**: 录像段整段预分配（fallocate）——用上一段的实际大小估算本段大小并一次性预留连续磁盘区域，免去逐次追加的 inode 元数据事务，减少 SD/eMMC 写放大、提升合并/回放读取局部性。预分配只是提示不是上限，实际写入超出会照常增长；不支持 fallocate 的文件系统自动降级为普通追加写。设为 `false` 恢复纯追加写（重启生效）
+- **示例**: `true`, `false`
+
+### `storage.prealloc_headroom_percent`
+- **类型**: int
+- **默认**: `10`
+- **描述**: 预分配相对上一段大小的余量百分比（吸收码率漂移，避免段内再次增长）；范围 0–400
+- **示例**: `10`, `25`
+
+### `storage.prealloc_min_bytes`
+- **类型**: int
+- **默认**: `4194304`（4MiB）
+- **描述**: 预分配下限——上一段小于该值时跳过预分配（小段的 extent 抖动不值得折腾）；不得大于 `prealloc_max_bytes`
+- **示例**: `4194304`
+
+### `storage.prealloc_max_bytes`
+- **类型**: int
+- **默认**: `536870912`（512MiB）
+- **描述**: 单段预分配上限，防止病态大段把后续段的预留空间也撑爆
+- **示例**: `536870912`
 
 ### `storage.db_path`
 - **类型**: string

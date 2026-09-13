@@ -135,7 +135,10 @@ type StorageConfig struct {
 	Durability string `yaml:"durability"`
 	// Segment preallocation knobs (#757) — defaults materialized by config
 	// defaults; every value operator-tunable, nothing hardcoded in recorders.
-	PreallocEnabled         bool  `yaml:"prealloc_enabled"`          // default true; false restores pure append-write growth
+	// PreallocEnabled is a pointer so "unset" (default ON) is distinguishable
+	// from an explicit `prealloc_enabled: false` — same tri-state pattern as
+	// hls.low_latency (#772).
+	PreallocEnabled         *bool `yaml:"prealloc_enabled"`          // default true; explicit false restores pure append-write growth
 	PreallocHeadroomPercent int   `yaml:"prealloc_headroom_percent"` // default 10
 	PreallocMinBytes        int64 `yaml:"prealloc_min_bytes"`        // default 4MiB (below = skip)
 	PreallocMaxBytes        int64 `yaml:"prealloc_max_bytes"`        // default 512MiB

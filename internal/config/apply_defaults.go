@@ -276,11 +276,13 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Memory.AutoCgroupPercent == 0 {
 		cfg.Memory.AutoCgroupPercent = 80
 	}
-	// Segment preallocation defaults (#757).
-	if !cfg.Storage.PreallocEnabled && cfg.Storage.PreallocHeadroomPercent == 0 && cfg.Storage.PreallocMinBytes == 0 && cfg.Storage.PreallocMaxBytes == 0 {
-		// All-zero (unset section) = defaults on. An explicit false only
-		// reaches here together with other non-zero knobs, so it stays off.
-		cfg.Storage.PreallocEnabled = true
+	// Segment preallocation defaults (#757). nil (unset) = ON — the
+	// deployed behavior since the feature landed; an explicit false is
+	// preserved by the pointer (a bare `prealloc_enabled: false` must NOT
+	// be flipped back on).
+	if cfg.Storage.PreallocEnabled == nil {
+		cfg.Storage.PreallocEnabled = new(bool)
+		*cfg.Storage.PreallocEnabled = true
 	}
 	if cfg.Storage.PreallocHeadroomPercent == 0 {
 		cfg.Storage.PreallocHeadroomPercent = 10

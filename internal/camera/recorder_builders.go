@@ -297,6 +297,12 @@ func (cm *CameraManager) buildIngestRecorder(cam config.CameraConfig, segDur tim
 	})
 }
 
+// preallocEnabled resolves the tri-state prealloc switch (#757): nil
+// (config defaults materialize it to true) or true = enabled.
+func preallocEnabled(v *bool) bool {
+	return v == nil || *v
+}
+
 // preallocParamsFromConfig maps the storage.prealloc_* knobs onto the
 // recorder-side params (#757). Values are materialized by config defaults;
 // zero-value fields keep the recorder's documented defaults.
@@ -305,7 +311,7 @@ func preallocParamsFromConfig(cfg *config.Config) recorder.PreallocParams {
 		return recorder.PreallocParams{}
 	}
 	return recorder.PreallocParams{
-		Disabled:        !cfg.Storage.PreallocEnabled,
+		Disabled:        !preallocEnabled(cfg.Storage.PreallocEnabled),
 		HeadroomPercent: cfg.Storage.PreallocHeadroomPercent,
 		MinBytes:        cfg.Storage.PreallocMinBytes,
 		MaxBytes:        cfg.Storage.PreallocMaxBytes,
