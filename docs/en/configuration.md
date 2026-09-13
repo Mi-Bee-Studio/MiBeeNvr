@@ -85,7 +85,7 @@ hls:
   segment_max_size_mb: 10        # HLS segment max size in MB
   segment_count: 7               # Segments per stream (range: 3-10)
   max_streams: 4                 # Max concurrent streams (range: 1-20, RPi constraint: 4)
-  low_latency: false             # Enable Low-Latency HLS
+  low_latency: true              # Low-Latency HLS, on by default; false = classic segment playlists
   part_min_duration: "200ms"     # LL-HLS partial segment duration
 xiaomi:
   user_id: ""                    # Xiaomi account user ID (from auth response)
@@ -830,9 +830,14 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 
 ### `hls.low_latency`
 - **Type**: boolean
-- **Default**: `false`
-- **Description**: Enable Low-Latency HLS (LL-HLS) using partial segments for reduced latency
-- **Note**: Requires `segment_count` >= 7 when enabled
+- **Default**: `true` (leaving it unset counts as enabled)
+- **Description**: Enable Low-Latency HLS (LL-HLS) using partial segments for
+  reduced latency. Set `false` to serve classic segment-only playlists
+  (H.264 → MPEG-TS, H.265 → fMP4) for plain-HLS clients. Takes effect after
+  a restart
+- **Note**: Requires `segment_count` >= 7 when enabled (when `low_latency` is
+  unset and `segment_count` < 7, the defaults logic raises `segment_count`
+  to 7 automatically)
 - **Example**: `true`, `false`
 
 ### `hls.part_min_duration`
@@ -1499,7 +1504,7 @@ webdav:
   read_write: false
 hls:
   max_streams: 4
-  low_latency: false
+  low_latency: true
 streaming:
   webrtc:
     enabled: true

@@ -83,6 +83,12 @@ type streamEntry struct {
 	// the scan ran after EVERY successful frame write (20-30 fps × N cameras = a
 	// persistent directory-scan storm purely to collect segment-size metrics).
 	lastSegObserve time.Time
+	// Cached codec parameter sets: seeded at startStream from the recorder's
+	// snapshot (possibly SDP sprop-seeded) and refreshed by writeLoop when
+	// fresher in-band NALs appear. Owned by writeLoop after startStream
+	// returns (seed happens-before goroutine spawn); read on the same
+	// goroutine by withCachedParamSets and rebuildMuxer.
+	sps, pps, vps []byte
 }
 
 // segmentObserveInterval is the minimum interval between segment-directory scans for
@@ -224,6 +230,9 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		isH265:           isH265,
 		maxFPS:           maxFPS,
 		observedSegments: make(map[string]bool),
+		sps:              sps,
+		pps:              pps,
+		vps:              vps,
 	}
 	m.streams[cameraID] = entry
 
@@ -358,6 +367,13 @@ func extractParamSets(au [][]byte, isH265 bool) (vps, sps, pps []byte, ok bool) 
 func (m *Manager) rebuildMuxer(cameraID string, entry *streamEntry, au [][]byte) bool {
 	vps, sps, pps, ok := extractParamSets(au, entry.isH265)
 	if !ok {
+		// SDP-only cameras never carry parameter sets in-band (#772) —
+		// writeLoop normally injects the cache before we get here; the
+		// fallback covers any path that reaches rebuild without injection.
+		vps, sps, pps = entry.vps, entry.sps, entry.pps
+		ok = nalutil.HasCompleteParamSets([][]byte{vps, sps, pps}, entry.isH265)
+	}
+	if !ok {
 		hlsLogger.Warn("HLS rebuild: IDR frame missing parameter sets, waiting for next IDR",
 			"camera_id", cameraID, "consecutive_errors", entry.consecutiveErrors)
 		return false
@@ -381,6 +397,84 @@ func (m *Manager) rebuildMuxer(cameraID string, entry *streamEntry, au [][]byte)
 	}
 	hlsLogger.Info("HLS muxer rebuilt after transient failure", "camera_id", cameraID)
 	return true
+}
+
+// refreshParamCache updates the entry's cached parameter sets from in-band
+// NALs (SPS/PPS for H264, VPS/SPS/PPS for H265). In-band bytes are fresher
+// than the startStream seed — a mid-stream codec change lands here first and
+// the next injected IDR / muxer rebuild uses the new values. Called from
+// writeLoop only (cache owner).
+func refreshParamCache(entry *streamEntry, au [][]byte) {
+	if entry.isH265 {
+		vps, sps, pps := nalutil.ExtractParamSetsH265(au)
+		if vps != nil {
+			entry.vps = vps
+		}
+		if sps != nil {
+			entry.sps = sps
+		}
+		if pps != nil {
+			entry.pps = pps
+		}
+		return
+	}
+	sps, pps := nalutil.ExtractParamSetsH264(au)
+	if sps != nil {
+		entry.sps = sps
+	}
+	if pps != nil {
+		entry.pps = pps
+	}
+}
+
+// withCachedParamSets returns au with any missing parameter-set NALs prepended
+// from the entry cache so IDR access units are self-contained. Cameras that
+// signal parameters only via SDP sprop-parameter-sets (out-of-band, RFC 6184)
+// otherwise break the HLS muxer on every keyframe: gohlslib's DTS extractors
+// need the SPS inside the AU ("unable to extract DTS"), and the muxer dies into
+// the rebuild loop (#772). Same rationale as the RTSP egress writeParamSets
+// (internal/rtsp/server.go). The returned slice is freshly allocated — the
+// hub-shared backing array of the incoming AU is never mutated.
+func withCachedParamSets(au [][]byte, entry *streamEntry) [][]byte {
+	var haveVPS, haveSPS, havePPS bool
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		if entry.isH265 {
+			switch (nalu[0] >> 1) & 0x3F {
+			case 32:
+				haveVPS = true
+			case 33:
+				haveSPS = true
+			case 34:
+				havePPS = true
+			}
+		} else {
+			switch nalu[0] & 0x1F {
+			case 7:
+				haveSPS = true
+			case 8:
+				havePPS = true
+			}
+		}
+	}
+	pre := make([][]byte, 0, 3)
+	if entry.isH265 && !haveVPS && entry.vps != nil {
+		pre = append(pre, entry.vps)
+	}
+	if !haveSPS && entry.sps != nil {
+		pre = append(pre, entry.sps)
+	}
+	if !havePPS && entry.pps != nil {
+		pre = append(pre, entry.pps)
+	}
+	if len(pre) == 0 {
+		return au
+	}
+	out := make([][]byte, 0, len(pre)+len(au))
+	out = append(out, pre...)
+	return append(out, au...)
 }
 
 // StartSubStreamReader starts a separate RTSP connection to a sub-stream URL for HLS.
@@ -572,7 +666,8 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 		case <-ctx.Done():
 			return
 		case frame := <-entry.frameCh:
-			isIDR := isFirstNalIDR(frame.au, entry.isH265)
+			au := frame.au
+			isIDR := isFirstNalIDR(au, entry.isH265)
 			traceID := "no-trace"
 			if isIDR {
 				traceID = fmt.Sprintf("%s-%d", cameraID, frame.pts)
@@ -584,8 +679,17 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 				"stage", "hls_recv",
 				"is_idr", isIDR,
 			)
-			if waitForFirstIDR(frame.au, entry.isH265, &entry.idrReceived) {
+			if waitForFirstIDR(au, entry.isH265, &entry.idrReceived) {
 				continue
+			}
+			// Keep the entry's parameter-set cache fresh (in-band bytes are
+			// newer than the startStream seed on a codec change), then make
+			// IDR AUs self-contained: cameras that signal SPS/PPS only via
+			// SDP sprop (out-of-band, RFC 6184) otherwise fail gohlslib's
+			// DTS extraction on every keyframe (#772).
+			refreshParamCache(entry, au)
+			if isIDR {
+				au = withCachedParamSets(au, entry)
 			}
 			// Muxer may have been nilled by handleWriteError after a transient write
 			// failure (e.g. non-monotonic DTS from RTP packet loss). Rebuild it on
@@ -594,11 +698,11 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 				if !isIDR {
 					continue
 				}
-				if !m.rebuildMuxer(cameraID, entry, frame.au) {
+				if !m.rebuildMuxer(cameraID, entry, au) {
 					continue
 				}
 			}
-			if err := writeFrameToMuxer(entry.isH265, entry.mux, entry.track, frame.au, frame.pts, cameraID); err != nil {
+			if err := writeFrameToMuxer(entry.isH265, entry.mux, entry.track, au, frame.pts, cameraID); err != nil {
 				frametrace.LogDrop(
 					cameraID,
 					"trace_id", traceID,
@@ -1036,6 +1140,27 @@ func (m *Manager) GetStreamStatus(cameraID string) (active bool) {
 // Returns false if the stream is not active.
 // Includes a 30s timeout to prevent indefinite blocking when the muxer
 // has no segments (e.g. stale Hub consumer after idle eviction).
+// silentResponseWriter detects that gohlslib's request router served nothing.
+// Its server no-ops on filenames it never registered (only index.m3u8,
+// <id>_stream.m3u8 and segment/part file names exist), so an unknown path —
+// e.g. the stream.m3u8 name our docs once advertised — surfaced as
+// HTTP 200 with an empty body (#772). On a definitive zero-write completion
+// the caller turns this into a 404.
+type silentResponseWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (s *silentResponseWriter) WriteHeader(code int) {
+	s.wrote = true
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *silentResponseWriter) Write(b []byte) (int, error) {
+	s.wrote = true
+	return s.ResponseWriter.Write(b)
+}
+
 func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request) bool {
 	m.mu.RLock()
 	entry, ok := m.streams[cameraID]
@@ -1070,6 +1195,7 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 	defer cancel()
 
 	done := make(chan struct{})
+	zw := &silentResponseWriter{ResponseWriter: w}
 	go func() {
 		defer close(done)
 		// Recover from panics that occur when the HTTP handler context is
@@ -1082,11 +1208,17 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 					"camera_id", cameraID, "panic", rv)
 			}
 		}()
-		mux.Handle(w, r)
+		mux.Handle(zw, r)
 	}()
 
 	select {
 	case <-done:
+		// The muxer router completed without touching the writer: the
+		// requested file name is not one it serves. gohlslib silently
+		// no-ops here, which used to leak an empty 200 to the client (#772).
+		if !zw.wrote {
+			http.Error(w, "unknown HLS resource", http.StatusNotFound)
+		}
 		return true
 	case <-ctx.Done():
 		hlsLogger.Warn("HLS Handle timed out or cancelled", "camera_id", cameraID, "timeout", handleTimeout)

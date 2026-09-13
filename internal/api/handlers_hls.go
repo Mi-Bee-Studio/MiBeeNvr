@@ -174,11 +174,32 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	// ever authenticating anything but read-only media fetches. Re-issued on
 	// every playlist fetch, so players polling the playlist stay fresh.
 	setStreamCookieOnPlaylist(w, r, id)
+	// Legacy playlist-name aliases (#772): the API docs advertised
+	// stream.m3u8 through v0.12.0 (the muxer never served that name — the
+	// request surfaced as an empty 200), and playlist.m3u8 is the name most
+	// players guess first. The muxer registers only index.m3u8 and
+	// <id>_stream.m3u8, so rewrite the conventional aliases instead of 404ing
+	// integrations that followed the old docs.
+	r.URL.Path = rewriteLegacyPlaylistName(r.URL.Path)
 	// Proxy to muxer handler
 	if !h.hlsMgr.Handle(key, w, r) {
 		WriteError(w, http.StatusServiceUnavailable, "HLS stream not available")
 		return
 	}
+}
+
+// rewriteLegacyPlaylistName maps the conventional playlist names onto the
+// muxer's registered multivariant playlist (index.m3u8): stream.m3u8 was
+// what the API docs advertised through v0.12.0, playlist.m3u8 is what most
+// players guess first. Matching is case-insensitive; the directory part of
+// the path is preserved verbatim. Segment/init file names pass through
+// untouched — they are server-generated and must not be rewritten.
+func rewriteLegacyPlaylistName(p string) string {
+	lower := strings.ToLower(p)
+	if strings.HasSuffix(lower, "/stream.m3u8") || strings.HasSuffix(lower, "/playlist.m3u8") {
+		return p[:strings.LastIndex(p, "/")+1] + "index.m3u8"
+	}
+	return p
 }
 
 // setStreamCookieOnPlaylist sets the mbs_session cookie when the request is

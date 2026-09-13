@@ -13,16 +13,26 @@
 **请求（HLS 播放列表）：**
 ```bash
 curl -u username:password \
-  "http://localhost:9090/api/cameras/front-door/stream/stream.m3u8"
+  "http://localhost:9090/api/cameras/front-door/stream/index.m3u8"
 ```
 
 **请求（HLS 切片）：**
-```bash
-curl -u username:password \
-  "http://localhost:9090/api/cameras/front-door/stream/segment_001.ts"
-```
+
+切片/部分分片的文件名由服务端生成，无需手工构造——播放列表以相对 URL 引用它们，
+把播放列表交给任意 HLS 播放器（ffplay、VLC、hls.js、AVPlayer）即可自动拉取。
 
 **响应：** HLS 播放列表或切片文件内容
+
+**说明：**
+- 播放列表文件名为 `index.m3u8`（多变体播放列表）；`stream.m3u8` 与
+  `playlist.m3u8` 作为兼容别名同样可请求。其余未注册的文件名返回
+  `404 unknown HLS resource`。
+- 播放列表请求会阻塞到第一个分片生成（服务端上限 30 秒）；刚添加的摄像头可能
+  返回 `503 SPS/PPS not available yet`，等待首个关键帧后重试即可。
+- 默认启用低延迟 HLS（`hls.low_latency`，见配置文档）：播放列表包含
+  `#EXT-X-PART` 部分分片，LL-HLS 客户端可带 `_HLS_msn`/`_HLS_part` 阻塞轮询；
+  普通播放器按整段消费同样可播。设 `hls.low_latency: false` 并重启后输出经典
+  分段播放列表。
 
 ### 停止 HLS 流
 

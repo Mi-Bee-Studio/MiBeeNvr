@@ -386,3 +386,61 @@ func TestCodecFor(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, model.FormatH265, codec)
 }
+
+// --- #772: SDP-only parameter sets (out-of-band sprop cameras) ---
+
+// TestSDPOnlyCamera_ProducesSegmentsAndPlaylist is the end-to-end #772
+// regression: parameter sets reach the manager ONLY through StartStream
+// (the recorder's SDP-seeded snapshot); the broadcast AUs never carry them
+// in-band — the Axis-camera shape. Before the fix, gohlslib's DTS extractor
+// rejected every param-less IDR ("unable to extract DTS"), the muxer died
+// into the rebuild warn-loop, and the camera ended with zero segments.
+func TestSDPOnlyCamera_ProducesSegmentsAndPlaylist(t *testing.T) {
+	m := NewManagerWithOpts(context.Background(), t.TempDir(), 64, 1<<20, 3)
+	t.Cleanup(m.StopAll)
+
+	require.NoError(t, m.StartStream("cam-sdp-only", pumpSPS, pumpPPS, 0))
+	m.mu.RLock()
+	entry := m.streams["cam-sdp-only"]
+	dir := entry.dirPath
+	m.mu.RUnlock()
+
+	hub := streamhub.New()
+	require.NoError(t, m.SubscribeToHub("cam-sdp-only", hub, false))
+
+	// IDR/P pairs WITHOUT SPS/PPS in the access units.
+	for i := range 60 {
+		hub.Broadcast(int64(90000*i), [][]byte{pumpH264IDR}, true)
+		hub.Broadcast(int64(90000*i+3000), [][]byte{pumpH264P}, false)
+	}
+	require.Eventually(t, func() bool { return len(segmentFiles(t, dir)) > 0 },
+		15*time.Second, 200*time.Millisecond, "SDP-only camera never produced segments")
+
+	require.Eventually(t, func() bool {
+		rec := httptest.NewRecorder()
+		if !m.Handle("cam-sdp-only", rec, httptest.NewRequest(http.MethodGet, "/hls/cam-sdp-only/index.m3u8", nil)) {
+			return false
+		}
+		return rec.Body.Len() > 0
+	}, 15*time.Second, 200*time.Millisecond, "playlist never served")
+
+	// The muxer survived: not nilled by handleWriteError.
+	entry.mu.Lock()
+	require.NotNil(t, entry.mux, "muxer must not die on param-less IDR AUs")
+	entry.mu.Unlock()
+}
+
+// TestHandle_UnknownPathReturns404 covers the silent-empty-200 half of
+// #772: gohlslib's server no-ops on file names it never registered, which
+// used to surface as HTTP 200 with Content-Length 0.
+func TestHandle_UnknownPathReturns404(t *testing.T) {
+	m := NewManagerWithOpts(context.Background(), t.TempDir(), 64, 1<<20, 3)
+	t.Cleanup(m.StopAll)
+
+	require.NoError(t, m.StartStream("cam-404", pumpSPS, pumpPPS, 0))
+
+	rec := httptest.NewRecorder()
+	require.True(t, m.Handle("cam-404", rec, httptest.NewRequest(http.MethodGet, "/hls/cam-404/bogus.m3u8", nil)))
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Contains(t, rec.Body.String(), "unknown HLS resource")
+}
