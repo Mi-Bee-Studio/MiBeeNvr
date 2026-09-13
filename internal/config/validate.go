@@ -389,8 +389,8 @@ func validateConfigDetails(cfg *Config) error {
 				if cam.SegmentDuration != "" {
 					continue // this camera already overrides locally
 				}
-				slog.Warn("storage.segment_duration below 60s with continuous-recording cameras — rotation amplifies metadata I/O (segment create/rename/fsync/DB rows ×N cameras); prefer 60-120s globally or a per-camera cameras[].segment_duration override",
-					"segment_duration", cfg.Storage.SegmentDuration, "first_camera", cam.ID)
+				slog.Warn("storage.segment_duration below the configured threshold with continuous-recording cameras — rotation amplifies metadata I/O (segment create/rename/fsync/DB rows ×N cameras); prefer 60-120s globally or a per-camera cameras[].segment_duration override",
+					"segment_duration", cfg.Storage.SegmentDuration, "warn_below", warnBelow.String(), "first_camera", cam.ID)
 				break
 			}
 		}
