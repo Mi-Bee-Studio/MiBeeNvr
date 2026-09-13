@@ -241,6 +241,10 @@ curl -X POST http://localhost:9090/api/gb28181/channels/34020000001320000001/ptz
 - `POST /api/gb28181/channels/{id}/invite` / `bye` — 手动拉流/停流
 - `POST /api/gb28181/channels/{id}/ptz` — PTZ 控制
 
+### 按需抓拍与手动录像（GB/T 28181-2022）
+- `POST /api/gb28181/channels/{id}/snapshot` — 向设备下发 SnapShotCmd 按需抓拍（`{"snap_num":1,"interval":0}`）；设备把 JPEG 回传到公共回调端点 `POST /api/gb28181/snapshot/upload?session=<SessionID>`，帧保存至 `snapshots/gb-<通道ID>/` 并触发 `camera.snapshot` 事件；会话在收到设备完成通知后关闭，超时未收到通知则判为失败
+- `POST /api/gb28181/channels/{id}/record` — 手动开始 / 停止录像（`{"action":"start"}` / `{"action":"stop"}`，对应 RecordCmd）
+
 ### 录像检索/回放（设备侧）
 - 见上节
 
