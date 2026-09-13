@@ -378,39 +378,23 @@ Look for `Events` in capabilities response:
 }
 ```
 
-### Motion Detection Events
+### Motion Detection (Camera-Side MotionAlarm Subscription)
 
-When supported, motion events are available via ONVIF subscription:
+Some cameras actively report motion through their ONVIF event service. Set the camera form's **Motion detection source** to **Camera-side detection (ONVIF events)** (`motion_source: camera:onvif`) and the NVR establishes a Pull-Point subscription with the camera:
 
-#### Subscribe to Motion Events
-```bash
-curl -X POST http://localhost:9090/api/cameras/{id}/onvif/events/subscribe \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-token" \
-  -d '{
-    "topic": "tns1:MotionAlarm",
-    "filter": {
-      "SimpleItem": {
-        "Name": "RegionOfInterest",
-        "Value": "1"
-      }
-    }
-  }'
-```
+- On `MotionAlarm State=true`: recording triggers immediately (identical action semantics to the MQTT / [webhook](webhook-integration.md) triggers); adaptive-recording cameras also exit timelapse (`reason=onvif_motion`), the same path as the audio trigger
+- On `State=false`: nothing triggers — the adaptive gate's calm logic re-enters timelapse on its own
+- All ONVIF events are also republished to the SSE event bus (`onvif.*` topics), visible in the web UI's ONVIF events panel
 
-### Event Limitations
+The NVR maintains the subscription automatically: renewal before expiry, rebuild on pull timeout; cameras without Pull-Point support are probed once, marked with a tombstone, and not retried. The diagnostics endpoint `GET /api/cameras/{id}/onvif-events` distinguishes "subscription broken" from "camera produced no events" (the camera form's status line reads it).
 
-- **Camera Dependent**: Only cameras with ONVIF Event Service support
-- **Firmware Required**: Often requires specific firmware version
-- **Protocol Variations**: Different implementations across manufacturers
-- **MiBee NVR Integration**: Currently supports basic event subscription
+> Events reported while the NVR is down are **NOT replayed** — recording decisions never depend on backfilled history.
 
 ### Alternative Motion Detection
 
-For cameras without ONVIF event support:
-- Use camera's built-in motion detection
-- Configure external motion detection in MiBee NVR
-- Use third-party motion detection solutions
+For cameras without ONVIF event service support:
+- Keep the default **NVR-side detection** (`motion_source: nvr`) — the NVR detects activity from the video stream itself (see [Adaptive Recording](adaptive-recording.md))
+- Or drive it externally via [MQTT](mqtt-integration.md) / [webhook](webhook-integration.md) triggers
 
 ## Device Management
 

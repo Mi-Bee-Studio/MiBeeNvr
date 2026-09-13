@@ -1,6 +1,6 @@
 # MQTT 集成
 
-MiBee NVR 支持 MQTT 触发录制与状态发布，用于智能家居自动化和事件驱动录制。接收 MQTT 消息可以启动/停止摄像头录制；开启状态发布后，健康告警与录像事件也会推送到 MQTT。
+MiBee NVR 支持 MQTT 触发录制与状态发布，用于智能家居自动化和事件驱动录制。接收 MQTT 消息可以启动/停止摄像头录制；开启状态发布后，健康告警与录像事件也会推送到 MQTT。没有 MQTT 代理、只有 HTTP 的场景可以改用 [Webhook 触发](webhook-integration.md)。
 
 ## 概述
 
