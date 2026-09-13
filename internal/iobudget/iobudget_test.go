@@ -17,8 +17,14 @@ type fakeClock struct {
 	t  time.Time
 }
 
+// newFakeClock anchors the fake clock at the REAL current time. A fixed
+// epoch date falls behind real time.Now() as the calendar advances —
+// Bucket.New stamps `last` with the real clock, so a fake clock in the past
+// makes refillLocked see negative elapsed forever, and the wait loop burns
+// ~130k iterations catching the fake clock up (passes without -race in ~7s,
+// hangs past the package timeout under -race — first seen on CI 2026-09-13).
 func newFakeClock() *fakeClock {
-	return &fakeClock{t: time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)}
+	return &fakeClock{t: time.Now()}
 }
 
 func (c *fakeClock) Now() time.Time {
