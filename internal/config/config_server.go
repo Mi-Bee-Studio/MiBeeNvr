@@ -132,16 +132,16 @@ type StorageConfig struct {
 	// and timelapse products always fsync in both tiers. Flash boards that
 	// can tolerate losing the last seconds of raw recording on power loss
 	// benefit most.
-	Durability string `yaml:"durability"`
-	// Segment preallocation knobs (#757) — defaults materialized by config
-	// defaults; every value operator-tunable, nothing hardcoded in recorders.
-	// PreallocEnabled is a pointer so "unset" (default ON) is distinguishable
-	// from an explicit `prealloc_enabled: false` — same tri-state pattern as
-	// hls.low_latency (#772).
-	PreallocEnabled         *bool `yaml:"prealloc_enabled"`          // default true; explicit false restores pure append-write growth
-	PreallocHeadroomPercent int   `yaml:"prealloc_headroom_percent"` // default 10
-	PreallocMinBytes        int64 `yaml:"prealloc_min_bytes"`        // default 4MiB (below = skip)
-	PreallocMaxBytes        int64 `yaml:"prealloc_max_bytes"`        // default 512MiB
+	Durability              string `yaml:"durability"`
+	PreallocEnabled         *bool  `yaml:"prealloc_enabled"`          // default true; explicit false restores pure append-write growth
+	PreallocHeadroomPercent int    `yaml:"prealloc_headroom_percent"` // default 10
+	PreallocMinBytes        int64  `yaml:"prealloc_min_bytes"`        // default 4MiB (below = skip)
+	PreallocMaxBytes        int64  `yaml:"prealloc_max_bytes"`        // default 512MiB
+	// SegmentDurationWarnBelow gates the short-rotation footgun warning
+	// (#758): warn when the global segment_duration is below this AND at
+	// least one continuous-mode camera has no per-camera override. Default
+	// "60s"; "0s" disables the warning.
+	SegmentDurationWarnBelow string `yaml:"segment_duration_warn_below"`
 	// Candidates lists additional storage locations made available to the NVR
 	// by the host platform (#395): on fnOS these are the user-authorized
 	// directories (TRIM_DATA_ACCESSIBLE_PATHS), mounted into the container and

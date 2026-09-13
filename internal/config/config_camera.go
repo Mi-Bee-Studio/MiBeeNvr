@@ -106,6 +106,13 @@ type CameraConfig struct {
 	// exit adaptive timelapse with reason=onvif_motion. ONVIF protocol only.
 	MotionSource string `yaml:"motion_source,omitempty" json:"motion_source,omitempty"`
 
+	// SegmentDuration overrides the global storage.segment_duration for THIS
+	// camera only (#758) — the escape hatch for scenes that genuinely need
+	// short rotation (e.g. high-time-resolution timelapse sampling) without
+	// amplifying segment-create/rename/fsync/DB churn on every other camera.
+	// Empty = global value.
+	SegmentDuration string `yaml:"segment_duration,omitempty" json:"segment_duration,omitempty"`
+
 	// RecordingMode selects the write-density strategy (issue #435):
 	//   "" | "continuous" — record every frame (default, current behavior)
 	//   "adaptive"        — dynamic timelapse: while the compressed-domain

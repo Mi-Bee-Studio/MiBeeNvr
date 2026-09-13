@@ -131,11 +131,20 @@ func (cm *CleanupManager) deepOrphanCleanup(ctx context.Context, cameras []strin
 			logger.Warn("deep orphan cleanup: failed to list artifacts", "camera_id", cam, "error", err)
 			continue
 		}
-		// DB paths may mix separators (relatives written with '/'), the walk
-		// yields native ones — compare on a normalized form.
+		// DB paths may be absolute or relative to the storage root (tierrec's
+		// sub-layer rows store relatives), and may mix separators — while the
+		// walk yields native ABSOLUTE paths. Normalize refs to absolute form so
+		// both path styles match; comparing raw strings silently orphaned every
+		// sub_ segment past the age rail (2026-09-13: 9.3k dangling rows, the
+		// sub-stream tier wiped on one camera).
+		root := cm.store.RootDir()
 		normRefs := make(map[string]bool, len(refs))
 		for p := range refs {
-			normRefs[filepath.ToSlash(filepath.Clean(p))] = true
+			clean := filepath.Clean(p)
+			if !filepath.IsAbs(clean) {
+				clean = filepath.Join(root, clean)
+			}
+			normRefs[filepath.ToSlash(clean)] = true
 		}
 		camRoot := filepath.Join(cm.store.RootDir(), cam)
 		var emptyableDirs []string

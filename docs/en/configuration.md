@@ -248,6 +248,31 @@ version: "1.0"
 - **Description**: per-segment reservation cap so a pathological segment cannot reserve absurd space for its successors
 - **Example**: `536870912`
 
+#### Rotation cadence is an I/O switch
+
+> The warning threshold itself is configurable:
+> `storage.segment_duration_warn_below` (default `"60s"`, `"0s"` disables).
+
+Every rotation pays a fixed metadata cost — segment create, temp→final
+rename, fsync, and two DB rows. The shorter the global duration, the more
+often EVERY camera pays it: at 30s a 13-camera fleet rotates ~26
+times/minute; at 120s, ~6.5. For continuous recording prefer **60–120s
+globally**; when a single camera genuinely needs short rotation (e.g.
+high-time-resolution timelapse sampling), give it a **per-camera override**
+instead of shortening the global:
+
+```yaml
+storage:
+  segment_duration: "120s"
+cameras:
+  - id: timelapse-cam
+    segment_duration: "15s"   # this camera only (#758)
+```
+
+A `config.Validate()` warning fires when the global value is below 60s and
+at least one continuous-mode camera has no override — `mibee-nvr
+validate-config` surfaces it too.
+
 ### `storage.db_path`
 - **Type**: string
 - **Optional**: yes
