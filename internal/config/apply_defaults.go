@@ -271,8 +271,15 @@ func applyConfigDefaults(cfg *Config) {
 	}
 	// IO budget defaults (#751): budget_bytes_per_sec stays 0 = disabled
 	// unless the operator opts in; burst defaults to one second of rate.
-	if cfg.IO.BudgetBytesPerSec > 0 && cfg.IO.BudgetBurstBytes == 0 {
-		cfg.IO.BudgetBurstBytes = cfg.IO.BudgetBytesPerSec
+	if cfg.IO.BudgetBytesPerSec > 0 {
+		if cfg.IO.BudgetBurstBytes == 0 {
+			cfg.IO.BudgetBurstBytes = cfg.IO.BudgetBytesPerSec
+		}
+		// Unlink guardrail default tier (#755): 200 files/s — the jbd2
+		// saturation lesson from #748. Explicit values win.
+		if cfg.IO.DeleteUnlinksPerSec == 0 {
+			cfg.IO.DeleteUnlinksPerSec = 200
+		}
 	}
 	if cfg.Merge.CheckInterval == "" {
 		cfg.Merge.CheckInterval = "1h"

@@ -12,6 +12,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
@@ -29,6 +31,16 @@ const repairDeleteChunkSize = 300
 // io.budget_bytes_per_sec in cmdRepair so a CLI mass-delete against a live
 // server yields exactly like the server's own cleanup would.
 var repairIOBudget iobudget.Limiter
+
+// repairChunkSleepFn is the legacy fixed inter-chunk pause (seam for tests).
+// It only runs when the I/O budget is OFF — with a budget installed, billing
+// paces the loop and the fixed sleep is skipped (#755).
+var repairChunkSleepFn = func(ctx context.Context) {
+	select {
+	case <-time.After(20 * time.Millisecond):
+	case <-ctx.Done():
+	}
+}
 
 // Seams for call-pattern and failure-injection tests (#753 TDD).
 var (
@@ -51,13 +63,21 @@ func deleteCandidatesInChunks(ctx context.Context, db *storage.DB, candidates []
 	progress func(deleted, total int),
 ) (deleted, failed int, freedBytes int64) {
 	total := len(candidates)
+	// Directory-locality grouping (#755): reclaim same-directory recordings
+	// back-to-back for ext4 metadata cache/journal coalescing. Chunking is
+	// unaffected (order within chunks is not semantic).
+	sorted := make([]model.Recording, len(candidates))
+	copy(sorted, candidates)
+	sort.Slice(sorted, func(i, j int) bool {
+		return filepath.Dir(sorted[i].FilePath) < filepath.Dir(sorted[j].FilePath)
+	})
 	budgetAborted := false
 	for start := 0; start < total; start += repairDeleteChunkSize {
 		if ctx.Err() != nil {
 			break
 		}
 		end := min(start+repairDeleteChunkSize, total)
-		chunk := candidates[start:end]
+		chunk := sorted[start:end]
 
 		ids := make([]string, len(chunk))
 		for i, r := range chunk {
@@ -104,9 +124,15 @@ func deleteCandidatesInChunks(ctx context.Context, db *storage.DB, candidates []
 		progress(deleted, total)
 
 		// Throttle between chunks — bounded I/O burst while the server runs.
-		select {
-		case <-time.After(20 * time.Millisecond):
-		case <-ctx.Done():
+		// With the I/O budget active the fixed sleep is skipped: billing
+		// paces the loop (#755).
+		if repairIOBudget == nil {
+			repairChunkSleepFn(ctx)
+		} else {
+			select {
+			case <-ctx.Done():
+			default:
+			}
 		}
 	}
 	return deleted, failed, freedBytes

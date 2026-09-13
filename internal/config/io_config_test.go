@@ -65,3 +65,53 @@ func TestIOConfig_ValidateAcceptsDisabled(t *testing.T) {
 		}
 	}
 }
+
+func TestIOConfig_UnlinkGuardrailDefaultsApplied(t *testing.T) {
+	// With a budget configured, the guardrail default (200/s) is materialized
+	// into the config — no magic constant in wiring code (#755).
+	cfg := &Config{}
+	cfg.IO.BudgetBytesPerSec = 1 << 20
+	applyConfigDefaults(cfg)
+	if cfg.IO.DeleteUnlinksPerSec != 200 {
+		t.Errorf("default delete_unlinks_per_sec = %d, want 200", cfg.IO.DeleteUnlinksPerSec)
+	}
+}
+
+func TestIOConfig_UnlinkGuardrailExplicitPreserved(t *testing.T) {
+	cfg := &Config{}
+	cfg.IO.BudgetBytesPerSec = 1 << 20
+	cfg.IO.DeleteUnlinksPerSec = 50
+	applyConfigDefaults(cfg)
+	if cfg.IO.DeleteUnlinksPerSec != 50 {
+		t.Errorf("explicit delete_unlinks_per_sec = %d, want preserved 50", cfg.IO.DeleteUnlinksPerSec)
+	}
+}
+
+func TestIOConfig_UnlinkGuardrailNoDefaultWithoutBudget(t *testing.T) {
+	// Budget off (default) — no guardrail value invented, legacy pacing stays.
+	cfg := &Config{}
+	applyConfigDefaults(cfg)
+	if cfg.IO.DeleteUnlinksPerSec != 0 {
+		t.Errorf("delete_unlinks_per_sec without budget = %d, want 0", cfg.IO.DeleteUnlinksPerSec)
+	}
+}
+
+func TestIOConfig_ValidateUnlinkGuardrail(t *testing.T) {
+	cfg := &Config{}
+	applyConfigDefaults(cfg)
+	cfg.IO.BudgetBytesPerSec = 1 << 20
+	cfg.IO.DeleteUnlinksPerSec = -1
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "io.delete_unlinks_per_sec") {
+		t.Errorf("Validate(negative unlinks) = %v, want io.delete_unlinks_per_sec error", err)
+	}
+
+	// Set without a byte budget is a configuration mistake.
+	cfg = &Config{}
+	applyConfigDefaults(cfg)
+	cfg.IO.DeleteUnlinksPerSec = 100
+	err = Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "io.delete_unlinks_per_sec") {
+		t.Errorf("Validate(unlinks without budget) = %v, want guidance error", err)
+	}
+}

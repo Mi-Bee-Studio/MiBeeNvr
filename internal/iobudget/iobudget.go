@@ -74,12 +74,16 @@ func WithObservers(onWait func(consumer string, waited time.Duration), onCharge 
 }
 
 // New creates a Bucket refilling rate units/second with the given burst
-// capacity, starting full. It returns nil when disabled (rate <= 0 or
-// capacity <= 0) — callers store the result directly and nil means
-// "budgeting off, zero overhead".
+// capacity, starting full. A capacity of 0 defaults to one second of rate
+// (matching the documented config default). It returns nil when disabled
+// (rate <= 0 or capacity < 0) — callers store the result directly and nil
+// means "budgeting off, zero overhead".
 func New(rate, capacity int64, opts ...Option) *Bucket {
-	if rate <= 0 || capacity <= 0 {
+	if rate <= 0 || capacity < 0 {
 		return nil
+	}
+	if capacity == 0 {
+		capacity = rate
 	}
 	b := &Bucket{
 		rate:     rate,

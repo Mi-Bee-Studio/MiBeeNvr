@@ -65,6 +65,7 @@ type appDeps struct {
 	remoteLogH   *remotelog.Handler
 	appLoc       *time.Location
 	ioBudget     *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
+	unlinkBudget *iobudget.Bucket // recursive-deletion unlink guardrail (#755); nil = off
 
 	// Merge / transcode / timelapse
 	mergeMgr              *merge.MergeManager

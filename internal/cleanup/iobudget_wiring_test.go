@@ -2,6 +2,7 @@ package cleanup
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,6 +38,15 @@ func (f *fakeBudget) total() int64 {
 		total += n
 	}
 	return total
+}
+
+// amounts returns the billed amounts in call order.
+func (f *fakeBudget) amounts() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]int64, len(f.calls))
+	copy(out, f.calls)
+	return out
 }
 
 func (f *fakeBudget) count() int {
@@ -192,4 +202,117 @@ func TestBatchDelete_NoBudgetUnchanged(t *testing.T) {
 func (e *testEnv) listAllRecordings(t *testing.T) ([]model.Recording, error) {
 	t.Helper()
 	return e.db.ListRecordings(context.Background(), model.RecordingFilter{CameraID: "cam1"})
+}
+
+// --- #755: byte-rate billing refinements ---
+
+// TestBatchDelete_DirectoryLocalityGrouping: with a budget installed, the
+// file-reclaim loop must visit recordings grouped by directory (all of dir A,
+// then all of dir B), not in the input (temporal) order. Observable through
+// the per-recording billing sequence — each recording's file size is unique,
+// so the billed amounts identify the visit order.
+func TestBatchDelete_DirectoryLocalityGrouping(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	now := time.Now().UTC()
+	// Interleaved input order: dirA, dirB, dirA, dirB — with distinct sizes
+	// r1=1001, r2=2002, r3=3003, r4=4004 so billing calls identify rows.
+	input := []struct {
+		id, rel string
+		size    int
+	}{
+		{"r1", "cam1/20260910/10/r1.mp4", 1001},
+		{"r2", "cam1/20260910/11/r2.mp4", 2002},
+		{"r3", "cam1/20260910/10/r3.mp4", 3003},
+		{"r4", "cam1/20260910/11/r4.mp4", 4004},
+	}
+	for _, in := range input {
+		env.insertTestRecording(t, in.id, "cam1", in.rel, now.Add(-48*time.Hour), false)
+		full := filepath.Join(env.store.RootDir(), in.rel)
+		require.NoError(t, os.WriteFile(full, make([]byte, in.size), 0o644))
+	}
+
+	cm, err := NewCleanupManager(env.db, env.store, defaultCleanupConfig())
+	require.NoError(t, err)
+
+	fb := &fakeBudget{}
+	cm.SetIOBudget(fb)
+
+	recs, err := env.listAllRecordings(t)
+	require.NoError(t, err)
+	byID := map[string]model.Recording{}
+	for _, r := range recs {
+		byID[r.ID] = r
+	}
+	ordered := []model.Recording{byID["r1"], byID["r2"], byID["r3"], byID["r4"]}
+
+	_, err = cm.BatchDeleteRecordingsWithFiles(t.Context(), ordered, "test")
+	require.NoError(t, err)
+
+	billed := fb.amounts()
+	require.Len(t, billed, 4)
+	// Grouped visit: {r1,r3} (dir …/10) adjacently, {r2,r4} (dir …/11)
+	// adjacently — in either group order.
+	firstGroup := [2]int64{billed[0], billed[1]}
+	secondGroup := [2]int64{billed[2], billed[3]}
+	isPair := func(p [2]int64, a, b int64) bool {
+		return (p[0] == a && p[1] == b) || (p[0] == b && p[1] == a)
+	}
+	grouped := (isPair(firstGroup, 1001, 3003) && isPair(secondGroup, 2002, 4004)) ||
+		(isPair(firstGroup, 2002, 4004) && isPair(secondGroup, 1001, 3003))
+	require.True(t, grouped,
+		"billing order %v is not directory-grouped (want {r1,r3} and {r2,r4} adjacent)", billed)
+}
+
+// TestDeleteRecordingFile_UnlinkGuardrail: with an unlink budget installed,
+// directory-form deletion paces per FILE against the guardrail (one Wait per
+// file) instead of the legacy fixed chunk sleep.
+func TestDeleteRecordingFile_UnlinkGuardrail(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	// Frame tree with 5 files.
+	dirPath := filepath.Join(env.store.RootDir(), "cam1", "frames_r1")
+	require.NoError(t, os.MkdirAll(dirPath, 0o755))
+	for i := range 5 {
+		require.NoError(t, os.WriteFile(filepath.Join(dirPath, fmt.Sprintf("f_%d.jpg", i)), []byte("x"), 0o644))
+	}
+
+	cm, err := NewCleanupManager(env.db, env.store, defaultCleanupConfig())
+	require.NoError(t, err)
+	// Legacy pacing configured — must be IGNORED once the guardrail is set
+	// (guardrail replaces, not stacks on, the fixed time-slice).
+	cm.SetDirectoryDeleteThrottle(100000, time.Hour)
+
+	guard := &fakeBudget{}
+	cm.SetUnlinkBudget(guard)
+
+	require.NoError(t, cm.deleteRecordingFile(t.Context(), dirPath))
+	require.NoDirExists(t, dirPath)
+	require.Equal(t, 5, guard.count(), "one guardrail Wait per unlinked file")
+	require.True(t, guard.allConsumersCleanup())
+}
+
+// TestDeleteRecordingFile_LegacyPacingWhenNoGuardrail: without an unlink
+// budget the fixed chunk pacing still applies (default config = unchanged
+// behavior).
+func TestDeleteRecordingFile_LegacyPacingWhenNoGuardrail(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.close(t)
+
+	dirPath := filepath.Join(env.store.RootDir(), "cam1", "frames_r1")
+	require.NoError(t, os.MkdirAll(dirPath, 0o755))
+	for i := range 3 {
+		require.NoError(t, os.WriteFile(filepath.Join(dirPath, fmt.Sprintf("f_%d.jpg", i)), []byte("x"), 0o644))
+	}
+
+	cm, err := NewCleanupManager(env.db, env.store, defaultCleanupConfig())
+	require.NoError(t, err)
+	// Tiny chunk + tiny sleep proves the legacy path executes (the deletion
+	// still completes and would have paused between chunks).
+	cm.SetDirectoryDeleteThrottle(2, time.Millisecond)
+
+	require.NoError(t, cm.deleteRecordingFile(t.Context(), dirPath))
+	require.NoDirExists(t, dirPath)
 }
