@@ -441,8 +441,10 @@ go_goroutines > 500
 | `nvr_merge_pending_segments` | Gauge | `camera_id` | 待合并的片段数量（按摄像头分区） |
 | `nvr_rolling_merge_latency_seconds` | Histogram | `camera_id` | 从片段关闭到滚动合并完成的耗时 |
 | `nvr_rolling_merge_bucket_segments` | Gauge | `camera_id` | 当前滚动合并窗口桶中累计的片段数 |
+| `nvr_rolling_merge_bucket_finalized_total` | Counter | `reason` | 滚动合并桶离开保留集的次数（#764）。`reason` 取值：`idle_ttl`（空闲超时淘汰）/ `capacity_lru`（容量 LRU 淘汰）/ `size_limit`（逼近 mdat 上限滚动）/ `batch_reset`（批量合并路径弃置整个保留集） |
+| `nvr_rolling_merge_bucket_lifetime_seconds` | Histogram | `reason` | 桶从创建到 finalize 的存活时长（秒）——质量振荡相机的微合并风暴消除后桶寿命应显著拉长 |
 
-**`nvr_merge_duration_seconds` 桶区间：** 0.5秒, 1秒, 5秒, 10秒, 30秒, 60秒, 300秒, 600秒。**`nvr_merge_size_bytes` 桶区间：** 10MB, 50MB, 100MB, 500MB, 1GB, 3GB。**`nvr_rolling_merge_latency_seconds` 桶区间：** 0.1秒, 0.5秒, 1秒, 2秒, 5秒, 10秒, 30秒。
+**`nvr_merge_duration_seconds` 桶区间：** 0.5秒, 1秒, 5秒, 10秒, 30秒, 60秒, 300秒, 600秒。**`nvr_merge_size_bytes` 桶区间：** 10MB, 50MB, 100MB, 500MB, 1GB, 3GB。**`nvr_rolling_merge_latency_seconds` 桶区间：** 0.1秒, 0.5秒, 1秒, 2秒, 5秒, 10秒, 30秒。**`nvr_rolling_merge_bucket_lifetime_seconds` 桶区间：** 1秒, 5秒, 15秒, 1分钟, 5分钟, 15分钟, 1小时, 6小时。
 
 **用途：**
 
@@ -455,6 +457,9 @@ histogram_quantile(0.99, rate(nvr_rolling_merge_latency_seconds_bucket[5m]))
 
 # 各摄像头未合并片段积压
 nvr_merge_pending_segments
+
+# 按原因观察桶淘汰速率（重连风暴相机应从高频 finalize 回落）
+sum by (reason) (rate(nvr_rolling_merge_bucket_finalized_total[1h]))
 ```
 
 ---
@@ -558,6 +563,29 @@ rate(nvr_ai_events_errors_total[5m]) > 0
 ```promql
 # 各摄像头跳转热点
 topk(5, sum(rate(nvr_timeline_seeks_total[1h])) by (camera_id))
+```
+
+---
+
+## 20. 像素活动门控指标
+
+跟踪自适应录像像素活动门控（pixgate）采样器的遥测（#699）。journald 在磁盘压力下会轮转抹掉日志，这些指标是采样器健康的持久观测面。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_pixgate_samples_total` | Counter | `camera_id`, `source` | 已处理的采样数。`source`：`hub`（主流镜像）/ `rtsp`（独立子流拉取） |
+| `nvr_pixgate_triggers_total` | Counter | `camera_id` | 确认活动触发的全速率退出调用次数（每个活跃样本都会 re-arm hold，与 Trigger 调用 1:1） |
+| `nvr_pixgate_last_area_pct` | Gauge | `camera_id` | 最近样本的最大前景 blob 面积（网格占比 %） |
+| `nvr_pixgate_last_sample_timestamp_seconds` | Gauge | `camera_id` | 最近一次采样的 Unix 时间戳——采样器心跳 |
+
+**用途：** 心跳停滞 = 采样器已死；心跳新鲜但 `area_pct` 低 = 场景安静。「卡延时」类问题事后排查时二者在日志里不可区分的盲区由此消除。
+
+```promql
+# 采样器心跳停滞告警（5 分钟无样本）
+time() - nvr_pixgate_last_sample_timestamp_seconds > 300
+
+# 各相机触发频率
+topk(5, sum(rate(nvr_pixgate_triggers_total[1h])) by (camera_id))
 ```
 
 ---
