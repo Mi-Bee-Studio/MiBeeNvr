@@ -20,6 +20,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmjpeg"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
@@ -241,6 +242,28 @@ func countJPGFiles(t *testing.T, dir string) int {
 	return count
 }
 
+// countAVIVideoFrames demuxes an AVI segment file and returns its video
+// chunk count (#761 default form — replaces counting .jpg files in a dir).
+func countAVIVideoFrames(t *testing.T, path string) int {
+	t.Helper()
+	fh, err := os.Open(path)
+	require.NoError(t, err)
+	defer fh.Close()
+	d, err := avi.NewDemuxer(fh)
+	require.NoError(t, err)
+	count := 0
+	for {
+		c, err := d.NextChunk()
+		if err != nil {
+			break
+		}
+		if c.Type == avi.ChunkVideo {
+			count++
+		}
+	}
+	return count
+}
+
 func countSegmentDirs(t *testing.T, m *storage.Manager, cameraID string) int {
 	t.Helper()
 	segs, err := m.ListSegments(cameraID)
@@ -280,13 +303,14 @@ func TestMJPEGRecorder_RecordsFrames(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected at least one recorded segment")
 
-	// Check that the segment directory contains .jpg files
+	// #761: the default segment shape is a single .avi file per segment (the
+	// per-frame JPEG directory is the explicit "dir" opt-out form).
 	for _, f := range files {
 		info, err := os.Stat(f)
 		require.NoError(t, err)
-		require.True(t, info.IsDir(), "MJPEG segment should be a directory")
-		n := countJPGFiles(t, f)
-		require.Greater(t, n, 0, "segment %s should contain .jpg files", f)
+		require.False(t, info.IsDir(), "default MJPEG segment should be a single AVI file")
+		require.Equal(t, ".avi", filepath.Ext(f))
+		require.Greater(t, info.Size(), int64(0))
 	}
 }
 
@@ -370,16 +394,17 @@ func TestMJPEGRecorder_FrameSampling(t *testing.T) {
 
 	require.NoError(t, rec.Stop())
 
-	// With SampleInterval=3, sending 9 frames should save exactly 3
+	// With SampleInterval=3, sending 9 frames should save exactly 3 (#761:
+	// frames live inside the default AVI container — count video chunks).
 	files, err := mgr.ListSegments("cam-mjpeg-sample")
 	require.NoError(t, err)
 	require.Len(t, files, 1, "expected exactly 1 segment")
 
-	totalJPGs := 0
+	totalFrames := 0
 	for _, f := range files {
-		totalJPGs += countJPGFiles(t, f)
+		totalFrames += countAVIVideoFrames(t, f)
 	}
-	require.Equal(t, 3, totalJPGs, "expected exactly 3 saved frames with SampleInterval=3 from 9 sent")
+	require.Equal(t, 3, totalFrames, "expected exactly 3 saved frames with SampleInterval=3 from 9 sent")
 }
 
 func TestMJPEGRecorder_GracefulShutdown(t *testing.T) {
@@ -558,18 +583,19 @@ func TestMJPEGRecorderNoAudio(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	require.Equal(t, 0, collector.count(), "no audio frames should be broadcast when no audio in SDP")
 
-	// Video should still be recorded as JPEG directory (backward compat).
+	// Video should still be recorded — as the default single-file AVI
+	// container WITHOUT an audio track (#761: video-only AVI is the default
+	// shape even when AudioEnabled didn't find a G.711 stream).
 	files, err := mgr.ListSegments("cam-noaudio")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "expected video recording even with no audio in SDP")
 
-	// Verify all segments are directories with .jpg files.
 	for _, f := range files {
 		info, err := os.Stat(f)
 		require.NoError(t, err)
-		require.True(t, info.IsDir(), "MJPEG segment should be a directory when no audio")
-		n := countJPGFiles(t, f)
-		require.Greater(t, n, 0, "segment %s should contain .jpg files", f)
+		require.False(t, info.IsDir(), "segment should be a single AVI file (#761 default)")
+		require.Equal(t, ".avi", filepath.Ext(f))
+		require.Greater(t, countAVIVideoFrames(t, f), 0, "segment %s should contain video frames", f)
 	}
 }
 

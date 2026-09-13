@@ -96,8 +96,11 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
 		RecordingMode string `json:"recording_mode"`
 		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
-		MotionSource string                          `json:"motion_source"`
-		Adaptive     *config.AdaptiveRecordingConfig `json:"adaptive"`
+		MotionSource string `json:"motion_source"`
+		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
+		// default) or "dir" (legacy per-frame directory).
+		MJPEGForm string                          `json:"mjpeg_form"`
+		Adaptive  *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Audio trigger (#478): loudness input for adaptive recording.
 		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
 		// Push/ingest fields (SRT/RTMP)
@@ -296,8 +299,11 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	// Same boundary validation for the recording mode (#435, #402 class).
 	if err := config.ValidateCameraRecordingMode(config.CameraConfig{
 		ID:            body.Name,
+		Protocol:      proto,
 		Encoding:      enc,
 		RecordingMode: body.RecordingMode,
+		MotionSource:  body.MotionSource,
+		MJPEGForm:     body.MJPEGForm,
 		Adaptive:      body.Adaptive,
 	}); err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
@@ -325,6 +331,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		CascadeSubStream:  body.CascadeSubStream,
 		RecordingMode:     body.RecordingMode,
 		MotionSource:      body.MotionSource,
+		MJPEGForm:         body.MJPEGForm,
 		Adaptive:          body.Adaptive,
 		AudioTrigger:      body.AudioTrigger,
 		StreamKey:         body.StreamKey,

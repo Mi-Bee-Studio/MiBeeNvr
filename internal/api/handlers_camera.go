@@ -88,6 +88,7 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.RecordingMode = cam.RecordingMode
 		row.RecordingTier = cam.RecordingTier
 		row.MotionSource = cam.MotionSource
+		row.MJPEGForm = cam.MJPEGForm
 		row.Pixgate = cam.Pixgate
 		row.Adaptive = cam.Adaptive
 		if cam.Protocol == "gb28181" {
@@ -390,9 +391,12 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingMode *string `json:"recording_mode"`
 		RecordingTier *string `json:"recording_tier"`
 		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
-		MotionSource *string                         `json:"motion_source"`
-		Pixgate      *config.CameraPixgateConfig     `json:"pixgate"`
-		Adaptive     *config.AdaptiveRecordingConfig `json:"adaptive"`
+		MotionSource *string `json:"motion_source"`
+		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
+		// default) or "dir" (legacy per-frame directory). Applies on restart.
+		MJPEGForm *string                         `json:"mjpeg_form"`
+		Pixgate   *config.CameraPixgateConfig     `json:"pixgate"`
+		Adaptive  *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Audio trigger (#478): loudness input for adaptive recording.
 		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
 		// Push/ingest fields (SRT/RTMP)
@@ -501,6 +505,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingMode:          body.RecordingMode,
 		RecordingTier:          body.RecordingTier,
 		MotionSource:           body.MotionSource,
+		MJPEGForm:              body.MJPEGForm,
 		Pixgate:                body.Pixgate,
 		Adaptive:               body.Adaptive,
 		AudioTrigger:           body.AudioTrigger,
@@ -518,7 +523,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	// startup path enforces, resolved against the camera's CURRENT encoding
 	// (or the new one, when the same request changes it) — adaptive needs
 	// h264/h265.
-	if body.RecordingMode != nil || body.Adaptive != nil || body.AudioTrigger != nil {
+	if body.RecordingMode != nil || body.Adaptive != nil || body.AudioTrigger != nil ||
+		body.MotionSource != nil || body.MJPEGForm != nil {
 		probe := config.CameraConfig{ID: id}
 		if h.config != nil {
 			for _, cam := range h.config.Cameras {
@@ -530,6 +536,15 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Encoding != nil && *body.Encoding != "" {
 			probe.Encoding = *body.Encoding
+		}
+		if body.Protocol != nil && *body.Protocol != "" {
+			probe.Protocol = *body.Protocol
+		}
+		if body.MotionSource != nil {
+			probe.MotionSource = *body.MotionSource
+		}
+		if body.MJPEGForm != nil {
+			probe.MJPEGForm = *body.MJPEGForm
 		}
 		if body.RecordingMode != nil {
 			probe.RecordingMode = *body.RecordingMode

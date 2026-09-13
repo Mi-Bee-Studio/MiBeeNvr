@@ -15,6 +15,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
@@ -105,13 +106,21 @@ func runRepairDuration() int {
 
 		// Probe the actual duration. For MP4 files use FastProbeDuration (reads
 		// only the stts box — ~100× faster than full ParseSegment for large
-		// files). For MJPEG frame directories (ESP32 MiBeeCam), estimate from
-		// frame count × a nominal frame interval.
+		// files). For AVI containers (#761 MJPEG/JPEG default) derive from the
+		// demuxer's frame index. For MJPEG frame directories (ESP32 MiBeeCam),
+		// estimate from frame count × a nominal frame interval.
 		var dur float64
 		if mediaprobe.IsLikelyMP4(rec.FilePath) {
 			d, err := mediaprobe.FastProbeDuration(rec.FilePath)
 			if err != nil {
 				handleUnrepairable(i+1, len(zeroRecs), rec, fmt.Sprintf("probe failed: %v", err))
+				continue
+			}
+			dur = d
+		} else if strings.HasSuffix(rec.FilePath, ".avi") {
+			d, err := estimateAVIDuration(rec.FilePath)
+			if err != nil {
+				handleUnrepairable(i+1, len(zeroRecs), rec, fmt.Sprintf("avi estimate failed: %v", err))
 				continue
 			}
 			dur = d

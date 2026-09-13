@@ -768,6 +768,42 @@ func TestReconcileOrphanedFiles_Basic(t *testing.T) {
 	}
 }
 
+// TestReconcileOrphanedFiles_AVI (#761): AVI is now the DOMINANT MJPEG
+// segment form — a crash-finalized .avi orphan must reconcile into a
+// FormatAVI recording row like .mp4 files do, or every post-flip crash
+// recovery would silently lose the segment.
+func TestReconcileOrphanedFiles_AVI(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "store")
+	m, err := NewManager(storeDir)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(dir, "reconcile_avi.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam-avi", "AVI Cam", "http", "jpeg", "http://host/stream", "", "", "", "", "", ""))
+
+	camDir := filepath.Join(storeDir, "cam-avi")
+	require.NoError(t, os.MkdirAll(camDir, 0o755))
+	name := "cam-avi_20260913_120000_1234567890123456789.avi"
+	require.NoError(t, os.WriteFile(filepath.Join(camDir, name), []byte("fake-avi-data"), 0o644))
+
+	cameraIDs := map[string]bool{"cam-avi": true}
+	count, err := m.ReconcileOrphanedFiles(ctx, db, cameraIDs)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	got, err := db.GetRecording(ctx, "1234567890123456789")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, model.FormatAVI, got.Format, ".avi orphan must reconcile as format=avi")
+	require.Equal(t, filepath.Join(camDir, name), got.FilePath)
+}
+
 func TestReconcileOrphanedFiles_SkipsUnknownCamera(t *testing.T) {
 	dir := t.TempDir()
 	storeDir := filepath.Join(dir, "store")
@@ -1099,17 +1135,18 @@ func TestParseRecordingName(t *testing.T) {
 
 	valid := []struct {
 		name    string
-		wantMP4 bool
+		wantExt string
 	}{
-		{camID + "_20260629_063758_1782686278819104131.mp4", true},
-		{camID + "_20260629_063758_1782686278819104131", false}, // MJPEG dir
-		{camID + "_20260720_100000_1111111111111111111.mp4", true},
+		{camID + "_20260629_063758_1782686278819104131.mp4", ".mp4"},
+		{camID + "_20260629_063758_1782686278819104131", ""}, // MJPEG dir
+		{camID + "_20260720_100000_1111111111111111111.mp4", ".mp4"},
+		{camID + "_20260913_120000_1234567890123456789.avi", ".avi"}, // #761 container form
 	}
 	for _, tc := range valid {
 		got, ok := parseRecordingName(tc.name, camID)
 		require.True(t, ok, "valid name rejected: %s", tc.name)
 		require.Equal(t, camID, got.cameraID)
-		require.Equal(t, tc.wantMP4, got.isMP4File)
+		require.Equal(t, tc.wantExt, got.fileExt)
 		require.False(t, got.startedAt.IsZero(), "startedAt should parse")
 		require.NotEmpty(t, got.nanoID)
 	}
@@ -1127,8 +1164,8 @@ func TestParseRecordingName(t *testing.T) {
 		// Bad date format.
 		camID + "_notadate_063758_1782686278819104131.mp4",
 		camID + "_20261329_063758_1782686278819104131.mp4", // month 13
-		// Non-mp4 file with extension.
-		camID + "_20260629_063758_1782686278819104131.avi",
+		// Non-recording files with extensions (.avi is now VALID — #761).
+		camID + "_20260629_063758_1782686278819104131.mov",
 		"config.yaml",
 		"orphan.tmp",
 		// Random junk.

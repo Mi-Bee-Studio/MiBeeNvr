@@ -113,6 +113,11 @@ func (r *HTTPJPEGRecorder) ManualRecordingActive() bool { return r.manual.Active
 // HubSource labels the hub for the flow-path observability view.
 func (r *HTTPJPEGRecorder) HubSource() string { return "http-jpeg" }
 
+// AVIForm reports whether the recorder writes single-file AVI segments
+// (#761). Exposed read-only for wiring tests (builder → config resolution) —
+// mirrors the pixgate MetricsWired precedent.
+func (r *HTTPJPEGRecorder) AVIForm() bool { return r.cfg.AVI }
+
 // StreamURL returns the MJPEG stream URL.
 func (r *HTTPJPEGRecorder) StreamURL() string { return r.cfg.URL }
 
@@ -165,69 +170,20 @@ func (r *HTTPJPEGRecorder) recordError(errorType string) {
 
 var _ model.Recorder = (*HTTPJPEGRecorder)(nil)
 
-// aviSegmentDurCap returns the maximum segment duration for AVI-mode recorders
-// (HTTPJPEG with AVI=true, MJPEG with audio). AVI muxer buffers ALL frames in
-// RAM until segment close (avi/muxer.go:m.buf), so segment duration directly
-// determines per-stream RAM: 1080p MJPEG @ 1.5Mbps ≈ 5.6MB/30s, 56MB/5min.
-//
-// Low-memory hosts (≤2GB, e.g. RPi 3B with 1GB) must stay at 30s — a single
-// 5-min AVI segment would consume ~5% of total RAM per camera, and the legacy
-// cap was chosen for this reason. Hosts with >2GB (Banana Pi M5, x86) can
-// safely use 5min, reducing 24h fragment count from ~2880 to ~288 per camera
-// (10× reduction in merge backlog pressure for JPEG cameras).
-//
-// Threshold mirrors config.maxSegmentDurationForMem (2GB) for consistency.
-func aviSegmentDurCap() time.Duration {
-	const (
-		lowMemCap  = 30 * time.Second // RPi 3B (≤2GB): AVI muxer RAM safety
-		highMemCap = 5 * time.Minute  // Banana Pi M5 / x86 (>2GB): 10× fewer fragments
-		threshold  = 2048             // MB — 2GB
-	)
-	if memAvailableMB() > threshold {
-		return highMemCap
-	}
-	return lowMemCap
-}
-
-// memAvailableMB reports available RAM in MB. Reads /proc/meminfo on Linux;
-// falls back to a conservative value on other platforms (treat as low-mem).
-// Local copy of config.memAvailableMB to avoid a config→recorder import cycle
-// (recorder is imported by many packages including ones config depends on).
-func memAvailableMB() int {
-	const fallback = 1024 // conservative: assume low memory on non-Linux
-	data, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return fallback
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "MemAvailable:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				var kb int
-				if _, err := fmt.Sscanf(fields[1], "%d", &kb); err == nil {
-					return kb / 1024
-				}
-			}
-		}
-	}
-	return fallback
-}
+// aviRotateBytes is the early-rotation threshold for AVI segments (#761): the
+// RIFF chunk/list size fields are uint32, so a segment must rotate before the
+// file reaches 4 GiB. 3.5 GiB leaves headroom for the idx1 tail and the final
+// frames in flight. The old RAM-based segment-duration cap (aviSegmentDurCap)
+// is gone with it — the AVI muxer now streams incrementally to disk (avi.Muxer
+// io.WriterAt mode), so memory no longer scales with segment size; duration is
+// bounded by this byte ceiling instead. A package var (not const) purely so
+// tests can shrink it.
+var aviRotateBytes int64 = int64(7) << 29 // 3.5 GiB
 
 func NewHTTPJPEGRecorder(cfg HTTPJPEGConfig, store SegmentStore, opts ...*metrics.Metrics) *HTTPJPEGRecorder {
 	var m *metrics.Metrics
 	if len(opts) > 0 {
 		m = opts[0]
-	}
-	if cfg.AVI {
-		// AVI muxer buffers all frames in RAM until segment close, so cap
-		// duration by available memory. On RPi 3B this stays at 30s; on >2GB
-		// hosts it rises to 5m (10× fewer fragments → 10× less merge backlog).
-		if durCap := aviSegmentDurCap(); cfg.SegmentDur > durCap {
-			httpJpegLogger.Warn("AVI mode: SegmentDur capped by available RAM",
-				"camera_id", cfg.CameraID, "configured", cfg.SegmentDur, "capped_to", durCap,
-				"mem_available_mb", memAvailableMB())
-			cfg.SegmentDur = durCap
-		}
 	}
 	if cfg.SegmentDur == 0 {
 		cfg.SegmentDur = DefaultSegmentDur
@@ -613,8 +569,14 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		}
 		r.lastFrameTime.Store(time.Now().Unix())
 
-		// Check if segment duration elapsed
-		if time.Since(r.segStart) >= r.cfg.SegmentDur {
+		// Check if segment duration elapsed, or the AVI size ceiling approached
+		rotate := false
+		if r.cfg.AVI && r.aviMuxer != nil {
+			r.mu.Lock()
+			rotate = r.aviMuxer.TotalBytes() >= aviRotateBytes
+			r.mu.Unlock()
+		}
+		if rotate || time.Since(r.segStart) >= r.cfg.SegmentDur {
 			r.closeCurrentSegment()
 		}
 	}

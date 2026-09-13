@@ -1866,6 +1866,34 @@ func TestMQTTStatusEventsConfig(t *testing.T) {
 	require.False(t, cfg.MQTT.StatusEvents, "default mqtt.status_events should be false")
 }
 
+// TestValidateCameraMJPEGForm (#761): the mjpeg_form allowlist — "" or "avi"
+// (single-file AVI container, the default) and "dir" (legacy per-frame
+// directory opt-out).
+func TestValidateCameraMJPEGForm(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		form    string
+		wantErr bool
+	}{
+		{"empty defaults to avi", "", false},
+		{"explicit avi", "avi", false},
+		{"dir opt-out", "dir", false},
+		{"garbage value rejected", "flv", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cam := CameraConfig{ID: "cam-1", Protocol: "http", MJPEGForm: tc.form}
+			err := ValidateCameraRecordingMode(cam)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestValidateCameraMotionSource (#711): the motion-source allowlist plus the
 // protocol gate for camera:onvif.
 func TestValidateCameraMotionSource(t *testing.T) {

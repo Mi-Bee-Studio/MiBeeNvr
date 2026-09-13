@@ -651,6 +651,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.MotionSource != nil {
 		cam.MotionSource = *updates.MotionSource
 	}
+	if updates.MJPEGForm != nil {
+		cam.MJPEGForm = *updates.MJPEGForm
+	}
 	if updates.Pixgate != nil {
 		cam.Pixgate = updates.Pixgate
 	}

@@ -175,9 +175,11 @@ func TestHTTPJPEGAVIRecording(t *testing.T) {
 	}
 }
 
-func TestHTTPJPEGSegmentDurCap(t *testing.T) {
-	// When AVI=true with SegmentDur above the platform cap, it should be capped.
-	// The cap is RAM-dependent: 30s on ≤2GB hosts, 5m on >2GB hosts.
+func TestHTTPJPEGSegmentDurNoRamCap(t *testing.T) {
+	// #761: the RAM-based AVI duration cap is gone — the incremental muxer
+	// streams to disk, so a long SegmentDur passes through unchanged. The RIFF
+	// uint32 ceiling is guarded by the byte-based rotation (aviRotateBytes),
+	// not by clamping duration.
 	srv, handler := newMJPEGStreamServer()
 	defer srv.Close()
 
@@ -185,17 +187,14 @@ func TestHTTPJPEGSegmentDurCap(t *testing.T) {
 	cfg := HTTPJPEGConfig{
 		CameraID:   "cam-http-jpeg-cap",
 		URL:        srv.URL,
-		SegmentDur: 120 * time.Minute, // way over any platform cap
+		SegmentDur: 120 * time.Minute, // would have been capped to 30s/5m before #761
 		AVI:        true,
 		Width:      32,
 		Height:     24,
 	}
 	rec := NewHTTPJPEGRecorder(cfg, mgr)
-	want := aviSegmentDurCap()
-	require.Equal(t, want, rec.cfg.SegmentDur,
-		"SegmentDur should be capped at aviSegmentDurCap() = %v (got %v)", want, rec.cfg.SegmentDur)
-	require.Less(t, rec.cfg.SegmentDur, cfg.SegmentDur,
-		"capped value should be less than configured")
+	require.Equal(t, cfg.SegmentDur, rec.cfg.SegmentDur,
+		"SegmentDur must not be RAM-capped anymore (#761 incremental muxer)")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -210,7 +209,7 @@ func TestHTTPJPEGSegmentDurCap(t *testing.T) {
 }
 
 func TestHTTPJPEGSegmentDurNoCap(t *testing.T) {
-	// When AVI=false with SegmentDur > 30s, it should NOT be capped.
+	// AVI=false with SegmentDur > 30s passes through (dir path never had a cap).
 	cfg := HTTPJPEGConfig{
 		CameraID:   "cam-no-cap",
 		URL:        "http://127.0.0.1:1/test",
@@ -271,24 +270,10 @@ func TestHTTPJPEGFlagDisabled(t *testing.T) {
 	}
 }
 
-// TestAviSegmentDurCap verifies the RAM-dependent cap returns one of the two
-// documented values and that it's a positive duration.
-func TestAviSegmentDurCap(t *testing.T) {
-	durCap := aviSegmentDurCap()
-	require.Greater(t, durCap, time.Duration(0), "cap must be positive")
-	// Must be one of the two documented values
-	if durCap != 30*time.Second && durCap != 5*time.Minute {
-		t.Fatalf("aviSegmentDurCap() returned %v, expected 30s (≤2GB) or 5m (>2GB)", durCap)
-	}
-	t.Logf("aviSegmentDurCap() = %v on this host (memAvailableMB=%d)", durCap, memAvailableMB())
-}
-
-// TestMemAvailableMB returns a sane value on Linux.
-func TestMemAvailableMB(t *testing.T) {
-	mb := memAvailableMB()
-	require.Greater(t, mb, 0, "memAvailableMB must be positive")
-	// Any real Linux host has at least 128MB available; the fallback is 1024.
-	require.Less(t, mb, 1024*1024, "memAvailableMB should be <1TB (sanity check)")
+// TestAviRotateBytesDefault verifies the RIFF uint32 safety ceiling is set at
+// 3.5 GiB (replaces the removed RAM-based aviSegmentDurCap — #761).
+func TestAviRotateBytesDefault(t *testing.T) {
+	require.Equal(t, int64(7)<<29, aviRotateBytes, "AVI rotation ceiling must stay under the 4GiB RIFF limit")
 }
 
 // vanishedTmpStore simulates a segment tmp that disappears mid-stream

@@ -408,6 +408,14 @@ cameras:
 - **描述**: MJPEG 帧采样间隔（秒）。较高的值可减少 CPU 使用率但降低帧率
 - **示例**: `1`, `2`, `5`
 
+### `cameras[].mjpeg_form`
+- **类型**: string
+- **可选**: 是
+- **默认**: `"avi"`（#761）
+- **描述**: MJPEG/JPEG 相机（rtsp+mjpeg、http_jpeg、ONVIF-JPEG）的录像段形态。`"avi"`——每段一个 AVI 单文件容器（默认；消除每帧一文件的元数据 churn，删除从整目录递归退化为单次 unlink，深扫/保留期开销大幅下降）；`"dir"`——旧的每帧一个 JPEG 文件目录形态（显式退路）。开启音频的 MJPEG 相机始终录制 AVI，与本项无关。变更需重启 NVR 生效。旧键 `http_jpeg_avi` 已废弃——其值不再被读取（AVI 即默认；需要目录形态请设 `mjpeg_form: "dir"`）。
+- **示例**: `"avi"`, `"dir"`
+- **存量段**: 目录形历史段可继续回放/合并/清理，无需迁移即可混用。
+
 ### `cameras[].hls_max_fps`
 - **类型**: integer
 - **可选**: 是
