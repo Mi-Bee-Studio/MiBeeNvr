@@ -264,10 +264,11 @@ func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID st
 			rollingLogger.Info("rolling MP4 batch merged",
 				"camera_id", cameraID, "segments", n)
 			// The batch produced standalone output files that are NOT tracked
-			// by the in-memory bucket state. Drop the stale bucket so the next
+			// by the in-memory bucket state. Drop the retained set so the next
 			// single-segment append builds a fresh bucket instead of appending
-			// over the batch's time range (double-covered timeline).
-			r.buckets.Delete(cameraID)
+			// over the batch's time range (double-covered timeline) — and
+			// account the dropped buckets on the finalize metric.
+			r.dropBuckets(cameraID, "batch_reset")
 		}
 	} else {
 		for _, seg := range mp4Segs {
