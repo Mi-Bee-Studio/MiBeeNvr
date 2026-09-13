@@ -94,13 +94,9 @@ curl -u admin:password \
 ### HLS 流媒体示例
 
 ```bash
-# 获取 HLS 播放列表
+# 获取 HLS 播放列表（切片 URL 由播放列表以相对路径引用，交给播放器自动拉取）
 curl -u admin:password \
-  "http://localhost:9090/api/cameras/living-room/stream/stream.m3u8"
-
-# 获取 HLS 切片
-curl -u admin:password \
-  "http://localhost:9090/api/cameras/living-room/stream/segment_001.ts"
+  "http://localhost:9090/api/cameras/living-room/stream/index.m3u8"
 ```
 
 ### 小米摄像头设置

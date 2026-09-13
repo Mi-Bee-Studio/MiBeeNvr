@@ -849,8 +849,34 @@ func TestApplyDefaultsHLS(t *testing.T) {
 	require.Equal(t, 10, cfg.HLS.SegmentMaxSizeMB)
 	require.Equal(t, 7, cfg.HLS.SegmentCount)
 	require.Equal(t, 4, cfg.HLS.MaxStreams)
-	require.False(t, cfg.HLS.LowLatency)
+	// #772: LL-HLS defaults to on (nil → true).
+	require.NotNil(t, cfg.HLS.LowLatency)
+	require.True(t, *cfg.HLS.LowLatency)
+	require.True(t, cfg.HLS.LowLatencyEnabled())
 	require.Equal(t, "200ms", cfg.HLS.PartMinDuration)
+}
+
+// TestApplyDefaultsHLS_LowLatencyMigration: deployments that never set
+// low_latency ran LL in practice (the key was dead), so defaulting it on
+// must not fail validation for a low explicit segment_count — the count is
+// raised to the LL floor instead (#772).
+func TestApplyDefaultsHLS_LowLatencyMigration(t *testing.T) {
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 4}}
+	cfg.ApplyDefaults()
+	require.True(t, cfg.HLS.LowLatencyEnabled())
+	require.Equal(t, 7, cfg.HLS.SegmentCount, "segment_count raised to the LL floor")
+	require.NoError(t, Validate(cfg))
+}
+
+// TestApplyDefaultsHLS_ExplicitFalseHonored: an explicit low_latency: false
+// selects classic playlists and lifts the segment_count floor (#772).
+func TestApplyDefaultsHLS_ExplicitFalseHonored(t *testing.T) {
+	f := false
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 4, LowLatency: &f}}
+	cfg.ApplyDefaults()
+	require.False(t, cfg.HLS.LowLatencyEnabled())
+	require.Equal(t, 4, cfg.HLS.SegmentCount, "count untouched in classic mode")
+	require.NoError(t, Validate(cfg))
 }
 
 func TestHLSPartMinDurationValidation_Invalid(t *testing.T) {
@@ -878,7 +904,8 @@ func TestHLSPartMinDurationValidation_TooHigh(t *testing.T) {
 }
 
 func TestHLSLowLatency_SegmentCountTooLow(t *testing.T) {
-	cfg := &Config{HLS: HLSConfig{SegmentCount: 5, LowLatency: true, PartMinDuration: "200ms"}}
+	tr := true // explicit low_latency: true — the migration guard must NOT bump the count
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 5, LowLatency: &tr, PartMinDuration: "200ms"}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.Error(t, err)
@@ -886,7 +913,8 @@ func TestHLSLowLatency_SegmentCountTooLow(t *testing.T) {
 }
 
 func TestHLSLowLatency_SegmentCount7(t *testing.T) {
-	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, LowLatency: true, PartMinDuration: "200ms"}}
+	tr := true
+	cfg := &Config{HLS: HLSConfig{SegmentCount: 7, LowLatency: &tr, PartMinDuration: "200ms"}}
 	cfg.ApplyDefaults()
 	err := Validate(cfg)
 	require.NoError(t, err)

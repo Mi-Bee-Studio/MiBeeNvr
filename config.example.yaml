@@ -292,7 +292,9 @@ hls:
   segment_max_size_mb: 10          # HLS segment max size in MB (default: 10)
   segment_count: 7                 # Segments per stream (range: 3-10, default: 7)
   max_streams: 4                   # Max concurrent HLS streams (range: 1-20, default: 4)
-  low_latency: false               # Enable Low-Latency HLS (default: false)
+  low_latency: true                # Low-Latency HLS, on by default (unset = on). Set false for classic
+                                    # segment playlists (H264→MPEG-TS .ts, H265→fMP4) for plain-HLS
+                                    # clients; takes effect after restart. LL requires segment_count >= 7
   part_min_duration: "200ms"       # LL-HLS part duration (range: 100ms-1s, default: 200ms)
 
 # Observability — logging and debugging
