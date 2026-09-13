@@ -171,8 +171,8 @@ func TestScanFor_StopsAtMaxParallel(t *testing.T) {
 	}
 
 	eng := NewEngine(Config{MaxParallel: maxScans, ProbeTimeout: time.Second, MaxDuration: 10 * time.Second}, probe)
-	got := eng.scanFor(context.Background(), hosts, 80, "nobody")
-	mustEqual(t, got, "", "no match expected")
+	got := eng.scanFor(context.Background(), hosts, []int{80}, "nobody")
+	mustEqual(t, got.host, "", "no match expected")
 	mustEqual(t, int(peak) <= maxScans, true, "peak concurrency must not exceed MaxParallel")
 	mustEqual(t, int(atomic.LoadInt32(&probeCount)), total, "all hosts probed")
 }
@@ -205,7 +205,7 @@ func TestBuildCandidates_DeduplicatesAndSkipsBroadcast(t *testing.T) {
 		ONVIFEndpoint: "http://192.0.2.5/onvif/device_service",
 		SubnetHints:   []string{"192.0.2.0/24"},
 	}
-	got := buildCandidates(cam, 80)
+	got := buildCandidates(cam)
 
 	seen := make(map[string]int)
 	for _, h := range got {

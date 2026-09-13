@@ -823,6 +823,20 @@ func validateConfigDetails(cfg *Config) error {
 		}
 	}
 
+	// Rediscovery port sweep: each entry is a TCP port, and the list is capped
+	// because probe cost scales as candidates × ports against max_duration
+	// (RPi-3B budget; cap mirrors rediscovery.maxProbePorts). Validated
+	// unconditionally so an invalid list is caught even while health monitoring
+	// is disabled.
+	for i, p := range cfg.Health.Rediscovery.ProbePorts {
+		if p < 1 || p > 65535 {
+			return fmt.Errorf("health.rediscovery.probe_ports[%d] must be a valid TCP port (1-65535), got %d", i, p)
+		}
+	}
+	if len(cfg.Health.Rediscovery.ProbePorts) > 8 {
+		return fmt.Errorf("health.rediscovery.probe_ports must have at most 8 entries (each port multiplies probe cost against max_duration), got %d", len(cfg.Health.Rediscovery.ProbePorts))
+	}
+
 	// AI validation
 	if cfg.AI.Enabled {
 		if cfg.AI.ConfidenceThreshold < 0 || cfg.AI.ConfidenceThreshold > 1 {

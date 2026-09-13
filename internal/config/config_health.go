@@ -31,6 +31,12 @@ type RediscoveryConfig struct {
 	// MaxDuration bounds a single full scan (default "30s") so a wide subnet_hints
 	// list cannot pin the heal loop forever.
 	MaxDuration string `yaml:"max_duration"`
+	// ProbePorts is the non-standard ONVIF port sweep list (default
+	// [80, 8080, 8899]). The camera's last-known port is ALWAYS probed first;
+	// an explicit list replaces the defaults. Keep it short (≤8, validated):
+	// every extra port multiplies the probe budget (candidates × ports) against
+	// max_duration.
+	ProbePorts []int `yaml:"probe_ports"`
 }
 
 // RediscoveryEnabled reports the effective enabled state (defaults to true when
