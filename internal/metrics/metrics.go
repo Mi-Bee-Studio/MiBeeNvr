@@ -108,6 +108,16 @@ type Metrics struct {
 	RollingBucketFinalizedTotal  *prometheus.CounterVec   // labels: reason
 	RollingBucketLifetimeSeconds *prometheus.HistogramVec // labels: reason
 
+	// Pixgate sampler telemetry (#699): the journal proved unreliable for
+	// field diagnosis (journald vacuuming under disk pressure erased 10 days
+	// of a stuck-in-timelapse investigation), so the gate's health lives in
+	// Prometheus instead. LastSampleTimestamp is the sampler heartbeat —
+	// a stale value separates "sampler dead" from "scene quiet".
+	PixgateSamplesTotal        *prometheus.CounterVec // labels: camera_id, source (hub|rtsp)
+	PixgateTriggersTotal       *prometheus.CounterVec // labels: camera_id
+	PixgateLastAreaPct         *prometheus.GaugeVec   // labels: camera_id
+	PixgateLastSampleTimestamp *prometheus.GaugeVec   // labels: camera_id (unix seconds)
+
 	// Memory self-discipline (#756): the GOMEMLIMIT installed at startup
 	// (0 = not set — env var won, disabled by config, or unknown host).
 	MemorySoftLimitBytes prometheus.Gauge
@@ -531,6 +541,22 @@ func NewMetrics() *Metrics {
 		Help:    "Wall time from bucket creation to finalize, partitioned by reason (#764).",
 		Buckets: []float64{1, 5, 15, 60, 300, 900, 3600, 21600},
 	}, []string{"reason"})
+	pixgateSamplesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_pixgate_samples_total",
+		Help: "Pixel-gate samples processed, partitioned by camera and sampler source (#699).",
+	}, []string{"camera_id", "source"})
+	pixgateTriggersTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_pixgate_triggers_total",
+		Help: "Pixel-gate confirmed-activity triggers (full-rate exits), partitioned by camera (#699).",
+	}, []string{"camera_id"})
+	pixgateLastAreaPct := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_pixgate_last_area_pct",
+		Help: "Largest foreground blob area (% of grid) of the most recent sample per camera (#699).",
+	}, []string{"camera_id"})
+	pixgateLastSampleTimestamp := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_pixgate_last_sample_timestamp_seconds",
+		Help: "Unix time of the most recent sample per camera — the sampler heartbeat; staleness separates a dead sampler from a quiet scene (#699).",
+	}, []string{"camera_id"})
 
 	// Auth metrics — track login attempts for security monitoring
 	authAttemptsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -815,6 +841,10 @@ func NewMetrics() *Metrics {
 		RollingMergeBucketSegments:     rollingMergeBucketSegments,
 		RollingBucketFinalizedTotal:    rollingBucketFinalizedTotal,
 		RollingBucketLifetimeSeconds:   rollingBucketLifetimeSeconds,
+		PixgateSamplesTotal:            pixgateSamplesTotal,
+		PixgateTriggersTotal:           pixgateTriggersTotal,
+		PixgateLastAreaPct:             pixgateLastAreaPct,
+		PixgateLastSampleTimestamp:     pixgateLastSampleTimestamp,
 		AuthAttemptsTotal:              authAttemptsTotal,
 		AuthRateLimitedTotal:           authRateLimitedTotal,
 		AIEventsReceivedTotal:          aiEventsReceivedTotal,
@@ -912,6 +942,31 @@ func (m *Metrics) UpdateRollingMergeBucketSegments(cameraID string, count int) {
 		return
 	}
 	m.RollingMergeBucketSegments.WithLabelValues(cameraID).Set(float64(count))
+}
+
+// RecordPixgateSample records one processed pixel-gate sample: the counter
+// carries camera+source, the gauges refresh the sampler heartbeat (unix
+// timestamp) and the last FG area (#699).
+func (m *Metrics) RecordPixgateSample(cameraID, source string, areaPct float64) {
+	if m == nil || m.PixgateSamplesTotal == nil {
+		return
+	}
+	m.PixgateSamplesTotal.WithLabelValues(cameraID, source).Inc()
+	if m.PixgateLastAreaPct != nil {
+		m.PixgateLastAreaPct.WithLabelValues(cameraID).Set(areaPct)
+	}
+	if m.PixgateLastSampleTimestamp != nil {
+		m.PixgateLastSampleTimestamp.WithLabelValues(cameraID).Set(float64(time.Now().UnixNano()) / 1e9)
+	}
+}
+
+// RecordPixgateTrigger records a confirmed-activity trigger (full-rate exit)
+// for a camera (#699).
+func (m *Metrics) RecordPixgateTrigger(cameraID string) {
+	if m == nil || m.PixgateTriggersTotal == nil {
+		return
+	}
+	m.PixgateTriggersTotal.WithLabelValues(cameraID).Inc()
 }
 
 // RecordRollingBucketFinalized records a rolling bucket leaving the retained

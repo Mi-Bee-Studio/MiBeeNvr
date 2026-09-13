@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
 
 // Target mirrors substream.Target's RTSP-relevant subset (kept local so the
@@ -107,6 +108,10 @@ type Config struct {
 	Trigger        Trigger
 	Bus            Publisher
 	Log            *slog.Logger
+	// Metrics receives the sampler telemetry (#699): per-camera sample
+	// counters, trigger counts and the last-sample heartbeat gauge. nil =
+	// no telemetry (tests that don't assert on it).
+	Metrics *metrics.Metrics
 	// Cameras is the enabled set, refreshed via SetCameras.
 	Cameras map[string]CameraConfig
 }
@@ -471,6 +476,15 @@ func (m *Manager) runCamera(ctx context.Context, cameraID string, cfg CameraConf
 			return ctx.Err() == nil
 		}
 		m.recordFG(cameraID, now, res.BlobAreaPct, !res.Flood && !res.Ghost)
+		// Prometheus telemetry (#699): the journal is not a durable
+		// observation surface (field incident lost 10 days to journald
+		// vacuuming) — counters and the heartbeat gauge are.
+		if m.cfg.Metrics != nil {
+			m.cfg.Metrics.RecordPixgateSample(cameraID, srcLabel, res.BlobAreaPct)
+			if res.Active {
+				m.cfg.Metrics.RecordPixgateTrigger(cameraID)
+			}
+		}
 		if line, emit := stats.observe(now, res.BlobAreaPct, !res.Flood && !res.Ghost, res.Active); emit {
 			// #699 field visibility: the normal path is silent, which left
 			// TL-stuck cameras undiagnosable from the journal alone.
