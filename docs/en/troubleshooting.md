@@ -546,6 +546,11 @@ Live merge states (`pending`/`merged`/`merging`) are never matched by `--status`
    curl -u admin:password http://localhost:9090/api/merge/pending
    ```
 
+   When reading pending counts (API or raw SQL), note that `merge_status='pending'`
+   on `layer=1` rows would NOT be merge backlog: sub-stream archive segments
+   (tiered recording) never enter the merge pipeline and carry the terminal
+   status `sublayer` since v39 — only `layer=0` `pending` rows are real backlog.
+
 ### High Memory Usage
 
 #### Camera Consumes Too Much RAM

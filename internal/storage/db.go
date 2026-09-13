@@ -256,8 +256,14 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // management page sends the full named-group order). Also ensured via
 // idempotent ALTER.
 //
+// v39: one-shot DATA migration (#763) — layer=1 tierrec rows inserted before
+// the terminal-status fix carried merge_status='pending' forever (98% of all
+// pending rows in production, polluting pending-based diagnostics and
+// crowding the ghost-row sweep). Init rewrites them to the terminal
+// 'sublayer' status; the UPDATE is idempotent (second boot touches 0 rows).
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "38"
+const currentSchemaVersion = "39"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -534,6 +540,16 @@ func (d *DB) Init(ctx context.Context) error {
 	// ── Column backfill for pre-v38 databases: camera_groups.position ──
 	if err := d.ensureCameraGroupsPositionColumn(ctx); err != nil {
 		return err
+	}
+
+	// ── v39 data migration (#763): retire permanently-pending layer=1 rows ──
+	// Sub-layer segments never enter the merge pipeline, so 'pending' was a
+	// wrong lifecycle from birth. Idempotent: after the first run no
+	// layer!=0 'pending' rows remain (the writer now inserts terminal).
+	if _, err := d.db.ExecContext(ctx,
+		`UPDATE recordings SET merge_status='sublayer' WHERE COALESCE(layer,0)!=0 AND merge_status='pending'`,
+	); err != nil {
+		return fmt.Errorf("v39 sublayer status migration: %w", err)
 	}
 
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value=? WHERE key='schema_version'", currentSchemaVersion)

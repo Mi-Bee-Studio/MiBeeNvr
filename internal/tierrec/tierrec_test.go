@@ -98,6 +98,12 @@ func TestSubRecorder_WritesLayerOneSegments(t *testing.T) {
 	if r.Layer != model.LayerSub {
 		t.Fatalf("row layer = %d, want %d", r.Layer, model.LayerSub)
 	}
+	// #763: sub-layer rows never enter the merge pipeline — they are born
+	// terminal. A 'pending' insert is the zombie-row bug (98% of production
+	// pending pollution).
+	if r.MergeStatus != model.MergeStatusSublayer {
+		t.Fatalf("row merge_status = %q, want terminal %q", r.MergeStatus, model.MergeStatusSublayer)
+	}
 	if r.FrameCount == 0 || r.CameraID != "cam-sub" {
 		t.Fatalf("bad row: frames=%d cam=%s", r.FrameCount, r.CameraID)
 	}
