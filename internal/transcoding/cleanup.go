@@ -38,7 +38,17 @@ func CleanOrphanedTranscodes(ctx context.Context, dataDir string, db DBTaskListe
 	var deleted int
 	err = filepath.WalkDir(dataDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			if d == nil {
+				// The root itself failed — nothing to walk.
+				return err
+			}
+			// Entry-level failure (e.g. an unreadable dir left behind by a
+			// root-run CLI): skip this entry and keep sweeping the rest —
+			// aborting here would leave every later orphan alive forever
+			// (M5 production: one root-owned periodic_extract dir silenced
+			// the whole sweep, every cycle, 2026-09-14).
+			slog.Warn("orphan sweep: skipping unreadable entry", "path", path, "error", err)
+			return nil
 		}
 		if d.IsDir() {
 			return nil

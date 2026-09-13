@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -215,6 +216,53 @@ func (m *PeriodicMergeManager) tempDirBase() string {
 	return filepath.Join(m.dataDir, "tmp")
 }
 
+// extractDirGrace bounds how long a periodic_extract_* directory may sit
+// under the temp base before the sweep reclaims it. Live merges hold their
+// extract dir only for one Run (minutes); the grace covers a full natural-day
+// window's worst case with heavy IO, so anything older is a crash/interrupt
+// leftover (server died mid-window, or a Ctrl-C'd timelapse-merge CLI — one
+// such run as root even left root-owned dirs on M5, 2026-09-14).
+const extractDirGrace = 24 * time.Hour
+
+// sweepStaleExtractDirs removes periodic_extract_* leftovers older than
+// extractDirGrace from the temp base. Returns the number of dirs removed.
+// Unreadable entries are skipped (WARN) — a root-owned leftover must not
+// silence the sweep.
+func (m *PeriodicMergeManager) sweepStaleExtractDirs() int {
+	base := m.tempDirBase()
+	if base == "" {
+		return 0
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		slog.Warn("periodic merge: extract-dir sweep cannot read temp base", "dir", base, "error", err)
+		return 0
+	}
+	cutoff := time.Now().Add(-extractDirGrace)
+	removed := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "periodic_extract_") {
+			continue
+		}
+		dir := filepath.Join(base, e.Name())
+		info, err := e.Info()
+		if err != nil {
+			slog.Warn("periodic merge: extract-dir sweep cannot stat entry", "dir", dir, "error", err)
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue // possibly live (or grace-period young)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			slog.Warn("periodic merge: extract-dir sweep cannot remove stale dir", "dir", dir, "error", err)
+			continue
+		}
+		slog.Info("periodic merge: swept stale extract dir", "dir", dir, "age", time.Since(info.ModTime()).Round(time.Minute))
+		removed++
+	}
+	return removed
+}
+
 // TempDirBase exposes the effective intermediate-frame directory base.
 // Exposed for wiring regression tests.
 func (m *PeriodicMergeManager) TempDirBase() string {
@@ -375,6 +423,10 @@ func (m *PeriodicMergeManager) Duration() time.Duration {
 // existing timelapse recordings. Extracted frames are organized into per-codec
 // temporary directories and cleaned up after merge completion.
 func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.Time) error {
+	// Reclaim crash/interrupt leftovers before creating new ones — a killed
+	// merge (server crash, Ctrl-C'd CLI) skips the deferred cleanup.
+	m.sweepStaleExtractDirs()
+
 	startTime, endTime := parseMergeRange(t, m.duration, m.loc)
 	windowLabel := startTime.Format("2006-01-02_150405")
 
