@@ -2,12 +2,13 @@
 
 > Applies to MiBee NVR v0.12.0+ (built-in RTSP output, MQTT triggers and status publishing)
 
-MiBee NVR has no official Home Assistant integration, but its RTSP output, REST API, MQTT trigger, and status publishing capabilities combine into a complete setup. This guide splits the paths by purpose — each can be enabled independently.
+MiBee NVR ships an optional Home Assistant custom integration (Option 0: discovery plus per-camera entities and switches); skipping it is equally viable — the RTSP output, REST API, MQTT trigger, and status publishing capabilities combine into a complete setup. This guide splits the paths by purpose — each can be enabled independently.
 
 ## Overview
 
 | Purpose | Path | Dependencies |
 |---------|------|--------------|
+| All-in-one (discovery + entities + switch) | Bundled custom integration (Option 0) | Manual copy install |
 | View (H.264/H.265 cameras) | RTSP output + Generic Camera | None (HA native) |
 | View (MJPEG/JPEG cameras) | `stream.mjpeg` + MJPEG Camera | None (HA native) |
 | Trigger (HA → NVR) | MQTT trigger | MQTT broker |
@@ -21,6 +22,25 @@ The simplest combination is "RTSP for viewing + MQTT trigger + MQTT state" — H
 - NVR REST endpoints use the web-login credentials as Basic Auth (except `/api/health`, `/api/events`, and `/api/metrics`, which are public).
 - The camera ID is the `id` configured in the NVR (kebab-case, e.g. `front-door`).
 - Never hardcode passwords into version-controlled YAML — use HA `secrets`.
+
+## Option 0: Bundled Custom Integration (recommended)
+
+The repository ships a Home Assistant custom integration ([source and entity list](../../deploy/home-assistant/README.md)). Once installed it discovers NVRs on the LAN automatically and creates, per camera:
+
+- **Camera entity** — H.264/H.265 via the NVR's built-in RTSP output (HA `stream`, 1–3 s latency); MJPEG/JPEG cameras via the `stream.mjpeg` passthrough (HA-native MJPEG camera).
+- **Binary sensors ×2** — *Connected* (connectivity) and *Recording* (segment writer active).
+- **Switch** — toggles the camera's `recording_enabled` flag.
+
+Install (manual copy, ~1 minute; the integration lives in a subdirectory of the main repository, so HACS cannot install it from there):
+
+```bash
+git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git /tmp/mibee-nvr
+mkdir -p <HA-config-dir>/custom_components
+cp -r /tmp/mibee-nvr/deploy/home-assistant/custom_components/mibee_nvr \
+      <HA-config-dir>/custom_components/
+```
+
+After restarting Home Assistant: Settings → Devices & Services → Add Integration → **MiBee NVR**. NVRs on the LAN are auto-discovered via `_mibee-nvr._tcp` mDNS; enter the web-login credentials. Credentials, the RTSP port (default `8554`), and the polling interval (default `30 s`) are adjustable in the integration options.
 
 ## Option A: RTSP Output + Generic Camera (H.264/H.265 cameras)
 
