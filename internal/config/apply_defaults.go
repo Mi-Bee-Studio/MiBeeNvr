@@ -297,6 +297,12 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Storage.SegmentDurationWarnBelow == "" {
 		cfg.Storage.SegmentDurationWarnBelow = "60s"
 	}
+	// Periodic-merge temp-dir sweep grace default (#797 review): 24h —
+	// past any live natural-day merge on slow disks, so the sweep only
+	// reclaims crash/interrupt leftovers.
+	if cfg.Storage.PeriodicTempGraceS == 0 {
+		cfg.Storage.PeriodicTempGraceS = 86400
+	}
 	// Merge defaults
 	if cfg.Merge.BatchLimit <= 0 {
 		cfg.Merge.BatchLimit = 200

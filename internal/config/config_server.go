@@ -142,6 +142,14 @@ type StorageConfig struct {
 	// least one continuous-mode camera has no per-camera override. Default
 	// "60s"; "0s" disables the warning.
 	SegmentDurationWarnBelow string `yaml:"segment_duration_warn_below"`
+	// PeriodicTempGraceS bounds how long periodic-merge temp directories
+	// (periodic_extract_* / periodic_go_merge_* under <root>/periodic-merge/tmp)
+	// may sit before the startup sweep reclaims them — crash/interrupt
+	// leftovers, since the happy path cleans up via defer (#797 review).
+	// 0 = default 86400 (24h — past any live natural-day merge on slow disks).
+	// Smaller risks eating a live merge's inputs on very slow disks; larger
+	// leaks longer. Global key (the temp base is shared across cameras).
+	PeriodicTempGraceS int `yaml:"periodic_temp_grace_s,omitempty"`
 	// Candidates lists additional storage locations made available to the NVR
 	// by the host platform (#395): on fnOS these are the user-authorized
 	// directories (TRIM_DATA_ACCESSIBLE_PATHS), mounted into the container and

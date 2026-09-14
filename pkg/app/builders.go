@@ -498,6 +498,11 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 				timelapse.WithIntermediateMP4Pruner(db),
 				timelapse.WithExtractionInterval(extractInterval),
 				timelapse.WithDeleteRecordingsAfterMerge(cam.Timelapse.DeleteRecordingsAfterMerge),
+				// Temp-dir sweep grace (storage.periodic_temp_grace_s, #797
+				// review): one global value for every manager — the temp base
+				// is shared, per-camera granularity would let the strictest
+				// camera silently win.
+				timelapse.WithTempDirGrace(time.Duration(cfg.Storage.PeriodicTempGraceS)*time.Second),
 			)
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
 			slog.Info(

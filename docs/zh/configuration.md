@@ -234,6 +234,13 @@ cameras:
 
 > 存储与内存的系统性调优（fsync 持久化分级、预分配、GOMEMLIMIT、后台 I/O 预算）见[性能调优](performance.md)。
 
+### `storage.periodic_temp_grace_s`
+- **类型**: integer
+- **可选**: 是
+- **默认**: `86400`（24h）
+- **描述**: periodic 合并临时目录（`<root>/periodic-merge/tmp` 下的 `periodic_extract_*` / `periodic_go_merge_*`）的启动清扫宽限期。崩溃或 Ctrl-C 中断的合并会遗留这些目录（正常路径由 defer 清理）；NVR 启动/每轮合并开始时回收超过宽限期的遗留。**调小有删活数据的风险**——慢速 ARM + USB HDD 上 natural-day 窗口合并可能跑数小时，宽限期必须大于最长合并时长；调大则泄漏滞留更久。全局键（tmp 目录全相机共享）。
+- **示例**: `86400`, `172800`
+
 ### `storage.db_path`
 - **类型**: string
 - **可选**: 是
