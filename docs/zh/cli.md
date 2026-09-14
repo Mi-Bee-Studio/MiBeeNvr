@@ -34,7 +34,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`download-model`](#download-model-下载-ai-模型) | 下载浏览器端 AI 检测模型 |
 | [`merge-cameras`](#merge-cameras-合并摄像头) | 合并两个重复的摄像头条目 |
 | [`timelapse-merge`](#timelapse-merge-录像转延时合并) | 把任意时段的录像批量转成延时合并产物 |
-| [`repair`](#repair-数据修复) | 数据修复工具集（7 个子命令） |
+| [`repair`](#repair-数据修复) | 数据修复工具集（8 个子命令） |
 | [`cleanup`](#cleanup-录像清理) | 按日期 / 孤儿文件清理录像 |
 | [`gen-gb35114-certs`](#gen-gb35114-certs-签发-gb35114-试点证书) | 签发 GB35114 A 级试点证书（仅 `-tags gb35114` 构建） |
 
@@ -181,6 +181,7 @@ mibee-nvr repair <子命令> [--dry-run | --execute] [--config mibee-nvr.yaml]
 | `prune-intermediate-mp4` | 清理已并入周期合并产物（8h/24h/7d/30d）的滚动合并中间 .mp4 |
 | `reclaim-orphan-merges` | 回收 Web UI 删除录像后遗留的孤儿合并 .mp4（只动无引用产物，不碰源段） |
 | `normalize-endpoints` | 规范化 ONVIF endpoint（省略默认端口 / 小写 / 去尾斜杠），修复去重查询不匹配 |
+| `mjpeg-containerize` | 把旧版目录形态 MJPEG 段（每帧一个 JPEG 文件）转成单文件 AVI 容器（#761）；逐段「转换 → 校验 → 落库 → 删源」，校验失败则行不动 |
 
 示例：
 
@@ -190,6 +191,26 @@ mibee-nvr repair duration
 
 # 执行修复，并删除探测失败的坏文件
 mibee-nvr repair duration --execute --prune
+```
+
+`mjpeg-containerize` 专用参数：
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `--camera <id>` | 全部 | 只转换该摄像头的段 |
+| `--limit N` | 全部 | 最多转换 N 段 |
+| `--keep-old` | 关 | 转换后保留源帧目录 |
+| `--busy-retries N` | `3` | DB 行翻转遇 `SQLITE_BUSY` 的重试次数（`0` = 单次尝试，不重试） |
+| `--busy-wait <dur>` | `2s` | BUSY 重试的线性退避基数（Go 时长格式，如 `500ms`、`5s`） |
+
+CLI 与运行中的 NVR 共享 WAL 库——磁盘饱和时服务端合并事务可能拖过 busy_timeout，此时调大这两个值；快盘上默认 3 次的最坏等待是纯浪费，可调小（照 `timelapse-merge --delete-throttle` 先例）。
+
+```bash
+# 预览（默认 dry-run）
+mibee-nvr repair mjpeg-containerize --camera yard-esp32
+
+# 执行；磁盘饱和时放宽 BUSY 重试
+mibee-nvr repair mjpeg-containerize --execute --busy-retries 5 --busy-wait 5s
 ```
 
 ## cleanup — 录像清理

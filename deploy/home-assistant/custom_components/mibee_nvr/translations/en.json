@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Connect Home Assistant to your MiBee NVR.",
+        "data": {
+          "host": "Host",
+          "port": "Port (Web UI, default 9090)",
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificate",
+          "rtsp_port": "RTSP output port (default 8554)"
+        }
+      },
+      "confirm_discovery": {
+        "description": "Found MiBee NVR at {host}:{port}. Enter your web login credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificate",
+          "rtsp_port": "RTSP output port (default 8554)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication"
+    },
+    "abort": {
+      "already_configured": "This NVR is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "rtsp_port": "RTSP output port",
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    }
+  }
+}

@@ -76,13 +76,19 @@ type repairOpts struct {
 	olderThan  time.Duration // 0 = no age filter (delete all matching regardless of age)
 	// prune-intermediate-mp4 specific
 	before string // YYYY-MM-DD — only act on recordings started before this date (UTC)
+	// mjpeg-containerize specific
+	keepOld     bool          // keep the source frame directory after conversion
+	busyRetries int           // SQLITE_BUSY retry attempts for DB row flips (0 = single attempt)
+	busyWait    time.Duration // linear backoff base between BUSY retries
 }
 
 func parseRepairFlags(startIdx int) repairOpts {
 	opts := repairOpts{
-		configPath: "mibee-nvr.yaml",
-		limit:      0,
-		dryRun:     true, // safe default
+		configPath:  "mibee-nvr.yaml",
+		limit:       0,
+		dryRun:      true, // safe default
+		busyRetries: 3,
+		busyWait:    2 * time.Second,
 	}
 	for i := startIdx; i < len(os.Args); i++ {
 		arg := os.Args[i]
@@ -118,6 +124,21 @@ func parseRepairFlags(startIdx int) repairOpts {
 		case arg == "--before" && i+1 < len(os.Args):
 			i++
 			opts.before = os.Args[i]
+		case arg == "--keep-old":
+			opts.keepOld = true
+		case arg == "--busy-retries" && i+1 < len(os.Args):
+			i++
+			if n, err := parseInt(os.Args[i]); err == nil && n >= 0 {
+				opts.busyRetries = n
+			}
+		case arg == "--busy-wait" && i+1 < len(os.Args):
+			i++
+			d, err := time.ParseDuration(os.Args[i])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid --busy-wait %q (use Go duration like 2s or 500ms): %v\n", os.Args[i], err)
+				os.Exit(1)
+			}
+			opts.busyWait = d
 		case arg == "--help", arg == "-h":
 			opts.configPath = "__help__"
 		}

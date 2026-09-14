@@ -269,13 +269,32 @@ func (m *Manager) Acquire(ctx context.Context, cameraID string) (*Source, error)
 	if !ok || (target.URL == "" && target.Kind != KindGB28181) {
 		return nil, ErrNoSubStream
 	}
+	return m.acquireResolved(ctx, cameraID, target)
+}
 
+// AcquireTarget starts (or joins) an on-demand pull for an explicitly
+// resolved target under a caller-chosen key (#451 cascade main-stream
+// activation): the caller resolves the camera's MAIN GB channel itself —
+// the configured Resolver only knows sub-streams. The key must be non-empty
+// and distinct from plain cameraIDs (convention: "<prefix>:"+cameraID) so
+// explicit entries coexist with resolver-based ones. Each success must be
+// balanced with Release(key).
+func (m *Manager) AcquireTarget(ctx context.Context, key string, target Target) (*Source, error) {
+	if key == "" || (target.URL == "" && target.Kind != KindGB28181) {
+		return nil, ErrNoSubStream
+	}
+	return m.acquireResolved(ctx, key, target)
+}
+
+// acquireResolved is the shared acquire path once a target is known: join
+// an existing entry or create one and wait for readiness.
+func (m *Manager) acquireResolved(ctx context.Context, key string, target Target) (*Source, error) {
 	m.mu.Lock()
 	if m.stopped {
 		m.mu.Unlock()
 		return nil, ErrStopped
 	}
-	if e := m.sources[cameraID]; e != nil {
+	if e := m.sources[key]; e != nil {
 		// Another Acquire won the race and started the pull — join it.
 		e.refs++
 		if e.idle != nil {
@@ -284,33 +303,33 @@ func (m *Manager) Acquire(ctx context.Context, cameraID string) (*Source, error)
 		}
 		m.mu.Unlock()
 		if err := m.waitReady(ctx, e); err != nil {
-			m.Release(cameraID)
+			m.Release(key)
 			return nil, err
 		}
 		return e.src, nil
 	}
 
 	src := &Source{
-		cameraID: cameraID,
+		cameraID: key,
 		hub:      streamhub.New(),
 		ready:    make(chan struct{}),
 	}
-	src.hub.SetCameraID(cameraID)
+	src.hub.SetCameraID(key)
 	src.hub.SetSource("substream")
 	if m.cfg.WireHub != nil {
-		m.cfg.WireHub(src.hub, cameraID)
+		m.cfg.WireHub(src.hub, key)
 	}
 	src.state.Store(StateStarting)
 
 	pullCtx, cancel := context.WithCancel(context.Background())
 	e := &entry{src: src, cancel: cancel, done: make(chan struct{}), refs: 1, target: target}
-	m.sources[cameraID] = e
+	m.sources[key] = e
 	m.mu.Unlock()
 
 	go m.pull(pullCtx, e)
 
 	if err := m.waitReady(ctx, e); err != nil {
-		m.Release(cameraID)
+		m.Release(key)
 		return nil, err
 	}
 	return src, nil

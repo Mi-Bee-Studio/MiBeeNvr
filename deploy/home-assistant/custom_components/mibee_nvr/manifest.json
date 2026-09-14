@@ -1,0 +1,14 @@
+{
+  "domain": "mibee_nvr",
+  "name": "MiBee NVR",
+  "codeowners": ["@Mi-Bee-Studio"],
+  "config_flow": true,
+  "dependencies": ["stream"],
+  "documentation": "https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/deploy/home-assistant",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Mi-Bee-Studio/MiBeeNvr/issues",
+  "loggers": ["mibee_nvr"],
+  "requirements": [],
+  "version": "0.1.0"
+}
