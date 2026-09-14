@@ -32,7 +32,7 @@ func pullerReleased(puller *fakeGBPuller) int {
 func TestAcquireTargetBypassesResolver(t *testing.T) {
 	m := NewManager(Config{
 		// The resolver would refuse everything — the explicit target must win.
-		Resolver:     func(ctx context.Context, cameraID string) (Target, bool, error) {
+		Resolver: func(ctx context.Context, cameraID string) (Target, bool, error) {
 			return Target{}, false, errors.New("resolver must not be consulted")
 		},
 		IdleTimeout: 100 * time.Millisecond,
