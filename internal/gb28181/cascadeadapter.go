@@ -29,19 +29,20 @@ import (
 // mostly third-party brands, and a "MiBee" default would mislabel them.
 func CascadeConfig(cfg config.GB28181CascadeConfig) gbcascade.Config {
 	out := gbcascade.Config{
-		Enabled:           cfg.Enabled,
-		ServerDomain:      cfg.ServerDomain,
-		ServerAddr:        cfg.ServerAddr,
-		LocalDeviceID:     cfg.LocalDeviceID,
-		Realm:             cfg.Realm,
-		Password:          cfg.Password,
-		SIPListen:         cfg.SIPListen,
-		HeartbeatInterval: cfg.HeartbeatInterval,
-		RegisterExpires:   cfg.RegisterExpires,
-		DeviceName:        "MiBee NVR",
-		Manufacturer:      "MiBee",
-		Model:             "MiBeeNvr",
-		UserAgent:         "MiBeeNvr",
+		Enabled:              cfg.Enabled,
+		ServerDomain:         cfg.ServerDomain,
+		ServerAddr:           cfg.ServerAddr,
+		LocalDeviceID:        cfg.LocalDeviceID,
+		Realm:                cfg.Realm,
+		Password:             cfg.Password,
+		SIPListen:            cfg.SIPListen,
+		HeartbeatInterval:    cfg.HeartbeatInterval,
+		RegisterExpires:      cfg.RegisterExpires,
+		HubActivationTimeout: cfg.HubActivationTimeout,
+		DeviceName:           "MiBee NVR",
+		Manufacturer:         "MiBee",
+		Model:                "MiBeeNvr",
+		UserAgent:            "MiBeeNvr",
 	}
 	for _, u := range cfg.Upstreams {
 		out.Upstreams = append(out.Upstreams, gbcascade.Upstream{

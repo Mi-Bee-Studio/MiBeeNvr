@@ -206,6 +206,7 @@ gb28181_cascade:
   sip_listen: ":5061"                      # 级联信令端口（与平台角色 5060 并存）
   heartbeat_interval: "60s"
   register_expires: 3600
+  hub_activation_timeout: "10s"           # 多级级联：上级点播未在录 GB 子相机的按需激活限时（#451）
 ```
 
 行为要点：
@@ -216,6 +217,7 @@ gb28181_cascade:
 - 上级 INVITE → 200 OK(sendonly) → 从 StreamHub 取流 → PS 复用 → RTP 推送；BYE/错误清理
 - **目录收敛**（`cameras[].cascade_enabled: false`）：该相机从聚合目录隐藏、对其通道的 INVITE 返回 404，但通道编码分配保留——重新开启即恢复原编码，上级绑定不漂移
 - **级联上报子码流**（`cameras[].cascade_sub_stream: true`）：INVITE 转发改走相机按需拉取的[子码流](sub-stream.md)——低分辨率档让上级预览不再吃满上行带宽；相机无子码流或拉取失败自动回退主流，无子码流的相机不受影响
+- **多级级联按需激活**（`gb28181_cascade.hub_activation_timeout`，#451）：上级点播一个**当前未在录**的 GB 子设备通道时，中间级先向该子设备发起本地 INVITE（限时默认 10s），拿到流再转发——超时回 500 不建立无媒体对话，BYE 后按空闲回收本地拉流；已激活引用随会话释放。非 GB 相机不走此路径
 - **多上级上联**（`gb28181_cascade.upstreams`，#370）：单上级表单之外可配置任意数量的额外上级——每条独立运行自己的 REGISTER/Keepalive 会话（共享 SIP 监听端口），独立在线状态；字段留空回退单上级表单值
 - v1 限制：**仅视频**（hub 音频暂不区分 G.711 A/μ 律）；不推送目录变更 NOTIFY（上级轮询兜底）
 

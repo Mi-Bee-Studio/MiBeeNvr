@@ -206,6 +206,7 @@ gb28181_cascade:
   sip_listen: ":5061"                      # cascade signaling port (coexists with 5060)
   heartbeat_interval: "60s"
   register_expires: 3600
+  hub_activation_timeout: "10s"           # multi-level: bounded on-demand activation for idle GB child cameras (#451)
 ```
 
 Behavior:
@@ -216,6 +217,7 @@ Behavior:
 - Upper INVITE → 200 OK (sendonly) → StreamHub subscription → PS mux → RTP push; BYE/error teardown
 - **Catalog convergence** (`cameras[].cascade_enabled: false`): the camera is hidden from the aggregated catalog and its channel's INVITEs answer 404, but the channel-code allocation is kept — re-enabling restores the same code, upper-platform bindings don't drift
 - **Sub-stream cascading** (`cameras[].cascade_sub_stream: true`): INVITE forwarding rides the camera's on-demand [sub-stream](sub-stream.md) — the low-resolution tier keeps your uplink bounded for preview-only platforms; falls back to main when the camera has no sub-stream or the pull fails, and cameras without one are unaffected
+- **Multi-level on-demand activation** (`gb28181_cascade.hub_activation_timeout`, #451): when the upper platform INVITEs a GB child channel that is **not currently recording**, the middle tier first starts a bounded local INVITE to that child device (default 10s) and forwards once frames arrive — a timeout answers 500 without establishing a medialess dialog, and the local pull retires on idle after BYE. Non-GB cameras skip this path
 - **Multiple upstreams** (`gb28181_cascade.upstreams`, #370): beyond the single-upstream form you can configure any number of extra upper platforms — each entry runs its own REGISTER/Keepalive session over the shared SIP listener with independent online state; fields left empty fall back to the single-form values
 - v1 limits: **video only** (the hub's audio callback does not distinguish G.711 A/μ-law yet); no catalog-change NOTIFY pushes (the upper falls back to polling)
 

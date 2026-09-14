@@ -36,6 +36,11 @@ type GB28181CascadeConfig struct {
 	// 80%). Default 3600.
 	RegisterExpires int `yaml:"register_expires"`
 
+	// HubActivationTimeout bounds the on-demand main-stream activation wait
+	// when an upper INVITE hits a not-currently-recording GB child camera
+	// (#451 multi-level cascade). Empty = the library default "10s".
+	HubActivationTimeout string `yaml:"hub_activation_timeout,omitempty"`
+
 	// Upstreams declares ADDITIONAL upper platforms for multi-upstream
 	// cascade (#370): each entry runs its own REGISTER/keepalive session over
 	// the shared SIP listener, with independent online state. Fields left
