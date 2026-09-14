@@ -60,7 +60,12 @@ func TestRollingMerge_BatchPathAccountsFinalize(t *testing.T) {
 	waitForRecordingGone(t, env, cameraID, "rec-2")
 	waitForRecordingGone(t, env, cameraID, "rec-3")
 
-	require.GreaterOrEqual(t,
-		testutil.ToFloat64(mt.RollingBucketFinalizedTotal.WithLabelValues("batch_reset")), 1.0,
+	// The metric increments in dropBuckets AFTER mergeBatchMP4 has deleted
+	// the source rows — waitForRecordingGone can land inside that window
+	// (observed as a CI flake 2026-09-14). Poll the metric itself rather
+	// than asserting instantly behind the leading effect (#571 rule).
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(mt.RollingBucketFinalizedTotal.WithLabelValues("batch_reset")) >= 1.0
+	}, 5*time.Second, 20*time.Millisecond,
 		"the batch path's bucket-set drop must account finalizes (reason=batch_reset)")
 }
