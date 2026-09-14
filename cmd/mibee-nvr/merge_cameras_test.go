@@ -239,6 +239,92 @@ func replaceAll(s, old, replacement string) string {
 	return string(result)
 }
 
+// TestMergeDiskDirectories_RemovesEmptySourceTree verifies that a complete
+// forward move removes the entire source directory tree. Regression for #798:
+// recording dirs are nested (YYYYMM/DD/HH), and the old removeEmptyDirs only
+// attempted a top-level os.Remove — which fails on any subdirectory — leaving
+// the empty skeleton behind on disk.
+func TestMergeDiskDirectories_RemovesEmptySourceTree(t *testing.T) {
+	t.Helper()
+	srcDir, err := os.MkdirTemp("", "merge-src-*")
+	if err != nil {
+		t.Fatalf("failed to create src temp dir: %v", err)
+	}
+	defer os.RemoveAll(srcDir)
+
+	dstDir, err := os.MkdirTemp("", "merge-dst-*")
+	if err != nil {
+		t.Fatalf("failed to create dst temp dir: %v", err)
+	}
+	defer os.RemoveAll(dstDir)
+
+	// Production layout: nested date directories.
+	nested := filepath.Join(srcDir, "202608", "15", "00")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("failed to create nested dir: %v", err)
+	}
+
+	files := []string{
+		filepath.Join(nested, "cam-source_20260815_000000_abc123.mp4"),
+		filepath.Join(srcDir, "cam-source_20260815_010000_def456.mp4"),
+	}
+	for _, f := range files {
+		if err := os.WriteFile(f, []byte("test"), 0o644); err != nil {
+			t.Fatalf("failed to create %s: %v", f, err)
+		}
+	}
+
+	movedCount, _, err := mergeDiskDirectories(context.Background(), srcDir, dstDir, "", "cam-source", "cam-target")
+	if err != nil {
+		t.Fatalf("mergeDiskDirectories failed: %v", err)
+	}
+	if movedCount != 2 {
+		t.Fatalf("expected 2 files moved, got %d", movedCount)
+	}
+
+	// The whole source tree must be gone, not just the files.
+	if _, err := os.Stat(srcDir); !os.IsNotExist(err) {
+		t.Errorf("source dir %q should be removed after a complete move, still exists", srcDir)
+	}
+}
+
+// TestMergeDiskDirectories_PartialMoveKeepsSourceDir verifies that a partial
+// move (namePrefix filter, files left behind) keeps the source directory —
+// cleanup only ever removes empty directories, never remaining data.
+func TestMergeDiskDirectories_PartialMoveKeepsSourceDir(t *testing.T) {
+	t.Helper()
+	srcDir, err := os.MkdirTemp("", "merge-src-*")
+	if err != nil {
+		t.Fatalf("failed to create src temp dir: %v", err)
+	}
+	defer os.RemoveAll(srcDir)
+
+	dstDir, err := os.MkdirTemp("", "merge-dst-*")
+	if err != nil {
+		t.Fatalf("failed to create dst temp dir: %v", err)
+	}
+	defer os.RemoveAll(dstDir)
+
+	leftover := filepath.Join(srcDir, "cam2_20260815_000000_def.mp4")
+	if err := os.WriteFile(filepath.Join(srcDir, "cam1_20260815_000000_abc.mp4"), []byte("test"), 0o644); err != nil {
+		t.Fatalf("failed to create cam1 file: %v", err)
+	}
+	if err := os.WriteFile(leftover, []byte("test"), 0o644); err != nil {
+		t.Fatalf("failed to create cam2 file: %v", err)
+	}
+
+	if _, _, err := mergeDiskDirectories(context.Background(), srcDir, dstDir, "cam1_", "", ""); err != nil {
+		t.Fatalf("mergeDiskDirectories failed: %v", err)
+	}
+
+	if _, err := os.Stat(leftover); os.IsNotExist(err) {
+		t.Errorf("leftover file %q should still exist after partial move", leftover)
+	}
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		t.Errorf("source dir %q should be kept while it still holds files", srcDir)
+	}
+}
+
 // TestMergeDiskDirectories_RollbackWithManifest verifies the complete
 // forward move + rollback cycle using manifest-based approach.
 func TestMergeDiskDirectories_RollbackWithManifest(t *testing.T) {

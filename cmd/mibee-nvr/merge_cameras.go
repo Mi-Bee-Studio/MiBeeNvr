@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -521,13 +522,23 @@ func mergeDiskDirectories(ctx context.Context, srcDir, dstDir, namePrefix, renam
 	return moved, manifest, nil
 }
 
-// removeEmptyDirs recursively removes empty directories starting from path.
-func removeEmptyDirs(path string) {
-	for {
-		if err := os.Remove(path); err != nil {
-			break
+// removeEmptyDirs removes root and its now-empty subdirectories bottom-up.
+// os.Remove fails harmlessly on non-empty directories, so files left behind
+// by a partial move (namePrefix filter) keep their parent directories alive.
+// WalkDir visits parents before children, hence the reverse for deepest-first
+// removal — a top-level-only remove can never succeed on the nested
+// YYYYMM/DD/HH recording layout (#798).
+func removeEmptyDirs(root string) {
+	var dirs []string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			dirs = append(dirs, path)
 		}
-		path = filepath.Dir(path)
+		return nil
+	})
+	slices.Reverse(dirs)
+	for _, dir := range dirs {
+		_ = os.Remove(dir)
 	}
 }
 
