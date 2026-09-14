@@ -74,7 +74,7 @@ ruff format --check custom_components tests
 pytest -v
 ```
 
-The suite pins `homeassistant==2026.6.0` and includes an import-validation
+The suite pins `homeassistant==2026.6.4` and includes an import-validation
 test, so the component is exercised against real Home Assistant, not just
 stubs. CI runs the same steps in the `home-assistant` job.
 
