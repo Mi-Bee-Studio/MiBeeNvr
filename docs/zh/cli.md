@@ -36,6 +36,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`timelapse-merge`](#timelapse-merge-录像转延时合并) | 把任意时段的录像批量转成延时合并产物 |
 | [`repair`](#repair-数据修复) | 数据修复工具集（7 个子命令） |
 | [`cleanup`](#cleanup-录像清理) | 按日期 / 孤儿文件清理录像 |
+| [`gen-gb35114-certs`](#gen-gb35114-certs-签发-gb35114-试点证书) | 签发 GB35114 A 级试点证书（仅 `-tags gb35114` 构建） |
 
 ---
 
@@ -215,6 +216,16 @@ mibee-nvr cleanup --orphans
 | `--config <path>` | 配置文件路径（默认 `mibee-nvr.yaml`，用于定位存储根目录和数据库） |
 
 > 日常清理请优先使用[保留策略](recording-playback.md)（`cleanup.retention_days`）；本命令适合迁移后瘦身、异常善后等场景。
+
+## gen-gb35114-certs — 签发 GB35114 试点证书
+
+仅存在于 `-tags gb35114` 构建（默认构建运行会提示重建方式）。为 GB35114 A 级安全注册签发自签试点材料：SM2 平台身份 + 由平台签发的设备身份，输出布局直接对应 `gb28181.security35114` 的三个路径键。详见 [GB28181 指南 — GB35114 安全增强](gb28181-guide.md)。
+
+```bash
+mibee-nvr gen-gb35114-certs --platform-id 34020000002000000001 \
+  --device-id 34020000001320000001,34020000001320000002 \
+  --out-dir gb35114-certs [--days 3650]
+```
 
 ## 环境变量速查
 

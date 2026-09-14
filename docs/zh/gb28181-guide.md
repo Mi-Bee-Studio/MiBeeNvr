@@ -148,6 +148,14 @@ cameras:
 | `platform_key` | string | (必填) | 平台 SM2 私钥路径 |
 | `device_certs_dir` | string | 空 | 预置设备证书目录，每设备一个 `<deviceID>.pem` 文件。可选——设备也可通过 Capability cnonce 上报证书（信任首用）；预置是更严格的策略 |
 
+**试点证书签发**（无 CA 的实验/小型部署）：`-tags gb35114` 构建附带一条签发命令——
+
+```bash
+mibee-nvr gen-gb35114-certs --platform-id <20位平台ID>   --device-id <20位设备ID>[,<20位设备ID>...] --out-dir gb35114-certs
+```
+
+自签 SM2 平台身份 + 由平台签发的设备身份（PKCS#8 私钥 0600 + GM/T 0015-2012 证书），输出布局即上表三个路径参数的取值形态（`devices/<deviceID>.pem`），把设备证书与私钥分发到对应设备即可。签发材料经完整的 Challenge/VerifyRegister/VerifyOK 握手回归验证（两侧 VKEK 一致）。生产部署请改用真实 CA（CFCA 等）签发。
+
 
 ### 相机配置
 
