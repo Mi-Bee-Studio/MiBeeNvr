@@ -2,12 +2,13 @@
 
 > 适用于 MiBee NVR v0.12.0+（内置 RTSP 输出、MQTT 触发与状态发布）
 
-MiBee NVR 没有官方 Home Assistant 集成，但通过 RTSP 输出、REST API、MQTT 触发与状态发布四个能力，可以拼出完整的接入方案。本文按用途拆分路径，全部可独立启用。
+MiBee NVR 自带一个可选的 Home Assistant 自定义集成（方案 0：自动发现、按相机生成实体与开关）；不装它也完全可行——通过 RTSP 输出、REST API、MQTT 触发与状态发布四个能力，可以拼出完整的接入方案。本文按用途拆分路径，全部可独立启用。
 
 ## 方案总览
 
 | 用途 | 路径 | 依赖 |
 |------|------|------|
+| 一体化（发现 + 实体 + 开关） | 自定义集成（方案 0） | 手动复制安装 |
 | 看画面（H.264/H.265 相机） | RTSP 输出 + Generic Camera | 无（HA 原生） |
 | 看画面（MJPEG/JPEG 相机） | `stream.mjpeg` + MJPEG Camera | 无（HA 原生） |
 | 触发联动（HA → NVR） | MQTT 触发 | MQTT 代理 |
@@ -21,6 +22,25 @@ MiBee NVR 没有官方 Home Assistant 集成，但通过 RTSP 输出、REST API�
 - NVR 的 REST 接口使用 Web 登录凭据做 Basic Auth（`/api/health`、`/api/events`、`/api/metrics` 除外，它们是公开的）。
 - 摄像头 ID 用 NVR 中配置的 `id`（kebab-case，如 `front-door`）。
 - 密码不要硬编码进版本库管理的 YAML，使用 HA 的 `secrets`。
+
+## 方案 0：自定义集成（推荐）
+
+仓库内置一个 Home Assistant 自定义集成（[源码与实体清单](../../deploy/home-assistant/README.md)）。安装后自动发现局域网内的 NVR，并为每台相机创建：
+
+- **摄像头实体** — H.264/H.265 走 NVR 内置 RTSP 输出（HA `stream`，延迟 1–3 秒）；MJPEG/JPEG 相机走 `stream.mjpeg` 直通（HA 原生 MJPEG 摄像头）。
+- **二进制传感器 ×2** — *Connected*（连接状态）与 *Recording*（正在写录像段）。
+- **开关** — 切换相机的 `recording_enabled` 录制开关。
+
+安装（手动复制，约 1 分钟；集成位于主仓子目录，HACS 无法从主仓直接安装）：
+
+```bash
+git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git /tmp/mibee-nvr
+mkdir -p <HA配置目录>/custom_components
+cp -r /tmp/mibee-nvr/deploy/home-assistant/custom_components/mibee_nvr \
+      <HA配置目录>/custom_components/
+```
+
+重启 Home Assistant 后：设置 → 设备与服务 → 添加集成 → **MiBee NVR**。局域网内的 NVR 会被 `_mibee-nvr._tcp` mDNS 自动发现，输入 Web 登录凭据即可；凭据、RTSP 端口（默认 `8554`）与轮询间隔（默认 `30` 秒）都可在集成选项里修改。
 
 ## 方案 A：RTSP 输出 + Generic Camera（H.264/H.265 相机）
 

@@ -75,3 +75,7 @@ internal/transcoding/-decoders
 internal/transcoding/-encoders
 .zcode/
 .codegraph/
+# Home Assistant integration local dev artifacts (deploy/home-assistant)
+__pycache__/
+deploy/home-assistant/.pytest_cache/
+deploy/home-assistant/.venv/

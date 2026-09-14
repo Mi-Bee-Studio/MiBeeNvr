@@ -113,3 +113,25 @@ jobs:
 
       - name: Test seam with -tags gb35114
         run: go test -tags gb35114 -timeout 3m ./internal/gb28181/
+
+  # Home Assistant custom integration (deploy/home-assistant, #659): the
+  # pytest suite pins homeassistant==2025.1.4 and includes an import-validation
+  # test — without this job the component rots silently behind Go CI.
+  home-assistant:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/home-assistant
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: deploy/home-assistant/requirements_test.txt
+
+      - run: pip install -r requirements_test.txt
+      - run: ruff check custom_components tests
+      - run: ruff format --check custom_components tests
+      - run: python -m pytest -v
