@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -86,7 +87,8 @@ func containerizeMJPEGDirs(ctx context.Context, db *storage.DB, recs []*model.Re
 			rep.failed++
 			continue
 		}
-		fmt.Fprintf(w, "  OK   %s — %d frames → %s.avi\n", rec.ID, len(frames), rec.FilePath)
+		// rec.FilePath was flipped to the .avi path inside containerizeOne.
+		fmt.Fprintf(w, "  OK   %s — %d frames → %s\n", rec.ID, len(frames), rec.FilePath)
 		rep.converted++
 	}
 	return rep
@@ -173,11 +175,15 @@ func containerizeOne(db *storage.DB, rec *model.Recording, frames []string, keep
 	}
 
 	// DB last: the row flips only after the container is durable on disk.
+	// The live server's merge transactions can outlast the busy_timeout
+	// under disk saturation — retry the transient locks (#761 production).
 	rec.FilePath = aviPath
 	rec.Format = model.FormatAVI
 	rec.FrameCount = wrote
 	rec.FileSize = fi.Size()
-	if err := db.UpdateRecording(ctx, rec); err != nil {
+	if err := retryOnBusy(func() error {
+		return db.UpdateRecording(ctx, rec)
+	}, 3, 2*time.Second); err != nil {
 		return fmt.Errorf("db update: %w", err)
 	}
 	if !keepOld {
