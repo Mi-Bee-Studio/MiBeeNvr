@@ -62,7 +62,7 @@ ruff format --check custom_components tests
 pytest -v
 ```
 
-测试套件固定 `homeassistant==2025.1.4` 并包含导入校验测试——组件面对的是真实
+测试套件固定 `homeassistant==2026.6.0` 并包含导入校验测试——组件面对的是真实
 Home Assistant，不只是桩。CI 的 `home-assistant` job 运行相同步骤。
 
 ## 许可

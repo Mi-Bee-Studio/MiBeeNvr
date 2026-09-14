@@ -3,4 +3,4 @@ pytest-asyncio>=0.24
 aiohttp>=3.9
 ruff>=0.6
 numpy>=1.26
-homeassistant==2025.1.4
+homeassistant==2026.6.0
