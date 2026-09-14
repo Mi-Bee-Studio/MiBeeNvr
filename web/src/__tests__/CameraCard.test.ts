@@ -107,7 +107,7 @@ describe('CameraCard', () => {
       protocols: [],
       encoding: 'h264',
       default: 'hls',
-      rtsp: { available: true, url: 'rtsp://192.168.63.30:8554/test' },
+      rtsp: { available: true, url: 'rtsp://192.0.2.30:8554/test' },
     });
     copyTextMock.mockResolvedValue(true);
     const { container } = render(CameraCard, { props: defaultProps(makeCamera()) });
@@ -115,7 +115,7 @@ describe('CameraCard', () => {
     expect(btn).toBeTruthy();
     btn?.click();
     await vi.waitFor(() => expect(getCameraProtocolsMock).toHaveBeenCalledWith('test'));
-    await vi.waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('rtsp://192.168.63.30:8554/test'));
+    await vi.waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('rtsp://192.0.2.30:8554/test'));
     expect(toastMock).toHaveBeenCalledWith(expect.stringContaining('RTSP'), 'success');
   });
 

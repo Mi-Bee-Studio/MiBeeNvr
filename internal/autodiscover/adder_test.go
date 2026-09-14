@@ -467,7 +467,7 @@ func TestEndpointChanged(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 	const camID = "cam-existing"
-	const ep = "http://192.168.63.212:80/onvif/device_service"
+	const ep = "http://192.0.2.212:80/onvif/device_service"
 	require := func(cond bool, msg string) {
 		t.Helper()
 		if !cond {
@@ -486,7 +486,7 @@ func TestEndpointChanged(t *testing.T) {
 	require(!adder.endpointChanged(ctx, camID, ep+"/"), "trailing-slash variant must report unchanged (normalized)")
 
 	// Genuinely different endpoint → changed.
-	require(adder.endpointChanged(ctx, camID, "http://192.168.63.99:80/onvif/device_service"), "different IP must report changed")
+	require(adder.endpointChanged(ctx, camID, "http://192.0.2.99:80/onvif/device_service"), "different IP must report changed")
 
 	// Unknown camera ID → fail-open (true), so the update is attempted.
 	require(adder.endpointChanged(ctx, camID+"-nope", ep), "unknown camera must fail-open (true)")

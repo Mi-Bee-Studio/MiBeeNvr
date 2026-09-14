@@ -36,7 +36,7 @@ func setupDedupHandler(t *testing.T) *Handler {
 	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, nil)
 	deviceMgr.Register(&platform.Device{
 		ID:      "34020000001310000001",
-		NetAddr: "192.168.63.240:5060",
+		NetAddr: "192.0.2.240:5060",
 	})
 	return h
 }
@@ -47,17 +47,17 @@ func setupDedupHandler(t *testing.T) *Handler {
 func TestHandleCreateCamera_GBDuplicateRefused(t *testing.T) {
 	h := setupDedupHandler(t)
 
-	body := `{"name":"Front","protocol":"rtsp","url":"rtsp://192.168.63.240:554/stream","enabled":false}`
+	body := `{"name":"Front","protocol":"rtsp","url":"rtsp://192.0.2.240:554/stream","enabled":false}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusConflict, rr.Code, "body: %s", rr.Body.String())
 
 	// Same host via onvif_endpoint is refused too.
-	body = `{"name":"Front ONVIF","protocol":"onvif","onvif_endpoint":"http://192.168.63.240/onvif/device_service","enabled":false}`
+	body = `{"name":"Front ONVIF","protocol":"onvif","onvif_endpoint":"http://192.0.2.240/onvif/device_service","enabled":false}`
 	rr = doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusConflict, rr.Code)
 
 	// allow_duplicate overrides the guard.
-	body = `{"name":"Front","protocol":"rtsp","url":"rtsp://192.168.63.240:554/stream","enabled":false,"allow_duplicate":true}`
+	body = `{"name":"Front","protocol":"rtsp","url":"rtsp://192.0.2.240:554/stream","enabled":false,"allow_duplicate":true}`
 	rr = doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
 }
@@ -67,7 +67,7 @@ func TestHandleCreateCamera_GBDuplicateRefused(t *testing.T) {
 func TestHandleCreateCamera_NoGBDeviceAllowsNormalCreate(t *testing.T) {
 	h := setupDedupHandler(t)
 
-	body := `{"name":"Other","protocol":"rtsp","url":"rtsp://192.168.63.9:554/stream","enabled":false}`
+	body := `{"name":"Other","protocol":"rtsp","url":"rtsp://192.0.2.9:554/stream","enabled":false}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
 }
@@ -85,7 +85,7 @@ func TestHandleCreateCamera_NilDeviceMgrNoop(t *testing.T) {
 	h := NewHandler(db, store, noopAuthMW(), nil, camMgr, nil, "", nil, nil, nil, nil, nil)
 	require.Nil(t, h.gb28181DeviceMgr)
 
-	body := `{"name":"Front","protocol":"rtsp","url":"rtsp://192.168.63.240:554/stream","enabled":false}`
+	body := `{"name":"Front","protocol":"rtsp","url":"rtsp://192.0.2.240:554/stream","enabled":false}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusCreated, rr.Code)
 }
@@ -113,7 +113,7 @@ func TestHandleCreateCamera_GBFingerprintRefusedAcrossInterfaces(t *testing.T) {
 	// Fingerprint persisted when the device registered via GB28181 (from a
 	// different interface IP than the create host).
 	require.NoError(t, h.db.UpsertGB28181Fingerprint(context.Background(), storage.GB28181Fingerprint{
-		DeviceID: "34020000001310000001", Serial: "NC00000001", SourceIP: "192.168.63.152",
+		DeviceID: "34020000001310000001", Serial: "NC00000001", SourceIP: "192.0.2.152",
 		ProbedAt: time.Now(),
 	}))
 

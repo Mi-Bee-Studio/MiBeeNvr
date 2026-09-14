@@ -53,11 +53,11 @@ func TestMjpegStreamURL(t *testing.T) {
 
 	// HTTPJPEG recorder supplies its URL directly.
 	jpegRec := recorder.NewHTTPJPEGRecorder(recorder.HTTPJPEGConfig{
-		CameraID: "cam-1", URL: "http://192.168.63.225:81/stream",
+		CameraID: "cam-1", URL: "http://192.0.2.225:81/stream",
 	}, nil)
 	rr = doRequest(t, mjpegEnv(t, jpegRec, nil), http.MethodGet, "/api/cameras/cam-1/stream.mjpeg", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
-	require.Contains(t, rr.Body.String(), "http://192.168.63.225:81/stream")
+	require.Contains(t, rr.Body.String(), "http://192.0.2.225:81/stream")
 
 	// Fallback: http-protocol camera config URL.
 	cams := []config.CameraConfig{{ID: "cam-1", Protocol: "http", URL: "http://10.0.0.5/mjpeg"}}

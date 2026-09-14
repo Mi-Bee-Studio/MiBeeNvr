@@ -43,7 +43,7 @@ func TestSecurityHeaders(t *testing.T) {
 // verbatim in the CSP directive.
 func TestSecurityHeadersCustomFrameAncestors(t *testing.T) {
 	t.Parallel()
-	allowed := "http://192.168.63.60 http://192.168.63.50"
+	allowed := "http://192.0.2.60 http://192.0.2.50"
 	handler := SecurityHeaders(allowed)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

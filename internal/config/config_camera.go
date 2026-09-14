@@ -70,7 +70,7 @@ type CameraConfig struct {
 	// disabled. ONVIF cameras auto-populate this on first successful connection.
 	// See internal/rediscovery/ for the re-discovery engine.
 	StableID string `yaml:"stable_id,omitempty" json:"stable_id,omitempty"`
-	// SubnetHints are candidate CIDRs (e.g. "192.168.63.0/24") where the camera may
+	// SubnetHints are candidate CIDRs (e.g. "192.0.2.0/24") where the camera may
 	// appear after roaming. The re-discovery scanner probes these in addition to the
 	// last-known host and the NVR's own interface subnets. Empty = scan last-known +
 	// local subnets only.

@@ -705,7 +705,7 @@ cameras:
 - **Type**: array of string
 - **Optional**: Yes
 - **Description**: Candidate CIDRs where the camera may appear after roaming. The IP self-healing re-discovery scan probes these in addition to the last-known host and the NVR's own interface subnets. Empty = scan last-known + local subnets only
-- **Example**: `["192.168.63.0/24", "192.168.62.0/24"]`
+- **Example**: `["192.0.2.0/24", "192.168.62.0/24"]`
 
 ### `cameras[].ring_buf_cap`
 - **Type**: int

@@ -28,7 +28,7 @@ func gbDedupConfig(t *testing.T) *config.Config {
 		Name:          "Front ONVIF",
 		Protocol:      "onvif",
 		URL:           "",
-		ONVIFEndpoint: "http://192.168.63.240/onvif/device_service",
+		ONVIFEndpoint: "http://192.0.2.240/onvif/device_service",
 		StableID:      "NC00000001",
 	}}
 	return cfg
@@ -37,11 +37,11 @@ func gbDedupConfig(t *testing.T) *config.Config {
 func TestCameraIDByHostIP(t *testing.T) {
 	mgr, _, _, _ := newTestManagerWithCfg(t, gbDedupConfig(t))
 
-	id, ok := mgr.CameraIDByHostIP("192.168.63.240")
+	id, ok := mgr.CameraIDByHostIP("192.0.2.240")
 	require.True(t, ok)
 	require.Equal(t, "front-onvif", id)
 
-	_, ok = mgr.CameraIDByHostIP("192.168.63.999")
+	_, ok = mgr.CameraIDByHostIP("192.0.2.999")
 	require.False(t, ok)
 	_, ok = mgr.CameraIDByHostIP("")
 	require.False(t, ok, "empty IP must never match")
@@ -57,7 +57,7 @@ func TestCameraIDByHostIP_IgnoresGB28181Cameras(t *testing.T) {
 	mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
 
 	// GB cameras have no URL; they must not participate in IP matching.
-	_, ok := mgr.CameraIDByHostIP("192.168.63.240")
+	_, ok := mgr.CameraIDByHostIP("192.0.2.240")
 	require.True(t, ok)
 }
 
@@ -83,7 +83,7 @@ func TestEnsureGB28181Camera_SkipsWhenHostCameraExists(t *testing.T) {
 	mgr, _, _, _ := newTestManagerWithCfg(t, gbDedupConfig(t))
 
 	require.NoError(t, mgr.EnsureGB28181Camera(
-		"34020000001310000001", "34020000001320000001", "GB Channel", "192.168.63.240"))
+		"34020000001310000001", "34020000001320000001", "GB Channel", "192.0.2.240"))
 
 	// No gb- camera created; the ONVIF camera is untouched.
 	_, ok := mgr.GB28181CameraIDByChannel("34020000001310000001", "34020000001320000001")
@@ -102,7 +102,7 @@ func TestEnsureGB28181Camera_SkipsBySerialAcrossInterfaces(t *testing.T) {
 	mgr, _, _, _ := newTestManagerWithCfg(t, gbDedupConfig(t))
 
 	require.NoError(t, mgr.EnsureGB28181Camera(
-		"34020000001310000001", "34020000001320000001", "GB Channel", "192.168.63.152"))
+		"34020000001310000001", "34020000001320000001", "GB Channel", "192.0.2.152"))
 
 	_, ok := mgr.GB28181CameraIDByChannel("34020000001310000001", "34020000001320000001")
 	require.False(t, ok, "auto-enroll must be suppressed on serial match")
@@ -116,7 +116,7 @@ func TestEnsureGB28181Camera_EnrollsWhenNoCollision(t *testing.T) {
 	mgr, _, _, _ := newTestManagerWithCfg(t, gbDedupConfig(t))
 
 	require.NoError(t, mgr.EnsureGB28181Camera(
-		"34020000001310000009", "34020000001320000009", "", "192.168.63.9"))
+		"34020000001310000009", "34020000001320000009", "", "192.0.2.9"))
 
 	id, ok := mgr.GB28181CameraIDByChannel("34020000001310000009", "34020000001320000009")
 	require.True(t, ok)
@@ -147,7 +147,7 @@ func TestEnsureGB28181Camera_SerialMismatchEnrolls(t *testing.T) {
 	mgr, _, _, _ := newTestManagerWithCfg(t, gbDedupConfig(t))
 
 	require.NoError(t, mgr.EnsureGB28181Camera(
-		"34020000001310000003", "34020000001320000003", "", "192.168.63.9"))
+		"34020000001310000003", "34020000001320000003", "", "192.0.2.9"))
 
 	_, ok := mgr.GB28181CameraIDByChannel("34020000001310000003", "34020000001320000003")
 	require.True(t, ok)
@@ -159,7 +159,7 @@ func TestResolveGBDeviceSerial_CachesAndPersists(t *testing.T) {
 
 	mgr, _, db, _ := newTestManagerWithCfg(t, gbDedupConfig(t))
 
-	serial, ok := mgr.resolveGBDeviceSerial("34020000001310000077", "192.168.63.152")
+	serial, ok := mgr.resolveGBDeviceSerial("34020000001310000077", "192.0.2.152")
 	require.True(t, ok)
 	require.Equal(t, "NC00000001", serial)
 
@@ -167,7 +167,7 @@ func TestResolveGBDeviceSerial_CachesAndPersists(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, fp, "fingerprint must be persisted for the reverse dedup path")
 	require.Equal(t, "NC00000001", fp.Serial)
-	require.Equal(t, "192.168.63.152", fp.SourceIP)
+	require.Equal(t, "192.0.2.152", fp.SourceIP)
 
 	// Second resolve must come from the in-memory cache (probe stays unused).
 	calls := 0
@@ -175,7 +175,7 @@ func TestResolveGBDeviceSerial_CachesAndPersists(t *testing.T) {
 		calls++
 		return "NC00000001", true
 	}
-	serial, ok = mgr.resolveGBDeviceSerial("34020000001310000077", "192.168.63.152")
+	serial, ok = mgr.resolveGBDeviceSerial("34020000001310000077", "192.0.2.152")
 	require.True(t, ok)
 	require.Equal(t, "NC00000001", serial)
 	require.Zero(t, calls)
@@ -194,7 +194,7 @@ func TestEnsureGB28181Camera_AllowSameIPEnrollBypassesDedup(t *testing.T) {
 		mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
 
 		require.NoError(t, mgr.EnsureGB28181Camera(
-			"34020000001310000001", "34020000001320000001", "GB Channel", "192.168.63.240"))
+			"34020000001310000001", "34020000001320000001", "GB Channel", "192.0.2.240"))
 
 		id, ok := mgr.GB28181CameraIDByChannel("34020000001310000001", "34020000001320000001")
 		require.True(t, ok, "flag must bypass L1 IP dedup")
@@ -210,7 +210,7 @@ func TestEnsureGB28181Camera_AllowSameIPEnrollBypassesDedup(t *testing.T) {
 		mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
 
 		require.NoError(t, mgr.EnsureGB28181Camera(
-			"34020000001310000001", "34020000001320000001", "GB Channel", "192.168.63.152"))
+			"34020000001310000001", "34020000001320000001", "GB Channel", "192.0.2.152"))
 
 		_, ok := mgr.GB28181CameraIDByChannel("34020000001310000001", "34020000001320000001")
 		require.True(t, ok, "flag must bypass L2 serial dedup")

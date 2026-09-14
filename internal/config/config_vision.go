@@ -13,7 +13,7 @@ type VisionConfig struct {
 	// Enabled 是否启用 Vision 推送集成。默认 false(SSE 模式向后兼容)。
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
-	// URL Vision 服务的基地址,如 "http://192.168.63.110:9091"。
+	// URL Vision 服务的基地址,如 "http://192.0.2.110:9091"。
 	// NVR 将 POST 到 {URL}/vision/segment/notify。
 	//
 	// 多实例部署时此字段退化为兼容显示字段,实际推送目标以 instances 为准;

@@ -199,10 +199,10 @@ func TestCameraIngestActivationStableID(t *testing.T) {
 	require.Empty(t, got)
 
 	// ONVIF endpoint raw write + reader-facing lookup.
-	require.NoError(t, db.UpdateCameraOnvifEndpointRaw(ctx, "cam-1", "http://192.168.63.251:80/onvif/device_service"))
+	require.NoError(t, db.UpdateCameraOnvifEndpointRaw(ctx, "cam-1", "http://192.0.2.251:80/onvif/device_service"))
 	ep, err := db.GetCameraOnvifEndpoint(ctx, "cam-1")
 	require.NoError(t, err)
-	require.Equal(t, "http://192.168.63.251:80/onvif/device_service", ep)
+	require.Equal(t, "http://192.0.2.251:80/onvif/device_service", ep)
 	ep, err = db.GetCameraOnvifEndpoint(ctx, "ghost")
 	require.NoError(t, err)
 	require.Empty(t, ep)

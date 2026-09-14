@@ -1365,7 +1365,7 @@ server:
   listen: ":9090"
 auth:
   username: admin
-  password: admin12345
+  password: test-pass-12345
 metrics_auth:
   username: metrics
   password: metpass
