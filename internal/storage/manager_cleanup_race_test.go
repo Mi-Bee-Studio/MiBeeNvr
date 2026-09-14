@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -66,6 +67,9 @@ func TestCleanupTempFiles_StillRemovesOrphansBesideActiveSegment(t *testing.T) {
 	require.NoError(t, err)
 	orphan := filepath.Join(filepath.Dir(activeTemp), "999999999999999999.tmp")
 	require.NoError(t, os.WriteFile(orphan, []byte("crash-leftover"), 0o644))
+	// Backdate past the 1h rail (#803) — this fixture is a crash leftover.
+	past := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(orphan, past, past))
 
 	require.NoError(t, m.CleanupTempFiles())
 
@@ -96,7 +100,12 @@ func TestCleanupTempFiles_SkipsRegisteredExternalTemp(t *testing.T) {
 	require.NoError(t, err, "registered external temp must survive the scan")
 
 	m.UnregisterActiveTemp(extTemp)
+	// The 1h rail (#803) spares fresh temps — an unregistered temp becomes a
+	// removable orphan only once past the rail. Backdate to simulate the
+	// crash-leftover state this sweep exists for.
+	past := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(extTemp, past, past))
 	require.NoError(t, m.CleanupTempFiles())
 	_, err = os.Stat(extTemp)
-	require.True(t, os.IsNotExist(err), "unregistered temp is an orphan again and must be removed")
+	require.True(t, os.IsNotExist(err), "unregistered old temp is an orphan again and must be removed")
 }
