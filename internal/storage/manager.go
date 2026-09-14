@@ -701,6 +701,14 @@ func (m *Manager) IsAvailable() bool {
 // creation, so any .tmp visible on disk without a registration is a genuine
 // crash leftover.
 //
+// The registry only covers writers in THIS process. External tools (repair
+// mjpeg-containerize writes <seg>.avi.tmp under cam-* trees) cannot
+// register; a service restart mid-write raced their tmp between fsync and
+// reopen (#803, 2026-09-14 production: service start 13:30:27 == neighbor
+// .avi mtimes ±4s). Entries younger than 1h are therefore spared — same rail
+// as both orphan scans — costing nothing for the crash-leftover purpose,
+// since leftovers are old by the time any startup scan sees them.
+//
 // Callers that don't need the result immediately should run it in a
 // goroutine to avoid blocking startup.
 func (m *Manager) CleanupTempFiles() error {
@@ -729,6 +737,9 @@ func (m *Manager) CleanupTempFiles() error {
 						if m.isActiveTemp(path) {
 							return nil // in-flight segment — protected
 						}
+						if youngTmp(d) {
+							return nil // possible external writer's in-flight temp (#803)
+						}
 						if err := os.Remove(path); err != nil {
 							// Don't abort the whole walk on a single failure (file
 							// may be in use); record and continue.
@@ -745,6 +756,9 @@ func (m *Manager) CleanupTempFiles() error {
 					if m.isActiveTemp(path) {
 						return filepath.SkipDir // in-flight MJPEG/timelapse segment — protected
 					}
+					if youngTmp(d) {
+						return filepath.SkipDir // possible external writer's in-flight temp (#803)
+					}
 					if err := os.RemoveAll(path); err != nil {
 						logger.Warn("temp cleanup: failed to remove temp dir", "path", path, "error", err)
 					}
@@ -760,6 +774,17 @@ func (m *Manager) CleanupTempFiles() error {
 		}
 	}
 	return firstErr
+}
+
+// youngTmp reports whether a walk entry is a .tmp younger than the orphan
+// rail — possibly an external writer's in-flight temp rather than a crash
+// leftover (#803). Unreadable entries count as young (fail-safe: keep).
+func youngTmp(d os.DirEntry) bool {
+	info, err := d.Info()
+	if err != nil {
+		return true
+	}
+	return time.Since(info.ModTime()) < time.Hour
 }
 
 // ReconcileOrphanedFiles scans camera directories for .mp4 files that are not registered
