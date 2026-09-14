@@ -383,6 +383,11 @@ func validateConfigDetails(cfg *Config) error {
 	if errWarn != nil {
 		return fmt.Errorf("storage.segment_duration_warn_below invalid: %w", errWarn)
 	}
+	// Temp-dir sweep grace (#797 review): negative would sweep live merges'
+	// inputs into the future; a sane floor (60s) keeps the knob meaningful.
+	if cfg.Storage.PeriodicTempGraceS < 0 {
+		return fmt.Errorf("storage.periodic_temp_grace_s must be >= 0 (got %d)", cfg.Storage.PeriodicTempGraceS)
+	}
 	if dur, err := time.ParseDuration(cfg.Storage.SegmentDuration); err == nil && warnBelow > 0 && dur < warnBelow {
 		for _, cam := range cfg.Cameras {
 			if cam.RecordingMode == "" || cam.RecordingMode == "continuous" {

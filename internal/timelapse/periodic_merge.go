@@ -71,6 +71,11 @@ type PeriodicMergeManager struct {
 	duration time.Duration
 	loc      *time.Location
 
+	// tempDirGrace bounds the startup temp-dir sweep (see
+	// defaultTempDirGrace); 0 = default. Injected via WithTempDirGrace from
+	// storage.periodic_temp_grace_s (#797 review).
+	tempDirGrace time.Duration
+
 	retryCounts map[string]retryInfo
 	retryMu     sync.Mutex
 
@@ -168,6 +173,25 @@ func WithExtractionInterval(d time.Duration) Option {
 }
 
 // WithDeleteRecordingsAfterMerge enables the per-camera
+// WithTempDirGrace overrides the startup temp-dir sweep grace period
+// (storage.periodic_temp_grace_s, #797 review). Non-positive falls back to
+// defaultTempDirGrace.
+func WithTempDirGrace(d time.Duration) Option {
+	return func(m *PeriodicMergeManager) {
+		m.tempDirGrace = d
+	}
+}
+
+// TempDirGrace reports the effective temp-dir sweep grace (default when the
+// injected value is non-positive). Exposed read-only for wiring tests
+// (builders.go → storage.periodic_temp_grace_s).
+func (m *PeriodicMergeManager) TempDirGrace() time.Duration {
+	if m.tempDirGrace > 0 {
+		return m.tempDirGrace
+	}
+	return defaultTempDirGrace
+}
+
 // delete_recordings_after_merge behavior: source video recordings in the
 // window are deleted after a successful periodic merge (opt-in, default off).
 // A source deleter must also be wired (SetSourceRecordingDeleter).
@@ -216,51 +240,78 @@ func (m *PeriodicMergeManager) tempDirBase() string {
 	return filepath.Join(m.dataDir, "tmp")
 }
 
-// extractDirGrace bounds how long a periodic_extract_* directory may sit
-// under the temp base before the sweep reclaims it. Live merges hold their
-// extract dir only for one Run (minutes); the grace covers a full natural-day
-// window's worst case with heavy IO, so anything older is a crash/interrupt
-// leftover (server died mid-window, or a Ctrl-C'd timelapse-merge CLI — one
-// such run as root even left root-owned dirs on M5, 2026-09-14).
-const extractDirGrace = 24 * time.Hour
+// Temp-dir families the periodic merge pipeline creates under the temp base.
+// Single source of truth shared by the creation sites and the startup sweep —
+// renaming a prefix without updating the sweep would silently blind it
+// (review #797-2).
+const (
+	periodicTempExtractPrefix = "periodic_extract_"  // frame-extraction outputs (probe)
+	periodicTempGoMergePrefix = "periodic_go_merge_" // Go-merge staging (full copied frame set)
+)
 
-// sweepStaleExtractDirs removes periodic_extract_* leftovers older than
-// extractDirGrace from the temp base. Returns the number of dirs removed.
-// Unreadable entries are skipped (WARN) — a root-owned leftover must not
-// silence the sweep.
-func (m *PeriodicMergeManager) sweepStaleExtractDirs() int {
+var periodicTempDirPrefixes = []string{periodicTempExtractPrefix, periodicTempGoMergePrefix}
+
+// defaultTempDirGrace bounds how long a periodic temp directory may sit under
+// the temp base before the startup sweep reclaims it. Live merges hold their
+// temp dir only for one Run (minutes); the 24h default covers a natural-day
+// window's worst case on slow ARM + USB HDD with 1s-interval extraction, so
+// anything older is a crash/interrupt leftover (server died mid-window, or a
+// Ctrl-C'd timelapse-merge CLI — one such run as root even left root-owned
+// dirs on M5, 2026-09-14). Operators can tune it via
+// storage.periodic_temp_grace_s (#797 review): smaller risks eating a live
+// merge's inputs on very slow disks; larger leaks longer.
+const defaultTempDirGrace = 24 * time.Hour
+
+// sweepStaleTempDirs removes periodic temp-dir leftovers (both families) older
+// than the configured grace from the temp base. Returns the number of dirs
+// removed. Unreadable entries are skipped (WARN) — a root-owned leftover must
+// not silence the sweep.
+func (m *PeriodicMergeManager) sweepStaleTempDirs() int {
 	base := m.tempDirBase()
 	if base == "" {
 		return 0
 	}
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		slog.Warn("periodic merge: extract-dir sweep cannot read temp base", "dir", base, "error", err)
+		slog.Warn("periodic merge: temp-dir sweep cannot read temp base", "dir", base, "error", err)
 		return 0
 	}
-	cutoff := time.Now().Add(-extractDirGrace)
+	grace := m.tempDirGrace
+	if grace <= 0 {
+		grace = defaultTempDirGrace
+	}
+	cutoff := time.Now().Add(-grace)
 	removed := 0
 	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), "periodic_extract_") {
+		if !e.IsDir() || !hasAnyPrefix(e.Name(), periodicTempDirPrefixes) {
 			continue
 		}
 		dir := filepath.Join(base, e.Name())
 		info, err := e.Info()
 		if err != nil {
-			slog.Warn("periodic merge: extract-dir sweep cannot stat entry", "dir", dir, "error", err)
+			slog.Warn("periodic merge: temp-dir sweep cannot stat entry", "dir", dir, "error", err)
 			continue
 		}
 		if info.ModTime().After(cutoff) {
 			continue // possibly live (or grace-period young)
 		}
 		if err := os.RemoveAll(dir); err != nil {
-			slog.Warn("periodic merge: extract-dir sweep cannot remove stale dir", "dir", dir, "error", err)
+			slog.Warn("periodic merge: temp-dir sweep cannot remove stale dir", "dir", dir, "error", err)
 			continue
 		}
-		slog.Info("periodic merge: swept stale extract dir", "dir", dir, "age", time.Since(info.ModTime()).Round(time.Minute))
+		slog.Info("periodic merge: swept stale temp dir", "dir", dir, "age", time.Since(info.ModTime()).Round(time.Minute))
 		removed++
 	}
 	return removed
+}
+
+func hasAnyPrefix(name string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // TempDirBase exposes the effective intermediate-frame directory base.
@@ -425,7 +476,7 @@ func (m *PeriodicMergeManager) Duration() time.Duration {
 func (m *PeriodicMergeManager) Run(ctx context.Context, cameraID string, t time.Time) error {
 	// Reclaim crash/interrupt leftovers before creating new ones — a killed
 	// merge (server crash, Ctrl-C'd CLI) skips the deferred cleanup.
-	m.sweepStaleExtractDirs()
+	m.sweepStaleTempDirs()
 
 	startTime, endTime := parseMergeRange(t, m.duration, m.loc)
 	windowLabel := startTime.Format("2006-01-02_150405")

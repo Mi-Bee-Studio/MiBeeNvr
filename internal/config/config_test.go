@@ -1923,3 +1923,22 @@ func TestValidateCameraMotionSource(t *testing.T) {
 		})
 	}
 }
+
+// TestStoragePeriodicTempGraceValidation (#797 review): the temp-dir sweep
+// grace must default to 86400 and reject negative values.
+func TestStoragePeriodicTempGraceValidation(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	if cfg.Storage.PeriodicTempGraceS != 86400 {
+		t.Fatalf("default PeriodicTempGraceS = %d, want 86400", cfg.Storage.PeriodicTempGraceS)
+	}
+	cfg.Storage.PeriodicTempGraceS = -1
+	if err := Validate(cfg); err == nil {
+		t.Fatal("negative PeriodicTempGraceS must be rejected")
+	}
+	cfg.Storage.PeriodicTempGraceS = 172800
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("valid override rejected: %v", err)
+	}
+}

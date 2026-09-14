@@ -143,7 +143,7 @@ mibee-nvr timelapse-merge --camera all --encoding jpeg --start 2026-08-26 \
 - 命令可在 NVR 运行中执行（WAL 并发模型，与 cleanup/repair 一致）；但 timelapse 已启用的摄像头会被拒绝 —— 其窗口归服务器合并调度器所有，需 `--force` 或停服后运行。
 - **执行时自动自降级**（nice 19 + IO best-effort 最低档，`--no-throttle` 关闭）：大窗口合并与在线录像平权竞争会拖垮录像（2026-09-12 事故：load 8-13 持续 4.5h，录像 17→10 台），事后 renice 无法挽回。
 - **目录形源删除自动限速**（每 200 个文件暂停 `--delete-throttle`）：MJPEG/延时帧目录的百万级小文件 unlink 会让 ext4 日志（jbd2）饱和数十分钟，拖慢所有磁盘 IO。
-- 合并中间产物（帧提取/复制目录）写在**存储根** `<root>/periodic-merge/tmp/` 下，不再用系统 `/tmp`（1s 采样全天窗口约需 3.5-7GB，小根分区会 ENOSPC）；合并输出采用流式生成（#747），内存占用与窗口大小无关。
+- 合并中间产物（帧提取/复制目录）写在**存储根** `<root>/periodic-merge/tmp/` 下，不再用系统 `/tmp`（1s 采样全天窗口约需 3.5-7GB，小根分区会 ENOSPC）；合并输出采用流式生成（#747），内存占用与窗口大小无关。中断（Ctrl-C/崩溃）遗留的中间目录由 NVR 服务端启动清扫回收（宽限期 `storage.periodic_temp_grace_s`，默认 24h，见 [配置](configuration.md#storageperiodic_temp_grace_s)）。
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|

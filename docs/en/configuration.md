@@ -277,6 +277,13 @@ validate-config` surfaces it too.
 
 > For systematic storage & memory tuning (fsync durability tiers, preallocation, GOMEMLIMIT, background I/O budgeting) see [Performance Tuning](performance.md).
 
+### `storage.periodic_temp_grace_s`
+- **Type**: integer
+- **Optional**: Yes
+- **Default**: `86400` (24h)
+- **Description**: Startup-sweep grace period for periodic-merge temp directories (`periodic_extract_*` / `periodic_go_merge_*` under `<root>/periodic-merge/tmp`). Crashed or Ctrl-C'd merges leak these dirs (the happy path cleans via defer); sweeps at startup and at each merge run reclaim leftovers older than the grace. **Setting it too small risks deleting a LIVE merge's inputs** — on slow ARM + USB HDD a natural-day window merge can run for hours, so the grace must exceed your longest merge; too large leaks longer. Global key (the tmp dir is shared across cameras).
+- **Example**: `86400`, `172800`
+
 ### `storage.db_path`
 - **Type**: string
 - **Optional**: yes
