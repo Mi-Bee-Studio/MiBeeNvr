@@ -498,6 +498,12 @@ func TestCleanupTempFiles(t *testing.T) {
 	os.WriteFile(tmpFile1, []byte("orphan"), 0o644)
 	os.WriteFile(tmpFile2, []byte("orphan"), 0o644)
 
+	// Orphaned .tmp files are crash leftovers — by the time any sweep sees
+	// them they are old. Backdate so the age rail (#803) doesn't spare them.
+	past := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(tmpFile1, past, past))
+	require.NoError(t, os.Chtimes(tmpFile2, past, past))
+
 	// Create a normal file that should NOT be cleaned up
 	temp, final, _ := m.CreateSegment("cam-09", "h264")
 	m.WriteFrame(temp, []byte("keep"))
@@ -521,6 +527,44 @@ func TestCleanupTempFiles(t *testing.T) {
 	}
 }
 
+// TestCleanupTempFiles_SparesYoungUnregisteredTemps (#803): the startup temp
+// sweep must not delete .tmp entries younger than 1h. The active-temp
+// registry only covers writers in THIS process — an external CLI (repair
+// mjpeg-containerize writes <seg>.avi.tmp under a cam-* tree) cannot
+// register, and a service restart mid-write deleted its tmp between fsync
+// and reopen (2026-09-14 13:30:27 production evidence on M5: service start
+// time == neighbor .avi mtimes ±4s, migration FAIL "reopen verify: ENOENT",
+// 1 occurrence in ~760 segments — the only restart in a 6h42m run landing
+// inside a 2–4s write window). The 1h rail mirrors both orphan scans
+// ("items younger than 1h are skipped to avoid racing an in-progress
+// write"); the file branch covers .avi.tmp, the dir branch covers
+// CreateSegment-style .tmp frame directories written by external tools.
+func TestCleanupTempFiles_SparesYoungUnregisteredTemps(t *testing.T) {
+	dir := t.TempDir()
+	m, _ := NewManager(dir)
+
+	hourDir := filepath.Join(dir, "cam-803", "202609", "14", "13", "30")
+	require.NoError(t, os.MkdirAll(hourDir, 0o755))
+	youngFile := filepath.Join(hourDir, "seg_20260914_133000.avi.tmp")
+	require.NoError(t, os.WriteFile(youngFile, []byte("in-flight external write"), 0o644))
+	youngDir := filepath.Join(hourDir, "seg_20260914_133100.tmp")
+	require.NoError(t, os.MkdirAll(youngDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(youngDir, "frame.jpg"), []byte("f"), 0o644))
+
+	// Old unregistered tmp — a genuine crash leftover — must still die.
+	oldFile := filepath.Join(hourDir, "crashed_old.avi.tmp")
+	require.NoError(t, os.WriteFile(oldFile, []byte("leftover"), 0o644))
+	past := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(oldFile, past, past))
+
+	require.NoError(t, m.CleanupTempFiles())
+
+	require.FileExists(t, youngFile, "young unregistered .tmp (external writer, e.g. migration CLI) must survive the sweep")
+	_, err := os.Stat(youngDir)
+	require.NoError(t, err, "young unregistered .tmp dir must survive the sweep")
+	require.NoFileExists(t, oldFile, "old unregistered .tmp is a crash leftover and must be removed")
+}
+
 func TestCleanupTempFiles_NoTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	m, _ := NewManager(dir)
@@ -542,10 +586,13 @@ func TestCleanupTempFiles_ScopesToCameraDirs(t *testing.T) {
 	dir := t.TempDir()
 	m, _ := NewManager(dir)
 
-	// Camera subtree with an orphan .tmp that MUST be removed.
+	// Camera subtree with an orphan .tmp that MUST be removed (backdated —
+	// the age rail (#803) spares fresh temps).
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cam-test", "2026", "07", "20", "10"), 0o755))
 	camTmp := filepath.Join(dir, "cam-test", "2026", "07", "20", "10", "orphan.tmp")
 	require.NoError(t, os.WriteFile(camTmp, []byte("x"), 0o644))
+	past := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(camTmp, past, past))
 
 	// Out-of-scope locations that must NOT be touched even with .tmp suffix.
 	// These mimic real layout: hls shards, recordings dir, bin, certs, db files,

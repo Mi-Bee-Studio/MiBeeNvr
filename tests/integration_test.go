@@ -249,6 +249,14 @@ func TestCrashRecovery(t *testing.T) {
 	otherTmp := filepath.Join(otherDir, "other_crash.tmp")
 	require.NoError(t, os.WriteFile(otherTmp, []byte("other-crash-data"), 0o644))
 
+	// Backdate the crash fixtures past the 1h rail (#803): fresh .tmp entries
+	// are spared (an external writer may own them); crash leftovers are old by
+	// the time any sweep sees them.
+	past := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(tmpFile, past, past))
+	require.NoError(t, os.Chtimes(tmpDir, past, past))
+	require.NoError(t, os.Chtimes(otherTmp, past, past))
+
 	// 3. Run cleanup
 	require.NoError(t, store.CleanupTempFiles())
 
