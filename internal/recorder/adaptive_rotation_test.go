@@ -122,12 +122,18 @@ func TestH264Adaptive_TLExitFlushAfterRotation(t *testing.T) {
 	spike := append([]byte{0x41}, bytes.Repeat([]byte{0x33}, 299999)...)
 	send(spike, t0.Add(time.Duration(totalPs+1)*20*time.Millisecond))
 
-	require.Eventually(t, func() bool { return len(b.frameCh) == 0 }, 5*time.Second, 5*time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
-
-	files, err := mgr.ListFiles(cam)
-	require.NoError(t, err)
-	require.Len(t, files, 2, "rotation + exit flush must produce exactly 2 segments")
+	// Wait on the OBSERVABLE end state (2 final files), not on the channel
+	// draining: the last packet leaving frameCh only means writeFrames
+	// consumed it — the rotation + exit-flush finalize (muxer close, fsync,
+	// temp→final rename) runs after, and a fixed sleep raced it on slow CI
+	// runners (twice: #787/#797 CI reruns). ListFiles skips .tmp, so exactly
+	// 2 entries means both segments are durably finalized.
+	var files []string
+	require.Eventually(t, func() bool {
+		var err error
+		files, err = mgr.ListFiles(cam)
+		return err == nil && len(files) == 2
+	}, 5*time.Second, 10*time.Millisecond, "rotation + exit flush must produce exactly 2 segments")
 	sort.Strings(files)
 
 	seg1, err := merge.ParseSegment(files[0])
