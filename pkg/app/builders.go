@@ -851,6 +851,9 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		deps.gb28181Cascade = gbcascade.New(gb28181.CascadeConfig(cfg.GB28181Cascade), camera.NewCascadeSource(camMgr, db), gb28181.NewCascadeStore(db))
 		deps.gb28181Cascade.SetSegmentParser(gb28181.SegmentParser())
 		deps.gb28181Cascade.SetSubStreamAcquirer(camera.NewCascadeSubAcquirer(camMgr))
+		// Multi-level cascade (#451): an upper INVITE for a not-currently-
+		// recording GB child camera starts a bounded on-demand local INVITE.
+		deps.gb28181Cascade.SetHubActivator(camera.NewCascadeHubActivator(camMgr))
 		slog.Info("GB28181 cascade client configured",
 			"upper", cfg.GB28181Cascade.ServerAddr, "device", cfg.GB28181Cascade.LocalDeviceID)
 	}

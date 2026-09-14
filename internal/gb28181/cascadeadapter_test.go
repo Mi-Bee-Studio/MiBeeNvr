@@ -18,15 +18,16 @@ import (
 
 func TestCascadeConfigMapsFields(t *testing.T) {
 	in := config.GB28181CascadeConfig{
-		Enabled:           true,
-		ServerDomain:      "34020000002000000001",
-		ServerAddr:        "10.0.0.1:5060",
-		LocalDeviceID:     "34020000001320000001",
-		Realm:             "3402000000",
-		Password:          "secret",
-		SIPListen:         ":5061",
-		HeartbeatInterval: "30s",
-		RegisterExpires:   3600,
+		Enabled:              true,
+		ServerDomain:         "34020000002000000001",
+		ServerAddr:           "10.0.0.1:5060",
+		LocalDeviceID:        "34020000001320000001",
+		Realm:                "3402000000",
+		Password:             "secret",
+		SIPListen:            ":5061",
+		HeartbeatInterval:    "30s",
+		RegisterExpires:      3600,
+		HubActivationTimeout: "15s",
 		Upstreams: []config.GB28181CascadeUpstream{{
 			ServerDomain: "upper2", ServerAddr: "10.0.0.2:5060",
 			LocalDeviceID: "dev-at-2", Realm: "r2", Password: "p2",
@@ -37,6 +38,7 @@ func TestCascadeConfigMapsFields(t *testing.T) {
 	require.Equal(t, in.Enabled, out.Enabled)
 	require.Equal(t, in.ServerDomain, out.ServerDomain)
 	require.Equal(t, in.ServerAddr, out.ServerAddr)
+	require.Equal(t, in.HubActivationTimeout, out.HubActivationTimeout, "hub activation timeout must map through (#451)")
 	require.Equal(t, in.LocalDeviceID, out.LocalDeviceID)
 	require.Equal(t, in.Realm, out.Realm)
 	require.Equal(t, in.Password, out.Password)
