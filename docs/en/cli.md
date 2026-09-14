@@ -34,7 +34,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`download-model`](#download-model-download-the-ai-model) | Download the browser-side AI model |
 | [`merge-cameras`](#merge-cameras-merge-cameras) | Merge two duplicate camera entries |
 | [`timelapse-merge`](#timelapse-merge-convert-recordings-to-timelapse) | Batch-convert recordings of any period/camera into timelapse merges |
-| [`repair`](#repair-data-repair) | Data repair toolkit (7 subcommands) |
+| [`repair`](#repair-data-repair) | Data repair toolkit (8 subcommands) |
 | [`cleanup`](#cleanup-recording-cleanup) | Delete recordings by date / orphan files |
 | [`gen-gb35114-certs`](#gen-gb35114-certs-issue-gb35114-pilot-certificates) | Issue GB35114 level-A pilot certificates (`-tags gb35114` builds only) |
 
@@ -181,6 +181,7 @@ Every subcommand **defaults to dry-run** (reports what would change); add `--exe
 | `prune-intermediate-mp4` | Remove per-segment rolling-merge .mp4 outputs already folded into periodic (8h/24h/7d/30d) merges |
 | `reclaim-orphan-merges` | Reclaim merged .mp4 files left on disk after their recording row was deleted via the web UI (touches only unreferenced outputs) |
 | `normalize-endpoints` | Canonicalize ONVIF endpoints (elide default ports, lowercase, strip trailing slash) so dedup queries match |
+| `mjpeg-containerize` | Convert legacy dir-form MJPEG segments (one JPEG file per frame) into single-file AVI containers (#761); per segment "convert → verify → commit → remove source", and a failed verify leaves the row untouched |
 
 Examples:
 
@@ -190,6 +191,26 @@ mibee-nvr repair duration
 
 # execute, deleting unrecoverable files as well
 mibee-nvr repair duration --execute --prune
+```
+
+`mjpeg-containerize` specific flags:
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--camera <id>` | all | Convert only this camera's segments |
+| `--limit N` | all | Convert at most N segments |
+| `--keep-old` | off | Keep the source frame directory after conversion |
+| `--busy-retries N` | `3` | Retry attempts on `SQLITE_BUSY` for the DB row flip (`0` = single attempt, no retry) |
+| `--busy-wait <dur>` | `2s` | Linear backoff base between BUSY retries (Go duration, e.g. `500ms`, `5s`) |
+
+The CLI shares the WAL DB with the live NVR — under disk saturation the server's merge transactions can outlast busy_timeout (raise both values then); on fast disks the default 3-attempt worst case is pure waste (lower them). Mirrors the `timelapse-merge --delete-throttle` precedent.
+
+```bash
+# preview (dry-run by default)
+mibee-nvr repair mjpeg-containerize --camera yard-esp32
+
+# execute; relax BUSY retries under disk saturation
+mibee-nvr repair mjpeg-containerize --execute --busy-retries 5 --busy-wait 5s
 ```
 
 ## cleanup — Recording Cleanup

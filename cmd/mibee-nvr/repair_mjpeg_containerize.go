@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -31,10 +32,12 @@ import (
 )
 
 type containerizeOptions struct {
-	cameraID string
-	limit    int
-	dryRun   bool
-	keepOld  bool
+	cameraID    string
+	limit       int
+	dryRun      bool
+	keepOld     bool
+	busyRetries int           // SQLITE_BUSY retry attempts for the DB row flip
+	busyWait    time.Duration // linear backoff base between BUSY retries
 }
 
 type containerizeReport struct {
@@ -81,19 +84,20 @@ func containerizeMJPEGDirs(ctx context.Context, db *storage.DB, recs []*model.Re
 			fmt.Fprintf(w, "  PLAN %s — %d frames → %s.avi\n", rec.ID, len(frames), rec.FilePath)
 			continue
 		}
-		if err := containerizeOne(db, rec, frames, opts.keepOld); err != nil {
+		if err := containerizeOne(db, rec, frames, opts); err != nil {
 			fmt.Fprintf(w, "  FAIL %s — %v (row untouched)\n", rec.ID, err)
 			rep.failed++
 			continue
 		}
-		fmt.Fprintf(w, "  OK   %s — %d frames → %s.avi\n", rec.ID, len(frames), rec.FilePath)
+		// rec.FilePath was flipped to the .avi path inside containerizeOne.
+		fmt.Fprintf(w, "  OK   %s — %d frames → %s\n", rec.ID, len(frames), rec.FilePath)
 		rep.converted++
 	}
 	return rep
 }
 
 // containerizeOne performs the full convert-verify-commit cycle for one row.
-func containerizeOne(db *storage.DB, rec *model.Recording, frames []string, keepOld bool) error {
+func containerizeOne(db *storage.DB, rec *model.Recording, frames []string, opts containerizeOptions) error {
 	ctx := context.Background()
 	aviPath := rec.FilePath + ".avi"
 	tmpPath := aviPath + ".tmp"
@@ -173,14 +177,18 @@ func containerizeOne(db *storage.DB, rec *model.Recording, frames []string, keep
 	}
 
 	// DB last: the row flips only after the container is durable on disk.
+	// The live server's merge transactions can outlast the busy_timeout
+	// under disk saturation — retry the transient locks (#761 production).
 	rec.FilePath = aviPath
 	rec.Format = model.FormatAVI
 	rec.FrameCount = wrote
 	rec.FileSize = fi.Size()
-	if err := db.UpdateRecording(ctx, rec); err != nil {
+	if err := retryOnBusy(func() error {
+		return db.UpdateRecording(ctx, rec)
+	}, opts.busyRetries, opts.busyWait); err != nil {
 		return fmt.Errorf("db update: %w", err)
 	}
-	if !keepOld {
+	if !opts.keepOld {
 		if err := os.RemoveAll(rec.FilePath[:len(rec.FilePath)-len(".avi")]); err != nil {
 			return fmt.Errorf("remove source dir (row already migrated): %w", err)
 		}
@@ -255,13 +263,6 @@ func runRepairMJPEGContainerize() int {
 		printRepairMJPEGContainerizeUsage()
 		return 0
 	}
-	keepOld := false
-	for i := 3; i < len(os.Args); i++ {
-		if os.Args[i] == "--keep-old" {
-			keepOld = true
-		}
-	}
-
 	db, _, err := openDBFromConfig(opts.configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -291,7 +292,8 @@ func runRepairMJPEGContainerize() int {
 		ptrs[i] = &recs[i]
 	}
 	rep := containerizeMJPEGDirs(ctx, db, ptrs, containerizeOptions{
-		cameraID: opts.cameraID, limit: opts.limit, dryRun: opts.dryRun, keepOld: keepOld,
+		cameraID: opts.cameraID, limit: opts.limit, dryRun: opts.dryRun,
+		keepOld: opts.keepOld, busyRetries: opts.busyRetries, busyWait: opts.busyWait,
 	}, os.Stdout)
 	fmt.Printf("\nplanned=%d converted=%d skipped=%d failed=%d\n",
 		rep.planned, rep.converted, rep.skipped, rep.failed)
@@ -312,6 +314,8 @@ Flags:
   --camera ID     only convert this camera's segments
   --limit N       convert at most N segments
   --keep-old      keep the source frame directory after conversion
+  --busy-retries N  SQLITE_BUSY retry attempts for DB row flips (default 3; 0 = single attempt)
+  --busy-wait DUR  linear backoff base between BUSY retries (Go duration, default 2s)
   --dry-run       report the plan without changes (default)
   --execute       apply the conversion
 

@@ -210,3 +210,27 @@ func openDBForTest(dbPath string) (*storage.DB, error) {
 	}
 	return db, nil
 }
+
+// mjpeg-containerize BUSY tunables (#802 review): the retry shape is a CLI
+// surface — saturated disks need longer/more retries, fast disks waste the
+// default worst case. Mirrors the --delete-throttle precedent (#748):
+// defaults live in parseRepairFlags, zero retries = single attempt.
+func TestParseRepairFlags_ContainerizeBusyTunables(t *testing.T) {
+	var opts repairOpts
+	withArgs([]string{"bin", "repair", "mjpeg-containerize"}, func() {
+		opts = parseRepairFlags(3)
+	})
+	require.Equal(t, 3, opts.busyRetries, "default retry attempts")
+	require.Equal(t, 2*time.Second, opts.busyWait, "default linear backoff base")
+	require.False(t, opts.keepOld)
+
+	withArgs([]string{
+		"bin", "repair", "mjpeg-containerize",
+		"--busy-retries", "5", "--busy-wait", "500ms", "--keep-old",
+	}, func() {
+		opts = parseRepairFlags(3)
+	})
+	require.Equal(t, 5, opts.busyRetries)
+	require.Equal(t, 500*time.Millisecond, opts.busyWait)
+	require.True(t, opts.keepOld)
+}
