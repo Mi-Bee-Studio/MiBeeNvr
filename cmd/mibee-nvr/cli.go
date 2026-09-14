@@ -322,6 +322,8 @@ func dispatchSubcommand(args []string) {
 		cmdCleanup()
 	case "validate-config":
 		cmdValidateConfig()
+	case "gen-gb35114-certs":
+		cmdGenGB35114Certs()
 	}
 }
 

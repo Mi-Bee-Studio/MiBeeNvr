@@ -36,6 +36,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`timelapse-merge`](#timelapse-merge-convert-recordings-to-timelapse) | Batch-convert recordings of any period/camera into timelapse merges |
 | [`repair`](#repair-data-repair) | Data repair toolkit (7 subcommands) |
 | [`cleanup`](#cleanup-recording-cleanup) | Delete recordings by date / orphan files |
+| [`gen-gb35114-certs`](#gen-gb35114-certs-issue-gb35114-pilot-certificates) | Issue GB35114 level-A pilot certificates (`-tags gb35114` builds only) |
 
 ---
 
@@ -215,6 +216,16 @@ mibee-nvr cleanup --orphans
 | `--config <path>` | Config file path (default `mibee-nvr.yaml`; locates the storage root and database) |
 
 > For day-to-day cleanup prefer the [retention policy](recording-playback.md) (`cleanup.retention_days`); this command is for post-migration slimming and incident cleanup.
+
+## gen-gb35114-certs — Issue GB35114 Pilot Certificates
+
+Only present in `-tags gb35114` builds (a default build explains the rebuild instead). Issues self-signed pilot material for GB35114 level-A secure registration: an SM2 platform identity plus device identities signed by the platform, laid out to match the three path keys of `gb28181.security35114`. See the [GB28181 guide — GB35114 Security](gb28181-guide.md).
+
+```bash
+mibee-nvr gen-gb35114-certs --platform-id 34020000002000000001 \
+  --device-id 34020000001320000001,34020000001320000002 \
+  --out-dir gb35114-certs [--days 3650]
+```
 
 ## Environment Variables
 

@@ -148,6 +148,14 @@ The `gb28181.security35114` section (#714/#707, GB35114 level A) enables the nat
 | `platform_key` | string | (required) | Platform SM2 private key path |
 | `device_certs_dir` | string | empty | Directory of pre-provisioned device certificates, one `<deviceID>.pem` per device. Optional — devices can instead announce their certificate via the Capability cnonce (trust-on-first-use); pre-provisioning is the stricter policy |
 
+**Pilot certificate issuance** (labs / small deployments without a CA): `-tags gb35114` builds ship a generator command —
+
+```bash
+mibee-nvr gen-gb35114-certs --platform-id <20-digit platform ID>   --device-id <20-digit device ID>[,<20-digit device ID>...] --out-dir gb35114-certs
+```
+
+It issues a self-signed SM2 platform identity plus device identities signed by the platform (PKCS#8 keys at 0600 + GM/T 0015-2012 certificates). The output layout matches the three path keys above exactly (`devices/<deviceID>.pem`); distribute each device's certificate and key to the device itself. The generated material is regression-verified through the full Challenge/VerifyRegister/VerifyOK handshake (matching VKEKs on both sides). For production, provision from a real CA (CFCA etc.) instead.
+
 
 ### Camera
 

@@ -66,7 +66,7 @@ func ApplySecurity35114(sip *gbsip.Config, cfg config.GB28181ServerConfig) error
 // silently downgrade that device to trust-on-first-use.
 func loadDeviceCerts(dir string) (map[string]*smx509.Certificate, error) {
 	if strings.TrimSpace(dir) == "" {
-		return nil, nil
+		return map[string]*smx509.Certificate{}, nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
