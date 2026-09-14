@@ -10,7 +10,7 @@ import (
 // with the IP redacted. This is the exact payload the HelloListener must parse
 // in production — keeping a real sample guards against parser regressions that
 // a hand-rolled minimal fixture might miss (namespace prefixes, scope formats).
-const realESP32Hello = `<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:tns="http://www.onvif.org/ver10/network/wsdl"><soap:Header><wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Hello</wsa:Action><wsa:MessageID>urn:uuid:f472b01e-0000-1000-8000-c82e1845d868</wsa:MessageID><wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To></soap:Header><soap:Body><wsd:Hello><wsa:EndpointReference><wsa:Address>urn:uuid:f472b01e-0000-1000-8000-c82e1845d868</wsa:Address></wsa:EndpointReference><wsd:Types>tns:NetworkVideoTransmitter</wsd:Types><wsd:Scopes>onvif://www.onvif.org/type/video_encoder onvif://www.onvif.org/type/NetworkVideoTransmitter onvif://www.onvif.org/hardware/MiBeeCam onvif://www.onvif.org/name/MiBeeCam onvif://www.onvif.org/Profile/Streaming</wsd:Scopes><wsd:XAddrs>http://192.168.63.140:80/onvif/device_service</wsd:XAddrs><wsd:MetadataVersion>2</wsd:MetadataVersion></wsd:Hello></soap:Body></soap:Envelope>`
+const realESP32Hello = `<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:tns="http://www.onvif.org/ver10/network/wsdl"><soap:Header><wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Hello</wsa:Action><wsa:MessageID>urn:uuid:f472b01e-0000-1000-8000-c82e1845d868</wsa:MessageID><wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To></soap:Header><soap:Body><wsd:Hello><wsa:EndpointReference><wsa:Address>urn:uuid:f472b01e-0000-1000-8000-c82e1845d868</wsa:Address></wsa:EndpointReference><wsd:Types>tns:NetworkVideoTransmitter</wsd:Types><wsd:Scopes>onvif://www.onvif.org/type/video_encoder onvif://www.onvif.org/type/NetworkVideoTransmitter onvif://www.onvif.org/hardware/MiBeeCam onvif://www.onvif.org/name/MiBeeCam onvif://www.onvif.org/Profile/Streaming</wsd:Scopes><wsd:XAddrs>http://192.0.2.140:80/onvif/device_service</wsd:XAddrs><wsd:MetadataVersion>2</wsd:MetadataVersion></wsd:Hello></soap:Body></soap:Envelope>`
 
 // realProbeMatches is a real ProbeMatches response (from a generic IPC) that
 // arrives on the shared multicast socket when another client issues a Probe.
@@ -23,7 +23,7 @@ func TestParseWSDMessage_Hello(t *testing.T) {
 	if dev == nil {
 		t.Fatal("parseWSDMessage returned nil for a valid Hello")
 	}
-	if dev.Endpoint != "http://192.168.63.140:80/onvif/device_service" {
+	if dev.Endpoint != "http://192.0.2.140:80/onvif/device_service" {
 		t.Errorf("Endpoint = %q, want the device_service XAddr", dev.Endpoint)
 	}
 	if dev.UUID != "urn:uuid:f472b01e-0000-1000-8000-c82e1845d868" {

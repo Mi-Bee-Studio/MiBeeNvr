@@ -37,7 +37,7 @@ func TestStatusSnapshot_FailedStartCameraExposesError(t *testing.T) {
 		"configured-but-not-started camera should not appear until it has a status")
 
 	// Simulate ONVIF recorder Start() failure (camera IP changed, unreachable).
-	mgr.markStartFailed("cam-onvif-1", errors.New("dial tcp 192.168.63.201:8080: no route to host"))
+	mgr.markStartFailed("cam-onvif-1", errors.New("dial tcp 192.0.2.201:8080: no route to host"))
 
 	// The camera must now be visible to the health loop as StatusError — this is
 	// the trigger status that auto-remediate.Check acts on (auto_remediate.go:123).

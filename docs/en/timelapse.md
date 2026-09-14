@@ -63,7 +63,7 @@ cameras:
   - name: "MiBeeCam"
     protocol: "onvif"
     encoding: "jpeg"
-    url: "http://192.168.63.148/onvif/device_service"
+    url: "http://192.0.2.148/onvif/device_service"
     recording_enabled: true
 
     timelapse:

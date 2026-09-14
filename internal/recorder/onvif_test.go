@@ -756,8 +756,8 @@ func TestDeriveRTSPURL(t *testing.T) {
 	tests := []struct {
 		name, in, want string
 	}{
-		{"http with port", "http://192.168.63.224:81/stream", "rtsp://192.168.63.224:554/stream"},
-		{"http default port", "http://192.168.63.224/stream", "rtsp://192.168.63.224:554/stream"},
+		{"http with port", "http://192.0.2.224:81/stream", "rtsp://192.0.2.224:554/stream"},
+		{"http default port", "http://192.0.2.224/stream", "rtsp://192.0.2.224:554/stream"},
 		{"already rtsp", "rtsp://1.2.3.4:554/stream", "rtsp://1.2.3.4:554/stream"},
 		{"strips userinfo", "http://admin:admin@1.2.3.4:81/stream", "rtsp://1.2.3.4:554/stream"},
 		{"garbage → empty", "://not-a-url", ""},
@@ -776,9 +776,9 @@ func TestRewriteStaleStreamHost(t *testing.T) {
 	}{
 		{
 			name:          "stale host rewritten (DHCP reassignment)",
-			rtspURL:       "rtsp://192.168.63.200:554/11",
-			onvifEndpoint: "http://192.168.63.199:8080/onvif/device_service",
-			want:          "rtsp://192.168.63.199:554/11",
+			rtspURL:       "rtsp://192.0.2.200:554/11",
+			onvifEndpoint: "http://192.0.2.199:8080/onvif/device_service",
+			want:          "rtsp://192.0.2.199:554/11",
 		},
 		{
 			name:          "hosts agree → unchanged",
@@ -825,7 +825,7 @@ func TestDetectEncoding_RTSPAuthoritativeOverLyingConfig(t *testing.T) {
 		// Simulate the persisted lie: config says H264 …
 		or.cfg.StreamEncoding = "H264"
 		// … rtspURL is set (Start resolved it) …
-		or.rtspURL = "rtsp://192.168.63.200:554/11"
+		or.rtspURL = "rtsp://192.0.2.200:554/11"
 		// … but the real stream is H265.
 		or.probeEncodingFn = func() string { return "H265" }
 	})

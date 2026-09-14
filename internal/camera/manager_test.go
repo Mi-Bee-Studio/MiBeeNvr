@@ -534,7 +534,7 @@ func TestAddCamera_DuplicateONVIFEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	const ep = "http://192.168.63.212:80/onvif/device_service"
+	const ep = "http://192.0.2.212:80/onvif/device_service"
 	// First add (mimics a manual/early add with a non-generated ID).
 	id1, err := mgr.AddCamera(ctx, config.CameraConfig{
 		ID:              "cam-early-manual",
@@ -595,7 +595,7 @@ func TestAddCamera_DuplicateStableID(t *testing.T) {
 		ID:              "cam-new-ip",
 		Name:            "Cam at new IP",
 		Protocol:        "onvif",
-		ONVIFEndpoint:   "http://192.168.63.99:80/onvif/device_service",
+		ONVIFEndpoint:   "http://192.0.2.99:80/onvif/device_service",
 		StableID:        serial,
 		ActivationState: "pending_activation",
 	})
@@ -2187,7 +2187,7 @@ func TestAddCameraReverseONVIFLookup(t *testing.T) {
 
 	cam := &config.CameraConfig{
 		Protocol:      "onvif",
-		ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+		ONVIFEndpoint: "http://192.0.2.212:80/onvif/device_service",
 		Username:      "admin",
 		Password:      "admin",
 	}
@@ -2211,7 +2211,7 @@ func TestAddCameraReverseONVIFFailure(t *testing.T) {
 
 	cam := &config.CameraConfig{
 		Protocol:      "onvif",
-		ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+		ONVIFEndpoint: "http://192.0.2.212:80/onvif/device_service",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2231,7 +2231,7 @@ func TestAddCameraReverseONVIFSkip(t *testing.T) {
 	cam := &config.CameraConfig{
 		StableID:      "already-set",
 		Protocol:      "onvif",
-		ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+		ONVIFEndpoint: "http://192.0.2.212:80/onvif/device_service",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2269,7 +2269,7 @@ func TestTryFillStableIDFromONVIF_OverwritesDirty(t *testing.T) {
 		name    string
 		dirtyID string
 	}{
-		{"dirty = IP address", "192.168.63.148"},
+		{"dirty = IP address", "192.0.2.148"},
 		{"dirty = all-zero MAC", "000000000000"},
 		{"dirty = URL", "http://cam/onvif"},
 	}
@@ -2281,7 +2281,7 @@ func TestTryFillStableIDFromONVIF_OverwritesDirty(t *testing.T) {
 			cam := &config.CameraConfig{
 				StableID:      tc.dirtyID,
 				Protocol:      "onvif",
-				ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+				ONVIFEndpoint: "http://192.0.2.212:80/onvif/device_service",
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -2315,7 +2315,7 @@ func TestTryFillStableIDFromONVIF_RejectsDirtySerial(t *testing.T) {
 			}
 			cam := &config.CameraConfig{
 				Protocol:      "onvif",
-				ONVIFEndpoint: "http://192.168.63.212:80/onvif/device_service",
+				ONVIFEndpoint: "http://192.0.2.212:80/onvif/device_service",
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

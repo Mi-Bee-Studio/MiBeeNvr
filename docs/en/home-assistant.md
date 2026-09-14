@@ -71,8 +71,8 @@ Add one Generic Camera per camera in HA's `configuration.yaml`:
 camera:
   - platform: generic
     name: "Front Door"
-    still_image_url: "http://192.168.63.30:9090/api/cameras/front-door/snapshot"
-    stream_source: "rtsp://192.168.63.30:8554/front-door"
+    still_image_url: "http://192.0.2.30:9090/api/cameras/front-door/snapshot"
+    stream_source: "rtsp://192.0.2.30:8554/front-door"
     username: admin
     password: "!secret nvr_password"
 ```
@@ -90,7 +90,7 @@ MJPEG/JPEG cameras bypass the RTSP output — use HA's native MJPEG Camera again
 camera:
   - platform: mjpeg
     name: "Yard ESP32"
-    mjpeg_url: "http://192.168.63.30:9090/api/cameras/yard-esp32/stream.mjpeg"
+    mjpeg_url: "http://192.0.2.30:9090/api/cameras/yard-esp32/stream.mjpeg"
     username: admin
     password: "!secret nvr_password"
     verify_ssl: false
@@ -106,7 +106,7 @@ Have the NVR start recording the moment a motion sensor fires. Configure MQTT on
 # mibee-nvr.yaml
 mqtt:
   enabled: true
-  broker: "tcp://192.168.63.1:1883"
+  broker: "tcp://192.0.2.1:1883"
   client_id: "mibee-nvr"
   topic: "mibee"
   username: "mqtt_user"
@@ -157,7 +157,7 @@ For low-frequency values, poll NVR endpoints with HA's RESTful integration. The 
 
 ```yaml
 restful:
-  - resource: "http://192.168.63.30:9090/api/cameras/front-door/stats"
+  - resource: "http://192.0.2.30:9090/api/cameras/front-door/stats"
     username: admin
     password: "!secret nvr_password"
     scan_interval: 60
@@ -180,7 +180,7 @@ Generic Camera over RTSP has 1–3 s latency. For sub-second latency install the
 
 ```yaml
 type: custom:webrtc-camera
-url: rtsp://192.168.63.30:8554/front-door
+url: rtsp://192.0.2.30:8554/front-door
 muted: true
 ```
 

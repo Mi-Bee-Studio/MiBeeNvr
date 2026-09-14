@@ -154,7 +154,7 @@ func TestHandleSetup_PreservesPreconfiguredFields(t *testing.T) {
 		Version: "1.0",
 		Server:  config.ServerConfig{Listen: "127.0.0.1:9777"},
 		Storage: config.StorageConfig{RootDir: "/mnt/preconfigured"},
-		Vision:  config.VisionConfig{Enabled: true, URL: "http://192.168.63.110:9091"},
+		Vision:  config.VisionConfig{Enabled: true, URL: "http://192.0.2.110:9091"},
 		APIKeys: []config.APIKeyConfig{{Key: "mbv_abcdef0123456789", Name: "vision"}},
 		Cameras: []config.CameraConfig{{ID: "test-cam", Name: "Test", Protocol: "rtsp", URL: "rtsp://example/stream", Encoding: "h264"}},
 	}
@@ -175,7 +175,7 @@ func TestHandleSetup_PreservesPreconfiguredFields(t *testing.T) {
 	require.Equal(t, "127.0.0.1:9777", saved.Server.Listen)
 	require.Equal(t, "/mnt/preconfigured", saved.Storage.RootDir)
 	require.True(t, saved.Vision.Enabled)
-	require.Equal(t, "http://192.168.63.110:9091", saved.Vision.URL)
+	require.Equal(t, "http://192.0.2.110:9091", saved.Vision.URL)
 	require.Len(t, saved.APIKeys, 1)
 	require.Equal(t, "mbv_abcdef0123456789", saved.APIKeys[0].Key)
 	require.Len(t, saved.Cameras, 1)

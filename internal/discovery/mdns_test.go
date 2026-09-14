@@ -39,10 +39,10 @@ func TestMDNSRegistrarConstructor(t *testing.T) {
 
 func TestMDNSRegistrarPlainTextName(t *testing.T) {
 	t.Parallel()
-	r := NewMDNSRegistrar("id-2", "bananapim5", 9091, false)
+	r := NewMDNSRegistrar("id-2", "testhost", 9091, false)
 	for _, kv := range r.txt {
 		if len(kv) > 5 && kv[:5] == "name=" {
-			require.Equal(t, "name=bananapim5", kv)
+			require.Equal(t, "name=testhost", kv)
 		}
 		if len(kv) > 4 && kv[:4] == "tls=" {
 			require.Equal(t, "tls=0", kv)

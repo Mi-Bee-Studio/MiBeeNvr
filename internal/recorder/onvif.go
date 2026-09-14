@@ -498,7 +498,7 @@ func deriveRTSPURL(httpURL string) string {
 
 // RewriteStaleStreamHost fixes a GetStreamUri response whose host lags behind
 // the ONVIF endpoint we are actually connected to. After a DHCP reassignment the
-// camera's GetStreamUri often still returns the OLD IP (e.g. rtsp://192.168.63.200
+// camera's GetStreamUri often still returns the OLD IP (e.g. rtsp://192.0.2.200
 // while the ONVIF service is reachable at .199). The library's fixLocalhostURL
 // corrects capability XAddrs but NOT values inside SOAP bodies like the stream
 // URI, so we rewrite the host here using the known-good ONVIF endpoint.

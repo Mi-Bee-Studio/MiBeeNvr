@@ -698,12 +698,12 @@ func TestAPI_GB28181_ListChannels_EnrollBlockedHint(t *testing.T) {
 			GB28181: config.GB28181ServerConfig{AllowSameIPEnroll: allowSameIP},
 			Cameras: []config.CameraConfig{{
 				ID: "front-onvif", Name: "Front ONVIF", Protocol: "onvif",
-				ONVIFEndpoint: "http://192.168.63.240/onvif/device_service",
+				ONVIFEndpoint: "http://192.0.2.240/onvif/device_service",
 			}},
 		}
 		camMgr := camera.NewCameraManager(cfg, store, db, "")
 		deviceMgr := platform.NewDeviceManager(60 * time.Second)
-		deviceMgr.Register(&platform.Device{ID: "device1", NetAddr: "192.168.63.240:5060"})
+		deviceMgr.Register(&platform.Device{ID: "device1", NetAddr: "192.0.2.240:5060"})
 		sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 		h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
 

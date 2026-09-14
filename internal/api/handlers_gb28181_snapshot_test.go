@@ -54,7 +54,7 @@ func setupGBSnapshotHandler(t *testing.T) (*Handler, *fakeGBCommander, *gb28181.
 	db, store := setupTestDB(t)
 	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
 	deviceMgr := platform.NewDeviceManager(time.Minute)
-	dev := &platform.Device{ID: "34020000001320000002", NetAddr: "192.168.63.118:5060"}
+	dev := &platform.Device{ID: "34020000001320000002", NetAddr: "192.0.2.118:5060"}
 	deviceMgr.Register(dev)
 	h.gb28181DeviceMgr = deviceMgr
 	deviceMgr.RegisterChannel(dev.ID, &platform.Channel{DeviceID: dev.ID, ID: "34020000001310000002"})

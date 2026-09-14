@@ -175,7 +175,7 @@ func NewEngineWithConfirm(cfg Config, probe ProbeFunc, confirm ConfirmFunc) *Eng
 // Result is the outcome of a successful re-discovery.
 type Result struct {
 	// NewEndpoint is the full ONVIF device_service URL at the camera's new address
-	// (e.g. "http://192.168.64.50:80/onvif/device_service").
+	// (e.g. "http://203.0.113.50:80/onvif/device_service").
 	NewEndpoint string
 	// NewHost is the bare IP (no port) of the matched device.
 	NewHost string

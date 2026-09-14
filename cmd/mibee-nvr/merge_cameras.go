@@ -651,7 +651,7 @@ Examples:
   # Merge + fix endpoint + disable timelapse in one shot
   mibee-nvr merge-cameras \
     --source=cam-A --target=cam-B \
-    --target-onvif-endpoint=http://192.168.63.134:80/onvif/device_service \
+    --target-onvif-endpoint=http://192.0.2.134:80/onvif/device_service \
     --target-disable-timelapse \
     --execute --force
 `)

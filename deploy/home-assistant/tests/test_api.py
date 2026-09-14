@@ -42,7 +42,7 @@ async def test_health_is_public(server: TestServer) -> None:
     finally:
         await client.close()
     assert health["status"] == "ok"
-    assert health["device_id"] == "bananapim5-test"
+    assert health["device_id"] == "nvr-test-device"
 
 
 @pytest.mark.asyncio

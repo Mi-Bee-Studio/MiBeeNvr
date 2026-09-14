@@ -25,9 +25,9 @@ func TestIsValidStableID(t *testing.T) {
 		{"maximum length 64", "0123456789012345678901234567890123456789012345678901234567890123", true},
 
 		// Reject — dirty values that broke rediscovery in production (#216).
-		{"IPv4 address", "192.168.63.148", false}, // contains '.', not in class
-		{"URL", "http://192.168.63.148", false},   // contains '/', ':', '.'
-		{"all-zero MAC", "000000000000", false},   // all-same-character
+		{"IPv4 address", "192.0.2.148", false},  // contains '.', not in class
+		{"URL", "http://192.0.2.148", false},    // contains '/', ':', '.'
+		{"all-zero MAC", "000000000000", false}, // all-same-character
 		{"all-zero colon MAC", "00:00:00:00:00:00", false},
 		{"all-f MAC", "ffffffffffff", false}, // all-same-character
 		{"all-X serial", "XXXXXXXXXXXX", false},
@@ -63,7 +63,7 @@ func TestIsValidStableID(t *testing.T) {
 // The hard rejection happens at the API write boundary instead.
 func TestValidateDirtyStableIDDoesNotBlockStartup(t *testing.T) {
 	dirtyCases := []string{
-		"192.168.63.148",   // IP (the actual production dirty value)
+		"192.0.2.148",      // IP (the actual production dirty value)
 		"000000000000",     // all-zero MAC
 		"http://cam/onvif", // URL
 	}

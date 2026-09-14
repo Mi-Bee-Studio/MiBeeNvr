@@ -1178,7 +1178,7 @@ func TestReconcileOrphanedFiles_MJPEGSkipsRandomDirs(t *testing.T) {
 // measurement (reconcile duration + read_bytes) is the authoritative
 // end-to-end verification.
 func TestParseRecordingName(t *testing.T) {
-	const camID = "cam-4aeeef41-e379-4d93-b289-c3aedbe5d729"
+	const camID = "cam-4b1f2e3d-9c8b-4d7e-8f9a-1b2c3d4e5f60"
 
 	valid := []struct {
 		name    string

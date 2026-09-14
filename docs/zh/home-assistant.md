@@ -71,8 +71,8 @@ Docker 部署需要发布 8554 端口（官方 compose 文件已包含）。
 camera:
   - platform: generic
     name: "前门"
-    still_image_url: "http://192.168.63.30:9090/api/cameras/front-door/snapshot"
-    stream_source: "rtsp://192.168.63.30:8554/front-door"
+    still_image_url: "http://192.0.2.30:9090/api/cameras/front-door/snapshot"
+    stream_source: "rtsp://192.0.2.30:8554/front-door"
     username: admin
     password: "!secret nvr_password"
 ```
@@ -90,7 +90,7 @@ MJPEG/JPEG 相机不走 RTSP 输出，改用 HA 原生的 MJPEG Camera 直接拉
 camera:
   - platform: mjpeg
     name: "院子 ESP32"
-    mjpeg_url: "http://192.168.63.30:9090/api/cameras/yard-esp32/stream.mjpeg"
+    mjpeg_url: "http://192.0.2.30:9090/api/cameras/yard-esp32/stream.mjpeg"
     username: admin
     password: "!secret nvr_password"
     verify_ssl: false
@@ -106,7 +106,7 @@ camera:
 # mibee-nvr.yaml
 mqtt:
   enabled: true
-  broker: "tcp://192.168.63.1:1883"
+  broker: "tcp://192.0.2.1:1883"
   client_id: "mibee-nvr"
   topic: "mibee"
   username: "mqtt_user"
@@ -157,7 +157,7 @@ mqtt:
 
 ```yaml
 restful:
-  - resource: "http://192.168.63.30:9090/api/cameras/front-door/stats"
+  - resource: "http://192.0.2.30:9090/api/cameras/front-door/stats"
     username: admin
     password: "!secret nvr_password"
     scan_interval: 60
@@ -180,7 +180,7 @@ Generic Camera 走 RTSP 有 1–3 秒延迟。需要亚秒级时可装社区卡�
 
 ```yaml
 type: custom:webrtc-camera
-url: rtsp://192.168.63.30:8554/front-door
+url: rtsp://192.0.2.30:8554/front-door
 muted: true
 ```
 

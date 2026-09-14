@@ -29,7 +29,7 @@ func TestEvents_SSEHeaders(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
-	req.SetBasicAuth("admin", "admin12345")
+	req.SetBasicAuth("admin", "test-pass-12345")
 	rr := httptest.NewRecorder()
 
 	go func() {
@@ -57,7 +57,7 @@ func TestEvents_ReceivesPublishedEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
-	req.SetBasicAuth("admin", "admin12345")
+	req.SetBasicAuth("admin", "test-pass-12345")
 	rec := newSSERecorder()
 
 	var handlerDone atomic.Bool
@@ -89,7 +89,7 @@ func TestEvents_FilterByPrefix(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/events?filter=onvif.", nil).WithContext(ctx)
-	req.SetBasicAuth("admin", "admin12345")
+	req.SetBasicAuth("admin", "test-pass-12345")
 	rec := newSSERecorder()
 
 	var handlerDone atomic.Bool
@@ -123,7 +123,7 @@ func TestEvents_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
-	req.SetBasicAuth("admin", "admin12345")
+	req.SetBasicAuth("admin", "test-pass-12345")
 	rec := newSSERecorder()
 
 	var handlerDone atomic.Bool
@@ -149,7 +149,7 @@ func TestEvents_BusNil(t *testing.T) {
 	// Don't set event bus.
 
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
-	req.SetBasicAuth("admin", "admin12345")
+	req.SetBasicAuth("admin", "test-pass-12345")
 	rr := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rr, req)
 
@@ -163,7 +163,7 @@ func TestEvents_HeartbeatFormat(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
-	req.SetBasicAuth("admin", "admin12345")
+	req.SetBasicAuth("admin", "test-pass-12345")
 	rec := newSSERecorder()
 
 	// Cancel after a short time — heartbeat interval is 15s so we won't see one.

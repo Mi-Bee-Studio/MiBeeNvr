@@ -35,7 +35,7 @@ curl http://localhost:9090/api/health
   "uptime": "2h34m15s",
   "setup_required": false,
   "device_id": "371da2dc-7804-4706-b424-ce50d14ce2d2",
-  "device_name": "bananapim5",
+  "device_name": "mibee-nvr",
   "cameras": {
     "total": 13,
     "recording": 10,

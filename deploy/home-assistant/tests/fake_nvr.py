@@ -10,7 +10,7 @@ PASSWORD = "hunter2"
 HEALTH = {
     "status": "ok",
     "version": "v0.12.1-test",
-    "device_id": "bananapim5-test",
+    "device_id": "nvr-test-device",
 }
 
 CAMERAS = [

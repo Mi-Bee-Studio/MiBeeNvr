@@ -46,13 +46,13 @@ func TestWriteControlEscalatesAfterConsecutiveFailures(t *testing.T) {
 	c := &CS2Conn{
 		Conn: &failingWriteConn{writeErr: errors.New("broken pipe")},
 	}
-	c.LogKey = "isa.camera.hlc8@192.168.63.9"
+	c.LogKey = "isa.camera.hlc8@192.0.2.9"
 
 	c.writeControl("pong", []byte{1, 2, 3, 4})
 	require.Contains(t, buf.String(), "level=DEBUG", "first failure logs at debug")
 	require.Contains(t, buf.String(), "frame=pong")
 	require.Contains(t, buf.String(), "consecutive_failures=1")
-	require.Contains(t, buf.String(), "peer=isa.camera.hlc8@192.168.63.9")
+	require.Contains(t, buf.String(), "peer=isa.camera.hlc8@192.0.2.9")
 
 	c.writeControl("pong", []byte{1, 2, 3, 4})
 	require.NotContains(t, buf.String(), "level=WARN", "second failure is still debug")

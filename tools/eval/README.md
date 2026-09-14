@@ -40,7 +40,7 @@
 
 ```bash
 # 例:视通保留的 3 天里每小时抽 1 段,标 rain(雨期采集)
-ssh mickey@192.168.63.30 'python3 - <<EOF
+ssh user@192.0.2.30 'python3 - <<EOF
 import sqlite3, json, random
 db = sqlite3.connect("file:/mnt/data/nvr/mibee-nvr.db?mode=ro", uri=True)
 rows = db.execute("""select file_path from recordings
