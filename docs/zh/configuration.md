@@ -152,6 +152,18 @@ version: "1.0"
 - **默认**： `30` / `8`
 - **说明**： 子码流按需拉取参数——`idle_timeout_s` 为无消费者后保持拉取多久再回收；`ready_timeout_s` 为 `quality=sub` 请求等待首帧就绪的超时。详见[子码流](sub-stream.md)。
 
+### `server.unix_socket`
+- **类型**: string
+- **默认**: 空（不监听 Unix socket）
+- **描述**: fnOS 网关部署形态的 Unix domain socket 监听路径。网关进程先自行验证用户会话，再把已认证请求转发到该 socket（携带受信任的 `X-Trim-*` 用户头）；gateway-auth 中间件只挂在该监听器上，TCP 端口上这些头一律忽略。可通过环境变量 `NVR_UNIX_SOCKET` 覆盖
+- **示例**: `"/run/mibee-nvr/nvr.sock"`
+
+### `server.base_path`
+- **类型**: string
+- **默认**: 空（服务在 `/` 提供）
+- **描述**: 反向代理/网关子路径部署的 URL 前缀（如 fnOS 应用中心的 `/app/mibee-nvr`）。携带该前缀的请求路径先剥离再路由；前缀同时注入 `index.html` 供 SPA 构建绝对 URL（静态资源、API、流端点）。可通过环境变量 `NVR_BASE_PATH` 覆盖
+- **示例**: `"/app/mibee-nvr"`
+
 ## 存储配置
 
 ### `storage.root_dir`
@@ -259,6 +271,25 @@ cameras:
 - **默认**: `15` / 空（全天）
 - **描述**: 后台录像迁移器的复制限速（MB/s，不与录制抢 IO）与迁移时间窗（本地时间，如 `"22:00-06:00"`；空 = 全天限速迁移）。
 
+## 内存配置
+
+GOMEMLIMIT 自动启发式（#756）——按部署环境自动推导堆上限。所有值为运维可调，接线代码只读具体配置值。
+
+### `memory.auto_physical_percent`
+- **类型**: integer
+- **默认**: `45`
+- **描述**: 裸机部署时按物理内存百分比推导堆上限的份额（%）
+
+### `memory.auto_cap_bytes`
+- **类型**: integer
+- **默认**: `1073741824`（1GiB）
+- **描述**: 物理内存推导路径在大内存主机上的封顶值（字节）
+
+### `memory.auto_cgroup_percent`
+- **类型**: integer
+- **默认**: `80`
+- **描述**: 运行在 cgroup 内存上限之下时（容器部署：fnOS/Docker），从 cgroup 上限取的份额（%）
+
 ## 身份验证配置
 
 ### `auth.username`
@@ -289,6 +320,12 @@ cameras:
 - **重要安全警告**: 仅**裸机（systemd/原生二进制）部署**适用。**反向代理（Caddy/nginx）与 Docker 端口映射部署严禁开启**——这两种拓扑下所有请求都会从 `127.0.0.1` 到达服务器，开启本开关会让**所有远程客户端绕过认证**。
 - **生效条件**（三者缺一不可）: `local_bypass: true`、请求来源为 loopback（RemoteAddr 127.0.0.1/::1）、**Host 头为 `localhost`/`127.0.0.1`/`[::1]`**（去掉端口后）、无 `X-Forwarded-For`/`X-Real-IP`/`Forwarded` 代理头。用宿主机局域网 IP 或主机名访问**不会** bypass（有意保守，兼防恶意网页与 DNS rebinding）。
 - **示例**: `local_bypass: true`
+
+### `auth.rate_limit.enabled` / `auth.rate_limit.max_failures` / `auth.rate_limit.window_minutes`
+- **类型**: boolean / integer / integer
+- **默认**: `false` / `20` / `1`
+- **描述**: 登录失败限流。启用后在 `window_minutes` 分钟窗口内累计 `max_failures` 次认证失败即触发限流，防止在线爆破。默认关闭
+- **示例**: `true`, `20`, `1`
 
 ## 摄像头配置
 
@@ -423,6 +460,13 @@ cameras:
 - **示例**: `"avi"`, `"dir"`
 - **存量段**: 目录形历史段可继续回放/合并/清理，无需迁移即可混用；如需收敛为单文件形态，运行 `mibee-nvr repair mjpeg-containerize`（默认 dry-run，`--execute` 生效，`--camera`/`--limit` 过滤，`--keep-old` 保留源目录；每段先验证容器帧数再翻转 DB 行）。
 
+### `cameras[].dark_frame_filter_enabled` / `cameras[].dark_frame_threshold`
+- **类型**: boolean / integer
+- **可选**: 是
+- **默认**: `false` / `15`
+- **描述**: 暗帧过滤（仅 MJPEG/AVI 相机）——启用后每段收尾时做亮度检查，过暗的段（夜间无红外能力）标记 `merge_status='dark'`，不参与合并并提前清理。`dark_frame_threshold` 为亮度判定阈值（0–255）
+- **示例**: `true`, `15`
+
 ### `cameras[].hls_max_fps`
 - **类型**: integer
 - **可选**: 是
@@ -461,6 +505,13 @@ cameras:
 - **描述**: 写入密度策略。`adaptive` 模式下画面安静时只写每 `adaptive.timelapse_interval` 一个关键帧，活动 / 音频 / 外部触发立即恢复全帧率（详见[自适应录制](adaptive-recording.md)）。仅 H.264/H.265 相机（MJPEG 无压缩域差分信号）
 - **示例**: `"adaptive"`
 
+### `cameras[].recording_tier`
+- **类型**: string
+- **可选**: 是
+- **默认**: 空（单层录制）
+- **取值**: 空 / `"single"` / `"tiered"`
+- **描述**: 分层录制（tierrec）。`"tiered"` = 子码流录成低清连续 layer=1 段 + 主码流事件驱动，推荐搭配 adaptive + `video_exit: false`（+ pixgate）让主码流纯事件化，适合近空场景。需要子码流能力协议（rtsp/onvif/gb28181），校验不符拒绝保存
+
 ### `cameras[].adaptive`
 
 - **类型**: object
@@ -471,6 +522,9 @@ cameras:
   - `timelapse_interval` (string, 默认 `"30s"`, 范围 5s–10m) — 稀疏期关键帧间隔
   - `spike_factor` (float, 默认 `5.0`, 范围 1.5–20) — 活动灵敏度阈值
   - `gop_buffer_bytes` (int, 默认 `33554432`, 范围 1–64MB) — GOP 预缓冲上限
+  - `noise_floor_bytes` (float, 默认 `0` 禁用, 范围 0–8MB) — 帧尺寸绝对噪声地板（字节）。夜间模式/码率崩塌等编码器噪声使相对尖峰指标误报时启用
+  - `auto_noise_floor` (boolean, 默认 `true`) — 从稀疏期帧尺寸自标定噪声地板（已知静止的稀疏帧 p99×1.25，封顶滚动中位数 4 倍）
+  - `video_exit` (boolean, 默认 `true`) — 是否保留视频尖峰退出稀疏模式。关闭后只有音频事件或外部语义触发（`POST /api/cameras/{id}/adaptive/trigger`）能恢复全速率
   - `ambient_audio` (boolean, 默认 `false`) — 稀疏期连续录制环境声（合并时合成氛围层，仅 G.711）
   - `timelapse_frame_ms` (int, 取值 100/300/500, 默认 100) — 合并产物的延时帧距
   - `ambient_archive` (boolean, 默认 `false`) — 原始环境声另存 `<segment>.g711` 附属文件
@@ -484,6 +538,19 @@ cameras:
   - `enabled` (boolean, required) — 启用响度输入
   - `min_dbfs` (float, 默认 `-45`, 范围 -90–0) — 1 秒窗口响度阈值
   - `pre_capture_s` (int, 默认 `3`, 范围 0–30) — 预录音频秒数
+
+### `cameras[].pixgate`
+- **类型**: object
+- **可选**: 是
+- **描述**: 像素活动门控（#699）——按相机独立采样分析画面活动，确认的活动作为 adaptive 录制的全速率退出触发输入（与视频尖峰、音频触发并列）。遥测指标见[监控指标](metrics.md)
+- **字段**:
+  - `enabled` (boolean, 默认 `false`) — 启用该相机的门控采样
+  - `sample_fps` (float, 默认 `1`, 范围 0.2–2) — 采样率
+  - `min_area_pct` (float, 默认 `1.5`, 范围 0.1–50) — 判定为活动的最大 blob 面积占分析网格的百分比
+  - `persist` (int, 默认 `2`, 范围 1–10) — 连续活跃样本达到该数量才确认活动
+  - `hold` (string, 默认 `"30s"`, 范围 1s–10m) — 每次确认活动后保持全速率的时长
+  - `ghost_secs` (float, 默认 `300`, 范围 0–3600) — 静止 blob（开灯、停车、镜头水滴）持续触发多久后被背景模型吸收；运动物体永不吸收
+  - `masks` (array) — 排除多边形（归一化 [0,1] 坐标）——天空、水面、街道等永久微动区域永不判为活动
 
 ### `cameras[].recording_schedule`
 
@@ -556,12 +623,24 @@ cameras:
 - **描述**: 每个摄像头的帧超时阈值。如果在此时间内未收到新帧，将触发看门狗重启
 - **示例**: `"30s"`, `"60s"`, `"2m"`
 
+### `cameras[].subnet_hints`
+- **类型**: array of string
+- **可选**: 是
+- **描述**: 候选 CIDR 列表——相机漫游后可能出现的网段。IP 自愈重发现扫描除最后已知地址和 NVR 本机网段外，还会探测这些网段。空 = 只扫最后已知地址 + 本地网段
+- **示例**: `["192.168.63.0/24", "192.168.62.0/24"]`
+
 ### `cameras[].ring_buf_cap`
 - **类型**: int
 - **可选**: 是
 - **默认**: `0`（使用内置默认 300）
 - **描述**: 覆盖录制器帧环形缓冲（frameCh）容量（#521）。写线程停顿（分段收尾 fsync、合并 IO、锁竞争）时缓冲吸收积压；缓冲满则丢帧（`nvr_recorder_ring_buffer_drops_total` 指标 + 流量页录像分支的溢出计数）。偶发丢帧的相机可调大此值换取停顿容忍（每格约 1KB 内存）。仅 H.264/H.265 录制器生效。范围 0–10000。
 - **示例**: `600`, `1000`
+
+### `cameras[].vision_targets`
+- **类型**: array of string
+- **可选**: 是
+- **描述**: 该相机的录像推送到哪些 Vision 实例（多实例路由，见 `vision.instances`）。空 = 全部启用实例（单实例默认行为）。名字必须存在于 `vision.instances`，未知名字 API 校验返回 400
+- **示例**: `["jetson-yolo", "coral-tpu"]`
 
 ### `cameras[].push_targets`
 - **类型**: array of objects
@@ -630,6 +709,21 @@ cameras:
 - **默认**: `[]`
 - **描述**: 子流分析层相机（#514）——列表内相机由 NVR 按需拉取**子码流**录成独立低清分析段（不进录像库、不参与合并；消费成功即删），推送改走子流段，主流段不再推送。低分辨率段解码成本为主流的 1/4~1/16。需要相机配置子码流（`sub_profile_token` 或 `sub_stream_url`）。配套参数：`sub_layer_segment_secs`（段时长，默认 60）、`sub_layer_retention_secs`（磁盘保留兜底，默认 7200）、`sub_layer_push_interval_secs`（推送扫描间隔，默认 20）。
 
+### `vision.tiered_cameras`
+- **类型**: array of string
+- **默认**: `[]`
+- **描述**: tierrec 子层段推送列表——列表内相机的 layer=1 子层段（60s 低清连续录制）推送给外部消费者做语义门控，主流段不再推送（让位语义与 `sub_layer_cameras` 相同，但段来源是正式录像库的 layer=1 行，非临时子流目录）。`skip_cameras` 优先于此列表
+
+### `vision.instances`
+- **类型**: array of object
+- **可选**: 是
+- **描述**: 多个 Vision 消费端实例——各自独立的地址/身份/启停；相机通过 `cameras[].vision_targets` 选择接哪些实例（空 = 全部启用实例）。不同实例可挂不同模型配置，实现按场景分流分析
+- **字段**:
+  - `name` (string, 必填) — 实例名（稳定标识，`vision_targets` 引用它；唯一）
+  - `url` (string, 必填) — 实例基地址，NVR POST 到 `{URL}/vision/segment/upload`
+  - `api_key_name` (string, 可选) — 关联的 API Key 名。心跳/事件/ai_status 回传携带该 key 时，NVR 据此把回传归因到本实例；缺省归因到 default 实例
+  - `enabled` (boolean, 默认 `true`) — 禁用的实例保留配置但不出现在路由目标中
+
 ## GB28181 配置
 
 国标平台接入（默认关闭）。完整键位说明（`gb28181:` 平台角色与
@@ -657,6 +751,11 @@ cameras:
 - **范围**: 50-99
 - **描述**: 当磁盘使用率超过 N% 时开始清理
 - **示例**: `90`, `95`, `98`
+
+### `cleanup.motion_aware_disk_cleanup`
+- **类型**: boolean
+- **默认**: `true`（未设置 = 开）
+- **描述**: 磁盘压力删除按「无趣优先」排序（#435）——静止段（motion_score≈0）先于活动段删除，未分析段中性排序。默认开启。用户的「保留 N 天」预期由时间保留路径管辖，本开关不触及
 
 ## 合并配置
 
@@ -707,6 +806,40 @@ cameras:
 - **默认**: `"10m"`
 - **描述**: 保留桶超过该时长未收到追加即 finalize —— 相机已稳定在某一档位或停止录像，该桶不会再被续用。`"0"` 关闭空闲淘汰（仅按容量淘汰）
 - **示例**: `"10m"`, `"30m"`, `"0"`
+
+### `merge.rolling_enabled`
+- **类型**: boolean
+- **默认**: `true`
+- **描述**: 事件驱动滚动合并——段关闭后秒级并入每相机窗口桶（对比周期合并的 ~1h 延迟）。连续 24/7 录制不开启会积累每日数千个 30s 碎片段；SD 卡相机为避免写放大可显式关闭（全局或相机级）
+- **示例**: `true`, `false`
+
+### `merge.rolling_debounce`
+- **类型**: string
+- **默认**: `"5s"`
+- **描述**: 滚动合并防抖——段关闭后等待该时长无新段再执行合并，聚拢频繁断连产生的碎片段
+- **示例**: `"500ms"`, `"2s"`, `"5s"`
+
+### `merge.rolling_window`
+- **类型**: string
+- **默认**: `"1h"`
+- **描述**: 滚动合并桶窗口时长（自然小时桶）。必须 ≤1h——超过 1h 的窗口跨 UTC 日边界，已因时区安全移除
+- **示例**: `"30m"`, `"1h"`
+
+### `merge.rolling_min_duration`
+- **类型**: string
+- **默认**: `"5m"`
+- **描述**: 合并产物目标最短时长。短于该值的产物标记 `merge_quality='short'`，可通过 `POST /api/merge/consolidate` 进一步整合
+- **示例**: `"5m"`, `"10m"`
+
+### `merge.rolling_backfill_max_segments` / `merge.rolling_backfill_max_age`
+- **类型**: integer / string
+- **默认**: `500` / `"72h"`
+- **描述**: 启动回填限流——只回填最近 `rolling_backfill_max_age` 内、至多 `rolling_backfill_max_segments` 个 pending 段，每次启动只跑一次（防 RPi 3B 首启 IO 风暴）
+
+### `merge.rolling_backfill_interval` / `merge.rolling_backfill_batch`
+- **类型**: string / integer
+- **默认**: `"10m"` / `500`
+- **描述**: 周期回填清扫——启动回填跟不上时（如每日数千 30s H265 碎段）由周期清扫消化 pending。`rolling_backfill_interval` 为清扫间隔（`"0"` 关闭，仅剩启动回填）；`rolling_backfill_batch` 限制单轮清扫处理段数，清扫全程 try-lock 让路实时事件。并发相机数由 `rolling_backfill_concurrency` 控制（默认按 RAM 自动选择，见升级指南）
 
 ## FTP 配置
 
@@ -893,6 +1026,12 @@ cameras:
 - **描述**: 最大并发 WebSocket 观众数
 - **示例**: `5`, `10`, `20`
 
+### `websocket.write_buf_size`
+- **类型**: integer
+- **默认**: `100`
+- **描述**: WebSocket 帧发送写缓冲大小（以帧为单位）
+- **示例**: `100`, `200`, `500`
+
 ## 健康监控配置
 
 ### `health.enabled`
@@ -901,11 +1040,65 @@ cameras:
 - **描述**: 启用摄像头健康监控系统。启用后，系统会监控摄像头状态、检测异常并可选地自动修复
 - **示例**: `true`, `false`
 
+### `health.events_retention`
+- **类型**: string
+- **默认**: `"720h"`（30 天）
+- **描述**: 健康监控事件保留时长
+- **示例**: `"168h"`（7 天）, `"720h"`（30 天）
+
+### `health.layer1.offline_threshold`
+- **类型**: string
+- **默认**: `"30s"`
+- **描述**: 第一层（离线检测）——无任何数据超过该时长即判定相机离线
+- **示例**: `"15s"`, `"30s"`, `"60s"`
+
+### `health.layer2.bitrate_change_threshold` / `health.layer2.min_fps` / `health.layer2.max_idr_interval`
+- **类型**: float / integer / string
+- **默认**: `0.5` / `5` / `"60s"`
+- **描述**: 第二层（质量异常）——归一化码率变化阈值（0.5 = 变化 50% 触发，范围 0–1）、最低可接受帧率、IDR 帧最大间隔
+
+### `health.layer2_5.freeze_timeout`
+- **类型**: string
+- **默认**: `"10s"`
+- **描述**: 第 2.5 层（画面冻结）——有流数据但画面无变化超过该时长判定冻结
+- **示例**: `"5s"`, `"10s"`, `"30s"`
+
+### `health.auto_remediation.enabled` / `max_restarts_per_hour` / `cooldown_minutes` / `blacklist_hours` / `global_max_per_min`
+- **类型**: boolean / integer / integer / integer / integer
+- **默认**: `false` / `3` / `5` / `1` / `10`
+- **描述**: 自动修复——检测到健康问题时自动重启相机；每小时重启超过 `max_restarts_per_hour` 次即拉黑 `blacklist_hours` 小时；两次修复动作间冷却 `cooldown_minutes` 分钟；全相机全局每分钟修复动作上限 `global_max_per_min`
+
+### `health.auto_remediation.reconnecting_timeout_minutes`
+- **类型**: integer
+- **默认**: `0`（用默认 10 分钟）
+- **描述**: 录制器停留在 reconnecting 状态超过该分钟数后，自动修复视为死胡同并触发硬重启（进而可升级到拉黑 + IP 重发现）。录制器自身的重连循环永远不会升级到 StatusError——没有这道闸门，IP 变更的相机会无限循环，重发现永不触发
+
+### `health.auto_remediation.rediscovery_rescan_minutes`
+- **类型**: integer
+- **默认**: `5`
+- **描述**: 相机处于拉黑期内每 N 分钟重试一次 IP 重发现。没有该参数时，拉黑期间恢复供电的相机要等完整 `blacklist_hours` 走完才被恢复（拉黑时刻只扫描一次）。每次重扫是有界网络扫描（≤30s、≤16 并发探测）。`0` = 关闭（旧行为：仅拉黑时刻单次扫描）
+- **示例**: `5`, `10`, `0`（关闭）
+
+### `health.auto_remediation.rediscovery_rescan_max_minutes` / `health.auto_remediation.rediscovery_rescan_backoff`
+- **类型**: integer / float
+- **默认**: `0`（用默认 60 分钟）/ `2.0`（须 ≥1.0）
+- **描述**: 拉黑期重扫的指数退避——每次连续「未找到」后重扫间隔乘以 `rediscovery_rescan_backoff`，封顶 `rediscovery_rescan_max_minutes`（默认序列 5→10→20→40→60 分钟）。防止永久离线相机以每 5 分钟全 /24 扫描无限期锤磁盘 IO
+
+### `health.auto_remediation.rediscovery_max_scan_misses`
+- **类型**: integer
+- **默认**: `0`（无限重扫，受退避封顶约束）
+- **描述**: 连续「未找到」达到该次数后彻底停止周期重扫——相机视为永久离线，只能手动 `POST /api/cameras/{id}/rediscover` 恢复
+
 ### `health.rediscovery.probe_ports`
 - **类型**: integer 列表
 - **默认**: `[80, 8080, 8899]`
 - **描述**: IP 漂移自愈的非标端口扫描列表。相机存量地址中解析出的端口（缺省 80）永远最先探测；其后每个候选 IP 还会按此列表逐端口探测——即使相机 ONVIF 服务跑在非标端口（如海思系 8080、TVT/视通系 8899）且存量地址未带端口，换 IP 后也能被重新定位。显式配置会覆盖默认列表；上限 8 项——每加一个端口，探测开销（候选数 × 端口数）都会相对 `max_duration` 翻倍累加。
 - **示例**: `[80, 8080, 8899]`, `[80, 8080]`
+
+### `health.rediscovery.max_parallel` / `health.rediscovery.probe_timeout`
+- **类型**: integer / string
+- **默认**: `16` / `"2s"`
+- **描述**: IP 自愈扫描参数——`max_parallel` 为并发单播探测数（RPi 3B 友好）；`probe_timeout` 为单 IP 探测超时
 
 ## 自动发现配置
 
@@ -1021,6 +1214,18 @@ auto_discover:
 - **描述**: RTMP 监听端口
 - **示例**: `1935`, `1936`
 
+### `rtmp.stream_keys`
+- **类型**: map (string → string)
+- **可选**: 是
+- **描述**: 相机 ID 到 RTMP 流密钥的映射（RTMP 推流鉴权）
+- **示例**:
+  ```yaml
+  rtmp:
+    stream_keys:
+      cam1: "my-stream-key-1"
+      cam2: "my-stream-key-2"
+  ```
+
 ## SRT 配置
 
 ### `srt.enabled`
@@ -1092,6 +1297,46 @@ auto_discover:
 - **默认**: `false`
 - **描述**: 启用 pprof 调试端点进行性能分析
 - **注意**: 生产环境中请谨慎使用
+
+## 转码配置
+
+### `transcoding.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 全局启用基于 FFmpeg 的转码
+- **示例**: `true`, `false`
+
+### `transcoding.ffmpeg_path`
+- **类型**: string
+- **可选**: 是
+- **描述**: FFmpeg 二进制路径，未指定时自动探测
+- **示例**: `"/usr/bin/ffmpeg"`
+
+### `transcoding.max_workers`
+- **类型**: integer
+- **默认**: `1`
+- **范围**: 1–4
+- **描述**: 并发转码任务数上限
+- **示例**: `1`, `2`, `4`
+
+### `transcoding.download_url`
+- **类型**: string
+- **可选**: 是
+- **描述**: FFmpeg 二进制下载地址（按平台自动填充）
+- **示例**: `"https://github.com/.../ffmpeg"`
+
+### `transcoding.job_timeout`
+- **类型**: string
+- **默认**: `"30m"`
+- **范围**: 1s–4h
+- **描述**: 单个转码任务超时
+- **示例**: `"10m"`, `"30m"`, `"1h"`
+
+### `transcoding.history_retention`
+- **类型**: string
+- **默认**: 空（永久保留）
+- **描述**: 转码任务历史保留时长
+- **示例**: `"168h"`（7 天）, `"720h"`（30 天）
 
 ## 扩展配置（Extensions）
 

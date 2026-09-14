@@ -193,6 +193,18 @@ version: "1.0"
 - **Default**: `30` / `8`
 - **Description**: On-demand sub-stream pull parameters — `idle_timeout_s` is how long an idle pull stays warm before recycling; `ready_timeout_s` is how long a `quality=sub` request waits for first video. See [Sub-streams](sub-stream.md).
 
+### `server.unix_socket`
+- **Type**: string
+- **Default**: empty (no Unix socket listener)
+- **Description**: Unix domain socket listener path for the fnOS gateway deployment topology. The gateway process validates its own login session, then forwards authenticated requests to this socket with trusted `X-Trim-*` user headers; the gateway-auth middleware is mounted ONLY on this listener, so those headers are ignored on the TCP port. Overridable via `NVR_UNIX_SOCKET`
+- **Example**: `"/run/mibee-nvr/nvr.sock"`
+
+### `server.base_path`
+- **Type**: string
+- **Default**: empty (served at `/`)
+- **Description**: URL prefix for reverse-proxy/gateway sub-path deployments (e.g. the fnOS app center's `/app/mibee-nvr`). Request paths carrying the prefix are stripped before routing; the prefix is also injected into `index.html` so the SPA can build absolute URLs (assets, API, stream endpoints). Overridable via `NVR_BASE_PATH`
+- **Example**: `"/app/mibee-nvr"`
+
 ## Storage Configuration
 
 ### `storage.root_dir`
@@ -304,6 +316,25 @@ validate-config` surfaces it too.
 - **RPi Constraint**: Maximum 30 seconds on Raspberry Pi 3B
 - **Example**: `"30s"`, `"1m"`, `"5m"`
 
+## Memory Configuration
+
+GOMEMLIMIT auto-heuristics (#756) — the heap ceiling is derived from the deployment environment. Every value is operator-tunable; wiring code reads concrete config values only.
+
+### `memory.auto_physical_percent`
+- **Type**: integer
+- **Default**: `45`
+- **Description**: On bare metal, the share (as % of physical RAM) used to derive the heap ceiling
+
+### `memory.auto_cap_bytes`
+- **Type**: integer
+- **Default**: `1073741824` (1GiB)
+- **Description**: Cap (bytes) for the physical-RAM derivation path on big hosts
+
+### `memory.auto_cgroup_percent`
+- **Type**: integer
+- **Default**: `80`
+- **Description**: When running under a cgroup memory ceiling (container deployments: fnOS/Docker), the share (as %) taken from the cgroup ceiling
+
 ## Authentication Configuration
 
 ### `auth.username`
@@ -334,6 +365,12 @@ validate-config` surfaces it too.
 - **Security warning**: For **bare-metal (systemd / native binary) deployments only**. **NEVER enable behind a reverse proxy (Caddy/nginx) or Docker published ports** — in those topologies every request arrives from `127.0.0.1`, so enabling this would let ALL remote clients bypass authentication.
 - **Required conditions** (all three): `local_bypass: true`, the request originates from loopback (RemoteAddr 127.0.0.1/::1), **the Host header is `localhost` / `127.0.0.1` / `[::1]` after stripping the port**, and no `X-Forwarded-For` / `X-Real-IP` / `Forwarded` proxy header is present. Access via the host LAN IP or hostname does NOT bypass (intentionally conservative; also blocks malicious web pages and DNS rebinding).
 - **Example**: `local_bypass: true`
+
+### `auth.rate_limit.enabled` / `auth.rate_limit.max_failures` / `auth.rate_limit.window_minutes`
+- **Type**: boolean / integer / integer
+- **Default**: `false` / `20` / `1`
+- **Description**: Login-failure rate limiting. When enabled, `max_failures` authentication failures within a `window_minutes` window trigger the limiter — an online brute-force guard. Off by default
+- **Example**: `true`, `20`, `1`
 
 ## Camera Configuration
 
@@ -470,6 +507,13 @@ cameras:
 - **Example**: `"avi"`, `"dir"`
 - **Existing segments**: directory-form history keeps playing/merging/cleaning unchanged — mixed forms coexist without migration. To converge them into container form, run `mibee-nvr repair mjpeg-containerize` (dry-run by default; `--execute` applies; `--camera`/`--limit` filters; `--keep-old` retains source dirs; each container is frame-verified before the DB row flips).
 
+### `cameras[].dark_frame_filter_enabled` / `cameras[].dark_frame_threshold`
+- **Type**: boolean / integer
+- **Optional**: Yes
+- **Default**: `false` / `15`
+- **Description**: Dark-frame filtering (MJPEG/AVI cameras only) — when enabled, each segment is brightness-checked at close time; segments too dark to be useful (night without IR capability) are marked `merge_status='dark'`, excluded from merge, and cleaned up early. `dark_frame_threshold` is the brightness threshold (0–255)
+- **Example**: `true`, `15`
+
 ### `cameras[].hls_max_fps`
 - **Type**: integer
 - **Optional**: Yes
@@ -508,6 +552,13 @@ cameras:
 - **Description**: Write-density strategy. In `adaptive` mode the camera writes one keyframe per `adaptive.timelapse_interval` while calm and instantly returns to full rate on activity / audio / external triggers (see [Adaptive Recording](adaptive-recording.md)). H.264/H.265 cameras only (MJPEG has no compressed-domain differential signal).
 - **Example**: `"adaptive"`
 
+### `cameras[].recording_tier`
+- **Type**: string
+- **Optional**: Yes
+- **Default**: empty (single-tier recording)
+- **Values**: empty / `"single"` / `"tiered"`
+- **Description**: Tiered recording (tierrec). `"tiered"` = the sub-stream records as a continuous low-res layer=1 tier while the main stream is event-driven — intended pairing is adaptive + `video_exit: false` (+ pixgate) so the main stream becomes event-only, for near-empty scenes. Requires a sub-stream-capable protocol (rtsp/onvif/gb28181); validation rejects anything else
+
 ### `cameras[].adaptive`
 
 - **Type**: object
@@ -518,6 +569,9 @@ cameras:
   - `timelapse_interval` (string, default `"30s"`, range 5s–10m) — keyframe cadence while sparse
   - `spike_factor` (float, default `5.0`, range 1.5–20) — activity sensitivity threshold
   - `gop_buffer_bytes` (int, default `33554432`, range 1–64MB) — GOP pre-buffer cap
+  - `noise_floor_bytes` (float, default `0` disabled, range 0–8MB) — absolute frame-size noise floor (bytes). For encoders whose noise (night mode / rate-control collapse) trips the relative spike metric on jitter
+  - `auto_noise_floor` (boolean, default `true`) — self-calibrate the noise floor from sparse-mode frame sizes (known-static sparse frames: p99 ×1.25, capped at 4× the rolling median)
+  - `video_exit` (boolean, default `true`) — keep video-spike exits from sparse mode. When false, only audio events or external semantic triggers (`POST /api/cameras/{id}/adaptive/trigger`) resume full rate
   - `ambient_audio` (boolean, default `false`) — record ambient audio while sparse (merged into an atmosphere bed; G.711 only)
   - `timelapse_frame_ms` (int, 100/300/500, default 100) — merged-product timelapse cadence
   - `ambient_archive` (boolean, default `false`) — keep raw ambient audio as a `<segment>.g711` sidecar
@@ -531,6 +585,19 @@ cameras:
   - `enabled` (boolean, required) — arm the loudness input
   - `min_dbfs` (float, default `-45`, range -90–0) — loudness threshold over a 1s window
   - `pre_capture_s` (int, default `3`, range 0–30) — seconds of pre-trigger audio
+
+### `cameras[].pixgate`
+- **Type**: object
+- **Optional**: Yes
+- **Description**: Pixel activity gate (#699) — per-camera frame sampling that analyzes motion and feeds confirmed activity into adaptive recording as a full-rate exit trigger (alongside video spikes and audio triggers). Telemetry metrics: see [Metrics](metrics.md)
+- **Fields**:
+  - `enabled` (boolean, default `false`) — arm the gate for this camera
+  - `sample_fps` (float, default `1`, range 0.2–2) — sampling rate
+  - `min_area_pct` (float, default `1.5`, range 0.1–50) — largest-blob area as % of the analysis grid that counts as activity
+  - `persist` (int, default `2`, range 1–10) — consecutive active samples required to confirm
+  - `hold` (string, default `"30s"`, range 1s–10m) — how long each confirmed sample keeps full rate armed
+  - `ghost_secs` (float, default `300`, range 0–3600) — how long a STATIC blob (light switched on, parked car, lens water drop) may keep triggering before the background model absorbs it; a moving object is never absorbed
+  - `masks` (array) — exclusion polygons in normalized [0,1] coordinates — sky, water, street: regions whose permanent shimmer must never read as activity
 
 ### `cameras[].recording_schedule`
 
@@ -634,6 +701,12 @@ cameras:
 - **Description**: Timeout before declaring a camera unhealthy when no frames are received. Per-camera override of the frame watchdog.
 - **Example**: `"30s"`, `"60s"`, `"120s"`
 
+### `cameras[].subnet_hints`
+- **Type**: array of string
+- **Optional**: Yes
+- **Description**: Candidate CIDRs where the camera may appear after roaming. The IP self-healing re-discovery scan probes these in addition to the last-known host and the NVR's own interface subnets. Empty = scan last-known + local subnets only
+- **Example**: `["192.168.63.0/24", "192.168.62.0/24"]`
+
 ### `cameras[].ring_buf_cap`
 - **Type**: int
 - **Optional**: Yes
@@ -661,6 +734,12 @@ cameras:
 - **Optional**: Yes (push-in only: `protocol: "srt"` or `"rtmp"`)
 - **Default**: `null` (follow global cleanup retention)
 - **Description**: Recording retention override for push-in cameras. `null` = follow global `cleanup.retention_days`, `0` = live-only (no recording), `N` = keep N days.
+
+### `cameras[].vision_targets`
+- **Type**: array of string
+- **Optional**: Yes
+- **Description**: Which Vision instances this camera's recordings are pushed to (multi-instance routing; see `vision.instances`). Empty = all enabled instances (the single-instance default). Names must exist in `vision.instances`; the API layer rejects unknown names with 400
+- **Example**: `["jetson-yolo", "coral-tpu"]`
 
 ### `cameras[].push_targets`
 - **Type**: array of objects
@@ -730,6 +809,21 @@ receives video-segment pushes and writes AI events back to the NVR.
 - **Default**: `[]`
 - **Description**: Sub-stream analysis-layer cameras — listed cameras get an on-demand **sub-stream** pull recorded as independent low-res analysis segments (not in the recording library, not merged; deleted once consumed); pushes ride the sub-stream segments and main-stream segments are no longer pushed. Low-res segments decode at 1/4–1/16 the cost of main. Requires a sub-stream on the camera (`sub_profile_token` or `sub_stream_url`). Companion knobs: `sub_layer_segment_secs` (segment duration, default 60), `sub_layer_retention_secs` (on-disk bound, default 7200), `sub_layer_push_interval_secs` (push sweep cadence, default 20).
 
+### `vision.tiered_cameras`
+- **Type**: array of string
+- **Default**: `[]`
+- **Description**: tierrec sub-tier push list — for cameras in this list, layer=1 sub-tier segments (60s low-res continuous recording) are pushed to external consumers for semantic gating and the main-stream segments are no longer pushed (same yield semantics as `sub_layer_cameras`, but the segments are layer=1 rows from the official recording library, not the temp sub-layer directory). `skip_cameras` takes precedence over this list
+
+### `vision.instances`
+- **Type**: array of object
+- **Optional**: Yes
+- **Description**: Multiple Vision consumer instances — each with its own address/identity/on-off switch; cameras select which instances receive their recordings via `cameras[].vision_targets` (empty = all enabled instances). Different instances can run different model configs for scene-based routing
+- **Fields**:
+  - `name` (string, required) — instance name (stable identifier referenced by `vision_targets`; unique)
+  - `url` (string, required) — instance base URL; the NVR POSTs to `{URL}/vision/segment/upload`
+  - `api_key_name` (string, optional) — associated API key name. Heartbeats/events/ai_status callbacks carrying that key are attributed to this instance by the NVR; unset attributes to the default instance
+  - `enabled` (boolean, default `true`) — a disabled instance keeps its config but is not a routing target
+
 ## GB28181 Configuration
 
 GB/T 28181 platform access (default off). See the [GB28181 guide](gb28181-guide.md)
@@ -757,6 +851,11 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Range**: 50-99
 - **Description**: Start cleanup when disk usage exceeds N%
 - **Example**: `90`, `95`, `98`
+
+### `cleanup.motion_aware_disk_cleanup`
+- **Type**: boolean
+- **Default**: `true` (unset = on)
+- **Description**: Orders disk-threshold deletion boring-first (#435) — static segments (motion_score≈0) are deleted before active ones; unanalyzed segments rank neutrally. On by default. The user's "keep N days" expectation is governed by the time-retention path, which this flag does not touch
 
 ## Merge Configuration
 
@@ -807,6 +906,40 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Default**: `"10m"`
 - **Description**: Finalizes a retained bucket that received no append for this long — the camera settled on one quality tier or stopped recording, so the bucket will not be resumed. `"0"` disables idle eviction (capacity-based eviction only)
 - **Example**: `"10m"`, `"30m"`, `"0"`
+
+### `merge.rolling_enabled`
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Event-driven rolling merge — newly closed segments join a per-camera window bucket within seconds (vs the periodic merge's ~1h latency). Without it, continuous 24/7 recording accumulates thousands of 30s fragments per camera per day; SD-card cameras may turn it off explicitly (globally or per camera) to avoid write amplification
+- **Example**: `true`, `false`
+
+### `merge.rolling_debounce`
+- **Type**: string
+- **Default**: `"5s"`
+- **Description**: Rolling-merge debounce — after a segment closes, wait this long for more segments before merging, batching fragments from frequent disconnects
+- **Example**: `"500ms"`, `"2s"`, `"5s"`
+
+### `merge.rolling_window`
+- **Type**: string
+- **Default**: `"1h"`
+- **Description**: Rolling-merge bucket window (natural-hour buckets). Must be ≤1h — larger windows span a UTC day boundary and were removed for timezone safety
+- **Example**: `"30m"`, `"1h"`
+
+### `merge.rolling_min_duration`
+- **Type**: string
+- **Default**: `"5m"`
+- **Description**: Target minimum duration for merged recordings. Outputs shorter than this are marked `merge_quality='short'` and can be consolidated further via `POST /api/merge/consolidate`
+- **Example**: `"5m"`, `"10m"`
+
+### `merge.rolling_backfill_max_segments` / `merge.rolling_backfill_max_age`
+- **Type**: integer / string
+- **Default**: `500` / `"72h"`
+- **Description**: Startup backfill throttling — only the most recent `rolling_backfill_max_age`, at most `rolling_backfill_max_segments` pending segments, and only once per boot (protects an RPi 3B's first-boot IO)
+
+### `merge.rolling_backfill_interval` / `merge.rolling_backfill_batch`
+- **Type**: string / integer
+- **Default**: `"10m"` / `500`
+- **Description**: Periodic backfill sweep — digests pending segments whenever the once-per-boot startup backfill cannot keep up (e.g. thousands of 30s H265 fragments per day). `rolling_backfill_interval` is the sweep interval (`"0"` disables it, leaving startup-only); `rolling_backfill_batch` caps how many pending segments one sweep processes — sweeps use try-locks and yield to real-time events. Concurrent cameras are bounded by `rolling_backfill_concurrency` (auto-selected by RAM; see the upgrade guide)
 
 ## FTP Configuration
 
@@ -1159,11 +1292,31 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Description**: While a camera is blacklisted, re-attempt IP rediscovery every N minutes. Without this, a camera that comes back online mid-blacklist (e.g. power restored) is not recovered until the full `blacklist_hours` elapses — rediscovery only scanned once at the blacklist moment. Each rescan is a bounded network sweep (≤30s, ≤16 parallel probes). Set to 0 to disable (legacy single-scan behavior).
 - **Example**: `5`, `10`, `0` (disabled)
 
+### `health.auto_remediation.reconnecting_timeout_minutes`
+- **Type**: integer
+- **Default**: `0` (use default: 10 minutes)
+- **Description**: How long a recorder may stay in the "reconnecting" state before auto-remediation treats it as a dead-end and triggers a hard restart (which can then escalate to blacklist + IP rediscovery). A recorder's own reconnect loop never escalates to StatusError — without this gate, a camera whose IP changed would loop forever and rediscovery would never fire
+
+### `health.auto_remediation.rediscovery_rescan_max_minutes` / `health.auto_remediation.rediscovery_rescan_backoff`
+- **Type**: integer / float
+- **Default**: `0` (use default: 60 minutes) / `2.0` (must be ≥1.0)
+- **Description**: Exponential backoff for blacklist-period rescans — after each consecutive "device not found" the rescan interval is multiplied by `rediscovery_rescan_backoff`, capped at `rediscovery_rescan_max_minutes` (default sequence 5→10→20→40→60 minutes). Prevents permanently-dead cameras from sustaining a full-/24 scan every 5 minutes indefinitely, which hammered disk IO on RPi-class hosts
+
+### `health.auto_remediation.rediscovery_max_scan_misses`
+- **Type**: integer
+- **Default**: `0` (unlimited rescans, bounded by the backoff cap)
+- **Description**: When > 0, periodic rescans stop entirely after this many consecutive "not found" results — the camera is assumed permanently offline and must be recovered via manual `POST /api/cameras/{id}/rediscover`
+
 ### `health.rediscovery.probe_ports`
 - **Type**: integer list
 - **Default**: `[80, 8080, 8899]`
 - **Description**: Non-standard ONVIF port sweep for IP self-healing. The camera's last-known port (parsed from its stored endpoint, default 80) is ALWAYS probed first; after that, each candidate host is also probed on this list — so a camera whose ONVIF service runs on a non-standard port (e.g. 8080 on MiBeeCam/Hisilicon-style devices, 8899 on TVT-style) is still relocated after an IP change even when its stored endpoint carries no port. An explicit list replaces the defaults. Capped at 8 entries: every extra port multiplies probe cost (candidates × ports) against `max_duration`.
 - **Example**: `[80, 8080, 8899]`, `[80, 8080]`
+
+### `health.rediscovery.max_parallel` / `health.rediscovery.probe_timeout`
+- **Type**: integer / string
+- **Default**: `16` / `"2s"`
+- **Description**: IP self-healing scan parameters — `max_parallel` is the concurrent unicast probe count (RPi 3B friendly); `probe_timeout` is the per-IP probe timeout
 
 ## Auto-Discover Configuration
 

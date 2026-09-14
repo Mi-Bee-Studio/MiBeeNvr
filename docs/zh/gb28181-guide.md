@@ -131,8 +131,23 @@ cameras:
 | `allow_same_ip_enroll` | bool | `false` | 允许同 IP 双协议并存：即使已有相机从该设备 IP 取流（或 ONVIF 序列号匹配），GB28181 通道仍自动建条目。适用于刻意让 ONVIF + GB28181 并存的场景，#596 |
 | `sub_channel_probe` | string | `"auto"` | 子通道探测模式：`auto`（仅探测厂商为海康/大华的设备）/ `on`（探测所有设备）/ `off`（关闭），#560 |
 | `sub_channel_probe_offset` | int | `1` | 子通道候选码 = 主通道码 + 该偏移（海康惯例 +1；0 = 禁用探测），范围 0–99 |
+| `alarm_linkage` | object | `{enabled: false}` | 报警联动流（#355）：`{enabled, duration}`——收到报警通知时，对未在推流的报警通道发起 INVITE，保持 `duration`（默认 `"60s"`）后 BYE；该通道对应的相机要求录像时则保持不断开 |
+| `security35114` | object | `{enabled: false}` | GB35114 国密安全（SM2/SM3 证书体系）——见下文 [GB35114 安全增强](#gb35114-安全增强)；仅在 `-tags gb35114` 构建的二进制中生效，默认构建启用时仅告警 |
+
 
 > `tcp_mode`（bool）是 `media_transport` 的旧别名，保留仅为 YAML 兼容，**已不再影响默认值**（v0.12.0 起默认即 `tcp-passive`，#460）；需要 UDP 请显式设置 `media_transport: "udp"`。
+
+### GB35114 安全增强
+
+`gb28181.security35114` 节（#714/#707，GB35114 A 级）启用国密证书体系：REGISTER 双向认证 + keyed-SM3 Note 完整性。**仅在 `-tags gb35114` 构建的二进制中生效**；默认构建下启用该节只记录一条警告。Digest 认证（`password`）设备与国密路径并存、互不干扰。
+
+| 参数 | 类型 | 默认值 | 描述 |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `false` | 启用 GB35114 REGISTER 认证器 |
+| `platform_cert` | string | (必填) | 平台 SM2 签名证书路径（双向挑战时用它签名） |
+| `platform_key` | string | (必填) | 平台 SM2 私钥路径 |
+| `device_certs_dir` | string | 空 | 预置设备证书目录，每设备一个 `<deviceID>.pem` 文件。可选——设备也可通过 Capability cnonce 上报证书（信任首用）；预置是更严格的策略 |
+
 
 ### 相机配置
 
@@ -193,7 +208,29 @@ gb28181_cascade:
 - 上级 INVITE → 200 OK(sendonly) → 从 StreamHub 取流 → PS 复用 → RTP 推送；BYE/错误清理
 - **目录收敛**（`cameras[].cascade_enabled: false`）：该相机从聚合目录隐藏、对其通道的 INVITE 返回 404，但通道编码分配保留——重新开启即恢复原编码，上级绑定不漂移
 - **级联上报子码流**（`cameras[].cascade_sub_stream: true`）：INVITE 转发改走相机按需拉取的[子码流](sub-stream.md)——低分辨率档让上级预览不再吃满上行带宽；相机无子码流或拉取失败自动回退主流，无子码流的相机不受影响
-- v1 限制：**仅视频**（hub 音频暂不区分 G.711 A/μ 律）；单上级；不推送目录变更 NOTIFY（上级轮询兜底）
+- **多上级上联**（`gb28181_cascade.upstreams`，#370）：单上级表单之外可配置任意数量的额外上级——每条独立运行自己的 REGISTER/Keepalive 会话（共享 SIP 监听端口），独立在线状态；字段留空回退单上级表单值
+- v1 限制：**仅视频**（hub 音频暂不区分 G.711 A/μ 律）；不推送目录变更 NOTIFY（上级轮询兜底）
+
+
+多上级配置示例：
+
+```yaml
+gb28181_cascade:
+  enabled: true
+  server_domain: "34020000002000000001"   # 首个上级（单上级表单仍是第一个 upstream）
+  server_addr: "192.168.1.10:5060"
+  local_device_id: "34020000001320000099"
+  realm: "3402000000"
+  password: "..."
+  upstreams:                               # 额外上级（#370）
+    - server_domain: "34020000002000000002"
+      server_addr: "192.168.1.11:5060"
+      local_device_id: "34020000001320000098"  # 该平台分配给本机的编号（可各不相同）
+      realm: "3402000000"
+      password: "..."
+      heartbeat_interval: "60s"            # 可选：覆盖该上级的保活节奏
+      register_expires: 3600               # 可选：覆盖该上级的 REGISTER 有效期
+```
 
 ## 订阅与事件
 

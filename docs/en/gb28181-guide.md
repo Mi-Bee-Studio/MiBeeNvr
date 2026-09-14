@@ -131,8 +131,23 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 | `allow_same_ip_enroll` | bool | `false` | Keep dual-protocol enrollment: auto-enroll a GB28181 channel even when another camera already streams from the device IP (or matches its ONVIF serial). For deliberate ONVIF + GB28181 side-by-side setups, #596 |
 | `sub_channel_probe` | string | `"auto"` | Sub-channel prober mode: `auto` (probe only Hikvision/Dahua devices) / `on` (probe every device) / `off`, #560 |
 | `sub_channel_probe_offset` | int | `1` | Sub-channel candidate code = main channel code + this offset (Hikvision convention is +1; 0 disables probing). Range 0–99 |
+| `alarm_linkage` | object | `{enabled: false}` | Alarm-triggered streaming (#355): `{enabled, duration}` — on an alarm notification, INVITE the alarm channel when it is not already streaming, hold the stream for `duration` (default `"60s"`) and then BYE — unless the channel's camera wants recording (then the stream stays) |
+| `security35114` | object | `{enabled: false}` | GB35114 national-cryptography security (SM2/SM3 certificates) — see [GB35114 Security](#gb35114-security) below; only active in binaries built with `-tags gb35114` (default builds just log a warning when enabled) |
+
 
 > `tcp_mode` (bool) is a legacy alias of `media_transport`, kept for YAML compatibility. It no longer influences the default (tcp-passive since v0.12.0, #460) — set `media_transport: "udp"` explicitly for UDP.
+
+### GB35114 Security
+
+The `gb28181.security35114` section (#714/#707, GB35114 level A) enables the national-cryptography certificate system: bidirectional REGISTER authentication + keyed-SM3 Note integrity. **Only active in binaries built with `-tags gb35114`** — a default build merely logs a warning when the section is enabled. Digest-authenticated (`password`) devices keep working alongside; the two paths never interfere.
+
+| Key | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `false` | Activate the GB35114 REGISTER authenticator |
+| `platform_cert` | string | (required) | Platform SM2 signing certificate path (Bidirection challenges sign with it) |
+| `platform_key` | string | (required) | Platform SM2 private key path |
+| `device_certs_dir` | string | empty | Directory of pre-provisioned device certificates, one `<deviceID>.pem` per device. Optional — devices can instead announce their certificate via the Capability cnonce (trust-on-first-use); pre-provisioning is the stricter policy |
+
 
 ### Camera
 
@@ -193,7 +208,29 @@ Behavior:
 - Upper INVITE → 200 OK (sendonly) → StreamHub subscription → PS mux → RTP push; BYE/error teardown
 - **Catalog convergence** (`cameras[].cascade_enabled: false`): the camera is hidden from the aggregated catalog and its channel's INVITEs answer 404, but the channel-code allocation is kept — re-enabling restores the same code, upper-platform bindings don't drift
 - **Sub-stream cascading** (`cameras[].cascade_sub_stream: true`): INVITE forwarding rides the camera's on-demand [sub-stream](sub-stream.md) — the low-resolution tier keeps your uplink bounded for preview-only platforms; falls back to main when the camera has no sub-stream or the pull fails, and cameras without one are unaffected
-- v1 limits: **video only** (the hub's audio callback does not distinguish G.711 A/μ-law yet); single upper platform; no catalog-change NOTIFY pushes (the upper falls back to polling)
+- **Multiple upstreams** (`gb28181_cascade.upstreams`, #370): beyond the single-upstream form you can configure any number of extra upper platforms — each entry runs its own REGISTER/Keepalive session over the shared SIP listener with independent online state; fields left empty fall back to the single-form values
+- v1 limits: **video only** (the hub's audio callback does not distinguish G.711 A/μ-law yet); no catalog-change NOTIFY pushes (the upper falls back to polling)
+
+
+Multi-upstream configuration example:
+
+```yaml
+gb28181_cascade:
+  enabled: true
+  server_domain: "34020000002000000001"   # first upper (the single-upstream form stays the first upstream)
+  server_addr: "192.168.1.10:5060"
+  local_device_id: "34020000001320000099"
+  realm: "3402000000"
+  password: "..."
+  upstreams:                               # extra uppers (#370)
+    - server_domain: "34020000002000000002"
+      server_addr: "192.168.1.11:5060"
+      local_device_id: "34020000001320000098"  # this NVR's ID at that platform (may differ per upper)
+      realm: "3402000000"
+      password: "..."
+      heartbeat_interval: "60s"            # optional: keepalive cadence override for this upstream
+      register_expires: 3600               # optional: REGISTER lifetime override for this upstream
+```
 
 ## Subscriptions and Events
 
