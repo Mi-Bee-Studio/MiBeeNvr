@@ -331,6 +331,9 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Merge.MinSegmentAge == "" {
 		cfg.Merge.MinSegmentAge = "10m"
 	}
+	if strings.TrimSpace(cfg.Merge.TranscodeGrace) == "" {
+		cfg.Merge.TranscodeGrace = "90s"
+	}
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
 	}

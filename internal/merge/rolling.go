@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,6 +135,11 @@ type RollingMergeConfig struct {
 	Window      time.Duration // bucket size (default 1h = natural-hour alignment)
 	MinDuration time.Duration // target minimum merged duration (default 5m); shorter → merge_quality='short'
 
+	// TranscodeGrace is the transcode-hold age rail (#810 TOCTOU): fresh
+	// segments on transcode-enabled cameras defer folding this long because
+	// their transcode task row lands seconds after completion. 0 = rail off.
+	TranscodeGrace time.Duration
+
 	// Bucket retention (#764): how many parameter-set-keyed buckets a camera
 	// keeps live (BucketRetain, default 2 = the HD/SD quality pair) and how
 	// long an append-less bucket survives (BucketIdleTTL, default 10m; 0 =
@@ -219,6 +225,16 @@ type RollingMergeCoordinator struct {
 	// instead, whose finalize window outlives the queue. nil = hold nothing;
 	// the constructor wires the DB-backed default.
 	pendingTranscodePaths func(ctx context.Context, cameraID string) map[string]bool
+
+	// cameraTranscodeEnabled reports whether a camera has transcoding on
+	// (#810 TOCTOU follow-up): the pending-task hold cannot see a task row
+	// that has not been inserted yet — production (2026-09-15, cam-3bbed0e1)
+	// showed the 500ms merge debounce folding a segment ~4s BEFORE its
+	// transcode task row landed. On transcode-enabled cameras, segments
+	// younger than transcodeGraceWindow defer by AGE, independent of task
+	// visibility. nil = rail off; the constructor wires the config-backed
+	// default.
+	cameraTranscodeEnabled func(cameraID string) bool
 
 	eventBus  *event.EventBus
 	eventCh   chan event.Event
@@ -351,7 +367,25 @@ func NewRollingMergeCoordinator(
 		eventCh:        make(chan event.Event, 128), // buffered: bursts of segment closes
 	}
 	r.pendingTranscodePaths = dbPendingTranscodePaths(db)
+	r.cameraTranscodeEnabled = camerasTranscodeEnabled(cameras)
 	return r
+}
+
+// camerasTranscodeEnabled derives the per-camera transcoding switch from the
+// live camera-config snapshot the coordinator already holds.
+func camerasTranscodeEnabled(cameras func() []config.CameraConfig) func(cameraID string) bool {
+	if cameras == nil {
+		return nil
+	}
+	return func(cameraID string) bool {
+		for _, c := range cameras() {
+			if c.ID == cameraID {
+				// Transcoding is a pointer block — absent means disabled.
+				return c.Transcoding != nil && c.Transcoding.Enabled
+			}
+		}
+		return false
+	}
 }
 
 // dbPendingTranscodePaths is the production pendingTranscodePaths: the file
@@ -433,6 +467,18 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 	if effective.RollingDebounce != "" {
 		if d, err := time.ParseDuration(effective.RollingDebounce); err == nil && d > 0 {
 			cfg.Debounce = d
+		}
+	}
+	// Transcode-hold age rail (#810). ApplyDefaults materializes "90s";
+	// resolve inline for configs that skipped it (tests, hand-built values).
+	// "off"/"0s" parse to a zero duration = rail off (pre-#811 folding).
+	graceStr := strings.TrimSpace(effective.TranscodeGrace)
+	if graceStr == "" {
+		graceStr = "90s"
+	}
+	if graceStr != "off" {
+		if d, err := time.ParseDuration(graceStr); err == nil && d > 0 {
+			cfg.TranscodeGrace = d
 		}
 	}
 	if effective.RollingWindow != "" {

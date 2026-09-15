@@ -1526,3 +1526,21 @@ func mustTempPath(t *testing.T) string {
 	require.NoError(t, os.MkdirAll(filepath.Dir(dir), 0o755))
 	return dir
 }
+
+// publishSegmentCompletedAt is publishSegmentCompleted with an explicit
+// EndedAt — the live dispatch derives pendingSegmentInfo.endedAt from the
+// event payload (publish time is "just completed"), so tests that need an
+// OLD segment through the live path must set the event's end explicitly.
+func publishSegmentCompletedAt(t *testing.T, bus *event.EventBus, cameraID, recordingID, filePath, format string, startedAt, endedAt time.Time) {
+	t.Helper()
+	bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+		CameraID:    cameraID,
+		FilePath:    filePath,
+		Format:      format,
+		Encoding:    format,
+		StartedAt:   startedAt.Format(time.RFC3339Nano),
+		EndedAt:     endedAt.Format(time.RFC3339Nano),
+		FileSize:    0,
+		RecordingID: recordingID,
+	})
+}
