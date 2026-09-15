@@ -96,6 +96,7 @@ xiaomi:
 observability:
   log_level: "info"              # Log level: debug, info, warn, error
   log_format: "text"             # Log format: json or text
+  stdlog_throttle: "10s"         # Rate-limit interval for third-party stdlib-log noise ("off" disables)
   enable_pprof: false            # Enable pprof debug endpoints
 streaming:
   webrtc:
@@ -1124,6 +1125,18 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Options**: `"json"`, `"text"`
 - **Description**: Log output format
 - **Example**: `"json"`, `"text"`
+
+### `observability.stdlog_throttle`
+- **Type**: string (Go duration)
+- **Default**: `"10s"`
+- **Options**: any Go duration (e.g. `"10s"`, `"1m"`, `"250ms"`); `"off"` / `"0s"` disables the limit
+- **Description**: Rate-limits high-frequency noise lines that third-party
+  protocol libraries emit through the standard library logger (e.g.
+  gortsplib's `N RTP packets lost` — several lines per second per stream) to
+  one line per interval. Unthrottled, this flooded a 24MB journald quota
+  twice on production, evicting the unit's own history. Passed lines still
+  go out structured (slog Info)
+- **Example**: `"10s"`, `"1m"`, `"off"`
 
 ### `observability.enable_pprof`
 - **Type**: boolean

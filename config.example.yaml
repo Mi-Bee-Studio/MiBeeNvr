@@ -301,6 +301,7 @@ hls:
 observability:
   log_level: "info"                # Log level: debug, info, warn, error (default: info)
   log_format: "text"               # Log format: json or text (default: text)
+  # stdlog_throttle: "10s"         # Rate-limit third-party stdlib-log noise (gortsplib RTP-loss); "off"/"0s" disables (default: 10s)
   # enable_pprof: false            # Enable pprof debug endpoints (default: false)
 
 # External AI post-processing consumer (MiBeeVision) integration.
