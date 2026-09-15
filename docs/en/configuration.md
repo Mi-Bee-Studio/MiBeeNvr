@@ -1226,6 +1226,18 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Description**: How long to retain health monitoring events
 - **Example**: `"720h"`, `"168h"`, `"720h"`
 
+### `health.goroutine_baseline`
+- **Type**: integer
+- **Default**: `300`
+- **Description**: Baseline of the `/api/health` goroutine tripwire (threshold = baseline + per-camera coefficient × number of cameras). The defaults fit the observed workload (~85 goroutines per recording camera); pure-forwarder small boxes can lower it
+- **Example**: `300`, `100`
+
+### `health.goroutine_per_camera`
+- **Type**: integer
+- **Default**: `150`
+- **Description**: Per-camera coefficient of the goroutine tripwire. Deployments with sub-stream consumers, cascade, or relay targets run more goroutines per camera — raise it accordingly
+- **Example**: `150`, `300`
+
 ### `health.alerts.cooldown`
 - **Type**: string
 - **Default**: `"5m"`
