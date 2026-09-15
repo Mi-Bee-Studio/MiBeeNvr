@@ -1057,6 +1057,20 @@ cameras:
 - **描述**: 健康监控事件保留时长
 - **示例**: `"168h"`（7 天）, `"720h"`（30 天）
 
+### `health.goroutine_baseline`
+- **类型**: integer
+- **默认**: `300`
+- **描述**: `/api/health` goroutine 绊线的基线值（阈值 = 基线 + 每路系数 × 相机数）。
+  默认系数按观测负载（每路录制相机约 85 个 goroutine）设定；纯转发小盒子可调低
+- **示例**: `300`, `100`
+
+### `health.goroutine_per_camera`
+- **类型**: integer
+- **默认**: `150`
+- **描述**: goroutine 绊线的每路系数。子流消费、级联、relay 目标多的部署每路
+  goroutine 数更高，可按需上调
+- **示例**: `150`, `300`
+
 ### `health.layer1.offline_threshold`
 - **类型**: string
 - **默认**: `"30s"`

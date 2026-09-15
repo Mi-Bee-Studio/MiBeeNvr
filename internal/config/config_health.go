@@ -4,13 +4,19 @@ package config
 
 // HealthConfig configures the camera health monitoring system.
 type HealthConfig struct {
-	Enabled         bool                        `yaml:"enabled"`
-	EventsRetention string                      `yaml:"events_retention"`
-	Alerts          HealthAlertsConfig          `yaml:"alerts"`
-	Layer1          HealthLayer1Config          `yaml:"layer1"`
-	Layer2          HealthLayer2Config          `yaml:"layer2"`
-	Layer2_5        HealthLayer2_5Config        `yaml:"layer2_5"`
-	AutoRemediation HealthAutoRemediationConfig `yaml:"auto_remediation"`
+	Enabled         bool   `yaml:"enabled"`
+	EventsRetention string `yaml:"events_retention"`
+	// GoroutineBaseline / GoroutinePerCamera tune the /api/health goroutine
+	// tripwire (threshold = baseline + per_camera × cameras). Defaults
+	// 300/150 fit the observed ~85-goroutines-per-camera workload; heavier
+	// per-camera workloads (sub-stream consumers, cascade, relays) raise it.
+	GoroutineBaseline  int                         `yaml:"goroutine_baseline"`
+	GoroutinePerCamera int                         `yaml:"goroutine_per_camera"`
+	Alerts             HealthAlertsConfig          `yaml:"alerts"`
+	Layer1             HealthLayer1Config          `yaml:"layer1"`
+	Layer2             HealthLayer2Config          `yaml:"layer2"`
+	Layer2_5           HealthLayer2_5Config        `yaml:"layer2_5"`
+	AutoRemediation    HealthAutoRemediationConfig `yaml:"auto_remediation"`
 	// Rediscovery triggers IP re-discovery (ONVIF unicast scan) when a camera is
 	// blacklisted by auto-remediation — i.e. the IP has permanently changed.
 	Rediscovery RediscoveryConfig `yaml:"rediscovery"`
