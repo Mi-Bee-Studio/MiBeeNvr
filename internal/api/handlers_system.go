@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 
 	"github.com/go-chi/chi/v5"
@@ -17,19 +18,50 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
+// Default goroutine tripwire coefficients — observed workload (recorder +
+// streamhub + reconnect loops ≈ 85 goroutines per recording camera; M5
+// 16-camera fleet idles at ~1365). The line sits at roughly 2x steady
+// state: small boxes keep their sensitivity, a runaway leak still crosses.
+// Operators tune both via health.goroutine_baseline / goroutine_per_camera
+// (heavier per-camera workloads: sub-stream consumers, cascade, relays).
+const (
+	defaultGoroutineBaseline  = 300
+	defaultGoroutinePerCamera = 150
+)
+
+// resolveGoroutinePolicy returns the effective coefficients, falling back
+// to the defaults when config is absent or the values were left at zero
+// (zero must not collapse the rail to nothing).
+func resolveGoroutinePolicy(cfg *config.Config) (baseline, perCamera int) {
+	baseline, perCamera = defaultGoroutineBaseline, defaultGoroutinePerCamera
+	if cfg == nil {
+		return
+	}
+	if cfg.Health.GoroutineBaseline > 0 {
+		baseline = cfg.Health.GoroutineBaseline
+	}
+	if cfg.Health.GoroutinePerCamera > 0 {
+		perCamera = cfg.Health.GoroutinePerCamera
+	}
+	return
+}
+
 // goroutineCheckStatus maps a goroutine count to the health-check verdict,
 // scaling the tripwire with the camera fleet: production shows ~85
-// goroutines per recording camera (recorder + streamhub + reconnect loops),
-// so a fixed 1000 flagged every >=12-camera box as permanently unhealthy
-// (M5: 16 cameras idle at ~1365; the Docker HEALTHCHECK inherits the
-// verdict). 300 base + 150 per camera keeps the line at roughly 2x steady
-// state for any deployment size — small boxes keep their sensitivity, a
-// runaway leak still crosses it.
-func goroutineCheckStatus(count, numCameras int) (status, message string) {
+// goroutines per recording camera, so a fixed 1000 flagged every >=12-camera
+// box as permanently unhealthy (M5: 16 cameras idle at ~1365; the Docker
+// HEALTHCHECK inherits the verdict). threshold = baseline + perCamera×N.
+func goroutineCheckStatus(count, numCameras, baseline, perCamera int) (status, message string) {
 	if numCameras < 0 {
 		numCameras = 0
 	}
-	threshold := 300 + 150*numCameras
+	if baseline <= 0 {
+		baseline = defaultGoroutineBaseline
+	}
+	if perCamera <= 0 {
+		perCamera = defaultGoroutinePerCamera
+	}
+	threshold := baseline + perCamera*numCameras
 	if count > threshold {
 		return "error", fmt.Sprintf("%d goroutines (threshold: %d, cameras: %d)", count, threshold, numCameras)
 	}
@@ -106,7 +138,8 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if camHealth != nil {
 		numCameras = camHealth.Total
 	}
-	gStatus, gMessage := goroutineCheckStatus(runtime.NumGoroutine(), numCameras)
+	baseline, perCamera := resolveGoroutinePolicy(h.config)
+	gStatus, gMessage := goroutineCheckStatus(runtime.NumGoroutine(), numCameras, baseline, perCamera)
 	resp.Checks["goroutines"] = HealthCheck{Status: gStatus, Message: gMessage}
 	if gStatus == "error" {
 		hasError = true

@@ -795,6 +795,15 @@ func validateConfigDetails(cfg *Config) error {
 		}
 	}
 
+	// Goroutine tripwire coefficients apply to /api/health regardless of
+	// the health service toggle.
+	if cfg.Health.GoroutineBaseline < 0 || cfg.Health.GoroutineBaseline > 1_000_000 {
+		return fmt.Errorf("health.goroutine_baseline must be between 0 and 1000000, got %d", cfg.Health.GoroutineBaseline)
+	}
+	if cfg.Health.GoroutinePerCamera < 0 || cfg.Health.GoroutinePerCamera > 100_000 {
+		return fmt.Errorf("health.goroutine_per_camera must be between 0 and 100000, got %d", cfg.Health.GoroutinePerCamera)
+	}
+
 	// Validate health configuration
 	if cfg.Health.Enabled {
 		if _, err := time.ParseDuration(cfg.Health.EventsRetention); err != nil {

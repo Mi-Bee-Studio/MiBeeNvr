@@ -481,6 +481,12 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Health.EventsRetention == "" {
 		cfg.Health.EventsRetention = "720h" // 30 days
 	}
+	if cfg.Health.GoroutineBaseline == 0 {
+		cfg.Health.GoroutineBaseline = 300
+	}
+	if cfg.Health.GoroutinePerCamera == 0 {
+		cfg.Health.GoroutinePerCamera = 150
+	}
 	if cfg.Health.Alerts.Cooldown == "" {
 		cfg.Health.Alerts.Cooldown = "5m"
 	}
