@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -124,6 +125,7 @@ type pullPointSubscription struct {
 	state           string // active | resubscribing | unsupported (diagnostics)
 	eventCount      int64
 	lastEventAt     time.Time
+	lastEvent       string // raw topic+data of the most recent polled event (#711)
 	lastError       string
 	pollErrs        int
 }
@@ -348,6 +350,7 @@ func (e *EventSubscriberImpl) Status(cameraID string) EventSubscriptionStatus {
 	st.TerminationTime = ps.terminationTime
 	st.EventCount = ps.eventCount
 	st.LastEventAt = ps.lastEventAt
+	st.LastEvent = ps.lastEvent
 	st.LastError = ps.lastError
 	st.ConsecutivePollErrors = ps.pollErrs
 	st.PollInterval = e.pollInterval.String()
@@ -384,6 +387,7 @@ type EventSubscriptionStatus struct {
 	PollInterval          string    `json:"poll_interval,omitempty"`
 	EventCount            int64     `json:"event_count"`
 	LastEventAt           time.Time `json:"last_event_at,omitempty"`
+	LastEvent             string    `json:"last_event,omitempty"`
 	LastError             string    `json:"last_error,omitempty"`
 	ConsecutivePollErrors int       `json:"consecutive_poll_errors"`
 }
@@ -528,6 +532,7 @@ func (e *EventSubscriberImpl) pollLoop(cameraID string, stopCh <-chan struct{}) 
 			e.setPS(cameraID, func(p *pullPointSubscription) {
 				p.eventCount++
 				p.lastEventAt = event.Timestamp
+				p.lastEvent = formatRawEvent(event)
 			})
 
 			e.mu.Lock()
@@ -647,6 +652,29 @@ func sleepInterruptible(stopCh <-chan struct{}, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
+}
+
+// formatRawEvent renders an event as "topic key=value ..." with sorted keys —
+// the raw payload the diagnostics snapshot exposes as last_event. It exists
+// because the MotionAlarm parse path fails silently on encoding mismatches
+// (e.g. a vendor sending State=active instead of true): without the raw text
+// in the diagnostics, "device emits nothing" and "device emits something we
+// drop" are indistinguishable in the field (#711).
+func formatRawEvent(evt ONVIFEvent) string {
+	if len(evt.Data) == 0 {
+		return evt.Topic
+	}
+	keys := make([]string, 0, len(evt.Data))
+	for k := range evt.Data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(evt.Topic)
+	for _, k := range keys {
+		fmt.Fprintf(&b, " %s=%v", k, evt.Data[k])
+	}
+	return b.String()
 }
 
 // parseNotificationMessage converts an onvif-go NotificationMessage to an ONVIFEvent.

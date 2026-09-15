@@ -1,7 +1,9 @@
 package camera
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -168,4 +170,37 @@ func TestONVIFEventsStatusRemembersFailure(t *testing.T) {
 	require.Equal(t, onvif.StateUnsupported, cm.ONVIFEventsStatus("cam-x").State)
 	require.NotEmpty(t, cm.ONVIFEventsStatus("cam-x").LastError)
 	require.Equal(t, onvif.StateResubscribing, cm.ONVIFEventsStatus("cam-y").State)
+}
+
+// TestOnONVIFEventWarnsOnUnparseableMotionAlarm pins the #711 observability
+// gap: a MotionAlarm-shaped event whose State is missing or not a bool was
+// dropped with NO log line — on a device encoding mismatch the true-leg
+// silently never fires and production cannot tell "nothing emitted" from
+// "emitted but unparsed". Must WARN with the raw payload; non-MotionAlarm
+// topics stay silent (they are not our contract).
+func TestOnONVIFEventWarnsOnUnparseableMotionAlarm(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	cm := NewCameraManager(testConfig(), nil, nil, "")
+	buf.Reset() // construction warnings are not under test
+
+	// State missing → ParseMotionAlarm !ok on a MotionAlarm topic.
+	cm.onONVIFEvent("cam-m", onvif.ONVIFEvent{
+		Topic: "tns1:VideoSource/MotionAlarm",
+		Data:  map[string]any{"Score": "73"},
+	})
+	require.Contains(t, buf.String(), "level=WARN")
+	require.Contains(t, buf.String(), "MotionAlarm")
+	require.Contains(t, buf.String(), "Score")
+
+	// Non-MotionAlarm unparseable topics are not our contract — silent.
+	buf.Reset()
+	cm.onONVIFEvent("cam-m", onvif.ONVIFEvent{
+		Topic: "tns1:Device/Tamper",
+		Data:  map[string]any{"Score": "73"},
+	})
+	require.NotContains(t, buf.String(), "level=WARN")
 }

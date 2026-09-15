@@ -210,6 +210,16 @@ type RollingMergeCoordinator struct {
 	// deterministically. nil = time.Now.
 	nowFn func() time.Time
 
+	// pendingTranscodePaths reports the file paths of the camera's segments
+	// that currently have a queued or running transcode task (#810). The
+	// debounce batch path merges AND deletes its sources immediately, which
+	// races the sequential transcode queue (M5 production, flapping H.265
+	// camera: the batch folded every source before its task ran — 54
+	// consecutive exit-254s). Held segments take the per-segment bucket path
+	// instead, whose finalize window outlives the queue. nil = hold nothing;
+	// the constructor wires the DB-backed default.
+	pendingTranscodePaths func(ctx context.Context, cameraID string) map[string]bool
+
 	eventBus  *event.EventBus
 	eventCh   chan event.Event
 	cancelSub context.CancelFunc
@@ -329,7 +339,7 @@ func NewRollingMergeCoordinator(
 	m *metrics.Metrics,
 	eventBus *event.EventBus,
 ) *RollingMergeCoordinator {
-	return &RollingMergeCoordinator{
+	r := &RollingMergeCoordinator{
 		db:             db,
 		store:          store,
 		getGlobalCfg:   getGlobalCfg,
@@ -339,6 +349,32 @@ func NewRollingMergeCoordinator(
 		metrics:        m,
 		eventBus:       eventBus,
 		eventCh:        make(chan event.Event, 128), // buffered: bursts of segment closes
+	}
+	r.pendingTranscodePaths = dbPendingTranscodePaths(db)
+	return r
+}
+
+// dbPendingTranscodePaths is the production pendingTranscodePaths: the file
+// paths of the camera's segments with a queued or running transcode task
+// (#810). Fail-open — on query error it returns nil (hold nothing), and the
+// batch path behaves exactly as before.
+func dbPendingTranscodePaths(db *storage.DB) func(ctx context.Context, cameraID string) map[string]bool {
+	return func(ctx context.Context, cameraID string) map[string]bool {
+		held := map[string]bool{}
+		for _, status := range []string{"pending", "running"} {
+			tasks, _, err := db.ListTranscodeTasks(ctx, storage.TranscodeTaskFilter{
+				CameraID: cameraID, Status: status, Limit: 200,
+			})
+			if err != nil {
+				return nil
+			}
+			for _, task := range tasks {
+				if task.InputPath != "" {
+					held[task.InputPath] = true
+				}
+			}
+		}
+		return held
 	}
 }
 

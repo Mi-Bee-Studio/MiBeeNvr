@@ -316,6 +316,17 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 		}
 	}()
 
+	// #810: a vanished input means the segment was merged away (or reclaimed)
+	// before this sequential-queue task ran — spawning ffmpeg into an instant
+	// failure produced a 254-storm on flapping cameras. A missing input is a
+	// precondition change, not a job failure: cancel quietly.
+	if _, err := os.Stat(task.InputPath); os.IsNotExist(err) {
+		q.finishTask(ctx, task, "cancelled", 0, "input vanished before task ran (merged away?)")
+		queueLogger.Info("transcode input vanished, cancelling",
+			"task_id", task.ID, "input", task.InputPath)
+		return
+	}
+
 	// Convert storage task to transcoding options with default preset
 	opts := q.taskToOptions(task, "")
 

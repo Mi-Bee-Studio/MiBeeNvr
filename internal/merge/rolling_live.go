@@ -237,6 +237,32 @@ func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID st
 	// When 2+ segments accumulated (frequent disconnect scenario), use batch merge
 	// to produce ONE merged file instead of multiple tiny rolling files.
 	// Single segment → per-segment append to rolling bucket (low latency).
+	//
+	// #810: segments with a pending/running transcode task are DEFERRED —
+	// both the batch path and the bucket append fold and delete their source
+	// within one debounce, racing the sequential transcode queue (M5
+	// production: flapping H.265 camera, 54 consecutive exit-254s). Deferred
+	// segments are left untouched for the backfill sweep (10m cadence,
+	// min_segment_age rail), by which time their tasks have finished.
+	if r.pendingTranscodePaths != nil {
+		if pending := r.pendingTranscodePaths(ctx, cameraID); len(pending) > 0 {
+			free := make([]pendingSegmentInfo, 0, len(mp4Segs))
+			deferred := 0
+			for _, seg := range mp4Segs {
+				if pending[seg.filePath] {
+					deferred++
+					continue
+				}
+				free = append(free, seg)
+			}
+			if deferred > 0 {
+				rollingLogger.Info("deferring segments with pending transcode tasks (backfill merges them after the tasks finish)",
+					"camera_id", cameraID, "deferred", deferred, "processing", len(free))
+				mp4Segs = free
+			}
+		}
+	}
+
 	if len(mp4Segs) >= 2 {
 		mp4Recs := make([]*model.Recording, len(mp4Segs))
 		for i, seg := range mp4Segs {
