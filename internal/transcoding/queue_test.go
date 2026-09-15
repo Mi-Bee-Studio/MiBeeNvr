@@ -467,9 +467,11 @@ exit 1
 	q := NewTranscodeQueue(db, caps, nil, cfg, m)
 
 	tmpDir := t.TempDir()
-	inputPath := filepath.Join(tmpDir, "nonexistent.mp4")
+	inputPath := filepath.Join(tmpDir, "input.mp4")
 	outputPath := filepath.Join(tmpDir, "output.mp4")
-	// Don't create input file — ffmpeg will fail
+	// Input must EXIST — a vanished input now cancels quietly before ffmpeg
+	// (#810); this test targets the real failure path (ffmpeg exits 1).
+	require.NoError(t, os.WriteFile(inputPath, []byte("fake video data"), 0o644))
 
 	taskID := helperInsertTask(t, db, inputPath, outputPath)
 
@@ -1626,4 +1628,36 @@ func TestQueueARMJPEGInputAllowed(t *testing.T) {
 
 	err := q.Enqueue(ctx, task)
 	require.NoError(t, err, "JPEG input should be allowed on ARM with software encoding")
+}
+
+// #810: a vanished input means the segment was merged away (or reclaimed)
+// before this sequential-queue task ran — spawning ffmpeg into an instant
+// failure produced a 254-storm on flapping cameras. A missing input is a
+// precondition change, not a job failure: cancel quietly.
+func TestRunWorker_InputVanishedCancelsQuietly(t *testing.T) {
+	db := newTestQueueDB(t)
+	q := newTestQueue(t, db, 1)
+
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "merged-away.mp4") // never created
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+	taskID := helperInsertTask(t, db, inputPath, outputPath)
+
+	task := &storage.TranscodeTask{
+		ID:           taskID,
+		CameraID:     "cam-810",
+		RecordingID:  "rec-810",
+		InputPath:    inputPath,
+		InputFormat:  "h265",
+		OutputPath:   outputPath,
+		OutputFormat: "h264",
+	}
+
+	q.runWorker(context.Background(), task)
+
+	row, err := db.GetTaskByID(context.Background(), taskID)
+	require.NoError(t, err)
+	require.Equal(t, "cancelled", row.Status, "vanished input must cancel, not fail")
+	require.Contains(t, row.Error.String, "vanished", "cancel reason should say why")
+	require.NoFileExists(t, outputPath, "ffmpeg must not run at all")
 }
