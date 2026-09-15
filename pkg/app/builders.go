@@ -45,6 +45,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/snapshot"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -176,11 +177,14 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		}
 		rh := remotelog.New(cfg.RemoteLog.Endpoint, cfg.RemoteLog.Format, logLevel, m)
 		deps.remoteLogH = rh
-		// Wrap slog.Default() with multi-handler to fan out to both stdout and remote
+		// Wrap slog.Default() with multi-handler to fan out to both stdout and
+		// remote. slogx.SetDefault (not a bare slog.SetDefault): the swap
+		// rewrites stdlib log output, which would silently discard an armed
+		// stdlib-log throttle (#813).
 		if current := slog.Default(); current.Handler() != nil {
-			slog.SetDefault(slog.New(remotelog.MultiHandler(current.Handler(), rh)))
+			slogx.SetDefault(slog.New(remotelog.MultiHandler(current.Handler(), rh)))
 		} else {
-			slog.SetDefault(slog.New(rh))
+			slogx.SetDefault(slog.New(rh))
 		}
 	}
 

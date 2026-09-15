@@ -416,6 +416,13 @@ func validateConfigDetails(cfg *Config) error {
 	if cfg.Observability.LogFormat != "json" && cfg.Observability.LogFormat != "text" {
 		return fmt.Errorf("observability.log_format invalid: %s (must be json/text)", cfg.Observability.LogFormat)
 	}
+	// Validate observability.stdlog_throttle: "off" or a non-negative Go
+	// duration ("0s" = disabled, like "off").
+	if v := cfg.Observability.StdlogThrottle; v != "off" {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err != nil || d < 0 {
+			return fmt.Errorf("observability.stdlog_throttle invalid: %s (must be a Go duration like 10s/1m, or off)", v)
+		}
+	}
 
 	// Validate remote_log
 	if cfg.RemoteLog.Enabled {

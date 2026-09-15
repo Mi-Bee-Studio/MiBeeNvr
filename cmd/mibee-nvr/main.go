@@ -18,6 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/pkg/app"
 )
@@ -100,9 +101,11 @@ func main() {
 	// Dispatch CLI subcommands before flag parsing
 	dispatchSubcommand(os.Args)
 
-	// Setup initial logger before config load
+	// Setup initial logger before config load. slogx.SetDefault (not a bare
+	// slog.SetDefault) re-arms the stdlib-log throttle on every swap — a bare
+	// swap rewrites log output and would silently discard it (#813).
 	logger := authmw.SetupLogger("info", "text")
-	slog.SetDefault(logger)
+	slogx.SetDefault(logger)
 
 	flag.Parse()
 
@@ -148,9 +151,13 @@ func main() {
 		slog.Warn("failed to write last-good config snapshot", "error", err)
 	}
 
-	// Reconfigure logger with user settings after config load
+	// Reconfigure logger with user settings after config load. The throttle
+	// interval is config-driven (observability.stdlog_throttle, default 10s,
+	// "off"/"0s" disables) — arming here, after the final logger swap, keeps
+	// it effective for the whole runtime.
 	logger = authmw.SetupLogger(cfg.Observability.LogLevel, cfg.Observability.LogFormat)
-	slog.SetDefault(logger)
+	slogx.SetDefault(logger)
+	slogx.InstallStdLogThrottle(cfg.Observability.StdlogThrottleDuration())
 
 	// Process memory self-discipline (#756): conservative GOMEMLIMIT before
 	// any manager starts allocating — env GOMEMLIMIT wins natively.

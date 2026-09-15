@@ -202,6 +202,9 @@ func applyConfigDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.Observability.LogFormat) == "" {
 		cfg.Observability.LogFormat = "text"
 	}
+	if strings.TrimSpace(cfg.Observability.StdlogThrottle) == "" {
+		cfg.Observability.StdlogThrottle = "10s"
+	}
 	// EnablePprof defaults to false (zero value)
 	// Version
 	// HLS defaults
