@@ -253,11 +253,12 @@ func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID st
 	// the debounce folding a segment ~4s before its task landed. Young
 	// segments on transcode-enabled cameras defer unconditionally; the
 	// backfill sweep folds them once the window expires.
-	graceRail := r.cameraTranscodeEnabled != nil && r.cameraTranscodeEnabled(cameraID)
+	grace := r.resolveRollingConfig(cameraID).TranscodeGrace
+	graceRail := grace > 0 && r.cameraTranscodeEnabled != nil && r.cameraTranscodeEnabled(cameraID)
 	var young func(endedAt time.Time) bool
 	if graceRail {
 		now := time.Now()
-		young = func(endedAt time.Time) bool { return now.Sub(endedAt) < transcodeGraceWindow }
+		young = func(endedAt time.Time) bool { return now.Sub(endedAt) < grace }
 	}
 	if len(pendingTranscode) > 0 || graceRail {
 		free := make([]pendingSegmentInfo, 0, len(mp4Segs))

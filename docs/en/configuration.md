@@ -919,6 +919,20 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Description**: Rolling-merge debounce — after a segment closes, wait this long for more segments before merging, batching fragments from frequent disconnects
 - **Example**: `"500ms"`, `"2s"`, `"5s"`
 
+### `merge.transcode_grace`
+- **Type**: string (Go duration)
+- **Default**: `"90s"`
+- **Options**: any Go duration (e.g. `"90s"`, `"2m"`); `"off"` / `"0s"` disables the rail
+- **Description**: Age rail deferring fresh-segment folding on transcode-enabled
+  cameras. The transcode task row lands seconds AFTER segment completion (the
+  subscriber probes media first) — folding inside that window deletes the
+  source and cancels the task, losing the H.264 version. Fresh segments defer
+  for the window; the 10-minute backfill sweep folds them once their task
+  finished. Raise it on slow disks / big fleets (slower probing); `"off"`
+  restores the pre-#811 fold-immediately behavior. Per-camera override via the
+  camera's `merge` block
+- **Example**: `"90s"`, `"2m"`, `"off"`
+
 ### `merge.rolling_window`
 - **Type**: string
 - **Default**: `"1h"`

@@ -37,9 +37,10 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 	// segments on transcode-enabled cameras defer by age, same as the live
 	// dispatch.
 	var youngTranscode func(endedAt time.Time) bool
-	if r.cameraTranscodeEnabled != nil && r.cameraTranscodeEnabled(cameraID) {
+	if grace := r.resolveRollingConfig(cameraID).TranscodeGrace; grace > 0 &&
+		r.cameraTranscodeEnabled != nil && r.cameraTranscodeEnabled(cameraID) {
 		now := time.Now()
-		youngTranscode = func(endedAt time.Time) bool { return now.Sub(endedAt) < transcodeGraceWindow }
+		youngTranscode = func(endedAt time.Time) bool { return now.Sub(endedAt) < grace }
 	}
 
 	// Group recordings by natural-hour window for batch merging.

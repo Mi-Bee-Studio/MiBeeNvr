@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,6 +134,11 @@ type RollingMergeConfig struct {
 	Debounce    time.Duration // delay after segment close before merging (batches rapid segments)
 	Window      time.Duration // bucket size (default 1h = natural-hour alignment)
 	MinDuration time.Duration // target minimum merged duration (default 5m); shorter → merge_quality='short'
+
+	// TranscodeGrace is the transcode-hold age rail (#810 TOCTOU): fresh
+	// segments on transcode-enabled cameras defer folding this long because
+	// their transcode task row lands seconds after completion. 0 = rail off.
+	TranscodeGrace time.Duration
 
 	// Bucket retention (#764): how many parameter-set-keyed buckets a camera
 	// keeps live (BucketRetain, default 2 = the HD/SD quality pair) and how
@@ -334,16 +340,6 @@ func segmentAudioKey(info *SegmentInfo) string {
 // per hour instead of one, which is fine (the timeline UI groups by hour).
 const bucketSizeLimit = 3 << 30 // 3 GiB
 
-// transcodeGraceWindow is how long a segment on a transcode-enabled camera
-// stays deferred from folding by AGE, regardless of task visibility (#810
-// TOCTOU follow-up). Production timing: segment completed → merge debounce
-// folded it 1s later → the transcode task row landed ~4s after that (the
-// transcode subscriber probes media before inserting). 90s covers the
-// task-creation latency with an order of magnitude of margin; the 10m
-// backfill sweep folds whatever the window leaves behind (task ran, or the
-// camera gave up on transcoding that segment).
-const transcodeGraceWindow = 90 * time.Second
-
 // NewRollingMergeCoordinator creates a new coordinator.
 // It does NOT start subscribing until Start() is called.
 
@@ -471,6 +467,18 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 	if effective.RollingDebounce != "" {
 		if d, err := time.ParseDuration(effective.RollingDebounce); err == nil && d > 0 {
 			cfg.Debounce = d
+		}
+	}
+	// Transcode-hold age rail (#810). ApplyDefaults materializes "90s";
+	// resolve inline for configs that skipped it (tests, hand-built values).
+	// "off"/"0s" parse to a zero duration = rail off (pre-#811 folding).
+	graceStr := strings.TrimSpace(effective.TranscodeGrace)
+	if graceStr == "" {
+		graceStr = "90s"
+	}
+	if graceStr != "off" {
+		if d, err := time.ParseDuration(graceStr); err == nil && d > 0 {
+			cfg.TranscodeGrace = d
 		}
 	}
 	if effective.RollingWindow != "" {

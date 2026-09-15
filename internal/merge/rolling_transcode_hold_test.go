@@ -32,6 +32,7 @@ func TestRollingMerge_BatchHoldsPendingTranscodeSegments(t *testing.T) {
 		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
+		TranscodeGrace:  "90s",
 	}
 	mt := metrics.NewMetrics()
 	r := NewRollingMergeCoordinator(
@@ -231,6 +232,7 @@ func TestRollingMerge_GraceWindowExpiresOnTranscodeCameras(t *testing.T) {
 		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
+		TranscodeGrace:  "90s",
 	}
 	r := NewRollingMergeCoordinator(
 		env.db, env.store,
@@ -247,7 +249,10 @@ func TestRollingMerge_GraceWindowExpiresOnTranscodeCameras(t *testing.T) {
 		return map[string]bool{}
 	}
 
-	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	// Anchor mid-PREVIOUS-hour (~45min old, same natural-hour window for
+	// both): a trunc(hour)+5m anchor is young again when the test runs in
+	// the first minutes of an hour (~12%/run flake, #815 review ②).
+	base := time.Now().UTC().Truncate(time.Hour).Add(-45 * time.Minute)
 	p1 := createAndInsertSegment(t, env, "rec-g1", cameraID, base)
 	p2 := createAndInsertSegment(t, env, "rec-g2", cameraID, base.Add(2*time.Minute))
 
@@ -283,11 +288,13 @@ func TestBackfillCamera_HoldsYoungSegmentsOnTranscodeCameras(t *testing.T) {
 		return map[string]bool{}
 	}
 
-	// Two young segments (ended ~5s ago) + one old control segment.
-	now := time.Now().UTC().Truncate(time.Hour)
+	// Two young segments (ended ~5s ago) + two old controls anchored
+	// mid-PREVIOUS-hour (same natural-hour window; the trunc(hour)+10m
+	// anchor is young again early in the hour — ~21%/run flake, #815
+	// review ②).
 	young1 := createAndInsertSegment(t, env, "rec-by1", cameraID, time.Now().UTC().Add(-35*time.Second))
 	young2 := createAndInsertSegment(t, env, "rec-by2", cameraID, time.Now().UTC().Add(-34*time.Second))
-	oldBase := now.Add(10 * time.Minute)
+	oldBase := time.Now().UTC().Truncate(time.Hour).Add(-45 * time.Minute)
 	old1 := createAndInsertSegment(t, env, "rec-bo1", cameraID, oldBase)
 	old2 := createAndInsertSegment(t, env, "rec-bo2", cameraID, oldBase.Add(30*time.Second))
 
@@ -303,4 +310,51 @@ func TestBackfillCamera_HoldsYoungSegmentsOnTranscodeCameras(t *testing.T) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// TestRollingMerge_TranscodeGraceOffFoldsImmediately pins the operator
+// exit (#815 review ①): merge.transcode_grace "0s"/"off" disables the age
+// rail entirely — a transcode camera folds fresh segments right away,
+// exactly the pre-#811 behavior, for operators who prefer it.
+func TestRollingMerge_TranscodeGraceOffFoldsImmediately(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+		TranscodeGrace:  "off",
+	}
+	mt := metrics.NewMetrics()
+	r := NewRollingMergeCoordinator(
+		env.db, env.store,
+		func() config.MergeConfig { return cfg },
+		func(string) *config.MergeConfig { return nil },
+		nil,
+		func() []config.CameraConfig { return nil },
+		mt,
+		bus,
+	)
+	cameraID := "cam-grace-off"
+	r.cameraTranscodeEnabled = func(string) bool { return true }
+	r.pendingTranscodePaths = func(context.Context, string) map[string]bool {
+		return map[string]bool{}
+	}
+
+	now := time.Now().UTC()
+	p1 := createAndInsertSegment(t, env, "rec-o1", cameraID, now.Add(-35*time.Second))
+	p2 := createAndInsertSegment(t, env, "rec-o2", cameraID, now.Add(-32*time.Second))
+
+	require.NoError(t, r.Start(context.Background()))
+	defer r.Stop()
+
+	publishSegmentCompleted(t, bus, cameraID, "rec-o1", p1, "h264", now.Add(-35*time.Second))
+	publishSegmentCompleted(t, bus, cameraID, "rec-o2", p2, "h264", now.Add(-32*time.Second))
+
+	// Rail off: young segments fold straight into the batch.
+	require.Eventually(t, func() bool {
+		return !fileExists(p1) && !fileExists(p2)
+	}, 10*time.Second, 100*time.Millisecond, "transcode_grace off must fold young segments immediately")
 }
