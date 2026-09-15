@@ -1961,5 +1961,6 @@
   "cameras.motionSubIdle": "not subscribed",
   "cameras.motionSubEvents": "events",
   "cameras.motionSubLastEvent": "last event",
+  "cameras.motionSubLastRaw": "last raw",
   "cameras.motionSubError": "last error"
 }

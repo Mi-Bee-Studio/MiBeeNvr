@@ -14,6 +14,7 @@
     state?: string;
     event_count?: number;
     last_event_at?: string;
+    last_event?: string;
     last_error?: string;
     consecutive_poll_errors?: number;
   }
@@ -64,6 +65,11 @@
     <span>· {t('cameras.motionSubEvents')}: {status.event_count ?? 0}</span>
     {#if lastEvent}
       <span>· {t('cameras.motionSubLastEvent')}: {lastEvent}</span>
+    {/if}
+    {#if status?.last_event}
+      <span class="truncate max-w-[240px]" title={status.last_event}>
+        · {t('cameras.motionSubLastRaw')}: {status.last_event}
+      </span>
     {/if}
   {/if}
   {#if status?.last_error}
