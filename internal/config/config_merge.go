@@ -23,7 +23,12 @@ type MergeConfig struct {
 	// the effective value; never dereference the pointer directly.
 	RollingEnabled  *bool  `yaml:"rolling_enabled" json:"rolling_enabled"`
 	RollingDebounce string `yaml:"rolling_debounce" json:"rolling_debounce"` // e.g. "500ms", "2s"
-	RollingWindow   string `yaml:"rolling_window" json:"rolling_window"`     // e.g. "1h", "30m"
+	// TranscodeGrace is how long a transcode-enabled camera's fresh segments
+	// defer folding by AGE (#810 TOCTOU): the transcode task row lands
+	// seconds after segment completion, so the pending-task hold cannot see
+	// it yet. "0s"/"off" disables the rail (pre-#811 folding). default "90s"
+	TranscodeGrace string `yaml:"transcode_grace" json:"transcode_grace"`
+	RollingWindow  string `yaml:"rolling_window" json:"rolling_window"` // e.g. "1h", "30m"
 
 	// RollingMinDuration is the target minimum duration for merged recordings.
 	// Merged files shorter than this are marked merge_quality='short' and can be
@@ -122,6 +127,9 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.RollingDebounce != "" {
 		result.RollingDebounce = perCamera.RollingDebounce
+	}
+	if perCamera.TranscodeGrace != "" {
+		result.TranscodeGrace = perCamera.TranscodeGrace
 	}
 	if perCamera.RollingWindow != "" {
 		result.RollingWindow = perCamera.RollingWindow

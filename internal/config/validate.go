@@ -484,6 +484,14 @@ func validateConfigDetails(cfg *Config) error {
 			return fmt.Errorf("merge min_segments_to_merge must be at least 2")
 		}
 	}
+
+	// Validate merge.transcode_grace: "off" or a positive Go duration
+	// ("0s" = disabled, like "off").
+	if v := cfg.Merge.TranscodeGrace; v != "off" {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err != nil || d < 0 {
+			return fmt.Errorf("merge.transcode_grace invalid: %s (must be a Go duration like 90s/2m, or off)", v)
+		}
+	}
 	// Validate rolling merge config when enabled (it defaults ON, so this runs
 	// for typical deployments). Mirrors the best-effort parse logic in
 	// rolling.resolveRollingConfig but fails fast at config load instead of

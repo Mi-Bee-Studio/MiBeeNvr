@@ -244,22 +244,41 @@ func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID st
 	// production: flapping H.265 camera, 54 consecutive exit-254s). Deferred
 	// segments are left untouched for the backfill sweep (10m cadence,
 	// min_segment_age rail), by which time their tasks have finished.
+	var pendingTranscode map[string]bool
 	if r.pendingTranscodePaths != nil {
-		if pending := r.pendingTranscodePaths(ctx, cameraID); len(pending) > 0 {
-			free := make([]pendingSegmentInfo, 0, len(mp4Segs))
-			deferred := 0
-			for _, seg := range mp4Segs {
-				if pending[seg.filePath] {
-					deferred++
-					continue
-				}
-				free = append(free, seg)
+		pendingTranscode = r.pendingTranscodePaths(ctx, cameraID)
+	}
+	// Age rail (#810 TOCTOU follow-up): a task row that has not been
+	// inserted yet is invisible to the pending-set — production showed
+	// the debounce folding a segment ~4s before its task landed. Young
+	// segments on transcode-enabled cameras defer unconditionally; the
+	// backfill sweep folds them once the window expires.
+	grace := r.resolveRollingConfig(cameraID).TranscodeGrace
+	graceRail := grace > 0 && r.cameraTranscodeEnabled != nil && r.cameraTranscodeEnabled(cameraID)
+	var young func(endedAt time.Time) bool
+	if graceRail {
+		now := time.Now()
+		young = func(endedAt time.Time) bool { return now.Sub(endedAt) < grace }
+	}
+	if len(pendingTranscode) > 0 || graceRail {
+		free := make([]pendingSegmentInfo, 0, len(mp4Segs))
+		deferred := 0
+		byAge := 0
+		for _, seg := range mp4Segs {
+			if pendingTranscode[seg.filePath] {
+				deferred++
+				continue
 			}
-			if deferred > 0 {
-				rollingLogger.Info("deferring segments with pending transcode tasks (backfill merges them after the tasks finish)",
-					"camera_id", cameraID, "deferred", deferred, "processing", len(free))
-				mp4Segs = free
+			if young != nil && young(seg.endedAt) {
+				byAge++
+				continue
 			}
+			free = append(free, seg)
+		}
+		if deferred > 0 || byAge > 0 {
+			rollingLogger.Info("deferring segments with pending transcode tasks (backfill merges them after the tasks finish)",
+				"camera_id", cameraID, "deferred", deferred, "young", byAge, "processing", len(free))
+			mp4Segs = free
 		}
 	}
 
