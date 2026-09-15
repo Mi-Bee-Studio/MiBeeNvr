@@ -117,6 +117,7 @@ xiaomi:
 observability:
   log_level: "info"              # 日志级别: debug, info, warn, error
   log_format: "text"             # 日志格式: json 或 text
+  stdlog_throttle: "10s"         # 三方库 stdlib 日志限流间隔（"off" 关闭）
   enable_pprof: false            # 启用 pprof 调试端点
 version: "1.0"
 ```
@@ -1301,6 +1302,15 @@ auto_discover:
 - **选项**: `"json"`, `"text"`
 - **描述**: 日志输出格式
 - **示例**: `"json"`, `"text"`
+
+### `observability.stdlog_throttle`
+- **类型**: string（Go duration）
+- **默认**: `"10s"`
+- **选项**: 任意 Go duration（如 `"10s"`、`"1m"`、`"250ms"`）；`"off"` / `"0s"` 关闭限流
+- **描述**: 对三方协议库经标准库 logger 输出的高频噪声行（如 gortsplib 的
+  `N RTP packets lost`，每流每秒可达数行）限流为每间隔 1 行——不限流时曾两次
+  挤爆 24MB journald 配额，冲掉排查现场。放行的行仍按结构化格式（slog Info）输出
+- **示例**: `"10s"`、`"1m"`、`"off"`
 
 ### `observability.enable_pprof`
 - **类型**: boolean
