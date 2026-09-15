@@ -18,6 +18,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/pkg/app"
 )
@@ -103,6 +104,11 @@ func main() {
 	// Setup initial logger before config load
 	logger := authmw.SetupLogger("info", "text")
 	slog.SetDefault(logger)
+
+	// Rate-limit third-party stdlib-log spam (gortsplib "N RTP packets
+	// lost", several/second/stream) — it evicted the unit's own journald
+	// history twice on production (#803/#711 forensics windows).
+	slogx.ThrottleStdLog(os.Stderr, 10*time.Second)
 
 	flag.Parse()
 
