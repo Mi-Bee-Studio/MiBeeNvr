@@ -245,6 +245,22 @@ type ObservabilityConfig struct {
 	LogLevel    string `yaml:"log_level"`    // default "info"
 	LogFormat   string `yaml:"log_format"`   // default "text"
 	EnablePprof bool   `yaml:"enable_pprof"` // default false
+	// StdlogThrottle rate-limits noisy third-party stdlib-log lines (gortsplib
+	// "N RTP packets lost") to 1 per interval — they otherwise flood small
+	// journald quotas. Go duration string; "off"/"0s" disables. default "10s"
+	StdlogThrottle string `yaml:"stdlog_throttle"`
+}
+
+// StdlogThrottleDuration resolves StdlogThrottle to a duration; empty, "off",
+// "0s" and unparseable values all mean disabled (0). Validate rejects
+// unparseable values on the config path, so the fallback only guards direct
+// programmatic uses.
+func (o ObservabilityConfig) StdlogThrottleDuration() time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(o.StdlogThrottle))
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
 }
 
 // RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
