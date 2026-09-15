@@ -1960,5 +1960,6 @@
   "cameras.motionSubIdle": "未订阅",
   "cameras.motionSubEvents": "已收事件",
   "cameras.motionSubLastEvent": "最近事件",
+  "cameras.motionSubLastRaw": "原始事件",
   "cameras.motionSubError": "最近错误"
 }
