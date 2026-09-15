@@ -17,6 +17,25 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
+// goroutineCheckStatus maps a goroutine count to the health-check verdict,
+// scaling the tripwire with the camera fleet: production shows ~85
+// goroutines per recording camera (recorder + streamhub + reconnect loops),
+// so a fixed 1000 flagged every >=12-camera box as permanently unhealthy
+// (M5: 16 cameras idle at ~1365; the Docker HEALTHCHECK inherits the
+// verdict). 300 base + 150 per camera keeps the line at roughly 2x steady
+// state for any deployment size — small boxes keep their sensitivity, a
+// runaway leak still crosses it.
+func goroutineCheckStatus(count, numCameras int) (status, message string) {
+	if numCameras < 0 {
+		numCameras = 0
+	}
+	threshold := 300 + 150*numCameras
+	if count > threshold {
+		return "error", fmt.Sprintf("%d goroutines (threshold: %d, cameras: %d)", count, threshold, numCameras)
+	}
+	return "ok", fmt.Sprintf("%d goroutines (threshold: %d, cameras: %d)", count, threshold, numCameras)
+}
+
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := HealthResponse{Checks: make(map[string]HealthCheck)}
 	hasWarning, hasError := false, false
@@ -74,19 +93,26 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Checks["storage"] = HealthCheck{Status: "error", Message: "storage not configured"}
 		hasError = true
 	}
-	// Goroutine check
-	numGoroutines := runtime.NumGoroutine()
-	if numGoroutines > 1000 {
-		resp.Checks["goroutines"] = HealthCheck{Status: "error", Message: fmt.Sprintf("%d goroutines (threshold: 1000)", numGoroutines)}
-		hasError = true
-	} else {
-		resp.Checks["goroutines"] = HealthCheck{Status: "ok", Message: fmt.Sprintf("%d goroutines", numGoroutines)}
+	// Camera health aggregation (computed first: the goroutine tripwire
+	// scales with the fleet size).
+	var camHealth *CameraHealthSummary
+	if h.healthMgr != nil {
+		camHealth = h.aggregateCameraHealth(r)
+		resp.Cameras = camHealth
 	}
 
-	// Camera health aggregation (influences overall status)
+	// Goroutine check — threshold scales with the camera fleet.
+	numCameras := 0
+	if camHealth != nil {
+		numCameras = camHealth.Total
+	}
+	gStatus, gMessage := goroutineCheckStatus(runtime.NumGoroutine(), numCameras)
+	resp.Checks["goroutines"] = HealthCheck{Status: gStatus, Message: gMessage}
+	if gStatus == "error" {
+		hasError = true
+	}
+
 	if h.healthMgr != nil {
-		camHealth := h.aggregateCameraHealth(r)
-		resp.Cameras = camHealth
 		if camHealth != nil {
 			if camHealth.Error > 0 {
 				hasWarning = true // any camera in error = degraded
@@ -251,7 +277,10 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Goroutines must be < 5000
+	// Goroutines must be < 5000 — deliberately NOT the fleet-scaled
+	// tripwire from /api/health: readiness answers "is the process
+	// fundamentally broken", where transient stream-setup spikes must not
+	// flap the probe.
 	numGoroutines := runtime.NumGoroutine()
 	if numGoroutines >= 5000 {
 		checks["goroutines"] = HealthCheck{Status: "error", Message: fmt.Sprintf("%d goroutines (threshold: 5000)", numGoroutines)}
