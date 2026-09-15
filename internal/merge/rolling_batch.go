@@ -20,6 +20,17 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 	const backfillBatchSize = 20 // small batches to yield lock to real-time events
 	batchPause := adaptiveBatchPause(len(recs), r.diskFreePercent())
 
+	// #810 (review follow-up): the live dispatch defers segments with
+	// pending transcode tasks — the backfill must inherit the same hold. A
+	// deep transcode backlog drains in minutes-to-tens-of-minutes while this
+	// sweep runs every ~10m, so folding here would still delete sources
+	// before their tasks run. Queried ONCE, before any merge lock is taken;
+	// per segment it costs one set lookup.
+	var pendingTranscode map[string]bool
+	if r.pendingTranscodePaths != nil {
+		pendingTranscode = r.pendingTranscodePaths(ctx, cameraID)
+	}
+
 	// Group recordings by natural-hour window for batch merging.
 	// Segments in different hours go into separate merge batches.
 	type windowBatch struct {
@@ -52,10 +63,14 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 			}
 			batch := win.recs[i:endIdx]
 
-			// Filter missing files.
+			// Filter missing files, and segments whose transcode task is
+			// still pending (#810) — they stay pending for a later sweep.
 			var valid []*model.Recording
 			for _, rec := range batch {
 				if _, err := os.Stat(rec.FilePath); os.IsNotExist(err) {
+					continue
+				}
+				if pendingTranscode[rec.FilePath] {
 					continue
 				}
 				valid = append(valid, rec)

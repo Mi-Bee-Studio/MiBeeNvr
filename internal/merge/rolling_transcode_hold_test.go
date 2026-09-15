@@ -17,6 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -108,4 +109,50 @@ func TestRollingMerge_BatchStillMergesWithoutPendingTranscode(t *testing.T) {
 	// Batch merge consumed both rows (frequent-disconnect path intact).
 	waitForRecordingGone(t, env, cameraID, "rec-c1")
 	waitForRecordingGone(t, env, cameraID, "rec-c2")
+}
+
+// Backfill side of #810 (review follow-up): backfillMP4's valid filter only
+// dropped missing files — a deferred segment whose transcode task is still
+// queued would be folded by the 10-minute sweep anyway (a deep backlog
+// drains in minutes-to-tens-of-minutes, far beyond min_segment_age). The
+// hold must reach the backfill path too.
+func TestBackfillCamera_HoldsPendingTranscodeSegments(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true)}
+	cameraID := "backfill-hold"
+	cameras := []config.CameraConfig{{ID: cameraID}}
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
+
+	baseTime := time.Now().UTC().Truncate(time.Hour).Add(15 * time.Minute)
+	paths := make([]string, 3)
+	for i := range 3 {
+		recID := "hold-" + string(rune('a'+i))
+		startedAt := baseTime.Add(time.Duration(i) * 30 * time.Second)
+		paths[i] = createAndInsertSegment(t, env, recID, cameraID, startedAt)
+	}
+	held := paths[1]
+
+	r.pendingTranscodePaths = func(ctx context.Context, camID string) map[string]bool {
+		require.Equal(t, cameraID, camID)
+		return map[string]bool{held: true}
+	}
+
+	merged, err := r.BackfillCamera(context.Background(), cameraID, false)
+	require.NoError(t, err)
+
+	// The free pair merged; the held segment must survive untouched for its
+	// transcode task, and its row must stay unmerged for the next sweep.
+	require.FileExists(t, held, "backfill must not fold a segment whose transcode task is pending")
+	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cameraID, Limit: 100})
+	require.NoError(t, err)
+	for _, rec := range recs {
+		if rec.FilePath == held {
+			require.NotEqual(t, model.MergeStatusMerged, rec.MergeStatus,
+				"held segment must stay pending for the next sweep")
+		}
+	}
+	require.GreaterOrEqual(t, merged, 1, "unheld segments must still backfill-merge")
 }
