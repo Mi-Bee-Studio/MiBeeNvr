@@ -2,6 +2,7 @@ package camera
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -191,6 +192,16 @@ func (cm *CameraManager) onONVIFEvent(cameraID string, evt onvif.ONVIFEvent) {
 	// (b) MotionAlarm → recorder.
 	ma, ok := onvif.ParseMotionAlarm(evt)
 	if !ok {
+		// A MotionAlarm-shaped event that failed to parse is the one failure
+		// mode that can hide a device-side encoding mismatch (e.g. a vendor
+		// sending State=active instead of true): the true-leg silently never
+		// fires and "device emits nothing" is indistinguishable from "emits
+		// something we drop" (#711). WARN with the raw payload; other topics
+		// are simply not our contract and stay silent.
+		if strings.Contains(strings.ToLower(evt.Topic), "motionalarm") {
+			logger.Warn("motionalarm event unparseable — State missing or not a bool",
+				"camera_id", cameraID, "topic", evt.Topic, "data", fmt.Sprintf("%v", evt.Data))
+		}
 		return
 	}
 	if !ma.Active {

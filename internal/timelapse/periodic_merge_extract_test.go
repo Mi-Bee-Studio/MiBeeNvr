@@ -263,8 +263,15 @@ func TestPeriodicMerge_DeleteSkippedForOpenWindow(t *testing.T) {
 	t.Helper()
 	dataDir := t.TempDir()
 	cameraID := "test-cam"
-	// Reference time INSIDE the window being merged (natural-day: today).
-	windowStart := time.Now().Truncate(time.Hour)
+	// Reference time INSIDE the window being merged (natural-day: today),
+	// pinned to noon UTC: near UTC midnight the refTime.Add(time.Minute)
+	// below hops into the next UTC day, the window aligns to a day the
+	// fixtures don't live in, and the preview assert flakes (observed
+	// 2026-09-14T23:59:50Z on main; second midnight flake in this test
+	// after the local-vs-UTC label one further down).
+	now := time.Now().UTC()
+	refTime := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)
+	windowStart := refTime.Add(-time.Hour)
 
 	dirA := filepath.Join(dataDir, "segA")
 	writeMJPEGDirFixture(t, dirA, windowStart, 60, time.Second, 0)
@@ -285,7 +292,6 @@ func TestPeriodicMerge_DeleteSkippedForOpenWindow(t *testing.T) {
 	mgr.SetSourceRecordingDeleter(deleter)
 
 	// Merge a window whose end is in the FUTURE (today, still recording).
-	refTime := time.Now()
 	if err := mgr.Run(context.Background(), cameraID, refTime.Add(time.Minute)); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}

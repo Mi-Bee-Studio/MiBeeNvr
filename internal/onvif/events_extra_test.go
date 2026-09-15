@@ -183,3 +183,31 @@ func TestEventSubscriberRenewalLoop(t *testing.T) {
 	sub.StopAll(context.Background())
 	require.False(t, sub.IsSubscribed("cam-renew"))
 }
+
+// TestStatusReportsLastEventRawSummary pins the #711 field-debugging surface:
+// the diagnostics snapshot must carry the raw topic+data of the most recent
+// polled event, so "the device emits State=active (unparseable)" is visible
+// from the /onvif-events endpoint without touching log levels — the parse
+// failure path is otherwise completely silent.
+func TestStatusReportsLastEventRawSummary(t *testing.T) {
+	srv := startEventMockServer(t, time.Now().Add(2*time.Hour))
+
+	client := NewClient(srv.URL, "admin", "pw")
+	require.NoError(t, client.Connect(context.Background()))
+
+	sub := NewEventSubscriber(client.client,
+		WithEventCallback(func(ONVIFEvent) {}),
+		WithPollInterval(30*time.Millisecond),
+		WithPullTimeout(500*time.Millisecond),
+	)
+	require.NoError(t, sub.Subscribe(context.Background(), "cam-raw"))
+
+	require.Eventually(t, func() bool {
+		st := sub.Status("cam-raw")
+		return strings.Contains(st.LastEvent, "MotionAlarm") &&
+			strings.Contains(st.LastEvent, "State=active") &&
+			strings.Contains(st.LastEvent, "source.Source=CAM")
+	}, 5*time.Second, 20*time.Millisecond, "last_event never surfaced the raw poll payload")
+
+	sub.StopAll(context.Background())
+}
