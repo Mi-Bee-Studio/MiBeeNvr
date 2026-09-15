@@ -38,7 +38,7 @@ func TestStdLogThrottle_RateLimitsRTPLostOnly(t *testing.T) {
 	th := &stdLogThrottle{out: out, match: rtpLostPattern, minInterval: time.Second}
 
 	// Burst of 20 matched lines → exactly one passes.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		n, err := th.Write([]byte("23 RTP packets lost\n"))
 		require.NoError(t, err)
 		require.Equal(t, len("23 RTP packets lost\n"), n)
@@ -46,7 +46,7 @@ func TestStdLogThrottle_RateLimitsRTPLostOnly(t *testing.T) {
 	require.Equal(t, 1, strings.Count(out.String(), "RTP"), "only the first matched line may pass within the interval")
 
 	// Unmatched lines flow untouched, even in bursts.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		_, err := th.Write([]byte("some other library message\n"))
 		require.NoError(t, err)
 	}
