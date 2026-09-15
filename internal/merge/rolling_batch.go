@@ -30,6 +30,17 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 	if r.pendingTranscodePaths != nil {
 		pendingTranscode = r.pendingTranscodePaths(ctx, cameraID)
 	}
+	// Age rail (#810 TOCTOU follow-up): the sweep's hold query can run before
+	// a just-completed segment's transcode task row lands (the transcode
+	// subscriber probes media before inserting) and
+	// ListPendingSegmentsForRolling has no minimum-age filter — young
+	// segments on transcode-enabled cameras defer by age, same as the live
+	// dispatch.
+	var youngTranscode func(endedAt time.Time) bool
+	if r.cameraTranscodeEnabled != nil && r.cameraTranscodeEnabled(cameraID) {
+		now := time.Now()
+		youngTranscode = func(endedAt time.Time) bool { return now.Sub(endedAt) < transcodeGraceWindow }
+	}
 
 	// Group recordings by natural-hour window for batch merging.
 	// Segments in different hours go into separate merge batches.
@@ -71,6 +82,10 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 					continue
 				}
 				if pendingTranscode[rec.FilePath] {
+					continue
+				}
+				if youngTranscode != nil && !rec.EndedAt.IsZero() &&
+					youngTranscode(rec.EndedAt) {
 					continue
 				}
 				valid = append(valid, rec)

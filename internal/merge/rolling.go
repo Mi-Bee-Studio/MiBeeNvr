@@ -220,6 +220,16 @@ type RollingMergeCoordinator struct {
 	// the constructor wires the DB-backed default.
 	pendingTranscodePaths func(ctx context.Context, cameraID string) map[string]bool
 
+	// cameraTranscodeEnabled reports whether a camera has transcoding on
+	// (#810 TOCTOU follow-up): the pending-task hold cannot see a task row
+	// that has not been inserted yet — production (2026-09-15, cam-3bbed0e1)
+	// showed the 500ms merge debounce folding a segment ~4s BEFORE its
+	// transcode task row landed. On transcode-enabled cameras, segments
+	// younger than transcodeGraceWindow defer by AGE, independent of task
+	// visibility. nil = rail off; the constructor wires the config-backed
+	// default.
+	cameraTranscodeEnabled func(cameraID string) bool
+
 	eventBus  *event.EventBus
 	eventCh   chan event.Event
 	cancelSub context.CancelFunc
@@ -324,6 +334,16 @@ func segmentAudioKey(info *SegmentInfo) string {
 // per hour instead of one, which is fine (the timeline UI groups by hour).
 const bucketSizeLimit = 3 << 30 // 3 GiB
 
+// transcodeGraceWindow is how long a segment on a transcode-enabled camera
+// stays deferred from folding by AGE, regardless of task visibility (#810
+// TOCTOU follow-up). Production timing: segment completed → merge debounce
+// folded it 1s later → the transcode task row landed ~4s after that (the
+// transcode subscriber probes media before inserting). 90s covers the
+// task-creation latency with an order of magnitude of margin; the 10m
+// backfill sweep folds whatever the window leaves behind (task ran, or the
+// camera gave up on transcoding that segment).
+const transcodeGraceWindow = 90 * time.Second
+
 // NewRollingMergeCoordinator creates a new coordinator.
 // It does NOT start subscribing until Start() is called.
 
@@ -351,7 +371,25 @@ func NewRollingMergeCoordinator(
 		eventCh:        make(chan event.Event, 128), // buffered: bursts of segment closes
 	}
 	r.pendingTranscodePaths = dbPendingTranscodePaths(db)
+	r.cameraTranscodeEnabled = camerasTranscodeEnabled(cameras)
 	return r
+}
+
+// camerasTranscodeEnabled derives the per-camera transcoding switch from the
+// live camera-config snapshot the coordinator already holds.
+func camerasTranscodeEnabled(cameras func() []config.CameraConfig) func(cameraID string) bool {
+	if cameras == nil {
+		return nil
+	}
+	return func(cameraID string) bool {
+		for _, c := range cameras() {
+			if c.ID == cameraID {
+				// Transcoding is a pointer block — absent means disabled.
+				return c.Transcoding != nil && c.Transcoding.Enabled
+			}
+		}
+		return false
+	}
 }
 
 // dbPendingTranscodePaths is the production pendingTranscodePaths: the file
