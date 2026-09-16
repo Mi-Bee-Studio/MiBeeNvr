@@ -338,6 +338,30 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 		}
 	}
 
+	// Vanished-source tolerance (production 2026-09-16, 3×/6h): the legacy
+	// MergeManager pass and this engine race over the same pending pool — a
+	// source deleted between ParseSegment (batch head) and the merge fails
+	// the WHOLE run with ENOENT (20-segment batches), leaving the survivors
+	// pending for a retry that hit the same collision. A vanished file means
+	// another engine already folded it: drop it and merge the survivors.
+	if len(recs) > 1 {
+		liveRecs := make([]*model.Recording, 0, len(recs))
+		liveInfos := make([]*SegmentInfo, 0, len(infos))
+		for i, rec := range recs {
+			if _, err := os.Stat(rec.FilePath); os.IsNotExist(err) {
+				rollingLogger.Info("run merge: source vanished under us (folded by another merge engine), skipping",
+					"camera_id", cameraID, "recording_id", rec.ID)
+				continue
+			}
+			liveRecs = append(liveRecs, rec)
+			liveInfos = append(liveInfos, infos[i])
+		}
+		if len(liveRecs) < 2 {
+			return 0, nil
+		}
+		recs, infos = liveRecs, liveInfos
+	}
+
 	sourcePaths := make([]string, 0, len(recs))
 	for _, rec := range recs {
 		sourcePaths = append(sourcePaths, rec.FilePath)
