@@ -795,6 +795,12 @@ receives video-segment pushes and writes AI events back to the NVR.
 - **Default**: `60`
 - **Description**: Consider the consumer offline after this many seconds without a heartbeat.
 
+### `vision.drop_mark_timeout_s`
+- **Type**: int
+- **Default**: `60`
+- **Description**: Budget (seconds) for marking recordings from a heartbeat drops report. Marking is detached from the client connection — it finishes even after the consumer hangs up (marking is idempotent, finishing beats failing halfway; abandoning on disconnect makes the consumer retry the same report forever) — but is bounded by this budget so a pathological report cannot pin the goroutine. Raise it for reports carrying hundreds of ranges or contention-heavy disks; upper bound 3600.
+- **Example**: `60`, `300`
+
 ### `vision.push_mode`
 - **Type**: string
 - **Default**: `"notify"`

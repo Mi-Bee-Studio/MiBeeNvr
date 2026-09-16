@@ -98,6 +98,11 @@ func validateConfigDetails(cfg *Config) error {
 			return fmt.Errorf("trigger.webhook.replay_window_s must be >= 0, got %d", cfg.Trigger.Webhook.ReplayWindowS)
 		}
 	}
+	// Vision drop 标记预算(秒):负值是无意义配置;超过一小时说明配错了
+	// 字段(那是心跳预算的量级,不是标记预算)。
+	if cfg.Vision.DropMarkTimeoutSecs < 0 || cfg.Vision.DropMarkTimeoutSecs > 3600 {
+		return fmt.Errorf("vision.drop_mark_timeout_secs must be between 0 and 3600, got %d", cfg.Vision.DropMarkTimeoutSecs)
+	}
 	// Vision 多实例:名称唯一必填;URL 合法 http(s)(legacy url 字段为空的
 	// "default 合成"不算显式实例,跳过 URL 检查)。
 	visionNames := make(map[string]bool, len(cfg.Vision.Instances)+1)
