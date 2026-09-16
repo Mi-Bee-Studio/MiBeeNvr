@@ -396,6 +396,9 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Vision.HeartbeatTimeoutSecs <= 0 {
 		cfg.Vision.HeartbeatTimeoutSecs = 60
 	}
+	if cfg.Vision.DropMarkTimeoutSecs <= 0 {
+		cfg.Vision.DropMarkTimeoutSecs = 60
+	}
 	if cfg.Vision.PushMode == "" {
 		cfg.Vision.PushMode = "notify"
 	}

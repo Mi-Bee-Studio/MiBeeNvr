@@ -188,6 +188,20 @@ func (c *Coordinator) Health() *HealthTracker {
 	return NewHealthTracker(c.cfg().HeartbeatTimeoutSecs)
 }
 
+// DropMarkTimeout 返回心跳 drops 报告的标记预算 (#823)。标记与客户端
+// 连接脱钩(消费端断连后仍跑完——幂等标记下跑完胜过跑一半),但须有界。
+// 预算随报告规模与 WAL 争用伸缩:数百 range × 饱和磁盘的部署上调。
+// config 侧 ApplyDefaults 已物化默认 60;此处对 <=0(测试/程序化拼装的
+// 配置)兜底同值——与 StdlogThrottleDuration 的 fail-safe 先例一致。
+func (c *Coordinator) DropMarkTimeout() time.Duration {
+	if c.cfg != nil {
+		if v := c.cfg().DropMarkTimeoutSecs; v > 0 {
+			return time.Duration(v) * time.Second
+		}
+	}
+	return 60 * time.Second
+}
+
 // RecordHeartbeat 按 API Key 名把心跳归因到实例(找不到 key 关联或匿名 →
 // default 实例,兼容旧版消费者)。返回实例名;"" 表示当前没有任何实例
 // (集成未启用)。

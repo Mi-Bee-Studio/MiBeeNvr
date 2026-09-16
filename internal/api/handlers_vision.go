@@ -92,7 +92,7 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 			// forever (production 2026-09-16: bursts of 189 consecutive
 			// "context canceled" failures). Marking is idempotent (terminal-
 			// state guard in the DB layer), so finishing beats failing.
-			markCtx, markCancel := dropMarkContext(r)
+			markCtx, markCancel := h.dropMarkContext(r)
 			if marked := vision.ApplyDrops(markCtx, h.db, body.Drops); marked > 0 {
 				if tracker, _ := h.visionCoordinator.InstanceByName(insName); tracker != nil {
 					tracker.NoteMarkedDrops(marked)
@@ -109,10 +109,11 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 
 // dropMarkContext detaches drop-report marking from the client connection:
 // WithoutCancel keeps request-scoped values (trace_id) while dropping the
-// cancellation chain, bounded by a deadline so a pathological report cannot
-// pin the goroutine forever.
-func dropMarkContext(r *http.Request) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
+// cancellation chain, bounded by vision.drop_mark_timeout_s so a pathological
+// report cannot pin the goroutine forever (default 60s; the budget scales
+// with report size and WAL contention — #823 review red line).
+func (h *Handler) dropMarkContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), h.visionCoordinator.DropMarkTimeout())
 }
 
 // handleVisionStatus 返回 Vision 集成的当前状态(供 NVR Web UI 展示)。
