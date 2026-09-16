@@ -46,11 +46,32 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 | Live streams | `GET /api/cameras/{id}/stream.flv`, HLS / WebRTC / MJPEG endpoints | pull streams (FLV needs BasicAuth) |
 | Recordings | `GET /api/recordings` | list / filter / paginate |
 | Playback | `GET /api/cameras/{id}/playback/playlist.m3u8` | per-recording playback |
-| AI events | `POST /api/ai/events`, `GET /api/ai/events`, `GET /api/ai/stats` | write from external AI backends (Bearer) and query stats |
+| AI events | `POST /api/ai/events`, `GET /api/ai/events`, `GET /api/ai/events/{id}`, `GET /api/ai/events/{id}/snapshot` | write from external AI backends (Bearer), query stats; event snapshot images |
 | Settings | `GET/PUT /api/settings`, `POST /api/settings/api-keys` | runtime config and keys |
 | Storage | `GET /api/storage`, `GET/POST/DELETE /api/storage/candidates`, `POST /api/storage/migrate` | storage stats, candidate volumes, batch migration ([Storage Management](storage-management.md)) |
 | GB28181 | `/api/gb28181/*` | devices / channels / PTZ / playback |
 | System | `GET /api/version`, `GET /api/capabilities`, `GET /api/stats` | version / capabilities / stats |
+
+## AI Event Snapshots
+
+`GET /api/ai/events/{id}/snapshot` returns the event's snapshot JPEG (the
+`snapshot_path` reported with the event by the external AI backend, relative to
+the NVR storage root — sidecar deployments write into
+`<storage root>/ai-snapshots/`):
+
+```bash
+curl -o snap.jpg "http://localhost:9090/api/ai/events/7141/snapshot?api_key=mbv_…"
+```
+
+- Auth matches the other AI query endpoints (BasicAuth session / Bearer API key /
+  `?api_key=`)
+- **Every "no image available" case is a plain 404** (no `snapshot_path`, file
+  missing, unknown event) so clients can fall back to a placeholder without
+  parsing the error body; an invalid id returns 400
+- Responses carry `Cache-Control: private, max-age=86400` (snapshots are
+  immutable) and support Range and conditional requests
+- Paths resolve inside the storage root; traversal or outside-root paths are
+  rejected with 404 — files outside the storage tree are never served
 
 ## SSE Event Stream
 
