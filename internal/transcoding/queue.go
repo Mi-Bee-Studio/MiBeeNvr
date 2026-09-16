@@ -140,11 +140,13 @@ func (q *TranscodeQueue) Enqueue(ctx context.Context, task *storage.TranscodeTas
 			switch task.OutputFormat {
 			case "h264":
 				if q.caps.H264EncoderType == EncoderSoftware {
-					slog.Warn("software H.264 encoding on ARM — transcoding will be slow", "arch", q.caps.Arch)
+					warnSoftwareEncoderOnce("libx264:"+q.caps.Arch,
+						"software H.264 encoding on ARM — transcoding will be slow", "arch", q.caps.Arch)
 				}
 			case "h265":
 				if q.caps.H265EncoderType == EncoderSoftware {
-					slog.Warn("software H.265 encoding on ARM — transcoding will be slow", "arch", q.caps.Arch)
+					warnSoftwareEncoderOnce("libx265:"+q.caps.Arch,
+						"software H.265 encoding on ARM — transcoding will be slow", "arch", q.caps.Arch)
 				}
 			}
 		}
