@@ -244,9 +244,12 @@ func (r *RollingMergeCoordinator) mergeSegments(ctx context.Context, cameraID st
 	// production: flapping H.265 camera, 54 consecutive exit-254s). Deferred
 	// segments are left untouched for the backfill sweep (10m cadence,
 	// min_segment_age rail), by which time their tasks have finished.
-	var pendingTranscode map[string]bool
-	if r.pendingTranscodePaths != nil {
-		pendingTranscode = r.pendingTranscodePaths(ctx, cameraID)
+	pendingTranscode, holdOK := r.queryTranscodeHold(ctx, cameraID)
+	if !holdOK {
+		// Fail-closed (#810 fold-site follow-up): the hold set is unknowable —
+		// fold nothing this round; the next dispatch or backfill sweep picks
+		// the segments up.
+		return
 	}
 	// Age rail (#810 TOCTOU follow-up): a task row that has not been
 	// inserted yet is invisible to the pending-set — production showed
@@ -396,6 +399,18 @@ func (r *RollingMergeCoordinator) acquireMergeLockBlocking(ctx context.Context, 
 // mergeOneSegment merges a single segment into the camera's current window bucket.
 func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendingSegmentInfo) error {
 	mergeStart := time.Now()
+
+	// Fold-site re-check (#810 residual, M5 2026-09-16): the dispatch filter
+	// holds pending-task segments, but production showed folds executing with
+	// tasks pending for minutes — whatever let the segment past the filter
+	// (query failure failing open, snapshot age, rail expiry mid-merge), the
+	// deletion moment is the last line of defense. Inside the per-camera
+	// merge lock, the task row is the authoritative state.
+	if held, ok := r.queryTranscodeHold(ctx, seg.cameraID); !ok || held[seg.filePath] {
+		rollingLogger.Info("fold re-check: segment still held by a pending/running transcode task",
+			"camera_id", seg.cameraID, "recording_id", seg.recordingID)
+		return nil
+	}
 
 	// Parse the new segment (moov-only, skips mdat).
 	newInfo, err := ParseSegment(seg.filePath)

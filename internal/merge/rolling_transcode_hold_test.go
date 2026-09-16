@@ -11,6 +11,7 @@ package merge
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -50,9 +51,9 @@ func TestRollingMerge_BatchHoldsPendingTranscodeSegments(t *testing.T) {
 	p1 := createAndInsertSegment(t, env, "rec-h1", cameraID, base)
 	p2 := createAndInsertSegment(t, env, "rec-h2", cameraID, base.Add(2*time.Minute))
 
-	r.pendingTranscodePaths = func(ctx context.Context, camID string) map[string]bool {
+	r.pendingTranscodePaths = func(ctx context.Context, camID string) (map[string]bool, error) {
 		require.Equal(t, cameraID, camID)
-		return map[string]bool{p2: true}
+		return map[string]bool{p2: true}, nil
 	}
 
 	require.NoError(t, r.Start(context.Background()))
@@ -96,7 +97,9 @@ func TestRollingMerge_BatchStillMergesWithoutPendingTranscode(t *testing.T) {
 		mt,
 		bus,
 	)
-	r.pendingTranscodePaths = func(context.Context, string) map[string]bool { return nil }
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return nil, nil
+	}
 
 	require.NoError(t, r.Start(context.Background()))
 	defer r.Stop()
@@ -137,9 +140,9 @@ func TestBackfillCamera_HoldsPendingTranscodeSegments(t *testing.T) {
 	}
 	held := paths[1]
 
-	r.pendingTranscodePaths = func(ctx context.Context, camID string) map[string]bool {
+	r.pendingTranscodePaths = func(ctx context.Context, camID string) (map[string]bool, error) {
 		require.Equal(t, cameraID, camID)
-		return map[string]bool{held: true}
+		return map[string]bool{held: true}, nil
 	}
 
 	merged, err := r.BackfillCamera(context.Background(), cameraID, false)
@@ -192,8 +195,8 @@ func TestRollingMerge_HoldsYoungSegmentsOnTranscodeCameras(t *testing.T) {
 	r.cameraTranscodeEnabled = func(string) bool { return true }
 	// The race window: NO task rows exist yet — the empty hold set is exactly
 	// what the production interleaving presents to the merge.
-	r.pendingTranscodePaths = func(context.Context, string) map[string]bool {
-		return map[string]bool{}
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return map[string]bool{}, nil
 	}
 
 	now := time.Now().UTC()
@@ -245,8 +248,8 @@ func TestRollingMerge_GraceWindowExpiresOnTranscodeCameras(t *testing.T) {
 	)
 	cameraID := "cam-grace-old"
 	r.cameraTranscodeEnabled = func(string) bool { return true }
-	r.pendingTranscodePaths = func(context.Context, string) map[string]bool {
-		return map[string]bool{}
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return map[string]bool{}, nil
 	}
 
 	// Anchor mid-PREVIOUS-hour (~45min old, same natural-hour window for
@@ -284,8 +287,8 @@ func TestBackfillCamera_HoldsYoungSegmentsOnTranscodeCameras(t *testing.T) {
 	cameras := []config.CameraConfig{{ID: cameraID}}
 	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)
 	r.cameraTranscodeEnabled = func(string) bool { return true }
-	r.pendingTranscodePaths = func(context.Context, string) map[string]bool {
-		return map[string]bool{}
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return map[string]bool{}, nil
 	}
 
 	// Two young segments (ended ~5s ago) + two old controls anchored
@@ -339,8 +342,8 @@ func TestRollingMerge_TranscodeGraceOffFoldsImmediately(t *testing.T) {
 	)
 	cameraID := "cam-grace-off"
 	r.cameraTranscodeEnabled = func(string) bool { return true }
-	r.pendingTranscodePaths = func(context.Context, string) map[string]bool {
-		return map[string]bool{}
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return map[string]bool{}, nil
 	}
 
 	now := time.Now().UTC()
@@ -357,4 +360,196 @@ func TestRollingMerge_TranscodeGraceOffFoldsImmediately(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !fileExists(p1) && !fileExists(p2)
 	}, 10*time.Second, 100*time.Millisecond, "transcode_grace off must fold young segments immediately")
+}
+
+// --- #810 residual follow-up (M5 production 2026-09-16): fold-site re-check ---
+//
+// Production evidence (cam-3bbed0e1, flapping Xiaomi H.265): task 8538 sat
+// pending in the DB from 06:45:51 while its input segment folded at 06:47:40
+// (bucket-create site) and the queue cancelled the claim at 06:57:22 ("input
+// vanished"). Two seconds after the fold, a neighboring dispatch's hold query
+// DID see the pending set — the fold executed against a stale/empty hold
+// snapshot upstream of the deletion. Whatever the upstream miss (filter query
+// failure failing open, snapshot age, rail expiry mid-merge), the hold must be
+// re-asserted at the fold site itself, inside the merge lock, immediately
+// before the source file is deleted: never fold a path whose transcode task
+// is pending/running in the DB at fold time.
+
+func TestMergeOneSegment_FoldSiteRecheckHoldsSegment(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h"}
+	cameraID := "cam-recheck"
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, []config.CameraConfig{{ID: cameraID}})
+	r.cameraTranscodeEnabled = func(string) bool { return true }
+
+	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	path := createAndInsertSegment(t, env, "rec-r1", cameraID, base)
+	// The dispatch filter missed the task (any upstream cause) — the fold site
+	// must still see it: the task is pending in the DB RIGHT NOW.
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return map[string]bool{path: true}, nil
+	}
+
+	err := r.mergeOneSegment(context.Background(), pendingSegmentInfo{
+		recordingID: "rec-r1",
+		filePath:    path,
+		format:      "h264",
+		cameraID:    cameraID,
+		startedAt:   base,
+		endedAt:     base.Add(30 * time.Second),
+		fileSize:    1024,
+	})
+	require.NoError(t, err)
+	require.FileExists(t, path,
+		"fold site must not delete a segment whose transcode task is pending/running at fold time")
+}
+
+// A hold-query failure on a transcode-enabled camera must fail CLOSED: skip
+// the fold, leave the segment for the next sweep. The pre-fix behavior failed
+// open (nil hold set) and folded silently — unrecoverable for the queued task.
+func TestMergeOneSegment_HoldQueryErrorFailsClosedOnTranscodeCamera(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h"}
+	cameraID := "cam-failclosed"
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, []config.CameraConfig{{ID: cameraID}})
+	r.cameraTranscodeEnabled = func(string) bool { return true }
+
+	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	path := createAndInsertSegment(t, env, "rec-f1", cameraID, base)
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return nil, errors.New("sqlite: database is locked")
+	}
+
+	err := r.mergeOneSegment(context.Background(), pendingSegmentInfo{
+		recordingID: "rec-f1",
+		filePath:    path,
+		format:      "h264",
+		cameraID:    cameraID,
+		startedAt:   base,
+		endedAt:     base.Add(30 * time.Second),
+		fileSize:    1024,
+	})
+	require.NoError(t, err)
+	require.FileExists(t, path,
+		"hold-query failure on a transcode camera must defer the fold (fail-closed)")
+}
+
+// Control: the same query failure on a transcode-DISABLED camera ALSO defers
+// the fold — fail-closed is deliberately unconditional (the camera toggle is
+// a config-snapshot derivative and must not gate the safe default). The
+// segment folds on the next round once the query succeeds again.
+func TestMergeOneSegment_HoldQueryErrorDefersOnDisabledCameraToo(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h"}
+	cameraID := "cam-failopen-ok"
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, []config.CameraConfig{{ID: cameraID}})
+	r.cameraTranscodeEnabled = func(string) bool { return false }
+
+	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	path := createAndInsertSegment(t, env, "rec-f2", cameraID, base)
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return nil, errors.New("sqlite: database is locked")
+	}
+
+	err := r.mergeOneSegment(context.Background(), pendingSegmentInfo{
+		recordingID: "rec-f2",
+		filePath:    path,
+		format:      "h264",
+		cameraID:    cameraID,
+		startedAt:   base,
+		endedAt:     base.Add(30 * time.Second),
+		fileSize:    1024,
+	})
+	require.NoError(t, err)
+	require.FileExists(t, path,
+		"fail-closed is unconditional: any camera defers the fold on a hold-query error")
+}
+
+// Batch path: the fold site re-check drops held segments from the batch — the
+// held file survives, its row stays untouched, the free segments still merge.
+func TestMergeBatchMP4_FoldSiteRecheckDropsHeldSegments(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h"}
+	cameraID := "cam-batch-recheck"
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, []config.CameraConfig{{ID: cameraID}})
+	r.cameraTranscodeEnabled = func(string) bool { return true }
+
+	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	paths := make([]string, 3)
+	recs := make([]*model.Recording, 3)
+	for i := range 3 {
+		recID := "rec-b" + string(rune('0'+i))
+		startedAt := base.Add(time.Duration(i) * 30 * time.Second)
+		paths[i] = createAndInsertSegment(t, env, recID, cameraID, startedAt)
+		recs[i] = &model.Recording{
+			ID:        recID,
+			CameraID:  cameraID,
+			FilePath:  paths[i],
+			Format:    model.FormatH264,
+			StartedAt: startedAt,
+			EndedAt:   startedAt.Add(30 * time.Second),
+			Duration:  30,
+		}
+	}
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return map[string]bool{paths[1]: true}, nil
+	}
+
+	n, err := r.mergeBatchMP4(context.Background(), cameraID, recs)
+	require.NoError(t, err)
+	require.Equal(t, 2, n, "the two unheld segments must merge")
+	require.FileExists(t, paths[1], "held segment must survive the batch fold")
+	require.True(t, !fileExists(paths[0]) && !fileExists(paths[2]),
+		"unheld segments must fold normally")
+}
+
+// Wired dispatch path: a persistent hold-query failure on a transcode camera
+// must stop the live fold entirely (fail-closed) — the segments stay for the
+// next sweep instead of racing the transcode queue blind.
+func TestRollingMerge_HoldQueryErrorDefersFold(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+		TranscodeGrace:  "off",
+	}
+	cameraID := "cam-dispatch-failclosed"
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, []config.CameraConfig{{ID: cameraID}})
+	r.cameraTranscodeEnabled = func(string) bool { return true }
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return nil, errors.New("sqlite: database is locked")
+	}
+
+	// Old segments (ended minutes ago, grace off) — every rail is expired;
+	// only the fail-closed query error can save them.
+	base := time.Now().UTC().Truncate(time.Hour).Add(-45 * time.Minute)
+	p1 := createAndInsertSegment(t, env, "rec-d1", cameraID, base)
+	p2 := createAndInsertSegment(t, env, "rec-d2", cameraID, base.Add(2*time.Minute))
+
+	require.NoError(t, r.Start(context.Background()))
+	defer r.Stop()
+
+	publishSegmentCompleted(t, bus, cameraID, "rec-d1", p1, "h264", base)
+	publishSegmentCompleted(t, bus, cameraID, "rec-d2", p2, "h264", base.Add(2*time.Minute))
+
+	require.Never(t, func() bool {
+		return !fileExists(p1) || !fileExists(p2)
+	}, 5*time.Second, 100*time.Millisecond,
+		"hold-query failure must defer the fold on transcode cameras (fail-closed)")
 }

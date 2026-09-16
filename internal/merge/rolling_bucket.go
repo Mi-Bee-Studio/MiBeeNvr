@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -95,6 +96,8 @@ func (r *RollingMergeCoordinator) createBucket(
 	}
 
 	// Delete the source segment file (DB already committed).
+	rollingLogger.Info("fold deleted source", "site", "bucket-create",
+		"camera_id", seg.cameraID, "recording_id", seg.recordingID, "file", filepath.Base(seg.filePath))
 	r.store.DeleteFile(seg.filePath)
 	os.Remove(seg.filePath + ".g711") // ambient archive sidecar (#496)
 
@@ -255,6 +258,8 @@ func (r *RollingMergeCoordinator) appendToBucket(
 	}
 
 	// Delete the source segment file.
+	rollingLogger.Info("fold deleted source", "site", "bucket-append",
+		"camera_id", seg.cameraID, "recording_id", seg.recordingID, "file", filepath.Base(seg.filePath))
 	r.store.DeleteFile(seg.filePath)
 	os.Remove(seg.filePath + ".g711") // ambient archive sidecar (#496)
 
