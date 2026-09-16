@@ -15,10 +15,19 @@ var pathPrefixes = []string{
 }
 
 // normalizePath replaces dynamic ID segments in known route prefixes with {id}.
+// The id segment is REPLACED, not prefixed: the suffix after it must survive
+// verbatim so multi-segment paths keep their real shape
+// (/api/recordings/123/ai-status → /api/recordings/{id}/ai-status). The
+// pre-fix version kept the real id after {id}, corrupting every multi-segment
+// path in request logs (MiBeeVision ai-status incident, 2026-09-16).
 func normalizePath(path string) string {
 	for _, prefix := range pathPrefixes {
 		if strings.HasPrefix(path, prefix) {
-			return prefix[:len(prefix)-1] + "/{id}" + path[len(prefix)-1:]
+			rest := path[len(prefix):]
+			if idx := strings.Index(rest, "/"); idx >= 0 {
+				return prefix + "{id}" + rest[idx:]
+			}
+			return prefix + "{id}"
 		}
 	}
 	return path

@@ -282,8 +282,8 @@ Update the AI processing status of a recording. Used by MiBeeVision to report pr
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `status` | string | Yes | AI status: `pending`, `processing`, `done`, `failed`, or `skipped` |
-| `error` | string | No | Error message if status is `failed` |
+| `ai_status` | string | Yes | AI status: `pending`, `processing`, `completed`, `failed`, or `skipped` |
+| `ai_error` | string | No | Reason when status is `failed`/`skipped` |
 
 **Request:**
 ```bash
@@ -291,7 +291,7 @@ curl -H "Authorization: Bearer mbv_your_api_key_here" \
   -X PATCH \
   -H "Content-Type: application/json" \
   -d '{
-    "status": "done"
+    "ai_status": "completed"
   }' \
   "http://localhost:9090/api/recordings/1704123456789012345/ai-status"
 ```
@@ -299,8 +299,8 @@ curl -H "Authorization: Bearer mbv_your_api_key_here" \
 **Response:** `200 OK`
 ```json
 {
-  "recording_id": "1704123456789012345",
-  "ai_status": "done"
+  "id": "1704123456789012345",
+  "ai_status": "completed"
 }
 ```
 

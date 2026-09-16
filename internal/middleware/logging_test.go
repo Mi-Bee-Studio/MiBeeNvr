@@ -175,3 +175,30 @@ func TestRequestLoggerLogsPostRequest(t *testing.T) {
 	require.Contains(t, buf.String(), "method=POST")
 	require.Contains(t, buf.String(), "status=201")
 }
+
+// TestNormalizePathMultiSegment pins the segment-REPLACEMENT semantics: the
+// dynamic id segment is swapped for {id} and the suffix must survive verbatim.
+// The pre-fix implementation PREPENDED {id} and kept the real id
+// (/api/recordings/123/ai-status → "/api/recordings/{id}/123/ai-status"),
+// corrupting every multi-segment recording/camera path in request logs and
+// actively misdirecting production diagnostics (MiBeeVision ai-status
+// incident, 2026-09-16: the logged path suggested an unsubstituted client
+// template while the client's URL was in fact correct).
+func TestNormalizePathMultiSegment(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+	cases := []struct{ in, want string }{
+		{"/api/recordings/123456789", "/api/recordings/{id}"},
+		{"/api/recordings/123456789/ai-status", "/api/recordings/{id}/ai-status"},
+		{"/api/recordings/123456789/download", "/api/recordings/{id}/download"},
+		{"/api/recordings/123456789/timelapse-frames/batch", "/api/recordings/{id}/timelapse-frames/batch"},
+		{"/api/cameras/cam-abc", "/api/cameras/{id}"},
+		{"/api/cameras/cam-abc/timeline/gaps", "/api/cameras/{id}/timeline/gaps"},
+		{"/api/recordings/", "/api/recordings/{id}"},
+		{"/api/health", "/api/health"},
+		{"/api/recordings/daily-summary", "/api/recordings/{id}"},
+	}
+	for _, c := range cases {
+		require.Equal(t, c.want, normalizePath(c.in), "normalizePath(%q)", c.in)
+	}
+}
