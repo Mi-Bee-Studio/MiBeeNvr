@@ -553,3 +553,105 @@ func TestRollingMerge_HoldQueryErrorDefersFold(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond,
 		"hold-query failure must defer the fold on transcode cameras (fail-closed)")
 }
+
+// --- #817 follow-up (M5 production 2026-09-16, round 2): two residual gaps ---
+//
+// cam-3bbed0e1 is DB-managed (absent from the yaml camera list): the task
+// creator resolves it against GLOBAL transcoding (enabled) and keeps creating
+// tasks, while the coordinator's per-camera-block-only lookup said "disabled"
+// and turned the age rail OFF — and the fold-site re-check ran at
+// mergeOneSegment ENTRY, with the merge+replace+delete taking seconds AFTER
+// it (production: task pending 10:46:00.4, source deleted 10:46:04.2, the
+// re-check itself ran ~2s BEFORE the task landed). Two fixes: (a) the rail
+// follows the task creator's resolution via builders wiring, (b) the hold is
+// re-asserted at the DELETION moment — a task landing mid-merge keeps its
+// source file (the bucket output is already committed; the retained file is
+// reclaimed by the orphan sweep after the task finishes).
+
+// (b) entry re-check misses a task that lands DURING the merge — the
+// deletion moment must re-assert the hold and keep the source file.
+func TestMergeOneSegment_DeletionMomentRecheckKeepsFileForLateTask(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h"}
+	cameraID := "cam-late-task"
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, []config.CameraConfig{{ID: cameraID}})
+	r.cameraTranscodeEnabled = func(string) bool { return true }
+
+	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	path := createAndInsertSegment(t, env, "rec-l1", cameraID, base)
+	// Call #1 (entry re-check): no task yet. Call #2 (deletion moment): the
+	// task landed while the merge was running — exactly the production race.
+	calls := 0
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		calls++
+		if calls >= 2 {
+			return map[string]bool{path: true}, nil
+		}
+		return map[string]bool{}, nil
+	}
+
+	err := r.mergeOneSegment(context.Background(), pendingSegmentInfo{
+		recordingID: "rec-l1",
+		filePath:    path,
+		format:      "h264",
+		cameraID:    cameraID,
+		startedAt:   base,
+		endedAt:     base.Add(30 * time.Second),
+		fileSize:    1024,
+	})
+	require.NoError(t, err)
+	require.FileExists(t, path,
+		"a task landing mid-merge must keep its source file at the deletion moment")
+}
+
+// (a) rail semantics for DB-managed cameras: a camera absent from the yaml
+// snapshot with GLOBAL transcoding enabled must defer young segments — pinned
+// via the same resolution the task creator uses (builders wires
+// cfg.ResolveTranscodingConfig; this test drives it through the exported
+// setter).
+func TestRollingMerge_HoldsYoungSegmentsOnGlobalOnlyTranscodeCameras(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:  boolPtr(true),
+		RollingDebounce: "50ms",
+		RollingWindow:   "1h",
+	}
+	mt := metrics.NewMetrics()
+	r := NewRollingMergeCoordinator(
+		env.db, env.store,
+		func() config.MergeConfig { return cfg },
+		func(string) *config.MergeConfig { return nil },
+		nil,
+		func() []config.CameraConfig { return nil }, // DB-managed camera: not in yaml
+		mt,
+		bus,
+	)
+	cameraID := "cam-global-only"
+	// Same shape builders wires: the task creator's resolution (global
+	// fallback for cameras absent from the yaml list).
+	r.SetCameraTranscodeEnabled(func(string) bool { return true })
+	r.pendingTranscodePaths = func(context.Context, string) (map[string]bool, error) {
+		return map[string]bool{}, nil
+	}
+
+	now := time.Now().UTC()
+	p1 := createAndInsertSegment(t, env, "rec-g1", cameraID, now.Add(-35*time.Second))
+	p2 := createAndInsertSegment(t, env, "rec-g2", cameraID, now.Add(-32*time.Second))
+
+	require.NoError(t, r.Start(context.Background()))
+	defer r.Stop()
+
+	publishSegmentCompleted(t, bus, cameraID, "rec-g1", p1, "h264", now.Add(-35*time.Second))
+	publishSegmentCompleted(t, bus, cameraID, "rec-g2", p2, "h264", now.Add(-32*time.Second))
+
+	require.Never(t, func() bool {
+		return !fileExists(p1) || !fileExists(p2)
+	}, 5*time.Second, 100*time.Millisecond,
+		"young segments on a global-only transcode camera must defer (rail follows the task creator's resolution)")
+}
