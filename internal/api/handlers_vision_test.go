@@ -5,6 +5,7 @@ package api
 // values — only the health tracker matters here).
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -259,4 +260,48 @@ func TestVision_HeartbeatInstanceAttribution(t *testing.T) {
 	routes.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), `"instance":"b"`)
+}
+
+// TestVision_HeartbeatDropsSurviveClientDisconnect: the drop-report marking
+// must complete even when the consumer hangs up mid-request. Production
+// 2026-09-16: reports carrying 189 ranges take longer than the consumer's
+// HTTP timeout; the disconnect cancels r.Context(), every remaining UPDATE
+// fails with "context canceled", the ack never arrives, and the consumer
+// retries the SAME report forever (unmarked rows re-pushed → re-dropped →
+// re-reported). Marking is idempotent — finishing beats failing halfway.
+func TestVision_HeartbeatDropsSurviveClientDisconnect(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+	h.SetVisionCoordinator(vision.NewCoordinator(
+		func() config.VisionConfig { return config.VisionConfig{HeartbeatTimeoutSecs: 30} },
+		func() string { return store.RootDir() },
+		event.NewEventBus(4),
+		nil, nil,
+	))
+	routes := h.Routes()
+
+	base := time.Date(2026, 9, 2, 4, 0, 0, 0, time.UTC)
+	seedRecording(t, db, makeRecording("drop-disc", "cam-1", "mp4", base, false))
+
+	body := `{
+		"protocol": 2, "status": "healthy",
+		"drops": {"seq": 9, "ranges": [
+			{"camera_id":"cam-1","reason":"queue_full","count":1,
+			 "ids":["drop-disc"]}
+		]}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/vision/heartbeat", strings.NewReader(body))
+	// The client disconnects before the handler reaches the DB write.
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	cancel()
+
+	routes.ServeHTTP(httptest.NewRecorder(), req)
+
+	got, err := db.GetRecording(t.Context(), "drop-disc")
+	require.NoError(t, err)
+	require.Equal(t, "skipped", got.AIStatus,
+		"drop marking must survive client disconnect (detached, bounded context)")
 }
