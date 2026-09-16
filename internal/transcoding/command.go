@@ -2,7 +2,6 @@ package transcoding
 
 import (
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -132,7 +131,11 @@ func buildVideoEncoderArgs(opts TranscodeOptions, caps HardwareCapabilities) ([]
 	// the only option when v4l2m2m is listed but the device lacks encoding capability
 	// (e.g. Amlogic S905X3 meson-video-decoder only does decode, not encode).
 	if !forceSoftware && isARMArch(caps.Arch) && isSoftwareEncoder(encoder) && !isMJPEGInput(opts.InputCodec) {
-		slog.Warn("using software encoder on ARM — transcoding will be slow; no working hardware encoder found", "encoder", encoder, "arch", caps.Arch)
+		// Once per process (per encoder+arch): the fact is static for the
+		// process lifetime and per-task repetition flooded journals.
+		warnSoftwareEncoderOnce(encoder+":"+caps.Arch,
+			"using software encoder on ARM — transcoding will be slow; no working hardware encoder found",
+			"encoder", encoder, "arch", caps.Arch)
 	}
 
 	args = append(args, "-c:v", encoder)
