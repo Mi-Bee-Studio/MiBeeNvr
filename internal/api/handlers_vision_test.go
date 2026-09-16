@@ -5,6 +5,7 @@ package api
 // values — only the health tracker matters here).
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -259,4 +260,94 @@ func TestVision_HeartbeatInstanceAttribution(t *testing.T) {
 	routes.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), `"instance":"b"`)
+}
+
+// TestVision_HeartbeatDropsSurviveClientDisconnect: the drop-report marking
+// must complete even when the consumer hangs up mid-request. Production
+// 2026-09-16: reports carrying 189 ranges take longer than the consumer's
+// HTTP timeout; the disconnect cancels r.Context(), every remaining UPDATE
+// fails with "context canceled", the ack never arrives, and the consumer
+// retries the SAME report forever (unmarked rows re-pushed → re-dropped →
+// re-reported). Marking is idempotent — finishing beats failing halfway.
+func TestVision_HeartbeatDropsSurviveClientDisconnect(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+	h.SetVisionCoordinator(vision.NewCoordinator(
+		func() config.VisionConfig { return config.VisionConfig{HeartbeatTimeoutSecs: 30} },
+		func() string { return store.RootDir() },
+		event.NewEventBus(4),
+		nil, nil,
+	))
+	routes := h.Routes()
+
+	base := time.Date(2026, 9, 2, 4, 0, 0, 0, time.UTC)
+	seedRecording(t, db, makeRecording("drop-disc", "cam-1", "mp4", base, false))
+
+	body := `{
+		"protocol": 2, "status": "healthy",
+		"drops": {"seq": 9, "ranges": [
+			{"camera_id":"cam-1","reason":"queue_full","count":1,
+			 "ids":["drop-disc"]}
+		]}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/vision/heartbeat", strings.NewReader(body))
+	// The client disconnects before the handler reaches the DB write.
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	cancel()
+
+	routes.ServeHTTP(httptest.NewRecorder(), req)
+
+	got, err := db.GetRecording(t.Context(), "drop-disc")
+	require.NoError(t, err)
+	require.Equal(t, "skipped", got.AIStatus,
+		"drop marking must survive client disconnect (detached, bounded context)")
+}
+
+// TestVision_DropMarkContextUsesConfiguredTimeout pins the #823 review red
+// line: the drop-marking budget is operator-tunable (vision.drop_mark_timeout_s),
+// not a hardcoded 60s — its "right" value scales with report size and WAL
+// contention (hundreds of ranges on a saturated disk legitimately need more;
+// fast disks waste a long pinning budget). The deadline on the detached
+// context must reflect the coordinator's live config.
+func TestVision_DropMarkContextUsesConfiguredTimeout(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	h := TestHandler(db, store)
+	h.SetVisionCoordinator(vision.NewCoordinator(
+		func() config.VisionConfig {
+			return config.VisionConfig{HeartbeatTimeoutSecs: 30, DropMarkTimeoutSecs: 7}
+		},
+		func() string { return store.RootDir() },
+		event.NewEventBus(4),
+		nil, nil,
+	))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/vision/heartbeat", nil)
+	ctx, cancel := h.dropMarkContext(req)
+	defer cancel()
+
+	dl, ok := ctx.Deadline()
+	require.True(t, ok, "detached context must carry a deadline")
+	remaining := time.Until(dl)
+	require.Greater(t, remaining, 5*time.Second, "deadline should reflect the configured 7s budget")
+	require.LessOrEqual(t, remaining, 7*time.Second)
+
+	// Zero config (hand-built, defaults not applied) falls back to 60s —
+	// the StdlogThrottleDuration fail-safe precedent.
+	h2 := TestHandler(db, store)
+	h2.SetVisionCoordinator(vision.NewCoordinator(
+		func() config.VisionConfig { return config.VisionConfig{} },
+		func() string { return store.RootDir() },
+		event.NewEventBus(4),
+		nil, nil,
+	))
+	ctx2, cancel2 := h2.dropMarkContext(req)
+	defer cancel2()
+	dl2, ok2 := ctx2.Deadline()
+	require.True(t, ok2)
+	require.Greater(t, time.Until(dl2), 55*time.Second, "zero config must fall back to the 60s default")
 }

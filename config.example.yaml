@@ -322,6 +322,8 @@ observability:
 #       url: "http://192.168.1.50:9091" # (empty = ALL enabled instances).
 #       api_key_name: "lab"
 #   heartbeat_timeout_secs: 60          # Consider consumer offline after this long without a heartbeat
+#   drop_mark_timeout_s: 60             # Budget for marking recordings from a drops report (detached
+#                                       # from the client connection; bounded to avoid goroutine pinning)
 #   push_mode: "notify"                 # "notify" = tell consumer to fetch; "upload" = push video bytes
 #   skip_cameras:                       # Cameras never pushed (e.g. MJPEG/JPEG encodings the
 #     - "cam-mjpeg-0000"                # consumer cannot decode) — saves the upload bandwidth

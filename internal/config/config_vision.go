@@ -29,6 +29,12 @@ type VisionConfig struct {
 	// NVR 认为 Vision 不健康,暂停推送。默认 60。
 	HeartbeatTimeoutSecs int `yaml:"heartbeat_timeout_secs" json:"heartbeatTimeoutSecs"`
 
+	// DropMarkTimeoutSecs 心跳 drops 报告的标记预算(秒)。标记与客户端连接
+	// 脱钩(消费端断连后仍跑完——标记幂等,跑完胜过跑一半,断连即弃会让
+	// 消费端无限重试同一份报告),但须有界防病理报告钉死 goroutine。预算
+	// 随报告规模与 WAL 争用伸缩:数百 range × 饱和磁盘的部署可上调。默认 60。
+	DropMarkTimeoutSecs int `yaml:"drop_mark_timeout_secs" json:"dropMarkTimeoutSecs"`
+
 	// PushMode 推送模式:
 	//   "notify" — 仅发送 file_path,Vision 从共享文件系统直读(Sidecar 同主机部署,零拷贝)
 	//   "upload" — 发送压缩视频字节流(Remote 跨主机部署)

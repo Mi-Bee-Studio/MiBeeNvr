@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -83,17 +84,36 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.Drops != nil {
 		if h.db != nil {
-			if marked := vision.ApplyDrops(r.Context(), h.db, body.Drops); marked > 0 {
+			// Drop marking runs on a context detached from the client
+			// connection: a report can carry hundreds of ranges and marking
+			// them against a busy WAL outlasts the consumer's HTTP timeout —
+			// on disconnect r.Context() cancels, every remaining range fails,
+			// the ack never arrives, and the consumer retries the SAME report
+			// forever (production 2026-09-16: bursts of 189 consecutive
+			// "context canceled" failures). Marking is idempotent (terminal-
+			// state guard in the DB layer), so finishing beats failing.
+			markCtx, markCancel := h.dropMarkContext(r)
+			if marked := vision.ApplyDrops(markCtx, h.db, body.Drops); marked > 0 {
 				if tracker, _ := h.visionCoordinator.InstanceByName(insName); tracker != nil {
 					tracker.NoteMarkedDrops(marked)
 				}
 			}
+			markCancel()
 		}
 		// ack = "已收到并消费这份报告"。即使个别范围数据坏掉被跳过,
 		// 也回 ack——不让消费者对一份注定无法生效的报告无限重试。
 		resp["ack_drops"] = body.Drops.Seq
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// dropMarkContext detaches drop-report marking from the client connection:
+// WithoutCancel keeps request-scoped values (trace_id) while dropping the
+// cancellation chain, bounded by vision.drop_mark_timeout_s so a pathological
+// report cannot pin the goroutine forever (default 60s; the budget scales
+// with report size and WAL contention — #823 review red line).
+func (h *Handler) dropMarkContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), h.visionCoordinator.DropMarkTimeout())
 }
 
 // handleVisionStatus 返回 Vision 集成的当前状态(供 NVR Web UI 展示)。
