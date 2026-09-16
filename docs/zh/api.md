@@ -68,6 +68,20 @@ curl -o snap.jpg "http://localhost:9090/api/ai/events/7141/snapshot?api_key=mbv_
   条件请求
 - 路径在存储 root 内解析，穿越或根外路径一律 404——不会读到存储树之外的文件
 
+远程部署的外部 AI 后端无法直写 NVR 存储树时，先 POST 事件拿到 id，再把
+快照 JPEG 原始字节上传到同一资源路径（`Content-Type: image/jpeg`，API Key
+鉴权）：
+
+```bash
+curl -X POST -H "Authorization: Bearer mbv_…" -H "Content-Type: image/jpeg"   --data-binary @snap.jpg "http://localhost:9090/api/ai/events/7141/snapshot"
+```
+
+- 上限 4MB；非 JPEG 魔数返回 400；文件落地 `<存储根>/ai-snapshots/` 并回填
+  事件的 `snapshot_path`（原子写），成功后 GET 立即可服务
+- 同机（sidecar）部署无需上传——直接写 `ai-snapshots/` 子目录并在事件里带
+  相对路径即可，两种形态收敛到同一 GET 端点
+
+
 ## SSE 事件流
 
 `GET /api/events` 以 Server-Sent Events 推送 NVR 内部事件总线，`filter` 查询参数按主题前缀过滤：

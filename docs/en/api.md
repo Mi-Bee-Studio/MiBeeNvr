@@ -73,6 +73,22 @@ curl -o snap.jpg "http://localhost:9090/api/ai/events/7141/snapshot?api_key=mbv_
 - Paths resolve inside the storage root; traversal or outside-root paths are
   rejected with 404 — files outside the storage tree are never served
 
+Remote external AI backends that cannot write the NVR storage tree directly
+POST the event first, then upload the snapshot JPEG bytes to the same resource
+path (`Content-Type: image/jpeg`, API-key auth):
+
+```bash
+curl -X POST -H "Authorization: Bearer mbv_…" -H "Content-Type: image/jpeg"   --data-binary @snap.jpg "http://localhost:9090/api/ai/events/7141/snapshot"
+```
+
+- 4MB cap; non-JPEG bodies return 400; the file lands in
+  `<storage root>/ai-snapshots/` (atomic write) and the event's
+  `snapshot_path` is backfilled — GET serves it immediately afterwards
+- Sidecar (same-host) deployments need no upload — write the
+  `ai-snapshots/` subtree directly and reference the relative path in the
+  event; both shapes converge on the same GET endpoint
+
+
 ## SSE Event Stream
 
 `GET /api/events` streams the internal event bus over Server-Sent Events; the `filter` query parameter narrows by topic prefix:
