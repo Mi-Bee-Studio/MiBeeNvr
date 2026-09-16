@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -320,6 +322,115 @@ func (h *Handler) handleGetAIEventSnapshot(w http.ResponseWriter, r *http.Reques
 	http.ServeFile(w, r, path)
 }
 
+// maxAIEventSnapshotBytes caps a single snapshot upload (sanity guard
+// against misbehaving clients; a 1080p event JPEG is well under 1MB).
+const maxAIEventSnapshotBytes = 4 << 20
+
+// handleUploadAIEventSnapshot accepts the event's snapshot JPEG bytes from
+// an external AI backend (POST /api/ai/events/{id}/snapshot, API-key auth).
+// Remote deployments cannot write the NVR storage tree directly, so they
+// upload bytes here; the handler persists the file under
+// <storage root>/ai-snapshots/ and backfills the event's snapshot_path.
+func (h *Handler) handleUploadAIEventSnapshot(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
+		WriteError(w, http.StatusUnauthorized, "API key required for snapshot upload")
+		return
+	}
+
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid event ID")
+		return
+	}
+	evt, err := h.db.GetAIEvent(r.Context(), id)
+	if err != nil {
+		logger.Error("failed to get AI event", "error", err, "path", r.URL.Path)
+		WriteError(w, http.StatusInternalServerError, "failed to get AI event")
+		return
+	}
+	if evt == nil {
+		WriteError(w, http.StatusNotFound, "AI event not found")
+		return
+	}
+	if h.config == nil {
+		WriteError(w, http.StatusInternalServerError, "storage not configured")
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxAIEventSnapshotBytes+1))
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	if len(data) > maxAIEventSnapshotBytes {
+		WriteError(w, http.StatusRequestEntityTooLarge, "snapshot too large")
+		return
+	}
+	// JPEG 魔数嗅探（FF D8）：挡住误发的 JSON/文本体。
+	if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
+		WriteError(w, http.StatusBadRequest, "invalid JPEG data")
+		return
+	}
+
+	rel := filepath.ToSlash(filepath.Join("ai-snapshots",
+		fmt.Sprintf("%s_%d.jpg", sanitizeFileToken(evt.CameraID), id)))
+	root := h.config.Storage.RootDir
+	dir := filepath.Join(root, "ai-snapshots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logger.Error("failed to create snapshot dir", "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to store snapshot")
+		return
+	}
+	target := filepath.Join(root, filepath.FromSlash(rel))
+	tmp := target + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		logger.Error("failed to write snapshot", "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to store snapshot")
+		return
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		_ = os.Remove(tmp)
+		logger.Error("failed to finalize snapshot", "error", err)
+		WriteError(w, http.StatusInternalServerError, "failed to store snapshot")
+		return
+	}
+
+	if err := h.db.UpdateAIEventSnapshotPath(r.Context(), id, rel); err != nil {
+		logger.Error("failed to backfill snapshot path", "error", err, "id", id)
+		WriteError(w, http.StatusInternalServerError, "failed to record snapshot path")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":            id,
+		"snapshot_path": rel,
+		"bytes":         len(data),
+	})
+}
+
+// sanitizeFileToken keeps a free-form camera id usable as a filename chunk.
+func sanitizeFileToken(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "camera"
+	}
+	return out
+}
+
 // resolveWithinStorageRoot resolves relOrAbs under root, accepting both
 // storage-root-relative paths (the documented contract) and absolute paths
 // that already point inside the root (lenient for same-host integrators).
@@ -354,5 +465,7 @@ func (h *Handler) registerAIRoutes(r chi.Router) {
 	r.Get("/api/ai/events", h.handleListAIEvents)
 	r.Get("/api/ai/events/{id}", h.handleGetAIEvent)
 	r.Get("/api/ai/events/{id}/snapshot", h.handleGetAIEventSnapshot)
+	// 上传与读取同一资源路径（POST 写、GET 读）：远程部署的 Vision 推字节。
+	r.Post("/api/ai/events/{id}/snapshot", h.handleUploadAIEventSnapshot)
 	r.Get("/api/ai/stats", h.handleGetAIEventStats)
 }
