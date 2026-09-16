@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"time"
@@ -26,9 +27,11 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 	// sweep runs every ~10m, so folding here would still delete sources
 	// before their tasks run. Queried ONCE, before any merge lock is taken;
 	// per segment it costs one set lookup.
-	var pendingTranscode map[string]bool
-	if r.pendingTranscodePaths != nil {
-		pendingTranscode = r.pendingTranscodePaths(ctx, cameraID)
+	pendingTranscode, holdOK := r.queryTranscodeHold(ctx, cameraID)
+	if !holdOK {
+		// Fail-closed (#810 fold-site follow-up): skip this camera's sweep —
+		// folding blind races the transcode queue; the next sweep retries.
+		return 0, nil
 	}
 	// Age rail (#810 TOCTOU follow-up): the sweep's hold query can run before
 	// a just-completed segment's transcode task row lands (the transcode
@@ -179,6 +182,29 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 // audio from the whole output.
 // Returns the number of segments successfully merged.
 func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID string, recs []*model.Recording) (int, error) {
+	// Fold-site re-check (#810 residual): the dispatch/backfill filters hold
+	// pending-task segments, but their snapshots can go stale across the
+	// merge-lock wait or a long sweep — drop held segments HERE, at the
+	// deletion moment. Everything held stays untouched for the next sweep.
+	if held, ok := r.queryTranscodeHold(ctx, cameraID); ok {
+		free := make([]*model.Recording, 0, len(recs))
+		for _, rec := range recs {
+			if held[rec.FilePath] {
+				rollingLogger.Info("batch fold re-check: segment still held by a pending/running transcode task",
+					"camera_id", cameraID, "recording_id", rec.ID)
+				continue
+			}
+			free = append(free, rec)
+		}
+		recs = free
+	} else {
+		// Fail-closed: hold unknowable on a transcode camera — fold nothing.
+		return 0, nil
+	}
+	if len(recs) < 2 {
+		return 0, nil
+	}
+
 	// Parse all segments.
 	infos := make([]*SegmentInfo, 0, len(recs))
 	parsedRecs := make([]*model.Recording, 0, len(recs))
@@ -414,6 +440,8 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 
 	// Delete source files.
 	for _, path := range sourcePaths {
+		rollingLogger.Info("fold deleted source", "site", "batch-mp4",
+			"camera_id", cameraID, "file", filepath.Base(path))
 		r.store.DeleteFile(path)
 	}
 

@@ -217,14 +217,10 @@ type RollingMergeCoordinator struct {
 	nowFn func() time.Time
 
 	// pendingTranscodePaths reports the file paths of the camera's segments
-	// that currently have a queued or running transcode task (#810). The
-	// debounce batch path merges AND deletes its sources immediately, which
-	// races the sequential transcode queue (M5 production, flapping H.265
-	// camera: the batch folded every source before its task ran — 54
-	// consecutive exit-254s). Held segments take the per-segment bucket path
-	// instead, whose finalize window outlives the queue. nil = hold nothing;
-	// the constructor wires the DB-backed default.
-	pendingTranscodePaths func(ctx context.Context, cameraID string) map[string]bool
+	// with a queued or running transcode task, or an error when the hold set
+	// cannot be determined (#810 fold-site re-check). Callers must fail
+	// CLOSED on error for transcode-enabled cameras.
+	pendingTranscodePaths func(ctx context.Context, cameraID string) (map[string]bool, error)
 
 	// cameraTranscodeEnabled reports whether a camera has transcoding on
 	// (#810 TOCTOU follow-up): the pending-task hold cannot see a task row
@@ -392,15 +388,15 @@ func camerasTranscodeEnabled(cameras func() []config.CameraConfig) func(cameraID
 // paths of the camera's segments with a queued or running transcode task
 // (#810). Fail-open — on query error it returns nil (hold nothing), and the
 // batch path behaves exactly as before.
-func dbPendingTranscodePaths(db *storage.DB) func(ctx context.Context, cameraID string) map[string]bool {
-	return func(ctx context.Context, cameraID string) map[string]bool {
+func dbPendingTranscodePaths(db *storage.DB) func(ctx context.Context, cameraID string) (map[string]bool, error) {
+	return func(ctx context.Context, cameraID string) (map[string]bool, error) {
 		held := map[string]bool{}
 		for _, status := range []string{"pending", "running"} {
 			tasks, _, err := db.ListTranscodeTasks(ctx, storage.TranscodeTaskFilter{
 				CameraID: cameraID, Status: status, Limit: 200,
 			})
 			if err != nil {
-				return nil
+				return nil, err
 			}
 			for _, task := range tasks {
 				if task.InputPath != "" {
@@ -408,8 +404,34 @@ func dbPendingTranscodePaths(db *storage.DB) func(ctx context.Context, cameraID 
 				}
 			}
 		}
-		return held
+		return held, nil
 	}
+}
+
+// queryTranscodeHold is the authoritative hold lookup shared by the dispatch
+// filter and the fold sites (#810 fold-site re-check). ok=false means the hold
+// set could not be determined (query failure) — callers MUST treat every path
+// as held: deleting a queued task's input is unrecoverable, a delayed merge is
+// not. The fail-closed branch deliberately does NOT gate on the camera's
+// transcode toggle: that toggle is a config-snapshot derivative (per-camera
+// block only, while task creation resolves global+per-camera), and production
+// 2026-09-16 showed the hold query itself behaving unreliably — the safe
+// default must not depend on a second possibly-stale signal. Transcode-
+// disabled cameras lose nothing: the error is rare and the next sweep folds.
+func (r *RollingMergeCoordinator) queryTranscodeHold(ctx context.Context, cameraID string) (held map[string]bool, ok bool) {
+	if r.pendingTranscodePaths == nil {
+		return nil, true // seam absent (ad-hoc wiring): no hold by construction
+	}
+	held, err := r.pendingTranscodePaths(ctx, cameraID)
+	if err != nil {
+		rollingLogger.Warn("pending-transcode hold query failed; treating all segments as held (fail-closed)",
+			"camera_id", cameraID, "error", err)
+		return nil, false
+	}
+	if held == nil {
+		held = map[string]bool{}
+	}
+	return held, true
 }
 
 // resolveRollingConfig returns the effective rolling config for a camera.
