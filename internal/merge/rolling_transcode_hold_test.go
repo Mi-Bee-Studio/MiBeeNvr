@@ -655,3 +655,51 @@ func TestRollingMerge_HoldsYoungSegmentsOnGlobalOnlyTranscodeCameras(t *testing.
 	}, 5*time.Second, 100*time.Millisecond,
 		"young segments on a global-only transcode camera must defer (rail follows the task creator's resolution)")
 }
+
+// --- cross-engine race (M5 production 2026-09-16, 3×/6h) ---
+//
+// The legacy MergeManager pass and the rolling engine race over the same
+// pending pool: the legacy pass merged+deleted sources and ONE SECOND later
+// the rolling backfill's 20-segment run failed wholesale with ENOENT — the
+// file existed at ParseSegment time and vanished before the actual merge.
+// A vanished source means another engine already folded it: drop it and
+// merge the survivors instead of failing the run.
+func TestMergeAudioRun_ToleratesVanishedSource(t *testing.T) {
+	env := newMergeTestEnv(t)
+	defer env.close(t)
+
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h"}
+	cameraID := "cam-vanish"
+	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, []config.CameraConfig{{ID: cameraID}})
+
+	base := time.Now().UTC().Truncate(time.Hour).Add(5 * time.Minute)
+	paths := make([]string, 3)
+	recs := make([]*model.Recording, 3)
+	infos := make([]*SegmentInfo, 3)
+	for i := range 3 {
+		recID := "rec-v" + string(rune('0'+i))
+		startedAt := base.Add(time.Duration(i) * 30 * time.Second)
+		paths[i] = createAndInsertSegment(t, env, recID, cameraID, startedAt)
+		recs[i] = &model.Recording{
+			ID:        recID,
+			CameraID:  cameraID,
+			FilePath:  paths[i],
+			Format:    model.FormatH264,
+			StartedAt: startedAt,
+			EndedAt:   startedAt.Add(30 * time.Second),
+			Duration:  30,
+		}
+		info, err := ParseSegment(paths[i])
+		require.NoError(t, err)
+		infos[i] = info
+	}
+	// The production race: file vanishes between ParseSegment and the merge.
+	require.NoError(t, os.Remove(paths[1]))
+
+	n, err := r.mergeAudioRun(context.Background(), cameraID, recs, infos)
+	require.NoError(t, err, "a vanished source must fail the run")
+	require.Equal(t, 2, n, "the two surviving segments must merge")
+	require.True(t, !fileExists(paths[0]) && !fileExists(paths[2]),
+		"surviving segments fold normally")
+}
