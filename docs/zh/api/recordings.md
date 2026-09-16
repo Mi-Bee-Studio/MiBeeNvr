@@ -282,8 +282,8 @@ curl -H "Authorization: Bearer mbv_your_api_key_here" \
 
 | 字段 | 类型 | 必填 | 说明 |
 |-------|------|----------|-------------|
-| `status` | string | 是 | AI 状态：`pending`、`processing`、`done`、`failed` 或 `skipped` |
-| `error` | string | 否 | `failed` 状态时的错误信息 |
+| `ai_status` | string | 是 | AI 状态：`pending`、`processing`、`completed`、`failed` 或 `skipped` |
+| `ai_error` | string | 否 | `failed`/`skipped` 状态时的原因说明 |
 
 **请求：**
 ```bash
@@ -291,7 +291,7 @@ curl -H "Authorization: Bearer mbv_your_api_key_here" \
   -X PATCH \
   -H "Content-Type: application/json" \
   -d '{
-    "status": "done"
+    "ai_status": "completed"
   }' \
   "http://localhost:9090/api/recordings/1704123456789012345/ai-status"
 ```
@@ -299,8 +299,8 @@ curl -H "Authorization: Bearer mbv_your_api_key_here" \
 **响应：** `200 OK`
 ```json
 {
-  "recording_id": "1704123456789012345",
-  "ai_status": "done"
+  "id": "1704123456789012345",
+  "ai_status": "completed"
 }
 ```
 
