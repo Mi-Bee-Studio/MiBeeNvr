@@ -28,6 +28,22 @@ type AIEvent struct {
 	CreatedAt      string  `json:"created_at"`
 }
 
+// UpdateAIEventSnapshotPath backfills the storage-root-relative snapshot
+// path after an external AI backend uploaded the image bytes (PR: remote
+// deployments cannot write the NVR storage tree directly).
+func (d *DB) UpdateAIEventSnapshotPath(ctx context.Context, id int64, snapshotPath string) error {
+	defer d.observeTxn(ctx, "ai_event", time.Now())
+	q := `UPDATE ai_events SET snapshot_path = ? WHERE id = ?;`
+	res, err := d.db.ExecContext(ctx, q, snapshotPath, id)
+	if err != nil {
+		return fmt.Errorf("update ai event snapshot: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("ai event %d not found", id)
+	}
+	return nil
+}
+
 // InsertAIEvent stores a new AI event from MiBeeVision.
 func (d *DB) InsertAIEvent(ctx context.Context, e *AIEvent) (int64, error) {
 	defer d.observeTxn(ctx, "ai_event", time.Now())
