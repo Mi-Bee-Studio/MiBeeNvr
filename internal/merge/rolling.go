@@ -367,6 +367,23 @@ func NewRollingMergeCoordinator(
 	return r
 }
 
+// SetCameraTranscodeEnabled overrides the transcode-enabled resolution used
+// by the age rail. Production wires cfg.ResolveTranscodingConfig (builders)
+// so the rail follows the SAME global+per-camera resolution as the transcode
+// task creator — a per-camera-block-only lookup misclassifies DB-managed
+// cameras (absent from the yaml snapshot) and silently disables the rail
+// while tasks keep flowing (#817 follow-up, M5 2026-09-16).
+func (r *RollingMergeCoordinator) SetCameraTranscodeEnabled(fn func(cameraID string) bool) {
+	r.cameraTranscodeEnabled = fn
+}
+
+// CameraTranscodeEnabled reports the age-rail resolution for a camera
+// (no resolution wired = disabled). Exported for wiring regression tests
+// (#817 follow-up) and diagnostics.
+func (r *RollingMergeCoordinator) CameraTranscodeEnabled(cameraID string) bool {
+	return r.cameraTranscodeEnabled != nil && r.cameraTranscodeEnabled(cameraID)
+}
+
 // camerasTranscodeEnabled derives the per-camera transcoding switch from the
 // live camera-config snapshot the coordinator already holds.
 func camerasTranscodeEnabled(cameras func() []config.CameraConfig) func(cameraID string) bool {

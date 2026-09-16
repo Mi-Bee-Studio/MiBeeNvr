@@ -342,6 +342,14 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		m,
 		deps.eventBus,
 	)
+	// #817 follow-up (M5 2026-09-16): the age rail must resolve transcode
+	// enablement EXACTLY like the task creator (global + per-camera merge).
+	// The constructor's per-camera-block-only lookup misclassified DB-managed
+	// cameras (absent from the yaml snapshot, resolved against the global
+	// switch) and silently disabled the rail while their tasks kept flowing.
+	deps.recordRollingMergeMgr.SetCameraTranscodeEnabled(func(cameraID string) bool {
+		return cfg.ResolveTranscodingConfig(cameraID).Enabled
+	})
 
 	// Step 5.5: Transcode manager (after merge, before camera)
 	var transcodeMgr *transcoding.TranscodeManager

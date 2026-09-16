@@ -95,6 +95,16 @@ func (r *RollingMergeCoordinator) createBucket(
 		return "", "", fmt.Errorf("db replace (create): %w", err)
 	}
 
+	// Deletion-moment re-check (#817 follow-up): the entry re-check ran
+	// seconds ago and a transcode task can land while the merge itself runs
+	// (production: task pending 3.8s before this delete). The bucket output
+	// is already committed — keep the source file for the task; the orphan
+	// sweep reclaims it after the task finishes.
+	if held, ok := r.queryTranscodeHold(ctx, seg.cameraID); !ok || held[seg.filePath] {
+		rollingLogger.Info("fold re-check: transcode task landed during merge — keeping source file",
+			"camera_id", seg.cameraID, "recording_id", seg.recordingID, "site", "bucket-create")
+		return finalPath, mergedRecID, nil
+	}
 	// Delete the source segment file (DB already committed).
 	rollingLogger.Info("fold deleted source", "site", "bucket-create",
 		"camera_id", seg.cameraID, "recording_id", seg.recordingID, "file", filepath.Base(seg.filePath))
@@ -257,6 +267,13 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		return "", "", fmt.Errorf("db replace (append): %w", err)
 	}
 
+	// Deletion-moment re-check (#817 follow-up): same race as bucket-create —
+	// a task landing mid-merge keeps its source file.
+	if held, ok := r.queryTranscodeHold(ctx, seg.cameraID); !ok || held[seg.filePath] {
+		rollingLogger.Info("fold re-check: transcode task landed during merge — keeping source file",
+			"camera_id", seg.cameraID, "recording_id", seg.recordingID, "site", "bucket-append")
+		return outputPath, mergedRecID, nil
+	}
 	// Delete the source segment file.
 	rollingLogger.Info("fold deleted source", "site", "bucket-append",
 		"camera_id", seg.cameraID, "recording_id", seg.recordingID, "file", filepath.Base(seg.filePath))

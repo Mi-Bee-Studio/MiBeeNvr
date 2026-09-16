@@ -438,8 +438,17 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 		return 0, fmt.Errorf("db replace: %w", err)
 	}
 
-	// Delete source files.
+	// Delete source files — with the deletion-moment hold re-check (#817
+	// follow-up): a task landing while the batch merge ran keeps its source
+	// file (the merged output is already committed; the orphan sweep
+	// reclaims the retained file after the task finishes).
+	heldDelete, holdOK := r.queryTranscodeHold(ctx, cameraID)
 	for _, path := range sourcePaths {
+		if !holdOK || heldDelete[path] {
+			rollingLogger.Info("batch fold re-check: transcode task holds source — keeping file",
+				"camera_id", cameraID, "file", filepath.Base(path))
+			continue
+		}
 		rollingLogger.Info("fold deleted source", "site", "batch-mp4",
 			"camera_id", cameraID, "file", filepath.Base(path))
 		r.store.DeleteFile(path)
