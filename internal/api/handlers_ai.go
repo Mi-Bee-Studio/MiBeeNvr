@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -265,6 +267,77 @@ func getDefaultStatsSince(period string) (t time.Time) {
 	}
 }
 
+// handleGetAIEventSnapshot serves the event's snapshot image
+// (GET /api/ai/events/{id}/snapshot). Sidecar MiBeeVision deployments write
+// JPEGs under <storage root>/ai-snapshots/ and report the storage-root-
+// relative path in snapshot_path; remote deployments leave it empty. Every
+// "no image available" case (empty path, missing file, invalid/escaping
+// path, unknown event) is a plain 404 so clients can fall back to a
+// placeholder without parsing the error body.
+func (h *Handler) handleGetAIEventSnapshot(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		WriteError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "invalid event ID")
+		return
+	}
+
+	evt, err := h.db.GetAIEvent(r.Context(), id)
+	if err != nil {
+		logger.Error("failed to get AI event", "error", err, "path", r.URL.Path)
+		WriteError(w, http.StatusInternalServerError, "failed to get AI event")
+		return
+	}
+	if evt == nil || evt.SnapshotPath == "" {
+		WriteError(w, http.StatusNotFound, "snapshot not available")
+		return
+	}
+	if h.config == nil {
+		WriteError(w, http.StatusInternalServerError, "storage not configured")
+		return
+	}
+
+	path, ok := resolveWithinStorageRoot(h.config.Storage.RootDir, evt.SnapshotPath)
+	if !ok {
+		// Vision-supplied path resolving outside the storage root is invalid
+		// — never serve files from outside the configured tree.
+		WriteError(w, http.StatusNotFound, "snapshot not available")
+		return
+	}
+	if _, err := os.Stat(path); err != nil {
+		WriteError(w, http.StatusNotFound, "snapshot not available")
+		return
+	}
+
+	// Snapshots are immutable once written; list views fetch them in bursts,
+	// so let clients cache for a day (ServeFile still honors range requests
+	// and conditional GETs via Last-Modified).
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	http.ServeFile(w, r, path)
+}
+
+// resolveWithinStorageRoot resolves relOrAbs under root, accepting both
+// storage-root-relative paths (the documented contract) and absolute paths
+// that already point inside the root (lenient for same-host integrators).
+// It returns false when the resolved path leaves the root.
+func resolveWithinStorageRoot(root, relOrAbs string) (string, bool) {
+	cleanRoot := filepath.Clean(root)
+	var p string
+	if filepath.IsAbs(relOrAbs) {
+		p = filepath.Clean(relOrAbs)
+	} else {
+		p = filepath.Clean(filepath.Join(cleanRoot, relOrAbs))
+	}
+	if p != cleanRoot && !strings.HasPrefix(p, cleanRoot+string(filepath.Separator)) {
+		return "", false
+	}
+	return p, true
+}
+
 // registerAIRoutes registers AI config/status/zones and MiBeeVision event routes.
 func (h *Handler) registerAIRoutes(r chi.Router) {
 	r.Get("/api/ai/status", h.aiHandler.handleAIStatus)
@@ -280,5 +353,6 @@ func (h *Handler) registerAIRoutes(r chi.Router) {
 	// GET endpoints are user-authenticated (behind the group's authMW)
 	r.Get("/api/ai/events", h.handleListAIEvents)
 	r.Get("/api/ai/events/{id}", h.handleGetAIEvent)
+	r.Get("/api/ai/events/{id}/snapshot", h.handleGetAIEventSnapshot)
 	r.Get("/api/ai/stats", h.handleGetAIEventStats)
 }
