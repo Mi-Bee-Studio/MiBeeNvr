@@ -71,6 +71,17 @@ self.addEventListener('fetch', (event) => {
     return; // Let browser handle normally
   }
 
+  // JPEG frame batches (timelapse merges `/frames`, AVI/timelapse recordings
+  // `/timelapse-frames/batch`): always network. These are bulk binary media —
+  // caching them burns the storage quota (one merge view streams hundreds of
+  // MB), and the network-first offline/abort fallback would resurrect STALE
+  // bytes from before a server-side data repair whenever a fetch aborts (the
+  // sequence player aborts its first in-flight batch on mount reset), making
+  // repaired data unplayable in browsers that visited earlier.
+  if (path.includes('/frames')) {
+    return; // Let browser handle normally
+  }
+
   // AI model files (/models/*.onnx): NEVER cached by the SW. The app manages
   // its own model cache (Cache API 'mibee-nvr-ai-models') with strict integrity
   // checks (Content-Length) and self-heal. If the SW also cache-first'd these,

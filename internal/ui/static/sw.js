@@ -11,7 +11,7 @@
 //
 // During `vite dev` the placeholder is NOT rewritten, so we fall back to a
 // dev-only random version (each reload is a new cache — fine for dev).
-const CACHE_VERSION = 'mibee-nvr-1789233137029';
+const CACHE_VERSION = 'mibee-nvr-1789621089629';
 
 // Serving prefix (#394): when the app is served under a reverse-proxy /
 // unified-gateway base path (e.g. fnOS "/app/mibee-nvr"), this SW itself lives
@@ -68,6 +68,17 @@ self.addEventListener('fetch', (event) => {
 
   // Media streams: always network (HLS m3u8, FLV, WebSocket, WebRTC)
   if (path.includes('/stream') || path.includes('/api/cameras/') && path.includes('stream')) {
+    return; // Let browser handle normally
+  }
+
+  // JPEG frame batches (timelapse merges `/frames`, AVI/timelapse recordings
+  // `/timelapse-frames/batch`): always network. These are bulk binary media —
+  // caching them burns the storage quota (one merge view streams hundreds of
+  // MB), and the network-first offline/abort fallback would resurrect STALE
+  // bytes from before a server-side data repair whenever a fetch aborts (the
+  // sequence player aborts its first in-flight batch on mount reset), making
+  // repaired data unplayable in browsers that visited earlier.
+  if (path.includes('/frames')) {
     return; // Let browser handle normally
   }
 
