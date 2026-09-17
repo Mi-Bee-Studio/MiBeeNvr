@@ -383,7 +383,7 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 	go r.writeFrames(writerDone)
 
 	client.OnPacketRTP(medi, forma, func(pkt *rtp.Packet) {
-		jpeg, err := rtpDec.Decode(pkt)
+		jpegData, err := rtpDec.Decode(pkt)
 		if err != nil {
 			// "need more packets" is the normal multi-packet-frame accumulation
 			// signal (returned for every non-final fragment). ESP32 RTSP-AVI firmware
@@ -394,26 +394,39 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 			}
 			return
 		}
-		// Cache latest frame for timelapse frame polling (LatestFrame). The decoder
-		// returns a freshly allocated slice, so storing the pointer is safe.
-		dp := jpeg
-		r.latestFrame.Store(&dp)
-		// Broadcast to StreamHub for wsstream live preview (MJPEG cameras).
-		// Each JPEG frame is wrapped as a single-element [][]byte to match
-		// the FrameCallback signature. wsstream treats every MJPEG frame as
-		// a keyframe (independently decodable).
-		if r.Hub != nil {
-			r.Hub.Broadcast(int64(pkt.Timestamp), [][]byte{jpeg}, true)
+		// Some RTSP MJPEG senders (ESP32 MiBeeCam firmware) pack COMPLETE JPEGs
+		// into the RTP payloads; the RFC 2435 depacketizer then prepends its own
+		// synthesized header block, and occasionally two frames arrive glued.
+		// Salvage the complete inner images — browsers reject the raw buffers.
+		// A clean single-image buffer passes through unchanged.
+		frames := ExtractCompleteJPEGs(jpegData)
+		if len(frames) == 0 {
+			return
 		}
-		select {
-		case r.frameCh <- jpeg:
-		default:
-			d := r.dropped.Add(1)
-			if r.metrics != nil {
-				r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
+		for i, f := range frames {
+			// Cache latest frame for timelapse frame polling (LatestFrame). The
+			// decoder returns freshly allocated slices, so storing is safe.
+			if i == len(frames)-1 {
+				dp := f
+				r.latestFrame.Store(&dp)
 			}
-			if d%100 == 1 {
-				mjpegLogger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
+			// Broadcast to StreamHub for wsstream live preview (MJPEG cameras).
+			// Each JPEG frame is wrapped as a single-element [][]byte to match
+			// the FrameCallback signature. wsstream treats every MJPEG frame as a
+			// keyframe (independently decodable).
+			if r.Hub != nil {
+				r.Hub.Broadcast(int64(pkt.Timestamp), [][]byte{f}, true)
+			}
+			select {
+			case r.frameCh <- f:
+			default:
+				d := r.dropped.Add(1)
+				if r.metrics != nil {
+					r.metrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()
+				}
+				if d%100 == 1 {
+					mjpegLogger.Warn("ring buffer full, dropped frames", "camera_id", r.cfg.CameraID, "dropped", d)
+				}
 			}
 		}
 	})

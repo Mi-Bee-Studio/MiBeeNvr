@@ -52,6 +52,8 @@ func runRepair() int {
 		return runRepairNormalizeEndpoints()
 	case "mjpeg-containerize":
 		return runRepairMJPEGContainerize()
+	case "timelapse-mjpeg":
+		return runRepairTimelapseMJPEG()
 	case "--help", "-h":
 		printRepairUsage()
 		return 0
@@ -221,6 +223,9 @@ Subcommands:
   mjpeg-containerize    Convert legacy dir-form MJPEG segments (one JPEG file per frame)
                          into single-file AVI containers (#761), verifying each container
                          before flipping the DB row; --keep-old retains the source dirs
+  timelapse-mjpeg       Rewrite MJPEG periodic-merge outputs whose samples carry
+                         double-header JPEGs (non-compliant RTSP RTP-JPEG senders);
+                         salvages each sample's complete inner JPEG losslessly
 
 Common options:
   --dry-run      Report what would change without modifying (default)

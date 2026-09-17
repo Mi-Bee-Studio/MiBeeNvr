@@ -18,6 +18,7 @@
    * minimal controls (the unified recording viewer).
    */
   import { onMount } from 'svelte';
+  import { t } from '$lib/i18n';
   import { Play, Pause } from 'lucide-svelte';
 
   interface Props {
@@ -69,6 +70,10 @@
 
   let blobCache = new Map<number, Blob>();
   let bitmaps = new Map<number, ImageBitmap>();
+  // Frames whose bytes failed createImageBitmap once (corrupt JPEG — refetch
+  // yields the same bytes). Never retried; skipped during playback instead of
+  // retrying forever (which showed an endless spinner).
+  const failedFrames = new Set<number>();
   const fetchedBatches = new Set<number>();
   const inflightBatches = new Map<number, Promise<void>>();
   let abort: AbortController | null = null;
@@ -160,6 +165,7 @@
       return bmp;
     } catch {
       blobCache.delete(i); // corrupt frame — refetch would give the same bytes
+      failedFrames.add(i);
       return null;
     }
   }
@@ -174,6 +180,19 @@
       const idx = currentIndex;
       const bmp = await ensureBitmap(idx);
       if (!bmp) {
+        if (failedFrames.has(idx)) {
+          // Undecodable frame: skip forward so one corrupt JPEG can't stall
+          // playback in an infinite fetch/decode retry loop.
+          if (total > 0 && idx < total - 1) {
+            currentIndex = idx + 1;
+            return;
+          }
+          if (!ready) {
+            errorMsg = t('timelapseMerge.framesUndecodable');
+            onError?.(errorMsg);
+          }
+          return;
+        }
         ensureAround(idx);
         return;
       }
@@ -260,6 +279,7 @@
     for (const bmp of bitmaps.values()) bmp.close();
     bitmaps.clear();
     blobCache.clear();
+    failedFrames.clear();
     fetchedBatches.clear();
     inflightBatches.clear();
     total = frameCount;
@@ -292,6 +312,7 @@
       for (const bmp of bitmaps.values()) bmp.close();
       bitmaps.clear();
       blobCache.clear();
+      failedFrames.clear();
     };
   });
 

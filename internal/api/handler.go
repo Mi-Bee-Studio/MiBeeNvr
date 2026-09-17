@@ -408,7 +408,12 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
 	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)      // Public for timelapse video playback
 	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording)     // HEAD for browser <video> probe
-	r.Get("/models/{filename}", h.handleServeModel)                    // Public for browser-side AI model loading
+	// Periodic-merge output playback: the SPA authenticates per-fetch from
+	// JS, so <video src> / <a download> / probeTimelapseMergeCodec HEAD arrive
+	// without credentials — same exposure class as /download above.
+	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
+	r.Head("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
+	r.Get("/models/{filename}", h.handleServeModel) // Public for browser-side AI model loading
 	// VOD HLS recording playback (#321) — same exposure class as /download:
 	// hls.js requests these same-origin without auth headers, and they serve
 	// the same media bytes /download already exposes.
