@@ -1059,9 +1059,10 @@ func (h *Handler) registerTimelapseRoutes(r chi.Router) {
 	r.Post("/api/timelapse/batch-merge", h.handleTimelapseBatchMerge)
 	// Periodic-merge outputs (timelapse_merges table). Registered BEFORE the
 	// /api/timelapse/{id} wildcard routes so the static /merges paths win.
+	// NOTE: GET/HEAD /api/timelapse/merges/{id}/download lives in
+	// registerAnonymousRoutes — <video>/<a> media requests carry no auth header.
 	r.Get("/api/timelapse/merges", h.handleListTimelapseMerges)
 	r.Get("/api/timelapse/merges/{id}", h.handleGetTimelapseMerge)
-	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
 	r.Get("/api/timelapse/merges/{id}/frames", h.handleTimelapseMergeFrames)
 	r.Delete("/api/timelapse/merges/{id}", h.handleDeleteTimelapseMerge)
 	r.Post("/api/timelapse/{id}/merge", h.handleTimelapseMerge)
