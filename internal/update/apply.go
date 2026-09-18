@@ -62,6 +62,10 @@ type Applier struct {
 	// DeploymentOverride replaces Deployment() (tests).
 	DeploymentOverride string
 
+	// GOOSOverride replaces runtime.GOOS (tests simulate desktop builds —
+	// see guards).
+	GOOSOverride string
+
 	// SignVerify checks the ed25519 signature over checksums.txt.
 	// Default: VerifyChecksumsSignature (embedded release key).
 	SignVerify func(checksums, sig []byte) error
@@ -207,8 +211,18 @@ func (a *Applier) Apply(ctx context.Context, req Request) error {
 }
 
 // guards enforces the恒禁用 conditions from #647: docker deployments, dev
-// builds, and non-strictly-newer targets never run.
+// builds, and non-strictly-newer targets never run. Desktop (windows/darwin)
+// builds are refused too: the apply step drives a linux systemd root helper,
+// and the release asset names carry no GOOS — a darwin arm64 self-update
+// would silently resolve to the linux arm64 binary.
 func (a *Applier) guards(req Request) error {
+	goos := a.GOOSOverride
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	if goos != "linux" {
+		return fmt.Errorf("update: self-update is linux-only (desktop builds update by downloading a new release)")
+	}
 	deployment := a.DeploymentOverride
 	if deployment == "" {
 		deployment = Deployment()
