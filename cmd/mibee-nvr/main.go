@@ -203,6 +203,11 @@ func main() {
 		api.SetUpdateChecker(upd)
 	}
 
+	// Loopback-local shutdown endpoint (macOS menu-bar helper is a separate
+	// process and cannot close the in-process tray quit channel).
+	apiShutdown := make(chan struct{})
+	api.SetShutdownFunc(func() { close(apiShutdown) })
+
 	httpSrv := a.Value("http-server").(*http.Server)
 	go func() {
 		slog.Info("MiBee NVR listening", "version", appVersion, "addr", cfg.Server.Listen)
@@ -244,10 +249,9 @@ func main() {
 	// Desktop tray (windows builds; no-op elsewhere): without it a desktop
 	// run has no discoverable entry to reach the UI or stop the server.
 	trayStop, trayQuit := tray.Start(tray.Options{
-		Tooltip:  "MiBee NVR " + appVersion,
-		OpenURL:  tray.ListenURL(cfg.Server.Listen),
-		Username: cfg.Auth.Username,
-		Version:  appVersion,
+		Tooltip: "MiBee NVR " + appVersion,
+		OpenURL: tray.ListenURL(cfg.Server.Listen),
+		Version: appVersion,
 	})
 	defer trayStop()
 
@@ -258,6 +262,8 @@ func main() {
 		slog.Info("received signal, shutting down", "signal", sig.String())
 	case <-trayQuit:
 		slog.Info("tray quit requested, shutting down")
+	case <-apiShutdown:
+		slog.Info("local shutdown request received, shutting down")
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

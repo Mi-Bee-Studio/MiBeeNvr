@@ -42,14 +42,18 @@ type Result struct {
 }
 
 // StarterConfig renders the first-run config written when none exists. Auth
-// stays empty → setup wizard on first web visit.
+// stays empty → setup wizard on first web visit. local_bypass is on: the
+// desktop password is for NON-local (LAN) logins — a browser on the machine
+// itself skips auth (loopback + loopback Host only, never behind a proxy).
 func StarterConfig(dataDir string) string {
 	return fmt.Sprintf(`# MiBee NVR — 初始配置（由 mibee-nvr install 生成）
-# 首次打开 Web 界面会引导设置管理员密码；之后可在此文件或 Web 设置中调整。
+# 本机浏览器免密直入；密码用于局域网/远程登录（可用托盘菜单「修改密码」设置）。
 server:
   listen: ":9090"
 storage:
   root_dir: '%s'
+auth:
+  local_bypass: true
 cameras: []
 `, yamlSingle(filepath.Join(dataDir, "data")))
 }
