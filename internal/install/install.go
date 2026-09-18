@@ -45,11 +45,15 @@ type Result struct {
 // stays empty → setup wizard on first web visit. local_bypass is on: the
 // desktop password is for NON-local (LAN) logins — a browser on the machine
 // itself skips auth (loopback + loopback Host only, never behind a proxy).
+// The listener binds loopback ONLY: passwordless local login must not be
+// reachable from the LAN by default — the tray 菜单栏「监听地址…」 entry opens
+// it up (0.0.0.0) when the user wants that.
 func StarterConfig(dataDir string) string {
 	return fmt.Sprintf(`# MiBee NVR — 初始配置（由 mibee-nvr install 生成）
 # 本机浏览器免密直入；密码用于局域网/远程登录（可用托盘菜单「修改密码」设置）。
+# 默认仅监听本机（127.0.0.1）；如需局域网访问，用托盘/菜单栏「监听地址…」改为 0.0.0.0:9090。
 server:
-  listen: ":9090"
+  listen: "127.0.0.1:9090"
 storage:
   root_dir: '%s'
 auth:

@@ -20,6 +20,9 @@ func Uninstall(purge bool) (*Result, error) {
 
 func setupConsole() {}
 
+// RefreshMenuBarHelper has no menu-bar helper to refresh off-desktop.
+func RefreshMenuBarHelper() error { return nil }
+
 func unsupported() error {
 	return fmt.Errorf("install: 桌面安装仅支持 windows/darwin；Linux 服务器请使用 systemd（make install-service / uninstall-service）")
 }

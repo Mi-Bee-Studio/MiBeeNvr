@@ -12,11 +12,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/install"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tray"
@@ -209,12 +211,16 @@ func main() {
 	api.SetShutdownFunc(func() { close(apiShutdown) })
 
 	httpSrv := a.Value("http-server").(*http.Server)
+	apiHandler := httpSrv.Handler
 	// Unblocks SSE handler loops the moment Shutdown begins — without this a
 	// quit with the web UI open stalls on the never-idle /api/events stream.
 	httpSrv.RegisterOnShutdown(api.CloseStreams)
+	// Bind the listener explicitly (not ListenAndServe) so a later listen
+	// swap can retire and rebuild just this listener (see applyListenAddr).
+	httpLn := mustListenTCP(cfg.Server.Listen)
 	go func() {
 		slog.Info("MiBee NVR listening", "version", appVersion, "addr", cfg.Server.Listen)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
 			slog.Error("http", "error", err)
 			os.Exit(1)
 		}
@@ -250,12 +256,93 @@ func main() {
 		gatewaySrv = listenGatewaySocket(sock, authmw.GatewayAuthMiddleware(httpSrv.Handler))
 	}
 
+	// HTTP(S): SSE/streaming connections never go idle, so Shutdown alone
+	// stalls until the context deadline (a tray quit with the web UI open
+	// used to take the full 30s). CloseStreams (fired by RegisterOnShutdown
+	// on every server below) unblocks the SSE loops; the short window + hard
+	// Close covers any remaining long-lived connection (e.g. FLV viewers).
+	httpShutdown := func(srv *http.Server, name string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			slog.Warn(name+" shutdown exceeded graceful window, closing", "error", err)
+			if cerr := srv.Close(); cerr != nil {
+				slog.Warn(name+" close", "error", cerr)
+			}
+		}
+	}
+
+	// applyListenAddr moves the plain-HTTP listener (tray 监听地址… menu /
+	// PUT /api/system/listen): bind the NEW address first so a bad address
+	// never takes the running server down, persist the config, drain the old
+	// server, then serve on the new listener. TLS and the gateway socket
+	// keep their own configured addresses.
+	var listenMu sync.Mutex
+	applyListenAddr := func(addr string) error {
+		listenMu.Lock()
+		defer listenMu.Unlock()
+
+		addr = strings.TrimSpace(addr)
+		if addr == cfg.Server.Listen {
+			return nil
+		}
+		newLn, lerr := net.Listen("tcp", addr)
+		if lerr != nil {
+			return fmt.Errorf("无法监听 %s（地址无效或端口被占用）：%w", addr, lerr)
+		}
+		old, oldAddr := httpSrv, cfg.Server.Listen
+		cfg.Server.Listen = addr
+		if serr := config.Save(*configPath, cfg); serr != nil {
+			cfg.Server.Listen = oldAddr
+			_ = newLn.Close()
+			return fmt.Errorf("保存配置失败：%w", serr)
+		}
+
+		// Drain the old server BEFORE arming the new one: its OnShutdown hook
+		// re-fires CloseStreams (a no-op on the consumed Once), and
+		// ResetStreams must only re-arm afterwards — otherwise the old
+		// server's shutdown would close the new era's signal too.
+		api.CloseStreams()
+		httpShutdown(old, "http (listen swap)")
+		api.ResetStreams()
+
+		httpSrv = &http.Server{
+			Handler:           apiHandler,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			// WriteTimeout intentionally not set (SSE / streaming), matching
+			// the boot server built in pkg/app.
+		}
+		httpSrv.RegisterOnShutdown(api.CloseStreams)
+		go func() {
+			slog.Info("MiBee NVR listening (rebind)", "addr", addr)
+			if err := httpSrv.Serve(newLn); err != nil && err != http.ErrServerClosed {
+				// Log-only: the tray can rebind again; killing the process
+				// would take the whole NVR down over a listener hiccup.
+				slog.Error("http serve (rebind)", "error", err)
+			}
+		}()
+
+		tray.SetAddress(addr)
+		// macOS: the menu-bar helper's base URL is baked in at compile time —
+		// recompile + restart it so it follows the new address (no-op
+		// elsewhere, and when the helper was never installed).
+		if rerr := install.RefreshMenuBarHelper(); rerr != nil {
+			slog.Warn("menu-bar helper refresh after listen change failed", "error", rerr)
+		}
+		slog.Info("listen address changed", "from", oldAddr, "to", addr)
+		return nil
+	}
+	api.SetListenChangeFunc(applyListenAddr)
+
 	// Desktop tray (windows builds; no-op elsewhere): without it a desktop
 	// run has no discoverable entry to reach the UI or stop the server.
 	trayStop, trayQuit := tray.Start(tray.Options{
-		Tooltip: "MiBee NVR " + appVersion,
-		OpenURL: tray.ListenURL(cfg.Server.Listen),
-		Version: appVersion,
+		Tooltip:        "MiBee NVR " + appVersion,
+		OpenURL:        tray.ListenURL(cfg.Server.Listen),
+		Version:        appVersion,
+		ListenAddr:     cfg.Server.Listen,
+		OnChangeListen: applyListenAddr,
 	})
 	defer trayStop()
 
@@ -280,21 +367,9 @@ func main() {
 			_ = os.Remove(sock)
 		}
 	}
-	// HTTP(S): SSE/streaming connections never go idle, so Shutdown alone
-	// stalls until the context deadline (a tray quit with the web UI open
-	// used to take the full 30s). CloseStreams (fired by RegisterOnShutdown
-	// below) unblocks the SSE loops; the short window + hard Close covers
-	// any remaining long-lived connection (e.g. FLV viewers).
-	httpShutdown := func(srv *http.Server, name string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
-			slog.Warn(name+" shutdown exceeded graceful window, closing", "error", err)
-			if cerr := srv.Close(); cerr != nil {
-				slog.Warn(name+" close", "error", cerr)
-			}
-		}
-	}
+	// HTTP(S): SSE/streaming connections never go idle — httpShutdown (with
+	// the CloseStreams hook registered on every server above) is defined
+	// before the listen-swap closure and reused here.
 	if tlsSrv != nil {
 		httpShutdown(tlsSrv, "https")
 	}
@@ -303,6 +378,19 @@ func main() {
 		slog.Error("stop", "error", err)
 	}
 	slog.Info("MiBee NVR stopped")
+}
+
+// mustListenTCP binds the main HTTP listener. Kept as a standalone function
+// (with its own os.Exit calls) so gocritic's exitAfterDefer stays quiet in
+// main — the same treatment as listenGatewaySocket: a fatal init error where
+// main's defers are moot anyway.
+func mustListenTCP(addr string) net.Listener {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		slog.Error("http listen", "addr", addr, "error", err)
+		os.Exit(1)
+	}
+	return ln
 }
 
 // listenGatewaySocket binds the fnOS unified-gateway Unix socket and starts

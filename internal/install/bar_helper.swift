@@ -19,6 +19,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "打开 Web 界面", action: #selector(openWeb(_:)), keyEquivalent: "w")
         menu.addItem(withTitle: "修改密码…", action: #selector(changePassword(_:)), keyEquivalent: "p")
+        menu.addItem(withTitle: "监听地址…", action: #selector(changeListen(_:)), keyEquivalent: "l")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出 MiBee NVR", action: #selector(shutdownNVR(_:)), keyEquivalent: "q")
         for mi in menu.items { mi.target = self }
@@ -64,6 +65,32 @@ final class Delegate: NSObject, NSApplicationDelegate {
         } else {
             self.notify("修改失败——NVR 未运行或尚未完成初始设置。", style: .warning)
         }
+    }
+
+    @objc func changeListen(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "修改监听地址"
+        alert.informativeText = "默认仅本机可访问（127.0.0.1）。填 0.0.0.0:9090 可开放局域网访问。"
+
+        let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        var cur = "127.0.0.1:9090"
+        if let c = URLComponents(url: baseURL, resolvingAgainstBaseURL: false), let h = c.host {
+            cur = h
+            if let p = c.port { cur += ":\(p)" }
+        }
+        f.stringValue = cur
+        alert.accessoryView = f
+        alert.addButton(withTitle: "确定")
+        alert.addButton(withTitle: "取消")
+
+        guard alert.runModal() == .alertFirstButtonReturn, !f.stringValue.isEmpty else { return }
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/system/listen"))
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["listen": f.stringValue])
+        // 202 = 已受理：NVR 随即换绑并自动重编译/重启本助手（新地址生效），
+        // 弹窗可能被助手重启打断——那本身就是切换成功的信号。
+        _ = postSync(req)
     }
 
     @objc func shutdownNVR(_ sender: Any?) {
