@@ -235,6 +235,25 @@ var wndProcCb = syscall.NewCallback(
 				openURL()
 				return 0
 			}
+		case wmCommand:
+			// The menu path handles picks inside showMenu (TPM_RETURNCMD
+			// returns the id, it never sends WM_COMMAND), so this routing
+			// only fires for posted messages — the automation hook the
+			// dialog E2E drives (no global input injection needed).
+			switch uint32(uint16(wParam)) {
+			case cmdOpen:
+				openURL()
+				return 0
+			case cmdPassword:
+				changePasswordDialog()
+				return 0
+			case cmdListen:
+				listenDialog()
+				return 0
+			case cmdQuit:
+				quitOnce.Do(func() { close(quitCh) })
+				return 0
+			}
 		case wmClose:
 			call(pDestroyWindow, hwnd)
 			return 0
@@ -440,15 +459,18 @@ var dlgProcCb = syscall.NewCallback(
 	func(hwnd uintptr, msgc uint32, wParam, lParam uintptr) uintptr {
 		switch msgc {
 		case wmCommand:
-			if lParam == 0 { // menu/accelerator notifications carry no hwnd
-				switch uint16(wParam & 0xFFFF) {
-				case idBtnOK:
-					submitPasswordChange(hwnd)
-					return 0
-				case idBtnCancel:
-					call(pDestroyWindow, hwnd)
-					return 0
-				}
+			// Both message shapes select on the same LOWORD(wParam) id:
+			// button clicks notify with lParam = control hwnd + HIWORD =
+			// BN_CLICKED (matching only lParam==0 left every button dead —
+			// field report 2026-09-19), while IsDialogMessage's keyboard
+			// translation (Enter/Esc) sends lParam = 0.
+			switch uint16(wParam & 0xFFFF) {
+			case idBtnOK:
+				submitPasswordChange(hwnd)
+				return 0
+			case idBtnCancel:
+				call(pDestroyWindow, hwnd)
+				return 0
 			}
 		}
 		ret, _, _ := pDefWindowProcW.Call(hwnd, uintptr(msgc), wParam, lParam)
@@ -593,15 +615,16 @@ var listenDlgProcCb = syscall.NewCallback(
 	func(hwnd uintptr, msgc uint32, wParam, lParam uintptr) uintptr {
 		switch msgc {
 		case wmCommand:
-			if lParam == 0 { // menu/accelerator notifications carry no hwnd
-				switch uint16(wParam & 0xFFFF) {
-				case idBtnOK:
-					submitListenChange(hwnd)
-					return 0
-				case idBtnCancel:
-					call(pDestroyWindow, hwnd)
-					return 0
-				}
+			// See dlgProcCb: accept BOTH the button-notification shape
+			// (lParam = control hwnd) and the keyboard-translation shape
+			// (lParam = 0) — matching only the latter left 确定/取消 dead.
+			switch uint16(wParam & 0xFFFF) {
+			case idBtnOK:
+				submitListenChange(hwnd)
+				return 0
+			case idBtnCancel:
+				call(pDestroyWindow, hwnd)
+				return 0
 			}
 		}
 		ret, _, _ := pDefWindowProcW.Call(hwnd, uintptr(msgc), wParam, lParam)
