@@ -536,9 +536,6 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Get("/api/stats/cameras", h.handleStatsCameras)
 	r.Get("/api/settings", h.handleGetSettings)
 	r.Put("/api/settings", h.handleUpdateSettings)
-	// Password change: the request's BasicAuth credentials prove knowledge of
-	// the CURRENT password (wrong one dies at the middleware's 401).
-	r.Post("/api/auth/password", h.handlePasswordChange)
 	r.Get("/api/storage/candidates", h.handleStorageCandidates)
 	r.Post("/api/storage/candidates", h.handleAddStorageCandidate)
 	r.Delete("/api/storage/candidates", h.handleRemoveStorageCandidate)

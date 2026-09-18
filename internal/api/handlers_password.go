@@ -14,18 +14,27 @@ type passwordChangeRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
-// handlePasswordChange handles POST /api/auth/password — change the admin
-// password. Auth model: the endpoint sits behind the standard auth
-// middleware, so the request's own BasicAuth credentials ARE the current
-// password — proving knowledge of it is what authorizes the change (the
-// same guarantee login gives; a wrong old password dies at 401 before the
-// handler ever runs).
+// handlePasswordChange handles POST /api/auth/password — set a new admin
+// password WITHOUT knowing the old one. Authorization is locality: the
+// request must be a loopback connection with a loopback Host and no proxy
+// headers (middleware.IsBypassEligible — the same judgement the local login
+// bypass uses). The desktop tray / macOS menu-bar helper call this from the
+// NVR's own machine, where the operator could equally edit the config file
+// by hand; remote callers get 403.
+//
+// The password exists for NON-local (LAN) logins — local sessions bypass
+// auth entirely when auth.local_bypass is on (the desktop-install default).
 //
 // Side effect worth knowing: the bcrypt hash is part of the session-token
 // signing key (middleware/token.go), so a successful change invalidates
-// EVERY outstanding session token — callers must re-login with the new
-// password (the desktop tray dialog does exactly that on next use).
+// EVERY outstanding session token — remote sessions must re-login.
 func (h *Handler) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
+	if !middleware.IsBypassEligible(r) {
+		WriteError(w, http.StatusForbidden,
+			"password change is only available from a local session on the NVR machine")
+		return
+	}
+
 	if strings.TrimSpace(h.config.Auth.PasswordHash) == "" {
 		WriteError(w, http.StatusConflict, "setup not completed — configure a password first")
 		return
@@ -61,5 +70,6 @@ func (h *Handler) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logger.Info("admin password changed from a local session", "remote", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
