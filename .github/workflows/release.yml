@@ -318,15 +318,19 @@ jobs:
           append_body: false
 
   # ---- Gitee mirror release (mainland-China download page) -------------------
-  # Creates the tag + release shell on the gitee.com mirror repo so mainland-
-  # China users get a per-version release page. Does NOT upload the binaries:
-  # Gitee stalls large POST bodies from GitHub-hosted runner IPs (verified
-  # 2026-09-18 — a 65MB attachment made zero byte progress across 4×15min curl
-  # retries while a git push seconds earlier succeeded), so assets are
-  # uploaded from a mainland-side machine with `deploy/gitee-mirror.sh` after
-  # the release. OPT-IN like mirror-to-acr: repo Variable ENABLE_GITEE=true +
-  # Secret GITEE_TOKEN. Missing token/variable → job skips, never blocks a
-  # release. Re-runs are safe: both steps no-op when tag/release exist.
+  # The gitee.com mirror holds EXACTLY ONE version — the latest stable —
+  # because Gitee caps total attachment storage. For a stable tag this job
+  # pushes the tag (the mirror repo's git sync lags) and find-or-creates the
+  # release shell; for a prerelease tag it skips the shell entirely. Either
+  # way it then prunes every Gitee release other than the latest stable.
+  # It does NOT upload assets: Gitee stalls large POST bodies from
+  # GitHub-hosted runner IPs (verified 2026-09-18 — a 65MB attachment made
+  # zero byte progress across 4×15min curl retries while a git push seconds
+  # earlier succeeded), so assets are uploaded from a mainland-side machine
+  # with `deploy/gitee-mirror.sh` after the release. OPT-IN like
+  # mirror-to-acr: repo Variable ENABLE_GITEE=true + Secret GITEE_TOKEN.
+  # Missing token/variable → job skips, never blocks a release. Re-runs are
+  # safe: every step no-ops when the desired state already holds.
   mirror-to-gitee:
     needs: release
     if: vars.ENABLE_GITEE == 'true' && startsWith(github.ref, 'refs/tags/v')
@@ -345,7 +349,7 @@ jobs:
           git push "https://mickeybee:${GITEE_TOKEN}@gitee.com/Mi-Bee-Studio/MiBeeNvr.git" \
             "refs/tags/${{ github.ref_name }}"
 
-      - name: Create the Gitee release
+      - name: Create the Gitee release and prune old versions
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -354,18 +358,34 @@ jobs:
           set -euo pipefail
           API="https://gitee.com/api/v5/repos/Mi-Bee-Studio/MiBeeNvr"
           AUTH="Authorization: Bearer ${GITEE_TOKEN}"
-          # Gitee quirks (verified against the live API): GET
-          # releases/tags/{tag} answers 200 with body `null` when the release
-          # does not exist — test the parsed id, not the HTTP code; POST
-          # /releases demands a target_commitish field (empty string is fine
-          # when the tag exists).
-          REL_ID=$(curl -sf -H "$AUTH" "${API}/releases/tags/${TAG}" | jq -r '.id // empty')
-          if [ -n "${REL_ID}" ]; then
-            echo "Gitee release ${TAG} already exists (id ${REL_ID})"
-            exit 0
+          KEEP=$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '[.[] | select(.prerelease == false)][0].tag_name')
+          echo "latest stable (kept on Gitee): ${KEEP}"
+          if [ "${TAG}" = "${KEEP}" ]; then
+            # Quirks (verified): GET releases/tags/{tag} answers 200 with body
+            # `null` when missing — test the parsed id, not the HTTP code;
+            # POST /releases demands a target_commitish field (empty string is
+            # fine when the tag exists).
+            REL_ID=$(curl -sf -H "$AUTH" "${API}/releases/tags/${TAG}" | jq -r '.id // empty')
+            if [ -z "${REL_ID}" ]; then
+              REL_ID=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" \
+                -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"target_commitish\":\"\",\"prerelease\":false,\"body\":\"MiBee NVR ${TAG} — 完整发布说明（含更新日志）见 GitHub：https://github.com/${{ github.repository }}/releases/tag/${TAG}\"}" \
+                "${API}/releases" | jq -r '.id')
+              echo "created Gitee release ${TAG} (id ${REL_ID})"
+            else
+              echo "Gitee release ${TAG} already exists (id ${REL_ID})"
+            fi
+          else
+            echo "tag ${TAG} is not the latest stable — no shell on Gitee (stable-only mirror)"
           fi
-          PRE=$(gh release view "$TAG" -R "${{ github.repository }}" --json isPrerelease --jq .isPrerelease)
-          REL_ID=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"target_commitish\":\"\",\"prerelease\":${PRE:-false},\"body\":\"MiBee NVR ${TAG} — 完整发布说明（含更新日志）见 GitHub：https://github.com/${{ github.repository }}/releases/tag/${TAG}\"}" \
-            "${API}/releases" | jq -r '.id')
-          echo "created Gitee release ${TAG} (id ${REL_ID})"
+          # Prune every Gitee release that is not the kept one. Enumerate from
+          # the GitHub side — the Gitee releases LIST endpoint drops entries
+          # under load.
+          for tag in $(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate --jq '.[].tag_name'); do
+            [ "${tag}" = "${KEEP}" ] && continue
+            id=$(curl -sf -H "$AUTH" "${API}/releases/tags/${tag}" | jq -r '.id // empty')
+            if [ -n "${id}" ]; then
+              echo "prune Gitee release ${tag} (id ${id})"
+              curl -sf -X DELETE -H "$AUTH" "${API}/releases/${id}"
+            fi
+          done
