@@ -244,8 +244,10 @@ func main() {
 	// Desktop tray (windows builds; no-op elsewhere): without it a desktop
 	// run has no discoverable entry to reach the UI or stop the server.
 	trayStop, trayQuit := tray.Start(tray.Options{
-		Tooltip: "MiBee NVR " + appVersion,
-		OpenURL: tray.ListenURL(cfg.Server.Listen),
+		Tooltip:  "MiBee NVR " + appVersion,
+		OpenURL:  tray.ListenURL(cfg.Server.Listen),
+		Username: cfg.Auth.Username,
+		Version:  appVersion,
 	})
 	defer trayStop()
 

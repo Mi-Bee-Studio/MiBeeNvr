@@ -3,13 +3,20 @@
 package tray
 
 import (
+	"bytes"
 	_ "embed"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -24,16 +31,17 @@ var iconICO []byte
 
 const (
 	className    = "MiBeeNVRTrayWnd"
+	dlgClassName = "MiBeeNVRPasswdDlg"
 	trayIconID   = 1
 	wmTray       = 0x8000 + 1 // WM_APP+1, tray callback message
 	cmdOpen      = 100
-	cmdQuit      = 101
+	cmdPassword  = 101
+	cmdQuit      = 102
 	iconTmpName  = "mibee-nvr-tray.ico"
 	tipMaxRunes  = 127 // szTip is [128]uint16 incl. NUL
-	menuTitle    = "MiBee NVR"
 	menuOpen     = "打开 Web 界面"
+	menuPassword = "修改密码…"
 	menuQuit     = "退出"
-	trayQuitMsg  = "tray quit requested, shutting down"
 	niTipMaxWLen = 128
 )
 
@@ -42,6 +50,8 @@ const (
 	wmDestroy       = 0x0002
 	wmClose         = 0x0010
 	wmCommand       = 0x0111
+	wmSetFont       = 0x0030
+	wmLButtonUp     = 0x0202
 	wmLButtonDblClk = 0x0203
 	wmRButtonUp     = 0x0205
 
@@ -65,21 +75,46 @@ const (
 	swShowNormal = 1
 
 	wsOverlappedWindow = 0x00CF0000
+	wsVisible          = 0x10000000
+	wsChild            = 0x40000000
+	wsTabstop          = 0x00010000
+	wsThickFrame       = 0x00040000
+	wsMaximizeBox      = 0x00010000
+
+	esPassword      = 0x0020
+	esAutoHscroll   = 0x0080
+	bsDefPushButton = 0x0001
+
+	idcEditOld  = 2001
+	idcEditNew  = 2002
+	idcEditConf = 2003
+	idBtnOK     = 1 // IDOK — IsDialogMessage maps Enter to the default button
+	idBtnCancel = 2 // IDCANCEL — IsDialogMessage maps Esc to this
+
+	mbOK              = 0x0
+	mbIconError       = 0x10
+	mbIconInformation = 0x40
+
+	defaultGuiFont = 17
 )
 
 var (
 	user32   = windows.NewLazySystemDLL("user32.dll")
 	shell32  = windows.NewLazySystemDLL("shell32.dll")
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
+	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
 
 	pRegisterClassExW    = user32.NewProc("RegisterClassExW")
 	pCreateWindowExW     = user32.NewProc("CreateWindowExW")
 	pDefWindowProcW      = user32.NewProc("DefWindowProcW")
 	pGetMessageW         = user32.NewProc("GetMessageW")
 	pDispatchMessageW    = user32.NewProc("DispatchMessageW")
+	pTranslateMessage    = user32.NewProc("TranslateMessage")
+	pIsDialogMessageW    = user32.NewProc("IsDialogMessageW")
 	pPostQuitMessage     = user32.NewProc("PostQuitMessage")
 	pDestroyWindow       = user32.NewProc("DestroyWindow")
 	pPostMessageW        = user32.NewProc("PostMessageW")
+	pSendMessageW        = user32.NewProc("SendMessageW")
 	pLoadImageW          = user32.NewProc("LoadImageW")
 	pDestroyIcon         = user32.NewProc("DestroyIcon")
 	pCreatePopupMenu     = user32.NewProc("CreatePopupMenu")
@@ -88,8 +123,13 @@ var (
 	pTrackPopupMenu      = user32.NewProc("TrackPopupMenu")
 	pSetForegroundWindow = user32.NewProc("SetForegroundWindow")
 	pGetCursorPos        = user32.NewProc("GetCursorPos")
+	pMessageBoxW         = user32.NewProc("MessageBoxW")
+	pGetWindowTextW      = user32.NewProc("GetWindowTextW")
+	pIsWindow            = user32.NewProc("IsWindow")
+	pSetFocus            = user32.NewProc("SetFocus")
 	pShellNotifyIconW    = shell32.NewProc("Shell_NotifyIconW")
 	pGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
+	pGetStockObject      = gdi32.NewProc("GetStockObject")
 )
 
 type point struct{ X, Y int32 }
@@ -141,9 +181,15 @@ type notifyIconDataW struct {
 
 // Process-wide tray state, owned by the tray goroutine after Start returns.
 var (
-	trayURL  string
-	quitCh   chan struct{}
-	quitOnce sync.Once
+	trayURL      string
+	trayUsername = "admin"
+	trayVersion  string
+	quitCh       chan struct{}
+	quitOnce     sync.Once
+
+	// Password-dialog control handles (single dialog at a time, used only on
+	// the tray thread).
+	dlgEditOld, dlgEditNew, dlgEditConf uintptr
 )
 
 var wndProcCb = syscall.NewCallback(
@@ -154,7 +200,7 @@ var wndProcCb = syscall.NewCallback(
 			case wmRButtonUp:
 				showMenu(windows.HWND(hwnd))
 				return 0
-			case wmLButtonDblClk:
+			case wmLButtonUp, wmLButtonDblClk:
 				openURL()
 				return 0
 			}
@@ -175,6 +221,10 @@ var wndProcCb = syscall.NewCallback(
 func startPlatform(opts Options) (stop func(), quit <-chan struct{}, err error) {
 	quitCh = make(chan struct{})
 	trayURL = opts.OpenURL
+	trayVersion = opts.Version
+	if u := strings.TrimSpace(opts.Username); u != "" {
+		trayUsername = u
+	}
 
 	iconPath := filepath.Join(os.TempDir(), iconTmpName)
 	if err := os.WriteFile(iconPath, iconICO, 0o644); err != nil {
@@ -188,6 +238,15 @@ func startPlatform(opts Options) (stop func(), quit <-chan struct{}, err error) 
 	ready := make(chan started, 1)
 
 	go func() {
+		// A Win32 window is bound to the OS thread that creates it, and its
+		// messages are queued to that thread — the goroutine must therefore
+		// stay pinned for the whole lifetime of the message loop. Without
+		// this the runtime may migrate us and every tray click silently
+		// dies with an unpumped queue (the "icon shows but does nothing"
+		// field report).
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
 		hinst, _, _ := pGetModuleHandleW.Call(0)
 		cls, _ := windows.UTF16PtrFromString(className)
 		wc := wndClassExW{LpfnWndProc: wndProcCb, LpszClassName: cls, HInstance: windows.Handle(hinst)}
@@ -238,6 +297,7 @@ func startPlatform(opts Options) (stop func(), quit <-chan struct{}, err error) 
 			}
 			call(pDispatchMessageW, uintptr(unsafe.Pointer(&m)))
 		}
+		slog.Info("tray message loop exited")
 		call(pDestroyIcon, icon)
 		_ = os.Remove(iconPath)
 	}()
@@ -275,6 +335,13 @@ func utf16ptr(s string) uintptr {
 	return uintptr(unsafe.Pointer(p))
 }
 
+func menuTitle() string {
+	if trayVersion != "" {
+		return "MiBee NVR  " + trayVersion
+	}
+	return "MiBee NVR"
+}
+
 func showMenu(hwnd windows.HWND) {
 	menu, _, _ := pCreatePopupMenu.Call()
 	if menu == 0 {
@@ -282,9 +349,10 @@ func showMenu(hwnd windows.HWND) {
 	}
 	defer call(pDestroyMenu, menu)
 
-	call(pAppendMenuW, menu, mfString|mfGrayed, 0, utf16ptr(menuTitle))
+	call(pAppendMenuW, menu, mfString|mfGrayed, 0, utf16ptr(menuTitle()))
 	if trayURL != "" {
 		call(pAppendMenuW, menu, mfString, cmdOpen, utf16ptr(menuOpen))
+		call(pAppendMenuW, menu, mfString, cmdPassword, utf16ptr(menuPassword))
 	}
 	call(pAppendMenuW, menu, mfSeparator, 0, 0)
 	call(pAppendMenuW, menu, mfString, cmdQuit, utf16ptr(menuQuit))
@@ -301,6 +369,8 @@ func showMenu(hwnd windows.HWND) {
 	switch cmd {
 	case cmdOpen:
 		openURL()
+	case cmdPassword:
+		changePasswordDialog()
 	case cmdQuit:
 		quitOnce.Do(func() { close(quitCh) })
 	}
@@ -316,5 +386,163 @@ func openURL() {
 	}
 	if err := windows.ShellExecute(0, nil, u, nil, nil, swShowNormal); err != nil {
 		slog.Warn("tray: open web ui failed", "error", err)
+	} else {
+		slog.Info("tray: opened web ui", "url", trayURL)
+	}
+}
+
+// ---- 修改密码 native dialog (runs modally on the tray thread) ----
+
+var dlgProcCb = syscall.NewCallback(
+	func(hwnd uintptr, msgc uint32, wParam, lParam uintptr) uintptr {
+		switch msgc {
+		case wmCommand:
+			if lParam == 0 { // menu/accelerator notifications carry no hwnd
+				switch uint16(wParam & 0xFFFF) {
+				case idBtnOK:
+					submitPasswordChange(hwnd)
+					return 0
+				case idBtnCancel:
+					call(pDestroyWindow, hwnd)
+					return 0
+				}
+			}
+		}
+		ret, _, _ := pDefWindowProcW.Call(hwnd, uintptr(msgc), wParam, lParam)
+		return ret
+	})
+
+func changePasswordDialog() {
+	hinst, _, _ := pGetModuleHandleW.Call(0)
+	cls, _ := windows.UTF16PtrFromString(dlgClassName)
+	wc := wndClassExW{LpfnWndProc: dlgProcCb, LpszClassName: cls, HInstance: windows.Handle(hinst)}
+	wc.CbSize = uint32(unsafe.Sizeof(wc))
+	call(pRegisterClassExW, uintptr(unsafe.Pointer(&wc))) // re-register is tolerated
+
+	font, _, _ := pGetStockObject.Call(defaultGuiFont)
+	style := uintptr((wsOverlappedWindow &^ wsThickFrame &^ wsMaximizeBox) | wsVisible)
+	title, _ := windows.UTF16PtrFromString("MiBee NVR — 修改密码")
+	hwnd, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(title)),
+		style, 0x80000000 /*CW_USEDEFAULT*/, 0x80000000, 400, 230, 0, 0, hinst, 0)
+	if hwnd == 0 {
+		slog.Warn("tray: create password dialog failed")
+		return
+	}
+
+	addCtrl := func(class, text string, id uintptr, style uintptr, x, y, w, h int32) uintptr {
+		t, _ := windows.UTF16PtrFromString(text)
+		c, _ := windows.UTF16PtrFromString(class)
+		ch, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(c)), uintptr(unsafe.Pointer(t)),
+			wsChild|wsVisible|style, uintptr(x), uintptr(y), uintptr(w), uintptr(h),
+			hwnd, id, hinst, 0)
+		if ch != 0 {
+			call(pSendMessageW, ch, wmSetFont, font, 1)
+		}
+		return ch
+	}
+	addCtrl("STATIC", "当前密码", 0, 0, 12, 18, 76, 20)
+	dlgEditOld = addCtrl("EDIT", "", idcEditOld, wsTabstop|esPassword|esAutoHscroll, 96, 16, 264, 24)
+	addCtrl("STATIC", "新密码", 0, 0, 12, 54, 76, 20)
+	dlgEditNew = addCtrl("EDIT", "", idcEditNew, wsTabstop|esPassword|esAutoHscroll, 96, 52, 264, 24)
+	addCtrl("STATIC", "确认新密码", 0, 0, 12, 90, 76, 20)
+	dlgEditConf = addCtrl("EDIT", "", idcEditConf, wsTabstop|esPassword|esAutoHscroll, 96, 88, 264, 24)
+	addCtrl("BUTTON", "确定", idBtnOK, bsDefPushButton|wsTabstop, 212, 128, 76, 28)
+	addCtrl("BUTTON", "取消", idBtnCancel, wsTabstop, 296, 128, 76, 28)
+	call(pSetFocus, dlgEditOld)
+
+	// Modal pump on the tray thread: IsDialogMessage gives Tab navigation,
+	// Enter→default button and Esc→cancel for free.
+	var m msg
+	for {
+		r, _, _ := pGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		if int32(r) <= 0 {
+			return
+		}
+		ok, _, _ := pIsDialogMessageW.Call(hwnd, uintptr(unsafe.Pointer(&m)))
+		if ok == 0 {
+			call(pTranslateMessage, uintptr(unsafe.Pointer(&m)))
+			call(pDispatchMessageW, uintptr(unsafe.Pointer(&m)))
+		}
+		if w, _, _ := pIsWindow.Call(hwnd); w == 0 {
+			return
+		}
+	}
+}
+
+func editText(h uintptr) string {
+	if h == 0 {
+		return ""
+	}
+	buf := make([]uint16, 256)
+	n, _, _ := pGetWindowTextW.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	return utf16ToString(buf[:n])
+}
+
+func utf16ToString(u []uint16) string {
+	return syscall.UTF16ToString(u)
+}
+
+func dlgMsgBox(hwnd uintptr, text, caption string, icon uintptr) {
+	call(pMessageBoxW, hwnd, utf16ptr(text), utf16ptr(caption), mbOK|icon)
+}
+
+func submitPasswordChange(hwnd uintptr) {
+	oldPw := editText(dlgEditOld)
+	newPw := editText(dlgEditNew)
+	confPw := editText(dlgEditConf)
+
+	if oldPw == "" || newPw == "" {
+		dlgMsgBox(hwnd, "请填写当前密码和新密码。", "修改密码", mbIconError)
+		return
+	}
+	if len(newPw) < 8 {
+		dlgMsgBox(hwnd, "新密码至少 8 个字符。", "修改密码", mbIconError)
+		return
+	}
+	if newPw != confPw {
+		dlgMsgBox(hwnd, "两次输入的新密码不一致。", "修改密码", mbIconError)
+		return
+	}
+	if err := postPasswordChange(oldPw, newPw); err != nil {
+		slog.Warn("tray: password change failed", "error", err)
+		dlgMsgBox(hwnd, "修改失败："+err.Error(), "修改密码", mbIconError)
+		return
+	}
+	slog.Info("tray: password changed")
+	dlgMsgBox(hwnd, "密码已修改，下次登录请使用新密码。", "修改密码", mbIconInformation)
+	call(pDestroyWindow, hwnd)
+}
+
+// postPasswordChange calls POST /api/auth/password on the NVR's own listener
+// with the CURRENT password as BasicAuth — proving knowledge of it is what
+// authorizes the change (identical security to a login attempt).
+func postPasswordChange(oldPw, newPw string) error {
+	if trayURL == "" {
+		return fmt.Errorf("Web 地址未知")
+	}
+	body, _ := json.Marshal(map[string]string{"new_password": newPw})
+	req, err := http.NewRequest(http.MethodPost,
+		strings.TrimRight(trayURL, "/")+"/api/auth/password", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(trayUsername, oldPw)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("无法连接 NVR（%w）", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusUnauthorized:
+		return fmt.Errorf("当前密码不正确")
+	case http.StatusConflict:
+		return fmt.Errorf("尚未完成初始设置——请先通过「打开 Web 界面」完成向导")
+	default:
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		return fmt.Errorf("HTTP %d：%s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 }
