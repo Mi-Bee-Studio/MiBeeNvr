@@ -209,6 +209,9 @@ func main() {
 	api.SetShutdownFunc(func() { close(apiShutdown) })
 
 	httpSrv := a.Value("http-server").(*http.Server)
+	// Unblocks SSE handler loops the moment Shutdown begins — without this a
+	// quit with the web UI open stalls on the never-idle /api/events stream.
+	httpSrv.RegisterOnShutdown(api.CloseStreams)
 	go func() {
 		slog.Info("MiBee NVR listening", "version", appVersion, "addr", cfg.Server.Listen)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -225,6 +228,7 @@ func main() {
 			Addr:    cfg.Server.TLSListen,
 			Handler: httpSrv.Handler,
 		}
+		tlsSrv.RegisterOnShutdown(api.CloseStreams)
 		go func() {
 			slog.Info("MiBee NVR HTTPS listening", "version", appVersion, "addr", cfg.Server.TLSListen,
 				"cert", cfg.Server.CertFile)
@@ -276,14 +280,25 @@ func main() {
 			_ = os.Remove(sock)
 		}
 	}
-	if tlsSrv != nil {
-		if err := tlsSrv.Shutdown(shutdownCtx); err != nil {
-			slog.Warn("https shutdown", "error", err)
+	// HTTP(S): SSE/streaming connections never go idle, so Shutdown alone
+	// stalls until the context deadline (a tray quit with the web UI open
+	// used to take the full 30s). CloseStreams (fired by RegisterOnShutdown
+	// below) unblocks the SSE loops; the short window + hard Close covers
+	// any remaining long-lived connection (e.g. FLV viewers).
+	httpShutdown := func(srv *http.Server, name string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			slog.Warn(name+" shutdown exceeded graceful window, closing", "error", err)
+			if cerr := srv.Close(); cerr != nil {
+				slog.Warn(name+" close", "error", cerr)
+			}
 		}
 	}
-	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		slog.Warn("http shutdown", "error", err)
+	if tlsSrv != nil {
+		httpShutdown(tlsSrv, "https")
 	}
+	httpShutdown(httpSrv, "http")
 	if err := a.Stop(); err != nil {
 		slog.Error("stop", "error", err)
 	}

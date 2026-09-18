@@ -26,6 +26,30 @@ func SetShutdownFunc(f func()) {
 	shutdownMu.Unlock()
 }
 
+// streamShutdown unblocks the SSE/streaming handler loops so
+// http.Server.Shutdown does not wait on never-idle connections (a tray quit
+// with the web UI open used to stall the full shutdown timeout on the SPA's
+// /api/events stream). main registers CloseStreams via
+// http.Server.RegisterOnShutdown, which fires as soon as Shutdown begins.
+var (
+	streamShutdown     = make(chan struct{})
+	streamShutdownOnce sync.Once
+)
+
+// CloseStreams signals every streaming handler loop to return. Idempotent.
+func CloseStreams() {
+	streamShutdownOnce.Do(func() { close(streamShutdown) })
+}
+
+// resetStreamShutdownForTest swaps in a fresh signal so one test firing
+// CloseStreams cannot poison the rest of the suite (the SSE loops re-read
+// the package var on every select iteration, so this takes effect
+// immediately). Test-only.
+func resetStreamShutdownForTest() {
+	streamShutdown = make(chan struct{})
+	streamShutdownOnce = sync.Once{}
+}
+
 // handleSystemShutdown handles POST /api/system/shutdown — graceful stop,
 // loopback-local only (IsBypassEligible), the same locality/authorization
 // model as POST /api/auth/password: whoever sits at the machine can already

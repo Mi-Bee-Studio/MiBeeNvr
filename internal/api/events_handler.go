@@ -53,6 +53,8 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-streamShutdown:
+			return
 		case evt := <-eventCh:
 			data, err := json.Marshal(evt)
 			if err != nil {
@@ -108,6 +110,8 @@ func (h *Handler) handleCameraEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-streamShutdown:
 			return
 		case evt := <-eventCh:
 			// Filter events by camera ID.
