@@ -50,6 +50,22 @@ cross-armv7: frontend
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/mibee-nvr-armv7 ./cmd/mibee-nvr/
 
+# Desktop targets (windows/darwin): pure-Go builds for running the NVR on a
+# PC — the web SPA is the UI (user-ruled 2026-09-18: no native desktop app).
+cross-windows: frontend
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/mibee-nvr-windows-amd64.exe ./cmd/mibee-nvr/
+
+cross-darwin-arm64: frontend
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/mibee-nvr-darwin-arm64 ./cmd/mibee-nvr/
+
+cross-darwin-amd64: frontend
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/mibee-nvr-darwin-amd64 ./cmd/mibee-nvr/
+
+cross-desktop: cross-windows cross-darwin-arm64 cross-darwin-amd64
+
 lint:
 	golangci-lint run
 
@@ -142,6 +158,6 @@ download-model: cross
 	ssh $(RPi_HOST) "sudo systemctl start $(RPi_SRV)"
 
 
-.PHONY: frontend build test test-verbose test-short cross cross-armv7 lint clean install install-service uninstall-service
+.PHONY: frontend build test test-verbose test-short cross cross-armv7 cross-windows cross-darwin-arm64 cross-darwin-amd64 cross-desktop lint clean install install-service uninstall-service
 .PHONY: docker-build docker-build-arm64 docker-build-all docker-push docker-push-arm64 docker-push-all docker-release
 .PHONY: download-model download-model-local deploy rollback deploy-check
