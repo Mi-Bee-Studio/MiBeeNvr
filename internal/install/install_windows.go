@@ -39,6 +39,27 @@ func setupConsole() {
 	_, _, _ = kernel32.NewProc("SetConsoleOutputCP").Call(65001)
 }
 
+// HideOwnConsole hides the console window the launcher (Start Menu shortcut,
+// Run-key autostart, Explorer double-click) allocated for the server — the
+// tray is the UI, a lingering cmd window reads as a stuck program (field
+// report 2026-09-19). Only hides a console we OWN: when another process
+// shares it (the user's terminal running `mibee-nvr …`), it stays visible.
+func HideOwnConsole() {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	hwnd, _, _ := kernel32.NewProc("GetConsoleWindow").Call()
+	if hwnd == 0 {
+		return
+	}
+	var procs [8]uintptr
+	n, _, _ := kernel32.NewProc("GetConsoleProcessList").Call(
+		uintptr(unsafe.Pointer(&procs[0])), uintptr(len(procs)))
+	if n > 1 {
+		return // shared console — not ours to hide
+	}
+	user32 := syscall.NewLazyDLL("user32.dll")
+	_, _, _ = user32.NewProc("ShowWindow").Call(hwnd, 0) // SW_HIDE
+}
+
 // OpenBrowser opens url in the default browser (ShellExecute — the same
 // call the tray's 打开 Web 界面 uses).
 func OpenBrowser(url string) {

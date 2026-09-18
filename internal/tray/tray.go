@@ -59,6 +59,25 @@ func ListenURL(listen string) string {
 	return "http://" + net.JoinHostPort(host, port)
 }
 
+// NormalizeListenInput accepts user shorthand in the 监听地址 dialog: a bare
+// all-digits entry means "keep the current host, change only the port" (with
+// current 127.0.0.1:9090, "9091" → 127.0.0.1:9091). Everything else passes
+// through for ValidateListenAddr to judge — the API endpoint stays strict.
+func NormalizeListenInput(input, currentListen string) string {
+	s := strings.TrimSpace(input)
+	if s == "" || strings.Contains(s, ":") {
+		return s
+	}
+	if _, err := strconv.Atoi(s); err != nil {
+		return s // not a bare port — let validation produce the message
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(currentListen))
+	if err != nil {
+		host = "" // wildcard current — keep wildcard
+	}
+	return net.JoinHostPort(host, s)
+}
+
 // ValidateListenAddr checks the shape of an address typed into the 监听地址
 // dialog: optional host + mandatory port ("127.0.0.1:9090", "0.0.0.0:9090",
 // ":9090", "[::1]:9090"). Error messages are user-facing (zh) — the dialog
@@ -73,7 +92,7 @@ func ValidateListenAddr(addr string) error {
 	}
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return errors.New("格式应为 [IP:]端口，例如 127.0.0.1:9090")
+		return errors.New("格式应为 [IP:]端口，例如 127.0.0.1:9090；只改端口可仅输入数字")
 	}
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 1 || n > 65535 {

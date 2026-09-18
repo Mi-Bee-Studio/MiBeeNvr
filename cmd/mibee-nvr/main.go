@@ -5,12 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -174,8 +176,23 @@ func main() {
 	// "off"/"0s" disables) — arming here, after the final logger swap, keeps
 	// it effective for the whole runtime.
 	logger = authmw.SetupLogger(cfg.Observability.LogLevel, cfg.Observability.LogFormat)
+
+	// Desktop windows server mode runs with a HIDDEN console (the tray is
+	// the UI — a lingering cmd window reads as a stuck program). Stdout
+	// would be lost with it, so tee the logs into the data dir first
+	// (darwin's LaunchAgent already redirects to nvr.log; servers log to
+	// journald/containers untouched).
+	if runtime.GOOS == "windows" {
+		if lw := openDesktopLogWriter(*configPath); lw != nil {
+			logger = authmw.SetupLoggerWriter(cfg.Observability.LogLevel, cfg.Observability.LogFormat, lw)
+			slog.Info("desktop log tee active", "file", filepath.Join(filepath.Dir(*configPath), "nvr.log"))
+		}
+	}
 	slogx.SetDefault(logger)
 	slogx.InstallStdLogThrottle(cfg.Observability.StdlogThrottleDuration())
+	if runtime.GOOS == "windows" {
+		install.HideOwnConsole()
+	}
 
 	// Process memory self-discipline (#756): conservative GOMEMLIMIT before
 	// any manager starts allocating — env GOMEMLIMIT wins natively.
@@ -393,6 +410,24 @@ func main() {
 		slog.Error("stop", "error", err)
 	}
 	slog.Info("MiBee NVR stopped")
+}
+
+// openDesktopLogWriter tees server logs into <config dir>/nvr.log (10MB
+// rotated to nvr.log.old) next to the desktop config — the hidden console
+// makes stdout unreadable, and on-machine forensics (the 2026-09-19
+// uninstaller incident) need a persistent record. Nil = keep stdout only.
+func openDesktopLogWriter(configPath string) io.Writer {
+	logPath := filepath.Join(filepath.Dir(configPath), "nvr.log")
+	if fi, err := os.Stat(logPath); err == nil && fi.Size() > 10*1024*1024 {
+		_ = os.Remove(logPath + ".old")
+		_ = os.Rename(logPath, logPath+".old")
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil
+	}
+	// f stays open for the process lifetime (owned by the logger).
+	return io.MultiWriter(os.Stdout, f)
 }
 
 // mustListenTCP binds the main HTTP listener. Kept as a standalone function

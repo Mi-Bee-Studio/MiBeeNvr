@@ -27,6 +27,9 @@ func InstalledExePath() string { return "" }
 func OpenBrowser(url string)   {}
 func NotifyDialog(text string) {}
 
+// HideOwnConsole is windows-only (console hiding for server mode).
+func HideOwnConsole() {}
+
 // RefreshMenuBarHelper has no menu-bar helper to refresh off-desktop.
 func RefreshMenuBarHelper() error { return nil }
 

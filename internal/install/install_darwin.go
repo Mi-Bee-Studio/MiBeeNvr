@@ -147,6 +147,9 @@ func Install(opts Options) (*Result, error) {
 	return res, nil
 }
 
+// HideOwnConsole is windows-only (console hiding for server mode).
+func HideOwnConsole() {}
+
 // RefreshMenuBarHelper recompiles and restarts the menu-bar helper after a
 // listen change so its baked base URL follows the new address. No-op when
 // the helper was never installed (or on non-darwin builds).

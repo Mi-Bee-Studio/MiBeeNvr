@@ -235,6 +235,25 @@ var wndProcCb = syscall.NewCallback(
 				openURL()
 				return 0
 			}
+		case wmCommand:
+			// The menu path handles picks inside showMenu (TPM_RETURNCMD
+			// returns the id, it never sends WM_COMMAND), so this routing
+			// only fires for posted messages — the automation hook the
+			// dialog E2E drives (no global input injection needed).
+			switch uint32(uint16(wParam)) {
+			case cmdOpen:
+				openURL()
+				return 0
+			case cmdPassword:
+				changePasswordDialog()
+				return 0
+			case cmdListen:
+				listenDialog()
+				return 0
+			case cmdQuit:
+				quitOnce.Do(func() { close(quitCh) })
+				return 0
+			}
 		case wmClose:
 			call(pDestroyWindow, hwnd)
 			return 0
@@ -440,15 +459,18 @@ var dlgProcCb = syscall.NewCallback(
 	func(hwnd uintptr, msgc uint32, wParam, lParam uintptr) uintptr {
 		switch msgc {
 		case wmCommand:
-			if lParam == 0 { // menu/accelerator notifications carry no hwnd
-				switch uint16(wParam & 0xFFFF) {
-				case idBtnOK:
-					submitPasswordChange(hwnd)
-					return 0
-				case idBtnCancel:
-					call(pDestroyWindow, hwnd)
-					return 0
-				}
+			// Both message shapes select on the same LOWORD(wParam) id:
+			// button clicks notify with lParam = control hwnd + HIWORD =
+			// BN_CLICKED (matching only lParam==0 left every button dead —
+			// field report 2026-09-19), while IsDialogMessage's keyboard
+			// translation (Enter/Esc) sends lParam = 0.
+			switch uint16(wParam & 0xFFFF) {
+			case idBtnOK:
+				submitPasswordChange(hwnd)
+				return 0
+			case idBtnCancel:
+				call(pDestroyWindow, hwnd)
+				return 0
 			}
 		}
 		ret, _, _ := pDefWindowProcW.Call(hwnd, uintptr(msgc), wParam, lParam)
@@ -593,15 +615,16 @@ var listenDlgProcCb = syscall.NewCallback(
 	func(hwnd uintptr, msgc uint32, wParam, lParam uintptr) uintptr {
 		switch msgc {
 		case wmCommand:
-			if lParam == 0 { // menu/accelerator notifications carry no hwnd
-				switch uint16(wParam & 0xFFFF) {
-				case idBtnOK:
-					submitListenChange(hwnd)
-					return 0
-				case idBtnCancel:
-					call(pDestroyWindow, hwnd)
-					return 0
-				}
+			// See dlgProcCb: accept BOTH the button-notification shape
+			// (lParam = control hwnd) and the keyboard-translation shape
+			// (lParam = 0) — matching only the latter left 确定/取消 dead.
+			switch uint16(wParam & 0xFFFF) {
+			case idBtnOK:
+				submitListenChange(hwnd)
+				return 0
+			case idBtnCancel:
+				call(pDestroyWindow, hwnd)
+				return 0
 			}
 		}
 		ret, _, _ := pDefWindowProcW.Call(hwnd, uintptr(msgc), wParam, lParam)
@@ -638,7 +661,7 @@ func listenDialog() {
 	}
 	addCtrl("STATIC", "监听地址", 0, 0, 12, 26, 76, 20)
 	dlgEditListen = addCtrl("EDIT", snapshot().listen, idcEditListen, wsTabstop|esAutoHscroll, 96, 24, 264, 24)
-	addCtrl("STATIC", "127.0.0.1 = 仅本机访问；0.0.0.0 = 开放局域网访问（需改端口则一并填写）", 0, 0, 12, 62, 360, 20)
+	addCtrl("STATIC", "127.0.0.1=仅本机访问  0.0.0.0=开放局域网  只填数字=仅改端口", 0, 0, 12, 62, 360, 20)
 	addCtrl("BUTTON", "确定", idBtnOK, bsDefPushButton|wsTabstop, 212, 96, 76, 28)
 	addCtrl("BUTTON", "取消", idBtnCancel, wsTabstop, 296, 96, 76, 28)
 	call(pSetFocus, dlgEditListen)
@@ -662,20 +685,21 @@ func listenDialog() {
 }
 
 func submitListenChange(hwnd uintptr) {
-	fn := snapshot().changeListen
-	if fn == nil {
+	st := snapshot()
+	if st.changeListen == nil {
 		call(pDestroyWindow, hwnd)
 		return
 	}
-	addr := strings.TrimSpace(editText(dlgEditListen))
+	// Bare digits ("9091") = keep the current host, change only the port.
+	addr := NormalizeListenInput(editText(dlgEditListen), st.listen)
 	if err := ValidateListenAddr(addr); err != nil {
 		dlgMsgBox(hwnd, err.Error(), "监听地址", mbIconError)
 		return
 	}
-	// Synchronous on purpose: fn binds the new address before touching the
-	// old listener, so an error here leaves everything serving as-is. The
+	// Synchronous on purpose: the swap binds the new address before touching
+	// the old listener, so an error here leaves everything serving as-is. The
 	// drain typically completes in well under a second.
-	if err := fn(addr); err != nil {
+	if err := st.changeListen(addr); err != nil {
 		slog.Warn("tray: listen change failed", "error", err)
 		dlgMsgBox(hwnd, "切换失败："+err.Error(), "监听地址", mbIconError)
 		return
