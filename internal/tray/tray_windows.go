@@ -85,7 +85,6 @@ const (
 	esAutoHscroll   = 0x0080
 	bsDefPushButton = 0x0001
 
-	idcEditOld  = 2001
 	idcEditNew  = 2002
 	idcEditConf = 2003
 	idBtnOK     = 1 // IDOK — IsDialogMessage maps Enter to the default button
@@ -181,15 +180,14 @@ type notifyIconDataW struct {
 
 // Process-wide tray state, owned by the tray goroutine after Start returns.
 var (
-	trayURL      string
-	trayUsername = "admin"
-	trayVersion  string
-	quitCh       chan struct{}
-	quitOnce     sync.Once
+	trayURL     string
+	trayVersion string
+	quitCh      chan struct{}
+	quitOnce    sync.Once
 
 	// Password-dialog control handles (single dialog at a time, used only on
 	// the tray thread).
-	dlgEditOld, dlgEditNew, dlgEditConf uintptr
+	dlgEditNew, dlgEditConf uintptr
 )
 
 var wndProcCb = syscall.NewCallback(
@@ -222,9 +220,6 @@ func startPlatform(opts Options) (stop func(), quit <-chan struct{}, err error) 
 	quitCh = make(chan struct{})
 	trayURL = opts.OpenURL
 	trayVersion = opts.Version
-	if u := strings.TrimSpace(opts.Username); u != "" {
-		trayUsername = u
-	}
 
 	iconPath := filepath.Join(os.TempDir(), iconTmpName)
 	if err := os.WriteFile(iconPath, iconICO, 0o644); err != nil {
@@ -423,7 +418,7 @@ func changePasswordDialog() {
 	style := uintptr((wsOverlappedWindow &^ wsThickFrame &^ wsMaximizeBox) | wsVisible)
 	title, _ := windows.UTF16PtrFromString("MiBee NVR — 修改密码")
 	hwnd, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(title)),
-		style, 0x80000000 /*CW_USEDEFAULT*/, 0x80000000, 400, 230, 0, 0, hinst, 0)
+		style, 0x80000000 /*CW_USEDEFAULT*/, 0x80000000, 400, 190, 0, 0, hinst, 0)
 	if hwnd == 0 {
 		slog.Warn("tray: create password dialog failed")
 		return
@@ -440,15 +435,13 @@ func changePasswordDialog() {
 		}
 		return ch
 	}
-	addCtrl("STATIC", "当前密码", 0, 0, 12, 18, 76, 20)
-	dlgEditOld = addCtrl("EDIT", "", idcEditOld, wsTabstop|esPassword|esAutoHscroll, 96, 16, 264, 24)
-	addCtrl("STATIC", "新密码", 0, 0, 12, 54, 76, 20)
-	dlgEditNew = addCtrl("EDIT", "", idcEditNew, wsTabstop|esPassword|esAutoHscroll, 96, 52, 264, 24)
-	addCtrl("STATIC", "确认新密码", 0, 0, 12, 90, 76, 20)
-	dlgEditConf = addCtrl("EDIT", "", idcEditConf, wsTabstop|esPassword|esAutoHscroll, 96, 88, 264, 24)
-	addCtrl("BUTTON", "确定", idBtnOK, bsDefPushButton|wsTabstop, 212, 128, 76, 28)
-	addCtrl("BUTTON", "取消", idBtnCancel, wsTabstop, 296, 128, 76, 28)
-	call(pSetFocus, dlgEditOld)
+	addCtrl("STATIC", "新密码", 0, 0, 12, 26, 76, 20)
+	dlgEditNew = addCtrl("EDIT", "", idcEditNew, wsTabstop|esPassword|esAutoHscroll, 96, 24, 264, 24)
+	addCtrl("STATIC", "确认新密码", 0, 0, 12, 66, 76, 20)
+	dlgEditConf = addCtrl("EDIT", "", idcEditConf, wsTabstop|esPassword|esAutoHscroll, 96, 64, 264, 24)
+	addCtrl("BUTTON", "确定", idBtnOK, bsDefPushButton|wsTabstop, 212, 104, 76, 28)
+	addCtrl("BUTTON", "取消", idBtnCancel, wsTabstop, 296, 104, 76, 28)
+	call(pSetFocus, dlgEditNew)
 
 	// Modal pump on the tray thread: IsDialogMessage gives Tab navigation,
 	// Enter→default button and Esc→cancel for free.
@@ -487,12 +480,11 @@ func dlgMsgBox(hwnd uintptr, text, caption string, icon uintptr) {
 }
 
 func submitPasswordChange(hwnd uintptr) {
-	oldPw := editText(dlgEditOld)
 	newPw := editText(dlgEditNew)
 	confPw := editText(dlgEditConf)
 
-	if oldPw == "" || newPw == "" {
-		dlgMsgBox(hwnd, "请填写当前密码和新密码。", "修改密码", mbIconError)
+	if newPw == "" {
+		dlgMsgBox(hwnd, "请填写新密码。", "修改密码", mbIconError)
 		return
 	}
 	if len(newPw) < 8 {
@@ -503,20 +495,20 @@ func submitPasswordChange(hwnd uintptr) {
 		dlgMsgBox(hwnd, "两次输入的新密码不一致。", "修改密码", mbIconError)
 		return
 	}
-	if err := postPasswordChange(oldPw, newPw); err != nil {
+	if err := postPasswordChange(newPw); err != nil {
 		slog.Warn("tray: password change failed", "error", err)
 		dlgMsgBox(hwnd, "修改失败："+err.Error(), "修改密码", mbIconError)
 		return
 	}
 	slog.Info("tray: password changed")
-	dlgMsgBox(hwnd, "密码已修改，下次登录请使用新密码。", "修改密码", mbIconInformation)
+	dlgMsgBox(hwnd, "密码已修改（局域网登录请使用新密码）。", "修改密码", mbIconInformation)
 	call(pDestroyWindow, hwnd)
 }
 
-// postPasswordChange calls POST /api/auth/password on the NVR's own listener
-// with the CURRENT password as BasicAuth — proving knowledge of it is what
-// authorizes the change (identical security to a login attempt).
-func postPasswordChange(oldPw, newPw string) error {
+// postPasswordChange calls POST /api/auth/password on the NVR's loopback
+// listener. The endpoint is local-machine-only (IsBypassEligible), so no old
+// password is needed — sitting at the console is the authorization.
+func postPasswordChange(newPw string) error {
 	if trayURL == "" {
 		return fmt.Errorf("Web 地址未知")
 	}
@@ -527,7 +519,6 @@ func postPasswordChange(oldPw, newPw string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(trayUsername, oldPw)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -537,8 +528,8 @@ func postPasswordChange(oldPw, newPw string) error {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return nil
-	case http.StatusUnauthorized:
-		return fmt.Errorf("当前密码不正确")
+	case http.StatusForbidden:
+		return fmt.Errorf("仅限在 NVR 本机上修改")
 	case http.StatusConflict:
 		return fmt.Errorf("尚未完成初始设置——请先通过「打开 Web 界面」完成向导")
 	default:

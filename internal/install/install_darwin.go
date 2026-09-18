@@ -3,16 +3,25 @@
 package install
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tray"
 )
 
 const (
 	installDirName = "MiBeeNVR" // under ~/Applications
 	label          = "com.mibee-nvr"
+	barLabel       = "com.mibee-nvr.bar"
 )
+
+//go:embed bar_helper.swift
+var barHelperSwift string
 
 // Paths returns the per-user install locations.
 func Paths() (exeDir, dataDir, configPath string, err error) {
@@ -33,9 +42,17 @@ func agentPlistPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", label+".plist"), nil
 }
 
-// Install copies the running binary to ~/Applications/MiBeeNVR and wires a
-// per-user LaunchAgent (RunAtLoad + KeepAlive, logs to the data dir). No
-// sudo anywhere.
+func barAgentPlistPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("install: home dir: %w", err)
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", barLabel+".plist"), nil
+}
+
+// Install copies the running binary to ~/Applications/MiBeeNVR, wires the
+// per-user LaunchAgent (RunAtLoad + KeepAlive, logs to the data dir) and the
+// optional menu-bar helper (swiftc-compiled AppKit app). No sudo anywhere.
 func Install(opts Options) (*Result, error) {
 	exeDir, dataDir, cfgPath, err := Paths()
 	if err != nil {
@@ -87,11 +104,55 @@ func Install(opts Options) (*Result, error) {
 	res.Notes = append(res.Notes,
 		"已注册 LaunchAgent（登录自启 + 崩溃自动拉起）：launchctl list | grep mibee",
 		"日志："+logPath+"（tail -f 跟踪）",
-		"管理界面：http://127.0.0.1:9090（局域网用本机 IP 访问）")
+		"管理界面：http://127.0.0.1:9090（局域网用本机 IP 访问；本机浏览器免密）")
+
+	// Menu-bar helper: compiled on the spot with swiftc (ships with Xcode
+	// Command Line Tools). Optional — a missing compiler only costs the bar
+	// icon; the NVR itself stays fully manageable via launchctl + the web UI.
+	if err := installMenuBarHelper(exeDir, dataDir, cfgPath); err != nil {
+		res.Notes = append(res.Notes, "菜单栏图标未安装："+err.Error())
+	} else {
+		res.Notes = append(res.Notes, "菜单栏图标已就绪（打开 Web 界面 / 修改密码 / 退出）")
+	}
 	return res, nil
 }
 
-// Uninstall unloads the LaunchAgent and removes program files. Data is kept
+// installMenuBarHelper compiles the embedded AppKit helper with swiftc and
+// registers its own LaunchAgent (RunAtLoad + KeepAlive).
+func installMenuBarHelper(exeDir, dataDir, cfgPath string) error {
+	if _, err := exec.LookPath("swiftc"); err != nil {
+		return fmt.Errorf("未找到 swiftc（安装 Xcode Command Line Tools 后重新执行 mibee-nvr install）")
+	}
+	base := "http://127.0.0.1:9090"
+	if cfg, err := config.Load(cfgPath); err == nil && cfg.Server.Listen != "" {
+		base = tray.ListenURL(cfg.Server.Listen)
+	}
+	src := filepath.Join(dataDir, "mibee-nvr-bar.swift")
+	if err := os.WriteFile(src, []byte(strings.ReplaceAll(barHelperSwift, "__BASE_URL__", base)), 0o644); err != nil {
+		return fmt.Errorf("写助手源码: %w", err)
+	}
+	barPath := filepath.Join(exeDir, "mibee-nvr-bar")
+	out, err := runCmd("swiftc", "-O", "-o", barPath, src)
+	if err != nil {
+		return fmt.Errorf("swiftc 编译失败: %v\n%s", err, out)
+	}
+
+	barPlist, err := barAgentPlistPath()
+	if err != nil {
+		return err
+	}
+	logPath := filepath.Join(dataDir, "nvr-bar.log")
+	if err := os.WriteFile(barPlist, []byte(LaunchAgentPlist(barPath, "", logPath)), 0o644); err != nil {
+		return fmt.Errorf("write bar LaunchAgent: %w", err)
+	}
+	_, _ = runLaunchctl("unload", barPlist)
+	if out, err := runLaunchctl("load", "-w", barPlist); err != nil {
+		return fmt.Errorf("launchctl load bar: %v\n%s", err, out)
+	}
+	return nil
+}
+
+// Uninstall unloads the LaunchAgents and removes program files. Data is kept
 // unless purge is true.
 func Uninstall(purge bool) (*Result, error) {
 	exeDir, dataDir, cfgPath, err := Paths()
@@ -110,6 +171,12 @@ func Uninstall(purge bool) (*Result, error) {
 		}
 		_ = os.Remove(plist)
 	}
+	if barPlist, err := barAgentPlistPath(); err == nil {
+		if _, statErr := os.Stat(barPlist); statErr == nil {
+			_, _ = runLaunchctl("unload", "-w", barPlist)
+			_ = os.Remove(barPlist)
+		}
+	}
 	_ = os.RemoveAll(exeDir)
 
 	if purge {
@@ -127,6 +194,11 @@ func Uninstall(purge bool) (*Result, error) {
 
 func runLaunchctl(args ...string) (string, error) {
 	out, err := exec.Command("launchctl", args...).CombinedOutput()
+	return string(out), err
+}
+
+func runCmd(name string, args ...string) (string, error) {
+	out, err := exec.Command(name, args...).CombinedOutput()
 	return string(out), err
 }
 

@@ -398,6 +398,11 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	r.Post("/api/auth/login", h.handleLogin)
 	r.Post("/api/setup", h.handleSetup)
+	// Loopback-local management endpoints (desktop tray / macOS menu-bar
+	// helper): gated by middleware.IsBypassEligible INSIDE the handlers —
+	// remote callers get 403.
+	r.Post("/api/auth/password", h.handlePasswordChange)
+	r.Post("/api/system/shutdown", handleSystemShutdown)
 	// fnOS unified-gateway SSO (#394): mints an NVR session token when the
 	// request carries a gateway-verified ADMIN identity. The identity context
 	// only exists on the gateway Unix-socket listener — everywhere else this
