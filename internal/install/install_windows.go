@@ -120,7 +120,8 @@ func Install(opts Options) (*Result, error) {
 
 	res := &Result{Exe: exePath, Config: cfgPath, DataDir: dataDir}
 	res.Notes = append(res.Notes,
-		"开始菜单 → 「MiBee NVR」启动；启动后任务栏托盘出现图标（右键：打开 Web 界面 / 退出）",
+		"开始菜单 → 「MiBee NVR」启动；启动后任务栏托盘出现图标（右键：打开 Web 界面 / 修改密码 / 监听地址 / 退出）",
+		"默认仅本机可访问（http://127.0.0.1:9090）；托盘「监听地址…」可改为 0.0.0.0:9090 开放局域网",
 		"已注册开机自启（仅当前用户）；控制面板「应用」/ 设置→应用 中可卸载")
 
 	// Best-effort autostart: only when nothing is already listening on the
@@ -140,6 +141,9 @@ func Install(opts Options) (*Result, error) {
 }
 
 func quote(p string) string { return `"` + p + `"` }
+
+// RefreshMenuBarHelper is darwin-only — windows manages the tray in-process.
+func RefreshMenuBarHelper() error { return nil }
 
 func portInUse(addr string) bool {
 	c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)

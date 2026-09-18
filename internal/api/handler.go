@@ -403,6 +403,7 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	// remote callers get 403.
 	r.Post("/api/auth/password", h.handlePasswordChange)
 	r.Post("/api/system/shutdown", handleSystemShutdown)
+	r.Put("/api/system/listen", handleListenChange)
 	// fnOS unified-gateway SSO (#394): mints an NVR session token when the
 	// request carries a gateway-verified ADMIN identity. The identity context
 	// only exists on the gateway Unix-socket listener — everywhere else this

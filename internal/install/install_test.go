@@ -9,7 +9,7 @@ import (
 func TestStarterConfig(t *testing.T) {
 	got := StarterConfig(filepath.Join("x", "data"))
 	for _, want := range []string{
-		`listen: ":9090"`,
+		`listen: "127.0.0.1:9090"`, // loopback-only default — LAN access is opt-in via the tray
 		filepath.Join("x", "data", "data"),
 	} {
 		if !strings.Contains(got, want) {

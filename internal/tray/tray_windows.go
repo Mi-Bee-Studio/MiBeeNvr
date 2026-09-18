@@ -30,19 +30,22 @@ var iconICO []byte
 // a 386 build would need different padding.
 
 const (
-	className    = "MiBeeNVRTrayWnd"
-	dlgClassName = "MiBeeNVRPasswdDlg"
-	trayIconID   = 1
-	wmTray       = 0x8000 + 1 // WM_APP+1, tray callback message
-	cmdOpen      = 100
-	cmdPassword  = 101
-	cmdQuit      = 102
-	iconTmpName  = "mibee-nvr-tray.ico"
-	tipMaxRunes  = 127 // szTip is [128]uint16 incl. NUL
-	menuOpen     = "打开 Web 界面"
-	menuPassword = "修改密码…"
-	menuQuit     = "退出"
-	niTipMaxWLen = 128
+	className          = "MiBeeNVRTrayWnd"
+	dlgClassName       = "MiBeeNVRPasswdDlg"
+	dlgListenClassName = "MiBeeNVRListenDlg"
+	trayIconID         = 1
+	wmTray             = 0x8000 + 1 // WM_APP+1, tray callback message
+	cmdOpen            = 100
+	cmdPassword        = 101
+	cmdQuit            = 102
+	cmdListen          = 103
+	iconTmpName        = "mibee-nvr-tray.ico"
+	tipMaxRunes        = 127 // szTip is [128]uint16 incl. NUL
+	menuOpen           = "打开 Web 界面"
+	menuPassword       = "修改密码…"
+	menuListen         = "监听地址…"
+	menuQuit           = "退出"
+	niTipMaxWLen       = 128
 )
 
 const (
@@ -85,10 +88,11 @@ const (
 	esAutoHscroll   = 0x0080
 	bsDefPushButton = 0x0001
 
-	idcEditNew  = 2002
-	idcEditConf = 2003
-	idBtnOK     = 1 // IDOK — IsDialogMessage maps Enter to the default button
-	idBtnCancel = 2 // IDCANCEL — IsDialogMessage maps Esc to this
+	idcEditNew    = 2002
+	idcEditConf   = 2003
+	idcEditListen = 2004
+	idBtnOK       = 1 // IDOK — IsDialogMessage maps Enter to the default button
+	idBtnCancel   = 2 // IDCANCEL — IsDialogMessage maps Esc to this
 
 	mbOK              = 0x0
 	mbIconError       = 0x10
@@ -178,17 +182,46 @@ type notifyIconDataW struct {
 	BalloonIcon     windows.Handle
 }
 
-// Process-wide tray state, owned by the tray goroutine after Start returns.
+// Process-wide tray state. url/listen/version/changeListen are guarded by
+// trayMu: written by Start (boot) and by SetAddress (after an in-process
+// listen swap, from any goroutine), read on the tray thread.
 var (
-	trayURL     string
-	trayVersion string
-	quitCh      chan struct{}
-	quitOnce    sync.Once
+	trayMu         sync.Mutex
+	trayURL        string
+	trayListen     string
+	trayVersion    string
+	changeListenFn func(string) error
+	quitCh         chan struct{}
+	quitOnce       sync.Once
 
-	// Password-dialog control handles (single dialog at a time, used only on
-	// the tray thread).
-	dlgEditNew, dlgEditConf uintptr
+	// Dialog control handles (single dialog at a time, used only on the
+	// tray thread).
+	dlgEditNew, dlgEditConf, dlgEditListen uintptr
 )
+
+// trayState is a consistent snapshot of the mutable tray settings.
+type trayState struct {
+	url          string
+	listen       string
+	version      string
+	changeListen func(string) error
+}
+
+func snapshot() trayState {
+	trayMu.Lock()
+	defer trayMu.Unlock()
+	return trayState{url: trayURL, listen: trayListen, version: trayVersion, changeListen: changeListenFn}
+}
+
+// SetAddress retargets the tray after an in-process listen swap: the 打开
+// Web 界面 entry, the loopback password endpoint base and the 监听地址 dialog
+// prefill all move to the new address.
+func SetAddress(listen string) {
+	trayMu.Lock()
+	defer trayMu.Unlock()
+	trayListen = listen
+	trayURL = ListenURL(listen)
+}
 
 var wndProcCb = syscall.NewCallback(
 	func(hwnd uintptr, msgc uint32, wParam, lParam uintptr) uintptr {
@@ -218,8 +251,12 @@ var wndProcCb = syscall.NewCallback(
 
 func startPlatform(opts Options) (stop func(), quit <-chan struct{}, err error) {
 	quitCh = make(chan struct{})
+	trayMu.Lock()
 	trayURL = opts.OpenURL
+	trayListen = opts.ListenAddr
 	trayVersion = opts.Version
+	changeListenFn = opts.OnChangeListen
+	trayMu.Unlock()
 
 	iconPath := filepath.Join(os.TempDir(), iconTmpName)
 	if err := os.WriteFile(iconPath, iconICO, 0o644); err != nil {
@@ -283,7 +320,7 @@ func startPlatform(opts Options) (stop func(), quit <-chan struct{}, err error) 
 		}
 		ready <- started{hwnd: windows.HWND(hwnd)}
 
-		slog.Info("tray icon created", "url", trayURL)
+		slog.Info("tray icon created", "url", snapshot().url)
 		var m msg
 		for {
 			r, _, _ := pGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
@@ -330,24 +367,32 @@ func utf16ptr(s string) uintptr {
 	return uintptr(unsafe.Pointer(p))
 }
 
-func menuTitle() string {
-	if trayVersion != "" {
-		return "MiBee NVR  " + trayVersion
+func menuTitle(version string) string {
+	if version != "" {
+		return "MiBee NVR  " + version
 	}
 	return "MiBee NVR"
 }
 
 func showMenu(hwnd windows.HWND) {
+	st := snapshot()
+
 	menu, _, _ := pCreatePopupMenu.Call()
 	if menu == 0 {
 		return
 	}
 	defer call(pDestroyMenu, menu)
 
-	call(pAppendMenuW, menu, mfString|mfGrayed, 0, utf16ptr(menuTitle()))
-	if trayURL != "" {
+	call(pAppendMenuW, menu, mfString|mfGrayed, 0, utf16ptr(menuTitle(st.version)))
+	if st.url != "" {
+		if st.listen != "" {
+			call(pAppendMenuW, menu, mfString|mfGrayed, 0, utf16ptr("监听："+st.listen))
+		}
 		call(pAppendMenuW, menu, mfString, cmdOpen, utf16ptr(menuOpen))
 		call(pAppendMenuW, menu, mfString, cmdPassword, utf16ptr(menuPassword))
+		if st.changeListen != nil {
+			call(pAppendMenuW, menu, mfString, cmdListen, utf16ptr(menuListen))
+		}
 	}
 	call(pAppendMenuW, menu, mfSeparator, 0, 0)
 	call(pAppendMenuW, menu, mfString, cmdQuit, utf16ptr(menuQuit))
@@ -366,23 +411,26 @@ func showMenu(hwnd windows.HWND) {
 		openURL()
 	case cmdPassword:
 		changePasswordDialog()
+	case cmdListen:
+		listenDialog()
 	case cmdQuit:
 		quitOnce.Do(func() { close(quitCh) })
 	}
 }
 
 func openURL() {
-	if trayURL == "" {
+	url := snapshot().url
+	if url == "" {
 		return
 	}
-	u, err := windows.UTF16PtrFromString(trayURL)
+	u, err := windows.UTF16PtrFromString(url)
 	if err != nil {
 		return
 	}
 	if err := windows.ShellExecute(0, nil, u, nil, nil, swShowNormal); err != nil {
 		slog.Warn("tray: open web ui failed", "error", err)
 	} else {
-		slog.Info("tray: opened web ui", "url", trayURL)
+		slog.Info("tray: opened web ui", "url", url)
 	}
 }
 
@@ -509,12 +557,13 @@ func submitPasswordChange(hwnd uintptr) {
 // listener. The endpoint is local-machine-only (IsBypassEligible), so no old
 // password is needed — sitting at the console is the authorization.
 func postPasswordChange(newPw string) error {
-	if trayURL == "" {
+	base := snapshot().url
+	if base == "" {
 		return fmt.Errorf("Web 地址未知")
 	}
 	body, _ := json.Marshal(map[string]string{"new_password": newPw})
 	req, err := http.NewRequest(http.MethodPost,
-		strings.TrimRight(trayURL, "/")+"/api/auth/password", bytes.NewReader(body))
+		strings.TrimRight(base, "/")+"/api/auth/password", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -536,4 +585,102 @@ func postPasswordChange(newPw string) error {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
 		return fmt.Errorf("HTTP %d：%s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
+}
+
+// ---- 监听地址 native dialog (runs modally on the tray thread) ----
+
+var listenDlgProcCb = syscall.NewCallback(
+	func(hwnd uintptr, msgc uint32, wParam, lParam uintptr) uintptr {
+		switch msgc {
+		case wmCommand:
+			if lParam == 0 { // menu/accelerator notifications carry no hwnd
+				switch uint16(wParam & 0xFFFF) {
+				case idBtnOK:
+					submitListenChange(hwnd)
+					return 0
+				case idBtnCancel:
+					call(pDestroyWindow, hwnd)
+					return 0
+				}
+			}
+		}
+		ret, _, _ := pDefWindowProcW.Call(hwnd, uintptr(msgc), wParam, lParam)
+		return ret
+	})
+
+func listenDialog() {
+	hinst, _, _ := pGetModuleHandleW.Call(0)
+	cls, _ := windows.UTF16PtrFromString(dlgListenClassName)
+	wc := wndClassExW{LpfnWndProc: listenDlgProcCb, LpszClassName: cls, HInstance: windows.Handle(hinst)}
+	wc.CbSize = uint32(unsafe.Sizeof(wc))
+	call(pRegisterClassExW, uintptr(unsafe.Pointer(&wc))) // re-register is tolerated
+
+	font, _, _ := pGetStockObject.Call(defaultGuiFont)
+	style := uintptr((wsOverlappedWindow &^ wsThickFrame &^ wsMaximizeBox) | wsVisible)
+	title, _ := windows.UTF16PtrFromString("MiBee NVR — 监听地址")
+	hwnd, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(title)),
+		style, 0x80000000 /*CW_USEDEFAULT*/, 0x80000000, 400, 170, 0, 0, hinst, 0)
+	if hwnd == 0 {
+		slog.Warn("tray: create listen dialog failed")
+		return
+	}
+
+	addCtrl := func(class, text string, id uintptr, style uintptr, x, y, w, h int32) uintptr {
+		t, _ := windows.UTF16PtrFromString(text)
+		c, _ := windows.UTF16PtrFromString(class)
+		ch, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(c)), uintptr(unsafe.Pointer(t)),
+			wsChild|wsVisible|style, uintptr(x), uintptr(y), uintptr(w), uintptr(h),
+			hwnd, id, hinst, 0)
+		if ch != 0 {
+			call(pSendMessageW, ch, wmSetFont, font, 1)
+		}
+		return ch
+	}
+	addCtrl("STATIC", "监听地址", 0, 0, 12, 26, 76, 20)
+	dlgEditListen = addCtrl("EDIT", snapshot().listen, idcEditListen, wsTabstop|esAutoHscroll, 96, 24, 264, 24)
+	addCtrl("STATIC", "127.0.0.1 = 仅本机访问；0.0.0.0 = 开放局域网访问（需改端口则一并填写）", 0, 0, 12, 62, 360, 20)
+	addCtrl("BUTTON", "确定", idBtnOK, bsDefPushButton|wsTabstop, 212, 96, 76, 28)
+	addCtrl("BUTTON", "取消", idBtnCancel, wsTabstop, 296, 96, 76, 28)
+	call(pSetFocus, dlgEditListen)
+
+	// Modal pump on the tray thread (same recipe as the password dialog).
+	var m msg
+	for {
+		r, _, _ := pGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		if int32(r) <= 0 {
+			return
+		}
+		ok, _, _ := pIsDialogMessageW.Call(hwnd, uintptr(unsafe.Pointer(&m)))
+		if ok == 0 {
+			call(pTranslateMessage, uintptr(unsafe.Pointer(&m)))
+			call(pDispatchMessageW, uintptr(unsafe.Pointer(&m)))
+		}
+		if w, _, _ := pIsWindow.Call(hwnd); w == 0 {
+			return
+		}
+	}
+}
+
+func submitListenChange(hwnd uintptr) {
+	fn := snapshot().changeListen
+	if fn == nil {
+		call(pDestroyWindow, hwnd)
+		return
+	}
+	addr := strings.TrimSpace(editText(dlgEditListen))
+	if err := ValidateListenAddr(addr); err != nil {
+		dlgMsgBox(hwnd, err.Error(), "监听地址", mbIconError)
+		return
+	}
+	// Synchronous on purpose: fn binds the new address before touching the
+	// old listener, so an error here leaves everything serving as-is. The
+	// drain typically completes in well under a second.
+	if err := fn(addr); err != nil {
+		slog.Warn("tray: listen change failed", "error", err)
+		dlgMsgBox(hwnd, "切换失败："+err.Error(), "监听地址", mbIconError)
+		return
+	}
+	slog.Info("tray: listen address changed", "addr", addr)
+	dlgMsgBox(hwnd, "监听地址已切换为 "+addr+"。\n旧连接已断开，请用新地址访问 Web 界面。", "监听地址", mbIconInformation)
+	call(pDestroyWindow, hwnd)
 }

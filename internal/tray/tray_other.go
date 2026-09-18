@@ -8,3 +8,7 @@ func startPlatform(opts Options) (stop func(), quit <-chan struct{}, err error) 
 	never := make(chan struct{})
 	return func() {}, never, nil
 }
+
+// SetAddress is the no-op counterpart of the windows tray retarget — on
+// macOS the menu-bar helper is refreshed by internal/install instead.
+func SetAddress(listen string) {}

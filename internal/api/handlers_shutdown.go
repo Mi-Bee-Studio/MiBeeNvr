@@ -41,14 +41,19 @@ func CloseStreams() {
 	streamShutdownOnce.Do(func() { close(streamShutdown) })
 }
 
-// resetStreamShutdownForTest swaps in a fresh signal so one test firing
-// CloseStreams cannot poison the rest of the suite (the SSE loops re-read
-// the package var on every select iteration, so this takes effect
-// immediately). Test-only.
-func resetStreamShutdownForTest() {
+// ResetStreams re-arms the streaming-shutdown signal after CloseStreams has
+// fired. Used when an in-process listen-address swap retires one HTTP server
+// and starts another: the new server's streaming handlers must see an OPEN
+// signal again (they re-read the package var on every select iteration, so
+// the swap takes effect immediately). The SSE tests use it for the same
+// isolation reason — one test firing CloseStreams cannot poison the suite.
+func ResetStreams() {
 	streamShutdown = make(chan struct{})
 	streamShutdownOnce = sync.Once{}
 }
+
+// resetStreamShutdownForTest kept as the test-callable alias of ResetStreams.
+func resetStreamShutdownForTest() { ResetStreams() }
 
 // handleSystemShutdown handles POST /api/system/shutdown — graceful stop,
 // loopback-local only (IsBypassEligible), the same locality/authorization

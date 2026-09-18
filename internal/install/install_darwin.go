@@ -104,7 +104,7 @@ func Install(opts Options) (*Result, error) {
 	res.Notes = append(res.Notes,
 		"已注册 LaunchAgent（登录自启 + 崩溃自动拉起）：launchctl list | grep mibee",
 		"日志："+logPath+"（tail -f 跟踪）",
-		"管理界面：http://127.0.0.1:9090（局域网用本机 IP 访问；本机浏览器免密）")
+		"管理界面：http://127.0.0.1:9090（默认仅本机、浏览器免密；菜单栏「监听地址…」可开放局域网）")
 
 	// Menu-bar helper: compiled on the spot with swiftc (ships with Xcode
 	// Command Line Tools). Optional — a missing compiler only costs the bar
@@ -112,9 +112,27 @@ func Install(opts Options) (*Result, error) {
 	if err := installMenuBarHelper(exeDir, dataDir, cfgPath); err != nil {
 		res.Notes = append(res.Notes, "菜单栏图标未安装："+err.Error())
 	} else {
-		res.Notes = append(res.Notes, "菜单栏图标已就绪（打开 Web 界面 / 修改密码 / 退出）")
+		res.Notes = append(res.Notes, "菜单栏图标已就绪（打开 Web 界面 / 修改密码 / 监听地址 / 退出）")
 	}
 	return res, nil
+}
+
+// RefreshMenuBarHelper recompiles and restarts the menu-bar helper after a
+// listen change so its baked base URL follows the new address. No-op when
+// the helper was never installed (or on non-darwin builds).
+func RefreshMenuBarHelper() error {
+	barPlist, err := barAgentPlistPath()
+	if err != nil {
+		return err
+	}
+	if _, statErr := os.Stat(barPlist); statErr != nil {
+		return nil // helper not installed — nothing to refresh
+	}
+	exeDir, dataDir, cfgPath, err := Paths()
+	if err != nil {
+		return err
+	}
+	return installMenuBarHelper(exeDir, dataDir, cfgPath)
 }
 
 // installMenuBarHelper compiles the embedded AppKit helper with swiftc and
