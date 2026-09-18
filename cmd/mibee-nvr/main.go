@@ -19,6 +19,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tray"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/pkg/app"
 )
@@ -240,10 +241,22 @@ func main() {
 		gatewaySrv = listenGatewaySocket(sock, authmw.GatewayAuthMiddleware(httpSrv.Handler))
 	}
 
+	// Desktop tray (windows builds; no-op elsewhere): without it a desktop
+	// run has no discoverable entry to reach the UI or stop the server.
+	trayStop, trayQuit := tray.Start(tray.Options{
+		Tooltip: "MiBee NVR " + appVersion,
+		OpenURL: tray.ListenURL(cfg.Server.Listen),
+	})
+	defer trayStop()
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	slog.Info("received signal, shutting down", "signal", sig.String())
+	select {
+	case sig := <-sigCh:
+		slog.Info("received signal, shutting down", "signal", sig.String())
+	case <-trayQuit:
+		slog.Info("tray quit requested, shutting down")
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
