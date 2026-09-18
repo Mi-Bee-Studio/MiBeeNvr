@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/procctl"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -351,7 +352,7 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 
 	// Process group for clean kill — prevents orphaned FFmpeg on RPi
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	procctl.SetProcessGroup(cmd)
 
 	// Capture stderr for progress parsing
 	stderr, err := cmd.StderrPipe()
@@ -367,7 +368,7 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 
 	// Set low priority (nice 10) — don't starve recording pipeline
 	pid := cmd.Process.Pid
-	if err := syscall.Setpriority(syscall.PRIO_PROCESS, pid, 10); err != nil {
+	if err := procctl.LowerPriority(pid); err != nil {
 		queueLogger.Warn("failed to set process priority", "pid", pid, "error", err)
 	}
 
@@ -711,13 +712,12 @@ func isMJPEGInputTask(format string) bool {
 
 var progressRegex = regexp.MustCompile(`time=(\d+):(\d+):(\d+\.\d+)`)
 
-// killProcessGroup sends SIGKILL to the entire process group to ensure
-// FFmpeg and any child processes are terminated.
+// killProcessGroup terminates FFmpeg and any child processes it spawned.
 func killProcessGroup(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+	if err := procctl.KillProcessGroup(cmd); err != nil {
 		queueLogger.Warn("failed to kill ffmpeg process group", "pid", cmd.Process.Pid, "error", err)
 	}
 }

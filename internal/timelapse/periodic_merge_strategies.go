@@ -12,11 +12,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/procctl"
 )
 
 // goConcatMerge merges MP4 segments losslessly using the pure-Go merge package
@@ -128,7 +128,7 @@ func (m *PeriodicMergeManager) ffmpegConcatMerge(ctx context.Context, segments [
 	)
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	procctl.SetProcessGroup(cmd)
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

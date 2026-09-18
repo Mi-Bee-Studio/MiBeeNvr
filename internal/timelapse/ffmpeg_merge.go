@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/procctl"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
@@ -125,7 +125,7 @@ func (m *FFmpegMerger) encoderFallbackChain() []string {
 // runFFmpeg executes the FFmpeg command with the given args and returns an error on failure.
 func (m *FFmpegMerger) runFFmpeg(ctx context.Context, args []string, outputPath string) error {
 	cmd := exec.CommandContext(ctx, m.caps.FFmpegPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	procctl.SetProcessGroup(cmd)
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -239,13 +239,12 @@ func consumeStderr(stderr io.Reader) string {
 	return strings.Join(lastLines, "\n")
 }
 
-// killMergeProcess sends SIGKILL to the entire process group to ensure
-// FFmpeg and any child processes are terminated.
+// killMergeProcess terminates FFmpeg and any child processes it spawned.
 func killMergeProcess(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+	if err := procctl.KillProcessGroup(cmd); err != nil {
 		slog.Warn("failed to kill ffmpeg merge process group", "pid", cmd.Process.Pid, "error", err)
 	}
 }

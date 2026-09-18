@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/procctl"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/stretchr/testify/require"
 )
@@ -152,8 +152,7 @@ func requireProcessGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		err := syscall.Kill(pid, 0)
-		if err != nil {
+		if !procctl.ProcessAlive(pid) {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
