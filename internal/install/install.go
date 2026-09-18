@@ -1,0 +1,83 @@
+// Package install implements per-user desktop installation for the NVR
+// (`mibee-nvr install` / `mibee-nvr uninstall`, windows + darwin): copy the
+// binary to a per-user location, wire OS integration (Add/Remove Programs
+// entry, Start Menu shortcut, login autostart on windows; LaunchAgent on
+// darwin), and provide the matching removal path. Everything is per-user —
+// no admin rights are needed or used on either platform.
+//
+// Design rules:
+//   - data (config + storage + logs) lives OUTSIDE the program dir so an
+//     uninstall keeps it unless --purge is given;
+//   - the starter config leaves auth empty on purpose — the web UI's
+//     first-run setup wizard then walks the user through setting the admin
+//     password;
+//   - install is idempotent (re-running refreshes files and integration).
+package install
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+)
+
+// Options carries values only the command layer knows.
+type Options struct {
+	// Version is the binary's appVersion (used in the ARP entry / summary).
+	Version string
+}
+
+// SetupConsole makes the install/uninstall console output readable where the
+// command layer prints (windows: switch the console to UTF-8; others: no-op).
+func SetupConsole() { setupConsole() }
+
+// Result describes what one install/uninstall run did, for the command layer
+// to print.
+type Result struct {
+	Exe      string   // installed binary path
+	Config   string   // config file path
+	DataDir  string   // data directory (config + storage + logs)
+	Started  bool     // whether the NVR was started as part of the run
+	Notes    []string // platform hints (URL, logs location, autostart)
+	KeptData bool     // uninstall: data dir was intentionally kept
+}
+
+// StarterConfig renders the first-run config written when none exists. Auth
+// stays empty → setup wizard on first web visit.
+func StarterConfig(dataDir string) string {
+	return fmt.Sprintf(`# MiBee NVR — 初始配置（由 mibee-nvr install 生成）
+# 首次打开 Web 界面会引导设置管理员密码；之后可在此文件或 Web 设置中调整。
+server:
+  listen: ":9090"
+storage:
+  root_dir: '%s'
+cameras: []
+`, yamlSingle(filepath.Join(dataDir, "data")))
+}
+
+// yamlSingle single-quotes a scalar for YAML: single-quoted style keeps
+// backslashes verbatim (windows paths), only ' needs doubling.
+func yamlSingle(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+// LaunchAgentPlist renders the per-user launchd agent keeping the NVR
+// running (RunAtLoad + KeepAlive), with logs appended to a file in the data
+// dir. Pure string rendering so it stays unit-testable on every platform.
+func LaunchAgentPlist(exe, cfg, log string) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	b.WriteString(`<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">` + "\n")
+	b.WriteString(`<plist version="1.0">` + "\n<dict>\n")
+	b.WriteString("\t<key>Label</key><string>com.mibee-nvr</string>\n")
+	b.WriteString("\t<key>ProgramArguments</key>\n\t<array>\n")
+	fmt.Fprintf(&b, "\t\t<string>%s</string>\n", exe)
+	b.WriteString("\t\t<string>-config</string>\n")
+	fmt.Fprintf(&b, "\t\t<string>%s</string>\n", cfg)
+	b.WriteString("\t</array>\n")
+	b.WriteString("\t<key>RunAtLoad</key><true/>\n")
+	b.WriteString("\t<key>KeepAlive</key><true/>\n")
+	fmt.Fprintf(&b, "\t<key>StandardOutPath</key><string>%s</string>\n", log)
+	fmt.Fprintf(&b, "\t<key>StandardErrorPath</key><string>%s</string>\n", log)
+	b.WriteString("</dict>\n</plist>\n")
+	return b.String()
+}

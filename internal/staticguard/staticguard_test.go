@@ -24,6 +24,11 @@ import (
 // function (session-style lifecycles). Key: "path/from/repo/root.go:FuncName".
 var waitFamilyAllowlist = map[string]string{
 	"internal/livetranscode/transcoder.go:Start": "session lifecycle: Start() spawns ffmpeg, Stop() calls cmd.Wait() (transcoder.go)",
+	// Detached-by-design desktop-installer spawns (plain exec.Command, not
+	// CommandContext → no watchCtx goroutine; windows-only paths → no unix
+	// zombie concern): the installer must exit while the child lives on.
+	"internal/install/install_windows.go:Install":   "installer spawns the installed NVR detached and exits; the server child outlives the installer by design",
+	"internal/install/install_windows.go:Uninstall": "installer schedules a detached delayed self-delete .cmd and exits; the child outlives the uninstaller by design",
 }
 
 func scanForUnwaitedExec(src []byte, filename string) []string {
@@ -134,6 +139,7 @@ func TestRepo_ExecSitesAreWaited(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			rel = filepath.ToSlash(rel) // allowlist keys are forward-slash paths
 			violations = append(violations, scanForUnwaitedExec(src, rel)...)
 			return nil
 		})
