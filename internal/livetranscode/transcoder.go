@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/procctl"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
@@ -188,7 +189,7 @@ func (lt *LiveTranscoder) Start(ctx context.Context) error {
 	ctx, lt.cancel = context.WithCancel(ctx)
 
 	lt.cmd = exec.CommandContext(ctx, ffmpegPath, args...)
-	lt.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	procctl.SetProcessGroup(lt.cmd)
 
 	// Override default SIGKILL with SIGTERM for graceful shutdown
 	lt.cmd.Cancel = func() error {
@@ -220,7 +221,7 @@ func (lt *LiveTranscoder) Start(ctx context.Context) error {
 	}
 
 	// Set low priority (nice 10) — don't starve recording pipeline
-	if err := syscall.Setpriority(syscall.PRIO_PROCESS, lt.cmd.Process.Pid, 10); err != nil {
+	if err := procctl.LowerPriority(lt.cmd.Process.Pid); err != nil {
 		ltLogger.Warn("failed to set process priority", "pid", lt.cmd.Process.Pid, "error", err)
 	}
 
@@ -538,13 +539,12 @@ func estimateAnnexBBuf(au AccessUnit) []byte {
 	return make([]byte, 0, total)
 }
 
-// killProcessGroup sends SIGKILL to the entire FFmpeg process group to ensure
-// no orphaned child processes remain on the system.
+// killProcessGroup terminates the FFmpeg child and any processes it spawned.
 func killProcessGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+	if err := procctl.KillProcessGroup(cmd); err != nil {
 		ltLogger.Warn("failed to kill process group",
 			"pid", cmd.Process.Pid, "error", err)
 	}

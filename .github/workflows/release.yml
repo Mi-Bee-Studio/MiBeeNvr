@@ -50,6 +50,9 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-amd64 ./cmd/mibee-nvr/ &
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-arm64 ./cmd/mibee-nvr/ &
           CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-armv7 ./cmd/mibee-nvr/ &
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-windows-amd64.exe ./cmd/mibee-nvr/ &
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-darwin-arm64 ./cmd/mibee-nvr/ &
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-darwin-amd64 ./cmd/mibee-nvr/ &
           wait
 
       # ---- Artifact integrity (#646) ------------------------------------------
@@ -66,7 +69,9 @@ jobs:
           SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          sha256sum mibee-nvr-amd64 mibee-nvr-arm64 mibee-nvr-armv7 > checksums.txt
+          sha256sum mibee-nvr-amd64 mibee-nvr-arm64 mibee-nvr-armv7 \
+            mibee-nvr-windows-amd64.exe mibee-nvr-darwin-arm64 mibee-nvr-darwin-amd64 \
+            > checksums.txt
           cat checksums.txt
           if [ -n "${SIGNING_KEY}" ]; then
             printf '%s' "$SIGNING_KEY" | base64 -d > "$RUNNER_TEMP/release-signing.key"
@@ -89,6 +94,9 @@ jobs:
             mibee-nvr-amd64
             mibee-nvr-arm64
             mibee-nvr-armv7
+            mibee-nvr-windows-amd64.exe
+            mibee-nvr-darwin-arm64
+            mibee-nvr-darwin-amd64
             checksums.txt
 
       - name: Attach release signature

@@ -98,6 +98,9 @@ func newTestApplier(t *testing.T, fa *fakeArtifact) (*Applier, *applyRecorder) {
 		Now:           func() time.Time { return time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC) },
 		ReleaseBase:   fa.srv.URL + "/releases/download/v9.9.9",
 		HealthTimeout: 30 * time.Second,
+		// These fixtures simulate the linux deployment (systemd restart,
+		// health gate) — keep guards passable on windows dev boxes.
+		GOOSOverride: "linux",
 	}
 	return a, rec
 }
@@ -258,6 +261,11 @@ func TestApplier_Apply_Guards(t *testing.T) {
 				a.DeploymentOverride = "docker"
 			},
 			want: "docker",
+		},
+		{
+			name: "non-linux platform refused",
+			mut:  func(r *Request, a *Applier) { a.GOOSOverride = "windows" },
+			want: "linux-only",
 		},
 		{
 			name: "dev build refused",
