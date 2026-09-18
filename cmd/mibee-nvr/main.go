@@ -117,6 +117,21 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Bare desktop runs of the INSTALLED binary resolve the default config
+	// to the installed one — otherwise a double-click would auto-init a
+	// stray config next to the exe. Explicit -config always wins.
+	configExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			configExplicit = true
+		}
+	})
+	if !configExplicit {
+		if p := desktopInstalledConfig(); p != "" {
+			*configPath = p
+		}
+	}
+
 	// Load and validate config
 	cfg, err := config.Load(*configPath)
 	if err != nil {

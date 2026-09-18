@@ -16,10 +16,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Function variables for testability. Tests override these to avoid os.Exit().
+// Function variables for testability. Tests override these to avoid os.Exit()
+// — and, for the desktop entry, to keep unit tests from INSTALLING on the
+// machine running them.
 var (
-	cmdEncryptConfigFn = cmdEncryptConfig
-	cmdDownloadModelFn = cmdDownloadModel
+	cmdEncryptConfigFn  = cmdEncryptConfig
+	cmdDownloadModelFn  = cmdDownloadModel
+	cmdInstallDesktopFn = func() { cmdInstall(true) }
 )
 
 // ---------------------------------------------------------------------------
@@ -295,6 +298,7 @@ func runEncryptConfig(cfgPath string, stdout io.Writer) error {
 // It routes os.Args to the appropriate handler function.
 func dispatchSubcommand(args []string) {
 	if len(args) <= 1 {
+		maybeInteractiveInstall(args)
 		return
 	}
 	switch args[1] {
@@ -325,7 +329,7 @@ func dispatchSubcommand(args []string) {
 	case "gen-gb35114-certs":
 		cmdGenGB35114Certs()
 	case "install":
-		cmdInstall()
+		cmdInstall(false)
 	case "uninstall":
 		cmdUninstall()
 	}

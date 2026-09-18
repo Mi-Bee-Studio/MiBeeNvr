@@ -34,6 +34,34 @@ func Paths() (exeDir, dataDir, configPath string, err error) {
 	return exeDir, dataDir, filepath.Join(dataDir, "mibee-nvr.yaml"), nil
 }
 
+// InstalledExePath is the installed binary location ("" when unresolvable).
+func InstalledExePath() string {
+	exeDir, _, _, err := Paths()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(exeDir, "mibee-nvr")
+}
+
+// OpenBrowser opens url in the default browser.
+func OpenBrowser(url string) {
+	_ = exec.Command("open", url).Start()
+}
+
+// NotifyDialog shows a modal osascript dialog — the only visible feedback
+// when the installer was launched from Finder (an LSUIElement .app has no
+// console, stdout goes nowhere).
+func NotifyDialog(text string) {
+	script := "display dialog " + applescriptQuote(text) + " buttons {\"好\"} default button 1 with icon note"
+	_ = exec.Command("osascript", "-e", script).Run()
+}
+
+// applescriptQuote wraps s in double quotes, escaping " and \.
+func applescriptQuote(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return `"` + r.Replace(s) + `"`
+}
+
 func agentPlistPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

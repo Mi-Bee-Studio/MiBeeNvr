@@ -20,6 +20,13 @@ func Uninstall(purge bool) (*Result, error) {
 
 func setupConsole() {}
 
+// InstalledExePath has no desktop install location off-desktop.
+func InstalledExePath() string { return "" }
+
+// OpenBrowser / NotifyDialog are desktop-only affordances.
+func OpenBrowser(url string)   {}
+func NotifyDialog(text string) {}
+
 // RefreshMenuBarHelper has no menu-bar helper to refresh off-desktop.
 func RefreshMenuBarHelper() error { return nil }
 
