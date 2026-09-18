@@ -15,8 +15,13 @@ import (
 type Options struct {
 	// Tooltip is the hover text (keep short; the shell truncates at 128 chars).
 	Tooltip string
-	// OpenURL is opened by the menu entry / double-click. Empty hides the entry.
+	// OpenURL is opened by the menu entry / single click. Empty hides the entry.
 	OpenURL string
+	// Username is the admin username used by the 修改密码 dialog's
+	// authenticate-with-current-password flow.
+	Username string
+	// Version decorates the menu header (e.g. "MiBee NVR  v0.12.0…").
+	Version string
 }
 
 // Start shows the tray icon and returns a stop function (removes the icon —
