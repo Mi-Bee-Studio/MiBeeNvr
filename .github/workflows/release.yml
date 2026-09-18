@@ -317,19 +317,16 @@ jobs:
           files: deploy/fnos/mibee-nvr-fnos-online-*.fpk
           append_body: false
 
-  # ---- Mirror binaries to Gitee (mainland-China fast download) ----------------
-  # Uploads every release asset ≤100MB (binaries, checksums, small packages —
-  # the ~160MB .fpk bundles exceed Gitee's single-attachment cap and stay
-  # GitHub-only) to the mirror repo's release on gitee.com, so mainland-China
-  # users can download without the slow/unreliable GitHub cross-border access
-  # (same motivation as mirror-to-acr for images). The gitee.com repo's git
-  # mirror sync lags behind, so this job pushes the tag itself (token = HTTPS
-  # password) before creating the release — otherwise every release would race
-  # the sync. OPT-IN like mirror-to-acr: repo Variable ENABLE_GITEE=true +
-  # Secret GITEE_TOKEN (personal access token of the mirror owner). A missing
-  # token/variable must never block a release: the job simply skips. If the
-  # upload fails the release is already complete on GitHub — re-run this
-  # workflow afterwards; re-runs skip attachments that already match by name.
+  # ---- Gitee mirror release (mainland-China download page) -------------------
+  # Creates the tag + release shell on the gitee.com mirror repo so mainland-
+  # China users get a per-version release page. Does NOT upload the binaries:
+  # Gitee stalls large POST bodies from GitHub-hosted runner IPs (verified
+  # 2026-09-18 — a 65MB attachment made zero byte progress across 4×15min curl
+  # retries while a git push seconds earlier succeeded), so assets are
+  # uploaded from a mainland-side machine with `deploy/gitee-mirror.sh` after
+  # the release. OPT-IN like mirror-to-acr: repo Variable ENABLE_GITEE=true +
+  # Secret GITEE_TOKEN. Missing token/variable → job skips, never blocks a
+  # release. Re-runs are safe: both steps no-op when tag/release exist.
   mirror-to-gitee:
     needs: release
     if: vars.ENABLE_GITEE == 'true' && startsWith(github.ref, 'refs/tags/v')
@@ -341,20 +338,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir gitee-assets
-          # Only fetch what Gitee will accept — assets ≤100MB (Gitee's
-          # single-attachment cap; skips the ~160MB .fpk bundles)
-          gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" \
-            --jq '.assets[] | select(.size <= 104857600) | .name' \
-          | while read -r name; do
-              gh release download "${{ github.ref_name }}" -R "${{ github.repository }}" \
-                --pattern "$name" --dir gitee-assets --clobber
-            done
-
       - name: Push tag to the Gitee mirror
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -362,7 +345,7 @@ jobs:
           git push "https://mickeybee:${GITEE_TOKEN}@gitee.com/Mi-Bee-Studio/MiBeeNvr.git" \
             "refs/tags/${{ github.ref_name }}"
 
-      - name: Attach assets to the Gitee release
+      - name: Create the Gitee release
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -371,31 +354,18 @@ jobs:
           set -euo pipefail
           API="https://gitee.com/api/v5/repos/Mi-Bee-Studio/MiBeeNvr"
           AUTH="Authorization: Bearer ${GITEE_TOKEN}"
-          # Gitee quirks (verified against the live API): GET releases/tags/{tag}
-          # answers 200 with body `null` when the release does not exist — test
-          # the parsed id, not the HTTP code; POST /releases demands a
-          # target_commitish field (empty string is fine when the tag exists);
-          # attachments upload under the multipart field `file` (NOT `files[]`)
-          # and DELETE attach_files/{id} returns 204.
+          # Gitee quirks (verified against the live API): GET
+          # releases/tags/{tag} answers 200 with body `null` when the release
+          # does not exist — test the parsed id, not the HTTP code; POST
+          # /releases demands a target_commitish field (empty string is fine
+          # when the tag exists).
           REL_ID=$(curl -sf -H "$AUTH" "${API}/releases/tags/${TAG}" | jq -r '.id // empty')
-          if [ -z "${REL_ID}" ]; then
-            PRE=$(gh release view "$TAG" -R "${{ github.repository }}" --json isPrerelease --jq .isPrerelease)
-            REL_ID=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" \
-              -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"target_commitish\":\"\",\"prerelease\":${PRE:-false},\"body\":\"MiBee NVR ${TAG} — 完整发布说明（含更新日志）见 GitHub：https://github.com/${{ github.repository }}/releases/tag/${TAG}\"}" \
-              "${API}/releases" | jq -r '.id')
+          if [ -n "${REL_ID}" ]; then
+            echo "Gitee release ${TAG} already exists (id ${REL_ID})"
+            exit 0
           fi
-          echo "Gitee release id: ${REL_ID}"
-          for f in gitee-assets/*; do
-            name=$(basename "$f")
-            # Replace same-named attachments so a re-run always converges to
-            # exactly the GitHub release's asset set
-            for aid in $(curl -sf -H "$AUTH" "${API}/releases/${REL_ID}/attach_files" | jq -r --arg n "$name" '(. // [])[] | select(.name == $n) | .id'); do
-              echo "delete stale attachment ${name} (id ${aid})"
-              curl -sf -X DELETE -H "$AUTH" "${API}/releases/${REL_ID}/attach_files/${aid}"
-            done
-            echo "upload ${name} ($(du -h "$f" | cut -f1))"
-            curl -sf --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 900 \
-              -X POST -H "$AUTH" -F "file=@${f}" \
-              "${API}/releases/${REL_ID}/attach_files" >/dev/null
-            sleep 1  # Gitee throttles aggressive API bursts
-          done
+          PRE=$(gh release view "$TAG" -R "${{ github.repository }}" --json isPrerelease --jq .isPrerelease)
+          REL_ID=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"target_commitish\":\"\",\"prerelease\":${PRE:-false},\"body\":\"MiBee NVR ${TAG} — 完整发布说明（含更新日志）见 GitHub：https://github.com/${{ github.repository }}/releases/tag/${TAG}\"}" \
+            "${API}/releases" | jq -r '.id')
+          echo "created Gitee release ${TAG} (id ${REL_ID})"
