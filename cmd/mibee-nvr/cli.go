@@ -324,6 +324,10 @@ func dispatchSubcommand(args []string) {
 		cmdValidateConfig()
 	case "gen-gb35114-certs":
 		cmdGenGB35114Certs()
+	case "install":
+		cmdInstall()
+	case "uninstall":
+		cmdUninstall()
 	}
 }
 
