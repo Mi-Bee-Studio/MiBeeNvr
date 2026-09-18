@@ -43,9 +43,11 @@ func InstalledExePath() string {
 	return filepath.Join(exeDir, "mibee-nvr")
 }
 
-// OpenBrowser opens url in the default browser.
+// OpenBrowser opens url in the default browser. Run (not Start): `open`
+// hands off to LaunchServices and returns immediately, and the waited
+// process keeps staticguard happy / leaves no zombie.
 func OpenBrowser(url string) {
-	_ = exec.Command("open", url).Start()
+	_ = exec.Command("open", url).Run()
 }
 
 // NotifyDialog shows a modal osascript dialog — the only visible feedback
