@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -82,23 +83,41 @@ func TestUnrecognizedSubcommand(t *testing.T) {
 	}
 }
 
-// TestNoArgs verifies dispatch does nothing when no subcommand is given.
+// TestNoArgs verifies the bare dispatch path. On windows/darwin a bare run
+// is the desktop installer entry (stubbed here — a unit test must never
+// install for real); elsewhere nothing happens.
 func TestNoArgs(t *testing.T) {
 	origEnc := cmdEncryptConfigFn
 	origDl := cmdDownloadModelFn
+	origDesk := cmdInstallDesktopFn
 	t.Cleanup(func() {
 		cmdEncryptConfigFn = origEnc
 		cmdDownloadModelFn = origDl
+		cmdInstallDesktopFn = origDesk
 	})
 
 	dispatchRecorder = nil
+	desktopCalls := 0
 	cmdEncryptConfigFn = func() { dispatchRecorder = append(dispatchRecorder, "encrypt-config") }
 	cmdDownloadModelFn = func() { dispatchRecorder = append(dispatchRecorder, "download-model") }
+	cmdInstallDesktopFn = func() { desktopCalls++ }
 
 	dispatchSubcommand([]string{"mibee-nvr"})
 
 	if len(dispatchRecorder) != 0 {
-		t.Errorf("expected 0 calls with no args, got %v", dispatchRecorder)
+		t.Errorf("expected 0 subcommand calls with no args, got %v", dispatchRecorder)
+	}
+	switch runtime.GOOS {
+	case "windows", "darwin":
+		// The test binary never lives at the installed location, so the
+		// desktop entry fires — routed to the stub, never the real install.
+		if desktopCalls != 1 {
+			t.Errorf("expected 1 desktop-install call on %s, got %d", runtime.GOOS, desktopCalls)
+		}
+	default:
+		if desktopCalls != 0 {
+			t.Errorf("expected 0 desktop-install calls on %s, got %d", runtime.GOOS, desktopCalls)
+		}
 	}
 }
 

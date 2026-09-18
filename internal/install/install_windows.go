@@ -14,6 +14,7 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -37,6 +38,23 @@ func setupConsole() {
 	_, _, _ = kernel32.NewProc("SetConsoleOutputCP").Call(65001)
 }
 
+// OpenBrowser opens url in the default browser (ShellExecute — the same
+// call the tray's 打开 Web 界面 uses).
+func OpenBrowser(url string) {
+	_ = windowsShellOpen(url)
+}
+
+func windowsShellOpen(url string) error {
+	u, err := syscall.UTF16PtrFromString(url)
+	if err != nil {
+		return err
+	}
+	return windows.ShellExecute(0, nil, u, nil, nil, 5 /*SW_SHOW*/)
+}
+
+// NotifyDialog is darwin-only; windows reports through the console.
+func NotifyDialog(text string) {}
+
 func localAppData() (string, error) {
 	d := os.Getenv("LOCALAPPDATA")
 	if d == "" {
@@ -54,6 +72,15 @@ func Paths() (exeDir, dataDir, configPath string, err error) {
 	exeDir = filepath.Join(lad, "Programs", installDirName)
 	dataDir = filepath.Join(lad, dataDirName)
 	return exeDir, dataDir, filepath.Join(dataDir, "mibee-nvr.yaml"), nil
+}
+
+// InstalledExePath is the installed binary location ("" when unresolvable).
+func InstalledExePath() string {
+	exeDir, _, _, err := Paths()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(exeDir, "mibee-nvr.exe")
 }
 
 func startMenuShortcut() (string, error) {
@@ -91,8 +118,8 @@ func Install(opts Options) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("install: read binary: %w", err)
 		}
-		if err := os.WriteFile(exePath, data, 0o755); err != nil {
-			return nil, fmt.Errorf("install: 写入 %s 失败（若 MiBee NVR 正在运行，请先从托盘菜单退出后重试）: %w", exePath, err)
+		if err := writeExeOverRunning(exePath, data); err != nil {
+			return nil, fmt.Errorf("install: 写入 %s 失败: %w", exePath, err)
 		}
 	}
 
@@ -223,6 +250,26 @@ func writeRunKey(exePath, cfgPath string) error {
 	return k.SetStringValue(runValueName, quote(exePath)+" -config "+quote(cfgPath))
 }
 
+// writeExeOverRunning installs the new binary even while a running instance
+// locks the target: Windows refuses to open a running exe for writing, but
+// DOES allow renaming it — the classic rename-aside upgrade. The running
+// instance keeps executing from the renamed .old file; the next start (or
+// the tray 退出 + autostart cycle) picks up the new binary. Stale .old
+// files from earlier upgrades are cleaned on entry; the current one lives
+// until the next install/uninstall.
+func writeExeOverRunning(exePath string, data []byte) error {
+	_ = os.Remove(exePath + ".old")
+	if _, err := os.Stat(exePath); err == nil {
+		if err := os.WriteFile(exePath, data, 0o755); err == nil {
+			return nil
+		}
+		if err := os.Rename(exePath, exePath+".old"); err != nil {
+			return fmt.Errorf("旧程序被占用且无法移开（%w）——若 MiBee NVR 正在运行，请先从托盘菜单退出后重试", err)
+		}
+	}
+	return os.WriteFile(exePath, data, 0o755)
+}
+
 // Uninstall removes the OS integration and program files. Data (config +
 // recordings + DB) is kept unless purge is true.
 func Uninstall(purge bool) (*Result, error) {
@@ -269,10 +316,10 @@ func Uninstall(purge bool) (*Result, error) {
 		// a small detached .cmd file — passing a quoted script through
 		// `cmd /c <argv>` mangles the quotes (Go escapes them MSVCRT-style,
 		// cmd.exe does not understand that), while a script FILE path is a
-		// single simply-quoted argument. The script deletes the exe, then
-		// itself, then the (then-empty) dir.
-		script := fmt.Sprintf("@echo off\r\ntimeout /t 2 /nobreak >nul 2>&1\r\ndel /f /q %s\r\ndel /f /q \"%%~f0\" & rmdir \"%%~dp0\"\r\n",
-			quote(exePath))
+		// single simply-quoted argument. The script deletes the exe (and any
+		// rename-aside .old), then itself, then the (then-empty) dir.
+		script := fmt.Sprintf("@echo off\r\ntimeout /t 2 /nobreak >nul 2>&1\r\ndel /f /q %s\r\ndel /f /q %s\r\ndel /f /q \"%%~f0\" & rmdir \"%%~dp0\"\r\n",
+			quote(exePath), quote(exePath+".old"))
 		scriptPath := filepath.Join(exeDir, "uninstall-mibee-nvr.cmd")
 		if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 			return nil, fmt.Errorf("install: 写自删除脚本失败: %w", err)
@@ -284,6 +331,7 @@ func Uninstall(purge bool) (*Result, error) {
 		}
 	} else {
 		_ = os.Remove(exePath)
+		_ = os.Remove(exePath + ".old") // rename-aside leftovers from upgrades
 		_ = os.Remove(exeDir)
 	}
 

@@ -54,6 +54,9 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-darwin-arm64 ./cmd/mibee-nvr/ &
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-darwin-amd64 ./cmd/mibee-nvr/ &
           wait
+          # Single-file windows installer (2026-09-18): the Setup exe IS the
+          # server binary — a bare double-click installs (desktop_entry.go).
+          cp mibee-nvr-windows-amd64.exe "MiBeeNVR-Setup-${{ github.ref_name }}-windows-amd64.exe"
 
       # ---- Artifact integrity (#646) ------------------------------------------
       # checksums.txt (sha256sum format) + a raw 64-byte ed25519 signature over
@@ -71,6 +74,7 @@ jobs:
           set -euo pipefail
           sha256sum mibee-nvr-amd64 mibee-nvr-arm64 mibee-nvr-armv7 \
             mibee-nvr-windows-amd64.exe mibee-nvr-darwin-arm64 mibee-nvr-darwin-amd64 \
+            "MiBeeNVR-Setup-${{ github.ref_name }}-windows-amd64.exe" \
             > checksums.txt
           cat checksums.txt
           if [ -n "${SIGNING_KEY}" ]; then
@@ -95,6 +99,7 @@ jobs:
             mibee-nvr-arm64
             mibee-nvr-armv7
             mibee-nvr-windows-amd64.exe
+            MiBeeNVR-Setup-${{ github.ref_name }}-windows-amd64.exe
             mibee-nvr-darwin-arm64
             mibee-nvr-darwin-amd64
             checksums.txt
@@ -161,6 +166,102 @@ jobs:
   # ghcr.io pull — the main cause of slow mainland-China installs. Fully additive:
   # if it fails, the release (binaries + image) is already complete; re-run or
   # build locally with ./deploy/fnos/build.sh instead.
+  # macOS single-file installer (2026-09-18): a universal (arm64+amd64) DMG
+  # containing MiBeeNVR.app. Double-clicking the app performs the install
+  # (desktop_entry.go — same flow as `mibee-nvr install`); uninstall lives in
+  # the menu-bar helper and `mibee-nvr uninstall`. Needs a macos runner for
+  # lipo/iconutil/hdiutil; also runnable via workflow_dispatch for test
+  # builds (artifact upload only, no release attachment without a tag).
+  dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: cd web && npm ci && npm run build && cp -r dist/* ../internal/ui/static/
+
+      - name: Resolve version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "DMG_VERSION=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          else
+            echo "DMG_VERSION=test-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build universal binary
+        run: |
+          LDFLAGS="-s -w -X main.appVersion=${DMG_VERSION}"
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o bin/arm64 ./cmd/mibee-nvr/
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o bin/amd64 ./cmd/mibee-nvr/
+          lipo -create -output mibee-nvr bin/arm64 bin/amd64
+          lipo -info mibee-nvr
+
+      - name: Assemble MiBeeNVR.app
+        run: |
+          mkdir -p MiBeeNVR.app/Contents/MacOS MiBeeNVR.app/Contents/Resources
+          cp mibee-nvr MiBeeNVR.app/Contents/MacOS/mibee-nvr
+          cat > MiBeeNVR.app/Contents/Info.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleName</key><string>MiBee NVR</string>
+            <key>CFBundleDisplayName</key><string>MiBee NVR</string>
+            <key>CFBundleIdentifier</key><string>com.mibee-studio.MiBeeNVR</string>
+            <key>CFBundleExecutable</key><string>mibee-nvr</string>
+            <key>CFBundleVersion</key><string>__VERSION__</string>
+            <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>LSUIElement</key><true/>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          sed -i '' "s/__VERSION__/${DMG_VERSION}/g" MiBeeNVR.app/Contents/Info.plist
+          # App icon from the SPA's 512px source (sips+iconutil ship with macOS).
+          mkdir AppIcon.iconset
+          for sz in 16 32 128 256 512; do
+            sips -z "$sz" "$sz" internal/ui/static/icon-512.png --out "AppIcon.iconset/icon_${sz}x${sz}.png" >/dev/null
+            sips -z $((sz * 2)) $((sz * 2)) internal/ui/static/icon-512.png --out "AppIcon.iconset/icon_${sz}x${sz}@2x.png" >/dev/null
+          done
+          iconutil -c icns AppIcon.iconset -o MiBeeNVR.app/Contents/Resources/AppIcon.icns
+          # Ad-hoc signature: no Apple developer ID (notarization is out of
+          # scope) — first launch needs the right-click → 打开 dance either way.
+          codesign --force --sign - MiBeeNVR.app
+
+      - name: Create DMG
+        run: |
+          mkdir staging
+          cp -R MiBeeNVR.app staging/
+          ln -s /Applications staging/Applications
+          hdiutil create -volname "MiBee NVR" -srcfolder staging -ov -format UDZO \
+            "MiBeeNVR-${DMG_VERSION}-macOS-universal.dmg"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal-dmg
+          path: MiBeeNVR-*-macOS-universal.dmg
+          if-no-files-found: error
+
+      - name: Attach DMG to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MiBeeNVR-*-macOS-universal.dmg
+
   fnos-fpk:
     needs: release
     # build.sh validates VERSION against ^[0-9]+\.[0-9]+\.[0-9]+$; on
