@@ -12,7 +12,12 @@ import (
 // RegisterOnShutdown). Before this, httpSrv.Shutdown waited the full ctx
 // timeout on never-idle SSE connections — a tray quit with the web UI open
 // took the whole 30s to visibly do anything.
+//
+// Deliberately NOT parallel: it fires the package-level stream signal
+// (reset before and after so the rest of the suite sees a fresh channel).
 func TestSSEReturnsOnStreamShutdown(t *testing.T) {
+	resetStreamShutdownForTest()
+	t.Cleanup(resetStreamShutdownForTest)
 	h, _ := setupEventsHandler(t)
 
 	done := make(chan struct{})

@@ -41,6 +41,15 @@ func CloseStreams() {
 	streamShutdownOnce.Do(func() { close(streamShutdown) })
 }
 
+// resetStreamShutdownForTest swaps in a fresh signal so one test firing
+// CloseStreams cannot poison the rest of the suite (the SSE loops re-read
+// the package var on every select iteration, so this takes effect
+// immediately). Test-only.
+func resetStreamShutdownForTest() {
+	streamShutdown = make(chan struct{})
+	streamShutdownOnce = sync.Once{}
+}
+
 // handleSystemShutdown handles POST /api/system/shutdown — graceful stop,
 // loopback-local only (IsBypassEligible), the same locality/authorization
 // model as POST /api/auth/password: whoever sits at the machine can already
