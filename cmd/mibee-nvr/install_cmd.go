@@ -76,15 +76,26 @@ func cmdUninstall() {
 	os.Exit(0)
 }
 
-// pauseIfInteractive keeps the console open when launched from Explorer
-// (Add/Remove Programs runs the uninstaller with no terminal to read the
-// summary from otherwise). Terminal/piped invocations flow through.
+// pauseIfInteractive keeps the console open when launched from Explorer /
+// Add/Remove Programs so the summary is readable — but BOUNDED: waiting for
+// an Enter that never comes used to zombie the ARP uninstaller, which in
+// turn locked the exe and silently sank the delayed self-delete (field
+// report 2026-09-19). Terminal/piped invocations flow through instantly.
 func pauseIfInteractive() {
 	stat, _ := os.Stdin.Stat()
 	if stat.Mode()&os.ModeCharDevice == 0 {
 		return
 	}
-	fmt.Print("\n按 Enter 键关闭…")
-	buf := make([]byte, 1)
-	_, _ = os.Stdin.Read(buf)
+	fmt.Print("\n按 Enter 键关闭（10 秒后自动关闭）…")
+	type done struct{}
+	sel := make(chan done, 1)
+	go func() {
+		buf := make([]byte, 1)
+		_, _ = os.Stdin.Read(buf)
+		sel <- done{}
+	}()
+	select {
+	case <-sel:
+	case <-time.After(10 * time.Second):
+	}
 }

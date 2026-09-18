@@ -5,6 +5,7 @@ package install
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,19 +185,60 @@ func portInUse(addr string) bool {
 // configListenInUse reports whether a service instance is answering on the
 // configured listen address (wildcards probed on loopback).
 func configListenInUse(cfgPath string) bool {
+	return portInUse(loopbackListenAddr(cfgPath))
+}
+
+// loopbackListenAddr resolves the configured listen address into the
+// loopback form an on-machine client (installer/uninstaller) should dial.
+func loopbackListenAddr(cfgPath string) string {
 	addr := ":9090"
 	if cfg, err := config.Load(cfgPath); err == nil && cfg.Server.Listen != "" {
 		addr = cfg.Server.Listen
 	}
 	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
 	if err != nil {
-		return portInUse("127.0.0.1:9090")
+		return "127.0.0.1:9090"
 	}
 	switch host {
 	case "", "0.0.0.0", "::", "[::]":
 		host = "127.0.0.1"
 	}
-	return portInUse(net.JoinHostPort(host, port))
+	return net.JoinHostPort(host, port)
+}
+
+// exeLocked reports whether some process holds the installed exe open for
+// write (a running instance or a paused installer console).
+func exeLocked(exePath string) bool {
+	f, err := os.OpenFile(exePath, os.O_RDWR, 0)
+	if err != nil {
+		return true
+	}
+	_ = f.Close()
+	return false
+}
+
+// stopRunningInstance gracefully stops a serving NVR via the loopback-local
+// shutdown endpoint (POST /api/system/shutdown — the same trust model the
+// tray uses) and waits for the port to free. Returns true when nothing is
+// listening anymore (including when nothing was in the first place).
+func stopRunningInstance(cfgPath string) bool {
+	addr := loopbackListenAddr(cfgPath)
+	if !portInUse(addr) {
+		return true
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Post("http://"+addr+"/api/system/shutdown", "application/json", strings.NewReader("{}"))
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+	// Graceful shutdown drains recorders etc. — give it a generous window.
+	for range 40 {
+		if !portInUse(addr) {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return !portInUse(addr)
 }
 
 func writeUninstallEntry(exePath, version string) error {
@@ -285,20 +327,23 @@ func Uninstall(purge bool) (*Result, error) {
 	selfIsTarget := selfExe != "" && strings.EqualFold(filepath.Clean(exePath), filepath.Clean(selfExe))
 
 	if _, statErr := os.Stat(exePath); statErr == nil {
+		// A running instance (or a paused installer) locks the exe and would
+		// silently sink the delayed self-delete. Stop the server OURSELVES via
+		// the loopback shutdown endpoint — the field-reported alternative
+		// ("please quit from the tray first") was invisible in the flash
+		// console the ARP path gets, and raced the logon autostart's bind.
 		if !selfIsTarget {
-			// A running instance locks the exe — surface a clear instruction
-			// instead of a sharing-violation stack.
-			if f, err := os.OpenFile(exePath, os.O_RDWR, 0); err != nil {
-				return nil, fmt.Errorf("install: MiBee NVR 正在运行，请先退出（托盘图标右键 → 退出）后重试卸载")
-			} else {
-				_ = f.Close()
+			if exeLocked(exePath) {
+				if !stopRunningInstance(cfgPath) || exeLocked(exePath) {
+					return nil, fmt.Errorf("install: MiBee NVR 正在运行且无法自动停止——请从托盘图标右键退出（或结束 mibee-nvr 进程）后重试卸载")
+				}
 			}
 		} else if configListenInUse(cfgPath) {
-			// Running the uninstaller FROM the installed exe (the ARP path): our
-			// own process always locks the file, so probe the service port for a
-			// second instance — the delayed self-delete would silently fail
-			// while one is alive.
-			return nil, fmt.Errorf("install: MiBee NVR 正在运行，请先退出（托盘图标右键 → 退出）后重试卸载")
+			// ARP path: our own process always locks the file, so probe the
+			// service port for the running instance instead.
+			if !stopRunningInstance(cfgPath) {
+				return nil, fmt.Errorf("install: MiBee NVR 正在运行且无法自动停止——请从托盘图标右键退出（或结束 mibee-nvr 进程）后重试卸载")
+			}
 		}
 	}
 
@@ -316,10 +361,21 @@ func Uninstall(purge bool) (*Result, error) {
 		// a small detached .cmd file — passing a quoted script through
 		// `cmd /c <argv>` mangles the quotes (Go escapes them MSVCRT-style,
 		// cmd.exe does not understand that), while a script FILE path is a
-		// single simply-quoted argument. The script deletes the exe (and any
-		// rename-aside .old), then itself, then the (then-empty) dir.
-		script := fmt.Sprintf("@echo off\r\ntimeout /t 2 /nobreak >nul 2>&1\r\ndel /f /q %s\r\ndel /f /q %s\r\ndel /f /q \"%%~f0\" & rmdir \"%%~dp0\"\r\n",
-			quote(exePath), quote(exePath+".old"))
+		// single simply-quoted argument. The script RETRIES the deletes for
+		// up to ~90s: the uninstaller console may hold the lock for its
+		// summary pause (bounded, but the belt-and-braces window absorbs any
+		// other slow releaser too), and a one-shot del used to silently sink
+		// the whole removal (field report 2026-09-19).
+		script := fmt.Sprintf("@echo off\r\n"+
+			"set /a n=0\r\n"+
+			":retry\r\n"+
+			"del /f /q %s\r\ndel /f /q %s\r\n"+
+			"if not exist %s if not exist %s goto done\r\n"+
+			"set /a n+=1\r\nif %%n%% geq 45 goto done\r\n"+
+			"timeout /t 2 /nobreak >nul 2>&1\r\ngoto retry\r\n"+
+			":done\r\n"+
+			"del /f /q \"%%~f0\" & rmdir \"%%~dp0\"\r\n",
+			quote(exePath), quote(exePath+".old"), quote(exePath), quote(exePath+".old"))
 		scriptPath := filepath.Join(exeDir, "uninstall-mibee-nvr.cmd")
 		if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 			return nil, fmt.Errorf("install: 写自删除脚本失败: %w", err)
