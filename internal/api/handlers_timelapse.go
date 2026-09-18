@@ -280,6 +280,8 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 		select {
 		case <-ctx.Done():
 			return
+		case <-streamShutdown:
+			return
 		case <-heartbeat.C:
 			fmt.Fprintf(w, ": ping\n\n")
 			flusher.Flush()
