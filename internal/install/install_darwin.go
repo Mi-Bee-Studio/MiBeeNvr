@@ -128,7 +128,7 @@ func Install(opts Options) (*Result, error) {
 		return nil, fmt.Errorf("install: mkdir LaunchAgents: %w", err)
 	}
 	logPath := filepath.Join(dataDir, "nvr.log")
-	if err := os.WriteFile(plist, []byte(LaunchAgentPlist(exePath, cfgPath, logPath)), 0o644); err != nil {
+	if err := os.WriteFile(plist, []byte(LaunchAgentPlist(label, exePath, cfgPath, logPath)), 0o644); err != nil {
 		return nil, fmt.Errorf("install: write LaunchAgent: %w", err)
 	}
 
@@ -216,7 +216,7 @@ func installMenuBarHelper(exeDir, dataDir, cfgPath string) error {
 		return err
 	}
 	logPath := filepath.Join(dataDir, "nvr-bar.log")
-	if err := os.WriteFile(barPlist, []byte(LaunchAgentPlist(barPath, "", logPath)), 0o644); err != nil {
+	if err := os.WriteFile(barPlist, []byte(LaunchAgentPlist(barLabel, barPath, "", logPath)), 0o644); err != nil {
 		return fmt.Errorf("write bar LaunchAgent: %w", err)
 	}
 	_, _ = runLaunchctl("unload", barPlist)

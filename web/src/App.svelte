@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { isAuthenticated, healthCheck, tryGatewaySession } from '$lib/api';
+  import { isAuthenticated, isLocalBypass, healthCheck, tryGatewaySession } from '$lib/api';
   import { t } from '$lib/i18n';
   import { WifiOff } from 'lucide-svelte';
   // Route loader map — lazy loaded on demand
@@ -57,10 +57,14 @@
   }
 
   async function checkSetupRequired() {
-    if (isAuthenticated()) return;
+    // Local-bypass browsers (the desktop install default: loopback listener +
+    // auth.local_bypass) never pass through the login route, so treating them
+    // as "already authenticated" here used to strand a fresh install on a
+    // raw "setup required" API error instead of the first-run wizard.
+    if (isAuthenticated() && !isLocalBypass()) return;
     try {
       const health = await healthCheck();
-      if (health.setup_required && currentRoute === 'login') {
+      if (health.setup_required && (currentRoute === 'login' || isLocalBypass())) {
         window.location.hash = '#/setup';
       }
     } catch {

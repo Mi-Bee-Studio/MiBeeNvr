@@ -24,7 +24,9 @@ func TestStarterConfig(t *testing.T) {
 }
 
 func TestLaunchAgentPlist(t *testing.T) {
-	got := LaunchAgentPlist("/u/Applications/MiBeeNVR/mibee-nvr",
+	t.Helper()
+	got := LaunchAgentPlist("com.mibee-nvr",
+		"/u/Applications/MiBeeNVR/mibee-nvr",
 		"/u/Library/Application Support/MiBeeNVR/mibee-nvr.yaml",
 		"/u/Library/Application Support/MiBeeNVR/nvr.log")
 	for _, want := range []string{
@@ -42,5 +44,27 @@ func TestLaunchAgentPlist(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "<?xml") {
 		t.Errorf("plist must start with xml decl, got:\n%s", got)
+	}
+}
+
+// The menu-bar helper agent must carry its OWN label — a second agent with
+// the NVR's label collides at launchctl load (field report 2026-09-19:
+// helper compiled but never appeared) — and no -config pair (it takes none).
+func TestLaunchAgentPlistMenuBarHelper(t *testing.T) {
+	t.Helper()
+	got := LaunchAgentPlist("com.mibee-nvr.bar",
+		"/u/Applications/MiBeeNVR/mibee-nvr-bar",
+		"",
+		"/u/Library/Application Support/MiBeeNVR/nvr-bar.log")
+	for _, want := range []string{
+		"<string>com.mibee-nvr.bar</string>",
+		"<string>/u/Applications/MiBeeNVR/mibee-nvr-bar</string>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("bar plist missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "-config") {
+		t.Errorf("bar plist must not pass -config:\n%s", got)
 	}
 }
