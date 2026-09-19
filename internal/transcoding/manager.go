@@ -163,6 +163,16 @@ func (m *TranscodeManager) Run(ctx context.Context) {
 						if !camConfig.Enabled {
 							continue
 						}
+						// #848: skip flapping-camera fragments below the
+						// configured duration floor (0 = gating off).
+						if m.segmentBelowFloor(seg) {
+							mgrLogger.Debug("skipping transcode: segment below min duration floor",
+								"camera_id", seg.CameraID,
+								"started_at", seg.StartedAt,
+								"ended_at", seg.EndedAt,
+								"floor_s", m.cfg.Transcoding.MinSegmentDurationS)
+							continue
+						}
 						// Get target codec (default h264)
 						targetCodec := camConfig.TargetCodec
 						if targetCodec == "" {

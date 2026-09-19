@@ -553,6 +553,9 @@ func validateConfigDetails(cfg *Config) error {
 	if cfg.Transcoding.MaxWorkers < 1 || cfg.Transcoding.MaxWorkers > 4 {
 		return fmt.Errorf("transcoding.max_workers must be between 1 and 4, got %d", cfg.Transcoding.MaxWorkers)
 	}
+	if cfg.Transcoding.MinSegmentDurationS < 0 || cfg.Transcoding.MinSegmentDurationS > 3600 {
+		return fmt.Errorf("transcoding.min_segment_duration_s must be between 0 and 3600, got %d", cfg.Transcoding.MinSegmentDurationS)
+	}
 	if cfg.Transcoding.JobTimeout != "" {
 		jobTimeout, err := time.ParseDuration(cfg.Transcoding.JobTimeout)
 		if err != nil {

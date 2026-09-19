@@ -29,6 +29,7 @@ const (
 	ConsumerCleanup   = "cleanup"
 	ConsumerRepair    = "repair"
 	ConsumerTimelapse = "timelapse"
+	ConsumerTranscode = "transcode"
 )
 
 // Limiter is the consumer-facing surface of a Bucket. Declared so dependent

@@ -89,7 +89,7 @@ io:
 观测：`nvr_iobudget_wait_seconds_total{consumer}`（后台等待时长）、
 `nvr_iobudget_bytes_charged_total{consumer}` /
 `nvr_iobudget_unlinks_charged_total{consumer}`（计费量），
-`consumer` ∈ {merge, cleanup, repair, timelapse}。
+`consumer` ∈ {merge, cleanup, repair, timelapse, transcode}——转码任务的输入读 + 输出写按输入大小 ×2 估价计费（#848）。
 
 `mibee-nvr repair delete-by-format` CLI 读取同一 `io:` 配置节——对在线
 服务器手工批量删除时，让路行为与服务端自身清理完全一致。

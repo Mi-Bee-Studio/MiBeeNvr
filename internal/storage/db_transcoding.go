@@ -153,6 +153,15 @@ func (d *DB) UpdateTaskStatus(ctx context.Context, id int64, status string, prog
 	return err
 }
 
+// CountTasksByStatus returns the number of tasks with the given status.
+// Cheaper than GetTasksByStatus when only the backlog depth matters (#848).
+func (d *DB) CountTasksByStatus(ctx context.Context, status string) (int64, error) {
+	var n int64
+	err := d.readConn().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM transcoding_tasks WHERE status = ?`, status).Scan(&n)
+	return n, err
+}
+
 // GetTasksByStatus returns all tasks with the given status, ordered by created_at ascending.
 func (d *DB) GetTasksByStatus(ctx context.Context, status string) ([]TranscodeTask, error) {
 	q := `SELECT id, camera_id, recording_id, input_path, input_format, output_path, output_format,
