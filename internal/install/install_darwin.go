@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tray"
@@ -106,6 +107,13 @@ func Install(opts Options) (*Result, error) {
 	if err := os.WriteFile(exePath, data, 0o755); err != nil {
 		return nil, fmt.Errorf("install: 写入 %s 失败: %w", exePath, err)
 	}
+	// Files written by a quarantined (downloaded, unsigned) installer inherit
+	// the quarantine xattr — launchd-exec'ing such a copy gets it KILLED by
+	// Gatekeeper with no prompt to approve, which reads as "installed but
+	// never starts". The user already approved this installer via the
+	// right-click/Open dance; clearing the flag on our own copies is the
+	// standard self-installer move.
+	stripQuarantine(exePath)
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		if err := os.WriteFile(cfgPath, []byte(StarterConfig(dataDir)), 0o600); err != nil {
 			return nil, fmt.Errorf("install: write starter config: %w", err)
@@ -130,7 +138,16 @@ func Install(opts Options) (*Result, error) {
 		return nil, fmt.Errorf("install: launchctl load: %w\n%s", err, out)
 	}
 
-	res := &Result{Exe: exePath, Config: cfgPath, DataDir: dataDir, Started: true}
+	res := &Result{Exe: exePath, Config: cfgPath, DataDir: dataDir}
+	// Honest Started: poll the configured listener instead of assuming the
+	// agent came up — a blocked/killed exec surfaces here instead of as a
+	// silent failure.
+	healthURL := healthURLForConfig(cfgPath)
+	res.Started = waitForHTTP(healthURL, 10*time.Second)
+	if !res.Started {
+		res.Notes = append(res.Notes,
+			"⚠️ 服务未能在 10 秒内就绪——排查：launchctl list | grep mibee；日志："+logPath)
+	}
 	res.Notes = append(res.Notes,
 		"已注册 LaunchAgent（登录自启 + 崩溃自动拉起）：launchctl list | grep mibee",
 		"日志："+logPath+"（tail -f 跟踪）",
@@ -149,6 +166,11 @@ func Install(opts Options) (*Result, error) {
 
 // HideOwnConsole is windows-only (console hiding for server mode).
 func HideOwnConsole() {}
+
+// stripQuarantine best-effort removes com.apple.quarantine from path.
+func stripQuarantine(path string) {
+	_, _ = runCmd("xattr", "-d", "com.apple.quarantine", path)
+}
 
 // RefreshMenuBarHelper recompiles and restarts the menu-bar helper after a
 // listen change so its baked base URL follows the new address. No-op when
@@ -187,6 +209,7 @@ func installMenuBarHelper(exeDir, dataDir, cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("swiftc 编译失败: %v\n%s", err, out)
 	}
+	stripQuarantine(barPath) // launchd would kill a quarantined helper
 
 	barPlist, err := barAgentPlistPath()
 	if err != nil {

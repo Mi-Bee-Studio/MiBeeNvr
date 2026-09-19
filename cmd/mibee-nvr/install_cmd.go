@@ -33,13 +33,12 @@ func cmdInstall(autoOpen bool) {
 		fmt.Printf("  · %s\n", n)
 	}
 	if autoOpen {
-		// A freshly started instance needs a beat to bind; an already-running
-		// one answers immediately.
-		if !res.Started {
-			time.Sleep(1500 * time.Millisecond)
+		if res.Started {
+			install.OpenBrowser(webUIURL(res.Config))
+			install.NotifyDialog("MiBee NVR 已安装并启动。\n任务栏托盘/菜单栏出现管理图标，浏览器即将打开管理界面。")
+		} else {
+			install.NotifyDialog("MiBee NVR 已安装，但服务未能在 10 秒内就绪。\n请查看下列备注与日志（nvr.log）；确认服务已启动后，从菜单栏/托盘打开管理界面。")
 		}
-		install.OpenBrowser(webUIURL(res.Config))
-		install.NotifyDialog("MiBee NVR 已安装并启动。\n任务栏托盘/菜单栏出现管理图标，浏览器即将打开管理界面。")
 	}
 	pauseIfInteractive()
 	os.Exit(0)

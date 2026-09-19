@@ -16,8 +16,13 @@ package install
 
 import (
 	"fmt"
+	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 )
 
 // Options carries values only the command layer knows.
@@ -66,6 +71,45 @@ cameras: []
 // backslashes verbatim (windows paths), only ' needs doubling.
 func yamlSingle(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+// healthURLForConfig resolves the loopback /api/health URL from the config's
+// listen address (wildcards probed on loopback).
+//
+//nolint:unused // called only from the windows/darwin install files — on the linux lint platform both are build-tagged out
+func healthURLForConfig(cfgPath string) string {
+	addr := "127.0.0.1:9090"
+	if cfg, err := config.Load(cfgPath); err == nil && cfg.Server.Listen != "" {
+		if host, port, err := net.SplitHostPort(strings.TrimSpace(cfg.Server.Listen)); err == nil {
+			switch host {
+			case "", "0.0.0.0", "::", "[::]":
+				host = "127.0.0.1"
+			}
+			addr = net.JoinHostPort(host, port)
+		}
+	}
+	return "http://" + addr + "/api/health"
+}
+
+// waitForHTTP polls url until it answers 2xx or the timeout lapses — the
+// honest "Started" behind every install summary (an agent killed at exec
+// surfaces here instead of as a silent non-start).
+//
+//nolint:unused // called only from the windows/darwin install files — on the linux lint platform both are build-tagged out
+func waitForHTTP(url string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 2 * time.Second}
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return true
+			}
+		}
+		time.Sleep(400 * time.Millisecond)
+	}
+	return false
 }
 
 // LaunchAgentPlist renders the per-user launchd agent keeping the NVR
