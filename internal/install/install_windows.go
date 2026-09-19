@@ -181,9 +181,15 @@ func Install(opts Options) (*Result, error) {
 		if err := cmd.Start(); err != nil {
 			res.Notes = append(res.Notes, "自动启动失败（可从开始菜单手动启动）: "+err.Error())
 		} else {
-			res.Started = true
+			res.Started = waitForHTTP(healthURLForConfig(cfgPath), 10*time.Second)
+			if !res.Started {
+				res.Notes = append(res.Notes, "⚠️ 服务未能在 10 秒内就绪——排查日志："+filepath.Join(dataDir, "nvr.log"))
+			}
 		}
 	} else {
+		// Already running (e.g. upgrade-in-place): Started tells the finish
+		// dialog the truth — the service answers, just not from this run.
+		res.Started = waitForHTTP(healthURLForConfig(cfgPath), 5*time.Second)
 		res.Notes = append(res.Notes, "检测到 127.0.0.1:9090 已有服务在监听，跳过自动启动")
 	}
 	return res, nil
