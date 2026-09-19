@@ -31,23 +31,42 @@ final class Delegate: NSObject, NSApplicationDelegate {
         item.menu = menu
     }
 
+    // 菜单 action 在 event-tracking runloop 模式里同步触发；在那里直接
+    // runModal 弹窗不可见，且可能未经用户输入就返回「确定」（2026-09-20
+    // 现场：点「卸载」没有任何弹窗，卸载却在后台执行了；「修改密码」
+    // 同样无弹窗即静默失败）。统一做法：跳到下一个 runloop tick（脱离
+    // 菜单追踪模式）并先激活本应用再弹窗——状态栏应用的标配写法。
+    private func presentOnMain(_ body: @escaping () -> Void) {
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            body()
+        }
+    }
+
     @objc func openWeb(_ sender: Any?) {
         NSWorkspace.shared.open(baseURL)
     }
 
     @objc func changePassword(_ sender: Any?) {
+        presentOnMain { self.changePasswordDialog() }
+    }
+
+    private func changePasswordDialog() {
         let alert = NSAlert()
         alert.messageText = "修改 MiBee NVR 管理密码"
         alert.informativeText = "密码用于局域网/远程登录（本机浏览器免密）。至少 8 个字符。"
 
-        let f1 = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        let f1 = NSSecureTextField(frame: NSRect(x: 0, y: 32, width: 260, height: 24))
         f1.placeholderString = "新密码"
-        let f2 = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        let f2 = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         f2.placeholderString = "确认新密码"
-        let stack = NSStackView(views: [f1, f2])
-        stack.orientation = .vertical
-        stack.spacing = 8
-        alert.accessoryView = stack
+        // NSAlert 按 accessoryView 的 frame 定弹窗尺寸；NSStackView 走
+        // 自动布局在部分系统上拿不到正确 fittingSize，弹窗会被压扁导致
+        // 输入框显示不全（现场 2026-09-20）。显式 frame 的容器最稳。
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 60))
+        box.addSubview(f1)
+        box.addSubview(f2)
+        alert.accessoryView = box
         alert.addButton(withTitle: "确定")
         alert.addButton(withTitle: "取消")
 
@@ -73,6 +92,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func changeListen(_ sender: Any?) {
+        presentOnMain { self.changeListenDialog() }
+    }
+
+    private func changeListenDialog() {
         let alert = NSAlert()
         alert.messageText = "修改监听地址"
         alert.informativeText = "默认仅本机可访问（127.0.0.1）。填 0.0.0.0:9090 可开放局域网访问。"
@@ -99,6 +122,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func uninstallNVR(_ sender: Any?) {
+        presentOnMain { self.uninstallDialog() }
+    }
+
+    private func uninstallDialog() {
         let alert = NSAlert()
         alert.messageText = "卸载 MiBee NVR？"
         alert.informativeText = "将移除程序与 LaunchAgent（含本菜单栏图标）。录像和配置默认保留（彻底清除请在终端使用 mibee-nvr uninstall --purge）。"
@@ -123,8 +150,15 @@ final class Delegate: NSObject, NSApplicationDelegate {
         var req = URLRequest(url: baseURL.appendingPathComponent("api/system/shutdown"))
         req.httpMethod = "POST"
         _ = postSync(req)
-        // 助手自身也随之退出：NVR 已停，菜单栏不应再挂着操作入口。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { exit(0) }
+        // 服务端停机时已 bootout 双 agent（KeepAlive 不会再拉起 NVR）；
+        // 助手也要把自身的 agent 注销，否则 launchd 会立刻让图标复活
+        // （现场 2026-09-20：退出一次图标又出现，要退两次）。
+        let uid = getuid()
+        if let p = try? Process.run(URL(fileURLWithPath: "/bin/launchctl"),
+                                    arguments: ["bootout", "gui/\(uid)/com.mibee-nvr.bar"]) {
+            _ = p
+        }
+        exit(0)
     }
 
     private func postSync(_ req: URLRequest) -> Bool {
@@ -142,6 +176,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let a = NSAlert()
         a.alertStyle = style
         a.messageText = text
+        NSApp.activate(ignoringOtherApps: true)
         a.runModal()
     }
 }

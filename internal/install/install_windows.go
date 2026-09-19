@@ -205,6 +205,10 @@ func quote(p string) string { return `"` + p + `"` }
 // RefreshMenuBarHelper is darwin-only — windows manages the tray in-process.
 func RefreshMenuBarHelper() error { return nil }
 
+// UnloadDesktopAgents is darwin-only — windows has no supervisor to detach
+// from; a tray quit is a plain process exit and stays down.
+func UnloadDesktopAgents() {}
+
 func portInUse(addr string) bool {
 	c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
 	if err != nil {
