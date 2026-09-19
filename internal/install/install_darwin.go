@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,6 +172,19 @@ func HideOwnConsole() {}
 // console plumbing).
 func EnsureParentConsole() {}
 func EnsureOwnedConsole()  {}
+
+// UnloadDesktopAgents removes the NVR and menu-bar agents from the current
+// launchd session (best-effort) so a deliberate quit STAYS quit — the agents
+// run with KeepAlive, so without this launchd resurrects the process the
+// moment it exits ("退出后图标又出现" field report 2026-09-20). bootout only
+// ends the current session's job; the plists stay enabled, so the next login
+// autostarts normally. Bare CLI runs simply fail to find the job — ignored.
+func UnloadDesktopAgents() {
+	uid := strconv.Itoa(os.Getuid())
+	for _, l := range []string{label, barLabel} {
+		_, _ = runLaunchctl("bootout", "gui/"+uid+"/"+l)
+	}
+}
 
 // stripQuarantine best-effort removes com.apple.quarantine from path.
 func stripQuarantine(path string) {

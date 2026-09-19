@@ -416,6 +416,10 @@ func main() {
 	if err := a.Stop(); err != nil {
 		slog.Error("stop", "error", err)
 	}
+	// Desktop agents run with KeepAlive — detach from the supervisor before
+	// exiting or launchd resurrects the process and a deliberate quit never
+	// sticks (menu-bar "退出" field report 2026-09-20). No-op on servers.
+	install.UnloadDesktopAgents()
 	slog.Info("MiBee NVR stopped")
 }
 
