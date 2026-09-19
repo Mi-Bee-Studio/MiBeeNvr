@@ -140,6 +140,12 @@ type RollingMergeConfig struct {
 	// their transcode task row lands seconds after completion. 0 = rail off.
 	TranscodeGrace time.Duration
 
+	// FragmentHold is the fragment batching window (#852): MP4 segments shorter
+	// than fragmentDurationThreshold are held this long before being folded
+	// into the bucket in ONE merge (instead of one full-bucket rewrite per
+	// fragment). 0 = hold disabled (fold per segment, pre-#852 behavior).
+	FragmentHold time.Duration
+
 	// Bucket retention (#764): how many parameter-set-keyed buckets a camera
 	// keeps live (BucketRetain, default 2 = the HD/SD quality pair) and how
 	// long an append-less bucket survives (BucketIdleTTL, default 10m; 0 =
@@ -524,6 +530,11 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 		if w, err := time.ParseDuration(effective.RollingWindow); err == nil && w > 0 {
 			cfg.Window = w
 		}
+	}
+	// Fragment batching (#852): *int with nil = default-on (300s) and explicit
+	// 0 = off — resolve via the accessor, never dereference the pointer.
+	if s := effective.RollingFragmentHoldValue(); s > 0 {
+		cfg.FragmentHold = time.Duration(s) * time.Second
 	}
 	if effective.RollingMinDuration != "" {
 		if d, err := time.ParseDuration(effective.RollingMinDuration); err == nil && d > 0 {

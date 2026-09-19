@@ -12,14 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Batch-path finalize accounting (#764 follow-up): the batch merge paths
-// (2+ segments in one debounce dispatch, backfill batches) drop the camera's
-// whole retained bucket set via r.buckets.Delete — silently, without the
-// finalize metric. In production the periodic backfill runs every 10m and is
-// the DOMINANT eviction path, so nvr_rolling_merge_bucket_finalized_total
-// undercounts to the point of uselessness (observed: zero series for hours
-// on M5 while buckets rolled hourly). Dropping the set must account every
-// bucket under reason="batch_reset".
+// Batch-path finalize accounting (#764 follow-up, reshaped by #852): the
+// batch merge paths that still produce STANDALONE outputs (the backfill
+// sweep's mergeBatchMP4) drop the camera's whole retained bucket set — that
+// drop must account every bucket under reason="batch_reset" (in production
+// the periodic backfill runs every 10m and is the DOMINANT eviction path, so
+// nvr_rolling_merge_bucket_finalized_total would undercount to uselessness
+// without it). The LIVE 2+-in-one-debounce dispatch no longer takes the batch
+// path at all (#852 true batch fold): it folds into the retained bucket, so
+// the second half of this test pins that no reset happens there.
 func TestRollingMerge_BatchPathAccountsFinalize(t *testing.T) {
 	env := newMergeTestEnv(t)
 	defer env.close(t)
@@ -51,21 +52,32 @@ func TestRollingMerge_BatchPathAccountsFinalize(t *testing.T) {
 	publishSegmentCompleted(t, bus, cameraID, "rec-1", p1, "h264", base)
 	waitForRecordingGone(t, env, cameraID, "rec-1")
 
-	// 2) Two segments inside one debounce window → the batch path
-	// (mergeBatchMP4) + bucket-set drop.
+	// 2) LIVE: two segments inside one debounce window now fold into the SAME
+	// retained bucket (#852) — no standalone batch product, no bucket-set drop.
 	p2 := createAndInsertSegment(t, env, "rec-2", cameraID, base.Add(2*time.Minute))
 	publishSegmentCompleted(t, bus, cameraID, "rec-2", p2, "h264", base.Add(2*time.Minute))
 	p3 := createAndInsertSegment(t, env, "rec-3", cameraID, base.Add(3*time.Minute))
 	publishSegmentCompleted(t, bus, cameraID, "rec-3", p3, "h264", base.Add(3*time.Minute))
 	waitForRecordingGone(t, env, cameraID, "rec-2")
 	waitForRecordingGone(t, env, cameraID, "rec-3")
+	waitForBucketStable(t, r, cameraID, 3, 5*time.Second)
+	require.Equal(t, 0.0, testutil.ToFloat64(mt.RollingBucketFinalizedTotal.WithLabelValues("batch_reset")),
+		"live dispatches fold into the retained bucket — no batch_reset drop (#852)")
 
-	// The metric increments in dropBuckets AFTER mergeBatchMP4 has deleted
-	// the source rows — waitForRecordingGone can land inside that window
-	// (observed as a CI flake 2026-09-14). Poll the metric itself rather
-	// than asserting instantly behind the leading effect (#571 rule).
+	// 3) BACKFILL: two OLD pre-existing pending segments (an earlier window,
+	// ended well before the #852 fragment-hold rail's horizon) take the
+	// standalone batch path (mergeBatchMP4) + bucket-set drop — which must
+	// account the finalize.
+	for i := range 2 {
+		recID := "rec-bf-" + string(rune('0'+i))
+		startedAt := base.Add(time.Duration(-50+i) * time.Minute)
+		createAndInsertSegment(t, env, recID, cameraID, startedAt)
+	}
+	_, err := r.BackfillCamera(context.Background(), cameraID, false)
+	require.NoError(t, err)
+
 	require.Eventually(t, func() bool {
 		return testutil.ToFloat64(mt.RollingBucketFinalizedTotal.WithLabelValues("batch_reset")) >= 1.0
 	}, 5*time.Second, 20*time.Millisecond,
-		"the batch path's bucket-set drop must account finalizes (reason=batch_reset)")
+		"the backfill batch path's bucket-set drop must account finalizes (reason=batch_reset)")
 }

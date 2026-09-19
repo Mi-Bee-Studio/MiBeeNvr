@@ -19,12 +19,13 @@ func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":               h.config.Merge.Enabled,
-		"check_interval":        h.config.Merge.CheckInterval,
-		"window_size":           h.config.Merge.WindowSize,
-		"batch_limit":           h.config.Merge.BatchLimit,
-		"min_segment_age":       h.config.Merge.MinSegmentAge,
-		"min_segments_to_merge": h.config.Merge.MinSegmentsToMerge,
+		"enabled":                 h.config.Merge.Enabled,
+		"check_interval":          h.config.Merge.CheckInterval,
+		"window_size":             h.config.Merge.WindowSize,
+		"batch_limit":             h.config.Merge.BatchLimit,
+		"min_segment_age":         h.config.Merge.MinSegmentAge,
+		"min_segments_to_merge":   h.config.Merge.MinSegmentsToMerge,
+		"rolling_fragment_hold_s": h.config.Merge.RollingFragmentHoldValue(),
 	})
 }
 
@@ -35,12 +36,13 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 	}
 
 	var body struct {
-		Enabled            *bool   `json:"enabled"`
-		CheckInterval      *string `json:"check_interval"`
-		WindowSize         *string `json:"window_size"`
-		BatchLimit         *int    `json:"batch_limit"`
-		MinSegmentAge      *string `json:"min_segment_age"`
-		MinSegmentsToMerge *int    `json:"min_segments_to_merge"`
+		Enabled              *bool   `json:"enabled"`
+		CheckInterval        *string `json:"check_interval"`
+		WindowSize           *string `json:"window_size"`
+		BatchLimit           *int    `json:"batch_limit"`
+		MinSegmentAge        *string `json:"min_segment_age"`
+		MinSegmentsToMerge   *int    `json:"min_segments_to_merge"`
+		RollingFragmentHoldS *int    `json:"rolling_fragment_hold_s"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -93,6 +95,16 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		h.config.Merge.MinSegmentsToMerge = *body.MinSegmentsToMerge
+	}
+	// Fragment batching window (#852): seconds a <30s MP4 fragment waits before
+	// its batch folds into the hour bucket. 0 disables batching; nil keeps the
+	// current value (partial PUT). Web-operable per the user's standing policy.
+	if body.RollingFragmentHoldS != nil {
+		if *body.RollingFragmentHoldS < 0 || *body.RollingFragmentHoldS > 3600 {
+			WriteError(w, http.StatusBadRequest, "rolling_fragment_hold_s must be between 0 (off) and 3600")
+			return
+		}
+		h.config.Merge.RollingFragmentHoldS = body.RollingFragmentHoldS
 	}
 
 	// Persist config to disk

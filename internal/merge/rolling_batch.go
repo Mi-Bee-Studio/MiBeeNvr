@@ -45,6 +45,17 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 		now := time.Now()
 		youngTranscode = func(endedAt time.Time) bool { return now.Sub(endedAt) < grace }
 	}
+	// Fragment-hold rail (#852): the sweep must not fold fragments the live
+	// loop is still holding for batching — young MP4 segments defer by the
+	// hold window (same age-rail pattern as the transcode grace above). The
+	// live hold timer always fires within the window, so deferring here can
+	// at most delay a fold to the next sweep if that timer's dispatch was
+	// lost (shutdown, dropped signal).
+	var youngHold func(endedAt time.Time) bool
+	if hold := r.resolveRollingConfig(cameraID).FragmentHold; hold > 0 {
+		now := time.Now()
+		youngHold = func(endedAt time.Time) bool { return now.Sub(endedAt) < hold }
+	}
 
 	// Group recordings by natural-hour window for batch merging.
 	// Segments in different hours go into separate merge batches.
@@ -90,6 +101,10 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 				}
 				if youngTranscode != nil && !rec.EndedAt.IsZero() &&
 					youngTranscode(rec.EndedAt) {
+					continue
+				}
+				if youngHold != nil && !rec.EndedAt.IsZero() &&
+					youngHold(rec.EndedAt) {
 					continue
 				}
 				valid = append(valid, rec)

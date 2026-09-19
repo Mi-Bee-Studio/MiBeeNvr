@@ -51,6 +51,11 @@ func wallEnv(t *testing.T) (*mergeTestEnv, *event.EventBus, *RollingMergeCoordin
 		RollingEnabled:  boolPtr(true),
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
+		// Fragment batching off (#852): several scenarios here publish 2-4s
+		// segments (fragments by duration); holding them for the default 300s
+		// window would stall every waitForBucketStable. Batching semantics
+		// have their own dedicated suite (rolling_fragment_hold_test.go).
+		RollingFragmentHoldS: intPtr(0),
 	}
 	r := newTestRollingCoordinator(env, cfg, bus)
 

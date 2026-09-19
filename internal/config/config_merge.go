@@ -35,6 +35,16 @@ type MergeConfig struct {
 	// further consolidated via POST /api/merge/consolidate. Default "5m".
 	RollingMinDuration string `yaml:"rolling_min_duration" json:"rolling_min_duration"`
 
+	// RollingFragmentHoldS is the fragment batching window (#852): MP4 segments
+	// shorter than 30s (flapping-camera reconnect fragments) are HELD this many
+	// seconds before being folded into the hour bucket in ONE merge — instead of
+	// one full-bucket rewrite per fragment (#851 write amplification: a flapper
+	// at ~7s/fragment drove 36 full rewrites/min and saturated the disk).
+	// *int so nil = default-on (300) while an explicit 0 turns batching off
+	// (fold per segment, pre-#852 behavior). Range 0-3600. The hold queue is
+	// metadata-only (worst case <1MB), so the default is safe on RPi 3B.
+	RollingFragmentHoldS *int `yaml:"rolling_fragment_hold_s,omitempty" json:"rolling_fragment_hold_s,omitempty"`
+
 	// RollingBucketRetain is how many rolling buckets a camera keeps alive,
 	// keyed by parameter set (#764). Cameras oscillating between quality tiers
 	// (xiaomi HD/SD reconnect storms) alternate two SPS/PPS keys; with a single
@@ -92,6 +102,21 @@ func (m MergeConfig) RollingEnabledValue() bool {
 	return *m.RollingEnabled
 }
 
+// DefaultRollingFragmentHoldS is the fragment batching window applied when the
+// user has not set merge.rolling_fragment_hold_s (#852).
+const DefaultRollingFragmentHoldS = 300
+
+// RollingFragmentHoldValue reports the effective fragment hold in seconds,
+// defaulting to DefaultRollingFragmentHoldS when the pointer is nil. 0 means
+// batching is off. Read via this accessor only — it preserves the
+// "unset → default" / "explicit 0 → off" distinction a bare int cannot.
+func (m MergeConfig) RollingFragmentHoldValue() int {
+	if m.RollingFragmentHoldS == nil {
+		return DefaultRollingFragmentHoldS
+	}
+	return *m.RollingFragmentHoldS
+}
+
 // ResolveMergeConfig returns the effective MergeConfig for a camera.
 // If perCamera is nil, the global config is returned unchanged.
 // If perCamera is non-nil, only non-zero fields override the global config.
@@ -133,6 +158,9 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.RollingWindow != "" {
 		result.RollingWindow = perCamera.RollingWindow
+	}
+	if perCamera.RollingFragmentHoldS != nil {
+		result.RollingFragmentHoldS = perCamera.RollingFragmentHoldS
 	}
 	if perCamera.RollingMinDuration != "" {
 		result.RollingMinDuration = perCamera.RollingMinDuration

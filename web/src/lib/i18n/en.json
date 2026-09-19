@@ -1132,6 +1132,8 @@
   "settings.invalidDiskThreshold": "Must be between 0 and 100",
   "settings.invalidRetentionDays": "Must be a non-negative number",
   "settings.itemsPerPage": "Items Per Page",
+  "settings.merge.fragmentHold": "Fragment batch fold (seconds)",
+  "settings.merge.fragmentHoldHint": "Segments shorter than 30s (flapping-camera reconnect fragments) are held and folded into the hour bucket in ONE merge, sharply cutting disk write amplification. Held fragments remain playable standalone recordings. 0 = off (fold per segment). Range 0-3600.",
   "settings.mibeevision.confirmRevoke": "Revoke API key \"{name}\"? MiBeeVision will lose access immediately.",
   "settings.mibeevision.connected": "Connected",
   "settings.mibeevision.consumerOffline": "Consumer offline",

@@ -107,3 +107,25 @@ work spent parked) and `nvr_iobudget_bytes_charged_total{consumer}` /
 The `mibee-nvr repair delete-by-format` CLI reads the same `io:` section
 from the YAML, so a manual mass-delete against a live server yields exactly
 like the server's own cleanup.
+
+### Fragment batch folding (#852)
+
+A flapping camera (flaky Wi-Fi/power, CS2 EOFs, cascade churn) produces one ~7s fragment per
+reconnect; every rolling-merge fold is a full-bucket read+rewrite (the streaming
+`MergeMP4Segments([bucket, segment])` pass), so a single sick camera can drive 36 full rewrites
+per minute and push PSI io some to 86% (#851 field data). Fragment batching holds MP4 segments
+shorter than 30s in a metadata-only queue and folds the whole batch in ONE pass — full-bucket
+rewrites drop to ~1/N.
+
+```yaml
+merge:
+  rolling_fragment_hold_s: 300   # default; 0 = off (fold per segment); range 0-3600
+```
+
+- On by default (metadata-only hold, worst-case memory <1MB — no RPi 3B impact); adjustable or
+  disable-able from the Web **Settings → merge** card;
+- Flush on whichever comes first: oldest fragment reaches the window / depth 8 / cumulative
+  64MB / hour-window rollover / a healthy (>=30s) segment on the same camera rides along; the
+  10-minute backfill sweep defers fragments still inside their window;
+- Held fragments remain standalone playable recordings — only the merged product appears up to
+  one window later.

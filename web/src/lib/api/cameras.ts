@@ -740,6 +740,10 @@ export interface MergeConfig {
   batch_limit?: number;
   min_segment_age?: string;
   min_segments_to_merge?: number;
+  // Fragment batching window in seconds (#852): segments <30s are held this
+  // long and folded into the hour bucket in ONE merge. The global settings
+  // GET reports the effective value; 0 disables batching.
+  rolling_fragment_hold_s?: number;
 }
 
 export async function getMergeConfig(cameraId: string, signal?: AbortSignal): Promise<MergeConfig | null> {

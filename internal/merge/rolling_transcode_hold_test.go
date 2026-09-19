@@ -126,7 +126,9 @@ func TestBackfillCamera_HoldsPendingTranscodeSegments(t *testing.T) {
 	defer env.close(t)
 
 	bus := event.NewEventBus(16)
-	cfg := config.MergeConfig{RollingEnabled: boolPtr(true)}
+	// #852: batching off — this test exercises backfill semantics; default-on
+	// fragment holding would defer its fresh-timestamp rows by hour position.
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingFragmentHoldS: intPtr(0)}
 	cameraID := "backfill-hold"
 	cameras := []config.CameraConfig{{ID: cameraID}}
 	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)

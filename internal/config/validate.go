@@ -548,6 +548,11 @@ func validateConfigDetails(cfg *Config) error {
 				return fmt.Errorf("invalid merge.rolling_bucket_idle_ttl %q: must be a positive duration or \"0\" to disable", cfg.Merge.RollingBucketIdleTTL)
 			}
 		}
+		// Fragment batching window (#852): nil = default 300s, explicit 0 = off.
+		if cfg.Merge.RollingFragmentHoldS != nil &&
+			(*cfg.Merge.RollingFragmentHoldS < 0 || *cfg.Merge.RollingFragmentHoldS > 3600) {
+			return fmt.Errorf("merge.rolling_fragment_hold_s must be between 0 (off) and 3600, got %d", *cfg.Merge.RollingFragmentHoldS)
+		}
 	}
 	// Validate transcoding configuration
 	if cfg.Transcoding.MaxWorkers < 1 || cfg.Transcoding.MaxWorkers > 4 {

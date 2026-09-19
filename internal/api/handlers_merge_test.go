@@ -164,3 +164,42 @@ func TestMerge_BackfillAll_NotEnabled(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "POST", "/api/merge/backfill", nil, "", "")
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
+
+// #852 fragment batching window: GET reports the effective value (nil →
+// default 300), PUT persists 0 (off) and rejects out-of-range values.
+func TestMerge_FragmentHoldSettingsRoundtrip(t *testing.T) {
+	t.Parallel()
+	h := mergeTestHandler(t)
+
+	// Default-on when unset: GET reports the effective 300.
+	rr := doRequest(t, h.Routes(), "GET", "/api/settings/merge", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+	require.EqualValues(t, 300, resp["rolling_fragment_hold_s"])
+
+	// PUT 0 (off) persists.
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings/merge",
+		bytes.NewBufferString(`{"rolling_fragment_hold_s": 0}`), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotNil(t, h.config.Merge.RollingFragmentHoldS)
+	require.EqualValues(t, 0, *h.config.Merge.RollingFragmentHoldS)
+
+	rr = doRequest(t, h.Routes(), "GET", "/api/settings/merge", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	resp = map[string]any{}
+	parseJSON(t, rr, &resp)
+	require.EqualValues(t, 0, resp["rolling_fragment_hold_s"])
+
+	// PUT 120 persists and round-trips.
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings/merge",
+		bytes.NewBufferString(`{"rolling_fragment_hold_s": 120}`), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.EqualValues(t, 120, *h.config.Merge.RollingFragmentHoldS)
+
+	// Out-of-range rejected without mutating the stored value.
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings/merge",
+		bytes.NewBufferString(`{"rolling_fragment_hold_s": 3601}`), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.EqualValues(t, 120, *h.config.Merge.RollingFragmentHoldS)
+}
