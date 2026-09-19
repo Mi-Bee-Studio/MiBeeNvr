@@ -45,6 +45,16 @@ type MergeConfig struct {
 	// metadata-only (worst case <1MB), so the default is safe on RPi 3B.
 	RollingFragmentHoldS *int `yaml:"rolling_fragment_hold_s,omitempty" json:"rolling_fragment_hold_s,omitempty"`
 
+	// RollingAppendBucket switches the hour bucket to the sequential-append
+	// format (#853): folds append sample bytes at the mdat tail and patch the
+	// reserved-capacity sample tables in place — O(segment) per fold instead
+	// of a full O(bucket) rewrite. DEFAULT FALSE per the user's RPi 3B ruling
+	// (2026-09-19): the per-camera RAM mirror + patch metadata costs ~1-2MB
+	// per active camera (72k samples/h × 12-16B/entry), and the format is in
+	// its experimental compatibility window. Video-only buckets; audio-bearing
+	// cameras keep the classic rewrite path. Web-operable (Settings → merge).
+	RollingAppendBucket bool `yaml:"rolling_append_bucket" json:"rolling_append_bucket"`
+
 	// RollingBucketRetain is how many rolling buckets a camera keeps alive,
 	// keyed by parameter set (#764). Cameras oscillating between quality tiers
 	// (xiaomi HD/SD reconnect storms) alternate two SPS/PPS keys; with a single

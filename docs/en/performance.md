@@ -129,3 +129,19 @@ merge:
   10-minute backfill sweep defers fragments still inside their window;
 - Held fragments remain standalone playable recordings — only the merged product appears up to
   one window later.
+
+### Sequential-append bucket (#853, experimental, default off)
+
+#852 cut the fold COUNT to 1/N; the sequential-append bucket cuts the per-fold COST from O(bucket)
+to O(segment): capacity slots are reserved in the sample tables at bucket creation, and a fold only
+appends the new segment's bytes at the mdat tail plus in-place table patches — existing bytes are
+never rewritten. Startup self-check truncates uncommitted tails (crash residue) to the mdat
+declaration; capacity exhaustion falls back to the classic full rewrite.
+
+```yaml
+merge:
+  rolling_append_bucket: false  # default off; experimental, toggle in Web Settings → merge
+```
+
+**⚠️ RPi 3B baseline**: ~1-2MB of resident RAM mirror per active camera (72k samples/h × 12-16B);
+12 cameras all-on ≈ 12-24MB. Use with care on 1GB devices; default off, user-enabled.

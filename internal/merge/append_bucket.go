@@ -194,6 +194,11 @@ func readAppendBucketMarker(f *os.File) (layout appendBucketLayout, ok bool, err
 			return layout, false, fmt.Errorf("bad box size %d at %d", size, pos)
 		}
 		if string(hdr[4:8]) == "free" {
+			if size < 8+appendBucketMarkerSize() {
+				// 经典合并输出的 moov 填充 free 盒——装不下标记载荷，
+				// 即非追加桶。
+				return layout, false, nil
+			}
 			break
 		}
 		pos += size
@@ -229,7 +234,7 @@ func readAppendBucketMarker(f *os.File) (layout appendBucketLayout, ok bool, err
 // --- 创建 ---
 
 // estimateSampleCap 按首段样本率 × 窗口 × 1.3 安全系数预估容量。
-func estimateSampleCap(first *SegmentInfo, window time.Duration, max uint32) uint32 {
+func estimateSampleCap(first *SegmentInfo, window time.Duration, maxSamples uint32) uint32 {
 	if window <= 0 {
 		window = time.Hour
 	}
@@ -241,8 +246,8 @@ func estimateSampleCap(first *SegmentInfo, window time.Duration, max uint32) uin
 	if cap32 < 1024 {
 		cap32 = 1024
 	}
-	if cap32 > max {
-		cap32 = max
+	if cap32 > maxSamples {
+		cap32 = maxSamples
 	}
 	return cap32
 }
@@ -520,7 +525,7 @@ func writeReservedMinf(rec *offsetWriter, w *mp4.Writer, tr *mergeTrack, base in
 		if err := writeU32(0); err != nil { // version/flags
 			return 0, 0, err
 		}
-		for i := 0; i < extraFields; i++ {
+		for range extraFields {
 			if err := writeU32(0); err != nil { // stsz: sample_size=0（变长）
 				return 0, 0, err
 			}
@@ -615,12 +620,12 @@ func OpenAppendBucket(path string) (*AppendBucket, error) {
 		nSamples := readU32(f, entryOff+4)
 		chunkSampleBase := b.video.sampleCount - nSamples
 		var chunkBytes int64
-		for i := uint32(0); i < nSamples; i++ {
+		for i := range nSamples {
 			chunkBytes += int64(readU32(f, layout.stszSlot0+int64(chunkSampleBase+i)*4))
 		}
 		b.video.lastChunkSize = chunkBytes
 	}
-	for i := uint32(0); i < b.video.sttsRuns; i++ {
+	for i := range b.video.sttsRuns {
 		c := readU32(f, layout.sttsSlot0+int64(i)*8)
 		d := readU32(f, layout.sttsSlot0+int64(i)*8+4)
 		b.video.duration += uint64(c) * uint64(d)

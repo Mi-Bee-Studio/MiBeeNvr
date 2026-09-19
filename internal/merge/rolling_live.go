@@ -650,6 +650,27 @@ func (r *RollingMergeCoordinator) mergeRunIntoBucket(ctx context.Context, run []
 	var mergedRecID string
 	var err error
 
+	// Sequential-append bucket (#853, opt-in — default OFF per the RPi 3B
+	// ruling): video-only runs fold via mdat-tail appends + in-place table
+	// patches. Any non-append-bucket or capacity-exhausted outcome falls back
+	// to the classic full-rewrite path below (capacity compaction IS the
+	// classic rewrite).
+	if cfg.AppendBucket && first.audioKey == "none" {
+		apath, arec, fellClassic, aerr := r.foldAppendBucket(ctx, run, bucket)
+		if aerr != nil {
+			// 与经典路径同一错误收口（dropBucketIfEmpty + return err）。
+			if bucket.mergedFilePath == "" && bucket.segmentCount == 0 {
+				r.dropBucketIfEmpty(cameraID, bucket)
+			}
+			rollingLogger.Warn("append-bucket fold failed", "camera_id", cameraID, "error", aerr)
+			return aerr
+		}
+		if !fellClassic {
+			outputPath, mergedRecID = apath, arec
+			goto bucketStateUpdate
+		}
+	}
+
 	if bucket.mergedFilePath == "" {
 		// First segments in this bucket — create the bucket file by merging
 		// the run (this normalizes it into the bucket format and creates the
@@ -688,6 +709,7 @@ func (r *RollingMergeCoordinator) mergeRunIntoBucket(ctx context.Context, run []
 	}
 
 	// Update bucket state.
+bucketStateUpdate:
 	bucket.mergedFilePath = outputPath
 	bucket.mergedRecID = mergedRecID
 	bucket.spsKey = spsKey

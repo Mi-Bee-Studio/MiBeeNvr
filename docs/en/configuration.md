@@ -68,6 +68,7 @@ merge:
   rolling_bucket_retain: 2       # buckets kept per camera, keyed by parameter set (#764)
   rolling_bucket_idle_ttl: "10m" # finalize a bucket with no append for this long; "0" disables
   rolling_fragment_hold_s: 300    # batch <30s fragments into ONE fold (#852); 0 = off
+  rolling_append_bucket: false    # sequential-append bucket (#853, experimental); default off
 ftp:
   enabled: true
   port: 2121
@@ -955,6 +956,18 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
   memory is <1MB — no RPi 3B impact. **Web-operable**: Settings → merge card (`rolling_fragment_hold_s`
   field of `GET/PUT /api/settings/merge`)
 - **Example**: `300`, `60`, `0`
+
+### `merge.rolling_append_bucket`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Sequential-append bucket (#853, **experimental**): folds append sample bytes at the
+  mdat tail and patch the capacity-reserved sample tables (stsz/stco/stts/stss/stsc) in place —
+  O(segment) per fold instead of O(bucket); orthogonal to (and stackable with) the #852 batching.
+  **⚠️ RPi 3B (1GB) baseline impact (user ruling 2026-09-19)**: ~**1–2MB** of resident RAM mirror +
+  patch metadata per active camera — hence default OFF and web-operable (Settings → merge card).
+  Video-only buckets; audio segments and existing buckets keep the classic full-rewrite path;
+  capacity exhaustion falls back to the classic rewrite (compaction). Applies to new buckets only
+- **Example**: `true`, `false`
 
 ### `merge.rolling_window`
 - **Type**: string

@@ -26,6 +26,7 @@ func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request)
 		"min_segment_age":         h.config.Merge.MinSegmentAge,
 		"min_segments_to_merge":   h.config.Merge.MinSegmentsToMerge,
 		"rolling_fragment_hold_s": h.config.Merge.RollingFragmentHoldValue(),
+		"rolling_append_bucket":   h.config.Merge.RollingAppendBucket,
 	})
 }
 
@@ -43,6 +44,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 		MinSegmentAge        *string `json:"min_segment_age"`
 		MinSegmentsToMerge   *int    `json:"min_segments_to_merge"`
 		RollingFragmentHoldS *int    `json:"rolling_fragment_hold_s"`
+		RollingAppendBucket  *bool   `json:"rolling_append_bucket"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -105,6 +107,12 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		h.config.Merge.RollingFragmentHoldS = body.RollingFragmentHoldS
+	}
+	// Sequential-append bucket (#853): experimental, default OFF (RPi 3B
+	// baseline — ~1-2MB RAM mirror per active camera). Existing buckets keep
+	// their format; the switch affects new buckets.
+	if body.RollingAppendBucket != nil {
+		h.config.Merge.RollingAppendBucket = *body.RollingAppendBucket
 	}
 
 	// Persist config to disk

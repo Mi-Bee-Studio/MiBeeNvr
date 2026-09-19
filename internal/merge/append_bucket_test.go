@@ -34,24 +34,6 @@ func appendBucketCfg() AppendBucketConfig {
 	return AppendBucketConfig{Window: time.Hour, MaxSamples: 4096}
 }
 
-// expectedAppendSamples 把源段样本映射为期望表（gap/cadence 压缩同规则）。
-func expectedAppendSamples(timescale uint32, cadence, gap time.Duration, srcs []*SegmentInfo) (sizes []uint32, durs []uint32, keys []bool, wall, file uint64) {
-	gapTicks := float64(timescale) * gap.Seconds()
-	frameTicks := uint32(float64(timescale) * cadence.Seconds())
-	for _, s := range srcs {
-		for _, e := range s.Samples {
-			sizes = append(sizes, e.Size)
-			d := e.Duration
-			durs = append(durs, d)
-			wall += uint64(d)
-			keys = append(keys, e.IsKeyFrame)
-			_ = gapTicks
-			_ = frameTicks
-		}
-	}
-	return
-}
-
 func TestAppendBucket_CreateAppendRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	cadence, gap := 100*time.Millisecond, 2*time.Second

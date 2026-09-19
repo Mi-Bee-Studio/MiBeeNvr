@@ -146,6 +146,10 @@ type RollingMergeConfig struct {
 	// fragment). 0 = hold disabled (fold per segment, pre-#852 behavior).
 	FragmentHold time.Duration
 
+	// AppendBucket enables the sequential-append bucket format (#853) for
+	// video-only buckets on this camera. Default off.
+	AppendBucket bool
+
 	// Bucket retention (#764): how many parameter-set-keyed buckets a camera
 	// keeps live (BucketRetain, default 2 = the HD/SD quality pair) and how
 	// long an append-less bucket survives (BucketIdleTTL, default 10m; 0 =
@@ -536,6 +540,9 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 	if s := effective.RollingFragmentHoldValue(); s > 0 {
 		cfg.FragmentHold = time.Duration(s) * time.Second
 	}
+	// Sequential-append bucket (#853): default OFF (RPi 3B ruling — the RAM
+	// mirror costs ~1-2MB/active camera).
+	cfg.AppendBucket = effective.RollingAppendBucket
 	if effective.RollingMinDuration != "" {
 		if d, err := time.ParseDuration(effective.RollingMinDuration); err == nil && d > 0 {
 			cfg.MinDuration = d

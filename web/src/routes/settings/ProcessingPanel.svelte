@@ -14,10 +14,14 @@
   // Fragment batching window in seconds (#852): null until loaded; 0 = off.
   let fragmentHoldS = $state<number | null>(null);
   let originalFragmentHoldS = $state<number | null>(null);
+  // Sequential-append bucket (#853): experimental, default OFF.
+  let appendBucket = $state(false);
+  let originalAppendBucket = $state(false);
   let loading = $state(true);
 
   let isDirty = $derived(
-    !loading && (mergeEnabled !== originalMergeEnabled || fragmentHoldS !== originalFragmentHoldS),
+    !loading && (mergeEnabled !== originalMergeEnabled || fragmentHoldS !== originalFragmentHoldS
+      || appendBucket !== originalAppendBucket),
   );
 
   let unregister: (() => void) | undefined;
@@ -28,11 +32,13 @@
       const mergeSettings = await getMergeSettings();
       mergeEnabled = mergeSettings.enabled ?? true;
       fragmentHoldS = mergeSettings.rolling_fragment_hold_s ?? 300;
+      appendBucket = mergeSettings.rolling_append_bucket ?? false;
     } catch (e) {
       console.warn('Failed to load merge settings:', e);
     } finally {
       originalMergeEnabled = mergeEnabled;
       originalFragmentHoldS = fragmentHoldS;
+      originalAppendBucket = appendBucket;
       loading = false;
     }
   }
@@ -42,16 +48,19 @@
     await updateMergeSettings({
       enabled: mergeEnabled,
       rolling_fragment_hold_s: hold,
+      rolling_append_bucket: appendBucket,
     });
     fragmentHoldS = hold;
     originalMergeEnabled = mergeEnabled;
     originalFragmentHoldS = hold;
+    originalAppendBucket = appendBucket;
     showToast(t('settings.saved'), 'success');
   }
 
   function resetForm() {
     mergeEnabled = originalMergeEnabled;
     fragmentHoldS = originalFragmentHoldS;
+    appendBucket = originalAppendBucket;
   }
 
   onMount(() => {
@@ -110,6 +119,15 @@
         }}
       />
       <p class="text-xs th-text-tertiary mt-1">{t('settings.merge.fragmentHoldHint')}</p>
+    </div>
+    <div class="pt-4 mt-4 border-t th-border">
+      <div class="flex items-center justify-between">
+        <div>
+          <span class="text-sm font-medium th-text-primary">{t('settings.merge.appendBucket')}</span>
+          <p class="text-xs th-text-tertiary mt-0.5">{t('settings.merge.appendBucketHint')}</p>
+        </div>
+        <Toggle checked={appendBucket} onChange={(v) => { appendBucket = v; }} label={t('settings.merge.appendBucket')} />
+      </div>
     </div>
   </SettingsCard>
 

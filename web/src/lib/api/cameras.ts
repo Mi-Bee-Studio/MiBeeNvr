@@ -744,6 +744,10 @@ export interface MergeConfig {
   // long and folded into the hour bucket in ONE merge. The global settings
   // GET reports the effective value; 0 disables batching.
   rolling_fragment_hold_s?: number;
+  // Sequential-append hour bucket (#853): folds append at the mdat tail
+  // instead of rewriting the bucket. Experimental, default OFF (RAM cost on
+  // small boards).
+  rolling_append_bucket?: boolean;
 }
 
 export async function getMergeConfig(cameraId: string, signal?: AbortSignal): Promise<MergeConfig | null> {

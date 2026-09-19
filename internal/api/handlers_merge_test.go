@@ -203,3 +203,27 @@ func TestMerge_FragmentHoldSettingsRoundtrip(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	require.EqualValues(t, 120, *h.config.Merge.RollingFragmentHoldS)
 }
+
+// #853 append-bucket switch: GET reports false by default; PUT persists and
+// round-trips; existing-bucket semantics (new buckets only) are server-side.
+func TestMerge_AppendBucketSettingsRoundtrip(t *testing.T) {
+	t.Parallel()
+	h := mergeTestHandler(t)
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/settings/merge", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]any
+	parseJSON(t, rr, &resp)
+	require.Equal(t, false, resp["rolling_append_bucket"])
+
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings/merge",
+		bytes.NewBufferString(`{"rolling_append_bucket": true}`), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.True(t, h.config.Merge.RollingAppendBucket)
+
+	rr = doRequest(t, h.Routes(), "GET", "/api/settings/merge", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	resp = map[string]any{}
+	parseJSON(t, rr, &resp)
+	require.Equal(t, true, resp["rolling_append_bucket"])
+}

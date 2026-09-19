@@ -224,3 +224,88 @@ func TestFragmentHold_BackfillDefersYoungFragments(t *testing.T) {
 	require.False(t, recordingExists(t, env, cam, "h8-old-0"), "old fragments fold via the sweep")
 	require.False(t, recordingExists(t, env, cam, "h8-old-1"))
 }
+
+// appendBucketEnv 启动一个开着追加桶开关的 rolling 测试环境（音频无、
+// 段为 30s+ 健康形态，直接走经典 debounce 折卷路径）。
+func appendBucketEnv(t *testing.T) (*mergeTestEnv, *event.EventBus, *RollingMergeCoordinator) {
+	t.Helper()
+	env := newMergeTestEnv(t)
+	t.Cleanup(func() { env.close(t) })
+	bus := event.NewEventBus(16)
+	cfg := config.MergeConfig{
+		RollingEnabled:      boolPtr(true),
+		RollingDebounce:     "50ms",
+		RollingWindow:       "1h",
+		RollingAppendBucket: true,
+	}
+	r := newTestRollingCoordinator(env, cfg, bus)
+	require.NoError(t, r.Start(context.Background()))
+	t.Cleanup(r.Stop)
+	return env, bus, r
+}
+
+// #853 集成：开关开启后纯视频健康段折卷走追加桶——桶文件带标记盒可重开，
+// 多折只涨 mdat（原地补丁），行/时间轴不变量保持；关闭开关（默认）零影响
+// 由既有全套件覆盖。
+func TestRollingAppendBucket_EndToEnd(t *testing.T) {
+	env, bus, r := appendBucketEnv(t)
+
+	cam := "cam-ab"
+	base := mergeTestNow()
+
+	pub := func(i int) string {
+		recID := "ab-" + string(rune('0'+i))
+		startedAt := base.Add(time.Duration(i) * 61 * time.Second)
+		return publishFrag(t, env, bus, cam, recID, startedAt, 45*time.Second, 1<<20)
+	}
+
+	pub(0)
+	waitForBucketStable(t, r, cam, 1, 5*time.Second)
+	pub(1)
+	waitForBucketStable(t, r, cam, 2, 5*time.Second)
+
+	// 桶文件是追加桶：可重开、镜像含 2 样本、文件不再全量重写（第二次折
+	// 卷前后 inode 不变——以内容长度增长 < 全量重写的常识校验由单元测试
+	// 覆盖，这里验证可重开 + 行不变量）。
+	bi := r.newestBucket(cam)
+	require.NotNil(t, bi)
+	bi.mu.Lock()
+	path := bi.mergedFilePath
+	bi.mu.Unlock()
+	ab, err := OpenAppendBucket(path)
+	require.NoError(t, err, "the bucket file must carry the append-bucket marker")
+	require.Equal(t, uint32(4), ab.SampleCount(), "2 segments × 2 samples")
+	require.Equal(t, uint32(2), ab.ChunkCount(), "one chunk per fold")
+	require.NoError(t, ab.Close())
+
+	// 产物解析 + 行不变量。
+	parsed, err := ParseSegment(path)
+	require.NoError(t, err)
+	require.Equal(t, 4, parsed.SampleCount)
+	recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cam, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.Equal(t, model.MergeStatusMerged, recs[0].MergeStatus)
+	// 墙钟 = 2 段 45s + 16s 间隙 = 106s。
+	require.InDelta(t, 106.0, recs[0].Duration, 2.0, "wall span must cover both segments' span, got %v", recs[0].Duration)
+	require.False(t, recordingExists(t, env, cam, "ab-0"))
+	require.False(t, recordingExists(t, env, cam, "ab-1"))
+}
+
+// 开关关闭（默认）时桶文件必须是经典格式（无标记盒）。
+func TestRollingAppendBucket_OffByDefault(t *testing.T) {
+	env, bus, r := fragEnv(t, intPtr(0)) // hold off, append off
+
+	cam := "cam-aboff"
+	base := mergeTestNow()
+	publishFrag(t, env, bus, cam, "aboff-0", base, 45*time.Second, 1<<20)
+	waitForBucketStable(t, r, cam, 1, 5*time.Second)
+
+	bi := r.newestBucket(cam)
+	require.NotNil(t, bi)
+	bi.mu.Lock()
+	path := bi.mergedFilePath
+	bi.mu.Unlock()
+	_, err := OpenAppendBucket(path)
+	require.ErrorIs(t, err, ErrNotAppendBucket, "default-off must keep the classic bucket format")
+}
