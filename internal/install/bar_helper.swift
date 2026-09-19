@@ -10,10 +10,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        if let img = NSImage(systemSymbolName: "video.fill", accessibilityDescription: "MiBee NVR") {
+        // SF Symbols 兜底链：video.fill 主选、video 次选；连 SF Symbols 都没有
+        // 的老系统退回纯文字。不用 NSImage.networkTemplateName——新 SDK 已移除
+        // 该常量，swiftc 现场编译会直接失败（菜单栏助手整个装不上）。
+        if let img = NSImage(systemSymbolName: "video.fill", accessibilityDescription: "MiBee NVR")
+            ?? NSImage(systemSymbolName: "video", accessibilityDescription: "MiBee NVR") {
             item.button?.image = img
         } else {
-            item.button?.image = NSImage(named: NSImage.networkTemplateName)
+            item.button?.title = "MiBee"
         }
 
         let menu = NSMenu()

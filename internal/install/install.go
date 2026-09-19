@@ -112,19 +112,25 @@ func waitForHTTP(url string, timeout time.Duration) bool {
 	return false
 }
 
-// LaunchAgentPlist renders the per-user launchd agent keeping the NVR
-// running (RunAtLoad + KeepAlive), with logs appended to a file in the data
-// dir. Pure string rendering so it stays unit-testable on every platform.
-func LaunchAgentPlist(exe, cfg, log string) string {
+// LaunchAgentPlist renders the per-user launchd agent keeping the given
+// program running (RunAtLoad + KeepAlive), with logs appended to a file in
+// the data dir. label MUST match the agent the caller manages (the NVR and
+// its menu-bar helper are two separate agents; a shared label makes the
+// second launchctl load fail with a label collision — or worse, unload the
+// other agent). cfg may be empty (the helper takes no -config). Pure string
+// rendering so it stays unit-testable on every platform.
+func LaunchAgentPlist(label, exe, cfg, log string) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	b.WriteString(`<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">` + "\n")
 	b.WriteString(`<plist version="1.0">` + "\n<dict>\n")
-	b.WriteString("\t<key>Label</key><string>com.mibee-nvr</string>\n")
+	fmt.Fprintf(&b, "\t<key>Label</key><string>%s</string>\n", label)
 	b.WriteString("\t<key>ProgramArguments</key>\n\t<array>\n")
 	fmt.Fprintf(&b, "\t\t<string>%s</string>\n", exe)
-	b.WriteString("\t\t<string>-config</string>\n")
-	fmt.Fprintf(&b, "\t\t<string>%s</string>\n", cfg)
+	if cfg != "" {
+		b.WriteString("\t\t<string>-config</string>\n")
+		fmt.Fprintf(&b, "\t\t<string>%s</string>\n", cfg)
+	}
 	b.WriteString("\t</array>\n")
 	b.WriteString("\t<key>RunAtLoad</key><true/>\n")
 	b.WriteString("\t<key>KeepAlive</key><true/>\n")
