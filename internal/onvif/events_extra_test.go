@@ -29,7 +29,35 @@ const soapCreatePullPointSubscriptionResponse = `<?xml version="1.0" encoding="U
   </s:Body>
 </s:Envelope>`
 
+// soapPullMessagesResponse uses the CANONICAL WS-BaseNotification + ONVIF
+// shape (#711/onvif-go#82): the ONVIF tt:Message sits INSIDE the outer
+// wsnt:Message, with the SimpleItems on the inner layer. Spec-faithful
+// cameras (the MotionAlarm production reports, commercial Hikvision/Dahua
+// class) all send this form; the legacy lax single-layer form lives in
+// soapPullMessagesResponseLegacy and stays covered by its own test.
 const soapPullMessagesResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
+  <s:Body>
+    <tev:PullMessagesResponse xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2" xmlns:tt="http://www.onvif.org/ver10/schema">
+      <wsnt:NotificationMessage>
+        <wsnt:Topic>tns1:VideoSource/MotionAlarm</wsnt:Topic>
+        <wsnt:Message UtcTime="2026-01-02T03:04:05Z" PropertyOperation="Changed">
+          <tt:Message>
+            <tt:Source><tt:SimpleItem Name="Source" Value="CAM"/></tt:Source>
+            <tt:Data><tt:SimpleItem Name="State" Value="active"/></tt:Data>
+          </tt:Message>
+        </wsnt:Message>
+      </wsnt:NotificationMessage>
+    </tev:PullMessagesResponse>
+  </s:Body>
+</s:Envelope>`
+
+// soapPullMessagesResponseLegacy is the lax single-layer form some firmwares
+// emit (attributes and SimpleItems directly on the outer Message). The
+// library merge keeps it working (inner layer wins when present) — pinned
+// here so a future library tightening fails loudly instead of silently
+// dropping another camera class.
+const soapPullMessagesResponseLegacy = `<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
   <s:Body>
     <tev:PullMessagesResponse xmlns:tev="http://www.onvif.org/ver10/events/wsdl">
@@ -46,9 +74,13 @@ const soapPullMessagesResponse = `<?xml version="1.0" encoding="UTF-8"?>
 
 // startEventMockServer serves the full PullPoint lifecycle. The subscription
 // reference points back at the same server so PullMessages/Renew/Unsubscribe
-// all arrive on the one listener.
-func startEventMockServer(t *testing.T, termination time.Time) *httptest.Server {
+// all arrive on the one listener. pullResponse overrides the canned PullMessages
+// body (empty = the canonical spec fixture).
+func startEventMockServer(t *testing.T, termination time.Time, pullResponse string) *httptest.Server {
 	t.Helper()
+	if pullResponse == "" {
+		pullResponse = soapPullMessagesResponse
+	}
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := make([]byte, 8192)
@@ -65,7 +97,7 @@ func startEventMockServer(t *testing.T, termination time.Time) *httptest.Server 
 			resp = strings.ReplaceAll(resp, "TERMINATION_TIME", termination.UTC().Format(time.RFC3339))
 			_, _ = w.Write([]byte(resp))
 		case strings.Contains(b, "PullMessages"):
-			_, _ = w.Write([]byte(soapPullMessagesResponse))
+			_, _ = w.Write([]byte(pullResponse))
 		case strings.Contains(b, "Renew"):
 			fmt.Fprint(w, `<?xml version="1.0"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><wsnt:RenewResponse xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2"><wsnt:TerminationTime>`)
 			_, _ = w.Write([]byte(time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339)))
@@ -84,7 +116,7 @@ func startEventMockServer(t *testing.T, termination time.Time) *httptest.Server 
 func TestEventSubscriberLifecycle(t *testing.T) {
 	// Termination must exceed SubscriptionRenewBefore (1h) or the first poll
 	// tick renews instead of pulling.
-	srv := startEventMockServer(t, time.Now().Add(2*time.Hour))
+	srv := startEventMockServer(t, time.Now().Add(2*time.Hour), "")
 
 	client := NewClient(srv.URL, "admin", "pw")
 	require.NoError(t, client.Connect(context.Background()))
@@ -156,7 +188,7 @@ func TestEventSubscriberSubscribeError(t *testing.T) {
 func TestEventSubscriberRenewalLoop(t *testing.T) {
 	// Termination 50ms out and SubscriptionRenewBefore forces renewal before
 	// the first pull; the Renew handler extends by an hour.
-	srv := startEventMockServer(t, time.Now().Add(50*time.Millisecond))
+	srv := startEventMockServer(t, time.Now().Add(50*time.Millisecond), "")
 
 	client := NewClient(srv.URL, "admin", "pw")
 	require.NoError(t, client.Connect(context.Background()))
@@ -190,7 +222,7 @@ func TestEventSubscriberRenewalLoop(t *testing.T) {
 // from the /onvif-events endpoint without touching log levels — the parse
 // failure path is otherwise completely silent.
 func TestStatusReportsLastEventRawSummary(t *testing.T) {
-	srv := startEventMockServer(t, time.Now().Add(2*time.Hour))
+	srv := startEventMockServer(t, time.Now().Add(2*time.Hour), "")
 
 	client := NewClient(srv.URL, "admin", "pw")
 	require.NoError(t, client.Connect(context.Background()))
@@ -208,6 +240,40 @@ func TestStatusReportsLastEventRawSummary(t *testing.T) {
 			strings.Contains(st.LastEvent, "State=active") &&
 			strings.Contains(st.LastEvent, "source.Source=CAM")
 	}, 5*time.Second, 20*time.Millisecond, "last_event never surfaced the raw poll payload")
+
+	sub.StopAll(context.Background())
+}
+
+// TestEventSubscriberLegacySingleLayerShape pins the lax single-layer form
+// (attributes + SimpleItems directly on the outer Message): the library's
+// #82 merge keeps it working alongside the canonical double-layer shape, and
+// a future tightening that drops it must fail here instead of silently
+// eating another camera class.
+func TestEventSubscriberLegacySingleLayerShape(t *testing.T) {
+	srv := startEventMockServer(t, time.Now().Add(2*time.Hour), soapPullMessagesResponseLegacy)
+
+	client := NewClient(srv.URL, "admin", "pw")
+	require.NoError(t, client.Connect(context.Background()))
+
+	eventsCh := make(chan ONVIFEvent, 4)
+	sub := NewEventSubscriber(client.client,
+		WithEventCallback(func(e ONVIFEvent) { eventsCh <- e }),
+		WithPollInterval(30*time.Millisecond),
+		WithPullTimeout(500*time.Millisecond),
+	)
+	require.NoError(t, sub.Subscribe(context.Background(), "cam-legacy"))
+
+	require.Eventually(t, func() bool {
+		select {
+		case evt := <-eventsCh:
+			require.Equal(t, "tns1:VideoSource/MotionAlarm", evt.Topic)
+			require.Equal(t, "active", evt.Data["State"])
+			require.Equal(t, "CAM", evt.Data["source.Source"])
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 20*time.Millisecond, "legacy single-layer event never reached callback")
 
 	sub.StopAll(context.Background())
 }
