@@ -22,7 +22,7 @@ import (
 // fields, post-fix the reset serializes behind the live merges.
 func TestBackfillCameraResetConcurrentWithLiveMerge(t *testing.T) {
 	cfg := config.MergeConfig{
-		RollingEnabled:       boolPtr(true),
+		RollingEnabled: boolPtr(true), RollingFragmentHoldS: intPtr(0), // backfill semantics test: batching off for determinism
 		RollingDebounce:      "10ms",
 		RollingWindow:        "1h",
 		RollingBucketRetain:  2,

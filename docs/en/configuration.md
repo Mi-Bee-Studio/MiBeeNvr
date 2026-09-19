@@ -67,6 +67,7 @@ merge:
   min_segments_to_merge: 3
   rolling_bucket_retain: 2       # buckets kept per camera, keyed by parameter set (#764)
   rolling_bucket_idle_ttl: "10m" # finalize a bucket with no append for this long; "0" disables
+  rolling_fragment_hold_s: 300    # batch <30s fragments into ONE fold (#852); 0 = off
 ftp:
   enabled: true
   port: 2121
@@ -939,6 +940,21 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
   restores the pre-#811 fold-immediately behavior. Per-camera override via the
   camera's `merge` block
 - **Example**: `"90s"`, `"2m"`, `"off"`
+
+### `merge.rolling_fragment_hold_s`
+- **Type**: integer (seconds)
+- **Default**: `300`
+- **Range**: 0-3600 (`0` = off — fold per segment, pre-#852 behavior)
+- **Description**: Fragment batching window (#852). MP4 segments shorter than 30s (the output of every
+  flapping-camera reconnect) no longer each trigger a full-bucket rewrite; they enter a metadata-only hold
+  queue and are folded into the hour bucket in ONE merge when the window expires — write amplification
+  drops by ~N. Flush conditions (whichever comes first): the oldest fragment reaches the window / queue
+  depth 8 / cumulative 64MB / hour-window rollover / a healthy (≥30s) segment on the same camera rides
+  along. Held fragments remain standalone playable recordings (only the merged product appears up to one
+  window later); the 10-minute backfill sweep also defers fragments inside the window. Worst-case hold
+  memory is <1MB — no RPi 3B impact. **Web-operable**: Settings → merge card (`rolling_fragment_hold_s`
+  field of `GET/PUT /api/settings/merge`)
+- **Example**: `300`, `60`, `0`
 
 ### `merge.rolling_window`
 - **Type**: string

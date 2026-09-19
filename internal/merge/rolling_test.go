@@ -33,6 +33,10 @@ func newTestRollingCoordinator(env *mergeTestEnv, cfg config.MergeConfig, bus *e
 // boolPtr is a test helper for setting *bool config fields (RollingEnabled).
 func boolPtr(b bool) *bool { return &b }
 
+// intPtr is a test helper for setting *int config fields
+// (RollingFragmentHoldS, #852).
+func intPtr(i int) *int { return &i }
+
 // newTestRollingCoordinatorWithCameras creates a coordinator with a camera list
 // (needed for backfill tests that rely on the cameras() callback).
 func newTestRollingCoordinatorWithCameras(env *mergeTestEnv, cfg config.MergeConfig, bus *event.EventBus, cameras []config.CameraConfig) *RollingMergeCoordinator {
@@ -47,7 +51,11 @@ func newTestRollingCoordinatorWithCameras(env *mergeTestEnv, cfg config.MergeCon
 	)
 }
 
-// publishSegmentCompleted simulates a recorder closing a segment.
+// publishSegmentCompleted simulates a recorder closing a segment. EndedAt is
+// pinned to startedAt+30s (NOT wall-now) so tests using this helper stay
+// deterministic under #852 fragment batching: a wall-now EndedAt drifts the
+// event duration across the 30s fragment boundary depending on when in the
+// hour the test runs.
 func publishSegmentCompleted(t *testing.T, bus *event.EventBus, cameraID, recordingID, filePath, format string, startedAt time.Time) {
 	t.Helper()
 	bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
@@ -56,7 +64,7 @@ func publishSegmentCompleted(t *testing.T, bus *event.EventBus, cameraID, record
 		Format:      format,
 		Encoding:    format,
 		StartedAt:   startedAt.Format(time.RFC3339Nano),
-		EndedAt:     time.Now().Format(time.RFC3339Nano),
+		EndedAt:     startedAt.Add(30 * time.Second).Format(time.RFC3339Nano),
 		FileSize:    0,
 		RecordingID: recordingID,
 	})
@@ -352,7 +360,9 @@ func TestBackfillMP4_MixedAudioBatchSplitsRuns(t *testing.T) {
 	defer env.close(t)
 
 	bus := event.NewEventBus(16)
-	cfg := config.MergeConfig{RollingEnabled: boolPtr(true)}
+	// #852: batching off — this test exercises backfill semantics; default-on
+	// fragment holding would defer its fresh-timestamp rows by hour position.
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingFragmentHoldS: intPtr(0)}
 	r := newTestRollingCoordinator(env, cfg, bus)
 
 	cameraID := "cam-mixed-batch"
@@ -573,7 +583,7 @@ func TestBackfillCamera_HistoricalSegments(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled:  boolPtr(true),
+		RollingEnabled: boolPtr(true), RollingFragmentHoldS: intPtr(0), // backfill semantics test: batching off for determinism
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -691,7 +701,7 @@ func TestBackfillCamera_IncludeFailed(t *testing.T) {
 
 	bus := event.NewEventBus(16)
 	cfg := config.MergeConfig{
-		RollingEnabled:  boolPtr(true),
+		RollingEnabled: boolPtr(true), RollingFragmentHoldS: intPtr(0), // backfill semantics test: batching off for determinism
 		RollingDebounce: "50ms",
 		RollingWindow:   "1h",
 	}
@@ -741,7 +751,9 @@ func TestBackfillCamera_MissingFileSkipped(t *testing.T) {
 	defer env.close(t)
 
 	bus := event.NewEventBus(16)
-	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h"}
+	// #852: batching off — this test exercises backfill semantics; default-on
+	// fragment holding would defer its fresh-timestamp rows by hour position.
+	cfg := config.MergeConfig{RollingEnabled: boolPtr(true), RollingWindow: "1h", RollingFragmentHoldS: intPtr(0)}
 	cameraID := "missing-cam"
 	cameras := []config.CameraConfig{{ID: cameraID}}
 	r := newTestRollingCoordinatorWithCameras(env, cfg, bus, cameras)

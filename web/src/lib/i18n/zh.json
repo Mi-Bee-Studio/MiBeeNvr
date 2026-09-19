@@ -1125,6 +1125,8 @@
   "settings.invalidDiskThreshold": "必须在 0 到 100 之间",
   "settings.invalidRetentionDays": "必须为非负数",
   "settings.itemsPerPage": "每页条数",
+  "settings.merge.fragmentHold": "碎段攒批折叠（秒）",
+  "settings.merge.fragmentHoldHint": "小于 30 秒的录像碎段（闪断相机重连产物）先攒在持有队列，到期后一次性合并进整点桶，显著降低磁盘写入放大。持有期间碎段仍是可播放的独立录像。0 = 关闭（回到逐段合并）。范围 0–3600。",
   "settings.mibeevision.confirmRevoke": "吊销 API Key \"{name}\"? MiBeeVision 将立即失去访问权限。",
   "settings.mibeevision.connected": "已连接",
   "settings.mibeevision.consumerOffline": "消费方离线",

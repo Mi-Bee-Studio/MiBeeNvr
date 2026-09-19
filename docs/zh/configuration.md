@@ -56,6 +56,7 @@ merge:
   rolling_min_duration: "5m"
   rolling_bucket_retain: 2           # 每相机保留的桶数（按参数集分键，#764）；1 = 旧单桶行为
   rolling_bucket_idle_ttl: "10m"     # 桶空闲超过该时长即 finalize；"0" 关闭空闲淘汰
+  rolling_fragment_hold_s: 300       # <30s 碎段攒批一次折卷（#852）；0 = 关闭逐段折
   rolling_backfill_max_segments: 500 # 启动回填上限（防 RPi IO 风暴）
   rolling_backfill_max_age: "72h"    # 只回填最近 N 小时的段
 ftp:
@@ -835,6 +836,18 @@ cameras:
   完成后收走。慢盘/大舰队（探媒体更慢）可上调；`"off"` 恢复 #811 前的立即折叠行为。支持相机级覆盖
   （相机 `merge` 块内同名字段）
 - **示例**: `"90s"`, `"2m"`, `"off"`
+
+### `merge.rolling_fragment_hold_s`
+- **类型**: integer（秒）
+- **默认**: `300`
+- **范围**: 0-3600（`0` = 关闭，回到逐段折卷）
+- **描述**: 碎段攒批窗口（#852）。时长小于 30s 的 MP4 碎段（闪断相机每次重连的产物）不再各触发一次全桶重写，
+  而是先进入纯元数据持有队列，窗口到期后**一次性**合并进整点桶——写入放大约降为原来的 1/N。冲刷条件（任一满足）：
+  最老碎段年龄到达本窗口 / 队列深度 8 段 / 累计 64MB / 小时窗翻转 / 同相机健康段（≥30s）到达搭车。
+  持有期间碎段仍是可独立播放的录像行（仅合并产物晚至多本窗口出现）；10 分钟回填扫描对窗口内的年轻碎段同样让路。
+  持有队列最坏内存 <1MB，对 RPi 3B 无影响。**Web 可操作**：设置 → 录像合并卡片（`GET/PUT /api/settings/merge`
+  的 `rolling_fragment_hold_s` 字段）
+- **示例**: `300`, `60`, `0`
 
 ### `merge.rolling_window`
 - **类型**: string
