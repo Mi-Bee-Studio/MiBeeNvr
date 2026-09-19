@@ -16,6 +16,7 @@ import (
 // (desktop_entry.go) — with autoOpen, so the installer finishes by landing
 // the user in the first-run wizard. Explicit CLI installs stay quiet.
 func cmdInstall(autoOpen bool) {
+	install.EnsureOwnedConsole() // GUI-subsystem: terminal-less launches (Setup double-click) get a visible console
 	install.SetupConsole()
 	res, err := install.Install(install.Options{Version: appVersion})
 	if err != nil {
@@ -54,6 +55,7 @@ func webUIURL(cfgPath string) string {
 }
 
 func cmdUninstall() {
+	install.EnsureOwnedConsole() // GUI-subsystem: the ARP uninstall path has no terminal to attach to
 	install.SetupConsole()
 	purge := false
 	for _, a := range os.Args[2:] {
@@ -81,8 +83,8 @@ func cmdUninstall() {
 // turn locked the exe and silently sank the delayed self-delete (field
 // report 2026-09-19). Terminal/piped invocations flow through instantly.
 func pauseIfInteractive() {
-	stat, _ := os.Stdin.Stat()
-	if stat.Mode()&os.ModeCharDevice == 0 {
+	stat, err := os.Stdin.Stat()
+	if err != nil || stat.Mode()&os.ModeCharDevice == 0 {
 		return
 	}
 	fmt.Print("\n按 Enter 键关闭（10 秒后自动关闭）…")

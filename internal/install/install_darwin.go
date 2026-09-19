@@ -167,6 +167,11 @@ func Install(opts Options) (*Result, error) {
 // HideOwnConsole is windows-only (console hiding for server mode).
 func HideOwnConsole() {}
 
+// EnsureParentConsole / EnsureOwnedConsole are windows-only (GUI-subsystem
+// console plumbing).
+func EnsureParentConsole() {}
+func EnsureOwnedConsole()  {}
+
 // stripQuarantine best-effort removes com.apple.quarantine from path.
 func stripQuarantine(path string) {
 	_, _ = runCmd("xattr", "-d", "com.apple.quarantine", path)

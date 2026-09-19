@@ -30,6 +30,11 @@ func NotifyDialog(text string) {}
 // HideOwnConsole is windows-only (console hiding for server mode).
 func HideOwnConsole() {}
 
+// EnsureParentConsole / EnsureOwnedConsole are windows-only (GUI-subsystem
+// console plumbing).
+func EnsureParentConsole() {}
+func EnsureOwnedConsole()  {}
+
 // RefreshMenuBarHelper has no menu-bar helper to refresh off-desktop.
 func RefreshMenuBarHelper() error { return nil }
 

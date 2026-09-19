@@ -55,7 +55,12 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-amd64 ./cmd/mibee-nvr/ &
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-arm64 ./cmd/mibee-nvr/ &
           CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-armv7 ./cmd/mibee-nvr/ &
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-windows-amd64.exe ./cmd/mibee-nvr/ &
+          # -H windowsgui: the windows binary is a tray app — the GUI
+          # subsystem means Windows never allocates a console for desktop
+          # launches (no cmd window to linger or close-kills-the-server).
+          # Terminal output is reconstructed in-process (AttachConsole,
+          # internal/install/console_windows.go).
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS -H windowsgui" -o mibee-nvr-windows-amd64.exe ./cmd/mibee-nvr/ &
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-darwin-arm64 ./cmd/mibee-nvr/ &
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o mibee-nvr-darwin-amd64 ./cmd/mibee-nvr/ &
           wait

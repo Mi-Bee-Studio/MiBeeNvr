@@ -178,6 +178,11 @@ func Install(opts Options) (*Result, error) {
 	if !portInUse("127.0.0.1:9090") {
 		cmd := exec.Command(exePath, "-config", cfgPath)
 		cmd.Dir = dataDir
+		// GUI-subsystem guard: the server child must NOT attach to this
+		// installer's console (see console_windows.go) — the console would
+		// then live exactly as long as the server, and closing it would
+		// kill the server.
+		cmd.Env = append(os.Environ(), desktopSpawnEnv+"=1")
 		if err := cmd.Start(); err != nil {
 			res.Notes = append(res.Notes, "自动启动失败（可从开始菜单手动启动）: "+err.Error())
 		} else {
