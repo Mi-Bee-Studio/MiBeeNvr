@@ -505,6 +505,16 @@ func validateConfigDetails(cfg *Config) error {
 		if cfg.Merge.RollingDebounce != "" {
 			if d, err := time.ParseDuration(cfg.Merge.RollingDebounce); err != nil || d <= 0 {
 				return fmt.Errorf("invalid merge.rolling_debounce %q: must be a positive duration", cfg.Merge.RollingDebounce)
+			} else if d < 2*time.Second {
+				// Low-debounce footgun warning (#851): the debounce exists to
+				// batch disconnect fragments into fewer folds; historical
+				// "tuning" it down to sub-second values silently defeated the
+				// batching (M5 ran 500ms — 36 folds/min during flap storms).
+				// Warning only: test scenarios stay legal. #852's fragment
+				// hold queue covers <30s fragments on its own, but healthy
+				// segments still fold per dispatch.
+				slog.Warn("merge.rolling_debounce below 2s defeats fold batching — each fold rewrites/patches the hour bucket; prefer 2-5s unless measuring a specific need",
+					"rolling_debounce", cfg.Merge.RollingDebounce)
 			}
 		}
 		if cfg.Merge.RollingWindow != "" {
