@@ -102,7 +102,7 @@ io:
 Observability: `nvr_iobudget_wait_seconds_total{consumer}` (time background
 work spent parked) and `nvr_iobudget_bytes_charged_total{consumer}` /
 `nvr_iobudget_unlinks_charged_total{consumer}` (billed volume), with
-`consumer` ∈ {merge, cleanup, repair, timelapse}.
+`consumer` ∈ {merge, cleanup, repair, timelapse, transcode} — transcode tasks bill input size × 2 (read + estimated output, #848).
 
 The `mibee-nvr repair delete-by-format` CLI reads the same `io:` section
 from the YAML, so a manual mass-delete against a live server yields exactly

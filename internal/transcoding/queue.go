@@ -52,6 +52,12 @@ type TranscodeQueue struct {
 	completionFn CompletionFunc // optional post-completion callback
 }
 
+// defaultMaxPendingTasks bounds the pending backlog (#848): flapping-camera
+// fragment storms (~7s segments, one task each) can otherwise pile up tasks
+// faster than a single ARM worker drains them, monopolizing I/O and CPU for
+// content that is mostly debris. Negative config values disable the cap.
+const defaultMaxPendingTasks = 200
+
 // QueueConfig holds configuration for the transcode queue.
 type QueueConfig struct {
 	DataDir         string // root data directory for orphan cleanup
@@ -60,12 +66,20 @@ type QueueConfig struct {
 	FFprobePath     string
 	ReplaceOriginal bool
 	JobTimeout      time.Duration // per-job timeout, 0 means no timeout
+
+	// MaxPendingTasks rejects new Enqueue calls once this many tasks are
+	// pending (#848). 0 = default (defaultMaxPendingTasks), negative =
+	// unlimited.
+	MaxPendingTasks int
 }
 
-// NewTranscodeQueue creates a new TranscodeQueue.
+// NewTranscodeQueue creates a TranscodeQueue.
 func NewTranscodeQueue(store *storage.DB, caps *HardwareCapabilities, dl *Downloader, cfg QueueConfig, m *metrics.Metrics) *TranscodeQueue {
 	if cfg.MaxWorkers <= 0 {
 		cfg.MaxWorkers = 1
+	}
+	if cfg.MaxPendingTasks == 0 {
+		cfg.MaxPendingTasks = defaultMaxPendingTasks
 	}
 	return &TranscodeQueue{
 		store:      store,
@@ -130,10 +144,29 @@ func (q *TranscodeQueue) Stop() {
 }
 
 // Enqueue inserts a new pending task into the database.
+// Rejects tasks while the pending backlog is at capacity (#848).
 // Rejects tasks that would require software encoding on ARM architecture.
 // Rejects tasks with input codecs that lack hardware decoders on ARM.
 // Rejects tasks where input resolution exceeds encoder limits.
 func (q *TranscodeQueue) Enqueue(ctx context.Context, task *storage.TranscodeTask) error {
+	// Backlog cap first — it is the cheapest check (one COUNT) and also
+	// skips the ffprobe subprocess spawn below when the queue is full.
+	if q.config.MaxPendingTasks > 0 {
+		var pending int64
+		err := storage.RetryOnBusy(ctx, func() error {
+			var e error
+			pending, e = q.store.CountTasksByStatus(ctx, "pending")
+			return e
+		})
+		if err != nil {
+			// Counting is advisory — fail open rather than dropping
+			// tasks on a transient SQLITE_BUSY.
+			queueLogger.Warn("failed to count pending transcode tasks", "error", err)
+		} else if pending >= int64(q.config.MaxPendingTasks) {
+			return fmt.Errorf("transcode queue full: %d pending tasks >= cap %d", pending, q.config.MaxPendingTasks)
+		}
+	}
+
 	if q.caps != nil && isARMArch(q.caps.Arch) {
 		// Log warning when software encoding is selected on ARM — it's slow but
 		// may be the only option when v4l2m2m is listed but device lacks encode capability.
@@ -328,6 +361,25 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 		queueLogger.Info("transcode input vanished, cancelling",
 			"task_id", task.ID, "input", task.InputPath)
 		return
+	}
+
+	// #848: pace this task's I/O against the process-wide background budget
+	// before spawning ffmpeg. A transcode reads the full input and writes an
+	// output of roughly the same order, so bill 2× the input size. Fragment-
+	// storm days (7s flapping-camera segments, one task each, ~1:1 CPU/IO
+	// overhead per fragment) measured this traffic outside any budget
+	// pushing USB-HDD boxes to ~60% PSI io-some. The wait shares the job
+	// context, so a JobTimeout expiry mid-wait cancels the task.
+	if fi, err := os.Stat(task.InputPath); err == nil && fi.Size() > 0 {
+		if werr := waitTranscodeIOBudget(ctx, fi.Size()*2); werr != nil {
+			// The worker ctx died (shutdown or job timeout) mid-wait — use a
+			// live context for the final status write, matching the ffmpeg
+			// error paths below.
+			q.finishTask(context.Background(), task, "cancelled", 0, fmt.Sprintf("I/O budget wait interrupted: %v", werr))
+			queueLogger.Info("transcode cancelled while waiting for I/O budget",
+				"task_id", task.ID, "input", task.InputPath, "error", werr)
+			return
+		}
 	}
 
 	// Convert storage task to transcoding options with default preset

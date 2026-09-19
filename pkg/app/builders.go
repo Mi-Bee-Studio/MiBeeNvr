@@ -130,6 +130,7 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 		))
 	merge.SetIOBudget(ioBudget)
 	timelapse.SetIOBudget(ioBudget)
+	transcoding.SetIOBudget(ioBudget)
 	deps.ioBudget = ioBudget
 	if ioBudget != nil {
 		slog.Info("background I/O budget enabled",

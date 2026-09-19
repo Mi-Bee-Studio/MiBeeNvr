@@ -3,12 +3,19 @@ package config
 // Transcoding configuration types and resolution helpers.
 
 type TranscodingConfig struct {
-	Enabled          bool   `yaml:"enabled" json:"enabled"`                               // default false
-	FFmpegPath       string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path"`             // auto-detected or user-specified
-	MaxWorkers       int    `yaml:"max_workers,omitempty" json:"max_workers"`             // default 1, max 4
-	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url"`           // auto-populated per platform
-	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout"`             // per-job timeout, default "30m", max 4h
-	HistoryRetention string `yaml:"history_retention,omitempty" json:"history_retention"` // e.g. "168h" (7d), "720h" (30d), ""=never
+	Enabled          bool   `yaml:"enabled" json:"enabled"`                                         // default false
+	FFmpegPath       string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path,omitempty"`             // auto-detected or user-specified
+	MaxWorkers       int    `yaml:"max_workers,omitempty" json:"max_workers,omitempty"`             // default 1, max 4
+	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url,omitempty"`           // auto-populated per platform
+	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout,omitempty"`             // per-job timeout, default "30m", max 4h
+	HistoryRetention string `yaml:"history_retention,omitempty" json:"history_retention,omitempty"` // e.g. "168h" (7d), "720h" (30d), ""=never
+
+	// MinSegmentDurationS skips auto-enqueueing transcode tasks for segments
+	// whose wall duration is below this floor (#848) — flapping-camera
+	// reconnect fragments. 0 (default) = gating off. Skipped fragments fold
+	// into rolling-merge buckets whose output is NOT re-enqueued, so their
+	// content keeps the original codec.
+	MinSegmentDurationS int `yaml:"min_segment_duration_s,omitempty" json:"min_segment_duration_s,omitempty"`
 }
 
 type CameraTranscodingConfig struct {

@@ -1603,6 +1603,12 @@ auto_discover:
 - **Description**: How long to retain transcoding job history. Empty string means never delete.
 - **Minimum**: 24h
 - **Example**: `"168h"`, `"720h"`, `""`
+### `transcoding.min_segment_duration_s`
+- **Type**: integer
+- **Default**: `0` (off)
+- **Range**: 0–3600
+- **Description**: Minimum segment duration floor for auto-enqueued transcodes (#848): reconnect fragments from flapping cameras (~7s) cost nearly as much to transcode as they contain, so shorter segments are not enqueued. Note: skipped fragments still fold into rolling-merge buckets whose output is never re-enqueued (it keeps the original codec) — enable only when that trade-off is acceptable.
+- **Example**: `30`
 
 ## Extensions Configuration
 
