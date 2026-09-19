@@ -254,6 +254,18 @@ func parseSegment(filePath string, probeKeyframes bool) (*SegmentInfo, error) {
 			}
 		}
 
+		// Leaf sample tables and codec descriptors have no children by
+		// definition — expanding them walks the remaining payload
+		// (boxSize − parsed fields) as child boxes. Classic merge output
+		// is always tight so that walk sees zero bytes, but the #853
+		// append bucket reserves capacity slots in these tables: the zero
+		// padding then parses as a phantom box with size 0 (which MP4
+		// defines as "extends to EOF") and aborts the whole traversal.
+		switch box.(type) {
+		case *mp4.Stts, *mp4.Stsc, *mp4.Stss, *mp4.Stco, *mp4.Co64,
+			*mp4.Stsz, *mp4.AVCDecoderConfiguration, *mp4.HvcC, *mp4.Esds:
+			return nil, nil
+		}
 		return h.Expand()
 	})
 	if err != nil {
