@@ -3,6 +3,7 @@ package merge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -369,3 +370,202 @@ func mapJSON(pairs [][2]float64) string {
 	}
 	return string(b)
 }
+
+// foldAppendBucket folds one video-only run via the sequential-append bucket
+// (#853): O(segment) bytes at the mdat tail + in-place table patches, never a
+// full-bucket rewrite. Handles both bucket creation (fresh append-bucket
+// file) and appends to an existing one; classicFellBack=true means the run
+// must take the classic MergeMP4Segments path instead (not an append bucket,
+// or capacity exhausted — the compact rewrite is that path).
+//
+// Caller holds bucket.mu. The append bucket file is opened per fold (fresh
+// mirror from the tables — cheap moov-only reads) and closed after; folds are
+// minutes apart, keeping no FDs between them.
+func (r *RollingMergeCoordinator) foldAppendBucket(
+	ctx context.Context,
+	run []*foldSegment,
+	bucket *bucketInfo,
+) (outputPath, mergedRecID string, classicFellBack bool, err error) {
+	first, last := run[0].seg, run[len(run)-1].seg
+	cameraID := first.cameraID
+	cfg := r.resolveRollingConfig(cameraID)
+
+	var ab *AppendBucket
+	if bucket.mergedFilePath == "" {
+		tempPath, finalPath, derr := r.store.CreateSegment(cameraID, first.format)
+		if derr != nil {
+			return "", "", false, fmt.Errorf("create append bucket output: %w", derr)
+		}
+		nab, cerr := CreateAppendBucket(tempPath, run[0].info, AppendBucketConfig{Window: cfg.Window})
+		if cerr != nil {
+			os.Remove(tempPath)
+			return "", "", false, fmt.Errorf("create append bucket: %w", cerr)
+		}
+		ab = nab
+		// Defer the temp→final rename until the batch landed; on any error
+		// below the temp file is removed and the bucket stays un-created.
+		defer func() {
+			if err != nil {
+				ab.Close()
+				os.Remove(tempPath)
+				return
+			}
+			if rerr := ab.Close(); rerr != nil {
+				err = fmt.Errorf("close append bucket: %w", rerr)
+				os.Remove(finalPath)
+				return
+			}
+			if rerr := r.store.CloseSegmentMerged(tempPath, finalPath); rerr != nil {
+				err = fmt.Errorf("finalize append bucket: %w", rerr)
+				os.Remove(finalPath)
+				return
+			}
+			outputPath = finalPath
+		}()
+	} else {
+		nab, oerr := OpenAppendBucket(bucket.mergedFilePath)
+		if oerr != nil {
+			if errors.Is(oerr, ErrNotAppendBucket) {
+				return "", "", true, nil // classic bucket — classic path
+			}
+			return "", "", false, fmt.Errorf("open append bucket: %w", oerr)
+		}
+		ab = nab
+		defer ab.Close()
+	}
+
+	srcs := make([]AppendSource, 0, len(run))
+	for _, fs := range run {
+		srcs = append(srcs, AppendSource{Path: fs.seg.filePath, Samples: fs.info.Samples})
+	}
+	ast, aerr := ab.AppendBatch(r.resolveTimelapseCadence(cameraID), r.resolveTimelapseGap(cameraID), srcs)
+	if aerr != nil {
+		if errors.Is(aerr, ErrAppendCapacity) && bucket.mergedFilePath != "" {
+			// 容量耗尽：压紧 = 经典全量重写路径（该桶此后保持经典格式）。
+			rollingLogger.Info("append bucket capacity exhausted — compacting via classic rewrite",
+				"camera_id", cameraID, "bucket", bucket.mergedFilePath)
+			return "", "", true, nil
+		}
+		return "", "", false, fmt.Errorf("append batch: %w", aerr)
+	}
+
+	// --- 行/桶账务：镜像 appendToBucket 的 #496 墙钟口径 ---
+	ts := float64(ab.timescale)
+	if ts <= 0 {
+		ts = 1000
+	}
+	deltaWall := float64(ast.WallTicks) / ts
+	deltaFile := float64(ast.FileTicks) / ts
+
+	if bucket.mergedFilePath == "" {
+		wallSec := last.endedAt.Sub(first.startedAt).Seconds()
+		mergedRecID = strconv.FormatInt(time.Now().UnixNano(), 10)
+		bucket.wallDurSec = wallSec
+		bucket.fileDurSec = deltaFile
+		bucket.lastEnded = last.endedAt
+		bucket.rowStart = first.startedAt
+		bucket.wallFile = [][2]float64{{0, 0}, {wallSec, deltaFile}}
+		totalFrames := 0
+		for _, fs := range run {
+			totalFrames += fs.info.SampleCount
+		}
+		fi, ferr := os.Stat(outputPathOf(ab))
+		if ferr != nil {
+			return "", "", false, fmt.Errorf("stat append bucket: %w", ferr)
+		}
+		mergedRec := &model.Recording{
+			ID:          mergedRecID,
+			CameraID:    cameraID,
+			FilePath:    outputPathOf(ab),
+			Format:      model.Format(first.format),
+			StartedAt:   first.startedAt,
+			EndedAt:     last.endedAt,
+			Duration:    wallSec,
+			FileSize:    fi.Size(),
+			FrameCount:  totalFrames,
+			MergeStatus: model.MergeStatusMerged,
+			TimelineMap: mapJSON(bucket.wallFile),
+		}
+		recIDs := make([]string, len(run))
+		for i, fs := range run {
+			recIDs[i] = fs.seg.recordingID
+		}
+		if uerr := storage.RetryOnBusy(ctx, func() error {
+			return r.db.RollingReplaceRecordings(ctx, mergedRec, "", recIDs)
+		}); uerr != nil {
+			return "", "", false, fmt.Errorf("db replace (append create): %w", uerr)
+		}
+		r.deleteRunSources(ctx, segsOf(run), "append-bucket-create")
+		return outputPathOf(ab), mergedRecID, false, nil
+	}
+
+	// 追加：gap/span 钳制 + #698 乱序守卫 + I1 钳制（同 appendToBucket）。
+	if !bucket.lastEnded.IsZero() {
+		if gapWall := last.endedAt.Sub(bucket.lastEnded).Seconds(); gapWall > deltaWall {
+			deltaWall = gapWall
+		}
+	}
+	if spanWall := last.endedAt.Sub(first.startedAt).Seconds(); deltaWall < spanWall {
+		deltaWall = spanWall
+	}
+	if last.endedAt.After(bucket.lastEnded) {
+		bucket.lastEnded = last.endedAt
+	}
+	if !bucket.rowStart.IsZero() && first.startedAt.Before(bucket.rowStart) {
+		bucket.rowStart = first.startedAt
+	}
+	bucket.wallDurSec += deltaWall
+	bucket.fileDurSec += deltaFile
+	if !bucket.rowStart.IsZero() {
+		if span := bucket.lastEnded.Sub(bucket.rowStart).Seconds(); span > bucket.wallDurSec {
+			bucket.wallDurSec = span
+		}
+	}
+	if len(bucket.wallFile) == 0 {
+		bucket.wallFile = [][2]float64{{0, 0}}
+	}
+	bucket.wallFile = append(bucket.wallFile, [2]float64{bucket.wallDurSec, bucket.fileDurSec})
+
+	fi, ferr := os.Stat(ab.Path())
+	if ferr != nil {
+		return "", "", false, fmt.Errorf("stat append bucket: %w", ferr)
+	}
+	mergedRecID = bucket.mergedRecID
+	mergedRec := &model.Recording{
+		ID:          mergedRecID,
+		CameraID:    cameraID,
+		FilePath:    ab.Path(),
+		Format:      model.Format(first.format),
+		StartedAt:   bucket.rowStart,
+		EndedAt:     bucket.lastEnded,
+		Duration:    bucket.wallDurSec,
+		FileSize:    fi.Size(),
+		FrameCount:  int(ab.SampleCount()),
+		MergeStatus: model.MergeStatusMerged,
+		TimelineMap: mapJSON(bucket.wallFile),
+	}
+	recIDs := make([]string, len(run))
+	for i, fs := range run {
+		recIDs[i] = fs.seg.recordingID
+	}
+	if uerr := storage.RetryOnBusy(ctx, func() error {
+		return r.db.RollingReplaceRecordings(ctx, mergedRec, bucket.mergedRecID, recIDs)
+	}); uerr != nil {
+		rollingLogger.Error("db update failed after append-bucket fold — data may be inconsistent",
+			"camera_id", cameraID, "merged_path", ab.Path(), "error", uerr)
+		return "", "", false, fmt.Errorf("db replace (append): %w", uerr)
+	}
+	r.deleteRunSources(ctx, segsOf(run), "append-bucket")
+	return ab.Path(), mergedRecID, false, nil
+}
+
+func segsOf(run []*foldSegment) []pendingSegmentInfo {
+	out := make([]pendingSegmentInfo, len(run))
+	for i, fs := range run {
+		out[i] = fs.seg
+	}
+	return out
+}
+
+// outputPathOf 提取追加桶的目标路径（创建期在 defer 里才可知，经由桶自身携带）。
+func outputPathOf(ab *AppendBucket) string { return ab.Path() }

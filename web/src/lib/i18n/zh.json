@@ -1127,6 +1127,8 @@
   "settings.itemsPerPage": "每页条数",
   "settings.merge.fragmentHold": "碎段攒批折叠（秒）",
   "settings.merge.fragmentHoldHint": "小于 30 秒的录像碎段（闪断相机重连产物）先攒在持有队列，到期后一次性合并进整点桶，显著降低磁盘写入放大。持有期间碎段仍是可播放的独立录像。0 = 关闭（回到逐段合并）。范围 0–3600。",
+  "settings.merge.appendBucket": "顺序追加桶（实验性）",
+  "settings.merge.appendBucketHint": "折卷改为在文件尾部追加并原地补丁样本表，不再全桶重写——闪断/长时录制相机的磁盘写入显著下降。实验性功能：每活跃相机常驻约 1–2MB 内存镜像，小内存设备（如 1GB 树莓派）请谨慎开启；仅对新桶生效。",
   "settings.mibeevision.confirmRevoke": "吊销 API Key \"{name}\"? MiBeeVision 将立即失去访问权限。",
   "settings.mibeevision.connected": "已连接",
   "settings.mibeevision.consumerOffline": "消费方离线",

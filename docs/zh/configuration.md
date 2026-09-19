@@ -57,6 +57,7 @@ merge:
   rolling_bucket_retain: 2           # 每相机保留的桶数（按参数集分键，#764）；1 = 旧单桶行为
   rolling_bucket_idle_ttl: "10m"     # 桶空闲超过该时长即 finalize；"0" 关闭空闲淘汰
   rolling_fragment_hold_s: 300       # <30s 碎段攒批一次折卷（#852）；0 = 关闭逐段折
+  rolling_append_bucket: false       # 顺序追加桶（#853，实验性）；默认关闭
   rolling_backfill_max_segments: 500 # 启动回填上限（防 RPi IO 风暴）
   rolling_backfill_max_age: "72h"    # 只回填最近 N 小时的段
 ftp:
@@ -848,6 +849,15 @@ cameras:
   持有队列最坏内存 <1MB，对 RPi 3B 无影响。**Web 可操作**：设置 → 录像合并卡片（`GET/PUT /api/settings/merge`
   的 `rolling_fragment_hold_s` 字段）
 - **示例**: `300`, `60`, `0`
+
+### `merge.rolling_append_bucket`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 顺序追加桶（#853，**实验性**）：折卷改为 mdat 尾部顺序追加 + 预留容量样本表（stsz/stco/stts/stss/stsc）原地补丁，
+  每折 O(段) 而非 O(桶)——与 #852 攒批正交可叠加。**⚠️ RPi 3B（1GB）设计基线影响（用户裁决 2026-09-19）**：
+  每活跃相机常驻约 **1–2MB** 内存镜像 + 补丁元数据，故默认关闭、Web 可操作（设置 → 录像合并卡片）。
+  仅纯视频桶；音频段与既有桶保持经典全量重写路径；容量耗尽自动回落经典重写（压紧）。仅对新桶生效
+- **示例**: `true`, `false`
 
 ### `merge.rolling_window`
 - **类型**: string
