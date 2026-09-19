@@ -1,6 +1,6 @@
 # 接入 Home Assistant
 
-> 适用于 MiBee NVR v0.12.0+（内置 RTSP 输出、MQTT 触发与状态发布）
+> 适用于 MiBee NVR v0.12.0+（内置 RTSP 输出、MQTT 触发与状态发布）；仓库内附带的 custom integration 自 v0.13.0 起提供
 
 MiBee NVR 自带一个可选的 Home Assistant 自定义集成（方案 0：自动发现、按相机生成实体与开关）；不装它也完全可行——通过 RTSP 输出、REST API、MQTT 触发与状态发布四个能力，可以拼出完整的接入方案。本文按用途拆分路径，全部可独立启用。
 
