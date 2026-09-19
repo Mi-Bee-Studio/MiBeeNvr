@@ -103,6 +103,13 @@ func autoInitConfig(configPath string) *config.Config {
 }
 
 func main() {
+	// Windows GUI-subsystem binary: reattach to the launching terminal so
+	// CLI output stays visible (no-op on other platforms and on desktop
+	// launches, where staying console-less is the point).
+	if runtime.GOOS == "windows" {
+		install.EnsureParentConsole()
+	}
+
 	// Dispatch CLI subcommands before flag parsing
 	dispatchSubcommand(os.Args)
 

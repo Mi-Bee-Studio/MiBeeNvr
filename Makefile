@@ -52,9 +52,11 @@ cross-armv7: frontend
 
 # Desktop targets (windows/darwin): pure-Go builds for running the NVR on a
 # PC — the web SPA is the UI (user-ruled 2026-09-18: no native desktop app).
+# windowsgui: tray app without a console — desktop launches never get a cmd
+# window (terminal output via AttachConsole, internal/install/console_windows.go).
 cross-windows: frontend
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/mibee-nvr-windows-amd64.exe ./cmd/mibee-nvr/
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS) -H windowsgui" -o $(BUILD_DIR)/mibee-nvr-windows-amd64.exe ./cmd/mibee-nvr/
 
 cross-darwin-arm64: frontend
 	@mkdir -p $(BUILD_DIR)
