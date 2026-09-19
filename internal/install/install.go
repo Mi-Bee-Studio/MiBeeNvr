@@ -75,6 +75,8 @@ func yamlSingle(s string) string {
 
 // healthURLForConfig resolves the loopback /api/health URL from the config's
 // listen address (wildcards probed on loopback).
+//
+//nolint:unused // called only from the windows/darwin install files — on the linux lint platform both are build-tagged out
 func healthURLForConfig(cfgPath string) string {
 	addr := "127.0.0.1:9090"
 	if cfg, err := config.Load(cfgPath); err == nil && cfg.Server.Listen != "" {
@@ -92,6 +94,8 @@ func healthURLForConfig(cfgPath string) string {
 // waitForHTTP polls url until it answers 2xx or the timeout lapses — the
 // honest "Started" behind every install summary (an agent killed at exec
 // surfaces here instead of as a silent non-start).
+//
+//nolint:unused // called only from the windows/darwin install files — on the linux lint platform both are build-tagged out
 func waitForHTTP(url string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 2 * time.Second}
