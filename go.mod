@@ -34,7 +34,7 @@ require (
 require go.uber.org/goleak v1.3.0
 
 require (
-	github.com/Mi-Bee-Studio/MiBeeP2PServer/sdk/go v0.0.0-20260920051840-0bb9dc8d873c
+	github.com/Mi-Bee-Studio/MiBeeP2PServer/sdk/go v0.0.0-20260920130648-7b0bac4957bb
 	github.com/emmansun/gmsm v0.44.1
 )
 
