@@ -78,7 +78,7 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 					// When recording_enabled=true, timelapse frames come from recorded
 					// segments via PeriodicMergeManager — skip starting the dedicated
 					// capturer (keyframe extractor or frame poller) and rolling merge.
-					recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+					recordingEnabled := cm.cfg.RecordingGate(cam.RecordingEnabled)
 					if recordingEnabled && cam.Timelapse != nil && cam.Timelapse.Enabled {
 						logger.Info("skipping timelapse capturer + rolling merge: recording_enabled=true",
 							"camera_id", cam.ID)

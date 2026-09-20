@@ -494,10 +494,10 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 				db, db, timelapse.NewGoMerger(), fps, periodicMergeDir, dur, appLoc,
 				timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
 					cam := camMgr.GetCameraConfig(cameraID)
-					if cam == nil || cam.RecordingEnabled == nil {
-						return true // nil = default true (recording enabled)
+					if cam == nil {
+						return true
 					}
-					return *cam.RecordingEnabled
+					return cfg.RecordingGate(cam.RecordingEnabled)
 				}),
 				// Persist periodic-merge outputs to the timelapse_merges table so
 				// the frontend can discover / play / delete long-window videos.

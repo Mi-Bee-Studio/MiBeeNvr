@@ -1966,5 +1966,9 @@
   "cameras.motionSubEvents": "已收事件",
   "cameras.motionSubLastEvent": "最近事件",
   "cameras.motionSubLastRaw": "原始事件",
-  "cameras.motionSubError": "最近错误"
+  "cameras.motionSubError": "最近错误",
+  "settings.recordingDefault": "默认启用录像存储",
+  "settings.recordingDefaultOn": "录像（写入存储）",
+  "settings.recordingDefaultOff": "纯直播（不写存储）",
+  "settings.recordingDefaultHint": "未单独设置录制开关的摄像头（含新添加与国标自动注册通道）继承此默认值；已单独设置的不受影响。保存后运行中的相关摄像头会自动重启生效。"
 }

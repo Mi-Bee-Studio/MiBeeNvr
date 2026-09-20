@@ -449,10 +449,10 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 				return true
 			}
 			cam := h.camMgr.GetCameraConfig(cameraID)
-			if cam == nil || cam.RecordingEnabled == nil {
+			if cam == nil {
 				return true
 			}
-			return *cam.RecordingEnabled
+			return h.config.RecordingGate(cam.RecordingEnabled)
 		}),
 		timelapse.WithRetainIntermediateMP4(retainMP4),
 		timelapse.WithIntermediateMP4Pruner(h.db),

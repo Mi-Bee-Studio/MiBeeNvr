@@ -51,6 +51,11 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			// hit, evict boring (low motion_score) segments first. nil = on.
 			"motion_aware_disk_cleanup": h.config.Cleanup.MotionAwareDiskCleanup == nil || *h.config.Cleanup.MotionAwareDiskCleanup,
 		},
+		// Global recording gate default: cameras without an explicit
+		// recording_enabled inherit this (new + auto-enrolled channels).
+		"recording": map[string]any{
+			"default_enabled": h.config.RecordingGate(nil),
+		},
 		"webdav": map[string]any{
 			"enabled":     h.config.WebDAV.Enabled != nil && *h.config.WebDAV.Enabled,
 			"path_prefix": h.config.WebDAV.PathPrefix,
@@ -192,6 +197,13 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			// first when the disk threshold is hit. nil = unchanged.
 			MotionAwareDiskCleanup *bool `json:"motion_aware_disk_cleanup"`
 		} `json:"cleanup"`
+		Recording *struct {
+			// Global recording gate default for cameras without an explicit
+			// recording_enabled. nil = unchanged. Applied hot: running cameras
+			// that inherit the default are recycled so the rebuilt recorder
+			// reads the new gate (same semantics as the per-camera toggle).
+			DefaultEnabled *bool `json:"default_enabled"`
+		} `json:"recording"`
 		Storage *struct {
 			// Recording root directory (#395). Takes effect on the NEXT start —
 			// the DB and all subsystems open paths under the old root at boot,
@@ -249,6 +261,19 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Update auto-apply toggle (#648): takes effect on the next check cycle.
 	if body.Update != nil && body.Update.AutoApply != nil {
 		h.config.Update.AutoApply = body.Update.AutoApply
+	}
+
+	// Global recording gate default: hot-apply by recycling running cameras
+	// that inherit it. Run detached — a fleet-wide recycle takes a while and
+	// the settings save must not block on it (config is already persisted by
+	// the time the goroutine reads it).
+	if body.Recording != nil && body.Recording.DefaultEnabled != nil {
+		oldDefault := h.config.RecordingGate(nil)
+		h.config.Recording.DefaultEnabled = body.Recording.DefaultEnabled
+		if oldDefault != *body.Recording.DefaultEnabled && h.camMgr != nil {
+			enabled := *body.Recording.DefaultEnabled
+			go h.camMgr.ApplyRecordingDefault(enabled)
+		}
 	}
 
 	// Update cleanup settings

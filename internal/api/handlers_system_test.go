@@ -511,3 +511,37 @@ func TestStatsCameras(t *testing.T) {
 	require.Equal(t, int64(2048), stats[1].TotalBytes)
 	require.Equal(t, 1, stats[1].Recordings)
 }
+
+// --- recording.default_enabled (global recording gate default) tests ---
+
+func TestSettings_RecordingDefaultRoundTrip(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// Default: unset = record.
+	rr := doRequest(t, h.Routes(), "GET", "/api/settings", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"default_enabled":true`)
+
+	// Turn the default off (pure-live deployments).
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings",
+		bytes.NewReader([]byte(`{"recording":{"default_enabled":false}}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.False(t, cfg.RecordingGate(nil), "nil-camera gate must follow the new global default")
+	require.True(t, cfg.RecordingGate(ptrBoolTrueForSettings()), "explicit per-camera value must still win")
+
+	rr = doRequest(t, h.Routes(), "GET", "/api/settings", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"default_enabled":false`)
+
+	// Absent field = unchanged (partial PUT semantics like every other key).
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings",
+		bytes.NewReader([]byte(`{"cleanup":{"retention_days":7}}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.False(t, cfg.RecordingGate(nil))
+}
+
+func ptrBoolTrueForSettings() *bool { v := true; return &v }

@@ -329,7 +329,7 @@ func (cm *CameraManager) startDualModeTimelapseScheduleMonitorForCamera(
 	startFn := func() {
 		// When recording is enabled, timelapse frames come from recorded segments
 		// via PeriodicMergeManager — no dedicated capturer needed.
-		if cam.RecordingEnabled == nil || *cam.RecordingEnabled {
+		if cm.cfg.RecordingGate(cam.RecordingEnabled) {
 			logger.Info("dual-mode timelapse schedule: not starting capturer, recording_enabled=true",
 				"camera_id", cameraID)
 			return

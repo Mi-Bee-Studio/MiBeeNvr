@@ -624,7 +624,7 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		// the new value. The previous expression mishandled the nil→false case,
 		// so disabling recording on a camera whose recording_enabled was never
 		// explicitly persisted left the old recorder writing segments to disk.
-		oldEffective := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+		oldEffective := cm.cfg.RecordingGate(cam.RecordingEnabled)
 		if oldEffective != *updates.RecordingEnabled {
 			needsRestart = true
 		}

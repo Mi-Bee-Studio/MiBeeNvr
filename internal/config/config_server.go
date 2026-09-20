@@ -204,6 +204,31 @@ func (c CleanupConfig) MotionAwareDiskCleanupEnabled() bool {
 	return c.MotionAwareDiskCleanup == nil || *c.MotionAwareDiskCleanup
 }
 
+// RecordingConfig is the global recording gate default. Cameras that never
+// set an explicit recording_enabled (nil — e.g. GB28181 auto-enrolled
+// channels, cameras created without the field) inherit this value; explicit
+// per-camera true/false always wins. Default (nil) = record, preserving the
+// pre-existing behavior. Primary use: pure-live deployments (fnOS test box,
+// ≤24h-retention rule) that want every channel live-only without flipping
+// each camera by hand.
+type RecordingConfig struct {
+	DefaultEnabled *bool `yaml:"default_enabled,omitempty"`
+}
+
+// RecordingGate resolves the effective recording gate for one camera:
+// explicit per-camera value first, then the global recording.default_enabled,
+// then record (true). Nil-safe on the receiver so callers without a config
+// keep the historical default.
+func (c *Config) RecordingGate(perCamera *bool) bool {
+	if perCamera != nil {
+		return *perCamera
+	}
+	if c != nil && c.Recording.DefaultEnabled != nil {
+		return *c.Recording.DefaultEnabled
+	}
+	return true
+}
+
 type AuthConfig struct {
 	Username     string          `yaml:"username"`
 	PasswordHash string          `yaml:"password_hash"`

@@ -190,7 +190,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				Status:      string(c.Status),
 				Encoding:    string(c.Encoding),
 				Protocol:    c.Protocol,
-				IsRecording: c.Status == model.StatusRecording && (c.RecordingEnabled == nil || *c.RecordingEnabled),
+				IsRecording: c.Status == model.StatusRecording && h.config.RecordingGate(c.RecordingEnabled),
 			}
 			if c.LastSeen != nil && !c.LastSeen.IsZero() {
 				ts := c.LastSeen.Format(time.RFC3339)
