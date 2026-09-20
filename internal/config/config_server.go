@@ -204,6 +204,25 @@ func (c CleanupConfig) MotionAwareDiskCleanupEnabled() bool {
 	return c.MotionAwareDiskCleanup == nil || *c.MotionAwareDiskCleanup
 }
 
+// Validate enforces the cleanup section's bounds and is the SINGLE source of
+// truth for them: the startup load (validate.go) and the settings PUT path
+// (handlers_settings.go) must both go through it. #867: the PUT's old ad-hoc
+// windows (disk_threshold_percent 1–100, retention_days unbounded) accepted
+// values the load then rejected (50–99 / ≤3650) — accepted at runtime,
+// shutdown-persist wrote them to yaml, the next start failed validation and
+// crash-looped (seen twice on the fnOS test box with disk_threshold_percent=20;
+// a running-process sed fix gets rewritten from memory by the same
+// shutdown-persist, so only the write-side gate actually closes it).
+func (c CleanupConfig) Validate() error {
+	if c.RetentionDays < 1 || c.RetentionDays > 3650 {
+		return fmt.Errorf("cleanup.retention_days must be between 1 and 3650, got %d", c.RetentionDays)
+	}
+	if c.DiskThresholdPercent < 50 || c.DiskThresholdPercent > 99 {
+		return fmt.Errorf("cleanup.disk_threshold_percent must be between 50 and 99, got %d", c.DiskThresholdPercent)
+	}
+	return nil
+}
+
 // RecordingConfig is the global recording gate default. Cameras that never
 // set an explicit recording_enabled (nil — e.g. GB28181 auto-enrolled
 // channels, cameras created without the field) inherit this value; explicit

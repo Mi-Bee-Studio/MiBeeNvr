@@ -276,21 +276,20 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update cleanup settings
+	// Update cleanup settings. Merge into a copy and validate with the SAME
+	// rules the startup load enforces (CleanupConfig.Validate — single source
+	// of truth), committing only when the whole section passes. #867: the old
+	// per-field ad-hoc windows (disk_threshold_percent 1–100, retention_days
+	// unbounded) accepted values the load then rejected at next start →
+	// crash loop; field-by-field early returns also half-committed a save
+	// when a later field failed.
 	if body.Cleanup != nil {
+		merged := h.config.Cleanup
 		if body.Cleanup.RetentionDays != nil {
-			if *body.Cleanup.RetentionDays < 1 {
-				WriteError(w, http.StatusBadRequest, "retention_days must be >= 1")
-				return
-			}
-			h.config.Cleanup.RetentionDays = *body.Cleanup.RetentionDays
+			merged.RetentionDays = *body.Cleanup.RetentionDays
 		}
 		if body.Cleanup.DiskThresholdPercent != nil {
-			if *body.Cleanup.DiskThresholdPercent < 1 || *body.Cleanup.DiskThresholdPercent > 100 {
-				WriteError(w, http.StatusBadRequest, "disk_threshold_percent must be between 1 and 100")
-				return
-			}
-			h.config.Cleanup.DiskThresholdPercent = *body.Cleanup.DiskThresholdPercent
+			merged.DiskThresholdPercent = *body.Cleanup.DiskThresholdPercent
 		}
 		if body.Cleanup.CheckInterval != nil {
 			// An empty/whitespace string means "keep current value" (partial PUT
@@ -302,12 +301,17 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					WriteError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
 					return
 				}
-				h.config.Cleanup.CheckInterval = trimmed
+				merged.CheckInterval = trimmed
 			}
 		}
 		if body.Cleanup.MotionAwareDiskCleanup != nil {
-			h.config.Cleanup.MotionAwareDiskCleanup = body.Cleanup.MotionAwareDiskCleanup
+			merged.MotionAwareDiskCleanup = body.Cleanup.MotionAwareDiskCleanup
 		}
+		if err := merged.Validate(); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.config.Cleanup = merged
 	}
 
 	// Update storage root (#395) — next-start semantics, see body.Storage.
