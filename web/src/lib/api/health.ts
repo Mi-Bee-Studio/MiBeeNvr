@@ -98,7 +98,7 @@ export async function getHealthCameras(): Promise<HealthCamerasResponse> {
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
-  return readJson(response);
+  return readJson(response, () => fetch(`${API_BASE}/health/cameras`));
 }
 
 // ─── Stability (#469: QualityTracker data — uptime/MTBF/trend per camera) ───

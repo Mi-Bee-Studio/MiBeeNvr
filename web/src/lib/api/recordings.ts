@@ -438,12 +438,16 @@ export async function batchMergeTimelapse(params: {
     date: params.date || '',
   });
 
-  const res = await fetch(url, { method: 'POST', headers, body });
+  // Retry is safe even for this POST: a plain-text gateway rejection means
+  // the request was refused before reaching the backend (no NVR trace), so
+  // the merge was never triggered.
+  const doFetch = (): Promise<Response> => fetch(url, { method: 'POST', headers, body });
+  const res = await doFetch();
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({ error: 'Failed to batch merge' }));
     throw new ApiRequestError(errorData.error || `HTTP ${res.status}`, errorData.code);
   }
-  return readJson(res);
+  return readJson(res, doFetch);
 }
 export function subscribeTimelapseMergeProgress(
   cameraId: string,

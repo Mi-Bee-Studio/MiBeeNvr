@@ -491,7 +491,12 @@ export async function listCameras(signal?: AbortSignal): Promise<Camera[]> {
   }
   const newEtag = resp.headers.get('ETag');
   if (newEtag) fullListEtag = newEtag;
-  const data = await readJson<Camera[]>(resp);
+  // On a gateway bounce the retry skips the ETag capture above; the next poll
+  // then misses 304 once and refreshes the full list — self-correcting.
+  const data = await readJson<Camera[]>(resp, () => fetch(`${API_BASE}/cameras`, {
+    headers,
+    signal: signal ?? AbortSignal.timeout(30000),
+  }));
   cachedFullList = data;
   return data;
 }
@@ -533,7 +538,12 @@ export async function listCamerasSummary(signal?: AbortSignal): Promise<CameraSu
   }
   const newEtag = resp.headers.get('ETag');
   if (newEtag) summaryEtag = newEtag;
-  const data = await readJson<CameraSummary[]>(resp);
+  // Retry skips the ETag capture above on a gateway bounce; the next poll
+  // misses 304 once and refreshes — self-correcting.
+  const data = await readJson<CameraSummary[]>(resp, () => fetch(`${API_BASE}/cameras?view=summary`, {
+    headers,
+    signal: signal ?? AbortSignal.timeout(30000),
+  }));
   cachedSummary = data;
   return data;
 }

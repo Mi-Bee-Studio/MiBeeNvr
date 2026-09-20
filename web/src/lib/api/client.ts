@@ -236,17 +236,33 @@ export function isLocalBypass(): boolean {
 }
 
 // Parse an API response body as JSON, tolerating the plain-text auth
-// rejection a fronting unified gateway produces: when the fnOS desktop
-// session expires, the gateway answers API paths with HTTP 200 + body
-// "invalid token" (verified on the fnOS test box, 2026-09-20). A bare
-// response.json() then throws a raw SyntaxError ("Unexpected token 'i'",
-// field-reported) that no caller handles. Read the text first, parse, and on
-// a plain-text body surface a typed error + a global event so App can
-// re-bootstrap (one reload re-enters through the desktop SSO).
-export async function readJson<T>(response: Response): Promise<T> {
+// rejection a fronting unified gateway produces: HTTP 200 + body "invalid
+// token". Primary cause (fixed separately): the fnOS gateway treats any
+// Authorization header as its own credential — getAuthHeader() now omits the
+// header entirely in gateway mode. This layer remains as resilience for the
+// gateway's other plain-text refusals (dead desktop session; transient
+// per-request bounces — observed live 2026-09-20 with sibling requests
+// succeeding in the same millisecond). A bare response.json() throws a raw
+// SyntaxError ("Unexpected token 'i'", field-reported) that no caller
+// handles. Here the text is read first and parsed; a plain-text body on an
+// OK status is the proxy speaking. Callers pass a refetch closure so early
+// rejections are retried with growing delays, and only when every retry
+// also refuses does this surface as a typed error + global event (App
+// re-bootstraps with one guarded reload).
+const GATEWAY_BOUNCE_RETRY_DELAYS_MS = [1200, 3000];
+
+function dispatchGatewayAuth(body: string): void {
+  window.dispatchEvent(new CustomEvent('nvr-gateway-auth', {
+    detail: { body: body.slice(0, 120) },
+  }));
+}
+
+type JsonAttempt<T> = { ok: true; value: T } | { ok: false; gatewayBody?: string };
+
+async function attemptParse<T>(response: Response): Promise<JsonAttempt<T>> {
   const text = await response.text();
   try {
-    return JSON.parse(text) as T;
+    return { ok: true, value: JSON.parse(text) as T };
   } catch {
     const trimmed = text.trim();
     // Gateway-auth signature: short printable plain text (the NVR itself
@@ -255,20 +271,42 @@ export async function readJson<T>(response: Response): Promise<T> {
     const printable = trimmed.length > 0 && trimmed.length <= 256 &&
       ![...trimmed].some((ch) => ch < ' ' || ch === '\x7f');
     if (printable && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-      window.dispatchEvent(new CustomEvent('nvr-gateway-auth', {
-        detail: { body: trimmed.slice(0, 120) },
-      }));
-      throw new ApiRequestError(
-        `网关会话已过期，请刷新页面重新进入（${trimmed.slice(0, 60)}）`,
-        'GATEWAY_AUTH',
-      );
+      return { ok: false, gatewayBody: trimmed };
     }
-    throw new ApiRequestError('响应不是有效的 JSON', 'BAD_JSON');
+    return { ok: false };
   }
 }
 
+export async function readJson<T>(response: Response, refetch?: () => Promise<Response>): Promise<T> {
+  let attempt = await attemptParse<T>(response);
+  if (!attempt.ok && attempt.gatewayBody !== undefined && refetch) {
+    for (const delayMs of GATEWAY_BOUNCE_RETRY_DELAYS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      attempt = await attemptParse<T>(await refetch());
+      if (attempt.ok || attempt.gatewayBody === undefined) break;
+    }
+  }
+  if (attempt.ok) return attempt.value;
+  if (attempt.gatewayBody !== undefined) {
+    dispatchGatewayAuth(attempt.gatewayBody);
+    throw new ApiRequestError(
+      `网关拒绝了请求（${attempt.gatewayBody.slice(0, 60)}），请稍后刷新页面`,
+      'GATEWAY_AUTH',
+    );
+  }
+  throw new ApiRequestError('响应不是有效的 JSON', 'BAD_JSON');
+}
+
 // Get the Authorization header value for API calls: "Bearer <session-token>".
+// Behind a unified gateway (fnOS "/app/mibee-nvr") this returns null: the
+// gateway interprets ANY Authorization header as ITS OWN session credential
+// and answers the NVR's bearer token with 200 + "invalid token" (verified
+// live 2026-09-20: identical endpoint — with the header bounces, without it
+// succeeds, because the gateway forwards its own verified NAS identity and
+// the NVR authorizes on that). Query-param auth (?token=) is unaffected —
+// WS/FLV/WHEP players keep using getTokenForUrl().
 export function getAuthHeader(): string | null {
+  if (APP_BASE) return null;
   const token = getToken();
   if (!token) return null;
   return `Bearer ${token}`;
@@ -317,13 +355,14 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
   // Default 30s timeout so a hung backend (e.g. ONVIF SOAP call blocked by a
   // slow/minimal device) cannot leave every loading spinner spinning forever.
   // A caller-supplied signal (e.g. abort on unmount) always takes precedence.
+  const doFetch = (): Promise<Response> => fetch(url, {
+    ...options,
+    headers,
+    signal: options.signal ?? AbortSignal.timeout(30000),
+  });
   let response: Response;
   try {
-    response = await fetch(url, {
-      ...options,
-      headers,
-      signal: options.signal ?? AbortSignal.timeout(30000),
-    });
+    response = await doFetch();
   } catch (e) {
     if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
       throw new ApiRequestError('Request timed out', 'TIMEOUT');
@@ -352,7 +391,7 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
     throw new ApiRequestError(apiErr.error || `HTTP ${response.status}`, apiErr.code);
   }
 
-  return readJson<T>(response);
+  return readJson<T>(response, doFetch);
 }
 
 // Generic API request for blob responses (e.g. file downloads)
@@ -429,13 +468,14 @@ export async function apiHeadHeader(
 export async function login(username: string, password: string, signal?: AbortSignal): Promise<LoginResponse> {
   const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
 
-  const response = await fetch(`${API_BASE}/auth/login`, {
+  const doFetch = (): Promise<Response> => fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: {
       Authorization: authHeader,
     },
     signal,
   });
+  const response = await doFetch();
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Invalid credentials' }));
@@ -446,7 +486,7 @@ export async function login(username: string, password: string, signal?: AbortSi
     throw new Error((errorData as ApiError).error || 'Invalid credentials');
   }
 
-  const data = await readJson<LoginResponse>(response);
+  const data = await readJson<LoginResponse>(response, doFetch);
 
   // Store the signed session token (NOT the password). expires_at drives local
   // expiry so isAuthenticated() can short-circuit without a round-trip.
@@ -480,11 +520,12 @@ export async function tryGatewaySession(): Promise<boolean> {
   // successful storeToken (manual login) and by a fresh window (sessionStorage).
   if (sessionStorage.getItem(LOGOUT_FLAG)) return false;
   try {
-    const response = await fetch(`${API_BASE}/auth/gateway-session`, {
+    const doFetch = (): Promise<Response> => fetch(`${API_BASE}/auth/gateway-session`, {
       signal: AbortSignal.timeout(5000),
     });
+    const response = await doFetch();
     if (!response.ok) return false;
-    const data = await readJson<LoginResponse>(response);
+    const data = await readJson<LoginResponse>(response, doFetch);
     if (!data.token) return false;
     storeToken(data.token, data.expires_at);
     return true;
@@ -496,7 +537,7 @@ export async function tryGatewaySession(): Promise<boolean> {
 // Health check (no auth required)
 export async function healthCheck(signal?: AbortSignal): Promise<HealthResponse> {
   const response = await fetch(`${API_BASE}/health`, { signal });
-  return readJson(response);
+  return readJson(response, () => fetch(`${API_BASE}/health`, { signal }));
 }
 
 // System stats endpoint
@@ -522,16 +563,17 @@ export async function setupApi(
   if (language) body.language = language;
   if (storagePath) body.storage_path = storagePath;
 
-  const response = await fetch(`${API_BASE}/setup`, {
+  const doFetch = (): Promise<Response> => fetch(`${API_BASE}/setup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  const response = await doFetch();
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Setup failed' }));
     throw new Error((errorData as ApiError).error || `HTTP ${response.status}`);
   }
 
-  return readJson(response);
+  return readJson(response, doFetch);
 }

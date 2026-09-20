@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { isAuthenticated, isLocalBypass, healthCheck, tryGatewaySession, clearToken } from '$lib/api';
+  import { isAuthenticated, isLocalBypass, healthCheck, tryGatewaySession } from '$lib/api';
   import { t } from '$lib/i18n';
   import { WifiOff } from 'lucide-svelte';
   // Route loader map — lazy loaded on demand
@@ -56,21 +56,30 @@
     }
   }
 
-  // Unified-gateway plain-text auth rejection (200 + "invalid token" when the
-  // fnOS desktop session expired): one silent reload re-enters through the
-  // desktop SSO and mints a fresh session; a second hit inside 30s means the
-  // desktop session itself is gone — drop to the login page instead of
-  // reload-looping (the raw SyntaxError crash this replaces, field 2026-09-20).
+  // Unified-gateway plain-text auth rejection (200 + "invalid token"). NEVER
+  // clearToken here: behind the fnOS gateway, if this SPA is running at all
+  // the desktop session was alive at entry — later plain-text rejections are
+  // per-request bounces under burst load (observed live 2026-09-20: sibling
+  // requests succeed in the same millisecond; readJson already retried once).
+  // Demoting to the login wall on them flipped Login↔Shell every ~15ms
+  // (234 requests in 12s measured), feeding the very gateway pressure that
+  // produces the bounce. One guarded reload re-enters through desktop SSO; a
+  // truly dead session is stopped by the gateway at the entry HTML, before
+  // this code ever runs, and the stored token expires on its own TTL anyway.
   function handleGatewayAuth() {
+    // Pure 30s window across reloads. Do NOT compare against
+    // performance.timeOrigin to "un-poison" a timestamp the previous document
+    // wrote at unload — after a guarded reload the stored timestamp always
+    // predates the new origin too, so that variant reloads on every event
+    // forever (verified live: 4.3s reload cycle, page never settles). A stale
+    // poisoned key costs at most one boot with the banner until the window
+    // expires; a reload loop costs the page entirely.
     const KEY = 'nvr_gw_auth_reload_at';
     const last = Number(sessionStorage.getItem(KEY) || 0);
     if (Date.now() - last > 30_000) {
       sessionStorage.setItem(KEY, String(Date.now()));
       window.location.reload();
-      return;
     }
-    clearToken();
-    window.location.hash = '#/login';
   }
 
   async function checkSetupRequired() {
