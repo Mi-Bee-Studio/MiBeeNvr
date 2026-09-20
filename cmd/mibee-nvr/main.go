@@ -141,16 +141,27 @@ func main() {
 		}
 	}
 
-	// Load and validate config
+	// Load and validate config. A config that fails to load or validate is
+	// first retried from the ".last-good" snapshot (written after every
+	// successful boot below) — a bad runtime write or hand edit must not
+	// turn into a crash loop (#867: an fnOS container restart-looped twice
+	// on disk_threshold_percent=20 because #737/#738 shipped only the
+	// snapshot half of this recovery point).
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			slog.Error("config", "error", err)
-			os.Exit(1)
+			if restored, rerr := config.RestoreLastGood(*configPath); rerr == nil {
+				slog.Warn("config failed to load — restored last-good snapshot; the rejected file is kept alongside as .bad", "load_error", err)
+				cfg = restored
+			} else {
+				slog.Error("config", "error", err)
+				os.Exit(1)
+			}
+		} else {
+			// Auto-initialize: config file not found, generate defaults
+			slog.Info("config file not found, auto-initializing with defaults", "path", *configPath)
+			cfg = autoInitConfig(*configPath)
 		}
-		// Auto-initialize: config file not found, generate defaults
-		slog.Info("config file not found, auto-initializing with defaults", "path", *configPath)
-		cfg = autoInitConfig(*configPath)
 	}
 
 	// Fix Docker storage path mismatch: if running in Docker but config has
@@ -167,8 +178,13 @@ func main() {
 	}
 
 	if err := config.Validate(cfg); err != nil {
-		slog.Error("config validation", "error", err)
-		os.Exit(1)
+		if restored, rerr := config.RestoreLastGood(*configPath); rerr == nil {
+			slog.Warn("config failed validation — restored last-good snapshot; the rejected file is kept alongside as .bad", "validation_error", err)
+			cfg = restored
+		} else {
+			slog.Error("config validation", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// Snapshot the boot-validated config as the recovery point for

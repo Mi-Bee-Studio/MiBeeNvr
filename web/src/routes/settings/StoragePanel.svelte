@@ -78,14 +78,17 @@
 
   function validateField(field: string, value: string) {
     const val = parseInt(value);
+    // Bounds mirror the server's CleanupConfig.Validate (#867) — the startup
+    // load rejects anything outside them, so a looser client would only set
+    // the user up for a 400 (or, pre-#867, a restart crash loop).
     if (field === 'retention_days') {
-      if (isNaN(val) || val < 0) {
+      if (isNaN(val) || val < 1 || val > 3650) {
         validationErrors['retention_days'] = t('settings.invalidRetentionDays');
       } else {
         delete validationErrors['retention_days'];
       }
     } else if (field === 'disk_threshold') {
-      if (isNaN(val) || val < 0 || val > 100) {
+      if (isNaN(val) || val < 50 || val > 99) {
         validationErrors['disk_threshold'] = t('settings.invalidDiskThreshold');
       } else {
         delete validationErrors['disk_threshold'];
@@ -98,7 +101,7 @@
     if (retentionDays < 1 || retentionDays > 3650) {
       validationErrors['retention_days'] = t('settings.validationRetention');
     }
-    if (diskThresholdPercent < 0 || diskThresholdPercent > 100) {
+    if (diskThresholdPercent < 50 || diskThresholdPercent > 99) {
       validationErrors['disk_threshold'] = t('settings.validationThreshold');
     }
     return Object.keys(validationErrors).length === 0;
@@ -451,8 +454,8 @@
           type="number"
           class="input {validationErrors['disk_threshold'] ? 'border-red-500' : ''}"
           bind:value={diskThresholdPercent}
-          min="0"
-          max="100"
+          min="50"
+          max="99"
           onblur={() => validateField('disk_threshold', String(diskThresholdPercent))}
           oninput={() => { if (validationErrors['disk_threshold']) delete validationErrors['disk_threshold']; }}
         />

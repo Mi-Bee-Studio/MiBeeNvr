@@ -33,3 +33,30 @@ func WriteLastGoodBackup(path string) error {
 	}
 	return nil
 }
+
+// RestoreLastGood completes the recovery point: swaps the ".last-good"
+// snapshot in over a live config that just failed to load or validate. The
+// snapshot must itself load AND validate (recovery must never trade a known
+// failure for a worse state); the rejected file is preserved as
+// "<path>.bad" for inspection before the overwrite. An error return means
+// "no recovery possible" — the caller logs its ORIGINAL error and exits,
+// exactly as before #867 (the snapshot half shipped in #737/#738 without
+// this consumer, so bad runtime writes still crash-looped the fnOS
+// container until someone sed-ed the file by hand).
+func RestoreLastGood(path string) (*Config, error) {
+	lgPath := path + ".last-good"
+	cfg, err := Load(lgPath)
+	if err != nil {
+		return nil, fmt.Errorf("last-good snapshot unavailable: %w", err)
+	}
+	if err := Validate(cfg); err != nil {
+		return nil, fmt.Errorf("last-good snapshot itself is invalid: %w", err)
+	}
+	if bad, err := os.ReadFile(path); err == nil {
+		_ = os.WriteFile(path+".bad", bad, 0o600)
+	}
+	if err := Save(path, cfg); err != nil {
+		return nil, fmt.Errorf("write restored config: %w", err)
+	}
+	return cfg, nil
+}
