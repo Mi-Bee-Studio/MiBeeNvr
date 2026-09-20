@@ -1,7 +1,7 @@
 /**
  * Camera API — CRUD, ONVIF discovery, PTZ, protocols, per-camera merge config
  */
-import { apiRequest, getAuthHeader, clearToken, API_BASE } from './client';
+import { apiRequest, getAuthHeader, clearToken, API_BASE , readJson } from './client';
 
 // --- Types ---
 
@@ -491,7 +491,7 @@ export async function listCameras(signal?: AbortSignal): Promise<Camera[]> {
   }
   const newEtag = resp.headers.get('ETag');
   if (newEtag) fullListEtag = newEtag;
-  const data = (await resp.json()) as Camera[];
+  const data = await readJson<Camera[]>(resp);
   cachedFullList = data;
   return data;
 }
@@ -533,7 +533,7 @@ export async function listCamerasSummary(signal?: AbortSignal): Promise<CameraSu
   }
   const newEtag = resp.headers.get('ETag');
   if (newEtag) summaryEtag = newEtag;
-  const data = (await resp.json()) as CameraSummary[];
+  const data = await readJson<CameraSummary[]>(resp);
   cachedSummary = data;
   return data;
 }

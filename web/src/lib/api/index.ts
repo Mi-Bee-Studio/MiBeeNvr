@@ -20,6 +20,7 @@ export {
   API_BASE,
   apiRequest,
   apiRequestBlob,
+  readJson,
   ApiRequestError,
   setupApi,
 } from './client';

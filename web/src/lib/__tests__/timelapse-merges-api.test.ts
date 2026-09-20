@@ -13,6 +13,7 @@ function mockJSONResponse(body: unknown, ok = true, status = 200): Response {
   return {
     ok,
     status,
+    text: async () => JSON.stringify(body),
     json: async () => body,
     headers: new Headers(),
   } as unknown as Response;

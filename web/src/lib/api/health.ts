@@ -1,7 +1,7 @@
 /**
  * Health API — camera health status, health events, per-camera health
  */
-import { API_BASE, apiRequest } from './client';
+import { API_BASE, apiRequest , readJson } from './client';
 
 // --- Types ---
 
@@ -98,7 +98,7 @@ export async function getHealthCameras(): Promise<HealthCamerasResponse> {
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
-  return response.json();
+  return readJson(response);
 }
 
 // ─── Stability (#469: QualityTracker data — uptime/MTBF/trend per camera) ───
