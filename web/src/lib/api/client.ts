@@ -235,6 +235,38 @@ export function isLocalBypass(): boolean {
   return localBypass;
 }
 
+// Parse an API response body as JSON, tolerating the plain-text auth
+// rejection a fronting unified gateway produces: when the fnOS desktop
+// session expires, the gateway answers API paths with HTTP 200 + body
+// "invalid token" (verified on the fnOS test box, 2026-09-20). A bare
+// response.json() then throws a raw SyntaxError ("Unexpected token 'i'",
+// field-reported) that no caller handles. Read the text first, parse, and on
+// a plain-text body surface a typed error + a global event so App can
+// re-bootstrap (one reload re-enters through the desktop SSO).
+export async function readJson<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const trimmed = text.trim();
+    // Gateway-auth signature: short printable plain text (the NVR itself
+    // always answers JSON — a plain body on an OK status is the proxy
+    // speaking). Binary/control-character junk is just a bad payload.
+    const printable = trimmed.length > 0 && trimmed.length <= 256 &&
+      ![...trimmed].some((ch) => ch < ' ' || ch === '\x7f');
+    if (printable && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      window.dispatchEvent(new CustomEvent('nvr-gateway-auth', {
+        detail: { body: trimmed.slice(0, 120) },
+      }));
+      throw new ApiRequestError(
+        `网关会话已过期，请刷新页面重新进入（${trimmed.slice(0, 60)}）`,
+        'GATEWAY_AUTH',
+      );
+    }
+    throw new ApiRequestError('响应不是有效的 JSON', 'BAD_JSON');
+  }
+}
+
 // Get the Authorization header value for API calls: "Bearer <session-token>".
 export function getAuthHeader(): string | null {
   const token = getToken();
@@ -320,7 +352,7 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
     throw new ApiRequestError(apiErr.error || `HTTP ${response.status}`, apiErr.code);
   }
 
-  return response.json();
+  return readJson<T>(response);
 }
 
 // Generic API request for blob responses (e.g. file downloads)
@@ -414,7 +446,7 @@ export async function login(username: string, password: string, signal?: AbortSi
     throw new Error((errorData as ApiError).error || 'Invalid credentials');
   }
 
-  const data = (await response.json()) as LoginResponse;
+  const data = await readJson<LoginResponse>(response);
 
   // Store the signed session token (NOT the password). expires_at drives local
   // expiry so isAuthenticated() can short-circuit without a round-trip.
@@ -452,7 +484,7 @@ export async function tryGatewaySession(): Promise<boolean> {
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) return false;
-    const data = (await response.json()) as LoginResponse;
+    const data = await readJson<LoginResponse>(response);
     if (!data.token) return false;
     storeToken(data.token, data.expires_at);
     return true;
@@ -464,7 +496,7 @@ export async function tryGatewaySession(): Promise<boolean> {
 // Health check (no auth required)
 export async function healthCheck(signal?: AbortSignal): Promise<HealthResponse> {
   const response = await fetch(`${API_BASE}/health`, { signal });
-  return response.json();
+  return readJson(response);
 }
 
 // System stats endpoint
@@ -501,5 +533,5 @@ export async function setupApi(
     throw new Error((errorData as ApiError).error || `HTTP ${response.status}`);
   }
 
-  return response.json();
+  return readJson(response);
 }

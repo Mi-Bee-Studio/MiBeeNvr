@@ -6,7 +6,13 @@ import { storeToken, getToken, logout, clearToken, tryGatewaySession } from '$li
 // — but an explicit logout must NOT be bounced straight back in.
 
 function fetchOk(body: Record<string, unknown>) {
-  return { ok: true, json: async () => body } as unknown as Response;
+  // readJson reads text() first (gateway plain-text tolerance) — the mock
+  // Response needs both accessors to satisfy the fuller contract.
+  return {
+    ok: true,
+    text: async () => JSON.stringify(body),
+    json: async () => body,
+  } as unknown as Response;
 }
 
 beforeEach(() => {

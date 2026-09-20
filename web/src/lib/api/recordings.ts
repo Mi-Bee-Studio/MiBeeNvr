@@ -1,7 +1,7 @@
 /**
  * Recording API — list, download, frames, stats, archives
  */
-import { apiRequest, apiRequestBlob, apiHeadHeader, getAuthHeader, API_BASE, ApiRequestError } from './client';
+import { apiRequest, apiRequestBlob, apiHeadHeader, getAuthHeader, API_BASE, ApiRequestError , readJson } from './client';
 import { fetchFrameBatch, type FrameBatch } from '$lib/multipart';
 
 // --- Types ---
@@ -443,7 +443,7 @@ export async function batchMergeTimelapse(params: {
     const errorData = await res.json().catch(() => ({ error: 'Failed to batch merge' }));
     throw new ApiRequestError(errorData.error || `HTTP ${res.status}`, errorData.code);
   }
-  return res.json();
+  return readJson(res);
 }
 export function subscribeTimelapseMergeProgress(
   cameraId: string,

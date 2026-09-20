@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { isAuthenticated, isLocalBypass, healthCheck, tryGatewaySession } from '$lib/api';
+  import { isAuthenticated, isLocalBypass, healthCheck, tryGatewaySession, clearToken } from '$lib/api';
   import { t } from '$lib/i18n';
   import { WifiOff } from 'lucide-svelte';
   // Route loader map — lazy loaded on demand
@@ -54,6 +54,23 @@
     } else {
       handleOffline();
     }
+  }
+
+  // Unified-gateway plain-text auth rejection (200 + "invalid token" when the
+  // fnOS desktop session expired): one silent reload re-enters through the
+  // desktop SSO and mints a fresh session; a second hit inside 30s means the
+  // desktop session itself is gone — drop to the login page instead of
+  // reload-looping (the raw SyntaxError crash this replaces, field 2026-09-20).
+  function handleGatewayAuth() {
+    const KEY = 'nvr_gw_auth_reload_at';
+    const last = Number(sessionStorage.getItem(KEY) || 0);
+    if (Date.now() - last > 30_000) {
+      sessionStorage.setItem(KEY, String(Date.now()));
+      window.location.reload();
+      return;
+    }
+    clearToken();
+    window.location.hash = '#/login';
   }
 
   async function checkSetupRequired() {
@@ -264,6 +281,7 @@ function parseRoute(hash: string) {
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
     window.addEventListener('nvr-api-offline', handleApiOffline);
+    window.addEventListener('nvr-gateway-auth', handleGatewayAuth);
 
     return () => {
       window.removeEventListener('hashchange', updateRoute);
@@ -271,6 +289,7 @@ function parseRoute(hash: string) {
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('nvr-api-offline', handleApiOffline);
+      window.removeEventListener('nvr-gateway-auth', handleGatewayAuth);
       window.removeEventListener('online', handleOnline);
       if (onlineBannerTimer) clearTimeout(onlineBannerTimer);
     };
