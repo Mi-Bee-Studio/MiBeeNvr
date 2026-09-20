@@ -17,7 +17,13 @@ set +e
 
 CONTAINER="mibee-nvr"
 APP_VERSION="${TRIM_APPVER:-0.11.0}"
-IMAGE="mibee-nvr:${APP_VERSION}"
+# Registry/local tag of the image this package ships. build.sh bakes the real
+# value here at pack time (s/^NVR_IMAGE_TAG=/); stable builds bake the plain
+# version (== APP_VERSION), prerelease builds bake the exact semver tag (e.g.
+# 0.13.0-preview.1) while the fnOS surface label (APP_VERSION) stays X.Y.Z —
+# installs must pull/load the real preview image, never a future stable.
+NVR_IMAGE_TAG="${APP_VERSION}"
+IMAGE="mibee-nvr:${NVR_IMAGE_TAG}"
 LOG="${TRIM_TEMP_LOGFILE:-${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log}"
 PORT="${wizard_port:-${TRIM_SERVICE_PORT:-9090}}"
 DATA_DIR="${TRIM_PKGVAR:-/var/lib/mibee-nvr}/data"
@@ -113,14 +119,14 @@ ensure_image() {
       echo "[mibee-nvr] Both ghcr.io and the ACR mirror are unreachable. Check the network and retry start." > "$LOG"
       return 1
     }
-    local remote="${reg}:${APP_VERSION}"
+    local remote="${reg}:${NVR_IMAGE_TAG}"
     log "online mode: pulling ${remote}"
     # ACR manual pushes sometimes carry a 'v' prefix (v0.11.0) while CI mirrors
     # use the bare version (0.11.0). Try bare first, fall back to v-prefixed.
     if ! docker pull "$remote" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1; then
       if [ "$reg" = "$ACR_PREFIX" ]; then
-        log "bare tag ${APP_VERSION} missing on ACR, retrying v${APP_VERSION}"
-        remote="${ACR_PREFIX}:v${APP_VERSION}"
+        log "bare tag ${NVR_IMAGE_TAG} missing on ACR, retrying v${NVR_IMAGE_TAG}"
+        remote="${ACR_PREFIX}:v${NVR_IMAGE_TAG}"
         docker pull "$remote" >> "${TRIM_PKGVAR:-/tmp}/mibee-nvr-main.log" 2>&1 || return 1
       else
         return 1

@@ -20,9 +20,13 @@
 #   ./deploy/fnos/build.sh <version>      # e.g. ./deploy/fnos/build.sh 0.10.1
 #   VERSION=0.10.1 ./deploy/fnos/build.sh
 #
-# The <version> MUST be X.Y.Z (fnOS requirement) and is written into both
-# manifest.version and the docker image tag, keeping them in lockstep. A
-# mismatch causes a misleading "manifest unknown" pull error on the NAS.
+# The <version> MUST be X.Y.Z (fnOS requirement) and is written into
+# manifest.version (the surface label). The image tag defaults to the same
+# value — keeping manifest and image in lockstep, since a mismatch causes a
+# misleading "manifest unknown" pull error on the NAS. Prerelease builds
+# override the tag with IMAGE_TAG=<exact semver> (e.g. 0.13.0-preview.1):
+# the surface label stays X.Y.Z while compose + cmd/main load/pull the real
+# preview image (baked into cmd/main's NVR_IMAGE_TAG), never a future stable.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +44,10 @@ VERSION="${1:-${VERSION:-}}"
 FNPACK="${FNPACK_BIN:-fnpack}"
 # Arches to bundle. Override with FNOS_ARCHES="amd64" for a single-arch fpk.
 ARCHES="${FNOS_ARCHES:-amd64 arm64}"
+# Image tag to bundle/pull, defaults to VERSION (stable lockstep). Prerelease
+# builds set IMAGE_TAG=<semver prerelease> and keep VERSION as the X.Y.Z
+# surface label — see the header comment.
+IMAGE_TAG="${IMAGE_TAG:-$VERSION}"
 
 if [ -z "$VERSION" ]; then
   echo "ERROR: version required (X.Y.Z). Usage: $0 <version>" >&2
@@ -73,18 +81,18 @@ mkdir -p "$IMAGES_DIR"
 # the online package never accidentally bundles an old tar.
 rm -f "$IMAGES_DIR"/mibee-nvr-*.tar
 
-UNIFIED_TAG="mibee-nvr:${VERSION}"
+UNIFIED_TAG="mibee-nvr:${IMAGE_TAG}"
 if [ "$ONLINE" -eq 1 ]; then
   echo "Online mode: skipping bundled images (cmd/main pulls at install time)."
 else
 for arch in $ARCHES; do
-  src="mibee-nvr:${VERSION}-${arch}"
+  src="mibee-nvr:${IMAGE_TAG}-${arch}"
   out="$IMAGES_DIR/mibee-nvr-${arch}.tar"
   if ! docker image inspect "$src" >/dev/null 2>&1; then
     echo "ERROR: image '$src' not found locally." >&2
     echo "       Build it first, e.g.:" >&2
     echo "         docker buildx build --platform linux/${arch} \\" >&2
-    echo "           --build-arg VERSION=${VERSION} -t ${src} --load \\" >&2
+    echo "           --build-arg VERSION=${IMAGE_TAG} -t ${src} --load \\" >&2
     echo "           -f deploy/docker/Dockerfile ." >&2
     exit 1
   fi
@@ -97,11 +105,18 @@ for arch in $ARCHES; do
 done
 fi
 
-# ---- 2. Bake the version into manifest + compose ---------------------------
+# ---- 2. Bake the version into manifest, cmd/main and compose ----------------
 # Inject the version into the manifest (idempotent).
 tmp_manifest="$(mktemp)"
 sed -E "s/^version=.*/version=${VERSION}/" "$SCRIPT_DIR/manifest" > "$tmp_manifest"
 mv "$tmp_manifest" "$SCRIPT_DIR/manifest"
+
+# Bake the image tag into cmd/main (idempotent — matches the assignment line
+# only). cmd/main's own default (APP_VERSION) stays correct for stable builds
+# even if this step is skipped.
+tmp_main="$(mktemp)"
+sed -E "s/^NVR_IMAGE_TAG=.*/NVR_IMAGE_TAG=\"${IMAGE_TAG}\"/" "$SCRIPT_DIR/cmd/main" > "$tmp_main"
+mv "$tmp_main" "$SCRIPT_DIR/cmd/main"
 
 # Resolve ${VERSION} in docker-compose.yaml. fnpack does NOT substitute it
 # (fnOS does not inject a VERSION env at install time), so the placeholder must
@@ -113,7 +128,7 @@ compose_file="$SCRIPT_DIR/app/docker/docker-compose.yaml"
 # app/, so a sibling .bak would leak into the .fpk. Restore from temp on exit.
 compose_bak="$(mktemp)"
 cp "$compose_file" "$compose_bak"
-sed -E "s#\\\$\\{VERSION\\}#${VERSION}#g" "$compose_file" > "$compose_file.tmp"
+sed -E "s#\\\$\\{VERSION\\}#${IMAGE_TAG}#g" "$compose_file" > "$compose_file.tmp"
 mv "$compose_file.tmp" "$compose_file"
 restore_compose() { cp "$compose_bak" "$compose_file" && rm -f "$compose_bak"; }
 trap restore_compose EXIT

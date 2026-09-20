@@ -282,9 +282,9 @@ jobs:
     # workflow_dispatch github.ref_name is a branch name, which would hard-fail
     # that check. The offline fpk is only meaningful on a real tag. Prerelease
     # tags (v0.13.0-preview.1 was the first) still package: the resolve step
-    # maps them to a Z-marker test version (an fnOS manifest.version cannot
-    # carry a semver prerelease suffix); the in-app version string stays honest
-    # via the build-arg below.
+    # keeps the fnOS surface label at the plain X.Y.Z base and overrides the
+    # image tag with the exact semver (build.sh IMAGE_TAG → cmd/main +
+    # compose), so installs load/pull the real preview image.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -300,24 +300,18 @@ jobs:
           echo "FNPACK_BIN=$RUNNER_TEMP/fnpack" >> "$GITHUB_ENV"
 
       - name: Resolve fpk version (strip leading v)
-        # manifest.version + the bundled image tag must be X.Y.Z (no 'v') to
-        # match build.sh's gate and the mibee-nvr:${VERSION} compose reference.
-        # The in-app version string INSIDE the image keeps the 'v' via the
-        # build-arg below, matching the pushed registry image.
-        # Prerelease tags: fnOS cannot carry the suffix, so map to a Z-marker
-        # test version per the studio's Z-only test-version rule —
-        # v0.13.0-preview.1 → 0.13.91. Only the fnOS ledger/compose tag is
-        # mapped; several previews of one X.Y reuse .91 (a re-tagged re-run
-        # replaces the package — bump the constant if that ever matters).
+        # manifest.version — the fnOS surface label — must be X.Y.Z (no 'v')
+        # to match build.sh's gate. The in-app version string INSIDE the image
+        # keeps the 'v' via the build-arg below, matching the pushed registry
+        # image. Prerelease tags: the surface label stays the plain X.Y.Z base
+        # (0.13.0) while image_tag carries the exact semver (0.13.0-preview.1)
+        # — compose and cmd/main load/pull the real preview image, never a
+        # future stable of the same X.Y.Z.
         id: ver
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          if [[ "$VER" == *-* ]]; then
-            BASE="${VER%%-*}"
-            echo "version=${BASE%.*}.91" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${VER}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "version=${VER%%-*}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${VER}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -334,7 +328,7 @@ jobs:
           platforms: linux/amd64
           push: false
           load: true
-          tags: mibee-nvr:${{ steps.ver.outputs.version }}-amd64
+          tags: mibee-nvr:${{ steps.ver.outputs.image_tag }}-amd64
           build-args: |
             VERSION=${{ github.ref_name }}
           cache-from: type=gha
@@ -348,14 +342,14 @@ jobs:
           platforms: linux/arm64
           push: false
           load: true
-          tags: mibee-nvr:${{ steps.ver.outputs.version }}-arm64
+          tags: mibee-nvr:${{ steps.ver.outputs.image_tag }}-arm64
           build-args: |
             VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Build offline .fpk
-        run: ./deploy/fnos/build.sh ${{ steps.ver.outputs.version }}
+        run: IMAGE_TAG=${{ steps.ver.outputs.image_tag }} ./deploy/fnos/build.sh ${{ steps.ver.outputs.version }}
 
       - name: Attach .fpk to the Release
         uses: softprops/action-gh-release@v2
@@ -432,12 +426,11 @@ jobs:
   # manual mirror with ./deploy/fnos/build.sh --online <ver> if ever needed.
   fnos-fpk-online:
     needs: mirror-to-acr
-    # Prerelease tags stay skipped here (unlike the offline fnos-fpk, which
-    # maps to a Z-marker test version): the online package pulls
-    # mibee-nvr:${VERSION} from a registry at install time, and only the exact
-    # semver tag (e.g. 0.13.0-preview.1) exists there — a mapped 0.13.91
-    # pull would 404.
-    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    # Prerelease tags package too: cmd/main's baked NVR_IMAGE_TAG pulls the
+    # exact semver tag (0.13.0-preview.1), which mirror-to-acr guarantees to
+    # exist on BOTH registries for the exact-tag mirror. The surface label
+    # (manifest.version) stays the plain X.Y.Z base, same as the offline fpk.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -450,11 +443,16 @@ jobs:
           echo "FNPACK_BIN=$RUNNER_TEMP/fnpack" >> "$GITHUB_ENV"
 
       - name: Resolve fpk version (strip leading v)
+        # Same surface/image-tag split as the offline fnos-fpk: version = X.Y.Z
+        # base (surface label), image_tag = exact semver (pull target).
         id: ver
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          echo "version=${VER%%-*}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${VER}" >> "$GITHUB_OUTPUT"
 
       - name: Build online .fpk
-        run: ./deploy/fnos/build.sh --online ${{ steps.ver.outputs.version }}
+        run: IMAGE_TAG=${{ steps.ver.outputs.image_tag }} ./deploy/fnos/build.sh --online ${{ steps.ver.outputs.version }}
 
       - name: Attach online .fpk to the Release
         uses: softprops/action-gh-release@v2
