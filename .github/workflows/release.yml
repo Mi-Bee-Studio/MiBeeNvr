@@ -473,7 +473,11 @@ jobs:
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          git push "https://mickeybee:${GITEE_TOKEN}@gitee.com/Mi-Bee-Studio/MiBeeNvr.git" \
+          # --force: a mirror reflects the source. Re-pushing a MOVED tag (e.g.
+          # v0.13.0-preview.1 was re-pointed after a pipeline fix) is always a
+          # non-fast-forward for tag refs — "already exists" without --force
+          # (first seen on the v0.13.0-preview.1 re-tag).
+          git push --force "https://mickeybee:${GITEE_TOKEN}@gitee.com/Mi-Bee-Studio/MiBeeNvr.git" \
             "refs/tags/${{ github.ref_name }}"
 
       - name: Create the Gitee release and prune old versions
