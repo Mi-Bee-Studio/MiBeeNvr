@@ -1967,5 +1967,9 @@
   "cameras.motionSubEvents": "events",
   "cameras.motionSubLastEvent": "last event",
   "cameras.motionSubLastRaw": "last raw",
-  "cameras.motionSubError": "last error"
+  "cameras.motionSubError": "last error",
+  "settings.recordingDefault": "Record by default",
+  "settings.recordingDefaultOn": "Recording (writes storage)",
+  "settings.recordingDefaultOff": "Live-only (no storage writes)",
+  "settings.recordingDefaultHint": "Cameras without an explicit recording toggle (newly added and GB28181 auto-enrolled channels) inherit this default; explicitly set cameras are unaffected. On save, affected running cameras restart automatically to apply it."
 }

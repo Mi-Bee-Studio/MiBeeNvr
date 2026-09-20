@@ -101,8 +101,16 @@ export interface VisionSettingsConfig {
   instances?: VisionInstanceConfig[];
 }
 
+/** The `recording` settings section — global recording gate default. */
+export interface RecordingSettingsConfig {
+  /** Cameras without an explicit recording_enabled inherit this
+ *  (new + auto-enrolled channels). Absent on writes = unchanged. */
+  default_enabled?: boolean;
+}
+
 export interface SettingsConfig {
   cleanup: CleanupConfig;
+  recording?: RecordingSettingsConfig;
   webdav: WebDAVConfig;
   streaming?: StreamingConfig;
   mibeevision?: MiBeeVisionConfig;

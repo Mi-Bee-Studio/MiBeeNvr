@@ -282,7 +282,7 @@ func (cm *CameraManager) buildGB28181Recorder(cam config.CameraConfig, segDur ti
 		DB:            cm.db,
 		Metrics:       cm.metrics,
 		EventBus:      cm.eventBus,
-		RecordEnabled: cam.RecordingEnabled == nil || *cam.RecordingEnabled,
+		RecordEnabled: cm.cfg.RecordingGate(cam.RecordingEnabled),
 		AudioEnabled:  cam.AudioEnabled,
 	}, nil)
 }

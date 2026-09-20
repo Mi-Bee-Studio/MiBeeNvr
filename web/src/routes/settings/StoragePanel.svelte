@@ -20,6 +20,9 @@
   let storageCandidates = $state<StorageCandidatesResponse | null>(null);
   let storageRestartRequired = $state(false);
 
+  // Form state — global recording gate default (nil cameras inherit it).
+  let recordingDefault = $state(true);
+
   // Form state — cleanup
   let retentionDays = $state(30);
   let diskThresholdPercent = $state(90);
@@ -47,7 +50,7 @@
   let isDirty = $derived.by(() => {
     if (loading) return false;
     const current = JSON.stringify({
-      storageRoot, retentionDays, diskThresholdPercent, motionAwareCleanup, webdavEnabled, webdavReadWrite,
+      storageRoot, recordingDefault, retentionDays, diskThresholdPercent, motionAwareCleanup, webdavEnabled, webdavReadWrite,
     });
     return current !== originalSnapshot;
   });
@@ -65,7 +68,7 @@
 
   function captureSnapshot() {
     originalSnapshot = JSON.stringify({
-      storageRoot, retentionDays, diskThresholdPercent, motionAwareCleanup, webdavEnabled, webdavReadWrite,
+      storageRoot, recordingDefault, retentionDays, diskThresholdPercent, motionAwareCleanup, webdavEnabled, webdavReadWrite,
     });
     originalRetentionDays = retentionDays;
     originalStorageRoot = storageRoot;
@@ -106,6 +109,7 @@
     error = '';
     try {
       const settings = await getSettings();
+      recordingDefault = settings.recording?.default_enabled ?? true;
       retentionDays = settings.cleanup.retention_days;
       diskThresholdPercent = settings.cleanup.disk_threshold_percent;
       motionAwareCleanup = settings.cleanup.motion_aware_disk_cleanup ?? true;
@@ -133,6 +137,12 @@
       // single payload. We only send the fields this panel owns; timezone is
       // omitted (server preserves the existing value).
       const payload: SettingsConfig = {
+        recording: {
+          // Global gate default for cameras without an explicit
+          // recording_enabled. Hot-applied server-side (running cameras
+          // that inherit it are recycled).
+          default_enabled: recordingDefault,
+        },
         // Recording root (#395): partial-PUT only when this panel actually
         // changed it — the backend applies it on the NEXT start and answers
         // restart_required=true, which we surface as a toast below.
@@ -178,6 +188,10 @@
 
   function resetForm() {
     // Restore from the last captured snapshot.
+    try {
+      const snap = JSON.parse(originalSnapshot);
+      if (typeof snap.recordingDefault === 'boolean') recordingDefault = snap.recordingDefault;
+    } catch { /* ignore */ }
     retentionDays = originalRetentionDays;
     storageRoot = originalStorageRoot;
     webdavEnabled = originalWebdavEnabled;
@@ -459,6 +473,17 @@
         <span class="text-sm th-text-secondary">{motionAwareCleanup ? t('settings.motionAwareCleanupOn') : t('settings.motionAwareCleanupOff')}</span>
       </div>
       <p class="text-xs th-text-muted mt-1">{t('settings.motionAwareCleanupHint')}</p>
+    </div>
+    <!-- Global recording gate default: cameras without an explicit
+         recording_enabled (new adds + GB28181 auto-enrolled channels)
+         inherit this. Off = pure-live deployment. -->
+    <div class="mt-6">
+      <span class="input-label">{t('settings.recordingDefault')}</span>
+      <div class="flex items-center gap-3 mt-2">
+        <Toggle checked={recordingDefault} onChange={(v) => { recordingDefault = v; }} label={t('settings.recordingDefault')} />
+        <span class="text-sm th-text-secondary">{recordingDefault ? t('settings.recordingDefaultOn') : t('settings.recordingDefaultOff')}</span>
+      </div>
+      <p class="text-xs th-text-muted mt-1">{t('settings.recordingDefaultHint')}</p>
     </div>
     <!-- check_interval removed (#153): backend default (1h) is optimal. -->
   </SettingsCard>

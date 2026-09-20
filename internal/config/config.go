@@ -13,6 +13,7 @@ type Config struct {
 	Server        ServerConfig        `yaml:"server"`
 	Storage       StorageConfig       `yaml:"storage"`
 	Cameras       []CameraConfig      `yaml:"cameras"`
+	Recording     RecordingConfig     `yaml:"recording"`
 	Cleanup       CleanupConfig       `yaml:"cleanup"`
 	Merge         MergeConfig         `yaml:"merge"`
 	Memory        MemoryConfig        `yaml:"memory"`

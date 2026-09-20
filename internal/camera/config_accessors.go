@@ -428,7 +428,55 @@ func (cm *CameraManager) GB28181RecordingWanted(deviceID, channelID string) bool
 	if cam == nil {
 		return false
 	}
-	return cam.RecordingEnabled == nil || *cam.RecordingEnabled
+	return cm.cfg.RecordingGate(cam.RecordingEnabled)
+}
+
+// ApplyRecordingDefault applies a changed global recording.default_enabled:
+// cameras without an explicit recording_enabled inherit the new value, and
+// every RUNNING camera whose effective gate actually flipped gets a recorder
+// stop/start (the writeFrames loop reads the gate once at Start — the same
+// semantics as the per-camera toggle in UpdateCamera). Cameras the user
+// manually stopped are left alone; they pick the gate up on their next start.
+// Returns the restarted camera IDs. Callers own concurrency (run it detached —
+// a fleet-wide restart can take a while).
+func (cm *CameraManager) ApplyRecordingDefault(enabled bool) []string {
+	statuses := cm.Status()
+	var restarted []string
+	for _, id := range cm.camerasInheritingRecordingDefault() {
+		switch statuses[id] {
+		case model.StatusRecording, model.StatusReconnecting:
+			// Running: recycle so the rebuilt recorder reads the new gate.
+		default:
+			continue // stopped/error by user intent — leave for the next start
+		}
+		if err := cm.StopCamera(context.Background(), id); err != nil {
+			slog.Warn("recording default change: stop failed", "camera_id", id, "error", err)
+			continue
+		}
+		if err := cm.StartCamera(context.Background(), id); err != nil {
+			slog.Warn("recording default change: start failed", "camera_id", id, "error", err)
+			continue
+		}
+		restarted = append(restarted, id)
+	}
+	if len(restarted) > 0 {
+		slog.Info("recording default change applied", "default_enabled", enabled, "restarted", len(restarted))
+	}
+	return restarted
+}
+
+// camerasInheritingRecordingDefault lists camera IDs that have no explicit
+// recording_enabled and therefore follow recording.default_enabled.
+func (cm *CameraManager) camerasInheritingRecordingDefault() []string {
+	cm.configMu.Lock()
+	defer cm.configMu.Unlock()
+	var inherited []string
+	for i := range cm.cfg.Cameras {
+		if cm.cfg.Cameras[i].RecordingEnabled == nil {
+			inherited = append(inherited, cm.cfg.Cameras[i].ID)
+		}
+	}
+	return inherited
 }
 
 // GB28181SubChannelID returns the persisted sub-channel code for the camera

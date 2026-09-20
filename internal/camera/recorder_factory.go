@@ -173,7 +173,7 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	// with IDR frames (e.g. Xiaomi H.264), produces frame files without SPS/PPS
 	// that the merger later rejects as "frames missing SPS" (issue #90).
 	if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
-		recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+		recordingEnabled := cm.cfg.RecordingGate(cam.RecordingEnabled)
 		// Runtime override: an ONVIF camera with empty encoding may have resolved
 		// to rtsp_keyframe statically but actually be a JPEG device. Use a frame
 		// poller instead.
@@ -201,7 +201,7 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 		// reconnect of a disconnect-heavy JPEG camera spawn a poller that
 		// spammed ~150s/6-frame timelapse fragments into the recordings list
 		// (206 segments in 9h observed on production).
-		recordingEnabled := cam.RecordingEnabled == nil || *cam.RecordingEnabled
+		recordingEnabled := cm.cfg.RecordingGate(cam.RecordingEnabled)
 		if !recordingEnabled {
 			if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
 				logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
