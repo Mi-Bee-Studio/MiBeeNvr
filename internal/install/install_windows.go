@@ -209,6 +209,9 @@ func RefreshMenuBarHelper() error { return nil }
 // from; a tray quit is a plain process exit and stays down.
 func UnloadDesktopAgents() {}
 
+// DetachForUninstall is darwin-only process-group plumbing.
+func DetachForUninstall() {}
+
 func portInUse(addr string) bool {
 	c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -184,6 +185,14 @@ func UnloadDesktopAgents() {
 	for _, l := range []string{label, barLabel} {
 		_, _ = runLaunchctl("bootout", "gui/"+uid+"/"+l)
 	}
+}
+
+// DetachForUninstall moves the uninstaller into its own session so the very
+// teardown it triggers (unload → NVR SIGTERM → UnloadDesktopAgents boots out
+// the bar job) cannot kill the uninstaller itself when it was spawned from a
+// launchd-managed parent (menu-bar helper etc.). Best-effort.
+func DetachForUninstall() {
+	_, _ = syscall.Setsid()
 }
 
 // stripQuarantine best-effort removes com.apple.quarantine from path.

@@ -25,7 +25,6 @@ final class Delegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "修改密码…", action: #selector(changePassword(_:)), keyEquivalent: "p")
         menu.addItem(withTitle: "监听地址…", action: #selector(changeListen(_:)), keyEquivalent: "l")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "卸载 MiBee NVR…", action: #selector(uninstallNVR(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "退出 MiBee NVR", action: #selector(shutdownNVR(_:)), keyEquivalent: "q")
         for mi in menu.items { mi.target = self }
         item.menu = menu
@@ -119,31 +118,6 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // 202 = 已受理：NVR 随即换绑并自动重编译/重启本助手（新地址生效），
         // 弹窗可能被助手重启打断——那本身就是切换成功的信号。
         _ = postSync(req)
-    }
-
-    @objc func uninstallNVR(_ sender: Any?) {
-        presentOnMain { self.uninstallDialog() }
-    }
-
-    private func uninstallDialog() {
-        let alert = NSAlert()
-        alert.messageText = "卸载 MiBee NVR？"
-        alert.informativeText = "将移除程序与 LaunchAgent（含本菜单栏图标）。录像和配置默认保留（彻底清除请在终端使用 mibee-nvr uninstall --purge）。"
-        alert.addButton(withTitle: "卸载")
-        alert.addButton(withTitle: "取消")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let exe = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Applications/MiBeeNVR/mibee-nvr")
-        guard FileManager.default.fileExists(atPath: exe.path) else {
-            self.notify("未找到已安装的程序：\(exe.path)", style: .warning)
-            return
-        }
-        // 卸载会 unload 本助手的 LaunchAgent——先派发再退出，避免僵尸图标。
-        if let p = try? Process.run(exe, arguments: ["uninstall"]) {
-            _ = p
-        }
-        exit(0)
     }
 
     @objc func shutdownNVR(_ sender: Any?) {
