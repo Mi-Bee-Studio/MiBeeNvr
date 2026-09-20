@@ -57,6 +57,10 @@ func webUIURL(cfgPath string) string {
 func cmdUninstall() {
 	install.EnsureOwnedConsole() // GUI-subsystem: the ARP uninstall path has no terminal to attach to
 	install.SetupConsole()
+	// darwin: the teardown this triggers (unload → NVR stop → agent bootout)
+	// would kill an uninstaller still inside a launchd job's process group —
+	// detach first so removal always runs to completion.
+	install.DetachForUninstall()
 	purge := false
 	for _, a := range os.Args[2:] {
 		if a == "--purge" {

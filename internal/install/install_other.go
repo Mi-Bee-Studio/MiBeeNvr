@@ -42,6 +42,9 @@ func RefreshMenuBarHelper() error { return nil }
 // whose restart policy must survive a deliberate stop.
 func UnloadDesktopAgents() {}
 
+// DetachForUninstall is darwin-only process-group plumbing.
+func DetachForUninstall() {}
+
 func unsupported() error {
 	return fmt.Errorf("install: 桌面安装仅支持 windows/darwin；Linux 服务器请使用 systemd（make install-service / uninstall-service）")
 }
