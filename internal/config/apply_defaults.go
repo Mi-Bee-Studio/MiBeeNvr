@@ -669,4 +669,8 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Update.Repo == "" {
 		cfg.Update.Repo = "Mi-Bee-Studio/MiBeeNvr"
 	}
+
+	// P2P device-role defaults: peer_id anchors on the install-stable
+	// Server.DeviceID (populated by ensureDeviceIdentity during Load).
+	cfg.P2P.applyDefaults(cfg.Server.DeviceID)
 }

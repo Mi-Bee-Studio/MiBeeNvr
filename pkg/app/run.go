@@ -76,7 +76,19 @@ func RunFree(cfg *config.Config, configPath string) (*App, error) {
 		return nil, err
 	}
 
-	// Phase 4: loopback diagnostics (pprof) — registered last, stopped first.
+	// Phase 4: P2P device-role agent (external access tunnel) — registered
+	// after the HTTP server so the API is up before the tunnel becomes
+	// reachable; stopped before it on shutdown. Off unless p2p.enabled, and
+	// failures never abort startup (remote access is an add-on, not a
+	// dependency of the recorder).
+	if deps.cfg.P2P.Enabled {
+		if err := registerP2PService(a, deps); err != nil {
+			cleanup()
+			return nil, err
+		}
+	}
+
+	// Phase 5: loopback diagnostics (pprof) — registered last, stopped first.
 	// Always on: during an incident (e.g. the 2026-08-17 OOM post-mortem) a
 	// flag-gated listener is exactly as useless as an absent one. Remote
 	// (non-loopback) exposure is separately gated by

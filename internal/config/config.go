@@ -43,6 +43,7 @@ type Config struct {
 	MetricsAuth    MetricsAuthConfig    `yaml:"metrics_auth"`
 	Security       SecurityConfig       `yaml:"security"`
 	Update         UpdateConfig         `yaml:"update"`
+	P2P            P2PConfig            `yaml:"p2p"`
 	APIKeys        []APIKeyConfig       `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
 	Version        string               `yaml:"version"`
 	Timezone       string               `yaml:"timezone"` // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
