@@ -172,6 +172,12 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 		m.logger.Info("client tunnel up", "service", m.cfg.ServiceName)
 	}
 
+	// 会话回收观测（SDK e83ad7e+）：远端 session_close 与本地 abandon
+	// （ice_restart_failed）两条路径都在资源释放后触发。
+	sess.OnSessionClose = func(sessionID, reason string) {
+		m.logger.Info("p2p session closed", "session_id", sessionID, "reason", reason)
+	}
+
 	// 服务端错误消息：鉴权类（token 失效/jti 重放）无法自愈 → 触发换新
 	// token 重拨；其余交给断线看门狗。
 	sess.OnError = func(code, msg string) {

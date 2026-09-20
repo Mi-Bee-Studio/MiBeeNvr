@@ -6,6 +6,8 @@ github.com/Mi-Bee-Studio/MiBeeP2PServer/sdk/go v0.0.0-20260920051840-0bb9dc8d873
 github.com/Mi-Bee-Studio/MiBeeP2PServer/sdk/go v0.0.0-20260920051840-0bb9dc8d873c/go.mod h1:rx9pksE+ngE7BupQ7PW2uPLDvqHH+uAfoFBbU322g14=
 github.com/Mi-Bee-Studio/MiBeeP2PServer/sdk/go v0.0.0-20260920130648-7b0bac4957bb h1:VmgxTSwkQBQjMqy04pyVKxppTsrO67Igfkmv2mR3kws=
 github.com/Mi-Bee-Studio/MiBeeP2PServer/sdk/go v0.0.0-20260920130648-7b0bac4957bb/go.mod h1:rx9pksE+ngE7BupQ7PW2uPLDvqHH+uAfoFBbU322g14=
+github.com/Mi-Bee-Studio/MiBeeP2PServer/sdk/go v0.0.0-20260920150545-e83ad7e807fa h1:Yhepk2NIyZ9eID5pg8sLjScjNQE0BzVlIUPCoyqFN98=
+github.com/Mi-Bee-Studio/MiBeeP2PServer/sdk/go v0.0.0-20260920150545-e83ad7e807fa/go.mod h1:rx9pksE+ngE7BupQ7PW2uPLDvqHH+uAfoFBbU322g14=
 github.com/abema/go-mp4 v1.7.3 h1:Aap+2vZl5KQrSGD9quYhLu4pWGXelFVUeFCa8IJaRXY=
 github.com/abema/go-mp4 v1.7.3/go.mod h1:vPl9t5ZK7K0x68jh12/+ECWBCXoWuIDtNgPtU2f04ws=
 github.com/asticode/go-astikit v0.59.0 h1:tjbwDym+MTSxqkAhJoHRZmHMXK6Jv4vGx+97FptKH6k=
