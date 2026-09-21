@@ -369,6 +369,10 @@ func validateConfigDetails(cfg *Config) error {
 	if cfg.Storage.PreallocMaxBytes > 0 && cfg.Storage.PreallocMinBytes > cfg.Storage.PreallocMaxBytes {
 		return fmt.Errorf("storage.prealloc_min_bytes %d exceeds prealloc_max_bytes %d", cfg.Storage.PreallocMinBytes, cfg.Storage.PreallocMaxBytes)
 	}
+	// Remote object-storage offload (issue #874). No-op when disabled.
+	if err := validateRemoteStorage(cfg.Storage.Remote); err != nil {
+		return err
+	}
 	// Per-camera segment_duration overrides (#758): must parse positive.
 	for _, cam := range cfg.Cameras {
 		if cam.SegmentDuration == "" {

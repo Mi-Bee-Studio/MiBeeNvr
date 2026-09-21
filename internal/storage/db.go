@@ -262,8 +262,13 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // crowding the ghost-row sweep). Init rewrites them to the terminal
 // 'sublayer' status; the UPDATE is idempotent (second boot touches 0 rows).
 //
+// v40: added offload_outbox (issue #874 batch 1) — the segment→object state
+// machine for S3-compatible object-storage offload
+// (pending → uploading → uploaded → evicted, terminal skipped). Pure addition;
+// no column changes to existing tables.
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "39"
+const currentSchemaVersion = "40"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -461,7 +466,24 @@ func (d *DB) Init(ctx context.Context) error {
         position INTEGER NOT NULL DEFAULT 0
     );`
 
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL, camGroupsSQL} {
+	offloadOutboxSQL := `CREATE TABLE IF NOT EXISTS offload_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recording_id TEXT NOT NULL UNIQUE,
+        camera_id TEXT NOT NULL,
+        object_key TEXT NOT NULL UNIQUE,
+        local_path TEXT NOT NULL,
+        file_size INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        etag TEXT DEFAULT '',
+        uploaded_size INTEGER NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        uploaded_at TEXT DEFAULT '',
+        evicted_at TEXT DEFAULT ''
+    );`
+
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL, camGroupsSQL, offloadOutboxSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
@@ -510,6 +532,9 @@ func (d *DB) Init(ctx context.Context) error {
 		"CREATE INDEX IF NOT EXISTS idx_timelapse_merges_status ON timelapse_merges(status)",
 		// Archive cleanup tasks
 		"CREATE INDEX IF NOT EXISTS idx_archive_cleanup_status ON archive_cleanup_tasks(status)",
+		// Offload outbox (issue #874): claim sweep + backlog accounting
+		"CREATE INDEX IF NOT EXISTS idx_offload_outbox_status ON offload_outbox(status)",
+		"CREATE INDEX IF NOT EXISTS idx_offload_outbox_camera ON offload_outbox(camera_id)",
 	}
 	for _, idx := range indexes {
 		_, _ = d.db.ExecContext(ctx, idx)

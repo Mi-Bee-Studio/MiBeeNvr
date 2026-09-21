@@ -174,6 +174,10 @@ type StorageConfig struct {
 	// MigrationWindow restricts background migration to a local-time window,
 	// e.g. "22:00-06:00". Empty = always allowed (rate-limited).
 	MigrationWindow string `yaml:"migration_window,omitempty"`
+	// Remote offloads merged recordings to an S3-compatible object store
+	// (issue #874 batch 1): local recording unchanged, post-merge async
+	// upload, optional verified eviction. Inert unless Remote.Enabled.
+	Remote RemoteStorageConfig `yaml:"remote,omitempty"`
 }
 
 // ModelsDir resolves where ONNX models live: the data volume when the
