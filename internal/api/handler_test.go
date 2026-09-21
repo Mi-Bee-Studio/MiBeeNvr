@@ -721,7 +721,7 @@ func TestUpdateSettings_InvalidRetentionDays(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
-	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30, DiskThresholdPercent: 85}, Cameras: []config.CameraConfig{}}
 	h := newHandlerWithConfig(db, store, cfg)
 
 	body := strings.NewReader(`{"cleanup":{"retention_days":0}}`)
@@ -731,7 +731,8 @@ func TestUpdateSettings_InvalidRetentionDays(t *testing.T) {
 	}
 	var resp map[string]string
 	parseJSON(t, rr, &resp)
-	if resp["error"] != "retention_days must be >= 1" {
+	// #867: same message the startup load produces (CleanupConfig.Validate).
+	if resp["error"] != "cleanup.retention_days must be between 1 and 3650, got 0" {
 		t.Fatalf("expected retention_days validation error, got %s", resp["error"])
 	}
 }
@@ -740,7 +741,7 @@ func TestUpdateSettings_InvalidDiskThreshold(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
-	cfg := &config.Config{Cleanup: config.CleanupConfig{DiskThresholdPercent: 95}, Cameras: []config.CameraConfig{}}
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30, DiskThresholdPercent: 95}, Cameras: []config.CameraConfig{}}
 	h := newHandlerWithConfig(db, store, cfg)
 
 	// Test too low

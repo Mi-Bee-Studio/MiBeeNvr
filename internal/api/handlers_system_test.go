@@ -518,7 +518,7 @@ func TestSettings_RecordingDefaultRoundTrip(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
-	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30}, Cameras: []config.CameraConfig{}}
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30, DiskThresholdPercent: 85}, Cameras: []config.CameraConfig{}}
 	h := newHandlerWithConfig(db, store, cfg)
 
 	// Default: unset = record.
@@ -542,6 +542,52 @@ func TestSettings_RecordingDefaultRoundTrip(t *testing.T) {
 		bytes.NewReader([]byte(`{"cleanup":{"retention_days":7}}`)), "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.False(t, cfg.RecordingGate(nil))
+}
+
+// #867: the settings PUT must enforce the SAME cleanup bounds the startup
+// load does — a value accepted at runtime but rejected at the next start's
+// load is a guaranteed crash loop (shutdown-persist writes it to yaml; seen
+// twice on the fnOS test box with disk_threshold_percent=20). A rejected
+// save must also not half-commit sibling fields.
+func TestSettings_CleanupValidationGate(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	cfg := &config.Config{Cleanup: config.CleanupConfig{RetentionDays: 30, DiskThresholdPercent: 85}, Cameras: []config.CameraConfig{}}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	// The field-test crash value is rejected with the load-side message.
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings",
+		bytes.NewReader([]byte(`{"cleanup":{"disk_threshold_percent":20}}`)), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "50 and 99")
+	require.Equal(t, 85, cfg.Cleanup.DiskThresholdPercent, "rejected value must not mutate the running config")
+
+	// retention_days is bounded above too (the old PUT window was unbounded).
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings",
+		bytes.NewReader([]byte(`{"cleanup":{"retention_days":5000}}`)), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "1 and 3650")
+	require.Equal(t, 30, cfg.Cleanup.RetentionDays)
+
+	// Both window ends pass and commit.
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings",
+		bytes.NewReader([]byte(`{"cleanup":{"disk_threshold_percent":50}}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 50, cfg.Cleanup.DiskThresholdPercent)
+
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings",
+		bytes.NewReader([]byte(`{"cleanup":{"disk_threshold_percent":99,"retention_days":3650}}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 99, cfg.Cleanup.DiskThresholdPercent)
+	require.Equal(t, 3650, cfg.Cleanup.RetentionDays)
+
+	// A failing field must not partially commit its passing siblings.
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings",
+		bytes.NewReader([]byte(`{"cleanup":{"retention_days":7,"disk_threshold_percent":20}}`)), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, 99, cfg.Cleanup.DiskThresholdPercent, "no partial commit when a sibling field fails")
+	require.Equal(t, 3650, cfg.Cleanup.RetentionDays, "no partial commit when a sibling field fails")
 }
 
 func ptrBoolTrueForSettings() *bool { v := true; return &v }

@@ -408,13 +408,11 @@ func validateConfigDetails(cfg *Config) error {
 			}
 		}
 	}
-	// Validate retention_days
-	if cfg.Cleanup.RetentionDays < 1 || cfg.Cleanup.RetentionDays > 3650 {
-		return fmt.Errorf("cleanup.retention_days must be between 1 and 3650, got %d", cfg.Cleanup.RetentionDays)
-	}
-	// Validate disk_threshold_percent
-	if cfg.Cleanup.DiskThresholdPercent < 50 || cfg.Cleanup.DiskThresholdPercent > 99 {
-		return fmt.Errorf("cleanup.disk_threshold_percent must be between 50 and 99, got %d", cfg.Cleanup.DiskThresholdPercent)
+	// Validate the cleanup section — single source of truth shared with the
+	// settings PUT path, so a value accepted at runtime can never fail this
+	// load on the next restart (#867).
+	if err := cfg.Cleanup.Validate(); err != nil {
+		return err
 	}
 	// Validate observability.log_level
 	if cfg.Observability.LogLevel != "debug" && cfg.Observability.LogLevel != "info" && cfg.Observability.LogLevel != "warn" && cfg.Observability.LogLevel != "error" {
