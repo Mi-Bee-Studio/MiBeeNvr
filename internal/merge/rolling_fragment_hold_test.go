@@ -210,10 +210,19 @@ func TestFragmentHold_BackfillDefersYoungFragments(t *testing.T) {
 
 	cam := "cam-h8"
 	now := time.Now().UTC()
-	// 两个"老"碎段（1h 前，同窗 30s 间隔）——backfill 可正常批折。
-	env.insertMergeableRecording(t, "h8-old-0", cam, now.Add(-2*time.Hour), now.Add(-2*time.Hour).Add(7*time.Second))
-	env.insertMergeableRecording(t, "h8-old-1", cam, now.Add(-2*time.Hour).Add(30*time.Second), now.Add(-2*time.Hour).Add(37*time.Second))
+	// Anchor the OLD pair mid-hour (mergeTestNow semantics): a raw now-2h
+	// that lands in the final 30s of an hour straddles the two fragments
+	// across window boundaries — each becomes a <2 singleton batch, nothing
+	// folds, and the old-must-fold assertions flake (CI 2026-09-20 on the
+	// v0.13.0-preview.1 release run; same class the mergeTestNow helper was
+	// created for). Age stays ~2h: far past the 300s hold rail, far short of
+	// the 7d singletonPurgeAge.
+	oldBase := mergeTestNow().Add(-2 * time.Hour)
+	// 两个"老"碎段（~2h 前，同窗 30s 间隔）——backfill 可正常批折。
+	env.insertMergeableRecording(t, "h8-old-0", cam, oldBase, oldBase.Add(7*time.Second))
+	env.insertMergeableRecording(t, "h8-old-1", cam, oldBase.Add(30*time.Second), oldBase.Add(37*time.Second))
 	// 一个"年轻"碎段（3s 前结束）——在持有轨道内，扫描必须跳过。
+	// （保持裸 now：年轻判定对照的是 sweep 自己的时钟，锚定反而失真。）
 	env.insertMergeableRecording(t, "h8-young", cam, now.Add(-10*time.Second), now.Add(-3*time.Second))
 
 	_, err := r.BackfillCamera(context.Background(), cam, false)
