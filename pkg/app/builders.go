@@ -42,6 +42,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/offload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
@@ -921,6 +923,41 @@ func buildAppDeps(cfg *config.Config, configPath string) (*appDeps, func(), erro
 	}
 	deps.cleanupMgr = cleanupMgr
 	deps.archiveDeleter = cleanup.NewArchiveDeleter(db, store)
+
+	// Step 8.5: offload (optional, issue #874 batch 1) — upload merged
+	// recordings to S3-compatible object storage. Pure side channel: the
+	// recording hot path is untouched; uploads ride the shared I/O budget as
+	// the "offload" tenant. Construction only validates config (no dial) —
+	// an unreachable endpoint surfaces as retried upload errors, never a
+	// startup crash.
+	if cfg.Storage.Remote.Enabled {
+		rc := cfg.Storage.Remote
+		os, err := objectstore.NewS3(objectstore.Config{
+			EndpointURL:     rc.EndpointURL,
+			Region:          rc.Region,
+			Bucket:          rc.Bucket,
+			PathStyle:       rc.PathStyle == nil || *rc.PathStyle,
+			AccessKeyID:     rc.AccessKeyID,
+			SecretAccessKey: rc.SecretAccessKey,
+		})
+		if err != nil {
+			startupBgCancel()
+			db.Close()
+			return nil, nil, fmt.Errorf("offload store: %w", err)
+		}
+		deps.offloadStore = os
+		deps.offloadMgr = offload.NewManager(db, offload.Options{
+			Store:        os,
+			Budget:       ioBudget,
+			Prefix:       rc.Prefix,
+			ScanInterval: time.Duration(rc.Upload.ScanIntervalS) * time.Second,
+			MinAge:       time.Duration(rc.Upload.MinAgeS) * time.Second,
+			Workers:      rc.Upload.MaxConcurrency,
+			BacklogLimit: rc.Upload.BacklogLimit,
+		})
+		slog.Info("remote offload enabled",
+			"bucket", rc.Bucket, "prefix", rc.Prefix, "workers", rc.Upload.MaxConcurrency)
+	}
 
 	// Wire the opt-in delete_recordings_after_merge source deleter into the
 	// periodic-merge managers. The per-camera enable flags were applied at

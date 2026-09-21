@@ -426,6 +426,16 @@ func registerServices(a *App, deps *appDeps) error {
 		return fmt.Errorf("register archive-deleter: %w", err)
 	}
 
+	// 7.6. offload (optional, issue #874) — S3-compatible remote upload of
+	// merged recordings. Registered after cleanup so its Stop (reverse
+	// order) halts uploads before the DB closes; it never holds resources
+	// the streaming services need.
+	if deps.offloadMgr != nil {
+		if err := a.Register(deps.offloadMgr); err != nil {
+			return fmt.Errorf("register offload: %w", err)
+		}
+	}
+
 	// 8. mqtt (optional)
 	if deps.mqttClient != nil {
 		if err := a.Register(&serviceFunc{

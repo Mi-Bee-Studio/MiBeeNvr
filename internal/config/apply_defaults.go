@@ -306,6 +306,33 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Storage.PeriodicTempGraceS == 0 {
 		cfg.Storage.PeriodicTempGraceS = 86400
 	}
+	// Remote object-storage offload defaults (issue #874 batch 1). Everything
+	// is inert unless storage.remote.enabled — the defaults only shape the
+	// shape of the block for users who turn it on. Path-style is the
+	// S3-compatible default (MinIO and friends); AWS virtual-hosted buckets
+	// set it false explicitly.
+	if cfg.Storage.Remote.Region == "" {
+		cfg.Storage.Remote.Region = "auto"
+	}
+	if cfg.Storage.Remote.PathStyle == nil {
+		cfg.Storage.Remote.PathStyle = new(bool)
+		*cfg.Storage.Remote.PathStyle = true
+	}
+	if cfg.Storage.Remote.Prefix == "" {
+		cfg.Storage.Remote.Prefix = "recordings"
+	}
+	if cfg.Storage.Remote.Upload.MaxConcurrency <= 0 {
+		cfg.Storage.Remote.Upload.MaxConcurrency = 1
+	}
+	if cfg.Storage.Remote.Upload.ScanIntervalS <= 0 {
+		cfg.Storage.Remote.Upload.ScanIntervalS = 60
+	}
+	if cfg.Storage.Remote.Upload.MinAgeS <= 0 {
+		cfg.Storage.Remote.Upload.MinAgeS = 900
+	}
+	if cfg.Storage.Remote.Upload.BacklogLimit == 0 {
+		cfg.Storage.Remote.Upload.BacklogLimit = 5000
+	}
 	// Merge defaults
 	if cfg.Merge.BatchLimit <= 0 {
 		cfg.Merge.BatchLimit = 200

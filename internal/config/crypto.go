@@ -176,6 +176,11 @@ func decryptConfig(cfg *Config, key []byte) {
 	if v, err := Decrypt(cfg.MetricsAuth.Password, key); err == nil {
 		cfg.MetricsAuth.Password = v
 	}
+	// Remote object-storage secret (issue #874). ${VAR} refs are left alone:
+	// Decrypt fails on them and the value stays literal, exactly as intended.
+	if v, err := Decrypt(cfg.Storage.Remote.SecretAccessKey, key); err == nil {
+		cfg.Storage.Remote.SecretAccessKey = v
+	}
 }
 
 // encryptConfig encrypts all sensitive fields in the config in place.
@@ -243,6 +248,15 @@ func encryptConfig(cfg *Config, key []byte) []string {
 		}
 	}
 
+	// Remote object-storage secret (issue #874). ${VAR} references are not
+	// secrets — never encrypt (and never rewrite) them.
+	if sk := cfg.Storage.Remote.SecretAccessKey; sk != "" && !IsEncrypted(sk) && !strings.Contains(sk, "${") {
+		if v, err := Encrypt(sk, key); err == nil {
+			cfg.Storage.Remote.SecretAccessKey = v
+			encrypted = append(encrypted, "storage.remote.secret_access_key")
+		}
+	}
+
 	return encrypted
 }
 
@@ -274,6 +288,11 @@ func SensitiveFieldPaths(cfg *Config) []string {
 	if cfg.MetricsAuth.Password != "" && !IsEncrypted(cfg.MetricsAuth.Password) {
 		fields = append(fields, "metrics_auth.password")
 	}
+	// Remote object-storage secret (issue #874). A ${VAR} reference is not a
+	// secret (the value lives in the environment) — skip those.
+	if sk := cfg.Storage.Remote.SecretAccessKey; sk != "" && !IsEncrypted(sk) && !strings.Contains(sk, "${") {
+		fields = append(fields, "storage.remote.secret_access_key")
+	}
 
 	return fields
 }
@@ -287,6 +306,7 @@ type sensitiveSnapshot struct {
 	XiaomiToken         string
 	CameraPasswords     []string
 	MetricsAuthPassword string
+	RemoteSecretKey     string
 }
 
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
@@ -297,6 +317,7 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		XiaomiToken:         cfg.Xiaomi.Token,
 		CameraPasswords:     make([]string, len(cfg.Cameras)),
 		MetricsAuthPassword: cfg.MetricsAuth.Password,
+		RemoteSecretKey:     cfg.Storage.Remote.SecretAccessKey,
 	}
 	for i := range cfg.Cameras {
 		s.CameraPasswords[i] = cfg.Cameras[i].Password
@@ -315,4 +336,5 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 		}
 		cfg.MetricsAuth.Password = s.MetricsAuthPassword
 	}
+	cfg.Storage.Remote.SecretAccessKey = s.RemoteSecretKey
 }

@@ -332,6 +332,8 @@ func dispatchSubcommand(args []string) {
 		cmdInstall(false)
 	case "uninstall":
 		cmdUninstall()
+	case "offload":
+		cmdOffload()
 	}
 }
 

@@ -30,6 +30,7 @@ const (
 	ConsumerRepair    = "repair"
 	ConsumerTimelapse = "timelapse"
 	ConsumerTranscode = "transcode"
+	ConsumerOffload   = "offload" // S3 remote upload bytes (issue #874)
 )
 
 // Limiter is the consumer-facing surface of a Bucket. Declared so dependent

@@ -21,6 +21,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/offload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
@@ -105,6 +107,11 @@ type appDeps struct {
 	// Cleanup
 	cleanupMgr     *cleanup.CleanupManager
 	archiveDeleter *cleanup.ArchiveDeleter
+
+	// Offload (optional, issue #874): S3-compatible remote upload of merged
+	// recordings. nil = storage.remote disabled.
+	offloadMgr   *offload.Manager
+	offloadStore objectstore.Store
 
 	// HTTP layer
 	handler    *api.Handler
