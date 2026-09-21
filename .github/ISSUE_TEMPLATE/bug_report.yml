@@ -1,0 +1,72 @@
+name: 🐛 Bug 报告
+description: 报告一个可复现的问题
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先查阅[故障排除文档](https://github.com/Mi-Bee-Studio/MiBeeNvr/blob/main/docs/zh/troubleshooting.md),部分常见问题已有解法。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题现象
+      description: 发生了什么?期望行为是什么?
+      placeholder: "例:RTSP 相机运行 2-3 天后录像停止,Web 界面显示相机离线,重启后恢复。"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: NVR 版本
+      description: 设置页 → 关于,或 /api/health 返回中的 version 字段
+      placeholder: "v0.12.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - 裸机 systemd(install.sh)
+        - Docker / Compose
+        - NAS 套件(fnOS / unRAID / 群晖 / 威联通 / 极空间 / iStoreOS)
+        - 桌面版(Windows / macOS)
+        - 源码编译
+    validations:
+      required: true
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: 涉及的接入协议
+      multiple: true
+      options:
+        - RTSP(H.264 / H.265 / MJPEG)
+        - HTTP JPEG
+        - ONVIF
+        - GB/T 28181
+        - RTMP / SRT 推流接入
+        - 小米摄像头
+        - 转推 / 中继
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 添加相机……
+        2. 等待/操作……
+        3. 出现……
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 可选。systemd:`journalctl -u mibee-nvr -n 200`;Docker:`docker logs <容器>`。请先脱敏(公网地址、凭据)。
+      render: text
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境补充
+      description: 可选。硬件(如 RPi 3B / Banana Pi M5)、相机数量与型号、存储类型(SD 卡 / USB HDD / NAS)、网络环境。
