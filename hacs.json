@@ -1,0 +1,6 @@
+{
+  "name": "MiBee NVR",
+  "homeassistant": "2025.1.0",
+  "zip_release": true,
+  "filename": "mibee_nvr.zip"
+}
