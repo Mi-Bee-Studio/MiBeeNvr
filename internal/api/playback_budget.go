@@ -54,7 +54,7 @@ type budgetedReadSeeker struct {
 func (b *budgetedReadSeeker) Read(p []byte) (int, error) {
 	n, err := b.f.Read(p)
 	if n > 0 {
-		//nolint:errcheck // ctx is never canceled; pacing must not abort a transfer
+		// ctx is never canceled; pacing must not abort a transfer.
 		_ = b.l.Wait(context.Background(), iobudget.ConsumerPlayback, int64(n))
 	}
 	return n, err

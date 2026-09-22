@@ -25,6 +25,6 @@ func chargeRecordingWrite(n int64) {
 	if writeBudget == nil || n <= 0 {
 		return
 	}
-	//nolint:errcheck // ctx is never canceled; a nil check beat error plumbing here
+	// ctx is never canceled; a nil check beat error plumbing here.
 	_ = writeBudget.Wait(context.Background(), iobudget.ConsumerRecording, n)
 }
