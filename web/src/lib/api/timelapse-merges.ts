@@ -6,7 +6,7 @@
  * The backend writes one row per output to the `timelapse_merges` table
  * (migration v28) so the frontend can discover, play, and delete them.
  */
-import { apiRequest, getAuthHeader, API_BASE, ApiRequestError } from './client';
+import { apiRequest, getAuthHeader, appendAuthToken, API_BASE, ApiRequestError } from './client';
 import { fetchFrameBatch, type FrameBatch } from '$lib/multipart';
 
 export interface TimelapseMerge {
@@ -76,7 +76,7 @@ export async function getTimelapseMerge(id: number | string, signal?: AbortSigna
  * Returns null if the merge is not yet completed.
  */
 export function getTimelapseMergeDownloadUrl(id: number | string): string {
-  return `${API_BASE}/timelapse/merges/${id}/download`;
+  return appendAuthToken(`${API_BASE}/timelapse/merges/${id}/download`);
 }
 
 /**

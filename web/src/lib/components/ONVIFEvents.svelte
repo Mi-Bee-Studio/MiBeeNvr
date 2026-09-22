@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
-  import { getAuthHeader, API_BASE } from '$lib/api';
+  import { getAuthHeader, appendAuthToken, API_BASE } from '$lib/api';
   import { Activity, Circle, Trash2 } from 'lucide-svelte';
 
   interface ONVIFEvent {
@@ -86,7 +86,7 @@
         ? `${API_BASE}/events?filter=onvif.&camera_id=${encodeURIComponent(cameraId)}`
         : `${API_BASE}/events?filter=onvif.`;
 
-      es = new EventSource(url);
+      es = new EventSource(appendAuthToken(url));
 
       es.onopen = () => {
         connected = true;

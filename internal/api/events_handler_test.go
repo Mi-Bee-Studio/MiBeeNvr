@@ -11,13 +11,16 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/stretchr/testify/require"
 )
 
 func setupEventsHandler(t *testing.T) (*Handler, *event.EventBus) {
 	t.Helper()
 	db, store := setupTestDB(t)
-	h := TestHandler(db, store)
+	hash, err := middleware.HashPassword("test-pass-12345")
+	require.NoError(t, err)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 	bus := event.NewEventBus(64)
 	h.SetEventBus(bus)
 	return h, bus
@@ -66,12 +69,13 @@ func TestEvents_ReceivesPublishedEvent(t *testing.T) {
 		handlerDone.Store(true)
 	}()
 
-	// Wait for handler to start and subscribe.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the handler to authenticate (bcrypt on first request) and
+	// subscribe before publishing.
+	time.Sleep(400 * time.Millisecond)
 
 	// Publish an event.
 	bus.Publish(context.Background(), "onvif.motion", map[string]string{"camera": "front-door"})
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	cancel()
 	time.Sleep(50 * time.Millisecond)
@@ -98,7 +102,7 @@ func TestEvents_FilterByPrefix(t *testing.T) {
 		handlerDone.Store(true)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(400 * time.Millisecond)
 
 	// Publish events with different topics.
 	bus.Publish(context.Background(), "onvif.motion", map[string]string{"camera": "cam-1"})
@@ -145,7 +149,9 @@ func TestEvents_ContextCancellation(t *testing.T) {
 func TestEvents_BusNil(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
-	h := TestHandler(db, store)
+	hash, err := middleware.HashPassword("test-pass-12345")
+	require.NoError(t, err)
+	h := testHandlerWithAuth(db, store, "admin", hash)
 	// Don't set event bus.
 
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)

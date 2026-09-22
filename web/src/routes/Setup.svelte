@@ -1,7 +1,7 @@
 <script lang="ts">
   import { setupApi, storeToken } from '$lib/api';
-  import ThemeToggle from '../components/ThemeToggle.svelte';
-  import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
+  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
   import { withBase } from '$lib/base-path';
   import { showToast } from '$lib/toast';
@@ -9,6 +9,9 @@
 
   let username = $state('admin');
   let password = $state('');
+  // First-boot arming code printed in the NVR terminal/log (#879). Optional:
+  // the server only requires it for non-loopback first-boot setup.
+  let setupCode = $state('');
   let confirmPassword = $state('');
   let showPassword = $state(false);
   let showConfirmPassword = $state(false);
@@ -105,7 +108,7 @@
     loading = true;
 
     try {
-      const res = await setupApi(username, password, language, storagePath);
+      const res = await setupApi(username, password, language, storagePath, setupCode || undefined);
 
       // Store the signed session token returned by the server. The browser
       // never carries the plaintext password again after setup.
@@ -317,6 +320,21 @@
           disabled={loading}
         />
         <p class="th-text-tertiary text-xs mt-1">{t('setup.storagePathHint')}</p>
+      </div>
+
+      <!-- Optional: first-boot setup code (#879, printed in the NVR terminal/log) -->
+      <div>
+        <label for="setup-code" class="input-label">{t('setup.setupCode')}</label>
+        <input
+          id="setup-code"
+          type="text"
+          class="input"
+          bind:value={setupCode}
+          placeholder="xxxxxxxx"
+          disabled={loading}
+          autocomplete="off"
+        />
+        <p class="th-text-tertiary text-xs mt-1">{t('setup.setupCodeHint')}</p>
       </div>
 
       <!-- Submit -->

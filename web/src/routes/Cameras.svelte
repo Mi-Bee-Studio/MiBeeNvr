@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader, ApiRequestError, API_BASE, listCameraGroups, createCameraGroup, renameCameraGroup, deleteCameraGroup, setCameraGroupsOrder } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader, appendAuthToken, ApiRequestError, API_BASE, listCameraGroups, createCameraGroup, renameCameraGroup, deleteCameraGroup, setCameraGroupsOrder } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse, ArchiveCleanupTask, ArchiveCleanupStatus } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -14,7 +14,7 @@
   import ArchiveConfirmDialog from '$lib/components/ArchiveConfirmDialog.svelte';
   import OnboardingOverlay from '$lib/components/OnboardingOverlay.svelte';
   import Tab from '$lib/components/Tab.svelte';
-  import Pagination from '../components/Pagination.svelte';
+  import Pagination from '$lib/components/Pagination.svelte';
   import { startBackfill, getUntranscodedRecordingCount } from '$lib/api/transcoding';
 
   let cameras = $state<Camera[]>([]);
@@ -748,7 +748,7 @@
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout>;
     function connect() {
-      es = new EventSource(`${API_BASE}/events?filter=camera.`);
+      es = new EventSource(appendAuthToken(`${API_BASE}/events?filter=camera.`));
       es.addEventListener('camera.added', (e: MessageEvent) => {
         try {
           const d = JSON.parse(e.data) as { name?: string; activation_state?: string };

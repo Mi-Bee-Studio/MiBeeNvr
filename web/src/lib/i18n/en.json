@@ -1369,6 +1369,8 @@
   "setup.secureNote": "Your password is stored securely and cannot be recovered",
   "setup.storagePath": "Storage Path",
   "setup.storagePathHint": "Directory where recordings will be stored; leave empty to keep the server's current setting",
+  "setup.setupCode": "Setup code (optional)",
+  "setup.setupCodeHint": "A first-boot code printed in the NVR terminal/log; required when finishing setup from a non-local browser",
   "setup.submit": "Complete Setup",
   "setup.submitting": "Setting up...",
   "setup.subtitle": "Create your admin account to get started",

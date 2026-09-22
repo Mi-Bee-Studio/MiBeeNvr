@@ -3,12 +3,18 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/go-chi/chi/v5"
 )
+
+// maxSSEPerIP caps concurrent SSE streams per client IP so one address cannot
+// hold unlimited long-lived connections.
+const maxSSEPerIP = 6
 
 // handleEvents handles GET /api/events.
 // Generic SSE endpoint that streams events from the EventBus.
@@ -18,6 +24,17 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusServiceUnavailable, "event bus not available")
 		return
 	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	cnt, _ := h.ssePerIP.LoadOrStore(ip, new(atomic.Int32))
+	if cnt.(*atomic.Int32).Add(1) > maxSSEPerIP {
+		cnt.(*atomic.Int32).Add(-1)
+		WriteError(w, http.StatusTooManyRequests, "too many SSE connections from this address")
+		return
+	}
+	defer cnt.(*atomic.Int32).Add(-1)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {

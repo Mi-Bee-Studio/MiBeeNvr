@@ -1,7 +1,7 @@
 /**
  * Health API — camera health status, health events, per-camera health
  */
-import { API_BASE, apiRequest , readJson } from './client';
+import { API_BASE, apiRequest, getAuthHeader, readJson } from './client';
 
 // --- Types ---
 
@@ -92,13 +92,16 @@ export interface HealthCamerasResponse {
   [cameraId: string]: CameraHealthDetail;
 }
 
-// Fetch health cameras (public, no auth required)
+// Fetch health cameras (auth required — fleet topology is not public, #879)
 export async function getHealthCameras(): Promise<HealthCamerasResponse> {
-  const response = await fetch(`${API_BASE}/health/cameras`);
+  const headers: Record<string, string> = {};
+  const authHeader = getAuthHeader();
+  if (authHeader) headers.Authorization = authHeader;
+  const response = await fetch(`${API_BASE}/health/cameras`, { headers });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
-  return readJson(response, () => fetch(`${API_BASE}/health/cameras`));
+  return readJson(response, () => fetch(`${API_BASE}/health/cameras`, { headers }));
 }
 
 // ─── Stability (#469: QualityTracker data — uptime/MTBF/trend per camera) ───
