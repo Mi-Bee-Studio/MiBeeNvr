@@ -19,27 +19,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ppsFixture matches h264SPS1920 (same stream).
+// ppsFixture matches h264SPS1920Fixture (same stream).
+var h264SPS1920Fixture = []byte{
+	0x67, 0x42, 0xc0, 0x28, 0xf4, 0x03, 0xc0, 0x11, 0x2f, 0x28,
+}
+
+var hevcSPS1920Fixture = []byte{
+	0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90,
+	0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x00, 0x78, 0xa0, 0x03,
+	0xc0, 0x80, 0x10, 0xe5, 0x96, 0x66, 0x69, 0x24, 0xca, 0xe0,
+	0x10, 0x00, 0x00, 0x03, 0x00, 0x10, 0x00, 0x00, 0x03, 0x01,
+	0xe0, 0x80,
+}
+
 var ppsFixture = []byte{0x68, 0xce, 0x38, 0x80}
 
 func TestExportedSPSResolutionWrappers(t *testing.T) {
 	t.Parallel()
 
-	w, h, err := ParseSPSResolution(h264SPS1920)
+	w, h, err := ParseSPSResolution(h264SPS1920Fixture)
 	require.NoError(t, err)
 	require.Equal(t, 1920, w)
 	require.Equal(t, 1080, h)
 
-	w, h, err = ParseHEVCSPSResolution(hevcSPS1920)
+	w, h, err = ParseHEVCSPSResolution(hevcSPS1920Fixture)
 	require.NoError(t, err)
 	require.Equal(t, 1920, w)
 	require.Equal(t, 1080, h)
 
 	// Codec-dispatching shim.
-	w, _, err = SPSResolution("h264", h264SPS1920)
+	w, _, err = SPSResolution("h264", h264SPS1920Fixture)
 	require.NoError(t, err)
 	require.Equal(t, 1920, w)
-	_, h, err = SPSResolution("h265", hevcSPS1920)
+	_, h, err = SPSResolution("h265", hevcSPS1920Fixture)
 	require.NoError(t, err)
 	require.Equal(t, 1080, h)
 
@@ -53,14 +65,14 @@ func TestExportedSPSResolutionWrappers(t *testing.T) {
 func TestParseSegmentNoProbeAndDurationOnly(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	path := createH264SegmentWithSamples(t, dir, "seg.mp4", h264SPS1920, ppsFixture, [][]byte{
+	path := createH264SegmentWithSamples(t, dir, "seg.mp4", h264SPS1920Fixture, ppsFixture, [][]byte{
 		{0x65, 0x88, 0x80, 0x40}, {0x41, 0x10, 0x00, 0x0c},
 	})
 
 	info, err := ParseSegmentNoProbe(path)
 	require.NoError(t, err)
 	require.Equal(t, "h264", info.Codec)
-	require.Equal(t, h264SPS1920, info.SPS)
+	require.Equal(t, h264SPS1920Fixture, info.SPS)
 
 	dur, err := ParseSegmentDurationOnly(path)
 	require.NoError(t, err)
@@ -178,7 +190,7 @@ func TestConsolidateShortRecord(t *testing.T) {
 	// (same lesson as mergeTestNow: an HH:59 wall clock straddles windows).
 	base := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour).Add(50 * time.Minute)
 	for i, id := range []string{"sh-1", "sh-2"} {
-		path := createH264SegmentWithSamples(t, camDir, id+".mp4", h264SPS1920, ppsFixture, [][]byte{
+		path := createH264SegmentWithSamples(t, camDir, id+".mp4", h264SPS1920Fixture, ppsFixture, [][]byte{
 			{0x65, 0x88, 0x80, 0x40}, {0x41, 0x10, 0x00, 0x0c},
 		})
 		start := base.Add(time.Duration(i) * time.Minute)

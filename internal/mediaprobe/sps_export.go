@@ -1,4 +1,4 @@
-package merge
+package mediaprobe
 
 // SPSResolution parses pixel dimensions from raw SPS bytes. Exported for the
 // VOD fragmenter (init-segment stsd/tkhd need width/height); codec is "h264"

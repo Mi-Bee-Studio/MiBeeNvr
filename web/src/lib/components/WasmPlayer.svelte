@@ -461,7 +461,7 @@ function handleWebGpuLost() {
   function initWorker(): boolean {
     try {
       worker = new Worker(
-        new URL('../lib/webcodecs-player/worker.ts', import.meta.url),
+        new URL('../webcodecs-player/worker.ts', import.meta.url),
         { type: 'module' },
       );
 

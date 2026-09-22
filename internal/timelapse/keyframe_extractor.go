@@ -433,7 +433,6 @@ func (k *KeyframeExtractor) captureFrame() {
 		"size", len(data),
 	)
 
-	// Check if segment duration has elapsed.
 	k.mu.Lock()
 	segStart := k.segStart
 	k.mu.Unlock()

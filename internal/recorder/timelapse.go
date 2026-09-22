@@ -21,10 +21,17 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
 var timelapseLogger = slogx.Component("timelapse-recorder")
+
+// SegmentMergeScheduler is the port the timelapse recorder needs from the
+// timelapse subsystem. Defined consumer-side so the recorder core does not
+// depend on the timelapse package (#877 batch 4);
+// *timelapse.RollingMergeManager satisfies it.
+type SegmentMergeScheduler interface {
+	StartSegmentMerge(ctx context.Context, cameraID, segmentDir, outputPath, recordingID string)
+}
 
 // TimelapseRecorderConfig holds configuration for the timelapse recorder.
 type TimelapseRecorderConfig struct {
@@ -37,7 +44,7 @@ type TimelapseRecorderConfig struct {
 	DataDir    string        // base data directory
 	DB         RecordingDB
 	Metrics    *metrics.Metrics
-	MergeMgr   *timelapse.RollingMergeManager // optional rolling merge manager
+	MergeMgr   SegmentMergeScheduler // optional rolling merge scheduler (port, #877 batch 4)
 	// RecordEnabled gates whether captured frames are written to disk, mirroring
 	// the segment recorder's RecordEnabled (internal/recorder/base.go).
 	// nil or true = write timelapse frames (default). false = "preview-only":
@@ -54,7 +61,7 @@ type TimelapseRecorder struct {
 	cfg      TimelapseRecorderConfig
 	store    SegmentStore
 	metrics  *metrics.Metrics
-	mergeMgr *timelapse.RollingMergeManager
+	mergeMgr SegmentMergeScheduler
 	client   *http.Client
 
 	mu           sync.Mutex
@@ -299,7 +306,6 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 		default:
 		}
 
-		// Read until boundary marker
 		if err := r.skipToBoundary(reader, boundary); err != nil {
 			return fmt.Errorf("read boundary: %w", err), true
 		}
@@ -310,7 +316,6 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 			return fmt.Errorf("read part headers: %w", err), true
 		}
 
-		// Read JPEG body
 		var data []byte
 		if contentLength > 0 {
 			data = make([]byte, contentLength)
@@ -326,7 +331,6 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 			}
 		}
 
-		// Validate JPEG magic bytes
 		if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
 			timelapseLogger.Warn("skipping invalid frame (missing JPEG magic)", "camera_id", r.cfg.CameraID, "size", len(data))
 			continue
@@ -361,7 +365,6 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 			continue
 		}
 
-		// Create segment if needed
 		if r.curTempPath == "" {
 			tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, "timelapse")
 			if err != nil {
@@ -385,7 +388,6 @@ func (r *TimelapseRecorder) connectAndStream(ctx context.Context) (error, bool) 
 		r.recordBytes(int64(len(data)))
 		r.lastFrameTime.Store(time.Now().Unix())
 
-		// Check if segment duration elapsed
 		if time.Since(r.segStart) >= r.cfg.SegmentDur {
 			r.closeCurrentSegment()
 		}
@@ -438,7 +440,7 @@ func (r *TimelapseRecorder) closeCurrentSegment() {
 			return nil
 		})
 		rec.FileSize = totalSize
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
 			timelapseLogger.Error("failed to insert timelapse recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 	}

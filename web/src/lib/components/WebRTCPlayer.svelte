@@ -402,12 +402,10 @@ let destroyed = false;
       const peerConnection = new RTCPeerConnection(iceServers);
       pc = peerConnection;
 
-      // Add recvonly transceiver for video
       peerConnection.addTransceiver('video', { direction: 'recvonly' });
       // Add recvonly transceiver for audio (will be rejected by server if no audio)
       peerConnection.addTransceiver('audio', { direction: 'recvonly' });
 
-      // Handle incoming tracks
       peerConnection.ontrack = (event) => {
         if (event.track.kind === 'audio') {
           webrtcAudioTrack = event.track;
@@ -432,7 +430,6 @@ let destroyed = false;
         }
       };
 
-      // Handle connection state changes
       peerConnection.onconnectionstatechange = () => {
         const state = peerConnection.connectionState;
         switch (state) {
@@ -461,7 +458,6 @@ let destroyed = false;
         }
       };
 
-      // Create offer
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
       if (destroyed) return;
@@ -484,7 +480,6 @@ let destroyed = false;
       });
       if (destroyed) return;
 
-      // Send SDP offer to WHEP endpoint
       const authHeader = getAuthHeader();
       const headers: Record<string, string> = {
         'Content-Type': 'application/sdp',
@@ -528,7 +523,6 @@ let destroyed = false;
       // Parse Location header for session URL (for DELETE on cleanup)
       const location = response.headers.get('Location');
       if (location) {
-        // Make absolute if relative
         // Make absolute if relative. The Location header is a root-absolute
         // in-app path ("/api/...") — re-prefix it with the runtime base path
         // so it resolves against the proxy/gateway origin (#394).

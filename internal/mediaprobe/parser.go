@@ -1,15 +1,18 @@
-package merge
+package mediaprobe
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
 	"github.com/abema/go-mp4"
 )
+
+var logger = slog.Default().With("component", "mediaprobe")
 
 // SegmentInfo contains parsed metadata and sample table from an MP4 segment.
 type SegmentInfo struct {
@@ -293,7 +296,6 @@ func parseSegment(filePath string, probeKeyframes bool) (*SegmentInfo, error) {
 		return nil, fmt.Errorf("no samples in segment")
 	}
 
-	// Build video sample entries.
 	videoSamples, err := buildTrackSamples(videoTrack)
 	if err != nil {
 		return nil, fmt.Errorf("build video samples: %w", err)
@@ -488,7 +490,6 @@ func ParseSegmentDurationOnly(filePath string) (float64, error) {
 
 // from a track accumulator's sample tables.
 func buildTrackSamples(tr *trackAccum) ([]SampleEntry, error) {
-	// Build per-sample size array.
 	stszSizes := tr.stszSizes
 	if tr.stszUniform != 0 {
 		stszSizes = make([]uint32, tr.sampleCount)

@@ -220,7 +220,6 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 		return 0, nil
 	}
 
-	// Parse all segments.
 	infos := make([]*SegmentInfo, 0, len(recs))
 	parsedRecs := make([]*model.Recording, 0, len(recs))
 	for _, rec := range recs {
@@ -382,7 +381,6 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 		sourcePaths = append(sourcePaths, rec.FilePath)
 	}
 
-	// Create output file.
 	tempPath, finalPath, err := r.store.CreateSegment(cameraID, string(recs[0].Format))
 	if err != nil {
 		return 0, fmt.Errorf("create output: %w", err)

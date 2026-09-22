@@ -5,8 +5,10 @@ package app
 // start/stop order. Start order = registration order; Stop is the reverse.
 // This order is load-bearing and verified by TestRunFree_ServiceOrder.
 //
-// The split is purely structural (#138): the closures are identical to the
-// historical RunFree body, only reading from deps.* instead of local vars.
+// registerServices calls the domain group functions below in the historical
+// sequence; within each group the registration order is unchanged. The split
+// is purely structural (#877): the closures are identical to the historical
+// body, only reading from deps.* instead of local vars.
 
 import (
 	"context"
@@ -33,6 +35,24 @@ import (
 // reading constructed managers from deps. Returns an error if any registration
 // fails (the caller invokes deps' cleanup func on failure).
 func registerServices(a *App, deps *appDeps) error {
+	if err := registerCoreServices(a, deps); err != nil {
+		return err
+	}
+	if err := registerMediaServices(a, deps); err != nil {
+		return err
+	}
+	if err := registerMaintenanceServices(a, deps); err != nil {
+		return err
+	}
+	if err := registerProtocolServices(a, deps); err != nil {
+		return err
+	}
+	return registerEgressServices(a, deps)
+}
+
+// registerCoreServices — storage-migrator, db, startup-bg, camera, health,
+// recording-auditor, autodiscover.
+func registerCoreServices(a *App, deps *appDeps) error {
 	// 0. storage migrator — background worker, stopped early
 	if err := a.Register(&serviceFunc{
 		name: "storage-migrator",
@@ -135,7 +155,7 @@ func registerServices(a *App, deps *appDeps) error {
 		return fmt.Errorf("register health: %w", err)
 	}
 
-	// 3.1 recording integrity auditor (#469 + #489 deep check): rate-limited
+	// 3.1. recording integrity auditor (#469 + #489 deep check): rate-limited
 	// mediaprobe sampling of closed segments, plus an hourly-per-camera ffmpeg
 	// decode-level deep check when a binary is available (FFmpeg stays
 	// OPTIONAL — no binary, no deep check). Nil-safe when bus/metrics are
@@ -167,6 +187,12 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	return nil
+}
+
+// registerMediaServices — merge, rolling-merge, vision-push, motion-score,
+// pixgate, tiered-recording, transcode, mergeScheduler.
+func registerMediaServices(a *App, deps *appDeps) error {
 	// 4. merge — run in background goroutine with its own cancel
 	{
 		var mergeCancel context.CancelFunc
@@ -381,6 +407,12 @@ func registerServices(a *App, deps *appDeps) error {
 		return fmt.Errorf("register mergeScheduler: %w", err)
 	}
 
+	return nil
+}
+
+// registerMaintenanceServices — cleanup, archive-deleter, mqtt, mqtt-status,
+// ftp.
+func registerMaintenanceServices(a *App, deps *appDeps) error {
 	// 7. cleanup — run in background goroutine with its own cancel
 	{
 		var cleanupCancel context.CancelFunc
@@ -495,6 +527,12 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	return nil
+}
+
+// registerProtocolServices — rtmp, whip, rtsp, srt, gb28181-cascade,
+// gb28181, discovery, mdns.
+func registerProtocolServices(a *App, deps *appDeps) error {
 	// 10. rtmp (optional)
 	if deps.rtmpServer != nil {
 		if err := a.Register(&serviceFunc{
@@ -686,6 +724,11 @@ func registerServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	return nil
+}
+
+// registerEgressServices — ws, webrtc, hls, api-handler, remoteLog.
+func registerEgressServices(a *App, deps *appDeps) error {
 	// 12. ws
 	if err := a.Register(&serviceFunc{
 		name: "ws",

@@ -317,7 +317,6 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		}
 	}
 
-	// Validate that segments have samples.
 	if first.SampleCount == 0 && (!hasAudio || first.AudioSampleCount == 0) {
 		return stats, fmt.Errorf("first segment has empty sample table")
 	}
@@ -352,13 +351,13 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	// Parse resolution from first segment's SPS.
 	switch codec {
 	case "h265":
-		w, h, err := parseHEVCSPSResolution(first.SPS)
+		w, h, err := ParseHEVCSPSResolution(first.SPS)
 		if err != nil {
 			logger.Warn("failed to parse SPS resolution", "error", err)
 		}
 		videoTrack.width, videoTrack.height = uint16(w), uint16(h)
 	case "h264":
-		w, h, err := parseSPSResolution(first.SPS)
+		w, h, err := ParseSPSResolution(first.SPS)
 		if err != nil {
 			logger.Warn("failed to parse SPS resolution", "error", err)
 		}

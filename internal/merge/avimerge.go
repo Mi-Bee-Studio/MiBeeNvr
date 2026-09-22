@@ -91,7 +91,6 @@ func MergeAVISegments(ctx context.Context, segments []*model.Recording, store *s
 		return nil, nil, fmt.Errorf("create merged segment: %w", err)
 	}
 
-	// Open output file for writing.
 	out, err := os.Create(tempPath)
 	if err != nil {
 		os.Remove(tempPath)
@@ -393,7 +392,6 @@ func MergeAVISegments(ctx context.Context, segments []*model.Recording, store *s
 		sourcePaths[i] = seg.FilePath
 	}
 
-	// Build merged recording.
 	merged := &model.Recording{
 		ID:         strconv.FormatInt(time.Now().UnixNano(), 10),
 		CameraID:   cameraID,

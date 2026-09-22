@@ -510,8 +510,8 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 
 	cfg := RollingMergeConfig{
 		Enabled:  effective.RollingEnabledValue(),
-		Debounce: 5 * time.Second, // default: batches frequent disconnect segments
-		Window:   time.Hour,       // default: natural-hour bucket
+		Debounce: config.MergeDefaultDebounce, // default: batches frequent disconnect segments
+		Window:   config.MergeDefaultWindow,   // default: natural-hour bucket
 	}
 	if effective.RollingDebounce != "" {
 		if d, err := time.ParseDuration(effective.RollingDebounce); err == nil && d > 0 {
@@ -523,7 +523,7 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 	// "off"/"0s" parse to a zero duration = rail off (pre-#811 folding).
 	graceStr := strings.TrimSpace(effective.TranscodeGrace)
 	if graceStr == "" {
-		graceStr = "90s"
+		graceStr = config.MergeDefaultTranscodeGrace
 	}
 	if graceStr != "off" {
 		if d, err := time.ParseDuration(graceStr); err == nil && d > 0 {
@@ -555,7 +555,7 @@ func (r *RollingMergeCoordinator) resolveRollingConfig(cameraID string) RollingM
 	if effective.RollingBucketRetain > 0 {
 		cfg.BucketRetain = effective.RollingBucketRetain
 	} else {
-		cfg.BucketRetain = 2
+		cfg.BucketRetain = config.MergeDefaultBucketRetain
 	}
 	if s := effective.RollingBucketIdleTTL; s != "" && s != "0" {
 		if d, err := time.ParseDuration(s); err == nil && d > 0 {

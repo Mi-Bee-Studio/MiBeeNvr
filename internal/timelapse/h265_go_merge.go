@@ -200,7 +200,6 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 	default:
 	}
 
-	// Create the output file.
 	f, err := os.Create(outputPath)
 	if err != nil {
 		return &MergeResult{Tier: TierGo, Error: err.Error()},
@@ -210,7 +209,6 @@ func (m *H265GoMerger) Merge(ctx context.Context, framesDir, outputPath string, 
 
 	w := mp4.NewWriter(f)
 
-	// Write ftyp.
 	ftypSize, err := writeCodecFtyp(w, [4]byte{'h', 'v', 'c', '1'})
 	if err != nil {
 		return &MergeResult{Tier: TierGo, Error: err.Error()},

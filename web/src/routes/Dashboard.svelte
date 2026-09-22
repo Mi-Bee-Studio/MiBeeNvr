@@ -12,7 +12,7 @@
   import TranscodingHistory from './TranscodingHistory.svelte';
   import AIEvents from './AIEvents.svelte';
   import { getMiBeeVisionConnected } from '$lib/mibeevision-status';
-  import AiStatusCard from '../components/AiStatusCard.svelte';
+  import AiStatusCard from '$lib/components/AiStatusCard.svelte';
 
   let { initialTab = 'storage' }: { initialTab?: string } = $props();
 

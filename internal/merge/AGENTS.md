@@ -36,6 +36,16 @@ rolling*.go      # Rolling merge coordinator — per-camera window buckets, rete
 - **Atomic output**: Uses `store.CreateSegment()`/`CloseSegment()` for temp→final rename
 - **DB transactions**: Inserts merged recording, batch-deletes originals in transaction
 - **Placeholder moov**: Writes moov with dummy data first, calculates real size, rewrites with limitedWriter to prevent overflow
+- **Audio merge**: supports AAC (mp4a+esds), G.711 (ulaw/alaw), and Opus (Opus+dOps) sample entries. Parser detects codec from sample entry box type.
+- **Per-camera merge mutex**: `sync.Map` with try-lock pattern prevents concurrent merges for same camera
+- **retryOnBusy on all DB ops**: All merge DB operations wrapped with `storage.RetryOnBusy()` for SQLITE_BUSY resilience
+- **SHA-256 hash for SPS/PPS grouping**: `fmt.Sprintf("%x", sha256.Sum256(sps+pps+vps))`
+- **co64 atom support**: For merged files >4GB, uses `co64` box instead of `stco`
+- **stts compression**: Run-length encoded consecutive same-duration samples to reduce moov size
+- **SPS/PPS error returns**: `parseSPSResolution` and `parseHEVCSPSResolution` return `(int, int, error)`; never silently return (0, 0)
+- **BitReader bounds checking**: `readBit()`, `readBits()`, `readUE()`, `readSE()` return errors on overflow instead of corrupted zero values
+- **Deferred MJPEG deletion**: Source dirs deleted AFTER successful DB commit, not before
+- **Context cancellation**: `MergeMP4Segments` accepts `ctx context.Context` for cancellation support
 
 ## ANTI-PATTERNS
 
@@ -45,7 +55,10 @@ rolling*.go      # Rolling merge coordinator — per-camera window buckets, rete
 - **DO NOT** merge segments younger than `MinSegmentAge` — recorder may still be writing
 - **DO NOT** assume merge always succeeds — disk full, permission errors, corrupt segments all handled gracefully with warnings
 - **DO NOT** use `stco` for files with chunk offsets > 4GB — use `co64`
-- **Audio merge**: supports AAC (mp4a+esds), G.711 (ulaw/alaw), and Opus (Opus+dOps) sample entries. Parser detects codec from sample entry box type.
+- **DO NOT** use null-byte string concatenation for SPS/PPS grouping — use SHA-256 hash (embedded null bytes cause false matches)
+- **DO NOT** silently ignore SPS parse failures — always return error and reject segment
+- **DO NOT** delete MJPEG source dirs before DB commit — data loss on DB failure
+- **DO NOT** use `readBit()`/`readBits()` return of 0 as valid data — may be bounds overflow
 
 ## METRICS
 
@@ -60,21 +73,3 @@ rolling*.go      # Rolling merge coordinator — per-camera window buckets, rete
 | nvr_merge_pending_segments | GaugeVec | camera_id | Pending segments per camera |
 | nvr_rolling_merge_bucket_finalized_total | CounterVec | reason | Buckets leaving the retained set (idle_ttl/capacity_lru/size_limit) — #764 retention |
 | nvr_rolling_merge_bucket_lifetime_seconds | HistogramVec | reason | Wall time from bucket creation to finalize (#764) |
-
-
-- **DO NOT** use null-byte string concatenation for SPS/PPS grouping — use SHA-256 hash (embedded null bytes cause false matches)
-- **DO NOT** silently ignore SPS parse failures — always return error and reject segment
-- **DO NOT** delete MJPEG source dirs before DB commit — data loss on DB failure
-- **DO NOT** use `readBit()`/`readBits()` return of 0 as valid data — may be bounds overflow
-- **DO NOT** use `stco` for files with chunk offsets > 4GB — use `co64`
-
-
-- **Per-camera merge mutex**: `sync.Map` with try-lock pattern prevents concurrent merges for same camera
-- **retryOnBusy on all DB ops**: All merge DB operations wrapped with `storage.RetryOnBusy()` for SQLITE_BUSY resilience
-- **SHA-256 hash for SPS/PPS grouping**: Replacing null-byte string concatenation with `fmt.Sprintf("%x", sha256.Sum256(sps+pps+vps))`
-- **co64 atom support**: For merged files >4GB, uses `co64` box instead of `stco`
-- **stts compression**: Run-length encoded consecutive same-duration samples to reduce moov size
-- **SPS/PPS error returns**: `parseSPSResolution` and `parseHEVCSPSResolution` now return `(int, int, error)` instead of silently returning (0, 0)
-- **BitReader bounds checking**: `readBit()`, `readBits()`, `readUE()`, `readSE()` return errors on overflow instead of corrupted zero values
-- **Deferred MJPEG deletion**: Source dirs deleted AFTER successful DB commit, not before
-- **Context cancellation**: `MergeMP4Segments` accepts `ctx context.Context` for cancellation support

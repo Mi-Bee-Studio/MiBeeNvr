@@ -368,7 +368,6 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		return m.mergeAVIGroup(ctx, cameraID, recs, cfg)
 	}
 
-	// Parse all segments.
 	type parsedRec struct {
 		rec    *model.Recording
 		info   *SegmentInfo
@@ -467,7 +466,6 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 			continue
 		}
 
-		// Create output file via store.
 		tempPath, finalPath, err := m.store.CreateSegment(cameraID, format)
 		if err != nil {
 			logger.Warn("failed to create merge output segment", "error", err)
@@ -631,7 +629,6 @@ func (m *MergeManager) mergeMJPEGGroup(ctx context.Context, cameraID string, rec
 		estSize += r.FileSize
 	}
 
-	// Check disk space.
 	total, used, err := m.store.GetDiskUsage()
 	if err != nil {
 		logger.Warn("failed to get disk usage", "error", err)
@@ -706,7 +703,6 @@ func (m *MergeManager) mergeAVIGroup(ctx context.Context, cameraID string, recs 
 		estSize += r.FileSize
 	}
 
-	// Check disk space.
 	total, used, err := m.store.GetDiskUsage()
 	if err != nil {
 		logger.Warn("failed to get disk usage", "error", err)

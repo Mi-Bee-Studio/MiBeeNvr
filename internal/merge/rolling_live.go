@@ -708,7 +708,6 @@ func (r *RollingMergeCoordinator) mergeRunIntoBucket(ctx context.Context, run []
 		return err
 	}
 
-	// Update bucket state.
 bucketStateUpdate:
 	bucket.mergedFilePath = outputPath
 	bucket.mergedRecID = mergedRecID

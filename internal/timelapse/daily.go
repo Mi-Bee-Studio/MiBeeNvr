@@ -63,7 +63,6 @@ func (m *DailyMergeManager) Run(ctx context.Context, cameraID string, date strin
 	// Filter to only include segments with merge_status='merged'.
 	segments := filterMergedSegments(recordings)
 
-	// Handle no segments.
 	if len(segments) == 0 {
 		slog.Warn(
 			"daily merge: no segments found for date",

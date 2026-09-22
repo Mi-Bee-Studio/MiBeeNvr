@@ -6,12 +6,12 @@
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings } from 'lucide-svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import PtzControl from '../components/PtzControl.svelte';
-  import TwoWayAudioButton from '../components/TwoWayAudioButton.svelte';
-  import CameraPlayer from '../components/CameraPlayer.svelte';
-  import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
-  import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
-  import SnapshotButton from '../components/SnapshotButton.svelte';
+  import PtzControl from '$lib/components/PtzControl.svelte';
+  import TwoWayAudioButton from '$lib/components/TwoWayAudioButton.svelte';
+  import CameraPlayer from '$lib/components/CameraPlayer.svelte';
+  import ProtocolSwitcher from '$lib/components/ProtocolSwitcher.svelte';
+  import type { StreamingProtocol } from '$lib/components/ProtocolSwitcher.svelte';
+  import SnapshotButton from '$lib/components/SnapshotButton.svelte';
   import ImagingPanel from '$lib/components/ImagingPanel.svelte';
   import PresetManager from '$lib/components/PresetManager.svelte';
   import GB28181TalkButton from '$lib/components/GB28181TalkButton.svelte';
