@@ -226,6 +226,21 @@ cleanup:
                                    # segments rank neutrally. Default true. The time-retention path above
                                    # is NOT affected — "keep N days" keeps its exact meaning.
 
+# Process-wide I/O budget (#751) — pace background bulk I/O (merge, cleanup,
+# timelapse extraction, S3 offload) against one token bucket so foreground
+# work keeps its latency on busy media. 0/unset = off (default): every
+# consumer's fast path is a nil check.
+#io:
+#  budget_bytes_per_sec: 0          # ~25% of the medium's sequential write throughput (e.g. 8-16 MiB/s
+#                                    # for a slow SD card, 40-60 MiB/s for a USB HDD). 0 disables.
+#  budget_burst_bytes: 0            # Token-bucket burst capacity; 0 → one second of the rate.
+#  delete_unlinks_per_sec: 200      # Recursive frame-tree delete guardrail (#755), active only with a budget.
+#  # Foreground budgeting (#886), both default OFF — pacing these paths can
+#  # add latency/drop frames under a tight budget; enable only on media where
+#  # the unbounded foreground I/O itself is the problem:
+#  #recording_writes_budgeted: false # Recording segment writes join as the "recording" tenant.
+#  #playback_reads_budgeted: false   # API media serving (playback/download) joins as the "playback" tenant.
+
 # Segment merging — combine short segments into longer recordings
 # Two independent systems:
 #   1. Periodic merge (enabled/check_interval): scans every interval, batch-merges

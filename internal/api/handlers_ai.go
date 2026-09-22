@@ -318,7 +318,7 @@ func (h *Handler) handleGetAIEventSnapshot(w http.ResponseWriter, r *http.Reques
 	// so let clients cache for a day (ServeFile still honors range requests
 	// and conditional GETs via Last-Modified).
 	w.Header().Set("Cache-Control", "private, max-age=86400")
-	http.ServeFile(w, r, path)
+	h.serveFileBudgeted(w, r, path)
 }
 
 // maxAIEventSnapshotBytes caps a single snapshot upload (sanity guard
