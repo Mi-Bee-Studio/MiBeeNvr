@@ -151,12 +151,13 @@ func NewH265Recorder(cfg H265Config, store SegmentStore, opts ...*metrics.Metric
 
 	rec := &H265Recorder{}
 	b := &baseRecorder{
-		driver: H265NALDriver{},
-		cfg:    cfg,
-		store:  store,
-		mtrics: m,
-		status: model.StatusStopped,
-		log:    h265Logger,
+		driver:       H265NALDriver{},
+		cfg:          cfg,
+		store:        store,
+		mtrics:       m,
+		frameBufPool: newFrameBufPool(),
+		status:       model.StatusStopped,
+		log:          h265Logger,
 	}
 	rec.baseRecorder = b
 	b.self = rec
@@ -430,12 +431,14 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		}
 		at := time.Now() // one arrival stamp for the whole AU (#506)
 		for _, nalu := range au {
-			data := make([]byte, 4+len(nalu))
-			copy(data, []byte{0x00, 0x00, 0x00, 0x01})
+			buf := r.frameBufPool.get(4 + len(nalu))
+			data := buf.b
+			data[0], data[1], data[2], data[3] = 0, 0, 0, 1
 			copy(data[4:], nalu)
 			select {
-			case r.frameCh <- framePacket{data: data, at: at}:
+			case r.frameCh <- framePacket{data: data, buf: buf, at: at}:
 			default:
+				r.frameBufPool.put(buf)
 				d := r.dropped.Add(1)
 				if r.mtrics != nil {
 					r.mtrics.RecorderRingBufferDropsTotal.WithLabelValues(r.cfg.CameraID).Inc()

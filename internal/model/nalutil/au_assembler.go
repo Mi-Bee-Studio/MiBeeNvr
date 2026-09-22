@@ -101,7 +101,13 @@ func (a *AUAssembler) flushLocked(emit func(au [][]byte, pts int64)) {
 		copy(out, a.pending)
 		emit(out, a.pts)
 	}
-	a.pending = nil
+	// Keep pending's capacity across pictures (#875 M6) — the outer slice
+	// rebuild churned on every picture otherwise. `out` above stays a fresh
+	// array because emit hands ownership out (hub consumers queue the AU by
+	// reference; the assembler must never mutate an emitted array). Only the
+	// pending backing store — whose header slots were already copied into
+	// out — is reused for the next picture.
+	a.pending = a.pending[:0]
 	a.valid = false
 	a.hasVCL = false
 }

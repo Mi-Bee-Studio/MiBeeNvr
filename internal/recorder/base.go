@@ -261,7 +261,52 @@ type codecDriver interface {
 // missing-ref POC errors on cameras with TCP-timeout flaps).
 type framePacket struct {
 	data []byte
-	at   time.Time
+	// buf is non-nil when data was carved from a pooled framing buffer; the
+	// writeFrames drain loop recycles it one iteration later (#875 H4).
+	// Producers that don't use the pool (tests, http-jpeg) leave it nil.
+	buf *naluFrameBuf
+	at  time.Time
+}
+
+// naluFrameBuf is a pooled Annex-B framing buffer: 4-byte start code plus one
+// NALU. The RTP callbacks used to allocate one per NALU (#875 H4); the pool
+// recycles them across pictures. Recycling is safe because every retention
+// point on the drain path copies — the codec param snapshot
+// (setCodecParams deep-copies) and the adaptive GOP ring (observe copies each
+// payload) — and the mp4 muxer's bufio finishes with the bytes synchronously
+// inside WriteSample.
+type naluFrameBuf struct {
+	b []byte
+}
+
+// frameBufPool is per-recorder: buffers never cross recorders, so each
+// camera's NALU size distribution settles its own pool and recorder shutdown
+// drops it naturally (sync.Pool is GC-cleared).
+type frameBufPool struct {
+	p sync.Pool
+}
+
+func newFrameBufPool() frameBufPool {
+	return frameBufPool{p: sync.Pool{New: func() any {
+		return &naluFrameBuf{b: make([]byte, 0, 64<<10)}
+	}}}
+}
+
+// get returns a buffer sliced to n bytes, ready to fill.
+func (f *frameBufPool) get(n int) *naluFrameBuf {
+	nb := f.p.Get().(*naluFrameBuf)
+	if cap(nb.b) < n {
+		// Oversized NALU (large IDR): replace rather than grow — a single
+		// 500KB frame must not strand the pool on tiny buffers.
+		nb.b = make([]byte, n)
+	}
+	nb.b = nb.b[:n]
+	return nb
+}
+
+func (f *frameBufPool) put(nb *naluFrameBuf) {
+	nb.b = nb.b[:0]
+	f.p.Put(nb)
 }
 
 type baseRecorder struct {
@@ -336,6 +381,10 @@ type baseRecorder struct {
 
 	// Frame pipeline (written from RTP callback goroutine, read from writeFrames).
 	frameCh chan framePacket
+	// frameBufPool recycles the Annex-B framing buffers sent through frameCh
+	// (#875 H4). Per-recorder by construction (only this recorder's callbacks
+	// get/put), so no cross-camera contention.
+	frameBufPool frameBufPool
 	// frameChPtr is the race-free read side of frameCh for RecordingStats:
 	// the plain field is reassigned at run() start while stats readers (the
 	// flow API) may sample concurrently; senders keep using frameCh directly.
@@ -578,7 +627,25 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 	// nil check per frame.
 	sparseAudio := false
 
+	// Pooled framing buffers (#875 H4): recycle the PREVIOUS packet's buffer
+	// at the top of each iteration. Every use of pkt.data inside an iteration
+	// is either synchronous (muxer bufio inside WriteSample) or copies what it
+	// retains (param-set snapshot, adaptive GOP ring), so recycling one
+	// iteration late is safe; the defer covers the final packet after the
+	// channel closes.
+	var held *naluFrameBuf
+	defer func() {
+		if held != nil {
+			b.frameBufPool.put(held)
+		}
+	}()
+
 	for pkt := range b.frameCh {
+		if held != nil {
+			b.frameBufPool.put(held)
+			held = nil
+		}
+		held = pkt.buf
 		// pkt.at is the unit's ARRIVAL time (#506) — every timestamp decision
 		// below (adaptive cadence, sample pts/duration, rotation) uses it so a
 		// backlog burst drained after a writer stall keeps real spacing instead
