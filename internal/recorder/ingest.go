@@ -372,7 +372,32 @@ func (r *IngestRecorder) WriteNALU(au [][]byte, ptsTicks int64, _ bool) {
 // H.265 sources additionally cache the VPS (required by the hvc1/hvcC track
 // and by consumers that expect the full VPS/SPS/PPS triple in-band).
 func (r *IngestRecorder) cacheParamSets(au [][]byte) {
-	if r.isH265() {
+	// First-byte precheck (#875 M2): VCL-only AUs — the overwhelming majority
+	// — skip both the full extraction scan and the cache lock. The type sets
+	// here mirror ExtractParamSetsH264/H265 exactly ({7,8} / {32,33,34}), so
+	// false negatives are impossible: any AU the extractors would score is
+	// admitted.
+	h265 := r.isH265()
+	hasParamSet := false
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			continue
+		}
+		if h265 {
+			if t := (nalu[0] >> 1) & 0x3F; t >= 32 && t <= 34 {
+				hasParamSet = true
+				break
+			}
+		} else if t := nalu[0] & 0x1F; t == 7 || t == 8 {
+			hasParamSet = true
+			break
+		}
+	}
+	if !hasParamSet {
+		return
+	}
+
+	if h265 {
 		vps, sps, pps := nalutil.ExtractParamSetsH265(au)
 		r.mu.Lock()
 		defer r.mu.Unlock()

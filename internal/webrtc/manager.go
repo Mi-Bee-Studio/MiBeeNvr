@@ -42,6 +42,16 @@ const (
 )
 
 // peerEntry holds a single WHEP peer connection and its metadata.
+// encodedFrame carries one annexB-encoded AU shared by every peer under a
+// stream key (#875 M1): WriteH264 encodes once and the per-peer writeLoops
+// only read the buffer (pion's packetizer copies into RTP payloads), so
+// sharing across peers is safe — mirrors the FLV manager's single-tag pattern.
+type encodedFrame struct {
+	data  []byte
+	pts   int64
+	isIDR bool
+}
+
 type peerEntry struct {
 	mu           sync.Mutex
 	pc           *webrtc.PeerConnection
@@ -58,7 +68,7 @@ type peerEntry struct {
 	// lastUsed is the last activity stamp in unix milliseconds (atomic — the
 	// per-frame path must not take the entry mutex, #875 H3).
 	lastUsed   atomic.Int64
-	frameCh    chan model.FrameMsg
+	frameCh    chan encodedFrame
 	drops      uint64             // atomic: total frames dropped due to buffer full
 	framesSent prometheus.Counter // pre-resolved per-camera counter (#875 H5)
 	congestion *congestionTracker // tracks drop rate for bitrate adaptation
@@ -543,12 +553,21 @@ func (m *Manager) WriteH264(key string, pts int64, au [][]byte) {
 		traceID = fmt.Sprintf("%s-%d", key, pts)
 	}
 
+	// Encode ONCE and share the buffer across peers (#875 M1) — with N
+	// viewers this replaces N annexB passes with one. An empty encode (no
+	// NALUs) previously cost every peer an encode-then-skip round-trip; now
+	// the whole fan-out is skipped.
+	data := annexBEncode(au)
+	if len(data) == 0 {
+		return
+	}
+
 	for _, entry := range entries {
 		entry.lastUsed.Store(time.Now().UnixMilli())
 
 		// Non-blocking send — drop frame if buffer full
 		select {
-		case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
+		case entry.frameCh <- encodedFrame{data: data, pts: pts, isIDR: isKeyframe}:
 			if frametrace.Active(key) {
 				frametrace.Log(
 					key,
@@ -763,7 +782,7 @@ func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSD
 		camID:      camID,
 		streamKey:  streamKey,
 		sessionID:  sid,
-		frameCh:    make(chan model.FrameMsg, m.frameBufSize),
+		frameCh:    make(chan encodedFrame, m.frameBufSize),
 		congestion: newCongestionTracker(m.frameBufSize),
 	}
 	entry.lastUsed.Store(time.Now().UnixMilli())
@@ -921,16 +940,16 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 		case <-ctx.Done():
 			return
 		case frame := <-entry.frameCh:
-			data := annexBEncode(frame.AU)
+			data := frame.data
 			if len(data) == 0 {
 				continue
 			}
 
 			// Congestion detection: skip non-IDR frames if drop rate is high
-			if entry.congestion.shouldSkipFrame(frame.IsKeyframe) {
+			if entry.congestion.shouldSkipFrame(frame.isIDR) {
 				slog.Debug("webrtc_congestion_skip",
 					"session_id", entry.sessionID,
-					"is_idr", frame.IsKeyframe,
+					"is_idr", frame.isIDR,
 					"drop_rate", entry.congestion.dropRate())
 				continue
 			}
@@ -942,7 +961,7 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 			if entry.lastPTS == 0 {
 				dur = time.Second / defaultFPS
 			} else {
-				delta := frame.PTS - entry.lastPTS
+				delta := frame.pts - entry.lastPTS
 				if delta > 0 {
 					dur = time.Duration(delta) * time.Second / h264ClockRate
 					// Cap at 1 second to prevent huge durations from PTS anomalies
@@ -953,7 +972,7 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 					dur = time.Second / defaultFPS
 				}
 			}
-			entry.lastPTS = frame.PTS
+			entry.lastPTS = frame.pts
 			entry.mu.Unlock()
 
 			if dur < time.Millisecond {
