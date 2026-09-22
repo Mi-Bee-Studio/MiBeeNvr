@@ -261,7 +261,6 @@ export function setupZombieDetector(
   const intervalId = setInterval(() => {
     const now = Date.now();
 
-    // Check readyState
     if (videoEl.readyState === 0) {
       if (readyStateZeroSince === null) {
         readyStateZeroSince = now;

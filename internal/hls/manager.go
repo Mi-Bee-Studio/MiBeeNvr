@@ -207,7 +207,6 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		return nil
 	}
 
-	// Create per-camera directory
 	dirPath := filepath.Join(m.dataDir, cameraID)
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
 		return err
@@ -241,7 +240,6 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 	entry.wg.Add(2)
 	go func() { defer entry.wg.Done(); m.writeLoop(ctx, cameraID, entry) }()
 
-	// Start idle watchdog
 	go func() { defer entry.wg.Done(); m.idleWatchdog(ctx, cameraID) }()
 
 	codecStr := "H264"
@@ -672,13 +670,15 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 			if isIDR {
 				traceID = fmt.Sprintf("%s-%d", cameraID, frame.pts)
 			}
-			frametrace.Log(
-				cameraID,
-				"trace_id", traceID,
-				"camera_id", cameraID,
-				"stage", "hls_recv",
-				"is_idr", isIDR,
-			)
+			if frametrace.Active(cameraID) {
+				frametrace.Log(
+					cameraID,
+					"trace_id", traceID,
+					"camera_id", cameraID,
+					"stage", "hls_recv",
+					"is_idr", isIDR,
+				)
+			}
 			if waitForFirstIDR(au, entry.isH265, &entry.idrReceived) {
 				continue
 			}
@@ -713,13 +713,15 @@ func (m *Manager) writeLoop(ctx context.Context, cameraID string, entry *streamE
 				)
 				m.handleWriteError(ctx, cameraID, entry, err)
 			} else {
-				frametrace.Log(
-					cameraID,
-					"trace_id", traceID,
-					"camera_id", cameraID,
-					"stage", "hls_write",
-					"is_idr", isIDR,
-				)
+				if frametrace.Active(cameraID) {
+					frametrace.Log(
+						cameraID,
+						"trace_id", traceID,
+						"camera_id", cameraID,
+						"stage", "hls_write",
+						"is_idr", isIDR,
+					)
+				}
 				// Successful write — reset error tracking
 				if entry.consecutiveErrors > 0 {
 					entry.consecutiveErrors = 0
@@ -1041,26 +1043,31 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 		return nil // stream not active, silently ignore
 	}
 
+	// Hoisted loop/frame invariants (#875 M7): IsIDR rescans the whole AU —
+	// compute once, reuse for both the throttle decision and the trace.
+	isIDR := nalutil.IsIDR(au, entry.isH265)
+
 	entry.mu.Lock()
 	entry.lastUsed = time.Now()
 
 	// Credit-based FPS throttling: accumulate elapsed time between frames,
 	// send only when enough credit has accumulated for one interval.
 	// This produces consistent frame intervals instead of jittery drops.
-	if shouldThrottle(entry.maxFPS, &entry.fpsCredit, &entry.lastFrameTime, time.Now(), nalutil.IsIDR(au, entry.isH265)) {
-		isIDR := nalutil.IsIDR(au, entry.isH265)
+	if shouldThrottle(entry.maxFPS, &entry.fpsCredit, &entry.lastFrameTime, time.Now(), isIDR) {
 		traceID := "no-trace"
 		if isIDR {
 			traceID = fmt.Sprintf("%s-%d", cameraID, pts)
 		}
-		frametrace.Log(
-			cameraID,
-			"trace_id", traceID,
-			"camera_id", cameraID,
-			"stage", "hls_drop",
-			"is_idr", isIDR,
-			"reason", "fps_throttle",
-		)
+		if frametrace.Active(cameraID) {
+			frametrace.Log(
+				cameraID,
+				"trace_id", traceID,
+				"camera_id", cameraID,
+				"stage", "hls_drop",
+				"is_idr", isIDR,
+				"reason", "fps_throttle",
+			)
+		}
 		if m.metrics != nil {
 			m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
 		}
@@ -1080,15 +1087,17 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 		if isIDR {
 			traceID = fmt.Sprintf("%s-%d", cameraID, pts)
 		}
-		frametrace.Log(
-			cameraID,
-			"trace_id", traceID,
-			"camera_id", cameraID,
-			"stage", "hls_drop",
-			"is_idr", isIDR,
-			"reason", "buffer_full",
-			"queue_depth", len(entry.frameCh),
-		)
+		if frametrace.Active(cameraID) {
+			frametrace.Log(
+				cameraID,
+				"trace_id", traceID,
+				"camera_id", cameraID,
+				"stage", "hls_drop",
+				"is_idr", isIDR,
+				"reason", "buffer_full",
+				"queue_depth", len(entry.frameCh),
+			)
+		}
 		if m.metrics != nil {
 			m.metrics.HLSFramesDropped.WithLabelValues(cameraID).Inc()
 		}

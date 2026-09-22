@@ -38,7 +38,7 @@ gb28181:
   subscribe_alarm: true         # 报警订阅
   subscribe_mobile_position: false
   subscribe_expires: "3600s"
-  allowed_device_ids: []        # 空 = 允许所有设备注册
+  allowed_device_ids: []        # 空 = 允许所有设备注册（启动时会打印 WARN 提示;生产建议显式列出）
 ```
 
 **关键参数**：

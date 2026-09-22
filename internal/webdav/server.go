@@ -195,7 +195,6 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, davHandler *w
 
 // resolveOrCreateCamera finds an existing camera by name or creates a new one.
 func (s *Server) resolveOrCreateCamera(ctx context.Context, name string) string {
-	// Try finding by name across all cameras
 	cameras, err := s.db.ListCameras(ctx)
 	if err == nil {
 		for _, c := range cameras {
@@ -205,7 +204,6 @@ func (s *Server) resolveOrCreateCamera(ctx context.Context, name string) string 
 		}
 	}
 
-	// Create a new camera
 	id := camera.GenerateCameraID()
 	err = s.db.UpsertCamera(ctx, id, name, string(model.ProtoHTTP), string(model.EncJPEG), "", "", "", "", "", "", "")
 	if err != nil {

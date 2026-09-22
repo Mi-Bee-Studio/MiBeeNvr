@@ -211,10 +211,11 @@ func TestAuthMiddlewareLegacyBasicAuthStillWorks(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
-// TestAuthMiddlewareLegacyQueryBase64TokenStillWorks guards the migration window:
-// old browsers still holding base64(user:pass) in their ?token= continue to work
-// until the next login, which swaps them for a signed token.
-func TestAuthMiddlewareLegacyQueryBase64TokenStillWorks(t *testing.T) {
+// TestAuthMiddlewareLegacyQueryBase64TokenRejected pins the removal (#879):
+// the base64(user:pass) ?token= form leaked credentials into browser history
+// and proxy logs — it must 401. The mbs_ session-token form stays supported
+// (EventSource/sendBeacon cannot set headers).
+func TestAuthMiddlewareLegacyQueryBase64TokenRejected(t *testing.T) {
 	hash, _ := HashPassword("secret")
 	mw, _ := NewAuthMiddleware(staticProvider("admin", hash), "", AuthRateLimitConfig{})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -224,7 +225,7 @@ func TestAuthMiddlewareLegacyQueryBase64TokenStillWorks(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/?token="+basic("admin", "secret"), nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "legacy base64 ?token= must still work during migration")
+	require.Equal(t, http.StatusUnauthorized, w.Code, "legacy base64 ?token= must be rejected")
 }
 
 // TestAuthMiddlewareRenewsExpiringToken checks that a token within the renewal

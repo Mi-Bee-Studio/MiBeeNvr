@@ -350,7 +350,6 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Fetch existing recording
 	existing, err := h.db.GetRecording(r.Context(), id)
 	if err != nil || existing == nil {
 		WriteError(w, http.StatusNotFound, "recording not found")
@@ -370,7 +369,6 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Apply partial updates
 	if body.FilePath != nil {
 		existing.FilePath = *body.FilePath
 	}
@@ -425,7 +423,6 @@ func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Validate ai_status value.
 	switch body.AIStatus {
 	case "pending", "processing", "completed", "failed", "skipped":
 		// ok
@@ -532,7 +529,6 @@ func (h *Handler) handleTimelineGaps(w http.ResponseWriter, r *http.Request) {
 	dayStart := time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.UTC)
 	dayEnd := dayStart.Add(24 * time.Hour)
 
-	// Fetch all recordings for this camera on this day.
 	recs, err := h.db.ListRecordings(r.Context(), model.RecordingFilter{
 		CameraID:  cameraID,
 		StartTime: dayStart,

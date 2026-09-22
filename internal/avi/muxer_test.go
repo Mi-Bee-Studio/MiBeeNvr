@@ -694,7 +694,6 @@ func TestAVIMuxer_Idx1Offsets(t *testing.T) {
 
 	data := buf.Bytes()
 
-	// Find movi data start.
 	moviOff := findFOURCC(t, data, fccmovi)
 	if moviOff < 0 {
 		t.Fatal("movi not found")
@@ -759,7 +758,6 @@ func TestMuxerVideoOnly(t *testing.T) {
 	data := buf.Bytes()
 	t.Logf("Video-only file size: %d bytes", len(data))
 
-	// Check RIFF magic.
 	if v := binary.LittleEndian.Uint32(data[0:]); v != fccRIFF {
 		t.Fatalf("expected RIFF at offset 0, got 0x%08X", v)
 	}

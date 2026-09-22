@@ -43,15 +43,14 @@ func autoInitConfig(configPath string) *config.Config {
 		if info, err := os.Stat("/data"); err == nil && info.IsDir() {
 			dataDir = "/data"
 		} else {
-			dataDir = "/var/lib/mibee-nvr"
+			dataDir = config.DefaultDataDir
 		}
 	}
 
-	// Check for initial password from env var
 	password := os.Getenv("NVR_PASSWORD")
 
 	cfg := &config.Config{
-		Server:        config.ServerConfig{Listen: ":9090"},
+		Server:        config.ServerConfig{Listen: config.DefaultListenAddr},
 		Storage:       config.StorageConfig{RootDir: dataDir, SegmentDuration: "30s"},
 		Auth:          config.AuthConfig{Username: "admin"},
 		Cameras:       []config.CameraConfig{},
@@ -77,12 +76,10 @@ func autoInitConfig(configPath string) *config.Config {
 		}
 		cfg.Auth.Password = password
 	}
-	// Create data directory if needed
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		slog.Warn("failed to create data directory", "dir", dataDir, "error", err)
 	}
 
-	// Create config directory if needed
 	configDir := filepath.Dir(configPath)
 	if configDir != "." && configDir != "/" {
 		if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -167,7 +164,7 @@ func main() {
 	// Fix Docker storage path mismatch: if running in Docker but config has
 	// the non-Docker default /var/lib/mibee-nvr, auto-fix to /data.
 	if dockerDir := config.DockerDataDir(); dockerDir != "" {
-		if cfg.Storage.RootDir == "/var/lib/mibee-nvr" || cfg.Storage.RootDir == "" {
+		if cfg.Storage.RootDir == config.DefaultDataDir || cfg.Storage.RootDir == "" {
 			slog.Warn("auto-fixing storage.root_dir for Docker environment",
 				"old", cfg.Storage.RootDir, "new", dockerDir)
 			cfg.Storage.RootDir = dockerDir

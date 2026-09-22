@@ -336,8 +336,7 @@ func TestProbeDevice_FallbackBothFail_ReturnsNil(t *testing.T) {
 // --- enrichDevices() serial capture test ---
 
 // TestEnrichDevices_CapturesSerial guards the fix for the discarded-serial bug:
-// enrichDevices fetches GetDeviceInformation (which includes SerialNumber) but
-// previously had no Serial field to write it to, so the serial was lost at
+// enrichDevices must capture the SerialNumber from GetDeviceInformation at
 // discovery time. The serial is what makes a camera immediately self-healable
 // (sent as stable_id at add time). Without this, IP self-healing only activates
 // after the async ensureStableID goroutine runs post-connect.

@@ -3,10 +3,10 @@
  *
  * Conservative buffer sizes for 512MB RAM. enableWorker disabled for Web Worker compat.
  *
- * HLS is ALWAYS low-latency now (the LL-HLS/HLS distinction was collapsed —
- * lowLatencyMode:true is on for every mount, and the smaller LL-HLS buffer
- * sizes are the single config). The `protocol` argument is retained for
- * backward-compat with existing callers but no longer changes the output.
+ * HLS is ALWAYS low-latency: lowLatencyMode:true is on for every mount, and
+ * the smaller LL-HLS buffer sizes are the single config. The `protocol`
+ * argument is retained for backward-compat with existing callers; it does
+ * not change the output.
  */
 
 import { getAuthHeader } from '$lib/api';
@@ -76,7 +76,7 @@ export function createHlsConfig(_protocol: string = 'hls'): Partial<Hls.Config> 
       }
       return new Request(context.url, initParams);
     },
-    // Low-latency buffer tuning (formerly the 'll-hls' branch). Tighter buffers
+    // Low-latency buffer tuning. Tighter buffers
     // give ~2-5s glass-to-glass latency on a home NVR with no CDN; RPi 3B's
     // 512MB RAM handles the smaller back-buffer fine.
     maxBufferLength: 10,

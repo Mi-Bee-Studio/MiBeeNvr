@@ -91,7 +91,6 @@ func (cm *CleanupManager) updateSQLiteMetrics(ctx context.Context) {
 		return
 	}
 
-	// Update WAL size
 	if walSize, err := cm.db.GetWALSize(); err == nil {
 		cm.metrics.SQLiteWALSizeBytes.Set(float64(walSize))
 	}
@@ -102,7 +101,6 @@ func (cm *CleanupManager) updateSQLiteMetrics(ctx context.Context) {
 		cm.metrics.SQLiteDBSizeBytes.Set(float64(info.Size()))
 	}
 
-	// Update fragmentation ratio
 	if frac, err := cm.db.GetFragmentationRatio(ctx); err == nil {
 		cm.metrics.SQLiteFragmentationRatio.Set(frac)
 	}

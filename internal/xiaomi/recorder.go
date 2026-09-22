@@ -23,6 +23,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -520,16 +521,16 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 				return
 			}
 			retryCount++
-			backoff := recorder.TieredBackoffWithJitter(retryCount)
+			delay := backoff.TieredBackoffWithJitter(retryCount)
 			r.reportVendorError(err)
-			xiaomiLogger.Error("failed to resolve MISS URL, retrying", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount)
+			xiaomiLogger.Error("failed to resolve MISS URL, retrying", "camera_id", r.cfg.CameraID, "error", err, "backoff", delay, "attempt", retryCount)
 			r.recordError("cloud_resolve")
 			r.recordXiaomiDisconnect("cloud_resolve")
 			r.setStatus(model.StatusReconnecting)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(backoff):
+			case <-time.After(delay):
 			}
 			continue
 		}
@@ -570,18 +571,18 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 		// hint the camera is unreachable). Also lengthen the backoff once the
 		// failure is clearly persistent, to calm the retry storm.
 		r.reportConnectError(err)
-		backoff := recorder.TieredBackoffWithJitter(retryCount)
+		delay := backoff.TieredBackoffWithJitter(retryCount)
 		if r.connectFailCount >= connectFailThreshold {
-			backoff = recorder.StorageBackoffWithJitter() // ~60s — the camera isn't coming back soon
+			delay = backoff.StorageBackoffWithJitter() // ~60s — the camera isn't coming back soon
 		}
-		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", backoff, "attempt", retryCount, "connect_failures", r.connectFailCount)
+		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", delay, "attempt", retryCount, "connect_failures", r.connectFailCount)
 		r.recordError("connection")
 		r.recordXiaomiDisconnect(classifyDisconnectReason(err))
 		r.setStatus(model.StatusReconnecting)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(delay):
 		}
 	}
 }
@@ -1387,7 +1388,6 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 		})
 	}
 
-	// Update metrics.
 	if r.frameCount > 0 && r.curFinalPath != "" {
 		r.recordSegmentCreated()
 		if fileSize > 0 {

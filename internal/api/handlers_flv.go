@@ -32,7 +32,6 @@ func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check camera exists
 	cam, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")

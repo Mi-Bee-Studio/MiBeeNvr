@@ -10,7 +10,6 @@ import (
 
 func TestMergeDiskDirectories_Manifest(t *testing.T) {
 	t.Helper()
-	// Create temp directories for source and target
 	srcDir, err := os.MkdirTemp("", "merge-src-*")
 	if err != nil {
 		t.Fatalf("failed to create src temp dir: %v", err)
@@ -23,7 +22,6 @@ func TestMergeDiskDirectories_Manifest(t *testing.T) {
 	}
 	defer os.RemoveAll(dstDir)
 
-	// Create test files in source directory with sourceID prefix
 	sourceID := "cam-source"
 	targetID := "cam-target"
 
@@ -33,7 +31,6 @@ func TestMergeDiskDirectories_Manifest(t *testing.T) {
 		t.Fatalf("failed to create subdir: %v", err)
 	}
 
-	// Create test files with sourceID prefix
 	testFiles := []string{
 		filepath.Join(srcDir, "cam-source_20240101_100000_abc123.mp4"),
 		filepath.Join(srcDir, "cam-source_20240101_110000_def456.mp4"),
@@ -174,7 +171,6 @@ func TestMergeDiskDirectories_NamePrefix(t *testing.T) {
 	}
 	defer os.RemoveAll(dstDir)
 
-	// Create files with different prefixes
 	files := []string{
 		filepath.Join(srcDir, "cam1_20240101_100000_abc.mp4"),
 		filepath.Join(srcDir, "cam2_20240101_100000_def.mp4"),
@@ -347,7 +343,6 @@ func TestMergeDiskDirectories_RollbackWithManifest(t *testing.T) {
 	sourceID := "front-door"
 	targetID := "back-yard"
 
-	// Create test files in source
 	testFiles := []string{
 		"front-door_20240101_100000_abc123.mp4",
 		"front-door_20240101_110000_def456.mp4",

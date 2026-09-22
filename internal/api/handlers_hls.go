@@ -64,7 +64,6 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get camera to check protocol
 	cam, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
@@ -97,7 +96,6 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 
 	// If stream not active, start it
 	if !h.hlsMgr.IsActive(key) {
-		// Get camera config for HLS options
 		camCfg := h.camMgr.GetCameraConfig(id)
 		hlsMaxFPS := 0
 		if camCfg != nil {
@@ -321,7 +319,6 @@ func getRecorderHub(rec model.Recorder) *streamhub.StreamHub {
 func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
-	// Find camera config to get SnapshotURL + credentials
 	var snapshotURL, username, password string
 	if h.config != nil {
 		for _, cam := range h.config.Cameras {
@@ -389,7 +386,6 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update cache
 	h.snapshotMu.Lock()
 	h.snapshots[cameraID] = &snapshotCache{data: data, timestamp: time.Now()}
 	h.snapshotMu.Unlock()

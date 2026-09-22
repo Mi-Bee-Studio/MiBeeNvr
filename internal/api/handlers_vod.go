@@ -33,6 +33,9 @@ var vodSegmentName = regexp.MustCompile(`^f(\d+)-(\d+)\.m4s$`)
 // handlePlaybackPlaylist renders the VOD M3U8 for a camera + time range.
 func (h *Handler) handlePlaybackPlaylist(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "cameraID")
+	// Segment fetches by hls.js carry no headers: hand them the scoped
+	// mbs_session cookie, same mechanism as live HLS (#879).
+	setStreamCookieOnPlaylist(w, r, cameraID)
 	q := r.URL.Query()
 	startStr, endStr := q.Get("start"), q.Get("end")
 	if startStr == "" || endStr == "" {

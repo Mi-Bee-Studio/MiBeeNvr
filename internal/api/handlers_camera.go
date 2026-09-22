@@ -635,7 +635,6 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Return updated CameraRow with status
 	row, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
@@ -723,7 +722,6 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Remove from merge scheduler if present
 	if h.mergeScheduler != nil {
 		h.mergeScheduler.Remove(id)
 	}

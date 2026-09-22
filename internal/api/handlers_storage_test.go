@@ -76,8 +76,13 @@ func TestUpdateSettingsStorageRoot(t *testing.T) {
 	h.config.Storage.RootDir = "/data"
 	h.configPath = filepath.Join(dir, "mibee-nvr.yaml")
 
-	body := `{"storage":{"root_dir":"` + newRoot + `"}}`
-	req := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader([]byte(body)))
+	// Marshal instead of string concatenation: Windows temp paths contain
+	// backslashes that would produce invalid JSON in a raw literal.
+	bodyBytes, err := json.Marshal(map[string]any{"storage": map[string]any{"root_dir": newRoot}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(bodyBytes))
 	rec := httptest.NewRecorder()
 	h.handleUpdateSettings(rec, req)
 

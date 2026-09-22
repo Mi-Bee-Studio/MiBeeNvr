@@ -88,7 +88,6 @@ func TestAIHandler_ZoneCRUD(t *testing.T) {
 	rr = doRequest(t, routes, http.MethodPost, "/api/ai/zones", strings.NewReader(`{bad`), "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 
-	// Create one zone.
 	zone := `{"camera_id":"front-door","zone":{"name":"porch","points":[[0,0],[1,0],[1,1]]},"enabled":true}`
 	rr = doRequest(t, routes, http.MethodPost, "/api/ai/zones", strings.NewReader(zone), "", "")
 	require.Equal(t, http.StatusCreated, rr.Code)

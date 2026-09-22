@@ -16,7 +16,6 @@ func SetupLogger(level, format string) *slog.Logger {
 // SetupLoggerWriter is SetupLogger with an explicit sink (the desktop windows
 // build tees stdout into a log file — its console is hidden while serving).
 func SetupLoggerWriter(level, format string, w io.Writer) *slog.Logger {
-	// Parse level string to slog.Level
 	var logLevel slog.Level
 	switch strings.ToLower(level) {
 	case "debug":
@@ -31,7 +30,6 @@ func SetupLoggerWriter(level, format string, w io.Writer) *slog.Logger {
 		logLevel = slog.LevelInfo // default to info
 	}
 
-	// Create handler based on format
 	var handler slog.Handler
 	if strings.ToLower(format) == "json" {
 		handler = slog.NewJSONHandler(w, &slog.HandlerOptions{

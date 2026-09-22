@@ -169,7 +169,6 @@ func TestAlertCooldownExpiration(t *testing.T) {
 		t.Fatalf("first HandleEvent returned error: %v", err)
 	}
 
-	// Wait for cooldown to expire
 	time.Sleep(cooldown + 50*time.Millisecond)
 
 	// Second event after cooldown — should be dispatched
@@ -372,7 +371,6 @@ func TestAlertStatusUpdateOnNewEvent(t *testing.T) {
 		t.Fatalf("expected error status, got %s", s)
 	}
 
-	// Wait for cooldown
 	time.Sleep(cooldown + 50*time.Millisecond)
 
 	// Second event: healthy (restored)
@@ -432,7 +430,6 @@ func TestAlertPipelineSeverityEscalation(t *testing.T) {
 		t.Errorf("expected first event status %s, got %s", model.HealthStatusWarning, stored[0].Status)
 	}
 
-	// Wait for cooldown to expire
 	time.Sleep(cooldown + 50*time.Millisecond)
 
 	// Second emit — same message, should escalate to error

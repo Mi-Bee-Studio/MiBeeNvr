@@ -1,7 +1,8 @@
 // Package vision 实现 NVR → MiBeeVision 的主动推送集成。
 //
 // NVR 在段刚落盘时,直接把视频文件字节流 POST 给 Vision(不是通知 file_path 让 Vision 下载)。
-// 这样视频数据在 NVR 合并进程删除原文件之前就已经到了 Vision 手里——彻底消除 404。
+// 这样视频数据在 NVR 合并进程删除原文件之前就已经到了 Vision 手里,不会因
+// 合并删除产生 404。
 //
 // 多实例(vision.instances):NVR 可同时接入多个 Vision 消费端,每实例独立的
 // 地址/心跳健康/暂停窗/离线补偿;相机按 vision_instances 路由(空 = 全部启用

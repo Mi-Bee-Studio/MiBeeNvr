@@ -122,7 +122,6 @@ func (d *Demuxer) NextChunk() (*Chunk, error) {
 			return nil, io.EOF
 
 		default:
-			// Check if this is a known data chunk.
 			chunkType, streamID := classifyChunk(ckID)
 			if chunkType == 0 {
 				// Unknown chunk, skip it.
@@ -136,7 +135,6 @@ func (d *Demuxer) NextChunk() (*Chunk, error) {
 				continue
 			}
 
-			// Read the chunk data.
 			data := make([]byte, ckSize)
 			if _, err := io.ReadFull(d.r, data); err != nil {
 				return nil, fmt.Errorf("avi: read chunk data: %w", err)
@@ -247,7 +245,6 @@ func (d *Demuxer) VideoFrameIndex() ([]VideoFrameEntry, error) {
 
 // parseHeaders reads and validates the RIFF header and hdrl list.
 func (d *Demuxer) parseHeaders() error {
-	// Read RIFF header.
 	var riffHeader [12]byte
 	if _, err := io.ReadFull(d.r, riffHeader[:]); err != nil {
 		return fmt.Errorf("avi: read RIFF header: %w", err)
@@ -286,7 +283,6 @@ func (d *Demuxer) parseHdrl() error {
 
 		switch ckID {
 		case fccLIST:
-			// Read list type.
 			var listType [4]byte
 			if _, err := io.ReadFull(d.r, listType[:]); err != nil {
 				return fmt.Errorf("avi: read list type: %w", err)
@@ -386,7 +382,6 @@ func (d *Demuxer) parseHdrlChildren(size uint32) error {
 			}
 
 		case fccLIST:
-			// Read list type.
 			var listType [4]byte
 			if _, err := io.ReadFull(d.r, listType[:]); err != nil {
 				return fmt.Errorf("avi: read hdrl list type: %w", err)
@@ -395,7 +390,6 @@ func (d *Demuxer) parseHdrlChildren(size uint32) error {
 
 			listTypeID := binary.LittleEndian.Uint32(listType[:])
 			if listTypeID == fccstrl {
-				// Parse strl list.
 				if err := d.parseStrl(ckSize - 4); err != nil {
 					return err
 				}

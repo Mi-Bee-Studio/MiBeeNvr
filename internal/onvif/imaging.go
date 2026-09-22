@@ -92,7 +92,6 @@ func (c *ImagingControllerImpl) SetImagingSettings(ctx context.Context, settings
 		return fmt.Errorf("imaging endpoint not configured")
 	}
 
-	// Build the ImagingSettings XML block
 	exposureXML := buildExposureSettingsXML(settings.Exposure)
 	wbXML := buildWhiteBalanceSettingsXML(settings.WhiteBalance)
 

@@ -142,7 +142,6 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 	recordingID := chi.URLParam(r, "recordingID")
 	ctx := r.Context()
 
-	// Get the recording
 	rec, err := h.db.GetRecording(ctx, recordingID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get recording")
@@ -167,7 +166,6 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	// Delete recording from DB
 	if err := h.db.DeleteRecording(ctx, recordingID); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to delete recording")
 		return

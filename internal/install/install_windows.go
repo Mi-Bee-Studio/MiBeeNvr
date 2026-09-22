@@ -230,7 +230,7 @@ func configListenInUse(cfgPath string) bool {
 // loopbackListenAddr resolves the configured listen address into the
 // loopback form an on-machine client (installer/uninstaller) should dial.
 func loopbackListenAddr(cfgPath string) string {
-	addr := ":9090"
+	addr := config.DefaultListenAddr
 	if cfg, err := config.Load(cfgPath); err == nil && cfg.Server.Listen != "" {
 		addr = cfg.Server.Listen
 	}

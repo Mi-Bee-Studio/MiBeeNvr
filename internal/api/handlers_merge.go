@@ -162,7 +162,6 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 	checkInterval := normalizeDurationPtr(body.CheckInterval)
 	windowSize := normalizeDurationPtr(body.WindowSize)
 	minSegmentAge := normalizeDurationPtr(body.MinSegmentAge)
-	// Validate duration fields
 	for _, d := range []*string{checkInterval, windowSize, minSegmentAge} {
 		if d != nil {
 			if _, err := time.ParseDuration(*d); err != nil {
@@ -423,7 +422,6 @@ func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Parse min_duration from query or config.
 	minDurStr := r.URL.Query().Get("min_duration")
 	cfg := h.config.Merge
 	if minDurStr == "" {
@@ -438,7 +436,6 @@ func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Find short merged recordings.
 	cameraID := r.URL.Query().Get("camera_id")
 	shortRecs, err := h.db.ListShortMergedRecordings(r.Context(), cameraID, minDur.Seconds())
 	if err != nil {

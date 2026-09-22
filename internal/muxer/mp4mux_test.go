@@ -229,19 +229,16 @@ func TestMP4MuxerAudio(t *testing.T) {
 
 	m := NewMP4Muxer(path)
 
-	// Add H.264 video track
 	videoTrackID, err := m.AddH264Track(testSPS, testPPS)
 	require.NoError(t, err)
 	assert.Equal(t, 1, videoTrackID)
 
-	// Add AAC audio track
 	// AudioSpecificConfig for AAC-LC, 44100Hz, stereo: 0x12 0x10
 	aacConfig := []byte{0x12, 0x10}
 	audioTrackID, err := m.AddAudioTrack("aac", aacConfig)
 	require.NoError(t, err)
 	assert.Equal(t, 2, audioTrackID)
 
-	// Write video samples
 	idrNAL := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x40}
 	nonIDRNAL := []byte{0x00, 0x00, 0x00, 0x01, 0x41, 0x9a, 0x24}
 
@@ -293,19 +290,16 @@ func TestG711AudioTrack(t *testing.T) {
 
 	m := NewMP4Muxer(path)
 
-	// Add H.264 video track
 	videoTrackID, err := m.AddH264Track(testSPS, testPPS)
 	require.NoError(t, err)
 	assert.Equal(t, 1, videoTrackID)
 
-	// Add G.711 μ-law audio track
 	// config: 1 byte muLaw flag (1=μ-law) + 4 bytes sample rate (8000 = 0x00001F40)
 	g711Config := []byte{0x01, 0x00, 0x00, 0x1F, 0x40}
 	audioTrackID, err := m.AddAudioTrack("g711", g711Config)
 	require.NoError(t, err)
 	assert.Equal(t, 2, audioTrackID)
 
-	// Write video samples
 	idrNAL := []byte{0x00, 0x00, 0x00, 0x01, 0x28, 0x01, 0xAF, 0x09}
 	err = m.WriteSample(videoTrackID, idrNAL, 0, 33*time.Millisecond)
 	require.NoError(t, err)

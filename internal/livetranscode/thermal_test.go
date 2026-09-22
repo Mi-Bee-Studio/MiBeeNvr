@@ -554,7 +554,6 @@ func TestTranscodeManager_ContextCancellation(t *testing.T) {
 	zoneMonitor := NewThermalMonitorWithZones(85, paths)
 	mgr.thermal = zoneMonitor
 
-	// Create a context that will be cancelled immediately
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 

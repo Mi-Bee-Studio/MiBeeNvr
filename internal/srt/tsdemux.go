@@ -67,7 +67,6 @@ func (d *TSDemuxer) Feed(data []byte) []NALU {
 
 	offset := 0
 	for offset+tsPacketSize <= len(data) {
-		// Find sync byte
 		if data[offset] != tsSyncByte {
 			// Scan for next sync byte
 			found := false
@@ -147,7 +146,6 @@ func (d *TSDemuxer) processPacket(pkt []byte) []NALU {
 			d.payload = d.payload[:0]
 		}
 
-		// Parse PES header
 		pts, pesPayloadOffset, ok := parsePESHeader(payload)
 		if ok {
 			d.pts = pts
@@ -215,7 +213,6 @@ func extractNALUs(data []byte, pts int64) []NALU {
 
 	var nalus []NALU
 
-	// Find all start code positions
 	positions := findStartCodes(data)
 
 	// Extract NALUs between consecutive start codes

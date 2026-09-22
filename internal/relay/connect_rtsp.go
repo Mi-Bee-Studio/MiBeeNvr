@@ -3,7 +3,7 @@ package relay
 import (
 	"context"
 	"fmt"
-	"time"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/bluenviron/gortsplib/v5"
@@ -46,7 +46,7 @@ func (t *PushTarget) connectRTSP(ctx context.Context) error {
 
 	t.setStatus(StatusConnecting, "")
 	tcp := gortsplib.ProtocolTCP
-	client := &gortsplib.Client{Protocol: &tcp, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	client := &gortsplib.Client{Protocol: &tcp, ReadTimeout: config.DefaultRTSPTimeout, WriteTimeout: config.DefaultRTSPTimeout}
 
 	videoForma := &format.H264{
 		PayloadTyp:        96,

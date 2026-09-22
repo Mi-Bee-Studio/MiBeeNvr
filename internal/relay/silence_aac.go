@@ -187,7 +187,6 @@ func (g *SilenceAACGenerator) run(ctx context.Context, ch chan []byte) {
 			return
 
 		case <-ticker.C:
-			// Check silence timeout.
 			if time.Since(time.Unix(0, g.lastActive.Load())) > g.maxContinuousSilence {
 				return
 			}

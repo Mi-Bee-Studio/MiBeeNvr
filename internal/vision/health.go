@@ -242,7 +242,7 @@ func (h *HealthTracker) RecordPushOutcome(success bool) (justOpened, justClosed 
 	h.pushFails++
 	if h.pushFails < h.pushBreakerN || h.pushOpenUntil.After(time.Now()) {
 		// 未达阈值,或半开探测失败(熔断本就开着):只累计,退避在下次
-		// 真正跨越阈值时按累计失败数计算。
+		// 跨越阈值时按累计失败数计算。
 		return false, false
 	}
 	backoff := h.pushBackoffBase << min(h.pushFails-h.pushBreakerN, 20)

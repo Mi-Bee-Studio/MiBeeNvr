@@ -13,7 +13,18 @@ package slogx
 import (
 	"context"
 	"log/slog"
+	"net/url"
 )
+
+// RedactURL strips userinfo from a camera/relay URL before it reaches logs.
+func RedactURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.User == nil {
+		return rawURL
+	}
+	u.User = nil
+	return u.String()
+}
 
 // Component returns a logger tagged component=name that defers handler
 // resolution to emit time. Drop-in for `slog.Default().With("component", n)`

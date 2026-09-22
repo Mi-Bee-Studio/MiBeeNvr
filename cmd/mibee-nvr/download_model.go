@@ -78,7 +78,7 @@ func cmdDownloadModel() {
 			if info, err := os.Stat("/data"); err == nil && info.IsDir() {
 				dataDir = "/data"
 			} else {
-				dataDir = "/var/lib/mibee-nvr"
+				dataDir = config.DefaultDataDir
 			}
 		}
 		modelDir = filepath.Join(dataDir, "models")

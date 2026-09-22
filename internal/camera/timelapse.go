@@ -9,6 +9,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
@@ -163,7 +164,7 @@ func (cm *CameraManager) createTimelapseMJPEGRecorder(cam config.CameraConfig, s
 		}
 	}
 	tlCfg.MergeMgr = cm.resolveTimelapseMergeMgr(cam, tlCfg.Interval)
-	logger.Info("creating TimelapseRecorder for timelapse", "camera_id", cam.ID, "url", cam.URL)
+	logger.Info("creating TimelapseRecorder for timelapse", "camera_id", cam.ID, "url", slogx.RedactURL(cam.URL))
 	return recorder.NewTimelapseRecorder(tlCfg, cm.store)
 }
 

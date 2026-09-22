@@ -534,7 +534,6 @@ func (sp *AnnexBStreamParser) Feed(chunk []byte) []AccessUnit {
 	lastSC := codes[len(codes)-1]
 	sp.buf = sp.buf[lastSC.pos:]
 
-	// Update param sets from new NALUs
 	for _, n := range newNalus {
 		sp.updateParamSet(n)
 	}

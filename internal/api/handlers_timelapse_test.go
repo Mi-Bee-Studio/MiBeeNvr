@@ -129,7 +129,6 @@ func TestMergeProgress_Complete(t *testing.T) {
 	if err := os.MkdirAll(segmentDir, 0o755); err != nil {
 		t.Fatalf("failed to create segment dir: %v", err)
 	}
-	// Write some test frames
 	jpegData := createTestJPEG(t, 100, 100)
 	for i := range 3 {
 		if err := os.WriteFile(filepath.Join(segmentDir, fmt.Sprintf("frame_%06d.jpg", i+1)), jpegData, 0o644); err != nil {
@@ -828,12 +827,10 @@ func TestTimelapseDelete_Success(t *testing.T) {
 	if err := os.MkdirAll(segDir, 0o755); err != nil {
 		t.Fatalf("failed to create seg dir: %v", err)
 	}
-	// Create a test frame file
 	if err := os.WriteFile(filepath.Join(segDir, "frame_000001.jpg"), []byte("test"), 0o644); err != nil {
 		t.Fatalf("failed to write frame: %v", err)
 	}
 
-	// Create a merged file
 	mergedPath := filepath.Join(store.RootDir(), "cam-1", "rec-tl-del-merged.mp4")
 	if err := os.WriteFile(mergedPath, []byte("fake-mp4"), 0o644); err != nil {
 		t.Fatalf("failed to create merged file: %v", err)

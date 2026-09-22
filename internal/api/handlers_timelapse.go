@@ -30,7 +30,6 @@ func (h *Handler) handleGetCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Find camera in config
 	var tl *config.CameraTimelapseConfig
 	for i := range h.config.Cameras {
 		if h.config.Cameras[i].ID == id {
@@ -95,7 +94,6 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// Validate interval
 	if body.Interval != "" {
 		dur, err := time.ParseDuration(body.Interval)
 		if err != nil {
@@ -108,7 +106,6 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// Validate frame_source
 	if body.FrameSource != "" {
 		switch body.FrameSource {
 		case "auto", "snapshot", "rtsp_keyframe", "mjpeg", "latest_frame":
@@ -119,24 +116,20 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// Validate merge_mode
 	if body.MergeMode != "" && body.MergeMode != "auto" && body.MergeMode != "mp4" && body.MergeMode != "jpeg" {
 		WriteError(w, http.StatusBadRequest, "merge_mode must be \"auto\", \"mp4\", or \"jpeg\"")
 		return
 	}
 
-	// Validate merge_output_fps
 	if body.MergeOutputFPS != 0 && (body.MergeOutputFPS < 1 || body.MergeOutputFPS > 60) {
 		WriteError(w, http.StatusBadRequest, "merge_output_fps must be between 1 and 60")
 		return
 	}
 
-	// Find and update camera config in memory
 	found := false
 	for i := range h.config.Cameras {
 		if h.config.Cameras[i].ID == id {
 			h.config.Cameras[i].Timelapse = &body
-			// Apply defaults to zero-value fields
 			if body.Interval == "" {
 				h.config.Cameras[i].Timelapse.Interval = "30s"
 			}
@@ -241,7 +234,6 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 
 	ctx := r.Context()
 
-	// Check if there's any progress info for this camera.
 	info, ok := h.timelapseMergeMgr.GetProgress(cameraID)
 	if !ok {
 		// No progress tracked yet — send an initial event with status idle.
@@ -299,7 +291,6 @@ func (h *Handler) handleTimelapseMergeProgress(w http.ResponseWriter, r *http.Re
 			}
 			fmt.Fprintf(w, "event: progress\ndata: %s\n\n", data)
 			flusher.Flush()
-			// Stop if merge completed or failed.
 			if info.Status == "completed" || info.Status == "failed" {
 				return
 			}
@@ -317,12 +308,10 @@ func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 	// Parse pagination params with abuse prevention (cap 1000, no default).
 	limit, offset := parsePagination(r, 0, 1000)
 
-	// Parse optional filters
 	cameraID := r.URL.Query().Get("camera_id")
 	sortBy := r.URL.Query().Get("sort_by")
 	sortOrder := r.URL.Query().Get("sort_order")
 
-	// Build filter for both timelapse and MJPEG recordings
 	filter := model.RecordingFilter{
 		Formats:   []model.Format{model.FormatTimelapse, model.FormatMJPEG},
 		CameraID:  cameraID,
@@ -392,7 +381,6 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Get FPS + retain-intermediate-mp4 flag from camera's timelapse config.
 	fps := 10
 	retainMP4 := false
 	for i := range h.config.Cameras {
@@ -500,7 +488,6 @@ func (h *Handler) handleTimelapsePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find camera in config
 	found := false
 	for i := range h.config.Cameras {
 		if h.config.Cameras[i].ID == cameraID {
@@ -550,7 +537,6 @@ func (h *Handler) handleTimelapseResume(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Find camera in config
 	found := false
 	for i := range h.config.Cameras {
 		if h.config.Cameras[i].ID == cameraID {
@@ -636,14 +622,12 @@ func (h *Handler) handleTimelapseDelete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Delete merged file if exists
 	if rec.MergePath != "" {
 		if err := os.RemoveAll(rec.MergePath); err != nil {
 			logger.Warn("failed to delete merged file", "merge_path", rec.MergePath, "error", err)
 		}
 	}
 
-	// Delete source segment directory (if it's a directory)
 	if rec.FilePath != "" {
 		info, err := os.Stat(rec.FilePath)
 		if err == nil && info.IsDir() {
@@ -836,7 +820,6 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 
 	dataDir := filepath.Join(h.config.Storage.RootDir, "periodic-merge")
 
-	// Parse date
 	refTime := time.Now().In(loc)
 	if body.Date != "" {
 		if parsed, err := time.ParseInLocation("2006-01-02", body.Date, loc); err == nil {
@@ -854,7 +837,6 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 	triggered := 0
 
 	for _, cameraID := range body.CameraIDs {
-		// Get FPS + retain-intermediate-mp4 flag from camera's timelapse config.
 		fps := 10
 		retainMP4 := false
 		for i := range h.config.Cameras {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -336,7 +337,11 @@ func TestHealth_CameraAggregation(t *testing.T) {
 			"cam-3": {CameraID: "cam-3", LatestStatus: "error", Score: 10},
 		},
 	}
-	h := setupHealthHandler(t, mgr)
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	authMW, _ := createTestAuthMW(t)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h.healthMgr = mgr
 
 	// Seed cameras in DB so names are available
 	ctx := context.Background()
@@ -344,22 +349,28 @@ func TestHealth_CameraAggregation(t *testing.T) {
 	h.db.UpsertCamera(ctx, "cam-2", "Back Yard", "rtsp", "h264", "rtsp://x", "", "", "", "", "", "")
 	h.db.UpsertCamera(ctx, "cam-3", "Garage", "rtsp", "h264", "rtsp://x", "", "", "", "", "", "")
 
+	// The camera fleet must NOT leak through the public /api/health (#879):
+	// anonymous callers get liveness only, and the detail endpoint 401s.
 	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), "Front Door")
+	require.NotContains(t, rr.Body.String(), "cam-1")
+	rr = doRequest(t, h.Routes(), "GET", "/api/health/cameras", nil, "", "")
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
 
-	var body HealthResponse
-	parseJSON(t, rr, &body)
-	require.NotNil(t, body.Cameras)
-	require.Equal(t, 3, body.Cameras.Total)
-	require.Equal(t, 1, body.Cameras.Recording)
-	require.Equal(t, 1, body.Cameras.Reconnecting)
-	require.Equal(t, 1, body.Cameras.Error)
-	require.Equal(t, 0, body.Cameras.Offline)
-	require.Len(t, body.Cameras.Details, 3)
+	// The aggregation itself still runs (goroutine tripwire scaling) and is
+	// covered by calling the aggregator directly.
+	agg := h.aggregateCameraHealth(httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	require.NotNil(t, agg)
+	require.Equal(t, 3, agg.Total)
+	require.Equal(t, 1, agg.Recording)
+	require.Equal(t, 1, agg.Reconnecting)
+	require.Equal(t, 1, agg.Error)
+	require.Equal(t, 0, agg.Offline)
+	require.Len(t, agg.Details, 3)
 
-	// Verify details contain expected camera data
 	detailMap := map[string]CameraHealthDetail{}
-	for _, d := range body.Cameras.Details {
+	for _, d := range agg.Details {
 		detailMap[d.ID] = d
 	}
 	require.Equal(t, "Front Door", detailMap["cam-1"].Name)
@@ -376,10 +387,7 @@ func TestHealth_CameraAggregation_NilManager(t *testing.T) {
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
-
-	var body HealthResponse
-	parseJSON(t, rr, &body)
-	require.Nil(t, body.Cameras)
+	require.NotContains(t, rr.Body.String(), `"cameras"`)
 }
 
 func TestHealth_CameraAggregation_EmptyHealth(t *testing.T) {
@@ -392,11 +400,6 @@ func TestHealth_CameraAggregation_EmptyHealth(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
 
-	var body HealthResponse
-	parseJSON(t, rr, &body)
-	require.NotNil(t, body.Cameras)
-	require.Equal(t, 0, body.Cameras.Total)
-	require.Empty(t, body.Cameras.Details)
 }
 
 func TestHealth_CameraAggregation_OfflineStatus(t *testing.T) {
@@ -412,17 +415,13 @@ func TestHealth_CameraAggregation_OfflineStatus(t *testing.T) {
 	require.NoError(t, h.db.UpsertCamera(context.Background(), "cam-1", "Cam 1", "rtsp", "h264", "rtsp://host/s1", "", "", "", "", "", ""))
 	require.NoError(t, h.db.UpsertCamera(context.Background(), "cam-2", "Cam 2", "rtsp", "h264", "rtsp://host/s2", "", "", "", "", "", ""))
 
-	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
-	require.Equal(t, http.StatusOK, rr.Code)
-
-	var body HealthResponse
-	parseJSON(t, rr, &body)
-	require.NotNil(t, body.Cameras)
-	require.Equal(t, 2, body.Cameras.Total)
-	require.Equal(t, 0, body.Cameras.Recording)
-	require.Equal(t, 0, body.Cameras.Reconnecting)
-	require.Equal(t, 0, body.Cameras.Error)
-	require.Equal(t, 2, body.Cameras.Offline)
+	agg := h.aggregateCameraHealth(httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	require.NotNil(t, agg)
+	require.Equal(t, 2, agg.Total)
+	require.Equal(t, 0, agg.Recording)
+	require.Equal(t, 0, agg.Reconnecting)
+	require.Equal(t, 0, agg.Error)
+	require.Equal(t, 2, agg.Offline)
 }
 
 // --- /api/health/cameras endpoint tests ---
@@ -492,7 +491,7 @@ func TestHealthCameras_PublicEndpoint(t *testing.T) {
 	h.healthMgr = mgr
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/health/cameras", nil, "", "")
-	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, http.StatusUnauthorized, rr.Code, "fleet topology must not be public (#879)")
 }
 
 // --- mock StabilityProvider ---
@@ -698,15 +697,11 @@ func TestHealth_AggregateSkipsRetiredCameras(t *testing.T) {
 	require.NoError(t, h.db.ArchiveCameraDB(ctx, "cam-archived"))
 	// "cam-deleted" is never inserted: its row is gone, the health entry remains.
 
-	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
-	require.Equal(t, http.StatusOK, rr.Code)
-
-	var resp HealthResponse
-	parseJSON(t, rr, &resp)
-	require.NotNil(t, resp.Cameras)
-	require.Equal(t, 1, resp.Cameras.Total)
-	require.Equal(t, 1, resp.Cameras.Recording)
-	require.Equal(t, 0, resp.Cameras.Error)
+	agg := h.aggregateCameraHealth(httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	require.NotNil(t, agg)
+	require.Equal(t, 1, agg.Total)
+	require.Equal(t, 1, agg.Recording)
+	require.Equal(t, 0, agg.Error)
 	// No overall-status assertion: the global status also reflects unrelated
 	// checks (e.g. the goroutine-count ceiling trips under a parallel test run).
 }

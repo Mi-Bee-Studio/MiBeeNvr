@@ -311,7 +311,6 @@ func TestMockDeviceManager_ConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	// Wait for all goroutines
 	timeout := time.After(500 * time.Millisecond)
 	for range 10 {
 		select {

@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"net/url"
 	"time"
 
@@ -343,7 +344,7 @@ func (t *PushTarget) connectRTSPWithTranscode(ctx context.Context) error {
 	// 5. Parse URL and connect RTSP.
 	t.setStatus(StatusConnecting, "connecting to RTSP target")
 	tcpProt := gortsplib.ProtocolTCP
-	client := &gortsplib.Client{Protocol: &tcpProt, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	client := &gortsplib.Client{Protocol: &tcpProt, ReadTimeout: config.DefaultRTSPTimeout, WriteTimeout: config.DefaultRTSPTimeout}
 
 	// 6. Build H.264 video format using transcoder's SPS/PPS.
 	videoForma := &format.H264{

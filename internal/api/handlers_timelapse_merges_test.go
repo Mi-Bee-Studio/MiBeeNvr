@@ -186,12 +186,11 @@ func TestHandleDeleteTimelapseMerge(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr), "output file should have been removed")
 }
 
-// TestDownloadTimelapseMerge_Anonymous pins the anonymous exposure contract of
-// the merge output download: <video src> and <a download> requests carry no
-// Authorization header (the SPA authenticates per-fetch from JS), so the
-// download route must live in the anonymous group — same exposure class as
-// /api/recordings/{id}/download. The merge metadata endpoint stays protected.
-func TestDownloadTimelapseMerge_Anonymous(t *testing.T) {
+// TestDownloadTimelapseMerge_Auth pins the auth contract of the merge output
+// download: the route sits in the protected group (recording/merge IDs are
+// predictable, so unauthenticated media access must 401), while the SPA
+// reaches it via ?token= links and the HA integration via BasicAuth.
+func TestDownloadTimelapseMerge_Auth(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 	hash, err := middleware.HashPassword("secret")
@@ -211,14 +210,23 @@ func TestDownloadTimelapseMerge_Anonymous(t *testing.T) {
 	require.NoError(t, err)
 	base := "/api/timelapse/merges/" + strconv.FormatInt(id, 10)
 
-	// GET without credentials — what the browser <video src> / <a download> sends.
+	// GET without credentials is rejected — media must not leak to
+	// unauthenticated listeners.
 	rr := doRequest(t, h.Routes(), "GET", base+"/download", nil, "", "")
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	// HEAD without credentials — same contract for browser <video> probes.
+	rr = doRequest(t, h.Routes(), "HEAD", base+"/download", nil, "", "")
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	// GET with BasicAuth (HA integration path) — full body + codec header.
+	rr = doRequest(t, h.Routes(), "GET", base+"/download", nil, "admin", "secret")
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, model.TimelapseMergeCodecH265, rr.Header().Get("X-Timelapse-Codec"))
 	require.Equal(t, testData, rr.Body.Bytes())
 
-	// HEAD without credentials — browser <video> probe / probeTimelapseMergeCodec.
-	rr = doRequest(t, h.Routes(), "HEAD", base+"/download", nil, "", "")
+	// HEAD with BasicAuth — browser <video> probe / probeTimelapseMergeCodec.
+	rr = doRequest(t, h.Routes(), "HEAD", base+"/download", nil, "admin", "secret")
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	// Merge metadata must remain behind auth.

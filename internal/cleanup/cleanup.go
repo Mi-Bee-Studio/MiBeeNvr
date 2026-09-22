@@ -55,7 +55,7 @@ type CleanupManager struct {
 	// present on disk / in the DB cache. nil = legacy behaviour (fall back
 	// to db.ListCameras). Injected from pkg/app/run.go — mirrors the
 	// provider pattern used by the merge coordinators. (staleRecordCleanup
-	// no longer uses it: the ghost-row sweep queries pending rows directly.)
+	// does not use it: the ghost-row sweep queries pending rows directly.)
 	activeCameraProvider       func() []config.CameraConfig
 	ffprobePath                string // optional ffprobe fallback for probeDuration; empty = pure-Go mediaprobe only
 	eventBus                   *event.EventBus
@@ -239,12 +239,10 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 	// Database maintenance: WAL checkpoint and incremental vacuum.
 	cm.performDatabaseMaintenance(ctx)
 
-	// Update cleanup duration metric
 	if cm.metrics != nil {
 		cm.metrics.CleanupDurationSeconds.Observe(time.Since(start).Seconds())
 	}
 
-	// Update SQLite database health metrics
 	cm.updateSQLiteMetrics(ctx)
 
 	return nil

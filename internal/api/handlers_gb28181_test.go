@@ -196,7 +196,6 @@ func TestAPI_GB28181_ListChannels_Success(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	// Create test device and channels
 	_ = h.db.UpsertGB28181Device(ctx, storage.GB28181Device{
 		ID:            "device1",
 		Name:          "Test Device",
@@ -271,7 +270,6 @@ func TestAPI_GB28181_CatalogRefresh_OfflineDevice(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	// Create offline device
 	_ = h.db.UpsertGB28181Device(ctx, storage.GB28181Device{
 		ID:            "device1",
 		Name:          "Test Device",

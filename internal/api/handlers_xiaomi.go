@@ -51,7 +51,6 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store token in config
 	h.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -90,7 +89,6 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store token in config
 	h.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -129,7 +127,6 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store token in config
 	h.saveXiaomiToken(result)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -144,7 +141,6 @@ func (h *Handler) handleXiaomiDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get stored token from config
 	if h.config == nil || h.config.Xiaomi.Token == "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"devices": []CloudDeviceInfo{},
@@ -187,7 +183,6 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build DID → CloudDeviceInfo lookup
 	deviceByDID := make(map[string]*CloudDeviceInfo, len(devices))
 	for i := range devices {
 		deviceByDID[devices[i].DID] = &devices[i]

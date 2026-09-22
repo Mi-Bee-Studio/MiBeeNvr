@@ -36,6 +36,9 @@ func setupTestDB(t *testing.T) (*storage.DB, *storage.Manager) {
 	if err != nil {
 		t.Fatalf("failed to create db: %v", err)
 	}
+	// Close both pools before t.TempDir cleanup — Windows cannot delete a
+	// database file an open connection still holds.
+	t.Cleanup(func() { _ = db.Close() })
 	ctx := context.Background()
 	if err := db.Init(ctx); err != nil {
 		t.Fatalf("failed to init db: %v", err)
@@ -907,7 +910,6 @@ func TestListFrames_MJPEG_Success(t *testing.T) {
 	if err := os.MkdirAll(frameDir, 0o755); err != nil {
 		t.Fatalf("failed to create frame dir: %v", err)
 	}
-	// Create some fake JPEG frames
 	for _, name := range []string{"frame001.jpg", "frame002.jpg", "frame003.jpg"} {
 		if err := os.WriteFile(filepath.Join(frameDir, name), []byte("fake-jpeg-"+name), 0o644); err != nil {
 			t.Fatalf("failed to create frame file: %v", err)
@@ -1379,7 +1381,6 @@ func TestDeleteRecording_InvalidID(t *testing.T) {
 	defer db.Close()
 	h := TestHandler(db, store)
 
-	// Delete non-existent recording
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/recordings/does-not-exist", nil, "", "")
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rr.Code)
@@ -1679,7 +1680,6 @@ func TestHandleGetCamera(t *testing.T) {
 	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
-	// Create a camera first
 	body := strings.NewReader(`{"name":"Test","protocol":"http","encoding":"jpeg","url":"http://cam/snap"}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
 	if rr.Code != http.StatusCreated {
@@ -1688,7 +1688,6 @@ func TestHandleGetCamera(t *testing.T) {
 	var created config.CameraConfig
 	parseJSON(t, rr, &created)
 
-	// Get it
 	rr = doRequest(t, h.Routes(), "GET", "/api/cameras/"+created.ID, nil, "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -1717,7 +1716,6 @@ func TestHandleUpdateCamera(t *testing.T) {
 	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
-	// Create a camera
 	body := strings.NewReader(`{"name":"Original","protocol":"http","encoding":"jpeg","url":"http://cam/snap"}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
 	if rr.Code != http.StatusCreated {
@@ -1726,7 +1724,6 @@ func TestHandleUpdateCamera(t *testing.T) {
 	var created config.CameraConfig
 	parseJSON(t, rr, &created)
 
-	// Update it
 	updateBody := strings.NewReader(`{"name":"Updated Name"}`)
 	rr = doRequest(t, h.Routes(), "PUT", "/api/cameras/"+created.ID, updateBody, "", "")
 	if rr.Code != http.StatusOK {
@@ -1810,7 +1807,6 @@ func TestHandleDeleteCamera(t *testing.T) {
 	t.Parallel()
 	h, _, _ := newTestCamHandler(t)
 
-	// Create a camera
 	body := strings.NewReader(`{"name":"To Delete","protocol":"http","encoding":"jpeg","url":"http://cam/snap"}`)
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras", body, "", "")
 	if rr.Code != http.StatusCreated {
@@ -1819,7 +1815,6 @@ func TestHandleDeleteCamera(t *testing.T) {
 	var created config.CameraConfig
 	parseJSON(t, rr, &created)
 
-	// Delete it
 	rr = doRequest(t, h.Routes(), "DELETE", "/api/cameras/"+created.ID, nil, "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -1940,7 +1935,6 @@ func TestServeModel_ValidFile(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	// Create a temp models directory with a test file
 	rootDir := t.TempDir()
 	modelsDir := filepath.Join(rootDir, "models")
 	require.NoError(t, os.MkdirAll(modelsDir, 0o755))
@@ -2528,7 +2522,6 @@ func TestGetCameraMergeConfig_Success(t *testing.T) {
 	_, _ = db.DB().Exec("INSERT INTO cameras (id, name, protocol, url) VALUES (?, ?, ?, ?)",
 		"cam1", "Test Cam", "rtsp", "h264", "rtsp://camera/stream")
 
-	// Set per-camera merge config
 	mergeEnabled := true
 	checkInterval := "30m"
 	windowSize := "2h"
@@ -3162,7 +3155,6 @@ func TestExtractFrameTimestamp(t *testing.T) {
 func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 	t.Helper()
 
-	// Create a minimal valid JPEG
 	baseJPEG := createTestJPEG(t, 32, 32)
 
 	// Build EXIF APP1 data in TIFF Little-Endian (II) format
@@ -3200,7 +3192,6 @@ func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 		t.Fatal("dateTime string too long")
 	}
 
-	// Write DateTime entry
 	binary.Write(tiff, binary.LittleEndian, uint16(0x0132))             // DateTime tag
 	binary.Write(tiff, binary.LittleEndian, uint16(2))                  // Type: ASCII
 	binary.Write(tiff, binary.LittleEndian, uint32(len(dateTimeBytes))) // Count
@@ -3219,7 +3210,6 @@ func makeTestJPEGWithEXIF(t *testing.T, dateTimeStr string) []byte {
 	// Next IFD pointer (0 = no more IFDs)
 	binary.Write(tiff, binary.LittleEndian, uint32(0))
 
-	// DateTime string value
 	tiff.Write(dateTimeBytes)
 
 	// EXIF IFD at exifIFDOffset

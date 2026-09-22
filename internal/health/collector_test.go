@@ -659,7 +659,6 @@ func TestCollectorPrometheusBridge(t *testing.T) {
 	m := metrics.NewMetrics()
 	c, _ := newCollectorWithMetrics(t, 5*time.Second, m)
 
-	// Create frame callbacks for camera
 	onFrame := c.OnFrame("cam1")
 
 	// Simulate 50 frames at 1000 bytes each over the window

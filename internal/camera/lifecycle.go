@@ -508,7 +508,6 @@ func classifyError(err error) string {
 		return "unknown"
 	}
 	msg := err.Error()
-	// Check for common error patterns
 	switch {
 	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline"):
 		return "timeout"

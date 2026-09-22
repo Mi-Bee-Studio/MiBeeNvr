@@ -78,7 +78,6 @@ func getMjpegURLFromRecorder(rec interface{}) string {
 		break
 	}
 
-	// Check HTTPJPEGRecorder
 	if httpRec, ok := rec.(*recorder.HTTPJPEGRecorder); ok {
 		return httpRec.StreamURL()
 	}

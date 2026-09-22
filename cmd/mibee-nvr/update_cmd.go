@@ -132,7 +132,7 @@ func runUpdate(args runUpdateArgs, out io.Writer) error {
 	}
 	dataDir := cfg.Storage.RootDir
 	if dataDir == "" {
-		dataDir = "/var/lib/mibee-nvr"
+		dataDir = config.DefaultDataDir
 	}
 
 	fmt.Fprintf(out, "upgrading %s → %s (binary %s)\n", appVersion, target, binPath)
@@ -174,7 +174,7 @@ func resolveBinaryPath(p string) (string, error) {
 func healthURLForConfig(cfg *config.Config) string {
 	listen := cfg.Server.Listen
 	if listen == "" {
-		listen = ":9090"
+		listen = config.DefaultListenAddr
 	}
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {

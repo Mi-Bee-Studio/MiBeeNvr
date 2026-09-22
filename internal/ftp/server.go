@@ -2,6 +2,7 @@ package ftp
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -111,7 +112,9 @@ func (s *Server) AuthUser(cc ftpserverlib.ClientContext, user, pass string) (ftp
 	if user == "" || pass == "" {
 		return nil, fmt.Errorf("ftp: authentication requires username and password")
 	}
-	if user != s.username || pass != s.password {
+	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.username)) == 1
+	passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.password)) == 1
+	if !userOK || !passOK {
 		return nil, fmt.Errorf("ftp: invalid credentials")
 	}
 	cc.SetPath("/")

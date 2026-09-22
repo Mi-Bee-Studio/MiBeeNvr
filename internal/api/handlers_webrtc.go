@@ -40,13 +40,11 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Validate content type
 	if ct := r.Header.Get("Content-Type"); ct != "application/sdp" {
 		WriteError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/sdp")
 		return
 	}
 
-	// Check camera exists
 	cam, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
@@ -57,7 +55,6 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Read SDP offer
 	offerSDP, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB max
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "failed to read SDP offer")
@@ -104,7 +101,6 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Create WHEP session
 	answerSDP, sessionID, err := h.webrtcMgr.CreateWHEPSession(id, offerSDP)
 	if err != nil {
 		if errors.Is(err, webrtc.ErrMaxPeersReached) {

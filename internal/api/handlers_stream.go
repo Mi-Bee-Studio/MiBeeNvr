@@ -218,7 +218,6 @@ func (h *HLSStreamHandler) subscribeHub(camID string, hub *streamhub.StreamHub, 
 		return
 	}
 
-	// Check if sub-stream URL is configured
 	if opts.SubStreamURL != "" {
 		fallback := func() {
 			_ = subscribeHLS(hub, camID, h.Mgr, isH265)

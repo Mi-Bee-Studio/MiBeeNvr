@@ -320,7 +320,6 @@ func TestUploadWithExtension(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ft)
 
-	// Write data
 	data := []byte("mp4 video data")
 	n, err := ft.Write(data)
 	require.NoError(t, err)
@@ -365,7 +364,6 @@ func TestDownloadWithOffset(t *testing.T) {
 	srv, _ := newTestServer(t)
 	cd := &clientDriver{server: srv}
 
-	// Create test file
 	cameraDir := filepath.Join(srv.storageMgr.RootDir(), "cam01")
 	require.NoError(t, os.MkdirAll(cameraDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(cameraDir, "video.mp4"), []byte("0123456789abcdef"), 0o644))

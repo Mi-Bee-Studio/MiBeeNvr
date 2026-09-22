@@ -490,7 +490,6 @@ func categorizeDiscoveryError(ctx context.Context, err error) *DiscoveryError {
 		return &DiscoveryError{Category: "TIMEOUT", Message: "discovery timed out: " + msg}
 	}
 
-	// Check for network errors
 	if strings.Contains(msg, "network is unreachable") ||
 		strings.Contains(msg, "no route to host") ||
 		strings.Contains(msg, "connection refused") ||
