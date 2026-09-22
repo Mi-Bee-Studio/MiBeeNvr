@@ -8,6 +8,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,23 +91,51 @@ func TestCameraEvents_SSEFiltersByCamera(t *testing.T) {
 
 func TestCameraIDFromEventData(t *testing.T) {
 	t.Parallel()
+	id := func(v interface{}) string { i, _ := cameraIDFromEventData(v); return i }
 	// Fast type-assertion paths.
-	require.Equal(t, "c1", cameraIDFromEventData(event.SegmentCompleted{CameraID: "c1"}))
-	require.Equal(t, "c2", cameraIDFromEventData(event.SegmentDeleted{CameraID: "c2"}))
-	require.Equal(t, "c3", cameraIDFromEventData(event.StorageHealthChanged{CameraID: "c3"}))
-	require.Equal(t, "c4", cameraIDFromEventData(event.AIDetectionEvent{CameraID: "c4"}))
+	require.Equal(t, "c1", id(event.SegmentCompleted{CameraID: "c1"}))
+	require.Equal(t, "c2", id(event.SegmentDeleted{CameraID: "c2"}))
+	require.Equal(t, "c3", id(event.StorageHealthChanged{CameraID: "c3"}))
+	require.Equal(t, "c4", id(event.AIDetectionEvent{CameraID: "c4"}))
+	require.Equal(t, "c5", id(event.CameraSnapshotEvent{CameraID: "c5"}))
+	require.Equal(t, "c6", id(event.GB28181AlarmEvent{CameraID: "c6"}))
 
 	// Map fast path with several key spellings.
-	require.Equal(t, "m1", cameraIDFromEventData(map[string]interface{}{"camera_id": "m1"}))
-	require.Equal(t, "m2", cameraIDFromEventData(map[string]interface{}{"CameraID": "m2"}))
-	require.Equal(t, "m3", cameraIDFromEventData(map[string]interface{}{"camera": "m3"}))
-	require.Equal(t, "", cameraIDFromEventData(map[string]interface{}{"camera_id": 42}))
-	require.Equal(t, "", cameraIDFromEventData(map[string]interface{}{}))
+	require.Equal(t, "m1", id(map[string]interface{}{"camera_id": "m1"}))
+	require.Equal(t, "m2", id(map[string]interface{}{"CameraID": "m2"}))
+	require.Equal(t, "m3", id(map[string]interface{}{"camera": "m3"}))
+	require.Equal(t, "", id(map[string]interface{}{"camera_id": 42}))
+	require.Equal(t, "", id(map[string]interface{}{}))
 
 	// JSON fallback for ad-hoc struct types.
 	type adhoc struct {
 		Camera string `json:"camera"`
 	}
-	require.Equal(t, "j1", cameraIDFromEventData(adhoc{Camera: "j1"}))
-	require.Equal(t, "", cameraIDFromEventData(42)) // not marshalable to a map with a key
+	require.Equal(t, "j1", id(adhoc{Camera: "j1"}))
+	require.Equal(t, "", id(42)) // not marshalable to a map with a key
+}
+
+// The fallback path composes the SSE frame from the Data bytes it already
+// serialized (#875 M4). That composition must be byte-identical to
+// json.Marshal(evt) — the wire format is a client contract.
+func TestFallbackFrameComposeMatchesMarshal(t *testing.T) {
+	t.Parallel()
+	type adhoc struct {
+		Camera string    `json:"camera"`
+		Note   string    `json:"note"`
+		At     time.Time `json:"at"`
+	}
+	d := adhoc{Camera: "cam-1", Note: `quote" & <html>`, At: time.Unix(1700000000, 0).UTC()}
+	evt := event.Event{Topic: "adhoc.topic", Data: d}
+
+	want, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	_, pre := cameraIDFromEventData(d)
+	require.NotNil(t, pre, "ad-hoc struct takes the fallback path")
+	topicB, err := json.Marshal(evt.Topic)
+	require.NoError(t, err)
+	got := []byte(`{"Topic":` + string(topicB) + `,"Data":` + string(pre) + `}`)
+	require.JSONEq(t, string(want), string(got))
+	require.Equal(t, string(want), string(got), "composed frame must be byte-identical to json.Marshal(evt)")
 }

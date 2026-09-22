@@ -113,7 +113,11 @@ func (h *Handler) handleCameraEvents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	eventCh := make(chan event.Event, 64)
 
-	// Subscribe to all events, filter by camera ID later.
+	// Subscribe to all events, filter by camera ID later. The bus never
+	// blocks on a slow subscriber (ring-overflow drops oldest, non-blocking
+	// send), so the broad subscription is safe; enumerating "camera topics"
+	// instead would silently miss future topics this endpoint promises to
+	// carry.
 	h.eventBus.SubscribeByPrefix("", eventCh, 64)
 
 	heartbeat := time.NewTicker(15 * time.Second)
@@ -131,13 +135,27 @@ func (h *Handler) handleCameraEvents(w http.ResponseWriter, r *http.Request) {
 		case <-streamShutdown:
 			return
 		case evt := <-eventCh:
-			// Filter events by camera ID.
-			if cameraIDFromEventData(evt.Data) != cameraID {
+			// Filter events by camera ID. pre is non-nil when the fallback
+			// path already serialized Data — the frame is then composed from
+			// those bytes instead of reflecting over the struct a second
+			// time (#875 M4).
+			id, pre := cameraIDFromEventData(evt.Data)
+			if id != cameraID {
 				continue
 			}
-			data, err := json.Marshal(evt)
-			if err != nil {
-				continue
+			var data []byte
+			if pre != nil {
+				topicB, err := json.Marshal(evt.Topic)
+				if err != nil {
+					continue
+				}
+				data = []byte(`{"Topic":` + string(topicB) + `,"Data":` + string(pre) + `}`)
+			} else {
+				var err error
+				data, err = json.Marshal(evt)
+				if err != nil {
+					continue
+				}
 			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Topic, data)
 			flusher.Flush()
@@ -149,40 +167,46 @@ func (h *Handler) handleCameraEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // cameraIDFromEventData attempts to extract a camera ID from event data.
-// Uses fast type assertion for known event types (avoids JSON round-trip on
-// the hot SSE path). Falls back to JSON reflection for unknown types.
-func cameraIDFromEventData(data interface{}) string {
+// Uses fast type assertion for known event types (zero allocation). Falls
+// back to one JSON serialize+parse pass for unknown types, whose serialized
+// bytes are returned so the caller can compose the SSE frame without a
+// second reflection round-trip (#875 M4).
+func cameraIDFromEventData(data interface{}) (id string, marshaled []byte) {
 	// Fast path: type-assert known event structs (zero allocation).
 	switch d := data.(type) {
 	case event.SegmentCompleted:
-		return d.CameraID
+		return d.CameraID, nil
 	case event.SegmentDeleted:
-		return d.CameraID
+		return d.CameraID, nil
 	case event.StorageHealthChanged:
-		return d.CameraID
+		return d.CameraID, nil
 	case event.AIDetectionEvent:
-		return d.CameraID
+		return d.CameraID, nil
+	case event.CameraSnapshotEvent:
+		return d.CameraID, nil
+	case event.GB28181AlarmEvent:
+		return d.CameraID, nil
 	case map[string]interface{}:
 		for _, key := range []string{"camera_id", "CameraID", "camera", "Camera"} {
 			if id, ok := d[key].(string); ok && id != "" {
-				return id
+				return id, nil
 			}
 		}
-		return ""
+		return "", nil
 	}
-	// Fallback: JSON round-trip for ad-hoc types.
+	// Fallback: one JSON round-trip for ad-hoc types.
 	b, err := json.Marshal(data)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	var m map[string]interface{}
 	if err := json.Unmarshal(b, &m); err != nil {
-		return ""
+		return "", nil
 	}
 	for _, key := range []string{"camera_id", "CameraID", "camera", "Camera"} {
 		if id, ok := m[key].(string); ok && id != "" {
-			return id
+			return id, b
 		}
 	}
-	return ""
+	return "", nil
 }
