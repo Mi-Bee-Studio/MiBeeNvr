@@ -147,7 +147,6 @@ func mergeTimeRanges(ranges []TimeRange) []TimeRange {
 // rolling-window merge — runs in the configured timezone (not UTC) and
 // stores output under per-camera directories (periodic-merge/<camera_id>/),
 // so crossing a UTC day boundary has no bucketing or IO-amplification cost.
-// The 1h cap that previously applied here was reverted in Timelapse v3.
 func ParseMergeDuration(s string) (time.Duration, error) {
 	// Named windows — these are the canonical values exposed in the UI
 	// dropdowns and match the alignment rules in parseMergeRange /

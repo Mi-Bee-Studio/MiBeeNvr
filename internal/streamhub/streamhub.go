@@ -74,6 +74,19 @@ type queuedFrame struct {
 
 // consumerEntry holds a subscribed consumer with its own buffered channel,
 // drain goroutine, and per-consumer counters.
+// consumerRef is a snapshot entry for the per-frame distribution loops. The
+// COW slices are rebuilt under h.mu on membership changes so the hot path
+// pays one atomic load instead of a lock + map walk + alloc (#875 H6).
+type consumerRef struct {
+	id    string
+	entry *consumerEntry
+}
+
+type audioRef struct {
+	id    string
+	entry *audioConsumer
+}
+
 type consumerEntry struct {
 	cb           FrameCallback
 	cbMsg        MsgCallback // set instead of cb for SubscribeMsg consumers
@@ -142,8 +155,12 @@ type HubHost interface {
 //
 // All methods are safe for concurrent use.
 type StreamHub struct {
-	mu                 sync.Mutex
-	consumers          map[string]*consumerEntry
+	mu        sync.Mutex
+	consumers map[string]*consumerEntry
+	// consumerSnapshot/audioSnapshot: COW snapshots of the maps above,
+	// swapped under h.mu; per-frame paths only Load (#875 H6).
+	consumerSnapshot   atomic.Pointer[[]consumerRef]
+	audioSnapshot      atomic.Pointer[[]audioRef]
 	audioConsumers     map[string]*audioConsumer
 	consumerBufferSize int // buffered channel size per video consumer (default: 150)
 
@@ -199,14 +216,12 @@ type StreamHub struct {
 	jitterBuffer         []model.FrameMsg // buffered frames awaiting reordering
 	jitterBufferMu       sync.Mutex       // protects jitter buffer state
 	jitterBufferTimer    *time.Timer      // timeout flush timer
-	jitterBufferLastPTS  int64            // last PTS seen, for disorder detection
+	jitterBufferLastPTS  atomic.Int64     // last PTS seen, for disorder detection (single writer; atomic keeps the ordered path lock-free)
 	jitterBufferReorders atomic.Int64     // total out-of-order detections
 	jitterBufferActive   atomic.Bool      // quick check if buffer may have frames
 	// OnJitterBufferFlush is called when jitter buffer flushes reordered frames.
 	// Receives cameraID and number of frames flushed.
 	OnJitterBufferFlush func(cameraID string, count int)
-	// OnBufferDepth is called after each distributeFrame send/drop with current channel depth.
-	OnBufferDepth func(cameraID, consumerID string, depth int)
 	// OnJitterBufferDepth is called when jitter buffer depth changes.
 	OnJitterBufferDepth func(cameraID string, depth int)
 	// OnJitterReorder is called when an out-of-order frame is detected.
@@ -296,6 +311,7 @@ func (h *StreamHub) Subscribe(id string, cb FrameCallback) error {
 		subscribedAt: time.Now(),
 	}
 	h.consumers[id] = entry
+	h.rebuildConsumerSnapshotLocked()
 	// Capture the replay candidate under the lock (consistent snapshot with the
 	// consumers map), but defer the actual channel send until after Unlock.
 	replay := h.latestCompleteIDRLocked()
@@ -333,6 +349,7 @@ func (h *StreamHub) SubscribeMsg(id string, cb MsgCallback) error {
 		subscribedAt: time.Now(),
 	}
 	h.consumers[id] = entry
+	h.rebuildConsumerSnapshotLocked()
 	replay := h.latestCompleteIDRLocked()
 	h.mu.Unlock()
 
@@ -397,11 +414,28 @@ func (h *StreamHub) latestCompleteIDRLocked() *model.FrameMsg {
 // Unsubscribe removes the consumer with the given ID.
 // It waits for the consumer's drain goroutine to finish processing buffered frames.
 // If the consumer does not exist, Unsubscribe is a no-op.
+// rebuildConsumerSnapshotLocked rebuilds the COW consumer snapshot; call under
+// h.mu after every change to h.consumers / h.audioConsumers.
+func (h *StreamHub) rebuildConsumerSnapshotLocked() {
+	refs := make([]consumerRef, 0, len(h.consumers))
+	for id, entry := range h.consumers {
+		refs = append(refs, consumerRef{id: id, entry: entry})
+	}
+	h.consumerSnapshot.Store(&refs)
+
+	arefs := make([]audioRef, 0, len(h.audioConsumers))
+	for id, entry := range h.audioConsumers {
+		arefs = append(arefs, audioRef{id: id, entry: entry})
+	}
+	h.audioSnapshot.Store(&arefs)
+}
+
 func (h *StreamHub) Unsubscribe(id string) {
 	h.mu.Lock()
 	entry, ok := h.consumers[id]
 	if ok {
 		delete(h.consumers, id)
+		h.rebuildConsumerSnapshotLocked()
 	}
 	h.mu.Unlock()
 
@@ -430,8 +464,9 @@ func (h *StreamHub) Broadcast(pts int64, au [][]byte, isIDR bool) {
 	// Hub-level counters: atomics only on the hot path; the periodic stats
 	// flusher and Snapshot() read them without locks.
 	now := time.Now().UnixNano()
+	size := int64(frameSize(au)) // computed once, reused by distributeFrame (#875 M3)
 	h.framesIn.Add(1)
-	h.bytesIn.Add(int64(frameSize(au)))
+	h.bytesIn.Add(size)
 	h.lastFrameAt.Store(now)
 
 	// Compute trace ID: only meaningful for IDR frames.
@@ -440,13 +475,15 @@ func (h *StreamHub) Broadcast(pts int64, au [][]byte, isIDR bool) {
 		traceID = fmt.Sprintf("%s-%d", h.cameraID, pts)
 	}
 
-	frametrace.Log(
-		h.cameraID,
-		"trace_id", traceID,
-		"camera_id", h.cameraID,
-		"stage", "streamhub_in",
-		"is_idr", isIDR,
-	)
+	if frametrace.Active(h.cameraID) {
+		frametrace.Log(
+			h.cameraID,
+			"trace_id", traceID,
+			"camera_id", h.cameraID,
+			"stage", "streamhub_in",
+			"is_idr", isIDR,
+		)
+	}
 
 	if h.OnBroadcast != nil {
 		h.OnBroadcast(h.cameraID, isIDR)
@@ -458,13 +495,12 @@ func (h *StreamHub) Broadcast(pts int64, au [][]byte, isIDR bool) {
 		return
 	}
 
-	h.distributeFrame(pts, au, isIDR)
+	h.distributeFrame(pts, au, isIDR, size)
 }
 
 // distributeFrame sends a single frame to all subscribed video consumers.
 // This is the direct (no jitter buffer) path.
-func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
-	h.mu.Lock()
+func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool, size int64) {
 	// Cache IDR access units for fast-start replay to future subscribers. Done
 	// under h.mu (same lock that guards consumers) so Subscribe — which reads &
 	// drains the cache under h.mu — sees a consistent snapshot. Deep-copy the AU:
@@ -472,19 +508,18 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 	// enforced contract, and a cached reference could outlive the producer's
 	// intended lifetime. The copy cost (one IDR per GOP) is negligible.
 	if isIDR && h.idrCacheSize > 0 {
+		h.mu.Lock()
 		h.cacheIDRLocked(pts, au)
+		h.mu.Unlock()
 	}
-	type entryWithID struct {
-		id    string
-		entry *consumerEntry
+	// COW snapshot (#875 H6): one atomic load, no lock/alloc on the per-frame
+	// path. nil = no subscriber ever attached.
+	snap := h.consumerSnapshot.Load()
+	if snap == nil {
+		return
 	}
-	entries := make([]entryWithID, 0, len(h.consumers))
-	for id, entry := range h.consumers {
-		entries = append(entries, entryWithID{id: id, entry: entry})
-	}
-	h.mu.Unlock()
+	entries := *snap
 
-	size := int64(frameSize(au))
 	now := time.Now().UnixNano()
 	for _, e := range entries {
 		e.entry.sendMu.RLock()
@@ -521,9 +556,6 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 			}
 		}
 		e.entry.sendMu.RUnlock()
-		if h.OnBufferDepth != nil {
-			h.OnBufferDepth(h.cameraID, e.id, len(e.entry.ch))
-		}
 	}
 }
 
@@ -531,10 +563,13 @@ func (h *StreamHub) distributeFrame(pts int64, au [][]byte, isIDR bool) {
 // If disorder is detected for the first time, it activates the jitter buffer.
 // Returns true if jitter buffer should be used for this frame.
 // Note: the previous frame (already distributed) cannot be recalled.
+// detectDisorder runs on every frame: the ordered path is lock-free (one
+// atomic load + store), and only the rare disorder event takes the jitter
+// mutex to serialize with the buffer state (#875 M3).
 func (h *StreamHub) detectDisorder(pts int64) bool {
-	h.jitterBufferMu.Lock()
-	defer h.jitterBufferMu.Unlock()
-	if h.jitterBufferLastPTS > 0 && pts < h.jitterBufferLastPTS {
+	last := h.jitterBufferLastPTS.Load()
+	if last > 0 && pts < last {
+		h.jitterBufferMu.Lock()
 		h.jitterBufferReorders.Add(1)
 		if h.OnJitterReorder != nil {
 			h.OnJitterReorder(h.cameraID)
@@ -543,13 +578,14 @@ func (h *StreamHub) detectDisorder(pts int64) bool {
 		slog.Info(
 			"jitter_buffer_activated",
 			"camera_id", h.cameraID,
-			"last_pts", h.jitterBufferLastPTS,
+			"last_pts", last,
 			"current_pts", pts,
 		)
-		h.jitterBufferLastPTS = 0 // reset tracking since we're now buffering
+		h.jitterBufferLastPTS.Store(0) // reset tracking since we're now buffering
+		h.jitterBufferMu.Unlock()
 		return true
 	}
-	h.jitterBufferLastPTS = pts
+	h.jitterBufferLastPTS.Store(pts)
 	return false
 }
 
@@ -567,7 +603,7 @@ func (h *StreamHub) bufferAndMaybeFlush(pts int64, au [][]byte, isIDR bool) {
 		h.jitterBufferMu.Unlock()
 		for _, f := range frames {
 			if f.AU != nil {
-				h.distributeFrame(f.PTS, f.AU, f.IsKeyframe)
+				h.distributeFrame(f.PTS, f.AU, f.IsKeyframe, int64(frameSize(f.AU)))
 			}
 		}
 		return
@@ -615,7 +651,7 @@ func (h *StreamHub) resetJitterBufferTimer() {
 			h.jitterBufferMu.Unlock()
 			for _, f := range frames {
 				if f.AU != nil {
-					h.distributeFrame(f.PTS, f.AU, f.IsKeyframe)
+					h.distributeFrame(f.PTS, f.AU, f.IsKeyframe, int64(frameSize(f.AU)))
 				}
 			}
 		})
@@ -774,6 +810,7 @@ func (h *StreamHub) SubscribeAudio(id string, cb AudioCallback) error {
 		done: make(chan struct{}),
 	}
 	h.audioConsumers[id] = entry
+	h.rebuildConsumerSnapshotLocked()
 	go entry.drain()
 	return nil
 }
@@ -786,6 +823,7 @@ func (h *StreamHub) UnsubscribeAudio(id string) {
 	entry, ok := h.audioConsumers[id]
 	if ok {
 		delete(h.audioConsumers, id)
+		h.rebuildConsumerSnapshotLocked()
 	}
 	h.mu.Unlock()
 
@@ -811,16 +849,12 @@ func (h *StreamHub) BroadcastAudio(pts int64, codec model.AudioCodec, data []byt
 		h.OnBroadcastAudio(h.cameraID, string(codec))
 	}
 
-	h.mu.Lock()
-	type entryWithID struct {
-		id    string
-		entry *audioConsumer
+	// COW snapshot (#875 H6) — see distributeFrame.
+	snap := h.audioSnapshot.Load()
+	if snap == nil {
+		return
 	}
-	entries := make([]entryWithID, 0, len(h.audioConsumers))
-	for id, entry := range h.audioConsumers {
-		entries = append(entries, entryWithID{id: id, entry: entry})
-	}
-	h.mu.Unlock()
+	entries := *snap
 
 	for _, e := range entries {
 		e.entry.sendMu.RLock()

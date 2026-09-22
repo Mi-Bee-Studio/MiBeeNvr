@@ -107,16 +107,16 @@ func Active(cameraID string) bool {
 	return ok && time.Now().Before(until)
 }
 
-// Log emits one frame_trace breadcrumb: Info through the dedicated
-// frame-trace logger while the camera is sampled, plain Debug otherwise.
+// Log emits one frame_trace breadcrumb through the dedicated frame-trace
+// logger while the camera is sampled, and is a no-op otherwise. Call sites
+// guard with Active() so the variadic args are never built on the per-frame
+// path; LogDrop keeps unsampled Warn visibility (drops are rare events).
 // The args format matches the existing call sites
 // ("trace_id", id, "stage", stage, ...).
 func Log(cameraID string, args ...any) {
 	if Active(cameraID) {
 		traceLogger.Load().Info("frame_trace", args...)
-		return
 	}
-	slog.Debug("frame_trace", args...)
 }
 
 // LogDrop emits a drop breadcrumb: Info through the dedicated logger while

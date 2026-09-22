@@ -1097,7 +1097,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 		}
 		recordingID = rec.ID
 		if err := b.cfg.DB.InsertRecordingWithRetry(
-			context.Background(), rec, 3, 500*time.Millisecond,
+			context.Background(), rec, dbInsertRetries, dbInsertBackoff,
 		); err != nil {
 			b.log.Error("failed to insert recording",
 				"camera_id", b.cfg.CameraID, "error", err)
@@ -1121,7 +1121,6 @@ func (b *baseRecorder) closeCurrentSegment() {
 			"camera_id", b.cfg.CameraID, "recording_id", recordingID)
 	}
 
-	// Update metrics for completed segment
 	if b.frameCount > 0 && finalExists {
 		b.recordSegmentCreated()
 		if fileSize > 0 {

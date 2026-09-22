@@ -22,7 +22,6 @@ func helperGenerateKey(t *testing.T) []byte {
 func helperSetEnvKey(t *testing.T, key []byte) {
 	t.Helper()
 	t.Setenv("NVR_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
-	// Reset cached key
 	encryptionKey = nil
 }
 
@@ -167,7 +166,6 @@ func TestGetEncryptionKeyFromFile(t *testing.T) {
 	key := helperGenerateKey(t)
 	helperClearEnvKey(t)
 
-	// Write key to temp file
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(key)), 0o600))

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
@@ -102,10 +103,10 @@ func TestAmbientSidecarLifecycle(t *testing.T) {
 
 func TestBackoffWrappers(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, TieredBackoff(0), TieredBackoff(0))
-	require.Greater(t, TieredBackoff(5).Nanoseconds(), int64(0))
-	require.GreaterOrEqual(t, TieredBackoffWithJitter(3), TieredBackoff(3))
-	require.GreaterOrEqual(t, StorageBackoffWithJitter(), 55*time.Second)
+	require.Equal(t, backoff.TieredBackoff(0), backoff.TieredBackoff(0))
+	require.Greater(t, backoff.TieredBackoff(5).Nanoseconds(), int64(0))
+	require.GreaterOrEqual(t, backoff.TieredBackoffWithJitter(3), backoff.TieredBackoff(3))
+	require.GreaterOrEqual(t, backoff.StorageBackoffWithJitter(), 55*time.Second)
 }
 
 func TestStorageHealthHelpers(t *testing.T) {

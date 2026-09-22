@@ -63,8 +63,11 @@ func wireHubMetrics(hub *streamhub.StreamHub, cameraID string, m *metrics.Metric
 	if m == nil {
 		return
 	}
+	// Pre-resolve the per-camera counter once (#469 pattern): the callback
+	// fires per frame, WithLabelValues does a label hash every call.
+	framesIn := m.StreamHubFramesInTotal.WithLabelValues(cameraID)
 	hub.OnBroadcast = func(cid string, isIDR bool) {
-		m.StreamHubFramesInTotal.WithLabelValues(cid).Inc()
+		framesIn.Inc()
 	}
 	// AddOnDrop (callback list) instead of assigning the field — a single field
 	// let protocol managers (HLS) silently clobber the Prometheus wiring (#469 Phase 0).
@@ -76,9 +79,6 @@ func wireHubMetrics(hub *streamhub.StreamHub, cameraID string, m *metrics.Metric
 	}
 	hub.OnAudioDrop = func(cid string) {
 		m.AudioFramesDroppedTotal.WithLabelValues(cid).Inc()
-	}
-	hub.OnBufferDepth = func(cid, consumerID string, depth int) {
-		m.StreamHubBufferDepth.WithLabelValues(cid, consumerID).Set(float64(depth))
 	}
 	hub.OnJitterBufferDepth = func(cid string, depth int) {
 		m.JitterBufferDepth.WithLabelValues(cid).Set(float64(depth))
@@ -169,6 +169,10 @@ func (cm *CameraManager) flushHubStats() {
 			cm.hubFlushLast[key] = [2]int64{c.Sends, c.Bytes}
 			m.StreamHubHopDwellAvgMS.WithLabelValues(cameraID, c.ID).Set(c.DwellAvgMS)
 			m.StreamHubHopDwellMaxMS.WithLabelValues(cameraID, c.ID).Set(c.DwellMaxMS)
+			// Buffer depth rides the 15s snapshot instead of a per-frame
+			// callback — Prometheus scrapes are ≥15s, per-frame Set was
+			// unobservable (#875 H1).
+			m.StreamHubBufferDepth.WithLabelValues(cameraID, c.ID).Set(float64(c.BufferDepth))
 		}
 	}
 }

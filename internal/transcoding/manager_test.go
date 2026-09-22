@@ -181,7 +181,6 @@ func TestManager_EnqueueRecording(t *testing.T) {
 	mgr, err := NewTranscodeManager(db, cfg, m)
 	require.NoError(t, err)
 
-	// Create a fake input file
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "test-segment.mp4")
 	err = os.WriteFile(inputPath, []byte("fake mp4 data"), 0o644)

@@ -57,7 +57,6 @@ func CleanOrphanedTranscodes(ctx context.Context, dataDir string, db DBTaskListe
 			return nil
 		}
 
-		// Check if context cancelled
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

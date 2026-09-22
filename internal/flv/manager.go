@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
@@ -58,6 +60,10 @@ type streamEntry struct {
 	// deltas are measured from (#481). Fixed at registration so the shared
 	// per-frame tag encodes a viewer-independent ingest offset.
 	clockBase atomic.Int64
+	// Pre-resolved per-camera counters — the per-viewer per-frame Inc must
+	// not pay a WithLabelValues label hash every send (#875 H5).
+	framesSent    prometheus.Counter
+	framesDropped prometheus.Counter
 }
 
 // viewerConn represents a connected FLV client.
@@ -150,6 +156,11 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 		frameCh:   make(chan model.FrameMsg, m.writeBufSize),
 		cancel:    cancel,
 		hub:       hub,
+	}
+
+	if m.metrics != nil {
+		entry.framesSent = m.metrics.FLVFramesSent.WithLabelValues(camID)
+		entry.framesDropped = m.metrics.FLVFramesDropped.WithLabelValues(camID)
 	}
 
 	// Subscribe with the full FrameMsg so the hub-entry wallclock (IngestAt)
@@ -319,22 +330,26 @@ func (m *Manager) writeFrameMsg(camID string, msg model.FrameMsg) {
 	// Non-blocking send
 	select {
 	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe, IngestAt: msg.IngestAt}:
-		frametrace.Log(
-			camID,
-			"trace_id", traceID,
-			"camera_id", camID,
-			"stage", "flv_recv",
-			"is_idr", isKeyframe,
-		)
+		if frametrace.Active(camID) {
+			frametrace.Log(
+				camID,
+				"trace_id", traceID,
+				"camera_id", camID,
+				"stage", "flv_recv",
+				"is_idr", isKeyframe,
+			)
+		}
 	default:
-		frametrace.Log(
-			camID,
-			"trace_id", traceID,
-			"camera_id", camID,
-			"stage", "flv_drop",
-			"is_idr", isKeyframe,
-			"queue_depth", len(entry.frameCh),
-		)
+		if frametrace.Active(camID) {
+			frametrace.Log(
+				camID,
+				"trace_id", traceID,
+				"camera_id", camID,
+				"stage", "flv_drop",
+				"is_idr", isKeyframe,
+				"queue_depth", len(entry.frameCh),
+			)
+		}
 	}
 }
 
@@ -356,7 +371,6 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 			}
 			tag := videoFrameTag(entry.codec, msg.AU, msg.PTS, msg.IsKeyframe, delta)
 
-			// Update GOP cache on keyframe
 			if msg.IsKeyframe {
 				entry.gopMu.Lock()
 				entry.gopCache.frames = entry.gopCache.frames[:0]
@@ -384,13 +398,13 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 			for _, v := range entry.viewers {
 				select {
 				case v.ch <- tag:
-					if m.metrics != nil {
-						m.metrics.FLVFramesSent.WithLabelValues(camID).Inc()
+					if entry.framesSent != nil {
+						entry.framesSent.Inc()
 					}
 				default:
 					// Slow client — drop frame
-					if m.metrics != nil {
-						m.metrics.FLVFramesDropped.WithLabelValues(camID).Inc()
+					if entry.framesDropped != nil {
+						entry.framesDropped.Inc()
 					}
 				}
 			}
@@ -513,7 +527,6 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 		flusher.Flush()
 	}
 
-	// Write sequence header
 	if err := writeWithDeadline(entry.seqHeader); err != nil {
 		return err
 	}

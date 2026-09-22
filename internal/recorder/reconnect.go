@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -44,9 +45,9 @@ type reconnectDeps struct {
 // failures get the flat ~60s storage backoff), floored at min. The floor
 // never shortens a longer tier or the storage backoff (#711).
 func nextBackoff(retryCount int, storageFailed bool, floor time.Duration) time.Duration {
-	b := TieredBackoffWithJitter(retryCount)
+	b := backoff.TieredBackoffWithJitter(retryCount)
 	if storageFailed {
-		b = StorageBackoffWithJitter()
+		b = backoff.StorageBackoffWithJitter()
 	}
 	if b < floor {
 		b = floor

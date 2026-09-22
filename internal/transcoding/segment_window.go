@@ -1,6 +1,7 @@
 package transcoding
 
 import (
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -13,7 +14,7 @@ import (
 var segmentTimeLayouts = []string{
 	time.RFC3339Nano,
 	time.RFC3339,
-	"2006-01-02 15:04:05.999999999",
+	storage.TimeLayout,
 	"2006-01-02 15:04:05",
 }
 

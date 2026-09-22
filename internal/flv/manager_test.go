@@ -80,7 +80,6 @@ func TestH264SequenceHeader(t *testing.T) {
 	tag := h264SequenceHeader(minimalSPS, minimalPPS)
 	require.NotNil(t, tag)
 
-	// Parse tag type
 	require.Equal(t, byte(0x09), tag[0], "tag type should be video (0x09)")
 
 	// Parse data size (3 bytes big-endian)
@@ -445,7 +444,6 @@ func TestServeFLV_SetsCorrectHeaders(t *testing.T) {
 
 	_ = mgr.ServeFLV("cam1", w, r)
 
-	// Check response headers
 	require.Equal(t, "video/x-flv", w.Header().Get("Content-Type"))
 }
 
@@ -819,13 +817,13 @@ func TestServeFLV_StalledClientDoesNotWedgePipeline(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- mgr.ServeFLV("cam1", sw, req) }()
 
-	// The viewer must be registered promptly (registration no longer waits
+	// The viewer must be registered promptly (registration does not wait
 	// on any client write).
 	require.Eventually(t, func() bool { return mgr.ViewerCount("cam1") == 1 },
 		2*time.Second, 20*time.Millisecond)
 
 	// /api/streams' ViewerCount must answer WHILE the stalled serve is stuck
-	// in its (lock-free) write — the old code deadlocked here.
+	// in its (lock-free) write.
 	counted := make(chan int, 1)
 	go func() { counted <- mgr.ViewerCount("cam1") }()
 	select {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -321,7 +322,7 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 		Host:         u.Host,
 		Protocol:     &tcp,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: config.DefaultRTSPTimeout,
 	}
 	if err := client.Start(); err != nil {
 		return fmt.Errorf("client start: %w", err), false
@@ -443,7 +444,6 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 			if r.Hub != nil {
 				r.Hub.BroadcastAudio(int64(pkt.Timestamp), model.AudioG711, data)
 			}
-			// Write to AVI muxer (if active segment).
 			r.mu.Lock()
 			m := r.aviMuxer
 			if m != nil {
@@ -688,7 +688,7 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 			})
 		}
 		rec.FileSize = totalSize
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
 			mjpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 
@@ -734,7 +734,6 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 		})
 	}
 
-	// Update metrics for completed segment
 	if r.frameCount > 0 && segmentFinalized {
 		r.recordSegmentCreated()
 	}

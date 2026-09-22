@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"net/http"
 	"net/url"
 	"strings"
@@ -583,7 +584,7 @@ func probeRTSPEncodingFor(rtspURL, username, password string) string {
 		Host:         u.Host,
 		Protocol:     &tcp,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: config.DefaultRTSPTimeout,
 	}
 	if err := client.Start(); err != nil {
 		return ""

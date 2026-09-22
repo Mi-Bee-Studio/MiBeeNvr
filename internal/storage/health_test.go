@@ -90,7 +90,7 @@ func TestHealthEventsFilter(t *testing.T) {
 
 	// Filter by time range (since = now - 90s)
 	since := now.Add(-90 * time.Second)
-	filtered, total, err = db.ListHealthEvents(ctx, HealthEventsFilter{Since: since.Format(sqliteTimeFormat)})
+	filtered, total, err = db.ListHealthEvents(ctx, HealthEventsFilter{Since: since.Format(TimeLayout)})
 	require.NoError(t, err)
 	require.Len(t, filtered, 2)
 	require.Equal(t, 2, total)
@@ -98,7 +98,7 @@ func TestHealthEventsFilter(t *testing.T) {
 	// Filter by camera + time
 	filtered, total, err = db.ListHealthEvents(ctx, HealthEventsFilter{
 		CameraID: "cam1",
-		Since:    now.Add(-90 * time.Second).Format(sqliteTimeFormat),
+		Since:    now.Add(-90 * time.Second).Format(TimeLayout),
 	})
 	require.NoError(t, err)
 	require.Len(t, filtered, 1)

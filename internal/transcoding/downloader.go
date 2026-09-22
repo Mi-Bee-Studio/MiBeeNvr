@@ -23,8 +23,16 @@ import (
 // Package-level variable so tests can override it.
 var getDownloadURL = defaultDownloadURL
 
+// DownloadMirror overrides the FFmpeg static-build host when non-empty
+// (config transcoding.download_mirror); the platform filename is appended.
+// Set once at wiring, before any download starts.
+var DownloadMirror string
+
 func defaultDownloadURL(goos, goarch string) string {
 	base := "https://johnvansickle.com/ffmpeg/builds"
+	if DownloadMirror != "" {
+		base = strings.TrimRight(DownloadMirror, "/")
+	}
 	switch goos + "/" + goarch {
 	case "linux/amd64":
 		return base + "/ffmpeg-git-amd64-static.tar.xz"
@@ -153,17 +161,14 @@ func (d *Downloader) DownloadFFmpeg(ctx context.Context) error {
 		}
 	}
 
-	// Check if already downloading
 	if d.status.Status == "downloading" {
 		d.mu.Unlock()
 		return fmt.Errorf("download already in progress")
 	}
 
-	// Set downloading state
 	d.status = DownloadStatus{Status: "downloading", Progress: 0}
 	d.saveState()
 
-	// Create cancellable context
 	dlCtx, cancel := context.WithCancel(ctx)
 	d.cancelFunc = cancel
 	d.mu.Unlock()
@@ -252,7 +257,6 @@ func (d *Downloader) downloadOnceWithURL(ctx context.Context, url string) error 
 		return fmt.Errorf("unsupported platform: %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
-	// Create tools directory
 	toolsDir := filepath.Join(d.dataDir, "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create tools directory: %w", err)

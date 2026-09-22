@@ -379,7 +379,7 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			req.SetBasicAuth(r.cfg.Username, r.cfg.Password)
 		}
 
-		httpJpegLogger.Info("connecting to MJPEG stream", "camera_id", r.cfg.CameraID, "url", r.cfg.URL)
+		httpJpegLogger.Info("connecting to MJPEG stream", "camera_id", r.cfg.CameraID, "url", slogx.RedactURL(r.cfg.URL))
 		resp, err = r.client.Do(req)
 		if err != nil {
 			return fmt.Errorf("http connect: %w", err), false
@@ -425,7 +425,6 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		default:
 		}
 
-		// Read until boundary marker
 		if err := r.skipToBoundary(reader, boundary); err != nil {
 			return fmt.Errorf("read boundary: %w", err), true
 		}
@@ -436,7 +435,6 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			return fmt.Errorf("read part headers: %w", err), true
 		}
 
-		// Read JPEG body
 		var data []byte
 		if contentLength > 0 {
 			data = make([]byte, contentLength)
@@ -452,7 +450,6 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			}
 		}
 
-		// Validate JPEG magic bytes
 		if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
 			httpJpegLogger.Warn("skipping invalid frame (missing JPEG magic)", "camera_id", r.cfg.CameraID, "size", len(data))
 			continue
@@ -497,7 +494,6 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			continue
 		}
 
-		// Create segment if needed
 		if r.curTempPath == "" {
 			if r.cfg.AVI {
 				tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatAVI))
@@ -657,7 +653,7 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 			})
 		}
 		rec.FileSize = totalSize
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
 			httpJpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 
@@ -713,7 +709,6 @@ func extractBoundary(ct string) string {
 		return "frame"
 	}
 	val := ct[idx+len("boundary="):]
-	// Remove quotes if present
 	val = strings.Trim(val, `"`)
 	// Trim any trailing semicolon/whitespace
 	if i := strings.IndexAny(val, "; "); i != -1 {
@@ -773,7 +768,6 @@ func readUntilBoundary(reader *bufio.Reader, buf *bytes.Buffer, boundary []byte)
 			return nil, err
 		}
 		buf.WriteByte(b)
-		// Check if buffer ends with boundary
 		if bytes.HasSuffix(buf.Bytes(), boundary) {
 			data := buf.Bytes()
 			data = data[:len(data)-len(boundary)]

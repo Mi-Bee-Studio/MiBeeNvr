@@ -1553,7 +1553,7 @@ func TestDequeueNotBlockedByLongTx(t *testing.T) {
 		InputFormat:  "h264",
 		OutputPath:   "/output.mp4",
 		OutputFormat: "h265",
-		CreatedAt:    time.Now().UTC().Format(sqliteTimeFormat),
+		CreatedAt:    time.Now().UTC().Format(TimeLayout),
 	}
 	require.NoError(t, db.EnqueueTask(ctx, task))
 

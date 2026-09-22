@@ -14,7 +14,7 @@ func TestTranscodingConfig_Defaults(t *testing.T) {
 	require.False(t, cfg.Transcoding.Enabled, "transcoding.enabled should default to false")
 	require.Equal(t, 1, cfg.Transcoding.MaxWorkers, "transcoding.max_workers should default to 1")
 	require.Empty(t, cfg.Transcoding.FFmpegPath, "transcoding.ffmpeg_path should default to empty (auto-detect)")
-	require.Empty(t, cfg.Transcoding.DownloadURL, "transcoding.download_url should default to empty")
+	require.Empty(t, cfg.Transcoding.DownloadMirror, "transcoding.download_mirror should default to empty")
 }
 
 func TestTranscodingConfig_InvalidMaxWorkers(t *testing.T) {

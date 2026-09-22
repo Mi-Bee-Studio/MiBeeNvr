@@ -79,8 +79,7 @@ func TestWHEPSessionWithICEServers(t *testing.T) {
 }
 
 // TestWHEPSessionWithoutICEServersIsBackwardCompatible is a regression guard:
-// a Manager created with zero options (the legacy code path in run.go before
-// this feature) must still work identically.
+// a Manager created with zero options must still work identically.
 func TestWHEPSessionWithoutICEServersIsBackwardCompatible(t *testing.T) {
 	mgr := NewManager() // no WithICEServers — legacy path
 	defer mgr.StopAll()
