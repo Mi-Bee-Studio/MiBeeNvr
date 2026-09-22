@@ -158,6 +158,7 @@ func TestRunFree_ServiceOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
@@ -199,6 +200,7 @@ func TestRunFree_ServiceOrder_GB28181Enabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
@@ -226,6 +228,7 @@ func TestRunFree_ServiceOrder_GB28181Disabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
@@ -255,6 +258,7 @@ func TestRunFree_ServiceOrder_DiscoveryEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
@@ -291,6 +295,7 @@ func TestRunFree_SmokeStartStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -330,6 +335,7 @@ func TestRunFree_StopJoinsBackgroundGoroutines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := a.Start(ctx); err != nil {
@@ -480,6 +486,7 @@ func TestRunFree_ServiceOrder_MQTTStatusEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
@@ -513,6 +520,7 @@ func TestRunFree_ServiceOrder_MQTTStatusEventsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	for _, name := range a.Services() {
 		if name == "mqtt-status" {

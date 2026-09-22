@@ -954,9 +954,9 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 				continue
 			}
 
-			// Calculate duration from PTS delta (90kHz clock)
-
-			entry.mu.Lock()
+			// Duration from PTS delta (90kHz clock). lastPTS is private to
+			// this writeLoop goroutine — the historical entry.mu round-trip
+			// was pure residue (#875 L4).
 			var dur time.Duration
 			if entry.lastPTS == 0 {
 				dur = time.Second / defaultFPS
@@ -973,7 +973,6 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 				}
 			}
 			entry.lastPTS = frame.pts
-			entry.mu.Unlock()
 
 			if dur < time.Millisecond {
 				dur = time.Millisecond
@@ -1014,7 +1013,8 @@ func (m *Manager) audioWriteLoop(ctx context.Context, entry *peerEntry) {
 		case <-ctx.Done():
 			return
 		case frame := <-entry.audioCh:
-			entry.mu.Lock()
+			// lastAudioPTS is private to this audioWriteLoop goroutine — no
+			// lock needed (#875 L4, same as the video writeLoop).
 			var dur time.Duration
 			if entry.lastAudioPTS == 0 {
 				dur = defaultAudioFrameDur
@@ -1030,7 +1030,6 @@ func (m *Manager) audioWriteLoop(ctx context.Context, entry *peerEntry) {
 				}
 			}
 			entry.lastAudioPTS = frame.PTS
-			entry.mu.Unlock()
 			if dur < time.Millisecond {
 				dur = time.Millisecond
 			}

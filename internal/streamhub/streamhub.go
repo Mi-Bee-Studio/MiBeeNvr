@@ -111,10 +111,19 @@ type consumerEntry struct {
 // stays lock- and syscall-free.
 func (e *consumerEntry) drain() {
 	defer close(e.done)
+	// Dwell stats are sampled 1-in-8 (#875 L5): three atomic ops per frame
+	// bought no accuracy — the reported value is a running MEAN, and a
+	// stationary-queue mean over a 1/8 sample is statistically identical.
+	// dwellMaxNS stays unsampled so the max stays exact (one Load per frame,
+	// CAS only on a new record).
+	var frames int64
 	for qf := range e.ch {
+		frames++
 		if ns := time.Now().UnixNano() - qf.enqueuedAt; ns > 0 {
-			e.dwellSumNS.Add(ns)
-			e.dwellCount.Add(1)
+			if frames%8 == 1 {
+				e.dwellSumNS.Add(ns)
+				e.dwellCount.Add(1)
+			}
 			for {
 				cur := e.dwellMaxNS.Load()
 				if ns <= cur || e.dwellMaxNS.CompareAndSwap(cur, ns) {

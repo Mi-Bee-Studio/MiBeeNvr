@@ -24,6 +24,10 @@ const probePath = "/onvif/device_service"
 // action (camera create), so a few seconds worst case is acceptable.
 const probeTimeout = 1200 * time.Millisecond
 
+// probeHTTPClient serves serial-number probes (#875 L6): shared so probing
+// multiple ports reuses the transport and its connection pool.
+var probeHTTPClient = &http.Client{Timeout: probeTimeout}
+
 var serialRe = regexp.MustCompile(`(?i)<(?:[\w.-]+:)?SerialNumber>\s*([^<]+?)\s*</(?:[\w.-]+:)?SerialNumber>`)
 
 const getDeviceInfoBody = `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">` +
@@ -44,7 +48,7 @@ func ProbeSerial(ctx context.Context, ip string) (string, bool) {
 	if ip == "" {
 		return "", false
 	}
-	client := &http.Client{Timeout: probeTimeout}
+	client := probeHTTPClient
 	for _, port := range ProbePorts {
 		select {
 		case <-ctx.Done():

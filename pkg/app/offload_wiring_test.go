@@ -39,6 +39,7 @@ func TestRunFree_OffloadEnabled_Registered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	svcs := a.Services()
 	found, idx := -1, -1

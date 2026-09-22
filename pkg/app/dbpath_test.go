@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -16,18 +17,29 @@ import (
 // the recording root otherwise (bare-metal installs keep the legacy layout).
 func TestResolveDBPath(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Storage.RootDir = "/mnt/recordings"
+	// Platform-native absolute paths: filepath.IsAbs (used by resolveDBPath)
+	// is false for "/mnt/..." on Windows, so a literal unix path would test
+	// the relative-join branch there instead of the intended bare-metal one.
+	root := "/mnt/recordings"
+	dataVol := "/data"
+	explicit := "/explicit/nvr.db"
+	if runtime.GOOS == "windows" {
+		root = `C:` + string(os.PathSeparator) + `mnt` + string(os.PathSeparator) + `recordings`
+		dataVol = `C:` + string(os.PathSeparator) + `data`
+		explicit = `C:` + string(os.PathSeparator) + `explicit` + string(os.PathSeparator) + `nvr.db`
+	}
+	cfg.Storage.RootDir = root
 
 	t.Setenv("NVR_DATA_DIR", "")
-	if got := resolveDBPath(cfg); got != "/mnt/recordings/mibee-nvr.db" {
+	if got := resolveDBPath(cfg); got != filepath.Join(root, "mibee-nvr.db") {
 		t.Fatalf("bare metal: %q", got)
 	}
-	t.Setenv("NVR_DATA_DIR", "/data")
-	if got := resolveDBPath(cfg); got != "/data/mibee-nvr.db" {
+	t.Setenv("NVR_DATA_DIR", dataVol)
+	if got := resolveDBPath(cfg); got != filepath.Join(dataVol, "mibee-nvr.db") {
 		t.Fatalf("docker: %q", got)
 	}
-	cfg.Storage.DBPath = "/explicit/nvr.db"
-	if got := resolveDBPath(cfg); got != "/explicit/nvr.db" {
+	cfg.Storage.DBPath = explicit
+	if got := resolveDBPath(cfg); got != explicit {
 		t.Fatalf("explicit override: %q", got)
 	}
 }
