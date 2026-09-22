@@ -788,6 +788,7 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 		}
 		b.lastFrameTime = pkt.at
 
+		chargeRecordingWrite(int64(len(nalu)))
 		if err := b.muxer.WriteSample(b.trackID, nalu, pts, duration); err != nil {
 			b.log.Error("failed to write sample",
 				"camera_id", b.cfg.CameraID, "error", err)
@@ -846,6 +847,7 @@ func (b *baseRecorder) writeFlushedGOP(frames []gopFrame) {
 		if dur < time.Millisecond {
 			dur = time.Millisecond
 		}
+		chargeRecordingWrite(int64(len(f.nalu)))
 		if err := b.muxer.WriteSample(b.trackID, f.nalu, pts, dur); err != nil {
 			b.log.Error("failed to write flushed sample",
 				"camera_id", b.cfg.CameraID, "error", err)

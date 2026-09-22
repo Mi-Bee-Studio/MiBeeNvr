@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
@@ -23,6 +24,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -187,6 +189,10 @@ type Handler struct {
 	// via ArmFirstBootSetup while no admin credentials exist; cleared once
 	// setup completes.
 	setupCode string
+	// playbackBudget opts media serving into the shared I/O budget as the
+	// "playback" tenant (#886, gray-release). nil (default) = ServeFile
+	// semantics unchanged.
+	playbackBudget atomic.Pointer[iobudget.Limiter]
 	// DB txn panel rate window (#759): previous /api/system/stats sample.
 	dbTxnMu           sync.Mutex
 	dbTxnPrev         *dbTxnSample
@@ -962,7 +968,7 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.ServeFile(w, r, cleanPath)
+	h.serveFileBudgeted(w, r, cleanPath)
 }
 
 // SetPTZSuppressor wires the pixgate suppression hook fired on every PTZ

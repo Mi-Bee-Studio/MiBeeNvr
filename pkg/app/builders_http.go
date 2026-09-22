@@ -61,6 +61,12 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 	}
 	handler.SetStorageMigrator(deps.migrationMgr)
 
+	// Playback reads join the shared budget as the "playback" tenant when
+	// opted in (#886 gray-release); nil keeps plain ServeFile semantics.
+	if deps.ioBudget != nil && cfg.IO.PlaybackReadsBudgeted {
+		handler.SetPlaybackBudget(deps.ioBudget)
+	}
+
 	// Live API key store: seeded from config, updated in place by the
 	// generate/revoke handlers so key changes apply without restart (#335).
 	apiKeyStore := authmw.NewAPIKeyStore()

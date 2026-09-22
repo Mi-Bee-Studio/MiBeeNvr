@@ -27,4 +27,19 @@ type IOConfig struct {
 	// budget_bytes_per_sec > 0; without a budget the legacy fixed
 	// time-slice pacing stays active (no default behavior change).
 	DeleteUnlinksPerSec int64 `yaml:"delete_unlinks_per_sec"`
+
+	// RecordingWritesBudgeted opts the recording write path INTO the shared
+	// budget as the "recording" tenant (#886, gray-release): segment-sample
+	// writes are charged per NALU byte and block on the bucket when it is
+	// starved. Default false — pacing the reliability-critical recorder can
+	// drop frames under a tight budget, so this only makes sense on media
+	// where unbounded recording writes themselves are the latency problem.
+	// Requires budget_bytes_per_sec > 0.
+	RecordingWritesBudgeted bool `yaml:"recording_writes_budgeted"`
+
+	// PlaybackReadsBudgeted opts API media serving (playback/downloads)
+	// into the shared budget as the "playback" tenant (#886): file reads are
+	// charged in ServeContent-sized chunks. Default false; requires
+	// budget_bytes_per_sec > 0.
+	PlaybackReadsBudgeted bool `yaml:"playback_reads_budgeted"`
 }

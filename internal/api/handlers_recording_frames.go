@@ -102,7 +102,7 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 			if err == nil {
 				if frameIndex >= 0 && frameIndex < len(jpgFiles) {
 					framePath := filepath.Join(validPath, jpgFiles[frameIndex])
-					http.ServeFile(w, r, framePath)
+					h.serveFileBudgeted(w, r, framePath)
 					return
 				}
 			}
@@ -136,7 +136,7 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filepath.Base(filePath)))
-	http.ServeFile(w, r, filePath)
+	h.serveFileBudgeted(w, r, filePath)
 }
 
 func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
@@ -445,7 +445,7 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filePath := filepath.Join(rec.FilePath, filename)
-	http.ServeFile(w, r, filePath)
+	h.serveFileBudgeted(w, r, filePath)
 }
 
 // handleMergedRecording handles GET /api/recordings/{id}/merged.
@@ -494,7 +494,7 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 	if codec := probeTimelapseCodecCached(rec.MergePath); codec != "" {
 		w.Header().Set("X-Timelapse-Codec", codec)
 	}
-	http.ServeFile(w, r, rec.MergePath)
+	h.serveFileBudgeted(w, r, rec.MergePath)
 }
 
 // timelapseCodecCache caches probe results by file path. Merge output files are

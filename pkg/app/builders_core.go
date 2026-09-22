@@ -21,6 +21,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
@@ -94,6 +95,13 @@ func buildCoreDeps(deps *appDeps) error {
 	merge.SetIOBudget(ioBudget)
 	timelapse.SetIOBudget(ioBudget)
 	transcoding.SetIOBudget(ioBudget)
+	// Foreground budgeting is opt-in per path (#886 gray-release): recording
+	// writes join as the "recording" tenant only when explicitly configured —
+	// pacing the reliability-critical recorder can drop frames under a tight
+	// budget, so it stays unthrottled by default.
+	if ioBudget != nil && cfg.IO.RecordingWritesBudgeted {
+		recorder.SetWriteBudget(ioBudget)
+	}
 	deps.ioBudget = ioBudget
 	if ioBudget != nil {
 		slog.Info("background I/O budget enabled",

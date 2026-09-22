@@ -674,7 +674,7 @@ func (h *Handler) handleTimelapseDownload(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(rec.MergePath)))
-	http.ServeFile(w, r, rec.MergePath)
+	h.serveFileBudgeted(w, r, rec.MergePath)
 }
 
 // handleRetryTimelapseMerge handles POST /api/recordings/{id}/retry-merge.
@@ -997,7 +997,7 @@ func (h *Handler) handleDownloadTimelapseMerge(w http.ResponseWriter, r *http.Re
 		w.Header().Set("X-Timelapse-Codec", m.Codec)
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(m.OutputPath)))
-	http.ServeFile(w, r, m.OutputPath)
+	h.serveFileBudgeted(w, r, m.OutputPath)
 }
 
 // handleDeleteTimelapseMerge handles DELETE /api/timelapse/merges/{id}.
