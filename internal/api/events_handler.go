@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -77,13 +76,26 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Topic, data)
+			writeSSEEvent(w, evt.Topic, data)
 			flusher.Flush()
 		case <-heartbeat.C:
-			fmt.Fprintf(w, ": ping\n\n")
+			_, _ = w.Write([]byte(": ping\n\n"))
 			flusher.Flush()
 		}
 	}
+}
+
+// writeSSEEvent emits one server-sent event frame. Byte concatenation
+// replaces fmt.Fprintf's format parsing + reflection on the per-event path
+// (#875 L2); the frame layout is identical.
+func writeSSEEvent(w http.ResponseWriter, topic string, data []byte) {
+	b := make([]byte, 0, len("event: \ndata: \n\n")+len(topic)+len(data))
+	b = append(b, "event: "...)
+	b = append(b, topic...)
+	b = append(b, "\ndata: "...)
+	b = append(b, data...)
+	b = append(b, "\n\n"...)
+	_, _ = w.Write(b)
 }
 
 // handleCameraEvents handles GET /api/cameras/{id}/events.
@@ -157,10 +169,10 @@ func (h *Handler) handleCameraEvents(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Topic, data)
+			writeSSEEvent(w, evt.Topic, data)
 			flusher.Flush()
 		case <-heartbeat.C:
-			fmt.Fprintf(w, ": ping\n\n")
+			_, _ = w.Write([]byte(": ping\n\n"))
 			flusher.Flush()
 		}
 	}

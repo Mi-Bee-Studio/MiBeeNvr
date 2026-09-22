@@ -28,6 +28,7 @@ func TestRunFree_PixgateHubResolverWired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	svc := a.Get("pixgate")
 	if svc == nil {
@@ -62,6 +63,7 @@ func TestRunFree_PixgateMetricsWired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFree: %v", err)
 	}
+	t.Cleanup(func() { _ = a.Stop() })
 
 	svc := a.Get("pixgate")
 	if svc == nil {

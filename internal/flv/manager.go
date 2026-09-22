@@ -500,8 +500,12 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 
 	flvLogger.Debug("FLV viewer connected", "camera_id", camID, "viewer_id", viewerID)
 
-	writeWithDeadline := func(p []byte) error {
-		_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	// Handshake + GOP replay burst shares ONE write deadline (#875 L3): the
+	// per-tag SetWriteDeadline was a deadline syscall per tag on connect. The
+	// 10s stall guard is preserved — a stuck viewer fails via the first
+	// blocked write within the same bound.
+	_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	writeRaw := func(p []byte) error {
 		_, err := w.Write(p)
 		return err
 	}
@@ -517,17 +521,17 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 
 	// Write FLV header + PreviousTagSize0
-	if err := writeWithDeadline(flvHeader()); err != nil {
+	if err := writeRaw(flvHeader()); err != nil {
 		return err
 	}
-	if err := writeWithDeadline(previousTagSize0()); err != nil {
+	if err := writeRaw(previousTagSize0()); err != nil {
 		return err
 	}
 	if flusher != nil {
 		flusher.Flush()
 	}
 
-	if err := writeWithDeadline(entry.seqHeader); err != nil {
+	if err := writeRaw(entry.seqHeader); err != nil {
 		return err
 	}
 	if flusher != nil {
@@ -536,7 +540,7 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 
 	// Replay the cached GOP snapshot (lock-free)
 	for _, frame := range gopFrames {
-		if err := writeWithDeadline(frame.tag); err != nil {
+		if err := writeRaw(frame.tag); err != nil {
 			return err
 		}
 	}
@@ -551,8 +555,12 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 		flusher.Flush()
 	}
 
-	// Write frames to client until disconnect
+	// Write frames to client until disconnect. Tags already queued in the
+	// channel are drained into one deadline+write pass (#875 L3) — under a
+	// frame burst this collapses per-tag SetWriteDeadline syscalls into one
+	// per batch, and the 10s stall guard still bounds the batch.
 	ctx := r.Context()
+	var batch [][]byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -561,8 +569,31 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 			if !ok {
 				return nil // channel closed
 			}
-			if err := writeWithDeadline(tag); err != nil {
-				return err
+			batch = append(batch[:0], tag)
+		drain:
+			for len(batch) < 64 {
+				select {
+				case t, ok := <-viewerCh:
+					if !ok {
+						// Channel closed mid-batch: flush what we hold.
+						_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+						for _, tg := range batch {
+							if _, err := w.Write(tg); err != nil {
+								return err
+							}
+						}
+						return nil
+					}
+					batch = append(batch, t)
+				default:
+					break drain
+				}
+			}
+			_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			for _, tg := range batch {
+				if _, err := w.Write(tg); err != nil {
+					return err
+				}
 			}
 			if flusher != nil {
 				flusher.Flush()

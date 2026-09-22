@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 	"time"
 
@@ -62,10 +61,12 @@ func (d *DB) ListHealthEvents(ctx context.Context, filter HealthEventsFilter) ([
 	dataSQL := "SELECT id, camera_id, event_type, status, message, metadata, created_at FROM camera_health_events" + whereClause
 	dataSQL += " ORDER BY created_at DESC"
 	if filter.Limit > 0 {
-		dataSQL += fmt.Sprintf(" LIMIT %d", filter.Limit)
+		dataSQL += " LIMIT ?"
+		args = append(args, filter.Limit)
 	}
 	if filter.Offset > 0 {
-		dataSQL += fmt.Sprintf(" OFFSET %d", filter.Offset)
+		dataSQL += " OFFSET ?"
+		args = append(args, filter.Offset)
 	}
 	dataSQL += ";"
 

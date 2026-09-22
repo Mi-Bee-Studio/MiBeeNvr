@@ -633,7 +633,8 @@ func (d *DB) ListRecordingsByMergeStatus(ctx context.Context, statuses []string,
 	}
 	q += " ORDER BY started_at ASC"
 	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT %d", limit)
+		q += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := d.readConn().QueryContext(ctx, q, args...)
 	if err != nil {
@@ -678,7 +679,8 @@ func (d *DB) ListFakeMergedRecordings(ctx context.Context, cameraID string, limi
 	}
 	q += " ORDER BY started_at ASC"
 	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT %d", limit)
+		q += " LIMIT ?"
+		args = append(args, limit)
 	}
 	rows, err := d.readConn().QueryContext(ctx, q, args...)
 	if err != nil {

@@ -257,12 +257,17 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 		sqlstr += " WHERE " + strings.Join(where, " AND ")
 	}
 	sqlstr += recordingsOrderByClause(filter)
+	// Bind LIMIT/OFFSET as parameters (#875 L1): interpolated values make a
+	// distinct SQL text per page, defeating sqlite's prepared-statement cache
+	// so every page pays a fresh prepare. Placeholders keep one cached plan.
 	if filter.Limit > 0 {
-		sqlstr += fmt.Sprintf(" LIMIT %d", filter.Limit)
+		sqlstr += " LIMIT ?"
+		args = append(args, filter.Limit)
 	}
 	// OFFSET is only used for legacy (non-cursor) pagination.
 	if !useKeyset && filter.Offset > 0 {
-		sqlstr += fmt.Sprintf(" OFFSET %d", filter.Offset)
+		sqlstr += " OFFSET ?"
+		args = append(args, filter.Offset)
 	}
 	sqlstr += ";"
 	rows, err := d.readConn().QueryContext(ctx, sqlstr, args...)
@@ -587,7 +592,8 @@ func (d *DB) ListRecordingTimelineSegments(ctx context.Context, filter model.Rec
 	}
 	// Timeline always renders left→right; ignore caller SortBy/SortOrder.
 	sqlstr += " ORDER BY started_at ASC"
-	sqlstr += fmt.Sprintf(" LIMIT %d", maxTimelineSegments)
+	sqlstr += " LIMIT ?"
+	args = append(args, maxTimelineSegments)
 	sqlstr += ";"
 
 	rows, err := d.readConn().QueryContext(ctx, sqlstr, args...)

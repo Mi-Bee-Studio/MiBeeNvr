@@ -14,6 +14,11 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 )
 
+// probeHTTPClient serves connection-test probes (#875 L6): a shared client
+// keeps the default transport (and its connection pool) across probes instead
+// of a fresh client + transport per test click.
+var probeHTTPClient = &http.Client{Timeout: 3 * time.Second}
+
 // handleTestConnection attempts to connect to a camera URL with a short timeout.
 // Returns success/failure, a human-readable message, and the latency in milliseconds.
 func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
@@ -74,9 +79,9 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 
 	default:
-		// HTTP/ONVIF: try HEAD/GET request with timeout
-		client := &http.Client{Timeout: 3 * time.Second}
-		// For URLs with credentials, inject them
+		// HTTP/ONVIF: try HEAD/GET request with timeout. Shared client (#875
+		// L6): a fresh http.Client per probe skipped transport/connection
+		// reuse entirely and re-allocated the transport on every test click.
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, target, nil)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -97,7 +102,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		resp, err := client.Do(req)
+		resp, err := probeHTTPClient.Do(req)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"success":    false,

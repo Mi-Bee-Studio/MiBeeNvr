@@ -18,6 +18,10 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// snapshotHTTPClient fetches camera snapshot URLs (#875 L6): shared so the
+// transport and its connection pool survive across fetches.
+var snapshotHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 // --- HLS streaming endpoints ---
 
 // subscribeHLS registers an HLS consumer on the recorder's StreamHub.
@@ -353,7 +357,6 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	// endpoint even when the ONVIF service itself is unauthenticated — so we
 	// attach the camera credentials when present. client.Get cannot set headers,
 	// hence NewRequestWithContext + client.Do.
-	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, snapshotURL, nil)
 	if err != nil {
 		serveStaleOrError(w, cached, ok, cameraID, fmt.Errorf("build snapshot request: %w", err))
@@ -362,7 +365,7 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if username != "" {
 		req.SetBasicAuth(username, password)
 	}
-	resp, err := client.Do(req)
+	resp, err := snapshotHTTPClient.Do(req)
 	if err != nil {
 		serveStaleOrError(w, cached, ok, cameraID, err)
 		return
