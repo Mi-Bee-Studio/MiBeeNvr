@@ -715,7 +715,6 @@ func TestZoneManager_Concurrency(t *testing.T) {
 func TestZoneManager_FilterIntegration(t *testing.T) {
 	zm := NewZoneManager()
 
-	// Set up zones.
 	require.NoError(t, zm.AddZone(makeROIZone(t, "cam-1", "entrance", true, [][2]float64{
 		{0, 0}, {0.3, 0}, {0.3, 1}, {0, 1},
 	})))

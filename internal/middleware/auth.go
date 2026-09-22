@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"encoding/base64"
 	"net"
 	"net/http"
 	"strings"
@@ -86,6 +85,14 @@ func HasProxyHeaders(r *http.Request) bool {
 // apart.
 func IsBypassEligible(r *http.Request) bool {
 	if r == nil || HasProxyHeaders(r) || !IsLocalIP(r.RemoteAddr) {
+		return false
+	}
+	// A browser request originating from another page (a malicious site the
+	// desktop user visited) carries Sec-Fetch-Site: cross-site even when it
+	// targets localhost — reject those. Non-browser clients send no
+	// Sec-Fetch-Site header and keep the loopback path.
+	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" &&
+		sfs != "none" && sfs != "same-origin" && sfs != "same-site" {
 		return false
 	}
 	host := strings.TrimSpace(r.Host)
@@ -284,24 +291,9 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 			}
 
 			user, pass, ok := r.BasicAuth()
-			if !ok {
-				// Fallback: check ?token= query parameter.
-				// Session tokens (mbs_) are validated above via the Bearer path; the
-				// ?token= variant for WS/sendBeacon is also handled by bearerSessionToken.
-				// Anything left here is the legacy base64(user:pass) form, kept only
-				// for migration compatibility.
-				if tok := r.URL.Query().Get("token"); tok != "" && !IsSessionToken(tok) {
-					decoded, err := base64.StdEncoding.DecodeString(tok)
-					if err == nil {
-						parts := strings.SplitN(string(decoded), ":", 2)
-						if len(parts) == 2 {
-							user = parts[0]
-							pass = parts[1]
-							ok = true
-						}
-					}
-				}
-			}
+			// ?token= accepts mbs_ session tokens only (validated above via
+			// the Bearer path). The legacy base64(user:pass) form was removed
+			// (#879): it leaked credentials into browser history and proxy logs.
 			if !ok || user != currentUsername || !CheckPassword(pass, currentHash) {
 				recordAuthAttempt("failure")
 				// Track auth failure only when rate limiting is enabled.

@@ -21,10 +21,10 @@ import (
 	"github.com/abema/go-mp4"
 )
 
-// codecMuxer builds the moov box structure for a single-codec video track.
-// It is the shared base of the former h264Muxer / h265Muxer; the only fields
-// that differed between them were the decoder-config payload (avcC vs hvcC
-// bytes) and the sample-entry / config box type names, now parameterized below.
+// codecMuxer builds the moov box structure for a single-codec video track,
+// shared by the H.264 and H.265 mergers. The only per-codec differences are
+// the decoder-config payload (avcC vs hvcC bytes) and the sample-entry /
+// config box type names, parameterized below.
 type codecMuxer struct {
 	frameCount  int
 	sampleSizes []uint32

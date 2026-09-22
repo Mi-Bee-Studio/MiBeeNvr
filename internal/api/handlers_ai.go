@@ -126,7 +126,6 @@ func (h *Handler) handleCreateAIEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record metrics
 	if m := currentAPIMetrics(); m != nil {
 		m.AIEventsReceivedTotal.WithLabelValues(body.CameraID, body.EventType).Inc()
 	}

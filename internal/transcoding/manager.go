@@ -184,7 +184,7 @@ func (m *TranscodeManager) Run(ctx context.Context) {
 						}
 						// Build task
 						outputPath := seg.FilePath + ".transcoded.mp4"
-						now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+						now := time.Now().UTC().Format(storage.TimeLayout)
 						task := &storage.TranscodeTask{
 							CameraID:        seg.CameraID,
 							RecordingID:     seg.RecordingID,
@@ -238,7 +238,7 @@ func (m *TranscodeManager) EnqueueRecording(cameraID, recordingID, inputPath, in
 	ext := ".mp4"
 	outputPath := inputPath + ".transcoded" + ext
 
-	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+	now := time.Now().UTC().Format(storage.TimeLayout)
 	task := &storage.TranscodeTask{
 		CameraID:     cameraID,
 		RecordingID:  recordingID,

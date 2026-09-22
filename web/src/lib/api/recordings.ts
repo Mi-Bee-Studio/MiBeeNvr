@@ -1,7 +1,7 @@
 /**
  * Recording API — list, download, frames, stats, archives
  */
-import { apiRequest, apiRequestBlob, apiHeadHeader, getAuthHeader, API_BASE, ApiRequestError , readJson } from './client';
+import { apiRequest, apiRequestBlob, apiHeadHeader, getAuthHeader, appendAuthToken, API_BASE, ApiRequestError , readJson } from './client';
 import { fetchFrameBatch, type FrameBatch } from '$lib/multipart';
 
 // --- Types ---
@@ -263,22 +263,22 @@ export async function batchDeleteRecordings(ids: string[], signal?: AbortSignal)
 }
 
 export function getRecordingDownloadUrl(id: string): string {
-  return `${API_BASE}/recordings/${id}/download`;
+  return appendAuthToken(`${API_BASE}/recordings/${id}/download`);
 }
 
 export function getRecordingVideoUrl(id: string): string {
-  return `${API_BASE}/recordings/${id}/download`;
+  return appendAuthToken(`${API_BASE}/recordings/${id}/download`);
 }
 
 export function getMergedRecordingUrl(id: string): string {
-  return `${API_BASE}/recordings/${id}/merged`;
+  return appendAuthToken(`${API_BASE}/recordings/${id}/merged`);
 }
 
 // getCameraPlaybackPlaylistURL builds the day-range VOD HLS playlist URL
 // (#321 Phase 2). The playlist stitches every H.264/H.265 recording of the
 // camera within [start, end] (RFC3339) into one seekable timeline.
 export function getCameraPlaybackPlaylistURL(cameraId: string, startISO: string, endISO: string): string {
-  return `${API_BASE}/cameras/${cameraId}/playback/playlist.m3u8?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`;
+  return appendAuthToken(`${API_BASE}/cameras/${cameraId}/playback/playlist.m3u8?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`);
 }
 
 // probeMergedRecordingCodec issues a HEAD request to the /merged endpoint and

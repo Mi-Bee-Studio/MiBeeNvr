@@ -21,7 +21,7 @@
     dashboard: () => import('./routes/Dashboard.svelte'),
     'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
   };
-  import Header from './components/Header';
+  import Header from '$lib/components/Header.svelte';
 
   // Network status
   let isOffline = $state(false);

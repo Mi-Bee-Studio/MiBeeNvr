@@ -57,7 +57,7 @@ ftp:
 
 ### 访问 FTP 资源
 
-FTP 服务器可通过 `ftp://localhost:2121` 访问，文件结构如下：
+FTP 为明文协议——凭据与数据均可被同网段嗅探。建议通过 `ftp.username` / `ftp.password` 设置独立于管理员的凭据（未设置时回退到管理员账号并在启动时告警）。FTP 服务器可通过 `ftp://localhost:2121` 访问，文件结构如下：
 
 ```text
 ftp://localhost:2121/

@@ -142,7 +142,6 @@ func (cm *CleanupManager) archivedRetentionCleanup(ctx context.Context) {
 			}
 		}
 
-		// Check if this archived camera has any recordings left
 		remaining, err := cm.db.CountRecordingsByCamera(ctx, cam.ID)
 		if err != nil {
 			logger.Warn("failed to count recordings for archived camera", "camera_id", cam.ID, "error", err)

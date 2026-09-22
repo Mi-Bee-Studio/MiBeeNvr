@@ -30,7 +30,7 @@
   import { parseVodPlaylist, entryAt, nearestEntryByWallClock, mediaTimeFor, type VodEntry } from '$lib/vod-playlist';
   import { parseTimelineMap, wallToFileSec, fileToWallSec } from '$lib/timeline-map';
   import VideoPlaybackControls from '$lib/components/VideoPlaybackControls.svelte';
-  import AviPlayback from '../../components/AviPlayback.svelte';
+  import AviPlayback from '$lib/components/AviPlayback.svelte';
   import TimelineBar from '$lib/components/TimelineBar.svelte';
 
   export type PlaybackMode = 'video' | 'timelapse' | 'avi' | 'mjpeg' | 'unsupported';

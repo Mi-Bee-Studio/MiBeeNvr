@@ -609,8 +609,8 @@ export class ConnectionManager {
   }
 
   // ─── Internal: Visibility ────────────────────────────────────────────
-  // REMOVED: ConnectionManager no longer binds its own visibilitychange
-  // listener. Visibility pause/resume is owned by the Player Orchestrator
+  // ConnectionManager does not bind its own visibilitychange listener.
+  // Visibility pause/resume is owned by the Player Orchestrator
   // (setTabVisible) to avoid the three-way conflict that caused the WS storm.
   // See the constructor note for the full rationale.
 }

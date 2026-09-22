@@ -270,7 +270,6 @@ func (d *DB) CameraExistsByOnvifEndpoint(ctx context.Context, onvifEndpoint, ser
 	}
 	if serial != "" {
 		var c int
-		// Check both serial_number and stable_id
 		if err := d.readConn().QueryRowContext(ctx, `SELECT COUNT(*) FROM cameras WHERE serial_number=? OR stable_id=? LIMIT 1`, serial, serial).Scan(&c); err != nil {
 			return false, err
 		}
@@ -526,7 +525,6 @@ func (d *DB) ReassignCameraStableID(ctx context.Context, fromCameraID, toCameraI
 	}
 	defer tx.Rollback() // no-op if committed
 
-	// Read current stable_id from source
 	var stableID string
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(stable_id, '') FROM cameras WHERE id=? LIMIT 1`, fromCameraID).Scan(&stableID); err != nil {
 		if err == sql.ErrNoRows {
@@ -538,12 +536,10 @@ func (d *DB) ReassignCameraStableID(ctx context.Context, fromCameraID, toCameraI
 		return nil // nothing to reassign
 	}
 
-	// Clear source
 	if _, err := tx.ExecContext(ctx, `UPDATE cameras SET stable_id='' WHERE id=?`, fromCameraID); err != nil {
 		return fmt.Errorf("reassign stable_id clear source: %w", err)
 	}
 
-	// Set destination
 	if _, err := tx.ExecContext(ctx, `UPDATE cameras SET stable_id=? WHERE id=?`, stableID, toCameraID); err != nil {
 		return fmt.Errorf("reassign stable_id set dest: %w", err)
 	}

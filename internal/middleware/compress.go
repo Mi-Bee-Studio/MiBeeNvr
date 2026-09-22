@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/klauspost/compress/gzip"
 )
@@ -29,13 +31,39 @@ type compressWriter struct {
 	// parser failed with INVALID_PROTOBUF). Only finalize gz when we actually
 	// used it.
 	wroteGzip bool
+	level     int
+}
+
+// gzipPools recycles gzip.Writers per compression level — NewWriterLevel
+// allocates several KB per request and dashboard/asset polling recreates it
+// constantly (#875 M5). gzip.Writer.Reset keeps the creation-time level, so
+// pools are keyed by level.
+var gzipPools sync.Map // level int -> *sync.Pool
+
+func getGzipWriter(w http.ResponseWriter, level int) *gzip.Writer {
+	p, _ := gzipPools.LoadOrStore(level, &sync.Pool{
+		New: func() any {
+			gz, _ := gzip.NewWriterLevel(io.Discard, level)
+			return gz
+		},
+	})
+	gz := p.(*sync.Pool).Get().(*gzip.Writer)
+	gz.Reset(w)
+	return gz
+}
+
+func putGzipWriter(gz *gzip.Writer, level int) {
+	gz.Reset(io.Discard) // drop the ResponseWriter reference while pooled
+	if p, ok := gzipPools.Load(level); ok {
+		p.(*sync.Pool).Put(gz)
+	}
 }
 
 func newCompressWriter(w http.ResponseWriter, level int) *compressWriter {
-	gz, _ := gzip.NewWriterLevel(w, level)
 	return &compressWriter{
-		w:  w,
-		gz: gz,
+		w:     w,
+		gz:    getGzipWriter(w, level),
+		level: level,
 	}
 }
 
@@ -103,9 +131,12 @@ func (cw *compressWriter) Close() error {
 	// which corrupts skip-compression responses (binary files served raw).
 	// See issue #109 (ONNX INVALID_PROTOBUF).
 	if !cw.wroteGzip {
+		putGzipWriter(cw.gz, cw.level)
 		return nil
 	}
-	return cw.gz.Close()
+	err := cw.gz.Close()
+	putGzipWriter(cw.gz, cw.level)
+	return err
 }
 
 // shouldSkipCompression returns true for content types that are already
@@ -143,7 +174,6 @@ func shouldSkipCompression(contentType string) bool {
 // The level parameter controls compression: 1 (BestSpeed) to 9 (BestCompression).
 // Level 5 is a good default (close to BestSpeed with better ratio).
 func StreamingGzip(level int) func(http.Handler) http.Handler {
-	// Validate level.
 	if level < gzip.DefaultCompression || level > gzip.BestCompression {
 		level = gzip.DefaultCompression
 	}

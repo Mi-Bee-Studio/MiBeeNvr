@@ -199,6 +199,5 @@ func TestSnapshotSessionManager_SubscribeFinished(t *testing.T) {
 	require.Eventually(t, func() bool { return sess2.Outcome() == SnapshotPartial },
 		2*time.Second, 10*time.Millisecond)
 
-	// Stop unwinds the subscription goroutine.
 	m.Stop()
 }

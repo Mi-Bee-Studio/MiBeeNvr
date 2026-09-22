@@ -200,7 +200,6 @@ func (s *MergeScheduler) runLoop() {
 
 	for {
 		s.mu.Lock()
-		// Find the earliest next run time
 		var earliest time.Time
 		for _, entry := range s.entries {
 			if entry.nextRun.IsZero() {

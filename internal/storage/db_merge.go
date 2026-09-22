@@ -311,7 +311,6 @@ func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recordi
 		}
 	}
 
-	// Delete source segment IDs.
 	if len(sourceIDs) > 0 {
 		placeholders := make([]string, len(sourceIDs))
 		args := make([]interface{}, len(sourceIDs))
@@ -450,7 +449,7 @@ func (d *DB) ListCameraMergeWindows(ctx context.Context, cameraID string, minAge
 	// cutoff would sit hours in the future of the intended instant on any
 	// non-UTC host and loosen the minAge gate (same class as the
 	// ListDarkRecordings bug, #565).
-	cutoff := time.Now().UTC().Add(-minAge).Format(sqliteTimeFormat)
+	cutoff := time.Now().UTC().Add(-minAge).Format(TimeLayout)
 	query := `SELECT strftime('%Y-%m-%d %H', started_at) as hour, MIN(started_at), MAX(ended_at), COUNT(*), format FROM recordings WHERE camera_id = ? AND merge_status = 'pending' AND COALESCE(layer,0)=0 AND ended_at IS NOT NULL AND ended_at < ? GROUP BY hour, format HAVING COUNT(*) >= 2 ORDER BY hour ASC;`
 	rows, err := d.readConn().QueryContext(ctx, query, cameraID, cutoff)
 	if err != nil {
@@ -515,8 +514,7 @@ func (d *DB) ClearCameraMerge(ctx context.Context, cameraID string) error {
 
 // SetMergeStatus updates merge_status for the given recording IDs in a single batched
 // UPDATE (with chunking to stay under SQLite's variable limit). Empty ids slice is a no-op.
-// Replaces the former per-row ExecContext loop (N IDs = N round-trips) with at most
-// ceil(len(ids)/batchUpdateChunkSize) statements, all in one transaction.
+// N IDs cost at most ceil(len(ids)/batchUpdateChunkSize) statements, all in one transaction.
 func (d *DB) SetMergeStatus(ctx context.Context, ids []string, status string) error {
 	defer d.observeTxn(ctx, "merge_status", time.Now())
 	if len(ids) == 0 {
@@ -753,8 +751,8 @@ func (d *DB) UpdateMergeProgress(ctx context.Context, id string, progress int) e
 
 // UpdateMergeProgressBatch is the multi-ID equivalent of UpdateMergeProgress, issuing a
 // single chunked UPDATE per batch instead of one statement per ID. Empty ids is a no-op.
-// This is the hot path during FFmpeg/Go merge progress parsing, where it was previously
-// called once per segment per progress tick (N segments × M ticks = N×M statements).
+// This is the hot path during FFmpeg/Go merge progress parsing (N segments × M progress
+// ticks — one statement per ID would cost N×M statements).
 func (d *DB) UpdateMergeProgressBatch(ctx context.Context, ids []string, progress int) error {
 	if len(ids) == 0 {
 		return nil
@@ -795,7 +793,7 @@ func (d *DB) ListSingletonPendingRecordings(ctx context.Context, cameraID string
 	// cutoff would sit hours in the future of the intended instant on any
 	// non-UTC host and loosen the minAge gate (same class as the
 	// ListDarkRecordings bug, #565).
-	cutoff := time.Now().UTC().Add(-minAge).Format(sqliteTimeFormat)
+	cutoff := time.Now().UTC().Add(-minAge).Format(TimeLayout)
 	query := `
 		WITH hour_buckets AS (
 			SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived,

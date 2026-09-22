@@ -181,8 +181,7 @@ func newSubStreamManager(t *testing.T, url string) *substream.Manager {
 
 // E2E: a camera on the sub layer records rotating mp4 segments from its live
 // sub-stream; the push sweep uploads them (X-Layer: sub, joined main recording
-// id) and deletes on success; the same camera's MAIN segments are no longer
-// pushed.
+// id) and deletes on success; the same camera's MAIN segments are not pushed.
 func TestSubLayer_RecordPushAndMainHandoff(t *testing.T) {
 	url := newTestSource(t)
 	subMgr := newSubStreamManager(t, url)

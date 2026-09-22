@@ -449,7 +449,6 @@ func TestStartTimelapseScheduleMonitor(t *testing.T) {
 	mgr.auxMu.Unlock()
 	assert.True(t, exists, "schedule monitor should be registered")
 
-	// Stop the monitor
 	mgr.stopTimelapseScheduleMonitor(cam.ID)
 
 	// Wait a moment for goroutine to finish

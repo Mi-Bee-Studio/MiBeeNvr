@@ -6,6 +6,12 @@ type FTPConfig struct {
 	Enabled          *bool  `yaml:"enabled"`            // default true
 	Port             int    `yaml:"port"`               // default 2121
 	PassivePortRange string `yaml:"passive_port_range"` // default "2122-2140"
+	// Username/Password are dedicated FTP credentials (#879): FTP is a
+	// cleartext protocol, so reusing the admin password would leak it to
+	// anyone sniffing the LAN. Unset = fallback to the admin account (with a
+	// startup warning) for backward compatibility.
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
 }
 
 type WebDAVConfig struct {

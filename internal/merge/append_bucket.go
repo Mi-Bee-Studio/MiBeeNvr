@@ -23,7 +23,7 @@ package merge
 // 最后一次 mdat size 补丁。恢复（OpenAppendBucket 自检）：文件尾长于
 // mdat 声明 → 截断到 mdat 末（丢未提交尾部，源段文件仍在，由上层回折）。
 //
-// ⚠️ RPi 3B 基线（用户裁决 2026-09-19）：镜像 + 补丁元数据常驻约
+// RPi 3B 实测基线：镜像 + 补丁元数据常驻约
 // 1–2MB/活跃相机；`merge.rolling_append_bucket` 默认 false，Web 设置页
 // 可操作（见 rolling 集成层）。
 

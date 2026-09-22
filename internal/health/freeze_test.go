@@ -180,7 +180,6 @@ func TestFreezeSetRecordingResetsTimer(t *testing.T) {
 	t.Helper()
 	detector, events := newTestFreezeDetector(testFreezeTimeout)
 
-	// Start recording
 	detector.SetRecording("cam-1", true)
 	detector.cameras["cam-1"].lastFrameTime.Store(time.Now().Add(-testFreezeTimeout - time.Second))
 

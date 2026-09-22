@@ -40,7 +40,6 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check camera exists
 	cam, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
 		slog.Error("WS: failed to get camera", "camera_id", id, "error", err)

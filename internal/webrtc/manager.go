@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/google/uuid"
@@ -53,11 +55,14 @@ type peerEntry struct {
 	camID        string // owning camera (no quality suffix) — logging/metrics
 	streamKey    string // camPeers/hubSubs key: camID or camID+streamhub.SubStreamKeySuffix (#513)
 	sessionID    string
-	lastUsed     time.Time
-	frameCh      chan model.FrameMsg
-	drops        uint64             // atomic: total frames dropped due to buffer full
-	congestion   *congestionTracker // tracks drop rate for bitrate adaptation
-	lastPTS      int64
+	// lastUsed is the last activity stamp in unix milliseconds (atomic — the
+	// per-frame path must not take the entry mutex, #875 H3).
+	lastUsed   atomic.Int64
+	frameCh    chan model.FrameMsg
+	drops      uint64             // atomic: total frames dropped due to buffer full
+	framesSent prometheus.Counter // pre-resolved per-camera counter (#875 H5)
+	congestion *congestionTracker // tracks drop rate for bitrate adaptation
+	lastPTS    int64
 }
 
 // congestionTracker tracks frame send/drop rates in a sliding window
@@ -529,37 +534,42 @@ func (m *Manager) WriteH264(key string, pts int64, au [][]byte) {
 	}
 	m.mu.RUnlock()
 
-	for _, entry := range entries {
-		entry.mu.Lock()
-		entry.lastUsed = time.Now()
-		entry.mu.Unlock()
+	// Loop invariants hoisted (#875 H3): the AU is identical for every peer,
+	// and lastUsed only needs second granularity for idle eviction — an
+	// atomic store replaces the per-peer mutex round-trip per frame.
+	isKeyframe := nalutil.IsIDR(au, false)
+	traceID := "no-trace"
+	if isKeyframe {
+		traceID = fmt.Sprintf("%s-%d", key, pts)
+	}
 
-		isKeyframe := nalutil.IsIDR(au, false)
-		traceID := "no-trace"
-		if isKeyframe {
-			traceID = fmt.Sprintf("%s-%d", key, pts)
-		}
+	for _, entry := range entries {
+		entry.lastUsed.Store(time.Now().UnixMilli())
 
 		// Non-blocking send — drop frame if buffer full
 		select {
 		case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe}:
-			frametrace.Log(
-				key,
-				"trace_id", traceID,
-				"camera_id", key,
-				"stage", "webrtc_recv",
-				"is_idr", isKeyframe,
-			)
+			if frametrace.Active(key) {
+				frametrace.Log(
+					key,
+					"trace_id", traceID,
+					"camera_id", key,
+					"stage", "webrtc_recv",
+					"is_idr", isKeyframe,
+				)
+			}
 		default:
-			frametrace.Log(
-				key,
-				"trace_id", traceID,
-				"camera_id", key,
-				"stage", "webrtc_drop",
-				"is_idr", isKeyframe,
-				"session_id", entry.sessionID,
-				"queue_depth", len(entry.frameCh),
-			)
+			if frametrace.Active(key) {
+				frametrace.Log(
+					key,
+					"trace_id", traceID,
+					"camera_id", key,
+					"stage", "webrtc_drop",
+					"is_idr", isKeyframe,
+					"session_id", entry.sessionID,
+					"queue_depth", len(entry.frameCh),
+				)
+			}
 			dropCount := atomic.AddUint64(&entry.drops, 1)
 			entry.congestion.recordDropped()
 			if m.mets != nil {
@@ -586,7 +596,6 @@ func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSD
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check peer limit for this stream
 	if len(m.camPeers[streamKey]) >= m.maxPeers {
 		return nil, "", ErrMaxPeersReached
 	}
@@ -621,7 +630,6 @@ func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSD
 		return nil, "", err
 	}
 
-	// Add track to PeerConnection
 	sender, err := pc.AddTrack(track)
 	if err != nil {
 		pc.Close()
@@ -723,7 +731,6 @@ func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSD
 		return nil, "", err
 	}
 
-	// Create SDP answer
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
 		cancel()
@@ -746,7 +753,6 @@ func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSD
 		logger.Warn("ICE gathering timed out, proceeding with gathered candidates", "camera_id", camID)
 	}
 
-	// Create peer entry
 	entry := &peerEntry{
 		pc:         pc,
 		track:      track,
@@ -757,12 +763,17 @@ func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSD
 		camID:      camID,
 		streamKey:  streamKey,
 		sessionID:  sid,
-		lastUsed:   time.Now(),
 		frameCh:    make(chan model.FrameMsg, m.frameBufSize),
 		congestion: newCongestionTracker(m.frameBufSize),
 	}
+	entry.lastUsed.Store(time.Now().UnixMilli())
+
 	if audioTrack != nil {
 		entry.audioCh = make(chan model.AudioFrame, m.audioBufSize)
+	}
+
+	if m.mets != nil {
+		entry.framesSent = m.mets.WebRTCFramesSent.WithLabelValues(camID)
 	}
 
 	m.peers[sid] = entry
@@ -771,7 +782,6 @@ func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSD
 		m.mets.WebRTCActivePeers.WithLabelValues(camID).Set(float64(len(m.camPeers[streamKey])))
 	}
 
-	// Start async frame writer goroutine
 	go m.writeLoop(ctx, entry)
 
 	// Start async audio writer goroutine (no-op for video-only peers)
@@ -779,7 +789,6 @@ func (m *Manager) CreateWHEPSession(streamKey string, offerSDP []byte) (answerSD
 		go m.audioWriteLoop(ctx, entry)
 	}
 
-	// Start idle watchdog goroutine
 	go m.idleWatchdog(ctx, entry)
 
 	logger.Info("WHEP session created", "camera_id", camID, "stream_key", streamKey, "session_id", sid, "audio", audioTrack != nil)
@@ -912,7 +921,6 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 		case <-ctx.Done():
 			return
 		case frame := <-entry.frameCh:
-			// Convert access unit to Annex B byte stream
 			data := annexBEncode(frame.AU)
 			if len(data) == 0 {
 				continue
@@ -964,8 +972,8 @@ func (m *Manager) writeLoop(ctx context.Context, entry *peerEntry) {
 			}
 			// Record successful send for congestion tracking
 			entry.congestion.recordSent()
-			if m.mets != nil {
-				m.mets.WebRTCFramesSent.WithLabelValues(entry.camID).Inc()
+			if entry.framesSent != nil {
+				entry.framesSent.Inc()
 			}
 		}
 	}
@@ -1041,7 +1049,7 @@ func (m *Manager) idleWatchdog(ctx context.Context, entry *peerEntry) {
 			return
 		case <-ticker.C:
 			entry.mu.Lock()
-			lastUsed := entry.lastUsed
+			lastUsed := time.UnixMilli(entry.lastUsed.Load())
 			entry.mu.Unlock()
 
 			if time.Since(lastUsed) > m.idleTimeout {

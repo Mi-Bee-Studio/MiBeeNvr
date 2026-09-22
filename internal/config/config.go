@@ -68,7 +68,6 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
-	// apply defaults
 	cfg.ApplyDefaults()
 
 	// Decrypt sensitive fields if encryption key is available

@@ -319,6 +319,15 @@ export function getTokenForUrl(): string | null {
   return getToken();
 }
 
+// Append the session token as a ?token= query param for fetchers that cannot
+// set headers (EventSource, <video src>, <a download>, hls.js). The auth
+// middleware accepts ?token=mbs_... on the same paths as the Bearer header.
+export function appendAuthToken(url: string): string {
+  const token = getTokenForUrl();
+  if (!token) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+}
+
 // API base URL: runtime base path (reverse-proxy / unified-gateway prefix,
 // e.g. fnOS "/app/mibee-nvr") + "/api". Empty prefix keeps "/api" unchanged.
 export const API_BASE = `${APP_BASE}/api`;
@@ -558,10 +567,12 @@ export async function setupApi(
   password: string,
   language?: string,
   storagePath?: string,
+  setupCode?: string,
 ): Promise<SetupResponse> {
   const body: Record<string, string> = { username, password };
   if (language) body.language = language;
   if (storagePath) body.storage_path = storagePath;
+  if (setupCode) body.setup_code = setupCode;
 
   const doFetch = (): Promise<Response> => fetch(`${API_BASE}/setup`, {
     method: 'POST',

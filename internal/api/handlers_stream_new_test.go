@@ -113,7 +113,6 @@ func TestWHEP_InvalidContentType(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	// Create camera in DB
 	seedCameraWithEncoding(t, db, "cam1", "h264")
 
 	webrtcMgr := webrtc.NewManager()

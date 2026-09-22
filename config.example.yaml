@@ -267,6 +267,9 @@ ftp:
   enabled: true                    # Enable FTP server (default: true)
   port: 2121                       # FTP control port (1-65535)
   passive_port_range: "2122-2140"  # Passive mode port range
+  # username: ""                   # Dedicated FTP credentials (recommended — FTP is a
+  # password: ""                   # cleartext protocol; unset falls back to the admin
+                                   # account with a startup warning)
 
 # MQTT trigger-based recording for smart home integration
 # When enabled, subscribe to topic for recording triggers
@@ -298,7 +301,7 @@ webdav:
 # HLS streaming — on-demand live view via Web UI
 # RPi constraint: max 4 concurrent streams
 hls:
-  write_buffer_size: 40            # Async frame buffer per stream (default: 100)
+  # write_buffer_size: 100         # Async frame buffer per stream (default: 100)
   segment_max_size_mb: 10          # HLS segment max size in MB (default: 10)
   segment_count: 7                 # Segments per stream (range: 3-10, default: 7)
   max_streams: 4                   # Max concurrent HLS streams (range: 1-20, default: 4)
@@ -362,11 +365,11 @@ observability:
 # Used to reduce bitrate, change codec format, or adjust quality
 # Requires ffmpeg to be installed on the system
 # transcoding:
+#   download_mirror: ""              # FFmpeg static-build mirror base URL (empty = official site)
 #   enabled: false              # Enable transcoding (default: false)
 #   ffmpeg_path: ""              # Path to ffmpeg binary (empty = auto-detect)
 #   max_workers: 1               # Max concurrent transcoding jobs (range: 1-4, default: 1)
 #   replace_original: false      # Replace original recordings with transcoded versions
-#   download_url: ""             # Auto-populated FFmpeg download URL per platform
 #
 # Per-camera transcoding overrides:
 #   cameras:
@@ -441,12 +444,12 @@ observability:
 #   endpoint: ""                      # HTTP endpoint URL for log delivery
 #   format: "jsonline"               # Log format: jsonline, loki (default: jsonline)
 
-# AI inference — ONNX Runtime object detection
+# AI detection — browser-side ONNX Runtime object detection
 # ai:
-#   inference_timeout_ms: 5000        # Inference timeout in ms (default: 5000)
+#   enabled: false                   # Enable AI detection (default: false)
 #   frame_skip_rate: 10              # Process every Nth frame (default: 10)
-#   confidence_threshold: 0.5         # Detection confidence threshold (default: 0.5)
-#   model_path: ""                   # Path to ONNX model (empty = auto-download)
+#   confidence_threshold: 0.5        # Detection confidence threshold (default: 0.5)
+#   model_url: ""                    # ONNX model URL (empty = bundled /models path)
 
 # RTMP ingest server — receive RTMP push streams
 # rtmp:

@@ -121,7 +121,7 @@
         }
       }
       protocolReasons = reasons;
-      // NOTE: we no longer emit onchange here. The Player Orchestrator owns the
+      // NOTE: this component does not emit onchange here. The Player Orchestrator owns the
       // initial protocol selection (it built the candidate chain from this same
       // /protocols response + browser caps). This component only emits onchange
       // on an explicit user click in selectProtocol() — so the dropdown reflects

@@ -628,7 +628,7 @@ func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 			FileSize:   fileSize,
 		}
 		recordingID = rec.ID
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
 			gb28181Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 	}
@@ -647,7 +647,6 @@ func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 		})
 	}
 
-	// Update metrics for the completed segment.
 	if r.frameCount > 0 && finalExists && r.cfg.Metrics != nil {
 		r.cfg.Metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, r.codecType).Inc()
 		if fileSize > 0 {

@@ -49,11 +49,8 @@ type CameraConfig struct {
 	// Supersedes http_jpeg_avi, whose value is no longer read.
 	MJPEGForm string `yaml:"mjpeg_form,omitempty" json:"mjpeg_form,omitempty"`
 
-	// HTTPJPEGAVI is DEPRECATED (#761): superseded by mjpeg_form. The value
-	// is no longer read — the AVI single-file container is the default for
-	// every MJPEG/JPEG camera; set mjpeg_form: dir for the legacy directory.
-	// Kept only so old configs parse without error.
-	HTTPJPEGAVI bool `yaml:"http_jpeg_avi,omitempty" json:"http_jpeg_avi,omitempty"`
+	// http_jpeg_avi (#761) was removed: superseded by mjpeg_form, and yaml
+	// parsing is non-strict — old configs carrying the key load unchanged.
 
 	// RingBufCap overrides the recorder's frameCh capacity (issue #521). The
 	// frameCh ring absorbs write-loop stalls (segment finalize fsync, merge IO,

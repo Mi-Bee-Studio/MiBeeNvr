@@ -1382,11 +1382,12 @@ auto_discover:
 - **描述**: 并发转码任务数上限
 - **示例**: `1`, `2`, `4`
 
-### `transcoding.download_url`
+### `transcoding.download_mirror`
 - **类型**: string
 - **可选**: 是
-- **描述**: FFmpeg 二进制下载地址（按平台自动填充）
-- **示例**: `"https://github.com/.../ffmpeg"`
+- **默认**: `""`（官方构建站）
+- **描述**: FFmpeg 静态构建镜像基址——设置后按平台自动拼接文件名，语义同 `update.download_mirror`；镜像站限流或不可达时可切换
+- **示例**: `"https://mirror.example.com/ffmpeg/builds"`
 
 ### `transcoding.job_timeout`
 - **类型**: string

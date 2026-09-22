@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 故障排除
+    url: https://github.com/Mi-Bee-Studio/MiBeeNvr/blob/main/docs/zh/troubleshooting.md
+    about: 常见问题与解决方案,提交 bug 前先查这里
+  - name: 📘 配置参考
+    url: https://github.com/Mi-Bee-Studio/MiBeeNvr/blob/main/docs/zh/configuration.md
+    about: 完整配置项说明
+  - name: 🔌 API 文档
+    url: https://github.com/Mi-Bee-Studio/MiBeeNvr/blob/main/docs/zh/api/README.md
+    about: REST API 接口文档

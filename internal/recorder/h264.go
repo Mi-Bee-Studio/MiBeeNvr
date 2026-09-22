@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/bluenviron/gortsplib/v5"
@@ -261,7 +263,7 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		Host:         u.Host,
 		Protocol:     &tcp,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: config.DefaultRTSPTimeout,
 	}
 	if err := client.Start(); err != nil {
 		return fmt.Errorf("client start: %w", err), false
@@ -418,13 +420,15 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		if isIDR {
 			traceID = fmt.Sprintf("%s-%d", r.cfg.CameraID, pkt.Timestamp)
 		}
-		frametrace.Log(
-			r.cfg.CameraID,
-			"trace_id", traceID,
-			"camera_id", r.cfg.CameraID,
-			"stage", "ingest",
-			"is_idr", isIDR,
-		)
+		if frametrace.Active(r.cfg.CameraID) {
+			frametrace.Log(
+				r.cfg.CameraID,
+				"trace_id", traceID,
+				"camera_id", r.cfg.CameraID,
+				"stage", "ingest",
+				"is_idr", isIDR,
+			)
+		}
 		// Fan-out to all stream consumers (HLS, WebRTC, etc.)
 		if r.Hub != nil {
 			r.Hub.Broadcast(int64(pkt.Timestamp), au, isIDR)

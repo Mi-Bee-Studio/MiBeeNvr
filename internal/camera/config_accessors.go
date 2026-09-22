@@ -108,7 +108,6 @@ func (cm *CameraManager) GetGB28181Recorder(cameraID string) *recorder.GB28181Re
 // deliberate dual-protocol setups); manual camera creation (API/web, with
 // allow_duplicate) remains the escape hatch otherwise.
 func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
-	// Check if a camera for this channel already exists.
 	if _, ok := cm.GB28181CameraIDByChannel(deviceID, channelID); ok {
 		return nil // Already enrolled
 	}

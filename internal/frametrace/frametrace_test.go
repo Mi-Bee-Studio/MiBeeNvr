@@ -106,18 +106,17 @@ func TestEnableClampsAndDefaults(t *testing.T) {
 func TestLogEscalation(t *testing.T) {
 	h := withCapture(t)
 
+	// Unsampled cameras emit nothing — call sites guard with Active(), so
+	// Log must not produce per-frame Debug noise (#875 H2).
+	before := len(h.all())
 	Log("cam-off", "stage", "ingest")
-	recs := h.all()
-	require.NotEmpty(t, recs)
-	last := recs[len(recs)-1]
-	assert.Equal(t, slog.LevelDebug, last.Level, "unsampled camera logs at Debug")
-	assert.Equal(t, "frame_trace", last.Message)
+	require.Len(t, h.all()[before:], 0, "unsampled camera logs nothing")
 
 	Enable("cam-on", 5*time.Second)
 	t.Cleanup(func() { Disable("cam-on") })
 	Log("cam-on", "stage", "ingest")
 	LogDrop("cam-on", "stage", "ws_drop")
-	recs = h.all()
+	recs := h.all()
 	require.GreaterOrEqual(t, len(recs), 2)
 	var infoCount int
 	for _, r := range recs[len(recs)-2:] {

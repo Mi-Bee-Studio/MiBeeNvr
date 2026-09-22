@@ -437,7 +437,6 @@ func TestAVIDemuxer_CloseAfterEOF(t *testing.T) {
 		t.Fatalf("NewDemuxer: %v", err)
 	}
 
-	// Read all chunks.
 	for i := range 5 {
 		_, err := d.NextChunk()
 		if errors.Is(err, io.EOF) {

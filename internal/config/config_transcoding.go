@@ -3,10 +3,13 @@ package config
 // Transcoding configuration types and resolution helpers.
 
 type TranscodingConfig struct {
-	Enabled          bool   `yaml:"enabled" json:"enabled"`                                         // default false
-	FFmpegPath       string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path,omitempty"`             // auto-detected or user-specified
-	MaxWorkers       int    `yaml:"max_workers,omitempty" json:"max_workers,omitempty"`             // default 1, max 4
-	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url,omitempty"`           // auto-populated per platform
+	Enabled    bool   `yaml:"enabled" json:"enabled"`                             // default false
+	FFmpegPath string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path,omitempty"` // auto-detected or user-specified
+	MaxWorkers int    `yaml:"max_workers,omitempty" json:"max_workers,omitempty"` // default 1, max 4
+	// DownloadMirror overrides the FFmpeg static-build host (base URL) —
+	// same semantics as update.download_mirror; the per-platform filename is
+	// appended. Empty = the official build site.
+	DownloadMirror   string `yaml:"download_mirror,omitempty" json:"download_mirror,omitempty"`
 	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout,omitempty"`             // per-job timeout, default "30m", max 4h
 	HistoryRetention string `yaml:"history_retention,omitempty" json:"history_retention,omitempty"` // e.g. "168h" (7d), "720h" (30d), ""=never
 

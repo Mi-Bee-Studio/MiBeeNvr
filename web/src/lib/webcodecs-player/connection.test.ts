@@ -334,8 +334,8 @@ describe('destroy', () => {
     expect((cm as { _zombieCheckTimer: ReturnType<typeof setInterval> | null })._zombieCheckTimer).toBeNull();
   });
 
-  // 'should remove visibility handler' removed — ConnectionManager no longer
-  // binds a visibilitychange listener (visibility owned by the orchestrator).
+  // ConnectionManager does not bind a visibilitychange listener
+  // (visibility owned by the orchestrator).
 
   it('should prevent any further operations', () => {
     const cm = createManager();
@@ -895,10 +895,8 @@ describe('zombie detection', () => {
 
 // ─── Visibility change ──────────────────────────────────────────────────────
 
-// 'visibility change' describe block removed — ConnectionManager no longer
-// binds a visibilitychange listener. Visibility pause/resume is owned by the
-// Player Orchestrator (setTabVisible). These tests verified the old per-CM
-// visibility behavior that caused the three-way conflict + WS storm.
+// ConnectionManager does not bind a visibilitychange listener. Visibility
+// pause/resume is owned by the Player Orchestrator (setTabVisible).
 
 // ─── Edge cases ─────────────────────────────────────────────────────────────
 

@@ -468,10 +468,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	// configMu serializes cfg.Cameras mutation + persistConfig. The recorder
 	// stop/start in PHASE 2 runs OUTSIDE configMu (startRecorder registers via
 	// apply, and rec.Stop runs lock-free) — this is what eliminates the
-	// self-deadlock that previously blocked every camera API endpoint.
+	// self-deadlock.
 	cm.configMu.Lock()
 
-	// Find camera
 	idx := -1
 	var cam *config.CameraConfig
 	for i := range cm.cfg.Cameras {
@@ -511,7 +510,6 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		needsRestart = true
 	}
 
-	// Apply updates
 	if updates.Name != nil {
 		cam.Name = *updates.Name
 	}

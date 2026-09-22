@@ -19,8 +19,7 @@ type LocalXiaomiAuth struct {
 // NewLocalXiaomiAuth creates a LocalXiaomiAuth and initializes cloud config.
 // The config pointer is kept so auth results can update it in-place.
 func NewLocalXiaomiAuth(cfg *config.Config) *LocalXiaomiAuth {
-	// Initialize cloud config for MISS URL resolution (was previously called
-	// from main.go as xiaomi.SetCloudConfig(cfg.Xiaomi)).
+	// Cloud config is needed for MISS URL resolution.
 	xiaomi.SetCloudConfig(cfg.Xiaomi)
 	return &LocalXiaomiAuth{cfg: cfg}
 }

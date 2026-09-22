@@ -28,12 +28,12 @@
   import GB28181AlarmsPositions from '$lib/components/GB28181AlarmsPositions.svelte';
 
   // New components
-  import FormatFilter from '../components/library/FormatFilter.svelte';
-  import CompactList from '../components/library/CompactList.svelte';
-  import CalendarView from '../components/timelapse/CalendarView.svelte';
-  import AviPlayback from '../components/AviPlayback.svelte';
-  import DayTimeline from '../lib/components/DayTimeline.svelte';
-  import type { TimelineAIEvent } from '../lib/components/DayTimeline.svelte';
+  import FormatFilter from '$lib/components/library/FormatFilter.svelte';
+  import CompactList from '$lib/components/library/CompactList.svelte';
+  import CalendarView from '$lib/components/timelapse/CalendarView.svelte';
+  import AviPlayback from '$lib/components/AviPlayback.svelte';
+  import DayTimeline from '$lib/components/DayTimeline.svelte';
+  import type { TimelineAIEvent } from '$lib/components/DayTimeline.svelte';
   import { listAIEvents } from '../lib/api/ai-events';
   import { getMiBeeVisionConnected } from '../lib/mibeevision-status.svelte';
   import { Brain } from 'lucide-svelte';

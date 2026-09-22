@@ -113,7 +113,6 @@ func parseFrameFilename(name string) (time.Time, bool) {
 	dateStr := rest[:8]
 	timeStr := rest[9:15]
 
-	// Validate both are digits
 	for _, c := range dateStr {
 		if c < '0' || c > '9' {
 			return time.Time{}, false

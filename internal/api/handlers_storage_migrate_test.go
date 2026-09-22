@@ -27,6 +27,10 @@ func setupMigrationHandler(t *testing.T) (*Handler, *migration.Migrator, string)
 
 	db, err := storage.New(filepath.Join(oldRoot, "mibee-nvr.db"))
 	if err != nil {
+		t.Fatalf("failed to create db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Init(context.Background()); err != nil {

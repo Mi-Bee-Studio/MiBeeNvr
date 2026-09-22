@@ -20,6 +20,10 @@ func setupONVIFCamera(t *testing.T) (*storage.DB, *storage.Manager) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	db, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, err)
 	ctx := context.Background()
 	require.NoError(t, db.Init(ctx))

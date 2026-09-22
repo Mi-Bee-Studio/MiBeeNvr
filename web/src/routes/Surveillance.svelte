@@ -5,8 +5,8 @@
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, Search, Plus } from 'lucide-svelte';
-  import PtzControl from '../components/PtzControl.svelte';
-  import CameraPlayer from '../components/CameraPlayer.svelte';
+  import PtzControl from '$lib/components/PtzControl.svelte';
+  import CameraPlayer from '$lib/components/CameraPlayer.svelte';
   import { formatDate } from '$lib/format';
   import { createSnapshotManager } from '$lib/snapshot';
   import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
@@ -74,7 +74,7 @@
   // upgrade decisions, and the reconnect coordinator (thundering-herd control).
   // Provided to CameraPlayer (and thus every player component) via context.
   // WasmPlayer is now lazy-loaded INSIDE CameraPlayer on first wasm mount, so
-  // this route no longer manages the chunk import.
+  // this route does not manage the chunk import.
   const orchestrator: PlayerOrchestrator = createPlayerOrchestrator();
   setContext('player-orchestrator', orchestrator);
 

@@ -273,7 +273,6 @@ func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol str
 func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilitiesDetailed, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// Check cache first
 	c.capsMu.Lock()
 	if c.cachedCapabilities != nil {
 		caps := c.cachedCapabilities

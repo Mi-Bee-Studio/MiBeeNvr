@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -20,6 +22,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -58,8 +61,7 @@ type HealthResponse struct {
 	// AND auth.local_bypass is enabled. The frontend uses it to skip the login
 	// page for local access. Derived from middleware.IsLocalIP + HasProxyHeaders
 	// + config.Auth.LocalBypass in handleHealth.
-	LocalAccess bool                 `json:"local_access"`
-	Cameras     *CameraHealthSummary `json:"cameras,omitempty"`
+	LocalAccess bool `json:"local_access"`
 	// DeviceID / DeviceName give LAN clients a stable identity to anchor on
 	// instead of an IP address (#330). Empty until the config provides them
 	// (the ID is generated and persisted on first config load).
@@ -179,6 +181,12 @@ type SnapshotCapturer interface {
 // Handler holds dependencies for the REST API handlers.
 
 type Handler struct {
+	// ssePerIP caps concurrent /api/events streams per client IP.
+	ssePerIP sync.Map // ip -> *atomic.Int32
+	// setupCode arms first-boot setup against LAN race claims (#879). Set
+	// via ArmFirstBootSetup while no admin credentials exist; cleared once
+	// setup completes.
+	setupCode string
 	// DB txn panel rate window (#759): previous /api/system/stats sample.
 	dbTxnMu           sync.Mutex
 	dbTxnPrev         *dbTxnSample
@@ -361,6 +369,12 @@ func (h *Handler) Routes() http.Handler {
 		h.registerVisionRoutes(r)
 		h.registerTelemetryRoute(r)
 		h.registerGB28181Routes(r)
+		h.registerMediaRoutes(r)
+		r.Get("/api/health/cameras", h.handleHealthCameras)
+		// Event SSE — full-bus topics (motion/AI events, file paths) are not
+		// for unauthenticated listeners; browsers pass ?token=, integrations
+		// use API keys (#879).
+		r.Get("/api/events", h.handleEvents)
 	})
 
 	return r
@@ -376,13 +390,8 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 		})
 		r.Use(rl.Handler)
 		r.Get("/api/health", h.handleHealth)
-		r.Get("/api/health/cameras", h.handleHealthCameras)
 		r.Get("/api/readyz", h.handleReadyz)
 		r.Get("/api/capabilities", h.handleCapabilities)
-		// Generic event streaming (SSE)
-		r.Get("/api/events", h.handleEvents)
-		// Vision heartbeat (public, rate-limited — Vision has no BasicAuth)
-		h.registerVisionPublicRoutes(r)
 		// Webhook trigger (public, rate-limited — HMAC signature is the credential, #709)
 		h.registerTriggerRoutes(r)
 		// GB28181 snapshot upload (public, rate-limited — the session ID in
@@ -396,8 +405,17 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 // registerAnonymousRoutes registers endpoints that require no authentication
 // but are NOT rate-limited (login, setup, public video playback, AI model file).
 func (h *Handler) registerAnonymousRoutes(r chi.Router) {
-	r.Post("/api/auth/login", h.handleLogin)
-	r.Post("/api/setup", h.handleSetup)
+	// Login/setup are credential-guessing targets: always rate-limited per IP,
+	// independent of the optional global auth.rate_limit switch.
+	r.Group(func(r chi.Router) {
+		rl := middleware.NewRateLimiter(context.Background(), middleware.RateLimiterConfig{
+			MaxRequests: 10,
+			Window:      time.Minute,
+		})
+		r.Use(rl.Handler)
+		r.Post("/api/auth/login", h.handleLogin)
+		r.Post("/api/setup", h.handleSetup)
+	})
 	// Loopback-local management endpoints (desktop tray / macOS menu-bar
 	// helper): gated by middleware.IsBypassEligible INSIDE the handlers —
 	// remote callers get 403.
@@ -409,28 +427,32 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	// only exists on the gateway Unix-socket listener — everywhere else this
 	// always returns 401, so it cannot be used to bypass the direct login.
 	r.Get("/api/auth/gateway-session", h.handleGatewaySession)
-	// Public routes
-	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)  // Public for video playback
-	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
-	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)      // Public for timelapse video playback
-	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording)     // HEAD for browser <video> probe
-	// Periodic-merge output playback: the SPA authenticates per-fetch from
-	// JS, so <video src> / <a download> / probeTimelapseMergeCodec HEAD arrive
-	// without credentials — same exposure class as /download above.
-	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
-	r.Head("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
 	r.Get("/models/{filename}", h.handleServeModel) // Public for browser-side AI model loading
-	// VOD HLS recording playback (#321) — same exposure class as /download:
-	// hls.js requests these same-origin without auth headers, and they serve
-	// the same media bytes /download already exposes.
-	r.Get("/api/cameras/{cameraID}/playback/playlist.m3u8", h.handlePlaybackPlaylist)
-	r.Get("/api/cameras/{cameraID}/playback/{recordingID}/{segName}", h.handlePlaybackSegment)
 	// WHIP push-in ingest (#369): browsers/OBS cannot send auth headers with
 	// the SDP POST, and the stream key IS the credential (RTMP/SRT streamid
 	// threat model). Must NOT be rate-limited — media sessions are long-lived.
 	if h.whipServer != nil {
 		h.whipServer.RegisterRoutes(r)
 	}
+}
+
+// registerMediaRoutes registers recording download and VOD playback behind
+// the auth middleware. Credential forms, in auth-priority order: Bearer
+// session token (SPA fetches), BasicAuth (HA integration), API key, the
+// mbs_session stream cookie (HLS segment fetches — the VOD playlist handler
+// sets it via setStreamCookieOnPlaylist, same mechanism as live HLS), and
+// ?token= (SPA <video src> / <a download> links, EventSource). Recording IDs
+// are UnixNano-predictable, so these endpoints must not sit in the anonymous
+// group.
+func (h *Handler) registerMediaRoutes(r chi.Router) {
+	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)
+	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
+	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)
+	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
+	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
+	r.Head("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
+	r.Get("/api/cameras/{cameraID}/playback/playlist.m3u8", h.handlePlaybackPlaylist)
+	r.Get("/api/cameras/{cameraID}/playback/{recordingID}/{segName}", h.handlePlaybackSegment)
 }
 
 // --- Helpers ---
@@ -442,7 +464,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func WriteError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	httpx.WriteError(w, status, msg)
 }
 
 // parsePagination parses the limit/offset query params with a caller-specified
@@ -561,6 +583,17 @@ func (h *Handler) SetFLVManager(mgr *flv.Manager) {
 // SetWSManager sets the WebSocket stream manager on the handler.
 func (h *Handler) SetWSManager(mgr *wsstream.Manager) {
 	h.wsMgr = mgr
+}
+
+// ArmFirstBootSetup generates and stores the one-time setup code and returns
+// it for the caller to print to the terminal/log (#879).
+func (h *Handler) ArmFirstBootSetup() (string, error) {
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	h.setupCode = hex.EncodeToString(buf)
+	return h.setupCode, nil
 }
 
 // SetHealthManager sets the health manager on the handler.

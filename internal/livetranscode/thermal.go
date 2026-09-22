@@ -414,7 +414,6 @@ func (m *TranscodeManager) Run(ctx context.Context) {
 	thermalCh := m.thermal.Start(ctx)
 
 	for {
-		// Check context
 		if ctx.Err() != nil {
 			return
 		}
@@ -424,7 +423,6 @@ func (m *TranscodeManager) Run(ctx context.Context) {
 			return
 		}
 
-		// Start the transcoder
 		if err := m.start(ctx); err != nil {
 			m.logger.Error("failed to start transcoder", "error", err)
 			if m.recordFailure() {

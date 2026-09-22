@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
@@ -20,7 +19,7 @@ func applyConfigDefaults(cfg *Config) {
 	}
 	// Server
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
-		cfg.Server.Listen = ":9090"
+		cfg.Server.Listen = DefaultListenAddr
 	}
 
 	// NVR_LISTEN_PORT overrides server.listen (env wins over the config file —
@@ -135,7 +134,7 @@ func applyConfigDefaults(cfg *Config) {
 	}
 	// Storage
 	if strings.TrimSpace(cfg.Storage.RootDir) == "" {
-		cfg.Storage.RootDir = "/var/lib/mibee-nvr"
+		cfg.Storage.RootDir = DefaultDataDir
 	}
 	if strings.TrimSpace(cfg.Storage.SegmentDuration) == "" {
 		cfg.Storage.SegmentDuration = "30s"
@@ -359,7 +358,7 @@ func applyConfigDefaults(cfg *Config) {
 		cfg.Merge.MinSegmentAge = "10m"
 	}
 	if strings.TrimSpace(cfg.Merge.TranscodeGrace) == "" {
-		cfg.Merge.TranscodeGrace = "90s"
+		cfg.Merge.TranscodeGrace = MergeDefaultTranscodeGrace
 	}
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
@@ -376,7 +375,7 @@ func applyConfigDefaults(cfg *Config) {
 	// append. Explicit rolling_bucket_retain: 1 is preserved (legacy
 	// single-bucket behavior).
 	if cfg.Merge.RollingBucketRetain <= 0 {
-		cfg.Merge.RollingBucketRetain = 2
+		cfg.Merge.RollingBucketRetain = MergeDefaultBucketRetain
 	}
 	if cfg.Merge.RollingBucketIdleTTL == "" {
 		cfg.Merge.RollingBucketIdleTTL = "10m"
@@ -605,7 +604,7 @@ func applyConfigDefaults(cfg *Config) {
 		cfg.AI.FrameSkipRate = 10
 	}
 	if cfg.AI.Zones == nil {
-		cfg.AI.Zones = make(map[string][]ai.ROI)
+		cfg.AI.Zones = make(map[string][]model.ROI)
 	}
 	if cfg.AI.ModelURL == "" {
 		cfg.AI.ModelURL = "/models/yolo11n.onnx"

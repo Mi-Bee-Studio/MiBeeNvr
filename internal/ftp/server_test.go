@@ -138,7 +138,6 @@ func TestFileUpload(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ft)
 
-	// Write test data
 	data := []byte("test video content for mibee-nvr")
 	n, err := ft.Write(data)
 	require.NoError(t, err)

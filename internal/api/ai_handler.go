@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -139,10 +140,10 @@ type zoneBodyZone struct {
 func (h *AIHandler) handleAIZones(w http.ResponseWriter, r *http.Request) {
 	cfg := h.manager.GetConfig()
 
-	zones := make([]ai.ROIZone, 0)
+	zones := make([]model.ROIZone, 0)
 	for cameraID, rois := range cfg.Zones {
 		for _, roi := range rois {
-			zones = append(zones, ai.ROIZone{
+			zones = append(zones, model.ROIZone{
 				CameraID: cameraID,
 				Zone:     roi,
 				Enabled:  true,
@@ -151,7 +152,7 @@ func (h *AIHandler) handleAIZones(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if zones == nil {
-		zones = []ai.ROIZone{}
+		zones = []model.ROIZone{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -176,7 +177,7 @@ func (h *AIHandler) handleAICreateZone(w http.ResponseWriter, r *http.Request) {
 	cfg := h.manager.GetConfig()
 
 	if cfg.Zones == nil {
-		cfg.Zones = make(map[string][]ai.ROI)
+		cfg.Zones = make(map[string][]model.ROI)
 	}
 
 	// Check for duplicate zone name across all cameras
@@ -189,7 +190,7 @@ func (h *AIHandler) handleAICreateZone(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	roi := ai.ROI{
+	roi := model.ROI{
 		Name:   body.Zone.Name,
 		Points: body.Zone.Points,
 	}
@@ -198,7 +199,7 @@ func (h *AIHandler) handleAICreateZone(w http.ResponseWriter, r *http.Request) {
 	h.manager.UpdateConfig(cfg)
 	h.syncAndSaveConfig()
 
-	created := ai.ROIZone{
+	created := model.ROIZone{
 		CameraID: body.CameraID,
 		Zone:     roi,
 		Enabled:  body.Enabled,
@@ -229,7 +230,6 @@ func (h *AIHandler) handleAIUpdateZone(w http.ResponseWriter, r *http.Request) {
 		for i, roi := range rois {
 			if roi.Name == id {
 				if body.Zone.Name != "" && body.Zone.Name != id {
-					// Check that the new name doesn't conflict
 					for _, otherROIs := range cfg.Zones {
 						for _, other := range otherROIs {
 							if other.Name == body.Zone.Name {

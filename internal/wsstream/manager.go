@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -86,11 +87,23 @@ type noopCounter struct{}
 
 func (noopCounter) Inc() {}
 
+// checkOrigin allows non-browser clients (no Origin header) and requires
+// browser origins to match the request host — cross-site pages must not open
+// NVR WebSockets.
+func checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
 // upgrader is the WebSocket upgrader used by ServeWS.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     checkOrigin,
 }
 
 // Manager manages WebSocket binary streams with per-camera stream entries.
@@ -437,13 +450,15 @@ func (m *Manager) writeFrameMsg(camID string, msg model.FrameMsg) {
 	select {
 	case entry.frameCh <- model.FrameMsg{PTS: pts, AU: au, IsKeyframe: isKeyframe, IngestAt: msg.IngestAt}:
 		entry.sentCounter.Inc()
-		frametrace.Log(
-			camID,
-			"trace_id", traceID,
-			"camera_id", camID,
-			"stage", "ws_recv",
-			"is_idr", isKeyframe,
-		)
+		if frametrace.Active(camID) {
+			frametrace.Log(
+				camID,
+				"trace_id", traceID,
+				"camera_id", camID,
+				"stage", "ws_recv",
+				"is_idr", isKeyframe,
+			)
+		}
 	default:
 		// Buffer full, drop frame
 		cnt := entry.dropCount.Add(1)
@@ -642,7 +657,6 @@ func (m *Manager) ServeWS(camID, quality string, w http.ResponseWriter, r *http.
 		return ErrStreamNotActive
 	}
 
-	// Check viewer limit
 	entry.viewerMu.Lock()
 	if len(entry.viewers) >= m.maxViewers {
 		entry.viewerMu.Unlock()

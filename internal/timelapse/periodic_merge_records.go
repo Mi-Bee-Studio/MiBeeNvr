@@ -29,7 +29,6 @@ func (m *PeriodicMergeManager) finalizeMerge(ctx context.Context, segments []mod
 	}
 	m.retryMu.Unlock()
 
-	// Update progress to 100 for completed merge.
 	m.updateProgressBatch(ctx, segments, 100)
 
 	if m.updater != nil {

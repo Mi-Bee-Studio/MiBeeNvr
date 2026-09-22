@@ -170,7 +170,6 @@ func TestHandler_WithAttrs(t *testing.T) {
 	h := New(srv.URL+"/insert/jsonline", "jsonline", slog.LevelDebug, nil)
 	defer h.Close()
 
-	// Create a child handler with attrs
 	child := h.WithAttrs([]slog.Attr{slog.String("component", "test-comp")})
 	for range defaultBufferSize {
 		r := slog.NewRecord(time.Now(), slog.LevelInfo, "attrs test", 0)

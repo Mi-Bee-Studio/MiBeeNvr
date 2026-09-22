@@ -6,51 +6,34 @@
         updateCamera,
         getMergeConfig,
         updateMergeConfig,
-        buildProtocolsMap,
-        normalizeProtocol,
         testConnection,
-        getDeviceCapabilities,
-        getPushStatus,
-        getRelayCapabilities,
-        apiRequest,
-        getStorageCandidates,
-        getCameraStorageRoot,
-        setCameraStorageRoot,
-        getStorageMigrateStatus,
         getSettings,
     } from '$lib/api';
     import type {
         Camera,
-        CameraTranscodingConfig,
         CreateCameraRequest,
         UpdateCameraRequest,
         MergeConfig,
         ProtocolInfo,
         XiaomiDevice,
         TestConnectionResult,
-        DeviceCapabilitiesInfo,
         PushTargetConfig,
-        PushTargetStatus as PushTargetStatusType,
-        VideoPresetOverrides,
-        RelayCapabilities,
         AdaptiveRecordingConfig,
         CameraAudioTriggerConfig,
         CameraPixgateConfig,
     } from '$lib/api';
-    import { Eye, EyeOff, PlugZap, Plus, Trash2, ArrowUpRight, Copy, Layers, Brain } from 'lucide-svelte';
-    import { onDestroy } from 'svelte';
+    import { Eye, EyeOff, PlugZap, Layers, Brain } from 'lucide-svelte';
     import { showToast } from '$lib/toast';
-    import { copyText } from '$lib/clipboard';
     import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
     import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
-    import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
-    import ImagingPanel from '$lib/components/ImagingPanel.svelte';
-    import PresetManager from '$lib/components/PresetManager.svelte';
-    import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
-  import MotionSubscriptionStatus from '$lib/components/MotionSubscriptionStatus.svelte';
-    import DeviceManagement from '$lib/components/DeviceManagement.svelte';
+    import MotionSubscriptionStatus from '$lib/components/MotionSubscriptionStatus.svelte';
+    import PushIngestFields from '$lib/components/camera-form/PushIngestFields.svelte';
+    import AdaptiveRecordingFields from '$lib/components/camera-form/AdaptiveRecordingFields.svelte';
+    import CameraStorageSection from '$lib/components/camera-form/CameraStorageSection.svelte';
+    import PushTargetList from '$lib/components/camera-form/PushTargetList.svelte';
+    import TranscodingSection from '$lib/components/camera-form/TranscodingSection.svelte';
+    import OnvifDeviceSection from '$lib/components/camera-form/OnvifDeviceSection.svelte';
     import { startBackfill, getUntranscodedRecordingCount } from '$lib/api/transcoding';
-    import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   interface Props {
     editingCamera: Camera | null;
     protocols: ProtocolInfo[];
@@ -136,23 +119,14 @@
   let formPixgateFPS = $state('');
   let formPixgateMinArea = $state('');
   let formPixgateHold = $state('');
-  let formPixgateWasEnabled = $state(false);
+  let formPixgateWasEnabled = false;
   // Audio trigger (#478): loudness input on top of the adaptive gate. Only
   // meaningful (and only sent) for adaptive + G.711 cameras.
   let formAudioTriggerEnabled = $state(false);
   let formAudioMinDBFS = $state('');
   let formAudioPreCaptureS = $state('');
-  let formAudioTriggerWasEnabled = $state(false);
+  let formAudioTriggerWasEnabled = false;
 
-  // Per-camera storage location (hot switch + background migration)
-  let camStorageRoot = $state('');
-  let camStorageDefault = $state('');
-  let camStorageCandidates = $state<Array<{ path: string; label: string }>>([]);
-  let camStorageMigrate = $state(true);
-  let camStorageDeleteSource = $state(true);
-  let camStorageSwitching = $state(false);
-  let camStorageMigration = $state<import('$lib/api').MigrationJob | null>(null);
-  let camStoragePoll: ReturnType<typeof setInterval> | undefined;
   // Xiaomi two-way audio
   let formTwoWayAudioEnabled = $state(false);
   // IP self-healing: candidate CIDRs to scan when this camera's IP changes.
@@ -186,14 +160,7 @@
       visionInstanceOptions = [];
     }
   }
-  // Push-out live status (fetched when editing)
-  let pushStatus = $state<PushTargetStatusType[]>([]);
-  let pushStatusTimer: ReturnType<typeof setInterval> | null = null;
-  // Relay presets for platform selector (fetched on mount)
-  let relayPresets = $state<{ name: string; description?: string }[]>([]);
-  let relayPresetsLoading = $state(true);
-  // Relay capabilities (FFmpeg availability for push-out)
-  let relayCapabilities = $state<RelayCapabilities | null>(null);
+
   // Transcoding config
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
@@ -217,10 +184,6 @@ let validationErrors = $state<Record<string, string>>({});
   let mergeConfig = $state<MergeConfig | null>(null);
   let mergeConfigLoading = $state(false);
 
-  // ONVIF capabilities
-  let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
-  let capsLoading = $state(false);
-
   // Auto-select encoding when protocol changes
   $effect(() => {
     const proto = protocolsMap.get(formProtocol);
@@ -228,8 +191,6 @@ let validationErrors = $state<Record<string, string>>({});
     const encodings = proto.encodings;
     if (!encodings.includes(formEncoding)) {
       if (formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181') {
-        // Auto-detect protocols: codec comes from the live stream, not config.
-        formEncoding = '';
         // Auto-detect protocols: codec comes from the live stream, not config.
         formEncoding = '';
       } else if (formProtocol === 'http') {
@@ -248,47 +209,11 @@ let validationErrors = $state<Record<string, string>>({});
     if (editingCamera) {
       populateForm(editingCamera);
       loadMergeConfig(editingCamera.id);
-      loadCapabilities(editingCamera);
-      loadCameraStorage(editingCamera.id);
     } else {
       resetFormFields();
       mergeConfig = null;
       mergeConfigLoading = false;
-      deviceCaps = null;
     }
-  });
-
-  // Fetch relay presets on mount for platform selector
-  $effect(() => {
-    const ctrl = new AbortController();
-    (async () => {
-      try {
-        const data: any = await apiRequest('/relay-presets', { signal: ctrl.signal });
-        relayPresets = Array.isArray(data) ? data : [];
-      } catch (e: any) {
-        if (ctrl.signal.aborted) return;
-        console.warn('Failed to load relay presets:', e);
-        relayPresets = [];
-      } finally {
-        relayPresetsLoading = false;
-      }
-    })();
-    return () => ctrl.abort();
-  });
-
-  // Fetch relay capabilities (FFmpeg availability for relay)
-  $effect(() => {
-    const ctrl = new AbortController();
-    (async () => {
-      try {
-        relayCapabilities = await getRelayCapabilities(ctrl.signal);
-      } catch (e: any) {
-        if (ctrl.signal.aborted) return;
-        console.warn('Failed to load relay capabilities:', e);
-        relayCapabilities = null;
-      }
-    })();
-    return () => ctrl.abort();
   });
 
   // Parse the subnet-hints textarea into a clean CIDR list (one per line,
@@ -340,58 +265,7 @@ let validationErrors = $state<Record<string, string>>({});
     formGB28181ChannelID = '';
     formPushRetentionDays = null;
     formPushTargets = [];
-    pushStatus = [];
     formVisionTargets = [];
-  }
-
-  async function loadCameraStorage(cameraId: string) {
-    camStorageRoot = '';
-    camStorageDefault = '';
-    camStorageCandidates = [];
-    camStorageMigration = null;
-    try {
-      const [info, cands] = await Promise.all([
-        getCameraStorageRoot(cameraId),
-        getStorageCandidates(),
-      ]);
-      camStorageRoot = info.override_root || '';
-      camStorageDefault = info.default_root;
-      camStorageCandidates = cands.candidates.filter((c) => c.path !== info.default_root);
-      if (info.migration) startStoragePoll(cameraId);
-    } catch { /* panel degrades silently */ }
-  }
-
-  function startStoragePoll(cameraId: string) {
-    if (camStoragePoll) clearInterval(camStoragePoll);
-    camStoragePoll = setInterval(async () => {
-      try {
-        const info = await getCameraStorageRoot(cameraId);
-        camStorageMigration = info.migration ?? null;
-        if (!info.migration && camStoragePoll) {
-          clearInterval(camStoragePoll);
-          camStoragePoll = undefined;
-        }
-      } catch { /* transient */ }
-    }, 1500);
-  }
-
-  async function applyCameraStorage(camera: Camera) {
-    if (camStorageSwitching) return;
-    camStorageSwitching = true;
-    try {
-      const res = await setCameraStorageRoot(camera.id, camStorageRoot, camStorageMigrate, camStorageDeleteSource);
-      if (res.migration) {
-        camStorageMigration = res.migration;
-        startStoragePoll(camera.id);
-      }
-      import('$lib/toast').then(({ showToast }) =>
-        showToast(t('cameras.storageSwitched'), 'success'));
-    } catch (e) {
-      import('$lib/toast').then(({ showToast }) =>
-        showToast(e instanceof Error ? e.message : t('cameras.storageSwitchFailed'), 'error'));
-    } finally {
-      camStorageSwitching = false;
-    }
   }
 
   function populateForm(camera: Camera) {
@@ -479,108 +353,12 @@ let validationErrors = $state<Record<string, string>>({});
     formPushRetentionDays = camera.push_retention_days ?? null;
     formPushTargets = (camera.push_targets ?? []).map((p) => ({ ...p }));
     formVisionTargets = camera.vision_targets ? [...camera.vision_targets] : [];
-    // Start polling push-out status while editing (only if there are targets).
-    startPushStatusPolling(camera.id);
   }
 
-  // --- Push-out (relay) helpers ---
-  onDestroy(() => {
-    stopPushStatusPolling();
-    if (camStoragePoll) clearInterval(camStoragePoll);
-  });
-  function startPushStatusPolling(cameraId: string) {
-    stopPushStatusPolling();
-    const poll = async () => {
-      try {
-        const res = await getPushStatus(cameraId);
-        pushStatus = res.targets ?? [];
-      } catch {
-        // ignore — camera may not be saved yet
-      }
-    };
-    poll();
-    pushStatusTimer = setInterval(poll, 3000);
-  }
-  function stopPushStatusPolling() {
-    if (pushStatusTimer) {
-      clearInterval(pushStatusTimer);
-      pushStatusTimer = null;
-    }
-  }
-  function addPushTarget() {
-    const id = 'tgt-' + Math.random().toString(36).slice(2, 8);
-    formPushTargets = [
-      ...formPushTargets,
-      { id, name: '', protocol: 'rtmp', url: '', enabled: true, platform: '', transcode_policy: 'auto', use_ffmpeg: false },
-    ];
-  }
-  function removePushTarget(id: string) {
-    formPushTargets = formPushTargets.filter((t) => t.id !== id);
-  }
   function toggleVisionTarget(name: string, checked: boolean) {
     formVisionTargets = checked
       ? [...new Set([...formVisionTargets, name])]
       : formVisionTargets.filter((n) => n !== name);
-  }
-
-  function updatePushTarget(id: string, patch: Partial<PushTargetConfig>) {
-    formPushTargets = formPushTargets.map((t) => (t.id === id ? { ...t, ...patch } : t));
-  }
-  function updatePushTargetOverride(id: string, patch: Partial<VideoPresetOverrides>) {
-    formPushTargets = formPushTargets.map((t) => {
-      if (t.id !== id) return t;
-      const current = t.video_preset_override || {};
-      return { ...t, video_preset_override: { ...current, ...patch } };
-    });
-  }
-  function resetPushTargetOverride(id: string) {
-    formPushTargets = formPushTargets.map((t) => {
-      if (t.id !== id) return t;
-      const { video_preset_override: _, ...rest } = t;
-      return rest;
-    });
-  }
-  function pushStatusFor(id: string): PushTargetStatusType | undefined {
-    return pushStatus.find((s) => s.id === id);
-  }
-
-  // Stop push target state
-  let showStopConfirm = $state(false);
-  let stopTargetId = $state<string | null>(null);
-  let stoppingTargets = $state<Set<string>>(new Set());
-
-  function confirmStopTarget(id: string) {
-    stopTargetId = id;
-    showStopConfirm = true;
-  }
-
-  async function handleStopTarget() {
-    if (!stopTargetId || !editingCamera) return;
-    const id = stopTargetId;
-    stoppingTargets = new Set([...stoppingTargets, id]);
-    showStopConfirm = false;
-    stopTargetId = null;
-    // Disable the target in form state
-    formPushTargets = formPushTargets.map((t) =>
-      t.id === id ? { ...t, enabled: false } : t
-    );
-    try {
-      await updateCamera(editingCamera.id, {
-        push_targets: formPushTargets,
-      });
-      showToast(t('cameras.pushOutTargetStopped'), 'success');
-    } catch (e) {
-      console.warn('Failed to stop push target:', e);
-      showToast(t('cameras.failedUpdate'), 'error');
-      // Revert
-      formPushTargets = formPushTargets.map((t) =>
-        t.id === id ? { ...t, enabled: true } : t
-      );
-    } finally {
-      const next = new Set(stoppingTargets);
-      next.delete(id);
-      stoppingTargets = next;
-    }
   }
 
   async function loadMergeConfig(cameraId: string) {
@@ -590,22 +368,6 @@ let validationErrors = $state<Record<string, string>>({});
       mergeConfig = await getMergeConfig(cameraId);
     } catch (e) { console.warn('Failed to load merge config:', e); mergeConfig = null; } finally {
       mergeConfigLoading = false;
-    }
-  }
-
-  async function loadCapabilities(cam: Camera) {
-    if (normalizeProtocol(cam.protocol) !== 'onvif') {
-      deviceCaps = null;
-      return;
-    }
-    capsLoading = true;
-    try {
-      deviceCaps = await getDeviceCapabilities(cam.id);
-    } catch (e) {
-      console.warn('Failed to load device capabilities:', e);
-      deviceCaps = null;
-    } finally {
-      capsLoading = false;
     }
   }
 
@@ -875,9 +637,6 @@ async function performCameraSave() {
             // stale label). rtsp/http/srt/rtmp send formEncoding — it drives
             // recorder selection.
             encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181' ? undefined : formEncoding,
-            // stored value, so don't send one (avoids writing a stale label).
-            // rtsp/http/srt/rtmp send formEncoding — it drives recorder selection.
-            encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181' ? undefined : formEncoding,
             transcoding: {
                 enabled: formTranscodingEnabled,
                 target_codec: formTranscodingCodec,
@@ -994,89 +753,9 @@ async function performCameraSave() {
       </div>
     {/if}
 
-    {#if formProtocol === 'gb28181'}
-      <!-- GB28181: the camera is identified by its SIP DeviceID + ChannelID.
-           The NVR invites the channel over SIP; there is no URL to dial. -->
-      <div>
-        <label for="cam-gb28181-device-id" class="input-label">{t('cameras.gb28181DeviceId')}</label>
-        <input id="cam-gb28181-device-id" type="text" class="input {validationErrors['gb28181_device_id'] ? 'border-red-500' : ''}" bind:value={formGB28181DeviceID}
-          placeholder={t('cameras.gb28181DeviceIdPlaceholder')}
-          oninput={() => { if (validationErrors['gb28181_device_id']) delete validationErrors['gb28181_device_id']; }} />
-        {#if validationErrors['gb28181_device_id']}
-          <p class="th-color-danger text-xs mt-1">{validationErrors['gb28181_device_id']}</p>
-        {/if}
-      </div>
-      <div>
-        <label for="cam-gb28181-channel-id" class="input-label">{t('cameras.gb28181ChannelId')}</label>
-        <input id="cam-gb28181-channel-id" type="text" class="input {validationErrors['gb28181_channel_id'] ? 'border-red-500' : ''}" bind:value={formGB28181ChannelID}
-          placeholder={t('cameras.gb28181ChannelIdPlaceholder')}
-          oninput={() => { if (validationErrors['gb28181_channel_id']) delete validationErrors['gb28181_channel_id']; }} />
-        {#if validationErrors['gb28181_channel_id']}
-          <p class="th-color-danger text-xs mt-1">{validationErrors['gb28181_channel_id']}</p>
-        {/if}
-      </div>
-    {/if}
-
-    {#if formProtocol === 'whip'}
-      <!-- WHIP push (WebRTC): browser/OBS pushes to the NVR; show the endpoint -->
-      <div>
-        <label for="cam-stream-key" class="input-label">{t('cameras.streamKey')}</label>
-        <input id="cam-stream-key" type="text" class="input" bind:value={formStreamKey}
-          placeholder="front-door" />
-        <p class="text-xs th-text-muted mt-1">
-          {t('cameras.whipPushAddress')}: http{'<'}NVR-IP:PORT{'>'}/whip/{formStreamKey || '<key>'}
-        </p>
-        <p class="text-xs th-text-muted mt-1">{t('cameras.whipHint')}</p>
-      </div>
-    {/if}
-
-    {#if formProtocol === 'rtmp'}
-      <!-- RTMP push: publisher connects to NVR; show the ingest address -->
-      <div>
-        <label for="cam-stream-key" class="input-label">{t('cameras.streamKey')}</label>
-        <input id="cam-stream-key" type="text" class="input" bind:value={formStreamKey}
-          placeholder="front-door" />
-        <p class="text-xs th-text-muted mt-1">
-          {t('cameras.rtmpPushAddress')}: rtmp://{'<'}NVR-IP{'>'}:1935/live/{formStreamKey || '<key>'}
-        </p>
-      </div>
-    {/if}
-
-    {#if formProtocol === 'srt'}
-      <!-- SRT push: publisher connects to NVR -->
-      <div>
-        <label for="cam-srt-stream-id" class="input-label">{t('cameras.srtStreamID')}</label>
-        <input id="cam-srt-stream-id" type="text" class="input" bind:value={formSRTStreamID}
-          placeholder="live/front-door" />
-        <p class="text-xs th-text-muted mt-1">
-          {t('cameras.srtPushAddress')}: srt://{'<'}NVR-IP{'>'}:9000?streamid={formSRTStreamID || editingCamera?.id || '<id>'}
-        </p>
-      </div>
-      <div>
-        <label for="cam-srt-passphrase" class="input-label">{t('cameras.srtPassphrase')}</label>
-        <input id="cam-srt-passphrase" type="text" class="input" bind:value={formSRTPassphrase}
-          placeholder="(optional AES passphrase)" />
-        <p class="text-xs th-text-muted mt-1">{t('cameras.srtPassphraseHint')}</p>
-      </div>
-    {/if}
-
-    {#if formProtocol === 'srt' || formProtocol === 'rtmp' || formProtocol === 'whip'}
-      <!-- Push-in save policy: follow global / live-only / custom retention -->
-      <div>
-        <label for="cam-push-retention" class="input-label">{t('cameras.pushRetention')}</label>
-        <select id="cam-push-retention" class="input" onchange={(e) => {
-          const v = (e.target as HTMLSelectElement).value;
-          formPushRetentionDays = v === '' ? null : v === 'live' ? 0 : parseInt(v, 10);
-        }}>
-          <option value="">{t('cameras.pushRetentionGlobal')}</option>
-          <option value="live" selected={formPushRetentionDays === 0}>{t('cameras.pushRetentionLiveOnly')}</option>
-          {#each [1, 3, 7, 14, 30, 90] as d}
-            <option value={d} selected={formPushRetentionDays === d}>{d} {t('cameras.days')}</option>
-          {/each}
-        </select>
-        <p class="text-xs th-text-muted mt-1">{t('cameras.pushRetentionHint')}</p>
-      </div>
-    {/if}
+    <PushIngestFields {formProtocol} {validationErrors} {editingCamera}
+      bind:formGB28181DeviceID bind:formGB28181ChannelID bind:formStreamKey
+      bind:formSRTPassphrase bind:formSRTStreamID bind:formPushRetentionDays />
 
     <!-- Recording toggle: when off, the camera is live-only (no segments on disk) -->
     <div class="flex items-center gap-2">
@@ -1110,157 +789,13 @@ async function performCameraSave() {
     {#if !formRecordingEnabled}
       <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
     {:else if formEncoding === 'h264' || formEncoding === 'h265'}
-      <!-- Recording mode (#435): continuous or adaptive (motion-aware sparse) -->
-      <div>
-        <label for="cam-recording-mode" class="input-label">{t('cameras.recordingMode')}</label>
-        <select id="cam-recording-mode" class="input" bind:value={formRecordingMode}>
-          <option value="continuous">{t('cameras.recordingModeContinuous')}</option>
-          <option value="adaptive">{t('cameras.recordingModeAdaptive')}</option>
-        </select>
-        <p class="text-xs th-text-muted mt-1">
-          {formRecordingMode === 'adaptive' ? t('cameras.recordingModeAdaptiveHint') : t('cameras.recordingModeHint')}
-        </p>
-      </div>
-      {#if formProtocol !== 'srt' && formProtocol !== 'rtmp' && formProtocol !== 'whip'}
-        <!-- Recording tier (#637): tiered adds a continuous sub-stream channel -->
-        <div>
-          <label for="cam-recording-tier" class="input-label">{t('cameras.recordingTier')}</label>
-          <select id="cam-recording-tier" class="input" bind:value={formRecordingTier}>
-            <option value="">{t('cameras.recordingTierSingle')}</option>
-            <option value="tiered">{t('cameras.recordingTierTiered')}</option>
-          </select>
-          <p class="text-xs th-text-muted mt-1">{t('cameras.recordingTierHint')}</p>
-        </div>
-      {/if}
-      {#if formRecordingMode === 'adaptive'}
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label for="cam-adaptive-calm" class="input-label">{t('cameras.adaptiveCalmThreshold')}</label>
-            <input id="cam-adaptive-calm" class="input" type="text" placeholder="60s" bind:value={formAdaptiveCalmThreshold} />
-          </div>
-          <div>
-            <label for="cam-adaptive-interval" class="input-label">{t('cameras.adaptiveTimelapseInterval')}</label>
-            <input id="cam-adaptive-interval" class="input" type="text" placeholder="30s" bind:value={formAdaptiveTimelapseInterval} />
-          </div>
-          <div>
-            <label for="cam-adaptive-spike" class="input-label">{t('cameras.adaptiveSpikeFactor')}</label>
-            <input id="cam-adaptive-spike" class="input" type="number" step="0.1" min="1.5" max="20" placeholder="5.0" bind:value={formAdaptiveSpikeFactor} />
-          </div>
-          <div>
-            <label for="cam-adaptive-gop" class="input-label">{t('cameras.adaptiveGopBufferMB')}</label>
-            <input id="cam-adaptive-gop" class="input" type="number" step="1" min="1" max="64" placeholder="16" bind:value={formAdaptiveGopBufferMB} />
-          </div>
-          <div>
-            <label for="cam-adaptive-noisefloor" class="input-label">{t('cameras.adaptiveNoiseFloorKB')}</label>
-            <input id="cam-adaptive-noisefloor" class="input" type="number" step="0.5" min="0" placeholder="0" bind:value={formNoiseFloorKB} />
-          </div>
-          <div class="flex items-end gap-2 pb-1">
-            <input id="cam-adaptive-autonoise" type="checkbox" class="checkbox" bind:checked={formAutoNoiseFloor} />
-            <label for="cam-adaptive-autonoise" class="input-label cursor-pointer">{t('cameras.adaptiveAutoNoiseFloor')}</label>
-          </div>
-        </div>
-        <div class="flex items-start gap-2">
-          <input
-            id="cam-adaptive-videoexit"
-            type="checkbox"
-            class="checkbox mt-0.5"
-            bind:checked={formVideoExit}
-          />
-          <label for="cam-adaptive-videoexit" class="input-label cursor-pointer">
-            {t('cameras.adaptiveVideoExit')}
-            <span class="block text-xs th-text-muted font-normal">{t('cameras.adaptiveVideoExitHint')}</span>
-          </label>
-        </div>
-        <div>
-          <label for="cam-adaptive-framems" class="input-label">{t('cameras.timelapseFrameMs')}</label>
-          <select id="cam-adaptive-framems" class="input" bind:value={formTimelapseFrameMs}>
-            <option value="">{t('cameras.timelapseFrameMsDefault')}</option>
-            <option value="100">0.1s</option>
-            <option value="300">0.3s</option>
-            <option value="500">0.5s</option>
-          </select>
-        </div>
-        <p class="text-xs th-text-muted -mt-1">{t('cameras.adaptiveParamsHint')}</p>
-        <div class="flex items-center gap-2">
-          <input
-            id="cam-audio-trigger"
-            type="checkbox"
-            class="checkbox"
-            bind:checked={formAudioTriggerEnabled}
-          />
-          <label for="cam-audio-trigger" class="input-label cursor-pointer">
-            {t('cameras.audioTrigger')}
-          </label>
-        </div>
-        {#if formAudioTriggerEnabled}
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label for="cam-audio-dbfs" class="input-label">{t('cameras.audioTriggerMinDBFS')}</label>
-              <input id="cam-audio-dbfs" class="input" type="number" step="1" min="-90" max="0" placeholder="-45" bind:value={formAudioMinDBFS} />
-            </div>
-            <div>
-              <label for="cam-audio-precap" class="input-label">{t('cameras.audioTriggerPreCapture')}</label>
-              <input id="cam-audio-precap" class="input" type="number" step="1" min="0" max="30" placeholder="3" bind:value={formAudioPreCaptureS} />
-            </div>
-          </div>
-        {/if}
-        <p class="text-xs th-text-muted -mt-1">{t('cameras.audioTriggerHint')}</p>
-        <div class="flex items-start gap-2">
-          <input
-            id="cam-pixgate"
-            type="checkbox"
-            class="checkbox mt-0.5"
-            bind:checked={formPixgateEnabled}
-          />
-          <label for="cam-pixgate" class="input-label cursor-pointer">
-            {t('cameras.pixgate')}
-            <span class="block text-xs th-text-muted font-normal">{t('cameras.pixgateHint')}</span>
-          </label>
-        </div>
-        {#if formPixgateEnabled}
-          <div class="grid grid-cols-3 gap-3">
-            <div>
-              <label for="cam-pixgate-fps" class="input-label">{t('cameras.pixgateFPS')}</label>
-              <input id="cam-pixgate-fps" class="input" type="number" step="0.1" min="0.2" max="2" placeholder="1" bind:value={formPixgateFPS} />
-            </div>
-            <div>
-              <label for="cam-pixgate-area" class="input-label">{t('cameras.pixgateMinArea')}</label>
-              <input id="cam-pixgate-area" class="input" type="number" step="0.1" min="0.1" max="50" placeholder="1.5" bind:value={formPixgateMinArea} />
-            </div>
-            <div>
-              <label for="cam-pixgate-hold" class="input-label">{t('cameras.pixgateHold')}</label>
-              <input id="cam-pixgate-hold" class="input" type="text" placeholder="30s" bind:value={formPixgateHold} />
-            </div>
-          </div>
-          <p class="text-xs th-text-muted -mt-1">{t('cameras.pixgateApplyHint')}</p>
-        {/if}
-        <div class="flex items-center gap-2">
-          <input
-            id="cam-ambient-audio"
-            type="checkbox"
-            class="checkbox"
-            bind:checked={formAmbientAudio}
-          />
-          <label for="cam-ambient-audio" class="input-label cursor-pointer">
-            {t('cameras.ambientAudio')}
-          </label>
-        </div>
-        {#if formAmbientAudio}
-          <p class="text-xs th-text-muted -mt-1">{t('cameras.ambientAudioHint')}</p>
-          <div class="flex items-center gap-2">
-            <input
-              id="cam-ambient-archive"
-              type="checkbox"
-              class="checkbox"
-              bind:checked={formAmbientArchive}
-            />
-            <label for="cam-ambient-archive" class="input-label cursor-pointer">
-              {t('cameras.ambientArchive')}
-            </label>
-          </div>
-          <p class="text-xs th-text-muted -mt-1">{t('cameras.ambientArchiveHint')}</p>
-        {/if}
-      {/if}
+      <AdaptiveRecordingFields {formProtocol}
+        bind:formRecordingMode bind:formRecordingTier bind:formAdaptiveCalmThreshold
+        bind:formAdaptiveTimelapseInterval bind:formAdaptiveSpikeFactor bind:formAdaptiveGopBufferMB
+        bind:formNoiseFloorKB bind:formAutoNoiseFloor bind:formVideoExit bind:formTimelapseFrameMs
+        bind:formAudioTriggerEnabled bind:formAudioMinDBFS bind:formAudioPreCaptureS
+        bind:formPixgateEnabled bind:formPixgateFPS bind:formPixgateMinArea bind:formPixgateHold
+        bind:formAmbientAudio bind:formAmbientArchive />
     {/if}
 
     <!-- Cascade catalog toggle: when off, the camera is hidden from the
@@ -1296,53 +831,7 @@ async function performCameraSave() {
     {/if}
 
     {#if editingCamera}
-      <!-- Storage location: hot per-camera switch + background migration -->
-      <div class="md:col-span-2 border-t th-border pt-4 mt-2">
-        <label class="input-label">{t('cameras.storageLocation')}</label>
-        <div class="flex items-center gap-3 mt-2 flex-wrap">
-          <select class="input max-w-xs" bind:value={camStorageRoot} disabled={camStorageSwitching}>
-            <option value="">{t('cameras.storageDefaultOption')}</option>
-            {#each camStorageCandidates as c (c.path)}
-              <option value={c.path}>{c.path}</option>
-            {/each}
-          </select>
-          <button
-            type="button"
-            class="btn btn-primary btn-sm"
-            disabled={camStorageSwitching}
-            onclick={() => editingCamera && applyCameraStorage(editingCamera)}
-          >
-            {camStorageSwitching ? t('common.saving') : t('cameras.storageApply')}
-          </button>
-        </div>
-        {#if camStorageCandidates.length === 0}
-          <p class="text-xs th-text-muted mt-1">{t('cameras.storageNoCandidatesHint')}</p>
-        {:else}
-          <label class="flex items-center gap-1.5 text-xs th-text-secondary mt-2 cursor-pointer">
-            <input type="checkbox" bind:checked={camStorageMigrate} disabled={camStorageSwitching} />
-            {t('cameras.storageMigrateHistory')}
-          </label>
-          {#if camStorageMigrate && camStorageRoot}
-            <label class="flex items-center gap-1.5 text-xs th-text-secondary ml-5 cursor-pointer">
-              <input type="checkbox" bind:checked={camStorageDeleteSource} disabled={camStorageSwitching} />
-              {t('settings.migrateDeleteSource')}
-            </label>
-          {/if}
-          {#if camStorageMigration && (camStorageMigration.state === 'running' || camStorageMigration.state === 'queued' || camStorageMigration.state === 'paused')}
-            <div class="mt-3">
-              <progress class="w-full" max={Math.max(camStorageMigration.total_files ?? 1, 1)} value={camStorageMigration.done_files ?? 0}></progress>
-              <p class="text-xs th-text-muted mt-1">
-                {t('settings.migrateProgress', {
-                  done: String(camStorageMigration.done_files ?? 0),
-                  total: String(camStorageMigration.total_files ?? 0),
-                  mb: ((camStorageMigration.done_bytes ?? 0) / (1024 * 1024)).toFixed(1),
-                })}
-                {#if camStorageMigration.state === 'paused'}· {t('cameras.storageMigrationPaused')}{/if}
-              </p>
-            </div>
-          {/if}
-        {/if}
-      </div>
+      <CameraStorageSection camera={editingCamera} />
     {/if}
 
     <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras) -->
@@ -1566,205 +1055,7 @@ async function performCameraSave() {
     </div>
     {/if}
 
-    <!-- Push-out (relay) targets: forward this camera's stream to remote destinations -->
-    <div class="md:col-span-2">
-      <details class="rounded-md border th-border">
-        <summary class="cursor-pointer p-3 flex items-center gap-2 th-bg-hover">
-          <ArrowUpRight size={16} class="th-text-secondary" />
-          <span class="font-medium th-text-primary">{t('cameras.pushOutTitle')}</span>
-          {#if formPushTargets.length > 0}
-            <span class="text-xs px-2 py-0.5 rounded-full th-bg-muted th-text-secondary">{formPushTargets.length}</span>
-          {/if}
-        </summary>
-        <div class="p-3 border-t th-border space-y-2">
-          <p class="text-xs th-text-muted mb-2">{t('cameras.pushOutHint')}</p>
-
-          {#if formPushTargets.length === 0}
-            <p class="text-sm th-text-muted py-2">{t('cameras.pushOutEmpty')}</p>
-          {:else}
-            {#each formPushTargets as tgt (tgt.id)}
-              {@const st = pushStatusFor(tgt.id)}
-              <div class="p-2 rounded-md th-bg-muted space-y-2">
-                <div class="flex flex-wrap items-center gap-2">
-                  <input type="text" class="input flex-1 min-w-[100px]" placeholder={t('cameras.pushOutName')}
-                    value={tgt.name} oninput={(e) => updatePushTarget(tgt.id, { name: (e.target as HTMLInputElement).value })} />
-                  <select class="input w-auto" value={tgt.protocol}
-                    onchange={(e) => updatePushTarget(tgt.id, { protocol: (e.target as HTMLSelectElement).value as 'rtmp' | 'rtsp' })}>
-                    <option value="rtmp">RTMP</option>
-                    <option value="rtsp">RTSP</option>
-                  </select>
-
-                  <!-- Platform selector -->
-                  <select class="input w-auto" value={tgt.platform || ''}
-                    onchange={(e) => updatePushTarget(tgt.id, { platform: (e.target as HTMLSelectElement).value })}>
-                    {#if relayPresetsLoading}
-                      <option value="">Loading...</option>
-                    {:else}
-                      <option value="">{t('cameras.pushPlatformGeneric')}</option>
-                      {#each relayPresets as preset (preset.name)}
-                        <option value={preset.name}>{preset.name}{preset.description ? ` — ${preset.description}` : ''}</option>
-                      {/each}
-                    {/if}
-                  </select>
-
-                  <!-- Transcode policy (hidden for H.264 source) -->
-                  {#if formEncoding === 'h264'}
-                    <span class="text-xs th-text-muted whitespace-nowrap">{t('cameras.pushTranscodeNA')}</span>
-                  {:else}
-                    <select class="input w-auto" value={tgt.transcode_policy || 'auto'}
-                      onchange={(e) => updatePushTarget(tgt.id, { transcode_policy: (e.target as HTMLSelectElement).value as 'auto' | 'force_sw' | 'off' | 'passthrough' })}>
-                      <option value="auto">{t('cameras.pushTranscodeAuto')}</option>
-                      <option value="force_sw">{t('cameras.pushTranscodeForceSW')}</option>
-                      <option value="passthrough">{t('cameras.pushTranscodePassthrough')}</option>
-                      <option value="off">{t('cameras.pushTranscodeRejectH265')}</option>
-                    </select>
-                  {/if}
-
-                  <input type="text" class="input flex-[2] min-w-[160px] {validationErrors['push_' + tgt.id] ? 'border-red-500' : ''}" placeholder={tgt.protocol === 'rtsp' ? 'rtsp://host:8554/stream' : 'rtmp://host:1935/live/你的直播密钥'}
-                    value={tgt.url} oninput={(e) => updatePushTarget(tgt.id, { url: (e.target as HTMLInputElement).value })} />
-                  <label class="flex items-center gap-1 text-xs th-text-secondary whitespace-nowrap">
-                    <input type="checkbox" class="checkbox" checked={tgt.enabled}
-                      onchange={(e) => updatePushTarget(tgt.id, { enabled: (e.target as HTMLInputElement).checked })} />
-                    {t('cameras.pushOutEnabled')}
-                  </label>
-                  <label class="flex items-center gap-1 text-xs th-text-secondary whitespace-nowrap" title={t('cameras.pushOutUseFFmpegHint')}>
-                    <input type="checkbox" class="checkbox" checked={tgt.use_ffmpeg ?? false}
-                      disabled={!relayCapabilities?.ffmpeg_available}
-                      onchange={(e) => updatePushTarget(tgt.id, { use_ffmpeg: (e.target as HTMLInputElement).checked })} />
-                    {t('cameras.pushOutUseFFmpeg')}
-                    {#if !relayCapabilities?.ffmpeg_available}
-                      <span class="th-text-muted">({t('cameras.pushOutFFmpegNotInstalled')})</span>
-                    {/if}
-                  </label>
-                  {#if st}
-                    <PushTargetStatus status={st} />
-                  {/if}
-                  <button type="button" class="btn-ghost p-1 th-color-danger" title={t('cameras.pushOutRemove')}
-                    onclick={() => removePushTarget(tgt.id)}>
-                    <Trash2 size={14} />
-                  </button>
-                  {#if st && tgt.enabled && st.status !== 'idle'}
-                    <button
-                      type="button"
-                      class="btn-ghost p-1 th-color-danger text-xs flex items-center gap-1"
-                      disabled={stoppingTargets.has(tgt.id)}
-                      onclick={() => confirmStopTarget(tgt.id)}
-                    >
-                      {#if stoppingTargets.has(tgt.id)}
-                        <span class="spinner w-3 h-3"></span>
-                        {t('cameras.pushOutStopping')}
-                      {:else}
-                        {t('cameras.pushOutStop')}
-                      {/if}
-                    </button>
-                  {/if}
-                </div>
-
-                <!-- Validation error for this target's URL -->
-                {#if validationErrors['push_' + tgt.id]}
-                  <p class="th-color-danger text-xs">{validationErrors['push_' + tgt.id]}</p>
-                {/if}
-
-                <!-- Live preview of the full push address the relay will
-                     actually use. This answers "这个输入框到底是什么意思": the
-                     URL field IS the full destination address (including the
-                     RTMP stream key, which lives in the path). Show it
-                     read-only with a copy button so the user can verify what
-                     they typed equals the address the platform gave them. -->
-                {#if tgt.url.trim()}
-                  <div class="flex items-center gap-2 px-2 py-1 rounded th-bg-muted/60">
-                    <span class="text-[10px] th-text-muted whitespace-nowrap shrink-0">{t('cameras.pushOutPreview')}</span>
-                    <code class="text-[11px] th-text-secondary truncate flex-1 font-mono">{tgt.url.trim()}</code>
-                    <button type="button" class="btn-ghost p-1 th-text-muted hover:th-text-primary shrink-0"
-                      title={t('cameras.pushOutCopyUrl')} aria-label={t('cameras.pushOutCopyUrl')}
-                      onclick={() => copyText(tgt.url.trim()).then((ok) =>
-                        showToast(ok ? t('cameras.pushOutUrlCopied') : t('cameras.pushOutUrlCopyFailed'), ok ? 'success' : 'error')
-                      )}>
-                      <Copy size={12} />
-                    </button>
-                  </div>
-                {/if}
-
-                <!-- Preset override panel (collapsed) -->
-                <details class="text-xs">
-                  <summary class="cursor-pointer th-text-secondary hover:th-text-primary transition-colors select-none">
-                    {t('cameras.pushPresetOverrides')}
-                    {#if tgt.video_preset_override}
-                      <span class="ml-1 text-[var(--color-accent)]">{t('cameras.pushPresetCustom')}</span>
-                    {/if}
-                  </summary>
-                  <div class="grid grid-cols-3 gap-x-3 gap-y-2 pt-2 pb-1">
-                    <div>
-                      <label for={tgt.id + '-resolution'} class="input-label">{t('cameras.pushPresetResolution')}</label>
-                      <input id={tgt.id + '-resolution'} type="text" class="input w-full" placeholder="1920x1080"
-                        value={tgt.video_preset_override?.resolution || ''}
-                        oninput={(e) => updatePushTargetOverride(tgt.id, { resolution: (e.target as HTMLInputElement).value || undefined })} />
-                    </div>
-                    <div>
-                      <label for={tgt.id + '-framerate'} class="input-label">{t('cameras.pushPresetFramerate')}</label>
-                      <input id={tgt.id + '-framerate'} type="number" class="input w-full" placeholder="30" min="1" max="120"
-                        value={tgt.video_preset_override?.framerate ?? ''}
-                        oninput={(e) => {
-                          const v = parseInt((e.target as HTMLInputElement).value);
-                          updatePushTargetOverride(tgt.id, { framerate: isNaN(v) ? undefined : v });
-                        }} />
-                    </div>
-                    <div>
-                      <label for={tgt.id + '-bitrate'} class="input-label">{t('cameras.pushPresetBitrate')}</label>
-                      <input id={tgt.id + '-bitrate'} type="number" class="input w-full" placeholder="3000" min="100" max="50000"
-                        value={tgt.video_preset_override?.video_bitrate_kbps ?? ''}
-                        oninput={(e) => {
-                          const v = parseInt((e.target as HTMLInputElement).value);
-                          updatePushTargetOverride(tgt.id, { video_bitrate_kbps: isNaN(v) ? undefined : v });
-                        }} />
-                    </div>
-                    <div>
-                      <label for={tgt.id + '-gop'} class="input-label">{t('cameras.pushPresetGOP')}</label>
-                      <input id={tgt.id + '-gop'} type="number" class="input w-full" placeholder="2" min="1" max="10"
-                        value={tgt.video_preset_override?.gop_seconds ?? ''}
-                        oninput={(e) => {
-                          const v = parseInt((e.target as HTMLInputElement).value);
-                          updatePushTargetOverride(tgt.id, { gop_seconds: isNaN(v) ? undefined : v });
-                        }} />
-                    </div>
-                    <div>
-                      <label for={tgt.id + '-profile'} class="input-label">{t('cameras.pushPresetProfile')}</label>
-                      <select id={tgt.id + '-profile'} class="input w-full" value={tgt.video_preset_override?.profile || ''}
-                        onchange={(e) => {
-                          const v = (e.target as HTMLSelectElement).value;
-                          updatePushTargetOverride(tgt.id, { profile: (v as 'baseline' | 'main' | 'high') || undefined });
-                        }}>
-                        <option value="">{t('cameras.pushPresetDefault')}</option>
-                        <option value="baseline">baseline</option>
-                        <option value="main">main</option>
-                        <option value="high">high</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label for={tgt.id + '-bframes'} class="input-label">{t('cameras.pushPresetBFrames')}</label>
-                      <input id={tgt.id + '-bframes'} type="number" class="input w-full" placeholder="0" min="0" max="2"
-                        value={tgt.video_preset_override?.bframes ?? ''}
-                        oninput={(e) => {
-                          const v = parseInt((e.target as HTMLInputElement).value);
-                          updatePushTargetOverride(tgt.id, { bframes: isNaN(v) ? undefined : v });
-                        }} />
-                    </div>
-                  </div>
-                  <button type="button" class="btn-ghost text-xs th-text-muted mt-1"
-                    onclick={() => resetPushTargetOverride(tgt.id)}>
-                    {t('cameras.pushPresetReset')}
-                  </button>
-                </details>
-              </div>
-            {/each}
-          {/if}
-
-          <button type="button" class="btn btn-ghost btn-sm mt-2 flex items-center gap-1" onclick={addPushTarget}>
-            <Plus size={14} /> {t('cameras.pushOutAdd')}
-          </button>
-        </div>
-      </details>
-    </div>
+    <PushTargetList bind:formPushTargets {formEncoding} {validationErrors} {editingCamera} />
 
     {#if formProtocol === 'xiaomi'}
       {#if editingCamera?.protocol === 'xiaomi' && xiaomiDeviceList.length > 0}
@@ -1882,91 +1173,11 @@ async function performCameraSave() {
 
   <!-- Transcoding Config (edit mode only, when global enabled) -->
   {#if editingCamera}
-    {#if globalTranscodingEnabled}
-      <details class="mt-6 border th-border rounded-lg" open={formTranscodingEnabled ? true : undefined}>
-        <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
-          {t('transcoding.per_camera_config')}
-          {#if formTranscodingEnabled}
-            <span class="text-xs th-text-muted ml-2">{t('transcoding.enabled')}</span>
-          {:else}
-            <span class="text-xs th-text-muted ml-2">{t('merge.usingDefault')}</span>
-          {/if}
-        </summary>
-
-        <div class="px-4 pb-4 pt-2">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <!-- Enabled toggle -->
-            <div class="md:col-span-2 flex items-center gap-2">
-              <input
-                id="transcode-enabled"
-                type="checkbox"
-                class="accent-[var(--color-accent)]"
-                bind:checked={formTranscodingEnabled}
-              />
-              <label for="transcode-enabled" class="th-text-secondary text-sm">{t('transcoding.enabled')}</label>
-            </div>
-
-            {#if formTranscodingEnabled}
-              <!-- Target Codec -->
-              <div>
-                <label for="transcode-codec" class="input-label">{t('transcoding.target_codec')}</label>
-                <select id="transcode-codec" class="input" bind:value={formTranscodingCodec}>
-                  <option value="h264">{t('transcoding.codec_h264')}</option>
-                  <option value="h265" disabled={!h265Available}>{t('transcoding.codec_h265')}{!h265Available ? ` (${t('transcoding.unavailable')})` : ''}</option>
-                </select>
-                {#if !h265Available}
-                  <p class="mt-1 text-xs text-[var(--color-danger)]">{t('transcoding.h265_not_available')}</p>
-                {:else if formTranscodingCodec === 'h265'}
-                  <p class="mt-1 text-xs text-[var(--color-warning)]">{t('transcoding.warning_h265_slow')}</p>
-                {/if}
-              </div>
-
-              <!-- Preset -->
-              <div>
-                <label for="transcode-preset" class="input-label">{t('transcoding.preset')}</label>
-                <select id="transcode-preset" class="input" bind:value={formTranscodingPreset}>
-                  <option value="ultrafast">{t('transcoding.preset_ultrafast')}</option>
-                  <option value="faster">{t('transcoding.preset_faster')}</option>
-                  <option value="medium">{t('transcoding.preset_medium')}</option>
-                </select>
-              </div>
-
-              <!-- Bitrate -->
-              <div>
-                <label for="transcode-bitrate" class="input-label">{t('transcoding.bitrate')}</label>
-                <input
-                  id="transcode-bitrate"
-                  type="text"
-                  class="input"
-                  bind:value={formTranscodingBitrate}
-                  placeholder="2M"
-                />
-              </div>
-
-              <!-- CRF (Quality) -->
-              <div>
-                <label for="transcode-crf" class="input-label">{t('transcoding.crf')} <span class="text-xs th-text-muted">({t('transcoding.crfHint')})</span></label>
-                <input
-                  id="transcode-crf"
-                  type="number"
-                  min="0"
-                  max="51"
-                  class="input"
-                  bind:value={formTranscodingCRF}
-                  placeholder="0"
-                />
-              </div>
-            {/if}
-          </div>
-        </div>
-      </details>
-    {:else}
-      <div class="mt-6 p-3 rounded-md th-bg-hover border th-border text-sm th-text-muted flex items-center gap-2">
-        <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        {t('transcoding.warning_global_disabled')}
-</div>
+    <TranscodingSection
+      bind:formTranscodingEnabled bind:formTranscodingCodec bind:formTranscodingPreset
+      bind:formTranscodingBitrate bind:formTranscodingCRF
+      {globalTranscodingEnabled} {h265Available} />
   {/if}
-{/if}
 
   <!-- Timelapse Config (edit mode only) -->
   {#if editingCamera}
@@ -1974,94 +1185,9 @@ async function performCameraSave() {
   {/if}
 
   <!-- ONVIF Device Settings (edit mode only, ONVIF cameras) -->
-  {#if editingCamera && normalizeProtocol(editingCamera.protocol) === 'onvif' && !capsLoading}
-    <div class="mt-6 space-y-4">
-      <h4 class="text-sm font-semibold th-text-secondary uppercase tracking-wide">ONVIF</h4>
-
-      <!-- Device Capabilities -->
-      <DeviceCapabilities cameraId={editingCamera.id} />
-
-      <!-- IP self-healing: subnet hints (where to look when this camera's IP changes) -->
-      <details class="border th-border rounded-lg">
-        <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
-          {t('cameras.subnetHintsTitle')}
-        </summary>
-        <div class="px-4 pb-4 space-y-2">
-          <p class="text-xs th-text-muted">{t('cameras.subnetHintsHint')}</p>
-          <textarea
-            bind:value={formSubnetHints}
-            rows="3"
-            class="input font-mono text-xs"
-            placeholder="192.168.1.0/24&#10;10.0.0.0/24"
-          ></textarea>
-          {#if editingCamera.stable_id}
-            <p class="text-xs th-text-muted">{t('cameras.subnetHintsStableId', { id: editingCamera.stable_id })}</p>
-          {:else}
-            <p class="text-xs th-color-warning">{t('cameras.subnetHintsNoStableId')}</p>
-          {/if}
-        </div>
-      </details>
-
-      <!-- Imaging Panel (if supported) -->
-      {#if deviceCaps?.imaging}
-        <details class="border th-border rounded-lg" open>
-          <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
-            {t('onvif.imaging.title')}
-          </summary>
-          <div class="px-4 pb-4">
-            <ImagingPanel cameraId={editingCamera.id} />
-          </div>
-        </details>
-      {/if}
-
-      <!-- Preset Manager (if PTZ supported) -->
-      {#if deviceCaps?.ptz}
-        <details class="border th-border rounded-lg" open>
-          <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
-            {t('onvif.presets.title')}
-          </summary>
-          <div class="px-4 pb-4">
-            <PresetManager cameraId={editingCamera.id} />
-          </div>
-        </details>
-      {/if}
-
-      <!-- ONVIF Events (if supported) -->
-      {#if deviceCaps?.events}
-        <details class="border th-border rounded-lg">
-          <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
-            {t('onvif.events.title')}
-          </summary>
-          <div class="px-4 pb-4">
-            <ONVIFEvents cameraId={editingCamera.id} maxEvents={50} />
-          </div>
-        </details>
-      {/if}
-
-      <!-- Device Management -->
-      <details class="border th-border rounded-lg">
-        <summary class="px-4 py-3 cursor-pointer th-text-secondary hover:th-text-primary transition-colors font-medium select-none">
-          {t('onvif.device.title')}
-        </summary>
-        <div class="px-4 pb-4">
-          <DeviceManagement cameraId={editingCamera.id} cameraName={editingCamera.name} />
-        </div>
-      </details>
-    </div>
+  {#if editingCamera}
+    <OnvifDeviceSection camera={editingCamera} bind:formSubnetHints />
   {/if}
-
-  <!-- Stop push target confirm dialog -->
-{#if showStopConfirm}
-  <ConfirmDialog
-    title={t('cameras.pushOutStopConfirm')}
-    message={t('cameras.pushOutStopConfirmDesc')}
-    variant="danger"
-    onconfirm={handleStopTarget}
-    oncancel={() => { showStopConfirm = false; stopTargetId = null; }}
-    confirmText={t('cameras.pushOutStop')}
-    loading={stoppingTargets.has(stopTargetId || '')}
-  />
-{/if}
 
   <div class="flex items-center gap-3 mt-6">
     <button onclick={handleSubmit} class="btn btn-primary" disabled={saving}>
@@ -2075,4 +1201,3 @@ async function performCameraSave() {
     </button>
     </div>
 </div>
-

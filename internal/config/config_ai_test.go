@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ai"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,7 +60,7 @@ func TestValidateAIConfig_InvalidZonePoints(t *testing.T) {
 		Enabled:             true,
 		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
-		Zones: map[string][]ai.ROI{
+		Zones: map[string][]model.ROI{
 			"cam1": {
 				{Name: "zone1", Points: [][2]float64{{0.1, 0.1}, {0.2, 0.2}}}, // only 2 points
 			},
@@ -77,7 +77,7 @@ func TestValidateAIConfig_EmptyZoneName(t *testing.T) {
 		Enabled:             true,
 		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
-		Zones: map[string][]ai.ROI{
+		Zones: map[string][]model.ROI{
 			"cam1": {
 				{Name: "", Points: [][2]float64{{0.1, 0.1}, {0.2, 0.2}, {0.3, 0.3}}},
 			},
@@ -94,7 +94,7 @@ func TestValidateAIConfig_InvalidZoneCoordinates(t *testing.T) {
 		Enabled:             true,
 		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
-		Zones: map[string][]ai.ROI{
+		Zones: map[string][]model.ROI{
 			"cam1": {
 				{Name: "zone1", Points: [][2]float64{{0.1, 0.1}, {0.2, 0.2}, {1.5, 0.3}}}, // 1.5 > 1
 			},
@@ -111,7 +111,7 @@ func TestValidateAIConfig_NegativeZoneCoordinate(t *testing.T) {
 		Enabled:             true,
 		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
-		Zones: map[string][]ai.ROI{
+		Zones: map[string][]model.ROI{
 			"cam1": {
 				{Name: "zone1", Points: [][2]float64{{-0.1, 0.1}, {0.2, 0.2}, {0.3, 0.3}}}, // -0.1 < 0
 			},
@@ -128,7 +128,7 @@ func TestValidateAIConfig_EmptyCameraID(t *testing.T) {
 		Enabled:             true,
 		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
-		Zones: map[string][]ai.ROI{
+		Zones: map[string][]model.ROI{
 			"": {
 				{Name: "zone1", Points: [][2]float64{{0.1, 0.1}, {0.2, 0.2}, {0.3, 0.3}}},
 			},
@@ -158,7 +158,7 @@ func TestValidateAIConfig_DisabledSkipsValidation(t *testing.T) {
 		Enabled:             false,
 		FrameSkipRate:       0,
 		ConfidenceThreshold: 1.5, // invalid if enabled
-		Zones: map[string][]ai.ROI{
+		Zones: map[string][]model.ROI{
 			"cam1": {
 				{Name: "", Points: [][2]float64{{0.1, 0.1}}}, // invalid if enabled
 			},
@@ -197,7 +197,7 @@ func TestValidateAIConfig_ValidZones(t *testing.T) {
 		Enabled:             true,
 		FrameSkipRate:       10,
 		ConfidenceThreshold: 0.5,
-		Zones: map[string][]ai.ROI{
+		Zones: map[string][]model.ROI{
 			"cam1": {
 				{
 					Name:   "driveway",

@@ -5,7 +5,7 @@
   import { t } from '$lib/i18n';
   import { formatDate } from '$lib/format';
   import { AlertCircle, Activity } from 'lucide-svelte';
-  import Pagination from '../components/Pagination.svelte';
+  import Pagination from '$lib/components/Pagination.svelte';
 
   let events = $state<HealthEvent[]>([]);
   let total = $state(0);

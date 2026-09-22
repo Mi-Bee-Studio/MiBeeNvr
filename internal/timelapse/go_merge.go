@@ -86,7 +86,6 @@ func (m *GoMerger) Merge(ctx context.Context, framesDir, outputPath string, fps 
 	}
 	sampleDuration := time.Duration(1000/fps) * time.Millisecond
 
-	// Create the MP4 file.
 	muxer, err := newMJPEGMuxer(outputPath)
 	if err != nil {
 		return &MergeResult{

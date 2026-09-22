@@ -30,7 +30,6 @@ func (r *RollingMergeCoordinator) createBucket(
 ) (outputPath, mergedRecID string, err error) {
 	first, last := segs[0], segs[len(segs)-1]
 
-	// Create output file via store.
 	tempPath, finalPath, derr := r.store.CreateSegment(first.cameraID, first.format)
 	if derr != nil {
 		return "", "", fmt.Errorf("create bucket output: %w", derr)
@@ -139,7 +138,6 @@ func (r *RollingMergeCoordinator) appendToBucket(
 ) (outputPath, mergedRecID string, err error) {
 	first, last := segs[0], segs[len(segs)-1]
 
-	// Parse the existing bucket file.
 	bucketParsed, err := ParseSegment(bucket.mergedFilePath)
 	if err != nil {
 		return "", "", fmt.Errorf("parse existing bucket: %w", err)
@@ -160,7 +158,6 @@ func (r *RollingMergeCoordinator) appendToBucket(
 		}
 	}
 
-	// Create new output file.
 	tempPath, finalPath, derr := r.store.CreateSegment(first.cameraID, first.format)
 	if derr != nil {
 		return "", "", fmt.Errorf("create append output: %w", derr)

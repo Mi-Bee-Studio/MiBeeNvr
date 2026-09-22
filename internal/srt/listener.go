@@ -136,7 +136,6 @@ func (l *Listener) Stop() error {
 		return nil
 	}
 
-	// Stop all receivers
 	for id, rec := range l.receivers {
 		rec.Stop()
 		delete(l.receivers, id)
@@ -204,7 +203,6 @@ func (l *Listener) handleConnect(req srt.ConnRequest) srt.ConnType {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Check if there's already a receiver for this camera
 	if rec, ok := l.receivers[cameraID]; ok && rec.Running() {
 		logger.Warn("SRT connection rejected: camera already has active receiver",
 			"camera_id", cameraID)

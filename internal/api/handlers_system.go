@@ -68,6 +68,8 @@ func goroutineCheckStatus(count, numCameras, baseline, perCamera int) (status, m
 	return "ok", fmt.Sprintf("%d goroutines (threshold: %d, cameras: %d)", count, threshold, numCameras)
 }
 
+const goroutineHardFail = 5000
+
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := HealthResponse{Checks: make(map[string]HealthCheck)}
 	hasWarning, hasError := false, false
@@ -130,7 +132,10 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	var camHealth *CameraHealthSummary
 	if h.healthMgr != nil {
 		camHealth = h.aggregateCameraHealth(r)
-		resp.Cameras = camHealth
+		// The per-camera detail stays behind auth (/api/health/cameras,
+		// #879): a public endpoint must not leak the camera fleet's names
+		// and topology. camHealth is still computed for the goroutine
+		// tripwire scaling below.
 	}
 
 	// Goroutine check — threshold scales with the camera fleet.
@@ -251,11 +256,9 @@ func (h *Handler) aggregateCameraHealth(r *http.Request) *CameraHealthSummary {
 	return summary
 }
 
-// handleHealthCameras returns full camera health map with scores.
-// Public endpoint — no auth required.
-
-// handleHealthCameras returns full camera health map with scores.
-// Public endpoint — no auth required.
+// handleHealthCameras returns the full camera health map with scores.
+// Behind the auth middleware (#879): camera names/status are fleet topology,
+// not liveness data.
 func (h *Handler) handleHealthCameras(w http.ResponseWriter, r *http.Request) {
 	if h.healthMgr == nil {
 		writeJSON(w, http.StatusOK, map[string]*model.CameraHealth{})
@@ -315,8 +318,8 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	// fundamentally broken", where transient stream-setup spikes must not
 	// flap the probe.
 	numGoroutines := runtime.NumGoroutine()
-	if numGoroutines >= 5000 {
-		checks["goroutines"] = HealthCheck{Status: "error", Message: fmt.Sprintf("%d goroutines (threshold: 5000)", numGoroutines)}
+	if numGoroutines >= goroutineHardFail {
+		checks["goroutines"] = HealthCheck{Status: "error", Message: fmt.Sprintf("%d goroutines (threshold: %d)", numGoroutines, goroutineHardFail)}
 		allOK = false
 	} else {
 		checks["goroutines"] = HealthCheck{Status: "ok"}
@@ -375,7 +378,6 @@ func (h *Handler) handleStatsTrends(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Load display timezone from config
 	loc := time.UTC
 	if h.config != nil && h.config.Timezone != "" && h.config.Timezone != "UTC" {
 		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
@@ -522,7 +524,6 @@ func (h *Handler) handleUpdateFeatures(w http.ResponseWriter, r *http.Request) {
 			h.camMgr.SetProtocolEnabled(proto, enabled)
 		}
 	}
-	// Return updated state
 	h.handleGetFeatures(w, r)
 }
 

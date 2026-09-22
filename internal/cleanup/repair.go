@@ -93,7 +93,6 @@ func (cm *CleanupManager) repairZeroDurationRecordings(ctx context.Context) {
 	logger.Info("zero-duration repair: found recordings to repair", "count", len(recordings))
 	var repaired int
 	for _, rec := range recordings {
-		// Check file exists on disk
 		if _, err := os.Stat(rec.FilePath); err != nil {
 			continue
 		}

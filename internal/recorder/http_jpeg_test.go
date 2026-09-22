@@ -133,7 +133,6 @@ func TestHTTPJPEGAVIRecording(t *testing.T) {
 	handler.sendFrames(10, 20*time.Millisecond)
 	time.Sleep(200 * time.Millisecond)
 
-	// Stop recorder
 	require.NoError(t, rec.Stop())
 	require.Equal(t, model.StatusStopped, rec.Status())
 

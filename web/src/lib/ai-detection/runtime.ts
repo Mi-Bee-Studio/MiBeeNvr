@@ -115,7 +115,6 @@ export class AiRuntime {
       throw new Error(`Model URL rejected: HTTP not allowed. Use HTTPS: ${url}`);
     }
 
-    // Parse hostname
     let hostname: string;
     try {
       hostname = new URL(url).hostname;
@@ -390,7 +389,6 @@ export class AiRuntime {
       modelUrl = withBase(modelUrl);
     }
 
-    // Check cache first
     try {
       const cache = await caches.open(MODEL_CACHE_NAME);
       const cached = await cache.match(modelUrl);

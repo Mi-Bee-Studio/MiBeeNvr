@@ -318,7 +318,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	storageChanged := false
 	if body.Storage != nil && body.Storage.RootDir != nil {
 		dir := strings.TrimSpace(*body.Storage.RootDir)
-		if dir == "" || !strings.HasPrefix(dir, "/") {
+		if dir == "" || !filepath.IsAbs(dir) {
 			WriteError(w, http.StatusBadRequest, "storage.root_dir must be an absolute path")
 			return
 		}
@@ -352,7 +352,6 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update webdav settings
 	if body.WebDAV != nil {
 		if body.WebDAV.Enabled != nil {
 			if h.config.WebDAV.Enabled == nil {
@@ -421,7 +420,6 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			"enabled", h.config.Vision.Enabled)
 	}
 
-	// Update timezone
 	if body.Timezone != nil {
 		tz := strings.TrimSpace(*body.Timezone)
 		if tz != "" && tz != "UTC" && tz != "Local" {
@@ -433,7 +431,6 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		h.config.Timezone = tz
 	}
 
-	// Update server listen port
 	if body.Server != nil && body.Server.Listen != nil {
 		raw := strings.TrimSpace(*body.Server.Listen)
 		raw = strings.TrimPrefix(raw, ":")
@@ -445,7 +442,6 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		h.config.Server.Listen = fmt.Sprintf(":%d", port)
 	}
 
-	// Update GB28181 settings
 	if body.GB28181 != nil {
 		if body.GB28181.Enabled != nil {
 			h.config.GB28181.Enabled = *body.GB28181.Enabled

@@ -386,7 +386,6 @@ func TestCloseCurrentSegmentWithSegment(t *testing.T) {
 	require.NotEmpty(t, tempPath)
 	require.NotEmpty(t, finalPath)
 
-	// Close it
 	r.closeCurrentSegment()
 	require.Nil(t, r.muxer)
 	require.Empty(t, r.curTempPath)

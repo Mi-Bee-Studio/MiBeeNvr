@@ -45,7 +45,6 @@ func (h *Handler) handleTranscodingCheck(w http.ResponseWriter, r *http.Request)
 
 	caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
 
-	// Check FFmpeg download status if downloader is available
 	var ffmpegStatus string
 	if h.downloader != nil {
 		status := h.downloader.GetFFmpegStatus()
@@ -169,7 +168,6 @@ func (h *Handler) handleFFmpegDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start download in background
 	go func() {
 		if err := h.downloader.DownloadFFmpeg(context.Background()); err != nil {
 			logger.Warn("FFmpeg download failed", "error", err)
@@ -213,7 +211,6 @@ func (h *Handler) handleFFmpegDownloadRetry(w http.ResponseWriter, r *http.Reque
 		// "not_installed" or unknown — also allow retry
 	}
 
-	// Start download in background
 	go func() {
 		if err := h.downloader.DownloadFFmpeg(context.Background()); err != nil {
 			logger.Warn("FFmpeg download retry failed", "error", err)
@@ -262,7 +259,6 @@ func (h *Handler) handleTranscodingTasksList(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Parse query params
 	filter := storage.TranscodeTaskFilter{
 		Status:   r.URL.Query().Get("status"),
 		CameraID: r.URL.Query().Get("camera_id"),
@@ -330,7 +326,6 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Validate required fields
 	if body.CameraID == "" {
 		WriteError(w, http.StatusBadRequest, "camera_id is required")
 		return
@@ -343,13 +338,11 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 		body.TargetCodec = "h264"
 	}
 
-	// Validate target codec
 	if body.TargetCodec != "h264" && body.TargetCodec != "h265" {
 		WriteError(w, http.StatusBadRequest, "target_codec must be h264 or h265")
 		return
 	}
 
-	// Check transcoding is enabled for this camera
 	if h.config != nil {
 		camConfig := h.config.ResolveTranscodingConfig(body.CameraID)
 		if !camConfig.Enabled {
@@ -358,7 +351,6 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Validate recording exists
 	rec, err := h.db.GetRecording(r.Context(), body.RecordingID)
 	if err != nil {
 		logger.Warn("failed to get recording", "error", err, "recording_id", body.RecordingID)
@@ -370,10 +362,9 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Build task
 	ext := ".mp4"
 	outputPath := rec.FilePath + ".transcoded" + ext
-	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+	now := time.Now().UTC().Format(storage.TimeLayout)
 	task := &storage.TranscodeTask{
 		CameraID:     body.CameraID,
 		RecordingID:  body.RecordingID,
@@ -410,7 +401,6 @@ func (h *Handler) handleTranscodingTaskCancel(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Check current task status
 	task, err := h.db.GetTaskByID(r.Context(), id)
 	if err != nil {
 		logger.Warn("failed to get transcode task", "error", err, "task_id", id)
@@ -476,7 +466,6 @@ func (h *Handler) handleTranscodingTaskRetry(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Get the existing task
 	task, err := h.db.GetTaskByID(r.Context(), id)
 	if err != nil {
 		logger.Warn("failed to get transcode task", "error", err, "task_id", id)
@@ -495,7 +484,7 @@ func (h *Handler) handleTranscodingTaskRetry(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Build new pending task from the failed task's parameters
-	now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+	now := time.Now().UTC().Format(storage.TimeLayout)
 	newTask := &storage.TranscodeTask{
 		CameraID:        task.CameraID,
 		RecordingID:     task.RecordingID,
@@ -536,7 +525,6 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Check camera exists in config
 	if h.config != nil {
 		cameraFound := false
 		for _, cam := range h.config.Cameras {
@@ -550,7 +538,6 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		// Check if transcoding is enabled for this camera
 		camConfig := h.config.ResolveTranscodingConfig(cameraID)
 		if !camConfig.Enabled {
 			WriteError(w, http.StatusBadRequest, "transcoding is not enabled for camera "+cameraID)
@@ -567,7 +554,6 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Get total recordings count for this camera
 	allRecordings, err := h.db.ListRecordings(r.Context(), model.RecordingFilter{
 		CameraID: cameraID,
 	})
@@ -577,7 +563,6 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Get recordings without transcode
 	recordings, err := h.db.ListRecordingsWithoutTranscode(r.Context(), cameraID)
 	if err != nil {
 		logger.Warn("failed to list recordings without transcode", "error", err, "camera_id", cameraID)
@@ -595,7 +580,7 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 			continue
 		}
 		outputPath := rec.FilePath + ".transcoded.mp4"
-		now := time.Now().UTC().Format("2006-01-02 15:04:05.999999999")
+		now := time.Now().UTC().Format(storage.TimeLayout)
 		tasks = append(tasks, storage.TranscodeTask{
 			CameraID:        cameraID,
 			RecordingID:     rec.ID,

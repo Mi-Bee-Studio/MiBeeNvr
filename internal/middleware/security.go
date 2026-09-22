@@ -1,9 +1,45 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
+	"sync"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 )
+
+// scriptSrcHashes returns 'sha256-...' source entries for every inline
+// <script> block in the embedded SPA index.html, computed once at first use
+// (#879). Hashing the file that is actually served keeps the policy correct
+// across vite rebuilds. When the file is absent (tests, UI-less builds) or has
+// no inline scripts, it falls back to 'unsafe-inline' — the header must never
+// break the UI it protects.
+var scriptSrcHashes = sync.OnceValue(func() string {
+	data, err := ui.StaticFS.ReadFile("static/index.html")
+	if err != nil {
+		return "'unsafe-inline'"
+	}
+	h := sha256.New()
+	var b strings.Builder
+	for _, m := range inlineScriptRe.FindAllStringSubmatch(string(data), -1) {
+		if strings.Contains(m[1], "src=") {
+			continue // external script tag, covered by 'self'
+		}
+		h.Reset()
+		h.Write([]byte(m[2]))
+		fmt.Fprintf(&b, " 'sha256-%s'", base64.StdEncoding.EncodeToString(h.Sum(nil)))
+	}
+	if b.Len() == 0 {
+		return "'unsafe-inline'"
+	}
+	return b.String()
+})
+
+var inlineScriptRe = regexp.MustCompile(`(?s)<script([^>]*)>(.*?)</script>`)
 
 // defaultFrameAncestors is used when no explicit frame-ancestors policy is
 // configured. 'self' permits the app to be framed only by pages of its own
@@ -40,13 +76,16 @@ func SecurityHeaders(frameAncestors string) func(http.Handler) http.Handler {
 			w.Header().Set("X-XSS-Protection", "1; mode=block")
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-			// CSP: Svelte 5 uses inline styles for dynamic styling; unsafe-inline is required.
+			// CSP: script-src hashes the embedded index.html's inline scripts
+			// (#879) — no blanket 'unsafe-inline' for scripts. Svelte 5 inline
+			// styles keep style-src 'unsafe-inline' (not exploitable without a
+			// script injection first).
 			// wasm-unsafe-eval: required for libde265 WASM H.265 decoder (enables H.265
 			// live playback on plain HTTP without WebCodecs/HTTPS) and ONNX Runtime Web
 			// (browser-side AI inference). connect-src ws:/wss:: WebSocket live streaming.
 			// worker-src blob:: WasmPlayer's decoder worker.
 			// frame-ancestors: controls cross-origin embedding (e.g. fnOS desktop iframe).
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src blob: data: 'self'; media-src blob: 'self'; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors "+ancestors)
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' "+scriptSrcHashes()+" 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src blob: data: 'self'; media-src blob: 'self'; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors "+ancestors)
 			next.ServeHTTP(w, r)
 		})
 	}

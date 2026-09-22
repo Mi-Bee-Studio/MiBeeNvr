@@ -124,7 +124,10 @@ func TestHandleSetup_CustomStoragePath(t *testing.T) {
 	t.Parallel()
 	h, cfgPath := setupTestHandlerForSetup(t)
 
-	body := setupRequest{Username: "admin", Password: "testpassword123", StoragePath: "/tmp/custom-nvr"}
+	// An OS-native absolute path: setup validates with filepath.IsAbs, and a
+	// POSIX-only literal would 400 on Windows.
+	customPath := filepath.Join(t.TempDir(), "custom-nvr")
+	body := setupRequest{Username: "admin", Password: "testpassword123", StoragePath: customPath}
 	b, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(b))
@@ -137,7 +140,7 @@ func TestHandleSetup_CustomStoragePath(t *testing.T) {
 
 	saved, err := config.Load(cfgPath)
 	require.NoError(t, err)
-	require.Equal(t, "/tmp/custom-nvr", saved.Storage.RootDir)
+	require.Equal(t, customPath, saved.Storage.RootDir)
 }
 
 // TestHandleSetup_PreservesPreconfiguredFields locks in the #388 fix: setup
@@ -262,4 +265,44 @@ func TestHandleSetup_TokenIsValid(t *testing.T) {
 	claims, err := middleware.VerifySessionToken(tok, h.config.Auth.PasswordHash, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, username, claims.Sub)
+}
+
+// TestHandleSetup_FirstBootCodeGate pins the #879 first-boot arming: while no
+// admin credentials exist, a non-loopback caller must present the code printed
+// in the NVR terminal; loopback (desktop) callers are exempt.
+func TestHandleSetup_FirstBootCodeGate(t *testing.T) {
+	t.Parallel()
+	h, _ := setupTestHandlerForSetup(t)
+	code, err := h.ArmFirstBootSetup()
+	require.NoError(t, err)
+	require.Len(t, code, 8)
+
+	post := func(setupCode, remote string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(setupRequest{Username: "admin", Password: "testpassword123", SetupCode: setupCode})
+		req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(body))
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.handleSetup(rec, req)
+		return rec
+	}
+
+	require.Equal(t, http.StatusForbidden, post("wrong", "192.168.1.50:1234").Code, "LAN caller with wrong code must be rejected")
+	require.Equal(t, http.StatusOK, post(code, "192.168.1.50:1234").Code, "LAN caller with the printed code passes")
+}
+
+// TestHandleSetup_FirstBootCodeLoopbackExempt: desktop loopback callers do
+// not need the code (the machine's own browser IS the trusted first user).
+func TestHandleSetup_FirstBootCodeLoopbackExempt(t *testing.T) {
+	t.Parallel()
+	h, _ := setupTestHandlerForSetup(t)
+	_, err := h.ArmFirstBootSetup()
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(setupRequest{Username: "admin", Password: "testpassword123"})
+	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Host = "localhost:9090" // IsBypassEligible requires a loopback Host header
+	rec := httptest.NewRecorder()
+	h.handleSetup(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
 }

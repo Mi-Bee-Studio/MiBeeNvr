@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,15 +13,12 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// registerVisionPublicRoutes 注册无需认证的 Vision 端点(与 SSE 一样在 public 组)。
-// 心跳是 Vision 的"我在"信号,不应要求 BasicAuth(Vision 只有 API Key)。
-// 若请求恰好携带了 API Key(心跳 v2 客户端都会带),则用于多实例归因。
-func (h *Handler) registerVisionPublicRoutes(r chi.Router) {
-	r.Post("/api/vision/heartbeat", h.handleVisionHeartbeat)
-}
-
-// registerVisionRoutes 注册需要认证的 Vision 端点(在 protected 组,Web UI 用)。
+// registerVisionRoutes 注册 Vision 端点(在 protected 组)。心跳携带
+// SkipCameras/drops 等状态写操作,必须认证:Vision 心跳 v2 客户端都会带
+// Bearer API Key,BasicAuth/会话 token 亦可。请求携带的 API Key 名
+// 匹配 vision.instances[].api_key_name 时心跳记到该实例。
 func (h *Handler) registerVisionRoutes(r chi.Router) {
+	r.Post("/api/vision/heartbeat", h.handleVisionHeartbeat)
 	r.Get("/api/vision/status", h.handleVisionStatus)
 	r.Get("/api/vision/metrics", h.handleVisionMetrics)
 }
@@ -56,7 +54,7 @@ func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) 
 		Drops   *vision.VisionDrops   `json:"drops"`
 		Metrics *vision.VisionMetrics `json:"metrics"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

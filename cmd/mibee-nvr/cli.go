@@ -41,7 +41,7 @@ var (
 // a host-port conflict. A missing/unreadable auto-detected config is non-fatal
 // and falls through to the default addr.
 func resolveHealthAddr(args []string) (string, error) {
-	addr := ":9090"
+	addr := config.DefaultListenAddr
 	addrExplicit := false   // --addr given: skip all config-based resolution
 	configExplicit := false // --config given: skip Docker auto-detection
 	for i := 2; i < len(args); i++ {
@@ -178,10 +178,10 @@ func parseInitArgs(args []string) initOptions {
 		}
 	}
 	if opts.dataDir == "" {
-		opts.dataDir = "/var/lib/mibee-nvr"
+		opts.dataDir = config.DefaultDataDir
 	}
 	if opts.listenAddr == "" {
-		opts.listenAddr = ":9090"
+		opts.listenAddr = config.DefaultListenAddr
 	}
 	if opts.cfgPath == "" {
 		opts.cfgPath = "mibee-nvr.yaml"
@@ -498,7 +498,6 @@ func cleanupByDate(ctx context.Context, db *sql.DB, storageRoot, beforeDate stri
 		return
 	}
 
-	// 删除文件。
 	var deletedFiles int
 	var freedBytes int64
 	for _, r := range recs {
@@ -513,7 +512,6 @@ func cleanupByDate(ctx context.Context, db *sql.DB, storageRoot, beforeDate stri
 	}
 	fmt.Printf("  Files: %d deleted, %.1f GB freed\n", deletedFiles, float64(freedBytes)/1e9)
 
-	// 删除 DB 行。
 	if result, err := db.ExecContext(ctx,
 		`DELETE FROM recordings WHERE file_path != '' AND started_at < ?`,
 		beforeDate+" 00:00:00"); err == nil {
@@ -522,7 +520,6 @@ func cleanupByDate(ctx context.Context, db *sql.DB, storageRoot, beforeDate stri
 		}
 	}
 
-	// 删除孤儿 AI 事件。
 	if result, err := db.ExecContext(ctx,
 		`DELETE FROM ai_events WHERE recording_id != '' AND recording_id NOT IN (SELECT id FROM recordings)`); err == nil {
 		if n, _ := result.RowsAffected(); n > 0 {
@@ -601,7 +598,6 @@ func cleanupOrphanFiles(ctx context.Context, db *sql.DB, storageRoot string, dry
 		return
 	}
 
-	// 删除孤儿文件。
 	var deleted int
 	var freed int64
 	for _, p := range orphanFiles {

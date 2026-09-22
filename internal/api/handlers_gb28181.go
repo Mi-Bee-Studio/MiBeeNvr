@@ -23,7 +23,6 @@ import (
 func (h *Handler) handleListGB28181Devices(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Parse limit query param
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
 	if limitStr != "" {
@@ -48,7 +47,6 @@ func (h *Handler) handleListGB28181Devices(w http.ResponseWriter, r *http.Reques
 		devices = []storage.GB28181Device{}
 	}
 
-	// Apply limit
 	if len(devices) > limit {
 		devices = devices[:limit]
 	}
@@ -98,7 +96,6 @@ func (h *Handler) handleListGB28181Channels(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Verify device exists
 	dev, err := h.db.GetGB28181Device(ctx, deviceID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to query device")
@@ -183,7 +180,6 @@ func (h *Handler) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify device exists
 	dev, err := h.db.GetGB28181Device(ctx, deviceID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to query device")
@@ -233,7 +229,6 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the channel by scanning all registered devices.
 	var deviceID string
 	var found bool
 	if h.gb28181DeviceMgr != nil {
@@ -251,7 +246,6 @@ func (h *Handler) handleInviteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if device is online
 	dev, ok := h.gb28181DeviceMgr.Device(deviceID)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "device not found")
@@ -913,7 +907,7 @@ func (h *Handler) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Re
 var gbTalkUpgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     checkWSOrigin,
 }
 
 // handleGB28181TalkWS streams the browser microphone to a GB28181 camera's

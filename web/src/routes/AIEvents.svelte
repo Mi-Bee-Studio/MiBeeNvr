@@ -11,8 +11,8 @@
   import { showToast } from '$lib/toast';
   import { classLabel, eventTypeLabel, severityLabel, zoneLabel } from '$lib/ai-labels';
   import { AlertCircle, Brain, ChevronDown, Play, Settings } from 'lucide-svelte';
-  import Pagination from '../components/Pagination.svelte';
-  import VisionMonitorPanel from '../lib/components/VisionMonitorPanel.svelte';
+  import Pagination from '$lib/components/Pagination.svelte';
+  import VisionMonitorPanel from '$lib/components/VisionMonitorPanel.svelte';
   import { getVisionStatus } from '$lib/api';
 
   let events = $state<AIEvent[]>([]);

@@ -244,7 +244,6 @@ func (r *SnapshotCapturer) captureFrame(ctx context.Context) {
 		data = fetched
 	}
 
-	// Create segment if needed
 	r.mu.Lock()
 	if r.curTempPath == "" {
 		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, "timelapse")
@@ -281,7 +280,6 @@ func (r *SnapshotCapturer) captureFrame(ctx context.Context) {
 	}
 	r.recordBytes(int64(len(data)))
 
-	// Check if segment duration elapsed
 	r.mu.Lock()
 	shouldRotate := time.Since(r.segStart) >= r.cfg.SegmentDur
 	r.mu.Unlock()
@@ -336,7 +334,6 @@ func (r *SnapshotCapturer) fetchSnapshot(ctx context.Context) ([]byte, error) {
 			continue
 		}
 
-		// Validate Content-Type
 		ct := resp.Header.Get("Content-Type")
 		ct = strings.ToLower(ct)
 		isJPEG := strings.HasPrefix(ct, "image/jpeg")

@@ -61,7 +61,6 @@ func (m *PeriodicMergeManager) markMergeFailed(ctx context.Context, segments []m
 	}
 	m.retryMu.Unlock()
 
-	// Update progress to 0 for failed merge.
 	m.updateProgressBatch(ctx, failedSegments, 0)
 
 	if m.updater != nil {

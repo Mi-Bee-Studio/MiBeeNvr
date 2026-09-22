@@ -921,10 +921,11 @@ func applyAutoVacuumIncremental(dbPath string) error {
 	return nil
 }
 
-// sqliteTimeFormat is the format used to store timestamps in SQLite.
-// sqliteTimeFormat is the format used to store timestamps in SQLite.
+// TimeLayout is the format used to store timestamps in SQLite.
 // Uses UTC without timezone suffix, compatible with SQLite's datetime() for string comparison.
-const sqliteTimeFormat = "2006-01-02 15:04:05.999999999"
+// Exported as the single source — the api/transcoding packages format with it
+// too, and a diverging literal silently queries empty (#876).
+const TimeLayout = "2006-01-02 15:04:05.999999999"
 
 // timeToDB converts time.Time to a SQLite-compatible string value.
 // Returns nil for zero time (which SQLite stores as NULL).
@@ -932,7 +933,7 @@ func timeToDB(t time.Time) any {
 	if t.IsZero() {
 		return nil
 	}
-	return t.UTC().Format(sqliteTimeFormat)
+	return t.UTC().Format(TimeLayout)
 }
 
 // formatTime formats a time.Time as a SQLite-compatible UTC string.
@@ -941,7 +942,7 @@ func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(sqliteTimeFormat)
+	return t.UTC().Format(TimeLayout)
 }
 
 // parseTime parses a SQLite timestamp string back into time.Time (UTC).
@@ -954,7 +955,7 @@ func parseTime(s string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	// Canonical format (current)
-	if t, err := time.Parse(sqliteTimeFormat, s); err == nil {
+	if t, err := time.Parse(TimeLayout, s); err == nil {
 		return t, nil
 	}
 	// Without fractional seconds (SQLite CURRENT_TIMESTAMP / datetime('now'))

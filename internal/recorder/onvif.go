@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/bluenviron/gortsplib/v5"
@@ -583,7 +585,7 @@ func probeRTSPEncodingFor(rtspURL, username, password string) string {
 		Host:         u.Host,
 		Protocol:     &tcp,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: config.DefaultRTSPTimeout,
 	}
 	if err := client.Start(); err != nil {
 		return ""

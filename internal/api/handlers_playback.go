@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,10 +21,22 @@ import (
 )
 
 // playbackUpgrader is the WebSocket upgrader for AVI recording playback.
+// checkWSOrigin allows non-browser clients (no Origin header) and requires
+// browser origins to match the request host — a cross-site page must not
+// open NVR WebSockets.
+func checkWSOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
 var playbackUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     checkWSOrigin,
 }
 
 // playbackState tracks the control state for a single WS playback connection.
@@ -70,7 +84,6 @@ func (h *Handler) handlePlayback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate and resolve file path.
 	validPath, err := storage.ValidatePath(h.store.RootDir(), rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, "recording file not found")
@@ -114,7 +127,6 @@ func playbackLoop(conn *websocket.Conn, aviPath string) {
 
 	state := &playbackState{}
 
-	// Start control message reader goroutine.
 	go readPlaybackControls(ctx, conn, state, cancel)
 
 	var lastPTS int64
@@ -126,7 +138,6 @@ func playbackLoop(conn *websocket.Conn, aviPath string) {
 		default:
 		}
 
-		// Check pause state.
 		state.mu.Lock()
 		if state.paused {
 			state.mu.Unlock()

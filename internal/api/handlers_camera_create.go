@@ -223,7 +223,6 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		body.ONVIFEndpoint = endpoint
 		body.URL = "" // Don't store in url field for ONVIF
-		// Check for duplicate ONVIF endpoint
 		if h.db != nil {
 			existingCams, _ := h.db.ListCameras(r.Context())
 			for _, ec := range existingCams {
@@ -255,7 +254,6 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("protocol %q: combined format is no longer supported; use separate protocol and encoding fields", proto))
 		return
 	}
-	// Set default encoding if still empty
 	if enc == "" {
 		switch proto {
 		case "rtsp":
@@ -395,7 +393,6 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			logger.Warn("failed to set camera ingest fields", "camera_id", id, "error", err)
 		}
 	}
-	// Return CameraRow with status
 	row, _ := h.db.GetCamera(r.Context(), id)
 	if row != nil {
 		if h.camMgr != nil {

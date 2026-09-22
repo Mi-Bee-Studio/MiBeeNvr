@@ -12,15 +12,26 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func setupEventsHandler(t *testing.T) (*Handler, *event.EventBus) {
 	t.Helper()
 	db, store := setupTestDB(t)
-	h := TestHandler(db, store)
+	h := testHandlerWithAuth(db, store, "admin", eventsTestHash(t))
 	bus := event.NewEventBus(64)
 	h.SetEventBus(bus)
 	return h, bus
+}
+
+// eventsTestHash pins bcrypt to MinCost: the SSE tests below assert timing
+// around the first request, and a cost-10 compare took 100ms+ on loaded CI
+// runners, blowing the fixed waits (flaky on ubuntu, slow on Windows).
+func eventsTestHash(t *testing.T) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("test-pass-12345"), bcrypt.MinCost)
+	require.NoError(t, err)
+	return string(hash)
 }
 
 func TestEvents_SSEHeaders(t *testing.T) {
@@ -66,12 +77,13 @@ func TestEvents_ReceivesPublishedEvent(t *testing.T) {
 		handlerDone.Store(true)
 	}()
 
-	// Wait for handler to start and subscribe.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the handler to authenticate (bcrypt on first request) and
+	// subscribe before publishing.
+	time.Sleep(400 * time.Millisecond)
 
 	// Publish an event.
 	bus.Publish(context.Background(), "onvif.motion", map[string]string{"camera": "front-door"})
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	cancel()
 	time.Sleep(50 * time.Millisecond)
@@ -98,7 +110,7 @@ func TestEvents_FilterByPrefix(t *testing.T) {
 		handlerDone.Store(true)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(400 * time.Millisecond)
 
 	// Publish events with different topics.
 	bus.Publish(context.Background(), "onvif.motion", map[string]string{"camera": "cam-1"})
@@ -145,7 +157,7 @@ func TestEvents_ContextCancellation(t *testing.T) {
 func TestEvents_BusNil(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
-	h := TestHandler(db, store)
+	h := testHandlerWithAuth(db, store, "admin", eventsTestHash(t))
 	// Don't set event bus.
 
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)

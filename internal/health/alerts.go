@@ -89,26 +89,22 @@ func (p *AlertPipeline) HandleEvent(cameraID string, event model.HealthEvent) er
 		event.CreatedAt = now
 	}
 
-	// Get or create emit state
 	state, ok := p.emitStates[key]
 	if !ok {
 		state = &emitState{}
 		p.emitStates[key] = state
 	}
 
-	// Check cooldown
 	if !state.lastEmit.IsZero() && now.Sub(state.lastEmit) < p.cooldown {
 		p.mu.Unlock()
 		return nil // suppressed
 	}
 
-	// Reset escalation window if expired
 	if !state.firstEmit.IsZero() && now.Sub(state.firstEmit) >= escalationWindow {
 		state.count = 0
 		state.firstEmit = now
 	}
 
-	// Set first emit time on first emission
 	if state.firstEmit.IsZero() {
 		state.firstEmit = now
 	}
@@ -120,10 +116,8 @@ func (p *AlertPipeline) HandleEvent(cameraID string, event model.HealthEvent) er
 		event.Status = string(model.HealthStatusError)
 	}
 
-	// Record emit time
 	state.lastEmit = now
 
-	// Update camera status
 	p.cameraStatus[cameraID] = event.Status
 
 	// Track anomaly events for health score (stream_anomaly, freeze_detected)

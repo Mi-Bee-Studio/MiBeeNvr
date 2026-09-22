@@ -68,6 +68,23 @@ jobs:
           # server binary — a bare double-click installs (desktop_entry.go).
           cp mibee-nvr-windows-amd64.exe "MiBeeNVR-Setup-${{ github.ref_name }}-windows-amd64.exe"
 
+      # ---- Home Assistant custom integration (HACS) --------------------------
+      # HACS only discovers custom_components/ at the repository root; this
+      # repo keeps the integration under deploy/home-assistant, so it ships
+      # as a release zip instead (hacs.json: zip_release + filename). The
+      # manifest version inside the zip is stamped from the tag — hacs/default
+      # requires manifest.version to equal the release tag.
+      - name: Package HA integration zip
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p ha-stage/custom_components
+          cp -r deploy/home-assistant/custom_components/mibee_nvr ha-stage/custom_components/
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" \
+            ha-stage/custom_components/mibee_nvr/manifest.json
+          grep '"version"' ha-stage/custom_components/mibee_nvr/manifest.json
+          cd ha-stage && zip -r ../mibee_nvr.zip custom_components && cd ..
+
       # ---- Artifact integrity (#646) ------------------------------------------
       # checksums.txt (sha256sum format) + a raw 64-byte ed25519 signature over
       # it, verified in-process by internal/update (pure Go, stdlib ed25519 —
@@ -113,6 +130,7 @@ jobs:
             mibee-nvr-darwin-arm64
             mibee-nvr-darwin-amd64
             checksums.txt
+            mibee_nvr.zip
 
       - name: Attach release signature
         if: env.SIGNED == 'true'

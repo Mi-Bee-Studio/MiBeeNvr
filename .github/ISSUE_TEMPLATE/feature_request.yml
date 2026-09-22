@@ -1,0 +1,33 @@
+name: 💡 功能建议
+description: 提出新功能或改进建议
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 什么场景下缺这个能力?先说问题,再说方案。
+      placeholder: "例:多路相机时希望按分组批量启停,现在要逐个点。"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望的方案
+      description: 你希望它怎么工作?协议、UI、配置、API 任一层面都可以。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已考虑过的替代方案
+      description: 可选。现有的做法为什么不够用。
+    validations:
+      required: false
+  - type: input
+    id: refs
+    attributes:
+      label: 关联
+      description: 可选。相关 issue / PR / 文档链接。
+    validations:
+      required: false

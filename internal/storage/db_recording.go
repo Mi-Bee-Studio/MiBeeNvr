@@ -238,7 +238,7 @@ func (d *DB) ListRecordings(ctx context.Context, filter model.RecordingFilter) (
 		}
 		if sortBy == "started_at" && strings.EqualFold(sortOrder, "desc") {
 			// The API hands cursors out as RFC3339Nano but started_at is stored in
-			// sqliteTimeFormat (space-separated). Bound raw, SQLite compares TEXT
+			// TimeLayout (space-separated). Bound raw, SQLite compares TEXT
 			// lexicographically and ' ' (0x20) sorts below 'T' (0x54) at offset 10 —
 			// every stored row compared "less than" every cursor, so each page
 			// silently re-served page 1 (#704). Re-format through the storage format

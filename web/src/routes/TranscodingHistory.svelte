@@ -4,7 +4,7 @@
  import type { TranscodeTask } from '$lib/api/transcoding';
  import { listCameras } from '$lib/api';
  import type { Camera } from '$lib/api';
- import Pagination from '../components/Pagination.svelte';
+ import Pagination from '$lib/components/Pagination.svelte';
  import { t } from '$lib/i18n';
  import { showToast } from '$lib/toast';
  import { formatDate, formatDuration } from '$lib/format';

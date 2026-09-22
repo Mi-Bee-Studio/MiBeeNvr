@@ -32,7 +32,6 @@ func (zm *ZoneManager) AddZone(zone ROIZone) error {
 	zm.mu.Lock()
 	defer zm.mu.Unlock()
 
-	// Check for duplicate zone name per camera.
 	for _, existing := range zm.zones[zone.CameraID] {
 		if existing.Name == zone.Zone.Name {
 			return fmt.Errorf("ai: zone %q already exists for camera %q", zone.Zone.Name, zone.CameraID)

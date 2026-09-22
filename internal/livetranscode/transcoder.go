@@ -199,21 +199,18 @@ func (lt *LiveTranscoder) Start(ctx context.Context) error {
 		return nil
 	}
 
-	// Create stdin pipe
 	stdin, err := lt.cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("livetranscode: stdin pipe: %w", err)
 	}
 	lt.stdinPipe = stdin
 
-	// Create stdout pipe
 	stdout, err := lt.cmd.StdoutPipe()
 	if err != nil {
 		stdin.Close()
 		return fmt.Errorf("livetranscode: stdout pipe: %w", err)
 	}
 
-	// Start FFmpeg
 	if err := lt.cmd.Start(); err != nil {
 		stdin.Close()
 		stdout.Close()
@@ -292,7 +289,6 @@ func (lt *LiveTranscoder) Stop() error {
 		}
 	}
 
-	// Wait for monitor goroutine
 	lt.monitorWg.Wait()
 
 	return nil

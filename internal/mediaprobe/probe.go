@@ -15,8 +15,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 )
 
 // MediaInfo holds the metadata extracted from a media file.
@@ -37,7 +35,7 @@ type MediaInfo struct {
 //
 // Returns an error if the file is not a parseable MP4 or has no video track.
 func ProbeMP4(filePath string) (*MediaInfo, error) {
-	seg, err := merge.ParseSegment(filePath)
+	seg, err := ParseSegment(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("mediaprobe: parse MP4: %w", err)
 	}
@@ -75,7 +73,7 @@ func ProbeMP4(filePath string) (*MediaInfo, error) {
 // Cheaper than ProbeMP4 when only duration is needed, though ParseSegment
 // already avoids reading mdat so the difference is negligible.
 func ProbeDuration(filePath string) (float64, error) {
-	seg, err := merge.ParseSegment(filePath)
+	seg, err := ParseSegment(filePath)
 	if err != nil {
 		return 0, fmt.Errorf("mediaprobe: parse duration: %w", err)
 	}
@@ -90,7 +88,7 @@ func ProbeDuration(filePath string) (float64, error) {
 // Use this when you only need the duration (e.g. the `repair duration` CLI).
 // For other metadata (codec, resolution, SPS/PPS), use ProbeMP4 or ProbeDuration.
 func FastProbeDuration(filePath string) (float64, error) {
-	dur, err := merge.ParseSegmentDurationOnly(filePath)
+	dur, err := ParseSegmentDurationOnly(filePath)
 	if err != nil {
 		return 0, fmt.Errorf("mediaprobe: fast probe duration: %w", err)
 	}
@@ -101,9 +99,9 @@ func FastProbeDuration(filePath string) (float64, error) {
 func resolutionFromSPS(codec string, sps []byte) (width, height int, err error) {
 	switch codec {
 	case "h264":
-		return merge.ParseSPSResolution(sps)
+		return ParseSPSResolution(sps)
 	case "h265":
-		return merge.ParseHEVCSPSResolution(sps)
+		return ParseHEVCSPSResolution(sps)
 	default:
 		return 0, 0, fmt.Errorf("mediaprobe: no SPS parser for codec %q", codec)
 	}

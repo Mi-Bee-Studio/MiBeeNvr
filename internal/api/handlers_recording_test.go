@@ -249,7 +249,6 @@ func TestBatchDeleteRecordings_Success(t *testing.T) {
 	h := TestHandler(db, store)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	// Create files
 	rec1 := makeRecording("batch-1", "cam-1", "h264", now, false)
 	rec1.FilePath = filepath.Join(store.RootDir(), "batch-1.mp4")
 	require.NoError(t, os.WriteFile(rec1.FilePath, []byte("data1"), 0o644))

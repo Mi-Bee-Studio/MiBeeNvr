@@ -32,8 +32,8 @@ type Manager struct {
 
 	// Per-segment writer states (#750), keyed by temp path: classification,
 	// camera attribution, retained FD + coalescing buffer for the append path.
-	// Replaces the former global write mutex — each state carries its own lock
-	// so cameras no longer serialize through one another.
+	// Each state carries its own lock; cameras never serialize through one
+	// another.
 	statesMu      sync.RWMutex
 	segmentStates map[string]*segmentWriter
 
@@ -670,7 +670,6 @@ func (m *Manager) GetDiskUsage() (total int64, used int64, err error) {
 	// Used = total - free
 	used = total - free
 
-	// Update storage metrics
 	if m.metrics != nil {
 		m.metrics.StorageUsedBytes.Set(float64(used))
 		m.metrics.StorageTotalBytes.Set(float64(total))
@@ -732,7 +731,6 @@ func (m *Manager) CleanupTempFiles() error {
 					return nil // skip inaccessible entries
 				}
 				if !d.IsDir() {
-					// Remove .tmp files
 					if strings.HasSuffix(d.Name(), ".tmp") {
 						if m.isActiveTemp(path) {
 							return nil // in-flight segment — protected

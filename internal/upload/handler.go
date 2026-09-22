@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -52,38 +52,38 @@ type uploadResponse struct {
 func (h *Handler) handleUploadJPEG(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "camera_id")
 	if err := h.validateCamera(r.Context(), cameraID); err != nil {
-		api.WriteError(w, http.StatusNotFound, err.Error())
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	ct := r.Header.Get("Content-Type")
 	if ct != "image/jpeg" {
-		api.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type %q, expected image/jpeg", ct))
+		httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type %q, expected image/jpeg", ct))
 		return
 	}
 
 	data, oversized, err := readBody(r.Body, h.maxUploadSize)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to read request body")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to read request body")
 		return
 	}
 	if oversized {
-		api.WriteError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("upload exceeds maximum size of %d bytes", h.maxUploadSize))
+		httpx.WriteError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("upload exceeds maximum size of %d bytes", h.maxUploadSize))
 		return
 	}
 
 	tempPath, finalPath, err := h.storageMgr.CreateSegment(cameraID, string(model.FormatMJPEG))
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to create segment")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to create segment")
 		return
 	}
 
 	if _, err := h.storageMgr.WriteFrame(tempPath, data); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to write frame")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to write frame")
 		return
 	}
 
 	if err := h.storageMgr.CloseSegment(tempPath, finalPath); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to close segment")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to close segment")
 		return
 	}
 
@@ -101,7 +101,7 @@ func (h *Handler) handleUploadJPEG(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to save recording metadata")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to save recording metadata")
 		return
 	}
 
@@ -120,35 +120,35 @@ func (h *Handler) handleUploadJPEG(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleUploadBatch(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "camera_id")
 	if err := h.validateCamera(r.Context(), cameraID); err != nil {
-		api.WriteError(w, http.StatusNotFound, err.Error())
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	ct := r.Header.Get("Content-Type")
 	if !strings.HasPrefix(ct, "multipart/form-data") {
-		api.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type %q, expected multipart/form-data", ct))
+		httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type %q, expected multipart/form-data", ct))
 		return
 	}
 
 	if err := r.ParseMultipartForm(h.maxUploadSize); err != nil {
-		api.WriteError(w, http.StatusBadRequest, "failed to parse multipart form")
+		httpx.WriteError(w, http.StatusBadRequest, "failed to parse multipart form")
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
 
 	if r.MultipartForm == nil || r.MultipartForm.File == nil {
-		api.WriteError(w, http.StatusBadRequest, "no files in upload")
+		httpx.WriteError(w, http.StatusBadRequest, "no files in upload")
 		return
 	}
 
 	files := r.MultipartForm.File["frames"]
 	if len(files) == 0 {
-		api.WriteError(w, http.StatusBadRequest, "no frames found in upload")
+		httpx.WriteError(w, http.StatusBadRequest, "no frames found in upload")
 		return
 	}
 
 	tempPath, finalPath, err := h.storageMgr.CreateSegment(cameraID, string(model.FormatMJPEG))
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to create segment")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to create segment")
 		return
 	}
 
@@ -156,24 +156,24 @@ func (h *Handler) handleUploadBatch(w http.ResponseWriter, r *http.Request) {
 	for _, fh := range files {
 		f, err := fh.Open()
 		if err != nil {
-			api.WriteError(w, http.StatusInternalServerError, "failed to open uploaded file")
+			httpx.WriteError(w, http.StatusInternalServerError, "failed to open uploaded file")
 			return
 		}
 		data, err := io.ReadAll(io.LimitReader(f, h.maxUploadSize))
 		f.Close()
 		if err != nil {
-			api.WriteError(w, http.StatusInternalServerError, "failed to read uploaded file")
+			httpx.WriteError(w, http.StatusInternalServerError, "failed to read uploaded file")
 			return
 		}
 		if _, err := h.storageMgr.WriteFrame(tempPath, data); err != nil {
-			api.WriteError(w, http.StatusInternalServerError, "failed to write frame")
+			httpx.WriteError(w, http.StatusInternalServerError, "failed to write frame")
 			return
 		}
 		totalSize += int64(len(data))
 	}
 
 	if err := h.storageMgr.CloseSegment(tempPath, finalPath); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to close segment")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to close segment")
 		return
 	}
 
@@ -191,7 +191,7 @@ func (h *Handler) handleUploadBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to save recording metadata")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to save recording metadata")
 		return
 	}
 
@@ -218,38 +218,38 @@ var allowedVideoTypes = map[string]bool{
 func (h *Handler) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "camera_id")
 	if err := h.validateCamera(r.Context(), cameraID); err != nil {
-		api.WriteError(w, http.StatusNotFound, err.Error())
+		httpx.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	ct := r.Header.Get("Content-Type")
 	if !allowedVideoTypes[ct] {
-		api.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type %q, expected video/mp4, video/avi, video/quicktime, or video/x-matroska", ct))
+		httpx.WriteError(w, http.StatusBadRequest, fmt.Sprintf("unsupported content type %q, expected video/mp4, video/avi, video/quicktime, or video/x-matroska", ct))
 		return
 	}
 
 	data, oversized, err := readBody(r.Body, h.maxUploadSize)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to read request body")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to read request body")
 		return
 	}
 	if oversized {
-		api.WriteError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("upload exceeds maximum size of %d bytes", h.maxUploadSize))
+		httpx.WriteError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("upload exceeds maximum size of %d bytes", h.maxUploadSize))
 		return
 	}
 
 	tempPath, finalPath, err := h.storageMgr.CreateSegment(cameraID, string(model.FormatH264))
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to create segment")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to create segment")
 		return
 	}
 
 	if _, err := h.storageMgr.WriteFrame(tempPath, data); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to write frame")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to write frame")
 		return
 	}
 
 	if err := h.storageMgr.CloseSegment(tempPath, finalPath); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to close segment")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to close segment")
 		return
 	}
 
@@ -267,7 +267,7 @@ func (h *Handler) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to save recording metadata")
+		httpx.WriteError(w, http.StatusInternalServerError, "failed to save recording metadata")
 		return
 	}
 

@@ -1,6 +1,10 @@
 package ai
 
-import "time"
+import (
+	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+)
 
 // Detection represents a single object detection result from the AI inference engine.
 // BBox is a bounding box in normalized coordinates [x1, y1, x2, y2] where each value
@@ -23,18 +27,8 @@ type DetectionEvent struct {
 	FrameHeight int         `json:"frame_height"` // original frame height in pixels
 }
 
-// ROI defines a region of interest as a closed polygon. Points are specified in
-// normalized coordinates (each coordinate in [0, 1]) relative to the frame dimensions.
-// The polygon is assumed to be implicitly closed (last point connects back to first).
-type ROI struct {
-	Name   string       `json:"name"`   // human-readable name for the region (e.g. "driveway", "front-door")
-	Points [][2]float64 `json:"points"` // polygon vertices in normalized coordinates
-}
+// ROI/ROIZone are part of the config schema and live in model; these aliases
+// keep package-qualified references compiling.
+type ROI = model.ROI
 
-// ROIZone binds an ROI to a specific camera and controls whether AI detection
-// should be filtered to only include objects within this zone.
-type ROIZone struct {
-	CameraID string `json:"camera_id"` // kebab-case camera identifier
-	Zone     ROI    `json:"zone"`      // the region of interest definition
-	Enabled  bool   `json:"enabled"`   // whether this zone filter is active
-}
+type ROIZone = model.ROIZone

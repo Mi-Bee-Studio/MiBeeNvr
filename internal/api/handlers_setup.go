@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +19,10 @@ type setupRequest struct {
 	Password    string `json:"password"`
 	Language    string `json:"language,omitempty"`
 	StoragePath string `json:"storage_path,omitempty"`
+	// SetupCode is the first-boot arming code printed to the terminal/log
+	// (#879). Required from non-loopback callers until setup completes;
+	// loopback (desktop local_bypass) callers are exempt.
+	SetupCode string `json:"setup_code,omitempty"`
 }
 
 // handleSetup handles POST /api/setup — first-time initialization.
@@ -35,7 +40,6 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate username
 	if strings.TrimSpace(req.Username) == "" {
 		WriteError(w, http.StatusBadRequest, "username is required")
 		return
@@ -44,6 +48,14 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// Validate password (same rule as CLI: min 8 chars)
 	if len(req.Password) < 8 {
 		WriteError(w, http.StatusBadRequest, "password must be at least 8 characters")
+		return
+	}
+
+	// First-boot arming (#879): while no admin credentials exist, a LAN peer
+	// must not be able to claim the account — the code is only visible on the
+	// machine's own terminal/log. Loopback callers (desktop) are exempt.
+	if h.setupCode != "" && !middleware.IsBypassEligible(r) && req.SetupCode != h.setupCode {
+		WriteError(w, http.StatusForbidden, "setup code required — see the NVR startup log/terminal (设置校验码见 NVR 启动日志/终端)")
 		return
 	}
 
@@ -66,7 +78,7 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// next restart (#434) — reject it here, with a hint at the mounted data
 	// volume, instead of letting the wizard save a boot-looping config.
 	if userPath != "" {
-		if !strings.HasPrefix(userPath, "/") {
+		if !filepath.IsAbs(userPath) {
 			WriteError(w, http.StatusBadRequest, "storage path must be an absolute path")
 			return
 		}
@@ -88,7 +100,7 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 			if info, err := os.Stat("/data"); err == nil && info.IsDir() {
 				dataDir = "/data"
 			} else {
-				dataDir = "/var/lib/mibee-nvr"
+				dataDir = config.DefaultDataDir
 			}
 		}
 	}

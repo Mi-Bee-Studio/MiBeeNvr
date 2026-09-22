@@ -275,7 +275,7 @@ func TestUpdateRecordingAIStatusStampsProcessedAt(t *testing.T) {
 
 // TestListRecordingsCursorPagination (#704): the cursor handed out by the API
 // is RFC3339Nano ("2026-09-06T04:06:52.145295Z") while started_at is stored in
-// sqliteTimeFormat ("2006-01-02 15:04:05.999999999"). Bound raw, the predicate
+// TimeLayout ("2006-01-02 15:04:05.999999999"). Bound raw, the predicate
 // compared 'T' (0x54) against ' ' (0x20) lexicographically — every stored row
 // sorted below every cursor, so page 2 silently returned page 1 again.
 func TestListRecordingsCursorPagination(t *testing.T) {

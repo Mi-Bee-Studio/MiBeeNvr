@@ -8,6 +8,7 @@ export {
   getToken,
   clearToken,
   getTokenForUrl,
+  appendAuthToken,
   isAuthenticated,
   isLocalBypass,
   login,

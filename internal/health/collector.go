@@ -117,7 +117,6 @@ func (s *StreamStatsCollector) OnFrame(cameraID string) func(pts int64, au [][]b
 				stats.lastIDRTime.Store(now)
 				stats.idrCount.Add(1)
 			} else {
-				// Check H.265 IDR
 				h265Type := (au[0][0] >> 1) & 0x3F
 				if h265Type == 19 || h265Type == 20 { // H.265 IDR
 					now := time.Now()
@@ -224,7 +223,6 @@ func (s *StreamStatsCollector) CheckAndReset() {
 			s.m.StreamBitrateKbps.WithLabelValues(cameraID).Set(bitrate / 1000)
 		}
 
-		// Check FPS threshold
 		if minFPS > 0 && fps < minFPS && frameCount > 0 {
 			streak := s.incrementAnomalyStreak(cameraID, anomalyKeyFPS)
 			if streak >= minConsecutiveChecks {
@@ -240,7 +238,6 @@ func (s *StreamStatsCollector) CheckAndReset() {
 			s.resetAnomalyStreak(cameraID, anomalyKeyFPS)
 		}
 
-		// Check bitrate change
 		s.mu.Lock()
 		prevBps, had := s.prevBitrate[cameraID]
 		s.prevBitrate[cameraID] = bitrate

@@ -726,7 +726,7 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 			FileSize:   fileSize,
 		}
 		recordingID = rec.ID
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
+		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
 			ingestLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
 	}
@@ -745,7 +745,6 @@ func (r *IngestRecorder) closeCurrentSegmentLocked() {
 		})
 	}
 
-	// Update metrics for the completed segment.
 	if r.frameCount > 0 && finalExists {
 		r.recordSegmentCreated()
 		if fileSize > 0 {

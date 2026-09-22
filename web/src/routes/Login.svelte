@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { login, isAuthenticated, tryGatewaySession } from '$lib/api';
-  import ThemeToggle from '../components/ThemeToggle.svelte';
-  import LanguageSwitcher from '../components/LanguageSwitcher.svelte';
+  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
   import { withBase } from '$lib/base-path';
   import { Eye, EyeOff } from 'lucide-svelte';

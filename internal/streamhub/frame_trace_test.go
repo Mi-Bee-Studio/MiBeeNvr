@@ -7,6 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 
 	"github.com/stretchr/testify/require"
 )
@@ -79,6 +82,11 @@ func TestStreamHub_BroadcastLogsFrameTrace(t *testing.T) {
 	t.Helper()
 	hub, ch := newCaptureHub(t, "test-cam")
 	defer slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	defer frametrace.Disable("test-cam")
+	// Traces only flow while the camera is sampled (#875 H2): the unsampled
+	// Debug fallback is gone, so pin the sampled path explicitly.
+	frametrace.SetLogger(slog.New(ch))
+	frametrace.Enable("test-cam", 5*time.Minute)
 	blockCh := make(chan struct{})
 	var received atomic.Int32
 	err := hub.Subscribe("sub", func(pts int64, au [][]byte) {

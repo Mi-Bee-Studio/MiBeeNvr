@@ -201,7 +201,6 @@ func (m *Muxer) WriteVideo(frame []byte, ptsMicroseconds int64) error {
 		length: uint32(chunkDataLen),
 	})
 
-	// Write 00dc chunk.
 	m.put32(fcc00dc)
 	m.put32(uint32(chunkDataLen))
 	m.write(frame)
@@ -238,7 +237,6 @@ func (m *Muxer) WriteAudio(data []byte, ptsMicroseconds int64) error {
 		length: uint32(chunkDataLen),
 	})
 
-	// Write 01wb chunk.
 	m.put32(fcc01wb)
 	m.put32(uint32(chunkDataLen))
 	m.write(data)
