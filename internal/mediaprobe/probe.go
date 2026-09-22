@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
 )
 
 // MediaInfo holds the metadata extracted from a media file.

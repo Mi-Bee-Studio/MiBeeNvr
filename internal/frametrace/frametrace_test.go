@@ -111,13 +111,12 @@ func TestLogEscalation(t *testing.T) {
 	before := len(h.all())
 	Log("cam-off", "stage", "ingest")
 	require.Len(t, h.all()[before:], 0, "unsampled camera logs nothing")
-	recs := h.all()
 
 	Enable("cam-on", 5*time.Second)
 	t.Cleanup(func() { Disable("cam-on") })
 	Log("cam-on", "stage", "ingest")
 	LogDrop("cam-on", "stage", "ws_drop")
-	recs = h.all()
+	recs := h.all()
 	require.GreaterOrEqual(t, len(recs), 2)
 	var infoCount int
 	for _, r := range recs[len(recs)-2:] {

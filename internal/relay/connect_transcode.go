@@ -3,9 +3,10 @@ package relay
 import (
 	"context"
 	"fmt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"net/url"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/livetranscode"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"

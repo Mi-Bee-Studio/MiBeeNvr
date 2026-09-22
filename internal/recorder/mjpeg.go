@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 

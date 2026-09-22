@@ -65,7 +65,8 @@ linters:
       - path: _test\.go
         linters: [errcheck, noctx, gocritic, contextcheck, nilnil, bodyclose]
       # rationale: Legacy packages with mixed nil patterns — nilnil/ineffassign disabled pending refactor
-      - path: internal/(onvif|upload|merge|storage|ftp|wsstream)/
+      # (mediaprobe joined when the merge parser moved there, #877)
+      - path: internal/(onvif|upload|merge|storage|ftp|wsstream|mediaprobe)/
         linters: [nilnil, ineffassign]
       # rationale: Third-party adapted code (go2rtc) — response body handling follows upstream pattern
       - path: internal/xiaomi/

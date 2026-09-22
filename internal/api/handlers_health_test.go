@@ -399,7 +399,6 @@ func TestHealth_CameraAggregation_EmptyHealth(t *testing.T) {
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
-
 }
 
 func TestHealth_CameraAggregation_OfflineStatus(t *testing.T) {

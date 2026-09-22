@@ -3,12 +3,13 @@ package recorder
 import (
 	"context"
 	"fmt"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 

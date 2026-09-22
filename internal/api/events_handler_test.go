@@ -11,19 +11,27 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func setupEventsHandler(t *testing.T) (*Handler, *event.EventBus) {
 	t.Helper()
 	db, store := setupTestDB(t)
-	hash, err := middleware.HashPassword("test-pass-12345")
-	require.NoError(t, err)
-	h := testHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", eventsTestHash(t))
 	bus := event.NewEventBus(64)
 	h.SetEventBus(bus)
 	return h, bus
+}
+
+// eventsTestHash pins bcrypt to MinCost: the SSE tests below assert timing
+// around the first request, and a cost-10 compare took 100ms+ on loaded CI
+// runners, blowing the fixed waits (flaky on ubuntu, slow on Windows).
+func eventsTestHash(t *testing.T) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("test-pass-12345"), bcrypt.MinCost)
+	require.NoError(t, err)
+	return string(hash)
 }
 
 func TestEvents_SSEHeaders(t *testing.T) {
@@ -149,9 +157,7 @@ func TestEvents_ContextCancellation(t *testing.T) {
 func TestEvents_BusNil(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
-	hash, err := middleware.HashPassword("test-pass-12345")
-	require.NoError(t, err)
-	h := testHandlerWithAuth(db, store, "admin", hash)
+	h := testHandlerWithAuth(db, store, "admin", eventsTestHash(t))
 	// Don't set event bus.
 
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
