@@ -91,4 +91,10 @@ failures. Every new test must satisfy them:
 - Subject line: `type(scope): summary` — matches the existing history
   (`feat(...)`, `fix(...)`, `docs(...)`, `refactor(...)`).
 - Reference the issue number in the PR body (`Closes #N`).
+- **No AI-assistant attribution in commit messages.** Never include AI
+  co-author trailers, "generated with ..." footers, or robot-emoji
+  markers — AI-assisted work is fine, but credited authorship is the
+  person opening the PR. CI rejects violating PR/push messages, and a
+  local hook can catch them before push: `git config core.hooksPath
+  .githooks`.
 - CI must be green and the branch up to date with `main` before merge.

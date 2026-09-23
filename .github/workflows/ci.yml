@@ -48,7 +48,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
+      # Full history so the commit-message gate can scan base..HEAD below.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
@@ -57,6 +60,28 @@ jobs:
           version: v2.12.2
       - name: Lint markdown fences (MD040)
         run: npx --yes markdownlint-cli2
+
+      # AI-assistant attribution (co-author trailers, "Generated with ...")
+      # must never reach main — a squash merge carries the PR title/body and
+      # commit messages verbatim, so gate all three.
+      - name: Reject AI attribution in commit messages
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          msgs=$(mktemp)
+          if [ -n "$PR_BASE" ]; then
+            git log --format=%B "$PR_BASE..HEAD" >> "$msgs"
+            printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" >> "$msgs"
+          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            git log --format=%B "$PUSH_BEFORE..$GITHUB_SHA" >> "$msgs" 2>/dev/null || git log --format=%B -1 >> "$msgs"
+          else
+            git log --format=%B -1 >> "$msgs"
+          fi
+          scripts/check-no-ai-attribution.sh "$msgs"
+
 
       # Relative links must resolve inside the repo (#412): the website docs
       # center syncs docs/{zh,en}/ and maps repo-relative links to site pages —

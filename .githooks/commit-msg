@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Local gate mirroring the CI check: block AI attribution in commit
+# messages. Enable with: git config core.hooksPath .githooks
+exec "$(git rev-parse --show-toplevel)/scripts/check-no-ai-attribution.sh" "$1"
