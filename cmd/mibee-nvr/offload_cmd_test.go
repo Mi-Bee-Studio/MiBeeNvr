@@ -39,6 +39,20 @@ func (f *cliFakeStore) Put(_ context.Context, key string, body io.Reader, _ int6
 	return `"cli-etag"`, nil
 }
 
+func (f *cliFakeStore) GetRange(_ context.Context, key string, start, end int64) (io.ReadCloser, objectstore.ObjectInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.objects[key]
+	if !ok {
+		return nil, objectstore.ObjectInfo{}, objectstore.ErrObjectNotFound
+	}
+	if end < 0 || end >= int64(len(b)) {
+		end = int64(len(b)) - 1
+	}
+	info := objectstore.ObjectInfo{Key: key, Size: int64(len(b))}
+	return io.NopCloser(bytes.NewReader(b[start : end+1])), info, nil
+}
+
 func (f *cliFakeStore) Head(_ context.Context, key string) (objectstore.ObjectInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

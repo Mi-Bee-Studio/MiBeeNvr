@@ -100,16 +100,27 @@ func buildMaintenanceDeps(deps *appDeps) (timelapseSourceDeleter, *snapshot.Capt
 		}
 		deps.offloadStore = os
 		deps.offloadMgr = offload.NewManager(db, offload.Options{
-			Store:        os,
-			Budget:       deps.ioBudget,
-			Prefix:       rc.Prefix,
-			ScanInterval: time.Duration(rc.Upload.ScanIntervalS) * time.Second,
-			MinAge:       time.Duration(rc.Upload.MinAgeS) * time.Second,
-			Workers:      rc.Upload.MaxConcurrency,
-			BacklogLimit: rc.Upload.BacklogLimit,
+			Store:          os,
+			Budget:         deps.ioBudget,
+			Prefix:         rc.Prefix,
+			ScanInterval:   time.Duration(rc.Upload.ScanIntervalS) * time.Second,
+			MinAge:         time.Duration(rc.Upload.MinAgeS) * time.Second,
+			Workers:        rc.Upload.MaxConcurrency,
+			BacklogLimit:   rc.Upload.BacklogLimit,
+			EvictAfterDays: time.Duration(rc.Evict.AfterDays) * 24 * time.Hour,
+			OnStatusCounts: func(counts map[string]int) {
+				for status, n := range counts {
+					m.OffloadOutboxRows.WithLabelValues(status).Set(float64(n))
+				}
+			},
+			OnUploaded: func(bytes int64) {
+				m.OffloadUploadedBytesTotal.Add(float64(bytes))
+			},
 		})
+		deps.offloadProxy = offload.NewProxy(os, offload.ProxyOptions{})
 		slog.Info("remote offload enabled",
-			"bucket", rc.Bucket, "prefix", rc.Prefix, "workers", rc.Upload.MaxConcurrency)
+			"bucket", rc.Bucket, "prefix", rc.Prefix, "workers", rc.Upload.MaxConcurrency,
+			"auto_evict_after_days", rc.Evict.AfterDays)
 	}
 
 	// Wire the opt-in delete_recordings_after_merge source deleter into the

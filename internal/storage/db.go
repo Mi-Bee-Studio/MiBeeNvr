@@ -267,8 +267,14 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // (pending → uploading → uploaded → evicted, terminal skipped). Pure addition;
 // no column changes to existing tables.
 //
+// v41: added offload_outbox.started_at/ended_at/duration/format (issue #874
+// batch 2 — remote playback needs timeline metadata on the outbox row, since
+// eviction deletes the recordings row). Ensured via idempotent ALTER +
+// one-shot backfill from recordings (rows whose recording row is already
+// gone stay empty and are excluded from remote listings).
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "40"
+const currentSchemaVersion = "41"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -564,6 +570,11 @@ func (d *DB) Init(ctx context.Context) error {
 
 	// ── Column backfill for pre-v38 databases: camera_groups.position ──
 	if err := d.ensureCameraGroupsPositionColumn(ctx); err != nil {
+		return err
+	}
+
+	// ── v41 (issue #874 batch 2): offload_outbox timeline metadata ──
+	if err := d.ensureOffloadOutboxMetadataColumns(ctx); err != nil {
 		return err
 	}
 

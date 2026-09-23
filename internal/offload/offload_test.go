@@ -6,6 +6,7 @@ package offload
 // cap, iobudget tenancy, key derivation.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -48,6 +49,23 @@ func (f *fakeStore) Put(_ context.Context, key string, body io.Reader, _ int64) 
 	f.objects[key] = b
 	f.puts = append(f.puts, key)
 	return `"fake-etag"`, nil
+}
+
+func (f *fakeStore) GetRange(_ context.Context, key string, start, end int64) (io.ReadCloser, objectstore.ObjectInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.objects[key]
+	if !ok {
+		return nil, objectstore.ObjectInfo{}, objectstore.ErrObjectNotFound
+	}
+	if start >= int64(len(b)) {
+		return nil, objectstore.ObjectInfo{}, objectstore.ErrRangeNotSatisfiable
+	}
+	if end < 0 || end >= int64(len(b)) {
+		end = int64(len(b)) - 1
+	}
+	info := objectstore.ObjectInfo{Key: key, Size: int64(len(b)), ETag: `"fake-etag"`}
+	return io.NopCloser(bytes.NewReader(b[start : end+1])), info, nil
 }
 
 func (f *fakeStore) Head(_ context.Context, key string) (objectstore.ObjectInfo, error) {
@@ -315,4 +333,52 @@ func TestManagerUploadRetryOnStoreError(t *testing.T) {
 	store.putErr = nil
 	store.mu.Unlock()
 	waitForStatus(t, db, storage.OffloadStatusUploaded, 1)
+}
+
+func TestManagerAutoEvictAfterDays(t *testing.T) {
+	m, db, store, _ := newManagerEnv(t, func(o *Options) {
+		o.EvictAfterDays = 7 * 24 * time.Hour
+		o.EvictInterval = 50 * time.Millisecond
+	})
+	rec := seedMergedRecording(t, db, "ae-1", "camA", 2*time.Hour, "auto-evict-me")
+
+	// Deterministic clock: upload happens "now"; evict eligibility is judged
+	// 8 days later.
+	now := time.Now().UTC()
+	m.nowFn = func() time.Time { return now.Add(8 * 24 * time.Hour) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, m.Start(ctx))
+	defer func() { _ = m.Stop() }()
+
+	// Upload completes (judged at the advanced clock — fine), then the evict
+	// loop finds it confirmed 8 days ago > after_days=7 and evicts.
+	require.Eventually(t, func() bool {
+		counts, _ := db.CountOffloadByStatus(context.Background())
+		return counts[storage.OffloadStatusEvicted] == 1
+	}, 15*time.Second, 100*time.Millisecond, "auto-evict must fire after the retention window")
+
+	_, statErr := os.Stat(rec.FilePath)
+	require.True(t, os.IsNotExist(statErr), "local file must be evicted")
+	require.Equal(t, 1, store.putCount(), "object must remain (exactly one upload)")
+}
+
+func TestManagerAutoEvictDisabledByDefault(t *testing.T) {
+	m, db, store, _ := newManagerEnv(t, func(o *Options) {
+		o.EvictInterval = 50 * time.Millisecond // fast loop, after_days = 0
+	})
+	seedMergedRecording(t, db, "ae-2", "camA", 2*time.Hour, "never-evicted")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, m.Start(ctx))
+	defer func() { _ = m.Stop() }()
+
+	waitForStatus(t, db, storage.OffloadStatusUploaded, 1)
+	assert.Never(t, func() bool {
+		counts, _ := db.CountOffloadByStatus(context.Background())
+		return counts[storage.OffloadStatusEvicted] > 0
+	}, 2*time.Second, 100*time.Millisecond, "after_days=0 must never auto-evict")
+	_ = store
 }

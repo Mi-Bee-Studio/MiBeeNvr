@@ -245,3 +245,100 @@ func TestOffloadBacklogCount(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, backlog, "only pending+uploading counts as backlog")
 }
+
+func TestOffloadItemMetadataPersisted(t *testing.T) {
+	db := newOffloadTestDB(t)
+	ctx := context.Background()
+
+	rec := insertMergedRecording(t, db, "meta-1", "camA", 2*time.Hour, 42)
+	inserted, err := db.EnqueueOffload(ctx, OffloadItem{
+		RecordingID: rec.ID, CameraID: "camA", ObjectKey: "k-meta",
+		LocalPath: rec.FilePath, FileSize: rec.FileSize,
+		StartedAt: rec.StartedAt, EndedAt: rec.EndedAt,
+		Duration: rec.Duration, Format: string(rec.Format),
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+
+	items, err := db.ListOffloadRemote(ctx, OffloadRemoteFilter{Statuses: []string{OffloadStatusPending}}, 10, 0)
+	require.NoError(t, err)
+	// Listing is remote-status-scoped by default; pending not included under
+	// the evicted-only default, so query explicitly.
+	require.Len(t, items, 1)
+	assert.Equal(t, rec.ID, items[0].RecordingID)
+	assert.Equal(t, "h264", items[0].Format)
+	assert.InDelta(t, 3600, items[0].Duration, 0.001)
+	assert.WithinDuration(t, rec.StartedAt, items[0].StartedAt, time.Second)
+	assert.WithinDuration(t, rec.EndedAt, items[0].EndedAt, time.Second)
+}
+
+func TestListOffloadRemoteEvictedOnly(t *testing.T) {
+	db := newOffloadTestDB(t)
+	ctx := context.Background()
+
+	// One evicted (with metadata), one uploaded, one pending.
+	evicted := insertMergedRecording(t, db, "r-ev", "camA", 3*time.Hour, 10)
+	uploaded := insertMergedRecording(t, db, "r-up", "camA", 2*time.Hour, 10)
+	pending := insertMergedRecording(t, db, "r-pend", "camB", 2*time.Hour, 10)
+	for _, rec := range []*model.Recording{evicted, uploaded, pending} {
+		_, err := db.EnqueueOffload(ctx, OffloadItem{
+			RecordingID: rec.ID, CameraID: rec.CameraID, ObjectKey: "k-" + rec.ID,
+			LocalPath: rec.FilePath, FileSize: rec.FileSize,
+			StartedAt: rec.StartedAt, EndedAt: rec.EndedAt,
+			Duration: rec.Duration, Format: string(rec.Format),
+		})
+		require.NoError(t, err)
+	}
+	evictedOutboxID := int64(-1)
+	for _, rec := range []*model.Recording{evicted, uploaded} {
+		items, err := db.ClaimPendingOffload(ctx, 1)
+		require.NoError(t, err)
+		require.Len(t, items, 1)
+		require.NoError(t, db.MarkOffloadUploaded(ctx, items[0].ID, `"e"`, 10))
+		if rec.ID == evicted.ID {
+			evictedOutboxID = items[0].ID
+		}
+	}
+	require.NotEqual(t, int64(-1), evictedOutboxID)
+	require.NoError(t, db.MarkOffloadEvicted(ctx, evictedOutboxID))
+
+	// Default listing: evicted only.
+	remote, err := db.ListOffloadRemote(ctx, OffloadRemoteFilter{}, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, remote, 1)
+	assert.Equal(t, evicted.ID, remote[0].RecordingID)
+
+	// Camera filter.
+	remote, err = db.ListOffloadRemote(ctx, OffloadRemoteFilter{CameraID: "camB"}, 10, 0)
+	require.NoError(t, err)
+	assert.Empty(t, remote)
+
+	// Metadata-less rows (pre-v41 leftovers) are excluded, not garbage rows.
+	_, err = db.db.ExecContext(ctx, `UPDATE offload_outbox SET started_at='' WHERE recording_id=?`, evicted.ID)
+	require.NoError(t, err)
+	remote, err = db.ListOffloadRemote(ctx, OffloadRemoteFilter{}, 10, 0)
+	require.NoError(t, err)
+	assert.Empty(t, remote, "rows without metadata cannot be placed on a timeline — excluded")
+}
+
+func TestOffloadMetadataBackfill(t *testing.T) {
+	db := newOffloadTestDB(t)
+	ctx := context.Background()
+
+	// A row enqueued WITHOUT metadata (batch-1 shape), recording row alive.
+	rec := insertMergedRecording(t, db, "bf-1", "camA", 2*time.Hour, 10)
+	_, err := db.EnqueueOffload(ctx, OffloadItem{
+		RecordingID: rec.ID, CameraID: "camA", ObjectKey: "k-bf",
+		LocalPath: rec.FilePath, FileSize: rec.FileSize,
+	})
+	require.NoError(t, err)
+
+	n, err := db.BackfillOffloadMetadata(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+
+	items, err := db.ListOffloadRemote(ctx, OffloadRemoteFilter{Statuses: []string{OffloadStatusPending}}, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "h264", items[0].Format)
+}

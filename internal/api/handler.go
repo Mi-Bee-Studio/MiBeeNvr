@@ -252,7 +252,10 @@ type Handler struct {
 	// Storage-migration (handlers_storage_migrate.go): the background
 	// idle-time migrator service. Nil in tests — the endpoints degrade.
 	migrationMgr StorageMigrator
-	gb28181PTZ   *platform.PTZController
+	// Remote offload playback proxy (handlers_offload.go, issue #874 batch
+	// 2). Nil = remote offload disabled — endpoints degrade to 404.
+	offloadPlayback OffloadPlaybackProxy
+	gb28181PTZ      *platform.PTZController
 	// ptzSuppress blinds the pixgate pixel gate while a PTZ command moves
 	// the camera (global scene change must not read as activity).
 	ptzSuppress    func(cameraID string)
@@ -381,6 +384,7 @@ func (h *Handler) Routes() http.Handler {
 		// for unauthenticated listeners; browsers pass ?token=, integrations
 		// use API keys (#879).
 		r.Get("/api/events", h.handleEvents)
+		h.registerOffloadRoutes(r)
 	})
 
 	return r
@@ -434,6 +438,10 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	// always returns 401, so it cannot be used to bypass the direct login.
 	r.Get("/api/auth/gateway-session", h.handleGatewaySession)
 	r.Get("/models/{filename}", h.handleServeModel) // Public for browser-side AI model loading
+	// Remote offload playback proxy (issue #874 batch 2) — same exposure
+	// class as /download above: <video>/fetches arrive without credentials.
+	r.Get("/api/offload/objects/{id}", h.handleOffloadObject)
+	r.Head("/api/offload/objects/{id}", h.handleOffloadObject)
 	// WHIP push-in ingest (#369): browsers/OBS cannot send auth headers with
 	// the SDP POST, and the stream key IS the credential (RTMP/SRT streamid
 	// threat model). Must NOT be rate-limited — media sessions are long-lived.

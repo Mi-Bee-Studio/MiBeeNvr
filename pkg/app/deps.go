@@ -112,6 +112,7 @@ type appDeps struct {
 	// recordings. nil = storage.remote disabled.
 	offloadMgr   *offload.Manager
 	offloadStore objectstore.Store
+	offloadProxy *offload.Proxy
 
 	// HTTP layer
 	handler    *api.Handler
