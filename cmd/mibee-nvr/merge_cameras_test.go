@@ -133,8 +133,12 @@ func TestMergeDiskDirectories_Manifest(t *testing.T) {
 
 func TestMergeDiskDirectories_EmptySource(t *testing.T) {
 	t.Helper()
-	// Test with non-existent source directory
-	srcDir := "/nonexistent/path"
+	// Non-existent source directory — under a temp parent so it is missing
+	// on every OS. A root-level "/nonexistent/path" resolves against the
+	// CURRENT DRIVE on Windows, where an elevated earlier run may have
+	// created it; a rename from such a drive-relative path then fails
+	// ERROR_NOT_SAME_DEVICE (#891).
+	srcDir := filepath.Join(t.TempDir(), "nonexistent", "path")
 	dstDir, err := os.MkdirTemp("", "merge-dst-*")
 	if err != nil {
 		t.Fatalf("failed to create dst temp dir: %v", err)

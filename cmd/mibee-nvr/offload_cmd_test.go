@@ -120,7 +120,11 @@ func TestRunOffloadEvictDryRunByDefault(t *testing.T) {
 	err := runOffloadEvict(db, store, config.RemoteStorageConfig{}, offloadEvictFlags{AllUploaded: true}, &out)
 	require.NoError(t, err)
 	assert.Contains(t, out.String(), "DRY-RUN")
-	assert.Contains(t, out.String(), "eligible 1 item(s)")
+	// The full CLI output rides along in the failure message: an empty
+	// eligible count prints its REFUSED reasons on the next lines, which is
+	// the difference between "window bug" and "remote verify refused"
+	// (#891 Windows triage).
+	assert.Contains(t, out.String(), "eligible 1 item(s)", "full evict output:\n%s", out.String())
 
 	// Dry-run changes nothing.
 	counts, err := db.CountOffloadByStatus(context.Background())
@@ -135,7 +139,7 @@ func TestRunOffloadEvictExecuteAllUploaded(t *testing.T) {
 	var out bytes.Buffer
 	err := runOffloadEvict(db, store, config.RemoteStorageConfig{}, offloadEvictFlags{AllUploaded: true, Execute: true}, &out)
 	require.NoError(t, err)
-	assert.Contains(t, out.String(), "evicted 1")
+	assert.Contains(t, out.String(), "evicted 1", "full evict output:\n%s", out.String())
 
 	counts, err := db.CountOffloadByStatus(context.Background())
 	require.NoError(t, err)

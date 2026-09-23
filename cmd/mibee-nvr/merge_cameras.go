@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -354,7 +355,7 @@ func runMergeCameras() int {
 				if err := os.MkdirAll(filepath.Dir(srcPath), 0o755); err != nil {
 					continue
 				}
-				if err := os.Rename(dstPath, srcPath); err == nil {
+				if err := moveFile(dstPath, srcPath); err == nil {
 					movedBack++
 				}
 			}
@@ -508,8 +509,8 @@ func mergeDiskDirectories(ctx context.Context, srcDir, dstDir, namePrefix, renam
 		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
 			return fmt.Errorf("mkdir %q: %w", filepath.Dir(dstPath), err)
 		}
-		if err := os.Rename(path, dstPath); err != nil {
-			return fmt.Errorf("rename %q → %q: %w", path, dstPath, err)
+		if err := moveFile(path, dstPath); err != nil {
+			return fmt.Errorf("move %q → %q: %w", path, dstPath, err)
 		}
 		moved++
 		manifest = append(manifest, dstPath)
@@ -520,6 +521,61 @@ func mergeDiskDirectories(ctx context.Context, srcDir, dstDir, namePrefix, renam
 	}
 	removeEmptyDirs(srcDir)
 	return moved, manifest, nil
+}
+
+// osRename is the rename seam (tests force the cross-device failure).
+var osRename = os.Rename
+
+// moveFile moves src to dst, falling back to copy+delete when the two live
+// on different filesystems — os.Rename cannot cross a device boundary, which
+// a merge between two mounted roots (eMMC ↔ USB HDD) or a Windows
+// cross-volume/drive-relative rename hits with EXDEV / ERROR_NOT_SAME_DEVICE
+// (#891).
+func moveFile(src, dst string) error {
+	err := osRename(src, dst)
+	if err == nil {
+		return nil
+	}
+	if !isCrossDeviceErr(err) {
+		return err
+	}
+	if cerr := copyFileFallback(src, dst); cerr != nil {
+		return cerr
+	}
+	return os.Remove(src)
+}
+
+// isCrossDeviceErr reports whether err is a cross-device rename failure.
+// Errno 17 is EXDEV on Unix and ERROR_NOT_SAME_DEVICE on Windows — the same
+// number covers both platforms.
+func isCrossDeviceErr(err error) bool {
+	if errors.Is(err, syscall.EXDEV) {
+		return true
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && errno == 17
+}
+
+// copyFileFallback copies src's content and permissions to dst.
+func copyFileFallback(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // removeEmptyDirs removes root and its now-empty subdirectories bottom-up.

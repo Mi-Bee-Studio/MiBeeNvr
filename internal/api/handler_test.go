@@ -1033,7 +1033,10 @@ func TestListFrames_MJPEG_DirectoryNotFound(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	rec := makeRecording("rec-nodir", "cam-1", "mjpeg", now, false)
-	rec.FilePath = "/nonexistent/path/that/does/not/exist"
+	// Missing dir under a temp parent — deterministic on every OS. A
+	// root-level "/nonexistent/…" resolves against the CURRENT DRIVE on
+	// Windows, where a previous elevated run may have created it (#891).
+	rec.FilePath = filepath.Join(t.TempDir(), "frames-gone")
 	seedRecording(t, db, rec)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/recordings/rec-nodir/frames", nil, "", "")

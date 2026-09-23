@@ -369,14 +369,16 @@ func (d *DB) CountOffloadBacklog(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// ListOffloadEvictable returns up to limit 'uploaded' items confirmed before
-// the given timestamp — the evict candidate set.
+// ListOffloadEvictable returns up to limit 'uploaded' items confirmed at or
+// before the given timestamp — the evict candidate set. The boundary is
+// inclusive: an upload confirmed exactly at the cutoff instant is confirmed
+// "as of" that instant (matters for --all-uploaded, whose cutoff is now).
 func (d *DB) ListOffloadEvictable(ctx context.Context, confirmedBefore time.Time, limit int) ([]OffloadItem, error) {
 	rows, err := d.readConn().QueryContext(ctx, `
 		SELECT id, recording_id, camera_id, object_key, local_path, file_size, status,
 			etag, bucket, uploaded_size, attempts, last_error, created_at, uploaded_at
 		FROM offload_outbox
-		WHERE status='uploaded' AND uploaded_at != '' AND uploaded_at < ?
+		WHERE status='uploaded' AND uploaded_at != '' AND uploaded_at <= ?
 		ORDER BY uploaded_at ASC
 		LIMIT ?`, timeToDB(confirmedBefore), limit)
 	if err != nil {
