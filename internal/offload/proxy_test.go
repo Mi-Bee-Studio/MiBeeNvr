@@ -88,7 +88,7 @@ func TestProxyServesRangeAndCoalesces(t *testing.T) {
 
 func mustServe(t *testing.T, p *Proxy, ctx context.Context, key string, start, end, total int64) io.ReadCloser {
 	t.Helper()
-	rc, err := p.ServeRange(ctx, key, start, end, total)
+	rc, err := p.ServeRange(ctx, "", key, start, end, total)
 	require.NoError(t, err)
 	return rc
 }
@@ -147,7 +147,7 @@ func TestProxyFetchErrorPropagates(t *testing.T) {
 	p, _, _, _ := newProxyEnv(t, nil)
 	ctx := context.Background()
 
-	_, err := p.ServeRange(ctx, "missing.mp4", 0, 100, 1<<20)
+	_, err := p.ServeRange(ctx, "", "missing.mp4", 0, 100, 1<<20)
 	assert.ErrorIs(t, err, objectstore.ErrObjectNotFound)
 }
 
