@@ -41,6 +41,39 @@ func setupHealthHandler(t *testing.T, mgr HealthManager) *Handler {
 
 // --- GET /api/health (public) tests ---
 
+// TestHealth_CamerasCountsPresentWithoutDetails pins the client-compat
+// contract of the PUBLIC health payload: bare camera counters must be
+// present (MiBeeScout ≤ current release identifies an NVR by
+// cameras.total in /api/health — discovery and manual connect both rely
+// on it), while per-camera fleet details (names/ids) must stay behind
+// auth on /api/health/cameras (#879).
+func TestHealth_CamerasCountsPresentWithoutDetails(t *testing.T) {
+	t.Parallel()
+	mgr := &mockHealthManager{
+		allHealth: map[string]*model.CameraHealth{
+			"cam-a": {CameraID: "cam-a", LatestStatus: "healthy"},
+			"cam-b": {CameraID: "cam-b", LatestStatus: "reconnecting"},
+		},
+	}
+	h := setupHealthHandler(t, mgr)
+	require.NoError(t, h.db.UpsertCamera(context.Background(), "cam-a", "客厅", "rtsp", "", "", "", "", "", "", "", ""))
+	require.NoError(t, h.db.UpsertCamera(context.Background(), "cam-b", "门口", "rtsp", "", "", "", "", "", "", "", ""))
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var raw map[string]any
+	parseJSON(t, rr, &raw)
+	cameras, ok := raw["cameras"].(map[string]any)
+	require.True(t, ok, "public /api/health must carry cameras counts (client compat)")
+	require.EqualValues(t, 2, cameras["total"])
+	require.EqualValues(t, 1, cameras["recording"])
+	require.EqualValues(t, 1, cameras["reconnecting"])
+	_, hasDetails := cameras["details"]
+	require.False(t, hasDetails, "fleet details must stay behind auth")
+	require.NotContains(t, rr.Body.String(), "客厅")
+}
+
 func TestHealth_Endpoint_DeviceIdentity(t *testing.T) {
 	t.Parallel()
 	h := setupHealthHandler(t, nil)

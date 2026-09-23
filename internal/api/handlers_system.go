@@ -135,7 +135,19 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// The per-camera detail stays behind auth (/api/health/cameras,
 		// #879): a public endpoint must not leak the camera fleet's names
 		// and topology. camHealth is still computed for the goroutine
-		// tripwire scaling below.
+		// tripwire scaling below — and projected into the response as
+		// bare counters (HealthCameraCounts), which old LAN clients
+		// (MiBeeScout discovery/manual connect) require to identify the
+		// NVR (#899).
+		if camHealth != nil {
+			resp.Cameras = &HealthCameraCounts{
+				Total:        camHealth.Total,
+				Recording:    camHealth.Recording,
+				Reconnecting: camHealth.Reconnecting,
+				Error:        camHealth.Error,
+				Offline:      camHealth.Offline,
+			}
+		}
 	}
 
 	// Goroutine check — threshold scales with the camera fleet.
