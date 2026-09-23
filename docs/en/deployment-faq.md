@@ -1,6 +1,6 @@
 # Deployment FAQ — NAS Packaging, Port Conflicts, Auto-Upgrade
 
-> Applies to v0.11.0+. Covers upgrade mechanics and port-conflict protection across NAS platforms.
+> Applies to v0.13.0+. Covers upgrade mechanics and port-conflict protection across NAS platforms.
 > Chinese version: `docs/zh/deployment-faq.md`.
 
 ## Contents
@@ -52,7 +52,7 @@ docker compose --profile auto-update up -d   # starts Watchtower
 curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
 
 # or pin a version
-sudo install.sh --version v0.12.0
+sudo install.sh --version v0.13.0
 ```
 
 ### 1.4 Should we build an in-app one-click self-upgrade?

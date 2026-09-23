@@ -8,16 +8,16 @@ Most endpoints require authentication via HTTP Basic Auth. See [Authentication](
 
 | Section | File | Description |
 |---------|------|-------------|
-| Authentication | [authentication.md](authentication.md) | Login, setup, capabilities, basic auth usage |
-| Health & System | [system.md](system.md) | Health check, readiness check, system stats |
+| Authentication | [authentication.md](authentication.md) | Login, password change (loopback), setup, capabilities, basic auth usage, v0.13 auth scope changes |
+| Health & System | [system.md](system.md) | Health check, readiness check, system stats, one-click upgrade, system management (shutdown / listen change, loopback only) |
 | Health Monitoring | [health-monitoring.md](health-monitoring.md) | Camera health status, stability scores, health events |
-| Cameras | [cameras.md](cameras.md) | Camera CRUD, test connection, start/stop, snapshots, adaptive trigger, per-camera storage root |
+| Cameras | [cameras.md](cameras.md) | Camera CRUD, test connection, start/stop, snapshots, adaptive trigger, per-camera storage root, camera groups |
 | Streaming | [streaming.md](streaming.md) | HLS, WebRTC, HTTP-FLV, WebSocket streaming, camera protocols |
 | Camera Stats & Events | [camera-details.md](camera-details.md) | Recording stats, camera event stream (SSE) |
-| ONVIF | [onvif.md](onvif.md) | PTZ control, presets, imaging, network, users, discovery |
-| Recordings | [recordings.md](recordings.md) | List, get, delete, download recordings, timelapse frames |
+| ONVIF | [onvif.md](onvif.md) | PTZ control, presets, imaging, network, users, discovery, event subscription status |
+| Recordings | [recordings.md](recordings.md) | List, get, delete, download recordings, timelapse frames (incl. batch) |
 | Archives | [archives.md](archives.md) | Archive groups, retention management |
-| Settings | [settings.md](settings.md) | System stats, settings CRUD, merge/streaming/transcoding settings, storage candidates & migration, MiBeeVision integration status |
+| Settings | [settings.md](settings.md) | System stats, settings CRUD, merge/streaming/transcoding/RTSP output settings, storage candidates & migration, MiBeeVision integration status & runtime metrics |
 | GB28181 | [../gb28181-guide.md](../gb28181-guide.md) | GB/T 28181 platform: devices/channels, catalog refresh, alarms, PTZ, device-side recording search & playback |
 | Xiaomi | [xiaomi.md](xiaomi.md) | Cloud auth, captcha, device management |
 | Merge & Timelapse Config | [merge.md](merge.md) | Merge status, pending counts, camera merge/timelapse config |
@@ -25,7 +25,7 @@ Most endpoints require authentication via HTTP Basic Auth. See [Authentication](
 | Relay | [relay-guide.md](../relay-guide.md) | Push-out relay presets, camera relay status |
 | AI Detection | [ai-detection.md](ai-detection.md) | AI config, ROI zones, model serving, AI event API (browser-side inference) |
 | Events | [events.md](events.md) | Event stream (SSE), camera events, telemetry |
-| Timelapse & Protocols | [timelapse-protocols.md](timelapse-protocols.md) | Timelapse status, supported protocols, feature flags |
+| Timelapse & Protocols | [timelapse-protocols.md](timelapse-protocols.md) | Timelapse status, merge-output frame batches, supported protocols, feature flags |
 | Backup | [backup.md](backup.md) | Create/list database backups |
 | Error Responses | [errors.md](errors.md) | Error codes, HTTP status codes, common examples |
 | Prometheus Metrics | [../metrics.md](../metrics.md) | All Prometheus metric definitions, types, labels, and usage |

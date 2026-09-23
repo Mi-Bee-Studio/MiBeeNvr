@@ -62,6 +62,32 @@ storage:
   root_dir: "/var/lib/mibee-nvr"   # Change to your preferred path (e.g. /mnt/external/nvr)
   segment_duration: "30s"          # MP4 segment duration (max 30s on RPi)
 
+  # Remote object-storage offload (#874, default OFF): merged recordings are
+  # asynchronously uploaded to an S3-compatible store (AWS S3 / MinIO /
+  # Cloudflare R2 / B2 / OSS / COS) as a cold backup — local recording is
+  # unchanged; optionally evict local copies after upload confirmation
+  # (`mibee-nvr offload evict`). The remote object is NEVER deleted by the NVR.
+  # See docs/{zh,en}/storage-offload.md.
+  # remote:
+  #   enabled: false
+  #   endpoint_url: "https://s3.example.com"   # S3 API endpoint (required when enabled)
+  #   region: "auto"                            # default "auto"
+  #   bucket: "nvr-archive"                     # required when enabled
+  #   # path_style: true                        # path-style addressing (default true; AWS virtual-hosted → false)
+  #   # Credentials support ${VAR} env references — expanded at runtime, so
+  #   # secrets never need to live in this file (a Settings-UI save round-trips
+  #   # the reference instead of writing the plaintext back):
+  #   access_key_id: "${S3_ACCESS_KEY}"
+  #   secret_access_key: "${S3_SECRET_KEY}"
+  #   # prefix: "recordings"                    # object-key root (default "recordings")
+  #   # upload:
+  #   #   max_concurrency: 1                    # parallel PUTs (default 1 — home uplink is the bottleneck)
+  #   #   scan_interval_s: 60                   # discovery sweep cadence (default 60)
+  #   #   min_age_s: 900                        # merged recording closed ≥15m before upload (60–86400)
+  #   #   backlog_limit: 5000                   # cap pending+uploading rows (0 = unlimited)
+  #   # evict:
+  #   #   after_days: 0                         # 0 (default) = upload-only, never evict; manual `offload evict` CLI
+
 # Authentication
 # Option 1: Set password_hash (generate with: mibee-nvr hash-password <pw>)
 # Option 2: Set password in plaintext (auto-converted to hash on first run)
@@ -240,6 +266,18 @@ cleanup:
 #  # the unbounded foreground I/O itself is the problem:
 #  #recording_writes_budgeted: false # Recording segment writes join as the "recording" tenant.
 #  #playback_reads_budgeted: false   # API media serving (playback/download) joins as the "playback" tenant.
+
+# Process memory self-discipline (#756). A conservative GOMEMLIMIT is set at
+# startup — min(45% of physical RAM, 1GiB), or ~80% of a cgroup limit when
+# tighter — so the Go heap leaves room for the page cache recording I/O
+# depends on. The native GOMEMLIMIT env var always wins over everything.
+# Defaults need no configuration; every knob is operator-tunable.
+#memory:
+#  # soft_limit_bytes: 0          # Explicit GOMEMLIMIT override (0 = auto heuristic; min 64MiB)
+#  # disable_auto_limit: false    # Restore the Go runtime default (no GOMEMLIMIT)
+#  # auto_physical_percent: 45    # Share of physical RAM for the heap tier (default 45)
+#  # auto_cap_bytes: 1073741824   # Cap of the physical tier on big hosts (default 1GiB)
+#  # auto_cgroup_percent: 80      # Share taken from a cgroup ceiling (default 80)
 
 # Segment merging — combine short segments into longer recordings
 # Two independent systems:
@@ -492,17 +530,27 @@ observability:
 #   password: ""                     # Metrics endpoint password
 #   password_hash: ""                 # Metrics endpoint password hash (bcrypt)
 
-# In-app version check (sensing layer ONLY — never executes an upgrade).
+# In-app version check (sensing layer ONLY — never executes an upgrade itself).
 # The backend polls GitHub Releases with ETag conditional requests (304s do not
 # count against the unauthenticated rate limit) and exposes the result at
 # /api/update/check + /api/version for the UI to show a "new version" badge.
-# Real upgrades are done by an external tool (Watchtower), the NAS app store, or
-# `docker compose pull && up -d`.
+# Real upgrades stay explicit: Docker deployments use an external tool
+# (Watchtower), the NAS app store, or `docker compose pull && up -d`; bare-metal
+# Linux uses `sudo mibee-nvr update` (or opts into auto_apply below).
+# See docs/{zh,en}/deployment-autoupdate.md.
 # update:
 #   enabled: true                     # Gate the background check (default: true)
 #   channel: "stable"                 # Release stream; only "stable" implemented
 #   check_interval: "1h"              # Poll cadence (time.Duration; min 1m)
 #   repo: "Mi-Bee-Studio/MiBeeNvr"   # GitHub "owner/name" to check
+#   # auto_apply: false               # Opt-in bare-metal EXECUTION (#647): a newly detected stable
+#   #                                 # release is installed via the mibee-nvr-update.service root
+#   #                                 # helper (polkit-authorized), sha256+ed25519 verified, rolled back
+#   #                                 # automatically if the health gate fails. Linux bare-metal only —
+#   #                                 # docker/desktop builds never self-apply.
+#   # download_mirror: ""             # Base URL replacing "https://github.com" for release downloads
+#   #                                 # (#649; ghproxy-style path-preserving mirror; the version CHECK
+#   #                                 # still hits the GitHub API; no fallback to GitHub on failure)
 
 # GB/T 28181 national-standard platform access (v0.11.0+, OFF by default).
 # SIP-capable cameras (Hikvision/Dahua/Uniview...) REGISTER to the NVR and

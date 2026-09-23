@@ -49,7 +49,7 @@ Settings → Devices & Services → Add Integration → **MiBee NVR**.
 
 ## Requirements on the NVR side
 
-- MiBee NVR **v0.12.0+** with the built-in RTSP output enabled (default) for
+- MiBee NVR **v0.13.0+** with the built-in RTSP output enabled (default) for
   H.264/H.265 streaming.
 - `latest-frame` thumbnails work out of the box for JPEG-family cameras; for
   H.264/H.265 cameras they additionally require the optional FFmpeg on the NVR

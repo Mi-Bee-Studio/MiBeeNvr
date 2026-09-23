@@ -6,13 +6,70 @@
 
 | 起始 → 目标 | 状态 | 需要的操作 |
 |------------|------|----------|
-| **0.11.x → 0.12.0** | 🟢 **透明升级（一处注意）** | 无破坏性 API 变更；数据库增量迁移自动完成；国标默认媒体传输改 TCP 被动。详见 [0.11.x → 0.12.0](#011x--v0120)。 |
-| **0.10.x → 0.11.0** | 🟡 **需阅读许可与 API 变更** | 许可证变更（AGPL-3.0）；一个 API 响应字段改名；纯 HTTP AAC 直播音频降级。详见 [0.10.x → 0.11.0](#010x--v0110)。 |
+| **0.12.x → 0.13.0** | 🟡 **需阅读安全收紧与默认值变化** | 若干端点移入鉴权组、`?token=` 透传移除；数据库 schema v40（不可降级）；HLS/MJPEG/合并默认值变化。详见 [0.12.x → 0.13.0](#012x--0130)。 |
+| **0.11.x → 0.12.0** | 🟢 **透明升级（一处注意）** | 无破坏性 API 变更；数据库增量迁移自动完成；国标默认媒体传输改 TCP 被动。详见 [0.11.x → 0.12.0](#011x--0120)。 |
+| **0.10.x → 0.11.0** | 🟡 **需阅读许可与 API 变更** | 许可证变更（AGPL-3.0）；一个 API 响应字段改名；纯 HTTP AAC 直播音频降级。详见 [0.10.x → 0.11.0](#010x--0110)。 |
 | **v0.9.1 → v0.10.0** | 🟡 **需要操作** | 拆分组合 `protocol` 字符串；可选的磁盘回收。详见 [v0.9.1 → v0.10.0](#v091--v0100)。 |
 | v0.9.0 → v0.9.1 | 🟢 透明升级 | 无需操作。 |
 | v0.8.x → v0.9.x | 🟡 先备份 | 大型存储层重构。备份数据库后升级。 |
 | v0.8.x → 0.10.0 | 🟡 两步走 | 先升级到 v0.9.x，再升级到 0.10.0。 |
-| **< v0.9.x → v0.10.0** | 🔴 **不支持（直升级）** | **必须**先升级到 0.9.x —— 原因见 [下文](#低于-v09x--v0100-不支持直升级)。 |
+| **< v0.9.x → v0.10.0** | 🔴 **不支持（直升级）** | **必须**先升级到 0.9.x —— 原因见 [下文](#低于-v09x--v0100不支持直升级)。 |
+
+---
+
+## 0.12.x → 0.13.0
+
+0.13.0 是一次大版本发布：**对象存储冷备**（S3 兼容异步上传）、**分层录制 + 像素域门控**（智能编码器相机全链路方案）、**Windows / macOS 桌面版**、**裸机自动更新**（签名校验 + 失败自动回滚）、**I/O 预算调度**与**录像写卡顿根除**。数据库增量迁移自动完成，但以下行为变更需要知晓：
+
+### 🔴 安全收紧（#879）
+
+- **下载与回放端点移入鉴权路由组**：`/api/recordings/{id}/download`、`/api/recordings/{id}/merged`、延时合并下载、回放分段（`/api/cameras/{id}/playback/*`）、`/api/events`、`/api/health/cameras` 在 v0.12.x 可匿名访问，现在要求与其它 API 相同的凭证（Basic Auth / API Key / 会话 cookie / Bearer token 均可）。**用脚本或第三方工具匿名拉取这些端点的集成需要补上凭证**
+- **移除 base64 旧版 `?token=` 透传**——请改用 `Authorization: Bearer` 会话 token、URL 签名 token 或 API Key
+- `local_bypass` 增加跨站请求拒绝（`Sec-Fetch-Site: cross-site` 的浏览器请求不再免鉴权）；CSP `script-src` 收紧为内联哈希——仅影响向页面注入自定义脚本的魔改部署
+- **无凭据首启**：未设置密码直接启动时，终端会打印一次性 setup 校验码，首跑向导需输入它完成初始化（本机环回访问豁免）
+
+### 🔴 数据库 schema v33 → v40（不可降级）
+
+首次启动自动增量迁移：新增相机分组（v36–v38）、`motion_confidence`（v34）、AI 事件来源（v35）、分层录制数据回填（v39）、`offload_outbox`（v40）。**迁移后无法回退到 v0.12.x 二进制**——升级前务必备份 `mibee-nvr.db` 与配置文件。
+
+### 🟡 存储与合并默认值变化
+
+- **HLS `low_latency` 默认改为开启**：未显式配置即低延迟 HLS（实际部署自该功能上线起就运行在 LL 模式，键此前是死的）；显式 `low_latency: false` 回到经典分段播放列表
+- **MJPEG 录像段默认改为单文件 AVI 容器**（消除 SD/eMMC 每帧文件的元数据抖动）：存量目录形段仍可正常播放；相机级 `http_jpeg_avi` 键废弃（旧配置不报错），新键 `mjpeg_form: dir` 可显式回退；存量段可用 `mibee-nvr repair mjpeg-containerize` 一次性迁移
+- **闪断碎片批量折叠默认开启**（`merge.rolling_fragment_hold_s` 未配置 = 300s）：闪断相机的碎片按批折叠而非逐个重写整桶——IO 负载显著下降属预期；显式设 `0` 关闭
+- `merge.rolling_bucket_retain` 默认 `2`：画质摆动相机（如小米 HD/SD 切换）会各保留一个桶，磁盘占用略增；显式设 `1` 恢复旧单桶行为
+- `merge.transcode_grace` 默认 `90s`：带转码任务相机的新鲜段延迟至多 90 秒才折叠（修复转码/合并竞态；设 `"0s"` 恢复立即折叠）
+- **`cleanup` 校验收紧**：`disk_threshold_percent` 合法域 50–99、`retention_days` 1–3650，且 Web 设置与启动加载同源校验——v0.12.x 设置页存得进去的越界值（如 20%）升级后会被拒绝，另新增 last-good 配置备份启动恢复（这正是 v0.12 崩溃循环 bug 的修复）
+
+### 🟡 其它行为变更
+
+- `POST /api/auth/password` 不再要求旧密码——本机环回请求（桌面版菜单栏/托盘配套）可直接改密；远程仍需登录会话
+- 第三方库 stdlib 日志限流默认每 10 秒 1 条（`observability.stdlog_throttle`），修复 journald 被刷爆；设 `off` 关闭
+- FTP 未配置专用凭据时回退管理员账号并打印启动警告（明文协议建议配置独立弱权限凭据 `ftp.username` / `ftp.password`）
+- 桌面版（Windows/macOS）默认只监听 `127.0.0.1` 且本机免密登录，不对局域网暴露；开放局域网需在托盘/菜单栏显式修改监听地址
+
+### 🟢 新特性速览
+
+- **对象存储冷备**：合并完成的录像异步上传到 S3 兼容存储（AWS S3 / MinIO / Cloudflare R2 / B2 / OSS / COS），上传校验后可安全逐出本地副本——见[对象存储冷备](storage-offload.md)
+- **分层录制 + 像素域门控**：智能编码器相机（静态 ~0.5fps / 5MP VBR）子码流 24/7 连续基线 + 主码流按需、约 1fps 采样的经典 CV 细门控，不依赖相机侧配合——见[自适应录制](adaptive-recording.md)
+- **Windows / macOS 桌面版**：单文件安装器（Setup.exe / DMG）、系统托盘与 macOS 菜单栏、本机免密——见[桌面版](desktop.md)
+- **裸机自动更新**：release 产物 ed25519 签名校验、健康门失败自动回滚、Web 设置页一键升级与升级历史（`update.auto_apply` 默认关闭）
+- **I/O 预算调度**：后台任务（合并 / 清理 / 修复 / 延时 / 转码 / offload）共享令牌桶，不再与前台平等争抢磁盘 IO；`io.recording_writes_budgeted` / `io.playback_reads_budgeted` 两个灰度开关默认关闭——见[性能调优](performance.md)
+- **录像写卡顿根除**：MP4 段增量落盘（消除 Close 时全文件突发写）；每段独立写锁，相机间写盘不再互相串行化
+- **内存自适应**：按物理内存 / cgroup 配额自动设置 GOMEMLIMIT，小内存板子不再 OOM（`memory:` 配置块）
+- **全局录像默认开关** `recording.default_enabled`：纯直播部署一键关闭录像
+- **相机分组**：Web UI 拖拽分组 / 排序 / 重命名（`/api/cameras/groups`）
+- **RTSP 输出支持 MJPEG/JPEG**（RTP-JPEG）；H.264/H.265 最新帧截图（可选 FFmpeg）与 MQTT 快照触发
+- **HMAC 签名 webhook 触发端点**：`POST /api/trigger/webhook/{camera_id}`，Stripe 风格签名 + 双向防重放——见 [Webhook 集成](webhook-integration.md)
+- **MQTT 事件总线转发**（`mqtt.status_events`）与定时强制录像窗口（`{"action":"record","duration":"60s"}`）
+- **ONVIF 相机侧移动侦测触发**（`motion_source: camera:onvif`）——见 [ONVIF 指南](onvif-guide.md)
+- **Home Assistant 官方定制集成随包发布**（HACS 可装，mDNS 自动发现）——见[接入 Home Assistant](home-assistant.md)
+- **Vision 多实例路由** + 推送熔断自动退避；AI 事件快照端点
+- **延时摄影 MJPEG 双模可用** + `timelapse-merge` CLI 批量转换 + 合并历史播放——见[延时摄影](timelapse.md)
+- **GB35114 A 级安全注册试点**（SM2 证书，需 `-tags gb35114` 构建）与 GB28181 级联按需主码流激活
+- **`validate-config` CLI**、深层孤儿目录扫描、启动配置防呆（崩溃循环保险丝）
+
+完整变更列表见 [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) 的 v0.13.0 说明。
 
 ---
 

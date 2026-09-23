@@ -272,6 +272,47 @@ curl -u username:password \
 }
 ```
 
+### ONVIF 事件订阅状态
+
+**端点：** `GET /api/cameras/{id}/onvif-events`
+
+查询该相机 ONVIF 事件（Pull-Point）订阅的诊断信息——订阅是否存活、事件计数、最近事件与最近错误，一眼区分「相机没发事件」还是「订阅挂了」。适用于 `motion_source: camera:onvif` 的相机；相机表单的状态栏即来自此端点。
+
+**请求：**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/lobby/onvif-events"
+```
+
+**响应：**
+```json
+{
+  "subscribed": true,
+  "state": "active",
+  "subscription_ref": "s0:Subscription:0",
+  "termination_time": "2026-09-23T10:00:00Z",
+  "poll_interval": "1s",
+  "event_count": 42,
+  "last_event_at": "2026-09-23T09:58:12Z",
+  "last_event": "tns1:VideoSource/MotionAlarm",
+  "consecutive_poll_errors": 0
+}
+```
+
+`state` 取值：`active`（订阅存活）/ `resubscribing`（订阅中断，退避重建中）/ `unsupported`（设备不支持事件服务）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `subscribed` | bool | 订阅当前是否存活 |
+| `state` | string | `active` / `resubscribing` / `unsupported`（从未尝试过订阅时为空串） |
+| `subscription_ref` | string | 订阅引用（设备返回） |
+| `termination_time` | string | 订阅到期时间（监督循环会自动续订） |
+| `poll_interval` | string | 拉取轮询间隔（默认 1s） |
+| `event_count` | integer | 本次订阅累计收到的事件数 |
+| `last_event_at` / `last_event` | string / string | 最近一次事件的时间与主题 |
+| `last_error` | string | 最近的订阅 / 轮询错误（无错时省略） |
+| `consecutive_poll_errors` | integer | 连续轮询失败次数 |
+
 ## ONVIF 摄像头管理
 
 ### 图像设置（GET）

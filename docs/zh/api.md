@@ -1,6 +1,6 @@
 # API 概览
 
-> 适用于 MiBeeNvr v0.12.0 · 完整接口文档见仓库 [docs/zh/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/zh/api)
+> 适用于 MiBeeNvr v0.13.0 · 完整接口文档见仓库 [docs/zh/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/zh/api)
 
 MiBee NVR 的全部功能都可通过 REST API 驱动（Web UI 本身就是这套路 API 的消费者），并提供 SSE 实时事件流。本页是认证方式与核心端点速查。
 
@@ -33,10 +33,11 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 |------|------|
 | `GET /api/health` | 健康汇总（含存储 / 摄像头状态） |
 | `GET /api/readyz` | 就绪探针 |
-| `GET /api/events` | **SSE 事件流**（限速 60 次/分钟，见下） |
-| `GET /api/recordings/{id}/download` | 录像下载（支持 Range，供播放器拖动） |
-| `GET /api/recordings/{id}/merged` | 延时摄影等合并产物 |
+| `GET /api/capabilities` | 摄取能力（RTMP / SRT 端口） |
+| `POST /api/trigger/webhook/{camera_id}` | Webhook 触发（公开限流组，凭据为 HMAC 签名，见下表） |
 | `GET /models/{filename}` | 浏览器端 AI 模型文件 |
+
+> v0.13 起录像下载（`/api/recordings/{id}/download`、`/api/recordings/{id}/merged`、延时合并下载）、回放、`GET /api/events` 与 `GET /api/health/cameras` 已从匿名移入鉴权组（浏览器经 `?token=` 会话令牌或 cookie 透明携带凭据）；旧版 base64 `?token=` 透传已移除。详见[身份验证 · v0.13 鉴权范围变更](api/authentication.md)。
 
 ## 核心端点组
 
@@ -47,6 +48,7 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 | 录像 | `GET /api/recordings` | 列表 / 筛选 / 分页 |
 | 回放 | `GET /api/cameras/{id}/playback/playlist.m3u8` | 按录像回放 |
 | AI 事件 | `POST /api/ai/events`、`GET /api/ai/events`、`GET /api/ai/events/{id}`、`GET /api/ai/events/{id}/snapshot` | 外部 AI 后端写入（Bearer）与查询统计；事件快照图片 |
+| 触发 | `POST /api/trigger/webhook/{camera_id}` | HMAC 签名 webhook 触发录像 / 停止 / 抓拍（完整文档见 [Webhook 集成](webhook-integration.md)） |
 | 设置 | `GET/PUT /api/settings`、`POST /api/settings/api-keys` | 运行配置与密钥 |
 | 存储 | `GET /api/storage`、`GET/POST/DELETE /api/storage/candidates`、`POST /api/storage/migrate` | 存储统计、候选卷管理、批量迁移（[存储管理](storage-management.md)） |
 | GB28181 | `/api/gb28181/*` | 设备 / 通道 / PTZ / 回放 |
@@ -84,11 +86,11 @@ curl -X POST -H "Authorization: Bearer mbv_…" -H "Content-Type: image/jpeg"   
 
 ## SSE 事件流
 
-`GET /api/events` 以 Server-Sent Events 推送 NVR 内部事件总线，`filter` 查询参数按主题前缀过滤：
+`GET /api/events` 以 Server-Sent Events 推送 NVR 内部事件总线，`filter` 查询参数按主题前缀过滤。v0.13 起需认证（BasicAuth / 会话令牌 / API Key；浏览器 EventSource 经 `?token=` 或 `?api_key=` 携带）：
 
 ```bash
 # 只订阅录像片段完成事件（外部 AI 后端的典型接入方式）
-curl -N "http://localhost:9090/api/events?filter=segment."
+curl -N "http://localhost:9090/api/events?filter=segment.&api_key=mbv_…"
 ```
 
 事件负载为嵌套结构，业务字段在 `Data` 内（含 `recording_id`）：

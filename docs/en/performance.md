@@ -99,10 +99,51 @@ io:
   200 files/s (configurable), preventing the ext4 journal (jbd2) saturation
   that self-sustains even after the deleting process exits.
 
-Observability: `nvr_iobudget_wait_seconds_total{consumer}` (time background
-work spent parked) and `nvr_iobudget_bytes_charged_total{consumer}` /
-`nvr_iobudget_unlinks_charged_total{consumer}` (billed volume), with
-`consumer` ∈ {merge, cleanup, repair, timelapse, transcode} — transcode tasks bill input size × 2 (read + estimated output, #848).
+### Tenant Panorama
+
+Every I/O tenant sharing the one token bucket (the `consumer` label in metrics):
+
+| Tenant | What is billed | Status |
+|---------|----------------|--------|
+| `merge` | Rolling / batch merge reads and writes | Existing |
+| `cleanup` | Retention / disk-watermark cleanup deletes | Existing |
+| `repair` | Repair mass-deletes | Existing |
+| `timelapse` | Timelapse frame extraction | Existing |
+| `transcode` | Transcode input reads + output writes, billed at input size × 2 (#848) | Existing |
+| `offload` | S3 object-storage cold-archive uploads (#874) | v0.13 |
+| `recording` | Segment-sample writes, billed per NALU byte | v0.13 gray-release, off by default (#886) |
+| `playback` | API media-serving reads, billed per read chunk | v0.13 gray-release, off by default (#886) |
+
+Observability: `nvr_iobudget_wait_seconds_total{consumer}` (time spent parked)
+and `nvr_iobudget_bytes_charged_total{consumer}` /
+`nvr_iobudget_unlinks_charged_total{consumer}` (billed volume).
+
+### Foreground gray-release switches (v0.13, #886)
+
+By default the budget only constrains background work; v0.13 adds two
+gray-release switches that bring **foreground** I/O into the same budget:
+
+```yaml
+io:
+  budget_bytes_per_sec: 16777216    # prerequisite: the budget itself is enabled
+  recording_writes_budgeted: false  # segment writes billed per NALU byte to the "recording" tenant
+  playback_reads_budgeted: false    # API media-serving reads billed per read chunk to the "playback" tenant
+```
+
+- **Default false — zero behavior change while off**, identical to previous
+  releases; both require `budget_bytes_per_sec > 0`.
+- `recording_writes_budgeted`: segment-sample writes are charged before the
+  muxer write and block when the bucket is starved (the recorder ring buffer
+  absorbs the delay; frames drop only if a stall outlasts it). Only makes sense
+  on media where unbounded recording writes themselves are the latency problem —
+  e.g. an SD card simultaneously serving merges and playback downloads. Code:
+  `internal/recorder/iobudget.go`.
+- `playback_reads_budgeted`: playback / download file reads are charged in
+  `http.ServeContent`-sized chunks; a starved bucket paces the transfer
+  (Range / negotiation semantics unchanged). Code: `internal/api/playback_budget.go`.
+- **Watch the iobudget metrics before enabling**: confirm
+  `nvr_iobudget_wait_seconds_total` has headroom, and re-check after flipping
+  that foreground waits stay bounded.
 
 The `mibee-nvr repair delete-by-format` CLI reads the same `io:` section
 from the YAML, so a manual mass-delete against a live server yields exactly
@@ -145,3 +186,18 @@ merge:
 
 **⚠️ RPi 3B baseline**: ~1-2MB of resident RAM mirror per active camera (72k samples/h × 12-16B);
 12 cameras all-on ≈ 12-24MB. Use with care on 1GB devices; default off, user-enabled.
+
+---
+
+## v0.13 Recording Write-Path Improvements
+
+Three write-path changes in v0.13 remove the I/O spikes segment writes used to
+create (observable via the `nvr_segment_write_duration_seconds` metric):
+
+- **Incremental MP4 flushing**: media bytes stream out incrementally during
+  recording; only a small moov header remains to patch at Close — the
+  full-file burst write at segment close is gone.
+- **Per-segment write locks**: cameras no longer serialize each other's segment
+  writes; one camera on a slow card does not stall the rest.
+- **NALU buffer pooling**: Annex-B framing buffers are pooled per recorder
+  (#875), eliminating a heap allocation per NALU and its GC pressure.

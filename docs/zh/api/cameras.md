@@ -370,6 +370,126 @@ curl -u username:password \
 
 > 目标盘空间不足（20% 安全余量校验）时返回 400 并拒绝切换；候选卷管理与批量迁移见[存储管理](../storage-management.md)。
 
+## 相机分组
+
+分组注册表允许**空分组**先于成员相机存在；每路相机的 `group_name` 字段始终是成员关系的唯一事实来源，因此重命名 / 删除分组会在一次调用中遍历全部成员相机（拖拽移动成员则走 `PUT /api/cameras/{id}`）。分组名上限 64 字符（去除首尾空白后非空），注册表上限 200 个分组。
+
+### 列出相机分组
+
+**端点：** `GET /api/cameras/groups`
+
+按保存的顺序返回全部分组名（管理页拖拽排序的结果）。无分组时返回空数组。
+
+**请求：**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/groups"
+```
+
+**响应：**
+```json
+["室内", "室外", "车库"]
+```
+
+### 创建相机分组
+
+**端点：** `POST /api/cameras/groups`
+
+注册一个新分组（追加到列表末尾）。同名分组已存在时不报错（幂等）。
+
+**请求体：**
+```json
+{"name": "室内"}
+```
+
+**请求：**
+```bash
+curl -u username:password \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"name": "室内"}' \
+  "http://localhost:9090/api/cameras/groups"
+```
+
+**响应（201 Created）：**
+```json
+{"name": "室内"}
+```
+
+> 名称为空或超过 64 字符返回 400。
+
+### 更新分组排序
+
+**端点：** `PUT /api/cameras/groups/order`
+
+保存完整的命名分组顺序（管理页拖拽排序）。列表中未知的名字会被注册（仅派生、尚未持久化的分组借此固化）；未出现在列表里的分组保持原有位置。
+
+**请求体：**
+```json
+{"names": ["室外", "室内", "车库"]}
+```
+
+**请求：**
+```bash
+curl -u username:password \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"names": ["室外", "室内", "车库"]}' \
+  "http://localhost:9090/api/cameras/groups/order"
+```
+
+**响应：**
+```json
+{"count": 3}
+```
+
+> 含重复名称或超过 200 个分组时返回 400。
+
+### 重命名相机分组
+
+**端点：** `PUT /api/cameras/groups/{name}`
+
+重命名分组并同步全部成员相机的 `group_name`。**重命名到已有分组名等于合并**：两组的成员相机都落到目标分组上——这是合法操作，不返回冲突错误。
+
+**请求体：**
+```json
+{"name": "客厅"}
+```
+
+**请求：**
+```bash
+curl -u username:password \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"name": "客厅"}' \
+  "http://localhost:9090/api/cameras/groups/室内"
+```
+
+**响应：**
+```json
+{"name": "客厅"}
+```
+
+> 新旧名称相同（无需重命名）返回 400。
+
+### 删除相机分组
+
+**端点：** `DELETE /api/cameras/groups/{name}`
+
+删除分组注册表项，成员相机的 `group_name` 清空（回到「未分组」）。响应返回被移出分组的相机数量。
+
+**请求：**
+```bash
+curl -u username:password \
+  -X DELETE \
+  "http://localhost:9090/api/cameras/groups/车库"
+```
+
+**响应：**
+```json
+{"ungrouped": 2}
+```
+
 ## 摄像头快照
 
 **端点：** `GET /api/cameras/{id}/snapshot`

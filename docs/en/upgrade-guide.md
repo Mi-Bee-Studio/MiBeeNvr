@@ -6,13 +6,70 @@ This guide covers upgrade paths and breaking changes between MiBee NVR releases.
 
 | From → To | Status | Action required |
 |-----------|--------|-----------------|
-| **0.11.x → 0.12.0** | 🟢 **transparent (one caveat)** | No breaking API changes; automatic incremental DB migration; GB28181 default media transport switched to TCP-passive. See [0.11.x → 0.12.0](#011x--v0120). |
-| **0.10.x → 0.11.0** | 🟡 **Read the license + API changes** | License change (AGPL-3.0); one API response field rename; plain-HTTP AAC live-audio degradation. See [0.10.x → 0.11.0](#010x--v0110). |
+| **0.12.x → 0.13.0** | 🟡 **Read: security tightening & default changes** | Several endpoints moved behind auth; `?token=` passthrough removed; DB schema v40 (no downgrade); HLS/MJPEG/merge default changes. See [0.12.x → 0.13.0](#012x--0130). |
+| **0.11.x → 0.12.0** | 🟢 **transparent (one caveat)** | No breaking API changes; automatic incremental DB migration; GB28181 default media transport switched to TCP-passive. See [0.11.x → 0.12.0](#011x--0120). |
+| **0.10.x → 0.11.0** | 🟡 **Read the license + API changes** | License change (AGPL-3.0); one API response field rename; plain-HTTP AAC live-audio degradation. See [0.10.x → 0.11.0](#010x--0110). |
 | **v0.9.1 → 0.10.0** | 🟡 **Action required** | Fix combined `protocol` strings; optional disk-space reclaim. See [v0.9.1 → v0.10.0](#v091--v0100). |
 | v0.9.0 → v0.9.1 | 🟢 Transparent | None. |
 | v0.8.x → v0.9.x | 🟡 Back up first | Large storage-layer refactor. Back up the DB, then upgrade. |
 | v0.8.x → 0.10.0 | 🟡 Two hops | Upgrade to v0.9.x first, then to 0.10.0. |
-| **< v0.9.x → 0.10.0** | 🔴 **Not supported (direct)** | You **must** upgrade to 0.9.x first — see [below](#below-v09x--v01000-not-supported-direct) for why. |
+| **< v0.9.x → 0.10.0** | 🔴 **Not supported (direct)** | You **must** upgrade to 0.9.x first — see [below](#below-v09x--v0100-not-supported-direct) for why. |
+
+---
+
+## 0.12.x → 0.13.0
+
+0.13.0 is a major release: **object-storage offload** (async upload to S3-compatible cold backup), **tiered recording + pixel-domain gating** (an end-to-end pipeline for smart-encoder cameras), **Windows / macOS desktop editions**, **bare-metal auto-update** (signature verification + automatic rollback on failure), **I/O budget scheduling**, and the **end of recording write stalls**. The incremental DB migration runs automatically on first boot, but the behavior changes below need your attention:
+
+### 🔴 Security tightening (#879)
+
+- **Download and playback endpoints moved into the authenticated route group**: `/api/recordings/{id}/download`, `/api/recordings/{id}/merged`, the delayed-merge download, playback segments (`/api/cameras/{id}/playback/*`), `/api/events`, and `/api/health/cameras` were anonymously accessible in v0.12.x; they now require the same credentials as every other API (Basic Auth / API Key / session cookie / Bearer token all work). **Integrations pulling these endpoints anonymously from scripts or third-party tools need to add credentials**
+- **The legacy base64 `?token=` passthrough is removed** — use an `Authorization: Bearer` session token, a URL-signed token, or an API Key instead
+- `local_bypass` now rejects cross-site requests (browser requests with `Sec-Fetch-Site: cross-site` no longer skip auth); the CSP `script-src` is tightened to inline hashes — only affects heavily modified deployments that inject custom scripts into the page
+- **Credential-free first start**: when starting without a password set, the terminal prints a one-time setup code; the first-run wizard asks for it to complete initialization (loopback access is exempt)
+
+### 🔴 Database schema v33 → v40 (no downgrade)
+
+The incremental migration runs automatically on first start: camera groups (v36–v38), `motion_confidence` (v34), AI event sources (v35), tiered-recording data backfill (v39), `offload_outbox` (v40). **Once migrated there is no going back to the v0.12.x binary** — back up `mibee-nvr.db` and your config file before upgrading.
+
+### 🟡 Storage & merge default changes
+
+- **HLS `low_latency` now defaults to on**: an unset key means low-latency HLS (in practice deployments have been running in LL mode since the feature landed — the key was dead until now); set `low_latency: false` explicitly for the classic segmented playlist
+- **MJPEG recording segments now default to a single-file AVI container** (eliminates the per-frame-file metadata churn on SD/eMMC): existing directory-form segments keep playing; the per-camera `http_jpeg_avi` key is deprecated (old configs don't error), the new key `mjpeg_form: dir` opts back into directories explicitly; existing segments can be migrated in one pass with `mibee-nvr repair mjpeg-containerize`
+- **Batch folding of flash-disconnect fragments is on by default** (`merge.rolling_fragment_hold_s` unset = 300s): fragments from flapping cameras are folded in batches instead of rewriting a whole bucket per fragment — a significant drop in IO load is expected; set `0` explicitly to turn it off
+- `merge.rolling_bucket_retain` defaults to `2`: cameras whose picture quality swings (e.g. Xiaomi HD/SD switching) now keep one bucket per quality, slightly increasing disk usage; set `1` explicitly to restore the old single-bucket behavior
+- `merge.transcode_grace` defaults to `90s`: fresh segments from cameras with transcode jobs are held back from folding for up to 90 seconds (fixes a transcode/merge race; set `"0s"` to fold immediately)
+- **`cleanup` validation tightened**: `disk_threshold_percent` valid range is 50–99 and `retention_days` 1–3650, and the web settings page now validates with the same rules as startup loading — out-of-range values the v0.12.x settings page accepted (e.g. 20%) are rejected after the upgrade. Also adds a last-good-config backup restored at startup (this is the fix for the v0.12 crash-loop bug)
+
+### 🟡 Other behavior changes
+
+- `POST /api/auth/password` no longer requires the old password — loopback requests (the companion for the desktop menubar/tray) can change the password directly; remote requests still need a logged-in session
+- Third-party-library stdlib logs are throttled to one line per 10 seconds by default (`observability.stdlog_throttle`), fixing journald getting flooded; set `off` to disable
+- FTP falls back to the admin account when no dedicated credentials are configured, and prints a startup warning (for a plaintext protocol, prefer separate low-privilege credentials `ftp.username` / `ftp.password`)
+- The desktop editions (Windows/macOS) listen on `127.0.0.1` only, with passwordless local login, and are not exposed to the LAN by default; opening up to the LAN requires explicitly changing the listen address in the tray/menubar
+
+### 🟢 New features at a glance
+
+- **Object-storage offload**: merged recordings upload asynchronously to S3-compatible storage (AWS S3 / MinIO / Cloudflare R2 / B2 / OSS / COS); after the upload verifies, the local copy can be evicted safely — see [Object-Storage Offload](storage-offload.md)
+- **Tiered recording + pixel-domain gating**: smart-encoder cameras (static ~0.5fps / 5MP VBR) get a 24/7 continuous sub-stream baseline plus on-demand main-stream, with fine gating by classic CV sampled at ~1fps — no camera-side cooperation required — see [Adaptive Recording](adaptive-recording.md)
+- **Windows / macOS desktop editions**: single-file installers (Setup.exe / DMG), system tray and macOS menubar, passwordless local access — see [Desktop Edition](desktop.md)
+- **Bare-metal auto-update**: ed25519 signature verification of release artifacts, automatic rollback when a health gate fails, one-click upgrade and upgrade history on the web settings page (`update.auto_apply` off by default)
+- **I/O budget scheduling**: background tasks (merge / cleanup / repair / timelapse / transcode / offload) share a token bucket instead of competing with the foreground for disk IO on equal terms; the two rollout switches `io.recording_writes_budgeted` / `io.playback_reads_budgeted` are off by default — see [Performance Tuning](performance.md)
+- **Recording write stalls eliminated**: MP4 segments flush to disk incrementally (no more whole-file burst write at Close); each segment takes its own write lock, so cameras no longer serialize each other's disk writes
+- **Memory auto-sizing**: GOMEMLIMIT is set automatically from physical RAM / cgroup quota, so small-memory boards stop OOMing (`memory:` config block)
+- **Global recording default switch** `recording.default_enabled`: turn recording off in one place for view-only deployments
+- **Camera groups**: drag-and-drop grouping / ordering / renaming in the web UI (`/api/cameras/groups`)
+- **RTSP output supports MJPEG/JPEG** (RTP-JPEG); latest-frame snapshots for H.264/H.265 (optional FFmpeg) and MQTT snapshot triggering
+- **HMAC-signed webhook trigger endpoint**: `POST /api/trigger/webhook/{camera_id}`, Stripe-style signatures + two-way replay protection — see [Webhook Trigger Integration](webhook-integration.md)
+- **MQTT event-bus forwarding** (`mqtt.status_events`) and scheduled forced-recording windows (`{"action":"record","duration":"60s"}`)
+- **ONVIF camera-side motion detection trigger** (`motion_source: camera:onvif`) — see [ONVIF Guide](onvif-guide.md)
+- **Home Assistant custom integration ships with releases** (installable via HACS, mDNS auto-discovery) — see [Home Assistant Integration](home-assistant.md)
+- **Vision multi-instance routing** + push circuit breaker with automatic backoff; an AI event snapshot endpoint
+- **Timelapse MJPEG dual-mode GA** + `timelapse-merge` CLI for batch conversion + merged-history playback — see [Timelapse Recording](timelapse.md)
+- **GB35114 level-A secure registration pilot** (SM2 certificates; requires a `-tags gb35114` build) and on-demand main-stream activation for GB28181 cascade
+- **`validate-config` CLI**, deep orphan-directory scanning, and startup config sanity guards (a crash-loop fuse)
+
+Full change list in the v0.13.0 notes on [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases).
 
 ---
 
@@ -206,7 +263,7 @@ If you build the binary yourself rather than using a release artifact:
 
 ---
 
-## < v0.9.x → v0.10.0: NOT supported (direct)
+## Below v0.9.x → v0.10.0: NOT supported (direct)
 
 You **cannot** upgrade directly from below v0.9.x to 0.10.0. There is no startup-time version guard that aborts the process, but you will hit one of these failures instead:
 

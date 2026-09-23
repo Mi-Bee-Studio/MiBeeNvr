@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> For MiBeeNvr v0.12.0 · default config file `mibee-nvr.yaml` (override with `-config`)
+> For MiBeeNvr v0.13.0 · default config file `mibee-nvr.yaml` (override with `-config`)
 
 A single YAML file drives all of MiBee NVR. This page is a **top-level key cheat sheet**; for every field see the [full configuration reference](https://github.com/Mi-Bee-Studio/MiBeeNvr/blob/main/docs/en/configuration.md) in the repository.
 
@@ -24,6 +24,7 @@ server:
 storage:
   root_dir: "/var/lib/mibee-nvr"  # storage root: recordings + database
   segment_duration: "30s"          # MP4 segment duration (≤30s recommended on RPi)
+  # remote: ...               # S3 object-storage offload (default off) — see the offload guide
 
 auth:
   username: "admin"
@@ -32,11 +33,20 @@ auth:
 
 cameras: []                  # camera list (prefer maintaining via web UI, see below)
 
+recording:
+  # default_enabled: true    # global recording gate default: cameras without an explicit recording_enabled inherit it; false = pure-live, no segments
+
 cleanup:
   retention_days: 30         # retention in days (1–3650), auto-cleaned when expired
 
 merge:
   enabled: false             # periodic segment merging (8h/24h/7d/30d outputs)
+
+io:
+  # budget_bytes_per_sec: 0  # background I/O budget (shared token bucket for merge/cleanup/offload; 0 = off, default)
+
+memory:                      # adaptive GOMEMLIMIT: defaults to min(45% physical RAM, 1GiB) — usually leave unset
+  # soft_limit_bytes: 0      # explicit override of the auto heuristic (0 = auto)
 
 ftp:
   enabled: true              # FTP access to recordings (default port 2121)
@@ -48,14 +58,20 @@ webdav:
   enabled: true              # WebDAV access (/dav)
 
 hls:
-  write_buffer_size: 40      # async write buffer frames per HLS stream
+  write_buffer_size: 100     # async write buffer frames per HLS stream
+  low_latency: true          # LL-HLS on by default; false = classic segment playlists
 
 observability:
   log_level: "info"          # debug / info / warn / error
 
 security:
   frame_ancestors: ""        # CSP frame-ancestors (set when embedding the web UI cross-origin)
+
+update:
+  # auto_apply: false        # bare-metal auto-upgrade (default off); version check is on by default
 ```
+
+> For the full `storage.remote` (S3 object-storage offload) configuration and the `mibee-nvr offload` operator commands see [Object-Storage Offload](storage-offload.md).
 
 ## Camera Entry Structure
 

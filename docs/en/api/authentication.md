@@ -27,10 +27,11 @@ curl "http://localhost:9090/api/ai/events?api_key=mbv_your_api_key_here"
 
 ### Authentication Order
 
-1. **Public routes** — no auth required (`/api/health`, `/api/metrics`, `/models/{filename}`, `/api/recordings/{id}/download`, `/api/recordings/{id}/merged`)
+1. **Public routes** — no auth required (`/api/health`, `/api/readyz`, `/api/capabilities`, `/api/trigger/webhook/*`, `/models/{filename}`)
 2. **API Key** — if `Authorization: Bearer mbv_...` header is present, API Key auth is attempted first
-3. **BasicAuth** — if no Bearer token, BasicAuth is used
-4. **Setup gate** — if no password is configured, `503 SETUP_REQUIRED` is returned
+3. **Setup gate** — if no password is configured, `503 SETUP_REQUIRED` is returned (the first-run wizard must complete first)
+4. **Local bypass** — loopback requests skip auth entirely when `auth.local_bypass` is on (the desktop-install default)
+5. **Session token / BasicAuth** — a `Bearer mbs_...` session token is tried before BasicAuth
 
 ### Managing API Keys
 
@@ -97,6 +98,47 @@ transparently via the `X-Renewed-Token` response header.
   "code": "AUTH_FAILED"
 }
 ```
+
+## Change Password
+
+**Endpoint:** `POST /api/auth/password`
+
+Set a new admin password **without knowing the old one**. Authorization is locality: the request must come from a loopback session on the NVR's own machine (a loopback connection with a loopback / `localhost` Host header and no proxy headers); remote callers always get 403 — the desktop tray / macOS menu-bar helper calls it from the NVR's own machine, where the operator could equally edit the config file by hand. The password exists for NON-local (LAN) logins — local sessions bypass auth entirely when `auth.local_bypass` is on (the desktop-install default).
+
+**Request Body:**
+```json
+{
+  "new_password": "new-secure-password"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `new_password` | string | Yes | New password (at least 8 characters) |
+
+**Request:**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"new_password": "new-secure-password"}' \
+  "http://127.0.0.1:9090/api/auth/password"
+```
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok"
+}
+```
+
+**Response (403 Forbidden, remote request):**
+```json
+{
+  "error": "password change is only available from a local session on the NVR machine"
+}
+```
+
+> Side effect worth knowing: the bcrypt hash is part of the session-token signing key, so a successful change invalidates **every outstanding session token (`mbs_`)** — remote sessions must re-login. Returns 409 when setup has not been completed (no password configured).
 
 ## Setup
 
@@ -169,3 +211,18 @@ curl http://localhost:9090/api/capabilities
   }
 }
 ```
+
+## v0.13 Auth Scope Changes
+
+As of v0.13 the following endpoints moved from anonymous (no auth) into the authenticated group, using the same credentials as every other `/api` endpoint (BasicAuth / Bearer API key / session token / streaming cookie):
+
+- `GET/HEAD /api/recordings/{id}/download` — recording download
+- `GET/HEAD /api/recordings/{id}/merged` — merged-output download
+- `GET/HEAD /api/timelapse/merges/{id}/download` — timelapse merge download
+- `GET /api/cameras/{cameraID}/playback/*` — per-recording playback (playlist and segments)
+- `GET /api/events` — full event stream (SSE)
+- `GET /api/health/cameras` — per-camera health detail
+
+Rationale: recording IDs are timestamp-predictable, and the event stream plus camera health detail expose fleet topology such as camera names — the risk of anonymous reachability outweighed the convenience. Browser flows are unaffected — the SPA's `<video src>` / `<a download>` links keep working via `?token=` (session tokens only) or the streaming cookie.
+
+At the same time, the **legacy base64(user:pass) `?token=` passthrough was removed**: credentials in URLs leak into browser history and proxy logs. `?token=` now accepts `mbs_` session tokens only; clients that cannot set headers should use `?api_key=` (an `mbv_`-prefixed API key) or BasicAuth instead.

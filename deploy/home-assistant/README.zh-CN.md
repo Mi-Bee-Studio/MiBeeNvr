@@ -40,7 +40,7 @@ cp -r /tmp/mibee-nvr/deploy/home-assistant/custom_components/mibee_nvr \
 
 ## NVR 侧要求
 
-- MiBee NVR **v0.12.0+**，H.264/H.265 直播需启用内置 RTSP 输出（默认开启）。
+- MiBee NVR **v0.13.0+**，H.264/H.265 直播需启用内置 RTSP 输出（默认开启）。
 - JPEG 系相机的 `latest-frame` 缩略图开箱即用；H.264/H.265 相机若需缩略图，
   还需在 NVR 主机上安装可选的 FFmpeg（见
   [NVR Home Assistant 文档](../../docs/zh/home-assistant.md)）。

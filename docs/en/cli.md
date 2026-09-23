@@ -1,6 +1,6 @@
 # CLI Reference
 
-> For MiBeeNvr v0.12.0 · command name `mibee-nvr` (prebuilt bundles may carry an arch suffix, e.g. `mibee-nvr-amd64`)
+> For MiBeeNvr v0.13.0 · command name `mibee-nvr` (prebuilt bundles may carry an arch suffix, e.g. `mibee-nvr-amd64`)
 
 MiBee NVR follows a "single binary + subcommands" design: **running it without a subcommand starts the server**, while subcommands run an administrative tool and exit.
 
@@ -31,11 +31,15 @@ mibee-nvr -config mibee-nvr.yaml
 | [`hash-password`](#hash-password-generate-a-hash) | Generate a password hash |
 | [`health`](#health-health-check) | HTTP health probe (for Docker HEALTHCHECK) |
 | [`encrypt-config`](#encrypt-config-encrypt-sensitive-fields) | Encrypt plaintext secrets in the config |
+| [`validate-config`](#validate-config-validate-a-config-file) | Pre-deploy config check (exit 0 = would boot) |
 | [`download-model`](#download-model-download-the-ai-model) | Download the browser-side AI model |
 | [`merge-cameras`](#merge-cameras-merge-cameras) | Merge two duplicate camera entries |
 | [`timelapse-merge`](#timelapse-merge-convert-recordings-to-timelapse) | Batch-convert recordings of any period/camera into timelapse merges |
-| [`repair`](#repair-data-repair) | Data repair toolkit (8 subcommands) |
+| [`eval-replay`](#eval-replay-offline-replay-evaluation) | Replay the activity scorer / adaptive gate offline for tuning |
+| [`repair`](#repair-data-repair) | Data repair toolkit (9 subcommands) |
 | [`cleanup`](#cleanup-recording-cleanup) | Delete recordings by date / orphan files |
+| [`offload`](#offload-object-storage-offload-queue) | S3 offload queue counters and local eviction |
+| [`update`](#update-version-check-and-upgrade) | Version check and bare-metal upgrade execution |
 | [`gen-gb35114-certs`](#gen-gb35114-certs-issue-gb35114-pilot-certificates) | Issue GB35114 level-A pilot certificates (`-tags gb35114` builds only) |
 
 ---
@@ -91,6 +95,22 @@ mibee-nvr encrypt-config --config mibee-nvr.yaml
 ```
 
 Prints which fields were encrypted; already-encrypted or empty fields are skipped. The server reads the config as usual afterwards, but the plaintext is no longer human-readable.
+
+## validate-config — Validate a Config File
+
+**Pre-deploy smoke check** for hand-edited YAML: runs the exact same Load → Validate pipeline the server uses at boot, without starting anything. **Exit code 0 = the NVR would boot on this config**, 1 = it would crash-loop under systemd:
+
+```bash
+mibee-nvr validate-config
+mibee-nvr validate-config --config /data/mibee-nvr.yaml
+# OK /data/mibee-nvr.yaml — the NVR would boot on this config
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config <path>` | `mibee-nvr.yaml` | Config file to validate (same default path a bare `mibee-nvr` start would load) |
+
+Validation covers **illegal values** (ranges, formats, missing required fields) and surfaces **dangling references** at load time — the 2026-09-11 M5 incident was exactly that (a hand-edited YAML dropped a vision instance a camera still referenced, and the service restart-looped for ~2 minutes). Run it after every manual edit, before restarting the service.
 
 ## download-model — Download the AI Model
 
@@ -162,6 +182,37 @@ Behavior notes:
 | `--no-throttle` | — | Skip the automatic self-downgrade (nice 19 + IO best-effort) |
 | `--config <path>` | `mibee-nvr.yaml` | Config file path |
 
+## eval-replay — Offline Replay Evaluation
+
+Replays the **offline activity scorer** or the **adaptive recording gate** over a golden corpus of finished recordings, printing per-file detail plus per-label aggregates — adaptive recording (`recording_mode: adaptive`) tuning ships with a before/after table instead of a field gamble. See [Adaptive Recording](adaptive-recording.md).
+
+```bash
+# scorer replay (default)
+mibee-nvr eval-replay --corpus corpus.json
+
+# gate replay (default config)
+mibee-nvr eval-replay --corpus corpus.json --gate
+
+# gate replay with a candidate config, side by side
+mibee-nvr eval-replay --corpus corpus.json --gate --videoexit=false
+```
+
+The corpus is a JSON array; paths may be absolute or relative to the manifest. Labels are free-form (framework convention: `rain` / `lowbitrate` / `static` / `active`):
+
+```json
+[{"path": "/mnt/data/nvr/cam-yard/seg.mp4", "camera": "cam-yard", "label": "rain"}]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--corpus <path>` | (required) | Corpus manifest JSON path |
+| `--gate` | scorer | Replay the adaptive gate instead of the scorer |
+| `--fps <n>` | derived per file | Frame rate for gate replay (0 = frames/duration) |
+| `--spike <f>` | — | Candidate gate: `spike_factor` |
+| `--noisefloor-bytes <n>` | — | Candidate gate: explicit `noise_floor_bytes` |
+| `--autonoise true\|false` | — | Candidate gate: `auto_noise_floor` |
+| `--videoexit true\|false` | — | Candidate gate: `video_exit` |
+
 ## repair — Data Repair
 
 A set of repair tools for runtime data issues. They **touch the database directly**. Prefer running with the server stopped (running is also safe — WAL mode allows concurrent readers — but stop for large repairs).
@@ -182,6 +233,7 @@ Every subcommand **defaults to dry-run** (reports what would change); add `--exe
 | `reclaim-orphan-merges` | Reclaim merged .mp4 files left on disk after their recording row was deleted via the web UI (touches only unreferenced outputs) |
 | `normalize-endpoints` | Canonicalize ONVIF endpoints (elide default ports, lowercase, strip trailing slash) so dedup queries match |
 | `mjpeg-containerize` | Convert legacy dir-form MJPEG segments (one JPEG file per frame) into single-file AVI containers (#761); per segment "convert → verify → commit → remove source", and a failed verify leaves the row untouched |
+| `timelapse-mjpeg` | Rewrite MJPEG periodic-merge outputs whose samples carry double-header JPEGs (non-compliant RTSP senders pack complete JPEGs into RFC 2435 payloads and the depacketizer prepends a synthesized header block, which browsers reject): the complete inner JPEG of every sample is salvaged losslessly and remuxed, and the DB row's frame count / file size refreshed; outputs with under 25% salvageable frames (source truncated at stream EOF) are skipped and left to the operator |
 
 Examples:
 
@@ -237,6 +289,67 @@ mibee-nvr cleanup --orphans
 | `--config <path>` | Config file path (default `mibee-nvr.yaml`; locates the storage root and database) |
 
 > For day-to-day cleanup prefer the [retention policy](recording-playback.md) (`cleanup.retention_days`); this command is for post-migration slimming and incident cleanup.
+
+## offload — Object-Storage Offload Queue
+
+Operator surface of [`storage.remote`](storage-offload.md) (S3-compatible object-storage cold backup). Both subcommands require `storage.remote.enabled: true` in the config and exit with an error otherwise:
+
+```bash
+# outbox counters per status + backlog (pending+uploading)
+mibee-nvr offload status
+
+# evict local copies of confirmed uploads (dry-run report by default)
+mibee-nvr offload evict --all-uploaded
+mibee-nvr offload evict --camera front-door
+
+# apply
+mibee-nvr offload evict --all-uploaded --execute
+```
+
+Behavior notes:
+
+- `evict` deletes the **local** file only for recordings whose upload is confirmed (`uploaded`); before `--execute` deletes anything, every item is re-verified with a fresh remote `HeadObject` — a failed check marks the item REFUSED and nothing is deleted for it. **The remote object is never deleted** (remote cleanup belongs to the bucket lifecycle policy).
+- The eligibility window defaults to `storage.remote.evict.after_days`; with `after_days: 0` (upload-only mode) you must pass `--all-uploaded` to evict at all.
+- Safe to run against a **live** server (WAL concurrent readers); prefer a quiet window for large batches.
+
+| Flag | Description |
+|------|-------------|
+| `--all-uploaded` | Consider every confirmed upload regardless of `evict.after_days` |
+| `--camera <id>` | Restrict to one camera |
+| `--execute` | Actually delete local files (default is a dry-run report) |
+| `--config <path>` | Config file path (default `mibee-nvr.yaml`) |
+
+For the full pipeline (outbox state machine, upload grace, backlog limit) and configuration see [Object-Storage Offload](storage-offload.md).
+
+## update — Version Check and Upgrade
+
+The **upgrade execution layer** for bare-metal (systemd) deployments (#647), working with the `mibee-nvr-update.service` root helper (polkit-authorized). `--check` is sensing-only; upgrades must run as root:
+
+```bash
+# sensing only: show current/latest/deployment, change nothing
+mibee-nvr update --check
+
+# manual upgrade to the latest stable (requires sudo)
+sudo mibee-nvr update
+sudo mibee-nvr update --version v0.13.0
+
+# root-helper entry (ExecStart of the update service; the request file is
+# written by the app and consumed exactly once — removed on ANY outcome)
+mibee-nvr update --apply-request /var/lib/mibee-nvr/update-request.json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--check` | — | Print current / latest / available / deployment only |
+| `--version <tag>` | latest stable | Target release tag |
+| `--apply-request <file>` | — | Consume the app-written upgrade request file (helper entry) |
+| `--config <path>` | `mibee-nvr.yaml` | Config file path |
+
+- Artifacts are verified with sha256 + ed25519; after the swap the service passes a **health gate** (local health probe against the configured `server.listen`) and rolls back to the previous binary automatically on failure.
+- **Linux bare-metal only**: permanently disabled for Docker deployments (the container is immutable — use Watchtower / `docker compose pull`); Windows/macOS desktop builds are refused too (a self-update would silently resolve to the linux binary).
+- `update.download_mirror` switches artifact downloads to a mirror (the version check still hits the GitHub API).
+
+For the auto-apply switch (`update.auto_apply`) and the service/polkit setup see [Automatic Updates](deployment-autoupdate.md).
 
 ## gen-gb35114-certs — Issue GB35114 Pilot Certificates
 
