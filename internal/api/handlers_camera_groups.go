@@ -59,6 +59,7 @@ func (h *Handler) handleSetCameraGroupsOrder(w http.ResponseWriter, r *http.Requ
 	}
 	if len(body.Names) > maxCameraGroups {
 		WriteError(w, http.StatusBadRequest, fmt.Sprintf("too many groups (max %d)", maxCameraGroups))
+		return
 	}
 	seen := make(map[string]bool, len(body.Names))
 	for _, raw := range body.Names {
