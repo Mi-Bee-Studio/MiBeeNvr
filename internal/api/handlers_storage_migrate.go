@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -16,11 +17,43 @@ import (
 // Storage migration — per-camera, hot, background (#395 rework).
 //
 // Switching a camera's storage (or the default) is HOT: NEW segments go to
-// the new root immediately. Historical recordings move afterwards through
-// the background idle-time migrator (rate-limited copy, per-row rewrite,
+// the new root immediately. Historical recordings move afterwards through the
+// background idle-time migrator (rate-limited copy, per-row rewrite,
 // verified source delete), so the user never waits and never restarts. The
 // only restart in the storage story is mounting a NEWLY authorized directory
 // (docker bind-mount — platform-inherent).
+
+// cleanStoragePath normalizes a user-supplied storage path: trimmed of
+// surrounding whitespace and trailing separators ("/" and "\" — the Windows
+// desktop SPA round-trips native paths). Returns ok=false for blank or
+// non-absolute paths (absolute means OS-absolute: "/…" on Unix, "C:\…" on
+// Windows — #891; a bare HasPrefix "/" check rejects every Windows path).
+func cleanStoragePath(p string) (string, bool) {
+	p = strings.TrimSpace(p)
+	p = strings.TrimRight(p, `/\`)
+	if p == "" || !filepath.IsAbs(p) {
+		return "", false
+	}
+	return p, true
+}
+
+// pathWithin reports whether child is parent itself or a descendant, by path
+// COMPONENT comparison (both separator flavors normalized) — a string
+// HasPrefix check cannot tell "/data/nvr" from "/data/nvr2", and on Windows
+// mixed "\" and "/" inputs never match a byte prefix at all (#891).
+func pathWithin(parent, child string) bool {
+	pp := strings.Split(filepath.Clean(strings.ReplaceAll(parent, `\`, `/`)), `/`)
+	cp := strings.Split(filepath.Clean(strings.ReplaceAll(child, `\`, `/`)), `/`)
+	if len(cp) < len(pp) {
+		return false
+	}
+	for i := range pp {
+		if pp[i] != cp[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // StorageMigrator is the migrator surface the API needs (implemented by
 // *migration.Migrator; nil-tolerant for tests).
@@ -38,17 +71,17 @@ func (h *Handler) SetStorageMigrator(m StorageMigrator) {
 // one of the platform-granted candidates, and pass a file-writability probe
 // (camera roots never host the database — no SQLite requirement).
 func (h *Handler) validCameraRoot(root string) (string, bool) {
-	root = strings.TrimRight(strings.TrimSpace(root), "/")
+	root, ok := cleanStoragePath(root)
 	if root == "" {
 		return "", true
 	}
-	if !strings.HasPrefix(root, "/") {
+	if !ok {
 		return "", false
 	}
-	if root != strings.TrimRight(h.config.Storage.RootDir, "/") {
+	if root != strings.TrimRight(h.config.Storage.RootDir, `/\`) {
 		found := false
 		for _, c := range h.config.Storage.Candidates {
-			if root == strings.TrimRight(c, "/") {
+			if root == strings.TrimRight(c, `/\`) {
 				found = true
 				break
 			}
@@ -184,8 +217,8 @@ func (h *Handler) handleAddStorageCandidate(w http.ResponseWriter, r *http.Reque
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	path := strings.TrimRight(strings.TrimSpace(body.Path), "/")
-	if path == "" || !strings.HasPrefix(path, "/") {
+	path, ok := cleanStoragePath(body.Path)
+	if !ok {
 		WriteError(w, http.StatusBadRequest, "path must be an absolute directory")
 		return
 	}
@@ -193,12 +226,12 @@ func (h *Handler) handleAddStorageCandidate(w http.ResponseWriter, r *http.Reque
 		WriteError(w, http.StatusBadRequest, "path does not exist or is not a directory: "+path)
 		return
 	}
-	if path == strings.TrimRight(h.config.Storage.RootDir, "/") {
+	if path == strings.TrimRight(h.config.Storage.RootDir, `/\`) {
 		WriteError(w, http.StatusBadRequest, "path is already the current recording root")
 		return
 	}
 	for _, c := range h.config.Storage.Candidates {
-		if path == strings.TrimRight(c, "/") {
+		if path == strings.TrimRight(c, `/\`) {
 			WriteError(w, http.StatusBadRequest, "path is already in the available storages")
 			return
 		}
@@ -280,8 +313,8 @@ func (h *Handler) handleStartStorageMigrate(w http.ResponseWriter, r *http.Reque
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	target := strings.TrimRight(strings.TrimSpace(body.Target), "/")
-	if target == "" || !strings.HasPrefix(target, "/") {
+	target, ok := cleanStoragePath(body.Target)
+	if !ok {
 		WriteError(w, http.StatusBadRequest, "target must be an absolute path")
 		return
 	}
@@ -290,7 +323,7 @@ func (h *Handler) handleStartStorageMigrate(w http.ResponseWriter, r *http.Reque
 		WriteError(w, http.StatusBadRequest, "target is already the current recording root")
 		return
 	}
-	if strings.HasPrefix(target+"/", from+"/") || strings.HasPrefix(from+"/", target+"/") {
+	if pathWithin(from, target) || pathWithin(target, from) {
 		WriteError(w, http.StatusBadRequest, "target must not contain (or be inside) the current recording root")
 		return
 	}

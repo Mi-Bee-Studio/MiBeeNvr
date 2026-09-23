@@ -10,6 +10,8 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -67,7 +69,7 @@ func TestStartStorageMigrate_Validation(t *testing.T) {
 		h, _, old := setupMigrationHandler(t)
 		h.authMW = noopAuthMW()
 		req := httptest.NewRequest(http.MethodPost, "/api/storage/migrate",
-			strings.NewReader(`{"target":"`+old+`"}`))
+			strings.NewReader(jsonBody(t, map[string]string{"target": old})))
 		w := httptest.NewRecorder()
 		h.Routes().ServeHTTP(w, req)
 		require.Equal(t, http.StatusBadRequest, w.Code)
@@ -78,7 +80,7 @@ func TestStartStorageMigrate_Validation(t *testing.T) {
 		h, _, old := setupMigrationHandler(t)
 		h.authMW = noopAuthMW()
 		req := httptest.NewRequest(http.MethodPost, "/api/storage/migrate",
-			strings.NewReader(`{"target":"`+old+"/sub"+`"}`))
+			strings.NewReader(jsonBody(t, map[string]string{"target": filepath.Join(old, "sub")})))
 		w := httptest.NewRecorder()
 		h.Routes().ServeHTTP(w, req)
 		require.Equal(t, http.StatusBadRequest, w.Code)
@@ -88,8 +90,14 @@ func TestStartStorageMigrate_Validation(t *testing.T) {
 		t.Parallel()
 		h, _, _ := setupMigrationHandler(t)
 		h.authMW = noopAuthMW()
+		// Target under a FILE: ProbeRoot's MkdirAll fails on every OS. A
+		// root-level "/definitely/…" path resolves against the current
+		// drive on Windows, where a writable root lets the probe CREATE
+		// the tree and the request wrongly succeeds (#891).
+		blocked := filepath.Join(t.TempDir(), "blocked")
+		require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
 		req := httptest.NewRequest(http.MethodPost, "/api/storage/migrate",
-			strings.NewReader(`{"target":"/definitely/not/a/real/path"}`))
+			strings.NewReader(jsonBody(t, map[string]string{"target": filepath.Join(blocked, "root")})))
 		w := httptest.NewRecorder()
 		h.Routes().ServeHTTP(w, req)
 		require.Equal(t, http.StatusBadRequest, w.Code)
@@ -103,7 +111,7 @@ func TestStartStorageMigrate_AcceptsAndEnqueues(t *testing.T) {
 	target := t.TempDir()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/storage/migrate",
-		strings.NewReader(`{"target":"`+target+`","delete_source":true}`))
+		strings.NewReader(jsonBody(t, map[string]any{"target": target, "delete_source": true})))
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
