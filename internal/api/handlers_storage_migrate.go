@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -31,7 +32,11 @@ import (
 func cleanStoragePath(p string) (string, bool) {
 	p = strings.TrimSpace(p)
 	p = strings.TrimRight(p, `/\`)
-	if p == "" || !filepath.IsAbs(p) {
+	// filepath.IsAbs alone is wrong on both ends: on Windows it rejects
+	// Unix-style "/mnt/…" roots (no drive letter), and on Unix it would reject
+	// Windows drive paths. Accept either flavor everywhere — a leading "/" is
+	// absolute on any OS, and "C:\…" only passes IsAbs on Windows.
+	if p == "" || !(filepath.IsAbs(p) || strings.HasPrefix(p, "/")) {
 		return "", false
 	}
 	return p, true
@@ -42,8 +47,11 @@ func cleanStoragePath(p string) (string, bool) {
 // HasPrefix check cannot tell "/data/nvr" from "/data/nvr2", and on Windows
 // mixed "\" and "/" inputs never match a byte prefix at all (#891).
 func pathWithin(parent, child string) bool {
-	pp := strings.Split(filepath.Clean(strings.ReplaceAll(parent, `\`, `/`)), `/`)
-	cp := strings.Split(filepath.Clean(strings.ReplaceAll(child, `\`, `/`)), `/`)
+	// path.Clean (not filepath.Clean): after separator normalization the
+	// comparison runs in pure-slash space — filepath.Clean would fold "/" back
+	// to "\" on Windows and the Split below would never see a separator.
+	pp := strings.Split(path.Clean(strings.ReplaceAll(parent, `\`, `/`)), `/`)
+	cp := strings.Split(path.Clean(strings.ReplaceAll(child, `\`, `/`)), `/`)
 	if len(cp) < len(pp) {
 		return false
 	}

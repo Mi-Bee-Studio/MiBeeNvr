@@ -220,7 +220,10 @@ func TestStorageCandidates_AddRemove(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/storage/candidates", nil)
 	w := httptest.NewRecorder()
 	h.handleStorageCandidates(w, req)
-	if !strings.Contains(w.Body.String(), extra) {
+	// The response body is JSON: on Windows the native path's "\" arrives
+	// JSON-escaped as "\\", so compare against the escaped form (a raw
+	// Contains on the native path can never match there).
+	if !strings.Contains(w.Body.String(), strings.ReplaceAll(extra, `\`, `\\`)) {
 		t.Fatalf("candidates response missing the added path: %s", w.Body.String())
 	}
 
