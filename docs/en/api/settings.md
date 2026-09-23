@@ -246,17 +246,37 @@ curl -u username:password   "http://localhost:9090/api/vision/status"
   "device": "jetson-orin",
   "queue_depth": 0,
   "processed": 12841,
-  "last_seen": "2026-08-17T12:00:00Z"
+  "skip_cameras": [],
+  "last_seen": "2026-08-17T12:00:00Z",
+  "drops_marked_total": 5,
+  "instances": [
+    {
+      "name": "default",
+      "url": "http://127.0.0.1:8080",
+      "healthy": true,
+      "device": "jetson-orin",
+      "queue_depth": 0,
+      "processed": 12841,
+      "last_seen": "2026-08-17T12:00:00Z",
+      "drops_marked_total": 5,
+      "push_state": "closed",
+      "push_fails": 0
+    }
+  ]
 }
 ```
 
-`last_seen` is omitted when no heartbeat has ever been received. The NVR only pushes
+Top-level fields keep their single-instance-era shape (the `default` instance);
+multi-instance deployments additionally carry an `instances[]` array expanded per
+instance (including the push-breaker state `push_state`: `closed` / `open` /
+`half-open`, and the consecutive-failure count `push_fails`). `last_seen` is
+omitted when no heartbeat has ever been received. The NVR only pushes
 video segments to Vision while `healthy` is `true`; after a heartbeat returns, missed
 segments are automatically re-pushed as compensation.
 
 ### Vision heartbeat
 
-**Endpoint:** `POST /api/vision/heartbeat` (public, no auth)
+**Endpoint:** `POST /api/vision/heartbeat` (auth required: API key / BasicAuth / session token — the heartbeat carries state writes such as SkipCameras and drops)
 
 The Vision service reports every 30 seconds. Request body:
 
@@ -276,6 +296,115 @@ The Vision service reports every 30 seconds. Request body:
   "push_enabled": true
 }
 ```
+
+> Heartbeat v2 adds two optional request blocks: `drops` (a batch drop report; the response carries `ack_drops` to acknowledge consumption, and affected recordings are marked `ai_status=skipped`) and `metrics` (a runtime metrics snapshot, fed into the history ring queried via `GET /api/vision/metrics`).
+
+### Vision Runtime Metrics
+
+**Endpoint:** `GET /api/vision/metrics`
+
+Query the heartbeat history ring (kept in memory, roughly 24 hours at one heartbeat per 30 seconds) for the dashboard trend charts. Returns `{"enabled": false, "points": [], "marked_total": 0}` when the Vision integration is not enabled.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description | Example |
+|-----------|------|----------|-------------|---------|
+| `hours` | integer | No | Lookback window (1–168, default 24; clamped when out of range) | `12` |
+| `instance` | string | No | Instance name (for multi-instance deployments; default `default`) | `jetson-orin` |
+
+**Request:**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/vision/metrics?hours=12"
+```
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "instance": "default",
+  "points": [
+    {
+      "ts": "2026-08-17T11:30:00Z",
+      "queue_depth": 2,
+      "processed_count": 12841,
+      "dropped_total": 0,
+      "decode_workers": 2,
+      "workers_busy": 1,
+      "events_emitted": 3104
+    }
+  ],
+  "marked_total": 5
+}
+```
+
+Each entry in `points` is one heartbeat sample; `marked_total` is the number of recordings the instance has marked skipped (`ai_status=skipped`) cumulatively. An unknown instance name yields empty `points`.
+
+## RTSP Output Settings
+
+Switch, port, and credentials for the built-in RTSP output server (`rtsp://<host>:<port>/<camera_id>` pull URLs that third-party platforms use as camera sources).
+
+### Get RTSP Output Settings
+
+**Endpoint:** `GET /api/settings/rtsp-output`
+
+**Request:**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/settings/rtsp-output"
+```
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "port": 8554,
+  "username": "viewer",
+  "password_configured": true
+}
+```
+
+The password is never returned — only the `password_configured` flag.
+
+### Update RTSP Output Settings
+
+**Endpoint:** `PUT /api/settings/rtsp-output`
+
+All fields are optional; partial updates are supported.
+
+**Request Body:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | bool | Enable / disable the RTSP output server (defaults to enabled) |
+| `port` | integer | Listen port (1–65535, otherwise 400) |
+| `username` | string | Pull-auth username (blank = keep current) |
+| `password` | string | Pull-auth password (**blank = keep the current password**; GET never returns it, so the UI round-trips an empty field when unchanged) |
+| `clear_credentials` | bool | Wipe username + password in one shot (open access); the `password` field alone cannot express "clear" |
+
+**Request:**
+```bash
+curl -u username:password \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "port": 8554,
+    "username": "viewer",
+    "password": "new-secret"
+  }' \
+  "http://localhost:9090/api/settings/rtsp-output"
+```
+
+**Response:**
+```json
+{
+  "status": "updated",
+  "restart_required": true
+}
+```
+
+> The RTSP server reads its config copy at construction, so every change **takes effect after a restart** — the response always carries `restart_required: true` for the UI hint.
 
 ## Update Settings
 

@@ -272,6 +272,47 @@ curl -u username:password \
 }
 ```
 
+### ONVIF Event Subscription Status
+
+**Endpoint:** `GET /api/cameras/{id}/onvif-events`
+
+Per-camera diagnostics for the ONVIF Pull-Point event subscription — whether it is alive, event counters, the last event and last error: enough to tell "the camera emits nothing" from "the subscription died" at a glance. Relevant for cameras with `motion_source: camera:onvif`; the camera form's status line is backed by this endpoint.
+
+**Request:**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/lobby/onvif-events"
+```
+
+**Response:**
+```json
+{
+  "subscribed": true,
+  "state": "active",
+  "subscription_ref": "s0:Subscription:0",
+  "termination_time": "2026-09-23T10:00:00Z",
+  "poll_interval": "1s",
+  "event_count": 42,
+  "last_event_at": "2026-09-23T09:58:12Z",
+  "last_event": "tns1:VideoSource/MotionAlarm",
+  "consecutive_poll_errors": 0
+}
+```
+
+`state` values: `active` (subscription alive) / `resubscribing` (subscription lost, rebuilding with backoff) / `unsupported` (device does not implement the event service).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `subscribed` | bool | Whether the subscription is currently alive |
+| `state` | string | `active` / `resubscribing` / `unsupported` (empty when no subscription was ever attempted) |
+| `subscription_ref` | string | Subscription reference (device-assigned) |
+| `termination_time` | string | Subscription expiry (the supervised loop renews it automatically) |
+| `poll_interval` | string | Pull polling interval (default 1s) |
+| `event_count` | integer | Events received over the current subscription |
+| `last_event_at` / `last_event` | string / string | Time and topic of the most recent event |
+| `last_error` | string | Most recent subscribe/poll error (omitted when clean) |
+| `consecutive_poll_errors` | integer | Consecutive polling failures |
+
 ## ONVIF Camera Management
 
 ### Imaging Settings

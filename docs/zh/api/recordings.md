@@ -362,3 +362,48 @@ curl -u username:password \
 ```
 
 **响应：** JPEG 图片二进制数据。无效文件名则返回 400（路径遍历防护）。
+
+## 批量获取延时摄影帧
+
+**端点：** `GET /api/recordings/{id}/timelapse-frames/batch`
+
+一次请求携带一批 JPEG 帧（`multipart/mixed` 响应，每个 part 一帧），取代逐帧 GET 的热路径——N 帧一次请求而不是 N 次请求。前端流式读取响应、按 part 解码为 Blob。
+
+**查询参数：**
+
+| 参数 | 类型 | 必填 | 说明 | 示例 |
+|-----------|------|----------|-------------|---------|
+| `offset` | integer | 否 | 起始帧序号（默认 0；负数 / 非数字返回 400） | `120` |
+| `limit` | integer | 否 | 本批帧数（默认 120，上限 240，超出钳制；0 / 负数 / 非数字返回 400） | `120` |
+
+**请求：**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/recordings/1704123456789012345/timelapse-frames/batch?offset=0&limit=60" \
+  -o batch.txt
+```
+
+**响应：** `Content-Type: multipart/mixed; boundary=…`，每个 part 为 `image/jpeg`，part 头带 `X-Frame-Index`（帧序号）。响应头：
+
+| 响应头 | 说明 |
+|--------|------|
+| `X-Frame-Total` | 该录制可用帧总数 |
+| `X-Frame-Offset` | 本批起始序号 |
+| `X-Frame-Count` | 本批实际帧数 |
+| `Cache-Control` | `no-store` |
+
+```text
+--BOUNDARY
+Content-Type: image/jpeg
+X-Frame-Index: 0
+
+<JPEG 字节…>
+--BOUNDARY
+Content-Type: image/jpeg
+X-Frame-Index: 1
+
+<JPEG 字节…>
+--BOUNDARY--
+```
+
+适用格式：`mjpeg` / `timelapse` 录制目录（按时间戳排序的 `.jpg` 文件）与 `avi` 录制（经 movi 索引切片）；其它格式返回 404（`not a timelapse or MJPEG recording`）。`offset` 超出总帧数时返回空但合法的 multipart 体（播放器据此干净收尾），帧数自动截断到可用范围。

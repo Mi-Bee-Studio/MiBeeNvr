@@ -64,22 +64,41 @@ Track recording operations — segment creation, byte counts, and active session
 | `nvr_segments_created_total` | Counter | `camera_id`, `codec` | Total MP4 segments created |
 | `nvr_recording_count` | Gauge | — | Current number of recording entries in the database |
 | `nvr_recorder_ring_buffer_drops_total` | Counter | `camera_id` | Frames dropped due to recorder ring buffer overflow |
+| `nvr_segment_write_duration_seconds` | Histogram | `camera_id` | Duration of MP4 segment file writes — SD-card degradation early warning |
+| `nvr_recording_audit_total` | Counter | `camera_id`, `result` | Recording integrity audit outcomes (mediaprobe on closed segments) |
+| `nvr_recording_deepcheck_total` | Counter | `camera_id`, `result` | Decode-level deep check outcomes (`ffmpeg -v error` sampling, ≤1/hour/camera, #489) — absent entirely when no FFmpeg is configured |
 
 **`codec` label values:** `h264`, `h265`, `mjpeg`, `http_jpeg`, `timelapse`, or Xiaomi codec name.
 
-**Usage:** Monitor recording health — a rapidly increasing drop rate indicates the recorder cannot keep up with the stream. Use `rate(nvr_recorder_ring_buffer_drops_total[5m])` to detect frame loss.
+**Buckets** for `nvr_segment_write_duration_seconds`: 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s.
+
+**`result` label values:** `ok`, `zero_duration`, `probe_error` for `nvr_recording_audit_total`; `ok`, `decode_error` for `nvr_recording_deepcheck_total`.
+
+**Usage:** Monitor recording health — a rapidly increasing drop rate indicates the recorder cannot keep up with the stream. Use `rate(nvr_recorder_ring_buffer_drops_total[5m])` to detect frame loss. A rising write-duration P99 means the storage medium is slowing down:
+
+```promql
+histogram_quantile(0.99, rate(nvr_segment_write_duration_seconds_bucket[5m])) > 1
+
+# Recording audit anomalies (zero-duration segments / probe failures)
+rate(nvr_recording_audit_total{result!="ok"}[1h]) > 0
+```
 
 ---
 
-## 2. Storage Metrics
+## 2. Storage & I/O Budget Metrics
 
-Track disk usage and capacity.
+Track disk usage, capacity, and shared I/O budget billing (see [Performance Tuning](performance.md) for the budget mechanism and its tuning).
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `nvr_storage_used_bytes` | Gauge | — | Storage space consumed by recordings |
 | `nvr_storage_total_bytes` | Gauge | — | Total storage capacity available |
 | `nvr_storage_write_errors_total` | Counter | — | Total number of storage write I/O errors across all cameras |
+| `nvr_iobudget_bytes_charged_total` | Counter | `consumer` | Bytes billed to the shared I/O budget, per consumer |
+| `nvr_iobudget_unlinks_charged_total` | Counter | `consumer` | Files billed to the recursive-deletion unlink guardrail, per consumer (#755) |
+| `nvr_iobudget_wait_seconds_total` | Counter | `consumer` | Cumulative seconds background work spent waiting on the shared I/O budget token bucket |
+
+**`consumer` label values:** `merge`, `cleanup`, `repair`, `timelapse`, `transcode`, `offload` (S3 cold-archive uploads), plus `recording` / `playback` when the gray-release switches (`io.recording_writes_budgeted` / `io.playback_reads_budgeted`, off by default) are enabled.
 
 **Usage:** Set alerts at 80%/90% thresholds:
 
@@ -192,7 +211,26 @@ rate(nvr_flv_gop_cache_hits_total[5m]) / (rate(nvr_flv_gop_cache_hits_total[5m])
 
 ---
 
-## 7. Xiaomi Camera Metrics
+## 7. WebSocket Streaming Metrics
+
+Track WebSocket low-latency live streaming (the WASM decode pipeline).
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_ws_active_streams` | Gauge | `camera_id` | Number of currently active WebSocket streams |
+| `nvr_ws_frames_sent_total` | Counter | `camera_id` | Frames successfully sent over WebSocket |
+| `nvr_ws_frames_dropped_total` | Counter | `camera_id` | WebSocket frames dropped due to buffer full |
+
+**Usage:**
+
+```promql
+# WebSocket frame loss rate
+rate(nvr_ws_frames_dropped_total[5m]) / (rate(nvr_ws_frames_sent_total[5m]) + rate(nvr_ws_frames_dropped_total[5m]))
+```
+
+---
+
+## 8. Xiaomi Camera Metrics
 
 Track Xiaomi CS2 P2P camera connection stability.
 
@@ -212,7 +250,7 @@ rate(nvr_xiaomi_disconnects_total[15m]) > 0.1
 
 ---
 
-## 8. Camera Connection Metrics
+## 9. Camera Connection Metrics
 
 Track general camera connection health and reconnection behavior.
 
@@ -239,7 +277,7 @@ rate(nvr_camera_connection_errors_total[5m])
 
 ---
 
-## 9. StreamHub / Pipeline Metrics
+## 10. StreamHub / Pipeline Metrics
 
 Track the internal frame distribution pipeline. These metrics help diagnose bottlenecks and frame loss in the StreamHub fan-out system.
 
@@ -248,17 +286,20 @@ Track the internal frame distribution pipeline. These metrics help diagnose bott
 | `nvr_streamhub_frames_in_total` | Counter | `camera_id` | Total frames broadcast into StreamHub |
 | `nvr_streamhub_frames_dropped_total` | Counter | `camera_id`, `consumer`, `is_idr` | Frames dropped by StreamHub (buffer full) |
 | `nvr_streamhub_consumer_buffer_depth` | Gauge | `camera_id`, `consumer` | Current buffer depth for each consumer |
-| `nvr_frame_processing_duration_seconds` | Histogram | `camera_id`, `protocol` | Frame processing time through the pipeline (1:100 sampling) |
+| `nvr_streamhub_frames_sent_total` | Counter | `camera_id`, `consumer` | Total frames delivered to each hub consumer (periodic flush from hub atomics) |
+| `nvr_streamhub_bytes_in_total` | Counter | `camera_id` | Total video bytes broadcast into StreamHub (periodic flush) |
+| `nvr_streamhub_drop_rate_exceeded_total` | Counter | `camera_id`, `consumer` | Times a consumer's drop rate crossed the warn threshold |
+| `nvr_streamhub_hop_dwell_ms_avg` | Gauge | `camera_id`, `consumer` | Average enqueue→drain dwell in a consumer's queue (ms) |
+| `nvr_streamhub_hop_dwell_ms_max` | Gauge | `camera_id`, `consumer` | Maximum enqueue→drain dwell in a consumer's queue (ms) |
 | `nvr_jitter_buffer_depth` | Gauge | `camera_id` | Current jitter buffer frame count |
 | `nvr_jitter_buffer_reorders_total` | Counter | `camera_id` | Out-of-order frames detected |
+| `nvr_jitter_buffer_flushes_total` | Counter | `camera_id` | Jitter buffer flushes (capacity or timeout reached) |
 | `nvr_audio_frames_total` | Counter | `camera_id`, `codec` | Total audio frames broadcast into StreamHub |
 | `nvr_audio_frames_dropped_total` | Counter | `camera_id` | Audio frames dropped due to buffer overflow |
 
 **`consumer` label values:** `hls`, `webrtc`, `flv`, `wsstream`, `recorder`, `ai`, etc.
 
 **`is_idr` label values:** `true` (IDR/key frame), `false`.
-
-**Buckets** for `nvr_frame_processing_duration_seconds`: 1ms, 2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s.
 
 **Usage:**
 
@@ -269,8 +310,11 @@ rate(nvr_streamhub_frames_dropped_total[5m])
 # High consumer buffer depth (potential bottleneck)
 nvr_streamhub_consumer_buffer_depth > 100
 
-# Frame processing latency P99
-histogram_quantile(0.99, rate(nvr_frame_processing_duration_seconds_bucket[5m]))
+# Delivered vs dropped frames per consumer
+rate(nvr_streamhub_frames_sent_total[5m])
+
+# Per-hop dwell — a high max means that consumer's queue is backing up
+nvr_streamhub_hop_dwell_ms_max
 
 # Jitter buffer activity — non-zero = out-of-order frames
 nvr_jitter_buffer_depth
@@ -278,7 +322,28 @@ nvr_jitter_buffer_depth
 
 ---
 
-## 10. Health → Prometheus Bridge Metrics
+## 11. Playback Quality Metrics
+
+Track player-reported end-to-end live latency and stalls (telemetry relayed over the WS channel; covers all live protocols).
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `nvr_playback_live_latency_ms` | Gauge | `camera_id`, `protocol` | Player-reported end-to-end live latency (ms): hub ingest wallclock relayed via WS vs. browser clock |
+| `nvr_playback_stalls_total` | Counter | `camera_id`, `protocol` | Player-reported playback stalls (buffering/freezes) |
+
+**Usage:**
+
+```promql
+# Live latency by protocol
+nvr_playback_live_latency_ms
+
+# Stall rate — sustained non-zero means bandwidth or pipeline trouble
+rate(nvr_playback_stalls_total[5m]) > 0
+```
+
+---
+
+## 12. Health → Prometheus Bridge Metrics
 
 Real-time camera stream quality metrics bridged from the health monitoring system.
 
@@ -303,7 +368,7 @@ nvr_stream_bitrate_kbps == 0
 
 ---
 
-## 11. Transcoding Metrics
+## 13. Transcoding Metrics
 
 Track FFmpeg transcoding jobs.
 
@@ -337,7 +402,7 @@ nvr_transcoding_ffmpeg_status == 0
 
 ---
 
-## 12. Remote Log Metrics
+## 14. Remote Log Metrics
 
 Track remote log shipping (VictoriaLogs / Loki).
 
@@ -358,7 +423,7 @@ rate(nvr_remote_log_dropped_total[5m]) > 0
 
 ---
 
-## 13. Codec Probe Metrics
+## 15. Codec Probe Metrics
 
 Observe the codec-detection pipeline (recorder probe → DB persist → `/protocols` → orchestrator → player). The H.265 chain is the project's largest complexity and defect source — issue #112 (H.265 black screen) was a **silent probe failure**. These metrics make probe outcome and latency visible so stale-encoding problems surface before users see black video.
 
@@ -394,7 +459,7 @@ histogram_quantile(0.99, sum(rate(nvr_codec_probe_duration_seconds_bucket[5m])) 
 
 ---
 
-## 14. Built-in Runtime Metrics
+## 16. Built-in Runtime Metrics
 
 In addition to custom NVR metrics, these standard collectors are registered:
 
@@ -427,7 +492,7 @@ go_goroutines > 500
 
 ---
 
-## 15. Merge Metrics
+## 17. Merge Metrics
 
 Track recording segment merge operations — both batch merges and the quasi-real-time rolling merge.
 
@@ -464,7 +529,7 @@ sum by (reason) (rate(nvr_rolling_merge_bucket_finalized_total[1h]))
 
 ---
 
-## 16. SQLite Database Metrics
+## 18. SQLite Database Metrics
 
 Health metrics for the SQLite metadata database — writer pool, read-only pool, and file-level health.
 
@@ -504,7 +569,7 @@ rate(nvr_sqlite_busy_errors_total[5m]) > 0
 
 ---
 
-## 17. Authentication Metrics
+## 19. Authentication Metrics
 
 Track login attempts for security monitoring.
 
@@ -527,7 +592,7 @@ rate(nvr_auth_rate_limited_total[5m])
 
 ---
 
-## 18. AI Event Metrics
+## 20. AI Event Metrics
 
 Track AI events received from the external MiBeeVision backend.
 
@@ -548,7 +613,7 @@ rate(nvr_ai_events_errors_total[5m]) > 0
 
 ---
 
-## 19. Timeline Metrics
+## 21. Timeline Metrics
 
 Track DVR-style timeline seek operations during recording browsing.
 
@@ -567,7 +632,7 @@ topk(5, sum(rate(nvr_timeline_seeks_total[1h])) by (camera_id))
 
 ---
 
-## 20. Pixel Activity Gate Metrics
+## 22. Pixel Activity Gate Metrics
 
 Track the adaptive-recording pixel-activity gate (pixgate) sampler telemetry (#699). journald rotates logs away under disk pressure, so these metrics are the durable observation surface for sampler health.
 
@@ -629,6 +694,9 @@ nvr_webrtc_active_peers
 
 # FLV viewers per camera
 nvr_flv_active_streams
+
+# WebSocket viewers per camera
+nvr_ws_active_streams
 ```
 
 ### Quality Panel
@@ -637,8 +705,8 @@ nvr_flv_active_streams
 # Top cameras by frame drop rate
 topk(5, rate(nvr_streamhub_frames_dropped_total[5m]))
 
-# Slow cameras by processing time
-topk(5, histogram_quantile(0.99, rate(nvr_frame_processing_duration_seconds_bucket[5m])))
+# Slow cameras by per-hop dwell (pipeline bottleneck)
+topk(5, nvr_streamhub_hop_dwell_ms_max)
 ```
 
 ---

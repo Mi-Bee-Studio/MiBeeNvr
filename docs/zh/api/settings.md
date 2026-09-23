@@ -247,16 +247,35 @@ curl -u username:password \
   "device": "jetson-orin",
   "queue_depth": 0,
   "processed": 12841,
-  "last_seen": "2026-08-17T12:00:00Z"
+  "skip_cameras": [],
+  "last_seen": "2026-08-17T12:00:00Z",
+  "drops_marked_total": 5,
+  "instances": [
+    {
+      "name": "default",
+      "url": "http://127.0.0.1:8080",
+      "healthy": true,
+      "device": "jetson-orin",
+      "queue_depth": 0,
+      "processed": 12841,
+      "last_seen": "2026-08-17T12:00:00Z",
+      "drops_marked_total": 5,
+      "push_state": "closed",
+      "push_fails": 0
+    }
+  ]
 }
 ```
 
-`last_seen` 在从未收到心跳时省略。只有 `healthy` 为 `true` 时 NVR 才会向
-Vision 推送视频段；心跳恢复后，错过的段会被自动补偿重推。
+顶层字段保持单实例时代的形状（即 `default` 实例）；多实例部署会附加
+`instances[]` 数组逐实例展开（含推送熔断状态 `push_state`：`closed` /
+`open` / `half-open`，与连续失败数 `push_fails`）。`last_seen` 在从未收到
+心跳时省略。只有 `healthy` 为 `true` 时 NVR 才会向 Vision 推送视频段；
+心跳恢复后，错过的段会被自动补偿重推。
 
 ### Vision 心跳上报
 
-**端点：** `POST /api/vision/heartbeat`（公开端点，无需认证）
+**端点：** `POST /api/vision/heartbeat`（需认证：API Key / BasicAuth / 会话令牌——心跳携带 SkipCameras、drops 等状态写操作）
 
 Vision 服务每 30 秒上报一次。请求体：
 
@@ -276,6 +295,115 @@ Vision 服务每 30 秒上报一次。请求体：
   "push_enabled": true
 }
 ```
+
+> 心跳 v2 请求体另有两个可选块：`drops`（批量丢弃报告，响应回 `ack_drops` 确认已消费，受影响录像标记为 `ai_status=skipped`）与 `metrics`（运行指标快照，进入 `GET /api/vision/metrics` 查询的历史环）。
+
+### Vision 运行指标
+
+**端点：** `GET /api/vision/metrics`
+
+查询心跳历史采样环（内存保留，约 24 小时 @ 每 30 秒一次心跳），供仪表盘趋势图绘制。未启用 Vision 集成时返回 `{"enabled": false, "points": [], "marked_total": 0}`。
+
+**查询参数：**
+
+| 参数 | 类型 | 必填 | 说明 | 示例 |
+|-----------|------|----------|-------------|---------|
+| `hours` | integer | 否 | 回溯时长（1–168，默认 24；超出范围被钳制） | `12` |
+| `instance` | string | 否 | 实例名（多实例部署时指定，默认 `default`） | `jetson-orin` |
+
+**请求：**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/vision/metrics?hours=12"
+```
+
+**响应：**
+```json
+{
+  "enabled": true,
+  "instance": "default",
+  "points": [
+    {
+      "ts": "2026-08-17T11:30:00Z",
+      "queue_depth": 2,
+      "processed_count": 12841,
+      "dropped_total": 0,
+      "decode_workers": 2,
+      "workers_busy": 1,
+      "events_emitted": 3104
+    }
+  ],
+  "marked_total": 5
+}
+```
+
+`points` 内是逐次心跳的采样点；`marked_total` 为该实例累计已标记跳过（`ai_status=skipped`）的录像数。指定的实例不存在时返回空 `points`。
+
+## RTSP 输出设置
+
+内置 RTSP 输出服务（`rtsp://<host>:<port>/<camera_id>` 拉流地址，供第三方平台当作摄像头源接入）的开关、端口与凭据。
+
+### 获取 RTSP 输出设置
+
+**端点：** `GET /api/settings/rtsp-output`
+
+**请求：**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/settings/rtsp-output"
+```
+
+**响应：**
+```json
+{
+  "enabled": true,
+  "port": 8554,
+  "username": "viewer",
+  "password_configured": true
+}
+```
+
+密码永不回显，只返回 `password_configured` 标志。
+
+### 更新 RTSP 输出设置
+
+**端点：** `PUT /api/settings/rtsp-output`
+
+所有字段可选，支持部分更新。
+
+**请求体：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `enabled` | bool | 启用 / 停用 RTSP 输出服务（缺省为启用） |
+| `port` | integer | 监听端口（1–65535，否则 400） |
+| `username` | string | 拉流认证用户名（留空 = 保持不变） |
+| `password` | string | 拉流认证密码（**留空 = 保持当前密码**；GET 不回显，UI 未改动时原样回传空串） |
+| `clear_credentials` | bool | 一次清空用户名 + 密码（开放访问）；单独的 `password` 字段无法表达「清除」 |
+
+**请求：**
+```bash
+curl -u username:password \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "port": 8554,
+    "username": "viewer",
+    "password": "new-secret"
+  }' \
+  "http://localhost:9090/api/settings/rtsp-output"
+```
+
+**响应：**
+```json
+{
+  "status": "updated",
+  "restart_required": true
+}
+```
+
+> RTSP 服务在构造时读取配置快照，任何修改**重启后生效**——响应恒带 `restart_required: true` 供 UI 提示。
 
 ## 更新设置
 

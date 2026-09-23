@@ -379,6 +379,126 @@ curl -u username:password \
 
 > Insufficient target space (20% safety-margin check) rejects the switch with 400; candidate management and batch migration are covered in [Storage Management](../storage-management.md).
 
+## Camera Groups
+
+The group registry lets an EMPTY group exist ahead of any member camera; per-camera `group_name` remains the membership source of truth, so rename/delete walk the member cameras in one call (drag-and-drop member moves go through `PUT /api/cameras/{id}`). Group names are capped at 64 characters (non-empty after trimming); the registry holds at most 200 groups.
+
+### List Camera Groups
+
+**Endpoint:** `GET /api/cameras/groups`
+
+Returns all group names in their saved order (the management page's drag-to-reorder result). An empty array when no groups exist.
+
+**Request:**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/cameras/groups"
+```
+
+**Response:**
+```json
+["Indoor", "Outdoor", "Garage"]
+```
+
+### Create Camera Group
+
+**Endpoint:** `POST /api/cameras/groups`
+
+Register a new group (appended to the end of the list). An existing name is a no-op (idempotent).
+
+**Request Body:**
+```json
+{"name": "Indoor"}
+```
+
+**Request:**
+```bash
+curl -u username:password \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Indoor"}' \
+  "http://localhost:9090/api/cameras/groups"
+```
+
+**Response (201 Created):**
+```json
+{"name": "Indoor"}
+```
+
+> An empty name or one longer than 64 characters returns 400.
+
+### Update Group Order
+
+**Endpoint:** `PUT /api/cameras/groups/order`
+
+Store the full named-group order (management-page drag-to-reorder). Unknown names in the list get registered (a derived-only group being reordered becomes persistent); groups absent from the list keep their old positions.
+
+**Request Body:**
+```json
+{"names": ["Outdoor", "Indoor", "Garage"]}
+```
+
+**Request:**
+```bash
+curl -u username:password \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"names": ["Outdoor", "Indoor", "Garage"]}' \
+  "http://localhost:9090/api/cameras/groups/order"
+```
+
+**Response:**
+```json
+{"count": 3}
+```
+
+> Duplicate names or more than 200 groups return 400.
+
+### Rename Camera Group
+
+**Endpoint:** `PUT /api/cameras/groups/{name}`
+
+Rename a group and update `group_name` on every member camera. **Renaming onto an existing name MERGES the two groups** — both member sets land on the target; this is a valid operation, not a conflict.
+
+**Request Body:**
+```json
+{"name": "Living Room"}
+```
+
+**Request:**
+```bash
+curl -u username:password \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Living Room"}' \
+  "http://localhost:9090/api/cameras/groups/Indoor"
+```
+
+**Response:**
+```json
+{"name": "Living Room"}
+```
+
+> A new name identical to the old one returns 400.
+
+### Delete Camera Group
+
+**Endpoint:** `DELETE /api/cameras/groups/{name}`
+
+Remove the registry entry; member cameras have `group_name` cleared (back to ungrouped). The response reports how many cameras were moved out.
+
+**Request:**
+```bash
+curl -u username:password \
+  -X DELETE \
+  "http://localhost:9090/api/cameras/groups/Garage"
+```
+
+**Response:**
+```json
+{"ungrouped": 2}
+```
+
 ## Camera Snapshot
 
 **Endpoint:** `GET /api/cameras/{id}/snapshot`

@@ -1,6 +1,6 @@
 # Recording & Playback
 
-> Applies to MiBeeNvr v0.12.0
+> Applies to MiBeeNvr v0.13.0
 
 MiBee NVR captures camera video streams as MP4 segments and saves them to disk. A built-in web interface lets you browse, search, and download recordings.
 
