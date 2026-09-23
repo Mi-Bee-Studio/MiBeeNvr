@@ -18,6 +18,20 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
 
+// jsonBody marshals a request body. Bodies must be built by Marshal, never
+// string concatenation: native Windows paths (t.TempDir() on the Windows
+// desktop build) contain "\", which spliced raw into JSON is an invalid
+// escape sequence — the server then 400s with "invalid request body" before
+// the assertion under test ever runs (#891).
+func jsonBody(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 // setupMigrationHandler builds a Handler + a real background migrator whose
 // install has one camera tree and a database that must not move.
 func setupMigrationHandler(t *testing.T) (*Handler, *migration.Migrator, string) {
@@ -71,7 +85,7 @@ func TestCameraStorageRoot_SwitchAndBackgroundMigrate(t *testing.T) {
 	h.config.Storage.Candidates = []string{target}
 
 	req := httptest.NewRequest(http.MethodPut, "/api/cameras/cam-one/storage-root",
-		strings.NewReader(`{"root": "`+target+`", "delete_source": true}`))
+		strings.NewReader(jsonBody(t, map[string]any{"root": target, "delete_source": true})))
 	req.SetPathValue("id", "cam-one")
 	w := httptest.NewRecorder()
 	h.handleSetCameraStorageRoot(w, req)
@@ -197,7 +211,7 @@ func TestStorageCandidates_AddRemove(t *testing.T) {
 	}
 
 	// Happy path: appears in config + in the candidates listing.
-	if w := add(`{"path": "` + extra + `"}`); w.Code != http.StatusOK {
+	if w := add(jsonBody(t, map[string]string{"path": extra})); w.Code != http.StatusOK {
 		t.Fatalf("add status = %d, body = %s", w.Code, w.Body.String())
 	}
 	if len(h.config.Storage.Candidates) != 1 || h.config.Storage.Candidates[0] != extra {
@@ -211,16 +225,20 @@ func TestStorageCandidates_AddRemove(t *testing.T) {
 	}
 
 	// Rejections: duplicate, non-existent dir, relative path, current root.
-	if w := add(`{"path": "` + extra + `"}`); w.Code != http.StatusBadRequest {
+	// The missing dir lives under a temp parent so the rejection reason is
+	// "does not exist" on every OS (root-level "/no/such/dir" resolves
+	// against the current drive on Windows — and a writable drive root
+	// would let ProbeDir CREATE it).
+	if w := add(jsonBody(t, map[string]string{"path": extra})); w.Code != http.StatusBadRequest {
 		t.Fatalf("duplicate status = %d", w.Code)
 	}
-	if w := add(`{"path": "/no/such/dir"}`); w.Code != http.StatusBadRequest {
+	if w := add(jsonBody(t, map[string]string{"path": filepath.Join(t.TempDir(), "no", "such", "dir")})); w.Code != http.StatusBadRequest {
 		t.Fatalf("missing dir status = %d", w.Code)
 	}
 	if w := add(`{"path": "relative/path"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("relative path status = %d", w.Code)
 	}
-	if w := add(`{"path": "` + oldRoot + `"}`); w.Code != http.StatusBadRequest {
+	if w := add(jsonBody(t, map[string]string{"path": oldRoot})); w.Code != http.StatusBadRequest {
 		t.Fatalf("current-root status = %d", w.Code)
 	}
 
@@ -255,7 +273,7 @@ func TestUpdateSettings_RootPreflightRejectsUnusableRoot(t *testing.T) {
 	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"storage": {"root_dir": "` + filepath.Join(blocked, "root") + `"}}`
+	body := jsonBody(t, map[string]any{"storage": map[string]string{"root_dir": filepath.Join(blocked, "root")}})
 	req := httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.handleUpdateSettings(w, req)
@@ -271,7 +289,7 @@ func TestUpdateSettings_RootPreflightRejectsUnusableRoot(t *testing.T) {
 func TestUpdateSettings_RootSwitchIsHot(t *testing.T) {
 	h, _, _ := setupMigrationHandler(t)
 	target := t.TempDir()
-	body := `{"storage": {"root_dir": "` + target + `"}}`
+	body := jsonBody(t, map[string]any{"storage": map[string]string{"root_dir": target}})
 	req := httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.handleUpdateSettings(w, req)

@@ -100,7 +100,7 @@ func repairOneTimelapseMerge(ctx context.Context, db *storage.DB, m *model.Timel
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer f.Close() // error paths; the success path closes explicitly below
 
 	// Pass 1: scan samples; short-circuit on the first clean one to keep the
 	// common (healthy) case at zero allocations.
@@ -187,8 +187,13 @@ func repairOneTimelapseMerge(ctx context.Context, db *storage.DB, m *model.Timel
 	if err != nil {
 		return false, err
 	}
-	// CreateTemp files are 0600; restore the storage manager's usual 0644 so
-	// the rewritten merge matches its siblings.
+	// The original must be closed BEFORE the replace-rename: on Windows,
+	// renaming onto a file this process still holds open fails with a
+	// sharing violation (Linux allows rename-over-open). The deferred Close
+	// above only covers error paths now.
+	if err := f.Close(); err != nil {
+		return false, err
+	}
 	if err := os.Chmod(outPath, 0o644); err != nil {
 		return false, err
 	}
