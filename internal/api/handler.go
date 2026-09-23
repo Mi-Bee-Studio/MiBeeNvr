@@ -69,6 +69,22 @@ type HealthResponse struct {
 	// (the ID is generated and persisted on first config load).
 	DeviceID   string `json:"device_id,omitempty"`
 	DeviceName string `json:"device_name,omitempty"`
+	// Cameras carries BARE camera counters for the public payload — the
+	// client-compat contract: MiBeeScout (and any 0.12-era client)
+	// identifies an NVR by cameras.total in /api/health; discovery and
+	// manual connect both fail without it (#899). Fleet details (names,
+	// ids, scores) stay behind auth on /api/health/cameras (#879).
+	Cameras *HealthCameraCounts `json:"cameras,omitempty"`
+}
+
+// HealthCameraCounts is the privacy-safe camera aggregation embedded in the
+// public /api/health response: counters only, no per-camera details.
+type HealthCameraCounts struct {
+	Total        int `json:"total"`
+	Recording    int `json:"recording"`
+	Reconnecting int `json:"reconnecting"`
+	Error        int `json:"error"`
+	Offline      int `json:"offline"`
 }
 
 // CameraHealthSummary provides aggregated camera health in the /api/health response.
