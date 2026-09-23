@@ -1321,9 +1321,11 @@ $effect(() => {
                     </div>
                   </div>
                   {#if playingRemoteId === item.id}
-                    <!-- Remote playback rides the anonymous range proxy
-                         (/api/offload/objects/{id}); H.264 plays natively,
-                         H.265 depends on the browser's HEVC support. -->
+                    <!-- Remote playback rides the range proxy
+                         (/api/offload/objects/{id}, authenticated via the
+                         ?token= query appended by offloadObjectURL); H.264
+                         plays natively, H.265 depends on the browser's HEVC
+                         support. -->
                     <video
                       class="w-full max-h-[480px] mt-2 rounded-lg bg-black"
                       controls

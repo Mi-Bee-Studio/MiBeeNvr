@@ -4,13 +4,13 @@ package api
 // batch 2):
 //
 //	GET  /api/offload/recordings        (authed) evicted/remote archive listing
-//	GET  /api/offload/objects/{id}      (anonymous, Range) playback proxy
-//	HEAD /api/offload/objects/{id}      (anonymous) <video> size probe
+//	GET  /api/offload/objects/{id}      (authed, Range) playback proxy
+//	HEAD /api/offload/objects/{id}      (authed) <video> size probe
 //
-// The object endpoints are anonymous for the same reason as
-// /api/recordings/{id}/download: <video> element fetches arrive without the
-// SPA's Authorization header, and they serve the same media bytes the local
-// download path already exposes.
+// The object endpoints sit in the protected media group with the recording
+// downloads (#893, tracking #879/#882): <video> element fetches reach them
+// via ?token= links minted by the SPA (appendAuthToken), the same mechanism
+// as /api/recordings/{id}/download.
 
 import (
 	"context"

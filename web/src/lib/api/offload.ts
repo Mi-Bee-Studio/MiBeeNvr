@@ -1,10 +1,12 @@
 /**
  * Offload API — remote object-storage archive (issue #874):
  * listing remote (evicted) items + outbox status. Playback rides the
- * anonymous range-proxy URL below (no Authorization header needed — same
- * exposure class as recording downloads).
+ * range-proxy URL below, in the protected media group — it carries the
+ * session token as a ?token= query param (same mechanism as recording
+ * downloads) so <video>/<a> fetches without an Authorization header still
+ * authenticate.
  */
-import { apiRequest, API_BASE } from './client';
+import { apiRequest, API_BASE, appendAuthToken } from './client';
 
 export interface OffloadRemoteItem {
   /** outbox row id — the playback URL key */
@@ -55,7 +57,7 @@ export async function getOffloadStatus(signal?: AbortSignal): Promise<OffloadSta
   return apiRequest<OffloadStatus>('/offload/status', { signal });
 }
 
-/** Anonymous ranged playback URL for a remote item (use directly in <video>). */
+/** Ranged playback URL for a remote item (use directly in <video>/<a download>). */
 export function offloadObjectURL(item: Pick<OffloadRemoteItem, 'id'>): string {
-  return `${API_BASE}/offload/objects/${item.id}`;
+  return appendAuthToken(`${API_BASE}/offload/objects/${item.id}`);
 }
