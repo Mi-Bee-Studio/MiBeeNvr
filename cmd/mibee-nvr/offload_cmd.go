@@ -44,6 +44,10 @@ func cmdOffload() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	// Exit explicitly on success: returning would fall through into the full
+	// server startup path in main (the cmdRepair os.Exit(runRepair()) pattern
+	// — every subcommand owns its exit).
+	os.Exit(0)
 }
 
 func runOffloadCommand() error {
