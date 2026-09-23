@@ -12,7 +12,7 @@ Supported targets: AWS S3, MinIO, Cloudflare R2, Backblaze B2, Alibaba Cloud OSS
 
 ## How it works
 
-```
+```text
 segments ──rolling merge──▶ merged output ──(after min_age grace)──▶ offload_outbox queue
                                                                         │
                              scan loop (60s default) picks pending rows ──▶ S3 PUT ──▶ HeadObject verify

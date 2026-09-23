@@ -12,7 +12,7 @@
 
 ## 工作原理
 
-```
+```text
 录像段 ──rolling 合并──▶ 合并产物 ──(min_age 宽限后)──▶ offload_outbox 队列
                                                           │
                               扫描循环（默认 60s）发现待上传行 ──▶ S3 PUT ──▶ HeadObject 校验
