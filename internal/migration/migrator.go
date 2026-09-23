@@ -220,11 +220,16 @@ func (m *Migrator) finish(job *Job, state, errStr string) {
 }
 
 // rootOf returns the known storage root a path lives under ("" = none).
+// Both separator flavors are normalized to "/" first: Windows-native paths
+// carry "\", and a hardcoded "/" prefix check matches nothing there —
+// recordings then silently skip migration entirely (#891).
 func (m *Migrator) rootOf(path string) string {
+	p := strings.ReplaceAll(path, `\`, `/`)
 	roots := m.store.Roots()
 	sort.Slice(roots, func(i, j int) bool { return len(roots[i]) > len(roots[j]) })
 	for _, r := range roots {
-		if strings.HasPrefix(path, r+"/") {
+		nr := strings.TrimSuffix(strings.ReplaceAll(r, `\`, `/`), "/")
+		if strings.HasPrefix(p, nr+"/") {
 			return r
 		}
 	}
@@ -386,7 +391,13 @@ func (m *Migrator) moveRecording(ctx context.Context, job *Job, r MigratableReco
 	if srcRoot == "" || srcRoot == job.ToRoot {
 		return 0, nil // not under any known root / already there
 	}
-	newFile := filepath.Join(job.ToRoot, strings.TrimPrefix(r.FilePath, srcRoot+"/"))
+	// Separator-agnostic relative-path derivation: rootOf matched on
+	// "/"-normalized strings, so the TrimPrefix must too — a Windows "\"
+	// path would trim nothing and bolt the entire absolute path (drive
+	// letter included) onto the target root.
+	normFile := strings.ReplaceAll(r.FilePath, `\`, `/`)
+	normRoot := strings.TrimSuffix(strings.ReplaceAll(srcRoot, `\`, `/`), "/")
+	newFile := filepath.Join(job.ToRoot, filepath.FromSlash(strings.TrimPrefix(normFile, normRoot+"/")))
 	if err := m.copyRated(ctx, r.FilePath, newFile); err != nil {
 		return 0, err
 	}
