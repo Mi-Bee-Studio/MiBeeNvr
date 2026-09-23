@@ -438,10 +438,6 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 	// always returns 401, so it cannot be used to bypass the direct login.
 	r.Get("/api/auth/gateway-session", h.handleGatewaySession)
 	r.Get("/models/{filename}", h.handleServeModel) // Public for browser-side AI model loading
-	// Remote offload playback proxy (issue #874 batch 2) — same exposure
-	// class as /download above: <video>/fetches arrive without credentials.
-	r.Get("/api/offload/objects/{id}", h.handleOffloadObject)
-	r.Head("/api/offload/objects/{id}", h.handleOffloadObject)
 	// WHIP push-in ingest (#369): browsers/OBS cannot send auth headers with
 	// the SDP POST, and the stream key IS the credential (RTMP/SRT streamid
 	// threat model). Must NOT be rate-limited — media sessions are long-lived.
@@ -457,7 +453,8 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 // sets it via setStreamCookieOnPlaylist, same mechanism as live HLS), and
 // ?token= (SPA <video src> / <a download> links, EventSource). Recording IDs
 // are UnixNano-predictable, so these endpoints must not sit in the anonymous
-// group.
+// group. The remote offload playback proxy (#874 batch 2, tightened #893)
+// shares this exposure class — outbox ids are equally predictable.
 func (h *Handler) registerMediaRoutes(r chi.Router) {
 	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
@@ -467,6 +464,8 @@ func (h *Handler) registerMediaRoutes(r chi.Router) {
 	r.Head("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
 	r.Get("/api/cameras/{cameraID}/playback/playlist.m3u8", h.handlePlaybackPlaylist)
 	r.Get("/api/cameras/{cameraID}/playback/{recordingID}/{segName}", h.handlePlaybackSegment)
+	r.Get("/api/offload/objects/{id}", h.handleOffloadObject)
+	r.Head("/api/offload/objects/{id}", h.handleOffloadObject)
 }
 
 // --- Helpers ---
