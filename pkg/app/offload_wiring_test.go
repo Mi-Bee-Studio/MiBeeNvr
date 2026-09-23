@@ -6,10 +6,13 @@ package app
 // construction (unreachable endpoint must still build).
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildAppDeps_OffloadDisabled_NoManager(t *testing.T) {
@@ -126,4 +129,34 @@ func serve(h http.Handler, req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// TestBuildAppDeps_OffloadPresignDefaultBucket guards the batch-3 default-
+// bucket presign path: the PresignFor closure receives ” for non-routed
+// rows and must resolve it to the CONFIGURED bucket (an empty bucket fails
+// NewS3 validation and the handler silently degrades to proxying — exactly
+// what the full-system acceptance caught on 2026-09-23).
+func TestBuildAppDeps_OffloadPresignDefaultBucket(t *testing.T) {
+	t.Helper()
+	cfg, configPath := minimalConfig(t)
+	cfg.Storage.Remote.Enabled = true
+	cfg.Storage.Remote.EndpointURL = "http://127.0.0.1:1"
+	cfg.Storage.Remote.Bucket = "nvr"
+	cfg.Storage.Remote.AccessKeyID = "k"
+	cfg.Storage.Remote.SecretAccessKey = "s"
+
+	deps, cleanup, err := buildAppDeps(cfg, configPath)
+	if err != nil {
+		t.Fatalf("buildAppDeps: %v", err)
+	}
+	defer cleanup()
+
+	// Presigning is LOCAL (query-string signing) — no dial, safe in tests.
+	url, err := deps.offloadProxy.PresignGet(context.Background(), "", "cam/a.mp4", time.Minute)
+	if err != nil {
+		t.Fatalf("PresignGet for the default bucket failed (empty bucket passed validation?): %v", err)
+	}
+	if !strings.Contains(url, "/nvr/cam/a.mp4") {
+		t.Fatalf("presigned URL %q does not address the configured bucket", url)
+	}
 }

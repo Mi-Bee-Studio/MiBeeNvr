@@ -145,7 +145,12 @@ func buildMaintenanceDeps(deps *appDeps) (timelapseSourceDeleter, *snapshot.Capt
 			},
 			PresignFor: func(bucket string) (objectstore.Presigner, error) {
 				// Presign against the browser-reachable endpoint when
-				// configured; otherwise the store's own endpoint.
+				// configured; otherwise the store's own endpoint. '' (the
+				// default bucket) must resolve to the CONFIGURED bucket —
+				// NewS3 rejects an empty one.
+				if bucket == "" {
+					bucket = rc.Bucket
+				}
 				pc := objectstore.Config{
 					Region:          rc.Region,
 					Bucket:          bucket,
