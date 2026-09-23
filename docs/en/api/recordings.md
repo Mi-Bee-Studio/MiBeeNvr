@@ -362,3 +362,48 @@ curl -u username:password \
 ```
 
 **Response:** JPEG image binary. Returns 400 for invalid filenames (path traversal protection).
+
+## Batch-Fetch Timelapse Frames
+
+**Endpoint:** `GET /api/recordings/{id}/timelapse-frames/batch`
+
+Carry a batch of JPEG frames in one request (a `multipart/mixed` response, one part per frame), replacing the per-frame GET hot path — N frames per request instead of N requests. The frontend streams the response and decodes parts as Blobs.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description | Example |
+|-----------|------|----------|-------------|---------|
+| `offset` | integer | No | First frame index (default 0; negative / non-numeric returns 400) | `120` |
+| `limit` | integer | No | Frames in this batch (default 120, max 240 — clamped; 0 / negative / non-numeric returns 400) | `120` |
+
+**Request:**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/recordings/1704123456789012345/timelapse-frames/batch?offset=0&limit=60" \
+  -o batch.txt
+```
+
+**Response:** `Content-Type: multipart/mixed; boundary=…`, each part an `image/jpeg` whose part headers carry `X-Frame-Index` (the frame index). Response headers:
+
+| Header | Description |
+|--------|-------------|
+| `X-Frame-Total` | Total frames available for the recording |
+| `X-Frame-Offset` | Index this batch starts at |
+| `X-Frame-Count` | Frames actually in this batch |
+| `Cache-Control` | `no-store` |
+
+```text
+--BOUNDARY
+Content-Type: image/jpeg
+X-Frame-Index: 0
+
+<JPEG bytes…>
+--BOUNDARY
+Content-Type: image/jpeg
+X-Frame-Index: 1
+
+<JPEG bytes…>
+--BOUNDARY--
+```
+
+Supported formats: `mjpeg` / `timelapse` recording directories (timestamp-sorted `.jpg` files) and `avi` recordings (sliced via the movi chunk index); anything else returns 404 (`not a timelapse or MJPEG recording`). An out-of-range `offset` yields an empty but valid multipart body (players stop cleanly), and the count is clamped to the available range.

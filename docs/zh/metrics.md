@@ -64,22 +64,41 @@ curl -u metrics:password http://localhost:9090/metrics
 | `nvr_segments_created_total` | Counter | `camera_id`, `codec` | 已创建的 MP4 片段总数 |
 | `nvr_recording_count` | Gauge | — | 数据库中当前的录制条目数 |
 | `nvr_recorder_ring_buffer_drops_total` | Counter | `camera_id` | 因录制器环形缓冲区溢出而丢弃的帧数 |
+| `nvr_segment_write_duration_seconds` | Histogram | `camera_id` | MP4 录像段写盘耗时——SD 卡性能退化的早期预警 |
+| `nvr_recording_audit_total` | Counter | `camera_id`, `result` | 录像完整性审计结果（对已关闭的段运行 mediaprobe） |
+| `nvr_recording_deepcheck_total` | Counter | `camera_id`, `result` | 解码级深度抽检结果（`ffmpeg -v error` 采样，每相机每小时 ≤1 次，#489）——未配置 FFmpeg 时该指标完全缺席 |
 
 **`codec` 标签值：** `h264`, `h265`, `mjpeg`, `http_jpeg`, `timelapse`，或小米摄像头编码名称。
 
-**用途：** 监控录制健康状态 — 丢帧率快速增长表明录制器无法跟上视频流。使用 `rate(nvr_recorder_ring_buffer_drops_total[5m])` 检测帧丢失。
+**`nvr_segment_write_duration_seconds` 桶区间：** 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s。
+
+**`result` 标签值：** `nvr_recording_audit_total` 为 `ok`, `zero_duration`, `probe_error`；`nvr_recording_deepcheck_total` 为 `ok`, `decode_error`。
+
+**用途：** 监控录制健康状态 — 丢帧率快速增长表明录制器无法跟上视频流。使用 `rate(nvr_recorder_ring_buffer_drops_total[5m])` 检测帧丢失。写盘耗时 P99 持续走高说明存储介质开始掉速：
+
+```promql
+histogram_quantile(0.99, rate(nvr_segment_write_duration_seconds_bucket[5m])) > 1
+
+# 录像审计异常（零时长段 / 探测失败）
+rate(nvr_recording_audit_total{result!="ok"}[1h]) > 0
+```
 
 ---
 
-## 2. 存储指标
+## 2. 存储与 I/O 预算指标
 
-跟踪磁盘使用情况和容量。
+跟踪磁盘使用情况、容量与共享 I/O 预算计费（预算机制的原理与调优见[性能调优](performance.md)）。
 
 | 指标 | 类型 | 标签 | 说明 |
 |--------|------|--------|-------------|
 | `nvr_storage_used_bytes` | Gauge | — | 录制文件占用的存储空间 |
 | `nvr_storage_total_bytes` | Gauge | — | 可用总存储容量 |
 | `nvr_storage_write_errors_total` | Counter | — | 所有摄像头的存储写入 I/O 错误总数 |
+| `nvr_iobudget_bytes_charged_total` | Counter | `consumer` | 计入共享 I/O 预算的字节数（按租户计费） |
+| `nvr_iobudget_unlinks_charged_total` | Counter | `consumer` | 计入递归删除 unlink 护栏的文件数（#755） |
+| `nvr_iobudget_wait_seconds_total` | Counter | `consumer` | 后台任务在共享 I/O 预算令牌桶上的累计等待秒数 |
+
+**`consumer` 标签值：** `merge`, `cleanup`, `repair`, `timelapse`, `transcode`, `offload`（S3 冷备上传），以及灰度开关（`io.recording_writes_budgeted` / `io.playback_reads_budgeted`，默认关闭）启用后的 `recording` / `playback`。
 
 **用途：** 设置 80%/90% 容量告警：
 
@@ -192,7 +211,26 @@ rate(nvr_flv_gop_cache_hits_total[5m]) / (rate(nvr_flv_gop_cache_hits_total[5m])
 
 ---
 
-## 7. 小米摄像头指标
+## 7. WebSocket 流指标
+
+跟踪 WebSocket 低延迟直播（WASM 解码管线）。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_ws_active_streams` | Gauge | `camera_id` | 当前活跃的 WebSocket 直播流数 |
+| `nvr_ws_frames_sent_total` | Counter | `camera_id` | 通过 WebSocket 成功发送的帧数 |
+| `nvr_ws_frames_dropped_total` | Counter | `camera_id` | 因缓冲区满丢弃的 WebSocket 帧数 |
+
+**用途：**
+
+```promql
+# WebSocket 帧丢失率
+rate(nvr_ws_frames_dropped_total[5m]) / (rate(nvr_ws_frames_sent_total[5m]) + rate(nvr_ws_frames_dropped_total[5m]))
+```
+
+---
+
+## 8. 小米摄像头指标
 
 跟踪小米 CS2 P2P 摄像头连接稳定性。
 
@@ -212,7 +250,7 @@ rate(nvr_xiaomi_disconnects_total[15m]) > 0.1
 
 ---
 
-## 8. 摄像头连接指标
+## 9. 摄像头连接指标
 
 跟踪通用摄像头连接健康状态和重连行为。
 
@@ -239,7 +277,7 @@ rate(nvr_camera_connection_errors_total[5m])
 
 ---
 
-## 9. StreamHub / 管道指标
+## 10. StreamHub / 管道指标
 
 跟踪内部帧分发管道。这些指标有助于诊断 StreamHub 分发系统中的瓶颈和帧丢失。
 
@@ -248,17 +286,20 @@ rate(nvr_camera_connection_errors_total[5m])
 | `nvr_streamhub_frames_in_total` | Counter | `camera_id` | 广播到 StreamHub 的帧总数 |
 | `nvr_streamhub_frames_dropped_total` | Counter | `camera_id`, `consumer`, `is_idr` | StreamHub 丢弃的帧数（缓冲区满） |
 | `nvr_streamhub_consumer_buffer_depth` | Gauge | `camera_id`, `consumer` | 每个消费者的当前缓冲区深度 |
-| `nvr_frame_processing_duration_seconds` | Histogram | `camera_id`, `protocol` | 帧通过管道的处理时间（1:100 采样） |
+| `nvr_streamhub_frames_sent_total` | Counter | `camera_id`, `consumer` | 成功投递到各消费者的帧总数（hub 原子计数周期性冲刷） |
+| `nvr_streamhub_bytes_in_total` | Counter | `camera_id` | 广播进 StreamHub 的视频字节总数（周期性冲刷） |
+| `nvr_streamhub_drop_rate_exceeded_total` | Counter | `camera_id`, `consumer` | 消费者丢帧率越过告警阈值的次数 |
+| `nvr_streamhub_hop_dwell_ms_avg` | Gauge | `camera_id`, `consumer` | 消费者队列「入队 → 排出」的平均驻留时间（毫秒） |
+| `nvr_streamhub_hop_dwell_ms_max` | Gauge | `camera_id`, `consumer` | 消费者队列「入队 → 排出」的最大驻留时间（毫秒） |
 | `nvr_jitter_buffer_depth` | Gauge | `camera_id` | 当前抖动缓冲区中的帧数 |
 | `nvr_jitter_buffer_reorders_total` | Counter | `camera_id` | 检测到的乱序帧数 |
+| `nvr_jitter_buffer_flushes_total` | Counter | `camera_id` | 抖动缓冲区冲刷次数（容量或超时触发） |
 | `nvr_audio_frames_total` | Counter | `camera_id`, `codec` | 广播到 StreamHub 的音频帧总数（按摄像头和编码分区） |
 | `nvr_audio_frames_dropped_total` | Counter | `camera_id` | 因缓冲区溢出丢弃的音频帧数（按摄像头分区） |
 
 **`consumer` 标签值：** `hls`, `webrtc`, `flv`, `wsstream`, `recorder`, `ai` 等。
 
 **`is_idr` 标签值：** `true`（IDR/关键帧）, `false`。
-
-**`nvr_frame_processing_duration_seconds` 桶区间：** 1ms, 2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s。
 
 **用途：**
 
@@ -269,8 +310,11 @@ rate(nvr_streamhub_frames_dropped_total[5m])
 # 高消费者缓冲区深度（潜在瓶颈）
 nvr_streamhub_consumer_buffer_depth > 100
 
-# 帧处理延迟 P99
-histogram_quantile(0.99, rate(nvr_frame_processing_duration_seconds_bucket[5m]))
+# 各消费者投递量 vs 丢弃量
+rate(nvr_streamhub_frames_sent_total[5m])
+
+# 逐跳驻留 — max 居高 = 该消费者队列积压
+nvr_streamhub_hop_dwell_ms_max
 
 # 抖动缓冲区活动 — 非零 = 存在乱序帧
 nvr_jitter_buffer_depth
@@ -278,7 +322,28 @@ nvr_jitter_buffer_depth
 
 ---
 
-## 10. 健康 → Prometheus 桥接指标
+## 11. 回放质量指标
+
+跟踪播放器上报的端到端直播延迟与卡顿（遥测经 WS 通道回传，覆盖全部直播协议）。
+
+| 指标 | 类型 | 标签 | 说明 |
+|--------|------|--------|-------------|
+| `nvr_playback_live_latency_ms` | Gauge | `camera_id`, `protocol` | 播放器上报的端到端直播延迟（毫秒）：hub 摄取墙钟经 WS 中继 vs 浏览器时钟 |
+| `nvr_playback_stalls_total` | Counter | `camera_id`, `protocol` | 播放器上报的卡顿次数（缓冲/冻结） |
+
+**用途：**
+
+```promql
+# 各协议直播延迟
+nvr_playback_live_latency_ms
+
+# 卡顿率 — 持续非零说明带宽或管道有问题
+rate(nvr_playback_stalls_total[5m]) > 0
+```
+
+---
+
+## 12. 健康 → Prometheus 桥接指标
 
 从健康监控系统桥接的实时摄像头流质量指标。
 
@@ -303,7 +368,7 @@ nvr_stream_bitrate_kbps == 0
 
 ---
 
-## 11. 转码指标
+## 13. 转码指标
 
 跟踪 FFmpeg 转码任务。
 
@@ -337,7 +402,7 @@ nvr_transcoding_ffmpeg_status == 0
 
 ---
 
-## 12. 远程日志指标
+## 14. 远程日志指标
 
 跟踪远程日志发送（VictoriaLogs / Loki）。
 
@@ -358,7 +423,7 @@ rate(nvr_remote_log_dropped_total[5m]) > 0
 
 ---
 
-## 13. 编码探测指标
+## 15. 编码探测指标
 
 观测编码检测链路（recorder 探测 → DB 持久化 → `/protocols` → orchestrator → 播放器）。H.265 链路是本项目最大的复杂度与缺陷来源——#112（H.265 黑屏）就是一次**静默的探测失败**。这些指标让探测结果与延迟可观测，使编码陈旧问题在用户看到黑屏之前就能被发现。
 
@@ -394,7 +459,7 @@ histogram_quantile(0.99, sum(rate(nvr_codec_probe_duration_seconds_bucket[5m])) 
 
 ---
 
-## 14. 内置运行时指标
+## 16. 内置运行时指标
 
 除了自定义的 NVR 指标外，还注册了以下标准收集器：
 
@@ -427,7 +492,7 @@ go_goroutines > 500
 
 ---
 
-## 15. 合并指标
+## 17. 合并指标
 
 跟踪录像片段合并操作 — 批量合并与准实时滚动合并。
 
@@ -464,7 +529,7 @@ sum by (reason) (rate(nvr_rolling_merge_bucket_finalized_total[1h]))
 
 ---
 
-## 16. SQLite 数据库指标
+## 18. SQLite 数据库指标
 
 SQLite 元数据库的健康指标 — 写连接池、只读连接池与文件级健康度。
 
@@ -504,7 +569,7 @@ rate(nvr_sqlite_busy_errors_total[5m]) > 0
 
 ---
 
-## 17. 认证指标
+## 19. 认证指标
 
 跟踪登录尝试，用于安全监控。
 
@@ -527,7 +592,7 @@ rate(nvr_auth_rate_limited_total[5m])
 
 ---
 
-## 18. AI 事件指标
+## 20. AI 事件指标
 
 跟踪从外部 MiBeeVision 后端接收的 AI 事件。
 
@@ -548,7 +613,7 @@ rate(nvr_ai_events_errors_total[5m]) > 0
 
 ---
 
-## 19. 时间轴指标
+## 21. 时间轴指标
 
 跟踪 DVR 式录像浏览过程中的时间轴跳转操作。
 
@@ -567,7 +632,7 @@ topk(5, sum(rate(nvr_timeline_seeks_total[1h])) by (camera_id))
 
 ---
 
-## 20. 像素活动门控指标
+## 22. 像素活动门控指标
 
 跟踪自适应录像像素活动门控（pixgate）采样器的遥测（#699）。journald 在磁盘压力下会轮转抹掉日志，这些指标是采样器健康的持久观测面。
 
@@ -629,6 +694,9 @@ nvr_webrtc_active_peers
 
 # 各摄像头 FLV 观看者
 nvr_flv_active_streams
+
+# 各摄像头 WebSocket 观看者
+nvr_ws_active_streams
 ```
 
 ### 质量面板
@@ -637,8 +705,8 @@ nvr_flv_active_streams
 # 帧丢弃率最高的摄像头
 topk(5, rate(nvr_streamhub_frames_dropped_total[5m]))
 
-# 处理时间最慢的摄像头
-topk(5, histogram_quantile(0.99, rate(nvr_frame_processing_duration_seconds_bucket[5m])))
+# 逐跳驻留最长的摄像头（管道瓶颈）
+topk(5, nvr_streamhub_hop_dwell_ms_max)
 ```
 
 ---

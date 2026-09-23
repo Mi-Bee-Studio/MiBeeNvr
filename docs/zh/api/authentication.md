@@ -27,10 +27,11 @@ curl "http://localhost:9090/api/ai/events?api_key=mbv_your_api_key_here"
 
 ### 认证顺序
 
-1. **公开路由** — 无需认证（`/api/health`、`/api/metrics`、`/models/{filename}`、`/api/recordings/{id}/download`、`/api/recordings/{id}/merged`）
+1. **公开路由** — 无需认证（`/api/health`、`/api/readyz`、`/api/capabilities`、`/api/trigger/webhook/*`、`/models/{filename}`）
 2. **API Key** — 如果请求包含 `Authorization: Bearer mbv_...`，优先尝试 API Key 认证
-3. **BasicAuth** — 如果没有 Bearer token，则使用 BasicAuth
-4. **设置门控** — 如果未配置密码，返回 `503 SETUP_REQUIRED`
+3. **设置门控** — 如果未配置密码，返回 `503 SETUP_REQUIRED`（必须先完成初始化向导）
+4. **本机旁路** — 环回请求在 `auth.local_bypass` 开启时（桌面安装默认）完全绕过认证
+5. **会话令牌 / BasicAuth** — `Bearer mbs_...` 会话令牌优先于 BasicAuth
 
 ### 管理 API Key
 
@@ -97,6 +98,47 @@ curl -u username:password -X POST "http://localhost:9090/api/auth/login"
   "code": "AUTH_FAILED"
 }
 ```
+
+## 修改密码
+
+**端点：** `POST /api/auth/password`
+
+设置新的管理员密码，**无需提供旧密码**。授权依据是「本机性」：请求必须来自 NVR 本机的环回会话（环回连接 + 环回 / `localhost` Host 头、无代理转发头），远程调用一律 403——桌面版托盘 / macOS 菜单栏助手从 NVR 自己的机器上调用它，本机操作者本来就能手改配置文件。密码本身服务于**非本机**（局域网）登录：本机会话在开启 `auth.local_bypass` 时（桌面安装默认）完全绕过认证。
+
+**请求体：**
+```json
+{
+  "new_password": "new-secure-password"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `new_password` | string | 是 | 新密码（至少 8 个字符） |
+
+**请求：**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"new_password": "new-secure-password"}' \
+  "http://127.0.0.1:9090/api/auth/password"
+```
+
+**响应（200 OK）：**
+```json
+{
+  "status": "ok"
+}
+```
+
+**响应（403 Forbidden，远程请求）：**
+```json
+{
+  "error": "password change is only available from a local session on the NVR machine"
+}
+```
+
+> 注意副作用：bcrypt 哈希参与会话令牌的签名密钥，改密成功后**所有已签发的会话令牌（`mbs_`）立即失效**，远程会话需重新登录。尚未完成初始化（未配置密码）时返回 409。
 
 ## 设置
 
@@ -169,3 +211,18 @@ curl http://localhost:9090/api/capabilities
   }
 }
 ```
+
+## v0.13 鉴权范围变更
+
+自 v0.13 起，以下端点从匿名（无需认证）移入鉴权组，与其它 `/api` 端点采用相同的认证方式（BasicAuth / Bearer API Key / 会话令牌 / 流媒体 cookie）：
+
+- `GET/HEAD /api/recordings/{id}/download` — 录像下载
+- `GET/HEAD /api/recordings/{id}/merged` — 合并产物下载
+- `GET/HEAD /api/timelapse/merges/{id}/download` — 延时合并下载
+- `GET /api/cameras/{cameraID}/playback/*` — 按录像回放（播放列表与切片）
+- `GET /api/events` — 全量事件流（SSE）
+- `GET /api/health/cameras` — 摄像头健康明细
+
+原因：录像 ID 可由时间戳预测，事件流与摄像头健康明细会暴露摄像头名称等拓扑信息，匿名可达的风险大于便利。浏览器场景不受影响——SPA 的 `<video src>` / `<a download>` 链接可继续通过 `?token=`（仅接受 `mbs_` 会话令牌）或流媒体 cookie 携带凭据。
+
+同时，**旧版 `?token=` 的 base64(user:pass) 透传已移除**：凭据以明文形式出现在 URL 中会进入浏览器历史与代理日志。`?token=` 现在只接受 `mbs_` 会话令牌；无法设置请求头的客户端请改用 `?api_key=`（`mbv_` 前缀的 API Key）或 BasicAuth。

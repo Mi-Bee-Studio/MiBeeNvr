@@ -1,6 +1,6 @@
 # Home Assistant Integration
 
-> Applies to MiBee NVR v0.12.0+ (built-in RTSP output, MQTT triggers and status publishing); the bundled custom integration ships with v0.13.0+
+> Applies to MiBee NVR v0.13.0+ (built-in RTSP output, MQTT triggers and status publishing); the bundled custom integration ships with v0.13.0+
 
 MiBee NVR ships an optional Home Assistant custom integration (Option 0: discovery plus per-camera entities and switches); skipping it is equally viable — the RTSP output, REST API, MQTT trigger, and status publishing capabilities combine into a complete setup. This guide splits the paths by purpose — each can be enabled independently.
 

@@ -23,7 +23,7 @@ cameras:
     protocol: "rtsp"
     encoding: "h264"
     url: "rtsp://..."
-    enabled: true
+    recording_enabled: true      # 录像开关（false = 纯直播，不写段）
     onvif_endpoint: ""           # ONVIF 特定
     profile_token: ""            # ONVIF 特定
     stream_encoding: ""          # ONVIF 自动检测 (H264/H265)
@@ -42,7 +42,16 @@ cameras:
 cleanup:
   retention_days: 30
   check_interval: "1h"
-  disk_threshold_percent: 95
+  disk_threshold_percent: 85
+recording:
+  default_enabled: true           # 全局录像默认；未显式设置 recording_enabled 的相机继承此值
+memory:
+  soft_limit_bytes: 0             # 0 = 自动 GOMEMLIMIT 启发式
+io:
+  budget_bytes_per_sec: 0         # 后台批处理共享 I/O 令牌桶（0 = 关闭）
+update:
+  enabled: true                   # 应用内版本检查（感知层）
+  channel: "stable"
 merge:
   enabled: false
   check_interval: "1h"
@@ -98,11 +107,10 @@ remote_log:
   endpoint: ""                    # 日志投递的 HTTP 端点 URL
   format: "jsonline"              # 日志格式: jsonline 或 loki
 ai:
-  enabled: false                 # 启用 AI 检测
-  model_path: ""                  # ONNX 模型路径
+  enabled: false                 # 启用 AI 检测（浏览器端 ONNX Runtime Web）
+  model_url: "/models/yolo11n.onnx"  # ONNX 模型地址
   confidence_threshold: 0.5      # AI 检测置信度阈值 (范围: 0-1)
-  inference_timeout_ms: 1000     # AI 推理超时 (毫秒)
-  frame_skip_rate: 2             # 帧跳过率 (每 N 帧处理一帧)
+  frame_skip_rate: 10            # 帧跳过率 (每 N 帧处理一帧)
 rtmp:
   enabled: false                 # 启用 RTMP 服务器
   port: 1935                    # RTMP 监听端口
@@ -226,10 +234,15 @@ version: "1.0"
 - **描述**: 单段预分配上限，防止病态大段把后续段的预留空间也撑爆
 - **示例**: `536870912`
 
+### `storage.segment_duration_warn_below`
+- **类型**: string
+- **默认**: `"60s"`
+- **描述**: 短轮换防呆告警阈值（#758）——全局 `segment_duration` 低于该值且存在未做每相机覆盖的 continuous 模式相机时，启动/校验输出警告（`mibee-nvr validate-config` 同样呈现）。设 `"0s"` 关闭告警
+- **示例**: `"60s"`, `"0s"`
+
 #### 轮转节奏是 I/O 开关
 
-> 告警阈值本身可配置：`storage.segment_duration_warn_below`
-> （默认 `"60s"`，设 `"0s"` 关闭告警）。
+> 告警阈值本身可配置：见上方 `storage.segment_duration_warn_below`。
 
 每次轮转都有一笔固定元数据成本——段创建、temp→final rename、fsync、每段 2 行
 DB 记录。全局时长越短，**所有**相机付费越频繁：30s × 13 路≈每分钟 26 次轮转；
@@ -274,9 +287,89 @@ cameras:
 - **默认**: `15` / 空（全天）
 - **描述**: 后台录像迁移器的复制限速（MB/s，不与录制抢 IO）与迁移时间窗（本地时间，如 `"22:00-06:00"`；空 = 全天限速迁移）。
 
+## 对象存储冷备（storage.remote）
+
+合并产物异步上传到 S3 兼容对象存储（AWS S3 / MinIO / R2 / B2 / OSS / COS）。本地录制行为不变：段照常落盘、照常滚动合并，上传发生在合并之后；可选在确认上传后逐出本地文件。整块默认关闭（`enabled: false`），未启用时完全惰性。详见[对象存储冷备](storage-offload.md)。
+
+### `storage.remote.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用合并录像的对象存储冷备。启用后要求 `endpoint_url`、`bucket`、`access_key_id`、`secret_access_key` 均非空，否则校验报错
+
+### `storage.remote.endpoint_url`
+- **类型**: string
+- **必需**: 是（启用时）
+- **描述**: S3 API 端点（如 `https://s3.example.com`），必须是带协议和主机的合法 URL
+- **示例**: `"http://192.168.1.20:9000"`（MinIO）, `"https://s3.amazonaws.com"`
+
+### `storage.remote.region`
+- **类型**: string
+- **默认**: `"auto"`
+- **描述**: 对象存储区域代码。多数 S3 兼容实现（MinIO/R2）接受 `auto`
+
+### `storage.remote.bucket`
+- **类型**: string
+- **必需**: 是（启用时）
+- **描述**: 目标存储桶名
+
+### `storage.remote.path_style`
+- **类型**: boolean
+- **默认**: `true`
+- **描述**: 路径风格寻址（`<endpoint>/<bucket>/<key>`），MinIO 与多数自建存储必需；AWS 虚拟主机桶需显式设 `false`
+
+### `storage.remote.access_key_id` / `storage.remote.secret_access_key`
+- **类型**: string
+- **必需**: 是（启用时）
+- **描述**: 静态凭据。两者均支持 `${VAR}` 环境变量引用（如 `"${S3_ACCESS_KEY}"`），展开发生在建立客户端时——配置文件里保留引用字面量，密钥不必落盘；引用了未设置的变量会在校验时空值报错。`secret_access_key` 在设置 `NVR_ENCRYPTION_KEY` 时保存自动静态加密（含 `${...}` 引用时不加密，避免把引用本身锁死）
+- **示例**: `access_key_id: "${S3_ACCESS_KEY_ID}"`
+
+### `storage.remote.prefix`
+- **类型**: string
+- **默认**: `"recordings"`
+- **描述**: 上传对象的 key 根前缀——对象键形如 `<prefix>/<camera>/<date>/<id>.<ext>`
+
+### `storage.remote.upload.max_concurrency`
+- **类型**: integer
+- **默认**: `1`
+- **范围**: 0-8（0 = 默认值 1）
+- **描述**: 并发 PUT 数上限。家庭上行带宽是瓶颈而非 CPU，默认串行
+
+### `storage.remote.upload.scan_interval_s`
+- **类型**: integer
+- **默认**: `60`
+- **范围**: 0-3600（0 = 默认值 60）
+- **描述**: 上传扫描周期（秒）——扫描可上传的已合并录像
+
+### `storage.remote.upload.min_age_s`
+- **类型**: integer
+- **默认**: `900`（15 分钟）
+- **范围**: 60-86400
+- **描述**: 合并录像关闭（ended_at）至少多久后才可上传——覆盖滚动合并防抖与回填延迟，确保仍在增长的窗口桶永不会被上传；漏网的迟到追加由陈旧重排队检查（文件大小 vs 已上传大小）兜底
+
+### `storage.remote.upload.backlog_limit`
+- **类型**: integer
+- **默认**: `5000`
+- **描述**: 待上传（pending+uploading）发件箱行数上限。上游带宽跟不上产能时停止入队并告警，而不是无限静默堆积；`0` = 不限
+
+### `storage.remote.evict.after_days`
+- **类型**: integer
+- **默认**: `0`
+- **描述**: 上传确认后本地文件保留天数，到期自动逐出。`0`（默认）= 只上传不逐出——本地逐出当前通过 CLI 手动执行（`mibee-nvr offload evict`），自动逐出尚未落地
+
 ## 内存配置
 
 GOMEMLIMIT 自动启发式（#756）——按部署环境自动推导堆上限。所有值为运维可调，接线代码只读具体配置值。
+
+### `memory.soft_limit_bytes`
+- **类型**: integer
+- **默认**: `0`（自动启发式）
+- **描述**: 显式覆盖自动 GOMEMLIMIT 计算的堆软上限（字节）。`0`（默认）= 自动推导；显式值不得低于 64MiB（更低会让运行时自身抖动）
+- **示例**: `536870912`（512MiB）
+
+### `memory.disable_auto_limit`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 关闭自动 GOMEMLIMIT 启发式，恢复 Go 运行时默认行为。原生 `GOMEMLIMIT` 环境变量始终优先于一切（运行时在 main 之前应用）
 
 ### `memory.auto_physical_percent`
 - **类型**: integer
@@ -292,6 +385,45 @@ GOMEMLIMIT 自动启发式（#756）——按部署环境自动推导堆上限�
 - **类型**: integer
 - **默认**: `80`
 - **描述**: 运行在 cgroup 内存上限之下时（容器部署：fnOS/Docker），从 cgroup 上限取的份额（%）
+
+## I/O 预算配置（io:）
+
+后台批处理（段合并、清理/修复删除、timelapse 抽帧）与前台工作（录像写、API 文件服务、SQLite）共享同一条内核 I/O 队列；默认平等竞争，繁忙介质上会把前台饿出秒级停顿。配置字节预算后改为按令牌桶节流。系统性调优见[性能调优](performance.md)。
+
+### `io.budget_bytes_per_sec`
+- **类型**: integer
+- **默认**: `0`（关闭预算，行为与旧版本一致）
+- **描述**: 后台批处理共享令牌桶速率（字节/秒）。建议约为存储介质顺序写吞吐的 25%（慢速 SD 卡 8-16 MiB/s，USB HDD 40-60 MiB/s）
+- **示例**: `12582912`（12 MiB/s）
+
+### `io.budget_burst_bytes`
+- **类型**: integer
+- **默认**: `0`（= 1 秒的 `budget_bytes_per_sec`）
+- **描述**: 令牌桶突发容量——单次突发不等待最多可消耗的字节数
+
+### `io.delete_unlinks_per_sec`
+- **类型**: integer
+- **默认**: `200`（预算开启时生效）
+- **描述**: 递归删除（MJPEG/timelapse 帧目录树）每秒 unlink 数护栏（#755）——防止元数据风暴让 ext4 日志（jbd2）饱和并在删除进程退出后自持续（#748 教训）。仅在 `budget_bytes_per_sec > 0` 时有意义；无预算时保持旧的固定时间片节流，默认行为不变
+
+### `io.recording_writes_budgeted`
+- **类型**: boolean
+- **默认**: `false`（灰度）
+- **描述**: 录像写路径纳入共享预算，作为 "recording" 租户（#886）——段采样写按 NALU 字节计费，桶枯竭时阻塞。默认关闭：节流可靠性关键的录制器在紧预算下会丢帧，只在"无节制的录像写本身是延迟问题"的介质上开启。要求 `budget_bytes_per_sec > 0`
+
+### `io.playback_reads_budgeted`
+- **类型**: boolean
+- **默认**: `false`（灰度）
+- **描述**: API 媒体服务（回放/下载）纳入共享预算，作为 "playback" 租户（#886）——文件读按 ServeContent 尺寸分块计费。要求 `budget_bytes_per_sec > 0`
+
+## 录像配置（recording:）
+
+### `recording.default_enabled`
+- **类型**: boolean（可空指针）
+- **默认**: 空（= 录像开启，保持既有行为）
+- **描述**: 全局录像门默认值。未显式设置 `recording_enabled` 的相机（如 GB28181 自动注册通道、建录时未带该字段的相机）继承此值；相机的显式 `true`/`false` 总是优先。主要用途：纯直播部署（如 ≤24h 保留规则的应用商店沙箱）把所有通道一键切为 live-only，不必逐相机翻转
+- **示例**: `false`（纯直播部署）
+- **参见**: `cameras[].recording_enabled`
 
 ## 身份验证配置
 
@@ -342,7 +474,7 @@ cameras:
     protocol: "rtsp"
     encoding: "h264"
     url: "摄像头地址"
-    enabled: true
+    recording_enabled: true
 ```
 
 ### `cameras[].id`
@@ -401,11 +533,12 @@ cameras:
 - **描述**: 摄像头身份验证密码
 - **示例**: `"摄像头密码"`
 
-### `cameras[].enabled`
-- **类型**: boolean
-- **默认**: `true`
-- **描述**: 是否启用摄像头录制
+### `cameras[].recording_enabled`
+- **类型**: boolean（可空指针）
+- **默认**: 空（= 录像开启；继承全局 `recording.default_enabled`）
+- **描述**: 该相机的录像开关。`false` = 纯直播模式：录制器保持连接并喂给 StreamHub（直播预览、推流转发、健康监控全部正常），但**不写任何录像段**——适用于 NVR 仅作直播/转发网关、需避免 SD 卡写入的场景。显式设置的 `true`/`false` 总是优先生效；未设置（nil）的相机继承顶层 `recording.default_enabled`（也未设置 = 录像开启）
 - **示例**: `true` 或 `false`
+- **注意**: 旧的 `enabled` 键不存在于 YAML（已被本键取代）——遗留配置中的 `enabled` 字段会被静默忽略
 
 ### `cameras[].onvif_endpoint`
 - **类型**: string
@@ -514,6 +647,22 @@ cameras:
 - **默认**: 空（单层录制）
 - **取值**: 空 / `"single"` / `"tiered"`
 - **描述**: 分层录制（tierrec）。`"tiered"` = 子码流录成低清连续 layer=1 段 + 主码流事件驱动，推荐搭配 adaptive + `video_exit: false`（+ pixgate）让主码流纯事件化，适合近空场景。需要子码流能力协议（rtsp/onvif/gb28181），校验不符拒绝保存
+- **参见**: [自适应录制](adaptive-recording.md)
+
+### `cameras[].motion_source`
+- **类型**: string
+- **可选**: 是
+- **默认**: 空（= `"nvr"`）
+- **取值**: 空 / `"nvr"` / `"camera:onvif"`
+- **描述**: 相机运动信号来源（#711）。`"nvr"`（默认）= NVR 自有检测器（adaptive 压缩域尖峰、pixgate）；`"camera:onvif"` = 订阅相机的 ONVIF Pull-Point 事件服务，以 `tns1:VideoSource/MotionAlarm` 事件（mibee_cam WiFi-CSI 契约 v1.5 §13，或标准相机的移动侦测）经共享触发面驱动录制器，以 reason=onvif_motion 退出 adaptive 稀疏模式。仅 ONVIF 协议相机可用
+- **示例**: `"camera:onvif"`
+
+### `cameras[].segment_duration`
+- **类型**: string
+- **可选**: 是
+- **默认**: 空（使用全局 `storage.segment_duration`）
+- **描述**: 每相机轮换时长覆盖（#758）——仅该相机生效的段轮换时长，是"单相机确需短轮转（如高时间分辨率 timelapse 采样）"场景的逃生舱，避免缩短全局时长给其它所有相机放大段创建/rename/fsync/DB 开销。同样受平台内存上限钳制（见 `storage.segment_duration`）
+- **示例**: `"15s"`, `"2m"`
 
 ### `cameras[].adaptive`
 
@@ -545,7 +694,7 @@ cameras:
 ### `cameras[].pixgate`
 - **类型**: object
 - **可选**: 是
-- **描述**: 像素活动门控（#699）——按相机独立采样分析画面活动，确认的活动作为 adaptive 录制的全速率退出触发输入（与视频尖峰、音频触发并列）。遥测指标见[监控指标](metrics.md)
+- **描述**: 像素活动门控（#699）——按相机独立采样分析画面活动，确认的活动作为 adaptive 录制的全速率退出触发输入（与视频尖峰、音频触发并列）。需要可 RTSP 拉取的子码流与 **ffmpeg**（可选依赖；缺失时该相机的门控保持关闭）。遥测指标见[监控指标](metrics.md)，调参详见[自适应录制](adaptive-recording.md)
 - **字段**:
   - `enabled` (boolean, 默认 `false`) — 启用该相机的门控采样
   - `sample_fps` (float, 默认 `1`, 范围 0.2–2) — 采样率
@@ -592,6 +741,21 @@ cameras:
 - **注意**: 只有非零字段会覆盖全局合并配置
 - **示例**: 参见 [合并配置](#合并配置)
 
+### `cameras[].transcoding`
+- **类型**: object
+- **可选**: 是
+- **描述**: 每个摄像头转码配置覆盖。字段说明参见[转码配置](#转码配置)
+- **示例**:
+  ```yaml
+  cameras:
+    - id: "cam1"
+      transcoding:
+        enabled: true
+        target_codec: "h264"
+        preset: "ultrafast"
+        bitrate: "2M"
+  ```
+
 ### `cameras[].timelapse`
 - **类型**: object
 - **可选**: 是
@@ -599,9 +763,8 @@ cameras:
 - **字段**:
   - `enabled` (boolean) - 启用延时摄影
   - `interval` (string, 默认: "30s", 最小: "1s") - 快照间隔
-  - `output_fps` (int, 默认: 30, 范围: 1-60) - 输出帧率
-  - `video_codec` (string, 默认: "h264") - 视频编码 (h264/h265)
   - `delete_original` (boolean, 默认: false) - 延时摄影后删除原始片段
+  - `delete_recordings_after_merge` (boolean, 默认: false) - 周期合并成功把窗口内原始帧折进延时产物后，删除源录像（DB 行 + 文件）。与 `delete_original`（仅删延时帧目录）不同；正在被 MiBeeVision 处理的录像始终跳过，合并失败永不应用。适合碎片多的 MJPEG/HTTP-JPEG 相机（延时产物完全替代原始段）
   - `merge_enabled` (boolean) - 启用合并 (nil=自动检测)
   - `merge_mode` (string, 默认: "auto") - 合并模式: auto, mp4, jpeg
   - `daily_merge` (boolean, 默认: true) - 每日合并
@@ -639,6 +802,21 @@ cameras:
 - **描述**: 覆盖录制器帧环形缓冲（frameCh）容量（#521）。写线程停顿（分段收尾 fsync、合并 IO、锁竞争）时缓冲吸收积压；缓冲满则丢帧（`nvr_recorder_ring_buffer_drops_total` 指标 + 流量页录像分支的溢出计数）。偶发丢帧的相机可调大此值换取停顿容忍（每格约 1KB 内存）。仅 H.264/H.265 录制器生效。范围 0–10000。
 - **示例**: `600`, `1000`
 
+### `cameras[].stream_key`
+- **类型**: string
+- **可选**: 是（仅推流接入相机）
+- **描述**: 推流接入相机（`protocol: "rtmp"`）的 RTMP 流密钥。将传入的 `rtmp://host:1935/live/{key}` 映射到该相机——发布端主动向该地址推流
+
+### `cameras[].srt_passphrase`
+- **类型**: string
+- **可选**: 是（仅推流接入相机）
+- **描述**: 加密 SRT 推流接入相机（`protocol: "srt"`）的 AES 密钥短语
+
+### `cameras[].srt_stream_id`
+- **类型**: string
+- **可选**: 是（仅推流接入相机）
+- **描述**: 推流接入相机（`protocol: "srt"`）的 SRT stream ID。将传入的 SRT `streamid` 映射到该相机
+
 ### `cameras[].vision_targets`
 - **类型**: array of string
 - **可选**: 是
@@ -659,6 +837,13 @@ cameras:
   - `transcode_policy` (string, optional, 默认: `"off"`) — `"auto"`（探测硬件，回退软件转码）、`"force_sw"`（始终使用 libx264）、`"off"`（拒绝 H.265 源）
   - `video_preset_override` (object, optional) — 覆盖预设参数：`{ resolution, framerate, video_bitrate_kbps, gop_seconds, profile, bframes }`
 - **注意**: H.264 源零拷贝直接转发。H.265 源在设置 `transcode_policy` 时会实时转码为 H.264（需要 FFmpeg）。热监控保护 ARM 单板计算机在转码期间免受过热影响。参见[推流转发指南](./relay-guide.md)了解详情。
+
+### `cameras[].push_retention_days`
+- **类型**: integer（可空指针）
+- **可选**: 是
+- **默认**: 空（跟随全局 `cleanup.retention_days`）
+- **描述**: 推流接入相机的按相机保留覆盖。`0` = 纯直播不落盘，`N` = 保留 N 天。仅对 srt/rtmp 推流相机有意义
+- **示例**: `0`, `3`, `7`
 
 ## API Keys 配置
 
@@ -697,7 +882,7 @@ cameras:
 - **默认**: `60`
 - **描述**: 超过该秒数未收到心跳即视为消费者离线。
 
-### `vision.drop_mark_timeout_s`
+### `vision.drop_mark_timeout_secs`
 - **类型**: int
 - **默认**: `60`
 - **描述**: 心跳 drops 报告的录像标记预算（秒）。标记与客户端连接脱钩——消费端断连后仍会跑完（标记幂等，跑完胜过跑一半；断连即弃会让消费端无限重试同一份报告），但受此时长约束，防止病理报告钉死协程。报告携带数百 range 或磁盘争用大的部署可上调；上限 3600。
@@ -756,10 +941,10 @@ cameras:
 
 ### `cleanup.disk_threshold_percent`
 - **类型**: integer
-- **默认**: 95
+- **默认**: 85
 - **范围**: 50-99
-- **描述**: 当磁盘使用率超过 N% 时开始清理
-- **示例**: `90`, `95`, `98`
+- **描述**: 当磁盘使用率超过 N% 时开始清理。默认 85%——避开 90%+ 接近满盘时 HDD 的随机写性能悬崖（SQLite checkpoint + 段合并的随机写开始与顺序录像写争抢磁头寻道）
+- **示例**: `80`, `85`, `90`
 
 ### `cleanup.motion_aware_disk_cleanup`
 - **类型**: boolean
@@ -901,6 +1086,13 @@ cameras:
 - **描述**: 被动模式端口范围（开始-结束）
 - **示例**: `"2122-2140"`, `"40000-40100"`
 
+### `ftp.username` / `ftp.password`
+- **类型**: string / string
+- **可选**: 是
+- **默认**: 空（回退到 `auth` 管理员账户，启动时输出警告）
+- **描述**: FTP 专用凭据（#879）——FTP 是明文协议，复用管理员密码会把它泄漏给局域网内任何嗅探者。设置后 FTP 使用独立账户鉴权；不设置则保持旧行为回退管理员账户（并提示更换）
+- **示例**: `username: "ftp-user"`, `password: "ftp专用密码"`
+
 ## MQTT 配置
 
 ### `mqtt.enabled`
@@ -1011,7 +1203,7 @@ cameras:
 
 ### `hls.low_latency`
 - **类型**: boolean
-- **默认**: `true`（不设置即视为开启）
+- **默认**: `true`（不设置即视为开启；**v0.13 起默认开启**，#772——此前 muxer 实际一直运行在 LL 模式，该键是死配置）
 - **描述**: 启用低延迟 HLS (LL-HLS)。启用后使用 gohlslib 的 Low-Latency HLS 变体；
   设为 `false` 时输出经典分段播放列表（H.264 → MPEG-TS，H.265 → fMP4），供普通
   HLS 客户端消费。修改后需重启生效
@@ -1045,6 +1237,12 @@ cameras:
 - **描述**: 最大并发 WebRTC 观众数。RPi 3B 上建议保持较低值
 - **示例**: `2`, `4`, `8`
 
+### `streaming.webrtc.idle_timeout`
+- **类型**: string
+- **默认**: `"60s"`
+- **描述**: 非活跃 WebRTC 连接的空闲超时（超时后关闭连接）
+- **示例**: `"30s"`, `"60s"`, `"120s"`
+
 ### `streaming.flv.enabled`
 - **类型**: boolean
 - **默认**: `true`
@@ -1057,6 +1255,18 @@ cameras:
 - **范围**: 1-50
 - **描述**: 最大并发 HTTP-FLV 观众数
 - **示例**: `10`, `20`, `50`
+
+### `streaming.flv.idle_timeout`
+- **类型**: string
+- **默认**: `"60s"`
+- **描述**: 非活跃 FLV 连接的空闲超时（超时后关闭连接）
+- **示例**: `"30s"`, `"60s"`, `"120s"`
+
+### `streaming.flv.gop_cache_size`
+- **类型**: integer
+- **默认**: 1
+- **描述**: 观众接入时缓存的 GOP 数，用于 FLV 秒开
+- **示例**: `1`, `2`, `5`
 
 ## WebSocket 配置
 
@@ -1071,6 +1281,12 @@ cameras:
 - **默认**: `100`
 - **描述**: WebSocket 帧发送写缓冲大小（以帧为单位）
 - **示例**: `100`, `200`, `500`
+
+### `websocket.idle_timeout`
+- **类型**: duration
+- **默认**: `60s`
+- **描述**: 非活跃 WebSocket 连接的空闲超时（超时后关闭连接）
+- **示例**: `30s`, `60s`, `120s`
 
 ## 健康监控配置
 
@@ -1100,16 +1316,42 @@ cameras:
   goroutine 数更高，可按需上调
 - **示例**: `150`, `300`
 
+### `health.alerts.cooldown`
+- **类型**: string
+- **默认**: `"5m"`
+- **描述**: 相邻两次健康告警之间的冷却时间
+- **示例**: `"1m"`, `"5m"`, `"10m"`
+
+### `health.alerts.mqtt`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用健康告警的 MQTT 发布
+- **示例**: `true`, `false`
+
 ### `health.layer1.offline_threshold`
 - **类型**: string
 - **默认**: `"30s"`
 - **描述**: 第一层（离线检测）——无任何数据超过该时长即判定相机离线
 - **示例**: `"15s"`, `"30s"`, `"60s"`
 
-### `health.layer2.bitrate_change_threshold` / `health.layer2.min_fps` / `health.layer2.max_idr_interval`
-- **类型**: float / integer / string
-- **默认**: `0.5` / `5` / `"60s"`
-- **描述**: 第二层（质量异常）——归一化码率变化阈值（0.5 = 变化 50% 触发，范围 0–1）、最低可接受帧率、IDR 帧最大间隔
+### `health.layer2.bitrate_change_threshold`
+- **类型**: float
+- **默认**: `0.5`
+- **范围**: 0-1
+- **描述**: 第二层（质量异常）——归一化码率变化阈值，0.5 = 变化 50% 触发质量事件
+- **示例**: `0.3`, `0.5`, `0.8`
+
+### `health.layer2.min_fps`
+- **类型**: integer
+- **默认**: `5`
+- **描述**: 第二层（质量异常）——健康相机的最低可接受帧率
+- **示例**: `5`, `10`, `15`
+
+### `health.layer2.max_idr_interval`
+- **类型**: string
+- **默认**: `"60s"`
+- **描述**: 第二层（质量异常）——IDR 帧最大允许间隔，超过即触发健康事件
+- **示例**: `"30s"`, `"60s"`, `"120s"`
 
 ### `health.layer2_5.freeze_timeout`
 - **类型**: string
@@ -1117,10 +1359,35 @@ cameras:
 - **描述**: 第 2.5 层（画面冻结）——有流数据但画面无变化超过该时长判定冻结
 - **示例**: `"5s"`, `"10s"`, `"30s"`
 
-### `health.auto_remediation.enabled` / `max_restarts_per_hour` / `cooldown_minutes` / `blacklist_hours` / `global_max_per_min`
-- **类型**: boolean / integer / integer / integer / integer
-- **默认**: `false` / `3` / `5` / `1` / `10`
-- **描述**: 自动修复——检测到健康问题时自动重启相机；每小时重启超过 `max_restarts_per_hour` 次即拉黑 `blacklist_hours` 小时；两次修复动作间冷却 `cooldown_minutes` 分钟；全相机全局每分钟修复动作上限 `global_max_per_min`
+### `health.auto_remediation.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 自动修复——检测到健康问题时自动重启相机
+- **示例**: `true`, `false`
+
+### `health.auto_remediation.max_restarts_per_hour`
+- **类型**: integer
+- **默认**: `3`
+- **描述**: 每小时自动重启相机次数上限；超过即把相机拉黑 `blacklist_hours` 小时
+- **示例**: `3`, `5`, `10`
+
+### `health.auto_remediation.cooldown_minutes`
+- **类型**: integer
+- **默认**: `5`
+- **描述**: 两次自动修复动作之间的冷却时间（分钟）
+- **示例**: `5`, `10`, `30`
+
+### `health.auto_remediation.blacklist_hours`
+- **类型**: integer
+- **默认**: `1`
+- **描述**: 超过重启上限后，相机被拉出自动修复的黑名单时长（小时）
+- **示例**: `1`, `2`, `24`
+
+### `health.auto_remediation.global_max_per_min`
+- **类型**: integer
+- **默认**: `10`
+- **描述**: 所有相机合计的每分钟修复动作全局上限
+- **示例**: `10`, `20`, `50`
 
 ### `health.auto_remediation.reconnecting_timeout_minutes`
 - **类型**: integer
@@ -1246,12 +1513,32 @@ auto_discover:
 
 ## AI 推理配置
 
+AI 检测在**浏览器端**运行（ONNX Runtime Web）；后端的 `internal/ai/` 只承载配置与 ROI 区域存储，不做任何服务端推理。
+
 ### `ai.enabled`
 - **类型**: boolean
 - **默认**: `false`
-- **描述**: 启用 AI 推理检测。启用后可在录像流上运行 ONNX Runtime 推理
-- **注意**: AI 配置没有独立的 enabled 字段，AI 功能在配置了 model_path 后自动启用
+- **描述**: 启用 AI 检测（浏览器端 ONNX Runtime Web 推理）
 - **示例**: `true`, `false`
+
+### `ai.model_url`
+- **类型**: string
+- **默认**: `"/models/yolo11n.onnx"`
+- **描述**: ONNX 模型地址（浏览器端加载）。旧键 `model_path` 已不存在——实际 YAML 键为 `model_url`
+- **示例**: `"/models/yolo11n.onnx"`
+
+### `ai.confidence_threshold`
+- **类型**: float
+- **默认**: `0.5`
+- **范围**: 0-1
+- **描述**: AI 检测置信度阈值
+- **示例**: `0.5`, `0.7`
+
+### `ai.frame_skip_rate`
+- **类型**: integer
+- **默认**: `10`
+- **描述**: 帧跳过率（每 N 帧处理一帧）
+- **示例**: `5`, `10`
 
 ## RTMP 配置
 
@@ -1295,6 +1582,27 @@ auto_discover:
 - **描述**: SRT 监听端口
 - **示例**: `9000`, `9001`
 
+### `srt.streams`
+- **类型**: array of objects
+- **可选**: 是
+- **描述**: SRT 流映射——定义传入的 SRT 流如何路由到相机
+- **字段**:
+  - `camera_id` (string, required) — 目标相机 ID
+  - `mode` (string, required, 选项: `"listener"`/`"caller"`) — SRT 模式
+  - `address` (string, caller 模式必填) — 远端 SRT 地址
+  - `passphrase` (string, optional) — AES 加密密钥短语
+  - `stream_id` (string, optional) — caller 模式的 SRT stream ID
+- **示例**:
+  ```yaml
+  srt:
+    streams:
+      - camera_id: "cam1"
+        mode: "listener"
+      - camera_id: "cam2"
+        mode: "caller"
+        address: "192.168.1.100:9000"
+  ```
+
 ## Metrics 认证配置
 
 ### `metrics_auth.username`
@@ -1308,6 +1616,12 @@ auto_discover:
 - **可选**: 是
 - **描述**: Metrics 端点的 BasicAuth 密码
 - **示例**: `"monitor-pass"`
+
+### `metrics_auth.password_hash`
+- **类型**: string
+- **可选**: 是
+- **描述**: Metrics 端点 BasicAuth 的 bcrypt 密码哈希。优先于 `password`
+- **示例**: `"$2a$10$..."`
 
 ## 小米配置
 
@@ -1398,15 +1712,53 @@ auto_discover:
 
 ### `transcoding.history_retention`
 - **类型**: string
-- **默认**: 空（永久保留）
+- **默认**: `"168h"`（7 天）
 - **描述**: 转码任务历史保留时长
-- **示例**: `"168h"`（7 天）, `"720h"`（30 天）
+- **示例**: `"72h"`（3 天）, `"720h"`（30 天）
 ### `transcoding.min_segment_duration_s`
 - **类型**: integer
 - **默认**: `0`（关闭）
 - **范围**: 0–3600
 - **描述**: 自动转码的最小段时长门槛（#848）：闪断相机重连周期产出的碎片段（约 7s）逐段转码的开销接近内容本身，低于该值的段不再自动入队。注意：跳过的碎段会随滚动合并进桶，合并产物不会重新入队转码（保持原编码），仅在可接受该权衡时开启。
 - **示例**: `30`
+
+## 自动更新配置（update:）
+
+应用内"有新版本"检查。默认仅是**感知层**：轮询 GitHub Releases、比对运行版本、在 Web UI 提示——从不执行升级（Docker 部署的容器不可变，真正的升级交给外部工具或应用商店）。详见[自动更新](deployment-autoupdate.md)。
+
+### `update.enabled`
+- **类型**: boolean
+- **默认**: `true`
+- **描述**: 启用后台版本检查
+
+### `update.channel`
+- **类型**: string
+- **默认**: `"stable"`
+- **描述**: 发布通道。`"stable"` 查询 `/releases/latest`（不含预发布版）；`"beta"` 列出 releases 并包含预发布版（当前仅实现 stable）
+- **示例**: `"stable"`, `"beta"`
+
+### `update.check_interval`
+- **类型**: string（Go duration）
+- **默认**: `"1h"`
+- **描述**: 后台轮询 GitHub 的间隔
+- **示例**: `"1h"`, `"6h"`
+
+### `update.repo`
+- **类型**: string
+- **默认**: `"Mi-Bee-Studio/MiBeeNvr"`
+- **描述**: 要检查的 GitHub 仓库（owner/name）
+
+### `update.auto_apply`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 选择性开启的**裸机自动升级执行**（#647）。`true` 且部署形态为裸机 systemd（绝非 docker/开发构建/beta）时，新检测到的 stable 版本经 `mibee-nvr-update.service` root 助手安装（polkit 授权），带 sha256+ed25519 校验，升级后健康门失败自动回滚到旧二进制。**Windows/macOS 桌面构建拒绝自更新**（自更新仅限 Linux——apply 步骤驱动 linux systemd root 助手，且 release 资产名不含 GOOS，桌面端请手动下载新版本）；Docker 部署永久禁用（用 Watchtower / compose pull）
+- **示例**: `true`
+
+### `update.download_mirror`
+- **类型**: string
+- **默认**: 空（GitHub 官方）
+- **描述**: 替换 `https://github.com` 的发布产物下载镜像基址（#649）——GitHub 慢/不可达网络下提升裸机自动升级可靠性。`{repo}/releases/download/...` 路径原样保留在镜像之下，ghproxy 式前缀或自建路径保留镜像均可。**版本检查仍走 GitHub API**；所有产物（二进制 + 校验和 + 签名）同源下载，镜像失败不回退 GitHub
+- **示例**: `"https://mirror.example.com/github"`
 
 ## 扩展配置（Extensions）
 
@@ -1437,7 +1789,7 @@ cameras:
     url: "rtsp://192.168.1.100:554/stream"
     username: "admin"
     password: "摄像头密码"
-    enabled: true
+    recording_enabled: true
     sub_stream_url: "rtsp://192.168.1.100:554/stream2"
     snapshot_url: "http://192.168.1.100:8080/snapshot"
 ```
@@ -1451,7 +1803,7 @@ cameras:
     encoding: "jpeg"
     url: "http://192.168.1.101/capture"
     sample_interval: 1
-    enabled: true
+    recording_enabled: true
 ```
 
 ### ONVIF 摄像头
@@ -1461,7 +1813,7 @@ cameras:
     name: "大厅摄像头"
     protocol: "onvif"
     url: "http://192.168.1.102:80/onvif/device_service"
-    enabled: true
+    recording_enabled: true
     # 可选：指定编码
     encoding: "h264"
     # 可选：指定流编码
@@ -1482,7 +1834,7 @@ cameras:
     encoding: "h264"
     did: "xiaomi_device_id"
     vendor: "cs2"
-    enabled: true
+    recording_enabled: true
 ```
 
 ### 延时摄影摄像头
@@ -1493,7 +1845,7 @@ cameras:
     protocol: "timelapse"
     encoding: "h264"
     url: "rtsp://192.168.1.103:554/stream"
-    enabled: true
+    recording_enabled: true
     timelapse:
       enabled: true
       interval: "30s"
@@ -1570,10 +1922,10 @@ cameras:
     protocol: "rtsp"
     encoding: "h264"
     url: "rtsp://192.168.1.100:554/stream"
-    enabled: true
+    recording_enabled: true
 cleanup:
   retention_days: 30
-  disk_threshold_percent: 95
+  disk_threshold_percent: 85
 ```
 
 ### 包含所有功能的完整设置
@@ -1592,7 +1944,7 @@ cameras:
     protocol: "rtsp"
     encoding: "h264"
     url: "rtsp://192.168.1.100:554/stream"
-    enabled: true
+    recording_enabled: true
     sub_stream_url: "rtsp://192.168.1.100:554/sub"
   - id: "xiaomi-cam"
     name: "小米摄像头"
@@ -1600,7 +1952,7 @@ cameras:
     encoding: "h264"
     did: "xiaomi_device_id"
     vendor: "cs2"
-    enabled: true
+    recording_enabled: true
 xiaomi:
   user_id: "1234567890"
   token: "xiaomi_token_123"

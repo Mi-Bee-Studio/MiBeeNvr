@@ -24,6 +24,38 @@ curl -u username:password \
 }
 ```
 
+### Batch-Fetch Merge Output Frames
+
+**Endpoint:** `GET /api/timelapse/merges/{id}/frames`
+
+Slice a batch of JPEG frames out of an MJPEG (`mjpa`) periodic-merge output and return them as a `multipart/mixed` response (one part per frame) — an MJPEG player fetches N frames in one request instead of N requests. Frame positions come from the pure-Go MP4 sample table (`stsz`/`stco`) and are read on demand; the file is never loaded whole. Only for `codec=mjpeg` merges — H.264/H.265 outputs play natively via `<video>`.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description | Example |
+|-----------|------|----------|-------------|---------|
+| `offset` | integer | No | First frame index (default 0; negative / non-numeric returns 400) | `120` |
+| `limit` | integer | No | Frames in this batch (default 120, max 240 — clamped; 0 / negative / non-numeric returns 400) | `120` |
+
+**Request:**
+```bash
+curl -u username:password \
+  "http://localhost:9090/api/timelapse/merges/42/frames?offset=0&limit=120" \
+  -o batch.txt
+```
+
+**Response:** `Content-Type: multipart/mixed; boundary=…`, each part an `image/jpeg` whose part headers carry `X-Frame-Index`. Response headers:
+
+| Header | Description |
+|--------|-------------|
+| `X-Frame-Total` | Total frames in the merge output |
+| `X-Frame-Offset` | Index this batch starts at |
+| `X-Frame-Count` | Frames actually in this batch |
+| `X-Frame-Fps` | Merge output frame rate (present when an fps is configured) |
+| `Cache-Control` | `no-store` |
+
+> A non-positive-integer `id` returns 400; a missing merge, one that is not `completed`, a non-MJPEG codec, or a missing output file all return 404. An out-of-range `offset` yields an empty but valid multipart body.
+
 ## Protocols API
 
 ### Get Supported Protocols

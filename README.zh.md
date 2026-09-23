@@ -142,11 +142,14 @@ make build
 | 文档 | 说明 |
 |------|------|
 | [快速入门](docs/zh/getting-started.md) | 安装、添加第一个摄像头 |
+| [升级指南](docs/zh/upgrade-guide.md) | 各版本间破坏性变更与迁移步骤 |
 | [配置说明](docs/zh/configuration.md) | 完整配置参考 |
 | [API 文档](docs/zh/api/README.md) | REST API 接口文档 |
 | [MediaMTX 指南](docs/zh/mediamtx-guide.md) | MediaMTX CSI 摄像头集成 |
 | [部署指南](docs/zh/deployment.md) | systemd、反向代理、交叉编译，及各 **NAS** 平台指南（unRAID / 飞牛 / iStoreOS / 群晖 / 威联通 / 极空间） |
 | [Docker 自动升级](docs/zh/deployment-autoupdate.md) | 手动升级 + 可选 Watchtower 自动升级与回滚 |
+| [对象存储冷备](docs/zh/storage-offload.md) | S3 兼容对象存储异步上传与本地逐出 |
+| [桌面版](docs/zh/desktop.md) | Windows / macOS 桌面版安装与信任模型 |
 | [摄像头指南](docs/zh/camera-guide.md) | 摄像头设置、协议、故障排除 |
 | [Xiaomi 设置](docs/zh/xiaomi-setup.md) | 小米云摄像头集成 |
 | [ONVIF 指南](docs/zh/onvif-guide.md) | ONVIF 摄像头设置、云台控制、故障排除 |
@@ -157,6 +160,8 @@ make build
 | [故障排除](docs/zh/troubleshooting.md) | 常见问题与解决方案 |
 | [视频转码](docs/zh/transcoding.md) | FFmpeg 转码设置 |
 | [Prometheus 指标](docs/zh/metrics.md) | 完整的 Prometheus 指标参考，包含类型、标签和使用示例 |
+| [推流转发](docs/zh/relay-guide.md) | RTMP 直播平台推流配置与故障排除 |
+| [远程访问](docs/zh/remote-access.md) | Tailscale / Cloudflare Tunnel 外网访问与 WebRTC ICE/STUN/TURN 配置 |
 
 ```bash
 make build              # 本机编译（当前架构）
@@ -200,7 +205,7 @@ make docker-release
 |------|------|
 | `ghcr.io/mi-bee-studio/mibeenvr:<tag>` | amd64, arm64, armv7 |
 
-可用标签：`0.11.0`（精确版本）、`0.11`（次版本）、`0`（主版本）、`latest`
+可用标签：`0.13.0`（精确版本）、`0.13`（次版本）、`0`（主版本）、`latest`
 
 ## 项目结构
 

@@ -1,6 +1,6 @@
 # API Overview
 
-> For MiBeeNvr v0.12.0 · full endpoint docs live in the repo at [docs/en/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/en/api)
+> For MiBeeNvr v0.13.0 · full endpoint docs live in the repo at [docs/en/api/](https://github.com/Mi-Bee-Studio/MiBeeNvr/tree/main/docs/en/api)
 
 Everything MiBee NVR does is drivable over its REST API (the web UI itself is a consumer of it), plus an SSE event stream. This page is an auth + core-endpoint cheat sheet.
 
@@ -33,10 +33,11 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 |----------|-------------|
 | `GET /api/health` | Health summary (storage / camera states) |
 | `GET /api/readyz` | Readiness probe |
-| `GET /api/events` | **SSE event stream** (rate-limited to 60/min, see below) |
-| `GET /api/recordings/{id}/download` | Recording download (Range supported for player seeking) |
-| `GET /api/recordings/{id}/merged` | Merged outputs such as timelapses |
+| `GET /api/capabilities` | Ingest capabilities (RTMP / SRT ports) |
+| `POST /api/trigger/webhook/{camera_id}` | Webhook trigger (public rate-limited group; the HMAC signature is the credential — see below) |
 | `GET /models/{filename}` | Browser-side AI model files |
+
+> As of v0.13, recording downloads (`/api/recordings/{id}/download`, `/api/recordings/{id}/merged`, timelapse merge download), playback, `GET /api/events`, and `GET /api/health/cameras` moved from anonymous into the authenticated group (browsers carry credentials transparently via the `?token=` session token or cookie); the legacy base64 `?token=` passthrough was removed. See [Authentication · v0.13 auth scope changes](api/authentication.md).
 
 ## Core Endpoint Groups
 
@@ -47,6 +48,7 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 | Recordings | `GET /api/recordings` | list / filter / paginate |
 | Playback | `GET /api/cameras/{id}/playback/playlist.m3u8` | per-recording playback |
 | AI events | `POST /api/ai/events`, `GET /api/ai/events`, `GET /api/ai/events/{id}`, `GET /api/ai/events/{id}/snapshot` | write from external AI backends (Bearer), query stats; event snapshot images |
+| Triggers | `POST /api/trigger/webhook/{camera_id}` | HMAC-signed webhook trigger for record / stop / snapshot (full docs: [Webhook Integration](webhook-integration.md)) |
 | Settings | `GET/PUT /api/settings`, `POST /api/settings/api-keys` | runtime config and keys |
 | Storage | `GET /api/storage`, `GET/POST/DELETE /api/storage/candidates`, `POST /api/storage/migrate` | storage stats, candidate volumes, batch migration ([Storage Management](storage-management.md)) |
 | GB28181 | `/api/gb28181/*` | devices / channels / PTZ / playback |
@@ -91,11 +93,11 @@ curl -X POST -H "Authorization: Bearer mbv_…" -H "Content-Type: image/jpeg"   
 
 ## SSE Event Stream
 
-`GET /api/events` streams the internal event bus over Server-Sent Events; the `filter` query parameter narrows by topic prefix:
+`GET /api/events` streams the internal event bus over Server-Sent Events; the `filter` query parameter narrows by topic prefix. As of v0.13 it requires auth (BasicAuth / session token / API key; browser EventSource clients pass `?token=` or `?api_key=`):
 
 ```bash
 # subscribe only to segment-completed events (typical external AI backend usage)
-curl -N "http://localhost:9090/api/events?filter=segment."
+curl -N "http://localhost:9090/api/events?filter=segment.&api_key=mbv_…"
 ```
 
 The payload is nested — business fields live inside `Data` (including `recording_id`):

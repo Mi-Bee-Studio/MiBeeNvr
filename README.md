@@ -146,7 +146,7 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 
 ### 🤖 Smart Features
 - Browser-side AI detection (ONNX Runtime Web, WebGPU-accelerated) — no backend inference
-- Audio recording and live preview playback (G.711 μ-law/A-law + Opus)
+- Audio recording and playback (AAC + G.711 μ-law/A-law + Opus); AAC live preview via WebCodecs
 - Multi-layer camera health monitoring
 - Auto-remediation for connection issues
 - SSE-based real-time event system
@@ -198,6 +198,8 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | [MediaMTX Guide](docs/en/mediamtx-guide.md) | MediaMTX integration for CSI cameras |
 | [Deployment](docs/en/deployment.md) | systemd, reverse proxy, cross-compile, and per-platform **NAS** guides (unRAID / fnOS / iStoreOS / Synology / QNAP / ZSpace) |
 | [Auto-update (Docker)](docs/en/deployment-autoupdate.md) | Manual + optional Watchtower auto-updates and rollback |
+| [Object-Storage Offload](docs/en/storage-offload.md) | Async S3-compatible cold backup with verified local eviction |
+| [Desktop Edition](docs/en/desktop.md) | Windows / macOS desktop installers and trust model |
 | [Xiaomi Setup](docs/en/xiaomi-setup.md) | Xiaomi cloud camera integration |
 | [ONVIF Guide](docs/en/onvif-guide.md) | ONVIF camera setup, PTZ control, troubleshooting |
 | [Camera Guide](docs/en/camera-guide.md) | Camera setup, protocols, troubleshooting |
@@ -234,7 +236,7 @@ Docker deployment:
 docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
-Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `0.11.0` (exact version), `0.11` (minor track), `0` (major track), `latest`
+Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `0.13.0` (exact version), `0.13` (minor track), `0` (major track), `latest`
 
 ## Project Structure
 

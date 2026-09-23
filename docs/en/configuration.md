@@ -1,5 +1,7 @@
 # Configuration Reference
 
+> For MiBeeNvr v0.13.0
+
 MiBee NVR uses a YAML configuration file to control all aspects of its operation. Below is a comprehensive reference of all available options, their defaults, and usage examples.
 
 ![General settings page](images/settings-general.webp)
@@ -12,6 +14,8 @@ server:
 storage:
   root_dir: "/var/lib/mibee-nvr"
   segment_duration: "30s"
+  # remote:                        # S3-compatible object-storage offload (#874)
+  #   enabled: false               # see "Object-Storage Offload" (storage-offload.md)
 auth:
   username: "admin"
   password_hash: ""
@@ -23,7 +27,7 @@ cameras:
     protocol: "rtsp"
     encoding: "h264"
     url: "rtsp://..."
-    enabled: true
+    recording_enabled: true       # false = live-only (no segments written); replaced the old non-existent `enabled` key
     audio_enabled: false
     onvif_endpoint: ""           # ONVIF specific
     profile_token: ""            # ONVIF specific  
@@ -54,10 +58,12 @@ cameras:
     health_overrides:            # Per-camera health threshold overrides
       min_fps: 10
       offline_threshold: "15s"
+recording:
+  default_enabled: true          # Global gate for cameras without explicit recording_enabled (nil = record)
 cleanup:
   retention_days: 30
   check_interval: "1h"
-  disk_threshold_percent: 95
+  disk_threshold_percent: 85
 merge:
   enabled: false
   check_interval: "1h"
@@ -69,10 +75,23 @@ merge:
   rolling_bucket_idle_ttl: "10m" # finalize a bucket with no append for this long; "0" disables
   rolling_fragment_hold_s: 300    # batch <30s fragments into ONE fold (#852); 0 = off
   rolling_append_bucket: false    # sequential-append bucket (#853, experimental); default off
+memory:
+  soft_limit_bytes: 0             # GOMEMLIMIT override; 0 = auto heuristic (#756)
+  disable_auto_limit: false
+  auto_physical_percent: 45
+  auto_cap_bytes: 1073741824      # 1GiB
+  auto_cgroup_percent: 80
+io:
+  budget_bytes_per_sec: 0         # Background I/O token bucket; 0 = off (#751)
+  delete_unlinks_per_sec: 200     # Metadata-storm guardrail (active when budgeting)
+  recording_writes_budgeted: false # Gray switch (#886)
+  playback_reads_budgeted: false  # Gray switch (#886)
 ftp:
   enabled: true
   port: 2121
   passive_port_range: "2122-2140"
+  username: ""                    # Dedicated FTP credentials (#879); empty = admin fallback
+  password: ""
 mqtt:
   enabled: false
   broker: "tcp://localhost:1883"
@@ -143,11 +162,12 @@ transcoding:
   max_workers: 1                 # Range: 1-4
   job_timeout: "30m"
   history_retention: "168h"      # 7 days
+  min_segment_duration_s: 0      # Skip auto-enqueue below this floor; 0 = off (#848)
+  download_mirror: ""            # FFmpeg static-build mirror base URL
 ai:
-  inference_timeout_ms: 0
-  frame_skip_rate: 0
-  confidence_threshold: 0.0
-  model_path: ""
+  model_url: "/models/yolo11n.onnx" # Browser-side ONNX Runtime Web model
+  frame_skip_rate: 10
+  confidence_threshold: 0.5
 rtmp:
   enabled: false
   port: 1935
@@ -162,6 +182,11 @@ srt:
 metrics_auth:
   username: ""
   password: ""
+update:
+  enabled: true                  # In-app version check (sensing only)
+  channel: "stable"
+  check_interval: "1h"
+  auto_apply: false              # Bare-metal systemd only; desktop/Docker never self-update
 version: "1.0"
 ```
 
@@ -265,10 +290,13 @@ version: "1.0"
 - **Description**: per-segment reservation cap so a pathological segment cannot reserve absurd space for its successors
 - **Example**: `536870912`
 
-#### Rotation cadence is an I/O switch
+### `storage.segment_duration_warn_below`
+- **Type**: string
+- **Default**: `"60s"`
+- **Description**: Short-rotation guard warning threshold (#758) — when the global `segment_duration` is below this value and a continuous-mode camera lacks a per-camera override, startup/validation emit a warning (`mibee-nvr validate-config` shows it too). Set `"0s"` to disable.
+- **Example**: `"60s"`, `"0s"`
 
-> The warning threshold itself is configurable:
-> `storage.segment_duration_warn_below` (default `"60s"`, `"0s"` disables).
+#### Rotation cadence is an I/O switch
 
 Every rotation pays a fixed metadata cost — segment create, temp→final
 rename, fsync, and two DB rows. The shorter the global duration, the more
@@ -319,9 +347,88 @@ validate-config` surfaces it too.
 - **RPi Constraint**: Maximum 30 seconds on Raspberry Pi 3B
 - **Example**: `"30s"`, `"1m"`, `"5m"`
 
+## Remote Object-Storage Offload
+
+`storage.remote` offloads merged recordings to an S3-compatible object store (AWS S3 / MinIO / Cloudflare R2 / B2 / OSS / COS) — local recording keeps working unchanged; uploads run asynchronously after a merge completes, and local copies can be evicted after verified upload. The whole subsystem (client, uploader, evict CLI) is inert unless `enabled`. See [Object-Storage Offload](storage-offload.md) for the full guide.
+
+### `storage.remote.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable the S3 offload subsystem. When enabled, `endpoint_url`, `bucket`, `access_key_id` and `secret_access_key` are required (validation fails otherwise).
+
+### `storage.remote.endpoint_url`
+- **Type**: string
+- **Required**: Yes (when enabled)
+- **Description**: S3 API endpoint URL, e.g. `"https://s3.example.com"`. Every supported target has one — there is no AWS-default resolution.
+
+### `storage.remote.region`
+- **Type**: string
+- **Default**: `"auto"`
+- **Description**: S3 region. `"auto"` works for R2/MinIO and most S3-compatible stores.
+
+### `storage.remote.bucket`
+- **Type**: string
+- **Required**: Yes (when enabled)
+- **Description**: Target bucket name.
+
+### `storage.remote.path_style`
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Path-style addressing (`<endpoint>/<bucket>/<key>`), required by MinIO and most self-hosted stores. AWS with virtual-hosted buckets sets it `false`.
+
+### `storage.remote.access_key_id` / `storage.remote.secret_access_key`
+- **Type**: string
+- **Required**: Yes (when enabled)
+- **Description**: Static S3 credentials. Both support `${VAR}` environment-variable references (expanded when the client is constructed — the in-memory config keeps the literal `${S3_ACCESS_KEY}` so a Settings-UI save round-trips the reference instead of writing the plaintext secret to disk; unset variables expand to empty and fail validation loudly). `secret_access_key` is additionally auto-encrypted at rest when `NVR_ENCRYPTION_KEY` is set (`${VAR}` references are never encrypted).
+- **Example**: `"${S3_ACCESS_KEY_ID}"`, `"${S3_SECRET_ACCESS_KEY}"`
+
+### `storage.remote.prefix`
+- **Type**: string
+- **Default**: `"recordings"`
+- **Description**: Object-key root for all uploaded objects (`<prefix>/<camera>/<date>/<id>.<ext>`).
+
+### `storage.remote.upload.max_concurrency`
+- **Type**: integer
+- **Default**: `1`
+- **Range**: 1-8 (0 = default 1)
+- **Description**: Bound on parallel PUTs. Home uplinks are the bottleneck, not CPU.
+
+### `storage.remote.upload.scan_interval_s`
+- **Type**: integer
+- **Default**: `60`
+- **Range**: 0-3600 (0 = default 60)
+- **Description**: Discovery sweep cadence for upload candidates.
+
+### `storage.remote.upload.min_age_s`
+- **Type**: integer
+- **Default**: `900` (15m)
+- **Range**: 60-86400
+- **Description**: How long a merged recording must have been closed (`ended_at`) before it is eligible for upload — covers the rolling-merge debounce + backfill latency so a still-growing window bucket is never uploaded; a late append that still slips through is caught by the stale-requeue check (file size vs uploaded size).
+
+### `storage.remote.upload.backlog_limit`
+- **Type**: integer
+- **Default**: `5000`
+- **Description**: Cap on pending+uploading outbox rows. When upstream bandwidth can't keep up with production, enqueueing stops and warns instead of silently queueing forever. `0` = unlimited.
+
+### `storage.remote.evict.after_days`
+- **Type**: integer
+- **Default**: `0`
+- **Description**: Days to keep the local file after upload confirmation before auto-eviction. `0` = upload-only, never evict (the manual `mibee-nvr offload evict` CLI is the batch-1 path).
+
 ## Memory Configuration
 
 GOMEMLIMIT auto-heuristics (#756) — the heap ceiling is derived from the deployment environment. Every value is operator-tunable; wiring code reads concrete config values only.
+
+### `memory.soft_limit_bytes`
+- **Type**: integer
+- **Default**: `0` (automatic heuristic)
+- **Description**: Overrides the automatic GOMEMLIMIT computation with an explicit value. Must be at least 64MiB when set — below that the Go runtime itself would thrash. The native `GOMEMLIMIT` env var always wins over everything.
+- **Example**: `536870912` (512MiB)
+
+### `memory.disable_auto_limit`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Turns the automatic GOMEMLIMIT heuristic off, restoring the Go runtime default.
 
 ### `memory.auto_physical_percent`
 - **Type**: integer
@@ -337,6 +444,36 @@ GOMEMLIMIT auto-heuristics (#756) — the heap ceiling is derived from the deplo
 - **Type**: integer
 - **Default**: `80`
 - **Description**: When running under a cgroup memory ceiling (container deployments: fnOS/Docker), the share (as %) taken from the cgroup ceiling
+
+## IO Configuration
+
+Background jobs (segment merge, cleanup/repair deletes, timelapse frame extraction) share one kernel I/O queue with foreground work (recording writes, API file serving, SQLite); by default they compete as equals, which on busy media starves the foreground into multi-second stalls. A configured byte budget paces them instead. See [Performance Tuning](performance.md) for systematic guidance.
+
+### `io.budget_bytes_per_sec`
+- **Type**: integer (bytes/sec)
+- **Default**: `0` (budgeting disabled — identical to previous releases)
+- **Description**: Shared token-bucket rate for background I/O. A sensible deployment value is ~25% of the storage medium's sequential write throughput (e.g. 8-16 MiB/s for a slow SD card, 40-60 MiB/s for a HDD on USB).
+- **Example**: `12582912` (12 MiB/s)
+
+### `io.budget_burst_bytes`
+- **Type**: integer (bytes)
+- **Default**: `0` → one second of `budget_bytes_per_sec`
+- **Description**: Token-bucket burst capacity — the maximum bytes a single burst can consume without waiting.
+
+### `io.delete_unlinks_per_sec`
+- **Type**: integer
+- **Default**: `0` → `200` (applied when a budget is configured)
+- **Description**: Cap on recursive frame-tree (MJPEG/timelapse) unlinks per second while the I/O budget is enabled (#755) — a metadata-storm guardrail so the ext4 journal (jbd2) cannot saturate and self-sustain after the deleting process exits. Only meaningful together with `budget_bytes_per_sec > 0`; without a budget the legacy fixed time-slice pacing stays active.
+
+### `io.recording_writes_budgeted`
+- **Type**: boolean
+- **Default**: `false` (gray-release switch, #886)
+- **Description**: Opts the recording write path INTO the shared budget as the "recording" tenant — segment-sample writes are charged per NALU byte and block on the bucket when it is starved. Off by default: pacing the reliability-critical recorder can drop frames under a tight budget; only makes sense on media where unbounded recording writes themselves are the latency problem. Requires `budget_bytes_per_sec > 0`.
+
+### `io.playback_reads_budgeted`
+- **Type**: boolean
+- **Default**: `false` (gray-release switch, #886)
+- **Description**: Opts API media serving (playback/downloads) into the shared budget as the "playback" tenant — file reads are charged in `ServeContent`-sized chunks. Requires `budget_bytes_per_sec > 0`.
 
 ## Authentication Configuration
 
@@ -375,6 +512,14 @@ GOMEMLIMIT auto-heuristics (#756) — the heap ceiling is derived from the deplo
 - **Description**: Login-failure rate limiting. When enabled, `max_failures` authentication failures within a `window_minutes` window trigger the limiter — an online brute-force guard. Off by default
 - **Example**: `true`, `20`, `1`
 
+## Recording Configuration
+
+### `recording.default_enabled`
+- **Type**: boolean (nullable)
+- **Default**: `null` (record — preserves pre-existing behavior)
+- **Description**: Global recording gate for cameras that never set an explicit [`recording_enabled`](#camerasrecording_enabled). Resolution order: explicit per-camera `true`/`false` always wins, then this global default, then record. Primary use: pure view-only deployments (e.g. an fnOS test box under a ≤24h-retention rule) that want every channel live-only without flipping each camera by hand.
+- **Example**: `false` (all unset cameras become live-only)
+
 ## Camera Configuration
 
 ### Camera Structure
@@ -387,7 +532,7 @@ cameras:
     protocol: "rtsp"
     encoding: "h264"
     url: "camera_url"
-    enabled: true
+    recording_enabled: true
 ```
 
 ### `cameras[].id`
@@ -448,10 +593,11 @@ cameras:
 - **Description**: Password for camera authentication
 - **Example**: `"camera-password"`
 
-### `cameras[].enabled`
-- **Type**: boolean
-- **Default**: `true`
-- **Description**: Whether the camera recording is enabled
+### `cameras[].recording_enabled`
+- **Type**: boolean (nullable)
+- **Default**: `null` (record normally)
+- **Description**: Whether this camera writes segments to disk. `null` or `true` = record normally. `false` = **live-only mode**: the recorder stays connected and feeds the StreamHub (live preview, relay, health all work) but writes NO segments — useful when the NVR is used purely as a live/relay gateway and SD-card writes must be avoided.
+- **Note**: There is no `cameras[].enabled` key — it never existed in the YAML schema (an unknown key is silently ignored); `recording_enabled` is the recording gate. Cameras that leave this unset inherit the global [`recording.default_enabled`](#recording-configuration).
 - **Example**: `true` or `false`
 
 ### `cameras[].onvif_endpoint`
@@ -562,6 +708,21 @@ cameras:
 - **Values**: empty / `"single"` / `"tiered"`
 - **Description**: Tiered recording (tierrec). `"tiered"` = the sub-stream records as a continuous low-res layer=1 tier while the main stream is event-driven — intended pairing is adaptive + `video_exit: false` (+ pixgate) so the main stream becomes event-only, for near-empty scenes. Requires a sub-stream-capable protocol (rtsp/onvif/gb28181); validation rejects anything else
 
+### `cameras[].motion_source`
+- **Type**: string
+- **Optional**: Yes
+- **Default**: `""` (the NVR's own detectors)
+- **Values**: `""` / `"nvr"` / `"camera:onvif"`
+- **Description**: Where the camera's motion signal comes from (#711). `""` or `"nvr"` — the NVR's own detectors (adaptive P-frame spikes, pixgate; the default behavior). `"camera:onvif"` — subscribe to the camera's ONVIF Pull-Point event service; `tns1:VideoSource/MotionAlarm` events drive the recorder via the shared trigger surface and exit adaptive timelapse with reason=onvif_motion (mibee_cam WiFi-CSI contract v1.5 §13, or a standard camera's built-in motion detection). ONVIF-protocol cameras only — validation rejects the combination otherwise.
+- **Example**: `"camera:onvif"`
+
+### `cameras[].segment_duration`
+- **Type**: string
+- **Optional**: Yes
+- **Default**: empty (use the global `storage.segment_duration`)
+- **Description**: Per-camera override of the global segment duration (#758) — the escape hatch for scenes that genuinely need short rotation (e.g. high-time-resolution timelapse sampling) without amplifying segment-create/rename/fsync/DB churn on every other camera. A `config.Validate()` warning fires when the global value is below 60s and at least one continuous-mode camera has no override.
+- **Example**: `"15s"`
+
 ### `cameras[].adaptive`
 
 - **Type**: object
@@ -592,7 +753,7 @@ cameras:
 ### `cameras[].pixgate`
 - **Type**: object
 - **Optional**: Yes
-- **Description**: Pixel activity gate (#699) — per-camera frame sampling that analyzes motion and feeds confirmed activity into adaptive recording as a full-rate exit trigger (alongside video spikes and audio triggers). Telemetry metrics: see [Metrics](metrics.md)
+- **Description**: Pixel activity gate (#699) — per-camera frame sampling that analyzes motion and feeds confirmed activity into adaptive recording as a full-rate exit trigger (alongside video spikes and audio triggers). Samples a low-rate decode of the camera's SUB-stream: requires an RTSP-reachable sub-stream and FFmpeg (optional dependency — the gate stays off without it). Telemetry metrics: see [Metrics](metrics.md)
 - **Fields**:
   - `enabled` (boolean, default `false`) — arm the gate for this camera
   - `sample_fps` (float, default `1`, range 0.2–2) — sampling rate
@@ -661,9 +822,8 @@ cameras:
 - **Fields**:
   - **`enabled`** (boolean, default: `false`) — Enable timelapse recording
   - **`interval`** (string, default: `"30s"`, min: 1s) — Snapshot capture interval
-  - **`output_fps`** (integer, default: 30, range: 1-60) — Output framerate
-  - **`video_codec`** (string, default: `"h264"`, options: h264/h265) — Video codec (deprecated)
   - **`delete_original`** (boolean, default: `false`) — Remove original segments after timelapse
+  - **`delete_recordings_after_merge`** (boolean, default: `false`) — After a periodic merge successfully folds a window's frames into a timelapse output, delete the source video recordings (DB rows + files). Opt-in; distinct from `delete_original` (which only removes timelapse frame dirs). Useful for fragment-heavy cameras (MJPEG/HTTP-JPEG) where the timelapse output replaces the raw segments. Recordings being processed by MiBeeVision are always skipped; never applied when the merge failed
   - **`merge_enabled`** (boolean, default: auto-detect) — Enable auto-merging
   - **`merge_mode`** (string, default: `"auto"`, options: auto/mp4/jpeg) — Merge output format
   - **`daily_merge`** (boolean, default: `true`) — Merge segments into daily files
@@ -797,7 +957,7 @@ receives video-segment pushes and writes AI events back to the NVR.
 - **Default**: `60`
 - **Description**: Consider the consumer offline after this many seconds without a heartbeat.
 
-### `vision.drop_mark_timeout_s`
+### `vision.drop_mark_timeout_secs`
 - **Type**: int
 - **Default**: `60`
 - **Description**: Budget (seconds) for marking recordings from a heartbeat drops report. Marking is detached from the client connection — it finishes even after the consumer hangs up (marking is idempotent, finishing beats failing halfway; abandoning on disconnect makes the consumer retry the same report forever) — but is bounded by this budget so a pathological report cannot pin the goroutine. Raise it for reports carrying hundreds of ranges or contention-heavy disks; upper bound 3600.
@@ -856,10 +1016,10 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 
 ### `cleanup.disk_threshold_percent`
 - **Type**: integer
-- **Default**: 95
+- **Default**: 85
 - **Range**: 50-99
-- **Description**: Start cleanup when disk usage exceeds N%
-- **Example**: `90`, `95`, `98`
+- **Description**: Start cleanup when disk usage exceeds N%. The default 85% avoids the HDD performance cliff that starts around 90%+ full, where random writes during SQLite checkpoints + segment merges start contending with sequential recording writes for head seeks.
+- **Example**: `80`, `85`, `90`
 
 ### `cleanup.motion_aware_disk_cleanup`
 - **Type**: boolean
@@ -1010,6 +1170,12 @@ lower-level cascade role) and `config.example.yaml` in the repo root for example
 - **Default**: `"2122-2140"`
 - **Description**: Passive mode port range (start-end)
 - **Example**: `"2122-2140"`, `"40000-40100"`
+
+### `ftp.username` / `ftp.password`
+- **Type**: string
+- **Default**: empty (fallback to the admin account, with a startup warning)
+- **Description**: Dedicated FTP credentials (#879). FTP is a cleartext protocol — reusing the admin password would leak it to anyone sniffing the LAN, so set separate credentials here. Leaving both unset keeps the legacy behavior of authenticating with the `auth` admin account and logs a startup warning.
+- **Example**: `username: "ftp-user"`, `password: "ftp-password"`
 
 ## MQTT Configuration
 
@@ -1484,30 +1650,32 @@ auto_discover:
 
 ## AI Configuration
 
-### `ai.inference_timeout_ms`
-- **Type**: integer
-- **Default**: 0 (no timeout)
-- **Description**: Inference timeout in milliseconds for AI model execution
-- **Example**: `5000`, `10000`, `30000`
+Browser-side AI detection (ONNX Runtime Web) — the backend `ai:` block is a config + ROI-zone store only; no inference runs on the server.
+
+### `ai.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Master switch for the AI detection feature. When off, the browser detector stays dormant regardless of the other `ai:` keys.
+- **Example**: `true`
+
+### `ai.model_url`
+- **Type**: string
+- **Default**: `"/models/yolo11n.onnx"`
+- **Description**: URL/path of the ONNX model the browser-side detector loads. (There is no `ai.model_path` key.)
+- **Example**: `"/models/yolo11n.onnx"`
 
 ### `ai.frame_skip_rate`
 - **Type**: integer
-- **Default**: 0 (process all frames)
+- **Default**: 10 (run inference on every 10th frame)
 - **Description**: Number of frames to skip between AI inference runs
-- **Example**: `0`, `3`, `5`
+- **Example**: `5`, `10`, `20`
 
 ### `ai.confidence_threshold`
 - **Type**: float
-- **Default**: 0.0
+- **Default**: 0.5
 - **Range**: 0.0-1.0
 - **Description**: Minimum confidence threshold for AI detection results
 - **Example**: `0.5`, `0.7`, `0.9`
-
-### `ai.model_path`
-- **Type**: string
-- **Optional**: Yes
-- **Description**: Path to the ONNX model file for AI inference
-- **Example**: `"/models/yolo.onnx"`
 
 ## RTMP Configuration
 
@@ -1613,11 +1781,11 @@ auto_discover:
 - **Description**: Maximum number of concurrent transcoding jobs
 - **Example**: `1`, `2`, `4`
 
-### `transcoding.download_url`
+### `transcoding.download_mirror`
 - **Type**: string
 - **Optional**: Yes
-- **Description**: URL to download FFmpeg binary from (auto-populated per platform)
-- **Example**: `"https://github.com/.../ffmpeg"`
+- **Description**: Overrides the FFmpeg static-build host (base URL) — same semantics as `update.download_mirror`; the per-platform filename is appended. Empty = the official build site.
+- **Example**: `"https://mirror.example.com/ffmpeg"`
 
 ### `transcoding.job_timeout`
 - **Type**: string
@@ -1628,16 +1796,52 @@ auto_discover:
 
 ### `transcoding.history_retention`
 - **Type**: string
-- **Default**: `"168h"` (7 days)
-- **Description**: How long to retain transcoding job history. Empty string means never delete.
+- **Default**: `"168h"` (7 days; an empty value is replaced by this default at startup)
+- **Description**: How long to retain transcoding job history.
 - **Minimum**: 24h
-- **Example**: `"168h"`, `"720h"`, `""`
+- **Example**: `"168h"`, `"720h"`
 ### `transcoding.min_segment_duration_s`
 - **Type**: integer
 - **Default**: `0` (off)
 - **Range**: 0–3600
 - **Description**: Minimum segment duration floor for auto-enqueued transcodes (#848): reconnect fragments from flapping cameras (~7s) cost nearly as much to transcode as they contain, so shorter segments are not enqueued. Note: skipped fragments still fold into rolling-merge buckets whose output is never re-enqueued (it keeps the original codec) — enable only when that trade-off is acceptable.
 - **Example**: `30`
+
+## Update Configuration
+
+In-app version check. This is the **sensing layer only** by default: the app polls GitHub Releases, compares the latest tag to the running version, and surfaces the result in the Web UI — it never executes an upgrade unless `auto_apply` is explicitly enabled. See [Auto-Update](deployment-autoupdate.md).
+
+### `update.enabled`
+- **Type**: boolean
+- **Default**: `true`
+- **Description**: Gate the background version check.
+
+### `update.channel`
+- **Type**: string
+- **Default**: `"stable"`
+- **Description**: Release stream. `"stable"` queries `/releases/latest` (excludes prereleases); `"beta"` lists releases and includes prereleases. Only `"stable"` is implemented for now.
+
+### `update.check_interval`
+- **Type**: string (Go duration)
+- **Default**: `"1h"`
+- **Description**: How often the background poller hits GitHub.
+
+### `update.repo`
+- **Type**: string
+- **Default**: `"Mi-Bee-Studio/MiBeeNvr"`
+- **Description**: The `owner/name` GitHub repository to check.
+
+### `update.auto_apply`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Opt-in EXECUTION of bare-metal upgrades (#647). When true AND the deployment is bare-metal systemd, a newly detected stable release is installed via the `mibee-nvr-update.service` root helper (polkit-authorized), with sha256+ed25519 verification and automatic rollback to the previous binary if the upgraded service fails its health gate. Docker, dev and beta builds never self-update (a container is immutable — use Watchtower or the NAS app store); self-update is Linux-only, so desktop builds (Windows/macOS) refuse it and update by downloading a new release manually. See [Auto-Update](deployment-autoupdate.md).
+- **Example**: `true`
+
+### `update.download_mirror`
+- **Type**: string
+- **Default**: empty (GitHub official)
+- **Description**: Base URL that replaces `https://github.com` for release-artifact downloads (#649) — bare-metal auto-upgrade reliability on networks where GitHub is slow/unreachable. The `{repo}/releases/download/...` path is preserved underneath it, so a ghproxy-style prefix or a self-hosted path-preserving mirror both fit. The version CHECK still goes to the GitHub API; all artifacts (binary + checksums + signature) come from the same origin and mirror failures never fall back to GitHub.
+- **Example**: `"https://mirror.example.com/github"`
 
 ## Extensions Configuration
 
@@ -1669,7 +1873,7 @@ cameras:
     url: "rtsp://192.168.1.100:554/stream"
     username: "admin"
     password: "camera-password"
-    enabled: true
+    recording_enabled: true
     sub_stream_url: "rtsp://192.168.1.100:554/stream2"
     snapshot_url: "http://192.168.1.100:8080/snapshot"
 ```
@@ -1683,7 +1887,7 @@ cameras:
     encoding: "jpeg"
     url: "http://192.168.1.101/capture"
     sample_interval: 1
-    enabled: true
+    recording_enabled: true
 ```
 
 ### ONVIF Camera
@@ -1693,7 +1897,7 @@ cameras:
     name: "Lobby Camera"
     protocol: "onvif"
     url: "http://192.168.1.102:80/onvif/device_service"
-    enabled: true
+    recording_enabled: true
     # Optional: specify encoding
     encoding: "h264"
     # Optional: specify stream encoding
@@ -1714,7 +1918,7 @@ cameras:
     encoding: "h264"
     did: "xiaomi_device_id"
     vendor: "cs2"
-    enabled: true
+    recording_enabled: true
 ```
 
 ## Migration from Legacy Format
@@ -1744,6 +1948,9 @@ The configuration is validated on startup with these constraints:
 - **Xiaomi Cameras**: Must have xiaomi.token configured
 - **Port Numbers**: Must be in range 1-65535
 - **Segment Duration**: Maximum 30 seconds on RPi 3B
+- **Storage Durability**: Must be `"strict"` or `"relaxed"` (empty = strict default)
+- **Remote Object Storage**: When `storage.remote.enabled` — `endpoint_url` (valid URL), `bucket`, `access_key_id`, `secret_access_key` required; `upload.max_concurrency` 0-8; `upload.scan_interval_s` 0-3600; `upload.min_age_s` 60-86400; `upload.backlog_limit` >= 0; `evict.after_days` >= 0
+- **Memory**: `soft_limit_bytes` must be 0 (automatic) or at least 64MiB
 - **Retention Days**: Must be between 1 and 3650
 - **Disk Threshold**: Must be between 50% and 99%
 - **Merge Configuration**: All duration fields must be valid; min_segments_to_merge >= 2
@@ -1759,9 +1966,10 @@ The configuration is validated on startup with these constraints:
 - **WebSocket Configuration**: max_viewers > 0, write_buf_size > 0, idle_timeout > 0
 - **Health Configuration**: All duration fields must be valid when health is enabled
 - **Remote Log Configuration**: endpoint required when enabled; format must be jsonline or loki
-- **Transcoding Configuration**: max_workers 1-4; job_timeout 1s-4h; history_retention >= 24h
+- **Transcoding Configuration**: max_workers 1-4; job_timeout 1s-4h; history_retention >= 24h; min_segment_duration_s 0-3600
 - **SRT Configuration**: port 1-65535; stream mode must be listener or caller
 - **Camera Health Overrides**: All duration fields must be valid; bitrate_change_threshold 0-1; min_fps >= 0
+- **Camera Motion Source**: must be `"nvr"` or `"camera:onvif"`; `camera:onvif` requires an onvif-protocol camera
 - **Camera Timelapse**: interval >= 1s; merge_mode must be auto/mp4/jpeg; merge_output_fps 1-60
 - **Camera Transcoding**: target_codec must be h264 or h265; preset must be ultrafast/faster/medium
 
@@ -1792,10 +2000,10 @@ cameras:
     protocol: "rtsp"
     encoding: "h264"
     url: "rtsp://192.168.1.100:554/stream"
-    enabled: true
+    recording_enabled: true
 cleanup:
   retention_days: 30
-  disk_threshold_percent: 95
+  disk_threshold_percent: 85
 ```
 
 ### Complete Setup with All Features
@@ -1814,7 +2022,7 @@ cameras:
     protocol: "rtsp"
     encoding: "h264"
     url: "rtsp://192.168.1.100:554/stream"
-    enabled: true
+    recording_enabled: true
     sub_stream_url: "rtsp://192.168.1.100:554/sub"
     audio_enabled: true
     transcoding:
@@ -1827,7 +2035,7 @@ cameras:
     encoding: "h264"
     did: "xiaomi_device_id"
     vendor: "cs2"
-    enabled: true
+    recording_enabled: true
 xiaomi:
   user_id: "1234567890"
   token: "xiaomi_token_123"
