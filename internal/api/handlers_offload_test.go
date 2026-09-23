@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/stretchr/testify/assert"
@@ -177,6 +178,45 @@ func TestOffloadObjectPlaybackGuards(t *testing.T) {
 	id2 := seedRemoteItem(t, db2, "remote-noproxy", "camA", storage.OffloadStatusEvicted)
 	rr = doRequest(t, h2.Routes(), "GET", fmt.Sprintf("/api/offload/objects/%d", id2), nil, "", "")
 	assert.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+// TestOffloadObject_Auth pins the auth contract of the remote-archive
+// playback proxy (#893): the route sits in the protected media group with the
+// recording downloads (outbox ids are predictable — archive playback must not
+// leak to unauthenticated listeners). The SPA reaches it via ?token= <video>
+// links; the HA integration via BasicAuth.
+func TestOffloadObject_Auth(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	hash, err := middleware.HashPassword("secret")
+	require.NoError(t, err)
+	h := testHandlerWithAuth(db, store, "admin", hash)
+
+	content := []byte("remote-archive-bytes")
+	h.SetOffloadPlayback(&fakePlaybackProxy{content: content})
+	id := seedRemoteItemSized(t, db, "remote-auth", "camA", storage.OffloadStatusEvicted, int64(len(content)))
+	url := fmt.Sprintf("/api/offload/objects/%d", id)
+
+	// GET without credentials — media must not leak anonymously.
+	rr := doRequest(t, h.Routes(), http.MethodGet, url, nil, "", "")
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	// HEAD without credentials — same contract for browser <video> probes.
+	rr = doRequest(t, h.Routes(), http.MethodHead, url, nil, "", "")
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	// GET with BasicAuth (HA integration path).
+	rr = doRequest(t, h.Routes(), http.MethodGet, url, nil, "admin", "secret")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, content, rr.Body.Bytes())
+
+	// GET with ?token= (SPA <video src>/fetch links carry no auth header).
+	tok, _ := middleware.SignSessionToken("admin", hash, time.Now())
+	req, _ := http.NewRequest(http.MethodGet, url+"?token="+tok, nil)
+	resp := doReq(t, h.Routes(), req)
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, content, resp.Body.Bytes())
 }
 
 // doReq executes a prepared request (headers set by the caller) against the router.
