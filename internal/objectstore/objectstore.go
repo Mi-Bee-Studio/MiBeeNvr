@@ -51,4 +51,11 @@ type Store interface {
 
 	// Head fetches object metadata; ErrObjectNotFound when absent.
 	Head(ctx context.Context, key string) (ObjectInfo, error)
+
+	// GetRange fetches bytes [start, end] — end INCLUSIVE, matching the S3
+	// Range header form; end < 0 means "to EOF" (an open-ended, streamable
+	// fetch). info.Size carries the TOTAL object size parsed from
+	// Content-Range when the store provides it (0 otherwise). Callers own
+	// closing the returned reader.
+	GetRange(ctx context.Context, key string, start, end int64) (io.ReadCloser, ObjectInfo, error)
 }

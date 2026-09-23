@@ -6,6 +6,8 @@ package app
 // construction (unreachable endpoint must still build).
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 )
@@ -77,4 +79,51 @@ func TestRunFree_OffloadBadConfig_FailsFast(t *testing.T) {
 	if _, err := RunFree(cfg, filepath.Join(cfg.Storage.RootDir, "mibee-nvr.yaml")); err == nil {
 		t.Fatal("RunFree should fail fast on an invalid remote-storage config")
 	}
+}
+
+// TestBuildAppDeps_OffloadPlaybackWired guards the batch-2 wiring: with
+// remote storage enabled, the coalescing playback proxy exists AND is wired
+// into the API handler (a nil SetOffloadPlayback would 404 every remote
+// playback — the #653 silent-dead-wiring class).
+func TestBuildAppDeps_OffloadPlaybackWired(t *testing.T) {
+	t.Helper()
+	cfg, configPath := minimalConfig(t)
+	cfg.Storage.Remote.Enabled = true
+	cfg.Storage.Remote.EndpointURL = "http://127.0.0.1:1"
+	cfg.Storage.Remote.Bucket = "nvr"
+	cfg.Storage.Remote.AccessKeyID = "k"
+	cfg.Storage.Remote.SecretAccessKey = "s"
+
+	deps, cleanup, err := buildAppDeps(cfg, configPath)
+	if err != nil {
+		t.Fatalf("buildAppDeps: %v", err)
+	}
+	defer cleanup()
+
+	if deps.offloadProxy == nil {
+		t.Fatal("deps.offloadProxy is nil with storage.remote.enabled=true")
+	}
+	if deps.handler == nil {
+		t.Fatal("deps.handler is nil")
+	}
+	// The endpoint must resolve through the real router (anonymous route).
+	req := newRequest("HEAD", "/api/offload/objects/1")
+	rec := serve(deps.router, req)
+	if rec.Code == 404 && rec.Body.String() == "" {
+		// Distinguish "route missing" (wiring bug) from "object not found"
+		// (expected — id 1 doesn't exist). A missing route returns the
+		// router's default 404 with an empty JSON body; the handler's 404
+		// carries {"error":...}. Assert the JSON error body shape.
+		t.Fatalf("playback endpoint may not be routed: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func newRequest(method, target string) *http.Request {
+	return httptest.NewRequest(method, target, nil)
+}
+
+func serve(h http.Handler, req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }

@@ -95,6 +95,11 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 		handler.SetTimelapseMergeMgr(deps.rollingMergeMgr)
 	}
 	handler.SetRollingMergeMgr(deps.recordRollingMergeMgr)
+	// Remote offload playback proxy (issue #874 batch 2): remote-only
+	// (evicted) archive playback rides the coalescing range proxy.
+	if deps.offloadProxy != nil {
+		handler.SetOffloadPlayback(deps.offloadProxy)
+	}
 	if deps.visionMgr != nil {
 		handler.SetVisionCoordinator(deps.visionMgr)
 	}
