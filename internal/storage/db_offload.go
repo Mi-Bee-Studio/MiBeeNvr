@@ -54,6 +54,11 @@ type OffloadItem struct {
 	EndedAt   time.Time
 	Duration  float64
 	Format    string
+
+	// Bucket pins the object's bucket for per-camera routing (v42, batch 3).
+	// '' = the configured default bucket — resolved at the consumer, never
+	// rewritten in place.
+	Bucket string
 }
 
 // OffloadCandidate is a merged recording discovered eligible for upload.
@@ -76,8 +81,8 @@ func (d *DB) EnqueueOffload(ctx context.Context, item OffloadItem) (bool, error)
 	now := time.Now().UTC()
 	q := `INSERT OR IGNORE INTO offload_outbox
 		(recording_id, camera_id, object_key, local_path, file_size, status, created_at,
-		 started_at, ended_at, duration, format)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		 started_at, ended_at, duration, format, bucket)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	startedAt, endedAt := any(""), any("")
 	if !item.StartedAt.IsZero() {
 		startedAt = timeToDB(item.StartedAt)
@@ -88,7 +93,7 @@ func (d *DB) EnqueueOffload(ctx context.Context, item OffloadItem) (bool, error)
 	res, err := d.db.ExecContext(ctx, q,
 		item.RecordingID, item.CameraID, item.ObjectKey, item.LocalPath,
 		item.FileSize, OffloadStatusPending, timeToDB(now),
-		startedAt, endedAt, item.Duration, item.Format)
+		startedAt, endedAt, item.Duration, item.Format, item.Bucket)
 	if err != nil {
 		return false, fmt.Errorf("enqueue offload: %w", err)
 	}
@@ -166,7 +171,7 @@ func queryOffloadByIDs(ctx context.Context, q *sql.Tx, ids []int64) ([]OffloadIt
 	}
 	rows, err := q.QueryContext(ctx,
 		`SELECT id, recording_id, camera_id, object_key, local_path, file_size, status,
-			etag, uploaded_size, attempts, last_error, created_at, uploaded_at
+			etag, bucket, uploaded_size, attempts, last_error, created_at, uploaded_at
 		 FROM offload_outbox WHERE id IN (`+strings.Join(placeholders, ",")+`) ORDER BY id`, args...)
 	if err != nil {
 		return nil, err
@@ -187,7 +192,7 @@ func scanOffloadItem(s scanner) (OffloadItem, error) {
 	var it OffloadItem
 	var createdAt, uploadedAt *string
 	if err := s.Scan(&it.ID, &it.RecordingID, &it.CameraID, &it.ObjectKey, &it.LocalPath,
-		&it.FileSize, &it.Status, &it.ETag, &it.UploadedSize, &it.Attempts, &it.LastError,
+		&it.FileSize, &it.Status, &it.ETag, &it.Bucket, &it.UploadedSize, &it.Attempts, &it.LastError,
 		&createdAt, &uploadedAt); err != nil {
 		return it, err
 	}
@@ -369,7 +374,7 @@ func (d *DB) CountOffloadBacklog(ctx context.Context) (int, error) {
 func (d *DB) ListOffloadEvictable(ctx context.Context, confirmedBefore time.Time, limit int) ([]OffloadItem, error) {
 	rows, err := d.readConn().QueryContext(ctx, `
 		SELECT id, recording_id, camera_id, object_key, local_path, file_size, status,
-			etag, uploaded_size, attempts, last_error, created_at, uploaded_at
+			etag, bucket, uploaded_size, attempts, last_error, created_at, uploaded_at
 		FROM offload_outbox
 		WHERE status='uploaded' AND uploaded_at != '' AND uploaded_at < ?
 		ORDER BY uploaded_at ASC
@@ -542,7 +547,7 @@ func (d *DB) ListOffloadRemote(ctx context.Context, f OffloadRemoteFilter, limit
 func (d *DB) GetOffloadItem(ctx context.Context, id int64) (*OffloadItem, error) {
 	rows, err := d.readConn().QueryContext(ctx, `
 		SELECT id, recording_id, camera_id, object_key, local_path, file_size, status,
-			etag, uploaded_size, attempts, last_error, created_at, uploaded_at
+			etag, bucket, uploaded_size, attempts, last_error, created_at, uploaded_at
 		FROM offload_outbox WHERE id = ?`, id)
 	if err != nil {
 		return nil, fmt.Errorf("get offload item: %w", err)

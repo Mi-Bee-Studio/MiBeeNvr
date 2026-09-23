@@ -145,6 +145,25 @@ func openOffloadDB(cfgPath string) (*storage.DB, *config.Config, error) {
 	return db, cfg, nil
 }
 
+// evictStoreFor builds the bucket→store resolver: the default store for ”,
+// lazily-built stores for per-camera override buckets (config-derived, so a
+// CLI evict reaches routed buckets exactly like the running manager).
+func evictStoreFor(rc config.RemoteStorageConfig, def objectstore.Store) func(string) (objectstore.Store, error) {
+	return func(bucket string) (objectstore.Store, error) {
+		if bucket == "" {
+			return def, nil
+		}
+		return objectstore.NewS3(objectstore.Config{
+			EndpointURL:     rc.EndpointURL,
+			Region:          rc.Region,
+			Bucket:          bucket,
+			PathStyle:       rc.PathStyle == nil || *rc.PathStyle,
+			AccessKeyID:     rc.AccessKeyID,
+			SecretAccessKey: rc.SecretAccessKey,
+		})
+	}
+}
+
 // runOffloadStatus prints the outbox counters.
 func runOffloadStatus(db *storage.DB, w io.Writer) error {
 	counts, err := db.CountOffloadByStatus(context.Background())
@@ -183,7 +202,7 @@ func runOffloadEvict(db *storage.DB, store objectstore.Store, rc config.RemoteSt
 	}
 
 	summary, err := offload.RunEvict(context.Background(), db, offload.EvictOptions{
-		Store:           store,
+		StoreFor:        evictStoreFor(rc, store),
 		ConfirmedBefore: cutoff,
 		CameraID:        flags.CameraID,
 		Execute:         flags.Execute,

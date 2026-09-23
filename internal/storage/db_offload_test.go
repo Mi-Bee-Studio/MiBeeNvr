@@ -342,3 +342,48 @@ func TestOffloadMetadataBackfill(t *testing.T) {
 	require.Len(t, items, 1)
 	assert.Equal(t, "h264", items[0].Format)
 }
+
+func TestOffloadBucketColumn(t *testing.T) {
+	db := newOffloadTestDB(t)
+	ctx := context.Background()
+
+	rec := insertMergedRecording(t, db, "bk-1", "camA", 2*time.Hour, 10)
+	inserted, err := db.EnqueueOffload(ctx, OffloadItem{
+		RecordingID: rec.ID, CameraID: "camA", ObjectKey: "k-bk", Bucket: "important",
+		LocalPath: rec.FilePath, FileSize: rec.FileSize,
+		StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, Duration: rec.Duration, Format: "h264",
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+
+	// Round-trips through claim, get, and evictable listing.
+	items, err := db.ClaimPendingOffload(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "important", items[0].Bucket)
+
+	require.NoError(t, db.MarkOffloadUploaded(ctx, items[0].ID, `"e"`, 10))
+	got, err := db.GetOffloadItem(ctx, items[0].ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "important", got.Bucket)
+
+	evictable, err := db.ListOffloadEvictable(ctx, time.Now().UTC().Add(time.Minute), 10)
+	require.NoError(t, err)
+	require.Len(t, evictable, 1)
+	assert.Equal(t, "important", evictable[0].Bucket)
+
+	// '' (pre-v42 rows / default bucket) stays '' — resolution to the
+	// default bucket happens at the consumer, not in the DB.
+	rec2 := insertMergedRecording(t, db, "bk-2", "camA", 3*time.Hour, 10)
+	_, err = db.EnqueueOffload(ctx, OffloadItem{
+		RecordingID: rec2.ID, CameraID: "camA", ObjectKey: "k-bk2",
+		LocalPath: rec2.FilePath, FileSize: rec2.FileSize,
+		StartedAt: rec2.StartedAt, EndedAt: rec2.EndedAt, Duration: rec2.Duration, Format: "h264",
+	})
+	require.NoError(t, err)
+	items, err = db.ClaimPendingOffload(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Empty(t, items[0].Bucket, "empty bucket = default (legacy rows)")
+}

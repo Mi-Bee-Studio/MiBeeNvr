@@ -99,8 +99,23 @@ func buildMaintenanceDeps(deps *appDeps) (timelapseSourceDeleter, *snapshot.Capt
 			return timelapseSourceDeleter{}, nil, nil, fmt.Errorf("offload store: %w", err)
 		}
 		deps.offloadStore = os
+		routes := make(map[string]offload.CameraRoute, len(rc.CameraOverrides))
+		for camID, ov := range rc.CameraOverrides {
+			routes[camID] = offload.CameraRoute{Bucket: ov.Bucket, Prefix: ov.Prefix}
+		}
 		deps.offloadMgr = offload.NewManager(db, offload.Options{
-			Store:          os,
+			Store: os,
+			NewBucketStore: func(bucket string) (objectstore.Store, error) {
+				return objectstore.NewS3(objectstore.Config{
+					EndpointURL:     rc.EndpointURL,
+					Region:          rc.Region,
+					Bucket:          bucket,
+					PathStyle:       rc.PathStyle == nil || *rc.PathStyle,
+					AccessKeyID:     rc.AccessKeyID,
+					SecretAccessKey: rc.SecretAccessKey,
+				})
+			},
+			CameraRoutes:   routes,
 			Budget:         deps.ioBudget,
 			Prefix:         rc.Prefix,
 			ScanInterval:   time.Duration(rc.Upload.ScanIntervalS) * time.Second,
@@ -117,7 +132,34 @@ func buildMaintenanceDeps(deps *appDeps) (timelapseSourceDeleter, *snapshot.Capt
 				m.OffloadUploadedBytesTotal.Add(float64(bytes))
 			},
 		})
-		deps.offloadProxy = offload.NewProxy(os, offload.ProxyOptions{})
+		deps.offloadProxy = offload.NewProxy(os, offload.ProxyOptions{
+			NewBucketStore: func(bucket string) (objectstore.Store, error) {
+				return objectstore.NewS3(objectstore.Config{
+					EndpointURL:     rc.EndpointURL,
+					Region:          rc.Region,
+					Bucket:          bucket,
+					PathStyle:       rc.PathStyle == nil || *rc.PathStyle,
+					AccessKeyID:     rc.AccessKeyID,
+					SecretAccessKey: rc.SecretAccessKey,
+				})
+			},
+			PresignFor: func(bucket string) (objectstore.Presigner, error) {
+				// Presign against the browser-reachable endpoint when
+				// configured; otherwise the store's own endpoint.
+				pc := objectstore.Config{
+					Region:          rc.Region,
+					Bucket:          bucket,
+					PathStyle:       rc.PathStyle == nil || *rc.PathStyle,
+					AccessKeyID:     rc.AccessKeyID,
+					SecretAccessKey: rc.SecretAccessKey,
+					EndpointURL:     rc.EndpointURL,
+				}
+				if rc.Playback.EndpointURL != "" {
+					pc.EndpointURL = rc.Playback.EndpointURL
+				}
+				return objectstore.NewS3Presigner(pc)
+			},
+		})
 		slog.Info("remote offload enabled",
 			"bucket", rc.Bucket, "prefix", rc.Prefix, "workers", rc.Upload.MaxConcurrency,
 			"auto_evict_after_days", rc.Evict.AfterDays)

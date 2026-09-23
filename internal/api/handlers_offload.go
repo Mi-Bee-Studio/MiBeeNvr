@@ -26,10 +26,13 @@ import (
 )
 
 // OffloadPlaybackProxy is the remote-object read path implemented by
-// internal/offload.Proxy (range coalescing + block cache). The interface
-// keeps api free of the offload import.
+// internal/offload.Proxy (range coalescing + block cache, batch-3 presign).
+// The interface keeps api free of the offload import.
 type OffloadPlaybackProxy interface {
-	ServeRange(ctx context.Context, key string, start, end, total int64) (io.ReadCloser, error)
+	ServeRange(ctx context.Context, bucket, key string, start, end, total int64) (io.ReadCloser, error)
+	// PresignGet produces a direct-GET URL for the object. Callers fall back
+	// to ServeRange when it errors.
+	PresignGet(ctx context.Context, bucket, key string, ttl time.Duration) (string, error)
 }
 
 // SetOffloadPlayback wires the remote playback proxy (nil = remote offload
@@ -106,6 +109,25 @@ func (h *Handler) handleOffloadObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Presigned direct playback (batch 3): 302 to a signed URL so media
+	// bytes flow store→browser without transiting the NVR. Opt-in — the
+	// configured endpoint is often not browser-reachable (Docker-internal
+	// names), which is why proxying stays the default. Any presign failure
+	// degrades to the proxy path below (a broken redirect would kill
+	// playback; proxying only costs NVR bandwidth).
+	if h.config != nil && h.config.Storage.Remote.Playback.Presigned {
+		ttl := time.Duration(h.config.Storage.Remote.Playback.TTLS) * time.Second
+		if ttl <= 0 {
+			ttl = time.Hour
+		}
+		if url, err := h.offloadPlayback.PresignGet(r.Context(), item.Bucket, item.ObjectKey, ttl); err == nil {
+			// Range headers ride along — the browser re-issues its range
+			// against the signed URL.
+			http.Redirect(w, r, url, http.StatusFound)
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Accept-Ranges", "bytes")
 
@@ -129,7 +151,7 @@ func (h *Handler) handleOffloadObject(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		return
 	}
-	rc, err := h.offloadPlayback.ServeRange(r.Context(), item.ObjectKey, serveStart, serveEnd, total)
+	rc, err := h.offloadPlayback.ServeRange(r.Context(), item.Bucket, item.ObjectKey, serveStart, serveEnd, total)
 	if err != nil {
 		// Headers are already set; the honest status at this point is 502
 		// (upstream object store).

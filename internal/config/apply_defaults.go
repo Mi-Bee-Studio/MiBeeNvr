@@ -332,6 +332,9 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.Storage.Remote.Upload.BacklogLimit == 0 {
 		cfg.Storage.Remote.Upload.BacklogLimit = 5000
 	}
+	if cfg.Storage.Remote.Playback.TTLS == 0 {
+		cfg.Storage.Remote.Playback.TTLS = 3600
+	}
 	// Merge defaults
 	if cfg.Merge.BatchLimit <= 0 {
 		cfg.Merge.BatchLimit = 200

@@ -29,7 +29,11 @@ type fakePlaybackProxy struct {
 	content []byte
 }
 
-func (f *fakePlaybackProxy) ServeRange(_ context.Context, _ string, start, end, total int64) (io.ReadCloser, error) {
+func (f *fakePlaybackProxy) PresignGet(context.Context, string, string, time.Duration) (string, error) {
+	return "", fmt.Errorf("presign unsupported")
+}
+
+func (f *fakePlaybackProxy) ServeRange(_ context.Context, _, _ string, start, end, total int64) (io.ReadCloser, error) {
 	if end < 0 || end > total-1 {
 		end = total - 1
 	}
@@ -183,6 +187,32 @@ func doReq(t *testing.T, h http.Handler, req *http.Request) *httptest.ResponseRe
 	return rec
 }
 
+// seedRemoteItemBucket seeds an outbox row pinned to an explicit bucket.
+func seedRemoteItemBucket(t *testing.T, db *storage.DB, id, cameraID, status, bucket string) int64 {
+	t.Helper()
+	ended := time.Now().UTC().Add(-2 * time.Hour)
+	rec := &model.Recording{
+		ID: id, CameraID: cameraID, FilePath: filepath.Join(t.TempDir(), id+".mp4"),
+		Format: model.FormatH264, StartedAt: ended.Add(-time.Hour), EndedAt: ended,
+		Duration: 3600, FileSize: 8, MergeStatus: model.MergeStatusMerged, MergeTier: "rolling",
+	}
+	require.NoError(t, db.InsertRecording(context.Background(), rec))
+	_, err := db.EnqueueOffload(context.Background(), storage.OffloadItem{
+		RecordingID: rec.ID, CameraID: cameraID, ObjectKey: "k/" + id, Bucket: bucket,
+		LocalPath: rec.FilePath, FileSize: rec.FileSize,
+		StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, Duration: rec.Duration, Format: "h264",
+	})
+	require.NoError(t, err)
+	items, err := db.ClaimPendingOffload(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.NoError(t, db.MarkOffloadUploaded(context.Background(), items[0].ID, `"e"`, rec.FileSize))
+	if status == storage.OffloadStatusEvicted {
+		require.NoError(t, db.MarkOffloadEvicted(context.Background(), items[0].ID))
+	}
+	return items[0].ID
+}
+
 func TestOffloadStatusEndpoint(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)
@@ -249,4 +279,68 @@ func TestSettingsRemoteRoundTrip(t *testing.T) {
 	rr = doRequest(t, h.Routes(), "PUT", "/api/settings", strings.NewReader(body), "", "")
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.Equal(t, "new-bucket", cfg.Storage.Remote.Bucket, "rejected save must not half-commit")
+}
+
+// presigningProxy fakes a proxy that can presign.
+type presigningProxy struct {
+	fakePlaybackProxy
+	presigned map[string]string // bucket → URL
+	fail      bool
+}
+
+func (p *presigningProxy) ServeRange(ctx context.Context, bucket, key string, start, end, total int64) (io.ReadCloser, error) {
+	return p.fakePlaybackProxy.ServeRange(ctx, bucket, key, start, end, total)
+}
+
+func (p *presigningProxy) PresignGet(_ context.Context, bucket, _ string, _ time.Duration) (string, error) {
+	if p.fail {
+		return "", fmt.Errorf("presigner unavailable")
+	}
+	if u, ok := p.presigned[bucket]; ok {
+		return u, nil
+	}
+	return "https://store.example.com/signed-default", nil
+}
+
+func TestOffloadObjectPresignedRedirect(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+	if h.config == nil {
+		h.config = &config.Config{}
+	}
+	h.config.ApplyDefaults()
+	h.config.Storage.Remote.Playback.Presigned = true
+	h.config.Storage.Remote.Playback.TTLS = 900
+	h.SetOffloadPlayback(&presigningProxy{
+		fakePlaybackProxy: fakePlaybackProxy{content: []byte("0123456789")},
+		presigned:         map[string]string{"vip": "https://store.example.com/signed-vip"},
+	})
+
+	// Default bucket → 302 to the presigned URL; no body streamed.
+	id := seedRemoteItem(t, db, "remote-ps", "camA", storage.OffloadStatusEvicted)
+	url := fmt.Sprintf("/api/offload/objects/%d", id)
+	rr := doRequest(t, h.Routes(), "GET", url, nil, "", "")
+	require.Equal(t, http.StatusFound, rr.Code)
+	assert.Equal(t, "https://store.example.com/signed-default", rr.Header().Get("Location"))
+
+	// Routed bucket → bucket-specific presigned URL (the outbox row pins it).
+	id2 := seedRemoteItemBucket(t, db, "remote-vip", "camA", storage.OffloadStatusEvicted, "vip")
+	rr = doRequest(t, h.Routes(), "GET", fmt.Sprintf("/api/offload/objects/%d", id2), nil, "", "")
+	require.Equal(t, http.StatusFound, rr.Code)
+	assert.Equal(t, "https://store.example.com/signed-vip", rr.Header().Get("Location"))
+
+	// Presigner failure degrades to proxying (206 path still works).
+	h.SetOffloadPlayback(&presigningProxy{fakePlaybackProxy: fakePlaybackProxy{content: []byte("0123456789")}, fail: true})
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Range", "bytes=2-5")
+	resp := doReq(t, h.Routes(), req)
+	require.Equal(t, http.StatusPartialContent, resp.Code, "presign failure must fall back to the proxy")
+
+	// Presigned disabled → plain proxy behavior (302 must NOT happen).
+	h.config.Storage.Remote.Playback.Presigned = false
+	h.SetOffloadPlayback(&presigningProxy{fakePlaybackProxy: fakePlaybackProxy{content: []byte("0123456789")}})
+	rr = doRequest(t, h.Routes(), "GET", url, nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
 }
