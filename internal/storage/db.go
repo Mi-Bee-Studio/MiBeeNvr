@@ -273,8 +273,12 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // one-shot backfill from recordings (rows whose recording row is already
 // gone stay empty and are excluded from remote listings).
 //
+// v42: added offload_outbox.bucket (issue #874 batch 3 — per-camera bucket
+// routing). ” = the configured default bucket; resolution happens at the
+// consumer (offload storeFor), never rewritten in place.
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "41"
+const currentSchemaVersion = "42"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -481,6 +485,7 @@ func (d *DB) Init(ctx context.Context) error {
         file_size INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'pending',
         etag TEXT DEFAULT '',
+        bucket TEXT DEFAULT '',
         uploaded_size INTEGER NOT NULL DEFAULT 0,
         attempts INTEGER NOT NULL DEFAULT 0,
         last_error TEXT DEFAULT '',
@@ -576,6 +581,20 @@ func (d *DB) Init(ctx context.Context) error {
 	// ── v41 (issue #874 batch 2): offload_outbox timeline metadata ──
 	if err := d.ensureOffloadOutboxMetadataColumns(ctx); err != nil {
 		return err
+	}
+
+	// ── v42 (issue #874 batch 3): offload_outbox.bucket ──
+	var bucketCol int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('offload_outbox') WHERE name='bucket'`,
+	).Scan(&bucketCol); err != nil {
+		return fmt.Errorf("check offload_outbox.bucket column: %w", err)
+	}
+	if bucketCol == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE offload_outbox ADD COLUMN bucket TEXT DEFAULT ''`); err != nil {
+			return fmt.Errorf("add offload_outbox.bucket column: %w", err)
+		}
 	}
 
 	// ── v39 data migration (#763): retire permanently-pending layer=1 rows ──

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 
@@ -28,6 +29,10 @@ type S3Store struct {
 	bucket          string
 	accessKeyID     string
 	secretAccessKey string
+
+	// presign lazily-built presign client (batch 3).
+	presignOnce sync.Once
+	presign     *s3.PresignClient
 }
 
 // NewS3 builds an S3Store. Credentials support ${VAR} env refs (expanded

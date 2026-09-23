@@ -120,3 +120,89 @@ func TestExpandEnvRefs(t *testing.T) {
 	assert.Equal(t, "${1bad}", ExpandEnvRefs("${1bad}"), "invalid name left untouched")
 	assert.Equal(t, "pre-abc123-post", ExpandEnvRefs("pre-${S3_TEST_KEY}-post"))
 }
+
+func newPlaybackConfig() *RemoteStorageConfig {
+	r := newRemoteConfig()
+	r.Playback = RemotePlaybackConfig{Presigned: true, TTLS: 3600}
+	return r
+}
+
+func TestRemotePlaybackDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{}
+	cfg.ApplyDefaults()
+	assert.False(t, cfg.Storage.Remote.Playback.Presigned, "proxy playback is the safe default")
+	assert.Equal(t, 3600, cfg.Storage.Remote.Playback.TTLS)
+	assert.Empty(t, cfg.Storage.Remote.Playback.EndpointURL, "empty = use the configured endpoint")
+	assert.Empty(t, cfg.Storage.Remote.CameraOverrides)
+}
+
+func TestRemotePlaybackValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid presigned config passes", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Storage: StorageConfig{Remote: *newPlaybackConfig()}}
+		cfg.ApplyDefaults()
+		assert.NoError(t, Validate(cfg))
+	})
+
+	t.Run("bad override endpoint rejected", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Storage: StorageConfig{Remote: *newPlaybackConfig()}}
+		cfg.ApplyDefaults()
+		cfg.Storage.Remote.Playback.EndpointURL = "not a url"
+		err := Validate(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "playback.endpoint_url")
+	})
+
+	t.Run("ttl bounds enforced", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Storage: StorageConfig{Remote: *newPlaybackConfig()}}
+		cfg.ApplyDefaults()
+		cfg.Storage.Remote.Playback.TTLS = 1
+		err := Validate(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ttl_s")
+	})
+}
+
+func TestRemoteCameraOverrides(t *testing.T) {
+	t.Parallel()
+
+	t.Run("override for unknown camera rejected", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Storage: StorageConfig{Remote: *newPlaybackConfig()}}
+		cfg.ApplyDefaults()
+		cfg.Storage.Remote.CameraOverrides = map[string]RemoteCameraOverride{
+			"ghost-cam": {Bucket: "b2"},
+		}
+		err := Validate(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ghost-cam")
+	})
+
+	t.Run("empty override rejected", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Storage: StorageConfig{Remote: *newPlaybackConfig()}}
+		cfg.ApplyDefaults()
+		cfg.Storage.Remote.CameraOverrides = map[string]RemoteCameraOverride{
+			"ghost-cam": {},
+		}
+		err := Validate(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ghost-cam")
+	})
+
+	t.Run("valid override for known camera passes", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Storage: StorageConfig{Remote: *newPlaybackConfig()}}
+		cfg.ApplyDefaults()
+		cfg.Cameras = append(cfg.Cameras, CameraConfig{ID: "front-door", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://x"})
+		cfg.Storage.Remote.CameraOverrides = map[string]RemoteCameraOverride{
+			"front-door": {Bucket: "important", Prefix: "yard"},
+		}
+		assert.NoError(t, Validate(cfg))
+	})
+}

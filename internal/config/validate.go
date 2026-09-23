@@ -373,6 +373,9 @@ func validateConfigDetails(cfg *Config) error {
 	if err := ValidateRemoteStorage(cfg.Storage.Remote); err != nil {
 		return err
 	}
+	if err := ValidateRemoteCameraOverrides(cfg.Cameras, cfg.Storage.Remote.CameraOverrides); err != nil {
+		return err
+	}
 	// Per-camera segment_duration overrides (#758): must parse positive.
 	for _, cam := range cfg.Cameras {
 		if cam.SegmentDuration == "" {

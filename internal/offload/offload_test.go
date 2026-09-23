@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -381,4 +382,122 @@ func TestManagerAutoEvictDisabledByDefault(t *testing.T) {
 		return counts[storage.OffloadStatusEvicted] > 0
 	}, 2*time.Second, 100*time.Millisecond, "after_days=0 must never auto-evict")
 	_ = store
+}
+
+// bucketStores fakes per-bucket stores for routing tests.
+type bucketStores struct {
+	mu    sync.Map // bucket → *fakeStore
+	def   *fakeStore
+	newFn func(bucket string) (objectstore.Store, error)
+}
+
+func newBucketStores() *bucketStores {
+	bs := &bucketStores{def: newFakeStore()}
+	bs.newFn = func(bucket string) (objectstore.Store, error) {
+		v, _ := bs.mu.LoadOrStore(bucket, newFakeStore())
+		return v.(*fakeStore), nil
+	}
+	return bs
+}
+
+func (bs *bucketStores) store(bucket string) *fakeStore {
+	if bucket == "" {
+		return bs.def
+	}
+	v, ok := bs.mu.Load(bucket)
+	if !ok {
+		return nil
+	}
+	return v.(*fakeStore)
+}
+
+func TestManagerRoutesCameraToOverrideBucket(t *testing.T) {
+	bs := newBucketStores()
+	m, db, _, _ := newManagerEnv(t, func(o *Options) {
+		o.Store = bs.def
+		o.NewBucketStore = bs.newFn
+		o.CameraRoutes = map[string]CameraRoute{
+			"camVIP": {Bucket: "vip-bucket", Prefix: "yard"},
+		}
+	})
+	recVIP := seedMergedRecording(t, db, "vip-1", "camVIP", 2*time.Hour, "vip-bytes")
+	seedMergedRecording(t, db, "std-1", "camStd", 2*time.Hour, "std-bytes")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, m.Start(ctx))
+	defer func() { _ = m.Stop() }()
+
+	require.Eventually(t, func() bool {
+		counts, _ := db.CountOffloadByStatus(ctx)
+		return counts[storage.OffloadStatusUploaded] == 2
+	}, 15*time.Second, 100*time.Millisecond)
+
+	// VIP camera's object went to the override bucket under the override prefix.
+	vip := bs.store("vip-bucket")
+	require.NotNil(t, vip)
+	key := ObjectKey("yard", "camVIP", recVIP.StartedAt, recVIP.ID, ".mp4")
+	vip.mu.Lock()
+	_, inVip := vip.objects[key]
+	vip.mu.Unlock()
+	assert.True(t, inVip, "override camera must upload to its routed bucket+prefix")
+
+	// Default camera stayed on the default bucket with the default prefix.
+	stdKey := ObjectKey("recordings", "camStd", time.Now().UTC(), "std-1", ".mp4")
+	_ = stdKey
+	bs.def.mu.Lock()
+	var stdFound bool
+	for k := range bs.def.objects {
+		if k == "recordings/camStd/"+time.Now().UTC().Format("2006/01/02")+"/std-1.mp4" {
+			stdFound = true
+		}
+	}
+	bs.def.mu.Unlock()
+	assert.True(t, stdFound, "non-overridden camera uses the default bucket+prefix")
+}
+
+func TestRunEvictBucketAware(t *testing.T) {
+	bs := newBucketStores()
+	dir := t.TempDir()
+	db, err := storage.New(filepath.Join(dir, "ev.db"))
+	require.NoError(t, err)
+	require.NoError(t, db.Init(context.Background()))
+	defer db.Close()
+	ctx := context.Background()
+
+	// One row in the default bucket, one routed to "vip".
+	for i, bucket := range []string{"", "vip"} {
+		rec := seedMergedRecording(t, db, "ev-b"+string(rune('a'+i)), "cam", 2*time.Hour, "content-"+bucket)
+		key := ObjectKey("recordings", "cam", rec.StartedAt, rec.ID, ".mp4")
+		_, err := db.EnqueueOffload(ctx, storage.OffloadItem{
+			RecordingID: rec.ID, CameraID: "cam", ObjectKey: key, Bucket: bucket,
+			LocalPath: rec.FilePath, FileSize: rec.FileSize,
+		})
+		require.NoError(t, err)
+		items, err := db.ClaimPendingOffload(ctx, 1)
+		require.NoError(t, err)
+		require.Len(t, items, 1)
+		st := bs.def
+		if bucket != "" {
+			v, _ := bs.mu.LoadOrStore(bucket, newFakeStore())
+			st = v.(*fakeStore)
+		}
+		_, err = st.Put(ctx, key, strings.NewReader("content-"+bucket), rec.FileSize)
+		require.NoError(t, err)
+		require.NoError(t, db.MarkOffloadUploaded(ctx, items[0].ID, `"e"`, rec.FileSize))
+	}
+
+	storeFor := func(bucket string) (objectstore.Store, error) {
+		if bucket == "" {
+			return bs.def, nil
+		}
+		return bs.newFn(bucket)
+	}
+	sum, err := RunEvict(ctx, db, EvictOptions{
+		StoreFor:        storeFor,
+		ConfirmedBefore: time.Now().UTC().Add(time.Minute),
+		Execute:         true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, sum.Evicted, "both buckets' items evict through their own stores")
 }

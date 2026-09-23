@@ -25,7 +25,10 @@ const evictBatch = 500
 
 // EvictOptions selects the evict candidate set and the run posture.
 type EvictOptions struct {
-	Store objectstore.Store
+	// StoreFor resolves the Store for an outbox row's bucket ('' = the
+	// default bucket) — per-camera routing means one evict run touches
+	// several buckets.
+	StoreFor func(bucket string) (objectstore.Store, error)
 
 	// ConfirmedBefore: only items whose upload was confirmed (uploaded_at)
 	// before this instant are eligible — the caller derives it from
@@ -73,7 +76,15 @@ func RunEvict(ctx context.Context, db *storage.DB, opt EvictOptions) (EvictSumma
 			continue
 		}
 
-		info, err := opt.Store.Head(ctx, it.ObjectKey)
+		store, serr := opt.StoreFor(it.Bucket)
+		if serr != nil {
+			summary.Refused = append(summary.Refused, EvictRefusal{
+				RecordingID: it.RecordingID, ObjectKey: it.ObjectKey,
+				Reason: fmt.Sprintf("store resolve: %v", serr),
+			})
+			continue
+		}
+		info, err := store.Head(ctx, it.ObjectKey)
 		switch {
 		case err != nil:
 			summary.Refused = append(summary.Refused, EvictRefusal{

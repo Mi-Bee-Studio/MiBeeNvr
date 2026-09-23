@@ -85,6 +85,12 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 				"evict": map[string]any{
 					"after_days": h.config.Storage.Remote.Evict.AfterDays,
 				},
+				"playback": map[string]any{
+					"presigned":    h.config.Storage.Remote.Playback.Presigned,
+					"endpoint_url": h.config.Storage.Remote.Playback.EndpointURL,
+					"ttl_s":        h.config.Storage.Remote.Playback.TTLS,
+				},
+				"camera_overrides": h.config.Storage.Remote.CameraOverrides,
 			},
 		},
 		"auth": map[string]any{
@@ -430,7 +436,25 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if ru.Evict != nil && ru.Evict.AfterDays != nil {
 			merged.Evict.AfterDays = *ru.Evict.AfterDays
 		}
+		if ru.Playback != nil {
+			if ru.Playback.Presigned != nil {
+				merged.Playback.Presigned = *ru.Playback.Presigned
+			}
+			if ru.Playback.EndpointURL != nil {
+				merged.Playback.EndpointURL = strings.TrimSpace(*ru.Playback.EndpointURL)
+			}
+			if ru.Playback.TTLS != nil {
+				merged.Playback.TTLS = *ru.Playback.TTLS
+			}
+		}
+		if ru.CameraOverrides != nil {
+			merged.CameraOverrides = *ru.CameraOverrides
+		}
 		if err := config.ValidateRemoteStorage(merged); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := config.ValidateRemoteCameraOverrides(h.config.Cameras, merged.CameraOverrides); err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -637,6 +661,12 @@ type remoteSettingsUpdate struct {
 	Evict *struct {
 		AfterDays *int `json:"after_days"`
 	} `json:"evict"`
+	Playback *struct {
+		Presigned   *bool   `json:"presigned"`
+		EndpointURL *string `json:"endpoint_url"`
+		TTLS        *int    `json:"ttl_s"`
+	} `json:"playback"`
+	CameraOverrides *map[string]config.RemoteCameraOverride `json:"camera_overrides"`
 }
 
 // handleStorageCandidates reports the recording-root choices available to the

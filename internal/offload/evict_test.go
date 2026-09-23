@@ -53,7 +53,7 @@ func TestEvictDryRunDefault(t *testing.T) {
 	rec, _, _ := seedUploadedItem(t, db, store, "e1", "camA")
 
 	sum, err := RunEvict(context.Background(), db, EvictOptions{
-		Store:           store,
+		StoreFor:        func(string) (objectstore.Store, error) { return store, nil },
 		ConfirmedBefore: time.Now().UTC().Add(time.Minute),
 		Execute:         false, // dry-run is the default posture
 	})
@@ -81,7 +81,7 @@ func TestEvictExecuteVerified(t *testing.T) {
 	rec, _, _ := seedUploadedItem(t, db, store, "e2", "camA")
 
 	sum, err := RunEvict(context.Background(), db, EvictOptions{
-		Store:           store,
+		StoreFor:        func(string) (objectstore.Store, error) { return store, nil },
 		ConfirmedBefore: time.Now().UTC().Add(time.Minute),
 		Execute:         true,
 	})
@@ -114,7 +114,7 @@ func TestEvictRefusesWhenRemoteMissing(t *testing.T) {
 	store.mu.Unlock()
 
 	sum, err := RunEvict(context.Background(), db, EvictOptions{
-		Store:           store,
+		StoreFor:        func(string) (objectstore.Store, error) { return store, nil },
 		ConfirmedBefore: time.Now().UTC().Add(time.Minute),
 		Execute:         true,
 	})
@@ -146,7 +146,7 @@ func TestEvictRefusesSizeMismatch(t *testing.T) {
 	store.mu.Unlock()
 
 	sum, err := RunEvict(context.Background(), db, EvictOptions{
-		Store:           store,
+		StoreFor:        func(string) (objectstore.Store, error) { return store, nil },
 		ConfirmedBefore: time.Now().UTC().Add(time.Minute),
 		Execute:         true,
 	})
@@ -170,7 +170,7 @@ func TestEvictCameraFilter(t *testing.T) {
 	seedUploadedItem(t, db, store, "e5b", "camB")
 
 	sum, err := RunEvict(context.Background(), db, EvictOptions{
-		Store:           store,
+		StoreFor:        func(string) (objectstore.Store, error) { return store, nil },
 		ConfirmedBefore: time.Now().UTC().Add(time.Minute),
 		CameraID:        "camA",
 		Execute:         true,
@@ -191,7 +191,7 @@ func TestEvictHonorsConfirmationCutoff(t *testing.T) {
 	// Cutoff in the past: the item was confirmed "now", so it is NOT yet
 	// evictable (the after_days retention window has not elapsed).
 	sum, err := RunEvict(context.Background(), db, EvictOptions{
-		Store:           store,
+		StoreFor:        func(string) (objectstore.Store, error) { return store, nil },
 		ConfirmedBefore: time.Now().UTC().Add(-time.Hour),
 		Execute:         true,
 	})

@@ -38,10 +38,27 @@ const claimBatch = 2
 // discoverBatch bounds candidate discovery per scan.
 const discoverBatch = 500
 
+// CameraRoute is one camera's offload routing override (batch 3,
+// cameraRoots/RootFor semantics): a different bucket and/or key prefix.
+type CameraRoute struct {
+	Bucket string
+	Prefix string
+}
+
 // Options wires the manager. Store is the only required field; everything
 // else has production defaults that tests override.
 type Options struct {
 	Store objectstore.Store
+
+	// NewBucketStore builds a Store for a per-camera OVERRIDE bucket (batch 3
+	// camera routing). nil = routing to non-default buckets is unavailable
+	// (enqueues with an override bucket fail loudly at upload time).
+	NewBucketStore func(bucket string) (objectstore.Store, error)
+
+	// CameraRoutes maps cameraID → {bucket, prefix} overrides ('' fields =
+	// default). Resolution happens once at enqueue; the outbox row pins the
+	// bucket forever after.
+	CameraRoutes map[string]CameraRoute
 
 	// Budget paces upload bytes against recording/cleanup I/O (iobudget
 	// tenant "offload"). nil = unbudgeted.
@@ -130,6 +147,38 @@ type Manager struct {
 	// nowFn is the clock seam (auto-evict window tests advance it
 	// deterministically). nil = time.Now.
 	nowFn func() time.Time
+
+	// bucketStores caches Stores for per-camera override buckets (keyed by
+	// bucket name); '' never appears — the default Store is m.opt.Store.
+	bucketStores sync.Map // bucket → objectstore.Store
+}
+
+// storeFor resolves the Store for an outbox row's bucket (” = default).
+// Override-bucket Stores are built lazily via NewBucketStore and cached.
+func (m *Manager) storeFor(bucket string) (objectstore.Store, error) {
+	if bucket == "" {
+		return m.opt.Store, nil
+	}
+	if v, ok := m.bucketStores.Load(bucket); ok {
+		return v.(objectstore.Store), nil
+	}
+	if m.opt.NewBucketStore == nil {
+		return nil, fmt.Errorf("offload: object routed to bucket %q but no bucket store factory is wired", bucket)
+	}
+	st, err := m.opt.NewBucketStore(bucket)
+	if err != nil {
+		return nil, fmt.Errorf("offload: build store for bucket %q: %w", bucket, err)
+	}
+	m.bucketStores.Store(bucket, st)
+	return st, nil
+}
+
+// routeFor resolves a camera's routing override at enqueue time.
+func (m *Manager) routeFor(cameraID string) CameraRoute {
+	if m.opt.CameraRoutes == nil {
+		return CameraRoute{}
+	}
+	return m.opt.CameraRoutes[cameraID]
 }
 
 func (m *Manager) now() time.Time {
@@ -245,12 +294,18 @@ func (m *Manager) runScan(ctx context.Context) {
 		if m.opt.BacklogLimit > 0 && backlogBefore+enqueued >= m.opt.BacklogLimit {
 			break
 		}
+		route := m.routeFor(c.CameraID)
+		prefix := m.opt.Prefix
+		if route.Prefix != "" {
+			prefix = route.Prefix
+		}
 		inserted, err := m.db.EnqueueOffload(ctx, storage.OffloadItem{
 			RecordingID: c.RecordingID,
 			CameraID:    c.CameraID,
-			ObjectKey:   ObjectKey(m.opt.Prefix, c.CameraID, c.StartedAt, c.RecordingID, filepath.Ext(c.FilePath)),
+			ObjectKey:   ObjectKey(prefix, c.CameraID, c.StartedAt, c.RecordingID, filepath.Ext(c.FilePath)),
 			LocalPath:   c.FilePath,
 			FileSize:    c.FileSize,
+			Bucket:      route.Bucket,
 			// Timeline metadata (v41): the outbox row outlives the recordings
 			// row (eviction deletes it) — carry the window forward now.
 			StartedAt: c.StartedAt,
@@ -320,7 +375,7 @@ func (m *Manager) evictLoop(ctx context.Context) {
 		}
 		cutoff := m.now().UTC().Add(-m.opt.EvictAfterDays)
 		summary, err := RunEvict(ctx, m.db, EvictOptions{
-			Store:           m.opt.Store,
+			StoreFor:        m.storeFor,
 			ConfirmedBefore: cutoff,
 			Execute:         true,
 		})
@@ -426,7 +481,14 @@ func (m *Manager) uploadOne(ctx context.Context, it storage.OffloadItem) {
 		_ = m.db.MarkOffloadRetry(ctx, it.ID, fmt.Sprintf("open: %v", err))
 		return
 	}
-	etag, err := m.opt.Store.Put(ctx, it.ObjectKey, f, size)
+	store, err := m.storeFor(it.Bucket)
+	if err != nil {
+		m.log.Warn("offload: no store for routed bucket — will retry next scan",
+			"recording", it.RecordingID, "bucket", it.Bucket, "error", err)
+		_ = m.db.MarkOffloadRetry(ctx, it.ID, err.Error())
+		return
+	}
+	etag, err := store.Put(ctx, it.ObjectKey, f, size)
 	f.Close()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -442,7 +504,7 @@ func (m *Manager) uploadOne(ctx context.Context, it storage.OffloadItem) {
 	// gate for 'uploaded' (eviction eligibility) — a truncated/ghost success
 	// must never look confirmed. (ETag equality is not portable: multipart
 	// ETags are not content MD5s.)
-	info, err := m.opt.Store.Head(ctx, it.ObjectKey)
+	info, err := store.Head(ctx, it.ObjectKey)
 	if err != nil || info.Size != size {
 		verr := fmt.Sprintf("post-upload verify failed (head: %v, remote=%d local=%d)", err, info.Size, size)
 		m.log.Warn("offload: "+verr, "recording", it.RecordingID, "key", it.ObjectKey)

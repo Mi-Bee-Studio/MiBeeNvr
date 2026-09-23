@@ -24,6 +24,7 @@ import (
 	"io"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
 )
@@ -36,6 +37,16 @@ type ProxyOptions struct {
 	// small against the 512 MiB process budget, large enough to hold the
 	// moov atom plus several playback chunks per object.
 	MaxCachedBytes int64
+
+	// NewBucketStore resolves Stores for per-camera override buckets
+	// (batch 3); '' (default bucket) never passes through here — the proxy's
+	// base Store serves it. nil = override buckets cannot be played back.
+	NewBucketStore func(bucket string) (objectstore.Store, error)
+
+	// PresignFor produces presigned GET URLs per bucket (batch 3 direct
+	// playback). nil = presigning unavailable; PresignGet errors and callers
+	// fall back to proxying.
+	PresignFor func(bucket string) (objectstore.Presigner, error)
 }
 
 func (o *ProxyOptions) normalize() {
@@ -58,6 +69,9 @@ type cacheEntry struct {
 type Proxy struct {
 	store objectstore.Store
 	opt   ProxyOptions
+
+	// bucketStores caches override-bucket Stores (batch 3).
+	bucketStores sync.Map
 
 	mu          sync.Mutex
 	lru         *list.List               // front = most recent
@@ -83,8 +97,42 @@ func (p *Proxy) CachedBytes() int {
 	return int(p.cachedBytes)
 }
 
-func blockID(key string, index int64) string {
-	return key + "#" + strconv.FormatInt(index, 10)
+// storeFor resolves the proxy's Store for a bucket (” = default base store).
+func (p *Proxy) storeFor(bucket string) (objectstore.Store, error) {
+	if bucket == "" {
+		return p.store, nil
+	}
+	if v, ok := p.bucketStores.Load(bucket); ok {
+		return v.(objectstore.Store), nil
+	}
+	if p.opt.NewBucketStore == nil {
+		return nil, fmt.Errorf("proxy: bucket %q has no store (per-camera routing playback unavailable)", bucket)
+	}
+	st, err := p.opt.NewBucketStore(bucket)
+	if err != nil {
+		return nil, fmt.Errorf("proxy: build store for bucket %q: %w", bucket, err)
+	}
+	p.bucketStores.Store(bucket, st)
+	return st, nil
+}
+
+// PresignGet produces a presigned direct-GET URL (batch 3). Errors when no
+// PresignFor resolver is wired — callers fall back to proxying the bytes.
+func (p *Proxy) PresignGet(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
+	if p.opt.PresignFor == nil {
+		return "", fmt.Errorf("proxy: presigned playback not configured")
+	}
+	presigner, err := p.opt.PresignFor(bucket)
+	if err != nil {
+		return "", fmt.Errorf("proxy: presigner for bucket %q: %w", bucket, err)
+	}
+	return presigner.PresignGet(ctx, key, ttl)
+}
+
+func blockID(bucket, key string, index int64) string {
+	// Bucket-qualified: per-camera routing can place objects with the same
+	// key shape in different buckets.
+	return bucket + "/" + key + "#" + strconv.FormatInt(index, 10)
 }
 
 // ServeRange returns the object's bytes [start, end] (end INCLUSIVE; -1 =
@@ -92,25 +140,29 @@ func blockID(key string, index int64) string {
 // spans larger than the cache budget stream straight through GetRange
 // without touching it. total is the object's exact size (the caller knows
 // it from the outbox row — no Head needed per request).
-func (p *Proxy) ServeRange(ctx context.Context, key string, start, end, total int64) (io.ReadCloser, error) {
+func (p *Proxy) ServeRange(ctx context.Context, bucket, key string, start, end, total int64) (io.ReadCloser, error) {
 	if total <= 0 || start < 0 || start >= total {
 		return nil, fmt.Errorf("proxy: invalid range start=%d total=%d", start, total)
 	}
 	if end < 0 || end > total-1 {
 		end = total - 1
 	}
+	store, err := p.storeFor(bucket)
+	if err != nil {
+		return nil, err
+	}
 
 	// Oversized span: stream through, keep the cache untouched. The store
 	// streams the body; memory stays at one response buffer.
 	if end-start+1 > p.opt.MaxCachedBytes {
-		rc, _, err := p.store.GetRange(ctx, key, start, end)
+		rc, _, err := store.GetRange(ctx, key, start, end)
 		if err != nil {
 			return nil, fmt.Errorf("proxy: stream %s: %w", key, err)
 		}
 		return rc, nil
 	}
 
-	data, err := p.fetchBlocks(ctx, key, start, end, total)
+	data, err := p.fetchBlocks(ctx, bucket, key, start, end, total)
 	if err != nil {
 		return nil, err
 	}
@@ -120,17 +172,21 @@ func (p *Proxy) ServeRange(ctx context.Context, key string, start, end, total in
 // fetchBlocks ensures every block overlapping [start,end] is cached (missing
 // contiguous runs fetched in one GetRange each) and returns the fully
 // assembled span bytes.
-func (p *Proxy) fetchBlocks(ctx context.Context, key string, start, end, total int64) ([]byte, error) {
+func (p *Proxy) fetchBlocks(ctx context.Context, bucket, key string, start, end, total int64) ([]byte, error) {
 	firstBlock := start / p.opt.BlockSize
 	lastBlock := end / p.opt.BlockSize
 
 	// Snapshot what is cached (and count the spans to fetch) under the lock,
 	// then do the fetches WITHOUT the lock (network I/O must not serialize
 	// concurrent requests), then merge back.
+	store, err := p.storeFor(bucket)
+	if err != nil {
+		return nil, err
+	}
 	p.mu.Lock()
 	var missing []int64
 	for i := firstBlock; i <= lastBlock; i++ {
-		if _, ok := p.entries[blockID(key, i)]; !ok {
+		if _, ok := p.entries[blockID(bucket, key, i)]; !ok {
 			missing = append(missing, i)
 		}
 	}
@@ -150,7 +206,7 @@ func (p *Proxy) fetchBlocks(ctx context.Context, key string, start, end, total i
 		if fetchEnd > total-1 {
 			fetchEnd = total - 1
 		}
-		rc, _, err := p.store.GetRange(ctx, key, fetchStart, fetchEnd)
+		rc, _, err := store.GetRange(ctx, key, fetchStart, fetchEnd)
 		if err != nil {
 			return nil, fmt.Errorf("proxy: fetch %s[%d,%d]: %w", key, fetchStart, fetchEnd, err)
 		}
@@ -162,7 +218,7 @@ func (p *Proxy) fetchBlocks(ctx context.Context, key string, start, end, total i
 		if closeErr != nil {
 			return nil, fmt.Errorf("proxy: close %s[%d,%d]: %w", key, fetchStart, fetchEnd, closeErr)
 		}
-		p.storeBlocks(key, missing[i], missing[j], buf)
+		p.storeBlocks(bucket, key, missing[i], missing[j], buf)
 		i = j + 1
 	}
 
@@ -170,7 +226,7 @@ func (p *Proxy) fetchBlocks(ctx context.Context, key string, start, end, total i
 	var out bytes.Buffer
 	out.Grow(int(end - start + 1))
 	for i := firstBlock; i <= lastBlock; i++ {
-		blk := p.getBlock(key, i)
+		blk := p.getBlock(bucket, key, i)
 		if blk == nil {
 			return nil, fmt.Errorf("proxy: block %s#%d vanished from cache mid-assembly", key, i)
 		}
@@ -189,7 +245,7 @@ func (p *Proxy) fetchBlocks(ctx context.Context, key string, start, end, total i
 
 // storeBlocks splits a fetched contiguous span into blocks and inserts them
 // into the LRU (evicting oldest entries to stay under the cap).
-func (p *Proxy) storeBlocks(key string, first, last int64, buf []byte) {
+func (p *Proxy) storeBlocks(bucket, key string, first, last int64, buf []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i := first; i <= last; i++ {
@@ -202,7 +258,7 @@ func (p *Proxy) storeBlocks(key string, first, last int64, buf []byte) {
 			end = int64(len(buf))
 		}
 		blk := append([]byte(nil), buf[off:end]...)
-		id := blockID(key, i)
+		id := blockID(bucket, key, i)
 		if existing, ok := p.entries[id]; ok {
 			p.lru.MoveToFront(existing)
 			existing.Value.(*cacheEntry).data = blk
@@ -231,10 +287,10 @@ func (p *Proxy) storeBlocks(key string, first, last int64, buf []byte) {
 }
 
 // getBlock returns the cached block, bumping its LRU position.
-func (p *Proxy) getBlock(key string, index int64) []byte {
+func (p *Proxy) getBlock(bucket, key string, index int64) []byte {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	el, ok := p.entries[blockID(key, index)]
+	el, ok := p.entries[blockID(bucket, key, index)]
 	if !ok {
 		return nil
 	}

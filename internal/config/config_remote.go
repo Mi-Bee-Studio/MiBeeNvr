@@ -38,9 +38,40 @@ type RemoteStorageConfig struct {
 	SecretAccessKey string `yaml:"secret_access_key"`
 	// Prefix is the object-key root for all uploaded objects
 	// ("<prefix>/<camera>/<date>/<id>.<ext>"). Default "recordings".
-	Prefix string             `yaml:"prefix,omitempty"`
-	Upload RemoteUploadConfig `yaml:"upload"`
-	Evict  RemoteEvictConfig  `yaml:"evict"`
+	Prefix   string               `yaml:"prefix,omitempty"`
+	Upload   RemoteUploadConfig   `yaml:"upload"`
+	Evict    RemoteEvictConfig    `yaml:"evict"`
+	Playback RemotePlaybackConfig `yaml:"playback,omitempty"`
+	// CameraOverrides route specific cameras to a different bucket and/or
+	// prefix (batch 3, cameraRoots/RootFor semantics). Keys are camera IDs;
+	// validated against the configured camera list.
+	CameraOverrides map[string]RemoteCameraOverride `yaml:"camera_overrides,omitempty"`
+}
+
+// RemotePlaybackConfig tunes remote playback (batch 3).
+type RemotePlaybackConfig struct {
+	// Presigned makes GET /api/offload/objects/{id} answer 302 with a
+	// presigned GetObject URL so the BROWSER talks to the store directly —
+	// the NVR stops relaying media bytes. Default false (proxy), because the
+	// configured endpoint is often NOT browser-reachable (Docker-internal
+	// host names, loopback bindings).
+	Presigned bool `yaml:"presigned"`
+	// EndpointURL overrides the endpoint used for presigning when the store
+	// is reachable from browsers under a different name
+	// (e.g. https://minio.example.com vs http://minio:9000). Empty = the
+	// configured storage.remote.endpoint_url.
+	EndpointURL string `yaml:"endpoint_url,omitempty"`
+	// TTLS is the presigned URL lifetime in seconds (default 3600).
+	TTLS int `yaml:"ttl_s,omitempty"`
+}
+
+// RemoteCameraOverride is one camera's offload routing override.
+type RemoteCameraOverride struct {
+	// Bucket redirects this camera's uploads to another bucket in the same
+	// store ("" = the default bucket).
+	Bucket string `yaml:"bucket,omitempty"`
+	// Prefix overrides the object-key root for this camera ("" = default).
+	Prefix string `yaml:"prefix,omitempty"`
 }
 
 // RemoteUploadConfig tunes the uploader loop.
@@ -125,6 +156,44 @@ func ValidateRemoteStorage(r RemoteStorageConfig) error {
 	}
 	if r.Evict.AfterDays < 0 {
 		return fmt.Errorf("storage.remote.evict.after_days must be >= 0 (0 = upload-only)")
+	}
+	// 0 = "default 3600" (ApplyDefaults materializes it); a nonzero value
+	// below 60s is useless for a playback session and treated as a typo.
+	if r.Playback.TTLS != 0 && (r.Playback.TTLS < 60 || r.Playback.TTLS > 86400) {
+		return fmt.Errorf("storage.remote.playback.ttl_s must be 0 (default) or in [60, 86400]")
+	}
+	if r.Playback.EndpointURL != "" {
+		if u, err := url.Parse(r.Playback.EndpointURL); err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("storage.remote.playback.endpoint_url must be a valid URL (e.g. https://minio.example.com)")
+		}
+	}
+	for camID, ov := range r.CameraOverrides {
+		if strings.TrimSpace(ov.Bucket) == "" && strings.TrimSpace(ov.Prefix) == "" {
+			return fmt.Errorf("storage.remote.camera_overrides[%s] sets neither bucket nor prefix", camID)
+		}
+		if strings.ContainsAny(ov.Prefix, " \t\n") {
+			return fmt.Errorf("storage.remote.camera_overrides[%s].prefix must not contain whitespace", camID)
+		}
+	}
+	return nil
+}
+
+// ValidateRemoteCameraOverrides cross-checks override keys against the
+// configured camera list — an override for an unknown camera is a typo that
+// would silently never fire. Called from the central Validate (camera config
+// lives outside validateRemoteStorage's scope).
+func ValidateRemoteCameraOverrides(cameras []CameraConfig, overrides map[string]RemoteCameraOverride) error {
+	if len(overrides) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(cameras))
+	for _, c := range cameras {
+		known[c.ID] = true
+	}
+	for camID := range overrides {
+		if !known[camID] {
+			return fmt.Errorf("storage.remote.camera_overrides[%s] references an unknown camera", camID)
+		}
 	}
 	return nil
 }
