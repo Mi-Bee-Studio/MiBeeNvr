@@ -63,6 +63,29 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		},
 		"storage": map[string]any{
 			"root_dir": h.config.Storage.RootDir,
+			// Remote object-storage offload (issue #874 batch 2). The secret
+			// is never returned — only whether one is configured (mirrors
+			// gb28181.password_configured). access_key_id round-trips because
+			// it may carry a ${VAR} reference the UI must not destroy.
+			"remote": map[string]any{
+				"enabled":           h.config.Storage.Remote.Enabled,
+				"endpoint_url":      h.config.Storage.Remote.EndpointURL,
+				"region":            h.config.Storage.Remote.Region,
+				"bucket":            h.config.Storage.Remote.Bucket,
+				"prefix":            h.config.Storage.Remote.Prefix,
+				"path_style":        h.config.Storage.Remote.PathStyle == nil || *h.config.Storage.Remote.PathStyle,
+				"access_key_id":     h.config.Storage.Remote.AccessKeyID,
+				"secret_configured": h.config.Storage.Remote.SecretAccessKey != "",
+				"upload": map[string]any{
+					"max_concurrency": h.config.Storage.Remote.Upload.MaxConcurrency,
+					"scan_interval_s": h.config.Storage.Remote.Upload.ScanIntervalS,
+					"min_age_s":       h.config.Storage.Remote.Upload.MinAgeS,
+					"backlog_limit":   h.config.Storage.Remote.Upload.BacklogLimit,
+				},
+				"evict": map[string]any{
+					"after_days": h.config.Storage.Remote.Evict.AfterDays,
+				},
+			},
 		},
 		"auth": map[string]any{
 			"username":        h.config.Auth.Username,
@@ -210,6 +233,11 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			// so a live switch would corrupt state. The response carries
 			// restart_required=true when this changes.
 			RootDir *string `json:"root_dir"`
+			// Remote object-storage offload (issue #874). nil = unchanged.
+			// Blank credential strings keep the current values (the GET never
+			// returns the secret, so the UI round-trips blanks). Takes effect
+			// on the next start — the uploader + proxy are built at boot.
+			Remote *remoteSettingsUpdate `json:"remote"`
 		} `json:"storage"`
 		WebDAV *struct {
 			Enabled    *bool   `json:"enabled"`
@@ -316,6 +344,7 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	// Update storage root (#395) — next-start semantics, see body.Storage.
 	storageChanged := false
+	remoteOffloadChanged := false
 	if body.Storage != nil && body.Storage.RootDir != nil {
 		dir := strings.TrimSpace(*body.Storage.RootDir)
 		if dir == "" || !filepath.IsAbs(dir) {
@@ -350,6 +379,63 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			storageChanged = true
 			logger.Info("storage root_dir switched (hot)", "new_root", dir)
 		}
+	}
+
+	// Update remote object-storage offload settings (issue #874). Merge into
+	// a copy and validate with the SAME rules a startup load enforces
+	// (config.ValidateRemoteStorage), committing only when the whole section
+	// passes (#867 discipline). Next-start semantics: the uploader service
+	// and playback proxy are constructed at boot.
+	if body.Storage != nil && body.Storage.Remote != nil {
+		merged := h.config.Storage.Remote
+		ru := body.Storage.Remote
+		if ru.Enabled != nil {
+			merged.Enabled = *ru.Enabled
+		}
+		if ru.EndpointURL != nil {
+			merged.EndpointURL = strings.TrimSpace(*ru.EndpointURL)
+		}
+		if ru.Region != nil {
+			merged.Region = strings.TrimSpace(*ru.Region)
+		}
+		if ru.Bucket != nil {
+			merged.Bucket = strings.TrimSpace(*ru.Bucket)
+		}
+		if ru.Prefix != nil {
+			merged.Prefix = strings.TrimSpace(*ru.Prefix)
+		}
+		if ru.PathStyle != nil {
+			merged.PathStyle = ru.PathStyle
+		}
+		if ru.AccessKeyID != nil && strings.TrimSpace(*ru.AccessKeyID) != "" {
+			merged.AccessKeyID = strings.TrimSpace(*ru.AccessKeyID)
+		}
+		if ru.SecretAccessKey != nil && strings.TrimSpace(*ru.SecretAccessKey) != "" {
+			merged.SecretAccessKey = strings.TrimSpace(*ru.SecretAccessKey)
+		}
+		if ru.Upload != nil {
+			if ru.Upload.MaxConcurrency != nil {
+				merged.Upload.MaxConcurrency = *ru.Upload.MaxConcurrency
+			}
+			if ru.Upload.ScanIntervalS != nil {
+				merged.Upload.ScanIntervalS = *ru.Upload.ScanIntervalS
+			}
+			if ru.Upload.MinAgeS != nil {
+				merged.Upload.MinAgeS = *ru.Upload.MinAgeS
+			}
+			if ru.Upload.BacklogLimit != nil {
+				merged.Upload.BacklogLimit = *ru.Upload.BacklogLimit
+			}
+		}
+		if ru.Evict != nil && ru.Evict.AfterDays != nil {
+			merged.Evict.AfterDays = *ru.Evict.AfterDays
+		}
+		if err := config.ValidateRemoteStorage(merged); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.config.Storage.Remote = merged
+		remoteOffloadChanged = true
 	}
 
 	if body.WebDAV != nil {
@@ -518,11 +604,39 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("failed to save config", "error", err)
 	}
 
+	if remoteOffloadChanged {
+		// Remote offload settings apply on the next start (the uploader
+		// service + playback proxy are constructed at boot).
+		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "restart_required": true})
+		return
+	}
 	if storageChanged {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "restart_required": false})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// remoteSettingsUpdate is the PUT /api/settings storage.remote body. Pointer
+// fields = "change me"; blank credential strings keep current values.
+type remoteSettingsUpdate struct {
+	Enabled         *bool   `json:"enabled"`
+	EndpointURL     *string `json:"endpoint_url"`
+	Region          *string `json:"region"`
+	Bucket          *string `json:"bucket"`
+	Prefix          *string `json:"prefix"`
+	PathStyle       *bool   `json:"path_style"`
+	AccessKeyID     *string `json:"access_key_id"`
+	SecretAccessKey *string `json:"secret_access_key"`
+	Upload          *struct {
+		MaxConcurrency *int `json:"max_concurrency"`
+		ScanIntervalS  *int `json:"scan_interval_s"`
+		MinAgeS        *int `json:"min_age_s"`
+		BacklogLimit   *int `json:"backlog_limit"`
+	} `json:"upload"`
+	Evict *struct {
+		AfterDays *int `json:"after_days"`
+	} `json:"evict"`
 }
 
 // handleStorageCandidates reports the recording-root choices available to the

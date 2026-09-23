@@ -88,9 +88,11 @@ func ExpandEnvRefs(s string) string {
 	})
 }
 
-// validateRemoteStorage validates the storage.remote block. Returns nil when
-// disabled. Called from the central Validate() — no validation outside it.
-func validateRemoteStorage(r RemoteStorageConfig) error {
+// ValidateRemoteStorage validates the storage.remote block. Returns nil when
+// disabled. The central Validate() calls it, and the settings PUT uses it to
+// apply the SAME rules a startup load would (single source of truth — the
+// #867 lesson: settings must never save what the next boot rejects).
+func ValidateRemoteStorage(r RemoteStorageConfig) error {
 	if !r.Enabled {
 		return nil
 	}

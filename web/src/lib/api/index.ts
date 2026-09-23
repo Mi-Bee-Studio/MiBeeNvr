@@ -390,3 +390,6 @@ export type {
   GB28181Alarm,
   GB28181Position,
 } from './gb28181';
+
+// Offload — remote object-storage archive (issue #874)
+export * from './offload';

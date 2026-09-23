@@ -10,6 +10,7 @@
   import { settingsForm } from '$lib/settings/settings-form.svelte';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
+  import RemoteStorageCard from './RemoteStorageCard.svelte';
 
   let loading = $state(true);
   let error = $state('');
@@ -516,4 +517,8 @@
     <!-- WebDAV path_prefix removed from UI (#153): /dav is almost never changed.
          Backend preserves the stored value when blank. -->
   </SettingsCard>
+
+  <!-- S3-compatible remote offload (issue #874) — self-registers with the
+       settingsForm coordinator, so the unified save bar covers it too. -->
+  <RemoteStorageCard />
 {/if}

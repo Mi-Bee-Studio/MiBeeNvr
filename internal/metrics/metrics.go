@@ -99,6 +99,11 @@ type Metrics struct {
 	IOBudgetChargedBytesTotal   *prometheus.CounterVec // labels: consumer — bytes billed against the shared budget
 	IOBudgetChargedUnlinksTotal *prometheus.CounterVec // labels: consumer — files billed against the unlink guardrail (#755)
 
+	// Offload outbox observability (issue #874 batch 2). status is a bounded
+	// enum (pending/uploading/uploaded/evicted/skipped).
+	OffloadOutboxRows         *prometheus.GaugeVec // labels: status — outbox rows per state (backlog = pending+uploading)
+	OffloadUploadedBytesTotal prometheus.Counter   // cumulative confirmed upload bytes
+
 	// Rolling merge metrics (quasi-real-time, event-driven)
 	RollingMergeLatencySeconds *prometheus.HistogramVec // labels: camera_id — time from segment close to merge complete
 	RollingMergeBucketSegments *prometheus.GaugeVec     // labels: camera_id — segments in current bucket
@@ -495,6 +500,14 @@ func NewMetrics() *Metrics {
 		Name: "nvr_iobudget_unlinks_charged_total",
 		Help: "Files billed to the recursive-deletion unlink guardrail per consumer (#755).",
 	}, []string{"consumer"})
+	offloadOutboxRows := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_offload_outbox_rows",
+		Help: "Offload outbox rows per state (issue #874). Backlog = pending+uploading; a growing backlog means the uplink is slower than recording production.",
+	}, []string{"status"})
+	offloadUploadedBytesTotal := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_offload_uploaded_bytes_total",
+		Help: "Cumulative bytes confirmed uploaded to remote object storage (issue #874).",
+	})
 	mergeSuccessesTotal := prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "nvr_merge_successes_total",
 		Help: "Total number of successful merges.",
@@ -730,6 +743,8 @@ func NewMetrics() *Metrics {
 		ioBudgetWaitSecondsTotal,
 		ioBudgetChargedBytesTotal,
 		ioBudgetChargedUnlinksTotal,
+		offloadOutboxRows,
+		offloadUploadedBytesTotal,
 		mergeSuccessesTotal,
 		mergeFailuresTotal,
 		mergeDurationSeconds,
@@ -841,6 +856,8 @@ func NewMetrics() *Metrics {
 		MergeAttemptsTotal:             mergeAttemptsTotal,
 		IOBudgetWaitSecondsTotal:       ioBudgetWaitSecondsTotal,
 		IOBudgetChargedBytesTotal:      ioBudgetChargedBytesTotal,
+		OffloadOutboxRows:              offloadOutboxRows,
+		OffloadUploadedBytesTotal:      offloadUploadedBytesTotal,
 		IOBudgetChargedUnlinksTotal:    ioBudgetChargedUnlinksTotal,
 		MergeSuccessesTotal:            mergeSuccessesTotal,
 		MergeFailuresTotal:             mergeFailuresTotal,

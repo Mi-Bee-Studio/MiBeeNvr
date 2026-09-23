@@ -68,8 +68,22 @@ type Options struct {
 	// pattern: don't burst the uplink). Seamed for tests.
 	UploadPause time.Duration
 
+	// EvictAfterDays auto-evicts local copies this long after upload
+	// confirmation (0 = upload-only, the CLI is the only evict path — the
+	// default posture per the issue's "先 CLI 后自动" batching).
+	EvictAfterDays time.Duration
+	// EvictInterval is the auto-evict sweep cadence (default 1h; the check
+	// is one DB query when after_days is 0).
+	EvictInterval time.Duration
+
 	// Logger override (defaults to the offload component logger).
 	Logger *slog.Logger
+
+	// Observers (metrics wiring in pkg/app; nil = unobserved).
+	// OnStatusCounts fires once per scan with the outbox row counts per
+	// status; OnUploaded fires per confirmed upload with the byte count.
+	OnStatusCounts func(counts map[string]int)
+	OnUploaded     func(bytes int64)
 }
 
 func (o *Options) normalize() {
@@ -87,6 +101,9 @@ func (o *Options) normalize() {
 	}
 	if o.Prefix == "" {
 		o.Prefix = "recordings"
+	}
+	if o.EvictInterval <= 0 {
+		o.EvictInterval = time.Hour
 	}
 	if o.Logger == nil {
 		o.Logger = slogx.Component("offload")
@@ -109,6 +126,17 @@ type Manager struct {
 	// backlogWarnAt throttles the backlog-cap warning to once per interval.
 	backlogWarnMu   sync.Mutex
 	backlogWarnLast time.Time
+
+	// nowFn is the clock seam (auto-evict window tests advance it
+	// deterministically). nil = time.Now.
+	nowFn func() time.Time
+}
+
+func (m *Manager) now() time.Time {
+	if m.nowFn != nil {
+		return m.nowFn()
+	}
+	return time.Now()
 }
 
 // NewManager builds the offload manager. It does nothing until Start.
@@ -130,13 +158,19 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	ctx, m.cancel = context.WithCancel(ctx)
 	// wg.Add before every go (sync.WaitGroup contract).
-	m.wg.Add(1 + m.opt.Workers)
+	m.wg.Add(2 + m.opt.Workers)
 	go m.scanLoop(ctx)
+	if m.opt.EvictAfterDays > 0 {
+		go m.evictLoop(ctx)
+	} else {
+		m.wg.Done() // no auto-evict goroutine: return the reserved slot
+	}
 	for i := range m.opt.Workers {
 		go m.worker(ctx, i)
 	}
 	m.log.Info("offload uploader started",
-		"workers", m.opt.Workers, "scan_interval", m.opt.ScanInterval, "min_age", m.opt.MinAge)
+		"workers", m.opt.Workers, "scan_interval", m.opt.ScanInterval, "min_age", m.opt.MinAge,
+		"auto_evict_after", m.opt.EvictAfterDays)
 	return nil
 }
 
@@ -172,7 +206,9 @@ func (m *Manager) runScan(ctx context.Context) {
 		return // shutting down: skip quietly (canceled queries are not failures)
 	}
 	if n, err := m.db.RequeueStaleUploadedOffload(ctx); err != nil {
-		m.log.Warn("offload: stale requeue failed", "error", err)
+		if ctx.Err() == nil {
+			m.log.Warn("offload: stale requeue failed", "error", err)
+		}
 	} else if n > 0 {
 		m.log.Info("offload: re-queueing grown recordings for re-upload", "rows", n)
 	}
@@ -194,7 +230,9 @@ func (m *Manager) runScan(ctx context.Context) {
 	cutoff := time.Now().UTC().Add(-m.opt.MinAge)
 	cands, err := m.db.ListOffloadCandidates(ctx, cutoff, discoverBatch)
 	if err != nil {
-		m.log.Warn("offload: candidate discovery failed", "error", err)
+		if ctx.Err() == nil {
+			m.log.Warn("offload: candidate discovery failed", "error", err)
+		}
 		return
 	}
 	enqueued := 0
@@ -213,6 +251,12 @@ func (m *Manager) runScan(ctx context.Context) {
 			ObjectKey:   ObjectKey(m.opt.Prefix, c.CameraID, c.StartedAt, c.RecordingID, filepath.Ext(c.FilePath)),
 			LocalPath:   c.FilePath,
 			FileSize:    c.FileSize,
+			// Timeline metadata (v41): the outbox row outlives the recordings
+			// row (eviction deletes it) — carry the window forward now.
+			StartedAt: c.StartedAt,
+			EndedAt:   c.EndedAt,
+			Duration:  c.Duration,
+			Format:    c.Format,
 		})
 		if err != nil {
 			m.log.Warn("offload: enqueue failed", "recording", c.RecordingID, "error", err)
@@ -229,6 +273,20 @@ func (m *Manager) runScan(ctx context.Context) {
 		default: // a worker is already draining
 		}
 	}
+	m.observeStatusCounts(ctx)
+}
+
+// observeStatusCounts pushes the outbox snapshot to the metrics observer.
+// Failure is logged at debug: observability must never alarm on its own.
+func (m *Manager) observeStatusCounts(ctx context.Context) {
+	if m.opt.OnStatusCounts == nil {
+		return
+	}
+	counts, err := m.db.CountOffloadByStatus(ctx)
+	if err != nil {
+		return
+	}
+	m.opt.OnStatusCounts(counts)
 }
 
 // warnBacklogOnce fires the backlog warning at most once per scan interval —
@@ -242,6 +300,45 @@ func (m *Manager) warnBacklogOnce(backlog int) {
 	m.backlogWarnLast = time.Now()
 	m.log.Warn("offload: upload backlog at cap — enqueueing paused (uplink slower than recording production; NOT dropping data, local retention still applies)",
 		"backlog", backlog, "cap", m.opt.BacklogLimit)
+}
+
+// evictLoop periodically evicts local copies whose upload confirmation is
+// older than EvictAfterDays. Reuses RunEvict, so every eviction is
+// HeadObject-verified — the same safety line as the CLI.
+func (m *Manager) evictLoop(ctx context.Context) {
+	defer m.wg.Done()
+	interval := m.opt.EvictInterval
+	// First sweep after a short warm-up so tests (and fresh boots with an
+	// old backlog) don't wait a full interval.
+	timer := time.NewTimer(min(interval, 5*time.Second))
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		cutoff := m.now().UTC().Add(-m.opt.EvictAfterDays)
+		summary, err := RunEvict(ctx, m.db, EvictOptions{
+			Store:           m.opt.Store,
+			ConfirmedBefore: cutoff,
+			Execute:         true,
+		})
+		if err != nil {
+			if ctx.Err() == nil {
+				m.log.Warn("offload: auto-evict sweep failed", "error", err)
+			}
+		} else if summary.Evicted > 0 || len(summary.Refused) > 0 {
+			m.log.Info("offload: auto-evict sweep",
+				"evicted", summary.Evicted, "reclaimed_bytes", summary.ReclaimedBytes,
+				"refused", len(summary.Refused))
+			for _, r := range summary.Refused {
+				m.log.Warn("offload: auto-evict refused an item — remote verify failed, local copy kept",
+					"recording", r.RecordingID, "key", r.ObjectKey, "reason", r.Reason)
+			}
+		}
+		timer.Reset(interval)
+	}
 }
 
 // worker claims pending rows and uploads them until the outbox drains.
@@ -356,6 +453,9 @@ func (m *Manager) uploadOne(ctx context.Context, it storage.OffloadItem) {
 	if err := m.db.MarkOffloadUploaded(ctx, it.ID, etag, size); err != nil {
 		m.log.Warn("offload: mark uploaded failed", "id", it.ID, "error", err)
 		return
+	}
+	if m.opt.OnUploaded != nil {
+		m.opt.OnUploaded(size)
 	}
 	m.log.Info("offload: uploaded",
 		"recording", it.RecordingID, "camera", it.CameraID,

@@ -104,7 +104,7 @@ export interface VisionSettingsConfig {
 /** The `recording` settings section — global recording gate default. */
 export interface RecordingSettingsConfig {
   /** Cameras without an explicit recording_enabled inherit this
- *  (new + auto-enrolled channels). Absent on writes = unchanged. */
+   *  (new + auto-enrolled channels). Absent on writes = unchanged. */
   default_enabled?: boolean;
 }
 
@@ -119,7 +119,11 @@ export interface SettingsConfig {
   timezone?: string; // "Local", "UTC", or IANA timezone name
   timezone_display?: string; // Human-readable timezone label (e.g. "Asia/Shanghai (UTC+8)")
   server?: { listen?: string }; // listen address ":9090" — changed via Settings UI
-  storage?: { root_dir?: string }; // recording root (#395) — applied on next start
+  storage?: {
+    root_dir?: string; // recording root (#395) — applied on next start
+    /** S3-compatible remote offload (issue #874) — applied on next start. */
+    remote?: RemoteStorageSettings;
+  };
 }
 
 export interface GB28181Config {
@@ -158,6 +162,26 @@ export interface MergePending {
 
 export interface FeatureFlags {
   protocols: Record<string, boolean>;
+}
+
+export interface RemoteStorageSettings {
+  enabled: boolean;
+  endpoint_url: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  path_style: boolean;
+  /** May carry a ${VAR} env reference — round-trips unchanged. */
+  access_key_id: string;
+  /** Never returned by the API; true = a secret is configured. */
+  secret_configured?: boolean;
+  upload?: {
+    max_concurrency?: number;
+    scan_interval_s?: number;
+    min_age_s?: number;
+    backlog_limit?: number;
+  };
+  evict?: { after_days?: number };
 }
 
 // --- Settings ---
@@ -516,7 +540,11 @@ export interface VisionMetricsResponse {
 }
 
 /** GET /api/vision/metrics?hours=[&instance=] — heartbeat history ring (~24h @ 30s). */
-export async function getVisionMetrics(hours = 24, instance?: string, signal?: AbortSignal): Promise<VisionMetricsResponse> {
+export async function getVisionMetrics(
+  hours = 24,
+  instance?: string,
+  signal?: AbortSignal,
+): Promise<VisionMetricsResponse> {
   const q = new URLSearchParams({ hours: String(hours) });
   if (instance) q.set('instance', instance);
   return apiRequest<VisionMetricsResponse>(`/vision/metrics?${q.toString()}`, { signal });
