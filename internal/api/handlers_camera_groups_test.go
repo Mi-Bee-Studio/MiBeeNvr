@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -78,6 +79,19 @@ func TestCameraGroupsOrderEndpoint(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	rr = doRequest(t, h.Routes(), "PUT", "/api/cameras/groups/order",
 		bytes.NewReader([]byte(`{"names":["  "]}`)), "", "")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// Overflow (201 names) must be rejected AND leave the stored order
+	// untouched — the 400 used to fall through a missing return and persist
+	// the oversized list anyway.
+	tooMany := make([]string, maxCameraGroups+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("组%03d", i)
+	}
+	payload, err := json.Marshal(map[string][]string{"names": tooMany})
+	require.NoError(t, err)
+	rr = doRequest(t, h.Routes(), "PUT", "/api/cameras/groups/order",
+		bytes.NewReader(payload), "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 
 	rr = doRequest(t, h.Routes(), "GET", "/api/cameras/groups", nil, "", "")
