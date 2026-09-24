@@ -45,6 +45,7 @@ func CS2Dial(host, transport string, idleTimeout time.Duration) (*CS2Conn, error
 	} else {
 		c.idleTimeout = idleTimeout
 	}
+	c.pingInterval = cs2PingInterval
 	go c.worker()
 	return c, nil
 }
@@ -70,6 +71,10 @@ type CS2Conn struct {
 	net.Conn
 	isTCP       bool
 	idleTimeout time.Duration
+	// pingInterval is the client PING cadence on TCP sessions; see
+	// cs2PingInterval. Worker-goroutine only. Set by CS2Dial; tests may
+	// override it to keep the cadence observable without real sleeps.
+	pingInterval time.Duration
 
 	mu     sync.Mutex
 	err    error
@@ -114,6 +119,31 @@ const cs2HdrSize = 32
 // cs2ReadTimeout is the timeout for Pop() calls in ReadPacket and ReadCommand.
 // If no data arrives within this period, the call returns a timeout error.
 const cs2ReadTimeout = 15 * time.Second
+
+// cs2PingInterval is the client PING cadence on CS2 TCP sessions. Xiaomi
+// cameras expect the client to PING roughly once per second (observed from
+// the official Mi Home app; go2rtc parity) and tear the session down after
+// their ~6s liveness window otherwise. This is a protocol fact, not a
+// tunable; it lives as a CS2Conn field only so tests can shrink it.
+const cs2PingInterval = time.Second
+
+// cs2PingPolicy decides when the next client-initiated PING is due on a CS2
+// TCP session. Inbound data does NOT postpone the next PING — only sending
+// one does. The camera's ~6s liveness window counts client PINGs, not
+// traffic: sessions that stream media but never PING get FIN'd anyway
+// (issue #906; 2026-09-24 packet capture — 7/7 media-flowing TCP sessions
+// with zero client pings, camera FIN at +6.19..6.28s, while UDP sessions
+// lived indefinitely on per-frame DRW acks alone).
+type cs2PingPolicy struct {
+	interval time.Duration
+	next     time.Time
+}
+
+// due reports whether a PING should be sent at instant now.
+func (p *cs2PingPolicy) due(now time.Time) bool { return !now.Before(p.next) }
+
+// markSent records a PING sent at instant now, scheduling the next one.
+func (p *cs2PingPolicy) markSent(now time.Time) { p.next = now.Add(p.interval) }
 
 func cs2Handshake(host, transport string) (net.Conn, error) {
 	conn, err := cs2NewUDPConn(host, 32108)
@@ -167,18 +197,16 @@ func (c *CS2Conn) worker() {
 		c.channels[2].Close()
 	}()
 
-	const (
-		pingInterval = 1 * time.Second
-	)
-	var keepaliveTS time.Time // only for TCP
+	ping := cs2PingPolicy{interval: c.pingInterval}
 	lastData := time.Now()
 	buf := make([]byte, 1200)
 
 	for {
-		// Set a short read deadline for TCP to wake up and send keepalive pings.
-		// For UDP use the full idle timeout since there is no ping mechanism.
+		// Short read deadline for TCP to wake up and send keepalive PINGs
+		// while idle; UDP has no ping mechanism, so it waits the full idle
+		// timeout instead.
 		if c.isTCP {
-			_ = c.Conn.SetReadDeadline(time.Now().Add(pingInterval))
+			_ = c.Conn.SetReadDeadline(time.Now().Add(c.pingInterval))
 		} else {
 			_ = c.Conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
 		}
@@ -187,10 +215,12 @@ func (c *CS2Conn) worker() {
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
-				// TCP: send keepalive ping on each timeout wakeup.
-				if c.isTCP && time.Now().After(keepaliveTS) {
-					c.writeControl("keepalive-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
-					keepaliveTS = time.Now().Add(pingInterval)
+				// TCP: no inbound for a full interval — send keepalive PING.
+				if c.isTCP {
+					if now := time.Now(); ping.due(now) {
+						c.writeControl("keepalive-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
+						ping.markSent(now)
+					}
 				}
 
 				// Detect truly dead connection: no data for idleTimeout.
@@ -205,9 +235,6 @@ func (c *CS2Conn) worker() {
 		}
 
 		lastData = time.Now()
-		if c.isTCP {
-			keepaliveTS = time.Now().Add(pingInterval)
-		}
 
 		switch buf[1] {
 		case cs2MsgDrw:
@@ -215,11 +242,12 @@ func (c *CS2Conn) worker() {
 			channel := c.channels[ch]
 
 			if c.isTCP {
-				// Send PING on data receive, matching official Mi Home app behavior.
-				// Ported from go2rtc: PING sent inside msgDrw handler, throttled to 1s.
-				if now := time.Now(); now.After(keepaliveTS) {
+				// Send PING on data receive, matching the official Mi Home app
+				// (go2rtc parity). Throttled by the ping policy: inbound data
+				// must NOT delay the next PING — see cs2PingPolicy.
+				if now := time.Now(); ping.due(now) {
 					c.writeControl("data-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
-					keepaliveTS = now.Add(pingInterval)
+					ping.markSent(now)
 				}
 				err = channel.Push(buf[8:n])
 			} else {

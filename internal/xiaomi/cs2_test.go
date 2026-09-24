@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -374,16 +375,25 @@ func TestCS2DialWithIdleTimeout(t *testing.T) {
 
 // mockCS2Conn implements net.Conn for testing, recording all writes.
 type mockCS2Conn struct {
-	reads   [][]byte
-	readIdx int
-	writes  [][]byte
-	err     error
-	mu      sync.Mutex
+	reads     [][]byte
+	readIdx   int
+	writes    [][]byte
+	err       error
+	readDelay time.Duration // optional sleep before each queued read (cadence tests)
+	timeouts  int           // leading reads that report a net timeout instead of data
+	mu        sync.Mutex
 }
 
 func (m *mockCS2Conn) Read(b []byte) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.readDelay > 0 {
+		time.Sleep(m.readDelay)
+	}
+	if m.timeouts > 0 {
+		m.timeouts--
+		return 0, os.ErrDeadlineExceeded
+	}
 	if m.readIdx >= len(m.reads) {
 		return 0, m.err
 	}
@@ -463,6 +473,121 @@ func TestCS2WorkerRepliesPongOnPing(t *testing.T) {
 		}
 	}
 	require.True(t, gotPong, "worker must reply PONG to camera PING (go2rtc parity); writes=%v", mock.writes)
+}
+
+func TestCS2PingPolicy(t *testing.T) {
+	t.Parallel()
+
+	p := cs2PingPolicy{interval: time.Second}
+	base := time.Now()
+
+	require.True(t, p.due(base),
+		"zero-value policy is due immediately — the first data frame triggers the first PING (go2rtc parity)")
+
+	p.markSent(base)
+	require.False(t, p.due(base.Add(time.Second-time.Millisecond)))
+	require.True(t, p.due(base.Add(time.Second)))
+
+	p.markSent(base.Add(time.Second))
+	require.False(t, p.due(base.Add(2*time.Second-time.Millisecond)),
+		"sending a PING schedules the next one a full interval later")
+	require.True(t, p.due(base.Add(2*time.Second)))
+}
+
+func TestCS2WorkerPingsWhileStreamingOnTCP(t *testing.T) {
+	t.Parallel()
+
+	// issue #906: the camera kills TCP sessions whose client never PINGs —
+	// a 2026-09-24 packet capture showed 7/7 media-flowing TCP sessions FIN'd
+	// at +6.2s with zero client PINGs (the old code let inbound data postpone
+	// the next PING forever, making the keepalive dead code while streaming).
+	// The worker must keep its PING cadence while data flows.
+	drw := append(
+		[]byte{cs2Magic, cs2MsgDrw, 0, 16, cs2MagicDrw, 2, 0, 0},
+		0, 0, 0, 4, 1, 2, 3, 4, // ch2 payload: 4-byte size + 4 data bytes
+	)
+	frames := make([][]byte, 12)
+	for i := range frames {
+		frames[i] = drw
+	}
+	mock := &mockCS2Conn{
+		reads:     frames,
+		err:       fmt.Errorf("mock read error"),
+		readDelay: 15 * time.Millisecond,
+	}
+	c := &CS2Conn{
+		Conn:         mock,
+		isTCP:        true,
+		idleTimeout:  time.Minute,
+		pingInterval: 25 * time.Millisecond,
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		c.worker()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not exit in time")
+	}
+	require.Error(t, c.Error())
+
+	var pings int
+	for _, w := range mock.writes {
+		if len(w) == 4 && w[0] == cs2Magic && w[1] == cs2MsgPing {
+			pings++
+		}
+	}
+	// ~180ms of streaming at a 25ms cadence should yield several PINGs;
+	// 3 leaves margin for slow CI runners.
+	require.GreaterOrEqual(t, pings, 3,
+		"worker must PING at its cadence while TCP data flows; writes=%d", len(mock.writes))
+}
+
+func TestCS2WorkerKeepalivePingWhenIdleOnTCP(t *testing.T) {
+	t.Parallel()
+
+	// No inbound data at all: the read-deadline wakeups must still send
+	// keepalive PINGs (idle TCP sessions need them exactly like active ones).
+	mock := &mockCS2Conn{
+		err:      fmt.Errorf("mock read error"),
+		timeouts: 3,
+	}
+	c := &CS2Conn{
+		Conn:         mock,
+		isTCP:        true,
+		idleTimeout:  time.Minute,
+		pingInterval: 10 * time.Millisecond,
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		c.worker()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not exit in time")
+	}
+	require.Error(t, c.Error())
+
+	var pings int
+	for _, w := range mock.writes {
+		if len(w) == 4 && w[0] == cs2Magic && w[1] == cs2MsgPing {
+			pings++
+		}
+	}
+	require.GreaterOrEqual(t, pings, 1,
+		"idle TCP session must still send keepalive PINGs; writes=%v", mock.writes)
 }
 
 // newTestCS2Conn creates a CS2Conn suitable for unit tests.
