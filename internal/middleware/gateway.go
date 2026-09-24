@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -86,4 +87,31 @@ func StripBasePath(prefix string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// WSOriginAllowed is the shared Origin gate for every WebSocket upgrader
+// (live streams, AVI playback, GB28181 talk-back).
+//
+// Non-browser clients send no Origin and pass. Browser origins must match the
+// request Host — a cross-site page must not open NVR WebSockets. One exception:
+// requests that arrived through the fnOS unified gateway carry the verified
+// X-Trim-* identity (see GatewayAuthMiddleware). Their Host header is the
+// gateway's forwarding host, not the browser origin, so the strict comparison
+// would reject the app's own SPA — the exact breakage that killed H.265 live
+// playback behind the gateway (WASM player rides the WS transport; the gateway
+// forwards to a Unix socket so the Host no longer matches, gorilla's default
+// CheckOrigin 403s, every H.265 tile goes "offline" while H.264/WebRTC still
+// works). The gateway identity is only ever attached on the Unix-socket
+// listener — a browser cannot forge it (no custom headers on WebSocket), and a
+// forged X-Trim-* on the TCP listener never becomes an identity.
+func WSOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	if GatewayIdentityFromContext(r.Context()) != nil {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
 }
