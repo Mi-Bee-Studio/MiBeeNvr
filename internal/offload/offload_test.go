@@ -421,7 +421,7 @@ func TestManagerRoutesCameraToOverrideBucket(t *testing.T) {
 		}
 	})
 	recVIP := seedMergedRecording(t, db, "vip-1", "camVIP", 2*time.Hour, "vip-bytes")
-	seedMergedRecording(t, db, "std-1", "camStd", 2*time.Hour, "std-bytes")
+	recStd := seedMergedRecording(t, db, "std-1", "camStd", 2*time.Hour, "std-bytes")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -443,15 +443,12 @@ func TestManagerRoutesCameraToOverrideBucket(t *testing.T) {
 	assert.True(t, inVip, "override camera must upload to its routed bucket+prefix")
 
 	// Default camera stayed on the default bucket with the default prefix.
-	stdKey := ObjectKey("recordings", "camStd", time.Now().UTC(), "std-1", ".mp4")
-	_ = stdKey
+	// Derive the expected key from the recording's own StartedAt (like the
+	// uploader does) — anchoring it to time.Now() makes the test fail whenever
+	// seeding crossed a UTC midnight (StartedAt = now-3h lands on yesterday).
+	stdKey := ObjectKey("recordings", "camStd", recStd.StartedAt, "std-1", ".mp4")
 	bs.def.mu.Lock()
-	var stdFound bool
-	for k := range bs.def.objects {
-		if k == "recordings/camStd/"+time.Now().UTC().Format("2006/01/02")+"/std-1.mp4" {
-			stdFound = true
-		}
-	}
+	_, stdFound := bs.def.objects[stdKey]
 	bs.def.mu.Unlock()
 	assert.True(t, stdFound, "non-overridden camera uses the default bucket+prefix")
 }
