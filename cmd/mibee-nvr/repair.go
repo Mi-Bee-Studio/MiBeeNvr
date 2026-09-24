@@ -54,6 +54,8 @@ func runRepair() int {
 		return runRepairMJPEGContainerize()
 	case "timelapse-mjpeg":
 		return runRepairTimelapseMJPEG()
+	case "append-tkhd":
+		return runRepairAppendTkhd()
 	case "--help", "-h":
 		printRepairUsage()
 		return 0
@@ -217,6 +219,10 @@ Subcommands:
   reclaim-orphan-merges Remove merged-output .mp4 files left on disk after their recording
                          row was deleted via the web UI (pre-#117 fix leak). Only touches
                          unreferenced .mp4 files; never source segments or frame dirs.
+  append-tkhd            Repair merged MP4s whose video dims are 0x0 in the stsd
+                         sample entry / tkhd (append-bucket outputs 2026-09-19..fix
+                         date): Chromium refuses to play them; dims are recovered in
+                         place from the file's SPS
   normalize-endpoints   Canonicalize every camera's onvif_endpoint (elide default :80/:443,
                          lowercase scheme/host, strip trailing slash) so dedup queries match
                          across discovery paths. Fixes legacy rows written before #175.

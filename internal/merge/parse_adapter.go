@@ -34,3 +34,16 @@ func ParseSPSResolution(sps []byte) (int, int, error) {
 func ParseHEVCSPSResolution(sps []byte) (int, int, error) {
 	return mediaprobe.ParseHEVCSPSResolution(sps)
 }
+
+// ValidateMergedMP4 按浏览器（Chromium 一族）严格口径校验合并产物结构。
+// 历次合并回归（#485/#497/#853-tkhd）的共同漏洞是只用 ffprobe/解码器
+// 验证产物——宽容解析器掩盖了浏览器拒播的结构缺陷。测试与 repair 共用。
+func ValidateMergedMP4(path string) error {
+	return mediaprobe.ValidateMergedMP4(path)
+}
+
+// ProbeVideoTrack 读取首个视频轨的浏览器相关字段（tkhd 尺寸/编解码配置/
+// 采样表计数）。
+func ProbeVideoTrack(path string) (*mediaprobe.VideoTrackInfo, error) {
+	return mediaprobe.ProbeVideoTrack(path)
+}
