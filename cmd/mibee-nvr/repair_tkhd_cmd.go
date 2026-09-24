@@ -83,7 +83,7 @@ func runRepairAppendTkhd() int {
 		camRoot := filepath.Join(rootDir, cam)
 		walkErr := filepath.WalkDir(camRoot, func(path string, d os.DirEntry, werr error) error {
 			if werr != nil {
-				return nil // tolerate per-entry FS noise, keep walking
+				return nil //nolint:nilerr // tolerate per-entry FS noise, keep walking
 			}
 			if d.IsDir() {
 				// 只下钻小时树（YYYYMM/DD/HH 均为纯数字命名）——MJPEG
@@ -103,7 +103,7 @@ func runRepairAppendTkhd() int {
 			scanned++
 			vt, err := merge.ProbeVideoTrack(path)
 			if err != nil {
-				return nil
+				return nil //nolint:nilerr // 不可探文件（录音轨外格式等）跳过，不中断扫描
 			}
 			tkhdZero := vt.Width == 0 || vt.Height == 0
 			seZero := vt.SampleEntryWidth == 0 || vt.SampleEntryHeight == 0
