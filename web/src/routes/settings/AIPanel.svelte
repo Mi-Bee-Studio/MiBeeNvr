@@ -753,7 +753,7 @@
                   aria-label={t('settings.mibeevision.instances.apiKey')}
                 >
                   <option value="">{t('settings.mibeevision.instances.noKey')}</option>
-                  {#each mibeeVisionKeys.filter((k) => !k.revoked) as key (key.name)}
+                  {#each mibeeVisionKeys.filter((k) => !k.revoked) as key, ki (key.name + '#' + ki)}
                     <option value={key.name}>{key.name}</option>
                   {/each}
                 </select>
@@ -795,7 +795,7 @@
       <!-- Existing keys -->
       {#if mibeeVisionKeys.length > 0}
         <div class="space-y-2">
-          {#each mibeeVisionKeys as key (key.name)}
+          {#each mibeeVisionKeys as key, ki (key.name + '#' + ki)}
             <div class="flex items-center justify-between p-3 rounded-md border th-border {key.revoked ? 'opacity-60' : ''}">
               <div class="min-w-0">
                 <div class="flex items-center flex-wrap">

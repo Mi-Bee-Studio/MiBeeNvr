@@ -12,7 +12,6 @@
     RadioTower,
     BrainCircuit,
     Film,
-    SlidersHorizontal,
     Info,
     Save,
     RotateCcw,
@@ -25,7 +24,6 @@
   import GB28181Panel from './settings/GB28181Panel.svelte';
   import AIPanel from './settings/AIPanel.svelte';
   import ProcessingPanel from './settings/ProcessingPanel.svelte';
-  import AdvancedPanel from './settings/AdvancedPanel.svelte';
   import UpdatePanel from './settings/UpdatePanel.svelte';
 
   let activeCategory = $state('general');
@@ -38,7 +36,6 @@
     { id: 'gb28181', label: t('settings.sidebar.gb28181'), icon: RadioTower },
     { id: 'ai', label: t('settings.sidebar.ai'), icon: BrainCircuit },
     { id: 'processing', label: t('settings.sidebar.processing'), icon: Film },
-    { id: 'advanced', label: t('settings.sidebar.advanced'), icon: SlidersHorizontal },
     { id: 'about', label: t('settings.sidebar.about'), icon: Info },
   ]);
 
@@ -154,7 +151,7 @@
       <!--
         Right content area (#160 fix).
 
-        All 7 panels are MOUNTED SIMULTANEOUSLY and toggled via CSS
+        All panels are MOUNTED SIMULTANEOUSLY and toggled via CSS
         `hidden`, NOT conditionally rendered with `{#if}`. This is deliberate:
 
           - Conditional render (`{#if activeCategory === 'general'}`) unmounts
@@ -199,9 +196,6 @@
         </div>
         <div class={activeCategory === 'processing' ? '' : 'hidden'}>
           <ProcessingPanel />
-        </div>
-        <div class={activeCategory === 'advanced' ? '' : 'hidden'}>
-          <AdvancedPanel />
         </div>
         <div class={activeCategory === 'about' ? '' : 'hidden'}>
           <UpdatePanel />
