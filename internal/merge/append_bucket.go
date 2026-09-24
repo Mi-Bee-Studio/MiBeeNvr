@@ -340,7 +340,24 @@ func writeReservedMoov(rec *offsetWriter, info *SegmentInfo, base int64, l *appe
 		pps:       info.PPS,
 		vps:       info.VPS,
 		timescale: info.Timescale,
-		// tkhd 宽高未知写 0，播放器从码流推导（同经典路径）。
+	}
+	// tkhd 宽高必须从首段 SPS 解析写入真实值（2026-09-24 现场回归）：
+	// 写 0 时 ffprobe/VLC 可从码流兜底播放，但 Chromium 一族严格读 tkhd
+	// 尺寸 → "no supported streams" 整文件拒播。SPS 解析失败仅在异常流
+	// 出现（与经典路径同姿态：WARN 后保 0）。
+	switch info.Codec {
+	case "h265":
+		if vw, vh, err := ParseHEVCSPSResolution(info.SPS); err != nil {
+			rollingLogger.Warn("append bucket: parse h265 SPS resolution failed, tkhd dims stay 0", "error", err)
+		} else {
+			tr.width, tr.height = uint16(vw), uint16(vh)
+		}
+	case "h264":
+		if vw, vh, err := ParseSPSResolution(info.SPS); err != nil {
+			rollingLogger.Warn("append bucket: parse h264 SPS resolution failed, tkhd dims stay 0", "error", err)
+		} else {
+			tr.width, tr.height = uint16(vw), uint16(vh)
+		}
 	}
 
 	if _, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("moov")}); err != nil {
@@ -363,6 +380,8 @@ func writeReservedMoov(rec *offsetWriter, info *SegmentInfo, base int64, l *appe
 	}
 	if _, err := mp4.Marshal(w, &mp4.Tkhd{
 		TrackID: 1,
+		Width:   uint32(tr.width) << 16,
+		Height:  uint32(tr.height) << 16,
 		Matrix: [9]int32{
 			0x00010000, 0, 0,
 			0, 0x00010000, 0,

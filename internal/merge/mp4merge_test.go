@@ -38,7 +38,9 @@ func createH264SegmentWithSamples(t *testing.T, dir string, name string, sps, pp
 func TestMergeMP4Segments_SameSPS(t *testing.T) {
 	dir := t.TempDir()
 
-	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	// 用真实可解析分辨率的 SPS（合成 SPS 解析不出尺寸，会让本测试失去
+	// Chromium 级校验的意义——tkhd 0×0 正是 2026-09-24 现场回归的根因）。
+	sps := h264SPS1920Fixture
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
 	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
 	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
@@ -73,6 +75,9 @@ func TestMergeMP4Segments_SameSPS(t *testing.T) {
 	require.Equal(t, info1.PPS, merged.PPS)
 	// Total duration: 5 samples * 33ms = 165ms
 	require.Equal(t, 165*time.Millisecond, merged.TotalDuration)
+
+	// Chromium 级结构校验（历次合并回归的防回归硬门）。
+	require.NoError(t, ValidateMergedMP4(outputPath))
 }
 
 func TestMergeMP4Segments_DifferentSPS(t *testing.T) {
@@ -102,7 +107,9 @@ func TestMergeMP4Segments_DifferentSPS(t *testing.T) {
 func TestMergeMP4Segments_SingleSegment(t *testing.T) {
 	dir := t.TempDir()
 
-	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	// 用真实可解析分辨率的 SPS（合成 SPS 解析不出尺寸，会让本测试失去
+	// Chromium 级校验的意义——tkhd 0×0 正是 2026-09-24 现场回归的根因）。
+	sps := h264SPS1920Fixture
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
 	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
 	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
@@ -133,7 +140,9 @@ func TestMergeMP4Segments_EmptyList(t *testing.T) {
 func TestMergeMP4Segments_ThreeSegments(t *testing.T) {
 	dir := t.TempDir()
 
-	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	// 用真实可解析分辨率的 SPS（合成 SPS 解析不出尺寸，会让本测试失去
+	// Chromium 级校验的意义——tkhd 0×0 正是 2026-09-24 现场回归的根因）。
+	sps := h264SPS1920Fixture
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
 	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
 	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
@@ -284,7 +293,9 @@ func createH265SegmentWithAudio(t *testing.T, dir, name string, vps, sps, pps []
 func TestParseSegment_WithAudio(t *testing.T) {
 	dir := t.TempDir()
 
-	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	// 用真实可解析分辨率的 SPS（合成 SPS 解析不出尺寸，会让本测试失去
+	// Chromium 级校验的意义——tkhd 0×0 正是 2026-09-24 现场回归的根因）。
+	sps := h264SPS1920Fixture
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
 	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
 	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
@@ -331,7 +342,9 @@ func TestParseSegment_VideoOnlyNoAudio(t *testing.T) {
 func TestMergeMP4Segments_WithAudio(t *testing.T) {
 	dir := t.TempDir()
 
-	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	// 用真实可解析分辨率的 SPS（合成 SPS 解析不出尺寸，会让本测试失去
+	// Chromium 级校验的意义——tkhd 0×0 正是 2026-09-24 现场回归的根因）。
+	sps := h264SPS1920Fixture
 	pps := []byte{0x68, 0xce, 0x38, 0x80}
 	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
 	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}

@@ -24,7 +24,16 @@ import (
 // buildAppendSource 落盘一个指定样本形状的 H264 源段并 Parse 出样本表。
 func buildAppendSource(t *testing.T, dir, name string, samples [][]byte, durs []time.Duration) *SegmentInfo {
 	t.Helper()
-	path := createH264SegmentWithDurations(t, dir, name, wallSps, wallPps, samples, durs)
+	// 真实可解析分辨率的 SPS：追加桶 tkhd 宽高取自 SPS，产物要过
+	// Chromium 级校验（wallSps 合成流解析不出尺寸）。
+	return buildAppendSourceWithSPS(t, dir, name, h264SPS1920Fixture, wallPps, samples, durs)
+}
+
+// buildAppendSourceWithSPS 落盘指定 SPS 的 H264 源段（供宽高断言用真实
+// 可解析的 SPS，wallSps 是合成流解析不出分辨率）。
+func buildAppendSourceWithSPS(t *testing.T, dir, name string, sps, pps []byte, samples [][]byte, durs []time.Duration) *SegmentInfo {
+	t.Helper()
+	path := createH264SegmentWithDurations(t, dir, name, sps, pps, samples, durs)
 	info, err := ParseSegment(path)
 	require.NoError(t, err)
 	return info
@@ -56,6 +65,7 @@ func TestAppendBucket_CreateAppendRoundTrip(t *testing.T) {
 	require.NoError(t, b.Close())
 
 	require.Equal(t, uint32(6), b.SampleCount(), "mirror sample count (post-close read is fine — plain struct field)")
+	require.NoError(t, ValidateMergedMP4(bucketPath), "A1: append-bucket output must pass Chromium-grade validation")
 	require.Equal(t, uint32(2), b.ChunkCount())
 	require.Equal(t, st1.Bytes+st2.Bytes, b.MDatLen())
 
@@ -66,7 +76,7 @@ func TestAppendBucket_CreateAppendRoundTrip(t *testing.T) {
 	require.True(t, parsed.KeyframesFromStss, "keyframes must come from stss")
 	require.Equal(t, src1.Timescale, parsed.Timescale)
 	require.Equal(t, src1.Codec, parsed.Codec)
-	require.Equal(t, len(wallSps), len(parsed.SPS))
+	require.Equal(t, len(h264SPS1920Fixture), len(parsed.SPS))
 
 	keyCount := 0
 	for _, s := range parsed.Samples {
@@ -334,3 +344,32 @@ func TestAppendBucket_EmptyAppendNoop(t *testing.T) {
 }
 
 var _ = context.Background
+
+// TestAppendBucket_TkhdDimensionsWritten —— #853 现场回归（2026-09-24，
+// 两轮定位）：追加桶 moov 模板把 stsd 样本条目与 tkhd 宽高都写 0。
+// ffprobe/VLC 从码流兜底可播，但 Chromium 构建流配置读 stsd 样本条目 →
+// "no supported streams" 整文件拒播。宽高必须从首段 SPS 解析写入两处；
+// 产物必须过 Chromium 级结构校验（校验器同时核查两处）。
+func TestAppendBucket_TkhdDimensionsWritten(t *testing.T) {
+	dir := t.TempDir()
+	src := buildAppendSourceWithSPS(t, dir, "s1.mp4", h264SPS1920Fixture, wallPps,
+		[][]byte{wallIDR, wallP, wallP},
+		[]time.Duration{33 * time.Millisecond, 33 * time.Millisecond, 33 * time.Millisecond})
+
+	bucketPath := filepath.Join(dir, "bucket.mp4")
+	b, err := CreateAppendBucket(bucketPath, src, appendBucketCfg())
+	require.NoError(t, err)
+	_, err = b.AppendBatch(100*time.Millisecond, 2*time.Second, []AppendSource{{Path: src.FilePath, Samples: src.Samples}})
+	require.NoError(t, err)
+	require.NoError(t, b.Close())
+
+	vt, err := ProbeVideoTrack(bucketPath)
+	require.NoError(t, err)
+	wantW, wantH, err := ParseSPSResolution(h264SPS1920Fixture)
+	require.NoError(t, err)
+	require.Equal(t, uint16(wantW), vt.SampleEntryWidth, "stsd sample entry width must come from SPS (what Chromium reads)")
+	require.Equal(t, uint16(wantH), vt.SampleEntryHeight, "stsd sample entry height must come from SPS (what Chromium reads)")
+	require.Equal(t, uint16(wantW), vt.Width, "tkhd width must come from SPS")
+	require.Equal(t, uint16(wantH), vt.Height, "tkhd height must come from SPS")
+	require.NoError(t, ValidateMergedMP4(bucketPath), "append-bucket output must pass Chromium-grade validation")
+}
