@@ -40,9 +40,27 @@ func buildRouter(
 		r.Use(authmw.StripBasePath(basePath))
 		slog.Info("base-path prefix stripping enabled", "prefix", basePath)
 	}
+	// Resolve the SPA document early: under a base path the served copy is
+	// injectBasePath()'s output, and the CSP script-src hashes built into
+	// SecurityHeaders must cover THAT document — the injected
+	// window.__NVR_BASE__ bootstrap is an inline script the raw document does
+	// not have, so a policy hashed from the raw document silently blocks it
+	// in gateway deployments.
+	staticContent, err := fs.Sub(ui.StaticFS, "static")
+	if err != nil {
+		return nil, fmt.Errorf("static fs: %w", err)
+	}
+	var indexBytes []byte
+	if basePath != "" {
+		raw, err := fs.ReadFile(staticContent, "index.html")
+		if err != nil {
+			return nil, fmt.Errorf("read index.html: %w", err)
+		}
+		indexBytes = injectBasePath(raw, basePath)
+	}
 	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
 	r.Use(chimiddleware.Recoverer)
-	r.Use(authmw.SecurityHeaders(cfg.Security.FrameAncestors))
+	r.Use(authmw.SecurityHeaders(cfg.Security.FrameAncestors, indexBytes))
 	r.Use(authmw.COOPHeaders)
 	// Streaming gzip compression for all JSON/HTML/text responses.
 	// SSE (text/event-stream) is also compressed but flushed per-event.
@@ -97,23 +115,9 @@ func buildRouter(
 		uploadHandler.RegisterRoutes(r)
 	})
 
-	// Static UI — serve from embedded filesystem
-	staticContent, err := fs.Sub(ui.StaticFS, "static")
-	if err != nil {
-		return nil, fmt.Errorf("static fs: %w", err)
-	}
+	// Static UI — serve from embedded filesystem (staticContent/indexBytes
+	// were resolved above, before the middleware chain was wired).
 	fileServer := http.FileServer(http.FS(staticContent))
-	// When served under a base path (gateway/proxy), index.html must tell the
-	// SPA the prefix so it can build absolute asset/API/stream URLs. Precompute
-	// the injected copy once; nil = serve the original untouched.
-	var indexBytes []byte
-	if basePath != "" {
-		raw, err := fs.ReadFile(staticContent, "index.html")
-		if err != nil {
-			return nil, fmt.Errorf("read index.html: %w", err)
-		}
-		indexBytes = injectBasePath(raw, basePath)
-	}
 	// Static files served without auth — SPA handles login flow client-side.
 	// All sensitive data is protected via API endpoints in handler.Routes().
 	// Cache: index.html must not be cached (always fresh after deploy).

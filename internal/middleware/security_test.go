@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +12,13 @@ import (
 
 func TestSecurityHeaders(t *testing.T) {
 	t.Parallel()
-	handler := SecurityHeaders("")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// A document with no inline scripts must fall back to 'unsafe-inline' —
+	// the policy can never brick the UI it protects. Using a synthetic
+	// document (rather than nil, which reads whatever is embedded) keeps the
+	// exact-match assertion below hermetic across checkouts with/without a
+	// built SPA.
+	doc := []byte("<!doctype html><html><head><title>x</title></head><body></body></html>")
+	handler := SecurityHeaders("", doc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -44,7 +52,7 @@ func TestSecurityHeaders(t *testing.T) {
 func TestSecurityHeadersCustomFrameAncestors(t *testing.T) {
 	t.Parallel()
 	allowed := "http://192.0.2.60 http://192.0.2.50"
-	handler := SecurityHeaders(allowed)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := SecurityHeaders(allowed, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -184,5 +192,40 @@ func TestExtractIP(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("extractIP(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+// TestSecurityHeadersHashInjectedBootstrap pins the #399 × #879 interplay:
+// gateway deployments inject a window.__NVR_BASE__ bootstrap inline script
+// into index.html at serve time. The CSP must be hashed from THAT document —
+// a policy hashed from the raw document silently blocks the bootstrap, the
+// SPA loses its URL prefix, and the whole gateway deployment (SSO included)
+// stops working.
+func TestSecurityHeadersHashInjectedBootstrap(t *testing.T) {
+	t.Parallel()
+	const bootstrap = `window.__NVR_BASE__="/app/mibee-nvr";`
+	doc := []byte(`<!doctype html><html><head><title>MiBee NVR</title></head>` +
+		`<body><script>` + bootstrap + `</script></body></html>`)
+	sum := sha256.Sum256([]byte(bootstrap))
+	wantHash := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+
+	handler := SecurityHeaders("", doc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	csp := w.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, wantHash) {
+		t.Errorf("CSP missing %s for the injected bootstrap script\ngot CSP: %s", wantHash, csp)
+	}
+	i := strings.Index(csp, "script-src")
+	scriptSrc := csp[i:]
+	if j := strings.Index(scriptSrc, ";"); j >= 0 {
+		scriptSrc = scriptSrc[:j]
+	}
+	if strings.Contains(scriptSrc, "'unsafe-inline'") {
+		t.Errorf("script-src should not fall back to 'unsafe-inline' when the document has inline scripts\ngot CSP: %s", csp)
 	}
 }
