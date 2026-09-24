@@ -179,7 +179,7 @@
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="md:col-span-2">
           <label for="remote-endpoint" class="input-label">{t('settings.remote.endpoint')}</label>
-          <input id="remote-endpoint" class="input font-mono text-xs" placeholder="https://s3.example.com 或 http://minio:9000" bind:value={endpointURL} />
+          <input id="remote-endpoint" class="input font-mono text-xs" placeholder={t('settings.remote.endpointPlaceholder')} bind:value={endpointURL} />
         </div>
         <div>
           <label for="remote-bucket" class="input-label">{t('settings.remote.bucket')}</label>
@@ -191,7 +191,10 @@
         </div>
         <div>
           <label for="remote-ak" class="input-label">{t('settings.remote.accessKey')}</label>
-          <input id="remote-ak" class="input font-mono text-xs" placeholder="minioadmin 或 ${S3_ACCESS_KEY}" bind:value={accessKeyID} />
+          <!-- Placeholder must come from i18n data: a literal `${...}` inside a
+               quoted template attribute makes Svelte treat {S3_ACCESS_KEY} as
+               an expression tag → ReferenceError at render → dead card. -->
+          <input id="remote-ak" class="input font-mono text-xs" placeholder={t('settings.remote.accessKeyPlaceholder')} bind:value={accessKeyID} />
         </div>
         <div>
           <label for="remote-sk" class="input-label">{t('settings.remote.secretKey')}</label>
