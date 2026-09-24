@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/gorilla/websocket"
@@ -87,16 +87,11 @@ type noopCounter struct{}
 
 func (noopCounter) Inc() {}
 
-// checkOrigin allows non-browser clients (no Origin header) and requires
-// browser origins to match the request host — cross-site pages must not open
-// NVR WebSockets.
+// checkOrigin delegates to middleware.WSOriginAllowed — the shared Origin gate
+// for every NVR WebSocket upgrader (see its doc comment for the fnOS-gateway
+// Host-mismatch rationale).
 func checkOrigin(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	u, err := url.Parse(origin)
-	return err == nil && strings.EqualFold(u.Host, r.Host)
+	return middleware.WSOriginAllowed(r)
 }
 
 // upgrader is the WebSocket upgrader used by ServeWS.

@@ -111,3 +111,56 @@ func TestStripBasePath(t *testing.T) {
 		}
 	}
 }
+
+func TestWSOriginAllowed(t *testing.T) {
+	t.Helper()
+	gwID := &GatewayIdentity{Username: "admin", UserID: "1000", Admin: true}
+
+	cases := []struct {
+		name   string
+		origin string
+		host   string
+		gwCtx  bool
+		want   bool
+	}{
+		{"no origin (non-browser client)", "", "192.168.1.10:9090", false, true},
+		{"same-host origin", "http://192.168.1.10:9090", "192.168.1.10:9090", false, true},
+		{"cross-site origin rejected", "http://evil.example", "192.168.1.10:9090", false, false},
+		{"port mismatch rejected", "http://192.168.1.10:5666", "192.168.1.10:9090", false, false},
+		{
+			// fnOS gateway forwarding: Origin is the desktop origin (:5666) but the
+			// Host header is the gateway's forwarding host — must pass on the
+			// verified gateway identity (unix-socket listener only).
+			"gateway identity allows host mismatch",
+			"http://192.168.1.10:5666", "internal-fwd-host", true, true,
+		},
+		{
+			// The identity gate trusts the request's transport (fnOS verified it),
+			// so the Origin content itself is irrelevant once the identity exists.
+			"gateway identity trusts transport regardless of origin value",
+			"http://evil.example", "internal-fwd-host", true, true,
+		},
+		{
+			// Raw X-Trim-* headers without the middleware-attached identity (a
+			// forged header on the TCP listener) must NOT relax the gate.
+			"forged identity stays rejected without context",
+			"http://evil.example", "192.168.1.10:9090", false, false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/cameras/x/stream/ws", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.gwCtx {
+				req = req.WithContext(WithGatewayIdentity(req.Context(), gwID))
+			}
+			if got := WSOriginAllowed(req); got != tc.want {
+				t.Fatalf("WSOriginAllowed() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

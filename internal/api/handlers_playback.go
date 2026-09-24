@@ -7,13 +7,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -21,16 +20,12 @@ import (
 )
 
 // playbackUpgrader is the WebSocket upgrader for AVI recording playback.
-// checkWSOrigin allows non-browser clients (no Origin header) and requires
-// browser origins to match the request host — a cross-site page must not
-// open NVR WebSockets.
+// checkWSOrigin delegates to middleware.WSOriginAllowed — the shared Origin
+// gate for every NVR WebSocket upgrader (see its doc comment for the
+// fnOS-gateway Host-mismatch rationale). Used by the AVI playback and GB28181
+// talk-back upgraders.
 func checkWSOrigin(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	u, err := url.Parse(origin)
-	return err == nil && strings.EqualFold(u.Host, r.Host)
+	return middleware.WSOriginAllowed(r)
 }
 
 var playbackUpgrader = websocket.Upgrader{
