@@ -303,8 +303,16 @@
   });
 
   onMount(() => {
-    abort = new AbortController();
-    ensureAround(0);
+    // The resetKey effect above has already created the controller for the
+    // current sequence and dispatched the first batch against it. Replacing
+    // it here unconditionally would mark that in-flight batch as stale (its
+    // snapshot no longer equals `abort`) — the response gets dropped, the
+    // blob cache stays empty, and the canvas shows an endless spinner until
+    // the user manually steps frames. Only create when the effect never ran.
+    if (!abort) {
+      abort = new AbortController();
+      ensureAround(0);
+    }
     return () => {
       abort?.abort();
       if (rafId) cancelAnimationFrame(rafId);
