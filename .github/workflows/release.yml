@@ -118,8 +118,10 @@ jobs:
       - name: Update release assets
         uses: softprops/action-gh-release@v2
         with:
-          # Only upload binaries, preserve existing release body if already set
-          generate_release_notes: true
+          # Only upload binaries, preserve existing release body if already
+          # set. Never let GitHub auto-generate notes: the curated body is
+          # the release page (house rule — no auto "What's Changed" lists).
+          generate_release_notes: false
           append_body: true
           files: |
             mibee-nvr-amd64
