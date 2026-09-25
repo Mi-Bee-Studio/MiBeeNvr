@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
 )
@@ -23,10 +25,25 @@ func (h *Handler) SetPlaybackBudget(l iobudget.Limiter) {
 // http.ServeFile; with one, reads are charged to the "playback" tenant in
 // ServeContent-sized chunks (#886). Range/If-Modified-Since semantics are
 // http.ServeContent's.
+//
+// Cache semantics: every media response carries an ETag (mtime+size) and
+// Cache-Control: no-cache — the browser may cache but MUST revalidate. Repair
+// tooling rewrites recording files IN PLACE (e.g. repair append-tkhd), and
+// Go's ServeContent only negotiates If-Modified-Since; without a strong ETag
+// plus forced revalidation, browsers kept serving the pre-repair bytes from
+// their media cache and playback looked "still broken" after a fix (observed
+// 2026-09-25). If-None-Match is answered here because net/http does not
+// handle ETag negotiation itself.
 func (h *Handler) serveFileBudgeted(w http.ResponseWriter, r *http.Request, path string) {
-	l := h.playbackBudget.Load()
-	if l == nil {
-		http.ServeFile(w, r, path)
+	if l := h.playbackBudget.Load(); l == nil {
+		st, err := os.Stat(path)
+		if err != nil {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+		if h.setMediaCacheHeaders(w, r, st) {
+			http.ServeFile(w, r, path)
+		}
 		return
 	}
 	f, err := os.Open(path)
@@ -40,7 +57,47 @@ func (h *Handler) serveFileBudgeted(w http.ResponseWriter, r *http.Request, path
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
-	http.ServeContent(w, r, filepath.Base(path), st.ModTime(), &budgetedReadSeeker{f: f, l: *l})
+	if h.setMediaCacheHeaders(w, r, st) {
+		http.ServeContent(w, r, filepath.Base(path), st.ModTime(), &budgetedReadSeeker{f: f, l: *h.playbackBudget.Load()})
+	}
+}
+
+// setMediaCacheHeaders stamps the media cache headers and answers
+// If-None-Match. Returns false when a 304 was written (caller must not serve
+// a body).
+func (h *Handler) setMediaCacheHeaders(w http.ResponseWriter, r *http.Request, st os.FileInfo) bool {
+	etag := mediaETag(st)
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if match := r.Header.Get("If-None-Match"); match != "" {
+		for _, cand := range splitETagList(match) {
+			if cand == etag || cand == "*" {
+				w.WriteHeader(http.StatusNotModified)
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// mediaETag builds a strong validator from mtime+size — both change whenever
+// a repair rewrites the file, so caches re-fetch exactly then and never
+// before.
+func mediaETag(st os.FileInfo) string {
+	return fmt.Sprintf(`"%x-%x"`, st.ModTime().UnixNano(), st.Size())
+}
+
+// splitETagList splits a comma-separated If-None-Match header value into
+// trimmed candidate tags.
+func splitETagList(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // budgetedReadSeeker charges every successful Read to the playback budget

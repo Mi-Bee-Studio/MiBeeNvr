@@ -59,6 +59,11 @@ type Status struct {
 	Deployment      string `json:"deployment"`          // "docker" | "binary" | ""
 	CheckedAt       string `json:"checked_at"`          // last successful/304 check (RFC3339)
 	Channel         string `json:"channel"`             // "stable" | "beta"
+	// SPABuild is the embedded frontend's build fingerprint, filled by the
+	// API layer (the update package cannot import internal/ui). It exists so
+	// "which frontend is deployed" is answerable at a glance - a stale SPA
+	// embedded into a fresh binary is otherwise undetectable (2026-09-25).
+	SPABuild string `json:"spa_build,omitempty"`
 }
 
 // Checker polls GitHub Releases in the background and caches the result.

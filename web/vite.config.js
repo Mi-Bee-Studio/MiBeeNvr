@@ -3,6 +3,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 import fs from 'node:fs'
+import { execSync } from 'node:child_process'
 
 /**
  * Service-Worker cache-versioning plugin.
@@ -92,6 +93,39 @@ function ortAssetsPlugin() {
   };
 }
 
+/**
+ * SPA build-fingerprint plugin.
+ *
+ * Emits dist/build-info.json (git describe + build timestamp) which the Go
+ * binary embeds and surfaces via /api/version (`spa_build`) and the startup
+ * log. Motivation: the 2026-09-25 outage was a stale SPA embedded into a
+ * fresh binary, and nothing on the running system could tell the two apart —
+ * the binary's version said "new" while the frontend was weeks old. With
+ * the fingerprint, "which frontend is deployed" is a one-glance answer.
+ */
+function spaBuildInfoPlugin() {
+  return {
+    name: 'spa-build-info',
+    apply: 'build',
+    closeBundle() {
+      let git = '';
+      try {
+        git = execSync('git describe --tags --always --dirty=-dirty', {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+          .toString()
+          .trim();
+      } catch {
+        git = ''; // not a git checkout (e.g. released tarball build)
+      }
+      fs.writeFileSync(
+        path.resolve('dist', 'build-info.json'),
+        JSON.stringify({ built_at: new Date().toISOString(), git: git || 'unknown' }, null, 2) + '\n'
+      );
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   // Relative base: index.html asset URLs resolve against the document URL, so
@@ -100,7 +134,7 @@ export default defineConfig({
   // backend injects window.__NVR_BASE__ so runtime code (API/stream URLs)
   // knows the prefix.
   base: './',
-  plugins: [svelte(), tailwindcss(), swVersionPlugin(), ortAssetsPlugin()],
+  plugins: [svelte(), tailwindcss(), swVersionPlugin(), ortAssetsPlugin(), spaBuildInfoPlugin()],
   resolve: {
     alias: {
       $lib: path.resolve('./src/lib'),
