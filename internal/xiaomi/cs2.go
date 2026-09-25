@@ -127,6 +127,15 @@ const cs2ReadTimeout = 15 * time.Second
 // tunable; it lives as a CS2Conn field only so tests can shrink it.
 const cs2PingInterval = time.Second
 
+// cs2ReadBufSize sizes the worker read buffer. CS2-over-TCP frames carry a
+// BE16 length in their 8-byte header, so a single frame may be up to 64KiB:
+// cameras chunk routine media to ~1KiB but emit larger frames for HD
+// keyframes and encoder parameter refreshes, and a buffer shorter than the
+// frame kills the session outright ("cs2 tcp: buffer too small" — observed
+// in the field on 2026-09-25 once sessions survived long enough to receive
+// one). UDP datagrams are far smaller and simply ignore the extra capacity.
+const cs2ReadBufSize = 65536
+
 // cs2PingPolicy decides when the next client-initiated PING is due on a CS2
 // TCP session. Inbound data does NOT postpone the next PING — only sending
 // one does. The camera's ~6s liveness window counts client PINGs, not
@@ -199,7 +208,7 @@ func (c *CS2Conn) worker() {
 
 	ping := cs2PingPolicy{interval: c.pingInterval}
 	lastData := time.Now()
-	buf := make([]byte, 1200)
+	buf := make([]byte, cs2ReadBufSize)
 
 	for {
 		// Short read deadline for TCP to wake up and send keepalive PINGs

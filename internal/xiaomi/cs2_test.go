@@ -684,3 +684,85 @@ func TestCS2WorkerPanicRecovery(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cs2: panic:")
 }
+
+func TestCS2WorkerAcceptsLargeTCPFrame(t *testing.T) {
+	t.Parallel()
+
+	// Long-lived TCP sessions (post-#906 keepalive fix) exposed a latent
+	// short-read-buffer bug: cameras occasionally emit CS2 TCP frames larger
+	// than the ~1KiB media chunk (HD keyframes, parameter refreshes — field
+	// log 2026-09-25 showed "cs2 tcp: buffer too small" killing otherwise
+	// stable sessions). The TCP frame length is a BE16 field, so the worker
+	// read buffer must cover the full 64KiB range. This drives the real
+	// framed cs2TCPConn reader over a loopback pair — the mock conn bypasses
+	// the framing layer and cannot catch this.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	const dataSize = 40000 // > the old 1200-byte buffer, < the 65535 BE16 max
+
+	payload := make([]byte, 4+dataSize)
+	binary.BigEndian.PutUint32(payload, dataSize) // data-channel size prefix
+	for i := 4; i < len(payload); i++ {
+		payload[i] = byte(i % 251)
+	}
+	msg := append(
+		[]byte{cs2Magic, cs2MsgDrw, 0, 0, cs2MagicDrw, 2, 0, 0},
+		payload...,
+	)
+	binary.BigEndian.PutUint16(msg[2:], uint16(len(msg)-4))
+
+	frame := make([]byte, 8+len(msg))
+	binary.BigEndian.PutUint16(frame, uint16(len(msg)))
+	frame[2] = cs2MagicTCP
+	copy(frame[8:], msg)
+
+	popDone := make(chan struct{})
+	srvDone := make(chan struct{})
+	go func() {
+		defer close(srvDone)
+		srv, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer srv.Close()
+		if _, err := srv.Write(frame); err != nil {
+			return
+		}
+		// Hold the session open until the client has drained the media.
+		<-popDone
+	}()
+
+	conn, err := cs2NewTCPConn(ln.Addr().String())
+	require.NoError(t, err)
+
+	c := &CS2Conn{
+		Conn:         conn,
+		isTCP:        true,
+		idleTimeout:  time.Minute,
+		pingInterval: 200 * time.Millisecond,
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+	go c.worker()
+
+	got, ok := c.channels[2].Pop(5 * time.Second)
+	close(popDone)
+	require.True(t, ok, "channel-2 media must be delivered for a >1KiB TCP frame")
+	require.Len(t, got, dataSize)
+	for i := range got {
+		if got[i] != byte((i+4)%251) {
+			t.Fatalf("media corrupted at offset %d: got %d", i, got[i])
+		}
+	}
+
+	_ = conn.Close()
+	<-srvDone
+
+	// The worker may report the post-close EOF, but never the short-buffer error.
+	if cerr := c.Error(); cerr != nil {
+		require.NotContains(t, cerr.Error(), "buffer too small")
+	}
+}
