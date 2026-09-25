@@ -4,4 +4,4 @@ aiohttp>=3.9
 ruff>=0.6
 numpy>=1.26
 PyTurboJPEG>=0.4  # HA camera/img_util imports turbojpeg at module load (2026.x)
-homeassistant==2026.6.4
+homeassistant==2026.7.4
