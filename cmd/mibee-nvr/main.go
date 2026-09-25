@@ -24,6 +24,7 @@ import (
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tray"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/pkg/app"
 )
@@ -271,7 +272,7 @@ func main() {
 	// swap can retire and rebuild just this listener (see applyListenAddr).
 	httpLn := mustListenTCP(cfg.Server.Listen)
 	go func() {
-		slog.Info("MiBee NVR listening", "version", appVersion, "addr", cfg.Server.Listen)
+		slog.Info("MiBee NVR listening", "version", appVersion, "spa_build", ui.SPABuildInfo(), "addr", cfg.Server.Listen)
 		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
 			slog.Error("http", "error", err)
 			os.Exit(1)

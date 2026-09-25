@@ -586,7 +586,7 @@ func (r *RollingMergeCoordinator) Start(ctx context.Context) error {
 	// sync.WaitGroup's contract: "Calls with a positive delta that start when the
 	// counter is zero must happen before a Wait." Otherwise a fast Stop's Wait
 	// could observe counter==0 and return before the goroutine's Add runs.
-	r.wg.Add(3)
+	r.wg.Add(4)
 	go r.eventLoop(ctx)
 
 	// One-shot backfill: drain historical pending segments for rolling-enabled cameras.
@@ -599,8 +599,27 @@ func (r *RollingMergeCoordinator) Start(ctx context.Context) error {
 	// outpaces the startup scan + event-driven merge.
 	go r.backfillLoop(ctx)
 
+	// One-shot orphan-row sweep: a restart mid-append leaves bucket .tmp rows
+	// whose file the next process (or an orphan-file sweep) has already removed;
+	// they would 404 on playback forever (2026-09-25: 164 such rows in prod).
+	go r.sweepOrphanRows(ctx)
+
 	rollingLogger.Info("rolling merge coordinator started")
 	return nil
+}
+
+// sweepOrphanRows removes recording rows whose .tmp backing file has vanished.
+// Rows whose file still exists are left alone — a live writer may own them.
+func (r *RollingMergeCoordinator) sweepOrphanRows(ctx context.Context) {
+	defer r.wg.Done()
+	n, err := r.db.SweepOrphanRecordingRows(ctx, ".tmp")
+	if err != nil {
+		rollingLogger.Warn("orphan-row sweep failed", "error", err)
+		return
+	}
+	if n > 0 {
+		rollingLogger.Info("orphan-row sweep removed dead recording rows", "removed", n)
+	}
 }
 
 // backfillOnStartup scans for historical pending MP4 segments across all rolling-enabled
@@ -611,7 +630,7 @@ func (r *RollingMergeCoordinator) Start(ctx context.Context) error {
 // cameras and merges them into window buckets. This ensures that recordings that existed
 // before rolling merge was enabled get the same quasi-real-time treatment retroactively.
 func (r *RollingMergeCoordinator) backfillOnStartup(ctx context.Context) {
-	defer r.wg.Done() // paired with r.wg.Add(3) in Start
+	defer r.wg.Done() // paired with r.wg.Add(4) in Start
 	// Check if any camera has rolling enabled — skip entirely if none.
 	hasRolling := false
 	for _, cam := range r.cameras() {
@@ -718,7 +737,7 @@ func (r *RollingMergeCoordinator) backfillOnStartup(ctx context.Context) {
 // (default 10m) it processes up to `rolling_backfill_batch` (default 500) pending
 // segments, using try-locks to yield to real-time events.
 func (r *RollingMergeCoordinator) backfillLoop(ctx context.Context) {
-	defer r.wg.Done() // paired with r.wg.Add(3) in Start
+	defer r.wg.Done() // paired with r.wg.Add(4) in Start
 	global := r.getGlobalCfg()
 	interval := time.Duration(0)
 	if global.RollingBackfillInterval != "" && global.RollingBackfillInterval != "0" {

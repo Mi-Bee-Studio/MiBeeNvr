@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
 )
 
@@ -29,10 +30,16 @@ func (h *Handler) handleVersion(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"current":    "",
 			"deployment": update.Deployment(),
+			"spa_build":  ui.SPABuildInfo(),
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, updateChecker.Status())
+	st := updateChecker.Status()
+	// Frontend build fingerprint alongside the binary version: a stale SPA
+	// embedded into a fresh binary is otherwise undetectable from the outside
+	// (that exact mismatch caused the 2026-09-25 playback outage).
+	st.SPABuild = ui.SPABuildInfo()
+	writeJSON(w, http.StatusOK, st)
 }
 
 // handleUpdateCheck returns the cached version-check status. Use POST to force
