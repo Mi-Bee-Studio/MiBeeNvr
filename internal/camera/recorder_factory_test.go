@@ -1,10 +1,14 @@
 package camera
 
 import (
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/xiaomi"
 )
@@ -73,3 +77,50 @@ var (
 	_ streamhub.HubHost = (*recorder.GB28181Recorder)(nil)
 	_ streamhub.HubHost = (*xiaomi.XiaomiRecorder)(nil)
 )
+
+// TestBuildGB28181Recorder_AdaptiveWiring guards recording_mode=adaptive
+// reaching the GB28181 recorder's write gate: armed when set, unarmed
+// otherwise. A silent miss here would show "adaptive" in the UI while the
+// camera keeps recording at full rate.
+func TestBuildGB28181Recorder_AdaptiveWiring(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			RootDir:         filepath.Join(tmpDir, "storage"),
+			SegmentDuration: "1m",
+		},
+	}
+	store, err := storage.NewManager(cfg.Storage.RootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.CleanupTempFiles()
+	cm := NewCameraManager(cfg, store, nil, "")
+
+	armed := cm.buildGB28181Recorder(config.CameraConfig{
+		ID:            "gb-armed",
+		Protocol:      string(model.ProtoGB28181),
+		Encoding:      "h264",
+		RecordingMode: "adaptive",
+	}, time.Minute)
+	gb, ok := armed.(*recorder.GB28181Recorder)
+	if !ok {
+		t.Fatalf("want *recorder.GB28181Recorder, got %T", armed)
+	}
+	if !gb.AdaptiveArmed() {
+		t.Fatal("recording_mode=adaptive must arm the write gate")
+	}
+
+	plain := cm.buildGB28181Recorder(config.CameraConfig{
+		ID:       "gb-plain",
+		Protocol: string(model.ProtoGB28181),
+		Encoding: "h264",
+	}, time.Minute)
+	gb2, ok := plain.(*recorder.GB28181Recorder)
+	if !ok {
+		t.Fatalf("want *recorder.GB28181Recorder, got %T", plain)
+	}
+	if gb2.AdaptiveArmed() {
+		t.Fatal("continuous mode must not arm the write gate")
+	}
+}

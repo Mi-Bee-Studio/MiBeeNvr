@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
@@ -38,6 +39,13 @@ type GB28181Config struct {
 	// muxed into MP4 segments and broadcast on the hub only when set
 	// (mirrors the per-camera audio_enabled flag of the RTSP recorders).
 	AudioEnabled bool
+	// Adaptive arms the dynamic-timelapse write gate (issue #435) — same
+	// semantics as the Xiaomi plugin gate (issue #468): sustained compressed-
+	// domain calm drops the disk write to one keyframe per TimelapseInterval,
+	// an activity spike flushes the retained GOP and resumes full rate. Live
+	// hub fan-out is never gated. H.264/H.265 PS streams only (config
+	// validation already restricts recording_mode=adaptive to those).
+	Adaptive *AdaptiveConfig
 }
 
 // GB28181Recorder is a passive recorder for GB/T 28181 channels: media does
@@ -76,6 +84,19 @@ type GB28181Recorder struct {
 	audioWarned    bool   // one-time warning for unusable AAC frames
 	lastAudioPts   int64  // monotonic guard
 	audioBytes     int64  // diagnostics
+
+	// Adaptive write-density state (issue #435). The gate is owned by
+	// WriteNALU under r.mu — the single video-ingress path — so it needs no
+	// lock of its own; Stop/OnBye touch it via closeCurrentSegmentLocked
+	// under the same mutex. Rebuilt per INVITE session (OnInvite) so a
+	// session recycle starts in NORMAL mode with a fresh baseline, matching
+	// the per-connection rebuild rule of the base recorder and the Xiaomi
+	// plugin (issue #468).
+	gate *AdaptiveGate
+	// audioSparse gates DISK audio writes while the gate is in sparse mode;
+	// live audio fan-out continues. Written by WriteNALU under r.mu, read by
+	// WriteAudio from the PS demux path.
+	audioSparse atomic.Bool
 }
 
 var (
@@ -88,7 +109,17 @@ func NewGB28181Recorder(cfg GB28181Config, hub *streamhub.StreamHub) *GB28181Rec
 	if cfg.SegmentDur < time.Millisecond {
 		cfg.SegmentDur = 10 * time.Minute
 	}
-	return &GB28181Recorder{cfg: cfg, Hub: hub, status: model.StatusStopped}
+	r := &GB28181Recorder{cfg: cfg, Hub: hub, status: model.StatusStopped}
+	if cfg.Adaptive != nil {
+		r.gate = NewAdaptiveGate(*cfg.Adaptive, cfg.CameraID, gb28181Logger)
+	}
+	return r
+}
+
+// AdaptiveArmed reports whether the dynamic-timelapse write gate is active
+// (diagnostics / camera-manager wiring tests).
+func (r *GB28181Recorder) AdaptiveArmed() bool {
+	return r.gate != nil
 }
 
 // Start marks the recorder as waiting for its INVITE (Reconnecting). The SIP
@@ -140,12 +171,17 @@ func (r *GB28181Recorder) CodecParams() (codec model.Format, sps, pps, vps []byt
 }
 
 // OnInvite transitions to Recording — called by the SIP server after the
-// INVITE 200 OK + ACK handshake succeeded.
+// INVITE 200 OK + ACK handshake succeeded. A new session gets a fresh gate:
+// the media state during the gap is unknown, so full-rate writing resumes
+// and the calm clock restarts (per-connection rebuild rule).
 func (r *GB28181Recorder) OnInvite() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.status == model.StatusStopped {
 		return
+	}
+	if r.cfg.Adaptive != nil {
+		r.gate = NewAdaptiveGate(*r.cfg.Adaptive, r.cfg.CameraID, gb28181Logger)
 	}
 	r.status = model.StatusRecording
 }
@@ -282,6 +318,21 @@ func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 		r.closeCurrentSegmentLocked()
 		curMux = nil
 	}
+	// Adaptive write-density gate (issue #435): classify the AU's VCL NALU,
+	// drop the disk write in sparse mode, and flush the retained GOP on the
+	// timelapse→normal exit BEFORE the current frame. The hub fan-out above
+	// already ran — live view is never gated.
+	if r.gate != nil {
+		_, skip, flush := r.gate.Observe(vclNALU, isIDR, time.Now())
+		r.audioSparse.Store(r.gate.Timelapse() && !(r.cfg.Adaptive != nil && r.cfg.Adaptive.AmbientAudio))
+		if len(flush) > 0 {
+			r.writeFlushedGOP(flush)
+		}
+		if skip {
+			r.mu.Unlock()
+			return
+		}
+	}
 	if curMux == nil {
 		tempPath, finalPath, err := r.cfg.Store.CreateSegment(r.cfg.CameraID, localCodecType)
 		if err != nil {
@@ -344,8 +395,47 @@ func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 	r.frameCount++
 	if time.Since(r.segStart) >= r.cfg.SegmentDur {
 		r.closeCurrentSegmentLocked()
+	} else if r.gate != nil {
+		// The AU just observed into the GOP ring is now on disk; a later
+		// timelapse-exit flush into this segment must skip it.
+		r.gate.MarkLastWritten()
 	}
 	r.mu.Unlock()
+}
+
+// writeFlushedGOP writes the adaptive gate's retained GOP frames (complete
+// reference chain since the last IDR) into the current segment on the
+// timelapse→normal transition. If the segment just rotated (muxer == nil)
+// the flush is dropped — the triggering AU's own IDR creates a fresh
+// segment, matching the Xiaomi plugin's boundary handling (#468). Flushed
+// PTS comes from capture wall time relative to segStart: over one segment
+// the 90kHz RTP timeline and the wall clock agree to within drift, and the
+// frames carry no RTP timestamps of their own. Callers hold r.mu.
+func (r *GB28181Recorder) writeFlushedGOP(frames []AdaptiveFrame) {
+	if r.muxer == nil {
+		return
+	}
+	for _, f := range frames {
+		if f.Written {
+			// Already on disk in this segment — re-writing duplicates the
+			// ring's IDR anchor.
+			continue
+		}
+		pts := f.At.Sub(r.segStart)
+		if pts < 0 {
+			pts = 0
+		}
+		dur := f.At.Sub(r.lastFrameTime)
+		if dur < time.Millisecond {
+			dur = time.Millisecond
+		}
+		if err := r.muxer.WriteSample(r.trackID, f.Nalu, pts, dur); err != nil {
+			gb28181Logger.Error("failed to write flushed sample", "camera_id", r.cfg.CameraID, "error", err)
+			continue
+		}
+		r.lastFrameTime = f.At
+		r.frameCount++
+	}
 }
 
 // ticksToDuration converts 90kHz RTP clock ticks to a duration.
@@ -419,6 +509,12 @@ func (r *GB28181Recorder) WriteAudio(codec string, data, config []byte, ptsTicks
 
 	if curMux == nil {
 		return // no open video segment — audio before first IDR is dropped
+	}
+	// Sparse (adaptive-timelapse) mode drops DISK audio; the live fan-out
+	// above already ran (#496 semantics — ambient_audio is not wired for the
+	// GB28181 recorder yet).
+	if r.audioSparse.Load() {
+		return
 	}
 
 	r.mu.Lock()
@@ -571,6 +667,12 @@ func ascChannels(asc []byte) int {
 func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 	if r.muxer == nil {
 		return
+	}
+	if r.gate != nil {
+		// The ring's written flags mean "on disk in the CURRENT segment";
+		// that segment just closed, so a later flush into a fresh segment
+		// must write the whole retained ring (#498).
+		r.gate.ClearWritten()
 	}
 	if err := r.muxer.Close(); err != nil {
 		gb28181Logger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)
