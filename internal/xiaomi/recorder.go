@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -70,8 +69,10 @@ const (
 	// (defect A: the old counter accumulated across weeks).
 	qualityStableResetWindow = 5 * time.Minute
 	// After a downgrade, an SD connection that streams stably for at least
-	// qualityUpgradeStableWindow earns one probe attempt back at HD
-	// (defect B: quality previously never recovered without a restart).
+	// qualityUpgradeStableWindow earns one probe attempt back at HD, taken
+	// on the connection's next natural disconnect (defect B: quality
+	// previously never recovered without a restart). A healthy stream is
+	// never torn down for the probe — see the run loop.
 	qualityUpgradeStableWindow = 10 * time.Minute
 	// maxQualityUpgradeAttempts bounds the downgrade→upgrade cycle per
 	// recorder lifecycle, preventing a downgrade/upgrade oscillation storm
@@ -79,12 +80,6 @@ const (
 	// must not feed that).
 	maxQualityUpgradeAttempts = 2
 )
-
-// errQualityUpgradeProbe is returned by connectAndRecord when a stable SD
-// connection reaches the upgrade window and should be deliberately reconnected
-// at HD (issue #502 defect B). It is a planned reconnect, not a failure —
-// the run loop skips the error metrics/backoff for it.
-var errQualityUpgradeProbe = errors.New("quality upgrade probe")
 
 // XiaomiCloudConfig holds Xiaomi cloud API credentials for URL resolution.
 type XiaomiCloudConfig struct {
@@ -170,6 +165,13 @@ type XiaomiRecorder struct {
 	// Quality state machine (issue #502). Owned by the run goroutine.
 	mediaStart      time.Time // when StartMedia succeeded for the current connection; zero while connecting
 	upgradeAttempts int       // SD→HD probe attempts consumed this recorder lifecycle
+	// hdProbeWanted is armed by the read loop once a stable SD session earns
+	// an HD probe; the run loop consumes it on the next natural disconnect.
+	// A healthy stream is never torn down deliberately — the old probe did
+	// exactly that and fed a self-inflicted flapping loop on HD-refusing
+	// cameras (issue #906 field evidence: healthy SD session murdered every
+	// stable window, ~90s of churn per cycle).
+	hdProbeWanted bool
 	// Test-overridable tuning (defaults from the consts above).
 	stableResetWindow   time.Duration
 	upgradeStableWindow time.Duration
@@ -546,17 +548,18 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 			r.recordXiaomiReconnect()
 		}
 
-		// Planned SD→HD upgrade probe (issue #502 defect B): a stable SD
-		// connection earned a reconnect at HD. Not a failure — reconnect
-		// immediately, skip the error metrics and backoff below.
-		if errors.Is(err, errQualityUpgradeProbe) {
+		// SD→HD upgrade (issue #502 defect B), piggybacked on a natural
+		// disconnect: the read loop only ARMS hdProbeWanted — reconnecting a
+		// healthy stream just to probe HD fed a self-inflicted flapping loop
+		// on cameras that refuse HD (issue #906: a healthy SD session was
+		// torn down every stable window, each cycle costing ~90s of churn).
+		if r.hdProbeWanted {
+			r.hdProbeWanted = false
 			r.currentQuality = "hd"
 			r.upgradeAttempts++
 			r.recordQualityChange("sd", "hd", fmt.Sprintf(
-				"stable SD streaming for %s, probe attempt %d/%d",
-				r.upgradeStableWindow, r.upgradeAttempts, r.maxUpgradeAttempts))
-			r.setStatus(model.StatusReconnecting)
-			continue
+				"stable SD streaming, probe attempt %d/%d on natural reconnect",
+				r.upgradeAttempts, r.maxUpgradeAttempts))
 		}
 
 		// Quality auto-fallback: if "no media data" errors persist at HD,
@@ -619,8 +622,8 @@ func (r *XiaomiRecorder) handleQualityFailure(err error, streamedStable bool) {
 
 // shouldProbeUpgrade reports whether the current SD connection has streamed
 // stably long enough to earn one bounded SD→HD probe attempt (issue #502
-// defect B). Called from the read loop; the probe itself is a deliberate
-// teardown + reconnect at HD, bounded by maxUpgradeAttempts per recorder
+// defect B). Arming only — the attempt itself is taken on the connection's
+// next natural disconnect, bounded by maxUpgradeAttempts per recorder
 // lifecycle so a camera that refuses HD cannot oscillate forever.
 func (r *XiaomiRecorder) shouldProbeUpgrade(now time.Time) bool {
 	return r.currentQuality == "sd" && r.qualityAuto() &&
@@ -751,12 +754,12 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 			return fmt.Errorf("miss read: %w", err), false
 		}
 
-		// SD→HD upgrade probe (issue #502 defect B): a healthy SD connection
-		// never disconnects on its own, so the recovery must tear it down
-		// deliberately once the stable window has been earned.
-		if r.shouldProbeUpgrade(time.Now()) {
-			r.closeCurrentSegment()
-			return errQualityUpgradeProbe, true
+		// SD→HD upgrade (issue #502 defect B): arm the probe once the stable
+		// window has been earned; the run loop consumes the flag on the next
+		// natural disconnect. NEVER disconnect here — a healthy stream must
+		// not be murdered to probe a better one (issue #906 field evidence).
+		if !r.hdProbeWanted && r.shouldProbeUpgrade(time.Now()) {
+			r.hdProbeWanted = true
 		}
 
 		// Handle audio packets when AudioEnabled.
