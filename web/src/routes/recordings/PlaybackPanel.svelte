@@ -23,8 +23,9 @@
     getTimelapseFrames,
     fetchRecordingFrameBatch,
     recordTimelineSeek,
+    repairRecording,
   } from '$lib/api';
-  import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight, Wrench } from 'lucide-svelte';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
   import MjpegSequencePlayer from '$lib/components/MjpegSequencePlayer.svelte';
   import { parseVodPlaylist, entryAt, nearestEntryByWallClock, mediaTimeFor, type VodEntry } from '$lib/vod-playlist';
@@ -104,6 +105,8 @@
   let videoError = $state<string | null>(null);
   let videoErrorMsg = $state('');
   let videoRetryCount = $state(0);
+  let repairRunning = $state(false);
+  let repairNote = $state('');
   let videoStalled = $state(false);
   let videoStallTimeout: ReturnType<typeof setTimeout> | null = null;
   const MAX_VIDEO_RETRIES = 3;
@@ -864,6 +867,44 @@
       video.load();
     }
   }
+
+  // tryRepairRecording asks the server to diagnose + fix the known failure
+  // classes for THIS recording (stale ID, dead .tmp row, zero duration,
+  // 0×0 stsd/tkhd dims) and reacts to the outcome: navigate to the merged
+  // product that swallowed the content, show the honest unrepairable
+  // verdicts, or auto-retry playback once data-level fixes landed.
+  async function tryRepairRecording() {
+    const id = recording?.id || currentId;
+    if (!id || repairRunning) return;
+    repairRunning = true;
+    repairNote = '';
+    try {
+      const res = await repairRecording(id);
+      if (res.status === 'resolved_fallback' && res.target_id) {
+        repairNote = t('detail.repairFallback');
+        const query = location.hash.includes('?') ? location.hash.slice(location.hash.indexOf('?')) : '';
+        setTimeout(() => { location.hash = `#/recordings/${res.target_id}${query}`; }, 700);
+        return;
+      }
+      if (res.status === 'file_missing') {
+        repairNote = t('detail.repairFileMissing');
+        return;
+      }
+      if (res.status === 'unrepairable') {
+        repairNote = t('detail.repairUnrepairable');
+        return;
+      }
+      if (res.actions?.length) repairNote = res.actions.join(' · ');
+      if (res.retry_playback) {
+        videoRetryCount = 0;
+        setTimeout(() => handleVideoRetry(), 500);
+      }
+    } catch (e) {
+      repairNote = t('detail.repairFailed', { error: String((e as Error)?.message || e) });
+    } finally {
+      repairRunning = false;
+    }
+  }
   function handleVideoCanPlay(e: Event) {
     if (e.target !== videoEl) {
       // Standby element finished buffering — flag it for waitForStandby.
@@ -1272,6 +1313,20 @@
             </button>
           {:else}
             <p class="text-white/70 text-xs mb-3">{t('detail.videoMaxRetries')}</p>
+          {/if}
+          {#if repairRunning}
+            <div class="flex items-center gap-2 text-white/80 mt-3">
+              <Loader2 size={16} class="animate-spin" />
+              <span class="text-sm">{t('detail.repairing')}</span>
+            </div>
+          {:else}
+            <button onclick={tryRepairRecording} class="btn btn-outline btn-sm flex items-center gap-1 text-white border-white/30 hover:bg-white/10 mt-3">
+              <Wrench size={14} />
+              {t('detail.tryRepair')}
+            </button>
+          {/if}
+          {#if repairNote}
+            <p class="text-white/80 text-xs text-center max-w-md mt-2">{repairNote}</p>
           {/if}
         </div>
       {:else if videoStalled}

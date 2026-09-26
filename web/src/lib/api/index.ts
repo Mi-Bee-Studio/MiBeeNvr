@@ -195,6 +195,7 @@ export {
   recordTimelineSeek,
   getRecordingDailySummary,
   getRecordingsTimeline,
+  repairRecording,
 } from './recordings';
 
 export type {
@@ -215,6 +216,7 @@ export type {
   TimelapsePreviewFrame,
   RecordingTimelineSegment,
   RecordingTimelineResponse,
+  RecordingRepairResult,
 } from './recordings';
 
 // Timelapse merges — periodic-merge outputs (8h / 12h / 24h / natural-day / 7d / 30d)

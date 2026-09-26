@@ -655,6 +655,7 @@ func (h *Handler) registerRecordingRoutes(r chi.Router) {
 			r.Get("/timelapse-frames/batch", h.handleTimelapseFramesBatch)
 			r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
 			r.Post("/retry-merge", h.handleRetryTimelapseMerge)
+			r.Post("/repair", h.handleRepairRecording)
 		})
 	})
 	// Recording gaps for timeline (per-camera, registered here to keep recording-
