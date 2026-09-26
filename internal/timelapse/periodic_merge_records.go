@@ -128,6 +128,11 @@ func (m *PeriodicMergeManager) recordMergeRow(ctx context.Context, segments []mo
 		}
 		return
 	}
+	// One captured timestamp feeds both fields: this row is written once, at
+	// completion, and two independent time.Now() calls produced
+	// completed_at < created_at by ~2µs in production data (insert defaults
+	// CreatedAt from a second, later call).
+	completed := time.Now().UTC()
 	row := &model.TimelapseMerge{
 		CameraID:         rc.cameraID,
 		WindowStart:      rc.startTime,
@@ -140,7 +145,8 @@ func (m *PeriodicMergeManager) recordMergeRow(ctx context.Context, segments []mo
 		FPS:              m.fps,
 		SourceSegmentIDs: sourceIDs,
 		Status:           model.TimelapseMergeStatusCompleted,
-		CompletedAt:      time.Now().UTC(),
+		CompletedAt:      completed,
+		CreatedAt:        completed,
 	}
 	if _, err := m.mergeStore.InsertTimelapseMerge(ctx, row); err != nil {
 		slog.Warn("periodic merge: insert merge row failed",
