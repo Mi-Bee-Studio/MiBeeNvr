@@ -53,6 +53,10 @@ func (d *DB) SweepOrphanRecordingRows(ctx context.Context, suffix string) (int64
 			if err == nil {
 				removed += n
 			}
+			// Swept rows were merge targets; their lineage dies with them.
+			if _, lerr := d.db.ExecContext(ctx, "DELETE FROM merge_lineage WHERE merged_id IN "+placeholder, args...); lerr != nil {
+				return lerr
+			}
 			return nil
 		}); err != nil {
 			return removed, fmt.Errorf("sweep delete: %w", err)

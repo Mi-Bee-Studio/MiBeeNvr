@@ -213,6 +213,11 @@ func (d *DB) MergeAndReplaceRecordings(ctx context.Context, merged *model.Record
 		return err
 	}
 
+	// Record fold provenance so stale IDs resolve to this row exactly (#903).
+	if err := recordMergeLineageInTx(ctx, tx, merged.ID, merged.CameraID, oldIDs); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 
@@ -331,6 +336,13 @@ func (d *DB) RollingReplaceRecordings(ctx context.Context, merged *model.Recordi
 			targetID = merged.ID
 		}
 		if err := migrateAIEventsInTx(ctx, tx, targetID, sourceIDs); err != nil {
+			return err
+		}
+
+		// Record fold provenance so stale IDs resolve to this row exactly
+		// (#903); appends re-target lineage that pointed at the growing row
+		// only via consumed buckets — the append target keeps its identity.
+		if err := recordMergeLineageInTx(ctx, tx, targetID, merged.CameraID, sourceIDs); err != nil {
 			return err
 		}
 	}

@@ -316,6 +316,14 @@ func TestRollingAppendBucket_EndToEnd(t *testing.T) {
 	require.InDelta(t, 106.0, recs[0].Duration, 2.0, "wall span must cover both segments' span, got %v", recs[0].Duration)
 	require.False(t, recordingExists(t, env, cam, "ab-0"))
 	require.False(t, recordingExists(t, env, cam, "ab-1"))
+
+	// v40 lineage: the folds that consumed both source segments left exact
+	// provenance — each deleted source ID resolves to the bucket row.
+	for _, src := range []string{"ab-0", "ab-1"} {
+		target, lerr := env.db.FindLineageTarget(context.Background(), src)
+		require.NoError(t, lerr)
+		require.Equal(t, recs[0].ID, target, "lineage for %s must point at the bucket row", src)
+	}
 }
 
 // 开关关闭（默认）时桶文件必须是经典格式（无标记盒）。

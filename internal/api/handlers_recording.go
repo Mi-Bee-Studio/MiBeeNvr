@@ -496,13 +496,23 @@ func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 }
 
 // fallbackRecording resolves a stale recording ID to the merged row that
-// consumed it. Returns nil when the ID is not a UnixNano stamp, nothing
-// covers the moment, or the cover is ambiguous across cameras (the caller
-// may pass ?camera_id= to disambiguate).
+// consumed it. Resolution is exact-first: the fold that consumed the ID left
+// merge-lineage provenance (storage v40), which is immune to the cross-camera
+// ambiguity of time-window matching — hourly buckets on many cameras cover
+// the same moment, but only one fold actually ate this ID. The covering-time
+// heuristic (#915) remains as the second step for rows consumed before
+// lineage existed. Returns nil when the ID is not a UnixNano stamp, neither
+// step resolves, or the cover is ambiguous across cameras (the caller may
+// pass ?camera_id= to disambiguate).
 func (h *Handler) fallbackRecording(r *http.Request, id string) *model.Recording {
 	n, err := strconv.ParseInt(id, 10, 64)
 	if err != nil || n < 1_000_000_000_000_000_000 || n > 1<<62 {
 		return nil
+	}
+	if target, lerr := h.db.FindLineageTarget(r.Context(), id); lerr == nil && target != "" {
+		if fb, gerr := h.db.GetRecording(r.Context(), target); gerr == nil && fb != nil {
+			return fb
+		}
 	}
 	ids, err := h.db.FindMergedCoveringIDs(r.Context(), time.Unix(0, n), r.URL.Query().Get("camera_id"))
 	if err != nil || len(ids) != 1 {
