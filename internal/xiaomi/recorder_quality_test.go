@@ -160,20 +160,23 @@ func TestShouldProbeUpgrade(t *testing.T) {
 // The probe budget bounds the downgrade→upgrade cycle: after
 // maxUpgradeAttempts failed probes the recorder stays at SD for the rest of
 // its lifecycle instead of oscillating (the 2K PTZ camera's 131 SPS changes
-// in one day show what oscillation costs).
+// in one day show what oscillation costs). The probe is piggybacked on a
+// natural disconnect — the read loop arms hdProbeWanted, never disconnects.
 func TestQualityUpgradeOscillationBounded(t *testing.T) {
 	t.Helper()
 	r := makeQualityTestRecorder(t)
 
 	cycles := 0
 	for {
-		// Simulate the probe path: SD connection stable past the window.
+		// Simulate the new flow: stable SD arms the flag; the natural
+		// disconnect that follows consumes it and reconnects at HD.
 		r.currentQuality = "sd"
 		r.mediaStart = time.Now().Add(-r.upgradeStableWindow)
-		if !r.shouldProbeUpgrade(time.Now()) {
+		if r.hdProbeWanted = r.shouldProbeUpgrade(time.Now()); !r.hdProbeWanted {
 			break
 		}
-		r.upgradeAttempts++ // run loop's probe branch consumes the budget
+		r.hdProbeWanted = false // run loop consumes the flag
+		r.upgradeAttempts++
 		r.currentQuality = "hd"
 
 		// HD refuses again: three rapid no-media failures downgrade.
@@ -190,12 +193,38 @@ func TestQualityUpgradeOscillationBounded(t *testing.T) {
 	require.Equal(t, "sd", r.currentQuality, "after the budget is spent, SD sticks")
 }
 
-func TestQualityProbeSentinelIsPlannedNotFailure(t *testing.T) {
+// The upgrade must never tear down a healthy stream: the read loop only arms
+// the probe flag; the disconnect that carries the HD attempt is always a
+// natural one (issue #906: the old deliberate teardown murdered a working SD
+// session every stable window).
+func TestQualityUpgradeArmsWithoutDisconnect(t *testing.T) {
 	t.Helper()
-	require.True(t, errors.Is(errQualityUpgradeProbe, errQualityUpgradeProbe))
-	// The sentinel must not match the no-media string check — the run loop
-	// handles it before handleQualityFailure and must never count it.
-	require.NotContains(t, errQualityUpgradeProbe.Error(), "no media data")
+	r := makeQualityTestRecorder(t)
+
+	r.currentQuality = "sd"
+	r.mediaStart = time.Now().Add(-r.upgradeStableWindow)
+
+	// The read loop's arming condition — flag flips once, stays armed.
+	require.False(t, r.hdProbeWanted)
+	arm := !r.hdProbeWanted && r.shouldProbeUpgrade(time.Now())
+	if arm {
+		r.hdProbeWanted = true
+	}
+	require.True(t, r.hdProbeWanted, "stable SD past the window arms the probe")
+
+	// Arming is idempotent for the rest of the session and consumes no budget.
+	arm = !r.hdProbeWanted && r.shouldProbeUpgrade(time.Now())
+	if arm {
+		r.hdProbeWanted = true
+	}
+	require.True(t, r.hdProbeWanted)
+	require.Zero(t, r.upgradeAttempts, "arming alone consumes no probe budget")
+
+	// Consume on a natural disconnect: quality goes to HD exactly once.
+	r.hdProbeWanted = false
+	r.upgradeAttempts++
+	r.currentQuality = "hd"
+	require.Equal(t, 1, r.upgradeAttempts)
 }
 
 // --- health event stream ---
