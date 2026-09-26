@@ -95,6 +95,31 @@ type CS2Conn struct {
 	// writeFail counts consecutive control-write failures per frame name.
 	// Worker-goroutine only — no lock needed (#503).
 	writeFail map[string]int
+	// stats is the worker's message timeline for the disconnect forensics
+	// log below. Worker-goroutine only — no lock needed (#906).
+	stats cs2Stats
+}
+
+// cs2Stats tracks the control-frame timeline of one CS2 session. The
+// camera tears the connection down ~6s after its liveness probe goes
+// unanswered (see the cs2MsgPing case in worker); when that happens the
+// forensics line below answers WHICH side of the PING/PONG exchange died
+// (no PING ever arrived / PONG sent but ignored / stream misparse) without
+// a packet capture (#906).
+type cs2Stats struct {
+	startedAt     time.Time
+	pingSent      int // our keepalive PINGs (TCP) / data-pings
+	pongSent      int // PONG replies to camera PING probes
+	pingRecv      int // camera PING probes observed
+	pongRecv      int
+	drwRecv       int // media frames
+	unknownRecv   int // frames that matched no known message type
+	lastPingSent  time.Time
+	lastPongSent  time.Time
+	lastPingRecv  time.Time
+	lastDataAt    time.Time
+	lastUnknownTy byte // message type of the most recent unknown frame
+	bufTooSmall   int  // TCP frames larger than the 1200B read buffer
 }
 
 const (
@@ -206,6 +231,28 @@ func (c *CS2Conn) worker() {
 		c.channels[2].Close()
 	}()
 
+	// #906 forensics: on exit, dump the session's control-frame timeline.
+	defer func() {
+		s := c.stats
+		uptime := time.Since(s.startedAt).Round(time.Millisecond)
+		age := func(t time.Time) string {
+			if t.IsZero() {
+				return "never"
+			}
+			return time.Since(t).Round(time.Millisecond).String() + " ago"
+		}
+		cs2Logger.Info("cs2: session closed — control-frame timeline",
+			"peer", c.peer(), "proto", c.Protocol(), "uptime", uptime.String(),
+			"err", c.getErr(),
+			"ping_sent", s.pingSent, "last_ping_sent", age(s.lastPingSent),
+			"ping_recv", s.pingRecv, "last_ping_recv", age(s.lastPingRecv),
+			"pong_sent", s.pongSent, "last_pong_sent", age(s.lastPongSent),
+			"pong_recv", s.pongRecv,
+			"drw_recv", s.drwRecv, "last_data", age(s.lastDataAt),
+			"unknown_recv", s.unknownRecv, "last_unknown_type", fmt.Sprintf("0x%02X", s.lastUnknownTy),
+			"buf_too_small", s.bufTooSmall)
+	}()
+	c.stats.startedAt = time.Now()
 	ping := cs2PingPolicy{interval: c.pingInterval}
 	lastData := time.Now()
 	buf := make([]byte, cs2ReadBufSize)
@@ -228,6 +275,8 @@ func (c *CS2Conn) worker() {
 				if c.isTCP {
 					if now := time.Now(); ping.due(now) {
 						c.writeControl("keepalive-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
+						c.stats.pingSent++
+						c.stats.lastPingSent = now
 						ping.markSent(now)
 					}
 				}
@@ -239,14 +288,20 @@ func (c *CS2Conn) worker() {
 				}
 				continue
 			}
+			var tooSmall *cs2BufTooSmallError
+			if errors.As(err, &tooSmall) {
+				c.stats.bufTooSmall++
+			}
 			c.setErr(fmt.Errorf("cs2: %w", err))
 			return
 		}
 
 		lastData = time.Now()
+		c.stats.lastDataAt = lastData
 
 		switch buf[1] {
 		case cs2MsgDrw:
+			c.stats.drwRecv++
 			ch := buf[5]
 			channel := c.channels[ch]
 
@@ -254,10 +309,12 @@ func (c *CS2Conn) worker() {
 				// Send PING on data receive, matching the official Mi Home app
 				// (go2rtc parity). Throttled by the ping policy: inbound data
 				// must NOT delay the next PING — see cs2PingPolicy.
-				if now := time.Now(); ping.due(now) {
-					c.writeControl("data-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
-					ping.markSent(now)
-				}
+					if now := time.Now(); ping.due(now) {
+						c.writeControl("data-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
+						c.stats.pingSent++
+						c.stats.lastPingSent = now
+						ping.markSent(now)
+					}
 				err = channel.Push(buf[8:n])
 			} else {
 				var pushed int
@@ -281,14 +338,24 @@ func (c *CS2Conn) worker() {
 		case cs2MsgPing:
 			// Camera probes client liveness with PING; we MUST reply PONG or it
 			// tears down the connection after its retry window (~6s). go2rtc parity.
+			c.stats.pingRecv++
+			c.stats.lastPingRecv = time.Now()
 			c.writeControl("pong", []byte{cs2Magic, cs2MsgPong, 0, 0})
-		case cs2MsgPong, cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP, cs2MsgClose, cs2MsgCloseAck: // skip
+			c.stats.pongSent++
+			c.stats.lastPongSent = time.Now()
+		case cs2MsgPong:
+			c.stats.pongRecv++
+		case cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP, cs2MsgClose, cs2MsgCloseAck: // skip
 		case cs2MsgDrwAck: // only for UDP
 			if fn := c.cmdAck.Load(); fn != nil {
 				(*fn)()
 			}
 		default:
-			// unknown message type, silently ignore
+			// unknown message type, silently ignore — but counted: a stream
+			// misparse (e.g. relayed framing drift) surfaces as a burst of
+			// unknown types right before the teardown (#906).
+			c.stats.unknownRecv++
+			c.stats.lastUnknownTy = buf[1]
 		}
 	}
 }
@@ -394,7 +461,7 @@ func (c *CS2Conn) ReadCommand() (cmd uint32, data []byte, err error) {
 	}
 	cmd = binary.LittleEndian.Uint32(buf)
 	data = buf[4:]
-	return
+	return cmd, data, err
 }
 
 // WriteCommand sends a command on channel 0 with ACK retry for UDP.
@@ -528,7 +595,7 @@ func (c *cs2UDPConn) Read(b []byte) (n int, err error) {
 		}
 
 		if string(addr.IP) == string(c.addr.IP) || n >= 8 {
-			return
+			return n, err
 		}
 	}
 }
@@ -596,17 +663,27 @@ type cs2TCPConn struct {
 	rd *bufio.Reader
 }
 
+// cs2BufTooSmallError marks a TCP frame larger than the worker's 1200-byte
+// read buffer: the frame is skipped and the stream position advances past
+// it, which can desynchronize framing on relays that emit bigger frames
+// (#906 forensics counter).
+type cs2BufTooSmallError struct{ need int }
+
+func (e *cs2BufTooSmallError) Error() string {
+	return fmt.Sprintf("cs2 tcp: buffer too small (frame %d bytes)", e.need)
+}
+
 func (c *cs2TCPConn) Read(p []byte) (n int, err error) {
 	tmp := make([]byte, 8)
 	if _, err = io.ReadFull(c.rd, tmp); err != nil {
-		return
+		return n, err
 	}
 	n = int(binary.BigEndian.Uint16(tmp))
 	if len(p) < n {
-		return 0, fmt.Errorf("cs2 tcp: buffer too small")
+		return 0, &cs2BufTooSmallError{need: n}
 	}
 	_, err = io.ReadFull(c.rd, p[:n])
-	return
+	return n, err
 }
 
 func (c *cs2TCPConn) Write(req []byte) (n int, err error) {
@@ -616,7 +693,7 @@ func (c *cs2TCPConn) Write(req []byte) (n int, err error) {
 	buf[2] = cs2MagicTCP
 	copy(buf[8:], req)
 	_, err = c.TCPConn.Write(buf)
-	return
+	return n, err
 }
 
 func newCS2DataChannel(pushSize, popSize int) *cs2DataChannel {
