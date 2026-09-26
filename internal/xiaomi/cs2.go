@@ -309,12 +309,12 @@ func (c *CS2Conn) worker() {
 				// Send PING on data receive, matching the official Mi Home app
 				// (go2rtc parity). Throttled by the ping policy: inbound data
 				// must NOT delay the next PING — see cs2PingPolicy.
-					if now := time.Now(); ping.due(now) {
-						c.writeControl("data-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
-						c.stats.pingSent++
-						c.stats.lastPingSent = now
-						ping.markSent(now)
-					}
+				if now := time.Now(); ping.due(now) {
+					c.writeControl("data-ping", []byte{cs2Magic, cs2MsgPing, 0, 0})
+					c.stats.pingSent++
+					c.stats.lastPingSent = now
+					ping.markSent(now)
+				}
 				err = channel.Push(buf[8:n])
 			} else {
 				var pushed int
