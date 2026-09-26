@@ -611,6 +611,23 @@ export async function retryRecordingMerge(recordingId: string): Promise<{ status
   });
 }
 
+// --- Recording Repair (playback-failure overlay) ---
+
+export interface RecordingRepairResult {
+  /** repaired | no_problem_found | resolved_fallback | file_missing | unrepairable */
+  status: string;
+  target_id?: string;
+  actions: string[];
+  retry_playback: boolean;
+}
+
+export async function repairRecording(recordingId: string, signal?: AbortSignal): Promise<RecordingRepairResult> {
+  return apiRequest<RecordingRepairResult>(`/recordings/${recordingId}/repair`, {
+    method: 'POST',
+    signal,
+  });
+}
+
 export interface TimelapsePreviewFrame {
   url: string;
   filename: string;

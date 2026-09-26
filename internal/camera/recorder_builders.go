@@ -274,7 +274,7 @@ func (cm *CameraManager) buildGB28181Recorder(cam config.CameraConfig, segDur ti
 	}
 	// Full recording pipeline: segments on disk, recordings DB rows,
 	// SegmentCompleted events, metrics — same guarantees as ingest cams.
-	return recorder.NewGB28181Recorder(recorder.GB28181Config{
+	gbCfg := recorder.GB28181Config{
 		CameraID:      cam.ID,
 		Encoding:      enc,
 		SegmentDur:    segDur,
@@ -284,7 +284,13 @@ func (cm *CameraManager) buildGB28181Recorder(cam config.CameraConfig, segDur ti
 		EventBus:      cm.eventBus,
 		RecordEnabled: cm.cfg.RecordingGate(cam.RecordingEnabled),
 		AudioEnabled:  cam.AudioEnabled,
-	}, nil)
+	}
+	if cam.RecordingMode == "adaptive" {
+		// Validated by config.ValidateCameraRecordingMode (h264/h265 only);
+		// resolved exactly like the RTSP/ONVIF/Xiaomi paths.
+		gbCfg.Adaptive = resolveAdaptiveConfig(cam.Adaptive)
+	}
+	return recorder.NewGB28181Recorder(gbCfg, nil)
 }
 
 // buildIngestRecorder builds the push-ingest recorder shared by SRT / RTMP /
