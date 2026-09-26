@@ -193,6 +193,9 @@ func (d *DB) DeleteRecordingsByCamera(ctx context.Context, cameraID string) erro
 	if err != nil {
 		return fmt.Errorf("delete recordings by camera: %w", err)
 	}
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM merge_lineage WHERE camera_id=?`, cameraID); err != nil {
+		return fmt.Errorf("delete merge lineage by camera: %w", err)
+	}
 	return nil
 }
 

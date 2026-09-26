@@ -876,6 +876,11 @@ func (d *DB) DeleteRecordingsBatch(ctx context.Context, ids []string) ([]string,
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
+		// The deleted rows may be merge-lineage targets; drop their lineage
+		// so stale-ID lookups can't resolve to a vanished recording (#903).
+		if perr := d.purgeLineageByTargetIDs(ctx, ids); perr != nil {
+			return nil, perr
+		}
 		return ids, nil
 	}
 	return nil, nil

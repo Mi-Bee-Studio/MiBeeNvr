@@ -416,6 +416,17 @@ func (d *DB) Init(ctx context.Context) error {
 		completed_at TEXT DEFAULT ''
 	)`
 
+	// v40: added merge_lineage (fold provenance — every consumed recording ID
+	// maps to the surviving merged row, written inside the fold transactions;
+	// lets stale recording IDs resolve to their merged product exactly, without
+	// time-window heuristics, see #903).
+	mergeLineageSQL := `CREATE TABLE IF NOT EXISTS merge_lineage (
+		source_id TEXT PRIMARY KEY,
+		merged_id TEXT NOT NULL,
+		camera_id TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`
+
 	gbDevSQL := `CREATE TABLE IF NOT EXISTS gb28181_devices (
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL DEFAULT '',
@@ -494,7 +505,7 @@ func (d *DB) Init(ctx context.Context) error {
         evicted_at TEXT DEFAULT ''
     );`
 
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL, camGroupsSQL, offloadOutboxSQL} {
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL, camGroupsSQL, offloadOutboxSQL, mergeLineageSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
@@ -543,6 +554,10 @@ func (d *DB) Init(ctx context.Context) error {
 		"CREATE INDEX IF NOT EXISTS idx_timelapse_merges_status ON timelapse_merges(status)",
 		// Archive cleanup tasks
 		"CREATE INDEX IF NOT EXISTS idx_archive_cleanup_status ON archive_cleanup_tasks(status)",
+		// Merge lineage (v40): re-target on bucket re-fold + purge when the
+		// target row is deleted; camera purge on archive cleanup.
+		"CREATE INDEX IF NOT EXISTS idx_merge_lineage_merged ON merge_lineage(merged_id)",
+		"CREATE INDEX IF NOT EXISTS idx_merge_lineage_camera ON merge_lineage(camera_id)",
 		// Offload outbox (issue #874): claim sweep + backlog accounting
 		"CREATE INDEX IF NOT EXISTS idx_offload_outbox_status ON offload_outbox(status)",
 		"CREATE INDEX IF NOT EXISTS idx_offload_outbox_camera ON offload_outbox(camera_id)",
