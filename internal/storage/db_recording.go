@@ -124,6 +124,37 @@ func (d *DB) UpdateRecording(ctx context.Context, r *model.Recording) error {
 	return err
 }
 
+// FindMergedCoveringIDs returns the IDs of merged rows whose
+// [started_at, ended_at] span contains at (#903 detail fallback). Recording
+// IDs are UnixNano creation stamps and a row's creation moment always falls
+// inside its own span, so a stale source-segment ID (deleted after rolling
+// merge consumed it) resolves to the merged product that swallowed it.
+// cameraID may be empty to search all cameras.
+func (d *DB) FindMergedCoveringIDs(ctx context.Context, at time.Time, cameraID string) ([]string, error) {
+	defer d.observeQuery("FindMergedCoveringIDs", time.Now())
+	q := "SELECT id FROM recordings WHERE merge_status='merged' AND started_at<=? AND ended_at>=?"
+	args := []any{formatTime(at), formatTime(at)}
+	if cameraID != "" {
+		q += " AND camera_id=?"
+		args = append(args, cameraID)
+	}
+	q += " ORDER BY started_at LIMIT 4"
+	rows, err := d.readConn().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find merged covering: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("find merged covering: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (d *DB) GetRecording(ctx context.Context, id string) (*model.Recording, error) {
 	row := d.readConn().QueryRowContext(ctx, `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, merge_path, merge_tier, merge_progress, merge_error, merge_quality, archived, ai_status, ai_processed_at, ai_error, motion_score, motion_confidence, activity_flags, timeline_map, COALESCE(layer,0) FROM recordings WHERE id=?;`, id)
 	var r model.Recording

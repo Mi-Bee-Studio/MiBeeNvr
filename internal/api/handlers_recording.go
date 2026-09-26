@@ -479,10 +479,40 @@ func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rec == nil {
+		// #903 fallback: rolling merge deletes source rows once the merged
+		// bucket row exists, but SPA list/timeline snapshots keep pointing at
+		// the dead ID until the next refresh. Recording IDs are UnixNano
+		// creation stamps, so the covering merged row is recoverable from the
+		// stale ID alone (see FindMergedCoveringIDs).
+		if fb := h.fallbackRecording(r, id); fb != nil {
+			w.Header().Set("X-Recording-Fallback-For", id)
+			writeJSON(w, http.StatusOK, fb)
+			return
+		}
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, rec)
+}
+
+// fallbackRecording resolves a stale recording ID to the merged row that
+// consumed it. Returns nil when the ID is not a UnixNano stamp, nothing
+// covers the moment, or the cover is ambiguous across cameras (the caller
+// may pass ?camera_id= to disambiguate).
+func (h *Handler) fallbackRecording(r *http.Request, id string) *model.Recording {
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || n < 1_000_000_000_000_000_000 || n > 1<<62 {
+		return nil
+	}
+	ids, err := h.db.FindMergedCoveringIDs(r.Context(), time.Unix(0, n), r.URL.Query().Get("camera_id"))
+	if err != nil || len(ids) != 1 {
+		return nil
+	}
+	fb, err := h.db.GetRecording(r.Context(), ids[0])
+	if err != nil || fb == nil {
+		return nil
+	}
+	return fb
 }
 
 // handleTimelineGaps returns recording gaps (time periods with no recording)
