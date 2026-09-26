@@ -16,6 +16,8 @@ package merge
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,6 +272,21 @@ func TestRollingAppendBucket_EndToEnd(t *testing.T) {
 
 	pub(0)
 	waitForBucketStable(t, r, cam, 1, 5*time.Second)
+
+	// #912: the create-fold writes the row BEFORE the deferred temp→final
+	// rename runs, and no later step updates it — assert at this point (the
+	// first append below would otherwise overwrite/heal the row and mask the
+	// bug) that the row already references the final, existing file.
+	{
+		recs, _, err := env.db.ListRecordingsWithTotal(context.Background(), model.RecordingFilter{CameraID: cam, Limit: 10})
+		require.NoError(t, err)
+		require.Len(t, recs, 1)
+		require.False(t, strings.HasSuffix(recs[0].FilePath, ".tmp"),
+			"merged row must reference the final path, not the create-time temp file (got %s)", recs[0].FilePath)
+		_, statErr := os.Stat(recs[0].FilePath)
+		require.NoError(t, statErr, "the merged row's file must exist at its recorded path")
+	}
+
 	pub(1)
 	waitForBucketStable(t, r, cam, 2, 5*time.Second)
 

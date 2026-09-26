@@ -388,11 +388,17 @@ func (r *RollingMergeCoordinator) foldAppendBucket(
 	cfg := r.resolveRollingConfig(cameraID)
 
 	var ab *AppendBucket
+	// finalPath carries the create-branch's final segment name out of the
+	// branch scope: the row accounting below runs after the branch, and the
+	// merged row must reference it (not the create-time temp name, #912).
+	// Empty on the append branch — there ab.Path() IS the final path.
+	var finalPath string
 	if bucket.mergedFilePath == "" {
-		tempPath, finalPath, derr := r.store.CreateSegment(cameraID, first.format)
+		tempPath, fp, derr := r.store.CreateSegment(cameraID, first.format)
 		if derr != nil {
 			return "", "", false, fmt.Errorf("create append bucket output: %w", derr)
 		}
+		finalPath = fp
 		nab, cerr := CreateAppendBucket(tempPath, run[0].info, AppendBucketConfig{Window: cfg.Window})
 		if cerr != nil {
 			os.Remove(tempPath)
@@ -471,9 +477,16 @@ func (r *RollingMergeCoordinator) foldAppendBucket(
 			return "", "", false, fmt.Errorf("stat append bucket: %w", ferr)
 		}
 		mergedRec := &model.Recording{
-			ID:          mergedRecID,
-			CameraID:    cameraID,
-			FilePath:    outputPathOf(ab),
+			ID:       mergedRecID,
+			CameraID: cameraID,
+			// The row must reference the FINAL path (#912): the temp→final
+			// rename happens in the deferred block AFTER this insert, and
+			// nothing updates the row afterwards — a row stamped with the
+			// .tmp path stayed a permanent 404 until the next append fold
+			// happened to overwrite it, and a restart in that window left
+			// the orphan behind for the startup sweep. Size is measured on
+			// the temp file (rename doesn't change content).
+			FilePath:    finalPath,
 			Format:      model.Format(first.format),
 			StartedAt:   first.startedAt,
 			EndedAt:     last.endedAt,
