@@ -47,6 +47,7 @@ type mediaRouteServer struct {
 
 	getServicesFails    bool // serve 500 for GetServices (fallback scenario)
 	answerMediaOnDevice bool // tolerant device: answer trt:* on device_service too
+	wrappedServices     bool // legacy wrapped GetServices form (pre-v0.5.0 rs devices)
 }
 
 func newMediaRouteServer(t *testing.T) *mediaRouteServer {
@@ -93,15 +94,23 @@ func (m *mediaRouteServer) serve(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, soapFaultResponse)
 			return
 		}
+		services := fmt.Sprintf(`<tcr:Service><tcr:Namespace>http://www.onvif.org/ver10/device/wsdl</tcr:Namespace><tcr:XAddr>%s</tcr:XAddr></tcr:Service>
+      <tcr:Service><tcr:Namespace>http://www.onvif.org/ver10/media/wsdl</tcr:Namespace><tcr:XAddr>%s</tcr:XAddr></tcr:Service>`, m.deviceEndpoint(), m.mediaXAddr.Load().(string))
+		if m.wrappedServices {
+			// Non-WSDL form emitted by pre-v0.5.0 rs devices: Service entries
+			// nested inside a tds:Services wrapper. The NVR parses direct
+			// children only (WSDL), so this form reads as "no services
+			// advertised" and the raw-SOAP path stays on the device endpoint.
+			services = "<tcr:Services>" + services + "</tcr:Services>"
+		}
 		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
   <s:Body>
     <tcr:GetServicesResponse xmlns:tcr="http://www.onvif.org/ver10/device/wsdl">
-      <tcr:Service><tcr:Namespace>http://www.onvif.org/ver10/device/wsdl</tcr:Namespace><tcr:XAddr>%s</tcr:XAddr></tcr:Service>
-      <tcr:Service><tcr:Namespace>http://www.onvif.org/ver10/media/wsdl</tcr:Namespace><tcr:XAddr>%s</tcr:XAddr></tcr:Service>
+      %s
     </tcr:GetServicesResponse>
   </s:Body>
-</s:Envelope>`, m.deviceEndpoint(), m.mediaXAddr.Load().(string))
+</s:Envelope>`, services)
 	case strings.Contains(b, "GetStreamUri"):
 		m.deviceMediaRequest.Add(1)
 		if m.answerMediaOnDevice {
@@ -130,13 +139,16 @@ func TestGetStreamURIWithProtocolRoutesToMediaEndpoint(t *testing.T) {
 
 	require.Equal(t, int32(1), m.mediaHits.Load(), "GetStreamUri must land on media_service")
 	require.Equal(t, int32(0), m.deviceMediaRequest.Load(), "GetStreamUri must not hit device_service")
-	require.GreaterOrEqual(t, m.getServices.Load(), int32(1), "routing must consult GetServices")
+	// Delta, not absolute: the onvif-go client resolves its own service
+	// endpoints via GetServices too (v2.3.0 #122), so the absolute count
+	// includes the library's call alongside the raw-SOAP route resolution.
+	before := m.getServices.Load()
 
 	// Second call reuses the cached route without a fresh GetServices.
 	_, err = client.GetStreamURIWithProtocol(context.Background(), "profile_1", "RTSP")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), m.mediaHits.Load())
-	require.Equal(t, int32(1), m.getServices.Load())
+	require.Equal(t, before, m.getServices.Load(), "cached route must not re-resolve GetServices")
 }
 
 func TestMediaRouteStaleHostIsRewritten(t *testing.T) {
@@ -176,10 +188,13 @@ func TestMediaRouteFallsBackToDeviceEndpointWhenUnadvertised(t *testing.T) {
 	require.Empty(t, client.mediaRoute, "failed resolution must not be cached as a route")
 
 	// A failed resolution is retried on the next raw media call (transient
-	// GetServices errors are not treated as a definitive absence).
+	// GetServices errors are not treated as a definitive absence). Delta, not
+	// absolute: the library resolves its own endpoints via GetServices too
+	// (v2.3.0), adding calls the raw-SOAP path does not control.
+	before := m.getServices.Load()
 	_, err = client.GetStreamURIWithProtocol(context.Background(), "profile_1", "RTSP")
 	require.NoError(t, err)
-	require.Equal(t, int32(2), m.getServices.Load())
+	require.Equal(t, before+1, m.getServices.Load())
 	require.Equal(t, int32(2), m.deviceMediaRequest.Load())
 }
 
@@ -205,6 +220,28 @@ func TestResolveMediaEndpointPicksVer20WhenVer10Missing(t *testing.T) {
 	got, err := resolveMediaEndpoint(context.Background(), srv.URL+"/onvif/device_service")
 	require.NoError(t, err)
 	require.Equal(t, "http://"+srv.Listener.Addr().String()+"/onvif/media2", got)
+}
+
+// Legacy wrapped GetServices form (pre-v0.5.0 rs devices, onvif-rs #64): the
+// Service entries sit inside a tds:Services wrapper that the WSDL does not
+// define. The parser reads direct children only, so this form resolves to
+// "nothing advertised" — the raw-SOAP media path keeps using the device
+// endpoint instead of misrouting. v0.5.0+ devices send the direct form the
+// parser matches (all other tests in this file).
+func TestMediaRouteWrappedServicesFormKeepsDeviceEndpoint(t *testing.T) {
+	m := newMediaRouteServer(t)
+	m.wrappedServices = true
+	m.answerMediaOnDevice = true // tolerant device: raw media calls on device_service still work
+
+	client := NewClient(m.deviceEndpoint(), "admin", "pw")
+	require.NoError(t, client.Connect(context.Background()))
+
+	info, err := client.GetStreamURIWithProtocol(context.Background(), "profile_1", "HTTP")
+	require.NoError(t, err)
+	require.Equal(t, "rtsp://192.168.1.100:554/stream1", info.URI)
+	require.Equal(t, int32(1), m.deviceMediaRequest.Load(), "wrapped form must not produce a media route")
+	require.Equal(t, int32(0), m.mediaHits.Load())
+	require.Empty(t, client.mediaRoute)
 }
 
 func TestRewriteStaleHost(t *testing.T) {
