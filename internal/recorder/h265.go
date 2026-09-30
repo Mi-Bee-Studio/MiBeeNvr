@@ -528,6 +528,9 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 		<-writerDone
 		return fmt.Errorf("PLAY: %w", err), false
 	}
+	if r.cfg.OnStreamSessionStart != nil {
+		r.cfg.OnStreamSessionStart()
+	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- client.Wait() }()
 

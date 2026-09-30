@@ -758,6 +758,34 @@ func (r *ONVIFRecorder) guessMJPEGURL() string {
 // r.rtspURL when the device serves JPEG over RTSP — see resolveJPEGEncoding —
 // so it must run exactly once) and stashes the result on r.resolvedEncoding so
 // the camera manager can persist it via ResolvedEncoding() (issue #112).
+// syncPointRequester is handed to the H.264/H.265 delegates as
+// OnStreamSessionStart: right after each successful PLAY (initial connect and
+// every reconnect) it asks the camera to mark its next frame as a keyframe,
+// so segment writing starts within a frame instead of waiting for the next
+// GOP boundary (#921). Fire-and-forget by design — devices without the
+// action answer a fault and some log a device-side WARN; neither may affect
+// the recording session, so failures are logged at debug and swallowed.
+func (r *ONVIFRecorder) syncPointRequester() {
+	token := r.ResolvedProfileToken()
+	if token == "" || r.onvifClient == nil {
+		return
+	}
+	go func() {
+		defer func() {
+			if p := recover(); p != nil {
+				onvifRecLogger.Warn("SetSynchronizationPoint callback panicked", "camera_id", r.cfg.CameraID, "panic", p)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := r.onvifClient.RequestSyncPoint(ctx, token); err != nil {
+			onvifRecLogger.Debug("SetSynchronizationPoint failed (ignored)", "camera_id", r.cfg.CameraID, "error", err)
+			return
+		}
+		onvifRecLogger.Debug("SetSynchronizationPoint requested", "camera_id", r.cfg.CameraID, "profile_token", token)
+	}()
+}
+
 func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 	encoding := r.detectEncoding(context.Background())
 	r.mu.Lock()
@@ -780,6 +808,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			RecordEnabled:        r.cfg.RecordEnabled,
 			Adaptive:             r.cfg.Adaptive,
 			AudioTrigger:         r.cfg.AudioTrigger,
+			OnStreamSessionStart: r.syncPointRequester,
 		}
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub
@@ -874,6 +903,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			RecordEnabled:        r.cfg.RecordEnabled,
 			Adaptive:             r.cfg.Adaptive,
 			AudioTrigger:         r.cfg.AudioTrigger,
+			OnStreamSessionStart: r.syncPointRequester,
 		}
 		rec := NewH264Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub

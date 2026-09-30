@@ -51,6 +51,10 @@ type MockDeviceClient struct {
 	GetStreamURIWithProtocolCalls int
 	StreamURIWithProtocol         *StreamInfo
 	StreamURIWithProtocolError    error
+
+	RequestSyncPointCalls  int
+	RequestSyncPointTokens []string
+	RequestSyncPointError  error
 }
 
 func (m *MockDeviceClient) Connect(ctx context.Context) error {
@@ -100,6 +104,14 @@ func (m *MockDeviceClient) GetCapabilities(ctx context.Context) (*DeviceCapabili
 	defer m.mu.Unlock()
 	m.GetCapabilitiesCalls++
 	return m.Capabilities, nil
+}
+
+func (m *MockDeviceClient) RequestSyncPoint(ctx context.Context, profileToken string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.RequestSyncPointCalls++
+	m.RequestSyncPointTokens = append(m.RequestSyncPointTokens, profileToken)
+	return m.RequestSyncPointError
 }
 
 // MockPTZController is a testable PTZController that records calls and returns configured values.
