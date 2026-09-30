@@ -302,7 +302,7 @@ func buildSubscribeEnvelope(consumerURL string, dur time.Duration) string {
 	b.WriteString(`<s:Body>`)
 	b.WriteString(`<wsnt:Subscribe xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2">`)
 	b.WriteString(`<wsnt:ConsumerReference><wsa:Address xmlns:wsa="http://www.w3.org/2005/08/addressing">`)
-	_, _ = xml.EscapeText(&b, []byte(consumerURL))
+	_ = xml.EscapeText(&b, []byte(consumerURL))
 	b.WriteString(`</wsa:Address></wsnt:ConsumerReference>`)
 	fmt.Fprintf(&b, `<wsnt:InitialTerminationTime>PT%.0fS</wsnt:InitialTerminationTime>`, dur.Seconds())
 	b.WriteString(`</wsnt:Subscribe></s:Body></s:Envelope>`)
