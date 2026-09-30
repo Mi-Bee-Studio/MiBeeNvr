@@ -100,6 +100,14 @@ type BaseConfig struct {
 	// with Adaptive non-nil; cameras streaming AAC/Opus audio log that the
 	// trigger stays inactive (no pure-Go decoder).
 	AudioTrigger *AudioTriggerConfig
+
+	// OnStreamSessionStart runs right after each successful RTSP PLAY —
+	// once on the initial start and once per reconnect, before the frame
+	// loop delivers data. ONVIF recorders use it to request an encoder sync
+	// point (SetSynchronizationPoint) so the first keyframe arrives within a
+	// frame instead of at the next GOP boundary. The callback must be cheap
+	// or spawn its own goroutine; failures must not panic. Nil = no-op.
+	OnStreamSessionStart func()
 }
 
 // rtspConnector is implemented by concrete RTSP recorders to provide the
