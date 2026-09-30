@@ -14,6 +14,11 @@ server:
   # and never changes afterwards; device_name defaults to the system hostname.
   # device_id: ""
   # device_name: ""
+  # Base URL ONVIF cameras use to POST push event notifications back to the
+  # NVR (wsnt:Subscribe / Notify). Must be reachable from the cameras and
+  # include any reverse-proxy base path. Empty (default) = cameras keep
+  # Pull-Point polling for camera-side motion events.
+  # advertise_url: "http://192.168.1.10:9090"
   # LAN self-announcement for clients that cannot use multicast/mDNS.
   # discovery:
   #   mdns:

@@ -188,9 +188,23 @@ type CameraManager struct {
 	// eventSubscriberFactory overrides subscriber construction (test seam
 	// for the #711 motion wiring; nil = per-camera ONVIF client path).
 	eventSubscriberFactory func(ctx context.Context, cameraID string, cb onvif.EventCallback) (onvif.EventSubscriber, error)
-	deviceInfoCache        map[string]*onvif.DeviceInfo // camera_id → cached device info
-	deviceInfoMu           sync.RWMutex                 // protects deviceInfoCache
-	eventBus               *event.EventBus              // event bus for publishing segment events
+	// pushSubscriberFactory overrides push-subscriber construction (test seam
+	// for the #922 push transport; nil = per-camera ONVIF client path). The
+	// onFallback hook must be wired into the subscriber's degrade path.
+	pushSubscriberFactory func(ctx context.Context, cameraID, notifyURL string, cb onvif.EventCallback, onFallback func(cameraID, reason string)) (onvif.EventSubscriber, error)
+	// pushTokens are the per-camera random notify-path tokens (#922): the
+	// token in /api/onvif/notify/{cameraID}/{token} is the endpoint's
+	// credential (ONVIF devices cannot BasicAuth). Guarded by onvifMu.
+	pushTokens map[string]string
+	// pushDeclined records why a camera is NOT on the push transport (#922):
+	// device faulted the Subscribe probe, or a renew degraded it. Persisted
+	// for the process lifetime so EnsureMotionSubscription doesn't re-probe
+	// on every reconcile; cleared on camera teardown (update/re-enable).
+	// Guarded by onvifMu.
+	pushDeclined    map[string]string
+	deviceInfoCache map[string]*onvif.DeviceInfo // camera_id → cached device info
+	deviceInfoMu    sync.RWMutex                 // protects deviceInfoCache
+	eventBus        *event.EventBus              // event bus for publishing segment events
 	// relayMgr (optional) is notified when a camera's push-out targets change so
 	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
 	// import cycle.
@@ -276,6 +290,8 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		onvifClients:       make(map[string]*onvif.Client),
 		eventSubscribers:   make(map[string]onvif.EventSubscriber),
 		motionSubErrors:    make(map[string]string),
+		pushTokens:         make(map[string]string),
+		pushDeclined:       make(map[string]string),
 		deviceInfoCache:    make(map[string]*onvif.DeviceInfo),
 		hubFlushLast:       make(map[string][2]int64),
 		hubBytesLast:       make(map[string]int64),

@@ -37,6 +37,15 @@ type ServerConfig struct {
 	// is mounted ONLY on this listener, so those headers are ignored on TCP.
 	// Empty = no socket listener. Overridable via NVR_UNIX_SOCKET.
 	UnixSocket string `yaml:"unix_socket"`
+	// AdvertiseURL is the base URL ONVIF devices use to reach the NVR for
+	// push event delivery (#922): when set, cameras with
+	// motion_source: camera:onvif are probed with a wsnt:Subscribe whose
+	// ConsumerReference points at "<AdvertiseURL>/api/onvif/notify/...", and
+	// the device POSTs wsnt:Notify messages there. Must be reachable FROM THE
+	// CAMERAS (not the browser) and include any reverse-proxy base path, e.g.
+	// "http://192.168.1.10:9090" or "https://nvr.example.com/app/mibee-nvr".
+	// Empty = push transport disabled; every camera keeps Pull-Point polling.
+	AdvertiseURL string `yaml:"advertise_url"`
 	// BasePath is the URL prefix the app is served under when fronted by a
 	// reverse proxy or NAS unified gateway (e.g. "/app/mibee-nvr"). Incoming
 	// request paths carrying the prefix are stripped before routing, and the
