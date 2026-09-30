@@ -130,13 +130,12 @@ func TestPushFallbackDegradesToPull(t *testing.T) {
 	fb("cam-o", "renew failed")
 
 	// The degrade tears the push subscriber down and the re-run reconcile
-	// takes the pull path (tombstoned).
+	// takes the pull path (tombstoned). The async goroutine writes the mock
+	// counters under the mock's lock — poll through the race-safe accessors.
 	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return pullSub.SubscribeCalls == 1 && pushSub.UnsubscribeCalls == 1
+		return pullSub.SubscribeCallCount() == 1 && pushSub.UnsubscribeCallCount() == 1
 	}, 5*time.Second, 100*time.Millisecond, "degrade must switch to pull-point transport")
-	require.Equal(t, 1, pushSub.SubscribeCalls, "declined camera must not re-probe push")
+	require.Equal(t, 1, pushSub.SubscribeCallCount(), "declined camera must not re-probe push")
 
 	st := cm.ONVIFEventsStatus("cam-o")
 	require.True(t, st.Subscribed)

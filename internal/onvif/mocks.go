@@ -331,6 +331,22 @@ func (m *MockEventSubscriber) Status(cameraID string) EventSubscriptionStatus {
 	return EventSubscriptionStatus{Subscribed: m.SubscribeCalls > m.UnsubscribeCalls, State: StateActive}
 }
 
+// SubscribeCallCount and UnsubscribeCallCount are race-safe accessors for
+// tests that poll these counters from other goroutines (require.Eventually
+// under -race); reading the exported fields directly races with the mock's
+// own locked writes.
+func (m *MockEventSubscriber) SubscribeCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.SubscribeCalls
+}
+
+func (m *MockEventSubscriber) UnsubscribeCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.UnsubscribeCalls
+}
+
 var _ EventSubscriber = (*MockEventSubscriber)(nil)
 
 // MockDeviceManager is a testable DeviceManager.
