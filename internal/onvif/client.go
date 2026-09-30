@@ -135,6 +135,23 @@ func (c *Client) GetProfiles(ctx context.Context) ([]DeviceProfile, error) {
 	return result, nil
 }
 
+// RequestSyncPoint asks the device to mark the next frame of the profile's
+// stream as a sync point (trt:SetSynchronizationPoint), so a recorder that
+// just (re)connected receives a keyframe immediately instead of waiting for
+// the next GOP boundary. Best-effort by contract: devices without the action
+// answer a Sender fault, which callers log and ignore.
+func (c *Client) RequestSyncPoint(ctx context.Context, profileToken string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ready {
+		return fmt.Errorf("onvif client not connected, call Connect() first")
+	}
+	if err := c.client.Media().SetSynchronizationPoint(ctx, profileToken); err != nil {
+		return fmt.Errorf("set synchronization point: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*StreamInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
