@@ -141,6 +141,15 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	}
 	startCam := cam
 
+	// Reconcile the camera-side ONVIF motion subscription (#711/#922): a
+	// camera CREATED with motion_source camera:onvif must not wait for its
+	// first update or the next boot to get its event subscription — found
+	// during the #922 push joint-debug (create left the camera unsubscribed
+	// until a PUT touched it). Runs BEFORE the (synchronous, dialing)
+	// recorder start so an unreachable camera does not delay the
+	// subscription; async like the boot path — Subscribe dials the camera.
+	go cm.EnsureMotionSubscription(context.Background(), startCam)
+
 	if needsRecorderStart {
 		if err := cm.startRecorder(ctx, startCam, segDur); err != nil {
 			logger.Error("failed to start recorder", "error", err)
