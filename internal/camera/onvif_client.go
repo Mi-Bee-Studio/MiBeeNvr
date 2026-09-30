@@ -255,10 +255,16 @@ func (cm *CameraManager) SubscribeONVIFEvents(ctx context.Context, cameraID stri
 	return nil
 }
 
-// UnsubscribeONVIFEvents unsubscribes from PullPoint events for the given camera.
+// UnsubscribeONVIFEvents unsubscribes from events (pull or push transport)
+// for the given camera. Teardown also clears the push-decline tombstone so a
+// re-enabled / re-saved camera re-probes the push transport (#922).
 func (cm *CameraManager) UnsubscribeONVIFEvents(ctx context.Context, cameraID string) error {
 	cm.onvifMu.Lock()
 	defer cm.onvifMu.Unlock()
+
+	// Always clear the tombstone — a camera being torn down is about to be
+	// reconciled again (update/disable), and the reconcile decides fresh.
+	delete(cm.pushDeclined, cameraID)
 
 	sub, exists := cm.eventSubscribers[cameraID]
 	if !exists {

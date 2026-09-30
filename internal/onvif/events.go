@@ -354,6 +354,7 @@ func (e *EventSubscriberImpl) Status(cameraID string) EventSubscriptionStatus {
 	st.LastError = ps.lastError
 	st.ConsecutivePollErrors = ps.pollErrs
 	st.PollInterval = e.pollInterval.String()
+	st.Transport = "pull"
 	return st
 }
 
@@ -382,6 +383,9 @@ func (e *EventSubscriberImpl) SetEventCallback(cb EventCallback) {
 type EventSubscriptionStatus struct {
 	Subscribed            bool      `json:"subscribed"`
 	State                 string    `json:"state"`
+	// Transport is how events arrive: "pull" (PullPoint polling) or "push"
+	// (device-POSTed wsnt:Notify, #922). Empty on legacy snapshots.
+	Transport             string    `json:"transport,omitempty"`
 	SubscriptionRef       string    `json:"subscription_ref,omitempty"`
 	TerminationTime       time.Time `json:"termination_time,omitempty"`
 	PollInterval          string    `json:"poll_interval,omitempty"`

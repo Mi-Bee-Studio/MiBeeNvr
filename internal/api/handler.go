@@ -425,6 +425,11 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 		if h.gb28181SnapMgr != nil {
 			r.Post("/api/gb28181/snapshot/upload", h.handleGB28181SnapshotUpload)
 		}
+		// ONVIF push-event notify consumer (public, rate-limited — the token
+		// in the URL is the credential; devices cannot BasicAuth, #922)
+		if h.camMgr != nil {
+			r.Post("/api/onvif/notify/{cameraID}/{token}", h.handleONVIFNotify)
+		}
 	})
 }
 

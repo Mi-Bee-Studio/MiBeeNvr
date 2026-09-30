@@ -2,7 +2,12 @@ package camera
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -76,6 +81,13 @@ func (cm *CameraManager) SetEventSubscriberFactory(f func(ctx context.Context, c
 	cm.eventSubscriberFactory = f
 }
 
+// SetPushSubscriberFactory overrides how push event subscribers are built
+// (test seam for the #922 push transport; production path goes through the
+// per-camera ONVIF client).
+func (cm *CameraManager) SetPushSubscriberFactory(f func(ctx context.Context, cameraID, notifyURL string, cb onvif.EventCallback, onFallback func(cameraID, reason string)) (onvif.EventSubscriber, error)) {
+	cm.pushSubscriberFactory = f
+}
+
 // EnsureMotionSubscription reconciles the camera's Pull-Point subscription
 // with its motion_source setting: subscribe when camera:onvif is active on an
 // ONVIF camera, tear down otherwise. Idempotent — called at boot, after
@@ -116,6 +128,18 @@ func (cm *CameraManager) EnsureMotionSubscription(ctx context.Context, cam confi
 
 	cameraID := cam.ID
 	cb := func(evt onvif.ONVIFEvent) { cm.onONVIFEvent(cameraID, evt) }
+
+	// Push transport first (#922): only when the NVR advertises a base URL
+	// devices can POST back to, and this camera hasn't already declined push
+	// (probe fault or a renew degrade — both tombstoned until teardown).
+	if declined := cm.pushDeclinedReason(cameraID); declined == "" && cm.pushConfigured() {
+		if cm.startPushSubscription(ctx, cam, cb) {
+			recordOutcome(nil)
+			return
+		}
+		// Push unavailable for this camera right now — fall through to the
+		// Pull-Point path unchanged.
+	}
 
 	if factory != nil {
 		sub, err := factory(ctx, cameraID, cb)
@@ -232,4 +256,155 @@ func (cm *CameraManager) onONVIFEvent(cameraID string, evt onvif.ONVIFEvent) {
 			}
 		}
 	}
+}
+
+// --- push transport (wsnt:Subscribe + device-POSTed Notify, #922) ----------
+
+// pushConfigured reports whether server.advertise_url enables the push
+// transport at all. Nil-config (tests) = disabled.
+func (cm *CameraManager) pushConfigured() bool {
+	return cm.cfg != nil && cm.cfg.Server.AdvertiseURL != ""
+}
+
+// pushDeclinedReason returns why the camera is not on push ("" = eligible).
+func (cm *CameraManager) pushDeclinedReason(cameraID string) string {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	return cm.pushDeclined[cameraID]
+}
+
+// pushTokenFor returns the camera's stable notify-path token, generating one
+// (crypto/rand, hex) on first use.
+func (cm *CameraManager) pushTokenFor(cameraID string) string {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	if t, ok := cm.pushTokens[cameraID]; ok {
+		return t
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is practically fatal system-wide; a fixed
+		// fallback token still keeps the endpoint non-guessable per process.
+		logger.Warn("crypto/rand unavailable for ONVIF notify token", "error", err)
+		for i := range b {
+			b[i] = byte(time.Now().UnixNano() >> (i % 8))
+		}
+	}
+	t := hex.EncodeToString(b)
+	cm.pushTokens[cameraID] = t
+	return t
+}
+
+// onvifNotifyURL builds the ConsumerReference address for a camera: the
+// advertised base URL plus the token-credentialed notify path.
+func (cm *CameraManager) onvifNotifyURL(cameraID, token string) string {
+	base := strings.TrimSuffix(cm.cfg.Server.AdvertiseURL, "/")
+	return base + "/api/onvif/notify/" + cameraID + "/" + token
+}
+
+// startPushSubscription probes the camera with a wsnt:Subscribe and, on
+// success, records it as the camera's event subscriber. Returns false when
+// push is unavailable (probe fault / transport error) — the caller then uses
+// the Pull-Point path. Renew failures later degrade the camera back via the
+// fallback hook: tombstone the camera, tear the push subscriber down, and
+// re-run the reconcile (which starts Pull-Point).
+func (cm *CameraManager) startPushSubscription(ctx context.Context, cam config.CameraConfig, cb onvif.EventCallback) bool {
+	cameraID := cam.ID
+	token := cm.pushTokenFor(cameraID)
+	notifyURL := cm.onvifNotifyURL(cameraID, token)
+
+	decline := func(reason string) {
+		cm.onvifMu.Lock()
+		cm.pushDeclined[cameraID] = reason
+		cm.onvifMu.Unlock()
+	}
+	fallback := func(id, reason string) {
+		logger.Warn("ONVIF push subscription degraded to pull-point", "camera_id", id, "reason", reason)
+		// Tear the dead push subscriber down first (the teardown clears the
+		// decline tombstone), THEN tombstone the camera so the reconcile
+		// below sees "no subscriber" and takes the Pull-Point path without
+		// re-probing push.
+		cm.UnsubscribeONVIFEvents(context.Background(), id)
+		decline(reason)
+		if c := cm.GetCameraConfig(id); c != nil {
+			go cm.EnsureMotionSubscription(context.Background(), *c)
+		}
+	}
+
+	var sub onvif.EventSubscriber
+	if factory := cm.pushSubscriberFactory; factory != nil {
+		s, err := factory(ctx, cameraID, notifyURL, cb, fallback)
+		if err != nil {
+			logger.Debug("push subscriber construction failed; using pull-point", "camera_id", cameraID, "error", err)
+			return false
+		}
+		sub = s
+	} else {
+		client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
+		if err != nil || client == nil {
+			logger.Debug("push probe skipped (no ONVIF client); using pull-point", "camera_id", cameraID)
+			return false
+		}
+		sub = client.NewPushSubscriber(
+			onvif.WithPushCallback(cb),
+			onvif.WithPushNotifyURL(notifyURL),
+			onvif.WithPushFallback(fallback),
+		)
+		if sub == nil {
+			return false
+		}
+	}
+
+	if err := sub.Subscribe(ctx, cameraID); err != nil {
+		if errors.Is(err, onvif.ErrPushNotSupported) {
+			logger.Info("device declined ONVIF push events; using pull-point", "camera_id", cameraID)
+			decline(err.Error())
+			return false
+		}
+		logger.Debug("ONVIF push subscribe failed; trying pull-point", "camera_id", cameraID, "error", err)
+		return false
+	}
+
+	cm.onvifMu.Lock()
+	cm.eventSubscribers[cameraID] = sub
+	cm.onvifMu.Unlock()
+	logger.Info("subscribed to ONVIF events via push", "camera_id", cameraID)
+	return true
+}
+
+// HandleOnvifNotify is the HTTP consumer entry for device-POSTed wsnt:Notify
+// bodies: it validates the path token (constant-time), parses the payload and
+// dispatches each event through the same path as Pull-Point events. The
+// returned HTTP status/message pair maps: 200 valid (zero events included —
+// some devices heartbeat empty Notifies), 404 unknown camera or token, 400
+// malformed body.
+func (cm *CameraManager) HandleOnvifNotify(cameraID, token string, body []byte) (int, string) {
+	cm.onvifMu.Lock()
+	want, known := cm.pushTokens[cameraID]
+	sub := cm.eventSubscribers[cameraID]
+	cm.onvifMu.Unlock()
+
+	// Constant-time compare on equal-length assumption; unknown camera and
+	// wrong token are the same 404 so the endpoint reveals nothing.
+	if !known || subtle.ConstantTimeCompare([]byte(want), []byte(token)) != 1 {
+		return http.StatusNotFound, "not found"
+	}
+
+	events, err := onvif.ParseNotifyEvents(body, cameraID)
+	if err != nil {
+		return http.StatusBadRequest, err.Error()
+	}
+	if len(events) == 0 {
+		return http.StatusOK, ""
+	}
+
+	deliverer, _ := sub.(onvif.EventDeliverer)
+	for _, evt := range events {
+		if deliverer != nil {
+			deliverer.DeliverEvent(evt)
+			continue
+		}
+		cm.onONVIFEvent(cameraID, evt)
+	}
+	return http.StatusOK, ""
 }

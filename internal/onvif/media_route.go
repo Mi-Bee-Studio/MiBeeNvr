@@ -114,3 +114,20 @@ func rewriteStaleHost(xaddr, deviceEndpoint string) string {
 	xu.Host = du.Host
 	return xu.String()
 }
+
+// resolveEventsEndpoint returns the advertised ver10 events-service XAddr
+// (rewritten to the device endpoint's host when stale) for wsnt:* raw SOAP —
+// the push-subscription routing companion of resolveMediaEndpoint (#922).
+// Empty string means nothing usable was advertised — callers keep the device
+// endpoint.
+func resolveEventsEndpoint(ctx context.Context, deviceEndpoint string) (string, error) {
+	xaddrs, err := fetchServiceXAddrs(ctx, deviceEndpoint)
+	if err != nil {
+		return "", err
+	}
+	advertised := xaddrs[nsEventsVer10]
+	if advertised == "" {
+		return "", nil
+	}
+	return rewriteStaleHost(advertised, deviceEndpoint), nil
+}

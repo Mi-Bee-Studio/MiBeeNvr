@@ -36,6 +36,12 @@ type Client struct {
 	// already hold it.
 	mediaRoute         string
 	mediaRouteResolved bool
+
+	// eventsRoute is the advertised events XAddr for wsnt:* raw SOAP, resolved
+	// once via GetServices (#922) — same routing pattern as mediaRoute.
+	// Guarded by mu.
+	eventsRoute         string
+	eventsRouteResolved bool
 }
 
 // NewClient creates a new ONVIF client for a specific device.
@@ -558,4 +564,55 @@ func (c *Client) NewEventSubscriber(opts ...EventSubscriberOption) EventSubscrib
 		return nil
 	}
 	return NewEventSubscriber(c.client, opts...)
+}
+
+// eventsSOAP posts a raw SOAP envelope for the push event subscription
+// (#922): an empty endpoint resolves to the advertised events XAddr (cached,
+// like the media route); Renew/Unsubscribe pass the subscription's own
+// SubscriptionManager address. Auth is WS-Security PasswordText — the same
+// raw-SOAP credential the PTZ/device raw paths use.
+func (c *Client) eventsSOAP(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
+	c.mu.Lock()
+	if !c.ready {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
+	}
+	if endpoint == "" && c.eventsRoute == "" && !c.eventsRouteResolved {
+		addr, err := resolveEventsEndpoint(ctx, c.endpoint)
+		c.mu.Unlock()
+		if err != nil {
+			logger.Debug("GetServices events endpoint resolution failed, using device endpoint", "device", c.endpoint, "error", err)
+			addr = ""
+		}
+		c.mu.Lock()
+		c.eventsRouteResolved = true
+		if addr != "" {
+			c.eventsRoute = addr
+			logger.Info("routing events SOAP actions to advertised events endpoint", "device", c.endpoint, "events", addr)
+		}
+	}
+	route := c.eventsRoute
+	c.mu.Unlock()
+
+	if endpoint == "" {
+		endpoint = route // may be empty → device endpoint fallback below
+	}
+	if endpoint == "" {
+		endpoint = c.endpoint
+	}
+	return c.DoRawSOAPWithPasswordText(ctx, endpoint, soapBody)
+}
+
+// NewPushSubscriber creates a push-transport EventSubscriber (wsnt:Subscribe +
+// device-POSTed Notify) backed by this client's raw-SOAP events route.
+// Requires Connect() to have been called first; nil-safe like the other
+// factories (callers treat nil as "no push").
+func (c *Client) NewPushSubscriber(opts ...PushOption) EventSubscriber {
+	c.mu.Lock()
+	ready := c.ready
+	c.mu.Unlock()
+	if !ready {
+		return nil
+	}
+	return NewPushSubscriber(c.eventsSOAP, opts...)
 }
