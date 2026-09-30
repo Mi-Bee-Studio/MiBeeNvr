@@ -201,10 +201,10 @@ type CameraManager struct {
 	// for the process lifetime so EnsureMotionSubscription doesn't re-probe
 	// on every reconcile; cleared on camera teardown (update/re-enable).
 	// Guarded by onvifMu.
-	pushDeclined map[string]string
-	deviceInfoCache        map[string]*onvif.DeviceInfo // camera_id → cached device info
-	deviceInfoMu           sync.RWMutex                 // protects deviceInfoCache
-	eventBus               *event.EventBus              // event bus for publishing segment events
+	pushDeclined    map[string]string
+	deviceInfoCache map[string]*onvif.DeviceInfo // camera_id → cached device info
+	deviceInfoMu    sync.RWMutex                 // protects deviceInfoCache
+	eventBus        *event.EventBus              // event bus for publishing segment events
 	// relayMgr (optional) is notified when a camera's push-out targets change so
 	// the relay engine can reconcile. Interface-typed to avoid a camera<->relay
 	// import cycle.

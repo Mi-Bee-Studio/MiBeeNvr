@@ -381,8 +381,8 @@ func (e *EventSubscriberImpl) SetEventCallback(cb EventCallback) {
 
 // EventSubscriptionStatus is the per-camera subscription diagnostic snapshot.
 type EventSubscriptionStatus struct {
-	Subscribed            bool      `json:"subscribed"`
-	State                 string    `json:"state"`
+	Subscribed bool   `json:"subscribed"`
+	State      string `json:"state"`
 	// Transport is how events arrive: "pull" (PullPoint polling) or "push"
 	// (device-POSTed wsnt:Notify, #922). Empty on legacy snapshots.
 	Transport             string    `json:"transport,omitempty"`

@@ -133,7 +133,6 @@ type pushTestDevice struct {
 	renewFail    bool
 	unsubscribes int
 	granted      time.Duration
-	notifyURL    string
 	srv          *httptest.Server
 }
 

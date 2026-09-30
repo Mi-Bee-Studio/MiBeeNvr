@@ -324,7 +324,7 @@ func (cm *CameraManager) startPushSubscription(ctx context.Context, cam config.C
 		// decline tombstone), THEN tombstone the camera so the reconcile
 		// below sees "no subscriber" and takes the Pull-Point path without
 		// re-probing push.
-		cm.UnsubscribeONVIFEvents(context.Background(), id)
+		_ = cm.UnsubscribeONVIFEvents(context.Background(), id)
 		decline(reason)
 		if c := cm.GetCameraConfig(id); c != nil {
 			go cm.EnsureMotionSubscription(context.Background(), *c)
