@@ -401,7 +401,9 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     // Xiaomi cameras authenticate via Xiaomi cloud account token (configured in
     // Settings), NOT per-camera username/password. Hiding the credential fields
     // avoids the misconception that they apply (issue #68-1).
-    capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: false },
+    // ptz: motor control on PT models goes through /api/cameras/{id}/ptz/*
+    // which the backend routes to the Xiaomi motor command.
+    capabilities: { hls: true, ptz: true, snapshot: false, discovery: true, auth: false },
   },
   {
     id: 'whip',

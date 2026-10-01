@@ -45,13 +45,18 @@ func (p *PTZControllerImpl) SetProfileToken(token string) {
 	p.profileToken = token
 }
 
+// defaultContinuousMoveTimeout bounds a runaway ContinuousMove (missed stop
+// — dropped client, pointercancel, tab blur) when the client's stop never
+// arrives: the camera self-stops after this window (ONVIF xs:duration).
+const defaultContinuousMoveTimeout = "PT10S"
+
 // ContinuousMove starts continuous PTZ movement at the given velocity.
 func (p *PTZControllerImpl) ContinuousMove(ctx context.Context, velocity PTZVector) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Provide default timeout — some cameras reject ContinuousMove without it
-	timeout := "PT10S"
+	// Some cameras also reject ContinuousMove without an explicit timeout.
+	timeout := defaultContinuousMoveTimeout
 	return p.client.PTZ().ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), &timeout)
 }
 

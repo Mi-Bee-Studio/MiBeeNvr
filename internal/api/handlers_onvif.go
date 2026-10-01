@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -213,6 +214,78 @@ func (h *Handler) cameraProtocol(r *http.Request, cameraID string) string {
 	return camera.Protocol
 }
 
+// gbPTZFromVector maps an ONVIF-style continuous-move vector onto the GB/T
+// 28181 PTZ direction bits (one axis at a time, zoom > tilt > pan priority,
+// matching the direction pad semantics) with a speed byte proportional to
+// the dominant axis magnitude (|axis|*255, so the UI's 0.5 default maps to
+// the protocol's mid speed 128).
+func gbPTZFromVector(pan, tilt, zoom float64) (direction string, speed byte) {
+	switch {
+	case zoom > 0:
+		return platform.DirZoomIn, gbSpeedFromMagnitude(zoom)
+	case zoom < 0:
+		return platform.DirZoomOut, gbSpeedFromMagnitude(zoom)
+	case tilt > 0:
+		return platform.DirUp, gbSpeedFromMagnitude(tilt)
+	case tilt < 0:
+		return platform.DirDown, gbSpeedFromMagnitude(tilt)
+	case pan > 0:
+		return platform.DirRight, gbSpeedFromMagnitude(pan)
+	case pan < 0:
+		return platform.DirLeft, gbSpeedFromMagnitude(pan)
+	default:
+		return platform.DirStop, 0
+	}
+}
+
+func gbSpeedFromMagnitude(v float64) byte {
+	s := int(math.Abs(v)*255 + 0.5)
+	if s < 1 {
+		s = 1
+	}
+	if s > 255 {
+		s = 255
+	}
+	return byte(s)
+}
+
+// xiaomiPTZFromVector maps an ONVIF-style continuous-move vector onto the
+// Xiaomi motor wire command. Xiaomi PT cameras have no optical zoom — a
+// zoom-dominant vector is an explicit error so callers surface the
+// capability mismatch instead of a silent no-op. A zero vector maps to
+// "stop". Speed scales as magnitude*10 (the legacy pad's default speed 5
+// corresponds to the unified API's 0.5 default magnitude).
+func xiaomiPTZFromVector(pan, tilt, zoom float64) (direction string, speed int, err error) {
+	ax, ay, az := math.Abs(pan), math.Abs(tilt), math.Abs(zoom)
+	switch {
+	case az > 0 && az >= ax && az >= ay:
+		return "", 0, errors.New("PTZ zoom is not supported on Xiaomi cameras")
+	case ay > 0 && ay >= ax:
+		if tilt > 0 {
+			return "up", xiaomiSpeedFromMagnitude(ay), nil
+		}
+		return "down", xiaomiSpeedFromMagnitude(ay), nil
+	case ax > 0:
+		if pan > 0 {
+			return "right", xiaomiSpeedFromMagnitude(ax), nil
+		}
+		return "left", xiaomiSpeedFromMagnitude(ax), nil
+	default:
+		return "stop", 0, nil
+	}
+}
+
+func xiaomiSpeedFromMagnitude(v float64) int {
+	s := int(v*10 + 0.5)
+	if s < 1 {
+		s = 1
+	}
+	if s > 100 {
+		s = 100
+	}
+	return s
+}
+
 // handleGB28181PTZMove maps an ONVIF-style continuous-move vector onto the
 // GB/T 28181 PTZ direction bits (one axis at a time, matching the direction
 // pad semantics) and sends it via the channel PTZ controller.
@@ -226,23 +299,8 @@ func (h *Handler) handleGB28181PTZMove(w http.ResponseWriter, r *http.Request, c
 		WriteError(w, http.StatusServiceUnavailable, "GB28181 PTZ controller not available")
 		return
 	}
-	const speed = byte(128)
-	switch {
-	case zoom > 0:
-		h.sendGB28181PTZ(w, channelID, platform.DirZoomIn, speed)
-	case zoom < 0:
-		h.sendGB28181PTZ(w, channelID, platform.DirZoomOut, speed)
-	case tilt > 0:
-		h.sendGB28181PTZ(w, channelID, platform.DirUp, speed)
-	case tilt < 0:
-		h.sendGB28181PTZ(w, channelID, platform.DirDown, speed)
-	case pan > 0:
-		h.sendGB28181PTZ(w, channelID, platform.DirRight, speed)
-	case pan < 0:
-		h.sendGB28181PTZ(w, channelID, platform.DirLeft, speed)
-	default:
-		h.sendGB28181PTZ(w, channelID, platform.DirStop, 0)
-	}
+	direction, speed := gbPTZFromVector(pan, tilt, zoom)
+	h.sendGB28181PTZ(w, channelID, direction, speed)
 }
 
 // handleGB28181PTZStop sends the GB/T 28181 PTZ stop command.
@@ -293,7 +351,7 @@ func (h *Handler) sendGB28181PTZ(w http.ResponseWriter, channelID, direction str
 
 func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	h.suppressPTZMotion(cameraID)
+	h.suppressPTZMotion(cameraID, ptzSuppressWindowMove)
 	var req struct {
 		Mode string  `json:"mode"`
 		Pan  float64 `json:"pan"`
@@ -312,6 +370,13 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	// DeviceControl PTZ command via the SIP MESSAGE transport.
 	if h.cameraProtocol(r, cameraID) == "gb28181" {
 		h.handleGB28181PTZMove(w, r, cameraID, req.Pan, req.Tilt, req.Zoom)
+		return
+	}
+	// Xiaomi cameras: translate the vector into the motor wire command so
+	// every surface (App / surveillance grid) drives PT cams through the same
+	// unified endpoint as ONVIF/GB cameras.
+	if h.cameraProtocol(r, cameraID) == "xiaomi" {
+		h.handleXiaomiVectorPTZMove(w, cameraID, req.Pan, req.Tilt, req.Zoom)
 		return
 	}
 	if !h.requireONVIF(w, r) {
@@ -345,9 +410,18 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	h.suppressPTZMotion(cameraID)
+	h.suppressPTZMotion(cameraID, ptzSuppressWindowShort)
 	if h.cameraProtocol(r, cameraID) == "gb28181" {
 		h.handleGB28181PTZStop(w, r, cameraID)
+		return
+	}
+	if h.cameraProtocol(r, cameraID) == "xiaomi" {
+		if err := h.xiaomiMotorCommand(cameraID, "stop", 0); err != nil {
+			logger.Error("Xiaomi PTZ stop failed", "camera_id", cameraID, "error", err)
+			WriteError(w, h.xiaomiPTZStatusCode(err), fmt.Sprintf("PTZ stop failed: %v", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
 	if !h.requireONVIF(w, r) {
@@ -495,7 +569,7 @@ func (h *Handler) handlePTZCreatePreset(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) handlePTZGoToPreset(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
-	h.suppressPTZMotion(cameraID)
+	h.suppressPTZMotion(cameraID, ptzSuppressWindowMove)
 	token := chi.URLParam(r, "token")
 	if h.cameraProtocol(r, cameraID) == "gb28181" {
 		h.handleGB28181PTZGoToPreset(w, r, cameraID, token)
