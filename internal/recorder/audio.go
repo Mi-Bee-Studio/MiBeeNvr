@@ -154,6 +154,19 @@ func (r *AudioRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 // probes (freeze detection, FPS stats) must not run on it.
 func (r *AudioRecorder) AudioOnly() bool { return true }
 
+// SetAudioConfigForTest seeds the codec snapshot from outside the package
+// (normally written by connectAndStream). Mirrors XiaomiRecorder's
+// SetMISSClientForTest precedent — API-level handler tests use it to arm the
+// audio-info accessors without a live RTSP source.
+func (r *AudioRecorder) SetAudioConfigForTest(codec string, sampleRate, channels int, muxerConfig []byte) {
+	switch codec {
+	case "aac":
+		r.audioCfg.Store(&audioConfig{codec: "aac", sampleRate: sampleRate, channels: channels, muxerConfig: muxerConfig})
+	default:
+		r.audioCfg.Store(&audioConfig{codec: "g711", sampleRate: sampleRate, channels: channels, muxerConfig: muxerConfig})
+	}
+}
+
 // AudioCodec / AudioConfig / AudioSampleRate / AudioChannels implement the
 // audioInfoProvider probe used by the WS and WebRTC handlers.
 func (r *AudioRecorder) AudioCodec() string {

@@ -484,7 +484,9 @@ func (h *Handler) registerMediaRoutes(r chi.Router) {
 	// per-IP rate-limited on top: the transcode is CPU work proportional to
 	// segment size, so a looping/scrubbing client must not be able to turn
 	// playback into a self-DoS (60/min covers segment-per-click playback plus
-	// browser range re-probes with wide margin).
+	// browser range re-probes with wide margin). The live-listening stream
+	// shares the limiter for its OPEN (sessions are long-lived — one request
+	// each, the limiter never bites mid-stream).
 	r.Group(func(r chi.Router) {
 		rl := middleware.NewRateLimiter(context.Background(), middleware.RateLimiterConfig{
 			MaxRequests: 60,
@@ -493,7 +495,11 @@ func (h *Handler) registerMediaRoutes(r chi.Router) {
 		r.Use(rl.Handler)
 		r.Get("/api/recordings/{id}/audio.wav", h.handleAudioWav)
 		r.Head("/api/recordings/{id}/audio.wav", h.handleAudioWav)
+		r.Get("/api/cameras/{cameraID}/audio/live.wav", h.handleAudioLiveWav)
 	})
+	// Audio access audit trail (compliance): the WAV fetch above and live
+	// sessions append here; queryable newest-first.
+	r.Get("/api/recordings/audio-audit", h.handleAudioAudit)
 	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)
 	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
 	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, setContext } from 'svelte';
-  import { getCamera, listCameras, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, xiaomiDevices, getTranscodingSettings, getTranscodingCheck, listCameraGroups, API_BASE } from '$lib/api';
+  import { getCamera, listCameras, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, xiaomiDevices, getTranscodingSettings, getTranscodingCheck, listCameraGroups, API_BASE, appendAuthToken } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo, XiaomiDevice } from '$lib/api';
   import { startBackfill } from '$lib/api/transcoding';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings, AudioLines } from 'lucide-svelte';
@@ -398,14 +398,31 @@
         </div>
       </div>
     {:else if camera && camera.encoding === 'audio'}
-      <!-- Audio-source device (v43): no video surface exists to mount any
-           player chain on — offer the honest dead end instead of a spinner
-           that never resolves. -->
-      <div class="card p-8 text-center">
-        <div class="mb-4 flex justify-center th-text-secondary"><AudioLines size={48} /></div>
-        <h3 class="text-lg font-medium th-text-primary mb-2">{camera.name || camera.id}</h3>
-        <p class="th-text-secondary mb-4">{t('live.audioOnlyNotice')}</p>
-        <button onclick={goBack} class="btn btn-secondary btn-sm">
+      <!-- Audio-source device (v43): no video surface — live LISTENING via
+           the streaming WAV endpoint instead of any player chain. -->
+      <div class="card p-8 text-center max-w-xl mx-auto">
+        <div class="flex items-center gap-3 justify-center mb-4 flex-wrap">
+          <button onclick={goBack} class="btn btn-ghost btn-sm flex items-center gap-1">
+            <ArrowLeft size={16} />
+            {t('nav.cameras')}
+          </button>
+          <h2 class="text-xl font-bold th-text-primary truncate flex items-center gap-2">
+            <AudioLines size={20} class="th-text-secondary" />
+            {camera.name || camera.id}
+          </h2>
+        </div>
+        {#if camera.status === 'recording' || camera.status === 'active'}
+          <audio
+            class="w-full mx-auto mb-3"
+            controls
+            preload="none"
+            src={appendAuthToken(`${API_BASE}/cameras/${camera.id}/audio/live.wav`)}
+          ></audio>
+          <p class="text-xs th-text-muted">{t('live.audioLiveHint')}</p>
+        {:else}
+          <p class="th-text-secondary mb-4">{t('live.audioOnlyNotice')}</p>
+        {/if}
+        <button onclick={goBack} class="btn btn-secondary btn-sm mt-4">
           {t('detail.back')}
         </button>
       </div>

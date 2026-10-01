@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -83,6 +84,11 @@ func (h *Handler) handleAudioWav(w http.ResponseWriter, r *http.Request) {
 		"recording_id", id, "camera_id", rec.CameraID,
 		"remote", r.RemoteAddr, "ua", r.UserAgent(),
 		"codec", fourcc, "bytes_in", len(payload), "bytes_out", len(pcm)+44)
+	recordAudioAudit(audioAuditEntry{
+		At: time.Now(), Kind: "wav", Recording: id, CameraID: rec.CameraID,
+		Remote: r.RemoteAddr, UA: r.UserAgent(),
+		Bytes: int64(len(pcm) + 44),
+	})
 
 	w.Header().Set("Content-Type", "audio/wav")
 	disposition := "inline"
