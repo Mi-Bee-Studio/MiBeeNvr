@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ptzMove, ptzStop, getPTZPresets, goToPTZPreset, xiaomiPtzMove, xiaomiPtzStop } from '$lib/api';
+  import { ptzMove, ptzStop, getPTZPresets, goToPTZPreset } from '$lib/api';
   import type { PTZPreset } from '$lib/api';
   import { t } from '$lib/i18n';
   import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-svelte';
@@ -8,6 +8,12 @@
   let moving = $state<string | null>(null);
   let error = $state('');
   let errorTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Move speed steps shared by every protocol: ONVIF uses the magnitude as
+  // the velocity component, the backend maps it onto GB speed bytes
+  // (magnitude*255) and Xiaomi motor speed (magnitude*10).
+  const SPEED_STEPS = [0.25, 0.5, 1.0] as const;
+  let speedLevel = $state(1);
 
   function reportPtzError(e: unknown) {
     // AbortError = our own rapid-tap cancel, not a failure.
@@ -26,28 +32,25 @@
   // receiving a late move AFTER stop (which would leave it turning forever).
   let moveAbort: AbortController | null = null;
 
-  function onPointerDown(direction: string, speed?: number) {
+  function onPointerDown(direction: string) {
     moving = direction;
     // Cancel any previous in-flight move/stop so rapid taps don't interleave.
     if (moveAbort) { moveAbort.abort(); }
     moveAbort = new AbortController();
-    if (protocol === 'xiaomi') {
-      xiaomiPtzMove(cameraId, direction, speed ?? 5).catch(reportPtzError);
-    } else {
-      // Map direction to ONVIF ContinuousMove velocity vector.
-      // ONVIF PanTilt: x=pan (right+), y=tilt (up+); Zoom: x=zoom (in+).
-      const s = speed ?? 0.5;
-      let pan = 0, tilt = 0, zoom = 0;
-      switch (direction) {
-        case 'up':    tilt =  s; break;
-        case 'down':  tilt = -s; break;
-        case 'left':  pan  = -s; break;
-        case 'right': pan  =  s; break;
-        case 'zoom_in':  zoom =  s; break;
-        case 'zoom_out': zoom = -s; break;
-      }
-      ptzMove(cameraId, { mode: 'continuous', pan, tilt, zoom }, moveAbort.signal).catch(reportPtzError);
+    // Map direction to a continuous-move velocity vector. The backend routes
+    // it per protocol: ONVIF native, GB28181 direction bits (speed ∝
+    // magnitude), Xiaomi motor direction/speed.
+    const s = SPEED_STEPS[speedLevel];
+    let pan = 0, tilt = 0, zoom = 0;
+    switch (direction) {
+      case 'up':    tilt =  s; break;
+      case 'down':  tilt = -s; break;
+      case 'left':  pan  = -s; break;
+      case 'right': pan  =  s; break;
+      case 'zoom_in':  zoom =  s; break;
+      case 'zoom_out': zoom = -s; break;
     }
+    ptzMove(cameraId, { mode: 'continuous', pan, tilt, zoom }, moveAbort.signal).catch(reportPtzError);
   }
 
   function onPointerUp() {
@@ -55,11 +58,9 @@
     moving = null;
     // Abort the in-flight move so it can't arrive after stop.
     if (moveAbort) { moveAbort.abort(); moveAbort = null; }
-    if (protocol === 'xiaomi') {
-      xiaomiPtzStop(cameraId).catch(() => {});
-    } else {
-      ptzStop(cameraId).catch(() => {});
-    }
+    // A failed stop leaves the camera turning — surface it instead of
+    // swallowing (rapid-tap AbortError is filtered inside reportPtzError).
+    ptzStop(cameraId).catch(reportPtzError);
   }
 
   // Load presets when enabled (ONVIF only; Xiaomi has no preset support)
@@ -92,6 +93,11 @@
   let isXiaomi = $derived(protocol === 'xiaomi');
 </script>
 
+<!-- Losing the window (alt-tab / mobile app switch) must stop an in-flight
+     move — pointerup never fires in those cases and the camera would keep
+     turning until the server-side ContinuousMove timeout. -->
+<svelte:window onblur={onPointerUp} />
+
 {#if enabled}
   <div class="ptz-panel">
     <div class="ptz-label">{t('ptz.control')}</div>
@@ -109,6 +115,7 @@
         onpointerdown={() => onPointerDown('up')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
         aria-label={t('ptz.up')}
       >
         <ChevronUp size={18} />
@@ -121,6 +128,7 @@
         onpointerdown={() => onPointerDown('left')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
         aria-label={t('ptz.left')}
       >
         <ChevronLeft size={18} />
@@ -136,6 +144,7 @@
         onpointerdown={() => onPointerDown('right')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
         aria-label={t('ptz.right')}
       >
         <ChevronRight size={18} />
@@ -148,6 +157,7 @@
         onpointerdown={() => onPointerDown('down')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
         aria-label={t('ptz.down')}
       >
         <ChevronDown size={18} />
@@ -155,15 +165,30 @@
       <div class="ptz-cell"></div>
     </div>
 
-    <!-- Zoom controls (ONVIF only) -->
+    <!-- Speed selector: magnitude maps per protocol on the backend -->
+    <div class="ptz-speed-row" role="group" aria-label={t('ptz.speed')}>
+      {#each [{ key: 'ptz.speedSlow', i: 0 }, { key: 'ptz.speedMedium', i: 1 }, { key: 'ptz.speedFast', i: 2 }] as step (step.i)}
+        <button
+          class="ptz-speed-btn"
+          class:ptz-speed-active={speedLevel === step.i}
+          onclick={() => (speedLevel = step.i)}
+          aria-label={t(step.key)}
+        >
+          {t(step.key)}
+        </button>
+      {/each}
+    </div>
+
+    <!-- Zoom controls (ONVIF/GB only; Xiaomi PT cams have no optical zoom) -->
     {#if !isXiaomi}
     <div class="ptz-zoom-row">
       <button
         class="ptz-btn ptz-btn-zoom"
         class:ptz-btn-active={moving === 'zoom_in'}
-        onpointerdown={() => onPointerDown('zoom_in', 0.5)}
+        onpointerdown={() => onPointerDown('zoom_in')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
         aria-label={t('ptz.zoomIn')}
       >
         <ZoomIn size={16} />
@@ -172,9 +197,10 @@
       <button
         class="ptz-btn ptz-btn-zoom"
         class:ptz-btn-active={moving === 'zoom_out'}
-        onpointerdown={() => onPointerDown('zoom_out', 0.5)}
+        onpointerdown={() => onPointerDown('zoom_out')}
         onpointerup={onPointerUp}
         onpointerleave={onPointerUp}
+        onpointercancel={onPointerUp}
         aria-label={t('ptz.zoomOut')}
       >
         <ZoomOut size={16} />
@@ -295,6 +321,38 @@
   @keyframes pulse {
     from { opacity: 0.5; }
     to { opacity: 1; }
+  }
+
+  .ptz-speed-row {
+    display: flex;
+    gap: 4px;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .ptz-speed-btn {
+    flex: 1;
+    padding: 0.1875rem 0.375rem;
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 0.6875rem;
+    cursor: pointer;
+    transition: all var(--duration-fast) var(--ease-out);
+    user-select: none;
+  }
+
+  .ptz-speed-btn:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
+  }
+
+  .ptz-speed-active {
+    background-color: var(--color-primary);
+    color: #ffffff;
+    border-color: var(--color-primary);
   }
 
   .ptz-zoom-row {

@@ -6,6 +6,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -47,6 +48,52 @@ func (h *Handler) getXiaomiRecorder(cameraID string) *xiaomi.XiaomiRecorder {
 		return nil
 	}
 	return xiaomiRec
+}
+
+// handleXiaomiVectorPTZMove routes the unified continuous-move vector
+// (POST /api/cameras/{id}/ptz/move) onto the Xiaomi motor command, so every
+// surface drives Xiaomi PT cams through the same endpoint as ONVIF/GB.
+func (h *Handler) handleXiaomiVectorPTZMove(w http.ResponseWriter, cameraID string, pan, tilt, zoom float64) {
+	direction, speed, err := xiaomiPTZFromVector(pan, tilt, zoom)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.xiaomiMotorCommand(cameraID, direction, speed); err != nil {
+		logger.Error("Xiaomi PTZ move failed", "camera_id", cameraID, "error", err, "direction", direction, "speed", speed)
+		WriteError(w, h.xiaomiPTZStatusCode(err), fmt.Sprintf("PTZ command failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// errXiaomiPTZNotConnected marks a missing Xiaomi recorder so callers can
+// answer 503 (camera offline) instead of a generic 500.
+var errXiaomiPTZNotConnected = errors.New("camera is not connected")
+
+// xiaomiPTZStatusCode maps motor dispatch errors onto HTTP statuses.
+func (h *Handler) xiaomiPTZStatusCode(err error) int {
+	if errors.Is(err, errXiaomiPTZNotConnected) {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusInternalServerError
+}
+
+// xiaomiMotorCommand sends a motor command to the camera's Xiaomi recorder.
+// The dispatch can be overridden via SetXiaomiPTZMotor (tests); production
+// always goes through the camera manager's recorder.
+func (h *Handler) xiaomiMotorCommand(cameraID, direction string, speed int) error {
+	if h.xiaomiPTZMotor != nil {
+		return h.xiaomiPTZMotor(cameraID, direction, speed)
+	}
+	if h.camMgr == nil {
+		return fmt.Errorf("camera manager not available")
+	}
+	rec := h.getXiaomiRecorder(cameraID)
+	if rec == nil {
+		return errXiaomiPTZNotConnected
+	}
+	return rec.MotorControl(direction, speed)
 }
 
 // handleXiaomiPTZMove handles POST /api/cameras/{id}/xiaomi/ptz/move

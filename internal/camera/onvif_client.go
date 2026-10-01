@@ -118,6 +118,21 @@ func (cm *CameraManager) GetONVIFClient(ctx context.Context, cameraID string) (*
 	return cm.getOrCreateONVIFClient(ctx, cameraID)
 }
 
+// SetTestONVIFPTZController overrides the PTZ controller returned by
+// GetONVIFPTZController for one camera (testing only; nil clears it).
+func (cm *CameraManager) SetTestONVIFPTZController(cameraID string, c onvif.PTZController) {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	if cm.testPTZCtlrs == nil {
+		cm.testPTZCtlrs = make(map[string]onvif.PTZController)
+	}
+	if c == nil {
+		delete(cm.testPTZCtlrs, cameraID)
+		return
+	}
+	cm.testPTZCtlrs[cameraID] = c
+}
+
 // closeAllONVIFClients clears the entire ONVIF client and device info caches.
 func (cm *CameraManager) closeAllONVIFClients() {
 	cm.onvifMu.Lock()
@@ -132,6 +147,12 @@ func (cm *CameraManager) closeAllONVIFClients() {
 // GetONVIFPTZController returns a PTZController for the given ONVIF camera.
 // Returns error if camera is not found, not ONVIF, or client creation fails.
 func (cm *CameraManager) GetONVIFPTZController(ctx context.Context, cameraID string) (onvif.PTZController, error) {
+	cm.onvifMu.Lock()
+	override := cm.testPTZCtlrs[cameraID]
+	cm.onvifMu.Unlock()
+	if override != nil {
+		return override, nil
+	}
 	client, err := cm.getOrCreateONVIFClient(ctx, cameraID)
 	if err != nil {
 		return nil, err
