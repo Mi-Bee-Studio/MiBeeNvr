@@ -111,6 +111,10 @@ type CameraRow struct {
 	// GroupName is the camera-management grouping label (v36). UI organization
 	// only — the recorder never reads it. '' = ungrouped.
 	GroupName string `json:"group,omitempty"`
+	// AudioLinkCameraID associates an audio-only source device (encoding
+	// "audio") with the video camera its recordings should replay alongside.
+	// '' = free-standing mic. DB-backed metadata (v43), never in YAML.
+	AudioLinkCameraID string `json:"audio_link_camera_id,omitempty"`
 }
 
 func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
@@ -119,7 +123,8 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
 		COALESCE(activation_state, 'active'),
-		COALESCE(group_name, '')
+		COALESCE(group_name, ''),
+		COALESCE(audio_link_camera_id, '')
 		FROM cameras WHERE archived=0 ORDER BY id;`)
 	if err != nil {
 		return nil, err
@@ -136,7 +141,7 @@ func (d *DB) ListCameras(ctx context.Context) ([]CameraRow, error) {
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
-			&c.ActivationState, &c.GroupName); err != nil {
+			&c.ActivationState, &c.GroupName, &c.AudioLinkCameraID); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -164,7 +169,8 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
 		COALESCE(activation_state, 'active'),
-		COALESCE(group_name, '')
+		COALESCE(group_name, ''),
+		COALESCE(audio_link_camera_id, '')
 		FROM cameras WHERE archived=1 ORDER BY id;`)
 	if err != nil {
 		return nil, err
@@ -181,7 +187,7 @@ func (d *DB) ListArchivedCameras(ctx context.Context) ([]CameraRow, error) {
 			&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 			&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 			&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
-			&c.ActivationState, &c.GroupName); err != nil {
+			&c.ActivationState, &c.GroupName, &c.AudioLinkCameraID); err != nil {
 			return nil, err
 		}
 		c.MergeEnabled = nullBoolToPtr(mergeEnabled)
@@ -291,13 +297,14 @@ func (d *DB) GetCamera(ctx context.Context, cameraID string) (*CameraRow, error)
 		onvif_endpoint, profile_token, stream_encoding,
 		archived, archived_at, archive_retention_days,
 		COALESCE(activation_state, 'active'),
-		COALESCE(group_name, '')
+		COALESCE(group_name, ''),
+		COALESCE(audio_link_camera_id, '')
 		FROM cameras WHERE id = ?`, cameraID).Scan(
 		&c.ID, &c.Name, &c.Protocol, &c.Encoding, &c.URL, &c.Description, &c.Location, &c.Brand, &c.Model, &c.SerialNumber, &c.StableID, &c.RetentionDays, &c.Username, &c.HasPassword,
 		&mergeEnabled, &mergeCheckInterval, &mergeWindowSize, &mergeBatchLimit, &mergeMinSegmentAge, &mergeMinSegmentsToMerge,
 		&c.ONVIFEndpoint, &c.ProfileToken, &c.StreamEncoding,
 		&c.Archived, &archivedAtStr, &c.ArchiveRetentionDays,
-		&c.ActivationState, &c.GroupName,
+		&c.ActivationState, &c.GroupName, &c.AudioLinkCameraID,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -357,6 +364,15 @@ func (d *DB) UpdateCameraMetadata(ctx context.Context, id, description, location
 // the camera does not exist (0 rows affected).
 func (d *DB) UpdateCameraGroup(ctx context.Context, id, group string) error {
 	_, err := d.db.ExecContext(ctx, `UPDATE cameras SET group_name=? WHERE id=?;`, group, id)
+	return err
+}
+
+// UpdateCameraAudioLink sets the audio-device → video-camera association (v43).
+// Empty string clears the link (= free-standing mic). Idempotent: does nothing
+// if the camera does not exist (0 rows affected). Existence/cycle validation of
+// the target is the caller's (API layer) job — the DB layer stays dumb.
+func (d *DB) UpdateCameraAudioLink(ctx context.Context, id, targetCameraID string) error {
+	_, err := d.db.ExecContext(ctx, `UPDATE cameras SET audio_link_camera_id=? WHERE id=?;`, targetCameraID, id)
 	return err
 }
 
