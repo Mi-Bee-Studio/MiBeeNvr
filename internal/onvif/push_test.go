@@ -82,6 +82,48 @@ func TestParseNotifyEventsPrefixDialects(t *testing.T) {
 	require.Equal(t, "CSI", events[0].Data["source.Source"])
 }
 
+func TestParseNotifyEventsCanonicalDoubleLayer(t *testing.T) {
+	t.Parallel()
+	// Canonical ONVIF double-layer payload: wsnt:Message wrapping an inner
+	// payload element that carries @UtcTime and the Source/Key/Data groups.
+	// Byte shape mirrors the rs device wire format (onvif-device-rs writer):
+	// SubscriptionReference sibling present, PropertyOperation stamped, Key
+	// group empty-inline — and the device's habit of wrapping the whole
+	// response envelope inside another envelope rides along harmlessly.
+	body := `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body><?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body>
+<wsnt:Notify xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2" xmlns:wsa="http://www.w3.org/2005/08/addressing" xmlns:tt="http://www.onvif.org/ver10/schema">
+ <wsnt:NotificationMessage>
+  <wsnt:SubscriptionReference><wsa:Address>http://192.0.2.10:8080/onvif/events_service/sub/abc</wsa:Address></wsnt:SubscriptionReference>
+  <wsnt:Topic Dialect="http://www.onvif.org/ver10/tev/topicExpression/Concrete">tns1:VideoSource/MotionAlarm</wsnt:Topic>
+  <wsnt:Message>
+   <tt:Message PropertyOperation="Changed" UtcTime="2026-10-01T07:46:12.123Z">
+    <tt:Source><tt:SimpleItem Name="Source" Value="0"/></tt:Source>
+    <tt:Key></tt:Key>
+    <tt:Data>
+     <tt:SimpleItem Name="State" Value="true"/>
+     <tt:SimpleItem Name="Targets" Value="person"/>
+    </tt:Data>
+   </tt:Message>
+  </wsnt:Message>
+ </wsnt:NotificationMessage>
+</wsnt:Notify>
+</soap:Body></soap:Envelope>
+</soap:Body></soap:Envelope>`
+	events, err := ParseNotifyEvents([]byte(body), "cam-x")
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	evt := events[0]
+	require.Equal(t, "tns1:VideoSource/MotionAlarm", evt.Topic)
+	require.Equal(t, "true", evt.Data["State"])
+	require.Equal(t, "person", evt.Data["Targets"])
+	require.Equal(t, "0", evt.Data["source.Source"])
+	want := time.Date(2026, 10, 1, 7, 46, 12, 123000000, time.UTC)
+	require.True(t, evt.Timestamp.Equal(want), "inner @UtcTime must be parsed, got %v", evt.Timestamp)
+}
+
 func TestParseNotifyEventsEmptyAndFault(t *testing.T) {
 	t.Parallel()
 	events, err := ParseNotifyEvents([]byte(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><wsnt:Notify xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2"/></s:Body></s:Envelope>`), "cam-x")

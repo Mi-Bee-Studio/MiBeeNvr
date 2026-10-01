@@ -458,17 +458,44 @@ func ParseNotifyEvents(body []byte, cameraID string) ([]ONVIFEvent, error) {
 			evt.Topic = strings.TrimSpace(topic.text())
 		}
 		if m := msg.firstLocal("Message"); m != nil {
-			if ts, ok := parseWSNTime(m.attr("UtcTime")); ok {
-				evt.Timestamp = ts
+			// The canonical ONVIF payload is double-layer: the WSN
+			// wsnt:Message wrapper around an inner payload element
+			// (tt:Message) that carries @UtcTime and the Source/Key/Data
+			// groups. Devices that inline them on wsnt:Message directly
+			// are tolerated too — each facet reads whichever layer has it.
+			layer := m
+			if inner := m.firstLocal("Message"); inner != nil {
+				layer = inner
 			}
-			if src := m.firstLocal("Source"); src != nil {
-				for name, value := range parseItems(src) {
-					evt.Data["source."+name] = value
+			for _, cand := range []*xmlNode{layer, m} {
+				if !evt.Timestamp.IsZero() {
+					break
+				}
+				if ts, ok := parseWSNTime(cand.attr("UtcTime")); ok {
+					evt.Timestamp = ts
 				}
 			}
-			if data := m.firstLocal("Data"); data != nil {
-				for name, value := range parseItems(data) {
-					evt.Data[name] = value
+			for _, group := range []string{"Source", "Data"} {
+				items := map[string]any{}
+				for _, cand := range []*xmlNode{layer, m} {
+					if g := cand.firstLocal(group); g != nil {
+						if got := parseItems(g); len(got) > 0 {
+							items = got
+							break
+						}
+					}
+				}
+				if len(items) == 0 {
+					continue
+				}
+				if group == "Source" {
+					for name, value := range items {
+						evt.Data["source."+name] = value
+					}
+				} else {
+					for name, value := range items {
+						evt.Data[name] = value
+					}
 				}
 			}
 		}
