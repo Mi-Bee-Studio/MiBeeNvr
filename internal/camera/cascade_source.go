@@ -29,15 +29,21 @@ func NewCascadeSource(cm *CameraManager, db *storage.DB) gbcascade.CameraSource 
 }
 
 // Cameras lists cameras eligible for cascade forwarding. MJPEG/JPEG cameras
-// are excluded (no PS mux story); everything else is offered — GB28181
-// cameras store encoding "" in config until their stream starts, so the
-// forwarder sniffs the codec from the first NAL when the hint is empty.
+// are excluded (no PS mux story), and so are audio-source devices (v43): the
+// cascade forwarder muxes video NALUs into a PS stream — an audio-only
+// channel would surface on the upper platform as a permanently dead video
+// channel. Everything else is offered — GB28181 cameras store encoding ""
+// in config until their stream starts, so the forwarder sniffs the codec
+// from the first NAL when the hint is empty.
 func (s cascadeSource) Cameras() []gbcascade.CameraInfo {
 	snap := s.cm.loadSnapshot()
 	active := s.activeCameraIDs()
 	out := make([]gbcascade.CameraInfo, 0, len(snap.configs))
 	for _, cfg := range snap.configs {
 		if cfg.Encoding == "mjpeg" || cfg.Encoding == "jpeg" {
+			continue
+		}
+		if cfg.Encoding == "audio" {
 			continue
 		}
 		if cfg.Protocol == "timelapse" {

@@ -480,9 +480,20 @@ func (h *Handler) registerMediaRoutes(r chi.Router) {
 	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
 	// Audio-only recordings (v43): G.711 → WAV pure-Go transcode (browsers
-	// don't play G.711-in-MP4). Same auth class as download + audit log.
-	r.Get("/api/recordings/{id}/audio.wav", h.handleAudioWav)
-	r.Head("/api/recordings/{id}/audio.wav", h.handleAudioWav)
+	// don't play G.711-in-MP4). Same auth class as download + audit log, and
+	// per-IP rate-limited on top: the transcode is CPU work proportional to
+	// segment size, so a looping/scrubbing client must not be able to turn
+	// playback into a self-DoS (60/min covers segment-per-click playback plus
+	// browser range re-probes with wide margin).
+	r.Group(func(r chi.Router) {
+		rl := middleware.NewRateLimiter(context.Background(), middleware.RateLimiterConfig{
+			MaxRequests: 60,
+			Window:      time.Minute,
+		})
+		r.Use(rl.Handler)
+		r.Get("/api/recordings/{id}/audio.wav", h.handleAudioWav)
+		r.Head("/api/recordings/{id}/audio.wav", h.handleAudioWav)
+	})
 	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)
 	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
 	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)

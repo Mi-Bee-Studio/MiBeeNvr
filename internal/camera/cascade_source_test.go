@@ -21,6 +21,7 @@ func TestCascadeSource_ExcludesArchivedCameras(t *testing.T) {
 		{ID: "cam-live", Name: "Live", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://127.0.0.1:1/a"},
 		{ID: "cam-residue", Name: "Archived Residue", Protocol: "gb28181", Encoding: ""},
 		{ID: "cam-mjpeg", Name: "MJPEG", Protocol: "rtsp", Encoding: "mjpeg", URL: "rtsp://127.0.0.1:1/b"},
+		{ID: "cam-audio", Name: "Hall Mic", Protocol: "rtsp", Encoding: "audio", URL: "rtsp://127.0.0.1:1/mic"},
 	}
 	mgr, _, db, _ := newTestManagerWithCfg(t, cfg)
 	ctx := context.Background()
@@ -28,6 +29,9 @@ func TestCascadeSource_ExcludesArchivedCameras(t *testing.T) {
 	// DB knows only the live camera (the residue camera's row is archived or
 	// was never created by the API path).
 	require.NoError(t, db.UpsertCamera(ctx, "cam-live", "Live", "rtsp", "h264", "rtsp://127.0.0.1:1/a", "", "", "", "", "", ""))
+	// The audio device is active in the DB — its exclusion from the catalog
+	// must come from the encoding filter, not the archived filter.
+	require.NoError(t, db.UpsertCamera(ctx, "cam-audio", "Hall Mic", "rtsp", "audio", "rtsp://127.0.0.1:1/mic", "", "", "", "", "", ""))
 	// Mirror the M5 sequence: row created active -> archived (partial
 	// archive leaves the YAML entry) -> boot re-upsert must not resurrect.
 	require.NoError(t, db.UpsertCamera(ctx, "cam-residue", "Archived Residue", "gb28181", "", "", "", "", "", "", "", ""))
@@ -47,10 +51,10 @@ func TestCascadeSource_ExcludesArchivedCameras(t *testing.T) {
 	for _, c := range src.Cameras() {
 		got = append(got, c.ID)
 	}
-	require.Equal(t, []string{"cam-live"}, got, "catalog must exclude archived residue and MJPEG")
+	require.Equal(t, []string{"cam-live"}, got, "catalog must exclude archived residue, MJPEG and audio devices")
 
 	// nil DB (no filter) preserves the pre-fix behavior: everything but
-	// MJPEG/timelapse is offered.
+	// MJPEG/timelapse/audio is offered.
 	var gotNil []string
 	for _, c := range (cascadeSource{cm: mgr}).Cameras() {
 		gotNil = append(gotNil, c.ID)

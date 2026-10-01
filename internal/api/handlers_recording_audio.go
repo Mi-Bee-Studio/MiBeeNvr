@@ -85,7 +85,11 @@ func (h *Handler) handleAudioWav(w http.ResponseWriter, r *http.Request) {
 		"codec", fourcc, "bytes_in", len(payload), "bytes_out", len(pcm)+44)
 
 	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%s.wav", id))
+	disposition := "inline"
+	if r.URL.Query().Get("download") == "1" {
+		disposition = "attachment"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%s.wav", disposition, id))
 	if err := writeWav(w, pcm, rate, channels); err != nil {
 		audioRecLogger.Warn("audio WAV write failed", "recording_id", id, "error", err)
 	}

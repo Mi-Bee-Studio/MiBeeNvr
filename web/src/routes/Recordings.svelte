@@ -58,7 +58,7 @@
     // the timelapse view was folded INTO the timeline) silently fall back
     // to the default timeline view rather than rendering an empty page.
     const f = params.get('format');
-    if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) initialFormat = f;
+    if (f && ['All', 'Video', 'Timelapse', 'MJPEG', 'Audio'].includes(f)) initialFormat = f;
     const c = params.get('camera');
     if (c) initialCameraId = c;
     // ?date=YYYY-MM-DD restores the watched day when returning from a
@@ -324,6 +324,7 @@ $effect(() => {
   let apiFormat = $derived.by(() => {
     if (formatPill === 'Timelapse') return 'timelapse';
     if (formatPill === 'MJPEG') return 'mjpeg';
+    if (formatPill === 'Audio') return 'audio';
     return '';
   });
   let useTimelapseApi = $derived(formatPill === 'Timelapse');
@@ -1112,7 +1113,7 @@ $effect(() => {
         // Legacy ?view=gallery / ?view=timelapse (both folded into the
         // timeline view) fall back to default timeline via the initial value.
         const f = params.get('format');
-        if (f && ['All', 'Video', 'Timelapse', 'MJPEG'].includes(f)) formatPill = f;
+        if (f && ['All', 'Video', 'Timelapse', 'MJPEG', 'Audio'].includes(f)) formatPill = f;
         const c = params.get('camera');
         if (c !== null) cameraId = c;
         const dt = params.get('date');

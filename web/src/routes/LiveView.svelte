@@ -3,7 +3,7 @@
   import { getCamera, listCameras, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, xiaomiDevices, getTranscodingSettings, getTranscodingCheck, listCameraGroups, API_BASE } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo, XiaomiDevice } from '$lib/api';
   import { startBackfill } from '$lib/api/transcoding';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings } from 'lucide-svelte';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings, AudioLines } from 'lucide-svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import PtzControl from '$lib/components/PtzControl.svelte';
@@ -396,6 +396,18 @@
             {t('detail.back')}
           </button>
         </div>
+      </div>
+    {:else if camera && camera.encoding === 'audio'}
+      <!-- Audio-source device (v43): no video surface exists to mount any
+           player chain on — offer the honest dead end instead of a spinner
+           that never resolves. -->
+      <div class="card p-8 text-center">
+        <div class="mb-4 flex justify-center th-text-secondary"><AudioLines size={48} /></div>
+        <h3 class="text-lg font-medium th-text-primary mb-2">{camera.name || camera.id}</h3>
+        <p class="th-text-secondary mb-4">{t('live.audioOnlyNotice')}</p>
+        <button onclick={goBack} class="btn btn-secondary btn-sm">
+          {t('detail.back')}
+        </button>
       </div>
     {:else if camera}
       <div class="space-y-4">
