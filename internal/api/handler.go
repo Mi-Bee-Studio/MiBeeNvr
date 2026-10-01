@@ -272,9 +272,12 @@ type Handler struct {
 	// 2). Nil = remote offload disabled — endpoints degrade to 404.
 	offloadPlayback OffloadPlaybackProxy
 	gb28181PTZ      *platform.PTZController
+	// xiaomiPTZMotor overrides Xiaomi motor dispatch when set (tests); nil
+	// routes commands through the camera manager's Xiaomi recorder.
+	xiaomiPTZMotor func(cameraID, direction string, speed int) error
 	// ptzSuppress blinds the pixgate pixel gate while a PTZ command moves
 	// the camera (global scene change must not read as activity).
-	ptzSuppress    func(cameraID string)
+	ptzSuppress    func(cameraID string, window time.Duration)
 	gb28181Catalog *platform.CatalogController
 	gb28181Inviter GB28181InviteSender
 	gb28181Bye     GB28181ByeSender
@@ -999,17 +1002,32 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 	h.serveFileBudgeted(w, r, cleanPath)
 }
 
+// PTZ suppression windows. Move/goto must outlast a long press or a preset
+// goto crossing the full pan range on a slow motor — if the window expires
+// mid-move the moving scene reads as activity and pollutes adaptive
+// recording and motion events. Stop only needs the scene to settle.
+const (
+	ptzSuppressWindowMove  = 30 * time.Second
+	ptzSuppressWindowShort = 8 * time.Second
+)
+
 // SetPTZSuppressor wires the pixgate suppression hook fired on every PTZ
 // command (move / stop / goto preset), all protocols.
-func (h *Handler) SetPTZSuppressor(f func(cameraID string)) {
+func (h *Handler) SetPTZSuppressor(f func(cameraID string, window time.Duration)) {
 	h.ptzSuppress = f
 }
 
 // suppressPTZMotion fires the PTZ suppression hook if wired (nil-safe).
-func (h *Handler) suppressPTZMotion(cameraID string) {
+func (h *Handler) suppressPTZMotion(cameraID string, window time.Duration) {
 	if h.ptzSuppress != nil {
-		h.ptzSuppress(cameraID)
+		h.ptzSuppress(cameraID, window)
 	}
+}
+
+// SetXiaomiPTZMotor wires an override for Xiaomi PTZ motor dispatch.
+// When nil, commands go through the camera manager's Xiaomi recorder.
+func (h *Handler) SetXiaomiPTZMotor(f func(cameraID, direction string, speed int) error) {
+	h.xiaomiPTZMotor = f
 }
 
 // SetGB28181PTZ wires the GB28181 PTZ controller for the channel PTZ endpoint.

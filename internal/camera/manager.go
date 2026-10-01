@@ -174,7 +174,8 @@ type CameraManager struct {
 	// copies plus millisecond disk writes — never for network I/O or rec.Start.
 	configMu         sync.Mutex
 	onvifClients     map[string]*onvif.Client            // camera_id → cached ONVIF client
-	onvifMu          sync.Mutex                          // protects onvifClients
+	onvifMu          sync.Mutex                          // protects onvifClients + testPTZControllers
+	testPTZCtlrs     map[string]onvif.PTZController      // camera_id → PTZ controller override (testing only)
 	errorDetails     map[string]*model.CameraErrorDetail // cameraID → latest error detail
 	errorDetailsMu   sync.RWMutex                        // protects errorDetails
 	eventSubscribers map[string]onvif.EventSubscriber    // camera_id → event subscriber

@@ -335,8 +335,8 @@ func registerMediaServices(a *App, deps *appDeps) error {
 			// gate so a moving camera never reads as activity.
 			deps.motionAnalyzer.SetPixelSource(pixgateFGSource{m})
 			if deps.handler != nil {
-				deps.handler.SetPTZSuppressor(func(cameraID string) {
-					m.Suppress(cameraID, 8*time.Second)
+				deps.handler.SetPTZSuppressor(func(cameraID string, window time.Duration) {
+					m.Suppress(cameraID, window)
 				})
 			}
 			if err := a.Register(m); err != nil {
