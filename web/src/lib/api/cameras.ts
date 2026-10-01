@@ -418,7 +418,7 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
   {
     id: 'whip',
     label: 'WHIP (WebRTC push)',
-    encodings: ['h264'],
+    encodings: ['h264', 'audio'],
     builtIn: true,
     capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
   },

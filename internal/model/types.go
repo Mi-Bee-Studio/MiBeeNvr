@@ -435,8 +435,10 @@ var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoSRT):  {string(FormatH264), string(FormatH265)},
 	string(ProtoRTMP): {string(FormatH264), string(FormatH265)},
 	// WHIP (browser/OBS WebRTC push-in) is H.264 only — matches WHEP egress
-	// (browser WebRTC H.265 support is still fragmented).
-	string(ProtoWHIP): {string(FormatH264)},
+	// (browser WebRTC H.265 support is still fragmented). Audio-only is the
+	// exception (v43): a WHIP+audio "camera" is a push microphone — phones
+	// and browsers publish Opus, which muxes straight into MP4.
+	string(ProtoWHIP): {string(FormatH264), string(FormatAudio)},
 	// GB28181 is an ingest protocol: the camera registers via SIP and the NVR
 	// INVITEs it; the codec is auto-detected from the PS stream_type at runtime.
 	string(ProtoGB28181): {string(FormatH264), string(FormatH265)},

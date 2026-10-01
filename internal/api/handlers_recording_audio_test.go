@@ -135,6 +135,46 @@ func TestReadAudioOnlyMP4(t *testing.T) {
 	}
 }
 
+// TestReadAudioOnlyMP4_Opus pins the dops shape: the muxer's Opus track must
+// surface through the box reader as fourcc 'dops' with the configured
+// channels/rate — the audio recorder's Opus path depends on it.
+func TestReadAudioOnlyMP4_Opus(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seg.mp4")
+	m := muxer.NewMP4Muxer(path)
+	trackID, err := m.AddAudioTrack("opus", []byte{2, 0, 0, 0, 0, 0xBB, 0x80}) // stereo, PreSkip 0, 48000Hz
+	if err != nil {
+		t.Fatalf("add opus track: %v", err)
+	}
+	frames := [][]byte{
+		{0x01, 0x02, 0x03},
+		{0x04, 0x05, 0x06, 0x07},
+	}
+	for i, f := range frames {
+		if err := m.WriteAudioSample(trackID, f, time.Duration(i)*20*time.Millisecond, 20*time.Millisecond); err != nil {
+			t.Fatalf("write opus sample: %v", err)
+		}
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close muxer: %v", err)
+	}
+
+	fourcc, rate, channels, payload, err := readAudioOnlyMP4(path)
+	if err != nil {
+		t.Fatalf("readAudioOnlyMP4: %v", err)
+	}
+	if fourcc != "Opus" {
+		t.Fatalf("fourcc = %q, want Opus (QuickTime-style entry our muxer writes)", fourcc)
+	}
+	if rate != 48000 || channels != 2 {
+		t.Fatalf("rate/channels = %d/%d, want 48000/2", rate, channels)
+	}
+	if len(payload) != 7 {
+		t.Fatalf("payload = %d bytes, want 7", len(payload))
+	}
+}
+
 // TestG711ToPCM pins known decode vectors through the API transcode path.
 func TestG711ToPCM(t *testing.T) {
 	t.Parallel()

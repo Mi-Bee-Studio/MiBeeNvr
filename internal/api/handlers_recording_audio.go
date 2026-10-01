@@ -65,7 +65,10 @@ func (h *Handler) handleAudioWav(w http.ResponseWriter, r *http.Request) {
 		pcm = g711ToPCM(payload, true, rate)
 	case "alaw":
 		pcm = g711ToPCM(payload, false, rate)
-	case "mp4a", "dops":
+	case "mp4a", "dops", "Opus":
+		// AAC ('mp4a') and Opus ('Opus' QuickTime style — what our muxer
+		// writes — plus 'dops' MPEG style defensively) are natively playable
+		// in browsers straight from the MP4 download endpoint.
 		WriteError(w, http.StatusNotAcceptable,
 			fmt.Sprintf("audio codec %q is natively playable in browsers — use the download endpoint for this recording", fourcc))
 		return

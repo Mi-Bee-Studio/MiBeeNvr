@@ -282,3 +282,98 @@ func TestAudioRecorder_EventsAndStats(t *testing.T) {
 func TestAudioRecorder_ImplementsRecorder(t *testing.T) {
 	var _ model.Recorder = (*AudioRecorder)(nil)
 }
+
+// TestAudioRecorder_PushMode drives the WHIP-microphone path end to end
+// through the public surface: Start in push mode (empty URL) → connect →
+// arm format → WritePushAU → disconnect finalizes the segment as a
+// born-terminal audio row → the writer survives for a second push.
+func TestAudioRecorder_PushMode(t *testing.T) {
+	dir := t.TempDir()
+	store := &audioTestStore{dir: dir}
+	db := &audioTestDB{}
+	r := NewAudioRecorder(AudioConfig{
+		CameraID:   "cam-mic",
+		RTSPURL:    "", // push mode
+		SegmentDur: 60 * time.Second,
+		DB:         db,
+		Store:      store,
+	}, store, nil)
+	if err := r.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer r.Stop()
+
+	if r.Status() != model.StatusReconnecting {
+		t.Fatalf("push idle status = %q, want reconnecting (waiting for publisher)", r.Status())
+	}
+
+	// Publisher arrives.
+	r.PushConnected()
+	if r.Status() != model.StatusRecording {
+		t.Fatalf("connected status = %q, want recording", r.Status())
+	}
+	r.ArmPushFormat("opus", 48000, 2)
+
+	// Opus-ish AUs through the push entry point.
+	for i := range 10 {
+		r.WritePushAU([]byte{0x01, byte(i), 0x03})
+		time.Sleep(2 * time.Millisecond)
+	}
+	waitDrained(t, r)
+
+	// Publisher leaves → the open segment finalizes NOW.
+	r.PushDisconnected()
+	if r.Status() != model.StatusReconnecting {
+		t.Fatalf("disconnected status = %q, want reconnecting", r.Status())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(db.rows_()) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(db.rows_()); got != 1 {
+		t.Fatalf("expected 1 finalized row after disconnect, got %d", got)
+	}
+	row := db.rows_()[0]
+	if row.Format != model.FormatAudio || row.MergeStatus != model.MergeStatusAudio {
+		t.Fatalf("row format/merge = %q/%q, want audio/audio", row.Format, row.MergeStatus)
+	}
+	if store.created != 1 || store.closed != 1 {
+		t.Fatalf("store create/close = %d/%d, want 1/1", store.created, store.closed)
+	}
+
+	// Second push reuses the same writer and opens a fresh segment.
+	r.PushConnected()
+	r.WritePushAU([]byte{0x09, 0x09})
+	waitDrained(t, r)
+	r.PushDisconnected()
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(db.rows_()) == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(db.rows_()); got != 2 {
+		t.Fatalf("expected 2 rows after the second push, got %d", got)
+	}
+	if store.created != 2 || store.closed != 2 {
+		t.Fatalf("store create/close after second push = %d/%d, want 2/2", store.created, store.closed)
+	}
+}
+
+// waitDrained blocks until the writer has consumed every queued AU.
+func waitDrained(t *testing.T, r *AudioRecorder) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(r.auCh) == 0 {
+			time.Sleep(20 * time.Millisecond) // let the writer finish the last write
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("writer did not drain the AU channel in time")
+}

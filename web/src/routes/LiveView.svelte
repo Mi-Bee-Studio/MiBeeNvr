@@ -29,6 +29,9 @@
   let camera = $state<Camera | null>(null);
   let loading = $state(true);
   let error = $state('');
+  // Live-listening failed (non-G.711 source → WAV endpoint 406, or source
+  // hiccup) — swap the player for a hint instead of a dead element.
+  let liveAudioError = $state(false);
   let isFullscreen = $state(false);
   let playerContainer: HTMLDivElement | undefined = $state();
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
@@ -324,6 +327,12 @@
     }
   });
 
+  // Reset the live-listening error state whenever the page switches camera.
+  $effect(() => {
+    void camera?.id;
+    liveAudioError = false;
+  });
+
   onMount(() => {
     if (!cameraId) {
       error = t('live.cameraIdRequired');
@@ -412,12 +421,17 @@
           </h2>
         </div>
         {#if camera.status === 'recording' || camera.status === 'active'}
-          <audio
-            class="w-full mx-auto mb-3"
-            controls
-            preload="none"
-            src={appendAuthToken(`${API_BASE}/cameras/${camera.id}/audio/live.wav`)}
-          ></audio>
+          {#if liveAudioError}
+            <p class="th-text-secondary mb-2">{t('live.audioLiveUnsupported')}</p>
+          {:else}
+            <audio
+              class="w-full mx-auto mb-3"
+              controls
+              preload="none"
+              src={appendAuthToken(`${API_BASE}/cameras/${camera.id}/audio/live.wav`)}
+              onerror={() => (liveAudioError = true)}
+            ></audio>
+          {/if}
           <p class="text-xs th-text-muted">{t('live.audioLiveHint')}</p>
         {:else}
           <p class="th-text-secondary mb-4">{t('live.audioOnlyNotice')}</p>

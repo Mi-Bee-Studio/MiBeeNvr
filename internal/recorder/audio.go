@@ -104,6 +104,10 @@ type AudioRecorder struct {
 	dropped atomic.Int64
 	lastAU  atomic.Int64 // unix nano of last received AU (stats + stall watchdog)
 
+	// pushClose signals the writer to finalize the current segment (a push
+	// publisher disconnected). Push mode = RTSPURL == "".
+	pushClose chan struct{}
+
 	// Segment state — owned by the single writer goroutine (writeAUs), plus
 	// closeSegment from run()'s final teardown after the writer has exited.
 	muxer        *muxer.MP4Muxer
@@ -135,7 +139,8 @@ func NewAudioRecorder(cfg AudioConfig, store SegmentStore, m *metrics.Metrics) *
 		status: model.StatusStopped,
 		// Pre-allocated (NOT only in connectAndStream): stats readers and
 		// tests drive the writer before any connection exists.
-		auCh: ch,
+		auCh:     ch,
+		pushClose: make(chan struct{}, 1),
 	}
 	r.auChPtr.Store(&ptr)
 	return r
@@ -150,22 +155,74 @@ func (r *AudioRecorder) HubSource() string { return "audio-recorder" }
 // GetHub exposes the hub for the camera-manager registry and live consumers.
 func (r *AudioRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
+// ArmPushFormat seeds the codec snapshot for a push-mode recorder (normally
+// written by connectAndStream on pull sources; the WHIP ingest server calls
+// this from its AudioFormatter hook before the first AU arrives). Also used
+// by API-level handler tests without a live RTSP source.
+func (r *AudioRecorder) ArmPushFormat(codec string, sampleRate, channels int) {
+	switch codec {
+	case "aac":
+		r.audioCfg.Store(&audioConfig{codec: "aac", sampleRate: sampleRate, channels: channels})
+	case "opus":
+		if sampleRate == 0 {
+			sampleRate = 48000
+		}
+		if channels == 0 {
+			channels = 1
+		}
+		r.audioCfg.Store(&audioConfig{
+			codec:       "opus",
+			sampleRate:  sampleRate,
+			channels:    channels,
+			muxerConfig: []byte{byte(channels), 0, 0, byte(sampleRate >> 24), byte(sampleRate >> 16), byte(sampleRate >> 8), byte(sampleRate)},
+		})
+	default: // g711
+		if sampleRate == 0 {
+			sampleRate = 8000
+		}
+		r.audioCfg.Store(&audioConfig{
+			codec:          "g711",
+			sampleRate:     sampleRate,
+			channels:       1,
+			g711MULaw:      true,
+			g711SampleRate: sampleRate,
+			muxerConfig:    []byte{1, byte(sampleRate >> 24), byte(sampleRate >> 16), byte(sampleRate >> 8), byte(sampleRate)},
+		})
+	}
+}
+
+// PushConnected marks a push-mode recorder as live (WHIP publisher arrived).
+func (r *AudioRecorder) PushConnected() { r.setStatus(model.StatusRecording) }
+
+// PushDisconnected finalizes the open segment (the push session is the
+// natural segment boundary) and returns to waiting-for-publisher.
+func (r *AudioRecorder) PushDisconnected() {
+	r.setStatus(model.StatusReconnecting)
+	select {
+	case r.pushClose <- struct{}{}:
+	default: // a close is already pending
+	}
+}
+
+// WritePushAU feeds one access unit from a push publisher (WHIP ingest).
+// The codec/duration derive from the format armed by ArmPushFormat.
+func (r *AudioRecorder) WritePushAU(data []byte) {
+	a := r.audioCfg.Load()
+	if a == nil || len(data) == 0 {
+		return
+	}
+	dur := 20 * time.Millisecond
+	if a.codec == "g711" && a.sampleRate > 0 {
+		dur = time.Duration(len(data)) * time.Second / time.Duration(a.sampleRate)
+	} else if a.codec == "aac" && a.sampleRate > 0 {
+		dur = time.Duration(1024) * time.Second / time.Duration(a.sampleRate)
+	}
+	r.enqueue(audioAU{data: data, codec: model.AudioCodec(a.codec), duration: dur, at: time.Now()})
+}
+
 // AudioOnly marks this recorder for the health manager: video-frame based
 // probes (freeze detection, FPS stats) must not run on it.
 func (r *AudioRecorder) AudioOnly() bool { return true }
-
-// SetAudioConfigForTest seeds the codec snapshot from outside the package
-// (normally written by connectAndStream). Mirrors XiaomiRecorder's
-// SetMISSClientForTest precedent — API-level handler tests use it to arm the
-// audio-info accessors without a live RTSP source.
-func (r *AudioRecorder) SetAudioConfigForTest(codec string, sampleRate, channels int, muxerConfig []byte) {
-	switch codec {
-	case "aac":
-		r.audioCfg.Store(&audioConfig{codec: "aac", sampleRate: sampleRate, channels: channels, muxerConfig: muxerConfig})
-	default:
-		r.audioCfg.Store(&audioConfig{codec: "g711", sampleRate: sampleRate, channels: channels, muxerConfig: muxerConfig})
-	}
-}
 
 // AudioCodec / AudioConfig / AudioSampleRate / AudioChannels implement the
 // audioInfoProvider probe used by the WS and WebRTC handlers.
@@ -255,8 +312,15 @@ func (r *AudioRecorder) recoverPanic(where string) {
 }
 
 // run drives the shared reconnect cycle until ctx is done, then finalizes
-// whatever segment is still open.
+// whatever segment is still open. Push mode (RTSPURL == "") has no source
+// connection to manage: the writer runs until Stop and AUs arrive through
+// WritePushAU from the ingest server.
 func (r *AudioRecorder) run(ctx context.Context) {
+	if r.cfg.RTSPURL == "" {
+		r.writeAUs(ctx)
+		r.setStatus(model.StatusStopped)
+		return
+	}
 	runReconnectLoop(ctx, reconnectDeps{
 		CameraID: r.cfg.CameraID,
 		Store:    r.cfg.Store,
@@ -308,12 +372,14 @@ func (r *AudioRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		return fmt.Errorf("DESCRIBE: %w", err), false
 	}
 
-	// Negotiate one audio format: AAC, then G.711. Opus sources are refused
-	// for now (the muxer config shape is untested against a real device —
-	// deferred until one is available for validation).
+	// Negotiate one audio format: AAC, then G.711, then Opus. All three mux
+	// straight into MP4 (aac→mp4a, G.711→ulaw/alaw, Opus→dops); the playback
+	// split: G.711 gets the WAV transcode + live listening, AAC/Opus play
+	// natively via the download endpoint.
 	var (
 		aacForma  *format.MPEG4Audio
 		g711Forma *format.G711
+		opusForma *format.Opus
 		audioMedi *description.Media
 	)
 	audioMedi = desc.FindFormat(&aacForma)
@@ -324,7 +390,10 @@ func (r *AudioRecorder) connectAndStream(ctx context.Context) (error, bool) {
 	} else {
 		audioMedi = desc.FindFormat(&g711Forma)
 		if audioMedi == nil {
-			return errors.New("no supported audio track (AAC/G.711) in stream"), false
+			audioMedi = desc.FindFormat(&opusForma)
+			if audioMedi == nil {
+				return errors.New("no supported audio track (AAC/G.711/Opus) in stream"), false
+			}
 		}
 		if _, err := client.Setup(desc.BaseURL, audioMedi, 0, 0); err != nil {
 			return fmt.Errorf("audio SETUP: %w", err), false
@@ -350,7 +419,7 @@ func (r *AudioRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			channels:    ch,
 			muxerConfig: enc,
 		})
-	} else {
+	} else if g711Forma != nil {
 		rate := g711Forma.SampleRate
 		muLawByte := byte(0)
 		if g711Forma.MULaw {
@@ -364,6 +433,24 @@ func (r *AudioRecorder) connectAndStream(ctx context.Context) (error, bool) {
 			g711MULaw:      g711Forma.MULaw,
 			g711SampleRate: rate,
 			muxerConfig:    []byte{muLawByte, byte(rate >> 24), byte(rate >> 16), byte(rate >> 8), byte(rate)},
+		})
+	} else {
+		// Opus: dops track config = channels + PreSkip(0 for RTP sources,
+		// no OpusHead) + input sample rate — see muxer.AddAudioTrack.
+		rate := opusForma.ClockRate()
+		if rate == 0 {
+			rate = 48000
+		}
+		ch := opusForma.ChannelCount
+		if ch == 0 {
+			ch = 1
+		}
+		auCodec = model.AudioOpus
+		r.audioCfg.Store(&audioConfig{
+			codec:       "opus",
+			sampleRate:  rate,
+			channels:    ch,
+			muxerConfig: []byte{byte(ch), 0, 0, byte(rate >> 24), byte(rate >> 16), byte(rate >> 8), byte(rate)},
 		})
 	}
 	r.log.Info("audio source connected", "camera_id", r.cfg.CameraID, "codec", string(auCodec))
@@ -410,6 +497,25 @@ func (r *AudioRecorder) connectAndStream(ctx context.Context) (error, bool) {
 					at:       at,
 				})
 			}
+		})
+	} else if opusForma != nil {
+		dec, derr := opusForma.CreateDecoder()
+		if derr != nil {
+			connCancel()
+			<-writerDone
+			return fmt.Errorf("Opus decoder: %w", derr), false
+		}
+		client.OnPacketRTP(audioMedi, opusForma, func(pkt *rtp.Packet) {
+			au, derr := dec.Decode(pkt)
+			if derr != nil {
+				return
+			}
+			r.enqueue(audioAU{
+				data:     au,
+				codec:    model.AudioOpus,
+				duration: 20 * time.Millisecond, // nominal Opus frame; arrival time drives rotation
+				at:       time.Now(),
+			})
 		})
 	} else {
 		dec := &rtplpcm.Decoder{BitDepth: 8, ChannelCount: 1}
@@ -501,29 +607,48 @@ func (r *AudioRecorder) writeAUs(ctx context.Context) {
 		case <-ctx.Done():
 			r.closeSegment(time.Now())
 			return
+		case <-r.pushClose:
+			// Push publisher went away: drain anything still queued, then
+			// finalize (the push session end is the segment boundary); the
+			// writer stays alive for the next publisher.
+		drain:
+			for {
+				select {
+				case au := <-r.auCh:
+					r.writeOneAU(au)
+				default:
+					break drain
+				}
+			}
+			r.closeSegment(time.Now())
 		case au := <-r.auCh:
-			if r.muxer != nil && au.at.Sub(r.segStart) >= r.cfg.SegmentDur {
-				r.closeSegment(au.at)
-			}
-			if r.muxer == nil {
-				if !r.recordEnabled() {
-					continue // live-only mode
-				}
-				if !r.openSegment(au) {
-					continue // storage failure: stay live, retry next AU
-				}
-			}
-			pts := au.at.Sub(r.segStart)
-			if err := r.muxer.WriteAudioSample(r.trackID, au.data, pts, au.duration); err != nil {
-				if err.Error() != "muxer is closed" {
-					r.log.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
-				}
-				continue
-			}
-			r.segBytes += int64(len(au.data))
-			r.auCount++
+			r.writeOneAU(au)
 		}
 	}
+}
+
+// writeOneAU applies the rotation/open/write sequence to one access unit.
+func (r *AudioRecorder) writeOneAU(au audioAU) {
+	if r.muxer != nil && au.at.Sub(r.segStart) >= r.cfg.SegmentDur {
+		r.closeSegment(au.at)
+	}
+	if r.muxer == nil {
+		if !r.recordEnabled() {
+			return // live-only mode
+		}
+		if !r.openSegment(au) {
+			return // storage failure: stay live, retry next AU
+		}
+	}
+	pts := au.at.Sub(r.segStart)
+	if err := r.muxer.WriteAudioSample(r.trackID, au.data, pts, au.duration); err != nil {
+		if err.Error() != "muxer is closed" {
+			r.log.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
+		}
+		return
+	}
+	r.segBytes += int64(len(au.data))
+	r.auCount++
 }
 
 // openSegment creates a new audio segment anchored at the first AU's

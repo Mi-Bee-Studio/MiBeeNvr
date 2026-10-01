@@ -236,11 +236,19 @@ func buildStreamingDeps(deps *appDeps) (flvMgr *flv.Manager, gbLibEvents *gbsip.
 			camMgr.ResolveWHIPKey,
 			camMgr.GetOrCreateHub,
 			func(cameraID string, _ *streamhub.StreamHub) {
+				if ar := camMgr.GetAudioPushRecorder(cameraID); ar != nil {
+					ar.PushConnected()
+					return
+				}
 				if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
 					ir.WriteConnected()
 				}
 			},
 			func(cameraID string) {
+				if ar := camMgr.GetAudioPushRecorder(cameraID); ar != nil {
+					ar.PushDisconnected()
+					return
+				}
 				if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
 					ir.OnDisconnect()
 				}
@@ -257,11 +265,22 @@ func buildStreamingDeps(deps *appDeps) (flvMgr *flv.Manager, gbLibEvents *gbsip.
 			}
 		}
 		deps.whipServer.AudioFormatter = func(cameraID string, codec string, sampleRate, channels int) {
+			// WHIP microphone (v43): arm the push-mode AudioRecorder's codec
+			// snapshot so its segments mux with the right track config.
+			if ar := camMgr.GetAudioPushRecorder(cameraID); ar != nil {
+				ar.ArmPushFormat(codec, sampleRate, channels)
+				return
+			}
 			if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
 				ir.SetAudioFormat(codec, sampleRate, channels)
 			}
 		}
 		deps.whipServer.AudioProvider = func(cameraID string) whip.AudioCallback {
+			if ar := camMgr.GetAudioPushRecorder(cameraID); ar != nil {
+				return func(codec string, ptsTicks int64, data []byte, dur time.Duration) {
+					ar.WritePushAU(data)
+				}
+			}
 			ir := camMgr.GetIngestRecorder(cameraID)
 			if ir == nil {
 				return nil

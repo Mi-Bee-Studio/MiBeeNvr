@@ -42,7 +42,7 @@ func TestAudioLiveWav_StreamsPCM(t *testing.T) {
 	ar := recorder.NewAudioRecorder(recorder.AudioConfig{CameraID: "cam-mic"}, nil, nil)
 	hub := streamhub.New()
 	ar.SetHub(hub)
-	ar.SetAudioConfigForTest("g711", 8000, 1, []byte{1, 0, 0, 0x1f, 0x40}) // μ-law 8k mono
+	ar.ArmPushFormat("g711", 8000, 1) // μ-law 8k mono
 
 	srv := httptest.NewServer(audioLiveEnv(t, ar, "cam-mic"))
 	defer srv.Close()

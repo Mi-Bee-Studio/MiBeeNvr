@@ -474,7 +474,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 		{
 			ID:        "whip",
 			Label:     "WHIP (WebRTC push)",
-			Encodings: []string{"h264"},
+			Encodings: []string{"h264", "audio"},
 			BuiltIn:   true,
 			// WHIP publishers send the stream key inside the endpoint URL — no
 			// per-camera credentials (same model as RTMP push keys).
