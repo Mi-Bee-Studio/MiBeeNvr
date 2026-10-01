@@ -293,8 +293,16 @@ func (m *Manager) OnCameraAdded(cameraID string, recorder model.Recorder, overri
 		}
 	}
 
+	// Audio-only source devices (independent microphones) carry no video
+	// frames: frame-driven probes (freeze detection, FPS/bitrate stats)
+	// would false-alarm on them forever. Connection monitoring still applies.
+	audioOnly := false
+	if ao, ok := recorder.(interface{ AudioOnly() bool }); ok {
+		audioOnly = ao.AudioOnly()
+	}
+
 	// Subscribe to StreamHub for stream stats (always) and freeze detection (full mode only)
-	if hub := getHub(recorder); hub != nil {
+	if hub := getHub(recorder); hub != nil && !audioOnly {
 		statsCallback := m.collector.OnFrame(cameraID)
 		_ = hub.Subscribe("health-stats-"+cameraID, statsCallback)
 
@@ -307,7 +315,9 @@ func (m *Manager) OnCameraAdded(cameraID string, recorder model.Recorder, overri
 	if !m.metricsOnly {
 		// Initialize connection / freeze / pipeline monitoring
 		m.conn.OnStatusChange(cameraID, string(model.StatusRecording))
-		m.freeze.SetRecording(cameraID, true)
+		if !audioOnly {
+			m.freeze.SetRecording(cameraID, true)
+		}
 		m.pipeline.SetCameraStatus(cameraID, string(model.HealthStatusHealthy))
 	}
 

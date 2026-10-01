@@ -74,9 +74,25 @@ func (cm *CameraManager) buildXiaomiRecorder(cam config.CameraConfig, segDur tim
 }
 
 // buildRTSPRecorder builds an RTSP recorder for the camera's encoding
-// (h264/h265/mjpeg).
+// (h264/h265/mjpeg/audio).
 func (cm *CameraManager) buildRTSPRecorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
 	switch cam.Encoding {
+	case string(model.FormatAudio):
+		// Audio-only source device (independent mic): time-driven rotation,
+		// audio segments only. segDur follows the recorder's own default
+		// (60s) unless the camera overrides the shared segment duration.
+		return recorder.NewAudioRecorder(recorder.AudioConfig{
+			CameraID:      cam.ID,
+			RTSPURL:       cam.URL,
+			Username:      cam.Username,
+			Password:      cam.Password,
+			SegmentDur:    segDur,
+			DB:            cm.db,
+			Store:         cm.store,
+			Metrics:       cm.metrics,
+			EventBus:      cm.eventBus,
+			RecordEnabled: cam.RecordingEnabled,
+		}, cm.store, cm.metrics)
 	case string(model.FormatH264):
 		h264Cfg := recorder.H264Config{
 			CameraID:          cam.ID,
