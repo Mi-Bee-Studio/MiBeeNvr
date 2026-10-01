@@ -142,7 +142,7 @@ func TestAudioRecorder_RotatesOnWallClock(t *testing.T) {
 	start := time.Now()
 	var aus []audioAU
 	// 30 AUs × 20ms = 600ms span inside the first segment window.
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		aus = append(aus, g711AU(start.Add(time.Duration(i)*20*time.Millisecond)))
 	}
 	// Next AU 600ms after start — past the 500ms rotation → new segment.
@@ -221,7 +221,7 @@ func TestAudioRecorder_LiveOnlySkipsDisk(t *testing.T) {
 
 	start := time.Now()
 	var aus []audioAU
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		aus = append(aus, g711AU(start.Add(time.Duration(i)*20*time.Millisecond)))
 	}
 	feedAUs(t, r, aus)

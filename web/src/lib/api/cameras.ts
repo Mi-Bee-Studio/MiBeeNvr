@@ -27,6 +27,12 @@ export interface Camera {
   serial_number?: string;
   /** Camera-management group label (v36). Empty/undefined = ungrouped. */
   group?: string;
+  /**
+   * Audio-device → video-camera association (v43). Only meaningful for
+   * encoding "audio" (independent mic) devices: the video camera whose
+   * recordings the audio should replay alongside. '' = free-standing mic.
+   */
+  audio_link_camera_id?: string;
   status?: string;
   error_type?: string | null;
   error_detail?: string | null;
@@ -199,6 +205,8 @@ export interface CreateCameraRequest {
   location?: string;
   /** Camera-management group label (v36). Empty/undefined = ungrouped. */
   group?: string;
+  /** Audio link (v43) — audio-only devices only. '' = free-standing mic. */
+  audio_link_camera_id?: string;
   brand?: string;
   model?: string;
   serial_number?: string;
@@ -261,6 +269,8 @@ export interface UpdateCameraRequest {
   location?: string;
   /** Camera-management group label (v36). Empty string = ungroup. */
   group?: string;
+  /** Audio link (v43) — '' clears the association. */
+  audio_link_camera_id?: string;
   brand?: string;
   model?: string;
   serial_number?: string;
@@ -375,7 +385,9 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
   {
     id: 'rtsp',
     label: 'RTSP',
-    encodings: ['h264', 'h265', 'mjpeg'],
+    // 'audio' = audio-only source device (independent mic): recorder consumes
+    // the stream's audio track and writes standalone audio segments.
+    encodings: ['h264', 'h265', 'mjpeg', 'audio'],
     builtIn: true,
     capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: true },
   },

@@ -454,7 +454,10 @@
   onMount(async () => {
     try {
       const fetched = await getDashboardCameras();
-      const activeFetched = fetched;
+      // Audio-only devices (v43, encoding "audio") have no video stream — they
+      // cannot render in a video grid and would occupy a slot with a permanent
+      // error tile. Exclude them from the grid and its picker.
+      const activeFetched = fetched.filter((c) => c.encoding !== 'audio');
       allCameras = activeFetched;
       const savedIds = loadSavedCameraIds();
       if (savedIds.length > 0) {

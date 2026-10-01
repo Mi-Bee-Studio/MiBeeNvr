@@ -431,9 +431,12 @@ type protocolInfo struct {
 func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 	protocols := []protocolInfo{
 		{
-			ID:           "rtsp",
-			Label:        "RTSP",
-			Encodings:    []string{"h264", "h265", "mjpeg"},
+			ID:    "rtsp",
+			Label: "RTSP",
+			// "audio" = audio-only source device (independent mic): the
+			// recorder consumes the stream's audio track (AAC/G.711) and
+			// writes standalone audio segments.
+			Encodings:    []string{"h264", "h265", "mjpeg", "audio"},
 			BuiltIn:      true,
 			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": true},
 		},

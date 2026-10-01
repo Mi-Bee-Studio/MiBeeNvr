@@ -765,7 +765,7 @@ func (d *DB) ensureCameraGroupsPositionColumn(ctx context.Context) error {
 // ensureCameraAudioLinkColumn adds cameras.audio_link_camera_id (v43, audio
 // source devices): optional association to the video camera whose recordings
 // the audio should be replayed alongside (a mic mounted next to a camera).
-// '' = free-standing mic. Pure metadata — the recorder never reads it.
+// ” = free-standing mic. Pure metadata — the recorder never reads it.
 func (d *DB) ensureCameraAudioLinkColumn(ctx context.Context) error {
 	var colExists int
 	if err := d.db.QueryRowContext(ctx,

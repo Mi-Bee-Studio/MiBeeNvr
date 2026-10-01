@@ -129,9 +129,9 @@ func NewAudioRecorder(cfg AudioConfig, store SegmentStore, m *metrics.Metrics) *
 	ch := make(chan audioAU, defaultAudioAUChanCap)
 	ptr := ch
 	r := &AudioRecorder{
-		cfg: cfg,
-		log: audioLogger,
-		done: make(chan struct{}),
+		cfg:    cfg,
+		log:    audioLogger,
+		done:   make(chan struct{}),
 		status: model.StatusStopped,
 		// Pre-allocated (NOT only in connectAndStream): stats readers and
 		// tests drive the writer before any connection exists.

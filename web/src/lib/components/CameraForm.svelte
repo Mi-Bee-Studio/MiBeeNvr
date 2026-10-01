@@ -4,6 +4,7 @@
     import {
         createCamera,
         updateCamera,
+        listCameras,
         getMergeConfig,
         updateMergeConfig,
         testConnection,
@@ -79,6 +80,13 @@
   let formLocation = $state('');
   // Camera-management group label (v36). Empty = ungrouped.
   let formGroup = $state('');
+  // Audio-device → video-camera association (v43). Only shown for
+  // rtsp+encoding "audio" (independent mic) sources. Empty = free-standing.
+  let formAudioLinkCameraID = $state('');
+  // Candidate video cameras for the audio link select, lazily loaded when the
+  // audio variant is active (the form intentionally has no cameras prop —
+  // one API call on demand beats threading a list through every mount).
+  let audioLinkCandidates = $state<{ id: string; name: string }[]>([]);
   let formBrand = $state('');
   let formModel = $state('');
   let formSerialNumber = $state('');
@@ -184,6 +192,28 @@ let validationErrors = $state<Record<string, string>>({});
   let mergeConfig = $state<MergeConfig | null>(null);
   let mergeConfigLoading = $state(false);
 
+  // Audio-source variant (v43): rtsp + encoding "audio" = independent mic.
+  const isAudioSource = $derived(formProtocol === 'rtsp' && formEncoding === 'audio');
+
+  // Lazily fetch candidate video cameras for the audio-link select once the
+  // audio variant becomes active (excludes other audio devices — the backend
+  // rejects those links anyway, hiding them here avoids the round-trip).
+  $effect(() => {
+    if (!isAudioSource) return;
+    let cancelled = false;
+    listCameras()
+      .then((cams) => {
+        if (cancelled) return;
+        audioLinkCandidates = cams
+          .filter((c) => c.encoding !== 'audio' && c.id !== editingCamera?.id)
+          .map((c) => ({ id: c.id, name: c.name }));
+      })
+      .catch(() => {
+        if (!cancelled) audioLinkCandidates = [];
+      });
+    return () => { cancelled = true; };
+  });
+
   // Auto-select encoding when protocol changes
   $effect(() => {
     const proto = protocolsMap.get(formProtocol);
@@ -235,6 +265,7 @@ let validationErrors = $state<Record<string, string>>({});
     formDescription = '';
     formLocation = '';
     formGroup = '';
+    formAudioLinkCameraID = '';
     formBrand = '';
     formModel = '';
     formSerialNumber = '';
@@ -284,6 +315,7 @@ let validationErrors = $state<Record<string, string>>({});
     formDescription = camera.description || '';
     formLocation = camera.location || '';
     formGroup = camera.group || '';
+    formAudioLinkCameraID = camera.audio_link_camera_id || '';
     formBrand = camera.brand || '';
     formModel = camera.model || '';
     formSerialNumber = camera.serial_number || '';
@@ -553,6 +585,7 @@ async function performCameraSave() {
             description: formDescription || undefined,
             location: formLocation || undefined,
             group: formGroup.trim(),
+            audio_link_camera_id: isAudioSource ? (formAudioLinkCameraID.trim() || '') : undefined,
             brand: formBrand || undefined,
             model: formModel || undefined,
             serial_number: formSerialNumber || undefined,
@@ -625,6 +658,7 @@ async function performCameraSave() {
             description: formDescription || undefined,
             location: formLocation || undefined,
             group: formGroup.trim() || undefined,
+            audio_link_camera_id: isAudioSource ? (formAudioLinkCameraID.trim() || '') : undefined,
             brand: formBrand || undefined,
             model: formModel || undefined,
             serial_number: formSerialNumber || undefined,
@@ -741,6 +775,21 @@ async function performCameraSave() {
         </select>
       {/if}
     </div>
+
+    <!-- Audio-source variant (v43): link this mic to a video camera so
+         playback can surface simultaneous audio; compliance hint applies. -->
+    {#if isAudioSource}
+      <div>
+        <label for="cam-audio-link" class="input-label">{t('cameras.audioLinkCamera')}</label>
+        <select id="cam-audio-link" class="input" bind:value={formAudioLinkCameraID}>
+          <option value="">{t('cameras.audioLinkNone')}</option>
+          {#each audioLinkCandidates as c (c.id)}
+            <option value={c.id}>{c.name}</option>
+          {/each}
+        </select>
+        <p class="text-xs th-color-secondary mt-1">{t('cameras.audioLinkHint')}</p>
+      </div>
+    {/if}
 
     {#if formProtocol === 'xiaomi'}
       <!-- Lens/Channel -->
