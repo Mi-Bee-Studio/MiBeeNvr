@@ -307,6 +307,13 @@ func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byt
 		codec = model.EncJPEG
 	case *recorder.MJPEGRecorder:
 		codec = model.FormatMJPEG
+	case *recorder.AudioRecorder:
+		// Audio-only source devices: no video codec, no live-video protocols.
+		// Leaving codec "" would make /protocols report nothing; the SPA then
+		// treats the camera as video-less (correct) and live listening goes
+		// through the WS audio path instead. Keep "" — the audio case exists
+		// here to document the deliberate no-op.
+		codec = ""
 	}
 	return
 }

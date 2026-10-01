@@ -479,6 +479,10 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 func (h *Handler) registerMediaRoutes(r chi.Router) {
 	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)
 	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
+	// Audio-only recordings (v43): G.711 → WAV pure-Go transcode (browsers
+	// don't play G.711-in-MP4). Same auth class as download + audit log.
+	r.Get("/api/recordings/{id}/audio.wav", h.handleAudioWav)
+	r.Head("/api/recordings/{id}/audio.wav", h.handleAudioWav)
 	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)
 	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
 	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)

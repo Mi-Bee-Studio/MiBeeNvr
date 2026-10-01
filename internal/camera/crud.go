@@ -704,6 +704,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 				logger.Error("failed to update camera group", "camera_id", cam.ID, "error", err)
 			}
 		}
+		// Audio-device association (v43) — DB-only, never affects the recorder.
+		if updates.AudioLinkCameraID != nil {
+			if err := cm.db.UpdateCameraAudioLink(ctx, cam.ID, strings.TrimSpace(*updates.AudioLinkCameraID)); err != nil {
+				logger.Error("failed to update camera audio link", "camera_id", cam.ID, "error", err)
+			}
+		}
 	}
 
 	segDur, err := time.ParseDuration(cm.cfg.Storage.SegmentDuration)

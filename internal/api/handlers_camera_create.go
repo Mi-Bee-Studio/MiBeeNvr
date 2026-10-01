@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,37 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
 )
+
+// defaultAudioDeviceRetentionDays is the compliance-baseline retention for
+// audio-only source devices at creation: shorter than the video default —
+// audio monitoring is legally the more sensitive modality.
+const defaultAudioDeviceRetentionDays = 7
+
+// validateAudioLink checks an audio-device → video-camera association (v43):
+// the target must exist and be a real (non-audio) camera.
+func (h *Handler) validateAudioLink(ctx context.Context, selfID, targetID string) error {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return nil
+	}
+	if targetID == selfID {
+		return errors.New("audio_link_camera_id cannot reference itself")
+	}
+	if h.db == nil {
+		return nil
+	}
+	row, err := h.db.GetCamera(ctx, targetID)
+	if err != nil {
+		return fmt.Errorf("audio link lookup failed: %w", err)
+	}
+	if row == nil {
+		return fmt.Errorf("audio_link_camera_id %q does not exist", targetID)
+	}
+	if row.Encoding == string(model.FormatAudio) {
+		return fmt.Errorf("audio_link_camera_id %q is itself an audio device", targetID)
+	}
+	return nil
+}
 
 // gb28181ChannelPayload is the API shape of a camera's GB28181 binding.
 type gb28181ChannelPayload struct {
@@ -73,7 +105,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Model        string `json:"model"`
 		SerialNumber string `json:"serial_number"`
 		// Group label (v36, camera-management grouping). Empty = ungrouped.
-		Group         string `json:"group"`
+		Group             string `json:"group"`
+		AudioLinkCameraID string `json:"audio_link_camera_id"`
+		// RetentionDays: 0 = service default. For audio-only devices
+		// (encoding "audio") the create boundary applies the compliance
+		// default (7 days) when unset or negative.
+		RetentionDays int    `json:"retention_days"`
 		ONVIFEndpoint string `json:"onvif_endpoint"`
 		ProfileToken  string `json:"profile_token"`
 		// Sub-stream (#512): manual sub profile token + manual sub stream URL.
@@ -294,6 +331,17 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Audio-only devices (v43): the optional camera association must pass
+	// validation BEFORE the camera is created (a bad link would otherwise
+	// leave a half-configured device behind).
+	if enc == string(model.FormatAudio) {
+		if link := strings.TrimSpace(body.AudioLinkCameraID); link != "" {
+			if err := h.validateAudioLink(r.Context(), "", link); err != nil {
+				WriteError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
 	// Same boundary validation for the recording mode (#435, #402 class).
 	if err := config.ValidateCameraRecordingMode(config.CameraConfig{
 		ID:            body.Name,
@@ -385,6 +433,23 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	if g := strings.TrimSpace(body.Group); g != "" {
 		if err := h.db.UpdateCameraGroup(r.Context(), id, g); err != nil {
 			logger.Warn("failed to set camera group", "camera_id", id, "error", err)
+		}
+	}
+	// Audio-only devices (v43): compliance retention default (7 days — audio
+	// evidence is more sensitive than video; shorter than the video default)
+	// unless explicitly provided, plus the optional camera association.
+	if enc == string(model.FormatAudio) {
+		rd := body.RetentionDays
+		if rd <= 0 {
+			rd = defaultAudioDeviceRetentionDays
+		}
+		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, rd); err != nil {
+			logger.Warn("failed to set audio device metadata/retention", "camera_id", id, "error", err)
+		}
+		if link := strings.TrimSpace(body.AudioLinkCameraID); link != "" {
+			if err := h.db.UpdateCameraAudioLink(r.Context(), id, link); err != nil {
+				logger.Warn("failed to set audio link", "camera_id", id, "error", err)
+			}
 		}
 	}
 	// Persist push/ingest fields for srt/rtmp cameras.
