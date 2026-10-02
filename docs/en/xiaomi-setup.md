@@ -216,35 +216,34 @@ curl -X POST -u admin:password http://localhost:9090/api/xiaomi/sync
 
 ### Camera Control
 
-**GET** `/api/xiaomi/cameras/{camera_id}/status`
-- **Response**: Camera status information
-- **Description**: Get current camera status
+**GET** `/api/cameras/{camera_id}`
+- **Response**: Camera details (including status)
+- **Description**: Get current camera status (generic camera endpoint; the old `/api/xiaomi/cameras/{id}/status` has been removed)
 
 ```bash
-curl -u admin:password http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/status
+curl -u admin:password http://localhost:9090/api/cameras/cam-xxxx
 ```
 
-**POST** `/api/xiaomi/cameras/{camera_id}/ptz`
-- **Body**: `{action: string, speed: number}`
-- **Response**: PTZ control result
-- **Description**: Control pan/tilt/zoom functions (for supported models)
+**POST** `/api/cameras/{camera_id}/ptz/move`
+- **Body**: `{"mode": "continuous", "pan": number, "tilt": number, "zoom": number}`
+- **Description**: PTZ jog (unified endpoint — see the "PTZ Control" chapter below; the old `/api/xiaomi/cameras/{id}/ptz` has been removed)
 
 ```bash
 curl -X POST -u admin:password \
   -H "Content-Type: application/json" \
-  -d '{"action": "up", "speed": 1}' \
-  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+  -d '{"mode":"continuous","pan":0,"tilt":0.5,"zoom":0}' \
+  http://localhost:9090/api/cameras/cam-xxxx/ptz/move
 ```
 
 ### Snapshot Management
 
-**GET** `/api/xiaomi/cameras/{camera_id}/snapshot`
+**GET** `/api/cameras/{camera_id}/snapshot`
 - **Response**: JPEG image data
-- **Description**: Take a snapshot from the camera
+- **Description**: Take a snapshot from the camera (generic camera endpoint; returns 404 when no snapshot is available)
 
 ```bash
 curl -u admin:password -o snapshot.jpg \
-  http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/snapshot
+  http://localhost:9090/api/cameras/cam-xxxx/snapshot
 ```
 
 ## Two-Way Audio
@@ -263,13 +262,11 @@ Enable two-way audio in your camera configuration:
 
 ```yaml
 cameras:
-  - id: "xiaomi_c200_front"
+  - id: "cam-xxxx"
     name: "Xiaomi C200 - Front"
     protocol: "xiaomi"
     encoding: "h264"
-    did: "device_id_here"
-    vendor: "cs2"
-    enabled: true
+    url: "xiaomi://655448418"   # xiaomi://<device DID>
     two_way_audio_enabled: true  # Enable two-way audio
 ```
 
@@ -296,37 +293,33 @@ cameras:
 
 Pan-tilt-zoom (PTZ) control is available for Xiaomi cameras with motor support. This includes most dome cameras (Xiaofang, Dafang, Xiaobai) and some indoor cameras.
 
+Xiaomi cameras share the **unified PTZ endpoints** with ONVIF / GB28181 cameras, driven by velocity vectors: `pan`/`tilt`/`zoom` ∈ [-1, 1]. For Xiaomi cameras the dominant axis becomes the rotation direction and speed = magnitude × 10 (matching the Web UI speed selector's 0.25 / 0.5 / 1.0).
+
 ### Supported Actions
 
-- `up`, `down`, `left`, `right` — Directional pan/tilt
-- `zoom_in`, `zoom_out` — Zoom control (if supported)
-- `stop` — Stop movement
+- `pan` / `tilt` — Directional pan/tilt (continuous velocity vectors; press to move, release to stop)
+- `stop` — Stop movement (a move must be followed by a stop)
+- `zoom` — **Not supported** on Xiaomi cameras (returns 400)
 
 ### API Usage
 
-**POST** `/api/xiaomi/cameras/{camera_id}/ptz`
-- **Body**: `{action: string, speed: number}`
-- **Actions**: "up", "down", "left", "right", "zoom_in", "zoom_out", "stop"
-- **Speed**: 1-10 (1 = slowest, 10 = fastest)
+**POST** `/api/cameras/{camera_id}/ptz/move`
+- **Body**: `{"mode": "continuous", "pan": number, "tilt": number, "zoom": number}`
+- **Response**: `{"status": "ok"}`; 503 when the camera is offline; 400 for a non-zero zoom vector
+
+**POST** `/api/cameras/{camera_id}/ptz/stop`
+- **Response**: `{"status": "ok"}`
 
 ```bash
-# Move camera up
+# Tilt up (0.5 = medium speed)
 curl -X POST -u admin:password \
   -H "Content-Type: application/json" \
-  -d '{"action": "up", "speed": 5}' \
-  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
-
-# Zoom in
-curl -X POST -u admin:password \
-  -H "Content-Type: application/json" \
-  -d '{"action": "zoom_in", "speed": 3}' \
-  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+  -d '{"mode":"continuous","pan":0,"tilt":0.5,"zoom":0}' \
+  http://localhost:9090/api/cameras/cam-xxxx/ptz/move
 
 # Stop movement
 curl -X POST -u admin:password \
-  -H "Content-Type: application/json" \
-  -d '{"action": "stop", "speed": 0}' \
-  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+  http://localhost:9090/api/cameras/cam-xxxx/ptz/stop
 ```
 
 ### Frontend Integration
@@ -342,11 +335,11 @@ You can query device information including firmware and hardware versions for Xi
 
 ### API Usage
 
-**GET** `/api/xiaomi/cameras/{camera_id}/device-info`
+**GET** `/api/cameras/{camera_id}/xiaomi/device-info`
 - **Response**: Device information JSON
 
 ```bash
-curl -u admin:password http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/device-info
+curl -u admin:password http://localhost:9090/api/cameras/cam-xxxx/xiaomi/device-info
 ```
 
 **Response Example**:
@@ -446,24 +439,24 @@ class XiaomiCameraClient:
     
     def take_snapshot(self, camera_id):
         """Take snapshot from camera"""
-        url = f"{self.base_url}/api/xiaomi/cameras/{camera_id}/snapshot"
+        url = f"{self.base_url}/api/cameras/{camera_id}/snapshot"
         response = self.session.get(url, auth=self.auth)
         response.raise_for_status()
         return response.content
     
     def get_camera_status(self, camera_id):
         """Get camera status"""
-        url = f"{self.base_url}/api/xiaomi/cameras/{camera_id}/status"
+        url = f"{self.base_url}/api/cameras/{camera_id}"
         response = self.session.get(url, auth=self.auth)
         response.raise_for_status()
         return response.json()
     
-    def trigger_recording(self, camera_id, duration=60):
-        """Trigger recording on camera"""
-        url = f"{self.base_url}/api/xiaomi/cameras/{camera_id}/trigger"
+    def trigger_recording(self, camera_id, hold=60):
+        """Trigger recording (external event forces adaptive cameras out of timelapse)"""
+        url = f"{self.base_url}/api/cameras/{camera_id}/adaptive/trigger"
         data = {
-            "action": "record",
-            "duration": duration
+            "source": "external",
+            "hold": hold
         }
         
         response = self.session.post(url, json=data, auth=self.auth)
@@ -565,7 +558,7 @@ take_snapshots() {
         
         # Take snapshot
         response=$(curl -s -u "$NVR_USER:$NVR_PASS" -o "/tmp/snapshot_${camera}.jpg" \
-                  "$NVR_URL/api/xiaomi/cameras/${camera}/snapshot" 2>/dev/null)
+                  "$NVR_URL/api/cameras/${camera}/snapshot" 2>/dev/null)
         
         if [[ $? -eq 0 && -f "/tmp/snapshot_${camera}.jpg" ]]; then
             file_size=$(stat -c%s "/tmp/snapshot_${camera}.jpg")
@@ -737,7 +730,7 @@ ERROR: xiaomi device not found: device_id_12345
 curl -u admin:password http://localhost:9090/api/xiaomi/devices
 
 # Check device online status
-curl -u admin:password http://localhost:9090/api/xiaomi/cameras/device_id_12345/status
+curl -u admin:password http://localhost:9090/api/cameras/cam-xxxx
 
 # Verify camera is online in Mi Home app
 # Check network connectivity

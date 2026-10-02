@@ -88,7 +88,7 @@ Opened from the grid or a camera card at `#/live/{id}`:
 
 - Large live view with protocol switching
 - **Quality switcher**: switch between main / [sub-stream](sub-stream.md) when the camera has one
-- **PTZ control**: pan/tilt/preset control for capable cameras (e.g. Xiaomi PTZ models)
+- **PTZ control**: pan/tilt/preset control for capable cameras (ONVIF / Xiaomi PTZ models / GB28181 channels); hold a direction to move, release to stop, with a three-step speed selector (slow / medium / fast)
 - **Two-way audio**: push-to-talk back to the camera (see [Audio](audio.md))
 - **Snapshot**: save the current frame
 - **Camera settings**: a collapsible panel at the bottom embeds this camera's edit form — adjust access parameters without navigating away; saving silently refreshes probes without interrupting playback
