@@ -44,6 +44,7 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 | Group | Endpoints | Notes |
 |-------|-----------|-------|
 | Cameras | `GET/POST /api/cameras`, `GET/PUT/DELETE /api/cameras/{id}`, `POST /api/cameras/{id}/adaptive/trigger`, `PUT/GET /api/cameras/{id}/storage-root` | camera CRUD, adaptive-recording external trigger, per-camera storage root |
+| PTZ | `POST /api/cameras/{id}/ptz/move`, `POST /api/cameras/{id}/ptz/stop`, `GET /api/cameras/{id}/ptz/status`, `GET/POST /api/cameras/{id}/ptz/presets`, `POST /api/cameras/{id}/ptz/presets/{token}/goto` | unified pan/tilt/zoom control (shared by ONVIF / Xiaomi / GB28181 channels; vector semantics and per-protocol differences: see the PTZ chapter in [Xiaomi Setup](xiaomi-setup.md)) |
 | Live streams | `GET /api/cameras/{id}/stream.flv`, HLS / WebRTC / MJPEG endpoints | pull streams (FLV needs BasicAuth) |
 | Recordings | `GET /api/recordings` | list / filter / paginate |
 | Playback | `GET /api/cameras/{id}/playback/playlist.m3u8` | per-recording playback |

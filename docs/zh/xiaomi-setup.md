@@ -214,35 +214,34 @@ curl -X POST -u admin:password http://localhost:9090/api/xiaomi/sync
 
 ### 摄像头控制
 
-**GET** `/api/xiaomi/cameras/{camera_id}/status`
-- **响应**：摄像头状态信息
-- **说明**：获取当前摄像头状态
+**GET** `/api/cameras/{camera_id}`
+- **响应**：摄像头详情（含状态）
+- **说明**：获取当前摄像头状态（通用摄像头端点；旧 `/api/xiaomi/cameras/{id}/status` 已移除）
 
 ```bash
-curl -u admin:password http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/status
+curl -u admin:password http://localhost:9090/api/cameras/cam-xxxx
 ```
 
-**POST** `/api/xiaomi/cameras/{camera_id}/ptz`
-- **请求体**：`{action: string, speed: number}`
-- **响应**：PTZ 控制结果
-- **说明**：控制云台/变焦功能（支持型号）
+**POST** `/api/cameras/{camera_id}/ptz/move`
+- **请求体**：`{"mode": "continuous", "pan": number, "tilt": number, "zoom": number}`
+- **说明**：云台点动（统一 PTZ 端点，详见下文「云台控制」一章；旧 `/api/xiaomi/cameras/{id}/ptz` 已移除）
 
 ```bash
 curl -X POST -u admin:password \
   -H "Content-Type: application/json" \
-  -d '{"action": "up", "speed": 1}' \
-  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+  -d '{"mode":"continuous","pan":0,"tilt":0.5,"zoom":0}' \
+  http://localhost:9090/api/cameras/cam-xxxx/ptz/move
 ```
 
 ### 快照管理
 
-**GET** `/api/xiaomi/cameras/{camera_id}/snapshot`
+**GET** `/api/cameras/{camera_id}/snapshot`
 - **响应**：JPEG 图像数据
-- **说明**：从摄像头拍摄快照
+- **说明**：从摄像头拍摄快照（通用摄像头端点；无可用快照时返回 404）
 
 ```bash
 curl -u admin:password -o snapshot.jpg \
-  http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/snapshot
+  http://localhost:9090/api/cameras/cam-xxxx/snapshot
 ```
 
 ## 双工音频
@@ -261,13 +260,11 @@ curl -u admin:password -o snapshot.jpg \
 
 ```yaml
 cameras:
-  - id: "xiaomi_c200_front"
+  - id: "cam-xxxx"
     name: "小米 C200 - 前门"
     protocol: "xiaomi"
     encoding: "h264"
-    did: "device_id_here"
-    vendor: "cs2"
-    enabled: true
+    url: "xiaomi://655448418"   # xiaomi://<设备 DID>
     two_way_audio_enabled: true  # 启用双工音频
 ```
 
@@ -301,42 +298,35 @@ cameras:
 
 云台控制（PTZ）适用于支持电机的小米摄像头。这包括大多数球型摄像头（小方、大方、小白）和一些室内摄像头。
 
+小米与 ONVIF / GB28181 摄像头共用同一组**统一 PTZ 端点**，按向量驱动：`pan`/`tilt`/`zoom` ∈ [-1, 1] 表示速度向量。对小米摄像头，取幅值最大的轴作为转动方向，速度 = 幅值 × 10（与 Web UI 三档速度选择器的 0.25 / 0.5 / 1.0 对应）。
+
 ### 支持的操作
 
-- `up`, `down`, `left`, `right` — 方向云台控制
-
-- `zoom_in`, `zoom_out` — 变焦控制（如果支持）
-
-- `stop` — 停止移动
+- `pan` / `tilt` — 方向云台控制（连续速度向量，按住即动、松手即停）
+- `stop` — 停止移动（move 之后必须跟一发 stop）
+- `zoom` — 小米摄像头**不支持**（返回 400）
 
 ### API 使用
 
-**POST** `/api/xiaomi/cameras/{camera_id}/ptz`
+**POST** `/api/cameras/{camera_id}/ptz/move`
 
-- **请求体**：`{action: string, speed: number}`
+- **请求体**：`{"mode": "continuous", "pan": number, "tilt": number, "zoom": number}`
+- **响应**：`{"status": "ok"}`；摄像头离线时 503；zoom 向量非零时 400
 
-- **操作**："up", "down", "left", "right", "zoom_in", "zoom_out", "stop"
+**POST** `/api/cameras/{camera_id}/ptz/stop`
 
-- **速度**：1-10（1 = 最慢，10 = 最快）
+- **响应**：`{"status": "ok"}`
 
 ```bash
-# 向上移动摄像头
+# 向上转动（0.5 = 中速）
 curl -X POST -u admin:password \
   -H "Content-Type: application/json" \
-  -d '{"action": "up", "speed": 5}' \
-  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
-
-# 放大
-curl -X POST -u admin:password \
-  -H "Content-Type: application/json" \
-  -d '{"action": "zoom_in", "speed": 3}' \
-  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+  -d '{"mode":"continuous","pan":0,"tilt":0.5,"zoom":0}' \
+  http://localhost:9090/api/cameras/cam-xxxx/ptz/move
 
 # 停止移动
 curl -X POST -u admin:password \
-  -H "Content-Type: application/json" \
-  -d '{"action": "stop", "speed": 0}' \
-  http://localhost:9090/api/xiaomi/cameras/xiaofang_living_room/ptz
+  http://localhost:9090/api/cameras/cam-xxxx/ptz/stop
 ```
 
 ### 前端集成
@@ -353,12 +343,12 @@ Web UI 为支持的摄像头提供屏幕云台控制。当满足以下条件时�
 
 ### API 使用
 
-**GET** `/api/xiaomi/cameras/{camera_id}/device-info`
+**GET** `/api/cameras/{camera_id}/xiaomi/device-info`
 
 - **响应**：设备信息 JSON
 
 ```bash
-curl -u admin:password http://localhost:9090/api/xiaomi/cameras/xiaomi_c200_front/device-info
+curl -u admin:password http://localhost:9090/api/cameras/cam-xxxx/xiaomi/device-info
 ```
 
 **响应示例**：
@@ -458,24 +448,24 @@ class XiaomiCameraClient:
     
     def take_snapshot(self, camera_id):
         """从摄像头拍摄快照"""
-        url = f"{self.base_url}/api/xiaomi/cameras/{camera_id}/snapshot"
+        url = f"{self.base_url}/api/cameras/{camera_id}/snapshot"
         response = self.session.get(url, auth=self.auth)
         response.raise_for_status()
         return response.content
     
     def get_camera_status(self, camera_id):
         """获取摄像头状态"""
-        url = f"{self.base_url}/api/xiaomi/cameras/{camera_id}/status"
+        url = f"{self.base_url}/api/cameras/{camera_id}"
         response = self.session.get(url, auth=self.auth)
         response.raise_for_status()
         return response.json()
     
-    def trigger_recording(self, camera_id, duration=60):
-        """触发摄像头录制"""
-        url = f"{self.base_url}/api/xiaomi/cameras/{camera_id}/trigger"
+    def trigger_recording(self, camera_id, hold=60):
+        """触发录制（外部事件强制 adaptive 摄像头退出延时模式）"""
+        url = f"{self.base_url}/api/cameras/{camera_id}/adaptive/trigger"
         data = {
-            "action": "record",
-            "duration": duration
+            "source": "external",
+            "hold": hold
         }
         
         response = self.session.post(url, json=data, auth=self.auth)
@@ -577,7 +567,7 @@ take_snapshots() {
         
         # 拍摄快照
         response=$(curl -s -u "$NVR_USER:$NVR_PASS" -o "/tmp/snapshot_${camera}.jpg" \
-                  "$NVR_URL/api/xiaomi/cameras/${camera}/snapshot" 2>/dev/null)
+                  "$NVR_URL/api/cameras/${camera}/snapshot" 2>/dev/null)
         
         if [[ $? -eq 0 && -f "/tmp/snapshot_${camera}.jpg" ]]; then
             file_size=$(stat -c%s "/tmp/snapshot_${camera}.jpg")
@@ -761,7 +751,7 @@ curl -X POST https://api.io.mi.com/login \
 curl -u admin:password http://localhost:9090/api/xiaomi/devices
 
 # 检查设备在线状态
-curl -u admin:password http://localhost:9090/api/xiaomi/cameras/device_id_12345/status
+curl -u admin:password http://localhost:9090/api/cameras/cam-xxxx
 
 # 在米家应用中验证摄像头在线
 # 检查网络连接

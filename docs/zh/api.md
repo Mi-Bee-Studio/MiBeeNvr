@@ -44,6 +44,7 @@ curl -H "Authorization: Bearer mbv_xxx" http://localhost:9090/api/recordings
 | 组 | 端点 | 说明 |
 |----|------|------|
 | 摄像头 | `GET/POST /api/cameras`、`GET/PUT/DELETE /api/cameras/{id}`、`POST /api/cameras/{id}/adaptive/trigger`、`PUT/GET /api/cameras/{id}/storage-root` | 摄像头 CRUD、自适应录制外部触发、按相机存储根 |
+| PTZ 云台 | `POST /api/cameras/{id}/ptz/move`、`POST /api/cameras/{id}/ptz/stop`、`GET /api/cameras/{id}/ptz/status`、`GET/POST /api/cameras/{id}/ptz/presets`、`POST /api/cameras/{id}/ptz/presets/{token}/goto` | 统一云台控制（ONVIF / 小米 / GB28181 通道共用；向量语义与协议差异见 [小米接入](xiaomi-setup.md)「云台控制」章） |
 | 实时流 | `GET /api/cameras/{id}/stream.flv`、HLS / WebRTC / MJPEG 端点 | 拉流（FLV 需 BasicAuth） |
 | 录像 | `GET /api/recordings` | 列表 / 筛选 / 分页 |
 | 回放 | `GET /api/cameras/{id}/playback/playlist.m3u8` | 按录像回放 |
