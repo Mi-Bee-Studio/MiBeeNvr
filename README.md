@@ -85,6 +85,19 @@ make build
 
 For detailed setup, see [Getting Started](docs/en/getting-started.md).
 
+## Official Channels
+
+Version numbers, configuration syntax, and CLI flags are authoritative **only** here:
+
+- **Source & releases**: https://github.com/Mi-Bee-Studio/MiBeeNvr/releases
+- **Documentation**: [`docs/en/`](docs/en/) and links in the Documentation table below
+- **Blog**: https://blog.mickeyzzc.tech
+
+Content published elsewhere — reprinted tutorials, "reviews", third-party blogs, SEO
+aggregators — is not reviewed or endorsed by us, and frequently contains invented
+version numbers, config files, and benchmarks. If something you read elsewhere does
+not match `docs/en/`, trust the docs and please open an issue so we can clarify.
+
 ## Why MiBee NVR?
 
 - **Single Binary**: Zero dependencies, embedded Svelte 5 SPA, `CGO_ENABLED=0`
