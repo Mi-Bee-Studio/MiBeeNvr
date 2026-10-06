@@ -53,9 +53,6 @@
   "archives.size": "Размер",
   "archives.title": "Архивные записи",
   "archives.totalSize": "Общий размер",
-  "backToTop": {
-    "common.backToTop": "Наверх"
-  },
   "calendar.today": "Сегодня",
   "calendar.weekdayFri": "Пт",
   "calendar.weekdayMon": "Пн",
@@ -899,10 +896,6 @@
   "onvif.snapshot.title": "Снимок",
   "onvif.username": "Имя пользователя",
   "onvif.viewDetails": "Подробнее",
-  "pagination": {
-    "jumpToPage": "Перейти на страницу",
-    "of": "из"
-  },
   "pagination.jumpToPage": "Перейти на страницу",
   "pagination.of": "из",
   "ptz.control": "Управление PTZ",

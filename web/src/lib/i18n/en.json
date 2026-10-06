@@ -53,9 +53,6 @@
   "archives.size": "Size",
   "archives.title": "Archived Recordings",
   "archives.totalSize": "Total Size",
-  "backToTop": {
-    "common.backToTop": "Back to top"
-  },
   "calendar.today": "Today",
   "calendar.weekdayFri": "Fri",
   "calendar.weekdayMon": "Mon",
@@ -899,10 +896,6 @@
   "onvif.snapshot.title": "Snapshot",
   "onvif.username": "Username",
   "onvif.viewDetails": "View Details",
-  "pagination": {
-    "jumpToPage": "Go to page",
-    "of": "of"
-  },
   "pagination.jumpToPage": "Go to page",
   "pagination.of": "of",
   "ptz.control": "PTZ Control",
