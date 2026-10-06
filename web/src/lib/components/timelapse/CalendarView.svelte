@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { t } from '$lib/i18n';
+  import { t, currentLocale } from '$lib/i18n';
   import type { RecordingDaySummary } from '$lib/api';
 
   let {
@@ -130,10 +130,10 @@
     currentMonth = d;
   }
   let monthNames = $derived.by(() => {
-    const lang = document.documentElement.lang === 'zh' ? 'zh-CN' : 'en-US';
+    const locale = currentLocale();
     return Array.from({ length: 12 }, (_, i) => {
       const date = new Date(2000, i, 1);
-      return date.toLocaleDateString(lang, { month: 'long' });
+      return date.toLocaleDateString(locale, { month: 'long' });
     });
   });
 
