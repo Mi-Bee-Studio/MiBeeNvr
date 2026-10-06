@@ -277,7 +277,7 @@
   "cameras.pushStatus.idle": "Простой",
   "cameras.pushStatus.overheating": "Перегрев",
   "cameras.pushStatus.reconnecting": "Переподключение",
-  "cameras.pushStatus.streaming": "Передача",
+  "cameras.pushStatus.streaming": "Поток",
   "cameras.pushStatus.transcoding": "Транскодирование",
   "cameras.pushTranscodeAuto": "Автоопределение оборудования",
   "cameras.pushTranscodeForceSW": "Принудительное программное кодирование",
@@ -900,8 +900,8 @@
   "onvif.username": "Имя пользователя",
   "onvif.viewDetails": "Подробнее",
   "pagination": {
-    "jumpToPage": "Go to page",
-    "of": "of"
+    "jumpToPage": "Перейти на страницу",
+    "of": "из"
   },
   "pagination.jumpToPage": "Перейти на страницу",
   "pagination.of": "из",
@@ -1716,8 +1716,8 @@
   "gb28181.control.title": "Управление устройством",
   "gb28181.control.record": "Запустить запись на устройстве",
   "gb28181.control.stopRecord": "Остановить запись на устройстве",
-  "gb28181.control.setGuard": "Поставить на охрану",
-  "gb28181.control.resetGuard": "Снять с охраны",
+  "gb28181.control.setGuard": "Охрана",
+  "gb28181.control.resetGuard": "Снять охрану",
   "gb28181.control.resetAlarm": "Сбросить тревогу",
   "gb28181.control.homePosition": "Домашняя позиция",
   "gb28181.control.reboot": "Перезагрузить устройство",
