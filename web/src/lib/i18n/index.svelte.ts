@@ -28,12 +28,28 @@ function detectLanguage(): string {
 
 export function initI18n(): void {
   state.currentLang = detectLanguage();
+  document.documentElement.lang = state.currentLang;
 }
 
 export function setLang(lang: string): void {
   if (!locales[lang]) return;
   state.currentLang = lang;
   localStorage.setItem('mibee_nvr_lang', lang);
+  document.documentElement.lang = lang;
+}
+
+// BCP-47 locale for Intl date formatting — one source of truth for every
+// toLocaleDateString/toLocaleString call site (zh/en-only mappings strand ru
+// and any future locale on en-US).
+export function currentLocale(): string {
+  switch (state.currentLang) {
+    case 'zh':
+      return 'zh-CN';
+    case 'ru':
+      return 'ru-RU';
+    default:
+      return 'en-US';
+  }
 }
 
 export function t(key: string, params?: Record<string, string | number>): string {

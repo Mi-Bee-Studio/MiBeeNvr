@@ -1,4 +1,4 @@
-import { state } from './i18n';
+import { state, currentLocale } from './i18n';
 
 /**
  * Parse a server timestamp into a Date, treating zoneless timestamps as UTC.
@@ -26,7 +26,7 @@ export function parseServerDate(dateStr: string): Date {
 export function formatDate(dateStr: string): string {
   const date = parseServerDate(dateStr);
   if (isNaN(date.getTime())) return dateStr;
-  const lang = state.currentLang === 'zh' ? 'zh-CN' : 'en-US';
+  const lang = currentLocale();
   return date.toLocaleString(lang, {
     month: 'short',
     day: 'numeric',
@@ -62,7 +62,7 @@ export function formatDuration(seconds: number): string {
 export function formatRelativeTime(dateStr: string, now: Date = new Date()): string {
   const date = parseServerDate(dateStr);
   if (isNaN(date.getTime())) return dateStr;
-  const lang = state.currentLang === 'zh' ? 'zh-CN' : 'en-US';
+  const lang = currentLocale();
   const rtf = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });
   const diffMs = date.getTime() - now.getTime();
   const absSec = Math.abs(diffMs) / 1000;
