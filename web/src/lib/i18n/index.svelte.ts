@@ -5,10 +5,11 @@
 
 import zh from './zh.json';
 import en from './en.json';
+import ru from './ru.json';
 
 type Translations = Record<string, string>;
 
-const locales: Record<string, Translations> = { zh, en };
+const locales: Record<string, Translations> = { zh, en, ru };
 
 // $state object — components import and read state.currentLang for reactive tracking
 // t() also reads state.currentLang, so any template calling t() re-evaluates on lang change
@@ -20,6 +21,7 @@ function detectLanguage(): string {
 
   const nav = navigator.language || '';
   if (/^zh\b/i.test(nav)) return 'zh';
+  if (/^ru\b/i.test(nav)) return 'ru';
 
   return 'en';
 }

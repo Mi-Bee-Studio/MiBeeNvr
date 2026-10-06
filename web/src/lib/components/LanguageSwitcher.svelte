@@ -14,4 +14,5 @@
 >
   <option value="zh">{t('lang.zh')}</option>
   <option value="en">{t('lang.en')}</option>
+  <option value="ru">{t('lang.ru')}</option>
 </select>
