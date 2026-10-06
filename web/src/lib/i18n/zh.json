@@ -53,9 +53,6 @@
   "archives.size": "大小",
   "archives.title": "归档录像",
   "archives.totalSize": "总大小",
-  "backToTop": {
-    "common.backToTop": "回到顶部"
-  },
   "calendar.today": "今天",
   "calendar.weekdayFri": "五",
   "calendar.weekdayMon": "一",
@@ -892,10 +889,6 @@
   "onvif.snapshot.title": "快照",
   "onvif.username": "用户名",
   "onvif.viewDetails": "查看详情",
-  "pagination": {
-    "jumpToPage": "跳转到",
-    "of": "/"
-  },
   "pagination.jumpToPage": "跳转到",
   "pagination.of": "/",
   "ptz.control": "云台控制",
