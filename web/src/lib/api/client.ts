@@ -290,7 +290,7 @@ export async function readJson<T>(response: Response, refetch?: () => Promise<Re
   if (attempt.gatewayBody !== undefined) {
     dispatchGatewayAuth(attempt.gatewayBody);
     throw new ApiRequestError(
-      `网关拒绝了请求（${attempt.gatewayBody.slice(0, 60)}），请稍后刷新页面`,
+      `网关拒绝了请求（${attempt.gatewayBody.slice(0, 60)}）。请重新打开飞牛并确认已登录（桌面会话失效时需重新登录飞牛），或稍后刷新页面`,
       'GATEWAY_AUTH',
     );
   }
@@ -469,21 +469,30 @@ export async function apiHeadHeader(
 
 // Login endpoint.
 //
-// The request itself still uses BasicAuth (the server validates user:pass via
-// bcrypt), but on success the server returns a stateless signed session token
-// which we persist — the browser then NEVER holds the password again. This is
-// the core security improvement over the old base64(user:pass)-in-sessionStorage
-// scheme.
+// The server validates user:pass via bcrypt and returns a stateless signed
+// session token which we persist — the browser then NEVER holds the password
+// again. This is the core security improvement over the old
+// base64(user:pass)-in-sessionStorage scheme.
+//
+// Credentials travel as the classic Basic header on direct access, but as a
+// JSON body behind a unified gateway (fnOS "/app/mibee-nvr"): the gateway
+// claims ANY Authorization header as its own session credential and answers
+// it with 200 + "invalid token" (#865), which would dead-end the login form
+// after an explicit logout. The server accepts both forms.
 export async function login(username: string, password: string, signal?: AbortSignal): Promise<LoginResponse> {
-  const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
-
-  const doFetch = (): Promise<Response> => fetch(`${API_BASE}/auth/login`, {
-    method: 'POST',
-    headers: {
-      Authorization: authHeader,
-    },
-    signal,
-  });
+  const doFetch = (): Promise<Response> =>
+    fetch(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      ...(APP_BASE
+        ? {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+          }
+        : {
+            headers: { Authorization: `Basic ${btoa(`${username}:${password}`)}` },
+          }),
+      signal,
+    });
   const response = await doFetch();
 
   if (!response.ok) {
