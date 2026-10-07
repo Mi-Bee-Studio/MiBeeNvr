@@ -182,6 +182,58 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 	}
 }
 
+// JSON-body credentials: the form-login path used behind a unified gateway,
+// where the gateway claims any Authorization header as its own session
+// credential and the SPA therefore sends credentials in the body instead.
+func TestLogin_BodyCredentials(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	hash, err := middleware.HashPassword("secret")
+	if err != nil {
+		t.Fatalf("failed to hash password: %v", err)
+	}
+	h := testHandlerWithAuth(db, store, "admin", hash)
+
+	body := strings.NewReader(`{"username":"admin","password":"secret"}`)
+	rr := doRequest(t, h.Routes(), "POST", "/api/auth/login", body, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestLogin_BodyCredentialsWrongPassword(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	hash, err := middleware.HashPassword("secret")
+	if err != nil {
+		t.Fatalf("failed to hash password: %v", err)
+	}
+	h := testHandlerWithAuth(db, store, "admin", hash)
+
+	body := strings.NewReader(`{"username":"admin","password":"wrong"}`)
+	rr := doRequest(t, h.Routes(), "POST", "/api/auth/login", body, "", "")
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+// A malformed/credential-less body must not be promoted to a header — the
+// request falls through to the normal no-auth path (401 with auth enabled).
+func TestLogin_BodyCredentialsMalformed(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+	hash, err := middleware.HashPassword("secret")
+	if err != nil {
+		t.Fatalf("failed to hash password: %v", err)
+	}
+	h := testHandlerWithAuth(db, store, "admin", hash)
+
+	rr := doRequest(t, h.Routes(), "POST", "/api/auth/login", strings.NewReader(`{"oops":1}`), "", "")
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
 // --- List recordings tests ---
 
 func TestListRecordings_Empty(t *testing.T) {

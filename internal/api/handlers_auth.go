@@ -1,6 +1,9 @@
 package api
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"time"
@@ -9,6 +12,25 @@ import (
 )
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// JSON-body credentials: behind a unified gateway (fnOS "/app/mibee-nvr")
+	// the gateway claims ANY Authorization header as its own session credential
+	// and refuses the request (HTTP 200 + "invalid token"), so the SPA cannot
+	// send Basic auth there — after an explicit logout the login form would be
+	// dead-ended with a gateway error. When the header is absent, accept
+	// {username,password} from the body by synthesizing the Basic header;
+	// validation still runs through the same auth middleware below (bcrypt,
+	// failure lockout, SETUP_REQUIRED), so nothing about the checks changes.
+	if r.Header.Get("Authorization") == "" && r.Body != nil {
+		var body struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err == nil && body.Username != "" {
+			r.Header.Set("Authorization", "Basic "+
+				base64.StdEncoding.EncodeToString([]byte(body.Username+":"+body.Password)))
+		}
+	}
+
 	// Validate credentials by running through the auth middleware.
 	// If auth is disabled, any request succeeds; otherwise BasicAuth is checked.
 	// Use httptest.ResponseRecorder to capture middleware output without writing to client w.
