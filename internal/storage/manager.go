@@ -215,7 +215,9 @@ func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string
 	uuid := strconv.FormatInt(now.UnixNano(), 10)
 
 	switch strings.ToLower(format) {
-	case "h264", "h265":
+	case "h264", "h265", "audio":
+		// "audio" = audio-only source device segments: same single-file MP4
+		// shape as h264/h265 (the muxer writes one audio track, no video).
 		tempPath = filepath.Join(hourDir, uuid+".tmp")
 		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, ts, uuid))
 		// Register BEFORE the file exists: the startup temp-cleanup scan

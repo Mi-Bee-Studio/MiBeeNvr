@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -475,3 +476,95 @@ func (d *captureDB) InsertRecordingWithRetry(_ context.Context, r *model.Recordi
 	return nil
 }
 func (d *captureDB) SetMergeStatus(_ context.Context, _ []string, _ string) error { return nil }
+
+// newAudioOnlyPusher builds an Opus-only WHIP client — the shape a browser/
+// phone microphone push produces (WHIP microphone, v43).
+func newAudioOnlyPusher(t *testing.T) (*webrtc.PeerConnection, *webrtc.TrackLocalStaticSample) {
+	t.Helper()
+	mediaEngine := &webrtc.MediaEngine{}
+	require.NoError(t, mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+		},
+		PayloadType: 111,
+	}, webrtc.RTPCodecTypeAudio))
+	ir := &interceptor.Registry{}
+	require.NoError(t, webrtc.RegisterDefaultInterceptors(mediaEngine, ir))
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine), webrtc.WithInterceptorRegistry(ir))
+	pc, err := api.NewPeerConnection(webrtc.Configuration{})
+	require.NoError(t, err)
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		"audio", "whip-mic-test",
+	)
+	require.NoError(t, err)
+	_, err = pc.AddTrack(audioTrack)
+	require.NoError(t, err)
+	return pc, audioTrack
+}
+
+// TestWHIPAudioOnlyPushToAudioRecorder is the WHIP-microphone integration: an
+// Opus-only publisher feeds a push-mode AudioRecorder through the production
+// wiring shape (AudioFormatter → ArmPushFormat, AudioProvider → WritePushAU),
+// and the finalized segment is an audio-library MP4 with an Opus track.
+func TestWHIPAudioOnlyPushToAudioRecorder(t *testing.T) {
+	store, err := storage.NewManager(t.TempDir())
+	require.NoError(t, err)
+	db := &captureDB{}
+	rec := recorder.NewAudioRecorder(recorder.AudioConfig{
+		CameraID:   "cam-whip-mic",
+		RTSPURL:    "", // push mode
+		SegmentDur: 10 * time.Minute,
+		Store:      store,
+		DB:         db,
+	}, store, nil)
+	rec.SetHub(streamhub.New())
+	require.NoError(t, rec.Start(context.Background()))
+	t.Cleanup(func() { _ = rec.Stop() })
+
+	h := newTestHarness(t)
+	h.server.AudioFormatter = func(cameraID, codec string, sampleRate, channels int) {
+		rec.ArmPushFormat(codec, sampleRate, channels)
+	}
+	var delivered atomic.Int64
+	h.server.AudioProvider = func(cameraID string) AudioCallback {
+		return func(codec string, ptsTicks int64, data []byte, dur time.Duration) {
+			delivered.Add(1)
+			rec.WritePushAU(data)
+		}
+	}
+
+	pc, audioTrack := newAudioOnlyPusher(t)
+	defer func() { _ = pc.Close() }()
+	connectPusher(t, h, pc)
+
+	// Production onConn wiring → recorder goes live.
+	rec.PushConnected()
+
+	deadline := time.Now().Add(8 * time.Second)
+	sent := 0
+	for time.Now().Before(deadline) {
+		require.NoError(t, audioTrack.WriteSample(media.Sample{Data: make([]byte, 120), Duration: 20 * time.Millisecond}))
+		sent++
+		time.Sleep(20 * time.Millisecond)
+		if sent > 100 {
+			break
+		}
+	}
+	require.Greater(t, delivered.Load(), int64(50), "audio frames must reach the provider")
+
+	// Production onDisc wiring → segment finalizes as an audio row.
+	rec.PushDisconnected()
+	require.Eventually(t, func() bool { return len(db.recordings) == 1 },
+		3*time.Second, 20*time.Millisecond, "one finalized audio row after disconnect")
+	row := db.recordings[0]
+	require.Equal(t, model.FormatAudio, row.Format)
+	require.Equal(t, model.MergeStatusAudio, row.MergeStatus)
+
+	segs, err := filepath.Glob(filepath.Join(store.RootDir(), "cam-whip-mic", "*", "*", "*", "*.mp4"))
+	require.NoError(t, err)
+	require.NotEmpty(t, segs, "expected a finalized segment file")
+	data, err := os.ReadFile(segs[0])
+	require.NoError(t, err)
+	require.Contains(t, string(data), "Opus", "MP4 must carry the QuickTime-style Opus sample entry")
+}

@@ -30,6 +30,7 @@
 
   import MergePanel from './recordings/MergePanel.svelte';
   import PlaybackPanel from './recordings/PlaybackPanel.svelte';
+  import AudioCompanion from '$lib/components/recordings/AudioCompanion.svelte';
   import MetaEditor from './recordings/MetaEditor.svelte';
   import TimelapseMergePlayer from '$lib/components/TimelapseMergePlayer.svelte';
 
@@ -665,6 +666,13 @@
             </div>
           {/if}
         </div>
+
+        <!-- Linked audio track (v43 form-①): shown when the camera has a
+             linked audio-source device; hidden while timelapse mode is up
+             (its wall-clock↔file mapping breaks the sync math). -->
+        {#if recording && !tlMode}
+          <AudioCompanion {recording} />
+        {/if}
 
         <!-- Merge metadata (visible while in merged-timelapse mode) -->
         {#if tlMode && dayMerge}

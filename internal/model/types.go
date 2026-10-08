@@ -324,6 +324,10 @@ const (
 	FormatMJPEG     Format = "mjpeg"
 	FormatTimelapse Format = "timelapse"
 	FormatAVI       Format = "avi" // AVI container (MJPEG video + G.711 audio)
+	// FormatAudio marks a recording from an audio-only source device (a
+	// "microphone camera"). Segments are MP4 files carrying a single audio
+	// track (AAC / G.711 / Opus depending on the source).
+	FormatAudio Format = "audio"
 )
 
 // Audio format constants
@@ -361,6 +365,11 @@ const (
 	// produced permanently-pending zombie rows that polluted every
 	// pending-based diagnostic (#763).
 	MergeStatusSublayer = "sublayer"
+	// MergeStatusAudio marks a recording from an audio-only source device.
+	// Like sub-layer rows these are BORN terminal: there is no GOP to align,
+	// so they never enter the rolling merge pipeline. Retention and playback
+	// treat them like any other recording.
+	MergeStatusAudio = "audio"
 )
 
 // TimelapseMergeStatus constants for the timelapse_merges table.
@@ -411,7 +420,10 @@ type CodecInfo struct {
 
 // ValidEncodingsForProtocol maps transport protocol to supported encodings
 var ValidEncodingsForProtocol = map[string][]string{
-	string(ProtoRTSP):      {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
+	// "audio" = audio-only source device (independent microphone over RTSP):
+	// the recorder consumes the stream's audio track and records standalone
+	// audio segments (no video track needed in the stream).
+	string(ProtoRTSP):      {string(FormatH264), string(FormatH265), string(FormatMJPEG), string(FormatAudio)},
 	string(ProtoHTTP):      {string(EncJPEG)},
 	string(ProtoONVIF):     {string(FormatH264), string(FormatH265), string(EncJPEG)},
 	string(ProtoXiaomi):    {string(FormatH264), string(FormatH265)},
@@ -423,8 +435,10 @@ var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoSRT):  {string(FormatH264), string(FormatH265)},
 	string(ProtoRTMP): {string(FormatH264), string(FormatH265)},
 	// WHIP (browser/OBS WebRTC push-in) is H.264 only — matches WHEP egress
-	// (browser WebRTC H.265 support is still fragmented).
-	string(ProtoWHIP): {string(FormatH264)},
+	// (browser WebRTC H.265 support is still fragmented). Audio-only is the
+	// exception (v43): a WHIP+audio "camera" is a push microphone — phones
+	// and browsers publish Opus, which muxes straight into MP4.
+	string(ProtoWHIP): {string(FormatH264), string(FormatAudio)},
 	// GB28181 is an ingest protocol: the camera registers via SIP and the NVR
 	// INVITEs it; the codec is auto-detected from the PS stream_type at runtime.
 	string(ProtoGB28181): {string(FormatH264), string(FormatH265)},

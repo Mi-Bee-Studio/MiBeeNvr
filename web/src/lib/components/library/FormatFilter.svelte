@@ -14,6 +14,7 @@
     { id: 'Video', labelKey: 'recordings.formatVideo', icon: '📹' },
     { id: 'Timelapse', labelKey: 'recordings.formatTimelapse', icon: '⏱' },
     { id: 'MJPEG', labelKey: 'recordings.formatMjpeg', icon: '🎞' },
+    { id: 'Audio', labelKey: 'recordings.formatAudio', icon: '🔊' },
   ] as const;
 
   function handleClick(format: string) {

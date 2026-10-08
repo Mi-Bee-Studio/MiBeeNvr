@@ -10,7 +10,7 @@ export interface Recording {
   id: string;
   camera_id: string;
   file_path: string;
-  format: 'h264' | 'mjpeg' | 'h265' | 'timelapse' | 'avi';
+  format: 'h264' | 'mjpeg' | 'h265' | 'timelapse' | 'avi' | 'audio';
   started_at: string;
   ended_at: string;
   duration: number;

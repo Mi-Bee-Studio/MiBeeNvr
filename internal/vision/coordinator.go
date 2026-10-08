@@ -423,6 +423,15 @@ func (c *Coordinator) handleSegment(ctx context.Context, seg event.SegmentComple
 	if seg.Format == "timelapse" {
 		return
 	}
+	// 音频源设备段 (v43): 纯音频 MP4 无视频帧可分析——推送必然被消费者丢弃,
+	// 白耗带宽。跳过(未来音频事件分析由 Vision 侧音频支线自行拉流,不走这条
+	// 视频段推送管道)。
+	if seg.Format == string(model.FormatAudio) {
+		slog.Debug("vision push skipped — audio-only device segment",
+			"camera_id", seg.CameraID,
+			"recording_id", seg.RecordingID)
+		return
+	}
 	// #726: MJPEG/目录形段(帧序列目录)无法作为单文件字节流上传——推送
 	// 必然失败并进补偿队列无限重试(每段一次失败请求 + 一次磁盘读)。
 	// 按格式与实际路径形态双重拦截,每相机只 WARN 一次(建议配 skip_cameras

@@ -129,6 +129,12 @@ type CameraUpdate struct {
 	// only). nil = unchanged; empty string = ungroup. DB-only — no recorder
 	// restart, not persisted to YAML.
 	Group *string
+	// AudioLinkCameraID associates an audio-only device (encoding "audio")
+	// with the video camera its recordings replay alongside (v43). nil =
+	// unchanged; empty string = free-standing mic. DB-only metadata — no
+	// recorder restart, not persisted to YAML. Existence/shape validation is
+	// the API layer's job.
+	AudioLinkCameraID *string
 }
 
 type CameraManager struct {

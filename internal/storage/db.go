@@ -320,6 +320,7 @@ func (d *DB) Init(ctx context.Context) error {
         srt_passphrase TEXT DEFAULT '',
         srt_stream_id TEXT DEFAULT '',
         group_name TEXT DEFAULT '',
+        audio_link_camera_id TEXT DEFAULT '',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );`
 	recSQL := `CREATE TABLE IF NOT EXISTS recordings (
@@ -639,6 +640,11 @@ func (d *DB) Init(ctx context.Context) error {
 		return fmt.Errorf("v39 sublayer status migration: %w", err)
 	}
 
+	// ── Column backfill for pre-v43 databases: cameras.audio_link_camera_id ──
+	if err := d.ensureCameraAudioLinkColumn(ctx); err != nil {
+		return err
+	}
+
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value=? WHERE key='schema_version'", currentSchemaVersion)
 
 	// Enable auto_vacuum = INCREMENTAL for fresh databases (no-op for existing).
@@ -768,6 +774,26 @@ func (d *DB) ensureCameraGroupsPositionColumn(ctx context.Context) error {
 		if _, err := d.db.ExecContext(ctx,
 			`ALTER TABLE camera_groups ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return fmt.Errorf("add camera_groups.position column: %w", err)
+		}
+	}
+	return nil
+}
+
+// ensureCameraAudioLinkColumn adds cameras.audio_link_camera_id (v43, audio
+// source devices): optional association to the video camera whose recordings
+// the audio should be replayed alongside (a mic mounted next to a camera).
+// ” = free-standing mic. Pure metadata — the recorder never reads it.
+func (d *DB) ensureCameraAudioLinkColumn(ctx context.Context) error {
+	var colExists int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='audio_link_camera_id'`,
+	).Scan(&colExists); err != nil {
+		return fmt.Errorf("check cameras.audio_link_camera_id column: %w", err)
+	}
+	if colExists == 0 {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE cameras ADD COLUMN audio_link_camera_id TEXT DEFAULT ''`); err != nil {
+			return fmt.Errorf("add cameras.audio_link_camera_id column: %w", err)
 		}
 	}
 	return nil
