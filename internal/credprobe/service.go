@@ -21,7 +21,6 @@ package credprobe
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
