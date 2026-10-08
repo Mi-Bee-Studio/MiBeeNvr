@@ -20,6 +20,20 @@ func freeUDPPort(t *testing.T) int {
 	return pc.LocalAddr().(*net.UDPAddr).Port
 }
 
+// waitRunning blocks until the server reports its socket bound. A UDP dial
+// succeeds even before the server binds (connectionless), so dial-success
+// cannot be the readiness signal — the first packet would be refused.
+func waitRunning(t *testing.T, srv *Server) {
+	t.Helper()
+	for range 200 {
+		if srv.Running() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("server never came up")
+}
+
 func TestServer_ResponseShape(t *testing.T) {
 	t.Helper()
 	port := freeUDPPort(t)
@@ -28,19 +42,11 @@ func TestServer_ResponseShape(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- srv.Start(ctx) }()
+	waitRunning(t, srv)
 
-	// Wait for the socket to be bound.
-	var conn net.Conn
-	for range 50 {
-		var dialErr error
-		conn, dialErr = net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
-		if dialErr == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if conn == nil {
-		t.Fatal("server never came up")
+	conn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
 	}
 	defer conn.Close()
 
@@ -103,8 +109,8 @@ func TestServer_IgnoresShortPackets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = srv.Start(ctx) }()
+	waitRunning(t, srv)
 
-	time.Sleep(100 * time.Millisecond)
 	conn, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
