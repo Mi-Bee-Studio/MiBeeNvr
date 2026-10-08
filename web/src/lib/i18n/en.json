@@ -2011,5 +2011,21 @@
   "recordings.remoteLoadFailed": "Failed to load cloud archive",
   "recordings.remotePlay": "Play",
   "recordings.remoteDownload": "Download",
-  "recordings.remoteMjpegHint": "MJPEG archives cannot play in-browser — download to view"
+  "recordings.remoteMjpegHint": "MJPEG archives cannot play in-browser — download to view",
+  "cameras.timeSyncTitle": "Time Sync",
+  "cameras.timeSyncAuto": "Join auto correction",
+  "cameras.timeSyncAutoHint": "When the global time_sync.auto loop is enabled, the NVR periodically checks this camera's clock and corrects large skews automatically",
+  "cameras.timeSyncRefresh": "Check clock",
+  "cameras.timeSyncNow": "Sync now",
+  "cameras.timeSyncNTP": "Use NVR as NTP source",
+  "cameras.timeSyncSkew": "Skew",
+  "cameras.timeSyncMode": "Mode",
+  "cameras.timeSyncZone": "Timezone",
+  "cameras.timeSyncUnavailable": "Camera clock unreadable",
+  "cameras.timeSyncNoCreds": "No camera credentials configured — setting the clock/NTP server requires the camera's admin account",
+  "cameras.timeSyncSynced": "Corrected, residual skew {s}s",
+  "cameras.timeSyncNoChange": "Skew under 1 second, nothing written",
+  "cameras.timeSyncNTPDone": "Pointed at {server} (NTP mode)",
+  "cameras.timeSyncSNTPOn": "NVR SNTP server running",
+  "cameras.timeSyncSNTPOff": "NVR SNTP server disabled (time_sync.sntp)"
 }

@@ -116,6 +116,12 @@ type CameraConfig struct {
 	// exit adaptive timelapse with reason=onvif_motion. ONVIF protocol only.
 	MotionSource string `yaml:"motion_source,omitempty" json:"motion_source,omitempty"`
 
+	// AutoTimeSync opts this camera in/out of the time_sync.auto correction
+	// loop (#time-sync): nil = follow the global setting; false = never
+	// auto-correct this camera (status is still reported); true = correct
+	// when the global loop is enabled. ONVIF protocol only.
+	AutoTimeSync *bool `yaml:"auto_time_sync,omitempty" json:"auto_time_sync,omitempty"`
+
 	// SegmentDuration overrides the global storage.segment_duration for THIS
 	// camera only (#758) — the escape hatch for scenes that genuinely need
 	// short rotation (e.g. high-time-resolution timelapse sampling) without

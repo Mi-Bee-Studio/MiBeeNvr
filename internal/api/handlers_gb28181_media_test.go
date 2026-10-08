@@ -162,7 +162,7 @@ func newGBMediaEnv(t *testing.T) (*Handler, *fakeGBMedia) {
 
 	deviceMgr := platform.NewDeviceManager(60 * time.Second)
 	sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr, nil)
 	t.Cleanup(h.Close)
 
 	media := &fakeGBMedia{}

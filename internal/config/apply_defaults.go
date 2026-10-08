@@ -13,6 +13,8 @@ import (
 // extracted from ApplyDefaults() for readability. Each section applies zero-value
 // checks in declaration order. All mutations go through the *Config pointer.
 func applyConfigDefaults(cfg *Config) {
+	// Camera time-sync defaults (#time-sync).
+	applyTimeSyncDefaults(cfg)
 	// Timezone
 	if cfg.Timezone == "" {
 		cfg.Timezone = "Local"

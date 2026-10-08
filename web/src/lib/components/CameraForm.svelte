@@ -8,7 +8,11 @@
         updateMergeConfig,
         testConnection,
         getSettings,
+        getCameraTime,
+        syncCameraTime,
+        pointCameraAtNVR,
     } from '$lib/api';
+    import type { CameraTimeStatus } from '$lib/api';
     import type {
         Camera,
         CreateCameraRequest,
@@ -100,6 +104,11 @@
   // stays calm and returns to full recording on activity.
   let formRecordingMode = $state<'continuous' | 'adaptive'>('continuous');
   let formMotionSource = $state<'nvr' | 'camera:onvif'>('nvr');
+  // Time sync (#time-sync): per-camera auto opt-in + live clock status.
+  let formAutoTimeSync = $state(true);
+  let timeStatus = $state<CameraTimeStatus | null>(null);
+  let timeBusy = $state(false);
+  let timeMsg = $state('');
   let formAdaptiveCalmThreshold = $state('');
   let formAdaptiveTimelapseInterval = $state('');
   let formAdaptiveSpikeFactor = $state('');
@@ -315,6 +324,9 @@ let validationErrors = $state<Record<string, string>>({});
     formCascadeSubStream = camera.cascade_sub_stream ?? false;
     formRecordingMode = camera.recording_mode === 'adaptive' ? 'adaptive' : 'continuous';
     formMotionSource = camera.motion_source === 'camera:onvif' ? 'camera:onvif' : 'nvr';
+    formAutoTimeSync = camera.auto_time_sync ?? true;
+    timeStatus = null;
+    timeMsg = '';
     formAdaptiveCalmThreshold = camera.adaptive?.calm_threshold ?? '';
     formAdaptiveTimelapseInterval = camera.adaptive?.timelapse_interval ?? '';
     formAdaptiveSpikeFactor = camera.adaptive?.spike_factor ? String(camera.adaptive.spike_factor) : '';
@@ -580,6 +592,7 @@ async function performCameraSave() {
             cascade_sub_stream: formCascadeSubStream,
             recording_mode: formRecordingMode,
             motion_source: formProtocol === 'onvif' ? formMotionSource : undefined,
+            auto_time_sync: formProtocol === 'onvif' ? formAutoTimeSync : undefined,
             recording_tier: formRecordingTier,
             adaptive: buildAdaptivePayload(),
             audio_trigger: buildAudioTriggerPayload(),
@@ -652,6 +665,7 @@ async function performCameraSave() {
             cascade_sub_stream: formCascadeSubStream,
             recording_mode: formRecordingMode,
             motion_source: formProtocol === 'onvif' ? formMotionSource : undefined,
+            auto_time_sync: formProtocol === 'onvif' ? formAutoTimeSync : undefined,
             recording_tier: formRecordingTier,
             adaptive: buildAdaptivePayload(),
             audio_trigger: buildAudioTriggerPayload(),
@@ -678,6 +692,61 @@ async function performCameraSave() {
     }
 }
 
+
+  // --- Time sync actions (#time-sync) ---
+  async function refreshTimeStatus(): Promise<void> {
+    if (!editingCamera) return;
+    timeBusy = true;
+    timeMsg = '';
+    try {
+      timeStatus = await getCameraTime(editingCamera.id);
+    } catch (e) {
+      timeMsg = friendlyError(e);
+    } finally {
+      timeBusy = false;
+    }
+  }
+
+  async function syncTimeNow(): Promise<void> {
+    if (!editingCamera) return;
+    timeBusy = true;
+    timeMsg = '';
+    try {
+      const res = await syncCameraTime(editingCamera.id);
+      if (res.changed) {
+        timeMsg = t('cameras.timeSyncSynced', { values: { s: res.after_seconds.toFixed(1) } });
+      } else {
+        timeMsg = t('cameras.timeSyncNoChange');
+      }
+      await refreshTimeStatus();
+    } catch (e) {
+      timeMsg = friendlyError(e);
+    } finally {
+      timeBusy = false;
+    }
+  }
+
+  async function useNVRAsNTP(): Promise<void> {
+    if (!editingCamera) return;
+    timeBusy = true;
+    timeMsg = '';
+    try {
+      const res = await pointCameraAtNVR(editingCamera.id);
+      timeMsg = t('cameras.timeSyncNTPDone', { values: { server: res.server || 'NVR' } });
+      await refreshTimeStatus();
+    } catch (e) {
+      timeMsg = friendlyError(e);
+    } finally {
+      timeBusy = false;
+    }
+  }
+
+  function fmtSkew(seconds: number): string {
+    const abs = Math.abs(seconds);
+    if (abs >= 3600) return (seconds / 3600).toFixed(1) + ' h';
+    if (abs >= 60) return (seconds / 60).toFixed(1) + ' min';
+    return seconds.toFixed(1) + ' s';
+  }
 
 </script>
 <div class="card p-6 border th-border">
@@ -828,6 +897,61 @@ async function performCameraSave() {
       {#if formCascadeSubStream}
         <p class="text-xs th-text-muted -mt-1 ml-5">{t('cameras.cascadeSubStreamHint')}</p>
       {/if}
+    {/if}
+
+    <!-- Time sync (#time-sync): clock status + corrections; ONVIF + existing cameras only -->
+    {#if formProtocol === 'onvif' && editingCamera}
+      <details class="group rounded-lg border th-border-default">
+        <summary class="flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-sm font-medium">
+          {t('cameras.timeSyncTitle')}
+          {#if timeStatus?.available}
+            <span class="text-xs th-text-muted">{t('cameras.timeSyncSkew')}: {fmtSkew(timeStatus.skew_seconds)}</span>
+          {/if}
+        </summary>
+        <div class="space-y-2 px-3 pb-3">
+          <div class="flex items-center gap-2">
+            <input id="cam-auto-time-sync" type="checkbox" class="checkbox" bind:checked={formAutoTimeSync} />
+            <label for="cam-auto-time-sync" class="input-label cursor-pointer">
+              {t('cameras.timeSyncAuto')}
+            </label>
+          </div>
+          <p class="text-xs th-text-muted">{t('cameras.timeSyncAutoHint')}</p>
+
+          {#if timeStatus}
+            {#if timeStatus.available}
+              <div class="text-sm th-text-muted flex flex-wrap gap-x-4 gap-y-1">
+                <span>{t('cameras.timeSyncSkew')}: <span class="font-mono">{fmtSkew(timeStatus.skew_seconds)}</span></span>
+                {#if timeStatus.datetime_type}
+                  <span>{t('cameras.timeSyncMode')}: {timeStatus.datetime_type}</span>
+                {/if}
+                {#if timeStatus.timezone}
+                  <span>{t('cameras.timeSyncZone')}: {timeStatus.timezone}</span>
+                {/if}
+                <span>{timeStatus.sntp_enabled ? t('cameras.timeSyncSNTPOn') : t('cameras.timeSyncSNTPOff')}</span>
+              </div>
+            {:else}
+              <p class="text-sm text-amber-500">{t('cameras.timeSyncUnavailable')}{timeStatus.error ? ` (${timeStatus.error})` : ''}</p>
+            {/if}
+            {#if !timeStatus.credentials}
+              <p class="text-xs th-text-muted">{t('cameras.timeSyncNoCreds')}</p>
+            {/if}
+          {/if}
+          {#if timeMsg}
+            <p class="text-sm th-text-muted">{timeMsg}</p>
+          {/if}
+          <div class="flex flex-wrap gap-2">
+            <button type="button" class="btn btn-sm" disabled={timeBusy} onclick={refreshTimeStatus}>
+              {t('cameras.timeSyncRefresh')}
+            </button>
+            <button type="button" class="btn btn-sm" disabled={timeBusy} onclick={syncTimeNow}>
+              {t('cameras.timeSyncNow')}
+            </button>
+            <button type="button" class="btn btn-sm" disabled={timeBusy} onclick={useNVRAsNTP}>
+              {t('cameras.timeSyncNTP')}
+            </button>
+          </div>
+        </div>
+      </details>
     {/if}
 
     {#if editingCamera}

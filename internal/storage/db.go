@@ -277,8 +277,11 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // routing). ” = the configured default bucket; resolution happens at the
 // consumer (offload storeFor), never rewritten in place.
 //
+// v43: added camera_cred_probe (#credprobe) — the once-per-camera ledger for
+// the default-credential probe on auto-discovered cameras. Pure addition.
+//
 // The schema_meta table tracks the schema version for future migrations.
-const currentSchemaVersion = "42"
+const currentSchemaVersion = "43"
 
 func (d *DB) Init(ctx context.Context) error {
 	// ── Tables (full baseline — new installs get the final schema in one step) ──
@@ -348,6 +351,20 @@ func (d *DB) Init(ctx context.Context) error {
         FOREIGN KEY (camera_id) REFERENCES cameras(id)
     );`
 	metaSQL := `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
+
+	// v43 (#credprobe): once-per-camera ledger for the default-credential
+	// probe. A row existing at all means the camera was already probed —
+	// success OR failure — and must never be probed again.
+	credProbeSQL := `CREATE TABLE IF NOT EXISTS camera_cred_probe (
+        camera_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'attempted',
+        matched_username TEXT NOT NULL DEFAULT '',
+        rotated INTEGER NOT NULL DEFAULT 0,
+        attempted_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );`
+	if _, err := d.db.ExecContext(ctx, credProbeSQL); err != nil {
+		return fmt.Errorf("create camera_cred_probe: %w", err)
+	}
 	featSQL := `CREATE TABLE IF NOT EXISTS feature_flags (
 		key TEXT PRIMARY KEY,
 		value BOOLEAN NOT NULL DEFAULT FALSE,

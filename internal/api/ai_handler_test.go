@@ -31,7 +31,7 @@ func aiHandlerEnv(t *testing.T) (*Handler, http.Handler, string) {
 		t.Fatalf("seed config: %v", err)
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, cfgPath, nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, cfgPath, nil, nil, nil, nil, nil, nil)
 	h.SetAIHandler(NewAIHandler(ai.NewManager(ai.Config{}, nil), cfg, cfgPath))
 	return h, h.Routes(), cfgPath
 }

@@ -2011,5 +2011,21 @@
   "recordings.remoteLoadFailed": "Не удалось загрузить облачный архив",
   "recordings.remotePlay": "Воспроизвести",
   "recordings.remoteDownload": "Скачать",
-  "recordings.remoteMjpegHint": "Архивы MJPEG не воспроизводятся в браузере — скачайте для просмотра"
+  "recordings.remoteMjpegHint": "Архивы MJPEG не воспроизводятся в браузере — скачайте для просмотра",
+  "cameras.timeSyncTitle": "Синхронизация времени",
+  "cameras.timeSyncAuto": "Автокоррекция",
+  "cameras.timeSyncAutoHint": "При включённом глобальном цикле time_sync.auto NVR периодически проверяет часы камеры и автоматически исправляет большое расхождение",
+  "cameras.timeSyncRefresh": "Проверить время",
+  "cameras.timeSyncNow": "Синхронизировать",
+  "cameras.timeSyncNTP": "NVR как NTP-сервер",
+  "cameras.timeSyncSkew": "Расхождение",
+  "cameras.timeSyncMode": "Режим",
+  "cameras.timeSyncZone": "Часовой пояс",
+  "cameras.timeSyncUnavailable": "Не удалось прочитать часы камеры",
+  "cameras.timeSyncNoCreds": "Учётные данные камеры не заданы — для установки времени/NTP нужен администраторский аккаунт камеры",
+  "cameras.timeSyncSynced": "Исправлено, остаточное расхождение {s} с",
+  "cameras.timeSyncNoChange": "Расхождение меньше 1 секунды, запись не выполнялась",
+  "cameras.timeSyncNTPDone": "Направлено на {server} (режим NTP)",
+  "cameras.timeSyncSNTPOn": "SNTP-сервер NVR работает",
+  "cameras.timeSyncSNTPOff": "SNTP-сервер NVR отключён (time_sync.sntp)"
 }

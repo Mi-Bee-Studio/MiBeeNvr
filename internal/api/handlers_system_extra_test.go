@@ -31,7 +31,7 @@ func systemEnv(t *testing.T) (*Handler, http.Handler) {
 		Transcoding:  config.TranscodingConfig{Enabled: false, MaxWorkers: 2},
 	}
 	require.NoError(t, config.Save(cfgPath, cfg))
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, cfgPath, nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, cfgPath, nil, nil, nil, nil, nil, nil)
 	return h, h.Routes()
 }
 

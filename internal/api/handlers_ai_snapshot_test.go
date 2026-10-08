@@ -30,7 +30,7 @@ func snapshotEnv(t *testing.T) (*storage.DB, http.Handler, string) {
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	cfg := &config.Config{Storage: config.StorageConfig{RootDir: store.RootDir()}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	return db, h.Routes(), store.RootDir()
 }
 
@@ -148,7 +148,7 @@ func uploadEnv(t *testing.T) (*storage.DB, http.Handler, string) {
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	cfg := &config.Config{Storage: config.StorageConfig{RootDir: store.RootDir()}}
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	// 上传路径要求 API Key（与 POST /api/ai/events 同模型）。
 	return db, withAPIKey("vision", h.Routes()), store.RootDir()
 }

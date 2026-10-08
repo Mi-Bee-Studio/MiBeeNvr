@@ -38,6 +38,9 @@ const (
 	// event.CameraSnapshotEvent. Forwarded to MQTT via mqtt.status_events
 	// so smart-home automations can react.
 	TopicCameraSnapshot = "camera.snapshot"
+	// TopicCameraTimeSync: camera clock corrections + auto-check skew reports
+	// (#time-sync).
+	TopicCameraTimeSync = "camera.timesync"
 )
 
 var ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")

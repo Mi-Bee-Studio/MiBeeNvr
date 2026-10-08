@@ -926,6 +926,47 @@ cameras:
 `gb28181_cascade:` 下级级联角色）参见 [GB28181 指南](gb28181-guide.md)，
 示例参见根目录 `config.example.yaml`。
 
+## 摄像头时间同步（time_sync:）
+
+ONVIF 摄像头的时钟偶发漂移（RTC 电池耗尽、断电重启、时区错配）会让画面 OSD 水印与事件时间错乱。NVR 提供两条互补的修正路径：
+
+- **A 手动/自动校时**：读取相机时钟（无需凭据），偏差超过阈值时把 NVR 时间写入相机（`SetSystemDateAndTime`，需要相机的管理员凭据）。相机编辑页「时间同步」区块可查看偏差并手动校时。
+- **B NVR 作为 NTP 源**：内置 SNTP 服务器（UDP 123），把相机 NTP 指向 NVR 后相机自行周期同步——断电重置时钟也能自愈。相机编辑页「设为 NVR 为 NTP 源」一键完成。
+
+```yaml
+time_sync:
+  sntp:
+    enabled: true        # 默认开启；端口绑定失败只记日志不影响主服务
+    listen: ":123"       # 标准 NTP 端口（需要 root/capability；docker bridge 需映射 123/udp）
+  auto:
+    enabled: false       # 自动校时为可选项：改写相机时钟会改变其 OSD 时间显示
+    interval_minutes: 60
+    threshold_seconds: 30        # 偏差达到该值才校正
+    max_correction_seconds: 3600 # 超过该值只上报不自动改（疑似 RTC/时区问题，人工介入）
+    timezone: ""         # 校正时写入的 POSIX 时区（如 "CST-8"）；留空 = NVR 本地时区
+    ntp_push: false      # 校正成功后顺带把相机 NTP 指向 NVR（需 sntp 开启）
+```
+
+相机级开关：相机编辑页「参与自动校时」复选框（`cameras[].auto_time_sync`，缺省跟随全局）。相关 API：`GET /api/cameras/{id}/time`、`POST /api/cameras/{id}/time/sync`、`POST /api/cameras/{id}/time/ntp`。
+
+## 新相机默认凭证探测（credential_probe:）
+
+自动发现新入的相机常常仍停留在出厂默认口令。开启后，**自动发现**添加的无密码相机会被测试一份极小的业界出厂默认口令列表——**每台相机一生只测一次**（无论成败，落库记账，重启不复跑）；命中后把可用凭证写入该相机配置，使校时写入、设备管理等管理员操作立即可用。配置了 `rotate_password` 时，命中后立即把该账号改密为你指定的口令（ONVIF `SetUser` 并验证），一步完成加固。
+
+- 已带密码入册的相机永不探测；设备不可达/应答异常立即中止（不硬试，防相机端登录锁定）。
+- 内置列表可用 `candidates` 整体替换；`attempt_interval_ms` 控制尝试间隔（默认 2 秒）。
+- **该功能只存在于配置文件——刻意不提供 Web 界面与 API。**
+
+```yaml
+credential_probe:
+  enabled: true
+  # candidates:            # 不配置 = 使用内置业界默认列表
+  #   - username: admin
+  #     password: admin
+  rotate_password: ""      # 例如 "MySiteDefault!23"：命中即改密+验证+回填
+  attempt_interval_ms: 2000
+```
+
 ## 清理配置
 
 ### `cleanup.retention_days`

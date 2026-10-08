@@ -52,7 +52,7 @@ func (f *fakeGBCommander) StopManualRecord(_ string) error {
 func setupGBSnapshotHandler(t *testing.T) (*Handler, *fakeGBCommander, *gb28181.SnapshotSessionManager) {
 	t.Helper()
 	db, store := setupTestDB(t)
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	deviceMgr := platform.NewDeviceManager(time.Minute)
 	dev := &platform.Device{ID: "34020000001320000002", NetAddr: "192.0.2.118:5060"}
 	deviceMgr.Register(dev)

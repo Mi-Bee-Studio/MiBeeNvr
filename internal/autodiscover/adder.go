@@ -59,6 +59,15 @@ type CameraEnroller interface {
 	RestartRecorder(ctx context.Context, cameraID string) error
 }
 
+// CredentialProber is the default-credential probe hook (#credprobe).
+// Implemented by *credprobe.Service; nil disables probing (tests, explicit
+// config-off). The prober enforces its own once-per-camera rule.
+type CredentialProber interface {
+	// ProbeEnrolled offers a freshly enrolled camera (password-less, ONVIF)
+	// to the probe service. Must not block: implementations run async.
+	ProbeEnrolled(cameraID string, cam config.CameraConfig)
+}
+
 // dedupKey is the in-memory dedup identity. Prefer the device's hardware serial
 // (stable across IP changes); fall back to the endpoint string when the serial
 // is unavailable (e.g. enrichment failed for an auth-required device). Keying on
@@ -101,11 +110,19 @@ type Adder struct {
 	// (see makeDedupKey).
 	dedup   map[dedupKey]time.Time
 	dedupMu sync.Mutex
+	// credProber tests newly enrolled password-less cameras for factory
+	// defaults (#credprobe); nil = disabled.
+	credProber CredentialProber
 }
 
 // NewAdder constructs an Adder. cfg, db, and camMgr must be non-nil; bus may be
 // nil (events are silently skipped). camMgr is typed as CameraEnroller so tests
 // can inject a fake; pass a *camera.CameraManager in production.
+// SetCredentialProber wires the default-credential probe hook (#credprobe).
+func (a *Adder) SetCredentialProber(p CredentialProber) {
+	a.credProber = p
+}
+
 func NewAdder(cfg *config.AutoDiscoverConfig, camMgr CameraEnroller, db *storage.DB, bus *event.EventBus) *Adder {
 	return &Adder{
 		camMgr: camMgr,
@@ -475,6 +492,13 @@ func (a *Adder) enroll(ctx context.Context, dev onvif.DiscoveredDevice, endpoint
 		if err := a.db.UpdateCameraMetadata(ctx, id, "", "", dev.Manufacturer, dev.Model, dev.Serial, 0); err != nil {
 			logger.Warn("failed to persist camera metadata", "camera_id", id, "error", err)
 		}
+	}
+
+	// Default-credential probe (#credprobe): password-less ONVIF cameras get
+	// one factory-default test run; matched credentials are filled into the
+	// camera config. Async by contract — enrollment never blocks on SOAP.
+	if a.credProber != nil {
+		a.credProber.ProbeEnrolled(id, cam)
 	}
 
 	a.publish(ctx, event.TopicCameraAdded, map[string]any{

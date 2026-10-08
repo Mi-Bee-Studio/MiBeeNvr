@@ -138,6 +138,34 @@ func registerCoreServices(a *App, deps *appDeps) error {
 		return fmt.Errorf("register camera: %w", err)
 	}
 
+	// 3.1 time-sync (#time-sync): camera clock measurement/auto-correction
+	// plus the manual API operations. Registered after camera (consumes its
+	// config accessors); stops before camera — in-flight corrections finish
+	// before the manager tears down.
+	if deps.timeSyncSvc != nil {
+		if err := a.Register(&serviceFunc{
+			name: "time-sync",
+			startFunc: func(ctx context.Context) error {
+				return deps.timeSyncSvc.Start(ctx)
+			},
+			stopFunc: func() error {
+				return deps.timeSyncSvc.Stop()
+			},
+		}); err != nil {
+			return fmt.Errorf("register time-sync: %w", err)
+		}
+	}
+
+	// 3.2 credprobe (#credprobe): default-credential testing for newly
+	// auto-discovered cameras. Registered BEFORE autodiscover so it stops
+	// AFTER it — enroll-time probe offers stay valid while discovery winds
+	// down; its context cancellation gates late arrivals.
+	if deps.credProbeSvc != nil {
+		if err := a.Register(deps.credProbeSvc); err != nil {
+			return fmt.Errorf("register credprobe: %w", err)
+		}
+	}
+
 	// 3. health (always present)
 	if err := a.Register(&serviceFunc{
 		name: "health",
@@ -182,6 +210,9 @@ func registerCoreServices(a *App, deps *appDeps) error {
 	// while the manager is tearing down.
 	if deps.cfg.AutoDiscover.AutoDiscoverEnabled() {
 		adSvc := autodiscover.New(&deps.cfg.AutoDiscover, deps.camMgr, deps.db, deps.eventBus)
+		if deps.credProbeSvc != nil {
+			adSvc.SetCredentialProber(deps.credProbeSvc)
+		}
 		if err := a.Register(adSvc); err != nil {
 			return fmt.Errorf("register autodiscover: %w", err)
 		}
@@ -592,6 +623,29 @@ func registerProtocolServices(a *App, deps *appDeps) error {
 			},
 		}); err != nil {
 			return fmt.Errorf("register rtsp: %w", err)
+		}
+	}
+
+	// 10d. SNTP server (#time-sync path B, default on). Same leniency as
+	// rtsp: a bind failure (unprivileged :123 without capabilities, port
+	// taken) logs and the rest of time-sync keeps working — path A does not
+	// depend on it.
+	if deps.sntpServer != nil && deps.cfg.TimeSync.SNTP.EnabledOrDefault() {
+		if err := a.Register(&serviceFunc{
+			name: "sntp",
+			startFunc: func(ctx context.Context) error {
+				go func() {
+					if err := deps.sntpServer.Start(ctx); err != nil {
+						slog.Error("sntp server", "error", err)
+					}
+				}()
+				return nil
+			},
+			stopFunc: func() error {
+				return deps.sntpServer.Stop()
+			},
+		}); err != nil {
+			return fmt.Errorf("register sntp: %w", err)
 		}
 	}
 

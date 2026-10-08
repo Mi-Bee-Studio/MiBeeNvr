@@ -19,7 +19,7 @@ func newFlowTestHandler(t *testing.T) (*Handler, *camera.CameraManager) {
 	t.Cleanup(func() { db.Close() })
 	cfg := &config.Config{}
 	camMgr := camera.NewCameraManager(cfg, nil, nil, "", nil)
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 	return h, camMgr
 }
 

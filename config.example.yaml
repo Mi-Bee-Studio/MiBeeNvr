@@ -607,6 +607,46 @@ observability:
 #       server_addr: "192.168.1.11:5060"
 #       local_device_id: "34020000001320000098"  # per-upper identity (optional)
 
+
+# Camera time synchronization (#time-sync). Two cooperating mechanisms:
+#   A (auto): periodically measure each ONVIF camera's clock and correct
+#      large skews by writing the NVR time (needs camera admin credentials).
+#   B (sntp): the NVR runs a small SNTP server on the LAN; use the camera
+#      page's "Use NVR as NTP source" action to point cameras at it once —
+#      they then re-sync themselves, including after power loss.
+# time_sync:
+#   sntp:
+#     enabled: true      # default; bind failure only logs
+#     listen: ":123"     # standard NTP port (needs root/capability or a
+#                        # mapped docker port; docker bridge must publish 123/udp)
+#   auto:
+#     enabled: false     # opt-in: correcting clocks changes camera OSD time
+#     interval_minutes: 60
+#     threshold_seconds: 30     # correct at/above this skew
+#     max_correction_seconds: 3600  # beyond this: report only (suspect RTC/timezone)
+#     timezone: ""       # POSIX TZ written on correction (e.g. "CST-8"); empty = NVR local
+#     ntp_push: false    # after a correction, also point the camera at the NVR SNTP
+
+# Default-credential probe for auto-discovered cameras (#credprobe).
+# When auto-discovery enrolls a NEW camera with NO password, the NVR tests a
+# small factory-default credential list against it EXACTLY ONCE (per camera,
+# ever — tracked in the DB) and fills a matching credential into the camera
+# config. With rotate_password set, the matched account is immediately
+# rotated to that password (ONVIF SetUser), hardening the camera. Cameras
+# enrolled WITH a password are never probed. An unreachable/erratic device
+# aborts the run immediately (no hammering, no lockouts).
+# CONFIG-FILE ONLY — intentionally no web UI/API for this feature.
+# credential_probe:
+#   enabled: true
+#   # Override the built-in industry-default list entirely:
+#   # candidates:
+#   #   - username: admin
+#   #     password: admin
+#   #   - username: admin
+#   #     password: "12345"
+#   rotate_password: ""      # e.g. "MySiteDefault!23" — rotate+verify on match
+#   attempt_interval_ms: 2000
+
 # Extensions — arbitrary key-value pairs for external module config passthrough.
 # MiBeeNvr core does NOT read or validate these. Use for out-of-module service
 # extensions registered via pkg/app.App.Register. Unknown keys are silently ignored.

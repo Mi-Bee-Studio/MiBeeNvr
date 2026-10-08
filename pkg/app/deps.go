@@ -10,6 +10,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/credprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
@@ -28,9 +29,11 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/snapshot"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/sntp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/srt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timesync"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
@@ -81,9 +84,12 @@ type appDeps struct {
 	pixgateMgr            *pixgate.Manager                           // pixel-domain fine gate (issue #636)
 
 	// Camera + health + relay
-	camMgr    *camera.CameraManager
-	healthMgr *health.Manager
-	relayMgr  *relay.Manager
+	camMgr       *camera.CameraManager
+	timeSyncSvc  *timesync.Service
+	credProbeSvc *credprobe.Service
+	sntpServer   *sntp.Server
+	healthMgr    *health.Manager
+	relayMgr     *relay.Manager
 
 	// Streaming
 	hlsMgr    *hls.Manager

@@ -13,9 +13,12 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/credprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/sntp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timesync"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 )
@@ -138,6 +141,15 @@ func buildRecordingDeps(deps *appDeps) {
 
 	camMgr := camera.NewCameraManager(cfg, store, db, configPath, m, deps.mergeMgr, transcodeMgr, deps.rollingMergeMgr, appLoc, deps.eventBus)
 	deps.camMgr = camMgr
+
+	// Camera time-sync (#time-sync): shared service for the auto loop, the
+	// manual API operations and the cached clock statuses. The SNTP-enabled
+	// probe closes over the server below (nil-safe when disabled).
+	deps.sntpServer = sntp.NewServer(cfg.TimeSync.SNTP.Listen)
+	deps.timeSyncSvc = timesync.New(cfg.TimeSync, camMgr, deps.eventBus, deps.sntpServer.Running)
+	// Default-credential probe (#credprobe): config-file-only feature; acts
+	// at autodiscover-enroll time.
+	deps.credProbeSvc = credprobe.New(cfg.CredentialProbe, deps.db, camMgr)
 
 	// Step 5.6b: Vision push coordinator (NVR → MiBeeVision active push).
 	// Subscribes to segment.completed; pushes segment info to Vision when healthy.

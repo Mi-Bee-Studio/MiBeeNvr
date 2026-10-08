@@ -34,7 +34,7 @@ func mjpegEnv(t *testing.T, rec model.Recorder, cams []config.CameraConfig) http
 	if rec != nil {
 		camMgr.SetTestRecorder("cam-1", rec)
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 	return h.Routes()
 }
 

@@ -88,6 +88,7 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.RecordingMode = cam.RecordingMode
 		row.RecordingTier = cam.RecordingTier
 		row.MotionSource = cam.MotionSource
+		row.AutoTimeSync = cam.AutoTimeSync
 		row.MJPEGForm = cam.MJPEGForm
 		row.Pixgate = cam.Pixgate
 		row.Adaptive = cam.Adaptive
@@ -392,6 +393,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingTier *string `json:"recording_tier"`
 		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
 		MotionSource *string `json:"motion_source"`
+		// AutoTimeSync opts in/out of time_sync.auto for this camera (#time-sync).
+		AutoTimeSync *bool `json:"auto_time_sync"`
 		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
 		// default) or "dir" (legacy per-frame directory). Applies on restart.
 		MJPEGForm *string                         `json:"mjpeg_form"`
@@ -505,6 +508,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingMode:          body.RecordingMode,
 		RecordingTier:          body.RecordingTier,
 		MotionSource:           body.MotionSource,
+		AutoTimeSync:           body.AutoTimeSync,
 		MJPEGForm:              body.MJPEGForm,
 		Pixgate:                body.Pixgate,
 		Adaptive:               body.Adaptive,
@@ -791,6 +795,11 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Post("/onvif/users", h.handleONVIFCreateUsers)
 			r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
 			r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
+			// Camera time-sync (#time-sync): status read is credential-free;
+			// the two write endpoints need camera admin credentials.
+			r.Get("/time", h.handleCameraTimeStatus)
+			r.Post("/time/sync", h.handleCameraTimeSync)
+			r.Post("/time/ntp", h.handleCameraTimeNTP)
 			r.Get("/snapshot", h.handleSnapshot)
 			r.Get("/merge-config", h.handleGetCameraMergeConfig)
 			r.Put("/merge-config", h.handleUpdateCameraMergeConfig)

@@ -94,7 +94,7 @@ func newXiaomiPTZTestHandler(t *testing.T) (*Handler, *testMISSConn) {
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 
 	rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{
 		CameraID: "xiaomi-cam",
@@ -155,7 +155,7 @@ func TestPTZMove_XiaomiNotConnected(t *testing.T) {
 		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h"},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 
 	w := postPTZ(t, h, "/api/cameras/xiaomi-cam/ptz/move", `{"mode":"continuous","pan":0.5,"tilt":0,"zoom":0}`)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
@@ -219,7 +219,7 @@ func newONVIFPTZTestHandler(t *testing.T) (*Handler, *onvif.MockPTZController) {
 		Cameras: []config.CameraConfig{},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 
 	mock := &onvif.MockPTZController{
 		Position: onvif.PTZVector{Pan: -0.25, Tilt: 0.5, Zoom: 0.1},

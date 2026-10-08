@@ -266,7 +266,7 @@ func TestAcquireSub(t *testing.T) {
 
 	// Real manager, unknown camera → AcquireSubStream errors → main fallback.
 	cfg := &config.Config{Storage: config.StorageConfig{RootDir: store.RootDir()}, Cameras: []config.CameraConfig{}}
-	h2 := NewHandler(db, store, noopAuthMW(), cfg, camera.NewCameraManager(cfg, store, db, ""), nil, "", nil, nil, nil, nil, nil)
+	h2 := NewHandler(db, store, noopAuthMW(), cfg, camera.NewCameraManager(cfg, store, db, ""), nil, "", nil, nil, nil, nil, nil, nil)
 	w2 := httptest.NewRecorder()
 	require.Nil(t, h2.acquireSub(w2, httptest.NewRequest(http.MethodGet, "/x", nil), "ghost"))
 	require.Equal(t, "main", w2.Header().Get("X-Stream-Quality"))

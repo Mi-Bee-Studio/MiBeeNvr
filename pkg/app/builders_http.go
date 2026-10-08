@@ -47,7 +47,7 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 
 	// ---- Build HTTP router ----
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
-	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, configPath, deps.mergeMgr, cloudProxy, deps.mergeScheduler, deps.gb28181DevMgr, deps.gb28181SessionMgr)
+	handler := api.NewHandler(db, store, authMW, cfg, camMgr, hlsMgr, configPath, deps.mergeMgr, cloudProxy, deps.mergeScheduler, deps.gb28181DevMgr, deps.gb28181SessionMgr, deps.timeSyncSvc)
 
 	// First-boot setup code (#879): printed to the terminal/log so the person
 	// at the machine claims the admin account before any LAN peer can. Loopback

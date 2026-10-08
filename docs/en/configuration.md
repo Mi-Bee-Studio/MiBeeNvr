@@ -1001,6 +1001,47 @@ GB/T 28181 platform access (default off). See the [GB28181 guide](gb28181-guide.
 for the full key reference (`gb28181:` platform role and `gb28181_cascade:`
 lower-level cascade role) and `config.example.yaml` in the repo root for examples.
 
+## Camera Time Synchronization (time_sync:)
+
+ONVIF cameras occasionally drift (dead RTC batteries, power loss, timezone misconfiguration), skewing OSD timestamps and event times. The NVR offers two complementary correction paths:
+
+- **A Manual/auto correction**: read the camera's clock (no credentials needed) and, past a threshold, write the NVR's time to the camera (`SetSystemDateAndTime`; requires the camera's admin credentials). The camera form's "Time Sync" section shows the live skew and offers a manual correction.
+- **B NVR as NTP source**: a built-in SNTP server (UDP 123). Point a camera at the NVR once ("Use NVR as NTP source") and it re-syncs itself forever — including after power-loss clock resets.
+
+```yaml
+time_sync:
+  sntp:
+    enabled: true        # default; a bind failure only logs
+    listen: ":123"       # standard NTP port (root/capability required; docker bridge needs 123/udp published)
+  auto:
+    enabled: false       # opt-in: correcting clocks changes camera OSD time
+    interval_minutes: 60
+    threshold_seconds: 30        # correct at/above this skew
+    max_correction_seconds: 3600 # beyond this: report only (suspect RTC/timezone)
+    timezone: ""         # POSIX TZ written on correction (e.g. "CST-8"); empty = NVR local
+    ntp_push: false      # after a correction, also point the camera at the NVR SNTP
+```
+
+Per-camera switch: the camera form's "Join auto correction" checkbox (`cameras[].auto_time_sync`, default follows the global setting). APIs: `GET /api/cameras/{id}/time`, `POST /api/cameras/{id}/time/sync`, `POST /api/cameras/{id}/time/ntp`.
+
+## New-Camera Default-Credential Probe (credential_probe:)
+
+Newly auto-discovered cameras often still sit on factory-default passwords. When enabled, a password-less camera enrolled by auto-discovery is tested against a tiny list of industry factory defaults — **exactly once per camera, ever** (ledgered in the DB; survives restarts, applies regardless of outcome). On a match the working credential is written into the camera config, immediately unlocking admin operations (time-sync writes, device management). With `rotate_password` set, the matched account is rotated to your chosen password (ONVIF `SetUser`, verified) — hardening the camera in one step.
+
+- Cameras enrolled WITH a password are never probed; an unreachable/erratic device aborts the run immediately (no hammering, no camera-side lockouts).
+- The built-in list can be replaced entirely via `candidates`; `attempt_interval_ms` paces attempts (default 2s).
+- **Config-file only by design — there is deliberately no web UI or API for this feature.**
+
+```yaml
+credential_probe:
+  enabled: true
+  # candidates:            # unset = built-in industry-default list
+  #   - username: admin
+  #     password: admin
+  rotate_password: ""      # e.g. "MySiteDefault!23" — rotate+verify+fill on match
+  attempt_interval_ms: 2000
+```
+
 ## Cleanup Configuration
 
 ### `cleanup.retention_days`

@@ -65,6 +65,20 @@ func (cm *CameraManager) GetCameraConfig(cameraID string) *config.CameraConfig {
 	return cm.snapshotConfig(cameraID)
 }
 
+// ONVIFCameraIDs returns the IDs of all ONVIF-protocol cameras (unordered,
+// snapshot read). Consumers that can only act on ONVIF devices (time sync,
+// device management) iterate this instead of filtering the full list.
+func (cm *CameraManager) ONVIFCameraIDs() []string {
+	s := cm.loadSnapshot()
+	ids := make([]string, 0, len(s.configs))
+	for id, c := range s.configs {
+		if c.Protocol == string(model.ProtoONVIF) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // GetIngestRecorder returns the IngestRecorder for a camera if it is one, else
 // nil. Convenience for the SRT/RTMP servers that need to call WriteNALU /
 // OnDisconnect on push cameras.
