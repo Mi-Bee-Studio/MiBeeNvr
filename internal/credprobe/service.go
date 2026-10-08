@@ -230,7 +230,10 @@ func (s *Service) run(ctx context.Context, cameraID string, cam config.CameraCon
 	if err := s.db.SetCredentialProbeResult(ctx, cameraID, status, matchedUser, rotated); err != nil {
 		slog.Warn("credential probe: recording result failed", "camera_id", cameraID, "error", err)
 	}
+	note := "consider changing the camera password"
+	if rotated {
+		note = "password rotated to the configured default"
+	}
 	slog.Info("credential probe: default credential detected and filled",
-		"camera_id", cameraID, "username", matchedUser, "rotated", rotated,
-		"note", "camera was on factory defaults — " + map[bool]string{true: "password rotated to the configured default", false: "consider changing the camera password"}[rotated])
+		"camera_id", cameraID, "username", matchedUser, "rotated", rotated, "note", note)
 }
