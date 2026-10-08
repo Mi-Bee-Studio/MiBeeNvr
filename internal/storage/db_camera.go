@@ -86,6 +86,9 @@ type CameraRow struct {
 	// MotionSource selects the camera's motion signal (#711): ""/"nvr" or
 	// "camera:onvif" (Pull-Point MotionAlarm subscription).
 	MotionSource string `json:"motion_source,omitempty"`
+	// AutoTimeSync (#time-sync): nil = follow time_sync.auto; false = never
+	// auto-correct this camera. Config-injected (not a DB column).
+	AutoTimeSync *bool `json:"auto_time_sync,omitempty"`
 	// MJPEGForm selects the MJPEG/JPEG segment shape (#761): ""/"avi"
 	// (single-file AVI container, default) or "dir" (legacy per-frame
 	// directory). Applies on NVR restart.

@@ -67,7 +67,7 @@ func TestGetRtspOutputSettings_NilConfig(t *testing.T) {
 func newRtspSettingsHandler(t *testing.T, db *storage.DB, store *storage.Manager, cfg *config.Config) *Handler {
 	t.Helper()
 	configPath := filepath.Join(t.TempDir(), "mibee-nvr.yaml")
-	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, configPath, nil, nil, nil, nil, nil)
+	return NewHandler(db, store, noopAuthMW(), cfg, nil, nil, configPath, nil, nil, nil, nil, nil, nil)
 }
 
 func TestUpdateRtspOutputSettings_PersistsAndRequiresRestart(t *testing.T) {
@@ -76,7 +76,7 @@ func TestUpdateRtspOutputSettings_PersistsAndRequiresRestart(t *testing.T) {
 	defer db.Close()
 	cfg := &config.Config{}
 	configPath := filepath.Join(t.TempDir(), "mibee-nvr.yaml")
-	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, configPath, nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, nil, nil, configPath, nil, nil, nil, nil, nil, nil)
 
 	body := `{"enabled":true,"port":9554,"username":"u1","password":"p1"}`
 	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/rtsp-output", bytes.NewReader([]byte(body)), "", "")

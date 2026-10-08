@@ -144,7 +144,7 @@ func TestHealth_Status_RequiresAuth(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	authMW, _ := createTestAuthMW(t)
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.healthMgr = &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
 			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy"},
@@ -373,7 +373,7 @@ func TestHealth_CameraAggregation(t *testing.T) {
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	authMW, _ := createTestAuthMW(t)
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.healthMgr = mgr
 
 	// Seed cameras in DB so names are available
@@ -519,7 +519,7 @@ func TestHealthCameras_PublicEndpoint(t *testing.T) {
 	db, store := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
 	authMW, _ := createTestAuthMW(t)
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.healthMgr = mgr
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/health/cameras", nil, "", "")
@@ -692,7 +692,7 @@ func TestStability_Camera_RequiresAuth(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	authMW, _ := createTestAuthMW(t)
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.stabilityProvider = &mockStabilityProvider{
 		cameraStability: map[string]*health.StabilityData{
 			"cam1": {UptimePercent: 100, CurrentStatus: "online", Trend: "stable"},

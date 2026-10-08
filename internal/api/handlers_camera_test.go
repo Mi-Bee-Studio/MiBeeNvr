@@ -609,7 +609,7 @@ func TestHandleListCameras_GB28181_EncodingBackfill(t *testing.T) {
 	require.NoError(t, camMgr.Start(ctx))
 	defer camMgr.Stop()
 
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
 
@@ -686,7 +686,7 @@ func TestUpdateCamera_RejectsInvalidEncodingCombo(t *testing.T) {
 	require.NoError(t, camMgr.Start(ctx))
 	t.Cleanup(func() { _ = camMgr.Stop() })
 
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 
 	// jpeg is not a valid xiaomi encoding → 400, nothing persisted.
 	rr := doRequest(t, h.Routes(), "PUT", "/api/cameras/cam-xiaomi-update", bytes.NewReader([]byte(`{"encoding":"jpeg"}`)), "", "")

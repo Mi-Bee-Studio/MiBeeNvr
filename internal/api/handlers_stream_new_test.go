@@ -36,7 +36,7 @@ func TestWHEP_AuthRequired(t *testing.T) {
 	defer db.Close()
 
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "", middleware.AuthRateLimitConfig{})
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	r := h.Routes()
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras/test-cam/stream/webrtc", strings.NewReader("v=0"))
@@ -53,7 +53,7 @@ func TestWHEP_Create_NoWebRTCManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/test-cam/stream/webrtc",
 		strings.NewReader("v=0"), "admin", "pass")
@@ -67,7 +67,7 @@ func TestWHEP_Delete_NoWebRTCManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/test-cam/stream/webrtc/nonexistent-session",
 		nil, "admin", "pass")
@@ -82,7 +82,7 @@ func TestWHEP_Delete_SessionNotFound(t *testing.T) {
 	defer db.Close()
 
 	webrtcMgr := webrtc.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetWebRTCManager(webrtcMgr)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/test-cam/stream/webrtc/nonexistent-session",
@@ -98,7 +98,7 @@ func TestWHEP_CameraNotFound(t *testing.T) {
 	defer db.Close()
 
 	webrtcMgr := webrtc.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetWebRTCManager(webrtcMgr)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/nonexistent/stream/webrtc",
@@ -116,7 +116,7 @@ func TestWHEP_InvalidContentType(t *testing.T) {
 	seedCameraWithEncoding(t, db, "cam1", "h264")
 
 	webrtcMgr := webrtc.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetWebRTCManager(webrtcMgr)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/cameras/cam1/stream/webrtc", strings.NewReader("v=0"))
@@ -137,7 +137,7 @@ func TestFLV_AuthRequired(t *testing.T) {
 	defer db.Close()
 
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "", middleware.AuthRateLimitConfig{})
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	r := h.Routes()
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/test-cam/stream.flv", nil)
@@ -153,7 +153,7 @@ func TestFLV_NoManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/test-cam/stream.flv", nil, "admin", "pass")
 
@@ -167,7 +167,7 @@ func TestFLV_CameraNotFound(t *testing.T) {
 	defer db.Close()
 
 	flvMgr := flv.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetFLVManager(flvMgr)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/stream.flv", nil, "admin", "pass")
@@ -184,7 +184,7 @@ func TestFLV_StreamNotActive(t *testing.T) {
 	seedCameraWithEncoding(t, db, "cam1", "h264")
 
 	flvMgr := flv.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetFLVManager(flvMgr)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/stream.flv", nil, "admin", "pass")
@@ -201,7 +201,7 @@ func TestCameraProtocols_AuthRequired(t *testing.T) {
 	defer db.Close()
 
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "", middleware.AuthRateLimitConfig{})
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	r := h.Routes()
 	req := httptest.NewRequest(http.MethodGet, "/api/cameras/test-cam/protocols", nil)
@@ -217,7 +217,7 @@ func TestCameraProtocols_CameraNotFound(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/protocols", nil, "admin", "pass")
 
@@ -237,7 +237,7 @@ func TestCameraProtocols_H264Camera(t *testing.T) {
 	reg.Register(&stubStreamHandler{name: "webrtc", codecs: []model.Format{model.FormatH264}})
 	reg.Register(&stubStreamHandler{name: "flv", codecs: []model.Format{model.FormatH264, model.FormatH265}})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/protocols", nil, "admin", "pass")
@@ -266,7 +266,7 @@ func TestCameraProtocols_H265Camera(t *testing.T) {
 	reg.Register(&stubStreamHandler{name: "webrtc", codecs: []model.Format{model.FormatH264}})
 	reg.Register(&stubStreamHandler{name: "flv", codecs: []model.Format{model.FormatH264, model.FormatH265}})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam2/protocols", nil, "admin", "pass")
@@ -295,7 +295,7 @@ func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 	reg.Register(&stubStreamHandler{name: "webrtc", codecs: []model.Format{model.FormatH264}})
 	reg.Register(&MJPEGStreamHandler{})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam3/protocols", nil, "admin", "pass")
@@ -318,7 +318,7 @@ func TestCameraProtocols_NoRegistry(t *testing.T) {
 
 	seedCameraWithEncoding(t, db, "cam1", "h264")
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	// No stream registry set
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/protocols", nil, "admin", "pass")
@@ -344,7 +344,7 @@ func TestCameraProtocols_UsesStreamEncoding(t *testing.T) {
 	reg := NewStreamRegistry()
 	reg.Register(&HLSStreamHandler{})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/protocols", nil, "admin", "pass")
@@ -370,7 +370,7 @@ func TestRoutes_WHEPEndpointsRegistered(t *testing.T) {
 
 	seedCameraWithEncoding(t, db, "test", "h264")
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetWebRTCManager(webrtcMgr)
 	h.SetFLVManager(flvMgr)
 
@@ -402,7 +402,7 @@ func TestRoutes_FLVEndpointRegistered(t *testing.T) {
 	defer db.Close()
 
 	flvMgr := flv.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetFLVManager(flvMgr)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/test/stream.flv", nil, "admin", "pass")
@@ -417,7 +417,7 @@ func TestRoutes_CameraProtocolsEndpointRegistered(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/protocols", nil, "admin", "pass")
 
@@ -433,7 +433,7 @@ func TestSetWebRTCManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	require.Nil(t, h.webrtcMgr)
 
 	mgr := webrtc.NewManager()
@@ -447,7 +447,7 @@ func TestSetFLVManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 	require.Nil(t, h.flvMgr)
 
 	mgr := flv.NewManager()

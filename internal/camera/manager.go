@@ -88,6 +88,9 @@ type CameraUpdate struct {
 	// (subscribe to the camera's Pull-Point MotionAlarm events). nil =
 	// unchanged; the subscription reconciles immediately (no restart).
 	MotionSource *string
+	// AutoTimeSync (#time-sync): per-camera opt in/out of the automatic
+	// clock-correction loop. nil = unchanged (follow global setting).
+	AutoTimeSync *bool
 	// MJPEGForm (#761): ""/"avi" (single-file AVI container, the default) or
 	// "dir" (legacy per-frame JPEG directory). nil = unchanged; applies on
 	// NVR restart (resolved when the recorder is built).

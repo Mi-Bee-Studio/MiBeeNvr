@@ -36,7 +36,7 @@ func setupGB28181TestHandler(t *testing.T) *Handler {
 	deviceMgr := platform.NewDeviceManager(60 * time.Second)
 	sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
 
-	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
+	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr, nil)
 	h.SetGB28181ByeSender(&fakeGBByeSender{})
 	return h
 }
@@ -316,7 +316,7 @@ func TestAPI_GB28181_CatalogRefresh_Success(t *testing.T) {
 	db, _ := setupTestDB(t)
 	deviceMgr := platform.NewDeviceManager(60 * time.Second)
 	sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
-	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
+	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -424,7 +424,7 @@ func TestAPI_GB28181_ByeChannel_NoSessionMgr(t *testing.T) {
 	t.Helper()
 	db, _ := setupTestDB(t)
 
-	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/gb28181/channels/test/bye", nil, "", "")
 
@@ -475,7 +475,7 @@ func setupGB28181PTZHandler(t *testing.T) (*Handler, *fakePTZSender) {
 
 	deviceMgr := platform.NewDeviceManager(60 * time.Second)
 	sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
-	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
+	h := NewHandler(db, nil, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, deviceMgr, sessionMgr, nil)
 
 	dev := &platform.Device{ID: "34020000001310000001", Name: "Front Gate", NetAddr: "192.168.1.50:5060"}
 	deviceMgr.Register(dev)
@@ -703,7 +703,7 @@ func TestAPI_GB28181_ListChannels_EnrollBlockedHint(t *testing.T) {
 		deviceMgr := platform.NewDeviceManager(60 * time.Second)
 		deviceMgr.Register(&platform.Device{ID: "device1", NetAddr: "192.0.2.240:5060"})
 		sessionMgr := platform.NewSessionManager(platform.NewPortManager(30000, 30100), "3402000000")
-		h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, sessionMgr)
+		h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, sessionMgr, nil)
 
 		return doRequest(t, h.Routes(), http.MethodGet, "/api/gb28181/devices/device1/channels", nil, "", "")
 	}

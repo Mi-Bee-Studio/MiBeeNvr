@@ -33,7 +33,7 @@ func setupDedupHandler(t *testing.T) *Handler {
 	t.Cleanup(func() { _ = camMgr.Stop() })
 
 	deviceMgr := platform.NewDeviceManager(60 * time.Second)
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, deviceMgr, nil, nil)
 	deviceMgr.Register(&platform.Device{
 		ID:      "34020000001310000001",
 		NetAddr: "192.0.2.240:5060",
@@ -82,7 +82,7 @@ func TestHandleCreateCamera_NilDeviceMgrNoop(t *testing.T) {
 	require.NoError(t, camMgr.Start(ctx))
 	defer camMgr.Stop()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 	require.Nil(t, h.gb28181DeviceMgr)
 
 	body := `{"name":"Front","protocol":"rtsp","url":"rtsp://192.0.2.240:554/stream","enabled":false}`

@@ -97,6 +97,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingMode string `json:"recording_mode"`
 		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
 		MotionSource string `json:"motion_source"`
+		AutoTimeSync *bool  `json:"auto_time_sync"`
 		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
 		// default) or "dir" (legacy per-frame directory).
 		MJPEGForm string                          `json:"mjpeg_form"`
@@ -301,6 +302,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Encoding:      enc,
 		RecordingMode: body.RecordingMode,
 		MotionSource:  body.MotionSource,
+		AutoTimeSync:  body.AutoTimeSync,
 		MJPEGForm:     body.MJPEGForm,
 		Adaptive:      body.Adaptive,
 	}); err != nil {

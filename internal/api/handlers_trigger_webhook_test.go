@@ -133,7 +133,7 @@ func setupWebhookHandler(t *testing.T, enabled bool) (*Handler, *dispatchRecorde
 		},
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 	rec := newDispatchRecorder()
 	h.SetTriggerDispatcher(rec.record)
 	return h, rec

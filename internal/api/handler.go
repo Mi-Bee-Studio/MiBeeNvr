@@ -265,6 +265,9 @@ type Handler struct {
 	frameListCache    map[string]*frameListEntry
 	gb28181DeviceMgr  *platform.DeviceManager
 	gb28181SessionMgr *platform.SessionManager
+	// timeSync serves the camera time-sync endpoints (#time-sync); nil in
+	// tests → handlers answer 503.
+	timeSync TimeSyncOps
 	// Storage-migration (handlers_storage_migrate.go): the background
 	// idle-time migrator service. Nil in tests — the endpoints degrade.
 	migrationMgr StorageMigrator
@@ -310,8 +313,8 @@ type frameListEntry struct {
 // pick up new frames promptly but long enough to collapse a burst of requests.
 const frameListCacheTTL = 500 * time.Millisecond
 
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *platform.DeviceManager, gb28181SessionMgr *platform.SessionManager) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, vodMgr: vod.NewManager()}
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *platform.DeviceManager, gb28181SessionMgr *platform.SessionManager, timeSync TimeSyncOps) *Handler {
+	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
 }
 
 // startMergeGoroutine launches fn on a tracked background goroutine using the
@@ -574,7 +577,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 }
 
 // --- Test helper exported for handler_test.go ---
@@ -590,7 +593,7 @@ func testHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
 	}, "", middleware.AuthRateLimitConfig{})
-	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 }
 
 // extractDIDFromURL parses the DID from a xiaomi:// URL.

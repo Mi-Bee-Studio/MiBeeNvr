@@ -25,7 +25,7 @@ func TestHandleTelemetry_ValidPayload(t *testing.T) {
 		GetHash:     func() string { return validHash },
 	}, "", middleware.AuthRateLimitConfig{})
 
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	body := `{"event":"playback_start","camera_id":"front-door","duration_ms":5000}`
 	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", bytes.NewBufferString(body))
@@ -49,7 +49,7 @@ func TestHandleTelemetry_AggregatesFlowMetrics(t *testing.T) {
 	SetAPIMetrics(m)
 	t.Cleanup(func() { SetAPIMetrics(nil) })
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	post := func(body string) {
 		t.Helper()
@@ -131,7 +131,7 @@ func TestHandleTelemetry_Unauthenticated(t *testing.T) {
 		GetHash:     func() string { return validHash },
 	}, "", middleware.AuthRateLimitConfig{})
 
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil, nil, nil, nil, nil)
 
 	body := `{"event":"playback_start","camera_id":"front-door"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", bytes.NewBufferString(body))

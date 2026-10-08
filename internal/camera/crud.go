@@ -658,6 +658,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.MotionSource != nil {
 		cam.MotionSource = *updates.MotionSource
 	}
+	if updates.AutoTimeSync != nil {
+		cam.AutoTimeSync = updates.AutoTimeSync
+	}
 	if updates.MJPEGForm != nil {
 		cam.MJPEGForm = *updates.MJPEGForm
 	}

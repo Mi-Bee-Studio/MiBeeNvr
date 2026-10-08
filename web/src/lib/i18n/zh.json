@@ -2011,5 +2011,21 @@
   "recordings.remoteLoadFailed": "云端归档加载失败",
   "recordings.remotePlay": "播放",
   "recordings.remoteDownload": "下载",
-  "recordings.remoteMjpegHint": "MJPEG 归档不支持在线播放，请下载查看"
+  "recordings.remoteMjpegHint": "MJPEG 归档不支持在线播放，请下载查看",
+  "cameras.timeSyncTitle": "时间同步",
+  "cameras.timeSyncAuto": "参与自动校时",
+  "cameras.timeSyncAutoHint": "开启后,NVR 周期性检查该相机时钟并在偏差过大时自动校正(time_sync.auto 全局开关开启时生效)",
+  "cameras.timeSyncRefresh": "检查时间",
+  "cameras.timeSyncNow": "立即校时",
+  "cameras.timeSyncNTP": "设为 NVR 为 NTP 源",
+  "cameras.timeSyncSkew": "偏差",
+  "cameras.timeSyncMode": "模式",
+  "cameras.timeSyncZone": "时区",
+  "cameras.timeSyncUnavailable": "无法读取相机时钟",
+  "cameras.timeSyncNoCreds": "相机未配置凭据——写入校时/设置 NTP 需要相机管理员账号",
+  "cameras.timeSyncSynced": "已校时,残余偏差 {s}s",
+  "cameras.timeSyncNoChange": "偏差小于 1 秒,未写入",
+  "cameras.timeSyncNTPDone": "已指向 {server}(NTP 模式)",
+  "cameras.timeSyncSNTPOn": "NVR SNTP 服务运行中",
+  "cameras.timeSyncSNTPOff": "NVR SNTP 服务未启用(time_sync.sntp)"
 }

@@ -85,7 +85,15 @@ type systemDateTimeResponse struct {
 	XMLName xml.Name `xml:"GetSystemDateAndTimeResponse"`
 	Time    struct {
 		XMLName xml.Name `xml:"SystemDateAndTime"`
-		UTC     struct {
+		// DateTimeType / TimeZone / DaylightSavings / LocalDateTime feed the
+		// camera time-sync surface (#time-sync); the skew path only reads UTC.
+		DateTimeType    string `xml:"DateTimeType"`
+		DaylightSavings bool   `xml:"DaylightSavings"`
+		TimeZone        struct {
+			XMLName xml.Name `xml:"TimeZone"`
+			TZ      string   `xml:"TZ"`
+		} `xml:"TimeZone"`
+		UTC struct {
 			XMLName xml.Name `xml:"UTCDateTime"`
 			Date    struct {
 				XMLName xml.Name `xml:"Date"`
@@ -100,6 +108,21 @@ type systemDateTimeResponse struct {
 				Second  int      `xml:"Second"`
 			} `xml:"Time"`
 		} `xml:"UTCDateTime"`
+		Local struct {
+			XMLName xml.Name `xml:"LocalDateTime"`
+			Date    struct {
+				XMLName xml.Name `xml:"Date"`
+				Year    int      `xml:"Year"`
+				Month   int      `xml:"Month"`
+				Day     int      `xml:"Day"`
+			} `xml:"Date"`
+			Time struct {
+				XMLName xml.Name `xml:"Time"`
+				Hour    int      `xml:"Hour"`
+				Minute  int      `xml:"Minute"`
+				Second  int      `xml:"Second"`
+			} `xml:"Time"`
+		} `xml:"LocalDateTime"`
 	} `xml:"SystemDateAndTime"`
 }
 
@@ -109,6 +132,24 @@ type systemDateTimeResponse struct {
 // device's time can't be read (then the caller falls back to local time — the
 // legacy behavior — rather than failing outright).
 func (c *Client) measureClockSkew(ctx context.Context, endpoint string) time.Duration {
+	parsed, localMid, err := c.querySystemDateAndTime(ctx, endpoint)
+	if err != nil {
+		return 0
+	}
+	d := parsed.Time.UTC.Date
+	t := parsed.Time.UTC.Time
+	if d.Year < 2000 || d.Month < 1 || d.Day < 1 {
+		return 0 // unparsable / zero time — skip skew correction
+	}
+	deviceTime := time.Date(d.Year, time.Month(d.Month), d.Day, t.Hour, t.Minute, t.Second, 0, time.UTC)
+	return deviceTime.Sub(localMid)
+}
+
+// querySystemDateAndTime performs the unauthenticated GetSystemDateAndTime
+// round trip and returns the parsed response plus the RTT-compensated local
+// reference time (the midpoint between send and receive). Shared by the
+// digest-skew path and the camera time-sync read path (#time-sync).
+func (c *Client) querySystemDateAndTime(ctx context.Context, endpoint string) (systemDateTimeResponse, time.Time, error) {
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
   <s:Body>
@@ -117,7 +158,7 @@ func (c *Client) measureClockSkew(ctx context.Context, endpoint string) time.Dur
 </s:Envelope>`
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
 	if err != nil {
-		return 0
+		return systemDateTimeResponse{}, time.Time{}, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
 
@@ -125,12 +166,15 @@ func (c *Client) measureClockSkew(ctx context.Context, endpoint string) time.Dur
 	localAtSend := time.Now().UTC()
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return 0
+		return systemDateTimeResponse{}, time.Time{}, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0
+		return systemDateTimeResponse{}, time.Time{}, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return systemDateTimeResponse{}, time.Time{}, fmt.Errorf("GetSystemDateAndTime failed with status %d: %s", resp.StatusCode, truncateStr(string(respBody), 300))
 	}
 	// Account for half the round-trip (assume symmetric latency) to tighten the skew.
 	localNow := time.Now().UTC()
@@ -152,16 +196,10 @@ func (c *Client) measureClockSkew(ctx context.Context, endpoint string) time.Dur
 	if err := xml.Unmarshal(respBody, &env); err == nil {
 		parsed = env.Body.Response
 	} else if err := xml.Unmarshal(respBody, &parsed); err != nil {
-		return 0
+		return systemDateTimeResponse{}, time.Time{}, fmt.Errorf("parse response: %w", err)
 	}
-	d := parsed.Time.UTC.Date
-	t := parsed.Time.UTC.Time
-	if d.Year < 2000 || d.Month < 1 || d.Day < 1 {
-		return 0 // unparsable / zero time — skip skew correction
-	}
-	deviceTime := time.Date(d.Year, time.Month(d.Month), d.Day, t.Hour, t.Minute, t.Second, 0, time.UTC)
 	localMid := localAtSend.Add(localNow.Sub(localAtSend) / 2)
-	return deviceTime.Sub(localMid)
+	return parsed, localMid, nil
 }
 
 // doRawSOAPDigestDeviceTime sends a raw SOAP request authenticated with a

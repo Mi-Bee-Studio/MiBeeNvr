@@ -44,6 +44,12 @@ func New(cfg *config.AutoDiscoverConfig, camMgr CameraEnroller, db *storage.DB, 
 }
 
 // Name implements pkg/app.Service.
+// SetCredentialProber wires the default-credential probe hook (#credprobe)
+// through to the Adder.
+func (s *Service) SetCredentialProber(p CredentialProber) {
+	s.adder.SetCredentialProber(p)
+}
+
 func (s *Service) Name() string { return "autodiscover" }
 
 // Start launches the discovery modes. If ListenForHello is enabled, a resident

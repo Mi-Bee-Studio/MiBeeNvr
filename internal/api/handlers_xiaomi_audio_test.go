@@ -46,7 +46,7 @@ func xiaomiAudioEnv(t *testing.T, rec model.Recorder, cameraID string) http.Hand
 	if rec != nil {
 		camMgr.SetTestRecorder(cameraID, rec)
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 	return h.Routes()
 }
 
@@ -108,7 +108,7 @@ func TestTwoWayAudio_StartWithoutClient(t *testing.T) {
 	// No SetMISSClientForTest → missClient nil → "not connected" → 400.
 	rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{CameraID: "xiaomi-cam", DID: "1"}, store)
 	camMgr.SetTestRecorder("xiaomi-cam", rec)
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 
 	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/cameras/xiaomi-cam/xiaomi/two-way-audio/start", nil, "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code)
@@ -174,7 +174,7 @@ func TestAudioUpstreamWS_RoundTrip(t *testing.T) {
 	rec.SetMISSClientForTest(xiaomi.NewTestMISSClient(conn))
 	camMgr.SetTestRecorder("xiaomi-cam", rec)
 
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 	h.SetWSManager(wsstream.NewManager())
 
 	srv := httptest.NewServer(h.Routes())

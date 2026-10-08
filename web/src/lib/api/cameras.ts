@@ -220,6 +220,9 @@ export interface CreateCameraRequest {
   /** Motion signal source (#711): "nvr" (default) or "camera:onvif"
    *  (Pull-Point MotionAlarm subscription). */
   motion_source?: string;
+  // Time-sync opt in/out (#time-sync): null/undefined = follow time_sync.auto;
+  // false = never auto-correct this camera.
+  auto_time_sync?: boolean | null;
   /** MJPEG segment shape (#761): "avi" (single-file AVI container, default)
    *  or "dir" (legacy per-frame JPEG directory). Applies on restart. */
   mjpeg_form?: string;
@@ -283,6 +286,9 @@ export interface UpdateCameraRequest {
   /** Motion signal source (#711): "nvr" (default) or "camera:onvif".
    *  Reconciles immediately (no restart). */
   motion_source?: string;
+  // Time-sync opt in/out (#time-sync): null/undefined = unchanged (follow
+  // time_sync.auto); false = never auto-correct this camera.
+  auto_time_sync?: boolean | null;
   /** MJPEG segment shape (#761): "avi" (default) or "dir" (legacy
    *  per-frame directory). Applies on restart. */
   mjpeg_form?: string;
@@ -1287,4 +1293,51 @@ export interface CameraPixgateConfig {
   persist?: number;
   hold?: string;
   masks?: { name?: string; points: [number, number][] }[];
+}
+
+// ── Camera time sync (#time-sync) ────────────────────────────────────────────
+
+export interface CameraTimeStatus {
+  camera_id: string;
+  available: boolean;
+  checked_at: string;
+  skew_seconds: number;
+  device_utc?: string;
+  datetime_type?: string;
+  timezone?: string;
+  error?: string;
+  auto_managed: boolean;
+  sntp_enabled: boolean;
+  credentials: boolean;
+}
+
+export interface CameraTimeSyncResult {
+  changed: boolean;
+  before_seconds: number;
+  after_seconds: number;
+}
+
+/** Read the camera's clock vs the NVR's (no credentials needed). */
+export async function getCameraTime(id: string, signal?: AbortSignal): Promise<CameraTimeStatus> {
+  return apiRequest<CameraTimeStatus>(`/cameras/${encodeURIComponent(id)}/time`, {
+    signal: signal ?? AbortSignal.timeout(20000),
+  });
+}
+
+/** Write the NVR time to the camera when the skew is ≥1s (needs camera admin credentials). */
+export async function syncCameraTime(id: string, timezone?: string, signal?: AbortSignal): Promise<CameraTimeSyncResult> {
+  return apiRequest<CameraTimeSyncResult>(`/cameras/${encodeURIComponent(id)}/time/sync`, {
+    method: 'POST',
+    body: JSON.stringify(timezone ? { timezone } : {}),
+    signal: signal ?? AbortSignal.timeout(30000),
+  });
+}
+
+/** Point the camera at the NVR's SNTP server and switch it to NTP mode (path B). */
+export async function pointCameraAtNVR(id: string, server?: string, signal?: AbortSignal): Promise<{ ok: boolean; server: string }> {
+  return apiRequest<{ ok: boolean; server: string }>(`/cameras/${encodeURIComponent(id)}/time/ntp`, {
+    method: 'POST',
+    body: JSON.stringify(server ? { server } : {}),
+    signal: signal ?? AbortSignal.timeout(30000),
+  });
 }
