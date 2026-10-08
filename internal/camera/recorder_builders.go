@@ -323,13 +323,13 @@ func (cm *CameraManager) buildIngestRecorder(cam config.CameraConfig, segDur tim
 	if enc == string(model.FormatAudio) {
 		gate := cm.cfg.RecordingGate(cam.RecordingEnabled)
 		return recorder.NewAudioRecorder(recorder.AudioConfig{
-			CameraID:     cam.ID,
-			RTSPURL:      "", // push mode — AUs arrive via WritePushAU
-			SegmentDur:   segDur,
-			DB:           cm.db,
-			Store:        cm.store,
-			Metrics:      cm.metrics,
-			EventBus:     cm.eventBus,
+			CameraID:      cam.ID,
+			RTSPURL:       "", // push mode — AUs arrive via WritePushAU
+			SegmentDur:    segDur,
+			DB:            cm.db,
+			Store:         cm.store,
+			Metrics:       cm.metrics,
+			EventBus:      cm.eventBus,
 			RecordEnabled: &gate,
 		}, cm.store, cm.metrics)
 	}

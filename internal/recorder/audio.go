@@ -139,7 +139,7 @@ func NewAudioRecorder(cfg AudioConfig, store SegmentStore, m *metrics.Metrics) *
 		status: model.StatusStopped,
 		// Pre-allocated (NOT only in connectAndStream): stats readers and
 		// tests drive the writer before any connection exists.
-		auCh:     ch,
+		auCh:      ch,
 		pushClose: make(chan struct{}, 1),
 	}
 	r.auChPtr.Store(&ptr)
