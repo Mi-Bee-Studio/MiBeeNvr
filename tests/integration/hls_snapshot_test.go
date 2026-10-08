@@ -400,7 +400,7 @@ func TestHLSHandler_DispatchOrder_Snapshot(t *testing.T) {
 
 func TestValidEncodingsForProtocol_Snapshot(t *testing.T) {
 	expected := map[string][]string{
-		"rtsp":   {"h264", "h265", "mjpeg"},
+		"rtsp":   {"h264", "h265", "mjpeg", "audio"},
 		"http":   {"jpeg"},
 		"onvif":  {"h264", "h265", "jpeg"},
 		"xiaomi": {"h264", "h265"},

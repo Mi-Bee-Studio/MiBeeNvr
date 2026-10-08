@@ -462,18 +462,32 @@ func TestWHIPPushToRealRecorder(t *testing.T) {
 	require.Contains(t, string(data), "dOps", "MP4 must carry an Opus track (audio recorded)")
 }
 
+// captureDB is written by the recorder goroutine and read by the test's
+// assert.Eventually — both sides must take the mutex or the race detector
+// fires (CI runs -race).
 type captureDB struct {
+	mu         sync.Mutex
 	recordings []*model.Recording
 }
 
 func (d *captureDB) InsertRecording(_ context.Context, r *model.Recording) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.recordings = append(d.recordings, r)
 	return nil
 }
 
 func (d *captureDB) InsertRecordingWithRetry(_ context.Context, r *model.Recording, _ int, _ time.Duration) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.recordings = append(d.recordings, r)
 	return nil
+}
+
+func (d *captureDB) snapshot() []*model.Recording {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]*model.Recording(nil), d.recordings...)
 }
 func (d *captureDB) SetMergeStatus(_ context.Context, _ []string, _ string) error { return nil }
 
@@ -555,9 +569,9 @@ func TestWHIPAudioOnlyPushToAudioRecorder(t *testing.T) {
 
 	// Production onDisc wiring → segment finalizes as an audio row.
 	rec.PushDisconnected()
-	require.Eventually(t, func() bool { return len(db.recordings) == 1 },
+	require.Eventually(t, func() bool { return len(db.snapshot()) == 1 },
 		3*time.Second, 20*time.Millisecond, "one finalized audio row after disconnect")
-	row := db.recordings[0]
+	row := db.snapshot()[0]
 	require.Equal(t, model.FormatAudio, row.Format)
 	require.Equal(t, model.MergeStatusAudio, row.MergeStatus)
 
