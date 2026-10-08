@@ -31,7 +31,7 @@ func audioLiveEnv(t *testing.T, rec model.Recorder, cameraID string) http.Handle
 	if rec != nil {
 		camMgr.SetTestRecorder(cameraID, rec)
 	}
-	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
 	return h.Routes()
 }
 

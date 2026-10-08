@@ -277,8 +277,12 @@ func (d *DB) ReadPoolStats() (sql.DBStats, bool) {
 // routing). ” = the configured default bucket; resolution happens at the
 // consumer (offload storeFor), never rewritten in place.
 //
-// v43: added camera_cred_probe (#credprobe) — the once-per-camera ledger for
-// the default-credential probe on auto-discovered cameras. Pure addition.
+// v43 (dual-use — two lines shipped the same number independently and both
+// landed here via merge): added camera_cred_probe (#credprobe, the
+// once-per-camera default-credential-probe ledger) AND
+// cameras.audio_link_camera_id (#audio, audio-source ↔ video camera
+// association). Both are pure additions with idempotent ensures; the
+// baseline CREATE covers fresh installs either way.
 //
 // The schema_meta table tracks the schema version for future migrations.
 const currentSchemaVersion = "43"
