@@ -420,6 +420,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// Group label (v36, camera-management grouping). nil = unchanged;
 		// empty string = ungroup.
 		Group *string `json:"group"`
+		// Audio-device → video-camera association (v43). nil = unchanged;
+		// empty string = free-standing mic. Validated against the DB.
+		AudioLinkCameraID *string `json:"audio_link_camera_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -521,6 +524,15 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		VisionTargets:          body.VisionTargets,
 		GB28181:                body.GB28181.toConfigPtr(),
 		Group:                  body.Group,
+		AudioLinkCameraID:      body.AudioLinkCameraID,
+	}
+
+	// Audio link (v43): validate before mutating anything.
+	if body.AudioLinkCameraID != nil {
+		if err := h.validateAudioLink(r.Context(), id, *body.AudioLinkCameraID); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Validate recording mode + adaptive tuning with the same rules the

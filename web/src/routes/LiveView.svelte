@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy, setContext } from 'svelte';
-  import { getCamera, listCameras, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, xiaomiDevices, getTranscodingSettings, getTranscodingCheck, listCameraGroups, API_BASE } from '$lib/api';
+  import { getCamera, listCameras, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, xiaomiDevices, getTranscodingSettings, getTranscodingCheck, listCameraGroups, API_BASE, appendAuthToken } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo, XiaomiDevice } from '$lib/api';
   import { startBackfill } from '$lib/api/transcoding';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings } from 'lucide-svelte';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings, AudioLines } from 'lucide-svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import PtzControl from '$lib/components/PtzControl.svelte';
@@ -29,6 +29,9 @@
   let camera = $state<Camera | null>(null);
   let loading = $state(true);
   let error = $state('');
+  // Live-listening failed (non-G.711 source → WAV endpoint 406, or source
+  // hiccup) — swap the player for a hint instead of a dead element.
+  let liveAudioError = $state(false);
   let isFullscreen = $state(false);
   let playerContainer: HTMLDivElement | undefined = $state();
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
@@ -324,6 +327,12 @@
     }
   });
 
+  // Reset the live-listening error state whenever the page switches camera.
+  $effect(() => {
+    void camera?.id;
+    liveAudioError = false;
+  });
+
   onMount(() => {
     if (!cameraId) {
       error = t('live.cameraIdRequired');
@@ -396,6 +405,40 @@
             {t('detail.back')}
           </button>
         </div>
+      </div>
+    {:else if camera && camera.encoding === 'audio'}
+      <!-- Audio-source device (v43): no video surface — live LISTENING via
+           the streaming WAV endpoint instead of any player chain. -->
+      <div class="card p-8 text-center max-w-xl mx-auto">
+        <div class="flex items-center gap-3 justify-center mb-4 flex-wrap">
+          <button onclick={goBack} class="btn btn-ghost btn-sm flex items-center gap-1">
+            <ArrowLeft size={16} />
+            {t('nav.cameras')}
+          </button>
+          <h2 class="text-xl font-bold th-text-primary truncate flex items-center gap-2">
+            <AudioLines size={20} class="th-text-secondary" />
+            {camera.name || camera.id}
+          </h2>
+        </div>
+        {#if camera.status === 'recording' || camera.status === 'active'}
+          {#if liveAudioError}
+            <p class="th-text-secondary mb-2">{t('live.audioLiveUnsupported')}</p>
+          {:else}
+            <audio
+              class="w-full mx-auto mb-3"
+              controls
+              preload="none"
+              src={appendAuthToken(`${API_BASE}/cameras/${camera.id}/audio/live.wav`)}
+              onerror={() => (liveAudioError = true)}
+            ></audio>
+          {/if}
+          <p class="text-xs th-text-muted">{t('live.audioLiveHint')}</p>
+        {:else}
+          <p class="th-text-secondary mb-4">{t('live.audioOnlyNotice')}</p>
+        {/if}
+        <button onclick={goBack} class="btn btn-secondary btn-sm mt-4">
+          {t('detail.back')}
+        </button>
       </div>
     {:else if camera}
       <div class="space-y-4">

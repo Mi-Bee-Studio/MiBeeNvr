@@ -24,6 +24,8 @@
     fetchRecordingFrameBatch,
     recordTimelineSeek,
     repairRecording,
+    appendAuthToken,
+    API_BASE,
   } from '$lib/api';
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight, Wrench } from 'lucide-svelte';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
@@ -34,7 +36,7 @@
   import AviPlayback from '$lib/components/AviPlayback.svelte';
   import TimelineBar from '$lib/components/TimelineBar.svelte';
 
-  export type PlaybackMode = 'video' | 'timelapse' | 'avi' | 'mjpeg' | 'unsupported';
+  export type PlaybackMode = 'video' | 'timelapse' | 'avi' | 'mjpeg' | 'audio' | 'unsupported';
 
   interface Props {
     recording: Recording | null;
@@ -151,6 +153,7 @@
       case 'h264': return t('recording.format.h264');
       case 'h265': return t('recording.format.h265');
       case 'timelapse': return t('recording.format.timelapse');
+      case 'audio': return t('recording.format.audio');
       default: return recording.format;
     }
   });
@@ -186,6 +189,7 @@
       return 'timelapse';
     }
     if (f === 'h264' || f === 'h265') return 'video';
+    if (f === 'audio') return 'audio';
     return 'unsupported';
   });
 
@@ -1624,6 +1628,27 @@
     <p class="text-xs text-center th-text-muted">
       {t('detail.spacePlayPause')} | {t('detail.arrowSeek')} | Home {t('detail.homeReset')} | F {t('live.fullscreen')} | L {t('detail.loop')} | {t('detail.escapeBack')}
     </p>
+  </div>
+{:else if playbackMode === 'audio'}
+  <!-- Audio-only recording (v43): try the server-side G.711→WAV transcode
+       first; AAC/Opus recordings get 406 from it and fall back to the raw
+       MP4 download URL (browsers play AAC-in-MP4 in <audio> natively). -->
+  <div class="flex flex-col items-center justify-center gap-4 bg-black py-16 px-4">
+    <div class="text-3xl th-text-tertiary">🎙️</div>
+    <audio
+      controls
+      preload="metadata"
+      src={appendAuthToken(`${API_BASE}/recordings/${currentId}/audio.wav`)}
+      onerror={(e) => {
+        const el = e.currentTarget;
+        if (!el.src.includes('/download')) {
+          el.src = appendAuthToken(`${API_BASE}/recordings/${currentId}/download`);
+          el.load();
+        }
+      }}
+      class="w-full max-w-xl"
+    ></audio>
+    <p class="text-xs th-text-muted">{t('detail.audioRecordingHint')}</p>
   </div>
 {:else}
   <div class="flex items-center justify-center h-64 bg-black">

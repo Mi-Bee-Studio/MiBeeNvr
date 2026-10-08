@@ -4,7 +4,7 @@
   import type { StorageStats, Camera, HealthResponse, SystemStats, CameraHealthDetail, CameraStorageStats } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatFileSize } from '$lib/format';
-  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2, Brain } from 'lucide-svelte';
+  import { Cpu, MemoryStick, HardDrive, Wifi, Activity, CircleCheck, AlertCircle, CirclePause, BarChart3, Loader2, Brain, AudioLines } from 'lucide-svelte';
   import TrendStackChart from '$lib/components/TrendStackChart.svelte';
   import Tab from '$lib/components/Tab.svelte';
   import CameraFlowTree from '$lib/components/CameraFlowTree.svelte';
@@ -124,7 +124,7 @@
   // per-camera storage footprint from /api/stats/cameras)
   let cameraHealthEntries = $derived.by(() => {
     const storageById = new Map(cameraStorage.map((s) => [s.camera_id, s]));
-    const entries: { id: string; name: string; status: string; score: number; bytes: number; segments: number; factors?: string[]; recording_enabled?: boolean | null }[] = [];
+    const entries: { id: string; name: string; status: string; score: number; bytes: number; segments: number; factors?: string[]; recording_enabled?: boolean | null; encoding?: string }[] = [];
     for (const cam of cameras) {
       const detail = healthCameras[cam.id];
       const st = storageById.get(cam.id);
@@ -137,6 +137,7 @@
         segments: st?.recordings ?? 0,
         factors: detail?.score_factors,
         recording_enabled: cam.recording_enabled,
+        encoding: cam.encoding || '',
       });
     }
     // Sort: by default unhealthy first (lowest score), then by name — the
@@ -158,6 +159,18 @@
       });
     }
     return entries;
+  });
+
+  // Audio partition (v43): audio-source devices render below the video
+  // cameras under a labeled divider — same row markup, visually separated so
+  // the 段数/存储 columns stay comparable within each class.
+  const AUDIO_DIVIDER_ID = '__audio_devices__';
+  let healthRenderList = $derived.by(() => {
+    const video = cameraHealthEntries.filter((e) => e.encoding !== 'audio');
+    const audio = cameraHealthEntries.filter((e) => e.encoding === 'audio');
+    if (audio.length === 0) return video;
+    const divider = { id: AUDIO_DIVIDER_ID, name: '', status: '', score: -1, bytes: 0, segments: 0, encoding: '__divider__' };
+    return [...video, divider, ...audio];
   });
 
   // Click-to-sort state for the camera-health columns (null = default
@@ -581,7 +594,15 @@
           <span class="min-w-[2rem]"></span>
         </div>
         <div class="space-y-1">
-          {#each cameraHealthEntries as cam (cam.id)}
+          {#each healthRenderList as cam (cam.id)}
+            {#if cam.id === AUDIO_DIVIDER_ID}
+              <!-- Audio-source partition (v43) -->
+              <div class="flex items-center gap-2 px-2 pt-2 pb-1 text-[11px] th-text-muted select-none">
+                <AudioLines size={12} />
+                <span>{t('dashboard.audioDevices')}</span>
+                <span class="flex-1 border-t th-border"></span>
+              </div>
+            {:else}
             <div
               class="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-[var(--bg-tertiary)] transition-colors"
               class:row-active={expandedFlow === cam.id}
@@ -635,6 +656,7 @@
                 {/if}
                 <CameraFlowTree cameraId={cam.id} name={cam.name} status={cam.status} recordingEnabled={cam.recording_enabled !== false} />
               </div>
+            {/if}
             {/if}
           {/each}
         </div>

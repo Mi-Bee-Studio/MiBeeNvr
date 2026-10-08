@@ -90,6 +90,17 @@ func (cm *CameraManager) GetIngestRecorder(cameraID string) *recorder.IngestReco
 	return rec
 }
 
+// GetAudioPushRecorder returns the push-mode AudioRecorder for a camera if it
+// is one, else nil. Used by the WHIP ingest wiring to route audio-only
+// publishers (WHIP microphones) into the audio segment pipeline.
+func (cm *CameraManager) GetAudioPushRecorder(cameraID string) *recorder.AudioRecorder {
+	rec, ok := cm.GetRecorder(cameraID).(*recorder.AudioRecorder)
+	if !ok {
+		return nil
+	}
+	return rec
+}
+
 // GetTimelapseMergeMgr returns the timelapse rolling merge manager, or nil if not set.
 func (cm *CameraManager) GetTimelapseMergeMgr() *timelapse.RollingMergeManager {
 	return cm.timelapseMergeMgr
