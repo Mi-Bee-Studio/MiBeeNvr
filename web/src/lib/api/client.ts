@@ -71,6 +71,10 @@ export interface HealthResponse {
   // proxy/gateway headers, AND auth.local_bypass enabled. The SPA uses it to
   // skip the login page for local access.
   local_access?: boolean;
+  // True when this request arrived through the unified gateway with a
+  // verified NAS identity. The SPA suppresses its Authorization header
+  // exactly when this is set (#938) — see getAuthHeader().
+  gateway?: boolean;
 }
 
 export interface SystemStats {
@@ -205,21 +209,44 @@ function maybeApplyRenewedToken(response: Response): void {
 // toggles on auth.local_bypass.)
 let localBypass = false;
 
+// Whether the current page load is served through the unified gateway (the
+// request to /api/health carried a gateway-verified NAS identity; see the
+// `gateway` field). Behind the gateway an Authorization header is hijacked by
+// the gateway as ITS session credential, so API calls must go headerless and
+// ride the forwarded identity instead. Direct access to the same listener
+// (which a base-path deployment also serves — same document, same prefix)
+// must send the Bearer token. The old inference "base path configured ⇒
+// gateway" broke every direct login on such deployments: login succeeded,
+// the first authenticated call came back headerless, 401'd, and the route
+// guard bounced the user back to the login page in a loop (#938).
+let gatewayFronted = false;
+
 // Query /api/health (public) to learn whether the backend considers the current
-// request local (see /api/health local_access). Called once during app
+// request local (see /api/health local_access), and whether it arrived through
+// the unified gateway (see /api/health gateway). Called once during app
 // bootstrap, before the router gates on isAuthenticated(). Bounded by a 3s
-// timeout so a hung backend cannot block mount() forever.
+// timeout so a hung backend cannot block mount() forever. If the health probe
+// fails, gatewayFronted stays false and API calls send the Bearer header —
+// correct for every deployment except a gateway whose session is dead, which
+// is already the guarded-reload path.
 export async function checkLocalBypass(): Promise<boolean> {
   try {
     const health = await healthCheck(AbortSignal.timeout(3000));
     if (health.local_access) {
       localBypass = true;
     }
+    gatewayFronted = health.gateway === true;
   } catch {
     // Health check failed or timed out — leave localBypass false; the login
     // page will show.
   }
   return localBypass;
+}
+
+// Whether the current page load is fronted by the unified gateway (see
+// gatewayFronted above). Exported for tests.
+export function isGatewayFronted(): boolean {
+  return gatewayFronted;
 }
 
 // Check if user is authenticated (has a non-expired session token, OR the
@@ -298,15 +325,21 @@ export async function readJson<T>(response: Response, refetch?: () => Promise<Re
 }
 
 // Get the Authorization header value for API calls: "Bearer <session-token>".
-// Behind a unified gateway (fnOS "/app/mibee-nvr") this returns null: the
-// gateway interprets ANY Authorization header as ITS OWN session credential
-// and answers the NVR's bearer token with 200 + "invalid token" (verified
-// live 2026-09-20: identical endpoint — with the header bounces, without it
-// succeeds, because the gateway forwards its own verified NAS identity and
-// the NVR authorizes on that). Query-param auth (?token=) is unaffected —
-// WS/FLV/WHEP players keep using getTokenForUrl().
+// Returns null when the current page load is fronted by the unified gateway
+// (fnOS "/app/mibee-nvr"): the gateway interprets ANY Authorization header as
+// ITS OWN session credential and answers the NVR's bearer token with 200 +
+// "invalid token" (verified live 2026-09-20: identical endpoint — with the
+// header bounces, without it succeeds, because the gateway forwards its own
+// verified NAS identity and the NVR authorizes on that). Query-param auth
+// (?token=) is unaffected — WS/FLV/WHEP players keep using getTokenForUrl().
+//
+// The discriminator is the /api/health `gateway` flag (set per request by the
+// backend from its verified gateway-identity context), NOT the base path: a
+// base-path deployment serves direct access from the same listener with the
+// same injected document, and direct access REQUIRES the Bearer header —
+// gating on APP_BASE left direct logins bouncing back to the login page (#938).
 export function getAuthHeader(): string | null {
-  if (APP_BASE) return null;
+  if (gatewayFronted) return null;
   const token = getToken();
   if (!token) return null;
   return `Bearer ${token}`;

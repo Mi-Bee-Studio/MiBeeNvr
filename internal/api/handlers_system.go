@@ -203,6 +203,13 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	localBypass := h.config != nil && h.config.Auth.LocalBypass != nil && *h.config.Auth.LocalBypass
 	resp.LocalAccess = localBypass && middleware.IsBypassEligible(r)
 
+	// Gateway — whether this request carried a unified-gateway-verified NAS
+	// identity (context only ever set on the gateway listener). The frontend
+	// suppresses its Authorization header exactly when this is true: the
+	// gateway claims any Authorization header as its own credential, while
+	// direct access to the same listener requires the Bearer token (#938).
+	resp.Gateway = middleware.GatewayIdentityFromContext(r.Context()) != nil
+
 	// Stable device identity for LAN clients (#330)
 	if h.config != nil {
 		resp.DeviceID = h.config.Server.DeviceID
