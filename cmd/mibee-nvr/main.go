@@ -269,24 +269,8 @@ func main() {
 	// quit with the web UI open stalls on the never-idle /api/events stream.
 	httpSrv.RegisterOnShutdown(api.CloseStreams)
 
-	// Empty-UI guard: the SPA build output is gitignored, so a binary compiled
-	// from a bare checkout/worktree (`go build` without the frontend step)
-	// embeds no web UI and the web root serves a directory listing while
-	// everything else looks healthy. Refuse to serve that — the operator
-	// administrates this box through the web UI, so a UI-less deploy is a
-	// failed deploy, and failing at startup (systemd + journal) beats 15h of
-	// silent breakage. NVR_ALLOW_EMPTY_UI=1 is the documented escape hatch for
-	// genuinely headless use; recording itself does not depend on the UI.
-	if os.Getenv("NVR_ALLOW_EMPTY_UI") != "1" {
-		if err := ui.VerifyEmbeddedSPA(ui.StaticFS); err != nil {
-			slog.Error("refusing to start: the embedded web UI is incomplete — rebuild with `make build` "+
-				"(or `cd web && npm run build && cp -r web/dist/* internal/ui/static/` and recompile); "+
-				"set NVR_ALLOW_EMPTY_UI=1 to run headless without the UI",
-				"error", err)
-			_ = a.Stop()
-			os.Exit(1)
-		}
-	}
+	// Empty-UI guard — see ensureEmbeddedUI.
+	ensureEmbeddedUI(a)
 
 	// Bind the listener explicitly (not ListenAndServe) so a later listen
 	// swap can retire and rebuild just this listener (see applyListenAddr).
@@ -479,6 +463,29 @@ func openDesktopLogWriter(configPath string) io.Writer {
 // (with its own os.Exit calls) so gocritic's exitAfterDefer stays quiet in
 // main — the same treatment as listenGatewaySocket: a fatal init error where
 // main's defers are moot anyway.
+// ensureEmbeddedUI refuses to serve a binary compiled without the SPA build
+// output: the frontend artifacts under internal/ui/static/ are gitignored, so
+// a bare `go build` from a fresh checkout/worktree embeds no web UI and the
+// web root would serve a directory listing while everything else looks
+// healthy. The operator administrates this box through the web UI — a UI-less
+// deploy is a failed deploy, and failing at startup (systemd + journal) beats
+// hours of silent breakage. NVR_ALLOW_EMPTY_UI=1 is the escape hatch for
+// genuinely headless use; recording itself does not depend on the UI. Kept as
+// a standalone function with its own os.Exit, matching mustListenTCP below.
+func ensureEmbeddedUI(a *app.App) {
+	if os.Getenv("NVR_ALLOW_EMPTY_UI") == "1" {
+		return
+	}
+	if err := ui.VerifyEmbeddedSPA(ui.StaticFS); err != nil {
+		slog.Error("refusing to start: the embedded web UI is incomplete — rebuild with `make build` "+
+			"(or `cd web && npm run build && cp -r web/dist/* internal/ui/static/` and recompile); "+
+			"set NVR_ALLOW_EMPTY_UI=1 to run headless without the UI",
+			"error", err)
+		_ = a.Stop()
+		os.Exit(1)
+	}
+}
+
 func mustListenTCP(addr string) net.Listener {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
