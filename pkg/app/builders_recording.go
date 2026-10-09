@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
@@ -210,6 +211,10 @@ func buildRecordingDeps(deps *appDeps) {
 	deps.mergeScheduler = mergeScheduler
 	// Pre-create per-camera merge managers and register them in the scheduler
 	periodicMergeManagers := make(map[string]*timelapse.PeriodicMergeManager)
+	// Catch-up specs mirror the scheduler registrations (same duration + the
+	// duration_label the manager stamps its timelapse_merges rows with) so the
+	// startup pass can tell missed windows from completed ones.
+	var catchUpSpecs []timelapse.CatchUpCamera
 	for _, cam := range cfg.Cameras {
 		if cam.Timelapse != nil {
 			dur := 24 * time.Hour
@@ -265,6 +270,11 @@ func buildRecordingDeps(deps *appDeps) {
 				timelapse.WithTempDirGrace(time.Duration(cfg.Storage.PeriodicTempGraceS)*time.Second),
 			)
 			mergeScheduler.AddOrUpdate(cam.ID, dur)
+			catchUpSpecs = append(catchUpSpecs, timelapse.CatchUpCamera{
+				CameraID:      cam.ID,
+				Duration:      dur,
+				DurationLabel: cam.Timelapse.MergeDuration,
+			})
 			slog.Info(
 				"merge scheduler: configured camera",
 				"camera_id", cam.ID,
@@ -273,11 +283,17 @@ func buildRecordingDeps(deps *appDeps) {
 		}
 	}
 	deps.periodicMergeManagers = periodicMergeManagers
-	mergeScheduler.SetRunFunc(func(ctx context.Context, cameraID string, refTime time.Time) error {
+	// Deterministic order (map iteration is randomized) so the catch-up pass
+	// walks cameras in a stable sequence.
+	sort.Slice(catchUpSpecs, func(i, j int) bool { return catchUpSpecs[i].CameraID < catchUpSpecs[j].CameraID })
+	deps.mergeCatchUpSpecs = catchUpSpecs
+	runScheduledMerge := func(ctx context.Context, cameraID string, refTime time.Time) error {
 		manager, ok := periodicMergeManagers[cameraID]
 		if !ok {
 			return fmt.Errorf("merge scheduler: no manager for camera %s", cameraID)
 		}
 		return manager.Run(ctx, cameraID, refTime)
-	})
+	}
+	mergeScheduler.SetRunFunc(runScheduledMerge)
+	deps.mergeRunFunc = runScheduledMerge
 }

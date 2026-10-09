@@ -79,9 +79,15 @@ type appDeps struct {
 	rollingMergeMgr       *timelapse.RollingMergeManager // timelapse rolling merge (wired to API handler)
 	mergeScheduler        *timelapse.MergeScheduler
 	periodicMergeManagers map[string]*timelapse.PeriodicMergeManager // per-camera (nil Timelapse = absent); asserted by wiring tests
-	visionMgr             *vision.Coordinator                        // NVR→Vision push coordinator
-	motionAnalyzer        *motion.Analyzer                           // offline motion-score service (issue #435)
-	pixgateMgr            *pixgate.Manager                           // pixel-domain fine gate (issue #636)
+	// mergeCatchUpSpecs + mergeRunFunc back the startup catch-up pass
+	// (timelapse.RunCatchUp): specs are collected while the per-camera
+	// managers are built; the mergeScheduler service launches the pass with
+	// them so windows missed across a restart are re-merged.
+	mergeCatchUpSpecs []timelapse.CatchUpCamera
+	mergeRunFunc      func(ctx context.Context, cameraID string, refTime time.Time) error
+	visionMgr         *vision.Coordinator // NVR→Vision push coordinator
+	motionAnalyzer    *motion.Analyzer    // offline motion-score service (issue #435)
+	pixgateMgr        *pixgate.Manager    // pixel-domain fine gate (issue #636)
 
 	// Camera + health + relay
 	camMgr       *camera.CameraManager
