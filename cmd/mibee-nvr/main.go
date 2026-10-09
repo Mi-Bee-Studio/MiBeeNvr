@@ -268,6 +268,26 @@ func main() {
 	// Unblocks SSE handler loops the moment Shutdown begins — without this a
 	// quit with the web UI open stalls on the never-idle /api/events stream.
 	httpSrv.RegisterOnShutdown(api.CloseStreams)
+
+	// Empty-UI guard: the SPA build output is gitignored, so a binary compiled
+	// from a bare checkout/worktree (`go build` without the frontend step)
+	// embeds no web UI and the web root serves a directory listing while
+	// everything else looks healthy. Refuse to serve that — the operator
+	// administrates this box through the web UI, so a UI-less deploy is a
+	// failed deploy, and failing at startup (systemd + journal) beats 15h of
+	// silent breakage. NVR_ALLOW_EMPTY_UI=1 is the documented escape hatch for
+	// genuinely headless use; recording itself does not depend on the UI.
+	if os.Getenv("NVR_ALLOW_EMPTY_UI") != "1" {
+		if err := ui.VerifyEmbeddedSPA(ui.StaticFS); err != nil {
+			slog.Error("refusing to start: the embedded web UI is incomplete — rebuild with `make build` "+
+				"(or `cd web && npm run build && cp -r web/dist/* internal/ui/static/` and recompile); "+
+				"set NVR_ALLOW_EMPTY_UI=1 to run headless without the UI",
+				"error", err)
+			_ = a.Stop()
+			os.Exit(1)
+		}
+	}
+
 	// Bind the listener explicitly (not ListenAndServe) so a later listen
 	// swap can retire and rebuild just this listener (see applyListenAddr).
 	httpLn := mustListenTCP(cfg.Server.Listen)
