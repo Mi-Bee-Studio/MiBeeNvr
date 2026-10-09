@@ -23,12 +23,14 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tierrec"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
 // registerServices registers all services on the App in start/stop order,
@@ -428,6 +430,50 @@ func registerMediaServices(a *App, deps *appDeps) error {
 		name: "mergeScheduler",
 		startFunc: func(ctx context.Context) error {
 			deps.mergeScheduler.Start(ctx)
+			// Startup catch-up: re-merge windows whose scheduled run was
+			// interrupted by a service stop (deploy restart, crash, power
+			// loss). Discovery is cheap (one indexed list per camera); the
+			// re-runs fold+delete sources exactly like the scheduled path.
+			// Runs until the backlog is drained; ctx cancellation (app
+			// shutdown) stops it between windows.
+			go func() {
+				if deps.mergeRunFunc == nil || len(deps.mergeCatchUpSpecs) == 0 {
+					return
+				}
+				timelapse.RunCatchUp(ctx, time.Now(), deps.appLoc, deps.mergeCatchUpSpecs,
+					timelapse.CatchUpProbes{
+						CompletedWindowStarts: func(ctx context.Context, cameraID, durationLabel string, from, to time.Time) (map[int64]struct{}, error) {
+							rows, err := deps.db.ListTimelapseMerges(ctx, storage.TimelapseMergeFilter{
+								CameraID:      cameraID,
+								DurationLabel: durationLabel,
+								Status:        model.TimelapseMergeStatusCompleted,
+								StartTime:     from,
+								EndTime:       to,
+							})
+							if err != nil {
+								return nil, err
+							}
+							out := make(map[int64]struct{}, len(rows))
+							for _, r := range rows {
+								out[r.WindowStart.UnixNano()] = struct{}{}
+							}
+							return out, nil
+						},
+						HasSources: func(ctx context.Context, cameraID string, start, end time.Time) (bool, error) {
+							recs, err := deps.db.ListRecordings(ctx, model.RecordingFilter{
+								CameraID:  cameraID,
+								StartTime: start,
+								EndTime:   end,
+								Limit:     1,
+							})
+							if err != nil {
+								return false, err
+							}
+							return len(recs) > 0, nil
+						},
+					},
+					deps.mergeRunFunc)
+			}()
 			return nil
 		},
 		stopFunc: func() error {
