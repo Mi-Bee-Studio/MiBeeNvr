@@ -360,7 +360,7 @@
   "cameras.toggle.enabledHint": "Камера включена",
   "cameras.tutkCardBadge": "Неизвестный протокол",
   "cameras.tutkIncompatible": "Эта камера использует неизвестный транспортный протокол",
-  "cameras.tutkIncompatibleDetail": "Эта модель камеры Xiaomi использует транспортный протокол, который MiBee NVR пока не поддерживает. MiBee NVR поддерживает протоколы CS2 и TUTK (P2P) — подробности в списке совместимости.",
+  "cameras.tutkIncompatibleDetail": "Эта модель камеры Xiaomi использует транспортный протокол, который MiBee NVR пока не поддерживает. MiBee NVR поддерживает протоколы CS2 и TUTK — подробности в списке совместимости.",
   "cameras.tutkInterceptMessage": "Камера '{name}' использует транспортный протокол, который MiBee NVR может не полностью поддерживать. Её можно добавить, но запись может не работать.",
   "cameras.tutkInterceptTitle": "Обнаружена камера с неизвестной совместимостью",
   "cameras.tutkToastTitle": "Совместимость камеры неизвестна",
