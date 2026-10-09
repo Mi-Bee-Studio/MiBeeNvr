@@ -4,6 +4,24 @@
 
 ## 常见问题
 
+### 服务启动即退出：「the embedded web UI is incomplete」
+
+**症状**：服务启动后立即退出，日志中出现 `refusing to start: the embedded web UI is incomplete`。
+
+**原因**：编译二进制时跳过了前端构建步骤（未使用 `make build`）。`internal/ui/static/` 下的 SPA 构建产物不进 git，裸 `go build` 编出来的二进制不含 Web 界面——服务会直接拒绝以这种形态启动，而不是提供一个坏掉的 Web 根路径。
+
+**解决**：用 Makefile 构建（会先构建前端）：
+
+```bash
+make build          # 或：make cross / make deploy
+# 手动等价步骤：
+cd web && npm ci && npm run build && cd ..
+cp -r web/dist/* internal/ui/static/
+go build ./cmd/mibee-nvr
+```
+
+确实无头运行的部署（完全通过 API/App 管理、不用网页界面）可设置 `NVR_ALLOW_EMPTY_UI=1` 跳过该检查——录像本身不依赖 Web 界面。
+
 ### 健康检查失败
 
 #### 数据库连接问题

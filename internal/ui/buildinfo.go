@@ -8,9 +8,16 @@ import "sync"
 // actually deployed" in one glance — the 2026-09-25 outage was a stale SPA
 // embedded into a fresh binary, and the version API offered no way to tell.
 //
-// Empty/"unknown" means the SPA predates the fingerprint (or a dev checkout
-// without a frontend build) — itself a useful signal.
+// "missing" means the embedded tree has no index.html at all (a binary
+// compiled without the SPA build output — see VerifyEmbeddedSPA). It must be
+// reported ahead of any stale build-info.json: a leftover fingerprint file
+// with no SPA behind it once made an empty-UI deployment look like a valid
+// older build. "unknown" means the SPA predates the fingerprinting (or a dev
+// checkout without a frontend build) — itself a useful signal.
 var spaBuildInfo = sync.OnceValue(func() string {
+	if _, err := StaticFS.ReadFile("static/index.html"); err != nil {
+		return "missing"
+	}
 	b, err := StaticFS.ReadFile("static/build-info.json")
 	if err != nil {
 		return "unknown"
@@ -23,7 +30,8 @@ var spaBuildInfo = sync.OnceValue(func() string {
 })
 
 // SPABuildInfo returns the embedded SPA's build fingerprint
-// ("git@timestamp"), or "unknown" when the bundle carries none.
+// ("git@timestamp"), "missing" when the SPA document itself is absent, or
+// "unknown" when the bundle carries no fingerprint.
 func SPABuildInfo() string {
 	return spaBuildInfo()
 }
