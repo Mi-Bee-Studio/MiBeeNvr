@@ -10,7 +10,7 @@
  * TDD: tested via runtime.test.ts with mocked onnxruntime-web.
  */
 
-import { APP_BASE, withBase } from '$lib/base-path';
+import { withBase } from '$lib/base-path';
 
 /** Cache API store name for AI model files. */
 export const MODEL_CACHE_NAME = 'mibee-nvr-ai-models';
@@ -200,8 +200,9 @@ export class AiRuntime {
         // Build the URL via a variable so Vite's static import-analysis cannot
         // see the literal path (it only exists at runtime after ortAssetsPlugin
         // copies it into dist/ort/ — not during tests). `@vite-ignore` alone does
-        // not stop the analyzer; a non-literal specifier does.
-        const bundleUrl = APP_BASE + '/ort/ort.all.bundle.min.mjs';
+        // not stop the analyzer; a non-literal specifier does. withBase() picks
+        // up the worker-side base registered from the init message (#942).
+        const bundleUrl = withBase('/ort/ort.all.bundle.min.mjs');
         const mod: any = await import(/* @vite-ignore */ bundleUrl);
         const ort = mod?.default ?? mod;
         if (!ort) throw new Error('ort.all.bundle.min.mjs imported but module export is undefined');
@@ -217,7 +218,7 @@ export class AiRuntime {
     // internal wasm/worker path resolution (issue #109, INVALID_PROTOBUF).
     AiRuntime._ortUmdPromise = new Promise<any>((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = APP_BASE + '/ort.min.js';
+      script.src = withBase('/ort.min.js');
       script.async = true;
       script.onload = () => {
         const ort = (globalThis as any).ort;
@@ -272,7 +273,7 @@ export class AiRuntime {
     if (this._ort.env) {
       // Ensure the `wasm` sub-object exists; some mocks omit it.
       if (!this._ort.env.wasm) this._ort.env.wasm = {};
-      this._ort.env.wasm.wasmPaths = `${APP_BASE}/ort/`;
+      this._ort.env.wasm.wasmPaths = withBase('/ort/');
       // Single-threaded: crossOriginIsolated is false on our deployment (no
       // COOP/COEP headers), so SharedArrayBuffer is unavailable. ORT detects
       // this and falls back anyway, but set it explicitly so the proxy worker

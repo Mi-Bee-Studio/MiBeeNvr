@@ -27,6 +27,7 @@
 
 /// <reference lib="webworker" />
 
+import { setWorkerBase } from '$lib/base-path';
 import { AiRuntime } from './runtime';
 import { ObjectDetector, type Detection } from './inference';
 
@@ -36,6 +37,13 @@ export type InferenceWorkerRequest =
   | {
       type: 'init';
       modelUrl?: string;
+      /**
+       * Gateway base path forwarded from the main thread (#942). A worker has
+       * no `window`, so the __NVR_BASE__ bootstrap injected into index.html is
+       * invisible here — without this the ORT bundle, wasm paths and model
+       * fetches all drop the prefix and 404 behind the fnOS gateway.
+       */
+      base?: string;
       inferenceTimeoutMs?: number;
     }
   | {
@@ -155,6 +163,9 @@ self.onmessage = async (event: MessageEvent<InferenceWorkerRequest>) => {
   try {
     switch (msg.type) {
       case 'init': {
+        // Register the gateway base BEFORE anything in the runtime fetches a
+        // root-absolute asset URL (#942).
+        setWorkerBase(msg.base);
         await ensureRuntime(msg.modelUrl, msg.inferenceTimeoutMs);
         post({ type: 'ready' });
         break;
