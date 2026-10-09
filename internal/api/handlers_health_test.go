@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/stretchr/testify/require"
 )
@@ -736,4 +737,39 @@ func TestHealth_AggregateSkipsRetiredCameras(t *testing.T) {
 	require.Equal(t, 0, agg.Error)
 	// No overall-status assertion: the global status also reflects unrelated
 	// checks (e.g. the goroutine-count ceiling trips under a parallel test run).
+}
+
+// TestHealth_GatewayFlagPinsAuthHeaderSignal pins the /api/health `gateway`
+// field (#938): it must mirror whether the request carried a verified
+// unified-gateway identity, because the SPA decides whether to send its
+// Authorization header on exactly this flag. A base-path deployment serves
+// gateway and direct access from the same listener — the flag is the only
+// reliable discriminator (the document/base path is identical on both paths).
+func TestHealth_GatewayFlagPinsAuthHeaderSignal(t *testing.T) {
+	h := setupHealthHandler(t, &mockHealthManager{})
+
+	// Plain (direct) request: no gateway identity in context → false.
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+	h.handleHealth(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var direct struct {
+		Gateway bool `json:"gateway"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &direct))
+	require.False(t, direct.Gateway, "direct request must not report gateway=true")
+
+	// Gateway-fronted request: identity in context → true.
+	req = httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req = req.WithContext(middleware.WithGatewayIdentity(req.Context(), &middleware.GatewayIdentity{
+		Username: "nas-admin", UserID: "1000", Admin: true,
+	}))
+	rec = httptest.NewRecorder()
+	h.handleHealth(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var fronted struct {
+		Gateway bool `json:"gateway"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &fronted))
+	require.True(t, fronted.Gateway, "gateway-identified request must report gateway=true")
 }

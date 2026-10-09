@@ -64,6 +64,15 @@ type HealthResponse struct {
 	// page for local access. Derived from middleware.IsLocalIP + HasProxyHeaders
 	// + config.Auth.LocalBypass in handleHealth.
 	LocalAccess bool `json:"local_access"`
+	// Gateway is true when this request arrived through the unified gateway
+	// with a verified NAS identity (the X-Trim-* context, only ever set on the
+	// gateway listener). The frontend uses it to decide whether an
+	// Authorization header is safe to send: the gateway claims ANY
+	// Authorization header as its own session credential and refuses it, while
+	// direct access to the same listener needs the Bearer token. Base-path
+	// deployments serve both paths, so the document alone cannot tell them
+	// apart (#938).
+	Gateway bool `json:"gateway"`
 	// DeviceID / DeviceName give LAN clients a stable identity to anchor on
 	// instead of an IP address (#330). Empty until the config provides them
 	// (the ID is generated and persisted on first config load).
