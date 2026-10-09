@@ -364,7 +364,7 @@
   "cameras.toggle.enabledHint": "Camera enabled",
   "cameras.tutkCardBadge": "Unknown protocol",
   "cameras.tutkIncompatible": "This camera uses an unknown transport protocol",
-  "cameras.tutkIncompatibleDetail": "This Xiaomi camera model uses a transport protocol MiBee NVR does not yet support. MiBee NVR supports both CS2 and TUTK (P2P) protocols — see the compatibility list for details.",
+  "cameras.tutkIncompatibleDetail": "This Xiaomi camera model uses a transport protocol MiBee NVR does not yet support. MiBee NVR supports both CS2 and TUTK protocols — see the compatibility list for details.",
   "cameras.tutkInterceptMessage": "The camera '{name}' uses a transport protocol MiBee NVR may not fully support. It can be added but may not record.",
   "cameras.tutkInterceptTitle": "Unknown compatibility camera detected",
   "cameras.tutkToastTitle": "Camera compatibility unknown",

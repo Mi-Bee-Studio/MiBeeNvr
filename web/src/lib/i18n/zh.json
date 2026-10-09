@@ -357,7 +357,7 @@
   "cameras.toggle.enabledHint": "摄像头已启用",
   "cameras.tutkCardBadge": "协议未知",
   "cameras.tutkIncompatible": "该摄像头使用未知的传输协议",
-  "cameras.tutkIncompatibleDetail": "该型号小米摄像头使用的传输协议 MiBee NVR 暂不支持。MiBee NVR 已支持 CS2 和 TUTK (P2P) 协议，详情请查看兼容性列表。",
+  "cameras.tutkIncompatibleDetail": "该型号小米摄像头使用的传输协议 MiBee NVR 暂不支持。MiBee NVR 已支持 CS2 和 TUTK 协议，详情请查看兼容性列表。",
   "cameras.tutkInterceptMessage": "摄像头 '{name}' 使用的传输协议 MiBee NVR 可能无法完整支持，可以添加但可能无法录像。",
   "cameras.tutkInterceptTitle": "检测到兼容性未知的摄像头",
   "cameras.tutkToastTitle": "摄像头兼容性未知",
