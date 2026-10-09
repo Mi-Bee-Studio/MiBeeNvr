@@ -4,6 +4,30 @@ This guide helps you diagnose and resolve common issues with MiBee NVR. If you c
 
 ## Common Issues
 
+### Server refuses to start: "the embedded web UI is incomplete"
+
+**Symptom**: the service exits immediately after startup and the log contains
+`refusing to start: the embedded web UI is incomplete`.
+
+**Cause**: the binary was compiled without the frontend build step (`make
+build`). The SPA output under `internal/ui/static/` is not checked into git,
+so a bare `go build` from a fresh checkout embeds no web UI — the server
+refuses to run that way instead of serving a broken web root.
+
+**Solution**: build with the Makefile, which builds the SPA first:
+
+```bash
+make build          # or: make cross / make deploy
+# equivalent manual steps:
+cd web && npm ci && npm run build && cd ..
+cp -r web/dist/* internal/ui/static/
+go build ./cmd/mibee-nvr
+```
+
+Genuinely headless deployments (NVR administered entirely via API/App, no web
+UI) may set `NVR_ALLOW_EMPTY_UI=1` to bypass the check — recording itself does
+not depend on the web UI.
+
 ### Health Check Fails
 
 #### Database Connection Issues
