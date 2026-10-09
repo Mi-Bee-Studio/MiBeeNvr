@@ -2067,6 +2067,34 @@ func TestServeModel_NonExistentFile(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
+// TestServeModel_DataDirSplit pins the fnOS-style split deployment: the
+// platform seeds models into $NVR_DATA_DIR/models while the recording root
+// is a different volume. The file server must resolve through ModelsDir()
+// (NVR_DATA_DIR-aware), not RootDir/models — otherwise GET /api/ai/models
+// lists the models while GET /models/{name} 404s on the very same files.
+func TestServeModel_DataDirSplit(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	rootDir := t.TempDir() // recording volume: no models dir at all
+	dataDir := t.TempDir() // platform data volume
+	modelsDir := filepath.Join(dataDir, "models")
+	require.NoError(t, os.MkdirAll(modelsDir, 0o755))
+	testFile := filepath.Join(modelsDir, "yolo11n.onnx")
+	require.NoError(t, os.WriteFile(testFile, []byte("onnx bytes"), 0o644))
+
+	t.Setenv("NVR_DATA_DIR", dataDir)
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: rootDir},
+	}
+	h := newHandlerWithConfig(db, store, cfg)
+
+	rr := doRequest(t, h.Routes(), "GET", "/models/yolo11n.onnx", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "onnx bytes", rr.Body.String())
+}
+
 // --- Snapshot endpoint tests ---
 
 // newSnapshotTestHandler creates a Handler with a config that has a snapshot-enabled camera.

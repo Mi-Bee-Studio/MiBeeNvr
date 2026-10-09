@@ -13,6 +13,7 @@
  * receives plain Detection[] to paint.
  */
 
+import { APP_BASE } from '$lib/base-path';
 import type { Detection } from './inference';
 import type { InferenceWorkerRequest, InferenceWorkerResponse } from './inference-worker';
 
@@ -134,8 +135,10 @@ class InferenceClient {
     if (this.worker && !this.readyPromise) return;
     this.ensureWorker();
     if (this.readyPromise) {
-      // Send init then wait for 'ready'.
-      this.send({ type: 'init', modelUrl, inferenceTimeoutMs: 10000 });
+      // Send init then wait for 'ready'. The base rides along (#942): the
+      // worker cannot see window.__NVR_BASE__, so its root-absolute asset
+      // URLs (ORT bundle, wasm paths, models) depend on this field.
+      this.send({ type: 'init', modelUrl, base: APP_BASE, inferenceTimeoutMs: 10000 });
       await this.readyPromise;
     }
   }

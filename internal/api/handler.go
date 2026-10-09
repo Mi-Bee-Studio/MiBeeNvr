@@ -1004,7 +1004,7 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleServeModel serves AI model files from the storage root directory.
+// handleServeModel serves AI model files from the models directory.
 // This is a public endpoint (no auth) so the browser can load ONNX models.
 func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 	filename := chi.URLParam(r, "filename")
@@ -1012,8 +1012,12 @@ func (h *Handler) handleServeModel(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "filename required")
 		return
 	}
-	// Serve from {storage_root}/models/ directory
-	modelDir := filepath.Join(h.config.Storage.RootDir, "models")
+	// Serve from ModelsDir() — the data-volume models dir when the platform
+	// provides NVR_DATA_DIR (docker-entrypoint seeds $NVR_DATA_DIR/models),
+	// matching download_model and GET /api/ai/models. Joining RootDir here
+	// instead made the listing and the file server disagree on fnOS, where
+	// the data dir and the recording root are different volumes.
+	modelDir := h.config.Storage.ModelsDir()
 
 	// Sanitize: prevent path traversal
 	cleanPath := filepath.Clean(filepath.Join(modelDir, filename))
