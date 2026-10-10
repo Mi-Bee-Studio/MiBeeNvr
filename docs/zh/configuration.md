@@ -651,6 +651,13 @@ cameras:
 - **描述**: 分层录制（tierrec）。`"tiered"` = 子码流录成低清连续 layer=1 段 + 主码流事件驱动，推荐搭配 adaptive + `video_exit: false`（+ pixgate）让主码流纯事件化，适合近空场景。需要子码流能力协议（rtsp/onvif/gb28181），校验不符拒绝保存
 - **参见**: [自适应录制](adaptive-recording.md)
 
+### `cameras[].tier_segment_duration`
+- **类型**: string
+- **可选**: 是（仅 `recording_tier: "tiered"` 时有意义）
+- **默认**: 空（60 秒）
+- **描述**: 分层录制子码流（layer=1）段的轮转时长覆盖。子码流 7×24 连续录制默认每 60s 落一段，本旋钮调长（如 `"5m"`）可按比例压低 tier-1 行数与 DB/元数据开销。与主流的 `segment_duration` 互不影响。校验范围 10s–6h。存量段可用 CLI [`tier-merge`](cli.md#tier-merge-子码流段合并) 按窗口折叠
+- **示例**: `"5m"`
+
 ### `cameras[].motion_source`
 - **类型**: string
 - **可选**: 是

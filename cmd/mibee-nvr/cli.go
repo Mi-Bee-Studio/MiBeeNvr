@@ -334,6 +334,8 @@ func dispatchSubcommand(args []string) {
 		cmdUninstall()
 	case "offload":
 		cmdOffload()
+	case "tier-merge":
+		cmdTierMerge()
 	}
 }
 

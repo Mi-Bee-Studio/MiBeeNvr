@@ -710,6 +710,13 @@ cameras:
 - **Values**: empty / `"single"` / `"tiered"`
 - **Description**: Tiered recording (tierrec). `"tiered"` = the sub-stream records as a continuous low-res layer=1 tier while the main stream is event-driven — intended pairing is adaptive + `video_exit: false` (+ pixgate) so the main stream becomes event-only, for near-empty scenes. Requires a sub-stream-capable protocol (rtsp/onvif/gb28181); validation rejects anything else
 
+### `cameras[].tier_segment_duration`
+- **Type**: string
+- **Optional**: Yes (only meaningful with `recording_tier: "tiered"`)
+- **Default**: empty (60 seconds)
+- **Description**: Rotation window override for the tiered sub-stream (layer=1) segments. The 24/7 sub-stream tier defaults to one segment per 60s; raising this (e.g. `"5m"`) cuts tier-1 row production proportionally. Independent of the main-stream `segment_duration`. Validated 10s–6h. Existing segments can be folded per window with the [`tier-merge`](cli.md#tier-merge-sub-stream-segment-merge) CLI
+- **Example**: `"5m"`
+
 ### `cameras[].motion_source`
 - **Type**: string
 - **Optional**: Yes
