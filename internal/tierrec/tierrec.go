@@ -78,6 +78,10 @@ type Config struct {
 	StorageRoot string
 	// SegmentDur overrides the rotation window (tests).
 	SegmentDur time.Duration
+	// SegDurFor resolves the per-camera rotation window
+	// (cameras[].tier_segment_duration). Called on segment rotation; return
+	// <=0 to fall back to SegmentDur. nil = uniform SegmentDur.
+	SegDurFor func(cameraID string) time.Duration
 	// TempRegistry protects in-flight segment temps from the storage
 	// manager's startup temp-cleanup scan (optional; nil in tests).
 	TempRegistry TempRegistry
@@ -104,6 +108,17 @@ func NewManager(cfg Config) *Manager {
 		cfg.SegmentDur = segmentSecs
 	}
 	return &Manager{cfg: cfg, log: cfg.Log.With("component", "tierrec"), cams: map[string]struct{}{}, runs: map[string]*camRun{}}
+}
+
+// segDur resolves the effective rotation window for one camera: the
+// per-camera override (SegDurFor) when positive, else the manager default.
+func (m *Manager) segDur(cameraID string) time.Duration {
+	if m.cfg.SegDurFor != nil {
+		if d := m.cfg.SegDurFor(cameraID); d > 0 {
+			return d
+		}
+	}
+	return m.cfg.SegmentDur
 }
 
 // Name implements pkg/app.Service.
@@ -363,7 +378,7 @@ func (r *subRecorder) onFrame(pts int64, au [][]byte) {
 		r.bytes += int64(len(nalu))
 	}
 
-	if ticksToDuration(pts-r.segStartTick) >= r.mgr.cfg.SegmentDur {
+	if ticksToDuration(pts-r.segStartTick) >= r.mgr.segDur(r.cameraID) {
 		r.closeSegmentLocked()
 	}
 }

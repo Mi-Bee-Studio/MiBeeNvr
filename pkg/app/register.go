@@ -400,6 +400,20 @@ func registerMediaServices(a *App, deps *appDeps) error {
 				Bus:          deps.eventBus,
 				StorageRoot:  deps.cfg.Storage.RootDir,
 				TempRegistry: deps.store,
+				// Per-camera layer-1 rotation window
+				// (cameras[].tier_segment_duration); read live at each
+				// rotation so the value applies without re-resolving runs.
+				SegDurFor: func(cameraID string) time.Duration {
+					cam := deps.camMgr.GetCameraConfig(cameraID)
+					if cam == nil || cam.TierSegmentDuration == "" {
+						return 0
+					}
+					d, err := time.ParseDuration(cam.TierSegmentDuration)
+					if err != nil || d <= 0 {
+						return 0
+					}
+					return d
+				},
 			})
 			tm.SetCameras(tiered)
 			if err := a.Register(tm); err != nil {

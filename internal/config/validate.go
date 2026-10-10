@@ -1002,6 +1002,12 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 			return fmt.Errorf("cameras.%s.recording_tier: tiered requires an rtsp/onvif/gb28181 camera with a sub-stream (got protocol %q)", cam.ID, cam.Protocol)
 		}
 	}
+	if cam.TierSegmentDuration != "" {
+		d, err := time.ParseDuration(cam.TierSegmentDuration)
+		if err != nil || d < 10*time.Second || d > 6*time.Hour {
+			return fmt.Errorf("cameras.%s.tier_segment_duration must be a duration 10s–6h, got %q", cam.ID, cam.TierSegmentDuration)
+		}
+	}
 	if cam.AudioTrigger != nil && cam.AudioTrigger.Enabled {
 		if cam.RecordingMode != "adaptive" {
 			return fmt.Errorf("cameras.%s.audio_trigger requires recording_mode: adaptive (got %q)", cam.ID, cam.RecordingMode)

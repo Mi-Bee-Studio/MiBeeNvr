@@ -35,6 +35,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`download-model`](#download-model-下载-ai-模型) | 下载浏览器端 AI 检测模型 |
 | [`merge-cameras`](#merge-cameras-合并摄像头) | 合并两个重复的摄像头条目 |
 | [`timelapse-merge`](#timelapse-merge-录像转延时合并) | 把任意时段的录像批量转成延时合并产物 |
+| [`tier-merge`](#tier-merge-子码流段合并) | 折叠分层录制的子码流段（行数治理） |
 | [`eval-replay`](#eval-replay-离线回放评估) | 离线回放活动评分 / 自适应门控，调参前后对照 |
 | [`repair`](#repair-数据修复) | 数据修复工具集（9 个子命令） |
 | [`cleanup`](#cleanup-录像清理) | 按日期 / 孤儿文件清理录像 |
@@ -180,6 +181,37 @@ mibee-nvr timelapse-merge --camera all --encoding jpeg --start 2026-08-26 \
 | `--execute` | dry-run | 真正执行 |
 | `--force` | — | NVR 运行中仍处理 timelapse 已启用的摄像头 |
 | `--no-throttle` | — | 跳过启动时自动自降级（nice 19 + IO best-effort） |
+| `--config <path>` | `mibee-nvr.yaml` | 配置文件路径 |
+
+## tier-merge — 子码流段合并
+
+把分层录制（`recording_tier: tiered`）摄像头的 **layer=1 子码流段**按时间窗口折叠成单个长文件 —— tier-1 行生来终态（不进服务器合并管道，#763），本命令是它们唯一的合并/行数治理手段：
+
+```bash
+# 预览（默认 dry-run）：全部子码流段按 1h 窗口折叠的计划
+mibee-nvr tier-merge --camera cam-xxxx
+
+# 执行：每小时窗折成一段，源段删除、产物行保持 layer=1
+mibee-nvr tier-merge --camera cam-xxxx --window 1h --execute
+```
+
+行为要点：
+
+- 每个窗口的源段探测（参数集）→ 合并（与滚动合并同一 `MergeMP4Segments` 原语，编码参数变化自动分段处理）→ 成功后**删除源段（DB 行 + 文件）并插入一条合并产物行**（仍是 layer=1 / 不进列表与时间轴，与源段口径一致）。
+- 默认跳过**新鲜窗口**（`--keep-newest`，默认 2h）——运行中的 tierrec 写入器不会被触碰；可在 NVR 运行中执行（WAL 并发模型）。
+- 文件已丢失的幽灵行直接清行；探测失败的窗口整窗跳过（绝不折半知窗口）。
+- 与 timelapse-merge 相同的自动自降级（nice 19 + IO best-effort，`--no-throttle` 关闭）——大存量折叠是重 IO 操作。
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--camera <id>` | （必填） | 摄像头 ID |
+| `--window <dur>` | `1h` | 折叠窗口桶（如 `30m` / `1h` / `6h`） |
+| `--from <YYYY-MM-DD>` | — | 只处理该日期起的窗口（配置时区） |
+| `--to <YYYY-MM-DD>` | 全部 | 只处理该日期前的窗口（不含） |
+| `--keep-newest <dur>` | `2h` | 跳过最新段小于该时长的窗口，`0` 关闭 |
+| `--min-segments <n>` | `2` | 窗口内少于 n 段跳过 |
+| `--execute` | dry-run | 真正执行 |
+| `--no-throttle` | — | 跳过自动自降级 |
 | `--config <path>` | `mibee-nvr.yaml` | 配置文件路径 |
 
 ## eval-replay — 离线回放评估

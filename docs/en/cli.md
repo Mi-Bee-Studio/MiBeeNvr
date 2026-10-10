@@ -35,6 +35,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`download-model`](#download-model-download-the-ai-model) | Download the browser-side AI model |
 | [`merge-cameras`](#merge-cameras-merge-cameras) | Merge two duplicate camera entries |
 | [`timelapse-merge`](#timelapse-merge-convert-recordings-to-timelapse) | Batch-convert recordings of any period/camera into timelapse merges |
+| [`tier-merge`](#tier-merge-sub-stream-segment-merge) | Fold tiered-recording sub-stream segments (row-count hygiene) |
 | [`eval-replay`](#eval-replay-offline-replay-evaluation) | Replay the activity scorer / adaptive gate offline for tuning |
 | [`repair`](#repair-data-repair) | Data repair toolkit (9 subcommands) |
 | [`cleanup`](#cleanup-recording-cleanup) | Delete recordings by date / orphan files |
@@ -180,6 +181,37 @@ Behavior notes:
 | `--execute` | dry-run | Actually execute |
 | `--force` | — | Process timelapse-enabled cameras while the NVR is running |
 | `--no-throttle` | — | Skip the automatic self-downgrade (nice 19 + IO best-effort) |
+| `--config <path>` | `mibee-nvr.yaml` | Config file path |
+
+## tier-merge — sub-stream segment merge
+
+Folds a tiered camera's (`recording_tier: tiered`) **layer=1 sub-stream segments** into one file per time window — tier-1 rows are born terminal (never a merge input, #763), so this command is their only consolidation lever:
+
+```bash
+# Preview (dry-run by default): the 1h-window fold plan for all sub segments
+mibee-nvr tier-merge --camera cam-xxxx
+
+# Execute: fold each hourly window, delete sources, keep one layer=1 product row
+mibee-nvr tier-merge --camera cam-xxxx --window 1h --execute
+```
+
+Behavior notes:
+
+- Per window: probe sources (parameter sets) → merge (same `MergeMP4Segments` primitive as the rolling merge; codec-parameter changes split the run) → on success **delete the source rows + files and insert ONE consolidated row** (still layer=1 / out of the default list and timeline, matching its sources).
+- Fresh windows are skipped by default (`--keep-newest`, default 2h) — the live tierrec writer is never touched. Safe to run while the NVR is live (WAL concurrency model).
+- Phantom rows whose files are gone are dropped; windows with probe failures are skipped entirely (never fold a half-known window).
+- Same automatic self-downgrade as timelapse-merge (nice 19 + IO best-effort, disable with `--no-throttle`) — folding a large backlog is IO-heavy.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--camera <id>` | (required) | Camera ID |
+| `--window <dur>` | `1h` | Fold window bucket (e.g. `30m` / `1h` / `6h`) |
+| `--from <YYYY-MM-DD>` | — | Only windows on/after this date (config tz) |
+| `--to <YYYY-MM-DD>` | all | Only windows before this date (exclusive) |
+| `--keep-newest <dur>` | `2h` | Skip windows whose newest segment is younger; `0` disables |
+| `--min-segments <n>` | `2` | Skip windows with fewer segments |
+| `--execute` | dry-run | Actually apply |
+| `--no-throttle` | — | Skip the automatic self-downgrade |
 | `--config <path>` | `mibee-nvr.yaml` | Config file path |
 
 ## eval-replay — Offline Replay Evaluation

@@ -148,6 +148,13 @@ type CameraConfig struct {
 	// protocol (rtsp/onvif/gb28181).
 	RecordingTier string `yaml:"recording_tier,omitempty" json:"recording_tier,omitempty"`
 
+	// TierSegmentDuration overrides the layer-1 (sub-stream) segment rotation
+	// window for THIS camera when recording_tier: tiered. The default (60s)
+	// trades row count for write locality; longer windows (e.g. "5m") cut
+	// tier-1 row production proportionally. Empty = default. Validated
+	// 10s..6h. Independent of the main-stream segment_duration knobs.
+	TierSegmentDuration string `yaml:"tier_segment_duration,omitempty" json:"tier_segment_duration,omitempty"`
+
 	// Adaptive holds the tuning knobs for recording_mode: adaptive. Nil uses
 	// the defaults in recorder.DefaultAdaptiveConfig.
 	Adaptive *AdaptiveRecordingConfig `yaml:"adaptive,omitempty" json:"adaptive,omitempty"`
