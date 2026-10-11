@@ -77,10 +77,12 @@ func TestAudioRing_ClearWrittenResetsFlags(t *testing.T) {
 func TestH264Adaptive_TLExitFlushAfterRotation(t *testing.T) {
 	mgr := newTestManager(t)
 	const cam = "h264-adaptive-poc"
+	// No second IDR is sent, so the mid-GOP rotation this test needs is the
+	// no-IDR fallback at 2×SegmentDur (200ms, before timelapse entry).
 	rec := NewH264Recorder(H264Config{
 		CameraID:   cam,
 		RTSPURL:    "rtsp://ignored",
-		SegmentDur: 200 * time.Millisecond,
+		SegmentDur: 100 * time.Millisecond,
 		RingBufCap: 256,
 		Adaptive: &AdaptiveConfig{
 			CalmThreshold:     400 * time.Millisecond,

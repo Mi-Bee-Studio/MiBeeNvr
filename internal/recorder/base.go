@@ -618,10 +618,11 @@ func (b *baseRecorder) run(ctx context.Context) {
 //  4. Skip non-VCL NALUs (driver.isVCL)
 //  5. Check storage health (shared)
 //  6. Check parameter sets ready (driver.paramSetsReady)
-//  7. Wait for IDR before creating segment (driver.isIDR)
+//  7. Roll the segment over at an IDR once SegmentDur has elapsed, then
+//     wait for IDR before creating a segment (driver.isIDR)
 //  8. Create segment if needed (shared + driver.addTrack)
 //  9. Write sample to muxer (shared)
-//  10. Check segment duration rollover (shared)
+//  10. Fallback rollover at 2×SegmentDur when no IDR arrives (shared)
 func (b *baseRecorder) writeFrames(done chan struct{}) {
 	defer b.recoverPanic("writeFrames")
 	defer close(done)
@@ -771,7 +772,16 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			continue
 		}
 
-		// Step 7: Wait for an IDR frame before starting a new segment.
+		// Step 7: Segment duration rollover (on the arrival axis), taken at
+		// the IDR that opens the next segment. Closing on whatever frame
+		// crossed SegmentDur left the new segment waiting for the next IDR
+		// and dropped the rest of that GOP — up to a whole GOP of footage
+		// lost at every boundary (~1.8s per 30s segment at a 4s GOP).
+		if b.muxer != nil && b.driver.isIDR(typ) && pkt.at.Sub(b.segStart) >= b.cfg.SegmentDur {
+			b.closeCurrentSegment()
+		}
+
+		// Wait for an IDR frame before starting a new segment.
 		// Without this, segments may start with P-frames that have no
 		// reference, causing black/gray output until the first IDR.
 		if b.muxer == nil && !b.driver.isIDR(typ) {
@@ -809,8 +819,9 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 			b.adaptive.markTailWritten()
 		}
 
-		// Step 10: Check segment duration rollover (on the arrival axis).
-		if pkt.at.Sub(b.segStart) >= b.cfg.SegmentDur {
+		// Step 10: Fallback rollover for a stream that sends no IDR for a
+		// further SegmentDur past the target, so segment length stays bounded.
+		if pkt.at.Sub(b.segStart) >= 2*b.cfg.SegmentDur {
 			b.closeCurrentSegment()
 		}
 	}
