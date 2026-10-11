@@ -382,8 +382,8 @@ Look for `Events` in capabilities response:
 
 Some cameras actively report motion through their ONVIF event service. Set the camera form's **Motion detection source** to **Camera-side detection (ONVIF events)** (`motion_source: camera:onvif`) and the NVR establishes a Pull-Point subscription with the camera:
 
-- On `MotionAlarm State=true`: recording triggers immediately (identical action semantics to the MQTT / [webhook](webhook-integration.md) triggers); adaptive-recording cameras also exit timelapse (`reason=onvif_motion`), the same path as the audio trigger
-- On `State=false`: nothing triggers — the adaptive gate's calm logic re-enters timelapse on its own
+- On `MotionAlarm State=true` (or `CellMotionDetector/Motion IsMotion=true` — the ONVIF standard cell-motion rule, which is all some cameras such as TP-Link emit): recording triggers immediately (identical action semantics to the MQTT / [webhook](webhook-integration.md) triggers); adaptive-recording cameras also exit timelapse (`reason=onvif_motion`), the same path as the audio trigger
+- On `State=false` / `IsMotion=false`: nothing triggers — the adaptive gate's calm logic re-enters timelapse on its own
 - All ONVIF events are also republished to the SSE event bus (`onvif.*` topics), visible in the web UI's ONVIF events panel
 
 The NVR maintains the subscription automatically: renewal before expiry, rebuild on pull timeout; cameras without Pull-Point support are probed once, marked with a tombstone, and not retried. The diagnostics endpoint `GET /api/cameras/{id}/onvif-events` distinguishes "subscription broken" from "camera produced no events" (the camera form's status line reads it).
