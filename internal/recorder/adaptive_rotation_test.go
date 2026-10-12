@@ -166,6 +166,109 @@ func TestH264Adaptive_TLExitFlushAfterRotation(t *testing.T) {
 	require.Equal(t, 1, spikeCount, "trigger frame must be on disk exactly once")
 }
 
+// TestH264Adaptive_TLExitFlushAfterIDRRollover covers the pre-write rollover
+// followed by a timelapse exit: an IDR past SegmentDur opens a fresh segment,
+// the camera then goes calm and spikes, and the flush lands in that segment.
+// Frames written before timelapse entry are skipped, retained ones are
+// written, and every frame reaches disk exactly once.
+func TestH264Adaptive_TLExitFlushAfterIDRRollover(t *testing.T) {
+	mgr := newTestManager(t)
+	const cam = "h264-adaptive-idr-rollover"
+	// SegmentDur 250ms: the second IDR (320ms) rolls the segment over, and the
+	// 2×SegmentDur fallback (820ms) stays clear of the spike (720ms). Closing
+	// on the frame that crossed 250ms would drop the P-frames at 280–300ms.
+	rec := NewH264Recorder(H264Config{
+		CameraID:   cam,
+		RTSPURL:    "rtsp://ignored",
+		SegmentDur: 250 * time.Millisecond,
+		RingBufCap: 256,
+		Adaptive: &AdaptiveConfig{
+			CalmThreshold:     400 * time.Millisecond,
+			TimelapseInterval: time.Hour,
+			SpikeFactor:       3.0,
+			MaxGOPBuffer:      8 << 20,
+		},
+	}, mgr)
+	b := rec.baseRecorder
+	b.frameCh = make(chan framePacket, 256)
+	b.resetAdaptive()
+
+	done := make(chan struct{})
+	go b.writeFrames(done)
+
+	send := func(nal []byte, at time.Time) {
+		b.frameCh <- framePacket{data: append(append([]byte{}, 0, 0, 0, 1), nal...), at: at}
+	}
+	idrFrame := func(tag byte) []byte {
+		return append(append([]byte{}, testIDR...), bytes.Repeat([]byte{tag}, 20000)...)
+	}
+
+	// Synthetic arrival axis: 20ms per frame. Frame 16 (320ms) is the second
+	// IDR; timelapse entry follows at ~400ms, so seg 2 holds both P-frames
+	// written at full rate and P-frames retained in the GOP ring.
+	const totalFrames, rolloverIdx = 35, 16
+	t0 := time.Now()
+	send(testSPS, t0)
+	send(testPPS, t0)
+	send(idrFrame(0x11), t0)
+	for i := 1; i <= totalFrames; i++ {
+		at := t0.Add(time.Duration(i) * 20 * time.Millisecond)
+		if i == rolloverIdx {
+			send(idrFrame(0x12), at)
+			continue
+		}
+		p := append([]byte{0x41}, bytes.Repeat([]byte{0x22}, 799)...)
+		p[len(p)-2] = byte(i >> 8)
+		p[len(p)-1] = byte(i)
+		send(p, at)
+	}
+
+	spike := append([]byte{0x41}, bytes.Repeat([]byte{0x33}, 299999)...)
+	send(spike, t0.Add(time.Duration(totalFrames+1)*20*time.Millisecond))
+
+	close(b.frameCh)
+	<-done
+	b.closeCurrentSegment() // finalize the still-open flush segment
+	require.Equal(t, 2, b.adaptive.transitions, "timelapse must be entered after the rollover and exited by the spike")
+
+	files, err := mgr.ListFiles(cam)
+	require.NoError(t, err)
+	require.Len(t, files, 2, "only the IDR rollover may split the recording")
+	sort.Strings(files)
+
+	seg1, err := merge.ParseSegment(files[0])
+	require.NoError(t, err)
+	require.Equal(t, rolloverIdx, seg1.SampleCount,
+		"segment 1 must hold the first IDR and every P-frame up to the rollover")
+
+	seg2, err := merge.ParseSegment(files[1])
+	require.NoError(t, err)
+	require.True(t, seg2.Samples[0].IsKeyFrame, "segment 2 must open at the rollover IDR")
+	require.Equal(t, totalFrames-rolloverIdx+2, seg2.SampleCount,
+		"segment 2 must hold the rollover IDR, every later P-frame and the trigger")
+
+	data, err := os.ReadFile(files[1])
+	require.NoError(t, err)
+	spikeTail := spike[len(spike)-16:]
+	spikeCount, keyCount := 0, 0
+	seen := make(map[string]int)
+	for i, s := range seg2.Samples {
+		sample := data[s.Offset : s.Offset+int64(s.Size)]
+		if bytes.Contains(sample, spikeTail) {
+			spikeCount++
+		}
+		if s.IsKeyFrame {
+			keyCount++
+		}
+		if j, dup := seen[string(sample)]; dup {
+			t.Fatalf("samples %d and %d are identical — a frame was written twice", j, i)
+		}
+		seen[string(sample)] = i
+	}
+	require.Equal(t, 1, keyCount, "the rollover IDR must not be re-written by the flush")
+	require.Equal(t, 1, spikeCount, "trigger frame must be on disk exactly once")
+}
+
 // TestH264Adaptive_BurstDrainKeepsArrivalSpacing (#506): a writer stall
 // back-pressures the channel; the drained burst must keep its ARRIVAL spacing
 // in the output timeline instead of collapsing onto the drain millisecond.
