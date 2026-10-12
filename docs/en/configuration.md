@@ -250,6 +250,7 @@ The `storage.remote` block uploads merged recordings to an S3-compatible object 
 - **Default**: `"30s"`
 - **Description**: Duration of video segments (memory intensive)
 - **Important**: Each segment holds all video data in RAM until completion
+- **Rollover**: H.264/H.265 RTSP and ONVIF cameras close a segment at the first keyframe after this duration, so the next segment starts on that keyframe with no gap; a segment is therefore up to one GOP longer than configured. A stream that sends no keyframe for twice this duration is cut there anyway.
 - **Memory Usage**:
   - 30s segments: ~15-20MB per segment
   - 60s segments: ~30-40MB per segment
