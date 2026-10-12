@@ -84,6 +84,20 @@ failures. Every new test must satisfy them:
 - **Keep fixtures lightweight.** Prefer hermetic stubs (fake shell
   scripts, `httptest`, UDP loopback) over real external processes so
   CI wall-time stays flat as the suite grows.
+- **Never real hosts in fixtures.** Test vectors, sample payloads,
+  example configs, and comments must not contain real hostnames,
+  public IPs, or deployment endpoints — anything resolvable on the
+  public internet or tied to a real deployment is deployment
+  information and does not belong in the repository. Use reserved
+  values only:
+  - Domains: `example.com` / `example.invalid` (RFC 2606)
+  - IPv4: the documentation ranges `192.0.2.0/24`, `198.51.100.0/24`,
+    `203.0.113.0/24` (RFC 5737); IPv6: `2001:db8::/32`
+  - `127.0.0.1` and RFC 1918 private addresses are fine for
+    local-server fixtures; when a vector mimics a captured wire
+    payload, prefer the documentation ranges.
+  Reviewers will ask for captured-payload vectors to be rewritten with
+  reserved values before merge.
 
 ## Commit / PR conventions
 
