@@ -723,7 +723,7 @@ cameras:
 - **Optional**: Yes
 - **Default**: `""` (the NVR's own detectors)
 - **Values**: `""` / `"nvr"` / `"camera:onvif"`
-- **Description**: Where the camera's motion signal comes from (#711). `""` or `"nvr"` — the NVR's own detectors (adaptive P-frame spikes, pixgate; the default behavior). `"camera:onvif"` — subscribe to the camera's ONVIF Pull-Point event service; `tns1:VideoSource/MotionAlarm` events drive the recorder via the shared trigger surface and exit adaptive timelapse with reason=onvif_motion (mibee_cam WiFi-CSI contract v1.5 §13, or a standard camera's built-in motion detection). ONVIF-protocol cameras only — validation rejects the combination otherwise.
+- **Description**: Where the camera's motion signal comes from (#711). `""` or `"nvr"` — the NVR's own detectors (adaptive P-frame spikes, pixgate; the default behavior). `"camera:onvif"` — subscribe to the camera's ONVIF Pull-Point event service; `tns1:VideoSource/MotionAlarm` (`State`) or the standard `tns1:RuleEngine/CellMotionDetector/Motion` (`IsMotion`, for cameras such as TP-Link that only emit this one) events drive the recorder via the shared trigger surface and exit adaptive timelapse with reason=onvif_motion (mibee_cam WiFi-CSI contract v1.5 §13, or a standard camera's built-in motion detection). ONVIF-protocol cameras only — validation rejects the combination otherwise.
 - **Example**: `"camera:onvif"`
 
 ### `cameras[].segment_duration`

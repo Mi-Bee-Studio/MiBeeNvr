@@ -664,7 +664,7 @@ cameras:
 - **可选**: 是
 - **默认**: 空（= `"nvr"`）
 - **取值**: 空 / `"nvr"` / `"camera:onvif"`
-- **描述**: 相机运动信号来源（#711）。`"nvr"`（默认）= NVR 自有检测器（adaptive 压缩域尖峰、pixgate）；`"camera:onvif"` = 订阅相机的 ONVIF Pull-Point 事件服务，以 `tns1:VideoSource/MotionAlarm` 事件（mibee_cam WiFi-CSI 契约 v1.5 §13，或标准相机的移动侦测）经共享触发面驱动录制器，以 reason=onvif_motion 退出 adaptive 稀疏模式。仅 ONVIF 协议相机可用
+- **描述**: 相机运动信号来源（#711）。`"nvr"`（默认）= NVR 自有检测器（adaptive 压缩域尖峰、pixgate）；`"camera:onvif"` = 订阅相机的 ONVIF Pull-Point 事件服务，以 `tns1:VideoSource/MotionAlarm`（`State`）或标准的 `tns1:RuleEngine/CellMotionDetector/Motion`（`IsMotion`，TP-Link 等只发这一种的相机）事件（mibee_cam WiFi-CSI 契约 v1.5 §13，或标准相机的移动侦测）经共享触发面驱动录制器，以 reason=onvif_motion 退出 adaptive 稀疏模式。仅 ONVIF 协议相机可用
 - **示例**: `"camera:onvif"`
 
 ### `cameras[].segment_duration`

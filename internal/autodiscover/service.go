@@ -2,6 +2,7 @@ package autodiscover
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -69,19 +70,24 @@ func (s *Service) Start(ctx context.Context) error {
 
 	// Passive mode: resident Hello listener. Degrades gracefully on bind failure
 	// (e.g. port 3702 unavailable, no multicast interface) — the scanner still
-	// provides discovery, just with higher latency.
+	// provides discovery, just with higher latency. Start blocks (it owns the
+	// receive loop), so it runs on its own goroutine; a bind failure is logged
+	// there and the service stays in scanner-only mode.
 	if s.cfg.ListenForHelloEnabled() {
 		listener, err := onvif.NewHelloListener(s.cfg.NetworkInterface, s.handleDiscovered)
 		if err != nil {
 			logger.Warn("Hello listener construction failed; falling back to scanner-only mode",
 				"error", err, "interface", s.cfg.NetworkInterface)
-		} else if err := listener.Start(ctx); err != nil {
-			logger.Warn("Hello listener start failed; falling back to scanner-only mode",
-				"error", err, "interface", s.cfg.NetworkInterface)
 		} else {
 			s.mu.Lock()
 			s.listener = listener
 			s.mu.Unlock()
+			go func() {
+				if err := listener.Start(ctx); err != nil && !errors.Is(err, onvif.ErrListenerStopped) {
+					logger.Warn("Hello listener start failed; falling back to scanner-only mode",
+						"error", err, "interface", s.cfg.NetworkInterface)
+				}
+			}()
 		}
 	} else {
 		logger.Info("auto-discover passive listener disabled by config (scanner-only mode)")

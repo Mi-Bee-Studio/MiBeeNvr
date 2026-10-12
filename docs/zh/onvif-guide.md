@@ -382,8 +382,8 @@ curl -X GET http://localhost:9090/api/cameras/{id}/onvif/capabilities \
 
 部分摄像头通过 ONVIF 事件服务主动上报移动事件。把摄像头编辑表单的「**运动侦测来源**」设为「**相机侧侦测（ONVIF 事件）**」（`motion_source: camera:onvif`）后，NVR 与相机建立 Pull-Point 订阅：
 
-- 收到 `MotionAlarm State=true`：立即触发该摄像头录像（动作语义与 MQTT / [Webhook](webhook-integration.md) 触发一致）；自适应录像的摄像头同时退出延时模式（`reason=onvif_motion`），与音频触发同一条路径
-- 收到 `State=false`：不触发任何动作——自适应门控的平静逻辑会自行回到延时模式
+- 收到 `MotionAlarm State=true`（或 `CellMotionDetector/Motion IsMotion=true`——ONVIF 标准的区域移动规则，TP-Link 等相机只发这一种）：立即触发该摄像头录像（动作语义与 MQTT / [Webhook](webhook-integration.md) 触发一致）；自适应录像的摄像头同时退出延时模式（`reason=onvif_motion`），与音频触发同一条路径
+- 收到 `State=false` / `IsMotion=false`：不触发任何动作——自适应门控的平静逻辑会自行回到延时模式
 - 所有 ONVIF 事件同时转发到 SSE 事件总线（`onvif.*` 主题），Web 端的 ONVIF 事件面板可见
 
 订阅由 NVR 自动维护：到期自动续订、无拉取超时自动重建；相机不支持 Pull-Point 时单次探测后标记墓碑、不再重试。诊断端点 `GET /api/cameras/{id}/onvif-events` 可区分「订阅挂了」还是「相机没产生事件」（编辑表单的状态行就读它）。

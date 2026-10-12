@@ -19,11 +19,13 @@ import (
 // Camera-side motion events (#711): a camera with motion_source: camera:onvif
 // runs a Pull-Point subscription against its ONVIF event service. Received
 // events are (a) republished to the SSE event bus under onvif.* topics (the
-// web UI's ONVIF events panel), and (b) MotionAlarm State=true drives the
+// web UI's ONVIF events panel), and (b) a motion-true on either standard
+// motion topic (MotionAlarm State, or CellMotionDetector/Motion IsMotion —
+// #950/#951) drives the
 // recorder: the shared trigger dispatcher action surface (record — identical
 // semantics to the MQTT/webhook triggers) plus, for adaptive cameras, a
 // timelapse exit with reason=onvif_motion (the same path as the audio and
-// pixel triggers). State=false intentionally triggers nothing: the adaptive
+// pixel triggers). A motion-clear intentionally triggers nothing: the adaptive
 // gate's calm logic re-enters timelapse on its own, and a dispatcher "stop"
 // would kill recording sessions other sources started.
 //
@@ -216,14 +218,14 @@ func (cm *CameraManager) onONVIFEvent(cameraID string, evt onvif.ONVIFEvent) {
 	// (b) MotionAlarm → recorder.
 	ma, ok := onvif.ParseMotionAlarm(evt)
 	if !ok {
-		// A MotionAlarm-shaped event that failed to parse is the one failure
+		// A motion-shaped event that failed to parse is the one failure
 		// mode that can hide a device-side encoding mismatch (e.g. a vendor
 		// sending State=active instead of true): the true-leg silently never
 		// fires and "device emits nothing" is indistinguishable from "emits
 		// something we drop" (#711). WARN with the raw payload; other topics
 		// are simply not our contract and stay silent.
-		if strings.Contains(strings.ToLower(evt.Topic), "motionalarm") {
-			logger.Warn("motionalarm event unparseable — State missing or not a bool",
+		if onvif.IsMotionTopic(evt.Topic) {
+			logger.Warn("motion event unparseable — state item missing or not a bool",
 				"camera_id", cameraID, "topic", evt.Topic, "data", fmt.Sprintf("%v", evt.Data))
 		}
 		return

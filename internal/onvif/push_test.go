@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +38,11 @@ const soapNotifyStandard = `<?xml version="1.0" encoding="UTF-8"?>
     </wsnt:Notify>
   </s:Body>
 </s:Envelope>`
+
+// The ParseNotifyEvents tests double as the parser-equivalence check for the
+// onvif-go port (onvif-go#127): every wire dialect this NVR's original
+// in-tree parser tolerated — including the #929 double-layer payload fix —
+// must keep parsing identically through the library.
 
 func TestParseNotifyEventsStandardDialect(t *testing.T) {
 	t.Parallel()
@@ -131,43 +137,13 @@ func TestParseNotifyEventsEmptyAndFault(t *testing.T) {
 	require.Empty(t, events, "empty Notify (heartbeat) is valid")
 
 	_, err = ParseNotifyEvents([]byte(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault><s:Code><s:Value>s:Sender</s:Value></s:Code></s:Fault></s:Body></s:Envelope>`), "cam-x")
-	require.Error(t, err)
-	require.True(t, isSenderFault(err), "faults inside Notify must surface as soap faults, got %v", err)
-}
-
-func TestParseSubscribeResponse(t *testing.T) {
-	t.Parallel()
-	body := fmt.Sprintf(`<?xml version="1.0"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>
-<wsnt:SubscribeResponse xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2">
- <wsnt:SubscriptionReference><wsa:Address xmlns:wsa="http://www.w3.org/2005/08/addressing">http://camera/sub-1</wsa:Address></wsnt:SubscriptionReference>
- <wsnt:CurrentTime>%s</wsnt:CurrentTime>
- <wsnt:TerminationTime>%s</wsnt:TerminationTime>
-</wsnt:SubscribeResponse></s:Body></s:Envelope>`,
-		time.Now().UTC().Format(time.RFC3339),
-		time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
-
-	subRef, mgr, term, err := parseSubscribeResponse([]byte(body))
-	require.NoError(t, err)
-	require.Equal(t, "http://camera/sub-1", subRef)
-	require.Equal(t, "http://camera/sub-1", mgr, "single address serves both roles")
-	require.True(t, time.Until(term) > 50*time.Minute)
-}
-
-func TestParseSubscribeResponseSenderFault(t *testing.T) {
-	t.Parallel()
-	body := `<?xml version="1.0"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>
-<s:Fault><s:Code><s:Value>s:Sender</s:Value><s:Subcode><s:Value>ter:ActionNotSupported</s:Value></s:Subcode></s:Code>
-<s:Reason><s:Text>Subscribe not supported</s:Text></s:Reason></s:Fault>
-</s:Body></s:Envelope>`
-	_, _, _, err := parseSubscribeResponse([]byte(body))
-	require.Error(t, err)
-	require.True(t, isSenderFault(err))
+	require.Error(t, err, "faults inside Notify must surface as errors")
 }
 
 // pushTestDevice is a minimal events-service stand-in: it accepts
-// wsnt:Subscribe/Renew/Unsubscribe and records what the subscriber sent.
+// wsnt:Subscribe/Renew/Unsubscribe over HTTP and records what the subscriber
+// sent. events() hands back a bare library client pointed at it — the same
+// wiring (*Client).NewPushSubscriber produces in production.
 type pushTestDevice struct {
 	mu           sync.Mutex
 	subscribeBs  []string
@@ -230,27 +206,14 @@ func readAll(t *testing.T, r *http.Request) string {
 	return string(buf)
 }
 
-// soap posts to the events endpoint unless an explicit endpoint (the
-// SubscriptionManager address) is given — mirrors (*Client).eventsSOAP.
-func (d *pushTestDevice) soap(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-	target := d.srvURL() + "/onvif/events"
-	if endpoint != "" {
-		target = endpoint
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(soapBody))
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	buf, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(buf))
-	}
-	return buf, nil
+// events returns the library events service over a bare client pointed at
+// the test device's events endpoint (a bare client routes every service to
+// its base endpoint, which is all this device serves).
+func (d *pushTestDevice) events(t *testing.T) pushEventsAPI {
+	t.Helper()
+	lib, err := onvifgo.NewClient(d.srvURL() + "/onvif/events")
+	require.NoError(t, err)
+	return lib.Events()
 }
 
 func TestPushSubscriberLifecycle(t *testing.T) {
@@ -259,21 +222,20 @@ func TestPushSubscriberLifecycle(t *testing.T) {
 
 	var mu sync.Mutex
 	var got []ONVIFEvent
-	sub := NewPushSubscriber(dev.soap,
+	sub := NewPushSubscriber(dev.events(t),
 		WithPushCallback(func(evt ONVIFEvent) { mu.Lock(); got = append(got, evt); mu.Unlock() }),
 		WithPushNotifyURL("http://nvr.test:9090/api/onvif/notify/cam-x/tok123"),
 		WithPushDuration(time.Hour),
 	)
 	require.NoError(t, sub.Subscribe(context.Background(), "cam-x"))
 
-	// The probe must carry the consumer URL and a termination request.
+	// The probe must carry the consumer URL and the requested termination.
 	dev.mu.Lock()
 	require.NotEmpty(t, dev.subscribeBs)
 	probe := dev.subscribeBs[0]
 	dev.mu.Unlock()
 	require.Contains(t, probe, "http://nvr.test:9090/api/onvif/notify/cam-x/tok123")
-	require.Contains(t, probe, "wsnt:Subscribe")
-	require.Contains(t, probe, "PT3600S")
+	require.Contains(t, probe, "PT60M", "requested termination (1h) must ride the probe")
 
 	st := sub.Status("cam-x")
 	require.True(t, st.Subscribed)
@@ -309,7 +271,7 @@ func TestPushSubscriberRenewFailureDegrades(t *testing.T) {
 	dev := newPushTestDevice(t, 2*time.Second)
 
 	fallbackCh := make(chan string, 1)
-	sub := NewPushSubscriber(dev.soap,
+	sub := NewPushSubscriber(dev.events(t),
 		WithPushCallback(func(ONVIFEvent) {}),
 		WithPushNotifyURL("http://nvr.test:9090/api/onvif/notify/cam-x/tok"),
 		WithPushFallback(func(cameraID, reason string) { fallbackCh <- reason }),
@@ -338,20 +300,9 @@ func TestPushSubscriberProbeSenderFaultMapsToNotSupported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	soap := func(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(soapBody))
-		if err != nil {
-			return nil, err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		buf, _ := io.ReadAll(resp.Body)
-		return buf, nil
-	}
-	sub := NewPushSubscriber(soap, WithPushCallback(func(ONVIFEvent) {}), WithPushNotifyURL("http://nvr/x"))
-	err := sub.Subscribe(context.Background(), "cam-x")
+	lib, err := onvifgo.NewClient(srv.URL)
+	require.NoError(t, err)
+	sub := NewPushSubscriber(lib.Events(), WithPushCallback(func(ONVIFEvent) {}), WithPushNotifyURL("http://nvr/x"))
+	err = sub.Subscribe(context.Background(), "cam-x")
 	require.ErrorIs(t, err, ErrPushNotSupported)
 }
