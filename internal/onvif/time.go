@@ -2,30 +2,36 @@ package onvif
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"time"
+
+	onvifdevice "github.com/mickeyzzc/onvif-go/v2/device"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
 // Camera time-correction primitives (#time-sync).
 //
-// Read path: GetDeviceTime uses the pre-auth GetSystemDateAndTime (the same
-// call measureClockSkew already makes for WS-Security digest auth), so camera
-// time is observable even with NO credentials configured.
+// The SOAP mechanics live in onvif-go's device package (onvif-go#129): the
+// write paths below are thin adapters over device.Service. The read path
+// stays local: it adds the Skew/LocalReference measurement (half-RTT
+// compensated against the NVR clock) that drives the timesync service's
+// drift thresholds, built on the same querySystemDateAndTime machinery the
+// WS-Security digest auth uses (wssecurity.go) — so camera time stays
+// observable even with NO credentials configured, exactly when it matters.
 //
-// Write paths: SetDeviceTime (tds:SetSystemDateAndTime, Manual) and SetNTPServer
-// (tds:SetNTP + flip DateTimeType to NTP). Both are admin-level (WRITE_SYSTEM)
-// operations and REQUIRE credentials — ErrNoCredentials is returned otherwise.
-// They ride the raw-SOAP digest path with the device-time skew correction, so
-// they work on exactly the cameras that need them: ones whose clocks (and thus
-// digest windows) have drifted.
+// Write paths require admin credentials — ErrNoCredentials is returned
+// otherwise (the library's sentinel, re-exported so callers keep one
+// errors.Is target). The library client the writes ride was Initialized at
+// Connect() with the measured clock skew applied, so they work on exactly
+// the cameras that need them: ones whose clocks (and thus digest windows)
+// have drifted.
 
 // ErrNoCredentials is returned by the write operations when the client was
 // constructed without a username/password. Callers surface it as an explicit
 // "credentials required" state rather than a generic device error.
-var ErrNoCredentials = errors.New("onvif: camera credentials required for this operation")
+var ErrNoCredentials = onvifdevice.ErrNoCredentials
 
 // DeviceTime is the result of reading a camera's wall clock.
 type DeviceTime struct {
@@ -83,67 +89,47 @@ func (c *Client) GetDeviceTime(ctx context.Context) (*DeviceTime, error) {
 // SetDeviceTime writes the NVR's current time to the camera
 // (tds:SetSystemDateAndTime, DateTimeType=Manual). tz is a POSIX TZ string
 // (e.g. "CST-8"); empty omits the TimeZone element (camera keeps its zone).
-// The embedded UTC time is compensated by the measured skew and by the send
-// delay, targeting sub-second residual error on a LAN.
+// The embedded UTC time is compensated by the measured skew, targeting
+// sub-second residual error on a LAN (the library sends the instant
+// verbatim, so the compensation happens here).
 //
-// Requires admin credentials. A camera in NTP mode may refuse Manual setting
-// with a Sender fault — the fault is surfaced verbatim for the caller to
-// decide (e.g. point the camera at the NVR's SNTP server instead).
+// Requires admin credentials. Works without Connect() — the timesync
+// service must be able to fix the clock of a drifted camera whose full
+// handshake (and digest window) is broken. A camera in NTP mode may refuse
+// Manual setting with a Sender fault — the fault is surfaced verbatim for
+// the caller to decide (e.g. point the camera at the NVR's SNTP server
+// instead).
 func (c *Client) SetDeviceTime(ctx context.Context, tz string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.username == "" {
 		return ErrNoCredentials
 	}
 
-	// Skew first: digest timestamps must be built on the camera's view of
-	// "now" or a badly-drifted camera rejects the very call that would fix it.
+	// Skew first: the instant must be built on the camera's view of "now" or
+	// a badly-drifted camera gets a stale clock written back.
 	skew := c.measureClockSkew(ctx, c.endpoint)
-	appliedAt := time.Now().UTC().Add(skew)
-
-	var tzElem string
-	if tz != "" {
-		tzElem = fmt.Sprintf("<tds:TimeZone><tt:TZ>%s</tt:TZ></tds:TimeZone>", xmlEscape(tz))
-	}
-	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
- xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
- xmlns:tt="http://www.onvif.org/ver10/schema">
-  <s:Body>
-    <tds:SetSystemDateAndTime>
-      <tds:DateTimeType>Manual</tds:DateTimeType>
-      <tds:DaylightSavings>false</tds:DaylightSavings>
-      %s
-      <tds:UTCDateTime>
-        <tt:Time>
-          <tt:Hour>%d</tt:Hour>
-          <tt:Minute>%d</tt:Minute>
-          <tt:Second>%d</tt:Second>
-        </tt:Time>
-        <tt:Date>
-          <tt:Year>%d</tt:Year>
-          <tt:Month>%d</tt:Month>
-          <tt:Day>%d</tt:Day>
-        </tt:Date>
-      </tds:UTCDateTime>
-    </tds:SetSystemDateAndTime>
-  </s:Body>
-</s:Envelope>`,
-		tzElem,
-		appliedAt.Hour(), appliedAt.Minute(), appliedAt.Second(),
-		appliedAt.Year(), int(appliedAt.Month()), appliedAt.Day())
-
-	respBody, err := c.doRawSOAPDigestDeviceTime(ctx, c.endpoint, soapBody)
+	lib, err := c.deviceWriter(skew)
 	if err != nil {
 		return err
 	}
-	return soapFaultCheck(respBody)
+	appliedAt := time.Now().UTC().Add(skew)
+
+	return lib.Device().SetDeviceTime(ctx, onvifdevice.DeviceTime{
+		UTCDateTime: appliedAt,
+		TimeZone:    tz,
+	})
 }
 
 // SetNTPServer points the camera at an NTP/SNTP server (host: IPv4 or DNS
 // name) and flips its DateTimeType to NTP so it actually uses the server.
-// Admin credentials required. Long-term self-healing path: after this, the
-// camera re-syncs on its own schedule (including after power loss with a dead
-// RTC battery) — pair with the NVR's built-in SNTP server.
+// Admin credentials required. Works without Connect() (same rationale as
+// SetDeviceTime). Long-term self-healing path: after this, the camera
+// re-syncs on its own schedule (including after power loss with a dead RTC
+// battery) — pair with the NVR's built-in SNTP server.
 func (c *Client) SetNTPServer(ctx context.Context, host string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.username == "" {
 		return ErrNoCredentials
 	}
@@ -152,71 +138,46 @@ func (c *Client) SetNTPServer(ctx context.Context, host string) error {
 		return fmt.Errorf("onvif: NTP server host is empty")
 	}
 
-	var hostType, hostElem string
+	lib, err := c.deviceWriter(c.measureClockSkew(ctx, c.endpoint))
+	if err != nil {
+		return err
+	}
+
+	nh := onvifdevice.NetworkHost{Type: "DNS", DNSname: host}
 	if ip := net.ParseIP(host); ip != nil {
 		if ip.To4() != nil {
-			hostType = "IPv4"
-			hostElem = fmt.Sprintf("<tt:IPv4Address>%s</tt:IPv4Address>", host)
+			nh = onvifdevice.NetworkHost{Type: "IPv4", IPv4Address: host}
 		} else {
-			hostType = "IPv6"
-			hostElem = fmt.Sprintf("<tt:IPv6Address>%s</tt:IPv6Address>", host)
+			nh = onvifdevice.NetworkHost{Type: "IPv6", IPv6Address: host}
 		}
-	} else {
-		hostType = "DNS"
-		hostElem = fmt.Sprintf("<tt:DNSname>%s</tt:DNSname>", xmlEscape(host))
 	}
 
-	ntpBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
- xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
- xmlns:tt="http://www.onvif.org/ver10/schema">
-  <s:Body>
-    <tds:SetNTP>
-      <tds:FromDHCP>false</tds:FromDHCP>
-      <tds:NTPManual>
-        <tt:Type>%s</tt:Type>
-        %s
-      </tds:NTPManual>
-    </tds:SetNTP>
-  </s:Body>
-</s:Envelope>`, hostType, hostElem)
+	return lib.Device().SetNTPServer(ctx, []onvifdevice.NetworkHost{nh})
+}
 
-	respBody, err := c.doRawSOAPDigestDeviceTime(ctx, c.endpoint, ntpBody)
+// deviceWriter returns a library client for the admin time writes. The
+// connected client is preferred (Initialize done, Connect-time skew already
+// applied). Before Connect the writes must still work — an ephemeral client
+// is built against c.endpoint with the freshly measured skew, mirroring the
+// raw-SOAP path these wrappers replaced (fixing a drifted camera's clock
+// cannot depend on a healthy full handshake).
+func (c *Client) deviceWriter(skew time.Duration) (*onvifgo.Client, error) {
+	if c.ready {
+		return c.client, nil
+	}
+	lib, err := onvifgo.NewClient(c.endpoint, onvifgo.WithCredentials(c.username, c.password))
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("create ONVIF client: %w", err)
 	}
-	if err := soapFaultCheck(respBody); err != nil {
-		return err
+	if skew != 0 {
+		lib.SetClockSkew(skew)
 	}
-
-	// Flip DateTimeType to NTP (no time value needed — the camera pulls it).
-	// Some firmwares accept SetNTP alone and switch implicitly; the explicit
-	// flip covers the ones that don't. A fault here leaves the NTP server
-	// configured but the mode unchanged — still report it so the caller knows
-	// the camera may need a manual sync in the meantime.
-	flipBody := `<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
- xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
-  <s:Body>
-    <tds:SetSystemDateAndTime>
-      <tds:DateTimeType>NTP</tds:DateTimeType>
-      <tds:DaylightSavings>false</tds:DaylightSavings>
-    </tds:SetSystemDateAndTime>
-  </s:Body>
-</s:Envelope>`
-	respBody, err = c.doRawSOAPDigestDeviceTime(ctx, c.endpoint, flipBody)
-	if err != nil {
-		return fmt.Errorf("NTP server set, but switching DateTimeType to NTP failed: %w", err)
-	}
-	if err := soapFaultCheck(respBody); err != nil {
-		return fmt.Errorf("NTP server set, but switching DateTimeType to NTP failed: %w", err)
-	}
-	return nil
+	return lib, nil
 }
 
 // soapFaultCheck scans a SOAP 1.2 response body for a Fault element. Some
 // devices answer HTTP 200 with a faulted envelope; without this check a
-// rejected SetSystemDateAndTime would look like success.
+// rejected request would look like success (used by the credentials probe).
 func soapFaultCheck(body []byte) error {
 	s := string(body)
 	for _, marker := range []string{"<s:Fault>", "<SOAP-ENV:Fault>", "<soap:Fault>", "<SOAP-ENV:fault>"} {

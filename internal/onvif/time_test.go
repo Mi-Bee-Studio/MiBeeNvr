@@ -110,10 +110,14 @@ func TestSetDeviceTime_SendsManualWithSkewCompensatedTime(t *testing.T) {
 	if err := c.SetDeviceTime(context.Background(), "CST-8"); err != nil {
 		t.Fatalf("SetDeviceTime: %v", err)
 	}
+	// Prefix-agnostic assertions: the write rides onvif-go's device service,
+	// whose serializer declares namespaces on the ancestors (no tds:/tt:/wsse:
+	// prefixes) — the semantic payload is what must survive.
 	for _, want := range []string{
-		"<tds:DateTimeType>Manual</tds:DateTimeType>",
-		"<tt:TZ>CST-8</tt:TZ>",
-		"<wsse:Username>admin</wsse:Username>",
+		">Manual<",
+		">CST-8<",
+		">admin<",
+		"UsernameToken",
 	} {
 		if !strings.Contains(gotBody, want) {
 			t.Errorf("SetSystemDateAndTime body missing %q\nbody: %s", want, gotBody)

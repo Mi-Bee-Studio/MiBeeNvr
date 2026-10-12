@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 //
-// HelloListener long tail: constructor, dispatch panic recovery, Stop
-// idempotence, isTimeout classification, and EnrichDevice against a mock
-// ONVIF endpoint.
+// HelloListener adapter long tail: constructor interface lookup and
+// EnrichDevice against a mock ONVIF endpoint. The socket loop, panic
+// recovery, Stop idempotence and stop/restart semantics are owned (and
+// tested) by onvif-go's discovery.Listener.
 
 package onvif
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,65 +22,13 @@ func TestNewHelloListenerInterfaceLookup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, l)
 
-	// A real loopback interface resolves.
-	lo, err := NewHelloListener("lo", func(DiscoveredDevice) {})
-	require.NoError(t, err)
-	require.NotNil(t, lo)
-	require.NotNil(t, lo.iface)
-
+	// A bogus interface name must fail construction.
 	_, err = NewHelloListener("no-such-iface-xyz", func(DiscoveredDevice) {})
 	require.Error(t, err)
-}
 
-func TestHelloListenerDispatch(t *testing.T) {
-	got := make(chan DiscoveredDevice, 1)
-	l, err := NewHelloListener("", func(d DiscoveredDevice) { got <- d })
-	require.NoError(t, err)
-
-	l.dispatch(DiscoveredDevice{UUID: "u1", Endpoint: "http://127.0.0.1/x"})
-	select {
-	case d := <-got:
-		require.Equal(t, "u1", d.UUID)
-	default:
-		t.Fatal("handler not invoked")
-	}
-
-	// A panicking handler must not escape dispatch.
-	l2, err := NewHelloListener("", func(DiscoveredDevice) { panic("handler bug") })
-	require.NoError(t, err)
-	require.NotPanics(t, func() { l2.dispatch(DiscoveredDevice{}) })
-}
-
-func TestHelloListenerStopIdempotent(t *testing.T) {
-	l, err := NewHelloListener("", func(DiscoveredDevice) {})
-	require.NoError(t, err)
-	l.Stop() // before Start: only flips the stopped flag
-	l.Stop() // second call is a no-op
-	require.True(t, l.stopped)
-}
-
-func TestIsTimeoutClassification(t *testing.T) {
-	require.True(t, isTimeout(&netTimeoutError{}))
-	require.False(t, isTimeout(errors.New("connection refused")))
-	require.False(t, isTimeout(&notTimeoutError{}))
-}
-
-type netTimeoutError struct{}
-
-func (*netTimeoutError) Error() string { return "i/o timeout" }
-func (*netTimeoutError) Timeout() bool { return true }
-
-type notTimeoutError struct{}
-
-func (*notTimeoutError) Error() string { return "reset" }
-func (*notTimeoutError) Timeout() bool { return false }
-
-func TestHelloListenerStartAfterStop(t *testing.T) {
-	l, err := NewHelloListener("", func(DiscoveredDevice) {})
-	require.NoError(t, err)
+	// Stop before Start and Stop twice are both safe on the wrapper.
 	l.Stop()
-	// Start on a stopped listener is a documented no-op success.
-	require.NoError(t, l.Start(context.Background()))
+	l.Stop()
 }
 
 func TestEnrichDeviceViaMock(t *testing.T) {
