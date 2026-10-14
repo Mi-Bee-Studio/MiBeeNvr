@@ -25,6 +25,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -32,6 +33,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/viewer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vision"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/vod"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/webrtc"
@@ -230,6 +232,8 @@ type Handler struct {
 	webrtcMgr         *webrtc.Manager
 	flvMgr            *flv.Manager
 	wsMgr             *wsstream.Manager
+	viewerStore       *viewer.Store
+	viewerLogin       ViewerLoginFn
 	configPath        string
 	snapshotMu        sync.RWMutex
 	snapshots         map[string]*snapshotCache // cameraID -> cached snapshot
@@ -308,6 +312,21 @@ type Handler struct {
 	gb28181Commander gbCommander
 	// gb28181SnapMgr tracks on-demand snapshot sessions (#708).
 	gb28181SnapMgr *gb28181.SnapshotSessionManager
+	// licenseMgr 商业化收费授权（P2P 门控同源共享实例；nil = 能力缺席）。
+	licenseMgr *license.Manager
+
+	// p2pAgent 热可配的 P2P 设备代理（nil = 能力缺席，状态端点报
+	// unavailable）。
+	p2pAgent P2PController
+
+	// p2pViewer App（viewer）互联质量上报的进程级内存态（仪表盘观测，
+	// 重启清零）。
+	p2pViewer p2pViewerState
+
+	// p2pEvents 连接记录环（Manager 链路事件经 RecordP2pLinkEvent 推入；
+	// 另有 events.jsonl 落盘，重启不清）。
+	p2pEventsMu sync.Mutex
+	p2pEvents   []p2pLinkEvent
 }
 
 // frameListEntry is a cached sorted listing of a frame directory.
@@ -389,6 +408,7 @@ func (h *Handler) Routes() http.Handler {
 	h.registerPublicRoutes(r)
 	// Anonymous routes (login, setup, public playback, model serving)
 	h.registerAnonymousRoutes(r)
+	h.registerViewerLoginRoutes(r)
 
 	// Protected routes (behind authMW)
 	r.Group(func(r chi.Router) {
@@ -408,8 +428,11 @@ func (h *Handler) Routes() http.Handler {
 		h.registerAIRoutes(r)
 		h.registerVisionRoutes(r)
 		h.registerTelemetryRoute(r)
+		h.registerViewerRoutes(r)
 		h.registerGB28181Routes(r)
 		h.registerMediaRoutes(r)
+		// 预投产调试：App 诊断上报（authed；文件落盘不进 DB）。
+		r.Post("/api/diagnostics/app", h.handleAppDiagnosticsReport)
 		r.Get("/api/health/cameras", h.handleHealthCameras)
 		// Event SSE — full-bus topics (motion/AI events, file paths) are not
 		// for unauthenticated listeners; browsers pass ?token=, integrations

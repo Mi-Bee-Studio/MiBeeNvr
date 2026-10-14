@@ -16,7 +16,7 @@ import (
 type TimeSyncOps interface {
 	Status(ctx context.Context, cameraID string) (*timesync.CameraTimeStatus, error)
 	CorrectCameraTime(ctx context.Context, cameraID, tz string) (*timesync.CorrectResult, error)
-	PointCameraAtNTP(ctx context.Context, cameraID, server string) error
+	PointCameraAtNTP(ctx context.Context, cameraID, server string) (string, error)
 }
 
 // --- Camera time-sync endpoints (#time-sync) ---
@@ -89,7 +89,8 @@ func (h *Handler) handleCameraTimeNTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := h.timeSync.PointCameraAtNTP(r.Context(), cameraID, req.Server); err != nil {
+	server, err := h.timeSync.PointCameraAtNTP(r.Context(), cameraID, req.Server)
+	if err != nil {
 		if errors.Is(err, onvif.ErrNoCredentials) {
 			WriteError(w, http.StatusBadRequest, "camera credentials required to set its NTP server (configure the camera's ONVIF account first)")
 			return
@@ -97,7 +98,7 @@ func (h *Handler) handleCameraTimeNTP(w http.ResponseWriter, r *http.Request) {
 		handleCameraTimeError(w, cameraID, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "server": req.Server})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "server": server})
 }
 
 // requireTimeSyncCamera validates handler-level preconditions shared by the

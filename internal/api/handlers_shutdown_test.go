@@ -49,8 +49,8 @@ func TestHandleSystemShutdown_RemoteRefused(t *testing.T) {
 	shutdownMu.Unlock()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/system/shutdown", bytes.NewReader([]byte("{}")))
-	req.RemoteAddr = "192.168.63.30:52000"
-	req.Host = "192.168.63.30:9090"
+	req.RemoteAddr = "192.0.2.30:52000"
+	req.Host = "192.0.2.30:9090"
 	rec := httptest.NewRecorder()
 	handleSystemShutdown(rec, req)
 	require.Equal(t, http.StatusForbidden, rec.Code)

@@ -47,8 +47,8 @@ func TestHandleListenChange_RemoteRefused(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPut, "/api/system/listen",
 		bytes.NewReader([]byte(`{"listen":"0.0.0.0:9090"}`)))
-	req.RemoteAddr = "192.168.63.30:52000"
-	req.Host = "192.168.63.30:9090"
+	req.RemoteAddr = "192.0.2.30:52000"
+	req.Host = "192.0.2.30:9090"
 	rec := httptest.NewRecorder()
 	handleListenChange(rec, req)
 	require.Equal(t, http.StatusForbidden, rec.Code)

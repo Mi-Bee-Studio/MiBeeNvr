@@ -81,8 +81,8 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
-	github.com/pion/dtls/v3 v3.1.8 // indirect
-	github.com/pion/ice/v4 v4.4.2 // indirect
+	github.com/pion/dtls/v3 v3.1.8
+	github.com/pion/ice/v4 v4.4.2
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.2.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect

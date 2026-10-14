@@ -35,9 +35,9 @@ func (f *fakeTimeSync) CorrectCameraTime(ctx context.Context, id, tz string) (*t
 	return f.correct, f.correctE
 }
 
-func (f *fakeTimeSync) PointCameraAtNTP(ctx context.Context, id, server string) error {
+func (f *fakeTimeSync) PointCameraAtNTP(ctx context.Context, id, server string) (string, error) {
 	f.ntpServer = server
-	return f.ntpE
+	return server, f.ntpE
 }
 
 // newTimeSyncHandler builds a handler with one pre-seeded ONVIF camera
@@ -128,11 +128,11 @@ func TestCameraTimeNTP_PassesServerOverride(t *testing.T) {
 	h := newTimeSyncHandler(t, fake)
 
 	rr := doRequest(t, h.Routes(), http.MethodPost, "/api/cameras/cam-1/time/ntp",
-		strings.NewReader(`{"server":"192.168.63.30"}`), "", "")
+		strings.NewReader(`{"server":"192.0.2.30"}`), "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("ntp = %d, want 200: %s", rr.Code, rr.Body.String())
 	}
-	if fake.ntpServer != "192.168.63.30" {
+	if fake.ntpServer != "192.0.2.30" {
 		t.Errorf("server = %q, want passed through", fake.ntpServer)
 	}
 }

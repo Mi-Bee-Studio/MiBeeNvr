@@ -333,6 +333,23 @@ func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 			return
 		}
 	}
+	// #953 对齐：时长轮转只发生在 IDR 上——本帧 IDR 落进新开段，段
+	// 边界两侧零丢弃（此前在写后任意帧上关段，新段等下一个 IDR，每
+	// 个边界丢最多一个 GOP 的画面）。
+	if curMux != nil {
+		if elapsed := time.Since(r.segStart); isIDR && elapsed >= r.cfg.SegmentDur {
+			r.closeCurrentSegmentLocked()
+			curMux = nil
+			// fall through: the open block below opens the fresh segment at
+			// this IDR.
+		} else if elapsed >= 2*r.cfg.SegmentDur {
+			// 无 IDR 流的段长兜底：关段后本帧交回等-IDR 门——新段只
+			// 能以 IDR 开（hub 广播已在上面完成，直播不受影响）。
+			r.closeCurrentSegmentLocked()
+			r.mu.Unlock()
+			return
+		}
+	}
 	if curMux == nil {
 		tempPath, finalPath, err := r.cfg.Store.CreateSegment(r.cfg.CameraID, localCodecType)
 		if err != nil {
@@ -393,9 +410,7 @@ func (r *GB28181Recorder) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
 	r.mu.Lock()
 	r.lastFrameTime = time.Now()
 	r.frameCount++
-	if time.Since(r.segStart) >= r.cfg.SegmentDur {
-		r.closeCurrentSegmentLocked()
-	} else if r.gate != nil {
+	if r.gate != nil {
 		// The AU just observed into the GOP ring is now on disk; a later
 		// timelapse-exit flush into this segment must skip it.
 		r.gate.MarkLastWritten()

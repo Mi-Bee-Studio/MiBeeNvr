@@ -69,6 +69,15 @@ func TestStdLogThrottle_ForwardsStructuredAndLimitsBurst(t *testing.T) {
 	}
 	require.Equal(t, 1, buf.count("RTP packets lost"),
 		"burst of matched lines must collapse to one")
+
+	// 2026-10-03：n16r8 类相机不读 RTCP 回写 → 客户端 writer 每次尝试都
+	// 打 "write queue is full"（实测 ~24 行/秒，挤掉 p2p 启动证据）——同桶限流。
+	for range 20 {
+		log.Printf("write queue is full")
+	}
+	// 与 RTP 行共享同一令牌桶：本窗口配额已被上一条消耗 → 全部静默。
+	require.Equal(t, 0, buf.count("write queue is full"),
+		"write-queue spam shares the bucket (nothing passes this window)")
 	require.Contains(t, buf.String(), `level=INFO`,
 		"passed lines must stay structured, not raw stderr text")
 	require.Contains(t, buf.String(), `msg="39 RTP packets lost"`)

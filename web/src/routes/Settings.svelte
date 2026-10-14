@@ -15,6 +15,7 @@
     Info,
     Save,
     RotateCcw,
+    Globe,
   } from 'lucide-svelte';
 
   import GeneralPanel from './settings/GeneralPanel.svelte';
@@ -25,6 +26,7 @@
   import AIPanel from './settings/AIPanel.svelte';
   import ProcessingPanel from './settings/ProcessingPanel.svelte';
   import UpdatePanel from './settings/UpdatePanel.svelte';
+  import P2pPanel from './settings/P2pPanel.svelte';
 
   let activeCategory = $state('general');
 
@@ -34,6 +36,7 @@
     { id: 'cameras', label: t('settings.sidebar.cameras'), icon: Camera },
     { id: 'streaming', label: t('settings.sidebar.streaming'), icon: Radio },
     { id: 'gb28181', label: t('settings.sidebar.gb28181'), icon: RadioTower },
+    { id: 'p2p', label: t('settings.sidebar.p2p'), icon: Globe },
     { id: 'ai', label: t('settings.sidebar.ai'), icon: BrainCircuit },
     { id: 'processing', label: t('settings.sidebar.processing'), icon: Film },
     { id: 'about', label: t('settings.sidebar.about'), icon: Info },
@@ -193,6 +196,9 @@
         </div>
         <div class={activeCategory === 'ai' ? '' : 'hidden'}>
           <AIPanel />
+        </div>
+        <div class={activeCategory === 'p2p' ? '' : 'hidden'}>
+          <P2pPanel />
         </div>
         <div class={activeCategory === 'processing' ? '' : 'hidden'}>
           <ProcessingPanel />

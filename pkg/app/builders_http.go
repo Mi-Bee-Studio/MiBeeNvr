@@ -60,6 +60,8 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 		}
 	}
 	handler.SetStorageMigrator(deps.migrationMgr)
+	// 商业化收费授权（P2P 门控同源实例；GET/PUT /api/license）。
+	handler.SetLicenseManager(deps.licenseMgr)
 
 	// Playback reads join the shared budget as the "playback" tenant when
 	// opted in (#886 gray-release); nil keeps plain ServeFile semantics.

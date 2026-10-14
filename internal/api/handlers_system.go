@@ -587,6 +587,23 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Get("/api/features", h.handleGetFeatures)
 	r.Put("/api/features", h.handleUpdateFeatures)
 	r.Get("/api/version", h.handleVersion)
+	// 商业化收费授权：状态查询 + 文档安装（热生效）。
+	r.Get("/api/license", h.handleGetLicense)
+	r.Put("/api/license", h.handleInstallLicense)
+	// P2P 外网接入：链路诊断 + 设置读写（热生效）+ 账号授权关联（M1 本地
+	// 确认制，见 handlers_p2p_association.go）。
+	r.Get("/api/p2p/status", h.handleGetP2PStatus)
+	// App 互联质量上报 + 仪表盘读取（handlers_p2p_viewer.go）。
+	r.Post("/api/p2p/viewer-report", h.handleP2pViewerReport)
+	r.Get("/api/p2p/viewer", h.handleGetP2pViewer)
+	r.Get("/api/settings/p2p", h.handleGetP2PSettings)
+	r.Put("/api/settings/p2p", h.handleUpdateP2PSettings)
+	r.Get("/api/p2p/association", h.handleGetP2PAssociation)
+	r.Post("/api/p2p/association/request", h.handleRequestP2PAssociation)
+	r.Post("/api/p2p/association/confirm", h.handleConfirmP2PAssociation)
+	r.Post("/api/p2p/association/enroll", h.handleEnrollP2PAssociation)
+	r.Post("/api/p2p/association/unbind", h.handleUnbindP2PAssociation)
+	r.Post("/api/p2p/association/cancel", h.handleCancelP2PAssociation)
 	r.Get("/api/update/check", h.handleUpdateCheck)
 	r.Post("/api/update/check", h.handleUpdateCheck)
 	// Upgrade execution (#648) — BasicAuth-protected like the rest of /api.

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/viewer"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"golang.org/x/crypto/bcrypt"
@@ -143,6 +145,10 @@ type AuthProvider struct {
 	// LocalBypass reports whether the local-access bypass is enabled. Called on
 	// every local-looking request; nil means disabled.
 	LocalBypass func() bool
+	// VerifyViewer validates a viewer session token (mbviewer_…) minted by the
+	// share flow (user-tenant-model §7). nil = viewer auth disabled. Viewers
+	// get a read-only, camera-scoped surface enforced right here.
+	VerifyViewer func(token string) (*viewer.Session, bool)
 }
 
 // NewAuthMiddleware returns a middleware that protects endpoints with HTTP Basic auth.
@@ -170,6 +176,24 @@ func NewAuthMiddleware(provider AuthProvider, plaintextPassword string, rateLimi
 			if IsAPIKeyAuthenticated(r.Context()) {
 				next.ServeHTTP(w, r)
 				return
+			}
+
+			// --- Viewer session (mbviewer_…): share-flow read-only access ---
+			// Bearer header or ?token= (stream URLs cannot carry headers).
+			// Enforced surface: GET/HEAD only + path allowlist + camera scope.
+			if provider.VerifyViewer != nil {
+				if tok := viewerTokenOf(r); tok != "" {
+					if sess, ok := provider.VerifyViewer(tok); ok {
+						if !viewerRequestAllowed(r, sess) {
+							recordAuthAttempt("failure")
+							w.WriteHeader(http.StatusForbidden)
+							return
+						}
+						recordAuthAttempt("success")
+						next.ServeHTTP(w, r.WithContext(WithViewer(r.Context(), sess)))
+						return
+					}
+				}
 			}
 
 			// fnOS unified gateway (issue #394): a request that arrived via the
@@ -527,4 +551,89 @@ func (rl *RateLimiter) entryCount() int {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	return len(rl.entries)
+}
+
+// ── Viewer sessions (share flow, user-tenant-model §7) ──────────────────────
+
+type viewerCtxKey struct{}
+
+// viewerTokenOf extracts an mbviewer_ token from the Bearer header or the
+// ?token= query (stream URLs cannot carry headers).
+func viewerTokenOf(r *http.Request) string {
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer "+viewer.TokenPrefix) {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	if tok := r.URL.Query().Get("token"); strings.HasPrefix(tok, viewer.TokenPrefix) {
+		return tok
+	}
+	return ""
+}
+
+// WithViewer attaches a verified viewer session to the request context.
+func WithViewer(ctx context.Context, s *viewer.Session) context.Context {
+	return context.WithValue(ctx, viewerCtxKey{}, s)
+}
+
+// ViewerFromContext returns the viewer session when the request authenticates
+// as one (nil = admin/API-key path).
+func ViewerFromContext(ctx context.Context) *viewer.Session {
+	s, _ := ctx.Value(viewerCtxKey{}).(*viewer.Session)
+	return s
+}
+
+// viewerAllowedSubpaths lists the per-camera read-only surface a viewer may
+// reach under /api/cameras/{id}/… (live streams, snapshots, events, protocol
+// probing for player selection). Configuration/mutation stays admin-only.
+var viewerAllowedSubpaths = map[string]bool{
+	"stream":       true, // HLS catch-all /stream/*
+	"stream.flv":   true,
+	"stream.mjpeg": true,
+	"latest-frame": true,
+	"snapshot":     true,
+	"snapshot/uri": true,
+	"events":       true,
+	"protocols":    true,
+}
+
+// viewerRequestAllowed enforces the viewer surface on one request:
+//  1. method GET/HEAD only (WS upgrades are GET);
+//  2. path allowlist: /api/viewer/* plus the per-camera read-only subpaths;
+//  3. camera scope: the camera id segment must be inside the session grant
+//     (empty grant = whole device).
+func viewerRequestAllowed(r *http.Request, sess *viewer.Session) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	path := r.URL.Path
+	// Base-path deployments may carry a prefix; normalize by finding /api/.
+	if i := strings.Index(path, "/api/"); i > 0 {
+		path = path[i:]
+	}
+	if strings.HasPrefix(path, "/api/viewer/") || path == "/api/viewer" {
+		return true
+	}
+	const camPrefix = "/api/cameras/"
+	if !strings.HasPrefix(path, camPrefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(path, camPrefix)
+	rest = strings.TrimSuffix(rest, "/")
+	segments := strings.SplitN(rest, "/", 2)
+	if len(segments) < 1 || segments[0] == "" {
+		return false
+	}
+	cameraID := segments[0]
+	// /api/cameras/{id}（无子路径）只读可见（App 拉单机详情）。
+	if len(segments) == 1 {
+		return sess.CameraAllowed(cameraID)
+	}
+	sub := segments[1]
+	if sub == "" {
+		return sess.CameraAllowed(cameraID)
+	}
+	subRoot := strings.SplitN(sub, "/", 2)[0]
+	if !viewerAllowedSubpaths[subRoot] {
+		return false
+	}
+	return sess.CameraAllowed(cameraID)
 }

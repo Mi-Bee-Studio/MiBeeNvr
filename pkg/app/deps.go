@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
@@ -16,6 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
@@ -67,6 +69,9 @@ type appDeps struct {
 	metrics      *metrics.Metrics
 	eventBus     *event.EventBus
 	authMW       func(http.Handler) http.Handler
+	// viewerLoginBinder 挂接分享观看者核验（p2p Manager 存活时由
+	// registerP2PService 调用；分享执行链 user-tenant-model §7）。
+	viewerLoginBinder func(mgr *p2p.Manager)
 	remoteLogH   *remotelog.Handler
 	appLoc       *time.Location
 	ioBudget     *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
@@ -96,6 +101,10 @@ type appDeps struct {
 	sntpServer   *sntp.Server
 	healthMgr    *health.Manager
 	relayMgr     *relay.Manager
+
+	// licenseMgr 商业化收费授权（P2P 门控与 /api/license 共享同一实例，
+	// API 安装新文档热生效）。恒非 nil（未配文档时状态 none）。
+	licenseMgr *license.Manager
 
 	// Streaming
 	hlsMgr    *hls.Manager

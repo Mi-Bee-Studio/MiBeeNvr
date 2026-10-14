@@ -168,10 +168,10 @@ func TestSetNTPServer_IPv4AndDNSAndModeFlip(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "secret")
-	if err := c.SetNTPServer(context.Background(), "192.168.63.30"); err != nil {
+	if err := c.SetNTPServer(context.Background(), "192.0.2.30"); err != nil {
 		t.Fatalf("SetNTPServer(IPv4): %v", err)
 	}
-	for _, want := range []string{"<tt:Type>IPv4</tt:Type>", "<tt:IPv4Address>192.168.63.30</tt:IPv4Address>", "<tds:FromDHCP>false</tds:FromDHCP>"} {
+	for _, want := range []string{"<tt:Type>IPv4</tt:Type>", "<tt:IPv4Address>192.0.2.30</tt:IPv4Address>", "<tds:FromDHCP>false</tds:FromDHCP>"} {
 		if !strings.Contains(setNTPBody, want) {
 			t.Errorf("SetNTP body missing %q\nbody: %s", want, setNTPBody)
 		}

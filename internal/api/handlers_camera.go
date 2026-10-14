@@ -180,6 +180,10 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			IsRecording bool    `json:"is_recording"`
 			LastSeen    *string `json:"last_seen,omitempty"`
 			ErrorCode   *string `json:"error_code,omitempty"`
+			// Group（v36 分组）也进 summary：手机 App 宫格用 summary 视图
+			// 渲染分组——缺这个字段 App 侧分组永远为空（2026-10-03 App 重构
+			// 实测发现；SPA 走全量视图不受影响）。
+			Group string `json:"group,omitempty"`
 		}
 		summaries := make([]cameraSummary, len(cameras))
 		// Build ETag from camera status signatures (cheap — no JSON serialization).
@@ -192,6 +196,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				Encoding:    string(c.Encoding),
 				Protocol:    c.Protocol,
 				IsRecording: c.Status == model.StatusRecording && h.config.RecordingGate(c.RecordingEnabled),
+				Group:       c.GroupName,
 			}
 			if c.LastSeen != nil && !c.LastSeen.IsZero() {
 				ts := c.LastSeen.Format(time.RFC3339)
@@ -203,6 +208,9 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(*c.ErrorType))
 			}
 			etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(c.ID+string(c.Status)))
+			// 分组名进 ETag：分组变化（v36 PUT group）要让 summary 的
+			// 304 缓存失效，否则 ETag 客户端拿不到新分组。
+			etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(c.GroupName))
 		}
 		etag := fmt.Sprintf(`"s%d-%d"`, len(summaries), etagHash)
 		w.Header().Set("ETag", etag)

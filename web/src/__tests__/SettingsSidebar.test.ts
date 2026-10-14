@@ -7,7 +7,7 @@ vi.mock('$lib/i18n', () => ({
 }));
 
 vi.mock('lucide-svelte', () => {
-  const icons = ['Settings', 'HardDrive', 'Camera', 'Radio', 'RadioTower', 'BrainCircuit', 'Film', 'Info', 'Save', 'RotateCcw'];
+  const icons = ['Settings', 'HardDrive', 'Camera', 'Radio', 'RadioTower', 'BrainCircuit', 'Film', 'Info', 'Save', 'RotateCcw', 'Globe'];
   const mock: Record<string, () => HTMLElement> = {};
   for (const name of icons) {
     mock[name] = function MockIcon() {
@@ -32,6 +32,7 @@ vi.mock('$lib/../routes/settings/StreamingPanel.svelte', () => stubPanel('Stream
 vi.mock('$lib/../routes/settings/GB28181Panel.svelte', () => stubPanel('GB28181Panel'));
 vi.mock('$lib/../routes/settings/AIPanel.svelte', () => stubPanel('AIPanel'));
 vi.mock('$lib/../routes/settings/ProcessingPanel.svelte', () => stubPanel('ProcessingPanel'));
+vi.mock('$lib/../routes/settings/P2pPanel.svelte', () => stubPanel('P2pPanel'));
 vi.mock('$lib/../routes/settings/UpdatePanel.svelte', () => stubPanel('UpdatePanel'));
 
 describe('Settings sidebar categories', () => {
@@ -41,7 +42,7 @@ describe('Settings sidebar categories', () => {
 
   // The Advanced (高级) section was removed with its only card — the resource
   // estimate table (user ruling 2026-09-24: no value, RPi-3B-era guesses).
-  it('lists exactly the eight remaining categories (no 高级/advanced)', () => {
+  it('lists exactly the nine categories incl. P2P remote access (no 高级/advanced)', () => {
     const { container } = render(Settings);
     const labels = [...container.querySelectorAll('nav button')].map((b) => (b as HTMLElement).textContent?.trim());
     const expected = [
@@ -50,6 +51,7 @@ describe('Settings sidebar categories', () => {
       'settings.sidebar.cameras',
       'settings.sidebar.streaming',
       'settings.sidebar.gb28181',
+      'settings.sidebar.p2p',
       'settings.sidebar.ai',
       'settings.sidebar.processing',
       'settings.sidebar.about',

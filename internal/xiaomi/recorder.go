@@ -889,6 +889,22 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		}
 	}
 
+	// #953 对齐：时长轮转只发生在 IDR 上——本帧 IDR 落进新开段，段边
+	// 界两侧零丢弃（此前在写后任意帧上关段，新段等下一个 IDR，每个边
+	// 界丢最多一个 GOP 的画面）。
+	if r.muxer != nil {
+		elapsed := time.Since(r.segStart)
+		if naluType == 5 && elapsed >= r.cfg.SegmentDur {
+			r.closeCurrentSegment()
+			// fall through：下方开段块以本 IDR 开新段。
+		} else if elapsed >= 2*r.cfg.SegmentDur {
+			// 无 IDR 流的段长兜底：关段后本帧交回等-IDR 门（直播转发
+			// 保留，仅磁盘写停到下个 IDR）。
+			r.closeCurrentSegment()
+			r.forwardHLS(nalu)
+			return
+		}
+	}
 	if r.muxer == nil {
 		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH264))
 		if err != nil {
@@ -947,10 +963,6 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 
 	// Forward to HLS (non-blocking)
 	r.forwardHLS(nalu)
-
-	if time.Since(r.segStart) >= r.cfg.SegmentDur {
-		r.closeCurrentSegment()
-	}
 }
 
 // processH265NALU handles an H.265/HEVC NAL unit.
@@ -1039,6 +1051,18 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		}
 	}
 
+	// #953 对齐（同 processH264NALU）：时长轮转只发生在 IDR 上；
+	// 2×SegmentDur 兜底关段后交回等-IDR 门（直播转发保留）。
+	if r.muxer != nil {
+		elapsed := time.Since(r.segStart)
+		if (naluType == 19 || naluType == 20) && elapsed >= r.cfg.SegmentDur {
+			r.closeCurrentSegment()
+		} else if elapsed >= 2*r.cfg.SegmentDur {
+			r.closeCurrentSegment()
+			r.forwardHLS(nalu)
+			return
+		}
+	}
 	if r.muxer == nil {
 		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH265))
 		if err != nil {
@@ -1095,10 +1119,6 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 
 	// Forward to HLS (non-blocking)
 	r.forwardHLS(nalu)
-
-	if time.Since(r.segStart) >= r.cfg.SegmentDur {
-		r.closeCurrentSegment()
-	}
 }
 
 // forwardHLS sends a NALU to all stream consumers via StreamHub (non-blocking).

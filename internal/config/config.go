@@ -40,14 +40,16 @@ type Config struct {
 	WebSocket       WebSocketConfig       `yaml:"websocket"`
 	AI              AIConfig              `yaml:"ai"`
 	Vision          VisionConfig          `yaml:"vision"`
-	TimeSync        TimeSyncConfig        `yaml:"time_sync"`
-	CredentialProbe CredentialProbeConfig `yaml:"credential_probe"`
 	MetricsAuth     MetricsAuthConfig     `yaml:"metrics_auth"`
 	Security        SecurityConfig        `yaml:"security"`
 	Update          UpdateConfig          `yaml:"update"`
+	P2P             P2PConfig             `yaml:"p2p"`
+	License         LicenseConfig         `yaml:"license"`
 	APIKeys         []APIKeyConfig        `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
 	Version         string                `yaml:"version"`
 	Timezone        string                `yaml:"timezone"` // display timezone, e.g. "Asia/Shanghai", "America/New_York"; default "UTC"
+	TimeSync        TimeSyncConfig        `yaml:"time_sync"`
+	CredentialProbe CredentialProbeConfig `yaml:"credential_probe"`
 
 	// Extensions holds arbitrary key-value pairs for external modules to
 	// declare custom configuration sections. MiBeeNvr core does NOT read
