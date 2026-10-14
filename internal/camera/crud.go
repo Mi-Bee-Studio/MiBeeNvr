@@ -154,6 +154,9 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		if err := cm.startRecorder(ctx, startCam, segDur); err != nil {
 			logger.Error("failed to start recorder", "error", err)
 		}
+		if startCam.RecordingSchedule != nil && len(startCam.RecordingSchedule.TimeRanges) > 0 {
+			cm.startRecordingScheduleMonitor(context.Background(), startCam.ID)
+		}
 	} else {
 		logger.Info("camera added in pending_activation state; recorder not started",
 			"camera_id", startCam.ID, "name", startCam.Name, "endpoint", startCam.ONVIFEndpoint)
@@ -338,6 +341,7 @@ func (cm *CameraManager) RemoveCamera(ctx context.Context, cameraID string) erro
 	cm.stopTimelapseFramePoller(cameraID)
 	// Stop dual-mode timelapse schedule monitor
 	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+	cm.stopRecordingScheduleMonitor(cameraID)
 	// Tear the on-demand sub-stream pull down with the camera (#513).
 	if cm.subStreams != nil {
 		cm.subStreams.StopCamera(cameraID)
@@ -449,6 +453,7 @@ func (cm *CameraManager) ArchiveCamera(ctx context.Context, cameraID string) err
 	}
 	cm.stopTimelapseFramePoller(cameraID)
 	cm.stopDualModeTimelapseScheduleMonitor(cameraID)
+	cm.stopRecordingScheduleMonitor(cameraID)
 
 	// Merge segments asynchronously. Uses a detached context (not the request
 	// ctx) so the merge survives the HTTP request completing. MergeCamera keys
@@ -643,8 +648,17 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.CascadeSubStream != nil {
 		cam.CascadeSubStream = *updates.CascadeSubStream
 	}
+	scheduleCleared := false
 	if updates.RecordingSchedule != nil {
-		cam.RecordingSchedule = updates.RecordingSchedule
+		// A schedule without time ranges means "record 24/7" — that is how
+		// clients clear it (JSON null cannot be told apart from "field
+		// omitted"), so drop it instead of persisting an empty object.
+		if len(updates.RecordingSchedule.TimeRanges) == 0 {
+			scheduleCleared = cam.RecordingSchedule != nil
+			cam.RecordingSchedule = nil
+		} else {
+			cam.RecordingSchedule = updates.RecordingSchedule
+		}
 	}
 	if updates.RecordingMode != nil {
 		if *updates.RecordingMode != cam.RecordingMode {
@@ -812,9 +826,21 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		go cm.relayMgr.SetCameraTargets(cameraID, targets)
 	}
 
-	// Start or update recording schedule monitor if a schedule is configured.
+	// Start or update recording schedule monitor if a schedule is configured;
+	// otherwise make sure none is left behind. A recorder the old schedule had
+	// stopped is resumed, since the camera is now meant to record 24/7.
 	if hasSchedule {
 		cm.startRecordingScheduleMonitor(context.Background(), cameraID)
+	} else {
+		cm.stopRecordingScheduleMonitor(cameraID)
+		if scheduleCleared {
+			if rec := cm.snapshotRecorder(cameraID); rec != nil && rec.Status() == model.StatusStopped {
+				logger.Info("recording schedule cleared, resuming recorder", "camera_id", cameraID)
+				if err := rec.Start(context.Background()); err != nil {
+					logger.Warn("failed to resume recorder after clearing recording schedule", "camera_id", cameraID, "error", err)
+				}
+			}
+		}
 	}
 
 	// Reconcile the camera-side ONVIF motion subscription with the (possibly

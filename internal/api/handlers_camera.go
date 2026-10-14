@@ -458,6 +458,15 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An empty recording_schedule (no time ranges) clears the schedule; only a
+	// non-empty one needs validating.
+	if body.RecordingSchedule != nil && len(body.RecordingSchedule.TimeRanges) > 0 {
+		if err := config.ValidateSchedule("recording_schedule", body.RecordingSchedule); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	// Harden credential updates: empty string from frontend means "don't update"
 	username := body.Username
 	if username != nil && *username == "" {

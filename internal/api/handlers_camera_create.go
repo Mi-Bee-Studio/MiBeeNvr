@@ -125,6 +125,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		AudioInRecordings *bool `json:"audio_in_recordings"`
 		// Recording gate: false = live-only (no segments written). nil = record.
 		RecordingEnabled *bool `json:"recording_enabled"`
+		// Recording schedule: time windows outside which nothing is recorded.
+		// nil or no time ranges = 24/7.
+		RecordingSchedule *config.ScheduleConfig `json:"recording_schedule"`
 		// Cascade gate: false = hidden from the GB28181 cascade catalog and
 		// INVITEs refused. nil = default (exposed).
 		CascadeEnabled *bool `json:"cascade_enabled"`
@@ -162,6 +165,14 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.RecordingSchedule != nil && len(body.RecordingSchedule.TimeRanges) == 0 {
+		body.RecordingSchedule = nil
+	}
+	if err := config.ValidateSchedule("recording_schedule", body.RecordingSchedule); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -375,6 +386,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
 		AudioInRecordings: body.AudioInRecordings != nil && *body.AudioInRecordings,
 		RecordingEnabled:  body.RecordingEnabled,
+		RecordingSchedule: body.RecordingSchedule,
 		CascadeEnabled:    body.CascadeEnabled,
 		CascadeSubStream:  body.CascadeSubStream,
 		RecordingMode:     body.RecordingMode,
