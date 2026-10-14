@@ -187,10 +187,38 @@ let formTranscodingCRF = $state(0);
 // Dark frame filtering
 let formDarkFrameFilterEnabled = $state(false);
 let formDarkFrameThreshold = $state(15);
-// Recording schedule
+// Recording schedule: one row per time range; no days selected = every day.
+type ScheduleRange = { start: string; end: string; days: number[] };
+const defaultScheduleRange = (): ScheduleRange => ({ start: '06:00', end: '22:00', days: [] });
+// Monday-first display order; `day` is the days_of_week value (0 = Sunday).
+const SCHEDULE_WEEKDAYS = [
+    { day: 1, key: 'calendar.weekdayMon' },
+    { day: 2, key: 'calendar.weekdayTue' },
+    { day: 3, key: 'calendar.weekdayWed' },
+    { day: 4, key: 'calendar.weekdayThu' },
+    { day: 5, key: 'calendar.weekdayFri' },
+    { day: 6, key: 'calendar.weekdaySat' },
+    { day: 0, key: 'calendar.weekdaySun' },
+];
 let formRecordingScheduleEnabled = $state(false);
-let formRecordingScheduleStart = $state('06:00');
-let formRecordingScheduleEnd = $state('22:00');
+let formRecordingScheduleRanges = $state<ScheduleRange[]>([defaultScheduleRange()]);
+
+function toggleScheduleDay(index: number, day: number) {
+    const range = formRecordingScheduleRanges[index];
+    range.days = range.days.includes(day) ? range.days.filter((d) => d !== day) : [...range.days, day];
+}
+
+// Days go on each range (all or none selected = every day), never at the
+// schedule level.
+function recordingSchedulePayload() {
+    return {
+        time_ranges: formRecordingScheduleRanges.map((r) => ({
+            start: r.start,
+            end: r.end,
+            ...(r.days.length > 0 && r.days.length < 7 ? { days_of_week: [...r.days].sort((a, b) => a - b) } : {}),
+        })),
+    };
+}
 let validationErrors = $state<Record<string, string>>({});
 
   // Test connection state
@@ -296,8 +324,7 @@ let validationErrors = $state<Record<string, string>>({});
     formDarkFrameFilterEnabled = false;
     formDarkFrameThreshold = 15;
     formRecordingScheduleEnabled = false;
-    formRecordingScheduleStart = '06:00';
-    formRecordingScheduleEnd = '22:00';
+    formRecordingScheduleRanges = [defaultScheduleRange()];
     formStreamKey = '';
     formSRTPassphrase = '';
     formSRTStreamID = '';
@@ -345,8 +372,13 @@ let validationErrors = $state<Record<string, string>>({});
     const sched = camera.recording_schedule;
     formRecordingScheduleEnabled = sched && sched.time_ranges && sched.time_ranges.length > 0;
     if (sched && sched.time_ranges && sched.time_ranges.length > 0) {
-      formRecordingScheduleStart = sched.time_ranges[0].start || '06:00';
-      formRecordingScheduleEnd = sched.time_ranges[0].end || '22:00';
+      // Schedule-level days apply to ranges without their own; fold them into
+      // each row so saving (per-range days only) keeps the same meaning.
+      formRecordingScheduleRanges = sched.time_ranges.map((r: { start?: string; end?: string; days_of_week?: number[] }) => ({
+        start: r.start || '06:00',
+        end: r.end || '22:00',
+        days: [...(r.days_of_week?.length ? r.days_of_week : (sched.days_of_week ?? []))],
+      }));
     }
     formChannel = camera.channel || '';
     formAudioEnabled = camera.audio_enabled ?? false;
@@ -643,9 +675,7 @@ async function performCameraSave() {
             dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
             // Unchecked → send an empty schedule so the backend clears it
             // (undefined would be read as "leave unchanged").
-            recording_schedule: formRecordingScheduleEnabled ? {
-                time_ranges: [{ start: formRecordingScheduleStart, end: formRecordingScheduleEnd }],
-            } : { time_ranges: [] },
+            recording_schedule: formRecordingScheduleEnabled ? recordingSchedulePayload() : { time_ranges: [] },
         };
         if (formUsername && formUsername !== editingCamera.username) {
             data.username = formUsername;
@@ -717,9 +747,7 @@ async function performCameraSave() {
             push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp' || formProtocol === 'whip') ? formPushRetentionDays : undefined,
             dark_frame_filter_enabled: formDarkFrameFilterEnabled,
             dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
-            recording_schedule: formRecordingScheduleEnabled ? {
-                time_ranges: [{ start: formRecordingScheduleStart, end: formRecordingScheduleEnd }],
-            } : undefined,
+            recording_schedule: formRecordingScheduleEnabled ? recordingSchedulePayload() : undefined,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -1093,11 +1121,42 @@ async function performCameraSave() {
             </label>
           </div>
           {#if formRecordingScheduleEnabled}
-            <div class="flex items-center gap-2 pl-6">
-              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordFrom') || 'Record from'}</label>
-              <input type="time" bind:value={formRecordingScheduleStart} class="input w-28 py-1" />
-              <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordTo') || 'to'}</label>
-              <input type="time" bind:value={formRecordingScheduleEnd} class="input w-28 py-1" />
+            <div class="space-y-2 pl-6">
+              {#each formRecordingScheduleRanges as range, i}
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="schedule-range">
+                  <div class="flex items-center gap-2">
+                    <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordFrom') || 'Record from'}</label>
+                    <input type="time" bind:value={range.start} class="input w-28 py-1" />
+                    <label class="text-sm th-text-muted whitespace-nowrap">{t('cameras.recordTo') || 'to'}</label>
+                    <input type="time" bind:value={range.end} class="input w-28 py-1" />
+                    {#if range.end <= range.start}
+                      <span class="text-xs th-text-muted">{t('cameras.recordingScheduleOvernight')}</span>
+                    {/if}
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    {#each SCHEDULE_WEEKDAYS as wd}
+                      <label class="flex items-center gap-1 text-sm th-text-secondary cursor-pointer">
+                        <input type="checkbox" class="accent-[var(--color-accent)]"
+                          checked={range.days.includes(wd.day)}
+                          onchange={() => toggleScheduleDay(i, wd.day)}
+                        />
+                        {t(wd.key)}
+                      </label>
+                    {/each}
+                  </div>
+                  {#if formRecordingScheduleRanges.length > 1}
+                    <button type="button" class="text-xs th-text-danger hover:underline"
+                      onclick={() => formRecordingScheduleRanges.splice(i, 1)}>
+                      {t('common.remove')}
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+              <button type="button" class="text-xs th-text-accent hover:underline"
+                onclick={() => formRecordingScheduleRanges.push(defaultScheduleRange())}>
+                + {t('cameras.recordingScheduleAddRange')}
+              </button>
+              <p class="text-xs th-text-muted">{t('cameras.recordingScheduleDaysHint')}</p>
             </div>
           {/if}
         </div>

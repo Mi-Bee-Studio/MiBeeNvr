@@ -36,8 +36,8 @@ func TestHandleCreateCamera_InvalidRecordingSchedule(t *testing.T) {
 	h := setupDedupHandler(t)
 
 	body := `{"name":"Sched","protocol":"rtsp","url":"rtsp://192.0.2.9:554/stream","enabled":false,
-		"recording_schedule":{"time_ranges":[{"start":"23:00","end":"07:00"}]}}`
+		"recording_schedule":{"time_ranges":[{"start":"23:00","end":"25:00"}]}}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusBadRequest, rr.Code, "body: %s", rr.Body.String())
-	require.Contains(t, rr.Body.String(), "recording_schedule.time_ranges[0].end")
+	require.Contains(t, rr.Body.String(), "recording_schedule.time_ranges[0].end invalid time")
 }

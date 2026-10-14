@@ -720,7 +720,7 @@ cameras:
 - **可选**: 是
 - **描述**: 录制时间窗（默认 24/7）。时间窗外不落盘（直播不受影响）
 - **字段**:
-  - `time_ranges` (array) — `{start: "09:00", end: "18:00"}` 列表，重叠自动合并
+  - `time_ranges` (array) — `{start: "09:00", end: "18:00"}` 列表，重叠自动合并。`end` 早于或等于 `start` 表示跨午夜（`22:00`–`06:00`；`07:00`–`00:00` = 录到午夜；相等 = 整 24 小时）。每段可带自己的 `days_of_week`，优先于整体的 `days_of_week`；跨夜时段按开始那天算星期
   - `days_of_week` (array of int) — 0=周日 … 6=周六；空 = 每天
 - **API**: `PUT /api/cameras/{id}` 传不含时间段的 `recording_schedule`（如 `{"time_ranges": []}`）即清除计划、恢复 24/7；不传该字段则保持不变
 

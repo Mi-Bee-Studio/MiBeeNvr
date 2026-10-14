@@ -2,7 +2,6 @@
 package timelapse
 
 import (
-	"sort"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -53,85 +52,20 @@ func (s *Scheduler) isRecordingTimeAt(now time.Time, cfg config.CameraTimelapseC
 	if cfg.Paused {
 		return false
 	}
-
-	// No schedule means 24/7 recording.
-	if cfg.Schedule == nil {
-		return true
-	}
-
-	// Check day-of-week restriction.
-	if len(cfg.Schedule.DaysOfWeek) > 0 {
-		weekday := int(now.Weekday()) // 0=Sunday, 1=Monday, …, 6=Saturday
-		dayMatch := false
-		for _, d := range cfg.Schedule.DaysOfWeek {
-			if d == weekday {
-				dayMatch = true
-				break
-			}
-		}
-		if !dayMatch {
-			return false
-		}
-	}
-
-	// No time ranges means all-day recording on allowed days.
-	if len(cfg.Schedule.TimeRanges) == 0 {
-		return true
-	}
-
-	currentMinutes := now.Hour()*60 + now.Minute()
-
-	for _, tr := range cfg.Schedule.TimeRanges {
-		startH, startM := parseHHMM(tr.Start)
-		endH, endM := parseHHMM(tr.End)
-		startMinutes := startH*60 + startM
-		endMinutes := endH*60 + endM
-
-		if currentMinutes >= startMinutes && currentMinutes < endMinutes {
-			return true
-		}
-	}
-
-	return false
+	// No schedule means 24/7 recording; no time ranges means all-day on the
+	// allowed days.
+	return cfg.Schedule.ActiveAt(now)
 }
 
 // IsScheduleActive checks if the current time falls within the given ScheduleConfig.
 // This is the generic version of IsRecordingTime that works with any ScheduleConfig
 // (not just CameraTimelapseConfig), enabling reuse for recording schedules.
 func (s *Scheduler) IsScheduleActive(schedule *config.ScheduleConfig) bool {
-	now := s.getNow()
-
 	// nil or no time ranges means 24/7 active.
 	if schedule == nil || len(schedule.TimeRanges) == 0 {
 		return true
 	}
-
-	// Check day-of-week restriction.
-	if len(schedule.DaysOfWeek) > 0 {
-		weekday := int(now.Weekday())
-		dayMatch := false
-		for _, d := range schedule.DaysOfWeek {
-			if d == weekday {
-				dayMatch = true
-				break
-			}
-		}
-		if !dayMatch {
-			return false
-		}
-	}
-
-	currentMinutes := now.Hour()*60 + now.Minute()
-	for _, tr := range schedule.TimeRanges {
-		startH, startM := parseHHMM(tr.Start)
-		endH, endM := parseHHMM(tr.End)
-		startMinutes := startH*60 + startM
-		endMinutes := endH*60 + endM
-		if currentMinutes >= startMinutes && currentMinutes < endMinutes {
-			return true
-		}
-	}
-	return false
+	return schedule.ActiveAt(s.getNow())
 }
 
 // NextTransition returns the duration until the next schedule state change
@@ -149,61 +83,15 @@ func (s *Scheduler) NextTransition(cfg config.CameraTimelapseConfig) time.Durati
 		return 0
 	}
 
-	currentMins := now.Hour()*60 + now.Minute()
-
-	// Scan up to 7 days ahead for the next transition.
-	for dayOffset := range 8 {
-		checkDate := now.AddDate(0, 0, dayOffset)
-		checkDay := int(checkDate.Weekday())
-
-		dayAllowed := len(cfg.Schedule.DaysOfWeek) == 0
-		if !dayAllowed {
-			for _, d := range cfg.Schedule.DaysOfWeek {
-				if d == checkDay {
-					dayAllowed = true
-					break
-				}
-			}
-		}
-
-		// Start scanning from the beginning of the day for future days,
-		// or from the current minute for today.
-		checkStartMins := 0
-		if dayOffset == 0 {
-			checkStartMins = currentMins
-		}
-
-		type transition struct {
-			minutes int  // minutes from midnight
-			turnsOn bool // true = state becomes recording
-		}
-
-		var transitions []transition
-
-		if dayAllowed {
-			for _, tr := range cfg.Schedule.TimeRanges {
-				startH, startM := parseHHMM(tr.Start)
-				endH, endM := parseHHMM(tr.End)
-				startMinutes := startH*60 + startM
-				endMinutes := endH*60 + endM
-				transitions = append(transitions, transition{startMinutes, true})
-				transitions = append(transitions, transition{endMinutes, false})
-			}
-		}
-
-		// Sort transitions by time of day.
-		sort.Slice(transitions, func(i, j int) bool {
-			return transitions[i].minutes < transitions[j].minutes
-		})
-
-		for _, t := range transitions {
-			if t.minutes > checkStartMins {
-				totalMins := dayOffset*24*60 + t.minutes - currentMins
-				return time.Duration(totalMins) * time.Minute
-			}
+	// Walk minute by minute (a schedule only changes on HH:MM boundaries)
+	// up to a week ahead; cheap, and correct for overnight and per-range days.
+	base := now.Truncate(time.Minute)
+	current := cfg.Schedule.ActiveAt(base)
+	for m := 1; m <= 8*24*60; m++ {
+		if cfg.Schedule.ActiveAt(base.Add(time.Duration(m)*time.Minute)) != current {
+			return time.Duration(m) * time.Minute
 		}
 	}
-
 	return 0
 }
 
@@ -214,15 +102,4 @@ func (s *Scheduler) getNow() time.Time {
 		return s.now()
 	}
 	return time.Now().In(s.loc)
-}
-
-// parseHHMM parses a validated HH:MM string into hours and minutes.
-// The input MUST already be validated by config validation.
-func parseHHMM(s string) (hours, minutes int) {
-	if len(s) != 5 || s[2] != ':' {
-		return 0, 0
-	}
-	hours = int(s[0]-'0')*10 + int(s[1]-'0')
-	minutes = int(s[3]-'0')*10 + int(s[4]-'0')
-	return hours, minutes
 }

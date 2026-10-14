@@ -1095,34 +1095,39 @@ func validatePixgate(cam CameraConfig) error {
 }
 
 // ValidateSchedule checks a ScheduleConfig (timelapse schedule or camera
-// recording_schedule) and normalizes it in place: days_of_week must be 0-6,
-// every time range must be HH:MM with end after start, and overlapping ranges
-// are merged. field prefixes error messages (e.g. "cameras.x.timelapse.schedule").
-// A nil schedule is valid.
+// recording_schedule) and normalizes it in place: days_of_week (schedule- and
+// range-level) must be 0-6, every time range must be HH:MM (end at or before
+// start = overnight), and overlapping ranges are merged. field prefixes error
+// messages (e.g. "cameras.x.timelapse.schedule"). A nil schedule is valid.
 func ValidateSchedule(field string, sched *ScheduleConfig) error {
 	if sched == nil {
 		return nil
 	}
-	for i, d := range sched.DaysOfWeek {
-		if d < 0 || d > 6 {
-			return fmt.Errorf("%s.days_of_week[%d] must be between 0 (Sunday) and 6 (Saturday), got %d", field, i, d)
-		}
+	if err := validateDaysOfWeek(field+".days_of_week", sched.DaysOfWeek); err != nil {
+		return err
 	}
 	var parsed []TimeRange
 	for i, tr := range sched.TimeRanges {
-		startH, startM, err := parseHHMM(tr.Start)
-		if err != nil {
+		if _, _, err := parseHHMM(tr.Start); err != nil {
 			return fmt.Errorf("%s.time_ranges[%d].start invalid time: %w", field, i, err)
 		}
-		endH, endM, err := parseHHMM(tr.End)
-		if err != nil {
+		if _, _, err := parseHHMM(tr.End); err != nil {
 			return fmt.Errorf("%s.time_ranges[%d].end invalid time: %w", field, i, err)
 		}
-		if endH*60+endM <= startH*60+startM {
-			return fmt.Errorf("%s.time_ranges[%d].end (%s) must be after start (%s)", field, i, tr.End, tr.Start)
+		if err := validateDaysOfWeek(fmt.Sprintf("%s.time_ranges[%d].days_of_week", field, i), tr.DaysOfWeek); err != nil {
+			return err
 		}
-		parsed = append(parsed, TimeRange{Start: tr.Start, End: tr.End})
+		parsed = append(parsed, TimeRange{Start: tr.Start, End: tr.End, DaysOfWeek: tr.DaysOfWeek})
 	}
 	sched.TimeRanges = mergeTimeRanges(parsed)
+	return nil
+}
+
+func validateDaysOfWeek(field string, days []int) error {
+	for i, d := range days {
+		if d < 0 || d > 6 {
+			return fmt.Errorf("%s[%d] must be between 0 (Sunday) and 6 (Saturday), got %d", field, i, d)
+		}
+	}
 	return nil
 }
