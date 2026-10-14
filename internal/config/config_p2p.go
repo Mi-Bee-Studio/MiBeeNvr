@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -77,6 +79,17 @@ type P2PConfig struct {
 	// 满载时 API 响应被排在 SCTP 队列后面的 HOL（实测 app_rtt 4.3s vs
 	// net_rtt 14-28ms）。0 = 默认 32KiB；负数 = 关闭。
 	EgressPriorityBytes int64 `yaml:"egress_priority_bytes"`
+
+	// Advertise 是 ICE 通告端点（零配置直连路径，#10）：
+	//   ""            默认行为（host/srflx/relay 常规 ICE 收集）；
+	//   "auto"        每次会话构建跑 UPnP→NAT-PMP→STUN 阶梯（结果
+	//                 TTL 5min 缓存，负结果也缓存）；
+	//   "auto:<port>" 同上但钉固定 UDP 端口（默认 40000）；
+	//   "<ip>:<port>" 固定公网端点直填（1:1 DNAT / 固定公网 IP 场景，
+	//                 对端即使在对称 NAT 后也可直连）。
+	// 阶梯/静态假设端口映射可达；不可达时 ICE 照常回落 TURN/relay——
+	// 通告失败不破连通性。阶梯执行与结果记 journal（组件 p2p）。
+	Advertise string `yaml:"advertise"`
 
 	// Association 是「App 发起账号授权关联」的本地状态（产品化 M1，
 	// docs/05 方案）：App 在 LAN 内发起 request → 设备主人在 NVR 上
@@ -171,11 +184,47 @@ func (c *P2PConfig) validate() error {
 			return fmt.Errorf("p2p.device_key %q is a directory", c.DeviceKeyPath)
 		}
 	}
+	if err := validateAdvertise(c.Advertise); err != nil {
+		return fmt.Errorf("p2p.advertise: %w", err)
+	}
+	return nil
+}
+
+// validateAdvertise 校验 p2p.advertise 形态：""（关）/ "auto" /
+// "auto:<1-65535>" / "<ip>:<port>"（IP 字面量，v4/v6 均可）。SDK 对
+// 非法值「响亮失败」（建链报错），这里前置到配置面——坏值在落盘前就
+// 被拒，而不是每次会话构建都死一遍。
+func validateAdvertise(spec string) error {
+	if spec == "" || spec == "auto" {
+		return nil
+	}
+	if rest, ok := strings.CutPrefix(spec, "auto:"); ok {
+		n, err := strconv.Atoi(rest)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("auto port must be 1-65535, got %q", rest)
+		}
+		return nil
+	}
+	host, portStr, err := net.SplitHostPort(spec)
+	if err != nil {
+		return fmt.Errorf("must be \"auto\"/\"auto:<port>\"/\"<ip>:<port>\": %w", err)
+	}
+	if net.ParseIP(host) == nil {
+		return fmt.Errorf("%q is not an IP literal (NAT1To1 通告需要固定 IP，DDNS 域名请解析后填 IP)", host)
+	}
+	n, err := strconv.Atoi(portStr)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("port must be 1-65535, got %q", portStr)
+	}
 	return nil
 }
 
 // ValidateP2P 暴露 p2p 节校验给设置 API（安装前预检，避免坏配置落盘）。
 func (c *Config) ValidateP2P() error { return c.P2P.validate() }
+
+// ValidateP2PConfig 校验一份独立的 P2P 配置副本（设置 API 的「副本预检、
+// 通过才提交」流程用——被拒请求不得污染内存态）。
+func ValidateP2PConfig(c *P2PConfig) error { return c.validate() }
 
 // LocalAddrFromListen 从 server.listen（":9090" 或 "0.0.0.0:9090"）推导
 // 回环地址。listen 已在 ServerConfig 默认/校验环节保证带端口。

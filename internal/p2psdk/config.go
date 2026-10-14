@@ -14,13 +14,14 @@ type SignalingConfig struct {
 	// JWT is the OIDC JWT for authentication with the signaling server.
 	JWT string
 
-	// TokenFunc, when set, is consulted for a fresh JWT on every full hello
-	// handshake — the initial connect and each reconnect-ladder attempt. A
-	// static JWT turns any server restart into an eternal ladder loop once
-	// the token TTL lapses: the ladder replays the dead string forever and
-	// never recovers without a process restart (2026-10-14 production: a
-	// 23-minute NVR outage, forced manual restart). Errors from TokenFunc
-	// abort the current attempt; the ladder's backoff paces the retries.
+	// TokenFunc optionally mints a FRESH JWT on demand (#66). Server tokens
+	// are single-use (JTI anti-replay) with a short TTL, so a long-lived
+	// peer cannot present one static JWT forever: every initial connect and
+	// every reconnect attempt asks TokenFunc for a new token and falls back
+	// to the static JWT when it errors or is nil. With TokenFunc set,
+	// token_expired / token_replayed server closes re-mint and retry
+	// (bounded); without it those closes abandon the reconnect ladder.
+	// Implementations own their timeout (the ladder runs uncontexted).
 	TokenFunc func() (string, error)
 
 	// ProductID identifies the product namespace for isolation.

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
 )
 
@@ -278,7 +280,7 @@ func TestClientSendAndReceive(t *testing.T) {
 	select {
 	case msg := <-received:
 		assert.Equal(t, "hello through relay", string(msg))
-	case <-time.After(15 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for message")
 	}
 
@@ -293,7 +295,7 @@ func TestClientSendAndReceive(t *testing.T) {
 	select {
 	case msg := <-receivedA:
 		assert.Equal(t, "reply from B", string(msg))
-	case <-time.After(15 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for reply")
 	}
 }
@@ -363,7 +365,7 @@ func TestClientKeepaliveDetectsSilentServer(t *testing.T) {
 	select {
 	case err := <-fatal:
 		require.Error(t, err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("silent server not detected within pong window")
 	}
 }
@@ -377,7 +379,7 @@ func TestClientPingPongKeepsAlive(t *testing.T) {
 	fatal := make(chan error, 1)
 	client.OnFatal(func(err error) { fatal <- err })
 	require.NoError(t, client.Connect(t.Context(), mock.url, hex.EncodeToString(mock.pubKey[:])))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	select {
 	case err := <-fatal:
@@ -409,7 +411,7 @@ func TestClientServerCloseFiresFatal(t *testing.T) {
 	select {
 	case err := <-fatal:
 		require.Error(t, err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("server close not detected")
 	}
 }
@@ -430,5 +432,55 @@ func TestClientDeliberateCloseNoFatal(t *testing.T) {
 		t.Fatalf("deliberate Close fired fatal: %v", err)
 	case <-time.After(300 * time.Millisecond):
 		// clean — no false alarm.
+	}
+}
+
+// TestAuthenticate_VerifiesServerAuthProof pins #64: when server_auth
+// carries the identity proof, a matching server key verifies and a foreign
+// (MITM-substituted) key fails closed.
+func TestAuthenticate_VerifiesServerAuthProof(t *testing.T) {
+	clientPub, clientPriv := GenerateKeyPair()
+	_, serverPriv := GenerateKeyPair()
+	var serverPub [32]byte
+	curve25519.ScalarBaseMult(&serverPub, &serverPriv)
+
+	var clientNonce [NonceLen]byte
+	for i := range clientNonce {
+		clientNonce[i] = byte(i)
+	}
+
+	buildProof := func(sealerPriv [32]byte) []byte {
+		var proofNonce [NonceLen]byte
+		for i := range proofNonce {
+			proofNonce[i] = byte(0xC0 + i)
+		}
+		bind := sha256.Sum256(append(append([]byte{}, clientNonce[:]...), clientPub[:]...))
+		sealed := box.Seal(nil, bind[:], &proofNonce, &clientPub, &sealerPriv)
+		out := append([]byte{}, proofNonce[:]...)
+		return append(out, sealed...)
+	}
+
+	c := NewClient()
+	c.pubKey, c.privKey = clientPub, clientPriv
+	c.serverPubKey = serverPub
+
+	// Genuine server key: proof verifies.
+	if err := c.verifyServerAuthProof(buildProof(serverPriv), clientNonce); err != nil {
+		t.Fatalf("genuine proof must verify: %v", err)
+	}
+
+	// Foreign key (MITM holding a different relay key): fail closed.
+	var strangerPriv [32]byte
+	strangerPriv[0] = 0x99
+	err := c.verifyServerAuthProof(buildProof(strangerPriv), clientNonce)
+	if err == nil {
+		t.Fatal("foreign-key proof must be rejected (fail closed)")
+	}
+
+	// Tampered bind (nonce substitution replay): fail closed.
+	tampered := buildProof(serverPriv)
+	tampered[len(tampered)-1] ^= 0xFF
+	if err := c.verifyServerAuthProof(tampered, clientNonce); err == nil {
+		t.Fatal("tampered proof must be rejected")
 	}
 }

@@ -87,10 +87,8 @@ func TestStatsCollector_Collect(t *testing.T) {
 	snap := sc.collect()
 
 	// On an idle PC, all values should be zero.
-	//nolint:testifylint // InEpsilon panics with zero expected value
-	assert.Equal(t, float64(0), snap.ICERTTSeconds)
-	//nolint:testifylint // InEpsilon panics with zero expected value
-	assert.Equal(t, float64(0), snap.ICEAvailableBitrateBits)
+	assert.Zero(t, snap.ICERTTSeconds)
+	assert.Zero(t, snap.ICEAvailableBitrateBits)
 	assert.Equal(t, uint64(0), snap.DataChannelBytesSent)
 	assert.Equal(t, uint64(0), snap.DataChannelBytesReceived)
 	assert.Equal(t, uint64(0), snap.DataChannelMessagesSent)
@@ -121,7 +119,7 @@ func TestStatsCollector_OnStatsCallback(t *testing.T) {
 	select {
 	case <-called:
 		// Callback invoked — test passes.
-	case <-time.After(10 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for OnStats callback")
 	}
 }

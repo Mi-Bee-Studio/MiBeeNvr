@@ -3,8 +3,10 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -29,12 +31,23 @@ const (
 	FramePing       byte = 0x06
 	FramePong       byte = 0x07
 
-	// #46 v2: FramePriorityBit OR-ed into send/recv types marks high priority;
+	// FramePriorityBit (0x80): OR-ed into send/recv types marks high priority;
 	// FrameCapPriority is the server_auth capability byte (byte 1). Never send
 	// priority-marked frames unless SupportsPriority() is true — legacy servers
 	// drop unknown types silently.
 	FramePriorityBit byte = 0x80
 	FrameCapPriority byte = 0x01
+	// FrameCapServerAuth (capability byte bit 1, #64): the success payload
+	// carries a server-identity proof after the capability byte —
+	// [24B proof nonce][48B box] sealed with the server static key to this
+	// client's public key over sha256(clientNonce ‖ clientPub).
+	FrameCapServerAuth byte = 0x02
+
+	// FrameThrottle (0x08) arrives server → client on the control lane when
+	// the server's inbound rate limit dropped this connection's data frames
+	// (#69). Payload: 8B BE [4B dropped frames][4B dropped bytes] over the
+	// server's rate window.
+	FrameThrottle byte = 0x08
 )
 
 // Protocol constants.
@@ -63,6 +76,10 @@ type Client struct {
 	// cross-talk, found by the 2026-10-09 tri-party patrol).
 	routes  map[[32]byte]func([]byte)
 	onFatal func(error)
+	// onThrottle fires when the server reports dropped data frames due to
+	// the inbound rate limit (#69) — video callers should step the bitrate
+	// down. At most once per server-side second; nil = ignored.
+	onThrottle func(droppedFrames, droppedBytes uint32)
 	// serverCaps carries the capability byte from server_auth (0 when the
 	// server is legacy 1-byte). Governed by mu; governs SendPriority gating.
 	serverCaps byte
@@ -374,6 +391,38 @@ func (c *Client) authenticate(_ context.Context) error {
 		c.serverCaps = respPayload[1]
 		c.mu.Unlock()
 	}
+
+	// #64 server-identity proof: [24B proof nonce][48B box] sealed with the
+	// server's static key to OUR public key over sha256(our nonce | our
+	// pub). The expected key comes from the authenticated Welcome — a relay
+	// that cannot produce this box is not the relay the signaling server
+	// announced (MITM with a substituted key). Fail closed; a 2-byte legacy
+	// payload carries no proof and stays accepted (old server).
+	const proofLen = 24 + 48
+	hasProof := len(respPayload) >= 2+proofLen
+	if c.serverCaps&FrameCapServerAuth != 0 && !hasProof {
+		return errors.New("relay auth: server advertised identity proof but sent none")
+	}
+	if hasProof {
+		if err := c.verifyServerAuthProof(respPayload[2:], nonce); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verifyServerAuthProof opens the #64 server-identity box. The bound
+// transcript is this client's own auth nonce — replaying a server_auth
+// captured from an earlier handshake of the SAME client fails here.
+func (c *Client) verifyServerAuthProof(proof []byte, clientNonce [NonceLen]byte) error {
+	var proofNonce [NonceLen]byte
+	copy(proofNonce[:], proof[:24])
+	bind := sha256.Sum256(append(append([]byte{}, clientNonce[:]...), c.pubKey[:]...))
+	opened, ok := box.Open(nil, proof[24:], &proofNonce, &c.serverPubKey, &c.privKey)
+	if !ok || !bytes.Equal(opened, bind[:]) {
+		return errors.New("relay auth: server identity verification failed" +
+			" (proof box invalid - possible MITM with substituted relay key)")
+	}
 	return nil
 }
 
@@ -429,9 +478,28 @@ func (c *Client) readLoop() {
 		case FrameKeepAlive, FramePong:
 			// No-op (the read itself refreshed liveness).
 
+		case FrameThrottle:
+			c.handleThrottle(payload)
+
 		default:
 			// Unknown frames ignored.
 		}
+	}
+}
+
+// handleThrottle parses a server rate-limit notification (#69): 8B BE
+// [4B frames][4B bytes] over the server's rate window.
+func (c *Client) handleThrottle(payload []byte) {
+	if len(payload) < 8 {
+		return
+	}
+	frames := binary.BigEndian.Uint32(payload[0:4])
+	nbytes := binary.BigEndian.Uint32(payload[4:8])
+	c.mu.Lock()
+	cb := c.onThrottle
+	c.mu.Unlock()
+	if cb != nil {
+		cb(frames, nbytes)
 	}
 }
 
@@ -525,6 +593,16 @@ func (c *Client) OnFatal(h func(error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onFatal = h
+}
+
+// OnThrottle registers the server rate-limit notification callback (#69).
+// The server sends at most one throttle frame per second while this
+// connection's data frames are being dropped; callers should reduce their
+// send rate (e.g. step the video bitrate down).
+func (c *Client) OnThrottle(h func(droppedFrames, droppedBytes uint32)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onThrottle = h
 }
 
 // Close shuts down the relay client and releases resources.

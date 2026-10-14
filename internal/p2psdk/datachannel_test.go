@@ -63,7 +63,7 @@ func TestWrapDataChannel_BuffersEarlyMessages(t *testing.T) {
 
 	require.NoError(t, dc.Send([]byte("late-3")))
 
-	deadline := time.After(15 * time.Second)
+	deadline := time.After(5 * time.Second)
 	var received []string
 	for len(received) < 3 {
 		select {

@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 )
 
@@ -20,12 +21,13 @@ import (
 type p2pAgent struct {
 	mu             sync.Mutex
 	cfg            config.P2PConfig
-	listen         string // server.listen，供 localAddr 推导
+	listen         string // server.listen，供 local_addr 推导
 	tokenStatePath string
 	logger         *slog.Logger
 	gate           p2p.LicenseGate
 	viewerBinder   func(*p2p.Manager) // 分享观看者核验挂接（可空）
 	onEvent        func(p2p.Event)    // 链路事件外流（仪表盘连接记录；可空）
+	recorder       *metrics.Metrics   // ICE 遥测进 /metrics（可空）
 
 	parentCtx context.Context
 	started   bool
@@ -98,6 +100,8 @@ func (a *p2pAgent) spawnLocked() {
 		a.tokenStatePath, a.logger, a.gate)
 	// 连接记录外流（Start 前设置，Manager 内无锁竞争）。
 	a.mgr.OnEvent = a.onEvent
+	// ICE 遥测 → Prometheus（#12；nil 安全——未接线只进状态快照）。
+	a.mgr.SetMetrics(a.recorder)
 	a.mgr.Start(a.parentCtx)
 	// 分享执行链：Manager 存活即挂上观看者核验（设备身份→平台判定）。
 	if a.viewerBinder != nil {
@@ -116,6 +120,7 @@ func registerP2PService(a *App, deps *appDeps) error {
 		gate:           deps.licenseMgr,
 		viewerBinder:   deps.viewerLoginBinder,
 		onEvent:        deps.handler.RecordP2pLinkEvent,
+		recorder:       deps.metrics,
 	}
 	deps.handler.SetP2PAgent(agent)
 	return a.Register(agent)

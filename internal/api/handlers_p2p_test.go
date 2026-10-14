@@ -92,12 +92,28 @@ func TestP2PSettingsEndpoints(t *testing.T) {
 	require.Equal(t, true, got["password_configured"])
 	require.NotContains(t, rr.Body.String(), "secret")
 
-	// 坏配置拒收：启用但缺 server_url。
+	// 坏配置拒收：启用但缺 server_url。内存不得被污染（预存缺陷回归钉：
+	// 被拒 PUT 曾把空 server_url 留在内存，下次成功 PUT 一并落盘）。
 	rr = doP2PPut(t, r, map[string]any{"enabled": true, "server_url": ""})
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, "wss://signal.example.com/signal", cfg.P2P.ServerURL,
+		"rejected PUT must not mutate the in-memory config")
 	// 坏配置拒收：max_clients 越界。
 	rr = doP2PPut(t, r, map[string]any{"max_clients": 100})
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// advertise 热配置（#10）：合法值落盘回显，非法值拒收。
+	rr = doP2PPut(t, r, map[string]any{"advertise": "auto:40000"})
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Equal(t, "auto:40000", cfg.P2P.Advertise)
+	rr = doRequest(t, r, "GET", "/api/settings/p2p", nil, "", "")
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	require.Equal(t, "auto:40000", got["advertise"])
+	rr = doP2PPut(t, r, map[string]any{"advertise": "example.com:4000"})
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	rr = doP2PPut(t, r, map[string]any{"advertise": ""})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "", cfg.P2P.Advertise)
 
 	// 清凭据（同时停用——启用态要求凭据完备，单清会被校验拒收）。
 	rr = doP2PPut(t, r, map[string]any{"enabled": false, "clear_credentials": true})
@@ -122,6 +138,12 @@ func TestP2PStatusEndpoint(t *testing.T) {
 	h.p2pAgent = agent
 	agent.snap = p2p.StatusSnapshot{
 		Enabled: true, Online: true, ActiveClients: 2, MaxClients: 5, CapSource: "license",
+		ICESessions: map[string]p2p.ICEStats{
+			"sess-1": {
+				LocalType: "srflx", RemoteType: "host", IPVersion: "4",
+				RTTMs: 23.5, LocalAddr: "121.8.2.41:40000",
+			},
+		},
 	}
 	rr = doRequest(t, r, "GET", "/api/p2p/status", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -131,4 +153,10 @@ func TestP2PStatusEndpoint(t *testing.T) {
 	require.Equal(t, 2, snap.ActiveClients)
 	require.Equal(t, 5, snap.MaxClients)
 	require.Equal(t, "license", snap.CapSource)
+	// #12 契约：nominated pair 的 type/ip_version/rtt_ms 必须出现在响应体。
+	require.Contains(t, snap.ICESessions, "sess-1")
+	ice := snap.ICESessions["sess-1"]
+	require.Equal(t, "srflx", ice.LocalType)
+	require.Equal(t, "4", ice.IPVersion)
+	require.InDelta(t, 23.5, ice.RTTMs, 0.001)
 }

@@ -66,7 +66,8 @@ func TestEgressPrioritySmallWritesRideHighLane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	if _, err := conn.Write([]byte("hello-priority")); err != nil {
+	sc := conn
+	if _, err := sc.Write([]byte("hello-priority")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

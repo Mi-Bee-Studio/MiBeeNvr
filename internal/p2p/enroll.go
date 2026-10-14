@@ -65,9 +65,9 @@ func EnrollHTTPBase(serverURL string) string {
 	}
 	switch u.Scheme {
 	case "wss":
-		return "https://" + u.Hostname()
+		return "https://" + deriveOrigin(u)
 	case "ws":
-		return "http://" + u.Host
+		return "http://" + deriveOrigin(u)
 	default:
 		return ""
 	}

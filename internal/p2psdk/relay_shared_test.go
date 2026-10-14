@@ -59,6 +59,32 @@ func newMiniRelayServer(t *testing.T) *miniRelayServer {
 
 func (s *miniRelayServer) pubKeyHex() string { return hex.EncodeToString(s.pubKey[:]) }
 
+// Mini-relay wire constants (mirror the relay frame protocol).
+const (
+	frameHeaderLen  = 5
+	keyLen          = 32
+	nonceLen        = 24
+	frameClientAuth = 0x01
+	frameServerAuth = 0x02
+	frameSendPacket = 0x03
+	frameRecvPacket = 0x04
+	framePing       = 0x06
+	framePong       = 0x07
+)
+
+// encMini encodes a relay frame for the mini server (masked shifts keep
+// every byte within range).
+func encMini(ft byte, p []byte) []byte {
+	b := make([]byte, frameHeaderLen+len(p))
+	b[0] = ft
+	b[1] = byte(len(p) >> 24) //nolint:gosec // G115: masked shift, bounded
+	b[2] = byte(len(p) >> 16) //nolint:gosec // G115: masked shift, bounded
+	b[3] = byte(len(p) >> 8)  //nolint:gosec // G115: masked shift, bounded
+	b[4] = byte(len(p))       //nolint:gosec // G115: len(p) bounded by frame protocol
+	copy(b[frameHeaderLen:], p)
+	return b
+}
+
 func (s *miniRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -66,28 +92,28 @@ func (s *miniRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	_, data, err := conn.ReadMessage()
-	if err != nil {
+	pubKey, ok := s.authenticateMini(conn)
+	if !ok {
 		return
 	}
-	const (
-		frameHeaderLen  = 5
-		keyLen          = 32
-		nonceLen        = 24
-		frameClientAuth = 0x01
-		frameServerAuth = 0x02
-		frameSendPacket = 0x03
-		frameRecvPacket = 0x04
-		framePing       = 0x06
-		framePong       = 0x07
-	)
+	s.relayLoop(conn, pubKey)
+}
+
+// authenticateMini performs the client_auth handshake and registers the
+// route; the returned key routes this connection afterwards.
+func (s *miniRelayServer) authenticateMini(conn *websocket.Conn) ([32]byte, bool) {
+	var zero [32]byte
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		return zero, false
+	}
 	if len(data) < frameHeaderLen || data[0] != frameClientAuth {
-		return
+		return zero, false
 	}
 	plen := int(data[1])<<24 | int(data[2])<<16 | int(data[3])<<8 | int(data[4])
 	payload := data[frameHeaderLen:]
 	if len(payload) < plen || plen < keyLen+nonceLen+1 {
-		return
+		return zero, false
 	}
 	payload = payload[:plen]
 
@@ -98,63 +124,62 @@ func (s *miniRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	sealed := payload[keyLen+nonceLen:]
 	decoded, ok := box.Open(nil, sealed, &nonce, &pubKey, &s.privKey)
 	if !ok || len(decoded) != keyLen {
-		return
+		return zero, false
 	}
 	var claimed [32]byte
 	copy(claimed[:], decoded)
 	if claimed != pubKey {
-		return
+		return zero, false
 	}
-	enc := func(ft byte, p []byte) []byte {
-		b := make([]byte, 5+len(p))
-		b[0] = ft
-		b[1] = byte(len(p) >> 24)
-		b[2] = byte(len(p) >> 16)
-		b[3] = byte(len(p) >> 8)
-		b[4] = byte(len(p))
-		copy(b[5:], p)
-		return b
-	}
-	_ = conn.WriteMessage(websocket.BinaryMessage, enc(frameServerAuth, []byte{0x00}))
+	_ = conn.WriteMessage(websocket.BinaryMessage, encMini(frameServerAuth, []byte{0x00}))
 
 	s.mu.Lock()
 	s.clients[pubKey] = conn
 	s.mu.Unlock()
+	return pubKey, true
+}
+
+// relayLoop routes ping→pong and send_packet→recv_packet until the
+// connection dies; deregistration is the caller's defer (see handleWS).
+func (s *miniRelayServer) relayLoop(conn *websocket.Conn, pubKey [32]byte) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.clients, pubKey)
 		s.mu.Unlock()
 	}()
-
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			return
 		}
-		if len(data) < 5 {
+		if len(data) < frameHeaderLen {
 			continue
 		}
 		switch data[0] {
 		case framePing:
-			s.writeTo(conn, enc(framePong, nil))
+			s.writeTo(conn, encMini(framePong, nil))
 		case frameSendPacket:
-			if len(data) < 5+keyLen {
-				continue
-			}
-			var dst [32]byte
-			copy(dst[:], data[5:5+keyLen])
-			s.mu.Lock()
-			dstConn := s.clients[dst]
-			s.mu.Unlock()
-			if dstConn == nil {
-				continue
-			}
-			recv := make([]byte, 0, keyLen+len(data)-5-keyLen)
-			recv = append(recv, pubKey[:]...)
-			recv = append(recv, data[5+keyLen:]...)
-			s.writeTo(dstConn, enc(frameRecvPacket, recv))
+			s.forwardPacket(pubKey, data)
 		}
 	}
+}
+
+func (s *miniRelayServer) forwardPacket(src [32]byte, data []byte) {
+	if len(data) < frameHeaderLen+keyLen {
+		return
+	}
+	var dst [32]byte
+	copy(dst[:], data[frameHeaderLen:frameHeaderLen+keyLen])
+	s.mu.Lock()
+	dstConn := s.clients[dst]
+	s.mu.Unlock()
+	if dstConn == nil {
+		return
+	}
+	recv := make([]byte, 0, keyLen+len(data)-frameHeaderLen-keyLen)
+	recv = append(recv, src[:]...)
+	recv = append(recv, data[frameHeaderLen+keyLen:]...)
+	s.writeTo(dstConn, encMini(frameRecvPacket, recv))
 }
 
 // TestP2PSessionCloseKeepsSharedRelay: p2pSession.close() must NOT close
@@ -166,10 +191,10 @@ func TestP2PSessionCloseKeepsSharedRelay(t *testing.T) {
 
 	a := relay.NewClient()
 	require.NoError(t, a.Connect(context.Background(), mock.url, mock.pubKeyHex()))
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	b := relay.NewClient()
 	require.NoError(t, b.Connect(context.Background(), mock.url, mock.pubKeyHex()))
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 
 	got := make(chan []byte, 1)
 	b.OnMessage(func(data []byte) { got <- data })
@@ -184,7 +209,7 @@ func TestP2PSessionCloseKeepsSharedRelay(t *testing.T) {
 	select {
 	case data := <-got:
 		assert.Equal(t, "still-alive", string(data))
-	case <-time.After(10 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("shared relay client was killed by p2pSession.close()")
 	}
 }
@@ -213,7 +238,7 @@ func TestHandleRelayFatalTearsDownRelaySessions(t *testing.T) {
 	select {
 	case id := <-closed:
 		assert.Equal(t, "relay-1", id)
-	case <-time.After(10 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("relay session close callback not fired")
 	}
 	s.mu.RLock()

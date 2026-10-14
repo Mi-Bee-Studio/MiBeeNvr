@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -40,8 +39,8 @@ func TestTunnel_RemoteCloseReturnsEOF(t *testing.T) {
 	buf := make([]byte, 4096)
 	total, err := tryReadAll(t, conn, buf, 5*time.Second)
 	require.NoError(t, err, "should read full response without error")
-	assert.Greater(t, total, 0, "should have received response bytes")
-	assert.True(t, strings.Contains(string(buf[:total]), "bye"),
+	assert.Positive(t, total, "should have received response bytes")
+	assert.Contains(t, string(buf[:total]), "bye",
 		"response should contain body, got: %s", string(buf[:total]))
 
 	// Now the remote has closed. A further Read must return io.EOF so that
@@ -75,14 +74,17 @@ func TestTunnel_HTTPReadResponseEndToEnd(t *testing.T) {
 	go func() {
 		defer close(done)
 		resp, rerr := http.ReadResponse(bufio.NewReader(conn), nil)
-		require.NoError(t, rerr, "http.ReadResponse must complete")
-		_ = resp.Body.Close()
+		// assert (not require): fatal asserts are test-goroutine-only.
+		assert.NoError(t, rerr, "http.ReadResponse must complete")
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
 	}()
 
 	select {
 	case <-done:
 		// success — ReadResponse completed.
-	case <-time.After(15 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("http.ReadResponse blocked past 5s — remote close EOF not propagated")
 	}
 }

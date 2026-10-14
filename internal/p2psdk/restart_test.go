@@ -331,7 +331,7 @@ func TestICERestart_RetryDriverReapsDeadPeer(t *testing.T) {
 	select {
 	case got := <-closed:
 		assert.Equal(t, "retry-test|ice_restart_failed", got)
-	case <-time.After(10 * time.Second):
+	default:
 		t.Fatal("OnSessionClose must fire on abandonment")
 	}
 }
@@ -399,7 +399,7 @@ func TestOnSessionClose_FiresOnRemoteClose(t *testing.T) {
 	select {
 	case got := <-closed:
 		assert.Equal(t, "remote-close|peer bye", got)
-	case <-time.After(10 * time.Second):
+	default:
 		t.Fatal("OnSessionClose must fire on remote session_close")
 	}
 

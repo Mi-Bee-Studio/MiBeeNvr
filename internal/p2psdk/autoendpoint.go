@@ -2,6 +2,8 @@ package peer
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -36,11 +38,31 @@ const (
 type autoEndpointState struct {
 	mu       sync.Mutex
 	addr     string
-	mode     string // "upnp" | "stun" | "" (unresolved/negative)
+	mode     string // "upnp" | "pmp" | "stun" | "" (unresolved/negative)
 	port     int
 	resolved bool // true once ANY result (incl. negative) is cached
 	gw       *UPnPGateway
 	expires  time.Time
+
+	// Per-rung failure detail of the most recent ladder run (guarded by mu).
+	// The ladder is otherwise silent — these make "why did auto fail" answerable
+	// from the device journal instead of a black box.
+	upnpErr error
+	pmpErr  error
+	stunErr error
+}
+
+// advertiseResolution is the diagnosable outcome of one resolveAdvertise call:
+// what address was chosen, which rung won, whether the ladder actually ran
+// (fresh) vs served from the TTL cache, and why each rung failed.
+type advertiseResolution struct {
+	addr    string // concrete advertise address ("" = none)
+	mode    string // "upnp" | "pmp" | "stun" | "" (negative)
+	fresh   bool   // ladder ran this call (false = cache hit or non-auto spec)
+	ladder  bool   // spec was "auto"/"auto:<port>" (vs static/empty passthrough)
+	upnpErr error
+	pmpErr  error
+	stunErr error
 }
 
 // Hooks for deterministic tests; production uses the real network paths.
@@ -70,74 +92,124 @@ var (
 // continues without advertisement) — a broken endpoint hint must never
 // break connectivity.
 func resolveAdvertise(spec string, stunServers []string) string {
+	return resolveAdvertiseDetailed(spec, stunServers).addr
+}
+
+// resolveAdvertiseDetailed is resolveAdvertise with a diagnosable outcome
+// (see advertiseResolution) so callers can log ladder execution and results.
+func resolveAdvertiseDetailed(spec string, stunServers []string) advertiseResolution {
 	if spec == "" {
-		return ""
+		return advertiseResolution{}
 	}
 	// Everything that is not "auto"/"auto:<port>" passes through UNVALIDATED:
 	// malformed static values (including "auto:xyz" typos) fail loudly in
 	// applyAdvertiseAddr — a config typo must be visible, not silently
 	// degraded to relay.
 	if spec != "auto" && !strings.HasPrefix(spec, "auto:") {
-		return spec
+		return advertiseResolution{addr: spec}
 	}
 	port := autoAdvertisePort
 	if spec != "auto" {
 		n, err := strconv.Atoi(strings.TrimPrefix(spec, "auto:"))
 		if err != nil || n < 1 || n > 65535 {
-			return spec // typo → loud downstream
+			return advertiseResolution{addr: spec} // typo → loud downstream
 		}
 		port = n
 	}
-	addr, _ := autoEndpoint.resolve(port, stunServers, autoEndpointHooksPtr)
-	return addr
+	return autoEndpoint.resolve(port, stunServers, autoEndpointHooksPtr)
 }
 
-func (s *autoEndpointState) resolve(port int, stunServers []string, h *autoEndpointHooks) (string, error) {
+func (s *autoEndpointState) resolve(port int, stunServers []string, h *autoEndpointHooks) advertiseResolution {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.resolved && time.Now().Before(s.expires) && s.port == port {
-		return s.addr, nil // cached hit, including negative results
+		return advertiseResolution{addr: s.addr, mode: s.mode, ladder: true} // cached hit, including negative results
 	}
 
 	// Ladder 1: UPnP (mapping = detection + firewall pinhole in one shot).
 	gw, err := h.discoverUPnP(3 * time.Second)
 	if err == nil {
-		if ip, iperr := h.externalIP(gw); iperr == nil {
+		ip, iperr := h.externalIP(gw)
+		switch {
+		case iperr != nil:
+			err = iperr
+		default:
 			if merr := h.addMapping(gw, port, port, upnpMappingLeaseSec); merr == nil {
 				s.addr, s.mode, s.port, s.gw, s.resolved = net.JoinHostPort(ip, strconv.Itoa(port)), "upnp", port, gw, true
 				s.expires = time.Now().Add(autoAdvertiseTTL)
-				return s.addr, nil
+				s.upnpErr, s.pmpErr, s.stunErr = nil, nil, nil
+				return advertiseResolution{addr: s.addr, mode: "upnp", fresh: true, ladder: true}
+			} else {
+				err = merr
 			}
 		}
 	}
+	upnpErr := err
 
 	// Ladder 2: NAT-PMP — gateways without an IGD (Apple lineage, some ISP
 	// firmware). Same-port mapping only; see natpmp.go.
+	var pmpErr error
 	if h.pmpMapping != nil {
-		if pmpAddr, perr := h.pmpMapping(port); perr == nil && pmpAddr != "" {
+		pmpAddr, perr := h.pmpMapping(port)
+		if perr == nil && pmpAddr != "" {
 			s.addr, s.mode, s.port, s.gw, s.resolved = pmpAddr, "pmp", port, nil, true
 			s.expires = time.Now().Add(autoAdvertiseTTL)
-			return s.addr, nil
+			s.upnpErr, s.pmpErr, s.stunErr = upnpErr, nil, nil
+			return advertiseResolution{addr: s.addr, mode: "pmp", fresh: true, ladder: true, upnpErr: upnpErr}
+		} else if perr != nil {
+			pmpErr = perr
+		} else {
+			pmpErr = errors.New("empty mapping address")
 		}
 	}
 
 	// Ladder 3: STUN + assumed manual forward.
+	var stunErr error
 	for _, u := range stunServers {
 		addr := stunURLToAddr(u)
 		if addr == "" {
 			continue
 		}
-		if mapped, serr := h.stunQuery(addr, 3*time.Second); serr == nil {
-			if host, _, herr := net.SplitHostPort(mapped); herr == nil && net.ParseIP(host) != nil {
-				s.addr, s.mode, s.port, s.gw, s.resolved = net.JoinHostPort(host, strconv.Itoa(port)), "stun", port, nil, true
-				s.expires = time.Now().Add(autoAdvertiseTTL)
-				return s.addr, nil
+		mapped, serr := h.stunQuery(addr, 3*time.Second)
+		if serr != nil {
+			if stunErr == nil {
+				stunErr = serr
 			}
+			continue
+		}
+		if host, _, herr := net.SplitHostPort(mapped); herr == nil && net.ParseIP(host) != nil {
+			s.addr, s.mode, s.port, s.gw, s.resolved = net.JoinHostPort(host, strconv.Itoa(port)), "stun", port, nil, true
+			s.expires = time.Now().Add(autoAdvertiseTTL)
+			s.upnpErr, s.pmpErr, s.stunErr = upnpErr, pmpErr, nil
+			return advertiseResolution{addr: s.addr, mode: "stun", fresh: true, ladder: true, upnpErr: upnpErr, pmpErr: pmpErr}
+		}
+		if stunErr == nil {
+			stunErr = fmt.Errorf("stun mapped %q: not a usable address", mapped)
 		}
 	}
+	if len(stunServers) == 0 {
+		stunErr = errors.New("no stun servers advertised")
+	}
+
 	s.addr, s.mode, s.gw, s.resolved, s.port = "", "", nil, true, port // negative cache too
 	s.expires = time.Now().Add(autoAdvertiseTTL)
-	return "", errors.New("auto advertise: upnp unavailable and stun unresolved")
+	s.upnpErr, s.pmpErr, s.stunErr = upnpErr, pmpErr, stunErr
+	return advertiseResolution{addr: "", mode: "", fresh: true, ladder: true, upnpErr: upnpErr, pmpErr: pmpErr, stunErr: stunErr}
+}
+
+// logAdvertiseResolution surfaces ladder execution in the peer journal: a
+// fresh success (Info) or total failure (Warn, with per-rung causes) per
+// ladder run — cache hits stay Debug so steady state does not spam.
+func logAdvertiseResolution(logger *slog.Logger, res advertiseResolution) {
+	if logger == nil || !res.ladder || !res.fresh {
+		return
+	}
+	if res.mode != "" {
+		logger.Info("auto advertise resolved", "mode", res.mode, "addr", res.addr)
+		return
+	}
+	logger.Warn("auto advertise ladder failed; proceeding with stock ICE (relay fallback)",
+		"upnp", res.upnpErr, "pmp", res.pmpErr, "stun", res.stunErr)
 }
 
 // stunURLToAddr converts a Welcome ICE server URL ("stun:host:port" or
