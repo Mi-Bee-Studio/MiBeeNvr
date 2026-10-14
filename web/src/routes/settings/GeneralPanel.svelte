@@ -28,23 +28,36 @@
   let deployment = $state(''); // "docker" | "binary" | "" — drives restart hint
   let portChanged = $state(false); // true after save when the port actually changed
 
-  // Timezone options (expanded set — Hong_Kong, Singapore, Chicago, Paris, Auckland).
-  const timezoneOptions = [
-    { value: 'Local', label: t('settings.timezoneLocal') },
-    { value: 'UTC', label: 'UTC' },
-    { value: 'Asia/Shanghai', label: 'Asia/Shanghai' },
-    { value: 'Asia/Hong_Kong', label: 'Asia/Hong_Kong' },
-    { value: 'Asia/Singapore', label: 'Asia/Singapore' },
-    { value: 'Asia/Tokyo', label: 'Asia/Tokyo' },
-    { value: 'America/New_York', label: 'America/New_York' },
-    { value: 'America/Los_Angeles', label: 'America/Los_Angeles' },
-    { value: 'America/Chicago', label: 'America/Chicago' },
-    { value: 'Europe/London', label: 'Europe/London' },
-    { value: 'Europe/Berlin', label: 'Europe/Berlin' },
-    { value: 'Europe/Paris', label: 'Europe/Paris' },
-    { value: 'Australia/Sydney', label: 'Australia/Sydney' },
-    { value: 'Pacific/Auckland', label: 'Pacific/Auckland' },
+  // Timezone options: the full IANA list (the backend validates with
+  // time.LoadLocation, which accepts every zone) instead of a hand-picked
+  // whitelist; 'Local'/'UTC' are backend pseudo-zones and stay on top.
+  // $derived keeps the 'Local' label translated when the language switches.
+  const FALLBACK_ZONES = [
+    'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Singapore', 'Asia/Tokyo',
+    'America/New_York', 'America/Los_Angeles', 'America/Chicago',
+    'Europe/London', 'Europe/Berlin', 'Europe/Paris',
+    'Australia/Sydney', 'Pacific/Auckland',
   ];
+  const ianaZones: string[] = (() => {
+    try {
+      return Intl.supportedValuesOf('timeZone');
+    } catch {
+      return FALLBACK_ZONES;
+    }
+  })();
+  let timezoneOptions = $derived.by(() => {
+    const opts = [
+      { value: 'Local', label: t('settings.timezoneLocal') },
+      { value: 'UTC', label: 'UTC' },
+      ...ianaZones.map((z) => ({ value: z, label: z })),
+    ];
+    // yaml 里手工配过列表外的值（IANA 别名等）时补进去，防止 select
+    // 静默跳回第一项、保存时把原值冲掉。
+    if (savedTimezone && !opts.some((o) => o.value === savedTimezone)) {
+      opts.push({ value: savedTimezone, label: savedTimezone });
+    }
+    return opts;
+  });
 
   // Dirty only tracks the server-persisted timezone; prefs are instant-save.
   let isDirty = $derived.by(() => {

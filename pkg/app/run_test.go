@@ -175,7 +175,7 @@ func TestRunFree_ServiceOrder(t *testing.T) {
 	// (storage-migrator runs the background per-camera recording migration worker)
 	// (startup-bg joins the two RunFree background goroutines; api-handler closes
 	// tracked timelapse-merge goroutines — both added for #143 TempDir flake fix)
-	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "time-sync", "credprobe", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "rtsp", "ws", "hls", "api-handler", "pprof-loopback"}
+	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "time-sync", "credprobe", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "rtsp", "ws", "hls", "api-handler", "p2p", "pprof-loopback"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}
@@ -208,7 +208,7 @@ func TestRunFree_ServiceOrder_GB28181Enabled(t *testing.T) {
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
 
-	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "time-sync", "credprobe", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "rtsp", "srt", "gb28181", "ws", "hls", "api-handler", "pprof-loopback"}
+	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "time-sync", "credprobe", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "rtsp", "srt", "gb28181", "ws", "hls", "api-handler", "p2p", "pprof-loopback"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}
@@ -266,7 +266,7 @@ func TestRunFree_ServiceOrder_DiscoveryEnabled(t *testing.T) {
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
 
-	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "time-sync", "credprobe", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "rtsp", "discovery", "mdns", "ws", "hls", "api-handler", "pprof-loopback"}
+	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "time-sync", "credprobe", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "rtsp", "discovery", "mdns", "ws", "hls", "api-handler", "p2p", "pprof-loopback"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}
@@ -494,7 +494,7 @@ func TestRunFree_ServiceOrder_MQTTStatusEvents(t *testing.T) {
 	svcs := a.Services()
 	t.Logf("observed Services() = %v", svcs)
 
-	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "time-sync", "credprobe", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "mqtt", "mqtt-status", "rtsp", "ws", "hls", "api-handler", "pprof-loopback"}
+	expected := []string{"storage-migrator", "db", "startup-bg", "camera", "time-sync", "credprobe", "health", "recording-auditor", "merge", "rolling-merge", "motion-score", "mergeScheduler", "cleanup", "archive-deleter", "mqtt", "mqtt-status", "rtsp", "ws", "hls", "api-handler", "p2p", "pprof-loopback"}
 	if len(svcs) != len(expected) {
 		t.Errorf("Services() count = %d, want %d", len(svcs), len(expected))
 	}

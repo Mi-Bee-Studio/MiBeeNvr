@@ -72,6 +72,12 @@ func validateConfigDetails(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
+	if err := cfg.P2P.validate(); err != nil {
+		return err
+	}
+	if err := cfg.License.validate(); err != nil {
+		return err
+	}
 	// Timezone validation
 	if cfg.Timezone != "" && cfg.Timezone != "UTC" && cfg.Timezone != "Local" {
 		if _, err := time.LoadLocation(cfg.Timezone); err != nil {

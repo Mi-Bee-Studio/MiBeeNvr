@@ -236,11 +236,15 @@ func TestPointCameraAtNTP(t *testing.T) {
 	cams := &fakeCams{configs: map[string]*config.CameraConfig{"cam-1": onvifCam("cam-1", ts.srv.URL, "admin", "pw")}}
 	svc := New(config.TimeSyncConfig{}, cams, nil, nil)
 
-	if err := svc.PointCameraAtNTP(context.Background(), "cam-1", "192.168.63.30"); err != nil {
+	srv, err := svc.PointCameraAtNTP(context.Background(), "cam-1", "192.0.2.30")
+	if err != nil {
 		t.Fatalf("PointCameraAtNTP: %v", err)
 	}
-	if ts.ntpHost != "192.168.63.30" {
-		t.Errorf("NTP host = %q, want 192.168.63.30", ts.ntpHost)
+	if srv != "192.0.2.30" {
+		t.Errorf("returned server = %q, want the override echoed", srv)
+	}
+	if ts.ntpHost != "192.0.2.30" {
+		t.Errorf("NTP host = %q, want 192.0.2.30", ts.ntpHost)
 	}
 	// SetNTP + DateTimeType flip = 2 device writes.
 	if ts.setCalls != 2 {

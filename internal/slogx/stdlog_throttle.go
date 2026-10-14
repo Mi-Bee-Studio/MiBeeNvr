@@ -33,10 +33,15 @@ import (
 	"time"
 )
 
-// rtpLostPattern matches gortsplib's "%d RTP %s lost" lines (packet and
-// stream-name variants) without matching anything an NVR component would
-// print through the stdlib logger.
-var rtpLostPattern = regexp.MustCompile(`^\d+ RTP \w+ lost`)
+// noisyPattern matches gortsplib's known spam lines without matching
+// anything an NVR component would print through the stdlib logger:
+//
+//   - "%d RTP %s lost" (packet and stream-name variants)
+//   - "write queue is full" — the client writer's per-attempt error for a
+//     camera that never reads RTCP feedback (n16r8 class, firmware-side).
+//     Observed 2026-10-03 at ~24 lines/s sustained; it evicted the unit's
+//     p2p startup evidence from the journal exactly like the #803 window.
+var noisyPattern = regexp.MustCompile(`^(\d+ RTP \w+ lost|write queue is full)`)
 
 // armedInterval is the currently armed throttle interval (nanoseconds); 0 =
 // off. Read at write time (so a disarm takes effect immediately on the
@@ -54,7 +59,7 @@ type stdLogThrottle struct {
 
 func (t *stdLogThrottle) Write(p []byte) (int, error) {
 	d := time.Duration(armedInterval.Load())
-	if d > 0 && rtpLostPattern.Match(p) {
+	if d > 0 && noisyPattern.Match(p) {
 		t.mu.Lock()
 		now := time.Now()
 		if now.Sub(t.last) < d {

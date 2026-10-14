@@ -1,0 +1,191 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"time"
+)
+
+// P2PConfig 配置外网 P2P 兜底链路（设备角色，内嵌 MiBee P2P SDK）。
+//
+// 形态：NVR 作为 device peer 连接信令服务器，把本机 HTTP API 注册为命名
+// 服务（默认 nvr-api）；手机 App（client）经 P2P 隧道以 net.Conn 语义
+// 访问，无需端口映射/公网 IP。
+//
+// 注意：server_url / 凭据均为部署环境信息，**不设默认值**——enabled 时
+// 必须显式配置（校验强制），保证代码本身不携带任何部署细节。
+type P2PConfig struct {
+	Enabled bool `yaml:"enabled"`
+
+	// ServerURL 是信令服务器 WebSocket 地址（如 wss://…/signal）。必填。
+	ServerURL string `yaml:"server_url"`
+
+	// ProductID 是平台侧产品命名空间。
+	ProductID string `yaml:"product_id"`
+
+	// PeerID 是本设备在产品内的唯一 ID。空 = 启动时取 "nvr-<hostname>"。
+	PeerID string `yaml:"peer_id"`
+
+	// ServiceName 是对外注册的隧道服务名（App 按此拨号）。
+	ServiceName string `yaml:"service_name"`
+
+	// LocalAddr 是注册到隧道的本机服务地址。空 = 由 server.listen 推导
+	// （127.0.0.1:<port>）。
+	LocalAddr string `yaml:"local_addr"`
+
+	// Username / Password 是 OIDC 服务账号（password grant 自助铸信令
+	// JWT；refresh token 轮换持久化，失败回退 password——不自动重试，
+	// 服务端有 5 次失败锁 15 分钟的防爆破）。
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+
+	// ClientID 是 OIDC client。空 = "p2p-signaling"。
+	ClientID string `yaml:"client_id"`
+
+	// TokenEndpoint 是 OIDC token 端点。空 = 由 ServerURL 同域推导
+	// （wss://host:port/… → https://host/oidc/token，经同一反代）。
+	TokenEndpoint string `yaml:"token_endpoint"`
+
+	// TransportTimeout 是单次 ICE/DataChannel 建立预算（含 relay 仲裁）。
+	TransportTimeoutSec int `yaml:"transport_timeout_s"`
+
+	// RedialMinIntervalSec 是会话彻底失败后的最小重拨间隔（防锤信令）。
+	RedialMinIntervalSec int `yaml:"redial_min_interval_s"`
+
+	// SessionIdleTimeoutSec 是无流量会话的空闲回收时长（秒）。手机熄屏
+	// 后会话必死（OS 杀网络），relay 会话的 ICE restart 机器不适用——
+	// 空闲扫是唯一收割者；默认 900s 下高频熄屏/亮屏会把死会话堆到并发
+	// 上限（2026-10-14 实测 active_clients 5 分钟 4 条）。0 = SDK 默认
+	// （15min）；负数 = 关闭清扫（不建议）。
+	SessionIdleTimeoutSec int `yaml:"session_idle_timeout_s"`
+
+	// MaxClients 是允许同时接入的 P2P 客户端上限。0 = 不覆盖（取授权
+	// 文档配额，两者皆无则默认 3）。超限新连接在信令层即被拒
+	// （connect_reject device_busy），WebRTC 拨号不发生。
+	MaxClients int `yaml:"max_clients"`
+
+	// DeviceKeyPath 指向 raw Ed25519 私钥文件（32B seed 或 64B 全钥，
+	// 建议 0600）。设置后每个 hello 对 JWT 的 "<sub>:<jti>" 签名——
+	// 平台侧设备档案绑定了公钥时强制要求（零信任身份绑定；同一密钥
+	// 用于 re-enroll 的持有证明）。档案未绑公钥时可留空（无签名路径）。
+	DeviceKeyPath string `yaml:"device_key"`
+
+	// EgressPriorityBytes 是每条隧道流的高优出口预算（字节）。每流的
+	// 前 N 字节走传输高优路径：小响应（API JSON/playlist/探测回包）
+	// 全程命中，视频等批量下载拿到快速起步后降级普通车道——消除视频
+	// 满载时 API 响应被排在 SCTP 队列后面的 HOL（实测 app_rtt 4.3s vs
+	// net_rtt 14-28ms）。0 = 默认 32KiB；负数 = 关闭。
+	EgressPriorityBytes int64 `yaml:"egress_priority_bytes"`
+
+	// Association 是「App 发起账号授权关联」的本地状态（产品化 M1，
+	// docs/05 方案）：App 在 LAN 内发起 request → 设备主人在 NVR 上
+	// confirm → 之后 App 经 PUT /api/settings/p2p 下发运行配置。
+	// 平台侧 user-device 绑定上报待平台联调后接入。
+	Association *P2PAssociationState `yaml:"association,omitempty"`
+}
+
+// P2PAssociationEntry 一次关联的双方身份快照。
+type P2PAssociationEntry struct {
+	// PlatformUserID 是平台侧终端用户标识（OAuth sub）。M1 由 App 申报，
+	// 平台联调后改为关联时平台签发核验。
+	PlatformUserID string `yaml:"platform_user_id" json:"platform_user_id"`
+	// PlatformUsername 是平台账号名（展示用）。
+	PlatformUsername string `yaml:"platform_username" json:"platform_username"`
+	// DisplayName 是人类可读名（如「小米手机 · 阿明」），NVR 确认界面展示。
+	DisplayName string `yaml:"display_name" json:"display_name"`
+	// RequestID 由发起方生成（幂等去重；confirm 时可校验一致）。
+	RequestID string `yaml:"request_id" json:"request_id"`
+	// At 是 request 创建时刻。
+	At time.Time `yaml:"at" json:"at"`
+	// ConfirmedAt 是设备主人确认时刻（仅 confirmed 条目有值）。
+	ConfirmedAt *time.Time `yaml:"confirmed_at,omitempty" json:"confirmed_at,omitempty"`
+}
+
+// P2PAssociationState M1 形态：同一时刻至多一个待确认申请、至多一个已
+// 关联账号（新关联覆盖旧关联——家庭单主模型；多用户等平台维度支持）。
+type P2PAssociationState struct {
+	Pending   *P2PAssociationEntry `yaml:"pending,omitempty" json:"pending,omitempty"`
+	Confirmed *P2PAssociationEntry `yaml:"confirmed,omitempty" json:"confirmed,omitempty"`
+}
+
+func (c *P2PConfig) applyDefaults(deviceID string) {
+	if c.ProductID == "" {
+		c.ProductID = "mibeenvr"
+	}
+	// PeerID 默认取安装级稳定身份（Server.DeviceID，UUIDv4 持久化，同
+	// /api/health 暴露的 device_id）——App 侧正是以该 ID 作为 P2P 寻址
+	// 锚点（发现→绑定→外网拨号同源）。
+	if c.PeerID == "" && deviceID != "" {
+		c.PeerID = deviceID
+	}
+	if c.ServiceName == "" {
+		c.ServiceName = "nvr-api"
+	}
+	if c.ClientID == "" {
+		c.ClientID = "p2p-signaling"
+	}
+	if c.TransportTimeoutSec == 0 {
+		c.TransportTimeoutSec = 20
+	}
+	if c.TransportTimeoutSec < 5 {
+		c.TransportTimeoutSec = 5
+	}
+	if c.RedialMinIntervalSec == 0 {
+		c.RedialMinIntervalSec = 30
+	}
+	if c.RedialMinIntervalSec < 5 {
+		c.RedialMinIntervalSec = 5
+	}
+	if c.EgressPriorityBytes == 0 {
+		c.EgressPriorityBytes = 32 << 10
+	}
+}
+
+func (c *P2PConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.ServerURL) == "" {
+		return fmt.Errorf("p2p.server_url is required when p2p.enabled")
+	}
+	if !strings.HasPrefix(c.ServerURL, "wss://") && !strings.HasPrefix(c.ServerURL, "ws://") {
+		return fmt.Errorf("p2p.server_url must be a ws:// or wss:// URL")
+	}
+	// 设备身份模式（enrollment 引导，user-tenant-model §5）：username 为
+	// device:<product>:<id>，无 password（token 只经 refresh 轮换链）。
+	if strings.TrimSpace(c.Username) == "" ||
+		(strings.TrimSpace(c.Password) == "" && !strings.HasPrefix(c.Username, "device:")) {
+		return fmt.Errorf("p2p.username and p2p.password are required when p2p.enabled " +
+			"(device-identity mode: device:… username, empty password)")
+	}
+	if c.MaxClients < 0 || c.MaxClients > 64 {
+		return fmt.Errorf("p2p.max_clients must be between 0 (auto) and 64, got %d", c.MaxClients)
+	}
+	// 密钥文件存在性前置校验：绑定公钥的档案下无签名 hello 会被拒，
+	// 与其上线后被信令反复打回，不如启动时就把配错暴露出来。
+	if c.DeviceKeyPath != "" {
+		if fi, err := os.Stat(c.DeviceKeyPath); err != nil {
+			return fmt.Errorf("p2p.device_key %q: %w", c.DeviceKeyPath, err)
+		} else if fi.IsDir() {
+			return fmt.Errorf("p2p.device_key %q is a directory", c.DeviceKeyPath)
+		}
+	}
+	return nil
+}
+
+// ValidateP2P 暴露 p2p 节校验给设置 API（安装前预检，避免坏配置落盘）。
+func (c *Config) ValidateP2P() error { return c.P2P.validate() }
+
+// LocalAddrFromListen 从 server.listen（":9090" 或 "0.0.0.0:9090"）推导
+// 回环地址。listen 已在 ServerConfig 默认/校验环节保证带端口。
+func (c *P2PConfig) LocalAddrFromListen(listen string) string {
+	if c.LocalAddr != "" {
+		return c.LocalAddr
+	}
+	i := strings.LastIndex(listen, ":")
+	if i < 0 {
+		return "127.0.0.1:9090"
+	}
+	return "127.0.0.1" + listen[i:]
+}

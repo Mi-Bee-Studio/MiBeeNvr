@@ -13,6 +13,7 @@
   import AIEvents from './AIEvents.svelte';
   import { getMiBeeVisionConnected } from '$lib/mibeevision-status';
   import AiStatusCard from '$lib/components/AiStatusCard.svelte';
+  import P2pViewerCard from '$lib/components/P2pViewerCard.svelte';
 
   let { initialTab = 'storage' }: { initialTab?: string } = $props();
 
@@ -553,6 +554,8 @@
     </div>
 
     <!-- Camera Health — per-camera status list (with storage footprint column) -->
+    <P2pViewerCard />
+
     <div class="card p-4 border th-border mb-6">
       <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
         <Activity size={16} class="text-accent" />

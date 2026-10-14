@@ -310,11 +310,6 @@
     gap: 0.5rem;
   }
 
-  .vm-unit {
-    font-size: 0.6875rem;
-    color: var(--text-tertiary);
-  }
-
   .vm-hint, .vm-error {
     font-size: 0.6875rem;
     color: var(--text-tertiary);

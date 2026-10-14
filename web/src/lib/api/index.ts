@@ -399,3 +399,28 @@ export type {
 
 // Offload — remote object-storage archive (issue #874)
 export * from './offload';
+
+// P2P external access + commercial license
+export {
+  getP2pSettings,
+  updateP2pSettings,
+  getP2pStatus,
+  getLicense,
+  installLicense,
+  getP2pAssociation,
+  confirmP2pAssociation,
+  cancelP2pAssociation,
+} from './p2p';
+
+export type {
+  P2pSettings,
+  P2pSettingsUpdate,
+  P2pStatus,
+  P2pRejection,
+  P2pGateStatus,
+  LicenseStatus,
+  LicenseInstall,
+  LicenseDocumentInfo,
+  P2pAssociationEntry,
+  P2pAssociationState,
+} from './p2p';

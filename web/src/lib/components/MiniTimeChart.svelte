@@ -2,6 +2,8 @@
   // Dependency-free mini time-series chart with readable axes (#692): Y tick
   // labels + unit, X time labels (HH:MM), gridlines, latest/peak annotations,
   // auto-decimation down to ~160 buckets so a 24h@30s ring stays light.
+  // The viewBox tracks the rendered pixel size (ResizeObserver), so text and
+  // strokes stay undistorted at any container width.
   interface Pt {
     t: number;
     v: number;
@@ -13,21 +15,43 @@
     color = 'var(--color-info, #3b82f6)',
     decimals = 0,
     emptyLabel = '--',
+    height = 96,
   }: {
     points?: Pt[];
     unit?: string;
     color?: string;
     decimals?: number;
     emptyLabel?: string;
+    height?: number;
   } = $props();
 
-  const W = 340;
-  const H = 120;
-  const PAD = { l: 44, r: 12, t: 18, b: 16 };
+  const uid = $props.id();
+
+  let wrap = $state<HTMLDivElement>();
+  let cw = $state(360);
+
+  $effect(() => {
+    if (!wrap) return;
+    // Measure synchronously first — ResizeObserver notifications ride the
+    // rendering loop and never fire for hidden tabs/background windows.
+    const measure = () => {
+      const w = wrap!.clientWidth;
+      if (w > 0) cw = w;
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  });
+
+  const W = $derived(Math.max(220, Math.round(cw)));
+  const H = $derived(height);
+  const PAD = { l: 40, r: 14, t: 16, b: 18 };
   const x0 = PAD.l;
-  const x1 = W - PAD.r;
+  const x1 = $derived(W - PAD.r);
   const y0 = PAD.t;
-  const y1 = H - PAD.b;
+  const y1 = $derived(H - PAD.b);
 
   // Decimate by averaging into ≤160 buckets.
   let series = $derived.by(() => {
@@ -73,23 +97,28 @@
   let area = $derived(line ? `${x0},${y1} ${line} ${x1},${y1}` : '');
 
   let last = $derived(series.length ? series[series.length - 1] : null);
+  // 峰值标注只在明显高出最新值时出现——平线/缓变曲线不标，避免「▲2」式噪音。
   let peak = $derived.by(() => {
     if (series.length < 2) return null;
     let bi = 0;
     series.forEach((p, i) => {
       if (p.v > series[bi].v) bi = i;
     });
-    return series[bi].v > 0 ? { i: bi, v: series[bi].v } : null;
+    const lv = series[series.length - 1].v;
+    return series[bi].v > lv * 1.05 ? { i: bi, v: series[bi].v } : null;
   });
 
-  let xLabels = $derived(
-    series.length
-      ? [0, Math.floor((series.length - 1) / 2), series.length - 1].map((i) => ({
-          x: px(i),
-          label: fmtT(series[i].t),
-        }))
-      : [],
-  );
+  let xLabels = $derived.by(() => {
+    if (!series.length) return [];
+    const n = series.length;
+    const idx = [...new Set([0, Math.floor((n - 1) / 2), n - 1])];
+    // 首尾标签向内收（start/end 对齐），中位居中——不悬出绘图区。
+    return idx.map((i) => ({
+      x: px(i),
+      anchor: i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle',
+      label: fmtT(series[i].t),
+    }));
+  });
 
   // Keep annotation text inside the plot horizontally.
   function labelX(x: number, anchor: 'start' | 'end'): number {
@@ -97,69 +126,83 @@
   }
 </script>
 
-<svg
-  viewBox="0 0 {W} {H}"
-  preserveAspectRatio="none"
-  data-testid="vm-timechart"
-  role="img"
-  aria-label={unit}
->
-  {#if series.length < 2}
-    <text class="vm-empty" x={(x0 + x1) / 2} y={(y0 + y1) / 2} text-anchor="middle">
-      {emptyLabel}
-    </text>
-  {:else}
-    <!-- unit caption -->
-    {#if unit}
-      <text class="vm-y" x={x0} y={10} text-anchor="start">{unit}</text>
-    {/if}
-    <!-- gridlines + Y tick labels -->
-    {#each ticks as tv (tv)}
-      <line class="vm-grid" x1={x0} y1={py(tv)} x2={x1} y2={py(tv)} />
-      <text class="vm-y" x={x0 - 6} y={py(tv) + 3} text-anchor="end">{fmtV(tv)}</text>
-    {/each}
-    <!-- X time labels -->
-    {#each xLabels as xl (xl.label)}
-      <text class="vm-x" x={xl.x} y={H - 4} text-anchor="middle">{xl.label}</text>
-    {/each}
-    <!-- series -->
-    <polygon points={area} fill={color} fill-opacity="0.12" />
-    <polyline points={line} fill="none" stroke={color} stroke-width="1.5" />
-    <!-- peak annotation (only when distinct from the latest point) -->
-    {#if peak && (!last || peak.i !== series.length - 1)}
-      <circle cx={px(peak.i)} cy={py(peak.v)} r="2.5" fill={color} fill-opacity="0.8" />
-      <text
-        class="vm-anno"
-        x={labelX(px(peak.i), 'start')}
-        y={Math.max(py(peak.v) - 4, 10)}
-        text-anchor="start"
-      >
-        ▲{fmtV(peak.v)}
+<div bind:this={wrap}>
+  <svg
+    viewBox="0 0 {W} {H}"
+    width="100%"
+    height={H}
+    data-testid="vm-timechart"
+    role="img"
+    aria-label={unit}
+  >
+    <defs>
+      <linearGradient id="{uid}-area" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color={color} stop-opacity="0.20" />
+        <stop offset="100%" stop-color={color} stop-opacity="0.02" />
+      </linearGradient>
+    </defs>
+    {#if series.length < 2}
+      <text class="vm-empty" x={(x0 + x1) / 2} y={(y0 + y1) / 2} text-anchor="middle">
+        {emptyLabel}
       </text>
+    {:else}
+      <!-- unit caption -->
+      {#if unit}
+        <text class="vm-unit" x={x0} y={10} text-anchor="start">{unit}</text>
+      {/if}
+      <!-- gridlines + Y tick labels -->
+      {#each ticks as tv (tv)}
+        <line class="vm-grid" x1={x0} y1={py(tv)} x2={x1} y2={py(tv)} />
+        <text class="vm-y" x={x0 - 6} y={py(tv) + 3} text-anchor="end">{fmtV(tv)}</text>
+      {/each}
+      <!-- X time labels -->
+      {#each xLabels as xl (xl.label)}
+        <text class="vm-x" x={xl.x} y={H - 4} text-anchor={xl.anchor}>{xl.label}</text>
+      {/each}
+      <!-- series -->
+      <polygon points={area} fill="url(#{uid}-area)" />
+      <polyline
+        points={line}
+        fill="none"
+        stroke={color}
+        stroke-width="1.5"
+        stroke-linejoin="round"
+        stroke-linecap="round"
+      />
+      <!-- peak annotation (only when clearly above the latest point) -->
+      {#if peak}
+        <circle cx={px(peak.i)} cy={py(peak.v)} r="2.5" fill={color} fill-opacity="0.8" />
+        <text
+          class="vm-anno"
+          x={labelX(px(peak.i) + 5, 'start')}
+          y={Math.max(py(peak.v) - 5, 12)}
+          text-anchor="start"
+        >
+          ▲{fmtV(peak.v)}
+        </text>
+      {/if}
+      <!-- latest value -->
+      {#if last}
+        <circle cx={px(series.length - 1)} cy={py(last.v)} r="3" fill={color} />
+        <text
+          class="vm-anno"
+          data-testid="vm-chart-last-value"
+          x={labelX(px(series.length - 1) - 5, 'end')}
+          y={Math.max(py(last.v) - 6, 12)}
+          text-anchor="end"
+        >
+          {fmtV(last.v)}
+        </text>
+      {/if}
     {/if}
-    <!-- latest value -->
-    {#if last}
-      <circle cx={px(series.length - 1)} cy={py(last.v)} r="3" fill={color} />
-      <text
-        class="vm-anno"
-        data-testid="vm-chart-last-value"
-        x={labelX(px(series.length - 1) - 4, 'end')}
-        y={Math.max(py(last.v) - 6, 10)}
-        text-anchor="end"
-      >
-        {fmtV(last.v)}
-      </text>
-    {/if}
-  {/if}
-</svg>
+  </svg>
+</div>
 
 <style>
   svg {
-    width: 100%;
-    height: 96px;
+    display: block;
     background: var(--bg-tertiary);
     border-radius: var(--radius-sm);
-    display: block;
   }
   .vm-grid {
     stroke: var(--border);
@@ -170,13 +213,23 @@
   .vm-x,
   .vm-anno,
   .vm-empty {
-    font-size: 9px;
+    font-size: 10px;
     fill: var(--text-tertiary);
     font-variant-numeric: tabular-nums;
+  }
+  .vm-unit {
+    font-size: 10px;
+    font-weight: 600;
+    fill: var(--text-tertiary);
   }
   .vm-anno {
     fill: var(--text-secondary);
     font-weight: 600;
+    /* halo carved out of the plot background keeps labels readable over the line */
+    paint-order: stroke;
+    stroke: var(--bg-tertiary);
+    stroke-width: 3px;
+    stroke-linejoin: round;
   }
   .vm-empty {
     fill: var(--text-tertiary);

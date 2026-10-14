@@ -32,14 +32,15 @@
   const pageSize = 20;
 
   // 事件类型下拉框:label 与列表显示保持一致(中文),value 仍是后端用的英文 key。
-  const eventTypes = [
+  // $derived — 语言切换时 label 跟着重算（const 会把旧语言冻结在首渲染）。
+  let eventTypes = $derived([
     { value: '', label: t('aiEvents.allTypes') },
     { value: 'zone_intrusion', label: eventTypeLabel('zone_intrusion') },
     { value: 'line_crossing', label: eventTypeLabel('line_crossing') },
     { value: 'loitering', label: eventTypeLabel('loitering') },
     { value: 'object_detected', label: eventTypeLabel('object_detected') },
     { value: 'custom', label: eventTypeLabel('custom') },
-  ];
+  ]);
 
   const severityColors: Record<string, string> = {
     info: 'text-blue-400 bg-blue-500/10 border-blue-500/30',

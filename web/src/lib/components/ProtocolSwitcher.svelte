@@ -56,19 +56,20 @@
   let browserSupportsWasmH265 = $state(false);
   let wasmUnavailableReason: string | null = $state(null);
 
-  let protocolOptions = [
+  // $derived — 语言切换时 label/latency 跟着重算（普通 let 会冻结首渲染文案）。
+  let protocolOptions = $derived([
     // 'auto' is the default and recommended choice — the Player Orchestrator
     // picks the lowest-latency protocol the browser+codec can handle and
     // adapts at runtime. Selecting a specific protocol below pins it (disables
     // auto-degrade/upgrade) for users who want explicit control.
-	{ id: 'auto', label: t('live.protocol.auto') || 'Auto', latency: t('live.protocol.autoLatency') || 'adaptive', viewers: '', resource: '' },
-	{ id: 'wasm', label: 'WebCodecs', latency: '<100ms', viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
-	{ id: 'webrtc', label: 'WebRTC', latency: t('live.protocol.latency.webrtc'), viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
-	{ id: 'flv', label: 'HTTP-FLV', latency: t('live.protocol.latency.flv'), viewers: t('live.protocol.viewers.flv'), resource: t('live.protocol.resource.flv') },
-	{ id: 'mjpeg', label: 'MJPEG', latency: t('live.protocol.latency.mjpeg'), viewers: t('live.protocol.viewers.mjpeg'), resource: t('live.protocol.resource.mjpeg') },
-	{ id: 'hls', label: 'HLS', latency: t('live.protocol.latency.hls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
-	{ id: 'll-hls', label: 'LL-HLS', latency: t('live.protocol.latency.llHls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
-  ];
+    { id: 'auto', label: t('live.protocol.auto') || 'Auto', latency: t('live.protocol.autoLatency') || 'adaptive', viewers: '', resource: '' },
+    { id: 'wasm', label: 'WebCodecs', latency: '<100ms', viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
+    { id: 'webrtc', label: 'WebRTC', latency: t('live.protocol.latency.webrtc'), viewers: t('live.protocol.viewers.webrtc'), resource: t('live.protocol.resource.webrtc') },
+    { id: 'flv', label: 'HTTP-FLV', latency: t('live.protocol.latency.flv'), viewers: t('live.protocol.viewers.flv'), resource: t('live.protocol.resource.flv') },
+    { id: 'mjpeg', label: 'MJPEG', latency: t('live.protocol.latency.mjpeg'), viewers: t('live.protocol.viewers.mjpeg'), resource: t('live.protocol.resource.mjpeg') },
+    { id: 'hls', label: 'HLS', latency: t('live.protocol.latency.hls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
+    { id: 'll-hls', label: 'LL-HLS', latency: t('live.protocol.latency.llHls'), viewers: t('live.protocol.viewers.hls'), resource: t('live.protocol.resource.hls') },
+  ]);
 
   let currentOption = $derived(
     protocolOptions.find(p => p.id === selected) || protocolOptions.find(p => p.id === 'auto') || protocolOptions[0],

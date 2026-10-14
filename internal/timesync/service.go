@@ -172,7 +172,7 @@ func (s *Service) sweep(ctx context.Context) {
 		s.publish(id, "auto", res.AfterSeconds, true)
 
 		if s.cfg.Auto.NTPPush && s.sntpEnabled() {
-			if err := s.pointAtNVR(ctx, cam, ""); err != nil {
+			if _, err := s.pointAtNVR(ctx, cam, ""); err != nil {
 				slog.Warn("NTP push after correction failed", "camera_id", id, "error", err)
 			}
 		}
@@ -224,6 +224,9 @@ func (s *Service) recordStatus(id string, st *CameraTimeStatus) {
 func (s *Service) decorateStatus(st *CameraTimeStatus) {
 	st.SNTPEnabled = s.sntpEnabled()
 	st.AutoManaged = s.autoManaged(st.CameraID)
+	if cam := s.cams.GetCameraConfig(st.CameraID); cam != nil {
+		st.Credentials = cam.Username != ""
+	}
 }
 
 func (s *Service) autoManaged(cameraID string) bool {
@@ -342,35 +345,36 @@ func (s *Service) correctWith(ctx context.Context, cam *config.CameraConfig, cli
 
 // PointCameraAtNTP sets the camera's NTP server (default: the NVR's own IP
 // as routable from the camera) and flips its DateTimeType to NTP — path B.
-func (s *Service) PointCameraAtNTP(ctx context.Context, cameraID, serverOverride string) error {
+// Returns the effective server address.
+func (s *Service) PointCameraAtNTP(ctx context.Context, cameraID, serverOverride string) (string, error) {
 	cam := s.cams.GetCameraConfig(cameraID)
 	if cam == nil {
-		return fmt.Errorf("camera %q not found", cameraID)
+		return "", fmt.Errorf("camera %q not found", cameraID)
 	}
 	if cam.Protocol != "onvif" {
-		return errors.New("time sync is only available for ONVIF cameras")
+		return "", errors.New("time sync is only available for ONVIF cameras")
 	}
 	if cam.Username == "" {
-		return onvif.ErrNoCredentials
+		return "", onvif.ErrNoCredentials
 	}
 	return s.pointAtNVR(ctx, cam, serverOverride)
 }
 
-func (s *Service) pointAtNVR(ctx context.Context, cam *config.CameraConfig, serverOverride string) error {
+func (s *Service) pointAtNVR(ctx context.Context, cam *config.CameraConfig, serverOverride string) (string, error) {
 	server := serverOverride
 	if server == "" {
 		ip, err := localAddrFor(cam)
 		if err != nil {
-			return fmt.Errorf("resolve NVR address for camera: %w", err)
+			return "", fmt.Errorf("resolve NVR address for camera: %w", err)
 		}
 		server = ip
 	}
 	client := onvif.NewClient(endpointOf(cam), cam.Username, cam.Password)
 	if err := client.SetNTPServer(ctx, server); err != nil {
-		return err
+		return "", err
 	}
 	slog.Info("camera pointed at NVR SNTP server", "camera_id", cam.ID, "server", server)
-	return nil
+	return server, nil
 }
 
 func (s *Service) publish(cameraID, method string, skewSeconds float64, corrected bool) {

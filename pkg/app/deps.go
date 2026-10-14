@@ -16,6 +16,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
@@ -24,6 +25,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/offload"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
@@ -67,10 +69,13 @@ type appDeps struct {
 	metrics      *metrics.Metrics
 	eventBus     *event.EventBus
 	authMW       func(http.Handler) http.Handler
-	remoteLogH   *remotelog.Handler
-	appLoc       *time.Location
-	ioBudget     *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
-	unlinkBudget *iobudget.Bucket // recursive-deletion unlink guardrail (#755); nil = off
+	// viewerLoginBinder 挂接分享观看者核验（p2p Manager 存活时由
+	// registerP2PService 调用；分享执行链 user-tenant-model §7）。
+	viewerLoginBinder func(mgr *p2p.Manager)
+	remoteLogH        *remotelog.Handler
+	appLoc            *time.Location
+	ioBudget          *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
+	unlinkBudget      *iobudget.Bucket // recursive-deletion unlink guardrail (#755); nil = off
 
 	// Merge / transcode / timelapse
 	mergeMgr              *merge.MergeManager
@@ -96,6 +101,10 @@ type appDeps struct {
 	sntpServer   *sntp.Server
 	healthMgr    *health.Manager
 	relayMgr     *relay.Manager
+
+	// licenseMgr 商业化收费授权（P2P 门控与 /api/license 共享同一实例，
+	// API 安装新文档热生效）。恒非 nil（未配文档时状态 none）。
+	licenseMgr *license.Manager
 
 	// Streaming
 	hlsMgr    *hls.Manager

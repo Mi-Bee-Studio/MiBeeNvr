@@ -14,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/memlimit"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -21,11 +22,13 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/viewer"
 )
 
 // memlimitAppliedFn reads the applied GOMEMLIMIT for the metrics gauge —
@@ -45,6 +48,14 @@ func buildCoreDeps(deps *appDeps) error {
 	// of an IP. Best-effort: a read-only config keeps the in-memory ID.
 	if err := config.EnsureDeviceIdentity(configPath, cfg); err != nil {
 		slog.Warn("failed to persist device identity", "path", configPath, "error", err)
+	}
+
+	// Step -0.5: 商业化收费授权——共享实例（P2P 门控 + /api/license 同源，
+	// 安装新文档热生效）。配置层错误（文档/公钥不可解码）只降级为日志：
+	// 授权是运行态不是启动条件，绝不阻塞主服务。
+	deps.licenseMgr = license.NewManager(cfg.Server.DeviceID)
+	if err := deps.licenseMgr.Configure(cfg.License.Document, cfg.License.PublicKey, cfg.License.Required); err != nil {
+		slog.Warn("license config undecodable; running as unlicensed", "error", err)
 	}
 
 	// Step 0: Ensure storage root directory exists. Inside containers an
@@ -245,10 +256,21 @@ func buildCoreDeps(deps *appDeps) error {
 	// The closure reads cfg on every call (like GetUsername/GetHash) so a future
 	// runtime toggle of local_bypass takes effect immediately; freezing the bool
 	// at startup would keep the bypass active after a disable — fail-open.
+	// 分享执行链（user-tenant-model §7）：观看者会话仓（进程内）。核验
+	// 闭包桥接 p2p Manager（设备身份调平台判定）——由 registerP2PService
+	// 在 Manager 存活时挂上；未启用/未绑定时观看者登录不可用。
+	viewerStore := viewer.NewStore()
+	verifyViewerWith := func(mgr *p2p.Manager) {
+		deps.handler.SetViewerAuth(viewerStore, mgr.VerifyViewer)
+	}
+	deps.viewerLoginBinder = verifyViewerWith
 	authMW, effectiveHash := authmw.NewAuthMiddleware(authmw.AuthProvider{
 		GetUsername: func() string { return cfg.Auth.Username },
 		GetHash:     func() string { return cfg.Auth.PasswordHash },
 		LocalBypass: func() bool { return cfg.Auth.LocalBypass != nil && *cfg.Auth.LocalBypass },
+		VerifyViewer: func(token string) (*viewer.Session, bool) {
+			return viewerStore.Verify(token, time.Now())
+		},
 	}, cfg.Auth.Password, authmw.AuthRateLimitConfig{
 		Enabled:       cfg.Auth.RateLimit.Enabled != nil && *cfg.Auth.RateLimit.Enabled,
 		MaxFailures:   cfg.Auth.RateLimit.MaxFailures,

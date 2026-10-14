@@ -652,3 +652,28 @@ observability:
 # extensions registered via pkg/app.App.Register. Unknown keys are silently ignored.
 # extensions:
 #   example_key: example_value
+
+# Remote access (direct WebRTC/relay tunnels). The NVR dials the MiBee P2P signaling server as a
+# device peer and serves the local HTTP API over an E2EE-capable tunnel, so
+# the mobile app can reach the NVR on networks with no port forwarding.
+# p2p:
+#   enabled: false
+#   server_url: "wss://signal.example.com/signal"  # required when enabled
+#   product_id: "mibeenvr"        # platform product namespace
+#   peer_id: ""                   # empty = install-level Server.DeviceID
+#   service_name: "nvr-api"       # tunnel service the app dials
+#   username: ""                  # OIDC service account (required when enabled)
+#   password: ""                  # stored ENC:-encrypted on save
+#   client_id: "p2p-signaling"
+#   token_endpoint: ""            # empty = derived from server_url
+#   transport_timeout_s: 20
+#   redial_min_interval_s: 30
+#   max_clients: 0                # 0 = license quota, else default 3; strictest wins
+#   device_key: ""                # raw Ed25519 key file; signs every hello
+
+# Commercial license. Install/replace via the web UI
+# (Settings → License) or PUT /api/license — hot-applies to the P2P gate.
+# license:
+#   document: ""                  # base64(payload).base64(sig) from license-mint
+#   public_key: ""                # operator's Ed25519 public key (base64, 32B)
+#   required: false               # true = P2P refuses to dial without a valid doc
