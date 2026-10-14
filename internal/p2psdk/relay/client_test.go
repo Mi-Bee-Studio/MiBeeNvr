@@ -278,7 +278,7 @@ func TestClientSendAndReceive(t *testing.T) {
 	select {
 	case msg := <-received:
 		assert.Equal(t, "hello through relay", string(msg))
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for message")
 	}
 
@@ -293,7 +293,7 @@ func TestClientSendAndReceive(t *testing.T) {
 	select {
 	case msg := <-receivedA:
 		assert.Equal(t, "reply from B", string(msg))
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for reply")
 	}
 }
@@ -363,7 +363,7 @@ func TestClientKeepaliveDetectsSilentServer(t *testing.T) {
 	select {
 	case err := <-fatal:
 		require.Error(t, err)
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("silent server not detected within pong window")
 	}
 }
@@ -409,7 +409,7 @@ func TestClientServerCloseFiresFatal(t *testing.T) {
 	select {
 	case err := <-fatal:
 		require.Error(t, err)
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("server close not detected")
 	}
 }

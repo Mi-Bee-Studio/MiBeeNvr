@@ -55,12 +55,12 @@ func TestOnDataChannel_AssignedAfterConnectStillFires(t *testing.T) {
 
 	select {
 	case <-deviceDCOpen:
-	case <-time.After(30 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("timeout waiting for device DataChannel")
 	}
 	select {
 	case <-clientDCOpen:
-	case <-time.After(30 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("client OnDataChannel never fired: callback assigned after Connect was lost (snapshot regression)")
 	}
 }

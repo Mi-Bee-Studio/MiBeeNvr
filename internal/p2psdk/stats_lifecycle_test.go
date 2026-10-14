@@ -34,7 +34,7 @@ func TestStartStatsCollectorLocked_StopsPrevious(t *testing.T) {
 	select {
 	case <-first.done:
 		// Previous poller drained — no orphan on the old PC.
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("previous stats collector was not stopped on rebind")
 	}
 

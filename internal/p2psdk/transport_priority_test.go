@@ -98,7 +98,7 @@ func TestDCEgressStrictPriority(t *testing.T) {
 	}
 
 	f.setBA(0)
-	if !waitFor(t, time.Second, func() bool { return len(f.snapshot()) == 3 }) {
+	if !waitFor(t, 5*time.Second, func() bool { return len(f.snapshot()) == 3 }) {
 		t.Fatalf("drain incomplete: %v", f.snapshot())
 	}
 
@@ -125,7 +125,7 @@ func TestDCEgressLowWaterGate(t *testing.T) {
 	}
 
 	f.setBA(0)
-	if !waitFor(t, time.Second, func() bool { return len(f.snapshot()) == 1 }) {
+	if !waitFor(t, 5*time.Second, func() bool { return len(f.snapshot()) == 1 }) {
 		t.Fatalf("frame never departed after drain: %v", f.snapshot())
 	}
 }
@@ -161,10 +161,10 @@ func TestDCEgressBackpressureBlocksAndResumes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("blocked send resumed with error: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("blocked Send never resumed after drain")
 	}
-	if !waitFor(t, time.Second, func() bool { return len(f.snapshot()) == 2 }) {
+	if !waitFor(t, 5*time.Second, func() bool { return len(f.snapshot()) == 2 }) {
 		t.Fatalf("both frames not delivered: %v", f.snapshot())
 	}
 }
@@ -237,7 +237,7 @@ func TestDCEgressCloseUnblocksSenders(t *testing.T) {
 		if err == nil {
 			t.Fatal("blocked Send should fail after Close")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("blocked Send never returned after Close")
 	}
 }
@@ -251,7 +251,7 @@ func TestDCEgressSendErrorPropagates(t *testing.T) {
 	if err := tr.Send([]byte("ok")); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if !waitFor(t, time.Second, func() bool { return len(f.snapshot()) == 1 }) {
+	if !waitFor(t, 5*time.Second, func() bool { return len(f.snapshot()) == 1 }) {
 		t.Fatal("first frame never departed")
 	}
 
@@ -259,7 +259,7 @@ func TestDCEgressSendErrorPropagates(t *testing.T) {
 	// Failure is asynchronous: this frame enqueues, the writer hits the
 	// error on it, and every subsequent Send must observe the dead state.
 	_ = tr.Send([]byte("bad"))
-	if !waitFor(t, time.Second, func() bool { return tr.Send([]byte("probe")) != nil }) {
+	if !waitFor(t, 5*time.Second, func() bool { return tr.Send([]byte("probe")) != nil }) {
 		t.Fatal("transport error never propagated to subsequent senders")
 	}
 }

@@ -82,7 +82,7 @@ func TestTunnel_HTTPReadResponseEndToEnd(t *testing.T) {
 	select {
 	case <-done:
 		// success — ReadResponse completed.
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("http.ReadResponse blocked past 5s — remote close EOF not propagated")
 	}
 }

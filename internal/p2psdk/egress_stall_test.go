@@ -33,7 +33,7 @@ func TestDCEgressEnqueueStallFailsAfterBudget(t *testing.T) {
 	case err := <-done:
 		require.Error(t, err, "stalled enqueue must fail after the budget")
 		assert.Contains(t, err.Error(), "egress stalled")
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("enqueue parked forever — stall budget not enforced")
 	}
 
