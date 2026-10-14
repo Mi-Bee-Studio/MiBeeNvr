@@ -42,9 +42,9 @@ func TestSentinelErrors_Distinct(t *testing.T) {
 		ErrICETimeout, ErrRelayUnavailable, ErrSessionNotFound,
 		ErrProtocolMismatch, ErrDirectICEConnected,
 	}
-	for _, target := range all {
-		for _, wrapped := range all {
-			if wrapped == target {
+	for ti, target := range all {
+		for wi, wrapped := range all {
+			if ti == wi {
 				continue
 			}
 			assert.Falsef(t, errors.Is(wrapped, target),

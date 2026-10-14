@@ -115,7 +115,7 @@ func LoadOrCreateDeviceKey(keyPath string) (ed25519.PrivateKey, error) {
 
 // Enroll 执行 ③④ 两步：/device/enroll（注册公钥+绑定归属）→
 // /device/re-enroll（Ed25519 挑战换 token）。device_bound/retired 且未指定
-//首选 ID 时换新 ID 重试一次（全新身份天然绕开冲突与毒药）。
+// 首选 ID 时换新 ID 重试一次（全新身份天然绕开冲突与毒药）。
 func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 	client := opts.HTTPClient
 	if client == nil {
@@ -146,7 +146,8 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 }
 
 func enrollOnce(ctx context.Context, client *http.Client, opts EnrollOptions,
-	priv ed25519.PrivateKey, pubkey, deviceID string) (*EnrollResult, error) {
+	priv ed25519.PrivateKey, pubkey, deviceID string,
+) (*EnrollResult, error) {
 	base := strings.TrimRight(opts.BaseURL, "/")
 
 	// ③ 注册公钥（票券一次性；归属域以票券为准，ProductID 仅作校验）。
@@ -217,7 +218,8 @@ func enrollOnce(ctx context.Context, client *http.Client, opts EnrollOptions,
 // postJSON 发一枚 JSON POST；2xx 时解码进 out，4xx/5xx 时按 error 字段
 // 映射类型化错误（errMap 命中优先，其次 authErr，最后带 error 文本）。
 func postJSON(ctx context.Context, client *http.Client, url string, body any,
-	out any, authErr error, errMap map[string]error) error {
+	out any, authErr error, errMap map[string]error,
+) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return err
