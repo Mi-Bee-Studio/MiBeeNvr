@@ -722,6 +722,7 @@ cameras:
 - **字段**:
   - `time_ranges` (array) — `{start: "09:00", end: "18:00"}` 列表，重叠自动合并
   - `days_of_week` (array of int) — 0=周日 … 6=周六；空 = 每天
+- **API**: `PUT /api/cameras/{id}` 传不含时间段的 `recording_schedule`（如 `{"time_ranges": []}`）即清除计划、恢复 24/7；不传该字段则保持不变
 
 ### `cameras[].cascade_enabled`
 

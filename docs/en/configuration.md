@@ -781,6 +781,7 @@ cameras:
 - **Fields**:
   - `time_ranges` (array) — list of `{start: "09:00", end: "18:00"}`; overlaps auto-merge
   - `days_of_week` (array of int) — 0=Sunday … 6=Saturday; empty = every day
+- **API**: a `recording_schedule` without time ranges (e.g. `{"time_ranges": []}`) in `PUT /api/cameras/{id}` clears the schedule (back to 24/7); omitting the field leaves it unchanged
 
 ### `cameras[].cascade_enabled`
 

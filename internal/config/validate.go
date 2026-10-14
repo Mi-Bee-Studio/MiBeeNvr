@@ -659,34 +659,8 @@ func validateConfigDetails(cfg *Config) error {
 			}
 		}
 		// Validate schedule
-		if sched := cam.Timelapse.Schedule; sched != nil {
-			// Validate days of week (0-6)
-			for i, d := range sched.DaysOfWeek {
-				if d < 0 || d > 6 {
-					return fmt.Errorf("cameras.%s.timelapse.schedule.days_of_week[%d] must be between 0 (Sunday) and 6 (Saturday), got %d", cam.ID, i, d)
-				}
-			}
-			// Validate and normalize time ranges
-			var parsed []TimeRange
-			for i, tr := range sched.TimeRanges {
-				startH, startM, err := parseHHMM(tr.Start)
-				if err != nil {
-					return fmt.Errorf("cameras.%s.timelapse.schedule.time_ranges[%d].start invalid time: %w", cam.ID, i, err)
-				}
-				endH, endM, err := parseHHMM(tr.End)
-				if err != nil {
-					return fmt.Errorf("cameras.%s.timelapse.schedule.time_ranges[%d].end invalid time: %w", cam.ID, i, err)
-				}
-				// Convert to minutes since midnight for comparison
-				startMins := startH*60 + startM
-				endMins := endH*60 + endM
-				if endMins <= startMins {
-					return fmt.Errorf("cameras.%s.timelapse.schedule.time_ranges[%d].end (%s) must be after start (%s)", cam.ID, i, tr.End, tr.Start)
-				}
-				parsed = append(parsed, TimeRange{Start: tr.Start, End: tr.End})
-			}
-			// Auto-merge overlapping time ranges
-			sched.TimeRanges = mergeTimeRanges(parsed)
+		if err := ValidateSchedule("cameras."+cam.ID+".timelapse.schedule", cam.Timelapse.Schedule); err != nil {
+			return err
 		}
 		// Validate merge config fields
 		if cam.Timelapse.MergeMode != "" {
@@ -1111,5 +1085,38 @@ func validatePixgate(cam CameraConfig) error {
 	if cam.Protocol == "srt" || cam.Protocol == "rtmp" || cam.Protocol == "whip" {
 		return fmt.Errorf("cameras.%s.pixgate requires an RTSP-reachable sub-stream (rtsp/onvif/gb28181 cameras)", cam.ID)
 	}
+	return nil
+}
+
+// ValidateSchedule checks a ScheduleConfig (timelapse schedule or camera
+// recording_schedule) and normalizes it in place: days_of_week must be 0-6,
+// every time range must be HH:MM with end after start, and overlapping ranges
+// are merged. field prefixes error messages (e.g. "cameras.x.timelapse.schedule").
+// A nil schedule is valid.
+func ValidateSchedule(field string, sched *ScheduleConfig) error {
+	if sched == nil {
+		return nil
+	}
+	for i, d := range sched.DaysOfWeek {
+		if d < 0 || d > 6 {
+			return fmt.Errorf("%s.days_of_week[%d] must be between 0 (Sunday) and 6 (Saturday), got %d", field, i, d)
+		}
+	}
+	var parsed []TimeRange
+	for i, tr := range sched.TimeRanges {
+		startH, startM, err := parseHHMM(tr.Start)
+		if err != nil {
+			return fmt.Errorf("%s.time_ranges[%d].start invalid time: %w", field, i, err)
+		}
+		endH, endM, err := parseHHMM(tr.End)
+		if err != nil {
+			return fmt.Errorf("%s.time_ranges[%d].end invalid time: %w", field, i, err)
+		}
+		if endH*60+endM <= startH*60+startM {
+			return fmt.Errorf("%s.time_ranges[%d].end (%s) must be after start (%s)", field, i, tr.End, tr.Start)
+		}
+		parsed = append(parsed, TimeRange{Start: tr.Start, End: tr.End})
+	}
+	sched.TimeRanges = mergeTimeRanges(parsed)
 	return nil
 }

@@ -641,9 +641,11 @@ async function performCameraSave() {
             push_retention_days: (formProtocol === 'srt' || formProtocol === 'rtmp' || formProtocol === 'whip') ? formPushRetentionDays : undefined,
             dark_frame_filter_enabled: formDarkFrameFilterEnabled,
             dark_frame_threshold: formDarkFrameFilterEnabled ? formDarkFrameThreshold : undefined,
+            // Unchecked → send an empty schedule so the backend clears it
+            // (undefined would be read as "leave unchanged").
             recording_schedule: formRecordingScheduleEnabled ? {
                 time_ranges: [{ start: formRecordingScheduleStart, end: formRecordingScheduleEnd }],
-            } : undefined,
+            } : { time_ranges: [] },
         };
         if (formUsername && formUsername !== editingCamera.username) {
             data.username = formUsername;

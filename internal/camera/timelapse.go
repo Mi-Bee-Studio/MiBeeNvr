@@ -381,53 +381,83 @@ func (cm *CameraManager) startRecordingScheduleMonitor(ctx context.Context, came
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 
-		// Initial check: stop if not recording time.
-		var schedule *config.ScheduleConfig
-		for _, c := range cm.cfg.Cameras {
-			if c.ID == cameraID {
-				schedule = c.RecordingSchedule
-				break
-			}
-		}
-
+		schedule := cm.recordingScheduleFor(cameraID)
 		if schedule == nil {
 			return
 		}
 
-		if !cm.scheduler.IsScheduleActive(schedule) {
-			logger.Info("recording schedule: outside active hours, stopping recorder", "camera_id", cameraID)
-			if rec := cm.snapshotRecorder(cameraID); rec != nil {
-				if err := rec.Stop(); err != nil {
-					logger.Warn("failed to stop recorder per recording schedule", "camera_id", cameraID, "error", err)
-				}
-			}
-		}
+		// Initial check: stop if not recording time.
+		cm.enforceRecordingSchedule(cameraID, schedule, true)
 
 		for {
 			select {
 			case <-monitorCtx.Done():
 				return
 			case <-ticker.C:
-				isActive := cm.scheduler.IsScheduleActive(schedule)
-				rec := cm.snapshotRecorder(cameraID)
-				if rec == nil {
-					continue
-				}
-				status := rec.Status()
-				if isActive && (status == model.StatusStopped || status == model.StatusError) {
-					logger.Info("recording schedule: active hours, starting recorder", "camera_id", cameraID)
-					if err := rec.Start(monitorCtx); err != nil {
-						logger.Warn("failed to start recorder per recording schedule", "camera_id", cameraID, "error", err)
-					}
-				} else if !isActive && (status == model.StatusRecording || status == model.StatusReconnecting) {
-					logger.Info("recording schedule: outside active hours, stopping recorder", "camera_id", cameraID)
-					if err := rec.Stop(); err != nil {
-						logger.Warn("failed to stop recorder per recording schedule", "camera_id", cameraID, "error", err)
-					}
-				}
+				cm.enforceRecordingSchedule(cameraID, schedule, false)
 			}
 		}
 	}()
+}
+
+// stopRecordingScheduleMonitor cancels the recording_schedule monitor goroutine
+// for the given camera (keyed as "rec-"+cameraID). Self-locking.
+func (cm *CameraManager) stopRecordingScheduleMonitor(cameraID string) {
+	cm.auxMu.Lock()
+	if cancel, ok := cm.scheduleMonitors["rec-"+cameraID]; ok {
+		cancel()
+		delete(cm.scheduleMonitors, "rec-"+cameraID)
+	}
+	cm.auxMu.Unlock()
+}
+
+// recordingScheduleFor returns the camera's configured recording_schedule.
+// cm.cfg.Cameras is mutated in place by UpdateCamera under configMu, so the
+// monitor goroutine reads it under the same lock.
+func (cm *CameraManager) recordingScheduleFor(cameraID string) *config.ScheduleConfig {
+	cm.configMu.Lock()
+	defer cm.configMu.Unlock()
+	for _, c := range cm.cfg.Cameras {
+		if c.ID == cameraID {
+			return c.RecordingSchedule
+		}
+	}
+	return nil
+}
+
+// enforceRecordingSchedule performs one schedule evaluation for the monitor.
+// The initial check only stops a recorder that is running outside the window;
+// later ticks also start one that is stopped inside it.
+func (cm *CameraManager) enforceRecordingSchedule(cameraID string, schedule *config.ScheduleConfig, initial bool) {
+	rec := cm.snapshotRecorder(cameraID)
+	if rec == nil {
+		return
+	}
+	isActive := cm.scheduler.IsScheduleActive(schedule)
+	if initial {
+		if !isActive {
+			logger.Info("recording schedule: outside active hours, stopping recorder", "camera_id", cameraID)
+			if err := rec.Stop(); err != nil {
+				logger.Warn("failed to stop recorder per recording schedule", "camera_id", cameraID, "error", err)
+			}
+		}
+		return
+	}
+	status := rec.Status()
+	if isActive && (status == model.StatusStopped || status == model.StatusError) {
+		logger.Info("recording schedule: active hours, starting recorder", "camera_id", cameraID)
+		// Detached from the monitor ctx on purpose: the monitor is cancelled
+		// and recreated on every camera update, and a recorder bound to the old
+		// monitor's ctx would silently exit with it (see startRecorderLocked).
+		if err := rec.Start(context.Background()); err != nil {
+			logger.Warn("failed to start recorder per recording schedule", "camera_id", cameraID, "error", err)
+		}
+	} else if !isActive && (status == model.StatusRecording || status == model.StatusReconnecting) {
+		logger.Info("recording schedule: outside active hours, stopping recorder", "camera_id", cameraID)
+		if err := rec.Stop(); err != nil {
+			logger.Warn("failed to stop recorder per recording schedule", "camera_id", cameraID, "error", err)
+		}
+	}
 }
 
 // startTimelapseKeyframeExtractor creates and starts a KeyframeExtractor for the given camera,
