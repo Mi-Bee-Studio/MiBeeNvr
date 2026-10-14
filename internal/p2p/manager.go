@@ -14,7 +14,12 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/tunnel"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 )
+
+// peerDial 是对 SDK peer.Dial 的唯一调用缝（测试注入用——SignalingConfig
+// 透传断言无法在真网络上做）。生产恒为 SDK 实现。
+var peerDial = peer.Dial
 
 // resumeGrace 覆盖 SDK 的 60s resume 窗口 + 重握手余量：断线后持续超过
 // 该时长仍未恢复（OnReconnect 未到）即判定会话死亡，换新 token 重拨。
@@ -70,21 +75,41 @@ type GateStatus struct {
 	State   string `json:"state"`
 }
 
+// ICEStats 是设备侧一条 WebRTC 会话的 ICE 遥测（SDK OnStats 每 5s 轮询，
+// 取最近一次）。relay（WSS）传输的会话没有 ICE 统计——不在此表即信号，
+// 与 App 自报的 mode=relay 互证。字段口径对齐 App 自报（rtt_ms 等），
+// 两端数据在 /api/p2p/status 同页可对账。
+type ICEStats struct {
+	SessionID     string    `json:"-"`
+	LocalType     string    `json:"local_type"`           // host|srflx|prflx|relay(TURN)
+	RemoteType    string    `json:"remote_type"`          // 对端候选类型
+	LocalAddr     string    `json:"local_addr,omitempty"` // 本端 NAT 映射地址（诊断金料）
+	RemoteAddr    string    `json:"remote_addr,omitempty"`
+	IPVersion     string    `json:"ip_version,omitempty"`     // "4"|"6"——IPv6 直连可见
+	RelayProtocol string    `json:"relay_protocol,omitempty"` // TURN 传输（udp/tcp/tls），非 TURN 空
+	RTTMs         float64   `json:"rtt_ms"`
+	AvailableKbps float64   `json:"available_kbps,omitempty"`
+	BytesSent     uint64    `json:"bytes_sent,omitempty"`
+	BytesReceived uint64    `json:"bytes_received,omitempty"`
+	At            time.Time `json:"at"`
+}
+
 // StatusSnapshot 是 P2P 链路的诊断快照（GET /api/p2p/status）。
 type StatusSnapshot struct {
-	Enabled       bool        `json:"enabled"`
-	Online        bool        `json:"online"`
-	PeerID        string      `json:"peer_id"`
-	ProductID     string      `json:"product_id"`
-	ServiceName   string      `json:"service"`
-	ServerURL     string      `json:"server_url"`
-	ActiveClients int         `json:"active_clients"`
-	MaxClients    int         `json:"max_clients"`
-	CapSource     string      `json:"cap_source"` // license|config|license+config|default
-	RejectedTotal int64       `json:"rejected_total"`
-	License       *GateStatus `json:"license,omitempty"`
-	LastRejection *Rejection  `json:"last_rejection,omitempty"`
-	RecentEvents  []Event     `json:"recent_events,omitempty"`
+	Enabled       bool                `json:"enabled"`
+	Online        bool                `json:"online"`
+	PeerID        string              `json:"peer_id"`
+	ProductID     string              `json:"product_id"`
+	ServiceName   string              `json:"service"`
+	ServerURL     string              `json:"server_url"`
+	ActiveClients int                 `json:"active_clients"`
+	MaxClients    int                 `json:"max_clients"`
+	CapSource     string              `json:"cap_source"` // license|config|license+config|default
+	RejectedTotal int64               `json:"rejected_total"`
+	License       *GateStatus         `json:"license,omitempty"`
+	LastRejection *Rejection          `json:"last_rejection,omitempty"`
+	RecentEvents  []Event             `json:"recent_events,omitempty"`
+	ICESessions   map[string]ICEStats `json:"ice_sessions,omitempty"`
 }
 
 // Manager 监督 P2P 设备会话的完整生命周期：铸 token → 信令上线 → 每个
@@ -124,6 +149,14 @@ type Manager struct {
 	eventsMu sync.Mutex
 	events   []Event
 
+	// 设备侧 ICE 遥测（SDK OnStats，#12）：sessionID → 最近一次快照。
+	// 会话关闭即时修剪；信令会话重拨整表换新（与 clients 同生命周期）。
+	iceMu sync.Mutex
+	ice   map[string]ICEStats
+
+	// metrics 可为 nil（未接线时遥测只进状态快照，不进 Prometheus）。
+	recorder *metrics.Metrics
+
 	// OnEvent 事件外流钩子（Start 前设置一次；nil = 不外流）。仪表盘的
 	// 连接记录经此实时收流（API 层落环 + 落盘），不依赖有人轮询状态页。
 	// 在 addEvent 的事件锁外调用，回调里允许再入 Manager 公开方法。
@@ -148,8 +181,13 @@ func New(cfg config.P2PConfig, localAddr, tokenStatePath string, logger *slog.Lo
 		gate:      gate,
 		redial:    make(chan struct{}, 1),
 		clients:   make(map[*tunnel.Tunnel]struct{}),
+		ice:       make(map[string]ICEStats),
 	}
 }
+
+// SetMetrics 接 Prometheus 记录器（可选；nil 安全——未接线时 ICE 遥测
+// 仍进 /api/p2p/status，只是不进 /metrics）。
+func (m *Manager) SetMetrics(rec *metrics.Metrics) { m.recorder = rec }
 
 // Online 报告信令会话当前是否在线（探活/诊断用）。
 func (m *Manager) Online() bool { return m.online.Load() }
@@ -261,9 +299,10 @@ func (m *Manager) Run(ctx context.Context) {
 func (m *Manager) runSession(ctx context.Context, jwt string) error {
 	m.disconnectedAt.Store(0)
 	m.resetClients()
+	m.resetICESessions()
 	m.online.Store(true)
 
-	sess, err := peer.Dial(ctx, peer.SignalingConfig{
+	sess, err := peerDial(ctx, peer.SignalingConfig{
 		ServerURL:     m.cfg.ServerURL,
 		JWT:           jwt,
 		ProductID:     m.cfg.ProductID,
@@ -275,6 +314,10 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 		// 在 hello 验），但任何掉线后重连都会被旧 token 卡死（2026-10-14
 		// 生产：服务器重启 → 梯子拿过期 token 死循环 23 分钟直到人工重启）。
 		TokenFunc: m.ladderTokenFunc(),
+		// 零配置直连端点（#10）："" 保持默认；"auto"/"auto:N" 每次会话
+		// 构建跑 UPnP→NAT-PMP→STUN 阶梯（SDK 侧 TTL 缓存 + journal 日
+		// 志）；"<ip>:<port>" 直填。通告不可达时 ICE 照常回落 TURN/relay。
+		AdvertiseAddr: m.cfg.Advertise,
 		TransportTimeout: func() time.Duration {
 			if m.cfg.TransportTimeoutSec > 0 {
 				return time.Duration(m.cfg.TransportTimeoutSec) * time.Second
@@ -312,6 +355,11 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 	m.consecRejects = 0
 	defer m.closeClients()
 	m.addEvent("online", "", "signaling connected")
+
+	// 设备侧 ICE 遥测（#12）：候选类型/IP 版本/RTT 进状态快照与
+	// /metrics。Session 级回调须在首个入站会话建立前挂好；SDK 注入
+	// SessionID 后回调；异常静默降级，绝不影响建链。
+	sess.OnStats = m.onICEStats
 
 	m.logger.Info("p2p device online",
 		"peer_id", m.cfg.PeerID,
@@ -382,6 +430,7 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 	// 会话回收观测（SDK e83ad7e+）：远端 session_close 与本地 abandon
 	// （ice_restart_failed）两条路径都在资源释放后触发。
 	sess.OnSessionClose = func(sessionID, reason string) {
+		m.dropICESession(sessionID)
 		m.addEvent("closed", sessionID, reason)
 		m.logger.Info("p2p session closed", "session_id", sessionID, "reason", reason)
 	}
@@ -563,6 +612,90 @@ func (m *Manager) RecentEvents() []Event {
 	return out
 }
 
+// onICEStats 吸收 SDK 的 ICE/DataChannel 快照（OnStats 回调，每会话每
+// 5s 一次）。无可选对（建链早期/relay 传输）的快照跳过——不覆盖既有
+// 条目。任何异常只丢遥测，绝不影响会话（#12 验收：静默降级）。
+func (m *Manager) onICEStats(snap peer.StatsSnapshot) {
+	if snap.SessionID == "" || snap.ICELocalCandidateType == "" {
+		return
+	}
+	st := ICEStats{
+		SessionID:     snap.SessionID,
+		LocalType:     snap.ICELocalCandidateType,
+		RemoteType:    snap.ICERemoteCandidateType,
+		LocalAddr:     snap.ICELocalCandidateAddress,
+		RemoteAddr:    snap.ICERemoteCandidateAddress,
+		IPVersion:     snap.ICEIPVersion,
+		RelayProtocol: snap.ICERelayProtocol,
+		RTTMs:         snap.ICERTTSeconds * 1000,
+		AvailableKbps: snap.ICEAvailableBitrateBits / 1000,
+		BytesSent:     snap.DataChannelBytesSent,
+		BytesReceived: snap.DataChannelBytesReceived,
+		At:            time.Now(),
+	}
+	m.iceMu.Lock()
+	m.ice[snap.SessionID] = st
+	counts := make(map[string]int, len(m.ice))
+	for _, s := range m.ice {
+		counts[s.LocalType]++
+	}
+	m.iceMu.Unlock()
+
+	if m.recorder != nil {
+		m.recorder.ObserveP2PICERTT(st.LocalType, st.RTTMs)
+		for typ, n := range counts {
+			m.recorder.SetP2PICESessions(typ, n)
+		}
+	}
+}
+
+// dropICESession 修剪一条已关闭会话的遥测条目（幂等）。被清空的类型
+// 必须下发 0（series 删除）——只更新剩余类型会让 gauge 滞留旧值。
+func (m *Manager) dropICESession(sessionID string) {
+	m.iceMu.Lock()
+	prev, ok := m.ice[sessionID]
+	delete(m.ice, sessionID)
+	seen := map[string]struct{}{}
+	counts := map[string]int{}
+	if ok && prev.LocalType != "" {
+		seen[prev.LocalType] = struct{}{}
+	}
+	for _, s := range m.ice {
+		seen[s.LocalType] = struct{}{}
+		counts[s.LocalType]++
+	}
+	m.iceMu.Unlock()
+	if !ok {
+		return
+	}
+	if m.recorder != nil {
+		for typ := range seen {
+			m.recorder.SetP2PICESessions(typ, counts[typ])
+		}
+	}
+}
+
+// resetICESessions 整表换新（新信令会话开始——与 resetClients 同节拍）。
+func (m *Manager) resetICESessions() {
+	m.iceMu.Lock()
+	m.ice = make(map[string]ICEStats)
+	m.iceMu.Unlock()
+}
+
+// iceSnapshot 返回 ICE 遥测副本（空表返回 nil——JSON omitempty 不出键）。
+func (m *Manager) iceSnapshot() map[string]ICEStats {
+	m.iceMu.Lock()
+	defer m.iceMu.Unlock()
+	if len(m.ice) == 0 {
+		return nil
+	}
+	out := make(map[string]ICEStats, len(m.ice))
+	for k, v := range m.ice {
+		out[k] = v
+	}
+	return out
+}
+
 // Status 返回 P2P 链路诊断快照。disabled 时仅报 enabled=false。
 func (m *Manager) Status() StatusSnapshot {
 	lim := m.clientCap()
@@ -577,6 +710,7 @@ func (m *Manager) Status() StatusSnapshot {
 		MaxClients:    lim.max,
 		CapSource:     lim.source,
 		RejectedTotal: m.rejectedTotal.Load(),
+		ICESessions:   m.iceSnapshot(),
 	}
 	if m.gate != nil {
 		snap.License = &GateStatus{Allowed: m.gate.Allowed(), State: m.gate.State()}

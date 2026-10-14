@@ -24,6 +24,8 @@ func TestNewMetrics_RegistersRecentCollectors(t *testing.T) {
 	m.PixgateTriggersTotal.WithLabelValues("cam").Inc()
 	m.PixgateLastAreaPct.WithLabelValues("cam").Set(0)
 	m.PixgateLastSampleTimestamp.WithLabelValues("cam").Set(1)
+	m.P2PICESessions.WithLabelValues("host").Set(1)
+	m.P2PICERTTMillis.WithLabelValues("host").Observe(20)
 
 	fams, err := m.Registry.Gather()
 	require.NoError(t, err)
@@ -39,6 +41,8 @@ func TestNewMetrics_RegistersRecentCollectors(t *testing.T) {
 		"nvr_pixgate_triggers_total",
 		"nvr_pixgate_last_area_pct",
 		"nvr_pixgate_last_sample_timestamp_seconds",
+		"nvr_p2p_ice_sessions",
+		"nvr_p2p_ice_rtt_milliseconds",
 	} {
 		require.True(t, registered[name],
 			"%s carries data but is absent from the served registry — registration missing", name)

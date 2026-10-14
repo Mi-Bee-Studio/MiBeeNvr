@@ -670,6 +670,12 @@ observability:
 #   redial_min_interval_s: 30
 #   max_clients: 0                # 0 = license quota, else default 3; strictest wins
 #   device_key: ""                # raw Ed25519 key file; signs every hello
+#   session_idle_timeout_s: 300   # idle session reap (relay zombies); 0 = SDK default 15m, <0 = off
+#   advertise: ""                 # ICE advertised endpoint: "" | "auto" | "auto:<port>"
+#                                 # (UPnP→NAT-PMP→STUN ladder, default port 40000, see journal
+#                                 # component p2p for ladder results) | "<ip>:<port>" for fixed
+#                                 # public endpoints (1:1 DNAT). Unreachable → ICE falls back to
+#                                 # TURN/relay as usual.
 
 # Commercial license. Install/replace via the web UI
 # (Settings → License) or PUT /api/license — hot-applies to the P2P gate.

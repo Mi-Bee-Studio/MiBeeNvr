@@ -328,10 +328,12 @@ func TestICERestart_RetryDriverReapsDeadPeer(t *testing.T) {
 		return !exists
 	}, 5*time.Second, 50*time.Millisecond, "retry driver must reap the session without further ICE events")
 
+	// teardownWithReason 先从注册表删除、后触发 OnSessionClose——Eventually
+	// 观察到删除时回调可能尚未执行，必须阻塞等回调而不是非阻塞探一次。
 	select {
 	case got := <-closed:
 		assert.Equal(t, "retry-test|ice_restart_failed", got)
-	case <-time.After(10 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("OnSessionClose must fire on abandonment")
 	}
 }
@@ -399,7 +401,7 @@ func TestOnSessionClose_FiresOnRemoteClose(t *testing.T) {
 	select {
 	case got := <-closed:
 		assert.Equal(t, "remote-close|peer bye", got)
-	case <-time.After(10 * time.Second):
+	default:
 		t.Fatal("OnSessionClose must fire on remote session_close")
 	}
 

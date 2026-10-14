@@ -1,7 +1,6 @@
 package peer
 
 import (
-	"errors"
 	"fmt"
 	"testing"
 
@@ -45,9 +44,9 @@ func TestSentinelErrors_Distinct(t *testing.T) {
 	for ti, target := range all {
 		for wi, wrapped := range all {
 			if ti == wi {
-				continue
+				continue // self-pairs only; distinct sentinels must not match
 			}
-			assert.Falsef(t, errors.Is(wrapped, target),
+			assert.NotErrorIsf(t, wrapped, target,
 				"errors.Is(%v, %v) should be false — sentinels must be distinct",
 				wrapped, target)
 		}
@@ -60,11 +59,11 @@ func TestSentinelErrors_Distinct(t *testing.T) {
 // caller still matches the root cause.
 func TestSentinelErrors_WrappingPreservesIdentity(t *testing.T) {
 	wrapped := fmt.Errorf("dial failed: server returned 401: %w", ErrAuthFailed)
-	assert.True(t, errors.Is(wrapped, ErrAuthFailed),
+	require.ErrorIs(t, wrapped, ErrAuthFailed,
 		"wrapped ErrAuthFailed must still match via errors.Is")
 
 	wrapped2 := fmt.Errorf("ice agent timed out after 15s: %w", ErrICETimeout)
-	assert.True(t, errors.Is(wrapped2, ErrICETimeout))
+	require.ErrorIs(t, wrapped2, ErrICETimeout)
 }
 
 // TestDialValidation_TypedErrors verifies Dial returns ErrInvalidConfig (not a
@@ -89,7 +88,7 @@ func TestDialValidation_TypedErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Dial(t.Context(), tc.cfg)
 			require.Error(t, err)
-			assert.Truef(t, errors.Is(err, ErrInvalidConfig),
+			assert.ErrorIsf(t, err, ErrInvalidConfig,
 				"expected ErrInvalidConfig, got %v", err)
 		})
 	}

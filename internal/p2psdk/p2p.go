@@ -78,7 +78,7 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	pc, err := newPeerConnection(welcome, cfg.AdvertiseAddr)
+	pc, err := newPeerConnection(welcome, cfg.AdvertiseAddr, p.log())
 	if err != nil {
 		return fmt.Errorf("create pc: %w", err)
 	}
@@ -150,7 +150,7 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	pc, err := newPeerConnection(welcome, cfg.AdvertiseAddr)
+	pc, err := newPeerConnection(welcome, cfg.AdvertiseAddr, p.log())
 	if err != nil {
 		return fmt.Errorf("create pc: %w", err)
 	}
@@ -446,7 +446,15 @@ func (p *p2pSession) startStatsCollectorLocked(pc *webrtc.PeerConnection) {
 		p.statsCollector.Stop()
 	}
 	p.statsCollector = NewStatsCollector(pc, p.log())
-	p.statsCollector.OnStats = p.onStats
+	if p.onStats != nil {
+		// Stamp the session ID into every snapshot: OnStats is one shared
+		// callback for all concurrent sessions of the signaling connection.
+		sid := p.sessionID
+		p.statsCollector.OnStats = func(snap StatsSnapshot) {
+			snap.SessionID = sid
+			p.onStats(snap)
+		}
+	}
 	p.statsCollector.Start()
 }
 
@@ -633,7 +641,7 @@ func stunURLs(welcome *Welcome) []string {
 	return urls
 }
 
-func newPeerConnection(welcome *Welcome, advertiseAddr string) (*webrtc.PeerConnection, error) {
+func newPeerConnection(welcome *Welcome, advertiseAddr string, logger *slog.Logger) (*webrtc.PeerConnection, error) {
 	config := webrtc.Configuration{
 		BundlePolicy:  webrtc.BundlePolicyMaxBundle,
 		RTCPMuxPolicy: webrtc.RTCPMuxPolicyRequire,
@@ -656,8 +664,11 @@ func newPeerConnection(welcome *Welcome, advertiseAddr string) (*webrtc.PeerConn
 	se := hardenedSettingEngine("")
 	// "auto"/"auto:N" resolve per session build via the UPnP→STUN ladder
 	// (autoendpoint.go); resolution failure degrades to "" (no advertisement,
-	// stock ICE + relay fallback) rather than failing the connection.
-	if err := applyAdvertiseAddr(&se, resolveAdvertise(advertiseAddr, stunURLs(welcome))); err != nil {
+	// stock ICE + relay fallback) rather than failing the connection. Ladder
+	// execution and per-rung failures are logged (fresh runs only).
+	res := resolveAdvertiseDetailed(advertiseAddr, stunURLs(welcome))
+	logAdvertiseResolution(logger, res)
+	if err := applyAdvertiseAddr(&se, res.addr); err != nil {
 		return nil, err
 	}
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))

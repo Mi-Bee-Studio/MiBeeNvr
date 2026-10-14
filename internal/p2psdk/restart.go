@@ -25,6 +25,52 @@ const maxICERestartFailures = 3
 // stall and the session would never be reaped.
 var iceRestartRetryInterval = 30 * time.Second
 
+// beginGracePeriod arms the disconnected→restart grace timer: a transient
+// disconnection heals itself; only one persisting past the grace window
+// escalates to a restart offer.
+func (p *p2pSession) beginGracePeriod() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.iceConnected = false
+	p.recoveryStart = time.Now()
+	if p.graceTimer != nil {
+		p.graceTimer.Stop()
+	}
+	p.graceTimer = time.AfterFunc(iceRestartGracePeriod, p.onGraceExpired)
+}
+
+// markICERecovered clears every restart bookkeeping surface and signals
+// watchTransport that the direct path is usable (the DataChannel OnOpen
+// callback also closes iceReady, but on some pion versions the offerer's
+// OnOpen never fires — SCTP association race — so ICE connected is the
+// authoritative signal).
+func (p *p2pSession) markICERecovered() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.iceConnected = true
+	if p.graceTimer != nil {
+		p.graceTimer.Stop()
+		p.graceTimer = nil
+	}
+	if p.restartTimer != nil {
+		p.restartTimer.Stop()
+		p.restartTimer = nil
+	}
+	p.restartFailures = 0
+	if !p.recoveryStart.IsZero() {
+		elapsed := time.Since(p.recoveryStart)
+		p.log().Info("ICE recovered", "duration_seconds", elapsed.Seconds())
+		p.recoveryStart = time.Time{}
+	}
+	if p.iceReady != nil {
+		select {
+		case <-p.iceReady:
+		default:
+			close(p.iceReady)
+		}
+	}
+}
+
 // handleICEStateChange processes ICE connection state transitions for
 // automatic ICE restart (session resilience). Called from pion's ICE
 // management goroutine; must be goroutine-safe.
@@ -34,14 +80,7 @@ var iceRestartRetryInterval = 30 * time.Second
 func (p *p2pSession) handleICEStateChange(state webrtc.ICEConnectionState) {
 	switch state {
 	case webrtc.ICEConnectionStateDisconnected:
-		p.mu.Lock()
-		p.iceConnected = false
-		p.recoveryStart = time.Now()
-		if p.graceTimer != nil {
-			p.graceTimer.Stop()
-		}
-		p.graceTimer = time.AfterFunc(iceRestartGracePeriod, p.onGraceExpired)
-		p.mu.Unlock()
+		p.beginGracePeriod()
 
 	case webrtc.ICEConnectionStateFailed:
 		p.mu.Lock()
@@ -71,37 +110,7 @@ func (p *p2pSession) handleICEStateChange(state webrtc.ICEConnectionState) {
 		p.attemptICERestart()
 
 	case webrtc.ICEConnectionStateConnected:
-		p.mu.Lock()
-		p.iceConnected = true
-		if p.graceTimer != nil {
-			p.graceTimer.Stop()
-			p.graceTimer = nil
-		}
-		if p.restartTimer != nil {
-			p.restartTimer.Stop()
-			p.restartTimer = nil
-		}
-		p.restartFailures = 0
-		if !p.recoveryStart.IsZero() {
-			elapsed := time.Since(p.recoveryStart)
-			p.log().Info(
-				"ICE recovered",
-				"duration_seconds", elapsed.Seconds(),
-			)
-			p.recoveryStart = time.Time{}
-		}
-		// Signal ICE readiness for watchTransport. The DataChannel OnOpen
-		// callback also closes this, but on some pion versions the offerer's
-		// OnOpen never fires (SCTP association race), so ICE connected is the
-		// authoritative signal that the direct path is usable.
-		if p.iceReady != nil {
-			select {
-			case <-p.iceReady:
-			default:
-				close(p.iceReady)
-			}
-		}
-		p.mu.Unlock()
+		p.markICERecovered()
 	case webrtc.ICEConnectionStateUnknown,
 		webrtc.ICEConnectionStateNew,
 		webrtc.ICEConnectionStateChecking,

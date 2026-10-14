@@ -48,8 +48,45 @@ func (s *Session) handleMessage(raw []byte) {
 	case MessageTypePresenceOnline, MessageTypePresenceOffline:
 		// Server scope broadcasts on peer join/leave: informational only.
 		s.logger.Debug("presence broadcast", "type", msg.Type)
+	case MessageTypePeerGone:
+		s.handlePeerGone(msg)
 	default:
 		s.logger.Debug("unhandled message type", "type", msg.Type)
+	}
+}
+
+// handlePeerGone harvests sessions whose remote peer the server declared
+// conclusively dead (#63: resume window expired without a reclaim). This
+// is the device-side half of fast recovery after phone Doze kills a
+// client — without it, dead-viewer sessions linger until the local idle
+// sweep (default 15 min) while new connections pile onto the device's
+// concurrent-session budget.
+func (s *Session) handlePeerGone(msg *Message) {
+	var gone PeerGone
+	if err := UnmarshalPayload(msg, &gone); err != nil {
+		s.logger.Warn("bad peer_gone", "error", err)
+		return
+	}
+	s.logger.Info("peer conclusively offline, harvesting its sessions",
+		"peer_id", gone.PeerID,
+		"session_id", gone.SessionID,
+		"reason", gone.Reason,
+	)
+
+	s.mu.RLock()
+	var victims []*p2pSession
+	for id, p2p := range s.peers {
+		if gone.SessionID != "" && id != gone.SessionID {
+			continue
+		}
+		if p2p.remotePeerID == gone.PeerID || gone.SessionID == id {
+			victims = append(victims, p2p)
+		}
+	}
+	s.mu.RUnlock()
+
+	for _, p2p := range victims {
+		p2p.teardownWithReason("peer_gone")
 	}
 }
 

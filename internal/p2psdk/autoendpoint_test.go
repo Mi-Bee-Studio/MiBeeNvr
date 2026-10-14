@@ -113,9 +113,9 @@ func TestAutoEndpointLadderPMPMiddle(t *testing.T) {
 	h2, _ := fakeAutoHooks()
 	h2.pmpMapping = func(int) (string, error) { return "", errors.New("no pmp") }
 	st := &autoEndpointState{}
-	addr, err := st.resolve(40000, []string{"stun:8.134.136.138:13477"}, h2)
-	if err != nil || addr != "121.8.2.41:40000" {
-		t.Fatalf("pmp-fail → stun: addr=%q err=%v", addr, err)
+	res := st.resolve(40000, []string{"stun:8.134.136.138:13477"}, h2)
+	if res.addr != "121.8.2.41:40000" || res.mode != "stun" {
+		t.Fatalf("pmp-fail → stun: %+v", res)
 	}
 	if st.mode != "stun" {
 		t.Fatalf("mode=%q want stun", st.mode)
@@ -132,9 +132,9 @@ func TestAutoEndpointLadderSTUNFallback(t *testing.T) {
 	autoEndpoint.mu.Unlock()
 
 	st := &autoEndpointState{}
-	addr, err := st.resolve(40000, []string{"stun:8.134.136.138:13477", "turn:x:1"}, h)
-	if err != nil || addr != "121.8.2.41:40000" {
-		t.Fatalf("stun fallback: addr=%q err=%v", addr, err)
+	res := st.resolve(40000, []string{"stun:8.134.136.138:13477", "turn:x:1"}, h)
+	if res.addr != "121.8.2.41:40000" || res.mode != "stun" {
+		t.Fatalf("stun fallback: %+v", res)
 	}
 	if st.mode != "stun" {
 		t.Fatalf("mode=%q want stun", st.mode)
@@ -150,11 +150,11 @@ func TestAutoEndpointNegativeCache(t *testing.T) {
 	h.stunQuery = func(string, time.Duration) (string, error) {
 		return "", errors.New("stun down")
 	}
-	if addr, err := st.resolve(40000, []string{"stun:1.2.3.4:3478"}, h); addr != "" || err == nil {
-		t.Fatalf("total failure must yield empty addr, got %q/%v", addr, err)
+	if res := st.resolve(40000, []string{"stun:1.2.3.4:3478"}, h); res.addr != "" || !res.fresh || res.upnpErr == nil {
+		t.Fatalf("total failure must yield empty fresh addr with causes, got %+v", res)
 	}
 	n := len(*calls)
-	if addr, _ := st.resolve(40000, []string{"stun:1.2.3.4:3478"}, h); addr != "" {
+	if res := st.resolve(40000, []string{"stun:1.2.3.4:3478"}, h); res.addr != "" || res.fresh {
 		t.Fatal("negative cache must hold")
 	}
 	if len(*calls) != n {
@@ -165,9 +165,8 @@ func TestAutoEndpointNegativeCache(t *testing.T) {
 	h.externalIP = func(*UPnPGateway) (string, error) { return "203.0.113.7", nil }
 	h.addMapping = func(*UPnPGateway, int, int, int) error { return nil }
 	st.expires = time.Now().Add(-time.Second)
-	addr, err := st.resolve(40000, nil, h)
-	if err != nil || addr != "203.0.113.7:40000" {
-		t.Fatalf("adaptive upgrade failed: %q/%v", addr, err)
+	if res := st.resolve(40000, nil, h); res.addr != "203.0.113.7:40000" || res.mode != "upnp" {
+		t.Fatalf("adaptive upgrade failed: %+v", res)
 	}
 }
 
@@ -191,5 +190,6 @@ func resetAutoEndpoint(t *testing.T) {
 	autoEndpoint.mu.Lock()
 	autoEndpoint.addr, autoEndpoint.mode, autoEndpoint.port, autoEndpoint.gw, autoEndpoint.resolved = "", "", 0, nil, false
 	autoEndpoint.expires = time.Time{}
+	autoEndpoint.upnpErr, autoEndpoint.pmpErr, autoEndpoint.stunErr = nil, nil, nil
 	autoEndpoint.mu.Unlock()
 }

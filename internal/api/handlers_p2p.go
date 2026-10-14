@@ -52,6 +52,7 @@ func (h *Handler) handleGetP2PSettings(w http.ResponseWriter, _ *http.Request) {
 		"transport_timeout_s":   c.TransportTimeoutSec,
 		"max_clients":           c.MaxClients,
 		"device_key_configured": c.DeviceKeyPath != "",
+		"advertise":             c.Advertise,
 	})
 }
 
@@ -75,13 +76,19 @@ func (h *Handler) handleUpdateP2PSettings(w http.ResponseWriter, r *http.Request
 		ClearCredentials    *bool   `json:"clear_credentials"`
 		TransportTimeoutSec *int    `json:"transport_timeout_s"`
 		MaxClients          *int    `json:"max_clients"`
+		Advertise           *string `json:"advertise"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	// 副本上应用+校验，通过才提交内存与磁盘——被拒请求不得留下脏内存
+	// （预存缺陷：此前直接改 h.config.P2P，校验 400 后内存已被污染，
+	// 下一次成功 PUT 会把污染值一并落盘/热应用）。
 	c := &h.config.P2P
+	next := *c
+	c = &next
 	if body.Enabled != nil {
 		c.Enabled = *body.Enabled
 	}
@@ -112,17 +119,21 @@ func (h *Handler) handleUpdateP2PSettings(w http.ResponseWriter, r *http.Request
 	if body.MaxClients != nil {
 		c.MaxClients = *body.MaxClients
 	}
+	if body.Advertise != nil {
+		c.Advertise = strings.TrimSpace(*body.Advertise)
+	}
 	// peer_id 留空 = 安装级默认（Server.DeviceID，与 App 侧发现锚点同源）。
 	if c.PeerID == "" {
 		c.PeerID = h.config.Server.DeviceID
 	}
 
 	// 落盘前预检（server_url 形态/凭据完备性/max_clients 范围/device_key
-	// 文件存在性）；坏配置不落盘不应用。
-	if err := h.config.ValidateP2P(); err != nil {
+	// 文件存在性/advertise 形态）；坏配置不落盘不应用。
+	if err := config.ValidateP2PConfig(c); err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	h.config.P2P = next
 	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 		WriteError(w, http.StatusInternalServerError, "failed to save config")

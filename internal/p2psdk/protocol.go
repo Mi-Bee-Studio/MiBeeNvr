@@ -42,6 +42,9 @@ const (
 	// every scope member on join/leave.
 	MessageTypePresenceOnline  MessageType = "presence_online"
 	MessageTypePresenceOffline MessageType = "presence_offline"
+	// MessageTypePeerGone: server-side conclusive death verdict (#63) —
+	// the peer's resume window expired; harvest sessions immediately.
+	MessageTypePeerGone MessageType = "peer_gone"
 )
 
 // Message is the common envelope for all signaling messages.
@@ -183,6 +186,17 @@ type SyncState struct {
 	LastSeenSeq uint64 `json:"last_seen_seq"`
 }
 
+// PeerGone is the server's conclusive-death verdict for a peer (#63): its
+// resume window expired. Sessions riding that peer should be torn down
+// immediately — a resume attempt against it cannot succeed.
+//
+//nolint:revive // name parity with the server protocol type (v1.md §2.16a)
+type PeerGone struct {
+	PeerID    string `json:"peer_id"`
+	SessionID string `json:"session_id,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // ── Marshal / Parse helpers ─────────────────────────────────────────────────
 
 // Marshal creates a JSON byte slice from a message type and payload.
@@ -230,7 +244,7 @@ func ParseAndValidate(raw []byte) (*Message, error) {
 		MessageTypeSDPOffer, MessageTypeSDPAnswer, MessageTypeICECandidate,
 		MessageTypeSessionOpen, MessageTypeSessionClose,
 		MessageTypePing, MessageTypePong, MessageTypeSignalResume,
-		MessageTypePresenceOnline, MessageTypePresenceOffline:
+		MessageTypePresenceOnline, MessageTypePresenceOffline, MessageTypePeerGone:
 		// valid
 	default:
 		return nil, fmt.Errorf("invalid message type: %s", msg.Type)

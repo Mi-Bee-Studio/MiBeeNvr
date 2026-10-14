@@ -268,12 +268,24 @@ func DeriveTokenEndpoint(serverURL string) string {
 	}
 	switch u.Scheme {
 	case "wss":
-		return fmt.Sprintf("https://%s/oidc/token", u.Hostname())
+		return "https://" + deriveOrigin(u) + "/oidc/token"
 	case "ws":
-		return fmt.Sprintf("http://%s/oidc/token", u.Host)
+		return "http://" + deriveOrigin(u) + "/oidc/token"
 	default:
 		return ""
 	}
+}
+
+// deriveOrigin returns the host[:port] of a parsed server URL. Explicit ports
+// are preserved: a signaling server on wss://h:8443 serves its OIDC stack on
+// the same origin — dropping the port silently aimed every token/enroll/grant
+// call at :443 (home-lab/mibee-nvr #11; only deployments without an explicit
+// port stay on the scheme default).
+func deriveOrigin(u *url.URL) string {
+	if u.Port() == "" {
+		return u.Hostname()
+	}
+	return u.Host
 }
 
 // StatePathFor 返回给定 config 路径旁的 token state 文件路径。

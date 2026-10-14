@@ -171,7 +171,8 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		MessageTypeSDPAnswer, MessageTypeICECandidate,
 		MessageTypeSessionOpen, MessageTypeSessionClose,
 		MessageTypePing, MessageTypePong,
-		MessageTypePresenceOnline, MessageTypePresenceOffline:
+		MessageTypePresenceOnline, MessageTypePresenceOffline,
+		MessageTypePeerGone:
 		return
 	}
 
@@ -279,7 +280,7 @@ func (s *mockSignalServer) routeMessage(sender *websocket.Conn, msg *Message) bo
 		s.mu.Unlock()
 		return true
 	case MessageTypeHello, MessageTypeWelcome, MessageTypeError, MessageTypeSignalResume,
-		MessageTypePong, MessageTypePresenceOnline, MessageTypePresenceOffline:
+		MessageTypePong, MessageTypePresenceOnline, MessageTypePresenceOffline, MessageTypePeerGone:
 		// Already handled during initial handshake or not expected; continue.
 		return true
 	}

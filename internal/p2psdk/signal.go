@@ -77,6 +77,12 @@ type signalingClient struct {
 	// not hammer both sides at the normal reconnect pace).
 	connectedAt      time.Time
 	shortLivedStreak int
+
+	// #66 auth-class close state: authTerminal stops the reconnect ladder
+	// (no fresh credential can fix the verdict); authFailStreak bounds
+	// re-mint retries for mintable verdicts when TokenFunc is set.
+	authTerminal   atomic.Bool
+	authFailStreak int
 }
 
 // #35 ② thresholds: a session shorter than shortLivedThreshold counts against
@@ -157,17 +163,14 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 	sc.lastWriteAt = sc.connectedAt // the hello itself is traffic
 	sc.connMu.Unlock()
 
-	// Send hello
-	jwt, err := sc.helloJWT(true)
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("token: %w", err)
-	}
+	// Send hello — the JWT is minted fresh when TokenFunc is set (#66):
+	// server tokens are single-use, so the static config JWT is only the
+	// first-connection credential.
 	hello := Hello{
 		ProductID: sc.cfg.ProductID,
 		PeerID:    sc.cfg.PeerID,
 		Role:      sc.cfg.Role,
-		JWT:       jwt,
+		JWT:       sc.currentJWT(),
 		Signature: sc.deviceHelloSignature(),
 	}
 	helloData, err := Marshal(MessageTypeHello, hello)
@@ -186,6 +189,10 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
 		_ = conn.Close()
+		if cls := classifyCloseError(err); cls != authCloseNone {
+			sc.noteAuthClassClose(cls)
+			return nil, fmt.Errorf("%w: server rejected hello: %w", ErrAuthFailed, err)
+		}
 		return nil, fmt.Errorf("read welcome: %w", err)
 	}
 	msg, err := ParseAndValidate(raw)
@@ -307,17 +314,18 @@ func (sc *signalingClient) recvLoop() {
 			// #35 ②：结算本次连接存活并打点重连原因（崩溃循环观测）。
 			sc.connMu.Lock()
 			sc.conn = nil
-			lifetime := time.Duration(0)
-			if !sc.connectedAt.IsZero() {
-				lifetime = time.Since(sc.connectedAt)
-			}
+			lifetime := sc.lifetimeLocked()
 			sc.connMu.Unlock()
 			sc.recordSessionLifetime(lifetime)
 			_ = conn.Close()
-			if sc.onClose != nil {
-				sc.onClose(err)
-			}
+			sc.notifyClose(err)
 			if sc.reconnect.Load() {
+				if sc.authClassAbandoned(err) {
+					sc.logger.Warn("reconnect ladder abandoned: auth-class close",
+						"reason", err.Error(),
+					)
+					return
+				}
 				sc.logger.Info("reconnect scheduled",
 					"reason", err.Error(),
 					"lifetime_s", lifetime.Seconds(),
@@ -378,144 +386,127 @@ func (sc *signalingClient) reconnectWithBackoff() {
 		default:
 		}
 
-		delay := time.Duration(math.Min(
-			float64(baseDelay)*math.Pow(2, float64(attempt)),
-			float64(maxDelay),
-		))
-		// #35 ②：短命会话连击时叠加冷却（与指数退避取 max——单次正常
-		// 闪断的恢复速度不受影响，只有崩溃循环被压速）。
-		if cd := sc.currentReconnectCooldown(); cd > delay {
-			delay = cd
-		}
-
+		delay := reconnectDelay(attempt, baseDelay, maxDelay, sc.currentReconnectCooldown())
 		sc.logger.Info("reconnecting", "attempt", attempt+1, "delay", delay)
-
 		select {
 		case <-sc.closeCh:
 			return
 		case <-time.After(delay):
 		}
 
-		dialer := &websocket.Dialer{
-			TLSClientConfig:  sc.cfg.TLSConfig,
-			HandshakeTimeout: sc.cfg.handshakeTimeout(),
+		if sc.reconnectAttempt(attempt) {
+			return // reconnected (resume or full hello) or ladder abandoned
 		}
-		conn, resp, err := dialer.Dial(sc.cfg.ServerURL, http.Header{})
-		if err != nil {
-			sc.logger.Warn("reconnect dial failed", "attempt", attempt+1, "error", err)
-			continue
-		}
-		_ = resp.Body.Close()
+	}
+}
 
-		// ── Attempt session resume if we have a session ID ────────────
-		if sc.lastSessionID != "" {
-			if sc.tryResume(conn) {
-				sc.logger.Info("reconnected")
-				if sc.onReconnect != nil {
-					sc.onReconnect()
-				}
-				return
-			}
-			// Resume rejected — the server closed the connection after the
-			// failed attempt, so redial and do a full hello handshake instead
-			// of retrying resume forever (the resume window is single-use).
-			sc.logger.Debug("resume failed, falling back to full handshake")
-			_ = conn.Close()
-			conn, resp, err = dialer.Dial(sc.cfg.ServerURL, http.Header{})
-			if err != nil {
-				sc.logger.Warn("reconnect dial failed", "attempt", attempt+1, "error", err)
-				continue
-			}
-			_ = resp.Body.Close()
-		}
+// reconnectDelay is one ladder step's backoff: exponential from baseDelay
+// capped at maxDelay, raised to the short-lived-streak cooldown when that
+// is higher (#35 ② — a single normal flash-cut keeps its fast recovery,
+// only crash loops get throttled).
+func reconnectDelay(attempt int, baseDelay, maxDelay, cooldown time.Duration) time.Duration {
+	delay := time.Duration(math.Min(
+		float64(baseDelay)*math.Pow(2, float64(attempt)),
+		float64(maxDelay),
+	))
+	if cooldown > delay {
+		return cooldown
+	}
+	return delay
+}
 
-		// ── Full hello handshake ──────────────────────────────────────
-		jwt, err := sc.helloJWT(false)
-		if err != nil {
-			sc.logger.Warn("token refresh failed; deferring attempt",
-				"attempt", attempt+1, "error", err)
-			continue
-		}
-		hello := Hello{
-			ProductID: sc.cfg.ProductID,
-			PeerID:    sc.cfg.PeerID,
-			Role:      sc.cfg.Role,
-			JWT:       jwt,
-			Signature: sc.deviceHelloSignature(),
-		}
-		helloData, err := Marshal(MessageTypeHello, hello)
-		if err != nil {
-			sc.logger.Warn("reconnect hello marshal failed", "error", err)
-			_ = conn.Close()
-			continue
-		}
-		_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-		if err := conn.WriteMessage(websocket.TextMessage, helloData); err != nil {
-			sc.logger.Warn("reconnect hello send failed", "attempt", attempt+1, "error", err)
-			_ = conn.Close()
-			continue
-		}
+// reconnectAttempt performs one ladder step: dial, optional resume, full
+// hello. Returns true when the ladder must stop (success or abandonment).
+func (sc *signalingClient) reconnectAttempt(attempt int) bool {
+	dialer := &websocket.Dialer{
+		TLSClientConfig:  sc.cfg.TLSConfig,
+		HandshakeTimeout: sc.cfg.handshakeTimeout(),
+	}
+	conn, resp, err := dialer.Dial(sc.cfg.ServerURL, http.Header{})
+	if err != nil {
+		sc.logger.Warn("reconnect dial failed", "attempt", attempt+1, "error", err)
+		return false
+	}
+	_ = resp.Body.Close()
 
-		// Read welcome
-		_ = conn.SetReadDeadline(time.Now().Add(sc.cfg.readTimeout()))
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			sc.logger.Warn("reconnect hello rejected", "attempt", attempt+1, "error", err)
-			_ = conn.Close()
-			// Auth-class rejection with no refresher: the static JWT can
-			// never satisfy the server — spinning at backoff forever just
-			// hides the outage (2026-10-14 production: 48 silent attempts).
-			// Give up the ladder; the session owner's watchdog/Close must
-			// redial with fresh credentials. With TokenFunc the next
-			// attempt mints a fresh token, so keep retrying.
-			if isAuthClassClose(err) && sc.cfg.TokenFunc == nil {
-				sc.logger.Warn("auth-class rejection with static JWT; abandoning reconnect ladder")
-				return
-			}
-			continue
+	// ── Attempt session resume if we have a session ID ────────────
+	if sc.lastSessionID != "" {
+		resumed, rconn, rerr := sc.tryResumeOrRedial(dialer, conn, attempt)
+		if rerr != nil {
+			return false
 		}
-		msg, err := ParseAndValidate(raw)
-		if err != nil {
-			sc.logger.Warn("reconnect welcome parse failed", "attempt", attempt+1, "error", err)
-			_ = conn.Close()
-			continue
+		if resumed {
+			sc.fireOnReconnect()
+			return true
 		}
-		if msg.Type != MessageTypeWelcome {
-			if msg.Type == MessageTypeError {
-				var errMsg ErrorMsg
-				if e := UnmarshalPayload(msg, &errMsg); e == nil {
-					sc.logger.Warn("server error in response to reconnect hello",
-						"code", errMsg.Code, "message", errMsg.Message)
-				}
-			} else {
-				sc.logger.Warn("expected welcome on reconnect", "got", msg.Type)
-			}
-			_ = conn.Close()
-			continue
-		}
-		var welcome Welcome
-		if err := UnmarshalPayload(msg, &welcome); err != nil {
-			sc.logger.Warn("reconnect welcome payload failed", "error", err)
-			_ = conn.Close()
-			continue
-		}
+		conn = rconn
+	}
+	return sc.helloReconnect(conn)
+}
 
-		sc.connMu.Lock()
-		sc.conn = conn
-		sc.lastSessionID = welcome.SessionID
-		// Reset done channel for the new recvLoop (the previous one was closed
-		// on exit). Under connMu: close() snapshots sc.done under the same
-		// lock — an unlocked swap is a data race, and a stale snapshot would
-		// let close() return while the fresh recvLoop still runs.
-		sc.done = make(chan struct{})
-		sc.connMu.Unlock()
+// helloReconnect completes a full hello handshake on a live connection and
+// installs it. Returns true when the ladder must stop: success, or a
+// terminal auth verdict (#66 — mintable verdicts already re-minted by the
+// caller's TokenFunc keep the ladder going).
+func (sc *signalingClient) helloReconnect(conn *websocket.Conn) bool {
+	if sc.authTerminal.Load() {
+		sc.logger.Warn("reconnect ladder abandoned: auth-class close")
+		return true
+	}
+	hello := Hello{
+		ProductID: sc.cfg.ProductID,
+		PeerID:    sc.cfg.PeerID,
+		Role:      sc.cfg.Role,
+		JWT:       sc.currentJWT(),
+		Signature: sc.deviceHelloSignature(),
+	}
+	helloData, err := Marshal(MessageTypeHello, hello)
+	if err != nil {
+		_ = conn.Close()
+		return false
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err := conn.WriteMessage(websocket.TextMessage, helloData); err != nil {
+		_ = conn.Close()
+		return false
+	}
 
-		sc.logger.Info("reconnected")
-		if sc.onReconnect != nil {
-			sc.onReconnect()
-		}
-		go sc.recvLoop()
-		return
+	// Read welcome; an auth-class close triages the ladder (#66).
+	msg, rerr := sc.readWelcomeOrClose(conn)
+	if rerr != nil {
+		var stop authLadderStop
+		return errors.As(rerr, &stop)
+	}
+	var welcome Welcome
+	if err := UnmarshalPayload(msg, &welcome); err != nil {
+		_ = conn.Close()
+		return false
+	}
+
+	sc.adoptReconnectedConn(conn, welcome.SessionID)
+	sc.fireOnReconnect()
+	go sc.recvLoop()
+	return true
+}
+
+// adoptReconnectedConn installs a freshly handshaked connection for the
+// recvLoop. Under connMu: close() snapshots sc.done under the same lock —
+// an unlocked swap is a data race, and a stale snapshot would let close()
+// return while the fresh recvLoop still runs.
+func (sc *signalingClient) adoptReconnectedConn(conn *websocket.Conn, sessionID string) {
+	sc.connMu.Lock()
+	defer sc.connMu.Unlock()
+	sc.conn = conn
+	sc.lastSessionID = sessionID
+	sc.done = make(chan struct{})
+	sc.authFailStreak = 0
+}
+
+// fireOnReconnect notifies the application that the link recovered.
+func (sc *signalingClient) fireOnReconnect() {
+	sc.logger.Info("reconnected")
+	if sc.onReconnect != nil {
+		sc.onReconnect()
 	}
 }
 
@@ -594,6 +585,54 @@ func (sc *signalingClient) close() {
 // with the configured device key. The claims are read from the JWT's own
 // payload (unverified locally; the server verifies the token signature).
 // Returns "" when no key is configured or the payload is unreadable.
+// currentJWT returns the JWT for the next hello (#66): TokenFunc mint when
+// available (server tokens are single-use), static config JWT otherwise.
+func (sc *signalingClient) currentJWT() string {
+	if sc.cfg.TokenFunc == nil {
+		return sc.cfg.JWT
+	}
+	fresh, err := sc.cfg.TokenFunc()
+	if err != nil || fresh == "" {
+		sc.logger.Warn("TokenFunc mint failed, falling back to static JWT", "error", err)
+		return sc.cfg.JWT
+	}
+	return fresh
+}
+
+// noteAuthClassClose records an auth-class server verdict and decides whether
+// the reconnect ladder must stop (#66). Terminal verdicts always stop.
+// Mintable verdicts (token_expired / token_replayed) stop unless a TokenFunc
+// can re-mint — and even then after maxAuthRemintFailures consecutive
+// mint-and-fail cycles, so a persistently failing mint doesn't loop forever.
+// The return value is "stop the ladder".
+func (sc *signalingClient) noteAuthClassClose(cls authCloseClass) bool {
+	sc.connMu.Lock()
+	defer sc.connMu.Unlock()
+	switch cls {
+	case authCloseTerminal:
+		sc.authTerminal.Store(true)
+		return true
+	case authCloseMintable:
+		if sc.cfg.TokenFunc == nil {
+			sc.authTerminal.Store(true)
+			return true
+		}
+		sc.authFailStreak++
+		if sc.authFailStreak >= maxAuthRemintFailures {
+			sc.authTerminal.Store(true)
+			return true
+		}
+		return false
+	case authCloseNone:
+		return false
+	default:
+		return false
+	}
+}
+
+// maxAuthRemintFailures bounds mintable-verdict re-mint retries.
+const maxAuthRemintFailures = 3
+
 func (sc *signalingClient) deviceHelloSignature() string {
 	if sc.deviceKey == nil || sc.cfg.Role != "device" {
 		return ""
@@ -640,42 +679,85 @@ func splitJWT(token string) []string {
 	return strings.Split(token, ".")
 }
 
-// helloJWT resolves the JWT for a full hello handshake. The initial connect
-// prefers the static cfg.JWT when present — session owners like the NVR
-// Manager mint it immediately before Dial, so consulting TokenFunc again
-// would double-mint inside the anti-hammer interval and fail every first
-// dial. Ladder attempts (initial=false) always re-mint via TokenFunc when
-// wired: by then the Dial-time token may be hours past its TTL.
-func (sc *signalingClient) helloJWT(initial bool) (string, error) {
-	if initial && sc.cfg.JWT != "" {
-		return sc.cfg.JWT, nil
+// authLadderStop is the typed signal that readWelcomeOrClose wants the
+// reconnect ladder terminated (terminal auth verdict).
+type authLadderStop struct{ reason string }
+
+func (authLadderStop) Error() string { return "ladder abandoned" }
+
+// readWelcomeOrClose reads the welcome on a freshly dialed ladder
+// connection. A non-nil error that is NOT authLadderStop means "retry the
+// ladder"; authLadderStop means "abandon" (#66).
+func (sc *signalingClient) readWelcomeOrClose(conn *websocket.Conn) (*Message, error) {
+	_ = conn.SetReadDeadline(time.Now().Add(sc.cfg.readTimeout()))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		_ = conn.Close()
+		if cls := classifyCloseError(err); cls != authCloseNone {
+			if sc.noteAuthClassClose(cls) {
+				sc.logger.Warn("reconnect ladder abandoned: auth-class close",
+					"reason", err.Error())
+				return nil, authLadderStop{reason: err.Error()}
+			}
+		}
+		return nil, err
 	}
-	if sc.cfg.TokenFunc != nil {
-		return sc.cfg.TokenFunc()
+	msg, err := ParseAndValidate(raw)
+	if err != nil || msg.Type != MessageTypeWelcome {
+		_ = conn.Close()
+		return nil, errNotWelcome
 	}
-	return sc.cfg.JWT, nil
+	return msg, nil
 }
 
-// isAuthClassClose reports whether a hello-phase error carries an auth-class
-// close reason from the server ("authentication_failed", "subject_revoked",
-// …). The server rejects bad hellos by closing the WebSocket with the reason
-// as close text (no protocol error frame), and gorilla surfaces that text in
-// the error string.
-func isAuthClassClose(err error) bool {
-	if err == nil {
-		return false
+// errNotWelcome marks a ladder attempt whose answer was not a welcome.
+var errNotWelcome = errors.New("signaling answer was not a welcome")
+
+// tryResumeOrRedial attempts signal_resume on a freshly dialed connection;
+// when the resume is rejected (single-use window miss) it redials for a
+// full hello. Returns (resumed=true, liveConn) on resume success,
+// (false, redialedConn) for the hello path, or an error when both dials
+// failed and the ladder should advance to the next attempt.
+func (sc *signalingClient) tryResumeOrRedial(
+	dialer *websocket.Dialer, conn *websocket.Conn, attempt int,
+) (bool, *websocket.Conn, error) {
+	if sc.tryResume(conn) {
+		return true, conn, nil
 	}
-	msg := err.Error()
-	for _, s := range []string{
-		"authentication_failed",
-		"subject_revoked",
-		"token_expired",
-		"invalid_token",
-		"unauthorized",
-	} {
-		if strings.Contains(msg, s) {
-			return true
-		}
+	// Resume rejected — the server closed the connection after the failed
+	// attempt, so redial for a full hello instead of retrying resume
+	// forever (the resume window is single-use).
+	sc.logger.Debug("resume failed, falling back to full handshake")
+	_ = conn.Close()
+	redialed, resp, err := dialer.Dial(sc.cfg.ServerURL, http.Header{})
+	if err != nil {
+		sc.logger.Warn("reconnect dial failed", "attempt", attempt+1, "error", err)
+		return false, nil, err
 	}
-	return false
+	_ = resp.Body.Close()
+	return false, redialed, nil
+}
+
+// authClassAbandoned classifies a connection-loss error and records the
+// verdict: true means the ladder must stop (#66 — terminal verdict, or a
+// mintable one past the re-mint budget / without a TokenFunc).
+func (sc *signalingClient) authClassAbandoned(err error) bool {
+	cls := classifyCloseError(err)
+	return cls != authCloseNone && sc.noteAuthClassClose(cls)
+}
+
+// lifetimeLocked returns the age of the connection being torn down; the
+// caller holds connMu (zero connectedAt counts as never-lived).
+func (sc *signalingClient) lifetimeLocked() time.Duration {
+	if sc.connectedAt.IsZero() {
+		return 0
+	}
+	return time.Since(sc.connectedAt)
+}
+
+// notifyClose fires the OnDisconnect callback when registered.
+func (sc *signalingClient) notifyClose(err error) {
+	if cb := sc.onClose; cb != nil {
+		cb(err)
+	}
 }
