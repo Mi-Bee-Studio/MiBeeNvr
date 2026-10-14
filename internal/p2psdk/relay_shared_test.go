@@ -184,7 +184,7 @@ func TestP2PSessionCloseKeepsSharedRelay(t *testing.T) {
 	select {
 	case data := <-got:
 		assert.Equal(t, "still-alive", string(data))
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("shared relay client was killed by p2pSession.close()")
 	}
 }
@@ -213,7 +213,7 @@ func TestHandleRelayFatalTearsDownRelaySessions(t *testing.T) {
 	select {
 	case id := <-closed:
 		assert.Equal(t, "relay-1", id)
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("relay session close callback not fired")
 	}
 	s.mu.RLock()

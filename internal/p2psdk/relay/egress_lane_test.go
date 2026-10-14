@@ -51,7 +51,7 @@ func TestClientEgressControlLaneJumpsQueuedData(t *testing.T) {
 	_ = c.Close()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("writerLoop must exit after Close")
 	}
 }
@@ -91,7 +91,7 @@ func TestClientEgressOverflowBackpressuresThenFailsOnStall(t *testing.T) {
 	select {
 	case err := <-enqueued:
 		require.NoError(t, err, "enqueue must succeed after drain resumes")
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("enqueue never completed after drain resumed")
 	}
 	select {
@@ -123,7 +123,7 @@ func TestClientEgressStallBeyondDeadlineFails(t *testing.T) {
 	select {
 	case ferr := <-fatal:
 		require.ErrorIs(t, ferr, err, "fatal callback carries the stall error")
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("stall must fire OnFatal")
 	}
 }

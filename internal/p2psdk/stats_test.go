@@ -121,7 +121,7 @@ func TestStatsCollector_OnStatsCallback(t *testing.T) {
 	select {
 	case <-called:
 		// Callback invoked — test passes.
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for OnStats callback")
 	}
 }

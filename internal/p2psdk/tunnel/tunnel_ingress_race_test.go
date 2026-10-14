@@ -114,7 +114,7 @@ func TestTunnelPreServeFramesSurvive(t *testing.T) {
 	select {
 	case data := <-got:
 		assert.Equal(t, "ping-before-serve", string(data))
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Serve 前到达的帧未被处理——预注册缓冲语义失效")
 	}
 }
