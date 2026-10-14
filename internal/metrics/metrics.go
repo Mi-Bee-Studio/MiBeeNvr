@@ -170,8 +170,9 @@ type Metrics struct {
 	// makes "direct-connection rate" a measurable product metric instead of a
 	// guess, and the ICE RTT histogram separates transport quality from
 	// app-layer amplification (app_rtt seconds vs ICE RTT milliseconds).
-	P2PICESessions  *prometheus.GaugeVec     // labels: local_type (host|srflx|prflx|relay=TURN) — current sessions per type
-	P2PICERTTMillis *prometheus.HistogramVec // nominated ICE pair RTT in milliseconds
+	P2PICESessions         *prometheus.GaugeVec     // labels: local_type (host|srflx|prflx|relay=TURN) — current sessions per type
+	P2PICERTTMillis        *prometheus.HistogramVec // nominated ICE pair RTT in milliseconds
+	P2PTunnelDroppedFrames prometheus.Gauge         // nvr_p2p_tunnel_dropped_frames — cumulative inbound tunnel frames dropped at delivery queues
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -692,6 +693,11 @@ func NewMetrics() *Metrics {
 		Buckets: []float64{5, 10, 20, 40, 80, 160, 320, 640, 1280},
 	}, []string{"local_type"})
 
+	p2pTunnelDropped := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_p2p_tunnel_dropped_frames",
+		Help: "Cumulative inbound tunnel frames dropped at stream delivery queues (queue full = peer consumer stalled; ordered streams cannot back-pressure). Sustained growth with live sessions = the client is not draining, not a link error.",
+	})
+
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -794,6 +800,7 @@ func NewMetrics() *Metrics {
 		resolvedEncoding,
 		p2pICESessions,
 		p2pICERTTMillis,
+		p2pTunnelDropped,
 
 		// Rolling bucket retention (#764) + pixgate sampler telemetry (#699).
 		// These were shipped UNREGISTERED in #783/#786 — the collectors
@@ -916,6 +923,7 @@ func NewMetrics() *Metrics {
 		ResolvedEncoding:               resolvedEncoding,
 		P2PICESessions:                 p2pICESessions,
 		P2PICERTTMillis:                p2pICERTTMillis,
+		P2PTunnelDroppedFrames:         p2pTunnelDropped,
 	}
 }
 
@@ -1104,4 +1112,13 @@ func (m *Metrics) IncRecordingDeepCheck(cameraID, result string) {
 		return
 	}
 	m.RecordingDeepCheckTotal.WithLabelValues(cameraID, result).Inc()
+}
+
+// SetP2PTunnelDroppedFrames publishes the cumulative tunnel drop counter
+// (nil-safe; negative values are ignored).
+func (m *Metrics) SetP2PTunnelDroppedFrames(total uint64) {
+	if m == nil || m.P2PTunnelDroppedFrames == nil {
+		return
+	}
+	m.P2PTunnelDroppedFrames.Set(float64(total))
 }

@@ -91,6 +91,25 @@ type P2PConfig struct {
 	// 通告失败不破连通性。阶梯执行与结果记 journal（组件 p2p）。
 	Advertise string `yaml:"advertise"`
 
+	// ICE 计时器（毫秒；0 = 库默认：keepalive 2s / connected→disconnected
+	// 5s / disconnected→failed 25s）。高抖动链路（弱 5G/地铁/跨境
+	// 300-500ms RTT）的 p99 尖峰会被库默认读成链路死亡——ICE restart
+	// 抖动而非容忍。可只调其中一项（其余回落库默认）。全 0 = 与历史
+	// 行为逐字节一致。
+	ICEKeepaliveIntervalMS   int `yaml:"ice_keepalive_interval_ms"`
+	ICEDisconnectedTimeoutMS int `yaml:"ice_disconnected_timeout_ms"`
+	ICEFailedTimeoutMS       int `yaml:"ice_failed_timeout_ms"`
+
+	// ICEReceiveMTU 覆盖 ICE 接收 MTU（字节；0 = 库默认）。小 MTU 路径
+	// （PPPoE/部分企业出口）可调；无 RFC 8829 协商，是静态旋钮。
+	ICEReceiveMTU int `yaml:"ice_receive_mtu"`
+
+	// TunnelMaxPayloadBytes 覆盖隧道分片大小（字节；0 = 默认 32KiB——
+	// 24h 跨段 WiFi 实测 32KiB 上行吞吐比 16KiB 高 ~20%）。接收方不校验
+	// 分片大小，两端不同设置互通；上限 32KiB 由 SCTP 64KiB 消息天花板
+	// 约束（base64 膨胀 4/3）。
+	TunnelMaxPayloadBytes int `yaml:"tunnel_max_payload_bytes"`
+
 	// Association 是「App 发起账号授权关联」的本地状态（产品化 M1，
 	// docs/05 方案）：App 在 LAN 内发起 request → 设备主人在 NVR 上
 	// confirm → 之后 App 经 PUT /api/settings/p2p 下发运行配置。
@@ -186,6 +205,37 @@ func (c *P2PConfig) validate() error {
 	}
 	if err := validateAdvertise(c.Advertise); err != nil {
 		return fmt.Errorf("p2p.advertise: %w", err)
+	}
+	if err := validateICETuning(c); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateICETuning 校验 ICE 计时器/MTU/分片三组旋钮（#13）。0 = 默认，
+// 负数/超界拒绝——计时器上限取「能容忍但仍会拆链」的量级（keepalive
+// ≤10min、disconnected ≤30min、failed ≤2h），再大等于关掉保活语义，
+// 属于误配。MTU 下界 576（IPv4 最小重组缓冲），上界 65535。分片
+// 4096..32768（SCTP 天花板）。
+func validateICETuning(c *P2PConfig) error {
+	for _, kv := range []struct {
+		name string
+		v    int
+		max  int
+	}{
+		{"p2p.ice_keepalive_interval_ms", c.ICEKeepaliveIntervalMS, 600_000},
+		{"p2p.ice_disconnected_timeout_ms", c.ICEDisconnectedTimeoutMS, 1_800_000},
+		{"p2p.ice_failed_timeout_ms", c.ICEFailedTimeoutMS, 7_200_000},
+	} {
+		if kv.v < 0 || kv.v > kv.max {
+			return fmt.Errorf("%s must be 0 (library default) or 1..%dms, got %d", kv.name, kv.max, kv.v)
+		}
+	}
+	if mtu := c.ICEReceiveMTU; mtu != 0 && (mtu < 576 || mtu > 65535) {
+		return fmt.Errorf("p2p.ice_receive_mtu must be 0 (library default) or 576..65535, got %d", mtu)
+	}
+	if n := c.TunnelMaxPayloadBytes; n != 0 && (n < 4096 || n > 32768) {
+		return fmt.Errorf("p2p.tunnel_max_payload_bytes must be 0 (default 32768) or 4096..32768, got %d", n)
 	}
 	return nil
 }
