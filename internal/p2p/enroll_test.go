@@ -25,8 +25,7 @@ type fakePlatform struct {
 	validTick  atomic.Value // string "id:secret"
 	boundSeen  atomic.Int64
 	retireOnce atomic.Bool // 首个 device_id 返回 retired（模拟重绑）
-	firstID    atomic.Value
-	pubkeys    *syncMap // device_id -> pubkey (b64)
+	pubkeys    *syncMap    // device_id -> pubkey (b64)
 	// existing 按 pubkey(b64) 模拟「同账号+同设备公钥幂等 upsert」
 	// （平台幂等 enroll 支持）：命中则 200 返回既有 device_id，
 	// 公钥登记在既有身份名下——请求方送来的随机 device_id 被忽略。
@@ -272,7 +271,8 @@ func TestEnrollHTTPBase(t *testing.T) {
 			t.Errorf("EnrollHTTPBase(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if GenerateDeviceID() == GenerateDeviceID() {
+	first, second := GenerateDeviceID(), GenerateDeviceID()
+	if first == second {
 		t.Fatal("device id collision")
 	}
 	_ = time.Second

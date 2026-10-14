@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"encoding/json"
-	"net"
 	"sync"
 	"testing"
 )
@@ -67,8 +66,7 @@ func TestEgressPrioritySmallWritesRideHighLane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	sc := conn.(net.Conn)
-	if _, err := sc.Write([]byte("hello-priority")); err != nil {
+	if _, err := conn.Write([]byte("hello-priority")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

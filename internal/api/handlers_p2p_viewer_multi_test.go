@@ -103,7 +103,7 @@ func TestP2pViewerSameAddrUpdatesOneEntry(t *testing.T) {
 	h, _, _ := setupP2PTestHandler(t)
 	r := h.Routes()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		rr := postViewerReport(t, r, map[string]any{
 			"mode": "tunnel", "self_addr": "116.22.1.93:13365", "rtt_ms": 10 + i,
 		})
@@ -117,7 +117,7 @@ func TestP2pViewerCapacityEviction(t *testing.T) {
 	h, _, _ := setupP2PTestHandler(t)
 	r := h.Routes()
 
-	for i := 0; i < p2pViewerMax+2; i++ {
+	for i := range p2pViewerMax + 2 {
 		rr := postViewerReport(t, r, map[string]any{
 			"mode": "relay", "self_addr": string(rune('a'+i)) + ".example:1", "rtt_ms": i,
 		})

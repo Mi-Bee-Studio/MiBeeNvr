@@ -22,8 +22,10 @@ import (
 	"time"
 )
 
-const stagingOIDC = "http://127.0.0.1:18085"
-const stagingP2P = "http://127.0.0.1:18080"
+const (
+	stagingOIDC = "http://127.0.0.1:18085"
+	stagingP2P  = "http://127.0.0.1:18080"
+)
 
 func stagingEnabled() bool { return os.Getenv("P2P_ENROLL_STAGING") == "1" }
 
@@ -31,8 +33,8 @@ func stagingMint(t *testing.T) string {
 	t.Helper()
 	resp, err := http.PostForm(stagingOIDC+"/token", url.Values{
 		"grant_type": {"password"}, "username": {"p2p-test"},
-		"password":   {"WAFmhUsqMCuIS8Tcvn"}, "product_id": {"mibeenvr"},
-		"client_id":  {"p2p-signaling"},
+		"password": {"WAFmhUsqMCuIS8Tcvn"}, "product_id": {"mibeenvr"},
+		"client_id": {"p2p-signaling"},
 	})
 	if err != nil {
 		t.Fatalf("staging login: %v", err)

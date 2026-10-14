@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/viewer"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
@@ -24,11 +22,13 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/viewer"
 )
 
 // memlimitAppliedFn reads the applied GOMEMLIMIT for the metrics gauge —

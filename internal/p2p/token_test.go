@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
-	"time"
 )
 
 // fakeOIDC 模拟 mibee-oidc token 端点：password grant 验账号密码、
@@ -162,9 +162,9 @@ func TestTokenManagerWrongPasswordNoRetryLoop(t *testing.T) {
 func TestDeriveTokenEndpoint(t *testing.T) {
 	cases := map[string]string{
 		"wss://signal2.example.invalid/signal": "https://signal2.example.invalid/oidc/token",
-		"ws://signal.example.invalid/signal":  "http://signal.example.invalid/oidc/token",
-		"wss://host:8443/signal":          "https://host/oidc/token",
-		"not-a-url":                       "",
+		"ws://signal.example.invalid/signal":   "http://signal.example.invalid/oidc/token",
+		"wss://host:8443/signal":               "https://host/oidc/token",
+		"not-a-url":                            "",
 	}
 	for in, want := range cases {
 		if got := DeriveTokenEndpoint(in); got != want {

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
@@ -26,6 +25,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/offload"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtmp"
@@ -72,10 +72,10 @@ type appDeps struct {
 	// viewerLoginBinder 挂接分享观看者核验（p2p Manager 存活时由
 	// registerP2PService 调用；分享执行链 user-tenant-model §7）。
 	viewerLoginBinder func(mgr *p2p.Manager)
-	remoteLogH   *remotelog.Handler
-	appLoc       *time.Location
-	ioBudget     *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
-	unlinkBudget *iobudget.Bucket // recursive-deletion unlink guardrail (#755); nil = off
+	remoteLogH        *remotelog.Handler
+	appLoc            *time.Location
+	ioBudget          *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
+	unlinkBudget      *iobudget.Bucket // recursive-deletion unlink guardrail (#755); nil = off
 
 	// Merge / transcode / timelapse
 	mergeMgr              *merge.MergeManager

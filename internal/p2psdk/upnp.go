@@ -53,7 +53,7 @@ func ssdpProbes() ([]ssdpProbe, error) {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		addrs, _ := ifc.Addrs() //nolint:errcheck // best effort per interface
+		addrs, _ := ifc.Addrs()
 		for _, a := range addrs {
 			ipn, ok := a.(*net.IPNet)
 			if !ok || ipn.IP.To4() == nil || ipn.IP.IsLoopback() {
@@ -85,7 +85,7 @@ func ssdpFanOut(probes []ssdpProbe) error {
 	}
 	for _, p := range probes {
 		for _, s := range searches {
-			_, _ = p.sock.WriteTo([]byte(s), dst) //nolint:errcheck // best effort fan-out
+			_, _ = p.sock.WriteTo([]byte(s), dst)
 		}
 	}
 	return nil
@@ -181,11 +181,11 @@ func newIGDClient(location, localIP string, timeout time.Duration) (*UPnPGateway
 		return nil, err
 	}
 	hc := &http.Client{Timeout: timeout}
-	resp, err := hc.Get(location) //nolint:noctx // discovery probe, bounded by client timeout
+	resp, err := hc.Get(location)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close() //nolint:errcheck // probe teardown
+	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, err
@@ -246,7 +246,7 @@ func (g *UPnPGateway) soap(action string, inner string) (string, error) {
 		"<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" " +
 		"s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
 		"<s:Body>" + inner + "</s:Body></s:Envelope>"
-	//nolint:noctx // discovery/action probe, bounded by client timeout
+
 	req, err := http.NewRequest(http.MethodPost, g.controlURL, strings.NewReader(envelope))
 	if err != nil {
 		return "", err
@@ -257,7 +257,7 @@ func (g *UPnPGateway) soap(action string, inner string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close() //nolint:errcheck // probe teardown
+	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
 		return string(body), fmt.Errorf("upnp SOAP %s → HTTP %d: %s", action, resp.StatusCode, upnpErrorCode(string(body)))

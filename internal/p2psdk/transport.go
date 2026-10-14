@@ -120,8 +120,10 @@ func (t *dataChannelTransport) Close() error {
 }
 
 // Compile-time check: *dataChannelTransport implements Transport.
-var _ Transport = (*dataChannelTransport)(nil)
-var _ PrioritySender = (*dataChannelTransport)(nil)
+var (
+	_ Transport      = (*dataChannelTransport)(nil)
+	_ PrioritySender = (*dataChannelTransport)(nil)
+)
 
 // errEgressClosed is returned to senders parked on lane capacity once the
 // scheduler has shut down (transport close or underlying Send failure).
@@ -175,11 +177,11 @@ func (s *dcEgressScheduler) enqueue(data []byte, high bool) error {
 			}
 			return err
 		}
-		cap, laneBytes, lane := dcEgressDataCap, &s.dataBytes, &s.data
+		limit, laneBytes, lane := dcEgressDataCap, &s.dataBytes, &s.data
 		if high {
-			cap, laneBytes, lane = dcEgressHighCap, &s.highBytes, &s.high
+			limit, laneBytes, lane = dcEgressHighCap, &s.highBytes, &s.high
 		}
-		if *laneBytes+len(data) <= cap || len(*lane) == 0 {
+		if *laneBytes+len(data) <= limit || len(*lane) == 0 {
 			*lane = append(*lane, data)
 			*laneBytes += len(data)
 			s.mu.Unlock()

@@ -4,11 +4,11 @@
 package p2p
 
 import (
-	"log/slog"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -247,6 +247,8 @@ func (t *TokenManager) Drain() {
 	done := make(chan struct{})
 	go func() {
 		t.mu.Lock()
+		//nolint:staticcheck // empty on purpose: acquiring the lock
+		// waits for an in-flight mint to finish before the process exits.
 		t.mu.Unlock()
 		close(done)
 	}()
