@@ -39,11 +39,12 @@ explicitly in your pull request so they can be reviewed before merge.
 
 ## What CI runs
 
-A PR runs six checks; all of them must be green before merge:
+A PR runs seven checks; all of them must be green before merge:
 
 | Check | What it does |
 |-------|--------------|
-| `test` | `go test -race ./...` with a 55% coverage floor |
+| `test` | `go test -race` split into three parallel shards (two balanced package shards + a dedicated quiet shard for `internal/p2psdk`, whose realtime-protocol tests need a runner to themselves) |
+| `coverage` | Merges the shard coverage profiles and enforces the 55% floor |
 | `lint` | golangci-lint v2 + markdown fence lint (MD040) + docs relative links & zh/en parity (`scripts/check-docs-links.py`) |
 | `build` | Frontend tests + build (Node 24), then the Go binary |
 | `build-desktop` | Cross-builds the Windows/macOS desktop binaries |
@@ -57,10 +58,11 @@ three.
 
 ## Vendored code
 
-`internal/p2psdk/` is a vendored snapshot of our client-side SDK,
-synced into this tree by the maintainers. Don't change it in drive-by
-PRs — open an issue first so the edit can be coordinated with the
-upstream SDK and carried through the next sync.
+`internal/p2psdk/` is a vendored snapshot of our client-side SDK, synced
+into this tree by the maintainers — see its
+[README](internal/p2psdk/README.md) for the API surface (signaling, tunnel,
+relay). Don't change it in drive-by PRs — open an issue first so the edit
+can be coordinated with the upstream SDK and carried through the next sync.
 
 ## Development process — TDD (required)
 
