@@ -89,6 +89,14 @@ type SignalingConfig struct {
 	// before falling back to relay. Zero (default) uses DefaultTransportTimeout.
 	TransportTimeout time.Duration
 
+	// ForceRelay pins the transport arbitration to the relay path (#82):
+	// the session adopts the relay transport as soon as it is available and
+	// never waits for direct ICE. For sites where direct attempts only
+	// produce pathological pairs (e.g. CGNAT behind an advertised endpoint)
+	// or applications wanting deterministic relay behavior. With no relay
+	// client available the stock direct-first arbitration applies unchanged.
+	ForceRelay bool
+
 	// AdvertiseAddr binds the local ICE host-candidate
 	// socket to the given FIXED UDP port and advertises the given public IP
 	// in place of host addresses (pion NAT1To1 host mode). Intended for
@@ -164,7 +172,6 @@ func (c SignalingConfig) sessionIdleTimeout() time.Duration {
 	return DefaultSessionIdleTimeout
 }
 
-// DataChannel represents an open DataChannel for sending and receiving data.
 // ICETimeouts overrides the pion ICE agent timers (SignalingConfig.
 // ICETimeouts). Zero fields fall back to the pion/ice v4.4.x defaults
 // below — keep these aligned if pion's agent_config.go ever changes, or
@@ -183,6 +190,7 @@ const (
 	ICEDefaultFailedTimeout       = 25 * time.Second
 )
 
+// DataChannel represents an open DataChannel for sending and receiving data.
 type DataChannel struct {
 	// Label is the DataChannel label (e.g. "p2p-data").
 	Label string

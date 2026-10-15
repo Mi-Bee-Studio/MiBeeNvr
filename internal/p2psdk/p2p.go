@@ -55,9 +55,15 @@ type p2pSession struct {
 	relayChan *relaySessionChannel
 
 	// Relay fallback fields.
-	iceReady          chan struct{}
-	relayClient       *relay.Client
-	remoteRelayKey    [32]byte
+	iceReady       chan struct{}
+	relayClient    *relay.Client
+	remoteRelayKey [32]byte
+	// watchSignal/watchCfg snapshot the arbitration inputs so the
+	// pathological-pair eviction (pathevict.go) can adopt the relay
+	// transport later, from the stats callback. Set once by watchTransport.
+	watchSignal       *signalingClient
+	watchCfg          SignalingConfig
+	evictOnce         sync.Once
 	pendingCandidates []string
 	relayActive       bool // true once relay transport was adopted; ICE restarts are then moot
 
@@ -446,12 +452,15 @@ func (p *p2pSession) startStatsCollectorLocked(pc *webrtc.PeerConnection) {
 		p.statsCollector.Stop()
 	}
 	p.statsCollector = NewStatsCollector(pc, p.log())
-	if p.onStats != nil {
-		// Stamp the session ID into every snapshot: OnStats is one shared
-		// callback for all concurrent sessions of the signaling connection.
-		sid := p.sessionID
-		p.statsCollector.OnStats = func(snap StatsSnapshot) {
-			snap.SessionID = sid
+	// Stamp the session ID into every snapshot: OnStats is one shared
+	// callback for all concurrent sessions of the signaling connection.
+	// The pathological-pair eviction rides the same tick so it works even
+	// when the application does not consume stats (#82).
+	sid := p.sessionID
+	p.statsCollector.OnStats = func(snap StatsSnapshot) {
+		snap.SessionID = sid
+		p.checkPathEviction(snap)
+		if p.onStats != nil {
 			p.onStats(snap)
 		}
 	}
@@ -465,7 +474,18 @@ func (p *p2pSession) watchTransport(signal *signalingClient, cfg SignalingConfig
 	p.mu.Lock()
 	iceReady := p.iceReady
 	rc := p.relayClient
+	p.watchSignal = signal
+	p.watchCfg = cfg
 	p.mu.Unlock()
+
+	if cfg.ForceRelay && rc != nil {
+		// #82: relay pinned by the application — adopt the relay transport
+		// without waiting for the direct arbitration. A direct DataChannel
+		// may still open (even on a pathological pair); the adoption
+		// re-fires the callbacks with the relay channel, replacing it.
+		p.adoptRelayTransport(signal, cfg, rc)
+		return
+	}
 
 	ctx := context.Background()
 	relayKick := p.relayKickChan()
@@ -479,15 +499,22 @@ func (p *p2pSession) watchTransport(signal *signalingClient, cfg SignalingConfig
 		return
 	}
 
-	// ICE timed out — use relay transport. Routing is per-session explicit
-	// (SendTo/OnPacket by peer key): the shared client must never have its
-	// single-peer destination mutated by one session out of many.
+	// ICE timed out — use relay transport.
+	p.adoptRelayTransport(signal, cfg, rc)
+}
+
+// adoptRelayTransport switches the session onto the shared relay client and
+// announces session_open (#82: extracted so the ForceRelay pin shares the
+// exact adoption path with the arbitration-timeout fallback). Routing is
+// per-session explicit (SendTo/OnPacket by peer key): the shared client must
+// never have its single-peer destination mutated by one session out of many.
+func (p *p2pSession) adoptRelayTransport(signal *signalingClient, cfg SignalingConfig, rc *relay.Client) {
 	p.mu.Lock()
 	p.relayActive = true
 	ch := &relaySessionChannel{rc: rc, peer: p.remoteRelayKey}
 	p.relayChan = ch
 	p.mu.Unlock()
-	p.log().Info("using relay transport", "session_id", p.sessionID)
+	p.log().Info("using relay transport", "session_id", p.sessionID, "pinned", cfg.ForceRelay)
 
 	dc := p.activityDataChannel(ch.dataChannel())
 	dc.E2EEKey = p.e2eeKey()

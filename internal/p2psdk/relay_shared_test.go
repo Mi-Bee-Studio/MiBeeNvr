@@ -131,11 +131,12 @@ func (s *miniRelayServer) authenticateMini(conn *websocket.Conn) ([32]byte, bool
 	if claimed != pubKey {
 		return zero, false
 	}
-	_ = conn.WriteMessage(websocket.BinaryMessage, encMini(frameServerAuth, []byte{0x00}))
-
+	// Register before the auth reply (drop-race rationale: see the mock
+	// in relay/client_test.go).
 	s.mu.Lock()
 	s.clients[pubKey] = conn
 	s.mu.Unlock()
+	s.writeTo(conn, encMini(frameServerAuth, []byte{0x00}))
 	return pubKey, true
 }
 

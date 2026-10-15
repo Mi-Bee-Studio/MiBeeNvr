@@ -113,7 +113,7 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 	)
 	// NAT 行为观测（#70/#14：只观测不改策略）——welcome 的 STUN 列表
 	// 在同一 socket 上复探比对映射，结果供诊断/后续选路决策消费。
-	go s.observeNAT(welcome)
+	go s.observeNAT(welcome) //nolint:gosec,contextcheck // deliberately detached: observation outlives the request scope
 	return s, nil
 }
 

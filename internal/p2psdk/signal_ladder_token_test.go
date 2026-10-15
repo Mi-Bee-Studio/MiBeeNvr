@@ -81,7 +81,7 @@ func TestSDK_SignalLadderAbandonsOnAuthRejectionWithoutTokenFunc(t *testing.T) {
 
 	var armed atomic.Bool
 	mock.mu.Lock()
-	mock.helloGate = func(jwt string) bool { return !armed.Load() }
+	mock.helloGate = func(_ string) bool { return !armed.Load() }
 	mock.mu.Unlock()
 
 	reconnected := make(chan struct{}, 1)
