@@ -184,8 +184,8 @@ func TestEvaluateProductMismatch(t *testing.T) {
 	}
 }
 
-func TestBlockConstantMatchesPricingGranularity(t *testing.T) {
+func TestBlockConstant(t *testing.T) {
 	if Block != 12*time.Hour {
-		t.Fatalf("Block = %v, want 12h (0.5 元/12 小时粒度)", Block)
+		t.Fatalf("Block = %v, want 12h", Block)
 	}
 }
