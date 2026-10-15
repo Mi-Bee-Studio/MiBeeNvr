@@ -411,3 +411,129 @@ func sdpAudioPort(t *testing.T, msg string) int {
 	}
 	return 0
 }
+
+// startModeBServer boots a mode-B server (outbound PBX configured, so the
+// registrar binding check is replaced by the PBX-source check).
+func startModeBServer(t *testing.T, pbx string) (*Server, *event.EventBus, string) {
+	t.Helper()
+	port := freePort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	cfg := ConfigFrom(config.DoorbellConfig{
+		Listen:    addr,
+		Realm:     "mibee-nvr",
+		Transport: "udp",
+		Users: []config.DoorbellUserConfig{
+			{Username: "door1", Secret: "s3cret", Name: "Front door"},
+		},
+		Outbound: &config.DoorbellOutboundConfig{Server: pbx, Username: "nvr", Secret: "x", Expires: "300s"},
+	})
+	cfg.RingTimeout = 60 * time.Second
+	bus := event.NewEventBus(64)
+	srv := NewServer(cfg, bus, nil)
+	require.NoError(t, srv.Start(context.Background()))
+	t.Cleanup(srv.Stop)
+	return srv, bus, addr
+}
+
+// TestFlow_ModeBInviteOnlyFromPBX: with an outbound PBX configured, INVITEs
+// are accepted from the PBX host and refused (403, no ring) from anywhere
+// else — the PBX is the trust anchor, so it is also the only allowed source.
+func TestFlow_ModeBInviteOnlyFromPBX(t *testing.T) {
+	sdp := "v=0\r\nc=IN IP4 127.0.0.1\r\nm=audio 4000 RTP/AVP 8\r\n"
+
+	// From the PBX host (client sources 127.0.0.1) → rings.
+	_, bus, addr := startModeBServer(t, "127.0.0.1:5060")
+	events := subscribeDoorbell(t, bus)
+	c := dialSIPClient(t, addr, "door1", "s3cret")
+	require.NoError(t, c.send(c.invite(t, sdp)))
+	resp, err := c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 1") }, 5*time.Second)
+	require.NoError(t, err)
+	require.Contains(t, firstLine(resp), "180")
+	waitForEvent(t, events, "doorbell.ring")
+
+	// PBX configured elsewhere (127.0.0.9) — a 127.0.0.1 source is not it.
+	_, bus2, addr2 := startModeBServer(t, "127.0.0.9:5060")
+	events2 := subscribeDoorbell(t, bus2)
+	c2 := dialSIPClient(t, addr2, "door1", "s3cret")
+	require.NoError(t, c2.send(c2.invite(t, sdp)))
+	resp2, err := c2.recv(nil, 5*time.Second)
+	require.NoError(t, err)
+	require.Contains(t, firstLine(resp2), "403")
+	select {
+	case <-events2:
+		t.Fatal("no ring event may fire for a non-PBX INVITE in mode B")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestFlow_SymmetricRTPLatch: when the doorbell's RTP actually leaves from
+// a different socket than its SDP advertised, the first inbound packet
+// latches the write destination — mic audio follows the real source.
+func TestFlow_SymmetricRTPLatch(t *testing.T) {
+	srv, bus, addr := startTestServer(t)
+	events := subscribeDoorbell(t, bus)
+
+	c := dialSIPClient(t, addr, "door1", "s3cret")
+	require.NoError(t, c.send(c.register(t, 300)))
+	challenge, err := c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 401") }, 5*time.Second)
+	require.NoError(t, err)
+	nonce := extractParam(challenge, "nonce")
+	require.NoError(t, c.send(c.registerAuth(t, "mibee-nvr", nonce, "sip:"+addr)))
+	_, err = c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 200") }, 5*time.Second)
+	require.NoError(t, err)
+
+	// Advertise one socket in the SDP, send RTP from another.
+	advertised, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = advertised.Close() })
+	real, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = real.Close() })
+
+	rawSDP, err := os.ReadFile("testdata/invite_offer.sdp")
+	require.NoError(t, err)
+	sdp := strings.ReplaceAll(string(rawSDP), "%DOORBELL_IP%", "127.0.0.1")
+	sdp = strings.Replace(sdp, "%DOORBELL_RTP_PORT%",
+		strconv.Itoa(advertised.LocalAddr().(*net.UDPAddr).Port), 1)
+
+	require.NoError(t, c.send(c.invite(t, sdp)))
+	_, err = c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 180") }, 5*time.Second)
+	require.NoError(t, err)
+	ring := waitForEvent(t, events, "doorbell.ring")
+	require.NoError(t, srv.Answer(ring.CallID))
+	okMsg, err := c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 200") }, 5*time.Second)
+	require.NoError(t, err)
+	nvrRTPPort := sdpAudioPort(t, okMsg)
+
+	bridge, err := srv.TalkBridge(ring.CallID)
+	require.NoError(t, err)
+	defer bridge.Close()
+
+	// One RTP packet from the real (unadvertised) socket latches the route.
+	alaw := []byte{0xd5, 0x2a}
+	pkt := make([]byte, 12+len(alaw))
+	pkt[0] = 0x80
+	pkt[1] = 8
+	copy(pkt[12:], alaw)
+	_, err = real.WriteToUDP(pkt, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: nvrRTPPort})
+	require.NoError(t, err)
+	select {
+	case got := <-bridge.Out:
+		require.Equal(t, alaw, got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bridge did not receive the doorbell's RTP payload")
+	}
+
+	// Mic direction must land on the real socket, never the advertised one.
+	bridge.In <- []byte{0x55, 0x11}
+	buf := make([]byte, 2048)
+	_ = real.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, _, err := real.ReadFromUDP(buf)
+	require.NoError(t, err)
+	require.Greater(t, n, 12)
+	require.Equal(t, byte(0x55), buf[12])
+	_ = advertised.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if n, _, err := advertised.ReadFromUDP(buf); err == nil {
+		t.Fatalf("mic audio must follow the latched source, not the SDP address (got %d bytes on the advertised socket)", n)
+	}
+}

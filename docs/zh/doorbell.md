@@ -47,7 +47,8 @@ doorbell:
 
 在 PBX 上把门铃的呼叫路由到分机 `nvr`。此模式下 PBX 是信任锚：经它到达的
 INVITE 只要 From 用户在配置列表中即被接受——不对每条 INVITE 重复校验门铃
-密码（SIP 经 PBX 的标准行为）。
+密码（SIP 经 PBX 的标准行为）。INVITE 的**来源地址必须与 `outbound.server`
+的主机一致**，其它来源一律 403。
 
 ## 安全姿态
 

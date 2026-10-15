@@ -51,7 +51,8 @@ doorbell:
 Route the doorbells' calls to extension `nvr` on the PBX. In this mode the
 PBX is the trust anchor: INVITEs arriving through it are accepted when their
 From user matches a configured entry — doorbell secrets are not re-verified
-per INVITE (that is how SIP through a PBX works).
+per INVITE (that is how SIP through a PBX works). An INVITE's **source
+address must match the `outbound.server` host**; anything else gets a 403.
 
 ## Security posture
 

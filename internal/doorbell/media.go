@@ -9,18 +9,19 @@ import (
 
 // mediaSession is one call's RTP endpoint: G.711 packets in both
 // directions between the doorbell and the talk bridge (the WebSocket
-// client on the other side). The socket is unconnected so a doorbell whose
-// RTP actually leaves from a different port than its SDP advertised still
-// works — the first valid inbound packet latches the write destination
-// (symmetric RTP, the intercom-firmware reality).
+// client on the other side). The socket is unconnected and the write
+// destination starts as the SDP-advertised address, but the first valid
+// inbound packet latches it for good (symmetric RTP, the intercom-firmware
+// reality: some firmware sends from a different port than it advertised).
 type mediaSession struct {
 	conn *net.UDPConn
 	pt   uint8
 
-	mu     sync.Mutex
-	dst    *net.UDPAddr
-	subs   map[chan []byte]struct{}
-	closed bool
+	mu      sync.Mutex
+	dst     *net.UDPAddr
+	latched bool
+	subs    map[chan []byte]struct{}
+	closed  bool
 
 	seq  uint16
 	ts   uint32
@@ -123,10 +124,12 @@ func (m *mediaSession) readLoop() {
 		if n <= rtpHeaderLen || buf[0] != 0x80 {
 			continue // not RTP
 		}
-		// Symmetric-RTP latch: answer wherever valid packets come from.
+		// Symmetric-RTP latch: the first valid inbound packet fixes the
+		// write destination for the rest of the call.
 		m.mu.Lock()
-		if m.dst == nil {
+		if !m.latched {
 			m.dst = src
+			m.latched = true
 		}
 		subs := make([]chan []byte, 0, len(m.subs))
 		for ch := range m.subs {

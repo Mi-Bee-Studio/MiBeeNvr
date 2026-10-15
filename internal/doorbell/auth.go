@@ -10,8 +10,8 @@ import (
 )
 
 // nonces issues and verifies digest challenges. A nonce is single-use and
-// expires after 5 minutes; issuing a fresh challenge invalidates the user's
-// previous pending nonce (a second REGISTER without auth re-challenges).
+// expires after 5 minutes; several outstanding nonces per user may coexist
+// (each still single-use and user-bound).
 type nonces struct {
 	mu   sync.Mutex
 	byID map[string]nonceEntry
@@ -84,8 +84,6 @@ func verifyDigest(req sip.Request, username, secret string) bool {
 		if auth.Nonce() == "" || auth.Response() == "" {
 			continue
 		}
-		auth.SetPassword(secret)
-		auth.SetMethod(string(req.Method()))
 		auth.SetPassword(secret)
 		auth.SetMethod(string(req.Method()))
 		return auth.CalcResponse() == auth.Response()

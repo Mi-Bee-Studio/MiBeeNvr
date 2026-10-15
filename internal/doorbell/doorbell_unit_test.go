@@ -3,6 +3,7 @@ package doorbell
 import (
 	"crypto/md5" //nolint:gosec // SIP digest mandates MD5
 	"encoding/hex"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -117,4 +118,60 @@ func digestResponse(username, realm, secret, method, uri, nonce string) string {
 	ha1 := md5hexLocal(username, realm, secret)
 	ha2 := md5hexLocal(method, uri)
 	return md5hexLocal(ha1, nonce, ha2)
+}
+
+// TestMedia_SymmetricLatch: the media session's write destination starts
+// as the SDP guess but the first valid inbound RTP packet re-targets it —
+// OS-independent (plain UDP, no SIP stack).
+func TestMedia_SymmetricLatch(t *testing.T) {
+	m, err := startMedia(8)
+	require.NoError(t, err)
+	t.Cleanup(m.close)
+
+	advertised, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = advertised.Close() })
+	real, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = real.Close() })
+
+	m.setDestination(advertised.LocalAddr().(*net.UDPAddr))
+	out, write, detach := m.subscribe(16)
+	defer detach()
+
+	// One valid RTP packet from the unadvertised socket latches the route.
+	payload := []byte{0xab, 0xcd}
+	pkt := append([]byte{0x80, 8, 0, 1, 0, 0, 0, 160, 0, 0, 0, 1}, payload...)
+	mediaPort := m.conn.LocalAddr().(*net.UDPAddr).Port
+	_, err = real.WriteToUDP(pkt, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mediaPort})
+	require.NoError(t, err)
+	select {
+	case got := <-out:
+		require.Equal(t, payload, got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("media session did not fan out the inbound payload")
+	}
+
+	// The write path now targets the latched source, not the SDP guess.
+	write([]byte{0x01, 0x02})
+	buf := make([]byte, 64)
+	_ = real.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, err = real.ReadFromUDP(buf)
+	require.NoError(t, err)
+	require.Equal(t, byte(0x01), buf[12])
+	require.Equal(t, byte(0x02), buf[13])
+	_ = advertised.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if n, _, err := advertised.ReadFromUDP(buf); err == nil {
+		t.Fatalf("writes must follow the latched source, not the SDP guess (got %d bytes)", n)
+	}
+}
+
+// TestOutboundHost: PBX host extraction for the mode-B INVITE source check.
+func TestOutboundHost(t *testing.T) {
+	s := &Server{cfg: Config{}}
+	require.Equal(t, "", s.outboundHost())
+	s.cfg.Outbound = &Outbound{Server: "192.168.1.5:5060"}
+	require.Equal(t, "192.168.1.5", s.outboundHost())
+	s.cfg.Outbound = &Outbound{Server: "sip:pbx.example.com"}
+	require.Equal(t, "pbx.example.com", s.outboundHost())
 }

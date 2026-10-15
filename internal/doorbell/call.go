@@ -123,6 +123,25 @@ func (m *callManager) calls() []*Call {
 	return out
 }
 
+// Snapshot returns a race-free value copy of the exported fields (the API
+// layer marshals these while the sweeper or an answerer may mutate them).
+func (c *Call) Snapshot() Call {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return Call{
+		ID:           c.ID,
+		User:         c.User,
+		Name:         c.Name,
+		CameraID:     c.CameraID,
+		SnapshotPath: c.SnapshotPath,
+		State:        c.State,
+		StartedAt:    c.StartedAt,
+		AnsweredAt:   c.AnsweredAt,
+		EndedAt:      c.EndedAt,
+		EndReason:    c.EndReason,
+	}
+}
+
 // startMedia binds the RTP endpoint for an answered call.
 func (c *Call) startMedia() error {
 	c.mu.Lock()

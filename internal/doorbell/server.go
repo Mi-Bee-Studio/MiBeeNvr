@@ -255,7 +255,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		_ = s.respondRaw(req, 401, "Unauthorized", "", challengeHeader(s.cfg.Realm, nonce))
 		return
 	}
-	// Consume the nonce the client used (issue() invalidated earlier ones).
+	// Burn the nonce the client used (single-use; re-challenge if stale).
 	if hdrs := req.GetHeaders("Authorization"); len(hdrs) > 0 {
 		if g, ok := hdrs[0].(*sip.GenericHeader); ok {
 			if auth := sip.AuthFromValue(g.Contents); auth != nil {
@@ -309,9 +309,12 @@ func (s *Server) handleInvite(req sip.Request, tx sip.ServerTransaction) {
 			_ = s.respondRaw(req, 403, "Not registered", "")
 			return
 		}
+	} else if sourceIP != s.outboundHost() {
+		// Mode B (PBX): calls arrive through the PBX we authenticated to —
+		// an INVITE from anywhere else is not that PBX, refuse it.
+		_ = s.respondRaw(req, 403, "Forbidden", "")
+		return
 	}
-	// Mode B (PBX): the PBX is trusted (we authenticated to it), the From
-	// user must be a configured door station. Source is the PBX by design.
 
 	offer, ok := parseAudioOffer(req.Body())
 	if !ok {
@@ -440,6 +443,19 @@ func (s *Server) sendBYE(c *Call) {
 	if _, err := s.srv.Request(bye); err != nil {
 		s.log.Warn("doorbell BYE send failed", "error", err)
 	}
+}
+
+// outboundHost is the PBX host we registered to (mode B) — the only source
+// an INVITE may come from in that mode.
+func (s *Server) outboundHost() string {
+	if s.cfg.Outbound == nil {
+		return ""
+	}
+	server := strings.TrimPrefix(s.cfg.Outbound.Server, "sip:")
+	if h, _, err := net.SplitHostPort(server); err == nil {
+		return h
+	}
+	return server
 }
 
 // fromUser extracts the From user.

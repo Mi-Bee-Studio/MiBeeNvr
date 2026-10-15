@@ -52,10 +52,11 @@ func (h *Handler) handleDoorbellCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	calls := h.doorbell.Calls()
-	// Newest first — the popup cares about the freshest ring.
+	// Newest first — the popup cares about the freshest ring. Snapshot()
+	// takes the per-call lock so the sweeper can end calls concurrently.
 	out := make([]map[string]any, 0, len(calls))
 	for i := len(calls) - 1; i >= 0; i-- {
-		c := calls[i]
+		c := calls[i].Snapshot()
 		out = append(out, map[string]any{
 			"id":            c.ID,
 			"user":          c.User,
@@ -111,18 +112,20 @@ func (h *Handler) handleDoorbellSnapshot(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	callID := chi.URLParam(r, "callID")
-	var call *doorbell.Call
+	var call doorbell.Call
+	found := false
 	for _, c := range h.doorbell.Calls() {
 		if c.ID == callID {
-			call = c
+			call = c.Snapshot()
+			found = true
 			break
 		}
 	}
-	if call == nil {
+	if !found {
 		WriteError(w, http.StatusNotFound, "no such call")
 		return
 	}
-	path, ok := h.doorbell.SnapshotPath(call)
+	path, ok := h.doorbell.SnapshotPath(&call)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "no snapshot for this call")
 		return
