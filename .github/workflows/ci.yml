@@ -13,6 +13,20 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Shards run on separate runners in parallel; each keeps default
+        # package parallelism inside. Split biased so the historically heavy
+        # packages land ~evenly (api+camera+merge vs middleware+tests+recorder,
+        # measured 2026-10-15; re-balance if a shard becomes the straggler).
+        # The p2psdk leg gets a runner of its own: its realtime-protocol tests
+        # (in-process WebRTC handshakes, relay routing) hit component-internal
+        # abandon deadlines when other test binaries run -race alongside —
+        # wider test-side waits cannot rescue a connection the stack already
+        # gave up on (2026-10-15: five CI failures with a drifting failure
+        # set, all in that subtree; local -race runs incl. WSL all green).
+        shard: [a, b, p2psdk]
     steps:
       - uses: actions/checkout@v5
 
@@ -22,44 +36,62 @@ jobs:
           cache: true
 
 
-      - name: Test (packages in parallel)
-        # internal/p2psdk's realtime-protocol tests (in-process WebRTC
-        # handshakes, relay routing) hit component-internal abandon deadlines
-        # when many package binaries run -race in parallel on a shared runner —
-        # wider test-side waits cannot rescue a connection the stack already
-        # gave up on (2026-10-15: five CI failures with a drifting failure
-        # set, all in this subtree; local -race runs incl. WSL all green).
-        # That subtree runs in its own serial step below on a quiet machine;
-        # everything else keeps default package parallelism (serializing all
-        # ~79 packages would cost ~24m per run).
-        run: >
-          go test -race -timeout 5m -coverprofile=coverage.out
-          $(go list ./... | grep -v '/internal/p2psdk')
-
-      - name: Test internal/p2psdk (serial, quiet machine)
+      - name: Test
         run: |
-          go test -race -timeout 10m -coverprofile=p2psdk-coverage.out ./internal/p2psdk/...
-          grep -v '^mode:' p2psdk-coverage.out >> coverage.out
+          case ${{ matrix.shard }} in
+            a)       PKGS=$(go list ./... | grep -E '/(api|camera|merge)$') ;;
+            b)       PKGS=$(go list ./... | grep -v '/internal/p2psdk' | grep -vE '/(api|camera|merge)$') ;;
+            p2psdk)  PKGS="./internal/p2psdk/..." ;;
+          esac
+          test -n "$PKGS" || { echo "shard ${{ matrix.shard }} resolved to no packages"; exit 1; }
+          go test -race -timeout 10m -coverprofile=coverage-${{ matrix.shard }}.out $PKGS
 
-      - name: Display coverage
-        run: go tool cover -func=coverage.out
-
-      - name: Upload coverage artifact
+      - name: Upload shard coverage
         uses: actions/upload-artifact@v6
         with:
-          name: coverage
-          path: coverage.out
+          name: coverage-${{ matrix.shard }}
+          path: coverage-${{ matrix.shard }}.out
 
-      - name: Check coverage threshold
+  coverage:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      # go tool cover resolves profile blocks against the source tree, so it
+      # needs the checkout (a missing module made it error out with an empty
+      # total that the old arithmetic silently treated as a pass).
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      - name: Download shard profiles
+        uses: actions/download-artifact@v7
+        with:
+          path: cov
+
+      - name: Merge profiles and check threshold
         run: |
+          awk '/^mode:/ { if (!seen) { print; seen=1 } next } { print }' cov/*/coverage-*.out > coverage.out
+          go tool cover -func=coverage.out | tail -1
           echo "Checking coverage threshold..."
           total=$(go tool cover -func=coverage.out | grep 'total:' | awk '{print $3}' | sed 's/%//' )
+          if [ -z "$total" ]; then
+            echo "Coverage parse failed (empty total) — profile merge or go tool cover is broken"
+            exit 1
+          fi
           echo "Total coverage: $total%"
           if (( $(echo "$total < 55" | bc -l) )); then
             echo "Coverage $total% is below threshold of 55%"
             exit 1
           fi
           echo "Coverage threshold check passed"
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage
+          path: coverage.out
 
   lint:
     runs-on: ubuntu-latest
