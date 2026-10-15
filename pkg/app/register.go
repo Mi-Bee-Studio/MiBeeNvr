@@ -793,7 +793,7 @@ func registerProtocolServices(a *App, deps *appDeps) error {
 			deps.cfg.Server.DeviceID,
 			deps.cfg.Server.DeviceName,
 			discovery.ParseAPIPort(deps.cfg.Server.Listen),
-			deps.cfg.Server.TLSListen != "",
+			discovery.APISpeaksTLS(deps.cfg.Server.Listen, deps.cfg.Server.TLSListen),
 			deps.cfg.Server.Discovery.UDP.Port,
 		)
 		if err := a.Register(&serviceFunc{
@@ -820,7 +820,7 @@ func registerProtocolServices(a *App, deps *appDeps) error {
 			deps.cfg.Server.DeviceID,
 			deps.cfg.Server.DeviceName,
 			discovery.ParseAPIPort(deps.cfg.Server.Listen),
-			deps.cfg.Server.TLSListen != "",
+			discovery.APISpeaksTLS(deps.cfg.Server.Listen, deps.cfg.Server.TLSListen),
 		)
 		if err := a.Register(&serviceFunc{
 			name: "mdns",

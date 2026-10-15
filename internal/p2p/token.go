@@ -59,6 +59,7 @@ type TokenManager struct {
 	refresh     string
 	lastTry     time.Time
 	statePath   string
+	stateWarned bool // loadState 对同一损坏周期只告警一次（#6）
 	httpClient  *http.Client
 	minInterval time.Duration // 测试可缩；默认 30s 防锤
 }
@@ -178,12 +179,35 @@ type tokenState struct {
 func (t *TokenManager) loadState() {
 	b, err := os.ReadFile(t.statePath)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) && !t.stateWarned {
+			// 存在但读不了（权限/IO）不是正常态；每次 Mint 重读照旧（手工
+			// 重建 state 的运维自愈路径依赖它），但告警只出一次防刷屏
+			// （#6：静默落密码流=极难排障）。
+			t.stateWarned = true
+			slog.Error("p2p token state 读取失败，忽略 state 走凭据流",
+				"path", t.statePath, "err", err)
+		}
 		return
 	}
 	var s tokenState
-	if json.Unmarshal(b, &s) == nil && s.RefreshToken != "" {
-		t.refresh = s.RefreshToken
+	if err := json.Unmarshal(b, &s); err != nil {
+		if !t.stateWarned {
+			t.stateWarned = true
+			slog.Error("p2p token state 损坏（半写/截断），忽略 state 走凭据流",
+				"path", t.statePath, "err", err, "size", len(b))
+		}
+		return
 	}
+	if s.RefreshToken == "" {
+		if !t.stateWarned {
+			t.stateWarned = true
+			slog.Error("p2p token state 缺 refresh_token，走凭据流重铸",
+				"path", t.statePath, "size", len(b))
+		}
+		return
+	}
+	t.stateWarned = false
+	t.refresh = s.RefreshToken
 }
 
 func (t *TokenManager) storeRefresh(refresh string) {
