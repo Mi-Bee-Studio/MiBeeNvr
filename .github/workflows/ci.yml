@@ -22,8 +22,24 @@ jobs:
           cache: true
 
 
-      - name: Test
-        run: go test -race -timeout 5m -coverprofile=coverage.out ./...
+      - name: Test (packages in parallel)
+        # internal/p2psdk's realtime-protocol tests (in-process WebRTC
+        # handshakes, relay routing) hit component-internal abandon deadlines
+        # when many package binaries run -race in parallel on a shared runner —
+        # wider test-side waits cannot rescue a connection the stack already
+        # gave up on (2026-10-15: five CI failures with a drifting failure
+        # set, all in this subtree; local -race runs incl. WSL all green).
+        # That subtree runs in its own serial step below on a quiet machine;
+        # everything else keeps default package parallelism (serializing all
+        # ~79 packages would cost ~24m per run).
+        run: >
+          go test -race -timeout 5m -coverprofile=coverage.out
+          $(go list ./... | grep -v '/internal/p2psdk')
+
+      - name: Test internal/p2psdk (serial, quiet machine)
+        run: |
+          go test -race -timeout 10m -coverprofile=p2psdk-coverage.out ./internal/p2psdk/...
+          grep -v '^mode:' p2psdk-coverage.out >> coverage.out
 
       - name: Display coverage
         run: go tool cover -func=coverage.out
