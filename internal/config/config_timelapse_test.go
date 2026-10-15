@@ -244,7 +244,8 @@ func TestTimelapseConfig_Schedule_InvalidTimeRange_StartBadFormat(t *testing.T) 
 	require.Contains(t, err.Error(), "time_ranges[0]")
 }
 
-func TestTimelapseConfig_Schedule_EndBeforeStart(t *testing.T) {
+// An end at or before the start is an overnight range, not an error.
+func TestTimelapseConfig_Schedule_OvernightAccepted(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "cam1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
@@ -252,15 +253,13 @@ func TestTimelapseConfig_Schedule_EndBeforeStart(t *testing.T) {
 			Enabled: true,
 			Schedule: &ScheduleConfig{
 				TimeRanges: []TimeRange{
-					{Start: "17:00", End: "09:00"}, // end before start
+					{Start: "17:00", End: "09:00"}, // overnight
 				},
 			},
 		},
 	}}}
 	cfg.ApplyDefaults()
-	err := Validate(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "must be after")
+	require.NoError(t, Validate(cfg))
 }
 
 func TestTimelapseConfig_Schedule_OverlappingRangesMerged(t *testing.T) {

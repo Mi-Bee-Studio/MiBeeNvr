@@ -2,15 +2,22 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
 // Timelapse configuration types and scheduling helpers.
 
 // TimeRange defines a start and end time for timelapse scheduling.
+// An End at or before Start runs past midnight into the next day
+// (22:00-06:00; 07:00-00:00 = until midnight; equal = a full 24h).
 type TimeRange struct {
 	Start string `yaml:"start,omitempty" json:"start,omitempty"` // HH:MM format (24h)
 	End   string `yaml:"end,omitempty" json:"end,omitempty"`     // HH:MM format (24h)
+	// DaysOfWeek limits this range to specific days (0=Sunday … 6=Saturday)
+	// and overrides the schedule-level DaysOfWeek. An overnight range counts
+	// against the day it starts on. Empty = the schedule-level days.
+	DaysOfWeek []int `yaml:"days_of_week,omitempty" json:"days_of_week,omitempty"`
 }
 
 // ScheduleConfig defines when timelapse recording should be active.
@@ -19,8 +26,62 @@ type ScheduleConfig struct {
 	// Multiple ranges are supported and overlapping ranges are auto-merged.
 	TimeRanges []TimeRange `yaml:"time_ranges,omitempty" json:"time_ranges,omitempty"`
 	// DaysOfWeek restricts recording to specific days (0=Sunday, 1=Monday, ..., 6=Saturday).
-	// Empty or nil means all days.
+	// Empty or nil means all days. A range's own DaysOfWeek takes precedence.
 	DaysOfWeek []int `yaml:"days_of_week,omitempty" json:"days_of_week,omitempty"`
+}
+
+// ActiveAt reports whether t (read in its own location) falls inside the
+// schedule. A nil schedule is always active; one without time ranges is active
+// all day on its allowed days. The after-midnight part of an overnight range
+// belongs to the day the range started on, so Fri 22:00-06:00 covers Saturday
+// morning, not Friday morning.
+func (s *ScheduleConfig) ActiveAt(t time.Time) bool {
+	if s == nil {
+		return true
+	}
+	today := int(t.Weekday())
+	if len(s.TimeRanges) == 0 {
+		return dayAllowed(s.DaysOfWeek, today)
+	}
+	yesterday := (today + 6) % 7
+	now := t.Hour()*60 + t.Minute()
+	for _, tr := range s.TimeRanges {
+		start, end, ok := tr.minutes()
+		if !ok {
+			continue
+		}
+		days := tr.DaysOfWeek
+		if len(days) == 0 {
+			days = s.DaysOfWeek
+		}
+		if start < end {
+			if now >= start && now < end && dayAllowed(days, today) {
+				return true
+			}
+			continue
+		}
+		if (now >= start && dayAllowed(days, today)) || (now < end && dayAllowed(days, yesterday)) {
+			return true
+		}
+	}
+	return false
+}
+
+// minutes returns the range bounds as minutes since midnight.
+func (tr TimeRange) minutes() (start, end int, ok bool) {
+	sh, sm, err := parseHHMM(tr.Start)
+	if err != nil {
+		return 0, 0, false
+	}
+	eh, em, err := parseHHMM(tr.End)
+	if err != nil {
+		return 0, 0, false
+	}
+	return sh*60 + sm, eh*60 + em, true
+}
+
+func dayAllowed(days []int, day int) bool {
+	return len(days) == 0 || slices.Contains(days, day)
 }
 
 type CameraTimelapseConfig struct {
@@ -78,7 +139,21 @@ func parseHHMM(s string) (hours, minutes int, err error) {
 }
 
 // mergeTimeRanges merges overlapping or adjacent time ranges and returns a non-overlapping sorted list.
+// Overnight ranges and ranges with their own days_of_week are kept as-is
+// (after the merged ones) — merging them would change which days they cover.
 func mergeTimeRanges(ranges []TimeRange) []TimeRange {
+	var plain, kept []TimeRange
+	for _, r := range ranges {
+		if start, end, ok := r.minutes(); ok && start < end && len(r.DaysOfWeek) == 0 {
+			plain = append(plain, r)
+		} else {
+			kept = append(kept, r)
+		}
+	}
+	return append(mergePlainTimeRanges(plain), kept...)
+}
+
+func mergePlainTimeRanges(ranges []TimeRange) []TimeRange {
 	if len(ranges) <= 1 {
 		return ranges
 	}

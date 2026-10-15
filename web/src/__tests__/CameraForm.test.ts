@@ -763,3 +763,105 @@ describe('CameraForm - group field (v36 camera grouping)', () => {
     });
   });
 });
+
+describe('CameraForm - recording schedule (weekly ranges)', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+  });
+
+  const scheduledCam = {
+    id: 'cam-sched-1',
+    name: 'Study',
+    protocol: 'rtsp',
+    encoding: 'h264',
+    url: 'rtsp://192.168.1.10/stream',
+    recording_schedule: {
+      time_ranges: [
+        { start: '15:00', end: '23:00', days_of_week: [1, 2, 3, 4, 5] },
+        { start: '07:00', end: '23:00' },
+      ],
+      // Schedule-level days apply to the second range (no days of its own).
+      days_of_week: [0, 6],
+    },
+  };
+
+  function mockPresetsOnly() {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+  }
+
+  async function savedBody(container: HTMLElement, path: string) {
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.save'),
+    );
+    await fireEvent.click(saveBtn!);
+    let body: any;
+    await vi.waitFor(() => {
+      const call = mockApiRequest.mock.calls.find((c) => typeof c[0] === 'string' && c[0] === path);
+      expect(call, `${path} should have been requested`).toBeTruthy();
+      body = JSON.parse((call![1] as RequestInit).body as string);
+    });
+    return body;
+  }
+
+  it('renders one row per range and round-trips per-range days', async () => {
+    mockPresetsOnly();
+    const { container } = render(CameraForm, { props: defaultProps({ editingCamera: scheduledCam as any }) });
+
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('[data-testid="schedule-range"]').length).toBe(2);
+    });
+    const rows = container.querySelectorAll('[data-testid="schedule-range"]');
+    const checked = (row: Element) =>
+      Array.from(row.querySelectorAll('input[type="checkbox"]')).filter((c) => (c as HTMLInputElement).checked).length;
+    expect(checked(rows[0])).toBe(5);
+    expect(checked(rows[1])).toBe(2);
+
+    const body = await savedBody(container, '/cameras/cam-sched-1');
+    expect(body.recording_schedule).toEqual({
+      time_ranges: [
+        { start: '15:00', end: '23:00', days_of_week: [1, 2, 3, 4, 5] },
+        { start: '07:00', end: '23:00', days_of_week: [0, 6] },
+      ],
+    });
+  });
+
+  it('adds a range and marks an overnight one', async () => {
+    mockPresetsOnly();
+    const { container } = render(CameraForm, { props: defaultProps({ editingCamera: scheduledCam as any }) });
+
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('[data-testid="schedule-range"]').length).toBe(2);
+    });
+    const addBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.recordingScheduleAddRange'),
+    );
+    await fireEvent.click(addBtn!);
+    const rows = container.querySelectorAll('[data-testid="schedule-range"]');
+    expect(rows.length).toBe(3);
+
+    const [start, end] = Array.from(rows[2].querySelectorAll('input[type="time"]')) as HTMLInputElement[];
+    await fireEvent.input(start, { target: { value: '22:00' } });
+    await fireEvent.input(end, { target: { value: '06:00' } });
+    expect(rows[2].textContent).toContain('cameras.recordingScheduleOvernight');
+
+    const body = await savedBody(container, '/cameras/cam-sched-1');
+    expect(body.recording_schedule.time_ranges[2]).toEqual({ start: '22:00', end: '06:00' });
+  });
+
+  it('sends an empty schedule when unchecked so the backend clears it', async () => {
+    mockPresetsOnly();
+    const { container } = render(CameraForm, { props: defaultProps({ editingCamera: scheduledCam as any }) });
+
+    await vi.waitFor(() => {
+      expect((container.querySelector('#cam-rec-schedule') as HTMLInputElement).checked).toBe(true);
+    });
+    await fireEvent.click(container.querySelector('#cam-rec-schedule')!);
+
+    const body = await savedBody(container, '/cameras/cam-sched-1');
+    expect(body.recording_schedule).toEqual({ time_ranges: [] });
+  });
+});

@@ -779,7 +779,7 @@ cameras:
 - **Optional**: yes
 - **Description**: Recording time window (24/7 by default). Outside the window nothing is written to disk (live view unaffected).
 - **Fields**:
-  - `time_ranges` (array) — list of `{start: "09:00", end: "18:00"}`; overlaps auto-merge
+  - `time_ranges` (array) — list of `{start: "09:00", end: "18:00"}`; overlaps auto-merge. An `end` at or before `start` runs past midnight (`22:00`–`06:00`; `07:00`–`00:00` = until midnight; equal = a full 24h). Each range may carry its own `days_of_week`, which overrides the schedule-level one; an overnight range counts against the day it starts on
   - `days_of_week` (array of int) — 0=Sunday … 6=Saturday; empty = every day
 - **API**: a `recording_schedule` without time ranges (e.g. `{"time_ranges": []}`) in `PUT /api/cameras/{id}` clears the schedule (back to 24/7); omitting the field leaves it unchanged
 

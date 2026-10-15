@@ -19,7 +19,7 @@ func TestValidateSchedule(t *testing.T) {
 		{"bad day", ScheduleConfig{DaysOfWeek: []int{7}}, "s.days_of_week[0] must be between 0 (Sunday) and 6 (Saturday)"},
 		{"bad start", ScheduleConfig{TimeRanges: []TimeRange{{Start: "9am", End: "18:00"}}}, "s.time_ranges[0].start invalid time"},
 		{"bad end", ScheduleConfig{TimeRanges: []TimeRange{{Start: "09:00", End: "25:00"}}}, "s.time_ranges[0].end invalid time"},
-		{"end before start", ScheduleConfig{TimeRanges: []TimeRange{{Start: "18:00", End: "09:00"}}}, "s.time_ranges[0].end (09:00) must be after start (18:00)"},
+		{"bad range day", ScheduleConfig{TimeRanges: []TimeRange{{Start: "09:00", End: "18:00", DaysOfWeek: []int{-1}}}}, "s.time_ranges[0].days_of_week[0] must be between 0 (Sunday) and 6 (Saturday)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -33,4 +33,19 @@ func TestValidateSchedule(t *testing.T) {
 	s := &ScheduleConfig{TimeRanges: []TimeRange{{Start: "13:00", End: "18:00"}, {Start: "09:00", End: "14:00"}}}
 	require.NoError(t, ValidateSchedule("s", s))
 	require.Equal(t, []TimeRange{{Start: "09:00", End: "18:00"}}, s.TimeRanges)
+
+	// Overnight ranges are valid; they and ranges with their own days are kept
+	// as-is, after the merged plain ranges.
+	s = &ScheduleConfig{TimeRanges: []TimeRange{
+		{Start: "22:00", End: "06:00"},
+		{Start: "07:00", End: "23:00", DaysOfWeek: []int{0, 6}},
+		{Start: "15:00", End: "18:00"},
+		{Start: "17:00", End: "23:00"},
+	}}
+	require.NoError(t, ValidateSchedule("s", s))
+	require.Equal(t, []TimeRange{
+		{Start: "15:00", End: "23:00"},
+		{Start: "22:00", End: "06:00"},
+		{Start: "07:00", End: "23:00", DaysOfWeek: []int{0, 6}},
+	}, s.TimeRanges)
 }

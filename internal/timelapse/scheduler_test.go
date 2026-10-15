@@ -297,6 +297,29 @@ func TestScheduler_NextTransition(t *testing.T) {
 		}
 	})
 
+	t.Run("overnight range with per-range days", func(t *testing.T) {
+		fri2100 := time.Date(2026, 10, 9, 21, 0, 0, 0, time.UTC)
+		s := &Scheduler{now: func() time.Time { return fri2100 }}
+		cfg := config.CameraTimelapseConfig{
+			Schedule: &config.ScheduleConfig{
+				TimeRanges: []config.TimeRange{{Start: "22:00", End: "06:00", DaysOfWeek: []int{5}}},
+			},
+		}
+		// Fri 21:00 -> on at 22:00.
+		if got := s.NextTransition(cfg); got != time.Hour {
+			t.Errorf("NextTransition = %v, want 1h", got)
+		}
+		// Sat 01:00 (inside Friday's range) -> off at 06:00.
+		sat0100 := time.Date(2026, 10, 10, 1, 0, 0, 0, time.UTC)
+		s.now = func() time.Time { return sat0100 }
+		if !s.IsRecordingTime(cfg) {
+			t.Error("Sat 01:00 should be inside Friday's overnight range")
+		}
+		if got := s.NextTransition(cfg); got != 5*time.Hour {
+			t.Errorf("NextTransition = %v, want 5h", got)
+		}
+	})
+
 	t.Run("crossing day boundary — Saturday to Monday", func(t *testing.T) {
 		sat2300 := time.Date(2026, 6, 6, 23, 0, 0, 0, time.UTC)
 		s := &Scheduler{now: func() time.Time { return sat2300 }}
