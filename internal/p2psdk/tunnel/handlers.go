@@ -209,8 +209,8 @@ func (t *Tunnel) pipeTCPToTunnel(tcpConn net.Conn, sc *streamConn) {
 		t.streams.Delete(sc.streamID)
 	}()
 
-	fragmenter := NewFragmenter(sc.streamID)
-	buf := make([]byte, MaxPayloadBytes)
+	fragmenter := NewFragmenter(sc.streamID, t.fragmentSize())
+	buf := make([]byte, t.fragmentSize())
 	for {
 		n, err := tcpConn.Read(buf)
 		if n > 0 {

@@ -3,12 +3,16 @@ package p2p
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"path/filepath"
 	"testing"
+	"time"
 
 	peer "github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/tunnel"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -32,6 +36,9 @@ func TestManagerDialPassesAdvertiseAndOnStats(t *testing.T) {
 		ServerURL: "wss://adv-test.invalid/signal",
 		Username:  "device:mibeenvr:nvr-x",
 		Advertise: "auto:40000",
+		// #13 计时器/MTU 透传断言（单项配置 → 其余项 0 由 SDK 回填库默认）。
+		ICEKeepaliveIntervalMS: 8000,
+		ICEReceiveMTU:          1280,
 	}
 	m := New(cfg, "127.0.0.1:9090", filepath.Join(t.TempDir(), "token.json"),
 		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), nil)
@@ -45,6 +52,15 @@ func TestManagerDialPassesAdvertiseAndOnStats(t *testing.T) {
 	}
 	if gotCfg.AdvertiseAddr != "auto:40000" {
 		t.Fatalf("AdvertiseAddr = %q, want auto:40000", gotCfg.AdvertiseAddr)
+	}
+	if gotCfg.ICETimeouts.KeepaliveInterval != 8_000*1e6 {
+		t.Fatalf("KeepaliveInterval = %v, want 8s", gotCfg.ICETimeouts.KeepaliveInterval)
+	}
+	if gotCfg.ICETimeouts.DisconnectedTimeout != 0 || gotCfg.ICETimeouts.FailedTimeout != 0 {
+		t.Fatalf("unset timers must stay 0 (SDK substitutes defaults), got %+v", gotCfg.ICETimeouts)
+	}
+	if gotCfg.ICEReceiveMTU != 1280 {
+		t.Fatalf("ICEReceiveMTU = %d, want 1280", gotCfg.ICEReceiveMTU)
 	}
 }
 
@@ -125,5 +141,115 @@ func TestManagerOnStatsMetrics(t *testing.T) {
 	m.dropICESession("b")
 	if got := testutil.ToFloat64(rec.P2PICESessions.WithLabelValues("host")); got != 0 {
 		t.Fatalf("host sessions gauge after prune = %v, want series removed/0", got)
+	}
+}
+
+// TestManagerTunnelDroppedFramesSum 钉住 #13 丢帧观测的 manager 汇总：
+// 黑盒驱动隧道入站路径（客户端流 + 不读的消费者 → 投递队列溢出）→
+// live 求和 → dropClient 结转 → Status/metrics 双面可见。
+func TestManagerTunnelDroppedFramesSum(t *testing.T) {
+	rec := metrics.NewMetrics()
+	m := New(config.P2PConfig{}, "127.0.0.1:9090", filepath.Join(t.TempDir(), "token.json"),
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), nil)
+	m.SetMetrics(rec)
+
+	var inbound func([]byte)
+	tr := &captureTransport{onMessage: func(h func([]byte)) { inbound = h }}
+	live := tunnel.New(tr)
+	go live.Serve()
+	t.Cleanup(func() { _ = live.Close() })
+
+	// 客户端流（Dial 注册 streams 表；captureTransport 吞掉 open 帧，
+	// 本端不读任何数据 = 消费端停转）。
+	conn, err := live.Dial("nvr-api")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	m.clientsMu.Lock()
+	m.clients[live] = struct{}{}
+	m.clientsMu.Unlock()
+
+	frame := func(typ, payload string) []byte {
+		b, _ := json.Marshal(map[string]string{"type": typ, "payload": payload})
+		return b
+	}
+	const total = 100 // dataCh 容量 64：36 帧注定溢出
+	for i := range total {
+		d, _ := json.Marshal(tunnel.TunnelData{
+			StreamID: 1, Seq: 0, Total: 1,
+			Payload: base64.StdEncoding.EncodeToString([]byte("x")),
+		})
+		inbound(frame("data", string(d)))
+		if i%16 == 15 {
+			time.Sleep(10 * time.Millisecond) // 让 Serve 跟上，避免 msgQ 吞帧
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.tunnelDroppedTotal() >= total-64 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := m.tunnelDroppedTotal(); got < total-64 {
+		t.Fatalf("TunnelDroppedFrames = %d, want >= %d (queue 64 + %d pushes)", got, total-64, total)
+	}
+	snap := m.Status()
+	if snap.TunnelDroppedFrames == 0 {
+		t.Fatal("Status must expose the drop count")
+	}
+	if !snap.ICEUDPOnly {
+		t.Fatal("ICEUDPOnly must be reported true (pion UDP-only)")
+	}
+
+	// 结转：会话结束后计数保持单调。
+	before := snap.TunnelDroppedFrames
+	m.dropClient(live)
+	if got := m.Status().TunnelDroppedFrames; got < before {
+		t.Fatalf("after dropClient, TunnelDroppedFrames = %d, want >= %d (carried over)", got, before)
+	}
+	if got := testutil.ToFloat64(rec.P2PTunnelDroppedFrames); got == 0 {
+		t.Fatal("metrics nvr_p2p_tunnel_dropped_frames must be published")
+	}
+}
+
+// captureTransport 记录 OnMessage 注册的入站回调（测试驱动入站帧）。
+type captureTransport struct{ onMessage func(func([]byte)) }
+
+func (c *captureTransport) Send([]byte) error        { return nil }
+func (c *captureTransport) OnMessage(h func([]byte)) { c.onMessage(h) }
+func (c *captureTransport) Close() error             { return nil }
+
+// TestManagerNATObservationStatus 钉住 #14 观测消费链：SDK 观测 →
+// StatusSnapshot.nat（含 prefer_relay 判定）+ metrics 单标签发布。
+func TestManagerNATObservationStatus(t *testing.T) {
+	rec := metrics.NewMetrics()
+	m := New(config.P2PConfig{}, "127.0.0.1:9090", filepath.Join(t.TempDir(), "token.json"),
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), nil)
+	m.SetMetrics(rec)
+
+	if m.Status().NAT != nil {
+		t.Fatal("before any observation, NAT must be nil")
+	}
+
+	m.onNATObservation(peer.NatObservation{
+		Class:         peer.NATSymmetric,
+		StunReachable: true,
+		Responsive:    2,
+		LocalAddr:     "192.168.1.10:52100",
+	})
+	snap := m.Status()
+	if snap.NAT == nil || snap.NAT.Class != "symmetric" {
+		t.Fatalf("NAT = %+v, want symmetric", snap.NAT)
+	}
+	if !snap.NAT.PreferRelay {
+		t.Fatal("symmetric NAT must set prefer_relay")
+	}
+	if got := testutil.ToFloat64(rec.P2PNATClass.WithLabelValues("symmetric")); got != 1 {
+		t.Fatalf("nvr_p2p_nat_class{symmetric} = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(rec.P2PNATClass); n != 1 {
+		t.Fatalf("exactly one class label must be live, got %d", n)
 	}
 }

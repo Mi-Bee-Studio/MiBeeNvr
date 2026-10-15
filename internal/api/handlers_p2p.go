@@ -41,18 +41,24 @@ func (h *Handler) handleGetP2PSettings(w http.ResponseWriter, _ *http.Request) {
 	}
 	c := h.config.P2P
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":               c.Enabled,
-		"server_url":            c.ServerURL,
-		"product_id":            c.ProductID,
-		"peer_id":               c.PeerID,
-		"service_name":          c.ServiceName,
-		"username":              c.Username,
-		"password_configured":   c.Password != "",
-		"client_id":             c.ClientID,
-		"transport_timeout_s":   c.TransportTimeoutSec,
-		"max_clients":           c.MaxClients,
-		"device_key_configured": c.DeviceKeyPath != "",
-		"advertise":             c.Advertise,
+		"enabled":                     c.Enabled,
+		"server_url":                  c.ServerURL,
+		"product_id":                  c.ProductID,
+		"peer_id":                     c.PeerID,
+		"service_name":                c.ServiceName,
+		"username":                    c.Username,
+		"password_configured":         c.Password != "",
+		"client_id":                   c.ClientID,
+		"transport_timeout_s":         c.TransportTimeoutSec,
+		"max_clients":                 c.MaxClients,
+		"device_key_configured":       c.DeviceKeyPath != "",
+		"advertise":                   c.Advertise,
+		"ice_keepalive_interval_ms":   c.ICEKeepaliveIntervalMS,
+		"ice_disconnected_timeout_ms": c.ICEDisconnectedTimeoutMS,
+		"ice_failed_timeout_ms":       c.ICEFailedTimeoutMS,
+		"ice_receive_mtu":             c.ICEReceiveMTU,
+		"tunnel_max_payload_bytes":    c.TunnelMaxPayloadBytes,
+		"ice_udp_only":                true, // pion v4 仅 UDP 候选（TCP 上游未支持）
 	})
 }
 
@@ -66,17 +72,22 @@ func (h *Handler) handleUpdateP2PSettings(w http.ResponseWriter, r *http.Request
 	}
 
 	var body struct {
-		Enabled             *bool   `json:"enabled"`
-		ServerURL           *string `json:"server_url"`
-		ProductID           *string `json:"product_id"`
-		PeerID              *string `json:"peer_id"`
-		ServiceName         *string `json:"service_name"`
-		Username            *string `json:"username"`
-		Password            *string `json:"password"`
-		ClearCredentials    *bool   `json:"clear_credentials"`
-		TransportTimeoutSec *int    `json:"transport_timeout_s"`
-		MaxClients          *int    `json:"max_clients"`
-		Advertise           *string `json:"advertise"`
+		Enabled                  *bool   `json:"enabled"`
+		ServerURL                *string `json:"server_url"`
+		ProductID                *string `json:"product_id"`
+		PeerID                   *string `json:"peer_id"`
+		ServiceName              *string `json:"service_name"`
+		Username                 *string `json:"username"`
+		Password                 *string `json:"password"`
+		ClearCredentials         *bool   `json:"clear_credentials"`
+		TransportTimeoutSec      *int    `json:"transport_timeout_s"`
+		MaxClients               *int    `json:"max_clients"`
+		Advertise                *string `json:"advertise"`
+		ICEKeepaliveIntervalMS   *int    `json:"ice_keepalive_interval_ms"`
+		ICEDisconnectedTimeoutMS *int    `json:"ice_disconnected_timeout_ms"`
+		ICEFailedTimeoutMS       *int    `json:"ice_failed_timeout_ms"`
+		ICEReceiveMTU            *int    `json:"ice_receive_mtu"`
+		TunnelMaxPayloadBytes    *int    `json:"tunnel_max_payload_bytes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -121,6 +132,21 @@ func (h *Handler) handleUpdateP2PSettings(w http.ResponseWriter, r *http.Request
 	}
 	if body.Advertise != nil {
 		c.Advertise = strings.TrimSpace(*body.Advertise)
+	}
+	if body.ICEKeepaliveIntervalMS != nil {
+		c.ICEKeepaliveIntervalMS = *body.ICEKeepaliveIntervalMS
+	}
+	if body.ICEDisconnectedTimeoutMS != nil {
+		c.ICEDisconnectedTimeoutMS = *body.ICEDisconnectedTimeoutMS
+	}
+	if body.ICEFailedTimeoutMS != nil {
+		c.ICEFailedTimeoutMS = *body.ICEFailedTimeoutMS
+	}
+	if body.ICEReceiveMTU != nil {
+		c.ICEReceiveMTU = *body.ICEReceiveMTU
+	}
+	if body.TunnelMaxPayloadBytes != nil {
+		c.TunnelMaxPayloadBytes = *body.TunnelMaxPayloadBytes
 	}
 	// peer_id 留空 = 安装级默认（Server.DeviceID，与 App 侧发现锚点同源）。
 	if c.PeerID == "" {

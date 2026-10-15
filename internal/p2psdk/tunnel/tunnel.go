@@ -29,6 +29,15 @@ type Tunnel struct {
 	mu        sync.Mutex
 	started   bool
 
+	// maxPayload overrides the fragment size (0 = MaxPayloadBytes).
+	maxPayload int
+
+	// droppedFrames counts inbound frames dropped at the stream delivery
+	// queue (queue full = the peer's consumer is stalled; dropping rather
+	// than back-pressuring is the ordered-stream design — surfaced for
+	// diagnostics, it is NOT an error path to fix silently).
+	droppedFrames atomic.Uint64
+
 	// msgCh carries inbound frames from the (construction-time) transport
 	// handler to the Serve loop. Buffering here is what makes pre-Serve
 	// frames survivable.
@@ -144,7 +153,7 @@ func fragmentAAD(streamID, seq, total uint32) []byte {
 // request to timeout (2026-10-09 tri-party patrol: R19/R41/R44, links
 // healthy yet logins stalled 15s). Frames arriving before Serve() buffer
 // in msgCh and drain once Serve runs.
-func New(t peer.Transport) *Tunnel {
+func New(t peer.Transport, opts ...Option) *Tunnel {
 	tun := &Tunnel{
 		transport: t,
 		services:  make(map[string]string),
@@ -155,6 +164,9 @@ func New(t peer.Transport) *Tunnel {
 		closeCh:   make(chan struct{}),
 		msgCh:     make(chan []byte, 64),
 	}
+	for _, o := range opts {
+		o(tun)
+	}
 	t.OnMessage(func(data []byte) {
 		select {
 		case tun.msgCh <- data:
@@ -162,6 +174,36 @@ func New(t peer.Transport) *Tunnel {
 		}
 	})
 	return tun
+}
+
+// Option customizes a Tunnel at construction.
+type Option func(*Tunnel)
+
+// WithMaxPayloadBytes overrides the tunnel fragment size (0/negative is
+// ignored → MaxPayloadBytes). Receivers do not validate fragment size, so
+// senders with different settings interoperate; the SCTP 64 KiB
+// message-size ceiling constrains the upper bound (base64 inflates by 4/3,
+// so 32 KiB payload ≈ 43.7 KiB on the wire).
+func WithMaxPayloadBytes(n int) Option {
+	return func(t *Tunnel) {
+		if n > 0 {
+			t.maxPayload = n
+		}
+	}
+}
+
+// fragmentSize is the effective per-fragment payload ceiling.
+func (t *Tunnel) fragmentSize() int {
+	if t.maxPayload > 0 {
+		return t.maxPayload
+	}
+	return MaxPayloadBytes
+}
+
+// DroppedFrames reports inbound frames dropped at stream delivery queues
+// (consumer stalled, queue full). Monotonic for this Tunnel's lifetime.
+func (t *Tunnel) DroppedFrames() uint64 {
+	return t.droppedFrames.Load()
 }
 
 // RegisterService registers a local service address reachable by name.

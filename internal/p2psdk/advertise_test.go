@@ -24,10 +24,10 @@ func TestApplyAdvertiseAddr(t *testing.T) {
 
 	// Full factory smoke: settings survive into a real PeerConnection.
 	// (Socket binding happens at gathering, not here — no port conflicts.)
-	pc, err := newPeerConnection(nil, "203.0.113.5:41913", nil)
+	pc, err := newPeerConnection(SignalingConfig{AdvertiseAddr: "203.0.113.5:41913"}, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, pc.Close())
 
-	_, err = newPeerConnection(nil, "definitely-bad", nil)
+	_, err = newPeerConnection(SignalingConfig{AdvertiseAddr: "definitely-bad"}, nil, nil)
 	require.Error(t, err, "invalid advertise must fail PC creation loudly")
 }

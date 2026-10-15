@@ -110,6 +110,30 @@ type StatusSnapshot struct {
 	LastRejection *Rejection          `json:"last_rejection,omitempty"`
 	RecentEvents  []Event             `json:"recent_events,omitempty"`
 	ICESessions   map[string]ICEStats `json:"ice_sessions,omitempty"`
+
+	// TunnelDroppedFrames 是隧道入站投递队列的累计丢帧数（消费端停滞/
+	// 队列满——有序流不反压是设计选择，丢帧是「消费者停转」信号而非
+	// 链路错误）。live 会话之和 + 已关闭会话结转，单调递增。
+	TunnelDroppedFrames uint64 `json:"tunnel_dropped_frames,omitempty"`
+
+	// ICEUDPOnly 如实标注传输能力边界：pion v4 只支持 UDP 候选——被
+	// QoS/企业网关整形的网段只能落 relay，没有 TCP 兜底。
+	ICEUDPOnly bool `json:"ice_udp_only"`
+
+	// NAT 是本机 NAT 行为观测（#14，只观测不改策略）：对称 NAT 意味着
+	// 与另一个对称 NAT 对端的常规 ICE 打洞数学上不可行——这是「为什么
+	// 落 relay」的设备侧事实证据。welcome 无 STUN 或探测未完成 = nil。
+	NAT *NATObservation `json:"nat,omitempty"`
+}
+
+// NATObservation 是设备侧 NAT 行为观测的对外视图（SDK peer.NatObservation）。
+type NATObservation struct {
+	Class         string    `json:"class"` // public|cone|symmetric|unknown
+	StunReachable bool      `json:"stun_reachable"`
+	Responsive    int       `json:"responsive"`
+	LocalAddr     string    `json:"local_addr,omitempty"`
+	PreferRelay   bool      `json:"prefer_relay"` // symmetric=true：该形态下应先/只走 relay
+	At            time.Time `json:"at"`
 }
 
 // Manager 监督 P2P 设备会话的完整生命周期：铸 token → 信令上线 → 每个
@@ -139,6 +163,13 @@ type Manager struct {
 	clientsMu     sync.Mutex
 	clients       map[*tunnel.Tunnel]struct{}
 	rejectedTotal atomic.Int64
+
+	// closedTunnelDrops 结转已关闭会话的隧道丢帧（Tunnel 关闭后计数
+	// 器不可再读；live 部分在 tunnelDroppedTotal 里现场求和）。
+	closedTunnelDrops atomic.Uint64
+
+	// natObs 是最近一次 NAT 行为观测（信令重拨后刷新）。
+	natObs        atomic.Pointer[peer.NatObservation]
 	consecRejects int // 平台策略拒绝连击数（成功上线清零；Run 循环读写）
 	lastRejection atomic.Pointer[Rejection]
 
@@ -318,6 +349,14 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 		// 构建跑 UPnP→NAT-PMP→STUN 阶梯（SDK 侧 TTL 缓存 + journal 日
 		// 志）；"<ip>:<port>" 直填。通告不可达时 ICE 照常回落 TURN/relay。
 		AdvertiseAddr: m.cfg.Advertise,
+		// ICE 计时器/MTU（#13）：0 = 库默认（不触碰引擎，行为与历史
+		// 逐字节一致）；单项配置时 SDK 侧对其余项回填库默认。
+		ICETimeouts: peer.ICETimeouts{
+			KeepaliveInterval:   msToDuration(m.cfg.ICEKeepaliveIntervalMS),
+			DisconnectedTimeout: msToDuration(m.cfg.ICEDisconnectedTimeoutMS),
+			FailedTimeout:       msToDuration(m.cfg.ICEFailedTimeoutMS),
+		},
+		ICEReceiveMTU: m.cfg.ICEReceiveMTU,
 		TransportTimeout: func() time.Duration {
 			if m.cfg.TransportTimeoutSec > 0 {
 				return time.Duration(m.cfg.TransportTimeoutSec) * time.Second
@@ -360,6 +399,7 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 	// /metrics。Session 级回调须在首个入站会话建立前挂好；SDK 注入
 	// SessionID 后回调；异常静默降级，绝不影响建链。
 	sess.OnStats = m.onICEStats
+	sess.OnNATObservation = m.onNATObservation
 
 	m.logger.Info("p2p device online",
 		"peer_id", m.cfg.PeerID,
@@ -398,7 +438,8 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 			_ = dc.Close()
 			return
 		}
-		tun := tunnel.New(peer.NewDataChannelTransport(dc))
+		tun := tunnel.New(peer.NewDataChannelTransport(dc),
+			tunnel.WithMaxPayloadBytes(m.cfg.TunnelMaxPayloadBytes))
 		if len(dc.E2EEKey) > 0 {
 			// 机会式隧道层 E2EE：对端未武装时自动回落明文（混合版本
 			// 兼容），relay 转发层零知识。
@@ -527,8 +568,59 @@ func (m *Manager) dropClient(tun *tunnel.Tunnel) {
 	delete(m.clients, tun)
 	n := len(m.clients)
 	m.clientsMu.Unlock()
+	// 丢帧计数结转：Tunnel 关闭后其计数不可再读，先把终值并入累计。
+	if drops := tun.DroppedFrames(); drops > 0 {
+		m.closedTunnelDrops.Add(drops)
+	}
+	m.recorder.SetP2PTunnelDroppedFrames(m.tunnelDroppedTotal())
 	m.addEvent("tunnel_down", "", fmt.Sprintf("active=%d", n))
-	m.logger.Info("client tunnel down", "active_clients", n)
+	m.logger.Info("client tunnel down", "active_clients", n, "dropped_frames_total", m.tunnelDroppedTotal())
+}
+
+// tunnelDroppedTotal = 已关闭会话结转 + live 会话现场求和（单调）。
+func (m *Manager) tunnelDroppedTotal() uint64 {
+	total := m.closedTunnelDrops.Load()
+	m.clientsMu.Lock()
+	for tun := range m.clients {
+		total += tun.DroppedFrames()
+	}
+	m.clientsMu.Unlock()
+	return total
+}
+
+// onNATObservation 消费 SDK 的 NAT 行为观测：Status/metrics/事件流三面落。
+func (m *Manager) onNATObservation(o peer.NatObservation) {
+	m.natObs.Store(&o)
+	m.addEvent("nat_observation", "",
+		fmt.Sprintf("class=%s stun=%d prefer_relay=%v", o.Class, o.Responsive, peer.PreferRelay(o.Class)))
+	m.recorder.SetP2PNATClass(string(o.Class))
+	m.logger.Info("NAT behavior observed",
+		"class", string(o.Class), "stun_responsive", o.Responsive,
+		"local_addr", o.LocalAddr, "prefer_relay", peer.PreferRelay(o.Class))
+}
+
+// natSnapshot 把 SDK 观测转成对外视图（nil 当未观测）。
+func (m *Manager) natSnapshot() *NATObservation {
+	o := m.natObs.Load()
+	if o == nil {
+		return nil
+	}
+	return &NATObservation{
+		Class:         string(o.Class),
+		StunReachable: o.StunReachable,
+		Responsive:    o.Responsive,
+		LocalAddr:     o.LocalAddr,
+		PreferRelay:   peer.PreferRelay(o.Class),
+		At:            o.At,
+	}
+}
+
+// msToDuration 毫秒 → Duration（0 保持 0 = 库默认）。
+func msToDuration(ms int) time.Duration {
+	if ms <= 0 {
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // ladderTokenFunc 返回信令梯子的逐次铸币闭包（独立方法以便测试）。Mint
@@ -645,6 +737,7 @@ func (m *Manager) onICEStats(snap peer.StatsSnapshot) {
 		m.recorder.ObserveP2PICERTT(st.LocalType, st.RTTMs)
 		for typ, n := range counts {
 			m.recorder.SetP2PICESessions(typ, n)
+			m.recorder.SetP2PTunnelDroppedFrames(m.tunnelDroppedTotal())
 		}
 	}
 }
@@ -671,6 +764,7 @@ func (m *Manager) dropICESession(sessionID string) {
 	if m.recorder != nil {
 		for typ := range seen {
 			m.recorder.SetP2PICESessions(typ, counts[typ])
+			m.recorder.SetP2PTunnelDroppedFrames(m.tunnelDroppedTotal())
 		}
 	}
 }
@@ -711,6 +805,11 @@ func (m *Manager) Status() StatusSnapshot {
 		CapSource:     lim.source,
 		RejectedTotal: m.rejectedTotal.Load(),
 		ICESessions:   m.iceSnapshot(),
+		// pion supportedNetworkTypes() 仅 UDP4/UDP6（TCP 候选上游未支
+		// 持）——如实上报，排障时先排除「UDP 被整形只剩 relay」。
+		ICEUDPOnly:          true,
+		TunnelDroppedFrames: m.tunnelDroppedTotal(),
+		NAT:                 m.natSnapshot(),
 	}
 	if m.gate != nil {
 		snap.License = &GateStatus{Allowed: m.gate.Allowed(), State: m.gate.State()}

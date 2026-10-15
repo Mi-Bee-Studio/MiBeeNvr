@@ -41,6 +41,26 @@ type SignalingConfig struct {
 	// identity binding; same key used for re-enroll proof-of-possession).
 	DeviceKeyPath string
 
+	// ICETimeouts optionally overrides the pion ICE agent timers (zero
+	// value = library defaults, see ICETimeouts). High-jitter links (weak
+	// 5G, metro, cross-border 300-500ms RTT) read multi-second p99 spikes
+	// as failure: the library defaults (keepalive 2s, connected→
+	// disconnected 5s, disconnected→failed 25s) then express as ICE
+	// restart churn instead of tolerance. Each field may be set
+	// independently; zero fields fall back to the matching default.
+	ICETimeouts ICETimeouts
+
+	// ICEReceiveMTU optionally overrides the ICE receive MTU (pion
+	// SetReceiveMTU). 0 = library default. Useful on small-MTU paths
+	// (PPPoE, some corporate egress) — though without RFC 8829 probing this
+	// is a static knob, not negotiation.
+	ICEReceiveMTU int
+
+	// TunnelMaxPayloadBytes optionally overrides the tunnel fragment size
+	// (0 = MaxPayloadBytes, 32 KiB). Receivers do not validate fragment
+	// size, so mixed settings interoperate; capping happens at the sender.
+	TunnelMaxPayloadBytes int
+
 	// TLSConfig is an optional TLS configuration for the WebSocket connection.
 	// When nil, default TLS settings are used.
 	TLSConfig *tls.Config
@@ -145,6 +165,24 @@ func (c SignalingConfig) sessionIdleTimeout() time.Duration {
 }
 
 // DataChannel represents an open DataChannel for sending and receiving data.
+// ICETimeouts overrides the pion ICE agent timers (SignalingConfig.
+// ICETimeouts). Zero fields fall back to the pion/ice v4.4.x defaults
+// below — keep these aligned if pion's agent_config.go ever changes, or
+// partial overrides silently drift from "library default".
+type ICETimeouts struct {
+	KeepaliveInterval   time.Duration
+	DisconnectedTimeout time.Duration
+	FailedTimeout       time.Duration
+}
+
+// pion/ice v4.4.x defaults (agent_config.go): substituted for zero
+// ICETimeouts fields so callers may override a single timer.
+const (
+	ICEDefaultKeepaliveInterval   = 2 * time.Second
+	ICEDefaultDisconnectedTimeout = 5 * time.Second
+	ICEDefaultFailedTimeout       = 25 * time.Second
+)
+
 type DataChannel struct {
 	// Label is the DataChannel label (e.g. "p2p-data").
 	Label string

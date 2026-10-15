@@ -170,8 +170,10 @@ type Metrics struct {
 	// makes "direct-connection rate" a measurable product metric instead of a
 	// guess, and the ICE RTT histogram separates transport quality from
 	// app-layer amplification (app_rtt seconds vs ICE RTT milliseconds).
-	P2PICESessions  *prometheus.GaugeVec     // labels: local_type (host|srflx|prflx|relay=TURN) — current sessions per type
-	P2PICERTTMillis *prometheus.HistogramVec // nominated ICE pair RTT in milliseconds
+	P2PICESessions         *prometheus.GaugeVec     // labels: local_type (host|srflx|prflx|relay=TURN) — current sessions per type
+	P2PICERTTMillis        *prometheus.HistogramVec // nominated ICE pair RTT in milliseconds
+	P2PTunnelDroppedFrames prometheus.Gauge         // nvr_p2p_tunnel_dropped_frames — cumulative inbound tunnel frames dropped at delivery queues
+	P2PNATClass            *prometheus.GaugeVec     // nvr_p2p_nat_class{class} — latest NAT observation (1 = current class)
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -692,6 +694,15 @@ func NewMetrics() *Metrics {
 		Buckets: []float64{5, 10, 20, 40, 80, 160, 320, 640, 1280},
 	}, []string{"local_type"})
 
+	p2pTunnelDropped := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_p2p_tunnel_dropped_frames",
+		Help: "Cumulative inbound tunnel frames dropped at stream delivery queues (queue full = peer consumer stalled; ordered streams cannot back-pressure). Sustained growth with live sessions = the client is not draining, not a link error.",
+	})
+	p2pNATClass := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_p2p_nat_class",
+		Help: "Latest NAT behavior observation (1 on the current class label: public|cone|symmetric|unknown). symmetric = classic ICE hole punching with another symmetric peer is mathematically infeasible — relay is the path.",
+	}, []string{"class"})
+
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -794,6 +805,8 @@ func NewMetrics() *Metrics {
 		resolvedEncoding,
 		p2pICESessions,
 		p2pICERTTMillis,
+		p2pTunnelDropped,
+		p2pNATClass,
 
 		// Rolling bucket retention (#764) + pixgate sampler telemetry (#699).
 		// These were shipped UNREGISTERED in #783/#786 — the collectors
@@ -916,6 +929,8 @@ func NewMetrics() *Metrics {
 		ResolvedEncoding:               resolvedEncoding,
 		P2PICESessions:                 p2pICESessions,
 		P2PICERTTMillis:                p2pICERTTMillis,
+		P2PTunnelDroppedFrames:         p2pTunnelDropped,
+		P2PNATClass:                    p2pNATClass,
 	}
 }
 
@@ -1104,4 +1119,28 @@ func (m *Metrics) IncRecordingDeepCheck(cameraID, result string) {
 		return
 	}
 	m.RecordingDeepCheckTotal.WithLabelValues(cameraID, result).Inc()
+}
+
+// SetP2PTunnelDroppedFrames publishes the cumulative tunnel drop counter
+// (nil-safe; negative values are ignored).
+func (m *Metrics) SetP2PTunnelDroppedFrames(total uint64) {
+	if m == nil || m.P2PTunnelDroppedFrames == nil {
+		return
+	}
+	m.P2PTunnelDroppedFrames.Set(float64(total))
+}
+
+// SetP2PNATClass publishes the observed NAT class — 1 on the current class,
+// deleting other series so exactly one label is live (nil-safe).
+func (m *Metrics) SetP2PNATClass(class string) {
+	if m == nil || m.P2PNATClass == nil {
+		return
+	}
+	for _, c := range []string{"public", "cone", "symmetric", "unknown"} {
+		if c == class {
+			m.P2PNATClass.WithLabelValues(c).Set(1)
+		} else {
+			m.P2PNATClass.DeleteLabelValues(c)
+		}
+	}
 }
