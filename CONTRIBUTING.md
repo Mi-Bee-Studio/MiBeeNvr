@@ -29,12 +29,38 @@ explicitly in your pull request so they can be reviewed before merge.
    enforces 55% minimum Go coverage.
 3. Frontend rules: Svelte 5 runes only (no legacy `$:` reactive
    syntax), plain Vite + hash routing (no SvelteKit patterns), no
-   `@ts-ignore`.
+   `@ts-ignore`. Building the web UI from source requires
+   **Node ≥ 24.15** (`.nvmrc` pins the version CI uses).
 4. Development follows **test-driven development** — see the next
    section; PRs without their tests are not mergeable.
 5. New Go packages should ship their own `AGENTS.md` structure notes
    (this file is gitignored — see the repository conventions in
    existing packages).
+
+## What CI runs
+
+A PR runs six checks; all of them must be green before merge:
+
+| Check | What it does |
+|-------|--------------|
+| `test` | `go test -race ./...` with a 55% coverage floor |
+| `lint` | golangci-lint v2 + markdown fence lint (MD040) + docs relative links & zh/en parity (`scripts/check-docs-links.py`) |
+| `build` | Frontend tests + build (Node 24), then the Go binary |
+| `build-desktop` | Cross-builds the Windows/macOS desktop binaries |
+| `gb35114` | Builds and tests the `-tags gb35114` security seam |
+| `home-assistant` | Validates the Home Assistant integration packaging |
+
+Docs-only PRs: keep fenced code blocks tagged (a bare ``` fence fails
+MD040), keep image paths and relative links resolvable, and keep the
+zh/en page sets in parity — `scripts/check-docs-links.py` enforces all
+three.
+
+## Vendored code
+
+`internal/p2psdk/` is a vendored snapshot of our client-side SDK,
+synced into this tree by the maintainers. Don't change it in drive-by
+PRs — open an issue first so the edit can be coordinated with the
+upstream SDK and carried through the next sync.
 
 ## Development process — TDD (required)
 
