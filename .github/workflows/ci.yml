@@ -23,7 +23,12 @@ jobs:
 
 
       - name: Test
-        run: go test -race -timeout 5m -coverprofile=coverage.out ./...
+        # -p 1：internal/p2psdk 的实时协议测试（WebRTC 握手/relay 路由）在
+        # 多包并行 -race 的 CPU 踩踏下会撞内部弃线 deadline 而挂死（等待上限
+        # 再宽也救不回；2026-10-15 五连 CI 失败、失败集漂移、本地含 WSL
+        # -race 整包全绿）。串行化给时序测试一个安静机器；每包超时放宽到
+        # 10m 兜底串行下最慢的包。
+        run: go test -race -p 1 -timeout 10m -coverprofile=coverage.out ./...
 
       - name: Display coverage
         run: go tool cover -func=coverage.out
