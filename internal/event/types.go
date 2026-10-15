@@ -82,3 +82,18 @@ type GB28181AlarmEvent struct {
 	AlarmDescription string    `json:"alarm_description,omitempty"`
 	ReceivedAt       time.Time `json:"received_at"`
 }
+
+// DoorbellEvent is the payload for the doorbell.* topics (#971): a SIP
+// doorbell rang (ring), a user answered or rejected it, or the call ended
+// (BYE / CANCEL / ring timeout / hangup). SnapshotPath is set on ring when
+// the configured camera produced a frame in time; it is relative to the
+// storage root, same convention as CameraSnapshotEvent.
+type DoorbellEvent struct {
+	CallID       string    `json:"call_id"`
+	User         string    `json:"user"`
+	Name         string    `json:"name,omitempty"`
+	CameraID     string    `json:"camera_id,omitempty"`
+	SnapshotPath string    `json:"snapshot_path,omitempty"`
+	Reason       string    `json:"reason,omitempty"` // ended: bye|cancel|timeout|hangup|rejected
+	Timestamp    time.Time `json:"timestamp"`
+}

@@ -329,6 +329,29 @@ ftp:
   # password: ""                   # cleartext protocol; unset falls back to the admin
                                    # account with a startup warning)
 
+# SIP doorbell / intercom (#971): standard SIP door stations ring the web
+# UI (popup + two-way G.711 talk + linked-camera snapshot). Default off;
+# lan_only (default) refuses SIP from non-private sources outright.
+doorbell:
+  enabled: false
+  listen: ":5070"                  # SIP listener
+  realm: "mibee-nvr"
+  transport: "udp"                # udp | tcp | tls (tls needs cert/key below)
+  # tls_cert: ""
+  # tls_key: ""
+  # lan_only: true                # refuse SIP from WAN sources (default true)
+  ring_timeout: "60s"
+  # users:                        # mode A: door stations register to the NVR
+  #   - username: "front-door"
+  #     secret: "change-me"       # encrypted at rest (ENC: mechanism)
+  #     name: "Front door"
+  #     camera_id: ""              # optional: snapshotted on ring
+  # outbound:                     # mode B: register the NVR to a PBX instead
+  #   server: "192.168.1.5:5060"
+  #   username: "nvr"
+  #   secret: "pbx-password"      # encrypted at rest
+  #   expires: "300s"
+
 # DLNA media server (#970): TVs and media players on the LAN discover the
 # NVR via SSDP and browse cameras -> days -> recordings. Default off; binds
 # only to the listed (or auto-detected LAN) interfaces, never to WAN/relay.

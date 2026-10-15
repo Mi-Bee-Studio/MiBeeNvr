@@ -12,6 +12,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/credprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/dlna"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/doorbell"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
@@ -118,6 +119,7 @@ type appDeps struct {
 	snapRunner        *snapshot.Runner // MQTT snapshot trigger: capture → persist → event (#656)
 	ftpServer         *ftp.Server
 	dlnaServer        *dlna.Server
+	doorbellServer    *doorbell.Server
 	rtmpServer        *rtmp.Server
 	srtListener       *srt.Listener
 	whipServer        *whip.Server

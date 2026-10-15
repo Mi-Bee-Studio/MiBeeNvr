@@ -1,0 +1,9 @@
+BYE sip:nvr@%SERVER_ADDR% SIP/2.0
+Via: SIP/2.0/UDP %LOCAL_ADDR%;branch=%BRANCH%;rport
+From: <sip:%USER%@%SERVER_ADDR%>;tag=%TAG%
+To: <sip:nvr@%SERVER_ADDR%>
+Call-ID: %CALLID%
+CSeq: 2 BYE
+Max-Forwards: 70
+Content-Length: 0
+

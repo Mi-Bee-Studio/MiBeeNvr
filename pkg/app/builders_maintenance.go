@@ -14,6 +14,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/dlna"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/doorbell"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
@@ -248,6 +249,13 @@ func buildMaintenanceDeps(deps *appDeps) (timelapseSourceDeleter, *snapshot.Capt
 			Interfaces:   cfg.DLNA.Interfaces,
 			FriendlyName: friendly,
 		}, db, store, host+"|"+store.RootDir())
+	}
+
+	// Step 10c: Optional SIP doorbell ingress (#971) — registrar + INVITE
+	// handling; ring events flow to the bus, snapshots reuse the shared
+	// runner (#656). Default off; lan_only refuses WAN sources outright.
+	if cfg.Doorbell.Enabled {
+		deps.doorbellServer = doorbell.NewServer(doorbell.ConfigFrom(cfg.Doorbell), deps.eventBus, deps.snapRunner)
 	}
 
 	return tlSourceDeleter, snapCapturer, triggerDispatcher, nil

@@ -30,6 +30,7 @@ type Config struct {
 	RTMP          RTMPConfig          `yaml:"rtmp"`
 	SRT           SRTConfig           `yaml:"srt"`
 	DLNA          DLNAConfig          `yaml:"dlna"`
+	Doorbell      DoorbellConfig      `yaml:"doorbell"`
 	WHIP          WHIPConfig          `yaml:"whip"`
 	GB28181       GB28181ServerConfig `yaml:"gb28181"`
 	// GB28181Cascade is the lower-level cascade client config (#364).

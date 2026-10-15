@@ -99,6 +99,7 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 - **FTP server**: remote upload + camera auto-registration (point the camera at the FTP address and it joins)
 - **MQTT**: event-bus forwarding (`mqtt.status_events`) + triggered / timed forced recording + snapshot triggers for home automation
 - **[Webhook triggers](webhook-integration.md)**: HMAC-SHA256-signed trigger endpoint (Stripe-style signatures + two-way replay protection) for external systems to start recording / snapshots
+- **[SIP doorbell / intercom](doorbell.md)**: standard SIP door stations ring the web UI (popup, two-way G.711 talk, linked-camera snapshot); registrar mode or through a PBX — default off
 - **[DLNA media server](dlna.md)**: TVs and LAN players discover the NVR via SSDP and browse cameras → days → recordings (default off, LAN interfaces only)
 - **[Home Assistant](home-assistant.md)**: the official custom integration ships with the release (mDNS auto-discovery + per-camera entities / switches); a fully native RTSP-output + MQTT assembly works too
 - **Prometheus**: 300+ metric families at `/api/metrics`

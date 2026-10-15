@@ -53,3 +53,45 @@ export function encodeAlaw(samples: Float32Array): Uint8Array {
   }
   return out;
 }
+
+/**
+ * Decode one standard G.711 A-law byte to a 16-bit PCM sample
+ * (alaw2linear from Sun's public-domain G.711 reference: xor 0x55, then
+ * segment expansion). This is the STANDARD wire format used by SIP
+ * intercom hardware — unlike pcmToAlaw above, which omits the xor to
+ * mirror the GB28181 custom-firmware pair.
+ */
+export function alawToPcm(a: number): number {
+  const v = a ^ 0x55;
+  let t = (v & 0x0f) << 4;
+  const seg = (v & 0x70) >> 4;
+  if (seg === 0) {
+    t += 8;
+  } else {
+    t += 0x108;
+    if (seg > 1) t <<= seg - 1;
+  }
+  return v & 0x80 ? t : -t;
+}
+
+/**
+ * Decode a run of standard A-law bytes (SIP doorbell RTP payloads) to
+ * Float32 PCM (−1..+1, 8 kHz mono).
+ */
+export function decodeAlaw(bytes: Uint8Array): Float32Array {
+  const out = new Float32Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    out[i] = alawToPcm(bytes[i]) / 32768;
+  }
+  return out;
+}
+
+/**
+ * Encode PCM to STANDARD A-law bytes (with the xor), for the SIP doorbell
+ * talk path — commercial intercom hardware expects the standard form.
+ */
+export function encodeAlawStandard(samples: Float32Array): Uint8Array {
+  const raw = encodeAlaw(samples);
+  for (let i = 0; i < raw.length; i++) raw[i] ^= 0x55;
+  return raw;
+}

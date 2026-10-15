@@ -1,0 +1,11 @@
+REGISTER sip:%SERVER_ADDR% SIP/2.0
+Via: SIP/2.0/UDP %LOCAL_ADDR%;branch=%BRANCH%;rport
+From: <sip:%USER%@%SERVER_ADDR%>;tag=%TAG%
+To: <sip:%USER%@%SERVER_ADDR%>
+Call-ID: %CALLID%
+CSeq: %CSEQ% REGISTER
+Contact: <sip:%USER%@%LOCAL_ADDR%>
+Max-Forwards: 70
+Expires: %EXPIRES%
+Content-Length: 0
+

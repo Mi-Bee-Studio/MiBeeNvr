@@ -8,6 +8,7 @@
   import LanguageSwitcher from './LanguageSwitcher.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import Toast from './Toast.svelte';
+  import DoorbellCallPopup from './DoorbellCallPopup.svelte';
   import { ArrowLeft, Menu, LogOut } from 'lucide-svelte';
 
   // Props
@@ -189,6 +190,8 @@
 
 <!-- Toast container — rendered at top level so it's always visible -->
 <Toast />
+<!-- Global doorbell incoming-call popup (#971) -->
+<DoorbellCallPopup />
 
 <style>
   .navbar {

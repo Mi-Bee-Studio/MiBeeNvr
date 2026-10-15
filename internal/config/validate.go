@@ -755,6 +755,43 @@ func validateConfigDetails(cfg *Config) error {
 			}
 		}
 	}
+	if cfg.Doorbell.Enabled {
+		switch cfg.Doorbell.Transport {
+		case "udp", "tcp", "tls":
+		default:
+			return fmt.Errorf("doorbell.transport must be udp, tcp or tls, got %q", cfg.Doorbell.Transport)
+		}
+		if cfg.Doorbell.Transport == "tls" && (cfg.Doorbell.TLSCert == "" || cfg.Doorbell.TLSKey == "") {
+			return fmt.Errorf("doorbell tls transport requires doorbell.tls_cert and doorbell.tls_key")
+		}
+		if _, err := time.ParseDuration(cfg.Doorbell.RingTimeout); err != nil {
+			return fmt.Errorf("doorbell.ring_timeout: %w", err)
+		}
+		if cfg.Doorbell.Outbound == nil && len(cfg.Doorbell.Users) == 0 {
+			return fmt.Errorf("doorbell is enabled but has no users and no outbound PBX — nothing could ever ring")
+		}
+		seen := map[string]bool{}
+		for i, u := range cfg.Doorbell.Users {
+			if strings.TrimSpace(u.Username) == "" {
+				return fmt.Errorf("doorbell.users[%d].username is required", i)
+			}
+			if seen[u.Username] {
+				return fmt.Errorf("doorbell.users[%d].username %q is duplicated", i, u.Username)
+			}
+			seen[u.Username] = true
+		}
+		if cfg.Doorbell.Outbound != nil {
+			if strings.TrimSpace(cfg.Doorbell.Outbound.Server) == "" {
+				return fmt.Errorf("doorbell.outbound.server is required when outbound is set")
+			}
+			if cfg.Doorbell.Outbound.Username == "" || cfg.Doorbell.Outbound.Secret == "" {
+				return fmt.Errorf("doorbell.outbound.username and .secret are required when outbound is set")
+			}
+			if _, err := time.ParseDuration(cfg.Doorbell.Outbound.Expires); err != nil {
+				return fmt.Errorf("doorbell.outbound.expires: %w", err)
+			}
+		}
+	}
 	for i, s := range cfg.SRT.Streams {
 		if strings.TrimSpace(s.CameraID) == "" {
 			return fmt.Errorf("srt.streams[%d].camera_id is required", i)

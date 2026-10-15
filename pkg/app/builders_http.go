@@ -158,6 +158,10 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 		// otherwise skew every record window by the TZ offset.
 		deps.gb28181Server.SetGBTimezone(appLoc)
 	}
+	// SIP doorbell API seam (#971): calls list / answer / reject / talk WS.
+	if deps.doorbellServer != nil {
+		handler.SetDoorbellService(api.NewDoorbellAdapter(deps.doorbellServer, store))
+	}
 	// Wire the cascade client: registration status surfaced in Settings, and
 	// upper-platform PTZ DeviceControl commands bridged to the local camera's
 	// native PTZ (ONVIF ContinuousMove / Xiaomi motor / local GB channel).

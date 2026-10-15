@@ -1,0 +1,11 @@
+v=0
+o=- 0 0 IN IP4 %DOORBELL_IP%
+s=Doorbell Call
+c=IN IP4 %DOORBELL_IP%
+t=0 0
+m=audio %DOORBELL_RTP_PORT% RTP/AVP 8 0 101
+a=rtpmap:8 PCMA/8000
+a=rtpmap:0 PCMU/8000
+a=rtpmap:101 telephone-event/8000
+a=fmtp:101 0-16
+a=sendrecv

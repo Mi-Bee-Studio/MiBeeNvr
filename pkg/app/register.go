@@ -640,6 +640,28 @@ func registerMaintenanceServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 9c. doorbell (optional) — SIP ingress; bind failures log and disable,
+	// never abort startup.
+	if deps.doorbellServer != nil {
+		if err := a.Register(&serviceFunc{
+			name: "doorbell",
+			startFunc: func(ctx context.Context) error {
+				go func() {
+					if err := deps.doorbellServer.Start(ctx); err != nil {
+						slog.Error("doorbell: ingress disabled", "error", err)
+					}
+				}()
+				return nil
+			},
+			stopFunc: func() error {
+				deps.doorbellServer.Stop()
+				return nil
+			},
+		}); err != nil {
+			return fmt.Errorf("register doorbell: %w", err)
+		}
+	}
+
 	return nil
 }
 
