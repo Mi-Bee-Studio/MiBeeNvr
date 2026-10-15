@@ -163,6 +163,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if listen == "" {
 		listen = ":5070"
 	}
+	listen = widenWildcardListen(listen)
 	network := strings.ToUpper(s.cfg.Transport)
 	if network == "" {
 		network = "UDP"
@@ -443,6 +444,21 @@ func (s *Server) sendBYE(c *Call) {
 	if _, err := s.srv.Request(bye); err != nil {
 		s.log.Warn("doorbell BYE send failed", "error", err)
 	}
+}
+
+// widenWildcardListen expands ":5070" to "0.0.0.0:5070". gosip's
+// FillTargetHostAndPort fills an empty host with 127.0.0.1 — without this,
+// the documented wildcard listen silently binds the registrar to loopback
+// only and no LAN door station can ever reach it.
+func widenWildcardListen(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen // bare port/malformed: let gosip surface the error
+	}
+	if strings.TrimSpace(host) == "" {
+		return net.JoinHostPort("0.0.0.0", port)
+	}
+	return listen
 }
 
 // outboundHost is the PBX host we registered to (mode B) — the only source

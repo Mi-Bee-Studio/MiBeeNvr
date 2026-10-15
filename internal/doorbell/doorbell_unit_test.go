@@ -175,3 +175,13 @@ func TestOutboundHost(t *testing.T) {
 	s.cfg.Outbound = &Outbound{Server: "sip:pbx.example.com"}
 	require.Equal(t, "pbx.example.com", s.outboundHost())
 }
+
+// TestWidenWildcardListen: ":5070" must become "0.0.0.0:5070" — gosip fills
+// an empty host with 127.0.0.1, which would loopback-bind the registrar.
+func TestWidenWildcardListen(t *testing.T) {
+	require.Equal(t, "0.0.0.0:5070", widenWildcardListen(":5070"))
+	require.Equal(t, "0.0.0.0:5060", widenWildcardListen(" :5060"))
+	require.Equal(t, "192.168.1.5:5070", widenWildcardListen("192.168.1.5:5070"))
+	require.Equal(t, "[::]:5070", widenWildcardListen("[::]:5070"))
+	require.Equal(t, "5070", widenWildcardListen("5070"))
+}
