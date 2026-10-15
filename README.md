@@ -101,12 +101,13 @@ not match `docs/en/`, trust the docs and please open an issue so we can clarify.
 
 - **Single Binary**: Zero dependencies, embedded Svelte 5 SPA, `CGO_ENABLED=0`
 - **Low-Power ARM Ready**: Runs on 1GB RAM with a 512MB memory budget (validated on Raspberry Pi 3B as the minimum baseline)
-- **Multi-Protocol Streaming**: HLS, WebRTC, HTTP-FLV, RTMP, SRT, WebSocket
+- **Multi-Protocol Streaming**: HLS, WebRTC, HTTP-FLV, RTMP, SRT, WebSocket, WHIP
 - **No Cloud Required**: Self-hosted, no subscriptions, no vendor lock-in
-- **Modern Web UI**: Dark/light themes, i18n support, responsive design
-- **ONVIF Support**: Auto-discovery, PTZ control, stream URI management
+- **Modern Web UI**: Dark/light themes, Chinese / English / Russian, responsive design
+- **ONVIF Support**: Auto-discovery, PTZ control, stream URI management, MotionAlarm events
 - **Plug-and-Play Auto-Discover**: ONVIF cameras joining the LAN are enrolled automatically in the background (Hikvision-NVR-style) — no manual scan. Unauthenticated devices start recording immediately; authenticated ones are added as pending activation until you supply credentials
 - **IP Self-Healing**: ONVIF cameras that change IP (Wi-Fi roaming across APs) are auto-relocated by serial number and reconnected — unicast probing works across routed subnets
+- **Remote Access**: Tailscale / Cloudflare Tunnel / WireGuard guides for external access today, with a built-in encrypted remote-connection mode on the way
 - **Smart Integrations**: MQTT triggers, WebDAV, FTP, FFmpeg transcoding
 
 ## Screenshots
@@ -118,17 +119,18 @@ not match `docs/en/`, trust the docs and please open an issue so we can clarify.
 *Recordings: per-camera timeline with AI event markers; list and timelapse views available*
 
 ![Cameras page](docs/en/images/cameras.webp)  
-*Cameras: discovery scanning, start/stop, and push-out relay management in one place*
+*Cameras: discovery scanning, drag-and-drop groups, start/stop, and push-out relay management in one place*
 
 ## Features
 
 ### 📷 Camera Support
 - RTSP (H.264/H.265/MJPEG) streaming
 - HTTP JPEG snapshot streaming
-- ONVIF discovery & management with PTZ control
+- ONVIF discovery & management with PTZ control and MotionAlarm event subscription
 - Xiaomi CS2 + legacy TUTK (7 models) cloud camera support
 - SRT/RTMP push-in cameras (cross-network ingest — receive streams from remote publishers)
-- GB/T 28181 national-standard platform (experimental): SIP cameras (Hikvision/Dahua/Uniview) register to the NVR — catalog, PTZ, voice intercom, device-side recording search & playback, alarm subscription, cascade. Default off
+- WHIP push-in (browsers, phones, OBS 30+ — WebRTC publishing with H.264 + Opus)
+- GB/T 28181 national-standard platform (experimental): SIP cameras (Hikvision/Dahua/Uniview) register to the NVR — catalog, PTZ, voice intercom, on-demand snapshot & device-side recording search/playback, alarm subscription, cascade. Default off
 - Native Go push-out relay (forward any camera to remote RTMP/RTSP targets; FFmpeg optional for compatibility)
 
 ### 📺 Streaming & Live View
@@ -137,15 +139,19 @@ not match `docs/en/`, trust the docs and please open an issue so we can clarify.
 - HTTP-FLV for browser-friendly streaming
 - RTMP ingest server for push/pull workflows
 - SRT low-latency transport receiver
+- WHIP ingest endpoint (WebRTC publishing from browsers/phones/OBS)
+- Built-in RTSP output server — re-serve every camera (incl. MJPEG) at `rtsp://<nvr>:8554/<camera-id>`
 - WebSocket real-time binary frame streaming
 
 ### 💾 Recording & Storage
 - Automatic MP4 segment generation
 - Multi-camera concurrent recording
-- Per-camera retention policies
+- Per-camera retention policies and weekly recording schedules
+- Adaptive recording — timelapse baseline that drops to sparse keyframes when calm and resumes full rate on motion or loud audio
 - Audio capture (AAC + G.711 + Opus)
 - Segment merging with configurable policies
 - Periodic timelapse recording
+- S3-compatible object-storage offload for cold archives (remote playback proxy or presigned URLs, per-camera bucket routing, automatic local eviction)
 - Continuous playback: double-buffered seamless segment chaining + full-day VOD timeline (scrub across recordings and gaps), AVI frame-browse mode
 - LAN discovery (mDNS `_mibee-nvr._tcp` + UDP 49090 responder) with a stable `device_id` in `/api/health`
 
@@ -153,6 +159,8 @@ not match `docs/en/`, trust the docs and please open an issue so we can clarify.
 - Modern Svelte 5 web UI with dark/light themes
 - REST API for automation
 - BasicAuth with bcrypt password hashing
+- Camera grouping with drag-and-drop, per-camera storage/segment stats
+- In-app update checker and one-click upgrade
 - Prometheus metrics integration
 - Atomic configuration with validation
 
@@ -166,6 +174,8 @@ not match `docs/en/`, trust the docs and please open an issue so we can clarify.
 
 ### 🔌 Integrations
 - MQTT trigger-based recording
+- HMAC-signed webhook trigger endpoint
+- Home Assistant integration
 - WebDAV server for file access
 - FTP server for remote uploads
 - FFmpeg hardware transcoding
@@ -184,7 +194,9 @@ not match `docs/en/`, trust the docs and please open an issue so we can clarify.
 | SRT (ingest) | Camera → NVR | ✅ Done | Push-in: low-latency transport |
 | RTMP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
 | RTSP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
-| ONVIF | Camera ↔ NVR | ✅ Done | Discovery, PTZ, stream URI |
+| RTSP (output) | NVR → External | ✅ Done | Built-in RTSP server: every camera re-served at `rtsp://<nvr>:8554/<camera-id>` |
+| WHIP | Publisher → NVR | ✅ Done | WebRTC push-in from browsers, phones, OBS 30+ (H.264 + Opus) |
+| ONVIF | Camera ↔ NVR | ✅ Done | Discovery, PTZ, stream URI, MotionAlarm events |
 | Xiaomi (CS2 + TUTK) | Camera → NVR | ✅ Done | CS2 P2P + legacy TUTK (7 models), cloud auth |
 | GB/T 28181 | Camera → NVR | ✅ Done | SIP platform, auto-enrollment, audio + talk, subscriptions, PTZ, device-side playback |
 
@@ -223,6 +235,8 @@ Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any R
 | [Transcoding](docs/en/transcoding.md) | FFmpeg transcoding setup |
 | [Prometheus Metrics](docs/en/metrics.md) | Complete Prometheus metric reference with types, labels, and examples |
 | [Relay Guide](docs/en/relay-guide.md) | RTMP live platform relay configuration and troubleshooting |
+| [WHIP Ingest](docs/en/whip-ingest.md) | WebRTC push-in from browsers, phones, and OBS |
+| [Webhook Integration](docs/en/webhook-integration.md) | HMAC-signed webhook trigger endpoint |
 | [Remote Access](docs/en/remote-access.md) | External/4G access via Tailscale, Cloudflare Tunnel, and WebRTC ICE/STUN/TURN config |
 
 ## Build & Deploy
@@ -254,7 +268,7 @@ Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `0.13.0` (exact 
 
 ```text
 cmd/mibee-nvr/       # CLI entry point + app lifecycle
-internal/            # Core packages (43 Go modules)
+internal/            # Core packages
 web/                # Svelte 5 SPA frontend
 deploy/             # systemd services, Caddyfile
 docs/               # Bilingual documentation (EN/ZH)
