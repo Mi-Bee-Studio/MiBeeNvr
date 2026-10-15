@@ -41,6 +41,14 @@ const (
 	// TopicCameraTimeSync: camera clock corrections + auto-check skew reports
 	// (#time-sync).
 	TopicCameraTimeSync = "camera.timesync"
+	// SIP doorbell lifecycle (#971): ring on incoming INVITE, answered /
+	// rejected by the user, ended on BYE/CANCEL/timeout/hangup. Payload:
+	// event.DoorbellEvent. Surfaces via /api/events SSE and MQTT forwarding
+	// so a doorbell ring can drive home-automations.
+	TopicDoorbellRing     = "doorbell.ring"
+	TopicDoorbellAnswered = "doorbell.answered"
+	TopicDoorbellRejected = "doorbell.rejected"
+	TopicDoorbellEnded    = "doorbell.ended"
 )
 
 var ErrDuplicateSubscriber = errors.New("subscriber already registered for this topic")

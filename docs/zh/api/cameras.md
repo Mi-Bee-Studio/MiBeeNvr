@@ -228,15 +228,22 @@ curl -u username:password \
 ```json
 {
   "success": true,
-  "message": "Connection successful",
-  "details": {
-    "protocol": "rtsp",
-    "encoding": "h264",
-    "latency_ms": 45,
-    "frames_received": 10
-  }
+  "message": "connection successful",
+  "latency_ms": 45,
+  "reachable": true,
+  "stream_ok": true,
+  "encoding": "H264",
+  "has_audio": true,
+  "audio_supported": true,
+  "audio": "PCMA 8000Hz"
 }
 ```
+
+RTSP 地址会做真实 DESCRIBE 探测（#964）：端口可达但流不可播放（路径或
+凭据错误）时 `stream_ok` 为 false 并附原因。音源表单（`encoding`:
+`audio`）只有存在可录制音频轨（G.711/AAC/Opus）才成功，探测到的编码在
+`audio` 字段；不支持的编码（如 G726）与纯视频地址返回明确的失败信息。
+DESCRIBE 成功时 `encoding` 为实际视频编码。
 
 ### 启动摄像头
 

@@ -185,6 +185,17 @@ func decryptConfig(cfg *Config, key []byte) {
 	if v, err := Decrypt(cfg.Storage.Remote.SecretAccessKey, key); err == nil {
 		cfg.Storage.Remote.SecretAccessKey = v
 	}
+	// SIP doorbell account secrets (#971)
+	for i := range cfg.Doorbell.Users {
+		if v, err := Decrypt(cfg.Doorbell.Users[i].Secret, key); err == nil {
+			cfg.Doorbell.Users[i].Secret = v
+		}
+	}
+	if cfg.Doorbell.Outbound != nil {
+		if v, err := Decrypt(cfg.Doorbell.Outbound.Secret, key); err == nil {
+			cfg.Doorbell.Outbound.Secret = v
+		}
+	}
 }
 
 // encryptConfig encrypts all sensitive fields in the config in place.
@@ -267,6 +278,21 @@ func encryptConfig(cfg *Config, key []byte) []string {
 			encrypted = append(encrypted, "storage.remote.secret_access_key")
 		}
 	}
+	// SIP doorbell account secrets (#971)
+	for i := range cfg.Doorbell.Users {
+		if s := cfg.Doorbell.Users[i].Secret; s != "" && !IsEncrypted(s) {
+			if v, err := Encrypt(s, key); err == nil {
+				cfg.Doorbell.Users[i].Secret = v
+				encrypted = append(encrypted, fmt.Sprintf("doorbell.users[%d].secret", i))
+			}
+		}
+	}
+	if cfg.Doorbell.Outbound != nil && cfg.Doorbell.Outbound.Secret != "" && !IsEncrypted(cfg.Doorbell.Outbound.Secret) {
+		if v, err := Encrypt(cfg.Doorbell.Outbound.Secret, key); err == nil {
+			cfg.Doorbell.Outbound.Secret = v
+			encrypted = append(encrypted, "doorbell.outbound.secret")
+		}
+	}
 
 	return encrypted
 }
@@ -307,6 +333,14 @@ func SensitiveFieldPaths(cfg *Config) []string {
 	if sk := cfg.Storage.Remote.SecretAccessKey; sk != "" && !IsEncrypted(sk) && !strings.Contains(sk, "${") {
 		fields = append(fields, "storage.remote.secret_access_key")
 	}
+	for i := range cfg.Doorbell.Users {
+		if s := cfg.Doorbell.Users[i].Secret; s != "" && !IsEncrypted(s) {
+			fields = append(fields, fmt.Sprintf("doorbell.users[%d].secret", i))
+		}
+	}
+	if cfg.Doorbell.Outbound != nil && cfg.Doorbell.Outbound.Secret != "" && !IsEncrypted(cfg.Doorbell.Outbound.Secret) {
+		fields = append(fields, "doorbell.outbound.secret")
+	}
 
 	return fields
 }
@@ -322,6 +356,8 @@ type sensitiveSnapshot struct {
 	MetricsAuthPassword string
 	P2PPassword         string
 	RemoteSecretKey     string
+	DoorbellSecrets     []string
+	DoorbellOutbound    string
 }
 
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
@@ -334,6 +370,13 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		MetricsAuthPassword: cfg.MetricsAuth.Password,
 		P2PPassword:         cfg.P2P.Password,
 		RemoteSecretKey:     cfg.Storage.Remote.SecretAccessKey,
+		DoorbellSecrets:     make([]string, len(cfg.Doorbell.Users)),
+	}
+	for i := range cfg.Doorbell.Users {
+		s.DoorbellSecrets[i] = cfg.Doorbell.Users[i].Secret
+	}
+	if cfg.Doorbell.Outbound != nil {
+		s.DoorbellOutbound = cfg.Doorbell.Outbound.Secret
 	}
 	for i := range cfg.Cameras {
 		s.CameraPasswords[i] = cfg.Cameras[i].Password
@@ -354,4 +397,12 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 	}
 	cfg.P2P.Password = s.P2PPassword
 	cfg.Storage.Remote.SecretAccessKey = s.RemoteSecretKey
+	for i := range cfg.Doorbell.Users {
+		if i < len(s.DoorbellSecrets) {
+			cfg.Doorbell.Users[i].Secret = s.DoorbellSecrets[i]
+		}
+	}
+	if cfg.Doorbell.Outbound != nil {
+		cfg.Doorbell.Outbound.Secret = s.DoorbellOutbound
+	}
 }

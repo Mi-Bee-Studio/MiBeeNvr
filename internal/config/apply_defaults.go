@@ -185,6 +185,22 @@ func applyConfigDefaults(cfg *Config) {
 	if cfg.DLNA.Port == 0 {
 		cfg.DLNA.Port = 49152
 	}
+	// SIP doorbell (#971) — default off
+	if cfg.Doorbell.Listen == "" {
+		cfg.Doorbell.Listen = ":5070"
+	}
+	if cfg.Doorbell.Realm == "" {
+		cfg.Doorbell.Realm = "mibee-nvr"
+	}
+	if cfg.Doorbell.Transport == "" {
+		cfg.Doorbell.Transport = "udp"
+	}
+	if cfg.Doorbell.RingTimeout == "" {
+		cfg.Doorbell.RingTimeout = "60s"
+	}
+	if cfg.Doorbell.Outbound != nil && cfg.Doorbell.Outbound.Expires == "" {
+		cfg.Doorbell.Outbound.Expires = "300s"
+	}
 	// MQTT
 	// default false already
 	// WebDAV

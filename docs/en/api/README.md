@@ -18,6 +18,7 @@ Most endpoints require authentication via HTTP Basic Auth. See [Authentication](
 | Recordings | [recordings.md](recordings.md) | List, get, delete, download recordings, timelapse frames (incl. batch) |
 | Archives | [archives.md](archives.md) | Archive groups, retention management |
 | Settings | [settings.md](settings.md) | System stats, settings CRUD, merge/streaming/transcoding/RTSP output settings, storage candidates & migration, MiBeeVision integration status & runtime metrics |
+| Doorbell | [doorbell.md](doorbell.md) | SIP doorbell calls (list, answer/reject/bye), ring snapshot, G.711 talk WebSocket, doorbell.* events |
 | GB28181 | [../gb28181-guide.md](../gb28181-guide.md) | GB/T 28181 platform: devices/channels, catalog refresh, alarms, PTZ, device-side recording search & playback |
 | Xiaomi | [xiaomi.md](xiaomi.md) | Cloud auth, captcha, device management |
 | Merge & Timelapse Config | [merge.md](merge.md) | Merge status, pending counts, camera merge/timelapse config |

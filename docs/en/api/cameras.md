@@ -237,15 +237,24 @@ curl -u username:password \
 ```json
 {
   "success": true,
-  "message": "Connection successful",
-  "details": {
-    "protocol": "rtsp",
-    "encoding": "h264",
-    "latency_ms": 45,
-    "frames_received": 10
-  }
+  "message": "connection successful",
+  "latency_ms": 45,
+  "reachable": true,
+  "stream_ok": true,
+  "encoding": "H264",
+  "has_audio": true,
+  "audio_supported": true,
+  "audio": "PCMA 8000Hz"
 }
 ```
+
+RTSP URLs are probed with a real DESCRIBE (#964): `stream_ok` is false with
+a reason when the port answers but the stream is not playable (wrong path
+or credentials). For audio-source forms (`encoding`: `audio`) success
+requires a recordable audio track — G.711/AAC/Opus — and the probed codec
+is reported in `audio`; unsupported codecs (e.g. G726) and video-only URLs
+fail with an explicit message. `encoding` carries the real video codec when
+the DESCRIBE succeeded.
 
 ### Start Camera
 

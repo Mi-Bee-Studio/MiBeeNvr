@@ -28,6 +28,11 @@ var statusTopics = []string{
 	// Persisted snapshot metadata (file_path relative to storage root) so
 	// smart-home automations can react to MQTT-triggered captures (#656).
 	event.TopicCameraSnapshot,
+	// SIP doorbell ring (#971) — low-frequency, prime home-automation material.
+	event.TopicDoorbellRing,
+	event.TopicDoorbellAnswered,
+	event.TopicDoorbellRejected,
+	event.TopicDoorbellEnded,
 }
 
 var statusLogger = slogx.Component("mqtt-status")
