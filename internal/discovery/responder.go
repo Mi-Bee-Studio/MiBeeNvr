@@ -176,6 +176,20 @@ func (r *UDPResponder) allowReply(ip string) bool {
 	return true
 }
 
+// APISpeaksTLS reports whether the API port advertised in discovery payloads
+// (parsed from server.listen) is actually served over TLS. A separate
+// tls_listen port must NOT flip this flag: the advertised (host, api, tls)
+// triple must describe one reachable service, and https://<ip>:<api-port>
+// does not exist when TLS lives on its own listener. The TLS port itself is
+// deliberately not advertised until clients grow support for a distinct
+// tls_api field.
+func APISpeaksTLS(listen, tlsListen string) bool {
+	if tlsListen == "" {
+		return false
+	}
+	return ParseAPIPort(tlsListen) == ParseAPIPort(listen)
+}
+
 // ParseAPIPort extracts the numeric port from a server.listen value. Accepts
 // ":9090", "0.0.0.0:9090", "192.0.2.1:9090", and bare "9090". Returns the
 // default 9090 for anything unparseable — the reply is advisory, and clients

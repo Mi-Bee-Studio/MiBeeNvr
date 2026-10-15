@@ -107,8 +107,18 @@ func LoadOrCreateDeviceKey(keyPath string) (ed25519.PrivateKey, error) {
 			return nil, fmt.Errorf("device key dir: %w", err)
 		}
 	}
-	if err := os.WriteFile(keyPath, priv.Seed(), 0o600); err != nil {
+	// 崩溃安全落盘（#6）：临时文件→fsync→改名，与 token state 同一纪律。
+	// 半写的 key 文件在下次启动报 unexpected size，agent 整个起不来——
+	// 裸 WriteFile 在写入窗口被 SIGTERM 正是这种窗口。
+	tmp := keyPath + ".tmp"
+	if err := writeStateDurably(tmp, priv.Seed()); err != nil {
 		return nil, fmt.Errorf("write device key: %w", err)
+	}
+	if err := os.Rename(tmp, keyPath); err != nil {
+		return nil, fmt.Errorf("write device key: %w", err)
+	}
+	if back, err := os.ReadFile(keyPath); err != nil || !bytes.Equal(back, priv.Seed()) {
+		return nil, fmt.Errorf("device key write verification failed (read: %v)", err)
 	}
 	return priv, nil
 }

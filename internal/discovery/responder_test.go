@@ -114,3 +114,23 @@ func TestParseAPIPort(t *testing.T) {
 		require.Equal(t, want, ParseAPIPort(in), "input %q", in)
 	}
 }
+
+func TestAPISpeaksTLS(t *testing.T) {
+	cases := []struct {
+		name      string
+		listen    string
+		tlsListen string
+		want      bool
+	}{
+		{"no tls listener", ":9090", "", false},
+		{"split tls port (separate listener)", ":9090", ":9443", false},
+		{"host-prefixed listen, split tls", "0.0.0.0:9090", ":9443", false},
+		{"tls covers the api port", ":9090", ":9090", true},
+		{"both empty", "", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.want, APISpeaksTLS(c.listen, c.tlsListen))
+		})
+	}
+}
