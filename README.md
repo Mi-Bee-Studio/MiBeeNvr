@@ -91,7 +91,6 @@ Version numbers, configuration syntax, and CLI flags are authoritative **only** 
 
 - **Source & releases**: https://github.com/Mi-Bee-Studio/MiBeeNvr/releases
 - **Documentation**: [`docs/en/`](docs/en/) and links in the Documentation table below
-- **Blog**: https://blog.mickeyzzc.tech
 
 Content published elsewhere — reprinted tutorials, "reviews", third-party blogs, SEO
 aggregators — is not reviewed or endorsed by us, and frequently contains invented
