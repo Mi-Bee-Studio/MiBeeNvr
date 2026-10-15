@@ -42,7 +42,8 @@ class FakeEventSource {
   }
   fire(type: string, payload: unknown) {
     this.listeners.get(type)?.forEach((fn) =>
-      fn({ type, data: JSON.stringify({ data: payload }) }),
+      // Real wire shape from /api/events: {"Topic":...,"Data":{...}}.
+      fn({ type, data: JSON.stringify({ Topic: type, Data: payload }) }),
     );
   }
   close() {}

@@ -87,10 +87,17 @@ registerProcessor('doorbell-talk-downsampler', TalkDownsampler);
     return () => teardown();
   });
 
+  // The events endpoint wraps every payload as {"Topic":...,"Data":{...}}
+  // (verified live against /api/events) — unwrap to the inner object.
+  function doorbellPayload(e: Event): DoorbellEvt {
+    const raw = JSON.parse((e as MessageEvent).data);
+    return (raw.Data ?? raw.data) as DoorbellEvt;
+  }
+
   function connect() {
     es = new EventSource(appendAuthToken(`${API_BASE}/events?filter=doorbell.`));
     es.addEventListener('doorbell.ring', (e) => {
-      const evt = JSON.parse((e as MessageEvent).data).data as DoorbellEvt;
+      const evt = doorbellPayload(e);
       // A second ring replaces the current popup (the old call was superseded
       // or the popup was left over).
       if (phase === 'talking' || phase === 'answering') return;
@@ -98,13 +105,13 @@ registerProcessor('doorbell-talk-downsampler', TalkDownsampler);
       phase = 'ringing';
     });
     es.addEventListener('doorbell.answered', (e) => {
-      const evt = JSON.parse((e as MessageEvent).data).data as DoorbellEvt;
+      const evt = doorbellPayload(e);
       // Our own answer keeps the popup (it transitions to talking); an
       // answer from another client dismisses ours.
       if (ringing?.call_id === evt.call_id && phase === 'ringing') dismiss();
     });
     const gone = (e: Event) => {
-      const evt = JSON.parse((e as MessageEvent).data).data as DoorbellEvt;
+      const evt = doorbellPayload(e);
       if (ringing?.call_id === evt.call_id) {
         cleanupTalk();
         dismiss();
