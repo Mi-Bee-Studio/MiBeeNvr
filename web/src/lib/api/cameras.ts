@@ -743,6 +743,12 @@ export interface TestConnectionResult {
   stream_ok?: boolean;
   encoding?: string;
   codec_lie?: boolean;
+  // RTSP DESCRIBE probe fields (#964): what the URL actually serves. `audio`
+  // is a human-readable fragment ("PCMA 8000Hz", "G726 (unsupported)") —
+  // absent when the stream has no audio track at all.
+  audio?: string;
+  has_audio?: boolean;
+  audio_supported?: boolean;
 }
 
 export async function testConnection(data: TestConnectionRequest, signal?: AbortSignal): Promise<TestConnectionResult> {

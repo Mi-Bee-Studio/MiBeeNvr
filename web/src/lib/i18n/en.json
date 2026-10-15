@@ -361,6 +361,7 @@
   "cameras.testFailed": "Connection failed: {error}",
   "cameras.testReachableNoStream": "The device responded but the live stream could not be verified. Check the RTSP port and stream credentials.",
   "cameras.testSuccess": "Connection successful ({latency}ms)",
+  "cameras.testAudioFound": "Audio track: {audio}",
   "cameras.testing": "Testing...",
   "cameras.title": "Camera Management",
   "cameras.toggle.disabledHint": "Camera disabled",

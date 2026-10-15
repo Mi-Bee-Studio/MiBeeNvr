@@ -9,13 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
-
-	"github.com/bluenviron/gortsplib/v5"
-	"github.com/bluenviron/gortsplib/v5/pkg/base"
-	"github.com/bluenviron/gortsplib/v5/pkg/format"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -572,44 +566,7 @@ func ProbeRTSPEncoding(rtspURL, username, password string) string {
 // "JPEG") so callers can tell RTSP-served MJPEG — which can carry G.711 audio
 // and record into AVI — apart from HTTP-only multipart MJPEG.
 func probeRTSPEncodingFor(rtspURL, username, password string) string {
-	u, err := base.ParseURL(rtspURL)
-	if err != nil {
-		return ""
-	}
-	if u.User == nil && username != "" {
-		u.User = url.UserPassword(username, password)
-	}
-	tcp := gortsplib.ProtocolTCP
-	client := &gortsplib.Client{
-		Scheme:       u.Scheme,
-		Host:         u.Host,
-		Protocol:     &tcp,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: config.DefaultRTSPTimeout,
-	}
-	if err := client.Start(); err != nil {
-		return ""
-	}
-	defer client.Close()
-
-	desc, _, err := client.Describe(u)
-	if err != nil {
-		return ""
-	}
-	// Check for H265 first (many ONVIF cameras report as H264 but stream H265)
-	var h265Forma *format.H265
-	if desc.FindFormat(&h265Forma) != nil {
-		return "H265"
-	}
-	var h264Forma *format.H264
-	if desc.FindFormat(&h264Forma) != nil {
-		return "H264"
-	}
-	var mjpegForma *format.MJPEG
-	if desc.FindFormat(&mjpegForma) != nil {
-		return "MJPEG"
-	}
-	return ""
+	return ProbeRTSPMedia(rtspURL, username, password).Video
 }
 
 // probeHTTPMJPEG probes the ONVIF device for an HTTP MJPEG stream by trying

@@ -865,3 +865,77 @@ describe('CameraForm - recording schedule (weekly ranges)', () => {
     expect(body.recording_schedule).toEqual({ time_ranges: [] });
   });
 });
+
+describe('CameraForm - RTSP audio probe display (#964)', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+  });
+
+  function mockProbeResponse(result: Record<string, unknown>) {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      if (path === '/cameras/test-connection') return Promise.resolve(result);
+      return Promise.resolve(null);
+    });
+  }
+
+  const audioCam = {
+    id: 'mic-test',
+    name: 'Room mic',
+    protocol: 'rtsp',
+    encoding: 'audio',
+    url: 'rtsp://example/stream',
+    enabled: true,
+  };
+
+  async function clickTestButton(container: HTMLElement) {
+    const btn = await vi.waitFor(() => {
+      const b = container.querySelector('button[title="cameras.testConnection"]') as HTMLButtonElement;
+      expect(b).toBeTruthy();
+      return b;
+    });
+    await fireEvent.click(btn);
+  }
+
+  it('shows the probed audio codec after a successful test connection', async () => {
+    mockProbeResponse({
+      success: true,
+      message: 'audio source ready: PCMA 8000Hz',
+      latency_ms: 12,
+      reachable: true,
+      stream_ok: true,
+      has_audio: true,
+      audio_supported: true,
+      audio: 'PCMA 8000Hz',
+    });
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: audioCam as any }),
+    });
+    await clickTestButton(container);
+    await vi.waitFor(() => {
+      // t() is mocked to echo the key (params are dropped), so the key
+      // itself proves the probe line rendered; real interpolation is
+      // covered by the i18n locale tests.
+      expect(container.textContent).toContain('cameras.testAudioFound');
+    });
+  });
+
+  it('renders no audio line when the stream carries no audio info', async () => {
+    mockProbeResponse({
+      success: true,
+      message: 'connection successful',
+      latency_ms: 8,
+      reachable: true,
+      stream_ok: true,
+    });
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: { ...audioCam, encoding: 'h264' } as any }),
+    });
+    await clickTestButton(container);
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('cameras.testSuccess');
+    });
+    expect(container.textContent).not.toContain('cameras.testAudioFound');
+  });
+});

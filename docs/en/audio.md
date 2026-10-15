@@ -167,6 +167,7 @@ audio:
 
 ## Next Steps
 
+- [Standalone audio sources](audio-sources.md) — IP pickups, phone-as-mic, ESP32 nodes
 - [Timelapse](timelapse.md) — timelapse recording
 - [Transcoding](transcoding.md) — video transcoding
 - [WebDAV / FTP Storage](webdav-ftp.md) — access recording files
