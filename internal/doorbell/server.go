@@ -273,8 +273,11 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 	}
 
 	expires := 300
-	if v := headerInt(req, "Expires"); v > 0 {
+	if v, ok := headerIntValue(req, "Expires"); ok {
 		expires = v
+	}
+	if expires < 0 {
+		expires = 0 // negative is nonsense; treat as unregister
 	}
 	if expires > 3600 {
 		expires = 3600
@@ -517,14 +520,16 @@ func (s *Server) publish(topic string, c *Call, reason string) {
 	})
 }
 
-// headerInt extracts an integer header value (Expires & friends) tolerantly.
-func headerInt(req sip.Request, name string) int {
+// headerIntValue extracts an integer header value if present and parseable.
+// Absent and present-but-zero must be distinguished: "Expires: 0" is an
+// unregister, not "use the default".
+func headerIntValue(req sip.Request, name string) (int, bool) {
 	for _, h := range req.GetHeaders(name) {
 		if g, ok := h.(*sip.GenericHeader); ok {
 			if n, err := strconv.Atoi(strings.TrimSpace(g.Contents)); err == nil {
-				return n
+				return n, true
 			}
 		}
 	}
-	return 0
+	return 0, false
 }

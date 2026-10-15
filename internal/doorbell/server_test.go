@@ -111,9 +111,13 @@ func (c *udpSIPClient) register(t *testing.T, expires int) string {
 	})
 }
 
-func (c *udpSIPClient) registerAuth(t *testing.T, realm, nonce, uri string) string {
+func (c *udpSIPClient) registerAuth(t *testing.T, realm, nonce, uri string, expires ...int) string {
 	resp := digestResponse(c.user, realm, c.secret, "REGISTER", uri, nonce)
-	base := c.register(t, 300)
+	ttl := 300
+	if len(expires) > 0 {
+		ttl = expires[0]
+	}
+	base := c.register(t, ttl)
 	auth := fmt.Sprintf(
 		"Authorization: Digest realm=\"%s\",algorithm=MD5,nonce=\"%s\",username=\"%s\",uri=\"%s\",response=\"%s\"",
 		realm, nonce, c.user, uri, resp)
@@ -535,5 +539,41 @@ func TestFlow_SymmetricRTPLatch(t *testing.T) {
 	_ = advertised.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	if n, _, err := advertised.ReadFromUDP(buf); err == nil {
 		t.Fatalf("mic audio must follow the latched source, not the SDP address (got %d bytes on the advertised socket)", n)
+	}
+}
+
+// TestFlow_UnregisterExpiresZero: "Expires: 0" must actually unregister —
+// an INVITE from the same source afterwards gets 403 again.
+func TestFlow_UnregisterExpiresZero(t *testing.T) {
+	_, bus, addr := startTestServer(t)
+	events := subscribeDoorbell(t, bus)
+	c := dialSIPClient(t, addr, "door1", "s3cret")
+
+	require.NoError(t, c.send(c.register(t, 300)))
+	challenge, err := c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 401") }, 5*time.Second)
+	require.NoError(t, err)
+	nonce := extractParam(challenge, "nonce")
+	require.NoError(t, c.send(c.registerAuth(t, "mibee-nvr", nonce, "sip:"+addr)))
+	_, err = c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 200") }, 5*time.Second)
+	require.NoError(t, err)
+
+	// Unregister with a fresh nonce (single-use).
+	require.NoError(t, c.send(c.register(t, 300)))
+	challenge, err = c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 401") }, 5*time.Second)
+	require.NoError(t, err)
+	nonce = extractParam(challenge, "nonce")
+	require.NoError(t, c.send(c.registerAuth(t, "mibee-nvr", nonce, "sip:"+addr, 0)))
+	unreg, err := c.recv(func(m string) bool { return strings.HasPrefix(m, "SIP/2.0 200") }, 5*time.Second)
+	require.NoError(t, err)
+	require.NotContains(t, unreg, "expires", "unregister 200 carries no registration lifetime")
+
+	require.NoError(t, c.send(c.invite(t, "v=0\r\nc=IN IP4 127.0.0.1\r\nm=audio 4000 RTP/AVP 8\r\n")))
+	resp, err := c.recv(nil, 5*time.Second)
+	require.NoError(t, err)
+	require.Contains(t, firstLine(resp), "403")
+	select {
+	case <-events:
+		t.Fatal("no ring event may fire after unregistering")
+	case <-time.After(300 * time.Millisecond):
 	}
 }
