@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/cleanup"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/dlna"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
@@ -230,6 +232,22 @@ func buildMaintenanceDeps(deps *appDeps) (timelapseSourceDeleter, *snapshot.Capt
 			slog.Warn("ftp: 未设置独立凭据,回退到管理员账号——FTP 为明文协议,建议配置 ftp.username/ftp.password / dedicated ftp.username/password recommended (FTP is cleartext)")
 		}
 		deps.ftpServer = ftp.NewServer(ftpAddr, cfg.FTP.PassivePortRange, ftpUser, ftpPass, store, db)
+	}
+
+	// Step 10b: Optional DLNA media server (#970) — SSDP + ContentDirectory
+	// for TVs/players on the LAN. Default off; binds only to the configured
+	// (or auto-detected LAN) interfaces.
+	if cfg.DLNA.Enabled {
+		friendly := cfg.DLNA.FriendlyName
+		if friendly == "" {
+			friendly = cfg.Server.DeviceName
+		}
+		host, _ := os.Hostname()
+		deps.dlnaServer = dlna.NewServer(dlna.ServerConfig{
+			Port:         cfg.DLNA.Port,
+			Interfaces:   cfg.DLNA.Interfaces,
+			FriendlyName: friendly,
+		}, db, store, host+"|"+store.RootDir())
 	}
 
 	return tlSourceDeleter, snapCapturer, triggerDispatcher, nil

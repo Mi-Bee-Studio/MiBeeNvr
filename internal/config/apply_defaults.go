@@ -181,6 +181,10 @@ func applyConfigDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.FTP.PassivePortRange) == "" {
 		cfg.FTP.PassivePortRange = "2122-2140"
 	}
+	// DLNA — default off; only the port carries a default
+	if cfg.DLNA.Port == 0 {
+		cfg.DLNA.Port = 49152
+	}
 	// MQTT
 	// default false already
 	// WebDAV

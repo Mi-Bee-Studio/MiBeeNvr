@@ -329,6 +329,15 @@ ftp:
   # password: ""                   # cleartext protocol; unset falls back to the admin
                                    # account with a startup warning)
 
+# DLNA media server (#970): TVs and media players on the LAN discover the
+# NVR via SSDP and browse cameras -> days -> recordings. Default off; binds
+# only to the listed (or auto-detected LAN) interfaces, never to WAN/relay.
+dlna:
+  enabled: false                   # Enable the DLNA media server
+  port: 49152                      # Per-interface HTTP port (device XML, Browse, item URLs)
+  # interfaces: []                 # Restrict to named interfaces (empty = all LAN IPv4)
+  # friendly_name: ""              # Name shown on renderers (default: server.device_name)
+
 # MQTT trigger-based recording for smart home integration
 # When enabled, subscribe to topic for recording triggers
 mqtt:
