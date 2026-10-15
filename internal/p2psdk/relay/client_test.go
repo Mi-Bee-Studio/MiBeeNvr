@@ -100,10 +100,10 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Success.
-	_ = conn.WriteMessage(websocket.BinaryMessage, encodeFrame(FrameServerAuth, []byte{0x00}))
-
-	// Register.
+	// Register BEFORE the auth reply: the client's Connect returns the
+	// moment it reads the reply, and peers may send (or tests may close
+	// conns) immediately — an unregistered key made those races silently
+	// drop frames (flaky TestClientSendAndReceive/TestClientServerCloseFiresFatal).
 	client := &mockClient{pubKey: msg.pubKey, conn: conn}
 	s.mu.Lock()
 	s.clients[msg.pubKey] = client
@@ -114,6 +114,12 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		delete(s.clients, msg.pubKey)
 		s.mu.Unlock()
 	}()
+
+	// Success (under client.mu: a concurrent forward to this freshly
+	// registered conn would race gorilla's single-writer constraint).
+	client.mu.Lock()
+	_ = conn.WriteMessage(websocket.BinaryMessage, encodeFrame(FrameServerAuth, []byte{0x00}))
+	client.mu.Unlock()
 
 	// Read loop.
 	for {
@@ -127,7 +133,9 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		if ft == FramePing {
 			if !s.silent.Load() {
+				client.mu.Lock()
 				_ = conn.WriteMessage(websocket.BinaryMessage, encodeFrame(FramePong, nil))
+				client.mu.Unlock()
 			}
 			continue
 		}

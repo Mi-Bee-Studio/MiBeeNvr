@@ -16,7 +16,7 @@ import (
 func TestDCEgressEnqueueStallFailsAfterBudget(t *testing.T) {
 	f := &fakeEgressDC{}
 	// Pin BufferedAmount above the admission watermark: run() never admits.
-	f.setBA(uint64(dcEgressLowWater) + 1)
+	f.setBA(uint64(dcEgressLowWater) + 1) //nolint:gosec // G115: watermark var is always positive
 	tr := newSchedTransport(f)
 
 	orig := dcEgressParkBudget

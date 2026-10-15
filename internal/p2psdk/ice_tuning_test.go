@@ -13,16 +13,10 @@ import (
 // the assertions read them via reflection (Int()/Uint() work on unexported
 // fields; Interface() would not).
 func TestApplyICETuning(t *testing.T) {
-	fieldDur := func(se *webrtc.SettingEngine, name string) time.Duration {
-		return engineDuration(se, t, name)
-	}
-
 	t.Run("zero config = untouched engine (byte-identical defaults)", func(t *testing.T) {
 		var se webrtc.SettingEngine
 		applyICETuning(&se, SignalingConfig{})
-		if got := fieldDur(&se, "ICEDisconnectedTimeout"); got != 0 {
-			t.Errorf("disconnected timeout = %v, want untouched (0)", got)
-		}
+		assertEngineDur(t, &se, "ICEDisconnectedTimeout", 0)
 		if got := engineUint(&se, "receiveMTU", t); got != 0 {
 			t.Errorf("receiveMTU = %v, want untouched (0)", got)
 		}
@@ -38,15 +32,9 @@ func TestApplyICETuning(t *testing.T) {
 			},
 			ICEReceiveMTU: 1280,
 		})
-		if got := fieldDur(&se, "ICEKeepaliveInterval"); got != 4*time.Second {
-			t.Errorf("keepalive = %v, want 4s", got)
-		}
-		if got := fieldDur(&se, "ICEDisconnectedTimeout"); got != 11*time.Second {
-			t.Errorf("disconnected = %v, want 11s", got)
-		}
-		if got := fieldDur(&se, "ICEFailedTimeout"); got != 61*time.Second {
-			t.Errorf("failed = %v, want 61s", got)
-		}
+		assertEngineDur(t, &se, "ICEKeepaliveInterval", 4*time.Second)
+		assertEngineDur(t, &se, "ICEDisconnectedTimeout", 11*time.Second)
+		assertEngineDur(t, &se, "ICEFailedTimeout", 61*time.Second)
 		if got := engineUint(&se, "receiveMTU", t); got != 1280 {
 			t.Errorf("receiveMTU = %v, want 1280", got)
 		}
@@ -57,15 +45,9 @@ func TestApplyICETuning(t *testing.T) {
 		applyICETuning(&se, SignalingConfig{
 			ICETimeouts: ICETimeouts{FailedTimeout: 90 * time.Second},
 		})
-		if got := fieldDur(&se, "ICEFailedTimeout"); got != 90*time.Second {
-			t.Errorf("failed = %v, want 90s", got)
-		}
-		if got := fieldDur(&se, "ICEKeepaliveInterval"); got != ICEDefaultKeepaliveInterval {
-			t.Errorf("keepalive = %v, want pion default %v", got, ICEDefaultKeepaliveInterval)
-		}
-		if got := fieldDur(&se, "ICEDisconnectedTimeout"); got != ICEDefaultDisconnectedTimeout {
-			t.Errorf("disconnected = %v, want pion default %v", got, ICEDefaultDisconnectedTimeout)
-		}
+		assertEngineDur(t, &se, "ICEFailedTimeout", 90*time.Second)
+		assertEngineDur(t, &se, "ICEKeepaliveInterval", ICEDefaultKeepaliveInterval)
+		assertEngineDur(t, &se, "ICEDisconnectedTimeout", ICEDefaultDisconnectedTimeout)
 	})
 
 	t.Run("non-positive MTU ignored", func(t *testing.T) {
@@ -84,6 +66,14 @@ func engineDuration(se *webrtc.SettingEngine, t *testing.T, name string) time.Du
 		return 0
 	}
 	return time.Duration(v.Int())
+}
+
+// assertEngineDur reads a duration leaf field via reflection and compares it.
+func assertEngineDur(t *testing.T, se *webrtc.SettingEngine, name string, want time.Duration) {
+	t.Helper()
+	if got := engineDuration(se, t, name); got != want {
+		t.Errorf("%s = %v, want %v", name, got, want)
+	}
 }
 
 func engineUint(se *webrtc.SettingEngine, name string, t *testing.T) uint64 {

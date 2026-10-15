@@ -3,7 +3,6 @@ package tunnel
 import (
 	"bytes"
 	"encoding/base64"
-	"io"
 	"log/slog"
 	"testing"
 
@@ -17,7 +16,7 @@ func (nilTransport) Send([]byte) error      { return nil }
 func (nilTransport) OnMessage(func([]byte)) {}
 func (nilTransport) Close() error           { return nil }
 func base64Decode(s string) ([]byte, error) { return base64.StdEncoding.DecodeString(s) }
-func nilLogger() *slog.Logger               { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func nilLogger() *slog.Logger               { return slog.New(slog.DiscardHandler) }
 
 var _ peer.Transport = nilTransport{}
 

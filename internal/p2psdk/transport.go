@@ -252,7 +252,7 @@ func (s *dcEgressScheduler) isClosed() bool {
 func (s *dcEgressScheduler) nextAdmissible() ([]byte, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.dc.BufferedAmount() >= uint64(dcEgressLowWater) {
+	if s.closed || s.dc.BufferedAmount() >= uint64(dcEgressLowWater) { //nolint:gosec // positive watermark
 		return nil, false
 	}
 	if len(s.high) > 0 {

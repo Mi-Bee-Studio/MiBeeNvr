@@ -125,45 +125,81 @@ func (s *autoEndpointState) resolve(port int, stunServers []string, h *autoEndpo
 	if s.resolved && time.Now().Before(s.expires) && s.port == port {
 		return advertiseResolution{addr: s.addr, mode: s.mode, ladder: true} // cached hit, including negative results
 	}
+	upnpRes, upnpOK, upnpErr := s.tryUPnP(port, h)
+	if upnpOK {
+		return upnpRes
+	}
+	pmpRes, pmpOK, pmpErr := s.tryPMP(port, upnpErr, h)
+	if pmpOK {
+		return pmpRes
+	}
+	stunRes, stunOK, stunErr := s.trySTUN(port, stunServers, upnpErr, pmpErr, h)
+	if stunOK {
+		return stunRes
+	}
+	s.addr, s.mode, s.gw, s.resolved, s.port = "", "", nil, true, port // negative cache too
+	s.expires = time.Now().Add(autoAdvertiseTTL)
+	s.upnpErr, s.pmpErr, s.stunErr = upnpErr, pmpErr, stunErr
+	return advertiseResolution{
+		addr: "", mode: "", fresh: true, ladder: true,
+		upnpErr: upnpErr, pmpErr: pmpErr, stunErr: stunErr,
+	}
+}
 
-	// Ladder 1: UPnP (mapping = detection + firewall pinhole in one shot).
+// tryUPnP runs ladder 1 (mapping = detection + firewall pinhole in one
+// shot). Caller must hold s.mu; on success the cache state is updated.
+func (s *autoEndpointState) tryUPnP(port int, h *autoEndpointHooks) (advertiseResolution, bool, error) {
 	gw, err := h.discoverUPnP(3 * time.Second)
-	if err == nil {
-		ip, iperr := h.externalIP(gw)
-		switch {
-		case iperr != nil:
-			err = iperr
-		default:
-			if merr := h.addMapping(gw, port, port, upnpMappingLeaseSec); merr == nil {
-				s.addr, s.mode, s.port, s.gw, s.resolved = net.JoinHostPort(ip, strconv.Itoa(port)), "upnp", port, gw, true
-				s.expires = time.Now().Add(autoAdvertiseTTL)
-				s.upnpErr, s.pmpErr, s.stunErr = nil, nil, nil
-				return advertiseResolution{addr: s.addr, mode: "upnp", fresh: true, ladder: true}
-			} else {
-				err = merr
-			}
-		}
+	if err != nil {
+		return advertiseResolution{}, false, err
 	}
-	upnpErr := err
-
-	// Ladder 2: NAT-PMP — gateways without an IGD (Apple lineage, some ISP
-	// firmware). Same-port mapping only; see natpmp.go.
-	var pmpErr error
-	if h.pmpMapping != nil {
-		pmpAddr, perr := h.pmpMapping(port)
-		if perr == nil && pmpAddr != "" {
-			s.addr, s.mode, s.port, s.gw, s.resolved = pmpAddr, "pmp", port, nil, true
-			s.expires = time.Now().Add(autoAdvertiseTTL)
-			s.upnpErr, s.pmpErr, s.stunErr = upnpErr, nil, nil
-			return advertiseResolution{addr: s.addr, mode: "pmp", fresh: true, ladder: true, upnpErr: upnpErr}
-		} else if perr != nil {
-			pmpErr = perr
-		} else {
-			pmpErr = errors.New("empty mapping address")
-		}
+	ip, err := h.externalIP(gw)
+	if err != nil {
+		return advertiseResolution{}, false, err
 	}
+	if pip := net.ParseIP(ip); !advertiseableIP(pip) {
+		// #82: a private/CGNAT "external" address means the IGD itself
+		// sits behind another NAT — cross-site peers can never reach it.
+		return advertiseResolution{}, false, fmt.Errorf("upnp external %s is private/CGNAT (NAT behind NAT)", ip)
+	}
+	if err := h.addMapping(gw, port, port, upnpMappingLeaseSec); err != nil {
+		return advertiseResolution{}, false, err
+	}
+	s.addr, s.mode, s.port, s.gw, s.resolved = net.JoinHostPort(ip, strconv.Itoa(port)), "upnp", port, gw, true
+	s.expires = time.Now().Add(autoAdvertiseTTL)
+	s.upnpErr, s.pmpErr, s.stunErr = nil, nil, nil
+	return advertiseResolution{addr: s.addr, mode: "upnp", fresh: true, ladder: true}, true, nil
+}
 
-	// Ladder 3: STUN + assumed manual forward.
+// tryPMP runs ladder 2 — gateways without an IGD (Apple lineage, some ISP
+// firmware). Same-port mapping only; see natpmp.go. Caller must hold s.mu.
+func (s *autoEndpointState) tryPMP(port int, upnpErr error, h *autoEndpointHooks) (advertiseResolution, bool, error) {
+	if h.pmpMapping == nil {
+		return advertiseResolution{}, false, nil
+	}
+	pmpAddr, perr := h.pmpMapping(port)
+	if perr != nil {
+		return advertiseResolution{}, false, perr
+	}
+	if pmpAddr == "" {
+		return advertiseResolution{}, false, errors.New("empty mapping address")
+	}
+	if host, _, herr := net.SplitHostPort(pmpAddr); herr != nil {
+		return advertiseResolution{}, false, herr
+	} else if !advertiseableIP(net.ParseIP(host)) { //nolint:revive // early-return style reads clearer here
+		return advertiseResolution{}, false, fmt.Errorf("pmp address %s is private/CGNAT", pmpAddr)
+	}
+	s.addr, s.mode, s.port, s.gw, s.resolved = pmpAddr, "pmp", port, nil, true
+	s.expires = time.Now().Add(autoAdvertiseTTL)
+	s.upnpErr, s.pmpErr, s.stunErr = upnpErr, nil, nil
+	return advertiseResolution{addr: s.addr, mode: "pmp", fresh: true, ladder: true, upnpErr: upnpErr}, true, nil
+}
+
+// trySTUN runs ladder 3 — STUN reflection + assumed manual port forward.
+// Caller must hold s.mu.
+func (s *autoEndpointState) trySTUN(
+	port int, stunServers []string, upnpErr, pmpErr error, h *autoEndpointHooks,
+) (advertiseResolution, bool, error) {
 	var stunErr error
 	for _, u := range stunServers {
 		addr := stunURLToAddr(u)
@@ -177,11 +213,14 @@ func (s *autoEndpointState) resolve(port int, stunServers []string, h *autoEndpo
 			}
 			continue
 		}
-		if host, _, herr := net.SplitHostPort(mapped); herr == nil && net.ParseIP(host) != nil {
+		if host, _, herr := net.SplitHostPort(mapped); herr == nil && advertiseableIP(net.ParseIP(host)) {
 			s.addr, s.mode, s.port, s.gw, s.resolved = net.JoinHostPort(host, strconv.Itoa(port)), "stun", port, nil, true
 			s.expires = time.Now().Add(autoAdvertiseTTL)
 			s.upnpErr, s.pmpErr, s.stunErr = upnpErr, pmpErr, nil
-			return advertiseResolution{addr: s.addr, mode: "stun", fresh: true, ladder: true, upnpErr: upnpErr, pmpErr: pmpErr}
+			return advertiseResolution{
+				addr: s.addr, mode: "stun", fresh: true, ladder: true,
+				upnpErr: upnpErr, pmpErr: pmpErr,
+			}, true, nil
 		}
 		if stunErr == nil {
 			stunErr = fmt.Errorf("stun mapped %q: not a usable address", mapped)
@@ -190,11 +229,7 @@ func (s *autoEndpointState) resolve(port int, stunServers []string, h *autoEndpo
 	if len(stunServers) == 0 {
 		stunErr = errors.New("no stun servers advertised")
 	}
-
-	s.addr, s.mode, s.gw, s.resolved, s.port = "", "", nil, true, port // negative cache too
-	s.expires = time.Now().Add(autoAdvertiseTTL)
-	s.upnpErr, s.pmpErr, s.stunErr = upnpErr, pmpErr, stunErr
-	return advertiseResolution{addr: "", mode: "", fresh: true, ladder: true, upnpErr: upnpErr, pmpErr: pmpErr, stunErr: stunErr}
+	return advertiseResolution{}, false, stunErr
 }
 
 // logAdvertiseResolution surfaces ladder execution in the peer journal: a
@@ -227,4 +262,21 @@ func stunURLToAddr(u string) string {
 		return net.JoinHostPort(host, "3478")
 	}
 	return host
+}
+
+// advertiseableIP reports whether an IP is usable as a cross-site
+// advertised endpoint (#82): loopback, link-local, multicast, unspecified,
+// RFC1918/ULA private and RFC 6598 CGNAT (100.64.0.0/10) addresses can
+// never be reached from a remote site — advertising them only poisons the
+// peers' candidate pools (a docker-bridge host address produced a
+// pathological prflx nomination in the mesh fleet).
+func advertiseableIP(ip net.IP) bool {
+	if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+		ip.IsMulticast() || ip.IsUnspecified() || ip.IsPrivate() {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+		return false
+	}
+	return true
 }
