@@ -490,9 +490,9 @@ func TestFlow_SymmetricRTPLatch(t *testing.T) {
 	advertised, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = advertised.Close() })
-	real, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	actual, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = real.Close() })
+	t.Cleanup(func() { _ = actual.Close() })
 
 	rawSDP, err := os.ReadFile("testdata/invite_offer.sdp")
 	require.NoError(t, err)
@@ -519,7 +519,7 @@ func TestFlow_SymmetricRTPLatch(t *testing.T) {
 	pkt[0] = 0x80
 	pkt[1] = 8
 	copy(pkt[12:], alaw)
-	_, err = real.WriteToUDP(pkt, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: nvrRTPPort})
+	_, err = actual.WriteToUDP(pkt, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: nvrRTPPort})
 	require.NoError(t, err)
 	select {
 	case got := <-bridge.Out:
@@ -531,8 +531,8 @@ func TestFlow_SymmetricRTPLatch(t *testing.T) {
 	// Mic direction must land on the real socket, never the advertised one.
 	bridge.In <- []byte{0x55, 0x11}
 	buf := make([]byte, 2048)
-	_ = real.SetReadDeadline(time.Now().Add(5 * time.Second))
-	n, _, err := real.ReadFromUDP(buf)
+	_ = actual.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, _, err := actual.ReadFromUDP(buf)
 	require.NoError(t, err)
 	require.Greater(t, n, 12)
 	require.Equal(t, byte(0x55), buf[12])

@@ -135,9 +135,9 @@ func TestMedia_SymmetricLatch(t *testing.T) {
 	advertised, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = advertised.Close() })
-	real, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	actual, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = real.Close() })
+	t.Cleanup(func() { _ = actual.Close() })
 
 	m.setDestination(advertised.LocalAddr().(*net.UDPAddr))
 	out, write, detach := m.subscribe(16)
@@ -147,7 +147,7 @@ func TestMedia_SymmetricLatch(t *testing.T) {
 	payload := []byte{0xab, 0xcd}
 	pkt := append([]byte{0x80, 8, 0, 1, 0, 0, 0, 160, 0, 0, 0, 1}, payload...)
 	mediaPort := m.conn.LocalAddr().(*net.UDPAddr).Port
-	_, err = real.WriteToUDP(pkt, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mediaPort})
+	_, err = actual.WriteToUDP(pkt, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mediaPort})
 	require.NoError(t, err)
 	select {
 	case got := <-out:
@@ -159,8 +159,8 @@ func TestMedia_SymmetricLatch(t *testing.T) {
 	// The write path now targets the latched source, not the SDP guess.
 	write([]byte{0x01, 0x02})
 	buf := make([]byte, 64)
-	_ = real.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, _, err = real.ReadFromUDP(buf)
+	_ = actual.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, err = actual.ReadFromUDP(buf)
 	require.NoError(t, err)
 	require.Equal(t, byte(0x01), buf[12])
 	require.Equal(t, byte(0x02), buf[13])
