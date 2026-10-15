@@ -220,3 +220,36 @@ type captureTransport struct{ onMessage func(func([]byte)) }
 func (c *captureTransport) Send([]byte) error        { return nil }
 func (c *captureTransport) OnMessage(h func([]byte)) { c.onMessage(h) }
 func (c *captureTransport) Close() error             { return nil }
+
+// TestManagerNATObservationStatus 钉住 #14 观测消费链：SDK 观测 →
+// StatusSnapshot.nat（含 prefer_relay 判定）+ metrics 单标签发布。
+func TestManagerNATObservationStatus(t *testing.T) {
+	rec := metrics.NewMetrics()
+	m := New(config.P2PConfig{}, "127.0.0.1:9090", filepath.Join(t.TempDir(), "token.json"),
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), nil)
+	m.SetMetrics(rec)
+
+	if m.Status().NAT != nil {
+		t.Fatal("before any observation, NAT must be nil")
+	}
+
+	m.onNATObservation(peer.NatObservation{
+		Class:         peer.NATSymmetric,
+		StunReachable: true,
+		Responsive:    2,
+		LocalAddr:     "192.168.1.10:52100",
+	})
+	snap := m.Status()
+	if snap.NAT == nil || snap.NAT.Class != "symmetric" {
+		t.Fatalf("NAT = %+v, want symmetric", snap.NAT)
+	}
+	if !snap.NAT.PreferRelay {
+		t.Fatal("symmetric NAT must set prefer_relay")
+	}
+	if got := testutil.ToFloat64(rec.P2PNATClass.WithLabelValues("symmetric")); got != 1 {
+		t.Fatalf("nvr_p2p_nat_class{symmetric} = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(rec.P2PNATClass); n != 1 {
+		t.Fatalf("exactly one class label must be live, got %d", n)
+	}
+}

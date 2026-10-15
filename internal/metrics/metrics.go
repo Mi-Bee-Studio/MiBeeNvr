@@ -173,6 +173,7 @@ type Metrics struct {
 	P2PICESessions         *prometheus.GaugeVec     // labels: local_type (host|srflx|prflx|relay=TURN) — current sessions per type
 	P2PICERTTMillis        *prometheus.HistogramVec // nominated ICE pair RTT in milliseconds
 	P2PTunnelDroppedFrames prometheus.Gauge         // nvr_p2p_tunnel_dropped_frames — cumulative inbound tunnel frames dropped at delivery queues
+	P2PNATClass            *prometheus.GaugeVec     // nvr_p2p_nat_class{class} — latest NAT observation (1 = current class)
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -697,6 +698,10 @@ func NewMetrics() *Metrics {
 		Name: "nvr_p2p_tunnel_dropped_frames",
 		Help: "Cumulative inbound tunnel frames dropped at stream delivery queues (queue full = peer consumer stalled; ordered streams cannot back-pressure). Sustained growth with live sessions = the client is not draining, not a link error.",
 	})
+	p2pNATClass := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_p2p_nat_class",
+		Help: "Latest NAT behavior observation (1 on the current class label: public|cone|symmetric|unknown). symmetric = classic ICE hole punching with another symmetric peer is mathematically infeasible — relay is the path.",
+	}, []string{"class"})
 
 	reg.MustRegister(
 		recordingBytesTotal,
@@ -801,6 +806,7 @@ func NewMetrics() *Metrics {
 		p2pICESessions,
 		p2pICERTTMillis,
 		p2pTunnelDropped,
+		p2pNATClass,
 
 		// Rolling bucket retention (#764) + pixgate sampler telemetry (#699).
 		// These were shipped UNREGISTERED in #783/#786 — the collectors
@@ -924,6 +930,7 @@ func NewMetrics() *Metrics {
 		P2PICESessions:                 p2pICESessions,
 		P2PICERTTMillis:                p2pICERTTMillis,
 		P2PTunnelDroppedFrames:         p2pTunnelDropped,
+		P2PNATClass:                    p2pNATClass,
 	}
 }
 
@@ -1121,4 +1128,19 @@ func (m *Metrics) SetP2PTunnelDroppedFrames(total uint64) {
 		return
 	}
 	m.P2PTunnelDroppedFrames.Set(float64(total))
+}
+
+// SetP2PNATClass publishes the observed NAT class — 1 on the current class,
+// deleting other series so exactly one label is live (nil-safe).
+func (m *Metrics) SetP2PNATClass(class string) {
+	if m == nil || m.P2PNATClass == nil {
+		return
+	}
+	for _, c := range []string{"public", "cone", "symmetric", "unknown"} {
+		if c == class {
+			m.P2PNATClass.WithLabelValues(c).Set(1)
+		} else {
+			m.P2PNATClass.DeleteLabelValues(c)
+		}
+	}
 }
