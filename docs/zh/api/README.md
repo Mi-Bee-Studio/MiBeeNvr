@@ -18,6 +18,7 @@
 | 录制 | [recordings.md](recordings.md) | 列出、获取、删除、下载录制文件、延时摄影帧（含批量） |
 | 归档 | [archives.md](archives.md) | 归档组、保留管理 |
 | 设置 | [settings.md](settings.md) | 系统统计、设置增删改查、合并/流媒体/转码/RTSP 输出设置、存储候选卷与批量迁移、MiBeeVision 集成状态与运行指标 |
+| 门铃 | [doorbell.md](doorbell.md) | SIP 门铃通话（列表、接听/拒绝/挂断）、按铃抓拍、G.711 对讲 WebSocket、doorbell.* 事件 |
 | GB28181 | [../gb28181-guide.md](../gb28181-guide.md) | 国标平台：设备/通道、目录刷新、报警、云台、设备录像检索回放 |
 | 小米 | [xiaomi.md](xiaomi.md) | 云认证、验证码、设备管理 |
 | 合并与延时配置 | [merge.md](merge.md) | 合并状态、待处理计数、摄像头合并/延时配置 |
