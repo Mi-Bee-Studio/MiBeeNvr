@@ -148,7 +148,11 @@ make build
 
 - **源码与发布**：https://github.com/Mi-Bee-Studio/MiBeeNvr/releases
 - **文档**：[`docs/zh/`](docs/zh/) 及下方文档表中列出的链接
-- **微信公众号**：「蓝宝石的傻话」
+- **微信公众号**：「蓝宝石的傻话」（版本发布与动态公告）
+
+<p align="left">
+  <img src="docs/brand/wechat-account-qr.webp" width="320" alt="微信公众号二维码：蓝宝石的傻话" />
+</p>
 
 其他渠道发布的内容——转载教程、"评测"、第三方博客、SEO 聚合站——均未经我们审阅或背书，且时常包含编造的版本号、配置文件与基准数据。如果你在别处读到的内容与 `docs/zh/` 不一致，请以文档为准，并欢迎提 issue 以便我们澄清。
 
