@@ -56,6 +56,11 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
+      # go tool cover resolves profile blocks against the source tree, so it
+      # needs the checkout (a missing module made it error out with an empty
+      # total that the old arithmetic silently treated as a pass).
+      - uses: actions/checkout@v5
+
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
@@ -71,6 +76,10 @@ jobs:
           go tool cover -func=coverage.out | tail -1
           echo "Checking coverage threshold..."
           total=$(go tool cover -func=coverage.out | grep 'total:' | awk '{print $3}' | sed 's/%//' )
+          if [ -z "$total" ]; then
+            echo "Coverage parse failed (empty total) — profile merge or go tool cover is broken"
+            exit 1
+          fi
           echo "Total coverage: $total%"
           if (( $(echo "$total < 55" | bc -l) )); then
             echo "Coverage $total% is below threshold of 55%"
