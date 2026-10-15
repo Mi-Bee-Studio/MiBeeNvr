@@ -203,7 +203,9 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) sweepLoop(ctx context.Context) {
-	t := time.NewTicker(30 * time.Second)
+	// 10s granularity keeps ring_timeout termination within ~10s of the
+	// deadline; the sweep is a cheap scan over the bounded recent list.
+	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 	for {
 		select {
