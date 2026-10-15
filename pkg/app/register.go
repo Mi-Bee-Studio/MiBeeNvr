@@ -618,6 +618,28 @@ func registerMaintenanceServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 9b. dlna (optional) — SSDP announcements start with the server; bind
+	// failures log and disable DLNA, never abort startup (same best-effort
+	// posture as the discovery responder).
+	if deps.dlnaServer != nil {
+		if err := a.Register(&serviceFunc{
+			name: "dlna",
+			startFunc: func(ctx context.Context) error {
+				go func() {
+					if err := deps.dlnaServer.Start(ctx); err != nil {
+						slog.Error("dlna: media server disabled", "error", err)
+					}
+				}()
+				return nil
+			},
+			stopFunc: func() error {
+				return deps.dlnaServer.Stop()
+			},
+		}); err != nil {
+			return fmt.Errorf("register dlna: %w", err)
+		}
+	}
+
 	return nil
 }
 

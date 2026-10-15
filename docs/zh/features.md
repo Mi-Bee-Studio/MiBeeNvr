@@ -99,6 +99,7 @@ SIP 摄像头/平台直接 REGISTER 到 NVR，以普通摄像头形式出现在�
 - **FTP 服务器**：远程上传 + 支持摄像头自动注册（摄像头填 FTP 地址即完成接入）
 - **MQTT 集成**：事件总线转发（`mqtt.status_events`）+ 触发式 / 定时强制录像 + 快照触发（家庭自动化联动）
 - **[Webhook 触发](webhook-integration.md)**：HMAC-SHA256 签名触发端点（Stripe 风格签名 + 双向防重放），供外部系统拉起录像 / 快照
+- **[DLNA 媒体服务器](dlna.md)**：电视/局域网播放器经 SSDP 自动发现 NVR,按 摄像头 → 日期 → 录像 浏览(默认关闭,仅内网网卡)
 - **[Home Assistant 集成](home-assistant.md)**：官方定制集成随包发布（mDNS 自动发现 + 按相机生成实体 / 开关）；也可用内置 RTSP 输出 + MQTT 纯原生拼装
 - **Prometheus 指标**：300+ 指标族，`/api/metrics` 抓取
 - **REST API**：全部功能可编程，支持 API Key（`mbv_` 前缀）与 BasicAuth 双认证

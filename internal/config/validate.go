@@ -745,6 +745,16 @@ func validateConfigDetails(cfg *Config) error {
 	if cfg.SRT.Port < 1 || cfg.SRT.Port > 65535 {
 		return fmt.Errorf("srt.port must be between 1 and 65535, got %d", cfg.SRT.Port)
 	}
+	if cfg.DLNA.Enabled {
+		if cfg.DLNA.Port < 1 || cfg.DLNA.Port > 65535 {
+			return fmt.Errorf("dlna.port must be between 1 and 65535, got %d", cfg.DLNA.Port)
+		}
+		for _, name := range cfg.DLNA.Interfaces {
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("dlna.interfaces must not contain empty names")
+			}
+		}
+	}
 	for i, s := range cfg.SRT.Streams {
 		if strings.TrimSpace(s.CameraID) == "" {
 			return fmt.Errorf("srt.streams[%d].camera_id is required", i)
