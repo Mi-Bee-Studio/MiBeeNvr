@@ -117,8 +117,12 @@ func LoadOrCreateDeviceKey(keyPath string) (ed25519.PrivateKey, error) {
 	if err := os.Rename(tmp, keyPath); err != nil {
 		return nil, fmt.Errorf("write device key: %w", err)
 	}
-	if back, err := os.ReadFile(keyPath); err != nil || !bytes.Equal(back, priv.Seed()) {
-		return nil, fmt.Errorf("device key write verification failed (read: %v)", err)
+	back, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("device key read-back: %w", err)
+	}
+	if !bytes.Equal(back, priv.Seed()) {
+		return nil, errors.New("device key write verification failed: content mismatch")
 	}
 	return priv, nil
 }
