@@ -3,12 +3,16 @@ package doorbell
 import (
 	"crypto/md5" //nolint:gosec // SIP digest mandates MD5
 	"encoding/hex"
+	"fmt"
 	"net"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	gosiplog "github.com/ghettovoice/gosip/log"
+	"github.com/ghettovoice/gosip/sip"
+	"github.com/ghettovoice/gosip/sip/parser"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -184,4 +188,39 @@ func TestWidenWildcardListen(t *testing.T) {
 	require.Equal(t, "192.168.1.5:5070", widenWildcardListen("192.168.1.5:5070"))
 	require.Equal(t, "[::]:5070", widenWildcardListen("[::]:5070"))
 	require.Equal(t, "5070", widenWildcardListen("5070"))
+}
+
+// TestHeaderIntValue_TypedExpires: gosip's parser maps Expires to a typed
+// *sip.Expires header — the value (including a meaningful 0) must survive
+// extraction through a real parse, not just hand-built GenericHeaders.
+func TestHeaderIntValue_TypedExpires(t *testing.T) {
+	raw := "REGISTER sip:192.168.1.9:5070 SIP/2.0\r\n" +
+		"Via: SIP/2.0/UDP 192.168.1.2:5555;branch=z9hG4bKtest\r\n" +
+		"From: <sip:front-door@192.168.1.9>;tag=x\r\n" +
+		"To: <sip:front-door@192.168.1.9>\r\n" +
+		"Call-ID: typed-expires-test\r\n" +
+		"CSeq: 1 REGISTER\r\n" +
+		"Expires: %s\r\n" +
+		"Content-Length: 0\r\n\r\n"
+	for _, tc := range []struct {
+		val    string
+		want   int
+		wantOK bool
+	}{{"0", 0, true}, {"300", 300, true}, {"3601", 3601, true}, {"x", 0, false}} {
+		msg, err := parser.ParseMessage([]byte(fmt.Sprintf(raw, tc.val)), gosiplog.NewDefaultLogrusLogger())
+		require.NoError(t, err, tc.val)
+		req, ok := msg.(sip.Request)
+		require.True(t, ok)
+		got, ok2 := headerIntValue(req, "Expires")
+		require.Equal(t, tc.wantOK, ok2, tc.val)
+		require.Equal(t, tc.want, got, tc.val)
+	}
+
+	// Absent header → not ok.
+	msg, err := parser.ParseMessage([]byte(fmt.Sprintf(raw, "0")), gosiplog.NewDefaultLogrusLogger())
+	require.NoError(t, err)
+	req := msg.(sip.Request)
+	req.RemoveHeader("Expires")
+	_, ok := headerIntValue(req, "Expires")
+	require.False(t, ok)
 }

@@ -522,11 +522,15 @@ func (s *Server) publish(topic string, c *Call, reason string) {
 
 // headerIntValue extracts an integer header value if present and parseable.
 // Absent and present-but-zero must be distinguished: "Expires: 0" is an
-// unregister, not "use the default".
+// unregister, not "use the default". gosip's parser maps known headers
+// (Expires) to typed values — handle both shapes.
 func headerIntValue(req sip.Request, name string) (int, bool) {
 	for _, h := range req.GetHeaders(name) {
-		if g, ok := h.(*sip.GenericHeader); ok {
-			if n, err := strconv.Atoi(strings.TrimSpace(g.Contents)); err == nil {
+		switch v := h.(type) {
+		case *sip.Expires:
+			return int(*v), true
+		case *sip.GenericHeader:
+			if n, err := strconv.Atoi(strings.TrimSpace(v.Contents)); err == nil {
 				return n, true
 			}
 		}
