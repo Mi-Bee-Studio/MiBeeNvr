@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -277,4 +278,67 @@ func TestTokenManagerDrainWaitsForInFlightMint(t *testing.T) {
 	if _, err := tm2.Mint(context.Background()); err != nil {
 		t.Fatalf("rotated refresh not persisted across Drain: %v", err)
 	}
+}
+
+// captureErrLog 抓 slog Error 记录（loadState 告警断言用，#6）。
+type captureErrLog struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (c *captureErrLog) Enabled(context.Context, slog.Level) bool { return true }
+
+func (c *captureErrLog) Handle(_ context.Context, r slog.Record) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if r.Level >= slog.LevelError {
+		c.msgs = append(c.msgs, r.Message)
+	}
+	return nil
+}
+
+func (c *captureErrLog) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *captureErrLog) WithGroup(string) slog.Handler      { return c }
+
+func TestLoadStateCorruptStateLogsOncePerEpisode(t *testing.T) {
+	lg := &captureErrLog{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(lg))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	require.NoError(t, os.WriteFile(path, []byte("{half-written"), 0o600))
+
+	tm := NewTokenManager("http://x", "cid", "u", "p", path)
+	tm.loadState()
+	require.Empty(t, tm.refresh, "损坏 state 不得被采信")
+	require.Len(t, lg.msgs, 1, "损坏即告警一次")
+
+	tm.loadState() // 同一损坏周期不刷屏（每次 Mint 都会重读）
+	require.Len(t, lg.msgs, 1)
+
+	// 手工重建 state（生产 09:59 事故的自愈路径）——重读必须捞起
+	require.NoError(t, os.WriteFile(path, []byte(`{"refresh_token":"r1"}`), 0o600))
+	tm.loadState()
+	require.Equal(t, "r1", tm.refresh)
+
+	// 再次损坏 = 新周期，再告警一次
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+	tm.loadState()
+	require.Len(t, lg.msgs, 2)
+}
+
+func TestLoadStateEmptyRefreshLogs(t *testing.T) {
+	lg := &captureErrLog{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(lg))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"refresh_token":""}`), 0o600))
+
+	tm := NewTokenManager("http://x", "cid", "u", "p", path)
+	tm.loadState()
+	require.Empty(t, tm.refresh)
+	require.Len(t, lg.msgs, 1, "空 refresh 视同损坏：显式告警")
 }

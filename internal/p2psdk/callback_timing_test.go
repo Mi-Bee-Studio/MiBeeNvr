@@ -18,6 +18,9 @@ import (
 // so the DataChannel cannot open before that elapses; the test assigns the
 // callback well inside the window.
 func TestOnDataChannel_AssignedAfterConnectStillFires(t *testing.T) {
+	// 2026-10-15：多包并行 -race 踩踏下该握手会撞内部弃线 deadline 挂死
+	// （曾以 CI=true 门控跳过）；主线 #974 已把 internal/p2psdk 隔离成
+	// 串行安静步骤，护栏恢复在 CI 全环境生效。
 	mock := newMockServer(t)
 	mock.connectAcceptDelay = 750 * time.Millisecond
 
@@ -55,12 +58,12 @@ func TestOnDataChannel_AssignedAfterConnectStillFires(t *testing.T) {
 
 	select {
 	case <-deviceDCOpen:
-	case <-time.After(30 * time.Second):
+	case <-time.After(120 * time.Second):
 		t.Fatal("timeout waiting for device DataChannel")
 	}
 	select {
 	case <-clientDCOpen:
-	case <-time.After(30 * time.Second):
+	case <-time.After(120 * time.Second):
 		t.Fatal("client OnDataChannel never fired: callback assigned after Connect was lost (snapshot regression)")
 	}
 }

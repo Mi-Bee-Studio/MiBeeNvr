@@ -5,6 +5,7 @@ package p2p
 // token 链（refresh 断=需重绑）。
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -278,4 +279,31 @@ func TestEnrollHTTPBase(t *testing.T) {
 		t.Fatal("device id collision")
 	}
 	_ = time.Second
+}
+
+func TestLoadOrCreateDeviceKeyDurableWrite(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "sub", "device.key")
+	priv, err := LoadOrCreateDeviceKey(key)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// 临时文件不残留；终件即 seed；二次加载返回同一身份
+	if _, err := os.Stat(key + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("tmp leftover: %v", err)
+	}
+	b, err := os.ReadFile(key)
+	if err != nil || len(b) != ed25519.SeedSize || !bytes.Equal(b, priv.Seed()) {
+		t.Fatalf("key file not the seed: err=%v len=%d", err, len(b))
+	}
+	priv2, err := LoadOrCreateDeviceKey(key)
+	if err != nil || !bytes.Equal(priv2, priv) {
+		t.Fatalf("reload mismatch: %v", err)
+	}
+	// 半写 key（崩溃现场形态）→ 显式报错而非静默再生身份
+	if err := os.WriteFile(key, make([]byte, 10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateDeviceKey(key); err == nil || !strings.Contains(err.Error(), "unexpected size") {
+		t.Fatalf("want unexpected size error, got %v", err)
+	}
 }
