@@ -9,9 +9,13 @@
    * not continuous coverage — the dotted texture keeps point-sampling from
    * masquerading as video gaps); completed periodic merges render as solid
    * strips along the top edge and are the click-to-play entry into merged
-   * timelapse outputs. AI event markers overlay everything as vertical bars.
-   * Clicking or dragging the band area resolves to a (recordingId, offset) via
-   * the shared findSegmentAt helper and fires onseek.
+   * timelapse outputs. Standalone audio sources linked to the camera
+   * (audio_link_camera_id, #963) render their segments as a solid emerald
+   * strip along the bottom edge — audio is continuous coverage, so unlike the
+   * dotted timelapse ribbon it reads as a solid track. AI event markers
+   * overlay everything as vertical bars. Clicking or dragging the band area
+   * resolves to a (recordingId, offset) via the shared findSegmentAt helper
+   * and fires onseek.
    */
   import { findSegmentAt, parseDayStart, epochMsToDaySec, formatLength, type TimelineSegment } from '$lib/timeline-utils';
   import type { Recording, Camera } from '$lib/api';
@@ -79,6 +83,17 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
     tlFrags: TLFragment[]; // raw timelapse segments (point samples)
     tlRibbons: TLRibbon[]; // visually coalesced ranges of tlFrags
     mergeStrips: MergeStrip[]; // completed merges intersecting the day (≤2 layers)
+    audioSource: Camera | null; // linked standalone audio source (#963)
+    audioSegs: AudioSeg[]; // its audio segments mapped onto this row's day
+  }
+
+  // A standalone audio source's segment positioned on the 24h axis. Audio is
+  // genuine continuous coverage (not point samples), so these render as a
+  // solid strip; the click target opens the audio recording itself.
+  interface AudioSeg {
+    recordingId: string;
+    startSec: number;
+    endSec: number;
   }
 
   interface CoverageBand {
@@ -137,6 +152,32 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
       list.push(m);
       mergesByCam.set(m.camera_id, list);
     }
+    // Standalone audio sources (#963): a source linked to a video camera
+    // (encoding "audio" + audio_link_camera_id) renders its segments as an
+    // audio track on the LINKED camera's row, in addition to the source's own
+    // row. The day's recordings were fetched for all cameras at once, so the
+    // audio segments are already in `recordings` — no extra fetch needed.
+    const audioCams = new Map<string, Camera>();
+    for (const cam of cameras) {
+      if (cam.encoding === 'audio') audioCams.set(cam.id, cam);
+    }
+    const audioByLinked = new Map<string, { source: Camera; segs: AudioSeg[] }>();
+    for (const ac of audioCams.values()) {
+      const linkedId = ac.audio_link_camera_id;
+      if (!linkedId) continue; // unlinked source — only its own row shows it
+      const segs: AudioSeg[] = [];
+      for (const r of (byCam.get(ac.id) ?? []).slice().sort(
+        (a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime()
+      )) {
+        const startMs = new Date(r.started_at).getTime();
+        const endMs = r.ended_at ? new Date(r.ended_at).getTime() : startMs + (r.duration || 0) * 1000;
+        const startSec = clampDay(epochMsToDaySec(startMs, dayStartMs));
+        const endSec = clampDay(epochMsToDaySec(endMs, dayStartMs));
+        if (endSec <= startSec) continue;
+        segs.push({ recordingId: r.id, startSec, endSec });
+      }
+      if (segs.length > 0) audioByLinked.set(linkedId, { source: ac, segs });
+    }
     const result: CameraRow[] = [];
     for (const cam of cameras) {
       const recs = (byCam.get(cam.id) ?? []).slice().sort(
@@ -172,6 +213,7 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
         coverageSec += endSec - startSec;
         if (r.merge_status === 'pending' || r.merge_status === '') pendingCount++;
       }
+      const audio = cam.encoding === 'audio' ? undefined : audioByLinked.get(cam.id);
       result.push({
         camera: cam,
         segments: segs,
@@ -181,6 +223,8 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
         tlFrags,
         tlRibbons: coalesceRibbons(tlFrags),
         mergeStrips: buildMergeStrips(mergesByCam.get(cam.id) ?? []),
+        audioSource: audio?.source ?? null,
+        audioSegs: audio?.segs ?? [],
       });
     }
     return result;
@@ -424,6 +468,33 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
     if (target) onseek(target.recordingId, target.offset);
   }
 
+  // ── Linked audio track (#963) ──
+  // A strip click opens the audio recording itself (the audio detail page
+  // plays it); it must not fall through to the row's video seek.
+  function onAudioStripClick(e: MouseEvent, seg: AudioSeg) {
+    e.stopPropagation();
+    onseek(seg.recordingId, 0);
+  }
+
+  function audioStripLabel(source: Camera, seg: AudioSeg): string {
+    return `${source.name || source.id} · ${secToClock(seg.startSec)} – ${secToClock(seg.endSec)} · ${t('library.legendAudio')}`;
+  }
+
+  let hoveredAudio = $state<{ source: Camera; seg: AudioSeg } | null>(null);
+  let audioTooltipX = $state(0);
+  let audioTooltipY = $state(0);
+
+  function onAudioStripEnter(e: MouseEvent, source: Camera, seg: AudioSeg) {
+    e.stopPropagation();
+    hoveredAudio = { source, seg };
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    audioTooltipX = rect.left + rect.width / 2;
+    audioTooltipY = rect.top;
+  }
+  function onAudioStripLeave() {
+    hoveredAudio = null;
+  }
+
   // ── Merge strips (completed periodic merges, click-to-play) ──
   function mergeDurationLabel(label: string): string {
     const key = mergeDurationI18nKeys[label];
@@ -487,10 +558,11 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
   // sample ribbon instead of a coverage band (see rows derived).
   function bandClass(band: CoverageBand): string {
     const fmt = band.format;
-    // blue=h264/h265, purple=avi, gray=mjpeg
+    // blue=h264/h265, purple=avi, gray=mjpeg, emerald=standalone audio
     if (fmt === 'h264' || fmt === 'h265') return 'band-video';
     if (fmt === 'avi') return 'band-avi';
     if (fmt === 'mjpeg') return 'band-mjpeg';
+    if (fmt === 'audio') return 'band-audio';
     return 'band-video';
   }
 
@@ -613,7 +685,7 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
 
     {#each rows as row (row.camera.id)}
       {@const hasRecs = row.bands.length > 0}
-      {@const hasAnyLayer = hasRecs || row.tlRibbons.length > 0 || row.mergeStrips.length > 0}
+      {@const hasAnyLayer = hasRecs || row.tlRibbons.length > 0 || row.mergeStrips.length > 0 || row.audioSegs.length > 0}
       <div class="flex items-center gap-2 group">
         <!-- Camera label -->
         <div class="w-[150px] sm:w-[190px] shrink-0 pr-2 text-right">
@@ -622,9 +694,11 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
           </div>
           <div class="text-[10px] th-text-tertiary tabular-nums">
             {#if hasRecs}
-              {coveragePct(row)}% · {row.bands.length}{#if row.pendingCount > 0} <span class="th-color-warning">({row.pendingCount} ⚠)</span>{/if}{#if row.tlRibbons.length > 0} <span title={t('library.legendTimelapseSample')}>⏱</span>{/if}
+              {coveragePct(row)}% · {row.bands.length}{#if row.pendingCount > 0} <span class="th-color-warning">({row.pendingCount} ⚠)</span>{/if}{#if row.tlRibbons.length > 0} <span title={t('library.legendTimelapseSample')}>⏱</span>{/if}{#if row.audioSegs.length > 0} <span title={t('library.legendAudio')}>🎙 {row.audioSegs.length}</span>{/if}
             {:else if row.tlFrags.length > 0}
               ⏱ {row.tlFrags.length} {t('library.timelapseSegUnit')}
+            {:else if row.audioSegs.length > 0}
+              🎙 {row.audioSegs.length} {t('library.audioSegUnit')}
             {/if}
           </div>
         </div>
@@ -701,6 +775,26 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
               ></div>
             {/each}
 
+            <!-- Linked standalone audio (#963): solid emerald strip along the
+                 bottom edge — the linked source's segments viewed from the
+                 video camera they accompany. Click opens the audio recording;
+                 mousedown swallowed for the same drag-seek reason as ribbons.
+                 Stacked 7px up when the row also has a timelapse ribbon (the
+                 two bottom-edge tracks are mutually rare but not exclusive). -->
+            {#each row.audioSegs as aseg (`aud-${aseg.recordingId}`)}
+              <button
+                type="button"
+                class="audio-strip"
+                style="left: {(aseg.startSec / DAY_SECONDS) * 100}%; width: {Math.max(0.4, ((aseg.endSec - aseg.startSec) / DAY_SECONDS) * 100)}%;{row.tlRibbons.length > 0 ? ' bottom: 7px;' : ''}"
+                onclick={(e) => onAudioStripClick(e, aseg)}
+                onmousedown={(e) => e.stopPropagation()}
+                onmouseenter={(e) => row.audioSource && onAudioStripEnter(e, row.audioSource, aseg)}
+                onmouseleave={onAudioStripLeave}
+                title={row.audioSource ? audioStripLabel(row.audioSource, aseg) : ''}
+                aria-label={row.audioSource ? audioStripLabel(row.audioSource, aseg) : ''}
+              ></button>
+            {/each}
+
             <!-- AI event markers overlay (stage E). Each marker sits above the
                  bands; click jumps to the recording at that moment. -->
             {#if aiMarkersByCam.get(row.camera.id)}
@@ -757,6 +851,7 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
       <span class="flex items-center gap-1"><span class="band-legend band-mjpeg"></span>MJPEG</span>
       <span class="flex items-center gap-1"><span class="band-legend tl-ribbon-legend"></span>{t('library.legendTimelapseSample')}</span>
       <span class="flex items-center gap-1"><span class="band-legend merge-strip-legend"></span>{t('library.legendTimelapseMerge')}</span>
+      <span class="flex items-center gap-1"><span class="band-legend audio-strip-legend"></span>{t('library.legendAudio')}</span>
       <span class="ml-auto">{t('library.timelineHint')}</span>
     </div>
   </div>
@@ -779,6 +874,16 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
     style="left: {ribbonTooltipX}px; top: {ribbonTooltipY - 36}px; transform: translateX(-50%)"
   >
     {secToClock(hoveredRibbon.startSec)} – {secToClock(hoveredRibbon.endSec)} · {t('library.legendTimelapseSample')} · {hoveredRibbon.fragCount} {t('library.timelapseSegUnit')}
+  </div>
+{/if}
+
+<!-- Linked audio strip hover tooltip -->
+{#if hoveredAudio}
+  <div
+    class="fixed z-50 pointer-events-none px-2 py-1 rounded bg-black/85 dark:bg-white/90 text-white dark:text-black text-[11px] tabular-nums shadow-lg"
+    style="left: {audioTooltipX}px; top: {audioTooltipY - 36}px; transform: translateX(-50%)"
+  >
+    {audioStripLabel(hoveredAudio.source, hoveredAudio.seg)} · {t('library.audioStripClickHint')}
   </div>
 {/if}
 
@@ -834,6 +939,42 @@ import { parseServerDate, formatMergeWindowLabel, formatFileSize, mergeDurationI
   }
   .band-mjpeg {
     background: #6b7280; /* gray-500 */
+  }
+  /* Standalone audio source segments — solid emerald (distinct from the dotted
+     cyan timelapse ribbon: audio is continuous coverage, not point samples). */
+  .band-audio {
+    background: #10b981; /* emerald-500 */
+  }
+  .audio-strip {
+    position: absolute;
+    bottom: 0;
+    height: 6px;
+    min-width: 2px;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    border-radius: 1px;
+    background: #10b981; /* emerald-500 */
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    z-index: 3;
+    transition: filter 0.12s, transform 0.12s;
+  }
+  .audio-strip:hover {
+    filter: brightness(1.15);
+    transform: scaleY(1.3);
+  }
+  .audio-strip:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 1px;
+    z-index: 6;
+  }
+  .audio-strip-legend {
+    display: inline-block;
+    width: 14px;
+    height: 6px;
+    border-radius: 1px;
+    background: #10b981;
   }
   /* Raw timelapse point samples — dotted cyan ribbon along the track's bottom
      edge. Dotted (vs the solid video bands) reads as "sampled", not coverage. */
