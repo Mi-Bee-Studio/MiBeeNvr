@@ -354,6 +354,7 @@
   "cameras.testFailed": "连接失败：{error}",
   "cameras.testReachableNoStream": "设备已响应，但无法验证直播流。请检查 RTSP 端口和流凭据。",
   "cameras.testSuccess": "连接成功 ({latency}ms)",
+  "cameras.testAudioFound": "音频轨：{audio}",
   "cameras.testing": "测试中...",
   "cameras.title": "摄像头管理",
   "cameras.toggle.disabledHint": "摄像头已停用",

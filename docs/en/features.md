@@ -88,6 +88,7 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 - Recording: AAC / G.711 (μ-law, A-law) / Opus all land in the MP4 audio track
 - Live monitoring: real-time G.711 and Opus playback; AAC via WebCodecs
 - **Two-way intercom**: push-to-talk to the camera (Xiaomi CS2 models)
+- **[Standalone audio sources](audio-sources.md)**: record audio independently of cameras (RTSP pull / WHIP push, codec probe in the camera form), link a source to a camera for synced playback and a day-timeline audio track
 
 ## Storage & Integrations
 

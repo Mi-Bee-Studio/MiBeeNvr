@@ -361,6 +361,7 @@
   "cameras.testFailed": "Соединение не удалось: {error}",
   "cameras.testReachableNoStream": "Устройство ответило, но прямой эфир не удалось проверить. Проверьте порт RTSP и учётные данные потока.",
   "cameras.testSuccess": "Соединение успешно ({latency}мс)",
+  "cameras.testAudioFound": "Аудиодорожка: {audio}",
   "cameras.testing": "Проверка...",
   "cameras.title": "Управление камерами",
   "cameras.toggle.disabledHint": "Камера отключена",

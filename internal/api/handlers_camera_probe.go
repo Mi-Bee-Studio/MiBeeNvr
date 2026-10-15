@@ -66,17 +66,63 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case strings.HasPrefix(target, "rtsp://"):
-		// RTSP: try TCP connection to the host:port
+		// Reachable signal first: a cheap TCP dial to the RTSP port (no
+		// credentials, no DESCRIBE) preserves the fast refused/unreachable
+		// failure of the old dial-only check.
 		conn, err := net.DialTimeout("tcp", stripScheme(target), 3*time.Second)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"success":    false,
+				"reachable":  false,
 				"message":    fmt.Sprintf("connection refused: %v", err),
 				"latency_ms": time.Since(startTime).Milliseconds(),
 			})
 			return
 		}
 		conn.Close()
+
+		// DESCRIBE probe (#964): reports what the URL actually serves. For
+		// standalone audio sources (encoding "audio") success requires a
+		// recordable audio track (G.711/AAC/Opus); for video cameras it
+		// requires a DESCRIBE-able stream — the old dial-only check could
+		// pass with wrong credentials or a dead path (the same "test passes
+		// but nothing records" shape the ONVIF probe fixed for issues
+		// #29/#30).
+		info := recorder.ProbeRTSPMedia(target, body.Username, body.Password)
+		resp := map[string]any{
+			"reachable":       true,
+			"stream_ok":       info.DescribeOK,
+			"encoding":        info.Video,
+			"has_audio":       info.RecordableAudio() || info.AudioOther != "",
+			"audio_supported": info.RecordableAudio(),
+			"latency_ms":      time.Since(startTime).Milliseconds(),
+		}
+		if au := info.AudioDescription(); au != "" {
+			resp["audio"] = au
+		}
+		switch {
+		case !info.DescribeOK:
+			resp["success"] = false
+			resp["message"] = info.DescribeErr + " — check the URL path and credentials"
+		case body.Encoding == "audio" && info.AudioOther != "":
+			resp["success"] = false
+			resp["message"] = fmt.Sprintf("stream has an audio track but codec %s is not supported (supported: G.711, AAC, Opus)", info.AudioOther)
+		case body.Encoding == "audio" && !info.RecordableAudio():
+			resp["success"] = false
+			resp["message"] = "stream connected but has no audio track — check the URL points at the audio stream"
+		case body.Encoding == "audio":
+			resp["success"] = true
+			resp["message"] = "audio source ready: " + info.AudioDescription()
+		default:
+			resp["success"] = true
+			if au := info.AudioDescription(); au != "" {
+				resp["message"] = "connection successful · audio: " + au
+			} else {
+				resp["message"] = "connection successful"
+			}
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
 
 	default:
 		// HTTP/ONVIF: try HEAD/GET request with timeout. Shared client (#875

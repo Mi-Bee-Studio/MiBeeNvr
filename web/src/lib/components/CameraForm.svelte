@@ -1206,6 +1206,11 @@ async function performCameraSave() {
         {:else if testResult.reachable && !testResult.stream_ok}
           <p class="text-xs th-text-muted">{t('cameras.testReachableNoStream')}</p>
         {/if}
+        {#if testResult.audio}
+          <p class="text-xs th-text-muted {testResult.success && testResult.audio_supported === false ? 'th-color-warning' : ''}">
+            {t('cameras.testAudioFound', { audio: testResult.audio })}
+          </p>
+        {/if}
       {/if}
       {#if validationErrors['url']}
         <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
