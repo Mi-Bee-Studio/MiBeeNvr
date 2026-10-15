@@ -28,6 +28,13 @@ func ipVersionOf(addr string) string {
 // StatsSnapshot contains ICE and DataChannel statistics extracted from a
 // single GetStats() call.
 type StatsSnapshot struct {
+	// SessionID identifies the P2P session this snapshot belongs to (set by
+	// the SDK before OnStats delivery; empty in hand-constructed snapshots).
+	// A SignalingConfig.OnStats callback is shared by every concurrent
+	// session of the signaling connection — without this key the consumer
+	// cannot tell which client's transport a snapshot describes.
+	SessionID string
+
 	// ICERTTSeconds is the current round-trip time of the nominated ICE
 	// candidate pair, in seconds. Zero when no nominated pair exists yet.
 	ICERTTSeconds float64

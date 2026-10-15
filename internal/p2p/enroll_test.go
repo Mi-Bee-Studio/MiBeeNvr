@@ -264,7 +264,9 @@ func TestEnrollHTTPBase(t *testing.T) {
 	cases := map[string]string{
 		"wss://signal.example.invalid/signal": "https://signal.example.invalid", // RFC 2606 reserved — never real endpoints in vectors
 		"ws://127.0.0.1:9444/signal":          "http://127.0.0.1:9444",
-		"garbage":                             "",
+		// 显式端口保留（#11）：wss 带端口不再静默丢。
+		"wss://h:8443/signal": "https://h:8443",
+		"garbage":             "",
 	}
 	for in, want := range cases {
 		if got := EnrollHTTPBase(in); got != want {

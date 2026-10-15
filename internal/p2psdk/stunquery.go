@@ -29,7 +29,7 @@ func stunQuery(addr string, timeout time.Duration) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // probe teardown
 
 	var pkt [20]byte
 	binary.BigEndian.PutUint16(pkt[0:], 0x0001) // Binding Request

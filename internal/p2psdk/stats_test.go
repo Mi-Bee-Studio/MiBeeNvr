@@ -87,10 +87,8 @@ func TestStatsCollector_Collect(t *testing.T) {
 	snap := sc.collect()
 
 	// On an idle PC, all values should be zero.
-	//nolint:testifylint // InEpsilon panics with zero expected value
-	assert.Equal(t, float64(0), snap.ICERTTSeconds)
-	//nolint:testifylint // InEpsilon panics with zero expected value
-	assert.Equal(t, float64(0), snap.ICEAvailableBitrateBits)
+	assert.Zero(t, snap.ICERTTSeconds)
+	assert.Zero(t, snap.ICEAvailableBitrateBits)
 	assert.Equal(t, uint64(0), snap.DataChannelBytesSent)
 	assert.Equal(t, uint64(0), snap.DataChannelBytesReceived)
 	assert.Equal(t, uint64(0), snap.DataChannelMessagesSent)

@@ -34,7 +34,7 @@ func TestSnapshotFromReportNominatedPairAddresses(t *testing.T) {
 		},
 	}
 	snap := snapshotFromReport(report)
-	assert.Equal(t, 0.021, snap.ICERTTSeconds)
+	assert.InEpsilon(t, 0.021, snap.ICERTTSeconds, 1e-9)
 	assert.Equal(t, "240e:9400:100::10", snap.ICELocalCandidateAddress)
 	assert.Equal(t, "240e:9400:200::20", snap.ICERemoteCandidateAddress)
 	assert.Equal(t, "6", snap.ICEIPVersion, "v6 地址对应版本=6")
@@ -69,5 +69,5 @@ func TestSnapshotFromReportIPv4Pair(t *testing.T) {
 func TestIPVersionOf(t *testing.T) {
 	assert.Equal(t, "6", ipVersionOf("240e:9400:100::10"))
 	assert.Equal(t, "4", ipVersionOf("116.22.2.230"))
-	assert.Equal(t, "", ipVersionOf(""))
+	assert.Empty(t, ipVersionOf(""))
 }

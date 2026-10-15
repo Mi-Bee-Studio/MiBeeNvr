@@ -17,10 +17,10 @@ func TestStartStatsCollectorLocked_StopsPrevious(t *testing.T) {
 
 	pcA, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pcA.Close() })
+	t.Cleanup(func() { _ = pcA.Close() }) //nolint:errcheck // test cleanup
 	pcB, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pcB.Close() })
+	t.Cleanup(func() { _ = pcB.Close() }) //nolint:errcheck // test cleanup
 
 	first := NewStatsCollector(pcA, nil)
 	first.Start()
@@ -49,7 +49,7 @@ func TestStartStatsCollectorLocked_NilOverPrevious(t *testing.T) {
 	p := &p2pSession{}
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pc.Close() })
+	t.Cleanup(func() { _ = pc.Close() }) //nolint:errcheck // test cleanup
 
 	require.Nil(t, p.statsCollector)
 	p.mu.Lock()

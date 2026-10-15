@@ -670,6 +670,23 @@ observability:
 #   redial_min_interval_s: 30
 #   max_clients: 0                # 0 = license quota, else default 3; strictest wins
 #   device_key: ""                # raw Ed25519 key file; signs every hello
+#   session_idle_timeout_s: 300   # idle session reap (relay zombies); 0 = SDK default 15m, <0 = off
+#   advertise: ""                 # ICE advertised endpoint: "" | "auto" | "auto:<port>"
+#                                 # (UPnP→NAT-PMP→STUN ladder, default port 40000, see journal
+#                                 # component p2p for ladder results) | "<ip>:<port>" for fixed
+#                                 # public endpoints (1:1 DNAT). Unreachable → ICE falls back to
+#                                 # TURN/relay as usual.
+#   ice_keepalive_interval_ms: 0    # ICE timers (0 = library default: keepalive 2s /
+#   ice_disconnected_timeout_ms: 0  # connected→disconnected 5s / disconnected→failed 25s).
+#   ice_failed_timeout_ms: 0        # Raise on high-jitter links (weak 5G / cross-border) so
+#                                  # p99 spikes read as jitter, not link death.
+#   ice_receive_mtu: 0              # ICE receive MTU in bytes (0 = library default); small-MTU
+#                                  # paths (PPPoE / some corporate egress). Static knob — no
+#                                  # RFC 8829 negotiation.
+#   tunnel_max_payload_bytes: 0     # Tunnel fragment size (0 = 32768). Receivers accept any
+#                                  # size; 32 KiB is the SCTP 64 KiB message ceiling after
+#                                  # base64 inflation. Note: ICE candidates are UDP-only
+#                                  # (pion v4) — UDP-shaped networks fall back to relay.
 
 # Commercial license. Install/replace via the web UI
 # (Settings → License) or PUT /api/license — hot-applies to the P2P gate.

@@ -95,16 +95,16 @@ func TestActivityDataChannelTouchesOnBothDirections(t *testing.T) {
 	var delivered []byte
 	inner := DataChannel{
 		OnMessage: func(h func([]byte)) { h([]byte("in")) },
-		Send:      func(b []byte) error { return nil },
+		Send:      func(_ []byte) error { return nil },
 	}
 	wrapped := p.activityDataChannel(inner)
 	wrapped.OnMessage(func(b []byte) { delivered = append(delivered, b...) })
 
-	assert.True(t, p.lastActivity.Load() > 0, "入站消息应 touch 活跃度")
+	assert.Positive(t, p.lastActivity.Load(), "入站消息应 touch 活跃度")
 	assert.Equal(t, "in", string(delivered), "包装不得吞消息")
 
 	before := p.lastActivity.Load()
 	time.Sleep(2 * time.Millisecond)
 	_ = wrapped.Send([]byte("out"))
-	assert.True(t, p.lastActivity.Load() > before, "出站发送应 touch 活跃度")
+	assert.Greater(t, p.lastActivity.Load(), before, "出站发送应 touch 活跃度")
 }

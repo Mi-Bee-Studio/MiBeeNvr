@@ -61,6 +61,12 @@ linters:
     paths:
       - web/
     rules:
+      # Vendored P2P SDK snapshot (internal/p2psdk) — diff-copied from the
+      # upstream SDK whose lint profile differs (errcheck exclusions there
+      # consume its nolint markers). Exclude nolintlint here so snapshots
+      # stay byte-identical to upstream and future copies carry zero friction.
+      - path: internal/p2psdk/
+        linters: [nolintlint]
       # Test files: loose checking
       - path: _test\.go
         linters: [errcheck, noctx, gocritic, contextcheck, nilnil, bodyclose]

@@ -165,6 +165,15 @@ type Metrics struct {
 	CodecProbeTotal           *prometheus.CounterVec   // labels: camera_id, encoding, result (ok|fail|unsupported)
 	CodecProbeDurationSeconds *prometheus.HistogramVec // labels: camera_id — RTSP DESCRIBE probe latency
 	ResolvedEncoding          *prometheus.GaugeVec     // labels: camera_id, encoding — last persisted encoding (alert on drift)
+
+	// P2P device-side ICE telemetry (#12): the nominated candidate type mix
+	// makes "direct-connection rate" a measurable product metric instead of a
+	// guess, and the ICE RTT histogram separates transport quality from
+	// app-layer amplification (app_rtt seconds vs ICE RTT milliseconds).
+	P2PICESessions         *prometheus.GaugeVec     // labels: local_type (host|srflx|prflx|relay=TURN) — current sessions per type
+	P2PICERTTMillis        *prometheus.HistogramVec // nominated ICE pair RTT in milliseconds
+	P2PTunnelDroppedFrames prometheus.Gauge         // nvr_p2p_tunnel_dropped_frames — cumulative inbound tunnel frames dropped at delivery queues
+	P2PNATClass            *prometheus.GaugeVec     // nvr_p2p_nat_class{class} — latest NAT observation (1 = current class)
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -675,6 +684,25 @@ func NewMetrics() *Metrics {
 		Help: "Last codec resolved for a camera and persisted to DB (value is always 1; the encoding label is the signal). Compare against the recorder's live codec to detect stale persisted encoding — a persistent mismatch indicates a persistence bug.",
 	}, []string{"camera_id", "encoding"})
 
+	p2pICESessions := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_p2p_ice_sessions",
+		Help: "Current P2P WebRTC sessions by nominated local candidate type. local_type=relay means TURN traversal; sessions on the WSS relay transport have no ICE stats at all (their absence is the relay-fallback signal, mirrored by viewer self-reports).",
+	}, []string{"local_type"})
+	p2pICERTTMillis := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "nvr_p2p_ice_rtt_milliseconds",
+		Help:    "Round-trip time of the nominated ICE candidate pair in milliseconds (device side, 5s polling).",
+		Buckets: []float64{5, 10, 20, 40, 80, 160, 320, 640, 1280},
+	}, []string{"local_type"})
+
+	p2pTunnelDropped := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_p2p_tunnel_dropped_frames",
+		Help: "Cumulative inbound tunnel frames dropped at stream delivery queues (queue full = peer consumer stalled; ordered streams cannot back-pressure). Sustained growth with live sessions = the client is not draining, not a link error.",
+	})
+	p2pNATClass := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvr_p2p_nat_class",
+		Help: "Latest NAT behavior observation (1 on the current class label: public|cone|symmetric|unknown). symmetric = classic ICE hole punching with another symmetric peer is mathematically infeasible — relay is the path.",
+	}, []string{"class"})
+
 	reg.MustRegister(
 		recordingBytesTotal,
 		activeCameras,
@@ -775,6 +803,10 @@ func NewMetrics() *Metrics {
 		codecProbeTotal,
 		codecProbeDurationSeconds,
 		resolvedEncoding,
+		p2pICESessions,
+		p2pICERTTMillis,
+		p2pTunnelDropped,
+		p2pNATClass,
 
 		// Rolling bucket retention (#764) + pixgate sampler telemetry (#699).
 		// These were shipped UNREGISTERED in #783/#786 — the collectors
@@ -895,6 +927,10 @@ func NewMetrics() *Metrics {
 		CodecProbeTotal:                codecProbeTotal,
 		CodecProbeDurationSeconds:      codecProbeDurationSeconds,
 		ResolvedEncoding:               resolvedEncoding,
+		P2PICESessions:                 p2pICESessions,
+		P2PICERTTMillis:                p2pICERTTMillis,
+		P2PTunnelDroppedFrames:         p2pTunnelDropped,
+		P2PNATClass:                    p2pNATClass,
 	}
 }
 
@@ -924,6 +960,29 @@ func (m *Metrics) IncSQLiteBusyErrors() {
 		return
 	}
 	m.SQLiteBusyErrorsTotal.Inc()
+}
+
+// SetP2PICESessions sets the current P2P WebRTC session count for a nominated
+// local candidate type (count 0 removes the series). Nil-safe — p2p telemetry
+// must never break session establishment (#12 acceptance).
+func (m *Metrics) SetP2PICESessions(localType string, count int) {
+	if m == nil || m.P2PICESessions == nil {
+		return
+	}
+	if count <= 0 {
+		m.P2PICESessions.DeleteLabelValues(localType)
+		return
+	}
+	m.P2PICESessions.WithLabelValues(localType).Set(float64(count))
+}
+
+// ObserveP2PICERTT records a nominated ICE pair round-trip in milliseconds.
+// Nil-safe; non-positive RTT (no nominated pair yet) is skipped.
+func (m *Metrics) ObserveP2PICERTT(localType string, milliseconds float64) {
+	if m == nil || m.P2PICERTTMillis == nil || milliseconds <= 0 {
+		return
+	}
+	m.P2PICERTTMillis.WithLabelValues(localType).Observe(milliseconds)
 }
 
 // RecordMergeSuccess records a successful merge operation.
@@ -1060,4 +1119,28 @@ func (m *Metrics) IncRecordingDeepCheck(cameraID, result string) {
 		return
 	}
 	m.RecordingDeepCheckTotal.WithLabelValues(cameraID, result).Inc()
+}
+
+// SetP2PTunnelDroppedFrames publishes the cumulative tunnel drop counter
+// (nil-safe; negative values are ignored).
+func (m *Metrics) SetP2PTunnelDroppedFrames(total uint64) {
+	if m == nil || m.P2PTunnelDroppedFrames == nil {
+		return
+	}
+	m.P2PTunnelDroppedFrames.Set(float64(total))
+}
+
+// SetP2PNATClass publishes the observed NAT class — 1 on the current class,
+// deleting other series so exactly one label is live (nil-safe).
+func (m *Metrics) SetP2PNATClass(class string) {
+	if m == nil || m.P2PNATClass == nil {
+		return
+	}
+	for _, c := range []string{"public", "cone", "symmetric", "unknown"} {
+		if c == class {
+			m.P2PNATClass.WithLabelValues(c).Set(1)
+		} else {
+			m.P2PNATClass.DeleteLabelValues(c)
+		}
+	}
 }

@@ -163,8 +163,12 @@ func TestDeriveTokenEndpoint(t *testing.T) {
 	cases := map[string]string{
 		"wss://signal2.example.invalid/signal": "https://signal2.example.invalid/oidc/token",
 		"ws://signal.example.invalid/signal":   "http://signal.example.invalid/oidc/token",
-		"wss://host:8443/signal":               "https://host/oidc/token",
-		"not-a-url":                            "",
+		// 显式端口必须保留（#11：丢端口会静默打到 443，非 443 部署
+		// token/enroll/grants 全部指向错误端点）。
+		"wss://host:8443/signal": "https://host:8443/oidc/token",
+		"wss://h:18443/signal":   "https://h:18443/oidc/token",
+		"ws://h:18080/signal":    "http://h:18080/oidc/token",
+		"not-a-url":              "",
 	}
 	for in, want := range cases {
 		if got := DeriveTokenEndpoint(in); got != want {

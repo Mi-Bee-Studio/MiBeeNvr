@@ -127,11 +127,16 @@ func (r *StreamRegistry) CloseStream(streamID uint32) {
 // Fragmenter splits payloads into TunnelData messages.
 type Fragmenter struct {
 	StreamID uint32
+	maxBytes int
 }
 
-// NewFragmenter creates a Fragmenter for the given stream ID.
-func NewFragmenter(streamID uint32) *Fragmenter {
-	return &Fragmenter{StreamID: streamID}
+// NewFragmenter creates a Fragmenter for the given stream ID. maxBytes ≤ 0
+// falls back to MaxPayloadBytes.
+func NewFragmenter(streamID uint32, maxBytes int) *Fragmenter {
+	if maxBytes <= 0 {
+		maxBytes = MaxPayloadBytes
+	}
+	return &Fragmenter{StreamID: streamID, maxBytes: maxBytes}
 }
 
 // Fragment splits a payload into TunnelData messages.
@@ -143,10 +148,10 @@ func (f *Fragmenter) Fragment(payload []byte) ([]TunnelData, error) {
 		}}, nil
 	}
 	//nolint:gosec // G115: payload length is bounded by application
-	total := uint32((len(payload) + MaxPayloadBytes - 1) / MaxPayloadBytes)
+	total := uint32((len(payload) + f.maxBytes - 1) / f.maxBytes)
 	var fragments []TunnelData
-	for offset := 0; offset < len(payload); offset += MaxPayloadBytes {
-		end := offset + MaxPayloadBytes
+	for offset := 0; offset < len(payload); offset += f.maxBytes {
+		end := offset + f.maxBytes
 		if end > len(payload) {
 			end = len(payload)
 		}

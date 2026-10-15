@@ -71,14 +71,14 @@ func TestTunnelPreServeFramesSurvive(t *testing.T) {
 	// 服务端：本地 TCP echo 探针。
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	got := make(chan []byte, 1)
 	go func() {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		buf := make([]byte, 64)
 		n, _ := bufio.NewReader(c).Read(buf)
 		got <- buf[:n]

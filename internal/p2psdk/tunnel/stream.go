@@ -60,7 +60,9 @@ func (sc *streamConn) pushData(data []byte) {
 	select {
 	case sc.dataCh <- data:
 	default:
-		sc.logger.Warn("data channel full, dropping")
+		n := sc.tunnel.droppedFrames.Add(1)
+		sc.logger.Warn("data channel full, dropping frame",
+			"dropped_total", n, "queue", cap(sc.dataCh))
 	}
 }
 
@@ -122,7 +124,7 @@ func (sc *streamConn) Read(b []byte) (int, error) {
 
 // Write implements net.Conn.Write.
 func (sc *streamConn) Write(b []byte) (int, error) {
-	fragmenter := NewFragmenter(sc.streamID)
+	fragmenter := NewFragmenter(sc.streamID, sc.tunnel.fragmentSize())
 	fragments, err := fragmenter.Fragment(b)
 	if err != nil {
 		return 0, fmt.Errorf("fragment: %w", err)

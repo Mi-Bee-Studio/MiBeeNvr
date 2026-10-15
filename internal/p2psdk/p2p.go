@@ -78,7 +78,7 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	pc, err := newPeerConnection(welcome, cfg.AdvertiseAddr)
+	pc, err := newPeerConnection(cfg, welcome, p.log())
 	if err != nil {
 		return fmt.Errorf("create pc: %w", err)
 	}
@@ -150,7 +150,7 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	pc, err := newPeerConnection(welcome, cfg.AdvertiseAddr)
+	pc, err := newPeerConnection(cfg, welcome, p.log())
 	if err != nil {
 		return fmt.Errorf("create pc: %w", err)
 	}
@@ -446,7 +446,15 @@ func (p *p2pSession) startStatsCollectorLocked(pc *webrtc.PeerConnection) {
 		p.statsCollector.Stop()
 	}
 	p.statsCollector = NewStatsCollector(pc, p.log())
-	p.statsCollector.OnStats = p.onStats
+	if p.onStats != nil {
+		// Stamp the session ID into every snapshot: OnStats is one shared
+		// callback for all concurrent sessions of the signaling connection.
+		sid := p.sessionID
+		p.statsCollector.OnStats = func(snap StatsSnapshot) {
+			snap.SessionID = sid
+			p.onStats(snap)
+		}
+	}
 	p.statsCollector.Start()
 }
 
@@ -633,7 +641,31 @@ func stunURLs(welcome *Welcome) []string {
 	return urls
 }
 
-func newPeerConnection(welcome *Welcome, advertiseAddr string) (*webrtc.PeerConnection, error) {
+// applyICETuning installs the optional ICE timer/MTU overrides from
+// SignalingConfig onto the SettingEngine (must run before NewPeerConnection;
+// pion ignores later changes). Zero ICETimeouts struct = untouched engine
+// (byte-identical behavior to the pre-knob build); individual zero fields
+// fall back to the pion/ice defaults recorded next to ICETimeouts.
+func applyICETuning(se *webrtc.SettingEngine, cfg SignalingConfig) {
+	if to := cfg.ICETimeouts; to != (ICETimeouts{}) {
+		ka, disc, failed := to.KeepaliveInterval, to.DisconnectedTimeout, to.FailedTimeout
+		if ka == 0 {
+			ka = ICEDefaultKeepaliveInterval
+		}
+		if disc == 0 {
+			disc = ICEDefaultDisconnectedTimeout
+		}
+		if failed == 0 {
+			failed = ICEDefaultFailedTimeout
+		}
+		se.SetICETimeouts(disc, failed, ka)
+	}
+	if cfg.ICEReceiveMTU > 0 {
+		se.SetReceiveMTU(uint(cfg.ICEReceiveMTU)) //nolint:gosec // G115: validated ≤65535 at config layer
+	}
+}
+
+func newPeerConnection(cfg SignalingConfig, welcome *Welcome, logger *slog.Logger) (*webrtc.PeerConnection, error) {
 	config := webrtc.Configuration{
 		BundlePolicy:  webrtc.BundlePolicyMaxBundle,
 		RTCPMuxPolicy: webrtc.RTCPMuxPolicyRequire,
@@ -654,10 +686,14 @@ func newPeerConnection(welcome *Welcome, advertiseAddr string) (*webrtc.PeerConn
 	}
 
 	se := hardenedSettingEngine("")
+	applyICETuning(&se, cfg)
 	// "auto"/"auto:N" resolve per session build via the UPnP→STUN ladder
 	// (autoendpoint.go); resolution failure degrades to "" (no advertisement,
-	// stock ICE + relay fallback) rather than failing the connection.
-	if err := applyAdvertiseAddr(&se, resolveAdvertise(advertiseAddr, stunURLs(welcome))); err != nil {
+	// stock ICE + relay fallback) rather than failing the connection. Ladder
+	// execution and per-rung failures are logged (fresh runs only).
+	res := resolveAdvertiseDetailed(cfg.AdvertiseAddr, stunURLs(welcome))
+	logAdvertiseResolution(logger, res)
+	if err := applyAdvertiseAddr(&se, res.addr); err != nil {
 		return nil, err
 	}
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))

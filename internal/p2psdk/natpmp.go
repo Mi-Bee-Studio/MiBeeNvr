@@ -61,7 +61,7 @@ func pmpExternalIP(gwAddr string, timeout time.Duration) (net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pmp dial: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = conn.Close() }() //nolint:errcheck // teardown
 
 	resp, err := pmpExchange(conn.(*net.UDPConn), []byte{natPMPVersion, natPMPOpAddr}, timeout)
 	if err != nil {
@@ -90,7 +90,7 @@ func pmpMapUDP(gwAddr string, port int, timeout time.Duration) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("pmp dial: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = conn.Close() }() //nolint:errcheck // teardown
 
 	req := make([]byte, 12)
 	req[0], req[1] = natPMPVersion, natPMPOpMap

@@ -46,7 +46,7 @@ func TestSession_OnDisconnect_FiredOnServerClose(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.NotNil(t, disconnectErr, "OnDisconnect error should be non-nil")
+	assert.Error(t, disconnectErr, "OnDisconnect error should be non-nil")
 }
 
 // TestSession_OnReconnect_FiredAfterRecovery verifies that OnReconnect fires

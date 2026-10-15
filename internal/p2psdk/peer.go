@@ -9,7 +9,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -109,7 +111,65 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 		"session_id", welcome.SessionID,
 		"peer_id", welcome.PeerID,
 	)
+	// NAT 行为观测（#70/#14：只观测不改策略）——welcome 的 STUN 列表
+	// 在同一 socket 上复探比对映射，结果供诊断/后续选路决策消费。
+	go s.observeNAT(welcome)
 	return s, nil
+}
+
+// NatObservation is one completed NAT behavior probe. Observational only:
+// the class is the fact base for path decisions (PreferRelay), the probe
+// itself never changes transport selection.
+type NatObservation struct {
+	Class         NATClass  `json:"class"`
+	StunReachable bool      `json:"stun_reachable"`
+	Responsive    int       `json:"responsive"` // STUN servers that answered
+	LocalAddr     string    `json:"local_addr,omitempty"`
+	At            time.Time `json:"at"`
+}
+
+// NATObservation returns the latest NAT observation (nil before the first
+// probe completes or when welcome carried no STUN servers).
+func (s *Session) NATObservation() *NatObservation {
+	if v := s.natObs.Load(); v != nil {
+		return v
+	}
+	return nil
+}
+
+// observeNAT probes the local NAT behavior via the welcome STUN list.
+// Needs ≥2 distinct responsive servers for a class verdict; fewer stays
+// NATUnknown (no false verdicts). Failures are logged once and dropped.
+func (s *Session) observeNAT(welcome *Welcome) {
+	urls := stunURLs(welcome)
+	if len(urls) == 0 {
+		s.logger.Debug("NAT observation skipped: no STUN servers in welcome")
+		return
+	}
+	servers := make([]string, 0, len(urls))
+	for _, u := range urls {
+		servers = append(servers, strings.TrimPrefix(u, "stun:"))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	res := DetectNATClass(ctx, servers, 5*time.Second)
+	obs := &NatObservation{
+		Class:         res.Class,
+		StunReachable: len(res.MappedByServer) > 0,
+		Responsive:    len(res.MappedByServer),
+		LocalAddr:     res.LocalAddr,
+		At:            time.Now(),
+	}
+	s.natObs.Store(obs)
+	s.logger.Info("NAT observation",
+		"class", string(res.Class),
+		"stun_responsive", obs.Responsive,
+		"local_addr", res.LocalAddr,
+		"prefer_relay", PreferRelay(res.Class),
+	)
+	if cb := s.OnNATObservation; cb != nil {
+		cb(*obs)
+	}
 }
 
 // Session represents a P2P session connected to the signaling server.
@@ -141,6 +201,11 @@ type Session struct {
 	// session_close or local abandonment after repeated ICE restart failures).
 	OnSessionClose func(sessionID, reason string)
 
+	// OnNATObservation reports the NAT behavior probe outcome (observational
+	// only, #70/#14). Fires once per Dial, shortly after connect, when the
+	// welcome STUN list allows a probe; never fires otherwise.
+	OnNATObservation func(NatObservation)
+
 	// P2P sessions by session ID
 	mu            sync.RWMutex
 	peers         map[string]*p2pSession
@@ -148,6 +213,9 @@ type Session struct {
 	closeOnce     sync.Once
 	done          chan struct{}
 	lastSessionID string
+
+	// natObs carries the latest NAT behavior probe (observeNAT).
+	natObs atomic.Pointer[NatObservation]
 }
 
 // Connect initiates a connection to a target peer.
