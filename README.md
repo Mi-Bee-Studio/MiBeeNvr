@@ -91,6 +91,11 @@ Version numbers, configuration syntax, and CLI flags are authoritative **only** 
 
 - **Source & releases**: https://github.com/Mi-Bee-Studio/MiBeeNvr/releases
 - **Documentation**: [`docs/en/`](docs/en/) and links in the Documentation table below
+- **WeChat official account**: 蓝宝石的傻话 (release announcements, in Chinese)
+
+<p align="left">
+  <img src="docs/brand/wechat-account-qr.webp" width="320" alt="WeChat official account QR — 蓝宝石的傻话" />
+</p>
 
 Content published elsewhere — reprinted tutorials, "reviews", third-party blogs, SEO
 aggregators — is not reviewed or endorsed by us, and frequently contains invented
