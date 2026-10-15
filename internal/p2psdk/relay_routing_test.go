@@ -28,8 +28,10 @@ func waitData(t *testing.T, ch chan []byte) []byte {
 	select {
 	case d := <-ch:
 		return d
-	case <-time.After(2 * time.Second):
-		t.Fatal("no relay packet within 2s")
+	// CI（-race + 满载 runner）上 UDP 往返偶发远超本机时延，2s 实证会
+	// 假阴性（2026-10-15 三连 CI 抖动），放宽到 15s。
+	case <-time.After(15 * time.Second):
+		t.Fatal("no relay packet within 15s")
 		return nil
 	}
 }
@@ -104,7 +106,7 @@ func TestRelaySessionChannelLifecycle(t *testing.T) {
 	require.NoError(t, p2p.close())
 	select {
 	case <-closed:
-	case <-time.After(time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("会话关闭必须触发通道 OnClose（应用层注销依赖它）")
 	}
 

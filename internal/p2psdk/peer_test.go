@@ -67,14 +67,14 @@ func TestSDK_TwoPeersDirectConnect(t *testing.T) {
 	// Wait for device DataChannel
 	select {
 	case <-deviceDCOpen:
-	case <-time.After(30 * time.Second):
+	case <-time.After(120 * time.Second):
 		t.Fatal("timeout waiting for device DataChannel")
 	}
 
 	// Wait for client DataChannel
 	select {
 	case <-clientDCOpen:
-	case <-time.After(30 * time.Second):
+	case <-time.After(120 * time.Second):
 		t.Fatal("timeout waiting for client DataChannel")
 	}
 
@@ -84,7 +84,7 @@ func TestSDK_TwoPeersDirectConnect(t *testing.T) {
 	select {
 	case msg := <-deviceMsg:
 		assert.Equal(t, "hello from client", string(msg))
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("timeout: device did not receive message")
 	}
 
@@ -94,7 +94,7 @@ func TestSDK_TwoPeersDirectConnect(t *testing.T) {
 	select {
 	case msg := <-clientMsg:
 		assert.Equal(t, "hello from device", string(msg))
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("timeout: client did not receive message")
 	}
 
