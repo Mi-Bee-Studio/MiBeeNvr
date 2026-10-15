@@ -16,7 +16,7 @@
 
 轻量级、易上手的网络视频录像机，单文件部署，零配置烦恼——下载即用。
 
-专为低功耗 ARM 设备打造（在树莓派 3B 上验证最低配置）。支持主流协议：**RTSP**（H.264/H.265/MJPEG）、**HTTP JPEG**、**HLS** 直播流、**ONVIF** 设备发现、**WebRTC**（WHEP）、**HTTP-FLV**、**RTMP** 接入、**SRT** 接收器。
+专为低功耗 ARM 设备打造（在树莓派 3B 上验证最低配置）。支持主流协议：**RTSP**（H.264/H.265/MJPEG）、**HTTP JPEG**、**HLS** 直播流、**ONVIF** 设备发现、**WebRTC**（WHEP）、**HTTP-FLV**、**RTMP** 接入、**SRT** 接收器、**WHIP** 推入（浏览器/手机/OBS），并内置 **RTSP 输出**服务。
 
 [**English**](README.md)
 
@@ -33,21 +33,24 @@
 
 ## 核心功能
 
-- **摄像头协议**：RTSP（H.264/H.265/MJPEG）、HTTP JPEG、ONVIF 设备发现与管理、GB/T 28181 国标平台（海康/大华等 SIP 设备注册接入，实验性）、SRT/RTMP 收推（跨网络接入）、原生 Go 转推（把任意摄像头转发到远端，无 FFmpeg）
+- **摄像头协议**：RTSP（H.264/H.265/MJPEG）、HTTP JPEG、ONVIF 设备发现与管理（含 MotionAlarm 事件）、GB/T 28181 国标平台（海康/大华等 SIP 设备注册接入，实验性）、SRT/RTMP 收推（跨网络接入）、WHIP 推入（浏览器/手机/OBS 30+）、原生 Go 转推（把任意摄像头转发到远端，无 FFmpeg）
 - **即插即用自动发现**：接入局域网的 ONVIF 摄像头会在后台自动登记（海康 NVR 风格），无需手动扫描。无需认证的设备立即开始录制；需要认证的设备先添加为待激活状态，等你提供凭据后再启用
-- **视频录像**：自动 MP4 切片、多摄像头并发、按摄像头设置保留天数、音频录制（AAC + G.711 + Opus）
+- **视频录像**：自动 MP4 切片、多摄像头并发、按摄像头设置保留天数与每周录像计划、音频录制（AAC + G.711 + Opus）
+- **自适应录像**：安静时降为稀疏关键帧延时、有动静或响声时恢复全速；批量合并为延时摄影
+- **对象存储归档**：S3 兼容冷备（MinIO/云厂商 OSS），远程回放代理与预签名直连、按摄像头路由桶、本地空间自动腾空
 - **连续回放**：双缓冲无缝换段 + 全天 VOD 时间轴（跨录像/跨空隙拖动）、AVI 帧浏览
 - **局域网发现**：mDNS `_mibee-nvr._tcp` 通告 + UDP 49090 广播应答；`/api/health` 暴露稳定 `device_id`
-- **实时直播**：HLS / WebRTC（WHEP）/ HTTP-FLV 多协议直播，RTMP 接入 + SRT 接收器
+- **实时直播**：HLS / WebRTC（WHEP）/ HTTP-FLV 多协议直播，RTMP 接入 + SRT 接收器 + WHIP 推入 + 内置 RTSP 输出（`rtsp://<nvr>:8554/<camera-id>`，MJPEG 相机也能对外出流）
 - **片段合并**：自动/手动合并，全局 + 按摄像头策略
-- **Web 界面**：深色/浅色主题、响应式、中英文切换、Chart.js 图表
-- **智能家居**：MQTT 触发录像、WebDAV/FTP 文件访问
+- **摄像头管理**：拖拽分组与排序、每摄像头存储/片段统计、应用内检查更新与一键升级
+- **远程连接**：内置加密远程连接模式开发中（发布时另行文档化）；当前可参考 Tailscale / Cloudflare Tunnel 等外网访问指南
+- **Web 界面**：深色/浅色主题、响应式、中/英/俄三语、自绘 SVG 图表
+- **智能家居**：MQTT 触发录像、HMAC 签名 webhook 触发端点、Home Assistant 官方集成、WebDAV/FTP 文件访问
 - **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
 - **小米摄像头**：CS2 P2P + 旧版 TUTK（7 款型号）、云端认证（社区驱动，非核心功能）
 - **健康监控**：多层摄像头健康检测、自动修复、质量评分
 - **IP 自愈**：摄像头在多个无线 AP 间漫游导致 IP 变更时，ONVIF 摄像头按序列号自动重新发现并重连（黑名单自动触发 + 手动按钮），单播探测跨子网可用
 - **视频转码**：基于 FFmpeg 的硬件转码，H.265→H.264 转换
-- **延时摄影**：定时快照延时录像
 - **WebSocket 流**：实时二进制帧流
 - **AI 检测**：ONNX Runtime 推理，浏览器端目标检测
 - **事件系统**：基于 SSE 的实时事件流
@@ -60,11 +63,13 @@
 | 🧪 实验性 | GB/T 28181 | 国标平台：设备注册、目录、PTZ、语音对讲、设备录像检索回放、报警订阅、级联（尚未在海康/大华真机全量验证，默认关闭） |
 | ✅ 已完成 | HTTP JPEG | IP 摄像头快照流 |
 | ✅ 已完成 | HLS | 按需直播流 |
-| ✅ 已完成 | ONVIF | 设备发现、云台控制、流地址获取 |
+| ✅ 已完成 | ONVIF | 设备发现、云台控制、流地址获取、MotionAlarm 事件订阅 |
 | ✅ 已完成 | 小米（CS2 + 旧版 TUTK） | 云端认证、H.264/H.265 — 社区支持，7 款 TUTK 旧型号 |
 | ✅ 已完成 | RTMP（接入） | 收推：接收远端推流 |
 | ✅ 已完成 | SRT（接入） | 收推：低延迟传输 |
 | ✅ 已完成 | RTMP/RTSP（转推） | 转推：原生 Go 中继，转发到远端目标，可选 FFmpeg 兼容模式 |
+| ✅ 已完成 | RTSP（输出） | 内置 RTSP 服务：所有摄像头（含 MJPEG）经 `rtsp://<nvr>:8554/<camera-id>` 对外出流 |
+| ✅ 已完成 | WHIP（推入） | 浏览器/手机/OBS 30+ WebRTC 推流（H.264 + Opus） |
 | ✅ 已完成 | HTTP-FLV | 浏览器友好的直播流 |
 | ✅ 已完成 | WebRTC | 亚秒级延迟实时预览 |
 | ✅ 已完成 | 音频录制与实时预览 | AAC + G.711 + Opus，按摄像头开关，WebSocket 实时音频播放 |
@@ -171,6 +176,8 @@ make build
 | [视频转码](docs/zh/transcoding.md) | FFmpeg 转码设置 |
 | [Prometheus 指标](docs/zh/metrics.md) | 完整的 Prometheus 指标参考，包含类型、标签和使用示例 |
 | [推流转发](docs/zh/relay-guide.md) | RTMP 直播平台推流配置与故障排除 |
+| [WHIP 推入](docs/zh/whip-ingest.md) | 浏览器/手机/OBS WebRTC 推流接入 |
+| [Webhook 集成](docs/zh/webhook-integration.md) | HMAC 签名的 webhook 触发端点 |
 | [远程访问](docs/zh/remote-access.md) | Tailscale / Cloudflare Tunnel 外网访问与 WebRTC ICE/STUN/TURN 配置 |
 
 ```bash
@@ -220,40 +227,13 @@ make docker-release
 ## 项目结构
 
 ```text
-cmd/mibee-nvr/       # 程序入口
-internal/            # 核心模块（43 个）
-  ai/               # AI 配置 + ROI 区域存储（推理在浏览器端，见 web/src/lib/ai-detection/）
-  api/              # REST API
-  camera/           # 摄像头管理
-  cleanup/          # 保留策略 + 磁盘清理
-  config/           # YAML 配置、验证
-  event/            # 发布/订阅事件总线
-  flv/              # HTTP-FLV 直播
-  ftp/              # FTP 服务
-  health/           # 摄像头健康监控
-  hls/              # HLS 直播（+ LL-HLS）
-  merge/            # 片段合并
-  metrics/          # Prometheus 指标
-  middleware/       # 认证、限流
-  model/            # 核心类型
-  mqtt/             # MQTT 客户端
-  muxer/            # MP4 封装器
-  onvif/            # ONVIF 发现、云台控制
-  recorder/         # H.264/H.265/MJPEG/JPEG/ONVIF/小米/延时录像引擎
-  rtmp/             # RTMP 接入服务
-  srt/              # SRT 监听器
-  storage/          # SQLite 数据库 + 文件管理
-  timelapse/        # 延时录像管理器
-  transcoding/      # FFmpeg 转码
-  ui/               # 内嵌 Web UI
-  upload/           # HTTP 上传处理
-  webdav/           # WebDAV 服务
-  webrtc/           # WebRTC WHEP 直播
-  wsstream/         # WebSocket 直播流
-  xiaomi/           # 小米摄像头（CS2 P2P）
+cmd/mibee-nvr/       # 程序入口 + 应用生命周期
+internal/            # 核心模块
 web/                 # Svelte 5 前端
-deploy/              # systemd 服务文件
+deploy/              # systemd、Docker 等部署资产
 docs/                # 文档（中文/英文）
+tests/               # 集成测试
+e2e-tests/           # Playwright E2E 测试
 ```
 
 ## 贡献

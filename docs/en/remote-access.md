@@ -4,6 +4,10 @@ MiBee NVR serves on the LAN by default. This guide covers how to make the NVR re
 
 > **This page covers only the minimal working configuration.** For advanced features of each tool (subnet routing, ACLs, exit nodes, custom certs), consult the tool's own documentation.
 
+## Built-in Remote Connection (coming soon)
+
+MiBee NVR ships with a built-in encrypted remote-connection mode (NAT traversal with automatic relay fallback), designed to work with a companion mobile app. It is being finalized and will be documented here when it ships — the self-hosted options below are available today.
+
 ---
 
 ## Scenario Comparison
