@@ -150,7 +150,7 @@ func (s *Session) handleConnectRequest(msg *Message) {
 	s.mu.Unlock()
 
 	go func() {
-		if err := p2p.startAsOfferer(s.signal, s.cfg, s.welcome); err != nil {
+		if err := p2p.startAsOfferer(s.signal, s.sessionConfig(), s.welcome); err != nil {
 			s.logger.Error("p2p as offerer failed", "error", err)
 			s.mu.Lock()
 			delete(s.peers, req.SessionID)
@@ -188,7 +188,7 @@ func (s *Session) handleConnectAccept(msg *Message) {
 	// network — so running it inline closes the "offer vs nil pc" race that
 	// silently dropped the offer and dead-ended the handshake (the callback
 	// -timing test caught it as a deterministic 120s hang under load).
-	if err := p2p.startAsAnswerer(s.signal, s.cfg, s.welcome); err != nil {
+	if err := p2p.startAsAnswerer(s.signal, s.sessionConfig(), s.welcome); err != nil {
 		s.logger.Error("p2p as answerer failed", "error", err)
 		if deleted := s.deleteP2P(accept.SessionID); deleted != nil {
 			_ = deleted.close()

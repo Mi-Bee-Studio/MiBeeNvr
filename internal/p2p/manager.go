@@ -120,6 +120,13 @@ type StatusSnapshot struct {
 	// QoS/企业网关整形的网段只能落 relay，没有 TCP 兜底。
 	ICEUDPOnly bool `json:"ice_udp_only"`
 
+	// TransportDecision 是当前传输仲裁钉选（relay = 钉 relay 跳过 ICE
+	// 仲裁；direct = 直连优先仲裁），DecisionReason 给出来源：
+	// force_relay（显式 true）| nat_symmetric（auto 且 v4 对称无 v6）
+	// | default。
+	TransportDecision string `json:"transport_decision"`
+	DecisionReason    string `json:"decision_reason"`
+
 	// NAT 是本机 NAT 行为观测（#14，只观测不改策略）：对称 NAT 意味着
 	// 与另一个对称 NAT 对端的常规 ICE 打洞数学上不可行——这是「为什么
 	// 落 relay」的设备侧事实证据。welcome 无 STUN 或探测未完成 = nil。
@@ -128,12 +135,15 @@ type StatusSnapshot struct {
 
 // NATObservation 是设备侧 NAT 行为观测的对外视图（SDK peer.NatObservation）。
 type NATObservation struct {
-	Class         string    `json:"class"` // public|cone|symmetric|unknown
-	StunReachable bool      `json:"stun_reachable"`
-	Responsive    int       `json:"responsive"`
-	LocalAddr     string    `json:"local_addr,omitempty"`
-	PreferRelay   bool      `json:"prefer_relay"` // symmetric=true：该形态下应先/只走 relay
-	At            time.Time `json:"at"`
+	Class         string `json:"class"` // public|cone|symmetric|unknown
+	StunReachable bool   `json:"stun_reachable"`
+	Responsive    int    `json:"responsive"`
+	LocalAddr     string `json:"local_addr,omitempty"`
+	PreferRelay   bool   `json:"prefer_relay"` // symmetric=true：该形态下应先/只走 relay
+	// DualStack = 有全局 IPv6：v4 对称判定不排除 v6 直连，auto 钉选
+	// 据此豁免（有 v6 的设备即使 v4 对称也保持直连优先）。
+	DualStack bool      `json:"dual_stack"`
+	At        time.Time `json:"at"`
 }
 
 // Manager 监督 P2P 设备会话的完整生命周期：铸 token → 信令上线 → 每个
@@ -357,6 +367,10 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 			FailedTimeout:       msToDuration(m.cfg.ICEFailedTimeoutMS),
 		},
 		ICEReceiveMTU: m.cfg.ICEReceiveMTU,
+		// 传输仲裁钉选（#18）：显式 true 恒钉 relay；auto 的动态决策在
+		// NAT 观测回调里经 SetForceRelay 写回（Dial 时观测未出，先保持
+		// 直连优先）；缺省 = 历史行为。
+		ForceRelay: m.cfg.ForceRelay == config.ForceRelayAlways,
 		TransportTimeout: func() time.Duration {
 			if m.cfg.TransportTimeoutSec > 0 {
 				return time.Duration(m.cfg.TransportTimeoutSec) * time.Second
@@ -399,7 +413,12 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 	// /metrics。Session 级回调须在首个入站会话建立前挂好；SDK 注入
 	// SessionID 后回调；异常静默降级，绝不影响建链。
 	sess.OnStats = m.onICEStats
-	sess.OnNATObservation = m.onNATObservation
+	// NAT 观测 + auto 钉选联动（#18）：观测回调先把 auto 模式的决策写回
+	// Session（后续会话按新钉选走），再落状态/指标/事件。
+	sess.OnNATObservation = func(o peer.NatObservation) {
+		m.onNATObservation(o)
+		m.applyAutoForceRelay(sess, o)
+	}
 
 	m.logger.Info("p2p device online",
 		"peer_id", m.cfg.PeerID,
@@ -592,11 +611,13 @@ func (m *Manager) tunnelDroppedTotal() uint64 {
 func (m *Manager) onNATObservation(o peer.NatObservation) {
 	m.natObs.Store(&o)
 	m.addEvent("nat_observation", "",
-		fmt.Sprintf("class=%s stun=%d prefer_relay=%v", o.Class, o.Responsive, peer.PreferRelay(o.Class)))
+		fmt.Sprintf("class=%s stun=%d dual_stack=%v prefer_relay=%v", o.Class, o.Responsive, o.DualStack, peer.PreferRelay(o.Class)))
 	m.recorder.SetP2PNATClass(string(o.Class))
+	m.recorder.SetP2PNATDualStack(o.DualStack)
 	m.logger.Info("NAT behavior observed",
 		"class", string(o.Class), "stun_responsive", o.Responsive,
-		"local_addr", o.LocalAddr, "prefer_relay", peer.PreferRelay(o.Class))
+		"local_addr", o.LocalAddr, "dual_stack", o.DualStack,
+		"prefer_relay", peer.PreferRelay(o.Class))
 }
 
 // natSnapshot 把 SDK 观测转成对外视图（nil 当未观测）。
@@ -611,7 +632,39 @@ func (m *Manager) natSnapshot() *NATObservation {
 		Responsive:    o.Responsive,
 		LocalAddr:     o.LocalAddr,
 		PreferRelay:   peer.PreferRelay(o.Class),
+		DualStack:     o.DualStack,
 		At:            o.At,
+	}
+}
+
+// transportDecision 汇出当前仲裁钉选及其来源（状态面可观测，#18）。
+// 纯 true 恒钉；auto 读最近一次 NAT 观测（v4 对称且无全局 IPv6 才钉）；
+// 其余（含缺省）保持直连优先——与历史行为一致。
+func (m *Manager) transportDecision() (pinned bool, reason string) {
+	switch m.cfg.ForceRelay {
+	case config.ForceRelayAlways:
+		return true, "force_relay"
+	case config.ForceRelayAuto:
+		if o := m.natObs.Load(); o != nil && o.Class == peer.NATSymmetric && !o.DualStack {
+			return true, "nat_symmetric"
+		}
+	}
+	return false, "default"
+}
+
+// applyAutoForceRelay 在 auto 模式下把 NAT 观测翻译成设备侧仲裁钉选：
+// v4 对称 NAT 且无全局 IPv6 → 钉 relay（后续会话跳过注定失败的 ICE
+// 仲裁窗）；其余恢复直连优先。显式 true / 缺省模式不经过这里（Dial 时
+// 已定）。观测在 Dial 后数秒内回调，先于常见的第一条客户端会话。
+func (m *Manager) applyAutoForceRelay(sess *peer.Session, o peer.NatObservation) {
+	if m.cfg.ForceRelay != config.ForceRelayAuto {
+		return
+	}
+	pinned := o.Class == peer.NATSymmetric && !o.DualStack
+	sess.SetForceRelay(pinned)
+	if pinned {
+		m.logger.Info("force relay pinned by NAT observation",
+			"class", string(o.Class), "dual_stack", o.DualStack)
 	}
 }
 
@@ -810,6 +863,11 @@ func (m *Manager) Status() StatusSnapshot {
 		ICEUDPOnly:          true,
 		TunnelDroppedFrames: m.tunnelDroppedTotal(),
 		NAT:                 m.natSnapshot(),
+	}
+	if pinned, reason := m.transportDecision(); pinned {
+		snap.TransportDecision, snap.DecisionReason = "relay", reason
+	} else {
+		snap.TransportDecision, snap.DecisionReason = "direct", reason
 	}
 	if m.gate != nil {
 		snap.License = &GateStatus{Allowed: m.gate.Allowed(), State: m.gate.State()}
