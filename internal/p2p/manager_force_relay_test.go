@@ -79,3 +79,17 @@ func TestNATSnapshotDualStack(t *testing.T) {
 		t.Fatalf("dual-stack symmetric snapshot = %+v", got)
 	}
 }
+
+// TestTunnelEchoStatusFields：T2 探测观测进 Status（#87 设备侧出口）。
+func TestTunnelEchoStatusFields(t *testing.T) {
+	m := newForceRelayManager(t, config.ForceRelayDefault)
+	if got := m.tunnelEchoSnapshot(); got != nil {
+		t.Fatalf("no probe yet must snapshot nil, got %+v", got)
+	}
+	m.echoObs.Store(&TunnelEchoObs{NormalMS: 42, PrioMS: 9, LaneUsed: true, WantBytes: 16384})
+	snap := m.Status()
+	if snap.TunnelEcho == nil || snap.TunnelEcho.NormalMS != 42 || snap.TunnelEcho.PrioMS != 9 ||
+		!snap.TunnelEcho.LaneUsed || snap.TunnelEcho.WantBytes != 16384 {
+		t.Fatalf("tunnel echo snapshot = %+v", snap.TunnelEcho)
+	}
+}

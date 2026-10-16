@@ -252,11 +252,22 @@ func (t *Tunnel) pipeTunnelToTCP(tcpConn net.Conn, sc *streamConn) {
 }
 
 func (t *Tunnel) sendMsg(msg TunnelMessage) error {
-	data, err := json.Marshal(msg)
+	data, err := marshalTunnelMessage(msg)
 	if err != nil {
-		return fmt.Errorf("marshal tunnel msg: %w", err)
+		return err
 	}
 	return t.transport.Send(data)
+}
+
+// marshalTunnelMessage encodes one envelope frame; callers that route the
+// bytes themselves (priority lane) marshal first so lane selection happens
+// after serialization failures, not before.
+func marshalTunnelMessage(msg TunnelMessage) ([]byte, error) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal tunnel msg: %w", err)
+	}
+	return data, nil
 }
 
 // sendEgress routes one already-marshaled tunnel message, honoring the

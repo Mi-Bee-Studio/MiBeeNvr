@@ -57,6 +57,10 @@ type Tunnel struct {
 	// egressPrioBudget arms per-stream high-lane marking (see
 	// EnableEgressPriority); zero = off (pre-feature behavior).
 	egressPrioBudget atomic.Int64
+
+	// echo (T2 RTT probes) lazy state — see echo.go.
+	echoOnce  sync.Once
+	echoState *echoState
 }
 
 // e2eeHandshakeTimeout bounds how long Dial waits for the device's sealed
@@ -308,7 +312,15 @@ func (t *Tunnel) dispatch(data []byte) {
 		t.handleClose(msg.Payload)
 	case TunnelMessageTypeE2EEAck:
 		t.handleE2EEAck(msg.Payload)
+	case TunnelMessageTypeEcho:
+		t.handleEcho(msg.Payload)
+	case TunnelMessageTypeEchoResp:
+		t.handleEchoResp(msg.Payload)
 	default:
-		t.logger.Warn("unknown tunnel message type", "type", msg.Type)
+		// Forward compatibility: unknown types are ignored silently (no
+		// throw, no disconnect) so newer peers can introduce frames without
+		// breaking older ones. Debug, not Warn: a frame type this build
+		// predates is expected traffic, not an anomaly.
+		t.logger.Debug("unknown tunnel message type ignored", "type", msg.Type)
 	}
 }

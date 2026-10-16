@@ -131,6 +131,22 @@ type StatusSnapshot struct {
 	// 与另一个对称 NAT 对端的常规 ICE 打洞数学上不可行——这是「为什么
 	// 落 relay」的设备侧事实证据。welcome 无 STUN 或探测未完成 = nil。
 	NAT *NATObservation `json:"nat,omitempty"`
+
+	// TunnelEcho 是最近一次设备侧隧道 echo 探测（#87 T2 分解）：普通
+	// 车道反映业务数据排队，优先车道反映控制面体感；满载时两者的差值
+	// = 优先级车道真实买到的量，prio(满载)−prio(轻载) = 控制面被媒体
+	// 面拖累的净量。nil = 尚无客户端隧道。
+	TunnelEcho *TunnelEchoObs `json:"tunnel_echo,omitempty"`
+}
+
+// TunnelEchoObs 一次 T2 隧道单跳 RTT 探测结果（双车道，#87）。
+type TunnelEchoObs struct {
+	NormalMS    int64     `json:"normal_ms"`
+	PrioMS      int64     `json:"prio_ms"`
+	LaneUsed    bool      `json:"lane_used"` // 优先车道真实可用（非静默降级）
+	WantBytes   int       `json:"want_bytes"`
+	Unsupported bool      `json:"unsupported,omitempty"` // 对端不回显（旧 App）
+	At          time.Time `json:"at"`
 }
 
 // NATObservation 是设备侧 NAT 行为观测的对外视图（SDK peer.NatObservation）。
@@ -180,6 +196,7 @@ type Manager struct {
 
 	// natObs 是最近一次 NAT 行为观测（信令重拨后刷新）。
 	natObs        atomic.Pointer[peer.NatObservation]
+	echoObs       atomic.Pointer[TunnelEchoObs]
 	consecRejects int // 平台策略拒绝连击数（成功上线清零；Run 循环读写）
 	lastRejection atomic.Pointer[Rejection]
 
@@ -469,8 +486,12 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 		m.clients[tun] = struct{}{}
 		m.clientsMu.Unlock()
 
+		// T2 单跳 RTT 探测（#87）：双车道周期采样，对端不回显（旧 App）
+		// 连续未应答后标记 unsupported 停测。
+		stopEcho := m.startTunnelEchoSampler(tun)
 		if dc.OnClose != nil {
 			dc.OnClose(func() {
+				stopEcho()
 				_ = tun.Close()
 				m.dropClient(tun)
 			})
@@ -635,6 +656,68 @@ func (m *Manager) natSnapshot() *NATObservation {
 		DualStack:     o.DualStack,
 		At:            o.At,
 	}
+}
+
+// tunnelEchoSnapshot 汇出最近一次 T2 探测（nil 当无客户端隧道）。
+func (m *Manager) tunnelEchoSnapshot() *TunnelEchoObs {
+	return m.echoObs.Load()
+}
+
+// tunnelEchoInterval 是 T2 双车道探测周期（30s 与 App 质量上报同窗）。
+const tunnelEchoInterval = 30 * time.Second
+
+// startTunnelEchoSampler 周期探测一条客户端隧道的 T2 单跳 RTT（#87）：
+// 普通车道走业务数据同款排队路径，优先车道反映控制面体感；回显按
+// MaxPayloadBytes 补齐——测的就是数据帧尺寸的排队，不是小包特供通道。
+// 对端不回显（旧 App）连续 3 次未应答 → 标记 unsupported 退出（缺答是
+// 有效答案，不是故障）；任何发送失败（隧道关闭）也退出。
+func (m *Manager) startTunnelEchoSampler(tun *tunnel.Tunnel) (stop func()) {
+	stopCh := make(chan struct{})
+	go func() {
+		probe := func() bool { // false = stop sampling
+			want := tunnel.MaxPayloadBytes
+			normal, errN := tun.ProbeEcho(want, false)
+			if errN != nil {
+				if errors.Is(errN, tunnel.ErrEchoUnsupported) {
+					m.echoObs.Store(&TunnelEchoObs{WantBytes: want, Unsupported: true, At: time.Now()})
+					m.logger.Info("tunnel echo unsupported by peer — T2 unmeasurable", "want_bytes", want)
+					return false
+				}
+				if errors.Is(errN, tunnel.ErrEchoTimeout) {
+					return true // miss: keep sampling, give-up logic is in ProbeEcho
+				}
+				return false // send failure: tunnel closing/closed
+			}
+			prio, errP := tun.ProbeEcho(want, true)
+			if errP != nil {
+				return false
+			}
+			m.echoObs.Store(&TunnelEchoObs{
+				NormalMS:  normal.RTT.Milliseconds(),
+				PrioMS:    prio.RTT.Milliseconds(),
+				LaneUsed:  prio.PrioLane,
+				WantBytes: want,
+				At:        time.Now(),
+			})
+			return true
+		}
+		if !probe() {
+			return
+		}
+		ticker := time.NewTicker(tunnelEchoInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				if !probe() {
+					return
+				}
+			}
+		}
+	}()
+	return sync.OnceFunc(func() { close(stopCh) })
 }
 
 // transportDecision 汇出当前仲裁钉选及其来源（状态面可观测，#18）。
@@ -863,6 +946,7 @@ func (m *Manager) Status() StatusSnapshot {
 		ICEUDPOnly:          true,
 		TunnelDroppedFrames: m.tunnelDroppedTotal(),
 		NAT:                 m.natSnapshot(),
+		TunnelEcho:          m.tunnelEchoSnapshot(),
 	}
 	if pinned, reason := m.transportDecision(); pinned {
 		snap.TransportDecision, snap.DecisionReason = "relay", reason
