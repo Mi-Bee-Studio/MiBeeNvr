@@ -18,15 +18,15 @@ func TestAdvertiseableIP(t *testing.T) {
 		{"8.8.8.8", true},
 		{"198.51.100.156", true},
 		{"1.1.1.1", true},
-		{"", false},               // unparsable → nil IP
-		{"127.0.0.1", false},      // loopback
-		{"169.254.1.1", false},    // link-local
-		{"224.0.0.1", false},      // multicast
-		{"0.0.0.0", false},        // unspecified
-		{"10.1.2.3", false},       // RFC1918
-		{"172.16.0.1", false},     // RFC1918
+		{"", false},              // unparsable → nil IP
+		{"127.0.0.1", false},     // loopback
+		{"169.254.1.1", false},   // link-local
+		{"224.0.0.1", false},     // multicast
+		{"0.0.0.0", false},       // unspecified
+		{"10.1.2.3", false},      // RFC1918
+		{"172.16.0.1", false},    // RFC1918
 		{"192.168.77.60", false}, // RFC1918 (docker-bridge poison form from #82)
-		{"100.64.0.1", false},     // RFC 6598 CGNAT
+		{"100.64.0.1", false},    // RFC 6598 CGNAT
 		{"100.127.255.255", false},
 		{"100.128.0.1", true},     // just outside CGNAT
 		{"fd00::1", false},        // ULA

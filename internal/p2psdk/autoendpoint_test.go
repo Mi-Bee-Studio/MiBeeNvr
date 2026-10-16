@@ -173,7 +173,7 @@ func TestAutoEndpointNegativeCache(t *testing.T) {
 // TestStunURLToAddr：Welcome URL 形态解析（默认 3478、跳过 turn:）。
 func TestStunURLToAddr(t *testing.T) {
 	cases := map[string]string{
-		"stun:198.51.100.8:13477":  "198.51.100.8:13477",
+		"stun:198.51.100.8:13477":   "198.51.100.8:13477",
 		"stun:stun.example.com":     "stun.example.com:3478",
 		"turn:host:1?transport=udp": "",
 		"":                          "",
