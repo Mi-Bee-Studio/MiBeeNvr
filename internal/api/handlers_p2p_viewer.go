@@ -30,6 +30,10 @@ type p2pViewerSample struct {
 	RttMs    int       `json:"rtt_ms"`
 	KbpsUp   int       `json:"kbps_up"`
 	KbpsDown int       `json:"kbps_down"`
+	// BandwidthClass 是 App 侧弱带宽分级（good|degraded|starved|unknown，
+	// 近 3 窗下行均值 + RTT 判定）——观测字段，采集分布用于后续自动
+	// 降档的阈值校准。
+	BandwidthClass string `json:"bandwidth_class,omitempty"`
 }
 
 const viewerHistoryMaxBytes = 5 << 20 // rotate: <name>.jsonl → <name>-1.jsonl
@@ -57,17 +61,20 @@ func (h *Handler) appendViewerJSONL(name string, line []byte) {
 // rtt_* 为应用层（HTTP 过隧道）窗口统计；net_rtt_ms 为直连隧道的
 // ICE 传输层真实往返（「网络差」vs「隧道被视频流量占满」的分离证据）。
 type p2pViewerReport struct {
-	Mode       string `json:"mode"`                // tunnel|relay
-	ViewerID   string `json:"viewer_id,omitempty"` // App 装机稳定标识（fix4 起上报）
-	SelfAddr   string `json:"self_addr"`
-	RttMs      int    `json:"rtt_ms"`
-	RttMinMs   *int   `json:"rtt_min_ms,omitempty"`
-	RttMaxMs   *int   `json:"rtt_max_ms,omitempty"`
-	NetRttMs   *int   `json:"net_rtt_ms,omitempty"`
-	KbpsUp     int    `json:"kbps_up"`
-	KbpsDown   int    `json:"kbps_down"`
-	BytesTotal int64  `json:"bytes_total"`
-	AppVersion string `json:"app_version"`
+	Mode     string `json:"mode"`                // tunnel|relay
+	ViewerID string `json:"viewer_id,omitempty"` // App 装机稳定标识（fix4 起上报）
+	SelfAddr string `json:"self_addr"`
+	RttMs    int    `json:"rtt_ms"`
+	RttMinMs *int   `json:"rtt_min_ms,omitempty"`
+	RttMaxMs *int   `json:"rtt_max_ms,omitempty"`
+	NetRttMs *int   `json:"net_rtt_ms,omitempty"`
+	KbpsUp   int    `json:"kbps_up"`
+	KbpsDown int    `json:"kbps_down"`
+	// BandwidthClass：App 侧弱带宽分级（good|degraded|starved|unknown），
+	// 旧版 App 不带此字段（空串）。
+	BandwidthClass string `json:"bandwidth_class,omitempty"`
+	BytesTotal     int64  `json:"bytes_total"`
+	AppVersion     string `json:"app_version"`
 }
 
 const p2pViewerSampleCap = 240 // 30s 间隔 ≈ 2h 环形历史
@@ -156,6 +163,7 @@ func (h *Handler) RecordP2pViewerReport(r p2pViewerReport) {
 		e.updatedAt = now
 		e.samples = append(e.samples, p2pViewerSample{
 			At: now, Mode: r.Mode, RttMs: r.RttMs, KbpsUp: r.KbpsUp, KbpsDown: r.KbpsDown,
+			BandwidthClass: r.BandwidthClass,
 		})
 		if len(e.samples) > p2pViewerSampleCap {
 			e.samples = e.samples[len(e.samples)-p2pViewerSampleCap:]
@@ -175,6 +183,7 @@ func (h *Handler) RecordP2pViewerReport(r p2pViewerReport) {
 			updatedAt: now,
 			samples: []p2pViewerSample{{
 				At: now, Mode: r.Mode, RttMs: r.RttMs, KbpsUp: r.KbpsUp, KbpsDown: r.KbpsDown,
+				BandwidthClass: r.BandwidthClass,
 			}},
 		}
 	}
@@ -201,6 +210,12 @@ func (h *Handler) handleP2pViewerReport(w http.ResponseWriter, r *http.Request) 
 	if body.RttMs < 0 || body.RttMs > 60000 || body.KbpsUp < 0 || body.KbpsDown < 0 ||
 		body.KbpsUp > 1000000 || body.KbpsDown > 1000000 {
 		WriteError(w, http.StatusBadRequest, "values out of range")
+		return
+	}
+	switch body.BandwidthClass {
+	case "", "good", "degraded", "starved", "unknown":
+	default:
+		WriteError(w, http.StatusBadRequest, "bandwidth_class must be good|degraded|starved|unknown")
 		return
 	}
 	h.RecordP2pViewerReport(body)
@@ -246,18 +261,19 @@ func (h *Handler) handleGetP2pViewer(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	type viewerOut struct {
-		ViewerID   string            `json:"viewer_id,omitempty"`
-		SelfAddr   string            `json:"self_addr"`
-		Mode       string            `json:"mode"`
-		RttMs      int               `json:"rtt_ms"`
-		NetRttMs   *int              `json:"net_rtt_ms,omitempty"`
-		KbpsUp     int               `json:"kbps_up"`
-		KbpsDown   int               `json:"kbps_down"`
-		BytesTotal int64             `json:"bytes_total"`
-		AppVersion string            `json:"app_version"`
-		UpdatedAt  string            `json:"updated_at"`
-		Stale      bool              `json:"stale"`
-		Samples    []p2pViewerSample `json:"samples"`
+		ViewerID       string            `json:"viewer_id,omitempty"`
+		SelfAddr       string            `json:"self_addr"`
+		Mode           string            `json:"mode"`
+		RttMs          int               `json:"rtt_ms"`
+		NetRttMs       *int              `json:"net_rtt_ms,omitempty"`
+		KbpsUp         int               `json:"kbps_up"`
+		KbpsDown       int               `json:"kbps_down"`
+		BandwidthClass string            `json:"bandwidth_class,omitempty"`
+		BytesTotal     int64             `json:"bytes_total"`
+		AppVersion     string            `json:"app_version"`
+		UpdatedAt      string            `json:"updated_at"`
+		Stale          bool              `json:"stale"`
+		Samples        []p2pViewerSample `json:"samples"`
 	}
 
 	h.p2pViewer.mu.Lock()
@@ -274,34 +290,36 @@ func (h *Handler) handleGetP2pViewer(w http.ResponseWriter, _ *http.Request) {
 		for _, e := range entries {
 			stale := time.Since(e.updatedAt) > 3*time.Minute
 			outs = append(outs, viewerOut{
-				ViewerID:   e.latest.ViewerID,
-				SelfAddr:   e.latest.SelfAddr,
-				Mode:       e.latest.Mode,
-				RttMs:      e.latest.RttMs,
-				NetRttMs:   e.latest.NetRttMs,
-				KbpsUp:     e.latest.KbpsUp,
-				KbpsDown:   e.latest.KbpsDown,
-				BytesTotal: e.latest.BytesTotal,
-				AppVersion: e.latest.AppVersion,
-				UpdatedAt:  e.updatedAt.UTC().Format(time.RFC3339),
-				Stale:      stale,
-				Samples:    append([]p2pViewerSample(nil), e.samples...),
+				ViewerID:       e.latest.ViewerID,
+				SelfAddr:       e.latest.SelfAddr,
+				Mode:           e.latest.Mode,
+				RttMs:          e.latest.RttMs,
+				NetRttMs:       e.latest.NetRttMs,
+				KbpsUp:         e.latest.KbpsUp,
+				KbpsDown:       e.latest.KbpsDown,
+				BandwidthClass: e.latest.BandwidthClass,
+				BytesTotal:     e.latest.BytesTotal,
+				AppVersion:     e.latest.AppVersion,
+				UpdatedAt:      e.updatedAt.UTC().Format(time.RFC3339),
+				Stale:          stale,
+				Samples:        append([]p2pViewerSample(nil), e.samples...),
 			})
 		}
 		resp["viewers"] = outs
 		if len(outs) > 0 {
 			// 兼容字段：取最新观众拍平成旧结构（samples 同源）。
 			resp["viewer"] = map[string]any{
-				"self_addr":   outs[0].SelfAddr,
-				"mode":        outs[0].Mode,
-				"rtt_ms":      outs[0].RttMs,
-				"kbps_up":     outs[0].KbpsUp,
-				"kbps_down":   outs[0].KbpsDown,
-				"bytes_total": outs[0].BytesTotal,
-				"app_version": outs[0].AppVersion,
-				"updated_at":  outs[0].UpdatedAt,
-				"stale":       outs[0].Stale,
-				"samples":     outs[0].Samples,
+				"self_addr":       outs[0].SelfAddr,
+				"mode":            outs[0].Mode,
+				"rtt_ms":          outs[0].RttMs,
+				"kbps_up":         outs[0].KbpsUp,
+				"kbps_down":       outs[0].KbpsDown,
+				"bandwidth_class": outs[0].BandwidthClass,
+				"bytes_total":     outs[0].BytesTotal,
+				"app_version":     outs[0].AppVersion,
+				"updated_at":      outs[0].UpdatedAt,
+				"stale":           outs[0].Stale,
+				"samples":         outs[0].Samples,
 			}
 		}
 	}
