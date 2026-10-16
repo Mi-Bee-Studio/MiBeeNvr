@@ -108,8 +108,7 @@ func startHTTPServer(t testing.TB) (net.Listener, string) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
 
-	// Generate a large response payload spanning multiple MaxPayloadBytes
-	// chunks (32 KiB each).
+	// Generate a large response payload spanning multiple tunnel fragments.
 	largeBody := make([]byte, 100000)
 	for i := range largeBody {
 		largeBody[i] = byte('A' + i%26)

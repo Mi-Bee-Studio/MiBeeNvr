@@ -57,7 +57,7 @@ type SignalingConfig struct {
 	ICEReceiveMTU int
 
 	// TunnelMaxPayloadBytes optionally overrides the tunnel fragment size
-	// (0 = MaxPayloadBytes, 32 KiB). Receivers do not validate fragment
+	// (0 = MaxPayloadBytes, 16 KiB). Receivers do not validate fragment
 	// size, so mixed settings interoperate; capping happens at the sender.
 	TunnelMaxPayloadBytes int
 
