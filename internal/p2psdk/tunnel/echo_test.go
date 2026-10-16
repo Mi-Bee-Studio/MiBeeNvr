@@ -138,7 +138,7 @@ func TestEcho_UnsupportedAfterTimeouts(t *testing.T) {
 	go tun.Serve()
 	t.Cleanup(func() { _ = tun.Close() })
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := tun.ProbeEcho(64, false)
 		require.Error(t, err, "probe %d must fail", i)
 		if i < 2 {
