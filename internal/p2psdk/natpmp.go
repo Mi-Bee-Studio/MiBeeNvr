@@ -63,7 +63,11 @@ func pmpExternalIP(gwAddr string, timeout time.Duration) (net.IP, error) {
 	}
 	defer func() { _ = conn.Close() }() //nolint:errcheck // teardown
 
-	resp, err := pmpExchange(conn.(*net.UDPConn), []byte{natPMPVersion, natPMPOpAddr}, timeout)
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		return nil, errors.New("pmp dial: not a UDP connection")
+	}
+	resp, err := pmpExchange(udpConn, []byte{natPMPVersion, natPMPOpAddr}, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("pmp addr request: %w", err)
 	}
@@ -98,7 +102,11 @@ func pmpMapUDP(gwAddr string, port int, timeout time.Duration) (int, error) {
 	binary.BigEndian.PutUint16(req[6:8], uint16(port)) //nolint:gosec // G115: same-port mapping requested
 	binary.BigEndian.PutUint32(req[8:12], natPMPLifetimeSec)
 
-	resp, err := pmpExchange(conn.(*net.UDPConn), req, timeout)
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		return 0, errors.New("pmp map: not a UDP connection")
+	}
+	resp, err := pmpExchange(udpConn, req, timeout)
 	if err != nil {
 		return 0, fmt.Errorf("pmp map request: %w", err)
 	}
@@ -154,35 +162,47 @@ func discoverGatewayIPs(limit int) []net.IP {
 		add(ip)
 	}
 
-	ifaces, err := net.Interfaces()
-	if err == nil {
-		for _, ifc := range ifaces {
-			addrs, aerr := ifc.Addrs()
-			if aerr != nil {
-				continue
-			}
-			for _, a := range addrs {
-				ipn, ok := a.(*net.IPNet)
-				if !ok {
-					continue
-				}
-				ip4 := ipn.IP.To4()
-				if ip4 == nil || ip4.IsLoopback() || len(ipn.Mask) != 4 {
-					continue
-				}
-				gw := ip4.Mask(ipn.Mask)
-				if len(gw) == 4 {
-					gw[3] |= 1
-					add(net.IP(append([]byte(nil), gw...)))
-				}
-			}
-		}
+	for _, ip := range interfaceGatewayCandidates() {
+		add(ip)
 	}
 
 	if len(cands) > limit {
 		cands = cands[:limit]
 	}
 	return cands
+}
+
+// interfaceGatewayCandidates returns the .1 host of every interface IPv4
+// network (consumer-router convention; a stray probe at a non-gateway host
+// is silently dropped). A listing failure yields no candidates.
+func interfaceGatewayCandidates() []net.IP {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []net.IP
+	for _, ifc := range ifaces {
+		addrs, aerr := ifc.Addrs()
+		if aerr != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipn.IP.To4()
+			if ip4 == nil || ip4.IsLoopback() || len(ipn.Mask) != 4 {
+				continue
+			}
+			gw := ip4.Mask(ipn.Mask)
+			if len(gw) == 4 {
+				gw[3] |= 1
+				out = append(out, net.IP(append([]byte(nil), gw...)))
+			}
+		}
+	}
+	return out
 }
 
 // parseProcNetRoutes extracts default-route gateway IPs from /proc/net/route

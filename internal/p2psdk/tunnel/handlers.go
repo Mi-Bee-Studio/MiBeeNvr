@@ -334,6 +334,8 @@ func isTunnelLifecycleType(typ TunnelMessageType) bool {
 	switch typ {
 	case TunnelMessageTypeOpen, TunnelMessageTypeClose, TunnelMessageTypeE2EEAck:
 		return true
+	case TunnelMessageTypeData, TunnelMessageTypeEcho, TunnelMessageTypeEchoResp:
+		return false
 	}
 	return false
 }

@@ -13,9 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/relay"
 	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/relay"
 )
 
 // signalSender is the minimal interface for sending raw signaling messages.

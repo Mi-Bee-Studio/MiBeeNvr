@@ -204,7 +204,9 @@ func (s *autoEndpointState) tryPMP(port int, upnpErr error, h *autoEndpointHooks
 // tryPCP runs ladder 2b (#43-D completion) — PCP-only gateways that
 // neither UPnP nor NAT-PMP served. Same-port mapping only; see pcp.go.
 // Caller must hold s.mu.
-func (s *autoEndpointState) tryPCP(port int, upnpErr, pmpErr error, h *autoEndpointHooks) (advertiseResolution, bool, error) {
+func (s *autoEndpointState) tryPCP(
+	port int, upnpErr, pmpErr error, h *autoEndpointHooks,
+) (advertiseResolution, bool, error) {
 	if h.pcpMapping == nil {
 		return advertiseResolution{}, false, nil
 	}
@@ -258,7 +260,8 @@ func (s *autoEndpointState) trySTUN(
 			continue
 		}
 		if host, _, herr := net.SplitHostPort(mapped); herr == nil && advertiseableIP(net.ParseIP(host)) {
-			s.addr, s.mode, s.port, s.gw, s.resolved = net.JoinHostPort(host, strconv.Itoa(port)), "stun", port, nil, true
+			s.addr = net.JoinHostPort(host, strconv.Itoa(port))
+			s.mode, s.port, s.gw, s.resolved = "stun", port, nil, true
 			s.expires = time.Now().Add(autoAdvertiseTTL)
 			s.upnpErr, s.pmpErr, s.stunErr = upnpErr, pmpErr, nil
 			return advertiseResolution{

@@ -119,7 +119,7 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 	)
 	// NAT 行为观测（#70/#14：只观测不改策略）——welcome 的 STUN 列表
 	// 在同一 socket 上复探比对映射，结果供诊断/后续选路决策消费。
-	go s.observeNAT(welcome) //nolint:gosec,contextcheck // deliberately detached: observation outlives the request scope
+	go s.observeNAT(welcome) //nolint:gosec,contextcheck // detached: observation outlives request scope
 	return s, nil
 }
 
@@ -141,10 +141,7 @@ type NatObservation struct {
 // NATObservation returns the latest NAT observation (nil before the first
 // probe completes or when welcome carried no STUN servers).
 func (s *Session) NATObservation() *NatObservation {
-	if v := s.natObs.Load(); v != nil {
-		return v
-	}
-	return nil
+	return s.natObs.Load()
 }
 
 // sessionConfig returns a locked snapshot of the signaling config (#89).

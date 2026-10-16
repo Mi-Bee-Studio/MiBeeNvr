@@ -72,7 +72,7 @@ func pcpMapUDP(gwAddr string, port int, timeout time.Duration) (int, error) {
 	// Suggested external IP at [44:60] stays zero — server assigns.
 
 	buf := make([]byte, 64)
-	var lastErr error = errors.New("pcp: no response")
+	lastErr := errors.New("pcp: no response")
 	for range pcpRequestTries {
 		if _, err := conn.Write(req); err != nil {
 			return 0, err

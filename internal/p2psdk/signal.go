@@ -119,22 +119,32 @@ func newSignalingClient(cfg SignalingConfig) *signalingClient {
 		logger: logger.With("component", "signal_client"),
 	}
 	if cfg.DeviceKeyPath != "" {
-		raw, err := os.ReadFile(cfg.DeviceKeyPath) //nolint:gosec // user-provided key path
-		if err != nil {
-			logger.Warn("device key unreadable; hellos will be unsigned", "path", cfg.DeviceKeyPath, "error", err)
-		} else if len(raw) == ed25519.SeedSize {
-			sc.deviceKey = ed25519.NewKeyFromSeed(raw)
-		} else if len(raw) == ed25519.PrivateKeySize {
-			sc.deviceKey = ed25519.PrivateKey(raw)
-		} else {
-			logger.Warn("device key must be 32 raw bytes (seed) or 64 bytes (full key); hellos will be unsigned",
-				"path", cfg.DeviceKeyPath, "size", len(raw))
-		}
+		sc.deviceKey = loadDeviceKey(logger, cfg.DeviceKeyPath)
 	}
 	sc.closeCh = make(chan struct{})
 	sc.done = make(chan struct{})
 	sc.reconnect.Store(true)
 	return sc
+}
+
+// loadDeviceKey reads the optional Ed25519 device key (32B seed or 64B
+// full key). An unreadable or mis-sized key leaves hellos unsigned
+// (warned, never fatal).
+func loadDeviceKey(logger *slog.Logger, path string) ed25519.PrivateKey {
+	raw, err := os.ReadFile(path) //nolint:gosec // user-provided key path
+	if err != nil {
+		logger.Warn("device key unreadable; hellos will be unsigned", "path", path, "error", err)
+		return nil
+	}
+	if len(raw) == ed25519.SeedSize {
+		return ed25519.NewKeyFromSeed(raw)
+	}
+	if len(raw) == ed25519.PrivateKeySize {
+		return ed25519.PrivateKey(raw)
+	}
+	logger.Warn("device key must be 32 raw bytes (seed) or 64 bytes (full key); hellos will be unsigned",
+		"path", path, "size", len(raw))
+	return nil
 }
 
 type discardWriter struct{}
@@ -144,6 +154,28 @@ func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 // connect dials the signaling server WebSocket and returns the welcome message.
 // It blocks until the hello handshake completes.
 //
+// maybeReconnectAfterReadError runs the read-loop tail after a
+// connection error: sessions still in the reconnect ladder back off and
+// redial unless the error was an auth-class close (that ladder is
+// abandoned for good).
+func (sc *signalingClient) maybeReconnectAfterReadError(err error, lifetime time.Duration) {
+	if !sc.reconnect.Load() {
+		return
+	}
+	if sc.authClassAbandoned(err) {
+		sc.logger.Warn("reconnect ladder abandoned: auth-class close",
+			"reason", err.Error(),
+		)
+		return
+	}
+	sc.logger.Info("reconnect scheduled",
+		"reason", err.Error(),
+		"lifetime_s", lifetime.Seconds(),
+		"cooldown", sc.currentReconnectCooldown(),
+	)
+	sc.reconnectWithBackoff()
+}
+
 //nolint:funlen // complex setup
 func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 	dialer := &websocket.Dialer{
@@ -333,20 +365,7 @@ func (sc *signalingClient) recvLoop() {
 			sc.recordSessionLifetime(lifetime)
 			_ = conn.Close()
 			sc.notifyClose(err)
-			if sc.reconnect.Load() {
-				if sc.authClassAbandoned(err) {
-					sc.logger.Warn("reconnect ladder abandoned: auth-class close",
-						"reason", err.Error(),
-					)
-					return
-				}
-				sc.logger.Info("reconnect scheduled",
-					"reason", err.Error(),
-					"lifetime_s", lifetime.Seconds(),
-					"cooldown", sc.currentReconnectCooldown(),
-				)
-				sc.reconnectWithBackoff()
-			}
+			sc.maybeReconnectAfterReadError(err, lifetime)
 			return
 		}
 		if sc.onMessage != nil {

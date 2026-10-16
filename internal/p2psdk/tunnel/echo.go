@@ -106,32 +106,18 @@ func (t *Tunnel) ProbeEcho(ctx context.Context, wantBytes int, priority bool) (E
 	}
 	t.echoMu.Unlock()
 
-	if wantBytes <= 0 {
-		wantBytes = t.fragmentSize()
-	}
-	if wantBytes > maxEchoWantBytes {
-		wantBytes = maxEchoWantBytes
-	}
+	wantBytes = t.clampEchoWant(wantBytes)
 
-	id := rand.Uint32()
+	id := rand.Uint32() //nolint:gosec // G404: probe correlation id, not a secret
 	ch := make(chan echoAnswer, 1)
-	t.echoMu.Lock()
-	if t.echoPending == nil {
-		t.echoPending = make(map[uint32]chan echoAnswer)
-	}
-	t.echoPending[id] = ch
-	t.echoMu.Unlock()
-	defer func() {
-		t.echoMu.Lock()
-		delete(t.echoPending, id)
-		t.echoMu.Unlock()
-	}()
+	unregister := t.registerEchoProbe(id, ch)
+	defer unregister()
 
 	lanePriority := priority && priorityLaneActive(t.transport)
 	req := make([]byte, 16)
 	binary.BigEndian.PutUint32(req[0:4], id)
 	binary.BigEndian.PutUint64(req[4:12], uint64(time.Now().UnixNano()))
-	binary.BigEndian.PutUint32(req[12:16], uint32(wantBytes))
+	binary.BigEndian.PutUint32(req[12:16], uint32(wantBytes)) //nolint:gosec // G115: clamped to maxEchoWantBytes
 	msg := TunnelMessage{
 		Type:    TunnelMessageTypeEcho,
 		Payload: base64.StdEncoding.EncodeToString(req),
@@ -180,6 +166,33 @@ func (t *Tunnel) ProbeEcho(ctx context.Context, wantBytes int, priority bool) (E
 		timeout, misses, echoUnsupportedAfter)
 }
 
+// clampEchoWant applies the want-bytes default (fragment size) and cap.
+func (t *Tunnel) clampEchoWant(want int) int {
+	if want <= 0 {
+		want = t.fragmentSize()
+	}
+	if want > maxEchoWantBytes {
+		want = maxEchoWantBytes
+	}
+	return want
+}
+
+// registerEchoProbe records a pending echo answer channel and returns its
+// cleanup.
+func (t *Tunnel) registerEchoProbe(id uint32, ch chan echoAnswer) func() {
+	t.echoMu.Lock()
+	if t.echoPending == nil {
+		t.echoPending = make(map[uint32]chan echoAnswer)
+	}
+	t.echoPending[id] = ch
+	t.echoMu.Unlock()
+	return func() {
+		t.echoMu.Lock()
+		delete(t.echoPending, id)
+		t.echoMu.Unlock()
+	}
+}
+
 // handleEcho answers one echo request. The reply always rides the priority
 // path — it is control-plane traffic and must not queue behind bulk data;
 // transports without a priority lane fall back harmlessly.
@@ -223,6 +236,7 @@ func (t *Tunnel) handleEchoResp(payload string) {
 	}
 	select {
 	case ch <- echoAnswer{
+		//nolint:gosec // G115: UnixNano timestamps fit int64 until year 2262
 		tSendNS: int64(binary.BigEndian.Uint64(raw[4:12])),
 		recvAt:  time.Now(),
 	}:
