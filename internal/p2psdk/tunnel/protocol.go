@@ -8,15 +8,21 @@ import (
 	"sync/atomic"
 )
 
-// MaxPayloadBytes is the maximum payload size for a single TunnelData message.
+// MaxPayloadBytes is the default maximum payload size for a single TunnelData
+// message.
 //
-// 32 KiB: a 24h cross-segment WiFi measurement (linktest frame-size sweep,
-// 2026-10-09) showed 32 KiB chunks sustain ~20% higher uplink throughput than
-// 16 KiB (105.5 vs 85.3 Mbps mean) with downlink unchanged. Base64 framing
-// inflates this to ~43.7 KiB on the wire, still under the 64 KiB SCTP
-// message-size ceiling. Receivers do not validate payload size, so mixed
-// old/new SDK versions interoperate.
-const MaxPayloadBytes = 32768 // 32 KiB
+// 16 KiB: the relay path rides a TCP WebSocket where a lost segment
+// retransmits the whole base64-inflated (~4/3) frame, so halving the fragment
+// halves both the retransmission unit and the in-flight byte count, and it
+// matches the mobile client default so both directions fragment alike. A 24h
+// cross-segment WiFi frame-size sweep measured ~20% higher uplink throughput
+// at 32 KiB on the direct SCTP path (105.5 vs 85.3 Mbps mean), but both
+// figures dwarf real video bitrates (<4 Mbps) — deployments that want that
+// headroom can raise the size via WithMaxPayloadBytes. Base64 framing of the
+// 32 KiB maximum inflates to ~43.7 KiB on the wire, still under the 64 KiB
+// SCTP message-size ceiling. Receivers do not validate payload size, so
+// mixed old/new SDK versions interoperate.
+const MaxPayloadBytes = 16384 // 16 KiB
 
 // DefaultSendWindowSize is the default unacknowledged send window per stream.
 const DefaultSendWindowSize = 8
