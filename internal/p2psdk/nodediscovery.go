@@ -129,13 +129,13 @@ type nodeCand struct {
 }
 
 func maxBucket(m map[int64][]nodeCand) int64 {
-	var max int64
+	var top int64
 	for b := range m {
-		if b > max {
-			max = b
+		if b > top {
+			top = b
 		}
 	}
-	return max
+	return top
 }
 
 // fetchNodeList retrieves the public node list.

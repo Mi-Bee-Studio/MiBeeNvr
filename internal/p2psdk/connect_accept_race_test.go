@@ -93,7 +93,7 @@ func TestSetForceRelay_ConcurrentSnapshotReads(t *testing.T) {
 			}
 		}
 	}()
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		sess.SetForceRelay(i%2 == 0)
 	}
 	close(stop)
