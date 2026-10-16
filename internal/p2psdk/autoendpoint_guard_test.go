@@ -16,7 +16,7 @@ func TestAdvertiseableIP(t *testing.T) {
 		want bool
 	}{
 		{"8.8.8.8", true},
-		{"121.8.0.156", true},
+		{"198.51.100.156", true},
 		{"1.1.1.1", true},
 		{"", false},               // unparsable → nil IP
 		{"127.0.0.1", false},      // loopback
@@ -25,7 +25,7 @@ func TestAdvertiseableIP(t *testing.T) {
 		{"0.0.0.0", false},        // unspecified
 		{"10.1.2.3", false},       // RFC1918
 		{"172.16.0.1", false},     // RFC1918
-		{"192.168.193.60", false}, // RFC1918 (the docker-bridge poison from #82)
+		{"192.168.77.60", false}, // RFC1918 (docker-bridge poison form from #82)
 		{"100.64.0.1", false},     // RFC 6598 CGNAT
 		{"100.127.255.255", false},
 		{"100.128.0.1", true},     // just outside CGNAT
@@ -53,7 +53,7 @@ func TestAutoendpointSkipsPrivateUPnPResult(t *testing.T) {
 		externalIP:   func(*UPnPGateway) (string, error) { return "192.168.5.1", nil },
 		addMapping:   func(*UPnPGateway, int, int, int) error { return nil },
 		stunQuery: func(string, time.Duration) (string, error) {
-			return "121.8.0.156:40000", nil
+			return "198.51.100.156:40000", nil
 		},
 	}
 	res := s.resolve(40000, []string{"stun://x:3478"}, h)

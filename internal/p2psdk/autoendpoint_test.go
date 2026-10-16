@@ -43,7 +43,7 @@ func fakeAutoHooks() (*autoEndpointHooks, *[]string) {
 		addMapping: func(*UPnPGateway, int, int, int) error { return errors.New("no gw") },
 		stunQuery: func(addr string, _ time.Duration) (string, error) {
 			*calls = append(*calls, "stun:"+addr)
-			return "121.8.2.41:51820", nil
+			return "203.0.113.41:51820", nil
 		},
 	}
 	return h, calls
@@ -66,12 +66,12 @@ func TestAutoEndpointLadderUPnPWins(t *testing.T) {
 		return nil
 	}
 	withAutoHooks(t, h)
-	got := resolveAdvertise("auto", []string{"stun:8.134.136.138:13477"})
+	got := resolveAdvertise("auto", []string{"stun:198.51.100.8:13477"})
 	if got != "203.0.113.9:40000" {
 		t.Fatalf("upnp ladder must advertise mapped addr, got %q", got)
 	}
 	for _, c := range *calls {
-		if c == "stun:8.134.136.138:13477" {
+		if c == "stun:198.51.100.8:13477" {
 			t.Fatal("stun must not be queried when UPnP succeeds")
 		}
 	}
@@ -100,11 +100,11 @@ func TestAutoEndpointLadderPMPMiddle(t *testing.T) {
 		return "198.51.100.7:40000", nil
 	}
 	withAutoHooks(t, h)
-	if got := resolveAdvertise("auto", []string{"stun:8.134.136.138:13477"}); got != "198.51.100.7:40000" {
+	if got := resolveAdvertise("auto", []string{"stun:198.51.100.8:13477"}); got != "198.51.100.7:40000" {
 		t.Fatalf("pmp rung must advertise mapped addr, got %q", got)
 	}
 	for _, c := range *calls {
-		if c == "stun:8.134.136.138:13477" {
+		if c == "stun:198.51.100.8:13477" {
 			t.Fatal("stun must not be queried when PMP succeeds")
 		}
 	}
@@ -113,8 +113,8 @@ func TestAutoEndpointLadderPMPMiddle(t *testing.T) {
 	h2, _ := fakeAutoHooks()
 	h2.pmpMapping = func(int) (string, error) { return "", errors.New("no pmp") }
 	st := &autoEndpointState{}
-	res := st.resolve(40000, []string{"stun:8.134.136.138:13477"}, h2)
-	if res.addr != "121.8.2.41:40000" || res.mode != "stun" {
+	res := st.resolve(40000, []string{"stun:198.51.100.8:13477"}, h2)
+	if res.addr != "203.0.113.41:40000" || res.mode != "stun" {
 		t.Fatalf("pmp-fail → stun: %+v", res)
 	}
 	if st.mode != "stun" {
@@ -132,8 +132,8 @@ func TestAutoEndpointLadderSTUNFallback(t *testing.T) {
 	autoEndpoint.mu.Unlock()
 
 	st := &autoEndpointState{}
-	res := st.resolve(40000, []string{"stun:8.134.136.138:13477", "turn:x:1"}, h)
-	if res.addr != "121.8.2.41:40000" || res.mode != "stun" {
+	res := st.resolve(40000, []string{"stun:198.51.100.8:13477", "turn:x:1"}, h)
+	if res.addr != "203.0.113.41:40000" || res.mode != "stun" {
 		t.Fatalf("stun fallback: %+v", res)
 	}
 	if st.mode != "stun" {
@@ -173,7 +173,7 @@ func TestAutoEndpointNegativeCache(t *testing.T) {
 // TestStunURLToAddr：Welcome URL 形态解析（默认 3478、跳过 turn:）。
 func TestStunURLToAddr(t *testing.T) {
 	cases := map[string]string{
-		"stun:8.134.136.138:13477":  "8.134.136.138:13477",
+		"stun:198.51.100.8:13477":  "198.51.100.8:13477",
 		"stun:stun.example.com":     "stun.example.com:3478",
 		"turn:host:1?transport=udp": "",
 		"":                          "",
