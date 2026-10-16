@@ -283,10 +283,27 @@ func (cm *CameraManager) buildTimelapseRecorder(cam config.CameraConfig, segDur 
 
 // buildGB28181Recorder builds the passive GB28181 recorder — media flows in
 // only after a SIP INVITE (autoInviteGB28181 drives that at recorder start).
+// Voice-input channels (encoding=audio, GB type code 136) get a push-mode
+// AudioRecorder instead: bare G.711 AUs arrive via the audio-writer bridge —
+// same shape as a WHIP push microphone, segments land in the standalone
+// audio library with its own retention model.
 func (cm *CameraManager) buildGB28181Recorder(cam config.CameraConfig, segDur time.Duration) model.Recorder {
 	enc := cam.Encoding
 	if enc == "" {
 		enc = string(model.FormatH264)
+	}
+	if enc == string(model.FormatAudio) {
+		gate := cm.cfg.RecordingGate(cam.RecordingEnabled)
+		return recorder.NewAudioRecorder(recorder.AudioConfig{
+			CameraID:      cam.ID,
+			RTSPURL:       "", // push mode — AUs arrive via the GB audio bridge
+			SegmentDur:    segDur,
+			DB:            cm.db,
+			Store:         cm.store,
+			Metrics:       cm.metrics,
+			EventBus:      cm.eventBus,
+			RecordEnabled: &gate,
+		}, cm.store, cm.metrics)
 	}
 	// Full recording pipeline: segments on disk, recordings DB rows,
 	// SegmentCompleted events, metrics — same guarantees as ingest cams.

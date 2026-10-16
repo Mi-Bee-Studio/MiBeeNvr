@@ -164,10 +164,19 @@ func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name, sourceIP
 	if cameraName == "" {
 		cameraName = "GB28181 " + channelID
 	}
+	// Voice-input channels (network pickups, GB type code 136) enroll as
+	// audio cameras: the library's INVITE negotiates a lone m=audio session
+	// (G.711) and the camera records into the standalone-audio pipeline —
+	// no video track exists for a video recorder to wait on.
+	encoding := ""
+	if platform.IsAudioInputChannel(channelID) {
+		encoding = string(model.FormatAudio)
+	}
 	cam := config.CameraConfig{
 		ID:       "gb-" + channelID,
 		Name:     cameraName,
 		Protocol: string(model.ProtoGB28181),
+		Encoding: encoding,
 		GB28181: config.GB28181ChannelConfig{
 			DeviceID:  deviceID,
 			ChannelID: channelID,
@@ -324,25 +333,57 @@ func (cm *CameraManager) GB28181NALUWriter(cameraID string) func(au [][]byte, pt
 // GB28181AudioWriter returns the recorder's audio-frame callback for a
 // GB28181 camera, or nil. The SIP server bridges demuxed PS audio frames
 // (G.711/AAC) into the recorder for MP4 muxing and live hub broadcast.
+// Voice-input channels (encoding=audio) have no video recorder at all —
+// their push-mode AudioRecorder is armed from the first frame's codec
+// (A-law for the negotiated PT 8, mu-law for bare PT 0) and fed per AU.
 func (cm *CameraManager) GB28181AudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
-	rec := cm.GetGB28181Recorder(cameraID)
-	if rec == nil {
+	if rec := cm.GetGB28181Recorder(cameraID); rec != nil {
+		return rec.WriteAudio
+	}
+	ar := cm.GetAudioPushRecorder(cameraID)
+	if ar == nil {
 		return nil
 	}
-	return rec.WriteAudio
+	var armOnce sync.Once
+	return func(codec string, data, config []byte, ptsTicks int64, samples int) {
+		armOnce.Do(func() {
+			switch codec {
+			case "g711a", "g711u":
+				ar.ArmPushFormat(codec, 8000, 1)
+			case "aac":
+				ar.ArmPushFormat("aac", 0, 0)
+			default:
+				// Unknown codec strings still arm the G.711 default shape —
+				// the GB audio-only SDP only ever negotiates G.711.
+				ar.ArmPushFormat("g711", 8000, 1)
+			}
+		})
+		ar.WritePushAU(data)
+	}
 }
 
-// OnGB28181Invite transitions the recorder to Recording state.
+// OnGB28181Invite transitions the recorder to Recording state. Voice-input
+// channels map the session start onto the push-audio lifecycle instead.
 func (cm *CameraManager) OnGB28181Invite(cameraID string) {
 	if rec := cm.GetGB28181Recorder(cameraID); rec != nil {
 		rec.OnInvite()
+		return
+	}
+	if ar := cm.GetAudioPushRecorder(cameraID); ar != nil {
+		ar.PushConnected()
 	}
 }
 
-// OnGB28181Bye transitions the recorder to Reconnecting state.
+// OnGB28181Bye transitions the recorder to Reconnecting state (and, for
+// voice-input channels, finalizes the open audio segment — the BYE is the
+// natural segment boundary, same as a WHIP publisher leaving).
 func (cm *CameraManager) OnGB28181Bye(cameraID string) {
 	if rec := cm.GetGB28181Recorder(cameraID); rec != nil {
 		rec.OnBye()
+		return
+	}
+	if ar := cm.GetAudioPushRecorder(cameraID); ar != nil {
+		ar.PushDisconnected()
 	}
 }
 
