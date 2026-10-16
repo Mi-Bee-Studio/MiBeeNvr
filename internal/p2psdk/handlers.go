@@ -140,6 +140,7 @@ func (s *Session) handleConnectRequest(msg *Message) {
 		owner:        s,
 		onStats:      s.OnStats,
 		relayClient:  s.relayClient,
+		ctrlWanted:   req.CtrlChannel, // #88① dual-channel gate (requester-declared)
 	}
 	// 活跃度锚点=创建时刻：从未承载流量的会话（握手即死）也会被
 	// 空闲清扫按超时回收，而不是永久滞留名册。
@@ -180,14 +181,16 @@ func (s *Session) handleConnectAccept(msg *Message) {
 		p2p.setRelayClient(s.relayClient)
 	}
 
-	// Synchronous on purpose: the signaling read loop may deliver the
-	// offer back-to-back with this accept (server forwards both in quick
-	// succession; under scheduling pressure the next message is processed
-	// before a spawned goroutine gets to run). startAsAnswerer only builds
-	// the PeerConnection and registers handlers — it never blocks on the
-	// network — so running it inline closes the "offer vs nil pc" race that
-	// silently dropped the offer and dead-ended the handshake (the callback
-	// -timing test caught it as a deterministic 120s hang under load).
+	// Synchronous, not a goroutine (#89): the server relays connect_accept
+	// and sdp_offer back-to-back; with startAsAnswerer deferred to a
+	// goroutine, the read loop can process the offer before the
+	// PeerConnection exists — handleRemoteOffer hits a nil pc and the offer
+	// is dropped, killing the handshake (both sides then eat the transport
+	// arbitration timeout). Creating the PC inline closes that window —
+	// handleRemoteOffer already runs synchronously on the read loop, same
+	// precedent. The offerer stays async: its accept/offer are strictly
+	// ordered after PC creation by protocol, so the window does not exist
+	// there.
 	if err := p2p.startAsAnswerer(s.signal, s.sessionConfig(), s.welcome); err != nil {
 		s.logger.Error("p2p as answerer failed", "error", err)
 		if deleted := s.deleteP2P(accept.SessionID); deleted != nil {

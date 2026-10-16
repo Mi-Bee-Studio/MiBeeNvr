@@ -8,20 +8,16 @@ import (
 	"sync/atomic"
 )
 
-// MaxPayloadBytes is the default maximum payload size for a single TunnelData
-// message.
+// MaxPayloadBytes is the maximum payload size for a single TunnelData message.
 //
-// 16 KiB: the relay path rides a TCP WebSocket where a lost segment
-// retransmits the whole base64-inflated (~4/3) frame, so halving the fragment
-// halves both the retransmission unit and the in-flight byte count, and it
-// matches the mobile client default so both directions fragment alike. A 24h
-// cross-segment WiFi frame-size sweep measured ~20% higher uplink throughput
-// at 32 KiB on the direct SCTP path (105.5 vs 85.3 Mbps mean), but both
-// figures dwarf real video bitrates (<4 Mbps) — deployments that want that
-// headroom can raise the size via WithMaxPayloadBytes. Base64 framing of the
-// 32 KiB maximum inflates to ~43.7 KiB on the wire, still under the 64 KiB
-// SCTP message-size ceiling. Receivers do not validate payload size, so
-// mixed old/new SDK versions interoperate.
+// 16 KiB (#89 / nvr#20 alignment, 2026-10-16): aligns the chunk with the
+// mobile-side fragmentation and the echo-probe default so T2 numbers are
+// comparable across clients ("want defaults to the data chunk size"). The
+// earlier 32 KiB choice optimized a WiFi uplink sweep (~20% gain), but the
+// larger in-flight bytes worsen HOL for control traffic on constrained
+// paths — the cross-team measurement line (#87/#88) standardizes on 16 KiB.
+// Base64 framing inflates this to ~21.8 KiB on the wire. Receivers do not
+// validate payload size, so mixed old/new SDK versions interoperate.
 const MaxPayloadBytes = 16384 // 16 KiB
 
 // DefaultSendWindowSize is the default unacknowledged send window per stream.
@@ -38,10 +34,13 @@ const (
 	TunnelMessageTypeData    TunnelMessageType = "data"
 	TunnelMessageTypeClose   TunnelMessageType = "close"
 	TunnelMessageTypeE2EEAck TunnelMessageType = "e2ee_ack"
-	// Tunnel-layer RTT probe frames (T2 decomposition): echo is a global
-	// (non-stream) frame; the reply is padded to the requested size so the
-	// measurement exercises data-frame-sized queueing, not a small-packet
-	// side channel. Peers that predate echo simply never answer.
+
+	// T2 echo probe pair (#87). Tunnel-layer global frames (same level as
+	// open/close — never bound to a business stream): they measure the
+	// tunnel hop itself (framing + queues + transport), so they must not
+	// carry a stream lifecycle. Unknown-type compatibility rule applies:
+	// peers without echo support silently ignore the request; a prober that
+	// gets no answer marks T2 absent instead of retrying.
 	TunnelMessageTypeEcho     TunnelMessageType = "echo"
 	TunnelMessageTypeEchoResp TunnelMessageType = "echo_resp"
 )

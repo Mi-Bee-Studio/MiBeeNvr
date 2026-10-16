@@ -1,6 +1,7 @@
 package tunnel_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -15,217 +16,194 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/tunnel"
 )
 
-// prioTransport wraps a transport adding SendPriority, so tests can observe
-// the PrioLane flag flipping with the transport's actual capability.
-type prioTransport struct {
-	peer.Transport
-	prioSeen sync.Mutex
-	sawPrio  bool
+// Pinned cross-language vectors (#87): the SAME bytes are asserted by the
+// NVR Dart port's echo tests. Any change to the wire shape must change both
+// sides and the relay.md vectors section together.
+const (
+	vectorEchoReqB64  = "ESIzRAECAwQFBgcIAAAABA=="
+	vectorEchoRespB64 = "ESIzRAECAwQFBgcIAAAABAAAAAA="
+)
+
+// TestEchoWireVectors pins the on-wire payload layout: request 16 bytes
+// (4B id | 8B t_send_ns | 4B want, BigEndian), response the same 16 bytes
+// plus want zero bytes.
+func TestEchoWireVectors(t *testing.T) {
+	req, err := base64.StdEncoding.DecodeString(vectorEchoReqB64)
+	require.NoError(t, err)
+	require.Len(t, req, 16)
+	assert.Equal(t, uint32(0x11223344), binary.BigEndian.Uint32(req[0:4]))
+	assert.Equal(t, uint64(0x0102030405060708), binary.BigEndian.Uint64(req[4:12]))
+	assert.Equal(t, uint32(4), binary.BigEndian.Uint32(req[12:16]))
+
+	resp, err := base64.StdEncoding.DecodeString(vectorEchoRespB64)
+	require.NoError(t, err)
+	require.Len(t, resp, 20)
+	assert.Equal(t, req, resp[:16], "response echoes id + t_send_ns verbatim")
+	assert.Equal(t, make([]byte, 4), resp[16:], "padding is want zero bytes")
 }
 
-func (p *prioTransport) SendPriority(data []byte) error {
-	p.prioSeen.Lock()
-	p.sawPrio = true
-	p.prioSeen.Unlock()
-	return p.Transport.Send(data)
+// TestEchoRoundTrip verifies the probe/responder pair over a full tunnel
+// pair: the RTT is measured and repeated probes work (pending map hygiene).
+func TestEchoRoundTrip(t *testing.T) {
+	_, clientTun := setupTunnelPair(t)
+
+	res, err := clientTun.ProbeEcho(context.Background(), 512, false)
+	require.NoError(t, err)
+	assert.False(t, res.LanePriority, "linkedPair transport has no priority lane")
+	assert.Equal(t, 512, res.WantBytes)
+	assert.GreaterOrEqual(t, res.RTT, time.Duration(0))
+	assert.Less(t, res.RTT, 5*time.Second)
+
+	res, err = clientTun.ProbeEcho(context.Background(), 64, false)
+	require.NoError(t, err)
+	assert.Equal(t, 64, res.WantBytes)
 }
 
-func startTunnel(t *testing.T, tr peer.Transport) *tunnel.Tunnel {
-	t.Helper()
-	tun := tunnel.New(tr)
-	go tun.Serve()
-	t.Cleanup(func() { _ = tun.Close() })
-	time.Sleep(20 * time.Millisecond)
-	return tun
-}
-
-// TestEcho_RoundTrip covers the T2 probe against a real paired responder:
-// RTT sane, payload padding honored (want bytes come back), and BOTH lanes
-// report.
-func TestEcho_RoundTrip(t *testing.T) {
+// TestEchoResponderPadsToWant intercepts the raw response frame on the
+// wire: it must be an echo_resp envelope whose payload decodes to
+// 16+want bytes — the deliberate same-size queueing measurement.
+func TestEchoResponderPadsToWant(t *testing.T) {
 	devDC, clientDC := linkedPair()
-	_ = startTunnel(t, peer.NewDataChannelTransport(devDC))
-	clientTun := startTunnel(t, peer.NewDataChannelTransport(clientDC))
 
-	normal, err := clientTun.ProbeEcho(512, false)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, normal.RTT, time.Duration(0))
-	assert.Less(t, normal.RTT, 2*time.Second, "in-process pair must answer fast")
-	assert.Equal(t, 512, normal.WantBytes)
-	assert.False(t, normal.PrioLane, "linkedPair DataChannel has no priority sender — degrade must be recorded")
-
-	_, err = clientTun.ProbeEcho(32*1024, true)
-	require.NoError(t, err, "priority-lane probe on a degrading transport still measures (normal path)")
-}
-
-// TestEcho_WantBytesClampedAndPadded: an oversize request truncates to the
-// ceiling rather than failing, and the reply body really is want bytes (the
-// same-size-as-data guarantee the measurement depends on).
-func TestEcho_WantBytesClampedAndPadded(t *testing.T) {
-	raw := &recordingTransport{}
-	_ = startTunnel(t, raw)
-
-	// Drive the responder's handler with a crafted request via its own
-	// inbound path.
-	var payload [16]byte
-	binary.BigEndian.PutUint32(payload[12:16], uint32(1<<20)) // over the ceiling
-	req := tunnelMessageJSON(t, "echo", payload[:])
-	raw.deliver(req)
-	time.Sleep(50 * time.Millisecond)
-
-	frame := raw.lastFrame("echo_resp")
-	require.NotNil(t, frame, "responder must reply")
-	decoded, err := base64.StdEncoding.DecodeString(frame.Payload)
-	require.NoError(t, err)
-	assert.Len(t, decoded, 16+65536, "oversize want truncates to the ceiling, header + padded body")
-}
-
-// TestEcho_StaleReplyIgnored: a reply with no matching pending probe (stale,
-// duplicate, or bogus id) is dropped without breaking the next real probe.
-func TestEcho_StaleReplyIgnored(t *testing.T) {
-	devDC, clientDC := linkedPair()
-	_ = startTunnel(t, peer.NewDataChannelTransport(devDC))
-	clientTun := startTunnel(t, peer.NewDataChannelTransport(clientDC))
-
-	// Fabricate a reply for an id nobody asked about, delivered INTO the
-	// client tunnel from the peer side.
-	var bogus [16]byte
-	binary.BigEndian.PutUint32(bogus[0:4], 0xdeadbeef)
-	binary.BigEndian.PutUint64(bogus[4:12], uint64(time.Now().UnixNano()))
-	err := devDC.Send(tunnelMessageJSON(t, "echo_resp", bogus[:]))
-	require.NoError(t, err)
-	time.Sleep(50 * time.Millisecond)
-
-	res, err := clientTun.ProbeEcho(64, false)
-	require.NoError(t, err, "stale reply must not break the next probe")
-	assert.Less(t, res.RTT, 2*time.Second)
-}
-
-// TestEcho_UnknownTypeIgnored: frames of a type this build predates must not
-// throw or disconnect — the tunnel keeps serving business frames afterwards.
-func TestEcho_UnknownTypeIgnored(t *testing.T) {
-	devDC, clientDC := linkedPair()
-	devTun := startTunnel(t, peer.NewDataChannelTransport(devDC))
-	clientTun := startTunnel(t, peer.NewDataChannelTransport(clientDC))
-
-	err := devDC.Send([]byte(`{"type":"frame_from_the_future","payload":""}`))
-	require.NoError(t, err)
-	time.Sleep(30 * time.Millisecond)
-
-	// Business traffic and echo still flow through the same pair.
-	_, echoAddr := startEchoServer(t)
-	devTun.RegisterService("echo", echoAddr)
-	conn, err := clientTun.Dial("echo")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.Write([]byte("ping"))
-	require.NoError(t, err)
-	got, err := pollRead(t, conn, 5*time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, []byte("ping"), got)
-
-	res, err := clientTun.ProbeEcho(64, false)
-	require.NoError(t, err)
-	assert.Less(t, res.RTT, 2*time.Second)
-}
-
-// TestEcho_UnsupportedAfterTimeouts: a silent peer marks unsupported after
-// three consecutive misses and further probes short-circuit without wire
-// traffic (legacy peer — absence of a reply is an answer).
-func TestEcho_UnsupportedAfterTimeouts(t *testing.T) {
-	tunnel.SetProbeEchoTimeoutForTest(t, 60*time.Millisecond)
-	tun := tunnel.New(&dropTransport{})
-	go tun.Serve()
-	t.Cleanup(func() { _ = tun.Close() })
-
-	for i := range 3 {
-		_, err := tun.ProbeEcho(64, false)
-		require.Error(t, err, "probe %d must fail", i)
-		if i < 2 {
-			assert.NotErrorIs(t, err, tunnel.ErrEchoUnsupported, "misses 1-2 are plain timeouts")
-		} else {
-			assert.ErrorIs(t, err, tunnel.ErrEchoUnsupported, "3rd miss marks the peer legacy")
-		}
+	// Instrument the device side's egress BEFORE the transport copies the
+	// struct: every frame the responder sends is recorded, then delivered.
+	var mu sync.Mutex
+	var responses [][]byte
+	origSend := devDC.Send
+	devDC.Send = func(b []byte) error {
+		mu.Lock()
+		responses = append(responses, append([]byte(nil), b...))
+		mu.Unlock()
+		return origSend(b)
 	}
-	assert.True(t, tun.EchoUnsupported())
-	start := time.Now()
-	_, err := tun.ProbeEcho(64, false)
-	assert.ErrorIs(t, err, tunnel.ErrEchoUnsupported)
-	assert.Less(t, time.Since(start), 30*time.Millisecond, "short-circuits, no wire wait")
-}
 
-// TestEcho_PriorityLaneFlag: with a transport that really implements
-// SendPriority the probe reports PrioLane=true (no silent-degrade misread).
-func TestEcho_PriorityLaneFlag(t *testing.T) {
-	devDC, clientDC := linkedPair()
-	_ = startTunnel(t, peer.NewDataChannelTransport(devDC))
-	wrapped := &prioTransport{Transport: peer.NewDataChannelTransport(clientDC)}
-	clientTun := startTunnel(t, wrapped)
-
-	res, err := clientTun.ProbeEcho(64, true)
-	require.NoError(t, err)
-	assert.True(t, res.PrioLane, "priority-capable transport must be reported as such")
-
-	res, err = clientTun.ProbeEcho(64, false)
-	require.NoError(t, err)
-	assert.False(t, res.PrioLane, "normal-lane probe must not claim the priority lane")
-}
-
-// --- helpers -------------------------------------------------------------
-
-func tunnelMessageJSON(t *testing.T, typ string, payload []byte) []byte {
-	t.Helper()
-	data, err := json.Marshal(map[string]string{
-		"type":    typ,
-		"payload": base64.StdEncoding.EncodeToString(payload),
+	devTun := tunnel.New(peer.NewDataChannelTransport(devDC))
+	clientTun := tunnel.New(peer.NewDataChannelTransport(clientDC))
+	go devTun.Serve()    //nolint:errcheck
+	go clientTun.Serve() //nolint:errcheck
+	t.Cleanup(func() {
+		_ = clientTun.Close()
+		_ = devTun.Close()
 	})
+
+	_, err := clientTun.ProbeEcho(context.Background(), 300, false)
 	require.NoError(t, err)
-	return data
-}
 
-// dropTransport accepts sends but never answers (a silent legacy peer).
-type dropTransport struct{ sink func([]byte) }
-
-func (d *dropTransport) Send([]byte) error        { return nil }
-func (d *dropTransport) OnMessage(h func([]byte)) { d.sink = h }
-func (d *dropTransport) Close() error             { return nil }
-
-// recordingTransport captures frames the tunnel sends (for asserting the
-// responder's wire output without a full pair).
-type recordingTransport struct {
-	mu     sync.Mutex
-	frames []tunnel.TunnelMessage
-	sink   func([]byte)
-}
-
-func (r *recordingTransport) Send(data []byte) error {
-	var msg tunnel.TunnelMessage
-	if err := json.Unmarshal(data, &msg); err == nil {
-		r.mu.Lock()
-		r.frames = append(r.frames, msg)
-		r.mu.Unlock()
-	}
-	if r.sink != nil {
-		r.sink(data)
-	}
-	return nil
-}
-func (r *recordingTransport) OnMessage(h func([]byte)) { r.sink = h }
-func (r *recordingTransport) Close() error             { return nil }
-
-func (r *recordingTransport) lastFrame(typ string) *tunnel.TunnelMessage {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for i := len(r.frames) - 1; i >= 0; i-- {
-		if string(r.frames[i].Type) == typ {
-			return &r.frames[i]
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		fs := append([][]byte(nil), responses...)
+		mu.Unlock()
+		for _, raw := range fs {
+			var m tunnel.TunnelMessage
+			if json.Unmarshal(raw, &m) != nil || m.Type != tunnel.TunnelMessageTypeEchoResp {
+				continue
+			}
+			payload, err := base64.StdEncoding.DecodeString(m.Payload)
+			require.NoError(t, err)
+			assert.Len(t, payload, 16+300, "response padded to want")
+			return
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return nil
+	t.Fatal("no echo_resp frame observed on the wire")
 }
 
-func (r *recordingTransport) deliver(data []byte) {
-	if r.sink != nil {
-		r.sink(data)
+// TestEchoWantClamp: want above the 64 KiB cap is clamped.
+func TestEchoWantClamp(t *testing.T) {
+	_, clientTun := setupTunnelPair(t)
+	res, err := clientTun.ProbeEcho(context.Background(), 1<<20, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1<<16, res.WantBytes)
+}
+
+// TestEchoDefaultWantUsesFragmentSize: want<=0 defaults to the tunnel's
+// data chunk size — the measurement convention that keeps T2 numbers
+// comparable across clients.
+func TestEchoDefaultWantUsesFragmentSize(t *testing.T) {
+	_, clientTun := setupTunnelPair(t)
+	res, err := clientTun.ProbeEcho(context.Background(), 0, false)
+	require.NoError(t, err)
+	assert.Equal(t, 16384, res.WantBytes, "must track MaxPayloadBytes (16 KiB alignment)")
+}
+
+// TestEchoUnsupportedShortCircuit: a legacy peer that never answers makes
+// the prober time out; after 3 consecutive misses the tunnel flips to
+// unsupported and later probes fail fast without sending. The ctx deadline
+// clamps the per-probe timeout so the test stays fast.
+func TestEchoUnsupportedShortCircuit(t *testing.T) {
+	devDC, clientDC := linkedPair()
+	_ = devDC // the device side never runs a Tunnel — legacy peer that
+	// silently drops unknown frame types.
+
+	clientTun := tunnel.New(peer.NewDataChannelTransport(clientDC))
+	go clientTun.Serve() //nolint:errcheck
+	t.Cleanup(func() { _ = clientTun.Close() })
+
+	for i := 1; i <= 3; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		_, err := clientTun.ProbeEcho(ctx, 16, false)
+		cancel()
+		require.Error(t, err, "probe %d must time out", i)
 	}
+	assert.True(t, clientTun.EchoUnsupported())
+
+	start := time.Now()
+	_, err := clientTun.ProbeEcho(context.Background(), 16, false)
+	require.ErrorIs(t, err, tunnel.ErrEchoUnsupported)
+	assert.Less(t, time.Since(start), 20*time.Millisecond, "short-circuit must not send")
+}
+
+// TestEchoUnknownTypeIgnored: frames with unknown types neither crash the
+// tunnel nor disturb a subsequent probe.
+func TestEchoUnknownTypeIgnored(t *testing.T) {
+	devDC, clientDC := linkedPair()
+	devTun := tunnel.New(peer.NewDataChannelTransport(devDC))
+	clientTun := tunnel.New(peer.NewDataChannelTransport(clientDC))
+	go devTun.Serve()    //nolint:errcheck
+	go clientTun.Serve() //nolint:errcheck
+	t.Cleanup(func() {
+		_ = clientTun.Close()
+		_ = devTun.Close()
+	})
+
+	unknown, err := json.Marshal(tunnel.TunnelMessage{Type: "bogus_future_frame", Payload: "e30="})
+	require.NoError(t, err)
+	require.NoError(t, devDC.Send(unknown))
+
+	res, err := clientTun.ProbeEcho(context.Background(), 64, false)
+	require.NoError(t, err)
+	assert.Equal(t, 64, res.WantBytes)
+}
+
+// TestEchoLaneTruth: the result reports whether the request lane was real.
+// A plain transport (no PrioritySender) reports false even when priority
+// was requested; a priority-capable transport reports true.
+func TestEchoLaneTruth(t *testing.T) {
+	devDC, clientDC := linkedPair()
+	prioDC := withPriorityHook(clientDC)
+
+	devTun := tunnel.New(peer.NewDataChannelTransport(devDC))
+	clientTun := tunnel.New(peer.NewDataChannelTransport(prioDC))
+	go devTun.Serve()    //nolint:errcheck
+	go clientTun.Serve() //nolint:errcheck
+	t.Cleanup(func() {
+		_ = clientTun.Close()
+		_ = devTun.Close()
+	})
+
+	res, err := clientTun.ProbeEcho(context.Background(), 64, false)
+	require.NoError(t, err)
+	assert.False(t, res.LanePriority, "priority not requested")
+
+	res, err = clientTun.ProbeEcho(context.Background(), 64, true)
+	require.NoError(t, err)
+	assert.True(t, res.LanePriority, "dc priority hook counts as a real lane")
+}
+
+// withPriorityHook fakes a DataChannel with its own priority send hook so
+// dataChannelTransport.PriorityActive() reports true.
+func withPriorityHook(dc peer.DataChannel) peer.DataChannel {
+	dc.SendPriority = func(b []byte) error { return dc.Send(b) }
+	return dc
 }

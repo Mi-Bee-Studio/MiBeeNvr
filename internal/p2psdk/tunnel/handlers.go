@@ -51,6 +51,11 @@ func (t *Tunnel) handleOpen(payload string) {
 	sc.setConn(conn)
 	t.streams.Store(open.StreamID, sc)
 
+	// #88①: data that overtook this open across the two channels.
+	for _, early := range t.drainEarlyData(open.StreamID) {
+		sc.pushData(early)
+	}
+
 	if sc.sealed {
 		t.sendE2EEAck()
 	}
@@ -113,7 +118,11 @@ func (t *Tunnel) handleData(payload string) {
 
 	v, ok := t.streams.Load(data.StreamID)
 	if !ok {
-		t.logger.Warn("data for unknown stream", "stream_id", data.StreamID)
+		// #88①: on the dual-channel path the open rides the lossy channel
+		// while data rides the ordered one — SCTP gives no cross-stream
+		// ordering, so data can legitimately arrive first. Buffer briefly
+		// (bounded); the open delivers, a lost open ages out.
+		t.bufferEarlyData(data.StreamID, result)
 		return
 	}
 	sc, ok := v.(*streamConn)
@@ -121,6 +130,57 @@ func (t *Tunnel) handleData(payload string) {
 		return
 	}
 	sc.pushData(result)
+}
+
+// earlyDataTTL bounds how long pre-open data waits for its open before the
+// buffered bytes are discarded (a lost open on the lossy channel means the
+// dialer-side stream times out anyway — the buffer is only for reorder).
+var earlyDataTTL = 2 * time.Second
+
+// bufferEarlyData parks one reassembled payload for a stream whose open has
+// not arrived yet. Bounded per stream (8 payloads) and globally (64); the
+// TTL sweep runs opportunistically on insert.
+func (t *Tunnel) bufferEarlyData(streamID uint32, payload []byte) {
+	t.earlyMu.Lock()
+	defer t.earlyMu.Unlock()
+	now := time.Now()
+	for id := range t.early {
+		if now.Sub(t.earlyAt[id]) > earlyDataTTL {
+			delete(t.early, id)
+			delete(t.earlyAt, id)
+		}
+	}
+	if len(t.early) >= 64 {
+		return // bounded — a flood without opens is bogus traffic
+	}
+	if len(t.early[streamID]) >= 8 {
+		return
+	}
+	if t.early == nil {
+		t.early = make(map[uint32][][]byte)
+		t.earlyAt = make(map[uint32]time.Time)
+	}
+	if _, seen := t.earlyAt[streamID]; !seen {
+		t.earlyAt[streamID] = now
+	}
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+	t.early[streamID] = append(t.early[streamID], cp)
+}
+
+// EarlyDataTTLForTest exposes the pre-open buffer TTL to the external test
+// package (aging-out assertions need to know how long to wait).
+func EarlyDataTTLForTest() time.Duration { return earlyDataTTL }
+
+// drainEarlyData returns and clears the buffered pre-open payloads for a
+// stream (called right after the open registers the stream).
+func (t *Tunnel) drainEarlyData(streamID uint32) [][]byte {
+	t.earlyMu.Lock()
+	defer t.earlyMu.Unlock()
+	out := t.early[streamID]
+	delete(t.early, streamID)
+	delete(t.earlyAt, streamID)
+	return out
 }
 
 // e2eeAckPlaintext is the sealed constant inside an e2ee_ack frame.
@@ -252,22 +312,30 @@ func (t *Tunnel) pipeTunnelToTCP(tcpConn net.Conn, sc *streamConn) {
 }
 
 func (t *Tunnel) sendMsg(msg TunnelMessage) error {
-	data, err := marshalTunnelMessage(msg)
+	data, err := json.Marshal(msg)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal tunnel msg: %w", err)
+	}
+	// #88①: lifecycle frames ride the paired lossy ctrl channel when the
+	// transport has one — losing one costs a stream retry, while queueing
+	// them behind bulk-data retransmissions head-of-line blocks everything.
+	if isTunnelLifecycleType(msg.Type) {
+		if cs, ok := t.transport.(interface{ SendControl([]byte) error }); ok {
+			return cs.SendControl(data)
+		}
 	}
 	return t.transport.Send(data)
 }
 
-// marshalTunnelMessage encodes one envelope frame; callers that route the
-// bytes themselves (priority lane) marshal first so lane selection happens
-// after serialization failures, not before.
-func marshalTunnelMessage(msg TunnelMessage) ([]byte, error) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return nil, fmt.Errorf("marshal tunnel msg: %w", err)
+// isTunnelLifecycleType selects the frames that may ride the lossy ctrl
+// channel: stream lifecycle + the E2EE ack (echo frames keep their own
+// measured-lane semantics, see echo.go).
+func isTunnelLifecycleType(typ TunnelMessageType) bool {
+	switch typ {
+	case TunnelMessageTypeOpen, TunnelMessageTypeClose, TunnelMessageTypeE2EEAck:
+		return true
 	}
-	return data, nil
+	return false
 }
 
 // sendEgress routes one already-marshaled tunnel message, honoring the

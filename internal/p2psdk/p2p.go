@@ -42,6 +42,14 @@ type p2pSession struct {
 	iceConnected    bool        // last known ICE connection state (liveness gate for retries)
 	statsCollector  *StatsCollector
 
+	// #88① dual-channel direct path. ctrlWanted mirrors the requester's
+	// ctrl_channel declaration (offerer gate — an old requester never sees
+	// a second channel). ctrlDC holds the wrapped lossy control channel
+	// once open; nil otherwise. Guarded by mu.
+	ctrlWanted bool
+	ctrlDC     *DataChannel
+	ctrlRaw    *webrtc.DataChannel
+
 	// lastActivity is the unix-nano timestamp of the most recent traffic on
 	// the user-facing DataChannel (either direction). The Session idle sweep
 	// reclaims sessions whose viewers died without session_close (#20).
@@ -91,6 +99,24 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	p.pc = pc
 	p.signal = signal
 	pc.OnICEConnectionStateChange(p.handleICEStateChange)
+
+	// #88①: open the lossy control channel FIRST (SCTP stream id order is
+	// creation order), but ONLY when the requester declared dual-channel
+	// support — an old answerer would wrap every incoming channel as its
+	// one tunnel, so a second channel must never reach it.
+	if p.ctrlWanted {
+		unordered := false
+		noRetrans := uint16(0)
+		ctrl, err := pc.CreateDataChannel(DataChannelLabelCtrl, &webrtc.DataChannelInit{
+			Ordered:        &unordered,
+			MaxRetransmits: &noRetrans,
+		})
+		if err != nil {
+			p.log().Warn("ctrl channel create failed — single-channel fallback", "error", err)
+		} else {
+			p.ctrlRaw = ctrl
+		}
+	}
 
 	ordered := true
 	dc, err := pc.CreateDataChannel(DataChannelLabel, &webrtc.DataChannelInit{Ordered: &ordered})
@@ -167,8 +193,20 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 	p.startStatsCollectorLocked(pc)
 
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+		// #88①: the lossy ctrl channel is SDK plumbing — stash it and pair
+		// it with the data channel below; the application callback still
+		// fires exactly once, for the data channel. Old peers send only
+		// p2p-data, so this branch simply never triggers.
+		if dc.Label() == DataChannelLabelCtrl {
+			wctrl := p.activityDataChannel(wrapDataChannel(dc))
+			p.mu.Lock()
+			p.ctrlDC = &wctrl
+			p.mu.Unlock()
+			return
+		}
 		p.mu.Lock()
 		p.dc = dc
+		ctrl := p.ctrlDC
 		p.mu.Unlock()
 		dc.OnOpen(func() {
 			p.log().Info(
@@ -178,6 +216,9 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 			if cb := p.owner.dataChannelCallback(); cb != nil {
 				wdc := p.activityDataChannel(wrapDataChannel(dc))
 				wdc.E2EEKey = p.e2eeKey()
+				if ctrl != nil {
+					wdc.Ctrl = ctrl // #88① pair (may have arrived earlier)
+				}
 				cb(wdc)
 			}
 			if cb := p.owner.sessionCallback(); cb != nil {
@@ -217,10 +258,21 @@ func (p *p2pSession) dataChannelOpenHandler(signal *signalingClient, cfg Signali
 		)
 		p.mu.Lock()
 		dc := p.dc
+		ctrl := p.ctrlRaw
 		p.mu.Unlock()
 		if cb := p.owner.dataChannelCallback(); cb != nil {
 			wdc := p.activityDataChannel(wrapDataChannel(dc))
 			wdc.E2EEKey = p.e2eeKey()
+			// #88①: pair the lossy ctrl channel with the data channel so
+			// the transport layer can route control frames off the ordered
+			// lane. Wrap order: data first, ctrl attached before delivery.
+			if ctrl != nil {
+				wctrl := p.activityDataChannel(wrapDataChannel(ctrl))
+				p.mu.Lock()
+				p.ctrlDC = &wctrl
+				p.mu.Unlock()
+				wdc.Ctrl = &wctrl
+			}
 			cb(wdc)
 		}
 		if cb := p.owner.sessionCallback(); cb != nil {

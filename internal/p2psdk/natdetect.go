@@ -42,17 +42,50 @@ func PreferRelay(class NATClass) bool {
 
 // NATProbeResult carries one NAT detection outcome.
 type NATProbeResult struct {
-	Class          NATClass
+	Class NATClass
+	// DualStack reports a global-unicast IPv6 address on any interface
+	// (#89): the v4 verdict above does not rule out v6 direct paths
+	// (cellular v6 is near-universal, home broadband dual-stack common), so
+	// relay-pinning consumers may exempt dual-stack hosts from a symmetric
+	// verdict reached over v4 only.
+	DualStack      bool
 	MappedByServer map[string]string // server addr -> mapped ip:port
 	LocalAddr      string
-	// DualStack reports a global-unicast IPv6 address on any interface.
-	// The classification probes UDP/IPv4 only, so a symmetric verdict says
-	// nothing about IPv6 direct connectivity — ICE can still pair via v6
-	// host candidates on a dual-stack machine. Relay-pinning decisions fed
-	// by the class must exempt such machines. The check is address-based
-	// (no route/firewall probing): a stale or firewalled v6 address only
-	// degrades to the unpinned default behavior, never worse.
-	DualStack bool
+}
+
+// globalIPv6Probe reports whether any interface holds a global-unicast
+// IPv6 address. Package-level var so tests can inject a deterministic
+// answer (the autoEndpointHooks precedent).
+var globalIPv6Probe = hasGlobalIPv6
+
+// hasGlobalIPv6 walks the interface table looking for a global-unicast v6
+// address — ULA (fc00::/7) and link-local (fe80::/10) do not count: they
+// are not routable to the public internet.
+func hasGlobalIPv6() bool {
+	ifaces, _ := net.Interfaces()
+	for _, ifc := range ifaces {
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipnet.IP
+			if ip.To4() != nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+				ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+				continue
+			}
+			// ULA fc00::/7: first 7 bits zero-masked compare.
+			if len(ip) == net.IPv6len && ip[0]&0xfe == 0xfc {
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // DetectNATClass classifies the local NAT by querying TWO OR MORE STUN
@@ -67,7 +100,10 @@ type NATProbeResult struct {
 // servers should list ≥2 distinct STUN endpoints ("host:port"). Results
 // with fewer than two responsive servers are NATUnknown (no compare).
 func DetectNATClass(_ context.Context, servers []string, timeout time.Duration) NATProbeResult {
-	res := NATProbeResult{Class: NATUnknown, MappedByServer: map[string]string{}, DualStack: globalIPv6Probe()}
+	res := NATProbeResult{Class: NATUnknown, MappedByServer: map[string]string{}}
+	// Dual-stack is an interface fact, independent of the v4 probe outcome:
+	// report it even when classification cannot complete (#89).
+	res.DualStack = globalIPv6Probe()
 	if len(servers) < 2 || timeout <= 0 {
 		return res
 	}
@@ -166,40 +202,6 @@ func localInterfaceIPs() map[string]bool {
 		}
 	}
 	return out
-}
-
-// globalIPv6Probe reports whether any interface carries a globally routable
-// IPv6 address. Swappable in tests — host interface state is not
-// controllable from a unit test (same pattern as the auto-endpoint hooks).
-var globalIPv6Probe = func() bool {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return false
-	}
-	for _, ifc := range ifaces {
-		addrs, err := ifc.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			ipnet, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ip := ipnet.IP
-			sixteen := ip.To16()
-			if ip.To4() != nil || sixteen == nil || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() {
-				continue
-			}
-			// ULA (fc00::/7) counts as global-unicast to Go but is not
-			// globally routable — not a v6 direct-connectivity path.
-			if sixteen[0]&0xfe == 0xfc {
-				continue
-			}
-			return true
-		}
-	}
-	return false
 }
 
 // fanOutStunRequests sends one Binding request per server over the shared

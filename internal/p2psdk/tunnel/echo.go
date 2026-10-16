@@ -1,213 +1,237 @@
 package tunnel
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
-	"sync"
-	"sync/atomic"
-	"testing"
 	"time"
 
 	peer "github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk"
 )
 
-// Tunnel-layer echo frames (#87 T2 decomposition): one RTT measurement hop
-// that sits between the transport RTT (T1, relay ping/pong) and the
-// full-application RTT (T3, a tunneled API call). Echo is a tunnel-level
-// GLOBAL frame — the same tier as open/close — because it measures the fixed
-// "encapsulation + transport" cost and must not be bound to any business
-// stream's lifecycle.
+// T2 echo probe (#87): a one-shot tunnel-layer RTT measurement frame pair.
 //
-// Wire format (base64 payload inside the TunnelMessage envelope):
+// Wire shape — byte-identical with the NVR Dart port and pinned by the
+// cross-language test vectors (see the echo section of relay.md; the Go and
+// Dart unit tests assert the same bytes):
 //
-//	request:  4B client_id | 8B t_send_ns | 4B want_echo_bytes
-//	response: 4B client_id | 8B t_send_ns | want_echo_bytes bytes
+//	echo      payload = base64( 4B client_id | 8B t_send_ns | 4B want_echo_bytes )
+//	echo_resp payload = base64( 4B client_id | 8B t_send_ns | want bytes (zeros) )
 //
-// The reply is padded to want_echo_bytes on purpose: an unpadded echo would
-// measure a small-packet side channel and lie about queueing — the exact
-// misread that made the three-lane fix look like it solved more than it did.
-// The requester picks the lane for the REQUEST (normal vs priority); the
-// reply always rides the priority path when the transport has one, because
-// echo_resp is control-plane traffic. Callers record whether a priority lane
-// was actually available: SendPriority may silently degrade to the normal
-// path, and a sample taken on a degraded lane must not be read as
-// "priority works".
-const (
-	echoHeaderLen    = 16 // 4B client_id | 8B t_send_ns | 4B want
-	maxEchoWantBytes = 1 << 16
-)
+// All integers BigEndian. want is capped at maxEchoWantBytes. The response
+// is padded to want deliberately: an unpadded echo would measure a
+// "small-packet special lane" and misread what the three-lane fix actually
+// bought. The responder always answers on the transport's priority path
+// (control plane; harmless fallback when absent); the prober picks its
+// request lane and reports the truth of whether that lane was real. Go does
+// not validate want or the padding in the response — Dart implementations
+// may leave zeros.
+//
+// Echo frames are NOT E2EE-sealed: they are synthetic, carry no user data,
+// and measure the path rather than protect content.
 
-// probeEchoTimeout bounds one round trip. Generous on purpose: under video
-// load the NORMAL lane is exactly the thing being measured — a tight timeout
-// would censor the interesting samples.
-var probeEchoTimeout = 8 * time.Second
+// maxEchoWantBytes caps the echo response size (matches the Dart port's
+// _echoMaxWant; also the historical 64 KiB SCTP message ceiling).
+const maxEchoWantBytes = 1 << 16
 
-// echoGiveUpAfter unanswered consecutive probes marks the peer as legacy
-// (predates echo support). No retries afterwards — absence of a reply is a
-// valid answer, not a failure.
-const echoGiveUpAfter = 3
+// echoProbeTimeout bounds a single probe round trip.
+var echoProbeTimeout = 5 * time.Second
 
-// ErrEchoUnsupported reports a peer that never answered echo probes (the
-// tunnel stays fully functional; T2 is simply unmeasurable against it).
-var ErrEchoUnsupported = errors.New("tunnel echo: peer unsupported")
+// echoUnsupportedAfter unanswered probes (consecutive) short-circuit further
+// probing — a silent peer is a valid answer ("T2 unsupported"), not a
+// failure to retry into.
+const echoUnsupportedAfter = 3
 
-// ErrEchoTimeout reports one missed round trip (peer busy or slow): callers
-// keep sampling — ProbeEcho itself escalates to ErrEchoUnsupported after
-// echoGiveUpAfter consecutive misses.
-var ErrEchoTimeout = errors.New("tunnel echo: timeout")
+// ErrEchoUnsupported is returned once the peer has proven (by silence)
+// that it does not implement the echo responder.
+var ErrEchoUnsupported = errors.New("tunnel: peer does not answer echo (t2 unsupported)")
 
-// EchoProbeResult is one completed (or lane-observed) round trip.
-type EchoProbeResult struct {
-	RTT       time.Duration
+// EchoResult is one completed T2 probe.
+type EchoResult struct {
+	// RTT is the tunnel-hop round trip measured with the local clock.
+	RTT time.Duration
+	// LanePriority reports whether the REQUEST actually rode a priority
+	// path — false when priority was not requested OR the transport
+	// silently degrades (peer.SendPriority may fall back). Samples must
+	// not be read as "priority effective" when this is false.
+	LanePriority bool
+	// WantBytes is the (clamped) echo size actually used.
 	WantBytes int
-	PrioLane  bool // the request went out on a real priority lane (not a silent degrade)
 }
 
-type echoState struct {
-	mu           sync.Mutex
-	pending      map[uint32]chan time.Duration
-	unsupported  atomic.Bool
-	consecMisses atomic.Int32
+// echo response delivery channel payload.
+type echoAnswer struct {
+	tSendNS int64
+	recvAt  time.Time
 }
 
-func (t *Tunnel) echo() *echoState {
-	t.echoOnce.Do(func() { t.echoState = &echoState{pending: map[uint32]chan time.Duration{}} })
-	return t.echoState
+// priorityLaneActive reports the truth of "a SendPriority on this transport
+// actually rides a priority path" (#87): false for plain transports, the
+// transport's own negotiated answer when it exposes PriorityActive (relay
+// client: capability bit; datachannel: scheduler present), and merely
+// "implements PrioritySender" otherwise.
+func priorityLaneActive(t peer.Transport) bool {
+	if pa, ok := t.(interface{ PriorityActive() bool }); ok {
+		return pa.PriorityActive()
+	}
+	_, ok := t.(peer.PrioritySender)
+	return ok
 }
 
-// ProbeEcho sends one echo request padded-reply size want and waits for the
-// matching response. priority selects the request lane (the reply always
-// rides the priority path when available). After echoGiveUpAfter consecutive
-// timeouts the peer is marked legacy and every further call returns
-// ErrEchoUnsupported without touching the wire.
-func (t *Tunnel) ProbeEcho(want int, priority bool) (EchoProbeResult, error) {
-	if want < 0 || want > maxEchoWantBytes {
-		want = maxEchoWantBytes
+// EchoUnsupported reports whether T2 probing has been short-circuited for
+// this tunnel (peer never answers echo).
+func (t *Tunnel) EchoUnsupported() bool {
+	t.echoMu.Lock()
+	defer t.echoMu.Unlock()
+	return t.echoUnsupported
+}
+
+// ProbeEcho sends one T2 echo and waits for the response (#87).
+//
+// wantBytes <= 0 defaults to the tunnel's fragment size — the measurement
+// convention is "want defaults to the data chunk size", keeping T2 numbers
+// comparable across clients. priority selects the request lane; the result
+// reports the lane truth. Legacy peers never answer: after
+// echoUnsupportedAfter consecutive misses the tunnel marks T2 unsupported
+// and later calls return ErrEchoUnsupported without sending.
+func (t *Tunnel) ProbeEcho(ctx context.Context, wantBytes int, priority bool) (EchoResult, error) {
+	t.echoMu.Lock()
+	if t.echoUnsupported {
+		t.echoMu.Unlock()
+		return EchoResult{}, ErrEchoUnsupported
 	}
-	st := t.echo()
-	if st.unsupported.Load() {
-		return EchoProbeResult{}, ErrEchoUnsupported
+	t.echoMu.Unlock()
+
+	if wantBytes <= 0 {
+		wantBytes = t.fragmentSize()
 	}
-	id := rand.Uint32() //nolint:gosec // probe correlation id, not a secret
-	ch := make(chan time.Duration, 1)
-	st.mu.Lock()
-	if st.pending == nil {
-		st.mu.Unlock()
-		return EchoProbeResult{}, errors.New("tunnel echo: closed")
+	if wantBytes > maxEchoWantBytes {
+		wantBytes = maxEchoWantBytes
 	}
-	st.pending[id] = ch
-	st.mu.Unlock()
+
+	id := rand.Uint32()
+	ch := make(chan echoAnswer, 1)
+	t.echoMu.Lock()
+	if t.echoPending == nil {
+		t.echoPending = make(map[uint32]chan echoAnswer)
+	}
+	t.echoPending[id] = ch
+	t.echoMu.Unlock()
 	defer func() {
-		st.mu.Lock()
-		delete(st.pending, id)
-		st.mu.Unlock()
+		t.echoMu.Lock()
+		delete(t.echoPending, id)
+		t.echoMu.Unlock()
 	}()
 
-	var payload [echoHeaderLen]byte
-	binary.BigEndian.PutUint32(payload[0:4], id)
-	binary.BigEndian.PutUint64(payload[4:12], uint64(time.Now().UnixNano()))
-	binary.BigEndian.PutUint32(payload[12:16], uint32(want)) //nolint:gosec // bounded above
+	lanePriority := priority && priorityLaneActive(t.transport)
+	req := make([]byte, 16)
+	binary.BigEndian.PutUint32(req[0:4], id)
+	binary.BigEndian.PutUint64(req[4:12], uint64(time.Now().UnixNano()))
+	binary.BigEndian.PutUint32(req[12:16], uint32(wantBytes))
 	msg := TunnelMessage{
 		Type:    TunnelMessageTypeEcho,
-		Payload: base64.StdEncoding.EncodeToString(payload[:]),
+		Payload: base64.StdEncoding.EncodeToString(req),
 	}
 	data, err := marshalTunnelMessage(msg)
 	if err != nil {
-		return EchoProbeResult{}, err
+		return EchoResult{}, err
 	}
-	prioLane := false
+	var sendErr error
 	if priority {
-		if err := peer.SendPriority(t.transport, data); err != nil {
-			return EchoProbeResult{}, err
-		}
-		_, prioLane = t.transport.(peer.PrioritySender)
-	} else if err := t.transport.Send(data); err != nil {
-		return EchoProbeResult{}, err
+		sendErr = peer.SendPriority(t.transport, data)
+	} else {
+		sendErr = t.transport.Send(data)
+	}
+	if sendErr != nil {
+		return EchoResult{}, fmt.Errorf("tunnel: echo send: %w", sendErr)
 	}
 
+	timeout := echoProbeTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if d := time.Until(deadline); d < timeout {
+			timeout = d
+		}
+	}
 	select {
-	case rtt := <-ch:
-		st.consecMisses.Store(0)
-		return EchoProbeResult{RTT: rtt, WantBytes: want, PrioLane: prioLane}, nil
-	case <-time.After(probeEchoTimeout):
-		if st.consecMisses.Add(1) >= echoGiveUpAfter {
-			st.unsupported.Store(true)
-			return EchoProbeResult{}, ErrEchoUnsupported
+	case ans := <-ch:
+		rtt := ans.recvAt.Sub(time.Unix(0, ans.tSendNS))
+		if rtt < 0 {
+			rtt = 0 // clock skew guard; both stamps are the local clock
 		}
-		return EchoProbeResult{}, ErrEchoTimeout
-	case <-t.closeCh:
-		return EchoProbeResult{}, errors.New("tunnel echo: tunnel closed")
+		t.echoMu.Lock()
+		t.echoMisses = 0
+		t.echoMu.Unlock()
+		return EchoResult{RTT: rtt, LanePriority: lanePriority, WantBytes: wantBytes}, nil
+	case <-time.After(timeout):
+	case <-ctx.Done():
 	}
+	t.echoMu.Lock()
+	t.echoMisses++
+	misses := t.echoMisses
+	if misses >= echoUnsupportedAfter {
+		t.echoUnsupported = true // silence is a valid answer: stop probing
+	}
+	t.echoMu.Unlock()
+	return EchoResult{}, fmt.Errorf("tunnel: echo timed out after %s (miss %d/%d)",
+		timeout, misses, echoUnsupportedAfter)
 }
 
-// EchoUnsupported reports whether the peer was marked legacy (never answers).
-func (t *Tunnel) EchoUnsupported() bool { return t.echo().unsupported.Load() }
-
-// SetProbeEchoTimeoutForTest swaps the probe timeout and restores it via
-// cleanup (the external test package cannot reach the package var).
-func SetProbeEchoTimeoutForTest(tb testing.TB, d time.Duration) time.Duration {
-	tb.Helper()
-	saved := probeEchoTimeout
-	probeEchoTimeout = d
-	tb.Cleanup(func() { probeEchoTimeout = saved })
-	return saved
-}
-
-// handleEcho answers an inbound request with a reply padded to want bytes.
-// The reply rides the priority path when the transport has one (control
-// plane); legacy peers never reach here.
+// handleEcho answers one echo request. The reply always rides the priority
+// path — it is control-plane traffic and must not queue behind bulk data;
+// transports without a priority lane fall back harmlessly.
 func (t *Tunnel) handleEcho(payload string) {
 	raw, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil || len(raw) != echoHeaderLen {
-		t.logger.Warn("invalid echo request", "len", len(raw), "err", err)
+	if err != nil || len(raw) < 16 {
+		t.logger.Debug("invalid echo request", "len", len(raw))
 		return
 	}
 	want := binary.BigEndian.Uint32(raw[12:16])
-	if want > maxEchoWantBytes {
-		want = maxEchoWantBytes // oversize requests truncate, not fail
+	if int(want) > maxEchoWantBytes {
+		want = maxEchoWantBytes
 	}
-	resp := make([]byte, echoHeaderLen, echoHeaderLen+int(want))
-	copy(resp, raw[:12]) // client_id + t_send_ns echoed verbatim
-	resp = append(resp, make([]byte, int(want))...)
-	msg := TunnelMessage{
+	resp := make([]byte, 16+int(want))
+	copy(resp[0:16], raw[0:16]) // id + t_send_ns verbatim (padding stays zero)
+	data, err := marshalTunnelMessage(TunnelMessage{
 		Type:    TunnelMessageTypeEchoResp,
 		Payload: base64.StdEncoding.EncodeToString(resp),
-	}
-	data, err := marshalTunnelMessage(msg)
+	})
 	if err != nil {
 		return
 	}
-	_ = peer.SendPriority(t.transport, data)
+	if err := peer.SendPriority(t.transport, data); err != nil {
+		t.logger.Debug("echo reply send failed", "error", err)
+	}
 }
 
-// handleEchoResp delivers a reply to its matching pending probe. Replies
-// with a smaller-than-requested body (legacy truncation) still count — the
-// correlation id and send timestamp are in the header.
+// handleEchoResp matches a response to its pending probe and delivers the
+// timing. Unknown ids (stale, duplicate, spoofed) are dropped silently.
 func (t *Tunnel) handleEchoResp(payload string) {
 	raw, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil || len(raw) < echoHeaderLen {
+	if err != nil || len(raw) < 16 {
 		return
 	}
 	id := binary.BigEndian.Uint32(raw[0:4])
-	sentNS := int64(binary.BigEndian.Uint64(raw[4:12]))
-	st := t.echo()
-	st.mu.Lock()
-	ch, ok := st.pending[id]
-	st.mu.Unlock()
+	t.echoMu.Lock()
+	ch, ok := t.echoPending[id]
+	t.echoMu.Unlock()
 	if !ok {
-		return // stale or duplicate reply — no pending probe cares
-	}
-	rtt := time.Since(time.Unix(0, sentNS))
-	// Guard against a peer echoing a bogus timestamp (clock skew across
-	// devices does not exist here — both fields are OUR clock — but a
-	// negative or absurd RTT means the frame is garbage.
-	if rtt < 0 || rtt > 24*time.Hour {
 		return
 	}
 	select {
-	case ch <- rtt:
-	default:
+	case ch <- echoAnswer{
+		tSendNS: int64(binary.BigEndian.Uint64(raw[4:12])),
+		recvAt:  time.Now(),
+	}:
+	default: // probe already timed out
 	}
+}
+
+// marshalTunnelMessage serializes one envelope frame (json.Marshal with an
+// error, unlike the hot-path mustJSON helper).
+func marshalTunnelMessage(msg TunnelMessage) ([]byte, error) {
+	return json.Marshal(msg)
 }
