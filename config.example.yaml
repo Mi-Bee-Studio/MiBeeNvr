@@ -715,10 +715,11 @@ observability:
 #   ice_receive_mtu: 0              # ICE receive MTU in bytes (0 = library default); small-MTU
 #                                  # paths (PPPoE / some corporate egress). Static knob — no
 #                                  # RFC 8829 negotiation.
-#   tunnel_max_payload_bytes: 0     # Tunnel fragment size (0 = 32768). Receivers accept any
-#                                  # size; 32 KiB is the SCTP 64 KiB message ceiling after
-#                                  # base64 inflation. Note: ICE candidates are UDP-only
-#                                  # (pion v4) — UDP-shaped networks fall back to relay.
+#   tunnel_max_payload_bytes: 0     # Tunnel fragment size (0 = 16384, matching the mobile peer).
+#                                  # Receivers accept any size; 32 KiB is the SCTP 64 KiB
+#                                  # message ceiling after base64 inflation (the config max).
+#                                  # Note: ICE candidates are UDP-only (pion v4) — UDP-shaped
+#                                  # networks fall back to relay.
 
 # Commercial license. Install/replace via the web UI
 # (Settings → License) or PUT /api/license — hot-applies to the P2P gate.
