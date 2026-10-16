@@ -163,6 +163,25 @@ func (r *AudioRecorder) ArmPushFormat(codec string, sampleRate, channels int) {
 	switch codec {
 	case "aac":
 		r.audioCfg.Store(&audioConfig{codec: "aac", sampleRate: sampleRate, channels: channels})
+	case "g711a", "g711u":
+		// GB28181 voice-input channels negotiate G.711 explicitly: A-law is
+		// the GB28181 default (PT 8) and bare-RTP PT 0 maps to mu-law — the
+		// law MUST reach the muxer config or playback decodes garbage.
+		if sampleRate == 0 {
+			sampleRate = 8000
+		}
+		muLawByte := byte(0)
+		if codec == "g711u" {
+			muLawByte = 1
+		}
+		r.audioCfg.Store(&audioConfig{
+			codec:          "g711",
+			sampleRate:     sampleRate,
+			channels:       1,
+			g711MULaw:      codec == "g711u",
+			g711SampleRate: sampleRate,
+			muxerConfig:    []byte{muLawByte, byte(sampleRate >> 24), byte(sampleRate >> 16), byte(sampleRate >> 8), byte(sampleRate)},
+		})
 	case "opus":
 		if sampleRate == 0 {
 			sampleRate = 48000

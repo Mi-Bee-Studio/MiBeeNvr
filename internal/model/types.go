@@ -441,7 +441,9 @@ var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoWHIP): {string(FormatH264), string(FormatAudio)},
 	// GB28181 is an ingest protocol: the camera registers via SIP and the NVR
 	// INVITEs it; the codec is auto-detected from the PS stream_type at runtime.
-	string(ProtoGB28181): {string(FormatH264), string(FormatH265)},
+	// "audio" is the voice-input channel form (network pickup, GB type code
+	// 136): a lone m=audio INVITE feeding the standalone-audio pipeline.
+	string(ProtoGB28181): {string(FormatH264), string(FormatH265), string(FormatAudio)},
 }
 
 // ValidateProtocolEncoding checks if the protocol+encoding combination is valid.
