@@ -23,7 +23,7 @@ import (
 func newApplyTestEnv(t *testing.T, latest string, available bool) (*Handler, *applyTestSeams, string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, `{"tag_name":%q,"html_url":"x"}`, latest)
+		fmt.Fprintf(w, `[{"tag_name":%q,"html_url":"x"}]`, latest)
 	}))
 	t.Cleanup(srv.Close)
 

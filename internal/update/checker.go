@@ -28,8 +28,12 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-// latestReleaseAPI is the GitHub endpoint for the newest non-prerelease.
-const latestReleaseAPI = "https://api.github.com/repos/%s/releases/latest"
+// releasesListAPI is the GitHub endpoint for the release list. We cannot use
+// /releases/latest: the repo also publishes companion-product releases under
+// non-NVR tag names (e.g. "mibee-vision-vX.Y.Z"), and GitHub's "latest"
+// pointer happily lands on those — masking real NVR updates. The list is
+// scanned for the newest vX.Y.Z-shaped, non-prerelease NVR release instead.
+const releasesListAPI = "https://api.github.com/repos/%s/releases?per_page=100"
 
 // minRecheckBackoff caps how fast the poller retries after a failure, so a
 // flaky network/GitHub outage does not hammer the API.
@@ -45,6 +49,8 @@ type githubRelease struct {
 	Name        string `json:"name"`
 	HTMLURL     string `json:"html_url"`
 	PublishedAt string `json:"published_at"`
+	Prerelease  bool   `json:"prerelease"`
+	Draft       bool   `json:"draft"`
 	Body        string `json:"body"` // release notes (changelog)
 }
 
@@ -192,7 +198,7 @@ func (c *Checker) fetchAndCache(ctx context.Context) (Status, error) {
 	}
 	url := c.endpoint
 	if url == "" {
-		url = fmt.Sprintf(latestReleaseAPI, c.repo)
+		url = fmt.Sprintf(releasesListAPI, c.repo)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -229,9 +235,15 @@ func (c *Checker) fetchAndCache(ctx context.Context) (Status, error) {
 	if err != nil {
 		return c.Status(), err
 	}
-	var rel githubRelease
-	if err := json.Unmarshal(body, &rel); err != nil {
+	var releases []githubRelease
+	if err := json.Unmarshal(body, &releases); err != nil {
 		return c.Status(), err
+	}
+	rel, ok := newestNVRRelease(releases)
+	if !ok {
+		// Keep the previous cache; a release page with no NVR-shaped tag at
+		// all would otherwise blank the UI's version card.
+		return c.Status(), fmt.Errorf("update: no vX.Y.Z-shaped release found in %d entries", len(releases))
 	}
 
 	status := Status{
@@ -259,6 +271,40 @@ func (c *Checker) fetchAndCache(ctx context.Context) (Status, error) {
 	}
 	c.mu.Unlock()
 	return status, nil
+}
+
+// newestNVRRelease picks the newest release that is actually an NVR release:
+// a vX.Y.Z-shaped tag (strict three-part form — companion-product tags like
+// "mibee-vision-v0.1.0" fail semver and "v0.13"-style shorthand fails the
+// shape check), not a draft and not a prerelease. The list endpoint returns
+// entries newest-first, so the first match wins.
+func newestNVRRelease(releases []githubRelease) (githubRelease, bool) {
+	for _, rel := range releases {
+		if rel.Draft || rel.Prerelease {
+			continue
+		}
+		if !isNVRVersionTag(rel.TagName) {
+			continue
+		}
+		return rel, true
+	}
+	return githubRelease{}, false
+}
+
+// isNVRVersionTag reports whether a release tag has the strict vX.Y.Z shape
+// (an optional prerelease/build suffix is tolerated — the GitHub prerelease
+// flag gates those, not the tag text). x/mod/semver's IsValid alone is too
+// lenient: it accepts "v1" and "v0.13".
+func isNVRVersionTag(tag string) bool {
+	v := ensureV(strings.TrimSpace(tag))
+	if !semver.IsValid(v) {
+		return false
+	}
+	core := v[1:]
+	if i := strings.IndexAny(core, "-+"); i >= 0 {
+		core = core[:i]
+	}
+	return len(strings.Split(core, ".")) == 3
 }
 
 // isNewer reports whether candidate is strictly newer than current using Go's
