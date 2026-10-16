@@ -180,14 +180,20 @@ func (s *Session) handleConnectAccept(msg *Message) {
 		p2p.setRelayClient(s.relayClient)
 	}
 
-	go func() {
-		if err := p2p.startAsAnswerer(s.signal, s.cfg, s.welcome); err != nil {
-			s.logger.Error("p2p as answerer failed", "error", err)
-			if deleted := s.deleteP2P(accept.SessionID); deleted != nil {
-				_ = deleted.close()
-			}
+	// Synchronous on purpose: the signaling read loop may deliver the
+	// offer back-to-back with this accept (server forwards both in quick
+	// succession; under scheduling pressure the next message is processed
+	// before a spawned goroutine gets to run). startAsAnswerer only builds
+	// the PeerConnection and registers handlers — it never blocks on the
+	// network — so running it inline closes the "offer vs nil pc" race that
+	// silently dropped the offer and dead-ended the handshake (the callback
+	// -timing test caught it as a deterministic 120s hang under load).
+	if err := p2p.startAsAnswerer(s.signal, s.cfg, s.welcome); err != nil {
+		s.logger.Error("p2p as answerer failed", "error", err)
+		if deleted := s.deleteP2P(accept.SessionID); deleted != nil {
+			_ = deleted.close()
 		}
-	}()
+	}
 }
 
 func (s *Session) handleConnectReject(msg *Message) {

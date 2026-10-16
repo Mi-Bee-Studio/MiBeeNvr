@@ -18,9 +18,12 @@ import (
 // so the DataChannel cannot open before that elapses; the test assigns the
 // callback well inside the window.
 func TestOnDataChannel_AssignedAfterConnectStillFires(t *testing.T) {
-	// 2026-10-15：多包并行 -race 踩踏下该握手会撞内部弃线 deadline 挂死
-	// （曾以 CI=true 门控跳过）；主线 #974 已把 internal/p2psdk 隔离成
-	// 串行安静步骤，护栏恢复在 CI 全环境生效。
+	// 2026-10-16 根因修正：此前的间歇挂死不是"弃线 deadline"，而是
+	// handleConnectAccept 曾用 goroutine 起 answerer——accept 与 offer
+	// 背靠背送达时（本 mock 的 connectAcceptDelay 正是把两条消息排队成
+	// 背靠背），offer 在 pc 尚未创建时到达被静默丢弃，握手永久死亡。
+	// answerer 路径已同步化；本测试 = 该顺序性竞态的回归护栏（GOMAXPROCS=1
+	// + -race 下旧代码 ~2/3 必现，新代码须恒绿）。
 	mock := newMockServer(t)
 	mock.connectAcceptDelay = 750 * time.Millisecond
 
