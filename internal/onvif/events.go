@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
@@ -405,6 +408,7 @@ func (e *EventSubscriberImpl) run(cameraID string, stopCh <-chan struct{}) {
 	if backoff <= 0 {
 		backoff = resubscribeMinBackoff
 	}
+	initial := backoff // transient failures reset here, never above
 	for {
 		select {
 		case <-stopCh:
@@ -438,7 +442,18 @@ func (e *EventSubscriberImpl) run(cameraID string, stopCh <-chan struct{}) {
 				if !sleepInterruptible(stopCh, backoff) {
 					return
 				}
-				backoff = min(backoff*2, resubscribeMaxBackoff)
+				// Transient transport failures (WiFi blip, route momentarily
+				// unreachable, dial refused) recover on their own once the
+				// link returns — keep the SHORT backoff instead of escalating,
+				// so a 3-second network flap does not leave the subscription
+				// dark for the full 60s cap (observed as a 7+ minute
+				// resubscribing stall after one ENETUNREACH during the #922
+				// push joint-debug). Credential/protocol faults still escalate.
+				if !transientTransportError(err) {
+					backoff = min(backoff*2, resubscribeMaxBackoff)
+				} else {
+					backoff = initial
+				}
 				continue
 			}
 			backoff = resubscribeMinBackoff
@@ -454,6 +469,39 @@ func (e *EventSubscriberImpl) run(cameraID string, stopCh <-chan struct{}) {
 		}
 		backoff = min(backoff*2, resubscribeMaxBackoff)
 	}
+}
+
+// transientTransportError reports dial-phase network failures that recover
+// by themselves once connectivity returns. Wrapped SOAP/HTTP errors lose
+// their syscall identity along the way, so the string fallbacks cover the
+// transport dialects seen in the field.
+func transientTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var nerr net.Error
+	if errors.As(err, &nerr) {
+		return true // timeouts and other temporary network conditions
+	}
+	for _, target := range []error{
+		syscall.ECONNREFUSED,
+		syscall.EHOSTUNREACH,
+		syscall.ENETUNREACH,
+		syscall.ENETDOWN,
+		io.EOF,
+		io.ErrUnexpectedEOF,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "network is unreachable") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "eof")
 }
 
 // rebuildSubscription tears down the current subscription server-side and
