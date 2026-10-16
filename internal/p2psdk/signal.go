@@ -151,9 +151,23 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 		HandshakeTimeout: sc.cfg.handshakeTimeout(),
 	}
 
-	conn, resp, err := dialer.DialContext(ctx, sc.cfg.ServerURL, http.Header{})
+	serverURL := sc.cfg.ServerURL
+	// #48 nearest-node selection: only when discovery is configured, and
+	// only as a PREFERRED endpoint — every failure path keeps ServerURL.
+	if sc.cfg.NodesURL != "" {
+		if best := DiscoverBestNode(ctx, sc.cfg.NodesURL, sc.logger); best != "" {
+			serverURL = best
+		}
+	}
+
+	conn, resp, err := dialer.DialContext(ctx, serverURL, http.Header{})
 	if err != nil {
-		return nil, fmt.Errorf("dial signaling: %w", err)
+		// The discovered node may be freshly dead (probe raced): one
+		// straight retry on the configured URL before giving the rung up.
+		conn, resp, err = dialer.DialContext(ctx, sc.cfg.ServerURL, http.Header{})
+		if err != nil {
+			return nil, fmt.Errorf("dial signaling: %w", err)
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 

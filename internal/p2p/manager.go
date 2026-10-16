@@ -674,28 +674,37 @@ const tunnelEchoInterval = 30 * time.Second
 func (m *Manager) startTunnelEchoSampler(tun *tunnel.Tunnel) (stop func()) {
 	stopCh := make(chan struct{})
 	go func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-stopCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 		probe := func() bool { // false = stop sampling
 			want := tunnel.MaxPayloadBytes
-			normal, errN := tun.ProbeEcho(want, false)
+			normal, errN := tun.ProbeEcho(ctx, want, false)
 			if errN != nil {
 				if errors.Is(errN, tunnel.ErrEchoUnsupported) {
 					m.echoObs.Store(&TunnelEchoObs{WantBytes: want, Unsupported: true, At: time.Now()})
 					m.logger.Info("tunnel echo unsupported by peer — T2 unmeasurable", "want_bytes", want)
 					return false
 				}
-				if errors.Is(errN, tunnel.ErrEchoTimeout) {
+				if strings.Contains(errN.Error(), "echo timed out") {
 					return true // miss: keep sampling, give-up logic is in ProbeEcho
 				}
 				return false // send failure: tunnel closing/closed
 			}
-			prio, errP := tun.ProbeEcho(want, true)
+			prio, errP := tun.ProbeEcho(ctx, want, true)
 			if errP != nil {
 				return false
 			}
 			m.echoObs.Store(&TunnelEchoObs{
 				NormalMS:  normal.RTT.Milliseconds(),
 				PrioMS:    prio.RTT.Milliseconds(),
-				LaneUsed:  prio.PrioLane,
+				LaneUsed:  prio.LanePriority,
 				WantBytes: want,
 				At:        time.Now(),
 			})

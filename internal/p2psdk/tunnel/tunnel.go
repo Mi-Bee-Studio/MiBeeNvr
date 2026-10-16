@@ -4,6 +4,7 @@ package tunnel
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -58,15 +59,33 @@ type Tunnel struct {
 	// EnableEgressPriority); zero = off (pre-feature behavior).
 	egressPrioBudget atomic.Int64
 
-	// echo (T2 RTT probes) lazy state — see echo.go.
-	echoOnce  sync.Once
-	echoState *echoState
+	// T2 echo probe state (#87): pending probes by client id, consecutive
+	// miss counter, and the unsupported short-circuit (a silent peer is a
+	// valid answer). echoMu guards all three.
+	echoMu          sync.Mutex
+	echoPending     map[uint32]chan echoAnswer
+	echoMisses      int
+	echoUnsupported bool
+
+	// #88① pre-open data parking: data frames that beat their open across
+	// the ctrl/data channels. Bounded and TTL'd (see bufferEarlyData).
+	earlyMu sync.Mutex
+	early   map[uint32][][]byte
+	earlyAt map[uint32]time.Time
+
+	// requireE2EE (#36③): fail Dial when the peer cannot confirm E2EE
+	// instead of degrading to plaintext.
+	requireE2EE bool
 }
 
 // e2eeHandshakeTimeout bounds how long Dial waits for the device's sealed
 // e2ee_ack before proceeding (a legacy device never acks; the session then
 // runs plaintext exactly as before E2EE existed).
 const e2eeHandshakeTimeout = 500 * time.Millisecond
+
+// ErrE2EERequired is returned by Dial under the WithRequireE2EE policy
+// when the peer did not confirm tunnel-layer encryption in time (#36③).
+var ErrE2EERequired = errors.New("tunnel: e2ee required but peer did not confirm")
 
 // EnableEgressPriority arms per-stream egress acceleration (#46 v2 device
 // side): each stream's first budgetBytes of outbound wire traffic rides the
@@ -188,6 +207,13 @@ type Option func(*Tunnel)
 // senders with different settings interoperate; the SCTP 64 KiB
 // message-size ceiling constrains the upper bound (base64 inflates by 4/3,
 // so 32 KiB payload ≈ 43.7 KiB on the wire).
+// WithRequireE2EE arms the #36③ strict-E2EE policy: a Dial whose peer
+// cannot confirm tunnel-layer encryption fails with ErrE2EERequired rather
+// than degrading to plaintext (opportunistic default unchanged).
+func WithRequireE2EE() Option {
+	return func(t *Tunnel) { t.requireE2EE = true }
+}
+
 func WithMaxPayloadBytes(n int) Option {
 	return func(t *Tunnel) {
 		if n > 0 {
@@ -264,11 +290,19 @@ func (t *Tunnel) Dial(service string) (net.Conn, error) {
 
 	// When E2EE is armed, wait (briefly) for the device's sealed ack so the
 	// first data frame can already be ciphertext. A legacy device never
-	// acks; the timeout leaves the session in plaintext-compat mode.
+	// acks; the timeout leaves the session in plaintext-compat mode —
+	// unless RequireE2EE is armed (#36③): then the missing ack fails the
+	// dial instead. Policy switch for deployments that prefer no session
+	// over an unencrypted one; the default stays opportunistic.
 	if t.e2eeCipher != nil {
 		select {
 		case <-t.e2eeAckCh:
 		case <-time.After(e2eeHandshakeTimeout):
+			if t.requireE2EE {
+				t.registry.CloseStream(streamID)
+				t.streams.Delete(streamID)
+				return nil, ErrE2EERequired
+			}
 			t.logger.Warn("e2ee ack not received — proceeding plaintext (legacy peer?)",
 				"stream_id", streamID)
 		}
@@ -317,10 +351,8 @@ func (t *Tunnel) dispatch(data []byte) {
 	case TunnelMessageTypeEchoResp:
 		t.handleEchoResp(msg.Payload)
 	default:
-		// Forward compatibility: unknown types are ignored silently (no
-		// throw, no disconnect) so newer peers can introduce frames without
-		// breaking older ones. Debug, not Warn: a frame type this build
-		// predates is expected traffic, not an anomaly.
-		t.logger.Debug("unknown tunnel message type ignored", "type", msg.Type)
+		// Unknown types are silently ignored (#87/#9 compatibility rule):
+		// a newer peer's probe frames must not spam a legacy peer's logs.
+		t.logger.Debug("unknown tunnel message type", "type", msg.Type)
 	}
 }

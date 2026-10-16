@@ -11,6 +11,14 @@ type SignalingConfig struct {
 	// ServerURL is the WebSocket URL of the signaling server (e.g. wss://host:port).
 	ServerURL string
 
+	// NodesURL optionally points at the platform's public node list
+	// (GET /api/nodes, #48). When set, every fresh connection first runs
+	// nearest-node discovery (concurrent probes, 50 ms latency buckets
+	// with in-bucket shuffle) and dials the winner; ANY discovery failure
+	// falls straight back to ServerURL. Empty (default) keeps single-URL
+	// behavior byte-identical — zero change for existing deployments.
+	NodesURL string
+
 	// JWT is the OIDC JWT for authentication with the signaling server.
 	JWT string
 
@@ -57,7 +65,7 @@ type SignalingConfig struct {
 	ICEReceiveMTU int
 
 	// TunnelMaxPayloadBytes optionally overrides the tunnel fragment size
-	// (0 = MaxPayloadBytes, 16 KiB). Receivers do not validate fragment
+	// (0 = MaxPayloadBytes, 32 KiB). Receivers do not validate fragment
 	// size, so mixed settings interoperate; capping happens at the sender.
 	TunnelMaxPayloadBytes int
 
@@ -228,4 +236,12 @@ type DataChannel struct {
 	// relay fallback was never connected). Applications pass it to
 	// tunnel.EnableE2EE to encrypt tunnel payloads end-to-end.
 	E2EEKey []byte
+
+	// Ctrl is the paired lossy control channel of the #88① dual-channel
+	// direct path (nil on single-channel sessions and on the relay
+	// transport). Set by the SDK when the peer negotiated ctrl_channel;
+	// the transport built from this DataChannel routes tunnel control
+	// frames through it and feeds its inbound messages into the same
+	// handler. Applications can ignore it — routing is automatic.
+	Ctrl *DataChannel
 }

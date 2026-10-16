@@ -72,6 +72,7 @@ type autoEndpointHooks struct {
 	addMapping   func(gw *UPnPGateway, ext, inner, lease int) error
 	stunQuery    func(addr string, timeout time.Duration) (string, error)
 	pmpMapping   func(port int) (string, error)
+	pcpMapping   func(port int) (string, error)
 }
 
 var (
@@ -82,6 +83,7 @@ var (
 		addMapping:   func(gw *UPnPGateway, ext, inner, lease int) error { return gw.AddUDPMapping(ext, inner, lease) },
 		stunQuery:    stunQuery,
 		pmpMapping:   tryPMPMapping,
+		pcpMapping:   tryPCPMapping,
 	}
 )
 
@@ -133,7 +135,11 @@ func (s *autoEndpointState) resolve(port int, stunServers []string, h *autoEndpo
 	if pmpOK {
 		return pmpRes
 	}
-	stunRes, stunOK, stunErr := s.trySTUN(port, stunServers, upnpErr, pmpErr, h)
+	pcpRes, pcpOK, pcpErr := s.tryPCP(port, upnpErr, pmpErr, h)
+	if pcpOK {
+		return pcpRes
+	}
+	stunRes, stunOK, stunErr := s.trySTUN(port, stunServers, upnpErr, coalesceErr(pmpErr, pcpErr), h)
 	if stunOK {
 		return stunRes
 	}
@@ -193,6 +199,44 @@ func (s *autoEndpointState) tryPMP(port int, upnpErr error, h *autoEndpointHooks
 	s.expires = time.Now().Add(autoAdvertiseTTL)
 	s.upnpErr, s.pmpErr, s.stunErr = upnpErr, nil, nil
 	return advertiseResolution{addr: s.addr, mode: "pmp", fresh: true, ladder: true, upnpErr: upnpErr}, true, nil
+}
+
+// tryPCP runs ladder 2b (#43-D completion) — PCP-only gateways that
+// neither UPnP nor NAT-PMP served. Same-port mapping only; see pcp.go.
+// Caller must hold s.mu.
+func (s *autoEndpointState) tryPCP(port int, upnpErr, pmpErr error, h *autoEndpointHooks) (advertiseResolution, bool, error) {
+	if h.pcpMapping == nil {
+		return advertiseResolution{}, false, nil
+	}
+	pcpAddr, perr := h.pcpMapping(port)
+	if perr != nil {
+		return advertiseResolution{}, false, perr
+	}
+	if pcpAddr == "" {
+		return advertiseResolution{}, false, errors.New("empty mapping address")
+	}
+	if host, _, herr := net.SplitHostPort(pcpAddr); herr != nil {
+		return advertiseResolution{}, false, herr
+	} else if !advertiseableIP(net.ParseIP(host)) { //nolint:revive // early-return style reads clearer here
+		return advertiseResolution{}, false, fmt.Errorf("pcp address %s is private/CGNAT", pcpAddr)
+	}
+	s.addr, s.mode, s.port, s.gw, s.resolved = pcpAddr, "pcp", port, nil, true
+	s.expires = time.Now().Add(autoAdvertiseTTL)
+	s.upnpErr, s.pmpErr, s.stunErr = upnpErr, pmpErr, nil
+	return advertiseResolution{
+		addr: s.addr, mode: "pcp", fresh: true, ladder: true,
+		upnpErr: upnpErr, pmpErr: pmpErr,
+	}, true, nil
+}
+
+// coalesceErr returns the first non-nil error (diagnostics chaining).
+func coalesceErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
 }
 
 // trySTUN runs ladder 3 — STUN reflection + assumed manual port forward.

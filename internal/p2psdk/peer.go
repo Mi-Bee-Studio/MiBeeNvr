@@ -22,6 +22,12 @@ import (
 // DataChannelLabel is the label used for DataChannel created by the SDK.
 const DataChannelLabel = "p2p-data"
 
+// DataChannelLabelCtrl is the lossy control channel of the #88① dual
+// channel direct path: unordered + maxRetransmits=0, carrying tunnel
+// lifecycle frames (open/close/e2ee_ack) so a lost control frame costs one
+// retry instead of head-of-line blocking behind bulk data retransmissions.
+const DataChannelLabelCtrl = "p2p-ctrl"
+
 // Role constants for SignalingConfig.Role. A device accepts inbound tunnels;
 // a client initiates outbound connections to a device.
 const (
@@ -121,34 +127,15 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 // the class is the fact base for path decisions (PreferRelay), the probe
 // itself never changes transport selection.
 type NatObservation struct {
-	Class         NATClass `json:"class"`
-	StunReachable bool     `json:"stun_reachable"`
-	Responsive    int      `json:"responsive"` // STUN servers that answered
-	LocalAddr     string   `json:"local_addr,omitempty"`
-	// DualStack reports a global-unicast IPv6 interface address: the v4
-	// classification does not rule out v6 direct connectivity, so
-	// relay-pinning consumers must exempt dual-stack machines.
-	DualStack bool      `json:"dual_stack"`
-	At        time.Time `json:"at"`
-}
-
-// SetForceRelay updates the ForceRelay pin applied to sessions constructed
-// after this call; existing sessions keep their already-made transport
-// decision. The device application feeds its "auto" NAT policy through
-// here — the observation callback fires shortly after Dial, and the next
-// client session then skips the doomed ICE arbitration on symmetric-v4
-// networks. Safe for concurrent use.
-func (s *Session) SetForceRelay(pinned bool) {
-	s.mu.Lock()
-	s.cfg.ForceRelay = pinned
-	s.mu.Unlock()
-}
-
-// sessionConfig snapshots the live config under the session lock.
-func (s *Session) sessionConfig() SignalingConfig {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.cfg
+	Class NATClass `json:"class"`
+	// DualStack reports a global-unicast IPv6 address on any interface
+	// (#89): a v4-symmetric verdict does not rule out v6 direct paths, so
+	// relay pinning consumers may exempt dual-stack hosts.
+	DualStack     bool      `json:"dual_stack"`
+	StunReachable bool      `json:"stun_reachable"`
+	Responsive    int       `json:"responsive"` // STUN servers that answered
+	LocalAddr     string    `json:"local_addr,omitempty"`
+	At            time.Time `json:"at"`
 }
 
 // NATObservation returns the latest NAT observation (nil before the first
@@ -158,6 +145,26 @@ func (s *Session) NATObservation() *NatObservation {
 		return v
 	}
 	return nil
+}
+
+// sessionConfig returns a locked snapshot of the signaling config (#89).
+// Session-construction points (connect request/accept handling, the idle
+// sweep) must read cfg through this — SetForceRelay may write concurrently
+// once a device updates its relay pin from a NAT observation after Dial.
+func (s *Session) sessionConfig() SignalingConfig {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg
+}
+
+// SetForceRelay dynamically updates the relay pin (#89): the execution
+// surface for device-side "auto decides from NAT observation". Affects
+// sessions created after the call (running sessions keep the config they
+// captured at construction). Safe to call any time after Dial.
+func (s *Session) SetForceRelay(v bool) {
+	s.cfgMu.Lock()
+	s.cfg.ForceRelay = v
+	s.cfgMu.Unlock()
 }
 
 // observeNAT probes the local NAT behavior via the welcome STUN list.
@@ -178,18 +185,18 @@ func (s *Session) observeNAT(welcome *Welcome) {
 	res := DetectNATClass(ctx, servers, 5*time.Second)
 	obs := &NatObservation{
 		Class:         res.Class,
+		DualStack:     res.DualStack,
 		StunReachable: len(res.MappedByServer) > 0,
 		Responsive:    len(res.MappedByServer),
 		LocalAddr:     res.LocalAddr,
-		DualStack:     res.DualStack,
 		At:            time.Now(),
 	}
 	s.natObs.Store(obs)
 	s.logger.Info("NAT observation",
 		"class", string(res.Class),
+		"dual_stack", res.DualStack,
 		"stun_responsive", obs.Responsive,
 		"local_addr", res.LocalAddr,
-		"dual_stack", res.DualStack,
 		"prefer_relay", PreferRelay(res.Class),
 	)
 	if cb := s.OnNATObservation; cb != nil {
@@ -199,7 +206,9 @@ func (s *Session) observeNAT(welcome *Welcome) {
 
 // Session represents a P2P session connected to the signaling server.
 type Session struct {
-	cfg    SignalingConfig
+	cfg   SignalingConfig
+	cfgMu sync.RWMutex // guards cfg: SetForceRelay writes post-Dial while handlers read
+
 	signal *signalingClient
 	logger *slog.Logger
 
@@ -269,6 +278,11 @@ func (s *Session) Connect(_ context.Context, targetPeerID string, serviceName ..
 	req := ConnectRequest{
 		TargetPeerID: targetPeerID,
 		SessionID:    sessionID,
+		// #88①: declare dual-channel support so a NEW device-side offerer
+		// may open the lossy control channel. Old devices ignore the
+		// unknown field and keep the single p2p-data channel — every
+		// direction of the version matrix stays wire-compatible.
+		CtrlChannel: true,
 	}
 	if len(serviceName) > 0 {
 		req.ServiceName = serviceName[0]

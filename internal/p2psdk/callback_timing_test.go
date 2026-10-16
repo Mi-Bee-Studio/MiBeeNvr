@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -18,12 +19,13 @@ import (
 // so the DataChannel cannot open before that elapses; the test assigns the
 // callback well inside the window.
 func TestOnDataChannel_AssignedAfterConnectStillFires(t *testing.T) {
-	// 2026-10-16 根因修正：此前的间歇挂死不是"弃线 deadline"，而是
-	// handleConnectAccept 曾用 goroutine 起 answerer——accept 与 offer
-	// 背靠背送达时（本 mock 的 connectAcceptDelay 正是把两条消息排队成
-	// 背靠背），offer 在 pc 尚未创建时到达被静默丢弃，握手永久死亡。
-	// answerer 路径已同步化；本测试 = 该顺序性竞态的回归护栏（GOMAXPROCS=1
-	// + -race 下旧代码 ~2/3 必现，新代码须恒绿）。
+	t.Cleanup(func() { // #78: goroutine evidence on the load-budget flake
+		if t.Failed() {
+			buf := make([]byte, 1<<20)
+			n := runtime.Stack(buf, true)
+			t.Logf("goroutine dump: %s", buf[:n])
+		}
+	})
 	mock := newMockServer(t)
 	mock.connectAcceptDelay = 750 * time.Millisecond
 
@@ -61,12 +63,12 @@ func TestOnDataChannel_AssignedAfterConnectStillFires(t *testing.T) {
 
 	select {
 	case <-deviceDCOpen:
-	case <-time.After(120 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("timeout waiting for device DataChannel")
 	}
 	select {
 	case <-clientDCOpen:
-	case <-time.After(120 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("client OnDataChannel never fired: callback assigned after Connect was lost (snapshot regression)")
 	}
 }

@@ -116,6 +116,11 @@ type ConnectRequest struct {
 	TargetPeerID string `json:"target_peer_id"`
 	SessionID    string `json:"session_id"`
 	ServiceName  string `json:"service_name,omitempty"`
+	// CtrlChannel declares that THIS client understands the dual-channel
+	// direct path (#88): a new device-side offerer that sees it may open
+	// the p2p-ctrl channel (unordered, unreliable) alongside p2p-data.
+	// Additive JSON: old peers never set it and never see a second channel.
+	CtrlChannel bool `json:"ctrl_channel,omitempty"`
 	// RelayURL/RelayPubKey: cross-node (federation) session relay override
 	// injected by the servers — both peers must share ONE relay endpoint.
 	RelayURL    string `json:"relay_url,omitempty"`

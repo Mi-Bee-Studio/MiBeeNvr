@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,11 +43,11 @@ const (
 	// [24B proof nonce][48B box] sealed with the server static key to this
 	// client's public key over sha256(clientNonce ‖ clientPub).
 	FrameCapServerAuth byte = 0x02
-	// FrameCapEcho (capability byte bit 2, #87): the deployment supports
-	// tunnel-layer echo RTT probes (T2 decomposition). Echo frames ride the
-	// peer tunnel, not the relay — this bit lets clients gate probing on
-	// deployment support so older fleets read "unsupported", not "broken".
-	FrameCapEcho byte = 0x04
+	// FrameCapDualConn (capability byte bit 2, #88②): the server accepts a
+	// second ctrl connection per key — client_auth appends 1 byte
+	// conn_type (0x01) after the 109-byte legacy payload. Priority frames
+	// are delivered to the recipient's ctrl connection when present.
+	FrameCapDualConn byte = 0x04
 
 	// FrameThrottle (0x08) arrives server → client on the control lane when
 	// the server's inbound rate limit dropped this connection's data frames
@@ -112,6 +113,22 @@ type Client struct {
 	pingInterval time.Duration
 	pongTimeout  time.Duration
 	writeTimeout time.Duration
+
+	// serverURL remembers the endpoint for the #88② ctrl dial.
+	serverURL string
+	// logger is nil-safe diagnostics output (defaults to slog.Default()).
+	loggerField *slog.Logger
+	// ctrl is the #88② physically separate control connection (nil until
+	// the dual-connection dial succeeds; soft-degrades on death).
+	ctrl atomic.Pointer[ctrlLink]
+}
+
+// logger returns the client's diagnostics logger (never nil).
+func (c *Client) logger() *slog.Logger {
+	if c.loggerField != nil {
+		return c.loggerField
+	}
+	return slog.Default()
 }
 
 // Default liveness timing. The relay protocol answers FramePing with
@@ -183,6 +200,19 @@ func (c *Client) SupportsPriority() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.serverCaps&FrameCapPriority != 0
+}
+
+// PriorityActive is the T2 lane-truth hook (#87): without the server's
+// capability bit, SendPriority silently degrades to the normal path, and
+// probe samples must not be read as "priority effective".
+func (c *Client) PriorityActive() bool { return c.SupportsPriority() }
+
+// SupportsDualConn reports whether the server advertised the #88②
+// dual-connection capability (ctrl lane).
+func (c *Client) SupportsDualConn() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.serverCaps&FrameCapDualConn != 0
 }
 
 // enqueueCtrl queues a control-lane frame (ping/pong). Best effort: a
@@ -329,10 +359,19 @@ func (c *Client) Connect(ctx context.Context, serverURL string, serverPubKeyHex 
 		return fmt.Errorf("relay auth: %w", err)
 	}
 
+	c.mu.Lock()
+	c.serverURL = serverURL
+	c.mu.Unlock()
 	c.lastRead.Store(time.Now().UnixNano())
 	go c.readLoop()
 	go c.keepaliveLoop()
 	go c.writerLoop()
+	// #88②: open the physically separate control connection when the
+	// server advertised it. Soft-fail: single-connection behavior on any
+	// error (old server, network hiccup).
+	if c.SupportsDualConn() {
+		go c.dialCtrlLink()
+	}
 	return nil
 }
 
@@ -572,6 +611,11 @@ func (c *Client) SendPriorityTo(dst [32]byte, data []byte) error {
 	if !c.SupportsPriority() {
 		return c.SendTo(dst, data)
 	}
+	// #88②: the physically separate ctrl connection beats any shared-lane
+	// queueing when live; its death degrades to the path below.
+	if c.sendViaCtrl(dst, data) {
+		return nil
+	}
 	if len(data) > MaxPacketSize-KeyLen {
 		return fmt.Errorf("payload too large: %d", len(data))
 	}
@@ -613,6 +657,9 @@ func (c *Client) OnThrottle(h func(droppedFrames, droppedBytes uint32)) {
 // Close shuts down the relay client and releases resources.
 // Implements peer.Transport.
 func (c *Client) Close() error {
+	if link := c.ctrl.Load(); link != nil {
+		link.close()
+	}
 	select {
 	case <-c.closeCh:
 		return nil

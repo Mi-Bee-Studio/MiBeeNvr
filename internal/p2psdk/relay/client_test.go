@@ -31,6 +31,14 @@ type mockRelayServer struct {
 	// silent: when set, the read loop answers nothing (no pong) and never
 	// pushes — simulates a black-holed / half-open path for liveness tests.
 	silent atomic.Bool
+
+	// caps: capability byte echoed in server_auth (0 = legacy 1-byte
+	// reply). Tests set it to advertise #88② dual-connection support.
+	caps byte
+	// ctrlMu guards ctrl tracking for #88② tests.
+	ctrlMu     sync.Mutex
+	ctrlConns  map[[32]byte]*websocket.Conn
+	ctrlFrames chan []byte
 }
 
 type mockClient struct {
@@ -41,7 +49,9 @@ type mockClient struct {
 
 func newMockRelayServer(t *testing.T) *mockRelayServer {
 	s := &mockRelayServer{
-		clients: make(map[[32]byte]*mockClient),
+		clients:    make(map[[32]byte]*mockClient),
+		ctrlConns:  make(map[[32]byte]*websocket.Conn),
+		ctrlFrames: make(chan []byte, 16),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(_ *http.Request) bool { return true },
 		},
@@ -85,7 +95,14 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	copy(msg.pubKey[:], payload[:KeyLen])
 	copy(msg.nonce[:], payload[KeyLen:KeyLen+NonceLen])
-	msg.box = payload[KeyLen+NonceLen:]
+	// The box is exactly 48 bytes; a trailing byte (when present) is the
+	// #88② conn_type marker (0x01 = ctrl).
+	boxEnd := KeyLen + NonceLen + 48
+	if len(payload) < boxEnd {
+		return
+	}
+	msg.box = payload[KeyLen+NonceLen : boxEnd]
+	isCtrl := len(payload) >= boxEnd+1 && payload[boxEnd] == 0x01
 
 	// Verify.
 	decoded, ok := box.Open(nil, msg.box, &msg.nonce, &msg.pubKey, &s.privKey)
@@ -117,9 +134,38 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Success (under client.mu: a concurrent forward to this freshly
 	// registered conn would race gorilla's single-writer constraint).
+	var authPayload []byte
+	if s.caps != 0 {
+		authPayload = []byte{0x00, s.caps}
+	} else {
+		authPayload = []byte{0x00}
+	}
 	client.mu.Lock()
-	_ = conn.WriteMessage(websocket.BinaryMessage, encodeFrame(FrameServerAuth, []byte{0x00}))
+	_ = conn.WriteMessage(websocket.BinaryMessage, encodeFrame(FrameServerAuth, authPayload))
 	client.mu.Unlock()
+
+	// #88②: ctrl connections are tracked separately — same key, second
+	// slot; their inbound frames are recorded for assertions.
+	if isCtrl {
+		s.ctrlMu.Lock()
+		s.ctrlConns[msg.pubKey] = conn
+		s.ctrlMu.Unlock()
+		defer func() {
+			s.ctrlMu.Lock()
+			delete(s.ctrlConns, msg.pubKey)
+			s.ctrlMu.Unlock()
+		}()
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			select {
+			case s.ctrlFrames <- data:
+			default:
+			}
+		}
+	}
 
 	// Read loop.
 	for {

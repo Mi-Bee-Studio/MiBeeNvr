@@ -95,6 +95,18 @@ func (t *dataChannelTransport) Send(data []byte) error {
 	return t.dc.Send(data)
 }
 
+// SendControl routes tunnel lifecycle frames over the paired lossy ctrl
+// channel of the #88① dual-channel path. Absent a ctrl channel the caller
+// keeps the normal lane — wire compatibility in every direction. Control
+// frames are small and individually expendable, so they bypass the
+// scheduler entirely (no admission wait behind bulk bytes).
+func (t *dataChannelTransport) SendControl(data []byte) error {
+	if t.dc.Ctrl != nil {
+		return t.dc.Ctrl.Send(data)
+	}
+	return t.Send(data)
+}
+
 // SendPriority routes to the scheduler's high lane on the WebRTC path, to
 // the optional DataChannel priority hook on the relay path, and degrades to
 // Send when neither exists — availability first.
@@ -110,11 +122,29 @@ func (t *dataChannelTransport) SendPriority(data []byte) error {
 
 func (t *dataChannelTransport) OnMessage(h func([]byte)) {
 	t.dc.OnMessage(h)
+	// #88①: inbound frames ride whichever channel the peer chose; both
+	// feed the same handler. wrapDataChannel already buffers pre-handler
+	// arrivals per channel, so early ctrl frames survive too.
+	if t.dc.Ctrl != nil {
+		t.dc.Ctrl.OnMessage(h)
+	}
+}
+
+// PriorityActive reports whether a SendPriority on this transport actually
+// rides a priority path (#87 T2 lane-truth): true when the egress scheduler
+// is in charge (strict-priority lanes) or the underlying DataChannel exposes
+// its own priority hook; false when SendPriority is just a silent alias for
+// Send.
+func (t *dataChannelTransport) PriorityActive() bool {
+	return t.sched != nil || t.dc.SendPriority != nil
 }
 
 func (t *dataChannelTransport) Close() error {
 	if t.sched != nil {
 		t.sched.shutdown()
+	}
+	if t.dc.Ctrl != nil {
+		_ = t.dc.Ctrl.Close()
 	}
 	return t.dc.Close()
 }
