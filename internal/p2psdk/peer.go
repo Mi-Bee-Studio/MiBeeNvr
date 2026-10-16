@@ -121,11 +121,34 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 // the class is the fact base for path decisions (PreferRelay), the probe
 // itself never changes transport selection.
 type NatObservation struct {
-	Class         NATClass  `json:"class"`
-	StunReachable bool      `json:"stun_reachable"`
-	Responsive    int       `json:"responsive"` // STUN servers that answered
-	LocalAddr     string    `json:"local_addr,omitempty"`
-	At            time.Time `json:"at"`
+	Class         NATClass `json:"class"`
+	StunReachable bool     `json:"stun_reachable"`
+	Responsive    int      `json:"responsive"` // STUN servers that answered
+	LocalAddr     string   `json:"local_addr,omitempty"`
+	// DualStack reports a global-unicast IPv6 interface address: the v4
+	// classification does not rule out v6 direct connectivity, so
+	// relay-pinning consumers must exempt dual-stack machines.
+	DualStack bool      `json:"dual_stack"`
+	At        time.Time `json:"at"`
+}
+
+// SetForceRelay updates the ForceRelay pin applied to sessions constructed
+// after this call; existing sessions keep their already-made transport
+// decision. The device application feeds its "auto" NAT policy through
+// here — the observation callback fires shortly after Dial, and the next
+// client session then skips the doomed ICE arbitration on symmetric-v4
+// networks. Safe for concurrent use.
+func (s *Session) SetForceRelay(pinned bool) {
+	s.mu.Lock()
+	s.cfg.ForceRelay = pinned
+	s.mu.Unlock()
+}
+
+// sessionConfig snapshots the live config under the session lock.
+func (s *Session) sessionConfig() SignalingConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg
 }
 
 // NATObservation returns the latest NAT observation (nil before the first
@@ -158,6 +181,7 @@ func (s *Session) observeNAT(welcome *Welcome) {
 		StunReachable: len(res.MappedByServer) > 0,
 		Responsive:    len(res.MappedByServer),
 		LocalAddr:     res.LocalAddr,
+		DualStack:     res.DualStack,
 		At:            time.Now(),
 	}
 	s.natObs.Store(obs)
@@ -165,6 +189,7 @@ func (s *Session) observeNAT(welcome *Welcome) {
 		"class", string(res.Class),
 		"stun_responsive", obs.Responsive,
 		"local_addr", res.LocalAddr,
+		"dual_stack", res.DualStack,
 		"prefer_relay", PreferRelay(res.Class),
 	)
 	if cb := s.OnNATObservation; cb != nil {
@@ -320,7 +345,7 @@ func (s *Session) idleSweepLoop() {
 // traffic for longer than the configured idle timeout. Teardown runs outside
 // the session lock (teardownWithReason re-locks internally).
 func (s *Session) sweepIdleSessions() {
-	timeout := s.cfg.sessionIdleTimeout()
+	timeout := s.sessionConfig().sessionIdleTimeout()
 	if timeout < 0 {
 		return
 	}

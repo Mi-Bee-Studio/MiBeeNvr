@@ -45,6 +45,14 @@ type NATProbeResult struct {
 	Class          NATClass
 	MappedByServer map[string]string // server addr -> mapped ip:port
 	LocalAddr      string
+	// DualStack reports a global-unicast IPv6 address on any interface.
+	// The classification probes UDP/IPv4 only, so a symmetric verdict says
+	// nothing about IPv6 direct connectivity — ICE can still pair via v6
+	// host candidates on a dual-stack machine. Relay-pinning decisions fed
+	// by the class must exempt such machines. The check is address-based
+	// (no route/firewall probing): a stale or firewalled v6 address only
+	// degrades to the unpinned default behavior, never worse.
+	DualStack bool
 }
 
 // DetectNATClass classifies the local NAT by querying TWO OR MORE STUN
@@ -59,7 +67,7 @@ type NATProbeResult struct {
 // servers should list ≥2 distinct STUN endpoints ("host:port"). Results
 // with fewer than two responsive servers are NATUnknown (no compare).
 func DetectNATClass(_ context.Context, servers []string, timeout time.Duration) NATProbeResult {
-	res := NATProbeResult{Class: NATUnknown, MappedByServer: map[string]string{}}
+	res := NATProbeResult{Class: NATUnknown, MappedByServer: map[string]string{}, DualStack: globalIPv6Probe()}
 	if len(servers) < 2 || timeout <= 0 {
 		return res
 	}
@@ -158,6 +166,40 @@ func localInterfaceIPs() map[string]bool {
 		}
 	}
 	return out
+}
+
+// globalIPv6Probe reports whether any interface carries a globally routable
+// IPv6 address. Swappable in tests — host interface state is not
+// controllable from a unit test (same pattern as the auto-endpoint hooks).
+var globalIPv6Probe = func() bool {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, ifc := range ifaces {
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipnet.IP
+			sixteen := ip.To16()
+			if ip.To4() != nil || sixteen == nil || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			// ULA (fc00::/7) counts as global-unicast to Go but is not
+			// globally routable — not a v6 direct-connectivity path.
+			if sixteen[0]&0xfe == 0xfc {
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // fanOutStunRequests sends one Binding request per server over the shared

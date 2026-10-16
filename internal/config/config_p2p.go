@@ -7,7 +7,62 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
+
+// P2PForceRelay 是 p2p.force_relay 三态：""（或 false）保持历史行为
+// （直连优先仲裁，逐字节一致）；true 恒钉 relay（跳过 ICE 仲裁）；
+// auto 按最近一次 NAT 观测动态决定——v4 对称 NAT 且无全局 IPv6 时钉
+// relay（跳过注定失败的仲裁窗），其余保持直连优先。YAML 同时接受
+// bool 与字符串写法。
+type P2PForceRelay string
+
+const (
+	// ForceRelayDefault（空/false）：历史直连优先仲裁。
+	ForceRelayDefault P2PForceRelay = ""
+	// ForceRelayAlways（true）：每个会话不经 ICE 仲裁直接落 relay。
+	ForceRelayAlways P2PForceRelay = "true"
+	// ForceRelayAuto：按 NAT 观测动态决定。
+	ForceRelayAuto P2PForceRelay = "auto"
+)
+
+// UnmarshalYAML 接受 bool（true/false）与字符串（"true"/"false"/"auto"）
+// 两种写法；其余值为配置错误。
+func (f *P2PForceRelay) UnmarshalYAML(node *yaml.Node) error {
+	var b bool
+	if err := node.Decode(&b); err == nil {
+		if b {
+			*f = ForceRelayAlways
+		} else {
+			*f = ForceRelayDefault
+		}
+		return nil
+	}
+	var s string
+	if err := node.Decode(&s); err != nil {
+		return fmt.Errorf("p2p.force_relay: want bool or \"true\"/\"false\"/\"auto\"")
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "false":
+		*f = ForceRelayDefault
+	case "true":
+		*f = ForceRelayAlways
+	case "auto":
+		*f = ForceRelayAuto
+	default:
+		return fmt.Errorf("p2p.force_relay: unknown value %q (want true/false/auto)", s)
+	}
+	return nil
+}
+
+// Normalized 返回对外展示/序列化的规范串（"" → "false"）。
+func (f P2PForceRelay) Normalized() string {
+	if f == ForceRelayDefault {
+		return "false"
+	}
+	return string(f)
+}
 
 // P2PConfig 配置外网 P2P 兜底链路（设备角色，内嵌 MiBee P2P SDK）。
 //
@@ -51,6 +106,13 @@ type P2PConfig struct {
 
 	// TransportTimeout 是单次 ICE/DataChannel 建立预算（含 relay 仲裁）。
 	TransportTimeoutSec int `yaml:"transport_timeout_s"`
+
+	// ForceRelay 钉选传输仲裁：""（默认，含 false）保持直连优先仲裁；
+	// "true" 每个会话跳过 ICE 仲裁直接落 relay；"auto" 按最近一次 NAT
+	// 观测动态决定（v4 对称 NAT 且无全局 IPv6 → 钉 relay，跳过注定失败
+	// 的仲裁窗；其余直连优先）。决策与原因见 /api/p2p/status 的
+	// transport_decision / decision_reason。
+	ForceRelay P2PForceRelay `yaml:"force_relay"`
 
 	// RedialMinIntervalSec 是会话彻底失败后的最小重拨间隔（防锤信令）。
 	RedialMinIntervalSec int `yaml:"redial_min_interval_s"`

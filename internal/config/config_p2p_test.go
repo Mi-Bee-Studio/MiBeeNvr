@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestP2PDefaults(t *testing.T) {
@@ -140,5 +142,49 @@ func TestP2PValidateIntegration(t *testing.T) {
 	cfg.P2P.Password = "p"
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("validate: %v", err)
+	}
+}
+
+// TestP2PForceRelayTriState：bool 与字符串两种 YAML 写法都接受，垃圾值
+// 报错；Normalized 把空值展示为 "false"。
+func TestP2PForceRelayTriState(t *testing.T) {
+	cases := []struct {
+		snippet string
+		want    P2PForceRelay
+	}{
+		{"force_relay: true", ForceRelayAlways},
+		{"force_relay: false", ForceRelayDefault},
+		{"force_relay: True", ForceRelayAlways},
+		{`force_relay: "true"`, ForceRelayAlways},
+		{`force_relay: "false"`, ForceRelayDefault},
+		{`force_relay: "auto"`, ForceRelayAuto},
+		{`force_relay: "AUTO"`, ForceRelayAuto},
+		{`force_relay: ""`, ForceRelayDefault},
+	}
+	for _, c := range cases {
+		var wrap struct {
+			P2P P2PConfig `yaml:"p2p"`
+		}
+		if err := yaml.Unmarshal([]byte("p2p:\n  "+c.snippet+"\n"), &wrap); err != nil {
+			t.Errorf("parse %q: %v", c.snippet, err)
+			continue
+		}
+		if wrap.P2P.ForceRelay != c.want {
+			t.Errorf("parse %q = %q, want %q", c.snippet, wrap.P2P.ForceRelay, c.want)
+		}
+	}
+
+	var wrap struct {
+		P2P P2PConfig `yaml:"p2p"`
+	}
+	if err := yaml.Unmarshal([]byte("p2p:\n  force_relay: sometimes\n"), &wrap); err == nil {
+		t.Error("garbage force_relay must be rejected")
+	}
+
+	if got := P2PForceRelay("").Normalized(); got != "false" {
+		t.Errorf("Normalized(\"\") = %q, want false", got)
+	}
+	if got := ForceRelayAuto.Normalized(); got != "auto" {
+		t.Errorf("Normalized(auto) = %q", got)
 	}
 }

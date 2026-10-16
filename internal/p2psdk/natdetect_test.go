@@ -182,3 +182,30 @@ func TestDetectNATClass_SymmetricVsDirect(t *testing.T) {
 	assert.Equal(t, NATUnknown, res.Class)
 	assert.False(t, PreferRelay(res.Class))
 }
+
+// TestDetectNATClass_DualStackFlag：DualStack 与 STUN 探测正交，即使探
+// 测没跑（servers<2）也如实上报接口 v6 形态——auto 钉选消费它豁免
+// v4 对称判定。
+func TestDetectNATClass_DualStackFlag(t *testing.T) {
+	saved := globalIPv6Probe
+	t.Cleanup(func() { globalIPv6Probe = saved })
+
+	globalIPv6Probe = func() bool { return true }
+	res := DetectNATClass(context.Background(), nil, 0)
+	assert.True(t, res.DualStack)
+	assert.Equal(t, NATUnknown, res.Class, "no servers must stay unknown")
+
+	globalIPv6Probe = func() bool { return false }
+	res = DetectNATClass(context.Background(), nil, 0)
+	assert.False(t, res.DualStack)
+}
+
+// TestSessionSetForceRelay：钉选写回对后续会话可见（auto 模式的执行
+// 面），读回走锁快照。
+func TestSessionSetForceRelay(t *testing.T) {
+	s := &Session{}
+	s.SetForceRelay(true)
+	assert.True(t, s.sessionConfig().ForceRelay)
+	s.SetForceRelay(false)
+	assert.False(t, s.sessionConfig().ForceRelay)
+}
