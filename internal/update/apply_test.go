@@ -379,7 +379,7 @@ func lastLine(s string) string {
 // (#647). Repeated polls of the same tag must not re-trigger.
 func TestChecker_SetOnAvailable_FiresOncePerTag(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"tag_name":"v9.9.9","html_url":"x"}`)
+		fmt.Fprint(w, `[{"tag_name":"v9.9.9","html_url":"x"}]`)
 	}))
 	defer srv.Close()
 

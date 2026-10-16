@@ -19,10 +19,10 @@ func TestRefreshForcesNetworkFetch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		json.NewEncoder(w).Encode([]map[string]any{{
 			"tag_name": "v0.12.0", "name": "R", "html_url": "https://x",
 			"published_at": "2026-01-01T00:00:00Z", "body": "notes",
-		})
+		}})
 	}))
 	defer srv.Close()
 

@@ -76,13 +76,13 @@ func newTestServer(t *testing.T, tag string, etag string) (*httptest.Server, *in
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		resp := map[string]any{
+		resp := []map[string]any{{
 			"tag_name":     tag,
 			"name":         "Release " + tag,
 			"html_url":     "https://example.com/release",
 			"published_at": "2026-01-01T00:00:00Z",
 			"body":         "## What's new\n- fixes",
-		}
+		}}
 		w.Header().Set("Content-Type", "application/json")
 		if etag != "" {
 			w.Header().Set("ETag", etag)
@@ -198,5 +198,116 @@ func TestFetchAndCache_ErrorOn500(t *testing.T) {
 	// Status() still returns a sane pre-fetch value, never panics.
 	if st := c.Status(); st.Current != "v0.10.0" {
 		t.Fatalf("Current = %q after failed fetch", st.Current)
+	}
+}
+
+// TestFetchAndCache_SkipsNonNVRTags guards the companion-product masking
+// bug: the repo's release page also carries e.g. "mibee-vision-vX.Y.Z"
+// releases (newer by publish date than any NVR release). The checker must
+// pick the newest vX.Y.Z-shaped non-prerelease NVR tag, never let a
+// non-NVR tag become "latest" — or v0.13 users would never hear about
+// v0.14 while a vision release sits on top.
+func TestFetchAndCache_SkipsNonNVRTags(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Newest-first, as the real list endpoint orders them.
+		json.NewEncoder(w).Encode([]map[string]any{
+			{
+				"tag_name": "mibee-vision-v0.2.0", "name": "Vision", "html_url": "https://x/vision",
+				"published_at": "2026-10-20T00:00:00Z", "body": "vision lite",
+			},
+			{
+				"tag_name": "v0.14.0-beta.1", "name": "beta", "html_url": "https://x/beta",
+				"published_at": "2026-10-18T00:00:00Z", "prerelease": true, "body": "beta",
+			},
+			{
+				"tag_name": "v0.14.0", "name": "NVR v0.14.0", "html_url": "https://x/v014",
+				"published_at": "2026-10-15T00:00:00Z", "body": "nvr release",
+			},
+			{
+				"tag_name": "v0.13.0", "name": "NVR v0.13.0", "html_url": "https://x/v013",
+				"published_at": "2026-09-25T00:00:00Z", "body": "older nvr",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	// A v0.13.0 user must be told about v0.14.0 despite the newer vision
+	// and prerelease entries above it.
+	c := New("v0.13.0", "owner/repo", "stable", time.Hour)
+	c.endpoint = srv.URL
+	st, err := c.fetchAndCache(context.Background())
+	if err != nil {
+		t.Fatalf("fetchAndCache: %v", err)
+	}
+	if st.Latest != "v0.14.0" {
+		t.Fatalf("Latest = %q, want v0.14.0 (vision/prerelease tags must be skipped)", st.Latest)
+	}
+	if !st.UpdateAvailable {
+		t.Fatal("v0.13.0 → v0.14.0 update was masked by non-NVR releases")
+	}
+	if st.HTMLURL != "https://x/v014" {
+		t.Fatalf("HTMLURL = %q, want the v0.14.0 release URL", st.HTMLURL)
+	}
+}
+
+// TestFetchAndCache_NoNVRReleaseKeepsCache: a release list with only
+// non-NVR tags is an error, and the previous cache survives it.
+func TestFetchAndCache_NoNVRReleaseKeepsCache(t *testing.T) {
+	t.Helper()
+	srvGood, _, _ := newTestServer(t, "v0.13.0", "")
+	defer srvGood.Close()
+	srvVisionOnly := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]any{
+			{
+				"tag_name": "mibee-vision-v0.2.0", "name": "Vision", "html_url": "https://x/v",
+				"published_at": "2026-10-20T00:00:00Z", "body": "vision",
+			},
+		})
+	}))
+	defer srvVisionOnly.Close()
+
+	c := New("v0.13.0", "owner/repo", "stable", time.Hour)
+	c.endpoint = srvGood.URL
+	if _, err := c.fetchAndCache(context.Background()); err != nil {
+		t.Fatalf("seed fetch: %v", err)
+	}
+	c.endpoint = srvVisionOnly.URL
+	if _, err := c.fetchAndCache(context.Background()); err == nil {
+		t.Fatal("vision-only release list must be an error")
+	}
+	if got := c.Status(); got.Latest != "v0.13.0" {
+		t.Fatalf("cache clobbered by failed fetch: %+v", got)
+	}
+}
+
+// TestNewestNVRRelease_ShapeCases pins the tag-shape filter itself.
+func TestNewestNVRRelease_ShapeCases(t *testing.T) {
+	t.Helper()
+	pick := func(tags ...string) (githubRelease, bool) {
+		rels := make([]githubRelease, len(tags))
+		for i, tag := range tags {
+			rels[i] = githubRelease{TagName: tag}
+		}
+		return newestNVRRelease(rels)
+	}
+	if rel, ok := pick("mibee-vision-v0.1.0", "v0.13.0"); !ok || rel.TagName != "v0.13.0" {
+		t.Fatalf("vision tag leaked: %+v ok=%v", rel, ok)
+	}
+	if rel, ok := pick("0.13.0"); !ok || rel.TagName != "0.13.0" {
+		t.Fatalf("v-less semver tag should pass the shape filter: %+v ok=%v", rel, ok)
+	}
+	if _, ok := pick("mibee-vision-v0.1.0", "nightly", "v0.13", "release-1"); ok {
+		t.Fatal("no vX.Y.Z-shaped tag may match")
+	}
+	draft := []githubRelease{{TagName: "v0.14.0", Draft: true}, {TagName: "v0.13.0"}}
+	if rel, ok := newestNVRRelease(draft); !ok || rel.TagName != "v0.13.0" {
+		t.Fatalf("draft release leaked: %+v ok=%v", rel, ok)
+	}
+	pre := []githubRelease{{TagName: "v0.14.0-preview.1", Prerelease: true}, {TagName: "v0.13.0"}}
+	if rel, ok := newestNVRRelease(pre); !ok || rel.TagName != "v0.13.0" {
+		t.Fatalf("prerelease release leaked: %+v ok=%v", rel, ok)
 	}
 }
