@@ -20,7 +20,7 @@ func TestAdvertiseResolutionDiagnosable(t *testing.T) {
 	}
 	withAutoHooks(t, h)
 
-	res := resolveAdvertiseDetailed("auto", []string{"stun:8.134.136.138:13477"})
+	res := resolveAdvertiseDetailed("auto", []string{"stun:198.51.100.8:13477"})
 	if res.addr != "" || res.mode != "" || !res.fresh || !res.ladder {
 		t.Fatalf("total failure resolution = %+v; want fresh negative ladder", res)
 	}

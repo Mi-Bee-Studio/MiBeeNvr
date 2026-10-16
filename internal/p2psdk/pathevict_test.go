@@ -14,9 +14,9 @@ func TestPathologicalDirectPair(t *testing.T) {
 		snap StatsSnapshot
 		want bool
 	}{
-		{"the observed artifact (docker-bridge prflx, 360ms)", StatsSnapshot{
+		{"docker-bridge prflx shape with terrible RTT (360ms)", StatsSnapshot{
 			ICERemoteCandidateType:    "prflx",
-			ICERemoteCandidateAddress: "192.168.193.63",
+			ICERemoteCandidateAddress: "192.168.77.63",
 			ICERTTSeconds:             0.363,
 		}, true},
 		{"artifact with stats lag (no RTT yet)", StatsSnapshot{
@@ -25,22 +25,22 @@ func TestPathologicalDirectPair(t *testing.T) {
 		}, true},
 		{"genuine same-LAN prflx (3ms) stays", StatsSnapshot{
 			ICERemoteCandidateType:    "prflx",
-			ICERemoteCandidateAddress: "192.168.63.52",
+			ICERemoteCandidateAddress: "192.168.77.52",
 			ICERTTSeconds:             0.003,
 		}, false},
 		{"public prflx stays", StatsSnapshot{
 			ICERemoteCandidateType:    "prflx",
-			ICERemoteCandidateAddress: "121.8.0.156",
+			ICERemoteCandidateAddress: "198.51.100.156",
 			ICERTTSeconds:             0.4,
 		}, false},
 		{"signaled private host candidate stays", StatsSnapshot{
 			ICERemoteCandidateType:    "host",
-			ICERemoteCandidateAddress: "192.168.63.52",
+			ICERemoteCandidateAddress: "192.168.77.52",
 			ICERTTSeconds:             0.363,
 		}, false},
 		{"relay-nominated pair stays", StatsSnapshot{
 			ICERemoteCandidateType:    "relay",
-			ICERemoteCandidateAddress: "8.134.136.138",
+			ICERemoteCandidateAddress: "203.0.113.20",
 		}, false},
 		{"garbage address stays", StatsSnapshot{
 			ICERemoteCandidateType:    "prflx",
