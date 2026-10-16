@@ -104,10 +104,11 @@ type P2PConfig struct {
 	// （PPPoE/部分企业出口）可调；无 RFC 8829 协商，是静态旋钮。
 	ICEReceiveMTU int `yaml:"ice_receive_mtu"`
 
-	// TunnelMaxPayloadBytes 覆盖隧道分片大小（字节；0 = 默认 32KiB——
-	// 24h 跨段 WiFi 实测 32KiB 上行吞吐比 16KiB 高 ~20%）。接收方不校验
-	// 分片大小，两端不同设置互通；上限 32KiB 由 SCTP 64KiB 消息天花板
-	// 约束（base64 膨胀 4/3）。
+	// TunnelMaxPayloadBytes 覆盖隧道分片大小（字节；0 = 默认 16KiB——与
+	// 移动端对齐，relay TCP 路径的重传单元与在途字节减半。直连 SCTP 路径
+	// 32KiB 实测上行吞吐高 ~20%，但两者都远超实际视频码率，要该余量的
+	// 部署可显式调大）。接收方不校验分片大小，两端不同设置互通；上限
+	// 32KiB 由 SCTP 64KiB 消息天花板约束（base64 膨胀 4/3）。
 	TunnelMaxPayloadBytes int `yaml:"tunnel_max_payload_bytes"`
 
 	// Association 是「App 发起账号授权关联」的本地状态（产品化 M1，
@@ -235,7 +236,7 @@ func validateICETuning(c *P2PConfig) error {
 		return fmt.Errorf("p2p.ice_receive_mtu must be 0 (library default) or 576..65535, got %d", mtu)
 	}
 	if n := c.TunnelMaxPayloadBytes; n != 0 && (n < 4096 || n > 32768) {
-		return fmt.Errorf("p2p.tunnel_max_payload_bytes must be 0 (default 32768) or 4096..32768, got %d", n)
+		return fmt.Errorf("p2p.tunnel_max_payload_bytes must be 0 (default 16384) or 4096..32768, got %d", n)
 	}
 	return nil
 }
