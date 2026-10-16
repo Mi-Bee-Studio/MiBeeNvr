@@ -174,6 +174,7 @@ type Metrics struct {
 	P2PICERTTMillis        *prometheus.HistogramVec // nominated ICE pair RTT in milliseconds
 	P2PTunnelDroppedFrames prometheus.Gauge         // nvr_p2p_tunnel_dropped_frames — cumulative inbound tunnel frames dropped at delivery queues
 	P2PNATClass            *prometheus.GaugeVec     // nvr_p2p_nat_class{class} — latest NAT observation (1 = current class)
+	P2PNATDualStack        prometheus.Gauge         // nvr_p2p_nat_dual_stack — 1 = global-unicast IPv6 present (v4 symmetric verdict exempted from relay pinning)
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -702,6 +703,10 @@ func NewMetrics() *Metrics {
 		Name: "nvr_p2p_nat_class",
 		Help: "Latest NAT behavior observation (1 on the current class label: public|cone|symmetric|unknown). symmetric = classic ICE hole punching with another symmetric peer is mathematically infeasible — relay is the path.",
 	}, []string{"class"})
+	p2pNATDualStack := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_p2p_nat_dual_stack",
+		Help: "1 = a global-unicast IPv6 interface address exists. The NAT class probe is IPv4-only, so a symmetric verdict cannot rule out v6 direct connectivity — relay-pinning decisions exempt dual-stack machines.",
+	})
 
 	reg.MustRegister(
 		recordingBytesTotal,
@@ -807,6 +812,7 @@ func NewMetrics() *Metrics {
 		p2pICERTTMillis,
 		p2pTunnelDropped,
 		p2pNATClass,
+		p2pNATDualStack,
 
 		// Rolling bucket retention (#764) + pixgate sampler telemetry (#699).
 		// These were shipped UNREGISTERED in #783/#786 — the collectors
@@ -931,6 +937,7 @@ func NewMetrics() *Metrics {
 		P2PICERTTMillis:                p2pICERTTMillis,
 		P2PTunnelDroppedFrames:         p2pTunnelDropped,
 		P2PNATClass:                    p2pNATClass,
+		P2PNATDualStack:                p2pNATDualStack,
 	}
 }
 
@@ -1128,6 +1135,19 @@ func (m *Metrics) SetP2PTunnelDroppedFrames(total uint64) {
 		return
 	}
 	m.P2PTunnelDroppedFrames.Set(float64(total))
+}
+
+// SetP2PNATDualStack publishes whether the machine carries a global-unicast
+// IPv6 address (nil-safe).
+func (m *Metrics) SetP2PNATDualStack(present bool) {
+	if m == nil || m.P2PNATDualStack == nil {
+		return
+	}
+	if present {
+		m.P2PNATDualStack.Set(1)
+	} else {
+		m.P2PNATDualStack.Set(0)
+	}
 }
 
 // SetP2PNATClass publishes the observed NAT class — 1 on the current class,

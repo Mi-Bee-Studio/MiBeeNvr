@@ -50,6 +50,7 @@ func (h *Handler) handleGetP2PSettings(w http.ResponseWriter, _ *http.Request) {
 		"password_configured":         c.Password != "",
 		"client_id":                   c.ClientID,
 		"transport_timeout_s":         c.TransportTimeoutSec,
+		"force_relay":                 c.ForceRelay.Normalized(),
 		"max_clients":                 c.MaxClients,
 		"device_key_configured":       c.DeviceKeyPath != "",
 		"advertise":                   c.Advertise,
@@ -81,6 +82,7 @@ func (h *Handler) handleUpdateP2PSettings(w http.ResponseWriter, r *http.Request
 		Password                 *string `json:"password"`
 		ClearCredentials         *bool   `json:"clear_credentials"`
 		TransportTimeoutSec      *int    `json:"transport_timeout_s"`
+		ForceRelay               *string `json:"force_relay"`
 		MaxClients               *int    `json:"max_clients"`
 		Advertise                *string `json:"advertise"`
 		ICEKeepaliveIntervalMS   *int    `json:"ice_keepalive_interval_ms"`
@@ -126,6 +128,19 @@ func (h *Handler) handleUpdateP2PSettings(w http.ResponseWriter, r *http.Request
 	}
 	if body.TransportTimeoutSec != nil {
 		c.TransportTimeoutSec = *body.TransportTimeoutSec
+	}
+	if body.ForceRelay != nil {
+		switch v := strings.ToLower(strings.TrimSpace(*body.ForceRelay)); v {
+		case "", "false":
+			c.ForceRelay = config.ForceRelayDefault
+		case "true":
+			c.ForceRelay = config.ForceRelayAlways
+		case "auto":
+			c.ForceRelay = config.ForceRelayAuto
+		default:
+			WriteError(w, http.StatusBadRequest, "force_relay must be true/false/auto")
+			return
+		}
 	}
 	if body.MaxClients != nil {
 		c.MaxClients = *body.MaxClients

@@ -699,6 +699,11 @@ observability:
 #   client_id: "p2p-signaling"
 #   token_endpoint: ""            # empty = derived from server_url
 #   transport_timeout_s: 20
+#   force_relay: "false"          # transport arbitration pin: "false" (default) = direct-first
+#                                 # ICE arbitration; "true" = every session goes relay directly;
+#                                 # "auto" = latest NAT observation decides (v4 symmetric NAT
+#                                 # without global IPv6 pins relay, skipping the doomed
+#                                 # arbitration window). Decision visible in /api/p2p/status.
 #   redial_min_interval_s: 30
 #   max_clients: 0                # 0 = license quota, else default 3; strictest wins
 #   device_key: ""                # raw Ed25519 key file; signs every hello
