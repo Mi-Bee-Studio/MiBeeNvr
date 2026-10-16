@@ -38,6 +38,12 @@ const (
 	TunnelMessageTypeData    TunnelMessageType = "data"
 	TunnelMessageTypeClose   TunnelMessageType = "close"
 	TunnelMessageTypeE2EEAck TunnelMessageType = "e2ee_ack"
+	// Tunnel-layer RTT probe frames (T2 decomposition): echo is a global
+	// (non-stream) frame; the reply is padded to the requested size so the
+	// measurement exercises data-frame-sized queueing, not a small-packet
+	// side channel. Peers that predate echo simply never answer.
+	TunnelMessageTypeEcho     TunnelMessageType = "echo"
+	TunnelMessageTypeEchoResp TunnelMessageType = "echo_resp"
 )
 
 // TunnelMessage is the envelope for DataChannel tunnel sub-protocol messages.

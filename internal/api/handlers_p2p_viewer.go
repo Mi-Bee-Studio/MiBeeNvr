@@ -34,6 +34,8 @@ type p2pViewerSample struct {
 	// 近 3 窗下行均值 + RTT 判定）——观测字段，采集分布用于后续自动
 	// 降档的阈值校准。
 	BandwidthClass string `json:"bandwidth_class,omitempty"`
+	T2NormalMS     *int   `json:"t2_normal_ms,omitempty"`
+	T2PrioMS       *int   `json:"t2_prio_ms,omitempty"`
 }
 
 const viewerHistoryMaxBytes = 5 << 20 // rotate: <name>.jsonl → <name>-1.jsonl
@@ -73,8 +75,14 @@ type p2pViewerReport struct {
 	// BandwidthClass：App 侧弱带宽分级（good|degraded|starved|unknown），
 	// 旧版 App 不带此字段（空串）。
 	BandwidthClass string `json:"bandwidth_class,omitempty"`
-	BytesTotal     int64  `json:"bytes_total"`
-	AppVersion     string `json:"app_version"`
+	// T2 隧道单跳 RTT（#87 分解：T1=net_rtt_ms / T2=本字段 / T3=rtt_ms）：
+	// 普通车道（业务数据同款排队）与优先车道（控制面体感）各一采样。
+	// 旧版 App 不带。
+	T2NormalMS *int   `json:"t2_normal_ms,omitempty"`
+	T2PrioMS   *int   `json:"t2_prio_ms,omitempty"`
+	T2LaneUsed bool   `json:"t2_lane_used,omitempty"`
+	BytesTotal int64  `json:"bytes_total"`
+	AppVersion string `json:"app_version"`
 }
 
 const p2pViewerSampleCap = 240 // 30s 间隔 ≈ 2h 环形历史
@@ -164,6 +172,8 @@ func (h *Handler) RecordP2pViewerReport(r p2pViewerReport) {
 		e.samples = append(e.samples, p2pViewerSample{
 			At: now, Mode: r.Mode, RttMs: r.RttMs, KbpsUp: r.KbpsUp, KbpsDown: r.KbpsDown,
 			BandwidthClass: r.BandwidthClass,
+			T2NormalMS:     r.T2NormalMS,
+			T2PrioMS:       r.T2PrioMS,
 		})
 		if len(e.samples) > p2pViewerSampleCap {
 			e.samples = e.samples[len(e.samples)-p2pViewerSampleCap:]
@@ -184,6 +194,8 @@ func (h *Handler) RecordP2pViewerReport(r p2pViewerReport) {
 			samples: []p2pViewerSample{{
 				At: now, Mode: r.Mode, RttMs: r.RttMs, KbpsUp: r.KbpsUp, KbpsDown: r.KbpsDown,
 				BandwidthClass: r.BandwidthClass,
+				T2NormalMS:     r.T2NormalMS,
+				T2PrioMS:       r.T2PrioMS,
 			}},
 		}
 	}
@@ -217,6 +229,12 @@ func (h *Handler) handleP2pViewerReport(w http.ResponseWriter, r *http.Request) 
 	default:
 		WriteError(w, http.StatusBadRequest, "bandwidth_class must be good|degraded|starved|unknown")
 		return
+	}
+	for _, v := range []*int{body.T2NormalMS, body.T2PrioMS} {
+		if v != nil && (*v < 0 || *v > 60000) {
+			WriteError(w, http.StatusBadRequest, "t2 rtt out of range")
+			return
+		}
 	}
 	h.RecordP2pViewerReport(body)
 	if raw, err := json.Marshal(struct {
@@ -269,6 +287,9 @@ func (h *Handler) handleGetP2pViewer(w http.ResponseWriter, _ *http.Request) {
 		KbpsUp         int               `json:"kbps_up"`
 		KbpsDown       int               `json:"kbps_down"`
 		BandwidthClass string            `json:"bandwidth_class,omitempty"`
+		T2NormalMS     *int              `json:"t2_normal_ms,omitempty"`
+		T2PrioMS       *int              `json:"t2_prio_ms,omitempty"`
+		T2LaneUsed     bool              `json:"t2_lane_used,omitempty"`
 		BytesTotal     int64             `json:"bytes_total"`
 		AppVersion     string            `json:"app_version"`
 		UpdatedAt      string            `json:"updated_at"`
@@ -315,6 +336,9 @@ func (h *Handler) handleGetP2pViewer(w http.ResponseWriter, _ *http.Request) {
 				"kbps_up":         outs[0].KbpsUp,
 				"kbps_down":       outs[0].KbpsDown,
 				"bandwidth_class": outs[0].BandwidthClass,
+				"t2_normal_ms":    outs[0].T2NormalMS,
+				"t2_prio_ms":      outs[0].T2PrioMS,
+				"t2_lane_used":    outs[0].T2LaneUsed,
 				"bytes_total":     outs[0].BytesTotal,
 				"app_version":     outs[0].AppVersion,
 				"updated_at":      outs[0].UpdatedAt,

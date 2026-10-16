@@ -42,6 +42,11 @@ const (
 	// [24B proof nonce][48B box] sealed with the server static key to this
 	// client's public key over sha256(clientNonce ‖ clientPub).
 	FrameCapServerAuth byte = 0x02
+	// FrameCapEcho (capability byte bit 2, #87): the deployment supports
+	// tunnel-layer echo RTT probes (T2 decomposition). Echo frames ride the
+	// peer tunnel, not the relay — this bit lets clients gate probing on
+	// deployment support so older fleets read "unsupported", not "broken".
+	FrameCapEcho byte = 0x04
 
 	// FrameThrottle (0x08) arrives server → client on the control lane when
 	// the server's inbound rate limit dropped this connection's data frames
