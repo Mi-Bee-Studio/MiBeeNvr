@@ -34,10 +34,13 @@ func newManagerWithONVIFCamera(t *testing.T) (*CameraManager, string) {
 func TestUpdateCameraEvictsCachedONVIFClientOnCredentialChange(t *testing.T) {
 	mgr, camID := newManagerWithONVIFCamera(t)
 
-	// Simulate the established cached client (pre-update credentials).
+	// Simulate the established cached client (pre-update credentials). The
+	// map is guarded by onvifMu — background goroutines from the update path
+	// (recorder restart, subscription reconcile) access it concurrently.
 	stale := onvif.NewClient("http://192.168.62.104:8080/onvif/device_service", "admin", "old-secret")
+	mgr.onvifMu.Lock()
 	mgr.onvifClients[camID] = stale
-	require.Contains(t, mgr.onvifClients, camID)
+	mgr.onvifMu.Unlock()
 
 	pw := "new-rotated-secret"
 	_, err := mgr.UpdateCamera(context.Background(), camID, CameraUpdate{Password: &pw})
@@ -46,7 +49,10 @@ func TestUpdateCameraEvictsCachedONVIFClientOnCredentialChange(t *testing.T) {
 	// The OLD client must be gone. The cache may legitimately hold a FRESH
 	// entry already (the recorder restart re-creates one with the new
 	// secret) — what matters is the stale instance never survives.
-	if cur, ok := mgr.onvifClients[camID]; ok {
+	mgr.onvifMu.Lock()
+	cur, ok := mgr.onvifClients[camID]
+	mgr.onvifMu.Unlock()
+	if ok {
 		assert.NotSame(t, stale, cur,
 			"credential-only update must evict the stale ONVIF client")
 	}
@@ -58,13 +64,18 @@ func TestUpdateCameraEvictsCachedONVIFClientOnCredentialChange(t *testing.T) {
 func TestUpdateCameraKeepsCachedONVIFClientOnUnrelatedChange(t *testing.T) {
 	mgr, camID := newManagerWithONVIFCamera(t)
 
+	mgr.onvifMu.Lock()
 	mgr.onvifClients[camID] = onvif.NewClient("http://192.168.62.104:8080/onvif/device_service", "admin", "secret")
 	cached := mgr.onvifClients[camID]
+	mgr.onvifMu.Unlock()
 
 	name := "renamed"
 	_, err := mgr.UpdateCamera(context.Background(), camID, CameraUpdate{Name: &name})
 	require.NoError(t, err)
 
-	assert.Same(t, cached, mgr.onvifClients[camID],
+	mgr.onvifMu.Lock()
+	cur := mgr.onvifClients[camID]
+	mgr.onvifMu.Unlock()
+	assert.Same(t, cached, cur,
 		"unrelated update must keep the cached client")
 }
