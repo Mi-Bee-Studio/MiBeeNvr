@@ -45,13 +45,13 @@ func TestSnapshotFromReportIPv4Pair(t *testing.T) {
 		"L1": webrtc.ICECandidateStats{
 			ID:            "L1",
 			CandidateType: webrtc.ICECandidateTypeSrflx,
-			IP:            "116.22.2.230",
+			IP:            "203.0.113.30",
 			Port:          51000,
 		},
 		"R1": webrtc.ICECandidateStats{
 			ID:            "R1",
 			CandidateType: webrtc.ICECandidateTypeSrflx,
-			IP:            "61.140.196.84",
+			IP:            "198.51.100.84",
 			Port:          52000,
 		},
 		"P1": webrtc.ICECandidatePairStats{
@@ -68,6 +68,6 @@ func TestSnapshotFromReportIPv4Pair(t *testing.T) {
 
 func TestIPVersionOf(t *testing.T) {
 	assert.Equal(t, "6", ipVersionOf("240e:9400:100::10"))
-	assert.Equal(t, "4", ipVersionOf("116.22.2.230"))
+	assert.Equal(t, "4", ipVersionOf("203.0.113.30"))
 	assert.Empty(t, ipVersionOf(""))
 }

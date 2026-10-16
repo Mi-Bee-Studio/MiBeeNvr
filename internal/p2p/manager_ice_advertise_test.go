@@ -76,7 +76,7 @@ func TestManagerOnStatsExposesICE(t *testing.T) {
 		SessionID:                 "sess-1",
 		ICELocalCandidateType:     "srflx",
 		ICERemoteCandidateType:    "host",
-		ICELocalCandidateAddress:  "121.8.2.41:40000",
+		ICELocalCandidateAddress:  "203.0.113.41:40000",
 		ICERemoteCandidateAddress: "223.5.5.5",
 		ICEIPVersion:              "4",
 		ICERTTSeconds:             0.0235,
