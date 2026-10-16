@@ -504,6 +504,18 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	// Determine if recorder needs restart
 	needsRestart := false
 	onvifEndpointChanged := false
+	// Credential-only updates must also invalidate the cached ONVIF client —
+	// the cache keys on camera_id alone, so a stale client would keep the old
+	// password in memory until restart (found during the #922 push joint-
+	// debug: PUT updated credentials on disk but every SOAP call still 401'd
+	// under the old secret).
+	onvifCredentialsChanged := false
+	if updates.Username != nil && *updates.Username != cam.Username {
+		onvifCredentialsChanged = true
+	}
+	if updates.Password != nil && *updates.Password != cam.Password {
+		onvifCredentialsChanged = true
+	}
 	if updates.URL != nil && *updates.URL != cam.URL {
 		needsRestart = true
 	}
@@ -734,10 +746,10 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		segDur = recorder.DefaultSegmentDur
 	}
 
-	// If ONVIF endpoint changed, close cached client so a fresh one is created.
-	// CloseONVIFClient takes onvifMu + deviceInfoMu (NOT configMu), so it is
-	// safe under the held lock.
-	if onvifEndpointChanged {
+	// If the ONVIF endpoint or credentials changed, close the cached client
+	// so a fresh one is created. CloseONVIFClient takes onvifMu + deviceInfoMu
+	// (NOT configMu), so it is safe under the held lock.
+	if onvifEndpointChanged || onvifCredentialsChanged {
 		cm.CloseONVIFClient(cam.ID)
 	}
 
