@@ -251,9 +251,10 @@ type codecDriver interface {
 //     after Store makes these reads race-free without a mutex.
 //
 //   - Tier 3 — writeFrames-owned, NO lock (single-goroutine invariant):
-//     trackID, curFinalPath, curTempPath, frameCount, lastFrameTime.
-//     Only the writeFrames goroutine reads/writes these; HTTP handlers and RTP
-//     callbacks MUST NOT touch them.
+//     trackID, curFinalPath, curTempPath, lastFrameTime. Only the writeFrames
+//     goroutine reads/writes these; HTTP handlers and RTP callbacks MUST NOT
+//     touch them. frameCount is writeFrames-owned too but is read by
+//     RecordingStats from HTTP goroutines, so it is an atomic.Int64 (#1001).
 //
 // Note: muxer.MP4Muxer itself is goroutine-safe (WriteSample/WriteAudioSample
 // each take the muxer's own mutex), so concurrent video (writeFrames) and
@@ -357,7 +358,10 @@ type baseRecorder struct {
 	curFinalPath  string
 	curTempPath   string
 	segStart      time.Time
-	frameCount    int
+	// frameCount is Tier-3-owned (writeFrames goroutine is the only writer)
+	// but RecordingStats reads it from HTTP goroutines, so it lives behind an
+	// atomic instead of the Tier-3 plain fields below (#1001).
+	frameCount    atomic.Int64
 	lastFrameTime time.Time
 
 	// lastSegBytes feeds segment preallocation (#757): the previous
@@ -812,7 +816,7 @@ func (b *baseRecorder) writeFrames(done chan struct{}) {
 				"camera_id", b.cfg.CameraID, "error", err)
 			continue
 		}
-		b.frameCount++
+		b.frameCount.Add(1)
 		if b.adaptive != nil {
 			// The frame just observed into the GOP ring is now on disk; a later
 			// timelapse-exit flush into this segment must skip it (issue #473).
@@ -873,7 +877,7 @@ func (b *baseRecorder) writeFlushedGOP(frames []gopFrame) {
 			continue
 		}
 		b.lastFrameTime = f.at
-		b.frameCount++
+		b.frameCount.Add(1)
 	}
 	// The triggering (current) frame follows via the normal write path; its
 	// duration is computed against the last flushed frame's timestamp, and
@@ -1055,7 +1059,7 @@ func (b *baseRecorder) createNewSegment(at time.Time) bool {
 	b.curTempPath = tempPath
 	b.curFinalPath = finalPath
 	b.lastFrameTime = at
-	b.frameCount = 0
+	b.frameCount.Store(0)
 	return true
 }
 
@@ -1139,7 +1143,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 		b.mu.Unlock()
 		b.curTempPath = ""
 		b.curFinalPath = ""
-		b.frameCount = 0
+		b.frameCount.Store(0)
 		return
 	}
 
@@ -1180,7 +1184,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 			StartedAt:  b.segStart,
 			EndedAt:    now,
 			Duration:   duration,
-			FrameCount: b.frameCount,
+			FrameCount: int(b.frameCount.Load()),
 			FileSize:   fileSize,
 		}
 		recordingID = rec.ID
@@ -1209,7 +1213,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 			"camera_id", b.cfg.CameraID, "recording_id", recordingID)
 	}
 
-	if b.frameCount > 0 && finalExists {
+	if b.frameCount.Load() > 0 && finalExists {
 		b.recordSegmentCreated()
 		if fileSize > 0 {
 			b.recordBytes(fileSize)
@@ -1228,7 +1232,7 @@ func (b *baseRecorder) closeCurrentSegment() {
 	b.mu.Unlock()
 	b.curTempPath = ""
 	b.curFinalPath = ""
-	b.frameCount = 0
+	b.frameCount.Store(0)
 }
 
 // handleStorageFailure closes the current segment cleanly without storage I/O
@@ -1244,7 +1248,11 @@ func (b *baseRecorder) handleStorageFailure() {
 		if b.audioTrig != nil {
 			b.audioTrig.ClearWritten()
 		}
+		// ambientFile is mu-guarded (the audio RTP callback reads it under
+		// mu) — close it under the lock, same as closeCurrentSegment (#1001).
+		b.mu.Lock()
 		b.closeAmbientSidecar()
+		b.mu.Unlock()
 		b.muxer.Close()
 		os.Remove(b.curTempPath)
 		os.Remove(b.curFinalPath + ".g711")
@@ -1253,7 +1261,7 @@ func (b *baseRecorder) handleStorageFailure() {
 		b.curTempPath = ""
 		b.curFinalPath = ""
 		b.audioTrackID = 0
-		b.frameCount = 0
+		b.frameCount.Store(0)
 		b.mu.Unlock()
 	}
 	if logNow, ok := shouldLogHealth(b.lastHealthLogAt); ok {
@@ -1353,7 +1361,7 @@ func (b *baseRecorder) RecordingStats() RecordingStats {
 	if b.muxer != nil {
 		st.Segmenting = true
 		st.SegmentElapsedS = time.Since(b.segStart).Seconds()
-		st.SegmentFrames = int64(b.frameCount)
+		st.SegmentFrames = b.frameCount.Load()
 	}
 	b.mu.Unlock()
 	return st
