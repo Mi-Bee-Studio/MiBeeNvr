@@ -22,9 +22,9 @@
 
 ### 第 1 层 —— 生命周期 + 每分段状态，由 `mu` 守护
 
-```
+```text
 status, cancel, done, muxer, audioTrackID, segStart
-```
+```text
 
 `mu` 串行化多字段一致性。`writeFrames` goroutine 是
 `muxer`/`segStart`/`audioTrackID` 的唯一写者；锁的存在是为了**音频 RTP
@@ -35,10 +35,10 @@ status, cancel, done, muxer, audioTrackID, segStart
 
 ### 第 2 层 —— 跨 goroutine 配置，置于 `atomic.Pointer` 之后
 
-```
+```text
 codec  atomic.Pointer[codecParams]   // SPS/PPS/VPS — #219
 audio  atomic.Pointer[audioConfig]   // codec/sampleRate/channels/muxerConfig/g711* — #226
-```
+```text
 
 两者都在 `connectAndRecord` 期间**一次性**写入，被多个 goroutine 读取
 （`writeFrames`、音频 RTP 回调，以及外部 HLS/WebRTC/WS/转发/状态访问
@@ -49,9 +49,9 @@ audio  atomic.Pointer[audioConfig]   // codec/sampleRate/channels/muxerConfig/g7
 
 ### 第 3 层 —— `writeFrames` 独占，无锁（单 goroutine 不变式）
 
-```
+```text
 trackID, curFinalPath, curTempPath, frameCount, lastFrameTime
-```
+```text
 
 只有 `writeFrames` goroutine 读写这些字段。HTTP handler 和 RTP 回调**不得**
 触碰它们——这里刻意不加锁，若要在此添加跨 goroutine 访问，必须把该字段

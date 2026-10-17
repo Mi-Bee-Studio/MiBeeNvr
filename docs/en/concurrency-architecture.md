@@ -25,9 +25,9 @@ enforced by doc-comments on the struct and guarded by `go test -race` (see
 
 ### Tier 1 — lifecycle + per-segment state, guarded by `mu`
 
-```
+```text
 status, cancel, done, muxer, audioTrackID, segStart
-```
+```text
 
 `mu` serializes multi-field consistency. The `writeFrames` goroutine is the
 sole writer of `muxer`/`segStart`/`audioTrackID`; the lock exists for the
@@ -38,10 +38,10 @@ fixed a torn-view bug where `audioTrackID` was published outside that block).
 
 ### Tier 2 — cross-goroutine configuration, behind `atomic.Pointer`
 
-```
+```text
 codec  atomic.Pointer[codecParams]   // SPS/PPS/VPS — #219
 audio  atomic.Pointer[audioConfig]   // codec/sampleRate/channels/muxerConfig/g711* — #226
-```
+```text
 
 Both are written **once** during `connectAndRecord` and read by many goroutines
 (`writeFrames`, the audio RTP callback, and the external HLS/WebRTC/WS/relay/
@@ -53,9 +53,9 @@ writer's reusable buffers.
 
 ### Tier 3 — `writeFrames`-owned, NO lock (single-goroutine invariant)
 
-```
+```text
 trackID, curFinalPath, curTempPath, frameCount, lastFrameTime
-```
+```text
 
 Only the `writeFrames` goroutine reads/writes these. HTTP handlers and RTP
 callbacks MUST NOT touch them — there is intentionally no lock, and adding

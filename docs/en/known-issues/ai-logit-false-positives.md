@@ -21,10 +21,10 @@ covered in green `person` boxes at 100% confidence, regardless of scene
 content. A debug overlay (`data-ai-debug` on the `AiOverlay` canvas) revealed
 the actual worker output:
 
-```
+```text
 camera 0 (78 dets): person:100% | person:100% | person:100% | ...  (×78)
 camera 2 (260 dets): person:100% | person:100% | person:100% | ... (×260)
-```
+```text
 
 Every single detection was `classId=0` (`person`) at `sigmoid→100%`. No other
 class ever appeared in the background noise. Meanwhile a real human walking
@@ -61,7 +61,7 @@ be large positives). The original code:
 const score = sigmoid(rawScore);   // normalize logit → probability
 if (score > maxScore) { ... }
 if (maxScore < confidenceThreshold) continue;
-```
+```text
 
 `sigmoid` maps any positive logit to `> 0.5`. So a background patch with a
 weakly-positive `person` logit (say `0.3`) became `sigmoid(0.3) = 0.57` and
@@ -74,9 +74,9 @@ A garbled / partially-corrupted decoded frame (common with H.265 streams —
 occasional decode errors feed the model noise instead of pixels) makes the
 model emit **absurdly large logits**. Observed values on the failing camera:
 
-```
+```text
 person raw logits: 62932, 15351, 11356, 2620, 15324, ...
-```
+```text
 
 `sigmoid(62932)` is `1.0` to floating-point precision. `sigmoid(2620)` is `1.0`.
 So **every** exploding-logit box reads as `100%` confidence, and **no threshold
@@ -105,7 +105,7 @@ if (maxRaw > MAX_VALID_LOGIT) continue;
 // Sigmoid to normalize, THEN threshold (a 0.95 threshold ≈ logit 2.94).
 const maxScore = sigmoid(maxRaw);
 if (maxScore < confidenceThreshold) continue;
-```
+```text
 
 Two changes:
 1. **Logit upper bound (`MAX_VALID_LOGIT = 15`)** — drops exploding-logit boxes

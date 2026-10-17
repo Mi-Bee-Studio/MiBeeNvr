@@ -18,10 +18,10 @@
 置信度的绿色 `person` 框。调试覆盖层（`AiOverlay` 画布上的 `data-ai-debug`）
 揭示了 worker 的实际输出：
 
-```
+```text
 camera 0 (78 dets): person:100% | person:100% | person:100% | ...  (×78)
 camera 2 (260 dets): person:100% | person:100% | person:100% | ... (×260)
-```
+```text
 
 每一条检测都是 `classId=0`（`person`），`sigmoid→100%`。背景噪声中从未出现
 其他类别。与此同时，真实走过场景的人偶尔被框成**黄色**（某个"其他"COCO
@@ -56,7 +56,7 @@ YOLOv11 默认的 ONNX 导出输出**原始类别 logit**（无界实数，可�
 const score = sigmoid(rawScore);   // normalize logit → probability
 if (score > maxScore) { ... }
 if (maxScore < confidenceThreshold) continue;
-```
+```text
 
 `sigmoid` 把任何正 logit 都映射到 `> 0.5`。于是一个 `person` logit 微弱为正
 （比如 `0.3`）的背景块变成 `sigmoid(0.3) = 0.57`，轻松越过 `0.5` 阈值。
@@ -67,9 +67,9 @@ if (maxScore < confidenceThreshold) continue;
 一帧花屏 / 部分损坏的解码帧（H.265 流常见——偶发的解码错误喂给模型的是
 噪声而不是像素）会让模型输出**大得离谱的 logit**。故障相机上观测到的值：
 
-```
+```text
 person raw logits: 62932, 15351, 11356, 2620, 15324, ...
-```
+```text
 
 `sigmoid(62932)` 在浮点精度下就是 `1.0`。`sigmoid(2620)` 也是 `1.0`。所以
 **每一个** logit 爆炸的框都读作 `100%` 置信度，**任何阈值（除非 >1.0）
@@ -98,7 +98,7 @@ if (maxRaw > MAX_VALID_LOGIT) continue;
 // Sigmoid to normalize, THEN threshold (a 0.95 threshold ≈ logit 2.94).
 const maxScore = sigmoid(maxRaw);
 if (maxScore < confidenceThreshold) continue;
-```
+```text
 
 两处改动：
 1. **logit 上界（`MAX_VALID_LOGIT = 15`）**——丢弃损坏帧产生的 logit 爆炸框。

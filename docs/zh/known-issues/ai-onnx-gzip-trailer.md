@@ -15,10 +15,10 @@
 
 部署 ONNX Runtime Web（浏览器端 AI 推理）后，每个相机的实时视图都显示：
 
-```
+```text
 AI ✗ Can't create a session. ERROR_CODE: 7, ERROR_MESSAGE:
        Failed to load model because protobuf parsing failed.
-```
+```text
 
 这被提交为 issue #109，标题 "AI detection fails to load model: protobuf
 parsing failed"。错误来自 ORT 的 C++ 核心（`Model::Load` → protobuf
@@ -79,19 +79,19 @@ moov/mdat 结束即停）；而 ONNX 是带严格长度前缀的单条 protobuf 
 把浏览器取回字节的**完整 md5**（而不只是开头）与磁盘字节对比，暴露了
 损坏：
 
-```
+```text
 browser fetched md5 : ee7b0660585856f7e37a10b8c5b29edd   ← 10741417 bytes (corrupted)
 disk md5 (correct)  : df8e6fccb7797fd340b6bb1358a53394   ← 10741397 bytes
                                                                        ↑ +20 bytes
-```
+```text
 
 损坏文件**最后 32 字节**的十六进制转储：
 
-```
+```text
 ... 46 61 6c 73 65 [1f 8b 08 00 00 09 6e 88 00 ff 03 00 00 00 00 00 00 00 00 00]
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                     empty gzip member appended by gz.Close() on an unused writer
-```
+```text
 
 `curl -H "Accept-Encoding: gzip"` 从服务端复现了损坏（完全不涉及浏览器），
 确认这是服务端 bug，不是客户端 bug。
@@ -132,7 +132,7 @@ func (cw *compressWriter) Close() error {
     }
     return cw.gz.Close()
 }
-```
+```text
 
 这是一个**一次性的收尾守卫**——只要有过任何字节经过 `gz`，该旗标在响应
 剩余生命周期内保持为 true，因此正常的压缩响应（JSON、HTML、SSE）仍会正确
