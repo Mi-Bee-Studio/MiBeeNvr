@@ -1,19 +1,25 @@
-import { writable } from 'svelte/store';
-
 export interface Toast {
   id: string;
   message: string;
   type: 'success' | 'error' | 'info' | 'warning';
 }
 
-export const toasts = writable<Toast[]>([]);
+// Module-level $state: the single toast list, reactive across every importer
+// without svelte/store (this retires the last writable store in the codebase).
+let toasts = $state<Toast[]>([]);
+
+// Getter preserves $state reactivity for list consumers (the Toast
+// component's each block) while the variable itself stays unexported.
+export function getToasts(): Toast[] {
+  return toasts;
+}
 
 let idCounter = 0;
 
 export function showToast(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') {
   const id = `toast-${++idCounter}`;
 
-  toasts.update((current) => [...current, { id, message, type }]);
+  toasts = [...toasts, { id, message, type }];
 
   // Auto-dismiss timing scales with severity: errors/warnings carry diagnostic
   // detail the user needs to read and act on, so they persist longer than the
@@ -21,10 +27,10 @@ export function showToast(message: string, type: 'success' | 'error' | 'info' | 
   // vanished before the user finished reading them.
   const duration = type === 'error' || type === 'warning' ? 6000 : 3000;
   setTimeout(() => {
-    toasts.update((current) => current.filter((toast) => toast.id !== id));
+    toasts = toasts.filter((toast) => toast.id !== id);
   }, duration);
 }
 
 export function dismissToast(id: string) {
-  toasts.update((current) => current.filter((toast) => toast.id !== id));
+  toasts = toasts.filter((toast) => toast.id !== id);
 }
