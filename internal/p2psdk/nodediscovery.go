@@ -78,23 +78,12 @@ func DiscoverBestNode(ctx context.Context, nodesURL string, logger *slog.Logger)
 		logger.Warn("node discovery fetch failed — using configured URL", "error", err)
 		return ""
 	}
-	var candidates []string
-	for _, n := range nodes {
-		if n.Online && strings.Contains(n.SignalURL, "://") {
-			candidates = append(candidates, n.SignalURL)
-		}
-	}
+	candidates := onlineSignalURLs(nodes)
 	if len(candidates) == 0 {
 		return ""
 	}
 
-	rtts := probeAll(ctx, candidates)
-	var cands []nodeCand
-	for _, u := range candidates {
-		if d, ok := rtts[u]; ok {
-			cands = append(cands, nodeCand{url: u, rtt: d})
-		}
-	}
+	cands := probeCandidates(ctx, candidates)
 	if len(cands) == 0 {
 		logger.Warn("node discovery: every candidate probe failed — using configured URL")
 		return ""
@@ -120,6 +109,30 @@ func DiscoverBestNode(ctx context.Context, nodesURL string, logger *slog.Logger)
 	discoveryCache[nodesURL] = discoveryResult{best: best, fetched: time.Now()}
 	discoveryMu.Unlock()
 	return best
+}
+
+// onlineSignalURLs returns the signal URLs of online nodes.
+func onlineSignalURLs(nodes []PublicNode) []string {
+	var candidates []string
+	for _, n := range nodes {
+		if n.Online && strings.Contains(n.SignalURL, "://") {
+			candidates = append(candidates, n.SignalURL)
+		}
+	}
+	return candidates
+}
+
+// probeCandidates latency-probes the candidate URLs and keeps the ones
+// that answered.
+func probeCandidates(ctx context.Context, candidates []string) []nodeCand {
+	rtts := probeAll(ctx, candidates)
+	var cands []nodeCand
+	for _, u := range candidates {
+		if d, ok := rtts[u]; ok {
+			cands = append(cands, nodeCand{url: u, rtt: d})
+		}
+	}
+	return cands
 }
 
 // nodeCand is one probed discovery candidate.

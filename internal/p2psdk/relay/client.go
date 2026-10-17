@@ -370,7 +370,7 @@ func (c *Client) Connect(ctx context.Context, serverURL string, serverPubKeyHex 
 	// server advertised it. Soft-fail: single-connection behavior on any
 	// error (old server, network hiccup).
 	if c.SupportsDualConn() {
-		go c.dialCtrlLink()
+		go c.dialCtrlLink() //nolint:gosec,contextcheck // G118: ctrl link outlives connect()
 	}
 	return nil
 }

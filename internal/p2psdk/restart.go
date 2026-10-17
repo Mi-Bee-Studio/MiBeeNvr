@@ -175,10 +175,7 @@ func (p *p2pSession) attemptICERestart() {
 	} else {
 		p.restartFailures++
 		if p.restartFailures >= maxICERestartFailures {
-			if p.restartTimer != nil {
-				p.restartTimer.Stop()
-				p.restartTimer = nil
-			}
+			p.stopRestartTimerLocked()
 			failures := p.restartFailures
 			p.mu.Unlock()
 			p.log().Error("ICE restart failed", "error", err, "consecutive_failures", failures)
@@ -196,6 +193,15 @@ func (p *p2pSession) attemptICERestart() {
 
 	if err != nil {
 		p.log().Error("ICE restart failed", "error", err, "consecutive_failures", failures)
+	}
+}
+
+// stopRestartTimerLocked stops and clears the restart retry timer. The
+// caller holds p.mu.
+func (p *p2pSession) stopRestartTimerLocked() {
+	if p.restartTimer != nil {
+		p.restartTimer.Stop()
+		p.restartTimer = nil
 	}
 }
 

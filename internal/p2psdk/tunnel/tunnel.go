@@ -202,11 +202,6 @@ func New(t peer.Transport, opts ...Option) *Tunnel {
 // Option customizes a Tunnel at construction.
 type Option func(*Tunnel)
 
-// WithMaxPayloadBytes overrides the tunnel fragment size (0/negative is
-// ignored → MaxPayloadBytes). Receivers do not validate fragment size, so
-// senders with different settings interoperate; the SCTP 64 KiB
-// message-size ceiling constrains the upper bound (base64 inflates by 4/3,
-// so 32 KiB payload ≈ 43.7 KiB on the wire).
 // WithRequireE2EE arms the #36③ strict-E2EE policy: a Dial whose peer
 // cannot confirm tunnel-layer encryption fails with ErrE2EERequired rather
 // than degrading to plaintext (opportunistic default unchanged).
@@ -214,6 +209,11 @@ func WithRequireE2EE() Option {
 	return func(t *Tunnel) { t.requireE2EE = true }
 }
 
+// WithMaxPayloadBytes overrides the tunnel fragment size (0/negative is
+// ignored → MaxPayloadBytes). Receivers do not validate fragment size, so
+// senders with different settings interoperate; the SCTP 64 KiB
+// message-size ceiling constrains the upper bound (base64 inflates by 4/3,
+// so 32 KiB payload ≈ 43.7 KiB on the wire).
 func WithMaxPayloadBytes(n int) Option {
 	return func(t *Tunnel) {
 		if n > 0 {

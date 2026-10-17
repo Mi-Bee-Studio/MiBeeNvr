@@ -1,7 +1,6 @@
 package tunnel_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,6 +35,5 @@ func TestRequireE2EEFailsDialOnSilentPeer(t *testing.T) {
 
 	_, err := clientTun.Dial("svc")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, tunnel.ErrE2EERequired),
-		"dial must fail with ErrE2EERequired, got %v", err)
+	assert.ErrorIs(t, err, tunnel.ErrE2EERequired, "dial must fail with ErrE2EERequired")
 }

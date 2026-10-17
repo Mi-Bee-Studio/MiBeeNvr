@@ -41,10 +41,10 @@ func DeriveSessionKey(myPriv, myPub, remotePub [32]byte) ([32]byte, error) {
 		}
 	}
 	h := sha256.New()
-	h.Write(label)
-	h.Write(shared)
-	h.Write(lo)
-	h.Write(hi)
+	_, _ = h.Write(label)
+	_, _ = h.Write(shared)
+	_, _ = h.Write(lo)
+	_, _ = h.Write(hi)
 	var key [KeySize]byte
 	copy(key[:], h.Sum(nil))
 	return key, nil

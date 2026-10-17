@@ -10,6 +10,8 @@ import (
 )
 
 // handleMessage dispatches a parsed signaling message to the right handler.
+//
+//nolint:gocyclo // one-line-per-case message dispatcher; merging cases would change log texts
 func (s *Session) handleMessage(raw []byte) {
 	msg, err := ParseAndValidate(raw)
 	if err != nil {

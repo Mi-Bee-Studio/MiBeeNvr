@@ -87,10 +87,22 @@ func TestEarlyDataBeforeOpenAcrossLanes(t *testing.T) {
 	mustSend(tunnel.TunnelMessage{Type: tunnel.TunnelMessageTypeData, Payload: mustJSONString(t, live)})
 
 	// The two buffered early payloads arrive first, in order, then live.
-	got := readN(t, srvCh, 3, 3*time.Second)
-	assert.Equal(t, "early-1", string(got[0]))
-	assert.Equal(t, "early-2", string(got[1]))
-	assert.Equal(t, "live", string(got[2]))
+	// TCP may coalesce the back-to-back writes into a single Read (or split
+	// one) — only the concatenated byte stream is stable to assert on; the
+	// properties under test are ordering and completeness, not read framing.
+	want := "early-1early-2live"
+	var all []byte
+	deadline := time.After(3 * time.Second)
+	for len(all) < len(want) {
+		select {
+		case r := <-srvCh:
+			require.NoError(t, r.err)
+			all = append(all, r.data...)
+		case <-deadline:
+			t.Fatalf("timeout: got %d/%d bytes: %q", len(all), len(want), all)
+		}
+	}
+	assert.Equal(t, want, string(all))
 }
 
 // TestEarlyDataLostOpenAgesOut (#88①): data with NO open ever arriving is
@@ -134,25 +146,6 @@ func mustJSONString(t testing.TB, v any) string {
 type dualTestRead struct {
 	data []byte
 	err  error
-}
-
-func readN(t testing.TB, ch chan dualTestRead, n int, timeout time.Duration) [][]byte {
-	t.Helper()
-	var out [][]byte
-	deadline := time.After(timeout)
-	for len(out) < n {
-		select {
-		case r := <-ch:
-			require.NoError(t, r.err)
-			out = append(out, r.data)
-		case <-deadline:
-			for i, v := range out {
-				t.Logf("payload[%d]=%q", i, string(v))
-			}
-			t.Fatalf("timeout: got %d/%d payloads", len(out), n)
-		}
-	}
-	return out
 }
 
 // earlyDataTTLOverride exposes the package TTL for tests via a registered

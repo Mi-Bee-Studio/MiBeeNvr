@@ -66,10 +66,10 @@ func (c *Client) dialCtrlLink() {
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	conn, resp, err := dialer.DialContext(ctx, url, nil)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close() // lint: bodyclose — dial failures return the handshake response
-	}
 	cancel()
+	if resp != nil {
+		_ = resp.Body.Close() // success path body is a no-op; error path must close
+	}
 	if err != nil {
 		logger.Warn("relay ctrl link dial failed — staying single-connection", "error", err)
 		return

@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/relay"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2psdk/relay"
 )
 
 func TestEstablishTransport(t *testing.T) {
