@@ -7,6 +7,7 @@ package peer
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -283,6 +284,14 @@ func (s *Session) Connect(_ context.Context, targetPeerID string, serviceName ..
 	}
 	if len(serviceName) > 0 {
 		req.ServiceName = serviceName[0]
+	}
+	// Arm direct-path E2EE upfront (mibeescout#16): the device creates the
+	// DataChannel before the SDP exchange can carry our relay identity, so
+	// hand it over with the request. The keypair exists independently of
+	// any live relay connection.
+	if s.relayClient != nil {
+		callerPub := s.relayClient.PubKey()
+		req.CallerRelayPubKey = hex.EncodeToString(callerPub[:])
 	}
 	if err := s.signal.sendRawMsg(MessageTypeConnectRequest, req); err != nil {
 		return fmt.Errorf("send connect_request: %w", err)

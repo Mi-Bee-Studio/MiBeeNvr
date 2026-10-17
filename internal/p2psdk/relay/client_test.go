@@ -28,6 +28,9 @@ type mockRelayServer struct {
 	mu       sync.Mutex
 	clients  map[[32]byte]*mockClient
 
+	// authOverload: answer client_auth with status 0x03 + close 4005 (#95).
+	authOverload bool
+
 	// silent: when set, the read loop answers nothing (no pong) and never
 	// pushes — simulates a black-holed / half-open path for liveness tests.
 	silent atomic.Bool
@@ -139,6 +142,15 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		authPayload = []byte{0x00, s.caps}
 	} else {
 		authPayload = []byte{0x00}
+	}
+	if s.authOverload {
+		client.mu.Lock()
+		_ = conn.WriteMessage(websocket.BinaryMessage, encodeFrame(FrameServerAuth, []byte{0x03}))
+		client.mu.Unlock()
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(4005, "relay_overloaded"),
+			time.Now().Add(time.Second))
+		return
 	}
 	client.mu.Lock()
 	_ = conn.WriteMessage(websocket.BinaryMessage, encodeFrame(FrameServerAuth, authPayload))

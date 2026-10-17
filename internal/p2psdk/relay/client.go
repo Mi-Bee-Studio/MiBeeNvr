@@ -161,8 +161,20 @@ const (
 var clientDataQueueWait = 45 * time.Second
 
 // NewClient creates an unconnected relay client.
+// ErrOverloaded reports server_auth status 0x03: the relay is at capacity.
+// Back off and retry later (or use another node) — this is NOT an auth
+// failure: the session's keys remain valid. Legacy servers signal the same
+// condition with 0x01 (indistinguishable from a crypto failure).
+var ErrOverloaded = errors.New("relay overloaded (capacity)")
+
 func NewClient() *Client {
-	return &Client{
+	// Identity keys are minted EAGERLY (mibeescout#16): the caller's relay
+	// public key must be available before any relay connection exists —
+	// it rides connect_request to arm direct-path E2EE. A Client's relay
+	// identity is now stable across reconnects, matching the server-side
+	// static-key semantics (#55).
+	pub, priv := GenerateKeyPair()
+	c := &Client{
 		closeCh:      make(chan struct{}),
 		ctrlCh:       make(chan []byte, clientCtrlQueueFrames),
 		hiCh:         make(chan []byte, clientHighQueueFrames),
@@ -170,7 +182,11 @@ func NewClient() *Client {
 		pingInterval: defaultPingInterval,
 		pongTimeout:  defaultPongTimeout,
 		writeTimeout: defaultWriteTimeout,
+
+		pubKey:  pub,
+		privKey: priv,
 	}
+	return c
 }
 
 // SetRemotePeer sets the remote peer's relay public key for Send operations.
@@ -353,7 +369,6 @@ func (c *Client) Connect(ctx context.Context, serverURL string, serverPubKeyHex 
 	defer func() { _ = resp.Body.Close() }()
 	c.conn = conn
 
-	c.pubKey, c.privKey = GenerateKeyPair()
 	if err := c.authenticate(ctx); err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("relay auth: %w", err)
@@ -426,7 +441,13 @@ func (c *Client) authenticate(_ context.Context) error {
 	if ft != FrameServerAuth {
 		return fmt.Errorf("expected server_auth, got 0x%02x", ft)
 	}
-	if len(respPayload) < 1 || respPayload[0] != 0x00 {
+	if len(respPayload) < 1 {
+		return errors.New("relay auth response missing status byte")
+	}
+	if respPayload[0] != 0x00 {
+		if respPayload[0] == 0x03 {
+			return ErrOverloaded // #95: capacity, not a key/box failure
+		}
 		return fmt.Errorf("relay auth rejected (status=0x%02x)", respPayload[0])
 	}
 	// Capability byte (byte 1, #46 v2): legacy servers send only status.
