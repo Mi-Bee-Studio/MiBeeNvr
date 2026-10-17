@@ -186,7 +186,7 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 			"camera_id", r.cfg.CameraID, "old", rtspURL, "new", fixed)
 		rtspURL = fixed
 	}
-	onvifRecLogger.Info("resolved ONVIF stream URI", "camera_id", r.cfg.CameraID, "rtsp_url", rtspURL)
+	onvifRecLogger.Info("resolved ONVIF stream URI", "camera_id", r.cfg.CameraID, "rtsp_url", slogx.RedactURL(rtspURL))
 
 	// Publish rtspURL BEFORE createDelegate: createDelegate → detectEncoding →
 	// probeRTSPEncoding reads r.rtspURL to DESCRIBE the stream and detect the
@@ -470,7 +470,7 @@ func (r *ONVIFRecorder) resolveJPEGEncoding() string {
 		return "JPEG"
 	}
 	if enc := probeRTSPEncodingFor(candidate, r.cfg.Username, r.cfg.Password); enc == "MJPEG" {
-		onvifRecLogger.Info("JPEG device serves MJPEG over RTSP — using RTSP recorder (AVI+audio capable)", "camera_id", r.cfg.CameraID, "rtsp_url", candidate)
+		onvifRecLogger.Info("JPEG device serves MJPEG over RTSP — using RTSP recorder (AVI+audio capable)", "camera_id", r.cfg.CameraID, "rtsp_url", slogx.RedactURL(candidate))
 		r.rtspURL = candidate
 		return "MJPEG"
 	}
@@ -673,17 +673,17 @@ func (r *ONVIFRecorder) probeHTTPMJPEG(ctx context.Context) (string, *http.Respo
 			testURL := base + path
 			resp, probeCancel, err := probeMJPEGHeaders(ctx, client, testURL)
 			if err != nil {
-				onvifRecLogger.Debug("HTTP MJPEG probe candidate failed", "camera_id", r.cfg.CameraID, "url", testURL, "error", err)
+				onvifRecLogger.Debug("HTTP MJPEG probe candidate failed", "camera_id", r.cfg.CameraID, "url", slogx.RedactURL(testURL), "error", err)
 				continue
 			}
 			ct := resp.Header.Get("Content-Type")
 			if !strings.Contains(ct, "multipart/x-mixed-replace") {
 				_ = resp.Body.Close()
 				probeCancel()
-				onvifRecLogger.Debug("HTTP MJPEG probe response", "camera_id", r.cfg.CameraID, "url", testURL, "content_type", ct)
+				onvifRecLogger.Debug("HTTP MJPEG probe response", "camera_id", r.cfg.CameraID, "url", slogx.RedactURL(testURL), "content_type", ct)
 				continue
 			}
-			onvifRecLogger.Info("HTTP MJPEG stream found", "camera_id", r.cfg.CameraID, "url", testURL)
+			onvifRecLogger.Info("HTTP MJPEG stream found", "camera_id", r.cfg.CameraID, "url", slogx.RedactURL(testURL))
 			return testURL, resp, probeCancel, nil
 		}
 	}
@@ -815,11 +815,11 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			if err != nil {
 				onvifRecLogger.Debug("ONVIF GetStreamURIWithProtocol(HTTP) failed", "camera_id", r.cfg.CameraID, "error", err)
 			} else if info != nil && strings.HasPrefix(info.URI, "http://") {
-				onvifRecLogger.Info("ONVIF returned HTTP stream URI", "camera_id", r.cfg.CameraID, "url", info.URI)
+				onvifRecLogger.Info("ONVIF returned HTTP stream URI", "camera_id", r.cfg.CameraID, "url", slogx.RedactURL(info.URI))
 				r.httpJPEGURL = info.URI
 				return r.newHTTPJPEGRecorder(info.URI, nil, nil)
 			} else if info != nil {
-				onvifRecLogger.Debug("ONVIF HTTP protocol returned non-HTTP URI, ignoring", "camera_id", r.cfg.CameraID, "url", info.URI)
+				onvifRecLogger.Debug("ONVIF HTTP protocol returned non-HTTP URI, ignoring", "camera_id", r.cfg.CameraID, "url", slogx.RedactURL(info.URI))
 			}
 		}
 
@@ -841,7 +841,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 		//    Construct best-guess HTTP MJPEG URL from ONVIF endpoint + RTSP path.
 		//    HTTPJPEGRecorder will retry automatically on connection failure.
 		guessURL := r.guessMJPEGURL()
-		onvifRecLogger.Info("HTTP MJPEG probe failed, using best-guess URL", "camera_id", r.cfg.CameraID, "url", guessURL)
+		onvifRecLogger.Info("HTTP MJPEG probe failed, using best-guess URL", "camera_id", r.cfg.CameraID, "url", slogx.RedactURL(guessURL))
 		r.httpJPEGURL = guessURL
 		return r.newHTTPJPEGRecorder(guessURL, nil, nil)
 	default: // H264 or unknown

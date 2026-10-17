@@ -135,14 +135,14 @@ func (cm *CameraManager) createTimelapseSnapshotRecorder(cam config.CameraConfig
 			snapCfg.SnapshotURL = derived
 			logger.Info("auto-derived snapshot URL for timelapse",
 				"camera_id", cam.ID,
-				"url", derived)
+				"url", slogx.RedactURL(derived))
 		}
 	}
 	if snapCfg.SnapshotURL == "" {
 		logger.Warn("no snapshot URL available for snapshot frame source", "camera_id", cam.ID)
 		return nil
 	}
-	logger.Info("creating SnapshotCapturer for timelapse", "camera_id", cam.ID, "url", snapCfg.SnapshotURL)
+	logger.Info("creating SnapshotCapturer for timelapse", "camera_id", cam.ID, "url", slogx.RedactURL(snapCfg.SnapshotURL))
 	return timelapse.NewSnapshotCapturer(snapCfg, cm.store, cm.metrics)
 }
 
