@@ -272,7 +272,11 @@ func buildCoreDeps(deps *appDeps) error {
 			return viewerStore.Verify(token, time.Now())
 		},
 	}, cfg.Auth.Password, authmw.AuthRateLimitConfig{
-		Enabled:       cfg.Auth.RateLimit.Enabled != nil && *cfg.Auth.RateLimit.Enabled,
+		// Default ON (#1005): a default deployment must throttle BasicAuth
+		// brute force on its own instead of leaning entirely on bcrypt cost
+		// as the brake (which doubles as a CPU-DoS surface). Explicit
+		// `rate_limit.enabled: false` opts out.
+		Enabled:       cfg.Auth.RateLimit.Enabled == nil || *cfg.Auth.RateLimit.Enabled,
 		MaxFailures:   cfg.Auth.RateLimit.MaxFailures,
 		WindowMinutes: cfg.Auth.RateLimit.WindowMinutes,
 	})

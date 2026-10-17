@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"crypto/sha256"
 	"net"
 	"net/http"
 	"strings"
@@ -433,7 +434,13 @@ func CheckPassword(password, hash string) bool {
 		return false
 	}
 
-	cacheKey := password + "\x00" + hash
+	// Key by digest, not by the plaintext: the key outlives the call for the
+	// full cache TTL in a global map, and keeping raw passwords resident
+	// widens the blast radius of any memory disclosure. A SHA-256 over
+	// (password, hash) preserves the password-change invalidation the plain
+	// concat key had — different hash ⇒ different key (#1005).
+	keySum := sha256.Sum256([]byte(password + "\x00" + hash))
+	cacheKey := string(keySum[:])
 
 	if v, ok := authCache.Load(cacheKey); ok {
 		entry := v.(authCacheEntry)
