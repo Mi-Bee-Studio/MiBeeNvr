@@ -28,9 +28,8 @@ func TestProcessH264NALUSPSOnly(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	var lastTS uint64
 	// SPS NALU (type 7)
-	r.processH264NALU([]byte{0x67, 0x42, 0xc0, 0x1e}, 0, &lastTS)
+	r.processH264NALU([]byte{0x67, 0x42, 0xc0, 0x1e}, time.Now())
 	require.NotNil(t, r.sps)
 	require.Equal(t, byte(0x67), r.sps[0])
 	// No muxer created (PPS missing)
@@ -43,9 +42,8 @@ func TestProcessH264NALUPPSOnly(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	var lastTS uint64
 	// PPS NALU (type 8)
-	r.processH264NALU([]byte{0x68, 0xce, 0x38, 0x80}, 0, &lastTS)
+	r.processH264NALU([]byte{0x68, 0xce, 0x38, 0x80}, time.Now())
 	require.NotNil(t, r.pps)
 	// No muxer created (SPS missing)
 	require.Nil(t, r.muxer)
@@ -57,9 +55,8 @@ func TestProcessH264NALUIDRWithoutSPSPPS(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	var lastTS uint64
 	// IDR NALU (type 5) without SPS/PPS — should be dropped
-	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
+	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, time.Now())
 	require.Nil(t, r.muxer)
 }
 
@@ -71,9 +68,8 @@ func TestProcessH264NALUNonIDRWithoutMuxer(t *testing.T) {
 	r.sps = []byte{0x67, 0x42}
 	r.pps = []byte{0x68, 0xce}
 
-	var lastTS uint64
 	// Non-IDR (type 1) before muxer is created — should be dropped
-	r.processH264NALU([]byte{0x41, 0x01, 0x02}, 0, &lastTS)
+	r.processH264NALU([]byte{0x41, 0x01, 0x02}, time.Now())
 	require.Nil(t, r.muxer)
 }
 
@@ -83,12 +79,11 @@ func TestProcessH264NALUSPSChange(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processH264NALU([]byte{0x67, 0x42, 0xc0, 0x1e}, 0, &lastTS)
+	r.processH264NALU([]byte{0x67, 0x42, 0xc0, 0x1e}, time.Now())
 	require.NotNil(t, r.sps)
 
 	// New SPS should replace old
-	r.processH264NALU([]byte{0x67, 0x42, 0x00, 0x0a}, 0, &lastTS)
+	r.processH264NALU([]byte{0x67, 0x42, 0x00, 0x0a}, time.Now())
 	require.Equal(t, []byte{0x67, 0x42, 0x00, 0x0a}, r.sps)
 }
 
@@ -98,12 +93,11 @@ func TestProcessH264NALUPPSChange(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processH264NALU([]byte{0x68, 0xce, 0x38, 0x80}, 0, &lastTS)
+	r.processH264NALU([]byte{0x68, 0xce, 0x38, 0x80}, time.Now())
 	require.NotNil(t, r.pps)
 
 	// New PPS should replace old
-	r.processH264NALU([]byte{0x68, 0xce, 0x00}, 0, &lastTS)
+	r.processH264NALU([]byte{0x68, 0xce, 0x00}, time.Now())
 	require.Equal(t, []byte{0x68, 0xce, 0x00}, r.pps)
 }
 
@@ -115,9 +109,8 @@ func TestProcessH264NALUUnknownNALType(t *testing.T) {
 	r.sps = []byte{0x67}
 	r.pps = []byte{0x68}
 
-	var lastTS uint64
 	// NAL type 6 (SEI) — should be ignored
-	r.processH264NALU([]byte{0x06, 0x01, 0x02}, 0, &lastTS)
+	r.processH264NALU([]byte{0x06, 0x01, 0x02}, time.Now())
 	require.Nil(t, r.muxer)
 }
 
@@ -129,8 +122,7 @@ func TestProcessH265NALUVPSOnly(t *testing.T) {
 	r.codec = model.FormatH265
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processH265NALU([]byte{0x40, 0x01, 0x0c}, 0, &lastTS)
+	r.processH265NALU([]byte{0x40, 0x01, 0x0c}, time.Now())
 	require.NotNil(t, r.vps)
 	require.Nil(t, r.muxer)
 }
@@ -141,8 +133,7 @@ func TestProcessH265NALUSPSOnly(t *testing.T) {
 	r.codec = model.FormatH265
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processH265NALU([]byte{0x42, 0x01, 0x01}, 0, &lastTS)
+	r.processH265NALU([]byte{0x42, 0x01, 0x01}, time.Now())
 	require.NotNil(t, r.sps)
 	require.Nil(t, r.muxer)
 }
@@ -153,8 +144,7 @@ func TestProcessH265NALUPPSOnly(t *testing.T) {
 	r.codec = model.FormatH265
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processH265NALU([]byte{0x44, 0x01, 0xc1}, 0, &lastTS)
+	r.processH265NALU([]byte{0x44, 0x01, 0xc1}, time.Now())
 	require.NotNil(t, r.pps)
 	require.Nil(t, r.muxer)
 }
@@ -168,9 +158,8 @@ func TestProcessH265NALUIDRWithoutVPS(t *testing.T) {
 	r.pps = []byte{0x44, 0x01}
 	// Missing VPS
 
-	var lastTS uint64
 	// IDR_W_RADL (type 19): first byte = (19 << 1) = 0x26
-	r.processH265NALU([]byte{0x26, 0x01, 0x02}, 0, &lastTS)
+	r.processH265NALU([]byte{0x26, 0x01, 0x02}, time.Now())
 	require.Nil(t, r.muxer)
 }
 
@@ -183,10 +172,9 @@ func TestProcessH265NALUNonVCLType(t *testing.T) {
 	r.sps = []byte{0x42, 0x01}
 	r.pps = []byte{0x44, 0x01}
 
-	var lastTS uint64
 	// Type 35 (SEI prefix, non-VCL) — should be ignored
 	// First byte: (35 << 1) | 1 = 71 = 0x47
-	r.processH265NALU([]byte{0x47, 0x01}, 0, &lastTS)
+	r.processH265NALU([]byte{0x47, 0x01}, time.Now())
 	require.Nil(t, r.muxer)
 }
 
@@ -196,10 +184,9 @@ func TestProcessH265NALUVPSChange(t *testing.T) {
 	r.codec = model.FormatH265
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processH265NALU([]byte{0x40, 0x01, 0x0c}, 0, &lastTS)
+	r.processH265NALU([]byte{0x40, 0x01, 0x0c}, time.Now())
 	// New VPS replaces old
-	r.processH265NALU([]byte{0x40, 0x01, 0x0d}, 0, &lastTS)
+	r.processH265NALU([]byte{0x40, 0x01, 0x0d}, time.Now())
 	require.Equal(t, []byte{0x40, 0x01, 0x0d}, r.vps)
 }
 
@@ -216,9 +203,8 @@ func TestProcessH265NALUIDR_W_RADL(t *testing.T) {
 	store := newRecordingSegmentStore(t)
 	r.store = store
 
-	var lastTS uint64
 	// IDR_W_RADL (type 19): first byte = (19 << 1) = 0x26
-	r.processH265NALU([]byte{0x26, 0x01, 0x02, 0x03}, 0, &lastTS)
+	r.processH265NALU([]byte{0x26, 0x01, 0x02, 0x03}, time.Now())
 	require.NotNil(t, r.muxer)
 	require.Equal(t, model.FormatH265, r.codec)
 }
@@ -235,9 +221,8 @@ func TestProcessH265NALUIDR_N_LP(t *testing.T) {
 	store := newRecordingSegmentStore(t)
 	r.store = store
 
-	var lastTS uint64
 	// IDR_N_LP (type 20): first byte = (20 << 1) = 0x28
-	r.processH265NALU([]byte{0x28, 0x01, 0x02}, 0, &lastTS)
+	r.processH265NALU([]byte{0x28, 0x01, 0x02}, time.Now())
 	require.NotNil(t, r.muxer)
 }
 
@@ -266,7 +251,7 @@ func TestForwardHLSSetsSPSPPSOnH264IDR(t *testing.T) {
 	})
 
 	// IDR (type 5)
-	r.forwardHLS([]byte{0x65, 0x01, 0x02})
+	r.forwardHLS([]byte{0x65, 0x01, 0x02}, time.Now())
 
 	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	mu.Lock()
@@ -300,7 +285,7 @@ func TestForwardHLSSetsVPS_SPS_PPSOnH265IDR(t *testing.T) {
 	})
 
 	// IDR_N_LP (type 20): (20 << 1) = 0x28
-	r.forwardHLS([]byte{0x28, 0x01})
+	r.forwardHLS([]byte{0x28, 0x01}, time.Now())
 
 	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	mu.Lock()
@@ -333,7 +318,7 @@ func TestForwardHLSH264NonIDRNoPrefix(t *testing.T) {
 	})
 
 	// Non-IDR (type 1)
-	r.forwardHLS([]byte{0x41, 0x01})
+	r.forwardHLS([]byte{0x41, 0x01}, time.Now())
 	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	mu.Lock()
 	require.Len(t, receivedAU, 1)
@@ -348,7 +333,7 @@ func TestForwardHLSNoCallback(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 	// No callback set — should not panic
-	r.forwardHLS([]byte{0x65, 0x01})
+	r.forwardHLS([]byte{0x65, 0x01}, time.Now())
 }
 
 // --- closeCurrentSegment edge cases ---
@@ -377,8 +362,7 @@ func TestCloseCurrentSegmentWithSegment(t *testing.T) {
 	r.pps = []byte{0x68, 0xce, 0x38, 0x80}
 
 	// Create segment via processH264NALU with IDR
-	var lastTS uint64
-	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
+	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, time.Now())
 
 	require.NotNil(t, r.muxer)
 	tempPath := r.curTempPath
@@ -407,8 +391,7 @@ func TestCloseCurrentSegmentTwice(t *testing.T) {
 	r.sps = []byte{0x67, 0x42, 0xc0, 0x1e}
 	r.pps = []byte{0x68, 0xce, 0x38, 0x80}
 
-	var lastTS uint64
-	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
+	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, time.Now())
 	require.NotNil(t, r.muxer)
 
 	r.closeCurrentSegment()
@@ -495,6 +478,7 @@ func TestCodecParamsH265(t *testing.T) {
 	r.sps = []byte{0x42, 0x01, 0x01}
 	r.pps = []byte{0x44, 0x01, 0xc1}
 	r.vps = []byte{0x40, 0x01, 0x0c}
+	r.publishCodecSnap()
 
 	codec, sps, pps, vps := r.CodecParams()
 	require.Equal(t, model.FormatH265, codec)
@@ -535,8 +519,7 @@ func TestProcessNALUDispatchH264(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processNALU([]byte{0x67, 0x42}, 0, &lastTS)
+	r.processNALU([]byte{0x67, 0x42}, time.Now())
 	require.NotNil(t, r.sps)
 }
 
@@ -546,8 +529,7 @@ func TestProcessNALUDispatchH265(t *testing.T) {
 	r.codec = model.FormatH265
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processNALU([]byte{0x40, 0x01, 0x0c}, 0, &lastTS)
+	r.processNALU([]byte{0x40, 0x01, 0x0c}, time.Now())
 	require.NotNil(t, r.vps)
 }
 
@@ -671,7 +653,7 @@ func TestHLSSubscribeConcurrent(t *testing.T) {
 	for range 10 {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			r.forwardHLS([]byte{0x41, 0x01})
+			r.forwardHLS([]byte{0x41, 0x01}, time.Now())
 		}()
 	}
 
@@ -699,8 +681,7 @@ func TestCloseCurrentSegmentRemovesTempOnError(t *testing.T) {
 	r.sps = []byte{0x67, 0x42, 0xc0, 0x1e}
 	r.pps = []byte{0x68, 0xce, 0x38, 0x80}
 
-	var lastTS uint64
-	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
+	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, time.Now())
 	require.NotNil(t, r.muxer)
 
 	tempPath := r.curTempPath
