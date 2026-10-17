@@ -9,6 +9,7 @@ package xiaomi
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -22,13 +23,12 @@ func feedH264IDR(t *testing.T, r *XiaomiRecorder) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 	r.cfg.AudioEnabled = true
-	r.audioCodecID = missCodecPCMU
+	r.audioCodecID.Store(missCodecPCMU)
 	r.store = newRecordingSegmentStore(t)
 
-	var lastTS uint64
-	r.processH264NALU([]byte{0x67, 0x42, 0xc0, 0x1e}, 0, &lastTS)
-	r.processH264NALU([]byte{0x68, 0xce, 0x38, 0x80}, 0, &lastTS)
-	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
+	r.processH264NALU([]byte{0x67, 0x42, 0xc0, 0x1e}, time.Now())
+	r.processH264NALU([]byte{0x68, 0xce, 0x38, 0x80}, time.Now())
+	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, time.Now())
 	require.NotNil(t, r.muxer)
 }
 
@@ -39,11 +39,10 @@ func feedH265IDR(t *testing.T, r *XiaomiRecorder) {
 	r.codec = model.FormatH265
 	r.codecOK = true
 	r.cfg.AudioEnabled = true
-	r.audioCodecID = missCodecPCMU
+	r.audioCodecID.Store(missCodecPCMU)
 	r.store = newRecordingSegmentStore(t)
 
-	var lastTS uint64
-	r.processH265NALU([]byte{0x26, 0x01, 0x02, 0x03}, 0, &lastTS)
+	r.processH265NALU([]byte{0x26, 0x01, 0x02, 0x03}, time.Now())
 	require.NotNil(t, r.muxer)
 }
 
