@@ -140,6 +140,8 @@ func (s *Session) handleConnectRequest(msg *Message) {
 	// exchange, so the historical sdp-offer key carrier is too late and
 	// e2eeKey() would silently return nil (plaintext direct tunnels).
 	var callerRelayKey [32]byte
+	s.logger.Info("connect_request caller relay key",
+		"present", req.CallerRelayPubKey != "", "session_id", req.SessionID)
 	if req.CallerRelayPubKey != "" {
 		if key, err := hex.DecodeString(req.CallerRelayPubKey); err == nil && len(key) == 32 {
 			copy(callerRelayKey[:], key)
