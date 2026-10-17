@@ -8,7 +8,7 @@
   import { getMiBeeVisionConnected, getMiBeeVisionLoaded, refreshMiBeeVisionStatus } from '$lib/mibeevision-status.svelte';
   import { t } from '$lib/i18n';
   import { formatDate, parseServerDate } from '$lib/format';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { classLabel, eventTypeLabel, severityLabel, zoneLabel } from '$lib/ai-labels';
   import { AlertCircle, Brain, ChevronDown, Play, Settings } from 'lucide-svelte';
   import Pagination from '$lib/components/Pagination.svelte';

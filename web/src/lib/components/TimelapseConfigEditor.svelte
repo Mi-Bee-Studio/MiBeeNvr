@@ -2,7 +2,7 @@
   import { t } from '$lib/i18n';
   import { getTimelapseConfig, updateTimelapseConfig, getSettings } from '$lib/api';
   import type { TimelapseConfig, ScheduleConfig } from '$lib/api';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
 
   interface Props {
     cameraId: string;
