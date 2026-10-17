@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
@@ -533,7 +534,7 @@ func TestInjectCredentialsAndRedact(t *testing.T) {
 	require.Equal(t, "rtsp://admin:secret@192.168.1.10:554/sub", in)
 	// Existing userinfo preserved.
 	require.Equal(t, "rtsp://a:b@host/x", injectCredentials("rtsp://a:b@host/x", "admin", "secret"))
-	require.Equal(t, "rtsp://192.168.1.10:554/sub", redactURL(in))
+	require.Equal(t, "rtsp://192.168.1.10:554/sub", slogx.RedactURL(in))
 }
 
 // Status/Hub are the flow view's per-camera accessors (#513 observability):
