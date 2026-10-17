@@ -102,5 +102,5 @@ REST 接口（给集成用）：`GET /api/doorbell/calls`、
 
 ## 下一步
 
-- [事件与自动化](api-reference.md)——`doorbell.*` 事件主题
+- [事件与自动化](api/README.md)——`doorbell.*` 事件主题
 - [GB28181](gb28181-guide.md)——面向摄像头的平台侧协议

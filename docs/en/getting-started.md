@@ -133,6 +133,8 @@ There are three ways to set the admin password:
 2. **Plaintext in config** — set `auth.password` in YAML; auto-hashed to `password_hash` on first start
 3. **Manual hash** — generate with `mibee-nvr hash-password <pw>` and paste into `auth.password_hash`
 
+> For the full command surface (init / hash-password / health / cleanup / repair and the other subcommands) see the [CLI Reference](cli.md).
+
 ### Default Paths
 
 | Path | Description |
@@ -151,6 +153,8 @@ MiBee NVR uses a **separate transport + encoding** format for camera protocols:
 
 - **Transport**: `rtsp`, `http`, `onvif`, `xiaomi`, `timelapse`
 - **Encoding**: `h264`, `h265`, `mjpeg`, `jpeg`
+
+All cameras are managed on the **Cameras** page: click **Scan Devices** to auto-discover ONVIF / Xiaomi cameras on the LAN, or **+ Add Camera** to add one manually; each camera card supports start/stop, restart, and a live view.
 
 > The old combined format (`rtsp_h264`, `rtsp_h265`, `rtsp_mjpeg`, `http_jpeg`) is **rejected in 0.10.0+** — `Validate()` and the camera create handler return an error asking you to split into separate `protocol` and `encoding` fields.
 
@@ -298,3 +302,12 @@ ftp your-server 2121
 
 - Reduce `segment_duration` to `30s` (default). Longer durations hold more data in RAM.
 - The RPi 3B has ~900MB RAM. With 4 cameras at 30s segments, expect ~300MB stable usage.
+
+## Next Steps
+
+- [Docker Deployment](install-docker.md) — production container deployment
+- [CLI Reference](cli.md) — command-line administration
+- [Configuration Reference](config.md) — top-level YAML key cheat sheet
+- [NAS Deployment](install-nas.md) — Synology / QNAP / unRAID / fnOS
+- [ONVIF Auto-Discovery](onvif-discovery.md) — zero-config camera onboarding
+- [Recording & Playback](recording-playback.md) — managing recordings

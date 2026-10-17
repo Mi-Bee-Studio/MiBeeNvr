@@ -29,7 +29,7 @@ flowchart LR
 curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
 ```
 
-用 Docker 或在群晖 / 威联通 / 飞牛 fnOS 商店里安装也完全可以——参见[快速开始](quickstart.md)。装好后浏览器打开 `http://设备IP:9090`。
+用 Docker 或在群晖 / 威联通 / 飞牛 fnOS 商店里安装也完全可以——参见[快速入门](getting-started.md)。装好后浏览器打开 `http://设备IP:9090`。
 
 ### 第 2 步：跟着初始化向导走（2 分钟）
 
