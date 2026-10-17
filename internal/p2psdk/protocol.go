@@ -125,6 +125,15 @@ type ConnectRequest struct {
 	// injected by the servers — both peers must share ONE relay endpoint.
 	RelayURL    string `json:"relay_url,omitempty"`
 	RelayPubKey string `json:"relay_pub_key,omitempty"`
+	// CallerRelayPubKey is the CALLER's relay identity public key (hex),
+	// sent upfront so the device-side offerer can arm tunnel E2EE BEFORE
+	// creating the DataChannel — on the direct path the SDP exchange (the
+	// historical key carrier) arrives too late for that (mibeescout#16).
+	// Distinct from federation's relay_pub_key above, which names the
+	// shared relay SERVER key. Additive: old devices ignore it (direct
+	// path stays plaintext exactly as before); armed only when BOTH sides
+	// are new.
+	CallerRelayPubKey string `json:"caller_relay_pub_key,omitempty"`
 }
 
 // ConnectAccept is sent by the target to accept a connection request.

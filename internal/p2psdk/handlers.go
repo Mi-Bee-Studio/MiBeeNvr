@@ -134,15 +134,31 @@ func (s *Session) handleConnectRequest(msg *Message) {
 		s.repointRelay(req.RelayURL, req.RelayPubKey)
 	}
 
+	// Caller's relay identity key (mibeescout#16): arming the session
+	// BEFORE the first DataChannel exists is the whole point — on the
+	// direct path the offerer builds the channel ahead of the SDP
+	// exchange, so the historical sdp-offer key carrier is too late and
+	// e2eeKey() would silently return nil (plaintext direct tunnels).
+	var callerRelayKey [32]byte
+	if req.CallerRelayPubKey != "" {
+		if key, err := hex.DecodeString(req.CallerRelayPubKey); err == nil && len(key) == 32 {
+			copy(callerRelayKey[:], key)
+		} else {
+			s.logger.Warn("connect_request carried an undecodable caller_relay_pub_key",
+				"session_id", req.SessionID)
+		}
+	}
+
 	p2p := &p2pSession{
-		sessionID:    req.SessionID,
-		remotePeerID: req.TargetPeerID,
-		isOfferer:    true,
-		logger:       s.logger,
-		owner:        s,
-		onStats:      s.OnStats,
-		relayClient:  s.relayClient,
-		ctrlWanted:   req.CtrlChannel, // #88① dual-channel gate (requester-declared)
+		sessionID:      req.SessionID,
+		remotePeerID:   req.TargetPeerID,
+		isOfferer:      true,
+		remoteRelayKey: callerRelayKey,
+		logger:         s.logger,
+		owner:          s,
+		onStats:        s.OnStats,
+		relayClient:    s.relayClient,
+		ctrlWanted:     req.CtrlChannel, // #88① dual-channel gate (requester-declared)
 	}
 	// 活跃度锚点=创建时刻：从未承载流量的会话（握手即死）也会被
 	// 空闲清扫按超时回收，而不是永久滞留名册。
@@ -242,7 +258,9 @@ func (s *Session) handleSDPOffer(msg *Message) {
 	if offer.RelayPubKey != "" {
 		key, err := hex.DecodeString(offer.RelayPubKey)
 		if err == nil && len(key) == 32 {
+			p2p.mu.Lock()
 			copy(p2p.remoteRelayKey[:], key)
+			p2p.mu.Unlock()
 		}
 	}
 
@@ -264,11 +282,15 @@ func (s *Session) handleSDPAnswer(msg *Message) {
 		return
 	}
 
-	// Extract remote peer's relay public key.
+	// Extract remote peer's relay public key (under p.mu: e2eeKey() reads
+	// the same field from channel-setup paths — an unlocked copy here was
+	// a latent data race exposed by the direct-E2EE regression test).
 	if answer.RelayPubKey != "" {
 		key, err := hex.DecodeString(answer.RelayPubKey)
 		if err == nil && len(key) == 32 {
+			p2p.mu.Lock()
 			copy(p2p.remoteRelayKey[:], key)
+			p2p.mu.Unlock()
 		}
 	}
 
