@@ -132,6 +132,11 @@ type StatusSnapshot struct {
 	// 落 relay」的设备侧事实证据。welcome 无 STUN 或探测未完成 = nil。
 	NAT *NATObservation `json:"nat,omitempty"`
 
+	// Relay 是设备侧 relay 拨号熔断器视图（#23/#24）：冷却期钉 relay 的
+	// 仲裁让位直连（见 TransportDecision 的 relay_cooldown），这里给出
+	// 熔断状态与按因分类的失败计数。nil = 未启用（不会发生，恒有值）。
+	Relay *RelayCircuit `json:"relay,omitempty"`
+
 	// TunnelEcho 是最近一次设备侧隧道 echo 探测（#87 T2 分解）：普通
 	// 车道反映业务数据排队，优先车道反映控制面体感；满载时两者的差值
 	// = 优先级车道真实买到的量，prio(满载)−prio(轻载) = 控制面被媒体
@@ -194,6 +199,9 @@ type Manager struct {
 	// 器不可再读；live 部分在 tunnelDroppedTotal 里现场求和）。
 	closedTunnelDrops atomic.Uint64
 
+	// relay 是设备侧 relay 拨号熔断器（#23/#24）。
+	relay *relayBreaker
+
 	// natObs 是最近一次 NAT 行为观测（信令重拨后刷新）。
 	natObs        atomic.Pointer[peer.NatObservation]
 	echoObs       atomic.Pointer[TunnelEchoObs]
@@ -237,6 +245,7 @@ func New(cfg config.P2PConfig, localAddr, tokenStatePath string, logger *slog.Lo
 		tokens:    NewTokenManager(endpoint, cfg.ClientID, cfg.Username, cfg.Password, tokenStatePath),
 		logger:    logger.With("component", "p2p"),
 		gate:      gate,
+		relay:     newRelayBreaker(),
 		redial:    make(chan struct{}, 1),
 		clients:   make(map[*tunnel.Tunnel]struct{}),
 		ice:       make(map[string]ICEStats),
@@ -395,6 +404,10 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 			return 20 * time.Second
 		}(),
 		SessionIdleTimeout: time.Duration(m.cfg.SessionIdleTimeoutSec) * time.Second,
+		// relay 拨号熔断（#23/#24）：冷却期 SDK 跳过 relay 建连（信令与
+		// 直连仲裁不受影响）；每次建连结果经 onRelayConnect 分类计数。
+		RelayDialGate:  m.relay.allowDial,
+		OnRelayConnect: m.onRelayConnect,
 		OnDisconnect: func(err error) {
 			m.disconnectedAt.Store(time.Now().UnixNano())
 			m.online.Store(false)
@@ -658,6 +671,9 @@ func (m *Manager) natSnapshot() *NATObservation {
 	}
 }
 
+// relayStatusPtr 取地址小工具（Status 恒携带 relay 块）。
+func relayStatusPtr(r RelayCircuit) *RelayCircuit { return &r }
+
 // tunnelEchoSnapshot 汇出最近一次 T2 探测（nil 当无客户端隧道）。
 func (m *Manager) tunnelEchoSnapshot() *TunnelEchoObs {
 	return m.echoObs.Load()
@@ -733,6 +749,17 @@ func (m *Manager) startTunnelEchoSampler(tun *tunnel.Tunnel) (stop func()) {
 // 纯 true 恒钉；auto 读最近一次 NAT 观测（v4 对称且无全局 IPv6 才钉）；
 // 其余（含缺省）保持直连优先——与历史行为一致。
 func (m *Manager) transportDecision() (pinned bool, reason string) {
+	pinned, reason = m.transportPin()
+	// relay 熔断冷却期（#23 P1）：钉 relay 的决策让位直连仲裁——relay
+	// 死不能拖死整线；冷却结束探测在途时恢复钉选语义（如实反映）。
+	if pinned && m.relay.cooldownActive() {
+		return false, "relay_cooldown"
+	}
+	return pinned, reason
+}
+
+// transportPin 是不含熔断让位的原始钉选判定（#18 矩阵）。
+func (m *Manager) transportPin() (pinned bool, reason string) {
 	switch m.cfg.ForceRelay {
 	case config.ForceRelayAlways:
 		return true, "force_relay"
@@ -753,6 +780,14 @@ func (m *Manager) applyAutoForceRelay(sess *peer.Session, o peer.NatObservation)
 		return
 	}
 	pinned := o.Class == peer.NATSymmetric && !o.DualStack
+	if pinned && m.relay.cooldownActive() {
+		// relay 熔断冷却中：观测虽钉 relay，但拨号被闸——保持直连优先，
+		// 冷却结束后的会话按恢复的钉选走（transportDecision 同步反映）。
+		sess.SetForceRelay(false)
+		m.logger.Warn("relay pin suppressed by circuit cooldown; staying direct-first",
+			"class", string(o.Class), "dual_stack", o.DualStack)
+		return
+	}
 	sess.SetForceRelay(pinned)
 	if pinned {
 		m.logger.Info("force relay pinned by NAT observation",
@@ -955,6 +990,7 @@ func (m *Manager) Status() StatusSnapshot {
 		ICEUDPOnly:          true,
 		TunnelDroppedFrames: m.tunnelDroppedTotal(),
 		NAT:                 m.natSnapshot(),
+		Relay:               relayStatusPtr(m.relay.snapshot()),
 		TunnelEcho:          m.tunnelEchoSnapshot(),
 	}
 	if pinned, reason := m.transportDecision(); pinned {

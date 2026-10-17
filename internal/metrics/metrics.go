@@ -175,6 +175,9 @@ type Metrics struct {
 	P2PTunnelDroppedFrames prometheus.Gauge         // nvr_p2p_tunnel_dropped_frames — cumulative inbound tunnel frames dropped at delivery queues
 	P2PNATClass            *prometheus.GaugeVec     // nvr_p2p_nat_class{class} — latest NAT observation (1 = current class)
 	P2PNATDualStack        prometheus.Gauge         // nvr_p2p_nat_dual_stack — 1 = global-unicast IPv6 present (v4 symmetric verdict exempted from relay pinning)
+	P2PRelayDials          prometheus.Counter       // nvr_p2p_relay_dials_total — every relay connect attempt (dial-time + mid-life rebuilds)
+	P2PRelayDialFailures   *prometheus.CounterVec   // nvr_p2p_relay_dial_failures_total{reason} — reason: overloaded|auth|rate_limited|network
+	P2PRelayCircuitState   prometheus.Gauge         // nvr_p2p_relay_circuit_state — 0 closed / 1 open / 2 half_open
 }
 
 // NewMetrics creates a new Metrics instance with a custom registry,
@@ -707,6 +710,18 @@ func NewMetrics() *Metrics {
 		Name: "nvr_p2p_nat_dual_stack",
 		Help: "1 = a global-unicast IPv6 interface address exists. The NAT class probe is IPv4-only, so a symmetric verdict cannot rule out v6 direct connectivity — relay-pinning decisions exempt dual-stack machines.",
 	})
+	p2pRelayDials := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "nvr_p2p_relay_dials_total",
+		Help: "Relay connect attempts from the device side (Dial-time connects and mid-life rebuilds). A saturated failure count alongside a flat success rate is the device-side face of a relay outage.",
+	})
+	p2pRelayDialFailures := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_p2p_relay_dial_failures_total",
+		Help: "Relay connect attempts that failed, by reason. overloaded (server_auth 0x03 / close 4005) and rate_limited (4006-4008) are capacity semantics — back off, never treat as a credentials problem; auth (0x01) is a key/box failure; network is everything else.",
+	}, []string{"reason"})
+	p2pRelayCircuit := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "nvr_p2p_relay_circuit_state",
+		Help: "Relay dial circuit breaker state: 0 closed (relay dials allowed), 1 open (cooldown — relay skipped, sessions fall back to direct arbitration), 2 half_open (single-flight probe in flight).",
+	})
 
 	reg.MustRegister(
 		recordingBytesTotal,
@@ -813,6 +828,9 @@ func NewMetrics() *Metrics {
 		p2pTunnelDropped,
 		p2pNATClass,
 		p2pNATDualStack,
+		p2pRelayDials,
+		p2pRelayDialFailures,
+		p2pRelayCircuit,
 
 		// Rolling bucket retention (#764) + pixgate sampler telemetry (#699).
 		// These were shipped UNREGISTERED in #783/#786 — the collectors
@@ -938,6 +956,9 @@ func NewMetrics() *Metrics {
 		P2PTunnelDroppedFrames:         p2pTunnelDropped,
 		P2PNATClass:                    p2pNATClass,
 		P2PNATDualStack:                p2pNATDualStack,
+		P2PRelayDials:                  p2pRelayDials,
+		P2PRelayDialFailures:           p2pRelayDialFailures,
+		P2PRelayCircuitState:           p2pRelayCircuit,
 	}
 }
 
@@ -1148,6 +1169,32 @@ func (m *Metrics) SetP2PNATDualStack(present bool) {
 	} else {
 		m.P2PNATDualStack.Set(0)
 	}
+}
+
+// IncP2PRelayDial counts one relay connect attempt (nil-safe).
+func (m *Metrics) IncP2PRelayDial() {
+	if m == nil || m.P2PRelayDials == nil {
+		return
+	}
+	m.P2PRelayDials.Inc()
+}
+
+// IncP2PRelayDialFailure counts one failed relay connect attempt by reason
+// (overloaded|auth|rate_limited|network; nil-safe).
+func (m *Metrics) IncP2PRelayDialFailure(reason string) {
+	if m == nil || m.P2PRelayDialFailures == nil {
+		return
+	}
+	m.P2PRelayDialFailures.WithLabelValues(reason).Inc()
+}
+
+// SetP2PRelayCircuitState publishes the relay circuit breaker state as the
+// numeric gauge value (nil-safe).
+func (m *Metrics) SetP2PRelayCircuitState(v float64) {
+	if m == nil || m.P2PRelayCircuitState == nil {
+		return
+	}
+	m.P2PRelayCircuitState.Set(v)
 }
 
 // SetP2PNATClass publishes the observed NAT class — 1 on the current class,
