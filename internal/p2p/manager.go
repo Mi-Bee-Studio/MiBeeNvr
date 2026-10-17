@@ -497,10 +497,17 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 			tunnel.WithMaxPayloadBytes(m.cfg.TunnelMaxPayloadBytes))
 		if len(dc.E2EEKey) > 0 {
 			// 机会式隧道层 E2EE：对端未武装时自动回落明文（混合版本
-			// 兼容），relay 转发层零知识。
+			// 兼容），relay 转发层零知识。armed 正面日志（#5/#22）：journal
+			// 必须能直接回答「本会话是否端到端加密」——此前只有失败侧
+			// Warn，密钥缺席完全静默（真机 0.1.10 直连会话 plaintext 时
+			// 无从分辨是没带 key 还是带了解不开）。
 			if err := tun.EnableE2EE(dc.E2EEKey); err != nil {
 				m.logger.Warn("tunnel e2ee arm failed; proceeding plaintext", "error", err)
+			} else {
+				m.logger.Info("tunnel e2ee armed")
 			}
+		} else {
+			m.logger.Info("tunnel e2ee not armed — caller relay key absent")
 		}
 		m.clients[tun] = struct{}{}
 		m.clientsMu.Unlock()
