@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -103,6 +104,13 @@ type P2PConfig struct {
 	// TokenEndpoint 是 OIDC token 端点。空 = 由 ServerURL 同域推导
 	// （wss://host:port/… → https://host/oidc/token，经同一反代）。
 	TokenEndpoint string `yaml:"token_endpoint"`
+
+	// NodesURL 是联邦公共节点表端点（GET /api/nodes，就近选点）。空 =
+	// 不启用（单节点行为不变）；设置后每次信令连接前并发 RTT 探测定
+	// 节点，任何失败硬回退 server_url——选点永不阻塞、永不恶化连接。
+	// 结果进 journal（node discovery selected endpoint / 回退 Warn）与
+	// /api/p2p/status 的 node_selection 块。
+	NodesURL string `yaml:"nodes_url"`
 
 	// TransportTimeout 是单次 ICE/DataChannel 建立预算（含 relay 仲裁）。
 	TransportTimeoutSec int `yaml:"transport_timeout_s"`
@@ -264,6 +272,12 @@ func (c *P2PConfig) validate() error {
 			return fmt.Errorf("p2p.device_key %q: %w", c.DeviceKeyPath, err)
 		} else if fi.IsDir() {
 			return fmt.Errorf("p2p.device_key %q is a directory", c.DeviceKeyPath)
+		}
+	}
+	if c.NodesURL != "" {
+		if u, err := url.Parse(c.NodesURL); err != nil || u.Host == "" ||
+			(u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("p2p.nodes_url must be an absolute http(s) URL when set")
 		}
 	}
 	if err := validateAdvertise(c.Advertise); err != nil {

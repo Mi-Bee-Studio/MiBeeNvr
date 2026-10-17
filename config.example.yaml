@@ -698,6 +698,13 @@ observability:
 #   password: ""                  # stored ENC:-encrypted on save
 #   client_id: "p2p-signaling"
 #   token_endpoint: ""            # empty = derived from server_url
+#   nodes_url: ""                 # federation node list (GET /api/nodes). Empty = single-node
+#                                 # behavior; set to enable nearest-node selection: every
+#                                 # signaling connect probes nodes concurrently and dials the
+#                                 # lowest-RTT one, falling back to server_url on ANY failure
+#                                 # (never blocks, never worsens). Selection visible in the
+#                                 # journal (node discovery selected endpoint) and
+#                                 # /api/p2p/status node_selection.
 #   transport_timeout_s: 20
 #   force_relay: "false"          # transport arbitration pin: "false" (default) = direct-first
 #                                 # ICE arbitration; "true" = every session goes relay directly;

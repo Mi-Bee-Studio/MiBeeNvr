@@ -136,6 +136,9 @@ type StatusSnapshot struct {
 	// 仲裁让位直连（见 TransportDecision 的 relay_cooldown），这里给出
 	// 熔断状态与按因分类的失败计数。nil = 未启用（不会发生，恒有值）。
 	Relay *RelayCircuit `json:"relay,omitempty"`
+	// NodeSelection 是最近一次联邦就近选点结果（#21）：nil = 未配置
+	// nodes_url 或尚无成功选点（此时端点即 server_url）。
+	NodeSelection *NodeSelectionView `json:"node_selection,omitempty"`
 
 	// TunnelEcho 是最近一次设备侧隧道 echo 探测（#87 T2 分解）：普通
 	// 车道反映业务数据排队，优先车道反映控制面体感；满载时两者的差值
@@ -370,7 +373,10 @@ func (m *Manager) runSession(ctx context.Context, jwt string) error {
 	m.online.Store(true)
 
 	sess, err := peerDial(ctx, peer.SignalingConfig{
-		ServerURL:     m.cfg.ServerURL,
+		ServerURL: m.cfg.ServerURL,
+		// 联邦就近选点（#21）：拉 /api/nodes 并发 RTT 探测定节点，任何
+		// 失败硬回退 ServerURL；缺省空 = 单节点行为不变（SDK 侧语义）。
+		NodesURL:      m.cfg.NodesURL,
 		JWT:           jwt,
 		ProductID:     m.cfg.ProductID,
 		PeerID:        m.cfg.PeerID,
@@ -673,6 +679,25 @@ func (m *Manager) natSnapshot() *NATObservation {
 
 // relayStatusPtr 取地址小工具（Status 恒携带 relay 块）。
 func relayStatusPtr(r RelayCircuit) *RelayCircuit { return &r }
+
+// NodeSelectionView 是就近选点的对外视图（peer.NodeSelection）。
+type NodeSelectionView struct {
+	URL   string    `json:"url"`
+	RTTMs int64     `json:"rtt_ms"`
+	At    time.Time `json:"at"`
+}
+
+// nodeSelectionSnapshot 汇出最近一次选点（未配置/未选出 = nil）。
+func (m *Manager) nodeSelectionSnapshot() *NodeSelectionView {
+	if m.cfg.NodesURL == "" {
+		return nil
+	}
+	sel, ok := peer.LastNodeSelection(m.cfg.NodesURL)
+	if !ok {
+		return nil
+	}
+	return &NodeSelectionView{URL: sel.URL, RTTMs: sel.RTTMs, At: sel.At}
+}
 
 // tunnelEchoSnapshot 汇出最近一次 T2 探测（nil 当无客户端隧道）。
 func (m *Manager) tunnelEchoSnapshot() *TunnelEchoObs {
@@ -989,6 +1014,7 @@ func (m *Manager) Status() StatusSnapshot {
 		// 持）——如实上报，排障时先排除「UDP 被整形只剩 relay」。
 		ICEUDPOnly:          true,
 		TunnelDroppedFrames: m.tunnelDroppedTotal(),
+		NodeSelection:       m.nodeSelectionSnapshot(),
 		NAT:                 m.natSnapshot(),
 		Relay:               relayStatusPtr(m.relay.snapshot()),
 		TunnelEcho:          m.tunnelEchoSnapshot(),

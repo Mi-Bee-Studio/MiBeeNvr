@@ -48,7 +48,30 @@ const bucketWidthMs = 50
 
 type discoveryResult struct {
 	best    string
+	rttMs   int64
 	fetched time.Time
+}
+
+// NodeSelection is the outcome of the last successful nearest-node
+// discovery for a configured NodesURL — the observability surface for
+// embedders (status pages) to show which node the device is using.
+type NodeSelection struct {
+	URL   string
+	RTTMs int64
+	At    time.Time
+}
+
+// LastNodeSelection returns the cached selection for nodesURL. ok=false
+// means no successful discovery has completed yet (or the TTL cache
+// expired) — callers report the configured ServerURL as the endpoint.
+func LastNodeSelection(nodesURL string) (NodeSelection, bool) {
+	discoveryMu.Lock()
+	defer discoveryMu.Unlock()
+	r, ok := discoveryCache[nodesURL]
+	if !ok || r.best == "" {
+		return NodeSelection{}, false
+	}
+	return NodeSelection{URL: r.best, RTTMs: r.rttMs, At: r.fetched}, true
 }
 
 var (
@@ -106,7 +129,7 @@ func DiscoverBestNode(ctx context.Context, nodesURL string, logger *slog.Logger)
 		"url", best, "rtt_ms", ordered[0].rtt.Milliseconds(), "candidates", len(cands))
 
 	discoveryMu.Lock()
-	discoveryCache[nodesURL] = discoveryResult{best: best, fetched: time.Now()}
+	discoveryCache[nodesURL] = discoveryResult{best: best, rttMs: ordered[0].rtt.Milliseconds(), fetched: time.Now()}
 	discoveryMu.Unlock()
 	return best
 }

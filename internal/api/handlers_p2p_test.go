@@ -111,6 +111,19 @@ func TestP2PSettingsEndpoints(t *testing.T) {
 	require.Equal(t, "auto:40000", got["advertise"])
 	rr = doP2PPut(t, r, map[string]any{"advertise": "example.com:4000"})
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	// nodes_url 就近选点（#21）：合法绝对 http(s) URL 落盘回显；非法定
+	// 义（无 scheme/错 scheme/相对路径）拒收且不污染内存。
+	rr = doP2PPut(t, r, map[string]any{"nodes_url": "https://nodes.example.com/api/nodes"})
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Equal(t, "https://nodes.example.com/api/nodes", cfg.P2P.NodesURL)
+	rr = doRequest(t, r, "GET", "/api/settings/p2p", nil, "", "")
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	require.Equal(t, "https://nodes.example.com/api/nodes", got["nodes_url"])
+	rr = doP2PPut(t, r, map[string]any{"nodes_url": "nodes.example.com"})
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, "https://nodes.example.com/api/nodes", cfg.P2P.NodesURL,
+		"rejected nodes_url must not mutate the in-memory config")
 	rr = doP2PPut(t, r, map[string]any{"advertise": ""})
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, "", cfg.P2P.Advertise)
