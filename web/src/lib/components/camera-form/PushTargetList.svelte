@@ -10,7 +10,7 @@
     } from '$lib/api';
     import { ArrowUpRight, Plus, Trash2, Copy } from 'lucide-svelte';
     import { onDestroy } from 'svelte';
-    import { showToast } from '$lib/toast';
+    import { showToast } from '$lib/toast.svelte';
     import { copyText } from '$lib/clipboard';
     import PushTargetStatus from '$lib/components/PushTargetStatus.svelte';
     import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';

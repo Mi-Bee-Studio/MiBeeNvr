@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { API_BASE, getAuthHeader } from '$lib/api';
+  import { apiRequest } from '$lib/api';
   import { t } from '$lib/i18n';
 
   interface Props {
@@ -25,11 +25,12 @@
     let stopped = false;
     const load = async () => {
       try {
-        const resp = await fetch(`${API_BASE}/cameras/${encodeURIComponent(cameraId)}/onvif-events`, {
-          headers: { ...getAuthHeader() }
-        });
-        if (!resp.ok) return;
-        const data = await resp.json();
+        // apiRequest carries the Authorization header (getAuthHeader returns
+        // string | null — spreading it into a Headers-init object produced
+        // {0:'B',1:'e',…} and sent NO auth, so every poll 401'd silently).
+        const data = await apiRequest<SubStatus>(
+          `/cameras/${encodeURIComponent(cameraId)}/onvif-events`
+        );
         if (!stopped) status = data;
       } catch {
         // transient — next poll retries

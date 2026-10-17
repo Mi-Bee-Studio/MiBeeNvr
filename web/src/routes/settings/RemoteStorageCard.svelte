@@ -8,7 +8,7 @@
   import { getSettings, updateSettings, getOffloadStatus } from '$lib/api';
   import type { SettingsConfig, OffloadStatus } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
   import Toggle from '$lib/components/Toggle.svelte';

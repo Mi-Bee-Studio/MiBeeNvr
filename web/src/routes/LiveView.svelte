@@ -17,7 +17,7 @@
   import GB28181TalkButton from '$lib/components/GB28181TalkButton.svelte';
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { copyText } from '$lib/clipboard';
   import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
   import { probeCaps } from '$lib/player/capabilities-cache';
