@@ -215,26 +215,42 @@ func (d *clientDriver) OpenFile(name string, flag int, perm os.FileMode) (afero.
 	return &fileWrapper{File: f}, nil
 }
 
+// Remove deletes a file and keeps the recordings table in sync: any row still
+// referencing the path (source file_path or merged merge_path) would be a
+// permanent 404 after the file is gone (#1004).
 func (d *clientDriver) Remove(name string) error {
 	realPath, err := d.resolvePath(name)
 	if err != nil {
 		return err
 	}
-	return os.Remove(realPath)
+	if err := os.Remove(realPath); err != nil {
+		return err
+	}
+	d.deleteRecordingRows(realPath)
+	return nil
 }
 
 func (d *clientDriver) Chown(name string, uid, gid int) error {
 	return nil // not meaningful for this driver
 }
 
+// RemoveAll deletes a directory tree and every recordings row underneath it
+// (MJPEG segment directories hold many files; dropping only the top-level row
+// would leave the rest as ghosts, #1004).
 func (d *clientDriver) RemoveAll(path string) error {
 	realPath, err := d.resolvePath(path)
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(realPath)
+	if err := os.RemoveAll(realPath); err != nil {
+		return err
+	}
+	d.deleteRecordingRows(realPath)
+	return nil
 }
 
+// Rename moves a file or directory and rewrites the affected recordings rows
+// to the new path so playback/merge lookups keep resolving (#1004).
 func (d *clientDriver) Rename(oldname, newname string) error {
 	realOld, err := d.resolvePath(oldname)
 	if err != nil {
@@ -244,7 +260,38 @@ func (d *clientDriver) Rename(oldname, newname string) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(realOld, realNew)
+	if err := os.Rename(realOld, realNew); err != nil {
+		return err
+	}
+	if s := d.server; s.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		n, err := s.db.RenameRecordingPaths(ctx, realOld, realNew)
+		if err != nil {
+			logger.Error("ftp rename: failed to update recording rows", "old_path", realOld, "new_path", realNew, "error", err)
+		} else if n > 0 {
+			logger.Info("ftp rename: updated recording rows", "old_path", realOld, "new_path", realNew, "rows", n)
+		}
+	}
+	return nil
+}
+
+// deleteRecordingRows drops recordings rows bound to a removed path or the
+// tree under it. Best-effort: the file operation already succeeded, so a DB
+// failure is logged and surfaced through the next orphan reconciliation.
+func (d *clientDriver) deleteRecordingRows(realPath string) {
+	s := d.server
+	if s.db == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n, err := s.db.DeleteRecordingRowsByPath(ctx, realPath)
+	if err != nil {
+		logger.Error("ftp remove: failed to delete recording rows", "path", realPath, "error", err)
+	} else if n > 0 {
+		logger.Info("ftp remove: deleted recording rows", "path", realPath, "rows", n)
+	}
 }
 
 func (d *clientDriver) Stat(name string) (os.FileInfo, error) {
