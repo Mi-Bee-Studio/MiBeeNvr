@@ -8,6 +8,7 @@ package peer
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -80,18 +81,18 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 	}
 	s.lastSessionID = welcome.SessionID
 	sc.lastSessionID = welcome.SessionID
-	// Connect to relay server if enabled.
+	// Connect to relay server if enabled (host gate + outcome callback
+	// consulted inside — see connectSessionRelay).
 	if welcome.RelayURL != "" && welcome.RelayPubKey != "" {
-		rc := relay.NewClient()
-		if err := rc.Connect(ctx, welcome.RelayURL, welcome.RelayPubKey); err != nil {
-			logger.Warn("relay connect failed (non-fatal)", "error", err)
-		} else {
+		rc, err := connectSessionRelay(ctx, welcome.RelayURL, welcome.RelayPubKey, cfg, logger)
+		switch {
+		case errors.Is(err, ErrRelayGated):
+			// host circuit open — deliberate skip, not a failure
+		case err == nil:
 			s.relayClient = rc
 			rc.OnFatal(s.handleRelayFatal)
-			logger.Info(
-				"relay connection established",
-				"relay_url", welcome.RelayURL,
-			)
+		default:
+			// failure already logged + reported inside connectSessionRelay
 		}
 	}
 
@@ -439,6 +440,35 @@ func (s *Session) handleRelayFatal(err error) {
 	go s.rebuildRelayClient()
 }
 
+// ErrRelayGated reports that the host's RelayDialGate skipped the relay
+// dial: NOT a failure — callers proceed without a relay client (direct-
+// first arbitration). Deliberately no OnRelayConnect callback fires for a
+// gated skip: an attempt that never happened cannot fail.
+var ErrRelayGated = errors.New("relay dial skipped by host gate")
+
+// connectSessionRelay dials the session-level relay transport, honoring
+// the host's RelayDialGate and reporting every real attempt outcome via
+// OnRelayConnect. Both relay connect sites (Dial-time and the mid-life
+// rebuild loop) go through here so host-side circuit breaking sees every
+// dial.
+func connectSessionRelay(ctx context.Context, serverURL, serverPubKeyHex string, cfg SignalingConfig, logger *slog.Logger) (*relay.Client, error) {
+	if cfg.RelayDialGate != nil && !cfg.RelayDialGate() {
+		logger.Info("relay connect skipped by host gate (circuit open)")
+		return nil, ErrRelayGated
+	}
+	rc := relay.NewClient()
+	err := rc.Connect(ctx, serverURL, serverPubKeyHex)
+	if cfg.OnRelayConnect != nil {
+		cfg.OnRelayConnect(err)
+	}
+	if err != nil {
+		logger.Warn("relay connect failed (non-fatal)", "error", err)
+		return nil, err
+	}
+	logger.Info("relay connection established", "relay_url", serverURL)
+	return rc, nil
+}
+
 // rebuildRelayClient reconnects the session-level relay transport with
 // bounded retries. A fresh relay.Client is used each attempt (the previous
 // one is permanently failed — fatalOnce is spent), matching the
@@ -449,15 +479,25 @@ func (s *Session) rebuildRelayClient() {
 		return
 	}
 	for attempt := 1; attempt <= 3; attempt++ {
+		// The host gate is re-consulted per attempt: a circuit that opened
+		// while we were sleeping must stop here, not dial into a known-dead
+		// relay. The next signaling session retries naturally.
+		cfg := s.sessionConfig()
+		if cfg.RelayDialGate != nil && !cfg.RelayDialGate() {
+			s.logger.Info("relay rebuild skipped by host gate (circuit open)")
+			return
+		}
 		select {
 		case <-s.closeCh:
 			return
 		case <-time.After(time.Duration(attempt) * 5 * time.Second):
 		}
-		rc := relay.NewClient()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		err := rc.Connect(ctx, w.RelayURL, w.RelayPubKey)
+		rc, err := connectSessionRelay(ctx, w.RelayURL, w.RelayPubKey, cfg, s.logger)
 		cancel()
+		if errors.Is(err, ErrRelayGated) {
+			return // gate closed between the check and the dial
+		}
 		if err != nil {
 			s.logger.Warn("relay rebuild attempt failed",
 				"attempt", attempt, "error", err)

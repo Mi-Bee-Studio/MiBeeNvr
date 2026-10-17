@@ -135,6 +135,23 @@ type SignalingConfig struct {
 	// ACKs flow on any open stream. Zero (default) uses
 	// DefaultSessionIdleTimeout; negative disables the sweep entirely.
 	SessionIdleTimeout time.Duration
+
+	// RelayDialGate is consulted before EVERY relay connect attempt (the
+	// Dial-time connect and each mid-life rebuild attempt). Returning
+	// false skips that attempt entirely — no socket, no auth handshake,
+	// and no OnRelayConnect callback (an attempt that never happened
+	// cannot fail). Embedders use this for relay circuit breaking: while
+	// the circuit is open the device stays signaling-direct and the stock
+	// direct-first arbitration applies unchanged. nil = always dial.
+	RelayDialGate func() bool
+
+	// OnRelayConnect reports the outcome of every relay connect attempt:
+	// nil on success, else the attempt error. Classify with
+	// errors.Is(err, relay.ErrOverloaded) — capacity rejections
+	// (server_auth 0x03) are NOT key failures and must not be treated as
+	// credentials problems. Fired from the dialing goroutine (Dial or the
+	// bounded rebuild loop); keep it non-blocking. Optional.
+	OnRelayConnect func(err error)
 }
 
 // Package-level defaults for timeouts. All are non-zero so an unconfigured
