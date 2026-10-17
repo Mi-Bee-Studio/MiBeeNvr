@@ -49,6 +49,7 @@ func (h *Handler) handleGetP2PSettings(w http.ResponseWriter, _ *http.Request) {
 		"username":                    c.Username,
 		"password_configured":         c.Password != "",
 		"client_id":                   c.ClientID,
+		"nodes_url":                   c.NodesURL,
 		"transport_timeout_s":         c.TransportTimeoutSec,
 		"force_relay":                 c.ForceRelay.Normalized(),
 		"max_clients":                 c.MaxClients,
@@ -81,6 +82,7 @@ func (h *Handler) handleUpdateP2PSettings(w http.ResponseWriter, r *http.Request
 		Username                 *string `json:"username"`
 		Password                 *string `json:"password"`
 		ClearCredentials         *bool   `json:"clear_credentials"`
+		NodesURL                 *string `json:"nodes_url"`
 		TransportTimeoutSec      *int    `json:"transport_timeout_s"`
 		ForceRelay               *string `json:"force_relay"`
 		MaxClients               *int    `json:"max_clients"`
@@ -125,6 +127,9 @@ func (h *Handler) handleUpdateP2PSettings(w http.ResponseWriter, r *http.Request
 	}
 	if body.ClearCredentials != nil && *body.ClearCredentials {
 		c.Username, c.Password = "", ""
+	}
+	if body.NodesURL != nil {
+		c.NodesURL = strings.TrimSpace(*body.NodesURL)
 	}
 	if body.TransportTimeoutSec != nil {
 		c.TransportTimeoutSec = *body.TransportTimeoutSec

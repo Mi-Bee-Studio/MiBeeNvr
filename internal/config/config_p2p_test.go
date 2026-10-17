@@ -188,3 +188,33 @@ func TestP2PForceRelayTriState(t *testing.T) {
 		t.Errorf("Normalized(auto) = %q", got)
 	}
 }
+
+// TestP2PNodesURLValidation 钉住 nodes_url 校验（#21）：空 = 不启用；
+// 非空必须是绝对 http(s) URL；节点表形态非法不挡 p2p 启用（选点失败
+// 硬回退 server_url），但拼写错误要当场暴露。
+func TestP2PNodesURLValidation(t *testing.T) {
+	valid := func(nodesURL string) *P2PConfig {
+		return &P2PConfig{
+			Enabled:   true,
+			ServerURL: "wss://signal.example.com/signal",
+			Username:  "nvr-svc",
+			Password:  "secret",
+			NodesURL:  nodesURL,
+		}
+	}
+	if err := valid("").validate(); err != nil {
+		t.Fatalf("empty nodes_url must validate (disabled), got %v", err)
+	}
+	if err := valid("https://nodes.example.com/api/nodes").validate(); err != nil {
+		t.Fatalf("absolute https nodes_url must validate, got %v", err)
+	}
+	for _, bad := range []string{
+		"nodes.example.com/api/nodes", // no scheme
+		"ftp://nodes.example.com",     // wrong scheme
+		"/api/nodes",                  // relative
+	} {
+		if err := valid(bad).validate(); err == nil {
+			t.Fatalf("nodes_url %q must be rejected", bad)
+		}
+	}
+}
