@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 )
@@ -20,6 +21,11 @@ var encryptionKey []byte
 // GetEncryptionKey returns the AES-256 encryption key from NVR_ENCRYPTION_KEY
 // environment variable. The key must be exactly 32 bytes (base64-encoded or raw).
 // Returns nil if no key is configured.
+//
+// A key that IS configured but cannot be loaded (unreadable key file, wrong
+// length, bad base64) is an operator error, not a "not configured" state: it
+// logs a loud error before returning nil, because the caller silently falls
+// back to persisting sensitive fields in plaintext (#1005).
 func GetEncryptionKey() []byte {
 	if encryptionKey != nil {
 		return encryptionKey
@@ -32,6 +38,8 @@ func GetEncryptionKey() []byte {
 		if keyFile != "" {
 			data, err := os.ReadFile(keyFile)
 			if err != nil {
+				slog.Error("config encryption key file unreadable — sensitive fields will persist in PLAINTEXT",
+					"key_file", keyFile, "error", err)
 				return nil
 			}
 			keyStr = strings.TrimSpace(string(data))
@@ -54,6 +62,8 @@ func GetEncryptionKey() []byte {
 		return encryptionKey
 	}
 
+	slog.Error("config encryption key is malformed (need 32 bytes, base64-encoded or raw) — sensitive fields will persist in PLAINTEXT",
+		"key_length", len(keyStr), "base64_error", err)
 	return nil
 }
 

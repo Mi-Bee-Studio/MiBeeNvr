@@ -110,8 +110,9 @@ auth:
   #                      # Docker published ports: there every proxied request
   #                      # arrives from 127.0.0.1, and enabling this would bypass
   #                      # auth for ALL remote clients.
-  # rate_limit:              # Optional auth-failure rate limiting (default off)
-  #   enabled: false         #   enable to throttle brute-force attempts
+  # rate_limit:              # Auth-failure rate limiting (default ON)
+  #   enabled: true          #   set false only if something in front of the
+  #                          #   NVR already throttles brute-force attempts
   #   max_failures: 20       #   lock an IP after this many failures
   #   window_minutes: 1      #   within this many minutes
 
