@@ -147,7 +147,7 @@ the comparison, don't keep raising the threshold.
 - PR #193 — the fix (`MAX_VALID_LOGIT` cap + sigmoid clarification)
 - `inference.test.ts` — regression test: exploding logit (`62932`) rejected,
   normal strong detection (`logit 6` → `sigmoid 0.998`) retained
-- Sibling postmortem: `known-issues-ai-onnx-gzip-trailer.md` (#109) — another
+- Sibling postmortem: `known-issues/ai-onnx-gzip-trailer.md` (#109) — another
   case where the visible symptom ("model won't load") misdirected diagnosis
   away from the real (middleware) cause
 - The debug-overlay technique (`AiOverlay` → `data-ai-debug` DOM node) is a
