@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,6 +34,28 @@ import (
 
 var hlsLogger = slogx.Component("hls-manager")
 
+// touchLastUsed stamps the entry's LRU clock. Race-free from any lock domain
+// (see the lastUsed field comment).
+func (e *streamEntry) touchLastUsed() {
+	now := time.Now()
+	e.lastUsed.Store(&now)
+}
+
+// lastUsedTime snapshots the entry's LRU clock; the zero Time means the entry
+// was never stamped.
+func (e *streamEntry) lastUsedTime() time.Time {
+	if p := e.lastUsed.Load(); p != nil {
+		return *p
+	}
+	return time.Time{}
+}
+
+// setLastUsed overwrites the LRU clock with a specific instant (tests build
+// entries with deliberate orderings; runtime code uses touchLastUsed).
+func (e *streamEntry) setLastUsed(t time.Time) {
+	e.lastUsed.Store(&t)
+}
+
 const (
 	defaultIdleTimeout    = 60 * time.Second
 	defaultMaxStreams     = 4
@@ -51,11 +74,17 @@ type hlsFrame struct {
 
 // streamEntry holds a per-camera HLS muxer and its metadata.
 type streamEntry struct {
-	mu                sync.Mutex // protects lastUsed, lastFrameTime, and fpsCredit
-	mux               *gohlslib.Muxer
-	track             *gohlslib.Track
-	dirPath           string
-	lastUsed          time.Time
+	mu      sync.Mutex // protects lastFrameTime and fpsCredit
+	mux     *gohlslib.Muxer
+	track   *gohlslib.Track
+	dirPath string
+	// lastUsed feeds the LRU/idle decisions and is written from two lock
+	// domains: startStream/evictLRULocked hold m.mu (which they must NOT
+	// extend to entry.mu — the #230 lock-order audit keeps the order
+	// m.mu → release → entry.mu), while writeFrame/Handle write it under
+	// entry.mu. An immutable *time.Time behind atomic.Pointer is race-free
+	// from both domains without nesting the locks (#1002).
+	lastUsed          atomic.Pointer[time.Time]
 	cancel            context.CancelFunc
 	frameCh           chan hlsFrame // async write buffer
 	isH265            bool
@@ -192,7 +221,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 
 	// Already active — just update lastUsed (check before eviction to avoid unnecessary evict)
 	if entry, ok := m.streams[cameraID]; ok {
-		entry.lastUsed = time.Now()
+		entry.touchLastUsed()
 		return nil
 	}
 
@@ -203,7 +232,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 
 	// Already active — just update lastUsed
 	if entry, ok := m.streams[cameraID]; ok {
-		entry.lastUsed = time.Now()
+		entry.touchLastUsed()
 		return nil
 	}
 
@@ -223,7 +252,6 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		mux:              mux,
 		track:            track,
 		dirPath:          dirPath,
-		lastUsed:         time.Now(),
 		cancel:           cancel,
 		frameCh:          make(chan hlsFrame, m.writeBufSize),
 		isH265:           isH265,
@@ -233,6 +261,7 @@ func (m *Manager) startStream(cameraID string, isH265 bool, sps, pps, vps []byte
 		pps:              pps,
 		vps:              vps,
 	}
+	entry.touchLastUsed()
 	m.streams[cameraID] = entry
 
 	// Start async writer goroutine for this stream. Tracked by entry.wg so
@@ -944,9 +973,9 @@ func (m *Manager) evictLRULocked(newStreamID string) {
 		if id == newStreamID {
 			continue
 		}
-		if oldestID == "" || entry.lastUsed.Before(oldestTime) {
+		if t := entry.lastUsedTime(); oldestID == "" || t.Before(oldestTime) {
 			oldestID = id
-			oldestTime = entry.lastUsed
+			oldestTime = t
 		}
 	}
 	if oldestID == "" {
@@ -1048,7 +1077,7 @@ func (m *Manager) writeFrame(cameraID string, pts int64, au [][]byte) error {
 	isIDR := nalutil.IsIDR(au, entry.isH265)
 
 	entry.mu.Lock()
-	entry.lastUsed = time.Now()
+	entry.touchLastUsed()
 
 	// Credit-based FPS throttling: accumulate elapsed time between frames,
 	// send only when enough credit has accumulated for one interval.
@@ -1180,7 +1209,7 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 	}
 
 	entry.mu.Lock()
-	entry.lastUsed = time.Now()
+	entry.touchLastUsed()
 	// Snapshot muxer under the lock. handleWriteError sets entry.mux = nil
 	// on write failures; an HTTP request arriving in that window would
 	// dereference nil and panic the whole process (SIGSEGV addr=0xd0).
@@ -1337,9 +1366,7 @@ func (m *Manager) idleWatchdog(ctx context.Context, cameraID string) {
 			if !ok {
 				return
 			}
-			entry.mu.Lock()
-			lastUsed := entry.lastUsed
-			entry.mu.Unlock()
+			lastUsed := entry.lastUsedTime()
 			if time.Since(lastUsed) > m.idleTimeout {
 				hlsLogger.Info("HLS stream idle timeout, stopping", "camera_id", cameraID)
 				if m.metrics != nil {
