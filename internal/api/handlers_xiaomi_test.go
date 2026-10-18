@@ -77,18 +77,23 @@ type failingCloudProxy struct{}
 func (failingCloudProxy) SetCloudConfig(ctx context.Context, userID, token, region string) error {
 	return nil
 }
+
 func (failingCloudProxy) SignIn(ctx context.Context, username, password, region string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, errors.New("invalid username or password")
 }
+
 func (failingCloudProxy) SubmitCaptcha(ctx context.Context, sessionID, captchaCode string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, errors.New("captcha mismatch")
 }
+
 func (failingCloudProxy) SubmitVerify(ctx context.Context, sessionID, ticket string) (*CloudAuthResult, *CloudVerificationRequired, error) {
 	return nil, nil, errors.New("ticket rejected")
 }
+
 func (failingCloudProxy) ListDevices(ctx context.Context) ([]CloudDeviceInfo, error) {
 	return nil, errors.New("not signed in")
 }
+
 func (failingCloudProxy) CheckVendor(ctx context.Context, did string) (string, error) {
 	return "", errors.New("unknown")
 }
