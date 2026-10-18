@@ -150,11 +150,11 @@ type XiaomiRecorder struct {
 	// codecSnap so the cross-goroutine accessors (SPS/PPS/VPS/CodecParams —
 	// HLS/WS/relay HTTP goroutines) read a consistent triplet without a
 	// lock. Port of baseRecorder's Tier-2 snapshot (#219/#226 parity, #1003).
-	codec   model.Format // "h264" or "h265"
-	sps     []byte
-	pps     []byte
-	vps     []byte // H265 only
-	codecOK bool   // true once codec type is determined
+	codec     model.Format // "h264" or "h265"
+	sps       []byte
+	pps       []byte
+	vps       []byte // H265 only
+	codecOK   bool   // true once codec type is determined
 	codecSnap atomic.Pointer[codecSnapshot]
 	// paramGate bounds parameter-set-triggered segment rotations (#642): this
 	// model family alternates decode-equivalent SPS encodings (VUI/timing-only
