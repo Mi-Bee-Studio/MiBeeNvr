@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
@@ -627,43 +628,26 @@ func (h *Handler) mapGB28181PTZError(w http.ResponseWriter, err error) {
 	}
 }
 
-// gb28181DeviceRecord is the JSON shape of one device-side record entry.
-type gb28181DeviceRecord struct {
-	Name      string `json:"name"`
-	FilePath  string `json:"file_path,omitempty"`
-	StartTime string `json:"start_time"` // RFC3339
-	EndTime   string `json:"end_time"`   // RFC3339
-}
-
-// parseGB28181Time parses a device-supplied timestamp. GB/T 28181 uses
-// "2006-01-02T15:04:05"; some vendors use a space separator. Local device
-// time is interpreted in the configured GB timezone (devices lack TZ info;
-// defaults to the NVR's local zone).
-func (h *Handler) parseGB28181Time(v string) (time.Time, bool) {
-	loc := h.gb28181Loc
-	if loc == nil {
-		loc = time.Local
+// writeGBRecordError maps DeviceRecordService errors onto the typed-error
+// track; deviceFailStatus is the status a device-side failure (INVITE/query/
+// BYE/control rejected by the device) maps to for this endpoint (502 for
+// fetch starts and queries, 409 for control, 500 for stop) (#1009).
+func writeGBRecordError(w http.ResponseWriter, err error, deviceFailStatus int) {
+	var (
+		nf  *gb28181.ChannelNotFoundError
+		una *gb28181.MediaUnavailableError
+		rg  *gb28181.InvalidRangeError
+	)
+	switch {
+	case errors.As(err, &una):
+		writeAPIError(w, http.StatusServiceUnavailable, err)
+	case errors.As(err, &nf):
+		writeAPIError(w, http.StatusNotFound, err)
+	case errors.As(err, &rg):
+		writeAPIError(w, http.StatusBadRequest, err)
+	default:
+		writeAPIError(w, deviceFailStatus, err)
 	}
-	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", time.RFC3339} {
-		if t, err := time.ParseInLocation(layout, v, loc); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
-
-// resolveChannelDevice finds the device owning channelID across all
-// registered devices ("" when unknown).
-func (h *Handler) resolveChannelDevice(channelID string) (string, bool) {
-	if h.gb28181DeviceMgr == nil {
-		return "", false
-	}
-	for _, dev := range h.gb28181DeviceMgr.AllDevices() {
-		if _, ok := h.gb28181DeviceMgr.FindChannel(dev.ID, channelID); ok {
-			return dev.ID, true
-		}
-	}
-	return "", false
 }
 
 // handleChannelRecords returns the device-side recording index for a time
@@ -674,57 +658,21 @@ func (h *Handler) handleChannelRecords(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "channel ID is required")
 		return
 	}
-	startStr := r.URL.Query().Get("start")
-	endStr := r.URL.Query().Get("end")
-	if startStr == "" || endStr == "" {
-		WriteError(w, http.StatusBadRequest, "start and end query params are required")
-		return
-	}
-	start, err := time.Parse(time.RFC3339, startStr)
+	start, err := time.Parse(time.RFC3339, r.URL.Query().Get("start"))
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "start must be RFC3339")
 		return
 	}
-	end, err := time.Parse(time.RFC3339, endStr)
+	end, err := time.Parse(time.RFC3339, r.URL.Query().Get("end"))
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "end must be RFC3339")
 		return
 	}
-	if !end.After(start) || end.Sub(start) > 7*24*time.Hour {
-		WriteError(w, http.StatusBadRequest, "invalid range: end must be after start, max 7 days")
-		return
-	}
 
-	deviceID, ok := h.resolveChannelDevice(channelID)
-	if !ok {
-		WriteError(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if h.gb28181Media == nil {
-		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
-		return
-	}
-
-	items, err := h.gb28181Media.QueryChannelRecords(deviceID, channelID, start, end)
+	records, err := h.gb28181Records.Records(channelID, start, end)
 	if err != nil {
-		slog.Warn("GB28181 record query failed", "channel_id", channelID, "error", err)
-		WriteError(w, http.StatusBadGateway, "device record query failed: "+err.Error())
+		writeGBRecordError(w, err, http.StatusBadGateway)
 		return
-	}
-
-	records := make([]gb28181DeviceRecord, 0, len(items))
-	for _, it := range items {
-		st, okSt := h.parseGB28181Time(it.StartTime)
-		et, okEt := h.parseGB28181Time(it.EndTime)
-		if !okSt || !okEt {
-			continue // malformed device entries are dropped, not fatal
-		}
-		records = append(records, gb28181DeviceRecord{
-			Name:      it.Name,
-			FilePath:  it.FilePath,
-			StartTime: st.UTC().Format(time.RFC3339),
-			EndTime:   et.UTC().Format(time.RFC3339),
-		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"channel_id": channelID,
@@ -760,25 +708,9 @@ func (h *Handler) handleChannelPlaybackStart(w http.ResponseWriter, r *http.Requ
 		WriteError(w, http.StatusBadRequest, "end must be RFC3339")
 		return
 	}
-	if !end.After(start) || end.Sub(start) > 24*time.Hour {
-		WriteError(w, http.StatusBadRequest, "invalid range: end must be after start, max 24 hours")
-		return
-	}
 
-	deviceID, ok := h.resolveChannelDevice(channelID)
-	if !ok {
-		WriteError(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if h.gb28181Media == nil {
-		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
-		return
-	}
-
-	slog.Info("GB28181 channel playback requested", "channel_id", channelID, "start", req.Start, "end", req.End)
-	if err := h.gb28181Media.StartPlayback(deviceID, channelID, start, end); err != nil {
-		slog.Warn("GB28181 playback start failed", "channel_id", channelID, "error", err)
-		WriteError(w, http.StatusBadGateway, "playback start failed: "+err.Error())
+	if err := h.gb28181Records.StartPlayback(channelID, start, end); err != nil {
+		writeGBRecordError(w, err, http.StatusBadGateway)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{
@@ -814,25 +746,9 @@ func (h *Handler) handleChannelDownloadStart(w http.ResponseWriter, r *http.Requ
 		WriteError(w, http.StatusBadRequest, "end must be RFC3339")
 		return
 	}
-	if !end.After(start) || end.Sub(start) > 7*24*time.Hour {
-		WriteError(w, http.StatusBadRequest, "invalid range: end must be after start, max 7 days")
-		return
-	}
 
-	deviceID, ok := h.resolveChannelDevice(channelID)
-	if !ok {
-		WriteError(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if h.gb28181Media == nil {
-		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
-		return
-	}
-
-	slog.Info("GB28181 channel download requested", "channel_id", channelID, "start", req.Start, "end", req.End)
-	if err := h.gb28181Media.StartDownload(deviceID, channelID, start, end); err != nil {
-		slog.Warn("GB28181 download start failed", "channel_id", channelID, "error", err)
-		WriteError(w, http.StatusBadGateway, "download start failed: "+err.Error())
+	if err := h.gb28181Records.StartDownload(channelID, start, end); err != nil {
+		writeGBRecordError(w, err, http.StatusBadGateway)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{
@@ -844,11 +760,11 @@ func (h *Handler) handleChannelDownloadStart(w http.ResponseWriter, r *http.Requ
 // handleChannelPlaybackStatus reports the running fetch (404 when idle).
 func (h *Handler) handleChannelPlaybackStatus(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
-	if h.gb28181Media == nil {
-		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
+	st, ok, err := h.gb28181Records.PlaybackStatus(channelID)
+	if err != nil {
+		writeGBRecordError(w, err, http.StatusServiceUnavailable)
 		return
 	}
-	st, ok := h.gb28181Media.PlaybackStatusFor(channelID)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"active": false, "channel_id": channelID})
 		return
@@ -860,12 +776,8 @@ func (h *Handler) handleChannelPlaybackStatus(w http.ResponseWriter, r *http.Req
 // partially-fetched recording).
 func (h *Handler) handleChannelPlaybackStop(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "id")
-	if h.gb28181Media == nil {
-		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
-		return
-	}
-	if err := h.gb28181Media.StopPlayback(channelID); err != nil {
-		WriteError(w, http.StatusInternalServerError, "failed to stop playback")
+	if err := h.gb28181Records.StopPlayback(channelID); err != nil {
+		writeGBRecordError(w, err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "playback_stopped", "channel_id": channelID})
@@ -890,12 +802,8 @@ func (h *Handler) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Re
 		WriteError(w, http.StatusBadRequest, "action must be pause, resume, or seek")
 		return
 	}
-	if h.gb28181Media == nil {
-		WriteError(w, http.StatusServiceUnavailable, "GB28181 device media API not available")
-		return
-	}
-	if err := h.gb28181Media.PlaybackControl(channelID, req.Action, req.Scale, req.Position); err != nil {
-		WriteError(w, http.StatusConflict, err.Error())
+	if err := h.gb28181Records.PlaybackControl(channelID, req.Action, req.Scale, req.Position); err != nil {
+		writeGBRecordError(w, err, http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "control_sent", "action": req.Action})
