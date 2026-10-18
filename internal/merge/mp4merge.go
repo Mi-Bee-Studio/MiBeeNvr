@@ -1635,10 +1635,6 @@ func (b *bytesWriter) Seek(offset int64, whence int) (int64, error) {
 	return b.pos, nil
 }
 
-func (b *bytesWriter) len() int64 {
-	return int64(len(b.data))
-}
-
 // countWriter is a no-retention io.WriteSeeker for measuring box output
 // (#1011 debt 3): it mirrors bytesWriter's position semantics — including
 // SeekEnd anchored at the high-water mark, which for append-only writes is

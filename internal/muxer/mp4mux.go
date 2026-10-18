@@ -1041,48 +1041,6 @@ func writeOpusSampleEntry(w *mp4.Writer, tr *track) error {
 	return mediaprobe.WriteOpusSampleEntry(w, uint16(tr.opusChans), tr.opusPreSkip, tr.opusRate)
 }
 
-// buildEsds constructs an esds (Elementary Stream Descriptor) box for AAC.
-// Structure: ES_Descriptor > DecoderConfigDescriptor > DecSpecificInfoTag(AudioSpecificConfig) + SLConfigDescriptor
-func buildEsds(audioConfig []byte) *mp4.Esds {
-	return &mp4.Esds{
-		FullBox: mp4.FullBox{Version: 0},
-		Descriptors: []mp4.Descriptor{
-			{
-				Tag:  mp4.ESDescrTag,
-				Size: uint32(25 + len(audioConfig)),
-				ESDescriptor: &mp4.ESDescriptor{
-					ESID:           1,
-					StreamPriority: 0,
-				},
-				DecoderConfigDescriptor: nil,
-			},
-			{
-				Tag:  mp4.DecoderConfigDescrTag,
-				Size: uint32(13 + len(audioConfig)),
-				DecoderConfigDescriptor: &mp4.DecoderConfigDescriptor{
-					ObjectTypeIndication: 0x40, // Audio ISO/IEC 14496-3 (AAC)
-					StreamType:           0x05, // AudioStream
-					UpStream:             false,
-					Reserved:             true,
-					BufferSizeDB:         0,
-					MaxBitrate:           128000,
-					AvgBitrate:           128000,
-				},
-			},
-			{
-				Tag:  mp4.DecSpecificInfoTag,
-				Size: uint32(len(audioConfig)),
-				Data: audioConfig,
-			},
-			{
-				Tag:  mp4.SLConfigDescrTag,
-				Size: 1,
-				Data: []byte{0x02}, // predefined: use timestamps
-			},
-		},
-	}
-}
-
 // --- Helpers ---
 
 func trackDurationMs(tr *track) uint32 {
