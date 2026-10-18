@@ -277,9 +277,9 @@ type AuthConfig struct {
 }
 
 // RateLimitConfig controls auth failure rate limiting.
-// When Enabled is false (default), no rate limiting is applied.
+// Defaults to enabled (nil = on); set enabled: false to opt out.
 type RateLimitConfig struct {
-	Enabled       *bool `yaml:"enabled"`        // default false
+	Enabled       *bool `yaml:"enabled"`        // default true
 	MaxFailures   int   `yaml:"max_failures"`   // default 20
 	WindowMinutes int   `yaml:"window_minutes"` // default 1
 }
