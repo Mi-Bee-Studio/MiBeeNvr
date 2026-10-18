@@ -354,10 +354,10 @@ type baseRecorder struct {
 	audioTrackID int
 	// ambientFile is the raw G.711 sidecar handle (nil unless
 	// adaptive.ambient_audio+ambient_archive; guarded by mu like muxer).
-	ambientFile   *os.File
-	curFinalPath  string
-	curTempPath   string
-	segStart      time.Time
+	ambientFile  *os.File
+	curFinalPath string
+	curTempPath  string
+	segStart     time.Time
 	// frameCount is Tier-3-owned (writeFrames goroutine is the only writer)
 	// but RecordingStats reads it from HTTP goroutines, so it lives behind an
 	// atomic instead of the Tier-3 plain fields below (#1001).
