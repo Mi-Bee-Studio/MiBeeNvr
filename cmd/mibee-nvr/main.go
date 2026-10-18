@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/app"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/install"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
@@ -26,7 +27,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tray"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/app"
 )
 
 var (
