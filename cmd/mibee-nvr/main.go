@@ -26,7 +26,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tray"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/update"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/pkg/app"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/app"
 )
 
 var (
