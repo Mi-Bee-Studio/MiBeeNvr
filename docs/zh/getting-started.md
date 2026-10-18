@@ -132,6 +132,8 @@ make cross
 2. **配置文件明文** — 在 YAML 中设置 `auth.password`，首次启动时自动转换为 `password_hash`
 3. **手动生成哈希** — 使用 `mibee-nvr hash-password <密码>` 生成，粘贴到 `auth.password_hash`
 
+> 完整命令行用法（init / hash-password / health / cleanup / repair 等子命令）见 [CLI 用户手册](cli.md)。
+
 ### 默认路径
 
 | 路径 | 说明 |
@@ -150,6 +152,8 @@ MiBee NVR 使用**独立的传输协议 + 编码格式**配置摄像头：
 
 - **传输协议**：`rtsp`、`http`、`onvif`、`xiaomi`、`timelapse`
 - **编码格式**：`h264`、`h265`、`mjpeg`、`jpeg`
+
+所有摄像头都在「摄像头」页管理：点击「**扫描设备**」可自动发现局域网内的 ONVIF / 小米摄像头，点击「**+ 添加摄像头**」手动添加；每张卡片可以启停、重启、查看实时画面。
 
 > 旧版组合格式（`rtsp_h264`、`rtsp_h265`、`rtsp_mjpeg`、`http_jpeg`）在 **0.10.0+ 已被拒绝** —— `Validate()` 与摄像头创建处理器会返回错误，要求拆分为独立的 `protocol` 和 `encoding` 字段。
 
@@ -297,3 +301,12 @@ ftp 你的服务器地址 2121
 
 - 将 `segment_duration` 设为 `30s`（默认值）。更长的时长会在内存中缓存更多数据。
 - 树莓派 3B 约 900MB 内存，4 个摄像头 30 秒片段时稳定运行约占 300MB。
+
+## 下一步
+
+- [Docker 部署](install-docker.md) — 生产环境部署
+- [CLI 用户手册](cli.md) — 命令行管理工具
+- [配置参考](config.md) — YAML 顶层键速查
+- [NAS 部署](install-nas.md) — 群晖 / 威联通 / unRAID / 飞牛
+- [ONVIF 自动发现](onvif-discovery.md) — 零配置接入摄像头
+- [录制与回放](recording-playback.md) — 录像管理

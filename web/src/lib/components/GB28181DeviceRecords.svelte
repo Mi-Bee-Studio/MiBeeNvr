@@ -14,7 +14,7 @@
   } from '$lib/api';
   import type { GB28181DeviceRecord, GB28181PlaybackStatus } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { Search, Download, FileDown, Pause, Play, Square, HardDriveDownload, Loader2 } from 'lucide-svelte';
 
   let { channelId }: { channelId: string } = $props();

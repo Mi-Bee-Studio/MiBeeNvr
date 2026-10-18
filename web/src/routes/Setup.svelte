@@ -4,7 +4,7 @@
   import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
   import { t } from '$lib/i18n';
   import { withBase } from '$lib/base-path';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { Eye, EyeOff, Check, X } from 'lucide-svelte';
 
   let username = $state('admin');

@@ -112,5 +112,5 @@ the same contract as the GB28181 talk socket).
 
 ## Next steps
 
-- [Events & automation](api-reference.md) — the `doorbell.*` event topics
+- [Events & automation](api/README.md) — the `doorbell.*` event topics
 - [GB28181](gb28181-guide.md) — the platform-side protocol for cameras

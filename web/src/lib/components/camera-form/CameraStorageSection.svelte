@@ -7,7 +7,7 @@
     } from '$lib/api';
     import type { Camera, MigrationJob } from '$lib/api';
     import { onDestroy } from 'svelte';
-    import { showToast } from '$lib/toast';
+    import { showToast } from '$lib/toast.svelte';
 
   interface Props {
     camera: Camera;
@@ -73,10 +73,10 @@
         camStorageMigration = res.migration;
         startStoragePoll(cam.id);
       }
-      import('$lib/toast').then(({ showToast }) =>
+      import('$lib/toast.svelte').then(({ showToast }) =>
         showToast(t('cameras.storageSwitched'), 'success'));
     } catch (e) {
-      import('$lib/toast').then(({ showToast }) =>
+      import('$lib/toast.svelte').then(({ showToast }) =>
         showToast(e instanceof Error ? e.message : t('cameras.storageSwitchFailed'), 'error'));
     } finally {
       camStorageSwitching = false;

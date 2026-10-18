@@ -138,21 +138,35 @@ type XiaomiRecorder struct {
 	segStart      time.Time
 	frameCount    int
 	lastFrameTime time.Time
+	// lastSegBytes feeds segment preallocation (#757, baseRecorder parity):
+	// the previous segment's final size estimates the next one. Written only
+	// in closeCurrentSegment and read only at muxer creation — both on the
+	// read-loop goroutine. 0 = no estimate yet.
+	lastSegBytes int64
 
-	// Codec state (probed from first packets)
-	codec   model.Format // "h264" or "h265"
-	sps     []byte
-	pps     []byte
-	vps     []byte // H265 only
-	codecOK bool   // true once codec type is determined
+	// Codec state (probed from first packets). The raw fields are owned by
+	// the connectAndRecord read-loop goroutine (single writer); every
+	// mutation also publishes an immutable deep-copied snapshot behind
+	// codecSnap so the cross-goroutine accessors (SPS/PPS/VPS/CodecParams —
+	// HLS/WS/relay HTTP goroutines) read a consistent triplet without a
+	// lock. Port of baseRecorder's Tier-2 snapshot (#219/#226 parity, #1003).
+	codec     model.Format // "h264" or "h265"
+	sps       []byte
+	pps       []byte
+	vps       []byte // H265 only
+	codecOK   bool   // true once codec type is determined
+	codecSnap atomic.Pointer[codecSnapshot]
 	// paramGate bounds parameter-set-triggered segment rotations (#642): this
 	// model family alternates decode-equivalent SPS encodings (VUI/timing-only
 	// differences) per GOP — 188 rotations in 4.9h on production. Owned by the
 	// video NALU processing goroutine.
 	paramGate nalutil.ParamRotationGate
 
-	// Audio state (probed from first audio packet)
-	audioCodecID uint32 // MISS codec ID for audio (0 = not detected yet)
+	// Audio state (probed from first audio packet). Single writer (read
+	// loop's forwardAudio), multi-reader (external Audio* accessors from
+	// HTTP goroutines; muxer track setup on the read loop itself) — atomic
+	// for the same reason as codecSnap (#1003). MISS codec ID, 0 = unknown.
+	audioCodecID atomic.Uint32
 
 	Hub         *streamhub.StreamHub // Frame fan-out to multiple consumers (HLS, WebRTC, etc.)
 	streamStart time.Time            // For PTS rebase (used by forwardHLS)
@@ -201,6 +215,28 @@ type XiaomiRecorder struct {
 // Interface compliance check.
 var _ model.Recorder = (*XiaomiRecorder)(nil)
 
+// codecSnapshot is the immutable published view of the codec parameter sets,
+// deep-copied on every publish (see baseRecorder.codecParams, #219). Storing
+// the full triplet keeps concurrent readers from observing a torn old/new mix
+// (e.g. new SPS with the previous PPS).
+type codecSnapshot struct {
+	codec model.Format
+	sps   []byte
+	pps   []byte
+	vps   []byte
+}
+
+// publishCodecSnap replaces the published codec view from the writer-owned raw
+// fields. Read-loop goroutine only, after any codec-state mutation.
+func (r *XiaomiRecorder) publishCodecSnap() {
+	r.codecSnap.Store(&codecSnapshot{
+		codec: r.codec,
+		sps:   append([]byte(nil), r.sps...),
+		pps:   append([]byte(nil), r.pps...),
+		vps:   append([]byte(nil), r.vps...),
+	})
+}
+
 // GetHub returns the StreamHub for frame fan-out.
 func (r *XiaomiRecorder) GetHub() *streamhub.StreamHub { return r.Hub }
 
@@ -211,17 +247,33 @@ func (r *XiaomiRecorder) SetHub(hub *streamhub.StreamHub) { r.Hub = hub }
 func (r *XiaomiRecorder) HubSource() string { return "xiaomi" }
 
 // SPS returns the current H.264/H.265 SPS NAL unit (without start bytes).
-func (r *XiaomiRecorder) SPS() []byte { return r.sps }
+// Read from the published snapshot — race-free from any goroutine (#1003).
+func (r *XiaomiRecorder) SPS() []byte {
+	if s := r.codecSnap.Load(); s != nil {
+		return s.sps
+	}
+	return nil
+}
 
 // PPS returns the current H.264/H.265 PPS NAL unit (without start bytes).
-func (r *XiaomiRecorder) PPS() []byte { return r.pps }
+func (r *XiaomiRecorder) PPS() []byte {
+	if s := r.codecSnap.Load(); s != nil {
+		return s.pps
+	}
+	return nil
+}
 
 // VPS returns the current H.265 VPS NAL unit (without start bytes), or nil for H.264.
-func (r *XiaomiRecorder) VPS() []byte { return r.vps }
+func (r *XiaomiRecorder) VPS() []byte {
+	if s := r.codecSnap.Load(); s != nil {
+		return s.vps
+	}
+	return nil
+}
 
 // AudioCodec returns the audio codec name ("g711" or "" for no audio).
 func (r *XiaomiRecorder) AudioCodec() string {
-	c, ok := missCodecToAudio(r.audioCodecID)
+	c, ok := missCodecToAudio(r.audioCodecID.Load())
 	if !ok {
 		return ""
 	}
@@ -233,7 +285,7 @@ func (r *XiaomiRecorder) AudioConfig() []byte { return nil }
 
 // AudioSampleRate returns the audio sample rate. G.711 defaults to 8 kHz.
 func (r *XiaomiRecorder) AudioSampleRate() int {
-	if _, ok := missCodecToAudio(r.audioCodecID); ok {
+	if _, ok := missCodecToAudio(r.audioCodecID.Load()); ok {
 		return 8000
 	}
 	return 0
@@ -241,7 +293,7 @@ func (r *XiaomiRecorder) AudioSampleRate() int {
 
 // AudioChannels returns the number of audio channels. G.711 is mono.
 func (r *XiaomiRecorder) AudioChannels() int {
-	if _, ok := missCodecToAudio(r.audioCodecID); ok {
+	if _, ok := missCodecToAudio(r.audioCodecID.Load()); ok {
 		return 1
 	}
 	return 0
@@ -325,9 +377,13 @@ func (r *XiaomiRecorder) setStatus(s model.RecorderStatus) {
 }
 
 // CodecParams returns the current codec parameters detected from the stream.
-// Implements model.HLSProvider.
+// Implements model.HLSProvider. Snapshot read — consistent triplet, race-free
+// from any goroutine (#1003).
 func (r *XiaomiRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte) {
-	return r.codec, r.sps, r.pps, r.vps
+	if s := r.codecSnap.Load(); s != nil {
+		return s.codec, s.sps, s.pps, s.vps
+	}
+	return model.Format(""), nil, nil, nil
 }
 
 // incActive increments the active recordings gauge if metrics is available.
@@ -721,7 +777,8 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	r.sps = nil
 	r.pps = nil
 	r.vps = nil
-	r.audioCodecID = 0
+	r.audioCodecID.Store(0)
+	r.publishCodecSnap()
 	// Rebuild the adaptive gate per connection: a reconnect always starts in
 	// NORMAL mode with a fresh activity baseline (a reconnect storm can't
 	// oscillate the mode). The audio-trigger runtime follows the gate.
@@ -738,8 +795,6 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 		r.audioTrig = nil
 	}
 
-	var lastTimestamp uint64
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -754,11 +809,19 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 			return fmt.Errorf("miss read: %w", err), false
 		}
 
+		// Arrival time, captured once per packet (#506 / #1003 parity with
+		// baseRecorder): recording timestamps, rotation checks and the
+		// adaptive cadence follow it — never the consumption-time wall clock.
+		// When the read loop stalls and then drains a backlog in a burst,
+		// consumption-time timestamps collapse onto the same millisecond and
+		// break the decode reference chain (duplicate-dts → missing-ref).
+		at := time.Now()
+
 		// SD→HD upgrade (issue #502 defect B): arm the probe once the stable
 		// window has been earned; the run loop consumes the flag on the next
 		// natural disconnect. NEVER disconnect here — a healthy stream must
 		// not be murdered to probe a better one (issue #906 field evidence).
-		if !r.hdProbeWanted && r.shouldProbeUpgrade(time.Now()) {
+		if !r.hdProbeWanted && r.shouldProbeUpgrade(at) {
 			r.hdProbeWanted = true
 		}
 
@@ -784,28 +847,31 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 				r.codec = model.FormatH265
 			}
 			r.codecOK = true
+			r.publishCodecSnap()
 			xiaomiLogger.Info("codec detected", "camera_id", r.cfg.CameraID, "codec", r.codec)
 		}
 
 		// Parse Annex B NALUs from payload and process each one.
 		nalus := splitAnnexBNALUs(pkt.Payload)
 		for _, nalu := range nalus {
-			r.processNALU(nalu, pkt.Timestamp, &lastTimestamp)
+			r.processNALU(nalu, at)
 		}
 	}
 }
 
-// processNALU handles a single NALU extracted from Annex B payload.
-func (r *XiaomiRecorder) processNALU(nalu []byte, timestamp uint64, lastTimestamp *uint64) {
+// processNALU handles a single NALU extracted from Annex B payload. at is the
+// packet's arrival time (captured at ReadPacket), shared by every NALU of the
+// same packet.
+func (r *XiaomiRecorder) processNALU(nalu []byte, at time.Time) {
 	if len(nalu) == 0 {
 		return
 	}
 
 	switch r.codec {
 	case model.FormatH264:
-		r.processH264NALU(nalu, timestamp, lastTimestamp)
+		r.processH264NALU(nalu, at)
 	case model.FormatH265:
-		r.processH265NALU(nalu, timestamp, lastTimestamp)
+		r.processH265NALU(nalu, at)
 	}
 }
 
@@ -816,8 +882,9 @@ func (r *XiaomiRecorder) recordDisabled() bool {
 	return r.cfg.RecordEnabled != nil && !*r.cfg.RecordEnabled
 }
 
-// processH264NALU handles an H.264 NAL unit.
-func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTimestamp *uint64) {
+// processH264NALU handles an H.264 NAL unit. at is the packet arrival time
+// (see the read loop's capture point).
+func (r *XiaomiRecorder) processH264NALU(nalu []byte, at time.Time) {
 	naluType := nalu[0] & 0x1F
 	switch naluType {
 	case 7: // SPS
@@ -835,6 +902,7 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 			}
 		}
 		r.sps = append([]byte(nil), nalu...)
+		r.publishCodecSnap()
 		return
 	case 8: // PPS
 		if r.pps != nil && !bytes.Equal(r.pps, nalu) && r.muxer != nil {
@@ -845,6 +913,7 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 			}
 		}
 		r.pps = append([]byte(nil), nalu...)
+		r.publishCodecSnap()
 		return
 	}
 
@@ -859,7 +928,7 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 	// Live-only mode: keep the stream alive for live preview (forwardHLS) but
 	// skip all disk writes (segment creation + WriteSample + rotation).
 	if r.recordDisabled() {
-		r.forwardHLS(nalu)
+		r.forwardHLS(nalu, at)
 		return
 	}
 
@@ -870,9 +939,8 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 
 	// Adaptive write-density gate (issue #435/#468) — see processH265NALU.
 	if r.adaptive != nil {
-		now := time.Now()
 		isIDR := naluType == 5
-		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
+		_, skip, flush := r.adaptive.Observe(nalu, isIDR, at)
 		// Ambient-audio cameras keep the disk audio track through sparse mode
 		// (#496); the merge renders the ambient span into the atmosphere bed.
 		r.audioSparse.Store(r.adaptive.Timelapse() && !r.cfg.Adaptive.AmbientAudio)
@@ -884,7 +952,7 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 			r.flushAudioRing()
 		}
 		if skip {
-			r.forwardHLS(nalu)
+			r.forwardHLS(nalu, at)
 			return
 		}
 	}
@@ -893,7 +961,7 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 	// 界两侧零丢弃（此前在写后任意帧上关段，新段等下一个 IDR，每个边
 	// 界丢最多一个 GOP 的画面）。
 	if r.muxer != nil {
-		elapsed := time.Since(r.segStart)
+		elapsed := at.Sub(r.segStart)
 		if naluType == 5 && elapsed >= r.cfg.SegmentDur {
 			r.closeCurrentSegment()
 			// fall through：下方开段块以本 IDR 开新段。
@@ -901,7 +969,7 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 			// 无 IDR 流的段长兜底：关段后本帧交回等-IDR 门（直播转发
 			// 保留，仅磁盘写停到下个 IDR）。
 			r.closeCurrentSegment()
-			r.forwardHLS(nalu)
+			r.forwardHLS(nalu, at)
 			return
 		}
 	}
@@ -912,6 +980,10 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 			return
 		}
 		r.muxer = muxer.NewMP4Muxer(tempPath)
+		// Preallocation from the previous segment's final size (#757 parity).
+		if r.lastSegBytes > 0 {
+			r.muxer.SetPreallocateBytes(r.lastSegBytes)
+		}
 		trackID, err := r.muxer.AddH264Track(r.sps, r.pps)
 		if err != nil {
 			xiaomiLogger.Error("failed to add H264 track", "camera_id", r.cfg.CameraID, "error", err)
@@ -925,8 +997,8 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		// audio in recordings (default off — #496 follow-up, issue #520).
 		// Live audio and the audio trigger read the pre-disk path and do not
 		// need the track.
-		if r.cfg.AudioEnabled && r.cfg.AudioInRecordings && r.audioCodecID > 0 {
-			codec, cfg, ok := buildAudioMuxerConfig(r.audioCodecID)
+		if r.cfg.AudioEnabled && r.cfg.AudioInRecordings && r.audioCodecID.Load() > 0 {
+			codec, cfg, ok := buildAudioMuxerConfig(r.audioCodecID.Load())
 			if ok {
 				aID, err := r.muxer.AddAudioTrack(codec, cfg)
 				if err != nil {
@@ -938,18 +1010,17 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		}
 		r.curTempPath = tempPath
 		r.curFinalPath = finalPath
-		r.segStart = time.Now()
-		r.lastFrameTime = r.segStart
+		r.segStart = at
+		r.lastFrameTime = at
 		r.frameCount = 0
 	}
 
-	now := time.Now()
-	pts := now.Sub(r.segStart)
-	duration := now.Sub(r.lastFrameTime)
+	pts := at.Sub(r.segStart)
+	duration := at.Sub(r.lastFrameTime)
 	if duration < time.Millisecond {
 		duration = time.Millisecond
 	}
-	r.lastFrameTime = now
+	r.lastFrameTime = at
 
 	if err := r.muxer.WriteSample(r.trackID, nalu, pts, duration); err != nil {
 		xiaomiLogger.Error("failed to write sample", "camera_id", r.cfg.CameraID, "error", err)
@@ -962,11 +1033,12 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 	}
 
 	// Forward to HLS (non-blocking)
-	r.forwardHLS(nalu)
+	r.forwardHLS(nalu, at)
 }
 
-// processH265NALU handles an H.265/HEVC NAL unit.
-func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTimestamp *uint64) {
+// processH265NALU handles an H.265/HEVC NAL unit. at is the packet arrival
+// time (see the read loop's capture point).
+func (r *XiaomiRecorder) processH265NALU(nalu []byte, at time.Time) {
 	// HEVC NALU type: 2-byte header, type is in bits 1-6 of first byte.
 	naluType := (nalu[0] >> 1) & 0x3F
 	switch naluType {
@@ -979,6 +1051,7 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 			}
 		}
 		r.vps = append([]byte(nil), nalu...)
+		r.publishCodecSnap()
 		return
 	case 33: // SPS
 		if r.sps != nil && !bytes.Equal(r.sps, nalu) && r.muxer != nil {
@@ -993,6 +1066,7 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 			}
 		}
 		r.sps = append([]byte(nil), nalu...)
+		r.publishCodecSnap()
 		return
 	case 34: // PPS
 		if r.pps != nil && !bytes.Equal(r.pps, nalu) && r.muxer != nil {
@@ -1003,6 +1077,7 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 			}
 		}
 		r.pps = append([]byte(nil), nalu...)
+		r.publishCodecSnap()
 		return
 	}
 
@@ -1017,7 +1092,7 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	// Live-only mode: keep the stream alive for live preview (forwardHLS) but
 	// skip all disk writes (segment creation + WriteSample + rotation).
 	if r.recordDisabled() {
-		r.forwardHLS(nalu)
+		r.forwardHLS(nalu, at)
 		return
 	}
 
@@ -1032,9 +1107,8 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	// references. Live fan-out (forwardHLS → StreamHub) keeps flowing for every
 	// frame — the gate changes write density, never the connection.
 	if r.adaptive != nil {
-		now := time.Now()
 		isIDR := naluType == 19 || naluType == 20
-		_, skip, flush := r.adaptive.Observe(nalu, isIDR, now)
+		_, skip, flush := r.adaptive.Observe(nalu, isIDR, at)
 		// Ambient-audio cameras keep the disk audio track through sparse mode
 		// (#496); the merge renders the ambient span into the atmosphere bed.
 		r.audioSparse.Store(r.adaptive.Timelapse() && !r.cfg.Adaptive.AmbientAudio)
@@ -1046,7 +1120,7 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 			r.flushAudioRing()
 		}
 		if skip {
-			r.forwardHLS(nalu)
+			r.forwardHLS(nalu, at)
 			return
 		}
 	}
@@ -1054,12 +1128,12 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	// #953 对齐（同 processH264NALU）：时长轮转只发生在 IDR 上；
 	// 2×SegmentDur 兜底关段后交回等-IDR 门（直播转发保留）。
 	if r.muxer != nil {
-		elapsed := time.Since(r.segStart)
+		elapsed := at.Sub(r.segStart)
 		if (naluType == 19 || naluType == 20) && elapsed >= r.cfg.SegmentDur {
 			r.closeCurrentSegment()
 		} else if elapsed >= 2*r.cfg.SegmentDur {
 			r.closeCurrentSegment()
-			r.forwardHLS(nalu)
+			r.forwardHLS(nalu, at)
 			return
 		}
 	}
@@ -1070,6 +1144,10 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 			return
 		}
 		r.muxer = muxer.NewMP4Muxer(tempPath)
+		// Preallocation from the previous segment's final size (#757 parity).
+		if r.lastSegBytes > 0 {
+			r.muxer.SetPreallocateBytes(r.lastSegBytes)
+		}
 		trackID, err := r.muxer.AddH265Track(r.vps, r.sps, r.pps)
 		if err != nil {
 			xiaomiLogger.Error("failed to add H265 track", "camera_id", r.cfg.CameraID, "error", err)
@@ -1081,8 +1159,8 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 
 		// Add audio track if audio codec detected (same gating as H264 path:
 		// enabled AND kept in recordings — issue #520).
-		if r.cfg.AudioEnabled && r.cfg.AudioInRecordings && r.audioCodecID > 0 {
-			codec, cfg, ok := buildAudioMuxerConfig(r.audioCodecID)
+		if r.cfg.AudioEnabled && r.cfg.AudioInRecordings && r.audioCodecID.Load() > 0 {
+			codec, cfg, ok := buildAudioMuxerConfig(r.audioCodecID.Load())
 			if ok {
 				aID, err := r.muxer.AddAudioTrack(codec, cfg)
 				if err != nil {
@@ -1094,18 +1172,17 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 		}
 		r.curTempPath = tempPath
 		r.curFinalPath = finalPath
-		r.segStart = time.Now()
-		r.lastFrameTime = r.segStart
+		r.segStart = at
+		r.lastFrameTime = at
 		r.frameCount = 0
 	}
 
-	now := time.Now()
-	pts := now.Sub(r.segStart)
-	duration := now.Sub(r.lastFrameTime)
+	pts := at.Sub(r.segStart)
+	duration := at.Sub(r.lastFrameTime)
 	if duration < time.Millisecond {
 		duration = time.Millisecond
 	}
-	r.lastFrameTime = now
+	r.lastFrameTime = at
 
 	if err := r.muxer.WriteSample(r.trackID, nalu, pts, duration); err != nil {
 		xiaomiLogger.Error("failed to write sample", "camera_id", r.cfg.CameraID, "error", err)
@@ -1118,21 +1195,22 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	}
 
 	// Forward to HLS (non-blocking)
-	r.forwardHLS(nalu)
+	r.forwardHLS(nalu, at)
 }
 
 // forwardHLS sends a NALU to all stream consumers via StreamHub (non-blocking).
 // For IDR frames, the codec parameter sets (SPS/PPS or VPS/SPS/PPS) are prepended
 // so the HLS DTS extractor receives a complete access unit.
-func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
+func (r *XiaomiRecorder) forwardHLS(nalu []byte, at time.Time) {
 	if r.Hub == nil || r.Hub.ConsumerCount() == 0 {
 		return
 	}
 	// Convert wall-clock duration to 90kHz ticks (RTP timestamp units).
 	// HLS manager uses ClockRate=90000, so PTS must be in 90kHz ticks,
 	// not nanoseconds. This matches built-in H264/H265 recorders which
-	// pass RTP timestamps directly.
-	pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
+	// pass RTP timestamps directly. at is the packet arrival time (#1003):
+	// consumption-time stamps would collapse after a read-loop stall.
+	pts := at.Sub(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
 
 	switch r.codec {
 	case model.FormatH264:
@@ -1199,16 +1277,16 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	audioCodec, ok := missCodecToAudio(codecID)
 	if !ok {
 		// Log unsupported codecs once, not per-frame (e.g. Opus codec_id=1032)
-		if r.audioCodecID == 0 {
+		if r.audioCodecID.Load() == 0 {
 			xiaomiLogger.Info("audio codec not yet supported for recording, skipping", "camera_id", r.cfg.CameraID, "codec_id", codecID)
-			r.audioCodecID = codecID // mark as seen to suppress repeated logs
+			r.audioCodecID.Store(codecID) // mark as seen to suppress repeated logs
 		}
 		return
 	}
 
 	// Remember the audio codec ID for muxer track creation.
-	if r.audioCodecID == 0 {
-		r.audioCodecID = codecID
+	if r.audioCodecID.Load() == 0 {
+		r.audioCodecID.Store(codecID)
 		xiaomiLogger.Info("audio codec detected", "camera_id", r.cfg.CameraID, "codec_id", codecID, "codec", audioCodec)
 	}
 
@@ -1371,10 +1449,25 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 		}
 	}
 
-	// Insert recording entry into database.
+	// Segment-loss gate: when the final file never materialized (vanished
+	// temp — e.g. the startup temp-cleanup scan racing segment creation,
+	// 2026-09-08 incident), any DB row would be a permanent 404 entry. Skip
+	// the insert, event, and metrics instead. baseRecorder parity (#1003).
 	var fileSize int64
 	var recordingID string
-	if r.cfg.DB != nil && r.curFinalPath != "" {
+	finalExists := false
+	if r.curFinalPath != "" {
+		if info, err := os.Stat(r.curFinalPath); err == nil {
+			finalExists = true
+			fileSize = info.Size()
+			// Feed the next segment's preallocation estimate (#757 parity).
+			r.lastSegBytes = fileSize
+		} else {
+			xiaomiLogger.Warn("segment file missing after finalize — recording row skipped",
+				"camera_id", r.cfg.CameraID, "path", r.curFinalPath)
+		}
+	}
+	if r.cfg.DB != nil && finalExists {
 		now := time.Now()
 		duration := now.Sub(r.segStart).Seconds()
 		rec := &model.Recording{
@@ -1388,10 +1481,7 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 			FrameCount: r.frameCount,
 		}
 		recordingID = rec.ID
-		if info, err := os.Stat(r.curFinalPath); err == nil {
-			fileSize = info.Size()
-			rec.FileSize = fileSize
-		}
+		rec.FileSize = fileSize
 		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
 			xiaomiLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
 		}
@@ -1411,7 +1501,7 @@ func (r *XiaomiRecorder) closeCurrentSegment() {
 		})
 	}
 
-	if r.frameCount > 0 && r.curFinalPath != "" {
+	if r.frameCount > 0 && finalExists {
 		r.recordSegmentCreated()
 		if fileSize > 0 {
 			r.recordBytes(fileSize)

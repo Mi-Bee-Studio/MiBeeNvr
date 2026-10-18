@@ -2,7 +2,7 @@
   import { t } from '$lib/i18n';
   import { deleteCameraMergeConfig } from '$lib/api';
   import type { MergeConfig } from '$lib/api';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
 
   interface Props {
     cameraId: string;
