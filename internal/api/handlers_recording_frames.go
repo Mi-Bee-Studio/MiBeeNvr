@@ -6,61 +6,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/avi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
-
-// sortedImageFiles returns the sorted list of image filenames in dir, using a short-TTL
-// cache to avoid os.ReadDir + sort on every request. The cache is invalidated when the
-// directory's mtime changes (new frames written) or after frameListCacheTTL. This matters
-// for MJPEG/timelapse frame dirs which can hold thousands of JPEGs; without it each
-// ?frame=N / list-frames request re-scanned and re-sorted the whole directory.
-func (h *Handler) sortedImageFiles(dir string) ([]string, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return nil, err
-	}
-	mtime := info.ModTime().Unix()
-
-	h.frameListMu.Lock()
-	if h.frameListCache == nil {
-		h.frameListCache = make(map[string]*frameListEntry)
-	}
-	cached, ok := h.frameListCache[dir]
-	if ok && cached.dirMtime == mtime && time.Since(cached.scannedAt) < frameListCacheTTL {
-		names := cached.names
-		h.frameListMu.Unlock()
-		return names, nil
-	}
-	h.frameListMu.Unlock()
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if isImageFile(e.Name()) {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Slice(names, func(i, j int) bool { return names[i] < names[j] })
-
-	h.frameListMu.Lock()
-	h.frameListCache[dir] = &frameListEntry{names: names, dirMtime: mtime, scannedAt: time.Now()}
-	h.frameListMu.Unlock()
-	return names, nil
-}
 
 func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -70,7 +23,7 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if rec == nil {
-		WriteError(w, http.StatusNotFound, "recording not found")
+		writeAPIError(w, http.StatusNotFound, &model.RecordingNotFoundError{RecordingID: id})
 		return
 	}
 
@@ -98,7 +51,7 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 	if frameStr != "" && rec.Format == model.FormatMJPEG {
 		frameIndex, err := strconv.Atoi(frameStr)
 		if err == nil {
-			jpgFiles, err := h.sortedImageFiles(validPath)
+			jpgFiles, err := h.recFrames.SortedImageFiles(validPath)
 			if err == nil {
 				if frameIndex >= 0 && frameIndex < len(jpgFiles) {
 					framePath := filepath.Join(validPath, jpgFiles[frameIndex])
@@ -147,7 +100,7 @@ func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rec == nil {
-		WriteError(w, http.StatusNotFound, "recording not found")
+		writeAPIError(w, http.StatusNotFound, &model.RecordingNotFoundError{RecordingID: id})
 		return
 	}
 
@@ -156,8 +109,7 @@ func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := rec.FilePath
-	info, err := os.Stat(filePath)
+	info, err := os.Stat(rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, "recording files not found")
 		return
@@ -167,7 +119,7 @@ func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries, err := os.ReadDir(filePath)
+	frames, err := h.recFrames.MJPEGFrames(rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to read recording directory")
 		return
@@ -178,58 +130,25 @@ func (h *Handler) handleListFrames(w http.ResponseWriter, r *http.Request) {
 		Filename string `json:"filename"`
 		Size     int64  `json:"size"`
 	}
-
-	var frames []FrameInfo
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") {
-			continue
-		}
-		fi, err := e.Info()
-		if err != nil {
-			continue
-		}
-		frames = append(frames, FrameInfo{
-			Filename: name,
-			Size:     fi.Size(),
-		})
+	out := make([]FrameInfo, len(frames))
+	for i, f := range frames {
+		out[i] = FrameInfo{Index: i, Filename: f.Filename, Size: f.Size}
 	}
-
-	// Sort by filename (natural order - timestamp-based names sort correctly)
-	sort.Slice(frames, func(i, j int) bool {
-		return frames[i].Filename < frames[j].Filename
-	})
-
-	// Assign sequential indices
-	for i := range frames {
-		frames[i].Index = i
-	}
-
-	if frames == nil {
-		frames = []FrameInfo{}
-	}
-
 	writeJSON(w, http.StatusOK, map[string]any{
-		"frames": frames,
+		"frames": out,
 	})
 }
 
 // --- Timelapse endpoints ---
 
-// isTimelapseFrame checks if a filename has a supported timelapse frame extension.
-
-// isTimelapseFrame checks if a filename has a supported timelapse frame extension.
-func isTimelapseFrame(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") ||
-		strings.HasSuffix(lower, ".h264") || strings.HasSuffix(lower, ".h265")
+// timelapseFrameInfo is the JSON shape shared by the directory and AVI frame
+// listings under /api/recordings/{id}/timelapse-frames.
+type timelapseFrameInfo struct {
+	Filename  string `json:"filename"`
+	URL       string `json:"url"`
+	Size      int64  `json:"size"`
+	Timestamp string `json:"timestamp"`
 }
-
-// handleTimelapseFrames handles GET /api/recordings/{id}/timelapse-frames.
-// Returns JSON array of frame metadata for timelapse recordings.
 
 // handleTimelapseFrames handles GET /api/recordings/{id}/timelapse-frames.
 // Returns JSON array of frame metadata for timelapse recordings.
@@ -241,7 +160,7 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if rec == nil {
-		WriteError(w, http.StatusNotFound, "recording not found")
+		writeAPIError(w, http.StatusNotFound, &model.RecordingNotFoundError{RecordingID: id})
 		return
 	}
 	if rec.Format == model.FormatAVI {
@@ -263,49 +182,21 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	entries, err := os.ReadDir(rec.FilePath)
+	frames, err := h.recFrames.TimelapseFrames(rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to read timelapse directory")
 		return
 	}
-
-	type TimelapseFrameInfo struct {
-		Filename  string `json:"filename"`
-		URL       string `json:"url"`
-		Size      int64  `json:"size"`
-		Timestamp string `json:"timestamp"`
-	}
-
-	var frames []TimelapseFrameInfo
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	out := make([]timelapseFrameInfo, len(frames))
+	for i, f := range frames {
+		out[i] = timelapseFrameInfo{
+			Filename:  f.Filename,
+			URL:       fmt.Sprintf("/api/recordings/%s/timelapse-frames/%s", id, f.Filename),
+			Size:      f.Size,
+			Timestamp: f.Timestamp.UTC().Format(time.RFC3339),
 		}
-		name := e.Name()
-		if !isTimelapseFrame(name) {
-			continue
-		}
-		fi, err := e.Info()
-		if err != nil {
-			continue
-		}
-		frames = append(frames, TimelapseFrameInfo{
-			Filename:  name,
-			URL:       fmt.Sprintf("/api/recordings/%s/timelapse-frames/%s", id, name),
-			Size:      fi.Size(),
-			Timestamp: extractFrameTimestamp(name, filepath.Join(rec.FilePath, name), fi.ModTime()).UTC().Format(time.RFC3339),
-		})
 	}
-
-	sort.Slice(frames, func(i, j int) bool {
-		return frames[i].Filename < frames[j].Filename
-	})
-
-	if frames == nil {
-		frames = []TimelapseFrameInfo{}
-	}
-
-	writeJSON(w, http.StatusOK, frames)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleAviFrames serves the timelapse-frames listing contract for AVI
@@ -314,54 +205,29 @@ func (h *Handler) handleTimelapseFrames(w http.ResponseWriter, r *http.Request) 
 // cross-segment chaining and seeking — consumes this exactly like timelapse
 // frames, giving AVI recordings seekable playback instead of the realtime-only
 // WebSocket player.
-
-// handleAviFrames serves the timelapse-frames listing contract for AVI
-// recordings (#321): video frames (complete JPEGs) indexed by walking the
-// movi chunk headers. The frontend JPEG cycler — which already has seamless
-// cross-segment chaining and seeking — consumes this exactly like timelapse
-// frames, giving AVI recordings seekable playback instead of the realtime-only
-// WebSocket player.
-func (h *Handler) handleAviFrames(w http.ResponseWriter, r *http.Request, rec *model.Recording) {
-	f, err := os.Open(rec.FilePath)
-	if err != nil {
+func (h *Handler) handleAviFrames(w http.ResponseWriter, _ *http.Request, rec *model.Recording) {
+	if _, err := os.Stat(rec.FilePath); err != nil {
 		WriteError(w, http.StatusNotFound, "AVI file not found")
 		return
 	}
-	defer f.Close()
-
-	dmx, err := avi.NewDemuxer(f)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "parse AVI: "+err.Error())
-		return
-	}
-	entries, err := dmx.VideoFrameIndex()
+	entries, err := h.recFrames.AVIFrames(rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "index AVI frames: "+err.Error())
 		return
 	}
-
-	type TimelapseFrameInfo struct {
-		Filename  string `json:"filename"`
-		URL       string `json:"url"`
-		Size      int64  `json:"size"`
-		Timestamp string `json:"timestamp"`
-	}
 	started := rec.StartedAt
-	frames := make([]TimelapseFrameInfo, 0, len(entries))
+	frames := make([]timelapseFrameInfo, 0, len(entries))
 	for _, e := range entries {
 		name := fmt.Sprintf("f%06d.jpg", e.Index)
-		frames = append(frames, TimelapseFrameInfo{
+		frames = append(frames, timelapseFrameInfo{
 			Filename:  name,
 			URL:       fmt.Sprintf("/api/recordings/%s/timelapse-frames/%s", rec.ID, name),
-			Size:      int64(e.Size),
+			Size:      e.Size,
 			Timestamp: started.Add(time.Duration(e.PTSUs) * time.Microsecond).UTC().Format(time.RFC3339),
 		})
 	}
 	writeJSON(w, http.StatusOK, frames)
 }
-
-// handleAviFrame serves one JPEG frame out of an AVI recording by synthetic
-// filename (f%06d.jpg — see handleAviFrames).
 
 // handleAviFrame serves one JPEG frame out of an AVI recording by synthetic
 // filename (f%06d.jpg — see handleAviFrames).
@@ -377,12 +243,7 @@ func (h *Handler) handleAviFrame(w http.ResponseWriter, r *http.Request, rec *mo
 		return
 	}
 	defer f.Close()
-	dmx, err := avi.NewDemuxer(f)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "parse AVI: "+err.Error())
-		return
-	}
-	entries, err := dmx.VideoFrameIndex()
+	entries, err := h.recFrames.AVIFrames(rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "index AVI frames: "+err.Error())
 		return
@@ -397,16 +258,13 @@ func (h *Handler) handleAviFrame(w http.ResponseWriter, r *http.Request, rec *mo
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Content-Length", strconv.FormatInt(int64(e.Size), 10))
+	w.Header().Set("Content-Length", strconv.FormatInt(e.Size, 10))
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.CopyN(w, f, int64(e.Size)); err != nil {
+	if _, err := io.CopyN(w, f, e.Size); err != nil {
 		return // client went away
 	}
 }
-
-// handleTimelapseFrame handles GET /api/recordings/{id}/timelapse-frames/{filename}.
-// Serves an individual JPEG frame from a timelapse recording.
 
 // handleTimelapseFrame handles GET /api/recordings/{id}/timelapse-frames/{filename}.
 // Serves an individual JPEG frame from a timelapse recording.
@@ -432,7 +290,7 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rec == nil {
-		WriteError(w, http.StatusNotFound, "recording not found")
+		writeAPIError(w, http.StatusNotFound, &model.RecordingNotFoundError{RecordingID: id})
 		return
 	}
 	if rec.Format == model.FormatAVI {
@@ -457,16 +315,6 @@ func (h *Handler) handleTimelapseFrame(w http.ResponseWriter, r *http.Request) {
 // can decide whether to use <video> (H.264/H.265 are browser-playable) or fall
 // back to the JPEG frame cycler (MJPEG-in-MP4 / mjpa is not). Probed via the
 // pure-Go mediaprobe package — no ffprobe.
-
-// handleMergedRecording handles GET /api/recordings/{id}/merged.
-// Serves the merged MP4 file for a timelapse recording if it has been merged.
-// Returns 404 if the merged MP4 is not available — the frontend falls back to
-// the JPEG frame viewer on this 404 (via MEDIA_ERR_NETWORK in handleVideoError).
-//
-// Sets the X-Timelapse-Codec response header (h264/h265/mjpeg) so the frontend
-// can decide whether to use <video> (H.264/H.265 are browser-playable) or fall
-// back to the JPEG frame cycler (MJPEG-in-MP4 / mjpa is not). Probed via the
-// pure-Go mediaprobe package — no ffprobe.
 func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	rec, err := h.db.GetRecording(r.Context(), id)
@@ -475,7 +323,7 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if rec == nil {
-		WriteError(w, http.StatusNotFound, "recording not found")
+		writeAPIError(w, http.StatusNotFound, &model.RecordingNotFoundError{RecordingID: id})
 		return
 	}
 	if rec.MergePath == "" {
@@ -491,12 +339,8 @@ func (h *Handler) handleMergedRecording(w http.ResponseWriter, r *http.Request) 
 	}
 	// Surface the codec so the frontend player can pick the right path.
 	// HEAD requests also get the header (caller sets it before ServeFile).
-	if codec := probeTimelapseCodecCached(rec.MergePath); codec != "" {
+	if codec := h.recFrames.ProbeCodec(rec.MergePath); codec != "" {
 		w.Header().Set("X-Timelapse-Codec", codec)
 	}
 	h.serveFileBudgeted(w, r, rec.MergePath)
 }
-
-// timelapseCodecCache caches probe results by file path. Merge output files are
-// immutable (never modified after creation), so the codec never changes — caching
-// avoids re-parsing the MP4 box header on every playback request.

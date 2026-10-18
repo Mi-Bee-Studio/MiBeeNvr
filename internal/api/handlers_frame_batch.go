@@ -201,7 +201,7 @@ func (h *Handler) handleFramesBatchDir(w http.ResponseWriter, r *http.Request, r
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	names, err := h.sortedImageFiles(rec.FilePath)
+	names, err := h.recFrames.SortedImageFiles(rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, "timelapse directory not found")
 		return

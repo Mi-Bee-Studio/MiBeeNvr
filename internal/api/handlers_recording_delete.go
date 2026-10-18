@@ -123,9 +123,3 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	}
 	writeJSON(w, http.StatusOK, result)
 }
-
-// sortedImageFiles returns the sorted list of image filenames in dir, using a short-TTL
-// cache to avoid os.ReadDir + sort on every request. The cache is invalidated when the
-// directory's mtime changes (new frames written) or after frameListCacheTTL. This matters
-// for MJPEG/timelapse frame dirs which can hold thousands of JPEGs; without it each
-// ?frame=N / list-frames request re-scanned and re-sorted the whole directory.
