@@ -19,6 +19,11 @@ import (
 // defaultTimescale is the timescale used for MP4 timestamps (ticks per second).
 const defaultTimescale = 1000
 
+// ErrClosed is returned by every operation on a muxer whose Close has already
+// run. Sentinel so callers (recorder teardown paths racing a rotation) can
+// classify it with errors.Is instead of matching the message text.
+var ErrClosed = errors.New("muxer is closed-REPLACED")
+
 // track holds per-track state for the MP4 muxer.
 type track struct {
 	id          int
@@ -112,7 +117,7 @@ func (m *MP4Muxer) AddH264Track(sps, pps []byte) (int, error) {
 	defer m.mu.Unlock()
 
 	if m.closed {
-		return 0, errors.New("muxer is closed")
+		return 0, ErrClosed
 	}
 
 	spsCopy := make([]byte, len(sps))
@@ -139,7 +144,7 @@ func (m *MP4Muxer) AddH265Track(vps, sps, pps []byte) (int, error) {
 	defer m.mu.Unlock()
 
 	if m.closed {
-		return 0, errors.New("muxer is closed")
+		return 0, ErrClosed
 	}
 
 	vpsCopy := make([]byte, len(vps))
@@ -174,7 +179,7 @@ func (m *MP4Muxer) AddAudioTrack(codec string, audioConfig []byte) (int, error) 
 	defer m.mu.Unlock()
 
 	if m.closed {
-		return 0, errors.New("muxer is closed")
+		return 0, ErrClosed
 	}
 
 	if codec != "aac" && codec != "g711" && codec != "opus" {
@@ -229,7 +234,7 @@ func (m *MP4Muxer) WriteSample(trackID int, data []byte, pts time.Duration, dura
 	defer m.mu.Unlock()
 
 	if m.closed {
-		return errors.New("muxer is closed")
+		return ErrClosed
 	}
 
 	t := m.trackByID(trackID)
@@ -247,7 +252,7 @@ func (m *MP4Muxer) WriteAudioSample(trackID int, data []byte, pts time.Duration,
 	defer m.mu.Unlock()
 
 	if m.closed {
-		return errors.New("muxer is closed")
+		return ErrClosed
 	}
 
 	t := m.trackByID(trackID)

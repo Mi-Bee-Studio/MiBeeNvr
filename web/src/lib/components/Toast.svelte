@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { toasts, dismissToast } from '$lib/toast';
+	import { getToasts, dismissToast } from '$lib/toast.svelte';
 	import { fade, fly } from 'svelte/transition';
 	import { X } from 'lucide-svelte';
 
@@ -27,7 +27,7 @@
 </script>
 
 <div bind:this={toastContainer}>
-	{#each $toasts as toast (toast.id)}
+	{#each getToasts() as toast (toast.id)}
 <div
 class="toast"
 class:toast-success={toast.type === 'success'}
@@ -39,13 +39,16 @@ class:toast-warning={toast.type === 'warning'}
 			aria-label="Dismiss notification"
 			tabindex="0"
 
-			on:click={() => dismissToast(toast.id)}
-			on:keydown={(e) => handleKeydown(e, toast.id)}
+			onclick={() => dismissToast(toast.id)}
+			onkeydown={(e) => handleKeydown(e, toast.id)}
 		>
 {toast.message}
 			<button
 				class="toast-close"
-				on:click|stopPropagation={() => dismissToast(toast.id)}
+				onclick={(e) => {
+				e.stopPropagation();
+				dismissToast(toast.id);
+			}}
 			>
 			<X size={16} />
 			</button>

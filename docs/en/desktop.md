@@ -53,6 +53,6 @@ The desktop editions treat themselves as **personal software on this machine** b
 
 ## Next Steps
 
-- [Quick Start](quickstart.md) — add your first camera
+- [Getting Started](getting-started.md) — add your first camera
 - [Configuration Reference](configuration.md) — the full config-file reference
 - [Performance Tuning](performance.md) — IO / memory tuning on desktop hardware

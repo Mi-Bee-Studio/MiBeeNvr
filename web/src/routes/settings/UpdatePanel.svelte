@@ -12,7 +12,7 @@
   import type { UpdateStatus, UpdateApplyStatus, UpdateHistoryEntry } from '$lib/api';
   import { t } from '$lib/i18n';
   import { withBase } from '$lib/base-path';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Toggle from '$lib/components/Toggle.svelte';
   import {

@@ -19,11 +19,13 @@
                                                           │                    │
                                               迟到增长按 size-compare 重传 ◀── 校验通过 → uploaded
                                                                                │
-                                                          手动 CLI 逐出本地副本 ◀── evictable
+                                                          自动/手动 CLI 逐出本地副本 ◀── evictable
 ```
 
+- **上传对象**：rolling 合并产物——合并引擎已生成的按小时合并 MP4 文件（而非 30 秒碎片段）。一条录像 = 一个对象，对象数与请求数可控
 - **outbox 表持久化上传状态**（`pending → uploading → uploaded → evicted`，另有终态 `skipped`）：崩溃重启后自动重排队，不会丢也不会重复上传（覆盖写幂等）
 - **最小年龄宽限**（默认 15 分钟）：合并 debounce 与回填产物落地后才允许上传，绝不传一个还在增长的桶；万一迟到的增长漏网，size-compare 会触发幂等重传
+- **上传确认**：PUT 后以 HEAD 比对远端对象尺寸，一致才标记 `uploaded`——截断或假成功永远不会被当作已确认
 - **backlog 上限告警**（默认 5000 行）：上游带宽跟不上产能时停止入队并告警，而不是无限排队
 - 上传使用进程级 **I/O 预算**（租户 `offload`），与录像/回放/合并共享调度，不挤占前台
 - **远端对象永不删除**——本地逐出前逐对象 Head 复核；远端清理交给 bucket lifecycle 策略
@@ -51,20 +53,41 @@ storage:
       min_age_s: 900                              # 合并完成最小年龄（60–86400）
       backlog_limit: 5000                         # 待上传行数上限（0 = 不限）
     evict:
-      after_days: 0                               # 0 = 只上传不自动逐出（当前版本推荐）
+      after_days: 0                               # 0 = 只上传不逐出（默认）；30 = 上传确认 30 天后自动逐出
+    playback:
+      presigned: false                            # 302 直连回放（见「远端录像回放」）
+      endpoint_url: ""                            # 签名所用的浏览器可达端点覆写
+      ttl_s: 3600                                 # 签名 URL 有效期（秒）
 ```
 
-改完用 `mibee-nvr validate-config` 校验，重启服务生效。
+改完用 `mibee-nvr validate-config` 校验，重启服务生效。Web 界面（设置 → 存储）提供同样的字段，并显示实时队列状态。
 
 **凭据与安全**：
 
 - `access_key_id` / `secret_access_key` 支持 `${VAR}` 环境变量引用——展开发生在客户端构造时，配置文件里只存引用，从 Web 设置页保存也不会把明文写回 YAML
-- `secret_access_key` 属于自动加密字段集：落盘前自动加密，`encrypt-config` 一致处理
+- `secret_access_key` 属于自动加密字段集：设置了 `NVR_ENCRYPTION_KEY`（或 `NVR_ENCRYPTION_KEY_FILE`）时落盘前自动加密，`encrypt-config` 一致处理；`${VAR}` 引用原样保留、不加密
 - 未设置的 `${VAR}` 展开为空字符串，会在启动校验时报"凭证为空"——错误配置响亮失败而非带病运行
+
+### 按相机路由
+
+把指定相机路由到不同的桶和/或键前缀（与按相机存储根目录同语义）：
+
+```yaml
+storage:
+  remote:
+    camera_overrides:
+      front-door: { bucket: important-bucket, prefix: yard }
+      back-yard:   { prefix: outdoor }
+```
+
+outbox 行在入队时钉死对象所在桶——之后的配置改动不会移动已上传的对象。指向未知相机的覆写会在校验时报错。
 
 ## 逐出本地副本
 
-当前版本逐出走 CLI（自动逐出后续版本提供）。**默认 dry-run**，先看报告再执行：
+仅上传永远不会删除本地文件。上传确认后释放空间有两种方式：
+
+- **自动**——设置 `evict.after_days: 30`，后台周期清扫在上传确认满 30 天后删除本地副本；复用与 CLI 相同的逐出路径，每次删除前都经 `HeadObject` 复核，复核失败即拒绝逐出、保留本地文件
+- **手动 CLI**——默认 dry-run，先看报告再执行：
 
 ```bash
 # 队列状态：pending/uploading/uploaded/evicted 计数与最老待传年龄
@@ -82,13 +105,24 @@ mibee-nvr offload evict --all-uploaded --execute
 
 - 逐出**只删本地文件**，远端对象永不删除；回滚冷备只需重新下载对象
 - 可对运行中的服务执行（WAL 读并发安全）；大批量建议在低峰执行
-- `--execute` 前务必确认 bucket 的 lifecycle 策略不会过早删除对象
+- 逐出前务必确认 bucket 的 lifecycle 策略不会过早删除对象
+
+## 远端录像回放
+
+被逐出的录像在 Web 界面仍然可见：录像页的"云端归档"区块按日期列出，可内联播放与下载。
+
+- **默认（代理）**：回放经 NVR 提供（`GET /api/offload/objects/{id}`，支持 HTTP Range）。代理对浏览器拖动进度条产生的大量小范围请求做范围合并——按块对齐抓取 + 小型 LRU 缓存——不会打爆对象存储
+- **Presigned 直连**（`playback.presigned: true`）：回放端点改为 302 到短时效签名 URL，视频字节从存储直达浏览器，NVR 零中转。仅在浏览器能访问存储端点时开启——若 NVR 通过 Docker 内网名访问 MinIO，请用 `playback.endpoint_url` 填浏览器可达地址。签名失败会静默回退代理
+
+## 观测
+
+除 `mibee-nvr offload status` 外，同样的计数以 Prometheus 指标暴露：`nvr_offload_outbox_rows{status}`（积压 = pending + uploading）与 `nvr_offload_uploaded_bytes_total`；`/api/offload/status` 供设置页使用。
 
 ## 与清理/保留期的关系
 
 - `cleanup`（本地保留期）照常运行——它只管本地文件；上传与否不影响本地清理决策
 - 需要冷数据长期保留时：本地 `retention_days` 保持短周期（如 7 天），远端交给 bucket lifecycle（如 365 天）
-- 磁盘水位（`disk_threshold_percent`）触发的紧急清理同样不区分是否已上传——想"已上传就先不删"请用逐出 CLI 主动腾空间
+- 磁盘水位（`disk_threshold_percent`）触发的紧急清理同样不区分是否已上传——想"已上传就先不删"请启用 `evict.after_days`，或用逐出 CLI 主动腾空间
 
 ## 常见问题
 
@@ -97,8 +131,11 @@ mibee-nvr offload evict --all-uploaded --execute
 | 上传会不会抢录像的磁盘 IO？ | 不会——offload 是共享 I/O 预算的租户之一，与录像/回放/合并统一调度 |
 | 上传一半崩溃了怎么办？ | outbox 行停在 `uploading`，重启后自动重排队幂等覆盖 |
 | 为什么某条录像一直不上传？ | 看年龄是否小于 `min_age_s`（默认 15 分钟）；再看 backlog 是否触顶告警 |
-| Web 界面能配置吗？ | 设置页可改凭证与开关；逐出与状态查看走 CLI |
+| 上行带宽跟不上录制怎么办？ | 积压增长到 `backlog_limit` 后停止入队并告警（本地保留策略照常，数据不丢）；可以调大上限、接受延迟，或减少录制内容 |
+| 能否完全上云（不落本地盘）？ | 不能，这是有意的设计——崩溃一致性、合并与回放都将依赖上行带宽；本地优先 + 异步上传是受支持的模型 |
+| Web 界面能配置吗？ | 设置页（设置 → 存储）可改字段并显示实时队列状态；逐出走 `evict.after_days` 或 CLI |
 | R2 怎么配？ | `endpoint_url: https://<account>.r2.cloudflarestorage.com`、`region: auto`、`path_style: true` |
+| 付费存储成本如何？ | 主要成本是出口流量与请求数——代理的范围合并、以及上传合并段而非碎片段，都是为了压低请求数 |
 
 ## 下一步
 

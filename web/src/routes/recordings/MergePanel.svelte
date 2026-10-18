@@ -9,7 +9,7 @@
   // the only markup here is the cancel-merge ConfirmDialog.
   import { onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import type { Recording } from '$lib/api';
   import {

@@ -6,7 +6,7 @@
  import type { Camera } from '$lib/api';
  import Pagination from '$lib/components/Pagination.svelte';
  import { t } from '$lib/i18n';
- import { showToast } from '$lib/toast';
+ import { showToast } from '$lib/toast.svelte';
  import { formatDate, formatDuration } from '$lib/format';
  import { AlertCircle, Video, RefreshCw } from 'lucide-svelte';
 

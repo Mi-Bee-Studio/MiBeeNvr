@@ -68,7 +68,7 @@ func TestCloseCurrentSegment_NoGhostRowWhenTempVanished(t *testing.T) {
 	b.curTempPath = tempPath
 	b.curFinalPath = finalPath
 	b.segStart = time.Now().Add(-time.Minute)
-	b.frameCount = 10
+	b.frameCount.Store(10)
 
 	// Simulate the race: the .tmp vanishes (startup cleanup scan) while the
 	// recorder is mid-segment. The muxer's fd stays valid (writes land in the
@@ -108,7 +108,7 @@ func TestCloseCurrentSegment_HealthySegmentInsertsRow(t *testing.T) {
 	b.curTempPath = tempPath
 	b.curFinalPath = finalPath
 	b.segStart = time.Now().Add(-time.Minute)
-	b.frameCount = 10
+	b.frameCount.Store(10)
 
 	b.closeCurrentSegment()
 

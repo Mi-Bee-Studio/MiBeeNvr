@@ -177,7 +177,7 @@ version: "1.0"
 
 ## 存储配置
 
-`storage.remote` 配置块将合并后的录像异步上传到 S3 兼容对象存储（MinIO / AWS S3 / R2 / B2 / OSS），含已验证的本地驱逐与远端回放。完整指南见[远程对象存储归档](./storage-remote.md)。
+`storage.remote` 配置块将合并后的录像异步上传到 S3 兼容对象存储（MinIO / AWS S3 / R2 / B2 / OSS），含已验证的本地逐出与远端回放。完整指南见[对象存储冷备](./storage-offload.md)。
 
 ### `storage.root_dir`
 - **类型**: string

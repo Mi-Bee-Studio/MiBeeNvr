@@ -26,12 +26,11 @@ func newTestManager(t *testing.T) *Manager {
 // newTestStreamEntry creates a streamEntry for testing without starting a real muxer.
 // The frameCh is buffered so frames accumulate for counting.
 func newTestStreamEntry(maxFPS int) *streamEntry {
-	return &streamEntry{
+	return stampedEntry(&streamEntry{
 		frameCh:       make(chan hlsFrame, defaultWriteBufSize),
 		maxFPS:        maxFPS,
-		lastUsed:      time.Now(),
 		lastFrameTime: time.Time{}, // zero value means "never written"
-	}
+	}, time.Now())
 }
 
 // --- Frame Rate Limiter Tests ---
@@ -188,10 +187,9 @@ func TestIsActive_StreamExists(t *testing.T) {
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
-	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-		lastUsed: time.Now(),
-	}
+	mgr.streams[cameraID] = stampedEntry(&streamEntry{
+		frameCh: make(chan hlsFrame, defaultWriteBufSize),
+	}, time.Now())
 	mgr.mu.Unlock()
 
 	require.True(t, mgr.IsActive(cameraID))
@@ -273,11 +271,10 @@ func TestConcurrentWrites(t *testing.T) {
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
-	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-		maxFPS:   0,
-		lastUsed: time.Now(),
-	}
+	mgr.streams[cameraID] = stampedEntry(&streamEntry{
+		frameCh: make(chan hlsFrame, defaultWriteBufSize),
+		maxFPS:  0,
+	}, time.Now())
 	mgr.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -305,11 +302,10 @@ func TestConcurrentWritesAndIsActive(t *testing.T) {
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
-	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-		maxFPS:   0,
-		lastUsed: time.Now(),
-	}
+	mgr.streams[cameraID] = stampedEntry(&streamEntry{
+		frameCh: make(chan hlsFrame, defaultWriteBufSize),
+		maxFPS:  0,
+	}, time.Now())
 	mgr.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -347,11 +343,10 @@ func TestStartStream_AtCapacity_EvictsLRU(t *testing.T) {
 	mgr.mu.Lock()
 	for i := range defaultMaxStreams {
 		_, cancel := context.WithCancel(context.Background())
-		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
-			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-			lastUsed: time.Now(),
-			cancel:   cancel,
-		}
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = stampedEntry(&streamEntry{
+			frameCh: make(chan hlsFrame, defaultWriteBufSize),
+			cancel:  cancel,
+		}, time.Now())
 	}
 	mgr.mu.Unlock()
 
@@ -373,11 +368,10 @@ func TestEvictStream_Active(t *testing.T) {
 
 	mgr.mu.Lock()
 	_, cancel := context.WithCancel(context.Background())
-	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-		lastUsed: time.Now(),
-		cancel:   cancel,
-	}
+	mgr.streams[cameraID] = stampedEntry(&streamEntry{
+		frameCh: make(chan hlsFrame, defaultWriteBufSize),
+		cancel:  cancel,
+	}, time.Now())
 	mgr.mu.Unlock()
 
 	require.Equal(t, 1, mgr.GetActiveStreamCount())
@@ -403,11 +397,10 @@ func TestLRUEviction_EvictsOldestStream(t *testing.T) {
 	now := time.Now()
 	for i := range defaultMaxStreams {
 		_, cancel := context.WithCancel(context.Background())
-		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
-			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-			lastUsed: now.Add(time.Duration(i) * time.Second), // cam-0 is oldest
-			cancel:   cancel,
-		}
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = stampedEntry(&streamEntry{
+			frameCh: make(chan hlsFrame, defaultWriteBufSize),
+			cancel:  cancel,
+		}, now.Add(time.Duration(i)*time.Second))
 	}
 	mgr.mu.Unlock()
 
@@ -434,11 +427,10 @@ func TestLRUEviction_EvictedStreamCleanedUp(t *testing.T) {
 	mgr.mu.Lock()
 	for i := range defaultMaxStreams {
 		_, cancel := context.WithCancel(context.Background())
-		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
-			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-			lastUsed: time.Now().Add(time.Duration(i) * time.Second),
-			cancel:   cancel,
-		}
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = stampedEntry(&streamEntry{
+			frameCh: make(chan hlsFrame, defaultWriteBufSize),
+			cancel:  cancel,
+		}, time.Now().Add(time.Duration(i)*time.Second))
 	}
 	mgr.mu.Unlock()
 
@@ -477,11 +469,10 @@ func TestGetActiveStreamCount_WithStreams(t *testing.T) {
 	mgr.mu.Lock()
 	for i := range 3 {
 		_, cancel := context.WithCancel(context.Background())
-		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
-			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-			lastUsed: time.Now(),
-			cancel:   cancel,
-		}
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = stampedEntry(&streamEntry{
+			frameCh: make(chan hlsFrame, defaultWriteBufSize),
+			cancel:  cancel,
+		}, time.Now())
 	}
 	mgr.mu.Unlock()
 
@@ -495,10 +486,9 @@ func TestGetStreamStatus_Active(t *testing.T) {
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
-	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-		lastUsed: time.Now(),
-	}
+	mgr.streams[cameraID] = stampedEntry(&streamEntry{
+		frameCh: make(chan hlsFrame, defaultWriteBufSize),
+	}, time.Now())
 	mgr.mu.Unlock()
 
 	require.True(t, mgr.GetStreamStatus(cameraID))
@@ -514,10 +504,9 @@ func TestGetStreamStatus_ConcurrentReads(t *testing.T) {
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
-	mgr.streams[cameraID] = &streamEntry{
-		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-		lastUsed: time.Now(),
-	}
+	mgr.streams[cameraID] = stampedEntry(&streamEntry{
+		frameCh: make(chan hlsFrame, defaultWriteBufSize),
+	}, time.Now())
 	mgr.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -569,11 +558,10 @@ func TestConcurrentStartStreams_AtCapacity_NoDeadlock(t *testing.T) {
 	for i := range defaultMaxStreams {
 		mgr.mu.Lock()
 		_, cancel := context.WithCancel(context.Background())
-		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
-			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-			lastUsed: time.Now(),
-			cancel:   cancel,
-		}
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = stampedEntry(&streamEntry{
+			frameCh: make(chan hlsFrame, defaultWriteBufSize),
+			cancel:  cancel,
+		}, time.Now())
 		mgr.mu.Unlock()
 	}
 
@@ -603,11 +591,10 @@ func TestConcurrentStopStreams_NoDeadlock(t *testing.T) {
 	for i := range defaultMaxStreams {
 		mgr.mu.Lock()
 		_, cancel := context.WithCancel(context.Background())
-		mgr.streams[fmt.Sprintf("cam-%d", i)] = &streamEntry{
-			frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-			lastUsed: time.Now(),
-			cancel:   cancel,
-		}
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = stampedEntry(&streamEntry{
+			frameCh: make(chan hlsFrame, defaultWriteBufSize),
+			cancel:  cancel,
+		}, time.Now())
 		mgr.mu.Unlock()
 	}
 
@@ -658,12 +645,11 @@ func TestWriteFrame_DropCounterIncrements(t *testing.T) {
 
 	// Insert a stream entry with tiny buffer and no FPS limit
 	mgr.mu.Lock()
-	entry := &streamEntry{
+	entry := stampedEntry(&streamEntry{
 		frameCh:       make(chan hlsFrame, 2), // matches writeBufSize
 		maxFPS:        0,
-		lastUsed:      time.Now(),
 		lastFrameTime: time.Time{},
-	}
+	}, time.Now())
 	mgr.streams[cameraID] = entry
 	mgr.mu.Unlock()
 
@@ -696,12 +682,11 @@ func TestWriteFrame_DropCounterNilMetrics(t *testing.T) {
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
-	entry := &streamEntry{
+	entry := stampedEntry(&streamEntry{
 		frameCh:       make(chan hlsFrame, 1),
 		maxFPS:        0,
-		lastUsed:      time.Now(),
 		lastFrameTime: time.Time{},
-	}
+	}, time.Now())
 	mgr.streams[cameraID] = entry
 	mgr.mu.Unlock()
 
@@ -1115,11 +1100,10 @@ func TestWriteBufferCapacity(t *testing.T) {
 	cameraID := "test-cam"
 
 	mgr.mu.Lock()
-	entry := &streamEntry{
-		frameCh:  make(chan hlsFrame, defaultWriteBufSize),
-		maxFPS:   0,
-		lastUsed: time.Now(),
-	}
+	entry := stampedEntry(&streamEntry{
+		frameCh: make(chan hlsFrame, defaultWriteBufSize),
+		maxFPS:  0,
+	}, time.Now())
 	mgr.streams[cameraID] = entry
 	mgr.mu.Unlock()
 
@@ -1374,14 +1358,13 @@ func TestWriteLoop_ErrorRecovery_MuxerDestroyedAndIDRReset(t *testing.T) {
 
 	// Insert entry with a nil muxer
 	mgr.mu.Lock()
-	entry := &streamEntry{
+	entry := stampedEntry(&streamEntry{
 		mux:         nil,
 		track:       nil,
 		frameCh:     make(chan hlsFrame, defaultWriteBufSize),
-		lastUsed:    time.Now(),
 		idrReceived: true,
 		maxFPS:      0,
-	}
+	}, time.Now())
 	mgr.streams["test-cam"] = entry
 	mgr.mu.Unlock()
 
@@ -1882,4 +1865,11 @@ func TestRefreshParamCache_H265(t *testing.T) {
 	require.Equal(t, vps, entry.vps)
 	require.Equal(t, sps, entry.sps)
 	require.Equal(t, pps, entry.pps)
+}
+
+// stampedEntry stamps a constructed entry's LRU clock and returns it — the
+// atomic lastUsed cannot be set in a struct literal.
+func stampedEntry(base *streamEntry, t time.Time) *streamEntry {
+	base.setLastUsed(t)
+	return base
 }

@@ -21,7 +21,7 @@
   import type { Recording, Camera, RecordingDaySummary, RecordingTimelineSegment } from '$lib/api';
   import { t } from '$lib/i18n';
   import { formatDate, formatFileSize, formatMergeWindowLabel, mergeDurationI18nKeys, parseServerDate } from '$lib/format';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { Search, ChevronUp, Table2, ArrowUp, AlertCircle, Trash2, Clock, Hourglass, Server, Cloud, Download } from 'lucide-svelte';
   import GB28181DeviceRecords from '$lib/components/GB28181DeviceRecords.svelte';
   import GB28181DeviceControl from '$lib/components/GB28181DeviceControl.svelte';

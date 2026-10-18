@@ -38,13 +38,12 @@ func mp4FilesUnder(t *testing.T, store *storage.Manager) []string {
 func TestXiaomiRecorder_RotationAtIDRKeepsGOPTail(t *testing.T) {
 	rec, store := newRotationRecorder(t, 250*time.Millisecond)
 
-	var lastTS uint64
 	idr := []byte{0x65, 0x88, 0x84, 0x00, 0x10}
 	p := []byte{0x41, 0x9a, 0x10, 0x00}
 
-	rec.processH264NALU(idr, 0, &lastTS)
+	rec.processH264NALU(idr, time.Now())
 	for i := 1; i <= 30; i++ {
-		rec.processH264NALU(p, uint64(i)*40, &lastTS)
+		rec.processH264NALU(p, time.Now())
 		time.Sleep(10 * time.Millisecond)
 	}
 	rec.mu.Lock()
@@ -52,14 +51,14 @@ func TestXiaomiRecorder_RotationAtIDRKeepsGOPTail(t *testing.T) {
 	rec.mu.Unlock()
 	require.GreaterOrEqual(t, fc, 29, "P-frames past SegmentDur must stay on disk until the next IDR")
 
-	rec.processH264NALU(idr, 35*40, &lastTS)
+	rec.processH264NALU(idr, time.Now())
 	require.Len(t, mp4FilesUnder(t, store), 1, "segment 1 must be finalized at the IDR rollover")
 	rec.mu.Lock()
 	fc = rec.frameCount
 	rec.mu.Unlock()
 	require.Equal(t, 1, fc, "rollover IDR must open the fresh segment")
-	rec.processH264NALU(p, 36*40, &lastTS)
-	rec.processH264NALU(p, 37*40, &lastTS)
+	rec.processH264NALU(p, time.Now())
+	rec.processH264NALU(p, time.Now())
 	rec.closeCurrentSegment()
 	require.Len(t, mp4FilesUnder(t, store), 2, "exactly two segments after close")
 }
@@ -69,13 +68,12 @@ func TestXiaomiRecorder_RotationAtIDRKeepsGOPTail(t *testing.T) {
 func TestXiaomiRecorder_RotationFallbackAt2xDuration(t *testing.T) {
 	rec, store := newRotationRecorder(t, 120*time.Millisecond)
 
-	var lastTS uint64
 	idr := []byte{0x65, 0x88, 0x84, 0x00, 0x10}
 	p := []byte{0x41, 0x9a, 0x10, 0x00}
 
-	rec.processH264NALU(idr, 0, &lastTS)
+	rec.processH264NALU(idr, time.Now())
 	for i := 1; i <= 45; i++ {
-		rec.processH264NALU(p, uint64(i)*40, &lastTS)
+		rec.processH264NALU(p, time.Now())
 		time.Sleep(10 * time.Millisecond)
 	}
 	require.Len(t, mp4FilesUnder(t, store), 1, "2×SegmentDur fallback must finalize the segment")

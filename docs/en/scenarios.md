@@ -29,7 +29,7 @@ The one-liner on Linux:
 curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
 ```
 
-Docker, or an app-store package on Synology / QNAP / fnOS, work equally well — see [Quick Start](quickstart.md). Once installed, open `http://device-ip:9090`.
+Docker, or an app-store package on Synology / QNAP / fnOS, work equally well — see [Getting Started](getting-started.md). Once installed, open `http://device-ip:9090`.
 
 ### Step 2: Follow the setup wizard (2 min)
 

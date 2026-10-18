@@ -3,7 +3,7 @@
   import { getDashboardCameras, getAuthHeader, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, listCameraGroups, API_BASE } from '$lib/api';
   import type { Camera, ProtocolInfo, CameraProtocolsResponse } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { Loader2, AlertCircle, Video, VideoOff, X, Settings, ImageOff, CircleCheck, CirclePause, Search, Plus } from 'lucide-svelte';
   import PtzControl from '$lib/components/PtzControl.svelte';
   import CameraPlayer from '$lib/components/CameraPlayer.svelte';
