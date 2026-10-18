@@ -29,6 +29,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recframes"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -271,11 +272,10 @@ type Handler struct {
 	// (SetTimelapseSourceDeleter) because the cleanup manager is built after
 	// the handler in app assembly; nil = deletion disabled.
 	timelapseSourceDeleter timelapse.SourceRecordingDeleter
-	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
-	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
-	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
-	frameListMu       sync.Mutex
-	frameListCache    map[string]*frameListEntry
+	// recFrames owns frame-level access to frame-based recordings (#1009
+	// batch 2): the frame-directory listing cache, MJPEG/timelapse/AVI frame
+	// indexes, frame timestamp extraction, and the merge-codec probe cache.
+	recFrames         *recframes.Service
 	gb28181DeviceMgr  *platform.DeviceManager
 	gb28181Records    *gb28181.DeviceRecordService // device-recording domain (records/playback/download)
 	gb28181SessionMgr *platform.SessionManager
@@ -330,20 +330,8 @@ type Handler struct {
 	p2pEvents   []p2pLinkEvent
 }
 
-// frameListEntry is a cached sorted listing of a frame directory.
-type frameListEntry struct {
-	names     []string // sorted image filenames
-	dirMtime  int64    // unix mtime of the dir at scan time (for invalidation)
-	scannedAt time.Time
-}
-
-// frameListCacheTTL bounds how long a cached listing is served without re-stat.
-// Timelapse dirs grow while a recording is active, so keep this short enough to
-// pick up new frames promptly but long enough to collapse a burst of requests.
-const frameListCacheTTL = 500 * time.Millisecond
-
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *platform.DeviceManager, gb28181SessionMgr *platform.SessionManager, timeSync TimeSyncOps) *Handler {
-	h := &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	h := &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), recFrames: recframes.New(), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
 	// The device-record domain service shares the handler's post-injection
 	// wiring: media API, device registry, GB timezone (#1009).
 	h.gb28181Records = gb28181.NewDeviceRecordService()
@@ -595,12 +583,6 @@ func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset
 
 func writeAPIError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error(), "code": model.ErrorCode(err)})
-}
-
-// isImageFile checks if a filename has an image extension (jpg/jpeg/png).
-func isImageFile(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png")
 }
 
 // validateURL checks that a URL has a valid scheme and non-empty host.

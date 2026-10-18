@@ -1,4 +1,4 @@
-package api
+package recframes
 
 import (
 	"bytes"
@@ -7,67 +7,15 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
-// timelapseCodecCache caches probe results by file path. Merge output files are
-// immutable (never modified after creation), so the codec never changes — caching
-// avoids re-parsing the MP4 box header on every playback request.
-var timelapseCodecCache sync.Map // path → string (codec)
-
-// probeTimelapseCodecCached returns the codec for a timelapse merge MP4, using
-// an in-memory cache keyed by file path. Since merge outputs are write-once,
-// the cache is permanent per path (no invalidation needed).
-
-// probeTimelapseCodecCached returns the codec for a timelapse merge MP4, using
-// an in-memory cache keyed by file path. Since merge outputs are write-once,
-// the cache is permanent per path (no invalidation needed).
-func probeTimelapseCodecCached(path string) string {
-	if v, ok := timelapseCodecCache.Load(path); ok {
-		return v.(string)
-	}
-	codec := probeTimelapseCodec(path)
-	timelapseCodecCache.Store(path, codec)
-	return codec
-}
-
-// probeTimelapseCodec returns "h264" / "h265" / "mjpeg" for the MP4 at the
-// given path, or "" if the codec could not be determined. Used to populate the
-// X-Timelapse-Codec response header that the frontend player consults.
-
-// probeTimelapseCodec returns "h264" / "h265" / "mjpeg" for the MP4 at the
-// given path, or "" if the codec could not be determined. Used to populate the
-// X-Timelapse-Codec response header that the frontend player consults.
-func probeTimelapseCodec(path string) string {
-	info, err := mediaprobe.ProbeMP4(path)
-	if err != nil {
-		return ""
-	}
-	switch info.Codec {
-	case model.TimelapseMergeCodecH264, model.TimelapseMergeCodecH265:
-		return info.Codec
-	default:
-		// mediaprobe returns raw codec string for mjpa; normalize to "mjpeg".
-		return model.TimelapseMergeCodecMJPEG
-	}
-}
-
-// extractFrameTimestamp extracts the capture timestamp from a frame file.
+// frameTimestamp extracts the capture timestamp from a frame file.
 // Priority order:
-// 1. Filename pattern: frame_YYYYMMDD_HHMMSS.jpg
-// 2. JPEG EXIF DateTimeOriginal (or DateTime as fallback)
-// 3. File ModTime (fallback)
-
-// extractFrameTimestamp extracts the capture timestamp from a frame file.
-// Priority order:
-// 1. Filename pattern: frame_YYYYMMDD_HHMMSS.jpg
-// 2. JPEG EXIF DateTimeOriginal (or DateTime as fallback)
-// 3. File ModTime (fallback)
-func extractFrameTimestamp(name, filePath string, modTime time.Time) time.Time {
+//  1. Filename pattern: frame_YYYYMMDD_HHMMSS.jpg
+//  2. JPEG EXIF DateTimeOriginal (or DateTime as fallback)
+//  3. File ModTime (fallback)
+func frameTimestamp(name, filePath string, modTime time.Time) time.Time {
 	// Try filename pattern first (no file I/O needed)
 	if t, ok := parseFrameFilename(name); ok {
 		return t
@@ -81,12 +29,6 @@ func extractFrameTimestamp(name, filePath string, modTime time.Time) time.Time {
 	// Last resort: file ModTime
 	return modTime
 }
-
-// parseFrameFilename attempts to parse a timestamp from a frame filename.
-// Supported formats:
-//   - frame_20240101_120000.jpg
-//   - frame_20240101_120000_001.jpg
-//   - frame_000001.jpg (no timestamp — returns false)
 
 // parseFrameFilename attempts to parse a timestamp from a frame filename.
 // Supported formats:
@@ -133,11 +75,8 @@ func parseFrameFilename(name string) (time.Time, bool) {
 	return t, true
 }
 
-// extractEXIFDateTime extracts DateTimeOriginal (or DateTime) from a JPEG file's EXIF data.
-// Returns the parsed time and true if successful.
-
-// extractEXIFDateTime extracts DateTimeOriginal (or DateTime) from a JPEG file's EXIF data.
-// Returns the parsed time and true if successful.
+// extractEXIFDateTime extracts DateTimeOriginal (or DateTime) from a JPEG
+// file's EXIF data. Returns the parsed time and true if successful.
 func extractEXIFDateTime(filePath string) (time.Time, bool) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -145,8 +84,8 @@ func extractEXIFDateTime(filePath string) (time.Time, bool) {
 	}
 	defer f.Close()
 
-	// Read enough for JPEG SOI + APP1 marker + EXIF header + TIFF structure
-	// EXIF data is typically in the first few KB; read 64KB to be safe
+	// Read enough for JPEG SOI + APP1 marker + EXIF header + TIFF structure.
+	// EXIF data is typically in the first few KB; read 64KB to be safe.
 	buf := make([]byte, 65536)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
@@ -199,9 +138,8 @@ func extractEXIFDateTime(filePath string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// parseEXIFTIFF parses a TIFF structure within EXIF data to find DateTimeOriginal or DateTime.
-
-// parseEXIFTIFF parses a TIFF structure within EXIF data to find DateTimeOriginal or DateTime.
+// parseEXIFTIFF parses a TIFF structure within EXIF data to find
+// DateTimeOriginal or DateTime.
 func parseEXIFTIFF(data []byte) (time.Time, bool) {
 	if len(data) < 8 {
 		return time.Time{}, false
@@ -246,19 +184,13 @@ func parseEXIFTIFF(data []byte) (time.Time, bool) {
 			break
 		}
 		tag := bo.Uint16(data[entryOff : entryOff+2])
-		type_ := bo.Uint16(data[entryOff+2 : entryOff+4])
-		_ = type_
 
 		switch tag {
 		case 0x0132: // DateTime in IFD0 (ASCII)
-			// Value is an ASCII string stored in the value field (4 bytes) or as an offset
 			if s := readEXIFString(data, entryOff, bo); s != "" {
 				dateTimeStr = s
 			}
 		case 0x8769: // ExifIFD pointer
-			if entryOff+12 > len(data) {
-				break
-			}
 			exifIFDOffset = int(bo.Uint32(data[entryOff+8 : entryOff+12]))
 			if exifIFDOffset < 0 || exifIFDOffset >= len(data) {
 				exifIFDOffset = 0
@@ -266,8 +198,7 @@ func parseEXIFTIFF(data []byte) (time.Time, bool) {
 		}
 	}
 
-	// If we found DateTime in IFD0, use it (but prefer DateTimeOriginal from EXIF IFD)
-	// Try EXIF IFD first for DateTimeOriginal
+	// Prefer DateTimeOriginal from the EXIF IFD over IFD0's DateTime.
 	if exifIFDOffset > 0 && exifIFDOffset+2 <= len(data) {
 		numExifEntries := int(bo.Uint16(data[exifIFDOffset : exifIFDOffset+2]))
 		for j := range numExifEntries {
@@ -297,26 +228,22 @@ func parseEXIFTIFF(data []byte) (time.Time, bool) {
 }
 
 // readEXIFString reads an ASCII string value from an EXIF entry.
-// For short strings (≤4 bytes), the value is stored inline in the 4-byte value field.
-// For longer strings, the value field contains an offset to the string data.
-
-// readEXIFString reads an ASCII string value from an EXIF entry.
-// For short strings (≤4 bytes), the value is stored inline in the 4-byte value field.
-// For longer strings, the value field contains an offset to the string data.
+// For short strings (≤4 bytes), the value is stored inline in the 4-byte
+// value field; for longer strings, the value field contains an offset to the
+// string data.
 func readEXIFString(data []byte, entryOff int, bo binary.ByteOrder) string {
 	if entryOff+12 > len(data) {
 		return ""
 	}
 
-	type_ := bo.Uint16(data[entryOff+2 : entryOff+4])
+	typ := bo.Uint16(data[entryOff+2 : entryOff+4])
 	count := bo.Uint32(data[entryOff+4 : entryOff+8])
 
 	// Type 2 = ASCII string
-	if type_ != 2 {
+	if typ != 2 {
 		return ""
 	}
 
-	// Calculate total byte count (ASCII strings have 1 byte per character)
 	totalBytes := int(count)
 	if totalBytes <= 0 || totalBytes > 256 {
 		return ""
@@ -324,10 +251,8 @@ func readEXIFString(data []byte, entryOff int, bo binary.ByteOrder) string {
 
 	var strBytes []byte
 	if totalBytes <= 4 {
-		// Inline value
 		strBytes = data[entryOff+8 : entryOff+8+totalBytes]
 	} else {
-		// Offset to string data
 		offset := int(bo.Uint32(data[entryOff+8 : entryOff+12]))
 		if offset < 0 || offset+totalBytes > len(data) {
 			return ""
@@ -335,16 +260,5 @@ func readEXIFString(data []byte, entryOff int, bo binary.ByteOrder) string {
 		strBytes = data[offset : offset+totalBytes]
 	}
 
-	// Strip null terminator(s)
-	s := string(bytes.TrimRight(strBytes, "\x00"))
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(string(bytes.TrimRight(strBytes, "\x00")))
 }
-
-// handleTimelineGaps returns recording gaps (time periods with no recording)
-// for a camera on a specific date. Used by the frontend timeline to render
-// "断帧" (frame drop) markers.
-//
-// Query params:
-//
-//	date=YYYY-MM-DD  — the day to analyze (required)
-//	min_gap=30s      — minimum gap duration to report (default 30s)
