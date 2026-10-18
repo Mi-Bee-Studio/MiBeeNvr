@@ -17,7 +17,7 @@ vi.mock('lucide-svelte', () => {
   return mock;
 });
 
-vi.mock('$lib/toast', () => ({ showToast: vi.fn() }));
+vi.mock('$lib/toast.svelte', () => ({ showToast: vi.fn() }));
 
 // Stub every settings panel so the shell test only exercises the sidebar —
 // the real panels each have (or get) their own tests.

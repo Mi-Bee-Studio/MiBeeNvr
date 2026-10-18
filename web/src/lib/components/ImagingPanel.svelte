@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getImagingSettings, setImagingSettings, getImagingOptions } from '$lib/api';
   import type { ImagingSettings, ImagingOptions } from '$lib/api';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { t } from '$lib/i18n';
   import { friendlyError } from '$lib/errors';
   let { cameraId }: { cameraId: string } = $props();

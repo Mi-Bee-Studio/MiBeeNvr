@@ -6,7 +6,7 @@
   import { getSettings, updateSettings, getStats, getStorageCandidates, addStorageCandidate, removeStorageCandidate, startStorageMigrate, getStorageMigrateStatus } from '$lib/api';
   import type { SettingsConfig, StorageStats, StorageCandidatesResponse, StorageMigrateStatusResponse, MigrationJob } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
   import Toggle from '$lib/components/Toggle.svelte';

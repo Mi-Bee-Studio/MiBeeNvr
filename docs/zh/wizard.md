@@ -54,7 +54,7 @@
 点击「完成设置」，向导会写入管理员凭据并自动登录，进入 Web 界面。此时系统还没有摄像头，可以：
 
 - 在「摄像头」页点击「扫描设备」自动发现 ONVIF / 小米摄像头
-- 或点击「+ 添加摄像头」手动添加（参阅 [快速开始](quickstart.md)）
+- 或点击「+ 添加摄像头」手动添加（参阅 [快速入门](getting-started.md)）
 
 ## 重置向导
 
@@ -171,7 +171,7 @@ cameras:
 
 ## 下一步
 
-- [快速开始](quickstart.md) — 添加第一台摄像头
+- [快速入门](getting-started.md) — 添加第一台摄像头
 - [Docker 部署](install-docker.md) — 生产环境容器化部署
 - [NAS 部署](install-nas.md) — NAS 系统安装
 - [ONVIF 自动发现](onvif-discovery.md) — 摄像头自动发现

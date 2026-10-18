@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 )
 
 // getOrCreateONVIFClient returns a cached ONVIF client for the given camera,
@@ -360,5 +361,5 @@ func (cm *CameraManager) autoPopulateSnapshotURL(ctx context.Context, cameraID s
 	}
 	cm.configMu.Unlock()
 
-	logger.Info("auto-populated snapshot URL from ONVIF device", "camera_id", cameraID, "url", uri)
+	logger.Info("auto-populated snapshot URL from ONVIF device", "camera_id", cameraID, "url", slogx.RedactURL(uri))
 }

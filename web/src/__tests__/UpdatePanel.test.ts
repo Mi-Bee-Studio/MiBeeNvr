@@ -27,7 +27,7 @@ vi.mock('lucide-svelte', () => {
   return mock;
 });
 
-vi.mock('$lib/toast', () => ({ showToast: vi.fn() }));
+vi.mock('$lib/toast.svelte', () => ({ showToast: vi.fn() }));
 
 // --- Mock API surface ---
 const mockGetUpdateStatus = vi.hoisted(() => vi.fn());

@@ -281,19 +281,18 @@ func TestXiaomiRecorderCodecDetectionH264(t *testing.T) {
 
 	require.False(t, r.codecOK)
 
-	var lastTS uint64
 	// Simulate an H264 SPS packet.
 	spsPayload := []byte{
 		0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xc0, 0x1e,
 	}
-	r.processNALU(spsPayload[4:], 0, &lastTS)
+	r.processNALU(spsPayload[4:], time.Now())
 	// Codec is set in processNALU based on r.codec which needs codecOK.
 	// Actually codec is probed in connectAndRecord from pkt.CodecID.
 	// Let's set it manually for this test.
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	r.processNALU(spsPayload[4:], 0, &lastTS)
+	r.processNALU(spsPayload[4:], time.Now())
 	require.NotNil(t, r.sps)
 	require.Equal(t, byte(0x67), r.sps[0])
 }
@@ -308,17 +307,16 @@ func TestXiaomiRecorderCodecDetectionH265(t *testing.T) {
 	r.codec = model.FormatH265
 	r.codecOK = true
 
-	var lastTS uint64
 	vpsPayload := []byte{0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0x0c}
-	r.processNALU(vpsPayload[4:], 0, &lastTS)
+	r.processNALU(vpsPayload[4:], time.Now())
 	require.NotNil(t, r.vps)
 
 	spsPayload := []byte{0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0x01}
-	r.processNALU(spsPayload[4:], 0, &lastTS)
+	r.processNALU(spsPayload[4:], time.Now())
 	require.NotNil(t, r.sps)
 
 	ppsPayload := []byte{0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xc1}
-	r.processNALU(ppsPayload[4:], 0, &lastTS)
+	r.processNALU(ppsPayload[4:], time.Now())
 	require.NotNil(t, r.pps)
 }
 
@@ -358,12 +356,11 @@ func TestXiaomiRecorderRecordDisabledNoSegment(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	var lastTS uint64
 	// Feed SPS, PPS, then an IDR frame.
-	r.processNALU([]byte{0x67, 0x42, 0xc0, 0x1e}, 0, &lastTS) // SPS (type 7)
-	r.processNALU([]byte{0x68, 0xce, 0x38, 0x80}, 0, &lastTS) // PPS (type 8)
+	r.processNALU([]byte{0x67, 0x42, 0xc0, 0x1e}, time.Now()) // SPS (type 7)
+	r.processNALU([]byte{0x68, 0xce, 0x38, 0x80}, time.Now()) // PPS (type 8)
 	// IDR frame (type 5): should NOT create a segment in live-only mode.
-	r.processNALU([]byte{0x65, 0x88, 0x84, 0x00, 0x33, 0x00, 0x00}, 1, &lastTS)
+	r.processNALU([]byte{0x65, 0x88, 0x84, 0x00, 0x33, 0x00, 0x00}, time.Now())
 
 	require.Equal(t, 0, store.Creates(),
 		"CreateSegment must not be called when RecordEnabled=false (live-only mode)")
@@ -381,10 +378,9 @@ func TestXiaomiRecorderRecordEnabledCreatesSegment(t *testing.T) {
 	r.codec = model.FormatH264
 	r.codecOK = true
 
-	var lastTS uint64
-	r.processNALU([]byte{0x67, 0x42, 0xc0, 0x1e}, 0, &lastTS) // SPS
-	r.processNALU([]byte{0x68, 0xce, 0x38, 0x80}, 0, &lastTS) // PPS
-	r.processNALU([]byte{0x65, 0x88, 0x84, 0x00}, 1, &lastTS) // IDR
+	r.processNALU([]byte{0x67, 0x42, 0xc0, 0x1e}, time.Now()) // SPS
+	r.processNALU([]byte{0x68, 0xce, 0x38, 0x80}, time.Now()) // PPS
+	r.processNALU([]byte{0x65, 0x88, 0x84, 0x00}, time.Now()) // IDR
 
 	require.GreaterOrEqual(t, store.Creates(), 1,
 		"CreateSegment must be called when recording is enabled (default)")
@@ -412,6 +408,7 @@ func TestXiaomiRecorderHLSProviderInterface(t *testing.T) {
 	r.codec = model.FormatH264
 	r.sps = []byte{0x67, 0x42}
 	r.pps = []byte{0x68, 0xce}
+	r.publishCodecSnap()
 	codec, sps, pps, vps = r.CodecParams()
 	require.Equal(t, model.FormatH264, codec)
 	require.Equal(t, []byte{0x67, 0x42}, sps)
@@ -445,7 +442,7 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 
 	// Trigger forwardHLS
 	nalu := []byte{0x65, 0x01, 0x02}
-	r.forwardHLS(nalu)
+	r.forwardHLS(nalu, time.Now())
 
 	// StreamHub delivers asynchronously — wait for callback
 	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
@@ -468,7 +465,7 @@ func TestXiaomiRecorderHLSFrameCallbackNil(t *testing.T) {
 	r.codecOK = true
 
 	// Should not panic when callback is nil
-	r.forwardHLS([]byte{0x65, 0x01})
+	r.forwardHLS([]byte{0x65, 0x01}, time.Now())
 }
 
 // --- Test with mock MISS connection for full recording flow ---

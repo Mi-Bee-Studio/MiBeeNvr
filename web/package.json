@@ -11,6 +11,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "format": "prettier --write src/",
+    "lint": "prettier --check src/ && eslint src",
+    "check": "svelte-check --threshold error",
     "test": "vitest run"
   },
   "devDependencies": {
@@ -24,7 +26,8 @@
     "svelte": "^5.57.2",
     "tailwindcss": "^4.3.3",
     "vite": "^8.3.3",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "svelte-check": "^4.0.0"
   },
   "dependencies": {
     "@yume-chan/libde265": "^1.0.0",

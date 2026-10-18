@@ -394,7 +394,7 @@ func TestXiaomiRecorderHLSFrameH265IDR(t *testing.T) {
 
 	// IDR_W_RADL (type 19): first byte = (19 << 1) = 38 = 0x26
 	idrNALU := []byte{0x26, 0x01, 0x02}
-	r.forwardHLS(idrNALU)
+	r.forwardHLS(idrNALU, time.Now())
 
 	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	mu.Lock()
@@ -431,7 +431,7 @@ func TestXiaomiRecorderHLSFrameUnknownCodec(t *testing.T) {
 	})
 
 	nalu := []byte{0xAA, 0xBB}
-	r.forwardHLS(nalu)
+	r.forwardHLS(nalu, time.Now())
 	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
 	mu.Lock()
 	require.Len(t, receivedAU, 1)
@@ -448,9 +448,8 @@ func TestProcessNALUEmpty(t *testing.T) {
 		CameraID: "test-cam",
 		DID:      "dev1",
 	}, &noopSegmentStore{})
-	var lastTS uint64
 	// Should not panic on empty NALU
-	r.processNALU([]byte{}, 0, &lastTS)
+	r.processNALU([]byte{}, time.Now())
 }
 
 // --- splitAnnexBNALUs with only zeros ---

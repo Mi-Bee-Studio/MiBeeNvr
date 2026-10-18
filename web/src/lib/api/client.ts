@@ -1,6 +1,7 @@
 /**
  * Base HTTP client — auth, generic fetch wrappers
  */
+import { t } from '$lib/i18n';
 import { APP_BASE } from '$lib/base-path';
 
 // Session token storage.
@@ -279,9 +280,11 @@ export function isLocalBypass(): boolean {
 const GATEWAY_BOUNCE_RETRY_DELAYS_MS = [1200, 3000];
 
 function dispatchGatewayAuth(body: string): void {
-  window.dispatchEvent(new CustomEvent('nvr-gateway-auth', {
-    detail: { body: body.slice(0, 120) },
-  }));
+  window.dispatchEvent(
+    new CustomEvent('nvr-gateway-auth', {
+      detail: { body: body.slice(0, 120) },
+    }),
+  );
 }
 
 type JsonAttempt<T> = { ok: true; value: T } | { ok: false; gatewayBody?: string };
@@ -295,8 +298,8 @@ async function attemptParse<T>(response: Response): Promise<JsonAttempt<T>> {
     // Gateway-auth signature: short printable plain text (the NVR itself
     // always answers JSON — a plain body on an OK status is the proxy
     // speaking). Binary/control-character junk is just a bad payload.
-    const printable = trimmed.length > 0 && trimmed.length <= 256 &&
-      ![...trimmed].some((ch) => ch < ' ' || ch === '\x7f');
+    const printable =
+      trimmed.length > 0 && trimmed.length <= 256 && ![...trimmed].some((ch) => ch < ' ' || ch === '\x7f');
     if (printable && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
       return { ok: false, gatewayBody: trimmed };
     }
@@ -316,12 +319,9 @@ export async function readJson<T>(response: Response, refetch?: () => Promise<Re
   if (attempt.ok) return attempt.value;
   if (attempt.gatewayBody !== undefined) {
     dispatchGatewayAuth(attempt.gatewayBody);
-    throw new ApiRequestError(
-      `网关拒绝了请求（${attempt.gatewayBody.slice(0, 60)}）。请重新打开飞牛并确认已登录（桌面会话失效时需重新登录飞牛），或稍后刷新页面`,
-      'GATEWAY_AUTH',
-    );
+    throw new ApiRequestError(t('api.gatewayRejected', { body: attempt.gatewayBody.slice(0, 60) }), 'GATEWAY_AUTH');
   }
-  throw new ApiRequestError('响应不是有效的 JSON', 'BAD_JSON');
+  throw new ApiRequestError(t('api.badJson'), 'BAD_JSON');
 }
 
 // Get the Authorization header value for API calls: "Bearer <session-token>".
@@ -397,11 +397,12 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
   // Default 30s timeout so a hung backend (e.g. ONVIF SOAP call blocked by a
   // slow/minimal device) cannot leave every loading spinner spinning forever.
   // A caller-supplied signal (e.g. abort on unmount) always takes precedence.
-  const doFetch = (): Promise<Response> => fetch(url, {
-    ...options,
-    headers,
-    signal: options.signal ?? AbortSignal.timeout(30000),
-  });
+  const doFetch = (): Promise<Response> =>
+    fetch(url, {
+      ...options,
+      headers,
+      signal: options.signal ?? AbortSignal.timeout(30000),
+    });
   let response: Response;
   try {
     response = await doFetch();
@@ -571,9 +572,10 @@ export async function tryGatewaySession(): Promise<boolean> {
   // successful storeToken (manual login) and by a fresh window (sessionStorage).
   if (sessionStorage.getItem(LOGOUT_FLAG)) return false;
   try {
-    const doFetch = (): Promise<Response> => fetch(`${API_BASE}/auth/gateway-session`, {
-      signal: AbortSignal.timeout(5000),
-    });
+    const doFetch = (): Promise<Response> =>
+      fetch(`${API_BASE}/auth/gateway-session`, {
+        signal: AbortSignal.timeout(5000),
+      });
     const response = await doFetch();
     if (!response.ok) return false;
     const data = await readJson<LoginResponse>(response, doFetch);
@@ -616,11 +618,12 @@ export async function setupApi(
   if (storagePath) body.storage_path = storagePath;
   if (setupCode) body.setup_code = setupCode;
 
-  const doFetch = (): Promise<Response> => fetch(`${API_BASE}/setup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const doFetch = (): Promise<Response> =>
+    fetch(`${API_BASE}/setup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
   const response = await doFetch();
 
   if (!response.ok) {
