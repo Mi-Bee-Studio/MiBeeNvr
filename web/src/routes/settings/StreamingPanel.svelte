@@ -5,7 +5,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { getStreamingSettings, updateStreamingSettings, getRtspOutputSettings, updateRtspOutputSettings } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
   import SettingsStreamingCard from './SettingsStreamingCard.svelte';

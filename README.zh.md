@@ -14,237 +14,130 @@
 [![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=flat)](LICENSE)
 [![Contributors](https://img.shields.io/github/contributors/Mi-Bee-Studio/MiBeeNvr?style=flat&label=Contributors)](https://github.com/Mi-Bee-Studio/MiBeeNvr/graphs/contributors)
 
-轻量级、易上手的网络视频录像机，单文件部署，零配置烦恼——下载即用。
+> **60 秒把任意低功耗 ARM 设备变成专业 NVR。**
+> 单二进制、零依赖、无需云端。512MB 内存预算即可在低功耗 ARM 设备上运行。
 
-专为低功耗 ARM 设备打造（在树莓派 3B 上验证最低配置）。支持主流协议：**RTSP**（H.264/H.265/MJPEG）、**HTTP JPEG**、**HLS** 直播流、**ONVIF** 设备发现、**WebRTC**（WHEP）、**HTTP-FLV**、**RTMP** 接入、**SRT** 接收器、**WHIP** 推入（浏览器/手机/OBS），并内置 **RTSP 输出**服务。
+![空载内存](https://img.shields.io/badge/空载内存-38_MB-2ea44f?style=flat-square)
+![冷启动](https://img.shields.io/badge/冷启动-122_ms-2ea44f?style=flat-square)
+![容量](https://img.shields.io/badge/68路@226Mbps录制-CPU_24%25-2ea44f?style=flat-square)
+![低配档](https://img.shields.io/badge/RK3399跑28路-2ea44f?style=flat-square)
 
-[**English**](README.md)
+<sub>自测值——测试方法与完整曲线见[性能](#性能)。</sub>
+
+> [**中文**](README.zh.md) — [English](README.md)
 
 ## 截图
 
-![监控大屏](docs/zh/images/surveillance.webp)
-*监控大屏：多宫格实时画面（WebCodecs / MJPEG），叠加健康分与 AI 检测*
+![监控宫格](docs/zh/images/surveillance.webp)
+*监控宫格：多相机实时画面（WebCodecs / MJPEG），带健康评分与 AI 叠加*
 
 ![录像时间轴](docs/zh/images/recordings.webp)
-*录像页：时间轴 + AI 事件标记，支持列表 / 延时摄影视图*
+*录像：按相机的时间轴与 AI 事件标记；支持列表与延时视图*
 
 ![摄像头管理](docs/zh/images/cameras.webp)
-*摄像头页：扫描发现、启停、转推输出一站式管理*
+*摄像头：发现扫描、拖拽分组、启停管理、转推输出一站式完成*
 
-## 核心功能
-
-- **摄像头协议**：RTSP（H.264/H.265/MJPEG）、HTTP JPEG、ONVIF 设备发现与管理（含 MotionAlarm 事件）、GB/T 28181 国标平台（海康/大华等 SIP 设备注册接入，实验性）、SRT/RTMP 收推（跨网络接入）、WHIP 推入（浏览器/手机/OBS 30+）、原生 Go 转推（把任意摄像头转发到远端，无 FFmpeg）
-- **即插即用自动发现**：接入局域网的 ONVIF 摄像头会在后台自动登记（海康 NVR 风格），无需手动扫描。无需认证的设备立即开始录制；需要认证的设备先添加为待激活状态，等你提供凭据后再启用
-- **视频录像**：自动 MP4 切片、多摄像头并发、按摄像头设置保留天数与每周录像计划、音频录制（AAC + G.711 + Opus）
-- **自适应录像**：安静时降为稀疏关键帧延时、有动静或响声时恢复全速；批量合并为延时摄影
-- **对象存储归档**：S3 兼容冷备（MinIO/云厂商 OSS），远程回放代理与预签名直连、按摄像头路由桶、本地空间自动腾空
-- **连续回放**：双缓冲无缝换段 + 全天 VOD 时间轴（跨录像/跨空隙拖动）、AVI 帧浏览
-- **局域网发现**：mDNS `_mibee-nvr._tcp` 通告 + UDP 49090 广播应答；`/api/health` 暴露稳定 `device_id`
-- **实时直播**：HLS / WebRTC（WHEP）/ HTTP-FLV 多协议直播，RTMP 接入 + SRT 接收器 + WHIP 推入 + 内置 RTSP 输出（`rtsp://<nvr>:8554/<camera-id>`，MJPEG 相机也能对外出流）
-- **片段合并**：自动/手动合并，全局 + 按摄像头策略
-- **摄像头管理**：拖拽分组与排序、每摄像头存储/片段统计、应用内检查更新与一键升级
-- **远程连接**：内置加密远程连接模式开发中（发布时另行文档化）；当前可参考 Tailscale / Cloudflare Tunnel 等外网访问指南
-- **Web 界面**：深色/浅色主题、响应式、中/英/俄三语、自绘 SVG 图表
-- **智能家居**：MQTT 触发录像、HMAC 签名 webhook 触发端点、Home Assistant 官方集成、WebDAV/FTP 文件访问
-- **单文件部署**：零依赖、内嵌前端、`CGO_ENABLED=0`
-- **小米摄像头**：CS2 P2P + 旧版 TUTK（7 款型号）、云端认证（社区驱动，非核心功能）
-- **健康监控**：多层摄像头健康检测、自动修复、质量评分
-- **IP 自愈**：摄像头在多个无线 AP 间漫游导致 IP 变更时，ONVIF 摄像头按序列号自动重新发现并重连（黑名单自动触发 + 手动按钮），单播探测跨子网可用
-- **视频转码**：基于 FFmpeg 的硬件转码，H.265→H.264 转换
-- **WebSocket 流**：实时二进制帧流
-- **AI 检测**：ONNX Runtime 推理，浏览器端目标检测
-- **事件系统**：基于 SSE 的实时事件流
-
-## 开发路线
-
-| 状态 | 协议 / 功能 | 说明 |
-|------|------------|------|
-| ✅ 已完成 | RTSP（H.264/H.265/MJPEG） | 核心流媒体协议 |
-| 🧪 实验性 | GB/T 28181 | 国标平台：设备注册、目录、PTZ、语音对讲、设备录像检索回放、报警订阅、级联（尚未在海康/大华真机全量验证，默认关闭） |
-| ✅ 已完成 | HTTP JPEG | IP 摄像头快照流 |
-| ✅ 已完成 | HLS | 按需直播流 |
-| ✅ 已完成 | ONVIF | 设备发现、云台控制、流地址获取、MotionAlarm 事件订阅 |
-| ✅ 已完成 | 小米（CS2 + 旧版 TUTK） | 云端认证、H.264/H.265 — 社区支持，7 款 TUTK 旧型号 |
-| ✅ 已完成 | RTMP（接入） | 收推：接收远端推流 |
-| ✅ 已完成 | SRT（接入） | 收推：低延迟传输 |
-| ✅ 已完成 | RTMP/RTSP（转推） | 转推：原生 Go 中继，转发到远端目标，可选 FFmpeg 兼容模式 |
-| ✅ 已完成 | RTSP（输出） | 内置 RTSP 服务：所有摄像头（含 MJPEG）经 `rtsp://<nvr>:8554/<camera-id>` 对外出流 |
-| ✅ 已完成 | WHIP（推入） | 浏览器/手机/OBS 30+ WebRTC 推流（H.264 + Opus） |
-| ✅ 已完成 | HTTP-FLV | 浏览器友好的直播流 |
-| ✅ 已完成 | WebRTC | 亚秒级延迟实时预览 |
-| ✅ 已完成 | 音频录制与实时预览 | AAC + G.711 + Opus，按摄像头开关，WebSocket 实时音频播放 |
-| ✅ 已完成 | 健康监控 | 多层检测、自动修复 |
 ## 快速开始
 
-### 方式 1：预编译二进制（推荐）
-
-从 [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases) 下载最新二进制文件：
-
-```bash
-# AMD64（大多数 PC/服务器）
-wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-amd64
-chmod +x mibee-nvr-amd64
-
-# ARM64（树莓派等）
-wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-arm64
-chmod +x mibee-nvr-arm64
-
-# ARMv7（树莓派 2/3 等）
-wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-armv7
-chmod +x mibee-nvr-armv7
-```
-
-初始化配置并启动：
-
-```bash
-./mibee-nvr-amd64 init --password yourpassword
-./mibee-nvr-amd64 -config mibee-nvr.yaml
-```
-
-打开 `http://localhost:9090` 即可访问管理界面。
-
-### 方式 2：Docker
-
-```bash
-docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
-```
-
-打开 `http://localhost:9090` 即可访问管理界面。
-
-如需将录像存储到外部硬盘，请修改 `docker-compose.yml` 中的卷挂载：
-
-```yaml
-    volumes:
-      - /mnt/external/nvr:/data    # ← 改为宿主机路径
-    environment:
-      - NVR_DATA_DIR=/data          # 必须与卷挂载一致
-```
-
-详见 [`deploy/docker/docker-compose.yml`](deploy/docker/docker-compose.yml)。
-
-### 方式 3：一键安装脚本
+### 一键安装（推荐）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
 ```
 
-自动下载二进制文件、创建系统用户（`nvr`）、生成配置、安装 systemd 服务并启动。数据目录：`/var/lib/mibee-nvr`。
+自动下载二进制、创建系统用户（`nvr`）、生成配置、安装 systemd 服务并启动。数据目录 `/var/lib/mibee-nvr`，浏览器打开 `http://localhost:9090` 进入 Web 界面。
 
-### 方式 4：源码编译
-
-```bash
-git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git
-cd MiBeeNvr
-make build
-./mibee-nvr init --password yourpassword
-./mibee-nvr -config mibee-nvr.yaml
-```
-
-详细设置请参考 [快速入门](docs/zh/getting-started.md)。
-
-## 官方渠道
-
-版本号、配置语法与 CLI 参数**仅**以下列来源为权威：
-
-- **源码与发布**：https://github.com/Mi-Bee-Studio/MiBeeNvr/releases
-- **文档**：[`docs/zh/`](docs/zh/) 及下方文档表中列出的链接
-- **微信公众号**：「蓝宝石的傻话」（版本发布与动态公告）
-
-<p align="left">
-  <img src="docs/brand/wechat-account-qr.webp" width="320" alt="微信公众号二维码：蓝宝石的傻话" />
-</p>
-
-其他渠道发布的内容——转载教程、"评测"、第三方博客、SEO 聚合站——均未经我们审阅或背书，且时常包含编造的版本号、配置文件与基准数据。如果你在别处读到的内容与 `docs/zh/` 不一致，请以文档为准，并欢迎提 issue 以便我们澄清。
-
-## 文档
-
-| 文档 | 说明 |
-|------|------|
-| [快速入门](docs/zh/getting-started.md) | 安装、添加第一个摄像头 |
-| [升级指南](docs/zh/upgrade-guide.md) | 各版本间破坏性变更与迁移步骤 |
-| [配置说明](docs/zh/configuration.md) | 完整配置参考 |
-| [API 文档](docs/zh/api/README.md) | REST API 接口文档 |
-| [MediaMTX 指南](docs/zh/mediamtx-guide.md) | MediaMTX CSI 摄像头集成 |
-| [部署指南](docs/zh/deployment.md) | systemd、反向代理、交叉编译，及各 **NAS** 平台指南（unRAID / 飞牛 / iStoreOS / 群晖 / 威联通 / 极空间） |
-| [Docker 自动升级](docs/zh/deployment-autoupdate.md) | 手动升级 + 可选 Watchtower 自动升级与回滚 |
-| [对象存储冷备](docs/zh/storage-offload.md) | S3 兼容对象存储异步上传与本地逐出 |
-| [桌面版](docs/zh/desktop.md) | Windows / macOS 桌面版安装与信任模型 |
-| [摄像头指南](docs/zh/camera-guide.md) | 摄像头设置、协议、故障排除 |
-| [Xiaomi 设置](docs/zh/xiaomi-setup.md) | 小米云摄像头集成 |
-| [ONVIF 指南](docs/zh/onvif-guide.md) | ONVIF 摄像头设置、云台控制、故障排除 |
-| [FTP 集成](docs/zh/ftp-integration.md) | FTP 文件访问设置 |
-| [MQTT 集成](docs/zh/mqtt-integration.md) | MQTT 智能家居集成 |
-| [接入 Home Assistant](docs/zh/home-assistant.md) | Home Assistant 接入指南 |
-| [WebDAV 集成](docs/zh/webdav-integration.md) | WebDAV 文件访问设置 |
-| [故障排除](docs/zh/troubleshooting.md) | 常见问题与解决方案 |
-| [视频转码](docs/zh/transcoding.md) | FFmpeg 转码设置 |
-| [Prometheus 指标](docs/zh/metrics.md) | 完整的 Prometheus 指标参考，包含类型、标签和使用示例 |
-| [推流转发](docs/zh/relay-guide.md) | RTMP 直播平台推流配置与故障排除 |
-| [WHIP 推入](docs/zh/whip-ingest.md) | 浏览器/手机/OBS WebRTC 推流接入 |
-| [Webhook 集成](docs/zh/webhook-integration.md) | HMAC 签名的 webhook 触发端点 |
-| [远程访问](docs/zh/remote-access.md) | Tailscale / Cloudflare Tunnel 外网访问与 WebRTC ICE/STUN/TURN 配置 |
-
-```bash
-make build              # 本机编译（当前架构）
-make cross              # 交叉编译 ARM64 二进制
-make test               # 运行测试
-make lint               # 代码检查
-```
-
-## Docker 容器镜像
-
-快速部署请参考 [`deploy/docker/docker-compose.yml`](deploy/docker/docker-compose.yml)：
+### Docker
 
 ```bash
 docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
-使用位于 `deploy/docker/Dockerfile` 的单一多架构构建文件：在容器内交叉编译前端与后端，并复用预构建的多架构基础镜像（含 FFmpeg），全程无需 QEMU 模拟。
+录像存外接盘时，修改 `docker-compose.yml` 中的卷挂载并设置 `NVR_DATA_DIR=/data` 与之对应（文件内有注释示例）。
+
+<details>
+<summary>其它方式：预编译二进制、源码编译</summary>
 
 ```bash
-# 构建 amd64 镜像
-make docker-build
-
-# 构建 arm64 镜像（容器内交叉编译，无需 QEMU）
-make docker-build-arm64
-
-# 构建全部架构
-make docker-build-all
-
-# 推送到镜像仓库（需先 docker/podman login）
-make docker-push              # 推送 amd64
-make docker-push-arm64        # 推送 arm64
-make docker-push-all          # 推送全部
-
-# 一键构建并推送
-make docker-release
+# 预编译二进制（AMD64 / ARM64 / ARMv7）
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-arm64
+chmod +x mibee-nvr-arm64
+./mibee-nvr-arm64 init --password 你的密码
+./mibee-nvr-arm64 -config mibee-nvr.yaml
 ```
 
-镜像在打版本标签时自动发布到 GitHub Container Registry：
-
-| 镜像 | 架构 |
-|------|------|
-| `ghcr.io/mi-bee-studio/mibeenvr:<tag>` | amd64, arm64, armv7 |
-
-可用标签：`0.13.0`（精确版本）、`0.13`（次版本）、`0`（主版本）、`latest`
-
-## 项目结构
-
-```text
-cmd/mibee-nvr/       # 程序入口 + 应用生命周期
-internal/            # 核心模块
-web/                 # Svelte 5 前端
-deploy/              # systemd、Docker 等部署资产
-docs/                # 文档（中文/英文）
-tests/               # 集成测试
-e2e-tests/           # Playwright E2E 测试
+```bash
+# 源码编译
+git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git
+cd MiBeeNvr && make build
 ```
+
+</details>
+
+详细步骤见[快速上手](docs/zh/getting-started.md)。
+
+## 为什么选 MiBee NVR？
+
+- **单二进制**：零依赖、内嵌 Svelte 5 SPA、`CGO_ENABLED=0`
+- **低功耗 ARM 就绪**：1GB 内存可跑，512MB 内存预算（以树莓派 3B 为最低基线验证）
+- **即插即录自动发现**：ONVIF 相机入网即后台自动注册，无需手动扫描；带凭据的相机以待激活状态等待你补齐凭据
+- **IP 自愈**：Wi-Fi 漫游跨 AP 换 IP 的相机按序列号自动寻回并重连
+- **自适应录制**：平静时降为稀疏关键帧的延时基线，动静或响亮声音触发即刻恢复全速
+- **浏览器端 AI 检测**：ONNX Runtime Web + WebGPU 加速——无需后端推理服务器
+- **现代 Web 界面**：深浅主题、中/英/俄三语、响应式；WebCodecs 播放 H.265
+- **无需云端**：自托管、无订阅、无锁定——当下用 Tailscale / Cloudflare Tunnel / WireGuard 远程访问，内置加密远程模式在路上
+
+## 性能
+
+三个硬件档位的自测数据——测试方法、判定口径与完整资源曲线见[压测报告](docs/zh/performance-benchmark.md)。全程出厂默认配置，不含任何需手动打开的优化开关。
+
+| 硬件 | 负载 | 结果 |
+|---|---|---|
+| 任意（空载） | — | 内存 38 MB，冷启动 122 ms |
+| x86 台式机（i5-12600KF） | 68 路 · 226 Mbps 录制，另加 32 路并发观看 | CPU 24%，API p50 < 11 ms，零失败 |
+| RK3399 NAS（低配档） | 28 路录制 | CPU 20–23%（瓶颈在 eMMC 存储） |
+| Banana Pi M5（生产机） | 18 路，80% iowait 风暴 | health API p50 13.5 ms |
+
+## 支持的协议
+
+| 协议 | 方向 | 说明 |
+|------|------|------|
+| RTSP | 相机 → NVR | H.264/H.265/MJPEG |
+| HTTP JPEG | 相机 → NVR | 快照流 |
+| ONVIF | 相机 ↔ NVR | 发现、云台、流地址、MotionAlarm 事件 |
+| 小米（CS2 + TUTK） | 相机 → NVR | CS2 P2P + 旧版 TUTK（7 型号），云端认证 |
+| GB/T 28181 | 相机 → NVR | SIP 平台、自动注册、语音对讲、云台、设备侧回放 |
+| SRT / RTMP（接入） | 推流端 → NVR | 跨网络推入、低延迟传输 |
+| WHIP | 推流端 → NVR | 浏览器 / 手机 / OBS 30+ 的 WebRTC 推流（H.264 + Opus） |
+| HLS | NVR → 观看端 | 按需起流，支持 LL-HLS |
+| WebRTC（WHEP） | NVR → 观看端 | 亚秒延迟 |
+| HTTP-FLV | NVR → 观看端 | 浏览器友好 |
+| RTSP（输出服务） | NVR → 外部 | 每台相机一个地址 `rtsp://<nvr>:8554/<camera-id>` |
+| RTMP / RTSP（转推） | NVR → 外部 | 原生 Go 转推至远端目标 |
+
+## 文档
+
+带一句话简介的完整目录见 [`docs/zh/README.md`](docs/zh/README.md)。常用入口：
+
+- [快速上手](docs/zh/getting-started.md) · [配置参考](docs/zh/configuration.md) · [CLI](docs/zh/cli.md) · [API 参考](docs/zh/api/README.md)
+- [部署](docs/zh/deployment.md)（含 NAS 指南：unRAID / fnOS / 群晖 / 威联通 / iStoreOS / 极空间）· [远程访问](docs/zh/remote-access.md)
+- [故障排查](docs/zh/troubleshooting.md) · [升级指南](docs/zh/upgrade-guide.md)
+
+版本号、配置语法、CLI 参数**只**以本仓库的 releases 与 `docs/zh/` 为权威来源。外部转载教程、“评测”、SEO 聚合页均未经我们审阅，常含有编造的版本号与跑分。若你看到的第三方内容与文档不符，以文档为准，欢迎提 issue 告知。
+
+**微信公众号**：蓝宝石的傻话（版本发布公告，中文）
+
+<p align="left">
+  <img src="docs/brand/wechat-account-qr.webp" width="320" alt="微信公众号二维码 — 蓝宝石的傻话" />
+</p>
 
 ## 贡献
 
-1. 提交前运行 `make lint`
-2. 新功能附带测试
-3. 清晰的提交信息
+1. 提交前跑 `make lint`（golangci-lint v2，先 `make lint-install`），新功能补测试
+2. Web SPA：Node 22，`cd web && npm run build && npm run test`
+3. 写清晰的提交信息
+
+项目结构——`cmd/mibee-nvr/` CLI 入口、`internal/` 核心包、`web/` Svelte 5 SPA、`deploy/` 服务文件、`docs/` 中英双语文档、`tests/` + `e2e-tests/` 集成与 Playwright 测试。详见[架构总览](docs/zh/architecture.md)。
 
 感谢所有贡献者：
 
@@ -252,11 +145,11 @@ e2e-tests/           # Playwright E2E 测试
 
 ## 许可证
 
-[AGPL-3.0-only](LICENSE) © Mi&Bee Studio，附带 [`pkg/` 链接例外](LICENSE.pkg-linking-exception)——第三方程序可以基于扩展接口构建，不触发 AGPL 义务。
+[AGPL-3.0-only](LICENSE) © Mi&Bee Studio，附 [`pkg/` 链接例外](LICENSE.pkg-linking-exception)：
 
-- **使用 MiBee NVR**（运行、录像、看流）：无任何义务，可自由使用（包括商用）。
-- **修改并分发**：修改版必须以 AGPL-3.0 开源发布。
-- **在自己的程序中使用 `pkg/` 接口**：受链接例外保护，你的程序许可证由你决定。
-- **独立进程通过 HTTP/WebSocket API 调用运行中的 NVR**：完全不受许可证影响。
+- **使用 MiBee NVR**（运行、录像、看流）：无任何义务——自由使用，包括商用。
+- **修改并分发**：修改版须以 AGPL-3.0 发布。
+- **基于 `pkg/` 构建自己的程序**：链接例外允许，你的程序许可自选。
+- **通过 HTTP/WebSocket API 与运行中的 NVR 交互的独立程序**：从不受该许可证影响。
 
-v0.10.1 及更早版本以 MIT 授权发布，继续适用于那些版本。第三方组件声明见 [NOTICE](NOTICE)，贡献授权政策见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+v0.10.1 及更早版本为 MIT 许可，对该范围继续有效。见 [NOTICE](NOTICE) 与 [CONTRIBUTING.md](CONTRIBUTING.md)。

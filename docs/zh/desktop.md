@@ -53,6 +53,6 @@ v0.13.0 起 MiBee NVR 提供 **Windows 与 macOS 桌面版**：单文件安装�
 
 ## 下一步
 
-- [快速入门](quickstart.md) — 添加第一路相机
+- [快速入门](getting-started.md) — 添加第一路相机
 - [配置参考](configuration.md) — 配置文件完整说明
 - [性能调优](performance.md) — 桌面硬件上的 IO / 内存调优

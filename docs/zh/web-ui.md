@@ -101,6 +101,6 @@ MiBee NVR 的 Web 界面分为五个顶级页面 + 直播页。本页是各页�
 
 ## 下一步
 
-- [快速开始](quickstart.md) — 添加第一台摄像头
+- [快速入门](getting-started.md) — 添加第一台摄像头
 - [CLI 用户手册](cli.md) — 命令行管理
 - [直播转推](relay-guide.md) — 把画面推到直播平台

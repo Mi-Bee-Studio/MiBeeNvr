@@ -6,7 +6,7 @@
   // polling + status is self-contained here. Extracted from
   // RecordingDetail.svelte (#136).
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { RefreshCw } from 'lucide-svelte';
   import type { Recording } from '$lib/api';
   import { downloadRecording as apiDownloadRecording } from '$lib/api';

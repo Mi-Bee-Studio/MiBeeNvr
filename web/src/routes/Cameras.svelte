@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, rediscoverCamera, activateCamera, getAuthHeader, appendAuthToken, ApiRequestError, API_BASE, listCameraGroups, createCameraGroup, renameCameraGroup, deleteCameraGroup, setCameraGroupsOrder } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, apiRequestBlob, rediscoverCamera, activateCamera, appendAuthToken, ApiRequestError, API_BASE, listCameraGroups, createCameraGroup, renameCameraGroup, deleteCameraGroup, setCameraGroupsOrder } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse, ArchiveCleanupTask, ArchiveCleanupStatus } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { friendlyError } from '$lib/errors';
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
   import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings, Loader2, FolderPlus, Pencil } from 'lucide-svelte';
@@ -433,38 +433,24 @@
     window.location.hash = `#/recordings/${rec.id}`;
   }
 
-  function downloadRecording(rec: Recording) {
-    const url = `${API_BASE}/archives/${expandedArchiveId}/recordings/${rec.id}/download`;
-    const authHeader = getAuthHeader();
-    if (authHeader) {
-      fetch(url, {
-        headers: { 'Authorization': authHeader }
-      })
-        .then(res => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.blob();
-        })
-        .then(blob => {
-          const objectUrl = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = objectUrl;
-          link.download = `archive_${rec.camera_id}_${rec.id}.mp4`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          URL.revokeObjectURL(objectUrl);
-        })
-        .catch(() => {
-          showToast(t('common.error'), 'error');
-        });
-      return;
+  async function downloadRecording(rec: Recording) {
+    // apiRequestBlob carries the session auth (and its renewal/gateway
+    // handling) instead of a hand-rolled fetch that lost both.
+    try {
+      const blob = await apiRequestBlob(
+        `/archives/${expandedArchiveId}/recordings/${rec.id}/download`
+      );
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = `archive_${rec.camera_id}_${rec.id}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      showToast(t('common.error'), 'error');
     }
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `archive_${rec.camera_id}_${rec.id}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
   }
 
   async function confirmDeleteRecordingFn() {

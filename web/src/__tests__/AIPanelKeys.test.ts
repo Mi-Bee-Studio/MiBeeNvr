@@ -18,7 +18,7 @@ vi.mock('lucide-svelte', () => {
   return mock;
 });
 
-vi.mock('$lib/toast', () => ({ showToast: vi.fn() }));
+vi.mock('$lib/toast.svelte', () => ({ showToast: vi.fn() }));
 vi.mock('$lib/clipboard', () => ({ copyText: vi.fn().mockResolvedValue(true) }));
 vi.mock('$lib/mibeevision-status.svelte', () => ({ refreshMiBeeVisionStatus: vi.fn() }));
 vi.mock('$lib/format', () => ({ formatRelativeTime: () => 'just now' }));

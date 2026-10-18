@@ -15,7 +15,7 @@ const copyTextMock = vi.hoisted(() => vi.fn());
 vi.mock('$lib/clipboard', () => ({ copyText: copyTextMock }));
 
 const toastMock = vi.hoisted(() => vi.fn());
-vi.mock('$lib/toast', () => ({ showToast: toastMock }));
+vi.mock('$lib/toast.svelte', () => ({ showToast: toastMock }));
 
 // Mock lucide-svelte icons
 vi.mock('lucide-svelte', () => {

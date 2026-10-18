@@ -90,7 +90,7 @@ AI 检测完全在浏览器端通过 ONNX Runtime Web (WASM) 运行。失败时�
 这表示浏览器收到的 ONNX 模型字节无法被解析。
 
 **先确认你的版本已修复。** gzip-trailer 修复之前的版本（见
-[`docs/known-issues-ai-onnx-gzip-trailer.md`](../known-issues-ai-onnx-gzip-trailer.md)）
+[`docs/en/known-issues/ai-onnx-gzip-trailer.md`](known-issues/ai-onnx-gzip-trailer.md)）
 会给所有二进制下载追加一个多余的 gzip 尾巴——无论模型多有效都会失败。
 如果你已经在修复后的构建上，按以下步骤排查：
 
