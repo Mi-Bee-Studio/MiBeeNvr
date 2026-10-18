@@ -36,10 +36,13 @@ The permission
 
 Why this exception exists
 
-  The `pkg/` tree (pkg/app, pkg/camera, pkg/streamhub, pkg/eventbus) is
-  a public, stable extension API: it exists so that third parties can
-  build their own programs on top of MiBee NVR's service and camera
-  abstractions. Without this exception, AGPL-3.0's copyleft would
+  The `pkg/` tree (pkg/camera, pkg/streamhub, pkg/eventbus) is a public,
+  stable extension API: it exists so that third parties can build their
+  own programs on top of MiBee NVR's camera and event abstractions.
+  (pkg/app previously appeared here; it was the composition root — it
+  imported 55 internal packages and changed with every internal
+  refactor, so it was never a stable surface. It moved to internal/ and
+  is out of the exception. #1010) Without this exception, AGPL-3.0's copyleft would
   extend to any program compiled together with `pkg/`, which would
   defeat the tree's stated purpose as a neutral extension surface.
 
