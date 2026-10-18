@@ -10,7 +10,7 @@
   import { COCO_CLASSES } from '$lib/ai-detection/inference';
   import { t } from '$lib/i18n';
   import { Plus, Trash2, X, Copy, Check, ChevronDown } from 'lucide-svelte';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { copyText } from '$lib/clipboard';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
   import SettingsCard from '$lib/components/SettingsCard.svelte';

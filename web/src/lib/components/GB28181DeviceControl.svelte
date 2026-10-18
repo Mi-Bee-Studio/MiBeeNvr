@@ -3,7 +3,7 @@
   // reset, home position, reboot (double-confirm). Plus FI lens control and
   // auxiliary switches (wiper/light, #341 — GB/T 28181-2022 § A.3.3/A.3.7).
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { sendGB28181DeviceControl, sendGB28181LensControl, sendGB28181AuxSwitch } from '$lib/api';
   import {
     CircleDot, ShieldCheck, ShieldOff, BellOff, Home, Power, Disc,

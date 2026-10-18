@@ -14,10 +14,28 @@
 [![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=flat)](LICENSE)
 [![Contributors](https://img.shields.io/github/contributors/Mi-Bee-Studio/MiBeeNvr?style=flat&label=Contributors)](https://github.com/Mi-Bee-Studio/MiBeeNvr/graphs/contributors)
 
-> **Turn any low-power ARM device into a professional NVR in 60 seconds.**  
+> **Turn any low-power ARM device into a professional NVR in 60 seconds.**
 > Single binary, zero dependencies, no cloud required. Runs on low-power ARM devices with a 512MB memory budget.
 
+![Idle RSS](https://img.shields.io/badge/idle_RSS-38_MB-2ea44f?style=flat-square)
+![Cold start](https://img.shields.io/badge/cold_start-122_ms-2ea44f?style=flat-square)
+![Capacity](https://img.shields.io/badge/68_cameras_@_226_Mbps-24%25_CPU-2ea44f?style=flat-square)
+![Low tier](https://img.shields.io/badge/28_cameras_on_RK3399-2ea44f?style=flat-square)
+
+<sub>Self-measured — methodology and full curves in [Performance](#performance).</sub>
+
 > [**中文**](README.zh.md) — [English](README.md)
+
+## Screenshots
+
+![Surveillance grid](docs/en/images/surveillance.webp)
+*Surveillance grid: multi-camera live view (WebCodecs / MJPEG) with health scores and AI overlay*
+
+![Recordings timeline](docs/en/images/recordings.webp)
+*Recordings: per-camera timeline with AI event markers; list and timelapse views available*
+
+![Cameras page](docs/en/images/cameras.webp)
+*Cameras: discovery scanning, drag-and-drop groups, start/stop, and push-out relay management in one place*
 
 ## Quick Start
 
@@ -27,267 +45,99 @@
 curl -fsSL https://raw.githubusercontent.com/Mi-Bee-Studio/MiBeeNvr/main/install.sh | sudo bash
 ```
 
-Downloads the binary, creates a system user (`nvr`), generates a config, installs a systemd service, and starts it. Data directory: `/var/lib/mibee-nvr`.
+Downloads the binary, creates a system user (`nvr`), generates a config, installs a systemd service, and starts it. Data directory: `/var/lib/mibee-nvr`. Open `http://localhost:9090` for the Web UI.
 
-### Option 1: Pre-built Binary
-
-Download the latest binary from [GitHub Releases](https://github.com/Mi-Bee-Studio/MiBeeNvr/releases):
-
-```bash
-# AMD64 (most PCs/servers)
-wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-amd64
-chmod +x mibee-nvr-amd64
-
-# ARM64 (Raspberry Pi 4/5, etc.)
-wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-arm64
-chmod +x mibee-nvr-arm64
-
-# ARMv7 (Raspberry Pi 2/3, etc.)
-wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-armv7
-chmod +x mibee-nvr-armv7
-```
-
-Initialize config and start:
-
-```bash
-./mibee-nvr-amd64 init --password yourpassword
-./mibee-nvr-amd64 -config mibee-nvr.yaml
-```
-
-Open `http://localhost:9090` to access the Web UI.
-
-### Option 2: Docker
+### Docker
 
 ```bash
 docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
 ```
 
-Open `http://localhost:9090` to access the Web UI.
+To store recordings on an external drive, edit the volume mount and set `NVR_DATA_DIR=/data` to match (see the commented block in `docker-compose.yml`).
 
-To store recordings on an external drive, edit the volume mount in `docker-compose.yml`:
-
-```yaml
-    volumes:
-      - /mnt/external/nvr:/data    # ← change to your host path
-    environment:
-      - NVR_DATA_DIR=/data          # must match the volume mount
-```
-
-### Option 3: Build from Source
+<details>
+<summary>Other options: pre-built binary, build from source</summary>
 
 ```bash
-git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git
-cd MiBeeNvr
-make build
-./mibee-nvr init --password yourpassword
-./mibee-nvr -config mibee-nvr.yaml
+# Pre-built binary (AMD64 / ARM64 / ARMv7)
+wget https://github.com/Mi-Bee-Studio/MiBeeNvr/releases/latest/download/mibee-nvr-amd64
+chmod +x mibee-nvr-amd64
+./mibee-nvr-amd64 init --password yourpassword
+./mibee-nvr-amd64 -config mibee-nvr.yaml
 ```
 
+```bash
+# Build from source
+git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git
+cd MiBeeNvr && make build
+```
+
+</details>
+
 For detailed setup, see [Getting Started](docs/en/getting-started.md).
-
-## Official Channels
-
-Version numbers, configuration syntax, and CLI flags are authoritative **only** here:
-
-- **Source & releases**: https://github.com/Mi-Bee-Studio/MiBeeNvr/releases
-- **Documentation**: [`docs/en/`](docs/en/) and links in the Documentation table below
-- **WeChat official account**: 蓝宝石的傻话 (release announcements, in Chinese)
-
-<p align="left">
-  <img src="docs/brand/wechat-account-qr.webp" width="320" alt="WeChat official account QR — 蓝宝石的傻话" />
-</p>
-
-Content published elsewhere — reprinted tutorials, "reviews", third-party blogs, SEO
-aggregators — is not reviewed or endorsed by us, and frequently contains invented
-version numbers, config files, and benchmarks. If something you read elsewhere does
-not match `docs/en/`, trust the docs and please open an issue so we can clarify.
 
 ## Why MiBee NVR?
 
 - **Single Binary**: Zero dependencies, embedded Svelte 5 SPA, `CGO_ENABLED=0`
 - **Low-Power ARM Ready**: Runs on 1GB RAM with a 512MB memory budget (validated on Raspberry Pi 3B as the minimum baseline)
-- **Multi-Protocol Streaming**: HLS, WebRTC, HTTP-FLV, RTMP, SRT, WebSocket, WHIP
-- **No Cloud Required**: Self-hosted, no subscriptions, no vendor lock-in
-- **Modern Web UI**: Dark/light themes, Chinese / English / Russian, responsive design
-- **ONVIF Support**: Auto-discovery, PTZ control, stream URI management, MotionAlarm events
-- **Plug-and-Play Auto-Discover**: ONVIF cameras joining the LAN are enrolled automatically in the background (Hikvision-NVR-style) — no manual scan. Unauthenticated devices start recording immediately; authenticated ones are added as pending activation until you supply credentials
-- **IP Self-Healing**: ONVIF cameras that change IP (Wi-Fi roaming across APs) are auto-relocated by serial number and reconnected — unicast probing works across routed subnets
-- **Remote Access**: Tailscale / Cloudflare Tunnel / WireGuard guides for external access today, with a built-in encrypted remote-connection mode on the way
-- **Smart Integrations**: MQTT triggers, WebDAV, FTP, FFmpeg transcoding
+- **Plug-and-Play Auto-Discover**: ONVIF cameras joining the LAN are enrolled automatically in the background — no manual scan; authenticated ones wait as pending activation until you supply credentials
+- **IP Self-Healing**: Cameras that change IP (Wi-Fi roaming across APs) are auto-relocated by serial number and reconnected
+- **Adaptive Recording**: Timelapse baseline that drops to sparse keyframes when calm and resumes full rate on motion or loud audio
+- **Browser-Side AI Detection**: ONNX Runtime Web with WebGPU acceleration — no backend inference server
+- **Modern Web UI**: Dark/light themes, Chinese / English / Russian, responsive; WebCodecs H.265 playback
+- **No Cloud Required**: Self-hosted, no subscriptions, no vendor lock-in — remote access via Tailscale / Cloudflare Tunnel / WireGuard today, with a built-in encrypted remote mode on the way
 
-## Screenshots
+## Performance
 
-![Surveillance grid](docs/en/images/surveillance.webp)  
-*Surveillance grid: multi-camera live view (WebCodecs / MJPEG) with health scores and AI overlay*
+Self-measured across three hardware tiers — methodology, judging criteria, and full resource curves are published in the [benchmark report](docs/en/performance-benchmark.md). Default configuration throughout; no manually-enabled optimization switches.
 
-![Recordings timeline](docs/en/images/recordings.webp)  
-*Recordings: per-camera timeline with AI event markers; list and timelapse views available*
-
-![Cameras page](docs/en/images/cameras.webp)  
-*Cameras: discovery scanning, drag-and-drop groups, start/stop, and push-out relay management in one place*
-
-## Features
-
-### 📷 Camera Support
-- RTSP (H.264/H.265/MJPEG) streaming
-- HTTP JPEG snapshot streaming
-- ONVIF discovery & management with PTZ control and MotionAlarm event subscription
-- Xiaomi CS2 + legacy TUTK (7 models) cloud camera support
-- SRT/RTMP push-in cameras (cross-network ingest — receive streams from remote publishers)
-- WHIP push-in (browsers, phones, OBS 30+ — WebRTC publishing with H.264 + Opus)
-- GB/T 28181 national-standard platform (experimental): SIP cameras (Hikvision/Dahua/Uniview) register to the NVR — catalog, PTZ, voice intercom, on-demand snapshot & device-side recording search/playback, alarm subscription, cascade. Default off
-- Native Go push-out relay (forward any camera to remote RTMP/RTSP targets; FFmpeg optional for compatibility)
-
-### 📺 Streaming & Live View
-- HLS on-demand streaming with LL-HLS support
-- WebRTC WHEP for sub-second latency viewing
-- HTTP-FLV for browser-friendly streaming
-- RTMP ingest server for push/pull workflows
-- SRT low-latency transport receiver
-- WHIP ingest endpoint (WebRTC publishing from browsers/phones/OBS)
-- Built-in RTSP output server — re-serve every camera (incl. MJPEG) at `rtsp://<nvr>:8554/<camera-id>`
-- WebSocket real-time binary frame streaming
-
-### 💾 Recording & Storage
-- Automatic MP4 segment generation
-- Multi-camera concurrent recording
-- Per-camera retention policies and weekly recording schedules
-- Adaptive recording — timelapse baseline that drops to sparse keyframes when calm and resumes full rate on motion or loud audio
-- Audio capture (AAC + G.711 + Opus)
-- Segment merging with configurable policies
-- Periodic timelapse recording
-- S3-compatible object-storage offload for cold archives (remote playback proxy or presigned URLs, per-camera bucket routing, automatic local eviction)
-- Continuous playback: double-buffered seamless segment chaining + full-day VOD timeline (scrub across recordings and gaps), AVI frame-browse mode
-- LAN discovery (mDNS `_mibee-nvr._tcp` + UDP 49090 responder) with a stable `device_id` in `/api/health`
-
-### 🔧 Management
-- Modern Svelte 5 web UI with dark/light themes
-- REST API for automation
-- BasicAuth with bcrypt password hashing
-- Camera grouping with drag-and-drop, per-camera storage/segment stats
-- In-app update checker and one-click upgrade
-- Prometheus metrics integration
-- Atomic configuration with validation
-
-### 🤖 Smart Features
-- Browser-side AI detection (ONNX Runtime Web, WebGPU-accelerated) — no backend inference
-- Audio recording and playback (AAC + G.711 μ-law/A-law + Opus); AAC live preview via WebCodecs
-- Multi-layer camera health monitoring
-- Auto-remediation for connection issues
-- SSE-based real-time event system
-- Quality scoring and alerting
-
-### 🔌 Integrations
-- MQTT trigger-based recording
-- HMAC-signed webhook trigger endpoint
-- Home Assistant integration
-- WebDAV server for file access
-- FTP server for remote uploads
-- FFmpeg hardware transcoding
-- Event-driven architecture
+| Hardware | Load | Result |
+|---|---|---|
+| Any (idle) | — | 38 MB RSS, 122 ms cold start |
+| x86 desktop (i5-12600KF) | 68 cams · 226 Mbps recording, +32 concurrent viewers | 24% CPU, API p50 < 11 ms, zero failures |
+| RK3399 NAS (low tier) | 28 cams recording | 20–23% CPU (storage-bound, eMMC) |
+| Banana Pi M5 (production) | 18 cams, 80% iowait storm | health API p50 13.5 ms |
 
 ## Supported Protocols
 
-| Protocol | Direction | Status | Notes |
-|----------|----------|---------|-------|
-| RTSP | Camera → NVR | ✅ Done | H.264/H.265/MJPEG support |
-| HTTP JPEG | Camera → NVR | ✅ Done | Snapshot streaming |
-| HLS | NVR → Browser | ✅ Done | On-demand streaming |
-| WebRTC | NVR → Browser | ✅ Done | WHEP sub-second latency |
-| HTTP-FLV | NVR → Browser | ✅ Done | Browser-friendly streaming |
-| RTMP (ingest) | Camera → NVR | ✅ Done | Push-in: receive streams from remote publishers |
-| SRT (ingest) | Camera → NVR | ✅ Done | Push-in: low-latency transport |
-| RTMP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
-| RTSP (relay) | NVR → External | ✅ Done | Push-out: native Go relay to remote targets |
-| RTSP (output) | NVR → External | ✅ Done | Built-in RTSP server: every camera re-served at `rtsp://<nvr>:8554/<camera-id>` |
-| WHIP | Publisher → NVR | ✅ Done | WebRTC push-in from browsers, phones, OBS 30+ (H.264 + Opus) |
-| ONVIF | Camera ↔ NVR | ✅ Done | Discovery, PTZ, stream URI, MotionAlarm events |
-| Xiaomi (CS2 + TUTK) | Camera → NVR | ✅ Done | CS2 P2P + legacy TUTK (7 models), cloud auth |
-| GB/T 28181 | Camera → NVR | ✅ Done | SIP platform, auto-enrollment, audio + talk, subscriptions, PTZ, device-side playback |
-
-## Use Cases
-
-### 🏠 Home Security
-Monitor your property with multiple cameras. Motion-triggered recording, smartphone alerts, and easy remote viewing from anywhere.
-
-### 🏪 Small Business
-Affordable security system for shops, offices, and warehouses. Multi-camera support with individual retention policies.
-
-### 🔧 DIY/Tinkering
-Perfect for homelab enthusiasts. Self-hosted, no subscriptions, works with any RTSP camera and integrates with smart home systems.
+| Protocol | Direction | Notes |
+|----------|----------|-------|
+| RTSP | Camera → NVR | H.264/H.265/MJPEG |
+| HTTP JPEG | Camera → NVR | Snapshot streaming |
+| ONVIF | Camera ↔ NVR | Discovery, PTZ, stream URI, MotionAlarm events |
+| Xiaomi (CS2 + TUTK) | Camera → NVR | CS2 P2P + legacy TUTK (7 models), cloud auth |
+| GB/T 28181 | Camera → NVR | SIP platform, auto-enrollment, audio + talk, PTZ, device-side playback |
+| SRT / RTMP (ingest) | Publisher → NVR | Push-in: remote publishers, low-latency transport |
+| WHIP | Publisher → NVR | WebRTC push from browsers, phones, OBS 30+ (H.264 + Opus) |
+| HLS | NVR → Viewer | On-demand with LL-HLS support |
+| WebRTC (WHEP) | NVR → Viewer | Sub-second latency |
+| HTTP-FLV | NVR → Viewer | Browser-friendly streaming |
+| RTSP (output server) | NVR → External | Every camera re-served at `rtsp://<nvr>:8554/<camera-id>` |
+| RTMP / RTSP (relay) | NVR → External | Native Go push-out to remote targets |
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [Getting Started](docs/en/getting-started.md) | Installation, first camera setup |
-| [Upgrade Guide](docs/en/upgrade-guide.md) | Breaking changes & migration steps between versions |
-| [Configuration](docs/en/configuration.md) | Full config reference |
-| [API Reference](docs/en/api/README.md) | REST API documentation |
-| [MediaMTX Guide](docs/en/mediamtx-guide.md) | MediaMTX integration for CSI cameras |
-| [Deployment](docs/en/deployment.md) | systemd, reverse proxy, cross-compile, and per-platform **NAS** guides (unRAID / fnOS / iStoreOS / Synology / QNAP / ZSpace) |
-| [Auto-update (Docker)](docs/en/deployment-autoupdate.md) | Manual + optional Watchtower auto-updates and rollback |
-| [Object-Storage Offload](docs/en/storage-offload.md) | Async S3-compatible cold backup with verified local eviction |
-| [Desktop Edition](docs/en/desktop.md) | Windows / macOS desktop installers and trust model |
-| [Xiaomi Setup](docs/en/xiaomi-setup.md) | Xiaomi cloud camera integration |
-| [ONVIF Guide](docs/en/onvif-guide.md) | ONVIF camera setup, PTZ control, troubleshooting |
-| [Camera Guide](docs/en/camera-guide.md) | Camera setup, protocols, troubleshooting |
-| [FTP Integration](docs/en/ftp-integration.md) | FTP file access setup |
-| [MQTT Integration](docs/en/mqtt-integration.md) | MQTT smart home integration |
-| [Home Assistant](docs/en/home-assistant.md) | Home Assistant integration guide |
-| [WebDAV Integration](docs/en/webdav-integration.md) | WebDAV file access setup |
-| [Troubleshooting](docs/en/troubleshooting.md) | Common issues and solutions |
-| [Transcoding](docs/en/transcoding.md) | FFmpeg transcoding setup |
-| [Prometheus Metrics](docs/en/metrics.md) | Complete Prometheus metric reference with types, labels, and examples |
-| [Relay Guide](docs/en/relay-guide.md) | RTMP live platform relay configuration and troubleshooting |
-| [WHIP Ingest](docs/en/whip-ingest.md) | WebRTC push-in from browsers, phones, and OBS |
-| [Webhook Integration](docs/en/webhook-integration.md) | HMAC-signed webhook trigger endpoint |
-| [Remote Access](docs/en/remote-access.md) | External/4G access via Tailscale, Cloudflare Tunnel, and WebRTC ICE/STUN/TURN config |
+Full index with one-line descriptions: [`docs/en/README.md`](docs/en/README.md). Most-visited entry points:
 
-## Build & Deploy
+- [Getting Started](docs/en/getting-started.md) · [Configuration](docs/en/configuration.md) · [CLI](docs/en/cli.md) · [API Reference](docs/en/api/README.md)
+- [Deployment](docs/en/deployment.md) (incl. NAS guides: unRAID / fnOS / Synology / QNAP / iStoreOS / ZSpace) · [Remote Access](docs/en/remote-access.md)
+- [Troubleshooting](docs/en/troubleshooting.md) · [Upgrade Guide](docs/en/upgrade-guide.md)
 
-```bash
-# Build for current architecture
-make build
+Version numbers, configuration syntax, and CLI flags are authoritative **only** in this repository's releases and `docs/en/`. Content published elsewhere — reprinted tutorials, "reviews", SEO aggregators — is not reviewed by us and frequently contains invented version numbers and benchmarks. If something you read elsewhere does not match the docs, trust the docs and please open an issue.
 
-# Cross-compile for ARM64 (Raspberry Pi)
-make cross
+**WeChat official account**: 蓝宝石的傻话 (release announcements, in Chinese)
 
-# Run tests
-make test
-
-# Build Docker images
-make docker-build       # Multi-stage build
-make docker-build-arm64 # Cross-compile arm64 (no QEMU)
-make docker-build-all   # All architectures
-```
-
-Docker deployment:
-```bash
-docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d
-```
-
-Images published to `ghcr.io/mi-bee-studio/mibeenvr` with tags: `0.13.0` (exact version), `0.13` (minor track), `0` (major track), `latest`
-
-## Project Structure
-
-```text
-cmd/mibee-nvr/       # CLI entry point + app lifecycle
-internal/            # Core packages
-web/                # Svelte 5 SPA frontend
-deploy/             # systemd services, Caddyfile
-docs/               # Bilingual documentation (EN/ZH)
-tests/              # Integration tests
-e2e-tests/         # Playwright E2E tests
-```
-
-For full project details, see the [architecture overview](docs/en/architecture.md).
+<p align="left">
+  <img src="docs/brand/wechat-account-qr.webp" width="320" alt="WeChat official account QR — 蓝宝石的傻话" />
+</p>
 
 ## Contributing
 
-1. Run `make lint` before submitting (golangci-lint v2; run `make lint-install` first)
-2. Add tests for new features
+1. Run `make lint` before submitting (golangci-lint v2; `make lint-install` first) and add tests for new features
+2. Web SPA: Node 22, `cd web && npm run build && npm run test`
 3. Write clear commit messages
+
+Project layout — `cmd/mibee-nvr/` CLI entry, `internal/` core packages, `web/` Svelte 5 SPA, `deploy/` service files, `docs/` bilingual documentation, `tests/` + `e2e-tests/` integration and Playwright tests. Details in the [architecture overview](docs/en/architecture.md).
 
 Thanks to everyone who has contributed:
 
@@ -295,11 +145,11 @@ Thanks to everyone who has contributed:
 
 ## License
 
-[AGPL-3.0-only](LICENSE) © Mi&Bee Studio, with a [linking exception for `pkg/`](LICENSE.pkg-linking-exception) so third-party programs may build on the extension interfaces without triggering AGPL obligations.
+[AGPL-3.0-only](LICENSE) © Mi&Bee Studio, with a [linking exception for `pkg/`](LICENSE.pkg-linking-exception):
 
 - **Using MiBee NVR** (running it, recording cameras, watching streams): no obligations — use it freely, including commercially.
 - **Modifying and distributing it**: your modified version must be released under AGPL-3.0.
 - **Building on `pkg/`** in your own program: allowed under the linking exception; your program's license is your choice.
 - **Separate programs talking to a running NVR** over its HTTP/WebSocket APIs: never affected by the license.
 
-Releases up to v0.10.1 were MIT-licensed; that continues to apply to those versions. See [NOTICE](NOTICE) for third-party components and [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution licensing policy.
+Releases up to v0.10.1 were MIT-licensed; that continues to apply to those versions. See [NOTICE](NOTICE) and [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -532,5 +532,5 @@ PUT /api/cameras/camera-id
 
 - [配置参考](configuration.md)
 - [摄像头指南](camera-guide.md)
-- [API 参考](api-reference.md)
+- [API 参考](api/README.md)
 - [故障排除](troubleshooting.md)

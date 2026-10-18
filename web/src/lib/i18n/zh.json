@@ -1,4 +1,6 @@
 {
+  "api.gatewayRejected": "网关拒绝了请求（{body}）。请重新打开飞牛并确认已登录（桌面会话失效时需重新登录飞牛），或稍后刷新页面",
+  "api.badJson": "响应不是有效的 JSON",
   "doorbell.title": "门铃",
   "doorbell.incoming": "来电",
   "doorbell.answering": "接听中…",
@@ -851,6 +853,7 @@
   "onvif.device.users.unsupported": "此设备不支持用户管理",
   "onvif.device.users.user": "用户",
   "onvif.device.users.username": "用户名",
+  "onvif.device.users.password": "密码",
   "onvif.device.usersDesc": "管理设备上的用户账户。",
   "onvif.deviceName": "设备名称",
   "onvif.discover": "扫描 ONVIF 设备",
