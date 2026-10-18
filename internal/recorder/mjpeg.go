@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -660,20 +659,6 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 	var recordingID string
 	segFormat := r.segmentFormat()
 	if r.cfg.DB != nil && segmentFinalized && r.frameCount > 0 {
-		now := time.Now()
-		duration := now.Sub(r.segStart).Seconds()
-		rec := &model.Recording{
-			ID:         strconv.FormatInt(now.UnixNano(), 10),
-			CameraID:   r.cfg.CameraID,
-			FilePath:   r.curFinalPath,
-			Format:     segFormat,
-			StartedAt:  r.segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: r.frameCount,
-		}
-		recordingID = rec.ID
-
 		if r.curIsAVI {
 			// AVI is a single file.
 			if info, err := os.Stat(r.curFinalPath); err == nil {
@@ -688,10 +673,8 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 				return nil
 			})
 		}
-		rec.FileSize = totalSize
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
-			mjpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
-		}
+		recordingID = insertSegmentRow(mjpegLogger, r.cfg.DB, r.cfg.CameraID,
+			r.curFinalPath, segFormat, r.segStart, r.frameCount, totalSize)
 
 		// Dark frame detection: check if segment is too dark to be useful.
 		// Only runs when DarkFrameFilterEnabled is true and threshold > 0.
@@ -721,19 +704,8 @@ func (r *MJPEGRecorder) closeCurrentSegment() {
 	}
 
 	// Publish SegmentCompleted event.
-	formatStr := string(segFormat)
-	if r.cfg.EventBus != nil && recordingID != "" {
-		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
-			CameraID:    r.cfg.CameraID,
-			FilePath:    r.curFinalPath,
-			Format:      formatStr,
-			Encoding:    formatStr,
-			StartedAt:   r.segStart.Format(time.RFC3339Nano),
-			EndedAt:     time.Now().Format(time.RFC3339Nano),
-			FileSize:    totalSize,
-			RecordingID: recordingID,
-		})
-	}
+	publishSegmentCompleted(mjpegLogger, r.cfg.EventBus, r.cfg.CameraID,
+		r.curFinalPath, segFormat, r.segStart, totalSize, recordingID)
 
 	if r.frameCount > 0 && segmentFinalized {
 		r.recordSegmentCreated()

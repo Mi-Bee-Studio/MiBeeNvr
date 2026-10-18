@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -680,101 +679,64 @@ func ascChannels(asc []byte) int {
 	return int(asc[1] >> 3 & 0x0F)
 }
 
+// closeCurrentSegmentLocked flushes the active MP4 segment via the shared
+// FinalizeSegment skeleton (issue #1012 block 1). Caller must hold r.mu —
+// therefore the hooks deliberately take no locks.
 func (r *GB28181Recorder) closeCurrentSegmentLocked() {
 	if r.muxer == nil {
 		return
 	}
-	if r.gate != nil {
-		// The ring's written flags mean "on disk in the CURRENT segment";
-		// that segment just closed, so a later flush into a fresh segment
-		// must write the whole retained ring (#498).
-		r.gate.ClearWritten()
-	}
-	if err := r.muxer.Close(); err != nil {
-		gb28181Logger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)
-		if r.curTemp != "" {
-			os.Remove(r.curTemp)
-		}
-		r.muxer = nil
-		r.curTemp = ""
-		r.curFinal = ""
-		r.frameCount = 0
-		return
-	}
-
-	// Atomic rename: temp → final.
-	if r.curTemp != "" && r.curFinal != "" {
-		if err := r.cfg.Store.CloseSegment(r.curTemp, r.curFinal); err != nil {
-			gb28181Logger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Segment-loss gate (2026-09-08 incident): when the final file never
-	// materialized, a DB row would be a permanent 404 entry — skip the
-	// insert, event, and metrics instead.
-	var fileSize int64
-	var recordingID string
-	finalExists := false
-	if r.curFinal != "" {
-		if info, err := os.Stat(r.curFinal); err == nil {
-			finalExists = true
-			fileSize = info.Size()
-		} else {
-			gb28181Logger.Warn("segment file missing after finalize — recording row skipped",
-				"camera_id", r.cfg.CameraID, "path", r.curFinal)
-		}
-	}
-
-	// Insert the recording row so the segment is visible to playback, merge,
-	// timelapse, and retention cleanup.
 	format := model.FormatH264
 	if r.codecType == "h265" {
 		format = model.FormatH265
 	}
-	if r.cfg.DB != nil && finalExists {
-		now := time.Now()
-		duration := now.Sub(r.segStart).Seconds()
-		rec := &model.Recording{
-			ID:         strconv.FormatInt(now.UnixNano(), 10),
-			CameraID:   r.cfg.CameraID,
-			FilePath:   r.curFinal,
-			Format:     format,
-			StartedAt:  r.segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: r.frameCount,
-			FileSize:   fileSize,
-		}
-		recordingID = rec.ID
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
-			gb28181Logger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
-		}
+	// DB is the concrete *storage.DB here: a nil pointer must stay "no DB"
+	// for the skeleton's row gate — assigning it to the interface parameter
+	// directly would make a typed-nil interface, which compares non-nil.
+	var db segmentRowInserter
+	if r.cfg.DB != nil {
+		db = r.cfg.DB
 	}
-
-	// Publish SegmentCompleted so merge/timelapse pick the segment up.
-	if r.cfg.EventBus != nil && recordingID != "" {
-		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
-			CameraID:    r.cfg.CameraID,
-			FilePath:    r.curFinal,
-			Format:      string(format),
-			Encoding:    string(format),
-			StartedAt:   r.segStart.Format(time.RFC3339Nano),
-			EndedAt:     time.Now().Format(time.RFC3339Nano),
-			FileSize:    fileSize,
-			RecordingID: recordingID,
-		})
-	}
-
-	if r.frameCount > 0 && finalExists && r.cfg.Metrics != nil {
-		r.cfg.Metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, r.codecType).Inc()
-		if fileSize > 0 {
-			r.cfg.Metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, r.codecType).Add(float64(fileSize))
-		}
-	}
-
-	r.muxer = nil
-	r.curTemp = ""
-	r.curFinal = ""
-	r.frameCount = 0
-	r.audioTrackID = 0 // the next segment's muxer needs a fresh audio track
+	FinalizeSegment(SegmentFinalizeParams{
+		Log:        gb28181Logger,
+		CameraID:   r.cfg.CameraID,
+		Store:      r.cfg.Store,
+		DB:         db,
+		EventBus:   r.cfg.EventBus,
+		Muxer:      r.muxer,
+		TempPath:   r.curTemp,
+		FinalPath:  r.curFinal,
+		SegStart:   r.segStart,
+		FrameCount: int64(r.frameCount),
+		Format:     format,
+		ResetRings: func() {
+			// The ring's written flags mean "on disk in the CURRENT segment";
+			// that segment just closed, so a later flush into a fresh segment
+			// must write the whole retained ring (#498).
+			if r.gate != nil {
+				r.gate.ClearWritten()
+			}
+		},
+		OnCloseError: func() {
+			r.muxer = nil
+			r.curTemp = ""
+			r.curFinal = ""
+			r.frameCount = 0
+		},
+		OnMetrics: func(fileSize int64, _ time.Duration) {
+			if r.cfg.Metrics != nil {
+				r.cfg.Metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, r.codecType).Inc()
+				if fileSize > 0 {
+					r.cfg.Metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, r.codecType).Add(float64(fileSize))
+				}
+			}
+		},
+		OnFinished: func() {
+			r.muxer = nil
+			r.curTemp = ""
+			r.curFinal = ""
+			r.frameCount = 0
+			r.audioTrackID = 0 // the next segment's muxer needs a fresh audio track
+		},
+	})
 }

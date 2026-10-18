@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -707,95 +706,46 @@ func (r *IngestRecorder) OnDisconnect() {
 	r.mu.Unlock()
 }
 
-// closeCurrentSegmentLocked flushes the active MP4 segment to disk, inserts the
-// Recording DB row, publishes the SegmentCompleted event, and updates metrics.
-// Caller must hold r.mu. No-op if no segment is open. Mirrors
-// H264Recorder.closeCurrentSegment.
+// closeCurrentSegmentLocked flushes the active MP4 segment via the shared
+// FinalizeSegment skeleton (issue #1012 block 1). Caller must hold r.mu —
+// therefore the hooks deliberately take no locks. No-op if no segment is
+// open. Mirrors H264Recorder.closeCurrentSegment.
 func (r *IngestRecorder) closeCurrentSegmentLocked() {
 	if r.muxer == nil {
 		return
 	}
-	if err := r.muxer.Close(); err != nil {
-		ingestLogger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)
-		if r.curTemp != "" {
-			os.Remove(r.curTemp)
-		}
-		r.muxer = nil
-		r.curTemp = ""
-		r.curFinal = ""
-		r.frameCount = 0
-		return
-	}
-
-	// Atomic rename: temp → final.
-	if r.curTemp != "" && r.curFinal != "" {
-		if err := r.cfg.Store.CloseSegment(r.curTemp, r.curFinal); err != nil {
-			ingestLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Segment-loss gate (2026-09-08 incident): when the final file never
-	// materialized, a DB row would be a permanent 404 entry — skip the
-	// insert, event, and metrics instead.
-	var fileSize int64
-	var recordingID string
-	finalExists := false
-	if r.curFinal != "" {
-		if info, err := os.Stat(r.curFinal); err == nil {
-			finalExists = true
-			fileSize = info.Size()
-		} else {
-			ingestLogger.Warn("segment file missing after finalize — recording row skipped",
-				"camera_id", r.cfg.CameraID, "path", r.curFinal)
-		}
-	}
-	format := r.format()
-	if r.cfg.DB != nil && finalExists {
-		now := time.Now()
-		duration := now.Sub(r.segStart).Seconds()
-		rec := &model.Recording{
-			ID:         strconv.FormatInt(now.UnixNano(), 10),
-			CameraID:   r.cfg.CameraID,
-			FilePath:   r.curFinal,
-			Format:     format,
-			StartedAt:  r.segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: r.frameCount,
-			FileSize:   fileSize,
-		}
-		recordingID = rec.ID
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
-			ingestLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Publish SegmentCompleted event.
-	if r.cfg.EventBus != nil && recordingID != "" {
-		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
-			CameraID:    r.cfg.CameraID,
-			FilePath:    r.curFinal,
-			Format:      string(format),
-			Encoding:    string(format),
-			StartedAt:   r.segStart.Format(time.RFC3339Nano),
-			EndedAt:     time.Now().Format(time.RFC3339Nano),
-			FileSize:    fileSize,
-			RecordingID: recordingID,
-		})
-	}
-
-	if r.frameCount > 0 && finalExists {
-		r.recordSegmentCreated()
-		if fileSize > 0 {
-			r.recordBytes(fileSize)
-		}
-	}
-
-	r.muxer = nil
-	r.curTemp = ""
-	r.curFinal = ""
-	r.frameCount = 0
-	r.audioTrackID = 0
+	FinalizeSegment(SegmentFinalizeParams{
+		Log:        ingestLogger,
+		CameraID:   r.cfg.CameraID,
+		Store:      r.cfg.Store,
+		DB:         r.cfg.DB,
+		EventBus:   r.cfg.EventBus,
+		Muxer:      r.muxer,
+		TempPath:   r.curTemp,
+		FinalPath:  r.curFinal,
+		SegStart:   r.segStart,
+		FrameCount: int64(r.frameCount),
+		Format:     r.format(),
+		OnCloseError: func() {
+			r.muxer = nil
+			r.curTemp = ""
+			r.curFinal = ""
+			r.frameCount = 0
+		},
+		OnMetrics: func(fileSize int64, _ time.Duration) {
+			r.recordSegmentCreated()
+			if fileSize > 0 {
+				r.recordBytes(fileSize)
+			}
+		},
+		OnFinished: func() {
+			r.muxer = nil
+			r.curTemp = ""
+			r.curFinal = ""
+			r.frameCount = 0
+			r.audioTrackID = 0
+		},
+	})
 }
 
 // --- metrics helpers (nil-safe, mirror H264Recorder) ---

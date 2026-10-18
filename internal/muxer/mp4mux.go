@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mp4util"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/prealloc"
 	"github.com/abema/go-mp4"
@@ -776,17 +777,40 @@ func writeStbl(w *mp4.Writer, tr *track) error {
 	}
 	_ = bi2
 
-	// stts
+	// stts — run-length encoded: consecutive equal deltas compress to one
+	// entry, exactly like the merge-side writer (internal/merge mp4merge.go).
+	// The expanded per-sample table is identical — every consumer either
+	// expands runs (mediaprobe parser) or is a standard player, for which RLE
+	// is the norm. Real-time camera tracks are near-uniform (one delta per
+	// cadence), so this collapses one-entry-per-sample to one-entry-per-run:
+	// ~96KB less moov for a 12k-frame segment.
 	bi6, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("stts")})
 	if err != nil {
 		return err
 	}
-	sttsEntries := make([]mp4.SttsEntry, len(tr.samples))
-	for i, s := range tr.samples {
-		sttsEntries[i] = mp4.SttsEntry{
-			SampleCount: 1,
-			SampleDelta: uint32(s.duration.Milliseconds()),
+	var sttsEntries []mp4.SttsEntry
+	if len(tr.samples) > 0 {
+		sttsEntries = make([]mp4.SttsEntry, 0, len(tr.samples))
+		prevDelta := uint32(tr.samples[0].duration.Milliseconds())
+		runCount := uint32(1)
+		for i := 1; i < len(tr.samples); i++ {
+			delta := uint32(tr.samples[i].duration.Milliseconds())
+			if delta == prevDelta {
+				runCount++
+				continue
+			}
+			sttsEntries = append(sttsEntries, mp4.SttsEntry{
+				SampleCount: runCount,
+				SampleDelta: prevDelta,
+			})
+			prevDelta = delta
+			runCount = 1
 		}
+		// Flush final run.
+		sttsEntries = append(sttsEntries, mp4.SttsEntry{
+			SampleCount: runCount,
+			SampleDelta: prevDelta,
+		})
 	}
 	if _, err := mp4.Marshal(w, &mp4.Stts{EntryCount: uint32(len(sttsEntries)), Entries: sttsEntries}, mp4.Context{}); err != nil {
 		return err
@@ -989,7 +1013,7 @@ func writeAACSampleEntry(w *mp4.Writer, tr *track) error {
 	if err != nil {
 		return err
 	}
-	esds := buildEsds(tr.audioConfig)
+	esds := mediaprobe.BuildEsds(tr.audioConfig)
 	if _, err := mp4.Marshal(w, esds, mp4.Context{}); err != nil {
 		return err
 	}
@@ -1005,106 +1029,16 @@ func writeAACSampleEntry(w *mp4.Writer, tr *track) error {
 	return nil
 }
 
-// writeG711SampleEntry writes ulaw (μ-law) or alaw (A-law) sample entry for G.711 audio.
-// G.711 is raw PCM — no esds or codec config boxes needed.
-// Written as raw bytes since go-mp4 only registers AudioSampleEntry for mp4a/enca.
+// writeG711SampleEntry writes ulaw (μ-law) or alaw (A-law) sample entry for
+// G.711 audio via the shared mediaprobe builder (issue #1012 block 2).
 func writeG711SampleEntry(w *mp4.Writer, tr *track) error {
-	boxType := mp4.StrToBoxType("ulaw")
-	if !tr.g711MULaw {
-		boxType = mp4.StrToBoxType("alaw")
-	}
-
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: boxType})
-	if err != nil {
-		return err
-	}
-
-	sampleRate := uint32(tr.g711Rate)
-	if sampleRate == 0 {
-		sampleRate = 8000
-	}
-
-	// Write AudioSampleEntry fields manually (same layout as mp4a without esds):
-	// reserved[6] + data_reference_index[2] + entry_version[2] + reserved[6] +
-	// channel_count[2] + sample_size[2] + pre_defined[2] + reserved[2] + sample_rate[4]
-	buf := make([]byte, 28)
-	// bytes 6-7: data_reference_index = 1
-	buf[7] = 0x01
-	// bytes 16-17: channel_count = 1
-	buf[17] = 0x01
-	// bytes 18-19: sample_size = 8
-	buf[19] = 0x08
-	// bytes 24-27: sample_rate = fixed-point 16.16
-	rateFixed := sampleRate << 16
-	buf[24] = byte(rateFixed >> 24)
-	buf[25] = byte(rateFixed >> 16)
-	buf[26] = byte(rateFixed >> 8)
-	buf[27] = byte(rateFixed)
-
-	if _, err := w.Write(buf); err != nil {
-		return err
-	}
-
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi
-	return nil
+	return mediaprobe.WriteG711SampleEntry(w, tr.g711MULaw, uint32(tr.g711Rate))
 }
 
-// writeOpusSampleEntry writes Opus sample entry ("Opus" box + "dOps" child) for Opus audio.
-// Uses go-mp4 native Opus box types (available since go-mp4 v0.12.0).
+// writeOpusSampleEntry writes Opus sample entry via the shared mediaprobe
+// builder (issue #1012 block 2).
 func writeOpusSampleEntry(w *mp4.Writer, tr *track) error {
-	bi, err := w.StartBox(&mp4.BoxInfo{Type: mp4.BoxTypeOpus()})
-	if err != nil {
-		return err
-	}
-
-	chans := uint16(tr.opusChans)
-	if chans == 0 {
-		chans = 1 // mono default
-	}
-
-	opus := &mp4.AudioSampleEntry{
-		SampleEntry: mp4.SampleEntry{
-			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.BoxTypeOpus()},
-			DataReferenceIndex: 1,
-		},
-		EntryVersion: 0,
-		ChannelCount: chans,
-		SampleSize:   16,
-		SampleRate:   48000 << 16, // Opus always uses 48kHz timescale per spec
-	}
-	if _, err := mp4.Marshal(w, opus, mp4.Context{}); err != nil {
-		return err
-	}
-
-	// dOps (OpusSpecificBox) — mandatory child
-	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.BoxTypeDOps()})
-	if err != nil {
-		return err
-	}
-	dOps := &mp4.DOps{
-		Version:              0,
-		OutputChannelCount:   uint8(chans),
-		PreSkip:              tr.opusPreSkip,
-		InputSampleRate:      tr.opusRate,
-		OutputGain:           0,
-		ChannelMappingFamily: 0, // simple mono/stereo
-	}
-	if _, err := mp4.Marshal(w, dOps, mp4.Context{}); err != nil {
-		return err
-	}
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi2
-
-	if _, err := w.EndBox(); err != nil {
-		return err
-	}
-	_ = bi
-	return nil
+	return mediaprobe.WriteOpusSampleEntry(w, uint16(tr.opusChans), tr.opusPreSkip, tr.opusRate)
 }
 
 // buildEsds constructs an esds (Elementary Stream Descriptor) box for AAC.
@@ -1160,204 +1094,23 @@ func trackDurationMs(tr *track) uint32 {
 }
 
 // --- SPS Resolution Parser ---
-
-// bitReader reads bits from a byte slice, MSB first.
-type bitReader struct {
-	data   []byte
-	offset int
-}
-
-func (r *bitReader) readBit() int {
-	if r.offset >= len(r.data)*8 {
-		return 0
-	}
-	byteIdx := r.offset / 8
-	bitIdx := 7 - (r.offset % 8)
-	r.offset++
-	return int((r.data[byteIdx] >> bitIdx) & 1)
-}
-
-func (r *bitReader) readBits(n int) int {
-	var val int
-	for range n {
-		val = (val << 1) | r.readBit()
-	}
-	return val
-}
-
-// readUE reads an unsigned Exp-Golomb coded value.
-func (r *bitReader) readUE() int {
-	leadingZeros := 0
-	for r.readBit() == 0 {
-		leadingZeros++
-		if leadingZeros > 32 {
-			return 0
-		}
-	}
-	if leadingZeros == 0 {
-		return 0
-	}
-	return (1 << leadingZeros) - 1 + r.readBits(leadingZeros)
-}
-
-// readSE reads a signed Exp-Golomb coded value.
-func (r *bitReader) readSE() int {
-	val := r.readUE()
-	if val%2 == 0 {
-		return -(val / 2)
-	}
-	return (val + 1) / 2
-}
-
-// removeEmulationPrevention removes H.264 emulation prevention bytes (0x00 0x00 0x03).
-func removeEmulationPrevention(data []byte) []byte {
-	var result []byte
-	i := 0
-	for i < len(data) {
-		if i+2 < len(data) && data[i] == 0 && data[i+1] == 0 && data[i+2] == 3 {
-			result = append(result, 0, 0)
-			i += 3
-		} else {
-			result = append(result, data[i])
-			i++
-		}
-	}
-	return result
-}
+//
+// The bitstream parsers live in internal/mediaprobe (sps.go) — the single
+// canonical implementation (issue #1012 block 2). These thin wrappers keep
+// muxer's (width, height) no-error call shape: a malformed SPS yields (0, 0),
+// which callers treat as "unknown resolution". Note the error-returning
+// mediaprobe parsers reject truncated SPS outright, while the old local
+// parser silently zero-filled past end-of-data — for such garbage-in cases
+// (0, 0) is written instead of a synthesized small resolution.
 
 // parseSPSResolution extracts width and height from an H.264 SPS NAL unit.
 // Returns (0, 0) if parsing fails.
 func parseSPSResolution(sps []byte) (width, height int) {
-	if len(sps) < 8 {
+	w, h, err := mediaprobe.ParseSPSResolution(sps)
+	if err != nil {
 		return 0, 0
 	}
-
-	// Remove emulation prevention bytes, skip NAL header byte.
-	rbsp := removeEmulationPrevention(sps[1:])
-	if len(rbsp) < 4 {
-		return 0, 0
-	}
-
-	r := &bitReader{data: rbsp}
-
-	// profile_idc (8 bits)
-	profileIDC := r.readBits(8)
-	// constraint_set_flags (8 bits)
-	r.readBits(8)
-	// level_idc (8 bits)
-	r.readBits(8)
-
-	// seq_parameter_set_id
-	r.readUE()
-
-	// High profile and extensions require additional fields.
-	highProfile := profileIDC == 100 || profileIDC == 110 || profileIDC == 122 ||
-		profileIDC == 244 || profileIDC == 44 || profileIDC == 83 ||
-		profileIDC == 86 || profileIDC == 118 || profileIDC == 128 ||
-		profileIDC == 138 || profileIDC == 139 || profileIDC == 134
-
-	chromaFormatIDC := 1
-	if highProfile {
-		chromaFormatIDC = r.readUE()
-		if chromaFormatIDC == 3 {
-			r.readBit() // separate_colour_plane_flag
-		}
-		r.readUE()  // bit_depth_luma_minus8
-		r.readUE()  // bit_depth_chroma_minus8
-		r.readBit() // qpprime_y_zero_transform_bypass_flag
-		scalingPresent := r.readBit()
-		if scalingPresent == 1 {
-			count := 8
-			if chromaFormatIDC == 3 {
-				count = 12
-			}
-			for i := range count {
-				present := r.readBit()
-				if present == 1 {
-					size := 16
-					if i >= 6 {
-						size = 64
-					}
-					lastScale := 8
-					for range size {
-						delta := r.readSE()
-						nextScale := (lastScale + delta + 256) % 256
-						if nextScale == 0 {
-							nextScale = 256
-						}
-						lastScale = nextScale
-					}
-				}
-			}
-		}
-	}
-
-	// log2_max_frame_num_minus4
-	r.readUE()
-
-	// pic_order_cnt_type
-	picOrderCntType := r.readUE()
-	if picOrderCntType == 0 {
-		r.readUE() // log2_max_pic_order_cnt_lsb_minus4
-	} else if picOrderCntType == 1 {
-		r.readBit() // delta_pic_order_always_zero_flag
-		r.readSE()  // offset_for_non_ref_pic
-		r.readSE()  // offset_for_top_to_bottom_field
-		numRefFrames := r.readUE()
-		for range numRefFrames {
-			r.readSE()
-		}
-	}
-
-	// max_num_ref_frames
-	r.readUE()
-	// gaps_in_frame_num_value_allowed_flag
-	r.readBit()
-
-	// pic_width_in_mbs_minus1
-	picWidthInMbs := r.readUE() + 1
-	// pic_height_in_map_units_minus1
-	picHeightInMapUnits := r.readUE() + 1
-	// frame_mbs_only_flag
-	frameMbsOnly := r.readBit()
-	if frameMbsOnly == 0 {
-		r.readBit() // mb_adaptive_frame_field_flag
-	}
-	// direct_8x8_inference_flag
-	r.readBit()
-	// frame_cropping_flag
-	frameCropping := r.readBit()
-
-	var cropLeft, cropRight, cropTop, cropBottom int
-	if frameCropping == 1 {
-		cropLeftMinus1 := r.readUE()
-		cropRightMinus1 := r.readUE()
-		cropTopMinus1 := r.readUE()
-		cropBottomMinus1 := r.readUE()
-
-		var cropUnitX, cropUnitY int
-		if chromaFormatIDC == 0 {
-			cropUnitX, cropUnitY = 1, 1
-		} else if chromaFormatIDC == 1 {
-			cropUnitX, cropUnitY = 2, 2
-		} else if chromaFormatIDC == 2 {
-			cropUnitX, cropUnitY = 2, 1
-		} else {
-			cropUnitX, cropUnitY = 1, 1
-		}
-		cropLeft = cropUnitX * cropLeftMinus1
-		cropRight = cropUnitX * cropRightMinus1
-		cropTop = cropUnitY * cropTopMinus1
-		cropBottom = cropUnitY * cropBottomMinus1
-	}
-
-	width = picWidthInMbs*16 - cropLeft - cropRight
-	height = (2-frameMbsOnly)*picHeightInMapUnits*16 - cropTop - cropBottom
-
-	if width <= 0 || height <= 0 || width > 8192 || height > 8192 {
-		return 0, 0
-	}
-	return width, height
+	return w, h
 }
 
 // parseHEVCSPSResolution extracts width and height from an HEVC SPS NAL unit.
@@ -1368,51 +1121,9 @@ func parseSPSResolution(sps []byte) (width, height int) {
 // pic_width_in_luma_samples(UE), pic_height_in_luma_samples(UE).
 // Returns (0, 0) if parsing fails.
 func parseHEVCSPSResolution(sps []byte) (width, height int) {
-	if len(sps) < 8 {
+	w, h, err := mediaprobe.ParseHEVCSPSResolution(sps)
+	if err != nil {
 		return 0, 0
 	}
-	rbsp := removeEmulationPrevention(sps[2:]) // skip 2-byte NAL header
-	if len(rbsp) < 13 {
-		return 0, 0
-	}
-	r := &bitReader{data: rbsp}
-	// sps_video_parameter_set_id (4 bits)
-	r.readBits(4)
-	// sps_max_sub_layers_minus1 (3 bits)
-	maxSubLayersMinus1 := r.readBits(3)
-	// sps_temporal_id_nesting_flag (1 bit)
-	r.readBit()
-	// profile_tier_level: skip general_profile_space(2) + general_tier_flag(1) + general_profile_idc(5)
-	r.readBits(8)
-	// general_profile_compatibility_flag[32]: 32 bits
-	r.readBits(32)
-	// general constraint indicator flags: 48 bits
-	r.readBits(48)
-	// general_level_idc: 8 bits
-	r.readBits(8)
-	// sub-layer profile_present/level_present flags: 2 bits per sub-layer (skip)
-	for range maxSubLayersMinus1 {
-		r.readBits(2)
-	}
-	if maxSubLayersMinus1 > 0 {
-		// sub_layer_level_present_flag: 1 bit per sub-layer
-		for range maxSubLayersMinus1 {
-			r.readBit()
-		}
-	}
-	// sps_seq_parameter_set_id (UE)
-	r.readUE()
-	// chroma_format_idc (UE)
-	chromaFormatIDC := r.readUE()
-	if chromaFormatIDC == 3 {
-		r.readBit() // separate_colour_plane_flag
-	}
-	// pic_width_in_luma_samples (UE)
-	width = r.readUE()
-	// pic_height_in_luma_samples (UE)
-	height = r.readUE()
-	if width <= 0 || height <= 0 || width > 8192 || height > 8192 {
-		return 0, 0
-	}
-	return width, height
+	return w, h
 }
