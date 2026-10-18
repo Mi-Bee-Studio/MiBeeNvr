@@ -54,7 +54,7 @@ Specify where recordings are stored:
 Click "Complete Setup". The wizard saves the admin credentials, logs you in automatically, and drops you into the web UI. There are no cameras yet — you can:
 
 - Click "Scan Devices" on the Cameras page to auto-discover ONVIF / Xiaomi cameras
-- Or click "+ Add Camera" to add one manually (see [Quick Start](quickstart.md))
+- Or click "+ Add Camera" to add one manually (see [Getting Started](getting-started.md))
 
 ## Resetting the Wizard
 
@@ -163,7 +163,7 @@ cameras:
 
 ## Next Steps
 
-- [Quick Start](quickstart.md) — add your first camera
+- [Getting Started](getting-started.md) — add your first camera
 - [Docker Deployment](install-docker.md) — production container deployment
 - [NAS Deployment](install-nas.md) — NAS system installation
 - [ONVIF Auto-Discovery](onvif-discovery.md) — camera auto-discovery

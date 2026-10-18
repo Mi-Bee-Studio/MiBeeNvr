@@ -10,7 +10,7 @@
   //   - MetaEditor:    info card + actions row + transcode status
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import type { Recording, TimelapseMerge } from '$lib/api';
   import {
     getRecording,

@@ -550,5 +550,5 @@ PUT /api/cameras/camera-id
 
 - [Configuration Reference](configuration.md)
 - [Camera Guide](camera-guide.md)
-- [API Reference](api-reference.md)
+- [API Reference](api/README.md)
 - [Troubleshooting](troubleshooting.md)

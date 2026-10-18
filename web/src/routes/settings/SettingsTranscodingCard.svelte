@@ -4,7 +4,7 @@
   import type { SelfCheckResult, DownloadStatus, HardwareCapabilities, ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import { t } from '$lib/i18n';
   import { AlertCircle, AlertTriangle, Download, RotateCw, Cpu, ChevronDown, ChevronUp, XCircle } from 'lucide-svelte';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   const FFMPEG_DOWNLOAD_TIMEOUT = 5 * 60 * 1000; // 5 minutes in ms
 
   // Transcoding state

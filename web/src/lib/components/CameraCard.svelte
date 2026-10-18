@@ -3,7 +3,7 @@
   import { normalizeProtocol, getCameraProtocols } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { copyText } from '$lib/clipboard';
   import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff, Copy, Link, X } from 'lucide-svelte';
 

@@ -21,7 +21,7 @@ vi.mock('lucide-svelte', () => {
 });
 
 // --- Mock toast ---
-vi.mock('$lib/toast', () => ({
+vi.mock('$lib/toast.svelte', () => ({
   showToast: vi.fn(),
 }));
 
