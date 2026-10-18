@@ -870,6 +870,52 @@ func (d *DB) DeleteRecording(ctx context.Context, id string) error {
 	return err
 }
 
+// pathBound matches rows whose stored path equals path or sits underneath it
+// (path + "/…"), without LIKE so path characters need no escaping and a
+// directory path never matches a sibling with a longer name ("/cam" must not
+// match "/cam-2").
+func pathBound(col, param string) string {
+	return col + ` = ` + param + `
+		OR (substr(` + col + `, 1, length(` + param + `)) = ` + param + `
+			AND substr(` + col + `, length(` + param + `) + 1, 1) = '/')`
+}
+
+// DeleteRecordingRowsByPath removes every recordings row referencing the exact
+// path — as source file_path or merged merge_path. Used by out-of-band file
+// removal (FTP) so the table keeps no permanent-404 rows (#1004). Returns the
+// number of rows removed.
+func (d *DB) DeleteRecordingRowsByPath(ctx context.Context, path string) (int64, error) {
+	defer d.observeTxn(ctx, "api_write", time.Now())
+	res, err := d.db.ExecContext(ctx,
+		`DELETE FROM recordings WHERE `+pathBound("file_path", "?1")+`
+			OR `+pathBound("merge_path", "?1"), path)
+	if err != nil {
+		return 0, fmt.Errorf("delete recording rows by path: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// RenameRecordingPaths rewrites recordings rows after an out-of-band rename
+// (FTP): a row whose file_path/merge_path equals oldPath or sits underneath it
+// is rewritten to the corresponding newPath. Returns the number of rows
+// touched.
+func (d *DB) RenameRecordingPaths(ctx context.Context, oldPath, newPath string) (int64, error) {
+	defer d.observeTxn(ctx, "api_write", time.Now())
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE recordings SET
+			file_path = ?2 || substr(file_path, length(?1) + 1),
+			merge_path = CASE WHEN merge_path IS NULL THEN NULL
+				ELSE ?2 || substr(merge_path, length(?1) + 1) END
+		WHERE `+pathBound("file_path", "?1")+`
+			OR `+pathBound("merge_path", "?1"), oldPath, newPath)
+	if err != nil {
+		return 0, fmt.Errorf("rename recording paths: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // DeleteRecordingsBatch deletes multiple recordings by ID using a single batch DELETE.
 // Returns the slice of IDs requested for deletion on success (nil on failure).
 // Uses a single IN clause to minimize transaction duration and SQLITE_BUSY contention.
