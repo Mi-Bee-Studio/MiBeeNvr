@@ -135,9 +135,9 @@ const (
 )
 
 // validateRange enforces end-after-start and the per-operation cap.
-func validateRange(op string, start, end time.Time, max time.Duration) error {
-	if !end.After(start) || end.Sub(start) > max {
-		return &InvalidRangeError{Op: op, Max: max}
+func validateRange(op string, start, end time.Time, span time.Duration) error {
+	if !end.After(start) || end.Sub(start) > span {
+		return &InvalidRangeError{Op: op, Max: span}
 	}
 	return nil
 }
