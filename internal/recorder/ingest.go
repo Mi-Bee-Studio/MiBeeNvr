@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"errors"
 	"os"
 	"runtime"
 	"strconv"
@@ -268,7 +269,7 @@ func (r *IngestRecorder) WriteAudio(codec string, ptsTicks int64, data []byte, d
 	if m != nil && aid > 0 {
 		pts := time.Since(start)
 		if err := m.WriteAudioSample(aid, data, pts, dur); err != nil {
-			if err.Error() != "muxer is closed" {
+			if !errors.Is(err, muxer.ErrClosed) {
 				ingestLogger.Error("failed to write audio sample",
 					"camera_id", r.cfg.CameraID, "error", err)
 			}
