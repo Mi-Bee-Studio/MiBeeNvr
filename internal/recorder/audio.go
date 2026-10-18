@@ -661,7 +661,7 @@ func (r *AudioRecorder) writeOneAU(au audioAU) {
 	}
 	pts := au.at.Sub(r.segStart)
 	if err := r.muxer.WriteAudioSample(r.trackID, au.data, pts, au.duration); err != nil {
-		if err.Error() != "muxer is closed" {
+		if !errors.Is(err, muxer.ErrClosed) {
 			r.log.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
 		}
 		return

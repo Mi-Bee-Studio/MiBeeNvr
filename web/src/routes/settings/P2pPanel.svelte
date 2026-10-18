@@ -16,7 +16,7 @@
   } from '$lib/api';
   import SettingsCard from '$lib/components/SettingsCard.svelte';
   import { t } from '$lib/i18n';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
 
   // --- Load state ---

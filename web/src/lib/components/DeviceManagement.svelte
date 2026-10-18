@@ -10,7 +10,7 @@
     deleteDeviceUsers,
   } from '$lib/api';
   import type { ONVIFNetworkInterface, ONVIFDeviceUser } from '$lib/api';
-  import { showToast } from '$lib/toast';
+  import { showToast } from '$lib/toast.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import {
     Wifi,
@@ -425,7 +425,7 @@
               type="password"
               class="input input-sm"
               bind:value={newUserPassword}
-              placeholder={t('onvif.device.users.username') === '用户名' ? '密码' : 'Password'}
+              placeholder={t('onvif.device.users.password')}
             />
             <select class="input input-sm" bind:value={newUserLevel}>
               <option value="Administrator">{t('onvif.device.users.administrator')}</option>

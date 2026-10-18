@@ -18,10 +18,10 @@
 After deploying ONNX Runtime Web (browser-side AI inference), every camera
 LiveView showed:
 
-```
+```text
 AI ✗ Can't create a session. ERROR_CODE: 7, ERROR_MESSAGE:
        Failed to load model because protobuf parsing failed.
-```
+```text
 
 This was filed as issue #109 with the title "AI detection fails to load model:
 protobuf parsing failed". The error came from ORT's C++ core
@@ -88,19 +88,19 @@ of the message and fail.
 Comparing the **full md5** (not just the head) of the browser-fetched bytes
 against the on-disk bytes revealed the corruption:
 
-```
+```text
 browser fetched md5 : ee7b0660585856f7e37a10b8c5b29edd   ← 10741417 bytes (corrupted)
 disk md5 (correct)  : df8e6fccb7797fd340b6bb1358a53394   ← 10741397 bytes
                                                                        ↑ +20 bytes
-```
+```text
 
 Hex dump of the **last 32 bytes** of the corrupted file:
 
-```
+```text
 ... 46 61 6c 73 65 [1f 8b 08 00 00 09 6e 88 00 ff 03 00 00 00 00 00 00 00 00 00]
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                     empty gzip member appended by gz.Close() on an unused writer
-```
+```text
 
 `curl -H "Accept-Encoding: gzip"` reproduced the corruption from the server
 side (no browser involved), confirming it was a server bug, not a client bug.
@@ -141,7 +141,7 @@ func (cw *compressWriter) Close() error {
     }
     return cw.gz.Close()
 }
-```
+```text
 
 This is a **one-time finalization guard** — once any bytes go through `gz`,
 the flag stays true for the rest of the response, so legitimate compressed

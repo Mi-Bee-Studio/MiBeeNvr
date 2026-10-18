@@ -96,13 +96,19 @@ func (d *DB) InsertRecordingWithRetry(ctx context.Context, r *model.Recording, m
 				"max_retries", maxRetries,
 				"error", lastErr,
 			)
-			time.Sleep(backoff)
+			// Ctx-aware sleep: retrying a cancelled context is a guaranteed
+			// failure, so bail out instead of burning the backoff slots.
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("insert recording: context cancelled during busy backoff: %w", ctx.Err())
+			case <-time.After(backoff):
+			}
 		}
 		err := d.InsertRecording(ctx, r)
 		if err == nil {
 			return nil
 		}
-		if !strings.Contains(err.Error(), "database is locked") && !strings.Contains(err.Error(), "SQLITE_BUSY") {
+		if !IsBusyError(err) {
 			return err
 		}
 		lastErr = err
@@ -712,6 +718,9 @@ func (d *DB) DailyRecordingSummary(ctx context.Context, filter model.RecordingFi
 		}
 		res = append(res, model.RecordingDaySummary{Date: date, Count: count, Formats: formats})
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("daily recording summary: %w", err)
+	}
 	return res, nil
 }
 
@@ -752,9 +761,10 @@ func (d *DB) GetRecordingsByPathSet(ctx context.Context, paths []string) (map[st
 			defer rows.Close()
 			for rows.Next() {
 				var p string
-				if err := rows.Scan(&p); err == nil {
-					result[p] = true
+				if err := rows.Scan(&p); err != nil {
+					return fmt.Errorf("get recordings by path set: %w", err)
 				}
+				result[p] = true
 			}
 			return rows.Err()
 		}(); err != nil {
@@ -785,9 +795,15 @@ func (d *DB) GetRecordingPathsByCamera(ctx context.Context, cameraID string) (ma
 	defer rows.Close()
 	for rows.Next() {
 		var p string
-		if err := rows.Scan(&p); err == nil {
-			result[p] = true
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("get recording paths by camera: %w", err)
 		}
+		result[p] = true
+	}
+	// A partial set here is worse than an error: the orphan cleanup treats
+	// DB-known files missing from this set as deletable orphans (#1000).
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get recording paths by camera: %w", err)
 	}
 	return result, nil
 }
@@ -928,6 +944,9 @@ func (d *DB) listExpiredRecordings(ctx context.Context, cameraID string, archive
 		}
 		res = append(res, *r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list expired recordings: %w", err)
+	}
 	return res, nil
 }
 
@@ -960,6 +979,9 @@ func (d *DB) ListOldestRecordings(ctx context.Context, limit int) ([]model.Recor
 		}
 		res = append(res, *r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list oldest recordings: %w", err)
+	}
 	return res, nil
 }
 
@@ -988,6 +1010,9 @@ func (d *DB) ListOldestRecordingsMotionAware(ctx context.Context, limit int) ([]
 		}
 		res = append(res, *r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list oldest recordings motion-aware: %w", err)
+	}
 	return res, nil
 }
 
@@ -1002,9 +1027,13 @@ func (d *DB) ListRecordingPathsByCamera(ctx context.Context, cameraID string) (m
 	for rows.Next() {
 		var p string
 		if err := rows.Scan(&p); err != nil {
-			continue
+			return nil, fmt.Errorf("list recording paths by camera: %w", err)
 		}
 		result[filepath.Base(p)] = true
+	}
+	// Partial sets feed the orphan deleter — propagate iteration errors (#1000).
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list recording paths by camera: %w", err)
 	}
 	return result, nil
 }
@@ -1026,7 +1055,7 @@ func (d *DB) ListRecordingArtifactPathsByCamera(ctx context.Context, cameraID st
 	for rows.Next() {
 		var fp, mp *string
 		if err := rows.Scan(&fp, &mp); err != nil {
-			continue
+			return nil, fmt.Errorf("list recording artifact paths by camera: %w", err)
 		}
 		if fp != nil && *fp != "" {
 			result[*fp] = true
@@ -1034,6 +1063,10 @@ func (d *DB) ListRecordingArtifactPathsByCamera(ctx context.Context, cameraID st
 		if mp != nil && *mp != "" {
 			result[*mp] = true
 		}
+	}
+	// Partial sets feed the deep orphan deleter — propagate iteration errors (#1000).
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list recording artifact paths by camera: %w", err)
 	}
 	return result, nil
 }
@@ -1113,6 +1146,9 @@ func (d *DB) ListRecordingsWithoutTranscode(ctx context.Context, cameraID string
 		}
 		res = append(res, *r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list recordings without transcode: %w", err)
+	}
 	return res, nil
 }
 
@@ -1133,6 +1169,9 @@ func (d *DB) RepairZeroDurationRecordings(ctx context.Context) ([]model.Recordin
 			return nil, fmt.Errorf("repair zero duration recordings: %w", err)
 		}
 		res = append(res, *r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("repair zero duration recordings: %w", err)
 	}
 	return res, nil
 }

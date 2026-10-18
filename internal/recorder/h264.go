@@ -478,7 +478,7 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 					pts := time.Since(start)
 					dur := 1024 * time.Second / time.Duration(audioForma.ClockRate())
 					if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
-						if err.Error() != "muxer is closed" {
+						if !errors.Is(err, muxer.ErrClosed) {
 							h264Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
 						}
 					}
@@ -518,7 +518,7 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 					dur = time.Millisecond
 				}
 				if err := m.WriteAudioSample(aid, data, pts, dur); err != nil {
-					if err.Error() != "muxer is closed" {
+					if !errors.Is(err, muxer.ErrClosed) {
 						h264Logger.Error("failed to write G.711 audio sample", "camera_id", r.cfg.CameraID, "error", err)
 					}
 				} else {
@@ -571,6 +571,12 @@ func (r *H264Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	case err := <-errCh:
 		close(stopWatchdog)
 		<-watchdogDone
+		// Wait() returning does not guarantee every RTP callback goroutine
+		// has drained; Close() is the explicit barrier. Without it, a
+		// residual callback's non-blocking send on frameCh can hit the
+		// closed channel and panic (#1001). The deferred Close() below is
+		// a no-op double-close.
+		client.Close()
 		close(r.frameCh)
 		<-writerDone
 		r.closeCurrentSegment()

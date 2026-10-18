@@ -235,7 +235,7 @@ version: "1.0"
 
 ## Storage Configuration
 
-The `storage.remote` block uploads merged recordings to an S3-compatible object store (MinIO / AWS S3 / R2 / B2 / OSS) as a background side channel, with verified local eviction and remote playback. See [Remote Object Storage Offload](./storage-remote.md) for the full guide.
+The `storage.remote` block uploads merged recordings to an S3-compatible object store (MinIO / AWS S3 / R2 / B2 / OSS) as a background side channel, with verified local eviction and remote playback. See [Object-Storage Offload](./storage-offload.md) for the full guide.
 
 ### `storage.root_dir`
 - **Type**: string

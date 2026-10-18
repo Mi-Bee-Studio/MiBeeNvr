@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"errors"
 	"os"
 	"runtime"
 	"strconv"
@@ -575,7 +576,7 @@ func (r *GB28181Recorder) WriteAudio(codec string, data, config []byte, ptsTicks
 		dur = time.Millisecond
 	}
 	if err := curMux.WriteAudioSample(audioTrack, data, ticksToDuration(rel), dur); err != nil &&
-		err.Error() != "muxer is closed" {
+		!errors.Is(err, muxer.ErrClosed) {
 		gb28181Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
 	}
 }

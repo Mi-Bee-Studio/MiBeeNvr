@@ -35,7 +35,7 @@ Three possible causes, in diagnosis order:
 
 If **no parameter change has any effect** (confidence 0.98, class filter, model swap all useless) and every box reads `person:100%`, this was an H.265 decode-error frame feeding the model garbage, causing exploding logits (thousands) whose sigmoid is 1.0 — defeating any threshold < 1.0. **This is fixed in code**: logits > 15 are dropped as decode artifacts. If you still see wall-to-wall 100% false positives, confirm you're running a build after #193.
 
-See [known-issues-ai-logit-false-positives.md](../known-issues-ai-logit-false-positives.md).
+See [known issue: logit explosion]()
 
 ### 2. Confidence threshold too low (most common)
 
@@ -149,6 +149,6 @@ curl -u admin:PASSWORD http://localhost:9090/api/ai/models
 
 ## Related
 
-- [Known issue: logit explosion causing wall-to-wall person:100% false positives](../known-issues-ai-logit-false-positives.md)
-- [Known issue: ONNX model loading gzip-trailer](../known-issues-ai-onnx-gzip-trailer.md)
+- [Known issue: logit explosion causing wall-to-wall person:100% false positives](known-issues/ai-logit-false-positives.md)
+- [Known issue: ONNX model loading gzip-trailer](known-issues/ai-onnx-gzip-trailer.md)
 - Architecture: AI inference is entirely browser-side (`web/src/lib/ai-detection/`); the backend only stores config and model files
