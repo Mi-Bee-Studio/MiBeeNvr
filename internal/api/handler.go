@@ -277,6 +277,7 @@ type Handler struct {
 	frameListMu       sync.Mutex
 	frameListCache    map[string]*frameListEntry
 	gb28181DeviceMgr  *platform.DeviceManager
+	gb28181Records    *gb28181.DeviceRecordService // device-recording domain (records/playback/download)
 	gb28181SessionMgr *platform.SessionManager
 	// timeSync serves the camera time-sync endpoints (#time-sync); nil in
 	// tests → handlers answer 503.
@@ -298,7 +299,6 @@ type Handler struct {
 	gb28181Inviter GB28181InviteSender
 	gb28181Bye     GB28181ByeSender
 	gb28181Cascade GB28181CascadeStatus
-	gb28181Loc     *time.Location // GB naive-clock zone (nil → Local)
 	// vodMgr serves the on-demand HLS VOD fragmenter for recording playback
 	// (#321 Phase 2). Self-contained (owns its segment cache) — constructed
 	// here rather than threaded through NewHandler's positional params.
@@ -343,7 +343,12 @@ type frameListEntry struct {
 const frameListCacheTTL = 500 * time.Millisecond
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *platform.DeviceManager, gb28181SessionMgr *platform.SessionManager, timeSync TimeSyncOps) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	h := &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	// The device-record domain service shares the handler's post-injection
+	// wiring: media API, device registry, GB timezone (#1009).
+	h.gb28181Records = gb28181.NewDeviceRecordService()
+	h.gb28181Records.SetDeviceManager(gb28181DeviceMgr)
+	return h
 }
 
 // startMergeGoroutine launches fn on a tracked background goroutine using the
@@ -1120,7 +1125,7 @@ func (h *Handler) SetGB28181Cascade(s GB28181CascadeStatus) {
 // SetGB28181Timezone pins the zone used to interpret/format naive GB/T 28181
 // device-clock timestamps (RecordInfo entries). nil keeps time.Local.
 func (h *Handler) SetGB28181Timezone(loc *time.Location) {
-	h.gb28181Loc = loc
+	h.gb28181Records.SetTimezone(loc)
 }
 
 // GB28181InviteSender sends a SIP INVITE to start a media session on a channel.
@@ -1184,6 +1189,7 @@ type GB28181DeviceMedia interface {
 // endpoints.
 func (h *Handler) SetGB28181DeviceMedia(s GB28181DeviceMedia) {
 	h.gb28181Media = s
+	h.gb28181Records.SetMedia(s)
 }
 
 // registerGB28181Routes registers GB28181 device and channel endpoints.
