@@ -42,7 +42,11 @@ func (h *Handler) handleXiaomiAuth(w http.ResponseWriter, r *http.Request) {
 
 	result, verification, err := h.cloudProxy.SignIn(r.Context(), req.Username, req.Password, region)
 	if err != nil {
-		WriteError(w, http.StatusUnauthorized, fmt.Sprintf("authentication failed: %v", err))
+		// 502, NOT 401: the caller's NVR session is fine — the UPSTREAM cloud
+		// rejected the Xiaomi credentials. 401 here made the frontend's global
+		// handler clear the NVR session and bounce the user to the login page
+		// on a typo'd Xiaomi password (#1014).
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("authentication failed: %v", err))
 		return
 	}
 
@@ -80,7 +84,8 @@ func (h *Handler) handleXiaomiCaptcha(w http.ResponseWriter, r *http.Request) {
 
 	result, verification, err := h.cloudProxy.SubmitCaptcha(r.Context(), req.SessionID, req.CaptchaCode)
 	if err != nil {
-		WriteError(w, http.StatusUnauthorized, fmt.Sprintf("captcha verification failed: %v", err))
+		// 502 not 401 — upstream rejection, the NVR session is fine (#1014).
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("captcha verification failed: %v", err))
 		return
 	}
 
@@ -118,7 +123,8 @@ func (h *Handler) handleXiaomiVerify(w http.ResponseWriter, r *http.Request) {
 
 	result, verification, err := h.cloudProxy.SubmitVerify(r.Context(), req.SessionID, req.Ticket)
 	if err != nil {
-		WriteError(w, http.StatusUnauthorized, fmt.Sprintf("verification failed: %v", err))
+		// 502 not 401 — upstream rejection, the NVR session is fine (#1014).
+		WriteError(w, http.StatusBadGateway, fmt.Sprintf("verification failed: %v", err))
 		return
 	}
 
@@ -169,7 +175,9 @@ func (h *Handler) handleXiaomiSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.config == nil || h.config.Xiaomi.Token == "" {
-		WriteError(w, http.StatusUnauthorized, "xiaomi cloud not authenticated")
+		// 409 not 401 — "log into Xiaomi first" is a precondition, not an
+		// NVR-session failure; 401 bounced the user to the login page (#1014).
+		WriteError(w, http.StatusConflict, "xiaomi cloud not authenticated")
 		return
 	}
 	if h.camMgr == nil {
