@@ -28,7 +28,7 @@
         CameraPixgateConfig,
     } from '$lib/api';
     import { Eye, EyeOff, PlugZap, Layers, Brain } from 'lucide-svelte';
-    import { showToast } from '$lib/toast';
+    import { showToast } from '$lib/toast.svelte';
     import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
     import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
     import MotionSubscriptionStatus from '$lib/components/MotionSubscriptionStatus.svelte';

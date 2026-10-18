@@ -163,6 +163,6 @@ timeline
 
 ## 下一步
 
-- 想快速上手：[快速开始](quickstart.md)
+- 想快速上手：[快速入门](getting-started.md)
 - 想看真实使用场景：[场景玩法指引](scenarios.md)
 - 正在选型对比：[同类方案对比](comparison.md)

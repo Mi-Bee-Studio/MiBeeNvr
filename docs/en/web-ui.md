@@ -101,6 +101,6 @@ Opened from the grid or a camera card at `#/live/{id}`:
 
 ## Next Steps
 
-- [Quick Start](quickstart.md) — add your first camera
+- [Getting Started](getting-started.md) — add your first camera
 - [CLI Reference](cli.md) — command-line administration
 - [Live Relay](relay-guide.md) — push feeds to streaming platforms

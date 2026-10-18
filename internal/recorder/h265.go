@@ -473,7 +473,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 					pts := time.Since(start)
 					dur := 1024 * time.Second / time.Duration(audioForma.ClockRate())
 					if err := m.WriteAudioSample(aid, aacData, pts, dur); err != nil {
-						if err.Error() != "muxer is closed" {
+						if !errors.Is(err, muxer.ErrClosed) {
 							h265Logger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
 						}
 					}
@@ -512,7 +512,7 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 					dur = time.Millisecond
 				}
 				if err := m.WriteAudioSample(aid, data, pts, dur); err != nil {
-					if err.Error() != "muxer is closed" {
+					if !errors.Is(err, muxer.ErrClosed) {
 						h265Logger.Error("failed to write G.711 audio sample", "camera_id", r.cfg.CameraID, "error", err)
 					}
 				} else {
@@ -565,6 +565,9 @@ func (r *H265Recorder) connectAndRecord(ctx context.Context) (error, bool) {
 	case err := <-errCh:
 		close(stopWatchdog)
 		<-watchdogDone
+		// Close() is the callback-drain barrier; without it a residual RTP
+		// callback's non-blocking send can hit the closed frameCh (#1001).
+		client.Close()
 		close(r.frameCh)
 		<-writerDone
 		r.closeCurrentSegment()

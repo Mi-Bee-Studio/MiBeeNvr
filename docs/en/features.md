@@ -163,6 +163,6 @@ The design baseline is a **low-end ARM board** (1GB RAM, Cortex-A53 class); all 
 
 ## Next Steps
 
-- Get running fast: [Quick Start](quickstart.md)
+- Get running fast: [Getting Started](getting-started.md)
 - See real-world recipes: [Scenario Playbooks](scenarios.md)
 - Comparing options: [How It Compares](comparison.md)
