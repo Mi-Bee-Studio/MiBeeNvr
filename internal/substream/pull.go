@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
@@ -80,7 +81,7 @@ func (m *Manager) pull(ctx context.Context, e *entry) {
 			cancel()
 			if rerr == nil && ok && t.URL != "" && t.URL != e.target.URL {
 				subLogger.Info("sub-stream target re-resolved after failures", "camera_id", cameraID,
-					"old", redactURL(e.target.URL), "new", redactURL(t.URL))
+					"old", slogx.RedactURL(e.target.URL), "new", slogx.RedactURL(t.URL))
 				e.target = t
 				backoff = time.Second
 			}
@@ -265,7 +266,7 @@ func (m *Manager) pullOnce(ctx context.Context, e *entry, backoff *time.Duration
 	*backoff = time.Second
 	*fails = 0
 	src.state.Store(StateLive)
-	subLogger.Info("sub-stream live", "camera_id", src.cameraID, "codec", string(codec), "url", redactURL(rawURL))
+	subLogger.Info("sub-stream live", "camera_id", src.cameraID, "codec", string(codec), "url", slogx.RedactURL(rawURL))
 
 	// Stall watchdog: closing the client forces Wait() to return, which the
 	// reconnect loop turns into a fresh session.
@@ -345,15 +346,5 @@ func injectCredentials(rawURL, user, pass string) string {
 		return rawURL
 	}
 	u.User = url.UserPassword(user, pass)
-	return u.String()
-}
-
-// redactURL strips userinfo for logging.
-func redactURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.User == nil {
-		return rawURL
-	}
-	u.User = nil
 	return u.String()
 }
