@@ -241,12 +241,76 @@ func trimAudioHead(seg *SegmentInfo, droppedSec float64) {
 // MergeMP4Segments merges aligned segments into outputPath. The optional
 // frameDur overrides the package default TimelapseFrameDur — callers with a
 // per-camera cadence (adaptive.timelapse_frame_ms) pass it through.
+//
+// The merge runs as a phase sequence (issue #1011 debt 1 — this function used
+// to be a 457-line monolith): align → validate → budget moov → skeleton →
+// video pass → audio pass → patch tail. Each phase is a named function below,
+// in original execution order.
 func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath string, frameDur ...time.Duration) (MergeStats, error) {
 	stats := MergeStats{LeadingDropped: map[int]int{}}
 	if len(segments) == 0 {
 		return stats, fmt.Errorf("no segments to merge")
 	}
 
+	segments, err := alignSegmentsToKeyframes(segments, &stats)
+	if err != nil {
+		return stats, err
+	}
+	codec, hasAudio, err := validateMergeInputs(segments)
+	if err != nil {
+		return stats, err
+	}
+
+	out, err := os.Create(outputPath)
+	if err != nil {
+		return stats, fmt.Errorf("create output: %w", err)
+	}
+	defer out.Close()
+
+	videoTrack, audioTrack, moovSize, err := budgetMoovSize(codec, segments, hasAudio)
+	if err != nil {
+		return stats, err
+	}
+
+	// The sample-copy buffer doubles as the moov placeholder's zero scratch:
+	// at this point it is freshly allocated and still all-zero (#1011 debt 3 —
+	// the placeholder used to be a moovSize-sized allocation).
+	buf := make([]byte, mergeBufferSize())
+	layout, err := writeOutputSkeleton(out, codec, moovSize, buf)
+	if err != nil {
+		return stats, err
+	}
+
+	allVideoSamples, mdatBytes, err := streamVideoSamples(ctx, out, segments, hasAudio, layout.mdatDataStart, buf, frameDur, &stats)
+	if err != nil {
+		return stats, err
+	}
+
+	var allAudioSamples []mergedSample
+	if hasAudio {
+		allAudioSamples, mdatBytes, err = streamAudioSamples(ctx, out, segments, &stats, layout.mdatDataStart, mdatBytes, buf)
+		if err != nil {
+			return stats, err
+		}
+	}
+
+	if err := patchMdatAndWriteMoov(out, layout, mdatBytes, videoTrack, audioTrack, hasAudio, allVideoSamples, allAudioSamples); err != nil {
+		return stats, err
+	}
+
+	// Sync and close.
+	if err := out.Sync(); err != nil {
+		return stats, fmt.Errorf("sync output: %w", err)
+	}
+
+	return stats, nil
+}
+
+// alignSegmentsToKeyframes drops each segment's leading samples up to its
+// first keyframe (see AlignToKeyframe) and collects the mergeable subset.
+// Segments without any keyframe are skipped and reported in stats — keeping
+// them standalone beats corrupting the merged reference chain.
+func alignSegmentsToKeyframes(segments []*SegmentInfo, stats *MergeStats) ([]*SegmentInfo, error) {
 	aligned := make([]*SegmentInfo, 0, len(segments))
 	for i, seg := range segments {
 		dropped, ok := AlignToKeyframe(seg)
@@ -263,35 +327,42 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		aligned = append(aligned, seg)
 	}
 	if len(aligned) == 0 {
-		return stats, ErrNoKeyframe
+		return nil, ErrNoKeyframe
 	}
-	segments = aligned
+	return aligned, nil
+}
 
+// validateMergeInputs enforces same-codec/same-parameter-set compatibility
+// across all (already aligned) segments and resolves audio presence. Mixed
+// audio presence/config downgrades the merge to video-only — this handles
+// camera reconnection scenarios where audio_enabled was toggled or G.711
+// negotiation succeeded/failed mid-session. Video is always preserved; losing
+// audio in merged files is acceptable — the individual source segments (if
+// still on disk) retain it. A first segment with no samples at all is
+// rejected.
+func validateMergeInputs(segments []*SegmentInfo) (codec string, hasAudio bool, err error) {
 	first := segments[0]
-	codec := first.Codec
+	codec = first.Codec
 
 	// Validate all segments share the same codec and SPS/PPS.
 	for i, seg := range segments {
 		if seg.Codec != codec {
-			return stats, fmt.Errorf("segment %d: codec mismatch (%s vs %s)", i, seg.Codec, codec)
+			return "", false, fmt.Errorf("segment %d: codec mismatch (%s vs %s)", i, seg.Codec, codec)
 		}
 		if i > 0 {
 			if !bytes.Equal(seg.SPS, first.SPS) || !bytes.Equal(seg.PPS, first.PPS) {
-				return stats, fmt.Errorf("segment %d: SPS/PPS mismatch", i)
+				return "", false, fmt.Errorf("segment %d: SPS/PPS mismatch", i)
 			}
 			if codec == "h265" && !bytes.Equal(seg.VPS, first.VPS) {
-				return stats, fmt.Errorf("segment %d: VPS mismatch", i)
+				return "", false, fmt.Errorf("segment %d: VPS mismatch", i)
 			}
 		}
 	}
 
 	// Validate audio consistency. When segments have mixed audio presence
 	// (some have audio, some don't), we DROP audio from the merged output
-	// rather than failing the merge. This handles camera reconnection scenarios
-	// where audio_enabled was toggled or G.711 negotiation succeeded/failed
-	// mid-session. Video is always preserved; losing audio in merged files is
-	// acceptable — the individual source segments (if still on disk) retain it.
-	hasAudio := false
+	// rather than failing the merge (see function comment).
+	hasAudio = false
 	audioConfig := first.AudioConfig
 	audioMixed := false
 	for i, seg := range segments {
@@ -318,29 +389,28 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	}
 
 	if first.SampleCount == 0 && (!hasAudio || first.AudioSampleCount == 0) {
-		return stats, fmt.Errorf("first segment has empty sample table")
+		return "", false, fmt.Errorf("first segment has empty sample table")
 	}
+	return codec, hasAudio, nil
+}
 
-	out, err := os.Create(outputPath)
-	if err != nil {
-		return stats, fmt.Errorf("create output: %w", err)
-	}
-	defer out.Close()
+// budgetMoovSize builds placeholder tracks (uniform durations, every sample
+// flagged keyframe — worst-case stss so the reserved moov always fits the real
+// pass) and measures the moov they would produce, plus per-sample stts
+// headroom, to derive the space to reserve for the final moov. Measurement
+// runs through countWriter — nothing is retained (#1011 debt 3: this pass
+// used to buffer the whole placeholder moov, a retention of the same order
+// as the moov itself).
+func budgetMoovSize(codec string, segments []*SegmentInfo, hasAudio bool) (videoTrack *mergeTrack, audioTrack *mergeTrack, moovSize int64, err error) {
+	first := segments[0]
 
-	// Step 1: Write ftyp box.
-	ftypSize, err := writeMergeFtyp(out, codec)
-	if err != nil {
-		return stats, fmt.Errorf("write ftyp: %w", err)
-	}
-
-	// Step 2: Calculate moov size by writing to a buffer with placeholder offsets.
 	// Count total video samples across all segments.
 	var totalVideoSamples int
 	for _, seg := range segments {
 		totalVideoSamples += seg.SampleCount
 	}
 
-	videoTrack := &mergeTrack{
+	videoTrack = &mergeTrack{
 		isH265:       codec == "h265",
 		sps:          first.SPS,
 		pps:          first.PPS,
@@ -372,15 +442,14 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		videoTrack.samples[i].isKeyFrame = true
 	}
 	// Build audio track placeholder for size calculation.
-	var audioTrack *mergeTrack
-	var totalAudioSamples int
 	if hasAudio {
+		var totalAudioSamples int
 		for _, seg := range segments {
 			totalAudioSamples += seg.AudioSampleCount
 		}
 		audioTrack = &mergeTrack{
 			isAudio:      true,
-			audioConfig:  audioConfig,
+			audioConfig:  first.AudioConfig,
 			audioCodec:   first.AudioCodec,
 			g711MULaw:    first.G711MULaw,
 			timescale:    first.AudioTimescale,
@@ -391,19 +460,19 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			audioTrack.samples[i].duration = 23 // placeholder
 		}
 	}
-	// Write moov to a buffer to get its exact size.
-	moovBuf := &bytesWriter{}
-	moovW := mp4.NewWriter(moovBuf)
-	if err := writeMergeMoov(moovW, videoTrack, audioTrack, 0, 0); err != nil {
-		return stats, fmt.Errorf("calculate moov size: %w", err)
+
+	// Measure the placeholder moov's exact size (counted, not buffered).
+	sizeW := &countWriter{}
+	if err := writeMergeMoov(mp4.NewWriter(sizeW), videoTrack, audioTrack, 0, 0); err != nil {
+		return nil, nil, 0, fmt.Errorf("calculate moov size: %w", err)
 	}
-	moovSize := moovBuf.len()
+	moovSize = sizeW.size()
 	// Add headroom for stts entry expansion — real video may have varying frame durations
 	// that prevent full RLE compression, requiring more stts entries than the uniform-duration
 	// placeholder (which compresses to 1 entry). Max overhead: 8 bytes per sample per track.
 	moovSize += int64(totalVideoSamples) * 8
 	if hasAudio {
-		moovSize += int64(totalAudioSamples) * 8
+		moovSize += int64(audioTrack.totalSamples) * 8
 	}
 
 	// Clear placeholder samples; real ones will be set after streaming mdat.
@@ -411,25 +480,47 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	if audioTrack != nil {
 		audioTrack.samples = nil
 	}
+	return videoTrack, audioTrack, moovSize, nil
+}
 
-	// Step 3: Write placeholder moov at the correct position.
-	moovOffset := ftypSize
-	moovPlaceholder := make([]byte, moovSize)
-	if _, err := out.Write(moovPlaceholder); err != nil {
-		return stats, fmt.Errorf("write moov placeholder: %w", err)
+// mergeLayout captures the merged output file's fixed header geometry.
+type mergeLayout struct {
+	moovOffset       int64
+	moovSize         int64
+	mdatHeaderOffset int64
+	mdatDataStart    int64
+}
+
+// writeOutputSkeleton lays down the output's fixed header geometry: ftyp, a
+// zero-filled moov placeholder of the reserved size (streamed through a still
+// pristine zero-filled scratch buffer — #1011 debt 3), and the mdat box
+// header whose size gets patched after the sample passes.
+func writeOutputSkeleton(out io.Writer, codec string, moovSize int64, zeroScratch []byte) (mergeLayout, error) {
+	var layout mergeLayout
+	ftypSize, err := writeMergeFtyp(out, codec)
+	if err != nil {
+		return layout, fmt.Errorf("write ftyp: %w", err)
 	}
-
-	// Step 4: Write mdat box header (size placeholder + "mdat").
-	mdatHeaderOffset := moovOffset + moovSize
+	layout.moovOffset = ftypSize
+	layout.moovSize = moovSize
+	if err := writeZeroes(out, moovSize, zeroScratch); err != nil {
+		return layout, fmt.Errorf("write moov placeholder: %w", err)
+	}
+	layout.mdatHeaderOffset = layout.moovOffset + moovSize
 	var mdatHeader [8]byte
 	copy(mdatHeader[4:8], "mdat")
 	if _, err := out.Write(mdatHeader[:]); err != nil {
-		return stats, fmt.Errorf("write mdat header: %w", err)
+		return layout, fmt.Errorf("write mdat header: %w", err)
 	}
-	mdatDataStart := mdatHeaderOffset + 8
+	layout.mdatDataStart = layout.mdatHeaderOffset + 8
+	return layout, nil
+}
 
-	// Step 5: Stream sample data from each segment into the output.
-	buf := make([]byte, mergeBufferSize())
+// streamVideoSamples is the video pass: every aligned segment's video samples
+// are streamed into mdat with the fixed-size copy buffer (one-pass sequential
+// readahead, #754), sparse dwell durations are rewritten to the timelapse
+// cadence, and the wall→file timeline map is recorded per segment.
+func streamVideoSamples(ctx context.Context, out io.Writer, segments []*SegmentInfo, hasAudio bool, mdatDataStart int64, buf []byte, frameDur []time.Duration, stats *MergeStats) ([]mergedSample, int64, error) {
 	var currentOffset int64
 	var allVideoSamples []mergedSample
 
@@ -437,12 +528,12 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	var wallSec, fileSec float64
 	for _, seg := range segments {
 		if seg.FilePath == "" {
-			return stats, fmt.Errorf("segment has empty FilePath")
+			return nil, 0, fmt.Errorf("segment has empty FilePath")
 		}
 
 		src, err := os.Open(seg.FilePath)
 		if err != nil {
-			return stats, fmt.Errorf("open segment %s: %w", seg.FilePath, err)
+			return nil, 0, fmt.Errorf("open segment %s: %w", seg.FilePath, err)
 		}
 		// One-pass sequential read (#754): aggressive readahead while copying,
 		// and — only when no audio pass will reopen this file — drop the cache
@@ -473,7 +564,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			select {
 			case <-ctx.Done():
 				src.Close()
-				return stats, ctx.Err()
+				return nil, 0, ctx.Err()
 			default:
 			}
 			sampleAbsOffset := currentOffset + mdatDataStart
@@ -481,7 +572,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 			_, copyErr := copySampleData(ctx, src, out, s.Offset, int64(s.Size), buf)
 			if copyErr != nil {
 				src.Close()
-				return stats, fmt.Errorf("copy sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
+				return nil, 0, fmt.Errorf("copy sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
 			}
 
 			dur := s.Duration
@@ -510,118 +601,119 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		src.Close()
 		stats.WallToFile = append(stats.WallToFile, [2]float64{wallSec, fileSec})
 	}
+	return allVideoSamples, currentOffset, nil
+}
 
-	// Stream audio samples after video samples. Spans whose video timeline was
-	// compressed (#496) get their audio rendered by envelope mixdown instead of
-	// verbatim copy — see ambient_audio.go; non-G.711 compressed spans drop
-	// their audio (logged), uncompressed spans keep it byte-for-byte.
+// streamAudioSamples is the audio pass (after the video pass): spans whose
+// video timeline was compressed (#496) get their audio rendered by envelope
+// mixdown instead of verbatim copy — see ambient_audio.go; non-G.711
+// compressed spans drop their audio (logged), uncompressed spans keep it
+// byte-for-byte.
+func streamAudioSamples(ctx context.Context, out io.Writer, segments []*SegmentInfo, stats *MergeStats, mdatDataStart, startOffset int64, buf []byte) ([]mergedSample, int64, error) {
 	var allAudioSamples []mergedSample
-	if hasAudio {
-		for segIdx, seg := range segments {
-			if len(seg.AudioSamples) == 0 {
+	currentOffset := startOffset
+	for segIdx, seg := range segments {
+		if len(seg.AudioSamples) == 0 {
+			continue
+		}
+
+		spanWall := stats.WallToFile[segIdx+1][0] - stats.WallToFile[segIdx][0]
+		spanFile := stats.WallToFile[segIdx+1][1] - stats.WallToFile[segIdx][1]
+		compressedSpan := spanWall > 0 && spanFile > 0 && spanWall > 1.5*spanFile
+
+		if compressedSpan {
+			if seg.AudioCodec != "g711" {
+				logger.Warn("merge: dropping audio of a compressed span with unsupported codec (g711 only)",
+					"path", seg.FilePath, "codec", seg.AudioCodec)
 				continue
 			}
-
-			spanWall := stats.WallToFile[segIdx+1][0] - stats.WallToFile[segIdx][0]
-			spanFile := stats.WallToFile[segIdx+1][1] - stats.WallToFile[segIdx][1]
-			compressedSpan := spanWall > 0 && spanFile > 0 && spanWall > 1.5*spanFile
-
-			if compressedSpan {
-				if seg.AudioCodec != "g711" {
-					logger.Warn("merge: dropping audio of a compressed span with unsupported codec (g711 only)",
-						"path", seg.FilePath, "codec", seg.AudioCodec)
-					continue
-				}
-				src, err := os.Open(seg.FilePath)
-				if err != nil {
-					return stats, fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)
-				}
-				raw := make([]byte, 0, 1<<16)
-				for _, s := range seg.AudioSamples {
-					chunk := make([]byte, s.Size)
-					if _, err := src.ReadAt(chunk, s.Offset); err != nil {
-						src.Close()
-						return stats, fmt.Errorf("read audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, err)
-					}
-					if err := waitIOBudget(ctx, int64(s.Size)); err != nil {
-						src.Close()
-						return stats, err
-					}
-					raw = append(raw, chunk...)
-				}
-				fadvise.DontNeed(src) // last consumer of this file is done
-				src.Close()
-
-				nOut := int(spanFile*float64(seg.AudioTimescale) + 0.5)
-				bed := mixdownAmbient(seg.G711MULaw, raw, nOut)
-				if len(bed) > 0 {
-					bedOffset := currentOffset + mdatDataStart
-					if _, err := out.Write(bed); err != nil {
-						return stats, fmt.Errorf("write ambient bed: %w", err)
-					}
-					for i := range bed {
-						allAudioSamples = append(allAudioSamples, mergedSample{
-							offset:   bedOffset + int64(i),
-							size:     1,
-							duration: 1, // one tick per G.711 byte on the audio timescale
-						})
-					}
-					currentOffset += int64(len(bed))
-					stats.AmbientSamples += len(bed)
-				}
-				continue
-			}
-
 			src, err := os.Open(seg.FilePath)
 			if err != nil {
-				return stats, fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)
+				return nil, 0, fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)
 			}
-
-			for _, s := range seg.AudioSamples {
-				select {
-				case <-ctx.Done():
-					src.Close()
-					return stats, ctx.Err()
-				default:
-				}
-				sampleAbsOffset := currentOffset + mdatDataStart
-
-				_, copyErr := copySampleData(ctx, src, out, s.Offset, int64(s.Size), buf)
-				if copyErr != nil {
-					src.Close()
-					return stats, fmt.Errorf("copy audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
-				}
-
-				allAudioSamples = append(allAudioSamples, mergedSample{
-					offset:   sampleAbsOffset,
-					size:     s.Size,
-					duration: s.Duration,
-				})
-				currentOffset += int64(s.Size)
-			}
-
+			// Streaming ambient bed (#1011 debt 2): rendered straight from the
+			// span's sample table — the span's whole G.711 track is no longer
+			// buffered in memory (it grew linearly with wall time, ~4.8MB per
+			// 10-minute span).
+			nOut := int(spanFile*float64(seg.AudioTimescale) + 0.5)
+			bedOffset := currentOffset + mdatDataStart
+			n, aerr := writeAmbientBed(ctx, src, seg, nOut, out)
 			fadvise.DontNeed(src) // last consumer of this file is done
 			src.Close()
+			if aerr != nil {
+				return nil, 0, fmt.Errorf("ambient bed for %s: %w", seg.FilePath, aerr)
+			}
+			if n > 0 {
+				for i := range n {
+					allAudioSamples = append(allAudioSamples, mergedSample{
+						offset:   bedOffset + int64(i),
+						size:     1,
+						duration: 1, // one tick per G.711 byte on the audio timescale
+					})
+				}
+				currentOffset += int64(n)
+				stats.AmbientSamples += n
+			}
+			continue
 		}
-	}
 
-	// Step 6: Patch mdat box size.
-	mdatBoxSize := uint64(8 + currentOffset)
-	if mdatBoxSize > math.MaxUint32 {
-		return stats, fmt.Errorf("mdat box size %d exceeds MaxUint32", mdatBoxSize)
+		src, err := os.Open(seg.FilePath)
+		if err != nil {
+			return nil, 0, fmt.Errorf("open segment %s for audio: %w", seg.FilePath, err)
+		}
+
+		for _, s := range seg.AudioSamples {
+			select {
+			case <-ctx.Done():
+				src.Close()
+				return nil, 0, ctx.Err()
+			default:
+			}
+			sampleAbsOffset := currentOffset + mdatDataStart
+
+			_, copyErr := copySampleData(ctx, src, out, s.Offset, int64(s.Size), buf)
+			if copyErr != nil {
+				src.Close()
+				return nil, 0, fmt.Errorf("copy audio sample from %s at offset %d: %w", seg.FilePath, s.Offset, copyErr)
+			}
+
+			allAudioSamples = append(allAudioSamples, mergedSample{
+				offset:   sampleAbsOffset,
+				size:     s.Size,
+				duration: s.Duration,
+			})
+			currentOffset += int64(s.Size)
+		}
+
+		fadvise.DontNeed(src) // last consumer of this file is done
+		src.Close()
 	}
-	if _, err := out.Seek(mdatHeaderOffset, io.SeekStart); err != nil {
-		return stats, fmt.Errorf("seek to mdat header: %w", err)
+	return allAudioSamples, currentOffset, nil
+}
+
+// patchMdatAndWriteMoov finishes the output once both sample passes are done:
+// patches the mdat box size, then rewrites the reserved moov region with the
+// REAL sample tables through an overflow-guarded limitedWriter, and pads any
+// leftover reserved space with a "free" box so parsers can traverse
+// moov → free → mdat without breaking.
+func patchMdatAndWriteMoov(out *os.File, layout mergeLayout, mdatBytes int64, videoTrack, audioTrack *mergeTrack, hasAudio bool, allVideoSamples, allAudioSamples []mergedSample) error {
+	// Patch mdat box size.
+	mdatBoxSize := uint64(8 + mdatBytes)
+	if mdatBoxSize > math.MaxUint32 {
+		return fmt.Errorf("mdat box size %d exceeds MaxUint32", mdatBoxSize)
+	}
+	if _, err := out.Seek(layout.mdatHeaderOffset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek to mdat header: %w", err)
 	}
 	var sizeBuf [4]byte
 	binary.BigEndian.PutUint32(sizeBuf[:], uint32(mdatBoxSize))
 	if _, err := out.Write(sizeBuf[:]); err != nil {
-		return stats, fmt.Errorf("write mdat size: %w", err)
+		return fmt.Errorf("write mdat size: %w", err)
 	}
 
-	// Step 7: Go back and write the real moov box at the placeholder position.
-	if _, err := out.Seek(moovOffset, io.SeekStart); err != nil {
-		return stats, fmt.Errorf("seek to moov: %w", err)
+	// Go back and write the real moov box at the placeholder position.
+	if _, err := out.Seek(layout.moovOffset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek to moov: %w", err)
 	}
 
 	// Calculate total video duration in timescale units.
@@ -630,7 +722,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 		totalVideoDuration += uint64(s.duration)
 	}
 	if totalVideoDuration > math.MaxUint32 {
-		return stats, fmt.Errorf("DurationV0 overflow: video duration %d exceeds MaxUint32", totalVideoDuration)
+		return fmt.Errorf("DurationV0 overflow: video duration %d exceeds MaxUint32", totalVideoDuration)
 	}
 	videoTrack.duration = uint32(totalVideoDuration)
 	videoTrack.samples = allVideoSamples
@@ -638,60 +730,85 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	// A merged product where every span was compressed with a dropped
 	// non-G.711 track has zero audio samples — emit no audio track at all.
 	if hasAudio && len(allAudioSamples) == 0 {
-		hasAudio = false
 		audioTrack = nil
 	}
 
 	// Set real audio track data.
-	if hasAudio {
+	if audioTrack != nil {
 		var totalAudioDuration uint64
 		for _, s := range allAudioSamples {
 			totalAudioDuration += uint64(s.duration)
 		}
 		if totalAudioDuration > math.MaxUint32 {
-			return stats, fmt.Errorf("DurationV0 overflow: audio duration %d exceeds MaxUint32", totalAudioDuration)
+			return fmt.Errorf("DurationV0 overflow: audio duration %d exceeds MaxUint32", totalAudioDuration)
 		}
 		audioTrack.duration = uint32(totalAudioDuration)
 		audioTrack.samples = allAudioSamples
 	}
 
 	// Use a limited writer to prevent overflow into mdat.
-	moovOut := &limitedWriter{w: out, remaining: moovSize, pos: moovOffset}
+	moovOut := &limitedWriter{w: out, remaining: layout.moovSize, pos: layout.moovOffset}
 	moovWriter := mp4.NewWriter(moovOut)
 	// Video chunk starts at mdatDataStart; audio chunk starts after video data.
-	videoChunkOffset := mdatDataStart
+	videoChunkOffset := layout.mdatDataStart
 	var audioChunkOffset int64
-	if hasAudio {
-		audioChunkOffset = mdatDataStart
+	if audioTrack != nil {
+		audioChunkOffset = layout.mdatDataStart
 		for _, s := range allVideoSamples {
 			audioChunkOffset += int64(s.size)
 		}
 	}
 	if err := writeMergeMoov(moovWriter, videoTrack, audioTrack, videoChunkOffset, audioChunkOffset); err != nil {
-		return stats, fmt.Errorf("write moov: %w", err)
+		return fmt.Errorf("write moov: %w", err)
 	}
 
 	if moovOut.remaining < 0 {
-		return stats, fmt.Errorf("moov box overflow: calculated %d, actual %d", moovSize, moovSize-moovOut.remaining)
+		return fmt.Errorf("moov box overflow: calculated %d, actual %d", layout.moovSize, layout.moovSize-moovOut.remaining)
 	}
 
 	// If the real moov is smaller than the reserved space, pad with a "free" box.
-	// This ensures parsers can traverse from moov → free → mdat without breaking.
 	if moovOut.remaining > 0 {
-		padBuf := make([]byte, moovOut.remaining)
-		binary.BigEndian.PutUint32(padBuf[0:4], uint32(moovOut.remaining))
-		copy(padBuf[4:8], "free")
-		if _, err := out.Write(padBuf); err != nil {
-			return stats, fmt.Errorf("write moov padding: %w", err)
+		if err := writeMoovPad(out, moovOut.remaining); err != nil {
+			return fmt.Errorf("write moov padding: %w", err)
 		}
 	}
+	return nil
+}
 
-	// Sync and close.
-	if err := out.Sync(); err != nil {
-		return stats, fmt.Errorf("sync output: %w", err)
+// writeZeroes writes n zero bytes through a zero-filled scratch chunk — the
+// WriteN-style sequential zero write behind the moov placeholder and the
+// free-box payload (#1011 debt 3: both used to be whole-size allocations,
+// peaking at moov-order memory).
+func writeZeroes(w io.Writer, n int64, zero []byte) error {
+	for n > 0 {
+		chunk := int64(len(zero))
+		if chunk > n {
+			chunk = n
+		}
+		if _, err := w.Write(zero[:chunk]); err != nil {
+			return err
+		}
+		n -= chunk
 	}
+	return nil
+}
 
-	return stats, nil
+// writeMoovPad fills the gap between the real moov's end and the reserved
+// region's end with a "free" box (8-byte header + streamed zero payload). If
+// the gap cannot fit a box header (<8 bytes, unreachable in practice — box
+// sizes are 4-byte aligned and the per-sample headroom keeps the pad ≥ 8),
+// plain zero fill avoids the previous version's slice-bounds panic.
+func writeMoovPad(w io.Writer, remaining int64) error {
+	if remaining < 8 {
+		return writeZeroes(w, remaining, make([]byte, remaining))
+	}
+	var hdr [8]byte
+	binary.BigEndian.PutUint32(hdr[0:4], uint32(remaining))
+	copy(hdr[4:8], "free")
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	return writeZeroes(w, remaining-8, make([]byte, 64<<10))
 }
 
 // copySampleData copies size bytes from src at offset to dst using the
@@ -1518,9 +1635,46 @@ func (b *bytesWriter) Seek(offset int64, whence int) (int64, error) {
 	return b.pos, nil
 }
 
-func (b *bytesWriter) len() int64 {
-	return int64(len(b.data))
+// countWriter is a no-retention io.WriteSeeker for measuring box output
+// (#1011 debt 3): it mirrors bytesWriter's position semantics — including
+// SeekEnd anchored at the high-water mark, which for append-only writes is
+// exactly the length bytesWriter would have grown to — while discarding the
+// payload bytes. Used by the moov-size estimation pass, which used to buffer
+// the entire placeholder moov (a retention of the same order as the moov
+// itself).
+type countWriter struct {
+	pos  int64
+	high int64
 }
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	c.pos += int64(len(p))
+	if c.pos > c.high {
+		c.high = c.pos
+	}
+	return len(p), nil
+}
+
+func (c *countWriter) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+		c.pos = offset
+	case io.SeekCurrent:
+		c.pos += offset
+	case io.SeekEnd:
+		c.pos = c.high + offset
+	default:
+		return c.pos, fmt.Errorf("countWriter: invalid whence %d", whence)
+	}
+	if c.pos < 0 {
+		c.pos = 0
+	}
+	return c.pos, nil
+}
+
+// size reports the number of bytes a bytesWriter-backed run would have
+// produced (the high-water mark of write ends).
+func (c *countWriter) size() int64 { return c.high }
 
 // limitedWriter wraps an io.WriteSeeker and limits the total bytes written.
 // Used to write moov box in-place without overflowing into mdat.

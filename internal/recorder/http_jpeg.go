@@ -625,19 +625,6 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 		segFormat = model.FormatAVI
 	}
 	if r.cfg.DB != nil && segmentFinalized && r.frameCount > 0 {
-		now := time.Now()
-		duration := now.Sub(r.segStart).Seconds()
-		rec := &model.Recording{
-			ID:         strconv.FormatInt(now.UnixNano(), 10),
-			CameraID:   r.cfg.CameraID,
-			FilePath:   r.curFinalPath,
-			Format:     segFormat,
-			StartedAt:  r.segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: r.frameCount,
-		}
-		recordingID = rec.ID
 		if r.cfg.AVI {
 			// AVI is a single file.
 			if info, err := os.Stat(r.curFinalPath); err == nil {
@@ -652,10 +639,8 @@ func (r *HTTPJPEGRecorder) closeCurrentSegment() {
 				return nil
 			})
 		}
-		rec.FileSize = totalSize
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, dbInsertRetries, dbInsertBackoff); err != nil {
-			httpJpegLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
-		}
+		recordingID = insertSegmentRow(httpJpegLogger, r.cfg.DB, r.cfg.CameraID,
+			r.curFinalPath, segFormat, r.segStart, r.frameCount, totalSize)
 
 		// Dark frame detection: check if segment is too dark to be useful.
 		if r.cfg.DarkFrameFilterEnabled && r.cfg.DarkFrameThreshold > 0 && recordingID != "" {

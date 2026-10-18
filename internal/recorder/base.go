@@ -39,7 +39,6 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1107,132 +1106,80 @@ func (b *baseRecorder) closeAmbientSidecar() {
 	}
 }
 
-// closeCurrentSegment finalizes the current segment: closes the muxer,
-// atomically renames temp→final, inserts the recording record into the DB,
-// publishes a SegmentCompleted event, and updates metrics.
-//
-// This method is fully codec-agnostic: it uses driver.segmentFormat() for
-// the recording metadata and driver.codecLabel() for metrics labels.
+// closeCurrentSegment finalizes the current segment via the shared
+// FinalizeSegment skeleton (close → rename → insert row → event → metrics;
+// issue #1012 block 1). The codec-agnostic bits come from the driver
+// (segmentFormat for the recording metadata) and the recorder's own locking
+// discipline lives in the hooks (b.mu around muxer/audioTrackID/ambient).
 func (b *baseRecorder) closeCurrentSegment() {
 	if b.muxer == nil {
 		return
 	}
-	// The retained GOP/audio rings' `written` markings refer to the segment
-	// being closed; a later timelapse-exit flush into a FRESH segment must
-	// write those frames instead of skipping them (issue #498: mid-GOP frames
-	// existed only in the closed file, so the skip produced missing refs).
-	if b.adaptive != nil {
-		b.adaptive.clearWritten()
-	}
-	if b.audioTrig != nil {
-		b.audioTrig.ClearWritten()
-	}
-	finishStart := time.Now()
-	b.mu.Lock()
-	b.closeAmbientSidecar()
-	b.mu.Unlock()
-	if err := b.muxer.Close(); err != nil {
-		b.log.Error("failed to close muxer",
-			"camera_id", b.cfg.CameraID, "error", err)
-		if b.curTempPath != "" {
-			os.Remove(b.curTempPath)
-		}
-		b.mu.Lock()
-		b.muxer = nil
-		b.audioTrackID = 0
-		b.mu.Unlock()
-		b.curTempPath = ""
-		b.curFinalPath = ""
-		b.frameCount.Store(0)
-		return
-	}
-
-	// Atomic rename: temp → final
-	if b.curTempPath != "" && b.curFinalPath != "" {
-		if err := b.store.CloseSegment(b.curTempPath, b.curFinalPath); err != nil {
-			b.log.Error("failed to close segment",
-				"camera_id", b.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Segment-loss gate: when the final file never materialized (vanished
-	// temp — e.g. the startup temp-cleanup scan racing segment creation,
-	// 2026-09-08 incident), any DB row would be a permanent 404 entry.
-	// Skip the insert, event, and metrics instead.
-	var fileSize int64
-	var recordingID string
-	finalExists := false
-	if b.curFinalPath != "" {
-		if info, err := os.Stat(b.curFinalPath); err == nil {
-			finalExists = true
-			fileSize = info.Size()
-			// Feed the next segment's preallocation estimate (#757).
-			b.lastSegBytes = fileSize
-		} else {
-			b.log.Warn("segment file missing after finalize — recording row skipped",
-				"camera_id", b.cfg.CameraID, "path", b.curFinalPath)
-		}
-	}
-	if b.cfg.DB != nil && finalExists {
-		now := time.Now()
-		duration := now.Sub(b.segStart).Seconds()
-		rec := &model.Recording{
-			ID:         strconv.FormatInt(now.UnixNano(), 10),
-			CameraID:   b.cfg.CameraID,
-			FilePath:   b.curFinalPath,
-			Format:     b.driver.segmentFormat(),
-			StartedAt:  b.segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: int(b.frameCount.Load()),
-			FileSize:   fileSize,
-		}
-		recordingID = rec.ID
-		if err := b.cfg.DB.InsertRecordingWithRetry(
-			context.Background(), rec, dbInsertRetries, dbInsertBackoff,
-		); err != nil {
-			b.log.Error("failed to insert recording",
-				"camera_id", b.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Publish SegmentCompleted event.
-	if b.cfg.EventBus != nil && recordingID != "" {
-		b.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
-			CameraID:    b.cfg.CameraID,
-			FilePath:    b.curFinalPath,
-			Format:      string(b.driver.segmentFormat()),
-			Encoding:    string(b.driver.segmentFormat()),
-			StartedAt:   b.segStart.Format(time.RFC3339Nano),
-			EndedAt:     time.Now().Format(time.RFC3339Nano),
-			FileSize:    fileSize,
-			RecordingID: recordingID,
-		})
-	} else if recordingID != "" {
-		b.log.Warn("SegmentCompleted NOT published — EventBus is nil",
-			"camera_id", b.cfg.CameraID, "recording_id", recordingID)
-	}
-
-	if b.frameCount.Load() > 0 && finalExists {
-		b.recordSegmentCreated()
-		if fileSize > 0 {
-			b.recordBytes(fileSize)
-		}
-		// Segment finalize wall time (muxer close + fsync/rename + DB insert):
-		// sustained growth is the SD-card/USB degradation early-warning (#469).
-		if b.mtrics != nil {
-			b.mtrics.ObserveSegmentWrite(b.cfg.CameraID, time.Since(finishStart))
-		}
-	}
-
-	b.mu.Lock()
-	b.muxer = nil
-	b.audioTrackID = 0
-	b.closeAmbientSidecar()
-	b.mu.Unlock()
-	b.curTempPath = ""
-	b.curFinalPath = ""
-	b.frameCount.Store(0)
+	FinalizeSegment(SegmentFinalizeParams{
+		Log:          b.log,
+		CameraID:     b.cfg.CameraID,
+		Store:        b.store,
+		DB:           b.cfg.DB,
+		EventBus:     b.cfg.EventBus,
+		Muxer:        b.muxer,
+		TempPath:     b.curTempPath,
+		FinalPath:    b.curFinalPath,
+		SegStart:     b.segStart,
+		FrameCount:   b.frameCount.Load(),
+		Format:       b.driver.segmentFormat(),
+		LastSegBytes: &b.lastSegBytes,
+		ResetRings: func() {
+			// The retained GOP/audio rings' `written` markings refer to the
+			// segment being closed; a later timelapse-exit flush into a FRESH
+			// segment must write those frames instead of skipping them
+			// (issue #498: mid-GOP frames existed only in the closed file, so
+			// the skip produced missing refs).
+			if b.adaptive != nil {
+				b.adaptive.clearWritten()
+			}
+			if b.audioTrig != nil {
+				b.audioTrig.ClearWritten()
+			}
+		},
+		BeforeMuxerClose: func() {
+			// ambientFile is mu-guarded (the audio RTP callback reads it
+			// under mu) — close it under the lock before the muxer (#1001).
+			b.mu.Lock()
+			b.closeAmbientSidecar()
+			b.mu.Unlock()
+		},
+		OnCloseError: func() {
+			b.mu.Lock()
+			b.muxer = nil
+			b.audioTrackID = 0
+			b.mu.Unlock()
+			b.curTempPath = ""
+			b.curFinalPath = ""
+			b.frameCount.Store(0)
+		},
+		OnMetrics: func(fileSize int64, wall time.Duration) {
+			b.recordSegmentCreated()
+			if fileSize > 0 {
+				b.recordBytes(fileSize)
+			}
+			// Segment finalize wall time (muxer close + fsync/rename + DB
+			// insert): sustained growth is the SD-card/USB degradation
+			// early-warning (#469).
+			if b.mtrics != nil {
+				b.mtrics.ObserveSegmentWrite(b.cfg.CameraID, wall)
+			}
+		},
+		OnFinished: func() {
+			b.mu.Lock()
+			b.muxer = nil
+			b.audioTrackID = 0
+			b.closeAmbientSidecar()
+			b.mu.Unlock()
+			b.curTempPath = ""
+			b.curFinalPath = ""
+			b.frameCount.Store(0)
+		},
+	})
 }
 
 // handleStorageFailure closes the current segment cleanly without storage I/O

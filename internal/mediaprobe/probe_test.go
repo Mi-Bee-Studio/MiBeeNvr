@@ -1,4 +1,4 @@
-package mediaprobe
+package mediaprobe_test
 
 import (
 	"os"
@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/stretchr/testify/require"
 )
@@ -67,7 +68,7 @@ func TestProbeMP4_H264(t *testing.T) {
 	dir := t.TempDir()
 	path := createH264MP4(t, dir, 3)
 
-	info, err := ProbeMP4(path)
+	info, err := mediaprobe.ProbeMP4(path)
 	require.NoError(t, err)
 	require.Equal(t, "h264", info.CodecName)
 	require.Equal(t, "h264", info.Codec)
@@ -82,7 +83,7 @@ func TestProbeMP4_H265(t *testing.T) {
 	dir := t.TempDir()
 	path := createH265MP4(t, dir, 2)
 
-	info, err := ProbeMP4(path)
+	info, err := mediaprobe.ProbeMP4(path)
 	require.NoError(t, err)
 	// ffprobe-compatible name for H.265 is "hevc".
 	require.Equal(t, "hevc", info.CodecName)
@@ -96,14 +97,14 @@ func TestProbeDuration(t *testing.T) {
 	dir := t.TempDir()
 	path := createH264MP4(t, dir, 5)
 
-	dur, err := ProbeDuration(path)
+	dur, err := mediaprobe.ProbeDuration(path)
 	require.NoError(t, err)
 	// 5 frames × 33ms = 165ms.
 	require.InDelta(t, 0.165, dur, 0.01)
 }
 
 func TestProbeMP4_NonExistent(t *testing.T) {
-	_, err := ProbeMP4("/nonexistent/path/file.mp4")
+	_, err := mediaprobe.ProbeMP4("/nonexistent/path/file.mp4")
 	require.Error(t, err)
 }
 
@@ -111,15 +112,15 @@ func TestProbeMP4_InvalidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "notmp4.mp4")
 	require.NoError(t, os.WriteFile(path, []byte("not a real mp4"), 0o644))
-	_, err := ProbeMP4(path)
+	_, err := mediaprobe.ProbeMP4(path)
 	require.Error(t, err)
 }
 
 func TestIsLikelyMP4(t *testing.T) {
-	require.True(t, IsLikelyMP4("/data/recordings/cam/rec.mp4"))
-	require.True(t, IsLikelyMP4("/data/x.MP4"))
-	require.True(t, IsLikelyMP4("/data/seg.transcoded.mp4"))
-	require.True(t, IsLikelyMP4("/data/x.m4v"))
-	require.False(t, IsLikelyMP4("/data/frame.jpg"))
-	require.False(t, IsLikelyMP4("/data/clip.avi"))
+	require.True(t, mediaprobe.IsLikelyMP4("/data/recordings/cam/rec.mp4"))
+	require.True(t, mediaprobe.IsLikelyMP4("/data/x.MP4"))
+	require.True(t, mediaprobe.IsLikelyMP4("/data/seg.transcoded.mp4"))
+	require.True(t, mediaprobe.IsLikelyMP4("/data/x.m4v"))
+	require.False(t, mediaprobe.IsLikelyMP4("/data/frame.jpg"))
+	require.False(t, mediaprobe.IsLikelyMP4("/data/clip.avi"))
 }
