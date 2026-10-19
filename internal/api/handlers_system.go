@@ -208,7 +208,14 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// suppresses its Authorization header exactly when this is true: the
 	// gateway claims any Authorization header as its own credential, while
 	// direct access to the same listener requires the Bearer token (#938).
-	resp.Gateway = middleware.GatewayIdentityFromContext(r.Context()) != nil
+	if gi := middleware.GatewayIdentityFromContext(r.Context()); gi != nil {
+		resp.Gateway = true
+		// GatewayAdmin — the identity is specifically an ADMIN one. The setup
+		// wizard hides its first-boot code field for these sessions: the
+		// gateway-admin path is exempt from the code (#1032), so asking for
+		// one would send NAS admins hunting for a code they don't need.
+		resp.GatewayAdmin = gi.Admin
+	}
 
 	// Stable device identity for LAN clients (#330)
 	if h.config != nil {

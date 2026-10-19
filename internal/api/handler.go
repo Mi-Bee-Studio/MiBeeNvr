@@ -76,6 +76,10 @@ type HealthResponse struct {
 	// deployments serve both paths, so the document alone cannot tell them
 	// apart (#938).
 	Gateway bool `json:"gateway"`
+	// GatewayAdmin is true when the gateway-verified identity is specifically
+	// an NAS admin. The setup wizard hides its first-boot code field for
+	// these sessions — the gateway-admin path is exempt from the code (#1032).
+	GatewayAdmin bool `json:"gateway_admin"`
 	// DeviceID / DeviceName give LAN clients a stable identity to anchor on
 	// instead of an IP address (#330). Empty until the config provides them
 	// (the ID is generated and persisted on first config load).

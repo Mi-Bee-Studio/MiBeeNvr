@@ -55,9 +55,20 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 	if strings.TrimSpace(cfg.Auth.PasswordHash) == "" && strings.TrimSpace(cfg.Auth.Password) == "" {
 		if code, err := handler.ArmFirstBootSetup(); err == nil {
 			slog.Warn("首次设置校验码(完成管理员设置时填入)/ first-boot setup code: " + code)
+			// Headless deployments (Docker on a NAS) have no reachable terminal,
+			// and wrapper-script logs never carry the app's own stdout (#1032) —
+			// also drop the code next to the config file (the mounted data
+			// volume). Best-effort: stdout still carries it.
+			if ferr := api.WriteFirstBootSetupCodeFile(configPath, code); ferr != nil {
+				slog.Warn("failed to write setup-code.txt", "error", ferr)
+			}
 		} else {
 			slog.Error("failed to arm first-boot setup code", "error", err)
 		}
+	} else {
+		// Credentials exist — remove a stale code file (downgrade or a restored
+		// data dir): the code would be dead while the file reads live.
+		api.RemoveFirstBootSetupCodeFile(configPath)
 	}
 	handler.SetStorageMigrator(deps.migrationMgr)
 	// 商业化收费授权（P2P 门控同源实例；GET/PUT /api/license）。
