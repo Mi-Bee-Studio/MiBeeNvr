@@ -72,8 +72,13 @@ func (h *Handler) handleXiaomiVectorPTZMove(w http.ResponseWriter, cameraID stri
 var errXiaomiPTZNotConnected = errors.New("camera is not connected")
 
 // xiaomiPTZStatusCode maps motor dispatch errors onto HTTP statuses.
+// Both not-connected shapes answer 503: a recorder missing from the
+// manager (restarting) and one registered with its control plane down
+// (xiaomi.ErrNotConnected, the reconnecting state) are runtime states,
+// not server defects (mibeescout#40).
 func (h *Handler) xiaomiPTZStatusCode(err error) int {
-	if errors.Is(err, errXiaomiPTZNotConnected) {
+	if errors.Is(err, errXiaomiPTZNotConnected) ||
+		errors.Is(err, xiaomi.ErrNotConnected) {
 		return http.StatusServiceUnavailable
 	}
 	return http.StatusInternalServerError
@@ -134,7 +139,7 @@ func (h *Handler) handleXiaomiPTZMove(w http.ResponseWriter, r *http.Request) {
 
 	if err := xiaomiRec.MotorControl(req.Direction, req.Speed); err != nil {
 		logger.Error("Xiaomi PTZ move failed", "camera_id", cameraID, "error", err, "direction", req.Direction, "speed", req.Speed)
-		WriteError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ command failed: %v", err))
+		WriteError(w, h.xiaomiPTZStatusCode(err), fmt.Sprintf("PTZ command failed: %v", err))
 		return
 	}
 
@@ -162,7 +167,7 @@ func (h *Handler) handleXiaomiPTZStop(w http.ResponseWriter, r *http.Request) {
 	// Send stop command — speed=0 with direction "stop" stops the motor.
 	if err := xiaomiRec.MotorControl("stop", 0); err != nil {
 		logger.Error("Xiaomi PTZ stop failed", "camera_id", cameraID, "error", err)
-		WriteError(w, http.StatusInternalServerError, fmt.Sprintf("PTZ stop failed: %v", err))
+		WriteError(w, h.xiaomiPTZStatusCode(err), fmt.Sprintf("PTZ stop failed: %v", err))
 		return
 	}
 
