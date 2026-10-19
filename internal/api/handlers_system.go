@@ -203,6 +203,17 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	localBypass := h.config != nil && h.config.Auth.LocalBypass != nil && *h.config.Auth.LocalBypass
 	resp.LocalAccess = localBypass && middleware.IsBypassEligible(r)
 
+	// Gateway — whether this request carried a unified-gateway-verified NAS
+	// identity (context only ever set on the gateway listener). GatewayAdmin —
+	// the identity is specifically an ADMIN one. The setup wizard hides its
+	// first-boot code field for these sessions: the gateway-admin path is
+	// exempt from the code (#1032), so asking for one would send NAS admins
+	// hunting for a code they don't need.
+	if gi := middleware.GatewayIdentityFromContext(r.Context()); gi != nil {
+		resp.Gateway = true
+		resp.GatewayAdmin = gi.Admin
+	}
+
 	// Stable device identity for LAN clients (#330)
 	if h.config != nil {
 		resp.DeviceID = h.config.Server.DeviceID

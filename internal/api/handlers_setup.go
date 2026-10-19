@@ -19,10 +19,22 @@ type setupRequest struct {
 	Password    string `json:"password"`
 	Language    string `json:"language,omitempty"`
 	StoragePath string `json:"storage_path,omitempty"`
-	// SetupCode is the first-boot arming code printed to the terminal/log
-	// (#879). Required from non-loopback callers until setup completes;
-	// loopback (desktop local_bypass) callers are exempt.
+	// SetupCode is the first-boot arming code printed to the terminal/log and
+	// dropped next to the config as setup-code.txt (#879, #1032). Required
+	// from non-loopback callers until setup completes; loopback (desktop) and
+	// gateway-verified NAS-admin callers are exempt.
 	SetupCode string `json:"setup_code,omitempty"`
+}
+
+// setupCodeRequiredMessage words the 403 hint for where the code can actually
+// be found in THIS deployment (#1032): a Docker image has no reachable
+// terminal, and NAS wrapper logs never carry the app's stdout — point at the
+// data-folder file first, the container log second.
+func setupCodeRequiredMessage() string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("NVR_DEPLOYMENT")), "docker") {
+		return "setup code required — see setup-code.txt in the NVR data folder (the mounted volume) or the container log, e.g. `docker logs <container>` (设置校验码见数据目录 setup-code.txt 文件或容器日志 docker logs)"
+	}
+	return "setup code required — see the NVR startup log/terminal or setup-code.txt in the data folder (设置校验码见 NVR 启动日志/终端或数据目录 setup-code.txt)"
 }
 
 // handleSetup handles POST /api/setup — first-time initialization.
@@ -53,9 +65,18 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 	// First-boot arming (#879): while no admin credentials exist, a LAN peer
 	// must not be able to claim the account — the code is only visible on the
-	// machine's own terminal/log. Loopback callers (desktop) are exempt.
-	if h.setupCode != "" && !middleware.IsBypassEligible(r) && req.SetupCode != h.setupCode {
-		WriteError(w, http.StatusForbidden, "setup code required — see the NVR startup log/terminal (设置校验码见 NVR 启动日志/终端)")
+	// machine's own terminal/log. Loopback callers (desktop) are exempt, and
+	// so are gateway-verified NAS admins (#1032): the unified gateway forwards
+	// only desktop sessions it has authenticated, and the X-Trim-* identity
+	// context exists solely on the unix-socket listener — a LAN peer cannot
+	// forge it (the same trust the auth middleware already grants these
+	// identities).
+	gatewayAdmin := false
+	if gi := middleware.GatewayIdentityFromContext(r.Context()); gi != nil && gi.Admin {
+		gatewayAdmin = true
+	}
+	if h.setupCode != "" && !middleware.IsBypassEligible(r) && !gatewayAdmin && req.SetupCode != h.setupCode {
+		WriteError(w, http.StatusForbidden, setupCodeRequiredMessage())
 		return
 	}
 
@@ -125,6 +146,10 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
+
+	// Credentials exist now — the arming code (and its data-folder file,
+	// #1032) are dead. Drop the file so it can't mislead a later reader.
+	RemoveFirstBootSetupCodeFile(h.configPath)
 
 	// Issue a stateless signed session token (same scheme as /api/auth/login) so
 	// the just-initialized browser session never carries a reversible password.

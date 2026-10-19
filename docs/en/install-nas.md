@@ -144,6 +144,7 @@ Once installed, the app shows up in the "Installed" list where you can open or u
 
 - **Host network**: the packaged container runs with host networking so ONVIF WS-Discovery (UDP multicast `239.255.255.250:3702`) works. If host ports `9090` (web) or `2121` (FTP) are taken, change the web port under **Web UI → Settings → General → Web UI Port** (restart required), or set `NVR_LISTEN_PORT` before deployment
 - **Desktop single sign-on (unified gateway)**: opening MiBee NVR from the fnOS desktop icon goes through the fnOS unified gateway and logs you in automatically — no second password prompt. Direct access via `http://nas-ip:9090` still uses NVR's own login
+- **Code-free first-boot setup**: the setup wizard opened from the fnOS desktop icon arrives gateway-verified as an NAS admin and needs no setup code; only direct access via `http://nas-ip:9090` asks for one (see “General Configuration → First-boot Setup” for where to find it)
 - **Persistent data**: recordings, the database, and config live in the fnOS app-data directory and survive upgrades and reinstall
 - **Extra storage volumes**: authorize additional directories in the fnOS app settings to use them as secondary recording storage
 
@@ -199,6 +200,15 @@ services:
 ```
 
 ## General Configuration
+
+### First-boot Setup (Setup Code)
+
+When the container starts for the first time with no password configured, the NVR shows the initialization wizard (create the admin account). To keep a LAN peer from claiming the admin account first, the wizard asks for a one-time **setup code** (not needed when opened on the machine itself, from the fnOS desktop, or when a password was pre-set via the `NVR_PASSWORD` environment variable):
+
+- **Data-folder file (recommended)**: `setup-code.txt` in the data volume (the host directory mounted at `/data`) — open it in your file manager
+- **Container log**: `docker logs mibee-nvr 2>&1 | grep "setup code" | tail -1` (newest line; the code rotates after each container restart)
+
+`setup-code.txt` is deleted automatically once initialization completes.
 
 ### Environment Variable Reference
 

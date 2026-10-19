@@ -23,6 +23,18 @@
   let error = $state('');
   let loading = $state(false);
 
+  // fnOS desktop sessions arrive gateway-verified as NAS admin — the server
+  // exempts those from the first-boot code (#1032), so don't ask for one.
+  // Plain fetch (no auth header): the gateway claims any Authorization header
+  // as its own credential (#938), and /api/health is public anyway.
+  let gatewayAdmin = $state(false);
+  $effect(() => {
+    fetch(withBase('/api/health'), { headers: { Accept: 'application/json' } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h) => { if (h) gatewayAdmin = !!h.gateway_admin; })
+      .catch(() => {});
+  });
+
   let errors = $state({ username: '', password: '', confirmPassword: '' });
 
   // Browser capability detection
@@ -322,20 +334,23 @@
         <p class="th-text-tertiary text-xs mt-1">{t('setup.storagePathHint')}</p>
       </div>
 
-      <!-- Optional: first-boot setup code (#879, printed in the NVR terminal/log) -->
-      <div>
-        <label for="setup-code" class="input-label">{t('setup.setupCode')}</label>
-        <input
-          id="setup-code"
-          type="text"
-          class="input"
-          bind:value={setupCode}
-          placeholder="xxxxxxxx"
-          disabled={loading}
-          autocomplete="off"
-        />
-        <p class="th-text-tertiary text-xs mt-1">{t('setup.setupCodeHint')}</p>
-      </div>
+      <!-- Optional: first-boot setup code (#879, #1032 — hidden for
+           gateway-verified NAS admins, who are exempt server-side) -->
+      {#if !gatewayAdmin}
+        <div>
+          <label for="setup-code" class="input-label">{t('setup.setupCode')}</label>
+          <input
+            id="setup-code"
+            type="text"
+            class="input"
+            bind:value={setupCode}
+            placeholder="xxxxxxxx"
+            disabled={loading}
+            autocomplete="off"
+          />
+          <p class="th-text-tertiary text-xs mt-1">{t('setup.setupCodeHint')}</p>
+        </div>
+      {/if}
 
       <!-- Submit -->
       <button type="submit" class="btn btn-primary w-full" disabled={loading}>
