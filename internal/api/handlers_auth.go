@@ -96,11 +96,11 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGatewaySession(w http.ResponseWriter, r *http.Request) {
 	gi := middleware.GatewayIdentityFromContext(r.Context())
 	if gi == nil || !gi.Admin {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not available on this listener"})
+		WriteError(w, http.StatusUnauthorized, "not available on this listener")
 		return
 	}
 	if h.config == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no config"})
+		WriteError(w, http.StatusServiceUnavailable, "no config")
 		return
 	}
 	hash := h.config.Auth.PasswordHash

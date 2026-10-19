@@ -149,6 +149,42 @@ func TestHandler_BrowseMetadataItem(t *testing.T) {
 	require.Contains(t, rr.Body.String(), `<NumberReturned>1</NumberReturned>`)
 }
 
+// TestHandler_BrowseMetadataContainers covers the container metadata
+// branches (#1013): root, camera, and day objects each describe themselves
+// with the right parent and child count.
+func TestHandler_BrowseMetadataContainers(t *testing.T) {
+	f := setupDLNA(t)
+	h := f.srv.Handler()
+
+	// The DIDL payload is XML-escaped inside the SOAP Result element (&#34;
+	// for quotes), so assert on escaped fragments.
+	esc := func(v string) string { return strings.ReplaceAll(v, `"`, "&#34;") }
+
+	// Root: parent -1, one child per camera (2).
+	rr := doBrowse(t, h, "0", "BrowseMetadata", 0, 0)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), esc(`id="0"`))
+	require.Contains(t, rr.Body.String(), esc(`parentID="-1"`))
+	require.Contains(t, rr.Body.String(), esc(`childCount="2"`))
+
+	// Camera: cam-a has two recording days (10-15 and 10-14).
+	rr = doBrowse(t, h, "Acam-a", "BrowseMetadata", 0, 0)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), esc(`parentID="0"`))
+	require.Contains(t, rr.Body.String(), "Front Door")
+
+	// Day: 2026-10-15 under cam-a holds two recordings (compact date IDs).
+	rr = doBrowse(t, h, "Acam-aD20261015", "BrowseMetadata", 0, 0)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), esc(`parentID="Acam-a"`))
+	require.Contains(t, rr.Body.String(), "20261015")
+
+	// Audio-only cameras participate in the tree too.
+	rr = doBrowse(t, h, "Acam-b", "BrowseMetadata", 0, 0)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "Room Mic")
+}
+
 func TestHandler_BrowsePagination(t *testing.T) {
 	f := setupDLNA(t)
 	rr := doBrowse(t, f.srv.Handler(), "Acam-aD20261015", "BrowseDirectChildren", 0, 1)
