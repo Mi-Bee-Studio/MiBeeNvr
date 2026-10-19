@@ -1377,7 +1377,7 @@
   "setup.storagePath": "存储路径",
   "setup.storagePathHint": "录像文件的存储目录；留空则沿用服务端当前配置",
   "setup.setupCode": "设置校验码（可选）",
-  "setup.setupCodeHint": "首次启动时 NVR 终端/日志会打印一个校验码，在非本机浏览器完成设置时需要填入；本机访问无需填写",
+  "setup.setupCodeHint": "在 NVR 数据目录（Docker 部署即挂载的数据卷）的 setup-code.txt 文件中查看，或在 NVR 启动终端/容器日志中查看；本机访问无需填写",
   "setup.submit": "完成设置",
   "setup.submitting": "正在设置...",
   "setup.subtitle": "创建管理员账户以开始使用",

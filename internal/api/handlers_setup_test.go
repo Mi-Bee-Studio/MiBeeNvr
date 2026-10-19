@@ -306,3 +306,70 @@ func TestHandleSetup_FirstBootCodeLoopbackExempt(t *testing.T) {
 	h.handleSetup(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 }
+
+// TestHandleSetup_FirstBootCodeGatewayAdminExempt (#1032): a request that
+// arrived through the unified gateway with a verified ADMIN identity does not
+// need the code — the NAS already authenticated the operator, and the
+// identity context cannot be forged from the network (unix-socket listener
+// only). Non-admin gateway users still need it, mirroring the auth
+// middleware's own gateway bypass.
+func TestHandleSetup_FirstBootCodeGatewayAdminExempt(t *testing.T) {
+	t.Parallel()
+	post := func(admin bool) *httptest.ResponseRecorder {
+		// Fresh handler per case: the admin case completes setup, and the
+		// non-admin case must be judged on its own first-boot state.
+		h, _ := setupTestHandlerForSetup(t)
+		_, err := h.ArmFirstBootSetup()
+		require.NoError(t, err)
+		body, _ := json.Marshal(setupRequest{Username: "admin", Password: "testpassword123"})
+		req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(body))
+		req.RemoteAddr = "192.168.1.50:1234" // non-loopback: only the identity can exempt
+		req = req.WithContext(middleware.WithGatewayIdentity(req.Context(),
+			&middleware.GatewayIdentity{Username: "nasadmin", Admin: admin}))
+		rec := httptest.NewRecorder()
+		h.handleSetup(rec, req)
+		return rec
+	}
+
+	require.Equal(t, http.StatusOK, post(true).Code, "gateway-verified NAS admin completes setup without the code")
+	require.Equal(t, http.StatusForbidden, post(false).Code, "non-admin gateway identity still needs the code")
+}
+
+// TestSetupCodeFileLifecycle (#1032): the first-boot code is dropped next to
+// the config as setup-code.txt and deleted once setup completes.
+func TestSetupCodeFileLifecycle(t *testing.T) {
+	t.Parallel()
+	h, cfgPath := setupTestHandlerForSetup(t)
+	code, err := h.ArmFirstBootSetup()
+	require.NoError(t, err)
+
+	require.NoError(t, WriteFirstBootSetupCodeFile(cfgPath, code))
+	content, err := os.ReadFile(filepath.Join(filepath.Dir(cfgPath), "setup-code.txt"))
+	require.NoError(t, err)
+	require.Contains(t, string(content), code)
+
+	// Complete setup (loopback path) — the file must be gone.
+	body, _ := json.Marshal(setupRequest{Username: "admin", Password: "testpassword123"})
+	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Host = "localhost:9090"
+	rec := httptest.NewRecorder()
+	h.handleSetup(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	_, err = os.Stat(filepath.Join(filepath.Dir(cfgPath), "setup-code.txt"))
+	require.True(t, os.IsNotExist(err), "setup-code.txt must be removed after setup completes")
+
+	// Removing a missing file is a no-op (boot-time stale cleanup path).
+	RemoveFirstBootSetupCodeFile(cfgPath)
+}
+
+// TestSetupCodeRequiredMessage (#1032): the 403 hint names where the code
+// actually lives in the running deployment. (No t.Parallel — t.Setenv.)
+func TestSetupCodeRequiredMessage(t *testing.T) {
+	t.Setenv("NVR_DEPLOYMENT", "docker")
+	require.Contains(t, setupCodeRequiredMessage(), "setup-code.txt")
+	require.Contains(t, setupCodeRequiredMessage(), "docker logs")
+
+	t.Setenv("NVR_DEPLOYMENT", "")
+	require.Contains(t, setupCodeRequiredMessage(), "startup log/terminal")
+}
