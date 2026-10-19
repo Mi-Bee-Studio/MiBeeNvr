@@ -138,7 +138,7 @@ func TestTokenManager_Reenroll_PlatformDownSurfacesError(t *testing.T) {
 }
 
 // newFakeRefreshRejector：OIDC 端点把既有 refresh 一律判 invalid_grant
-//（模拟轮换链断裂），但 re-enroll 换发的新 refresh（refresh-reenroll）
+// （模拟轮换链断裂），但 re-enroll 换发的新 refresh（refresh-reenroll）
 // 有效——可断言「自愈后链条续上了」。
 func newFakeRefreshRejector(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

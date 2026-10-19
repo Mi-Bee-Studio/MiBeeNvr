@@ -68,7 +68,7 @@ type TokenManager struct {
 	minInterval time.Duration // 测试可缩；默认 30s 防锤
 
 	// re-enroll 自愈（设备身份专用，#27）：platformBase 为平台 HTTP 根
-	//（EnrollHTTPBase 同源推导）；deviceKey 惰性加载并缓存。
+	// （EnrollHTTPBase 同源推导）；deviceKey 惰性加载并缓存。
 	reenrollBase string
 	productID    string
 	deviceID     string
@@ -137,7 +137,7 @@ func (t *TokenManager) Mint(ctx context.Context) (string, error) {
 
 	// 设备身份（无 password 凭据）：re-enroll 自愈（#27）——覆盖两条
 	// 死路：①轮换链断裂（refresh invalid_grant）；②state 丢失/损坏
-	//（此前直落空密码 password grant，即 M5 连打 3 天 400 的根因）。
+	// （此前直落空密码 password grant，即 M5 连打 3 天 400 的根因）。
 	// 平台挑战签名换发新链；未配置设备密钥才宣告链死。服务账号模式
 	// 回退 password grant。
 	if t.username == "" || t.password == "" {
@@ -192,7 +192,7 @@ func (t *TokenManager) grant(ctx context.Context, form url.Values) (*tokenRespon
 
 // SetReenroll 配置设备身份的 re-enroll 自愈参数（#27）。platformBase 为
 // 平台 HTTP 根（EnrollHTTPBase 同源）；keyPath 指向 Ed25519 私钥文件
-//（32B seed 或 64B 全钥，与 SDK DeviceKeyPath 同格式）。logger 可为 nil。
+// （32B seed 或 64B 全钥，与 SDK DeviceKeyPath 同格式）。logger 可为 nil。
 func (t *TokenManager) SetReenroll(platformBase, productID, deviceID, keyPath string, logger *slog.Logger) {
 	t.reenrollBase = strings.TrimRight(platformBase, "/")
 	t.productID = productID
@@ -207,7 +207,7 @@ func (t *TokenManager) reenrollConfigured() bool {
 
 // reenrollGrant 走平台两步 re-enroll：init 取挑战 → Ed25519 签名
 // "mibee-re-enroll:v1:<product>:<device>:<challenge>" → 换发 token 对
-//（mibee-oidc device_issue，服务端 6 次/小时限速）。失败原样上抛，
+// （mibee-oidc device_issue，服务端 6 次/小时限速）。失败原样上抛，
 // 由 [minMintInterval] 节流后续重试。
 func (t *TokenManager) reenrollGrant(ctx context.Context) (*tokenResponse, error) {
 	key := t.loadDeviceKey()
