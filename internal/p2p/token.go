@@ -5,6 +5,8 @@ package p2p
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +47,8 @@ func isDeviceIdentity(username, password string) bool {
 //
 //	冷启动 → refresh grant（轮换式，7 天 TTL）
 //	        ↘ invalid_grant → password grant（配置文件凭据）
+//	                        ↘ 设备身份（无密码）→ re-enroll（Ed25519 挑战，
+//	                          平台代理签发 device_issue，#27 自愈）
 //
 // refresh token 持久化到 state 文件（0600，与 config 同目录），重启后
 // 链条不断。**失败绝不自动重试**——单次 Mint = 单次 HTTP 尝试，且两次
@@ -62,6 +66,16 @@ type TokenManager struct {
 	stateWarned bool // loadState 对同一损坏周期只告警一次（#6）
 	httpClient  *http.Client
 	minInterval time.Duration // 测试可缩；默认 30s 防锤
+
+	// re-enroll 自愈（设备身份专用，#27）：platformBase 为平台 HTTP 根
+	//（EnrollHTTPBase 同源推导）；deviceKey 惰性加载并缓存。
+	reenrollBase string
+	productID    string
+	deviceID     string
+	keyPath      string
+	deviceKey    ed25519.PrivateKey
+	keyErr       error
+	logger       *slog.Logger
 }
 
 type tokenResponse struct {
@@ -116,14 +130,26 @@ func (t *TokenManager) Mint(ctx context.Context) (string, error) {
 			t.storeRefresh(resp.RefreshToken)
 			return resp.AccessToken, nil
 		}
-		// refresh 失效（invalid_grant 等）。设备身份模式（无 password 凭据）
-		// 不可回退——链条死亡即需用户重新绑定；服务账号模式回退 password
-		// grant。
+		// refresh 失效（invalid_grant 等）：链断，走下方身份分流。
 		t.refresh = ""
 		t.removeState()
-		if t.username == "" || t.password == "" {
-			return "", ErrRebindNeeded
+	}
+
+	// 设备身份（无 password 凭据）：re-enroll 自愈（#27）——覆盖两条
+	// 死路：①轮换链断裂（refresh invalid_grant）；②state 丢失/损坏
+	//（此前直落空密码 password grant，即 M5 连打 3 天 400 的根因）。
+	// 平台挑战签名换发新链；未配置设备密钥才宣告链死。服务账号模式
+	// 回退 password grant。
+	if t.username == "" || t.password == "" {
+		if t.reenrollConfigured() {
+			resp, err := t.reenrollGrant(ctx)
+			if err != nil {
+				return "", fmt.Errorf("re-enroll: %w", err)
+			}
+			t.storeRefresh(resp.RefreshToken)
+			return resp.AccessToken, nil
 		}
+		return "", ErrRebindNeeded
 	}
 
 	resp, err := t.grant(ctx, url.Values{
@@ -162,6 +188,74 @@ func (t *TokenManager) grant(ctx context.Context, form url.Values) (*tokenRespon
 			tr.ErrorOr("no access_token"))
 	}
 	return &tr, nil
+}
+
+// SetReenroll 配置设备身份的 re-enroll 自愈参数（#27）。platformBase 为
+// 平台 HTTP 根（EnrollHTTPBase 同源）；keyPath 指向 Ed25519 私钥文件
+//（32B seed 或 64B 全钥，与 SDK DeviceKeyPath 同格式）。logger 可为 nil。
+func (t *TokenManager) SetReenroll(platformBase, productID, deviceID, keyPath string, logger *slog.Logger) {
+	t.reenrollBase = strings.TrimRight(platformBase, "/")
+	t.productID = productID
+	t.deviceID = deviceID
+	t.keyPath = keyPath
+	t.logger = logger
+}
+
+func (t *TokenManager) reenrollConfigured() bool {
+	return t.reenrollBase != "" && t.productID != "" && t.deviceID != "" && t.keyPath != ""
+}
+
+// reenrollGrant 走平台两步 re-enroll：init 取挑战 → Ed25519 签名
+// "mibee-re-enroll:v1:<product>:<device>:<challenge>" → 换发 token 对
+//（mibee-oidc device_issue，服务端 6 次/小时限速）。失败原样上抛，
+// 由 [minMintInterval] 节流后续重试。
+func (t *TokenManager) reenrollGrant(ctx context.Context) (*tokenResponse, error) {
+	key := t.loadDeviceKey()
+	if key == nil {
+		return nil, fmt.Errorf("device key unavailable: %w", t.keyErr)
+	}
+
+	var initResp struct {
+		Challenge string `json:"challenge"`
+	}
+	if err := postJSON(ctx, t.httpClient, t.reenrollBase+"/device/re-enroll/init",
+		map[string]string{"product_id": t.productID, "device_id": t.deviceID},
+		&initResp, nil, nil); err != nil {
+		return nil, fmt.Errorf("init: %w", err)
+	}
+	if initResp.Challenge == "" {
+		return nil, errors.New("init: no challenge")
+	}
+
+	msg := "mibee-re-enroll:v1:" + t.productID + ":" + t.deviceID + ":" + initResp.Challenge
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(key, []byte(msg)))
+
+	var tr tokenResponse
+	if err := postJSON(ctx, t.httpClient, t.reenrollBase+"/device/re-enroll", map[string]string{
+		"product_id": t.productID,
+		"device_id":  t.deviceID,
+		"challenge":  initResp.Challenge,
+		"signature":  sig,
+	}, &tr, nil, nil); err != nil {
+		return nil, fmt.Errorf("issue: %w", err)
+	}
+	if tr.AccessToken == "" {
+		return nil, errors.New("issue: no access_token")
+	}
+	return &tr, nil
+}
+
+func (t *TokenManager) loadDeviceKey() ed25519.PrivateKey {
+	if t.deviceKey != nil || t.keyErr != nil {
+		return t.deviceKey
+	}
+	key, err := LoadOrCreateDeviceKey(t.keyPath)
+	if err != nil {
+		t.keyErr = err
+		return nil
+	}
+	t.deviceKey = key
+	return key
 }
 
 func (r *tokenResponse) ErrorOr(fallback string) string {

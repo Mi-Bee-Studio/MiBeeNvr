@@ -242,10 +242,17 @@ func New(cfg config.P2PConfig, localAddr, tokenStatePath string, logger *slog.Lo
 	if endpoint == "" {
 		endpoint = DeriveTokenEndpoint(cfg.ServerURL)
 	}
+	tokens := NewTokenManager(endpoint, cfg.ClientID, cfg.Username, cfg.Password, tokenStatePath)
+	// 设备身份（无密码）+ 已配设备密钥 → 启用 re-enroll 自愈（#27：
+	// refresh 轮换链断裂后经平台挑战签名换发新链，不再需要人工重绑）。
+	if cfg.DeviceKeyPath != "" && cfg.Username != "" && cfg.Password == "" {
+		tokens.SetReenroll(EnrollHTTPBase(cfg.ServerURL), cfg.ProductID, cfg.PeerID,
+			cfg.DeviceKeyPath, logger)
+	}
 	return &Manager{
 		cfg:       cfg,
 		localAddr: localAddr,
-		tokens:    NewTokenManager(endpoint, cfg.ClientID, cfg.Username, cfg.Password, tokenStatePath),
+		tokens:    tokens,
 		logger:    logger.With("component", "p2p"),
 		gate:      gate,
 		relay:     newRelayBreaker(),
