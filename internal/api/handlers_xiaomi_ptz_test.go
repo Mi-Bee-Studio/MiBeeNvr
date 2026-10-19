@@ -279,3 +279,43 @@ type testMISSAddr struct{}
 
 func (a *testMISSAddr) Network() string { return "tcp" }
 func (a *testMISSAddr) String() string  { return "127.0.0.1:1234" }
+
+// 断连相机的 PTZ 统一端点应答 503（依赖不可用）而非 500（mibeescout#40）：
+// recorder 在册但内部 MISS 连接未建立（reconnecting 态）是运行态，不是服务端缺陷。
+func TestXiaomiPTZMoveNotConnectedReturns503(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	ctx := t.Context()
+	require.NoError(t, db.UpsertCamera(ctx, "xiaomi-cam", "Xiaomi Camera", "xiaomi", "", "xiaomi://12345", "", "", "", "", "", ""))
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{RootDir: store.RootDir(), SegmentDuration: "30s"},
+		Cleanup: config.CleanupConfig{RetentionDays: 30, CheckInterval: "1h", DiskThresholdPercent: 95},
+		Cameras: []config.CameraConfig{},
+	}
+	camMgr := camera.NewCameraManager(cfg, store, db, "")
+	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil, nil, nil, nil, nil)
+
+	// recorder 在册、不挂 mock 客户端——missClient 为 nil，即
+	//「注册了但连接未建立」的 reconnecting 态。
+	rec := xiaomi.NewXiaomiRecorder(xiaomi.XiaomiRecorderConfig{
+		CameraID: "xiaomi-cam",
+		DID:      "12345",
+	}, store)
+	camMgr.SetTestRecorder("xiaomi-cam", rec)
+
+	body := `{"mode":"continuous","pan":0.3,"tilt":0,"zoom":0}`
+	req := httptest.NewRequest(http.MethodPost, "/api/cameras/xiaomi-cam/ptz/move", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
+
+	// 旧端点 /xiaomi/ptz/move 同语义。
+	body2 := `{"direction":"left","speed":5}`
+	req2 := httptest.NewRequest(http.MethodPost, "/api/cameras/xiaomi-cam/xiaomi/ptz/move", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusServiceUnavailable, w2.Code, "body=%s", w2.Body.String())
+}

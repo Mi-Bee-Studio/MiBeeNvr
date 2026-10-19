@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -32,6 +33,11 @@ import (
 )
 
 var xiaomiLogger = slogx.Component("xiaomi-recorder")
+
+// ErrNotConnected marks a recorder whose control-plane client is not
+// established (reconnecting/idle). Callers map it to 503 — a runtime state,
+// not a server defect.
+var ErrNotConnected = errors.New("xiaomi recorder not connected")
 
 // SegmentStore abstracts storage operations needed by the recorder.
 type SegmentStore interface {
@@ -1546,7 +1552,7 @@ func (r *XiaomiRecorder) MotorControl(direction string, speed int) error {
 	client := r.missClient
 	r.missMu.Unlock()
 	if client == nil {
-		return fmt.Errorf("xiaomi recorder not connected")
+		return ErrNotConnected
 	}
 	return client.MotorControl(direction, speed)
 }
@@ -1558,7 +1564,7 @@ func (r *XiaomiRecorder) GetDeviceInfo() (map[string]interface{}, error) {
 	client := r.missClient
 	r.missMu.Unlock()
 	if client == nil {
-		return nil, fmt.Errorf("xiaomi recorder not connected")
+		return nil, ErrNotConnected
 	}
 	return client.GetDeviceInfo()
 }
@@ -1571,7 +1577,7 @@ func (r *XiaomiRecorder) StartTwoWayAudio() error {
 	client := r.missClient
 	r.missMu.Unlock()
 	if client == nil {
-		return fmt.Errorf("xiaomi recorder not connected")
+		return ErrNotConnected
 	}
 	return client.StartSpeaker()
 }
@@ -1582,7 +1588,7 @@ func (r *XiaomiRecorder) StopTwoWayAudio() error {
 	client := r.missClient
 	r.missMu.Unlock()
 	if client == nil {
-		return fmt.Errorf("xiaomi recorder not connected")
+		return ErrNotConnected
 	}
 	return client.wirePacket(missCmdSpeakerStop, nil)
 }
@@ -1607,7 +1613,7 @@ func (r *XiaomiRecorder) WriteAudioToCamera(codecID uint32, payload []byte) erro
 	client := r.missClient
 	r.missMu.Unlock()
 	if client == nil {
-		return fmt.Errorf("xiaomi recorder not connected")
+		return ErrNotConnected
 	}
 	return client.WriteAudio(codecID, payload)
 }
