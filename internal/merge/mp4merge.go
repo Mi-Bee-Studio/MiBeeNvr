@@ -267,7 +267,7 @@ func MergeMP4Segments(ctx context.Context, segments []*SegmentInfo, outputPath s
 	}
 	defer out.Close()
 
-	videoTrack, audioTrack, moovSize, err := budgetMoovSize(codec, segments, hasAudio)
+	videoTrack, audioTrack, moovSize, err := budgetMoovSize(codec, segments, hasAudio, frameDur)
 	if err != nil {
 		return stats, err
 	}
@@ -394,6 +394,37 @@ func validateMergeInputs(segments []*SegmentInfo) (codec string, hasAudio bool, 
 	return codec, hasAudio, nil
 }
 
+// predictSpanTimeline dry-runs the video pass's dwell-compression math on the
+// sample table alone (no media I/O) to predict a segment's wall→file timeline.
+// The ambient-audio bed sizes its output from the compressed (file) length,
+// which on mildly-compressed spans exceeds the parsed audio sample count — the
+// moov budget needs that prediction up front (#1024).
+func predictSpanTimeline(seg *SegmentInfo, frameDur []time.Duration) (wallSec, fileSec float64) {
+	ts := float64(seg.Timescale)
+	if ts == 0 {
+		return 0, 0
+	}
+	cadence := TimelapseFrameDur
+	if len(frameDur) > 0 && frameDur[0] > 0 {
+		cadence = frameDur[0]
+	}
+	gap := TimelapseGapThreshold
+	if len(frameDur) > 1 && frameDur[1] > 0 {
+		gap = frameDur[1]
+	}
+	gapTicks := float64(seg.Timescale) * gap.Seconds()
+	frameTicks := uint32(float64(seg.Timescale) * cadence.Seconds())
+	for _, s := range seg.Samples {
+		dur := s.Duration
+		if float64(dur) > gapTicks {
+			dur = frameTicks
+		}
+		wallSec += float64(s.Duration) / ts
+		fileSec += float64(dur) / ts
+	}
+	return wallSec, fileSec
+}
+
 // budgetMoovSize builds placeholder tracks (uniform durations, every sample
 // flagged keyframe — worst-case stss so the reserved moov always fits the real
 // pass) and measures the moov they would produce, plus per-sample stts
@@ -401,7 +432,7 @@ func validateMergeInputs(segments []*SegmentInfo) (codec string, hasAudio bool, 
 // runs through countWriter — nothing is retained (#1011 debt 3: this pass
 // used to buffer the whole placeholder moov, a retention of the same order
 // as the moov itself).
-func budgetMoovSize(codec string, segments []*SegmentInfo, hasAudio bool) (videoTrack *mergeTrack, audioTrack *mergeTrack, moovSize int64, err error) {
+func budgetMoovSize(codec string, segments []*SegmentInfo, hasAudio bool, frameDur []time.Duration) (videoTrack *mergeTrack, audioTrack *mergeTrack, moovSize int64, err error) {
 	first := segments[0]
 
 	// Count total video samples across all segments.
@@ -445,7 +476,22 @@ func budgetMoovSize(codec string, segments []*SegmentInfo, hasAudio bool) (video
 	if hasAudio {
 		var totalAudioSamples int
 		for _, seg := range segments {
-			totalAudioSamples += seg.AudioSampleCount
+			count := seg.AudioSampleCount
+			// Ambient-bed reservation (#1024): a compressed G.711 span renders
+			// one audio sample per output byte (nOut, derived from the
+			// compressed file timeline) instead of its parsed samples — on
+			// mildly-compressed spans nOut exceeds the parsed count, so reserve
+			// the larger of the two. Non-G.711 compressed spans drop their
+			// audio entirely (over-reservation is harmless).
+			if seg.AudioCodec == "g711" && len(seg.AudioSamples) > 0 {
+				wall, file := predictSpanTimeline(seg, frameDur)
+				if wall > 0 && file > 0 && wall > 1.5*file {
+					if nOut := int(file*float64(seg.AudioTimescale) + 0.5); nOut > count {
+						count = nOut
+					}
+				}
+			}
+			totalAudioSamples += count
 		}
 		audioTrack = &mergeTrack{
 			isAudio:      true,

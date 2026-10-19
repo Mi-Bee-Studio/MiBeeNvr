@@ -308,3 +308,53 @@ func TestMergeMP4Segments_CompressedG711SpanAmbientBed(t *testing.T) {
 	require.Equal(t, "g711", out.AudioCodec)
 	require.Equal(t, nOut, out.AudioSampleCount, "one audio sample per ambient byte")
 }
+
+// TestMergeMP4Segments_MildCompressionAmbientBedOverflow pins #1024: at mild
+// compression ratios the ambient bed's output (one sample per byte of the
+// compressed span) far exceeds the parsed audio sample count, and the moov
+// budget — reserved from the parsed count — overflows with "write moov: EOF"
+// unless the budget phase predicts the ambient count. 60s wall → 2×18s file
+// (1.67×) puts nOut ~12× the parsed samples.
+func TestMergeMP4Segments_MildCompressionAmbientBedOverflow(t *testing.T) {
+	dir := t.TempDir()
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+
+	path := filepath.Join(dir, "mild_g711.mp4")
+	m := muxer.NewMP4Muxer(path)
+	videoTrackID, err := m.AddH264Track(sps, pps)
+	require.NoError(t, err)
+	audioTrackID, err := m.AddAudioTrack("g711", []byte{1, 0x00, 0x00, 0x1F, 0x40})
+	require.NoError(t, err)
+	// Two 30s keyframe dwells → wall 60s; a 18s cadence compresses each dwell
+	// to 18s → file 36s (ratio 1.67× > the 1.5× compressed-span threshold).
+	require.NoError(t, m.WriteSample(videoTrackID, idr, 0, 30*time.Second))
+	require.NoError(t, m.WriteSample(videoTrackID, idr, 30*time.Second, 30*time.Second))
+	frame := make([]byte, 160)
+	for i := range frame {
+		frame[i] = byte(i%2*40 + 60)
+	}
+	var apts time.Duration
+	for range 150 {
+		require.NoError(t, m.WriteAudioSample(audioTrackID, frame, apts, 20*time.Millisecond))
+		apts += 20 * time.Millisecond
+	}
+	require.NoError(t, m.Close())
+
+	info, err := ParseSegment(path)
+	require.NoError(t, err)
+
+	outPath := filepath.Join(dir, "out_mild.mp4")
+	stats, err := MergeMP4Segments(context.Background(), []*SegmentInfo{info}, outPath, 18*time.Second)
+	require.NoError(t, err, "mildly-compressed ambient span must not overflow the moov budget (#1024)")
+	require.Equal(t, 2, stats.TimelapseFrames)
+	nOut := int(36*float64(info.AudioTimescale) + 0.5)
+	require.Equal(t, nOut, stats.AmbientSamples)
+	require.Greater(t, nOut, info.AudioSampleCount, "fixture must sit in the overflow regime (nOut > parsed samples)")
+
+	out, err := ParseSegment(outPath)
+	require.NoError(t, err)
+	require.True(t, out.HasAudio)
+	require.Equal(t, nOut, out.AudioSampleCount, "one audio sample per ambient byte")
+}
