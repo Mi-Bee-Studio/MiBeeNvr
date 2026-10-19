@@ -22,7 +22,12 @@ package merge
 // The G.711 codec tables follow the ITU-T reference (Sun ulaw2linear /
 // alaw2linear form and their inverses).
 
-import "math"
+import (
+	"context"
+	"fmt"
+	"io"
+	"math"
+)
 
 func g711DecodeMuLaw(u byte) int16 {
 	u = ^u
@@ -124,14 +129,7 @@ func mixdownAmbient(muLaw bool, in []byte, nOut int) []byte {
 	// RMS envelope per output sample over its proportional input window.
 	env := make([]float64, nOut)
 	for j := range nOut {
-		lo := j * len(in) / nOut
-		hi := (j + 1) * len(in) / nOut
-		if hi <= lo {
-			hi = lo + 1
-		}
-		if hi > len(in) {
-			hi = len(in)
-		}
+		lo, hi := ambientWindowBounds(int64(len(in)), nOut, j)
 		var sumSq float64
 		for _, b := range in[lo:hi] {
 			var v int16
@@ -178,4 +176,209 @@ func mixdownAmbient(muLaw bool, in []byte, nOut int) []byte {
 		}
 	}
 	return out
+}
+
+// ambientWindowBounds returns the input window [lo,hi) whose RMS becomes
+// output sample j — the single definition of the window arithmetic, shared by
+// mixdownAmbient (in-memory reference) and writeAmbientBed (streaming merge
+// path) so the two cannot drift. Same integer math the original
+// mixdownAmbient inlined (j*len/nOut with the min-1-byte and tail clamps).
+func ambientWindowBounds(totalIn int64, nOut, j int) (lo, hi int64) {
+	lo = int64(j) * totalIn / int64(nOut)
+	hi = (int64(j) + 1) * totalIn / int64(nOut)
+	if hi <= lo {
+		hi = lo + 1
+	}
+	if hi > totalIn {
+		hi = totalIn
+	}
+	return lo, hi
+}
+
+// ambientScratchSize is the fixed chunk size for the streaming ambient
+// mixdown's file reads and encoded-output writes (#1011 debt 2).
+const ambientScratchSize = 64 << 10
+
+// ambientSpanReader walks the virtual concatenation of a segment's audio
+// samples (sample k's bytes immediately followed by sample k+1's) straight
+// from the source file — no span bytes are retained (#1011 debt 2: the merge
+// ambient pass used to buffer a whole compressed span's G.711 track before
+// mixdown, ~4.8MB per 10-minute wall span and linear in wall time).
+type ambientSpanReader struct {
+	src   io.ReaderAt
+	spans []SampleEntry
+	base  int64 // virtual offset where spans[idx] starts
+	idx   int   // span holding the next window's start; window starts never
+	// move backward, so this cursor is monotone
+}
+
+// readVirtual consumes the virtual byte range [vlo,vhi) in chunks of at most
+// len(buf), calling consume for each chunk. A chunk never crosses a sample's
+// file extent, so the chunking is invisible to the decoder. Reads map back to
+// per-sample file offsets via ReadAt.
+func (r *ambientSpanReader) readVirtual(ctx context.Context, vlo, vhi int64, buf []byte, consume func([]byte) error) error {
+	// Advance the window-start cursor to the span containing vlo.
+	for r.idx < len(r.spans) && r.base+int64(r.spans[r.idx].Size) <= vlo {
+		r.base += int64(r.spans[r.idx].Size)
+		r.idx++
+	}
+	idx, base := r.idx, r.base
+	pos := vlo
+	for pos < vhi {
+		if idx >= len(r.spans) {
+			return fmt.Errorf("ambient window [%d,%d) beyond audio spans at virtual offset %d", vlo, vhi, pos)
+		}
+		spanEnd := base + int64(r.spans[idx].Size)
+		end := spanEnd
+		if vhi < end {
+			end = vhi
+		}
+		if end <= pos {
+			// Zero-size span — skip it.
+			idx++
+			base = spanEnd
+			continue
+		}
+		n := int(end - pos)
+		if n > len(buf) {
+			n = len(buf)
+		}
+		fileOff := r.spans[idx].Offset + (pos - base)
+		if _, err := r.src.ReadAt(buf[:n], fileOff); err != nil {
+			return fmt.Errorf("read %d audio bytes at offset %d: %w", n, fileOff, err)
+		}
+		if err := waitIOBudget(ctx, int64(n)); err != nil {
+			return err
+		}
+		if err := consume(buf[:n]); err != nil {
+			return err
+		}
+		pos += int64(n)
+		if pos >= spanEnd {
+			idx++
+			base = spanEnd
+		}
+	}
+	return nil
+}
+
+// ambientWindowRMS decodes the G.711 window [lo,hi) and returns its RMS — the
+// exact float64 op sequence mixdownAmbient applies per window, so the
+// streaming and in-memory paths produce bit-identical envelopes.
+func ambientWindowRMS(ctx context.Context, r *ambientSpanReader, muLaw bool, lo, hi int64, buf []byte) (float64, error) {
+	var sumSq float64
+	err := r.readVirtual(ctx, lo, hi, buf, func(chunk []byte) error {
+		if muLaw {
+			for _, b := range chunk {
+				v := g711DecodeMuLaw(b)
+				sumSq += float64(v) * float64(v)
+			}
+		} else {
+			for _, b := range chunk {
+				v := g711DecodeALaw(b)
+				sumSq += float64(v) * float64(v)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return math.Sqrt(sumSq / float64(hi-lo)), nil
+}
+
+// writeAmbientBed renders one compressed span's ambient bed directly from the
+// segment file — the streaming form of mixdownAmbient (#1011 debt 2). It is
+// byte-identical to assembling the span's audio in memory and calling
+// mixdownAmbient: same window arithmetic (ambientWindowBounds), same float64
+// op order, same LCG carrier, same per-window op sequence.
+//
+// Why two passes over the span's bytes instead of holding the envelope: the
+// normalize step needs the envelope's GLOBAL RMS before the first output
+// sample can be rendered, so at least the envelope (or the input) must be
+// retained across that boundary. Retaining the input is what the old code did
+// — linear in wall time. Retaining a float64 env array is 8 B × nOut, which
+// at mild compression ratios (just above the 1.5× compressed-span threshold,
+// where nOut ≈ inputSize/1.5) would EXCEED the very input it replaced — a
+// regression for exactly those spans. Instead both phases recompute windows
+// on the fly: retention drops to two 64KB scratch buffers, at the cost of
+// reading (page-cache-warm) span bytes twice. Total I/O budget billing is
+// unchanged (billed per byte read).
+//
+// Returns the number of bed bytes written (== nOut); 0 means no bed (empty
+// audio or nOut <= 0, mirroring mixdownAmbient's nil result).
+func writeAmbientBed(ctx context.Context, src io.ReaderAt, seg *SegmentInfo, nOut int, out io.Writer) (int, error) {
+	var totalIn int64
+	for _, s := range seg.AudioSamples {
+		totalIn += int64(s.Size)
+	}
+	if totalIn == 0 || nOut <= 0 {
+		return 0, nil
+	}
+	muLaw := seg.G711MULaw
+	readBuf := make([]byte, ambientScratchSize)
+
+	// Pass 1: per-window RMS envelope's global mean-square (normalization).
+	r1 := &ambientSpanReader{src: src, spans: seg.AudioSamples}
+	var ms float64
+	for j := range nOut {
+		lo, hi := ambientWindowBounds(totalIn, nOut, j)
+		envJ, err := ambientWindowRMS(ctx, r1, muLaw, lo, hi, readBuf)
+		if err != nil {
+			return 0, err
+		}
+		ms += envJ * envJ
+	}
+	rms := math.Sqrt(ms / float64(nOut))
+	var scale float64
+	if rms > 1e-6 {
+		scale = ambientGain / rms
+	}
+
+	// Pass 2: recompute each window, modulate the low-passed noise carrier,
+	// and write the encoded bed in fixed chunks.
+	r2 := &ambientSpanReader{src: src, spans: seg.AudioSamples}
+	enc := make([]byte, ambientScratchSize)
+	encLen := 0
+	const carrierTap = 8 // moving average ≈ 1kHz at 8k sample rate
+	var seed uint32 = 0x9E3779B9
+	var noise, lp float64
+	for j := range nOut {
+		lo, hi := ambientWindowBounds(totalIn, nOut, j)
+		envJ, err := ambientWindowRMS(ctx, r2, muLaw, lo, hi, readBuf)
+		if err != nil {
+			return 0, err
+		}
+		if rms > 1e-6 {
+			envJ *= scale
+		}
+		seed = seed*1664525 + 1013904223
+		// uniform (−1,1): full int32 range over 2^31
+		noise = float64(int32(seed)) / 2147483648.0
+		lp += (noise - lp) / carrierTap
+		s := envJ * lp
+		if s > 32767 {
+			s = 32767
+		} else if s < -32768 {
+			s = -32768
+		}
+		if muLaw {
+			enc[encLen] = g711EncodeMuLaw(int16(s))
+		} else {
+			enc[encLen] = g711EncodeALaw(int16(s))
+		}
+		encLen++
+		if encLen == len(enc) {
+			if _, err := out.Write(enc[:encLen]); err != nil {
+				return 0, err
+			}
+			encLen = 0
+		}
+	}
+	if encLen > 0 {
+		if _, err := out.Write(enc[:encLen]); err != nil {
+			return 0, err
+		}
+	}
+	return nOut, nil
 }

@@ -20,16 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIsTimelapseFrame(t *testing.T) {
-	t.Parallel()
-	for name, want := range map[string]bool{
-		"frame_1.jpg": true, "f2.jpeg": true, "seg.h264": true, "seg.h265": true,
-		"notes.txt": false, "plan.mp4": false, "frame.PNG": false,
-	} {
-		require.Equal(t, want, isTimelapseFrame(name), name)
-	}
-}
-
 func TestParseDateParts(t *testing.T) {
 	t.Parallel()
 	y, m, d, err := parseDateParts("2026-08-20")

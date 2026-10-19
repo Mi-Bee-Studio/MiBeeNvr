@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -346,126 +347,18 @@ func (h *Handler) handleTimelapseList(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleTimelapseMerge(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
-	// Dedup: prevent concurrent merges for the same camera
-	_, loaded := h.activeMerges.LoadOrStore(cameraID, struct{}{})
-	if loaded {
-		WriteError(w, http.StatusConflict, "a merge is already in progress for this camera")
-		return
-	}
-
-	// Parse optional duration query param for custom merge windows.
-	// Default to "natural-day" (24h, midnight-aligned) when not specified.
+	// Optional duration query param for custom merge windows. Default to
+	// "natural-day" (24h, midnight-aligned) when not specified.
 	durationStr := r.URL.Query().Get("duration")
 	if durationStr == "" {
 		durationStr = "natural-day"
 	}
-	h.handleTimelapseMergeWithDuration(w, r, cameraID, durationStr)
-}
 
-// handleTimelapseMergeWithDuration handles merge with a custom duration.
-func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *http.Request, cameraID, durationStr string) {
-	dur, err := config.ParseMergeDuration(durationStr)
+	refTime, err := h.tlTrigger.Trigger(cameraID, durationStr, r.URL.Query().Get("date"))
 	if err != nil {
-		h.activeMerges.Delete(cameraID)
-		WriteError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+		writeTLTriggerError(w, err)
 		return
 	}
-	if h.db == nil {
-		h.activeMerges.Delete(cameraID)
-		WriteError(w, http.StatusInternalServerError, "database not available")
-		return
-	}
-	if h.config == nil {
-		h.activeMerges.Delete(cameraID)
-		WriteError(w, http.StatusInternalServerError, "config not available")
-		return
-	}
-
-	fps := 10
-	retainMP4 := false
-	for i := range h.config.Cameras {
-		if h.config.Cameras[i].ID == cameraID && h.config.Cameras[i].Timelapse != nil {
-			if h.config.Cameras[i].Timelapse.MergeOutputFPS > 0 {
-				fps = h.config.Cameras[i].Timelapse.MergeOutputFPS
-			}
-			retainMP4 = h.config.Cameras[i].Timelapse.RetainIntermediateMP4Value()
-			break
-		}
-	}
-
-	// Load display timezone. "Local" (the config default) means use the
-	// server's local timezone — time.LoadLocation("Local") fails, so handle
-	// it explicitly via time.Local. Without this, the merge window is
-	// computed in UTC and natural-day merges return "no segments found"
-	// because the window misses the camera's local-day segments.
-	loc := time.UTC
-	switch {
-	case h.config.Timezone == "" || h.config.Timezone == "UTC":
-		// keep UTC
-	case h.config.Timezone == "Local":
-		loc = time.Local
-	default:
-		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
-			loc = l
-		}
-	}
-
-	dataDir := filepath.Join(h.config.Storage.RootDir, "periodic-merge")
-
-	// Parse date or use current time as reference in the configured timezone
-	dateStr := r.URL.Query().Get("date")
-	refTime := time.Now().In(loc)
-	if dateStr != "" {
-		parsed, err := time.ParseInLocation("2006-01-02", dateStr, loc)
-		if err == nil {
-			refTime = parsed
-		}
-	}
-
-	// Create PeriodicMergeManager with the specified duration. Wire the merge
-	// store so the output is discoverable via /api/timelapse/merges, and the
-	// recording-enabled provider so recording_enabled=true cameras include
-	// video frames in the merge (parity with the scheduled path in run.go).
-	// Also wire the intermediate-.mp4 pruner so manual merges reclaim the
-	// same disk the scheduled path does.
-	mgr := timelapse.NewPeriodicMergeManager(
-		h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
-		timelapse.WithMergeStore(h.db),
-		timelapse.WithDurationLabel(durationStr),
-		timelapse.WithRecordingEnabledProvider(func(cameraID string) bool {
-			if h.camMgr == nil {
-				return true
-			}
-			cam := h.camMgr.GetCameraConfig(cameraID)
-			if cam == nil {
-				return true
-			}
-			return h.config.RecordingGate(cam.RecordingEnabled)
-		}),
-		timelapse.WithRetainIntermediateMP4(retainMP4),
-		timelapse.WithIntermediateMP4Pruner(h.db),
-		timelapse.WithExtractionInterval(h.timelapseExtractionInterval(cameraID)),
-		timelapse.WithDeleteRecordingsAfterMerge(h.timelapseDeleteAfterMerge(cameraID)),
-	)
-	mgr.SetSourceRecordingDeleter(h.timelapseSourceDeleter)
-
-	// Run the merge on a Handler-tracked goroutine (mergeWg + mergeCtx) so
-	// Handler.Close can cancel + join it during shutdown. Previously this used
-	// an untracked goroutine with context.Background(), which leaked past
-	// App.Stop / t.TempDir cleanup — root cause of the #143 TempDir flake.
-	launched := h.startMergeGoroutine(func(ctx context.Context) {
-		defer h.activeMerges.Delete(cameraID)
-		if err := mgr.Run(ctx, cameraID, refTime); err != nil {
-			logger.Warn("timelapse merge failed", "camera_id", cameraID, "duration", durationStr, "error", err)
-		}
-	})
-	if !launched {
-		// Handler is shutting down — release the dedup slot and 409-style reject.
-		h.activeMerges.Delete(cameraID)
-		WriteError(w, http.StatusServiceUnavailable, "server is shutting down")
-		return
-	}
-
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":    "merge_initiated",
 		"camera_id": cameraID,
@@ -474,8 +367,26 @@ func (h *Handler) handleTimelapseMergeWithDuration(w http.ResponseWriter, r *htt
 	})
 }
 
-// handleTimelapsePause handles POST /api/timelapse/{id}/pause.
-// Pauses timelapse recording for a camera.
+// writeTLTriggerError maps ManualTrigger errors onto the coded-error track
+// (#1009 batch 3).
+func writeTLTriggerError(w http.ResponseWriter, err error) {
+	var (
+		active *timelapse.MergeAlreadyActiveError
+		bad    *timelapse.InvalidDurationError
+		down   *timelapse.TriggerShuttingDownError
+	)
+	switch {
+	case errors.As(err, &active):
+		writeAPIError(w, http.StatusConflict, err)
+	case errors.As(err, &bad):
+		writeAPIError(w, http.StatusBadRequest, err)
+	case errors.As(err, &down):
+		writeAPIError(w, http.StatusServiceUnavailable, err)
+	default:
+		writeAPIError(w, http.StatusInternalServerError, err)
+	}
+}
+
 func (h *Handler) handleTimelapsePause(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
@@ -789,91 +700,18 @@ func (h *Handler) handleTimelapseBatchMerge(w http.ResponseWriter, r *http.Reque
 		body.Duration = "natural-day"
 	}
 
-	dur, err := config.ParseMergeDuration(body.Duration)
+	results, err := h.tlTrigger.TriggerBatch(body.CameraIDs, body.Duration, body.Date)
 	if err != nil {
-		WriteError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+		writeTLTriggerError(w, err)
 		return
 	}
 
-	if h.db == nil {
-		WriteError(w, http.StatusInternalServerError, "database not available")
-		return
-	}
-	if h.config == nil {
-		WriteError(w, http.StatusInternalServerError, "config not available")
-		return
-	}
-
-	// Load timezone — handle "Local" explicitly (time.LoadLocation("Local")
-	// fails, which would silently fall back to UTC and misalign the window).
-	loc := time.UTC
-	switch {
-	case h.config.Timezone == "" || h.config.Timezone == "UTC":
-		// keep UTC
-	case h.config.Timezone == "Local":
-		loc = time.Local
-	default:
-		if l, err := time.LoadLocation(h.config.Timezone); err == nil {
-			loc = l
-		}
-	}
-
-	dataDir := filepath.Join(h.config.Storage.RootDir, "periodic-merge")
-
-	refTime := time.Now().In(loc)
-	if body.Date != "" {
-		if parsed, err := time.ParseInLocation("2006-01-02", body.Date, loc); err == nil {
-			refTime = parsed
-		}
-	}
-
-	type batchResult struct {
-		CameraID string `json:"camera_id"`
-		Status   string `json:"status"`
-		Error    string `json:"error,omitempty"`
-	}
-
-	results := make([]batchResult, 0, len(body.CameraIDs))
 	triggered := 0
-
-	for _, cameraID := range body.CameraIDs {
-		fps := 10
-		retainMP4 := false
-		for i := range h.config.Cameras {
-			if h.config.Cameras[i].ID == cameraID && h.config.Cameras[i].Timelapse != nil {
-				if h.config.Cameras[i].Timelapse.MergeOutputFPS > 0 {
-					fps = h.config.Cameras[i].Timelapse.MergeOutputFPS
-				}
-				retainMP4 = h.config.Cameras[i].Timelapse.RetainIntermediateMP4Value()
-				break
-			}
+	for _, res := range results {
+		if res.Status == "merge_initiated" {
+			triggered++
 		}
-
-		mgr := timelapse.NewPeriodicMergeManager(
-			h.db, h.db, timelapse.NewGoMerger(), fps, dataDir, dur, loc,
-			timelapse.WithMergeStore(h.db),
-			timelapse.WithDurationLabel(body.Duration),
-			timelapse.WithRetainIntermediateMP4(retainMP4),
-			timelapse.WithIntermediateMP4Pruner(h.db),
-			timelapse.WithExtractionInterval(h.timelapseExtractionInterval(cameraID)),
-			timelapse.WithDeleteRecordingsAfterMerge(h.timelapseDeleteAfterMerge(cameraID)),
-		)
-		mgr.SetSourceRecordingDeleter(h.timelapseSourceDeleter)
-
-		// Launch merge in background (Handler-tracked so Close can join it).
-		h.startMergeGoroutine(func(ctx context.Context) {
-			if err := mgr.Run(ctx, cameraID, refTime); err != nil {
-				logger.Warn("timelapse batch merge failed", "camera_id", cameraID, "duration", body.Duration, "error", err)
-			}
-		})
-
-		triggered++
-		results = append(results, batchResult{
-			CameraID: cameraID,
-			Status:   "merge_initiated",
-		})
 	}
-
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"results":   results,
 		"triggered": triggered,

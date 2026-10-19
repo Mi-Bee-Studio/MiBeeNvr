@@ -333,38 +333,6 @@ func TestValidateURL_Invalid(t *testing.T) {
 	require.False(t, validateURL("://"))
 }
 
-// --- isImageFile tests ---
-
-func TestIsImageFile_JPG(t *testing.T) {
-	t.Parallel()
-	require.True(t, isImageFile("frame001.jpg"))
-}
-
-func TestIsImageFile_JPEG(t *testing.T) {
-	t.Parallel()
-	require.True(t, isImageFile("frame001.jpeg"))
-}
-
-func TestIsImageFile_PNG(t *testing.T) {
-	t.Parallel()
-	require.True(t, isImageFile("frame001.png"))
-}
-
-func TestIsImageFile_Uppercase(t *testing.T) {
-	t.Parallel()
-	require.True(t, isImageFile("frame001.JPG"))
-}
-
-func TestIsImageFile_MP4(t *testing.T) {
-	t.Parallel()
-	require.False(t, isImageFile("video.mp4"))
-}
-
-func TestIsImageFile_NoExtension(t *testing.T) {
-	t.Parallel()
-	require.False(t, isImageFile("frame"))
-}
-
 // --- resolveEncoding / probeCodec tests (encoding read-path unification, #166) ---
 
 // TestResolveEncoding_ProbeWinsOverStored proves the live recorder probe is

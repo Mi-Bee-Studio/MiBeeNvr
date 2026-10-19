@@ -29,6 +29,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recframes"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
@@ -249,34 +250,21 @@ type Handler struct {
 	eventBus          *event.EventBus
 	timelapseMergeMgr *timelapse.RollingMergeManager
 	mergeScheduler    *timelapse.MergeScheduler
-	activeMerges      sync.Map
-	// mergeWg tracks the goroutines spawned by handleTimelapseMerge and
-	// handleTimelapseBatchMerge (which run PeriodicMergeManager.Run in the
-	// background). mergeCtx/mergeCancel let Close propagate shutdown to them.
-	// Close waits on mergeWg so in-flight merges finish (or observe ctx cancel)
-	// before the caller (App.Stop / a test's t.TempDir cleanup) tears down the
-	// storage tree — prevents the TempDir "directory not empty" flake (#143/#125).
-	mergeMu           sync.Mutex
-	mergeCtx          context.Context    // set by initMergeCtx; nil ⇒ fall back to context.Background()
-	mergeCancel       context.CancelFunc // set by initMergeCtx
-	mergeWg           sync.WaitGroup
-	isClosed          bool // guarded by mergeMu; prevents new merges after Close
+	// tlTrigger assembles and launches manual (single/batch) periodic merges
+	// and owns their goroutine lifecycle (#1009 batch 3); Close joins them so
+	// merges never outlive the storage tree (the #143/#125 TempDir class).
+	tlTrigger         *timelapse.ManualTrigger
 	aiHandler         *AIHandler
 	relayMgr          *relay.Manager
 	visionCoordinator *vision.Coordinator
 	apiKeyStore       *middleware.APIKeyStore
 	whipServer        *whip.Server
-	// timelapseSourceDeleter backs the opt-in delete_recordings_after_merge
-	// behavior in manual merges. Wired post-construction
-	// (SetTimelapseSourceDeleter) because the cleanup manager is built after
-	// the handler in app assembly; nil = deletion disabled.
-	timelapseSourceDeleter timelapse.SourceRecordingDeleter
-	// frameListCache memoizes sorted file-name listings for MJPEG/timelapse frame
-	// directories so repeated ?frame=N / list-frames requests don't os.ReadDir + sort
-	// the whole directory on every hit. Keyed by dir path; invalidated by mtime + TTL.
-	frameListMu       sync.Mutex
-	frameListCache    map[string]*frameListEntry
+	// recFrames owns frame-level access to frame-based recordings (#1009
+	// batch 2): the frame-directory listing cache, MJPEG/timelapse/AVI frame
+	// indexes, frame timestamp extraction, and the merge-codec probe cache.
+	recFrames         *recframes.Service
 	gb28181DeviceMgr  *platform.DeviceManager
+	gb28181Records    *gb28181.DeviceRecordService // device-recording domain (records/playback/download)
 	gb28181SessionMgr *platform.SessionManager
 	// timeSync serves the camera time-sync endpoints (#time-sync); nil in
 	// tests → handlers answer 503.
@@ -298,7 +286,6 @@ type Handler struct {
 	gb28181Inviter GB28181InviteSender
 	gb28181Bye     GB28181ByeSender
 	gb28181Cascade GB28181CascadeStatus
-	gb28181Loc     *time.Location // GB naive-clock zone (nil → Local)
 	// vodMgr serves the on-demand HLS VOD fragmenter for recording playback
 	// (#321 Phase 2). Self-contained (owns its segment cache) — constructed
 	// here rather than threaded through NewHandler's positional params.
@@ -330,75 +317,44 @@ type Handler struct {
 	p2pEvents   []p2pLinkEvent
 }
 
-// frameListEntry is a cached sorted listing of a frame directory.
-type frameListEntry struct {
-	names     []string // sorted image filenames
-	dirMtime  int64    // unix mtime of the dir at scan time (for invalidation)
-	scannedAt time.Time
-}
-
-// frameListCacheTTL bounds how long a cached listing is served without re-stat.
-// Timelapse dirs grow while a recording is active, so keep this short enough to
-// pick up new frames promptly but long enough to collapse a burst of requests.
-const frameListCacheTTL = 500 * time.Millisecond
-
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *platform.DeviceManager, gb28181SessionMgr *platform.SessionManager, timeSync TimeSyncOps) *Handler {
-	return &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), frameListCache: make(map[string]*frameListEntry), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	h := &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), recFrames: recframes.New(), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	// The device-record domain service shares the handler's post-injection
+	// wiring: media API, device registry, GB timezone (#1009).
+	h.gb28181Records = gb28181.NewDeviceRecordService()
+	h.gb28181Records.SetDeviceManager(gb28181DeviceMgr)
+	// Manual periodic-merge trigger (#1009 batch 3): the recording-enabled
+	// gate mirrors the scheduled path (nil/unknown camera ⇒ include video).
+	// A nil camMgr must stay a nil interface — a typed nil would sneak past
+	// the service's nil guard and panic on lookup.
+	var tlCams timelapse.CameraSettings
+	if camMgr != nil {
+		tlCams = camMgr
+	}
+	h.tlTrigger = timelapse.NewManualTrigger(db, func() *config.Config { return h.config }, tlCams, func(cameraID string) bool {
+		if camMgr == nil {
+			return true
+		}
+		cam := camMgr.GetCameraConfig(cameraID)
+		if cam == nil {
+			return true
+		}
+		return h.config.RecordingGate(cam.RecordingEnabled)
+	})
+	return h
 }
 
-// startMergeGoroutine launches fn on a tracked background goroutine using the
-// Handler's merge context. It returns false (without launching) if Close has
-// already been called, so shutdown isn't racing with a brand-new merge. The
-// mergeWg/Add happens here (under mergeMu, before the `go`) to satisfy
-// sync.WaitGroup's "Add before Wait when counter is zero" contract — Close's
-// Wait cannot observe a zero counter while a new merge is being registered.
-//
-// This replaces the prior `go func() { ctx := context.Background(); mgr.Run(...) }()`
-// pattern in handleTimelapseMerge/handleTimelapseBatchMerge that leaked
-// goroutines past test/App teardown (root cause of the #143 TempDir flake).
-func (h *Handler) startMergeGoroutine(fn func(ctx context.Context)) bool {
-	h.mergeMu.Lock()
-	defer h.mergeMu.Unlock()
-	if h.isClosed {
-		return false
-	}
-	if h.mergeCtx == nil {
-		// Lazy-init: derive from Background so merges run independent of any
-		// single HTTP request's lifetime, but remain cancellable via Close.
-		h.mergeCtx, h.mergeCancel = context.WithCancel(context.Background())
-	}
-	ctx := h.mergeCtx
-	h.mergeWg.Add(1)
-	go func() {
-		defer h.mergeWg.Done()
-		fn(ctx)
-	}()
-	return true
-}
-
-// Close cancels any in-flight timelapse merge goroutines and waits for them to
-// exit. It must be called during application shutdown (after the HTTP server
-// stops accepting requests) so merges don't outlive the storage tree — the
-// App.Service contract requires all goroutines be released, and tests using
-// t.TempDir for the storage root will otherwise hit "directory not empty"
-// during RemoveAll (#143 / #125 class). Idempotent.
+// Close cancels any in-flight manual timelapse merges (single or batch) and
+// waits for them to exit — the trigger owns their goroutine lifecycle (#1009
+// batch 3). It must be called during application shutdown (after the HTTP
+// server stops accepting requests) so merges don't outlive the storage tree —
+// the App.Service contract requires all goroutines be released, and tests
+// using t.TempDir for the storage root will otherwise hit "directory not
+// empty" during RemoveAll (#143 / #125 class). Idempotent.
 func (h *Handler) Close() {
-	h.mergeMu.Lock()
-	if h.isClosed {
-		h.mergeMu.Unlock()
-		return
+	if h.tlTrigger != nil {
+		h.tlTrigger.Close()
 	}
-	h.isClosed = true
-	cancel := h.mergeCancel
-	h.mergeMu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	// Wait outside mergeMu: merges may still call back into handler methods
-	// (e.g. reading config) that don't take mergeMu, and holding the lock while
-	// waiting risks deadlock if a merge ever does take it.
-	h.mergeWg.Wait()
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -592,12 +548,6 @@ func writeAPIError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error(), "code": model.ErrorCode(err)})
 }
 
-// isImageFile checks if a filename has an image extension (jpg/jpeg/png).
-func isImageFile(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png")
-}
-
 // validateURL checks that a URL has a valid scheme and non-empty host.
 // This is a basic sanity check — specific protocol validation is handled separately.
 func validateURL(rawURL string) bool {
@@ -760,40 +710,16 @@ func (h *Handler) SetAIHandler(ah *AIHandler) {
 
 // SetTimelapseSourceDeleter wires the deleter used by the opt-in
 // delete_recordings_after_merge behavior in manual merges. Wired
-// post-construction because the cleanup manager is built after the handler
-// in app assembly.
+// post-construction because the cleanup manager is built after the
+// handler in app assembly.
 func (h *Handler) SetTimelapseSourceDeleter(d timelapse.SourceRecordingDeleter) {
-	h.timelapseSourceDeleter = d
+	h.tlTrigger.SetSourceRecordingDeleter(d)
 }
 
 // HasTimelapseSourceDeleter reports whether the timelapse source deleter is
 // wired. Exposed for wiring regression tests.
 func (h *Handler) HasTimelapseSourceDeleter() bool {
-	return h.timelapseSourceDeleter != nil
-}
-
-// timelapseExtractionInterval returns the camera's timelapse.interval for
-// recording→timelapse frame sampling (manual merges; default 30s).
-func (h *Handler) timelapseExtractionInterval(cameraID string) time.Duration {
-	if h.camMgr != nil {
-		if cam := h.camMgr.GetCameraConfig(cameraID); cam != nil && cam.Timelapse != nil {
-			if d, err := time.ParseDuration(cam.Timelapse.Interval); err == nil && d > 0 {
-				return d
-			}
-		}
-	}
-	return 30 * time.Second
-}
-
-// timelapseDeleteAfterMerge reports the camera's delete_recordings_after_merge
-// flag for manual merges (default false).
-func (h *Handler) timelapseDeleteAfterMerge(cameraID string) bool {
-	if h.camMgr != nil {
-		if cam := h.camMgr.GetCameraConfig(cameraID); cam != nil && cam.Timelapse != nil {
-			return cam.Timelapse.DeleteRecordingsAfterMerge
-		}
-	}
-	return false
+	return h.tlTrigger.HasSourceRecordingDeleter()
 }
 
 // SetRelayManager wires the relay manager for the relay-presets endpoints.
@@ -1120,7 +1046,7 @@ func (h *Handler) SetGB28181Cascade(s GB28181CascadeStatus) {
 // SetGB28181Timezone pins the zone used to interpret/format naive GB/T 28181
 // device-clock timestamps (RecordInfo entries). nil keeps time.Local.
 func (h *Handler) SetGB28181Timezone(loc *time.Location) {
-	h.gb28181Loc = loc
+	h.gb28181Records.SetTimezone(loc)
 }
 
 // GB28181InviteSender sends a SIP INVITE to start a media session on a channel.
@@ -1184,6 +1110,7 @@ type GB28181DeviceMedia interface {
 // endpoints.
 func (h *Handler) SetGB28181DeviceMedia(s GB28181DeviceMedia) {
 	h.gb28181Media = s
+	h.gb28181Records.SetMedia(s)
 }
 
 // registerGB28181Routes registers GB28181 device and channel endpoints.

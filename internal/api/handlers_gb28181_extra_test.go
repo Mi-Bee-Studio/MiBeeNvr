@@ -35,38 +35,6 @@ func gbReq(t *testing.T, method, path, id string, body string) (*httptest.Respon
 	return httptest.NewRecorder(), req
 }
 
-func TestGB28181ParseTime(t *testing.T) {
-	h := setupGB28181TestHandler(t)
-
-	for _, ok := range []string{"2026-08-27T10:00:00", "2026-08-27 10:00:00", "2026-08-27T10:00:00Z"} {
-		_, valid := h.parseGB28181Time(ok)
-		require.True(t, valid, "layout must parse: %s", ok)
-	}
-	_, valid := h.parseGB28181Time("not-a-time")
-	require.False(t, valid)
-}
-
-func TestGB28181ResolveChannelDevice(t *testing.T) {
-	h := setupGB28181TestHandler(t)
-
-	// No channel registered → unresolved.
-	_, ok := h.resolveChannelDevice("34020000001320000011")
-	require.False(t, ok)
-
-	// Register a device + channel → resolves to the owning device.
-	h.gb28181DeviceMgr.Register(&platform.Device{ID: "dev1", NetAddr: "127.0.0.1:9"})
-	dev, _ := h.gb28181DeviceMgr.Device("dev1")
-	if dev != nil {
-		dev.Status.Store(platform.DeviceOnline)
-	}
-	h.gb28181DeviceMgr.RegisterChannel("dev1", &platform.Channel{
-		ID: "34020000001320000011", Name: "Front",
-	})
-	got, ok := h.resolveChannelDevice("34020000001320000011")
-	require.True(t, ok)
-	require.Equal(t, "dev1", got)
-}
-
 func TestGB28181PlaybackControlValidation(t *testing.T) {
 	h := setupGB28181TestHandler(t)
 

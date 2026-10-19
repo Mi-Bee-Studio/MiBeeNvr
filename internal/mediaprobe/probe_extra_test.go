@@ -1,4 +1,4 @@
-package mediaprobe
+package mediaprobe_test
 
 // Coverage for FastProbeDuration + MediaInfo.FormatDuration (#580). The MP4
 // fixture is built with the real internal muxer — same pattern as the merge
@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mediaprobe"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/stretchr/testify/require"
 )
@@ -35,21 +36,21 @@ func buildProbeMP4(t *testing.T, samples int) string {
 func TestFastProbeDuration(t *testing.T) {
 	t.Parallel()
 	p := buildProbeMP4(t, 30)
-	d, err := FastProbeDuration(p)
+	d, err := mediaprobe.FastProbeDuration(p)
 	require.NoError(t, err)
 	require.InDelta(t, 0.99, d, 0.1) // 30 samples × 33ms
 
 	// Missing / non-MP4 files error, never panic.
-	_, err = FastProbeDuration(filepath.Join(t.TempDir(), "missing.mp4"))
+	_, err = mediaprobe.FastProbeDuration(filepath.Join(t.TempDir(), "missing.mp4"))
 	require.Error(t, err)
-	_, err = FastProbeDuration("/etc/hostname")
+	_, err = mediaprobe.FastProbeDuration("/etc/hostname")
 	require.Error(t, err)
 }
 
 func TestFormatDuration(t *testing.T) {
 	t.Parallel()
-	m := &MediaInfo{}
+	m := &mediaprobe.MediaInfo{}
 	require.Equal(t, "0s", m.FormatDuration())
-	m2 := &MediaInfo{Duration: 90}
+	m2 := &mediaprobe.MediaInfo{Duration: 90}
 	require.Contains(t, m2.FormatDuration(), "1m30s")
 }

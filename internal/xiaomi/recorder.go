@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1416,104 +1415,63 @@ func (r *XiaomiRecorder) PixelTriggerEvent(at time.Time, hold time.Duration) err
 	return nil
 }
 
-// closeCurrentSegment finalizes the current MP4 segment.
+// closeCurrentSegment finalizes the current MP4 segment via the shared
+// recorder.FinalizeSegment skeleton (close → rename → insert row → event →
+// metrics; issue #1012 block 1 — this copy drifted from baseRecorder before,
+// see #1003). Xiaomi-specific bits live in the hooks: the adaptive/audio ring
+// written-flag resets, the field set reset (no baseRecorder locking here —
+// the segment fields are owned by the read-loop goroutine), and the metrics
+// counters (no #469 wall-time observation on this recorder).
 func (r *XiaomiRecorder) closeCurrentSegment() {
 	if r.muxer == nil {
 		return
 	}
-	// The retained rings' `written` markings refer to the segment being
-	// closed; a later flush into a fresh segment must write those frames
-	// instead of skipping them (issue #498 — mirrors baseRecorder).
-	if r.adaptive != nil {
-		r.adaptive.ClearWritten()
-	}
-	if r.audioTrig != nil {
-		r.audioTrig.ClearWritten()
-	}
-	if err := r.muxer.Close(); err != nil {
-		xiaomiLogger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)
-		if r.curTempPath != "" {
-			os.Remove(r.curTempPath)
-		}
-		r.muxer = nil
-		r.curTempPath = ""
-		r.curFinalPath = ""
-		r.frameCount = 0
-		return
-	}
-
-	// Atomic rename: temp → final
-	if r.curTempPath != "" && r.curFinalPath != "" {
-		if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
-			xiaomiLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Segment-loss gate: when the final file never materialized (vanished
-	// temp — e.g. the startup temp-cleanup scan racing segment creation,
-	// 2026-09-08 incident), any DB row would be a permanent 404 entry. Skip
-	// the insert, event, and metrics instead. baseRecorder parity (#1003).
-	var fileSize int64
-	var recordingID string
-	finalExists := false
-	if r.curFinalPath != "" {
-		if info, err := os.Stat(r.curFinalPath); err == nil {
-			finalExists = true
-			fileSize = info.Size()
-			// Feed the next segment's preallocation estimate (#757 parity).
-			r.lastSegBytes = fileSize
-		} else {
-			xiaomiLogger.Warn("segment file missing after finalize — recording row skipped",
-				"camera_id", r.cfg.CameraID, "path", r.curFinalPath)
-		}
-	}
-	if r.cfg.DB != nil && finalExists {
-		now := time.Now()
-		duration := now.Sub(r.segStart).Seconds()
-		rec := &model.Recording{
-			ID:         strconv.FormatInt(now.UnixNano(), 10),
-			CameraID:   r.cfg.CameraID,
-			FilePath:   r.curFinalPath,
-			Format:     r.codec,
-			StartedAt:  r.segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: r.frameCount,
-		}
-		recordingID = rec.ID
-		rec.FileSize = fileSize
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
-			xiaomiLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Publish SegmentCompleted event.
-	if r.cfg.EventBus != nil && recordingID != "" {
-		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
-			CameraID:    r.cfg.CameraID,
-			FilePath:    r.curFinalPath,
-			Format:      string(r.codec),
-			Encoding:    string(r.codec),
-			StartedAt:   r.segStart.Format(time.RFC3339Nano),
-			EndedAt:     time.Now().Format(time.RFC3339Nano),
-			FileSize:    fileSize,
-			RecordingID: recordingID,
-		})
-	}
-
-	if r.frameCount > 0 && finalExists {
-		r.recordSegmentCreated()
-		if fileSize > 0 {
-			r.recordBytes(fileSize)
-		}
-	}
-
-	r.muxer = nil
-	r.trackID = 0
-	r.audioTrackID = 0
-	r.curTempPath = ""
-	r.curFinalPath = ""
-	r.frameCount = 0
+	recorder.FinalizeSegment(recorder.SegmentFinalizeParams{
+		Log:          xiaomiLogger,
+		CameraID:     r.cfg.CameraID,
+		Store:        r.store,
+		DB:           r.cfg.DB,
+		EventBus:     r.cfg.EventBus,
+		Muxer:        r.muxer,
+		TempPath:     r.curTempPath,
+		FinalPath:    r.curFinalPath,
+		SegStart:     r.segStart,
+		FrameCount:   int64(r.frameCount),
+		Format:       r.codec,
+		LastSegBytes: &r.lastSegBytes,
+		ResetRings: func() {
+			// The retained rings' `written` markings refer to the segment
+			// being closed; a later flush into a fresh segment must write
+			// those frames instead of skipping them (issue #498 — mirrors
+			// baseRecorder).
+			if r.adaptive != nil {
+				r.adaptive.ClearWritten()
+			}
+			if r.audioTrig != nil {
+				r.audioTrig.ClearWritten()
+			}
+		},
+		OnCloseError: func() {
+			r.muxer = nil
+			r.curTempPath = ""
+			r.curFinalPath = ""
+			r.frameCount = 0
+		},
+		OnMetrics: func(fileSize int64, _ time.Duration) {
+			r.recordSegmentCreated()
+			if fileSize > 0 {
+				r.recordBytes(fileSize)
+			}
+		},
+		OnFinished: func() {
+			r.muxer = nil
+			r.trackID = 0
+			r.audioTrackID = 0
+			r.curTempPath = ""
+			r.curFinalPath = ""
+			r.frameCount = 0
+		},
+	})
 }
 
 // splitAnnexBNALUs splits Annex B formatted data into individual NALUs.

@@ -4,7 +4,9 @@ package merge
 // map, and the ambient-audio envelope mixdown.
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -177,4 +179,132 @@ func TestMixdownAmbient(t *testing.T) {
 		rt := g711DecodeALaw(g711EncodeALaw(v))
 		require.InDelta(t, float64(v), float64(rt), 800, "A-law round trip of %d", v)
 	}
+}
+
+// TestWriteAmbientBedMatchesMixdown: the streaming ambient renderer (#1011
+// debt 2) must be byte-identical to the in-memory reference mixdownAmbient —
+// across window shapes (expansion where nOut > input, heavy compression,
+// single window), both G.711 variants, and sample spans scattered at
+// non-contiguous file offsets with filler bytes between them.
+func TestWriteAmbientBedMatchesMixdown(t *testing.T) {
+	ctx := context.Background()
+
+	buildFile := func(payload []byte, gap int) ([]byte, []SampleEntry) {
+		var file []byte
+		var spans []SampleEntry
+		for _, part := range splitPayload(payload, 3) {
+			file = append(file, make([]byte, gap)...)
+			spans = append(spans, SampleEntry{Offset: int64(len(file)), Size: uint32(len(part))})
+			file = append(file, part...)
+		}
+		return file, spans
+	}
+
+	for _, muLaw := range []bool{true, false} {
+		for _, tc := range []struct {
+			name  string
+			input int
+			nOut  int
+		}{
+			{"expand_windows_overlap", 97, 500}, // nOut > input: windows share bytes
+			{"heavy_compression", 60000, 500},   // 300×-style timelapse ratio
+			{"single_window", 12345, 1},         // whole input in one window
+			{"exact_division", 8000, 100},       // window boundaries land on sample edges
+			{"no_audio", 0, 100},                // mixdownAmbient returns nil
+		} {
+			t.Run(fmt.Sprintf("%s_mulaw%v", tc.name, muLaw), func(t *testing.T) {
+				payload := make([]byte, tc.input)
+				for i := range payload {
+					payload[i] = byte(i*31 + 7)
+				}
+				file, spans := buildFile(payload, 5)
+				seg := &SegmentInfo{AudioSamples: spans, G711MULaw: muLaw}
+
+				want := mixdownAmbient(muLaw, payload, tc.nOut)
+
+				var got bytes.Buffer
+				n, err := writeAmbientBed(ctx, bytes.NewReader(file), seg, tc.nOut, &got)
+				require.NoError(t, err)
+				if tc.input == 0 {
+					require.Equal(t, 0, n)
+					require.Empty(t, got.Bytes())
+					return
+				}
+				require.Equal(t, tc.nOut, n)
+				require.Equal(t, want, got.Bytes(), "streaming bed must be byte-identical to mixdownAmbient")
+			})
+		}
+	}
+}
+
+// splitPayload cuts p into at most parts roughly-equal pieces (test fixture
+// helper for TestWriteAmbientBedMatchesMixdown).
+func splitPayload(p []byte, parts int) [][]byte {
+	if len(p) == 0 {
+		return nil
+	}
+	var out [][]byte
+	size := (len(p) + parts - 1) / parts
+	for len(p) > 0 {
+		cut := min(size, len(p))
+		out = append(out, p[:cut])
+		p = p[cut:]
+	}
+	return out
+}
+
+// TestMergeMP4Segments_CompressedG711SpanAmbientBed: end-to-end through the
+// merge — a sparse-dwell segment carrying a G.711 track must have its video
+// compressed and its audio rendered as an ambient bed (one per-byte sample on
+// the audio timescale), with the output still parseable.
+func TestMergeMP4Segments_CompressedG711SpanAmbientBed(t *testing.T) {
+	dir := t.TempDir()
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idr := []byte{0x65, 0x88, 0x80, 0x40}
+
+	path := filepath.Join(dir, "sparse_g711.mp4")
+	m := muxer.NewMP4Muxer(path)
+	videoTrackID, err := m.AddH264Track(sps, pps)
+	require.NoError(t, err)
+	audioTrackID, err := m.AddAudioTrack("g711", []byte{1, 0x00, 0x00, 0x1F, 0x40})
+	require.NoError(t, err)
+	// Sparse video: two 30s keyframe dwells → wall 60s, compressed to 2×100ms.
+	require.NoError(t, m.WriteSample(videoTrackID, idr, 0, 30*time.Second))
+	require.NoError(t, m.WriteSample(videoTrackID, idr, 30*time.Second, 30*time.Second))
+	// G.711 source audio. Frame count matters beyond realism: the ambient bed
+	// emits one audio sample per OUTPUT byte (nOut of them), while the moov
+	// budget only reserves for the PARSED sample count plus 8 B/sample stts
+	// headroom — nOut beyond ~3× the sample count overflows the reserved moov
+	// (a pre-existing latent limitation of the ambient path, not something
+	// this test should trip; see the #1011 refactor notes).
+	frame := make([]byte, 160)
+	for i := range frame {
+		frame[i] = byte(i%2*40 + 60)
+	}
+	var apts time.Duration
+	for range 150 {
+		require.NoError(t, m.WriteAudioSample(audioTrackID, frame, apts, 20*time.Millisecond))
+		apts += 20 * time.Millisecond
+	}
+	require.NoError(t, m.Close())
+
+	info, err := ParseSegment(path)
+	require.NoError(t, err)
+	require.True(t, info.HasAudio)
+	require.Equal(t, "g711", info.AudioCodec)
+
+	stats, err := MergeMP4Segments(context.Background(), []*SegmentInfo{info},
+		filepath.Join(dir, "out.mp4"), 100*time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.TimelapseFrames)
+	// spanFile = 2×100ms = 0.2s; bed length = spanFile × audio timescale.
+	nOut := int(0.2*float64(info.AudioTimescale) + 0.5)
+	require.Equal(t, nOut, stats.AmbientSamples, "ambient bed must cover the compressed file span")
+
+	out, err := ParseSegment(filepath.Join(dir, "out.mp4"))
+	require.NoError(t, err)
+	require.True(t, out.HasAudio, "ambient bed keeps the output's audio track alive")
+	require.Equal(t, "g711", out.AudioCodec)
+	require.Equal(t, nOut, out.AudioSampleCount, "one audio sample per ambient byte")
 }
