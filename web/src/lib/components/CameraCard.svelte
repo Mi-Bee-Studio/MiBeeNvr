@@ -23,8 +23,6 @@
    onRetryMerge?: (camera: Camera) => void;
    onrediscover?: (camera: Camera) => void;
    onactivate?: (camera: Camera, credentials: { username: string; password: string }) => Promise<void>;
-   /** Enable drag-to-regroup (camera management page, v37). */
-   groupDraggable?: boolean;
  }
 
   let {
@@ -43,7 +41,6 @@
    onRetryMerge,
    onrediscover,
    onactivate,
-   groupDraggable = false,
  }: Props = $props();
 
   let menuOpen = $state(false);
@@ -202,13 +199,7 @@ let healthShowWarningIcon = $derived(
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="card camera-card border th-border p-4 transition-all {menuOpen || pushTargetsOpen ? 'is-popover-open' : ''} {groupDraggable ? 'cursor-grab active:cursor-grabbing' : ''}"
-  draggable={groupDraggable ? 'true' : undefined}
-  ondragstart={groupDraggable ? (e: DragEvent) => {
-    if (!e.dataTransfer) return;
-    e.dataTransfer.setData('application/x-mibee-camera', camera.id);
-    e.dataTransfer.effectAllowed = 'move';
-  } : undefined}
+  class="card camera-card border th-border p-4 transition-all {menuOpen || pushTargetsOpen ? 'is-popover-open' : ''}"
 >
   <!-- Top: Name + Status -->
   <div class="flex items-start justify-between gap-2 mb-3">
@@ -366,6 +357,9 @@ let healthShowWarningIcon = $derived(
       <span class="text-xs font-medium th-text-secondary px-2 py-0.5 rounded th-bg-tertiary">{protocolLabel}</span>
       {#if encodingLabel}
         <span class="text-xs th-text-tertiary px-2 py-0.5 rounded th-bg-tertiary">{encodingLabel}</span>
+      {/if}
+      {#if camera.group}
+        <span class="text-xs px-2 py-0.5 rounded-full border th-border th-text-secondary" title={t('cameras.tag')}>#{camera.group}</span>
       {/if}
       {#if streamTransport === 'rtsp'}
         <span class="badge badge-info">{t('cameras.streamTransportRtsp')}</span>
