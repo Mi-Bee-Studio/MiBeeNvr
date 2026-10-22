@@ -164,3 +164,32 @@ func TestWSOriginAllowed(t *testing.T) {
 		})
 	}
 }
+
+// TestGatewayMiddlewareViaGatewayMarker covers the fnOS gateway's WebSocket
+// forwarding: it upgrades through the Unix-socket listener but does NOT
+// inject X-Trim-* headers, so the request carries no gateway identity —
+// only the listener marker. The Origin gate must still pass it (production
+// breakage 2026-10-22: every live-view tile 403ed in CheckOrigin behind the
+// gateway), while the same header-less request on the TCP listener path
+// (no marker) stays rejected.
+func TestGatewayMiddlewareViaGatewayMarker(t *testing.T) {
+	t.Helper()
+
+	wrap := GatewayAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := WSOriginAllowed(r); !got {
+			t.Fatalf("WSOriginAllowed() = false for gateway-forwarded WS upgrade, want true")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Header-less request through the gateway middleware chain: allowed.
+	req := httptest.NewRequest(http.MethodGet, "/api/cameras/x/stream/ws", nil)
+	req.Host = "internal-fwd-host"
+	req.Header.Set("Origin", "http://192.168.1.10:5666")
+	wrap.ServeHTTP(httptest.NewRecorder(), req)
+
+	// Same request without the middleware (the TCP listener path): rejected.
+	if WSOriginAllowed(req) {
+		t.Fatalf("WSOriginAllowed() = true on TCP-listener path without identity/marker, want false")
+	}
+}
