@@ -49,8 +49,9 @@
     globalTranscodingEnabled?: boolean;
     h265Available?: boolean;
     onbackfillneeded?: (info: { cameraId: string; count: number; targetCodec: string }) => Promise<boolean>;
-    /** Existing group labels for the group input's datalist suggestions (v36). */
-    knownGroups?: string[];
+    /** Existing tag labels (the legacy group field) for the tag input's
+     * datalist suggestions — free-form, single tag per device. */
+    tagSuggestions?: string[];
   }
 
   let {
@@ -63,7 +64,7 @@
     onsave,
     oncancel,
     onbackfillneeded,
-    knownGroups = [],
+    tagSuggestions = [],
   }: Props = $props();
 
   // Unique suffix for this form instance's datalist id — the Cameras page can
@@ -841,15 +842,14 @@ async function performCameraSave() {
       {/if}
     </div>
 
-    <!-- Group (v37 camera-management grouping) — top-level, not buried in
-         advanced settings: it drives the management page's sections. The
-         datalist suggests existing groups. -->
+    <!-- Tag (the legacy group field under a lighter name): a free-form label
+         shown as a chip and filtered on the management page. -->
     <div>
-      <label for="cam-group" class="input-label">{t('cameras.group')}</label>
+      <label for="cam-group" class="input-label">{t('cameras.tag')}</label>
       <input id="cam-group" type="text" class="input" list="{formUid}-group-options"
-        bind:value={formGroup} placeholder={t('cameras.groupPlaceholder')} />
+        bind:value={formGroup} placeholder={t('cameras.tagPlaceholder')} />
       <datalist id="{formUid}-group-options">
-        {#each knownGroups as g (g)}
+        {#each tagSuggestions as g (g)}
           <option value={g}></option>
         {/each}
       </datalist>

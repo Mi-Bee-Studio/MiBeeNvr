@@ -660,7 +660,7 @@ describe('CameraForm - gb28181 protocol (todo 18)', () => {
   });
 });
 
-describe('CameraForm - group field (v36 camera grouping)', () => {
+describe('CameraForm - tag field (legacy group label)', () => {
   afterEach(() => {
     cleanup();
     mockApiRequest.mockReset();
@@ -684,7 +684,7 @@ describe('CameraForm - group field (v36 camera grouping)', () => {
     const { container } = render(CameraForm, {
       props: defaultProps({
         editingCamera: groupedCam as any,
-        knownGroups: ['室内', '室外'],
+        tagSuggestions: ['室内', '室外'],
       }),
     });
 
