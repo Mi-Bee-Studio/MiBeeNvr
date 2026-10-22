@@ -6,9 +6,9 @@ require (
 	github.com/Eyevinn/hi264 v0.10.0
 	github.com/abema/go-mp4 v1.7.3
 	github.com/bluenviron/gohlslib/v2 v2.4.4
-	github.com/bluenviron/gortmplib v1.0.2
+	github.com/bluenviron/gortmplib v1.0.4
 	github.com/bluenviron/gortsplib/v5 v5.6.5
-	github.com/bluenviron/mediacommon/v2 v2.9.4
+	github.com/bluenviron/mediacommon/v2 v2.9.6
 	github.com/datarhei/gosrt v0.11.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fclairamb/ftpserverlib v0.32.4
