@@ -32,6 +32,7 @@
   let graph: wired | null = null;
   let levels: number[] = [];
   let peaks: number[] = [];
+  let normPeaks: number[] = []; // slow-decaying per-bar peak for adaptive scaling
   let accent = '#7c3aed';
 
   function ensureGraph(el: HTMLAudioElement): wired | null {
@@ -85,6 +86,7 @@
     if (levels.length !== bars) {
       levels = new Array(bars).fill(0);
       peaks = new Array(bars).fill(0);
+      normPeaks = new Array(bars).fill(0);
     }
 
     // Sample the analyser: per-bar RMS of the time-domain signal.
@@ -103,14 +105,22 @@
         const rms = Math.sqrt(acc / (to - from));
         // Gain ~2.4 keeps speech at a lively mid-height; clamp to full scale.
         const target = Math.min(1, rms * 2.4);
+        // Adaptive scaling: normalize against a slowly-decaying per-bar peak
+        // so QUIET sources (an ambient mic at -40dB) still read as living
+        // bars instead of a flat line — while digital silence (below the
+        // 0.06 floor) stays honestly flat. Still the real signal, just
+        // auto-ranged like every serious voice UI.
+        normPeaks[i] = Math.max(target, normPeaks[i] * 0.992);
+        const norm = Math.min(1, target / Math.max(normPeaks[i], 0.06));
         // Fast attack, slow release — bars jump on sound, ease down after.
-        levels[i] = Math.max(target, levels[i] * 0.82);
+        levels[i] = Math.max(norm, levels[i] * 0.82);
         peaks[i] = Math.max(peaks[i] * 0.955, levels[i]);
       }
     } else {
       for (let i = 0; i < bars; i++) {
         levels[i] = 0;
         peaks[i] = peaks[i] * 0.955;
+        normPeaks[i] = normPeaks[i] * 0.992;
       }
     }
 
@@ -162,6 +172,7 @@
     if (el) graph = ensureGraph(el);
     levels = [];
     peaks = [];
+    normPeaks = [];
   });
 
   $effect(() => {
