@@ -10,6 +10,7 @@ import (
 
 	"github.com/bluenviron/gortmplib"
 	"github.com/bluenviron/gortmplib/pkg/codecs"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
@@ -450,4 +451,75 @@ func TestH265FrameExtraction(t *testing.T) {
 		defer mu.Unlock()
 		return len(receivedFrames) > 0
 	}, 10*time.Second, 100*time.Millisecond, "H.265 frames should be received")
+}
+
+// TestAudioTrackDoesNotPanicServer reproduces the 2026-10-22 production crash:
+// a publisher whose stream carries an audio track (upstream H.265 cameras are
+// transcoded to H.264+AAC before relaying here) hit gortmplib Reader.Read's
+// unchecked onAudioData[0] call — SIGSEGV, whole process down, container
+// crash-looping on every relay retry. The server must register a discard
+// callback for audio tracks and keep serving video frames.
+func TestAudioTrackDoesNotPanicServer(t *testing.T) {
+	keys := testStreamKeys()
+
+	var frames int
+	var mu sync.Mutex
+	hub := streamhub.New()
+	err := hub.Subscribe("test", func(pts int64, au [][]byte) {
+		mu.Lock()
+		frames++
+		mu.Unlock()
+	})
+	require.NoError(t, err)
+
+	srv, addr := startTestServer(t, testResolver(keys), func(string) *streamhub.StreamHub {
+		return hub
+	}, nil, nil)
+	_ = srv
+
+	u, err := url.Parse("rtmp://" + addr + "/live/test-key-1")
+	require.NoError(t, err)
+	client := &gortmplib.Client{URL: u, Publish: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err = client.Initialize(ctx)
+	cancel()
+	if err != nil {
+		t.Skipf("RTMP client publish failed: %v", err)
+		return
+	}
+	defer client.Close()
+
+	videoTrack := &gortmplib.Track{Codec: &codecs.H264{
+		SPS: []byte{0x67, 0x42, 0xc0, 0x28, 0xd9, 0x00, 0x78, 0x02, 0x27, 0xe5, 0x84, 0x00, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60, 0xc9, 0x20},
+		PPS: []byte{0x08, 0x06, 0x07, 0x08},
+	}}
+	// AAC-LC 44.1kHz stereo AudioSpecificConfig.
+	audioTrack := &gortmplib.Track{Codec: &codecs.MPEG4Audio{Config: &mpeg4audio.AudioSpecificConfig{Type: 2, SampleRate: 44100, ChannelConfig: 2}}}
+	w := &gortmplib.Writer{Conn: client, Tracks: []*gortmplib.Track{videoTrack, audioTrack}}
+	require.NoError(t, w.Initialize())
+
+	// gortmplib Reader has a 2-second analyze period; write interleaved video
+	// and audio past it. Without the audio discard registration the first
+	// analyzed audio packet panics the test process itself.
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer writeCancel()
+	go func() {
+		for i := 0; ; i++ {
+			select {
+			case <-writeCtx.Done():
+				return
+			default:
+			}
+			ts := time.Duration(i*33) * time.Millisecond
+			_ = w.WriteH264(videoTrack, ts, ts, [][]byte{{0x65, 0x88, 0x84, 0x00, 0x40}})
+			_ = w.WriteMPEG4Audio(audioTrack, ts, []byte{0x21, 0x11, 0x45, 0x00})
+			time.Sleep(33 * time.Millisecond)
+		}
+	}()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return frames > 5
+	}, 10*time.Second, 100*time.Millisecond, "video frames should keep flowing past the analyze window despite the audio track")
 }
