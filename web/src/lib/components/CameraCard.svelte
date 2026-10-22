@@ -5,7 +5,7 @@
   import type { CameraHealth } from '$lib/api/health';
   import { showToast } from '$lib/toast.svelte';
   import { copyText } from '$lib/clipboard';
-  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff, Copy, Link, X } from 'lucide-svelte';
+  import { Pencil, RotateCw, Eye, MoreVertical, Archive, Loader2, AlertCircle, RefreshCw, ArrowUpRight, WifiOff, Copy, Link, X, AudioLines, Headphones } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -110,6 +110,11 @@
       activating = false;
     }
   }
+
+  // Audio-only device (independent mic, encoding "audio"): the card trims
+  // video-only affordances - no RTSP pull URL, no stream-transport badge,
+  // "listen" instead of "live".
+  let isAudio = $derived(camera.encoding === 'audio');
 
   let variant = $derived(
     camera.status === 'recording'
@@ -345,6 +350,8 @@ let healthShowWarningIcon = $derived(
    {/if}
    {#if camera.status === 'recording' && camera.recording_enabled === false}
         <span class="badge badge-info">{t('cameras.statusLive')}</span>
+      {:else if camera.status === 'recording' && isAudio}
+        <span class="badge badge-success">{t('cameras.statusRecordingAudio')}</span>
       {:else if camera.status === 'recording'}
         <span class="badge badge-success">{t('cameras.statusRecording')}</span>
       {:else if camera.status === 'error'}
@@ -364,19 +371,24 @@ let healthShowWarningIcon = $derived(
   <div class="space-y-1.5 mb-3">
     <div class="flex items-center gap-2 flex-wrap">
       <span class="text-xs font-medium th-text-secondary px-2 py-0.5 rounded th-bg-tertiary">{protocolLabel}</span>
-      {#if encodingLabel}
+      {#if isAudio}
+        <span class="text-xs font-medium th-color-success px-2 py-0.5 rounded th-bg-tertiary inline-flex items-center gap-1">
+          <AudioLines size={11} />
+          {t('cameras.deviceType.audio')}
+        </span>
+      {:else if encodingLabel}
         <span class="text-xs th-text-tertiary px-2 py-0.5 rounded th-bg-tertiary">{encodingLabel}</span>
       {/if}
-      {#if camera.group}
-        <span class="text-xs px-2 py-0.5 rounded-full border th-border th-text-secondary" title={t('cameras.tag')}>#{camera.group}</span>
-      {/if}
-      {#if streamTransport === 'rtsp'}
+      {#if !isAudio && streamTransport === 'rtsp'}
         <span class="badge badge-info">{t('cameras.streamTransportRtsp')}</span>
-      {:else if streamTransport === 'http'}
+      {:else if !isAudio && streamTransport === 'http'}
         <span class="badge badge-success">{t('cameras.streamTransportHttp')}</span>
       {/if}
     </div>
-    <p class="text-xs th-text-tertiary truncate font-mono" title={camera.url}>{camera.url}</p>
+    {#if camera.url}
+      <p class="text-xs th-text-tertiary truncate font-mono" title={camera.url}>{camera.url}</p>
+    {/if}
+
   </div>
 
   <!-- Bottom: Action bar -->
@@ -451,23 +463,36 @@ let healthShowWarningIcon = $derived(
      {/if}
 
      <!-- Copy RTSP pull URL (#686): server assembles rtsp://[creds@]host:port/<id>
-          on click; toasts the reason when the output server is off/unservable. -->
-      <button
-        class="btn btn-ghost px-2 py-1 text-sm"
-        onclick={copyRtspUrl}
-        disabled={rtspCopying}
-        title={t('cameras.copyRtsp')}
-        aria-label={t('cameras.copyRtsp')}
-      >
-        {#if rtspCopying}
-          <Loader2 size={14} class="animate-spin" />
-        {:else}
-          <Link size={14} />
-        {/if}
-        <span class="hidden sm:inline-flex ml-1.5 text-xs">RTSP</span>
-      </button>
+          on click; toasts the reason when the output server is off/unservable.
+          Video devices only - an audio pickup has no servable RTSP output. -->
+      {#if !isAudio}
+        <button
+          class="btn btn-ghost px-2 py-1 text-sm"
+          onclick={copyRtspUrl}
+          disabled={rtspCopying}
+          title={t('cameras.copyRtsp')}
+          aria-label={t('cameras.copyRtsp')}
+        >
+          {#if rtspCopying}
+            <Loader2 size={14} class="animate-spin" />
+          {:else}
+            <Link size={14} />
+          {/if}
+          <span class="hidden sm:inline-flex ml-1.5 text-xs">RTSP</span>
+        </button>
+      {/if}
 
-      {#if isHls}
+      {#if isAudio}
+        <a
+          href="#/live/{camera.id}"
+          class="btn btn-ghost px-2 py-1 text-sm"
+          title={t('cameras.action.listenLabel')}
+          aria-label={t('cameras.action.listenLabel')}
+        >
+          <Headphones size={14} />
+          <span class="hidden sm:inline-flex ml-1.5 text-xs">{t('cameras.action.listenLabel')}</span>
+        </a>
+      {:else if isHls}
         <a
           href="#/live/{camera.id}"
           class="btn btn-ghost px-2 py-1 text-sm"

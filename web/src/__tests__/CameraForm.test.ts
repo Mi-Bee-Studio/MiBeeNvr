@@ -61,6 +61,7 @@ type CameraFormProps = {
   protocolsMap: Map<string, ProtocolInfo>;
   onsave: () => void;
   oncancel: () => void;
+  groupSuggestions?: string[];
 };
 
 function defaultProps(overrides: Partial<CameraFormProps> = {}): CameraFormProps {
@@ -369,9 +370,7 @@ describe('CameraForm - push camera URL exemption', () => {
     await fireEvent.click(saveBtn!);
 
     await vi.waitFor(() => {
-      const create = mockApiRequest.mock.calls.find(
-        (c) => typeof c[0] === 'string' && c[0] === '/cameras',
-      );
+      const create = mockApiRequest.mock.calls.find((c) => typeof c[0] === 'string' && c[0] === '/cameras');
       expect(create, 'POST /cameras should have been issued').toBeTruthy();
     });
   });
@@ -604,7 +603,7 @@ describe('CameraForm - gb28181 protocol (todo 18)', () => {
     await fireEvent.change(protocolSelect!, { target: { value: 'gb28181' } });
 
     const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('cameras.save')
+      b.textContent?.includes('cameras.save'),
     );
     expect(saveBtn).toBeTruthy();
     await fireEvent.click(saveBtn!);
@@ -640,7 +639,7 @@ describe('CameraForm - gb28181 protocol (todo 18)', () => {
     await fireEvent.input(channelInput!, { target: { value: '34020000001320000001' } });
 
     const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('cameras.save')
+      b.textContent?.includes('cameras.save'),
     );
     await fireEvent.click(saveBtn!);
 
@@ -660,7 +659,7 @@ describe('CameraForm - gb28181 protocol (todo 18)', () => {
   });
 });
 
-describe('CameraForm - tag field (legacy group label)', () => {
+describe('CameraForm - group field', () => {
   afterEach(() => {
     cleanup();
     mockApiRequest.mockReset();
@@ -684,7 +683,7 @@ describe('CameraForm - tag field (legacy group label)', () => {
     const { container } = render(CameraForm, {
       props: defaultProps({
         editingCamera: groupedCam as any,
-        tagSuggestions: ['室内', '室外'],
+        groupSuggestions: ['室内', '室外'],
       }),
     });
 
@@ -696,7 +695,7 @@ describe('CameraForm - tag field (legacy group label)', () => {
     const datalist = container.querySelector('datalist');
     expect(datalist, 'datalist should exist').toBeTruthy();
     const opts = Array.from(datalist!.querySelectorAll('option'));
-    expect(opts.map(o => o.value)).toEqual(['室内', '室外']);
+    expect(opts.map((o) => o.value)).toEqual(['室内', '室外']);
   });
 
   it('sends group in the update payload (empty string ungroups)', async () => {
@@ -721,9 +720,7 @@ describe('CameraForm - tag field (legacy group label)', () => {
     await fireEvent.click(saveBtn!);
 
     await vi.waitFor(() => {
-      const put = mockApiRequest.mock.calls.find(
-        (c) => typeof c[0] === 'string' && c[0] === '/cameras/cam-group-1',
-      );
+      const put = mockApiRequest.mock.calls.find((c) => typeof c[0] === 'string' && c[0] === '/cameras/cam-group-1');
       expect(put, 'PUT /cameras/{id} should have been issued').toBeTruthy();
       const body = JSON.parse((put![1] as RequestInit).body as string);
       expect(body.group).toBe('');
@@ -754,9 +751,7 @@ describe('CameraForm - tag field (legacy group label)', () => {
     await fireEvent.click(saveBtn!);
 
     await vi.waitFor(() => {
-      const create = mockApiRequest.mock.calls.find(
-        (c) => typeof c[0] === 'string' && c[0] === '/cameras',
-      );
+      const create = mockApiRequest.mock.calls.find((c) => typeof c[0] === 'string' && c[0] === '/cameras');
       expect(create, 'POST /cameras should have been issued').toBeTruthy();
       const body = JSON.parse((create![1] as RequestInit).body as string);
       expect(body.group).toBe('室外');
@@ -937,5 +932,88 @@ describe('CameraForm - RTSP audio probe display (#964)', () => {
       expect(container.textContent).toContain('cameras.testSuccess');
     });
     expect(container.textContent).not.toContain('cameras.testAudioFound');
+  });
+});
+
+describe('CameraForm - audio pickup variant (GB voice channel)', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+    vi.unstubAllGlobals();
+  });
+
+  const gbMic = {
+    id: 'gb-34020000001360000003',
+    name: 'Hall Pickup',
+    protocol: 'gb28181',
+    encoding: 'audio',
+    url: '',
+    group: '',
+    gb28181: { device_id: '34020000001320000001', channel_id: '34020000001360000003' },
+  };
+
+  it('shows the audio-link select for a GB audio channel (not just rtsp mics)', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+    // listCameras goes through raw fetch (ETag caching), not apiRequest.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () =>
+        JSON.stringify([
+          { id: 'cam-1', name: 'Studio Cam', encoding: 'h264' },
+          { id: 'gb-other-mic', name: 'Other Mic', encoding: 'audio' },
+        ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: gbMic as any }),
+    });
+
+    await vi.waitFor(() => {
+      // The candidates fetch must actually run and populate the select.
+      expect(fetchMock).toHaveBeenCalled();
+      expect(container.querySelectorAll('#cam-audio-link option').length).toBe(2);
+    });
+    const opts = Array.from(container.querySelectorAll('#cam-audio-link option'));
+    // Other audio devices are not link candidates; only the video camera is.
+    expect(opts.map((o) => (o as HTMLOptionElement).value)).toEqual(['', 'cam-1']);
+  });
+
+  it('hides the video audio toggles for an audio-source device', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: gbMic as any }),
+    });
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-encoding')).toBeTruthy();
+    });
+    expect(container.querySelector('#cam-audio')).toBeNull();
+    expect(container.querySelector('#cam-audio-in-recordings')).toBeNull();
+  });
+
+  it('keeps the cascade catalog toggle but hides sub-stream forwarding for audio', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: gbMic as any }),
+    });
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-cascade')).toBeTruthy();
+    });
+    expect(container.querySelector('#cam-cascade-sub')).toBeNull();
   });
 });

@@ -51,7 +51,7 @@
     onbackfillneeded?: (info: { cameraId: string; count: number; targetCodec: string }) => Promise<boolean>;
     /** Existing tag labels (the legacy group field) for the tag input's
      * datalist suggestions — free-form, single tag per device. */
-    tagSuggestions?: string[];
+    groupSuggestions?: string[];
   }
 
   let {
@@ -64,7 +64,7 @@
     onsave,
     oncancel,
     onbackfillneeded,
-    tagSuggestions = [],
+    groupSuggestions = [],
   }: Props = $props();
 
   // Unique suffix for this form instance's datalist id — the Cameras page can
@@ -230,8 +230,11 @@ let validationErrors = $state<Record<string, string>>({});
   let mergeConfig = $state<MergeConfig | null>(null);
   let mergeConfigLoading = $state(false);
 
-  // Audio-source variant (v43): rtsp + encoding "audio" = independent mic.
-  const isAudioSource = $derived(formProtocol === 'rtsp' && formEncoding === 'audio');
+  // Audio-source variant (v43): creating rtsp+audio, or editing ANY device
+  // whose stored encoding is audio - GB28181 voice-input channels register
+  // that way (encoding derived from the channel type, not from the form).
+  const isAudioDevice = $derived(editingCamera?.encoding === 'audio');
+  const isAudioSource = $derived(isAudioDevice || (formProtocol === 'rtsp' && formEncoding === 'audio'));
 
   // Lazily fetch candidate video cameras for the audio-link select once the
   // audio variant becomes active (excludes other audio devices — the backend
@@ -387,7 +390,7 @@ let validationErrors = $state<Record<string, string>>({});
     formRecordingEnabled = camera.recording_enabled ?? true;
     formCascadeEnabled = camera.cascade_enabled ?? true;
     formCascadeSubStream = camera.cascade_sub_stream ?? false;
-    formRecordingMode = camera.recording_mode === 'adaptive' ? 'adaptive' : 'continuous';
+    formRecordingMode = camera.recording_mode === 'adaptive' && camera.encoding !== 'audio' ? 'adaptive' : 'continuous';
     formMotionSource = camera.motion_source === 'camera:onvif' ? 'camera:onvif' : 'nvr';
     formAutoTimeSync = camera.auto_time_sync ?? true;
     timeStatus = null;
@@ -842,14 +845,13 @@ async function performCameraSave() {
       {/if}
     </div>
 
-    <!-- Tag (the legacy group field under a lighter name): a free-form label
-         shown as a chip and filtered on the management page. -->
+    <!-- Group (v36): the device's section on the management page. -->
     <div>
-      <label for="cam-group" class="input-label">{t('cameras.tag')}</label>
+      <label for="cam-group" class="input-label">{t('cameras.group')}</label>
       <input id="cam-group" type="text" class="input" list="{formUid}-group-options"
-        bind:value={formGroup} placeholder={t('cameras.tagPlaceholder')} />
+        bind:value={formGroup} placeholder={t('cameras.groupPlaceholder')} />
       <datalist id="{formUid}-group-options">
-        {#each tagSuggestions as g (g)}
+        {#each groupSuggestions as g (g)}
           <option value={g}></option>
         {/each}
       </datalist>
@@ -961,7 +963,9 @@ async function performCameraSave() {
     </div>
     {#if !formCascadeEnabled}
       <p class="text-xs th-text-muted -mt-1">{t('cameras.cascadeDisabledHint')}</p>
-    {:else}
+    {:else if !isAudioSource}
+      <!-- Sub-stream forwarding is video-only; audio channels keep just the
+           catalog-exposure toggle above. -->
       <div class="flex items-center gap-2 ml-5">
         <input
           id="cam-cascade-sub"
@@ -1037,8 +1041,9 @@ async function performCameraSave() {
       <CameraStorageSection camera={editingCamera} />
     {/if}
 
-    <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras) -->
-    {#if formEncoding !== 'mjpeg' && formEncoding !== 'jpeg'}
+    <!-- Audio recording toggle (not supported for MJPEG/JPEG cameras; an
+         audio-source device IS its audio track, so the toggles don't apply) -->
+    {#if !isAudioSource && formEncoding !== 'mjpeg' && formEncoding !== 'jpeg'}
       <div class="flex items-center gap-2">
         <input
           id="cam-audio"

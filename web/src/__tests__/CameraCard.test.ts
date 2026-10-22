@@ -19,7 +19,19 @@ vi.mock('$lib/toast.svelte', () => ({ showToast: toastMock }));
 
 // Mock lucide-svelte icons
 vi.mock('lucide-svelte', () => {
-  const icons = ['Pencil', 'Play', 'Square', 'RotateCw', 'Eye', 'MoreVertical', 'Archive', 'Link', 'Loader2'];
+  const icons = [
+    'Pencil',
+    'Play',
+    'Square',
+    'RotateCw',
+    'Eye',
+    'MoreVertical',
+    'Archive',
+    'Link',
+    'Loader2',
+    'AudioLines',
+    'Headphones',
+  ];
   const mock: Record<string, () => HTMLElement> = {};
   for (const name of icons) {
     mock[name] = () => document.createElement('span');
@@ -134,5 +146,51 @@ describe('CameraCard', () => {
     btn?.click();
     await vi.waitFor(() => expect(toastMock).toHaveBeenCalledWith(expect.stringContaining('RTSP'), 'error'));
     expect(copyTextMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('CameraCard - audio pickup variant', () => {
+  afterEach(() => cleanup());
+
+  function makeMic(overrides: Partial<Camera> = {}): Camera {
+    return makeCamera({
+      id: 'gb-mic-1',
+      name: 'Hall Pickup',
+      protocol: 'gb28181',
+      encoding: 'audio',
+      url: '',
+      status: 'recording',
+      ...overrides,
+    });
+  }
+
+  it('renders a Listen link instead of Live for an audio device', () => {
+    const { container } = render(CameraCard, { props: defaultProps(makeMic()) });
+    const link = container.querySelector('a[href="#/live/gb-mic-1"]');
+    expect(link).toBeTruthy();
+    expect(link?.getAttribute('aria-label')).toBe('Listen');
+  });
+
+  it('hides the RTSP copy button for an audio device', () => {
+    const { container } = render(CameraCard, { props: defaultProps(makeMic()) });
+    expect(container.querySelector('button[title*="RTSP"], button[aria-label*="RTSP"]')).toBeNull();
+  });
+
+  it('shows the audio type badge and the audio-recording status badge', () => {
+    const { getByText } = render(CameraCard, { props: defaultProps(makeMic()) });
+    expect(getByText('Audio pickup')).toBeTruthy();
+    expect(getByText('Recording audio')).toBeTruthy();
+  });
+
+  it('hides the URL line when the device has no URL (GB voice channel)', () => {
+    const { container } = render(CameraCard, { props: defaultProps(makeMic()) });
+    expect(container.querySelector('p.font-mono')).toBeNull();
+  });
+
+  it('keeps the RTSP button and Live link for video cameras', () => {
+    const { container } = render(CameraCard, { props: defaultProps(makeCamera()) });
+    expect(container.querySelector('button[title*="RTSP"], button[aria-label*="RTSP"]')).toBeTruthy();
+    const link = container.querySelector('a[href="#/live/test"]');
+    expect(link?.getAttribute('aria-label')).toBe('Live');
   });
 });
