@@ -496,6 +496,7 @@ func (h *Handler) registerMediaRoutes(r chi.Router) {
 		r.Get("/api/recordings/{id}/audio.wav", h.handleAudioWav)
 		r.Head("/api/recordings/{id}/audio.wav", h.handleAudioWav)
 		r.Get("/api/cameras/{cameraID}/audio/live.wav", h.handleAudioLiveWav)
+		r.Get("/api/cameras/{cameraID}/audio/live", h.handleAudioLive)
 	})
 	// Audio access audit trail (compliance): the WAV fetch above and live
 	// sessions append here; queryable newest-first.

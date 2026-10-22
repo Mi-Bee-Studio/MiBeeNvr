@@ -17,6 +17,7 @@
   import { parseServerDate } from '$lib/format';
   import { t } from '$lib/i18n';
   import { AudioLines, Volume2, VolumeX } from 'lucide-svelte';
+  import AudioWaveform from '$lib/components/AudioWaveform.svelte';
 
   interface Props {
     recording: Recording;
@@ -27,7 +28,10 @@
     id: string;
     startMs: number;
     endMs: number;
-    unsupported?: boolean; // WAV endpoint refused (AAC/Opus) — skipped in sync
+    // WAV endpoint refused: retried once via the MP4 download URL (AAC/Opus
+    // segments are natively playable there); still failing = truly unsupported.
+    fallbackTried?: boolean;
+    unsupported?: boolean; // skipped in sync
   }
 
   const PAD_MS = 120_000; // context padding around the video window
@@ -158,14 +162,23 @@
 
   function attach(segId: string) {
     if (!audioEl) return;
+    const seg = segs.find((s) => s.id === segId);
+    if (seg) seg.fallbackTried = false;
     audioEl.src = appendAuthToken(`${API_BASE}/recordings/${segId}/audio.wav`);
     audioEl.load();
   }
 
   function onAudioError() {
-    // Most likely a 406 (AAC/Opus refused by the WAV endpoint) — mark the
-    // segment so sync skips it instead of retrying every tick.
+    // Most likely a 406 (AAC/Opus refused by the WAV endpoint). Those
+    // recordings are natively playable in <audio> straight from the MP4
+    // download endpoint — retry once before giving up on the segment.
     const seg = segs.find((s) => s.id === currentSegId);
+    if (seg && !seg.fallbackTried && audioEl && currentSegId) {
+      seg.fallbackTried = true;
+      audioEl.src = appendAuthToken(`${API_BASE}/recordings/${currentSegId}/download`);
+      audioEl.load();
+      return;
+    }
     if (seg) seg.unsupported = true;
     if (auditioning) {
       auditioning = false;
@@ -317,6 +330,10 @@
         {/if}
       </p>
     {/if}
+
+    <div class="mt-2">
+      <AudioWaveform audio={audioEl} height={30} bars={40} label={t('common.audioWaveform')} />
+    </div>
 
     <audio bind:this={audioEl} class="hidden" onerror={onAudioError}></audio>
   </div>
