@@ -396,6 +396,10 @@ func buildStreamingDeps(deps *appDeps) (flvMgr *flv.Manager, gbLibEvents *gbsip.
 			return nil, nil, err
 		}
 		deps.gb28181Server = gbsip.NewServer(sipCfg, deps.gb28181DevMgr, deps.gb28181SessionMgr, gb28181.NewDeviceStore(deps.db))
+		// Return audio (#341 full duplex): the uplink hook must be wired
+		// before serving — the library captures it per session at StartTalk.
+		deps.talkUplinks = gb28181.NewTalkUplinkRegistry()
+		deps.talkUplinks.Attach(deps.gb28181Server)
 		// Alarm notifications surface on the event bus (SSE /api/events).
 		gbLibEvents = gb28181.NewEventBridge(deps.eventBus)
 		deps.gb28181Server.SetEventBus(gbLibEvents)

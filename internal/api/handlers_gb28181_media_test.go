@@ -48,6 +48,10 @@ type fakeGBMedia struct {
 	talkActive   bool
 	talkWritten  [][]byte
 
+	upCh         chan []byte
+	upUnsub      func()
+	upSubscribed bool
+
 	playback *platform.PlaybackInfo
 
 	alarms    []event.GB28181AlarmEvent
@@ -106,6 +110,18 @@ func (f *fakeGBMedia) StartTalk(_, _ string, _ string) error {
 	}
 	f.talkActive = true
 	return nil
+}
+
+// SubscribeTalkUplink satisfies the uplink seam (gb28181-go #141):
+// tests pre-load upCh to stream return audio at the WebSocket.
+func (f *fakeGBMedia) SubscribeTalkUplink(string) (<-chan []byte, func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.upCh == nil {
+		return nil, func() {}
+	}
+	f.upSubscribed = true
+	return f.upCh, f.upUnsub
 }
 
 func (f *fakeGBMedia) StopTalk(string) error {
@@ -472,4 +488,38 @@ func TestGBPTZMoveDirections(t *testing.T) {
 	h2.gb28181PTZ = nil
 	require.Equal(t, http.StatusServiceUnavailable, gbDo(t, h2, http.MethodPost, "/api/cameras/gb-cam/ptz/move", `{"mode":"continuous","pan":1}`).Code)
 	require.Equal(t, http.StatusServiceUnavailable, gbDo(t, h2, http.MethodPost, "/api/cameras/gb-cam/ptz/stop", "").Code)
+}
+
+// TestGBTalkWSUplinkDownstream verifies the full-duplex leg: frames from
+// the uplink subscription stream back over the same WebSocket as binary
+// messages, and teardown unsubscribes.
+func TestGBTalkWSUplinkDownstream(t *testing.T) {
+	t.Parallel()
+	h, media := newGBMediaEnv(t)
+
+	unsubbed := make(chan struct{})
+	media.mu.Lock()
+	media.upCh = make(chan []byte, 4)
+	media.upCh <- []byte{0xD5, 0x55, 0x2A}
+	media.upUnsub = func() { close(unsubbed) }
+	media.mu.Unlock()
+
+	srv := httptest.NewServer(h.Routes())
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/cameras/gb-cam/gb28181/talk"
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	mt, payload, err := conn.ReadMessage()
+	require.NoError(t, err, "uplink frame must stream back over the socket")
+	require.Equal(t, websocket.BinaryMessage, mt)
+	require.Equal(t, []byte{0xD5, 0x55, 0x2A}, payload)
+	require.NoError(t, conn.Close())
+
+	select {
+	case <-unsubbed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WS teardown must unsubscribe from the uplink feed")
+	}
 }

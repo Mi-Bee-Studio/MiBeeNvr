@@ -1104,6 +1104,11 @@ type GB28181DeviceMedia interface {
 	WriteTalkAudio(channelID string, alaw []byte)
 	// TalkStatusFor reports the intercom state of a camera.
 	TalkStatusFor(cameraID string) platform.TalkStatus
+	// SubscribeTalkUplink returns the device's return-audio frames (the
+	// sendrecv uplink leg, gb28181-go #141) for the intercom WebSocket to
+	// push back to the browser, plus an unsubscribe func. A nil channel
+	// means the platform has no uplink consumer wired.
+	SubscribeTalkUplink(channelID string) (<-chan []byte, func())
 	// GB28181Alarms returns the device's recent alarms (latest first).
 	GB28181Alarms(deviceID string) []event.GB28181AlarmEvent
 	// GB28181Positions returns the device's recent mobile positions.

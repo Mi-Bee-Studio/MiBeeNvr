@@ -151,7 +151,7 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 		handler.SetGB28181Catalog(platform.NewCatalogController(deps.gb28181DevMgr, deps.gb28181Server))
 		handler.SetGB28181Inviter(deps.gb28181Server)
 		handler.SetGB28181ByeSender(deps.gb28181Server)
-		handler.SetGB28181DeviceMedia(gb28181.ServerAdapter{Server: deps.gb28181Server})
+		handler.SetGB28181DeviceMedia(gb28181.ServerAdapter{Server: deps.gb28181Server, Uplinks: deps.talkUplinks})
 		handler.SetGB28181Timezone(appLoc)
 		// Auto-create cameras when GB28181 devices register, matching ONVIF auto-add.
 		deps.gb28181Server.SetCameraEnroller(camMgr)

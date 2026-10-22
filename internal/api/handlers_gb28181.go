@@ -856,6 +856,30 @@ func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// Full duplex (#341 + gb28181-go #141): the device's return audio
+	// (sendrecv uplink leg) streams back over this same socket as binary
+	// frames. A nil channel (no registry wired) keeps the socket send-only.
+	upCh, unsub := h.gb28181Media.SubscribeTalkUplink(channelID)
+	var writerDone <-chan struct{}
+	if upCh != nil {
+		done := make(chan struct{})
+		writerDone = done
+		go func() {
+			defer close(done)
+			for payload := range upCh {
+				if err := conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+					return
+				}
+			}
+		}()
+	}
+	defer func() {
+		unsub()
+		if writerDone != nil {
+			<-writerDone
+		}
+	}()
+
 	for {
 		mt, data, err := conn.ReadMessage()
 		if err != nil {

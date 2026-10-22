@@ -218,6 +218,19 @@ func NewEventBridge(nvr *event.EventBus) *gbsip.EventBus {
 // server unchanged.
 type ServerAdapter struct {
 	*gbsip.Server
+	// Uplinks fans OnTalkUplink out to the intercom WebSocket; nil
+	// disables the downstream leg (send-only intercoms).
+	Uplinks *TalkUplinkRegistry
+}
+
+// SubscribeTalkUplink exposes the registry to the intercom WebSocket
+// (full duplex: browser mic down, device mic up). A nil registry yields
+// a nil channel and a no-op unsubscribe.
+func (a ServerAdapter) SubscribeTalkUplink(channelID string) (<-chan []byte, func()) {
+	if a.Uplinks == nil {
+		return nil, func() {}
+	}
+	return a.Uplinks.Subscribe(channelID)
 }
 
 // GB28181Alarms returns the device's recent alarms, latest first.
