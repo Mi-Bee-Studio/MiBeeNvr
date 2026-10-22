@@ -523,3 +523,60 @@ func TestAudioTrackDoesNotPanicServer(t *testing.T) {
 		return frames > 5
 	}, 10*time.Second, 100*time.Millisecond, "video frames should keep flowing past the analyze window despite the audio track")
 }
+
+// TestCodecSinkReportsObservedTrack pins the CodecSink wiring: the encoding
+// reported to the camera manager must be the track the publisher actually
+// carries, so a stale manual annotation on the camera entry self-heals instead
+// of steering the player onto an unplayable protocol.
+func TestCodecSinkReportsObservedTrack(t *testing.T) {
+	keys := testStreamKeys()
+	hub := streamhub.New()
+	srv, addr := startTestServer(t, testResolver(keys), func(string) *streamhub.StreamHub {
+		return hub
+	}, nil, nil)
+	_ = srv
+
+	var mu sync.Mutex
+	var reported []string
+	srv.CodecSink = func(cameraID, encoding string) {
+		mu.Lock()
+		reported = append(reported, cameraID+":"+encoding)
+		mu.Unlock()
+	}
+
+	client, w, track, err := connectPublisher(t, addr, "test-key-1")
+	if err != nil {
+		t.Skipf("RTMP client publish failed: %v", err)
+		return
+	}
+	defer client.Close()
+
+	// The reader's track analysis needs real frames past its analyze window.
+	frameCtx, frameCancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer frameCancel()
+	go func() {
+		for i := 0; ; i++ {
+			select {
+			case <-frameCtx.Done():
+				return
+			default:
+			}
+			_ = w.WriteH264(track, time.Duration(i*33)*time.Millisecond, time.Duration(i*33)*time.Millisecond, [][]byte{{0x65, 0x88, 0x84, 0x00, 0x40}})
+			time.Sleep(33 * time.Millisecond)
+		}
+	}()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(reported) > 0
+	}, 10*time.Second, 100*time.Millisecond, "codec sink should fire after track analysis")
+
+	mu.Lock()
+	defer mu.Unlock()
+	// connectPublisher publishes an H.264 track; the sink must report exactly
+	// that, never the camera entry's configured annotation.
+	for _, r := range reported {
+		require.Equal(t, "rtmp-camera-1:h264", r)
+	}
+}

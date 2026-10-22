@@ -592,3 +592,56 @@ func (cm *CameraManager) SetGB28181SubChannel(deviceID, channelID, subChannelID 
 	slog.Info("gb28181: persisted probed sub_channel_id", "camera", cameraID, "sub_channel_id", subChannelID)
 	return nil
 }
+
+// SyncIngestEncoding reconciles an ingest (push-in) camera's configured
+// encoding with the codec its publisher's stream actually carries. The RTMP
+// ingest server reports the analyzed track ("h264"/"h265") on every publisher
+// connect; the camera entry's encoding is a manual annotation that can go
+// stale (e.g. the upstream relay switched from transcoded H.264 to passthrough
+// H.265) and a stale annotation makes the player pick an unplayable protocol
+// with no error anywhere. Auto-detection wins; manual config is the fallback
+// for when no publisher has ever connected.
+//
+// Scoped to push-in protocols on purpose: pull recorders (ONVIF/RTSP) keep the
+// existing fill-once ensureEncoding semantics, because a user may deliberately
+// pin stream_encoding to work around a camera whose SDP lies (claimedEncoding).
+// Ingest has no equivalent legitimate pin — the track analysis reads the real
+// stream, not a claim.
+func (cm *CameraManager) SyncIngestEncoding(cameraID, encoding string) {
+	switch encoding {
+	case "h264", "h265":
+	default:
+		return
+	}
+	cm.configMu.Lock()
+	changed := false
+	for i := range cm.cfg.Cameras {
+		c := &cm.cfg.Cameras[i]
+		if c.ID != cameraID {
+			continue
+		}
+		if c.Protocol != string(model.ProtoRTMP) {
+			cm.configMu.Unlock()
+			return
+		}
+		if strings.TrimSpace(c.Encoding) != encoding {
+			c.Encoding = encoding
+			changed = true
+		}
+		break
+	}
+	cm.configMu.Unlock()
+	if !changed {
+		return
+	}
+	if err := cm.persistConfig(); err != nil {
+		logger.Warn("ingest encoding sync: persist config failed", "camera_id", cameraID, "encoding", encoding, "error", err)
+	}
+	if cm.db != nil {
+		if err := cm.db.UpdateCameraEncoding(context.Background(), cameraID, encoding); err != nil {
+			logger.Warn("ingest encoding sync: db update failed", "camera_id", cameraID, "encoding", encoding, "error", err)
+		}
+	}
+	logger.Info("ingest encoding auto-synced from publisher stream",
+		"camera_id", cameraID, "encoding", encoding)
+}
