@@ -8,7 +8,7 @@ RPi_SRV  := mibee-nvr
 # Docker image registry
 DOCKER_REGISTRY ?= ghcr.io/mi-bee-studio/mibeenvr
 # Binary version: tag if on tag, else <tag>-<n>-g<hash>[-dirty]; 'dev' outside git.
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION := $(shell git describe --tags --always --dirty --match "v[0-9]*" 2>/dev/null || echo "dev")
 # Linker flags shared by all build targets. Release workflow overrides appVersion via github.ref_name.
 LDFLAGS := -s -w -X main.appVersion=$(VERSION)
 # -trimpath is a go-build flag (NOT a linker flag) — drops absolute paths from the binary for reproducible builds.
