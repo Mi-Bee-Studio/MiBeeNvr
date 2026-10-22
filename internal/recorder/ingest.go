@@ -775,3 +775,26 @@ func (r *IngestRecorder) recordBytes(bytes int64) {
 		r.cfg.Metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, string(r.format())).Add(float64(bytes))
 	}
 }
+
+// SetObservedCodec reconciles the recorder's configured encoding with the
+// codec the publisher's stream actually carries (reported by the RTMP server's
+// track analysis on every publisher connect). A stale configured encoding
+// mislabels every downstream read — CodecParams(), the /api/cameras encoding
+// field (resolveEncoding prefers the recorder's runtime codec, #166), and the
+// player's protocol choice — while the recorder happily consumes the real
+// stream. The update takes effect at the next segment boundary (segment
+// creation reads format()); an in-flight segment keeps the label it was
+// opened with, so a codec flip mid-recording never corrupts an existing MP4
+// track.
+func (r *IngestRecorder) SetObservedCodec(encoding string) {
+	switch encoding {
+	case "h264", "h265":
+	default:
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cfg.Encoding != encoding {
+		r.cfg.Encoding = encoding
+	}
+}
