@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, apiRequestBlob, rediscoverCamera, activateCamera, appendAuthToken, ApiRequestError, API_BASE } from '$lib/api';
+  import { listCameras, deleteCamera, startCamera, stopCamera, updateCamera, xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, listArchives, setArchiveRetention, deleteArchiveGroup, listArchiveRecordings, deleteArchiveRecording, getArchiveCleanupStatus, getHealthStatus, getTranscodingStatus, getTranscodingSettings, getTranscodingCheck, getCameraRecordingStats, apiRequestBlob, rediscoverCamera, activateCamera, appendAuthToken, ApiRequestError, API_BASE, listCameraGroups, createCameraGroup, renameCameraGroup, deleteCameraGroup, setCameraGroupsOrder } from '$lib/api';
   import type { Camera, XiaomiDevice, ProtocolInfo, ArchiveGroup, Recording, CameraHealth, HealthStatusResponse, ArchiveCleanupTask, ArchiveCleanupStatus } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast.svelte';
   import { friendlyError } from '$lib/errors';
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
-  import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings, Loader2 } from 'lucide-svelte';
+  import { AlertCircle, Camera as CameraIcon, Plus, Archive as ArchiveIcon, Trash2, ExternalLink, Clock, HardDrive, Play, Download, ChevronDown, ChevronRight, Video, Settings, Loader2, Pencil } from 'lucide-svelte';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import CameraCard from '$lib/components/CameraCard.svelte';
@@ -95,6 +95,267 @@
 
   function toggleFilter(tag: string): void {
     tagFilter = tagFilter === tag ? null : tag;
+  }
+
+  // Device grouping (v37, restored alongside the v44 tag filter — the two are
+  // orthogonal: tags filter WHICH devices show, groups organize the survivors
+  // into collapsible sections). Groups are plain labels on each device
+  // (assigned via drag & drop, the form, or a page-level create); an EMPTY
+  // group lives in the server-side registry until a device joins it. Collapse
+  // state persists in localStorage. With no group at all, rendering falls
+  // back to the legacy flat grid.
+  const GROUPS_COLLAPSED_KEY = 'mibee_nvr_camera_groups_collapsed';
+  let collapsedGroups = $state<Set<string>>(loadCollapsedGroups());
+  let registryGroups = $state<string[]>([]);
+  // New-group dialog
+  let showNewGroup = $state(false);
+  let newGroupName = $state('');
+  // Inline header rename
+  let renamingGroup = $state<string | null>(null);
+  let renameValue = $state('');
+  // Delete-group confirmation
+  let deleteGroupConfirm = $state<string | null>(null);
+  // Drag & drop: which section a device is currently dragged over ('' = ungrouped).
+  let dragOverGroup = $state<string | null>(null);
+
+  function loadCollapsedGroups(): Set<string> {
+    try {
+      const raw = localStorage.getItem(GROUPS_COLLAPSED_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? new Set(arr.filter(x => typeof x === 'string')) : new Set();
+    } catch {
+      return new Set();
+    }
+  }
+
+  function persistCollapsedGroups(): void {
+    localStorage.setItem(GROUPS_COLLAPSED_KEY, JSON.stringify([...collapsedGroups]));
+  }
+
+  function toggleGroupCollapse(name: string): void {
+    const next = new Set(collapsedGroups);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    collapsedGroups = next;
+    persistCollapsedGroups();
+  }
+
+  async function loadGroups(): Promise<void> {
+    try {
+      registryGroups = await listCameraGroups();
+    } catch (e) {
+      console.warn('Failed to load camera groups:', e);
+    }
+  }
+
+  // Ordered union of registry + device-derived labels — drives section
+  // rendering (and the form datalist). The registry carries the user's
+  // drag-to-reorder positions; derived-only labels append zh-sorted at the end.
+  const knownGroups = $derived.by(() => {
+    const ordered = [...registryGroups];
+    const seen = new Set(ordered);
+    const derived = [...new Set(cameras.map(c => (c.group || '').trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'zh'));
+    for (const g of derived) {
+      if (!seen.has(g)) {
+        ordered.push(g);
+        seen.add(g);
+      }
+    }
+    return ordered;
+  });
+  const hasGroups = $derived(knownGroups.length > 0);
+
+  // Sectioned view over the TAG-FILTERED list: named groups first (registry
+  // order), ungrouped bucket last. A group whose members are all filtered out
+  // is skipped — filtering never leaves empty scaffolding behind (except when
+  // no filter is active, where a registered-but-empty group still shows as a
+  // drop target).
+  const groupedSections = $derived.by(() => {
+    const map = new Map<string, Camera[]>();
+    for (const c of filteredCameras) {
+      const g = (c.group || '').trim();
+      if (!map.has(g)) map.set(g, []);
+      map.get(g)!.push(c);
+    }
+    const filtering = tagFilter !== null;
+    const sections: { name: string; cameras: Camera[] }[] = [];
+    for (const name of knownGroups) {
+      const members = map.get(name) ?? [];
+      if (filtering && members.length === 0) continue;
+      sections.push({ name, cameras: members });
+    }
+    const ungrouped = map.get('');
+    if (ungrouped && ungrouped.length > 0) sections.push({ name: '', cameras: ungrouped });
+    return sections;
+  });
+
+  function autofocus(el: HTMLInputElement): void {
+    el.focus();
+    el.select();
+  }
+
+  async function createGroup(): Promise<void> {
+    const name = newGroupName.trim();
+    if (!name) {
+      showToast(t('cameras.groupNameEmpty'), 'error');
+      return;
+    }
+    try {
+      await createCameraGroup(name);
+      showToast(t('cameras.groupCreatedToast'), 'success');
+      showNewGroup = false;
+      newGroupName = '';
+      await loadGroups();
+    } catch (e) {
+      showToast(friendlyError(e, 'cameras.groupCreateFailed'), 'error');
+    }
+  }
+
+  function startRename(name: string): void {
+    renamingGroup = name;
+    renameValue = name;
+  }
+
+  async function commitRename(): Promise<void> {
+    const oldName = renamingGroup;
+    if (!oldName) return;
+    const newName = renameValue.trim();
+    renamingGroup = null;
+    if (!newName || newName === oldName) return;
+    try {
+      await renameCameraGroup(oldName, newName);
+      showToast(t('cameras.groupRenamedToast'), 'success');
+      // Keep the collapse state under the new name.
+      if (collapsedGroups.has(oldName)) {
+        const next = new Set([...collapsedGroups].map(g => (g === oldName ? newName : g)));
+        collapsedGroups = next;
+        persistCollapsedGroups();
+      }
+      await Promise.all([loadGroups(), loadCameras()]);
+    } catch (e) {
+      showToast(friendlyError(e, 'cameras.groupRenameFailed'), 'error');
+    }
+  }
+
+  async function confirmDeleteGroup(): Promise<void> {
+    const name = deleteGroupConfirm;
+    if (!name) return;
+    deleteGroupConfirm = null;
+    try {
+      await deleteCameraGroup(name);
+      const next = new Set(collapsedGroups);
+      next.delete(name);
+      collapsedGroups = next;
+      persistCollapsedGroups();
+      showToast(t('cameras.groupDeletedToast'), 'success');
+      await Promise.all([loadGroups(), loadCameras()]);
+    } catch (e) {
+      showToast(friendlyError(e, 'cameras.groupDeleteFailed'), 'error');
+    }
+  }
+
+  // Drag & drop — section drop handlers. Foreign drags (file drops etc.) are
+  // ignored by checking the custom MIME type.
+  function onSectionDragOver(e: DragEvent, group: string): void {
+    if (!e.dataTransfer) return;
+    if (!(e.dataTransfer.types || []).includes('application/x-mibee-camera')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dragOverGroup = group;
+  }
+
+  function onSectionDragLeave(e: DragEvent, group: string): void {
+    const related = e.relatedTarget as Node | null;
+    const current = e.currentTarget as Node | null;
+    if (related && current && current.contains(related)) return;
+    if (dragOverGroup === group) dragOverGroup = null;
+  }
+
+  async function onSectionDrop(e: DragEvent, group: string): Promise<void> {
+    e.preventDefault();
+    dragOverGroup = null;
+    const id = e.dataTransfer?.getData('application/x-mibee-camera');
+    if (!id) return;
+    await moveCameraToGroup(id, group);
+  }
+
+  async function moveCameraToGroup(id: string, group: string): Promise<void> {
+    const cam = cameras.find(c => c.id === id);
+    if (!cam) return;
+    const prev = (cam.group || '').trim();
+    if (prev === group) return;
+    // Optimistic move; revert on failure.
+    cameras = cameras.map(c => (c.id === id ? { ...c, group } : c));
+    try {
+      await updateCamera(id, { group });
+      showToast(t('cameras.groupMovedToast', {
+        camera: cam.name,
+        group: group || t('cameras.groupUngrouped'),
+      }), 'success');
+    } catch (e) {
+      cameras = cameras.map(c => (c.id === id ? { ...c, group: prev } : c));
+      showToast(friendlyError(e, 'cameras.groupMoveFailed'), 'error');
+    }
+  }
+
+  // Group reorder (v38): drag a group header onto another header = insert
+  // BEFORE it; onto the ungrouped header = move to last. Distinct MIME type
+  // from the device drag so the two drop handlers never cross-fire.
+  let reorderDragOver = $state<string | null>(null);
+
+  function onHeaderDragStart(e: DragEvent, group: string): void {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData('application/x-mibee-group', group);
+    e.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onHeaderDragOver(e: DragEvent, target: string): void {
+    if (!e.dataTransfer) return;
+    if (!(e.dataTransfer.types || []).includes('application/x-mibee-group')) return;
+    const dragged = e.dataTransfer.getData('application/x-mibee-group');
+    if (dragged === target) return; // no-op slot
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    reorderDragOver = target;
+  }
+
+  function onHeaderDragLeave(e: DragEvent, target: string): void {
+    const related = e.relatedTarget as Node | null;
+    const current = e.currentTarget as Node | null;
+    if (related && current && current.contains(related)) return;
+    if (reorderDragOver === target) reorderDragOver = null;
+  }
+
+  async function onHeaderDrop(e: DragEvent, target: string): Promise<void> {
+    e.preventDefault();
+    e.stopPropagation(); // don't let the section's device-drop handler run
+    reorderDragOver = null;
+    const dragged = e.dataTransfer?.getData('application/x-mibee-group');
+    if (!dragged || dragged === target) return;
+    await reorderGroup(dragged, target);
+  }
+
+  async function reorderGroup(dragged: string, target: string): Promise<void> {
+    const names = knownGroups.slice();
+    const from = names.indexOf(dragged);
+    if (from < 0) return;
+    names.splice(from, 1);
+    if (target === '') {
+      names.push(dragged); // dropped on 未分组 → last named slot
+    } else {
+      const to = names.indexOf(target);
+      if (to < 0) names.push(dragged);
+      else names.splice(to, 0, dragged);
+    }
+    if (names.every((n, i) => n === knownGroups[i])) return; // no change
+    // Optimistic reorder; reload from server truth on completion/failure.
+    registryGroups = names;
+    try {
+      await setCameraGroupsOrder(names);
+    } catch (e) {
+      showToast(friendlyError(e, 'cameras.groupReorderFailed'), 'error');
+    }
+    await loadGroups();
   }
 
   // Discovery panel
@@ -470,6 +731,7 @@
   onMount(async () => {
     loadCameras();
     loadHealth();
+    loadGroups();
     loadArchives().then(() => loadCleanupStatus().then(() => {
       if (cleanupTasks.some(t => t.status === 'pending' || t.status === 'running')) {
         cleanupPolling = window.setInterval(loadCleanupStatus, 3000);
@@ -574,6 +836,9 @@
             {/if}
           </div>
         {/if}
+        <button onclick={() => { showNewGroup = true; }} class="btn btn-ghost">
+          {t('cameras.createGroup')}
+        </button>
         <button onclick={openAddForm} class="btn btn-primary">
           + {t('cameras.addCamera')}
         </button>
@@ -708,40 +973,125 @@
               {t('cameras.filter.empty')}
             </div>
           {:else}
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
-              {#each filteredCameras as camera (camera.id)}
-                <CameraCard
-                  {camera}
-                  {protocolsMap}
-                  health={healthData[camera.id]}
-                  onedit={openEditForm}
-                  ondelete={openArchiveConfirm}
-                  onstart={handleStartCamera}
-                  onstop={handleStopCamera}
-                  onrestart={handleRestartCamera}
-                  onrediscover={handleRediscoverCamera}
-                  onactivate={handleActivateCamera}
-                  onsaveName={handleSaveName}
-                />
-                <!-- Inline Edit Form for this camera -->
-                {#if editingCamera && editingCamera.id === camera.id}
-                  <div class="col-span-1 sm:col-span-2 lg:col-span-3 animate-slide-down">
-                    <CameraForm
-                      {editingCamera}
-                      {protocols}
-                      {protocolsMap}
-                      {xiaomiDeviceList}
-                      globalTranscodingEnabled={globalTranscodingEnabled}
-                      h265Available={h265Available}
-                      tagSuggestions={knownTags}
-                      onsave={handleFormSave}
-                      oncancel={handleFormCancel}
-                      onbackfillneeded={handleBackfillNeeded}
-                    />
-                  </div>
+            <!-- Grouped device grid (v37 restored, v45): named group sections
+                 with collapsible headers (inline rename + delete), drag &
+                 drop between sections, ungrouped bucket last — laid over the
+                 tag-filtered list, so tags pick WHICH devices show and groups
+                 organize the survivors. When no group exists at all, hasGroups
+                 is false and this renders the flat grid. -->
+            {#each groupedSections as grp (grp.name)}
+              {@const collapsed = collapsedGroups.has(grp.name)}
+              <div
+                class="camera-group-section {hasGroups && dragOverGroup === grp.name ? 'camera-group-section--drop' : ''}"
+                role="group"
+                aria-label={grp.name || t('cameras.groupUngrouped')}
+                ondragover={hasGroups ? (e) => onSectionDragOver(e, grp.name) : undefined}
+                ondragleave={hasGroups ? (e) => onSectionDragLeave(e, grp.name) : undefined}
+                ondrop={hasGroups ? (e) => onSectionDrop(e, grp.name) : undefined}
+              >
+                {#if hasGroups}
+                  {#if renamingGroup === grp.name}
+                    <div class="mt-6 card border th-border rounded-lg px-3 py-2 flex items-center gap-2">
+                      <input
+                        type="text"
+                        class="input h-8 max-w-[260px] text-sm"
+                        bind:value={renameValue}
+                        use:autofocus
+                        onkeydown={(e) => {
+                          if (e.key === 'Enter') commitRename();
+                          else if (e.key === 'Escape') renamingGroup = null;
+                        }}
+                        onblur={() => { if (renamingGroup === grp.name) commitRename(); }}
+                        placeholder={t('cameras.groupNamePlaceholder')}
+                      />
+                      <button class="btn btn-primary btn-sm" onclick={commitRename}>{t('cameras.save')}</button>
+                      <button class="btn btn-secondary btn-sm" onclick={() => { renamingGroup = null; }}>{t('common.cancel')}</button>
+                    </div>
+                  {:else}
+                    <div
+                      class="mt-6 card border th-border rounded-lg px-3 py-2 flex items-center gap-2 select-none {reorderDragOver === grp.name ? 'camera-group-header--insert' : ''}"
+                      ondragover={hasGroups ? (e) => onHeaderDragOver(e, grp.name) : undefined}
+                      ondragleave={hasGroups ? (e) => onHeaderDragLeave(e, grp.name) : undefined}
+                      ondrop={hasGroups ? (e) => onHeaderDrop(e, grp.name) : undefined}
+                    >
+                      <button type="button"
+                        class="flex items-center gap-2 flex-1 min-w-0 text-left {grp.name ? 'cursor-grab active:cursor-grabbing' : ''}"
+                        title={grp.name ? t('cameras.groupReorderHint') : undefined}
+                        draggable={grp.name ? 'true' : undefined}
+                        ondragstart={grp.name ? (e) => onHeaderDragStart(e, grp.name) : undefined}
+                        onclick={() => toggleGroupCollapse(grp.name)}
+                        aria-expanded={!collapsed}>
+                        {#if collapsed}
+                          <ChevronRight size={16} class="th-text-secondary shrink-0" />
+                        {:else}
+                          <ChevronDown size={16} class="th-text-secondary shrink-0" />
+                        {/if}
+                        <span class="font-semibold th-text-primary truncate">
+                          {grp.name || t('cameras.groupUngrouped')}
+                        </span>
+                        <span class="badge badge-neutral shrink-0">{grp.cameras.length}</span>
+                      </button>
+                      {#if grp.name}
+                        <button type="button" class="btn btn-ghost btn-sm shrink-0 p-1.5"
+                          title={t('cameras.renameGroup')} aria-label={t('cameras.renameGroup')}
+                          onclick={() => startRename(grp.name)}>
+                          <Pencil size={14} />
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-sm shrink-0 p-1.5 th-color-danger"
+                          title={t('cameras.deleteGroup')} aria-label={t('cameras.deleteGroup')}
+                          onclick={() => { deleteGroupConfirm = grp.name; }}>
+                          <Trash2 size={14} />
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
                 {/if}
-              {/each}
-            </div>
+                {#if !hasGroups || !collapsed}
+                  {#if hasGroups && grp.cameras.length === 0}
+                    <!-- Empty group (registered but no member yet): drop hint -->
+                    <div class="mt-3 border-2 border-dashed th-border rounded-lg p-8 text-center text-sm th-text-muted">
+                      {t('cameras.groupDropHint')}
+                    </div>
+                  {:else}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 {hasGroups ? 'mt-3' : 'mt-6'}">
+                      {#each grp.cameras as camera (camera.id)}
+                        <CameraCard
+                          {camera}
+                          {protocolsMap}
+                          health={healthData[camera.id]}
+                          groupDraggable={true}
+                          onedit={openEditForm}
+                          ondelete={openArchiveConfirm}
+                          onstart={handleStartCamera}
+                          onstop={handleStopCamera}
+                          onrestart={handleRestartCamera}
+                          onrediscover={handleRediscoverCamera}
+                          onactivate={handleActivateCamera}
+                          onsaveName={handleSaveName}
+                        />
+                        <!-- Inline Edit Form for this camera -->
+                        {#if editingCamera && editingCamera.id === camera.id}
+                          <div class="col-span-1 sm:col-span-2 lg:col-span-3 animate-slide-down">
+                            <CameraForm
+                              {editingCamera}
+                              {protocols}
+                              {protocolsMap}
+                              {xiaomiDeviceList}
+                              globalTranscodingEnabled={globalTranscodingEnabled}
+                              h265Available={h265Available}
+                              tagSuggestions={knownTags}
+                              onsave={handleFormSave}
+                              oncancel={handleFormCancel}
+                              onbackfillneeded={handleBackfillNeeded}
+                            />
+                          </div>
+                        {/if}
+                      {/each}
+                    </div>
+                  {/if}
+                {/if}
+              </div>
+            {/each}
           {/if}
         {/if}
       {:else}
@@ -1047,6 +1397,47 @@
       onskip={() => { showOnboarding = false; }}
     />
   {/if}
+
+  <!-- New-group dialog (v37 restored) -->
+  {#if showNewGroup}
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true">
+      <div class="card max-w-sm w-full p-6">
+        <h3 class="text-lg font-semibold th-text-primary mb-4">{t('cameras.createGroup')}</h3>
+        <input
+          type="text"
+          class="input mb-5"
+          bind:value={newGroupName}
+          use:autofocus
+          placeholder={t('cameras.groupNamePlaceholder')}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') createGroup();
+            else if (e.key === 'Escape') showNewGroup = false;
+          }}
+        />
+        <div class="flex justify-end gap-2">
+          <button class="btn btn-secondary btn-sm" onclick={() => { showNewGroup = false; }}>{t('common.cancel')}</button>
+          <button class="btn btn-primary btn-sm" onclick={createGroup}>{t('cameras.createGroup')}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Delete-group confirmation (v37 restored) -->
+  {#if deleteGroupConfirm}
+    {@const groupCameraCount = cameras.filter(c => (c.group || '').trim() === deleteGroupConfirm).length}
+    <ConfirmDialog
+      title={t('cameras.deleteGroupTitle')}
+      message={t('cameras.deleteGroupMessage', {
+        name: deleteGroupConfirm,
+        count: String(groupCameraCount),
+      })}
+      confirmText={t('common.confirm')}
+      cancelText={t('common.cancel')}
+      onconfirm={confirmDeleteGroup}
+      oncancel={() => { deleteGroupConfirm = null; }}
+      variant="danger"
+    />
+  {/if}
 </div>
 
 <style>
@@ -1076,5 +1467,20 @@
   .tag-chip-count {
     font-size: 0.6875rem;
     opacity: 0.7;
+  }
+
+  /* Group sections (v37 restored): drop-target highlight while a device drag
+     hovers a section, and the insertion line while a group header is dragged
+     over another header. */
+  .camera-group-section {
+    border-radius: 0.5rem;
+  }
+  .camera-group-section--drop {
+    background-color: color-mix(in srgb, var(--color-primary, #7c3aed) 8%, transparent);
+    outline: 2px dashed var(--color-primary, #7c3aed);
+    outline-offset: 2px;
+  }
+  .camera-group-header--insert {
+    box-shadow: 0 -2px 0 0 var(--color-primary, #7c3aed);
   }
 </style>
