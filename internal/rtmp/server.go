@@ -318,6 +318,30 @@ func (s *Server) handlePublisher(ctx context.Context, sc *gortmplib.ServerConn, 
 		})
 	}
 
+	// Register a discard callback for every audio track: RTMP ingest has no
+	// audio path (video-only recording), but gortmplib's Reader.Read invokes
+	// the per-track callback map without a nil check — an audio-bearing
+	// publish (e.g. an upstream transcode to H.264+AAC) panics the whole
+	// process with SIGSEGV the moment the first audio packet arrives.
+	for _, track := range r.Tracks() {
+		switch track.Codec.(type) {
+		case *codecs.MPEG4Audio:
+			r.OnDataMPEG4Audio(track, func(time.Duration, []byte) {})
+		case *codecs.MPEG1Audio:
+			r.OnDataMPEG1Audio(track, func(time.Duration, []byte) {})
+		case *codecs.G711:
+			r.OnDataG711(track, func(time.Duration, []byte) {})
+		case *codecs.LPCM:
+			r.OnDataLPCM(track, func(time.Duration, []byte) {})
+		case *codecs.Opus:
+			r.OnDataOpus(track, func(time.Duration, []byte) {})
+		case *codecs.FLAC:
+			r.OnDataFLAC(track, func(time.Duration, []byte) {})
+		case *codecs.AC3:
+			r.OnDataAC3(track, func(time.Duration, []byte) {})
+		}
+	}
+
 	// Read loop — runs until disconnect or context cancellation
 	for {
 		select {
