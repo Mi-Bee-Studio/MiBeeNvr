@@ -15,6 +15,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/doorbell"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
+	gb28181 "github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/hls"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/iobudget"
@@ -125,6 +126,7 @@ type appDeps struct {
 	whipServer        *whip.Server
 	rtspServer        *rtsp.Server
 	gb28181Server     *gbsip.Server
+	talkUplinks       *gb28181.TalkUplinkRegistry
 	gb28181Cascade    *gbcascade.Service
 	gb28181DevMgr     *platform.DeviceManager
 	gb28181SessionMgr *platform.SessionManager
