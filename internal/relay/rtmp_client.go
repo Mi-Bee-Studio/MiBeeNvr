@@ -545,17 +545,12 @@ func dialRTMPPublish(ctx context.Context, rawURL string, videoWidth, videoHeight
 		return nil, nil, fmt.Errorf("publish status: %w", err)
 	}
 
-	// Background reader goroutine: consume server messages (PingRequest,
-	// WindowAckSize, onStatus, etc.) to prevent TCP receive buffer from filling.
-	// Without this, the companion thinks we're unresponsive and RSTs the connection.
-	// go2rtc does the same in its publish() function.
-	go func() {
-		for {
-			if _, err := conn.Read(); err != nil {
-				return
-			}
-		}
-	}()
+	// Inbound drain: gortmplib's Writer runs its own reader goroutine from
+	// Initialize() on (v1.0.4+) consuming server messages (PingRequest,
+	// WindowAckSize, onStatus) — the original hand-rolled drain loop here would
+	// race it on the same bufio.Reader. The Writer's built-in loop serves the
+	// same purpose: keep the TCP receive buffer from filling (the companion
+	// RSTs connections that never read).
 
 	return conn, cleanup, nil
 }
