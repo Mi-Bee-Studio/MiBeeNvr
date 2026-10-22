@@ -43,7 +43,7 @@
 
 - **\"URL 输入框到底是什么意思？\"** —— 它就是目标平台给你的**完整推流地址**（含协议头 `rtmp://` 或 `rtsp://`、服务器、应用名、直播密钥）。填好后下方的实时预览就是最终用来推流的地址。
 - **\"RTMP 的 key 在哪里设？\"** —— 没有单独的 key 输入框，key 就是 URL 最后一段路径。例如 `rtmp://live-push.bilivideo.com/live-bvc/?streamkey=你的key`。
-- **H.265 摄像头能推吗？** —— 可以。直播平台基本只收 H.264，NVR 会自动把 H.265 转码成 H.264 再推（需要开启转码策略 `auto`，M5 有硬件转码）。H.264 摄像头则直接转发，零转码开销。
+- **H.265 摄像头能推吗？** —— 可以。直播平台基本只收 H.264，NVR 会自动把 H.265 转码成 H.264 再推（需要开启转码策略 `auto`，M5 有硬件转码）。H.264 摄像头则直接转发，零转码开销。**接收端是另一台本 NVR 时**，改用 `passthrough` 策略可让 H.265 原样直推（enhanced-RTMP hvc1），发送端零转码开销。
 - **推流有声音吗？** —— 有。摄像头提供 AAC 音频时直通；只有 G.711 时 NVR 会自动转成静默或兼容音频，无需设置。
 
 ---
@@ -323,6 +323,7 @@ relay:
 | `"auto"` | 硬件可用时使用硬件，否则软件 | 性能和质量的最佳平衡 |
 | `"force_sw"` | 始终使用软件转码 | 测试，或硬件有 bug 时 |
 | `"off"` | 用永久错误拒绝 H.265 源 | 仅用于仅 H.264 工作流 |
+| `"passthrough"` | H.265 源不转码，以 enhanced-RTMP（hvc1）原样直推 | **NVR → NVR 转推**（另一台本 NVR 的推流接入、SRS、FFmpeg 6.1+ 均支持）；发送端 CPU 零转码开销，ARM 单板多路并发首选。第三方直播平台（斗鱼、B 站等）大多不收 hvc1，推平台请继续用 `auto` |
 
 ## 手动平台测试
 
@@ -580,7 +581,7 @@ type PushTargetConfig struct {
     URL                 string                `yaml:"url" json:"url"`                           // 目标 URL
     Enabled             bool                  `yaml:"enabled" json:"enabled"`                   // 目标是否激活
     Platform            string                `yaml:"platform,omitempty" json:"platform,omitempty"`                         // 预设名称（bilibili/douyin/youtube/kuaishou/generic）
-    TranscodePolicy     string                `yaml:"transcode_policy,omitempty" json:"transcode_policy,omitempty"`         // "auto", "force_sw", "off"
+    TranscodePolicy     string                `yaml:"transcode_policy,omitempty" json:"transcode_policy,omitempty"`         // "auto", "force_sw", "off", "passthrough"
     VideoPresetOverride *VideoPresetOverrides `yaml:"video_preset_override,omitempty" json:"video_preset_override,omitempty"`
 }
 ```
@@ -614,7 +615,7 @@ relay:
 ### 验证规则
 
 - **Platform：** 必须匹配 `^[a-zA-Z0-9_]+$`（字母数字 + 下划线）或为空
-- **TranscodePolicy：** 必须为 "auto", "force_sw", "off" 或空
+- **TranscodePolicy：** 必须为 "auto", "force_sw", "off", "passthrough" 或空
 - **Resolution：** 必须为 WxH 格式（如 "1920x1080"）
 - **Framerate：** 如果指定，必须为 1-120
 - **VideoBitrateKbps：** 如果指定，必须为 100-50000
