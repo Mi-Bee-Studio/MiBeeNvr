@@ -54,7 +54,7 @@ func TestTalkUplinkRegistryDropWhenFull(t *testing.T) {
 	defer unsub()
 
 	// Fill past the buffer: dispatch must never block the producer.
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		r.Dispatch("chan-a", []byte{byte(i)})
 	}
 	require.Equal(t, cap(ch), len(ch), "buffer full, overflow dropped")
