@@ -227,8 +227,15 @@ func buildStreamingDeps(deps *appDeps) (flvMgr *flv.Manager, gbLibEvents *gbsip.
 		// CodecSink: keep the camera entry's encoding in sync with what the
 		// publisher actually sends (auto-detect first, manual config as
 		// fallback) — a stale annotation sends the player down an unplayable
-		// protocol path.
-		deps.rtmpServer.CodecSink = camMgr.SyncIngestEncoding
+		// protocol path. Two destinations: the IngestRecorder's runtime codec
+		// (what CodecParams()/resolveEncoding serve, effective immediately)
+		// and the persisted config+DB (what survives restarts).
+		deps.rtmpServer.CodecSink = func(cameraID, encoding string) {
+			if ir := camMgr.GetIngestRecorder(cameraID); ir != nil {
+				ir.SetObservedCodec(encoding)
+			}
+			camMgr.SyncIngestEncoding(cameraID, encoding)
+		}
 		slog.Info("RTMP server configured", "port", cfg.RTMP.Port)
 	}
 
