@@ -926,10 +926,10 @@ SRT uses UDP, which some home ISPs block or make hard to forward. If SRT doesn't
 
 ### Notes & limitations
 
-- **H.264 only over SRT/RTMP today.** The SRT MPEG-TS demuxer and classic RTMP both carry H.264. H.265 over these transports is a follow-up. (For H.265 cameras, transcode to H.264 at the publisher, or use MediaMTX as a bridge.)
+- **SRT carries H.264 only; RTMP carries both H.264 and H.265.** The SRT MPEG-TS demuxer only carries H.264. RTMP ingest accepts classic H.264 as well as H.265 via enhanced-RTMP (hvc1) — published by another MiBee NVR's relay (`transcode_policy: "passthrough"`), FFmpeg 6.1+, SRS, etc.; classic publishers like OBS still send H.264.
 - **The camera shows *offline* until a publisher connects** — this is expected for push cameras. There is no source to "dial" until the publisher arrives.
 - **Port forwarding / public IP required.** Push ingest does not traverse NAT on its own (no STUN/TURN). If neither side has a reachable port, use an overlay network (Tailscale/WireGuard) or MediaMTX as an intermediary.
-- **Audio**: RTMP/SRT push currently record video only (no audio track wiring on the ingest path yet).
+- **Audio**: RTMP/SRT push currently record video only (an audio track in the incoming stream is discarded; reception is unaffected).
 - **Legacy global config** (`srt.streams[]`, `rtmp.stream_keys`) still works and is merged with per-camera fields; per-camera fields take precedence.
 
 ## Push-Out (Relay) — Forward a Camera to Remote Destinations
@@ -992,7 +992,7 @@ flowchart LR
 
 ### Notes & limitations
 
-- **H.264 preferred for RTMP targets**. H.265 sources are automatically transcoded to H.264 when `transcode_policy: "auto"` is set (see [Relay Guide](./relay-guide.md)); H.264 sources are forwarded directly with zero transcode overhead.
+- **H.265 handling for RTMP targets**. Classic RTMP carries H.264 only: with `transcode_policy: "auto"` H.265 sources are transcoded to H.264 (see [Relay Guide](./relay-guide.md)); H.264 sources are forwarded directly with zero transcode overhead. **When the receiver is another MiBee NVR**, set the policy to `passthrough` and H.265 is forwarded natively via enhanced-RTMP (hvc1) — zero transcode cost on the sender, suitable for many concurrent streams on ARM SBCs.
 - **Audio is forwarded**: AAC audio is passed through; G.711-only sources are handled per target platform requirements (see Relay Guide).
 - **Target must be reachable**: the relay dials OUT to the target, so the target's RTMP/RTSP port must be accessible (port-forward if behind NAT).
 - **Resilient reconnect**: if the source camera or target connection drops, the relay retries with exponential backoff and resumes automatically.

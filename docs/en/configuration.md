@@ -926,9 +926,9 @@ cameras:
   - `url` (string, required) — target URL (`rtmp://host:1935/app/key` or `rtsp://host:8554/path`)
   - `enabled` (boolean, required) — whether the target is active
   - `platform` (string, optional) — platform preset: `"bilibili"`, `"douyin"`, `"youtube"`, `"kuaishou"`, `"generic"`, or empty for custom
-  - `transcode_policy` (string, optional, default: `"off"`) — `"auto"` (probe hardware, fallback software), `"force_sw"` (always libx264), `"off"` (reject H.265 sources)
+  - `transcode_policy` (string, optional, default: empty — H.265 sources transcode as with `auto`) — `"auto"` (probe hardware, fallback software), `"force_sw"` (always libx264), `"off"` (reject H.265 sources), `"passthrough"` (forward H.265 natively via enhanced-RTMP hvc1 with zero transcode cost; only works with enhanced-RTMP-capable receivers — another MiBee NVR, SRS, FFmpeg 6.1+; most third-party live platforms reject hvc1)
   - `video_preset_override` (object, optional) — override preset params: `{ resolution, framerate, video_bitrate_kbps, gop_seconds, profile, bframes }`
-- **Note**: H.264 sources are remuxed zero-copy. H.265 sources are live-transcoded to H.264 when `transcode_policy` is set (requires FFmpeg). Thermal monitoring protects ARM SBCs from overheating during transcode. See [Relay Guide](./relay-guide.md) for details.
+- **Note**: H.264 sources are remuxed zero-copy. H.265 sources are live-transcoded to H.264 under a transcode policy (built-in libx264; a separate FFmpeg compatibility mode also exists). Thermal monitoring protects ARM SBCs from overheating during transcode. See [Relay Guide](./relay-guide.md) for details.
 
 ## API Keys Configuration
 

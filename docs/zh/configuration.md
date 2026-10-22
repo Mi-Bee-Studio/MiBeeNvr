@@ -845,9 +845,9 @@ cameras:
   - `url` (string, required) — 目标 URL（`rtmp://host:1935/app/key` 或 `rtsp://host:8554/path`）
   - `enabled` (boolean, required) — 目标是否启用
   - `platform` (string, optional) — 平台预设：`"bilibili"`、`"douyin"`、`"youtube"`、`"kuaishou"`、`"generic"`，或留空表示自定义
-  - `transcode_policy` (string, optional, 默认: `"off"`) — `"auto"`（探测硬件，回退软件转码）、`"force_sw"`（始终使用 libx264）、`"off"`（拒绝 H.265 源）
+  - `transcode_policy` (string, optional, 默认: 空 —— H.265 源按 `auto` 转码) — `"auto"`（探测硬件，回退软件转码）、`"force_sw"`（始终使用 libx264）、`"off"`（拒绝 H.265 源）、`"passthrough"`（H.265 源不转码，以 enhanced-RTMP hvc1 原样直推；仅适用于支持 enhanced-RTMP H.265 的接收端 —— 另一台本 NVR、SRS、FFmpeg 6.1+，第三方直播平台大多不收）
   - `video_preset_override` (object, optional) — 覆盖预设参数：`{ resolution, framerate, video_bitrate_kbps, gop_seconds, profile, bframes }`
-- **注意**: H.264 源零拷贝直接转发。H.265 源在设置 `transcode_policy` 时会实时转码为 H.264（需要 FFmpeg）。热监控保护 ARM 单板计算机在转码期间免受过热影响。参见[推流转发指南](./relay-guide.md)了解详情。
+- **注意**: H.264 源零拷贝直接转发。H.265 源在转码策略下会实时转码为 H.264（内置 libx264，另有 FFmpeg 兼容模式）。热监控保护 ARM 单板计算机在转码期间免受过热影响。参见[推流转发指南](./relay-guide.md)了解详情。
 
 ### `cameras[].push_retention_days`
 - **类型**: integer（可空指针）

@@ -43,7 +43,7 @@ After opening a live room on your platform (e.g. the [Bilibili Live Studio](http
 
 - **"What is the URL field for?"** — it's the **full push address** your platform gave you (protocol prefix `rtmp://` or `rtsp://`, server, app name, and stream key all in one). The live preview below the field is exactly what will be used to push.
 - **"Where do I set the RTMP key?"** — there's no separate key input; the key is the last path segment of the URL. e.g. `rtmp://live-push.bilivideo.com/live-bvc/?streamkey=YOUR_KEY`.
-- **Can H.265 cameras push?** — yes. Live platforms mostly accept only H.264, so NVR auto-transcodes H.265 → H.264 before pushing (enable transcode policy `auto`; M5 has hardware transcode). H.264 cameras are forwarded directly with zero transcode overhead.
+- **Can H.265 cameras push?** — yes. Live platforms mostly accept only H.264, so NVR auto-transcodes H.265 → H.264 before pushing (enable transcode policy `auto`; M5 has hardware transcode). H.264 cameras are forwarded directly with zero transcode overhead. **When the receiver is another MiBee NVR**, switch the policy to `passthrough` and H.265 is pushed natively (enhanced-RTMP hvc1) with zero transcode cost on the sender.
 - **Is there audio?** — yes. When the camera provides AAC audio it's passed through; with only G.711, NVR auto-fills compatible/silent audio — no setup needed.
 
 ---
@@ -323,6 +323,7 @@ relay:
 | `"auto"` | Use hardware if available, fallback to software | Best balance of performance and quality |
 | `"force_sw"` | Always use software transcoding | Testing, or when hardware has bugs |
 | `"off"` | Reject H.265 sources with permanent error | Only for H.264-only workflows |
+| `"passthrough"` | Forward H.265 natively via enhanced-RTMP (hvc1), no transcoding | **NVR → NVR relay** (another MiBee NVR's ingest, SRS, and FFmpeg 6.1+ all accept hvc1); zero transcode cost on the sender — the first choice for multiple concurrent streams on ARM SBCs. Most third-party live platforms reject hvc1; for those keep using `auto`. |
 
 ## Manual Platform Testing
 
@@ -580,7 +581,7 @@ type PushTargetConfig struct {
     URL                 string                `yaml:"url" json:"url"`                           // Target URL
     Enabled             bool                  `yaml:"enabled" json:"enabled"`                   // Whether target is active
     Platform            string                `yaml:"platform,omitempty" json:"platform,omitempty"`                         // Preset name (bilibili/dougin/youtube/kuaishou/generic)
-    TranscodePolicy     string                `yaml:"transcode_policy,omitempty" json:"transcode_policy,omitempty"`         // "auto", "force_sw", "off"
+    TranscodePolicy     string                `yaml:"transcode_policy,omitempty" json:"transcode_policy,omitempty"`         // "auto", "force_sw", "off", "passthrough"
     VideoPresetOverride *VideoPresetOverrides `yaml:"video_preset_override,omitempty" json:"video_preset_override,omitempty"`
 }
 ```
@@ -614,7 +615,7 @@ relay:
 ### Validation Rules
 
 - **Platform:** Must match `^[a-zA-Z0-9_]+$` (alphanumeric + underscores) or be empty
-- **TranscodePolicy:** Must be "auto", "force_sw", "off", or empty
+- **TranscodePolicy:** Must be "auto", "force_sw", "off", "passthrough", or empty
 - **Resolution:** Must be in format WxH (e.g., "1920x1080")
 - **Framerate:** If specified, must be 1-120
 - **VideoBitrateKbps:** If specified, must be 100-50000
