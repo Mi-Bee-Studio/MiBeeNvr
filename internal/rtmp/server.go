@@ -58,6 +58,13 @@ type Server struct {
 	// set, each received access unit is forwarded to the IngestRecorder in
 	// addition to the hub broadcast, so RTMP pushes produce recordings.
 	NALUProvider func(cameraID string) NALUCallback
+	// CodecSink receives the video codec ("h264"/"h265") the publisher's
+	// stream actually carries, reported on every publisher connect once the
+	// track analysis has settled. Wired to the camera manager's
+	// SyncIngestEncoding so a stale encoding on the camera entry (e.g. the
+	// upstream switched from transcoded H.264 to passthrough H.265) self-heals
+	// instead of leaving the player to pick an unplayable protocol.
+	CodecSink func(cameraID, encoding string)
 
 	mu         sync.Mutex
 	listener   net.Listener
@@ -261,6 +268,18 @@ func (s *Server) handlePublisher(ctx context.Context, sc *gortmplib.ServerConn, 
 	if h264Track == nil && h265Track == nil {
 		logger.Error("no H.264/H.265 track found", "camera_id", entry.cameraID)
 		return
+	}
+
+	// Report the observed codec before anything can bail out below: the entry's
+	// configured encoding is a manual annotation, and the analyzed track is the
+	// physical fact the player must trust (auto-detect first, manual config as
+	// a last resort).
+	if s.CodecSink != nil {
+		if h265Track != nil {
+			s.CodecSink(entry.cameraID, "h265")
+		} else {
+			s.CodecSink(entry.cameraID, "h264")
+		}
 	}
 
 	// Set up the IngestRecorder callback (used below for both the initial
