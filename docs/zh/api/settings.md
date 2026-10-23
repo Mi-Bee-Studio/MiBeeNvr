@@ -217,9 +217,42 @@ curl -u username:password \
     "subscribe_alarm": false,
     "subscribe_mobile_position": false,
     "subscribe_expires": "3600s"
+  },
+  "doorbell": {
+    "enabled": true,
+    "listen": ":5070",
+    "realm": "mibee-nvr",
+    "transport": "udp",
+    "tls_cert": "",
+    "tls_key": "",
+    "lan_only": true,
+    "ring_timeout": "60s",
+    "users": [
+      {
+        "username": "front-door",
+        "name": "Front door",
+        "camera_id": "cam-xxxx",
+        "secret_configured": true
+      }
+    ],
+    "outbound": {
+      "server": "192.0.2.10:5060",
+      "username": "nvr",
+      "expires": "300s",
+      "secret_configured": true
+    }
+  },
+  "dlna": {
+    "enabled": false,
+    "port": 49152,
+    "interfaces": [],
+    "friendly_name": ""
   }
 }
 ```
+
+`doorbell` 的密钥永远不回传：每个门站与 outbound 的密钥只以
+`secret_configured` 布尔值出现，PBX 模式关闭时 `outbound` 为 `null`。
 
 `mibeevision.api_keys` 永远不会返回完整密钥（只有前缀）；`last_used`
 为该密钥最近一次被使用的 UTC 时间（每分钟粒度），从未使用过的密钥省略该字段。
@@ -442,6 +475,40 @@ curl -u username:password \
 {
   "status": "updated"
 }
+```
+
+按节提交同理——每个字段都可省略（缺省 = 不变）。`doorbell` 与 `dlna`
+两节遵循部分更新语义，另有两条约定：
+
+- 密钥留空即保持已存值（门站级与 outbound）：GET 永远不回传密钥，UI
+  未改动时回传空字段。`doorbell.users` 整表替换；
+  `doorbell.outbound.enabled: false` 移除 PBX 模式（GET 回 `null`）。
+- 两个服务都在启动时快照配置，因此任何改动都返回
+  `{"status": "updated", "restart_required": true}`（与上方 RTSP 输出
+  服务器相同）。
+
+**请求（门铃 + DLNA 示例）：**
+```bash
+curl -u username:password \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{
+    "doorbell": {
+      "enabled": true,
+      "listen": ":5070",
+      "users": [
+        {"username": "front-door", "name": "Front door", "camera_id": "cam-xxxx", "secret": ""}
+      ],
+      "outbound": {"enabled": false}
+    },
+    "dlna": {
+      "enabled": true,
+      "port": 49152,
+      "interfaces": ["eth0"],
+      "friendly_name": "Home NVR"
+    }
+  }' \
+  "http://localhost:9090/api/settings"
 ```
 
 ## 获取合并设置

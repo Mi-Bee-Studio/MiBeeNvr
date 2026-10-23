@@ -27,8 +27,10 @@ dlna:
   # friendly_name: ""    # 播放器上显示的名字;默认取 server.device_name
 ```
 
-修改后重启 NVR 生效。SSDP 通告走 UDP 1900;设备描述、Browse 控制和录像
-下载走所绑网卡上的指定 TCP 端口。
+修改后重启 NVR 生效。同样的字段也可在 **设置 → DLNA** 里编辑(启用开关、
+端口、显示名称、网卡列表)——保存响应同样带 `restart_required: true`。SSDP
+通告走 UDP 1900;设备描述、Browse 控制和录像下载走所绑网卡上的指定 TCP
+端口。
 
 ## 播放器看到什么
 

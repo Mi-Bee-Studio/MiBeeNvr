@@ -935,6 +935,40 @@ cameras:
 `gb28181_cascade:` 下级级联角色）参见 [GB28181 指南](gb28181-guide.md)，
 示例参见根目录 `config.example.yaml`。
 
+## 门铃配置（doorbell:）
+
+SIP 门铃/门口机接入（默认关闭）。模式、安全姿态与使用参见
+[门铃指南](doorbell.md)；下表所有键同样可在 **设置 → 门铃** 中编辑
+（下次启动生效）。
+
+| 键 | 类型 | 默认 | 说明 |
+|-----|------|---------|-------------|
+| `enabled` | boolean | `false` | SIP 接入总开关 |
+| `listen` | string | `":5070"` | SIP 监听地址 |
+| `realm` | string | `"mibee-nvr"` | SIP 摘要挑战域 |
+| `transport` | string | `"udp"` | `udp`、`tcp` 或 `tls` |
+| `tls_cert` / `tls_key` | string | — | PEM 路径，`tls` 时必填 |
+| `lan_only` | boolean | `true` | 拒绝来自非私网源地址的 SIP |
+| `ring_timeout` | duration | `"60s"` | 无人接听自动终止 |
+| `users` | list | — | 门站（模式 A）：`username`、`secret`（落盘加密）、`name`（弹窗显示名）、`camera_id`（可选，按铃抓拍源） |
+| `outbound` | map | — | 模式 B：注册到 PBX——`server`、`username`、`secret`、`expires`（默认 `"300s"`）；缺省 = 仅模式 A |
+
+启用时至少需要一个 `users` 条目或 `outbound`。运行状态（已注册门站、
+待重启）经 `GET /api/doorbell/status` 暴露。
+
+## DLNA 媒体服务器（dlna:）
+
+UPnP AV 媒体服务器（默认关闭）——局域网电视/播放器浏览录像库
+（相机 → 日期 → 录像）。同样可在 **设置 → DLNA** 中编辑，改动下次启动
+生效。浏览模型与播放器注意事项参见 [DLNA 指南](dlna.md)。
+
+| 键 | 类型 | 默认 | 说明 |
+|-----|------|---------|-------------|
+| `enabled` | boolean | `false` | 媒体服务器总开关 |
+| `port` | integer | `49152` | 每网卡 HTTP 端口（1–65535） |
+| `interfaces` | list | — | 绑定网卡名；留空 = 所有非回环 IPv4 网卡 |
+| `friendly_name` | string | 服务器名 | 播放器上显示的设备名 |
+
 ## 摄像头时间同步（time_sync:）
 
 ONVIF 摄像头的时钟偶发漂移（RTC 电池耗尽、断电重启、时区错配）会让画面 OSD 水印与事件时间错乱。NVR 提供两条互补的修正路径：
