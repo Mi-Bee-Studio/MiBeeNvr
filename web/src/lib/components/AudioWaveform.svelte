@@ -1,3 +1,56 @@
+<script module lang="ts">
+  // Module scope on purpose: the Web Audio graph must outlive component
+  // instances. createMediaElementSource may be called only ONCE per element —
+  // a remount that recreated it would throw and leave a dead flat canvas, and
+  // routing through a context that later gets GC'd permanently silences the
+  // element (the classic Chrome trap). One SHARED AudioContext feeds every
+  // element (browsers cap concurrent contexts hard); one analyser per element
+  // for the element's whole life, keyed weakly so both follow element GC.
+  interface wired {
+    ctx: AudioContext;
+    analyser: AnalyserNode;
+    data: Uint8Array;
+  }
+  const wiredEls = new WeakMap<HTMLAudioElement, wired>();
+  let sharedCtx: AudioContext | null = null;
+
+  function audioContext(): AudioContext | null {
+    if (sharedCtx && sharedCtx.state !== 'closed') return sharedCtx;
+    const AC: typeof AudioContext | undefined =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return null;
+    try {
+      sharedCtx = new AC();
+    } catch {
+      return null; // e.g. past the browser's concurrent-context cap
+    }
+    return sharedCtx;
+  }
+
+  function ensureGraph(el: HTMLAudioElement): wired | null {
+    const existing = wiredEls.get(el);
+    if (existing) {
+      if (existing.ctx.state === 'suspended') void existing.ctx.resume();
+      return existing;
+    }
+    const ctx = audioContext();
+    if (!ctx) return null;
+    try {
+      const source = ctx.createMediaElementSource(el);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.55;
+      source.connect(analyser);
+      analyser.connect(ctx.destination); // keep the element audible
+      const g: wired = { ctx, analyser, data: new Uint8Array(analyser.fftSize) };
+      wiredEls.set(el, g);
+      return g;
+    } catch {
+      return null; // e.g. element already sourced elsewhere / cross-origin — defensive
+    }
+  }
+</script>
+
 <script lang="ts">
   // REAL waveform visualization for any <audio> element: a Web Audio
   // AnalyserNode taps the element's output (MediaElementSource) and every
@@ -20,45 +73,11 @@
   let canvas: HTMLCanvasElement | undefined = $state();
   let raf = 0;
 
-  // One Web Audio graph per media element, for the element's whole life:
-  // createMediaElementSource may only be called once per element, so remounts
-  // (route changes) must reuse the existing nodes rather than create new ones.
-  interface wired {
-    ctx: AudioContext;
-    analyser: AnalyserNode;
-    data: Uint8Array;
-  }
-  const wiredEls = new WeakMap<HTMLAudioElement, wired>();
   let graph: wired | null = null;
   let levels: number[] = [];
   let peaks: number[] = [];
   let normPeaks: number[] = []; // slow-decaying per-bar peak for adaptive scaling
   let accent = '#7c3aed';
-
-  function ensureGraph(el: HTMLAudioElement): wired | null {
-    const existing = wiredEls.get(el);
-    if (existing) {
-      if (existing.ctx.state === 'suspended') void existing.ctx.resume();
-      return existing;
-    }
-    const AC: typeof AudioContext | undefined =
-      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AC) return null;
-    try {
-      const ctx = new AC();
-      const source = ctx.createMediaElementSource(el);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.55;
-      source.connect(analyser);
-      analyser.connect(ctx.destination); // keep the element audible
-      const g: wired = { ctx, analyser, data: new Uint8Array(analyser.fftSize) };
-      wiredEls.set(el, g);
-      return g;
-    } catch {
-      return null; // e.g. cross-origin element — same-origin here, defensive
-    }
-  }
 
   function readAccent(): string {
     const v = getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim();
