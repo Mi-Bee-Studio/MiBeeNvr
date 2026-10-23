@@ -116,6 +116,8 @@ export interface SettingsConfig {
   mibeevision?: MiBeeVisionConfig;
   vision?: VisionSettingsConfig;
   gb28181?: GB28181Config;
+  doorbell?: DoorbellSettingsConfig;
+  dlna?: DlnaSettingsConfig;
   timezone?: string; // "Local", "UTC", or IANA timezone name
   timezone_display?: string; // Human-readable timezone label (e.g. "Asia/Shanghai (UTC+8)")
   server?: { listen?: string }; // listen address ":9090" — changed via Settings UI
@@ -145,6 +147,66 @@ export interface GB28181Config {
   subscribe_expires?: string;
   sip_transport?: string; // "udp" | "tcp"
   allowed_device_ids?: string[];
+}
+
+/** One door station row of the `doorbell` settings section (#971). */
+export interface DoorbellUserSettings {
+  username: string;
+  name: string;
+  camera_id: string;
+  /** Write-only: blank = keep the stored secret (GET never returns it). */
+  secret?: string;
+  /** Read-only: whether a secret is configured. */
+  secret_configured?: boolean;
+}
+
+/** The `doorbell` settings section — SIP doorbell / intercom ingress.
+ *  Applied on next start (restart_required). */
+export interface DoorbellSettingsConfig {
+  enabled: boolean;
+  listen: string;
+  realm: string;
+  transport: string; // "udp" | "tcp" | "tls"
+  tls_cert?: string;
+  tls_key?: string;
+  lan_only?: boolean;
+  ring_timeout: string;
+  users?: DoorbellUserSettings[];
+  /** null = mode A only (no PBX registration). */
+  outbound?: DoorbellOutboundSettings | null;
+}
+
+export interface DoorbellOutboundSettings {
+  /** false on write removes mode B; true/fields present materialize it. */
+  enabled?: boolean;
+  /** Optional so the disable write `{ enabled: false }` typechecks; the
+   *  GET always returns them when outbound is configured. */
+  server?: string;
+  username?: string;
+  /** Write-only: blank = keep the stored secret. */
+  secret?: string;
+  /** Read-only: whether a secret is configured. */
+  secret_configured?: boolean;
+  expires?: string;
+}
+
+/** The `dlna` settings section — UPnP AV media server (#970).
+ *  Applied on next start (restart_required). */
+export interface DlnaSettingsConfig {
+  enabled: boolean;
+  port: number;
+  /** Empty = all non-loopback multicast IPv4 interfaces. */
+  interfaces?: string[];
+  friendly_name?: string;
+}
+
+/** GET /doorbell/status — runtime state of the doorbell ingress. */
+export interface DoorbellStatus {
+  /** Config-side enable (may diverge from `running` until the restart). */
+  enabled: boolean;
+  /** Whether the SIP server is actually built and listening. */
+  running: boolean;
+  registered: { user: string; source: string; expires_at: string }[];
 }
 
 export interface MergeStatus {
@@ -190,8 +252,10 @@ export async function getSettings(signal?: AbortSignal): Promise<SettingsConfig>
   return apiRequest<SettingsConfig>('/settings', { signal });
 }
 
+/** Partial-PUT semantics: callers send one section (e.g. `{ gb28181 }`,
+ *  `{ doorbell }`, `{ dlna }`); nil sections are unchanged server-side. */
 export async function updateSettings(
-  settings: SettingsConfig,
+  settings: Partial<SettingsConfig>,
   signal?: AbortSignal,
 ): Promise<{ status: string; restart_required?: boolean }> {
   return apiRequest<{ status: string; restart_required?: boolean }>('/settings', {
@@ -199,6 +263,12 @@ export async function updateSettings(
     body: JSON.stringify(settings),
     signal,
   });
+}
+
+/** Runtime doorbell state — enabled-vs-running divergence is the
+ *  pending-restart state the settings panel surfaces. */
+export async function getDoorbellStatus(signal?: AbortSignal): Promise<DoorbellStatus> {
+  return apiRequest<DoorbellStatus>('/doorbell/status', { signal });
 }
 
 // Recording-root choices (#395): the current storage.root_dir plus extra
