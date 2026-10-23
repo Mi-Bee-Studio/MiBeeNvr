@@ -99,9 +99,9 @@ const (
 // liveAudioFormat carries the per-codec framing for one live session.
 type liveAudioFormat struct {
 	contentType string
-	ext         string             // filename extension in Content-Disposition
-	header      []byte             // container header written once (nil = none)
-	accept      model.AudioCodec   // codec the stream was opened with; other codecs are dropped
+	ext         string                   // filename extension in Content-Disposition
+	header      []byte                   // container header written once (nil = none)
+	accept      model.AudioCodec         // codec the stream was opened with; other codecs are dropped
 	frame       func(data []byte) []byte // per-AU bytes to append (may allocate)
 }
 
@@ -345,13 +345,13 @@ func newLiveADTSFormat(ar *recorder.AudioRecorder) (liveAudioFormat, error) {
 		accept:      model.AudioAAC,
 		frame: func(au []byte) []byte {
 			out := make([]byte, 7+len(au))
-			n := len(au) + 7 // frame_length includes the ADTS header
+			n := len(au) + 7            // frame_length includes the ADTS header
 			out[0], out[1] = 0xFF, 0xF1 // syncword, MPEG-4, layer 0, no CRC
 			out[2] = profile<<6 | freqIdx<<2 | ch>>2
 			out[3] = ch&3<<6 | byte(n>>11)&0x03
 			out[4] = byte(n >> 3)
 			out[5] = byte(n&0x07)<<5 | 0x1F // buffer fullness 0x7FF (VBR), high bits
-			out[6] = 0xFC                    // low bits + zero blocks-in-frame
+			out[6] = 0xFC                   // low bits + zero blocks-in-frame
 			copy(out[7:], au)
 			return out
 		},
@@ -439,11 +439,11 @@ func newLiveOggOpusFormat(ar *recorder.AudioRecorder) (liveAudioFormat, error) {
 
 	head := make([]byte, 0, 19)
 	head = append(head, "OpusHead"...)
-	head = append(head, 1, byte(ch)) // version 1, channel count
+	head = append(head, 1, byte(ch))                 // version 1, channel count
 	head = binary.LittleEndian.AppendUint16(head, 0) // pre-skip (RTP sources: none)
 	head = binary.LittleEndian.AppendUint32(head, uint32(rate))
 	head = binary.LittleEndian.AppendUint16(head, 0) // output gain
-	head = append(head, 0)                            // mapping family 0 (mono/stereo)
+	head = append(head, 0)                           // mapping family 0 (mono/stereo)
 
 	tags := make([]byte, 0, 8+4+len("MiBeeNvr")+4)
 	tags = append(tags, "OpusTags"...)

@@ -102,7 +102,16 @@ func (h *Handler) handleListStreams(w http.ResponseWriter, r *http.Request) {
 	for cameraID, hub := range hubs {
 		result = append(result, h.buildFlowCamera(cameraID, hub, statuses[cameraID], mergeCounts))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"streams": result})
+	resp := map[string]any{"streams": result}
+	if h.gb28181Sessions != nil {
+		if sessions, recycles := h.gb28181Sessions(); sessions != nil {
+			resp["gb28181"] = map[string]any{
+				"sessions":       sessions,
+				"stall_recycles": recycles,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleCameraFlow serves GET /api/cameras/{id}/flow — the flow-path snapshot

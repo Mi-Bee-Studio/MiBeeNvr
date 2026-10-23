@@ -812,6 +812,11 @@ func validateConfigDetails(cfg *Config) error {
 		if strings.TrimSpace(cfg.GB28181.SIPListen) == "" {
 			return fmt.Errorf("gb28181.sip_listen is required when gb28181.enabled=true")
 		}
+		if sw := strings.TrimSpace(cfg.GB28181.StallWatchdog); sw != "" && !strings.EqualFold(sw, "off") {
+			if d, err := time.ParseDuration(sw); err != nil || d < 0 {
+				return fmt.Errorf("gb28181.stall_watchdog must be a non-negative duration (default 90s; %q), \"off\" to disable", sw)
+			}
+		}
 		if strings.TrimSpace(cfg.GB28181.Password) == "" {
 			return fmt.Errorf("gb28181.password is required when gb28181.enabled=true")
 		}

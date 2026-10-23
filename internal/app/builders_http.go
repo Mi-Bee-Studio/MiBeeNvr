@@ -168,6 +168,30 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 		// a different zone than the devices (UTC container, CST cameras) would
 		// otherwise skew every record window by the TZ offset.
 		deps.gb28181Server.SetGBTimezone(appLoc)
+		// Emission watchdog (gb28181-go #144): recycle sessions whose RTP
+		// keeps arriving while the demuxer produces nothing, then re-invite
+		// immediately — recovery bounded by the stall window, not the
+		// device's REGISTER expires. Configured via gb28181.stall_watchdog.
+		armGB28181StallWatchdog(deps)
+		// GB session observability: /api/streams gains a gb28181 section.
+		if deps.gb28181SessionMgr != nil {
+			sm := deps.gb28181SessionMgr
+			handler.SetGB28181Sessions(func() ([]api.GB28181SessionStatus, int64) {
+				sts := sm.Statuses()
+				out := make([]api.GB28181SessionStatus, 0, len(sts))
+				for _, st := range sts {
+					out = append(out, api.GB28181SessionStatus{
+						ChannelID:       st.ChannelID,
+						Classification:  st.Classification,
+						PacketsReceived: st.PacketsReceived,
+						AUEmitted:       st.AUEmitted,
+						AudioFrames:     st.AudioFrames,
+						Stalled:         st.Stalled,
+					})
+				}
+				return out, sm.StallRecycles()
+			})
+		}
 	}
 	// SIP doorbell API seam (#971): calls list / answer / reject / talk WS.
 	if deps.doorbellServer != nil {

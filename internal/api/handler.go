@@ -288,8 +288,11 @@ type Handler struct {
 	ptzSuppress    func(cameraID string, window time.Duration)
 	gb28181Catalog *platform.CatalogController
 	gb28181Inviter GB28181InviteSender
-	gb28181Bye     GB28181ByeSender
-	gb28181Cascade GB28181CascadeStatus
+	// gb28181Sessions (nil when GB28181 is disabled) feeds the /api/streams
+	// gb28181 section: live session observability + watchdog recycle count.
+	gb28181Sessions func() ([]GB28181SessionStatus, int64)
+	gb28181Bye      GB28181ByeSender
+	gb28181Cascade  GB28181CascadeStatus
 	// vodMgr serves the on-demand HLS VOD fragmenter for recording playback
 	// (#321 Phase 2). Self-contained (owns its segment cache) — constructed
 	// here rather than threaded through NewHandler's positional params.
@@ -1063,6 +1066,24 @@ type GB28181InviteSender interface {
 // SetGB28181Inviter wires the SIP server for the channel INVITE endpoint.
 func (h *Handler) SetGB28181Inviter(s GB28181InviteSender) {
 	h.gb28181Inviter = s
+}
+
+// GB28181SessionStatus mirrors the GB library's session observability
+// snapshot (payload classification + production counters + stall flag) for
+// /api/streams. Declared locally — Handler does not import the GB library.
+type GB28181SessionStatus struct {
+	ChannelID       string `json:"channel_id"`
+	Classification  string `json:"classification"`
+	PacketsReceived int64  `json:"packets_received"`
+	AUEmitted       int64  `json:"au_emitted"`
+	AudioFrames     int64  `json:"audio_frames_emitted"`
+	Stalled         bool   `json:"stalled"`
+}
+
+// SetGB28181Sessions wires the GB28181 session observability provider
+// (live session snapshot + stall-watchdog recycle count).
+func (h *Handler) SetGB28181Sessions(fn func() ([]GB28181SessionStatus, int64)) {
+	h.gb28181Sessions = fn
 }
 
 // GB28181ByeSender stops a channel media session end-to-end (SIP BYE to the
