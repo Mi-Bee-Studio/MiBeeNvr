@@ -129,6 +129,8 @@ github.com/mickeyzzc/gb28181-go v0.13.1-0.20261022222853-1b4ae8c6ce56 h1:kEHmxGX
 github.com/mickeyzzc/gb28181-go v0.13.1-0.20261022222853-1b4ae8c6ce56/go.mod h1:BHoRPKNAn9T8uPDFuYGl2ybBNDA5+IHNbyLsb3v230g=
 github.com/mickeyzzc/gb28181-go v0.13.1-0.20261023012155-a5d1b61e37a4 h1:KDvjGp3iLTzRUYI1ZTCLKEzjPGTsY+Pgmt90ngXgpDs=
 github.com/mickeyzzc/gb28181-go v0.13.1-0.20261023012155-a5d1b61e37a4/go.mod h1:BHoRPKNAn9T8uPDFuYGl2ybBNDA5+IHNbyLsb3v230g=
+github.com/mickeyzzc/gb28181-go v0.13.1-0.20261023043640-e34e4246ed54 h1:tP0kO1l/QmiCdzNPiSCciQb9UajoBS6sUkjp3CaQ/ZQ=
+github.com/mickeyzzc/gb28181-go v0.13.1-0.20261023043640-e34e4246ed54/go.mod h1:BHoRPKNAn9T8uPDFuYGl2ybBNDA5+IHNbyLsb3v230g=
 github.com/mickeyzzc/onvif-go/v2 v2.5.0 h1:ygWlHsXpOuIOi/X24JY+J789NrM2Gb++YN3dhK3p+uw=
 github.com/mickeyzzc/onvif-go/v2 v2.5.0/go.mod h1:Ev+Uh2j6Ii6pJ5JrHm50wv4ZburLr97GZwTYovj0YsU=
 github.com/miekg/dns v1.1.73 h1:uhT8nJxmTrPJYClxVxTCX+CVn6qnzSiybRk72Z6DgrE=
