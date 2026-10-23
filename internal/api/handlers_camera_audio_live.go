@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -85,16 +86,27 @@ func (h *Handler) handleAudioAudit(w http.ResponseWriter, r *http.Request) {
 //
 // Both endpoints share the same lifecycle: the stream ends on client
 // disconnect, source silence (30s), a mid-session codec change away from the
-// opened format (frames stop arriving → silence timeout), or a 6h hard cap
-// against zombie listeners. Browsers play progressive WAV/ADTS/Ogg through
-// <audio> with unknown sizes (WAV spells 0xFFFFFFFF; ADTS and Ogg are
-// self-delimiting streams).
+// opened format (frames stop arriving → silence timeout), a 6h hard cap
+// against zombie listeners, or — WAV only — the nominal window the response
+// declares. Chromium's WAV demuxer rejects open-ended bodies (it needs a
+// known resource size to clamp the 0xFFFFFFFF markers; the same bytes play
+// fine as a finite blob), so the WAV branches declare a finite
+// Content-Length covering a nominal listening window and end the body
+// cleanly at exactly that length (#1052). Earlier ends (idle/cap/disconnect)
+// truncate the response, which browsers accept after draining the buffer.
+// ADTS and Ogg are self-delimiting streams and stay open-ended.
 
 const (
 	audioLiveMaxIdle    = 30 * time.Second
 	audioLiveMaxSession = 6 * time.Hour
 	audioLiveFlushEvery = 500 * time.Millisecond // frequent small flushes: browsers start streaming playback sooner
 )
+
+// audioLiveWavNominalWindow is the listening window the WAV branches declare
+// via Content-Length (a live-listen session far outlasting it is unusual; the
+// client simply re-opens). Var so tests can shrink it to exercise the exact
+// end-of-body path.
+var audioLiveWavNominalWindow = time.Hour
 
 // liveAudioFormat carries the per-codec framing for one live session.
 type liveAudioFormat struct {
@@ -103,6 +115,10 @@ type liveAudioFormat struct {
 	header      []byte                   // container header written once (nil = none)
 	accept      model.AudioCodec         // codec the stream was opened with; other codecs are dropped
 	frame       func(data []byte) []byte // per-AU bytes to append (may allocate)
+	// contentLen >0 declares a finite Content-Length and ends the body at
+	// exactly that many bytes (WAV branches — see the block comment); 0 keeps
+	// the open-ended chunked form (ADTS/Ogg).
+	contentLen int64
 }
 
 // handleAudioLiveWav: G.711 → streaming PCM WAV (legacy consumers).
@@ -201,10 +217,15 @@ func runLiveAudioSession(w http.ResponseWriter, r *http.Request, cameraID string
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Audio-Codec", string(f.accept))
+	written := int64(0)
+	if f.contentLen > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(f.contentLen, 10))
+	}
 	if len(f.header) > 0 {
 		if _, err := w.Write(f.header); err != nil {
 			return // client hung up already
 		}
+		written = int64(len(f.header))
 	}
 	flusher.Flush()
 
@@ -238,7 +259,18 @@ func runLiveAudioSession(w http.ResponseWriter, r *http.Request, cameraID string
 			return
 		case data := <-frames:
 			lastFrame = time.Now()
-			if _, err := w.Write(f.frame(data)); err != nil {
+			out := f.frame(data)
+			if f.contentLen > 0 && written+int64(len(out)) > f.contentLen {
+				out = out[:f.contentLen-written] // end cleanly at the declared length
+			}
+			if len(out) > 0 {
+				if _, err := w.Write(out); err != nil {
+					return
+				}
+				written += int64(len(out))
+			}
+			if f.contentLen > 0 && written >= f.contentLen {
+				flusher.Flush()
 				return
 			}
 		case <-flushTicker.C:
@@ -284,12 +316,17 @@ func newLiveWavFormat(ar *recorder.AudioRecorder) (liveAudioFormat, error) {
 	copy(hdr[36:], "data")
 	binary.LittleEndian.PutUint32(hdr[40:], 0xFFFFFFFF)
 
+	// Finite declared length for the WAV branches (#1052): Chromium's WAV
+	// demuxer needs a known resource size; a nominal window keeps the header
+	// honest while staying open for far longer than a live-listen session.
+	nominal := int64(rate) * int64(channels) * 2 * int64(audioLiveWavNominalWindow) / int64(time.Second)
 	return liveAudioFormat{
 		contentType: "audio/wav",
 		ext:         "wav",
 		header:      hdr,
 		accept:      model.AudioG711,
 		frame:       func(d []byte) []byte { return g711ToPCM(d, muLaw, rate) },
+		contentLen:  int64(len(hdr)) + nominal,
 	}, nil
 }
 
