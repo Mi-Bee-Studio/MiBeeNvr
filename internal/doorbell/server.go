@@ -59,6 +59,10 @@ func NewServer(cfg Config, bus *event.EventBus, snap SnapshotRunner) *Server {
 // Calls exposes the recent-call list (API surface).
 func (s *Server) Calls() []*Call { return s.calls.calls() }
 
+// RegisteredStations snapshots the live mode-A registrations (sorted by
+// user) for the API status endpoint.
+func (s *Server) RegisteredStations() []StationStatus { return s.reg.snapshot() }
+
 // Answer accepts a ringing call: 200 OK with our SDP, media up.
 func (s *Server) Answer(callID string) error {
 	c, err := s.calls.get(callID)
