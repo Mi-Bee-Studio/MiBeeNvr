@@ -2,7 +2,9 @@ package camera
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -10,6 +12,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
@@ -123,4 +126,52 @@ func TestValidEncodingsGB28181Audio(t *testing.T) {
 		string(model.FormatAudio))
 	assert.True(t, platform.IsAudioInputChannel(gbPickupChannelID))
 	assert.False(t, platform.IsAudioInputChannel(gbCameraChannelID))
+}
+
+// TestGB28181AudioWriterSurvivesRecorderRecreate — regression for the
+// 2026-10-22 22:07 field incident (Gitea home-lab/mibee-nvr#29 forensics): a
+// camera re-created mid-session swaps the manager's recorder under the same
+// ID, and a writer pinned to the first recorder instance dropped every AU
+// while the session kept reporting "playing" — segments stopped for an hour
+// until a process restart. The per-call-resolution writer must follow the
+// swap: frames land in the NEW recorder, armed fresh, and the replaced
+// instance receives nothing.
+func TestGB28181AudioWriterSurvivesRecorderRecreate(t *testing.T) {
+	cfg := testConfig()
+	cfg.Cameras = nil
+	cfg.GB28181.AllowSameIPEnroll = true
+	mgr, _ := newManagerWithBus(t, cfg)
+
+	camID := "gb-" + gbPickupChannelID
+	require.NoError(t, mgr.EnsureGB28181Camera("34020000002000000001", gbPickupChannelID, "前门拾音器", ""))
+
+	recA := recorder.NewAudioRecorder(recorder.AudioConfig{CameraID: camID}, nil, nil)
+	hubA := streamhub.New()
+	recA.SetHub(hubA)
+	mgr.SetTestRecorder(camID, recA)
+
+	w := mgr.GB28181AudioWriter(camID)
+	require.NotNil(t, w)
+
+	// The re-creation: a FRESH recorder replaces the old instance under the
+	// same camera ID — exactly the 22:07 catalog re-insert shape.
+	recB := recorder.NewAudioRecorder(recorder.AudioConfig{CameraID: camID}, nil, nil)
+	hubB := streamhub.New()
+	recB.SetHub(hubB)
+	mgr.SetTestRecorder(camID, recB)
+
+	var framesA, framesB atomic.Int64
+	require.NoError(t, hubA.SubscribeAudio("old", func(int64, model.AudioCodec, []byte) { framesA.Add(1) }))
+	require.NoError(t, hubB.SubscribeAudio("new", func(int64, model.AudioCodec, []byte) { framesB.Add(1) }))
+
+	for i := 0; i < 10; i++ {
+		w("g711a", make([]byte, 160), nil, 0, 160)
+	}
+
+	// Hub consumers drain asynchronously — wait for delivery, then assert
+	// the replaced instance stayed silent.
+	require.Eventually(t, func() bool { return framesB.Load() == 10 }, 2*time.Second, 10*time.Millisecond,
+		"frames must land in the NEW recorder")
+	assert.Zero(t, framesA.Load(), "the replaced recorder must receive nothing")
+	assert.Equal(t, "g711", recB.AudioCodec(), "the new recorder must be armed fresh")
 }
