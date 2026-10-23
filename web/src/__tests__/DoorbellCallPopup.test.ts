@@ -113,3 +113,53 @@ describe('DoorbellCallPopup (#971)', () => {
     await waitFor(() => expect(container.textContent || '').not.toContain('doorbell.answer'));
   });
 });
+
+// --- G.711 codec anchors (shared with the GB28181 talk path) ---
+// Standard-form A-law: linear 0 → 0xD5, rails → 0xAA/0x2A; decoder anchors
+// 0xD5 → 8, 0x8A → 8064, 0xAA → 32256, 0x2A → −32256.
+import { pcmToAlawItu, encodeAlawItu, decodeAlaw } from '$lib/alaw-encoder';
+
+describe('ITU G.711 A-law anchors + round-trip', () => {
+  it('encodes the documented anchor values', () => {
+    expect(pcmToAlawItu(0)).toBe(0xd5);
+    expect(pcmToAlawItu(32767)).toBe(0xaa);
+    expect(pcmToAlawItu(-32768)).toBe(0x2a);
+  });
+
+  it('decodes the documented anchor values', () => {
+    const out = decodeAlaw(new Uint8Array([0xd5, 0x8a, 0xaa, 0x2a]));
+    expect(out[0] * 32768).toBeCloseTo(8, -1);
+    expect(out[1] * 32768).toBeCloseTo(8064, -1);
+    expect(out[2] * 32768).toBeCloseTo(32256, -1);
+    expect(out[3] * 32768).toBeCloseTo(-32256, -1);
+  });
+
+  it('keeps sign polarity on a mid-level sample', () => {
+    const pos = decodeAlaw(new Uint8Array([pcmToAlawItu(8000)]))[0];
+    const neg = decodeAlaw(new Uint8Array([pcmToAlawItu(-8000)]))[0];
+    expect(pos).toBeGreaterThan(0);
+    expect(neg).toBeLessThan(0);
+  });
+
+  it('decodeAlaw(encodeAlawItu(x)) stays within G.711 quantization error', () => {
+    // Inherent A-law error: 13-bit fold (≤8) + half the top-segment step
+    // (16-bit step 1024 → 512) + the codec's 32256 ceiling vs 32767 rails.
+    for (let x = -32768; x <= 32767; x += 997) {
+      const bytes = encodeAlawItu(new Float32Array([x / 32767]));
+      const back = decodeAlaw(bytes)[0] * 32768;
+      expect(Math.abs(back - x)).toBeLessThanOrEqual(520);
+    }
+  });
+
+  it('round-trips a Float32 buffer without changing length', () => {
+    const pcm = new Float32Array(160);
+    for (let i = 0; i < pcm.length; i++) pcm[i] = Math.sin((i / 160) * 2 * Math.PI) * 0.5;
+    const bytes = encodeAlawItu(pcm);
+    const back = decodeAlaw(bytes);
+    expect(bytes).toHaveLength(160);
+    expect(back).toHaveLength(160);
+    for (let i = 0; i < 160; i++) {
+      expect(Math.abs(back[i] - pcm[i])).toBeLessThanOrEqual(520 / 32768);
+    }
+  });
+});
