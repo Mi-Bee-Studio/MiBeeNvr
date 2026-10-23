@@ -140,7 +140,7 @@ describe('DoorbellPanel', () => {
       running: false,
       registered: [],
     });
-    expect(container.textContent).toContain('settings.doorbell.statusPendingRestart');
+    expect(container.textContent).toContain('settings.doorbell.statusRestartPending');
   });
 
   it('binds user edits back to state', async () => {
@@ -153,7 +153,9 @@ describe('DoorbellPanel', () => {
   });
 
   it('save sends the doorbell block via updateSettings and surfaces restart_required', async () => {
-    await renderPanel();
+    const { container } = await renderPanel();
+    // Baseline: enabled config + running service.
+    expect(container.textContent).toContain('settings.doorbell.statusRunning');
 
     await settingsForm.panels.get('doorbell')!.save();
 
@@ -181,9 +183,13 @@ describe('DoorbellPanel', () => {
       },
     });
 
-    // restart_required from the API becomes an explicit toast.
+    // restart_required from the API becomes an explicit toast, and the
+    // status strip flips to pending even though the (mocked) service is
+    // still running — the disable/retune directions need that.
     const messages = vi.mocked(showToast).mock.calls.map((c) => c[0]);
     expect(messages).toContain('settings.doorbell.restartRequired');
+    expect(container.textContent).toContain('settings.doorbell.statusRestartPending');
+    expect(container.textContent).not.toContain('settings.doorbell.statusRunning');
   });
 
   it('blocks save when enabled with no users and no outbound', async () => {

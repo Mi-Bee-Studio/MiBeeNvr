@@ -1859,7 +1859,7 @@
   "settings.doorbell.statusTitle": "运行状态",
   "settings.doorbell.statusHint": "已启用但未运行表示等待重启生效。",
   "settings.doorbell.statusRunning": "正在监听来电",
-  "settings.doorbell.statusPendingRestart": "已启用——等待重启生效",
+  "settings.doorbell.statusRestartPending": "已保存——重启后生效",
   "settings.doorbell.statusStopped": "未运行",
   "settings.doorbell.statusRegistered": "已注册门站（{count}）",
   "settings.doorbell.validationUsersRequired": "启用前需至少一个门站或启用 PBX 模式。",

@@ -1843,7 +1843,7 @@
   "settings.doorbell.statusTitle": "Состояние",
   "settings.doorbell.statusHint": "«Включено, но не работает» означает ожидание перезапуска.",
   "settings.doorbell.statusRunning": "Ожидает вызовы",
-  "settings.doorbell.statusPendingRestart": "Включено — ожидает перезапуска",
+  "settings.doorbell.statusRestartPending": "Сохранено — применится после перезапуска NVR",
   "settings.doorbell.statusStopped": "Не работает",
   "settings.doorbell.statusRegistered": "Зарегистрированные домофоны ({count})",
   "settings.doorbell.validationUsersRequired": "Для включения нужен хотя бы один домофон или режим АТС.",

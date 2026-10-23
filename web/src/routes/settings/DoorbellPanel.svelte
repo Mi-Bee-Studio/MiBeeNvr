@@ -22,6 +22,12 @@
   // pending-restart state; never blocks the panel.
   let status = $state<DoorbellStatus | null>(null);
   let cameras = $state<CameraSummary[]>([]);
+  // Set when THIS session saved a change the running service has not picked
+  // up yet (restart_required). runtime-only divergence (enabled config, no
+  // service) covers the same state across reloads; the flag also covers the
+  // reverse direction — disabled config, service still listening until the
+  // restart.
+  let pendingRestart = $state(false);
 
   // Config state — mirrors internal/config/config_doorbell.go defaults
   // (apply_defaults.go).
@@ -89,6 +95,7 @@
   async function loadConfig() {
     loading = true;
     error = '';
+    pendingRestart = false;
     getDoorbellStatus()
       .then((st) => (status = st))
       .catch(() => (status = null));
@@ -200,6 +207,7 @@
       showToast(t('settings.saved'), 'success');
       if (res.restart_required) {
         showToast(t('settings.doorbell.restartRequired'), 'info');
+        pendingRestart = true;
         getDoorbellStatus()
           .then((st) => (status = st))
           .catch(() => {});
@@ -483,17 +491,15 @@
         <p class="text-xs th-text-tertiary mt-1">{t('settings.doorbell.statusHint')}</p>
       </div>
       <div class="flex flex-col gap-1 items-end text-xs">
-        {#if status === null}
-          <span class="th-text-tertiary">{t('settings.doorbell.statusStopped')}</span>
-        {:else if status.running}
+        {#if pendingRestart || (doorbellEnabled && status !== null && !status.running)}
+          <span class="inline-flex items-center gap-1.5 text-yellow-600 dark:text-yellow-400">
+            <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
+            {t('settings.doorbell.statusRestartPending')}
+          </span>
+        {:else if status !== null && status.running}
           <span class="inline-flex items-center gap-1.5 text-green-600 dark:text-green-400">
             <span class="w-2 h-2 rounded-full bg-green-500"></span>
             {t('settings.doorbell.statusRunning')}
-          </span>
-        {:else if doorbellEnabled}
-          <span class="inline-flex items-center gap-1.5 text-yellow-600 dark:text-yellow-400">
-            <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
-            {t('settings.doorbell.statusPendingRestart')}
           </span>
         {:else}
           <span class="th-text-tertiary">{t('settings.doorbell.statusStopped')}</span>

@@ -1859,7 +1859,7 @@
   "settings.doorbell.statusTitle": "Runtime status",
   "settings.doorbell.statusHint": "Enabled-but-not-running means a restart is pending.",
   "settings.doorbell.statusRunning": "Listening for calls",
-  "settings.doorbell.statusPendingRestart": "Enabled — restart pending",
+  "settings.doorbell.statusRestartPending": "Saved — applies after an NVR restart",
   "settings.doorbell.statusStopped": "Not running",
   "settings.doorbell.statusRegistered": "Registered stations ({count})",
   "settings.doorbell.validationUsersRequired": "Enable requires at least one door station or PBX mode.",
