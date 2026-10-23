@@ -95,3 +95,38 @@ export function encodeAlawStandard(samples: Float32Array): Uint8Array {
   for (let i = 0; i < raw.length; i++) raw[i] ^= 0x55;
   return raw;
 }
+
+/**
+ * Encode one 16-bit PCM sample as a fully ITU-T G.711 standard A-law byte:
+ * fold to 13 bits, sign-1-positive, four mantissa bits, xor 0x55 parity.
+ * This is the wire form standard GB28181 intercom devices speak (the
+ * legacy pcmToAlaw above is the old no-xor custom-firmware pair, kept only
+ * for history). Documented anchors: linear 0 → 0xD5, positive full scale →
+ * 0xAA, negative full scale → 0x2A.
+ */
+export function pcmToAlawItu(sample: number): number {
+  const pcm = sample >> 3; // fold to 13 bits
+  const mask = pcm >= 0 ? 0xd5 : 0x55;
+  const mag = pcm >= 0 ? pcm : -pcm - 1;
+
+  let segment = 0;
+  while (segment < 7 && mag >= (0x20 << segment)) segment++;
+  const step = segment < 2 ? (mag >> 1) & 0x0f : (mag >> segment) & 0x0f;
+  return (((segment << 4) | step) ^ mask) & 0xff;
+}
+
+/**
+ * Encode a run of PCM samples (Float32, −1..+1, resampled to 8 kHz BEFORE
+ * calling this) into standard ITU G.711 A-law bytes — the GB28181 intercom
+ * wire form for the eye family, both directions (pairs with decodeAlaw).
+ */
+export function encodeAlawItu(samples: Float32Array): Uint8Array {
+  const out = new Uint8Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    let s = samples[i];
+    if (s > 1) s = 1;
+    else if (s < -1) s = -1;
+    out[i] = pcmToAlawItu(Math.round(s * 32767));
+  }
+  return out;
+}

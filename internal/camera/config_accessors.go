@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -308,6 +309,22 @@ func (cm *CameraManager) GB28181CameraIDByChannel(deviceID, channelID string) (s
 	return "", false
 }
 
+// GB28181CameraConfigByChannelID resolves the camera config bound to a
+// channel ID alone. Used by the stall-watchdog re-invite, whose library
+// callback carries only the channel ID: GB channel IDs embed the device ID,
+// so a channel matches at most one camera. Like GB28181CameraIDByChannel it
+// scans configs instead of assuming the auto-enroll "gb-<channelID>" ID, so
+// manually created cameras re-invite too.
+func (cm *CameraManager) GB28181CameraConfigByChannelID(channelID string) (config.CameraConfig, bool) {
+	snap := cm.loadSnapshot()
+	for _, cfg := range snap.configs {
+		if cfg.Protocol == string(model.ProtoGB28181) && cfg.GB28181.ChannelID == channelID {
+			return *cfg, true
+		}
+	}
+	return config.CameraConfig{}, false
+}
+
 // ArchiveGB28181Camera soft-removes the camera auto-enrolled for a channel —
 // used when a catalog supersedes the device-self pseudo-channel (#352).
 // Archives preserve recordings; a no-op when no camera is bound.
@@ -322,12 +339,21 @@ func (cm *CameraManager) ArchiveGB28181Camera(deviceID, channelID string) error 
 // GB28181NALUWriter returns the recorder's AU callback for a GB28181 camera,
 // or nil. The SIP server uses this to bridge RTP receiver output directly
 // into the recorder pipeline at access-unit granularity.
+//
+// The returned closure resolves the recorder PER CALL (a lock-free snapshot
+// read). A camera re-created mid-session — config reload, auto-enroll
+// supersede, the 2026-10-22 22:07 field incident — swaps the manager's
+// recorder under the same ID, and a writer pinned to the old instance would
+// silently drop every AU while the session reports "playing".
 func (cm *CameraManager) GB28181NALUWriter(cameraID string) func(au [][]byte, ptsTicks int64, isIDR bool) {
-	rec := cm.GetGB28181Recorder(cameraID)
-	if rec == nil {
-		return nil
+	if cm.GetGB28181Recorder(cameraID) == nil {
+		return nil // audio-only channel: no video recorder by design
 	}
-	return rec.WriteNALU
+	return func(au [][]byte, ptsTicks int64, isIDR bool) {
+		if rec := cm.GetGB28181Recorder(cameraID); rec != nil {
+			rec.WriteNALU(au, ptsTicks, isIDR)
+		}
+	}
 }
 
 // GB28181AudioWriter returns the recorder's audio-frame callback for a
@@ -336,28 +362,42 @@ func (cm *CameraManager) GB28181NALUWriter(cameraID string) func(au [][]byte, pt
 // Voice-input channels (encoding=audio) have no video recorder at all —
 // their push-mode AudioRecorder is armed from the first frame's codec
 // (A-law for the negotiated PT 8, mu-law for bare PT 0) and fed per AU.
+//
+// Like GB28181NALUWriter, the closure resolves the recorder per call, so a
+// mid-session camera re-creation re-attaches to the NEW recorder. Arming
+// follows the instance: a fresh AudioRecorder starts unarmed, so the codec
+// snapshot is (re)taken whenever the resolved recorder changes.
 func (cm *CameraManager) GB28181AudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
-	if rec := cm.GetGB28181Recorder(cameraID); rec != nil {
-		return rec.WriteAudio
-	}
-	ar := cm.GetAudioPushRecorder(cameraID)
-	if ar == nil {
+	if cm.GetAudioPushRecorder(cameraID) == nil && cm.GetGB28181Recorder(cameraID) == nil {
 		return nil
 	}
-	var armOnce sync.Once
+	var lastArmed atomic.Pointer[recorder.AudioRecorder]
+	arm := func(ar *recorder.AudioRecorder, codec string) {
+		if lastArmed.Load() == ar {
+			return
+		}
+		switch codec {
+		case "g711a", "g711u":
+			ar.ArmPushFormat(codec, 8000, 1)
+		case "aac":
+			ar.ArmPushFormat("aac", 0, 0)
+		default:
+			// Unknown codec strings still arm the G.711 default shape —
+			// the GB audio-only SDP only ever negotiates G.711.
+			ar.ArmPushFormat("g711", 8000, 1)
+		}
+		lastArmed.Store(ar)
+	}
 	return func(codec string, data, config []byte, ptsTicks int64, samples int) {
-		armOnce.Do(func() {
-			switch codec {
-			case "g711a", "g711u":
-				ar.ArmPushFormat(codec, 8000, 1)
-			case "aac":
-				ar.ArmPushFormat("aac", 0, 0)
-			default:
-				// Unknown codec strings still arm the G.711 default shape —
-				// the GB audio-only SDP only ever negotiates G.711.
-				ar.ArmPushFormat("g711", 8000, 1)
-			}
-		})
+		if rec := cm.GetGB28181Recorder(cameraID); rec != nil {
+			rec.WriteAudio(codec, data, config, ptsTicks, samples)
+			return
+		}
+		ar := cm.GetAudioPushRecorder(cameraID)
+		if ar == nil {
+			return // camera gone mid-session; the stall watchdog recycles the session if this persists
+		}
+		arm(ar, codec)
 		ar.WritePushAU(data)
 	}
 }

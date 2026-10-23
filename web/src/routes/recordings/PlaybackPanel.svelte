@@ -29,6 +29,7 @@
   } from '$lib/api';
   import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Play, Pause, ChevronLeft, ChevronRight, Wrench } from 'lucide-svelte';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
+  import AudioWaveform from '$lib/components/AudioWaveform.svelte';
   import MjpegSequencePlayer from '$lib/components/MjpegSequencePlayer.svelte';
   import { parseVodPlaylist, entryAt, nearestEntryByWallClock, mediaTimeFor, type VodEntry } from '$lib/vod-playlist';
   import { parseTimelineMap, wallToFileSec, fileToWallSec } from '$lib/timeline-map';
@@ -78,6 +79,7 @@
     oncrosssegment,
   } = $props();
 
+  let audioRecEl = $state<HTMLAudioElement | undefined>(undefined);
   let mjpegPlayer: MjpegPlayer | undefined = $state();
 
   // --- Video player state (H.264 / H.265) ---
@@ -1636,6 +1638,7 @@
   <div class="flex flex-col items-center justify-center gap-4 bg-black py-16 px-4">
     <div class="text-3xl th-text-tertiary">🎙️</div>
     <audio
+      bind:this={audioRecEl}
       controls
       preload="metadata"
       src={appendAuthToken(`${API_BASE}/recordings/${currentId}/audio.wav`)}
@@ -1648,6 +1651,9 @@
       }}
       class="w-full max-w-xl"
     ></audio>
+    <div class="w-full max-w-xl">
+      <AudioWaveform audio={audioRecEl} label={t('common.audioWaveform')} />
+    </div>
     <p class="text-xs th-text-muted">{t('detail.audioRecordingHint')}</p>
   </div>
 {:else}

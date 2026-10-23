@@ -66,40 +66,22 @@
   let globalTranscodingEnabled = $state(false);
   let h265Available = $state(true);
 
-  // Device tags (v44): the legacy group label renders as a lightweight tag
-  // (one per device, free-form, edited in the device form). Type tags
-  // (camera / audio pickup) derive from encoding. The filter bar
-  // single-selects; re-clicking the active chip resets to all devices.
-  const TYPE_CAMERA = '__type:camera';
-  const TYPE_AUDIO = '__type:audio';
-  let tagFilter = $state<string | null>(null);
-  const knownTags = $derived(
-    [...new Set(cameras.map((c) => (c.group || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh')),
-  );
-  const tagCounts = $derived.by(() => {
-    const m = new Map<string, number>();
-    for (const c of cameras) {
-      const tag = (c.group || '').trim();
-      if (tag) m.set(tag, (m.get(tag) ?? 0) + 1);
-    }
-    return m;
-  });
+  // Device type filter (v46): groups are the single organization axis
+  // (sections + registry + drag-to-regroup); the only orthogonal cut is
+  // device TYPE - video cameras vs audio pickups. Rendered as a compact
+  // segmented control, hidden entirely when the deployment has no pickups,
+  // so a pure-camera install keeps its pre-audio look.
+  type DeviceTypeFilter = 'all' | 'camera' | 'audio';
+  let typeFilter = $state<DeviceTypeFilter>('all');
   const audioCount = $derived(cameras.filter((c) => c.encoding === 'audio').length);
   const cameraCount = $derived(cameras.length - audioCount);
   const filteredCameras = $derived.by(() => {
-    if (tagFilter === TYPE_AUDIO) return cameras.filter((c) => c.encoding === 'audio');
-    if (tagFilter === TYPE_CAMERA) return cameras.filter((c) => c.encoding !== 'audio');
-    if (tagFilter) return cameras.filter((c) => (c.group || '').trim() === tagFilter);
+    if (typeFilter === 'audio') return cameras.filter((c) => c.encoding === 'audio');
+    if (typeFilter === 'camera') return cameras.filter((c) => c.encoding !== 'audio');
     return cameras;
   });
 
-  function toggleFilter(tag: string): void {
-    tagFilter = tagFilter === tag ? null : tag;
-  }
-
-  // Device grouping (v37, restored alongside the v44 tag filter — the two are
-  // orthogonal: tags filter WHICH devices show, groups organize the survivors
-  // into collapsible sections). Groups are plain labels on each device
+  // Device grouping (v37/v46): groups are plain labels on each device
   // (assigned via drag & drop, the form, or a page-level create); an EMPTY
   // group lives in the server-side registry until a device joins it. Collapse
   // state persists in localStorage. With no group at all, rendering falls
@@ -165,7 +147,7 @@
   });
   const hasGroups = $derived(knownGroups.length > 0);
 
-  // Sectioned view over the TAG-FILTERED list: named groups first (registry
+  // Sectioned view over the TYPE-FILTERED list: named groups first (registry
   // order), ungrouped bucket last. A group whose members are all filtered out
   // is skipped — filtering never leaves empty scaffolding behind (except when
   // no filter is active, where a registered-but-empty group still shows as a
@@ -177,7 +159,7 @@
       if (!map.has(g)) map.set(g, []);
       map.get(g)!.push(c);
     }
-    const filtering = tagFilter !== null;
+    const filtering = typeFilter !== 'all';
     const sections: { name: string; cameras: Camera[] }[] = [];
     for (const name of knownGroups) {
       const members = map.get(name) ?? [];
@@ -903,7 +885,7 @@
             {xiaomiDeviceList}
             globalTranscodingEnabled={globalTranscodingEnabled}
             h265Available={h265Available}
-            tagSuggestions={knownTags}
+            groupSuggestions={knownGroups}
             onsave={handleFormSave}
             oncancel={handleFormCancel}
             onbackfillneeded={handleBackfillNeeded}
@@ -935,49 +917,37 @@
             <button onclick={openAddForm} class="btn btn-primary btn-sm">+ {t('cameras.addCamera')}</button>
           </div>
         {:else}
-          <!-- Tag filter bar + flat device grid (v44): type chips derive from
-               encoding (camera / audio pickup), custom chips are the legacy
-               group labels shown as #tags. Single-select filter. -->
-          <div class="flex items-center gap-2 flex-wrap mt-4" role="toolbar" aria-label={t('cameras.filterAria')}>
-            <button
-              class="tag-chip {tagFilter === null ? 'tag-chip--active' : ''}"
-              onclick={() => (tagFilter = null)}>
-              {t('cameras.filter.all')}
-              <span class="tag-chip-count">{cameras.length}</span>
-            </button>
-            <button
-              class="tag-chip {tagFilter === TYPE_CAMERA ? 'tag-chip--active' : ''}"
-              onclick={() => toggleFilter(TYPE_CAMERA)}>
-              {t('cameras.filter.cameras')}
-              <span class="tag-chip-count">{cameraCount}</span>
-            </button>
-            {#if audioCount > 0}
-              <button
-                class="tag-chip {tagFilter === TYPE_AUDIO ? 'tag-chip--active' : ''}"
-                onclick={() => toggleFilter(TYPE_AUDIO)}>
-                {t('cameras.filter.audio')}
-                <span class="tag-chip-count">{audioCount}</span>
+          <!-- Device type filter (v46): groups organize devices into sections;
+               this only cuts by type (camera / audio pickup). Hidden when the
+               deployment has no pickups. -->
+          {#if audioCount > 0}
+            <div class="type-seg mt-4" role="tablist" aria-label={t('cameras.filterAria')}>
+              <button type="button" role="tab" aria-selected={typeFilter === 'all'}
+                class="type-seg-btn {typeFilter === 'all' ? 'type-seg-btn--active' : ''}"
+                onclick={() => (typeFilter = 'all')}>
+                {t('cameras.filter.all')}<span class="type-seg-count">{cameras.length}</span>
               </button>
-            {/if}
-            {#each knownTags as tag (tag)}
-              <button
-                class="tag-chip {tagFilter === tag ? 'tag-chip--active' : ''}"
-                onclick={() => toggleFilter(tag)}>
-                #{tag}
-                <span class="tag-chip-count">{tagCounts.get(tag) ?? 0}</span>
+              <button type="button" role="tab" aria-selected={typeFilter === 'camera'}
+                class="type-seg-btn {typeFilter === 'camera' ? 'type-seg-btn--active' : ''}"
+                onclick={() => (typeFilter = 'camera')}>
+                {t('cameras.filter.cameras')}<span class="type-seg-count">{cameraCount}</span>
               </button>
-            {/each}
-          </div>
+              <button type="button" role="tab" aria-selected={typeFilter === 'audio'}
+                class="type-seg-btn {typeFilter === 'audio' ? 'type-seg-btn--active' : ''}"
+                onclick={() => (typeFilter = 'audio')}>
+                {t('cameras.filter.audio')}<span class="type-seg-count">{audioCount}</span>
+              </button>
+            </div>
+          {/if}
           {#if filteredCameras.length === 0}
             <div class="card border th-border p-8 text-center mt-4 text-sm th-text-muted">
               {t('cameras.filter.empty')}
             </div>
           {:else}
-            <!-- Grouped device grid (v37 restored, v45): named group sections
-                 with collapsible headers (inline rename + delete), drag &
-                 drop between sections, ungrouped bucket last — laid over the
-                 tag-filtered list, so tags pick WHICH devices show and groups
-                 organize the survivors. When no group exists at all, hasGroups
+            <!-- Grouped device grid (v37/v46): named group sections with
+                 collapsible headers (inline rename + delete), drag & drop
+                 between sections, ungrouped bucket last — over the
+                 type-filtered list. When no group exists at all, hasGroups
                  is false and this renders the flat grid. -->
             {#each groupedSections as grp (grp.name)}
               {@const collapsed = collapsedGroups.has(grp.name)}
@@ -1079,7 +1049,7 @@
                               {xiaomiDeviceList}
                               globalTranscodingEnabled={globalTranscodingEnabled}
                               h265Available={h265Available}
-                              tagSuggestions={knownTags}
+                              groupSuggestions={knownGroups}
                               onsave={handleFormSave}
                               oncancel={handleFormCancel}
                               onbackfillneeded={handleBackfillNeeded}
@@ -1441,30 +1411,36 @@
 </div>
 
 <style>
-  /* Tag filter chips (device management, v44) */
-  .tag-chip {
+  /* Device type segmented filter (device management, v46) */
+  .type-seg {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border, #262626);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+  .type-seg-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
-    padding: 0.25rem 0.75rem;
-    border-radius: 9999px;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    border: 1px solid var(--border, #262626);
+    padding: 0.375rem 0.75rem;
+    border: none;
     color: var(--text-secondary, #a1a1a1);
     background: transparent;
     cursor: pointer;
     transition: all 120ms ease-out;
   }
-  .tag-chip:hover,
-  .tag-chip--active {
-    border-color: var(--color-primary, #7c3aed);
-    color: var(--color-primary, #7c3aed);
+  .type-seg-btn + .type-seg-btn {
+    border-left: 1px solid var(--border, #262626);
   }
-  .tag-chip--active {
+  .type-seg-btn:hover,
+  .type-seg-btn--active {
+    color: var(--color-primary, #7c3aed);
     background: color-mix(in srgb, var(--color-primary, #7c3aed) 12%, transparent);
   }
-  .tag-chip-count {
+  .type-seg-count {
     font-size: 0.6875rem;
     opacity: 0.7;
   }

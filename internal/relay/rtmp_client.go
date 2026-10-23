@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -407,13 +408,23 @@ func dialRTMPPublish(ctx context.Context, rawURL string, videoWidth, videoHeight
 	}
 	cleanup := func() { _ = nconn.Close() }
 
-	// TODO: TLS for RTMPS (plain RTMP only for now — companion/Douyu use rtmp://).
+	// 1b. RTMPS wraps the plain TCP connection in TLS before the RTMP
+	// handshake (certificate verification ON — self-signed endpoints are
+	// out of scope until someone actually needs one).
+	var mediaConn net.Conn = nconn
+	if u.Scheme == "rtmps" {
+		host, _, splitErr := net.SplitHostPort(u.Host)
+		if splitErr != nil {
+			host = u.Host
+		}
+		mediaConn = tls.Client(nconn, &tls.Config{ServerName: host})
+	}
 
 	// 2. Wrap with bytecounter + plain handshake.
 	//    wrapDump is a no-op unless NVR_RTMP_DEBUG_DUMP names a file; it lets us
 	//    capture every sent byte to diff against FFmpeg when debugging strict
 	//    receivers (e.g. Douyu Live Companion RST after Publish.Start).
-	bc := bytecounter.NewReadWriter(wrapDump(nconn))
+	bc := bytecounter.NewReadWriter(wrapDump(mediaConn))
 	// Complex handshake: C1 contains an HMAC-SHA256 digest (key="Genuine Adobe
 	// Flash Player 001", scheme 0). Adobe FMS and FMS-compatible platforms
 	// (Douyu, Huya, Bilibili) validate this digest even in plain RTMP (v3) mode.

@@ -3,7 +3,7 @@
   import { Mic, MicOff, Loader2 } from 'lucide-svelte';
   import { getTokenForUrl, API_BASE } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { encodeAlaw } from '$lib/alaw-encoder';
+  import { encodeAlawItu, decodeAlaw } from '$lib/alaw-encoder';
 
   let {
     cameraId,
@@ -19,6 +19,8 @@
 
   let ws: WebSocket | null = null;
   let ctx: AudioContext | null = null;
+  let playCtx: AudioContext | null = null;
+  let playTime = 0;
   let stream: MediaStream | null = null;
   let workletNode: AudioWorkletNode | null = null;
 
@@ -102,13 +104,21 @@ registerProcessor('talk-downsampler', TalkDownsampler);
         workletNode.port.onmessage = (e: MessageEvent) => {
           const pcm = e.data as Float32Array;
           if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(encodeAlaw(pcm));
+            ws.send(encodeAlawItu(pcm));
           }
         };
         src.connect(workletNode);
-        // Deliberately NOT connected to ctx.destination — no local playback
-        // (half-duplex feel: speak, don't hear yourself).
-        await ctx.resume();
+        // Mic path is deliberately NOT connected to ctx.destination — no
+        // local playback of your own voice.
+
+        // Device return audio (sendrecv uplink leg, standard A-law 8 kHz)
+        // plays on a dedicated context; mic echo cancellation is on.
+        playCtx = new AudioContext({ sampleRate: 8000 });
+        playTime = 0;
+        ws.onmessage = (e: MessageEvent) => {
+          if (typeof e.data !== 'string' && playCtx) enqueue(decodeAlaw(new Uint8Array(e.data)));
+        };
+        await Promise.all([ctx.resume(), playCtx.resume()]);
         state = 'talking';
       } catch (err) {
         console.error('[GB28181Talk] pipeline error:', err);
@@ -140,10 +150,27 @@ registerProcessor('talk-downsampler', TalkDownsampler);
     state = 'idle';
   }
 
+  // Gapless playback queue for the return leg; if the device stalls or the
+  // network hiccups, resync instead of letting scheduled latency grow.
+  function enqueue(pcm: Float32Array) {
+    if (!playCtx) return;
+    const buf = playCtx.createBuffer(1, pcm.length, 8000);
+    buf.copyToChannel(pcm, 0);
+    const node = playCtx.createBufferSource();
+    node.buffer = buf;
+    node.connect(playCtx.destination);
+    const now = playCtx.currentTime;
+    if (playTime < now) playTime = now + 0.02;
+    else if (playTime - now > 0.4) playTime = now + 0.02;
+    node.start(playTime);
+    playTime += pcm.length / 8000;
+  }
+
   function cleanup() {
     if (ws) {
       ws.onclose = null;
       ws.onerror = null;
+      ws.onmessage = null;
       try {
         ws.close();
       } catch {
@@ -159,6 +186,10 @@ registerProcessor('talk-downsampler', TalkDownsampler);
     if (ctx) {
       ctx.close().catch(() => undefined);
       ctx = null;
+    }
+    if (playCtx) {
+      playCtx.close().catch(() => undefined);
+      playCtx = null;
     }
     if (stream) {
       for (const track of stream.getTracks()) track.stop();

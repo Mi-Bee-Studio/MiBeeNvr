@@ -110,7 +110,7 @@ function spaBuildInfoPlugin() {
     closeBundle() {
       let git = '';
       try {
-        git = execSync('git describe --tags --always --dirty=-dirty', {
+        git = execSync('git describe --tags --always --dirty=-dirty --match "v[0-9]*"', {
           stdio: ['ignore', 'pipe', 'ignore'],
         })
           .toString()

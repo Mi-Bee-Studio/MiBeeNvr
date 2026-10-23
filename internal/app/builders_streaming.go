@@ -439,3 +439,45 @@ func newGB28181SessionManager(cfg config.GB28181ServerConfig) *platform.SessionM
 	}
 	return platform.NewSessionManager(platform.NewPortManager(start, end), cfg.ServerID)
 }
+
+// armGB28181StallWatchdog arms the session stall supervisor from
+// gb28181.stall_watchdog (ApplyDefaults fills "90s"; an explicit "off" or a
+// non-positive duration keeps it disarmed). Wedged sessions — RTP arriving
+// while the demuxer produces nothing — are recycled BYE-first by the
+// library, then re-invited immediately through the SIP server. The check
+// cadence derives from the window (quarter, clamped to 5s–60s) instead of
+// being a second knob.
+func armGB28181StallWatchdog(deps *appDeps) {
+	if deps.gb28181SessionMgr == nil {
+		return
+	}
+	window, err := time.ParseDuration(strings.TrimSpace(deps.cfg.GB28181.StallWatchdog))
+	if err != nil || window <= 0 {
+		return
+	}
+	checkEvery := window / 4
+	if checkEvery < 5*time.Second {
+		checkEvery = 5 * time.Second
+	} else if checkEvery > 60*time.Second {
+		checkEvery = 60 * time.Second
+	}
+	sessionMgr := deps.gb28181SessionMgr
+	inviter := deps.gb28181Server
+	camMgr := deps.camMgr
+	sessionMgr.SetStallWatchdog(checkEvery, window, func(channelID string) {
+		// Resolve by channel scan, not the "gb-<channelID>" ID convention —
+		// manually created GB cameras must re-invite too.
+		cfg, ok := camMgr.GB28181CameraConfigByChannelID(channelID)
+		if !ok || cfg.GB28181.DeviceID == "" {
+			slog.Warn("gb28181: stall recycle: no bound camera — auto-INVITE on next REGISTER still applies",
+				"channel_id", channelID)
+			return
+		}
+		if err := inviter.InviteChannel(cfg.GB28181.DeviceID, channelID); err != nil {
+			slog.Warn("gb28181: stall recycle: immediate re-INVITE failed — auto-INVITE on next REGISTER still applies",
+				"channel_id", channelID, "error", err)
+		}
+	})
+	slog.Info("gb28181: session stall watchdog armed",
+		"stall_window", window, "check_every", checkEvery)
+}

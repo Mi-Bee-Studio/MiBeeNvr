@@ -174,3 +174,20 @@ func TestApplyDefaults_GB28181MediaTransport(t *testing.T) {
 		require.Equal(t, "tcp-active", cfg.GB28181.MediaTransport)
 	})
 }
+
+func TestApplyDefaults_GB28181StallWatchdog(t *testing.T) {
+	cfg := &Config{GB28181: GB28181ServerConfig{Enabled: true}}
+	cfg.ApplyDefaults()
+	require.Equal(t, "90s", cfg.GB28181.StallWatchdog, "default arms the watchdog")
+
+	cfg2 := &Config{GB28181: GB28181ServerConfig{StallWatchdog: "off"}}
+	cfg2.ApplyDefaults()
+	require.Equal(t, "off", cfg2.GB28181.StallWatchdog, "explicit opt-out survives")
+
+	cfg3 := validGB28181Config()
+	cfg3.ApplyDefaults()
+	cfg3.GB28181.StallWatchdog = "bogus"
+	err := Validate(cfg3)
+	require.Error(t, err, "unparseable durations are rejected")
+	require.Contains(t, err.Error(), "stall_watchdog")
+}

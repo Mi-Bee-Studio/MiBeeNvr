@@ -45,6 +45,16 @@ type GB28181ServerConfig struct {
 	// CatalogInterval is how often the platform refreshes the device catalog.
 	CatalogInterval string `yaml:"catalog_interval"` // default "30m"
 
+	// StallWatchdog arms the GB28181 emission watchdog (gb28181-go #144): a
+	// live session whose RTP keeps arriving while the demuxer produces
+	// nothing for this long is recycled (SIP BYE + teardown, then an
+	// immediate re-INVITE). Detects the whole wedged-demuxer family — the
+	// audio-only misclassification stall (2026-10-22 field incident) ran
+	// six hours because nothing noticed "packets in, nothing out".
+	// Default "90s"; "off" or "0s" disables. The check cadence is derived
+	// from the window (quarter, clamped to 5s–60s) — no extra knob.
+	StallWatchdog string `yaml:"stall_watchdog,omitempty"` // default "90s"
+
 	// SubChannelProbe gates the sub-channel prober (#560): "auto" (default —
 	// probe only devices whose DeviceInfo Manufacturer matches a known
 	// offset-convention vendor), "on" (probe every device), "off" (never).

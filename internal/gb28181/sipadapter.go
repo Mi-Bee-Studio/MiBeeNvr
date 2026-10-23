@@ -170,8 +170,7 @@ func (a *deviceStoreAdapter) GetGB28181Device(ctx context.Context, id string) (*
 		return nil, err
 	}
 	if d == nil {
-		//nolint:nilnil // TODO(#604): nil,nil = "not found" is storage.DB's existing contract (api handlers depend on it); the adapter forwards it verbatim.
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil,nil = "not found": storage.DB's long-standing contract, API handlers depend on it
 	}
 	out := convDeviceOut(*d)
 	return &out, nil

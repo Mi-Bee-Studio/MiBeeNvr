@@ -502,6 +502,9 @@ func applyConfigDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.GB28181.HeartbeatInterval) == "" {
 		cfg.GB28181.HeartbeatInterval = "60s"
 	}
+	if strings.TrimSpace(cfg.GB28181.StallWatchdog) == "" {
+		cfg.GB28181.StallWatchdog = "90s"
+	}
 	if strings.TrimSpace(cfg.GB28181.CatalogInterval) == "" {
 		cfg.GB28181.CatalogInterval = "30m"
 	}
