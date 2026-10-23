@@ -164,7 +164,7 @@ func TestGB28181AudioWriterSurvivesRecorderRecreate(t *testing.T) {
 	require.NoError(t, hubA.SubscribeAudio("old", func(int64, model.AudioCodec, []byte) { framesA.Add(1) }))
 	require.NoError(t, hubB.SubscribeAudio("new", func(int64, model.AudioCodec, []byte) { framesB.Add(1) }))
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		w("g711a", make([]byte, 160), nil, 0, 160)
 	}
 
@@ -174,4 +174,32 @@ func TestGB28181AudioWriterSurvivesRecorderRecreate(t *testing.T) {
 		"frames must land in the NEW recorder")
 	assert.Zero(t, framesA.Load(), "the replaced recorder must receive nothing")
 	assert.Equal(t, "g711", recB.AudioCodec(), "the new recorder must be armed fresh")
+}
+
+// TestGB28181CameraConfigByChannelID: the stall-watchdog re-invite resolves
+// cameras by scanning configs — manually created cameras whose ID doesn't
+// follow the auto-enroll "gb-<channelID>" convention must resolve too, and
+// non-GB cameras sharing an ID shape must not.
+func TestGB28181CameraConfigByChannelID(t *testing.T) {
+	cfg := testConfig()
+	cfg.Cameras = []config.CameraConfig{
+		{
+			ID:       "doorbell-manual", // manual creation: NOT gb-<channel>
+			Protocol: string(model.ProtoGB28181),
+			GB28181:  config.GB28181ChannelConfig{DeviceID: "34020000002000000001", ChannelID: gbCameraChannelID},
+		},
+		{
+			ID:       gbCameraChannelID, // an RTSP camera whose ID collides with the channel string
+			Protocol: string(model.ProtoRTSP),
+		},
+	}
+	mgr, _ := newManagerWithBus(t, cfg)
+
+	got, ok := mgr.GB28181CameraConfigByChannelID(gbCameraChannelID)
+	require.True(t, ok, "manual GB camera must resolve by channel alone")
+	assert.Equal(t, "doorbell-manual", got.ID)
+	assert.Equal(t, "34020000002000000001", got.GB28181.DeviceID)
+
+	_, ok = mgr.GB28181CameraConfigByChannelID(gbPickupChannelID)
+	assert.False(t, ok, "unknown channel must not resolve")
 }

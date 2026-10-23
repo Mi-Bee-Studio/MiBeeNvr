@@ -309,6 +309,22 @@ func (cm *CameraManager) GB28181CameraIDByChannel(deviceID, channelID string) (s
 	return "", false
 }
 
+// GB28181CameraConfigByChannelID resolves the camera config bound to a
+// channel ID alone. Used by the stall-watchdog re-invite, whose library
+// callback carries only the channel ID: GB channel IDs embed the device ID,
+// so a channel matches at most one camera. Like GB28181CameraIDByChannel it
+// scans configs instead of assuming the auto-enroll "gb-<channelID>" ID, so
+// manually created cameras re-invite too.
+func (cm *CameraManager) GB28181CameraConfigByChannelID(channelID string) (config.CameraConfig, bool) {
+	snap := cm.loadSnapshot()
+	for _, cfg := range snap.configs {
+		if cfg.Protocol == string(model.ProtoGB28181) && cfg.GB28181.ChannelID == channelID {
+			return *cfg, true
+		}
+	}
+	return config.CameraConfig{}, false
+}
+
 // ArchiveGB28181Camera soft-removes the camera auto-enrolled for a channel —
 // used when a catalog supersedes the device-self pseudo-channel (#352).
 // Archives preserve recordings; a no-op when no camera is bound.

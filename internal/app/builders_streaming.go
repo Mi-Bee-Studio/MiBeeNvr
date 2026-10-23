@@ -465,8 +465,10 @@ func armGB28181StallWatchdog(deps *appDeps) {
 	inviter := deps.gb28181Server
 	camMgr := deps.camMgr
 	sessionMgr.SetStallWatchdog(checkEvery, window, func(channelID string) {
-		cfg := camMgr.GetCameraConfig("gb-" + channelID)
-		if cfg == nil || cfg.GB28181.DeviceID == "" {
+		// Resolve by channel scan, not the "gb-<channelID>" ID convention —
+		// manually created GB cameras must re-invite too.
+		cfg, ok := camMgr.GB28181CameraConfigByChannelID(channelID)
+		if !ok || cfg.GB28181.DeviceID == "" {
 			slog.Warn("gb28181: stall recycle: no bound camera — auto-INVITE on next REGISTER still applies",
 				"channel_id", channelID)
 			return
