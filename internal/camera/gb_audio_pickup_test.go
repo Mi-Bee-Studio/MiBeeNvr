@@ -129,7 +129,7 @@ func TestValidEncodingsGB28181Audio(t *testing.T) {
 }
 
 // TestGB28181AudioWriterSurvivesRecorderRecreate — regression for the
-// 2026-10-22 22:07 field incident (Gitea home-lab/mibee-nvr#29 forensics): a
+// 2026-10-22 22:07 field incident (internal tracker #29 forensics): a
 // camera re-created mid-session swaps the manager's recorder under the same
 // ID, and a writer pinned to the first recorder instance dropped every AU
 // while the session kept reporting "playing" — segments stopped for an hour

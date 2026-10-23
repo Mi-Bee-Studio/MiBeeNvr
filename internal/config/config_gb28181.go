@@ -49,7 +49,7 @@ type GB28181ServerConfig struct {
 	// live session whose RTP keeps arriving while the demuxer produces
 	// nothing for this long is recycled (SIP BYE + teardown, then an
 	// immediate re-INVITE). Detects the whole wedged-demuxer family — the
-	// audio-only misclassification stall (Gitea home-lab/mibee-nvr#29) ran
+	// audio-only misclassification stall (2026-10-22 field incident) ran
 	// six hours because nothing noticed "packets in, nothing out".
 	// Default "90s"; "off" or "0s" disables. The check cadence is derived
 	// from the window (quarter, clamped to 5s–60s) — no extra knob.

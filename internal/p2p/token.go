@@ -397,7 +397,7 @@ func DeriveTokenEndpoint(serverURL string) string {
 // deriveOrigin returns the host[:port] of a parsed server URL. Explicit ports
 // are preserved: a signaling server on wss://h:8443 serves its OIDC stack on
 // the same origin — dropping the port silently aimed every token/enroll/grant
-// call at :443 (home-lab/mibee-nvr #11; only deployments without an explicit
+// call at :443 (internal tracker #11; only deployments without an explicit
 // port stay on the scheme default).
 func deriveOrigin(u *url.URL) string {
 	if u.Port() == "" {
