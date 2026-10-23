@@ -1,9 +1,42 @@
 # Doorbell API
 
-SIP doorbell / intercom endpoints (#971). All require authentication; the
-feature must be enabled in config (`doorbell.enabled: true`) — otherwise
-these answer `501 Not Implemented`. See [Doorbell](../doorbell.md) for the
-feature guide.
+SIP doorbell / intercom endpoints (#971). All require authentication. The
+call endpoints need the feature enabled in config (`doorbell.enabled: true`,
+settable from Settings → Doorbell) — otherwise they answer
+`501 Not Implemented`; the status endpoint below always answers. See
+[Doorbell](../doorbell.md) for the feature guide.
+
+## Runtime status
+
+**Endpoint:** `GET /api/doorbell/status`
+
+Config + runtime state of the ingress. `enabled` is the config-side toggle
+and `running` whether the SIP server is actually built — the two diverge
+between a settings save and the restart it needs, which is exactly the
+"restart pending" state the settings panel surfaces.
+
+```bash
+curl -u username:password http://localhost:9090/api/doorbell/status
+```
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "running": true,
+  "registered": [
+    {
+      "user": "front-door",
+      "source": "192.0.2.50:5060",
+      "expires_at": "2026-10-15T20:35:00+08:00"
+    }
+  ]
+}
+```
+
+`registered` lists the live mode-A registrations (door stations that
+REGISTERed with the NVR and have not expired); mode-B stations behind a PBX
+do not appear here.
 
 ## List calls
 

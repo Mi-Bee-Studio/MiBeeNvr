@@ -1,8 +1,39 @@
 # 门铃 API
 
-SIP 门铃/对讲端点（#971）。均需鉴权；功能须在配置中开启
-（`doorbell.enabled: true`），否则一律返回 `501 Not Implemented`。
-功能说明见[门铃](../doorbell.md)。
+SIP 门铃/对讲端点（#971）。均需鉴权。来电类端点要求功能已在配置中开启
+（`doorbell.enabled: true`，可在 设置 → 门铃 修改），否则一律返回
+`501 Not Implemented`；下方状态端点始终返回 200。功能说明见
+[门铃](../doorbell.md)。
+
+## 运行状态
+
+**端点：** `GET /api/doorbell/status`
+
+门铃接入的配置与运行状态。`enabled` 是配置侧开关，`running` 是 SIP 服务
+是否实际已构建——两者在"保存设置后、重启前"这段窗口内不一致，正是设置
+面板展示的"等待重启生效"状态。
+
+```bash
+curl -u username:password http://localhost:9090/api/doorbell/status
+```
+
+**响应：**
+```json
+{
+  "enabled": true,
+  "running": true,
+  "registered": [
+    {
+      "user": "front-door",
+      "source": "192.0.2.50:5060",
+      "expires_at": "2026-10-15T20:35:00+08:00"
+    }
+  ]
+}
+```
+
+`registered` 列出当前存活的模式 A 注册（已向 NVR REGISTER 且未过期的
+门站）；模式 B 经 PBX 的门站不出现在这里。
 
 ## 来电列表
 

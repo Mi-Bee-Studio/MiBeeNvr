@@ -20,6 +20,9 @@ type DoorbellService interface {
 	Reject(callID string, decline bool) error
 	Hangup(callID string) error
 	TalkBridge(callID string) (*doorbell.TalkBridge, error)
+	// RegisteredStations lists the live mode-A registrations (settings
+	// panel status strip).
+	RegisteredStations() []doorbell.StationStatus
 	// SnapshotPath resolves a call's snapshot (storage-root-relative) to an
 	// absolute path for serving; empty when the call has no snapshot.
 	SnapshotPath(call *doorbell.Call) (string, bool)
@@ -34,11 +37,29 @@ var doorbellTalkUpgrader = websocket.Upgrader{
 // registerDoorbellRoutes mounts /doorbell/* (inside the authed group).
 func (h *Handler) registerDoorbellRoutes(r chi.Router) {
 	r.Get("/api/doorbell/calls", h.handleDoorbellCalls)
+	r.Get("/api/doorbell/status", h.handleDoorbellStatus)
 	r.Post("/api/doorbell/calls/{callID}/answer", h.handleDoorbellAnswer)
 	r.Post("/api/doorbell/calls/{callID}/reject", h.handleDoorbellReject)
 	r.Post("/api/doorbell/calls/{callID}/bye", h.handleDoorbellBye)
 	r.Get("/api/doorbell/calls/{callID}/talk", h.handleDoorbellTalkWS)
 	r.Get("/api/doorbell/calls/{callID}/snapshot", h.handleDoorbellSnapshot)
+}
+
+// handleDoorbellStatus reports the panel-facing runtime state: whether the
+// config enables the ingress, whether the server is actually running (the
+// two diverge between a settings save and the restart it needs), and the
+// live mode-A registrations. Always 200 — unlike the call endpoints this is
+// meaningful when the service is absent.
+func (h *Handler) handleDoorbellStatus(w http.ResponseWriter, r *http.Request) {
+	registered := []doorbell.StationStatus{}
+	if h.doorbell != nil {
+		registered = h.doorbell.RegisteredStations()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":    h.config != nil && h.config.Doorbell.Enabled,
+		"running":    h.doorbell != nil,
+		"registered": registered,
+	})
 }
 
 // SetDoorbellService wires the doorbell server into the API (builders_http).
@@ -209,6 +230,7 @@ type DoorbellCore = interface {
 	Reject(callID string, decline bool) error
 	Hangup(callID string) error
 	TalkBridge(callID string) (*doorbell.TalkBridge, error)
+	RegisteredStations() []doorbell.StationStatus
 }
 
 // NewDoorbellAdapter builds the API seam for a doorbell server.
@@ -224,6 +246,10 @@ func (a *doorbellServerAdapter) Reject(id string, decline bool) error {
 func (a *doorbellServerAdapter) Hangup(id string) error { return a.srv.Hangup(id) }
 func (a *doorbellServerAdapter) TalkBridge(id string) (*doorbell.TalkBridge, error) {
 	return a.srv.TalkBridge(id)
+}
+
+func (a *doorbellServerAdapter) RegisteredStations() []doorbell.StationStatus {
+	return a.srv.RegisteredStations()
 }
 
 func (a *doorbellServerAdapter) SnapshotPath(call *doorbell.Call) (string, bool) {

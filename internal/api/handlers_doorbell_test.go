@@ -14,6 +14,7 @@ import (
 // fakeDoorbell is a canned DoorbellService.
 type fakeDoorbell struct {
 	calls    []*doorbell.Call
+	stations []doorbell.StationStatus
 	answered map[string]error
 	rejectd  map[string]error
 	byed     map[string]error
@@ -48,6 +49,8 @@ func (f *fakeDoorbell) TalkBridge(id string) (*doorbell.TalkBridge, error) {
 func (f *fakeDoorbell) SnapshotPath(call *doorbell.Call) (string, bool) {
 	return "", false
 }
+
+func (f *fakeDoorbell) RegisteredStations() []doorbell.StationStatus { return f.stations }
 
 func setupDoorbellAPI(t *testing.T) (*Handler, *fakeDoorbell) {
 	t.Helper()

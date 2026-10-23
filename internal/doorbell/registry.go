@@ -2,6 +2,7 @@ package doorbell
 
 import (
 	"net"
+	"sort"
 	"sync"
 	"time"
 )
@@ -69,6 +70,28 @@ func (r *registry) count() int {
 		}
 	}
 	return n
+}
+
+// StationStatus is one door station's live registration state, surfaced by
+// the API status endpoint for the settings panel.
+type StationStatus struct {
+	User      string    `json:"user"`
+	Source    string    `json:"source"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// snapshot lists the live (unexpired) registrations, sorted by user.
+func (r *registry) snapshot() []StationStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]StationStatus, 0, len(r.byUser))
+	for _, reg := range r.byUser {
+		if time.Now().Before(reg.expiresAt) {
+			out = append(out, StationStatus{User: reg.user, Source: reg.source, ExpiresAt: reg.expiresAt})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].User < out[j].User })
+	return out
 }
 
 // hostOf splits "ip:port" into ip.

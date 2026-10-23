@@ -28,9 +28,11 @@ dlna:
   # friendly_name: ""    # name on renderers; default: server.device_name
 ```
 
-Restart the NVR after changing the section. The SSDP announcements ride UDP
-1900; the device description, Browse control and item downloads ride the
-configured TCP port on each bound interface.
+Restart the NVR after changing the section. The same fields are editable at
+**Settings → DLNA** (enable toggle, port, friendly name, interface list) —
+saving answers `restart_required: true` for the same reason. The SSDP
+announcements ride UDP 1900; the device description, Browse control and item
+downloads ride the configured TCP port on each bound interface.
 
 ## What renderers see
 

@@ -54,6 +54,21 @@ From user matches a configured entry — doorbell secrets are not re-verified
 per INVITE (that is how SIP through a PBX works). An INVITE's **source
 address must match the `outbound.server` host**; anything else gets a 403.
 
+## Configure from the web UI
+
+Everything above is editable at **Settings → Doorbell** — the enable toggle,
+listener/realm/transport (`tls` reveals the cert-pair fields), `lan_only`,
+ring timeout, the door-station list (username, display name, linked camera
+picker, secret) and the PBX card. Secrets are write-only: the API answers
+`secret_configured` booleans and blank fields keep the stored values, so
+editing a station never requires retyping its password.
+
+The section applies on the next start — saving answers
+`restart_required: true` and the panel's status strip flips to
+"Enabled — restart pending" (config on, server not yet rebuilt). Once
+running, the strip lists the stations currently registered
+([`GET /api/doorbell/status`](api/doorbell.md)).
+
 ## Security posture
 
 - **Default off**; the section does nothing until `enabled: true`.
@@ -82,7 +97,8 @@ Ring/answer/reject/end also flow to the event stream (`/api/events`, filter
 `doorbell.`) and — with `mqtt.status_events` enabled — to
 `{prefix}/event/doorbell.ring` etc. for home-automation reactions.
 
-REST surface (for integrations): `GET /api/doorbell/calls`,
+REST surface (for integrations): `GET /api/doorbell/status`,
+`GET /api/doorbell/calls`,
 `POST /api/doorbell/calls/{id}/answer|reject|bye`, and the
 `/api/doorbell/calls/{id}/talk` WebSocket (binary G.711 frames both ways —
 the same contract as the GB28181 talk socket).
