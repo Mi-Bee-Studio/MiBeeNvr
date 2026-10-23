@@ -749,7 +749,9 @@ func (cm *CameraManager) startTimelapseFramePoller(cameraID string, cam config.C
 	if frameProvider == nil {
 		logger.Warn("recorder does not support LatestFrame for timelapse frame polling",
 			"camera_id", cameraID)
-		return nil, nil //nolint:nilnil // TODO(#storage-overhaul): callers check for nil poller to skip dual-mode frame polling.
+		// A nil poller is the documented “no dual-mode frames for this
+		// camera” signal — callers skip frame polling when it is nil.
+		return nil, nil //nolint:nilnil
 	}
 
 	interval := 30 * time.Second

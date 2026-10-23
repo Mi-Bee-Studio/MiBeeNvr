@@ -176,7 +176,9 @@ func (r *RollingMergeCoordinator) backfillMP4(ctx context.Context, cameraID stri
 			}
 		}
 	}
-	return merged, nil //nolint:nilerr // TODO(#storage-overhaul): intentional — report partial merge count on ctx cancellation rather than failing the whole backfill.
+	// Partial-on-cancel is intentional: the caller gets the merges that
+	// did finish instead of failing the whole backfill.
+	return merged, nil //nolint:nilerr
 }
 
 // mergeBatchMP4 merges a batch of MP4 segments into output file(s).
@@ -580,7 +582,9 @@ func (r *RollingMergeCoordinator) backfillBatchFormat(ctx context.Context, camer
 		case <-ctx.Done():
 		}
 	}
-	return merged, nil //nolint:nilerr // TODO(#storage-overhaul): intentional — report partial merge count on ctx cancellation rather than failing the whole backfill.
+	// Partial-on-cancel is intentional: the caller gets the merges that
+	// did finish instead of failing the whole backfill.
+	return merged, nil //nolint:nilerr
 }
 
 // mergeBatchSegments delegates to the format-specific batch merge function and
