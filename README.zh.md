@@ -107,11 +107,13 @@ cd MiBeeNvr && make build
 | ONVIF | 相机 ↔ NVR | 发现、云台、流地址、MotionAlarm 事件 |
 | 小米（CS2 + TUTK） | 相机 → NVR | CS2 P2P + 旧版 TUTK（7 型号），云端认证 |
 | GB/T 28181 | 相机 → NVR | SIP 平台、自动注册、语音对讲、云台、设备侧回放 |
+| SIP 门铃 | 门禁设备 → NVR | Doorbird/Akuvox/海康门口机：来电弹窗、双向 G.711 对讲 |
 | SRT / RTMP（接入） | 推流端 → NVR | 跨网络推入、低延迟传输 |
 | WHIP | 推流端 → NVR | 浏览器 / 手机 / OBS 30+ 的 WebRTC 推流（H.264 + Opus） |
 | HLS | NVR → 观看端 | 按需起流，支持 LL-HLS |
 | WebRTC（WHEP） | NVR → 观看端 | 亚秒延迟 |
 | HTTP-FLV | NVR → 观看端 | 浏览器友好 |
+| DLNA / UPnP AV | NVR → 电视 | 局域网媒体服务器——电视直接浏览播放录像库 |
 | RTSP（输出服务） | NVR → 外部 | 每台相机一个地址 `rtsp://<nvr>:8554/<camera-id>` |
 | RTMP / RTSP（转推） | NVR → 外部 | 原生 Go 转推至远端目标 |
 

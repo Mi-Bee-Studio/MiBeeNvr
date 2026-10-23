@@ -217,9 +217,43 @@ curl -u username:password \
     "subscribe_alarm": false,
     "subscribe_mobile_position": false,
     "subscribe_expires": "3600s"
+  },
+  "doorbell": {
+    "enabled": true,
+    "listen": ":5070",
+    "realm": "mibee-nvr",
+    "transport": "udp",
+    "tls_cert": "",
+    "tls_key": "",
+    "lan_only": true,
+    "ring_timeout": "60s",
+    "users": [
+      {
+        "username": "front-door",
+        "name": "Front door",
+        "camera_id": "cam-xxxx",
+        "secret_configured": true
+      }
+    ],
+    "outbound": {
+      "server": "192.0.2.10:5060",
+      "username": "nvr",
+      "expires": "300s",
+      "secret_configured": true
+    }
+  },
+  "dlna": {
+    "enabled": false,
+    "port": 49152,
+    "interfaces": [],
+    "friendly_name": ""
   }
 }
 ```
+
+`doorbell` secrets never round-trip: per-user and outbound secrets surface
+as `secret_configured` booleans, and `outbound` is `null` when PBX mode is
+off.
 
 `mibeevision.api_keys` never returns full secrets (prefix only); `last_used` is the
 UTC time that key was last used (minute granularity), omitted when never used.
@@ -443,6 +477,42 @@ curl -u username:password \
 {
   "status": "updated"
 }
+```
+
+Section-scoped bodies work the same way — every field is optional
+(nil = unchanged). The `doorbell` and `dlna` sections follow
+partial-PUT semantics with two conventions:
+
+- Blank secrets keep the stored ones (per-user and outbound): the GET never
+  returns them, so the UI round-trips empty fields when unchanged.
+  `doorbell.users` is replaced as a whole table;
+  `doorbell.outbound.enabled: false` removes PBX mode (null on GET).
+- Both services snapshot their config at boot, so any change answers
+  `{"status": "updated", "restart_required": true}` (same as the RTSP
+  output server above).
+
+**Request (doorbell + DLNA example):**
+```bash
+curl -u username:password \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{
+    "doorbell": {
+      "enabled": true,
+      "listen": ":5070",
+      "users": [
+        {"username": "front-door", "name": "Front door", "camera_id": "cam-xxxx", "secret": ""}
+      ],
+      "outbound": {"enabled": false}
+    },
+    "dlna": {
+      "enabled": true,
+      "port": 49152,
+      "interfaces": ["eth0"],
+      "friendly_name": "Home NVR"
+    }
+  }' \
+  "http://localhost:9090/api/settings"
 ```
 
 ## Get Merge Settings

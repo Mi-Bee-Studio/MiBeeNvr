@@ -139,7 +139,51 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"subscribe_mobile_position": h.config.GB28181.SubscribeMobilePosition,
 			"subscribe_expires":         h.config.GB28181.SubscribeExpires,
 		},
+		"doorbell": h.doorbellSettingsView(),
+		"dlna": map[string]any{
+			"enabled":       h.config.DLNA.Enabled,
+			"port":          h.config.DLNA.Port,
+			"interfaces":    h.config.DLNA.Interfaces,
+			"friendly_name": h.config.DLNA.FriendlyName,
+		},
 	})
+}
+
+// doorbellSettingsView renders the doorbell section for GET /api/settings
+// (#971). Secrets are never returned — per-user and outbound secrets
+// surface as secret_configured booleans (gb28181.password_configured
+// convention); outbound is null when mode B is off.
+func (h *Handler) doorbellSettingsView() map[string]any {
+	users := make([]map[string]any, 0, len(h.config.Doorbell.Users))
+	for _, u := range h.config.Doorbell.Users {
+		users = append(users, map[string]any{
+			"username":          u.Username,
+			"name":              u.Name,
+			"camera_id":         u.CameraID,
+			"secret_configured": u.Secret != "",
+		})
+	}
+	var outbound any
+	if ob := h.config.Doorbell.Outbound; ob != nil {
+		outbound = map[string]any{
+			"server":            ob.Server,
+			"username":          ob.Username,
+			"expires":           ob.Expires,
+			"secret_configured": ob.Secret != "",
+		}
+	}
+	return map[string]any{
+		"enabled":      h.config.Doorbell.Enabled,
+		"listen":       h.config.Doorbell.Listen,
+		"realm":        h.config.Doorbell.Realm,
+		"transport":    h.config.Doorbell.Transport,
+		"tls_cert":     h.config.Doorbell.TLSCert,
+		"tls_key":      h.config.Doorbell.TLSKey,
+		"lan_only":     h.config.Doorbell.LANOnlyEnabled(),
+		"ring_timeout": h.config.Doorbell.RingTimeout,
+		"users":        users,
+		"outbound":     outbound,
+	}
 }
 
 func formatOffset(seconds int) string {
@@ -285,6 +329,24 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			SubscribeMobilePosition *bool   `json:"subscribe_mobile_position"`
 			SubscribeExpires        *string `json:"subscribe_expires"`
 		} `json:"gb28181"`
+		Doorbell *struct {
+			Enabled     *bool                   `json:"enabled"`
+			Listen      *string                 `json:"listen"`
+			Realm       *string                 `json:"realm"`
+			Transport   *string                 `json:"transport"`
+			TLSCert     *string                 `json:"tls_cert"`
+			TLSKey      *string                 `json:"tls_key"`
+			LANOnly     *bool                   `json:"lan_only"`
+			RingTimeout *string                 `json:"ring_timeout"`
+			Users       *[]doorbellUserUpdate   `json:"users"`
+			Outbound    *doorbellOutboundUpdate `json:"outbound"`
+		} `json:"doorbell"`
+		DLNA *struct {
+			Enabled      *bool     `json:"enabled"`
+			Port         *int      `json:"port"`
+			Interfaces   *[]string `json:"interfaces"`
+			FriendlyName *string   `json:"friendly_name"`
+		} `json:"dlna"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -623,14 +685,132 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Doorbell ingress (#971). The SIP listener and the popup talk bridge
+	// snapshot their config at boot — section changes apply on the next
+	// start, so the response carries restart_required. Merge into a copy and
+	// validate with the SAME rules the startup load enforces
+	// (config.Validate), rolling the section back on failure (#867
+	// discipline).
+	doorbellChanged := false
+	if body.Doorbell != nil {
+		merged := h.config.Doorbell
+		db := body.Doorbell
+		if db.Enabled != nil {
+			merged.Enabled = *db.Enabled
+		}
+		if db.Listen != nil {
+			merged.Listen = strings.TrimSpace(*db.Listen)
+		}
+		if db.Realm != nil {
+			merged.Realm = strings.TrimSpace(*db.Realm)
+		}
+		if db.Transport != nil {
+			merged.Transport = strings.TrimSpace(*db.Transport)
+		}
+		if db.TLSCert != nil {
+			merged.TLSCert = strings.TrimSpace(*db.TLSCert)
+		}
+		if db.TLSKey != nil {
+			merged.TLSKey = strings.TrimSpace(*db.TLSKey)
+		}
+		if db.LANOnly != nil {
+			merged.LANOnly = db.LANOnly
+		}
+		if db.RingTimeout != nil {
+			merged.RingTimeout = strings.TrimSpace(*db.RingTimeout)
+		}
+		if db.Users != nil {
+			// Whole-table replace. A blank secret keeps the existing secret
+			// for the same username (the GET never returns secrets, so the
+			// UI round-trips blanks — same semantics as the gb28181 password).
+			oldSecrets := make(map[string]string, len(h.config.Doorbell.Users))
+			for _, u := range h.config.Doorbell.Users {
+				oldSecrets[u.Username] = u.Secret
+			}
+			users := make([]config.DoorbellUserConfig, 0, len(*db.Users))
+			for _, u := range *db.Users {
+				secret := u.Secret
+				if strings.TrimSpace(secret) == "" {
+					secret = oldSecrets[u.Username]
+				}
+				users = append(users, config.DoorbellUserConfig{
+					Username: u.Username,
+					Name:     u.Name,
+					CameraID: u.CameraID,
+					Secret:   secret,
+				})
+			}
+			merged.Users = users
+		}
+		if db.Outbound != nil {
+			if db.Outbound.Enabled != nil && !*db.Outbound.Enabled {
+				merged.Outbound = nil
+			} else {
+				target := config.DoorbellOutboundConfig{}
+				if merged.Outbound != nil {
+					target = *merged.Outbound
+				}
+				if db.Outbound.Server != nil {
+					target.Server = strings.TrimSpace(*db.Outbound.Server)
+				}
+				if db.Outbound.Username != nil {
+					target.Username = strings.TrimSpace(*db.Outbound.Username)
+				}
+				if db.Outbound.Secret != nil {
+					if s := strings.TrimSpace(*db.Outbound.Secret); s != "" {
+						target.Secret = s
+					}
+				}
+				if db.Outbound.Expires != nil {
+					target.Expires = strings.TrimSpace(*db.Outbound.Expires)
+				}
+				merged.Outbound = &target
+			}
+		}
+		prev := h.config.Doorbell
+		h.config.Doorbell = merged
+		if err := config.Validate(h.config); err != nil {
+			h.config.Doorbell = prev
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		doorbellChanged = true
+	}
+
+	// DLNA media server (#970) — same next-start semantics as doorbell.
+	dlnaChanged := false
+	if body.DLNA != nil {
+		merged := h.config.DLNA
+		if body.DLNA.Enabled != nil {
+			merged.Enabled = *body.DLNA.Enabled
+		}
+		if body.DLNA.Port != nil {
+			merged.Port = *body.DLNA.Port
+		}
+		if body.DLNA.Interfaces != nil {
+			merged.Interfaces = *body.DLNA.Interfaces
+		}
+		if body.DLNA.FriendlyName != nil {
+			merged.FriendlyName = strings.TrimSpace(*body.DLNA.FriendlyName)
+		}
+		prev := h.config.DLNA
+		h.config.DLNA = merged
+		if err := config.Validate(h.config); err != nil {
+			h.config.DLNA = prev
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		dlnaChanged = true
+	}
+
 	// Persist config to disk
 	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 	}
 
-	if remoteOffloadChanged {
-		// Remote offload settings apply on the next start (the uploader
-		// service + playback proxy are constructed at boot).
+	if remoteOffloadChanged || doorbellChanged || dlnaChanged {
+		// Remote offload, doorbell and DLNA settings apply on the next start
+		// (their services are constructed at boot).
 		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "restart_required": true})
 		return
 	}
@@ -639,6 +819,27 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// doorbellUserUpdate is one row of the doorbell.users PUT body. A blank
+// secret keeps the existing secret for the same username (the GET never
+// returns secrets, so the UI round-trips blanks).
+type doorbellUserUpdate struct {
+	Username string `json:"username"`
+	Name     string `json:"name"`
+	CameraID string `json:"camera_id"`
+	Secret   string `json:"secret"`
+}
+
+// doorbellOutboundUpdate is the doorbell.outbound PUT body. enabled=false
+// removes the outbound registration (mode A only); any other field present
+// materializes/merges the struct. A blank secret keeps the current one.
+type doorbellOutboundUpdate struct {
+	Enabled  *bool   `json:"enabled"`
+	Server   *string `json:"server"`
+	Username *string `json:"username"`
+	Secret   *string `json:"secret"`
+	Expires  *string `json:"expires"`
 }
 
 // remoteSettingsUpdate is the PUT /api/settings storage.remote body. Pointer

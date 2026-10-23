@@ -1010,6 +1010,42 @@ GB/T 28181 platform access (default off). See the [GB28181 guide](gb28181-guide.
 for the full key reference (`gb28181:` platform role and `gb28181_cascade:`
 lower-level cascade role) and `config.example.yaml` in the repo root for examples.
 
+## Doorbell Configuration (doorbell:)
+
+SIP doorbell / intercom ingress (default off). See the [doorbell guide](doorbell.md)
+for modes, security posture and usage; every key below is also editable at
+**Settings → Doorbell** (applies on the next start).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | boolean | `false` | Master switch for the SIP ingress |
+| `listen` | string | `":5070"` | SIP listener address |
+| `realm` | string | `"mibee-nvr"` | SIP digest challenge realm |
+| `transport` | string | `"udp"` | `udp`, `tcp` or `tls` |
+| `tls_cert` / `tls_key` | string | — | PEM paths, required for `tls` |
+| `lan_only` | boolean | `true` | Reject SIP from non-private source addresses |
+| `ring_timeout` | duration | `"60s"` | Auto-terminate unanswered calls |
+| `users` | list | — | Door stations (mode A): `username`, `secret` (encrypted at rest), `name` (popup display), `camera_id` (optional ring-snapshot source) |
+| `outbound` | map | — | Mode B: register to a PBX — `server`, `username`, `secret`, `expires` (default `"300s"`); absent = mode A only |
+
+At least one `users` entry or `outbound` is required when enabled. Runtime
+state (registered stations, restart-pending) is exposed at
+`GET /api/doorbell/status`.
+
+## DLNA Media Server (dlna:)
+
+UPnP AV media server (default off) — TVs and renderers on the LAN browse the
+recording library (camera → day → recording). Also editable at
+**Settings → DLNA**; changes apply on the next start. See the
+[DLNA guide](dlna.md) for the browsing model and renderer notes.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | boolean | `false` | Master switch for the media server |
+| `port` | integer | `49152` | Per-interface HTTP port (1–65535) |
+| `interfaces` | list | — | NIC names to bind; empty = every non-loopback IPv4 interface |
+| `friendly_name` | string | server name | Device name as it appears on renderers |
+
 ## Camera Time Synchronization (time_sync:)
 
 ONVIF cameras occasionally drift (dead RTC batteries, power loss, timezone misconfiguration), skewing OSD timestamps and event times. The NVR offers two complementary correction paths:

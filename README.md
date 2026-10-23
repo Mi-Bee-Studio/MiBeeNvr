@@ -107,11 +107,13 @@ Self-measured across three hardware tiers — methodology, judging criteria, and
 | ONVIF | Camera ↔ NVR | Discovery, PTZ, stream URI, MotionAlarm events |
 | Xiaomi (CS2 + TUTK) | Camera → NVR | CS2 P2P + legacy TUTK (7 models), cloud auth |
 | GB/T 28181 | Camera → NVR | SIP platform, auto-enrollment, audio + talk, PTZ, device-side playback |
+| SIP doorbell | Door station → NVR | Doorbird/Akuvox/Hikvision intercoms: ring popup, two-way G.711 talk |
 | SRT / RTMP (ingest) | Publisher → NVR | Push-in: remote publishers, low-latency transport |
 | WHIP | Publisher → NVR | WebRTC push from browsers, phones, OBS 30+ (H.264 + Opus) |
 | HLS | NVR → Viewer | On-demand with LL-HLS support |
 | WebRTC (WHEP) | NVR → Viewer | Sub-second latency |
 | HTTP-FLV | NVR → Viewer | Browser-friendly streaming |
+| DLNA / UPnP AV | NVR → TV | LAN media server — TVs browse and play the recording library |
 | RTSP (output server) | NVR → External | Every camera re-served at `rtsp://<nvr>:8554/<camera-id>` |
 | RTMP / RTSP (relay) | NVR → External | Native Go push-out to remote targets |
 

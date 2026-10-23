@@ -50,6 +50,18 @@ INVITE 只要 From 用户在配置列表中即被接受——不对每条 INVITE
 密码（SIP 经 PBX 的标准行为）。INVITE 的**来源地址必须与 `outbound.server`
 的主机一致**，其它来源一律 403。
 
+## 在 Web UI 中配置
+
+以上全部内容都可在 **设置 → 门铃** 里编辑——启用开关、监听地址/realm/传输
+（选 `tls` 时展开证书对字段）、`lan_only`、响铃超时、门站列表（用户名、显示
+名、关联相机下拉、密钥）以及 PBX 卡片。密钥只写不读：API 只回
+`secret_configured` 布尔值，留空即保持已存值——编辑门站不需要重输密码。
+
+本节改动在下次启动时生效——保存的响应带 `restart_required: true`，面板的
+状态条会切换为"已启用——等待重启生效"（配置已开、服务尚未重建）。运行中
+时状态条列出当前已注册的门站
+（[`GET /api/doorbell/status`](api/doorbell.md)）。
+
 ## 安全姿态
 
 - **默认关闭**；不写 `enabled: true` 该节完全不生效。
@@ -75,7 +87,7 @@ INVITE 只要 From 用户在配置列表中即被接受——不对每条 INVITE
 开启 `mqtt.status_events` 后转发到 `{prefix}/event/doorbell.ring` 等主题，
 供家庭自动化联动。
 
-REST 接口（给集成用）：`GET /api/doorbell/calls`、
+REST 接口（给集成用）：`GET /api/doorbell/status`、`GET /api/doorbell/calls`、
 `POST /api/doorbell/calls/{id}/answer|reject|bye`，以及
 `/api/doorbell/calls/{id}/talk` WebSocket（双向二进制 G.711 帧——与 GB28181
 对讲同一套约定）。
