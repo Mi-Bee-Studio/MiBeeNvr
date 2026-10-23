@@ -172,9 +172,7 @@ func (cm *CleanupManager) deepOrphanCleanup(ctx context.Context, cameras []strin
 			}
 			info, statErr := d.Info()
 			if statErr != nil {
-				// Unreadable entries are skipped (logged above): the walk must
-				// never abort — one bad entry cannot orphan the rest.
-				return nil //nolint:nilerr
+				return nil //nolint:nilerr // unreadable entry (logged above): skip it, never abort the walk
 			}
 			if time.Since(info.ModTime()) < time.Hour {
 				return nil

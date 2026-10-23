@@ -17,7 +17,7 @@ var opusFixture []byte
 // boundaries come from the ADTS frame_length field; the 7-byte headers are
 // stripped.
 func loadADTS() ([][]byte, error) {
-	var raw = aacFixture
+	raw := aacFixture
 	var aus [][]byte
 	for i := 0; i+7 <= len(raw); {
 		if raw[i] != 0xFF || raw[i+1]&0xF6 != 0xF0 {
@@ -39,7 +39,7 @@ func loadADTS() ([][]byte, error) {
 // Packets terminate on lacing values < 255; the OpusHead/OpusTags header
 // packets are skipped.
 func loadOggOpus() ([][]byte, error) {
-	var raw = opusFixture
+	raw := opusFixture
 	var pkts [][]byte
 	var cur []byte
 	for i := 0; i+27 <= len(raw); {
@@ -52,7 +52,7 @@ func loadOggOpus() ([][]byte, error) {
 			break
 		}
 		p := i + 27 + nSegs
-		for s := 0; s < nSegs; s++ {
+		for s := range nSegs {
 			sz := int(raw[i+27+s])
 			if p+sz > len(raw) {
 				return pkts, nil

@@ -308,6 +308,23 @@ func adtsFreqIndex(rate int) (byte, bool) {
 	return 0, false
 }
 
+// parseAudioSpecificConfig extracts the ADTS-relevant fields from a 2-byte
+// AudioSpecificConfig: audioObjectType, sampling frequency index and channel
+// configuration. ok=false when any field falls outside the ADTS-representable
+// ranges (AOT must be AAC-LC/LTP/Main/SSR, freq index ≤ 12, 1–6 channels).
+func parseAudioSpecificConfig(asc []byte) (objType, freqIdx, ch int, ok bool) {
+	if len(asc) < 2 {
+		return 0, 0, 0, false
+	}
+	objType = int(asc[0]>>3) & 0x1F
+	freqIdx = int(asc[0]&0x07)<<1 | int(asc[1]>>7)
+	ch = int(asc[1]>>3) & 0x0F
+	if objType >= 2 && objType <= 5 && freqIdx <= 12 && ch >= 1 && ch <= 6 {
+		return objType, freqIdx, ch, true
+	}
+	return 0, 0, 0, false
+}
+
 // newLiveADTSFormat re-frames AAC AUs from the hub into an ADTS stream the
 // browser decodes natively. Header parameters come from the recorder's
 // AudioSpecificConfig when present (RTSP sources carry it); push ingests
@@ -317,16 +334,11 @@ func adtsFreqIndex(rate int) (byte, bool) {
 func newLiveADTSFormat(ar *recorder.AudioRecorder) (liveAudioFormat, error) {
 	var profile, freqIdx, ch byte
 	fromASC := false
-	if asc := ar.AudioConfig(); len(asc) >= 2 {
-		objType := int(asc[0]>>3) & 0x1F
-		fi := int(asc[0]&0x07)<<1 | int(asc[1]>>7)
-		cc := int(asc[1]>>3) & 0x0F
-		if objType >= 2 && objType <= 5 && fi <= 12 && cc >= 1 && cc <= 6 {
-			profile = byte(objType - 1) // ADTS profile field = audioObjectType-1 (2=LC → 1)
-			freqIdx = byte(fi)
-			ch = byte(cc)
-			fromASC = true
-		}
+	if objType, fi, cc, ok := parseAudioSpecificConfig(ar.AudioConfig()); ok {
+		profile = byte(objType - 1) // ADTS profile field = audioObjectType-1 (2=LC → 1)
+		freqIdx = byte(fi)
+		ch = byte(cc)
+		fromASC = true
 	}
 	if !fromASC {
 		fi, ok := adtsFreqIndex(ar.AudioSampleRate())
@@ -364,9 +376,9 @@ func newLiveADTSFormat(ar *recorder.AudioRecorder) (liveAudioFormat, error) {
 // reflection, no final xor — not the IEEE table hash/crc32 ships.
 var oggCRCTable = func() [256]uint32 {
 	var t [256]uint32
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		c := uint32(i) << 24
-		for b := 0; b < 8; b++ {
+		for range 8 {
 			if c&0x80000000 != 0 {
 				c = c<<1 ^ 0x04c11db7
 			} else {

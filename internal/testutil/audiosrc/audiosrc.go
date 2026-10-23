@@ -223,8 +223,10 @@ func (h *handler) OnPlay(*gortsplib.ServerHandlerOnPlayCtx) (*base.Response, err
 
 // --- G.711 synthesis (Sun g711.c reference algorithms) ---
 
-var segUEnd = [8]int{0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF}
-var segAEnd = [8]int{0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF}
+var (
+	segUEnd = [8]int{0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF}
+	segAEnd = [8]int{0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF}
+)
 
 func segSearch(v int, ends *[8]int) int {
 	for i, e := range ends {
@@ -280,7 +282,7 @@ func toneFrame(t time.Time, freq float64, mulaw bool) []byte {
 	const rate = 8000
 	n := 160
 	out := make([]byte, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		tt := t.Sub(startTime).Seconds() + float64(i)/rate
 		env := 0.12 + 0.88*(0.5+0.5*math.Sin(2*math.Pi*0.45*tt))
 		s := int16(env * 22000 * math.Sin(2*math.Pi*freq*tt))

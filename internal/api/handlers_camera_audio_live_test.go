@@ -161,8 +161,8 @@ func driveLiveFormat(t *testing.T, ar *recorder.AudioRecorder, cameraID string, 
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	// Accumulate until the buffer is full or the context deadline — the
-	// server flushes on a 2s cadence, so the first read only carries the
-	// initial header flush.
+	// server flushes on a 500ms cadence, so the first read may carry only
+	// the initial header flush.
 	body := make([]byte, readN)
 	n := 0
 	for n < readN {
@@ -231,7 +231,7 @@ func TestAudioLive_Opus_Ogg(t *testing.T) {
 		}
 		nSegs := int(body[off+26])
 		total := 0
-		for i := 0; i < nSegs; i++ {
+		for i := range nSegs {
 			total += int(body[off+27+i])
 		}
 		if total == 300 && nSegs == 2 {
@@ -242,8 +242,6 @@ func TestAudioLive_Opus_Ogg(t *testing.T) {
 	require.True(t, found, "a 300-byte Opus packet should span two lacing segments")
 
 	// Granule positions on consecutive data pages advance by 960 (20ms@48k).
-	g1 := int64(binary.LittleEndian.Uint64(body[6:14])) // OpusHead page: 0
-	_ = g1
 	var dataGranules []int64
 	for off := 0; off+27 < len(body)-300; off++ {
 		if string(body[off:off+4]) != "OggS" {
@@ -290,23 +288,26 @@ func TestAudioLive_OpusHeaderParams(t *testing.T) {
 	require.Equal(t, uint32(16000), binary.LittleEndian.Uint32(body[40:44]), "input sample rate")
 }
 
-// TestADTS_ASCParse: with an ASC in AudioConfig (RTSP pull shape) the header
-// derives profile/frequency/channels from it.
+// TestADTS_ASCParse exercises the production ASC parser (the RTSP-pull path
+// of newLiveADTSFormat): fields decode per ISO 14496-3 and out-of-range
+// configurations are rejected so the armed-rate fallback takes over.
 func TestADTS_ASCParse(t *testing.T) {
-	ar := recorder.NewAudioRecorder(recorder.AudioConfig{CameraID: "cam-aac2"}, nil, nil)
-	ar.SetHub(streamhub.New())
-	ar.ArmPushFormat("aac", 48000, 2)
-	// ASC for AAC-LC, 48000 Hz (idx 3), stereo: AOT=2 (00010), freq idx 3 (0011), ch 2 (0010)
-	// bits: 00010 0011 0010 ... = 0x11 0x90
-	// ArmPushFormat does not carry an ASC; simulate the RTSP shape by parsing
-	// the pure helper directly.
-	asc := []byte{0x11, 0x90}
-	objType := int(asc[0]>>3) & 0x1F
-	fi := int(asc[0]&0x07)<<1 | int(asc[1]>>7)
-	cc := int(asc[1]>>3) & 0x0F
+	// ASC for AAC-LC, 48000 Hz (idx 3), stereo: AOT=2 (00010), freq idx 3
+	// (0011), ch 2 (0010); bits: 00010 0011 0010 ... = 0x11 0x90.
+	objType, fi, cc, ok := parseAudioSpecificConfig([]byte{0x11, 0x90})
+	require.True(t, ok)
 	require.Equal(t, 2, objType)
 	require.Equal(t, 3, fi)
 	require.Equal(t, 2, cc)
+
+	// AOT 0 and reserved frequency index 13 must be rejected (all other
+	// fields kept valid so the rejection isolates the one under test).
+	_, _, _, bad := parseAudioSpecificConfig([]byte{0x01, 0x90}) // AOT 0, freq idx 3, stereo
+	require.False(t, bad)
+	_, _, _, bad = parseAudioSpecificConfig([]byte{0x16, 0x90}) // AOT 2, freq idx 13 (reserved), stereo
+	require.False(t, bad)
+	_, _, _, bad = parseAudioSpecificConfig([]byte{0x11}) // truncated
+	require.False(t, bad)
 }
 
 // TestAudioLive_NotConnected: no hub → 503.
