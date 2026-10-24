@@ -117,7 +117,7 @@ cd MiBeeNvr && make build
 | HTTP JPEG | 相机 → NVR | 快照流 |
 | ONVIF | 相机 ↔ NVR | 发现、云台、流地址、MotionAlarm 事件 |
 | 小米（CS2 + TUTK） | 相机 → NVR | CS2 P2P + 旧版 TUTK（7 型号），云端认证 |
-| GB/T 28181 | 相机 → NVR | SIP 平台、自动注册、语音对讲、云台、设备侧回放 |
+| GB/T 28181 | 相机 → NVR | SIP 平台、自动注册、语音对讲、云台、设备侧回放（v0.14 起转正为生产支持） |
 | SIP 门铃 | 门禁设备 → NVR | Doorbird/Akuvox/海康门口机：来电弹窗、双向 G.711 对讲 |
 | SRT / RTMP（接入） | 推流端 → NVR | 跨网络推入、低延迟传输 |
 | WHIP | 推流端 → NVR | 浏览器 / 手机 / OBS 30+ 的 WebRTC 推流（H.264 + Opus） |
