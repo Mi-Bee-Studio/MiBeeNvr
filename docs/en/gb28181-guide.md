@@ -97,7 +97,7 @@ Path: **Configuration → Network → Device Access → GB28181**.
 | Field | Value | Notes |
 |---|---|---|
 | Enable | On | |
-| Transport | **UDP** | TCP has a known media defect — see "Pitfalls" below |
+| Transport | UDP or TCP | Both work; on older NVR versions TCP invites had a defect (see "Pitfalls") — start with UDP there |
 | SIP server ID | NVR's `gb28181.server_id` (e.g. `34020000002000000001`) | |
 | SIP server domain | NVR's `gb28181.realm` (e.g. `3402000000`) | |
 | SIP server address | NVR host IP | |
@@ -114,6 +114,9 @@ After saving, the camera REGISTERs to the NVR (Digest auth). Nothing to add manu
 
 1. NVR logs show `device registered` → `catalog received` → `session created` → `first RTP received — session confirmed`;
 2. The camera appears in the camera list and starts recording, with rolling segments landing on disk;
+
+![Enrolled camera card on the devices page](images/gb28181-hikvision-cameras.webp)
+
 3. Opening the camera's live page shows the picture.
 
 ![Enrolled: NVR live view](images/gb28181-hikvision-liveview.webp)
@@ -122,7 +125,7 @@ After saving, the camera REGISTERs to the NVR (Digest auth). Nothing to add manu
 
 - **Factory clock is stuck in the past**: set the time first (web UI "Configuration → System → Time", or `PUT /ISAPI/System/time`);
 - **UDP mode starts with STUN probes** aimed at port 5060: normal NAT probing — the NVR not answering does not affect the subsequent registration; don't misread STUN packets as a protocol failure;
-- **Choosing TCP breaks on-demand streaming** (known limitation, [#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058); library fix [gb28181-go#145](https://github.com/mickeyzzc/gb28181-go/pull/145) submitted): after a TCP registration the platform's INVITE used to leave via UDP aimed at the device's TCP source port, so the device never saw it and the media session rebuilt in a ~32s loop (log signature: INVITE unanswered, repeated `packets_received=0`). **Use UDP until the fix ships**;
+- **Choosing TCP breaks on-demand streaming** (fixed, [#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058); library fix [gb28181-go#145](https://github.com/mickeyzzc/gb28181-go/pull/145)): after a TCP registration the platform's INVITE used to leave via UDP aimed at the device's TCP source port, so the device never saw it and the media session rebuilt in a ~32s loop (log signature: INVITE unanswered, repeated `packets_received=0`). The fix ships with v0.14; on earlier versions switch the camera back to UDP;
 - **GB/T 28181-2022 works as-is**: the Hikvision 2022 mode (`x_gb_ver=3.0`) interops fully (register/catalog/INVITE/PS) — no need to downgrade to 2016;
 - **First-login "change password" nag**: cancel it; it doesn't block configuration.
 
