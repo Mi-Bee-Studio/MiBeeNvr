@@ -229,3 +229,28 @@ func TestSecurityHeadersHashInjectedBootstrap(t *testing.T) {
 		t.Errorf("script-src should not fall back to 'unsafe-inline' when the document has inline scripts\ngot CSP: %s", csp)
 	}
 }
+
+// TestScriptSrcHashesCRLFNormalized pins the browser-side normalization: the
+// HTML input stream converts CRLF (and lone CR) to LF before the parser sees
+// script text, and browsers hash that normalized content. A Windows-built SPA
+// (CRLF line endings) must therefore hash identically to its LF twin —
+// hashing the raw bytes made the policy self-consistent but blocked every
+// inline script in real browsers.
+func TestScriptSrcHashesCRLFNormalized(t *testing.T) {
+	t.Parallel()
+	const script = "console.log('x');"
+	lf := []byte("<!doctype html><script>\n" + script + "\n</script>")
+	crlf := []byte("<!doctype html><script>\r\n" + script + "\r\n</script>")
+
+	lfHash := scriptSrcHashesFor(lf)
+	crlfHash := scriptSrcHashesFor(crlf)
+	if lfHash != crlfHash {
+		t.Errorf("CRLF document hashed differently than its LF twin:\nLF:   %s\nCRLF: %s", lfHash, crlfHash)
+	}
+
+	sum := sha256.Sum256([]byte("\n" + script + "\n"))
+	want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	if !strings.Contains(lfHash, want) {
+		t.Errorf("hash should cover the exact script text with LF endings, want %s in %s", want, lfHash)
+	}
+}

@@ -105,6 +105,71 @@ func TestAudioLiveWav_StreamsPCM(t *testing.T) {
 	}, 3*time.Second, 100*time.Millisecond, "live session should be audited")
 }
 
+// TestAudioLiveWav_DeclaresFiniteContentLength pins the #1052 fix shape:
+// the WAV branches must declare a finite Content-Length (nominal window),
+// because Chromium's WAV demuxer rejects open-ended bodies. The 0xFFFFFFFF
+// size markers stay — with a known resource size the parser clamps them.
+func TestAudioLiveWav_DeclaresFiniteContentLength(t *testing.T) {
+	ar := recorder.NewAudioRecorder(recorder.AudioConfig{CameraID: "cam-mic"}, nil, nil)
+	hub := streamhub.New()
+	ar.SetHub(hub)
+	ar.ArmPushFormat("g711", 8000, 1)
+
+	srv := httptest.NewServer(audioLiveEnv(t, ar, "cam-mic"))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/cameras/cam-mic/audio/live.wav", nil)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	// 44-byte header + 8000 Hz * 1 ch * 2 bytes * 3600 s.
+	require.Equal(t, "57600044", resp.Header.Get("Content-Length"))
+}
+
+// TestAudioLiveWav_EndsExactlyAtDeclaredLength shrinks the nominal window and
+// asserts the body terminates cleanly at exactly Content-Length bytes — the
+// mid-frame truncation path included.
+func TestAudioLiveWav_EndsExactlyAtDeclaredLength(t *testing.T) {
+	orig := audioLiveWavNominalWindow
+	audioLiveWavNominalWindow = 250 * time.Millisecond // 8000*2*0.25 = 4000 bytes + 44 header
+	t.Cleanup(func() { audioLiveWavNominalWindow = orig })
+
+	ar := recorder.NewAudioRecorder(recorder.AudioConfig{CameraID: "cam-mic"}, nil, nil)
+	hub := streamhub.New()
+	ar.SetHub(hub)
+	ar.ArmPushFormat("g711", 8000, 1)
+
+	srv := httptest.NewServer(audioLiveEnv(t, ar, "cam-mic"))
+	defer srv.Close()
+
+	go func() { // keep frames flowing well past the window
+		g711 := make([]byte, 160)
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case <-deadline:
+				return
+			default:
+			}
+			hub.BroadcastAudio(time.Now().UnixNano(), model.AudioG711, g711)
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+
+	resp, err := http.Get(srv.URL + "/api/cameras/cam-mic/audio/live.wav")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, "4044", resp.Header.Get("Content-Length"))
+
+	all, err := io.ReadAll(resp.Body) // ends when the handler closes at the cap
+	require.NoError(t, err, "body must end cleanly, not with an unexpected EOF")
+	require.Len(t, all, 4044, "exactly the declared Content-Length bytes")
+	require.Equal(t, "RIFF", string(all[0:4]))
+}
+
 func TestAudioLiveWav_NotAudioDevice(t *testing.T) {
 	h := audioLiveEnv(t, nil, "cam-none") // no recorder registered
 	srv := httptest.NewServer(h)
