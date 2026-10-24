@@ -18,8 +18,9 @@
 
 **音频**（0.11.0 起）：WebRTC (WHEP) 将 G.711 与 Opus 音频直接复用进轨道（零转码）；
 WebSocket 播放器走共享音频 WS 端点（G.711 全场景可用，AAC/Opus 需 WebCodecs 即
-HTTPS 或 localhost）；HLS/HTTP-FLV/MJPEG 轮询不承载直播音频。录像回放的音频
-（G.711/AAC/Opus）由浏览器 MP4 原生解码，不受协议选择影响。
+HTTPS 或 localhost）；HTTP-FLV 自 #1066 起对 **AAC 音源**承载直播音频（经典 FLV 仅
+支持 AAC，G.711/Opus 待 Enhanced-FLV 决策）；HLS 与 MJPEG 轮询不承载直播音频。录像
+回放的音频（G.711/AAC/Opus）由浏览器 MP4 原生解码，不受协议选择影响。
 
 ---
 

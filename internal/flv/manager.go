@@ -25,6 +25,9 @@ var flvLogger = slogx.Component("flv-manager")
 const (
 	defaultMaxViewers   = 10
 	defaultWriteBufSize = 100
+	// Audio tags are tiny (~200-1500B) and far sparser than video frames;
+	// 100 frames ≈ 2-4s of AAC — plenty of slack before dropping.
+	defaultAudioBufSize = 100
 )
 
 // gopCache stores the last GOP (keyframe + following delta frames)
@@ -53,9 +56,29 @@ type streamEntry struct {
 	viewerSeq atomic.Int64
 	viewerMu  sync.Mutex
 	frameCh   chan model.FrameMsg
+	audioCh   chan []byte // ready AAC audio tags (seq header + frames)
 	cancel    context.CancelFunc
 	hub       *streamhub.StreamHub
 	hubSubID  string
+	// audioSubID is the hub audio subscription ("flv-audio-<camID>"), set
+	// when the AAC leg is armed via RegisterAudioConfig.
+	audioSubID string
+	// audioSeqTag holds the pre-built AAC sequence-header tag once armed.
+	// atomic.Pointer so ServeFLV can read it without holding m.mu (the
+	// arm happens after entry publication; set-once, never mutated).
+	audioSeqTag atomic.Pointer[[]byte]
+	// audioChannels feeds aacTagFirstByte; written once under m.mu before
+	// audioCodecArmed flips, read under m.mu.
+	audioChannels   int
+	audioCodecArmed bool
+	// audioTsOffset anchors wallclock-nanos audio producers (RTSP recorder
+	// broadcasts UnixNano) onto the video tag timeline: set once from the
+	// last video tag ms so both clocks run in real time from a common zero.
+	audioTsOffset   atomic.Int64
+	audioTsAnchored atomic.Bool
+	// lastVideoMs is the ms timestamp of the newest video tag (anchor
+	// reference for the audio timeline).
+	lastVideoMs atomic.Int64
 	// clockBase is the unix-ms wallclock this entry's FLV tag StreamID
 	// deltas are measured from (#481). Fixed at registration so the shared
 	// per-frame tag encodes a viewer-independent ingest offset.
@@ -146,16 +169,18 @@ func (m *Manager) RegisterStream(camID string, codec model.Format, sps, pps, vps
 
 	ctx, cancel := context.WithCancel(context.Background())
 	entry := &streamEntry{
-		codec:     codec,
-		sps:       sps,
-		pps:       pps,
-		vps:       vps,
-		seqHeader: seqHeader,
-		gopCache:  &gopCache{},
-		viewers:   make(map[int64]*viewerConn),
-		frameCh:   make(chan model.FrameMsg, m.writeBufSize),
-		cancel:    cancel,
-		hub:       hub,
+		codec:      codec,
+		sps:        sps,
+		pps:        pps,
+		vps:        vps,
+		seqHeader:  seqHeader,
+		gopCache:   &gopCache{},
+		viewers:    make(map[int64]*viewerConn),
+		frameCh:    make(chan model.FrameMsg, m.writeBufSize),
+		audioCh:    make(chan []byte, defaultAudioBufSize),
+		audioSubID: "flv-audio-" + camID,
+		cancel:     cancel,
+		hub:        hub,
 	}
 
 	if m.metrics != nil {
@@ -195,9 +220,12 @@ func (m *Manager) unregisterStream(camID string) {
 	m.mu.Unlock()
 
 	if ok {
-		// Unsubscribe from recorder's StreamHub
+		// Unsubscribe from recorder's StreamHub (video + armed audio leg)
 		if entry.hub != nil && entry.hubSubID != "" {
 			entry.hub.Unsubscribe(entry.hubSubID)
+			if entry.audioCodecArmed {
+				entry.hub.Unsubscribe(entry.audioSubID)
+			}
 		}
 		entry.cancel()
 		entry.viewerMu.Lock()
@@ -226,6 +254,101 @@ func (m *Manager) ActiveHub(camID string) *streamhub.StreamHub {
 	return entry.hub
 }
 
+// RegisterAudioConfig arms the AAC audio leg for a registered stream (#1066):
+// subscribes the recorder hub's audio frames and pre-builds the AAC
+// sequence-header tag from the recorder's authoritative AudioSpecificConfig
+// (the same ASC the MP4 muxer writes into esds). Idempotent; safe to call
+// from every ServeFLV request so a camera whose audio params arrive late is
+// armed by the next viewer. Classic FLV carries AAC only — G.711/Opus stay
+// muted until an Enhanced-FLV decision lands.
+func (m *Manager) RegisterAudioConfig(camID string, asc []byte, sampleRate, channels int) {
+	if len(asc) == 0 {
+		return
+	}
+	m.mu.Lock()
+	entry, ok := m.streams[camID]
+	if !ok || entry.audioCodecArmed {
+		m.mu.Unlock()
+		return
+	}
+	entry.audioCodecArmed = true
+	entry.audioChannels = channels
+	hub := entry.hub
+	seq := aacAudioSequenceHeader(asc, channels)
+	entry.audioSeqTag.Store(&seq)
+	m.mu.Unlock()
+
+	flvLogger.Info("FLV audio armed (AAC)", "camera_id", camID,
+		"sample_rate", sampleRate, "channels", channels)
+	if hub != nil {
+		if err := hub.SubscribeAudio(entry.audioSubID, func(pts int64, codec model.AudioCodec, data []byte) {
+			m.writeAudioFrame(camID, pts, codec, data)
+		}); err != nil {
+			flvLogger.Warn("FLV audio subscribe failed", "camera_id", camID, "error", err)
+		}
+	}
+	// Viewers already connected when the leg arms get the sequence header
+	// through the audio channel (ordered ahead of any frame tag). When none
+	// are connected yet, ServeFLV's join path writes it — enqueueing here
+	// too would deliver it twice to the first viewer.
+	entry.viewerMu.Lock()
+	viewers := len(entry.viewers)
+	entry.viewerMu.Unlock()
+	if viewers > 0 {
+		select {
+		case entry.audioCh <- seq:
+		default: // full of frames with no header yet — impossible in practice
+		}
+	}
+}
+
+// writeAudioFrame converts one hub audio access unit into an FLV audio tag.
+// Non-AAC codecs are dropped silently: the leg is armed for AAC only.
+func (m *Manager) writeAudioFrame(camID string, pts int64, codec model.AudioCodec, data []byte) {
+	if codec != model.AudioAAC || len(data) == 0 {
+		return
+	}
+	m.mu.RLock()
+	entry, ok := m.streams[camID]
+	armed := ok && entry.audioCodecArmed
+	channels := 0
+	if ok {
+		channels = entry.audioChannels
+	}
+	m.mu.RUnlock()
+	if !armed {
+		return
+	}
+
+	tag := aacAudioFrameTag(m.audioTsMs(entry, pts), data, channels)
+	select {
+	case entry.audioCh <- tag:
+	default:
+		// Same bounded-memory-over-live-tail trade as video: drop, count it.
+		if entry.framesDropped != nil {
+			entry.framesDropped.Inc()
+		}
+	}
+}
+
+// audioTsMs normalizes a hub audio pts onto the FLV millisecond timeline.
+// Producers disagree on the audio clock: the RTSP AudioRecorder broadcasts
+// UnixNano wallclock (recorder/audio.go enqueue), GB28181 broadcasts 90kHz
+// media ticks (same family as video PTS). Nanos (magnitude >1e15) are
+// anchored once against the newest video tag so both timelines share a zero
+// and then advance in real time; tick-family pts map 1:1 via /90.
+func (m *Manager) audioTsMs(entry *streamEntry, pts int64) int64 {
+	if pts <= 1_000_000_000_000_000 {
+		return pts / 90
+	}
+	ms := pts/1_000_000 - entry.clockBase.Load()
+	if !entry.audioTsAnchored.Load() {
+		entry.audioTsOffset.Store(max(entry.lastVideoMs.Load()-ms, 0))
+		entry.audioTsAnchored.Store(true)
+	}
+	return ms + entry.audioTsOffset.Load()
+}
+
 // RebindHub re-subscribes an active stream to a new StreamHub. The sub-stream
 // puller (#513) restarts with a FRESH hub after each idle recycle; without a
 // rebind the entry keeps listening to the dead hub and every viewer goes
@@ -247,12 +370,22 @@ func (m *Manager) RebindHub(camID string, hub *streamhub.StreamHub) {
 
 	if oldHub != nil && subID != "" {
 		oldHub.Unsubscribe(subID)
+		if entry.audioCodecArmed {
+			oldHub.Unsubscribe(entry.audioSubID)
+		}
 	}
 	if hub.SubscribeMsg(subID, func(msg model.FrameMsg) {
 		m.writeFrameMsg(camID, msg)
 	}) != nil {
 		flvLogger.Warn("FLV rebind: hub subscribe failed", "camera_id", camID)
 		return
+	}
+	if entry.audioCodecArmed {
+		if err := hub.SubscribeAudio(entry.audioSubID, func(pts int64, codec model.AudioCodec, data []byte) {
+			m.writeAudioFrame(camID, pts, codec, data)
+		}); err != nil {
+			flvLogger.Warn("FLV rebind: audio subscribe failed", "camera_id", camID, "error", err)
+		}
 	}
 	flvLogger.Info("FLV stream rebound to new StreamHub", "camera_id", camID)
 }
@@ -359,6 +492,23 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 		select {
 		case <-ctx.Done():
 			return
+		case tag := <-entry.audioCh:
+			// Audio tags bypass the GOP cache (only the sequence header is
+			// replayed to joining viewers) but fan out like video frames.
+			entry.viewerMu.Lock()
+			for _, v := range entry.viewers {
+				select {
+				case v.ch <- tag:
+					if entry.framesSent != nil {
+						entry.framesSent.Inc()
+					}
+				default:
+					if entry.framesDropped != nil {
+						entry.framesDropped.Inc()
+					}
+				}
+			}
+			entry.viewerMu.Unlock()
 		case msg := <-entry.frameCh:
 			// Ingest offset (ms from clockBase) rides in the tag StreamID
 			// field — spec-receivers ignore it, our player reads it (#481).
@@ -370,6 +520,7 @@ func (m *Manager) writeLoop(ctx context.Context, camID string, entry *streamEntr
 				}
 			}
 			tag := videoFrameTag(entry.codec, msg.AU, msg.PTS, msg.IsKeyframe, delta)
+			entry.lastVideoMs.Store(msg.PTS / 90)
 
 			if msg.IsKeyframe {
 				entry.gopMu.Lock()
@@ -533,6 +684,13 @@ func (m *Manager) ServeFLV(camID string, w http.ResponseWriter, r *http.Request)
 
 	if err := writeRaw(entry.seqHeader); err != nil {
 		return err
+	}
+	// AAC sequence header (when armed) so joining viewers can decode audio
+	// immediately — set-once via atomic, no lock needed.
+	if seq := entry.audioSeqTag.Load(); seq != nil {
+		if err := writeRaw(*seq); err != nil {
+			return err
+		}
 	}
 	if flusher != nil {
 		flusher.Flush()

@@ -98,6 +98,16 @@ func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 		h.flvMgr.RebindHub(key, subSrc.Hub())
 	}
 
+	// Arm the AAC audio leg when the camera provides AAC params (#1066):
+	// idempotent and retried on every request, so a camera whose audio
+	// config arrives after the first viewer still gets armed by the next
+	// one. Sub-streams are video-only (#513) — main quality only.
+	if quality != qualitySub && h.camMgr != nil {
+		if ci := h.camMgr.GetCodecInfo(id); ci.AudioCodec == "aac" && len(ci.AudioConfig) > 0 {
+			h.flvMgr.RegisterAudioConfig(key, ci.AudioConfig, ci.AudioSampleRate, ci.AudioChannels)
+		}
+	}
+
 	// Serve FLV stream (blocks until client disconnects)
 	if err := h.flvMgr.ServeFLV(key, w, r); err != nil {
 		if errors.Is(err, flv.ErrStreamNotActive) {
