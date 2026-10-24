@@ -165,7 +165,7 @@ func (c *Client) deviceWriter(skew time.Duration) (*onvifgo.Client, error) {
 	if c.ready {
 		return c.client, nil
 	}
-	lib, err := onvifgo.NewClient(c.endpoint, onvifgo.WithCredentials(c.username, c.password))
+	lib, err := newLibClient(c.endpoint, c.username, c.password)
 	if err != nil {
 		return nil, fmt.Errorf("create ONVIF client: %w", err)
 	}

@@ -48,6 +48,20 @@ func NewClient(endpoint, username, password string) *Client {
 	}
 }
 
+// newLibClient builds the library client with the NVR's default auth ladder:
+// digest first (the library default), then password-text, HTTP basic and none.
+// The extra rungs cover old firmwares that answer a rejected digest with an
+// empty 200 body instead of a 401/fault (#1051, onvif-go#140): the library
+// advances the ladder on such bodies and pins the first mode that works.
+func newLibClient(endpoint, username, password string, opts ...onvifgo.ClientOption) (*onvifgo.Client, error) {
+	opts = append([]onvifgo.ClientOption{
+		onvifgo.WithCredentials(username, password),
+		onvifgo.WithAuthFallback(onvifgo.AuthPasswordText, onvifgo.AuthHTTPBasic, onvifgo.AuthNone),
+	}, opts...)
+
+	return onvifgo.NewClient(endpoint, opts...)
+}
+
 // Connect initializes the ONVIF connection and discovers service endpoints.
 // Idempotent: calling Connect again on an already-connected client is a no-op,
 // so the recorder, snapshot auto-populator and PTZ controller can safely share
@@ -62,7 +76,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	onvifClient, err := onvifgo.NewClient(c.endpoint, onvifgo.WithCredentials(c.username, c.password))
+	onvifClient, err := newLibClient(c.endpoint, c.username, c.password)
 	if err != nil {
 		return fmt.Errorf("create ONVIF client: %w", err)
 	}
