@@ -70,7 +70,7 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 
 - **Browser-side AI detection**: ONNX Runtime Web (WebGPU → WASM SIMD fallback) runs YOLO11 inference in your browser — zero server load, works even on aging NVR hardware
 - **ROI zones**: draw the doorway / hallway / gate; only targets inside the zone raise events. Confidence, frame-skip and class filters all tunable (see the [AI tuning guide](ai-detection-tuning.md))
-- **MiBeeVision integration**: optional external AI backend (as of v0.13: multi-instance routing via `vision.instances` + push circuit-breaker with automatic back-off) — the NVR pushes recording segments and re-pushes missed ones after reconnects; AI event snapshot endpoint
+- **MiBeeVision integration**: optional external AI backend (as of v0.13: multi-instance routing via `vision.instances` + push circuit-breaker with automatic back-off) — the NVR pushes recording segments and re-pushes missed ones after reconnects; AI event snapshot endpoint. The official **MiBeeVision Lite** binary ships free in the NVR repository (independent version line; Lite is single-camera, CPU inference, Linux x86_64/ARM64) — no self-built AI backend required
 - **Camera-side motion detection**: ONVIF MotionAlarm events serve directly as a recording trigger (`motion_source: camera:onvif`, see the [ONVIF guide](onvif-guide.md)) — detection work is offloaded to the camera, zero decode cost on the NVR
 - **Health monitoring**: multi-level camera health checks, auto-remediation, blacklisting, IP-drift self-healing (re-discovers cameras by ONVIF serial number)
 - **SSE live events**: camera status, health events and segment completion stream to the UI in real time
