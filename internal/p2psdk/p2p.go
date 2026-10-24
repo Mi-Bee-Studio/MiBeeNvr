@@ -84,6 +84,10 @@ type p2pSession struct {
 	// arbitration has decided is a harmless no-op.
 	relayKick   chan struct{}
 	relayKickFn sync.Once
+	// e2eeWarnOnce gates the plaintext-tunnel WARN: a session may deliver
+	// its channel and re-derive multiple times, but the operator only
+	// needs to hear about a plaintext tunnel once (mibeescout#16).
+	e2eeWarnOnce sync.Once
 }
 
 // startAsOfferer creates a PeerConnection and DataChannel (as offerer).
@@ -216,7 +220,7 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 			)
 			if cb := p.owner.dataChannelCallback(); cb != nil {
 				wdc := p.activityDataChannel(wrapDataChannel(dc))
-				wdc.E2EEKey = p.e2eeKey()
+				p.armE2EE(&wdc)
 				if ctrl != nil {
 					wdc.Ctrl = ctrl // #88① pair (may have arrived earlier)
 				}
@@ -263,7 +267,7 @@ func (p *p2pSession) dataChannelOpenHandler(signal *signalingClient, cfg Signali
 		p.mu.Unlock()
 		if cb := p.owner.dataChannelCallback(); cb != nil {
 			wdc := p.activityDataChannel(wrapDataChannel(dc))
-			wdc.E2EEKey = p.e2eeKey()
+			p.armE2EE(&wdc)
 			// #88①: pair the lossy ctrl channel with the data channel so
 			// the transport layer can route control frames off the ordered
 			// lane. Wrap order: data first, ctrl attached before delivery.
@@ -570,7 +574,7 @@ func (p *p2pSession) adoptRelayTransport(signal *signalingClient, cfg SignalingC
 	p.log().Info("using relay transport", "session_id", p.sessionID, "pinned", cfg.ForceRelay)
 
 	dc := p.activityDataChannel(ch.dataChannel())
-	dc.E2EEKey = p.e2eeKey()
+	p.armE2EE(&dc)
 	if cb := p.owner.dataChannelCallback(); cb != nil {
 		cb(dc)
 	}
@@ -623,6 +627,20 @@ func (p *p2pSession) e2eeKey() []byte {
 		return nil
 	}
 	return key[:]
+}
+
+// armE2EE installs the tunnel E2EE session key on a channel about to be
+// delivered to the application. When the key cannot be derived (either
+// side's relay key material missing) the tunnel silently runs plaintext —
+// a one-time WARN per session makes that observable in device logs instead
+// of only via App diagnostics (mibeescout#16).
+func (p *p2pSession) armE2EE(dc *DataChannel) {
+	dc.E2EEKey = p.e2eeKey()
+	if len(dc.E2EEKey) == 0 {
+		p.e2eeWarnOnce.Do(func() {
+			p.log().Warn("tunnel e2ee not armed, session runs plaintext (missing key material)")
+		})
+	}
 }
 
 // relaySessionChannel is one session's view of the shared relay client.
