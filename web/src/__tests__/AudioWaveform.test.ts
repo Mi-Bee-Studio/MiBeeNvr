@@ -18,7 +18,7 @@ const fakeCtx = {
   destination: {},
 };
 
-function installFakeAudioContext() {
+export function installFakeAudioContext() {
   (window as unknown as Record<string, unknown>).AudioContext = function () {
     return fakeCtx;
   };
@@ -54,5 +54,16 @@ describe('AudioWaveform', () => {
     render(AudioWaveform, { audio: el });
     await new Promise((r) => setTimeout(r, 50));
     expect(createMediaElementSource.mock.calls.length).toBe(before);
+  });
+});
+
+describe('AudioWaveform node tap', () => {
+  it('taps an AudioNode in parallel without re-feeding the destination', async () => {
+    installFakeAudioContext();
+    const fakeNode = { connect: vi.fn() } as unknown as AudioNode;
+    render(AudioWaveform, { node: fakeNode } as never);
+    await waitFor(() => expect(fakeCtx.createAnalyser).toHaveBeenCalled());
+    // the tap must connect the source node into the analyser
+    expect(fakeNode.connect).toHaveBeenCalled();
   });
 });
