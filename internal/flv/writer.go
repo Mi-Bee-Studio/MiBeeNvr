@@ -287,3 +287,48 @@ func videoFrameTag(codec model.Format, nalus [][]byte, pts int64, isKeyframe boo
 	binary.BigEndian.PutUint32(buf[off:], uint32(11+dataSize))
 	return buf
 }
+
+// Audio constants for classic-FLV AAC (SoundFormat=10). G.711/Opus need
+// Enhanced-FLV (fourcc audio) — deliberately out of scope (#1066 v1).
+const (
+	soundFormatAAC = 10
+)
+
+// AAC packet types (second byte of the audio tag body when SoundFormat=10).
+const (
+	aacPacketTypeSeqHeader = 0x00
+	aacPacketTypeRaw       = 0x01
+)
+
+// aacTagFirstByte builds the AudioTagHeader first byte: SoundFormat(4)=10,
+// SoundRate(2)=3 (44kHz) and SoundSize(1)=1 (16-bit) are IGNORED for AAC by
+// spec — the real rate/depth live in the AudioSpecificConfig — but are set
+// to the spec-mandated values; SoundType(1) = channels-1.
+func aacTagFirstByte(channels int) byte {
+	soundType := byte(0)
+	if channels >= 2 {
+		soundType = 1
+	}
+	return soundFormatAAC<<4 | 0x03<<2 | 0x01<<1 | soundType
+}
+
+// aacAudioSequenceHeader builds the audio sequence-header tag carrying the
+// AudioSpecificConfig — the same ASC the MP4 muxer writes into esds, so no
+// re-derivation: the recorder's ASC is authoritative.
+func aacAudioSequenceHeader(asc []byte, channels int) []byte {
+	data := make([]byte, 0, 2+len(asc))
+	data = append(data, aacTagFirstByte(channels), aacPacketTypeSeqHeader)
+	data = append(data, asc...)
+	return flvTag(tagTypeAudio, 0, data)
+}
+
+// aacAudioFrameTag builds an audio tag for one raw AAC access unit (no ADTS
+// — producers strip it and deliver the ASC separately).
+// tsMs: presentation time in milliseconds, already normalized by the manager
+// (producers disagree on the hub audio clock, see writeAudioFrame).
+func aacAudioFrameTag(tsMs int64, frame []byte, channels int) []byte {
+	data := make([]byte, 0, 2+len(frame))
+	data = append(data, aacTagFirstByte(channels), aacPacketTypeRaw)
+	data = append(data, frame...)
+	return flvTag(tagTypeAudio, tsMs, data)
+}
