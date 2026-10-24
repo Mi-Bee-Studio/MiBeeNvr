@@ -26,8 +26,14 @@ func scriptSrcHashesFor(indexHTML []byte) string {
 		if strings.Contains(m[1], "src=") {
 			continue // external script tag, covered by 'self'
 		}
+		// The HTML input stream normalizes CRLF and lone CR to LF before the
+		// parser ever sees the script text, and browsers hash the normalized
+		// content. Hashing the raw bytes instead silently breaks the policy
+		// for any document with CRLF line endings (e.g. a Windows-built SPA):
+		// every inline script is blocked while the header still carries
+		// self-consistent-but-wrong hashes.
 		h.Reset()
-		h.Write([]byte(m[2]))
+		h.Write([]byte(strings.ReplaceAll(strings.ReplaceAll(m[2], "\r\n", "\n"), "\r", "\n")))
 		fmt.Fprintf(&b, " 'sha256-%s'", base64.StdEncoding.EncodeToString(h.Sum(nil)))
 	}
 	if b.Len() == 0 {
