@@ -11,8 +11,15 @@
     analyser: AnalyserNode;
     data: Uint8Array;
   }
-  const wiredEls = new WeakMap<HTMLAudioElement, wired>();
+  const wiredEls = new WeakMap<HTMLAudioElement | AudioNode, wired>();
   let sharedCtx: AudioContext | null = null;
+
+  // The shared context, for sibling players that schedule their own sources
+  // (LiveAudioPlayer) — everyone on one context keeps the browser's
+  // concurrent-context cap happy and lets this waveform tap their output.
+  export function getSharedAudioContext(): AudioContext | null {
+    return audioContext();
+  }
 
   function audioContext(): AudioContext | null {
     if (sharedCtx && sharedCtx.state !== 'closed') return sharedCtx;
@@ -27,7 +34,7 @@
     return sharedCtx;
   }
 
-  function ensureGraph(el: HTMLAudioElement): wired | null {
+  function ensureGraph(el: HTMLAudioElement | AudioNode): wired | null {
     const existing = wiredEls.get(el);
     if (existing) {
       if (existing.ctx.state === 'suspended') void existing.ctx.resume();
@@ -36,12 +43,17 @@
     const ctx = audioContext();
     if (!ctx) return null;
     try {
-      const source = ctx.createMediaElementSource(el);
+      const isNode = !(el instanceof HTMLAudioElement);
+      const source: AudioNode = isNode ? el : ctx.createMediaElementSource(el);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.55;
       source.connect(analyser);
-      analyser.connect(ctx.destination); // keep the element audible
+      // Element path: MediaElementSource REDIRECTS the element's audio, so
+      // the analyser must also feed the destination or the element goes
+      // silent. Node path: the owner keeps its own destination wiring — the
+      // analyser only taps in parallel.
+      if (!isNode) analyser.connect(ctx.destination);
       const g: wired = { ctx, analyser, data: new Uint8Array(analyser.fftSize) };
       wiredEls.set(el, g);
       // A suspended context doesn't merely mute the element — through
@@ -54,7 +66,7 @@
         if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
       };
       wake();
-      el.addEventListener('play', wake);
+      if (!isNode) el.addEventListener('play', wake);
       return g;
     } catch {
       return null; // e.g. element already sourced elsewhere / cross-origin — defensive
@@ -74,12 +86,15 @@
   interface Props {
     /** The audio element to visualize. Re-render safe: one graph per element. */
     audio?: HTMLAudioElement | null;
+    /** Alternative tap: any AudioNode whose output to visualize (e.g. a
+     *  player's gain bus) — wires an analyser without an <audio> element. */
+    node?: AudioNode | null;
     height?: number;
     bars?: number;
     /** aria-label for the canvas. */
     label?: string;
   }
-  let { audio = null, height = 72, bars = 56, label = '' }: Props = $props();
+  let { audio = null, node = null, height = 72, bars = 56, label = '' }: Props = $props();
 
   let canvas: HTMLCanvasElement | undefined = $state();
   let raf = 0;
@@ -198,7 +213,7 @@
   }
 
   $effect(() => {
-    const el = audio;
+    const el = audio ?? node;
     if (el) graph = ensureGraph(el);
     levels = [];
     peaks = [];

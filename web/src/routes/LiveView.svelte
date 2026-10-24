@@ -6,6 +6,7 @@
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Link, Settings, AudioLines } from 'lucide-svelte';
   import CameraForm from '$lib/components/CameraForm.svelte';
   import AudioWaveform from '$lib/components/AudioWaveform.svelte';
+  import LiveAudioPlayer from '$lib/components/LiveAudioPlayer.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import PtzControl from '$lib/components/PtzControl.svelte';
   import TwoWayAudioButton from '$lib/components/TwoWayAudioButton.svelte';
@@ -32,8 +33,6 @@
   let error = $state('');
   // Live-listening failed (non-G.711 source → WAV endpoint 406, or source
   // hiccup) — swap the player for a hint instead of a dead element.
-  let liveAudioError = $state(false);
-  let liveAudioEl = $state<HTMLAudioElement | undefined>(undefined);
   let isFullscreen = $state(false);
   let playerContainer: HTMLDivElement | undefined = $state();
   let protocolsMap = $state<Map<string, ProtocolInfo>>(buildProtocolsMap(DEFAULT_PROTOCOLS));
@@ -329,12 +328,6 @@
     }
   });
 
-  // Reset the live-listening error state whenever the page switches camera.
-  $effect(() => {
-    void camera?.id;
-    liveAudioError = false;
-  });
-
   onMount(() => {
     if (!cameraId) {
       error = t('live.cameraIdRequired');
@@ -423,21 +416,7 @@
           </h2>
         </div>
         {#if camera.status === 'recording' || camera.status === 'active'}
-          {#if liveAudioError}
-            <p class="th-text-secondary mb-2">{t('live.audioLiveUnsupported')}</p>
-          {:else}
-            <audio
-              bind:this={liveAudioEl}
-              class="w-full mx-auto mb-2"
-              controls
-              preload="none"
-              src={appendAuthToken(`${API_BASE}/cameras/${camera.id}/audio/live`)}
-              onerror={() => (liveAudioError = true)}
-            ></audio>
-            <div class="w-full max-w-xl mx-auto mb-3">
-              <AudioWaveform audio={liveAudioEl} label={t('common.audioWaveform')} />
-            </div>
-          {/if}
+          <LiveAudioPlayer cameraId={camera.id} codec={camera.encoding === 'audio' ? 'g711' : ''} />
           <p class="text-xs th-text-muted">{t('live.audioLiveHint')}</p>
         {:else}
           <p class="th-text-secondary mb-4">{t('live.audioOnlyNotice')}</p>
