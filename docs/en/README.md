@@ -46,7 +46,7 @@
 | Page | What it covers |
 |---|---|
 | [Recording & Playback](recording-playback.md) | Segments, timelines, continuous playback, VOD scrubbing |
-| [Adaptive Recording](adaptive-recording.md) | Timelapse baseline that resumes full rate on motion/audio |
+| [Adaptive Recording](adaptive-recording.md) | Timelapse baseline on calm scenes (75–98% less disk), full rate on motion/audio/semantic triggers — zero frames lost at the switch |
 | [Timelapse](timelapse.md) | Periodic timelapse recording and merging |
 | [Audio](audio.md) | Audio capture (AAC / G.711 / Opus), live preview |
 | [Standalone Audio Sources](audio-sources.md) | Enrolling audio-only sources like network microphones |
