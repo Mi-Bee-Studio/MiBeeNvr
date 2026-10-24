@@ -11,7 +11,7 @@ vi.mock('$lib/i18n', () => ({
 
 // --- Mock lucide-svelte icons ---
 vi.mock('lucide-svelte', () => {
-  const icons = ['Eye', 'EyeOff', 'PlugZap', 'Plus', 'Trash2', 'ArrowUpRight', 'Copy', 'Layers', 'Brain'];
+  const icons = ['Eye', 'EyeOff', 'PlugZap', 'Plus', 'Trash2', 'ArrowUpRight', 'Copy', 'Layers', 'Brain', 'Wifi', 'Users', 'Power', 'RefreshCw', 'AlertTriangle', 'Save', 'ChevronDown', 'Move', 'Image', 'Bell', 'Camera', 'Radio', 'Activity', 'Circle'];
   const mock: Record<string, () => HTMLElement> = {};
   for (const name of icons) {
     mock[name] = () => document.createElement('span');
@@ -1015,5 +1015,84 @@ describe('CameraForm - audio pickup variant (GB voice channel)', () => {
       expect(container.querySelector('#cam-cascade')).toBeTruthy();
     });
     expect(container.querySelector('#cam-cascade-sub')).toBeNull();
+  });
+});
+
+describe('CameraForm - cascade catalog boundary (#1037)', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+    vi.unstubAllGlobals();
+  });
+
+  const gbCam = {
+    id: 'gb-34020000001329990001',
+    name: 'GB cam',
+    protocol: 'gb28181',
+    encoding: '',
+    url: '',
+    group: '',
+    gb28181: { device_id: '34020000001329990001', channel_id: '34020000001329990002' },
+  };
+  const onvifCam = {
+    id: 'cam-onvif',
+    name: 'ONVIF cam',
+    protocol: 'onvif',
+    encoding: 'h265',
+    url: 'http://192.168.1.10/onvif/device_service',
+    group: '',
+  };
+
+  async function renderCascade(cam: any) {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+    const { container } = render(CameraForm, {
+      props: defaultProps({ editingCamera: cam }),
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-cascade')).toBeTruthy();
+    });
+    return container.querySelector('#cam-cascade') as HTMLInputElement;
+  }
+
+  it('defaults the toggle on for a GB camera and off for a non-GB camera', async () => {
+    expect((await renderCascade(gbCam)).checked).toBe(true);
+    cleanup();
+    expect((await renderCascade(onvifCam)).checked).toBe(false);
+  });
+
+  it('keeps an explicit cascade_enabled choice regardless of protocol', async () => {
+    expect((await renderCascade({ ...onvifCam, cascade_enabled: true })).checked).toBe(true);
+    cleanup();
+    expect((await renderCascade({ ...gbCam, cascade_enabled: false })).checked).toBe(false);
+  });
+
+  it('follows protocol switches with the default until the user touches the toggle', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+    const { container } = render(CameraForm, { props: defaultProps() });
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-cascade')).toBeTruthy();
+    });
+    const cb = container.querySelector('#cam-cascade') as HTMLInputElement;
+    const sel = container.querySelector('#cam-protocol') as HTMLSelectElement;
+    expect(cb.checked).toBe(false);
+
+    sel.value = 'gb28181';
+    await fireEvent.change(sel);
+    expect(cb.checked).toBe(true);
+
+    // An explicit toggle pins the choice; protocol switches stop overriding.
+    await fireEvent.change(cb, { target: { checked: false } });
+    sel.value = 'onvif';
+    await fireEvent.change(sel);
+    expect(cb.checked).toBe(false);
+    sel.value = 'gb28181';
+    await fireEvent.change(sel);
+    expect(cb.checked).toBe(false);
   });
 });

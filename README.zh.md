@@ -82,10 +82,21 @@ cd MiBeeNvr && make build
 - **低功耗 ARM 就绪**：1GB 内存可跑，512MB 内存预算（以树莓派 3B 为最低基线验证）
 - **即插即录自动发现**：ONVIF 相机入网即后台自动注册，无需手动扫描；带凭据的相机以待激活状态等待你补齐凭据
 - **IP 自愈**：Wi-Fi 漫游跨 AP 换 IP 的相机按序列号自动寻回并重连
-- **自适应录制**：平静时降为稀疏关键帧的延时基线，动静或响亮声音触发即刻恢复全速
-- **浏览器端 AI 检测**：ONNX Runtime Web + WebGPU 加速——无需后端推理服务器
+- **自适应录制**：压缩域运动分析让安静画面降为延时级稀疏写入，动静或响亮声音即刻恢复全速——静态场景省盘 75%–98%，切换零丢帧（[详见下文](#自适应录制)）
+- **双层 AI 检测**：浏览器端 ONNX Runtime Web + WebGPU 加速、无需推理服务器；服务端可选官方伴随引擎 MiBeeVision——分析录像、事件回写、语义触发自适应录制
 - **现代 Web 界面**：深浅主题、中/英/俄三语、响应式；WebCodecs 播放 H.265
 - **无需云端**：自托管、无订阅、无锁定——当下用 Tailscale / Cloudflare Tunnel / WireGuard 远程访问，内置加密远程模式在路上
+
+## 自适应录制
+
+监控画面 95% 的时间无事发生，连续录像却始终全帧率写盘。自适应录制在 NVR 侧分析压缩码流（P 帧尺寸相对滚动基线的偏离，全程零解码），安静时降为延时级稀疏写入，一有动静立即恢复全帧率。切换瞬间冲刷 GOP 预缓冲，稀疏→全速**零丢帧**——不花屏、回放无空洞。
+
+- **静态场景省盘 75%–98%**——实测数据：2K H.265 相机从 ~2700 MB/h 降到 ~688 MB/h（含活动时段）
+- **五路唤醒信号**：码率尖峰 · 异常响声（G.711 dBFS）· 子码流 ~1fps 采样像素域 CV（专治码率恒定的智能编码器相机）· 相机侧 ONVIF 移动侦测 · 语义触发 API（MiBeeVision 官方引擎或任意 AI / 家庭自动化）
+- **分层录制**：子码流 24/7 连续兜底、一帧不漏，主码流只录事件——这个组合在其他 NVR 里仍是开放的特性请求
+- **离线调参**：`eval-replay` 用既有录像回放门控决策，不碰生产就能预演参数效果
+
+完整管线、调参与遥测详见[自适应录制](docs/zh/adaptive-recording.md)。
 
 ## 性能
 
@@ -106,7 +117,7 @@ cd MiBeeNvr && make build
 | HTTP JPEG | 相机 → NVR | 快照流 |
 | ONVIF | 相机 ↔ NVR | 发现、云台、流地址、MotionAlarm 事件 |
 | 小米（CS2 + TUTK） | 相机 → NVR | CS2 P2P + 旧版 TUTK（7 型号），云端认证 |
-| GB/T 28181 | 相机 → NVR | SIP 平台、自动注册、语音对讲、云台、设备侧回放 |
+| GB/T 28181 | 相机 → NVR | SIP 平台、自动注册、语音对讲、云台、设备侧回放（v0.14 起转正为生产支持） |
 | SIP 门铃 | 门禁设备 → NVR | Doorbird/Akuvox/海康门口机：来电弹窗、双向 G.711 对讲 |
 | SRT / RTMP（接入） | 推流端 → NVR | 跨网络推入、低延迟传输 |
 | WHIP | 推流端 → NVR | 浏览器 / 手机 / OBS 30+ 的 WebRTC 推流（H.264 + Opus） |
@@ -122,7 +133,7 @@ cd MiBeeNvr && make build
 带一句话简介的完整目录见 [`docs/zh/README.md`](docs/zh/README.md)。常用入口：
 
 - [快速上手](docs/zh/getting-started.md) · [配置参考](docs/zh/configuration.md) · [CLI](docs/zh/cli.md) · [API 参考](docs/zh/api/README.md)
-- [部署](docs/zh/deployment.md)（含 NAS 指南：unRAID / fnOS / 群晖 / 威联通 / iStoreOS / 极空间）· [远程访问](docs/zh/remote-access.md)
+- [部署](docs/zh/deployment.md)（含 NAS 指南：unRAID / fnOS / 群晖 / 威联通 / iStoreOS / 极空间；[deb/rpm 原生包](docs/zh/install-linux.md)）· [远程访问](docs/zh/remote-access.md)
 - [故障排查](docs/zh/troubleshooting.md) · [升级指南](docs/zh/upgrade-guide.md)
 
 版本号、配置语法、CLI 参数**只**以本仓库的 releases 与 `docs/zh/` 为权威来源。外部转载教程、“评测”、SEO 聚合页均未经我们审阅，常含有编造的版本号与跑分。若你看到的第三方内容与文档不符，以文档为准，欢迎提 issue 告知。

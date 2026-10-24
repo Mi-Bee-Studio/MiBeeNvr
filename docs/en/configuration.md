@@ -786,8 +786,8 @@ cameras:
 ### `cameras[].cascade_enabled`
 
 - **Type**: boolean
-- **Default**: `true` (nil treated as true)
-- **Description**: GB28181 cascade catalog-convergence switch — `false` hides this camera from the upper platform's aggregated catalog and its channel's INVITEs answer 404. The channel-code allocation is kept, so re-enabling restores the same code (upper-platform bindings don't drift).
+- **Default**: `true` for GB cameras; `false` for non-GB cameras (nil resolves per protocol)
+- **Description**: GB28181 cascade catalog-boundary switch. On-demand playback is guaranteed only for GB sources — non-GB sources have no on-demand pull and only play while the camera is recording, so they stay out of the catalog by default (an explicit `true` publishes one; recommended only for continuously-recording cameras). `false` explicitly hides any camera: gone from the upper platform's aggregated catalog, its channel's INVITEs answer 404. The channel-code allocation is kept, so re-enabling restores the same code (upper-platform bindings don't drift).
 - **Example**: `false`
 
 ### `cameras[].cascade_sub_stream`

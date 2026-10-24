@@ -70,7 +70,7 @@ SIP 摄像头/平台直接 REGISTER 到 NVR，以普通摄像头形式出现在�
 
 - **浏览器端 AI 检测**：ONNX Runtime Web（WebGPU → WASM SIMD 回退），YOLO11 模型在浏览器推理——服务器零负载，老旧 NVR 主机也能跑
 - **ROI 区域**：划出入口/通道等关键区域，只对区域内目标报警；置信度、跳帧率、类别过滤全可调（见 [AI 调参指南](ai-detection-tuning.md)）
-- **MiBeeVision 集成**：可接入外部 AI 后端（v0.13 起支持多实例路由 `vision.instances` + 推送熔断自动退避），NVR 主动推送录像段、掉线自动补偿重推；AI 事件快照端点
+- **MiBeeVision 集成**：可接入外部 AI 后端（v0.13 起支持多实例路由 `vision.instances` + 推送熔断自动退避），NVR 主动推送录像段、掉线自动补偿重推；AI 事件快照端点。官方 **MiBeeVision Lite** 二进制已在 NVR 仓库免费分发（独立版本线；Lite 为单摄像头、CPU 推理、Linux x86_64/ARM64），无需自建 AI 后端
 - **相机侧移动侦测**：ONVIF MotionAlarm 事件直接作为录像触发源（`motion_source: camera:onvif`，见 [ONVIF 指南](onvif-guide.md)）——侦测算力下放给相机，NVR 零解码开销
 - **健康监控**：多层级摄像头健康检测、自动补救、掉线黑名单、IP 漂移自愈（按 ONVIF 序列号重新发现）
 - **SSE 实时事件**：摄像头状态、健康事件、录像段完成全部实时推送

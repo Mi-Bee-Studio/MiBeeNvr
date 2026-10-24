@@ -20,6 +20,7 @@
 | Page | What it covers |
 |---|---|
 | [Deployment Overview](deployment.md) | systemd, reverse proxy, cross-compile, and links to every platform guide |
+| [Linux Packages](install-linux.md) | Native deb / rpm install, upgrade, removal |
 | [Docker Install](install-docker.md) | Compose setup, volumes, upgrades |
 | [NAS Install](install-nas.md) | Choosing the NAS path for your model |
 | [unRAID](deployment-unraid.md) · [fnOS](deployment-fnos.md) · [iStoreOS](deployment-istoreos.md) · [Synology](deployment-synology.md) · [QNAP](deployment-qnap.md) · [ZSpace](deployment-zspace.md) | Per-platform guides |
@@ -46,7 +47,7 @@
 | Page | What it covers |
 |---|---|
 | [Recording & Playback](recording-playback.md) | Segments, timelines, continuous playback, VOD scrubbing |
-| [Adaptive Recording](adaptive-recording.md) | Timelapse baseline that resumes full rate on motion/audio |
+| [Adaptive Recording](adaptive-recording.md) | Timelapse baseline on calm scenes (75–98% less disk), full rate on motion/audio/semantic triggers — zero frames lost at the switch |
 | [Timelapse](timelapse.md) | Periodic timelapse recording and merging |
 | [Audio](audio.md) | Audio capture (AAC / G.711 / Opus), live preview |
 | [Standalone Audio Sources](audio-sources.md) | Enrolling audio-only sources like network microphones |

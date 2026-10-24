@@ -28,3 +28,6 @@ Dockerfile text eol=lf
 *.woff2    binary
 *.ttf      binary
 *.onnx     binary
+
+# Packaging scripts must stay LF — CRLF breaks shebangs/systemd parsing in the packages
+deploy/packaging/** text eol=lf

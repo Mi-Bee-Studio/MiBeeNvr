@@ -2,6 +2,8 @@
 
 This guide covers MiBee NVR's GB/T 28181 (Chinese national video-surveillance standard) integration: SIP platform setup, device enrollment, audio, voice intercom, subscriptions, PTZ, device-side recording playback, and troubleshooting.
 
+**Graduated to production support as of v0.14**: verified end-to-end on commercial cameras (Hikvision 2026 firmware) and several in-house device families — enrollment, cascading, voice intercom, PTZ and GB35114 level-A national-cryptography mutual authentication are all maintained as production features.
+
 ## What is GB/T 28181?
 
 GB/T 28181 is China's national standard for networked video monitoring; it defines how IP cameras, NVRs, and platforms interoperate over SIP and RTP/PS. MiBee NVR implements the **platform role** (UAS):
@@ -85,6 +87,50 @@ cameras:
 
 Audio is off by default. Turn on the **Audio** toggle in the camera's edit page (or `PUT /api/cameras/{id}` with `{"audio_enabled": true}`); the PS stream's audio track (G.711 A-law/μ-law, AAC) is then muxed into MP4 recordings and live streams.
 
+
+## Real-Device Walkthrough: Hikvision (2026 Firmware)
+
+A factory-fresh Hikvision DS-2CD2225Y (2026 web UI, GB/T 28181-2022 mode), from camera-side setup to an enrolled NVR camera. Other brands follow the same shape: find the GB28181 access page and fill in the same server parameters.
+
+### Camera-Side Configuration
+
+Path: **Configuration → Network → Device Access → GB28181**.
+
+| Field | Value | Notes |
+|---|---|---|
+| Enable | On | |
+| Transport | UDP or TCP | Both work; on older NVR versions TCP invites had a defect (see "Pitfalls") — start with UDP there |
+| SIP server ID | NVR's `gb28181.server_id` (e.g. `34020000002000000001`) | |
+| SIP server domain | NVR's `gb28181.realm` (e.g. `3402000000`) | |
+| SIP server address | NVR host IP | |
+| SIP server port | NVR's `gb28181.sip_listen` port (default 5060) | |
+| SIP username / auth ID | Camera's GB device number (20 digits; first 10 usually match the server domain) | Doubles as the video channel ID on this model |
+| SIP auth password | NVR's `gb28181.password` | |
+| Register validity / interval / heartbeat | 3600 / 60 / 60 s | Factory defaults line up with the NVR |
+
+![Hikvision GB28181 platform access settings](images/gb28181-hikvision-config.webp)
+
+### Enrollment and Verification
+
+After saving, the camera REGISTERs to the NVR (Digest auth). Nothing to add manually on the NVR side — the device is auto-enrolled as a `gb-<device-id>` camera and an on-demand INVITE pulls the stream. Verification checklist:
+
+1. NVR logs show `device registered` → `catalog received` → `session created` → `first RTP received — session confirmed`;
+2. The camera appears in the camera list and starts recording, with rolling segments landing on disk;
+
+![Enrolled camera card on the devices page](images/gb28181-hikvision-cameras.webp)
+
+3. Opening the camera's live page shows the picture.
+
+![Enrolled: NVR live view](images/gb28181-hikvision-liveview.webp)
+
+### Pitfalls
+
+- **Factory clock is stuck in the past**: set the time first (web UI "Configuration → System → Time", or `PUT /ISAPI/System/time`);
+- **UDP mode starts with STUN probes** aimed at port 5060: normal NAT probing — the NVR not answering does not affect the subsequent registration; don't misread STUN packets as a protocol failure;
+- **Choosing TCP breaks on-demand streaming** (fixed, [#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058); library fix [gb28181-go#145](https://github.com/mickeyzzc/gb28181-go/pull/145)): after a TCP registration the platform's INVITE used to leave via UDP aimed at the device's TCP source port, so the device never saw it and the media session rebuilt in a ~32s loop (log signature: INVITE unanswered, repeated `packets_received=0`). The fix ships with v0.14; on earlier versions switch the camera back to UDP;
+- **GB/T 28181-2022 works as-is**: the Hikvision 2022 mode (`x_gb_ver=3.0`) interops fully (register/catalog/INVITE/PS) — no need to downgrade to 2016;
+- **First-login "change password" nag**: cancel it; it doesn't block configuration.
+
 ## Capability Overview
 
 | Capability | Status | Notes |
@@ -104,7 +150,7 @@ Audio is off by default. Turn on the **Audio** toggle in the camera's edit page 
 | Time sync | ✅ | Device Query answered with platform time |
 | DeviceInfo/Status automation | ✅ | Brand/model backfill; keepalive preserves metadata |
 | **Cascading (lower-level role)** | ✅ | Registers to an upper platform, aggregated catalog, INVITE forwarding (see Cascading Uplink) |
-| GB35114 | ⏸ | On demand (see #341) |
+| GB35114 | ✅ | Level-A certificate auth (requires a `-tags gb35114` build; see below) |
 
 ## Configuration Reference
 
@@ -213,9 +259,9 @@ Behavior:
 
 - Channel IDs are allocated on first catalog appearance (`<ID[:10]>132` + 7-digit serial) and persisted — upper-platform bindings survive restarts
 - REGISTER + Digest, re-registration at 80% of Expires, Keepalive; an upper restart (keepalive 403) triggers immediate re-registration
-- The catalog aggregates every non-MJPEG camera; H.264/H.265 is sniffed from the first NAL for the PSM type
+- The catalog aggregates publishable cameras: GB sources publish by default, non-GB sources stay out by default (see "Catalog boundary & convergence" below, #1037); H.264/H.265 is sniffed from the first NAL for the PSM type
 - Upper INVITE → 200 OK (sendonly) → StreamHub subscription → PS mux → RTP push; BYE/error teardown
-- **Catalog convergence** (`cameras[].cascade_enabled: false`): the camera is hidden from the aggregated catalog and its channel's INVITEs answer 404, but the channel-code allocation is kept — re-enabling restores the same code, upper-platform bindings don't drift
+- **Catalog boundary & convergence** (`cameras[].cascade_enabled`, #1037): on-demand playback is guaranteed only for GB sources (on-demand activation, below) — non-GB sources have no on-demand pull and only play while the camera is **currently recording**, so they stay out of the catalog by default; an explicit `true` publishes one anyway (recommended only for continuously-recording cameras). `false` explicitly hides any camera: gone from the catalog, INVITEs answer 404, but the channel-code allocation is kept — re-enabling restores the same code, upper-platform bindings don't drift. In the camera form the checkbox default follows the protocol (GB = on, others = off) until you set it manually
 - **Sub-stream cascading** (`cameras[].cascade_sub_stream: true`): INVITE forwarding rides the camera's on-demand [sub-stream](sub-stream.md) — the low-resolution tier keeps your uplink bounded for preview-only platforms; falls back to main when the camera has no sub-stream or the pull fails, and cameras without one are unaffected
 - **Multi-level on-demand activation** (`gb28181_cascade.hub_activation_timeout`, #451): when the upper platform INVITEs a GB child channel that is **not currently recording**, the middle tier first starts a bounded local INVITE to that child device (default 10s) and forwards once frames arrive — a timeout answers 500 without establishing a medialess dialog, and the local pull retires on idle after BYE. Non-GB cameras skip this path
 - **Multiple upstreams** (`gb28181_cascade.upstreams`, #370): beyond the single-upstream form you can configure any number of extra upper platforms — each entry runs its own REGISTER/Keepalive session over the shared SIP listener with independent online state; fields left empty fall back to the single-form values
@@ -359,11 +405,8 @@ If authentication or recording searches misbehave due to clock drift: the NVR an
 
 ## Limitations & Known Issues
 
-- **Device-self pseudo-channel**: after an NVR restart, catalog-capable multi-channel devices briefly get a "device-self" camera that never streams. Known issue; archive it manually after restart. Tracked in #352
-- **Talk real-device coverage**: voice intercom is E2E-verified against a simulator; the real-device loopback is tracked in #353
 - **TCP 0x24 framing**: a vendor extension (GB/T 28181-2016/2022 specify RFC4571); use `auto` for mixed fleets
-- **Multi-level cascading / GB35114**: not implemented, on demand (#341)
-- **Alarm-triggered streaming**: alarm events are on the bus; automated alarm → INVITE linkage is tracked in #355
+- **GB35114 higher levels**: level-A certificate auth is implemented (`-tags gb35114` build, see above); higher security levels are not
 
 ## Security
 

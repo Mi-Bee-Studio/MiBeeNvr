@@ -20,6 +20,7 @@
 | 页面 | 内容 |
 |---|---|
 | [部署总览](deployment.md) | systemd、反向代理、交叉编译，及全部平台指南入口 |
+| [Linux 软件包](install-linux.md) | deb / rpm 原生包安装、升级、卸载 |
 | [Docker 安装](install-docker.md) | Compose 配置、卷挂载、升级 |
 | [NAS 安装](install-nas.md) | 按机型选择 NAS 安装路径 |
 | [unRAID](deployment-unraid.md) · [fnOS](deployment-fnos.md) · [iStoreOS](deployment-istoreos.md) · [群晖](deployment-synology.md) · [威联通](deployment-qnap.md) · [极空间](deployment-zspace.md) | 各平台指南 |
@@ -46,7 +47,7 @@
 | 页面 | 内容 |
 |---|---|
 | [录像与回放](recording-playback.md) | 分段、时间轴、连续播放、全天 VOD 拖动 |
-| [自适应录制](adaptive-recording.md) | 平静时降为延时基线，动静/声音触发恢复全速 |
+| [自适应录制](adaptive-recording.md) | 平静时降为延时基线省盘 75%–98%，动静/声音/语义触发恢复全速，切换零丢帧 |
 | [延时摄影](timelapse.md) | 定时延时录制与合并 |
 | [音频](audio.md) | 音频采集（AAC / G.711 / Opus）、实时试听 |
 | [独立录音源](audio-sources.md) | 网络拾音器等纯音频源的接入 |
