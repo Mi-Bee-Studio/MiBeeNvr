@@ -74,7 +74,7 @@ type streamEntry struct {
 	// audioTsOffset anchors wallclock-nanos audio producers (RTSP recorder
 	// broadcasts UnixNano) onto the video tag timeline: set once from the
 	// last video tag ms so both clocks run in real time from a common zero.
-	audioTsOffset    atomic.Int64
+	audioTsOffset   atomic.Int64
 	audioTsAnchored atomic.Bool
 	// lastVideoMs is the ms timestamp of the newest video tag (anchor
 	// reference for the audio timeline).
