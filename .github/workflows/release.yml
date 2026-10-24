@@ -85,6 +85,40 @@ jobs:
           grep '"version"' ha-stage/custom_components/mibee_nvr/manifest.json
           cd ha-stage && zip -r ../mibee_nvr.zip custom_components && cd ..
 
+      # ---- Native Linux packages (deb/rpm) -------------------------------------
+      # nfpm builds both formats from one spec (deploy/packaging/nfpm.yaml) —
+      # the spec uses __VERSION__/__ARCH__ placeholders because nfpm globs
+      # contents[].src before its env-templating pass, so a templated source
+      # path never resolves. The service account/data-dir layout matches the
+      # bare-metal unit: see deploy/packaging/nfpm.yaml header comment.
+      # The runner's dpkg-deb/rpm double-check metadata + scriptlets before
+      # upload (rpm arch conversion amd64->x86_64 is asserted here too).
+      - name: Build Linux packages (deb/rpm)
+        run: |
+          set -euo pipefail
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          PKGVER="${GITHUB_REF_NAME#v}"
+          PKGVER="${PKGVER//-/~}"
+          mkdir -p pkgstage
+          for ARCH in amd64 arm64; do
+            cp "mibee-nvr-${ARCH}" pkgstage/mibee-nvr
+            sed -e "s/__VERSION__/${PKGVER}/g" -e "s/__ARCH__/${ARCH}/g" \
+              deploy/packaging/nfpm.yaml > pkgstage/nfpm.yaml
+            nfpm package -f pkgstage/nfpm.yaml -p deb \
+              -t "mibee-nvr_${PKGVER}-1_${ARCH}.deb"
+            case "${ARCH}" in
+              amd64) RPMARCH=x86_64 ;;
+              arm64) RPMARCH=aarch64 ;;
+            esac
+            nfpm package -f pkgstage/nfpm.yaml -p rpm \
+              -t "mibee-nvr-${PKGVER}-1.${RPMARCH}.rpm"
+          done
+          dpkg-deb -f "mibee-nvr_${PKGVER}-1_amd64.deb" Package Version Architecture
+          dpkg-deb --info "mibee-nvr_${PKGVER}-1_amd64.deb" postinst >/dev/null
+          rpm -qp --qf '%{name}-%{version}-%{release}.%{arch}\n' \
+            "mibee-nvr-${PKGVER}-1.x86_64.rpm"
+          rpm -qp --scripts "mibee-nvr-${PKGVER}-1.x86_64.rpm" | grep -q 'useradd\|systemctl'
+
       # ---- Artifact integrity (#646) ------------------------------------------
       # checksums.txt (sha256sum format) + a raw 64-byte ed25519 signature over
       # it, verified in-process by internal/update (pure Go, stdlib ed25519 —
@@ -102,6 +136,7 @@ jobs:
           sha256sum mibee-nvr-amd64 mibee-nvr-arm64 mibee-nvr-armv7 \
             mibee-nvr-windows-amd64.exe mibee-nvr-darwin-arm64 mibee-nvr-darwin-amd64 \
             "MiBeeNVR-Setup-${{ github.ref_name }}-windows-amd64.exe" \
+            mibee-nvr_*.deb mibee-nvr-*.rpm \
             > checksums.txt
           cat checksums.txt
           if [ -n "${SIGNING_KEY}" ]; then
@@ -131,6 +166,8 @@ jobs:
             MiBeeNVR-Setup-${{ github.ref_name }}-windows-amd64.exe
             mibee-nvr-darwin-arm64
             mibee-nvr-darwin-amd64
+            mibee-nvr_*.deb
+            mibee-nvr-*.rpm
             checksums.txt
             mibee_nvr.zip
 

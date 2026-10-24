@@ -1,8 +1,11 @@
 package peer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,4 +92,22 @@ func TestConnectArmsDeviceE2EEBeforeSDP(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// TestArmE2EEWarnsOnceOnMissingKeyMaterial (mibeescout#16 item 3): a
+// channel delivered without derivable key material runs plaintext — that
+// state must be observable in device logs (one WARN per session), not only
+// via App diagnostics.
+func TestArmE2EEWarnsOnceOnMissingKeyMaterial(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	p := &p2pSession{sessionID: "s-warn", logger: logger}
+	dc := &DataChannel{}
+
+	p.armE2EE(dc)
+	p.armE2EE(dc) // second delivery must not warn again
+
+	assert.Empty(t, dc.E2EEKey, "no key material → key stays nil (plaintext semantics)")
+	assert.Equal(t, 1, strings.Count(buf.String(), "e2ee not armed"),
+		"exactly one WARN per session")
 }

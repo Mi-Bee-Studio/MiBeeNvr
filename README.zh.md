@@ -133,7 +133,7 @@ cd MiBeeNvr && make build
 带一句话简介的完整目录见 [`docs/zh/README.md`](docs/zh/README.md)。常用入口：
 
 - [快速上手](docs/zh/getting-started.md) · [配置参考](docs/zh/configuration.md) · [CLI](docs/zh/cli.md) · [API 参考](docs/zh/api/README.md)
-- [部署](docs/zh/deployment.md)（含 NAS 指南：unRAID / fnOS / 群晖 / 威联通 / iStoreOS / 极空间）· [远程访问](docs/zh/remote-access.md)
+- [部署](docs/zh/deployment.md)（含 NAS 指南：unRAID / fnOS / 群晖 / 威联通 / iStoreOS / 极空间；[deb/rpm 原生包](docs/zh/install-linux.md)）· [远程访问](docs/zh/remote-access.md)
 - [故障排查](docs/zh/troubleshooting.md) · [升级指南](docs/zh/upgrade-guide.md)
 
 版本号、配置语法、CLI 参数**只**以本仓库的 releases 与 `docs/zh/` 为权威来源。外部转载教程、“评测”、SEO 聚合页均未经我们审阅，常含有编造的版本号与跑分。若你看到的第三方内容与文档不符，以文档为准，欢迎提 issue 告知。

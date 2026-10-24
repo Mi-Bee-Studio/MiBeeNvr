@@ -27,6 +27,10 @@ sudo ./install.sh --uninstall
 
 如果配置文件不存在，安装程序会提示输入管理员密码。安装完成后，Web 界面可通过 `http://<主机IP>:9090` 访问。
 
+### Linux 软件包（deb / rpm）
+
+Debian/Ubuntu（amd64、arm64）与 RHEL 系（x86_64、aarch64）可直接安装官方原生包——包管理器接管二进制、systemd 单元与升级，数据仍固定在 `/var/lib/mibee-nvr`。详见 [Linux 软件包](install-linux.md)。
+
 ### Docker
 
 #### 前置条件

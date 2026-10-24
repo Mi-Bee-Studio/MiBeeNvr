@@ -298,6 +298,7 @@
   "cameras.storageMigrationPaused": "waiting for migration window",
   "cameras.storageNoCandidatesHint": "Only the default storage is available. Authorize more directories (App Center → Settings → Authorized folders) to assign per-camera storage.",
   "cameras.cascadeDisabledHint": "When off, this camera is hidden from the cascade catalog — the upper platform cannot see or request it (the channel allocation is kept; re-enabling restores the same code)",
+  "cameras.cascadeNonGBHint": "Non-GB sources have no on-demand pull: the upper platform can play this camera only while it is recording — invites fail at other times. Keep continuous recording on if you publish it.",
   "cameras.cascadeSubStream": "Cascade sub-stream",
   "cameras.cascadeSubStreamHint": "Forward the low-res sub-stream to the upper platform (bandwidth-friendly). Falls back to main when the camera has no sub-stream.",
   "cameras.recordingEnabled": "Record video to disk",

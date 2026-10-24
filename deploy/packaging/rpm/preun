@@ -1,0 +1,14 @@
+#!/bin/sh
+# %preun: stop and disable the service on erase (not on upgrade).
+# Recordings and config under /var/lib/mibee-nvr are NEVER touched.
+# $1: 0 = erase, 1 = upgrade.
+set -e
+
+if [ "$1" = "0" ]; then
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop mibee-nvr >/dev/null 2>&1 || true
+    systemctl disable mibee-nvr >/dev/null 2>&1 || true
+  fi
+fi
+
+exit 0
