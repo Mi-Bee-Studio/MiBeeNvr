@@ -85,6 +85,47 @@ cameras:
 
 音频默认关闭。在相机编辑页打开 **音频** 开关（或 API `PUT /api/cameras/{id}` `{"audio_enabled": true}`）后，PS 流中的音频轨（G.711 A-law/μ-law、AAC）会写入 MP4 音轨并进入直播音频。
 
+
+## 真机接入实例：海康（2026 版固件）
+
+以一台全新出厂的海康 DS-2CD2225Y（2026 版 Web 界面，GB/T 28181-2022 模式）为例，展示从相机网页配置到入册 NVR 的完整过程。其它品牌步骤类似：找到 GB28181（国标）接入配置页，填同一组服务器参数即可。
+
+### 相机侧配置
+
+路径：**配置 → 网络 → 设备接入 → GB28181**。
+
+| 字段 | 填写 | 说明 |
+|---|---|---|
+| 启用 | 打开 | |
+| 传输协议 | **UDP** | TCP 模式当前有媒体接收缺陷，见下方「常见坑」 |
+| SIP 服务器 ID | NVR 的 `gb28181.server_id`（示例 `34020000002000000001`） | |
+| SIP 服务器域 | NVR 的 `gb28181.realm`（示例 `3402000000`） | |
+| SIP 服务器地址 | NVR 主机 IP | |
+| SIP 服务器端口 | NVR 的 `gb28181.sip_listen` 端口（默认 5060） | |
+| SIP 用户名 / 认证 ID | 相机的国标设备编号（20 位，前 10 位通常与服务器域一致） | 该相机默认同时作为视频通道编码 ID |
+| SIP 用户认证密码 | NVR 的 `gb28181.password` | |
+| 注册有效期 / 注册间隔 / 心跳周期 | 3600 / 60 / 60 秒 | 出厂默认即可，与 NVR 心跳周期对齐 |
+
+![海康 GB28181 平台接入配置](images/gb28181-hikvision-config.webp)
+
+### 入册与验证
+
+保存后相机即向 NVR 发起 REGISTER（Digest 认证）。NVR 侧无需手动添加相机——设备入册后自动创建 `gb-<设备编号>` 相机并发起按需 INVITE 拉流。完整链路的验证点：
+
+1. NVR 日志依次出现 `device registered` → `catalog received` → `session created` → `first RTP received — session confirmed`；
+2. 摄像头列表出现新相机并进入录制状态，滚动录像段落开始落盘；
+3. 打开该相机的直播页即可看到画面。
+
+![接入完成：NVR 直播页](images/gb28181-hikvision-liveview.webp)
+
+### 常见坑
+
+- **出厂时钟停在很久以前**：先校时（网页「配置 → 系统 → 时间」，或 `PUT /ISAPI/System/time`），避免依赖时间的功能异常；
+- **UDP 模式启动时先发 STUN 探测包**（目标为 5060 端口）：这是正常的 NAT 探测行为，NVR 不应答也不影响随后的注册——抓包看到 STUN 不要误判为协议不通；
+- **传输协议选 TCP 时点播失败**（已知限制，[#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058)，库修复 [gb28181-go#145](https://github.com/mickeyzzc/gb28181-go/pull/145) 已提交）：设备经 TCP 注册后，NVR 发出的 INVITE 曾按 UDP 发往设备的 TCP 源端口，设备永远收不到请求，媒体会话每约 32 秒循环重建（日志特征：INVITE unanswered、`packets_received=0` 反复出现）。**修复合入发布前请使用 UDP**；
+- **GB/T 28181-2022 模式可直接使用**：实测海康 2022 模式（`x_gb_ver=3.0`）的注册/目录/INVITE/PS 流与本 NVR 完全互操作，无需降级到 2016 模式；
+- **固件首次登录强制弹「修改密码」**：点取消即可，不影响后续配置。
+
 ## 功能总览
 
 | 能力 | 状态 | 说明 |
