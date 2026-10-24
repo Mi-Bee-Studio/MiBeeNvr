@@ -2,6 +2,8 @@
 
 This guide covers MiBee NVR's GB/T 28181 (Chinese national video-surveillance standard) integration: SIP platform setup, device enrollment, audio, voice intercom, subscriptions, PTZ, device-side recording playback, and troubleshooting.
 
+**Graduated to production support as of v0.14**: verified end-to-end on commercial cameras (Hikvision 2026 firmware) and several in-house device families — enrollment, cascading, voice intercom, PTZ and GB35114 level-A national-cryptography mutual authentication are all maintained as production features.
+
 ## What is GB/T 28181?
 
 GB/T 28181 is China's national standard for networked video monitoring; it defines how IP cameras, NVRs, and platforms interoperate over SIP and RTP/PS. MiBee NVR implements the **platform role** (UAS):

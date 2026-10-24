@@ -117,7 +117,7 @@ Self-measured across three hardware tiers — methodology, judging criteria, and
 | HTTP JPEG | Camera → NVR | Snapshot streaming |
 | ONVIF | Camera ↔ NVR | Discovery, PTZ, stream URI, MotionAlarm events |
 | Xiaomi (CS2 + TUTK) | Camera → NVR | CS2 P2P + legacy TUTK (7 models), cloud auth |
-| GB/T 28181 | Camera → NVR | SIP platform, auto-enrollment, audio + talk, PTZ, device-side playback |
+| GB/T 28181 | Camera → NVR | SIP platform, auto-enrollment, audio + talk, PTZ, device-side playback (production support since v0.14) |
 | SIP doorbell | Door station → NVR | Doorbird/Akuvox/Hikvision intercoms: ring popup, two-way G.711 talk |
 | SRT / RTMP (ingest) | Publisher → NVR | Push-in: remote publishers, low-latency transport |
 | WHIP | Publisher → NVR | WebRTC push from browsers, phones, OBS 30+ (H.264 + Opus) |
