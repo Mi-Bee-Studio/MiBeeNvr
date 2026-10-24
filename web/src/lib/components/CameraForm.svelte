@@ -106,7 +106,12 @@
   // Recording gate — when off, the recorder stays connected for live preview
   // and relay but writes NO segments to disk (live-only / stream-forward mode).
   let formRecordingEnabled = $state(true);
-  let formCascadeEnabled = $state(true);
+  // Cascade catalog toggle. Non-GB sources default OFF: they have no on-demand
+  // activation upstream, so the upper platform could only play them while this
+  // camera happens to be recording. formCascadeTouched marks an explicit user
+  // choice so switching protocol doesn't clobber it.
+  let formCascadeEnabled = $state(false);
+  let formCascadeTouched = $state(false);
   let formCascadeSubStream = $state(false);
   // Recording mode (#435): continuous, or adaptive — dynamic timelapse that
   // drops to sparse keyframes while the compressed-domain activity signal
@@ -274,6 +279,12 @@ let validationErrors = $state<Record<string, string>>({});
     }
   });
 
+  // Follow protocol changes with the cascade default until the user makes an
+  // explicit choice: only gb28181 sources are servable on demand upstream.
+  function syncCascadeDefault(proto: string) {
+    if (!formCascadeTouched) formCascadeEnabled = proto === 'gb28181';
+  }
+
   // Populate form when editingCamera changes
   $effect(() => {
     loadVisionInstanceOptions();
@@ -323,6 +334,9 @@ let validationErrors = $state<Record<string, string>>({});
     formChannel = '';
     formAudioEnabled = false;
     formAudioInRecordings = false;
+    formCascadeEnabled = false;
+    formCascadeTouched = false;
+    formCascadeSubStream = false;
     formTwoWayAudioEnabled = false;
     formSubnetHints = '';
     formDarkFrameFilterEnabled = false;
@@ -388,7 +402,8 @@ let validationErrors = $state<Record<string, string>>({});
     formAudioEnabled = camera.audio_enabled ?? false;
     formAudioInRecordings = camera.audio_in_recordings ?? false;
     formRecordingEnabled = camera.recording_enabled ?? true;
-    formCascadeEnabled = camera.cascade_enabled ?? true;
+    formCascadeEnabled = camera.cascade_enabled ?? camera.protocol === 'gb28181';
+    formCascadeTouched = camera.cascade_enabled != null;
     formCascadeSubStream = camera.cascade_sub_stream ?? false;
     formRecordingMode = camera.recording_mode === 'adaptive' && camera.encoding !== 'audio' ? 'adaptive' : 'continuous';
     formMotionSource = camera.motion_source === 'camera:onvif' ? 'camera:onvif' : 'nvr';
@@ -835,7 +850,8 @@ async function performCameraSave() {
     <!-- Protocol -->
     <div>
       <label for="cam-protocol" class="input-label">{t('cameras.protocol')}</label>
-      <select id="cam-protocol" class="input" bind:value={formProtocol}>
+      <select id="cam-protocol" class="input" bind:value={formProtocol}
+        onchange={(e) => syncCascadeDefault((e.currentTarget as HTMLSelectElement).value)}>
         {#each protocols as proto (proto.id)}
           <option value={proto.id}>{proto.label}</option>
         {/each}
@@ -949,13 +965,15 @@ async function performCameraSave() {
     {/if}
 
     <!-- Cascade catalog toggle: when off, the camera is hidden from the
-         GB28181 cascade upper platform (catalog + INVITE). -->
+         GB28181 cascade upper platform (catalog + INVITE). Non-GB sources
+         start off — they only play upstream while this camera is recording. -->
     <div class="flex items-center gap-2">
       <input
         id="cam-cascade"
         type="checkbox"
         class="checkbox"
         bind:checked={formCascadeEnabled}
+        onchange={() => (formCascadeTouched = true)}
       />
       <label for="cam-cascade" class="input-label cursor-pointer">
         {t('cameras.cascadeEnabled')}
@@ -963,7 +981,10 @@ async function performCameraSave() {
     </div>
     {#if !formCascadeEnabled}
       <p class="text-xs th-text-muted -mt-1">{t('cameras.cascadeDisabledHint')}</p>
-    {:else if !isAudioSource}
+    {:else if formProtocol !== 'gb28181' && !isAudioSource}
+      <p class="text-xs th-text-muted -mt-1">{t('cameras.cascadeNonGBHint')}</p>
+    {/if}
+    {#if formCascadeEnabled && !isAudioSource}
       <!-- Sub-stream forwarding is video-only; audio channels keep just the
            catalog-exposure toggle above. -->
       <div class="flex items-center gap-2 ml-5">
