@@ -44,6 +44,17 @@
       analyser.connect(ctx.destination); // keep the element audible
       const g: wired = { ctx, analyser, data: new Uint8Array(analyser.fftSize) };
       wiredEls.set(el, g);
+      // A suspended context doesn't merely mute the element — through
+      // MediaElementSource it pins the playback clock at zero (the element
+      // reports playing while currentTime never advances). Autoplay policy
+      // can create the context suspended before any gesture; the element's
+      // own play interaction is a user gesture, so resume from there. The
+      // immediate resume covers the case where activation already exists.
+      const wake = () => {
+        if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
+      };
+      wake();
+      el.addEventListener('play', wake);
       return g;
     } catch {
       return null; // e.g. element already sourced elsewhere / cross-origin — defensive
