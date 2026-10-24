@@ -1,0 +1,24 @@
+#!/bin/sh
+# %post: create the service account and data dir, then register the unit.
+# The first start auto-generates the config at /var/lib/mibee-nvr/mibee-nvr.yaml
+# (the unit runs with ProtectSystem=strict, so the config lives in the data dir).
+# $1: 1 = install, 2 = upgrade (bash-style arg rpm passes to scriptlets).
+set -e
+
+if ! getent group nvr >/dev/null; then
+  groupadd -r nvr
+fi
+if ! getent passwd nvr >/dev/null; then
+  useradd -r -g nvr -d /var/lib/mibee-nvr -s /sbin/nologin -M nvr
+fi
+install -d -o nvr -g nvr /var/lib/mibee-nvr
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload >/dev/null || true
+  if [ "$1" = "2" ] && systemctl is-active --quiet mibee-nvr; then
+    systemctl restart mibee-nvr || true
+  fi
+  systemctl enable mibee-nvr >/dev/null || true
+fi
+
+exit 0

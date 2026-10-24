@@ -20,6 +20,7 @@
 | Page | What it covers |
 |---|---|
 | [Deployment Overview](deployment.md) | systemd, reverse proxy, cross-compile, and links to every platform guide |
+| [Linux Packages](install-linux.md) | Native deb / rpm install, upgrade, removal |
 | [Docker Install](install-docker.md) | Compose setup, volumes, upgrades |
 | [NAS Install](install-nas.md) | Choosing the NAS path for your model |
 | [unRAID](deployment-unraid.md) · [fnOS](deployment-fnos.md) · [iStoreOS](deployment-istoreos.md) · [Synology](deployment-synology.md) · [QNAP](deployment-qnap.md) · [ZSpace](deployment-zspace.md) | Per-platform guides |

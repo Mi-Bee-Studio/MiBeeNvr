@@ -1,0 +1,54 @@
+# nfpm spec for the native Linux packages (deb + rpm) built by release.yml.
+#
+# One spec serves both formats and both release architectures: the CI step
+# renders this file with sed (__VERSION__, __ARCH__) and stages the arch's
+# binary at pkgstage/mibee-nvr, then runs `nfpm package -p deb` / `-p rpm`.
+# Placeholders instead of nfpm env-templates on purpose — contents[].src is
+# globbed before templating, so a templated source path never resolves.
+# nfpm converts the arch to the format-native name (amd64 -> x86_64,
+# arm64 -> aarch64) automatically.
+#
+# Layout mirrors the bare-metal unit (deploy/mibee-nvr.service): the service
+# runs as the system user `nvr` with data AND config under /var/lib/mibee-nvr
+# (ProtectSystem=strict makes /etc read-only, so the first-boot auto-init
+# writes the config into the writable data dir). /etc/mibee-nvr only ships
+# the commented example for reference.
+name: mibee-nvr
+arch: "__ARCH__"
+version: "__VERSION__"
+release: 1
+section: net
+priority: optional
+maintainer: "MiBee Studio <mi-bee-studio@users.noreply.github.com>"
+description: |
+  MiBee NVR — self-hosted network video recorder.
+  Records RTSP / ONVIF / GB28181 / RTMP / SRT / Xiaomi cameras and streams
+  HLS / WebRTC / HTTP-FLV with a built-in web UI. Runs on amd64 and arm64
+  Linux servers, NAS and SBC boards.
+homepage: https://github.com/Mi-Bee-Studio/MiBeeNvr
+license: AGPL-3.0-only
+
+contents:
+  - src: pkgstage/mibee-nvr
+    dst: /usr/bin/mibee-nvr
+    file_info:
+      mode: 0755
+  - src: deploy/packaging/mibee-nvr.service
+    dst: /usr/lib/systemd/system/mibee-nvr.service
+  - src: config.example.yaml
+    dst: /etc/mibee-nvr/config.example.yaml
+    type: config|noreplace
+  - src: LICENSE
+    dst: /usr/share/doc/mibee-nvr/LICENSE
+  - src: LICENSE.pkg-linking-exception
+    dst: /usr/share/doc/mibee-nvr/LICENSE.pkg-linking-exception
+
+overrides:
+  deb:
+    scripts:
+      postinstall: deploy/packaging/deb/postinst
+      preremove: deploy/packaging/deb/prerm
+  rpm:
+    scripts:
+      postinstall: deploy/packaging/rpm/post
+      preremove: deploy/packaging/rpm/preun
