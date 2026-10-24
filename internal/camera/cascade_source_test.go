@@ -16,9 +16,12 @@ import (
 // residue to the upper platform (found on M5: archived "Lower Cascade Test"
 // still allocated cascade channel …05 on the fnOS upper, dead forever).
 func TestCascadeSource_ExcludesArchivedCameras(t *testing.T) {
+	rtspOptIn := true
 	cfg := testConfig()
 	cfg.Cameras = []config.CameraConfig{
-		{ID: "cam-live", Name: "Live", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://127.0.0.1:1/a"},
+		// Non-GB sources publish only with an explicit opt-in; this test's
+		// "live" camera keeps its catalog slot that way.
+		{ID: "cam-live", Name: "Live", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://127.0.0.1:1/a", CascadeEnabled: &rtspOptIn},
 		{ID: "cam-residue", Name: "Archived Residue", Protocol: "gb28181", Encoding: ""},
 		{ID: "cam-mjpeg", Name: "MJPEG", Protocol: "rtsp", Encoding: "mjpeg", URL: "rtsp://127.0.0.1:1/b"},
 		{ID: "cam-audio", Name: "Hall Mic", Protocol: "rtsp", Encoding: "audio", URL: "rtsp://127.0.0.1:1/mic"},
@@ -60,4 +63,34 @@ func TestCascadeSource_ExcludesArchivedCameras(t *testing.T) {
 		gotNil = append(gotNil, c.ID)
 	}
 	require.ElementsMatch(t, []string{"cam-live", "cam-residue"}, gotNil)
+}
+
+// Catalog boundary (#1037): only gb28181 cameras are servable on demand (the
+// HubActivator covers GB only), so non-GB sources hide from the upper
+// platform's catalog unless explicitly opted in with cascade_enabled=true —
+// publishing them otherwise advertises channels that only play while this
+// NVR happens to be recording the camera.
+func TestCascadeSource_NonGBRequiresOptIn(t *testing.T) {
+	off, on := false, true
+	cfg := testConfig()
+	cfg.Cameras = []config.CameraConfig{
+		{ID: "cam-gb", Name: "GB", Protocol: "gb28181", Encoding: ""},
+		{ID: "cam-gb-off", Name: "GB off", Protocol: "gb28181", Encoding: "", CascadeEnabled: &off},
+		{ID: "cam-onvif", Name: "ONVIF", Protocol: "onvif", Encoding: "h265"},
+		{ID: "cam-onvif-in", Name: "ONVIF in", Protocol: "onvif", Encoding: "h265", CascadeEnabled: &on},
+		{ID: "cam-rtsp-off", Name: "RTSP off", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://127.0.0.1:1/x", CascadeEnabled: &off},
+	}
+	mgr, _, _, _ := newTestManagerWithCfg(t, cfg)
+
+	hidden := map[string]bool{}
+	for _, c := range (cascadeSource{cm: mgr}).Cameras() {
+		hidden[c.ID] = c.CascadeHidden
+	}
+	require.Equal(t, map[string]bool{
+		"cam-gb":       false, // GB sources publish by default
+		"cam-gb-off":   true,  // explicit opt-out hides any camera
+		"cam-onvif":    true,  // non-GB default: hidden (no on-demand activation)
+		"cam-onvif-in": false, // explicit opt-in publishes a non-GB camera
+		"cam-rtsp-off": true,  // explicit opt-out wins over everything
+	}, hidden)
 }

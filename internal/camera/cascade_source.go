@@ -3,7 +3,9 @@ package camera
 import (
 	"context"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/mickeyzzc/gb28181-go/platform"
 	gbcascade "github.com/mickeyzzc/gb28181-go/platform/cascade"
@@ -59,14 +61,31 @@ func (s cascadeSource) Cameras() []gbcascade.CameraInfo {
 			Name:      cfg.Name,
 			Encoding:  cfg.Encoding,
 			SubStream: cfg.CascadeSubStream,
-			// Catalog convergence: cascade_enabled=false hides the camera from
-			// the upper platform entirely (catalog + INVITE gate).
-			CascadeHidden: cfg.CascadeEnabled != nil && !*cfg.CascadeEnabled,
+			// Catalog convergence: hidden cameras stay in the channel-code
+			// allocation but are neither listed nor INVITE-servable upstream.
+			CascadeHidden: cascadeHidden(cfg),
 			// Brand/Model live only in DB rows (config.CameraConfig has no
 			// such fields); the catalog falls back to MiBee/MiBeeNvr.
 		})
 	}
 	return out
+}
+
+// cascadeHidden decides whether a camera is advertised to the upper platform.
+// An explicit cascade_enabled=false always hides. Non-GB cameras hide by
+// default too: they have no on-demand activation (the HubActivator covers
+// gb28181 only), so publishing them would advertise channels the upper
+// platform can only play while this NVR happens to be recording the camera —
+// an invite at any other moment fails. cascade_enabled:true opts a non-GB
+// camera back in, playable while its recorder keeps the hub alive.
+func cascadeHidden(cfg *config.CameraConfig) bool {
+	if cfg.CascadeEnabled != nil && !*cfg.CascadeEnabled {
+		return true
+	}
+	if cfg.Protocol != string(model.ProtoGB28181) {
+		return cfg.CascadeEnabled == nil || !*cfg.CascadeEnabled
+	}
+	return false
 }
 
 // activeCameraIDs returns the set of non-archived camera IDs, or nil when the

@@ -145,7 +145,7 @@ After saving, the camera REGISTERs to the NVR (Digest auth). Nothing to add manu
 | Time sync | ✅ | Device Query answered with platform time |
 | DeviceInfo/Status automation | ✅ | Brand/model backfill; keepalive preserves metadata |
 | **Cascading (lower-level role)** | ✅ | Registers to an upper platform, aggregated catalog, INVITE forwarding (see Cascading Uplink) |
-| GB35114 | ⏸ | On demand (see #341) |
+| GB35114 | ✅ | Level-A certificate auth (requires a `-tags gb35114` build; see below) |
 
 ## Configuration Reference
 
@@ -254,9 +254,9 @@ Behavior:
 
 - Channel IDs are allocated on first catalog appearance (`<ID[:10]>132` + 7-digit serial) and persisted — upper-platform bindings survive restarts
 - REGISTER + Digest, re-registration at 80% of Expires, Keepalive; an upper restart (keepalive 403) triggers immediate re-registration
-- The catalog aggregates every non-MJPEG camera; H.264/H.265 is sniffed from the first NAL for the PSM type
+- The catalog aggregates publishable cameras: GB sources publish by default, non-GB sources stay out by default (see "Catalog boundary & convergence" below, #1037); H.264/H.265 is sniffed from the first NAL for the PSM type
 - Upper INVITE → 200 OK (sendonly) → StreamHub subscription → PS mux → RTP push; BYE/error teardown
-- **Catalog convergence** (`cameras[].cascade_enabled: false`): the camera is hidden from the aggregated catalog and its channel's INVITEs answer 404, but the channel-code allocation is kept — re-enabling restores the same code, upper-platform bindings don't drift
+- **Catalog boundary & convergence** (`cameras[].cascade_enabled`, #1037): on-demand playback is guaranteed only for GB sources (on-demand activation, below) — non-GB sources have no on-demand pull and only play while the camera is **currently recording**, so they stay out of the catalog by default; an explicit `true` publishes one anyway (recommended only for continuously-recording cameras). `false` explicitly hides any camera: gone from the catalog, INVITEs answer 404, but the channel-code allocation is kept — re-enabling restores the same code, upper-platform bindings don't drift. In the camera form the checkbox default follows the protocol (GB = on, others = off) until you set it manually
 - **Sub-stream cascading** (`cameras[].cascade_sub_stream: true`): INVITE forwarding rides the camera's on-demand [sub-stream](sub-stream.md) — the low-resolution tier keeps your uplink bounded for preview-only platforms; falls back to main when the camera has no sub-stream or the pull fails, and cameras without one are unaffected
 - **Multi-level on-demand activation** (`gb28181_cascade.hub_activation_timeout`, #451): when the upper platform INVITEs a GB child channel that is **not currently recording**, the middle tier first starts a bounded local INVITE to that child device (default 10s) and forwards once frames arrive — a timeout answers 500 without establishing a medialess dialog, and the local pull retires on idle after BYE. Non-GB cameras skip this path
 - **Multiple upstreams** (`gb28181_cascade.upstreams`, #370): beyond the single-upstream form you can configure any number of extra upper platforms — each entry runs its own REGISTER/Keepalive session over the shared SIP listener with independent online state; fields left empty fall back to the single-form values
@@ -400,11 +400,8 @@ If authentication or recording searches misbehave due to clock drift: the NVR an
 
 ## Limitations & Known Issues
 
-- **Device-self pseudo-channel**: after an NVR restart, catalog-capable multi-channel devices briefly get a "device-self" camera that never streams. Known issue; archive it manually after restart. Tracked in #352
-- **Talk real-device coverage**: voice intercom is E2E-verified against a simulator; the real-device loopback is tracked in #353
 - **TCP 0x24 framing**: a vendor extension (GB/T 28181-2016/2022 specify RFC4571); use `auto` for mixed fleets
-- **Multi-level cascading / GB35114**: not implemented, on demand (#341)
-- **Alarm-triggered streaming**: alarm events are on the bus; automated alarm → INVITE linkage is tracked in #355
+- **GB35114 higher levels**: level-A certificate auth is implemented (`-tags gb35114` build, see above); higher security levels are not
 
 ## Security
 

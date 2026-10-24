@@ -291,6 +291,7 @@
   "cameras.storageMigrationPaused": "等待迁移时间窗",
   "cameras.storageNoCandidatesHint": "当前只有默认存储可用。在「应用中心 → 设置 → 授权目录」授权更多目录后可按摄像头分配。",
   "cameras.cascadeDisabledHint": "关闭后此摄像头不上报国标级联目录，上级平台无法看到或点播它（通道号保留，重新开启后绑定关系不变）",
+  "cameras.cascadeNonGBHint": "非国标源没有按需拉流：上级点播仅在该摄像头正在录像时成功，其余时间会失败。上报前请确保其保持连续录像。",
   "cameras.cascadeSubStream": "级联上报子码流",
   "cameras.cascadeSubStreamHint": "上级点播时转发低清子码流（带宽友好）。相机无子码流或拉流失败时自动回退主流。",
   "cameras.recordingEnabled": "录制视频到磁盘",
