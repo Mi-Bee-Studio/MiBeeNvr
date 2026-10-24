@@ -85,6 +85,47 @@ cameras:
 
 Audio is off by default. Turn on the **Audio** toggle in the camera's edit page (or `PUT /api/cameras/{id}` with `{"audio_enabled": true}`); the PS stream's audio track (G.711 A-law/μ-law, AAC) is then muxed into MP4 recordings and live streams.
 
+
+## Real-Device Walkthrough: Hikvision (2026 Firmware)
+
+A factory-fresh Hikvision DS-2CD2225Y (2026 web UI, GB/T 28181-2022 mode), from camera-side setup to an enrolled NVR camera. Other brands follow the same shape: find the GB28181 access page and fill in the same server parameters.
+
+### Camera-Side Configuration
+
+Path: **Configuration → Network → Device Access → GB28181**.
+
+| Field | Value | Notes |
+|---|---|---|
+| Enable | On | |
+| Transport | **UDP** | TCP has a known media defect — see "Pitfalls" below |
+| SIP server ID | NVR's `gb28181.server_id` (e.g. `34020000002000000001`) | |
+| SIP server domain | NVR's `gb28181.realm` (e.g. `3402000000`) | |
+| SIP server address | NVR host IP | |
+| SIP server port | NVR's `gb28181.sip_listen` port (default 5060) | |
+| SIP username / auth ID | Camera's GB device number (20 digits; first 10 usually match the server domain) | Doubles as the video channel ID on this model |
+| SIP auth password | NVR's `gb28181.password` | |
+| Register validity / interval / heartbeat | 3600 / 60 / 60 s | Factory defaults line up with the NVR |
+
+![Hikvision GB28181 platform access settings](images/gb28181-hikvision-config.webp)
+
+### Enrollment and Verification
+
+After saving, the camera REGISTERs to the NVR (Digest auth). Nothing to add manually on the NVR side — the device is auto-enrolled as a `gb-<device-id>` camera and an on-demand INVITE pulls the stream. Verification checklist:
+
+1. NVR logs show `device registered` → `catalog received` → `session created` → `first RTP received — session confirmed`;
+2. The camera appears in the camera list and starts recording, with rolling segments landing on disk;
+3. Opening the camera's live page shows the picture.
+
+![Enrolled: NVR live view](images/gb28181-hikvision-liveview.webp)
+
+### Pitfalls
+
+- **Factory clock is stuck in the past**: set the time first (web UI "Configuration → System → Time", or `PUT /ISAPI/System/time`);
+- **UDP mode starts with STUN probes** aimed at port 5060: normal NAT probing — the NVR not answering does not affect the subsequent registration; don't misread STUN packets as a protocol failure;
+- **Choosing TCP drops all media** (known limitation, [#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058)): after a TCP registration the NVR's UDP media receiver pins its source filter to the TCP signaling source port, so every RTP packet is dropped and the session rebuilds in a ~32s loop (log signature: repeated `packets_received=0`). **Use UDP for now**;
+- **GB/T 28181-2022 works as-is**: the Hikvision 2022 mode (`x_gb_ver=3.0`) interops fully (register/catalog/INVITE/PS) — no need to downgrade to 2016;
+- **First-login "change password" nag**: cancel it; it doesn't block configuration.
+
 ## Capability Overview
 
 | Capability | Status | Notes |
