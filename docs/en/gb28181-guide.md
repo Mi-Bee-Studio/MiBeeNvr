@@ -122,7 +122,7 @@ After saving, the camera REGISTERs to the NVR (Digest auth). Nothing to add manu
 
 - **Factory clock is stuck in the past**: set the time first (web UI "Configuration → System → Time", or `PUT /ISAPI/System/time`);
 - **UDP mode starts with STUN probes** aimed at port 5060: normal NAT probing — the NVR not answering does not affect the subsequent registration; don't misread STUN packets as a protocol failure;
-- **Choosing TCP drops all media** (known limitation, [#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058)): after a TCP registration the NVR's UDP media receiver pins its source filter to the TCP signaling source port, so every RTP packet is dropped and the session rebuilds in a ~32s loop (log signature: repeated `packets_received=0`). **Use UDP for now**;
+- **Choosing TCP breaks on-demand streaming** (known limitation, [#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058); library fix [gb28181-go#145](https://github.com/mickeyzzc/gb28181-go/pull/145) submitted): after a TCP registration the platform's INVITE used to leave via UDP aimed at the device's TCP source port, so the device never saw it and the media session rebuilt in a ~32s loop (log signature: INVITE unanswered, repeated `packets_received=0`). **Use UDP until the fix ships**;
 - **GB/T 28181-2022 works as-is**: the Hikvision 2022 mode (`x_gb_ver=3.0`) interops fully (register/catalog/INVITE/PS) — no need to downgrade to 2016;
 - **First-login "change password" nag**: cancel it; it doesn't block configuration.
 

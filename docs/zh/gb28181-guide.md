@@ -122,7 +122,7 @@ cameras:
 
 - **出厂时钟停在很久以前**：先校时（网页「配置 → 系统 → 时间」，或 `PUT /ISAPI/System/time`），避免依赖时间的功能异常；
 - **UDP 模式启动时先发 STUN 探测包**（目标为 5060 端口）：这是正常的 NAT 探测行为，NVR 不应答也不影响随后的注册——抓包看到 STUN 不要误判为协议不通；
-- **传输协议选 TCP 时媒体全丢**（已知限制，[#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058)）：设备经 TCP 注册后，NVR 的 UDP 媒体接收过滤器会错误锚定到 TCP 信令源端口，RTP 全部被丢弃、会话约 32 秒后被拆并循环重建（日志特征：`packets_received=0` 反复出现）。**当前请使用 UDP**；
+- **传输协议选 TCP 时点播失败**（已知限制，[#1058](https://github.com/Mi-Bee-Studio/MiBeeNvr/issues/1058)，库修复 [gb28181-go#145](https://github.com/mickeyzzc/gb28181-go/pull/145) 已提交）：设备经 TCP 注册后，NVR 发出的 INVITE 曾按 UDP 发往设备的 TCP 源端口，设备永远收不到请求，媒体会话每约 32 秒循环重建（日志特征：INVITE unanswered、`packets_received=0` 反复出现）。**修复合入发布前请使用 UDP**；
 - **GB/T 28181-2022 模式可直接使用**：实测海康 2022 模式（`x_gb_ver=3.0`）的注册/目录/INVITE/PS 流与本 NVR 完全互操作，无需降级到 2016 模式；
 - **固件首次登录强制弹「修改密码」**：点取消即可，不影响后续配置。
 
