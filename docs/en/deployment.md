@@ -27,6 +27,10 @@ sudo ./install.sh --uninstall
 
 The installer will prompt for an admin password if no config file exists. After installation, the Web UI is available at `http://<host-ip>:9090`.
 
+### Linux packages (deb / rpm)
+
+Debian/Ubuntu (amd64, arm64) and RHEL-family (x86_64, aarch64) hosts can install the official native packages — the package manager takes over the binary, the systemd unit and upgrades, with data still rooted at `/var/lib/mibee-nvr`. See [Linux Packages](install-linux.md).
+
 ### Docker
 
 #### Prerequisites

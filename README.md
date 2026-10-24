@@ -122,7 +122,7 @@ Self-measured across three hardware tiers — methodology, judging criteria, and
 Full index with one-line descriptions: [`docs/en/README.md`](docs/en/README.md). Most-visited entry points:
 
 - [Getting Started](docs/en/getting-started.md) · [Configuration](docs/en/configuration.md) · [CLI](docs/en/cli.md) · [API Reference](docs/en/api/README.md)
-- [Deployment](docs/en/deployment.md) (incl. NAS guides: unRAID / fnOS / Synology / QNAP / iStoreOS / ZSpace) · [Remote Access](docs/en/remote-access.md)
+- [Deployment](docs/en/deployment.md) (incl. NAS guides: unRAID / fnOS / Synology / QNAP / iStoreOS / ZSpace; native [deb/rpm packages](docs/en/install-linux.md)) · [Remote Access](docs/en/remote-access.md)
 - [Troubleshooting](docs/en/troubleshooting.md) · [Upgrade Guide](docs/en/upgrade-guide.md)
 
 Version numbers, configuration syntax, and CLI flags are authoritative **only** in this repository's releases and `docs/en/`. Content published elsewhere — reprinted tutorials, "reviews", SEO aggregators — is not reviewed by us and frequently contains invented version numbers and benchmarks. If something you read elsewhere does not match the docs, trust the docs and please open an issue.

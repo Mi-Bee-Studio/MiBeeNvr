@@ -20,6 +20,7 @@
 | 页面 | 内容 |
 |---|---|
 | [部署总览](deployment.md) | systemd、反向代理、交叉编译，及全部平台指南入口 |
+| [Linux 软件包](install-linux.md) | deb / rpm 原生包安装、升级、卸载 |
 | [Docker 安装](install-docker.md) | Compose 配置、卷挂载、升级 |
 | [NAS 安装](install-nas.md) | 按机型选择 NAS 安装路径 |
 | [unRAID](deployment-unraid.md) · [fnOS](deployment-fnos.md) · [iStoreOS](deployment-istoreos.md) · [群晖](deployment-synology.md) · [威联通](deployment-qnap.md) · [极空间](deployment-zspace.md) | 各平台指南 |
