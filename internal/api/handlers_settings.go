@@ -146,7 +146,33 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 			"interfaces":    h.config.DLNA.Interfaces,
 			"friendly_name": h.config.DLNA.FriendlyName,
 		},
+		"notifications": h.notificationsSettingsView(),
 	})
+}
+
+// notificationsSettingsView renders the notifications section for GET
+// /api/settings. Tokens and the snapshot API key are never returned — only
+// whether they are configured (gb28181.password_configured convention); the
+// UI round-trips blank secrets to keep existing values on save.
+func (h *Handler) notificationsSettingsView() map[string]any {
+	sinks := make([]map[string]any, 0, len(h.config.Notifications.Sinks))
+	for _, s := range h.config.Notifications.Sinks {
+		sinks = append(sinks, map[string]any{
+			"name":             s.Name,
+			"url":              s.URL,
+			"token_configured": s.Token != "",
+			"events":           s.Events,
+			"severity_min":     s.SeverityMin,
+			"timeout_s":        s.TimeoutS,
+			"burst_per_min":    s.BurstPerMin,
+		})
+	}
+	return map[string]any{
+		"enabled":            h.config.Notifications.Enabled,
+		"base_url":           h.config.Notifications.BaseURL,
+		"api_key_configured": h.config.Notifications.APIKey != "",
+		"sinks":              sinks,
+	}
 }
 
 // doorbellSettingsView renders the doorbell section for GET /api/settings
@@ -347,6 +373,24 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			Interfaces   *[]string `json:"interfaces"`
 			FriendlyName *string   `json:"friendly_name"`
 		} `json:"dlna"`
+		// Outbound alert forwarding — whole-table sink replacement. A blank
+		// token (or blank api_key) keeps the existing secret for the sink
+		// with the same name (the GET never returns secrets, so the UI
+		// round-trips blanks). Applies on the next start.
+		Notifications *struct {
+			Enabled *bool   `json:"enabled"`
+			BaseURL *string `json:"base_url"`
+			APIKey  *string `json:"api_key"`
+			Sinks   *[]struct {
+				Name        string   `json:"name"`
+				URL         string   `json:"url"`
+				Token       string   `json:"token"`
+				Events      []string `json:"events"`
+				SeverityMin string   `json:"severity_min"`
+				TimeoutS    int      `json:"timeout_s"`
+				BurstPerMin int      `json:"burst_per_min"`
+			} `json:"sinks"`
+		} `json:"notifications"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -803,12 +847,63 @@ func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		dlnaChanged = true
 	}
 
+	// Outbound alert forwarding (notifications) — same next-start semantics
+	// as doorbell/DLNA: the dispatcher and its sinks are constructed at boot.
+	notificationsChanged := false
+	if body.Notifications != nil {
+		merged := h.config.Notifications
+		if body.Notifications.Enabled != nil {
+			merged.Enabled = *body.Notifications.Enabled
+		}
+		if body.Notifications.BaseURL != nil {
+			merged.BaseURL = strings.TrimSpace(*body.Notifications.BaseURL)
+		}
+		if body.Notifications.APIKey != nil {
+			if key := strings.TrimSpace(*body.Notifications.APIKey); key != "" {
+				merged.APIKey = key
+			}
+		}
+		if body.Notifications.Sinks != nil {
+			// Keep existing secrets for same-named sinks; blank token on a
+			// NEW sink is a config error caught by Validate below.
+			prevTokens := make(map[string]string, len(h.config.Notifications.Sinks))
+			for _, s := range h.config.Notifications.Sinks {
+				prevTokens[s.Name] = s.Token
+			}
+			sinks := make([]config.NotificationSinkConfig, 0, len(*body.Notifications.Sinks))
+			for _, s := range *body.Notifications.Sinks {
+				token := strings.TrimSpace(s.Token)
+				if token == "" {
+					token = prevTokens[s.Name]
+				}
+				sinks = append(sinks, config.NotificationSinkConfig{
+					Name:        strings.TrimSpace(s.Name),
+					URL:         strings.TrimSpace(s.URL),
+					Token:       token,
+					Events:      s.Events,
+					SeverityMin: s.SeverityMin,
+					TimeoutS:    s.TimeoutS,
+					BurstPerMin: s.BurstPerMin,
+				})
+			}
+			merged.Sinks = sinks
+		}
+		prev := h.config.Notifications
+		h.config.Notifications = merged
+		if err := config.Validate(h.config); err != nil {
+			h.config.Notifications = prev
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		notificationsChanged = true
+	}
+
 	// Persist config to disk
 	if err := config.Save(h.configPath, h.config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 	}
 
-	if remoteOffloadChanged || doorbellChanged || dlnaChanged {
+	if remoteOffloadChanged || doorbellChanged || dlnaChanged || notificationsChanged {
 		// Remote offload, doorbell and DLNA settings apply on the next start
 		// (their services are constructed at boot).
 		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "restart_required": true})

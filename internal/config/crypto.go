@@ -206,6 +206,16 @@ func decryptConfig(cfg *Config, key []byte) {
 			cfg.Doorbell.Outbound.Secret = v
 		}
 	}
+
+	// Notification sink tokens + snapshot API key
+	if v, err := Decrypt(cfg.Notifications.APIKey, key); err == nil {
+		cfg.Notifications.APIKey = v
+	}
+	for i := range cfg.Notifications.Sinks {
+		if v, err := Decrypt(cfg.Notifications.Sinks[i].Token, key); err == nil {
+			cfg.Notifications.Sinks[i].Token = v
+		}
+	}
 }
 
 // encryptConfig encrypts all sensitive fields in the config in place.
@@ -304,6 +314,22 @@ func encryptConfig(cfg *Config, key []byte) []string {
 		}
 	}
 
+	// Notification sink tokens + snapshot API key
+	if cfg.Notifications.APIKey != "" && !IsEncrypted(cfg.Notifications.APIKey) {
+		if v, err := Encrypt(cfg.Notifications.APIKey, key); err == nil {
+			cfg.Notifications.APIKey = v
+			encrypted = append(encrypted, "notifications.api_key")
+		}
+	}
+	for i := range cfg.Notifications.Sinks {
+		if t := cfg.Notifications.Sinks[i].Token; t != "" && !IsEncrypted(t) {
+			if v, err := Encrypt(t, key); err == nil {
+				cfg.Notifications.Sinks[i].Token = v
+				encrypted = append(encrypted, fmt.Sprintf("notifications.sinks[%d].token", i))
+			}
+		}
+	}
+
 	return encrypted
 }
 
@@ -351,6 +377,14 @@ func SensitiveFieldPaths(cfg *Config) []string {
 	if cfg.Doorbell.Outbound != nil && cfg.Doorbell.Outbound.Secret != "" && !IsEncrypted(cfg.Doorbell.Outbound.Secret) {
 		fields = append(fields, "doorbell.outbound.secret")
 	}
+	if cfg.Notifications.APIKey != "" && !IsEncrypted(cfg.Notifications.APIKey) {
+		fields = append(fields, "notifications.api_key")
+	}
+	for i := range cfg.Notifications.Sinks {
+		if t := cfg.Notifications.Sinks[i].Token; t != "" && !IsEncrypted(t) {
+			fields = append(fields, fmt.Sprintf("notifications.sinks[%d].token", i))
+		}
+	}
 
 	return fields
 }
@@ -368,6 +402,8 @@ type sensitiveSnapshot struct {
 	RemoteSecretKey     string
 	DoorbellSecrets     []string
 	DoorbellOutbound    string
+	NotifyAPIKey        string
+	NotifySinkTokens    []string
 }
 
 func snapshotSensitive(cfg *Config) sensitiveSnapshot {
@@ -381,9 +417,14 @@ func snapshotSensitive(cfg *Config) sensitiveSnapshot {
 		P2PPassword:         cfg.P2P.Password,
 		RemoteSecretKey:     cfg.Storage.Remote.SecretAccessKey,
 		DoorbellSecrets:     make([]string, len(cfg.Doorbell.Users)),
+		NotifyAPIKey:        cfg.Notifications.APIKey,
+		NotifySinkTokens:    make([]string, len(cfg.Notifications.Sinks)),
 	}
 	for i := range cfg.Doorbell.Users {
 		s.DoorbellSecrets[i] = cfg.Doorbell.Users[i].Secret
+	}
+	for i := range cfg.Notifications.Sinks {
+		s.NotifySinkTokens[i] = cfg.Notifications.Sinks[i].Token
 	}
 	if cfg.Doorbell.Outbound != nil {
 		s.DoorbellOutbound = cfg.Doorbell.Outbound.Secret
@@ -414,5 +455,11 @@ func (s sensitiveSnapshot) restore(cfg *Config) {
 	}
 	if cfg.Doorbell.Outbound != nil {
 		cfg.Doorbell.Outbound.Secret = s.DoorbellOutbound
+	}
+	cfg.Notifications.APIKey = s.NotifyAPIKey
+	for i := range cfg.Notifications.Sinks {
+		if i < len(s.NotifySinkTokens) {
+			cfg.Notifications.Sinks[i].Token = s.NotifySinkTokens[i]
+		}
 	}
 }

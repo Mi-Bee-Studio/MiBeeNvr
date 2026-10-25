@@ -597,6 +597,21 @@ func registerMaintenanceServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 8.6 notifications (optional): outbound alert webhook forwarding
+	if deps.notifySvc != nil {
+		if err := a.Register(&serviceFunc{
+			name: "notifications",
+			startFunc: func(ctx context.Context) error {
+				return deps.notifySvc.Start(ctx)
+			},
+			stopFunc: func() error {
+				return deps.notifySvc.Stop()
+			},
+		}); err != nil {
+			return fmt.Errorf("register notifications: %w", err)
+		}
+	}
+
 	// 9. ftp (optional)
 	if deps.ftpServer != nil {
 		if err := a.Register(&serviceFunc{

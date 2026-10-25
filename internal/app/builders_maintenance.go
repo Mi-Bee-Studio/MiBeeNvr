@@ -17,6 +17,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/doorbell"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ftp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/notify"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/offload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/snapshot"
@@ -223,6 +224,21 @@ func buildMaintenanceDeps(deps *appDeps) (timelapseSourceDeleter, *snapshot.Capt
 		deps.mqttStatusPub = mqtt.NewStatusPublisher(deps.eventBus, deps.mqttClient)
 	}
 
+	// Step 9b: Optional outbound alert forwarding (notifications): the
+	// dispatcher subscribes to whitelisted event-bus topics and, via the
+	// health pipeline sink, camera offline/frozen events. Config errors fail
+	// startup — a silently dead alert path is worse than no startup.
+	if cfg.Notifications.Enabled {
+		svc, err := buildNotifyService(cfg, deps)
+		if err != nil {
+			return timelapseSourceDeleter{}, nil, nil, err
+		}
+		deps.notifySvc = svc
+		if deps.healthMgr != nil {
+			deps.healthMgr.SetAlertSink(svc)
+		}
+	}
+
 	// Step 10: Optional FTP server
 	if cfg.FTP.Enabled != nil && *cfg.FTP.Enabled {
 		ftpAddr := fmt.Sprintf(":%d", cfg.FTP.Port)
@@ -259,4 +275,67 @@ func buildMaintenanceDeps(deps *appDeps) (timelapseSourceDeleter, *snapshot.Capt
 	}
 
 	return tlSourceDeleter, snapCapturer, triggerDispatcher, nil
+}
+
+// buildNotifyService maps the notifications config onto the dispatcher,
+// wiring the DB-backed enrichment closures (camera display names, stored AI
+// event details). Snapshot links fall back to server.advertise_url when the
+// section does not override the base.
+func buildNotifyService(cfg *config.Config, deps *appDeps) (*notify.Service, error) {
+	sinks := make([]notify.SinkOptions, 0, len(cfg.Notifications.Sinks))
+	for _, s := range cfg.Notifications.Sinks {
+		sinks = append(sinks, notify.SinkOptions{
+			Name:        s.Name,
+			URL:         s.URL,
+			Token:       s.Token,
+			Events:      s.Events,
+			SeverityMin: s.SeverityMin,
+			TimeoutS:    s.TimeoutS,
+			BurstPerMin: s.BurstPerMin,
+		})
+	}
+
+	baseURL := cfg.Notifications.BaseURL
+	if baseURL == "" {
+		baseURL = cfg.Server.AdvertiseURL
+	}
+
+	db := deps.db
+	var nameOf notify.CameraNamer
+	if db != nil {
+		nameOf = func(cameraID string) string {
+			row, err := db.GetCamera(context.Background(), cameraID)
+			if err != nil || row == nil {
+				return ""
+			}
+			return row.Name
+		}
+	}
+	var aiLookup notify.AILookup
+	if db != nil {
+		aiLookup = func(eventID int64) (notify.AIEventInfo, bool) {
+			evt, err := db.GetAIEvent(context.Background(), eventID)
+			if err != nil || evt == nil {
+				return notify.AIEventInfo{}, false
+			}
+			return notify.AIEventInfo{
+				EventType: evt.EventType,
+				Severity:  evt.Severity,
+				ClassName: evt.ClassName,
+				ZoneName:  evt.ZoneName,
+				CameraID:  evt.CameraID,
+			}, true
+		}
+	}
+
+	return notify.NewService(notify.ServiceOptions{
+		Bus:         deps.eventBus,
+		Sinks:       sinks,
+		CameraNamer: nameOf,
+		AILookup:    aiLookup,
+		Snapshots: notify.Snapshots{
+			BaseURL: baseURL,
+			APIKey:  cfg.Notifications.APIKey,
+		},
+	})
 }

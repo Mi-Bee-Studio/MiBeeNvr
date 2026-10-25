@@ -240,6 +240,8 @@ export {
   getSettings,
   updateSettings,
   getDoorbellStatus,
+  getNotificationsStatus,
+  sendTestNotification,
   getStorageCandidates,
   addStorageCandidate,
   removeStorageCandidate,
@@ -289,6 +291,10 @@ export type {
   VisionInstanceConfig,
   VisionSettingsConfig,
   VisionInstanceStatus,
+  NotificationsSettingsConfig,
+  NotificationSinkSettings,
+  NotificationsStatus,
+  NotificationSinkStats,
 } from './settings';
 
 // Xiaomi — cloud auth, devices, sync

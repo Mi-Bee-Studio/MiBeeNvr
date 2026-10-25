@@ -71,6 +71,7 @@
 | [AI Detection Tuning](ai-detection-tuning.md) | Browser-side YOLO detection: sensitivity, classes, performance |
 | [MQTT Integration](mqtt-integration.md) | Trigger recording from smart-home events |
 | [Webhook Integration](webhook-integration.md) | HMAC-signed trigger endpoint |
+| [Alert Notifications](notifications.md) | Alert webhook forwarding (mibee-alert/1 envelope and receiver tips) |
 | [Home Assistant](home-assistant.md) | HA camera/rest/sensor integration |
 | [WebDAV / FTP](webdav-ftp.md) | File access over WebDAV and FTP — comparison and quick setup |
 | [WebDAV Integration](webdav-integration.md) | The built-in WebDAV server in depth |

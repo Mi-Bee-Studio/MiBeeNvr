@@ -382,6 +382,36 @@ trigger:
     secret: ""                     # Pre-shared HMAC secret (required when enabled, auto-encrypted if encryption key is set)
     replay_window_s: 300           # Max age of the signed timestamp, both directions (default 300)
 
+# Outbound alert notifications — forward NVR alerts to external webhook
+# receivers (alerting hubs, chat robots, monitoring platforms). Alerts are
+# POSTed as a small JSON envelope (schema "mibee-alert/1": type / severity /
+# title / source_ref / dedup_key / resolved / snapshot_url). Dedup,
+# aggregation, cooldowns and channel routing belong to the receiver — the
+# NVR only reports facts. Delivery is lossy by design: a bounded queue drops
+# the oldest alert when full and a dead receiver never blocks recording.
+# Requires a restart to apply.
+notifications:
+  enabled: false                   # Enable the alert dispatcher
+  # base_url: "http://192.168.1.10:9090"  # Externally reachable base URL of THIS
+  #                                      # NVR, used to build snapshot links in alerts.
+  #                                      # Falls back to server.advertise_url; empty on
+  #                                      # both = alerts without snapshot links.
+  # api_key: "mbv_..."              # Dedicated API key embedded in snapshot URLs (use a
+  #                                 # separate, revocable key — receivers store the links).
+  #                                 # Auto-encrypted when an encryption key is set.
+  # sinks:                          # One entry per receiver; each has its own queue + worker
+  #   - name: "alert-hub"           # Display name (logs + status endpoint)
+  #     url: "http://192.168.1.20:9080/api/ingest/webhook"  # Ingest base URL
+  #     token: "my-secret-token"    # Appended as the final path segment; auto-encrypted
+  #     events: []                  # Optional type filter (empty = all). Known types:
+  #                                  # camera.connection, camera.freeze, camera.stream,
+  #                                  # camera.quality, camera.motion, ai.detection,
+  #                                  # doorbell.ring, storage.health, gb28181.alarm,
+  #                                  # camera.added, notify.test
+  #     severity_min: "info"        # Drop alerts below this severity (info|warning|error|critical)
+  #     timeout_s: 5                # Per-request timeout (default 5)
+  #     burst_per_min: 30           # Outbound posts per minute cap (default 30)
+
 # WebDAV server — file access over WebDAV protocol
 # Shares recordings directory over HTTP
 webdav:

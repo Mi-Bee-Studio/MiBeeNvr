@@ -26,6 +26,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/notify"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/offload"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
@@ -117,6 +118,7 @@ type appDeps struct {
 	// Ingest listeners (optional)
 	mqttClient        *mqtt.Client
 	mqttStatusPub     *mqtt.StatusPublisher
+	notifySvc         *notify.Service  // outbound alert webhook dispatcher (optional)
 	snapRunner        *snapshot.Runner // MQTT snapshot trigger: capture → persist → event (#656)
 	ftpServer         *ftp.Server
 	dlnaServer        *dlna.Server
