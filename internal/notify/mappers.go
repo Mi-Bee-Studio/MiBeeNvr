@@ -3,6 +3,7 @@ package notify
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -220,14 +221,7 @@ func describeAIBody(eventType, class, zone string) string {
 }
 
 func joinComma(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += ", "
-		}
-		out += p
-	}
-	return out
+	return strings.Join(parts, ", ")
 }
 
 func (m *mapper) mapStorageHealth(data any) (Alert, bool) {

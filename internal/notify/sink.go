@@ -333,7 +333,7 @@ func (s *WebhookSink) post(ctx context.Context, a Alert) (retryAfter time.Durati
 		return 0, err // transport error / timeout / canceled
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return 0, nil

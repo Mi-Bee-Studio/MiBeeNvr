@@ -151,7 +151,7 @@ func TestSink_Filters(t *testing.T) {
 	var hits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
@@ -208,12 +208,12 @@ func TestSink_RateLimit(t *testing.T) {
 	var hits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
 	s := startSink(t, SinkOptions{Name: "t", URL: srv.URL, Token: "tok", BurstPerMin: 2})
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		s.Enqueue(quickAlert(TypeCameraMotion, SeverityInfo), false)
 	}
 	waitSent(t, s, 2)
