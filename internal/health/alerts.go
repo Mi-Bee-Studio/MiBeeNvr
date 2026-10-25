@@ -23,6 +23,15 @@ type MQTTPublisher interface {
 	Publish(topic string, payload any) error
 }
 
+// AlertSink receives cooldown-filtered health events for external alert
+// forwarding (the notifications webhook dispatcher). Satisfied by
+// *notify.Service via structural typing — health does not import notify.
+// Implementations must not block: the pipeline calls this on the monitoring
+// path.
+type AlertSink interface {
+	PublishAlert(cameraID string, event model.HealthEvent)
+}
+
 // emitState tracks cooldown and escalation state for a specific cooldown key.
 type emitState struct {
 	lastEmit  time.Time
@@ -43,6 +52,7 @@ type AlertPipeline struct {
 	storage     HealthStorage
 	mqttClient  MQTTPublisher
 	topicPrefix string
+	alertSink   AlertSink
 
 	// cooldown tracking: "cameraID:eventType:message" → emit state
 	emitStates map[string]*emitState
@@ -141,6 +151,12 @@ func (p *AlertPipeline) HandleEvent(cameraID string, event model.HealthEvent) er
 		if err := p.mqttClient.Publish(topic, event); err != nil {
 			slog.Warn("failed to publish MQTT health event", "camera_id", cameraID, "error", err)
 		}
+	}
+
+	// Dispatch to the notifications alert sink (webhook forwarding). The
+	// sink applies its own per-sink filters; enqueue is non-blocking.
+	if p.alertSink != nil {
+		p.alertSink.PublishAlert(cameraID, event)
 	}
 	return nil
 }
