@@ -1,0 +1,15 @@
+#!/bin/sh
+# prerm: stop the service on removal (upgrades keep it running — postinst
+# restarts it). Recordings and config under /var/lib/mibee-nvr are NEVER
+# touched; purge leaves them for the operator.
+set -e
+
+case "$1" in
+  remove)
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl stop mibee-nvr >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
+exit 0

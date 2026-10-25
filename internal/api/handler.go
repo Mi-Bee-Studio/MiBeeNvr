@@ -252,6 +252,7 @@ type Handler struct {
 	downloader        TranscodeDownloader
 	transcodeMgr      TranscodeManagerAPI
 	eventBus          *event.EventBus
+	notifySvc         NotifyService
 	timelapseMergeMgr *timelapse.RollingMergeManager
 	mergeScheduler    *timelapse.MergeScheduler
 	// tlTrigger assembles and launches manual (single/batch) periodic merges
@@ -395,6 +396,7 @@ func (h *Handler) Routes() http.Handler {
 		h.registerViewerRoutes(r)
 		h.registerGB28181Routes(r)
 		h.registerDoorbellRoutes(r)
+		h.registerNotifyRoutes(r)
 		h.registerMediaRoutes(r)
 		// 预投产调试：App 诊断上报（authed；文件落盘不进 DB）。
 		r.Post("/api/diagnostics/app", h.handleAppDiagnosticsReport)

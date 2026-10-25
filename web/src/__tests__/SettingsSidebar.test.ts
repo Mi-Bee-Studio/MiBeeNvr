@@ -7,7 +7,7 @@ vi.mock('$lib/i18n', () => ({
 }));
 
 vi.mock('lucide-svelte', () => {
-  const icons = ['Settings', 'HardDrive', 'Camera', 'Radio', 'RadioTower', 'BellRing', 'Tv', 'BrainCircuit', 'Film', 'Info', 'Save', 'RotateCcw', 'Globe'];
+  const icons = ['Settings', 'HardDrive', 'Camera', 'Radio', 'RadioTower', 'BellRing', 'Bell', 'Tv', 'BrainCircuit', 'Film', 'Info', 'Save', 'RotateCcw', 'Globe'];
   const mock: Record<string, () => HTMLElement> = {};
   for (const name of icons) {
     mock[name] = function MockIcon() {
@@ -44,7 +44,7 @@ describe('Settings sidebar categories', () => {
 
   // The Advanced (高级) section was removed with its only card — the resource
   // estimate table (user ruling 2026-09-24: no value, RPi-3B-era guesses).
-  it('lists exactly the eleven categories incl. doorbell + DLNA (no 高级/advanced)', () => {
+  it('lists exactly the twelve categories incl. doorbell + DLNA + notifications (no 高级/advanced)', () => {
     const { container } = render(Settings);
     const labels = [...container.querySelectorAll('nav button')].map((b) => (b as HTMLElement).textContent?.trim());
     const expected = [
@@ -55,6 +55,7 @@ describe('Settings sidebar categories', () => {
       'settings.sidebar.gb28181',
       'settings.sidebar.doorbell',
       'settings.sidebar.dlna',
+      'settings.sidebar.notifications',
       'settings.sidebar.p2p',
       'settings.sidebar.ai',
       'settings.sidebar.processing',

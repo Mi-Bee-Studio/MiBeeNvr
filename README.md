@@ -82,10 +82,21 @@ For detailed setup, see [Getting Started](docs/en/getting-started.md).
 - **Low-Power ARM Ready**: Runs on 1GB RAM with a 512MB memory budget (validated on Raspberry Pi 3B as the minimum baseline)
 - **Plug-and-Play Auto-Discover**: ONVIF cameras joining the LAN are enrolled automatically in the background — no manual scan; authenticated ones wait as pending activation until you supply credentials
 - **IP Self-Healing**: Cameras that change IP (Wi-Fi roaming across APs) are auto-relocated by serial number and reconnected
-- **Adaptive Recording**: Timelapse baseline that drops to sparse keyframes when calm and resumes full rate on motion or loud audio
-- **Browser-Side AI Detection**: ONNX Runtime Web with WebGPU acceleration — no backend inference server
+- **Adaptive Recording**: Compressed-domain motion analysis drops calm scenes to a timelapse-grade baseline and resumes full rate on motion or loud audio — 75–98% less disk on static scenes, zero frames lost at the switch ([details](#adaptive-recording))
+- **AI Detection, Two Layers**: Browser-side ONNX Runtime Web with WebGPU acceleration — no inference server needed; optional server-side MiBeeVision companion analyzes recordings, writes events back and drives semantic triggers
 - **Modern Web UI**: Dark/light themes, Chinese / English / Russian, responsive; WebCodecs H.265 playback
 - **No Cloud Required**: Self-hosted, no subscriptions, no vendor lock-in — remote access via Tailscale / Cloudflare Tunnel / WireGuard today, with a built-in encrypted remote mode on the way
+
+## Adaptive Recording
+
+In most surveillance scenes nothing happens 95% of the time — yet continuous recording writes every frame at full bitrate. Adaptive recording analyzes the compressed stream on the NVR side (P-frame sizes vs a rolling baseline; no decoding involved) and drops calm scenes to a timelapse-grade baseline, resuming full rate the moment activity appears. A GOP pre-buffer is flushed at the switch, so the sparse→full transition loses **zero** reference frames — no corruption, no playback gaps.
+
+- **75–98% less disk** on static scenes — field data: a 2K H.265 camera went from ~2700 MB/h to ~688 MB/h including active spans
+- **Five wake-up signals**: bitrate spike · loud audio (G.711 dBFS) · pixel-domain CV sampled at ~1fps from the sub-stream (for smart-codec cameras whose bitrate never moves) · camera-side ONVIF motion · a semantic trigger API driven by MiBeeVision or any AI / home automation
+- **Tiered recording**: the sub-stream records 24/7 as a never-miss baseline while the main stream records events only — a combination still an open feature request elsewhere
+- **Offline tuning**: `eval-replay` replays existing recordings through the gate — preview parameter changes without touching production
+
+Full pipeline, tuning and telemetry: [Adaptive Recording](docs/en/adaptive-recording.md).
 
 ## Performance
 
@@ -106,7 +117,7 @@ Self-measured across three hardware tiers — methodology, judging criteria, and
 | HTTP JPEG | Camera → NVR | Snapshot streaming |
 | ONVIF | Camera ↔ NVR | Discovery, PTZ, stream URI, MotionAlarm events |
 | Xiaomi (CS2 + TUTK) | Camera → NVR | CS2 P2P + legacy TUTK (7 models), cloud auth |
-| GB/T 28181 | Camera → NVR | SIP platform, auto-enrollment, audio + talk, PTZ, device-side playback |
+| GB/T 28181 | Camera → NVR | SIP platform, auto-enrollment, audio + talk, PTZ, device-side playback (production support since v0.14) |
 | SIP doorbell | Door station → NVR | Doorbird/Akuvox/Hikvision intercoms: ring popup, two-way G.711 talk |
 | SRT / RTMP (ingest) | Publisher → NVR | Push-in: remote publishers, low-latency transport |
 | WHIP | Publisher → NVR | WebRTC push from browsers, phones, OBS 30+ (H.264 + Opus) |
@@ -122,7 +133,7 @@ Self-measured across three hardware tiers — methodology, judging criteria, and
 Full index with one-line descriptions: [`docs/en/README.md`](docs/en/README.md). Most-visited entry points:
 
 - [Getting Started](docs/en/getting-started.md) · [Configuration](docs/en/configuration.md) · [CLI](docs/en/cli.md) · [API Reference](docs/en/api/README.md)
-- [Deployment](docs/en/deployment.md) (incl. NAS guides: unRAID / fnOS / Synology / QNAP / iStoreOS / ZSpace) · [Remote Access](docs/en/remote-access.md)
+- [Deployment](docs/en/deployment.md) (incl. NAS guides: unRAID / fnOS / Synology / QNAP / iStoreOS / ZSpace; native [deb/rpm packages](docs/en/install-linux.md)) · [Remote Access](docs/en/remote-access.md)
 - [Troubleshooting](docs/en/troubleshooting.md) · [Upgrade Guide](docs/en/upgrade-guide.md)
 
 Version numbers, configuration syntax, and CLI flags are authoritative **only** in this repository's releases and `docs/en/`. Content published elsewhere — reprinted tutorials, "reviews", SEO aggregators — is not reviewed by us and frequently contains invented version numbers and benchmarks. If something you read elsewhere does not match the docs, trust the docs and please open an issue.

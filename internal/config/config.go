@@ -22,6 +22,7 @@ type Config struct {
 	FTP           FTPConfig           `yaml:"ftp"`
 	MQTT          MQTTConfig          `yaml:"mqtt"`
 	Trigger       TriggerConfig       `yaml:"trigger"`
+	Notifications NotificationsConfig `yaml:"notifications"`
 	WebDAV        WebDAVConfig        `yaml:"webdav"`
 	HLS           HLSConfig           `yaml:"hls"`
 	Streaming     StreamingConfig     `yaml:"streaming"`

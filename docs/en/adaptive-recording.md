@@ -31,7 +31,20 @@ Five activity signals can pull a camera back to full rate — any one of them su
 | [Audio trigger](#audio-trigger) | A loud 1-second window — breaking glass, shouting, alarms (needs G.711 audio) |
 | [Pixel-domain gating](#pixel-domain-gating-pixgate) | "Real foreground movement" as judged by classic CV over a ~1fps sampled decode of the sub-stream — lets constant-bitrate smart-codec cameras tell motion from stillness |
 | Camera-side motion detection | With `motion_source: camera:onvif`, subscribes to the camera's ONVIF MotionAlarm events (`reason=onvif_motion`) — see the [ONVIF guide](onvif-guide.md) |
-| External semantic trigger | `POST /api/cameras/{id}/adaptive/trigger` — called by home automation, an AI backend, etc. (e.g. "person detected") |
+| External semantic trigger | `POST /api/cameras/{id}/adaptive/trigger` — called by MiBeeVision when a target is detected, or by home automation, an AI backend, any external system (e.g. "person detected") |
+
+## How This Compares in the Industry
+
+"Adaptive recording" is not unique by name — but most implementations put it somewhere else entirely:
+
+| Route | Typical implementations | Where it runs | Trade-offs |
+|--------|------------------------|---------------|------------|
+| Camera-side smart codec | Dahua Smart Codec, the Uniview / VIVOTEK adaptive-recording family | Camera firmware | The camera drops its own frame rate/bitrate when idle — saves network bandwidth too, but quality is locked to vendor firmware and nothing can be tuned on the NVR |
+| Event schedules + dual streams | Traditional commercial NVRs | NVR | Continuous / motion / event timetables; no native "sub-stream 24/7 baseline + main stream on demand" combination |
+| Motion-triggered / retention-by-event | Frigate, ZoneMinder (Mocord) | Software NVR | Records full-rate and keeps what matters via detection or retention policy, or event clips only; detection depends on decoding |
+| **This feature: NVR-side adaptive write density** | MiBee NVR | NVR | Compressed-domain verdict with zero decoding — any H.264/H.265 camera; the GOP pre-buffer makes the sparse→full switch lossless; [tiered recording](#tiered-recording) keeps a never-miss sub-stream baseline; `eval-replay` tunes parameters offline |
+
+Honest boundaries: unlike camera-side smart codecs this saves **disk only** — the camera still encodes and streams full-rate. Server-side semantic verdicts come from the official companion engine **MiBeeVision** (object detection and tracking over recorded segments, flowing back through the [trigger API](#external-trigger-api) to raise the main stream; the Lite build is single-camera, CPU inference) — or from any external system. For the broader field comparison see [How It Compares](comparison.md).
 
 ## Choosing a Setup
 
@@ -134,7 +147,7 @@ Key points:
 - **Prerequisites**: an rtsp / onvif / gb28181 camera with a configured sub-stream (`sub_stream_url` or the ONVIF `sub_profile_token`, see [Sub-Stream](sub-stream.md)); H.264 / H.265 only. Validation rejects impossible combinations at save time
 - **Segment shape**: sub-tier segments live in the same hour-bucket tree as main recordings, with a `sub_` filename prefix, 60s per segment; born terminal (`merge_status='sublayer'`) — **never a merge input** — and follow normal retention cleanup
 - **Layer filtering end to end**: sub-tier rows are hidden by default from the recordings list, playback timeline, merge, and Vision push. The recordings list API switches tiers via the `layer` query parameter: `?layer=1` shows only sub-tier segments, `?layer=0` forces main only
-- **Semantic gating**: cameras listed in `vision.tiered_cameras` have their layer=1 segments pushed to the external Vision consumer for semantic analysis — low-resolution segments cost a fraction of the main stream to decode; main-stream segments step aside and are not pushed (`vision.skip_cameras` takes precedence over the list). The semantic verdict flows back through the [External Trigger API](#external-trigger-api) to raise the main stream
+- **Semantic gating**: cameras listed in `vision.tiered_cameras` have their layer=1 segments pushed to the Vision consumer (the official MiBeeVision or a self-built backend) for semantic analysis — low-resolution segments cost a fraction of the main stream to decode; main-stream segments step aside and are not pushed (`vision.skip_cameras` takes precedence over the list). The semantic verdict flows back through the [External Trigger API](#external-trigger-api) to raise the main stream
 - **Relation to `recording_mode: adaptive`**: the two neither conflict nor replace each other — `recording_mode` decides "how densely the main stream writes", `recording_tier` decides "whether an extra never-interrupted low-bitrate baseline exists". Ordinary cameras are fine with single-tier adaptive; only cameras whose bitrate domain cannot see motion need tiered
 
 ## Pixel-Domain Gating (pixgate)

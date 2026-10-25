@@ -235,6 +235,24 @@ func (m *Manager) SetMQTTClient(client MQTTPublisher) {
 	m.pipeline.mqttClient = client
 }
 
+// SetAlertSink injects the external notification forwarder (internal/notify).
+// Health events (offline/frozen/recovered) do not travel the event bus — the
+// pipeline is their only dispatch point, so the webhook dispatcher hooks in
+// here. No-op in metrics-only mode (no pipeline exists there).
+func (m *Manager) SetAlertSink(sink AlertSink) {
+	if m == nil || m.pipeline == nil {
+		return
+	}
+	m.pipeline.alertSink = sink
+}
+
+// HasAlertSink reports whether a notification forwarder is wired into the
+// pipeline (wiring-test assertion surface; mirrors mqtt.Client's
+// HasActionHandler).
+func (m *Manager) HasAlertSink() bool {
+	return m != nil && m.pipeline != nil && m.pipeline.alertSink != nil
+}
+
 // SetMetrics injects the Prometheus metrics instance into the stream stats collector.
 // Without this call, nvr_stream_fps / nvr_stream_bitrate_kbps / nvr_stream_idr_interval_seconds
 // gauges are never written (collector.m stays nil and the nil-guard short-circuits).

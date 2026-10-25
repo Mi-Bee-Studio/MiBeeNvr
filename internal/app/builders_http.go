@@ -96,6 +96,9 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 	handler.SetHealthManager(healthMgr)
 	handler.SetStabilityProvider(healthMgr)
 	handler.SetEventBus(deps.eventBus)
+	// Outbound alert dispatcher (notifications): nil when disabled — the
+	// endpoints then report disabled instead of 404-ing.
+	handler.SetNotifyService(deps.notifySvc)
 	// FFmpeg-gated snapshot capturer for the latest-frame endpoint (#657).
 	handler.SetSnapshotCapturer(snapCapturer)
 	// Shared trigger dispatcher (MQTT + webhook, #709).

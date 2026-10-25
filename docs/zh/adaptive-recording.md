@@ -31,7 +31,20 @@ NVR 不解码画面，直接在**压缩域**分析：持续统计 P 帧大小相
 | [音频触发](#音频触发) | 1 秒窗口响度超过阈值的「异常声音」——玻璃破碎、呼喊、警报（需 G.711 音频） |
 | [像素域门控](#像素域门控-pixgate) | 子码流 ~1fps 采样解码后经典 CV 判定的「真实前景移动」——码率恒定的智能编码器相机也能判动静 |
 | 相机侧移动侦测 | `motion_source: camera:onvif` 时订阅相机的 ONVIF MotionAlarm 事件（`reason=onvif_motion`）——见 [ONVIF 指南](onvif-guide.md) |
-| 外部语义触发 | `POST /api/cameras/{id}/adaptive/trigger`——由家庭自动化、AI 后端等外部系统调用（如「检测到人形」） |
+| 外部语义触发 | `POST /api/cameras/{id}/adaptive/trigger`——MiBeeVision 检测到目标时调用，也可由家庭自动化、AI 后端等任意外部系统调用（如「检测到人形」） |
+
+## 与业界同类功能的定位
+
+「自适应录像」在业界并非没有同行——只是多数实现放在了别处：
+
+| 路线 | 代表实现 | 运行位置 | 取舍 |
+|------|----------|----------|------|
+| 相机侧智能编码 | Dahua Smart Codec、Uniview / VIVOTEK 的 Adaptive Recording 类 | 相机固件 | 相机空闲时自己降帧率/码率，顺带省网络带宽；但依赖厂商固件质量，NVR 侧无从调参 |
+| 事件时刻表 + 双码流 | 传统商用 NVR | NVR | 连续/运动/事件时间表；没有「子码流 24/7 基线 + 主码流按需」的原生组合 |
+| 运动触发 / 按事件保留 | Frigate、ZoneMinder（Mocord） | 软件 NVR | 全速写入、靠检测或保留策略取舍，或只存事件片段；检测依赖解码 |
+| **本功能：NVR 侧自适应写入密度** | MiBee NVR | NVR | 压缩域判定零解码，任意 H.264/H.265 相机可用；GOP 预冲让稀疏→全速切换零丢帧；[分层录制](#分层录制-tiered-recording)子码流兜底不漏录；`eval-replay` 离线调参 |
+
+诚实的边界：与相机侧方案相比，这里省的是**磁盘**而不是相机出流带宽——相机仍在全速编码。服务端语义判定由官方伴随引擎 **MiBeeVision** 承担（对录像分段做目标检测与跟踪，判定经[触发 API](#外部触发-api) 回流拉起主码流；Lite 版单摄像头、CPU 推理），也可由任意外部系统调用。更全面的同类方案选型对比见[同类方案对比](comparison.md)。
 
 ## 如何选择
 
@@ -134,7 +147,7 @@ cameras:
 - **前提**：rtsp / onvif / gb28181 相机且配好子码流（`sub_stream_url` 或 ONVIF `sub_profile_token`，见[子码流](sub-stream.md)）；仅 H.264 / H.265。配置校验不符直接拒绝保存
 - **段形态**：子层段与主流录像同一目录树，`sub_` 文件名前缀，60s 一段；天生终态（`merge_status='sublayer'`）**永不参与合并**，遵循普通保留期清理
 - **全链 layer 过滤**：子层行默认从录像列表、回放时间轴、合并与 Vision 推送中隐藏。录像列表 API 用查询参数 `layer` 切换：`?layer=1` 只看子层段，`?layer=0` 显式只看主流
-- **语义门控**：`vision.tiered_cameras` 名单内的相机，其子层段（layer=1）推送给外部 Vision 消费者做语义判读——低分辨率段解码成本只有主流的几分之一；主流段让位、不再推送（`vision.skip_cameras` 优先于名单）。语义结论由外部系统经[外部触发 API](#外部触发-api)回灌拉起主流
+- **语义门控**：`vision.tiered_cameras` 名单内的相机，其子层段（layer=1）推送给 Vision 消费者（官方 MiBeeVision 或自建后端）做语义判读——低分辨率段解码成本只有主流的几分之一；主流段让位、不再推送（`vision.skip_cameras` 优先于名单）。语义结论由外部系统经[外部触发 API](#外部触发-api)回灌拉起主流
 - **与 adaptive 的关系**：两者不互斥也不替代——`recording_mode` 决定「主码流写多密」，`recording_tier` 决定「是否多一条永不间断的低码率兜底」。普通相机单层 adaptive 即可；码率域判不出动静的相机才需要 tiered
 
 ## 像素域门控 (pixgate)

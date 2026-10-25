@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/notify"
 )
 
 // Pre-compiled regex patterns for validation (avoids SA6000: regexp.MatchString in loop).
@@ -102,6 +103,45 @@ func validateConfigDetails(cfg *Config) error {
 		}
 		if cfg.Trigger.Webhook.ReplayWindowS < 0 {
 			return fmt.Errorf("trigger.webhook.replay_window_s must be >= 0, got %d", cfg.Trigger.Webhook.ReplayWindowS)
+		}
+	}
+	// Outbound alert forwarding: an enabled dispatcher without receivers can
+	// never deliver anything, and a typo'd event type in a sink filter would
+	// silently match nothing forever — both fail fast here.
+	if cfg.Notifications.Enabled {
+		if len(cfg.Notifications.Sinks) == 0 {
+			return fmt.Errorf("notifications.enabled is true but notifications.sinks is empty")
+		}
+		if cfg.Notifications.BaseURL != "" {
+			if u, uerr := url.Parse(cfg.Notifications.BaseURL); uerr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || strings.HasSuffix(cfg.Notifications.BaseURL, "/") {
+				return fmt.Errorf("notifications.base_url must be an absolute http(s) URL without a trailing slash, got %q", cfg.Notifications.BaseURL)
+			}
+		}
+		for i, sink := range cfg.Notifications.Sinks {
+			if strings.TrimSpace(sink.URL) == "" {
+				return fmt.Errorf("notifications.sinks[%d].url is required", i)
+			}
+			u, uerr := url.Parse(sink.URL)
+			if uerr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+				return fmt.Errorf("notifications.sinks[%d].url must be an http(s) URL, got %q", i, sink.URL)
+			}
+			if strings.TrimSpace(sink.Token) == "" {
+				return fmt.Errorf("notifications.sinks[%d].token is required", i)
+			}
+			if sink.SeverityMin != "" && !notify.IsValidSeverity(sink.SeverityMin) {
+				return fmt.Errorf("notifications.sinks[%d].severity_min must be one of info|warning|error|critical, got %q", i, sink.SeverityMin)
+			}
+			if sink.TimeoutS < 0 || sink.TimeoutS > 120 {
+				return fmt.Errorf("notifications.sinks[%d].timeout_s must be between 0 and 120, got %d", i, sink.TimeoutS)
+			}
+			if sink.BurstPerMin < 0 {
+				return fmt.Errorf("notifications.sinks[%d].burst_per_min must be >= 0, got %d", i, sink.BurstPerMin)
+			}
+			for _, t := range sink.Events {
+				if !notify.IsValidType(t) {
+					return fmt.Errorf("notifications.sinks[%d].events: unknown event type %q (known: %s)", i, t, strings.Join(notify.KnownTypes(), ", "))
+				}
+			}
 		}
 	}
 	// Vision drop 标记预算(秒):负值是无意义配置;超过一小时说明配错了

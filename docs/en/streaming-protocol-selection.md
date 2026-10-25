@@ -18,8 +18,9 @@ Requiring the user to pick one "default protocol" in Settings that's wrong for s
 
 **Audio** (since 0.11.0): WebRTC (WHEP) muxes G.711 and Opus audio directly into the
 track (zero transcoding); WebSocket players use the shared audio-WS endpoint (G.711
-everywhere; AAC/Opus need WebCodecs, i.e. HTTPS or localhost); HLS/HTTP-FLV/MJPEG
-polling carry no live audio. Recording-playback audio (G.711/AAC/Opus) is decoded
+everywhere; AAC/Opus need WebCodecs, i.e. HTTPS or localhost); HLS/HTTP-FLV carries live
+audio for **AAC sources** since #1066 (classic FLV supports AAC only; G.711/Opus
+await an Enhanced-FLV decision); HLS and MJPEG polling carry no live audio. Recording-playback audio (G.711/AAC/Opus) is decoded
 natively by the browser's MP4 player and is unaffected by protocol choice.
 
 ---
