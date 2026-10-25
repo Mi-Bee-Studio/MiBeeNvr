@@ -66,8 +66,8 @@ github.com/fsnotify/fsnotify v1.4.9 h1:hsms1Qyu0jgnwNXIxa+/V/PDsU6CfLf6CNO8H7IWo
 github.com/fsnotify/fsnotify v1.4.9/go.mod h1:znqG4EE+3YCdAaPaxE2ZRY/06pZUdp0tY4IgpuI1SZQ=
 github.com/ghettovoice/gosip v0.0.0-20260919124345-798b72cc95a2 h1:t4lr+ZXZzqOzzd0zLqR2Y87p6AnwFyuDSsJqbGsidf0=
 github.com/ghettovoice/gosip v0.0.0-20260919124345-798b72cc95a2/go.mod h1:Cb2Ioas/4d5T9XUMFKLxjMxjmZVBONNrICOyiDdS4Xw=
-github.com/go-chi/chi/v5 v5.3.2 h1:5YQkICvTCSZ25hoRsyJazN0scjzKGiu4VAUc7H1o1nY=
-github.com/go-chi/chi/v5 v5.3.2/go.mod h1:R+tYY2hNuVUUjxoPtqUdgBqevM9s9njzkTLutVsOCto=
+github.com/go-chi/chi/v5 v5.5.0 h1:xdKQ1dJmVJsmgahrXSKhUx8NyVPzpwdlyrrQFpMPJgg=
+github.com/go-chi/chi/v5 v5.5.0/go.mod h1:d1IG7GtKPSjPyBP365PH8sAGVHk3qfB/IhjFNRH1wWM=
 github.com/go-test/deep v1.1.0 h1:WOcxcdHcvdgThNXjw0t76K42FXTU7HpNQWHpA2HHNlg=
 github.com/go-test/deep v1.1.0/go.mod h1:5C2ZWiW0ErCdrYzpqxLbTX7MG14M9iiw8DgHncVwcsE=
 github.com/gobwas/httphead v0.1.0 h1:exrUm0f4YX0L7EBwZHuCF4GDp8aJfVeBrlLQrs6NqWU=
@@ -121,10 +121,8 @@ github.com/mattn/go-isatty v0.0.24/go.mod h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI
 github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b/go.mod h1:01TrycV0kFyexm33Z7vhZRXopbI8J3TDReVlkTgMUxE=
 github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d h1:5PJl274Y63IEHC+7izoQE9x6ikvDFZS2mDVS3drnohI=
 github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d/go.mod h1:01TrycV0kFyexm33Z7vhZRXopbI8J3TDReVlkTgMUxE=
-github.com/mickeyzzc/gb28181-go v0.13.1-0.20261024083346-637c417ae4a2 h1:M2dRoPL7McPmKWRGqHNWXGDIgLr/EaIXWKXuNahwlcE=
-github.com/mickeyzzc/gb28181-go v0.13.1-0.20261024083346-637c417ae4a2/go.mod h1:BHoRPKNAn9T8uPDFuYGl2ybBNDA5+IHNbyLsb3v230g=
-github.com/mickeyzzc/onvif-go/v2 v2.5.1-0.20261023221007-bd4d7337be19 h1:h0VGuA3Sz9XhKLZ4AVAKxZROfWXVQxyeGzIZTm07T/0=
-github.com/mickeyzzc/onvif-go/v2 v2.5.1-0.20261023221007-bd4d7337be19/go.mod h1:Ev+Uh2j6Ii6pJ5JrHm50wv4ZburLr97GZwTYovj0YsU=
+github.com/mickeyzzc/gb28181-go v0.14.0 h1:lURVt51B3PJJMiMySEYkBfBOtUcRl1hPxIEd6kaCPpk=
+github.com/mickeyzzc/gb28181-go v0.14.0/go.mod h1:BHoRPKNAn9T8uPDFuYGl2ybBNDA5+IHNbyLsb3v230g=
 github.com/mickeyzzc/onvif-go/v2 v2.6.0 h1:EcpCkXSa3NnFcMCe/0Wa28Y6WCd344jppnZZlybEaqk=
 github.com/mickeyzzc/onvif-go/v2 v2.6.0/go.mod h1:Ev+Uh2j6Ii6pJ5JrHm50wv4ZburLr97GZwTYovj0YsU=
 github.com/miekg/dns v1.1.73 h1:uhT8nJxmTrPJYClxVxTCX+CVn6qnzSiybRk72Z6DgrE=

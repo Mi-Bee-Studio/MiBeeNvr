@@ -13,7 +13,7 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fclairamb/ftpserverlib v0.32.4
 	github.com/ghettovoice/gosip v0.0.0-20260919124345-798b72cc95a2
-	github.com/go-chi/chi/v5 v5.3.2
+	github.com/go-chi/chi/v5 v5.5.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.20.0
@@ -54,7 +54,7 @@ require (
 )
 
 require (
-	github.com/mickeyzzc/gb28181-go v0.13.1-0.20261024083346-637c417ae4a2
+	github.com/mickeyzzc/gb28181-go v0.14.0
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )
