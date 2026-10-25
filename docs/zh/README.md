@@ -71,6 +71,7 @@
 | [AI 检测调优](ai-detection-tuning.md) | 浏览器端 YOLO 检测：灵敏度、类别、性能 |
 | [MQTT 集成](mqtt-integration.md) | 智能家居事件触发录像 |
 | [Webhook 集成](webhook-integration.md) | HMAC 签名触发端点 |
+| [告警通知](notifications.md) | 告警 Webhook 转发（mibee-alert/1 报文与接收端要点） |
 | [Home Assistant](home-assistant.md) | HA 相机/REST/传感器集成 |
 | [WebDAV / FTP](webdav-ftp.md) | WebDAV 与 FTP 文件访问——对比与快速上手 |
 | [WebDAV 集成](webdav-integration.md) | 内置 WebDAV 服务器详解 |

@@ -108,6 +108,50 @@ export interface RecordingSettingsConfig {
   default_enabled?: boolean;
 }
 
+/** One outbound alert webhook receiver (`notifications.sinks[]`). */
+export interface NotificationSinkSettings {
+  name: string;
+  url: string;
+  /** Never returned by GET (token_configured instead). Blank on write keeps
+   *  the existing secret for the same-named sink. */
+  token?: string;
+  token_configured?: boolean;
+  events?: string[];
+  severity_min?: string;
+  timeout_s?: number;
+  burst_per_min?: number;
+}
+
+/** The `notifications` settings section — outbound alert forwarding. */
+export interface NotificationsSettingsConfig {
+  enabled?: boolean;
+  base_url?: string;
+  /** Never returned by GET (api_key_configured instead). Blank on write
+   *  keeps the existing key. */
+  api_key?: string;
+  api_key_configured?: boolean;
+  sinks?: NotificationSinkSettings[];
+}
+
+/** Per-sink delivery counters (GET /api/notifications/status). */
+export interface NotificationSinkStats {
+  name: string;
+  url: string;
+  sent_total: number;
+  failed_total: number;
+  retried_total: number;
+  dropped_queue: number;
+  dropped_rate: number;
+  dropped_filter: number;
+  queue_depth: number;
+}
+
+export interface NotificationsStatus {
+  enabled: boolean;
+  types: string[];
+  sinks: NotificationSinkStats[];
+}
+
 export interface SettingsConfig {
   cleanup: CleanupConfig;
   recording?: RecordingSettingsConfig;
@@ -118,6 +162,7 @@ export interface SettingsConfig {
   gb28181?: GB28181Config;
   doorbell?: DoorbellSettingsConfig;
   dlna?: DlnaSettingsConfig;
+  notifications?: NotificationsSettingsConfig;
   timezone?: string; // "Local", "UTC", or IANA timezone name
   timezone_display?: string; // Human-readable timezone label (e.g. "Asia/Shanghai (UTC+8)")
   server?: { listen?: string }; // listen address ":9090" — changed via Settings UI
@@ -269,6 +314,25 @@ export async function updateSettings(
  *  pending-restart state the settings panel surfaces. */
 export async function getDoorbellStatus(signal?: AbortSignal): Promise<DoorbellStatus> {
   return apiRequest<DoorbellStatus>('/doorbell/status', { signal });
+}
+
+/** Outbound alert forwarding runtime state: enabled flag, per-sink delivery
+ *  counters, and the event-type vocabulary (drives the type checkboxes). */
+export async function getNotificationsStatus(signal?: AbortSignal): Promise<NotificationsStatus> {
+  return apiRequest<NotificationsStatus>('/notifications/status', { signal });
+}
+
+/** Enqueue a notify.test alert to every configured sink (bypasses filters).
+ *  202 = queued — poll getNotificationsStatus counters for the outcome. */
+export async function sendTestNotification(
+  opts?: { severity?: string; title?: string },
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>('/notifications/test', {
+    method: 'POST',
+    body: JSON.stringify({ severity: opts?.severity ?? '', title: opts?.title ?? '' }),
+    signal,
+  });
 }
 
 // Recording-root choices (#395): the current storage.root_dir plus extra

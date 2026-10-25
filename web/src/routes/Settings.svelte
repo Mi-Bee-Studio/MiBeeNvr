@@ -11,6 +11,7 @@
     Radio,
     RadioTower,
     BellRing,
+    Bell,
     Tv,
     BrainCircuit,
     Film,
@@ -27,6 +28,7 @@
   import GB28181Panel from './settings/GB28181Panel.svelte';
   import DoorbellPanel from './settings/DoorbellPanel.svelte';
   import DlnaPanel from './settings/DlnaPanel.svelte';
+  import NotificationsPanel from './settings/NotificationsPanel.svelte';
   import AIPanel from './settings/AIPanel.svelte';
   import ProcessingPanel from './settings/ProcessingPanel.svelte';
   import UpdatePanel from './settings/UpdatePanel.svelte';
@@ -42,6 +44,7 @@
     { id: 'gb28181', label: t('settings.sidebar.gb28181'), icon: RadioTower },
     { id: 'doorbell', label: t('settings.sidebar.doorbell'), icon: BellRing },
     { id: 'dlna', label: t('settings.sidebar.dlna'), icon: Tv },
+    { id: 'notifications', label: t('settings.sidebar.notifications'), icon: Bell },
     { id: 'p2p', label: t('settings.sidebar.p2p'), icon: Globe },
     { id: 'ai', label: t('settings.sidebar.ai'), icon: BrainCircuit },
     { id: 'processing', label: t('settings.sidebar.processing'), icon: Film },
@@ -205,6 +208,9 @@
         </div>
         <div class={activeCategory === 'dlna' ? '' : 'hidden'}>
           <DlnaPanel />
+        </div>
+        <div class={activeCategory === 'notifications' ? '' : 'hidden'}>
+          <NotificationsPanel />
         </div>
         <div class={activeCategory === 'ai' ? '' : 'hidden'}>
           <AIPanel />
