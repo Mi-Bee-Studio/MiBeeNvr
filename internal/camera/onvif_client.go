@@ -3,7 +3,6 @@ package camera
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -196,9 +195,6 @@ func (cm *CameraManager) GetImagingController(ctx context.Context, cameraID stri
 	if ctrl == nil {
 		return nil, fmt.Errorf("failed to create imaging controller for camera %q", cameraID)
 	}
-	endpoint := client.GetEndpoint()
-	imgEndpoint := strings.TrimSuffix(endpoint, "/device_service") + "/imaging_service"
-	ctrl.SetImagingEndpoint(imgEndpoint)
 	return ctrl, nil
 }
 

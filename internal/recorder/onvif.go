@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -179,12 +180,20 @@ func (r *ONVIFRecorder) Start(ctx context.Context) error {
 		return fmt.Errorf("onvif device returned empty stream URI — check device credentials")
 	}
 	// The stream URI's host may lag behind the ONVIF endpoint after a DHCP
-	// reassignment (device still advertises its old IP). Rewrite it to the
-	// known-good endpoint host so the RTSP dial reaches the right address.
+	// reassignment (device still advertises its old IP). But a differing host
+	// is not always stale — the endpoint may legitimately ride a proxy, NAT
+	// reflection or management address while the stream address is direct
+	// (#1076). The device's own address wins while its RTSP port answers;
+	// only an unreachable advertised host is rewritten to the endpoint's.
 	if fixed := RewriteStaleStreamHost(rtspURL, r.cfg.ONVIFEndpoint); fixed != rtspURL {
-		onvifRecLogger.Info("rewrote stale stream URI host to match ONVIF endpoint",
-			"camera_id", r.cfg.CameraID, "old", rtspURL, "new", fixed)
-		rtspURL = fixed
+		if rtspHostReachable(rtspURL, StreamHostProbeTimeout) {
+			onvifRecLogger.Info("stream URI host differs from ONVIF endpoint but is reachable; keeping device-advertised address",
+				"camera_id", r.cfg.CameraID, "rtsp_url", slogx.RedactURL(rtspURL))
+		} else {
+			onvifRecLogger.Warn("rewrote stale stream URI host to match ONVIF endpoint (advertised host unreachable)",
+				"camera_id", r.cfg.CameraID, "old", rtspURL, "new", fixed)
+			rtspURL = fixed
+		}
 	}
 	onvifRecLogger.Info("resolved ONVIF stream URI", "camera_id", r.cfg.CameraID, "rtsp_url", slogx.RedactURL(rtspURL))
 
@@ -490,6 +499,45 @@ func deriveRTSPURL(httpURL string) string {
 	u.User = nil
 	u.Host = u.Hostname() + ":554"
 	return u.String()
+}
+
+// StreamHostProbeTimeout bounds the TCP reachability probe that gates the
+// stale-host rewrite (#1076). Unreachable LAN hosts normally refuse fast;
+// the cap covers firewalled addresses where the dial would hang.
+const StreamHostProbeTimeout = 1500 * time.Millisecond
+
+// rtspHostReachable reports whether the RTSP host:port in rtspURL answers a
+// TCP dial. A URL without an explicit port probes 554 (the RTSP default).
+func rtspHostReachable(rtspURL string, timeout time.Duration) bool {
+	u, err := url.Parse(rtspURL)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	addr := u.Host
+	if u.Port() == "" {
+		addr = net.JoinHostPort(u.Hostname(), "554")
+	}
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// ResolveStreamHost applies the #1076 stale-host policy to an
+// ONVIF-advertised stream URI: the device's own address wins while its RTSP
+// port is reachable — legitimate split setups (ONVIF endpoint via a proxy,
+// NAT reflection or a management address while the stream address is direct)
+// keep working. Only an unreachable advertised host is treated as stale (DHCP
+// reassignment) and rewritten to the ONVIF endpoint's host, preserving the
+// stream's own port. Returns the URL to dial and whether it was rewritten.
+func ResolveStreamHost(rtspURL, onvifEndpoint string) (string, bool) {
+	fixed := RewriteStaleStreamHost(rtspURL, onvifEndpoint)
+	if fixed == rtspURL || rtspHostReachable(rtspURL, StreamHostProbeTimeout) {
+		return rtspURL, false
+	}
+	return fixed, true
 }
 
 // RewriteStaleStreamHost fixes a GetStreamUri response whose host lags behind

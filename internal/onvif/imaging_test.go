@@ -2,7 +2,12 @@ package onvif
 
 import (
 	"context"
+	"reflect"
+	"strings"
+	"unsafe"
+
 	"fmt"
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +78,32 @@ func newImagingTestServer(t *testing.T, handler func(body string, w http.Respons
 	}))
 }
 
+// setImagingEndpoint pins the unexported imagingEndpoint field on an
+// onvifgo.Client (tests run against httptest servers that don't support the
+// full Initialize handshake — same technique as the PTZ tests).
+func setImagingEndpoint(t *testing.T, client *onvifgo.Client, url string) {
+	t.Helper()
+	v := reflect.ValueOf(client).Elem()
+	f := v.FieldByName("imagingEndpoint")
+	require.True(t, f.IsValid(), "imagingEndpoint field not found on onvifgo.Client")
+	ptr := (*string)(unsafe.Pointer(f.UnsafeAddr()))
+	*ptr = url
+}
+
+// newImagingTestClient creates an onvif-go Client with imagingEndpoint pointed
+// at the test server.
+func newImagingTestClient(t *testing.T, server *httptest.Server) *onvifgo.Client {
+	t.Helper()
+	client, err := onvifgo.NewClient(
+		server.URL,
+		onvifgo.WithCredentials("admin", "password"),
+		onvifgo.WithAuthFallback(onvifgo.AuthPasswordText, onvifgo.AuthHTTPBasic, onvifgo.AuthNone),
+	)
+	require.NoError(t, err)
+	setImagingEndpoint(t, client, server.URL)
+	return client
+}
+
 // --- ImagingControllerImpl tests ---
 
 func TestImagingController_ImplementsInterface(t *testing.T) {
@@ -87,8 +118,7 @@ func TestImagingController_GetImagingSettings_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	settings, err := ctrl.GetImagingSettings(context.Background())
 	require.NoError(t, err)
@@ -98,13 +128,20 @@ func TestImagingController_GetImagingSettings_Success(t *testing.T) {
 	require.Equal(t, 0.8, settings.Sharpness)
 }
 
-func TestImagingController_GetImagingSettings_NoEndpoint(t *testing.T) {
+func TestImagingController_NilClientGuard(t *testing.T) {
 	ctrl := NewImagingController(nil, "profile1")
-	// Don't set imaging endpoint
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "imaging endpoint not configured")
+	require.Contains(t, err.Error(), "no ONVIF client")
+
+	err = ctrl.SetImagingSettings(context.Background(), ImagingSettings{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no ONVIF client")
+
+	_, err = ctrl.GetImagingOptions(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no ONVIF client")
 }
 
 func TestImagingController_GetImagingSettings_SOAPError(t *testing.T) {
@@ -115,8 +152,7 @@ func TestImagingController_GetImagingSettings_SOAPError(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.Error(t, err)
@@ -126,14 +162,13 @@ func TestImagingController_GetImagingSettings_SOAPError(t *testing.T) {
 func TestImagingController_SetImagingSettings_Success(t *testing.T) {
 	server := newImagingTestServer(t, func(body string, w http.ResponseWriter) {
 		require.Contains(t, body, "SetImagingSettings")
-		require.Contains(t, body, "0.500000") // brightness
-		require.Contains(t, body, "0.700000") // saturation
+		require.Contains(t, body, "0.5") // brightness
+		require.Contains(t, body, "0.7") // saturation
 		w.Write([]byte(soapImagingSuccessResponse("SetImagingSettings")))
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	settings := ImagingSettings{
 		Brightness: 0.5,
@@ -154,12 +189,12 @@ func TestImagingController_SetImagingSettings_Success(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestImagingController_SetImagingSettings_NoEndpoint(t *testing.T) {
+func TestImagingController_SetImagingSettings_NoClientGuarded(t *testing.T) {
 	ctrl := NewImagingController(nil, "profile1")
 
 	err := ctrl.SetImagingSettings(context.Background(), ImagingSettings{})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "imaging endpoint not configured")
+	require.Contains(t, err.Error(), "no ONVIF client")
 }
 
 func TestImagingController_SetImagingSettings_SOAPError(t *testing.T) {
@@ -169,8 +204,7 @@ func TestImagingController_SetImagingSettings_SOAPError(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	err := ctrl.SetImagingSettings(context.Background(), ImagingSettings{Brightness: 0.5})
 	require.Error(t, err)
@@ -184,8 +218,7 @@ func TestImagingController_GetImagingOptions_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	options, err := ctrl.GetImagingOptions(context.Background())
 	require.NoError(t, err)
@@ -197,12 +230,12 @@ func TestImagingController_GetImagingOptions_Success(t *testing.T) {
 	require.NotNil(t, options.Sharpness)
 }
 
-func TestImagingController_GetImagingOptions_NoEndpoint(t *testing.T) {
+func TestImagingController_GetImagingOptions_NoClientGuarded(t *testing.T) {
 	ctrl := NewImagingController(nil, "profile1")
 
 	_, err := ctrl.GetImagingOptions(context.Background())
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "imaging endpoint not configured")
+	require.Contains(t, err.Error(), "no ONVIF client")
 }
 
 func TestImagingController_GetImagingOptions_SOAPError(t *testing.T) {
@@ -212,8 +245,7 @@ func TestImagingController_GetImagingOptions_SOAPError(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	_, err := ctrl.GetImagingOptions(context.Background())
 	require.Error(t, err)
@@ -233,9 +265,7 @@ func TestImagingController_SetCredentials(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
-	ctrl.SetCredentials("admin", "secret123")
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.NoError(t, err)
@@ -246,41 +276,41 @@ func TestImagingController_SetCredentials(t *testing.T) {
 
 func TestImagingController_AuthFallbackToBasic(t *testing.T) {
 	t.Helper()
-	// When WS-Security is rejected (401), doRawSOAP should fall back to HTTP Basic Auth.
+	// The device rejects every WS-Security-shaped body (both digest and
+	// PasswordText carry a UsernameToken) but accepts HTTP Basic Auth.
 	var attempt int
 	var lastAuthHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
 		attempt++
 		lastAuthHeader = r.Header.Get("Authorization")
-		// First request (WS-Security): reject with 401.
-		if attempt == 1 {
+		if strings.Contains(string(bodyBytes), "UsernameToken") {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`<error>unauthorized</error>`))
 			return
 		}
-		// Second request (Basic Auth): accept.
 		w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
 		w.Write([]byte(soapImagingSettingsResponse(0.5, 0.5, 0.5, 0.5)))
 	}))
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
-	ctrl.SetCredentials("admin", "secret123")
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 2, attempt, "should have tried WS-Security then Basic Auth")
+	require.Equal(t, 3, attempt, "ladder: digest, then PasswordText, then HTTP Basic")
 	require.Contains(t, lastAuthHeader, "Basic ")
 }
 
 func TestImagingController_AuthFallbackToNone(t *testing.T) {
 	t.Helper()
-	// When both WS-Security and Basic Auth are rejected, fall back to no-auth.
+	// The device rejects every WS-Security-shaped body AND HTTP Basic —
+	// only the unauthenticated attempt passes.
 	var attempt int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
 		attempt++
-		if attempt <= 2 {
+		if strings.Contains(string(bodyBytes), "UsernameToken") || r.Header.Get("Authorization") != "" {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`<error>unauthorized</error>`))
 			return
@@ -290,13 +320,11 @@ func TestImagingController_AuthFallbackToNone(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
-	ctrl.SetCredentials("admin", "secret123")
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 3, attempt, "should have tried WS-Security, Basic, then NoAuth")
+	require.Equal(t, 4, attempt, "ladder: digest, PasswordText, Basic, then NoAuth")
 }
 
 func TestImagingController_NoCredentialsSkipsAuthStrategies(t *testing.T) {
@@ -310,13 +338,14 @@ func TestImagingController_NoCredentialsSkipsAuthStrategies(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
-	// No SetCredentials call — empty username.
-
-	_, err := ctrl.GetImagingSettings(context.Background())
+	bare, err := onvifgo.NewClient(server.URL)
 	require.NoError(t, err)
-	require.Equal(t, 1, attempt, "should only try no-auth once")
+	setImagingEndpoint(t, bare, server.URL)
+	ctrl := NewImagingController(bare, "profile1")
+
+	_, err = ctrl.GetImagingSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, attempt, "without credentials the single digest attempt carries no header")
 }
 
 func TestImagingController_ConcurrentOperations(t *testing.T) {
@@ -332,8 +361,7 @@ func TestImagingController_ConcurrentOperations(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 10)
@@ -365,92 +393,47 @@ func TestImagingController_InvalidXMLResponse(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "parse imaging settings response")
+	require.Contains(t, err.Error(), "get imaging settings failed")
 }
 
-func TestParseImagingSettingsResponse_InvalidXML(t *testing.T) {
-	_, err := parseImagingSettingsResponse([]byte("invalid xml"))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "parse imaging settings response")
-}
-
-func TestParseImagingOptionsResponse_InvalidXML(t *testing.T) {
-	_, err := parseImagingOptionsResponse([]byte("invalid xml"))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "parse imaging options response")
-}
-
-func TestBuildExposureSettingsXML_AutoMode(t *testing.T) {
+func TestToOnvifImagingSettings_ModeNormalization(t *testing.T) {
 	t.Helper()
-	xml := buildExposureSettingsXML(ExposureSettings{Mode: "auto", ExposureTime: 0.01, Gain: 0.5})
-	require.Contains(t, xml, "AUTO")
-	require.Contains(t, xml, "0.010000")
-	require.Contains(t, xml, "0.500000")
+	mapped := toOnvifImagingSettings(ImagingSettings{
+		Exposure:     ExposureSettings{Mode: "manual", ExposureTime: 0.02, Gain: 1},
+		WhiteBalance: WhiteBalanceSettings{Mode: "auto"},
+	})
+	require.Equal(t, "MANUAL", mapped.Exposure.Mode)
+	require.Equal(t, 0.02, mapped.Exposure.ExposureTime)
+	require.Equal(t, 1.0, mapped.Exposure.Gain)
+	require.Equal(t, "AUTO", mapped.WhiteBalance.Mode)
 }
 
-func TestBuildExposureSettingsXML_ManualMode(t *testing.T) {
+// TestToOnvifImagingSettings_IndependentGains ensures CrGain and CbGain stay
+// independent values (they must not be forced equal — red and blue channel
+// gains are distinct).
+func TestToOnvifImagingSettings_IndependentGains(t *testing.T) {
 	t.Helper()
-	xml := buildExposureSettingsXML(ExposureSettings{Mode: "manual", ExposureTime: 0.02, Gain: 1.0})
-	require.Contains(t, xml, "MANUAL")
-	require.Contains(t, xml, "0.020000")
-	require.Contains(t, xml, "1.000000")
+	mapped := toOnvifImagingSettings(ImagingSettings{
+		WhiteBalance: WhiteBalanceSettings{Mode: "manual", CrGain: 1.5, CbGain: 2.5},
+	})
+	require.Equal(t, 1.5, mapped.WhiteBalance.CrGain)
+	require.Equal(t, 2.5, mapped.WhiteBalance.CbGain)
 }
 
-func TestBuildWhiteBalanceSettingsXML_AutoMode(t *testing.T) {
-	t.Helper()
-	xml := buildWhiteBalanceSettingsXML(WhiteBalanceSettings{Mode: "auto", ColorTemperature: 5500})
-	require.Contains(t, xml, "AUTO")
-	require.Contains(t, xml, "5500")
-}
-
-func TestBuildWhiteBalanceSettingsXML_ManualMode(t *testing.T) {
-	t.Helper()
-	xml := buildWhiteBalanceSettingsXML(WhiteBalanceSettings{Mode: "manual", ColorTemperature: 3200})
-	require.Contains(t, xml, "MANUAL")
-	require.Contains(t, xml, "3200")
-}
-
-// TestBuildWhiteBalanceSettingsXML_IndependentGains ensures CrGain and CbGain are
-// emitted as independent values (the old code forced both to ColorTemperature,
-// which is wrong — red and blue channel gains are distinct).
-func TestBuildWhiteBalanceSettingsXML_IndependentGains(t *testing.T) {
-	t.Helper()
-	xml := buildWhiteBalanceSettingsXML(WhiteBalanceSettings{Mode: "manual", CrGain: 1.5, CbGain: 2.5})
-	require.Contains(t, xml, "<tt:CrGain>1.500000</tt:CrGain>")
-	require.Contains(t, xml, "<tt:CbGain>2.500000</tt:CbGain>")
-}
-
-// TestBuildWhiteBalanceSettingsXML_ColorTemperatureFallback preserves legacy
+// TestToOnvifImagingSettings_ColorTemperatureFallback preserves legacy
 // behavior: when only ColorTemperature is set (CrGain/CbGain both zero), it is
 // used for both gains.
-func TestBuildWhiteBalanceSettingsXML_ColorTemperatureFallback(t *testing.T) {
+func TestToOnvifImagingSettings_ColorTemperatureFallback(t *testing.T) {
 	t.Helper()
-	xml := buildWhiteBalanceSettingsXML(WhiteBalanceSettings{Mode: "auto", ColorTemperature: 5500})
-	require.Contains(t, xml, "<tt:CrGain>5500.000000</tt:CrGain>")
-	require.Contains(t, xml, "<tt:CbGain>5500.000000</tt:CbGain>")
-}
-
-func TestTruncateStr_Short(t *testing.T) {
-	t.Helper()
-	result := truncateStr("hello", 10)
-	require.Equal(t, "hello", result)
-}
-
-func TestTruncateStr_ExactlyMax(t *testing.T) {
-	t.Helper()
-	result := truncateStr("hello", 5)
-	require.Equal(t, "hello", result)
-}
-
-func TestTruncateStr_TooLong(t *testing.T) {
-	t.Helper()
-	result := truncateStr("hello world", 5)
-	require.Equal(t, "hello...", result)
+	mapped := toOnvifImagingSettings(ImagingSettings{
+		WhiteBalance: WhiteBalanceSettings{Mode: "auto", ColorTemperature: 5500},
+	})
+	require.Equal(t, 5500.0, mapped.WhiteBalance.CrGain)
+	require.Equal(t, 5500.0, mapped.WhiteBalance.CbGain)
 }
 
 func TestImagingController_SOAPBodyContainsProfileToken(t *testing.T) {
@@ -461,8 +444,7 @@ func TestImagingController_SOAPBodyContainsProfileToken(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "my-video-token")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "my-video-token")
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.NoError(t, err)
@@ -477,8 +459,7 @@ func TestImagingController_SetImagingSettings_XMLStructure(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint(server.URL)
+	ctrl := NewImagingController(newImagingTestClient(t, server), "profile1")
 
 	err := ctrl.SetImagingSettings(context.Background(), ImagingSettings{
 		Brightness: 0.75,
@@ -489,17 +470,17 @@ func TestImagingController_SetImagingSettings_XMLStructure(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, capturedBody, "SetImagingSettings")
 	require.Contains(t, capturedBody, "profile1")
-	require.Contains(t, capturedBody, "0.750000")
-	require.Contains(t, capturedBody, "0.500000")
-	require.Contains(t, capturedBody, "0.250000")
-	require.Contains(t, capturedBody, "0.600000")
+	require.Contains(t, capturedBody, "0.75")
+	require.Contains(t, capturedBody, "0.5")
+	require.Contains(t, capturedBody, "0.25")
+	require.Contains(t, capturedBody, "0.6")
 }
 
 func TestImagingController_ServerDown(t *testing.T) {
 	t.Helper()
 	// Use a port that won't be listening
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint("http://127.0.0.1:1/imaging")
+	dead := &httptest.Server{URL: "http://127.0.0.1:1/imaging"}
+	ctrl := NewImagingController(newImagingTestClient(t, dead), "profile1")
 
 	_, err := ctrl.GetImagingSettings(context.Background())
 	require.Error(t, err)
@@ -511,8 +492,8 @@ func TestImagingController_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	ctrl := NewImagingController(nil, "profile1")
-	ctrl.SetImagingEndpoint("http://127.0.0.1:1/imaging")
+	dead := &httptest.Server{URL: "http://127.0.0.1:1/imaging"}
+	ctrl := NewImagingController(newImagingTestClient(t, dead), "profile1")
 
 	_, err := ctrl.GetImagingSettings(ctx)
 	require.Error(t, err)

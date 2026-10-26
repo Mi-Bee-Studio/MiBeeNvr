@@ -3,7 +3,6 @@ package onvif
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -351,48 +350,13 @@ func TestEnrichDevices_CapturesSerial(t *testing.T) {
 	host, port := testServerAddr(t, server)
 	endpoint := fmt.Sprintf("http://%s:%d/onvif/device_service", host, port)
 
-	devices := []DiscoveredDevice{{Endpoint: endpoint, Name: "pre-enrich"}}
-	enrichDevices(context.Background(), devices)
+	device := &DiscoveredDevice{Endpoint: endpoint, Name: "pre-enrich"}
+	EnrichDevice(context.Background(), device)
 
-	require.Equal(t, "SN12345", devices[0].Serial, "serial must be captured at discovery time")
-	require.Equal(t, "TestManufacturer", devices[0].Manufacturer)
-	require.Equal(t, "TestModel", devices[0].Model)
-	require.Equal(t, "V1.0", devices[0].Firmware)
+	require.Equal(t, "SN12345", device.Serial, "serial must be captured at discovery time")
+	require.Equal(t, "TestManufacturer", device.Manufacturer)
+	require.Equal(t, "TestModel", device.Model)
+	require.Equal(t, "V1.0", device.Firmware)
 }
 
 // --- readSnippet tests ---
-
-func TestReadSnippet(t *testing.T) {
-	t.Helper()
-	tests := []struct {
-		name string
-		r    io.Reader
-		want string
-	}{
-		{"short body", strings.NewReader("hello"), "hello"},
-		{"truncated to maxLen", strings.NewReader("0123456789ABCDEF"), "012345"}, // maxLen=6 below
-		{"nil reader", nil, ""},
-		{"empty reader", strings.NewReader(""), ""},
-		{"whitespace collapsed", strings.NewReader("  line1\nline2  "), "line1 line2"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Helper()
-			// Use maxLen=6 for the truncated case, 256 otherwise.
-			maxLen := 256
-			if tc.name == "truncated to maxLen" {
-				maxLen = 6
-			}
-			got := readSnippet(tc.r, maxLen)
-			if tc.name == "truncated to maxLen" {
-				if len(got) > 6 {
-					t.Errorf("readSnippet returned %d chars, want <= 6", len(got))
-				}
-				return
-			}
-			if got != tc.want {
-				t.Errorf("readSnippet() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}

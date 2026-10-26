@@ -91,8 +91,10 @@ func EnrichDevice(ctx context.Context, dev *DiscoveredDevice) {
 	if endpoint == "" {
 		return
 	}
-	info, err := fetchDeviceInformation(ctx, endpoint)
-	if err != nil || info == nil {
+	lib := &discovery.Device{XAddrs: []string{endpoint}}
+	discovery.EnrichDevices(ctx, []*discovery.Device{lib})
+	info := lib.Info
+	if info == nil {
 		return
 	}
 	if dev.Name == "" && info.Manufacturer != "" {

@@ -2,11 +2,8 @@ package onvif
 
 import (
 	"context"
-	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -30,12 +27,6 @@ type Client struct {
 
 	cachedCapabilities *DeviceCapabilitiesDetailed
 	capsMu             sync.Mutex
-
-	// mediaRoute is the advertised media XAddr for trt:* raw SOAP, resolved
-	// once via GetServices (#723). Guarded by mu — getRawStreamURI callers
-	// already hold it.
-	mediaRoute         string
-	mediaRouteResolved bool
 }
 
 // NewClient creates a new ONVIF client for a specific device.
@@ -48,15 +39,18 @@ func NewClient(endpoint, username, password string) *Client {
 	}
 }
 
-// newLibClient builds the library client with the NVR's default auth ladder:
-// digest first (the library default), then password-text, HTTP basic and none.
-// The extra rungs cover old firmwares that answer a rejected digest with an
-// empty 200 body instead of a 401/fault (#1051, onvif-go#140): the library
-// advances the ladder on such bodies and pins the first mode that works.
+// newLibClient builds the library client with the NVR's default configuration:
+// the full auth ladder (digest first, then password-text, HTTP basic and none)
+// and automatic clock-skew measurement. The extra ladder rungs cover old
+// firmwares that answer a rejected digest with an empty 200 body instead of a
+// 401/fault (#1051, onvif-go#140); the auto skew makes the very first
+// authenticated request carry device-correct digest timestamps (Hikvision
+// replay-window rejections).
 func newLibClient(endpoint, username, password string, opts ...onvifgo.ClientOption) (*onvifgo.Client, error) {
 	opts = append([]onvifgo.ClientOption{
 		onvifgo.WithCredentials(username, password),
 		onvifgo.WithAuthFallback(onvifgo.AuthPasswordText, onvifgo.AuthHTTPBasic, onvifgo.AuthNone),
+		onvifgo.WithAutoClockSkew(),
 	}, opts...)
 
 	return onvifgo.NewClient(endpoint, opts...)
@@ -83,19 +77,6 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	if err := onvifClient.Initialize(ctx); err != nil {
 		return fmt.Errorf("initialize ONVIF client: %w", err)
-	}
-
-	// Measure the device's clock skew and apply it to the SOAP client so all
-	// subsequent WS-Security digest auth uses the device's view of "now".
-	// This fixes Hikvision cameras that reject digests when the NVR's clock
-	// diverges from the camera's by more than the replay window (~5 min).
-	// Best-effort: if the skew can't be measured (device doesn't respond to
-	// GetSystemDateAndTime), the client falls back to local time (legacy behavior).
-	skew := c.measureClockSkew(ctx, c.endpoint)
-	if skew != 0 {
-		onvifClient.SetClockSkew(skew)
-		logger.Info("applied clock skew correction for ONVIF digest auth",
-			"endpoint", c.endpoint, "skew_seconds", skew.Seconds())
 	}
 
 	c.client = onvifClient
@@ -178,18 +159,6 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 		return nil, fmt.Errorf("get stream URI: %w", err)
 	}
 
-	// onvif-go may return empty URI due to XML namespace parsing issues
-	// with some devices. Fallback to raw SOAP request if URI is empty.
-	if strings.TrimSpace(uri.URI) == "" {
-		logger.Warn("onvif-go returned empty URI, trying raw SOAP fallback", "profile_token", profileToken)
-		rawURI, rawErr := c.getRawStreamURI(ctx, profileToken, "RTSP")
-		if rawErr != nil {
-			logger.Warn("raw SOAP fallback failed", "error", rawErr)
-		} else if strings.TrimSpace(rawURI) != "" {
-			uri.URI = rawURI
-		}
-	}
-
 	logger.Info("GetStreamURI response", "profile_token", profileToken, "uri", uri.URI)
 
 	return mapStreamURI(uri, profileToken), nil
@@ -197,104 +166,24 @@ func (c *Client) GetStreamURI(ctx context.Context, profileToken string) (*Stream
 
 // GetStreamURIWithProtocol requests a stream URI with a specific transport protocol.
 // Valid protocols: "RTSP" (default), "HTTP" (RTSP-over-HTTP tunneling), "UDP".
-// This uses raw SOAP since onvif-go doesn't support protocol selection.
 func (c *Client) GetStreamURIWithProtocol(ctx context.Context, profileToken, protocol string) (*StreamInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.ready {
 		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
 	}
-	rawURI, err := c.getRawStreamURI(ctx, profileToken, protocol)
+
+	uri, err := c.client.Media().GetStreamURIWithOptions(ctx, profileToken, onvifgo.StreamSetup{
+		Stream:    onvifgo.StreamRTPUnicast,
+		Transport: &onvifgo.Transport{Protocol: protocol},
+	})
 	if err != nil {
+		// The library already rejects an empty Uri in the response
+		// (ErrEmptyMediaURI), so a successful return always carries a URI.
 		return nil, fmt.Errorf("get stream URI with protocol %q: %w", protocol, err)
 	}
-	if strings.TrimSpace(rawURI) == "" {
-		return nil, fmt.Errorf("device returned empty URI for protocol %q", protocol)
-	}
-	logger.Info("GetStreamURIWithProtocol response", "profile_token", profileToken, "protocol", protocol, "uri", rawURI)
-	return &StreamInfo{URI: rawURI, ProfileToken: profileToken}, nil
-}
-
-// getRawStreamURI sends a raw SOAP GetStreamUri request and parses the response.
-// This works around XML namespace parsing issues in onvif-go with some devices.
-// The request is routed to the device's advertised media endpoint when one is
-// known (#723): minimal devices reject trt:* on device_service.
-func (c *Client) getRawStreamURI(ctx context.Context, profileToken, protocol string) (string, error) {
-	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
- xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
- xmlns:tt="http://www.onvif.org/ver10/schema">
-  <s:Body>
-    <trt:GetStreamUri>
-      <trt:StreamSetup>
-        <tt:Stream>RTP-Unicast</tt:Stream>
-        <tt:Transport>
-          <tt:Protocol>%s</tt:Protocol>
-        </tt:Transport>
-      </trt:StreamSetup>
-      <trt:ProfileToken>%s</trt:ProfileToken>
-    </trt:GetStreamUri>
-  </s:Body>
-</s:Envelope>`, protocol, profileToken)
-
-	// Resolve the media endpoint, best-effort: a definitive "no media
-	// advertised" is cached; transport errors are retried on the next raw
-	// media call. On failure we keep the legacy device-endpoint behavior
-	// (strict devices fault trt:* there, and callers fall back to other
-	// transports).
-	if c.mediaRoute == "" && !c.mediaRouteResolved {
-		if m, err := resolveMediaEndpoint(ctx, c.endpoint); err != nil {
-			logger.Debug("GetServices media endpoint resolution failed, using device endpoint", "device", c.endpoint, "error", err)
-		} else {
-			c.mediaRouteResolved = true
-			if m != "" {
-				c.mediaRoute = m
-				logger.Info("routing media SOAP actions to advertised media endpoint", "device", c.endpoint, "media", m)
-			}
-		}
-	}
-	endpoint := c.endpoint
-	if c.mediaRoute != "" {
-		endpoint = c.mediaRoute
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/soap+xml")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	// Parse URI from XML response using regex-like approach
-	// Look for <tt:Uri> or <Uri> tag content
-	var envelope struct {
-		XMLName xml.Name `xml:"Envelope"`
-		Body    struct {
-			XMLName              xml.Name `xml:"Body"`
-			GetStreamURIResponse struct {
-				XMLName  xml.Name `xml:"GetStreamUriResponse"`
-				MediaURI struct {
-					URI string `xml:"Uri"`
-				} `xml:"MediaUri"`
-			} `xml:"GetStreamUriResponse"`
-		} `xml:"Body"`
-	}
-
-	if err := xml.Unmarshal(body, &envelope); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
-	}
-
-	return envelope.Body.GetStreamURIResponse.MediaURI.URI, nil
+	logger.Info("GetStreamURIWithProtocol response", "profile_token", profileToken, "protocol", protocol, "uri", uri.URI)
+	return &StreamInfo{URI: uri.URI, Protocol: protocol, ProfileToken: profileToken}, nil
 }
 
 // GetCapabilities retrieves device capabilities (PTZ, streaming, etc.).
@@ -397,119 +286,9 @@ func mapStreamURI(uri *onvifgo.MediaURI, profileToken string) *StreamInfo {
 	}
 }
 
-// PTZEndpoint returns the PTZ service endpoint URL derived from the device endpoint.
-// Format: http://host:port/onvif/ptz_service
-func (c *Client) PTZEndpoint() string {
-	return strings.Replace(c.endpoint, "device_service", "ptz_service", 1)
-}
-
 // DeviceEndpoint returns the device service endpoint URL (same as c.endpoint).
 func (c *Client) DeviceEndpoint() string {
 	return c.endpoint
-}
-
-// DoRawSOAPNoAuth sends a raw SOAP request without any authentication header.
-// Used as fallback for cameras with buggy per-service WS-Security validation.
-func (c *Client) DoRawSOAPNoAuth(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-	// No auth header — camera firmware rejects WS-Security on some services
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("SOAP request failed with status %d: %s", resp.StatusCode, truncateStr(string(body), 500))
-	}
-	return body, nil
-}
-
-// DoRawSOAPBasicAuth sends a raw SOAP request with HTTP Basic Auth.
-// Used as fallback for cameras that accept BasicAuth but reject WS-Security.
-func (c *Client) DoRawSOAPBasicAuth(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-	if c.username != "" {
-		req.SetBasicAuth(c.username, c.password)
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("SOAP request failed with status %d: %s", resp.StatusCode, truncateStr(string(body), 500))
-	}
-	return body, nil
-}
-
-// buildWSSecurityHeader creates a WS-Security header with UsernameToken using PasswordText.
-func (c *Client) buildWSSecurityHeader() string {
-	return `<s:Header><wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><wsse:UsernameToken><wsse:Username>` + c.username + `</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">` + c.password + `</wsse:Password></wsse:UsernameToken></wsse:Security></s:Header>`
-}
-
-// DoRawSOAPWithPasswordText sends a raw SOAP request with WS-Security UsernameToken (PasswordText).
-// The soapBody parameter should be a full SOAP envelope (with <s:Envelope> and <s:Body>).
-// This method injects the WS-Security header into the envelope before the <s:Body>.
-// Used as fallback for cameras that reject PasswordDigest but accept PasswordText.
-func (c *Client) DoRawSOAPWithPasswordText(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
-	// Inject WS-Security header before <s:Body>
-	bodyWithAuth := strings.Replace(soapBody, "<s:Body>", c.buildWSSecurityHeader()+"<s:Body>", 1)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(bodyWithAuth))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("SOAP request failed with status %d: %s", resp.StatusCode, truncateStr(string(body), 500))
-	}
-	return body, nil
-}
-
-// isAuthError checks if an error indicates WS-Security auth rejection by the camera.
-// This is used to trigger fallback to an alternate auth strategy (Basic → NoAuth, etc.).
-func isAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := err.Error()
-	return strings.Contains(s, "NotAuthorized") ||
-		strings.Contains(s, "status 401") ||
-		strings.Contains(s, "status 403") ||
-		strings.Contains(s, "status 400") ||
-		strings.Contains(s, "status 500") ||
-		strings.Contains(s, "status 502")
 }
 
 // NewPTZController creates a PTZController backed by this client's onvif-go connection.
@@ -520,7 +299,7 @@ func (c *Client) NewPTZController(profileToken string) PTZController {
 	if c.client == nil {
 		return nil
 	}
-	return NewPTZController(c.client, profileToken, c.PTZEndpoint(), c.username, c.password, c.DoRawSOAPWithPasswordText)
+	return NewPTZController(c.client, profileToken)
 }
 
 // NewDeviceManager creates a DeviceManager backed by this client's onvif-go connection.
@@ -531,7 +310,7 @@ func (c *Client) NewDeviceManager() DeviceManager {
 	if c.client == nil {
 		return nil
 	}
-	return NewDeviceManager(c.client, c.DeviceEndpoint(), c.username, c.password, c.DoRawSOAPWithPasswordText)
+	return NewDeviceManager(c.client)
 }
 
 // NewImagingController creates an ImagingController backed by this client's onvif-go connection.
@@ -542,9 +321,7 @@ func (c *Client) NewImagingController(profileToken string) *ImagingControllerImp
 	if c.client == nil {
 		return nil
 	}
-	ctrl := NewImagingController(c.client, profileToken)
-	ctrl.SetCredentials(c.username, c.password)
-	return ctrl
+	return NewImagingController(c.client, profileToken)
 }
 
 // GetEndpoint returns the device service endpoint URL.
@@ -588,4 +365,44 @@ func (c *Client) NewPushSubscriber(opts ...PushOption) EventSubscriber {
 		return nil
 	}
 	return NewPushSubscriber(lib.Events(), opts...)
+}
+
+// AuthDiagnosis is the result of probing why an ONVIF device rejects
+// credentials, mapped from the library's triage (onvif-go's DiagnoseAuth:
+// measure the device clock skew, retry the digest with device time, and
+// classify ok / clock-skew / bad-credentials).
+type AuthDiagnosis struct {
+	SkewDetected bool    // a significant clock skew is part of the picture
+	SkewSeconds  float64 // measured deviceTime − localTime, signed
+	Diagnosis    string  // human-readable explanation + suggested fix
+}
+
+// DiagnoseAuth runs the library's authentication triage against the client's
+// endpoint and credentials. Callers surface the diagnosis when a digest-auth
+// failure looks skew-related; a non-skew verdict keeps SkewDetected=false so
+// callers fall back to their existing error text.
+func (c *Client) DiagnoseAuth(ctx context.Context) AuthDiagnosis {
+	lib, err := onvifgo.NewClient(c.endpoint,
+		onvifgo.WithCredentials(c.username, c.password),
+	)
+	if err != nil {
+		return AuthDiagnosis{Diagnosis: fmt.Sprintf("create ONVIF client: %v", err)}
+	}
+	diag, err := lib.DiagnoseAuth(ctx)
+	if err != nil || diag == nil {
+		return AuthDiagnosis{}
+	}
+	out := AuthDiagnosis{
+		SkewSeconds: diag.ClockSkew.Seconds(),
+		Diagnosis:   diag.Detail,
+	}
+	switch diag.Status {
+	case onvifgo.AuthStatusClockSkew:
+		out.SkewDetected = true
+	case onvifgo.AuthStatusBadCredentials:
+		// Skew present AND credentials wrong: the old diagnosis surfaced both
+		// (skew breaks digest, so fix the clock first, then re-check creds).
+		out.SkewDetected = diag.ClockSkew != 0
+	}
+	return out
 }

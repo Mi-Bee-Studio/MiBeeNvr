@@ -2,6 +2,7 @@ package onvif
 
 import (
 	"context"
+	"crypto/sha1" //nolint:gosec // ONVIF digest auth mandates SHA-1
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -24,14 +25,6 @@ func between(s, start, end string) string {
 	return rest[:j]
 }
 
-func mustParseRFC3339(s string) time.Time {
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
 // TestCredentialProber_TryVerdicts walks the three verdicts against a fake
 // device: accepted (200 no fault), rejected (401 then an auth fault on the
 // PasswordText retry), inconclusive (transport dead).
@@ -51,8 +44,12 @@ func TestCredentialProber_TryVerdicts(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		header := wsseDigestUsernameToken("admin", "right", mustParseRFC3339(created), nonce)
-		return gotDigest != "" && strings.Contains(header, gotDigest)
+		h := sha1.New() //nolint:gosec // ONVIF digest auth mandates SHA-1
+		h.Write(nonce)
+		h.Write([]byte(created))
+		h.Write([]byte("right"))
+		want := base64.StdEncoding.EncodeToString(h.Sum(nil))
+		return gotDigest != "" && gotDigest == want
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,22 +151,5 @@ func TestCredentialProber_SetUserPasswordFault(t *testing.T) {
 	p := NewCredentialProber(srv.URL)
 	if err := p.SetUserPassword(context.Background(), "admin", "old", "admin", "x"); err == nil {
 		t.Error("expected fault error, got nil")
-	}
-}
-
-// TestSoapFaultCheck covers the 200-with-fault trap (device "succeeds" the
-// HTTP POST but faults inside the envelope).
-func TestSoapFaultCheck(t *testing.T) {
-	t.Helper()
-	if err := soapFaultCheck([]byte(`<s:Envelope><s:Body><Ok/></s:Body></s:Envelope>`)); err != nil {
-		t.Errorf("clean body should pass, got %v", err)
-	}
-	for _, body := range []string{
-		`<s:Envelope><s:Body><s:Fault><s:Value>s:Sender</s:Value></s:Fault></s:Body></s:Envelope>`,
-		`<SOAP-ENV:Envelope><SOAP-ENV:Body><SOAP-ENV:Fault><faultcode>SOAP-ENV:Client</faultcode></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>`,
-	} {
-		if err := soapFaultCheck([]byte(body)); err == nil {
-			t.Errorf("fault body not detected: %s", body)
-		}
 	}
 }
