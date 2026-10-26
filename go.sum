@@ -124,6 +124,8 @@ github.com/mickeyzzc/gb28181-go v0.14.0 h1:lURVt51B3PJJMiMySEYkBfBOtUcRl1hPxIEd6
 github.com/mickeyzzc/gb28181-go v0.14.0/go.mod h1:BHoRPKNAn9T8uPDFuYGl2ybBNDA5+IHNbyLsb3v230g=
 github.com/mickeyzzc/onvif-go/v2 v2.6.1-0.20261026232305-5d1f9a46ffde h1:vEHZPDLJW0ks0moUekMPbkrfE8Co08YtOYXA9AmNrJM=
 github.com/mickeyzzc/onvif-go/v2 v2.6.1-0.20261026232305-5d1f9a46ffde/go.mod h1:Ev+Uh2j6Ii6pJ5JrHm50wv4ZburLr97GZwTYovj0YsU=
+github.com/mickeyzzc/onvif-go/v2 v2.6.1-0.20261026235423-d77bfe9b6970 h1:VeTsxIO9vswBuVB1sBKpX8ULgj3UQd6AAvN2UMVkB40=
+github.com/mickeyzzc/onvif-go/v2 v2.6.1-0.20261026235423-d77bfe9b6970/go.mod h1:Ev+Uh2j6Ii6pJ5JrHm50wv4ZburLr97GZwTYovj0YsU=
 github.com/miekg/dns v1.1.73 h1:uhT8nJxmTrPJYClxVxTCX+CVn6qnzSiybRk72Z6DgrE=
 github.com/miekg/dns v1.1.73/go.mod h1:RW2Obtfd5NZHvOFe3zYG0W8koWOQtAzyHaLo8vASBuQ=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
