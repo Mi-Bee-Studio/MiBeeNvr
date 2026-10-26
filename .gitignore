@@ -79,3 +79,4 @@ internal/transcoding/-encoders
 __pycache__/
 deploy/home-assistant/.pytest_cache/
 deploy/home-assistant/.venv/
+deploy/fnos-native/out/

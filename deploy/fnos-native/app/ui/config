@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "mibee-nvr-native.Application": {
+      "title": "MiBee NVR Native",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "9091",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}
