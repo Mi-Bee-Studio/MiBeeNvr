@@ -3,9 +3,7 @@ package onvif
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sync"
-	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
@@ -13,8 +11,6 @@ import (
 )
 
 var logger = slogx.Component("onvif-client")
-
-var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 // Client wraps an onvif-go Client for ONVIF device operations.
 type Client struct {

@@ -56,8 +56,6 @@ const soapSystemRebootResponse = `<?xml version="1.0" encoding="UTF-8"?>
   </s:Body>
 </s:Envelope>`
 
-// soapSystemDateAndTime builds a GetSystemDateAndTime response carrying the
-// given device clock (per wssecurity.go's systemDateTimeResponse struct).
 func soapSystemDateAndTime(t time.Time) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">

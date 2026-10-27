@@ -73,7 +73,7 @@ func (p *PTZControllerImpl) GetStatus(ctx context.Context) (position PTZVector, 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	status, err := p.client.PTZ().GetStatus(ctx, p.profileToken)
+	status, _ := p.client.PTZ().GetStatus(ctx, p.profileToken)
 	return fromOnvifPTZStatus(status)
 }
 

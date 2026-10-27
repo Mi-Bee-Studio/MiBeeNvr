@@ -2,18 +2,18 @@ package onvif
 
 import (
 	"context"
-	"reflect"
-	"strings"
-	"unsafe"
-
 	"fmt"
-	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
+
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 
 	"github.com/stretchr/testify/require"
 )
