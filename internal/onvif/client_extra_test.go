@@ -8,10 +8,8 @@ package onvif
 
 import (
 	"context"
-	"fmt"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -55,24 +53,6 @@ const soapSystemRebootResponse = `<?xml version="1.0" encoding="UTF-8"?>
     </tds:SystemRebootResponse>
   </s:Body>
 </s:Envelope>`
-
-func soapSystemDateAndTime(t time.Time) string {
-	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
-  <s:Body>
-    <tds:GetSystemDateAndTimeResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
-      <tds:SystemDateAndTime>
-        <tds:UTCDateTime>
-          <tds:Date><tds:Year>%d</tds:Year><tds:Month>%d</tds:Month><tds:Day>%d</tds:Day></tds:Date>
-          <tds:Time><tds:Hour>%d</tds:Hour><tds:Minute>%d</tds:Minute><tds:Second>%d</tds:Second></tds:Time>
-        </tds:UTCDateTime>
-      </tds:SystemDateAndTime>
-    </tds:GetSystemDateAndTimeResponse>
-  </s:Body>
-</s:Envelope>`,
-		t.UTC().Year(), int(t.UTC().Month()), t.UTC().Day(),
-		t.UTC().Hour(), t.UTC().Minute(), t.UTC().Second())
-}
 
 // connectMockClient spins up a mock ONVIF server and returns a connected Client.
 func connectMockClient(t *testing.T) (*Client, *onvifMockServer, *httptest.Server) {
