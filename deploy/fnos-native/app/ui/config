@@ -7,7 +7,7 @@
       "protocol": "",
       "gatewayPrefix": "/app/mibee-nvr-native",
       "gatewaySocket": "app.sock",
-      "url": "/app/mibee-nvr-native",
+      "url": "/app/mibee-nvr-native/",
       "allUsers": true
     }
   }
