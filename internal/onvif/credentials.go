@@ -2,12 +2,13 @@ package onvif
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
 // Camera credential probing primitives (#credprobe).
@@ -17,11 +18,14 @@ import (
 // auto-discovery often arrive with factory defaults — this surface lets the
 // NVR test a small candidate list of industry-default credentials against a
 // newly discovered camera (once per camera, enforced by the caller), and
-// optionally rotate the matched account to the operator's chosen password
-// (tds:SetUser).
+// optionally rotate the matched account to the operator's chosen password.
 //
-// All calls here are single raw-SOAP posts with no GetServices handshake, so
-// probing stays cheap and works before any Connect().
+// The SOAP round trips ride the library client (canonical wire format, auth
+// ladder, fault detection); the verdict classification stays here because it
+// is NVR policy: distinguishing "definitely wrong password" (safe to try the
+// next candidate) from "device answered ambiguously" (stop probing, lockout
+// risk). No Connect()/Initialize handshake is performed — probing stays cheap
+// and works before any connection exists.
 
 // CredentialVerdict classifies one credential attempt.
 type CredentialVerdict int
@@ -58,149 +62,88 @@ func NewCredentialProber(endpoint string) *CredentialProber {
 }
 
 // skewFor measures the device clock skew once per prober (unauthenticated
-// GetSystemDateAndTime) and reuses it for every digest the prober builds.
+// GetSystemDateAndTime) and reuses it for every digest the probe builds.
 func (p *CredentialProber) skewFor(ctx context.Context) time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.skewMeasured {
-		c := &Client{endpoint: p.endpoint}
-		p.skew = c.measureClockSkew(ctx, p.endpoint)
+		p.skew = measureDeviceSkew(ctx, p.endpoint)
 		p.skewMeasured = true
 	}
 	return p.skew
 }
 
+// probeClient builds the library client for one credential attempt. The
+// ladder deliberately stops at PasswordText: AuthNone/HTTP-Basic rungs do
+// not bind to the password under test — an anonymous-access device would
+// accept ANY credentials through them, defeating the probe.
+func (p *CredentialProber) probeClient(username, password string, skew time.Duration) (*onvifgo.Client, error) {
+	lib, err := onvifgo.NewClient(p.endpoint,
+		onvifgo.WithCredentials(username, password),
+		onvifgo.WithAuthFallback(onvifgo.AuthPasswordText),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if skew != 0 {
+		lib.SetClockSkew(skew)
+	}
+	return lib, nil
+}
+
 // Try tests one username/password via tds:GetUsers — an admin-level call on
 // mainstream firmware (Hikvision/Dahua/Axis all gate user management), which
-// is the level the time-sync writes need. Digest auth first; on a definitive
-// rejection it retries once with PasswordText (some budget firmwares reject
-// digests outright — same fallback as DeviceManagerImpl.GetUsers).
+// is the level the time-sync writes need. The library ladder runs digest then
+// PasswordText (the digest-hostile-firmware retry); a definitive rejection of
+// both classifies as Rejected.
 func (p *CredentialProber) Try(ctx context.Context, username, password string) CredentialVerdict {
-	const getUsers = `<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
- xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
-  <s:Body><tds:GetUsers/></s:Body>
-</s:Envelope>`
-
 	skew := p.skewFor(ctx)
-	status, body, err := postSOAPAuth(ctx, p.endpoint, getUsers, username, password, true, skew)
+	lib, err := p.probeClient(username, password, skew)
 	if err != nil {
 		return CredentialInconclusive
 	}
-	verdict := classifyAuthAnswer(status, body)
-	if verdict == CredentialRejected {
-		// PasswordText fallback for digest-hostile firmware.
-		status, body, err = postSOAPAuth(ctx, p.endpoint, getUsers, username, password, false, skew)
-		if err != nil {
-			return CredentialInconclusive
-		}
-		verdict = classifyAuthAnswer(status, body)
+	_, getUsersErr := lib.Security().GetUsers(ctx)
+	if getUsersErr == nil {
+		return CredentialAccepted
 	}
-	return verdict
+	return classifyCredentialError(getUsersErr)
 }
 
 // SetUserPassword rotates targetUser's password to newPassword, authenticating
-// as authUser/authPass (the credential a successful Try returned). Wire format
-// mirrors the onvif-go Security().SetUser call (tds:SetUser / tds:User with
-// tt:Username + tt:Password; empty UserLevel = modify-only semantics).
+// as authUser/authPass (the credential a successful Try returned).
+// Empty UserLevel = modify-only semantics.
 func (p *CredentialProber) SetUserPassword(ctx context.Context, authUser, authPass, targetUser, newPassword string) error {
-	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
- xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
- xmlns:tt="http://www.onvif.org/ver10/schema">
-  <s:Body>
-    <tds:SetUser>
-      <tds:User>
-        <tt:Username>%s</tt:Username>
-        <tt:Password>%s</tt:Password>
-      </tds:User>
-    </tds:SetUser>
-  </s:Body>
-</s:Envelope>`, xmlEscape(targetUser), xmlEscape(newPassword))
-
 	skew := p.skewFor(ctx)
-	status, body, err := postSOAPAuth(ctx, p.endpoint, soapBody, authUser, authPass, true, skew)
+	lib, err := p.probeClient(authUser, authPass, skew)
 	if err != nil {
 		return err
 	}
-	if status != http.StatusOK {
-		return fmt.Errorf("SetUser failed with status %d: %s", status, truncateStr(string(body), 300))
+	if err := lib.Security().SetUser(ctx, &onvifgo.User{
+		Username: targetUser,
+		Password: newPassword,
+	}); err != nil {
+		return fmt.Errorf("SetUser failed: %w", err)
 	}
-	return soapFaultCheck(body)
+	return nil
 }
 
-// classifyAuthAnswer maps one GetUsers round trip to a verdict.
-func classifyAuthAnswer(status int, body []byte) CredentialVerdict {
-	if status == http.StatusOK {
-		if soapFaultCheck(body) != nil {
-			// A 200-with-fault on GetUsers: auth faults read as rejection;
-			// anything else (ActionNotSupported & friends) is inconclusive —
-			// this device doesn't behave predictably, stop probing it.
-			low := strings.ToLower(string(body))
-			if strings.Contains(low, "notauthorized") || strings.Contains(low, "not authorized") ||
-				strings.Contains(low, "unauthorized") || strings.Contains(low, "authentication") {
-				return CredentialRejected
-			}
-			return CredentialInconclusive
-		}
+// classifyCredentialError maps a library GetUsers failure to a verdict.
+// The library wraps definitive rejections (401/403, auth faults, exhausted
+// auth ladder) in ErrUnauthorized; transport failures and ambiguous answers
+// propagate as themselves. A string-level sniff keeps custom-fault devices
+// (ter:NotAuthorized spellings the library may not map) on the Rejected side.
+func classifyCredentialError(err error) CredentialVerdict {
+	if err == nil {
 		return CredentialAccepted
 	}
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+	if errors.Is(err, onvifgo.ErrUnauthorized) {
 		return CredentialRejected
 	}
-	// SOAP 1.2 faults commonly surface as 400/500 with an auth fault body.
-	if status == http.StatusBadRequest || status == http.StatusInternalServerError {
-		low := strings.ToLower(string(body))
-		if strings.Contains(low, "notauthorized") || strings.Contains(low, "not authorized") ||
-			strings.Contains(low, "unauthorized") || strings.Contains(low, "authentication") ||
-			strings.Contains(low, "sender") {
+	low := strings.ToLower(err.Error())
+	for _, marker := range []string{"notauthorized", "not authorized", "unauthorized", "sender not authorized"} {
+		if strings.Contains(low, marker) {
 			return CredentialRejected
 		}
 	}
 	return CredentialInconclusive
-}
-
-// postSOAPAuth sends a raw SOAP envelope with a WS-Security UsernameToken
-// (digest or plaintext per useDigest), with `created` compensated by the
-// device's measured clock skew. Returns the HTTP status and body; err is
-// non-nil only for transport-level failures.
-func postSOAPAuth(ctx context.Context, endpoint, soapBody, username, password string, useDigest bool, skew time.Duration) (int, []byte, error) {
-	created := time.Now().UTC().Add(skew)
-	nonce := newNonce()
-	var header string
-	if useDigest {
-		header = wsseDigestUsernameToken(username, password, created, nonce)
-	} else {
-		header = wssePasswordTextUsernameToken(username, password, created, nonce)
-	}
-	bodyWithAuth := strings.Replace(soapBody, "<s:Body>", header+"<s:Body>", 1)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(bodyWithAuth))
-	if err != nil {
-		return 0, nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, nil, fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, nil, fmt.Errorf("read response: %w", err)
-	}
-	return resp.StatusCode, body, nil
-}
-
-// wssePasswordTextUsernameToken builds the weak-auth UsernameToken (plaintext
-// password). Only used as a retry when a device rejects digest auth.
-func wssePasswordTextUsernameToken(username, password string, created time.Time, nonce []byte) string {
-	createdStr := created.UTC().Format(time.RFC3339)
-	_ = nonce // nonce unused in the plaintext profile; kept for signature parity
-	return `<s:Header><wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><wsse:UsernameToken><wsse:Username>` +
-		xmlEscape(username) +
-		`</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-username-token-profile-1.0#PasswordText">` +
-		xmlEscape(password) +
-		`</wsse:Password><wsu:Created>` + createdStr + `</wsu:Created></wsse:UsernameToken></wsse:Security></s:Header>`
 }

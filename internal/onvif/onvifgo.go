@@ -22,7 +22,7 @@ func MapDiscoveredDevice(d *discovery.Device) DiscoveredDevice {
 		}
 	}
 
-	return DiscoveredDevice{
+	mapped := DiscoveredDevice{
 		UUID:     d.EndpointRef,
 		Name:     name,
 		XAddrs:   d.XAddrs,
@@ -30,6 +30,23 @@ func MapDiscoveredDevice(d *discovery.Device) DiscoveredDevice {
 		Hardware: hardware,
 		Endpoint: endpoint,
 	}
+	if info := d.Info; info != nil {
+		if mapped.Name == "" && info.Manufacturer != "" {
+			mapped.Name = info.Manufacturer
+		}
+		mapped.Manufacturer = info.Manufacturer
+		mapped.Model = info.Model
+		mapped.Firmware = info.FirmwareVersion
+		if mapped.Hardware == "" {
+			mapped.Hardware = info.HardwareID
+		}
+		// The serial is sent as stable_id at add time — this makes the camera
+		// immediately self-healable (IP re-acquisition by ONVIF serial) without
+		// waiting for the async ensureStableID goroutine that runs after the
+		// recorder connects.
+		mapped.Serial = info.SerialNumber
+	}
+	return mapped
 }
 
 // isONVIFDevice reports whether a WS-Discovery ProbeMatch answerer is actually

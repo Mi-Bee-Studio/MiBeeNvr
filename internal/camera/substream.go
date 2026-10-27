@@ -95,7 +95,7 @@ func (cm *CameraManager) resolveSubTarget(ctx context.Context, cameraID string) 
 		if info == nil || strings.TrimSpace(info.URI) == "" {
 			return substream.Target{}, false, nil
 		}
-		uri := recorder.RewriteStaleStreamHost(info.URI, endpoint)
+		uri, _ := recorder.ResolveStreamHost(info.URI, endpoint)
 		return substream.Target{URL: uri, Username: cam.Username, Password: cam.Password}, true, nil
 	}
 	return substream.Target{}, false, nil

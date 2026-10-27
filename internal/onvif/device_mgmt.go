@@ -2,7 +2,6 @@ package onvif
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,29 +18,19 @@ var (
 	deviceMgmtLogger = slog.Default().With("component", "onvif-device-mgmt")
 )
 
-// DeviceManagerImpl implements DeviceManager by delegating to onvif-go's device service.
+// DeviceManagerImpl implements DeviceManager by delegating to onvif-go's device
+// and security services. The auth ladder is resolved by the library client.
 type DeviceManagerImpl struct {
-	client   *onvifgo.Client
-	endpoint string
-	username string
-	password string
-	rawSOAP  func(ctx context.Context, endpoint, soapBody string) ([]byte, error)
-	mu       sync.Mutex
+	client *onvifgo.Client
+	mu     sync.Mutex
 }
 
 // Compile-time interface check.
 var _ DeviceManager = (*DeviceManagerImpl)(nil)
 
-// NewDeviceManager creates a DeviceManager backed by an onvif-go client
-// with raw SOAP fallback support for cameras that reject WS-Security.
-func NewDeviceManager(client *onvifgo.Client, endpoint, username, password string, rawSOAPFn func(context.Context, string, string) ([]byte, error)) *DeviceManagerImpl {
-	return &DeviceManagerImpl{
-		client:   client,
-		endpoint: endpoint,
-		username: username,
-		password: password,
-		rawSOAP:  rawSOAPFn,
-	}
+// NewDeviceManager creates a DeviceManager backed by an onvif-go client.
+func NewDeviceManager(client *onvifgo.Client) *DeviceManagerImpl {
+	return &DeviceManagerImpl{client: client}
 }
 
 // SystemReboot reboots the ONVIF device.
@@ -114,21 +103,15 @@ func (d *DeviceManagerImpl) SetNetworkInterfaces(ctx context.Context, interfaces
 }
 
 // GetUsers retrieves user accounts from the ONVIF device.
-// If onvif-go's WS-Security auth is rejected (e.g. camera firmware V4.0),
-// it falls back to a raw SOAP request without authentication.
 func (d *DeviceManagerImpl) GetUsers(ctx context.Context) ([]ONVIFUser, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	users, err := d.client.Security().GetUsers(ctx)
-	if err == nil || !isAuthError(err) {
-		if err != nil {
-			return nil, fmt.Errorf("get users failed: %w", err)
-		}
-		return mapUsers(users), nil
+	if err != nil {
+		return nil, fmt.Errorf("get users failed: %w", err)
 	}
-	deviceMgmtLogger.Warn("device auth rejected, retrying GetUsers with PasswordText WS-Security")
-	return d.rawGetUsers(ctx)
+	return mapUsers(users), nil
 }
 
 // CreateUsers creates new user accounts on the ONVIF device.
@@ -209,56 +192,4 @@ func mapUsers(users []*onvifgo.User) []ONVIFUser {
 		})
 	}
 	return result
-}
-
-// rawGetUsers sends a GetUsers SOAP request without WS-Security authentication.
-func (d *DeviceManagerImpl) rawGetUsers(ctx context.Context) ([]ONVIFUser, error) {
-	soapBody := `<?xml version="1.0" encoding="UTF-8"?>` +
-		`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"` +
-		` xmlns:tds="http://www.onvif.org/ver10/device/wsdl">` +
-		`<s:Body><tds:GetUsers/></s:Body>` +
-		`</s:Envelope>`
-
-	if d.rawSOAP == nil {
-		return nil, fmt.Errorf("raw SOAP fallback not available")
-	}
-	body, err := d.rawSOAP(ctx, d.endpoint, soapBody)
-	if err != nil {
-		return nil, fmt.Errorf("raw GetUsers failed: %w", err)
-	}
-	return parseRawGetUsersResponse(body)
-}
-
-// getUsersResponse represents the SOAP Envelope response for GetUsers.
-type getUsersResponse struct {
-	XMLName xml.Name `xml:"Envelope"`
-	Body    struct {
-		XMLName          xml.Name `xml:"Body"`
-		GetUsersResponse struct {
-			XMLName xml.Name  `xml:"GetUsersResponse"`
-			User    []rawUser `xml:"User"`
-		} `xml:"GetUsersResponse"`
-	} `xml:"Body"`
-}
-
-// rawUser represents a user in the raw SOAP response.
-type rawUser struct {
-	Username  string `xml:"Username"`
-	UserLevel string `xml:"UserLevel"`
-}
-
-// parseRawGetUsersResponse parses the raw SOAP XML response into ONVIFUser slice.
-func parseRawGetUsersResponse(body []byte) ([]ONVIFUser, error) {
-	var resp getUsersResponse
-	if err := xml.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse GetUsers response: %w", err)
-	}
-	result := make([]ONVIFUser, 0, len(resp.Body.GetUsersResponse.User))
-	for _, u := range resp.Body.GetUsersResponse.User {
-		result = append(result, ONVIFUser{
-			Username: u.Username,
-			Level:    u.UserLevel,
-		})
-	}
-	return result, nil
 }

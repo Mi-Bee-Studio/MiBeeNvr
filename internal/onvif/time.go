@@ -14,12 +14,12 @@ import (
 // Camera time-correction primitives (#time-sync).
 //
 // The SOAP mechanics live in onvif-go's device package (onvif-go#129): the
-// write paths below are thin adapters over device.Service. The read path
-// stays local: it adds the Skew/LocalReference measurement (half-RTT
-// compensated against the NVR clock) that drives the timesync service's
-// drift thresholds, built on the same querySystemDateAndTime machinery the
-// WS-Security digest auth uses (wssecurity.go) — so camera time stays
-// observable even with NO credentials configured, exactly when it matters.
+// write paths below are thin adapters over device.Service, and the read path
+// rides the library's unauthenticated GetSystemDateAndTime. The read adds the
+// Skew/LocalReference measurement (half-RTT compensated against the NVR
+// clock) that drives the timesync service's drift thresholds — so camera
+// time stays observable even with NO credentials configured, exactly when it
+// matters.
 //
 // Write paths require admin credentials — ErrNoCredentials is returned
 // otherwise (the library's sentinel, re-exported so callers keep one
@@ -55,32 +55,50 @@ type DeviceTime struct {
 }
 
 // GetDeviceTime reads the camera's clock via the unauthenticated
-// GetSystemDateAndTime. It does NOT require Connect() — the raw SOAP path
-// works on a bare NewClient(endpoint, ...) — so camera time is observable
-// even when the recorder/auth is broken (which is exactly when it matters).
+// GetSystemDateAndTime. It does NOT require Connect() — the library call
+// works on a bare endpoint — so camera time is observable even when the
+// recorder/auth is broken (which is exactly when it matters).
 func (c *Client) GetDeviceTime(ctx context.Context) (*DeviceTime, error) {
-	resp, localMid, err := c.querySystemDateAndTime(ctx, c.endpoint)
+	lib, err := onvifgo.NewClient(c.endpoint)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create ONVIF client: %w", err)
 	}
-	d := resp.Time.UTC.Date
-	t := resp.Time.UTC.Time
+	localStart := time.Now()
+	resp, err := lib.Device().FixedGetSystemDateAndTime(ctx)
+	localEnd := time.Now()
+	if err != nil {
+		return nil, fmt.Errorf("get system date and time: %w", err)
+	}
+	localMid := localStart.Add(localEnd.Sub(localStart) / 2)
+	if resp.UTCDateTime == nil {
+		return nil, fmt.Errorf("onvif: device returned no usable clock")
+	}
+	d := resp.UTCDateTime.Date
+	t := resp.UTCDateTime.Time
 	if d.Year < 2000 || d.Month < 1 || d.Day < 1 {
 		return nil, fmt.Errorf("onvif: device returned no usable clock (year=%d)", d.Year)
 	}
 	deviceUTC := time.Date(d.Year, time.Month(d.Month), d.Day, t.Hour, t.Minute, t.Second, 0, time.UTC)
-	ld := resp.Time.Local.Date
-	lt := resp.Time.Local.Time
+	var ld onvifdevice.Date
+	var lt onvifdevice.Time
+	if resp.LocalDateTime != nil {
+		ld = resp.LocalDateTime.Date
+		lt = resp.LocalDateTime.Time
+	}
 	local := time.Time{}
 	if ld.Year >= 2000 {
 		local = time.Date(ld.Year, time.Month(ld.Month), ld.Day, lt.Hour, lt.Minute, lt.Second, 0, time.UTC)
 	}
+	tz := ""
+	if resp.TimeZone != nil {
+		tz = resp.TimeZone.TZ
+	}
 	return &DeviceTime{
 		UTCDateTime:     deviceUTC,
 		LocalDateTime:   local,
-		TimeZone:        resp.Time.TimeZone.TZ,
-		DateTimeType:    resp.Time.DateTimeType,
-		DaylightSavings: resp.Time.DaylightSavings,
+		TimeZone:        tz,
+		DateTimeType:    string(resp.DateTimeType),
+		DaylightSavings: resp.DaylightSavings,
 		Skew:            deviceUTC.Sub(localMid),
 		LocalReference:  localMid,
 	}, nil
@@ -108,7 +126,7 @@ func (c *Client) SetDeviceTime(ctx context.Context, tz string) error {
 
 	// Skew first: the instant must be built on the camera's view of "now" or
 	// a badly-drifted camera gets a stale clock written back.
-	skew := c.measureClockSkew(ctx, c.endpoint)
+	skew := measureDeviceSkew(ctx, c.endpoint)
 	lib, err := c.deviceWriter(skew)
 	if err != nil {
 		return err
@@ -138,7 +156,7 @@ func (c *Client) SetNTPServer(ctx context.Context, host string) error {
 		return fmt.Errorf("onvif: NTP server host is empty")
 	}
 
-	lib, err := c.deviceWriter(c.measureClockSkew(ctx, c.endpoint))
+	lib, err := c.deviceWriter(measureDeviceSkew(ctx, c.endpoint))
 	if err != nil {
 		return err
 	}
@@ -175,19 +193,17 @@ func (c *Client) deviceWriter(skew time.Duration) (*onvifgo.Client, error) {
 	return lib, nil
 }
 
-// soapFaultCheck scans a SOAP 1.2 response body for a Fault element. Some
-// devices answer HTTP 200 with a faulted envelope; without this check a
-// rejected request would look like success (used by the credentials probe).
-func soapFaultCheck(body []byte) error {
-	s := string(body)
-	for _, marker := range []string{"<s:Fault>", "<SOAP-ENV:Fault>", "<soap:Fault>", "<SOAP-ENV:fault>"} {
-		if i := strings.Index(s, marker); i >= 0 {
-			frag := s[i:]
-			if len(frag) > 600 {
-				frag = frag[:600]
-			}
-			return fmt.Errorf("onvif: SOAP fault: %s", frag)
-		}
+// measureDeviceSkew measures the device clock skew over the library's
+// unauthenticated GetSystemDateAndTime round trip (half-RTT compensated).
+// Returns 0 on failure — callers degrade to the local clock.
+func measureDeviceSkew(ctx context.Context, endpoint string) time.Duration {
+	lib, err := onvifgo.NewClient(endpoint)
+	if err != nil {
+		return 0
 	}
-	return nil
+	skew, err := lib.MeasureClockSkew(ctx)
+	if err != nil {
+		return 0
+	}
+	return skew
 }

@@ -2,12 +2,9 @@ package onvif
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"net/http"
-	"regexp"
-	"strings"
-	"time"
+	"strconv"
+
+	onvifdiscovery "github.com/mickeyzzc/onvif-go/v2/discovery"
 )
 
 // ProbePorts lists the host-relative ports tried by ProbeSerial, in order:
@@ -16,24 +13,6 @@ import (
 // usually required there — a failed probe simply yields no fingerprint).
 // Exported as a var so tests can point it at a local listener.
 var ProbePorts = []string{"8080", "80", "8000"}
-
-const probePath = "/onvif/device_service"
-
-// probeTimeout bounds each endpoint attempt. The overall probe is the sum
-// across ports, but callers run it asynchronously (GB enroll) or on a manual
-// action (camera create), so a few seconds worst case is acceptable.
-const probeTimeout = 1200 * time.Millisecond
-
-// probeHTTPClient serves serial-number probes (#875 L6): shared so probing
-// multiple ports reuses the transport and its connection pool.
-var probeHTTPClient = &http.Client{Timeout: probeTimeout}
-
-var serialRe = regexp.MustCompile(`(?i)<(?:[\w.-]+:)?SerialNumber>\s*([^<]+?)\s*</(?:[\w.-]+:)?SerialNumber>`)
-
-const getDeviceInfoBody = `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">` +
-	`<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">` +
-	`<GetDeviceInformation xmlns="http://www.onvif.org/ver10/device/wsdl"/>` +
-	`</s:Body></s:Envelope>`
 
 // ProbeSerial queries a device's ONVIF GetDeviceInformation WITHOUT credentials
 // and returns its SerialNumber. It is the cross-protocol correlation probe for
@@ -44,54 +23,11 @@ const getDeviceInfoBody = `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-e
 // pure-GB28181 cameras (Hikvision/Dahua with auth-required ONVIF) legitimately
 // land here and simply fall back to IP-based matching.
 func ProbeSerial(ctx context.Context, ip string) (string, bool) {
-	ip = strings.TrimSpace(ip)
-	if ip == "" {
-		return "", false
-	}
-	client := probeHTTPClient
-	for _, port := range ProbePorts {
-		select {
-		case <-ctx.Done():
-			return "", false
-		default:
-		}
-		if serial, ok := probeEndpoint(ctx, client, fmt.Sprintf("http://%s:%s%s", ip, port, probePath)); ok {
-			return serial, true
+	ports := make([]int, 0, len(ProbePorts))
+	for _, p := range ProbePorts {
+		if n, err := strconv.Atoi(p); err == nil {
+			ports = append(ports, n)
 		}
 	}
-	return "", false
-}
-
-func probeEndpoint(ctx context.Context, client *http.Client, url string) (string, bool) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(getDeviceInfoBody))
-	if err != nil {
-		return "", false
-	}
-	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	// 401/405 etc. mean ONVIF-with-auth or no ONVIF here — not an error worth
-	// logging; try the next endpoint.
-	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
-		return "", false
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if err != nil {
-		return "", false
-	}
-	m := serialRe.FindSubmatch(body)
-	if len(m) != 2 {
-		return "", false
-	}
-	serial := strings.TrimSpace(string(m[1]))
-	if serial == "" {
-		return "", false
-	}
-	return serial, true
+	return onvifdiscovery.ProbeSerial(ctx, ip, ports)
 }

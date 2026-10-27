@@ -97,9 +97,12 @@ func TestClientConnectAuthFallbackEmptyDigestBody(t *testing.T) {
 	require.NoError(t, client.Connect(context.Background()))
 
 	kinds := snapshot()
-	require.GreaterOrEqual(t, len(kinds), 2, "expected at least digest + password-text attempts: %v", kinds)
-	require.Equal(t, "digest", kinds[0])
-	require.Equal(t, "text", kinds[1], "empty-bodied digest must advance the ladder to password-text")
+	// WithAutoClockSkew leads with one unauthenticated GetSystemDateAndTime
+	// ("none") before the first authenticated attempt.
+	require.GreaterOrEqual(t, len(kinds), 3, "expected skew probe + digest + password-text attempts: %v", kinds)
+	require.Equal(t, "none", kinds[0], "auto skew probe runs before the first authenticated call")
+	require.Equal(t, "digest", kinds[1])
+	require.Equal(t, "text", kinds[2], "empty-bodied digest must advance the ladder to password-text")
 
 	info, err := client.GetDeviceInformation(context.Background())
 	require.NoError(t, err)
