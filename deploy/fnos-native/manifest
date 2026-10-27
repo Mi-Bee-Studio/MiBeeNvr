@@ -1,0 +1,11 @@
+appname               = mibee-nvr-native
+version               = 0.0.0
+display_name          = MiBee NVR Native
+desc                  = Native (non-Docker) build of MiBee NVR: single static binary + embedded web UI. Lightweight variant that coexists with the Docker package; no bundled FFmpeg, so transcoding is unavailable.
+platform              = arm
+source                = thirdparty
+maintainer            = Mi-Bee Studio
+maintainer_url        = https://github.com/Mi-Bee-Studio/MiBeeNvr
+distributor           = Mi-Bee Studio
+desktop_uidir         = ui
+desktop_applaunchname = mibee-nvr-native.Application

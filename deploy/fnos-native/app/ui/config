@@ -1,0 +1,14 @@
+{
+  ".url": {
+    "mibee-nvr-native.Application": {
+      "title": "MiBee NVR Native",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/mibee-nvr-native",
+      "gatewaySocket": "app.sock",
+      "url": "/app/mibee-nvr-native/",
+      "allUsers": true
+    }
+  }
+}
