@@ -27,6 +27,11 @@ ensure_config() {
         cat > "${CONFIG_FILE}" <<EOF
 server:
   listen: ":9091"
+  # fnOS unified gateway: desktop-embedded access (iframe at
+  # /app/mibee-nvr-native) arrives via this socket with the verified
+  # fnOS identity — no NVR login; direct :9091 access still needs it.
+  unix_socket: "/vol1/@appcenter/mibee-nvr-native/app.sock"
+  base_path: "/app/mibee-nvr-native"
   discovery:
     udp:
       enabled: false
@@ -56,6 +61,20 @@ start_process() {
     log_msg "Starting mibee-nvr (native) ..."
     bash -c "${CMD}" >> ${LOG_FILE} 2>&1 &
     printf "%s" "$!" > ${PID_FILE}
+    chmod_gateway_socket
+    return 0
+}
+
+# The NVR creates its gateway socket 0660 (docker posture). Under the
+# native run-as user the fnOS gateway process cannot join the owning
+# group, so re-open the socket to group+other once it appears. The
+# enclosing /vol1/@appcenter directory is the access boundary.
+chmod_gateway_socket() {
+    local sock="/vol1/@appcenter/mibee-nvr-native/app.sock"
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        [ -S "${sock}" ] && { chmod 666 "${sock}" 2>/dev/null; return 0; }
+        sleep 1
+    done
     return 0
 }
 

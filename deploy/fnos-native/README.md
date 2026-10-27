@@ -34,6 +34,14 @@ RTSP/FTP/LAN-discovery off, recordings under the package data dir, admin
 password `mibee-native` (change it). Edit the yaml + restart to customize —
 the full option set is documented in the top-level `docs/`.
 
+The desktop entry opens through the **fnOS unified gateway** (iframe at
+`/app/mibee-nvr-native`, same integration as the Docker package): the NAS
+session is verified by the gateway and mapped to the NVR admin, so the
+embedded UI needs **no second login** — while direct `:9091` access still
+requires NVR credentials. The start script re-opens the gateway socket
+permissions for the native run-as user (the NVR creates it 0660 for the
+docker posture).
+
 ## Build
 
 `bash deploy/fnos-native/build.sh <version>` from the repo root: builds the
