@@ -62,6 +62,9 @@ type CameraUpdate struct {
 	Channel         *string
 	Transcoding     *config.CameraTranscodingConfig
 	AudioEnabled    *bool
+	// AudioInRecordings keeps the camera's real audio track in recorded
+	// segments (default off). nil = unchanged.
+	AudioInRecordings *bool
 	// Dark frame filtering
 	DarkFrameFilterEnabled *bool
 	DarkFrameThreshold     *int

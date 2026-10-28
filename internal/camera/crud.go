@@ -610,6 +610,15 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 		cam.AudioEnabled = *updates.AudioEnabled
 	}
+	if updates.AudioInRecordings != nil {
+		// Read at segment creation in the writer loop — but the recorder's
+		// cfg is a copy taken at construction, so a change needs the same
+		// restart as AudioEnabled.
+		if *updates.AudioInRecordings != cam.AudioInRecordings {
+			needsRestart = true
+		}
+		cam.AudioInRecordings = *updates.AudioInRecordings
+	}
 	// Push/ingest fields (SRT/RTMP)
 	if updates.StreamKey != nil {
 		cam.StreamKey = *updates.StreamKey
