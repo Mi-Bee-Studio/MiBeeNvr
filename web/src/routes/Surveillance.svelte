@@ -12,7 +12,8 @@
   import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { isAudioCapable, type ProtocolsResponse } from '$lib/stream-selection';
-  import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS } from '$lib/preferences';
+  import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS, getWallTemplateId, setWallTemplateId } from '$lib/preferences';
+  import { WALL_TEMPLATES, wallGeometry, getWallTemplate, type WallTemplate } from '$lib/wall-layouts';
   import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
 
   let cameras = $state<Camera[]>([]);
@@ -47,18 +48,28 @@
   let photoWall = $state(isPhotoWallEnabled());
   let serverBudget = $state(4);
 
-  // Featured-tile rotation (#1072 P1): default off; hovering the featured
+  // Featured-tile rotation (#1072 P1): default off; hovering any featured
   // tile pauses it, and it never runs while the picker or expand view is up.
   let rotationSecs = $state(getWallRotationSecs());
   let rotationPaused = $state(false);
+
+  // Photo-wall layout template (#1072): which anchor pattern the featured
+  // 2×2 tiles use (top-left hero, corners, centered, dual, triple). The
+  // geometry (columns + featured placements) is derived per camera count.
+  let wallTemplateId = $state(getWallTemplateId());
+
+  function changeWallTemplate(id: string) {
+    wallTemplateId = id;
+    setWallTemplateId(id);
+  }
 
   function changeWallRotation(secs: number) {
     rotationSecs = secs;
     setWallRotationSecs(secs);
   }
 
-  // Advance the carousel: the featured camera moves to the back, the next
-  // one takes the 2×2 slot. Deliberately NOT persisted — rotation is a
+  // Advance the carousel: the featured cameras move to the back, the next
+  // ones take the 2×2 slots. Deliberately NOT persisted — rotation is a
   // view-layer cycle; the saved selection order stays what the user picked
   // (and what drag-and-drop reorders persist).
   function rotateFeatured() {
@@ -75,6 +86,19 @@
   // The photo-wall layout only exists above 4 tiles — at or below that the
   // classic grid (including the 1-big-2-small 3-tile form) is the better view.
   const photoWallActive = $derived(photoWall && cameras.length > 4 && !expandedCameraId);
+
+  // Saved template might need more cameras than are currently selected
+  // (e.g. triple wants ≥9); fall back to the plain hero in that case.
+  const activeWallTemplate = $derived.by<WallTemplate>(() => {
+    const tpl = getWallTemplate(wallTemplateId);
+    return cameras.length >= tpl.minCameras ? tpl : WALL_TEMPLATES[0];
+  });
+  const wallGeom = $derived(
+    photoWallActive ? wallGeometry(activeWallTemplate, cameras.length) : null,
+  );
+  // How many leading tiles are featured 2×2 — drives quality clamping and
+  // the rotation hover-pause (uniform >4 grids keep the single featured tile).
+  const featuredTileCount = $derived(photoWallActive ? activeWallTemplate.featured : 1);
 
   $effect(() => {
     if (rotationSecs <= 0 || !photoWallActive || rotationPaused || !tabVisible || expandedCameraId || configOpen) return;
@@ -298,13 +322,13 @@
     return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4';
   }
 
-  // Photo-wall layout (#1072): one featured 2×2 tile + dense-packed 1×1
-  // tiles. Column tiers picked so the common counts tile exactly (6 → 3×3,
-  // 9 → 4×3, 16 → 5×4); odd counts leave a tail hole that dense flow
-  // minimizes.
-  function getWallGridClass(count: number): string {
-    const cols = count <= 6 ? 'sm:grid-cols-3' : count <= 9 ? 'lg:grid-cols-4' : 'lg:grid-cols-4 xl:grid-cols-5';
-    return `grid-cols-2 ${cols} [grid-auto-flow:dense]`;
+  // Photo-wall layout (#1072): featured 2×2 tiles anchor at the template's
+  // positions, the remaining 1×1 tiles dense-pack around them — every camera
+  // count fills gaplessly. Column count comes from the template (runtime
+  // value), so the grid is styled inline rather than via Tailwind tiers.
+  function wallGridStyle(count: number): string {
+    if (!photoWallActive || !wallGeom) return '';
+    return `grid-template-columns: repeat(${wallGeom.cols}, minmax(0, 1fr));`;
   }
 
   function getCellClass(camera: Camera, index: number, count: number): string {
@@ -313,37 +337,50 @@
         ? 'col-span-2 row-span-2'
         : 'hidden';
     }
-    if (photoWallActive && index === 0) return 'col-span-2 row-span-2';
     if (count === 3 && index === 0) {
       return 'col-span-2';
     }
     return '';
   }
 
+  // Featured tiles get explicit grid lines from the template; every other
+  // cell keeps only its height floor and lets dense auto-flow place it.
+  function cellStyle(index: number, count: number): string {
+    const minHeight = getCellMinHeight(count);
+    if (photoWallActive && wallGeom && index < wallGeom.featured) {
+      const p = wallGeom.placements[index];
+      return `min-height: ${minHeight}; grid-column: ${p.col} / span 2; grid-row: ${p.row} / span 2;`;
+    }
+    return `min-height: ${minHeight};`;
+  }
+
   // Cell height floor by layout row count: the classic grid holds two rows;
   // taller walls divide the viewport by their row count so tiles stay legible
-  // and the page scrolls instead of shrinking cells text-thin.
+  // and the page scrolls instead of shrinking cells text-thin. Each featured
+  // 2×2 tile occupies 3 extra 1×1 cells of area.
   function getCellMinHeight(count: number): string {
     if (count <= 1) return 'calc(100vh - 140px)';
     if (photoWallActive) {
-      const cols = count <= 6 ? 3 : count <= 9 ? 4 : 5;
-      const rows = Math.ceil((count + 3) / cols); // featured 2×2 adds 3 cells
+      const cols = wallGeom?.cols ?? 4;
+      const featured = activeWallTemplate.featured;
+      const rows = Math.ceil((count + 3 * featured) / cols);
       return `calc((100vh - 160px) / ${rows})`;
     }
     if (count <= 4) return 'calc((100vh - 160px) / 2)';
     if (count <= 9) return 'calc((100vh - 160px) / 3)';
-    return 'calc((100vh - 160px) / 4)';
+    return `calc((100vh - 160px) / ${Math.ceil(count / 4)})`;
   }
 
   // HD clamp (#1072): above 4 tiles the HD setting rides only the featured
-  // (first) tile; every other tile stays on the sub stream. A fleet-wide main
-  // switch at 9-16 tiles would multiply decoder cost past weak clients, and
-  // the small 1×1 cells hide the resolution difference anyway. Cameras without
-  // a sub stream stay on main automatically (effectiveQuality in CameraPlayer).
+  // tiles (how many depends on the wall template); every other tile stays on
+  // the sub stream. A fleet-wide main switch at 9-16 tiles would multiply
+  // decoder cost past weak clients, and the small 1×1 cells hide the
+  // resolution difference anyway. Cameras without a sub stream stay on main
+  // automatically (effectiveQuality in CameraPlayer).
   function tileQuality(index: number): 'main' | 'sub' {
     const gq = getGridQuality();
     if (gq !== 'main' || cameras.length <= 4) return gq;
-    return index === 0 ? 'main' : 'sub';
+    return index < featuredTileCount ? 'main' : 'sub';
   }
 
   function getStatusBadge(camera: Camera): { class: string; label: string; icon: any; text: string } {
@@ -807,6 +844,39 @@
               <option value={300}>5min</option>
             </select>
           </label>
+          {#if photoWall && maxGridCameras > 4}
+            <!-- Wall layout templates (#1072): chips render live mini
+                 previews of each template at the CURRENT camera count, so
+                 what you pick is what you get. -->
+            <div class="w-full flex items-center gap-2 flex-wrap">
+              <span class="text-xs th-text-secondary whitespace-nowrap" title={t('dashboard.wallLayoutHint')}>{t('dashboard.wallLayout')}</span>
+              {#each WALL_TEMPLATES as tpl (tpl.id)}
+                {@const previewCount = Math.max(cameras.length, 6)}
+                {@const geom = wallGeometry(tpl, previewCount)}
+                {@const tooFew = previewCount < tpl.minCameras}
+                <button
+                  type="button"
+                  class="wall-tpl-chip {wallTemplateId === tpl.id ? 'wall-tpl-chip-active' : ''}"
+                  title={tooFew
+                    ? `${t(`dashboard.layout.${tpl.id}`)} — ${t('dashboard.layoutMinHint', { count: tpl.minCameras })}`
+                    : t(`dashboard.layout.${tpl.id}`)}
+                  aria-label={t(`dashboard.layout.${tpl.id}`)}
+                  aria-pressed={wallTemplateId === tpl.id}
+                  disabled={tooFew}
+                  onclick={() => changeWallTemplate(tpl.id)}
+                >
+                  <span class="wall-tpl-preview" style="grid-template-columns: repeat({geom.cols}, minmax(0, 1fr));">
+                    {#each geom.placements as p (p.col * 100 + p.row)}
+                      <span class="wall-tpl-cell wall-tpl-featured" style="grid-column: {p.col} / span 2; grid-row: {p.row} / span 2;"></span>
+                    {/each}
+                    {#each Array(Math.max(previewCount - geom.featured, 0)) as _, si (si)}
+                      <span class="wall-tpl-cell"></span>
+                    {/each}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
           {#if gridCapacityOptions.length < MAX_GRID_CAMERAS_OPTIONS.length}
             <p class="w-full text-[11px] th-text-muted">{t('dashboard.budgetHint', { budget: serverBudget })}</p>
           {/if}
@@ -925,7 +995,8 @@
     {:else}
       <!-- Camera grid -->
       <div
-        class="grid gap-2 sm:gap-3 {photoWallActive ? getWallGridClass(cameras.length) : getGridClass(cameras.length)}"
+        class="grid gap-2 sm:gap-3 {photoWallActive ? '[grid-auto-flow:dense]' : getGridClass(cameras.length)}"
+        style={wallGridStyle(cameras.length)}
         onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
         onshrink={(e: CustomEvent) => shrinkToGrid()}
       >
@@ -939,14 +1010,14 @@
           <div
             class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(camera, index, cameras.length)} {dragOverIndex === index && draggedIndex !== null && draggedIndex !== index ? 'cell-drop-target' : ''} {draggedIndex === index ? 'cell-dragging' : ''}"
             class:cell-expanded={expandedCameraId === camera.id}
-            style="min-height: {getCellMinHeight(cameras.length)};"
+            style={cellStyle(index, cameras.length)}
             role="button"
             tabindex="0"
             aria-label="{camera.name || camera.id} — {status.text}"
             onclick={() => handleCellClick(camera, index)}
             onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCellClick(camera, index); } }}
             ondblclick={() => handleCellDblClick(camera)}
-            onmouseenter={() => { if (photoWallActive && index === 0) rotationPaused = true; }}
+            onmouseenter={() => { if (photoWallActive && index < featuredTileCount) rotationPaused = true; }}
             onmouseleave={() => { if (rotationPaused) rotationPaused = false; }}
             draggable={cameras.length > 1 && !expandedCameraId ? 'true' : undefined}
             ondragstart={(e: DragEvent) => handleDragStart(index, e)}
@@ -1119,6 +1190,45 @@
       opacity: 1;
       transform: scale(1);
     }
+  }
+
+  /* Wall layout template chips: live mini previews. The mini grid uses the
+     same dense-flow + span math as the real wall, so the chip previews are
+     exact (holes included). */
+  .wall-tpl-chip {
+    padding: 4px;
+    border: 1px solid var(--color-border, rgba(255, 255, 255, 0.14));
+    border-radius: var(--radius-md, 6px);
+    background: transparent;
+    cursor: pointer;
+    line-height: 0;
+    transition: border-color var(--duration-fast, 120ms) ease;
+  }
+  .wall-tpl-chip:hover:not(:disabled) {
+    border-color: var(--color-primary, #8b5cf6);
+  }
+  .wall-tpl-chip:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .wall-tpl-chip-active {
+    border-color: var(--color-primary, #8b5cf6);
+    box-shadow: 0 0 0 1px var(--color-primary, #8b5cf6);
+  }
+  .wall-tpl-preview {
+    display: grid;
+    grid-auto-flow: dense;
+    grid-auto-rows: 6px;
+    gap: 1px;
+    width: 54px;
+  }
+  .wall-tpl-cell {
+    background: var(--color-text-muted, rgba(150, 150, 150, 0.55));
+    border-radius: 1px;
+    min-width: 0;
+  }
+  .wall-tpl-featured {
+    background: var(--color-primary, #8b5cf6);
   }
 
 </style>

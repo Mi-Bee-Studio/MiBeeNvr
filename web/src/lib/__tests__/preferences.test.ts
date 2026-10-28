@@ -151,3 +151,27 @@ describe('wall rotation preference', () => {
     expect(getWallRotationSecs()).toBe(WALL_ROTATION_DEFAULT);
   });
 });
+
+// ─── Wall layout template preference (#1072) ───────────────────────────────
+describe('wall layout template preference', () => {
+  it('defaults to hero', async () => {
+    const { getWallTemplateId, WALL_TEMPLATE_DEFAULT } = await import('$lib/preferences');
+    expect(getWallTemplateId()).toBe(WALL_TEMPLATE_DEFAULT);
+    expect(WALL_TEMPLATE_DEFAULT).toBe('hero');
+  });
+
+  it('round-trips a known template and persists it', async () => {
+    const { getWallTemplateId, setWallTemplateId } = await import('$lib/preferences');
+    setWallTemplateId('center');
+    expect(getWallTemplateId()).toBe('center');
+    expect(localStorage.getItem('mibee_nvr_prefs_wall_template')).toBe('"center"');
+  });
+
+  it('rejects unknown ids and falls back on garbage storage', async () => {
+    const { getWallTemplateId, setWallTemplateId, WALL_TEMPLATE_DEFAULT } = await import('$lib/preferences');
+    setWallTemplateId('circle'); // not a template
+    expect(getWallTemplateId()).toBe(WALL_TEMPLATE_DEFAULT);
+    localStorage.setItem('mibee_nvr_prefs_wall_template', '"nope"');
+    expect(getWallTemplateId()).toBe(WALL_TEMPLATE_DEFAULT);
+  });
+});

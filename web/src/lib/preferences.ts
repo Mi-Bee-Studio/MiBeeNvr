@@ -3,6 +3,8 @@
  * Uses localStorage with prefix 'mibee_nvr_prefs_'
  */
 
+import { WALL_TEMPLATE_IDS } from './wall-layouts';
+
 const PREFIX = 'mibee_nvr_prefs_';
 
 // Preference keys
@@ -131,6 +133,23 @@ export function setWallRotationSecs(secs: number): void {
     setPreference('wall_rotation_secs', secs);
   } else {
     console.warn(`Wall rotation must be one of: ${WALL_ROTATION_OPTIONS.join(', ')}`);
+  }
+}
+
+/** Photo-wall layout template (which anchor pattern the featured tiles use).
+ *  Falls back to the default template on unknown stored values. */
+export const WALL_TEMPLATE_DEFAULT = 'hero' as const;
+
+export function getWallTemplateId(): string {
+  const id = getPreference('wall_template', WALL_TEMPLATE_DEFAULT);
+  return (WALL_TEMPLATE_IDS as readonly string[]).includes(id) ? id : WALL_TEMPLATE_DEFAULT;
+}
+
+export function setWallTemplateId(id: string): void {
+  if ((WALL_TEMPLATE_IDS as readonly string[]).includes(id)) {
+    setPreference('wall_template', id);
+  } else {
+    console.warn(`Wall template must be one of: ${WALL_TEMPLATE_IDS.join(', ')}`);
   }
 }
 
