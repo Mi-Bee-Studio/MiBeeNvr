@@ -129,6 +129,22 @@ func TestCameraUpdate(t *testing.T) {
 	require.NotNil(t, updated)
 	require.Equal(t, newKey, updated.StreamKey)
 
+	// audio_in_recordings round-trips through the update API (snapshot AND
+	// YAML on disk) — it was silently dropped before the field existed here.
+	require.Equal(t, http.StatusOK, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", `{"audio_in_recordings":true}`).Code)
+	updated = cm.GetCameraConfig("ingest-cam")
+	require.NotNil(t, updated)
+	require.True(t, updated.AudioInRecordings, "audio_in_recordings must reach the in-memory config")
+	disk2, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	persisted := false
+	for i := range disk2.Cameras {
+		if disk2.Cameras[i].ID == "ingest-cam" {
+			persisted = disk2.Cameras[i].AudioInRecordings
+		}
+	}
+	require.True(t, persisted, "audio_in_recordings must survive the YAML persist")
+
 	// Validation branches.
 	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", "not json").Code)
 	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", `{"sub_stream_url":"http://x"}`).Code)

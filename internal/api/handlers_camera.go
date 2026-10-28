@@ -383,6 +383,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Transcoding     *config.CameraTranscodingConfig `json:"transcoding"`
 		Channel         *string                         `json:"channel"`
 		AudioEnabled    *bool                           `json:"audio_enabled"`
+		// Keep the camera's real audio track in recorded segments. nil = unchanged.
+		AudioInRecordings *bool `json:"audio_in_recordings"`
 		// Dark frame filtering
 		DarkFrameFilterEnabled *bool `json:"dark_frame_filter_enabled"`
 		DarkFrameThreshold     *int  `json:"dark_frame_threshold"`
@@ -519,6 +521,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		Transcoding:            body.Transcoding,
 		Channel:                body.Channel,
 		AudioEnabled:           body.AudioEnabled,
+		AudioInRecordings:      body.AudioInRecordings,
 		DarkFrameFilterEnabled: body.DarkFrameFilterEnabled,
 		DarkFrameThreshold:     body.DarkFrameThreshold,
 		RecordingEnabled:       body.RecordingEnabled,
