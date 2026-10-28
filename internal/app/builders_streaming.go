@@ -62,6 +62,11 @@ func buildStreamingDeps(deps *appDeps) (flvMgr *flv.Manager, gbLibEvents *gbsip.
 	// clients. Takes effect at startup.
 	partDur, _ := time.ParseDuration(cfg.HLS.PartMinDuration)
 	hlsMgr.SetLowLatency(cfg.HLS.LowLatencyEnabled(), partDur)
+	// The stream budget is the global LRU-eviction threshold shared by all
+	// HLS consumers (grid tiles on the degrade chain, LiveView, expand,
+	// mobile). Config range is validated 1-20 at load (apply_defaults fills
+	// the default). Takes effect at startup.
+	hlsMgr.SetMaxStreams(cfg.HLS.MaxStreams)
 	deps.hlsMgr = hlsMgr
 
 	// Step 7.5: WebRTC manager (H.264 only)
