@@ -41,7 +41,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`cleanup`](#cleanup-录像清理) | 按日期 / 孤儿文件清理录像 |
 | [`offload`](#offload-对象存储冷备队列) | S3 冷备队列计数与本地副本逐出 |
 | [`update`](#update-版本检查与裸机升级) | 版本检查与裸机升级执行 |
-| [`gen-gb35114-certs`](#gen-gb35114-certs-签发-gb35114-试点证书) | 签发 GB35114 A 级试点证书（仅 `-tags gb35114` 构建） |
+| [`gen-gb35114-certs`](#gen-gb35114-certs-签发-gb35114-试点证书) | 签发 GB35114 试点证书（A/B/C 各级身份通用，仅 `-tags gb35114` 构建） |
 
 ---
 
@@ -384,7 +384,7 @@ mibee-nvr update --apply-request /var/lib/mibee-nvr/update-request.json
 
 ## gen-gb35114-certs — 签发 GB35114 试点证书
 
-仅存在于 `-tags gb35114` 构建（默认构建运行会提示重建方式）。为 GB35114 A 级安全注册签发自签试点材料：SM2 平台身份 + 由平台签发的设备身份，输出布局直接对应 `gb28181.security35114` 的三个路径键。详见 [GB28181 指南 — GB35114 安全增强](gb28181-guide.md)。
+仅存在于 `-tags gb35114` 构建（默认构建运行会提示重建方式）。为 GB35114 安全注册签发自签试点材料（A/B/C 各级身份通用）：SM2 平台身份 + 由平台签发的设备身份，输出布局直接对应 `gb28181.security35114` 的三个路径键。详见 [GB28181 指南 — GB35114 安全增强](gb28181-guide.md)。
 
 ```bash
 mibee-nvr gen-gb35114-certs --platform-id 34020000002000000001 \
