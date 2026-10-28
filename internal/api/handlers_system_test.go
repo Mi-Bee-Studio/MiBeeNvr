@@ -476,6 +476,52 @@ func TestStreamingSettings_HLSLowLatencyRoundTrip(t *testing.T) {
 	require.False(t, get(t))
 }
 
+// TestStreamingSettings_HLSMaxStreamsRoundTrip (#1072): the budget persists
+// and round-trips, out-of-range values are rejected, and a body without the
+// field leaves the stored value alone.
+func TestStreamingSettings_HLSMaxStreamsRoundTrip(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := newHandlerWithConfig(db, store, &config.Config{})
+	h.config.HLS.MaxStreams = 4
+
+	get := func(t *testing.T) int {
+		t.Helper()
+		rr := doRequest(t, h.Routes(), "GET", "/api/settings/streaming", nil, "", "")
+		require.Equal(t, http.StatusOK, rr.Code)
+		var got struct {
+			HLS struct {
+				MaxStreams int `json:"max_streams"`
+			} `json:"hls"`
+		}
+		require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+		return got.HLS.MaxStreams
+	}
+
+	require.Equal(t, 4, get(t))
+
+	rr := doRequest(t, h.Routes(), "PUT", "/api/settings/streaming",
+		bytes.NewReader([]byte(`{"hls":{"max_streams":9}}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 9, h.config.HLS.MaxStreams)
+	require.Equal(t, 9, get(t))
+
+	// Out-of-range values are rejected and do not mutate config.
+	for _, bad := range []string{`{"hls":{"max_streams":0}}`, `{"hls":{"max_streams":21}}`} {
+		rr := doRequest(t, h.Routes(), "PUT", "/api/settings/streaming",
+			bytes.NewReader([]byte(bad)), "", "")
+		require.Equal(t, http.StatusBadRequest, rr.Code)
+		require.Equal(t, 9, h.config.HLS.MaxStreams)
+	}
+
+	// A body without the hls section does not clobber the stored value.
+	rr = doRequest(t, h.Routes(), "PUT", "/api/settings/streaming",
+		bytes.NewReader([]byte(`{"webrtc":{"enabled":true}}`)), "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 9, get(t))
+}
+
 // --- handleStatsCameras tests ---
 
 func TestStatsCameras(t *testing.T) {
