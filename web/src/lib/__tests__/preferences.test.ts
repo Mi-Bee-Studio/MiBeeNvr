@@ -5,6 +5,12 @@ import {
   clearCameraProtocolOverride,
   clearAllCameraProtocolOverrides,
   PROTOCOL_OVERRIDE_TTL_MS,
+  getMaxGridCameras,
+  setMaxGridCameras,
+  isPhotoWallEnabled,
+  setPhotoWallEnabled,
+  MAX_GRID_CAMERAS_DEFAULT,
+  MAX_GRID_CAMERAS_OPTIONS,
 } from '$lib/preferences';
 
 beforeEach(() => {
@@ -71,5 +77,51 @@ describe('per-camera protocol override', () => {
     // They must still be readable so existing users don't lose their pins.
     localStorage.setItem('mibee_nvr_prefs_proto_cam-legacy', 'webrtc');
     expect(getCameraProtocolOverride('cam-legacy')).toBe('webrtc');
+  });
+});
+
+// ─── Grid wall preferences (#1072) ─────────────────────────────────────────
+describe('grid wall preferences', () => {
+  it('defaults to 4 cameras and photo-wall off', () => {
+    expect(getMaxGridCameras()).toBe(MAX_GRID_CAMERAS_DEFAULT);
+    expect(MAX_GRID_CAMERAS_DEFAULT).toBe(4);
+    expect(isPhotoWallEnabled()).toBe(false);
+  });
+
+  it('round-trips the preview count within the allowed options', () => {
+    setMaxGridCameras(9);
+    expect(getMaxGridCameras()).toBe(9);
+    expect(localStorage.getItem('mibee_nvr_prefs_max_grid_cameras')).toBe('9');
+    setMaxGridCameras(4);
+    expect(getMaxGridCameras()).toBe(4);
+  });
+
+  it('rejects values outside the options list', () => {
+    setMaxGridCameras(9);
+    setMaxGridCameras(5 as unknown as never); // not an option
+    expect(getMaxGridCameras()).toBe(9);
+  });
+
+  it('guards against hand-edited localStorage', () => {
+    localStorage.setItem('mibee_nvr_prefs_max_grid_cameras', '7');
+    expect(getMaxGridCameras()).toBe(7); // positive integers pass — clamped by server budget at runtime
+    localStorage.setItem('mibee_nvr_prefs_max_grid_cameras', '"nope"');
+    expect(getMaxGridCameras()).toBe(MAX_GRID_CAMERAS_DEFAULT);
+    localStorage.setItem('mibee_nvr_prefs_max_grid_cameras', '-3');
+    expect(getMaxGridCameras()).toBe(MAX_GRID_CAMERAS_DEFAULT);
+  });
+
+  it('round-trips the photo-wall flag', () => {
+    setPhotoWallEnabled(true);
+    expect(isPhotoWallEnabled()).toBe(true);
+    setPhotoWallEnabled(false);
+    expect(isPhotoWallEnabled()).toBe(false);
+  });
+
+  it('keeps the default option list ascending with 4 first', () => {
+    const opts = [...MAX_GRID_CAMERAS_OPTIONS];
+    expect(opts[0]).toBe(4);
+    expect(opts[0]).toBe(MAX_GRID_CAMERAS_DEFAULT);
+    for (let i = 1; i < opts.length; i++) expect(opts[i]).toBeGreaterThan(opts[i - 1]);
   });
 });
