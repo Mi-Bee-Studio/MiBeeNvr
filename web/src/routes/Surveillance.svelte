@@ -12,7 +12,7 @@
   import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { isAudioCapable, type ProtocolsResponse } from '$lib/stream-selection';
-  import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, MAX_GRID_CAMERAS_OPTIONS } from '$lib/preferences';
+  import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS } from '$lib/preferences';
   import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
 
   let cameras = $state<Camera[]>([]);
@@ -47,6 +47,25 @@
   let photoWall = $state(isPhotoWallEnabled());
   let serverBudget = $state(4);
 
+  // Featured-tile rotation (#1072 P1): default off; hovering the featured
+  // tile pauses it, and it never runs while the picker or expand view is up.
+  let rotationSecs = $state(getWallRotationSecs());
+  let rotationPaused = $state(false);
+
+  function changeWallRotation(secs: number) {
+    rotationSecs = secs;
+    setWallRotationSecs(secs);
+  }
+
+  // Advance the carousel: the featured camera moves to the back, the next
+  // one takes the 2×2 slot. Deliberately NOT persisted — rotation is a
+  // view-layer cycle; the saved selection order stays what the user picked
+  // (and what drag-and-drop reorders persist).
+  function rotateFeatured() {
+    if (cameras.length <= 1) return;
+    cameras = [...cameras.slice(1), cameras[0]];
+  }
+
   const gridCapacityOptions = $derived(
     MAX_GRID_CAMERAS_OPTIONS.filter((o) => o <= Math.max(serverBudget, 4)),
   );
@@ -56,6 +75,12 @@
   // The photo-wall layout only exists above 4 tiles — at or below that the
   // classic grid (including the 1-big-2-small 3-tile form) is the better view.
   const photoWallActive = $derived(photoWall && cameras.length > 4 && !expandedCameraId);
+
+  $effect(() => {
+    if (rotationSecs <= 0 || !photoWallActive || rotationPaused || !tabVisible || expandedCameraId || configOpen) return;
+    const timer = setInterval(rotateFeatured, rotationSecs * 1000);
+    return () => clearInterval(timer);
+  });
 
   function changeGridCapacity(n: number) {
     maxGridCameras = n;
@@ -765,6 +790,23 @@
             <input type="checkbox" checked={photoWall} onchange={togglePhotoWall} disabled={maxGridCameras <= 4} class="accent-[var(--color-primary)]" />
             {t('dashboard.photoWall')}
           </label>
+          <label
+            class="flex items-center gap-1.5 text-xs th-text-secondary whitespace-nowrap select-none {photoWall && maxGridCameras > 4 ? '' : 'opacity-50 pointer-events-none'}"
+            title={t('dashboard.wallRotationHint')}
+          >
+            {t('dashboard.wallRotation')}
+            <select
+              class="input py-1 px-1.5 text-xs"
+              value={rotationSecs}
+              onchange={(e) => changeWallRotation(parseInt((e.target as HTMLSelectElement).value))}
+              disabled={!(photoWall && maxGridCameras > 4)}
+            >
+              <option value={0}>{t('dashboard.wallRotation.off')}</option>
+              <option value={30}>30s</option>
+              <option value={60}>60s</option>
+              <option value={300}>5min</option>
+            </select>
+          </label>
           {#if gridCapacityOptions.length < MAX_GRID_CAMERAS_OPTIONS.length}
             <p class="w-full text-[11px] th-text-muted">{t('dashboard.budgetHint', { budget: serverBudget })}</p>
           {/if}
@@ -893,6 +935,7 @@
           {@const StatusIcon = status.icon}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <!-- svelte-ignore a11y_mouse_events_have_key_events -->
           <div
             class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(camera, index, cameras.length)} {dragOverIndex === index && draggedIndex !== null && draggedIndex !== index ? 'cell-drop-target' : ''} {draggedIndex === index ? 'cell-dragging' : ''}"
             class:cell-expanded={expandedCameraId === camera.id}
@@ -903,6 +946,8 @@
             onclick={() => handleCellClick(camera, index)}
             onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCellClick(camera, index); } }}
             ondblclick={() => handleCellDblClick(camera)}
+            onmouseenter={() => { if (photoWallActive && index === 0) rotationPaused = true; }}
+            onmouseleave={() => { if (rotationPaused) rotationPaused = false; }}
             draggable={cameras.length > 1 && !expandedCameraId ? 'true' : undefined}
             ondragstart={(e: DragEvent) => handleDragStart(index, e)}
             ondragover={(e: DragEvent) => handleDragOver(index, e)}

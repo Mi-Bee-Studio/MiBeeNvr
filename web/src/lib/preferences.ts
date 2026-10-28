@@ -116,6 +116,24 @@ export function setPhotoWallEnabled(v: boolean): void {
   setPreference('photo_wall', v);
 }
 
+/** Featured-tile rotation interval in seconds; 0 = off (default). Pauses on
+ *  hover over the featured tile. */
+export const WALL_ROTATION_OPTIONS = [0, 30, 60, 300] as const;
+export const WALL_ROTATION_DEFAULT = 0;
+
+export function getWallRotationSecs(): number {
+  const n = getPreference('wall_rotation_secs', WALL_ROTATION_DEFAULT);
+  return (WALL_ROTATION_OPTIONS as readonly number[]).includes(n) ? n : WALL_ROTATION_DEFAULT;
+}
+
+export function setWallRotationSecs(secs: number): void {
+  if ((WALL_ROTATION_OPTIONS as readonly number[]).includes(secs)) {
+    setPreference('wall_rotation_secs', secs);
+  } else {
+    console.warn(`Wall rotation must be one of: ${WALL_ROTATION_OPTIONS.join(', ')}`);
+  }
+}
+
 // Get effective theme (system preference when theme is null)
 export function getEffectiveTheme(): 'dark' | 'light' {
   const saved = getTheme();

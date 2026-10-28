@@ -125,3 +125,29 @@ describe('grid wall preferences', () => {
     for (let i = 1; i < opts.length; i++) expect(opts[i]).toBeGreaterThan(opts[i - 1]);
   });
 });
+
+// ─── Wall rotation preference (#1072 P1) ───────────────────────────────────
+describe('wall rotation preference', () => {
+  it('defaults to off (0)', async () => {
+    const { getWallRotationSecs, WALL_ROTATION_DEFAULT } = await import('$lib/preferences');
+    expect(getWallRotationSecs()).toBe(WALL_ROTATION_DEFAULT);
+    expect(WALL_ROTATION_DEFAULT).toBe(0);
+  });
+
+  it('round-trips within the allowed options', async () => {
+    const { getWallRotationSecs, setWallRotationSecs } = await import('$lib/preferences');
+    setWallRotationSecs(60);
+    expect(getWallRotationSecs()).toBe(60);
+    expect(localStorage.getItem('mibee_nvr_prefs_wall_rotation_secs')).toBe('60');
+    setWallRotationSecs(0);
+    expect(getWallRotationSecs()).toBe(0);
+  });
+
+  it('rejects values outside the options and falls back on garbage storage', async () => {
+    const { getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_DEFAULT } = await import('$lib/preferences');
+    setWallRotationSecs(45);
+    expect(getWallRotationSecs()).toBe(0); // still the previously stored 0
+    localStorage.setItem('mibee_nvr_prefs_wall_rotation_secs', '"fast"');
+    expect(getWallRotationSecs()).toBe(WALL_ROTATION_DEFAULT);
+  });
+});
