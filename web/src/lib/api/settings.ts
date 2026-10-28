@@ -38,7 +38,10 @@ export interface FLVStreamingConfig {
 }
 
 export interface HLSStreamingConfig {
-  low_latency: boolean;
+  low_latency?: boolean;
+  /** Concurrent preview-stream budget — global LRU eviction threshold, 1-20.
+   *  Restart-applied (#1072). Send only when the user changed it. */
+  max_streams?: number;
 }
 
 export interface RTMPConfig {
@@ -64,7 +67,8 @@ export interface SRTConfig {
 export interface StreamingConfig {
   webrtc: WebRTCConfig;
   flv: FLVStreamingConfig;
-  /** Omit when saving to keep the config-file value (#772 — no UI toggle yet). */
+  /** Omit low_latency when saving to keep the config-file value (#772 — no UI
+   *  toggle yet); max_streams is sent only when the budget field changed. */
   hls?: HLSStreamingConfig;
   rtmp?: RTMPConfig;
   srt?: SRTConfig;
