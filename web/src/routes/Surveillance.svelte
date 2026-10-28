@@ -808,18 +808,31 @@
           <!-- Wall capacity + photo-wall toggle (#1072): capacity is clamped by
                the server's HLS preview budget; the photo wall only exists
                above 4 tiles. -->
-          <label class="flex items-center gap-1.5 text-xs th-text-secondary whitespace-nowrap select-none">
-            {t('dashboard.gridCapacity')}
-            <select
-              class="input py-1 px-1.5 text-xs"
-              value={maxGridCameras}
-              onchange={(e) => changeGridCapacity(parseInt((e.target as HTMLSelectElement).value))}
-            >
+          <!-- Capacity + rotation are in-page chip groups, NOT native <select>:
+               embedded-webview panes render the native popup outside the
+               page's control — it can drift past the window edge and its
+               click landing points shift, accidentally toggling neighboring
+               controls. -->
+          <div
+            class="flex items-center gap-1.5 text-xs th-text-secondary whitespace-nowrap select-none"
+            role="group"
+            aria-label={t('dashboard.gridCapacity')}
+          >
+            <span>{t('dashboard.gridCapacity')}</span>
+            <div class="flex items-center gap-1">
               {#each MAX_GRID_CAMERAS_OPTIONS as n (n)}
-                <option value={n} disabled={n > Math.max(serverBudget, 4)}>{n}</option>
+                {@const overBudget = n > Math.max(serverBudget, 4)}
+                <button
+                  type="button"
+                  class="opt-chip {maxGridCameras === n ? 'opt-chip-active' : ''}"
+                  disabled={overBudget}
+                  aria-pressed={maxGridCameras === n}
+                  title={overBudget ? t('dashboard.budgetHint', { budget: serverBudget }) : `${n}`}
+                  onclick={() => changeGridCapacity(n)}
+                >{n}</button>
               {/each}
-            </select>
-          </label>
+            </div>
+          </div>
           <label
             class="flex items-center gap-1.5 text-xs th-text-secondary cursor-pointer whitespace-nowrap select-none {maxGridCameras > 4 ? '' : 'opacity-50 pointer-events-none'}"
             title={t('dashboard.photoWallHint')}
@@ -827,23 +840,25 @@
             <input type="checkbox" checked={photoWall} onchange={togglePhotoWall} disabled={maxGridCameras <= 4} class="accent-[var(--color-primary)]" />
             {t('dashboard.photoWall')}
           </label>
-          <label
+          <div
             class="flex items-center gap-1.5 text-xs th-text-secondary whitespace-nowrap select-none {photoWall && maxGridCameras > 4 ? '' : 'opacity-50 pointer-events-none'}"
+            role="group"
+            aria-label={t('dashboard.wallRotation')}
             title={t('dashboard.wallRotationHint')}
           >
-            {t('dashboard.wallRotation')}
-            <select
-              class="input py-1 px-1.5 text-xs"
-              value={rotationSecs}
-              onchange={(e) => changeWallRotation(parseInt((e.target as HTMLSelectElement).value))}
-              disabled={!(photoWall && maxGridCameras > 4)}
-            >
-              <option value={0}>{t('dashboard.wallRotation.off')}</option>
-              <option value={30}>30s</option>
-              <option value={60}>60s</option>
-              <option value={300}>5min</option>
-            </select>
-          </label>
+            <span>{t('dashboard.wallRotation')}</span>
+            <div class="flex items-center gap-1">
+              {#each WALL_ROTATION_OPTIONS as s (s)}
+                <button
+                  type="button"
+                  class="opt-chip {rotationSecs === s ? 'opt-chip-active' : ''}"
+                  disabled={!(photoWall && maxGridCameras > 4)}
+                  aria-pressed={rotationSecs === s}
+                  onclick={() => changeWallRotation(s)}
+                >{s === 0 ? t('dashboard.wallRotation.off') : s === 300 ? '5min' : `${s}s`}</button>
+              {/each}
+            </div>
+          </div>
           {#if photoWall && maxGridCameras > 4}
             <!-- Wall layout templates (#1072): chips render live mini
                  previews of each template at the CURRENT camera count, so
@@ -1190,6 +1205,30 @@
       opacity: 1;
       transform: scale(1);
     }
+  }
+
+  /* Option chips (capacity / rotation) — in-page replacements for native
+     <select>, see the comment at the markup for why. */
+  .opt-chip {
+    padding: 2px 8px;
+    border: 1px solid var(--color-border, rgba(255, 255, 255, 0.14));
+    border-radius: var(--radius-md, 6px);
+    background: transparent;
+    font-size: 11px;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: border-color var(--duration-fast, 120ms) ease;
+  }
+  .opt-chip:hover:not(:disabled) {
+    border-color: var(--color-primary, #8b5cf6);
+  }
+  .opt-chip:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .opt-chip-active {
+    border-color: var(--color-primary, #8b5cf6);
+    background: color-mix(in srgb, var(--color-primary, #8b5cf6) 14%, transparent);
   }
 
   /* Wall layout template chips: live mini previews. The mini grid uses the
