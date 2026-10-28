@@ -37,6 +37,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtplpcm"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpsimpleaudio"
 	"github.com/pion/rtp"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -111,11 +112,13 @@ func (b *baseRecorder) connectAndRecordShared(ctx context.Context, h rtspConnect
 		return err, false
 	}
 
-	// Audio setup: find AAC or G.711 format if AudioEnabled.
+	// Audio setup: find AAC, G.711 or Opus format if AudioEnabled.
 	var audioDec *rtpmpeg4audio.Decoder
 	var audioForma *format.MPEG4Audio
 	var g711Dec *rtplpcm.Decoder
 	var g711Forma *format.G711
+	var opusDec *rtpsimpleaudio.Decoder
+	var opusForma *format.Opus
 	var audioMedi *description.Media
 	if b.cfg.AudioEnabled {
 		// Try AAC first
@@ -187,7 +190,43 @@ func (b *baseRecorder) connectAndRecordShared(ctx context.Context, h rtspConnect
 				}
 			}
 		}
+		// If neither AAC nor G.711, try Opus (RFC 7587 — desktop/screen capture
+		// sources commonly ship it alongside H.264/H.265).
 		if audioDec == nil && g711Dec == nil {
+			audioMedi = desc.FindFormat(&opusForma)
+			if audioMedi != nil {
+				dec, derr := opusForma.CreateDecoder()
+				if derr != nil {
+					h.log.Warn("Opus decoder creation failed, continuing video-only", "camera_id", b.cfg.CameraID, "error", derr)
+				} else if _, err := client.Setup(desc.BaseURL, audioMedi, 0, 1); err != nil {
+					h.log.Warn("Opus audio SETUP failed, continuing video-only", "camera_id", b.cfg.CameraID, "error", err)
+				} else {
+					opusDec = dec
+					rate := opusForma.ClockRate()
+					if rate == 0 {
+						rate = 48000
+					}
+					ch := opusForma.ChannelCount
+					if ch == 0 {
+						ch = 1
+					}
+					// dops track config = channels + PreSkip(0 for RTP sources,
+					// no OpusHead) + input sample rate — see muxer.AddAudioTrack.
+					b.setAudioConfig(&audioConfig{
+						codec:       "opus",
+						sampleRate:  rate,
+						channels:    ch,
+						muxerConfig: []byte{byte(ch), 0, 0, byte(rate >> 24), byte(rate >> 16), byte(rate >> 8), byte(rate)},
+					})
+					h.log.Info("Opus audio track detected", "camera_id", b.cfg.CameraID, "rate", rate, "channels", ch)
+					if b.cfg.AudioTrigger != nil && b.cfg.AudioTrigger.Enabled {
+						// issue #478: the loudness trigger decodes G.711 only.
+						h.log.Warn("audio_trigger enabled but camera audio is Opus - trigger stays inactive (G.711 required)", "camera_id", b.cfg.CameraID)
+					}
+				}
+			}
+		}
+		if audioDec == nil && g711Dec == nil && opusDec == nil {
 			h.log.Debug("no supported audio format found in stream", "camera_id", b.cfg.CameraID)
 		}
 	}
@@ -334,6 +373,30 @@ func (b *baseRecorder) connectAndRecordShared(ctx context.Context, h rtspConnect
 					}
 				} else {
 					b.audioTriggerMarkWritten()
+				}
+			}
+		})
+	} else if opusDec != nil {
+		client.OnPacketRTP(audioMedi, opusForma, func(pkt *rtp.Packet) {
+			au, err := opusDec.Decode(pkt)
+			if err != nil {
+				return
+			}
+			if b.Hub != nil {
+				b.Hub.BroadcastAudio(int64(pkt.Timestamp), model.AudioOpus, au)
+			}
+			b.mu.Lock()
+			m := b.muxer
+			aid := b.audioTrackID
+			start := b.segStart
+			b.mu.Unlock()
+			if m != nil && aid > 0 && !b.audioSparse.Load() { // sparse drops disk audio; the track exists only when AudioInRecordings is on
+				pts := time.Since(start)
+				dur := 20 * time.Millisecond // nominal Opus frame; arrival time drives rotation
+				if err := m.WriteAudioSample(aid, au, pts, dur); err != nil {
+					if !errors.Is(err, muxer.ErrClosed) {
+						h.log.Error("failed to write Opus audio sample", "camera_id", b.cfg.CameraID, "error", err)
+					}
 				}
 			}
 		})
