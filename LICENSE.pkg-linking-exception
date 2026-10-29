@@ -1,27 +1,29 @@
-pkg/ Linking Exception — Additional Permission under Section 7 of AGPL-3.0
+SPDX-License-Identifier: LicenseRef-MiBeeNvr-pkg-linking-exception
+
+pkg/ Linking Exception — Additional Permission under Section 7 of AGPL-3.0-only
 ============================================================================
 
 Copyright (c) 2026 Mi&Bee Studio
 
 This file grants an additional permission (a "linking exception") on top
-of the GNU Affero General Public License version 3 ("AGPL-3.0") that
+of the GNU Affero General Public License version 3 ("AGPL-3.0-only") that
 governs this repository. It applies ONLY to the packages under the
 `pkg/` directory of this repository (the "Extension Interfaces") — the
 rest of the repository remains under plain AGPL-3.0.
 
 The permission
 
-  As a special exception to the terms and conditions of AGPL-3.0, the
+  As a special exception to the terms and conditions of AGPL-3.0-only, the
   copyright holders of MiBee NVR give you permission to link or combine
   the Extension Interfaces (or modified versions of the Extension
-  Interfaces, provided you otherwise comply with Section 4 of AGPL-3.0
+  Interfaces, provided you otherwise comply with Section 4 of AGPL-3.0-only
   regarding your modifications) with independent modules to produce a
   work containing the Extension Interfaces, and to copy and distribute
   the resulting work under terms of your choice, provided that:
 
     1. the resulting work does not itself incorporate, beyond the
        Extension Interfaces, any other part of this repository in a way
-       that would require it to be licensed under AGPL-3.0 against your
+       that would require it to be licensed under AGPL-3.0-only against your
        choice; and
 
     2. for each linked independent module you meet the terms and
@@ -42,7 +44,7 @@ Why this exception exists
   (pkg/app previously appeared here; it was the composition root — it
   imported 55 internal packages and changed with every internal
   refactor, so it was never a stable surface. It moved to internal/ and
-  is out of the exception. #1010) Without this exception, AGPL-3.0's copyleft would
+  is out of the exception. #1010) Without this exception, AGPL-3.0-only's copyleft would
   extend to any program compiled together with `pkg/`, which would
   defeat the tree's stated purpose as a neutral extension surface.
 
@@ -50,7 +52,7 @@ Why this exception exists
   repository (including `internal/`): programs that incorporate
   MiBee NVR's internal packages are still subject to AGPL-3.0.
   Interacting with a running MiBee NVR over its HTTP/WebSocket APIs
-  (as a separate process) never triggers AGPL-3.0 obligations at all.
+  (as a separate process) never triggers AGPL-3.0-only obligations at all.
 
 Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in this repository shall be dual-licensed as
