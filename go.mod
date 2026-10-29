@@ -55,7 +55,7 @@ require (
 )
 
 require (
-	github.com/mickeyzzc/gb28181-go v0.14.1-0.20261029122206-94c55a96c7e7
+	github.com/mickeyzzc/gb28181-go v0.14.1-0.20261029143806-7be41fbdd728
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
