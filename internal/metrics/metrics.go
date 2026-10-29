@@ -868,7 +868,7 @@ func NewMetrics() *Metrics {
 		HLSActiveStreams:               hlsActiveStreams,
 		HLSSegmentSizeBytes:            hlsSegmentSizeBytes,
 		HLSIdleEvictions:               hlsIdleEvictions,
-		GB35114AUVerifyFailures:      gb35114AUVerifyFailures,
+		GB35114AUVerifyFailures:        gb35114AUVerifyFailures,
 		WebRTCActivePeers:              webrtcActivePeers,
 		WebRTCFramesSent:               webrtcFramesSent,
 		WebRTCFramesDropped:            webrtcFramesDropped,
