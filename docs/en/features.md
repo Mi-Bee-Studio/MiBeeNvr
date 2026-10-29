@@ -62,7 +62,7 @@ SIP cameras/platforms REGISTER directly to the NVR and appear as regular cameras
 - Alarm / catalog / mobile-position subscriptions with alarm linkage
 - Device-side recording search (RecordInfo) + playback pull (speed control / seek)
 - **Lower-level cascade**: the NVR registers to an upper platform, forwards catalog/alarms; the upper platform can request NVR-local recordings (as of v0.13 the main stream activates on demand at playback time — nothing is pulled while idle); per-camera catalog convergence and optional sub-stream cascading keep your uplink light
-- **GB35114 pilot**: A-level secure registration (SM2 certificates, requires a `-tags gb35114` build) — an early look at the national-standard video security chain
+- **GB35114**: A-level certificate mutual auth / B-level per-AU video signatures / C-level SM4 media encryption (SM2/SM3/SM4, requires a `-tags gb35114` build; #1079) — full-level coverage of the national-standard video security chain
 
 > Off by default — enabling is opt-in. See the [GB/T 28181 guide](gb28181-guide.md).
 

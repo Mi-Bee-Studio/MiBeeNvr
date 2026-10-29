@@ -33,6 +33,11 @@ func ApplySecurity35114(sip *gbsip.Config, cfg config.GB28181ServerConfig) error
 	}
 	sc := cfg.Security35114
 
+	level, err := security35114.ParseLevel(sc.Level)
+	if err != nil {
+		return fmt.Errorf("gb35114: gb28181.security35114.level: %w", err)
+	}
+
 	identity, err := security35114.LoadIdentityFromFiles(sc.PlatformCert, sc.PlatformKey)
 	if err != nil {
 		return fmt.Errorf("gb35114: load platform identity: %w", err)
@@ -43,15 +48,17 @@ func ApplySecurity35114(sip *gbsip.Config, cfg config.GB28181ServerConfig) error
 		return err
 	}
 	if len(deviceCerts) > 0 {
-		gb35114Logger.Info("GB35114 A-level enabled", "device_certs", len(deviceCerts))
+		gb35114Logger.Info("GB35114 enabled", "level", string(level), "device_certs", len(deviceCerts))
 	} else {
-		gb35114Logger.Info("GB35114 A-level enabled (no pre-provisioned device certs — devices must announce via Capability cnonce)")
+		gb35114Logger.Info("GB35114 enabled (no pre-provisioned device certs — devices must announce via Capability cnonce)",
+			"level", string(level))
 	}
 
 	plat, err := security35114.NewPlatform(security35114.PlatformConfig{
 		ServerID:    cfg.ServerID,
 		Identity:    identity,
 		DeviceCerts: deviceCerts,
+		Level:       level,
 	})
 	if err != nil {
 		return fmt.Errorf("gb35114: construct platform: %w", err)

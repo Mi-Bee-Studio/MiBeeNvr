@@ -396,6 +396,9 @@ func buildStreamingDeps(deps *appDeps) (flvMgr *flv.Manager, gbLibEvents *gbsip.
 			return nil, nil, err
 		}
 		deps.gb28181Server = gbsip.NewServer(sipCfg, deps.gb28181DevMgr, deps.gb28181SessionMgr, gb28181.NewDeviceStore(deps.db))
+		// GB35114 B/C observability (#1079): AU-signature failures land in
+		// the metrics registry and a rate-limited tamper warning.
+		deps.gb28181Server.SetMetricsHooks(gb28181.NewMetricsBridge(deps.metrics.GB35114AUVerifyFailures))
 		// Return audio (#341 full duplex): the uplink hook must be wired
 		// before serving — the library captures it per session at StartTalk.
 		deps.talkUplinks = gb28181.NewTalkUplinkRegistry()
