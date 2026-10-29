@@ -148,6 +148,12 @@ rate(nvr_cleanup_deleted_total[1h])
 | `nvr_hls_segment_size_bytes` | Histogram | `camera_id` | HLS 片段文件大小分布 |
 | `nvr_hls_idle_evictions_total` | Counter | `camera_id` | 因空闲超时被驱逐的 HLS 流数 |
 
+**GB28181 国密（GB35114 B/C，#1079）：**
+
+| 指标 | 类型 | 标签 | 说明 |
+|---|---|---|---|
+| `nvr_gb35114_au_verify_failures_total` | Counter | `channel_id` | GB35114 B/C 媒体访问单元因签名缺失或验签失败被丢弃的次数——**任何增长都应视为流被篡改**（同时每通道每分钟至多一条告警日志） |
+
 **`nvr_hls_segment_size_bytes` 桶区间：** 64KB, 128KB, 256KB, 512KB, 1MB, 2MB, 4MB, 8MB, 16MB。
 
 **用途：**

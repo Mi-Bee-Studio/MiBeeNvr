@@ -148,6 +148,12 @@ Track HLS on-demand streaming performance.
 | `nvr_hls_segment_size_bytes` | Histogram | `camera_id` | Distribution of HLS segment file sizes |
 | `nvr_hls_idle_evictions_total` | Counter | `camera_id` | HLS streams evicted due to idle timeout |
 
+**GB28181 national cryptography (GB35114 B/C, #1079):**
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `nvr_gb35114_au_verify_failures_total` | Counter | `channel_id` | Media access units dropped because their GB35114 signature was missing or failed verification — **any increase should be treated as stream tampering** (a rate-limited warning log accompanies it) |
+
 **Buckets** for `nvr_hls_segment_size_bytes`: 64KB, 128KB, 256KB, 512KB, 1MB, 2MB, 4MB, 8MB, 16MB.
 
 **Usage:**
