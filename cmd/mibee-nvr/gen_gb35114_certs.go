@@ -2,7 +2,7 @@
 
 package main
 
-// gen-gb35114-certs (#452): issues the GB 35114-2017 A-level pilot kit —
+// gen-gb35114-certs (#452): issues the GB 35114-2017 pilot identity kit (serves levels A/B/C) —
 // a self-signed SM2 platform identity plus device identities signed by the
 // platform — laid out exactly as gb28181.security35114 consumes. Only
 // exists in -tags gb35114 builds (the default build prints guidance).
@@ -43,7 +43,7 @@ func cmdGenGB35114Certs() {
 		os.Exit(1)
 	}
 
-	fmt.Println("GB 35114-2017 A-level pilot material issued:")
+	fmt.Println("GB 35114-2017 pilot identity material issued (levels A/B/C):")
 	fmt.Printf("  platform cert:  %s\n", res.PlatformCert)
 	fmt.Printf("  platform key:   %s (0600)\n", res.PlatformKey)
 	if len(ids) > 0 {

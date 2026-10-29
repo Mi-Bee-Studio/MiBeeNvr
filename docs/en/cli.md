@@ -41,7 +41,7 @@ mibee-nvr -config mibee-nvr.yaml
 | [`cleanup`](#cleanup-recording-cleanup) | Delete recordings by date / orphan files |
 | [`offload`](#offload-object-storage-offload-queue) | S3 offload queue counters and local eviction |
 | [`update`](#update-version-check-and-upgrade) | Version check and bare-metal upgrade execution |
-| [`gen-gb35114-certs`](#gen-gb35114-certs-issue-gb35114-pilot-certificates) | Issue GB35114 level-A pilot certificates (`-tags gb35114` builds only) |
+| [`gen-gb35114-certs`](#gen-gb35114-certs-issue-gb35114-pilot-certificates) | Issue GB35114 pilot certificates (identities serve levels A/B/C; `-tags gb35114` builds only) |
 
 ---
 
@@ -385,7 +385,7 @@ For the auto-apply switch (`update.auto_apply`) and the service/polkit setup see
 
 ## gen-gb35114-certs — Issue GB35114 Pilot Certificates
 
-Only present in `-tags gb35114` builds (a default build explains the rebuild instead). Issues self-signed pilot material for GB35114 level-A secure registration: an SM2 platform identity plus device identities signed by the platform, laid out to match the three path keys of `gb28181.security35114`. See the [GB28181 guide — GB35114 Security](gb28181-guide.md).
+Only present in `-tags gb35114` builds (a default build explains the rebuild instead). Issues self-signed pilot material for GB35114 secure registration (identities serve levels A/B/C): an SM2 platform identity plus device identities signed by the platform, laid out to match the three path keys of `gb28181.security35114`. See the [GB28181 guide — GB35114 Security](gb28181-guide.md).
 
 ```bash
 mibee-nvr gen-gb35114-certs --platform-id 34020000002000000001 \

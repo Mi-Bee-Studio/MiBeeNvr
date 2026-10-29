@@ -130,11 +130,16 @@ type GB28181ServerConfig struct {
 }
 
 // GB35114SecurityConfig is the gb28181.security35114 section (#707). Certs
-// are GM/T 0015-2012 SM2 PEM files. A-level only; B/C need SVAC hardware and
-// are out of scope.
+// are GM/T 0015-2012 SM2 PEM files. Level selects the security tier (#1079):
+// "A" (default, REGISTER mutual auth + keyed signaling integrity), "B" (adds
+// per-AU SM2 video signatures + bidirectional Note integrity), "C" (adds
+// SM4-OFB media encryption under a VKEK-sealed VEK, negotiated per INVITE).
 type GB35114SecurityConfig struct {
 	// Enabled activates the GB35114 REGISTER authenticator.
 	Enabled bool `yaml:"enabled"`
+
+	// Level is the GB35114 security level: "A" (default), "B" or "C".
+	Level string `yaml:"level,omitempty"`
 
 	// PlatformCert / PlatformKey are the platform's SM2 signing certificate
 	// and private key (required — Bidirection challenges sign with them).

@@ -27,6 +27,7 @@ type Metrics struct {
 	HLSActiveStreams             *prometheus.GaugeVec     // labels: camera_id
 	HLSSegmentSizeBytes          *prometheus.HistogramVec // labels: camera_id
 	HLSIdleEvictions             *prometheus.CounterVec   // labels: camera_id
+	GB35114AUVerifyFailures      *prometheus.CounterVec   // labels: channel_id
 	WebRTCActivePeers            *prometheus.GaugeVec     // labels: camera_id
 	WebRTCFramesSent             *prometheus.CounterVec   // labels: camera_id
 	WebRTCFramesDropped          *prometheus.CounterVec   // labels: camera_id
@@ -268,6 +269,10 @@ func NewMetrics() *Metrics {
 		Name: "nvr_hls_idle_evictions_total",
 		Help: "Total HLS streams evicted due to idle timeout, partitioned by camera.",
 	}, []string{"camera_id"})
+	gb35114AUVerifyFailures := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvr_gb35114_au_verify_failures_total",
+		Help: "Total GB35114 level-B/C media access units dropped by signature verification (missing or invalid AU signature) — every increase is potential stream tampering.",
+	}, []string{"channel_id"})
 
 	webrtcActivePeers := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "nvr_webrtc_active_peers",
@@ -740,6 +745,7 @@ func NewMetrics() *Metrics {
 		hlsActiveStreams,
 		hlsSegmentSizeBytes,
 		hlsIdleEvictions,
+		gb35114AUVerifyFailures,
 		webrtcActivePeers,
 		webrtcFramesSent,
 		webrtcFramesDropped,
@@ -862,6 +868,7 @@ func NewMetrics() *Metrics {
 		HLSActiveStreams:               hlsActiveStreams,
 		HLSSegmentSizeBytes:            hlsSegmentSizeBytes,
 		HLSIdleEvictions:               hlsIdleEvictions,
+		GB35114AUVerifyFailures:        gb35114AUVerifyFailures,
 		WebRTCActivePeers:              webrtcActivePeers,
 		WebRTCFramesSent:               webrtcFramesSent,
 		WebRTCFramesDropped:            webrtcFramesDropped,

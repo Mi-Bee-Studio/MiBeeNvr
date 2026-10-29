@@ -2,7 +2,7 @@
 
 This guide covers MiBee NVR's GB/T 28181 (Chinese national video-surveillance standard) integration: SIP platform setup, device enrollment, audio, voice intercom, subscriptions, PTZ, device-side recording playback, and troubleshooting.
 
-**Graduated to production support as of v0.14**: verified end-to-end on commercial cameras (Hikvision 2026 firmware) and several in-house device families — enrollment, cascading, voice intercom, PTZ and GB35114 level-A national-cryptography mutual authentication are all maintained as production features.
+**Graduated to production support as of v0.14**: verified end-to-end on commercial cameras (Hikvision 2026 firmware) and several in-house device families — enrollment, cascading, voice intercom, PTZ and GB35114 A/B/C national-cryptography security (A certificate mutual auth, B video signatures, C media encryption; #1079) are all maintained as production features.
 
 ## What is GB/T 28181?
 
@@ -150,7 +150,7 @@ After saving, the camera REGISTERs to the NVR (Digest auth). Nothing to add manu
 | Time sync | ✅ | Device Query answered with platform time |
 | DeviceInfo/Status automation | ✅ | Brand/model backfill; keepalive preserves metadata |
 | **Cascading (lower-level role)** | ✅ | Registers to an upper platform, aggregated catalog, INVITE forwarding (see Cascading Uplink) |
-| GB35114 | ✅ | Level-A certificate auth (requires a `-tags gb35114` build; see below) |
+| GB35114 | ✅ | Level-A cert auth + level-B AU signatures + level-C media encryption (requires a `-tags gb35114` build; see below; #1079) |
 
 ## Configuration Reference
 
@@ -178,21 +178,32 @@ After saving, the camera REGISTERs to the NVR (Digest auth). Nothing to add manu
 | `sub_channel_probe` | string | `"auto"` | Sub-channel prober mode: `auto` (probe only Hikvision/Dahua devices) / `on` (probe every device) / `off`, #560 |
 | `sub_channel_probe_offset` | int | `1` | Sub-channel candidate code = main channel code + this offset (Hikvision convention is +1; 0 disables probing). Range 0–99 |
 | `alarm_linkage` | object | `{enabled: false}` | Alarm-triggered streaming (#355): `{enabled, duration}` — on an alarm notification, INVITE the alarm channel when it is not already streaming, hold the stream for `duration` (default `"60s"`) and then BYE — unless the channel's camera wants recording (then the stream stays) |
-| `security35114` | object | `{enabled: false}` | GB35114 national-cryptography security (SM2/SM3 certificates) — see [GB35114 Security](#gb35114-security) below; only active in binaries built with `-tags gb35114` (default builds just log a warning when enabled) |
+| `security35114` | object | `{enabled: false}` | GB35114 national-cryptography security (levels A/B/C, SM2/SM3/SM4) — see [GB35114 Security](#gb35114-security) below; only active in binaries built with `-tags gb35114` (default builds just log a warning when enabled) |
 
 
 > `tcp_mode` (bool) is a legacy alias of `media_transport`, kept for YAML compatibility. It no longer influences the default (tcp-passive since v0.12.0, #460) — set `media_transport: "udp"` explicitly for UDP.
 
 ### GB35114 Security
 
-The `gb28181.security35114` section (#714/#707, GB35114 level A) enables the national-cryptography certificate system: bidirectional REGISTER authentication + keyed-SM3 Note integrity. **Only active in binaries built with `-tags gb35114`** — a default build merely logs a warning when the section is enabled. Digest-authenticated (`password`) devices keep working alongside; the two paths never interfere.
+The `gb28181.security35114` section (#714/#707, GB35114 #1079) enables the national-cryptography certificate system: bidirectional REGISTER authentication + keyed-SM3 Note integrity, with the security tier selected by `level`. **Only active in binaries built with `-tags gb35114`** — a default build merely logs a warning when the section is enabled. Digest-authenticated (`password`) devices keep working alongside; the two paths never interfere.
 
 | Key | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | bool | `false` | Activate the GB35114 REGISTER authenticator |
+| `level` | string | `"A"` | Security level `A`/`B`/`C` (see the table below; negotiated per INVITE session) |
 | `platform_cert` | string | (required) | Platform SM2 signing certificate path (Bidirection challenges sign with it) |
 | `platform_key` | string | (required) | Platform SM2 private key path |
 | `device_certs_dir` | string | empty | Directory of pre-provisioned device certificates, one `<deviceID>.pem` per device. Optional — devices can instead announce their certificate via the Capability cnonce (trust-on-first-use); pre-provisioning is the stricter policy |
+
+The three levels (#1079; the PS-over-RTP software form — the two wire details the standard delegates to the SVAC codec are defined and documented by gb28181-go):
+
+| Level | Coverage |
+|-------|----------|
+| `A` | SM2-certificate mutual authentication + keyed-SM3 signaling integrity (device→platform) |
+| `B` | A + per-access-unit SM2 video signatures (device signs, platform verifies; missing/invalid signatures drop the AU) + Note integrity in the platform→device direction |
+| `C` | B + media encryption: a per-session VEK sealed SM4-ECB under the VKEK is negotiated through the INVITE SDP, and RTP payloads travel SM4-OFB encrypted (per-packet IVs, loss-resilient). The NVR decrypts at ingest — recording and live distribution are unchanged |
+
+The level is negotiated per INVITE session (the offer carries `a=security:`; a device that cannot honor the request refuses with 488 instead of degrading to plaintext). Recordings and live streams are handled as decrypted plaintext — media is encrypted on the transport leg, the at-rest and playback paths stay as they are.
 
 **Pilot certificate issuance** (labs / small deployments without a CA): `-tags gb35114` builds ship a generator command —
 
@@ -406,12 +417,12 @@ If authentication or recording searches misbehave due to clock drift: the NVR an
 ## Limitations & Known Issues
 
 - **TCP 0x24 framing**: a vendor extension (GB/T 28181-2016/2022 specify RFC4571); use `auto` for mixed fleets
-- **GB35114 higher levels**: level-A certificate auth is implemented (`-tags gb35114` build, see above); higher security levels are not
+- **GB35114 level coverage**: A cert auth / B per-AU signatures / C SM4 media encryption are all implemented (`-tags gb35114` build, see above; #1079); SVAC (GB/T 25724) native signed streams remain a hardware-codec ecosystem
 
 ## Security
 
 - **Authentication**: always set `password` (empty = any reachable device can register). Combine with the `allowed_device_ids` allowlist for defense in depth
-- **Transport**: SIP/RTP are plaintext (GB35114 TLS/SM crypto not implemented). Public deployments must sit behind a firewall/VPN — do not expose 5060 or the port pool directly
+- **Transport**: SIP signaling is plaintext; RTP payloads are SM4-encrypted in GB35114 level-C sessions (SIP-over-TLS/SIPS is not implemented). Public deployments should still sit behind a firewall/VPN — do not expose 5060 or the port pool directly
 - **Port pool**: 51 ports by default; extend as needed (keep under ~200 on RPi 3B)
 
 ## Resources
