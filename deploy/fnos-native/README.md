@@ -46,7 +46,9 @@ docker posture).
 
 `bash deploy/fnos-native/build.sh <version>` from the repo root: builds the
 SPA, embeds it, cross-compiles linux/arm64, assembles the fnpack project and
-copies the icons. The final `fnpack build` step must run where `fnpack` is
+copies the icons. Set `FNOS_ARCH=amd64` for x86_64 fnOS boxes (fnpack
+platform `x86`); the assembled project lands in `out/mibee-nvr-native-<arch>/`.
+The final `fnpack build` step must run where `fnpack` is
 installed (on the fnOS box itself or a build VM) — it just packs the assembled
 directory:
 

@@ -5,9 +5,18 @@
 set -euo pipefail
 
 VERSION="${1:-0.0.0}"
+# Target architecture: "arm64" (fnOS platform=arm, the default - aarch64 NAS)
+# or "amd64" (fnOS platform=x86 - fnpack accepts platform values
+# x86 / arm / loongarch / risc-v / all).
+ARCH="${FNOS_ARCH:-arm64}"
+case "${ARCH}" in
+  arm64) FN_PLATFORM="arm" ;;
+  amd64) FN_PLATFORM="x86" ;;
+  *) echo "unsupported ARCH (want arm64|amd64)" >&2; exit 2 ;;
+esac
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HERE="${ROOT}/deploy/fnos-native"
-OUT="${HERE}/out/mibee-nvr-native"
+OUT="${HERE}/out/mibee-nvr-native-${ARCH}"
 
 cd "${ROOT}"
 
@@ -21,14 +30,15 @@ rm -rf internal/ui/static/assets internal/ui/static/ort internal/ui/static/ort.m
 mkdir -p internal/ui/static
 cp -r web/dist/* internal/ui/static/
 
-echo "==> cross-compiling linux/arm64 static binary"
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+echo "==> cross-compiling linux/${ARCH} static binary (fnOS platform=${FN_PLATFORM})"
+CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
   go build -trimpath -ldflags "-s -w -X main.appVersion=${VERSION}" \
   -o "${OUT}/app/bin/mibee-nvr" ./cmd/mibee-nvr/
 
 echo "==> assembling fnpack project"
 mkdir -p "${OUT}/app/ui/images" "${OUT}/config" "${OUT}/cmd"
 cp "${HERE}/manifest" "${OUT}/manifest"
+sed -i "s/^platform .*/platform               = ${FN_PLATFORM}/" "${OUT}/manifest"
 sed -i "s/^version               = .*/version               = ${VERSION}/" "${OUT}/manifest"
 cp "${HERE}/cmd/main" "${OUT}/cmd/main"
 chmod +x "${OUT}/cmd/main"
