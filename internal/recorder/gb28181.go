@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -97,6 +100,12 @@ type GB28181Recorder struct {
 	// live audio fan-out continues. Written by WriteNALU under r.mu, read by
 	// WriteAudio from the PS demux path.
 	audioSparse atomic.Bool
+
+	// sessionSpan tracks the INVITE→BYE media session (OTel, no-op span when
+	// tracing is disabled). Sessions are long (hours); the span exports on
+	// End, giving per-session start/duration in the trace backend. Guarded by
+	// r.mu alongside the status it mirrors.
+	sessionSpan oteltrace.Span
 }
 
 var (
@@ -141,6 +150,7 @@ func (r *GB28181Recorder) Stop() error {
 		return nil
 	}
 	r.closeCurrentSegmentLocked()
+	r.endSessionSpanLocked("stopped")
 	r.status = model.StatusStopped
 	return nil
 }
@@ -183,6 +193,11 @@ func (r *GB28181Recorder) OnInvite() {
 	if r.cfg.Adaptive != nil {
 		r.gate = NewAdaptiveGate(*r.cfg.Adaptive, r.cfg.CameraID, gb28181Logger)
 	}
+	// Session-recycle without an intervening OnBye: close the stale span
+	// before opening the new one so sessions stay 1:1 with INVITEs.
+	r.endSessionSpanLocked("recycled")
+	_, r.sessionSpan = reconnectTracer.Start(context.Background(), "gb28181.session",
+		oteltrace.WithAttributes(attribute.String("camera_id", r.cfg.CameraID)))
 	r.status = model.StatusRecording
 }
 
@@ -195,7 +210,23 @@ func (r *GB28181Recorder) OnBye() {
 		return
 	}
 	r.closeCurrentSegmentLocked()
+	r.endSessionSpanLocked("bye")
 	r.status = model.StatusReconnecting
+}
+
+// endSessionSpanLocked closes the GB28181 session span (if any); reason is
+// recorded as an attribute for session-outcome filtering (bye/stopped/recycled).
+// Caller holds r.mu.
+func (r *GB28181Recorder) endSessionSpanLocked(reason string) {
+	if r.sessionSpan == nil {
+		return
+	}
+	r.sessionSpan.SetAttributes(attribute.String("gb28181.session.end_reason", reason))
+	if reason != "bye" {
+		r.sessionSpan.SetStatus(codes.Error, "session ended: "+reason)
+	}
+	r.sessionSpan.End()
+	r.sessionSpan = nil
 }
 
 // maxClockJumpTicks bounds the plausible PTS advance between two consecutive

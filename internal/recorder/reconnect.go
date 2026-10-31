@@ -6,6 +6,11 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/backoff"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
@@ -78,6 +83,10 @@ func backoffFor(err error, retryCount int, storageFailed bool, floor time.Durati
 	return b
 }
 
+// reconnectTracer spans every connect attempt (no-op until the global OTel
+// provider is installed by otelx.SetupTracing).
+var reconnectTracer = otel.Tracer("mibee-nvr/recorder")
+
 // runReconnectLoop is the shared auto-reconnect cycle: call Connect, on
 // failure sleep with tiered backoff + jitter (storage failures get the flat
 // storage backoff), transition to StatusReconnecting, and retry until ctx is
@@ -87,7 +96,14 @@ func backoffFor(err error, retryCount int, storageFailed bool, floor time.Durati
 func runReconnectLoop(ctx context.Context, d reconnectDeps) {
 	var retryCount int
 	for {
-		err, connected := d.Connect(ctx)
+		spanCtx, span := reconnectTracer.Start(ctx, "recorder.connect",
+			oteltrace.WithAttributes(attribute.String("camera_id", d.CameraID)))
+		err, connected := d.Connect(spanCtx)
+		span.SetAttributes(attribute.Bool("connected", connected))
+		if err != nil && ctx.Err() == nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
 		if ctx.Err() != nil {
 			return
 		}
