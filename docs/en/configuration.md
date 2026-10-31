@@ -119,6 +119,10 @@ observability:
   log_format: "text"             # Log format: json or text
   stdlog_throttle: "10s"         # Rate-limit interval for third-party stdlib-log noise ("off" disables)
   enable_pprof: false            # Enable pprof debug endpoints
+  tracing:                       # OpenTelemetry distributed tracing (off by default)
+    enabled: false
+    endpoint: ""                 # OTLP trace ingest, e.g. http://collector:4318/v1/traces
+    sample_ratio: 0.1            # Head-sampling ratio (0-1, default 0.1)
 streaming:
   webrtc:
     enabled: true
@@ -156,7 +160,7 @@ health:
 remote_log:
   enabled: false
   endpoint: ""                   # VictoriaLogs URL when enabled
-  format: "jsonline"             # jsonline or loki
+  format: "jsonline"             # jsonline, loki or otlp
 transcoding:
   enabled: false
   max_workers: 1                 # Range: 1-4
@@ -1447,6 +1451,33 @@ credential_probe:
 - **Description**: Enable pprof debug endpoints for performance profiling
 - **Note**: Use with caution in production
 
+### `observability.tracing.enabled`
+- **Type**: boolean
+- **Default**: `false`
+- **Description**: Enable OpenTelemetry distributed tracing. When on: every HTTP
+  API request gets a server span (upstream W3C `traceparent` headers are
+  honored); recorder connect attempts, merge/cleanup passes, GB28181
+  INVITE→BYE sessions and Vision segment pushes emit spans; log lines emitted
+  inside an active span automatically carry `otel_trace_id`/`otel_span_id`
+  fields (coexisting with the request-scoped `trace_id`)
+- **Example**: `true`, `false`
+
+### `observability.tracing.endpoint`
+- **Type**: string
+- **Required**: yes (when tracing is enabled)
+- **Description**: Absolute http(s) OTLP over HTTP trace ingest URL — an
+  OpenTelemetry Collector (`:4318/v1/traces`) or any OTLP-compatible backend
+- **Example**: `"http://192.168.1.10:4318/v1/traces"`
+
+### `observability.tracing.sample_ratio`
+- **Type**: float
+- **Default**: `0.1`
+- **Range**: 0 < ratio ≤ 1
+- **Description**: Head-sampling ratio. Head sampling decides at trace start
+  (outcome-based error biasing is tail sampling, a collector concern).
+  `1.0` = sample everything
+- **Example**: `0.1`, `1.0`
+
 ## Streaming Configuration
 
 > **Note**: `streaming.default_protocol` was removed in 0.11.0 (stale values are silently ignored) — the per-camera orchestrator auto-selects the protocol; use the switcher in the player UI to pin one manually.
@@ -1732,9 +1763,13 @@ auto_discover:
 ### `remote_log.format`
 - **Type**: string
 - **Default**: `"jsonline"`
-- **Options**: `"jsonline"`, `"loki"`
-- **Description**: Log shipping format
-- **Example**: `"jsonline"`, `"loki"`
+- **Options**: `"jsonline"`, `"loki"`, `"otlp"`
+- **Description**: Log shipping format. `otlp` exports via OpenTelemetry
+  OTLP/HTTP — `endpoint` then points at the OTLP logs ingest (VictoriaLogs
+  `/opentelemetry/v1/logs`, or any OpenTelemetry Collector on `:4318/v1/logs`),
+  and records emitted inside an active trace span automatically carry trace
+  correlation fields
+- **Example**: `"jsonline"`, `"loki"`, `"otlp"`
 
 ## AI Configuration
 

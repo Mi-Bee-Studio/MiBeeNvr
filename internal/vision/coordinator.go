@@ -29,7 +29,15 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
+
+// pushTracer spans segment pushes to Vision instances (no-op until the
+// global OTel provider is installed by otelx.SetupTracing).
+var pushTracer = otel.Tracer("mibee-nvr/vision")
 
 // Offline-compensation bounds (#329). A long offline gap is capped so the
 // recovery burst can't storm Vision or the disk; segments beyond the window
@@ -575,7 +583,21 @@ func (c *Coordinator) pushToInstance(ctx context.Context, rt routeTarget, absPat
 // a short Content-Length against a longer body aborts the transfer client-
 // side ("ContentLength=X with Body length Y" — field data 2026-09-02: 530
 // consecutive tiered-push losses before this was found).
-func (c *Coordinator) uploadSegment(ctx context.Context, baseURL string, absPath string, fileSize int64, hdr map[string]string) bool {
+func (c *Coordinator) uploadSegment(ctx context.Context, baseURL string, absPath string, fileSize int64, hdr map[string]string) (ok bool) {
+	spanCtx, span := pushTracer.Start(ctx, "vision.push.segment",
+		oteltrace.WithAttributes(
+			attribute.String("camera_id", hdr["X-Camera-Id"]),
+			attribute.String("recording_id", hdr["X-Recording-Id"]),
+		))
+	defer func() {
+		span.SetAttributes(attribute.Bool("ok", ok))
+		if !ok {
+			span.SetStatus(codes.Error, "push failed")
+		}
+		span.End()
+	}()
+	ctx = spanCtx
+
 	file, err := os.Open(absPath)
 	if err != nil {
 		slog.Warn("open segment file for push failed",
