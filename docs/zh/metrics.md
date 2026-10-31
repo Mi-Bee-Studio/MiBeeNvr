@@ -743,3 +743,26 @@ metrics_auth:
 当未配置 `metrics_auth` 时，`/metrics` 端点无需认证即可访问。
 
 要配置密码，使用 `mibee-nvr hash-password yourpassword` 生成 bcrypt 哈希，或将密码设置为明文（首次运行时自动转换）。
+
+---
+
+## 分布式追踪（OpenTelemetry）
+
+指标回答"发生了什么"，追踪回答"为什么、卡在哪"。`observability.tracing` 开启后，NVR 通过 OTLP/HTTP 导出 OpenTelemetry 追踪（可对接 OpenTelemetry Collector、Tempo、Jaeger 或任何 OTLP 兼容后端）：
+
+- **每个 API 请求**一个 server span（识别并延续上游 W3C `traceparent`）
+- **相机连接尝试**、**合并/清理任务**、**GB28181 INVITE→BYE 会话**、**AI 管线（Vision）段推送** 各自发出 span
+- 追踪开启时，处于活跃 span 上下文的日志行自动携带 `otel_trace_id`/`otel_span_id` 字段（与请求级 `trace_id` 共存）——任何出口（journald/远程日志）都可与链路互相关联
+- 头采样率 `sample_ratio` 默认 0.1；按错误率偏置的尾部采样属于 Collector 侧能力
+
+```yaml
+observability:
+  tracing:
+    enabled: true
+    endpoint: "http://collector:4318/v1/traces"
+    sample_ratio: 0.1
+```
+
+日志侧配套：`remote_log.format: otlp` 把日志经 OTLP/HTTP 直送 VictoriaLogs（`/opentelemetry/v1/logs`）或 Collector，日志与追踪在同一后端天然关联。完整字段说明见[配置手册](configuration.md)。
+
+`/metrics`（Prometheus）与追踪各自独立：指标端点、既有仪表盘与告警不受追踪开关影响。

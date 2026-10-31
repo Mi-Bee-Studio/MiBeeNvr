@@ -109,6 +109,14 @@ Self-measured across three hardware tiers — methodology, judging criteria, and
 | RK3399 NAS (low tier) | 28 cams recording | 20–23% CPU (storage-bound, eMMC) |
 | Banana Pi M5 (production) | 18 cams, 80% iowait storm | health API p50 13.5 ms |
 
+## Observability
+
+- **Metrics** — ~100 `nvr_*` Prometheus metrics on `/metrics` (per-camera streams, storage, SQLite, playback, P2P), with ready-to-import Grafana dashboards and alert rules (`deploy/grafana/`)
+- **Logs** — structured slog to stdout/journald, optional remote shipping to VictoriaLogs (NDJSON or OTLP)
+- **Tracing** (opt-in) — OpenTelemetry distributed tracing via OTLP/HTTP: spans for every API request, camera connect attempts, merge/cleanup passes, GB28181 sessions and AI-pipeline pushes; log lines inside a trace carry `otel_trace_id`/`otel_span_id` for one-click log↔trace correlation in any OTLP-compatible backend
+
+See [Metrics & Monitoring](docs/en/metrics.md) and [Configuration → observability](docs/en/configuration.md#observabilityenable_pprof).
+
 ## Supported Protocols
 
 | Protocol | Direction | Notes |

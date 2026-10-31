@@ -109,6 +109,14 @@ cd MiBeeNvr && make build
 | RK3399 NAS（低配档） | 28 路录制 | CPU 20–23%（瓶颈在 eMMC 存储） |
 | Banana Pi M5（生产机） | 18 路，80% iowait 风暴 | health API p50 13.5 ms |
 
+## 可观测性
+
+- **指标** —— `/metrics` 上约 100 个 `nvr_*` Prometheus 指标（每相机流、存储、SQLite、播放、P2P），附可直接导入的 Grafana 仪表盘与告警规则（`deploy/grafana/`）
+- **日志** —— 结构化 slog 输出 stdout/journald，可选远程投递 VictoriaLogs（NDJSON 或 OTLP）
+- **追踪**（可选）—— OpenTelemetry 分布式追踪，OTLP/HTTP 导出：覆盖每个 API 请求、相机连接尝试、合并/清理任务、GB28181 会话与 AI 管线推送；追踪开启时日志行自动携带 `otel_trace_id`/`otel_span_id`，在任何 OTLP 兼容后端一键实现日志↔链路互跳
+
+详见[监控指标](docs/zh/metrics.md)与[配置手册 → observability](docs/zh/configuration.md)。
+
 ## 支持的协议
 
 | 协议 | 方向 | 说明 |

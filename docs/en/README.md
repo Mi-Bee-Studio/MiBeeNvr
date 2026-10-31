@@ -92,7 +92,7 @@
 | [Performance Tuning](performance.md) | Memory tiers, GOMEMLIMIT, background IO budget |
 | [Performance Benchmark](performance-benchmark.md) | The 2026-09 self-test report: capacity and resource curves across three hardware tiers |
 | [Prometheus Metrics](metrics.md) | Metric reference with types, labels, examples |
-| [Observability](observability.md) | Logs, health, and event streams |
+| [Observability](observability.md) | Flow view, frame tracing, health stability, Prometheus/Grafana, OpenTelemetry tracing and remote logs |
 
 ## Developer & Internals
 

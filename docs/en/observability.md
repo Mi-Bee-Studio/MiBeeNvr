@@ -1,6 +1,6 @@
 # Observability Guide
 
-MiBee NVR ships a complete troubleshooting and monitoring toolkit: the flow-path view, end-to-end latency display, health stability stats, per-camera frame-trace sampling, Prometheus metrics and Grafana dashboards. This page is the entry point; full metric reference lives in [metrics.md](metrics.md).
+MiBee NVR ships a complete troubleshooting and monitoring toolkit: the flow-path view, end-to-end latency display, health stability stats, per-camera frame-trace sampling, Prometheus metrics and Grafana dashboards, OpenTelemetry distributed tracing and remote log shipping. This page is the entry point; full metric reference lives in [metrics.md](metrics.md).
 
 ## Flow View
 
@@ -99,6 +99,38 @@ Deduction reasons are listed in plain language (e.g. "3.2% frame drops in the la
 ### Latency metric
 
 `nvr_playback_live_latency_ms` (label `protocol` = ws/flv/hls/webrtc) comes from browser telemetry and reflects **what real users see** — complementary to hub-side metrics.
+
+## Distributed tracing (OpenTelemetry)
+
+Metrics answer *what* happened; traces answer *why* and *where it stalled*. With `observability.tracing` (off by default) enabled, traces export via OTLP/HTTP to an OpenTelemetry Collector, Tempo, Jaeger or any OTLP-compatible backend:
+
+```yaml
+observability:
+  tracing:
+    enabled: true
+    endpoint: "http://collector:4318/v1/traces"  # absolute http(s) URL
+    sample_ratio: 0.1                             # head-sampling ratio (default 0.1)
+```
+
+- One **server span per API request** — upstream W3C `traceparent` headers are honored, so external callers (apps / scripts) that send the header join the same trace
+- Spans for **camera connect attempts** (one per attempt, with camera_id/connected/error), **merge/cleanup passes**, **GB28181 INVITE→BYE sessions** (with end reason), and **AI-pipeline segment pushes**
+- While tracing is on, log lines emitted inside an active span automatically carry `otel_trace_id`/`otel_span_id` fields (coexisting with the request-scoped `trace_id`) — journald and remote logs both correlate with the trace
+- Head sampling decides at trace start (outcome-agnostic); outcome-based **tail sampling** is a collector concern
+- With tracing disabled every instrumentation site is a no-op (near-zero cost); `/metrics` and existing dashboards are unaffected
+
+## Remote log shipping
+
+`remote_log` ships structured logs to an external backend (stdout/journald keep working):
+
+```yaml
+remote_log:
+  enabled: true
+  endpoint: "http://victorialogs:9428/opentelemetry/v1/logs"
+  format: otlp        # otlp (OTLP/HTTP, recommended — logs↔traces correlate natively) | jsonline | loki
+```
+
+- `otlp`: endpoint is the OTLP logs ingest (VictoriaLogs `/opentelemetry/v1/logs`, or a Collector at `:4318/v1/logs`); with tracing on, the same backend links logs and traces with one click
+- `jsonline` / `loki`: NDJSON POST — endpoint is the matching ingest (e.g. VictoriaLogs `/insert/jsonline`)
 
 ## pprof profiling
 
