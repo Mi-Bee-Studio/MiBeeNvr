@@ -1,6 +1,6 @@
 # 可观测性手册
 
-MiBee NVR 内置一整套排障与监控能力：链路（Flow）页、端到端延迟显示、健康稳定性数据、按相机帧追踪采样、Prometheus 指标与 Grafana 面板。本文是这些能力的总入口；Prometheus 指标明细另见 [metrics.md](metrics.md)。
+MiBee NVR 内置一整套排障与监控能力：链路（Flow）页、端到端延迟显示、健康稳定性数据、按相机帧追踪采样、Prometheus 指标与 Grafana 面板、OpenTelemetry 分布式追踪与远程日志。本文是这些能力的总入口；Prometheus 指标明细另见 [metrics.md](metrics.md)。
 
 ## 链路（Flow）页
 
@@ -99,6 +99,38 @@ ingest（录制器收到帧）
 ### 端到端延迟指标
 
 `nvr_playback_live_latency_ms`（标签 `protocol` = ws/flv/hls/webrtc）来自浏览器遥测上报，反映**真实用户看到的延迟**，与 hub 侧指标互补。
+
+## 分布式追踪（OpenTelemetry）
+
+指标回答"发生了什么"，追踪回答"为什么、卡在哪"。`observability.tracing`（默认关闭）开启后经 OTLP/HTTP 导出追踪，可对接 OpenTelemetry Collector、Tempo、Jaeger 或任何 OTLP 兼容后端：
+
+```yaml
+observability:
+  tracing:
+    enabled: true
+    endpoint: "http://collector:4318/v1/traces"  # 绝对 http(s) URL
+    sample_ratio: 0.1                             # 头采样率（默认 0.1）
+```
+
+- **每个 API 请求**一个 server span——识别并延续上游 W3C `traceparent`，外部调用方（App/自动化脚本）带该头即可把请求并入同一条链路
+- **相机连接尝试**（一次尝试一个 span，带 camera_id/connected/错误）、**合并/清理任务**、**GB28181 INVITE→BYE 会话**（带结束原因）、**AI 管线段推送**各自发出 span
+- 追踪开启时，活跃 span 上下文中的日志行自动携带 `otel_trace_id`/`otel_span_id` 字段（与请求级 `trace_id` 共存）——journald 与远程日志都可同链路互相关联
+- 头采样在链路开始时决定是否记录（无法按结果偏置）；按错误率偏置的**尾部采样**属于 Collector 侧能力
+- 追踪关闭时全部埋点为 no-op，近乎零开销；`/metrics` 与既有仪表盘不受影响
+
+## 远程日志
+
+`remote_log` 把结构化日志投递到外部后端（stdout/journald 照常保留）：
+
+```yaml
+remote_log:
+  enabled: true
+  endpoint: "http://victorialogs:9428/opentelemetry/v1/logs"
+  format: otlp        # otlp（OTLP/HTTP，推荐，日志↔追踪天然关联）| jsonline | loki
+```
+
+- `otlp`：endpoint 填 OTLP logs 接收地址（VictoriaLogs `/opentelemetry/v1/logs` 或 Collector `:4318/v1/logs`）；配合追踪开启，同一后端内日志与链路一键互跳
+- `jsonline` / `loki`：NDJSON POST，endpoint 为对应接收端（如 VictoriaLogs `/insert/jsonline`）
 
 ## pprof 性能分析
 

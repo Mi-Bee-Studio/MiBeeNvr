@@ -743,3 +743,26 @@ metrics_auth:
 When `metrics_auth` is not configured, the `/metrics` endpoint is accessible without authentication.
 
 To configure, use `mibee-nvr hash-password yourpassword` to generate a bcrypt hash, or set the password as plaintext (auto-converted on first run).
+
+---
+
+## Distributed Tracing (OpenTelemetry)
+
+Metrics answer *what* happened; traces answer *why* and *where it stalled*. With `observability.tracing` enabled, the NVR exports OpenTelemetry traces via OTLP/HTTP (to an OpenTelemetry Collector, Tempo, Jaeger, or any OTLP-compatible backend):
+
+- One **server span per API request** (upstream W3C `traceparent` headers are honored)
+- Spans for **camera connect attempts**, **merge/cleanup passes**, **GB28181 INVITE→BYE sessions**, and **AI-pipeline (Vision) segment pushes**
+- While tracing is on, log lines emitted inside an active span automatically carry `otel_trace_id`/`otel_span_id` fields (coexisting with the request-scoped `trace_id`) — every sink (journald / remote logs) correlates with the trace
+- Head sampling via `sample_ratio` (default `0.1`); outcome-based error biasing is tail sampling, a collector concern
+
+```yaml
+observability:
+  tracing:
+    enabled: true
+    endpoint: "http://collector:4318/v1/traces"
+    sample_ratio: 0.1
+```
+
+Log-side companion: `remote_log.format: otlp` ships logs via OTLP/HTTP straight to VictoriaLogs (`/opentelemetry/v1/logs`) or a Collector, so logs and traces correlate natively in the same backend. Full field reference in the [Configuration guide](configuration.md).
+
+`/metrics` (Prometheus) and tracing are independent: the metrics endpoint, existing dashboards and alerts are unaffected by the tracing toggle.

@@ -92,7 +92,7 @@
 | [性能调优](performance.md) | 内存分层、GOMEMLIMIT、后台 IO 预算 |
 | [性能压测报告](performance-benchmark.md) | 2026-09 自测报告：三个硬件档位的容量与资源曲线 |
 | [Prometheus 指标](metrics.md) | 指标参考：类型、标签、示例 |
-| [可观测性](observability.md) | 日志、健康检查、事件流 |
+| [可观测性](observability.md) | 链路页、帧追踪、健康稳定性、Prometheus/Grafana、OpenTelemetry 追踪与远程日志 |
 
 ## 开发者与内部设计
 
