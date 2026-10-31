@@ -22,6 +22,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/otelx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
@@ -145,6 +146,23 @@ func buildCoreDeps(deps *appDeps) error {
 	// so registerServices can start it before the first segments complete.
 	deps.motionAnalyzer = motion.NewAnalyzer(db, deps.eventBus, cfg.Storage.RootDir, motion.DefaultOptions())
 
+	// Step 2.4: OpenTelemetry tracing (opt-in). Installs the global
+	// TracerProvider + W3C propagator; all instrumentation sites (middleware,
+	// reconnect loop, merge/cleanup, GB28181 sessions, Vision pushes) are
+	// no-ops until this succeeds. Flushes via otelx.Shutdown from main after
+	// App.Stop, so shutdown-path spans get exported too.
+	if cfg.Observability.Tracing.Enabled {
+		if err := otelx.SetupTracing(otelx.TracingConfig{
+			Endpoint:    cfg.Observability.Tracing.Endpoint,
+			SampleRatio: cfg.Observability.Tracing.SampleRatio,
+		}); err != nil {
+			db.Close()
+			return fmt.Errorf("otel tracing: %w", err)
+		}
+		slog.Info("otel tracing enabled", "endpoint", cfg.Observability.Tracing.Endpoint,
+			"sample_ratio", cfg.Observability.Tracing.SampleRatio)
+	}
+
 	// Step 2.5: Remote log handler (if enabled)
 	if cfg.RemoteLog.Enabled {
 		var logLevel slog.Level
@@ -158,16 +176,26 @@ func buildCoreDeps(deps *appDeps) error {
 		default:
 			logLevel = slog.LevelInfo
 		}
-		rh := remotelog.New(cfg.RemoteLog.Endpoint, cfg.RemoteLog.Format, logLevel, m)
-		deps.remoteLogH = rh
+		var ship logShipper
+		if cfg.RemoteLog.Format == "otlp" {
+			oh, err := otelx.NewOTLPLogHandler(cfg.RemoteLog.Endpoint, logLevel)
+			if err != nil {
+				db.Close()
+				return fmt.Errorf("remote log otlp: %w", err)
+			}
+			ship = oh
+		} else {
+			ship = remotelog.New(cfg.RemoteLog.Endpoint, cfg.RemoteLog.Format, logLevel, m)
+		}
+		deps.remoteLogH = ship
 		// Wrap slog.Default() with multi-handler to fan out to both stdout and
 		// remote. slogx.SetDefault (not a bare slog.SetDefault): the swap
 		// rewrites stdlib log output, which would silently discard an armed
 		// stdlib-log throttle (#813).
 		if current := slog.Default(); current.Handler() != nil {
-			slogx.SetDefault(slog.New(remotelog.MultiHandler(current.Handler(), rh)))
+			slogx.SetDefault(slog.New(remotelog.MultiHandler(current.Handler(), ship)))
 		} else {
-			slogx.SetDefault(slog.New(rh))
+			slogx.SetDefault(slog.New(ship))
 		}
 	}
 

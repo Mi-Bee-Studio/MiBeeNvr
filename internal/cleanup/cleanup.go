@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+	"go.opentelemetry.io/otel"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -27,6 +29,10 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
+
+// cleanupTracer spans cleanup cycles (no-op until the global OTel provider is
+// installed by otelx.SetupTracing).
+var cleanupTracer = otel.Tracer("mibee-nvr/cleanup")
 
 var logger = slogx.Component("cleanup")
 
@@ -204,6 +210,10 @@ func (cm *CleanupManager) Run(ctx context.Context) {
 // health retention, orphan files, stale records, zero-duration repair, then database
 // optimize (PRAGMA optimize) and WAL checkpoint.
 func (cm *CleanupManager) RunOnce(ctx context.Context) error {
+	spanCtx, span := cleanupTracer.Start(ctx, "cleanup.run",
+		oteltrace.WithSpanKind(oteltrace.SpanKindInternal))
+	ctx = spanCtx
+	defer span.End()
 	start := time.Now()
 
 	if err := cm.timeBasedCleanup(ctx); err != nil {

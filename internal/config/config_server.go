@@ -306,6 +306,23 @@ type ObservabilityConfig struct {
 	// "N RTP packets lost") to 1 per interval — they otherwise flood small
 	// journald quotas. Go duration string; "off"/"0s" disables. default "10s"
 	StdlogThrottle string `yaml:"stdlog_throttle"`
+	// Tracing enables OpenTelemetry distributed tracing (opt-in, off by
+	// default). When enabled, server spans are created per HTTP request and
+	// long-lived jobs (recorder connects, merges, cleanups, GB28181 sessions,
+	// Vision pushes) emit spans; logs gain otel_trace_id/otel_span_id fields.
+	Tracing ObservabilityTracingConfig `yaml:"tracing,omitempty"`
+}
+
+// ObservabilityTracingConfig configures OTLP/HTTP trace export.
+type ObservabilityTracingConfig struct {
+	Enabled bool `yaml:"enabled"` // default false
+	// Endpoint is the absolute OTLP trace ingest URL, scheme http/https,
+	// e.g. "http://collector:4318/v1/traces".
+	Endpoint string `yaml:"endpoint"`
+	// SampleRatio is the head-sampling ratio (0<r<=1); 0/unset = 0.1.
+	// Head sampling decides at trace start — outcome-based (error-biased)
+	// filtering is tail sampling, a collector concern.
+	SampleRatio float64 `yaml:"sample_ratio"`
 }
 
 // StdlogThrottleDuration resolves StdlogThrottle to a duration; empty, "off",
@@ -324,7 +341,10 @@ func (o ObservabilityConfig) StdlogThrottleDuration() time.Duration {
 type RemoteLogConfig struct {
 	Enabled  bool   `yaml:"enabled"`  // default false
 	Endpoint string `yaml:"endpoint"` // VictoriaLogs URL, e.g. "http://localhost:9428/insert/jsonline"
-	Format   string `yaml:"format"`   // "jsonline" (default) or "loki"
+	// Format: "jsonline" (default), "loki", or "otlp" — OpenTelemetry OTLP/HTTP
+	// export where endpoint is the OTLP logs ingest URL (VictoriaLogs
+	// /opentelemetry/v1/logs, or any OpenTelemetry Collector on :4318).
+	Format string `yaml:"format"`
 }
 
 // MetricsAuthConfig defines optional independent authentication for the /metrics endpoint.

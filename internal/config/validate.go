@@ -479,14 +479,24 @@ func validateConfigDetails(cfg *Config) error {
 			return fmt.Errorf("observability.stdlog_throttle invalid: %s (must be a Go duration like 10s/1m, or off)", v)
 		}
 	}
+	// Validate observability.tracing (opt-in; only meaningful when enabled).
+	if t := cfg.Observability.Tracing; t.Enabled {
+		u, err := url.Parse(strings.TrimSpace(t.Endpoint))
+		if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("observability.tracing.endpoint invalid: %s (must be an absolute http(s) URL, e.g. http://collector:4318/v1/traces)", t.Endpoint)
+		}
+		if t.SampleRatio < 0 || t.SampleRatio > 1 {
+			return fmt.Errorf("observability.tracing.sample_ratio invalid: %v (must be within 0..1)", t.SampleRatio)
+		}
+	}
 
 	// Validate remote_log
 	if cfg.RemoteLog.Enabled {
 		if strings.TrimSpace(cfg.RemoteLog.Endpoint) == "" {
 			return fmt.Errorf("remote_log.endpoint is required when remote_log.enabled=true")
 		}
-		if cfg.RemoteLog.Format != "jsonline" && cfg.RemoteLog.Format != "loki" {
-			return fmt.Errorf("remote_log.format must be \"jsonline\" or \"loki\", got %q", cfg.RemoteLog.Format)
+		if cfg.RemoteLog.Format != "jsonline" && cfg.RemoteLog.Format != "loki" && cfg.RemoteLog.Format != "otlp" {
+			return fmt.Errorf("remote_log.format must be \"jsonline\", \"loki\" or \"otlp\", got %q", cfg.RemoteLog.Format)
 		}
 	}
 	// Memory self-discipline (#756): 0 = automatic heuristic; an explicit

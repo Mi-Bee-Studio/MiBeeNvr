@@ -105,7 +105,7 @@ health:
 remote_log:
   enabled: false                 # 启用远程日志
   endpoint: ""                    # 日志投递的 HTTP 端点 URL
-  format: "jsonline"              # 日志格式: jsonline 或 loki
+  format: "jsonline"              # 日志格式: jsonline, loki 或 otlp
 ai:
   enabled: false                 # 启用 AI 检测（浏览器端 ONNX Runtime Web）
   model_url: "/models/yolo11n.onnx"  # ONNX 模型地址
@@ -129,6 +129,10 @@ observability:
   log_format: "text"             # 日志格式: json 或 text
   stdlog_throttle: "10s"         # 三方库 stdlib 日志限流间隔（"off" 关闭）
   enable_pprof: false            # 启用 pprof 调试端点
+  tracing:                       # OpenTelemetry 分布式追踪（默认关闭）
+    enabled: false
+    endpoint: ""                 # OTLP trace 端点, 如 http://collector:4318/v1/traces
+    sample_ratio: 0.1            # 头采样率 (0-1, 默认 0.1)
 version: "1.0"
 ```
 
@@ -1593,9 +1597,12 @@ auto_discover:
 ### `remote_log.format`
 - **类型**: string
 - **默认**: `"jsonline"`
-- **选项**: `"jsonline"`, `"loki"`
-- **描述**: 远程日志输出格式
-- **示例**: `"jsonline"`, `"loki"`
+- **选项**: `"jsonline"`, `"loki"`, `"otlp"`
+- **描述**: 远程日志输出格式。`otlp` 走 OpenTelemetry OTLP/HTTP 导出——此时
+  `endpoint` 填 OTLP logs 接收地址（如 VictoriaLogs 的
+  `/opentelemetry/v1/logs`，或 OpenTelemetry Collector 的 `:4318/v1/logs`），
+  且当日志处于活跃 trace 的 span 上下文时自动附带 trace 关联字段
+- **示例**: `"jsonline"`, `"loki"`, `"otlp"`
 
 ## AI 推理配置
 
@@ -1760,6 +1767,30 @@ AI 检测在**浏览器端**运行（ONNX Runtime Web）；后端的 `internal/a
 - **默认**: `false`
 - **描述**: 启用 pprof 调试端点进行性能分析
 - **注意**: 生产环境中请谨慎使用
+
+### `observability.tracing.enabled`
+- **类型**: boolean
+- **默认**: `false`
+- **描述**: 启用 OpenTelemetry 分布式追踪。启用后：每个 HTTP API 请求生成一个
+  server span（识别并延续上游 W3C `traceparent`）；录制器连接尝试、合并/清理
+  任务、GB28181 INVITE→BYE 会话、Vision 段推送均发出 span；日志行在 span 上下文
+  内自动附带 `otel_trace_id`/`otel_span_id` 字段（与请求级 `trace_id` 共存）
+- **示例**: `true`, `false`
+
+### `observability.tracing.endpoint`
+- **类型**: string
+- **必需**: 是（如果启用 tracing）
+- **描述**: OTLP over HTTP 的 trace 接收地址（绝对 http/https URL）。可以是
+  OpenTelemetry Collector（`:4318/v1/traces`）或任何兼容 OTLP 的后端
+- **示例**: `"http://192.168.1.10:4318/v1/traces"`
+
+### `observability.tracing.sample_ratio`
+- **类型**: float
+- **默认**: `0.1`
+- **范围**: 0 < ratio ≤ 1
+- **描述**: 头采样率。头采样在 trace 开始时决定是否记录（无法按结果偏置——
+  按错误率偏置的尾部采样属于 Collector 侧能力）。`1.0` = 全量采样
+- **示例**: `0.1`, `1.0`
 
 ## 转码配置
 

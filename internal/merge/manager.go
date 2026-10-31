@@ -13,6 +13,10 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
@@ -21,6 +25,10 @@ import (
 )
 
 var logger = slogx.Component("merge-manager")
+
+// mergeTracer spans merge passes (no-op until the global OTel provider is
+// installed by otelx.SetupTracing).
+var mergeTracer = otel.Tracer("mibee-nvr/merge")
 
 // MergeStatus holds the current status of the merge manager.
 type MergeStatus struct {
@@ -245,7 +253,19 @@ func (m *MergeManager) RunOnce(ctx context.Context) error {
 // MergeCamera performs a single merge pass for the given camera.
 // It resolves the effective merge config (global + per-camera override) and delegates to processCamera.
 // Returns an error if merge is already in progress for this camera or if the merge pass fails.
-func (m *MergeManager) MergeCamera(ctx context.Context, cameraID string) error {
+func (m *MergeManager) MergeCamera(ctx context.Context, cameraID string) (err error) {
+	// OTel span per camera merge pass (no-op until tracing is enabled) —
+	// merge duration/outcome correlation without touching processCamera.
+	spanCtx, span := mergeTracer.Start(ctx, "merge.camera",
+		oteltrace.WithAttributes(attribute.String("camera_id", cameraID)))
+	ctx = spanCtx
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	cfg := m.getGlobalCfg()
 
 	minAge, err := time.ParseDuration(cfg.MinSegmentAge)

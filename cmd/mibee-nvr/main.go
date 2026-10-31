@@ -23,6 +23,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/install"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/otelx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/tray"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/ui"
@@ -209,7 +210,7 @@ func main() {
 			slog.Info("desktop log tee active", "file", filepath.Join(filepath.Dir(*configPath), "nvr.log"))
 		}
 	}
-	slogx.SetDefault(logger)
+	slogx.SetDefault(slog.New(slogx.WithTraceContext(logger.Handler())))
 	slogx.InstallStdLogThrottle(cfg.Observability.StdlogThrottleDuration())
 	if runtime.GOOS == "windows" {
 		install.HideOwnConsole()
@@ -218,6 +219,10 @@ func main() {
 	// Process memory self-discipline (#756): conservative GOMEMLIMIT before
 	// any manager starts allocating — env GOMEMLIMIT wins natively.
 	applyMemoryLimit(cfg)
+
+	// OTel resource identity (service.version/instance.id) for tracing and
+	// OTLP log export — set before app assembly wires the providers.
+	otelx.SetBuildInfo(appVersion, cfg.Server.DeviceID)
 
 	a, err := app.RunFree(cfg, *configPath)
 	if err != nil {
@@ -434,6 +439,9 @@ func main() {
 	if err := a.Stop(); err != nil {
 		slog.Error("stop", "error", err)
 	}
+	// Flush OTel trace batches after every service stopped — shutdown-path
+	// spans (merge/cleanup/recorder teardown) get the same export chance.
+	otelx.Shutdown()
 	// Desktop agents run with KeepAlive — detach from the supervisor before
 	// exiting or launchd resurrects the process and a deliberate quit never
 	// sticks (menu-bar "退出" field report 2026-09-20). No-op on servers.

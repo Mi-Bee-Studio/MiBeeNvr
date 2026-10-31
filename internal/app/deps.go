@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -22,7 +23,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware/remotelog"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/migration"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mqtt"
@@ -60,6 +60,15 @@ import (
 // order — these are independent. The Start/Stop sequence registered in
 // registerServices is what matters for correctness; buildAppDeps order only
 // matters insofar as each manager needs its dependencies constructed first.
+// logShipper is the remote-log sink contract shared by remotelog.Handler
+// (jsonline/loki NDJSON POST) and otelx.OTLPLogHandler (OTLP/HTTP export):
+// an slog.Handler fanned out into the default logger, closed on the
+// service-stop path.
+type logShipper interface {
+	slog.Handler
+	Close()
+}
+
 type appDeps struct {
 	// Inputs / config
 	cfg        *config.Config
@@ -76,10 +85,12 @@ type appDeps struct {
 	// viewerLoginBinder 挂接分享观看者核验（p2p Manager 存活时由
 	// registerP2PService 调用；分享执行链 user-tenant-model §7）。
 	viewerLoginBinder func(mgr *p2p.Manager)
-	remoteLogH        *remotelog.Handler
-	appLoc            *time.Location
-	ioBudget          *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
-	unlinkBudget      *iobudget.Bucket // recursive-deletion unlink guardrail (#755); nil = off
+	// remoteLogH is either remotelog.Handler (jsonline/loki) or otelx.OTLPLogHandler
+	// (format=otlp) — both satisfy the Close() service-stop contract.
+	remoteLogH   logShipper
+	appLoc       *time.Location
+	ioBudget     *iobudget.Bucket // shared background I/O budget (#751); nil = off (default)
+	unlinkBudget *iobudget.Bucket // recursive-deletion unlink guardrail (#755); nil = off
 
 	// Merge / transcode / timelapse
 	mergeMgr              *merge.MergeManager

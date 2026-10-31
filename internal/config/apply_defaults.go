@@ -226,7 +226,11 @@ func applyConfigDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.Observability.StdlogThrottle) == "" {
 		cfg.Observability.StdlogThrottle = "10s"
 	}
-	// EnablePprof defaults to false (zero value)
+	// Tracing defaults: head-sampling ratio 0.1 when unset (zero value).
+	if cfg.Observability.Tracing.SampleRatio <= 0 {
+		cfg.Observability.Tracing.SampleRatio = 0.1
+	}
+	// EnablePprof / Tracing.Enabled default to false (zero value)
 	// Version
 	// HLS defaults
 	if cfg.HLS.WriteBufferSize <= 0 {

@@ -431,12 +431,16 @@ hls:
                                     # clients; takes effect after restart. LL requires segment_count >= 7
   part_min_duration: "200ms"       # LL-HLS part duration (range: 100ms-1s, default: 200ms)
 
-# Observability — logging and debugging
+# Observability — logging, tracing and debugging
 observability:
   log_level: "info"                # Log level: debug, info, warn, error (default: info)
   log_format: "text"               # Log format: json or text (default: text)
   # stdlog_throttle: "10s"         # Rate-limit third-party stdlib-log noise (gortsplib RTP-loss); "off"/"0s" disables (default: 10s)
   # enable_pprof: false            # Enable pprof debug endpoints (default: false)
+  # tracing:                       # OpenTelemetry distributed tracing (default: off)
+  #   enabled: true
+  #   endpoint: "http://collector:4318/v1/traces"   # OTLP/HTTP trace ingest (absolute http(s) URL)
+  #   sample_ratio: 0.1            # Head-sampling ratio, 0<r<=1 (default: 0.1)
 
 # External AI post-processing consumer (MiBeeVision) integration.
 # The consumer authenticates with an API key (below) and reports a heartbeat;
@@ -559,11 +563,15 @@ observability:
 #     probe_timeout: "2s"              # Per-IP probe timeout (default: 2s)
 #     max_duration: "30s"              # Bound on a single full scan (default: 30s)
 
-# Remote logging — send logs to external HTTP endpoint
+# Remote logging — send logs to an external HTTP endpoint (VictoriaLogs and
+# friends), or via OpenTelemetry OTLP/HTTP with format: otlp
 # remote_log:
 #   enabled: false                   # Enable remote logging (default: false)
 #   endpoint: ""                      # HTTP endpoint URL for log delivery
-#   format: "jsonline"               # Log format: jsonline, loki (default: jsonline)
+#   format: "jsonline"               # Log format: jsonline, loki, otlp (default: jsonline).
+#                                     # For otlp, endpoint is the OTLP logs ingest, e.g.
+#                                     # http://victorialogs:9428/opentelemetry/v1/logs or an
+#                                     # OpenTelemetry Collector at http://collector:4318/v1/logs
 
 # AI detection — browser-side ONNX Runtime object detection
 # ai:

@@ -58,6 +58,10 @@ func buildRouter(
 		}
 		indexBytes = injectBasePath(raw, basePath)
 	}
+	// OTel server spans (no-op unless observability.tracing.enabled): outermost
+	// so every request — including failures rejected by later middleware — is
+	// traced, and W3C traceparent from upstream joins existing traces.
+	r.Use(authmw.OTelTrace("/api/health", "/api/readyz"))
 	r.Use(authmw.RequestLogger(slog.Default(), "/api/health", "/api/readyz"))
 	r.Use(chimiddleware.Recoverer)
 	r.Use(authmw.SecurityHeaders(cfg.Security.FrameAncestors, indexBytes))
