@@ -116,6 +116,20 @@ type CameraConfig struct {
 	// exit adaptive timelapse with reason=onvif_motion. ONVIF protocol only.
 	MotionSource string `yaml:"motion_source,omitempty" json:"motion_source,omitempty"`
 
+	// ImagingType labels which imaging channel of the physical device this
+	// camera entry records (dual-spectrum support): "" | "visible" — the
+	// visible-light optics (default, existing behavior). "thermal" — the
+	// thermal channel, typically the second entry created for the same
+	// dual-spectrum device (one device, two channels, both recording 24/7).
+	// Purely a semantic label: recording/streaming are identical. Two default
+	// policies key off it — the AI push is skipped (vision.skip_cameras gets
+	// the camera appended on transition; detection models are visible-light
+	// trained and produce noise on thermal frames), and NVR-side motion
+	// gating (adaptive/pixgate) is a poor fit (the thermal NUC shutter's
+	// full-frame flash re-triggers pixel/spike detectors every calibration
+	// cycle), so continuous recording is recommended.
+	ImagingType string `yaml:"imaging_type,omitempty" json:"imaging_type,omitempty"`
+
 	// AutoTimeSync opts this camera in/out of the time_sync.auto correction
 	// loop (#time-sync): nil = follow the global setting; false = never
 	// auto-correct this camera (status is still reported); true = correct

@@ -88,6 +88,7 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.RecordingMode = cam.RecordingMode
 		row.RecordingTier = cam.RecordingTier
 		row.MotionSource = cam.MotionSource
+		row.ImagingType = cam.ImagingType
 		row.AutoTimeSync = cam.AutoTimeSync
 		row.MJPEGForm = cam.MJPEGForm
 		row.Pixgate = cam.Pixgate
@@ -184,6 +185,8 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			// 渲染分组——缺这个字段 App 侧分组永远为空（2026-10-03 App 重构
 			// 实测发现；SPA 走全量视图不受影响）。
 			Group string `json:"group,omitempty"`
+			// ImagingType（双光谱）同样进 summary：App 侧热成像通道徽标。
+			ImagingType string `json:"imaging_type,omitempty"`
 		}
 		summaries := make([]cameraSummary, len(cameras))
 		// Build ETag from camera status signatures (cheap — no JSON serialization).
@@ -197,6 +200,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				Protocol:    c.Protocol,
 				IsRecording: c.Status == model.StatusRecording && h.config.RecordingGate(c.RecordingEnabled),
 				Group:       c.GroupName,
+				ImagingType: c.ImagingType,
 			}
 			if c.LastSeen != nil && !c.LastSeen.IsZero() {
 				ts := c.LastSeen.Format(time.RFC3339)
@@ -211,6 +215,7 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			// 分组名进 ETag：分组变化（v36 PUT group）要让 summary 的
 			// 304 缓存失效，否则 ETag 客户端拿不到新分组。
 			etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(c.GroupName))
+			etagHash = crc32.Update(etagHash, crc32.IEEETable, []byte(c.ImagingType))
 		}
 		etag := fmt.Sprintf(`"s%d-%d"`, len(summaries), etagHash)
 		w.Header().Set("ETag", etag)
@@ -403,6 +408,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingTier *string `json:"recording_tier"`
 		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
 		MotionSource *string `json:"motion_source"`
+		// Imaging channel (dual-spectrum): ""/"visible" or "thermal". nil =
+		// unchanged. Thermal applies the default policy (AI push skip).
+		ImagingType *string `json:"imaging_type"`
 		// AutoTimeSync opts in/out of time_sync.auto for this camera (#time-sync).
 		AutoTimeSync *bool `json:"auto_time_sync"`
 		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
@@ -531,6 +539,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingMode:          body.RecordingMode,
 		RecordingTier:          body.RecordingTier,
 		MotionSource:           body.MotionSource,
+		ImagingType:            body.ImagingType,
 		AutoTimeSync:           body.AutoTimeSync,
 		MJPEGForm:              body.MJPEGForm,
 		Pixgate:                body.Pixgate,
@@ -560,7 +569,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	// (or the new one, when the same request changes it) — adaptive needs
 	// h264/h265.
 	if body.RecordingMode != nil || body.Adaptive != nil || body.AudioTrigger != nil ||
-		body.MotionSource != nil || body.MJPEGForm != nil {
+		body.MotionSource != nil || body.MJPEGForm != nil || body.ImagingType != nil {
 		probe := config.CameraConfig{ID: id}
 		if h.config != nil {
 			for _, cam := range h.config.Cameras {
@@ -578,6 +587,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.MotionSource != nil {
 			probe.MotionSource = *body.MotionSource
+		}
+		if body.ImagingType != nil {
+			probe.ImagingType = *body.ImagingType
 		}
 		if body.MJPEGForm != nil {
 			probe.MJPEGForm = *body.MJPEGForm

@@ -390,6 +390,15 @@ The NVR maintains the subscription automatically: renewal before expiry, rebuild
 
 > Events reported while the NVR is down are **NOT replayed** — recording decisions never depend on backfilled history.
 
+### Dual-Spectrum Thermal Channel (RadiometryAlarm)
+
+A dual-spectrum camera (thermal + visible-light lenses) follows the industry convention of **one device, two channels**: create a separate camera entry for the thermal profile and it records around the clock like any other source — no special protocol support needed.
+
+- **Onboarding**: when adding the ONVIF camera, run **Test connection** first, then pick the thermal profile in the **Main stream profile** dropdown (the low-resolution channel, e.g. 384×288 — automatic selection always takes the highest-resolution visible-light stream), and set **Imaging channel** to **Thermal**.
+- **Default policy**: a thermal channel is automatically added to the AI-analysis skip list (detection models are visible-light trained; thermal frames only yield false positives). The NUC calibration shutter freezes the whole frame every few tens of seconds and periodically fools NVR-side motion gating — the form warns when adaptive recording is selected; continuous recording is recommended.
+- **Radiometry alarms**: camera-side temperature rules (fire point / over-temperature) report via `Thermal/RadiometryAlarm`. The `motion_source: camera:onvif` subscription receives them: an alarm drives the recording trigger plus one evidence snapshot (event `trigger=onvif`) plus the SSE event `onvif.radiometryalarm`; a clear triggers nothing. The temperature rules themselves are configured on the camera (remote Thermal Service parameter configuration is out of current scope).
+- **Pairing display**: put the thermal and visible-light entries in the same [group](camera-guide.md) — no dedicated UI needed.
+
 ### Alternative Motion Detection
 
 For cameras without ONVIF event service support:

@@ -33,6 +33,10 @@ const (
 	actionRecord   = "record"
 	actionStop     = "stop"
 	actionSnapshot = "snapshot"
+	// actionSnapshotOnvif runs the same snapshot as "snapshot" but labels the
+	// captured event's trigger "onvif" instead of "mqtt" — used by camera-side
+	// ONVIF event wiring (RadiometryAlarm evidence frames).
+	actionSnapshotOnvif = "snapshot:onvif"
 )
 
 // actionTimeout bounds one triggered lifecycle call (camera dial + recorder
@@ -81,16 +85,20 @@ func NewActionDispatcher(lifecycle CameraLifecycle, snap SnapshotRunner) func(ca
 				}
 				actionLogger.Info("mqtt trigger applied", "camera_id", cameraID, "action", action)
 			}()
-		case actionSnapshot:
+		case actionSnapshot, actionSnapshotOnvif:
 			if snap == nil {
 				actionLogger.Warn("mqtt snapshot trigger dropped: no snapshot runner wired", "camera_id", cameraID)
 				return
+			}
+			trigger := "mqtt"
+			if action == actionSnapshotOnvif {
+				trigger = "onvif"
 			}
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 				defer cancel()
 
-				path, err := snap.RunSnapshot(ctx, cameraID, "mqtt")
+				path, err := snap.RunSnapshot(ctx, cameraID, trigger)
 				if err != nil {
 					actionLogger.Warn("mqtt snapshot trigger failed", "camera_id", cameraID, "error", err)
 					return

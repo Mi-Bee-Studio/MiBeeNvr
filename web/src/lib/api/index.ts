@@ -108,6 +108,8 @@ export {
   getAudioUpstreamWS,
   // Xiaomi device info
   getXiaomiDeviceInfo,
+  // ONVIF media profiles (main-profile picker)
+  getCameraProfiles,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -115,6 +117,7 @@ export type {
   CreateCameraRequest,
   CameraPixgateConfig,
   UpdateCameraRequest,
+  DeviceProfileOption,
   DiscoveredDevice,
   DiscoveryError,
   DiscoveryResult,

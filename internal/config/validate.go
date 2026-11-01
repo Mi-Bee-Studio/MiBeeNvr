@@ -1041,6 +1041,19 @@ func validatePortRange(r string) error {
 // MotionAlarm subscription as this camera's motion signal (#711).
 const MotionSourceCameraONVIF = "camera:onvif"
 
+// ImagingTypeThermal marks a camera entry as the thermal channel of a
+// dual-spectrum device. "" and "visible" mean visible light.
+const ImagingTypeThermal = "thermal"
+
+// ValidImagingType reports whether v is a legal imaging_type value.
+func ValidImagingType(v string) bool {
+	switch v {
+	case "", "visible", ImagingTypeThermal:
+		return true
+	}
+	return false
+}
+
 // MJPEG segment form values (#761): MJPEGFormAVI (also "") is the default
 // single-file AVI container per segment; MJPEGFormDir is the legacy
 // one-JPEG-file-per-frame directory opt-out.
@@ -1058,6 +1071,9 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 	case "", "nvr", MotionSourceCameraONVIF:
 	default:
 		return fmt.Errorf("cameras.%s.motion_source must be \"nvr\" or \"camera:onvif\" (got %q)", cam.ID, cam.MotionSource)
+	}
+	if !ValidImagingType(cam.ImagingType) {
+		return fmt.Errorf("cameras.%s.imaging_type must be \"visible\" or \"thermal\" (got %q)", cam.ID, cam.ImagingType)
 	}
 	if cam.MotionSource == MotionSourceCameraONVIF && cam.Protocol != "onvif" {
 		return fmt.Errorf("cameras.%s.motion_source=camera:onvif requires an onvif protocol camera (got %q)", cam.ID, cam.Protocol)

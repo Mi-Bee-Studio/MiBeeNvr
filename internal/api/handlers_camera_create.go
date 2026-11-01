@@ -137,6 +137,10 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingMode string `json:"recording_mode"`
 		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
 		MotionSource string `json:"motion_source"`
+		// Imaging channel (dual-spectrum): ""/"visible" or "thermal". Thermal
+		// applies the default policy (AI push skip; continuous recording
+		// recommended — the NUC shutter defeats pixel-domain motion gates).
+		ImagingType  string `json:"imaging_type"`
 		AutoTimeSync *bool  `json:"auto_time_sync"`
 		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
 		// default) or "dir" (legacy per-frame directory).
@@ -361,6 +365,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		Encoding:      enc,
 		RecordingMode: body.RecordingMode,
 		MotionSource:  body.MotionSource,
+		ImagingType:   body.ImagingType,
 		AutoTimeSync:  body.AutoTimeSync,
 		MJPEGForm:     body.MJPEGForm,
 		Adaptive:      body.Adaptive,
@@ -391,6 +396,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		CascadeSubStream:  body.CascadeSubStream,
 		RecordingMode:     body.RecordingMode,
 		MotionSource:      body.MotionSource,
+		ImagingType:       body.ImagingType,
 		MJPEGForm:         body.MJPEGForm,
 		Adaptive:          body.Adaptive,
 		AudioTrigger:      body.AudioTrigger,
@@ -482,6 +488,10 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
+		// Overlay the YAML-only fields (motion_source, imaging_type, sub
+		// profile, …) so the create response reflects what was just saved
+		// instead of making callers re-GET (#297 lesson).
+		injectYAMLConfigFields(row, h.config)
 		cameraRowForAPI(row)
 		writeJSON(w, http.StatusCreated, row)
 	} else {

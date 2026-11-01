@@ -114,3 +114,40 @@ func TestActionDispatcher_Snapshot_DoesNotTouchLifecycle(t *testing.T) {
 		return len(life.started()) > 0 || len(life.stopped()) > 0
 	}, 500*time.Millisecond, 50*time.Millisecond, "snapshot action must never start/stop the camera")
 }
+
+// triggerRecordingRunner records the trigger label each capture ran under.
+type triggerRecordingRunner struct {
+	mu       sync.Mutex
+	triggers []string
+}
+
+func (r *triggerRecordingRunner) RunSnapshot(_ context.Context, _ string, trigger string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.triggers = append(r.triggers, trigger)
+	return "p", nil
+}
+
+func (r *triggerRecordingRunner) recorded() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.triggers...)
+}
+
+// TestActionDispatcher_SnapshotTriggerLabel: "snapshot" labels the event
+// trigger "mqtt" (legacy contract); "snapshot:onvif" (camera-side ONVIF
+// events, e.g. RadiometryAlarm evidence frames) labels it "onvif" so the
+// events feed says where the capture came from.
+func TestActionDispatcher_SnapshotTriggerLabel(t *testing.T) {
+	t.Helper()
+	rec := &triggerRecordingRunner{}
+	dispatch := NewActionDispatcher(&fakeLifecycle{}, rec)
+
+	dispatch("cam-1", "snapshot", 0)
+	dispatch("cam-1", "snapshot:onvif", 0)
+
+	require.Eventually(t, func() bool {
+		return len(rec.recorded()) == 2
+	}, 15*time.Second, 50*time.Millisecond, "both snapshot action variants must run a capture")
+	require.Equal(t, []string{"mqtt", "onvif"}, rec.recorded())
+}

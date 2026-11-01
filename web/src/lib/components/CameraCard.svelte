@@ -269,6 +269,13 @@ let healthShowWarningIcon = $derived(
        {t('cameras.connectFailedBadge')}
      </span>
    {/if}
+   <!-- Thermal channel badge (dual-spectrum): distinguishes the thermal
+        entry from the visible-light sibling of the same physical device. -->
+   {#if camera.imaging_type === 'thermal'}
+     <span class="badge badge-warning" title={t('cameras.thermalHint')}>
+       {t('cameras.thermalBadge')}
+     </span>
+   {/if}
    <!-- Merge status badge -->
    {#if mergeStatus === 'merging'}
      <span class="badge badge-info flex items-center gap-1" title={mergeProgress + '%'} >

@@ -52,7 +52,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	// (issues #29/#30). The probe distinguishes reachable / stream-ok / codec-lie.
 	if body.Protocol == "onvif" {
 		probe := probeONVIFStream(r.Context(), target, body.Username, body.Password)
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"success":    probe.StreamOK,
 			"reachable":  probe.Reachable,
 			"stream_ok":  probe.StreamOK,
@@ -60,7 +60,14 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			"codec_lie":  probe.CodecLie,
 			"message":    probe.reasonOrOK(),
 			"latency_ms": time.Since(startTime).Milliseconds(),
-		})
+		}
+		// Profile list for the create form's manual main-profile picker
+		// (dual-spectrum/multi-lens). Omitted when GetProfiles never succeeded.
+		if probe.Profiles != nil {
+			resp["profiles"] = probe.Profiles
+			resp["auto_main_token"] = probe.AutoMainToken
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -235,6 +242,13 @@ type onvifStreamProbe struct {
 	Encoding  string // the REAL codec (RTSP DESCRIBE is authoritative; may differ from declared)
 	CodecLie  bool   // the ONVIF-declared codec disagrees with the real stream
 	Reason    string // human-readable explanation when Reachable/StreamOK is false
+	// Profiles carries the device's media profile list once GetProfiles
+	// succeeds (nil otherwise) — the create form's manual main-profile picker
+	// (dual-spectrum/multi-lens devices) renders it after a test connection.
+	Profiles []onvif.DeviceProfile
+	// AutoMainToken is the token SelectMainProfile would pick from Profiles
+	// ("" when there are none) — lets the UI label the automatic option.
+	AutoMainToken string
 }
 
 // onvifLooksLikeAuthError reports whether an ONVIF error smells like a
@@ -320,12 +334,18 @@ func probeONVIFStream(ctx context.Context, endpoint, username, password string) 
 		}
 	}
 	declared := profiles[0].Encoding
+	// Carry the profile list on every post-GetProfiles outcome so the create
+	// form's manual main-profile picker works even when the stream leg fails.
+	profileList := append([]onvif.DeviceProfile(nil), profiles...)
+	autoMain := onvif.SelectMainProfile(profiles)
 
 	si, err := client.GetStreamURI(ctx, profiles[0].Token)
 	if err != nil || si.URI == "" {
 		return onvifStreamProbe{
-			Reachable: true,
-			Reason:    "device responded but GetStreamUri failed — credentials may lack stream access, or the camera does not expose RTSP",
+			Reachable:     true,
+			Reason:        "device responded but GetStreamUri failed — credentials may lack stream access, or the camera does not expose RTSP",
+			Profiles:      profileList,
+			AutoMainToken: autoMain,
 		}
 	}
 
@@ -345,10 +365,12 @@ func probeONVIFStream(ctx context.Context, endpoint, username, password string) 
 			"endpoint", endpoint, "declared", declared, "actual", actual)
 	}
 	return onvifStreamProbe{
-		Reachable: true,
-		StreamOK:  true,
-		Encoding:  actual,
-		CodecLie:  codecLie,
+		Reachable:     true,
+		StreamOK:      true,
+		Encoding:      actual,
+		CodecLie:      codecLie,
+		Profiles:      profileList,
+		AutoMainToken: autoMain,
 	}
 }
 

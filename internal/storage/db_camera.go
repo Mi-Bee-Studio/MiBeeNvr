@@ -86,6 +86,11 @@ type CameraRow struct {
 	// MotionSource selects the camera's motion signal (#711): ""/"nvr" or
 	// "camera:onvif" (Pull-Point MotionAlarm subscription).
 	MotionSource string `json:"motion_source,omitempty"`
+	// ImagingType labels the device's imaging channel (dual-spectrum support):
+	// ""/"visible" = visible light; "thermal" = the thermal channel. Config-
+	// injected (not a DB column). Semantic label + default-policy key (AI push
+	// skip, motion-gating caveat) — recording itself is identical.
+	ImagingType string `json:"imaging_type,omitempty"`
 	// AutoTimeSync (#time-sync): nil = follow time_sync.auto; false = never
 	// auto-correct this camera. Config-injected (not a DB column).
 	AutoTimeSync *bool `json:"auto_time_sync,omitempty"`
