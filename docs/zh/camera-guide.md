@@ -631,20 +631,60 @@ cameras:
 
 ### 20. Wyze
 
-**型号**: Wyze Cam v3, Wyze Cam Outdoor, Wyze Cam Pan
+**型号**: Cam v2 / v3 / v3 Pro / v4、Cam Pan v1–v3、Cam Outdoor v1/v2、Video Doorbell v1/v2、Floodlight（TUTK 一代）；Cam OG、Video Doorbell Pro（新一代，仅 Go 版桥接可用）。无可用路径的机型见"已知问题"。
 
 #### 特殊设置：
 
-- 通过自定义固件提供有限的 RTSP 支持
-- 需要 Wyze RTSP 分支或等效方案
-- 主要基于云服务，不适合 NVR
+大多数 Wyze 摄像头出厂不提供 RTSP：它们通过私有 P2P 协议向 Wyze 云推流，MiBee NVR 没有原生实现这些协议。要把标准 RTSP 流接进 NVR 有三条路径，按顺序选第一条适用于你机型的。
 
-#### 配置：
+**路径 A —— 官方 RTSP 固件（仅 Cam v3 与 Cam Pan v3）**
+
+自 2026 年 2 月的正式版固件起（Cam v3 4.36.16.5654、Cam Pan v3 4.50.16.5654），RTSP 已内置于标准固件：升级摄像头后，在 Wyze App（3.9 及以上）的摄像头高级设置中开启 RTSP，设置用户名/密码并由 App 生成地址。该流仅限局域网。按通用 RTSP 摄像头添加：
+
+```yaml
+cameras:
+  - id: "wyze_v3"
+    name: "Wyze Cam v3"
+    protocol: "rtsp"
+    encoding: "h264"
+    url: "rtsp://user:password@192.168.1.118/live"   # 使用 Wyze App 生成的地址
+    enabled: true
+```
+
+其他机型（Cam v4、v3 Pro、Pan v2、OG 等）截至 2026 年底没有官方 RTSP。
+
+**路径 B —— wyze-bridge 桥接（TUTK 一代机型；OG / Doorbell Pro 需 Go 重写版）**
+
+桥接容器用你的 Wyze 账号登录，从每台摄像头拉流（局域网内尽可能直连），再以 RTSP/WebRTC/HLS 重新发布；摄像头在 Wyze App 中照常可用。有两个实现：
+
+- [mrlt8/docker-wyze-bridge](https://github.com/mrlt8/docker-wyze-bridge) —— 原版 Python 桥接。仅支持 TUTK 一代机型；2024 年底起基本停止维护。
+- [IDisposable/docker-wyze-bridge](https://github.com/IDisposable/docker-wyze-bridge) —— 基于 go2rtc 的 Go 重写版，持续维护，RTSP 约定相同。额外支持 Cam OG 与 Video Doorbell Pro（OG Telephoto、Doorbell Pro 2、Doorbell Duo 列为预期支持但未经确认）；门铃路径的信令经由 Wyze 服务器。
+
+1. 在与摄像头同一局域网运行桥接（Docker、Home Assistant 加载项、Unraid 等），配置 Wyze 账号邮箱/密码，以及在 [Wyze 开发者控制台](https://developer-api-console.wyze.com) 申请的 API Key/ID（2024 年 5 月起必需）。
+2. 若账号开启了两步验证，首次登录时按提示完成交互式验证。
+3. 打开桥接的 Web UI 查看每台摄像头的 RTSP 地址（8554 端口；路径为 Wyze App 中的摄像头名称转小写、空格换连字符，如 `Front Door` → `/front-door`）。
+4. 在 MiBee NVR 中按通用 RTSP 摄像头添加：
+
+```yaml
+cameras:
+  - id: "wyze_front_door"
+    name: "Wyze Front Door"
+    protocol: "rtsp"
+    encoding: "h264"
+    url: "rtsp://192.168.1.50:8554/front-door"   # wyze-bridge 地址 + 摄像头名
+    enabled: true
+```
+
+若在桥接端启用了认证，地址前加 `user:pass@`。原版桥接的音频默认关闭，需要时在���接端开启。
+
+**路径 C —— 第三方固件（进阶）**
+
+部分 Ingenic 方案机型（Cam v3、Cam Pan v3 等）可刷入社区固件，如 [wz_mini_hacks](https://github.com/gtxaspec/wz_mini_hacks) 或 [thingino](https://github.com/themactep/thingino-firmware)，由摄像头自身运行 RTSP 服务，完全离线、不依赖 Wyze 账号。RTSP 地址以固件项目文档为准，然后按通用 RTSP 添加：
 
 ```yaml
 cameras:
   - id: "wyze_rtsp"
-    name: "Wyze RTSP Stream"
+    name: "Wyze RTSP Firmware"
     protocol: "rtsp"
     encoding: "h264"
     url: "rtsp://admin:password@192.168.1.118:554/live"
@@ -653,9 +693,12 @@ cameras:
 
 #### 已知问题：
 
-- 未获得 Wyze 官方支持
-- 需要特定的固件修改
-- 使用自定义固件时性能可能较差
+- **截至 2026 年底没有可用的本地接入路径**：Cam Pan v4、Battery Cam Pro、Cam Floodlight Pro、Solar Cam Pan、Window Cam、Bulb Cam。不建议用于 NVR。
+- Cam OG 与 Video Doorbell Pro 只能通过 Go 版桥接接入；门铃路径依赖 Wyze 的 WebRTC 信令服务器。
+- 桥接路径的登录与设备枚举仍依赖 Wyze 云；Wyze 的 API 与账号/两步验证策略变更曾多次导致桥接失效。
+- 若依赖桥接，摄像头固件升级可能破坏其 P2P 连接——可考虑在 Wyze App 中关闭固件自动更新，升级前先查桥接项目的兼容表。
+- 相比原生 RTSP 摄像头，桥接会增加数秒延迟。
+- 除官方 RTSP 固件外，以上方案均未获 Wyze 官方支持。新部署请优先选择原生支持 ONVIF/RTSP 的摄像头。
 
 ## 通用配置技巧
 
