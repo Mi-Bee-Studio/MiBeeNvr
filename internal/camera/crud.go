@@ -15,6 +15,21 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 )
 
+// ensureThermalVisionSkip applies the thermal-channel default policy
+// (dual-spectrum): a thermal camera is appended to vision.skip_cameras —
+// visible-light-trained detection models produce only noise on thermal
+// frames, so pushing them wastes bandwidth and feeds the false-positive
+// pipeline. Callers hold configMu; their persistConfig writes the list out.
+// Removal is manual (a deliberate un-skip in settings must survive later
+// camera edits), and reverting imaging_type to visible does not un-skip.
+func (cm *CameraManager) ensureThermalVisionSkip(cameraID string) {
+	if cm.cfg.Vision.ShouldSkipCamera(cameraID) {
+		return
+	}
+	cm.cfg.Vision.SkipCameras = append(cm.cfg.Vision.SkipCameras, cameraID)
+	logger.Info("thermal camera added to vision skip list (default policy)", "camera_id", cameraID)
+}
+
 // AddCamera adds a new camera to the manager, starts its recorder, and persists.
 // If cam.ID is empty, a new ID is generated automatically.
 // Returns the camera ID.
@@ -74,6 +89,10 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	}
 	if !dup {
 		cm.cfg.Cameras = append(cm.cfg.Cameras, cam)
+		// Thermal-channel default policy (dual-spectrum): skip the AI push.
+		if cam.ImagingType == config.ImagingTypeThermal {
+			cm.ensureThermalVisionSkip(cam.ID)
+		}
 		// Republish snapshot configs map to include the new camera pointer.
 		cur := cm.loadSnapshot().clone()
 		cur.configs[cam.ID] = &cm.cfg.Cameras[len(cm.cfg.Cameras)-1]
@@ -564,6 +583,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		cam.ONVIFEndpoint = *updates.ONVIFEndpoint
 	}
 	if updates.ProfileToken != nil {
+		// The recorder resolves the main stream URI from the token at Start
+		// (and holds a config copy taken at construction), so a manual main-
+		// profile override only takes effect after a restart.
+		if *updates.ProfileToken != cam.ProfileToken {
+			needsRestart = true
+		}
 		cam.ProfileToken = *updates.ProfileToken
 	}
 	if updates.SubProfileToken != nil {
@@ -692,6 +717,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	}
 	if updates.MotionSource != nil {
 		cam.MotionSource = *updates.MotionSource
+	}
+	if updates.ImagingType != nil {
+		cam.ImagingType = *updates.ImagingType
+		if cam.ImagingType == config.ImagingTypeThermal {
+			cm.ensureThermalVisionSkip(cam.ID)
+		}
 	}
 	if updates.AutoTimeSync != nil {
 		cam.AutoTimeSync = updates.AutoTimeSync

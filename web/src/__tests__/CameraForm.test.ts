@@ -11,7 +11,31 @@ vi.mock('$lib/i18n', () => ({
 
 // --- Mock lucide-svelte icons ---
 vi.mock('lucide-svelte', () => {
-  const icons = ['Eye', 'EyeOff', 'PlugZap', 'Plus', 'Trash2', 'ArrowUpRight', 'Copy', 'Layers', 'Brain', 'Wifi', 'Users', 'Power', 'RefreshCw', 'AlertTriangle', 'Save', 'ChevronDown', 'Move', 'Image', 'Bell', 'Camera', 'Radio', 'Activity', 'Circle'];
+  const icons = [
+    'Eye',
+    'EyeOff',
+    'PlugZap',
+    'Plus',
+    'Trash2',
+    'ArrowUpRight',
+    'Copy',
+    'Layers',
+    'Brain',
+    'Wifi',
+    'Users',
+    'Power',
+    'RefreshCw',
+    'AlertTriangle',
+    'Save',
+    'ChevronDown',
+    'Move',
+    'Image',
+    'Bell',
+    'Camera',
+    'Radio',
+    'Activity',
+    'Circle',
+  ];
   const mock: Record<string, () => HTMLElement> = {};
   for (const name of icons) {
     mock[name] = () => document.createElement('span');
@@ -1094,5 +1118,186 @@ describe('CameraForm - cascade catalog boundary (#1037)', () => {
     sel.value = 'gb28181';
     await fireEvent.change(sel);
     expect(cb.checked).toBe(false);
+  });
+});
+
+describe('CameraForm - thermal imaging channel', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+  });
+
+  function mockBase() {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      return Promise.resolve(null);
+    });
+  }
+
+  async function fillMinimalCreate(container: HTMLElement) {
+    const nameInput = container.querySelector('#cam-name') as HTMLInputElement;
+    await fireEvent.input(nameInput, { target: { value: 'Dual Thermal' } });
+    const urlInput = container.querySelector('#cam-url') as HTMLInputElement;
+    await fireEvent.input(urlInput, { target: { value: 'rtsp://192.0.2.10/thermal' } });
+  }
+
+  it('defaults to visible and offers the thermal option', async () => {
+    mockBase();
+    const { container } = render(CameraForm, { props: defaultProps() });
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-imaging')).toBeTruthy();
+    });
+    const sel = container.querySelector('#cam-imaging') as HTMLSelectElement;
+    expect(sel.value).toBe('visible');
+    const opts = Array.from(sel.options).map((o) => o.value);
+    expect(opts).toContain('thermal');
+    // No thermal hint in visible mode.
+    expect(container.textContent).not.toContain('cameras.thermalHint');
+  });
+
+  it('selecting thermal shows the policy hint and sends imaging_type on create', async () => {
+    mockBase();
+    const { container } = render(CameraForm, { props: defaultProps() });
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-imaging')).toBeTruthy();
+    });
+    await fillMinimalCreate(container);
+
+    const sel = container.querySelector('#cam-imaging') as HTMLSelectElement;
+    await fireEvent.change(sel, { target: { value: 'thermal' } });
+    expect(container.textContent).toContain('cameras.thermalHint');
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.save'),
+    );
+    await fireEvent.click(saveBtn!);
+
+    await vi.waitFor(() => {
+      const create = mockApiRequest.mock.calls.find((c) => typeof c[0] === 'string' && c[0] === '/cameras');
+      expect(create, 'POST /cameras should have been issued').toBeTruthy();
+      const body = JSON.parse(create![1].body as string);
+      expect(body.imaging_type).toBe('thermal');
+    });
+  });
+
+  it('warns when thermal is combined with adaptive recording', async () => {
+    mockBase();
+    const { container } = render(CameraForm, { props: defaultProps() });
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-imaging')).toBeTruthy();
+    });
+    await fillMinimalCreate(container);
+
+    // thermal + continuous: no warning yet.
+    await fireEvent.change(container.querySelector('#cam-imaging')!, { target: { value: 'thermal' } });
+    expect(container.textContent).not.toContain('cameras.thermalAdaptiveWarn');
+
+    // Switch to adaptive: the shutter warning appears.
+    await fireEvent.change(container.querySelector('#cam-recording-mode')!, {
+      target: { value: 'adaptive' },
+    });
+    expect(container.textContent).toContain('cameras.thermalAdaptiveWarn');
+  });
+});
+
+describe('CameraForm - ONVIF main profile picker', () => {
+  afterEach(() => {
+    cleanup();
+    mockApiRequest.mockReset();
+  });
+
+  const dualSpectrumProfiles = {
+    profiles: [
+      { token: 'Profile_main', name: 'Main', encoding: 'H264', width: 2560, height: 1440 },
+      { token: 'Profile_thermal', name: 'Thermal', encoding: 'H264', width: 384, height: 288 },
+    ],
+    capabilities: { ptz: false, streaming: true },
+  };
+
+  it('populates from the device after a test connection and sends profile_token on create', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      if (path === '/cameras/test-connection')
+        return Promise.resolve({
+          success: true,
+          stream_ok: true,
+          message: 'ok',
+          latency_ms: 12,
+          profiles: dualSpectrumProfiles.profiles,
+          auto_main_token: 'Profile_main',
+        });
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(CameraForm, { props: defaultProps() });
+    await vi.waitFor(() => {
+      expect(container.querySelector('#cam-url')).toBeTruthy();
+    });
+
+    // ONVIF protocol + endpoint, then run the test connection.
+    await fireEvent.change(container.querySelector('#cam-protocol')!, { target: { value: 'onvif' } });
+    const nameInput = container.querySelector('#cam-name') as HTMLInputElement;
+    await fireEvent.input(nameInput, { target: { value: 'Dual Spectrum' } });
+    const urlInput = container.querySelector('#cam-url') as HTMLInputElement;
+    await fireEvent.input(urlInput, { target: { value: 'http://192.0.2.10/onvif/device_service' } });
+
+    // Main profile select exists but has no device options before probing.
+    const mainSel = container.querySelector('#cam-main-token') as HTMLSelectElement;
+    expect(mainSel).toBeTruthy();
+    expect(Array.from(mainSel.options).some((o) => o.value === 'Profile_thermal')).toBe(false);
+
+    const testBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.testConnection'),
+    );
+    await fireEvent.click(testBtn!);
+
+    await vi.waitFor(() => {
+      const sel = container.querySelector('#cam-main-token') as HTMLSelectElement;
+      expect(Array.from(sel.options).some((o) => o.value === 'Profile_thermal')).toBe(true);
+    });
+
+    // Pick the thermal channel and save: profile_token must ride the create.
+    await fireEvent.change(container.querySelector('#cam-main-token')!, {
+      target: { value: 'Profile_thermal' },
+    });
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('cameras.save'),
+    );
+    await fireEvent.click(saveBtn!);
+
+    await vi.waitFor(() => {
+      const create = mockApiRequest.mock.calls.find((c) => typeof c[0] === 'string' && c[0] === '/cameras');
+      expect(create, 'POST /cameras should have been issued').toBeTruthy();
+      const body = JSON.parse(create![1].body as string);
+      expect(body.profile_token).toBe('Profile_thermal');
+      expect(body.imaging_type).toBe('visible'); // independent knob
+    });
+  });
+
+  it('edit mode loads profiles from the registered camera and keeps a manual token visible', async () => {
+    mockApiRequest.mockImplementation((path: string) => {
+      if (path === '/relay-presets') return Promise.resolve(mockPresets);
+      if (path === '/cameras/cam-dual/onvif/profiles') return Promise.resolve(dualSpectrumProfiles);
+      return Promise.resolve(null);
+    });
+
+    const editing = {
+      id: 'cam-dual',
+      name: 'Dual',
+      protocol: 'onvif',
+      url: 'http://192.0.2.10/onvif/device_service',
+      profile_token: 'Profile_thermal',
+      imaging_type: 'thermal',
+    };
+    const { container } = render(CameraForm, { props: defaultProps({ editingCamera: editing }) });
+
+    await vi.waitFor(() => {
+      const sel = container.querySelector('#cam-main-token') as HTMLSelectElement;
+      expect(sel).toBeTruthy();
+      expect(sel.value).toBe('Profile_thermal');
+      expect(Array.from(sel.options).some((o) => o.value === 'Profile_main')).toBe(true);
+    });
+    // Thermal label preselected.
+    expect((container.querySelector('#cam-imaging') as HTMLSelectElement).value).toBe('thermal');
   });
 });

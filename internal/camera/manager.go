@@ -91,6 +91,12 @@ type CameraUpdate struct {
 	// (subscribe to the camera's Pull-Point MotionAlarm events). nil =
 	// unchanged; the subscription reconciles immediately (no restart).
 	MotionSource *string
+	// ImagingType labels the device's imaging channel (dual-spectrum):
+	// ""/"visible" or "thermal". nil = unchanged. Semantic label — no recorder
+	// restart. Setting it to thermal applies the default policy: the camera is
+	// appended to vision.skip_cameras (removal is manual, so a deliberate
+	// un-skip survives later edits).
+	ImagingType *string
 	// AutoTimeSync (#time-sync): per-camera opt in/out of the automatic
 	// clock-correction loop. nil = unchanged (follow global setting).
 	AutoTimeSync *bool

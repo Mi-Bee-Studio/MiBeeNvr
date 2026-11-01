@@ -28,6 +28,13 @@ export interface Camera {
   /** Camera-management group label (v36). Empty/undefined = ungrouped. */
   group?: string;
   /**
+   * Imaging channel (dual-spectrum): 'visible' (default/undefined) or
+   * 'thermal'. Thermal applies the default policy — the AI analysis push is
+   * skipped and NVR motion gating is discouraged (the calibration shutter
+   * re-triggers it every cycle).
+   */
+  imaging_type?: string;
+  /**
    * Audio-device → video-camera association (v43). Only meaningful for
    * encoding "audio" (independent mic) devices: the video camera whose
    * recordings the audio should replay alongside. '' = free-standing mic.
@@ -228,6 +235,8 @@ export interface CreateCameraRequest {
   /** Motion signal source (#711): "nvr" (default) or "camera:onvif"
    *  (Pull-Point MotionAlarm subscription). */
   motion_source?: string;
+  /** Imaging channel (dual-spectrum): 'visible' (default) or 'thermal'. */
+  imaging_type?: string;
   // Time-sync opt in/out (#time-sync): null/undefined = follow time_sync.auto;
   // false = never auto-correct this camera.
   auto_time_sync?: boolean | null;
@@ -296,6 +305,9 @@ export interface UpdateCameraRequest {
   /** Motion signal source (#711): "nvr" (default) or "camera:onvif".
    *  Reconciles immediately (no restart). */
   motion_source?: string;
+  /** Imaging channel (dual-spectrum): 'visible' (default) or 'thermal'.
+   *  Omit = unchanged. Thermal re-applies the AI-push skip default. */
+  imaging_type?: string;
   // Time-sync opt in/out (#time-sync): null/undefined = unchanged (follow
   // time_sync.auto); false = never auto-correct this camera.
   auto_time_sync?: boolean | null;
@@ -749,6 +761,32 @@ export interface TestConnectionResult {
   audio?: string;
   has_audio?: boolean;
   audio_supported?: boolean;
+  // ONVIF media profiles (dual-spectrum/multi-lens main-profile picker):
+  // present when GetProfiles succeeded during the probe. auto_main_token is
+  // the token the backend's automatic selection would pick ('' when none).
+  profiles?: DeviceProfileOption[];
+  auto_main_token?: string;
+}
+
+/** One ONVIF media profile as offered by the main-profile picker. */
+export interface DeviceProfileOption {
+  token: string;
+  name?: string;
+  encoding?: string;
+  width?: number;
+  height?: number;
+}
+
+/** Fetch a registered ONVIF camera's media profiles (edit-form picker). */
+export async function getCameraProfiles(
+  cameraId: string,
+  signal?: AbortSignal,
+): Promise<DeviceProfileOption[]> {
+  const result = await apiRequest<{ profiles: DeviceProfileOption[] }>(
+    `/cameras/${cameraId}/onvif/profiles`,
+    { signal },
+  );
+  return result.profiles || [];
 }
 
 export async function testConnection(data: TestConnectionRequest, signal?: AbortSignal): Promise<TestConnectionResult> {

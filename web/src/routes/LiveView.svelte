@@ -437,6 +437,9 @@
             {camera.name || camera.id}
           </h2>
           <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
+          {#if camera.imaging_type === 'thermal'}
+            <span class="badge badge-warning">{t('cameras.thermalBadge')}</span>
+          {/if}
 
           <!-- ONVIF controls shown for all ONVIF cameras -->
           {#if isOnvifCamera(camera) && deviceCaps?.snapshot}
