@@ -164,6 +164,17 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 		handler.SetGB28181Timezone(appLoc)
 		// Auto-create cameras when GB28181 devices register, matching ONVIF auto-add.
 		deps.gb28181Server.SetCameraEnroller(camMgr)
+		// Dual-spectrum auto-labeling: a catalog channel marked thermal
+		// (PhotoelectricImagingType=2, GB/T 28181-2022 — gb28181-go v0.15.1
+		// carries the marking on platform.Channel) enrolls with
+		// imaging_type=thermal (+ the AI-push skip default policy).
+		camMgr.SetGB28181ChannelImagingProbe(func(deviceID, channelID string) (int, bool) {
+			ch, ok := deps.gb28181DevMgr.FindChannel(deviceID, channelID)
+			if !ok {
+				return 0, false
+			}
+			return ch.PhotoelectricImagingType, true
+		})
 		// Auto-INVITE when GB28181 recorders start (pull media on camera creation).
 		camMgr.SetGB28181Inviter(deps.gb28181Server)
 		camMgr.SetGB28181SessionEnder(deps.gb28181Server)

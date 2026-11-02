@@ -118,6 +118,20 @@ func (cm *CameraManager) GetGB28181Recorder(cameraID string) *recorder.GB28181Re
 	return rec
 }
 
+// platformPhotoelectricThermal is the GB/T 28181-2022 光电成像类型 catalog
+// marking value for a thermal channel (1 = visible light, 2 = thermal).
+const platformPhotoelectricThermal = 2
+
+// SetGB28181ChannelImagingProbe wires the SIP server's channel lookup used
+// for dual-spectrum auto-labeling: when a GB channel's catalog entry carries
+// PhotoelectricImagingType (gb28181-go v0.15.1), the auto-enrolled camera
+// inherits the marking as its imaging_type. Called once at boot, before the
+// SIP server starts (same wiring contract as SetMotionActionHandler); nil
+// (never set) disables labeling.
+func (cm *CameraManager) SetGB28181ChannelImagingProbe(f func(deviceID, channelID string) (int, bool)) {
+	cm.gbChannelImagingProbe = f
+}
+
 // EnsureGB28181Camera creates a camera entry for a GB28181 channel if one
 // doesn't already exist. Called by the SIP server on REGISTER (device pseudo-
 // channel) and on Catalog receipt (real video channels) so GB28181 cameras
@@ -182,6 +196,17 @@ func (cm *CameraManager) EnsureGB28181Camera(deviceID, channelID, name, sourceIP
 			DeviceID:  deviceID,
 			ChannelID: channelID,
 		},
+	}
+	// Dual-spectrum auto-labeling: a channel the device's catalog marks as
+	// thermal (PhotoelectricImagingType=2, GB/T 28181-2022 — surfaced by
+	// gb28181-go v0.15.1) enrolls with imaging_type=thermal, which applies
+	// the default policy (AI push skip) via the AddCamera path. Labeling
+	// happens only at CREATE time — a later manual imaging_type edit always
+	// wins over the catalog marking.
+	if probe := cm.gbChannelImagingProbe; probe != nil {
+		if t, ok := probe(deviceID, channelID); ok && t == platformPhotoelectricThermal {
+			cam.ImagingType = config.ImagingTypeThermal
+		}
 	}
 	_, err := cm.AddCamera(context.Background(), cam)
 	return err

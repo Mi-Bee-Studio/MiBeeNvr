@@ -397,6 +397,7 @@ curl -X GET http://localhost:9090/api/cameras/{id}/onvif/capabilities \
 - **建机**：添加 ONVIF 相机时先「测试连接」，随后在「**主码流 Profile**」下拉里手选热成像 Profile（低分辨率通道，例如 384×288——自动选择永远挑分辨率最高的可见光主流）；把「**成像通道**」标为「**热成像**」。
 - **默认策略**：热成像通道自动加入 AI 分析跳过名单（检测模型面向可见光，热帧只会产生误报）；挡片校准（NUC）每几十秒冻结整幅画面，会周期性骗过 NVR 侧运动门——表单会在勾选自适应录像时给出警告，建议连续录制。
 - **测温报警**：相机侧温度规则（火点/超温）命中时上报 `Thermal/RadiometryAlarm`。`motion_source: camera:onvif` 的订阅会接收它：报警触发录像联动 + 一张抓图（事件 `trigger=onvif`）+ SSE 事件 `onvif.radiometryalarm`；报警解除不触发任何动作。测温规则本身在相机侧配置（ONVIF Thermal Service 的测温参数远程配置不在当前范围）。
+- **GB28181 通道**：设备目录按 GB/T 28181-2022 标注光电成像类型（`PhotoelectricImagingType=2`）的热通道在自动注册时会直接带上「热成像」标注（含 AI 跳过默认策略）——手工创建或后续手动改过的相机不受影响。
 - **配对展示**：把热成像与可见光两条记录放进同一个[分组](camera-guide.md)即可，无需专属 UI。
 
 ### 替代移动检测
