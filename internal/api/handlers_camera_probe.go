@@ -355,8 +355,10 @@ func probeONVIFStream(ctx context.Context, endpoint, username, password string) 
 	actual := recorder.ProbeRTSPEncoding(si.URI, username, password)
 	if actual == "" {
 		return onvifStreamProbe{
-			Reachable: true,
-			Reason:    "stream URI resolved but RTSP DESCRIBE failed — check that the RTSP port is reachable and credentials are correct",
+			Reachable:     true,
+			Reason:        "stream URI resolved but RTSP DESCRIBE failed — check that the RTSP port is reachable and credentials are correct",
+			Profiles:      profileList,
+			AutoMainToken: autoMain,
 		}
 	}
 	codecLie := declared != "" && !strings.EqualFold(actual, declared)

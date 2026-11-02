@@ -132,6 +132,19 @@ func (cm *CameraManager) SetGB28181ChannelImagingProbe(f func(deviceID, channelI
 	cm.gbChannelImagingProbe = f
 }
 
+// NewGBChannelImagingProbe adapts the SIP server's device manager — the
+// source of catalog channel state — into the probe SetGB28181ChannelImagingProbe
+// expects. pkg/app wiring uses exactly this constructor.
+func NewGBChannelImagingProbe(dm *platform.DeviceManager) func(deviceID, channelID string) (int, bool) {
+	return func(deviceID, channelID string) (int, bool) {
+		ch, ok := dm.FindChannel(deviceID, channelID)
+		if !ok {
+			return 0, false
+		}
+		return ch.PhotoelectricImagingType, true
+	}
+}
+
 // EnsureGB28181Camera creates a camera entry for a GB28181 channel if one
 // doesn't already exist. Called by the SIP server on REGISTER (device pseudo-
 // channel) and on Catalog receipt (real video channels) so GB28181 cameras

@@ -9,8 +9,10 @@ package camera
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/mickeyzzc/gb28181-go/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,4 +64,29 @@ func TestEnsureGB28181CameraNoProbeNoLabel(t *testing.T) {
 	require.NotNil(t, cam)
 	require.Empty(t, cam.ImagingType, "without a probe the enroll must not guess an imaging type")
 	require.False(t, cfg.Vision.ShouldSkipCamera("gb-34020000001320000003"))
+}
+
+// TestGBChannelImagingProbeFromDeviceManager pins the PRODUCTION probe
+// wiring (NewGBChannelImagingProbe over the SIP server's device manager)
+// against a real platform.DeviceManager carrying a catalog-registered
+// thermal channel — the exact shape pkg/app installs at boot.
+func TestGBChannelImagingProbeFromDeviceManager(t *testing.T) {
+	t.Parallel()
+	dm := platform.NewDeviceManager(time.Second)
+	dm.Register(&platform.Device{ID: "34020000001110000001", NetAddr: "127.0.0.1:5060"})
+	dm.RegisterChannel("34020000001110000001", &platform.Channel{
+		ID: "34020000001320000009", DeviceID: "34020000001110000001",
+		PhotoelectricImagingType: 2,
+	})
+
+	cfg := testConfig()
+	cfg.Cameras = nil
+	mgr, _ := newManagerWithBus(t, cfg)
+	mgr.SetGB28181ChannelImagingProbe(NewGBChannelImagingProbe(dm))
+
+	require.NoError(t, mgr.EnsureGB28181Camera("34020000001110000001", "34020000001320000009", "炉体热成像", ""))
+	cam := mgr.GetCameraConfig("gb-34020000001320000009")
+	require.NotNil(t, cam)
+	require.Equal(t, config.ImagingTypeThermal, cam.ImagingType)
+	require.True(t, cfg.Vision.ShouldSkipCamera("gb-34020000001320000009"))
 }

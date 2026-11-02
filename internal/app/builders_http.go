@@ -168,13 +168,7 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 		// (PhotoelectricImagingType=2, GB/T 28181-2022 — gb28181-go v0.15.1
 		// carries the marking on platform.Channel) enrolls with
 		// imaging_type=thermal (+ the AI-push skip default policy).
-		camMgr.SetGB28181ChannelImagingProbe(func(deviceID, channelID string) (int, bool) {
-			ch, ok := deps.gb28181DevMgr.FindChannel(deviceID, channelID)
-			if !ok {
-				return 0, false
-			}
-			return ch.PhotoelectricImagingType, true
-		})
+		camMgr.SetGB28181ChannelImagingProbe(camera.NewGBChannelImagingProbe(deps.gb28181DevMgr))
 		// Auto-INVITE when GB28181 recorders start (pull media on camera creation).
 		camMgr.SetGB28181Inviter(deps.gb28181Server)
 		camMgr.SetGB28181SessionEnder(deps.gb28181Server)

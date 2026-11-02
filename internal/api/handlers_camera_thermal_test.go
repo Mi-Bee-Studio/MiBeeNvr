@@ -5,10 +5,14 @@ package api
 // skip default policy side effect.
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"testing"
+	"time"
 
+	onvifserver "github.com/mickeyzzc/onvif-go/v2/server"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,4 +82,77 @@ func TestUpdateCameraImagingType(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+// TestProbeONVIFStreamDualSpectrumProfiles pins the create-form data source
+// against the embedded onvif-go virtual camera configured as a dual-spectrum
+// device: even when the RTSP leg cannot be verified (no real streamer in
+// the simulator), the probe must carry BOTH profiles plus the automatic
+// main-selection token so the manual picker can offer the thermal channel.
+func TestProbeONVIFStreamDualSpectrumProfiles(t *testing.T) {
+	t.Parallel()
+
+	cfg := onvifserver.DefaultConfig()
+	cfg.Host = "127.0.0.1"
+	cfg.Port = 0
+	cfg.Username = "admin"
+	cfg.Password = "sim-pass"
+	cfg.Profiles = []onvifserver.ProfileConfig{
+		{
+			Token: "Profile_visual", Name: "Visible Main",
+			VideoSource: onvifserver.VideoSourceConfig{
+				Token: "vs-0", Name: "Visible",
+				Resolution: onvifserver.Resolution{Width: 2560, Height: 1440},
+				Framerate:  25,
+				Bounds:     onvifserver.Bounds{Width: 2560, Height: 1440},
+			},
+			VideoEncoder: onvifserver.VideoEncoderConfig{
+				Encoding:   "H264",
+				Resolution: onvifserver.Resolution{Width: 2560, Height: 1440},
+				Framerate:  25, GovLength: 25, Bitrate: 4096,
+			},
+		},
+		{
+			Token: "Profile_thermal", Name: "Thermal",
+			VideoSource: onvifserver.VideoSourceConfig{
+				Token: "vs-1", Name: "Thermal",
+				Resolution: onvifserver.Resolution{Width: 384, Height: 288},
+				Framerate:  9,
+				Bounds:     onvifserver.Bounds{Width: 384, Height: 288},
+			},
+			VideoEncoder: onvifserver.VideoEncoderConfig{
+				Encoding:   "H264",
+				Resolution: onvifserver.Resolution{Width: 384, Height: 288},
+				Framerate:  9, GovLength: 9, Bitrate: 512,
+			},
+		},
+	}
+
+	// Port 0 would leak into the advertised service XAddrs (the simulator
+	// publishes config.Port, not the ephemeral port the listener got) —
+	// reserve a concrete free port instead.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	cfg.Port = port
+
+	sim, err := onvifserver.New(cfg)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = sim.Start(ctx) }()
+	require.Eventually(t, func() bool { return sim.ListenAddr() != "" },
+		5*time.Second, 50*time.Millisecond)
+
+	endpoint := "http://" + sim.ListenAddr() + "/onvif/device_service"
+	probe := probeONVIFStream(context.Background(), endpoint, "admin", "sim-pass")
+
+	require.True(t, probe.Reachable, "device_service must answer: %s", probe.Reason)
+	require.NotEmpty(t, probe.Profiles, "the profile list must ride the probe even without a stream leg")
+	require.Len(t, probe.Profiles, 2)
+	require.Equal(t, "Profile_visual", probe.AutoMainToken,
+		"automatic selection picks the highest-resolution visible-light profile")
+	tokens := []string{probe.Profiles[0].Token, probe.Profiles[1].Token}
+	require.Contains(t, tokens, "Profile_thermal")
 }
