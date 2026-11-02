@@ -97,8 +97,14 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 	handler.SetStabilityProvider(healthMgr)
 	handler.SetEventBus(deps.eventBus)
 	// Outbound alert dispatcher (notifications): nil when disabled — the
-	// endpoints then report disabled instead of 404-ing.
-	handler.SetNotifyService(deps.notifySvc)
+	// endpoints then report disabled instead of 404-ing. Guard the call:
+	// deps.notifySvc is a *notify.Service, and passing a nil pointer would
+	// store a non-nil interface (typed nil) — the handler's nil check would
+	// miss it and panic on Stats() (seen live: /api/notifications/status
+	// returned 500 on a notifications-disabled deployment).
+	if deps.notifySvc != nil {
+		handler.SetNotifyService(deps.notifySvc)
+	}
 	// FFmpeg-gated snapshot capturer for the latest-frame endpoint (#657).
 	handler.SetSnapshotCapturer(snapCapturer)
 	// Shared trigger dispatcher (MQTT + webhook, #709).
