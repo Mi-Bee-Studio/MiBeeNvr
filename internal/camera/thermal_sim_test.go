@@ -11,6 +11,7 @@ package camera
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,8 +160,16 @@ func TestRadiometryFullChainAgainstSimulator(t *testing.T) {
 	cm := NewCameraManager(cfg, nil, nil, "")
 	cm.eventBus = bus
 
+	// The handler runs on the subscriber's poll goroutine while
+	// require.Eventually polls from the test goroutine — guard the shared
+	// slice (CI runs -race).
+	var mu sync.Mutex
 	var actions []string
-	cm.SetMotionActionHandler(func(_, act string, _ time.Duration) { actions = append(actions, act) })
+	cm.SetMotionActionHandler(func(_, act string, _ time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		actions = append(actions, act)
+	})
 
 	ch := make(chan event.Event, 8)
 	require.NoError(t, bus.SubscribeByPrefix("onvif.", ch, 8))
@@ -177,6 +186,8 @@ func TestRadiometryFullChainAgainstSimulator(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
 		return len(actions) >= 2 && actions[0] == "record" && actions[1] == "snapshot:onvif"
 	}, 15*time.Second, 200*time.Millisecond, "the alarm must drive record + evidence snapshot through the pull-point chain")
 
