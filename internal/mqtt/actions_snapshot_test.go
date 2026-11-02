@@ -146,8 +146,10 @@ func TestActionDispatcher_SnapshotTriggerLabel(t *testing.T) {
 	dispatch("cam-1", "snapshot", 0)
 	dispatch("cam-1", "snapshot:onvif", 0)
 
+	// Each dispatch runs on its own goroutine — completion order is not
+	// deterministic, assert the labels unordered.
 	require.Eventually(t, func() bool {
 		return len(rec.recorded()) == 2
 	}, 15*time.Second, 50*time.Millisecond, "both snapshot action variants must run a capture")
-	require.Equal(t, []string{"mqtt", "onvif"}, rec.recorded())
+	require.ElementsMatch(t, []string{"mqtt", "onvif"}, rec.recorded())
 }
