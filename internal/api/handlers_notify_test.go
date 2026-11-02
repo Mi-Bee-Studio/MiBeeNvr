@@ -89,6 +89,28 @@ func TestNotifyStatus_Disabled(t *testing.T) {
 	}
 }
 
+// TestNotifyStatus_TypedNilService pins the live 2026-11-02 regression: the
+// app wiring passed a nil *notify.Service pointer into the NotifyService
+// interface parameter, so the handler's `!= nil` check saw a non-nil
+// interface and Stats() panicked on the nil receiver (status endpoint 500
+// on every notifications-disabled deployment). The nil-receiver guards in
+// notify.Service must keep this endpoint panic-free even if a typed nil
+// sneaks in again.
+func TestNotifyStatus_TypedNilService(t *testing.T) {
+	h, pass := newNotifyTestHandler(t, nil)
+	h.SetNotifyService((*notify.Service)(nil))
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/notifications/status", nil, "admin", pass)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: expected 200 with typed-nil service, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doRequest(t, h.Routes(), "POST", "/api/notifications/test", nil, "admin", pass)
+	if rr.Code != http.StatusAccepted {
+		t.Errorf("test: expected 202 (no-op) with typed-nil service, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestNotifyTest(t *testing.T) {
 	fake := &fakeNotifyService{}
 	h, pass := newNotifyTestHandler(t, fake)

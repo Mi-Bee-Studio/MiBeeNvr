@@ -162,6 +162,11 @@ func (s *Service) PublishAlert(cameraID string, evt model.HealthEvent) {
 // the receiver setup must be verifiable regardless of the sink's event
 // filter (that is the point of the button).
 func (s *Service) SendTest(severity, title string) {
+	if s == nil {
+		// Armor against a typed-nil *Service reaching the NotifyService
+		// interface: a no-op beats panicking the endpoint.
+		return
+	}
 	a := newAlert(timeNow())
 	a.Type = TypeNotifyTest
 	a.Severity = normalizeSeverity(severity, SeverityInfo)
@@ -178,6 +183,11 @@ func (s *Service) SendTest(severity, title string) {
 
 // Stats snapshots every sink's counters for the status endpoint.
 func (s *Service) Stats() []SinkStats {
+	if s == nil {
+		// Armor against a typed-nil *Service reaching the NotifyService
+		// interface: report empty counters instead of panicking.
+		return nil
+	}
 	out := make([]SinkStats, 0, len(s.sinks))
 	for _, sink := range s.sinks {
 		out = append(out, sink.Stats())
