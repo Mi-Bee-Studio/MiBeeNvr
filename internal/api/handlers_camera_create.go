@@ -135,6 +135,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		CascadeSubStream bool `json:"cascade_sub_stream"`
 		// Recording mode (#435): ""/"continuous" or "adaptive" (+ tuning).
 		RecordingMode string `json:"recording_mode"`
+		// Recording tier (#637): ""/"single" or "tiered" (continuous sub-stream).
+		RecordingTier string `json:"recording_tier"`
 		// Motion signal source (#711): ""/"nvr" or "camera:onvif".
 		MotionSource string `json:"motion_source"`
 		// Imaging channel (dual-spectrum): ""/"visible" or "thermal". Thermal
@@ -144,8 +146,10 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		AutoTimeSync *bool  `json:"auto_time_sync"`
 		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
 		// default) or "dir" (legacy per-frame directory).
-		MJPEGForm string                          `json:"mjpeg_form"`
-		Adaptive  *config.AdaptiveRecordingConfig `json:"adaptive"`
+		MJPEGForm string `json:"mjpeg_form"`
+		// Pixgate (#636): classic-CV gate over a sampled sub-stream decode.
+		Pixgate  *config.CameraPixgateConfig     `json:"pixgate"`
+		Adaptive *config.AdaptiveRecordingConfig `json:"adaptive"`
 		// Audio trigger (#478): loudness input for adaptive recording.
 		AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger"`
 		// Push/ingest fields (SRT/RTMP)
@@ -395,9 +399,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		CascadeEnabled:    body.CascadeEnabled,
 		CascadeSubStream:  body.CascadeSubStream,
 		RecordingMode:     body.RecordingMode,
+		RecordingTier:     body.RecordingTier,
 		MotionSource:      body.MotionSource,
 		ImagingType:       body.ImagingType,
+		AutoTimeSync:      body.AutoTimeSync,
 		MJPEGForm:         body.MJPEGForm,
+		Pixgate:           body.Pixgate,
 		Adaptive:          body.Adaptive,
 		AudioTrigger:      body.AudioTrigger,
 		StreamKey:         body.StreamKey,
@@ -411,6 +418,15 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.GB28181 != nil {
 		cam.GB28181 = body.GB28181.toConfig()
+	}
+	// Same boundary validation as the update path (#435, #402 class), on the
+	// config that is actually persisted. The ID is assigned on add; validate
+	// under the display name so the error names the camera.
+	probe := cam
+	probe.ID = body.Name
+	if err := config.ValidateCameraRecordingMode(probe); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Reject a dirty stable_id at the API boundary so it can't be frozen as the
