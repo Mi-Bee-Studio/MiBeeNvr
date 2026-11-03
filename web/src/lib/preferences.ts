@@ -3,6 +3,8 @@
  * Uses localStorage with prefix 'mibee_nvr_prefs_'
  */
 
+import { WALL_TEMPLATE_IDS } from './wall-layouts';
+
 const PREFIX = 'mibee_nvr_prefs_';
 
 // Preference keys
@@ -79,6 +81,76 @@ export function getTheme(): 'dark' | 'light' | null {
 
 export function setTheme(theme: 'dark' | 'light' | null): void {
   setPreference(PREFERENCE_KEYS.THEME, theme);
+}
+
+// --- Surveillance grid wall (#1072) ---
+
+/** Selectable preview-count options. 4 is the calibrated default (RPi-class
+ *  reference machine); higher tiers are explicit opt-ins — every tile is one
+ *  pull plus one decoder on the viewing browser, and the effective cap is
+ *  further clamped by the server's HLS preview budget. */
+export const MAX_GRID_CAMERAS_OPTIONS = [4, 6, 9, 12, 16] as const;
+export const MAX_GRID_CAMERAS_DEFAULT = 4;
+
+export function getMaxGridCameras(): number {
+  const n = getPreference('max_grid_cameras', MAX_GRID_CAMERAS_DEFAULT);
+  // Guard against hand-edited localStorage: only a positive integer passes.
+  return typeof n === 'number' && Number.isInteger(n) && n > 0
+    ? n
+    : MAX_GRID_CAMERAS_DEFAULT;
+}
+
+export function setMaxGridCameras(n: number): void {
+  if ((MAX_GRID_CAMERAS_OPTIONS as readonly number[]).includes(n)) {
+    setPreference('max_grid_cameras', n);
+  } else {
+    console.warn(`Max grid cameras must be one of: ${MAX_GRID_CAMERAS_OPTIONS.join(', ')}`);
+  }
+}
+
+/** Photo-wall layout (featured 2×2 tile + dense 1×1 tiles). Only effective
+ *  above 4 tiles; the flag is kept stored when the count drops back to 4. */
+export function isPhotoWallEnabled(): boolean {
+  return getPreference('photo_wall', false) === true;
+}
+
+export function setPhotoWallEnabled(v: boolean): void {
+  setPreference('photo_wall', v);
+}
+
+/** Featured-tile rotation interval in seconds; 0 = off (default). Pauses on
+ *  hover over the featured tile. */
+export const WALL_ROTATION_OPTIONS = [0, 30, 60, 300] as const;
+export const WALL_ROTATION_DEFAULT = 0;
+
+export function getWallRotationSecs(): number {
+  const n = getPreference('wall_rotation_secs', WALL_ROTATION_DEFAULT);
+  return (WALL_ROTATION_OPTIONS as readonly number[]).includes(n) ? n : WALL_ROTATION_DEFAULT;
+}
+
+export function setWallRotationSecs(secs: number): void {
+  if ((WALL_ROTATION_OPTIONS as readonly number[]).includes(secs)) {
+    setPreference('wall_rotation_secs', secs);
+  } else {
+    console.warn(`Wall rotation must be one of: ${WALL_ROTATION_OPTIONS.join(', ')}`);
+  }
+}
+
+/** Photo-wall layout template (which anchor pattern the featured tiles use).
+ *  Falls back to the default template on unknown stored values. */
+export const WALL_TEMPLATE_DEFAULT = 'hero' as const;
+
+export function getWallTemplateId(): string {
+  const id = getPreference('wall_template', WALL_TEMPLATE_DEFAULT);
+  return (WALL_TEMPLATE_IDS as readonly string[]).includes(id) ? id : WALL_TEMPLATE_DEFAULT;
+}
+
+export function setWallTemplateId(id: string): void {
+  if ((WALL_TEMPLATE_IDS as readonly string[]).includes(id)) {
+    setPreference('wall_template', id);
+  } else {
+    console.warn(`Wall template must be one of: ${WALL_TEMPLATE_IDS.join(', ')}`);
+  }
 }
 
 // Get effective theme (system preference when theme is null)

@@ -1374,7 +1374,7 @@ credential_probe:
 - **Default**: 4
 - **Range**: 1-20
 - **RPi Constraint**: Maximum 4 on Raspberry Pi 3B
-- **Description**: Maximum number of concurrent HLS streams
+- **Description**: Global budget of concurrent HLS preview streams — shared by main/sub streams and by all clients. At capacity the least recently used stream is evicted; preview is best-effort and never starves the recording path. Grid tiles on the degrade path, the single-camera live page, double-click expand and mobile clients all share this budget, and the surveillance grid clamps its selectable preview count to it. Editable under Settings → Streaming → "HLS preview budget"; applies after restart (the key used to be parsed and validated but never applied — now wired)
 - **Example**: `4`, `8`, `16`
 
 ### `hls.low_latency`

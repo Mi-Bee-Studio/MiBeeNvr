@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, setContext } from 'svelte';
-  import { getDashboardCameras, getAuthHeader, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, listCameraGroups, API_BASE } from '$lib/api';
+  import { getDashboardCameras, getAuthHeader, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, listCameraGroups, getStreamingSettings, HLS_MAX_STREAMS_FALLBACK, API_BASE } from '$lib/api';
   import type { Camera, ProtocolInfo, CameraProtocolsResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast.svelte';
@@ -12,7 +12,8 @@
   import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { isAudioCapable, type ProtocolsResponse } from '$lib/stream-selection';
-  import { getCameraProtocolOverride } from '$lib/preferences';
+  import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS, MAX_GRID_CAMERAS_DEFAULT, getWallTemplateId, setWallTemplateId } from '$lib/preferences';
+  import { WALL_TEMPLATES, wallGeometry, getWallTemplate, tileQualityFor, wallRowEstimate, CLASSIC_GRID_SIZE, type WallTemplate } from '$lib/wall-layouts';
   import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
 
   let cameras = $state<Camera[]>([]);
@@ -36,6 +37,103 @@
   let configOpen = $state(false);
   let selectedCameraIds = $state<string[]>([]);
   let pendingCameraIds = $state<string[]>([]);
+
+  // --- Grid wall capacity (#1072) ---
+  // The preview count is an explicit opt-in above the calibrated default of 4
+  // (RPi-class reference machine). The server's HLS preview budget further
+  // clamps what this browser may pick: tiles on the HLS degrade path — plus
+  // LiveView, expand and mobile clients — share that global budget, and
+  // overbooking it triggers LRU eviction churn.
+  let maxGridCameras = $state(getMaxGridCameras());
+  let photoWall = $state(isPhotoWallEnabled());
+  let serverBudget = $state(HLS_MAX_STREAMS_FALLBACK);
+
+  // Featured-tile rotation (#1072 P1): default off; hovering any featured
+  // tile pauses it, and it never runs while the picker or expand view is up.
+  let rotationSecs = $state(getWallRotationSecs());
+  let rotationPaused = $state(false);
+
+  // Photo-wall layout template (#1072): which anchor pattern the featured
+  // 2×2 tiles use (top-left hero, corners, centered, dual, triple). The
+  // geometry (columns + featured placements) is derived per camera count.
+  let wallTemplateId = $state(getWallTemplateId());
+
+  function changeWallTemplate(id: string) {
+    wallTemplateId = id;
+    setWallTemplateId(id);
+  }
+
+  function changeWallRotation(secs: number) {
+    rotationSecs = secs;
+    setWallRotationSecs(secs);
+  }
+
+  // Advance the carousel: the featured cameras move to the back, the next
+  // ones take the 2×2 slots. Deliberately NOT persisted — rotation is a
+  // view-layer cycle; the saved selection order stays what the user picked
+  // (and what drag-and-drop reorders persist).
+  function rotateFeatured() {
+    if (cameras.length <= 1) return;
+    cameras = [...cameras.slice(1), cameras[0]];
+  }
+
+  const gridCapacityOptions = $derived(
+    MAX_GRID_CAMERAS_OPTIONS.filter((o) => o <= Math.max(serverBudget, CLASSIC_GRID_SIZE)),
+  );
+  const effectiveMax = $derived(
+    Math.min(maxGridCameras, gridCapacityOptions[gridCapacityOptions.length - 1] ?? MAX_GRID_CAMERAS_DEFAULT),
+  );
+  // The photo-wall layout only exists above 4 tiles — at or below that the
+  // classic grid (including the 1-big-2-small 3-tile form) is the better view.
+  const photoWallActive = $derived(photoWall && cameras.length > 4 && !expandedCameraId);
+
+  // Saved template might need more cameras than are currently selected
+  // (e.g. triple wants ≥9); fall back to the plain hero in that case.
+  const activeWallTemplate = $derived.by<WallTemplate>(() => {
+    const tpl = getWallTemplate(wallTemplateId);
+    return cameras.length >= tpl.minCameras ? tpl : WALL_TEMPLATES[0];
+  });
+  const wallGeom = $derived(
+    photoWallActive ? wallGeometry(activeWallTemplate, cameras.length) : null,
+  );
+  // How many leading tiles are featured 2×2 — drives quality clamping and
+  // the rotation hover-pause (uniform >4 grids keep the single featured tile).
+  const featuredTileCount = $derived(photoWallActive ? activeWallTemplate.featured : 1);
+
+  $effect(() => {
+    if (rotationSecs <= 0 || !photoWallActive || rotationPaused || !tabVisible || expandedCameraId || configOpen) return;
+    const timer = setInterval(rotateFeatured, rotationSecs * 1000);
+    return () => clearInterval(timer);
+  });
+
+  function changeGridCapacity(n: number) {
+    maxGridCameras = n;
+    setMaxGridCameras(n);
+    if (n <= 4) {
+      photoWall = false;
+      setPhotoWallEnabled(false);
+    }
+    if (pendingCameraIds.length > n) pendingCameraIds = pendingCameraIds.slice(0, n);
+  }
+
+  function togglePhotoWall() {
+    photoWall = !photoWall;
+    setPhotoWallEnabled(photoWall);
+  }
+
+  // Whenever the effective cap shrinks (budget fetched late, capacity lowered,
+  // or a saved selection larger than the cap), trim the applied grid from the
+  // tail and persist. Dropped cameras release their orchestrator registration.
+  $effect(() => {
+    if (cameras.length > effectiveMax) {
+      const dropped = cameras.slice(effectiveMax);
+      cameras = cameras.slice(0, effectiveMax);
+      selectedCameraIds = cameras.map((c) => c.id);
+      if (pendingCameraIds.length > effectiveMax) pendingCameraIds = pendingCameraIds.slice(0, effectiveMax);
+      saveCameraIds(selectedCameraIds);
+      for (const c of dropped) orchestrator.unregisterCamera(c.id);
+    }
+  });
 
   // Snapshot state
   let snapshotUrls = $state<Record<string, string>>({});
@@ -170,7 +268,7 @@
     const sec = pickerSections.find(s => s.name === name);
     if (!sec) return;
     for (const c of sec.cameras) {
-      if (pendingCameraIds.length >= 4) break;
+      if (pendingCameraIds.length >= effectiveMax) break;
       if (!pendingCameraIds.includes(c.id)) pendingCameraIds = [...pendingCameraIds, c.id];
     }
   }
@@ -178,7 +276,7 @@
   function toggleCameraSelection(cameraId: string) {
     if (pendingCameraIds.includes(cameraId)) {
       pendingCameraIds = pendingCameraIds.filter(id => id !== cameraId);
-    } else if (pendingCameraIds.length < 4) {
+    } else if (pendingCameraIds.length < effectiveMax) {
       pendingCameraIds = [...pendingCameraIds, cameraId];
     }
   }
@@ -214,10 +312,23 @@
     return `${API_BASE}/cameras/${cameraId}/stream/index.m3u8`;
   }
 
+  // Uniform column tiers (#1072): ≤4 keeps the classic two-column grid; above
+  // that 3 columns up to 9 tiles and 4 columns beyond (lg+ only — narrow
+  // screens stay single-column).
   function getGridClass(count: number): string {
     if (count <= 1) return 'grid-cols-1';
-    if (count === 2) return 'grid-cols-1 sm:grid-cols-2';
-    return 'grid-cols-1 sm:grid-cols-2';
+    if (count <= 4) return 'grid-cols-1 sm:grid-cols-2';
+    if (count <= 9) return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+    return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4';
+  }
+
+  // Photo-wall layout (#1072): featured 2×2 tiles anchor at the template's
+  // positions, the remaining 1×1 tiles dense-pack around them — every camera
+  // count fills gaplessly. Column count comes from the template (runtime
+  // value), so the grid is styled inline rather than via Tailwind tiers.
+  function wallGridStyle(): string {
+    if (!photoWallActive || !wallGeom) return '';
+    return `grid-template-columns: repeat(${wallGeom.cols}, minmax(0, 1fr));`;
   }
 
   function getCellClass(camera: Camera, index: number, count: number): string {
@@ -230,6 +341,41 @@
       return 'col-span-2';
     }
     return '';
+  }
+
+  // Featured tiles get explicit grid lines from the template; every other
+  // cell keeps only its height floor and lets dense auto-flow place it.
+  function cellStyle(index: number, count: number): string {
+    const minHeight = getCellMinHeight(count);
+    if (photoWallActive && wallGeom && index < wallGeom.featured) {
+      const p = wallGeom.placements[index];
+      return `min-height: ${minHeight}; grid-column: ${p.col} / span 2; grid-row: ${p.row} / span 2;`;
+    }
+    return `min-height: ${minHeight};`;
+  }
+
+  // Cell height floor by layout row count: the classic grid holds two rows;
+  // taller walls divide the viewport by their row count so tiles stay legible
+  // and the page scrolls instead of shrinking cells text-thin. Each featured
+  // 2×2 tile occupies 3 extra 1×1 cells of area.
+  function getCellMinHeight(count: number): string {
+    if (count <= 1) return 'calc(100vh - 140px)';
+    if (photoWallActive) {
+      const rows = wallRowEstimate(wallGeom?.cols ?? CLASSIC_GRID_SIZE, activeWallTemplate.featured, count);
+      return `calc((100vh - 160px) / ${rows})`;
+    }
+    if (count <= 4) return 'calc((100vh - 160px) / 2)';
+    if (count <= 9) return 'calc((100vh - 160px) / 3)';
+    return `calc((100vh - 160px) / ${Math.ceil(count / 4)})`;
+  }
+
+  // HD clamp (#1072) — the rule lives in wall-layouts.tileQualityFor so it
+  // is unit-tested alongside the templates; see its doc comment for the
+  // rationale (featured tiles ride main, everything else stays sub above the
+  // classic grid; cameras without a sub stream still fall back to main inside
+  // CameraPlayer's effectiveQuality).
+  function tileQuality(index: number): 'main' | 'sub' {
+    return tileQualityFor(getGridQuality(), cameras.length, featuredTileCount, index);
   }
 
   function getStatusBadge(camera: Camera): { class: string; label: string; icon: any; text: string } {
@@ -452,6 +598,17 @@
   // --- Lifecycle ---
 
   onMount(async () => {
+    // Server HLS preview budget clamps the wall options (#1072). Non-blocking:
+    // until it lands the options stay at the safe default of 4; the clamp
+    // effect above trims an oversized saved selection if the budget is lower.
+    void (async () => {
+      try {
+        const s = await getStreamingSettings();
+        serverBudget = s.hls?.max_streams ?? HLS_MAX_STREAMS_FALLBACK;
+      } catch {
+        /* older binary or transient failure — keep the safe default */
+      }
+    })();
     try {
       const fetched = await getDashboardCameras();
       // Audio-only devices (v43, encoding "audio") have no video stream — they
@@ -625,7 +782,7 @@
       <div class="card p-4 mb-4">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-semibold th-text-primary">{t('dashboard.selectCameras')}</h3>
-          <span class="text-xs th-text-muted">{pendingCameraIds.length} / 4 · {t('dashboard.maxCameras')}</span>
+          <span class="text-xs th-text-muted">{pendingCameraIds.length} / {effectiveMax} · {t('dashboard.maxCameras')}</span>
         </div>
 
         <!-- Toolbar: search + online-only filter + clear -->
@@ -643,6 +800,96 @@
             <input type="checkbox" bind:checked={onlineOnly} class="accent-[var(--color-primary)]" />
             {t('dashboard.onlineOnly')}
           </label>
+          <!-- Wall capacity + photo-wall toggle (#1072): capacity is clamped by
+               the server's HLS preview budget; the photo wall only exists
+               above 4 tiles. -->
+          <!-- Capacity + rotation are in-page chip groups, NOT native <select>:
+               embedded-webview panes render the native popup outside the
+               page's control — it can drift past the window edge and its
+               click landing points shift, accidentally toggling neighboring
+               controls. -->
+          <div
+            class="flex items-center gap-1.5 text-xs th-text-secondary whitespace-nowrap select-none"
+            role="group"
+            aria-label={t('dashboard.gridCapacity')}
+          >
+            <span>{t('dashboard.gridCapacity')}</span>
+            <div class="flex items-center gap-1">
+              {#each MAX_GRID_CAMERAS_OPTIONS as n (n)}
+                {@const overBudget = n > Math.max(serverBudget, CLASSIC_GRID_SIZE)}
+                <button
+                  type="button"
+                  class="opt-chip {maxGridCameras === n ? 'opt-chip-active' : ''}"
+                  disabled={overBudget}
+                  aria-pressed={maxGridCameras === n}
+                  title={overBudget ? t('dashboard.budgetHint', { budget: serverBudget }) : `${n}`}
+                  onclick={() => changeGridCapacity(n)}
+                >{n}</button>
+              {/each}
+            </div>
+          </div>
+          <label
+            class="flex items-center gap-1.5 text-xs th-text-secondary cursor-pointer whitespace-nowrap select-none {maxGridCameras > 4 ? '' : 'opacity-50 pointer-events-none'}"
+            title={t('dashboard.photoWallHint')}
+          >
+            <input type="checkbox" checked={photoWall} onchange={togglePhotoWall} disabled={maxGridCameras <= 4} class="accent-[var(--color-primary)]" />
+            {t('dashboard.photoWall')}
+          </label>
+          <div
+            class="flex items-center gap-1.5 text-xs th-text-secondary whitespace-nowrap select-none {photoWall && maxGridCameras > 4 ? '' : 'opacity-50 pointer-events-none'}"
+            role="group"
+            aria-label={t('dashboard.wallRotation')}
+            title={t('dashboard.wallRotationHint')}
+          >
+            <span>{t('dashboard.wallRotation')}</span>
+            <div class="flex items-center gap-1">
+              {#each WALL_ROTATION_OPTIONS as s (s)}
+                <button
+                  type="button"
+                  class="opt-chip {rotationSecs === s ? 'opt-chip-active' : ''}"
+                  disabled={!(photoWall && maxGridCameras > 4)}
+                  aria-pressed={rotationSecs === s}
+                  onclick={() => changeWallRotation(s)}
+                >{s === 0 ? t('dashboard.wallRotation.off') : s === 300 ? '5min' : `${s}s`}</button>
+              {/each}
+            </div>
+          </div>
+          {#if photoWall && maxGridCameras > 4}
+            <!-- Wall layout templates (#1072): chips render live mini
+                 previews of each template at the CURRENT camera count, so
+                 what you pick is what you get. -->
+            <div class="w-full flex items-center gap-2 flex-wrap">
+              <span class="text-xs th-text-secondary whitespace-nowrap" title={t('dashboard.wallLayoutHint')}>{t('dashboard.wallLayout')}</span>
+              {#each WALL_TEMPLATES as tpl (tpl.id)}
+                {@const previewCount = Math.max(cameras.length, 6)}
+                {@const geom = wallGeometry(tpl, previewCount)}
+                {@const tooFew = previewCount < tpl.minCameras}
+                <button
+                  type="button"
+                  class="wall-tpl-chip {wallTemplateId === tpl.id ? 'wall-tpl-chip-active' : ''}"
+                  title={tooFew
+                    ? `${t(`dashboard.layout.${tpl.id}`)} — ${t('dashboard.layoutMinHint', { count: tpl.minCameras })}`
+                    : t(`dashboard.layout.${tpl.id}`)}
+                  aria-label={t(`dashboard.layout.${tpl.id}`)}
+                  aria-pressed={wallTemplateId === tpl.id}
+                  disabled={tooFew}
+                  onclick={() => changeWallTemplate(tpl.id)}
+                >
+                  <span class="wall-tpl-preview" style="grid-template-columns: repeat({geom.cols}, minmax(0, 1fr));">
+                    {#each geom.placements as p (p.col * 100 + p.row)}
+                      <span class="wall-tpl-cell wall-tpl-featured" style="grid-column: {p.col} / span 2; grid-row: {p.row} / span 2;"></span>
+                    {/each}
+                    {#each Array(Math.max(previewCount - geom.featured, 0)) as _, si (si)}
+                      <span class="wall-tpl-cell"></span>
+                    {/each}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+          {#if gridCapacityOptions.length < MAX_GRID_CAMERAS_OPTIONS.length}
+            <p class="w-full text-[11px] th-text-muted">{t('dashboard.budgetHint', { budget: serverBudget })}</p>
+          {/if}
           <button
             class="btn btn-ghost text-xs px-2 py-1"
             onclick={clearPendingSelection}
@@ -682,7 +929,7 @@
                 <span class="text-[11px] font-semibold th-text-secondary tracking-wide">{sec.name || t('cameras.groupUngrouped')}</span>
                 <span class="text-[11px] th-text-muted">{sec.cameras.length}</span>
                 <div class="flex-1 border-t th-border opacity-50"></div>
-                {#if pendingCameraIds.length < 4}
+                {#if pendingCameraIds.length < effectiveMax}
                   <button
                     type="button"
                     class="inline-flex items-center gap-0.5 text-[11px] hover:underline"
@@ -702,7 +949,7 @@
                     type="checkbox"
                     checked={pendingCameraIds.includes(camera.id)}
                     onchange={() => toggleCameraSelection(camera.id)}
-                    disabled={!pendingCameraIds.includes(camera.id) && pendingCameraIds.length >= 4}
+                    disabled={!pendingCameraIds.includes(camera.id) && pendingCameraIds.length >= effectiveMax}
                     class="accent-[var(--color-primary)]"
                   />
                   <span class="w-1.5 h-1.5 rounded-full shrink-0 {online ? 'bg-emerald-500' : 'bg-gray-400'}"
@@ -758,7 +1005,8 @@
     {:else}
       <!-- Camera grid -->
       <div
-        class="grid gap-2 sm:gap-3 {getGridClass(cameras.length)}"
+        class="grid gap-2 sm:gap-3 {photoWallActive ? '[grid-auto-flow:dense]' : getGridClass(cameras.length)}"
+        style={wallGridStyle()}
         onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
         onshrink={(e: CustomEvent) => shrinkToGrid()}
       >
@@ -768,16 +1016,19 @@
           {@const StatusIcon = status.icon}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <!-- svelte-ignore a11y_mouse_events_have_key_events -->
           <div
             class="relative bg-black rounded-lg overflow-hidden group camera-grid-cell {getCellClass(camera, index, cameras.length)} {dragOverIndex === index && draggedIndex !== null && draggedIndex !== index ? 'cell-drop-target' : ''} {draggedIndex === index ? 'cell-dragging' : ''}"
             class:cell-expanded={expandedCameraId === camera.id}
-            style="min-height: {cameras.length === 1 ? 'calc(100vh - 140px)' : 'calc((100vh - 160px) / 2)'};"
+            style={cellStyle(index, cameras.length)}
             role="button"
             tabindex="0"
             aria-label="{camera.name || camera.id} — {status.text}"
             onclick={() => handleCellClick(camera, index)}
             onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCellClick(camera, index); } }}
             ondblclick={() => handleCellDblClick(camera)}
+            onmouseenter={() => { if (photoWallActive && index < featuredTileCount) rotationPaused = true; }}
+            onmouseleave={() => { if (rotationPaused) rotationPaused = false; }}
             draggable={cameras.length > 1 && !expandedCameraId ? 'true' : undefined}
             ondragstart={(e: DragEvent) => handleDragStart(index, e)}
             ondragover={(e: DragEvent) => handleDragOver(index, e)}
@@ -858,7 +1109,7 @@
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
                 streamUrl={getStreamUrl(camera.id)}
-                quality={getGridQuality()}
+                quality={tileQuality(index)}
               />
             {/if}
 
@@ -949,6 +1200,69 @@
       opacity: 1;
       transform: scale(1);
     }
+  }
+
+  /* Option chips (capacity / rotation) — in-page replacements for native
+     <select>, see the comment at the markup for why. */
+  .opt-chip {
+    padding: 2px 8px;
+    border: 1px solid var(--color-border, rgba(255, 255, 255, 0.14));
+    border-radius: var(--radius-md, 6px);
+    background: transparent;
+    font-size: 11px;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: border-color var(--duration-fast, 120ms) ease;
+  }
+  .opt-chip:hover:not(:disabled) {
+    border-color: var(--color-primary, #8b5cf6);
+  }
+  .opt-chip:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .opt-chip-active {
+    border-color: var(--color-primary, #8b5cf6);
+    background: color-mix(in srgb, var(--color-primary, #8b5cf6) 14%, transparent);
+  }
+
+  /* Wall layout template chips: live mini previews. The mini grid uses the
+     same dense-flow + span math as the real wall, so the chip previews are
+     exact (holes included). */
+  .wall-tpl-chip {
+    padding: 4px;
+    border: 1px solid var(--color-border, rgba(255, 255, 255, 0.14));
+    border-radius: var(--radius-md, 6px);
+    background: transparent;
+    cursor: pointer;
+    line-height: 0;
+    transition: border-color var(--duration-fast, 120ms) ease;
+  }
+  .wall-tpl-chip:hover:not(:disabled) {
+    border-color: var(--color-primary, #8b5cf6);
+  }
+  .wall-tpl-chip:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .wall-tpl-chip-active {
+    border-color: var(--color-primary, #8b5cf6);
+    box-shadow: 0 0 0 1px var(--color-primary, #8b5cf6);
+  }
+  .wall-tpl-preview {
+    display: grid;
+    grid-auto-flow: dense;
+    grid-auto-rows: 6px;
+    gap: 1px;
+    width: 54px;
+  }
+  .wall-tpl-cell {
+    background: var(--color-text-muted, rgba(150, 150, 150, 0.55));
+    border-radius: 1px;
+    min-width: 0;
+  }
+  .wall-tpl-featured {
+    background: var(--color-primary, #8b5cf6);
   }
 
 </style>

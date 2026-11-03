@@ -204,6 +204,16 @@ func (m *Manager) SetLowLatency(enabled bool, partMinDuration time.Duration) {
 	}
 }
 
+// SetMaxStreams overrides the concurrent HLS stream budget — the LRU eviction
+// threshold shared by all clients. Values < 1 fall back to the default.
+// Must be called before any StartStream calls.
+func (m *Manager) SetMaxStreams(n int) {
+	if n < 1 {
+		n = defaultMaxStreams
+	}
+	m.maxStreams = n
+}
+
 // StartStream creates and starts an HLS muxer for the given camera.
 // The caller must provide the H264 SPS and PPS NAL units (without start bytes).
 func (m *Manager) StartStream(cameraID string, sps, pps []byte, maxFPS int) error {

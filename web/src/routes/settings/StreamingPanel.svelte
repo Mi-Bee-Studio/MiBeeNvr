@@ -3,7 +3,7 @@
   // Part of the unified settings shell (#153): no save button here; the
   // shell drives save/reset via the settingsForm coordinator.
   import { onMount, onDestroy } from 'svelte';
-  import { getStreamingSettings, updateStreamingSettings, getRtspOutputSettings, updateRtspOutputSettings } from '$lib/api';
+  import { getStreamingSettings, updateStreamingSettings, getRtspOutputSettings, updateRtspOutputSettings, HLS_MAX_STREAMS_FALLBACK } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast.svelte';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
@@ -37,6 +37,11 @@
   let rtspPasswordConfigured = $state(false);
   let rtspClearAuth = $state(false);
 
+  // HLS preview-stream budget (#1072): global LRU eviction threshold, 1-20,
+  // restart-applied. Only sent when the user actually changed it.
+  let hlsMaxStreams = $state(HLS_MAX_STREAMS_FALLBACK);
+  let originalHlsMaxStreams = $state(4);
+
   // Original values for dirty tracking + destructive detection
   let originalSnapshot = $state('');
   let originalRtmpEnabled = $state(false);
@@ -51,6 +56,7 @@
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
       rtmpStreamKeys, srtStreams,
       rtspEnabled, rtspPort, rtspUsername, rtspPasswordTyped, rtspClearAuth,
+      hlsMaxStreams,
     });
     return current !== originalSnapshot;
   });
@@ -61,10 +67,12 @@
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
       rtmpStreamKeys, srtStreams,
       rtspEnabled, rtspPort, rtspUsername, rtspPasswordTyped, rtspClearAuth,
+      hlsMaxStreams,
     });
     originalRtmpEnabled = streamingRtmpEnabled;
     originalSrtEnabled = streamingSrtEnabled;
     originalRtspEnabled = rtspEnabled;
+    originalHlsMaxStreams = hlsMaxStreams;
   }
 
   async function loadStreamingConfig() {
@@ -83,6 +91,7 @@
         : [];
       streamingSrtEnabled = config.srt?.enabled ?? false;
       streamingSrtPort = config.srt?.port ?? 9000;
+      hlsMaxStreams = config.hls?.max_streams ?? HLS_MAX_STREAMS_FALLBACK;
       const srtStreamList = config.srt?.streams;
       srtStreams = srtStreamList
         ? srtStreamList.map((s) => ({
@@ -131,6 +140,8 @@
         // No hls.low_latency here: the panel has no LL toggle, and the key is
         // live since #772 — sending a hardcoded value would clobber an
         // explicit `low_latency: false` from the config file on every save.
+        // The budget (#1072) only rides along when the user changed it.
+        ...(hlsMaxStreams !== originalHlsMaxStreams ? { hls: { max_streams: hlsMaxStreams } } : {}),
         rtmp: {
           enabled: streamingRtmpEnabled,
           port: streamingRtmpPort,
@@ -189,6 +200,7 @@
       rtspUsername = snap.rtspUsername;
       rtspPasswordTyped = snap.rtspPasswordTyped;
       rtspClearAuth = snap.rtspClearAuth;
+      hlsMaxStreams = snap.hlsMaxStreams;
     } catch { /* ignore */ }
   }
 
@@ -335,5 +347,22 @@
       </div>
     </div>
     <p class="text-xs th-text-tertiary mt-4">{t('settings.streaming.rtspOutput.restartHint')}</p>
+  </SettingsCard>
+
+  <!-- HLS preview budget (#1072): global concurrent preview-stream cap. -->
+  <SettingsCard
+    title={t('settings.streaming.hlsBudget')}
+    subtitle={t('settings.streaming.hlsBudgetDesc')}
+    defaultOpen={false}
+  >
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div>
+        <label for="hlsMaxStreams" class="input-label">{t('settings.streaming.hlsBudget.maxStreams')}</label>
+        <input id="hlsMaxStreams" type="number" class="input" value={hlsMaxStreams}
+          oninput={(e) => { const v = parseInt((e.target as HTMLInputElement).value); if (!Number.isNaN(v)) hlsMaxStreams = v; }}
+          min="1" max="20" />
+      </div>
+    </div>
+    <p class="text-xs th-text-tertiary mt-4">{t('settings.streaming.hlsBudget.restartHint')}</p>
   </SettingsCard>
 {/if}

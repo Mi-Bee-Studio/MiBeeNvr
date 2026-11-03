@@ -420,6 +420,48 @@ func TestLRUEviction_EvictsOldestStream(t *testing.T) {
 	mgr.StopAll()
 }
 
+// --- SetMaxStreams Tests ---
+
+// The configured budget (hls.max_streams) must actually reach the Manager:
+// the LRU threshold follows the override instead of staying at the default.
+func TestSetMaxStreams_OverridesBudget(t *testing.T) {
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+	mgr.SetMaxStreams(2)
+	require.Equal(t, 2, mgr.maxStreams)
+
+	// Fill to the configured capacity of 2 with staggered lastUsed times
+	mgr.mu.Lock()
+	now := time.Now()
+	for i := range 2 {
+		_, cancel := context.WithCancel(context.Background())
+		mgr.streams[fmt.Sprintf("cam-%d", i)] = stampedEntry(&streamEntry{
+			frameCh: make(chan hlsFrame, defaultWriteBufSize),
+			cancel:  cancel,
+		}, now.Add(time.Duration(i)*time.Second))
+	}
+	mgr.mu.Unlock()
+
+	// 3rd stream succeeds by evicting cam-0 (oldest); count stays at 2
+	sps := []byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	err := mgr.StartStream("cam-new", sps, pps, 0)
+	require.NoError(t, err)
+	require.Equal(t, 2, mgr.GetActiveStreamCount())
+	require.False(t, mgr.IsActive("cam-0"))
+	require.True(t, mgr.IsActive("cam-1"))
+	require.True(t, mgr.IsActive("cam-new"))
+	mgr.StopAll()
+}
+
+func TestSetMaxStreams_InvalidFallsBackToDefault(t *testing.T) {
+	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
+	mgr.SetMaxStreams(0)
+	require.Equal(t, defaultMaxStreams, mgr.maxStreams)
+	mgr.SetMaxStreams(-3)
+	require.Equal(t, defaultMaxStreams, mgr.maxStreams)
+	mgr.StopAll()
+}
+
 func TestLRUEviction_EvictedStreamCleanedUp(t *testing.T) {
 	mgr := NewManagerWithOpts(context.Background(), t.TempDir(), defaultWriteBufSize, defaultSegmentMaxSize, 0)
 

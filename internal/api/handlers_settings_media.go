@@ -27,6 +27,10 @@ func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Requ
 		},
 		"hls": map[string]any{
 			"low_latency": h.config.HLS.LowLatencyEnabled(),
+			// Concurrent HLS preview-stream budget — the global LRU eviction
+			// threshold shared by all clients (#1072). Takes effect at
+			// restart (the Manager reads it at construction).
+			"max_streams": h.config.HLS.MaxStreams,
 		},
 		// RTMP/SRT ingest settings. The streaming panel persisted nothing for
 		// them before: the PUT body had no rtmp/srt fields, so the UI switches
@@ -65,6 +69,7 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 		} `json:"flv"`
 		HLS *struct {
 			LowLatency *bool `json:"low_latency"`
+			MaxStreams *int  `json:"max_streams"`
 		} `json:"hls"`
 		RTMP *struct {
 			Enabled    *bool             `json:"enabled"`
@@ -116,11 +121,20 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	if body.HLS != nil && body.HLS.LowLatency != nil {
-		if h.config.HLS.LowLatency == nil {
-			h.config.HLS.LowLatency = new(bool)
+	if body.HLS != nil {
+		if body.HLS.LowLatency != nil {
+			if h.config.HLS.LowLatency == nil {
+				h.config.HLS.LowLatency = new(bool)
+			}
+			*h.config.HLS.LowLatency = *body.HLS.LowLatency
 		}
-		*h.config.HLS.LowLatency = *body.HLS.LowLatency
+		if body.HLS.MaxStreams != nil {
+			if *body.HLS.MaxStreams < 1 || *body.HLS.MaxStreams > 20 {
+				WriteError(w, http.StatusBadRequest, "hls.max_streams must be between 1 and 20")
+				return
+			}
+			h.config.HLS.MaxStreams = *body.HLS.MaxStreams
+		}
 	}
 
 	if body.RTMP != nil {
