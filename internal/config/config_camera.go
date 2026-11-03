@@ -143,6 +143,13 @@ type CameraConfig struct {
 	// Empty = global value.
 	SegmentDuration string `yaml:"segment_duration,omitempty" json:"segment_duration,omitempty"`
 
+	// ThermalReadout points the live-view temperature chip at the device's
+	// readout endpoint (dual-spectrum thermal cameras; the SPEC-style
+	// GET .../thermal/current JSON shape). The NVR polls it and republishes
+	// on the SSE bus under thermal.temperature — the overlay lights up
+	// without any player changes. Applies on restart (boot-wired).
+	ThermalReadout *ThermalReadoutConfig `yaml:"thermal_readout,omitempty" json:"thermal_readout,omitempty"`
+
 	// RecordingMode selects the write-density strategy (issue #435):
 	//   "" | "continuous" — record every frame (default, current behavior)
 	//   "adaptive"        — dynamic timelapse: while the compressed-domain
@@ -230,6 +237,17 @@ type CameraConfig struct {
 	// Per-camera push-in retention override. nil = follow global retention,
 	// 0 = live-only (no recording), N = keep N days. Only meaningful for srt/rtmp.
 	PushRetentionDays *int `yaml:"push_retention_days,omitempty" json:"push_retention_days,omitempty"`
+}
+
+// ThermalReadoutConfig is the device-side temperature readout endpoint
+// polled for the live-view chip. AuthHeader/AuthValue is a static-header
+// seam for pre-SPEC integrations (intranet deployments); the finalized
+// SPEC session auth replaces it without touching the poll loop.
+type ThermalReadoutConfig struct {
+	URL        string `yaml:"url" json:"url"`
+	IntervalS  int    `yaml:"interval_s,omitempty" json:"interval_s,omitempty"` // default 2
+	AuthHeader string `yaml:"auth_header,omitempty" json:"auth_header,omitempty"`
+	AuthValue  string `yaml:"auth_value,omitempty" json:"auth_value,omitempty"`
 }
 
 // AdaptiveRecordingConfig tunes recording_mode: adaptive (issue #435).
