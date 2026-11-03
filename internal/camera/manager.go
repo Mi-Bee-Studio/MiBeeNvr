@@ -342,5 +342,9 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		}
 	}
 	cm.snapshot.Store(initSnap)
+	// Thermal-channel GB alarm linkage: consume gb28181.alarm off the bus
+	// for record + evidence-snapshot dispatch on thermal cameras (nil bus =
+	// no-op). See thermal_alarm.go.
+	cm.armThermalGBAlarmLinkage()
 	return cm
 }
