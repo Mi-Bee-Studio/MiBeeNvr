@@ -105,6 +105,8 @@ type CameraRow struct {
 	// Pixgate config (#636): classic-CV gate over a sampled sub-stream decode.
 	Pixgate  *config.CameraPixgateConfig     `json:"pixgate,omitempty"`
 	Adaptive *config.AdaptiveRecordingConfig `json:"adaptive,omitempty"`
+	// Audio trigger (#478): loudness input for recording_mode: adaptive.
+	AudioTrigger *config.CameraAudioTriggerConfig `json:"audio_trigger,omitempty"`
 	// Cascade gate (injected from YAML at API response time): false = hidden
 	// from the GB28181 cascade catalog, INVITEs refused. nil = exposed.
 	CascadeEnabled *bool `json:"cascade_enabled,omitempty"`

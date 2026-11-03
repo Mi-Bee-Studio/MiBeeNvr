@@ -39,22 +39,8 @@ func cameraRowForAPI(row *storage.CameraRow) {
 //
 // cfg may be nil (no-op). If the camera ID is not found in cfg.Cameras the row
 // is returned unchanged. Callers: handleListCameras, handleGetCamera,
-// handleUpdateCamera — all three now share this so list/get/update agree.
-
-// injectYAMLConfigFields overlays the per-camera YAML-config fields that are NOT
-// stored in (or not read by) the DB query onto a CameraRow. The DB is the source
-// of truth for core columns (name/protocol/encoding/url/status/…), but several
-// fields live only in mibee-nvr.yaml (transcoding, channel, audio_enabled, push
-// targets, recording gate, dark-frame filter, recording schedule, stable_id,
-// subnet hints, ingest keys). Without this overlay the API response is missing
-// them — which previously made PUT /api/cameras/{id} return a row with
-// push_targets/recording_enabled absent and audio_enabled at its zero value
-// (false), so any caller trusting the PUT response (instead of re-GETting) saw
-// its just-saved data "missing" (issue #297).
-//
-// cfg may be nil (no-op). If the camera ID is not found in cfg.Cameras the row
-// is returned unchanged. Callers: handleListCameras, handleGetCamera,
-// handleUpdateCamera — all three now share this so list/get/update agree.
+// handleUpdateCamera, handleCreateCamera — all share this so every camera
+// response carries the same fields.
 func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 	if cfg == nil {
 		return
@@ -93,6 +79,7 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.MJPEGForm = cam.MJPEGForm
 		row.Pixgate = cam.Pixgate
 		row.Adaptive = cam.Adaptive
+		row.AudioTrigger = cam.AudioTrigger
 		if cam.Protocol == "gb28181" {
 			gb := cam.GB28181
 			row.GB28181 = &gb
