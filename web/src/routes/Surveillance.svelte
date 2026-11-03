@@ -13,7 +13,7 @@
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { isAudioCapable, type ProtocolsResponse } from '$lib/stream-selection';
   import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS, MAX_GRID_CAMERAS_DEFAULT, getWallTemplateId, setWallTemplateId } from '$lib/preferences';
-  import { WALL_TEMPLATES, wallGeometry, getWallTemplate, tileQualityFor, wallRowEstimate, CLASSIC_GRID_SIZE, type WallTemplate } from '$lib/wall-layouts';
+  import { WALL_TEMPLATES, wallGeometry, getWallTemplate, tileQualityFor, wallRowEstimate, fillSelection, CLASSIC_GRID_SIZE, type WallTemplate } from '$lib/wall-layouts';
   import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
 
   let cameras = $state<Camera[]>([]);
@@ -107,8 +107,14 @@
   });
 
   function changeGridCapacity(n: number) {
+    const prev = maxGridCameras;
     maxGridCameras = n;
     setMaxGridCameras(n);
+    // Raising the tier grows the grid with it. Lowering trims the selection
+    // (the clamp effect below persists the trim), so without the symmetric
+    // fill the tile count sticks at the old value after a round trip —
+    // exactly "the preview count can't be changed" from the user's side.
+    if (n > prev) fillGridTo(n);
     if (n <= 4) {
       photoWall = false;
       setPhotoWallEnabled(false);
@@ -119,6 +125,26 @@
   function togglePhotoWall() {
     photoWall = !photoWall;
     setPhotoWallEnabled(photoWall);
+  }
+
+  // Grow the applied grid up to a raised tier: pick from the full camera
+  // list (online first, dead tiles excluded — fillSelection), persist the
+  // new selection, and give the newcomers the same registration treatment
+  // as the initial load (orchestrator chain now, protocol rankings async).
+  function fillGridTo(n: number): void {
+    const currentIds = cameras.map((c) => c.id);
+    const nextIds = fillSelection(currentIds, allCameras, n);
+    const addedIds = nextIds.filter((id) => !currentIds.includes(id));
+    if (!addedIds.length) return;
+    const byId = new Map(allCameras.map((c) => [c.id, c]));
+    const added = addedIds.map((id) => byId.get(id)).filter((c): c is Camera => c !== undefined);
+    if (!added.length) return;
+    cameras = [...cameras, ...added];
+    selectedCameraIds = cameras.map((c) => c.id);
+    pendingCameraIds = [...selectedCameraIds];
+    saveCameraIds(selectedCameraIds);
+    syncOrchestrator();
+    void refreshCameraProtocols(addedIds);
   }
 
   // Whenever the effective cap shrinks (budget fetched late, capacity lowered,
