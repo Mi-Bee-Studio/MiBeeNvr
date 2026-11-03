@@ -136,8 +136,9 @@ func (r *triggerRecordingRunner) recorded() []string {
 
 // TestActionDispatcher_SnapshotTriggerLabel: "snapshot" labels the event
 // trigger "mqtt" (legacy contract); "snapshot:onvif" (camera-side ONVIF
-// events, e.g. RadiometryAlarm evidence frames) labels it "onvif" so the
-// events feed says where the capture came from.
+// events, e.g. RadiometryAlarm evidence frames) labels it "onvif";
+// "snapshot:gb" (thermal-channel GB alarm linkage) labels it "gb" — so the
+// events feed says where each capture came from.
 func TestActionDispatcher_SnapshotTriggerLabel(t *testing.T) {
 	t.Helper()
 	rec := &triggerRecordingRunner{}
@@ -145,11 +146,12 @@ func TestActionDispatcher_SnapshotTriggerLabel(t *testing.T) {
 
 	dispatch("cam-1", "snapshot", 0)
 	dispatch("cam-1", "snapshot:onvif", 0)
+	dispatch("cam-1", "snapshot:gb", 0)
 
 	// Each dispatch runs on its own goroutine — completion order is not
 	// deterministic, assert the labels unordered.
 	require.Eventually(t, func() bool {
-		return len(rec.recorded()) == 2
-	}, 15*time.Second, 50*time.Millisecond, "both snapshot action variants must run a capture")
-	require.ElementsMatch(t, []string{"mqtt", "onvif"}, rec.recorded())
+		return len(rec.recorded()) == 3
+	}, 15*time.Second, 50*time.Millisecond, "all snapshot action variants must run a capture")
+	require.ElementsMatch(t, []string{"mqtt", "onvif", "gb"}, rec.recorded())
 }

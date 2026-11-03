@@ -37,6 +37,10 @@ const (
 	// captured event's trigger "onvif" instead of "mqtt" — used by camera-side
 	// ONVIF event wiring (RadiometryAlarm evidence frames).
 	actionSnapshotOnvif = "snapshot:onvif"
+	// actionSnapshotGB is the GB28181 flavour: the same capture labelled
+	// "gb" — used by the thermal-channel GB alarm linkage (device-side
+	// temperature over-threshold NOTIFYs).
+	actionSnapshotGB = "snapshot:gb"
 )
 
 // actionTimeout bounds one triggered lifecycle call (camera dial + recorder
@@ -85,14 +89,17 @@ func NewActionDispatcher(lifecycle CameraLifecycle, snap SnapshotRunner) func(ca
 				}
 				actionLogger.Info("mqtt trigger applied", "camera_id", cameraID, "action", action)
 			}()
-		case actionSnapshot, actionSnapshotOnvif:
+		case actionSnapshot, actionSnapshotOnvif, actionSnapshotGB:
 			if snap == nil {
 				actionLogger.Warn("mqtt snapshot trigger dropped: no snapshot runner wired", "camera_id", cameraID)
 				return
 			}
 			trigger := "mqtt"
-			if action == actionSnapshotOnvif {
+			switch action {
+			case actionSnapshotOnvif:
 				trigger = "onvif"
+			case actionSnapshotGB:
+				trigger = "gb"
 			}
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
