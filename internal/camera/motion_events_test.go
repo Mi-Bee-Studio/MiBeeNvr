@@ -102,6 +102,96 @@ func TestOnMotionEventDispatchesPublishesAndTriggers(t *testing.T) {
 	<-ch
 }
 
+// TestOnRadiometryEventDispatchesPublishesAndTriggers mirrors the motion
+// dispatch test for the thermal RadiometryAlarm path: an active alarm drives
+// the record action PLUS an evidence snapshot (onvif-labelled) and the
+// adaptive exit; a clear triggers nothing; the SSE republish rides the same
+// onvif.* feed.
+func TestOnRadiometryEventDispatchesPublishesAndTriggers(t *testing.T) {
+	t.Parallel()
+	bus := event.NewEventBus(16)
+	cfg := testConfig()
+	cfg.Cameras = []config.CameraConfig{{
+		ID: "cam-t", Name: "配电箱热成像", Protocol: "onvif",
+		MotionSource: config.MotionSourceCameraONVIF,
+		ImagingType:  config.ImagingTypeThermal,
+	}}
+	cm := NewCameraManager(cfg, nil, nil, "")
+	cm.eventBus = bus
+
+	rec := &fakeMotionRecorder{}
+	cm.apply(func(s *snapshot) *snapshot {
+		s.recorders["cam-t"] = rec
+		return s
+	})
+
+	var actions []string
+	var actionCam string
+	cm.SetMotionActionHandler(func(cameraID, act string, _ time.Duration) {
+		actionCam = cameraID
+		actions = append(actions, act)
+	})
+
+	ch := make(chan event.Event, 8)
+	require.NoError(t, bus.SubscribeByPrefix("onvif.", ch, 16))
+
+	// RadiometryAlarm true → SSE publish + record + snapshot + adaptive trigger.
+	cm.onONVIFEvent("cam-t", onvif.ONVIFEvent{
+		Topic: "tns1:Thermal/RadiometryAlarm",
+		Data:  map[string]any{"Active": "true", "Temperature": "91.2"},
+	})
+
+	require.Equal(t, "cam-t", actionCam)
+	require.Equal(t, []string{"record", "snapshot:onvif"}, actions)
+	require.Equal(t, 1, rec.motionCalls)
+	require.Equal(t, motionTriggerHold, rec.lastHold)
+
+	evt := <-ch
+	require.Equal(t, "onvif.radiometryalarm", evt.Topic)
+	payload, ok := evt.Data.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "cam-t", payload["camera_id"])
+	require.Equal(t, "配电箱热成像", payload["camera_name"])
+
+	// Clear → published to SSE but triggers NOTHING.
+	actions = nil
+	cm.onONVIFEvent("cam-t", onvif.ONVIFEvent{
+		Topic: "tns1:Thermal/RadiometryAlarm",
+		Data:  map[string]any{"Active": "false"},
+	})
+	require.Empty(t, actions, "radiometry clear must not dispatch anything")
+	require.Equal(t, 1, rec.motionCalls)
+	<-ch
+}
+
+// TestOnRadiometryEventWarnsOnUnparseable pins the same observability
+// contract as motion: a radiometry-shaped event whose state is unparseable
+// must WARN (vendor encoding mismatch ≠ device emits nothing), while other
+// unparseable topics stay silent.
+func TestOnRadiometryEventWarnsOnUnparseable(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	cm := NewCameraManager(testConfig(), nil, nil, "")
+	buf.Reset() // construction warnings are not under test
+
+	cm.onONVIFEvent("cam-t", onvif.ONVIFEvent{
+		Topic: "tns1:Thermal/RadiometryAlarm",
+		Data:  map[string]any{"Temperature": "91.2"},
+	})
+	require.Contains(t, buf.String(), "level=WARN")
+	require.Contains(t, buf.String(), "RadiometryAlarm")
+
+	buf.Reset()
+	cm.onONVIFEvent("cam-t", onvif.ONVIFEvent{
+		Topic: "tns1:Thermal/Temperature",
+		Data:  map[string]any{"Value": "91.2"},
+	})
+	require.NotContains(t, buf.String(), "level=WARN")
+}
+
 func TestEnsureMotionSubscriptionGating(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()

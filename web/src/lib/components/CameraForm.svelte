@@ -12,8 +12,9 @@
         getCameraTime,
         syncCameraTime,
         pointCameraAtNVR,
+        getCameraProfiles,
     } from '$lib/api';
-    import type { CameraTimeStatus } from '$lib/api';
+    import type { CameraTimeStatus, DeviceProfileOption } from '$lib/api';
     import type {
         Camera,
         CreateCameraRequest,
@@ -85,6 +86,17 @@
   let formLocation = $state('');
   // Camera-management group label (v36). Empty = ungrouped.
   let formGroup = $state('');
+  // Imaging channel (dual-spectrum): 'visible' (default) or 'thermal'. Purely
+  // a semantic label + default-policy key (AI push skip, motion-gate caveat).
+  let formImagingType = $state<'visible' | 'thermal'>('visible');
+  // Manual main-stream profile override (ONVIF). Empty = automatic selection
+  // (highest resolution). Needed for dual-spectrum devices where the thermal
+  // channel is the low-res profile automatic selection would never pick.
+  let formProfileToken = $state('');
+  // Media profiles offered by the device: edit mode fetches them from the
+  // registered camera, create mode picks them up from a successful test
+  // connection. Empty = picker shows just auto (+ current manual token).
+  let profileOptions = $state<DeviceProfileOption[]>([]);
   // Audio-device → video-camera association (v43). Only shown for
   // rtsp+encoding "audio" (independent mic) sources. Empty = free-standing.
   let formAudioLinkCameraID = $state('');
@@ -291,6 +303,13 @@ let validationErrors = $state<Record<string, string>>({});
     if (editingCamera) {
       populateForm(editingCamera);
       loadMergeConfig(editingCamera.id);
+      // Main-profile picker options: best-effort fetch from the registered
+      // camera (an offline camera simply leaves the picker on auto/current).
+      if (editingCamera.protocol === 'onvif') {
+        getCameraProfiles(editingCamera.id)
+          .then((ps) => { profileOptions = ps; })
+          .catch(() => { profileOptions = []; });
+      }
     } else {
       resetFormFields();
       mergeConfig = null;
@@ -306,6 +325,14 @@ let validationErrors = $state<Record<string, string>>({});
     return parts.length > 0 ? parts : undefined;
   }
 
+  // Label one media profile in the main-profile picker: name (or token),
+  // resolution and codec — the dimensions are what distinguishes a thermal
+  // channel (384×288-class) from the visible-light main stream.
+  function profileOptionLabel(p: DeviceProfileOption): string {
+    const dims = p.width && p.height ? `${p.width}×${p.height}` : '';
+    return [p.name || p.token, dims, p.encoding || ''].filter(Boolean).join(' · ');
+  }
+
   function resetFormFields() {
     formName = '';
     formProtocol = 'rtsp';
@@ -317,6 +344,9 @@ let validationErrors = $state<Record<string, string>>({});
     formDescription = '';
     formLocation = '';
     formGroup = '';
+    formImagingType = 'visible';
+    formProfileToken = '';
+    profileOptions = [];
     formAudioLinkCameraID = '';
     formBrand = '';
     formModel = '';
@@ -369,6 +399,8 @@ let validationErrors = $state<Record<string, string>>({});
     formDescription = camera.description || '';
     formLocation = camera.location || '';
     formGroup = camera.group || '';
+    formImagingType = camera.imaging_type === 'thermal' ? 'thermal' : 'visible';
+    formProfileToken = camera.profile_token || '';
     formAudioLinkCameraID = camera.audio_link_camera_id || '';
     formBrand = camera.brand || '';
     formModel = camera.model || '';
@@ -520,6 +552,12 @@ let validationErrors = $state<Record<string, string>>({});
         encoding: formEncoding || undefined,
         onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
       });
+      // The ONVIF probe returns the device's media profiles — feed the
+      // main-profile picker so a dual-spectrum camera's thermal profile can
+      // be selected right at create time.
+      if (formProtocol === 'onvif' && testResult?.profiles?.length) {
+        profileOptions = testResult.profiles;
+      }
     } catch (e: any) {
       testResult = { success: false, message: friendlyError(e, 'cameras.testFailed'), latency_ms: 0 };
     } finally {
@@ -648,6 +686,8 @@ async function performCameraSave() {
             description: formDescription || undefined,
             location: formLocation || undefined,
             group: formGroup.trim(),
+            imaging_type: formImagingType,
+            profile_token: formProtocol === 'onvif' ? (formProfileToken.trim() || '') : undefined,
             audio_link_camera_id: isAudioSource ? (formAudioLinkCameraID.trim() || '') : undefined,
             brand: formBrand || undefined,
             model: formModel || undefined,
@@ -722,6 +762,8 @@ async function performCameraSave() {
             description: formDescription || undefined,
             location: formLocation || undefined,
             group: formGroup.trim() || undefined,
+            imaging_type: formImagingType,
+            profile_token: formProtocol === 'onvif' ? (formProfileToken.trim() || '') : undefined,
             audio_link_camera_id: isAudioSource ? (formAudioLinkCameraID.trim() || '') : undefined,
             brand: formBrand || undefined,
             model: formModel || undefined,
@@ -873,6 +915,20 @@ async function performCameraSave() {
       </datalist>
     </div>
 
+    <!-- Imaging channel (dual-spectrum): labels this entry as the thermal or
+         the visible-light channel of the physical device. Drives default
+         policies (AI push skip) and UI badges — recording is identical. -->
+    <div>
+      <label for="cam-imaging" class="input-label">{t('cameras.imagingType')}</label>
+      <select id="cam-imaging" class="input" bind:value={formImagingType}>
+        <option value="visible">{t('cameras.imagingVisible')}</option>
+        <option value="thermal">{t('cameras.imagingThermal')}</option>
+      </select>
+      {#if formImagingType === 'thermal'}
+        <p class="text-xs th-text-muted mt-1">{t('cameras.thermalHint')}</p>
+      {/if}
+    </div>
+
     <!-- Encoding -->
     <div>
       <label for="cam-encoding" class="input-label">{t('cameras.tableEncoding')}</label>
@@ -962,6 +1018,9 @@ async function performCameraSave() {
         bind:formAudioTriggerEnabled bind:formAudioMinDBFS bind:formAudioPreCaptureS
         bind:formPixgateEnabled bind:formPixgateFPS bind:formPixgateMinArea bind:formPixgateHold
         bind:formAmbientAudio bind:formAmbientArchive />
+      {#if formImagingType === 'thermal' && formRecordingMode === 'adaptive'}
+        <p class="text-xs th-color-warning -mt-1">{t('cameras.thermalAdaptiveWarn')}</p>
+      {/if}
     {/if}
 
     <!-- Cascade catalog toggle: when off, the camera is hidden from the
@@ -1248,6 +1307,31 @@ async function performCameraSave() {
       <div class="md:col-span-2 p-3 rounded-md th-bg-hover border th-border text-sm">
         <p class="th-text-secondary">{t('cameras.pushHint')}</p>
       </div>
+    {/if}
+
+    <!-- Main stream profile (ONVIF): manual override of the automatic
+         highest-resolution selection. The entry point for dual-spectrum
+         devices — the thermal channel is the low-res profile the automatic
+         rule never picks — and multi-lens devices. Empty = automatic. -->
+    {#if formProtocol === 'onvif'}
+    <div class="md:col-span-2">
+      <label for="cam-main-token" class="input-label">{t('cameras.mainProfile')}</label>
+      <select id="cam-main-token" class="input" bind:value={formProfileToken}>
+        <option value="">{t('cameras.mainProfileAuto')}</option>
+        {#if formProfileToken && !profileOptions.some((p) => p.token === formProfileToken)}
+          <!-- Manual token set but the device list is unavailable (offline
+               camera, pre-create) — keep the current value selectable. -->
+          <option value={formProfileToken}>{formProfileToken}</option>
+        {/if}
+        {#each profileOptions as p (p.token)}
+          <option value={p.token}>{profileOptionLabel(p)}</option>
+        {/each}
+      </select>
+      <p class="text-xs th-text-muted mt-1">{t('cameras.mainProfileHint')}</p>
+      {#if profileOptions.length === 0}
+        <p class="text-xs th-text-muted">{t('cameras.mainProfileListHint')}</p>
+      {/if}
+    </div>
     {/if}
 
     <!-- Sub-stream (#512): secondary low-res feed for future consumers -->

@@ -91,6 +91,12 @@ type CameraUpdate struct {
 	// (subscribe to the camera's Pull-Point MotionAlarm events). nil =
 	// unchanged; the subscription reconciles immediately (no restart).
 	MotionSource *string
+	// ImagingType labels the device's imaging channel (dual-spectrum):
+	// ""/"visible" or "thermal". nil = unchanged. Semantic label — no recorder
+	// restart. Setting it to thermal applies the default policy: the camera is
+	// appended to vision.skip_cameras (removal is manual, so a deliberate
+	// un-skip survives later edits).
+	ImagingType *string
 	// AutoTimeSync (#time-sync): per-camera opt in/out of the automatic
 	// clock-correction loop. nil = unchanged (follow global setting).
 	AutoTimeSync *bool
@@ -198,6 +204,11 @@ type CameraManager struct {
 	// motionAction is the shared trigger-dispatcher entry (#711) used for
 	// camera-side ONVIF MotionAlarm events; nil = motion actions dropped.
 	motionAction func(cameraID, action string, duration time.Duration)
+	// gbChannelImagingProbe resolves a GB28181 channel's catalog imaging
+	// marking (PhotoelectricImagingType, GB/T 28181-2022) for auto-labeling
+	// at enroll time; nil = no labeling. Set once at boot before the SIP
+	// server starts (same wiring contract as motionAction).
+	gbChannelImagingProbe func(deviceID, channelID string) (int, bool)
 	// eventSubscriberFactory overrides subscriber construction (test seam
 	// for the #711 motion wiring; nil = per-camera ONVIF client path).
 	eventSubscriberFactory func(ctx context.Context, cameraID string, cb onvif.EventCallback) (onvif.EventSubscriber, error)

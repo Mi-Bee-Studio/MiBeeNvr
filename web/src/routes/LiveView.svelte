@@ -11,6 +11,7 @@
   import PtzControl from '$lib/components/PtzControl.svelte';
   import TwoWayAudioButton from '$lib/components/TwoWayAudioButton.svelte';
   import CameraPlayer from '$lib/components/CameraPlayer.svelte';
+  import ThermalOverlay from '$lib/components/ThermalOverlay.svelte';
   import ProtocolSwitcher from '$lib/components/ProtocolSwitcher.svelte';
   import type { StreamingProtocol } from '$lib/components/ProtocolSwitcher.svelte';
   import SnapshotButton from '$lib/components/SnapshotButton.svelte';
@@ -437,6 +438,9 @@
             {camera.name || camera.id}
           </h2>
           <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
+          {#if camera.imaging_type === 'thermal'}
+            <span class="badge badge-warning">{t('cameras.thermalBadge')}</span>
+          {/if}
 
           <!-- ONVIF controls shown for all ONVIF cameras -->
           {#if isOnvifCamera(camera) && deviceCaps?.snapshot}
@@ -504,7 +508,7 @@
         {#if canStream(camera)}
           <!-- Player container -->
           <div
-            class="card border th-border overflow-hidden"
+            class="card border th-border overflow-hidden relative"
             style="max-height: 80vh;"
             bind:this={playerContainer}
             onshrink={() => goBack()}
@@ -530,6 +534,12 @@
                 streamUrl={`${API_BASE}/cameras/${cameraId}/stream/index.m3u8`}
                 quality={qualityPref}
               />
+            {/if}
+            {#if camera.imaging_type === 'thermal'}
+              <!-- Dual-spectrum: live temperature chip fed by the
+                   thermal.temperature SSE topic (adapter pending real
+                   devices; transport + rendering are in place). -->
+              <ThermalOverlay cameraId={camera.id} />
             {/if}
           </div>
         {:else}

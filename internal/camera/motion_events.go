@@ -29,6 +29,11 @@ import (
 // gate's calm logic re-enters timelapse on its own, and a dispatcher "stop"
 // would kill recording sessions other sources started.
 //
+// The same subscription also delivers the ONVIF Thermal Service's
+// RadiometryAlarm (dual-spectrum thermal channel): an active alarm drives
+// record + an evidence snapshot (trigger-labelled onvif) + the same adaptive
+// exit, published as onvif.radiometryalarm.
+//
 // mibee_cam contract notes pinned here (v1.5 §13): single-subscription model
 // (a new CreatePullPointSubscription replaces the old one — later client
 // wins), TerminationTime granted at 1h with 120s no-pull expiry (the
@@ -199,7 +204,7 @@ func (cm *CameraManager) ONVIFEventsStatus(cameraID string) onvif.EventSubscript
 }
 
 // onONVIFEvent is the per-camera callback for every event the PullPoint
-// subscription delivers: SSE republish + MotionAlarm handling.
+// subscription delivers: SSE republish + RadiometryAlarm/MotionAlarm handling.
 func (cm *CameraManager) onONVIFEvent(cameraID string, evt onvif.ONVIFEvent) {
 	// (a) Republish under onvif.* for the SSE feed / UI events panel.
 	if topic := onvifEventTopic(evt.Topic); topic != "" && cm.eventBus != nil {
@@ -215,7 +220,45 @@ func (cm *CameraManager) onONVIFEvent(cameraID string, evt onvif.ONVIFEvent) {
 		cm.eventBus.Publish(context.Background(), topic, payload)
 	}
 
-	// (b) MotionAlarm → recorder.
+	// (b) RadiometryAlarm (ONVIF Thermal Service) → recorder + evidence
+	// snapshot. Thermal rules (fire point / over-temperature) evaluate on the
+	// camera; the NVR consumes the verdict through the same shared trigger
+	// surface as motion — plus a snapshot, because a thermal alarm is exactly
+	// the kind of event whose moment the user will want to look at.
+	if onvif.IsRadiometryTopic(evt.Topic) {
+		ra, ok := onvif.ParseRadiometryAlarm(evt)
+		if !ok {
+			// Same observability contract as motion: a radiometry-shaped event
+			// that failed to parse must be visible, or a vendor encoding
+			// mismatch looks identical to "device emits nothing".
+			logger.Warn("radiometry event unparseable — state item missing or not a bool",
+				"camera_id", cameraID, "topic", evt.Topic, "data", fmt.Sprintf("%v", evt.Data))
+			return
+		}
+		if !ra.Active {
+			logger.Debug("onvif radiometry alarm cleared", "camera_id", cameraID, "source", ra.Source)
+			return
+		}
+		logger.Info("onvif radiometry alarm",
+			"camera_id", cameraID, "source", ra.Source, "temperature", ra.Temperature)
+		if cm.motionAction != nil {
+			cm.motionAction(cameraID, "record", 0)
+			cm.motionAction(cameraID, "snapshot:onvif", 0)
+		}
+		// Adaptive thermal cameras: exit timelapse for the alarm hold — the
+		// thermal picture can look static while a fire point smoulders.
+		if rec := cm.GetRecorder(cameraID); rec != nil {
+			if trig, ok := rec.(motionTriggerable); ok {
+				if err := trig.MotionTriggerEvent(time.Now(), motionTriggerHold); err != nil {
+					logger.Debug("onvif radiometry trigger not applied (not adaptive)",
+						"camera_id", cameraID, "error", err)
+				}
+			}
+		}
+		return
+	}
+
+	// (c) MotionAlarm → recorder.
 	ma, ok := onvif.ParseMotionAlarm(evt)
 	if !ok {
 		// A motion-shaped event that failed to parse is the one failure
