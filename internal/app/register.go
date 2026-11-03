@@ -70,6 +70,13 @@ func registerCoreServices(a *App, deps *appDeps) error {
 		return err
 	}
 
+	// 0b. thermal readout poller — republishes device-side temperature
+	// readings on the SSE bus (dual-spectrum live chip). No-op without
+	// configured thermal_readout sources.
+	if err := a.Register(newThermalReadoutService(deps.cfg, deps.eventBus)); err != nil {
+		return err
+	}
+
 	// 1. db — registered first so it stops last. Start also launches the
 	// idle-window WAL checkpoint loop (#752); it owns a cancel derived from
 	// the start ctx because App.Stop does not cancel it — the service's Stop
