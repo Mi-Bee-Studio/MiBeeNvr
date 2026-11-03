@@ -166,3 +166,32 @@ export function tileQualityFor(
 export function wallRowEstimate(cols: number, featured: number, count: number): number {
   return Math.max(1, Math.ceil((count + 3 * featured) / Math.max(cols, 1)));
 }
+
+/**
+ * Auto-fill a camera selection up to the requested tier (#1072 follow-up).
+ * Lowering the tier trims the selection (and persists the trim) — raising it
+ * must restore the symmetry, or the tile count sticks at the old value and
+ * the tier "can't be changed" from the user's perspective. Prefers online
+ * cameras in list order; stopped/errored ones never occupy auto-filled
+ * slots (dead tiles), offline-but-recovering ones only when online runs out.
+ */
+export function fillSelection(
+  currentIds: readonly string[],
+  available: ReadonlyArray<{ id: string; status: string }>,
+  target: number,
+): string[] {
+  const merged = [...currentIds];
+  if (target <= merged.length) return merged;
+  const have = new Set(merged);
+  const online: string[] = [];
+  const recovering: string[] = [];
+  for (const c of available) {
+    if (have.has(c.id)) continue;
+    const s = (c.status || '').toLowerCase();
+    if (s === 'stopped' || s === 'error' || s === 'failed') continue;
+    (s === 'recording' || s === 'active' ? online : recovering).push(c.id);
+  }
+  merged.push(...online.slice(0, target - merged.length));
+  if (merged.length < target) merged.push(...recovering.slice(0, target - merged.length));
+  return merged;
+}

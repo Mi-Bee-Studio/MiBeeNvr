@@ -5,6 +5,7 @@ import {
   getWallTemplate,
   tileQualityFor,
   wallRowEstimate,
+  fillSelection,
   CLASSIC_GRID_SIZE,
 } from '$lib/wall-layouts';
 
@@ -128,5 +129,50 @@ describe('wallRowEstimate', () => {
   it('never returns zero rows for degenerate counts', () => {
     expect(wallRowEstimate(4, 1, 1)).toBeGreaterThanOrEqual(1);
     expect(wallRowEstimate(1, 0, 0)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── Tier-raise auto-fill (#1072 follow-up) ─────────────────────────────────
+describe('fillSelection', () => {
+  const cams = [
+    { id: 'a', status: 'recording' },
+    { id: 'b', status: 'stopped' },
+    { id: 'c', status: 'active' },
+    { id: 'd', status: 'reconnecting' },
+    { id: 'e', status: 'error' },
+    { id: 'f', status: '' },
+  ];
+
+  it('grows the selection with online cameras in list order, skipping dead ones', () => {
+    expect(fillSelection(['a'], cams, 3)).toEqual(['a', 'c', 'd']);
+    // a(recording) kept, b(stopped)/e(error) never auto-filled,
+    // c(active) first, d(reconnecting) only after online runs out
+  });
+
+  it('is a no-op at or above the target', () => {
+    expect(fillSelection(['a', 'c'], cams, 2)).toEqual(['a', 'c']);
+    expect(fillSelection(['a', 'c', 'd'], cams, 2)).toEqual(['a', 'c', 'd']);
+  });
+
+  it('fills fewer when online+recovering candidates run out', () => {
+    expect(fillSelection(['a'], cams, 9)).toEqual(['a', 'c', 'd', 'f']);
+    // f has an unknown status — treated as recovering-tier, allowed after online
+  });
+
+  it('never duplicates an already-selected camera', () => {
+    const out = fillSelection(['c', 'd'], cams, 5);
+    expect(out).toEqual(['c', 'd', 'a', 'f']);
+    expect(new Set(out).size).toBe(out.length);
+  });
+
+  it('round-trips a tier down-up without losing the fill (regression)', () => {
+    // 9 → 6 trim happens in the route (clamp effect); raising back must
+    // re-fill to the tier, not stick at the trimmed count.
+    const pool = [...cams, ...['x', 'y', 'z', 'w', 'v'].map((id) => ({ id, status: 'recording' }))];
+    const nine = ['a', 'c', 'd', 'f', 'x', 'y', 'z', 'w', 'v'];
+    const afterDown = nine.slice(0, 6); // what the clamp effect persists
+    const backUp = fillSelection(afterDown, pool, 9);
+    expect(backUp).toHaveLength(9);
+    expect(backUp.slice(0, 6)).toEqual(afterDown); // existing order preserved
   });
 });
