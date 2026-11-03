@@ -965,7 +965,15 @@
       }, 3000);
     } catch (e) {
       transcodeForPlayback = false;
-      transcodeForPlaybackError = e instanceof Error ? e.message : t('detail.transcodeFailed');
+      const msg = e instanceof Error ? e.message : '';
+      // "Not enabled" from the gate is a configuration problem, not a
+      // playback failure — route the user to the setting instead of showing
+      // the raw API error.
+      if (/not enabled/i.test(msg)) {
+        transcodeForPlaybackError = t('detail.transcodeDisabledHint');
+      } else {
+        transcodeForPlaybackError = msg || t('detail.transcodeFailed');
+      }
       showToast(transcodeForPlaybackError, 'error');
     }
   }

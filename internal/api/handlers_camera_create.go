@@ -13,6 +13,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
 // defaultAudioDeviceRetentionDays is the compliance-baseline retention for
@@ -114,15 +115,20 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint string `json:"onvif_endpoint"`
 		ProfileToken  string `json:"profile_token"`
 		// Sub-stream (#512): manual sub profile token + manual sub stream URL.
-		SubProfileToken string                        `json:"sub_profile_token"`
-		SubStreamURL    string                        `json:"sub_stream_url"`
-		StreamEncoding  string                        `json:"stream_encoding"`
-		Encoding        string                        `json:"encoding"`
-		Timelapse       *config.CameraTimelapseConfig `json:"timelapse"`
-		Channel         string                        `json:"channel"`
-		AudioEnabled    *bool                         `json:"audio_enabled"`
+		SubProfileToken string `json:"sub_profile_token"`
+		SubStreamURL    string `json:"sub_stream_url"`
+		StreamEncoding  string `json:"stream_encoding"`
+		Encoding        string `json:"encoding"`
+		// Per-camera transcoding override; nil = follow the global switch.
+		Transcoding  *config.CameraTranscodingConfig `json:"transcoding"`
+		Timelapse    *config.CameraTimelapseConfig   `json:"timelapse"`
+		Channel      string                          `json:"channel"`
+		AudioEnabled *bool                           `json:"audio_enabled"`
 		// Keep the camera's real audio track in recorded segments (default off).
 		AudioInRecordings *bool `json:"audio_in_recordings"`
+		// Dark frame filtering (nil = off; threshold nil = default).
+		DarkFrameFilterEnabled *bool `json:"dark_frame_filter_enabled"`
+		DarkFrameThreshold     *int  `json:"dark_frame_threshold"`
 		// Recording gate: false = live-only (no segments written). nil = record.
 		RecordingEnabled *bool `json:"recording_enabled"`
 		// Recording schedule: time windows outside which nothing is recorded.
@@ -351,6 +357,18 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Same H.265 transcode capability guard as the update path: refuse a
+	// per-camera target the hardware cannot serve, at the wire.
+	if body.Transcoding != nil && body.Transcoding.TargetCodec == "h265" {
+		ffmpegPath := ""
+		if h.config != nil && h.config.Transcoding.FFmpegPath != "" {
+			ffmpegPath = h.config.Transcoding.FFmpegPath
+		}
+		if caps := transcoding.ProbeHardwareCapabilities(ffmpegPath); caps.H265EncoderType == transcoding.EncoderSoftware {
+			WriteError(w, http.StatusBadRequest, "H.265 transcoding is not available on this device (no hardware encoder)")
+			return
+		}
+	}
 	// Audio-only devices (v43): the optional camera association must pass
 	// validation BEFORE the camera is created (a bad link would otherwise
 	// leave a half-configured device behind).
@@ -362,62 +380,51 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Same boundary validation for the recording mode (#435, #402 class).
-	if err := config.ValidateCameraRecordingMode(config.CameraConfig{
-		ID:            body.Name,
-		Protocol:      proto,
-		Encoding:      enc,
-		RecordingMode: body.RecordingMode,
-		MotionSource:  body.MotionSource,
-		ImagingType:   body.ImagingType,
-		AutoTimeSync:  body.AutoTimeSync,
-		MJPEGForm:     body.MJPEGForm,
-		Adaptive:      body.Adaptive,
-	}); err != nil {
-		WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
 	cam := config.CameraConfig{
-		Name:              body.Name,
-		Protocol:          proto,
-		Encoding:          enc,
-		URL:               body.URL,
-		Username:          body.Username,
-		Password:          body.Password,
-		ONVIFEndpoint:     body.ONVIFEndpoint,
-		ProfileToken:      body.ProfileToken,
-		SubProfileToken:   body.SubProfileToken,
-		SubStreamURL:      body.SubStreamURL,
-		StreamEncoding:    body.StreamEncoding,
-		Timelapse:         body.Timelapse,
-		Channel:           body.Channel,
-		AudioEnabled:      body.AudioEnabled != nil && *body.AudioEnabled,
-		AudioInRecordings: body.AudioInRecordings != nil && *body.AudioInRecordings,
-		RecordingEnabled:  body.RecordingEnabled,
-		RecordingSchedule: body.RecordingSchedule,
-		CascadeEnabled:    body.CascadeEnabled,
-		CascadeSubStream:  body.CascadeSubStream,
-		RecordingMode:     body.RecordingMode,
-		RecordingTier:     body.RecordingTier,
-		MotionSource:      body.MotionSource,
-		ImagingType:       body.ImagingType,
-		AutoTimeSync:      body.AutoTimeSync,
-		MJPEGForm:         body.MJPEGForm,
-		Pixgate:           body.Pixgate,
-		Adaptive:          body.Adaptive,
-		AudioTrigger:      body.AudioTrigger,
-		StreamKey:         body.StreamKey,
-		SRTPassphrase:     body.SRTPassphrase,
-		SRTStreamID:       body.SRTStreamID,
-		PushTargets:       body.PushTargets,
-		PushRetentionDays: body.PushRetentionDays,
-		VisionTargets:     body.VisionTargets,
-		StableID:          body.StableID,
-		SubnetHints:       body.SubnetHints,
+		Name:                   body.Name,
+		Protocol:               proto,
+		Encoding:               enc,
+		URL:                    body.URL,
+		Username:               body.Username,
+		Password:               body.Password,
+		ONVIFEndpoint:          body.ONVIFEndpoint,
+		ProfileToken:           body.ProfileToken,
+		SubProfileToken:        body.SubProfileToken,
+		SubStreamURL:           body.SubStreamURL,
+		StreamEncoding:         body.StreamEncoding,
+		Timelapse:              body.Timelapse,
+		Channel:                body.Channel,
+		AudioEnabled:           body.AudioEnabled != nil && *body.AudioEnabled,
+		AudioInRecordings:      body.AudioInRecordings != nil && *body.AudioInRecordings,
+		Transcoding:            body.Transcoding,
+		DarkFrameFilterEnabled: body.DarkFrameFilterEnabled != nil && *body.DarkFrameFilterEnabled,
+		RecordingEnabled:       body.RecordingEnabled,
+		RecordingSchedule:      body.RecordingSchedule,
+		CascadeEnabled:         body.CascadeEnabled,
+		CascadeSubStream:       body.CascadeSubStream,
+		RecordingMode:          body.RecordingMode,
+		RecordingTier:          body.RecordingTier,
+		MotionSource:           body.MotionSource,
+		ImagingType:            body.ImagingType,
+		AutoTimeSync:           body.AutoTimeSync,
+		MJPEGForm:              body.MJPEGForm,
+		Pixgate:                body.Pixgate,
+		Adaptive:               body.Adaptive,
+		AudioTrigger:           body.AudioTrigger,
+		StreamKey:              body.StreamKey,
+		SRTPassphrase:          body.SRTPassphrase,
+		SRTStreamID:            body.SRTStreamID,
+		PushTargets:            body.PushTargets,
+		PushRetentionDays:      body.PushRetentionDays,
+		VisionTargets:          body.VisionTargets,
+		StableID:               body.StableID,
+		SubnetHints:            body.SubnetHints,
 	}
 	if body.GB28181 != nil {
 		cam.GB28181 = body.GB28181.toConfig()
+	}
+	if body.DarkFrameThreshold != nil {
+		cam.DarkFrameThreshold = *body.DarkFrameThreshold
 	}
 	// Same boundary validation as the update path (#435, #402 class), on the
 	// config that is actually persisted. The ID is assigned on add; validate
