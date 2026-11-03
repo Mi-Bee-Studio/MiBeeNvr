@@ -104,3 +104,54 @@ func TestReadoutPollerTolerantKeysAndFailures(t *testing.T) {
 		}
 	}
 }
+
+// TestReadoutPollerLiveDeviceShape pins the REAL device payload (observed
+// 2026-11-03, trusted:true with nested scene extremes) plus the trusted
+// gate: untrusted frames (EE compensation chain unhealthy during bring-up)
+// must never reach the chip.
+func TestReadoutPollerLiveDeviceShape(t *testing.T) {
+	t.Parallel()
+	var call int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		if call == 1 {
+			// The live shape: nested max/min with grid positions + extras.
+			_, _ = w.Write([]byte(`{"timestamp_ms":1793713274000,"frame_number":12,"trusted":true,
+			 "source":"sensor","ta":34.07,"vdd":3.287,
+			 "max":{"value_c":41.0,"x":4,"y":23},"min":{"value_c":28.6,"x":23,"y":15},
+			 "sensor_fps":0.028}`))
+			return
+		}
+		// Untrusted frames are dropped silently.
+		_, _ = w.Write([]byte(`{"trusted":false,"max":{"value_c":999.0},"min":{"value_c":-40.0}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	bus := event.NewEventBus(8)
+	ch := make(chan event.Event, 8)
+	require.NoError(t, bus.Subscribe(TopicTemperature, ch, 8))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	StartReadoutPoller(ctx, NewFeed(bus), map[string]ReadoutSource{
+		"cam-hot": {URL: srv.URL},
+	}, nil)
+
+	select {
+	case evt := <-ch:
+		reading := evt.Data.(Reading)
+		require.InDelta(t, 41.0, *reading.MaxC, 0.001)
+		require.InDelta(t, 28.6, *reading.MinC, 0.001)
+	case <-time.After(5 * time.Second):
+		t.Fatal("live device shape never reached the bus")
+	}
+
+	require.Never(t, func() bool {
+		select {
+		case evt := <-ch:
+			r := evt.Data.(Reading)
+			return r.MaxC != nil && *r.MaxC > 100 // the untrusted frame's 999
+		default:
+			return false
+		}
+	}, 300*time.Millisecond, 50*time.Millisecond, "untrusted frames must not publish")
+}
