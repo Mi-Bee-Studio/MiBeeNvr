@@ -3,7 +3,7 @@
   // Part of the unified settings shell (#153): no save button here; the
   // shell drives save/reset via the settingsForm coordinator.
   import { onMount, onDestroy } from 'svelte';
-  import { getStreamingSettings, updateStreamingSettings, getRtspOutputSettings, updateRtspOutputSettings } from '$lib/api';
+  import { getStreamingSettings, updateStreamingSettings, getRtspOutputSettings, updateRtspOutputSettings, HLS_MAX_STREAMS_FALLBACK } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast.svelte';
   import { settingsForm } from '$lib/settings/settings-form.svelte';
@@ -39,7 +39,7 @@
 
   // HLS preview-stream budget (#1072): global LRU eviction threshold, 1-20,
   // restart-applied. Only sent when the user actually changed it.
-  let hlsMaxStreams = $state(4);
+  let hlsMaxStreams = $state(HLS_MAX_STREAMS_FALLBACK);
   let originalHlsMaxStreams = $state(4);
 
   // Original values for dirty tracking + destructive detection
@@ -91,7 +91,7 @@
         : [];
       streamingSrtEnabled = config.srt?.enabled ?? false;
       streamingSrtPort = config.srt?.port ?? 9000;
-      hlsMaxStreams = config.hls?.max_streams ?? 4;
+      hlsMaxStreams = config.hls?.max_streams ?? HLS_MAX_STREAMS_FALLBACK;
       const srtStreamList = config.srt?.streams;
       srtStreams = srtStreamList
         ? srtStreamList.map((s) => ({

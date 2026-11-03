@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { WALL_TEMPLATES, wallGeometry, getWallTemplate } from '$lib/wall-layouts';
+import {
+  WALL_TEMPLATES,
+  wallGeometry,
+  getWallTemplate,
+  tileQualityFor,
+  wallRowEstimate,
+  CLASSIC_GRID_SIZE,
+} from '$lib/wall-layouts';
 
 // Counts a wall can realistically show (capacity options are 4/6/9/12/16 and
 // the wall needs >4; sweep everything in between too since the selection can
@@ -75,5 +82,51 @@ describe('wall layout templates', () => {
 
   it('unknown ids fall back to hero', () => {
     expect(getWallTemplate('circle').id).toBe('hero');
+  });
+});
+
+// ─── HD quality clamp rule (#1072) ──────────────────────────────────────────
+describe('tileQualityFor', () => {
+  it('passes the grid quality through at or below the classic grid size', () => {
+    expect(CLASSIC_GRID_SIZE).toBe(4);
+    expect(tileQualityFor('main', 4, 1, 3)).toBe('main'); // every tile may ride main
+    expect(tileQualityFor('main', 1, 1, 0)).toBe('main');
+    expect(tileQualityFor('sub', 4, 1, 0)).toBe('sub');
+  });
+
+  it('never upgrades when the grid setting is sub', () => {
+    expect(tileQualityFor('sub', 9, 1, 0)).toBe('sub');
+    expect(tileQualityFor('sub', 16, 3, 2)).toBe('sub');
+  });
+
+  it('clamps HD to the featured tiles above the classic grid', () => {
+    expect(tileQualityFor('main', 9, 1, 0)).toBe('main');
+    expect(tileQualityFor('main', 9, 1, 1)).toBe('sub');
+    // dual template: two featured tiles
+    expect(tileQualityFor('main', 9, 2, 1)).toBe('main');
+    expect(tileQualityFor('main', 9, 2, 2)).toBe('sub');
+    // triple template: three featured tiles
+    expect(tileQualityFor('main', 16, 3, 2)).toBe('main');
+    expect(tileQualityFor('main', 16, 3, 3)).toBe('sub');
+  });
+
+  it('uniform grids above the classic size keep exactly one featured tile', () => {
+    expect(tileQualityFor('main', 6, 1, 0)).toBe('main');
+    expect(tileQualityFor('main', 6, 1, 1)).toBe('sub');
+  });
+});
+
+// ─── Wall height row estimate ───────────────────────────────────────────────
+describe('wallRowEstimate', () => {
+  it('counts each featured 2×2 tile as three extra cells', () => {
+    expect(wallRowEstimate(4, 1, 9)).toBe(3); // hero@9 → 4×3
+    expect(wallRowEstimate(4, 2, 6)).toBe(3); // dual@6 → bigs + one small row
+    expect(wallRowEstimate(6, 3, 9)).toBe(3); // triple@9 → bigs + one full row
+    expect(wallRowEstimate(4, 1, 13)).toBe(4); // center@13 exact ring
+  });
+
+  it('never returns zero rows for degenerate counts', () => {
+    expect(wallRowEstimate(4, 1, 1)).toBeGreaterThanOrEqual(1);
+    expect(wallRowEstimate(1, 0, 0)).toBeGreaterThanOrEqual(1);
   });
 });

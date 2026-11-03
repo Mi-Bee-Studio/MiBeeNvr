@@ -260,6 +260,7 @@ export {
   updateFeatures,
   getStreamingSettings,
   updateStreamingSettings,
+  HLS_MAX_STREAMS_FALLBACK,
   getRtspOutputSettings,
   updateRtspOutputSettings,
   generateAPIKey,

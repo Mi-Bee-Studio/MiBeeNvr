@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, setContext } from 'svelte';
-  import { getDashboardCameras, getAuthHeader, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, listCameraGroups, getStreamingSettings, API_BASE } from '$lib/api';
+  import { getDashboardCameras, getAuthHeader, listProtocols, getCameraProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getHealthCameras, listCameraGroups, getStreamingSettings, HLS_MAX_STREAMS_FALLBACK, API_BASE } from '$lib/api';
   import type { Camera, ProtocolInfo, CameraProtocolsResponse } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast.svelte';
@@ -12,8 +12,8 @@
   import { createPlayerOrchestrator, makeRegistration, type PlayerOrchestrator } from '$lib/player/orchestrator.svelte';
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { isAudioCapable, type ProtocolsResponse } from '$lib/stream-selection';
-  import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS, getWallTemplateId, setWallTemplateId } from '$lib/preferences';
-  import { WALL_TEMPLATES, wallGeometry, getWallTemplate, type WallTemplate } from '$lib/wall-layouts';
+  import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS, MAX_GRID_CAMERAS_DEFAULT, getWallTemplateId, setWallTemplateId } from '$lib/preferences';
+  import { WALL_TEMPLATES, wallGeometry, getWallTemplate, tileQualityFor, wallRowEstimate, CLASSIC_GRID_SIZE, type WallTemplate } from '$lib/wall-layouts';
   import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
 
   let cameras = $state<Camera[]>([]);
@@ -46,7 +46,7 @@
   // overbooking it triggers LRU eviction churn.
   let maxGridCameras = $state(getMaxGridCameras());
   let photoWall = $state(isPhotoWallEnabled());
-  let serverBudget = $state(4);
+  let serverBudget = $state(HLS_MAX_STREAMS_FALLBACK);
 
   // Featured-tile rotation (#1072 P1): default off; hovering any featured
   // tile pauses it, and it never runs while the picker or expand view is up.
@@ -78,10 +78,10 @@
   }
 
   const gridCapacityOptions = $derived(
-    MAX_GRID_CAMERAS_OPTIONS.filter((o) => o <= Math.max(serverBudget, 4)),
+    MAX_GRID_CAMERAS_OPTIONS.filter((o) => o <= Math.max(serverBudget, CLASSIC_GRID_SIZE)),
   );
   const effectiveMax = $derived(
-    Math.min(maxGridCameras, gridCapacityOptions[gridCapacityOptions.length - 1] ?? 4),
+    Math.min(maxGridCameras, gridCapacityOptions[gridCapacityOptions.length - 1] ?? MAX_GRID_CAMERAS_DEFAULT),
   );
   // The photo-wall layout only exists above 4 tiles — at or below that the
   // classic grid (including the 1-big-2-small 3-tile form) is the better view.
@@ -326,7 +326,7 @@
   // positions, the remaining 1×1 tiles dense-pack around them — every camera
   // count fills gaplessly. Column count comes from the template (runtime
   // value), so the grid is styled inline rather than via Tailwind tiers.
-  function wallGridStyle(count: number): string {
+  function wallGridStyle(): string {
     if (!photoWallActive || !wallGeom) return '';
     return `grid-template-columns: repeat(${wallGeom.cols}, minmax(0, 1fr));`;
   }
@@ -361,9 +361,7 @@
   function getCellMinHeight(count: number): string {
     if (count <= 1) return 'calc(100vh - 140px)';
     if (photoWallActive) {
-      const cols = wallGeom?.cols ?? 4;
-      const featured = activeWallTemplate.featured;
-      const rows = Math.ceil((count + 3 * featured) / cols);
+      const rows = wallRowEstimate(wallGeom?.cols ?? CLASSIC_GRID_SIZE, activeWallTemplate.featured, count);
       return `calc((100vh - 160px) / ${rows})`;
     }
     if (count <= 4) return 'calc((100vh - 160px) / 2)';
@@ -371,16 +369,13 @@
     return `calc((100vh - 160px) / ${Math.ceil(count / 4)})`;
   }
 
-  // HD clamp (#1072): above 4 tiles the HD setting rides only the featured
-  // tiles (how many depends on the wall template); every other tile stays on
-  // the sub stream. A fleet-wide main switch at 9-16 tiles would multiply
-  // decoder cost past weak clients, and the small 1×1 cells hide the
-  // resolution difference anyway. Cameras without a sub stream stay on main
-  // automatically (effectiveQuality in CameraPlayer).
+  // HD clamp (#1072) — the rule lives in wall-layouts.tileQualityFor so it
+  // is unit-tested alongside the templates; see its doc comment for the
+  // rationale (featured tiles ride main, everything else stays sub above the
+  // classic grid; cameras without a sub stream still fall back to main inside
+  // CameraPlayer's effectiveQuality).
   function tileQuality(index: number): 'main' | 'sub' {
-    const gq = getGridQuality();
-    if (gq !== 'main' || cameras.length <= 4) return gq;
-    return index < featuredTileCount ? 'main' : 'sub';
+    return tileQualityFor(getGridQuality(), cameras.length, featuredTileCount, index);
   }
 
   function getStatusBadge(camera: Camera): { class: string; label: string; icon: any; text: string } {
@@ -609,7 +604,7 @@
     void (async () => {
       try {
         const s = await getStreamingSettings();
-        serverBudget = s.hls?.max_streams ?? 4;
+        serverBudget = s.hls?.max_streams ?? HLS_MAX_STREAMS_FALLBACK;
       } catch {
         /* older binary or transient failure — keep the safe default */
       }
@@ -821,7 +816,7 @@
             <span>{t('dashboard.gridCapacity')}</span>
             <div class="flex items-center gap-1">
               {#each MAX_GRID_CAMERAS_OPTIONS as n (n)}
-                {@const overBudget = n > Math.max(serverBudget, 4)}
+                {@const overBudget = n > Math.max(serverBudget, CLASSIC_GRID_SIZE)}
                 <button
                   type="button"
                   class="opt-chip {maxGridCameras === n ? 'opt-chip-active' : ''}"
@@ -1011,7 +1006,7 @@
       <!-- Camera grid -->
       <div
         class="grid gap-2 sm:gap-3 {photoWallActive ? '[grid-auto-flow:dense]' : getGridClass(cameras.length)}"
-        style={wallGridStyle(cameras.length)}
+        style={wallGridStyle()}
         onexpand={(e: CustomEvent) => expandToHls(e.detail.cameraId)}
         onshrink={(e: CustomEvent) => shrinkToGrid()}
       >

@@ -44,6 +44,10 @@ export interface HLSStreamingConfig {
   max_streams?: number;
 }
 
+/** Fallback when the server response predates `hls.max_streams` — mirrors
+ *  the server-side default (defaultMaxStreams in internal/hls). */
+export const HLS_MAX_STREAMS_FALLBACK = 4;
+
 export interface RTMPConfig {
   enabled: boolean;
   port: number;

@@ -132,3 +132,37 @@ export function wallGeometry(template: WallTemplate, count: number): WallGeometr
     placements: template.placements(count).map((p) => ({ col: p.col, row: p.row })),
   };
 }
+
+/** The calibrated classic grid size. Photo-wall features (templates, HD
+ *  clamp, rotation) exist strictly ABOVE this count; at or below it the
+ *  classic grid is the better view and every tile may ride the main stream. */
+export const CLASSIC_GRID_SIZE = 4;
+
+/**
+ * HD quality clamp (#1072): at or below the classic grid size the HD setting
+ * applies to every tile (the calibrated default); above it, only the featured
+ * tiles ride the main stream and the rest stay on the sub stream — a
+ * fleet-wide main switch at 9-16 tiles would multiply decoder cost past weak
+ * clients, and small 1x1 cells hide the resolution difference anyway.
+ * `featuredCount` is 1 for uniform grids, the template's count for walls.
+ * (Cameras WITHOUT a sub stream still fall back to main inside CameraPlayer's
+ * effectiveQuality — this clamp only steers the request.)
+ */
+export function tileQualityFor(
+  gridQuality: 'main' | 'sub',
+  cameraCount: number,
+  featuredCount: number,
+  index: number,
+): 'main' | 'sub' {
+  if (gridQuality !== 'main' || cameraCount <= CLASSIC_GRID_SIZE) return gridQuality;
+  return index < featuredCount ? 'main' : 'sub';
+}
+
+/**
+ * Row estimate for the wall height floor: each featured 2x2 tile occupies
+ * 3 extra 1x1 cells of area, and the viewport divides by the row count so
+ * tiles stay legible (the page scrolls instead of shrinking cells text-thin).
+ */
+export function wallRowEstimate(cols: number, featured: number, count: number): number {
+  return Math.max(1, Math.ceil((count + 3 * featured) / Math.max(cols, 1)));
+}
