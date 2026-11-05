@@ -16,37 +16,21 @@ The WASM + WebCodecs Unified Player & AI Detection system is a modern, tiered vi
 
 The system implements a sophisticated three-tier fallback architecture that automatically adapts to browser capabilities:
 
-```text
-┌─ Tier 1: WebGPU (Zero-Copy Hardware) ──────────────────────────────────┐
-│  WebCodecs decode → WebGPU texture (importExternalTexture) → Render    │
-│  ONNX Runtime WebGPU execution provider (AI, 5-10ms/frame)               │
-│  Browser Support: Chrome 113+, Edge 113+, Safari 18+                     │
-│  Performance: Decode 200+ FPS, AI 30+ FPS, Render 60 FPS                │
-├───────────────────────────────────────────────────────────────────────────┤
-└── ↓ WebGPU device loss or unavailable → Automatic fallback to WebGL2
-
-┌─ Tier 2: WebGL2 + WASM SIMD (Hybrid Mode) ─────────────────────────────┐
-│  WebCodecs decode → WebGL2 Canvas (copyExternalImageToTexture) → Render  │
-│  ONNX Runtime WASM SIMD execution provider (AI, 30-50ms/frame)          │
-│  Browser Support: Firefox 130+, Safari 16.4+, Chrome 94+ (WebCodecs)    │
-│  Performance: Decode 200+ FPS, AI 10-20 FPS, Render 60 FPS            │
-├───────────────────────────────────────────────────────────────────────────┤
-└── ↓ WebCodecs unavailable → Automatic fallback to Legacy players
-
-┌─ Tier 3: Legacy Compatibility Mode ──────────────────────────────────┐
-│  HTTP-FLV/HLS/WebRTC → hls.js/mpegts.js/WHEP → <video> element        │
-│  Browser Support: Legacy browsers, mobile browsers, specific scenarios   │
-│  Performance: Same as current experience                              │
-└───────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  T1["Tier 1: WebGPU (Zero-Copy Hardware)<br/>WebCodecs decode → WebGPU texture (importExternalTexture) → Render<br/>ONNX Runtime WebGPU execution provider (AI, 5-10ms/frame)<br/>Browser Support: Chrome 113+, Edge 113+, Safari 18+<br/>Performance: Decode 200+ FPS, AI 30+ FPS, Render 60 FPS"]
+  T2["Tier 2: WebGL2 + WASM SIMD (Hybrid Mode)<br/>WebCodecs decode → WebGL2 Canvas (copyExternalImageToTexture) → Render<br/>ONNX Runtime WASM SIMD execution provider (AI, 30-50ms/frame)<br/>Browser Support: Firefox 130+, Safari 16.4+, Chrome 94+ (WebCodecs)<br/>Performance: Decode 200+ FPS, AI 10-20 FPS, Render 60 FPS"]
+  T3["Tier 3: Legacy Compatibility Mode<br/>HTTP-FLV/HLS/WebRTC → hls.js/mpegts.js/WHEP → &lt;video&gt; element<br/>Browser Support: Legacy browsers, mobile browsers, specific scenarios<br/>Performance: Same as current experience"]
+  T1 -- "WebGPU device loss or unavailable → automatic fallback to WebGL2" --> T2
+  T2 -- "WebCodecs unavailable → automatic fallback to Legacy players" --> T3
 ```
 
 ### Data Flow Architecture
 
-```text
-Camera → RTSP Recorder → StreamHub → WebSocket → Browser Worker → 
-VideoDecoder → Renderer → Canvas
-                                                    ↓
-Frontend AI (ONNX Runtime Web) → Detections → UI Overlay (in-browser, no server round-trip)
+```mermaid
+flowchart LR
+  CAM["Camera"] --> RTSP["RTSP Recorder"] --> HUB["StreamHub"] --> WS["WebSocket"] --> WORKER["Browser Worker"] --> DEC["VideoDecoder"] --> REN["Renderer"] --> CV["Canvas"]
+  CV --> AI["Frontend AI (ONNX Runtime Web)"] --> DET["Detections"] --> UI["UI Overlay (in-browser, no server round-trip)"]
 ```
 
 ### Tier Detection Algorithm

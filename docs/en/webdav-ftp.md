@@ -137,20 +137,18 @@ mirror --reverse /recordings/front-door/ ./local-folder/
 
 The directory structure served by WebDAV and FTP:
 
-```text
-/
-├── recordings/                   # Recording files
-│   ├── front-door/               # Camera ID
-│   │   ├── 2026-08-18/           # Date directory
-│   │   │   ├── 00-00-00.mp4     # Recording segment
-│   │   │   ├── 00-01-00.mp4
-│   │   │   └── ...
-│   │   └── 2026-08-17/
-│   │       └── ...
-│   └── driveway/
-│       └── ...
-├── snapshots/                    # Snapshot images (if enabled)
-└── timelapse/                    # Timelapse videos (if enabled)
+```mermaid
+flowchart TB
+  ROOT["/"] --> REC["recordings/<br/>recording files"]
+  ROOT --> SNAP["snapshots/<br/>snapshot images (if enabled)"]
+  ROOT --> TL["timelapse/<br/>timelapse videos (if enabled)"]
+  REC --> C1["front-door/<br/>camera ID"]
+  REC --> C2["driveway/<br/>…"]
+  C1 --> D1["2026-08-18/<br/>date directory"]
+  C1 --> D2["2026-08-17/<br/>…"]
+  D1 --> F1["00-00-00.mp4<br/>recording segment"]
+  D1 --> F2["00-01-00.mp4"]
+  D1 --> E["…"]
 ```
 
 ## Security Configuration

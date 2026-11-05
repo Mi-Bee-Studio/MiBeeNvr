@@ -129,11 +129,9 @@ logging:
 
 ### 集成架构
 
-```text
-摄像头 → MediaMTX → MiBee NVR
-       ↓    ↓         ↓
-    RTSP  WebRTC     HTTP JPEG
-    RTMP  HLS        MP4 录像
+```mermaid
+flowchart LR
+  CAM["摄像头<br/>RTSP / RTMP"] --> MM["MediaMTX<br/>WebRTC / HLS"] --> NVR["MiBee NVR<br/>HTTP JPEG / MP4 录像"]
 ```
 
 ### 推荐配置
@@ -533,12 +531,10 @@ paths:
 
 ### 1. 部署架构
 
-```text
-摄像头 → MediaMTX (负载均衡) → MiBee NVR
-         ↓
-      监控节点
-         ↓
-      存储集群
+```mermaid
+flowchart LR
+  CAM["摄像头"] --> MM["MediaMTX（负载均衡）"] --> NVR["MiBee NVR"]
+  MM --> MON["监控节点"] --> ST["存储集群"]
 ```
 
 ### 2. 配置管理

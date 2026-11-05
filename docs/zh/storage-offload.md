@@ -12,14 +12,17 @@
 
 ## 工作原理
 
-```text
-录像段 ──rolling 合并──▶ 合并产物 ──(min_age 宽限后)──▶ offload_outbox 队列
-                                                          │
-                              扫描循环（默认 60s）发现待上传行 ──▶ S3 PUT ──▶ HeadObject 校验
-                                                          │                    │
-                                              迟到增长按 size-compare 重传 ◀── 校验通过 → uploaded
-                                                                               │
-                                                          自动/手动 CLI 逐出本地副本 ◀── evictable
+```mermaid
+flowchart TB
+  SEG["录像段"] -- "rolling 合并" --> MRG["合并产物"]
+  MRG -- "min_age 宽限后" --> OB["offload_outbox 队列"]
+  SCAN["扫描循环<br/>（默认 60s）发现待上传行"] --> PUT["S3 PUT"]
+  OB --> SCAN
+  PUT --> VER["HeadObject 校验"]
+  VER -- "校验通过" --> UP["uploaded"]
+  UP -. "迟到增长：size-compare 重传" .-> PUT
+  UP --> EV["evictable"]
+  EV -- "自动 / 手动 CLI 逐出本地副本" --> OUT["本地副本移除"]
 ```
 
 - **上传对象**：rolling 合并产物——合并引擎已生成的按小时合并 MP4 文件（而非 30 秒碎片段）。一条录像 = 一个对象，对象数与请求数可控

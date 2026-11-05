@@ -137,20 +137,18 @@ mirror --reverse /recordings/front-door/ ./local-folder/
 
 WebDAV 和 FTP 访问的目录结构：
 
-```text
-/
-├── recordings/                   # 录像文件
-│   ├── front-door/               # 摄像头 ID
-│   │   ├── 2026-08-18/           # 日期目录
-│   │   │   ├── 00-00-00.mp4     # 录像片段
-│   │   │   ├── 00-01-00.mp4
-│   │   │   └── ...
-│   │   └── 2026-08-17/
-│   │       └── ...
-│   └── driveway/
-│       └── ...
-├── snapshots/                    # 快照图片（如果启用）
-└── timelapse/                    # 延时摄影视频（如果启用）
+```mermaid
+flowchart TB
+  ROOT["/"] --> REC["recordings/<br/>录像文件"]
+  ROOT --> SNAP["snapshots/<br/>快照图片（如果启用）"]
+  ROOT --> TL["timelapse/<br/>延时摄影视频（如果启用）"]
+  REC --> C1["front-door/<br/>摄像头 ID"]
+  REC --> C2["driveway/<br/>…"]
+  C1 --> D1["2026-08-18/<br/>日期目录"]
+  C1 --> D2["2026-08-17/<br/>…"]
+  D1 --> F1["00-00-00.mp4<br/>录像片段"]
+  D1 --> F2["00-01-00.mp4"]
+  D1 --> E["…"]
 ```
 
 ## 安全配置

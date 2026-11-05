@@ -57,10 +57,9 @@ curl -X DELETE http://nvr:9090/api/cameras/front-door/trace
 
 日志过滤 `component=frame-trace`（或 `journalctl -u mibee-nvr | grep frame-trace`），链路为：
 
-```text
-ingest（录制器收到帧）
-  → streamhub_in / streamhub_drop（hub 入口/消费者丢帧）
-  → ws_recv / flv_recv / hls_* / webrtc_recv|drop（各协议支路）
+```mermaid
+flowchart LR
+  A["ingest<br/>（录制器收到帧）"] --> B["streamhub_in / streamhub_drop<br/>（hub 入口/消费者丢帧）"] --> C["ws_recv / flv_recv / hls_* / webrtc_recv|drop<br/>（各协议支路）"]
 ```
 
 `trace_id` 为 `相机ID-PTS`（仅关键帧），同一帧在各环节用同一 ID 串联。窗口到期自动回落——严禁常开全帧全相机（日志量 = 帧率 × 环节数 × ~250B/行）。

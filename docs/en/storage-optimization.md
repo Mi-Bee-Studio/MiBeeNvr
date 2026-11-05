@@ -12,19 +12,17 @@ MiBee NVR stores all metadata in a single SQLite database with **WAL (Write-Ahea
 
 ### Component Layers
 
-```text
-┌─────────────────────────────────────────┐
-│  Internal API Handlers                   │
-├─────────────────────────────────────────┤
-│  DB Layer (internal/storage/)            │
-│  ┌─────────────┐  ┌──────────────────┐   │
-│  │ DB struct    │  │ Manager struct    │   │
-│  │ (SQLite CRUD)│  │ (File operations) │   │
-│  └─────────────┘  └──────────────────┘   │
-├─────────────────────────────────────────┤
-│  modernc.org/sqlite (pure Go)            │
-│  WAL mode, mmap_size=256MB              │
-└─────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  API["Internal API Handlers"]
+  subgraph STORE["DB Layer (internal/storage/)"]
+    DB["DB struct<br/>SQLite CRUD"]
+    MGR["Manager struct<br/>File operations"]
+  end
+  DRV["modernc.org/sqlite (pure Go)<br/>WAL mode, mmap_size=256MB"]
+  API --> STORE
+  DB --> DRV
+  MGR --> DRV
 ```
 
 ### DSN Configuration
@@ -295,27 +293,23 @@ PRAGMA incremental_vacuum(256);  -- ~2MB per cycle
 
 ### Flow
 
-```text
-Recordings created (status = 'pending')
-    │
-    ▼
-MergeManager.RunOnce() (ticker: configurable, default 1h)
-    │
-    ├─ ListCameraMergeWindows() → hourly windows with 2+ segments
-    ├─ processCamera() per camera
-    │   ├─ acquireMergeLock() (per-camera mutex, non-blocking)
-    │   ├─ ListMergeableSegments()
-    │   ├─ groupByFormat() → separate H.264, H.265, MJPEG, AVI
-    │   ├─ mergeFormatGroup()
-    │   │   ├─ ParseSegment() (MP4 sample table extraction)
-    │   │   ├─ SHA-256 SPS/PPS grouping
-    │   │   ├─ Disk space check (1.1x estimate)
-    │   │   ├─ MergeMP4Segments() (streaming merge, 1MB buffer)
-    │   │   ├─ MergeAndReplaceRecordings() (transactional)
-    │   │   └─ Delete source files (post-commit)
-    │   └─ ListSingletonPendingRecordings() → mark as 'merged'
-    │
-    └─ Update metrics
+```mermaid
+flowchart TB
+  P["Recordings created (status = 'pending')"] --> RUN["MergeManager.RunOnce() (ticker: configurable, default 1h)"]
+  RUN --> W["ListCameraMergeWindows() → hourly windows with 2+ segments"]
+  RUN --> PC["processCamera() per camera"]
+  RUN --> MET["Update metrics"]
+  PC --> LK["acquireMergeLock() (per-camera mutex, non-blocking)"]
+  LK --> LM["ListMergeableSegments()"]
+  LM --> GF["groupByFormat() → separate H.264, H.265, MJPEG, AVI"]
+  GF --> FG["mergeFormatGroup()"]
+  FG --> S1["ParseSegment() (MP4 sample table extraction)"]
+  S1 --> S2["SHA-256 SPS/PPS grouping"]
+  S2 --> S3["Disk space check (1.1x estimate)"]
+  S3 --> S4["MergeMP4Segments() (streaming merge, 1MB buffer)"]
+  S4 --> S5["MergeAndReplaceRecordings() (transactional)"]
+  S5 --> S6["Delete source files (post-commit)"]
+  PC --> SG["ListSingletonPendingRecordings() → mark as 'merged'"]
 ```
 
 ### Segment Lifecycle States
@@ -374,9 +368,10 @@ All `QueryContext`/`QueryRowContext` calls route through `readConn()` (falls bac
 
 ### WAL Read Concurrency
 
-```text
-Writer (WAL):  INSERT/UPDATE/DELETE  →  appends to WAL file
-Reader 1/2/3:  SELECT (read pool)    →  reads from main DB + WAL index, concurrent
+```mermaid
+flowchart LR
+  W["Writer (WAL)<br/>INSERT/UPDATE/DELETE"] --> WA["appends to WAL file"]
+  R["Reader 1/2/3 (read pool)<br/>SELECT"] --> RD["reads from main DB + WAL index, concurrent"]
 ```
 
 ### temp_store = MEMORY
@@ -445,20 +440,13 @@ All implemented and wired. `nvr_sqlite_*` metrics are updated on a **60-second t
 
 ### Decision Tree
 
-```text
-Current DB Size?
-│
-├─ < 100MB → No action needed. Current config sufficient.
-│
-├─ 100MB – 500MB → ANALYZE weekly, PRAGMA optimize on startup
-│   └─ Ensure idx_recordings_archived_time exists (v19+)
-│
-├─ 500MB – 10GB → Partition by time (monthly tables)
-│   └─ [Pending T8] recordings_2026_01, recordings_2026_02, etc.
-│       UNION ALL view for transparent querying
-│
-└─ > 10GB → Migrate to PostgreSQL (external process)
-    └─ [Pending T12] Steps: pgx/v5 driver, pg_cron, streaming replication
+```mermaid
+flowchart TD
+  Q["Current DB Size?"]
+  Q -- "&lt; 100MB" --> A["No action needed. Current config sufficient."]
+  Q -- "100MB – 500MB" --> B["ANALYZE weekly, PRAGMA optimize on startup<br/>Ensure idx_recordings_archived_time exists (v19+)"]
+  Q -- "500MB – 10GB" --> C["Partition by time (monthly tables)<br/>[Pending T8] recordings_2026_01, recordings_2026_02, etc.<br/>UNION ALL view for transparent querying"]
+  Q -- "&gt; 10GB" --> D["Migrate to PostgreSQL (external process)<br/>[Pending T12] Steps: pgx/v5 driver, pg_cron, streaming replication"]
 ```
 
 ### When to Partition (500K+ Rows)
@@ -486,12 +474,12 @@ Stay on SQLite if: recordings <500K, DB <5GB, single NVR instance, RAM <1GB, SD 
 
 ### Long-Term Strategy
 
-```text
-Phase 1 (Current): SQLite single-file, WAL mode, optimized indexes
-Phase 2 (T8):      Time-based partition tables or separate DB files
-Phase 3 (T12):     PostgreSQL migration with pgx driver
-Phase 4 (Future):  ClickHouse for analytics queries (GetRecordingTrends, long-range stats)
-```
+| Phase | Content |
+|-------|---------|
+| Phase 1 (Current) | SQLite single-file, WAL mode, optimized indexes |
+| Phase 2 (T8) | Time-based partition tables or separate DB files |
+| Phase 3 (T12) | PostgreSQL migration with pgx driver |
+| Phase 4 (Future) | ClickHouse for analytics queries (GetRecordingTrends, long-range stats) |
 
 ---
 
