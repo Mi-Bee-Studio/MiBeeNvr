@@ -35,6 +35,13 @@ export interface Camera {
    */
   imaging_type?: string;
   /**
+   * Explicit dual-spectrum channel link: camera entries sharing a non-empty
+   * spectrum_group belong to one physical device whose channels register as
+   * SEPARATE GB28181 SIP devices (distinct gb28181.device_id). Drives the
+   * sibling switch chip + dual-pane in the live view. Config-injected.
+   */
+  spectrum_group?: string;
+  /**
    * Audio-device → video-camera association (v43). Only meaningful for
    * encoding "audio" (independent mic) devices: the video camera whose
    * recordings the audio should replay alongside. '' = free-standing mic.

@@ -22,6 +22,26 @@ describe('gbSiblings (dual-spectrum channels of one GB device)', () => {
     expect(gbSiblings(gb('gb-x', 'dev-2'), [a, b, c])).toEqual([]);
   });
 
+  it('links channels of separate SIP registrations via a shared spectrum_group', () => {
+    // The real dual-spectrum rig topology: each channel registers as its own
+    // GB device, so the device_ids differ and only the explicit group links them.
+    const visible = { ...gb('gb-vis', '34020000001320000011'), spectrum_group: 'rig-7f' } as Camera;
+    const thermal = { ...gb('gb-th', '34020000001320000003', 'thermal'), spectrum_group: 'rig-7f' } as Camera;
+    const stranger = { ...gb('gb-9', '34020000001320000099', 'thermal'), spectrum_group: 'other-rig' } as Camera;
+    const got = gbSiblings(thermal, [visible, thermal, stranger]);
+    expect(got.map((c) => c.id)).toEqual(['gb-vis']);
+    expect(gbSiblings(visible, [visible, thermal, stranger]).map((c) => c.id)).toEqual(['gb-th']);
+  });
+
+  it('does not group by an empty spectrum_group and needs no gb28181 binding when grouped', () => {
+    const a = { ...gb('gb-a', 'dev-a'), spectrum_group: '' } as Camera;
+    const b = { ...gb('gb-b', 'dev-b'), spectrum_group: '' } as Camera;
+    expect(gbSiblings(a, [a, b])).toEqual([]);
+    const noBinding = { id: 'gb-c', protocol: 'gb28181', spectrum_group: 'rig-7f' } as unknown as Camera;
+    const linked = { id: 'gb-d', protocol: 'gb28181', spectrum_group: 'rig-7f' } as unknown as Camera;
+    expect(gbSiblings(noBinding, [noBinding, linked]).map((c) => c.id)).toEqual(['gb-d']);
+  });
+
   it('ignores non-GB cameras and a camera without a gb28181 binding', () => {
     const onvif = { id: 'cam-1', protocol: 'onvif' } as unknown as Camera;
     const visible = gb('gb-1', 'dev-1');

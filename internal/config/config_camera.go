@@ -130,6 +130,16 @@ type CameraConfig struct {
 	// cycle), so continuous recording is recommended.
 	ImagingType string `yaml:"imaging_type,omitempty" json:"imaging_type,omitempty"`
 
+	// SpectrumGroup explicitly links the channels of one dual-spectrum
+	// device when they register as SEPARATE GB28181 SIP devices (each with
+	// its own gb28181.device_id) instead of the standard one-device-two-
+	// channels catalog shape. Camera entries sharing a non-empty
+	// spectrum_group are treated as spectrum siblings in the live view
+	// (channel switch chip + dual-pane). Purely a UI link: recording and
+	// streaming behavior are identical. Non-empty values are limited to
+	// [A-Za-z0-9._-] and 64 runes.
+	SpectrumGroup string `yaml:"spectrum_group,omitempty" json:"spectrum_group,omitempty"`
+
 	// AutoTimeSync opts this camera in/out of the time_sync.auto correction
 	// loop (#time-sync): nil = follow the global setting; false = never
 	// auto-correct this camera (status is still reported); true = correct

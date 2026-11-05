@@ -10,7 +10,16 @@
   // by whatever publishes through internal/thermal's Feed — the transport
   // and rendering are adapter-agnostic by design.
 
-  let { cameraId }: { cameraId: string } = $props();
+  let {
+    cameraId,
+    onprobe,
+  }: {
+    cameraId: string;
+    /** Fired on every probe click with the normalized position + resolved
+     *  cell temperature (NaN when the grid fetch failed) — lets the parent
+     *  mirror the spot on a dual-pane sibling pane (same device FOV). */
+    onprobe?: (probe: { nx: number; ny: number; c: number }) => void;
+  } = $props();
 
   type Reading = {
     camera_id: string;
@@ -93,10 +102,12 @@
     const values = await fetchGrid();
     if (!values) {
       probe = { nx, ny, c: NaN };
+      onprobe?.(probe);
       return;
     }
     const { x, y } = gridCellAt(nx, ny);
     probe = { nx, ny, c: values[y * 32 + x] };
+    onprobe?.(probe);
   }
 
   $effect(() => {

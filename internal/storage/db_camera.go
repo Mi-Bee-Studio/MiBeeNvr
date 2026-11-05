@@ -91,6 +91,11 @@ type CameraRow struct {
 	// injected (not a DB column). Semantic label + default-policy key (AI push
 	// skip, motion-gating caveat) — recording itself is identical.
 	ImagingType string `json:"imaging_type,omitempty"`
+	// SpectrumGroup explicitly links the channels of one dual-spectrum
+	// device that register as separate GB28181 SIP devices (distinct
+	// gb28181.device_id). Config-injected (not a DB column); shared non-
+	// empty values make the entries spectrum siblings in the live view.
+	SpectrumGroup string `json:"spectrum_group,omitempty"`
 	// AutoTimeSync (#time-sync): nil = follow time_sync.auto; false = never
 	// auto-correct this camera. Config-injected (not a DB column).
 	AutoTimeSync *bool `json:"auto_time_sync,omitempty"`

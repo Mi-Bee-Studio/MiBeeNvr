@@ -97,6 +97,10 @@ type CameraUpdate struct {
 	// appended to vision.skip_cameras (removal is manual, so a deliberate
 	// un-skip survives later edits).
 	ImagingType *string
+	// SpectrumGroup links the channels of one dual-spectrum device that
+	// register as separate GB28181 SIP devices. nil = unchanged; "" clears.
+	// Purely a UI link — no recorder restart.
+	SpectrumGroup *string
 	// AutoTimeSync (#time-sync): per-camera opt in/out of the automatic
 	// clock-correction loop. nil = unchanged (follow global setting).
 	AutoTimeSync *bool

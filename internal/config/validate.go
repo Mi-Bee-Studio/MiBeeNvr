@@ -1054,6 +1054,29 @@ func ValidImagingType(v string) bool {
 	return false
 }
 
+// ValidSpectrumGroup reports whether v is a legal spectrum_group value:
+// empty (no explicit channel link) or 1-64 runes of [A-Za-z0-9._-]. The
+// group key is only compared for equality between camera entries, but it
+// lands in URLs/UI as a join key, so keep the charset conservative.
+func ValidSpectrumGroup(v string) bool {
+	if v == "" {
+		return true
+	}
+	r := []rune(v)
+	if len(r) > 64 {
+		return false
+	}
+	for _, c := range r {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.' || c == '_' || c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // MJPEG segment form values (#761): MJPEGFormAVI (also "") is the default
 // single-file AVI container per segment; MJPEGFormDir is the legacy
 // one-JPEG-file-per-frame directory opt-out.
@@ -1074,6 +1097,9 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 	}
 	if !ValidImagingType(cam.ImagingType) {
 		return fmt.Errorf("cameras.%s.imaging_type must be \"visible\" or \"thermal\" (got %q)", cam.ID, cam.ImagingType)
+	}
+	if !ValidSpectrumGroup(cam.SpectrumGroup) {
+		return fmt.Errorf("cameras.%s.spectrum_group must be empty or 1-64 chars of [A-Za-z0-9._-] (got %q)", cam.ID, cam.SpectrumGroup)
 	}
 	if cam.MotionSource == MotionSourceCameraONVIF && cam.Protocol != "onvif" {
 		return fmt.Errorf("cameras.%s.motion_source=camera:onvif requires an onvif protocol camera (got %q)", cam.ID, cam.Protocol)

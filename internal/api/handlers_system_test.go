@@ -178,6 +178,9 @@ func TestReadyz_OK(t *testing.T) {
 	h := TestHandler(db, store)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/readyz", nil, "", "")
+	if rr.Code != http.StatusOK {
+		t.Logf("readyz body: %s", rr.Body.String())
+	}
 	require.Equal(t, http.StatusOK, rr.Code)
 }
 
