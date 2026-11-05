@@ -723,6 +723,8 @@
   "live.protocol.webrtc": "WebRTC",
   "live.reconnecting": "Сигнал потерян, переподключение...",
   "live.retry": "Повторить",
+    "live.spectrum.thermal": "Тепловой канал",
+  "live.spectrum.visible": "Видимый канал",
   "live.settings.title": "Настройки камеры",
   "live.snapshot.autoRestore": "Попытка восстановления прямого эфира...",
   "live.snapshot.fallback": "Поток недоступен — показываются снимки",

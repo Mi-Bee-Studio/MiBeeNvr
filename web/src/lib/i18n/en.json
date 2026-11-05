@@ -722,6 +722,8 @@
   "live.protocol.webrtc": "WebRTC",
   "live.reconnecting": "Signal lost, reconnecting...",
   "live.retry": "Retry",
+    "live.spectrum.thermal": "Thermal channel",
+  "live.spectrum.visible": "Visible channel",
   "live.settings.title": "Camera Settings",
   "live.snapshot.autoRestore": "Attempting to restore live stream...",
   "live.snapshot.fallback": "Stream unavailable — showing snapshots",

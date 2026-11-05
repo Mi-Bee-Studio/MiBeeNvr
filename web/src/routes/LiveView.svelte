@@ -26,6 +26,7 @@
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { getCameraProtocolOverride } from '$lib/preferences';
   import type { ProtocolsResponse, StreamQuality } from '$lib/stream-selection';
+  import { gbSiblings, spectrumLabelKey } from '$lib/spectrum';
   import { getCameraQuality, setCameraQuality } from '$lib/stream-quality.svelte';
   let { cameraId = '' }: { cameraId?: string } = $props();
 
@@ -73,6 +74,11 @@
     qualityPref = q;
     setCameraQuality(cameraId, q);
   }
+
+  // Dual-spectrum siblings (#1092 follow-up): the other channels of the same
+  // GB device (shared gb28181.device_id) — drives the thermal/visible switch
+  // chip in the header. Empty for single-channel devices.
+  let spectrumSiblings = $state<Camera[]>([]);
 
   // ONVIF capabilities
   let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
@@ -237,6 +243,15 @@
     error = '';
     try {
       camera = await getCamera(cameraId);
+      // Dual-spectrum: resolve the other channels of the same GB device so
+      // the header can offer a thermal/visible switch chip (#1092 follow-up).
+      if (camera?.gb28181?.device_id) {
+        try {
+          spectrumSiblings = gbSiblings(camera, await listCameras());
+        } catch { /* camera list unavailable — no sibling chip */ }
+      } else {
+        spectrumSiblings = [];
+      }
       // Probe caps + fetch the per-camera protocol ranking, then register the
       // camera with the orchestrator so it can build the candidate chain and
       // drive adaptive selection. A per-camera user override (from a prior
@@ -441,6 +456,17 @@
           {#if camera.imaging_type === 'thermal'}
             <span class="badge badge-warning">{t('cameras.thermalBadge')}</span>
           {/if}
+          <!-- Dual-spectrum: one GB device, two channels — one-click switch
+               between the thermal and visible channel of the same device. -->
+          {#each spectrumSiblings as sibling (sibling.id)}
+            <a
+              href={'#/live/' + sibling.id}
+              class="badge badge-outline hover:badge-warning cursor-pointer flex items-center gap-1"
+              title={sibling.name || sibling.id}
+            >
+              {t(spectrumLabelKey(sibling))}
+            </a>
+          {/each}
 
           <!-- ONVIF controls shown for all ONVIF cameras -->
           {#if isOnvifCamera(camera) && deviceCaps?.snapshot}

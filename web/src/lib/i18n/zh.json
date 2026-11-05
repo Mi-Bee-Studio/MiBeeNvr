@@ -715,6 +715,8 @@
   "live.protocol.webrtc": "WebRTC",
   "live.reconnecting": "信号中断，正在重连...",
   "live.retry": "重试",
+    "live.spectrum.thermal": "切换热成像通道",
+  "live.spectrum.visible": "切换可见光通道",
   "live.settings.title": "摄像头设置",
   "live.snapshot.autoRestore": "正在尝试恢复实时流...",
   "live.snapshot.fallback": "流不可用 — 正在显示快照",
