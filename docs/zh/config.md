@@ -88,6 +88,9 @@ cameras:
     password: "camera123"
     enabled: true
     recording_enabled: true      # false = 仅直播不落盘
+    # 双光谱（热成像）相关键：imaging_type: thermal（标注热通道+默认策略）、
+    # thermal_readout:（温度读数端点）、spectrum_group:（双通道独立注册时的配对键）
+    # 见《摄像头指南》「热成像 / 双光谱摄像头」一节。
 ```
 
 各接入协议的完整写法见对应文档：[ONVIF](onvif-discovery.md) · [小米](xiaomi-setup.md) · [SRT/RTMP](srt-rtmp.md) · [树莓派](raspberrypi.md) · [GB28181](gb28181-guide.md)。

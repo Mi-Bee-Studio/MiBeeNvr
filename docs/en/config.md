@@ -88,6 +88,10 @@ cameras:
     password: "camera123"
     enabled: true
     recording_enabled: true      # false = live-only, no recording
+    # Dual-spectrum (thermal) keys: imaging_type: thermal (label the thermal
+    # channel + default policies), thermal_readout: (temperature readout
+    # endpoint), spectrum_group: (pair channels that register separately).
+    # See the "Thermal / Dual-Spectrum Cameras" section in the camera guide.
 ```
 
 Full recipes per protocol: [ONVIF](onvif-discovery.md) · [Xiaomi](xiaomi-setup.md) · [SRT/RTMP](srt-rtmp.md) · [Raspberry Pi](raspberrypi.md) · [GB28181](gb28181-guide.md).
