@@ -50,16 +50,20 @@ func TestMinuteRecorder_SpotOnlyAndNilHandling(t *testing.T) {
 	r := NewMinuteRecorder()
 	base := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
 
-	// Spot-only frames (no extremes) never produce a sample.
+	// Spot-only frames (no extremes) never produce a sample — the spot-only
+	// minute closes empty when the next minute's reading arrives.
 	require.Nil(t, r.Observe(base, Reading{CameraID: "cam", Timestamp: base, Spots: []SpotReading{{Name: "n", TempC: 30}}}))
 	require.Nil(t, r.Observe(base.Add(90*time.Second), Reading{CameraID: "cam", Timestamp: base.Add(90 * time.Second)}))
-	// max-only readings still chart (min stays nil).
-	s := r.Observe(base.Add(3*time.Minute), Reading{CameraID: "cam", Timestamp: base.Add(2 * time.Minute), MaxC: f(33.3)})
+
+	// A max-only reading opens a real bucket; it closes when the minute
+	// after it arrives. max-only rows still chart (min stays nil).
+	require.Nil(t, r.Observe(base.Add(3*time.Minute), Reading{CameraID: "cam", Timestamp: base.Add(2 * time.Minute), MaxC: f(33.3)}))
+	s := r.Observe(base.Add(4*time.Minute), Reading{CameraID: "cam", Timestamp: base.Add(3 * time.Minute), MaxC: f(1)})
 	require.NotNil(t, s)
+	require.Equal(t, base.Add(2*time.Minute), s.Minute)
 	require.NotNil(t, s.MaxC)
+	require.InDelta(t, 33.3, *s.MaxC, 1e-9)
 	require.Nil(t, s.MinC)
-	// The first (spot-only) minute produced nothing.
-	require.Nil(t, r.Observe(base.Add(4*time.Minute), Reading{CameraID: "cam", Timestamp: base.Add(3 * time.Minute), MaxC: f(1)}))
 }
 
 func TestMinuteRecorder_ZeroTimestampFallsBackToNow(t *testing.T) {
