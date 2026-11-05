@@ -34,10 +34,14 @@ func TestThermalFrameProxy(t *testing.T) {
 
 	h := setupGB28181TestHandler(t)
 	h.config = &config.Config{Cameras: []config.CameraConfig{
-		{ID: "gb-hot", Protocol: "gb28181", ImagingType: "thermal",
-			ThermalReadout: &config.ThermalReadoutConfig{URL: up.URL, AuthHeader: "Authorization", AuthValue: "Bearer tok-1"}},
-		{ID: "gb-vis", Protocol: "gb28181",
-			ThermalReadout: &config.ThermalReadoutConfig{URL: up.URL}},
+		{
+			ID: "gb-hot", Protocol: "gb28181", ImagingType: "thermal",
+			ThermalReadout: &config.ThermalReadoutConfig{URL: up.URL, AuthHeader: "Authorization", AuthValue: "Bearer tok-1"},
+		},
+		{
+			ID: "gb-vis", Protocol: "gb28181",
+			ThermalReadout: &config.ThermalReadoutConfig{URL: up.URL},
+		},
 	}}
 	require.NoError(t, h.db.UpsertCamera(context.Background(), "gb-hot", "hot", "gb28181", "", "", "", "", "", "", "", ""))
 	require.NoError(t, h.db.UpsertCamera(context.Background(), "gb-vis", "vis", "gb28181", "", "", "", "", "", "", "", ""))
@@ -67,8 +71,10 @@ func TestThermalFrameUpstreamFailure(t *testing.T) {
 
 	h := setupGB28181TestHandler(t)
 	h.config = &config.Config{Cameras: []config.CameraConfig{
-		{ID: "gb-hot", Protocol: "gb28181", ImagingType: "thermal",
-			ThermalReadout: &config.ThermalReadoutConfig{URL: dead.URL}},
+		{
+			ID: "gb-hot", Protocol: "gb28181", ImagingType: "thermal",
+			ThermalReadout: &config.ThermalReadoutConfig{URL: dead.URL},
+		},
 	}}
 	require.NoError(t, h.db.UpsertCamera(context.Background(), "gb-hot", "hot", "gb28181", "", "", "", "", "", "", "", ""))
 	rec, req := thermalFrameReq(t, "gb-hot")
