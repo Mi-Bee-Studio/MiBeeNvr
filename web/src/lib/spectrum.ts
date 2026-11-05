@@ -5,17 +5,23 @@ import type { Camera } from './api/cameras';
  * a visible channel and a thermal channel registers as two cameras sharing
  * one gb28181.device_id (the industry-standard dual-channel model — the same
  * device appears as one hardware node with two channels in Milestone/iVMS).
- * Returns the other channels of the same physical device, so the live view
- * can offer a one-click "switch to thermal/visible channel" chip.
+ * Devices that instead register each channel as a SEPARATE SIP device get
+ * linked explicitly via a shared non-empty `spectrum_group` (config-level
+ * key — the two registrations have distinct device_ids, so nothing can be
+ * derived). Returns the other channels of the same physical device, so the
+ * live view can offer a one-click "switch to thermal/visible channel" chip
+ * and the dual-pane view.
  */
 export function gbSiblings(camera: Camera, cameras: Camera[] | null | undefined): Camera[] {
   const deviceId = camera?.gb28181?.device_id;
-  if (!deviceId || !cameras) return [];
+  const group = camera?.spectrum_group?.trim();
+  if ((!deviceId && !group) || !cameras) return [];
   return cameras.filter(
     (c) =>
       c.id !== camera.id &&
       c.protocol === 'gb28181' &&
-      c.gb28181?.device_id === deviceId
+      ((deviceId && c.gb28181?.device_id === deviceId) ||
+        (group && c.spectrum_group?.trim() === group))
   );
 }
 
