@@ -100,13 +100,13 @@ cameras:
 
 Audio is recorded in sync with video and stored in the same MP4 segments:
 
-```text
-recordings/
-├── front-door/
-│   ├── 2026-08-18/
-│   │   ├── 00-00-00.mp4     # Contains video and audio
-│   │   ├── 00-01-00.mp4
-│   │   └── ...
+```mermaid
+flowchart LR
+  R["recordings/"] --> CAM["front-door/<br/>camera ID"]
+  CAM --> DAY["2026-08-18/<br/>recording day"]
+  DAY --> F1["00-00-00.mp4<br/>contains video and audio"]
+  DAY --> F2["00-01-00.mp4"]
+  DAY --> E["…"]
 ```
 
 ## Audio Quality Tuning

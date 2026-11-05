@@ -112,20 +112,22 @@ Notes:
 
 Outside Docker, bare-metal installs (via install.sh) are the last online scenario that can be automated. The architecture deliberately avoids in-process self-replacement — the `mibee-nvr.service` sandbox (`User=nvr` + `ProtectSystem=strict`) already forbids the app from writing `/usr/local/bin`:
 
-```text
-app (nvr user, sandboxed)              root helper (mibee-nvr-update.service)
-  sensing layer sees a new release
-  AND update.auto_apply: true
-  ├─ write /var/lib/mibee-nvr/update-request.json
-  └─ systemctl start mibee-nvr-update.service  →  mibee-nvr update --apply-request …
-                                                    ① prechecks (non-docker, strict semver step, disk ≥ 3× artifact)
-                                                    ② stream-download checksums + ed25519 sig + binary
-                                                    ③ sha256 + signature verify (any failure aborts, zero changes)
-                                                    ④ keep .prev → atomic binary replace
-                                                    ⑤ systemctl restart mibee-nvr
-                                                    ⑥ health gate: /api/health readiness probe
-                                                    ⑦ automatic .prev rollback + restart on failure
-                                                    ⑧ append to update-history.jsonl
+```mermaid
+flowchart TB
+  subgraph APP["app (nvr user, sandboxed)"]
+    A1["sensing layer sees a new release<br/>AND update.auto_apply: true"] --> A2["write /var/lib/mibee-nvr/update-request.json"] --> A3["systemctl start mibee-nvr-update.service"]
+  end
+  subgraph HELPER["root helper (mibee-nvr-update.service)"]
+    H1["mibee-nvr update --apply-request …"] --> S1["① prechecks (non-docker, strict semver step, disk ≥ 3× artifact)"]
+    S1 --> S2["② stream-download checksums + ed25519 sig + binary"]
+    S2 --> S3["③ sha256 + signature verify (any failure aborts, zero changes)"]
+    S3 --> S4["④ keep .prev → atomic binary replace"]
+    S4 --> S5["⑤ systemctl restart mibee-nvr"]
+    S5 --> S6["⑥ health gate: /api/health readiness probe"]
+    S6 --> S7["⑦ automatic .prev rollback + restart on failure"]
+    S7 --> S8["⑧ append to update-history.jsonl"]
+  end
+  A3 --> H1
 ```
 
 A polkit rule (`/etc/polkit-1/rules.d/60-mibee-nvr-update.rules`, installed by the installer) authorizes the nvr user to start exactly this ONE unit — minimal privilege surface.

@@ -12,14 +12,17 @@ Supported targets: AWS S3, MinIO, Cloudflare R2, Backblaze B2, Alibaba Cloud OSS
 
 ## How it works
 
-```text
-segments ──rolling merge──▶ merged output ──(after min_age grace)──▶ offload_outbox queue
-                                                                        │
-                             scan loop (60s default) picks pending rows ──▶ S3 PUT ──▶ HeadObject verify
-                                                                        │                  │
-                                          late growth → size-compare re-upload ◀── verified → uploaded
-                                                                                           │
-                                                        evict local copy: auto / CLI ◀── evictable
+```mermaid
+flowchart TB
+  SEG["segments"] -- "rolling merge" --> MRG["merged output"]
+  MRG -- "after min_age grace" --> OB["offload_outbox queue"]
+  SCAN["scan loop (60s default)<br/>picks pending rows"] --> PUT["S3 PUT"]
+  OB --> SCAN
+  PUT --> VER["HeadObject verify"]
+  VER -- "verified" --> UP["uploaded"]
+  UP -. "late growth: size-compare re-upload" .-> PUT
+  UP --> EV["evictable"]
+  EV -- "evict local copy: auto / CLI" --> OUT["local copy removed"]
 ```
 
 - **What gets uploaded**: rolling-merge products — the consolidated ~hourly MP4 files the merge engine already produces (not the raw 30-second fragments). One recording = one object, keeping object counts and request counts low

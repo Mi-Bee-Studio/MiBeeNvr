@@ -100,13 +100,13 @@ cameras:
 
 音频与视频同步录制，存储在相同的 MP4 片段中：
 
-```text
-recordings/
-├── front-door/
-│   ├── 2026-08-18/
-│   │   ├── 00-00-00.mp4     # 包含视频和音频
-│   │   ├── 00-01-00.mp4
-│   │   └── ...
+```mermaid
+flowchart LR
+  R["recordings/"] --> CAM["front-door/<br/>摄像头 ID"]
+  CAM --> DAY["2026-08-18/<br/>录像日目录"]
+  DAY --> F1["00-00-00.mp4<br/>包含视频和音频"]
+  DAY --> F2["00-01-00.mp4"]
+  DAY --> E["…"]
 ```
 
 ## 音频质量优化

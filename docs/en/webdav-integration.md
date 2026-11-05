@@ -51,27 +51,13 @@ webdav:
 
 The WebDAV server can be accessed at `http://localhost:9090/dav`, with the following file structure:
 
-```text
-/dav/
-├── recordings/
-│   ├── h264/
-│   │   ├── camera_1/
-│   │   │   ├── 1704123456789012345.mp4
-│   │   │   └── 1704123456789012346.mp4
-│   │   └── camera_2/
-│   │       ├── 1704123456789012347.mp4
-│   │       └── 1704123456789012348.mp4
-│   └── h265/
-│       └── camera_1/
-│           └── 1704123456789012349.mp4
-└── snapshots/
-    ├── camera_1/
-    │   ├── 1704123456789012350.jpg
-    │   └── 1704123456789012351.jpg
-    └── camera_2/
-        ├── 1704123456789012352.jpg
-        └── 1704123456789012353.jpg
-```
+| Path | Purpose |
+|------|---------|
+| `recordings/h264/camera_1/` | Recording segments `1704123456789012345.mp4`, `1704123456789012346.mp4` |
+| `recordings/h264/camera_2/` | Recording segments `1704123456789012347.mp4`, `1704123456789012348.mp4` |
+| `recordings/h265/camera_1/` | Recording segments `1704123456789012349.mp4` |
+| `snapshots/camera_1/` | Snapshot images `1704123456789012350.jpg`, `1704123456789012351.jpg` |
+| `snapshots/camera_2/` | Snapshot images `1704123456789012352.jpg`, `1704123456789012353.jpg` |
 
 ### WebDAV Operations
 

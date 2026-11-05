@@ -4,14 +4,14 @@ Turn the NVR into a UPnP AV / DLNA media server: TVs, Android TV boxes and
 network players on the LAN discover it automatically via SSDP — no URLs to
 type, no app to install. Browsing follows the recording structure:
 
-```text
-MiBee NVR
-├── Front Door          (one container per camera)
-│   ├── 2026-10-15      (one container per recording day)
-│   │   ├── 12:00:00    (recording items — play directly)
-│   │   └── ...
-│   └── 2026-10-14
-└── Room Mic            (standalone audio sources appear too)
+```mermaid
+flowchart TB
+  ROOT["MiBee NVR"] --> C1["Front Door<br/>(one container per camera)"]
+  ROOT --> C2["Room Mic<br/>(standalone audio sources appear too)"]
+  C1 --> D1["2026-10-15<br/>(one container per recording day)"]
+  C1 --> D2["2026-10-14"]
+  D1 --> I1["12:00:00<br/>(recording items — play directly)"]
+  D1 --> I2["…"]
 ```
 
 Default **off** — DLNA has no authentication model, so the surface is bound

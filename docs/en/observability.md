@@ -57,10 +57,9 @@ curl -X DELETE http://nvr:9090/api/cameras/front-door/trace
 
 Filter logs by `component=frame-trace` (or `journalctl -u mibee-nvr | grep frame-trace`). The chain:
 
-```text
-ingest (recorder received the frame)
-  → streamhub_in / streamhub_drop (hub entry / consumer drop)
-  → ws_recv / flv_recv / hls_* / webrtc_recv|drop (per-protocol branches)
+```mermaid
+flowchart LR
+  A["ingest<br/>(recorder received the frame)"] --> B["streamhub_in / streamhub_drop<br/>(hub entry / consumer drop)"] --> C["ws_recv / flv_recv / hls_* / webrtc_recv|drop<br/>(per-protocol branches)"]
 ```
 
 `trace_id` is `cameraID-PTS` (keyframes only) — the same frame carries the same ID across hops. The window auto-expires; never leave per-frame logging on for all cameras permanently (volume = frame rate × hops × ~250B/line).

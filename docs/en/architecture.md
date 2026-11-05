@@ -15,15 +15,16 @@ Both reuse the existing `StreamHub` frame bus so they slot into the recording + 
 
 Every camera owns a `*model.StreamHub` — a frame fan-out bus. Producers call `hub.Broadcast(pts, au, isIDR)`; consumers call `hub.Subscribe(id, callback)`. The hub runs each consumer's callback in a dedicated goroutine (non-blocking; drops on full buffer).
 
-```text
-                     ┌─────────────────────────────────────────┐
-                     │              StreamHub                   │
-   RTSP recorder ──▶ │  Broadcast(pts, au, isIDR)              │ ──▶ HLS muxer
-   ONVIF recorder ──▶ │                                         │ ──▶ WebRTC
-   IngestRecorder ──▶ │  Subscribe("hls", cb)                   │ ──▶ FLV
-                     │  Subscribe("webrtc-<id>", cb)            │ ──▶ WebSocket
-                     │  Subscribe("relay-rtmp-<id>", cb)  ◀── NEW (push-out)
-                     └─────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  P1["RTSP recorder"] --> HUB
+  P2["ONVIF recorder"] --> HUB
+  P3["IngestRecorder"] --> HUB
+  HUB["StreamHub<br/>Broadcast(pts, au, isIDR)<br/>Subscribe(&quot;hls&quot;, cb)<br/>Subscribe(&quot;webrtc-&lt;id&gt;&quot;, cb)<br/>Subscribe(&quot;relay-rtmp-&lt;id&gt;&quot;, cb) —— NEW (push-out)"]
+  HUB --> C1["HLS muxer"]
+  HUB --> C2["WebRTC"]
+  HUB --> C3["FLV"]
+  HUB --> C4["WebSocket"]
 ```
 
 The **central hub registry** (the `hubs` map inside `CameraManager`'s copy-on-write snapshot, exposed via the lock-free `GetHub(id)` / `GetOrCreateHub(id)`) is the single source of truth: pull recorders, ingest servers, and relay targets all reference the SAME hub object for a given camera.
@@ -44,14 +45,15 @@ A remote publisher (ffmpeg, OBS, a phone, another NVR) pushes a stream to the NV
 
 ### Data flow (RTMP example)
 
-```text
-Publisher ──RTMP──▶ RTMP Server (handlePublisher)
-                       │  OnDataH264(au, pts)
-                       ├─▶ NALUProvider ──▶ IngestRecorder.WriteNALU(au, pts, isIDR)
-                       │                       ├─▶ hub.Broadcast (live consumers)
-                       │                       ├─▶ SPS/PPS capture + IDR-gated MP4 segment
-                       │                       └─▶ SegmentStore → RecordingDB → SegmentCompleted event
-                       └─▶ hub.Broadcast (legacy path)
+```mermaid
+flowchart TB
+  PUB["Publisher"] -- "RTMP" --> SRV["RTMP Server（handlePublisher）<br/>OnDataH264(au, pts)"]
+  SRV --> NALU["NALUProvider"]
+  NALU --> REC["IngestRecorder.WriteNALU(au, pts, isIDR)"]
+  REC --> HB1["hub.Broadcast（live consumers）"]
+  REC --> SPS["SPS/PPS capture + IDR-gated MP4 segment"]
+  REC --> EVT["SegmentStore → RecordingDB → SegmentCompleted event"]
+  SRV --> HB2["hub.Broadcast（legacy path）"]
 ```
 
 ### Key design points
@@ -81,22 +83,13 @@ The NVR forwards a camera's live stream to remote RTMP/RTSP targets. RTSP target
 
 ### Data flow
 
-```text
-Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
-                      │  cb(pts, au)
-                      ▼
-                   PushTarget.connectRTMP/connectRTSP
-                      │
-           ┌──────────┴──────────┐
-           ▼                     ▼
-     rtmpPublishConn       gortsplib.Client
-     (custom handshake,    .WritePacketRTP(media, pkt)
-      Type 0 publish)        (rtpEnc.Encode(au))
-           │                     │
-           ▼                     ▼
-     RTMP target            RTSP target
-     (remote NVR /          (remote NVR /
-      live platform)         backup)
+```mermaid
+flowchart TB
+  HUB["Camera StreamHub"] -- "Subscribe(&quot;relay-rtmp-&lt;id&gt;&quot;, cb)<br/>cb(pts, au)" --> PT["PushTarget.connectRTMP / connectRTSP"]
+  PT --> RTC["rtmpPublishConn<br/>(custom handshake, Type 0 publish)"]
+  PT --> GSP["gortsplib.Client<br/>.WritePacketRTP(media, pkt)<br/>(rtpEnc.Encode(au))"]
+  RTC --> T1["RTMP target<br/>(remote NVR / live platform)"]
+  GSP --> T2["RTSP target<br/>(remote NVR / backup)"]
 ```
 
 ### Key design points
@@ -193,15 +186,17 @@ rtmp:
 
 ## 6. Network Topology Examples
 
-```text
-A) Push-in: remote camera → NVR
-   [Remote Cam/ffmpeg] ──push RTMP/SRT──▶ [NVR (public IP / port-forwarded)]
-
-B) Push-out: NVR → remote destination
-   [NVR + camera] ──relay RTMP/RTSP──▶ [Remote NVR ingest / live platform]
-
-C) Chained (NVR-to-NVR, the cross-network scenario):
-   [Camera] ──RTSP──▶ [NVR-A] ──push-out relay──▶ [NVR-B (push-in ingest)] ──▶ records + live
+```mermaid
+flowchart LR
+  subgraph TOPOA["A) Push-in: remote camera → NVR"]
+    RC["Remote Cam/ffmpeg"] -- "push RTMP/SRT" --> N1["NVR (public IP / port-forwarded)"]
+  end
+  subgraph TOPOB["B) Push-out: NVR → remote destination"]
+    N2["NVR + camera"] -- "relay RTMP/RTSP" --> R1["Remote NVR ingest / live platform"]
+  end
+  subgraph TOPOC["C) Chained (NVR-to-NVR, the cross-network scenario)"]
+    CAM["Camera"] -- "RTSP" --> NA["NVR-A"] -- "push-out relay" --> NB["NVR-B (push-in ingest)"] --> OUT["records + live"]
+  end
 ```
 
 ---
@@ -309,34 +304,15 @@ Live preview audio playback uses the Web Audio API for gapless, low-latency audi
 
 ### 7.9 Data Flow
 
-```text
-Camera (RTSP SDP / Xiaomi MISS)
-    │  Detect audio track (G.711 μ-law, A-law, AAC, Opus)
-    │  Set g711MULaw flag, g711SampleRate, audioMuxerConfig
-    ▼
-Recorder (audio_enabled flag)
-    │  BroadcastAudio(pts, codec, sampleRate, raw_bytes) via StreamHub
-    ▼
-StreamHub
-    │  Fan-out to all consumers (recording muxer, live wsstream, merge)
-    ▼
-┌─────────────────┴─────────────────┐
-│                                     │
-▼                                     ▼
-MP4 Muxer (recording)          WebSocket Manager (live preview)
-│  WriteAudioSample()                 │  Send AudioCodecInfo (0x05)
-│  Raw bytes → MP4 track             │  Send AudioFrame (0x03)
-│  ulaw/alaw/mp4a/Opus box            │  Binary WebSocket frames
-│                                     │
-▼                                     ▼
-Segment Merge                    Browser
-│  Detect audio boxes                   │  Parse AudioCodecInfo (0x05)
-│  Preserve audio in merged MP4        │  Parse AudioFrame (0x03)
-│                                     │  G.711 decoder (ITU-T standard 256-entry lookup tables)
-▼                                     │  AudioContext at stream sample rate (8kHz)
-Recording Playback (HLS/MP4)           │  Web Audio API gapless playback
-│  Browser native MP4 audio decoder    │
-│  Clean, well-tested audio            │
+```mermaid
+flowchart TB
+  CAM["Camera (RTSP SDP / Xiaomi MISS)<br/>Detect audio track (G.711 μ-law, A-law, AAC, Opus)<br/>Set g711MULaw flag, g711SampleRate, audioMuxerConfig"] --> REC["Recorder (audio_enabled flag)"]
+  REC -- "BroadcastAudio(pts, codec, sampleRate, raw_bytes) via StreamHub" --> HUB["StreamHub<br/>Fan-out to all consumers (recording muxer, live wsstream, merge)"]
+  HUB --> MUX["MP4 Muxer (recording)<br/>WriteAudioSample()<br/>Raw bytes → MP4 track<br/>ulaw/alaw/mp4a/Opus box"]
+  HUB --> WSM["WebSocket Manager (live preview)<br/>Send AudioCodecInfo (0x05)<br/>Send AudioFrame (0x03)<br/>Binary WebSocket frames"]
+  MUX --> MERGE["Segment Merge<br/>Detect audio boxes<br/>Preserve audio in merged MP4"]
+  MERGE --> RP["Recording Playback (HLS/MP4)<br/>Browser native MP4 audio decoder<br/>Clean, well-tested audio"]
+  WSM --> BR["Browser<br/>Parse AudioCodecInfo (0x05)<br/>Parse AudioFrame (0x03)<br/>G.711 decoder (ITU-T standard 256-entry lookup tables)<br/>AudioContext at stream sample rate (8kHz)<br/>Web Audio API gapless playback"]
 ```
 
 ### 7.10 Key Design Points
@@ -352,4 +328,3 @@ Recording Playback (HLS/MP4)           │  Web Audio API gapless playback
 - **AAC/Opus live preview decode (supported as of #131)**: All three codecs are now decoded for live preview. AAC via WebCodecs `AudioDecoder` (requires HTTPS or localhost; on plain-HTTP LAN it degrades with a hint); Opus via WebCodecs `OpusDecoder`; G.711 via lookup tables (unaffected). AAC audio in recordings is unaffected. See `web/src/lib/decoders/`. (Previously only G.711 was decoded live; AAC/Opus were recordings-only.)
 
 - **Dual-path preservation**: The same raw codec bytes flow to both recording and live paths. Any change to the encoding side (e.g., sample rate, codec selection) affects both paths equally. The decoder is the only variable between recording and live quality.
-

@@ -12,19 +12,17 @@ MiBee NVR 的所有元数据存储在一个启用了 **WAL (Write-Ahead Log，�
 
 ### 组件分层
 
-```text
-┌─────────────────────────────────────────┐
-│  API 请求处理层                           │
-├─────────────────────────────────────────┤
-│  存储层 (internal/storage/)              │
-│  ┌─────────────┐  ┌──────────────────┐   │
-│  │ DB 结构体    │  │ Manager 结构体    │   │
-│  │ (SQLite CRUD)│  │ (文件操作)        │   │
-│  └─────────────┘  └──────────────────┘   │
-├─────────────────────────────────────────┤
-│  modernc.org/sqlite (纯 Go)              │
-│  WAL 模式, mmap_size=256MB              │
-└─────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  API["API 请求处理层"]
+  subgraph STORE["存储层（internal/storage/）"]
+    DB["DB 结构体<br/>SQLite CRUD"]
+    MGR["Manager 结构体<br/>文件操作"]
+  end
+  DRV["modernc.org/sqlite（纯 Go）<br/>WAL 模式, mmap_size=256MB"]
+  API --> STORE
+  DB --> DRV
+  MGR --> DRV
 ```
 
 ### DSN 配置
@@ -299,27 +297,23 @@ PRAGMA incremental_vacuum(256);  -- 每周期约 2MB
 
 ### 流程图
 
-```text
-各录制器创建段文件（状态 = 'pending'）
-    │
-    ▼
-MergeManager.RunOnce()（定时器：可配置，默认 1 小时）
-    │
-    ├─ ListCameraMergeWindows() → 包含 2+ 段的每小时窗口
-    ├─ processCamera() 逐个摄像头处理
-    │   ├─ acquireMergeLock()（每个摄像头互斥锁，非阻塞）
-    │   ├─ ListMergeableSegments()
-    │   ├─ groupByFormat() → 分离 H.264、H.265、MJPEG、AVI
-    │   ├─ mergeFormatGroup()
-    │   │   ├─ ParseSegment()（MP4 样本表提取）
-    │   │   ├─ SHA-256 SPS/PPS 分组
-    │   │   ├─ 磁盘空间检查（1.1 倍估算值）
-    │   │   ├─ MergeMP4Segments()（流式合并，1MB 缓冲区）
-    │   │   ├─ MergeAndReplaceRecordings()（事务性）
-    │   │   └─ 删除源文件（事务提交后）
-    │   └─ ListSingletonPendingRecordings() → 标记为 'merged'
-    │
-    └─ 更新指标
+```mermaid
+flowchart TB
+  P["各录制器创建段文件（状态 = 'pending'）"] --> RUN["MergeManager.RunOnce()（定时器：可配置，默认 1 小时）"]
+  RUN --> W["ListCameraMergeWindows() → 包含 2+ 段的每小时窗口"]
+  RUN --> PC["processCamera() 逐个摄像头处理"]
+  RUN --> MET["更新指标"]
+  PC --> LK["acquireMergeLock()（每个摄像头互斥锁，非阻塞）"]
+  LK --> LM["ListMergeableSegments()"]
+  LM --> GF["groupByFormat() → 分离 H.264、H.265、MJPEG、AVI"]
+  GF --> FG["mergeFormatGroup()"]
+  FG --> S1["ParseSegment()（MP4 样本表提取）"]
+  S1 --> S2["SHA-256 SPS/PPS 分组"]
+  S2 --> S3["磁盘空间检查（1.1 倍估算值）"]
+  S3 --> S4["MergeMP4Segments()（流式合并，1MB 缓冲区）"]
+  S4 --> S5["MergeAndReplaceRecordings()（事务性）"]
+  S5 --> S6["删除源文件（事务提交后）"]
+  PC --> SG["ListSingletonPendingRecordings() → 标记为 'merged'"]
 ```
 
 ### 段生命周期状态
@@ -360,9 +354,10 @@ d.db.SetConnMaxLifetime(0) // 本地 SQLite，无过期连接
 
 ### WAL 读取并发
 
-```text
-写入者 (WAL)：INSERT/UPDATE/DELETE → 追加到 WAL 文件
-读取者 1/2：  SELECT               → 从主 DB + WAL 索引读取，并发
+```mermaid
+flowchart LR
+  W["写入者（WAL）<br/>INSERT/UPDATE/DELETE"] --> WA["追加到 WAL 文件"]
+  R["读取者 1/2<br/>SELECT"] --> RD["从主 DB + WAL 索引读取（并发）"]
 ```
 
 ### temp_store = MEMORY
@@ -426,20 +421,13 @@ d.db.SetConnMaxLifetime(0) // 本地 SQLite，无过期连接
 
 ### 决策树
 
-```text
-当前数据库大小？
-│
-├─ < 100MB → 无需操作。当前配置已足够。
-│
-├─ 100MB – 500MB → 每周 ANALYZE，启动时 PRAGMA optimize
-│   └─ 确保存在 idx_recordings_archived_time（v19+）
-│
-├─ 500MB – 10GB → 按时间分区（按月分表）
-│   └─ [Pending T8] recordings_2026_01, recordings_2026_02 等
-│       UNION ALL 视图实现透明查询
-│
-└─ > 10GB → 迁移到 PostgreSQL（外部进程）
-    └─ [Pending T12] 步骤：pgx/v5 驱动, pg_cron, 流式复制
+```mermaid
+flowchart TD
+  Q["当前数据库大小？"]
+  Q -- "&lt; 100MB" --> A["无需操作。当前配置已足够。"]
+  Q -- "100MB – 500MB" --> B["每周 ANALYZE，启动时 PRAGMA optimize<br/>确保存在 idx_recordings_archived_time（v19+）"]
+  Q -- "500MB – 10GB" --> C["按时间分区（按月分表）<br/>[Pending T8] recordings_2026_01, recordings_2026_02 等<br/>UNION ALL 视图实现透明查询"]
+  Q -- "&gt; 10GB" --> D["迁移到 PostgreSQL（外部进程）<br/>[Pending T12] 步骤：pgx/v5 驱动, pg_cron, 流式复制"]
 ```
 
 ### 何时分区（50 万行以上）
@@ -467,12 +455,12 @@ CREATE TABLE recordings_2026_01 (
 
 ### 长期策略
 
-```text
-阶段 1 (当前)：SQLite 单文件，WAL 模式，优化索引
-阶段 2 (T8)：  基于时间的分区表或独立 DB 文件
-阶段 3 (T12)： 迁移到 PostgreSQL + pgx 驱动
-阶段 4 (未来)： ClickHouse 用于分析查询（GetRecordingTrends、长期统计）
-```
+| 阶段 | 内容 |
+|------|------|
+| 阶段 1（当前） | SQLite 单文件，WAL 模式，优化索引 |
+| 阶段 2（T8） | 基于时间的分区表或独立 DB 文件 |
+| 阶段 3（T12） | 迁移到 PostgreSQL + pgx 驱动 |
+| 阶段 4（未来） | ClickHouse 用于分析查询（GetRecordingTrends、长期统计） |
 
 ---
 
