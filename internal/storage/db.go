@@ -527,7 +527,17 @@ func (d *DB) Init(ctx context.Context) error {
         evicted_at TEXT DEFAULT ''
     );`
 
-	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL, camGroupsSQL, offloadOutboxSQL, mergeLineageSQL} {
+	thermalReadingsSQL := `CREATE TABLE IF NOT EXISTS thermal_readings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        camera_id TEXT NOT NULL,
+        minute TEXT NOT NULL,
+        max_c REAL,
+        min_c REAL,
+        spots TEXT NOT NULL DEFAULT '',
+        UNIQUE(camera_id, minute)
+    );`
+
+	for _, sql := range []string{camSQL, recSQL, metaSQL, featSQL, healthSQL, transcodeSQL, aiEventsSQL, timelapseMergesSQL, archiveCleanupTasksSQL, gbDevSQL, gbChSQL, gbFpSQL, cascadeChSQL, ptzPresetsSQL, camGroupsSQL, offloadOutboxSQL, mergeLineageSQL, thermalReadingsSQL} {
 		if _, err := d.db.ExecContext(ctx, sql); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}

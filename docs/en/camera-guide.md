@@ -631,6 +631,62 @@ cameras:
 - Requires specific firmware modifications
 - Performance can be poor with custom firmware
 
+## Thermal / Dual-Spectrum Cameras
+
+A dual-spectrum device (visible light + thermal) is just **two ordinary video streams** to the NVR — recording, live view and playback need no special handling. On top of that the NVR offers temperature features: live temperature chip, spot probing, over-threshold highlighting, dual-pane view, and a playback temperature curve.
+
+### Bringing up the thermal channel
+
+Pick whichever way the device exposes it:
+
+1. **Direct RTSP** (most commercial dual-spectrum cameras): vendors usually expose the thermal channel on a second RTSP path (e.g. Hikvision `/Streaming/Channels/201`) — add it as a regular RTSP camera.
+2. **ONVIF with a hand-picked profile**: ONVIF profile enumeration sometimes omits the thermal channel or gives it an indistinguishable name — select the second media profile's token manually in the camera edit form.
+3. **GB28181**: when the device marks the thermal channel in its catalog with `PhotoelectricImagingType=2`, the NVR auto-enrolls it and labels it as the thermal channel (see the [GB28181 guide](gb28181-guide.md)).
+
+### Labeling and temperature configuration
+
+```yaml
+cameras:
+  - id: "gb-thermal"
+    protocol: "gb28181"
+    imaging_type: thermal        # Leave empty or "visible" for optics. thermal
+                                 # enables the default policies: AI analysis
+                                 # push is skipped (detection models are
+                                 # visible-light trained) and continuous
+                                 # recording is recommended (the calibration
+                                 # shutter flash retriggers motion gates).
+    health_overrides:
+      min_fps: 1                 # Required for low-framerate thermal (2–8fps),
+                                 # otherwise the health check flags low fps.
+    thermal_readout:             # Temperature source (device-side HTTP readout,
+                                 # optional)
+      url: "http://192.168.1.50:8088/api/thermal/current"
+      auth_header: "Authorization"
+      auth_value: "Bearer <token>"
+    spectrum_group: "front-gate" # When the two channels register separately
+                                 # (distinct device IDs), give both cameras the
+                                 # same group key to pair them in the UI.
+```
+
+- Without **thermal_readout** the video pipeline works as usual; only the temperature chip / spot probing / temperature curve stay dark.
+- **spectrum_group**: unnecessary when the device registers as one device with two channels (shared device ID) — the NVR pairs them automatically. Group keys are 1–64 chars of `[A-Za-z0-9._-]`.
+
+### UI features
+
+| Feature | Where |
+| --- | --- |
+| Live temperature chip (max/min) | Thermal-channel live view, mounted automatically |
+| Spot probe (click to measure a point) | Thermal-channel live view |
+| Over-threshold highlighting | "Highlight ≥°C" input on the live view |
+| Dual pane (visible + thermal side by side, probe mirroring) | "Dual pane" toggle on the live view |
+| Playback temperature curve (minute-level max/min, 90-day retention) | Recording detail page of thermal channels |
+
+### Storage and framerate
+
+- A thermal stream is typically 1–2 Mbps (~11–22 GB/day); mostly-static scenes are far below that.
+- Temperature history is aggregated per minute into a separate store (90-day default) and does not count against recording retention.
+- For 2–8fps low-framerate thermal, always set `health_overrides.min_fps: 1`.
+
 ## General Configuration Tips
 
 ### RTSP URL Testing
