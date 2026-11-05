@@ -155,3 +155,29 @@ func TestReadoutPollerLiveDeviceShape(t *testing.T) {
 		}
 	}, 300*time.Millisecond, 50*time.Millisecond, "untrusted frames must not publish")
 }
+
+// TestReadoutPollerEnvelopeShape pins the Pi-era payload (observed
+// 2026-11-05, thermal module moved to the Raspberry Pi rig): the family
+// envelope {"ok":true,"data":{…}} wraps the §3.7 shape, spots included.
+// The bare OPi-bring-up shape must keep parsing too (both rigs may serve).
+func TestReadoutPollerEnvelopeShape(t *testing.T) {
+	t.Parallel()
+	pis := []byte(`{"ok":true,"data":{"timestamp_ms":1793843495882,"frame_number":551,"trusted":true,"ta":35.43,"vdd":2.848,
+	 "sensor_fps":3.45,"max":{"value_c":45.9,"x":30,"y":23},"min":{"value_c":37.1,"x":17,"y":17},
+	 "spots":[{"name":"炉体","x":30,"y":23,"value_c":45.9}]}}`)
+	r, ok := parseReadout("cam-pi", pis)
+	require.True(t, ok, "envelope-wrapped payload must parse")
+	require.InDelta(t, 45.9, *r.MaxC, 0.001)
+	require.InDelta(t, 37.1, *r.MinC, 0.001)
+	require.Len(t, r.Spots, 1)
+	require.InDelta(t, 45.9, r.Spots[0].TempC, 0.001)
+
+	bare := []byte(`{"trusted":true,"max":{"value_c":41.0,"x":4,"y":23},"min":{"value_c":28.6,"x":23,"y":15}}`)
+	r2, ok2 := parseReadout("cam-opi", bare)
+	require.True(t, ok2, "bare pre-envelope shape must keep parsing")
+	require.InDelta(t, 41.0, *r2.MaxC, 0.001)
+
+	// ok:false envelope = device-side error, no reading.
+	_, ok3 := parseReadout("cam-x", []byte(`{"ok":false,"data":{"max":{"value_c":1}}}`))
+	require.False(t, ok3)
+}
