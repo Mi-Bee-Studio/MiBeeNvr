@@ -77,6 +77,13 @@ func registerCoreServices(a *App, deps *appDeps) error {
 		return err
 	}
 
+	// 0c. thermal history recorder — subscribes to the same topic and
+	// persists minute-aggregated extremes for the P4 playback curve (#38
+	// Tier 2). No-op without a db/bus.
+	if err := a.Register(newThermalHistoryService(deps.db, deps.eventBus)); err != nil {
+		return err
+	}
+
 	// 1. db — registered first so it stops last. Start also launches the
 	// idle-window WAL checkpoint loop (#752); it owns a cancel derived from
 	// the start ctx because App.Stop does not cancel it — the service's Stop

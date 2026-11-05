@@ -3,9 +3,11 @@ package api
 import (
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -58,6 +60,102 @@ func (h *Handler) handleThermalFrame(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
+}
+
+// GET /api/cameras/{id}/thermal/history?from=&to=&points= — the P4 playback
+// temperature curve (#38 Tier 2): minute-aggregated scene extremes stored by
+// the thermal-history service, decimated to at most `points` buckets for
+// charting. Thermal cameras only (same config gate as the frame proxy).
+func (h *Handler) handleThermalHistory(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	ctx := r.Context()
+
+	if !thermalCameraIs(h.config, id) {
+		WriteError(w, http.StatusNotFound, "not a thermal camera")
+		return
+	}
+
+	to := time.Now().UTC()
+	from := to.Add(-24 * time.Hour)
+	if v := r.URL.Query().Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, "from must be RFC3339")
+			return
+		}
+		from = t.UTC()
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, "to must be RFC3339")
+			return
+		}
+		to = t.UTC()
+	}
+	if !from.Before(to) {
+		WriteError(w, http.StatusBadRequest, "from must be before to")
+		return
+	}
+	points := 720
+	if v := r.URL.Query().Get("points"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 2000 {
+			WriteError(w, http.StatusBadRequest, "points must be 1..2000")
+			return
+		}
+		points = n
+	}
+
+	rows, err := h.db.QueryThermalReadings(ctx, id, from, to)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to query thermal history")
+		return
+	}
+	pts := decimateThermalPoints(rows, points)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"camera_id": id,
+		"from":      from.Format(time.RFC3339),
+		"to":        to.Format(time.RFC3339),
+		"points":    pts,
+	})
+}
+
+// decimateThermalPoints folds the minute rows into at most n chart buckets,
+// keeping the extremes within each bucket (a hot spike spanning <1px of chart
+// width must survive). Empty input decimates to empty.
+func decimateThermalPoints(rows []storage.ThermalPoint, n int) []storage.ThermalPoint {
+	if len(rows) == 0 || n <= 0 {
+		return []storage.ThermalPoint{}
+	}
+	if len(rows) <= n {
+		return rows
+	}
+	out := make([]storage.ThermalPoint, 0, n)
+	step := float64(len(rows)) / float64(n)
+	for i := 0; i < n; i++ {
+		lo := int(float64(i) * step)
+		hi := int(float64(i+1) * step)
+		if i == n-1 || hi > len(rows) {
+			hi = len(rows)
+		}
+		if lo >= hi {
+			lo = hi - 1
+		}
+		b := storage.ThermalPoint{Minute: rows[lo].Minute}
+		for _, p := range rows[lo:hi] {
+			if p.MaxC != nil && (b.MaxC == nil || *p.MaxC > *b.MaxC) {
+				v := *p.MaxC
+				b.MaxC = &v
+			}
+			if p.MinC != nil && (b.MinC == nil || *p.MinC < *b.MinC) {
+				v := *p.MinC
+				b.MinC = &v
+			}
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 // thermalReadoutOf finds the configured readout source for a camera ID
