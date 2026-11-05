@@ -105,6 +105,7 @@ type spotPayload struct {
 	Name  string    `json:"name"`
 	X     float64   `json:"x"`
 	Y     float64   `json:"y"`
+	Value flexValue `json:"value_c"` // §3.7 spots spelling
 	Temp  flexValue `json:"temp_c"`
 	Temp2 flexValue `json:"temperature"`
 }
@@ -139,6 +140,12 @@ func (f *flexValue) UnmarshalJSON(b []byte) error {
 }
 
 func parseReadout(cameraID string, body []byte) (Reading, bool) {
+	// The Pi-era device wraps the payload in the family envelope
+	// {"ok":true,"data":{…}}; the OPi bring-up rig served the bare shape.
+	// Unwrap when the envelope is present and ok, otherwise parse as-is.
+	if inner, ok := unwrapEnvelope(body); ok {
+		body = inner
+	}
 	var p readoutPayload
 	if err := json.Unmarshal(body, &p); err != nil {
 		return Reading{}, false
@@ -153,11 +160,27 @@ func parseReadout(cameraID string, body []byte) (Reading, bool) {
 		return Reading{}, false
 	}
 	for _, s := range p.Spots {
-		if v := firstSet(s.Temp.Value, s.Temp2.Value); v != nil {
+		if v := firstSet(s.Value.Value, s.Temp.Value, s.Temp2.Value); v != nil {
 			r.Spots = append(r.Spots, SpotReading{Name: s.Name, X: s.X, Y: s.Y, TempC: *v})
 		}
 	}
 	return r, true
+}
+
+// unwrapEnvelope reports whether body carries {"ok":…,"data":{…}} and, when
+// ok is not false, returns the inner data blob for shape parsing.
+func unwrapEnvelope(body []byte) ([]byte, bool) {
+	var env struct {
+		OK   *bool           `json:"ok"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil || len(env.Data) == 0 {
+		return nil, false
+	}
+	if env.OK != nil && !*env.OK {
+		return nil, false
+	}
+	return env.Data, true
 }
 
 func firstSet(vs ...*float64) *float64 {
