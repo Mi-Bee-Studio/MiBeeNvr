@@ -109,7 +109,7 @@ func TestThermalHistoryEndpoint(t *testing.T) {
 
 	base := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
 	f := func(v float64) *float64 { return &v }
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		require.NoError(t, h.db.InsertThermalMinute(ctx, "gb-hot", base.Add(time.Duration(i)*time.Minute), f(float64(30+i)), f(float64(20+i)), ""))
 	}
 

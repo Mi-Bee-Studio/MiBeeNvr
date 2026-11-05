@@ -133,7 +133,7 @@ func decimateThermalPoints(rows []storage.ThermalPoint, n int) []storage.Thermal
 	}
 	out := make([]storage.ThermalPoint, 0, n)
 	step := float64(len(rows)) / float64(n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		lo := int(float64(i) * step)
 		hi := int(float64(i+1) * step)
 		if i == n-1 || hi > len(rows) {

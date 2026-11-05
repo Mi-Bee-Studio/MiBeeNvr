@@ -21,8 +21,8 @@ func TestThermalHistoryRoundtrip(t *testing.T) {
 	require.NoError(t, db.Init(ctx))
 	t.Cleanup(func() { _ = db.Close() })
 
-	m := func(h, min int) time.Time {
-		return time.Date(2026, 11, 6, h, min, 0, 0, time.UTC)
+	m := func(h, minute int) time.Time {
+		return time.Date(2026, 11, 6, h, minute, 0, 0, time.UTC)
 	}
 	f := func(v float64) *float64 { return &v }
 
