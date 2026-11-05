@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appendAuthToken, API_BASE } from '$lib/api';
   import { t } from '$lib/i18n';
+  import { gridCellAt, cellCenter, gridValues, cellsOverThreshold } from '$lib/spectrum';
 
   // Live temperature overlay for a thermal camera's live view. Subscribes
   // to the per-camera SSE feed and renders the latest thermal.temperature
@@ -60,6 +61,62 @@
     if (v >= 40) return 'text-amber-400';
     return 'text-sky-300';
   }
+
+  // ---- Spot temperature & threshold highlight (#1106 data path) ----
+  // Click anywhere on the player to probe that point; the 32x24 grid comes
+  // from the NVR proxy (device credentials never reach the browser).
+  let probe = $state<{ nx: number; ny: number; c: number } | null>(null);
+  let threshold = $state<number | null>(null);
+  let hotCells = $state<Array<{ nx: number; ny: number; v: number }>>([]);
+  let frameCache: { at: number; values: number[] | null } = { at: 0, values: null };
+  let probeLayer: HTMLElement | null = $state(null);
+
+  async function fetchGrid(): Promise<number[] | null> {
+    if (Date.now() - frameCache.at < 1500) return frameCache.values;
+    try {
+      const res = await fetch(appendAuthToken(`${API_BASE}/cameras/${encodeURIComponent(cameraId)}/thermal/frame`));
+      if (!res.ok) return null;
+      frameCache = { at: Date.now(), values: gridValues(await res.json()) };
+      return frameCache.values;
+    } catch {
+      return null;
+    }
+  }
+
+  async function onProbeClick(e: MouseEvent) {
+    const host = probeLayer?.parentElement;
+    if (!host) return;
+    const r = host.getBoundingClientRect();
+    const nx = (e.clientX - r.left) / r.width;
+    const ny = (e.clientY - r.top) / r.height;
+    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+    const values = await fetchGrid();
+    if (!values) {
+      probe = { nx, ny, c: NaN };
+      return;
+    }
+    const { x, y } = gridCellAt(nx, ny);
+    probe = { nx, ny, c: values[y * 32 + x] };
+  }
+
+  $effect(() => {
+    if (threshold === null) {
+      hotCells = [];
+      return;
+    }
+    let alive = true;
+    const run = async () => {
+      const values = await fetchGrid();
+      if (!alive || !values) return;
+      hotCells = cellsOverThreshold(values, threshold).map((c0) => ({ ...cellCenter(c0.x, c0.y), v: c0.v }));
+    };
+    run();
+    const iv = setInterval(run, 3000);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
+  });
 </script>
 
 <div
@@ -86,5 +143,44 @@
     {#if stale}
       <div class="text-[10px] text-white/50">{t('thermal.stale')}</div>
     {/if}
+  {/if}
+  <label class="flex items-center gap-1 mt-0.5 pointer-events-auto cursor-pointer">
+    <span class="text-[10px] text-white/60">{t('thermal.threshold')}</span>
+    <input
+      type="number"
+      class="w-12 bg-black/40 border border-white/15 rounded px-1 text-[10px] text-white/90"
+      value={threshold ?? ''}
+      placeholder="--"
+      oninput={(e) => {
+        const v = parseFloat((e.target as HTMLInputElement).value);
+        threshold = Number.isFinite(v) ? v : null;
+      }}
+      data-testid="thermal-threshold"
+    />
+  </label>
+</div>
+
+<!-- Click-to-probe layer + over-threshold markers, spanning the player. -->
+<div
+  bind:this={probeLayer}
+  class="absolute inset-0 z-10 cursor-crosshair"
+  onclick={onProbeClick}
+  data-testid="thermal-probe-layer"
+>
+  {#each hotCells as hc (hc.nx.toFixed(3) + hc.ny.toFixed(3))}
+    <span
+      class="absolute w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500/85 ring-1 ring-white/70"
+      style="left:{hc.nx * 100}%;top:{hc.ny * 100}%"
+      title="{hc.v.toFixed(1)}°C"
+    ></span>
+  {/each}
+  {#if probe}
+    <span
+      class="absolute -translate-x-1/2 -translate-y-[150%] px-1 py-0.5 rounded bg-black/70 text-[10px] font-mono text-white border border-white/20"
+      style="left:{probe.nx * 100}%;top:{probe.ny * 100}%"
+      data-testid="thermal-probe-value"
+    >
+      {Number.isNaN(probe.c) ? '--' : probe.c.toFixed(1)}°C
+    </span>
   {/if}
 </div>

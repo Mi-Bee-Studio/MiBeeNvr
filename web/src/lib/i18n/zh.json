@@ -2293,6 +2293,8 @@
   "cameras.imagingType": "成像通道",
   "cameras.imagingVisible": "可见光",
   "cameras.imagingThermal": "热成像",
+    "thermal.threshold": "高亮≥°C",
+  "thermal.probeHint": "点击画面测该点温度",
   "cameras.thermalBadge": "热成像",
   "cameras.thermalHint": "热成像通道：默认不推送 AI 分析；挡片校准会周期性冻结整幅画面，NVR 运动门不可靠，建议连续录制。",
   "cameras.thermalAdaptiveWarn": "热成像挡片校准会周期性冻结整幅画面，自适应模式每个周期都会误判为运动——建议改用连续录制。",
