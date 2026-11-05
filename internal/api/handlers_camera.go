@@ -794,6 +794,8 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Get("/stream.flv", h.handleFLVStream)
 			r.Get("/stream.mjpeg", h.handleMjpegStream)
 			r.Get("/latest-frame", h.handleLatestFrame)
+			// Dual-spectrum spot-temperature grid (proxied device readout)
+			r.Get("/thermal/frame", h.handleThermalFrame)
 			// Per-camera protocols
 			r.Get("/protocols", h.handleCameraProtocols)
 			// Flow-path snapshot (#469)
