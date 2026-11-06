@@ -1050,7 +1050,9 @@ func (m *Manager) Status() StatusSnapshot {
 
 // gateAllowed 报告授权门控是否放行（无门控恒放行）。状态变化时记一条
 // 日志（含恢复），稳态不刷屏。授权强制时文档必须授予 "p2p" 能力
-// （features 空 = 全能，兼容存量文档）。
+// （features 空 = 全能，兼容存量文档）。拦截/恢复的变化沿也进诊断事件流
+// （recent_events/连接记录）——单行 WARN 在日志海里不可见，一个授权失效
+// 拦拨了一周而无任何面板信号是实发事故（#49）。
 func (m *Manager) gateAllowed() bool {
 	if m.gate == nil {
 		return true
@@ -1067,11 +1069,19 @@ func (m *Manager) gateAllowed() bool {
 		state = "blocked:" + state
 	}
 	if state != m.lastGateState {
+		prev := m.lastGateState
 		m.lastGateState = state
 		if allowed {
 			m.logger.Info("p2p license gate allowing traffic", "license_state", m.gate.State())
 		} else {
 			m.logger.Warn("p2p license gate blocking; not dialing", "license_state", m.gate.State())
+		}
+		// 首评放行=正常开机基线，不发；首评拦截要发（进程带着失效授权
+		// 起来正是不可见事故的形态）；此后的放行沿=恢复事件，也发。
+		if !allowed {
+			m.addEvent("license_blocked", "", state)
+		} else if strings.HasPrefix(prev, "blocked") {
+			m.addEvent("license_ok", "", state)
 		}
 	}
 	return allowed
