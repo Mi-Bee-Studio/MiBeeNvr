@@ -507,14 +507,23 @@ func (c *CS2Conn) WriteCommand(cmd uint32, data []byte) error {
 
 // ReadPacket reads a media packet from channel 2.
 func (c *CS2Conn) ReadPacket() (hdr, payload []byte, err error) {
-	data, ok := c.channels[2].Pop(cs2ReadTimeout)
-	if !ok {
-		if c.getErr() != nil {
-			return nil, nil, c.getErr()
+	for {
+		data, ok := c.channels[2].Pop(cs2ReadTimeout)
+		if !ok {
+			if c.getErr() != nil {
+				return nil, nil, c.getErr()
+			}
+			return nil, nil, fmt.Errorf("cs2: no media data for %v", cs2ReadTimeout)
 		}
-		return nil, nil, fmt.Errorf("cs2: no media data for %v", cs2ReadTimeout)
+		// Short-frame guard: some firmwares occasionally emit a channel-2
+		// frame smaller than the fixed 32-byte header — slicing
+		// unconditionally panics there. Drop the frame and keep reading.
+		if len(data) < cs2HdrSize {
+			cs2Logger.Warn("cs2: dropped short media frame", "len", len(data), "want", cs2HdrSize)
+			continue
+		}
+		return data[:cs2HdrSize], data[cs2HdrSize:], nil
 	}
-	return data[:cs2HdrSize], data[cs2HdrSize:], nil
 }
 
 // WritePacket writes a media packet on channel 3.
