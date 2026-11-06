@@ -71,13 +71,13 @@ func (c *Client) dialCtrlLink() {
 		_ = resp.Body.Close() // success path body is a no-op; error path must close
 	}
 	if err != nil {
-		logger.Warn("relay ctrl link dial failed — staying single-connection", "error", err)
+		logger.Warn("relay ctrl link dial failed — staying single-connection", errKey, err)
 		return
 	}
 
 	link := &ctrlLink{conn: conn}
-	if err := c.ctrlHandshake(link, writeTimeout); err != nil {
-		logger.Warn("relay ctrl link auth failed — staying single-connection", "error", err)
+	if hsErr := c.ctrlHandshake(link, writeTimeout); hsErr != nil {
+		logger.Warn("relay ctrl link auth failed — staying single-connection", errKey, hsErr)
 		link.close()
 		return
 	}
@@ -125,8 +125,8 @@ func (c *Client) ctrlHandshake(link *ctrlLink, writeTimeout time.Duration) error
 	}
 	const proofLen = 24 + 48
 	if len(respPayload) >= 2+proofLen {
-		if err := c.verifyServerAuthProof(respPayload[2:], nonce); err != nil {
-			return err
+		if proofErr := c.verifyServerAuthProof(respPayload[2:], nonce); proofErr != nil {
+			return proofErr
 		}
 	}
 	return nil
@@ -176,6 +176,22 @@ func (c *Client) ctrlReadLoop(link *ctrlLink) {
 			}
 		case FramePing:
 			_ = link.writeFrame(encodeFrame(FramePong, nil), writeTimeout)
+		case FramePeerGone:
+			// #117: the server's asymmetric-leg self-notification may land
+			// on this leg (the data leg died; ctrl survives). Same dispatch
+			// as the main conn — onPeerGone decides (peer == own key → the
+			// session layer rebuilds the relay client).
+			if len(payload) < KeyLen+1 {
+				continue
+			}
+			var peer [32]byte
+			copy(peer[:], payload[:KeyLen])
+			c.mu.Lock()
+			h := c.onPeerGone
+			c.mu.Unlock()
+			if h != nil {
+				h(peer, payload[KeyLen])
+			}
 		case FrameKeepAlive, FramePong:
 			// liveness only
 		default:
@@ -214,7 +230,7 @@ func (c *Client) ctrlPingLoop(link *ctrlLink, interval, pongTimeout, writeTimeou
 func (c *Client) degradeCtrl(link *ctrlLink, cause error) {
 	if !link.dead.Swap(true) {
 		c.logger().Warn("relay ctrl link degraded — priority falls back to shared lane (#88②)",
-			"error", cause)
+			errorKey, cause)
 	}
 	if cur := c.ctrl.Load(); cur == link {
 		c.ctrl.CompareAndSwap(link, nil)

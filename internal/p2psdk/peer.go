@@ -7,6 +7,8 @@ package peer
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -73,7 +75,7 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 	s := &Session{
 		cfg:     cfg,
 		signal:  sc,
-		logger:  logger.With("component", "p2p_session"),
+		logger:  logger.With(componentKey, "p2p_session"),
 		peers:   make(map[string]*p2pSession),
 		welcome: welcome,
 		closeCh: make(chan struct{}),
@@ -91,6 +93,7 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 		case err == nil:
 			s.relayClient = rc
 			rc.OnFatal(s.handleRelayFatal)
+			rc.OnPeerGone(s.handleRelayPeerGone)
 		default:
 			// failure already logged + reported inside connectSessionRelay
 		}
@@ -98,7 +101,7 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 
 	sc.onMessage = s.handleMessage
 	sc.onClose = func(err error) {
-		s.logger.Warn("signaling connection lost", "error", err)
+		s.logger.WarnContext(ctx, "signaling connection lost", errorKey, err)
 		if cfg.OnDisconnect != nil {
 			cfg.OnDisconnect(err)
 		}
@@ -114,10 +117,10 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 	go s.cleanupLoop()
 	go s.idleSweepLoop()
 
-	s.logger.Info(
+	s.logger.InfoContext(ctx,
 		"session created",
-		"session_id", welcome.SessionID,
-		"peer_id", welcome.PeerID,
+		sessionIDKey, welcome.SessionID,
+		peerIDKey, welcome.PeerID,
 	)
 	// NAT 行为观测（#70/#14：只观测不改策略）——welcome 的 STUN 列表
 	// 在同一 socket 上复探比对映射，结果供诊断/后续选路决策消费。
@@ -129,15 +132,15 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 // the class is the fact base for path decisions (PreferRelay), the probe
 // itself never changes transport selection.
 type NatObservation struct {
-	Class NATClass `json:"class"`
+	At         time.Time `json:"at"`
+	Class      NATClass  `json:"class"`
+	LocalAddr  string    `json:"local_addr,omitempty"`
+	Responsive int       `json:"responsive"` // STUN servers that answered
 	// DualStack reports a global-unicast IPv6 address on any interface
 	// (#89): a v4-symmetric verdict does not rule out v6 direct paths, so
 	// relay pinning consumers may exempt dual-stack hosts.
-	DualStack     bool      `json:"dual_stack"`
-	StunReachable bool      `json:"stun_reachable"`
-	Responsive    int       `json:"responsive"` // STUN servers that answered
-	LocalAddr     string    `json:"local_addr,omitempty"`
-	At            time.Time `json:"at"`
+	DualStack     bool `json:"dual_stack"`
+	StunReachable bool `json:"stun_reachable"`
 }
 
 // NATObservation returns the latest NAT observation (nil before the first
@@ -192,11 +195,11 @@ func (s *Session) observeNAT(welcome *Welcome) {
 	}
 	s.natObs.Store(obs)
 	s.logger.Info("NAT observation",
-		"class", string(res.Class),
-		"dual_stack", res.DualStack,
-		"stun_responsive", obs.Responsive,
-		"local_addr", res.LocalAddr,
-		"prefer_relay", PreferRelay(res.Class),
+		classKey, string(res.Class),
+		dualStackKey, res.DualStack,
+		stunResponsiveKey, obs.Responsive,
+		localAddrKey, res.LocalAddr,
+		preferRelayKey, PreferRelay(res.Class),
 	)
 	if cb := s.OnNATObservation; cb != nil {
 		cb(*obs)
@@ -205,15 +208,17 @@ func (s *Session) observeNAT(welcome *Welcome) {
 
 // Session represents a P2P session connected to the signaling server.
 type Session struct {
-	cfg   SignalingConfig
-	cfgMu sync.RWMutex // guards cfg: SetForceRelay writes post-Dial while handlers read
-
-	signal *signalingClient
-	logger *slog.Logger
-
-	welcome     *Welcome
-	relayClient *relay.Client
-
+	OnStats func(StatsSnapshot) // called with GetStats snapshots (optional; assign before Connect)
+	// OnConnectRequest is an optional admission gate for inbound connection
+	// requests (device role). It runs before any WebRTC machinery starts;
+	// returning false makes the SDK answer the requester with connect_reject
+	// (code device_busy). When nil, every inbound request is accepted (the
+	// historical behavior). Read live at event time like the callbacks above.
+	OnConnectRequest func(req IncomingConnect) bool
+	signal           *signalingClient
+	logger           *slog.Logger
+	welcome          *Welcome
+	relayClient      *relay.Client
 	// Callbacks (set by the user; OnSession/OnDataChannel/OnReject are read
 	// live at event time, so they may be assigned any time before the event
 	// fires — including after Connect() returns via SetOnDataChannel)
@@ -221,40 +226,29 @@ type Session struct {
 	OnDataChannel func(dc DataChannel)              // called when a DataChannel opens
 	OnReject      func(code RejectCode, msg string) // called on connect rejection
 	OnError       func(code, msg string)            // called on a server-level error message
-	OnStats       func(StatsSnapshot)               // called with GetStats snapshots (optional; assign before Connect)
-
-	// OnConnectRequest is an optional admission gate for inbound connection
-	// requests (device role). It runs before any WebRTC machinery starts;
-	// returning false makes the SDK answer the requester with connect_reject
-	// (code device_busy). When nil, every inbound request is accepted (the
-	// historical behavior). Read live at event time like the callbacks above.
-	OnConnectRequest func(req IncomingConnect) bool
-
+	// natObs carries the latest NAT behavior probe (observeNAT).
+	natObs atomic.Pointer[NatObservation]
 	// OnSessionClose is called when a P2P session is torn down (remote
 	// session_close or local abandonment after repeated ICE restart failures).
 	OnSessionClose func(sessionID, reason string)
-
+	done           chan struct{}
 	// OnNATObservation reports the NAT behavior probe outcome (observational
 	// only, #70/#14). Fires once per Dial, shortly after connect, when the
 	// welcome STUN list allows a probe; never fires otherwise.
 	OnNATObservation func(NatObservation)
-
-	// P2P sessions by session ID
-	mu            sync.RWMutex
-	peers         map[string]*p2pSession
-	closeCh       chan struct{}
-	closeOnce     sync.Once
-	done          chan struct{}
-	lastSessionID string
-
-	// natObs carries the latest NAT behavior probe (observeNAT).
-	natObs atomic.Pointer[NatObservation]
+	closeCh          chan struct{}
+	peers            map[string]*p2pSession
+	lastSessionID    string
+	cfg              SignalingConfig
+	mu               sync.RWMutex
+	cfgMu            sync.RWMutex
+	closeOnce        sync.Once
 }
 
 // Connect initiates a connection to a target peer.
 // Returns after the connect_request is sent; session establishes
 // asynchronously. Use OnSession and OnDataChannel callbacks.
-func (s *Session) Connect(_ context.Context, targetPeerID string, serviceName ...string) error {
+func (s *Session) Connect(ctx context.Context, targetPeerID string, serviceName ...string) error {
 	sessionID := uuid.New().String()
 
 	p2p := &p2pSession{
@@ -298,10 +292,10 @@ func (s *Session) Connect(_ context.Context, targetPeerID string, serviceName ..
 		return fmt.Errorf("send connect_request: %w", err)
 	}
 
-	s.logger.Info(
+	s.logger.InfoContext(ctx,
 		"connect request sent",
-		"session_id", sessionID,
-		"target", targetPeerID,
+		sessionIDKey, sessionID,
+		targetKey, targetPeerID,
 	)
 	return nil
 }
@@ -311,10 +305,22 @@ func (s *Session) Close() error {
 	var errs []error
 	s.closeOnce.Do(func() {
 		close(s.closeCh)
+		// Delete-then-close, mirroring teardownWithReason: the sentinel in
+		// watchPCClosed identifies OUR OWN teardown by registry absence —
+		// closing PCs while the entries remain made every close re-fire an
+		// async teardown (signal sends from a mid-close session; the 2026-
+		// -10-20 full-suite hang).
 		s.mu.RLock()
+		snapshot := make([]*p2pSession, 0, len(s.peers))
 		for _, p2p := range s.peers {
-			if closeErr := p2p.close(); closeErr != nil {
-				errs = append(errs, closeErr)
+			snapshot = append(snapshot, p2p)
+		}
+		s.mu.RUnlock()
+		for _, p2p := range snapshot {
+			if cur := s.deleteP2P(p2p.sessionID); cur != nil {
+				if closeErr := cur.close(); closeErr != nil {
+					errs = append(errs, closeErr)
+				}
 			}
 		}
 		if s.relayClient != nil {
@@ -382,8 +388,8 @@ func (s *Session) sweepIdleSessions() {
 	s.mu.RUnlock()
 	for _, id := range stale {
 		if p := s.getP2P(id); p != nil {
-			p.log().Info("session idle, reclaiming", "session_id", id,
-				"idle_timeout", timeout.String())
+			p.log().Info("session idle, reclaiming", sessionIDKey, id,
+				idleTimeoutKey, timeout.String())
 			p.teardownWithReason("session_idle")
 		}
 	}
@@ -412,14 +418,15 @@ func (s *Session) getP2P(sessionID string) *p2pSession {
 // fresh, and the shared relay client itself is rebuilt so the NEXT adoption
 // isn't handed a dead socket (2026-10-08 production: relay black-holed mid-
 // test-day, both peers "on relay", zero data flowing, NVR restart was the
-// only recovery).
+// only recovery). A RestartingError cause (#106-B) routes the rebuild onto
+// the server-hinted fast retry instead of the 5s ladder.
 func (s *Session) handleRelayFatal(err error) {
 	select {
 	case <-s.closeCh:
 		return // Session.Close() owns teardown
 	default:
 	}
-	s.logger.Warn("relay connection fatal — rebuilding", "error", err)
+	s.logger.Warn("relay connection fatal — rebuilding", errKey, err)
 
 	// 1) Tear down sessions riding the dead transport: signaling
 	// session_close makes the peer redial immediately instead of timing out
@@ -437,7 +444,55 @@ func (s *Session) handleRelayFatal(err error) {
 	}
 
 	// 2) Rebuild the shared relay client in the background (bounded).
-	go s.rebuildRelayClient()
+	go s.rebuildRelayClient(err)
+}
+
+// handleRelayPeerGone reacts to the server's FramePeerGone (#106-B): a peer we
+// recently routed with left the relay. Sessions bound to that peer's relay
+// key are torn down with session_close (the peer's signaling may still be
+// alive — this also tells IT to redial), turning the old pong-timeout
+// recovery into a ~1s redial. Sessions on other transports are untouched.
+func (s *Session) handleRelayPeerGone(peer [32]byte, reason byte) {
+	select {
+	case <-s.closeCh:
+		return
+	default:
+	}
+	// #117 asymmetric leg loss: the server self-notifies a key's surviving
+	// leg when its sibling registration (data/ctrl) departs. Pong-based
+	// liveness can NEVER see this — the survivor keeps answering — so the
+	// only recovery is replacing the whole relay client (fresh key, fresh
+	// registration; new sessions announce the new key via SDP).
+	s.mu.RLock()
+	own := s.relayClient != nil && s.relayClient.PubKey() == peer
+	s.mu.RUnlock()
+	if own {
+		s.logger.Warn("relay self-notification — own sibling leg departed, rebuilding relay client",
+			peerKey, hex.EncodeToString(peer[:8]),
+			reasonKey, relay.PeerGoneReasonString(reason),
+		)
+		go s.rebuildRelayClient(fmt.Errorf("own sibling relay leg departed (reason 0x%02x)", reason))
+		return
+	}
+	s.mu.RLock()
+	victims := make([]*p2pSession, 0, len(s.peers))
+	for _, p2p := range s.peers {
+		if p2p.boundToRelayPeer(peer) {
+			victims = append(victims, p2p)
+		}
+	}
+	s.mu.RUnlock()
+	if len(victims) == 0 {
+		return
+	}
+	s.logger.Info("relay peer gone — tearing down sessions",
+		peerKey, hex.EncodeToString(peer[:8]),
+		reasonKey, relay.PeerGoneReasonString(reason),
+		countKey, len(victims),
+	)
+	for _, p2p := range victims {
+		p2p.teardownWithReason("relay_peer_gone")
+	}
 }
 
 // ErrRelayGated reports that the host's RelayDialGate skipped the relay
@@ -473,10 +528,17 @@ func connectSessionRelay(ctx context.Context, serverURL, serverPubKeyHex string,
 // bounded retries. A fresh relay.Client is used each attempt (the previous
 // one is permanently failed — fatalOnce is spent), matching the
 // full-rebuild contract. New sessions snapshot the new client at creation.
-func (s *Session) rebuildRelayClient() {
+// A restarting cause (#106-B) shortens the FIRST attempt to the server's
+// retry hint (+ jitter, clamped) — the server said it will be back shortly.
+func (s *Session) rebuildRelayClient(cause error) {
 	w := s.welcome
 	if w == nil || w.RelayURL == "" {
 		return
+	}
+	firstDelay := 5 * time.Second
+	if hint, ok := relay.RetryHint(cause); ok {
+		firstDelay = hint + jitterUpTo(750*time.Millisecond)
+		firstDelay = min(max(firstDelay, 300*time.Millisecond), 10*time.Second)
 	}
 	for attempt := 1; attempt <= 3; attempt++ {
 		// The host gate is re-consulted per attempt: a circuit that opened
@@ -487,10 +549,14 @@ func (s *Session) rebuildRelayClient() {
 			s.logger.Info("relay rebuild skipped by host gate (circuit open)")
 			return
 		}
+		delay := firstDelay
+		if attempt > 1 {
+			delay = time.Duration(attempt) * 5 * time.Second
+		}
 		select {
 		case <-s.closeCh:
 			return
-		case <-time.After(time.Duration(attempt) * 5 * time.Second):
+		case <-time.After(delay):
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		rc, err := connectSessionRelay(ctx, w.RelayURL, w.RelayPubKey, cfg, s.logger)
@@ -500,17 +566,36 @@ func (s *Session) rebuildRelayClient() {
 		}
 		if err != nil {
 			s.logger.Warn("relay rebuild attempt failed",
-				"attempt", attempt, "error", err)
+				attemptKey, attempt, errorKey, err)
 			continue
 		}
 		rc.OnFatal(s.handleRelayFatal)
+		rc.OnPeerGone(s.handleRelayPeerGone)
 		s.mu.Lock()
 		s.relayClient = rc
 		s.mu.Unlock()
-		s.logger.Info("relay connection rebuilt", "attempt", attempt)
+		s.logger.Info("relay connection rebuilt", attemptKey, attempt)
 		return
 	}
 	s.logger.Warn("relay rebuild gave up after 3 attempts")
+}
+
+// jitterUpTo returns a pseudo-random duration in [0, bound) — the
+// reconnect thundering-herd spread. crypto/rand (not math/rand) so gosec
+// G404 stays quiet; the cost, one 8-byte read per rebuild, is irrelevant
+// here.
+func jitterUpTo(bound time.Duration) time.Duration {
+	if bound <= 0 {
+		return 0
+	}
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return bound / 2
+	}
+	// Shift out the sign bit: v is non-negative, so the modulo below needs
+	// no narrowing conversion.
+	v := int64(binary.LittleEndian.Uint64(b[:]) >> 1)
+	return time.Duration(v % int64(bound))
 }
 
 // Live callback accessors: user callbacks are read under the session lock at

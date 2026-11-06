@@ -47,6 +47,10 @@ func SendPriority(t Transport, data []byte) error {
 }
 
 // dataChannelTransport wraps a DataChannel to implement Transport.
+//
+// on a two-field wrapper — negligible layout gain.
+//
+//nolint:govet // fieldalignment: 104→88 pointer bytes is a 16B/instance gain
 type dataChannelTransport struct {
 	dc    DataChannel
 	sched *dcEgressScheduler // non-nil iff dc.BufferedAmount is observable
@@ -167,17 +171,16 @@ var errEgressClosed = errors.New("transport egress closed")
 // low watermark. Strict priority plus one-way (high→normal) stream demotion
 // in the tunnel layer keep per-stream ordering intact.
 type dcEgressScheduler struct {
-	dc DataChannel
-
-	mu        sync.Mutex
+	dc        DataChannel
+	failErr   error
+	wake      chan struct{} // cap-1: nudges the writer and parked senders
+	done      chan struct{} // closed exactly once on shutdown
 	high      [][]byte
 	data      [][]byte
 	highBytes int
 	dataBytes int
+	mu        sync.Mutex
 	closed    bool
-	failErr   error
-	wake      chan struct{} // cap-1: nudges the writer and parked senders
-	done      chan struct{} // closed exactly once on shutdown
 }
 
 func newDCEgressScheduler(dc DataChannel) *dcEgressScheduler {

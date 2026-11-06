@@ -19,63 +19,41 @@ import (
 // Tunnel manages tunnel protocol streams over a Transport.
 type Tunnel struct {
 	transport peer.Transport
-	services  map[string]string
-	registry  *StreamRegistry
-	streams   sync.Map // streamID → *streamConn
-	gen       *StreamIDGenerator
-	reasm     *Reassembler
-	logger    *slog.Logger
-	wg        sync.WaitGroup
+	earlyAt   map[uint32]time.Time
 	closeCh   chan struct{}
-	mu        sync.Mutex
-	started   bool
-
-	// maxPayload overrides the fragment size (0 = MaxPayloadBytes).
-	maxPayload int
-
-	// droppedFrames counts inbound frames dropped at the stream delivery
-	// queue (queue full = the peer's consumer is stalled; dropping rather
-	// than back-pressuring is the ordered-stream design — surfaced for
-	// diagnostics, it is NOT an error path to fix silently).
-	droppedFrames atomic.Uint64
-
-	// msgCh carries inbound frames from the (construction-time) transport
-	// handler to the Serve loop. Buffering here is what makes pre-Serve
-	// frames survivable.
-	msgCh chan []byte
-
 	// E2EE state. cipher is set by EnableE2EE (before Serve); remoteConfirmed
 	// flips true when a sealed e2ee_ack (or sealed frame) arrives from the
 	// peer, after which the dialer seals its own frames — including the
 	// first one, because Dial waits (briefly) for the device's ack.
 	// Device-side streams seal from the first frame when the incoming open
 	// negotiated E2EE.
-	e2eeCipher      *e2ee.Cipher
-	remoteConfirmed atomic.Bool
-	e2eeAckCh       chan struct{}
-	e2eeAckOnce     sync.Once
-
-	// egressPrioBudget arms per-stream high-lane marking (see
-	// EnableEgressPriority); zero = off (pre-feature behavior).
+	e2eeCipher *e2ee.Cipher
+	gen        *StreamIDGenerator
+	reasm      *Reassembler
+	logger     *slog.Logger
+	// msgCh carries inbound frames from the (construction-time) transport
+	// handler to the Serve loop. Buffering here is what makes pre-Serve
+	// frames survivable.
+	msgCh            chan []byte
+	registry         *StreamRegistry
+	e2eeAckCh        chan struct{}
+	early            map[uint32][][]byte
+	echoPending      map[uint32]chan echoAnswer
+	services         map[string]string
+	streams          sync.Map
+	wg               sync.WaitGroup
+	droppedFrames    atomic.Uint64
 	egressPrioBudget atomic.Int64
-
-	// T2 echo probe state (#87): pending probes by client id, consecutive
-	// miss counter, and the unsupported short-circuit (a silent peer is a
-	// valid answer). echoMu guards all three.
-	echoMu          sync.Mutex
-	echoPending     map[uint32]chan echoAnswer
-	echoMisses      int
-	echoUnsupported bool
-
-	// #88① pre-open data parking: data frames that beat their open across
-	// the ctrl/data channels. Bounded and TTL'd (see bufferEarlyData).
-	earlyMu sync.Mutex
-	early   map[uint32][][]byte
-	earlyAt map[uint32]time.Time
-
-	// requireE2EE (#36③): fail Dial when the peer cannot confirm E2EE
-	// instead of degrading to plaintext.
-	requireE2EE bool
+	maxPayload       int
+	echoMisses       int
+	e2eeAckOnce      sync.Once
+	echoMu           sync.Mutex
+	earlyMu          sync.Mutex
+	mu               sync.Mutex
+	remoteConfirmed  atomic.Bool
+	echoUnsupported  bool
+	started          bool
+	requireE2EE      bool
 }
 
 // e2eeHandshakeTimeout bounds how long Dial waits for the device's sealed
@@ -183,7 +161,7 @@ func New(t peer.Transport, opts ...Option) *Tunnel {
 		registry:  NewStreamRegistry(),
 		gen:       NewStreamIDGenerator(),
 		reasm:     NewReassembler(),
-		logger:    slog.Default().With("component", "tunnel"),
+		logger:    slog.Default().With(componentKey, "tunnel"),
 		closeCh:   make(chan struct{}),
 		msgCh:     make(chan []byte, 64),
 	}
@@ -241,7 +219,7 @@ func (t *Tunnel) RegisterService(name, addr string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.services[name] = addr
-	t.logger.Info("service registered", "name", name, "addr", addr)
+	t.logger.Info("service registered", nameKey, name, addrKey, addr)
 }
 
 // Serve starts reading tunnel messages from the DataChannel.
@@ -304,11 +282,11 @@ func (t *Tunnel) Dial(service string) (net.Conn, error) {
 				return nil, ErrE2EERequired
 			}
 			t.logger.Warn("e2ee ack not received — proceeding plaintext (legacy peer?)",
-				"stream_id", streamID)
+				streamIDKey, streamID)
 		}
 	}
 
-	t.logger.Debug("dial initiated", "stream_id", streamID, "service", service)
+	t.logger.Debug("dial initiated", streamIDKey, streamID, serviceKey, service)
 	return sc, nil
 }
 
@@ -334,7 +312,7 @@ func (t *Tunnel) Close() error {
 func (t *Tunnel) dispatch(data []byte) {
 	var msg TunnelMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
-		t.logger.Warn("invalid tunnel message", "error", err)
+		t.logger.Warn("invalid tunnel message", errorKey, err)
 		return
 	}
 	switch msg.Type {
@@ -353,6 +331,6 @@ func (t *Tunnel) dispatch(data []byte) {
 	default:
 		// Unknown types are silently ignored (#87/#9 compatibility rule):
 		// a newer peer's probe frames must not spam a legacy peer's logs.
-		t.logger.Debug("unknown tunnel message type", "type", msg.Type)
+		t.logger.Debug("unknown tunnel message type", typeKey, msg.Type)
 	}
 }

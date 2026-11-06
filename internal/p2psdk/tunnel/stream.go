@@ -13,30 +13,21 @@ import (
 
 // streamConn implements net.Conn for a tunnel stream.
 type streamConn struct {
-	tunnel   *Tunnel
-	streamID uint32
-	service  string
-	logger   *slog.Logger
-
-	// sealed marks a device-side stream whose incoming open negotiated E2EE —
-	// every outbound data frame is sealed from the first byte.
-	sealed bool
-
-	// prioUsed counts wire bytes this stream has already spent on the
-	// high-priority lane; once it passes the tunnel's budget the stream
-	// demotes one-way (see Tunnel.EnableEgressPriority).
-	prioUsed atomic.Int64
-
-	mu         sync.Mutex
 	conn       net.Conn
-	closed     bool
+	dataCh     chan []byte
+	logger     *slog.Logger
+	wakeCh     chan struct{}
+	tunnel     *Tunnel
+	service    string
+	readBuf    []byte
+	prioUsed   atomic.Int64
+	readOff    int
+	wakeOnce   sync.Once
+	mu         sync.Mutex
+	streamID   uint32
 	remoteDone bool
-
-	dataCh   chan []byte
-	readBuf  []byte
-	readOff  int
-	wakeCh   chan struct{}
-	wakeOnce sync.Once
+	closed     bool
+	sealed     bool
 }
 
 func newStreamConn(tun *Tunnel, id uint32, svc string, log *slog.Logger) *streamConn {
@@ -44,7 +35,7 @@ func newStreamConn(tun *Tunnel, id uint32, svc string, log *slog.Logger) *stream
 		tunnel:   tun,
 		streamID: id,
 		service:  svc,
-		logger:   log.With("stream_id", id),
+		logger:   log.With(streamIDKey, id),
 		dataCh:   make(chan []byte, 64),
 		wakeCh:   make(chan struct{}),
 	}
@@ -62,7 +53,7 @@ func (sc *streamConn) pushData(data []byte) {
 	default:
 		n := sc.tunnel.droppedFrames.Add(1)
 		sc.logger.Warn("data channel full, dropping frame",
-			"dropped_total", n, "queue", cap(sc.dataCh))
+			droppedTotalKey, n, queueKey, cap(sc.dataCh))
 	}
 }
 
@@ -131,14 +122,14 @@ func (sc *streamConn) Write(b []byte) (int, error) {
 	}
 	for _, frag := range fragments {
 		if sc.sealed || sc.tunnel.e2eeActive() {
-			if err := sc.tunnel.sealFragment(&frag); err != nil {
-				return 0, fmt.Errorf("tunnel: seal: %w", err)
+			if sealErr := sc.tunnel.sealFragment(&frag); sealErr != nil {
+				return 0, fmt.Errorf("tunnel: seal: %w", sealErr)
 			}
 		}
 		msg := TunnelMessage{Type: TunnelMessageTypeData, Payload: mustJSON(frag)}
-		data, err := json.Marshal(msg)
-		if err != nil {
-			return 0, fmt.Errorf("marshal tunnel msg: %w", err)
+		data, marshalErr := json.Marshal(msg)
+		if marshalErr != nil {
+			return 0, fmt.Errorf("marshal tunnel msg: %w", marshalErr)
 		}
 		if sendErr := sc.tunnel.sendEgress(data, sc.claimEgressPriority(len(data))); sendErr != nil {
 			return 0, fmt.Errorf("send: %w", sendErr)

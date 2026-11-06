@@ -13,10 +13,10 @@ var errBoom = errors.New("boom")
 // recorded in departure order and BufferedAmount is test-controlled (the
 // knob the scheduler gates admission on).
 type fakeEgressDC struct {
-	mu   sync.Mutex
+	err  error
 	sent [][]byte
 	ba   uint64
-	err  error
+	mu   sync.Mutex
 }
 
 func (f *fakeEgressDC) send(data []byte) error {

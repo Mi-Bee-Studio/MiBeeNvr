@@ -23,17 +23,13 @@ import (
 // routing (send_packet → recv_packet) forwards to the destination by key.
 type miniRelayServer struct {
 	server   *httptest.Server
-	url      string
+	clients  map[[32]byte]*websocket.Conn
 	upgrader websocket.Upgrader
+	url      string
+	mu       sync.Mutex
+	wmu      sync.Mutex
 	pubKey   [32]byte
 	privKey  [32]byte
-
-	mu      sync.Mutex
-	clients map[[32]byte]*websocket.Conn
-	// wmu serializes ALL conn writes: gorilla panics on concurrent writers,
-	// and with multiple peers sending to one recipient (per-source routing
-	// tests) handler goroutines race (the real server has per-client locks).
-	wmu sync.Mutex
 }
 
 func (s *miniRelayServer) writeTo(conn *websocket.Conn, data []byte) {

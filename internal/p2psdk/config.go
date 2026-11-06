@@ -7,21 +7,18 @@ import (
 )
 
 // SignalingConfig configures the connection to the P2P signaling server.
+//
+//nolint:govet // fieldalignment: 剩 8B 填充差，整struct重排会毁掉按语义分组的字段注释
 type SignalingConfig struct {
-	// ServerURL is the WebSocket URL of the signaling server (e.g. wss://host:port).
-	ServerURL string
-
-	// NodesURL optionally points at the platform's public node list
-	// (GET /api/nodes, #48). When set, every fresh connection first runs
-	// nearest-node discovery (concurrent probes, 50 ms latency buckets
-	// with in-bucket shuffle) and dials the winner; ANY discovery failure
-	// falls straight back to ServerURL. Empty (default) keeps single-URL
-	// behavior byte-identical — zero change for existing deployments.
-	NodesURL string
-
-	// JWT is the OIDC JWT for authentication with the signaling server.
-	JWT string
-
+	// OnReconnect is called after the signaling link is successfully
+	// re-established following a drop. Optional.
+	OnReconnect func()
+	// OnDisconnect is called when the signaling WebSocket link drops, with the
+	// error that caused the loss. Always followed by either OnReconnect (link
+	// recovered) or session closure. Optional.
+	OnDisconnect func(err error)
+	// Logger is an optional slog logger. When nil, a no-op logger is used.
+	Logger *slog.Logger
 	// TokenFunc optionally mints a FRESH JWT on demand (#66). Server tokens
 	// are single-use (JTI anti-replay) with a short TTL, so a long-lived
 	// peer cannot present one static JWT forever: every initial connect and
@@ -31,16 +28,13 @@ type SignalingConfig struct {
 	// (bounded); without it those closes abandon the reconnect ladder.
 	// Implementations own their timeout (the ladder runs uncontexted).
 	TokenFunc func() (string, error)
-
-	// ProductID identifies the product namespace for isolation.
-	ProductID string
-
-	// PeerID is the unique identifier for this peer within the product.
-	PeerID string
-
+	// TLSConfig is an optional TLS configuration for the WebSocket connection.
+	// When nil, default TLS settings are used.
+	TLSConfig *tls.Config
 	// Role indicates the peer role: "device" or "client".
 	Role string
-
+	// PeerID is the unique identifier for this peer within the product.
+	PeerID string
 	// DeviceKeyPath optionally points at a raw Ed25519 private key file
 	// (32-byte seed or 64-byte full key, 0600). When set (and
 	// Role == "device"), every hello is signed
@@ -48,63 +42,6 @@ type SignalingConfig struct {
 	// device record on the server has a registered public key (zero-trust
 	// identity binding; same key used for re-enroll proof-of-possession).
 	DeviceKeyPath string
-
-	// ICETimeouts optionally overrides the pion ICE agent timers (zero
-	// value = library defaults, see ICETimeouts). High-jitter links (weak
-	// 5G, metro, cross-border 300-500ms RTT) read multi-second p99 spikes
-	// as failure: the library defaults (keepalive 2s, connected→
-	// disconnected 5s, disconnected→failed 25s) then express as ICE
-	// restart churn instead of tolerance. Each field may be set
-	// independently; zero fields fall back to the matching default.
-	ICETimeouts ICETimeouts
-
-	// ICEReceiveMTU optionally overrides the ICE receive MTU (pion
-	// SetReceiveMTU). 0 = library default. Useful on small-MTU paths
-	// (PPPoE, some corporate egress) — though without RFC 8829 probing this
-	// is a static knob, not negotiation.
-	ICEReceiveMTU int
-
-	// TunnelMaxPayloadBytes optionally overrides the tunnel fragment size
-	// (0 = MaxPayloadBytes, 32 KiB). Receivers do not validate fragment
-	// size, so mixed settings interoperate; capping happens at the sender.
-	TunnelMaxPayloadBytes int
-
-	// TLSConfig is an optional TLS configuration for the WebSocket connection.
-	// When nil, default TLS settings are used.
-	TLSConfig *tls.Config
-
-	// Logger is an optional slog logger. When nil, a no-op logger is used.
-	Logger *slog.Logger
-
-	// OnDisconnect is called when the signaling WebSocket link drops, with the
-	// error that caused the loss. Always followed by either OnReconnect (link
-	// recovered) or session closure. Optional.
-	OnDisconnect func(err error)
-
-	// OnReconnect is called after the signaling link is successfully
-	// re-established following a drop. Optional.
-	OnReconnect func()
-
-	// HandshakeTimeout is the maximum time to wait for the WebSocket handshake
-	// and hello/welcome exchange. Zero (default) uses DefaultHandshakeTimeout.
-	HandshakeTimeout time.Duration
-
-	// ReadTimeout is the maximum time between WebSocket reads before the link
-	// is considered dead. Zero (default) uses DefaultReadTimeout.
-	ReadTimeout time.Duration
-
-	// TransportTimeout is how long EstablishTransport waits for ICE to connect
-	// before falling back to relay. Zero (default) uses DefaultTransportTimeout.
-	TransportTimeout time.Duration
-
-	// ForceRelay pins the transport arbitration to the relay path (#82):
-	// the session adopts the relay transport as soon as it is available and
-	// never waits for direct ICE. For sites where direct attempts only
-	// produce pathological pairs (e.g. CGNAT behind an advertised endpoint)
-	// or applications wanting deterministic relay behavior. With no relay
-	// client available the stock direct-first arbitration applies unchanged.
-	ForceRelay bool
-
 	// AdvertiseAddr binds the local ICE host-candidate
 	// socket to the given FIXED UDP port and advertises the given public IP
 	// in place of host addresses (pion NAT1To1 host mode). Intended for
@@ -124,7 +61,53 @@ type SignalingConfig struct {
 	// failure. Result is TTL-cached (5min); a later-enabled router UPnP or
 	// a rotated WAN IP is picked up on the next refresh.
 	AdvertiseAddr string
-
+	// ICEProviderTags pins the session's ICE servers to Welcome entries
+	// carrying one of these tags ("self", "extra", or an external_ice
+	// provider name; research doc 07 §4.2). Empty (default) = use every
+	// entry. Primary use is A/B measurement (linktest forcing all relay
+	// attempts through one specific TURN provider); an unknown tag set
+	// leaves host candidates only, so ICE falls to TURN-less behavior —
+	// set it deliberately.
+	ICEProviderTags []string
+	// ServerURL is the WebSocket URL of the signaling server (e.g. wss://host:port).
+	ServerURL string
+	// ProductID identifies the product namespace for isolation.
+	ProductID string
+	// JWT is the OIDC JWT for authentication with the signaling server.
+	JWT string
+	// NodesURL optionally points at the platform's public node list
+	// (GET /api/nodes, #48). When set, every fresh connection first runs
+	// nearest-node discovery (concurrent probes, 50 ms latency buckets
+	// with in-bucket shuffle) and dials the winner; ANY discovery failure
+	// falls straight back to ServerURL. Empty (default) keeps single-URL
+	// behavior byte-identical — zero change for existing deployments.
+	NodesURL string
+	// ICETimeouts optionally overrides the pion ICE agent timers (zero
+	// value = library defaults, see ICETimeouts). High-jitter links (weak
+	// 5G, metro, cross-border 300-500ms RTT) read multi-second p99 spikes
+	// as failure: the library defaults (keepalive 2s, connected→
+	// disconnected 5s, disconnected→failed 25s) then express as ICE
+	// restart churn instead of tolerance. Each field may be set
+	// independently; zero fields fall back to the matching default.
+	ICETimeouts ICETimeouts
+	// TunnelMaxPayloadBytes optionally overrides the tunnel fragment size
+	// (0 = MaxPayloadBytes, 32 KiB). Receivers do not validate fragment
+	// size, so mixed settings interoperate; capping happens at the sender.
+	TunnelMaxPayloadBytes int
+	// HandshakeTimeout is the maximum time to wait for the WebSocket handshake
+	// and hello/welcome exchange. Zero (default) uses DefaultHandshakeTimeout.
+	HandshakeTimeout time.Duration
+	// ReadTimeout is the maximum time between WebSocket reads before the link
+	// is considered dead. Zero (default) uses DefaultReadTimeout.
+	ReadTimeout time.Duration
+	// TransportTimeout is how long EstablishTransport waits for ICE to connect
+	// before falling back to relay. Zero (default) uses DefaultTransportTimeout.
+	TransportTimeout time.Duration
+	// ICEReceiveMTU optionally overrides the ICE receive MTU (pion
+	// SetReceiveMTU). 0 = library default. Useful on small-MTU paths
+	// (PPPoE, some corporate egress) — though without RFC 8829 probing this
+	// is a static knob, not negotiation.
+	ICEReceiveMTU int
 	// SessionIdleTimeout is how long a P2P session may carry no traffic
 	// (neither direction on the user-facing DataChannel) before the device
 	// side tears it down with reason "session_idle". This reclaims sessions
@@ -135,7 +118,6 @@ type SignalingConfig struct {
 	// ACKs flow on any open stream. Zero (default) uses
 	// DefaultSessionIdleTimeout; negative disables the sweep entirely.
 	SessionIdleTimeout time.Duration
-
 	// RelayDialGate is consulted before EVERY relay connect attempt (the
 	// Dial-time connect and each mid-life rebuild attempt). Returning
 	// false skips that attempt entirely — no socket, no auth handshake,
@@ -152,6 +134,20 @@ type SignalingConfig struct {
 	// credentials problems. Fired from the dialing goroutine (Dial or the
 	// bounded rebuild loop); keep it non-blocking. Optional.
 	OnRelayConnect func(err error)
+
+	// ForceRelay pins the transport arbitration to the relay path (#82):
+	// the session adopts the relay transport as soon as it is available and
+	// never waits for direct ICE. For sites where direct attempts only
+	// produce pathological pairs (e.g. CGNAT behind an advertised endpoint)
+	// or applications wanting deterministic relay behavior. With no relay
+	// client available the stock direct-first arbitration applies unchanged.
+	ForceRelay bool
+	// DisableTelemetry turns off the ICE/session quality reports the SDK
+	// sends over the signaling link (research doc 07 §5.1). Default (false)
+	// reports: the traffic is a handful of small JSON frames per session
+	// (nomination changes + a final summary). Privacy-sensitive embedders
+	// can switch it off with no functional impact.
+	DisableTelemetry bool
 }
 
 // Package-level defaults for timeouts. All are non-zero so an unconfigured
@@ -217,9 +213,6 @@ const (
 
 // DataChannel represents an open DataChannel for sending and receiving data.
 type DataChannel struct {
-	// Label is the DataChannel label (e.g. "p2p-data").
-	Label string
-
 	// OnMessage sets the message handler for received data.
 	// Call dc.OnMessage(func(data []byte) { ... }) to receive data.
 	OnMessage func(h func([]byte))
@@ -241,19 +234,11 @@ type DataChannel struct {
 
 	// Close closes the DataChannel.
 	Close func() error
-
 	// OnClose registers a callback fired when the channel dies (remote close
 	// or transport teardown). Applications use it to release resources tied
 	// to the channel (e.g. stop the tunnel served over it). May be nil on
 	// transports that cannot observe close; register defensively.
 	OnClose func(cb func())
-
-	// E2EEKey is the tunnel end-to-end encryption session key derived from
-	// this session's relay keypair exchange (nil when unavailable, e.g. the
-	// relay fallback was never connected). Applications pass it to
-	// tunnel.EnableE2EE to encrypt tunnel payloads end-to-end.
-	E2EEKey []byte
-
 	// Ctrl is the paired lossy control channel of the #88① dual-channel
 	// direct path (nil on single-channel sessions and on the relay
 	// transport). Set by the SDK when the peer negotiated ctrl_channel;
@@ -261,4 +246,11 @@ type DataChannel struct {
 	// frames through it and feeds its inbound messages into the same
 	// handler. Applications can ignore it — routing is automatic.
 	Ctrl *DataChannel
+	// Label is the DataChannel label (e.g. "p2p-data").
+	Label string
+	// E2EEKey is the tunnel end-to-end encryption session key derived from
+	// this session's relay keypair exchange (nil when unavailable, e.g. the
+	// relay fallback was never connected). Applications pass it to
+	// tunnel.EnableE2EE to encrypt tunnel payloads end-to-end.
+	E2EEKey []byte
 }

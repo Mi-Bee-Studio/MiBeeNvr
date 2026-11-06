@@ -98,7 +98,7 @@ func DiscoverBestNode(ctx context.Context, nodesURL string, logger *slog.Logger)
 
 	nodes, err := fetchNodeList(ctx, nodesURL)
 	if err != nil {
-		logger.Warn("node discovery fetch failed — using configured URL", "error", err)
+		logger.WarnContext(ctx, "node discovery fetch failed — using configured URL", errKey, err)
 		return ""
 	}
 	candidates := onlineSignalURLs(nodes)
@@ -108,7 +108,7 @@ func DiscoverBestNode(ctx context.Context, nodesURL string, logger *slog.Logger)
 
 	cands := probeCandidates(ctx, candidates)
 	if len(cands) == 0 {
-		logger.Warn("node discovery: every candidate probe failed — using configured URL")
+		logger.WarnContext(ctx, "node discovery: every candidate probe failed — using configured URL")
 		return ""
 	}
 
@@ -125,8 +125,8 @@ func DiscoverBestNode(ctx context.Context, nodesURL string, logger *slog.Logger)
 		ordered = append(ordered, g...)
 	}
 	best := ordered[0].url
-	logger.Info("node discovery selected endpoint",
-		"url", best, "rtt_ms", ordered[0].rtt.Milliseconds(), "candidates", len(cands))
+	logger.InfoContext(ctx, "node discovery selected endpoint",
+		urlKey, best, rttMsKey, ordered[0].rtt.Milliseconds(), candidatesKey, len(cands))
 
 	discoveryMu.Lock()
 	discoveryCache[nodesURL] = discoveryResult{best: best, rttMs: ordered[0].rtt.Milliseconds(), fetched: time.Now()}
@@ -191,8 +191,8 @@ func fetchNodeList(ctx context.Context, nodesURL string) ([]PublicNode, error) {
 		return nil, fmt.Errorf("node list status %d", resp.StatusCode)
 	}
 	var nodes []PublicNode
-	if err := json.NewDecoder(resp.Body).Decode(&nodes); err != nil {
-		return nil, err
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&nodes); decodeErr != nil {
+		return nil, decodeErr
 	}
 	return nodes, nil
 }

@@ -42,15 +42,10 @@ func PreferRelay(class NATClass) bool {
 
 // NATProbeResult carries one NAT detection outcome.
 type NATProbeResult struct {
-	Class NATClass
-	// DualStack reports a global-unicast IPv6 address on any interface
-	// (#89): the v4 verdict above does not rule out v6 direct paths
-	// (cellular v6 is near-universal, home broadband dual-stack common), so
-	// relay-pinning consumers may exempt dual-stack hosts from a symmetric
-	// verdict reached over v4 only.
-	DualStack      bool
-	MappedByServer map[string]string // server addr -> mapped ip:port
+	MappedByServer map[string]string
+	Class          NATClass
 	LocalAddr      string
+	DualStack      bool
 }
 
 // globalIPv6Probe reports whether any interface holds a global-unicast
@@ -172,8 +167,8 @@ func sameAddrAsLocal(res NATProbeResult) bool {
 	}
 	localIPs := localInterfaceIPs()
 	for _, mapped := range res.MappedByServer {
-		host, port, err := net.SplitHostPort(mapped)
-		if err != nil {
+		host, port, splitErr := net.SplitHostPort(mapped)
+		if splitErr != nil {
 			return false
 		}
 		ip := net.ParseIP(host)
@@ -191,8 +186,8 @@ func localInterfaceIPs() map[string]bool {
 		return out
 	}
 	for _, ifc := range ifaces {
-		addrs, err := ifc.Addrs()
-		if err != nil {
+		addrs, addrErr := ifc.Addrs()
+		if addrErr != nil {
 			continue
 		}
 		for _, a := range addrs {
@@ -210,14 +205,14 @@ func localInterfaceIPs() map[string]bool {
 func fanOutStunRequests(conn *net.UDPConn, servers []string, deadline time.Time) map[string]string {
 	txToServer := map[string]string{}
 	for _, srv := range servers {
-		raddr, err := net.ResolveUDPAddr("udp4", srv)
-		if err != nil {
+		raddr, resolveErr := net.ResolveUDPAddr("udp4", srv)
+		if resolveErr != nil {
 			continue
 		}
 		var pkt [20]byte
 		pkt[0], pkt[1] = 0x00, 0x01 // Binding Request
 		pkt[4], pkt[5], pkt[6], pkt[7] = 0x21, 0x12, 0xA4, 0x42
-		if _, err := rand.Read(pkt[8:]); err != nil {
+		if _, randErr := rand.Read(pkt[8:]); randErr != nil {
 			continue
 		}
 		txToServer[string(pkt[8:20])] = srv
@@ -248,7 +243,7 @@ func collectStunResponses(conn *net.UDPConn, txToServer map[string]string, deadl
 		if !ok {
 			continue
 		}
-		if mapped, err := parseStunXORMapped(buf[:n]); err == nil {
+		if mapped, parseErr := parseStunXORMapped(buf[:n]); parseErr == nil {
 			mu.Lock()
 			if _, seen := res.MappedByServer[srv]; !seen {
 				res.MappedByServer[srv] = mapped

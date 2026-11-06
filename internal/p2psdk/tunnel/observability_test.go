@@ -68,9 +68,9 @@ func TestFragmenterSizeOption(t *testing.T) {
 		t.Fatalf("fragments = %d, want 3", len(frags))
 	}
 	for i, fr := range frags {
-		raw, err := base64Decode(fr.Payload)
-		if err != nil {
-			t.Fatalf("frag %d decode: %v", i, err)
+		raw, decodeErr := base64Decode(fr.Payload)
+		if decodeErr != nil {
+			t.Fatalf("frag %d decode: %v", i, decodeErr)
 		}
 		want := 16 * 1024
 		if i == 2 {
@@ -82,7 +82,7 @@ func TestFragmenterSizeOption(t *testing.T) {
 	}
 	// Default fragmenter keeps the historical 32 KiB ceiling.
 	fd := NewFragmenter(9, 0)
-	if frags, _ := fd.Fragment(bytes.Repeat([]byte{1}, MaxPayloadBytes+1)); len(frags) != 2 {
-		t.Fatalf("default fragments = %d, want 2", len(frags))
+	if tailFrags, _ := fd.Fragment(bytes.Repeat([]byte{1}, MaxPayloadBytes+1)); len(tailFrags) != 2 {
+		t.Fatalf("default fragments = %d, want 2", len(tailFrags))
 	}
 }
