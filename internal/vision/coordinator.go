@@ -15,7 +15,9 @@ package vision
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -53,6 +55,26 @@ const (
 // so the coordinator stays testable without SQLite.
 type Repusher interface {
 	ListRecordingsForVisionRepush(ctx context.Context, since, until time.Time, limit int) ([]model.Recording, error)
+}
+
+// lineageResolver is the optional Repusher capability (*storage.DB has it)
+// that recognizes fold-deleted recordings via merge-lineage provenance.
+type lineageResolver interface {
+	FindLineageTarget(ctx context.Context, sourceID string) (string, error)
+}
+
+// foldedBeforePush reports whether recordingID was consumed by a rolling/
+// batch fold — i.e. the missing file is the fold, not storage rot.
+func (c *Coordinator) foldedBeforePush(ctx context.Context, recordingID string) bool {
+	if recordingID == "" || c.db == nil {
+		return false
+	}
+	lr, ok := c.db.(lineageResolver)
+	if !ok {
+		return false
+	}
+	target, err := lr.FindLineageTarget(ctx, recordingID)
+	return err == nil && target != ""
 }
 
 // instance 是一个 Vision 消费端实例的运行时状态。配置变化时按 name 对账
@@ -600,6 +622,17 @@ func (c *Coordinator) uploadSegment(ctx context.Context, baseURL string, absPath
 
 	file, err := os.Open(absPath)
 	if err != nil {
+		// #46: rolling merge folds the source away between the completion
+		// event (or a compensation scan) and this open. That is an expected
+		// race, not a delivery failure: the merged bucket row carries the
+		// window and is itself push-eligible, so count it as handled instead
+		// of feeding the push breaker failures.
+		if errors.Is(err, fs.ErrNotExist) && c.foldedBeforePush(ctx, hdr["X-Recording-Id"]) {
+			slog.Info("segment folded before push — merged bucket will carry the window",
+				"recording_id", hdr["X-Recording-Id"],
+				"camera_id", hdr["X-Camera-Id"])
+			return true
+		}
 		slog.Warn("open segment file for push failed",
 			"error", err,
 			"path", absPath)
