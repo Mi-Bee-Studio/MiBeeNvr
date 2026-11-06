@@ -115,14 +115,14 @@ func sendOnFirstDC(s *Session, data []byte) error {
 func TestSDK_DialValidation(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     SignalingConfig
 		wantErr string
+		cfg     SignalingConfig
 	}{
-		{"no url", SignalingConfig{JWT: "j", ProductID: "p", PeerID: "p", Role: "d"}, "URL is required"},
-		{"no jwt", SignalingConfig{ServerURL: "ws://x", ProductID: "p", PeerID: "p", Role: "d"}, "JWT is required"},
-		{"no product", SignalingConfig{ServerURL: "ws://x", JWT: "j", PeerID: "p", Role: "d"}, "product ID is required"},
-		{"no peer", SignalingConfig{ServerURL: "ws://x", JWT: "j", ProductID: "p", Role: "d"}, "peer ID is required"},
-		{"no role", SignalingConfig{ServerURL: "ws://x", JWT: "j", ProductID: "p", PeerID: "p"}, "role is required"},
+		{name: "no url", cfg: SignalingConfig{JWT: "j", ProductID: "p", PeerID: "p", Role: "d"}, wantErr: "URL is required"},
+		{name: "no jwt", cfg: SignalingConfig{ServerURL: "ws://x", ProductID: "p", PeerID: "p", Role: "d"}, wantErr: "JWT is required"},
+		{name: "no product", cfg: SignalingConfig{ServerURL: "ws://x", JWT: "j", PeerID: "p", Role: "d"}, wantErr: "product ID is required"},
+		{name: "no peer", cfg: SignalingConfig{ServerURL: "ws://x", JWT: "j", ProductID: "p", Role: "d"}, wantErr: "peer ID is required"},
+		{name: "no role", cfg: SignalingConfig{ServerURL: "ws://x", JWT: "j", ProductID: "p", PeerID: "p"}, wantErr: "role is required"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

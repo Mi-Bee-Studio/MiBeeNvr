@@ -35,46 +35,43 @@ type StatsSnapshot struct {
 	// cannot tell which client's transport a snapshot describes.
 	SessionID string
 
-	// ICERTTSeconds is the current round-trip time of the nominated ICE
-	// candidate pair, in seconds. Zero when no nominated pair exists yet.
-	ICERTTSeconds float64
-
-	// ICEAvailableBitrateBits is the available outgoing bitrate for the
-	// nominated ICE candidate pair, in bits per second. Zero when unknown.
-	ICEAvailableBitrateBits float64
-
+	ICERemoteCandidateAddress string
 	// ICELocalCandidateType / ICERemoteCandidateType are the candidate types
 	// of the nominated pair ("host", "srflx", "prflx", "relay"). A "relay"
 	// type means the traffic traverses the TURN server instead of flowing
 	// directly between the peers. Empty when no nominated pair exists yet.
 	ICELocalCandidateType  string
 	ICERemoteCandidateType string
-
 	// ICELocalCandidateAddress / ICERemoteCandidateAddress are the IP
 	// addresses of the nominated pair's candidates (empty when unavailable).
 	// The local srflx address is this peer's public NAT mapping as observed
 	// by the STUN/TURN server — useful for network diagnostics.
-	ICELocalCandidateAddress  string
-	ICERemoteCandidateAddress string
-
+	ICELocalCandidateAddress string
 	// ICEIPVersion is "4" or "6" for the nominated pair's local address,
 	// "" when no pair is nominated — makes IPv6 direct wins observable.
 	ICEIPVersion string
-
 	// ICERelayProtocol is the transport used toward the TURN server ("udp",
 	// "tcp", "tls") when the local candidate of the nominated pair is a TURN
 	// allocation. Empty otherwise.
 	ICERelayProtocol string
-
+	// ICELocalCandidateURL is the STUN/TURN server URL that produced the
+	// nominated pair's local candidate (pion populates it for srflx/relay
+	// candidates; empty for host). Telemetry maps it back to the Welcome
+	// ICEServer tag to attribute the selected path to a provider (research
+	// doc 07 §5.1).
+	ICELocalCandidateURL string
+	// ICERTTSeconds is the current round-trip time of the nominated ICE
+	// candidate pair, in seconds. Zero when no nominated pair exists yet.
+	ICERTTSeconds float64
+	// ICEAvailableBitrateBits is the available outgoing bitrate for the
+	// nominated ICE candidate pair, in bits per second. Zero when unknown.
+	ICEAvailableBitrateBits float64
 	// DataChannelBytesSent is the total bytes sent over all DataChannels.
 	DataChannelBytesSent uint64
-
 	// DataChannelBytesReceived is the total bytes received over all DataChannels.
 	DataChannelBytesReceived uint64
-
 	// DataChannelMessagesSent is the total messages sent over all DataChannels.
 	DataChannelMessagesSent uint64
-
 	// DataChannelMessagesReceived is the total messages received over all DataChannels.
 	DataChannelMessagesReceived uint64
 }
@@ -83,18 +80,13 @@ type StatsSnapshot struct {
 // values through the OnStats callback. Call Start() after the PeerConnection
 // is established and Stop() from the session close path.
 type StatsCollector struct {
-	pc     *webrtc.PeerConnection
-	logger *slog.Logger
-	// nominatedLogged guards the one-time nominated-pair INFO log — the
-	// address/IP-version of the winning pair is triage gold (v6 direct wins
-	// must be visible in device journals without a dashboard).
-	nominatedLogged bool
+	pc              *webrtc.PeerConnection
+	logger          *slog.Logger
 	stopCh          chan struct{}
 	done            chan struct{}
+	OnStats         func(StatsSnapshot)
 	interval        time.Duration
-
-	// OnStats is called with each collected snapshot. May be nil.
-	OnStats func(StatsSnapshot)
+	nominatedLogged bool
 }
 
 // NewStatsCollector creates a StatsCollector for the given PeerConnection.
@@ -106,6 +98,15 @@ func NewStatsCollector(pc *webrtc.PeerConnection, logger *slog.Logger) *StatsCol
 		stopCh:   make(chan struct{}),
 		interval: 5 * time.Second,
 	}
+}
+
+// log returns the collector's diagnostics logger (never nil — nil at
+// construction falls back to the default logger).
+func (sc *StatsCollector) log() *slog.Logger {
+	if sc.logger != nil {
+		return sc.logger
+	}
+	return slog.Default()
 }
 
 // Start launches a background goroutine that polls pc.GetStats() every
@@ -125,14 +126,24 @@ func (sc *StatsCollector) Start() {
 			case <-ticker.C:
 			}
 
+			// Self-heal (2026-10-19): a session whose close() was skipped
+			// by whichever lifecycle path leaked it would otherwise poll
+			// GetStats on a closed PeerConnection forever — pion logs
+			// "the agent is closed" on every tick (fleet: ~36k lines/day).
+			// Stats of a closed PC are meaningless by definition; stop.
+			if sc.pc.ConnectionState() == webrtc.PeerConnectionStateClosed {
+				sc.log().Warn("stats collector: PeerConnection closed — self-stopping")
+				return
+			}
+
 			snapshot := sc.collect()
 			if !sc.nominatedLogged && snapshot.ICEIPVersion != "" {
 				sc.nominatedLogged = true
 				sc.logger.Info("ICE nominated pair",
-					"local", snapshot.ICELocalCandidateAddress,
-					"remote", snapshot.ICERemoteCandidateAddress,
-					"local_type", snapshot.ICELocalCandidateType,
-					"ip_version", snapshot.ICEIPVersion)
+					localKey, snapshot.ICELocalCandidateAddress,
+					remoteKey, snapshot.ICERemoteCandidateAddress,
+					localTypeKey, snapshot.ICELocalCandidateType,
+					ipVersionKey, snapshot.ICEIPVersion)
 			}
 			if sc.OnStats != nil {
 				sc.OnStats(snapshot)
@@ -187,6 +198,7 @@ func snapshotFromReport(report webrtc.StatsReport) StatsSnapshot {
 					snap.ICELocalCandidateType = lc.CandidateType.String()
 					snap.ICELocalCandidateAddress = lc.IP
 					snap.ICERelayProtocol = lc.RelayProtocol
+					snap.ICELocalCandidateURL = lc.URL
 				}
 				if rc, ok := candidates[s.RemoteCandidateID]; ok {
 					snap.ICERemoteCandidateType = rc.CandidateType.String()

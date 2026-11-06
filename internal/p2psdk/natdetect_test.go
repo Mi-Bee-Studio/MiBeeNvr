@@ -25,8 +25,8 @@ import (
 // the observed source — the minimum a real STUN server does.
 type fakeStunServer struct {
 	conn *net.UDPConn
-	addr string
 	done chan struct{}
+	addr string
 }
 
 func newFakeStunServer(t *testing.T) *fakeStunServer {
@@ -38,8 +38,8 @@ func newFakeStunServer(t *testing.T) *fakeStunServer {
 		defer close(s.done)
 		buf := make([]byte, 1500)
 		for {
-			n, from, err := conn.ReadFromUDP(buf)
-			if err != nil {
+			n, from, readErr := conn.ReadFromUDP(buf)
+			if readErr != nil {
 				return
 			}
 			if n < 20 || binary.BigEndian.Uint16(buf[0:]) != 0x0001 {
@@ -77,8 +77,8 @@ func buildStunBindingResponse(req []byte, observed *net.UDPAddr) []byte {
 // destination sees a different source port — the endpoint-dependent
 // mapping that defines a symmetric NAT.
 type symmetricNATProxy struct {
-	listeners []*net.UDPConn // client-facing ports (one per destination)
 	done      chan struct{}
+	listeners []*net.UDPConn
 }
 
 //nolint:funlen // two symmetric forwarding legs per destination
@@ -106,8 +106,8 @@ func newSymmetricNATProxy(t *testing.T, destinations ...string) *symmetricNATPro
 			defer wg.Done()
 			buf := make([]byte, 1500)
 			for {
-				n, from, err := l.ReadFromUDP(buf)
-				if err != nil {
+				n, from, readErr := l.ReadFromUDP(buf)
+				if readErr != nil {
 					return
 				}
 				mu.Lock()
@@ -120,8 +120,8 @@ func newSymmetricNATProxy(t *testing.T, destinations ...string) *symmetricNATPro
 			defer wg.Done()
 			buf := make([]byte, 1500)
 			for {
-				n, _, err := egress.ReadFromUDP(buf)
-				if err != nil {
+				n, _, readErr := egress.ReadFromUDP(buf)
+				if readErr != nil {
 					return
 				}
 				mu.Lock()

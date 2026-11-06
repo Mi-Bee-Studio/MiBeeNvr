@@ -45,6 +45,11 @@ const (
 	// MessageTypePeerGone: server-side conclusive death verdict (#63) —
 	// the peer's resume window expired; harvest sessions immediately.
 	MessageTypePeerGone MessageType = "peer_gone"
+	// MessageTypeTelemetry: client→server quality report (research doc 07
+	// §5.1) — the SDK reports the nominated ICE pair (attributed to a
+	// Welcome ICEServer tag) and session byte totals. Old servers warn and
+	// drop the frame; old clients never send it.
+	MessageTypeTelemetry MessageType = "telemetry"
 )
 
 // Message is the common envelope for all signaling messages.
@@ -85,25 +90,36 @@ type Hello struct {
 
 // Welcome is sent by the server after a successful hello handshake.
 type Welcome struct {
+	Capabilities    map[string]any `json:"capabilities,omitempty"`
 	SessionID       string         `json:"session_id"`
 	PeerID          string         `json:"peer_id"`
-	MaxPeers        int            `json:"max_peers"`
-	MaxDevices      int            `json:"max_devices"`
-	RelayEnabled    bool           `json:"relay_enabled"`
 	RelayURL        string         `json:"relay_url,omitempty"`
 	RelayPubKey     string         `json:"relay_pub_key,omitempty"`
-	ServerTime      int64          `json:"server_time"`
-	ICEServers      []ICEServer    `json:"ice_servers,omitempty"`
-	Capabilities    map[string]any `json:"capabilities,omitempty"`
 	ProtocolVersion string         `json:"protocol_version,omitempty"`
+	ICEServers      []ICEServer    `json:"ice_servers,omitempty"`
+	MaxPeers        int            `json:"max_peers"`
+	MaxDevices      int            `json:"max_devices"`
+	ServerTime      int64          `json:"server_time"`
+	RelayEnabled    bool           `json:"relay_enabled"`
 }
 
 // ICEServer describes a STUN or TURN server for ICE connectivity.
 type ICEServer struct {
-	URLs       []string `json:"urls"`
-	Username   string   `json:"username,omitempty"`
-	Credential string   `json:"credential,omitempty"`
+	Username   string `json:"username,omitempty"`
+	Credential string `json:"credential,omitempty"`
+	// Tag identifies the provider this entry came from (research doc 07
+	// §5.1): "self" for self-hosted entries, "extra" for the third-party
+	// STUN supplement, or an external_ice provider name. Absent on servers
+	// that predate tags; telemetry then reports provider "unknown".
+	Tag  string   `json:"tag,omitempty"`
+	URLs []string `json:"urls"`
 }
+
+// ICEServer tag values for server-minted entries.
+const (
+	ICEServerTagSelf  = "self"
+	ICEServerTagExtra = "extra"
+)
 
 // ErrorMsg is a generic error notification from the server.
 type ErrorMsg struct {
@@ -116,11 +132,6 @@ type ConnectRequest struct {
 	TargetPeerID string `json:"target_peer_id"`
 	SessionID    string `json:"session_id"`
 	ServiceName  string `json:"service_name,omitempty"`
-	// CtrlChannel declares that THIS client understands the dual-channel
-	// direct path (#88): a new device-side offerer that sees it may open
-	// the p2p-ctrl channel (unordered, unreliable) alongside p2p-data.
-	// Additive JSON: old peers never set it and never see a second channel.
-	CtrlChannel bool `json:"ctrl_channel,omitempty"`
 	// RelayURL/RelayPubKey: cross-node (federation) session relay override
 	// injected by the servers — both peers must share ONE relay endpoint.
 	RelayURL    string `json:"relay_url,omitempty"`
@@ -134,6 +145,11 @@ type ConnectRequest struct {
 	// path stays plaintext exactly as before); armed only when BOTH sides
 	// are new.
 	CallerRelayPubKey string `json:"caller_relay_pub_key,omitempty"`
+	// CtrlChannel declares that THIS client understands the dual-channel
+	// direct path (#88): a new device-side offerer that sees it may open
+	// the p2p-ctrl channel (unordered, unreliable) alongside p2p-data.
+	// Additive JSON: old peers never set it and never see a second channel.
+	CtrlChannel bool `json:"ctrl_channel,omitempty"`
 }
 
 // ConnectAccept is sent by the target to accept a connection request.
@@ -200,6 +216,30 @@ type SyncState struct {
 	LastSeenSeq uint64 `json:"last_seen_seq"`
 }
 
+// TelemetryReport is the client→server quality report payload (research
+// doc 07 §5.1). One struct serves both events, discriminated by Event:
+//
+//   - "ice_selected" — the nominated ICE pair changed (or the final state
+//     at close); Provider is the Welcome ICEServer tag attributed to the
+//     selected path.
+//   - "session_stats" — session teardown summary: DataChannel byte totals
+//     (the only byte visibility for paths that never touch the server's
+//     own TURN/relay) and the session_close reason vocabulary.
+type TelemetryReport struct {
+	Event         string  `json:"event"`
+	SessionID     string  `json:"session_id,omitempty"`
+	LocalType     string  `json:"local_type,omitempty"`
+	RemoteType    string  `json:"remote_type,omitempty"`
+	RelayProtocol string  `json:"relay_protocol,omitempty"`
+	Provider      string  `json:"provider,omitempty"`
+	CloseReason   string  `json:"close_reason,omitempty"`
+	RTTMS         float64 `json:"rtt_ms,omitempty"`
+	AvailMbps     float64 `json:"avail_mbps,omitempty"`
+	DurationSec   float64 `json:"duration_sec,omitempty"`
+	BytesSent     uint64  `json:"bytes_sent,omitempty"`
+	BytesRecv     uint64  `json:"bytes_recv,omitempty"`
+}
+
 // PeerGone is the server's conclusive-death verdict for a peer (#63): its
 // resume window expired. Sessions riding that peer should be torn down
 // immediately — a resume attempt against it cannot succeed.
@@ -258,7 +298,8 @@ func ParseAndValidate(raw []byte) (*Message, error) {
 		MessageTypeSDPOffer, MessageTypeSDPAnswer, MessageTypeICECandidate,
 		MessageTypeSessionOpen, MessageTypeSessionClose,
 		MessageTypePing, MessageTypePong, MessageTypeSignalResume,
-		MessageTypePresenceOnline, MessageTypePresenceOffline, MessageTypePeerGone:
+		MessageTypePresenceOnline, MessageTypePresenceOffline, MessageTypePeerGone,
+		MessageTypeTelemetry:
 		// valid
 	default:
 		return nil, fmt.Errorf("invalid message type: %s", msg.Type)

@@ -54,7 +54,45 @@ const (
 	// (#69). Payload: 8B BE [4B dropped frames][4B dropped bytes] over the
 	// server's rate window.
 	FrameThrottle byte = 0x08
+
+	// FrameRestarting (0x09, #106-B): the server is shutting down
+	// gracefully. Payload: 2B BE retry_after_ms — the hinted re-dial delay.
+	// Followed by close 4009 relay_restarting.
+	FrameRestarting byte = 0x09
+
+	// FramePeerGone (0x0A, #106-B): a peer this client recently routed with
+	// left the relay. Payload: [32B peer pubkey][1B reason] (0x00 conn lost,
+	// 0x01 idle reaped, 0x02 rate killed). Session owners should tear down
+	// sessions bound to that key and redial immediately.
+	FramePeerGone byte = 0x0A
 )
+
+// Close status 4009 (#106-B): the relay is restarting — transient, re-dial
+// on the hinted fast path instead of the exponential ladder.
+const closeStatusRestarting = 4009
+
+// FramePeerGone reason codes (payload byte after the 32B peer key) —
+// mirror of the server-side values (relay.md §6.2).
+const (
+	PeerGoneConnLost   byte = 0x00
+	PeerGoneIdleReaped byte = 0x01
+	PeerGoneRateKilled byte = 0x02
+)
+
+// PeerGoneReasonString maps a FramePeerGone reason to its wire name
+// (diagnostics; unknown codes render hex).
+func PeerGoneReasonString(reason byte) string {
+	switch reason {
+	case PeerGoneConnLost:
+		return "conn_lost"
+	case PeerGoneIdleReaped:
+		return "idle_reaped"
+	case PeerGoneRateKilled:
+		return "rate_killed"
+	default:
+		return fmt.Sprintf("unknown(0x%02x)", reason)
+	}
+}
 
 // Protocol constants.
 const (
@@ -68,13 +106,7 @@ const (
 // It connects to a relay server, authenticates with NaCl box, and
 // forwards encrypted packets between peers without server-side decryption.
 type Client struct {
-	conn         *websocket.Conn
-	pubKey       [32]byte
-	privKey      [32]byte
-	serverPubKey [32]byte
-	remotePubKey [32]byte
-
-	mu        sync.Mutex
+	conn      *websocket.Conn
 	onMessage func([]byte)
 	// routes are per-source inbound handlers: with several P2P sessions
 	// sharing this one relay connection, packets must be dispatched by the
@@ -86,14 +118,13 @@ type Client struct {
 	// the inbound rate limit (#69) — video callers should step the bitrate
 	// down. At most once per server-side second; nil = ignored.
 	onThrottle func(droppedFrames, droppedBytes uint32)
-	// serverCaps carries the capability byte from server_auth (0 when the
-	// server is legacy 1-byte). Governed by mu; governs SendPriority gating.
-	serverCaps byte
+	// onPeerGone fires when the server reports a recently-routed peer's
+	// connection ending (#106-B). Session owners tear down sessions bound
+	// to that key and redial; nil = ignored (old behavior: wait out the
+	// pong/idle timeouts).
+	onPeerGone func(peer [32]byte, reason byte)
 
-	closeCh   chan struct{}
-	writeMu   sync.Mutex
-	fatalOnce sync.Once
-	lastRead  atomic.Int64 // unix nanos of the last inbound frame
+	closeCh chan struct{}
 
 	// Async egress with a control lane (#46): keepalive pings and pong
 	// replies jump the data lane so liveness frames never sit behind bulk
@@ -101,26 +132,44 @@ type Client struct {
 	// (relay frame order is a protocol contract — no data frame may ever
 	// be reordered). One writer goroutine performs all socket writes.
 	// #46 v2 adds the high lane for priority-marked frames (negotiated).
-	ctrlCh    chan []byte
-	hiCh      chan []byte
-	dataCh    chan []byte
-	dataBytes atomic.Int64 // bytes queued on the data lanes
+	ctrlCh chan []byte
+	hiCh   chan []byte
+	dataCh chan []byte
 
 	// writeSync substitutes the socket-write primitive in tests.
 	writeSync func([]byte) error
+
+	// logger is nil-safe diagnostics output (defaults to slog.Default()).
+	loggerField *slog.Logger
+	// ctrl is the #88② physically separate control connection (nil until
+	// the dual-connection dial succeeds; soft-degrades on death).
+	ctrl atomic.Pointer[ctrlLink]
+	// serverURL remembers the endpoint for the #88② ctrl dial. Kept last
+	// among the pointers: its trailing string-len word falls out of the
+	// GC-scanned prefix (fieldalignment).
+	serverURL string
+
+	pubKey       [32]byte
+	privKey      [32]byte
+	serverPubKey [32]byte
+	remotePubKey [32]byte
+
+	mu        sync.Mutex
+	writeMu   sync.Mutex
+	lastRead  atomic.Int64 // unix nanos of the last inbound frame
+	dataBytes atomic.Int64 // bytes queued on the data lanes
 
 	// Liveness knobs (overridable in tests). Defaults below.
 	pingInterval time.Duration
 	pongTimeout  time.Duration
 	writeTimeout time.Duration
 
-	// serverURL remembers the endpoint for the #88② ctrl dial.
-	serverURL string
-	// logger is nil-safe diagnostics output (defaults to slog.Default()).
-	loggerField *slog.Logger
-	// ctrl is the #88② physically separate control connection (nil until
-	// the dual-connection dial succeeds; soft-degrades on death).
-	ctrl atomic.Pointer[ctrlLink]
+	// fatalOnce gates the single fatal teardown; the 12-byte sync.Once
+	// packs with serverCaps in the struct tail (fieldalignment).
+	fatalOnce sync.Once
+	// serverCaps carries the capability byte from server_auth (0 when the
+	// server is legacy 1-byte). Governed by mu; governs SendPriority gating.
+	serverCaps byte
 }
 
 // logger returns the client's diagnostics logger (never nil).
@@ -160,13 +209,42 @@ const (
 // 的极端停滞（var：测试可缩短）。
 var clientDataQueueWait = 45 * time.Second
 
-// NewClient creates an unconnected relay client.
 // ErrOverloaded reports server_auth status 0x03: the relay is at capacity.
 // Back off and retry later (or use another node) — this is NOT an auth
 // failure: the session's keys remain valid. Legacy servers signal the same
 // condition with 0x01 (indistinguishable from a crypto failure).
 var ErrOverloaded = errors.New("relay overloaded (capacity)")
 
+// RestartingError reports a server-initiated graceful restart (#106-B):
+// FrameRestarting or close 4009. The transport is dead (fail the same way
+// as any fatal), but the reconnection policy should use RetryAfter (+ small
+// jitter) instead of the full exponential ladder — the server expects to be
+// back within the hint.
+type RestartingError struct {
+	// RetryAfter is the server's re-dial hint (from the frame payload; a
+	// conservative default when only the close code was observed).
+	RetryAfter time.Duration
+}
+
+func (e *RestartingError) Error() string {
+	return fmt.Sprintf("relay restarting (retry after %s)", e.RetryAfter)
+}
+
+// defaultRestartingRetryAfter is used when the 4009 close arrives without
+// a preceding FrameRestarting (ctrl lane happened to drop it).
+const defaultRestartingRetryAfter = 2 * time.Second
+
+// RetryHint extracts the server's restart re-dial hint from an error chain
+// (#106-B). ok=false for every other error.
+func RetryHint(err error) (time.Duration, bool) {
+	var re *RestartingError
+	if errors.As(err, &re) {
+		return re.RetryAfter, true
+	}
+	return 0, false
+}
+
+// NewClient creates an unconnected relay client.
 func NewClient() *Client {
 	// Identity keys are minted EAGERLY (mibeescout#16): the caller's relay
 	// public key must be available before any relay connection exists —
@@ -369,9 +447,9 @@ func (c *Client) Connect(ctx context.Context, serverURL string, serverPubKeyHex 
 	defer func() { _ = resp.Body.Close() }()
 	c.conn = conn
 
-	if err := c.authenticate(ctx); err != nil {
+	if authErr := c.authenticate(ctx); authErr != nil {
 		_ = conn.Close()
-		return fmt.Errorf("relay auth: %w", err)
+		return fmt.Errorf("relay auth: %w", authErr)
 	}
 
 	c.mu.Lock()
@@ -469,8 +547,8 @@ func (c *Client) authenticate(_ context.Context) error {
 		return errors.New("relay auth: server advertised identity proof but sent none")
 	}
 	if hasProof {
-		if err := c.verifyServerAuthProof(respPayload[2:], nonce); err != nil {
-			return err
+		if proofErr := c.verifyServerAuthProof(respPayload[2:], nonce); proofErr != nil {
+			return proofErr
 		}
 	}
 	return nil
@@ -508,6 +586,13 @@ func (c *Client) readLoop() {
 				return
 			default:
 			}
+			// #106-B: a 4009 close without a preceding restarting frame
+			// (ctrl lane dropped it) still carries the transient-restart
+			// semantics.
+			if websocket.IsCloseError(err, closeStatusRestarting) {
+				c.fail(&RestartingError{RetryAfter: defaultRestartingRetryAfter})
+				return
+			}
 			c.fail(fmt.Errorf("relay read: %w", err))
 			return
 		}
@@ -521,21 +606,7 @@ func (c *Client) readLoop() {
 		// Priority-marked inbound frames dispatch on the base type (#46 v2).
 		switch FrameBase(ft) {
 		case FrameRecvPacket:
-			// Format: [0:32] source key, [32:] data payload.
-			if len(payload) < KeyLen {
-				continue
-			}
-			var src [32]byte
-			copy(src[:], payload[:KeyLen])
-			c.mu.Lock()
-			h := c.routes[src]
-			if h == nil {
-				h = c.onMessage
-			}
-			c.mu.Unlock()
-			if h != nil {
-				h(payload[KeyLen:])
-			}
+			c.dispatchRecvPacket(payload)
 
 		case FramePing:
 			c.enqueueCtrl(encodeFrame(FramePong, nil))
@@ -546,10 +617,60 @@ func (c *Client) readLoop() {
 		case FrameThrottle:
 			c.handleThrottle(payload)
 
+		case FrameRestarting:
+			// #106-B: server-side graceful shutdown — fail with the typed
+			// error so the reconnection policy can use the retry hint. A
+			// 4009 close follows; whichever arrives first wins.
+			c.fail(&RestartingError{RetryAfter: parseRestartingAfter(payload)})
+
+		case FramePeerGone:
+			// #106-B: [32B peer key][1B reason].
+			if len(payload) < KeyLen+1 {
+				continue
+			}
+			var peer [32]byte
+			copy(peer[:], payload[:KeyLen])
+			c.mu.Lock()
+			h := c.onPeerGone
+			c.mu.Unlock()
+			if h != nil {
+				h(peer, payload[KeyLen])
+			}
+
 		default:
 			// Unknown frames ignored.
 		}
 	}
+}
+
+// dispatchRecvPacket routes one inbound recv_packet — [0:32] source key,
+// [32:] data payload — to the per-source handler, falling back to the
+// global OnMessage handler.
+func (c *Client) dispatchRecvPacket(payload []byte) {
+	if len(payload) < KeyLen {
+		return
+	}
+	var src [32]byte
+	copy(src[:], payload[:KeyLen])
+	c.mu.Lock()
+	h := c.routes[src]
+	if h == nil {
+		h = c.onMessage
+	}
+	c.mu.Unlock()
+	if h != nil {
+		h(payload[KeyLen:])
+	}
+}
+
+// parseRestartingAfter reads the 2B BE retry_after_ms hint; a missing or
+// malformed payload falls back to the conservative default.
+func parseRestartingAfter(payload []byte) time.Duration {
+	if len(payload) >= 2 {
+		//nolint:gosec // G115: server-controlled hint clamped to uint16 ms
+		return time.Duration(binary.BigEndian.Uint16(payload)) * time.Millisecond
+	}
+	return defaultRestartingRetryAfter
 }
 
 // handleThrottle parses a server rate-limit notification (#69): 8B BE
@@ -673,6 +794,17 @@ func (c *Client) OnThrottle(h func(droppedFrames, droppedBytes uint32)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onThrottle = h
+}
+
+// OnPeerGone registers the peer-departure callback (#106-B): the server
+// sends FramePeerGone when a key this client routed with inside the
+// server-side window leaves the relay. Owners should tear down sessions
+// bound to that peer key and redial immediately — recovery in ~1s instead
+// of the liveness-timeout path.
+func (c *Client) OnPeerGone(h func(peer [32]byte, reason byte)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onPeerGone = h
 }
 
 // Close shuts down the relay client and releases resources.

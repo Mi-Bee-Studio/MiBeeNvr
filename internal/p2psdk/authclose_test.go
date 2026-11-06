@@ -46,15 +46,14 @@ func TestAuthClassCloseClassification(t *testing.T) {
 // conns so tests can deliver verdicts server-side), and can be scripted to
 // REJECT the Nth connection's hello with a policy close (#66).
 type scriptedAuthServer struct {
-	url string
-
-	mu           sync.Mutex
 	conns        map[int]*websocket.Conn
-	nextConn     int
-	rejectHelloN int // 1-based: this connection's hello is rejected (0 = never)
+	url          string
 	rejectReason string
-	hellos       int
 	lastJWT      string
+	nextConn     int
+	rejectHelloN int
+	hellos       int
+	mu           sync.Mutex
 }
 
 //nolint:funlen // scripted server: one handler, full handshake branches
@@ -89,7 +88,7 @@ func newScriptedAuthServer(t *testing.T) *scriptedAuthServer {
 			return
 		}
 		var hello Hello
-		if err := UnmarshalPayload(msg, &hello); err != nil {
+		if unmarshalErr := UnmarshalPayload(msg, &hello); unmarshalErr != nil {
 			return
 		}
 		s.mu.Lock()
@@ -111,7 +110,7 @@ func newScriptedAuthServer(t *testing.T) *scriptedAuthServer {
 		data, _ := Marshal(MessageTypeWelcome, welcome)
 		_ = conn.WriteMessage(websocket.TextMessage, data)
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			if _, _, readErr := conn.ReadMessage(); readErr != nil {
 				return
 			}
 		}

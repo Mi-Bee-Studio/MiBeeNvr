@@ -15,9 +15,9 @@ import (
 
 // fakeSignal is a minimal signal sender that records sent messages.
 type fakeSignal struct {
+	sent   []string
+	closes []SessionClose
 	mu     sync.Mutex
-	sent   []string       // SDP bodies sent via sendRaw
-	closes []SessionClose // session_close notifications sent via sendRaw
 }
 
 func (f *fakeSignal) sendRaw(_ MessageType, payload any) error {

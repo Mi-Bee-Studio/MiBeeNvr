@@ -9,9 +9,9 @@ import (
 // laneRecordingTransport records which lane (normal vs priority) every
 // outbound wire message took.
 type laneRecordingTransport struct {
-	mu     sync.Mutex
 	normal [][]byte
 	high   [][]byte
+	mu     sync.Mutex
 }
 
 func (r *laneRecordingTransport) Send(d []byte) error {
@@ -67,8 +67,8 @@ func TestEgressPrioritySmallWritesRideHighLane(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	sc := conn
-	if _, err := sc.Write([]byte("hello-priority")); err != nil {
-		t.Fatalf("write: %v", err)
+	if _, writeErr := sc.Write([]byte("hello-priority")); writeErr != nil {
+		t.Fatalf("write: %v", writeErr)
 	}
 
 	normal, high := tr.lanes()
@@ -93,8 +93,8 @@ func TestEgressPriorityBudgetDemotesOneWay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	if _, err := conn.Write([]byte("first")); err != nil {
-		t.Fatalf("write 1: %v", err)
+	if _, writeErr := conn.Write([]byte("first")); writeErr != nil {
+		t.Fatalf("write 1: %v", writeErr)
 	}
 
 	_, high := tr.lanes()
@@ -105,11 +105,11 @@ func TestEgressPriorityBudgetDemotesOneWay(t *testing.T) {
 	// Shrink the budget to exactly what stream 1 already used.
 	tun.EnableEgressPriority(int64(len(first[0])) - 1)
 
-	if _, err := conn.Write([]byte("second")); err != nil {
-		t.Fatalf("write 2: %v", err)
+	if _, writeErr := conn.Write([]byte("second")); writeErr != nil {
+		t.Fatalf("write 2: %v", writeErr)
 	}
-	if _, err := conn.Write([]byte("third")); err != nil {
-		t.Fatalf("write 3: %v", err)
+	if _, writeErr := conn.Write([]byte("third")); writeErr != nil {
+		t.Fatalf("write 3: %v", writeErr)
 	}
 
 	normal, high := tr.lanes()
@@ -133,8 +133,8 @@ func TestEgressPriorityBudgetIsPerStream(t *testing.T) {
 	}
 	// Budget exactly covers stream 1's first frame; stream 2 has its own.
 	tun.EnableEgressPriority(1 << 20)
-	if _, err := c1.Write([]byte("one")); err != nil {
-		t.Fatalf("write 1: %v", err)
+	if _, writeErr := c1.Write([]byte("one")); writeErr != nil {
+		t.Fatalf("write 1: %v", writeErr)
 	}
 	_, high := tr.lanes()
 	first := dataMessages(t, high)
@@ -147,8 +147,8 @@ func TestEgressPriorityBudgetIsPerStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial 2: %v", err)
 	}
-	if _, err := c2.Write([]byte("two")); err != nil {
-		t.Fatalf("write 2: %v", err)
+	if _, writeErr := c2.Write([]byte("two")); writeErr != nil {
+		t.Fatalf("write 2: %v", writeErr)
 	}
 
 	_, high = tr.lanes()
@@ -168,8 +168,8 @@ func TestEgressPriorityDisabledByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	if _, err := conn.Write([]byte("plain")); err != nil {
-		t.Fatalf("write: %v", err)
+	if _, writeErr := conn.Write([]byte("plain")); writeErr != nil {
+		t.Fatalf("write: %v", writeErr)
 	}
 
 	normal, high := tr.lanes()

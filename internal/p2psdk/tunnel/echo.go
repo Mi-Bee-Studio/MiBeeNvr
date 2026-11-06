@@ -65,8 +65,8 @@ type EchoResult struct {
 
 // echo response delivery channel payload.
 type echoAnswer struct {
-	tSendNS int64
 	recvAt  time.Time
+	tSendNS int64
 }
 
 // priorityLaneActive reports the truth of "a SendPriority on this transport
@@ -199,7 +199,7 @@ func (t *Tunnel) registerEchoProbe(id uint32, ch chan echoAnswer) func() {
 func (t *Tunnel) handleEcho(payload string) {
 	raw, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil || len(raw) < 16 {
-		t.logger.Debug("invalid echo request", "len", len(raw))
+		t.logger.Debug("invalid echo request", lenKey, len(raw))
 		return
 	}
 	want := binary.BigEndian.Uint32(raw[12:16])
@@ -215,8 +215,8 @@ func (t *Tunnel) handleEcho(payload string) {
 	if err != nil {
 		return
 	}
-	if err := peer.SendPriority(t.transport, data); err != nil {
-		t.logger.Debug("echo reply send failed", "error", err)
+	if sendErr := peer.SendPriority(t.transport, data); sendErr != nil {
+		t.logger.Debug("echo reply send failed", errorKey, sendErr)
 	}
 }
 

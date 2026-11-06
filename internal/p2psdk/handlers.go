@@ -15,7 +15,7 @@ import (
 func (s *Session) handleMessage(raw []byte) {
 	msg, err := ParseAndValidate(raw)
 	if err != nil {
-		s.logger.Warn("invalid message", "error", err)
+		s.logger.Warn("invalid message", errorKey, err)
 		return
 	}
 	switch msg.Type {
@@ -49,11 +49,14 @@ func (s *Session) handleMessage(raw []byte) {
 		s.logger.Debug("unexpected welcome message")
 	case MessageTypePresenceOnline, MessageTypePresenceOffline:
 		// Server scope broadcasts on peer join/leave: informational only.
-		s.logger.Debug("presence broadcast", "type", msg.Type)
+		s.logger.Debug("presence broadcast", typeKey, msg.Type)
 	case MessageTypePeerGone:
 		s.handlePeerGone(msg)
+	case MessageTypeTelemetry:
+		// Client→server report; unexpected from the server side.
+		s.logger.Debug("unexpected telemetry message")
 	default:
-		s.logger.Debug("unhandled message type", "type", msg.Type)
+		s.logger.Debug("unhandled message type", typeKey, msg.Type)
 	}
 }
 
@@ -66,13 +69,13 @@ func (s *Session) handleMessage(raw []byte) {
 func (s *Session) handlePeerGone(msg *Message) {
 	var gone PeerGone
 	if err := UnmarshalPayload(msg, &gone); err != nil {
-		s.logger.Warn("bad peer_gone", "error", err)
+		s.logger.Warn("bad peer_gone", errorKey, err)
 		return
 	}
 	s.logger.Info("peer conclusively offline, harvesting its sessions",
-		"peer_id", gone.PeerID,
-		"session_id", gone.SessionID,
-		"reason", gone.Reason,
+		peerIDKey, gone.PeerID,
+		sessionIDKey, gone.SessionID,
+		reasonKey, gone.Reason,
 	)
 
 	s.mu.RLock()
@@ -95,13 +98,13 @@ func (s *Session) handlePeerGone(msg *Message) {
 func (s *Session) handleConnectRequest(msg *Message) {
 	var req ConnectRequest
 	if err := UnmarshalPayload(msg, &req); err != nil {
-		s.logger.Warn("bad connect_request", "error", err)
+		s.logger.Warn("bad connect_request", errorKey, err)
 		return
 	}
 
 	s.logger.Info(
 		"incoming connect request",
-		"session_id", req.SessionID,
+		sessionIDKey, req.SessionID,
 	)
 
 	// Admission gate: refuse before any WebRTC machinery starts when the
@@ -118,13 +121,13 @@ func (s *Session) handleConnectRequest(msg *Message) {
 			SessionID: req.SessionID,
 		}
 		if data, err := Marshal(MessageTypeConnectReject, reject); err == nil {
-			if err := s.signal.send(data); err != nil {
-				s.logger.Warn("send device_busy reject", "error", err)
+			if sendErr := s.signal.send(data); sendErr != nil {
+				s.logger.Warn("send device_busy reject", errorKey, sendErr)
 			}
 		}
 		s.logger.Info("connect request rejected by device admission gate",
-			"session_id", req.SessionID,
-			"service", req.ServiceName)
+			sessionIDKey, req.SessionID,
+			serviceKey, req.ServiceName)
 		return
 	}
 
@@ -147,7 +150,7 @@ func (s *Session) handleConnectRequest(msg *Message) {
 			copy(callerRelayKey[:], key)
 		} else {
 			s.logger.Warn("connect_request carried an undecodable caller_relay_pub_key",
-				"session_id", req.SessionID)
+				sessionIDKey, req.SessionID)
 		}
 	}
 
@@ -172,10 +175,18 @@ func (s *Session) handleConnectRequest(msg *Message) {
 
 	go func() {
 		if err := p2p.startAsOfferer(s.signal, s.sessionConfig(), s.welcome); err != nil {
-			s.logger.Error("p2p as offerer failed", "error", err)
+			s.logger.Error("p2p as offerer failed",
+				sessionIDKey, req.SessionID, errorKey, err)
 			s.mu.Lock()
 			delete(s.peers, req.SessionID)
 			s.mu.Unlock()
+			// startAsOfferer's own error paths close the pc on four of six
+			// sites; the registry removal must also run the full close —
+			// the remaining sites (notably the sdp_offer send failure)
+			// left the pc open and the session object unreaped (2026-10-19
+			// fleet leak hunt: this path deleted from the registry without
+			// close()).
+			_ = p2p.close()
 		}
 	}()
 }
@@ -183,14 +194,14 @@ func (s *Session) handleConnectRequest(msg *Message) {
 func (s *Session) handleConnectAccept(msg *Message) {
 	var accept ConnectAccept
 	if err := UnmarshalPayload(msg, &accept); err != nil {
-		s.logger.Warn("bad connect_accept", "error", err)
+		s.logger.Warn("bad connect_accept", errorKey, err)
 		return
 	}
-	s.logger.Info("connect accepted", "session_id", accept.SessionID)
+	s.logger.Info("connect accepted", sessionIDKey, accept.SessionID)
 
 	p2p := s.getP2P(accept.SessionID)
 	if p2p == nil {
-		s.logger.Warn("connect_accept for unknown session", "session_id", accept.SessionID)
+		s.logger.Warn("connect_accept for unknown session", sessionIDKey, accept.SessionID)
 		return
 	}
 
@@ -212,7 +223,7 @@ func (s *Session) handleConnectAccept(msg *Message) {
 	// ordered after PC creation by protocol, so the window does not exist
 	// there.
 	if err := p2p.startAsAnswerer(s.signal, s.sessionConfig(), s.welcome); err != nil {
-		s.logger.Error("p2p as answerer failed", "error", err)
+		s.logger.Error("p2p as answerer failed", errorKey, err)
 		if deleted := s.deleteP2P(accept.SessionID); deleted != nil {
 			_ = deleted.close()
 		}
@@ -222,7 +233,7 @@ func (s *Session) handleConnectAccept(msg *Message) {
 func (s *Session) handleConnectReject(msg *Message) {
 	var reject ConnectReject
 	if err := UnmarshalPayload(msg, &reject); err != nil {
-		s.logger.Warn("bad connect_reject", "error", err)
+		s.logger.Warn("bad connect_reject", errorKey, err)
 		return
 	}
 
@@ -238,21 +249,21 @@ func (s *Session) handleConnectReject(msg *Message) {
 
 	s.logger.Info(
 		"connect rejected",
-		"session_id", reject.SessionID,
-		"code", reject.Code,
+		sessionIDKey, reject.SessionID,
+		codeKey, reject.Code,
 	)
 }
 
 func (s *Session) handleSDPOffer(msg *Message) {
 	var offer SDPOffer
 	if err := UnmarshalPayload(msg, &offer); err != nil {
-		s.logger.Warn("bad sdp_offer", "error", err)
+		s.logger.Warn("bad sdp_offer", errorKey, err)
 		return
 	}
 
 	p2p := s.getP2P(offer.SessionID)
 	if p2p == nil {
-		s.logger.Warn("sdp_offer for unknown session", "session_id", offer.SessionID)
+		s.logger.Warn("sdp_offer for unknown session", sessionIDKey, offer.SessionID)
 		return
 	}
 
@@ -267,20 +278,20 @@ func (s *Session) handleSDPOffer(msg *Message) {
 	}
 
 	if err := p2p.handleRemoteOffer(offer.SDP, s.signal); err != nil {
-		s.logger.Error("handle remote offer", "error", err)
+		s.logger.Error("handle remote offer", errorKey, err)
 	}
 }
 
 func (s *Session) handleSDPAnswer(msg *Message) {
 	var answer SDPAnswer
 	if err := UnmarshalPayload(msg, &answer); err != nil {
-		s.logger.Warn("bad sdp_answer", "error", err)
+		s.logger.Warn("bad sdp_answer", errorKey, err)
 		return
 	}
 
 	p2p := s.getP2P(answer.SessionID)
 	if p2p == nil {
-		s.logger.Warn("sdp_answer for unknown session", "session_id", answer.SessionID)
+		s.logger.Warn("sdp_answer for unknown session", sessionIDKey, answer.SessionID)
 		return
 	}
 
@@ -297,37 +308,37 @@ func (s *Session) handleSDPAnswer(msg *Message) {
 	}
 
 	if err := p2p.handleRemoteAnswer(answer.SDP); err != nil {
-		s.logger.Error("handle remote answer", "error", err)
+		s.logger.Error("handle remote answer", errorKey, err)
 	}
 }
 
 func (s *Session) handleICECandidate(msg *Message) {
 	var cand ICECandidate
 	if err := UnmarshalPayload(msg, &cand); err != nil {
-		s.logger.Warn("bad ice_candidate", "error", err)
+		s.logger.Warn("bad ice_candidate", errorKey, err)
 		return
 	}
 
 	p2p := s.getP2P(cand.SessionID)
 	if p2p == nil {
-		s.logger.Debug("ice_candidate for unknown session", "session_id", cand.SessionID)
+		s.logger.Debug("ice_candidate for unknown session", sessionIDKey, cand.SessionID)
 		return
 	}
 	if err := p2p.handleRemoteICECandidate(cand.Candidate); err != nil {
-		s.logger.Debug("add ice candidate", "error", err)
+		s.logger.Debug("add ice candidate", errorKey, err)
 	}
 }
 
 func (s *Session) handleSessionOpen(msg *Message) {
 	var open SessionOpen
 	if err := UnmarshalPayload(msg, &open); err != nil {
-		s.logger.Warn("bad session_open", "error", err)
+		s.logger.Warn("bad session_open", errorKey, err)
 		return
 	}
 	s.logger.Info(
 		"session opened",
-		"session_id", open.SessionID,
-		"peer_id", open.PeerID,
+		sessionIDKey, open.SessionID,
+		peerIDKey, open.PeerID,
 	)
 	// Peer-side relay announcement (Go SDK / Dart clients send session_open
 	// the moment they adopt the relay transport): cut our own ICE arbitration
@@ -343,7 +354,7 @@ func (s *Session) handleSessionOpen(msg *Message) {
 func (s *Session) handleSessionClose(msg *Message) {
 	var closeMsg SessionClose
 	if err := UnmarshalPayload(msg, &closeMsg); err != nil {
-		s.logger.Warn("bad session_close", "error", err)
+		s.logger.Warn("bad session_close", errorKey, err)
 		return
 	}
 	if deleted := s.deleteP2P(closeMsg.SessionID); deleted != nil {
@@ -354,8 +365,8 @@ func (s *Session) handleSessionClose(msg *Message) {
 	}
 	s.logger.Info(
 		"session closed",
-		"session_id", closeMsg.SessionID,
-		"reason", closeMsg.Reason,
+		sessionIDKey, closeMsg.SessionID,
+		reasonKey, closeMsg.Reason,
 	)
 }
 
@@ -366,8 +377,8 @@ func (s *Session) handleError(msg *Message) {
 	}
 	s.logger.Warn(
 		"server error",
-		"code", errMsg.Code,
-		"message", errMsg.Message,
+		codeKey, errMsg.Code,
+		messageKey, errMsg.Message,
 	)
 	if s.OnError != nil {
 		s.OnError(errMsg.Code, errMsg.Message)
@@ -378,17 +389,17 @@ func (s *Session) handleError(msg *Message) {
 func (s *Session) handlePing(msg *Message) {
 	var ping Ping
 	if err := UnmarshalPayload(msg, &ping); err != nil {
-		s.logger.Warn("bad ping", "error", err)
+		s.logger.Warn("bad ping", errorKey, err)
 		return
 	}
 	pong := Pong(ping)
 	pongData, err := Marshal(MessageTypePong, pong)
 	if err != nil {
-		s.logger.Warn("marshal pong", "error", err)
+		s.logger.Warn("marshal pong", errorKey, err)
 		return
 	}
-	if err := s.signal.send(pongData); err != nil {
-		s.logger.Warn("send pong", "error", err)
+	if sendErr := s.signal.send(pongData); sendErr != nil {
+		s.logger.Warn("send pong", errorKey, sendErr)
 	}
 }
 
@@ -407,13 +418,20 @@ func (s *Session) repointRelay(serverURL, serverPubKeyHex string) {
 	defer cancel()
 	if err := rc.Connect(ctx, serverURL, serverPubKeyHex); err != nil {
 		s.logger.Warn("relay override connect failed (keeping node default)",
-			"url", serverURL, "error", err)
+			urlKey, serverURL, errorKey, err)
 		return
 	}
+	// #117: the hooks are not optional — without OnFatal, this client's
+	// death never triggers a rebuild and the session keeps announcing a
+	// dead key (silent blackhole, no redial); without OnPeerGone it misses
+	// both routing-loss notifications and the server's asymmetric-leg
+	// self-notify.
+	rc.OnFatal(s.handleRelayFatal)
+	rc.OnPeerGone(s.handleRelayPeerGone)
 	s.mu.Lock()
 	s.relayClient = rc
 	s.mu.Unlock()
-	s.logger.Info("relay re-pointed for cross-node session", "url", serverURL)
+	s.logger.Info("relay re-pointed for cross-node session", urlKey, serverURL)
 }
 
 // setRelayClient swaps a pending session's relay client (pre-start only).

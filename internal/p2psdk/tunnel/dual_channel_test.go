@@ -40,20 +40,20 @@ func TestEarlyDataBeforeOpenAcrossLanes(t *testing.T) {
 	t.Cleanup(func() { _ = listener.Close() })
 	srvCh := make(chan dualTestRead, 4)
 	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
 			return
 		}
 		buf := make([]byte, 4096)
 		for {
-			n, err := conn.Read(buf)
+			n, readErr := conn.Read(buf)
 			if n > 0 {
 				b := make([]byte, n)
 				copy(b, buf[:n])
 				srvCh <- dualTestRead{data: b}
 			}
-			if err != nil {
-				srvCh <- dualTestRead{err: err}
+			if readErr != nil {
+				srvCh <- dualTestRead{err: readErr}
 				return
 			}
 		}
@@ -73,8 +73,8 @@ func TestEarlyDataBeforeOpenAcrossLanes(t *testing.T) {
 	// Data FIRST (stream 9), then the open — the exact cross-channel
 	// reorder the dual-channel path makes possible.
 	mustSend := func(v any) {
-		b, err := json.Marshal(v)
-		require.NoError(t, err)
+		b, marshalErr := json.Marshal(v)
+		require.NoError(t, marshalErr)
 		require.NoError(t, clientDC.Send(b))
 	}
 	early1 := tunnel.TunnelData{StreamID: 9, Seq: 0, Total: 1, Payload: "ZWFybHktMQ=="} // "early-1"
@@ -144,8 +144,8 @@ func mustJSONString(t testing.TB, v any) string {
 
 // dualTestRead is one read result from the backing TCP service.
 type dualTestRead struct {
-	data []byte
 	err  error
+	data []byte
 }
 
 // earlyDataTTLOverride exposes the package TTL for tests via a registered

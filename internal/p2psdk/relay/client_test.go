@@ -20,34 +20,31 @@ import (
 
 // mockRelayServer is an in-process relay server for testing.
 type mockRelayServer struct {
-	server   *httptest.Server
-	url      string
-	upgrader websocket.Upgrader
-	pubKey   [32]byte
-	privKey  [32]byte
-	mu       sync.Mutex
-	clients  map[[32]byte]*mockClient
-
-	// authOverload: answer client_auth with status 0x03 + close 4005 (#95).
-	authOverload bool
-
+	server     *httptest.Server
+	ctrlFrames chan []byte
+	clients    map[[32]byte]*mockClient
+	ctrlConns  map[[32]byte]*websocket.Conn
+	upgrader   websocket.Upgrader
+	url        string
+	// ctrlMu guards ctrl tracking for #88② tests.
+	ctrlMu sync.Mutex
+	mu     sync.Mutex
 	// silent: when set, the read loop answers nothing (no pong) and never
 	// pushes — simulates a black-holed / half-open path for liveness tests.
-	silent atomic.Bool
-
+	silent  atomic.Bool
+	pubKey  [32]byte
+	privKey [32]byte
 	// caps: capability byte echoed in server_auth (0 = legacy 1-byte
 	// reply). Tests set it to advertise #88② dual-connection support.
 	caps byte
-	// ctrlMu guards ctrl tracking for #88② tests.
-	ctrlMu     sync.Mutex
-	ctrlConns  map[[32]byte]*websocket.Conn
-	ctrlFrames chan []byte
+	// authOverload: answer client_auth with status 0x03 + close 4005 (#95).
+	authOverload bool
 }
 
 type mockClient struct {
-	pubKey [32]byte
 	conn   *websocket.Conn
 	mu     sync.Mutex
+	pubKey [32]byte
 }
 
 func newMockRelayServer(t *testing.T) *mockRelayServer {
@@ -92,9 +89,9 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var msg struct {
+		box    []byte
 		pubKey [32]byte
 		nonce  [24]byte
-		box    []byte
 	}
 	copy(msg.pubKey[:], payload[:KeyLen])
 	copy(msg.nonce[:], payload[KeyLen:KeyLen+NonceLen])
@@ -124,16 +121,23 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	// moment it reads the reply, and peers may send (or tests may close
 	// conns) immediately — an unregistered key made those races silently
 	// drop frames (flaky TestClientSendAndReceive/TestClientServerCloseFiresFatal).
+	// #88② fidelity with the real server: ctrl connections occupy a SECOND
+	// slot (ctrlConns) and never displace the data registration — the mock
+	// used to overwrite s.clients for ctrl dials, so ctrl-leg death broke
+	// the data path in tests while the real server kept routing (diverged
+	// from production exactly where #117 lived).
 	client := &mockClient{pubKey: msg.pubKey, conn: conn}
-	s.mu.Lock()
-	s.clients[msg.pubKey] = client
-	s.mu.Unlock()
-
-	defer func() {
+	if !isCtrl {
 		s.mu.Lock()
-		delete(s.clients, msg.pubKey)
+		s.clients[msg.pubKey] = client
 		s.mu.Unlock()
-	}()
+
+		defer func() {
+			s.mu.Lock()
+			delete(s.clients, msg.pubKey)
+			s.mu.Unlock()
+		}()
+	}
 
 	// Success (under client.mu: a concurrent forward to this freshly
 	// registered conn would race gorilla's single-writer constraint).
@@ -168,12 +172,12 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 			s.ctrlMu.Unlock()
 		}()
 		for {
-			_, data, err := conn.ReadMessage()
-			if err != nil {
+			_, ctrlData, ctrlErr := conn.ReadMessage()
+			if ctrlErr != nil {
 				return
 			}
 			select {
-			case s.ctrlFrames <- data:
+			case s.ctrlFrames <- ctrlData:
 			default:
 			}
 		}
@@ -181,15 +185,15 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Read loop.
 	for {
-		_, data, err := conn.ReadMessage()
-		if err != nil {
+		_, wire, readErr := conn.ReadMessage()
+		if readErr != nil {
 			return
 		}
-		ft, payload, err := readFrame(data)
-		if err != nil {
+		ftype, wirePayload, frameErr := readFrame(wire)
+		if frameErr != nil {
 			continue
 		}
-		if ft == FramePing {
+		if ftype == FramePing {
 			if !s.silent.Load() {
 				client.mu.Lock()
 				_ = conn.WriteMessage(websocket.BinaryMessage, encodeFrame(FramePong, nil))
@@ -197,24 +201,24 @@ func (s *mockRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if ft != FrameSendPacket || len(payload) < KeyLen {
+		if ftype != FrameSendPacket || len(wirePayload) < KeyLen {
 			continue
 		}
 
 		var dstKey [32]byte
-		copy(dstKey[:], payload[:KeyLen])
+		copy(dstKey[:], wirePayload[:KeyLen])
 
 		s.mu.Lock()
-		dst, ok := s.clients[dstKey]
+		dst, isClient := s.clients[dstKey]
 		s.mu.Unlock()
-		if !ok {
+		if !isClient {
 			continue
 		}
 
 		// Forward as RecvPacket: [0:32] source key, [32:] data.
-		recvPayload := make([]byte, KeyLen+len(payload)-KeyLen)
+		recvPayload := make([]byte, KeyLen+len(wirePayload)-KeyLen)
 		copy(recvPayload[:KeyLen], msg.pubKey[:])
-		copy(recvPayload[KeyLen:], payload[KeyLen:])
+		copy(recvPayload[KeyLen:], wirePayload[KeyLen:])
 		frame := encodeFrame(FrameRecvPacket, recvPayload)
 		dst.mu.Lock()
 		_ = dst.conn.WriteMessage(websocket.BinaryMessage, frame)
@@ -243,17 +247,17 @@ func TestKeyPairDeterminism(t *testing.T) {
 func TestFrameEncodeDecode(t *testing.T) {
 	tests := []struct {
 		name    string
-		ft      byte
 		payload []byte
+		ft      byte
 	}{
-		{"client_auth", FrameClientAuth, []byte("hello")},
-		{"server_auth", FrameServerAuth, []byte{0x00}},
-		{"send_packet", FrameSendPacket, make([]byte, KeyLen+10)},
-		{"recv_packet", FrameRecvPacket, make([]byte, KeyLen+5)},
-		{"keepalive", FrameKeepAlive, []byte{}},
-		{"ping", FramePing, []byte{}},
-		{"pong", FramePong, []byte{}},
-		{"empty_payload", FrameSendPacket, []byte{}},
+		{name: "client_auth", payload: []byte("hello"), ft: FrameClientAuth},
+		{name: "server_auth", payload: []byte{0x00}, ft: FrameServerAuth},
+		{name: "send_packet", payload: make([]byte, KeyLen+10), ft: FrameSendPacket},
+		{name: "recv_packet", payload: make([]byte, KeyLen+5), ft: FrameRecvPacket},
+		{name: "keepalive", payload: []byte{}, ft: FrameKeepAlive},
+		{name: "ping", payload: []byte{}, ft: FramePing},
+		{name: "pong", payload: []byte{}, ft: FramePong},
+		{name: "empty_payload", payload: []byte{}, ft: FrameSendPacket},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -546,7 +550,7 @@ func TestAuthenticate_VerifiesServerAuthProof(t *testing.T) {
 	// Tampered bind (nonce substitution replay): fail closed.
 	tampered := buildProof(serverPriv)
 	tampered[len(tampered)-1] ^= 0xFF
-	if err := c.verifyServerAuthProof(tampered, clientNonce); err == nil {
+	if proofErr := c.verifyServerAuthProof(tampered, clientNonce); proofErr == nil {
 		t.Fatal("tampered proof must be rejected")
 	}
 }

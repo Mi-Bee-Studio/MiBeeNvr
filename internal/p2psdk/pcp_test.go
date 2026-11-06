@@ -23,8 +23,8 @@ func newFakePCPGateway(t *testing.T, wanIP net.IP, externalPortOverride int) *fa
 	go func() {
 		buf := make([]byte, 128)
 		for {
-			n, addr, err := pc.ReadFrom(buf)
-			if err != nil {
+			n, addr, readErr := pc.ReadFrom(buf)
+			if readErr != nil {
 				return
 			}
 			req := buf[:n]

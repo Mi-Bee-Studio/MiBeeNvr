@@ -55,8 +55,8 @@ func pcpMapUDP(gwAddr string, port int, timeout time.Duration) (int, error) {
 	defer func() { _ = conn.Close() }() //nolint:errcheck // teardown
 
 	var nonce [12]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return 0, fmt.Errorf("pcp nonce: %w", err)
+	if _, nonceErr := rand.Read(nonce[:]); nonceErr != nil {
+		return 0, fmt.Errorf("pcp nonce: %w", nonceErr)
 	}
 
 	req := make([]byte, pcpMsgLen)
@@ -74,13 +74,13 @@ func pcpMapUDP(gwAddr string, port int, timeout time.Duration) (int, error) {
 	buf := make([]byte, 64)
 	lastErr := errors.New("pcp: no response")
 	for range pcpRequestTries {
-		if _, err := conn.Write(req); err != nil {
-			return 0, err
+		if _, writeErr := conn.Write(req); writeErr != nil {
+			return 0, writeErr
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
-		n, err := conn.Read(buf)
-		if err != nil {
-			lastErr = err
+		n, readErr := conn.Read(buf)
+		if readErr != nil {
+			lastErr = readErr
 			continue
 		}
 		resp := buf[:n]

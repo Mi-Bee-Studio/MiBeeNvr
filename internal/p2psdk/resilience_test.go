@@ -31,8 +31,8 @@ func TestSDK_KeepaliveSuppressedWhenBusy(t *testing.T) {
 	// 忙窗 500ms（~6 个 tick 机会）：每 ~30ms 写一帧（半周期 40ms 内持续刷新）。
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		pong, err := Marshal(MessageTypePong, Ping{Timestamp: time.Now().UnixMilli()})
-		require.NoError(t, err)
+		pong, marshalErr := Marshal(MessageTypePong, Ping{Timestamp: time.Now().UnixMilli()})
+		require.NoError(t, marshalErr)
 		require.NoError(t, sess.signal.sendBytes(pong))
 		time.Sleep(30 * time.Millisecond)
 	}

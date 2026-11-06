@@ -21,35 +21,42 @@ const stunMagicCookie = 0x2112A442
 // the mapping a NEW ICE session's socket would get, which is exactly what we
 // want to advertise.
 func stunQuery(addr string, timeout time.Duration) (string, error) {
-	raddr, err := net.ResolveUDPAddr("udp4", addr)
-	if err != nil {
-		return "", err
-	}
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close() //nolint:errcheck // probe teardown
+	return stunQueryOnConn(conn, addr, timeout)
+}
+
+// stunQueryOnConn runs one Binding Request round-trip over an existing
+// socket. netcheck shares one socket across servers so the per-destination
+// mapped addresses are comparable (EIM/EDM classification depends on it).
+func stunQueryOnConn(conn *net.UDPConn, addr string, timeout time.Duration) (string, error) {
+	raddr, err := net.ResolveUDPAddr("udp4", addr)
+	if err != nil {
+		return "", err
+	}
 
 	var pkt [20]byte
 	binary.BigEndian.PutUint16(pkt[0:], 0x0001) // Binding Request
 	binary.BigEndian.PutUint32(pkt[4:], stunMagicCookie)
-	if _, err := rand.Read(pkt[8:]); err != nil {
-		return "", err
+	if _, randErr := rand.Read(pkt[8:]); randErr != nil {
+		return "", randErr
 	}
 	txid := string(pkt[8:20])
 
 	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
-	if _, err := conn.WriteToUDP(pkt[:], raddr); err != nil {
-		return "", err
+	if _, writeErr := conn.WriteToUDP(pkt[:], raddr); writeErr != nil {
+		return "", writeErr
 	}
 	buf := make([]byte, 1500)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		_ = conn.SetReadDeadline(deadline)
-		n, _, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			return "", err
+		n, _, readErr := conn.ReadFromUDP(buf)
+		if readErr != nil {
+			return "", readErr
 		}
 		if n < 20 || binary.BigEndian.Uint16(buf[0:]) != 0x0101 {
 			continue

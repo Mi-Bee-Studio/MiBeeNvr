@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,65 +27,80 @@ type signalSender interface {
 	sendRaw(msgType MessageType, payload any) error
 }
 
+//nolint:govet // fieldalignment: 剩 8B 尺寸差，整struct重排会毁掉按语义分组的字段注释
 type p2pSession struct {
-	sessionID       string
-	remotePeerID    string
-	isOfferer       bool
-	pc              *webrtc.PeerConnection
-	dc              *webrtc.DataChannel
-	mu              sync.Mutex
-	logger          *slog.Logger
-	owner           *Session // live callback source; user callbacks are read at event time
-	onStats         func(StatsSnapshot)
-	signal          signalSender
-	graceTimer      *time.Timer
-	recoveryStart   time.Time
-	restartFailures int         // consecutive failed ICE restart rounds
-	restartTimer    *time.Timer // periodic driver while a restart offer is unanswered
-	iceConnected    bool        // last known ICE connection state (liveness gate for retries)
-	statsCollector  *StatsCollector
-
-	// #88① dual-channel direct path. ctrlWanted mirrors the requester's
-	// ctrl_channel declaration (offerer gate — an old requester never sees
-	// a second channel). ctrlDC holds the wrapped lossy control channel
-	// once open; nil otherwise. Guarded by mu.
-	ctrlWanted bool
-	ctrlDC     *DataChannel
-	ctrlRaw    *webrtc.DataChannel
-
-	// lastActivity is the unix-nano timestamp of the most recent traffic on
-	// the user-facing DataChannel (either direction). The Session idle sweep
-	// reclaims sessions whose viewers died without session_close (#20).
-	lastActivity atomic.Int64
-
-	// relayChan is this session's channel over the SHARED relay client
-	// (nil until relay adoption). Firing its close callbacks on session
-	// teardown is what lets the application layer (NVR tunnel registry)
-	// unregister — the old shim's OnClose was a registration-swallowing
-	// no-op, leaking the registry entry past session reclamation.
-	relayChan *relaySessionChannel
-
-	// Relay fallback fields.
-	iceReady       chan struct{}
-	relayClient    *relay.Client
-	remoteRelayKey [32]byte
+	recoveryStart time.Time
+	startedAt     time.Time
+	signal        signalSender
+	iceReady      chan struct{}
 	// watchSignal/watchCfg snapshot the arbitration inputs so the
 	// pathological-pair eviction (pathevict.go) can adopt the relay
 	// transport later, from the stats callback. Set once by watchTransport.
-	watchSignal       *signalingClient
-	watchCfg          SignalingConfig
-	evictOnce         sync.Once
-	pendingCandidates []string
-	relayActive       bool // true once relay transport was adopted; ICE restarts are then moot
-
+	watchSignal *signalingClient
+	dc          *webrtc.DataChannel
 	// relayKick is closed when the peer announces (via signaling session_open)
 	// that it adopted the relay transport while our ICE arbitration is still
 	// pending — the arbitration then falls to relay immediately instead of
 	// burning the full TransportTimeout window (2026-10-08: 20s of dead
 	// first-screen time measured in production). Closing after the
 	// arbitration has decided is a harmless no-op.
-	relayKick   chan struct{}
-	relayKickFn sync.Once
+	relayKick chan struct{}
+	logger    *slog.Logger
+	owner     *Session // live callback source; user callbacks are read at event time
+	onStats   func(StatsSnapshot)
+	// #88① dual-channel direct path. ctrlRaw is the raw lossy control
+	// channel before wrapping (offerer side). Guarded by mu.
+	ctrlRaw     *webrtc.DataChannel
+	graceTimer  *time.Timer
+	relayClient *relay.Client
+	// ctrlDC holds the wrapped lossy control channel once open; nil
+	// otherwise. Guarded by mu.
+	ctrlDC       *DataChannel
+	restartTimer *time.Timer // periodic driver while a restart offer is unanswered
+	// relayChan is this session's channel over the SHARED relay client
+	// (nil until relay adoption). Firing its close callbacks on session
+	// teardown is what lets the application layer (NVR tunnel registry)
+	// unregister — the old shim's OnClose was a registration-swallowing
+	// no-op, leaking the registry entry past session reclamation.
+	relayChan         *relaySessionChannel
+	statsCollector    *StatsCollector
+	pc                *webrtc.PeerConnection
+	sessionID         string
+	remotePeerID      string
+	pendingCandidates []string
+	watchCfg          SignalingConfig
+	// lastActivity is the unix-nano timestamp of the most recent traffic on
+	// the user-facing DataChannel (either direction). The Session idle sweep
+	// reclaims sessions whose viewers died without session_close (#20).
+	lastActivity    atomic.Int64
+	restartFailures int // consecutive failed ICE restart rounds
+	// evictStreak counts consecutive pathological-pair stats samples
+	// (#82): eviction fires only after it sustains — a lone WiFi RTT spike
+	// on a healthy LAN pair must never demote the session to relay.
+	// Guarded by mu.
+	evictStreak    int
+	relayKickFn    sync.Once
+	evictOnce      sync.Once
+	mu             sync.Mutex
+	remoteRelayKey [32]byte
+	// Telemetry state (research doc 07 §5.1). telOn gates reporting
+	// (SignalingConfig.DisableTelemetry); iceTags attributes the selected
+	// path; lastPairKey/lastSnap carry change detection; startedAt (moved
+	// beside recoveryStart — same alignment class, fieldalignment) and
+	// closeReason feed the final session_stats report.
+	telOn       bool
+	iceTags     *iceTagIndex
+	telMu       sync.Mutex
+	lastPairKey string
+	lastSnap    StatsSnapshot
+	closeReason string
+	// #88①: ctrlWanted mirrors the requester's ctrl_channel declaration
+	// (offerer gate — an old requester never sees a second channel).
+	ctrlWanted bool
+	isOfferer  bool
+	// Relay fallback fields.
+	relayActive  bool // true once relay transport was adopted; ICE restarts are then moot
+	iceConnected bool // last known ICE connection state (liveness gate for retries)
 	// e2eeWarnOnce gates the plaintext-tunnel WARN: a session may deliver
 	// its channel and re-derive multiple times, but the operator only
 	// needs to hear about a plaintext tunnel once (mibeescout#16).
@@ -97,6 +114,7 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.initTelemetryLocked(cfg, welcome)
 	pc, err := newPeerConnection(cfg, welcome, p.log())
 	if err != nil {
 		return fmt.Errorf("create pc: %w", err)
@@ -104,6 +122,7 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	p.pc = pc
 	p.signal = signal
 	pc.OnICEConnectionStateChange(p.handleICEStateChange)
+	pc.OnConnectionStateChange(p.watchPCClosed)
 
 	// #88①: open the lossy control channel FIRST (SCTP stream id order is
 	// creation order), but ONLY when the requester declared dual-channel
@@ -112,12 +131,12 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	if p.ctrlWanted {
 		unordered := false
 		noRetrans := uint16(0)
-		ctrl, err := pc.CreateDataChannel(DataChannelLabelCtrl, &webrtc.DataChannelInit{
+		ctrl, ctrlErr := pc.CreateDataChannel(DataChannelLabelCtrl, &webrtc.DataChannelInit{
 			Ordered:        &unordered,
 			MaxRetransmits: &noRetrans,
 		})
-		if err != nil {
-			p.log().Warn("ctrl channel create failed — single-channel fallback", "error", err)
+		if ctrlErr != nil {
+			p.log().Warn("ctrl channel create failed — single-channel fallback", errKey, ctrlErr)
 		} else {
 			p.ctrlRaw = ctrl
 		}
@@ -136,22 +155,22 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	dc.OnMessage(p.dataChannelMessageHandler())
 
 	// Send connect_accept so the initiator knows we accepted
-	if err := signal.sendRaw(MessageTypeConnectAccept, ConnectAccept{
+	if sendErr := signal.sendRaw(MessageTypeConnectAccept, ConnectAccept{
 		SessionID: p.sessionID,
-	}); err != nil {
+	}); sendErr != nil {
 		_ = pc.Close()
-		return fmt.Errorf("send connect_accept: %w", err)
+		return fmt.Errorf("send connect_accept: %w", sendErr)
 	}
-	p.log().Info("connect accepted", "session_id", p.sessionID)
+	p.log().Info("connect accepted", sessionIDKey, p.sessionID)
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		_ = pc.Close()
 		return fmt.Errorf("create offer: %w", err)
 	}
-	if err := pc.SetLocalDescription(offer); err != nil {
+	if descErr := pc.SetLocalDescription(offer); descErr != nil {
 		_ = pc.Close()
-		return fmt.Errorf("set local desc: %w", err)
+		return fmt.Errorf("set local desc: %w", descErr)
 	}
 
 	<-webrtc.GatheringCompletePromise(pc)
@@ -169,8 +188,8 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 		pk := p.relayClient.PubKey()
 		offerMsg.RelayPubKey = hex.EncodeToString(pk[:])
 	}
-	if err := signal.sendRaw(MessageTypeSDPOffer, offerMsg); err != nil {
-		return err
+	if sendErr := signal.sendRaw(MessageTypeSDPOffer, offerMsg); sendErr != nil {
+		return sendErr
 	}
 
 	p.iceReady = make(chan struct{})
@@ -187,6 +206,7 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.initTelemetryLocked(cfg, welcome)
 	pc, err := newPeerConnection(cfg, welcome, p.log())
 	if err != nil {
 		return fmt.Errorf("create pc: %w", err)
@@ -194,6 +214,7 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 	p.pc = pc
 	p.signal = signal
 	pc.OnICEConnectionStateChange(p.handleICEStateChange)
+	pc.OnConnectionStateChange(p.watchPCClosed)
 
 	p.startStatsCollectorLocked(pc)
 
@@ -216,7 +237,7 @@ func (p *p2pSession) startAsAnswerer(signal *signalingClient, cfg SignalingConfi
 		dc.OnOpen(func() {
 			p.log().Info(
 				"DataChannel opened (dtls)",
-				"session_id", p.sessionID, "label", dc.Label(),
+				sessionIDKey, p.sessionID, labelKey, dc.Label(),
 			)
 			if cb := p.owner.dataChannelCallback(); cb != nil {
 				wdc := p.activityDataChannel(wrapDataChannel(dc))
@@ -259,7 +280,7 @@ func (p *p2pSession) dataChannelOpenHandler(signal *signalingClient, cfg Signali
 	return func() {
 		p.log().Info(
 			"DataChannel opened (dtls)",
-			"session_id", p.sessionID,
+			sessionIDKey, p.sessionID,
 		)
 		p.mu.Lock()
 		dc := p.dc
@@ -297,7 +318,7 @@ func (p *p2pSession) dataChannelOpenHandler(signal *signalingClient, cfg Signali
 
 func (p *p2pSession) dataChannelMessageHandler() func(webrtc.DataChannelMessage) {
 	return func(msg webrtc.DataChannelMessage) {
-		p.log().Debug("data received", "len", len(msg.Data))
+		p.log().Debug("data received", lenKey, len(msg.Data))
 	}
 }
 
@@ -320,8 +341,8 @@ func (p *p2pSession) handleRemoteOffer(sdp string, signal *signalingClient) erro
 	if err != nil {
 		return fmt.Errorf("create answer: %w", err)
 	}
-	if err := p.pc.SetLocalDescription(answer); err != nil {
-		return fmt.Errorf("set local desc: %w", err)
+	if descErr := p.pc.SetLocalDescription(answer); descErr != nil {
+		return fmt.Errorf("set local desc: %w", descErr)
 	}
 
 	<-webrtc.GatheringCompletePromise(p.pc)
@@ -393,6 +414,10 @@ func (p *p2pSession) handleRemoteICECandidate(candidate string) error {
 // flushPendingCandidatesLocked replays any ICE candidates that arrived
 
 func (p *p2pSession) close() error {
+	// Final telemetry before tearing anything down: the signaling link and
+	// stats snapshot are both still alive here (research doc 07 §5.1).
+	p.emitSessionStats()
+
 	p.mu.Lock()
 	if p.graceTimer != nil {
 		p.graceTimer.Stop()
@@ -402,9 +427,8 @@ func (p *p2pSession) close() error {
 		p.restartTimer.Stop()
 		p.restartTimer = nil
 	}
-	if p.statsCollector != nil {
-		p.statsCollector.Stop()
-	}
+	sc := p.statsCollector
+	p.statsCollector = nil
 	dc := p.dc
 	p.dc = nil
 	// NOTE: p.relayClient is the SESSION-LEVEL shared connection (snapshotted
@@ -417,6 +441,13 @@ func (p *p2pSession) close() error {
 	pc := p.pc
 	p.pc = nil
 	p.mu.Unlock()
+
+	// Stop OUTSIDE p.mu (2026-10-19): the collector's OnStats callback runs
+	// checkPathEviction, which takes p.mu — stopping under the lock deadlocks
+	// close() against a tick already inside that callback.
+	if sc != nil {
+		sc.Stop()
+	}
 
 	var relayCh *relaySessionChannel
 	p.mu.Lock()
@@ -439,9 +470,9 @@ func (p *p2pSession) close() error {
 
 func (p *p2pSession) log() *slog.Logger {
 	if p.logger != nil {
-		return p.logger.With("session_id", p.sessionID)
+		return p.logger.With(sessionIDKey, p.sessionID)
 	}
-	return slog.Default().With("session_id", p.sessionID)
+	return slog.Default().With(sessionIDKey, p.sessionID)
 }
 
 // relayActiveSnapshot reports whether this session adopted the relay
@@ -452,12 +483,46 @@ func (p *p2pSession) relayActiveSnapshot() bool {
 	return p.relayActive
 }
 
+// watchPCClosed reacts to PeerConnection → Closed on a still-registered
+// session (2026-10-20 root cause of the fleet leak storm): a REMOTE
+// graceful close (the peer SDK's session teardown, DTLS close_notify on
+// the wire) cascades OUR PeerConnection to Closed without any local
+// Close() — pinned by TestRemoteGracefulCloseCascadesToLocalPCClosed.
+// The SDK used to ignore that signal, so the session lingered registered
+// until the 15-minute idle sweep while its stats collector polled the
+// dead PC (the "agent is closed" storm + PC/collector idle churn). Now
+// the transition IS the death notice: immediate teardown, session_close
+// lets a still-alive peer redial at once. Our own teardown path is
+// registry-gone by the time its pc.Close() fires this callback, so the
+// identity check below filters it out.
+func (p *p2pSession) watchPCClosed(s webrtc.PeerConnectionState) {
+	if s != webrtc.PeerConnectionStateClosed {
+		return
+	}
+	if p.owner.getP2P(p.sessionID) != p {
+		return // our own teardown already owns the session
+	}
+	p.log().Info("PeerConnection closed by remote cascade — tearing down session")
+	// Async: we are on pion's connection-state goroutine; teardown joins
+	// the ICE agent via close() and would deadlock inline.
+	go p.teardownWithReason("peerconnection_closed")
+}
+
+// boundToRelayPeer reports whether this session's relay peer key matches —
+// the FramePeerGone (#106-B) victim filter. Caller holds the owner's RLock.
+func (p *p2pSession) boundToRelayPeer(peer [32]byte) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.remoteRelayKey == peer
+}
+
 // teardownWithReason removes the session from the owner's registry, closes
 // local resources, notifies the peer via signaling session_close (so it
 // redials immediately instead of timing out against silence) and fires the
 // OnSessionClose callback. Caller: abandonSession (restart path) and the
 // relay-fatal victim sweep (peer.go handleRelayFatal).
 func (p *p2pSession) teardownWithReason(reason string) {
+	p.setTelemetryCloseReason(reason)
 	if p.signal != nil {
 		_ = p.signal.sendRaw(MessageTypeSessionClose, SessionClose{
 			SessionID: p.sessionID, Reason: reason,
@@ -517,6 +582,7 @@ func (p *p2pSession) startStatsCollectorLocked(pc *webrtc.PeerConnection) {
 	p.statsCollector.OnStats = func(snap StatsSnapshot) {
 		snap.SessionID = sid
 		p.checkPathEviction(snap)
+		p.maybeSendIceSelected(snap)
 		if p.onStats != nil {
 			p.onStats(snap)
 		}
@@ -552,7 +618,7 @@ func (p *p2pSession) watchTransport(signal *signalingClient, cfg SignalingConfig
 		return
 	}
 	if err != nil {
-		p.log().Warn("transport establishment failed", "error", err)
+		p.log().Warn("transport establishment failed", errorKey, err)
 		return
 	}
 
@@ -571,7 +637,7 @@ func (p *p2pSession) adoptRelayTransport(signal *signalingClient, cfg SignalingC
 	ch := &relaySessionChannel{rc: rc, peer: p.remoteRelayKey}
 	p.relayChan = ch
 	p.mu.Unlock()
-	p.log().Info("using relay transport", "session_id", p.sessionID, "pinned", cfg.ForceRelay)
+	p.log().Info("using relay transport", sessionIDKey, p.sessionID, pinnedKey, cfg.ForceRelay)
 
 	dc := p.activityDataChannel(ch.dataChannel())
 	p.armE2EE(&dc)
@@ -623,7 +689,7 @@ func (p *p2pSession) e2eeKey() []byte {
 	}
 	key, err := rc.DeriveE2EEKey(remote)
 	if err != nil {
-		p.log().Warn("e2ee key derivation failed", "error", err)
+		p.log().Warn("e2ee key derivation failed", errorKey, err)
 		return nil
 	}
 	return key[:]
@@ -648,12 +714,11 @@ func (p *p2pSession) armE2EE(dc *DataChannel) {
 // that same key), and Close is session-local: it never touches the shared
 // relay.Client, whose lifetime belongs to Session.Close (PR #24 semantics).
 type relaySessionChannel struct {
-	rc   *relay.Client
-	peer [32]byte
-
-	mu      sync.Mutex
-	closed  bool
+	rc      *relay.Client
 	onClose []func()
+	mu      sync.Mutex
+	peer    [32]byte
+	closed  bool
 }
 
 func (r *relaySessionChannel) dataChannel() DataChannel {
@@ -763,6 +828,98 @@ func applyICETuning(se *webrtc.SettingEngine, cfg SignalingConfig) {
 	}
 }
 
+// sctpRTOMaxDefault caps the SCTP retransmission-timeout ceiling. pion's
+// stock ceiling is RFC-4960-scale (seconds); on healthy low-RTT paths one
+// spurious no-progress event then parks the sender for hundreds of
+// milliseconds per occurrence (#109: the fleet 63.52→62.40 direction
+// measured 17–23 such stalls per 3.3MB leg, 81→20 Mbps, while RTT/loss
+// stayed flat and the reverse direction stayed clean). A 600ms ceiling
+// bounds the wait and restored full throughput in the on-path bench
+// matrix (6/6 legs, zero stalls); it stays above any realistic P2P RTT so
+// it cannot push RTO below path RTT. MIBEE_SCTP_RTO_MAX_MS overrides the
+// value; setting it to 0 restores stock pion behavior.
+const sctpRTOMaxDefault = 600 * time.Millisecond
+
+func envDurationMs(name string) time.Duration {
+	v := os.Getenv(name)
+	if v == "" {
+		return -1
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return time.Duration(n) * time.Millisecond
+}
+
+func envUint32(name string) (uint32, bool) {
+	v := os.Getenv(name)
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || int64(n) > math.MaxUint32 {
+		return 0, false
+	}
+	return uint32(n), true //nolint:gosec // G115: bounds checked above
+}
+
+// iceRenominationDefault: automatic renomination interval. #104 A/B
+// (2026-10-25, mesh fleet 62.40↔63.52, netem delay 150ms/loss 20% on the
+// nominated direct pair): renomination OFF pinned the session to the degraded
+// pair (RTT p50 152ms, throughput 0, three failed cycles, recovery only via
+// linktest's dead-streak rebuild); ON switched to the peer's other healthy
+// host pair within one cycle (RTT 2.4ms, 60-86 Mbps, no session rebuild).
+// Default ON at 3s (browser-scale re-evaluation); MIBEE_ICE_RENOMINATION_MS=0
+// disables, N>0 overrides the interval.
+const iceRenominationDefault = 3000 * time.Millisecond
+
+// applyICERenomination installs automatic renomination
+// (#104 task 2, draft-thatcher-ice-renomination): the controlling side
+// re-evaluates candidate pairs and switches to a better one without a full
+// ICE restart — quality-triggered path adaptation (the restart/abandon ladder
+// stays as the failure-triggered backstop). Interop: controlling-side
+// behavior only; the extra STUN attribute (0xC001) is ignored by
+// RFC-compliant agents that don't know the draft, and controlled/non-pion
+// peers just see ordinary nominations — no SDP negotiation involved.
+func applyICERenomination(se *webrtc.SettingEngine, logger *slog.Logger) {
+	d := envDurationMs("MIBEE_ICE_RENOMINATION_MS")
+	switch {
+	case d == 0: // explicit off
+		return
+	case d < 0: // unset/invalid → default
+		d = iceRenominationDefault
+	}
+	// logger may be nil（newPeerConnection 的测试路径传 nil——对齐包内
+	// 其它 nil-safe 日志约定）。
+	if err := se.SetICERenomination(webrtc.WithRenominationInterval(d)); err != nil {
+		if logger != nil {
+			logger.Warn("ice renomination enable failed", errKey, err)
+		}
+	} else if logger != nil {
+		logger.Info("ice automatic renomination enabled", intervalMsKey, d.Milliseconds())
+	}
+}
+
+func applySCTPHardening(se *webrtc.SettingEngine) {
+	if d := envDurationMs("MIBEE_SCTP_RTO_MAX_MS"); d >= 0 {
+		se.SetSCTPRTOMax(d)
+	} else {
+		se.SetSCTPRTOMax(sctpRTOMaxDefault)
+	}
+	// Experimental knobs for fleet A/B benching (#109 matrix), unset by
+	// default: MinCwnd / FastRtxWnd / CwndCAStep.
+	if n, ok := envUint32("MIBEE_SCTP_MIN_CWND"); ok {
+		se.SetSCTPMinCwnd(n)
+	}
+	if n, ok := envUint32("MIBEE_SCTP_FAST_RTX"); ok {
+		se.SetSCTPFastRtxWnd(n)
+	}
+	if n, ok := envUint32("MIBEE_SCTP_CA_STEP"); ok {
+		se.SetSCTPCwndCAStep(n)
+	}
+}
+
 func newPeerConnection(cfg SignalingConfig, welcome *Welcome, logger *slog.Logger) (*webrtc.PeerConnection, error) {
 	config := webrtc.Configuration{
 		BundlePolicy:  webrtc.BundlePolicyMaxBundle,
@@ -770,8 +927,12 @@ func newPeerConnection(cfg SignalingConfig, welcome *Welcome, logger *slog.Logge
 	}
 
 	if welcome != nil && len(welcome.ICEServers) > 0 {
-		iceServers := make([]webrtc.ICEServer, 0, len(welcome.ICEServers))
-		for _, srv := range welcome.ICEServers {
+		filtered := filterWelcomeICE(welcome, cfg.ICEProviderTags)
+		iceServers := make([]webrtc.ICEServer, 0, len(filtered))
+		// ICEProviderTags can pin the session to specific providers
+		// (linktest A/B: force all relay attempts through one external
+		// TURN). Unfiltered = every entry, ordering untouched.
+		for _, srv := range filtered {
 			is := webrtc.ICEServer{URLs: srv.URLs}
 			if srv.Username != "" {
 				is.Username = srv.Username
@@ -785,6 +946,8 @@ func newPeerConnection(cfg SignalingConfig, welcome *Welcome, logger *slog.Logge
 
 	se := hardenedSettingEngine("")
 	applyICETuning(&se, cfg)
+	applyICERenomination(&se, logger)
+	applySCTPHardening(&se)
 	// "auto"/"auto:N" resolve per session build via the UPnP→STUN ladder
 	// (autoendpoint.go); resolution failure degrades to "" (no advertisement,
 	// stock ICE + relay fallback) rather than failing the connection. Ladder
@@ -815,9 +978,12 @@ func applyAdvertiseAddr(se *webrtc.SettingEngine, advertiseAddr string) error {
 	if err != nil || port == 0 {
 		return fmt.Errorf("advertise_addr %q: udp port must be 1-65535", advertiseAddr)
 	}
-	if err := se.SetEphemeralUDPPortRange(uint16(port), uint16(port)); err != nil {
-		return fmt.Errorf("advertise_addr %q: pin port: %w", advertiseAddr, err)
+	if pinErr := se.SetEphemeralUDPPortRange(uint16(port), uint16(port)); pinErr != nil {
+		return fmt.Errorf("advertise_addr %q: pin port: %w", advertiseAddr, pinErr)
 	}
+	//nolint:staticcheck // SA1019: pion deprecates SetNAT1To1IPs in favor of
+	// SetICEAddressRewriteRules, but the rewrite rules change mDNS/candidate
+	// semantics; migrating is a deliberate behavior change, not a lint fix.
 	se.SetNAT1To1IPs([]string{host}, webrtc.ICECandidateTypeHost)
 	se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	return nil

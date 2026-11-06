@@ -88,8 +88,8 @@ func startEchoServer(t testing.TB) (net.Listener, string) {
 
 	go func() {
 		for {
-			conn, err := listener.Accept()
-			if err != nil {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
 				return
 			}
 			go func() {
@@ -116,8 +116,8 @@ func startHTTPServer(t testing.TB) (net.Listener, string) {
 
 	go func() {
 		for {
-			conn, err := listener.Accept()
-			if err != nil {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
 				return
 			}
 			go func() {
@@ -208,11 +208,11 @@ func TestTunnel_LargePayload(t *testing.T) {
 		default:
 		}
 		buf := make([]byte, 65536)
-		n, err := conn.Read(buf)
+		n, readErr := conn.Read(buf)
 		if n > 0 {
 			response = append(response, buf[:n]...)
 		}
-		if err != nil {
+		if readErr != nil {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)

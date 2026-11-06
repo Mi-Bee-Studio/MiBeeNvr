@@ -23,9 +23,9 @@ import (
 // 契约：New() 必须同步注册缓冲式入站 handler；Serve() 只消费。
 
 type raceTransport struct {
-	mu      sync.Mutex
 	handler func([]byte)
 	closed  chan struct{}
+	mu      sync.Mutex
 }
 
 func newRaceTransport() *raceTransport {
@@ -74,8 +74,8 @@ func TestTunnelPreServeFramesSurvive(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 	got := make(chan []byte, 1)
 	go func() {
-		c, err := ln.Accept()
-		if err != nil {
+		c, acceptErr := ln.Accept()
+		if acceptErr != nil {
 			return
 		}
 		defer func() { _ = c.Close() }()
@@ -90,18 +90,18 @@ func TestTunnelPreServeFramesSurvive(t *testing.T) {
 
 	// Serve 之前对端已发来 open + data（真实时序：session_open 一到，
 	// 客户端暖机请求即刻上路）。帧格式与 sendMsg 同构。
-	mustJSON := func(v any) string {
-		b, err := json.Marshal(v)
-		require.NoError(t, err)
+	marshalJSON := func(v any) string {
+		b, marshalErr := json.Marshal(v)
+		require.NoError(t, marshalErr)
 		return string(b)
 	}
 	openFrame, _ := json.Marshal(TunnelMessage{
 		Type:    TunnelMessageTypeOpen,
-		Payload: mustJSON(TunnelOpen{StreamID: 7, TargetService: "probe"}),
+		Payload: marshalJSON(TunnelOpen{StreamID: 7, TargetService: "probe"}),
 	})
 	dataFrame, _ := json.Marshal(TunnelMessage{
 		Type: TunnelMessageTypeData,
-		Payload: mustJSON(TunnelData{
+		Payload: marshalJSON(TunnelData{
 			StreamID: 7, Seq: 0, Total: 1,
 			Payload: base64.StdEncoding.EncodeToString([]byte("ping-before-serve")),
 		}),
