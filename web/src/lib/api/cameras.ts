@@ -7,9 +7,12 @@ import { apiRequest, getAuthHeader, clearToken, API_BASE , readJson } from './cl
 
 export interface CameraTranscodingConfig {
   enabled: boolean;
-  target_codec: string;
-  preset: string;
-  bitrate: string;
+  // Params are optional on the wire (backend omitempty / zero values): a
+  // minimal {enabled:false} is a legitimate "explicit off" payload.
+  target_codec?: string;
+  preset?: string;
+  bitrate?: string;
+  crf?: number;
 }
 
 export interface Camera {

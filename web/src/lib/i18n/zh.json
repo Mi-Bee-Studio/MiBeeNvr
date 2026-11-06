@@ -533,6 +533,7 @@
   "detail.timestamp": "时间戳",
   "detail.title": "录像详情",
   "detail.transcodeFailed": "转码失败",
+  "detail.transcodeDisabledHint": "转码未开启：请先在 设置 → 转码 打开全局转码（或在相机编辑页单独启用），保存后重试",
   "detail.transcodeReady": "转码完成，正在重新加载播放器",
   "detail.transcodeToH264": "转码为 H.264",
   "detail.transcodingForPlayback": "正在转码以播放…",
