@@ -15,15 +15,16 @@
 
 每个摄像头都持有一个 `*model.StreamHub` —— 一个帧扇出总线。生产者调用 `hub.Broadcast(pts, au, isIDR)`;消费者调用 `hub.Subscribe(id, callback)`。hub 在一个独立的 goroutine 中运行每个消费者的回调(非阻塞;缓冲区满时丢弃)。
 
-```text
-                     ┌─────────────────────────────────────────┐
-                     │              StreamHub                   │
-   RTSP recorder ──▶ │  Broadcast(pts, au, isIDR)              │ ──▶ HLS muxer
-   ONVIF recorder ──▶ │                                         │ ──▶ WebRTC
-   IngestRecorder ──▶ │  Subscribe("hls", cb)                   │ ──▶ FLV
-                     │  Subscribe("webrtc-<id>", cb)            │ ──▶ WebSocket
-                     │  Subscribe("relay-rtmp-<id>", cb)  ◀── NEW (push-out)
-                     └─────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  P1["RTSP recorder"] --> HUB
+  P2["ONVIF recorder"] --> HUB
+  P3["IngestRecorder"] --> HUB
+  HUB["StreamHub<br/>Broadcast(pts, au, isIDR)<br/>Subscribe(&quot;hls&quot;, cb)<br/>Subscribe(&quot;webrtc-&lt;id&gt;&quot;, cb)<br/>Subscribe(&quot;relay-rtmp-&lt;id&gt;&quot;, cb) —— NEW (push-out)"]
+  HUB --> C1["HLS muxer"]
+  HUB --> C2["WebRTC"]
+  HUB --> C3["FLV"]
+  HUB --> C4["WebSocket"]
 ```
 
 **中央 hub 注册表**(`CameraManager.hubRegistry`,`GetHub(id)` / `GetOrCreateHub(id)`)是唯一的真相来源:拉流录像器、接入服务器和转发目标对于同一摄像头都引用同一个 hub 对象。
@@ -44,14 +45,15 @@
 
 ### 数据流(RTMP 示例)
 
-```text
-Publisher ──RTMP──▶ RTMP Server (handlePublisher)
-                       │  OnDataH264(au, pts)
-                       ├─▶ NALUProvider ──▶ IngestRecorder.WriteNALU(au, pts, isIDR)
-                       │                       ├─▶ hub.Broadcast (live consumers)
-                       │                       ├─▶ SPS/PPS capture + IDR-gated MP4 segment
-                       │                       └─▶ SegmentStore → RecordingDB → SegmentCompleted event
-                       └─▶ hub.Broadcast (legacy path)
+```mermaid
+flowchart TB
+  PUB["Publisher"] -- "RTMP" --> SRV["RTMP Server（handlePublisher）<br/>OnDataH264(au, pts)"]
+  SRV --> NALU["NALUProvider"]
+  NALU --> REC["IngestRecorder.WriteNALU(au, pts, isIDR)"]
+  REC --> HB1["hub.Broadcast（live consumers）"]
+  REC --> SPS["SPS/PPS capture + IDR-gated MP4 segment"]
+  REC --> EVT["SegmentStore → RecordingDB → SegmentCompleted event"]
+  SRV --> HB2["hub.Broadcast（legacy path）"]
 ```
 
 ### 关键设计要点
@@ -81,22 +83,13 @@ NVR 将摄像头的直播流转发到远端 RTMP/RTSP 目标。RTSP 目标使用
 
 ### 数据流
 
-```text
-Camera StreamHub ──▶ Subscribe("relay-rtmp-<id>", cb)
-                      │  cb(pts, au)
-                      ▼
-                   PushTarget.connectRTMP/connectRTSP
-                      │
-           ┌──────────┴──────────┐
-           ▼                     ▼
-     rtmpPublishConn       gortsplib.Client
-     (自定义握手,         .WritePacketRTP(media, pkt)
-      Type 0 发布)          (rtpEnc.Encode(au))
-           │                     │
-           ▼                     ▼
-     RTMP target            RTSP target
-     (remote NVR /          (remote NVR /
-      live platform)         backup)
+```mermaid
+flowchart TB
+  HUB["Camera StreamHub"] -- "Subscribe(&quot;relay-rtmp-&lt;id&gt;&quot;, cb)<br/>cb(pts, au)" --> PT["PushTarget.connectRTMP / connectRTSP"]
+  PT --> RTC["rtmpPublishConn<br/>(custom handshake, Type 0 publish)"]
+  PT --> GSP["gortsplib.Client<br/>.WritePacketRTP(media, pkt)<br/>(rtpEnc.Encode(au))"]
+  RTC --> T1["RTMP target<br/>(remote NVR / live platform)"]
+  GSP --> T2["RTSP target<br/>(remote NVR / backup)"]
 ```
 
 ### 关键设计要点
@@ -193,15 +186,17 @@ rtmp:
 
 ## 6. 网络拓扑示例
 
-```text
-A) Push-in: remote camera → NVR
-   [Remote Cam/ffmpeg] ──push RTMP/SRT──▶ [NVR (public IP / port-forwarded)]
-
-B) Push-out: NVR → remote destination
-   [NVR + camera] ──relay RTMP/RTSP──▶ [Remote NVR ingest / live platform]
-
-C) Chained (NVR-to-NVR, the cross-network scenario):
-   [Camera] ──RTSP──▶ [NVR-A] ──push-out relay──▶ [NVR-B (push-in ingest)] ──▶ records + live
+```mermaid
+flowchart LR
+  subgraph TOPOA["A) Push-in: remote camera → NVR"]
+    RC["Remote Cam/ffmpeg"] -- "push RTMP/SRT" --> N1["NVR (public IP / port-forwarded)"]
+  end
+  subgraph TOPOB["B) Push-out: NVR → remote destination"]
+    N2["NVR + camera"] -- "relay RTMP/RTSP" --> R1["Remote NVR ingest / live platform"]
+  end
+  subgraph TOPOC["C) Chained (NVR-to-NVR, the cross-network scenario)"]
+    CAM["Camera"] -- "RTSP" --> NA["NVR-A"] -- "push-out relay" --> NB["NVR-B (push-in ingest)"] --> OUT["records + live"]
+  end
 ```
 
 ---
@@ -289,30 +284,14 @@ G.711 使用 `rtplpcm.Decoder`（返回原始 8-bit 字节，不做解压），A
 
 ### 7.9 数据流图
 
-```text
-Camera (RTSP SDP / Xiaomi MISS)
-    │  检测音频轨道 (G.711 μ-law, A-law, Opus)
-    ▼
-Recorder (audio_enabled 标志)
-    │  通过 StreamHub 广播音频帧
-    ▼
-StreamHub
-    │  扇出到所有消费者 (录制、直播、合并)
-    ▼
-MP4 Muxer (录制)
-    │  写入音频轨道 (AAC/G.711/Opus sample entry)
-    ▼
-Segment Merge
-    │  检测音频 box (ulaw/alaw/Opus)
-    │  在合并的 MP4 中保留音频
-    ▼
-WebSocket Manager (实时预览)
-    │  发送 AudioCodecInfo (0x05) + AudioFrame (0x03)
-    ▼
-Browser
-    │  G.711 解码器 (ITU-T 标准 256 项查找表)
-    │  AudioContext 以流采样率运行 (8kHz)
-    │  Web Audio API 无缝播放
+```mermaid
+flowchart TB
+  CAM["Camera（RTSP SDP / Xiaomi MISS）<br/>检测音频轨道（G.711 μ-law, A-law, Opus）"] --> REC["Recorder（audio_enabled 标志）"]
+  REC -- "通过 StreamHub 广播音频帧" --> HUB["StreamHub<br/>扇出到所有消费者（录制、直播、合并）"]
+  HUB --> MUX["MP4 Muxer（录制）<br/>写入音频轨道（AAC/G.711/Opus sample entry）"]
+  MUX --> MERGE["Segment Merge<br/>检测音频 box（ulaw/alaw/Opus）<br/>在合并的 MP4 中保留音频"]
+  MERGE --> WSM["WebSocket Manager（实时预览）<br/>发送 AudioCodecInfo（0x05）+ AudioFrame（0x03）"]
+  WSM --> BR["Browser<br/>G.711 解码器（ITU-T 标准 256 项查找表）<br/>AudioContext 以流采样率运行（8kHz）<br/>Web Audio API 无缝播放"]
 ```
 
 ### 7.10 关键设计要点

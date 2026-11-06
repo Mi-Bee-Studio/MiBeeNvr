@@ -523,12 +523,10 @@ paths:
 
 ### Deployment Architecture
 
-```text
-camera → MediaMTX (load balancing) → MiBee NVR
-         ↓
-      monitoring node
-         ↓
-      storage cluster
+```mermaid
+flowchart LR
+  CAM["camera"] --> MM["MediaMTX (load balancing)"] --> NVR["MiBee NVR"]
+  MM --> MON["monitoring node"] --> ST["storage cluster"]
 ```
 
 ### Configuration Management

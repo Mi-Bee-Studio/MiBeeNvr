@@ -350,9 +350,19 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	existing, err := h.db.GetRecording(r.Context(), id)
-	if err != nil || existing == nil {
+	// #46: if the source row was folded away, acknowledge without mutating —
+	// these fields (duration/file_size/…) are source-segment scoped and must
+	// not be stamped onto the merged bucket row. A 200 no-op stops the
+	// consumer's retry loop instead of feeding it 404s.
+	existing, _ := h.resolveRecordingForWrite(r, id)
+	if existing == nil {
 		WriteError(w, http.StatusNotFound, "recording not found")
+		return
+	}
+	if existing.ID != id {
+		logger.Info("recording folded before metadata update — acknowledged without mutation",
+			"id", id, "merged_id", existing.ID)
+		writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "folded"})
 		return
 	}
 
@@ -431,11 +441,19 @@ func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Verify recording exists.
-	existing, err := h.db.GetRecording(r.Context(), id)
-	if err != nil || existing == nil {
+	// Verify recording exists — following fold provenance when the source row
+	// was merged away (#46: Vision holds segment IDs from push time; a fold
+	// between push and write-back turned every result into a 404 and the
+	// analysis was lost). The status lands on the merged bucket row; the
+	// rank guard keeps the aggregate non-regressing across per-source reports.
+	reqID := id
+	existing, id := h.resolveRecordingForWrite(r, id)
+	if existing == nil {
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
+	}
+	if id != reqID {
+		w.Header().Set("X-Recording-Fallback-For", reqID)
 	}
 
 	if err := h.db.UpdateRecordingAIStatus(r.Context(), id, body.AIStatus, body.AIError); err != nil {
@@ -523,6 +541,26 @@ func (h *Handler) fallbackRecording(r *http.Request, id string) *model.Recording
 		return nil
 	}
 	return fb
+}
+
+// resolveRecordingForWrite is the write-path counterpart of fallbackRecording
+// for consumer write-backs (Vision PATCH /api/recordings/{id}[/ai-status]).
+// A rolling-merge fold deletes the source row after the segment was pushed,
+// so the consumer's stale ID must land on the merged bucket row or the
+// write-back 404s and the analysis result is lost (#46: 1593 lost status
+// updates in one hour). Exact lineage provenance only — never the covering-
+// time heuristic, which could route a write onto an unrelated camera's row.
+// Returns the live row (nil when unknown) plus the ID it resolved to.
+func (h *Handler) resolveRecordingForWrite(r *http.Request, id string) (*model.Recording, string) {
+	if rec, err := h.db.GetRecording(r.Context(), id); err == nil && rec != nil {
+		return rec, id
+	}
+	if target, lerr := h.db.FindLineageTarget(r.Context(), id); lerr == nil && target != "" {
+		if rec, gerr := h.db.GetRecording(r.Context(), target); gerr == nil && rec != nil {
+			return rec, target
+		}
+	}
+	return nil, id
 }
 
 // handleTimelineGaps returns recording gaps (time periods with no recording)

@@ -724,6 +724,9 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			cm.ensureThermalVisionSkip(cam.ID)
 		}
 	}
+	if updates.SpectrumGroup != nil {
+		cam.SpectrumGroup = *updates.SpectrumGroup
+	}
 	if updates.AutoTimeSync != nil {
 		cam.AutoTimeSync = updates.AutoTimeSync
 	}

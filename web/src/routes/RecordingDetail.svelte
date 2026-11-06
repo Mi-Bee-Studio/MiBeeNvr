@@ -27,6 +27,7 @@
   import { AlertTriangle, RefreshCw, Clapperboard, Hourglass, Download, Trash2, ChevronLeft, ChevronRight } from 'lucide-svelte';
   import { parseServerDate, formatFileSize } from '$lib/format';
   import { parseTimelineMap, wallToFileSec } from '$lib/timeline-map';
+  import ThermalHistoryChart from '$lib/components/ThermalHistoryChart.svelte';
 
   import MergePanel from './recordings/MergePanel.svelte';
   import PlaybackPanel from './recordings/PlaybackPanel.svelte';
@@ -79,6 +80,45 @@
   let cameraName = $state('');
   let mergeDeleteConfirm = $state(false);
   let mergeDeleting = $state(false);
+
+  // P4 playback temperature curve (#38 Tier 2): shown when the recording's
+  // camera is the thermal channel of a dual-spectrum device. The camera is
+  // fetched once per camera_id (segment switches reuse the cached verdict).
+  let thermalCameraId = $state('');
+  let thermalCacheId = '';
+  let thermalCacheIs = false;
+  function ensureThermalCamera(cameraId: string): void {
+    if (cameraId === thermalCacheId) {
+      thermalCameraId = thermalCacheIs ? cameraId : '';
+      return;
+    }
+    thermalCameraId = '';
+    getCamera(cameraId)
+      .then((cam) => {
+        thermalCacheId = cameraId;
+        thermalCacheIs = cam?.imaging_type === 'thermal';
+        if (thermalCacheIs) thermalCameraId = cameraId;
+      })
+      .catch(() => {
+        // Camera lookup is best-effort — no curve, no error.
+        thermalCacheId = cameraId;
+        thermalCacheIs = false;
+      });
+  }
+
+  // Curve window = the recording's [start, start+duration].
+  let thermalFrom = $state('');
+  let thermalTo = $state('');
+  $effect(() => {
+    if (recording?.started_at) {
+      thermalFrom = recording.started_at;
+      const endMs = Date.parse(recording.started_at) + (recording.duration || 0) * 1000;
+      thermalTo = new Date(endMs).toISOString();
+    } else {
+      thermalFrom = '';
+      thermalTo = '';
+    }
+  });
   const mergeDownloadUrl = $derived(
     dayMerge?.status === 'completed' && dayMerge.output_path ? getTimelapseMergeDownloadUrl(dayMerge.id) : '',
   );
@@ -259,6 +299,7 @@
       const rec = await getRecording(currentId);
       if (token !== loadToken) return;
       recording = rec;
+      ensureThermalCamera(rec.camera_id);
       syncDetailDateInURL();
       // Dual-mode entry: the day's merge (if any) enables the toggle.
       void loadDayMerge();
@@ -732,6 +773,21 @@
             oncancelmerge={() => mergePanel?.requestCancel()}
             ondelete={() => (deleteConfirm = true)}
           />
+        {/if}
+
+        <!-- P4 playback temperature curve: dual-spectrum thermal recordings
+             carry the scene extremes for their window (#38 Tier 2). -->
+        {#if thermalCameraId && thermalFrom && thermalTo}
+          <div class="card p-4" data-testid="thermal-history-card">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-sm font-semibold th-text-primary">{t('thermal.historyTitle')}</h3>
+              <div class="flex items-center gap-3 text-[11px] th-text-secondary">
+                <span class="flex items-center gap-1"><span class="inline-block w-3 h-0.5" style="background:#f59e0b"></span>{t('thermal.historyMax')}</span>
+                <span class="flex items-center gap-1"><span class="inline-block w-3 border-t border-dashed" style="border-color:#38bdf8"></span>{t('thermal.historyMin')}</span>
+              </div>
+            </div>
+            <ThermalHistoryChart cameraId={thermalCameraId} from={thermalFrom} to={thermalTo} />
+          </div>
         {/if}
       </div>
     {/if}

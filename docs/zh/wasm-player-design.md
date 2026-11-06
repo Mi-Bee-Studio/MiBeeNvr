@@ -16,37 +16,21 @@ WASM + WebCodecs 统一播放器与 AI 检测系统是一个现代的、分层�
 
 该系统实现了复杂的分级回退架构，能够自动适应浏览器功能：
 
-```text
-┌─ 第1级：WebGPU（零拷贝硬件） ──────────────────────────────────┐
-│  WebCodecs 解码 → WebGPU 纹理（importExternalTexture）→ 渲染   │
-│  ONNX Runtime WebGPU 执行提供商（AI，5-10ms/帧）               │
-│  浏览器支持：Chrome 113+、Edge 113+、Safari 18+                 │
-│  性能：解码 200+ FPS，AI 30+ FPS，渲染 60 FPS                   │
-├───────────────────────────────────────────────────────────────────────────┤
-└── ↓ WebGPU 设备丢失或不可用 → 自动回退到 WebGL2
-
-┌─ 第2级：WebGL2 + WASM SIMD（混合模式） ─────────────────────────────┐
-│  WebCodecs 解码 → WebGL2 Canvas（copyExternalImageToTexture）→ 渲染 │
-│  ONNX Runtime WASM SIMD 执行提供商（AI，30-50ms/帧）              │
-│  浏览器支持：Firefox 130+、Safari 16.4+、Chrome 94+（WebCodecs）  │
-│  性能：解码 200+ FPS，AI 10-20 FPS，渲染 60 FPS                   │
-├───────────────────────────────────────────────────────────────────────────┤
-└── ↓ WebCodecs 不可用 → 自动回退到传统播放器
-
-┌─ 第3级：传统兼容模式 ──────────────────────────────────┐
-│  HTTP-FLV/HLS/WebRTC → hls.js/mpegts.js/WHEP → <video> 元素 │
-│  浏览器支持：传统浏览器、移动浏览器、特定场景               │
-│  性能：与当前体验相同                                    │
-└───────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  T1["第1级：WebGPU（零拷贝硬件）<br/>WebCodecs 解码 → WebGPU 纹理（importExternalTexture）→ 渲染<br/>ONNX Runtime WebGPU 执行提供商（AI，5-10ms/帧）<br/>浏览器支持：Chrome 113+、Edge 113+、Safari 18+<br/>性能：解码 200+ FPS，AI 30+ FPS，渲染 60 FPS"]
+  T2["第2级：WebGL2 + WASM SIMD（混合模式）<br/>WebCodecs 解码 → WebGL2 Canvas（copyExternalImageToTexture）→ 渲染<br/>ONNX Runtime WASM SIMD 执行提供商（AI，30-50ms/帧）<br/>浏览器支持：Firefox 130+、Safari 16.4+、Chrome 94+（WebCodecs）<br/>性能：解码 200+ FPS，AI 10-20 FPS，渲染 60 FPS"]
+  T3["第3级：传统兼容模式<br/>HTTP-FLV/HLS/WebRTC → hls.js/mpegts.js/WHEP → &lt;video&gt; 元素<br/>浏览器支持：传统浏览器、移动浏览器、特定场景<br/>性能：与当前体验相同"]
+  T1 -- "WebGPU 设备丢失或不可用 → 自动回退到 WebGL2" --> T2
+  T2 -- "WebCodecs 不可用 → 自动回退到传统播放器" --> T3
 ```
 
 ### 数据流架构
 
-```text
-摄像头 → RTSP 录制器 → StreamHub → WebSocket → 浏览器 Worker →
-视频解码器 → 渲染器 → Canvas
-                                                    ↓
-前端 AI（ONNX Runtime Web）→ 检测结果 → UI 覆盖层（浏览器内完成，无服务端往返）
+```mermaid
+flowchart LR
+  CAM["摄像头"] --> RTSP["RTSP 录制器"] --> HUB["StreamHub"] --> WS["WebSocket"] --> WORKER["浏览器 Worker"] --> DEC["视频解码器"] --> REN["渲染器"] --> CV["Canvas"]
+  CV --> AI["前端 AI（ONNX Runtime Web）"] --> DET["检测结果"] --> UI["UI 覆盖层（浏览器内完成，无服务端往返）"]
 ```
 
 ### 分级检测算法

@@ -75,6 +75,7 @@ func injectYAMLConfigFields(row *storage.CameraRow, cfg *config.Config) {
 		row.RecordingTier = cam.RecordingTier
 		row.MotionSource = cam.MotionSource
 		row.ImagingType = cam.ImagingType
+		row.SpectrumGroup = cam.SpectrumGroup
 		row.AutoTimeSync = cam.AutoTimeSync
 		row.MJPEGForm = cam.MJPEGForm
 		row.Pixgate = cam.Pixgate
@@ -398,6 +399,10 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		// Imaging channel (dual-spectrum): ""/"visible" or "thermal". nil =
 		// unchanged. Thermal applies the default policy (AI push skip).
 		ImagingType *string `json:"imaging_type"`
+		// Spectrum link (dual-spectrum): non-empty group key shared by the
+		// channels of one device registering as separate GB SIP devices.
+		// nil = unchanged; "" clears the link.
+		SpectrumGroup *string `json:"spectrum_group"`
 		// AutoTimeSync opts in/out of time_sync.auto for this camera (#time-sync).
 		AutoTimeSync *bool `json:"auto_time_sync"`
 		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
@@ -527,6 +532,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingTier:          body.RecordingTier,
 		MotionSource:           body.MotionSource,
 		ImagingType:            body.ImagingType,
+		SpectrumGroup:          body.SpectrumGroup,
 		AutoTimeSync:           body.AutoTimeSync,
 		MJPEGForm:              body.MJPEGForm,
 		Pixgate:                body.Pixgate,
@@ -556,7 +562,8 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	// (or the new one, when the same request changes it) — adaptive needs
 	// h264/h265.
 	if body.RecordingMode != nil || body.Adaptive != nil || body.AudioTrigger != nil ||
-		body.MotionSource != nil || body.MJPEGForm != nil || body.ImagingType != nil {
+		body.MotionSource != nil || body.MJPEGForm != nil || body.ImagingType != nil ||
+		body.SpectrumGroup != nil {
 		probe := config.CameraConfig{ID: id}
 		if h.config != nil {
 			for _, cam := range h.config.Cameras {
@@ -577,6 +584,9 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.ImagingType != nil {
 			probe.ImagingType = *body.ImagingType
+		}
+		if body.SpectrumGroup != nil {
+			probe.SpectrumGroup = *body.SpectrumGroup
 		}
 		if body.MJPEGForm != nil {
 			probe.MJPEGForm = *body.MJPEGForm
@@ -794,6 +804,10 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Get("/stream.flv", h.handleFLVStream)
 			r.Get("/stream.mjpeg", h.handleMjpegStream)
 			r.Get("/latest-frame", h.handleLatestFrame)
+			// Dual-spectrum spot-temperature grid (proxied device readout)
+			r.Get("/thermal/frame", h.handleThermalFrame)
+			// P4 temperature history (minute-aggregated, playback curve)
+			r.Get("/thermal/history", h.handleThermalHistory)
 			// Per-camera protocols
 			r.Get("/protocols", h.handleCameraProtocols)
 			// Flow-path snapshot (#469)

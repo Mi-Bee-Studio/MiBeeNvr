@@ -30,6 +30,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/viewer"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // memlimitAppliedFn reads the applied GOMEMLIMIT for the metrics gauge —
@@ -87,6 +89,26 @@ func buildCoreDeps(deps *appDeps) error {
 	// Publish the GOMEMLIMIT applied by main.go (#756) — builders run after
 	// applyMemoryLimit, so the recorded value is final. Seam for wiring tests.
 	m.MemorySoftLimitBytes.Set(float64(memlimitAppliedFn()))
+
+	// License gauges (#49): evaluate at scrape time (a license can expire or
+	// be hot-installed between scrapes — no updater loop to drift). The
+	// state enum maps to numbers so the gate is alertable without label
+	// matching; a silently blocking gate previously had no metric face.
+	m.Registry.MustRegister(
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "nvr_license_state",
+			Help: "License evaluation state: 0=none 1=invalid 2=expired 3=expiring_soon 4=valid",
+		}, licenseStateGaugeValue(deps.licenseMgr)),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "nvr_license_allowed",
+			Help: "1 when gated capabilities (e.g. P2P remote access) are allowed, 0 when the gate is blocking",
+		}, func() float64 {
+			if deps.licenseMgr.Allowed() {
+				return 1
+			}
+			return 0
+		}),
+	)
 	// Step 2.15: Shared background I/O budget (#751) — merge, cleanup and
 	// timelapse extraction pace their bulk I/O against one process-wide
 	// token bucket so foreground work (recording writes, API file serving,

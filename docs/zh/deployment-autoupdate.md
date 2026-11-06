@@ -112,19 +112,22 @@ openssl pkeyutl -verify -pubin -inkey release-signing.pub.pem \
 
 Docker 之外,`install.sh` 安装的裸机环境是最后一个可自动化的在线场景。架构刻意绕开进程内自我替换——`mibee-nvr.service` 的沙箱(`User=nvr` + `ProtectSystem=strict`)本来就禁止应用写 `/usr/local/bin`:
 
-```text
-应用(nvr 用户,沙箱内)                root helper(mibee-nvr-update.service)
-  感知层发现新版 + update.auto_apply: true
-  ├─ 写请求文件 /var/lib/mibee-nvr/update-request.json
-  └─ systemctl start mibee-nvr-update.service   →  mibee-nvr update --apply-request …
-                                                    ① 前置检查(非 docker、semver 严格更新、磁盘 ≥ 产物×3)
-                                                    ② 流式下载校验和 + ed25519 签名 + 二进制
-                                                    ③ sha256 + 签名验证(失败即中止,系统零改动)
-                                                    ④ 保留 .prev → 原子替换二进制
-                                                    ⑤ systemctl restart mibee-nvr
-                                                    ⑥ 健康门禁:/api/health 就绪探针
-                                                    ⑦ 失败自动回滚 .prev 并重启
-                                                    ⑧ 升级历史落盘 update-history.jsonl
+```mermaid
+flowchart TB
+  subgraph APP["应用（nvr 用户，沙箱内）"]
+    A1["感知层发现新版 + update.auto_apply: true"] --> A2["写请求文件 /var/lib/mibee-nvr/update-request.json"] --> A3["systemctl start mibee-nvr-update.service"]
+  end
+  subgraph HELPER["root helper（mibee-nvr-update.service）"]
+    H1["mibee-nvr update --apply-request …"] --> S1["① 前置检查（非 docker、semver 严格更新、磁盘 ≥ 产物×3）"]
+    S1 --> S2["② 流式下载校验和 + ed25519 签名 + 二进制"]
+    S2 --> S3["③ sha256 + 签名验证（失败即中止，系统零改动）"]
+    S3 --> S4["④ 保留 .prev → 原子替换二进制"]
+    S4 --> S5["⑤ systemctl restart mibee-nvr"]
+    S5 --> S6["⑥ 健康门禁：/api/health 就绪探针"]
+    S6 --> S7["⑦ 失败自动回滚 .prev 并重启"]
+    S7 --> S8["⑧ 升级历史落盘 update-history.jsonl"]
+  end
+  A3 --> H1
 ```
 
 polkit 规则(`/etc/polkit-1/rules.d/60-mibee-nvr-update.rules`,installer 自动安装)只放行 nvr 用户**启动这一个 unit**,特权面最小。

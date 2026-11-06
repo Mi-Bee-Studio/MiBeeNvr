@@ -148,8 +148,9 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		// Imaging channel (dual-spectrum): ""/"visible" or "thermal". Thermal
 		// applies the default policy (AI push skip; continuous recording
 		// recommended — the NUC shutter defeats pixel-domain motion gates).
-		ImagingType  string `json:"imaging_type"`
-		AutoTimeSync *bool  `json:"auto_time_sync"`
+		ImagingType   string `json:"imaging_type"`
+		SpectrumGroup string `json:"spectrum_group"`
+		AutoTimeSync  *bool  `json:"auto_time_sync"`
 		// MJPEG segment shape (#761): ""/"avi" (single-file AVI container,
 		// default) or "dir" (legacy per-frame directory).
 		MJPEGForm string `json:"mjpeg_form"`
@@ -406,6 +407,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		RecordingTier:          body.RecordingTier,
 		MotionSource:           body.MotionSource,
 		ImagingType:            body.ImagingType,
+		SpectrumGroup:          body.SpectrumGroup,
 		AutoTimeSync:           body.AutoTimeSync,
 		MJPEGForm:              body.MJPEGForm,
 		Pixgate:                body.Pixgate,

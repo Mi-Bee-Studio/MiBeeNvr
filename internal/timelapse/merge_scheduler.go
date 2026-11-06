@@ -22,6 +22,15 @@ type mergeEntry struct {
 // next run times based on aligned UTC boundaries. A single goroutine drives
 // the loop, waking up at the earliest next run time across all cameras.
 //
+// Scheduled merges SERIALIZE on mergeSerial: aligned boundaries fire the
+// whole fleet at once (00:00 is the default for 24h windows), and N cameras
+// merging concurrently saturated the deployment host's disk (load 8.6,
+// iowait 29%, /api/cameras at 30s for the batch's duration — soak
+// observation). One merge pipeline at a time; queued goroutines observe ctx
+// cancellation so Stop stays fast. Catch-up already ran this way — its
+// comment promised "mirroring the scheduled path's serialization", which
+// only becomes true now.
+//
 // Thread-safe for AddOrUpdate/Remove from any goroutine.
 type MergeScheduler struct {
 	mu      sync.Mutex
@@ -32,6 +41,9 @@ type MergeScheduler struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	updated chan struct{} // signals entry changes to wake up the loop
+
+	// mergeSerial serializes scheduled merge executions across cameras (#47).
+	mergeSerial sync.Mutex
 }
 
 // NewMergeScheduler creates a new MergeScheduler with no entries.
@@ -166,6 +178,21 @@ func (s *MergeScheduler) triggerDueAt(ctx context.Context, now time.Time) int {
 			closedWindowRef := now.Add(-entry.duration)
 			go func(camID string, refTime time.Time) {
 				defer s.wg.Done()
+				// Serialize across cameras (#47): a boundary fans the whole
+				// fleet out at once, and concurrent merge pipelines (Go
+				// keyframe merge + ffmpeg extract each) stampede the disk.
+				// Queued goroutines fail fast once ctx is cancelled, so a
+				// Stop during a backlog waits only for the in-flight merge.
+				if ctx.Err() != nil {
+					return
+				}
+				s.mergeSerial.Lock()
+				defer s.mergeSerial.Unlock()
+				// Re-check after the wait: a Stop during a backlog cancels
+				// the ctx queued goroutines were waiting through.
+				if ctx.Err() != nil {
+					return
+				}
 				if err := s.runFunc(ctx, camID, refTime); err != nil {
 					slog.Error(
 						"merge scheduler: merge failed",

@@ -26,6 +26,7 @@
   import { probeCaps } from '$lib/player/capabilities-cache';
   import { getCameraProtocolOverride } from '$lib/preferences';
   import type { ProtocolsResponse, StreamQuality } from '$lib/stream-selection';
+  import { gbSiblings, spectrumLabelKey } from '$lib/spectrum';
   import { getCameraQuality, setCameraQuality } from '$lib/stream-quality.svelte';
   let { cameraId = '' }: { cameraId?: string } = $props();
 
@@ -72,6 +73,33 @@
   function setQuality(q: StreamQuality): void {
     qualityPref = q;
     setCameraQuality(cameraId, q);
+  }
+
+  // Dual-spectrum siblings (#1092 follow-up): the other channels of the same
+  // GB device (shared gb28181.device_id, or an explicit shared
+  // spectrum_group when the channels register as separate SIP devices) —
+  // drives the thermal/visible switch chip + dual-pane. Empty for
+  // single-channel devices.
+  let spectrumSiblings = $state<Camera[]>([]);
+
+  // Dual-pane (#1092): mount the first spectrum sibling beside the main
+  // player so both channels of one physical device are watched at once. The
+  // thermal pane keeps its full overlay (chip / probe / threshold); probing
+  // there mirrors the spot on the other pane at the same relative position.
+  let dualPane = $state(false);
+  const siblingCamera = $derived(
+    dualPane && spectrumSiblings.length > 0 ? spectrumSiblings[0] : null
+  );
+  let linkedProbe = $state<{ nx: number; ny: number; c: number } | null>(null);
+  let registeredSiblingId = '';
+
+  function toggleDualPane(): void {
+    dualPane = !dualPane;
+    linkedProbe = null;
+  }
+
+  function handleLinkedProbe(p: { nx: number; ny: number; c: number }): void {
+    linkedProbe = p;
   }
 
   // ONVIF capabilities
@@ -237,6 +265,15 @@
     error = '';
     try {
       camera = await getCamera(cameraId);
+      // Dual-spectrum: resolve the other channels of the same GB device so
+      // the header can offer a thermal/visible switch chip (#1092 follow-up).
+      if (camera?.gb28181?.device_id || camera?.spectrum_group) {
+        try {
+          spectrumSiblings = gbSiblings(camera, await listCameras());
+        } catch { /* camera list unavailable — no sibling chip */ }
+      } else {
+        spectrumSiblings = [];
+      }
       // Probe caps + fetch the per-camera protocol ranking, then register the
       // camera with the orchestrator so it can build the candidate chain and
       // drive adaptive selection. A per-camera user override (from a prior
@@ -329,6 +366,37 @@
     }
   });
 
+  // Register the dual-pane sibling with the SHARED orchestrator (probe its
+  // protocol ranking first — same shape as the primary registration in
+  // loadCamera; a failed probe falls back to the HLS-only chain). Registering
+  // only builds the candidate chain — the sibling's stream spins up when its
+  // CameraPlayer mounts and recycles when the pane closes.
+  $effect(() => {
+    const sib = siblingCamera;
+    if (!sib) return;
+    let cancelled = false;
+    (async () => {
+      let resp: ProtocolsResponse | null = null;
+      try {
+        resp = (await getCameraProtocols(sib.id)) as unknown as ProtocolsResponse;
+      } catch {
+        resp = null; // /protocols unreachable — orchestrator falls back to HLS
+      }
+      if (cancelled || !siblingCamera || siblingCamera.id !== sib.id) return;
+      orchestrator.registerCamera(
+        makeRegistration(sib, resp, {
+          override: getCameraProtocolOverride(sib.id),
+          isHlsCapable: isHlsSupported(sib),
+          isUnsupported: false,
+        }),
+      );
+      registeredSiblingId = sib.id;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
   onMount(() => {
     if (!cameraId) {
       error = t('live.cameraIdRequired');
@@ -375,6 +443,7 @@
   onDestroy(() => {
     document.removeEventListener('fullscreenchange', handleFullscreenChange);
     _orchUnsub();
+    if (registeredSiblingId) orchestrator.unregisterCamera(registeredSiblingId);
     if (camera) orchestrator.unregisterCamera(camera.id);
     orchestrator.dispose();
   });
@@ -441,6 +510,28 @@
           {#if camera.imaging_type === 'thermal'}
             <span class="badge badge-warning">{t('cameras.thermalBadge')}</span>
           {/if}
+          <!-- Dual-spectrum: one GB device, two channels — one-click switch
+               between the thermal and visible channel of the same device. -->
+          {#each spectrumSiblings as sibling (sibling.id)}
+            <a
+              href={'#/live/' + sibling.id}
+              class="badge badge-outline hover:badge-warning cursor-pointer flex items-center gap-1"
+              title={sibling.name || sibling.id}
+            >
+              {t(spectrumLabelKey(sibling))}
+            </a>
+          {/each}
+          {#if spectrumSiblings.length > 0}
+            <!-- Dual-pane: watch both channels of the device side by side. -->
+            <button
+              class="badge {dualPane ? 'badge-warning' : 'badge-outline hover:badge-warning'} cursor-pointer flex items-center gap-1"
+              onclick={toggleDualPane}
+              aria-pressed={dualPane}
+              data-testid="spectrum-dual-pane"
+            >
+              {t('live.spectrum.dualPane')}
+            </button>
+          {/if}
 
           <!-- ONVIF controls shown for all ONVIF cameras -->
           {#if isOnvifCamera(camera) && deviceCaps?.snapshot}
@@ -506,40 +597,88 @@
         </div>
 
         {#if canStream(camera)}
-          <!-- Player container -->
-          <div
-            class="card border th-border overflow-hidden relative"
-            style="max-height: 80vh;"
-            bind:this={playerContainer}
-            onshrink={() => goBack()}
-          >
-            {#if switchingProtocol}
-              <!-- Switching state -->
-              <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
-                <div class="absolute inset-0 flex items-center justify-center">
-                  <div class="flex items-center gap-2">
-                    <div class="w-3 h-3 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
-                    <span class="text-white/50 text-xs">{t('live.protocol.switching')}</span>
+          <!-- Dual-pane grid (#1092): side-by-side channels of one physical
+               device. Single full-width container when off / no sibling. -->
+          <div class={dualPane && siblingCamera ? 'grid grid-cols-1 lg:grid-cols-2 gap-4 items-start' : ''}>
+            <!-- Player container (main pane) -->
+            <div
+              class="card border th-border overflow-hidden relative"
+              style="max-height: 80vh;"
+              bind:this={playerContainer}
+              onshrink={() => goBack()}
+            >
+              {#if switchingProtocol}
+                <!-- Switching state -->
+                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
+                  <div class="absolute inset-0 flex items-center justify-center">
+                    <div class="flex items-center gap-2">
+                      <div class="w-3 h-3 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
+                      <span class="text-white/50 text-xs">{t('live.protocol.switching')}</span>
+                    </div>
                   </div>
                 </div>
+              {:else}
+                <!-- CameraPlayer reads the orchestrator's active mode and renders
+                     the matching player. The orchestrator owns degrade/upgrade;
+                     ProtocolSwitcher pins the chain on manual selection. -->
+                <CameraPlayer
+                  {camera}
+                  expanded={true}
+                  tabVisible={true}
+                  streamUrl={`${API_BASE}/cameras/${cameraId}/stream/index.m3u8`}
+                  quality={qualityPref}
+                />
+              {/if}
+              {#if camera.imaging_type === 'thermal'}
+                <!-- Dual-spectrum: live temperature chip fed by the
+                     thermal.temperature SSE topic (adapter pending real
+                     devices; transport + rendering are in place). -->
+                <ThermalOverlay cameraId={camera.id} onprobe={handleLinkedProbe} />
+              {/if}
+            </div>
+            {#if dualPane && siblingCamera}
+              <!-- Sibling pane: the other channel of the same device. The
+                   thermal side keeps its full overlay; the visible side
+                   mirrors the probed spot at the same relative position
+                   (approximate — the two FOVs are not pixel-registered). -->
+              <div class="card border th-border overflow-hidden relative" data-testid="spectrum-sibling-pane">
+                <div class="flex items-center justify-between gap-2 px-3 py-2 border-b th-border th-bg-secondary">
+                  <span class="text-sm font-medium th-text-primary truncate">{siblingCamera.name || siblingCamera.id}</span>
+                  <a
+                    href={'#/live/' + siblingCamera.id}
+                    class="badge badge-outline hover:badge-warning cursor-pointer text-xs whitespace-nowrap"
+                  >
+                    {t('live.spectrum.makePrimary')}
+                  </a>
+                </div>
+                <div class="relative bg-black">
+                  {#if canStream(siblingCamera)}
+                    <CameraPlayer
+                      camera={siblingCamera}
+                      expanded={true}
+                      tabVisible={true}
+                      streamUrl={`${API_BASE}/cameras/${siblingCamera.id}/stream/index.m3u8`}
+                      quality={getCameraQuality(siblingCamera.id)}
+                    />
+                    {#if siblingCamera.imaging_type === 'thermal'}
+                      <ThermalOverlay cameraId={siblingCamera.id} onprobe={handleLinkedProbe} />
+                    {:else if linkedProbe}
+                      <span
+                        class="absolute z-10 -translate-x-1/2 -translate-y-[150%] px-1 py-0.5 rounded bg-black/70 text-[10px] font-mono text-white border border-amber-400/60"
+                        style="left:{linkedProbe.nx * 100}%;top:{linkedProbe.ny * 100}%"
+                        data-testid="spectrum-probe-mirror"
+                        title={t('live.spectrum.probeMirrorHint')}
+                      >
+                        {Number.isNaN(linkedProbe.c) ? '--' : linkedProbe.c.toFixed(1)}°C
+                      </span>
+                    {/if}
+                  {:else}
+                    <div class="flex items-center justify-center aspect-video th-text-secondary text-sm">
+                      {t('live.spectrum.siblingNoStream')}
+                    </div>
+                  {/if}
+                </div>
               </div>
-            {:else}
-              <!-- CameraPlayer reads the orchestrator's active mode and renders
-                   the matching player. The orchestrator owns degrade/upgrade;
-                   ProtocolSwitcher pins the chain on manual selection. -->
-              <CameraPlayer
-                {camera}
-                expanded={true}
-                tabVisible={true}
-                streamUrl={`${API_BASE}/cameras/${cameraId}/stream/index.m3u8`}
-                quality={qualityPref}
-              />
-            {/if}
-            {#if camera.imaging_type === 'thermal'}
-              <!-- Dual-spectrum: live temperature chip fed by the
-                   thermal.temperature SSE topic (adapter pending real
-                   devices; transport + rendering are in place). -->
-              <ThermalOverlay cameraId={camera.id} />
             {/if}
           </div>
         {:else}

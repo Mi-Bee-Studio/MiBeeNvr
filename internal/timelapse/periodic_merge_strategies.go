@@ -150,6 +150,12 @@ func (m *PeriodicMergeManager) ffmpegConcatMerge(ctx context.Context, segments [
 		return fmt.Errorf("periodic merge: start ffmpeg: %w", err)
 	}
 
+	// Bulk background work — drop to nice 10 so a merge batch never starves
+	// the recording pipeline (same rationale as the transcoding queue, #47).
+	if err := procctl.LowerPriority(cmd.Process.Pid); err != nil {
+		slog.Warn("periodic merge: failed to lower ffmpeg priority", "pid", cmd.Process.Pid, "error", err)
+	}
+
 	// Read stderr for progress and error capture.
 	var lastLines []string
 	scanner := bufio.NewScanner(stderr)
