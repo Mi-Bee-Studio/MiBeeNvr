@@ -766,3 +766,29 @@ func TestCS2WorkerAcceptsLargeTCPFrame(t *testing.T) {
 		require.NotContains(t, cerr.Error(), "buffer too small")
 	}
 }
+
+// A camera occasionally emitting a channel-2 frame shorter than the fixed
+// 32-byte header must not crash ReadPacket — the frame is dropped with a
+// WARN and reading continues with the next packet (field incident shape:
+// a 17-byte frame panicked the unguarded slice).
+func TestCS2ReadPacketDropsShortFrame(t *testing.T) {
+	c := &CS2Conn{
+		channels: [4]*cs2DataChannel{
+			nil, nil, newCS2DataChannel(10, 100), nil,
+		},
+	}
+	// cs2DataChannel frames carry a 4-byte big-endian size prefix (consumed
+	// by the framer); a 17-byte body therefore delivers 17 bytes — under
+	// the 32-byte header, the panic shape from the field incident.
+	_, err := c.channels[2].PushSeq(0, makeDataWithSize(string(make([]byte, 17))))
+	require.NoError(t, err)
+	goodBody := make([]byte, cs2HdrSize+6)
+	copy(goodBody[cs2HdrSize:], "hello!")
+	_, err = c.channels[2].PushSeq(1, makeDataWithSize(string(goodBody)))
+	require.NoError(t, err)
+
+	hdr, payload, err := c.ReadPacket()
+	require.NoError(t, err)
+	require.Equal(t, make([]byte, cs2HdrSize), hdr)
+	require.Equal(t, []byte("hello!"), payload)
+}
