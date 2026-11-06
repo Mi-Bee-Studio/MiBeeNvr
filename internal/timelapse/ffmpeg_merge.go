@@ -136,6 +136,12 @@ func (m *FFmpegMerger) runFFmpeg(ctx context.Context, args []string, outputPath 
 		return fmt.Errorf("start ffmpeg: %w", err)
 	}
 
+	// Bulk background work — drop to nice 10 so a merge batch never starves
+	// the recording pipeline (same rationale as the transcoding queue, #47).
+	if err := procctl.LowerPriority(cmd.Process.Pid); err != nil {
+		slog.Warn("merge: failed to lower ffmpeg priority", "pid", cmd.Process.Pid, "error", err)
+	}
+
 	// Consume stderr to prevent blocking; capture last lines for error diagnostics.
 	errOutput := consumeStderr(stderr)
 
