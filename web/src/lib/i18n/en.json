@@ -540,6 +540,7 @@
   "detail.timestamp": "Timestamp",
   "detail.title": "Recording Details",
   "detail.transcodeFailed": "Transcode failed",
+  "detail.transcodeDisabledHint": "Transcoding is off: enable it in Settings → Transcoding (or per-camera in the camera's edit form), save, then retry",
   "detail.transcodeReady": "Transcode ready, reloading player",
   "detail.transcodeToH264": "Transcode to H.264",
   "detail.transcodingForPlayback": "Transcoding for playback…",

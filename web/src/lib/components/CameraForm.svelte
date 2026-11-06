@@ -1,6 +1,7 @@
 <script lang="ts">
     import { t } from '$lib/i18n';
     import { friendlyError } from '$lib/errors';
+    import { buildTranscodingPayload } from '$lib/camera-form-payload';
     import {
         createCamera,
         updateCamera,
@@ -202,6 +203,7 @@
   let formTranscodingPreset = $state('ultrafast');
 let formTranscodingBitrate = $state('2M');
 let formTranscodingCRF = $state(0);
+  let formTranscodingWasEnabled = $state(false);
 // Dark frame filtering
 let formDarkFrameFilterEnabled = $state(false);
 let formDarkFrameThreshold = $state(15);
@@ -360,6 +362,7 @@ let validationErrors = $state<Record<string, string>>({});
     formTranscodingPreset = 'ultrafast';
     formTranscodingBitrate = '2M';
     formTranscodingCRF = 0;
+    formTranscodingWasEnabled = false;
     validationErrors = {};
     formChannel = '';
     formAudioEnabled = false;
@@ -410,6 +413,7 @@ let validationErrors = $state<Record<string, string>>({});
     formSubStreamURL = camera.sub_stream_url || '';
     formSubProfileToken = camera.sub_profile_token || '';
     formTranscodingEnabled = camera.transcoding?.enabled ?? false;
+    formTranscodingWasEnabled = formTranscodingEnabled;
     formTranscodingCodec = !h265Available ? 'h264' : (camera.transcoding?.target_codec || 'h264');
     formTranscodingPreset = camera.transcoding?.preset || 'ultrafast';
     formTranscodingBitrate = camera.transcoding?.bitrate || '2M';
@@ -701,13 +705,14 @@ async function performCameraSave() {
             // stale label). rtsp/http/srt/rtmp send formEncoding — it drives
             // recorder selection.
             encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181' ? undefined : formEncoding,
-            transcoding: {
+            transcoding: buildTranscodingPayload({
                 enabled: formTranscodingEnabled,
-                target_codec: formTranscodingCodec,
+                wasEnabled: formTranscodingWasEnabled,
+                targetCodec: formTranscodingCodec,
                 preset: formTranscodingPreset,
                 bitrate: formTranscodingBitrate,
-                crf: formTranscodingCRF || undefined,
-            },
+                crf: formTranscodingCRF || 0,
+            }),
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
             audio_in_recordings: formAudioInRecordings,
@@ -777,13 +782,14 @@ async function performCameraSave() {
             // stale label). rtsp/http/srt/rtmp send formEncoding — it drives
             // recorder selection.
             encoding: formProtocol === 'onvif' || formProtocol === 'xiaomi' || formProtocol === 'gb28181' ? undefined : formEncoding,
-            transcoding: {
+            transcoding: buildTranscodingPayload({
                 enabled: formTranscodingEnabled,
-                target_codec: formTranscodingCodec,
+                wasEnabled: formTranscodingWasEnabled,
+                targetCodec: formTranscodingCodec,
                 preset: formTranscodingPreset,
                 bitrate: formTranscodingBitrate,
-                crf: formTranscodingCRF || undefined,
-            },
+                crf: formTranscodingCRF || 0,
+            }),
             channel: formProtocol === 'xiaomi' ? (formChannel || undefined) : undefined,
             audio_enabled: formAudioEnabled,
             audio_in_recordings: formAudioInRecordings,
