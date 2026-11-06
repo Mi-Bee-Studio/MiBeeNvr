@@ -159,7 +159,7 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 		SessionID: p.sessionID,
 	}); sendErr != nil {
 		_ = pc.Close()
-		return fmt.Errorf("send connect_accept: %w", err)
+		return fmt.Errorf("send connect_accept: %w", sendErr)
 	}
 	p.log().Info("connect accepted", sessionIDKey, p.sessionID)
 

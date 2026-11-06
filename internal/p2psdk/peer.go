@@ -520,7 +520,7 @@ func connectSessionRelay(ctx context.Context, serverURL, serverPubKeyHex string,
 		logger.Warn("relay connect failed (non-fatal)", "error", err)
 		return nil, err
 	}
-	logger.Info("relay connection established", "relay_url", serverURL)
+	logger.Info("relay connection established", relayURLKey, serverURL)
 	return rc, nil
 }
 
