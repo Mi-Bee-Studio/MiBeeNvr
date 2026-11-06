@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 
 	"github.com/go-chi/chi/v5"
@@ -172,6 +173,37 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 			}
 			if camHealth.Total > 0 && camHealth.Offline > camHealth.Total/2 {
 				hasError = true // majority offline = error
+			}
+		}
+	}
+
+	// License gate summary (#49): only when licensing is enforced — a
+	// non-required deployment must not advertise license machinery, and the
+	// incident shape (doc wiped, required stays) still shows up as
+	// state=none/allowed=false. A blocking or soon-expiring gate degrades
+	// overall status: core NVR duty (recording) is unaffected, but remote
+	// access is down and operators must see it on the standard probe.
+	if h.licenseMgr != nil {
+		if st := h.licenseMgr.Status(); st.Required {
+			sum := &HealthLicense{
+				State:       string(st.State),
+				Required:    st.Required,
+				Allowed:     st.Allowed,
+				TimeLeftSec: st.TimeLeftSec,
+			}
+			if st.Document != nil && !st.Document.ExpiresAt.IsZero() {
+				sum.ExpiresAt = st.Document.ExpiresAt.UTC().Format(time.RFC3339)
+			}
+			resp.License = sum
+			switch {
+			case !st.Allowed:
+				resp.Checks["license"] = HealthCheck{Status: "warning", Message: "license gate blocking gated capabilities (e.g. remote access): " + string(st.State)}
+				hasWarning = true
+			case st.State == license.StateExpiringSoon:
+				resp.Checks["license"] = HealthCheck{Status: "warning", Message: fmt.Sprintf("license expiring soon (%ds left)", st.TimeLeftSec)}
+				hasWarning = true
+			default:
+				resp.Checks["license"] = HealthCheck{Status: "ok"}
 			}
 		}
 	}

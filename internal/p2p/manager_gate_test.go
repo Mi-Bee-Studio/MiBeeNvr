@@ -125,3 +125,45 @@ func TestNilGateAlwaysAllowed(t *testing.T) {
 		t.Fatalf("nil gate must not log, got: %s", buf.String())
 	}
 }
+
+// TestGateEventsOnBlockingTransitions (#49): 拦拨（含首评即拦——进程带着
+// 失效授权起来正是当年不可见事故的形态）与恢复沿必须进诊断事件流
+// （recent_events/连接记录面）；首评放行=正常开机基线，不发事件。
+func TestGateEventsOnBlockingTransitions(t *testing.T) {
+	var buf bytes.Buffer
+	gate := &fakeGate{allowed: false, state: "none"}
+	m := newGateTestManager(t, gate, &buf)
+
+	// 首评即拦 → license_blocked 事件。
+	m.gateAllowed()
+	evs := m.RecentEvents()
+	if len(evs) != 1 || evs[0].Type != "license_blocked" || !strings.Contains(evs[0].Detail, "blocked:none") {
+		t.Fatalf("expected one license_blocked event, got %+v", evs)
+	}
+
+	// 稳态复查不重复发。
+	m.gateAllowed()
+	if len(m.RecentEvents()) != 1 {
+		t.Fatalf("steady-state re-check emitted another event: %+v", m.RecentEvents())
+	}
+
+	// 热恢复（API 安装新文档）→ license_ok 事件。
+	gate.allowed, gate.state = true, "valid"
+	m.gateAllowed()
+	evs = m.RecentEvents()
+	if len(evs) != 2 || evs[1].Type != "license_ok" || !strings.Contains(evs[1].Detail, "allowed:valid") {
+		t.Fatalf("expected a license_ok recovery event, got %+v", evs)
+	}
+}
+
+// TestGateFirstEvalAllowedEmitsNoEvent: 首评放行是开机基线，事件流保持
+// 干净（否则每次重启都多一条 license_ok 噪音）。
+func TestGateFirstEvalAllowedEmitsNoEvent(t *testing.T) {
+	var buf bytes.Buffer
+	m := newGateTestManager(t, &fakeGate{allowed: true, state: "valid"}, &buf)
+
+	m.gateAllowed()
+	if evs := m.RecentEvents(); len(evs) != 0 {
+		t.Fatalf("first-eval-allowed must not emit events, got %+v", evs)
+	}
+}
