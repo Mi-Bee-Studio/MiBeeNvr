@@ -99,8 +99,8 @@ func TestEchoResponderPadsToWant(t *testing.T) {
 			if json.Unmarshal(raw, &m) != nil || m.Type != tunnel.TunnelMessageTypeEchoResp {
 				continue
 			}
-			payload, err := base64.StdEncoding.DecodeString(m.Payload)
-			require.NoError(t, err)
+			payload, decodeErr := base64.StdEncoding.DecodeString(m.Payload)
+			require.NoError(t, decodeErr)
 			assert.Len(t, payload, 16+300, "response padded to want")
 			return
 		}

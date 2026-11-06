@@ -36,33 +36,33 @@ const (
 )
 
 type autoEndpointState struct {
-	mu       sync.Mutex
+	expires time.Time
+
+	// Per-rung failure detail of the most recent ladder run (guarded by mu).
+	// The ladder is otherwise silent — these make "why did auto fail"
+	// answerable from the device journal instead of a black box.
+	upnpErr  error
+	pmpErr   error
+	stunErr  error
+	gw       *UPnPGateway
 	addr     string
 	mode     string // "upnp" | "pmp" | "stun" | "" (unresolved/negative)
 	port     int
+	mu       sync.Mutex
 	resolved bool // true once ANY result (incl. negative) is cached
-	gw       *UPnPGateway
-	expires  time.Time
-
-	// Per-rung failure detail of the most recent ladder run (guarded by mu).
-	// The ladder is otherwise silent — these make "why did auto fail" answerable
-	// from the device journal instead of a black box.
-	upnpErr error
-	pmpErr  error
-	stunErr error
 }
 
 // advertiseResolution is the diagnosable outcome of one resolveAdvertise call:
 // what address was chosen, which rung won, whether the ladder actually ran
 // (fresh) vs served from the TTL cache, and why each rung failed.
 type advertiseResolution struct {
+	upnpErr error
+	pmpErr  error
+	stunErr error
 	addr    string // concrete advertise address ("" = none)
 	mode    string // "upnp" | "pmp" | "stun" | "" (negative)
 	fresh   bool   // ladder ran this call (false = cache hit or non-auto spec)
 	ladder  bool   // spec was "auto"/"auto:<port>" (vs static/empty passthrough)
-	upnpErr error
-	pmpErr  error
-	stunErr error
 }
 
 // Hooks for deterministic tests; production uses the real network paths.
@@ -168,8 +168,8 @@ func (s *autoEndpointState) tryUPnP(port int, h *autoEndpointHooks) (advertiseRe
 		// sits behind another NAT — cross-site peers can never reach it.
 		return advertiseResolution{}, false, fmt.Errorf("upnp external %s is private/CGNAT (NAT behind NAT)", ip)
 	}
-	if err := h.addMapping(gw, port, port, upnpMappingLeaseSec); err != nil {
-		return advertiseResolution{}, false, err
+	if mapErr := h.addMapping(gw, port, port, upnpMappingLeaseSec); mapErr != nil {
+		return advertiseResolution{}, false, mapErr
 	}
 	s.addr, s.mode, s.port, s.gw, s.resolved = net.JoinHostPort(ip, strconv.Itoa(port)), "upnp", port, gw, true
 	s.expires = time.Now().Add(autoAdvertiseTTL)
@@ -287,11 +287,11 @@ func logAdvertiseResolution(logger *slog.Logger, res advertiseResolution) {
 		return
 	}
 	if res.mode != "" {
-		logger.Info("auto advertise resolved", "mode", res.mode, "addr", res.addr)
+		logger.Info("auto advertise resolved", modeKey, res.mode, addrKey, res.addr)
 		return
 	}
 	logger.Warn("auto advertise ladder failed; proceeding with stock ICE (relay fallback)",
-		"upnp", res.upnpErr, "pmp", res.pmpErr, "stun", res.stunErr)
+		upnpKey, res.upnpErr, pmpKey, res.pmpErr, stunKey, res.stunErr)
 }
 
 // stunURLToAddr converts a Welcome ICE server URL ("stun:host:port" or

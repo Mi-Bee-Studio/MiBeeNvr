@@ -13,17 +13,17 @@ import (
 // use with errors.Is to branch on failure cause without string matching.
 func TestSentinelErrors_Available(t *testing.T) {
 	cases := []struct {
-		name string
 		err  error
+		name string
 	}{
-		{"ErrInvalidConfig", ErrInvalidConfig},
-		{"ErrAuthFailed", ErrAuthFailed},
-		{"ErrSignalingDisconnected", ErrSignalingDisconnected},
-		{"ErrICETimeout", ErrICETimeout},
-		{"ErrRelayUnavailable", ErrRelayUnavailable},
-		{"ErrSessionNotFound", ErrSessionNotFound},
-		{"ErrProtocolMismatch", ErrProtocolMismatch},
-		{"ErrDirectICEConnected", ErrDirectICEConnected},
+		{err: ErrInvalidConfig, name: "ErrInvalidConfig"},
+		{err: ErrAuthFailed, name: "ErrAuthFailed"},
+		{err: ErrSignalingDisconnected, name: "ErrSignalingDisconnected"},
+		{err: ErrICETimeout, name: "ErrICETimeout"},
+		{err: ErrRelayUnavailable, name: "ErrRelayUnavailable"},
+		{err: ErrSessionNotFound, name: "ErrSessionNotFound"},
+		{err: ErrProtocolMismatch, name: "ErrProtocolMismatch"},
+		{err: ErrDirectICEConnected, name: "ErrDirectICEConnected"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 func (t *Tunnel) handleOpen(payload string) {
 	var open TunnelOpen
 	if err := json.Unmarshal([]byte(payload), &open); err != nil {
-		t.logger.Warn("invalid tunnel open", "error", err)
+		t.logger.Warn("invalid tunnel open", errorKey, err)
 		return
 	}
 
@@ -22,7 +22,7 @@ func (t *Tunnel) handleOpen(payload string) {
 	t.mu.Unlock()
 
 	if !ok {
-		t.logger.Warn("unknown service", "service", open.TargetService)
+		t.logger.Warn("unknown service", serviceKey, open.TargetService)
 		_ = t.sendMsg(TunnelMessage{
 			Type:    TunnelMessageTypeClose,
 			Payload: mustJSON(TunnelClose{StreamID: open.StreamID}),
@@ -31,14 +31,14 @@ func (t *Tunnel) handleOpen(payload string) {
 	}
 
 	if err := t.registry.OpenStream(open.StreamID); err != nil {
-		t.logger.Warn("duplicate stream", "stream_id", open.StreamID)
+		t.logger.Warn("duplicate stream", streamIDKey, open.StreamID)
 		return
 	}
 
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		t.registry.CloseStream(open.StreamID)
-		t.logger.Warn("dial service failed", "service", open.TargetService, "error", err)
+		t.logger.Warn("dial service failed", serviceKey, open.TargetService, errorKey, err)
 		_ = t.sendMsg(TunnelMessage{
 			Type:    TunnelMessageTypeClose,
 			Payload: mustJSON(TunnelClose{StreamID: open.StreamID}),
@@ -60,8 +60,8 @@ func (t *Tunnel) handleOpen(payload string) {
 		t.sendE2EEAck()
 	}
 
-	t.logger.Debug("stream opened", "stream_id", open.StreamID,
-		"service", open.TargetService, "e2ee", sc.sealed)
+	t.logger.Debug("stream opened", streamIDKey, open.StreamID,
+		serviceKey, open.TargetService, e2eeKey, sc.sealed)
 
 	t.wg.Add(2)
 	go func() {
@@ -77,7 +77,7 @@ func (t *Tunnel) handleOpen(payload string) {
 func (t *Tunnel) handleData(payload string) {
 	var data TunnelData
 	if err := json.Unmarshal([]byte(payload), &data); err != nil {
-		t.logger.Warn("invalid tunnel data", "error", err)
+		t.logger.Warn("invalid tunnel data", errorKey, err)
 		return
 	}
 	if data.Enc {
@@ -85,12 +85,12 @@ func (t *Tunnel) handleData(payload string) {
 			// Sealed frame with no local key: the peer negotiated E2EE we
 			// cannot serve — never deliver ciphertext to the stream.
 			t.logger.Warn("sealed frame without e2ee key — dropping",
-				"stream_id", data.StreamID)
+				streamIDKey, data.StreamID)
 			return
 		}
 		if err := t.openFragment(&data); err != nil {
 			t.logger.Warn("e2ee decrypt failed — dropping frame",
-				"stream_id", data.StreamID, "seq", data.Seq, "error", err)
+				streamIDKey, data.StreamID, seqKey, data.Seq, errKey, err)
 			return
 		}
 		// First sealed frame doubles as the peer's E2EE confirmation:
@@ -99,13 +99,13 @@ func (t *Tunnel) handleData(payload string) {
 	}
 	t.logger.Debug(
 		"handleData",
-		"stream", data.StreamID, "seq", data.Seq,
-		"total", data.Total, "payload_len", len(data.Payload),
+		streamKey, data.StreamID, seqKey, data.Seq,
+		totalKey, data.Total, payloadLenKey, len(data.Payload),
 	)
 
 	result, err := t.reasm.AddFragment(data)
 	if err != nil {
-		t.logger.Warn("reassembly error", "stream_id", data.StreamID, "error", err)
+		t.logger.Warn("reassembly error", streamIDKey, data.StreamID, errorKey, err)
 		_ = t.sendMsg(TunnelMessage{
 			Type:    TunnelMessageTypeClose,
 			Payload: mustJSON(TunnelClose{StreamID: data.StreamID}),
@@ -192,7 +192,7 @@ const e2eeAckPlaintext = "mibee-e2ee-ack-v1"
 func (t *Tunnel) sendE2EEAck() {
 	sealed, err := t.e2eeCipher.Seal([]byte(e2eeAckPlaintext), []byte("e2ee-ack"))
 	if err != nil {
-		t.logger.Warn("e2ee ack seal failed", "error", err)
+		t.logger.Warn("e2ee ack seal failed", errorKey, err)
 		return
 	}
 	_ = t.sendMsg(TunnelMessage{
@@ -226,12 +226,12 @@ func (t *Tunnel) handleE2EEAck(payload string) {
 	}
 	sealed, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		t.logger.Warn("invalid e2ee_ack encoding", "error", err)
+		t.logger.Warn("invalid e2ee_ack encoding", errorKey, err)
 		return
 	}
 	pt, err := t.e2eeCipher.Open(sealed, []byte("e2ee-ack"))
 	if err != nil || string(pt) != e2eeAckPlaintext {
-		t.logger.Warn("e2ee_ack verification failed", "error", err)
+		t.logger.Warn("e2ee_ack verification failed", errorKey, err)
 		return
 	}
 	t.remoteConfirmed.Store(true)
@@ -245,13 +245,13 @@ func (t *Tunnel) handleE2EEAck(payload string) {
 func (t *Tunnel) handleClose(payload string) {
 	var closeMsg TunnelClose
 	if err := json.Unmarshal([]byte(payload), &closeMsg); err != nil {
-		t.logger.Warn("invalid tunnel close", "error", err)
+		t.logger.Warn("invalid tunnel close", errorKey, err)
 		return
 	}
 	t.registry.CloseStream(closeMsg.StreamID)
 	v, ok := t.streams.LoadAndDelete(closeMsg.StreamID)
 	if ok {
-		if sc, ok := v.(*streamConn); ok {
+		if sc, isStream := v.(*streamConn); isStream {
 			sc.closeRemote()
 		}
 	}
@@ -276,11 +276,11 @@ func (t *Tunnel) pipeTCPToTunnel(tcpConn net.Conn, sc *streamConn) {
 		if n > 0 {
 			fragments, fragErr := fragmenter.Fragment(buf[:n])
 			if fragErr != nil {
-				t.logger.Warn("fragment error", "stream_id", sc.streamID, "error", fragErr)
+				t.logger.Warn("fragment error", streamIDKey, sc.streamID, errorKey, fragErr)
 				return
 			}
 			if sendErr := t.sendFragments(fragments, sc.sealed); sendErr != nil {
-				t.logger.Warn("send data error", "stream_id", sc.streamID, "error", sendErr)
+				t.logger.Warn("send data error", streamIDKey, sc.streamID, errorKey, sendErr)
 				return
 			}
 		}
@@ -293,7 +293,7 @@ func (t *Tunnel) pipeTCPToTunnel(tcpConn net.Conn, sc *streamConn) {
 func (t *Tunnel) pipeTunnelToTCP(tcpConn net.Conn, sc *streamConn) {
 	defer func() {
 		if err := tcpConn.Close(); err != nil {
-			t.logger.Warn("pipeTunnelToTCP close error", "err", err)
+			t.logger.Warn("pipeTunnelToTCP close error", errKey, err)
 		}
 	}()
 	buf := make([]byte, MaxPayloadBytes)
@@ -301,7 +301,7 @@ func (t *Tunnel) pipeTunnelToTCP(tcpConn net.Conn, sc *streamConn) {
 		n, err := sc.Read(buf)
 		if n > 0 {
 			if _, writeErr := tcpConn.Write(buf[:n]); writeErr != nil {
-				t.logger.Warn("pipeTunnelToTCP write error", "stream_id", sc.streamID, "err", writeErr)
+				t.logger.Warn("pipeTunnelToTCP write error", streamIDKey, sc.streamID, errKey, writeErr)
 				return
 			}
 		}
@@ -347,5 +347,6 @@ func (t *Tunnel) sendEgress(data []byte, high bool) error {
 	if high {
 		return peer.SendPriority(t.transport, data)
 	}
+
 	return t.transport.Send(data)
 }

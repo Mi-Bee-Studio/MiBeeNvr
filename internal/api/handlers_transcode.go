@@ -311,10 +311,6 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
-	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
-		WriteError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
-		return
-	}
 
 	var body struct {
 		CameraID    string `json:"camera_id"`
@@ -343,12 +339,20 @@ func (h *Handler) handleTranscodingTaskCreate(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Disabled-by-config is a user condition: answer it first (400, naming
+	// the setting). A nil manager while config says enabled is the only case
+	// that is a service-side anomaly worth a 503.
 	if h.config != nil {
 		camConfig := h.config.ResolveTranscodingConfig(body.CameraID)
 		if !camConfig.Enabled {
-			WriteError(w, http.StatusBadRequest, "transcoding is not enabled for camera "+body.CameraID)
+			WriteError(w, http.StatusBadRequest, "transcoding is not enabled for camera "+body.CameraID+
+				" — enable it in Settings → Transcoding, or per-camera in the camera's edit form, then retry")
 			return
 		}
+	}
+	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
+		WriteError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
+		return
 	}
 
 	rec, err := h.db.GetRecording(r.Context(), body.RecordingID)
@@ -520,11 +524,8 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
-		WriteError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
-		return
-	}
-
+	// Same precedence as task create: user-actionable config state (400,
+	// naming the setting) before the wiring check (503).
 	if h.config != nil {
 		cameraFound := false
 		for _, cam := range h.config.Cameras {
@@ -540,9 +541,14 @@ func (h *Handler) handleTranscodingBackfill(w http.ResponseWriter, r *http.Reque
 
 		camConfig := h.config.ResolveTranscodingConfig(cameraID)
 		if !camConfig.Enabled {
-			WriteError(w, http.StatusBadRequest, "transcoding is not enabled for camera "+cameraID)
+			WriteError(w, http.StatusBadRequest, "transcoding is not enabled for camera "+cameraID+
+				" — enable it in Settings → Transcoding, or per-camera in the camera's edit form, then retry")
 			return
 		}
+	}
+	if h.transcodeMgr == nil || h.transcodeMgr.Queue() == nil {
+		WriteError(w, http.StatusServiceUnavailable, "transcoding is not enabled")
+		return
 	}
 
 	// Get target codec (default h264)

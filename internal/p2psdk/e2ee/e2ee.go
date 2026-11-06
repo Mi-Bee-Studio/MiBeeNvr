@@ -85,8 +85,8 @@ func (c *Cipher) Seal(plaintext, associated []byte) ([]byte, error) {
 		return nil, fmt.Errorf("e2ee: new xchacha: %w", err)
 	}
 	nonce := make([]byte, aead.NonceSize(), aead.NonceSize()+len(plaintext)+aead.Overhead())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("e2ee: nonce: %w", err)
+	if _, nonceErr := rand.Read(nonce); nonceErr != nil {
+		return nil, fmt.Errorf("e2ee: nonce: %w", nonceErr)
 	}
 	return aead.Seal(nonce, nonce, plaintext, associated), nil
 }

@@ -45,27 +45,12 @@ func setKeepaliveInterval(d time.Duration) {
 }
 
 // signalingClient manages a WebSocket connection to the signaling server.
+//
+// one client per peer connection — negligible, and the current grouping keeps
+// the #35 idle-suppression bookkeeping fields adjacent to their docs.
+//
+//nolint:govet // fieldalignment: 376→304 pointer bytes is a 72B/instance gain;
 type signalingClient struct {
-	cfg         SignalingConfig
-	conn        *websocket.Conn
-	connMu      sync.Mutex
-	logger      *slog.Logger
-	closeCh     chan struct{}
-	closeOnce   sync.Once
-	done        chan struct{} // closed when recvLoop exits
-	onMessage   func([]byte)  // called for every received message
-	onClose     func(error)   // called when connection is lost
-	onReconnect func()        // called after a successful reconnect
-	reconnect   atomic.Bool
-
-	// deviceKey is the loaded Ed25519 private key (DeviceKeyPath), used to
-	// sign hellos for pubkey-bound device identities.
-	deviceKey ed25519.PrivateKey
-
-	// lastSessionID and lastSeq track the last known session state for resumption.
-	lastSessionID string
-	lastSeq       uint64
-
 	// #35 ① keepalive idle suppression (syncthing pingSender pattern): any
 	// write inside the last half-interval means real traffic already fed both
 	// idle timers — the scheduled ping is skipped. Busy sessions stop paying
@@ -76,13 +61,23 @@ type signalingClient struct {
 	// on top of the exponential backoff (crash-loop / sweep-boundary peers must
 	// not hammer both sides at the normal reconnect pace).
 	connectedAt      time.Time
+	onClose          func(error)
+	conn             *websocket.Conn
+	closeCh          chan struct{}
+	logger           *slog.Logger
+	done             chan struct{}
+	onMessage        func([]byte)
+	onReconnect      func()
+	lastSessionID    string
+	cfg              SignalingConfig
+	deviceKey        ed25519.PrivateKey
+	lastSeq          uint64
 	shortLivedStreak int
-
-	// #66 auth-class close state: authTerminal stops the reconnect ladder
-	// (no fresh credential can fix the verdict); authFailStreak bounds
-	// re-mint retries for mintable verdicts when TokenFunc is set.
-	authTerminal   atomic.Bool
-	authFailStreak int
+	authFailStreak   int
+	closeOnce        sync.Once
+	connMu           sync.Mutex
+	reconnect        atomic.Bool
+	authTerminal     atomic.Bool
 }
 
 // #35 ② thresholds: a session shorter than shortLivedThreshold counts against
@@ -116,7 +111,7 @@ func newSignalingClient(cfg SignalingConfig) *signalingClient {
 	}
 	sc := &signalingClient{
 		cfg:    cfg,
-		logger: logger.With("component", "signal_client"),
+		logger: logger.With(componentKey, "signal_client"),
 	}
 	if cfg.DeviceKeyPath != "" {
 		sc.deviceKey = loadDeviceKey(logger, cfg.DeviceKeyPath)
@@ -133,7 +128,7 @@ func newSignalingClient(cfg SignalingConfig) *signalingClient {
 func loadDeviceKey(logger *slog.Logger, path string) ed25519.PrivateKey {
 	raw, err := os.ReadFile(path) //nolint:gosec // user-provided key path
 	if err != nil {
-		logger.Warn("device key unreadable; hellos will be unsigned", "path", path, "error", err)
+		logger.Warn("device key unreadable; hellos will be unsigned", pathKey, path, errorKey, err)
 		return nil
 	}
 	if len(raw) == ed25519.SeedSize {
@@ -143,7 +138,7 @@ func loadDeviceKey(logger *slog.Logger, path string) ed25519.PrivateKey {
 		return ed25519.PrivateKey(raw)
 	}
 	logger.Warn("device key must be 32 raw bytes (seed) or 64 bytes (full key); hellos will be unsigned",
-		"path", path, "size", len(raw))
+		pathKey, path, sizeKey, len(raw))
 	return nil
 }
 
@@ -164,14 +159,14 @@ func (sc *signalingClient) maybeReconnectAfterReadError(err error, lifetime time
 	}
 	if sc.authClassAbandoned(err) {
 		sc.logger.Warn("reconnect ladder abandoned: auth-class close",
-			"reason", err.Error(),
+			reasonKey, err.Error(),
 		)
 		return
 	}
 	sc.logger.Info("reconnect scheduled",
-		"reason", err.Error(),
-		"lifetime_s", lifetime.Seconds(),
-		"cooldown", sc.currentReconnectCooldown(),
+		reasonKey, err.Error(),
+		lifetimeSKey, lifetime.Seconds(),
+		cooldownKey, sc.currentReconnectCooldown(),
 	)
 	sc.reconnectWithBackoff()
 }
@@ -225,9 +220,9 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 		return nil, fmt.Errorf("marshal hello: %w", err)
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := conn.WriteMessage(websocket.TextMessage, helloData); err != nil {
+	if writeErr := conn.WriteMessage(websocket.TextMessage, helloData); writeErr != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("send hello: %w", err)
+		return nil, fmt.Errorf("send hello: %w", writeErr)
 	}
 
 	// Read welcome
@@ -259,9 +254,9 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 		return nil, fmt.Errorf("expected welcome, got: %s", msg.Type)
 	}
 	var welcome Welcome
-	if err := UnmarshalPayload(msg, &welcome); err != nil {
+	if unmarshalErr := UnmarshalPayload(msg, &welcome); unmarshalErr != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("parse welcome payload: %w", err)
+		return nil, fmt.Errorf("parse welcome payload: %w", unmarshalErr)
 	}
 
 	// recvLoop is started by the caller (Dial) via start() after wiring
@@ -271,10 +266,10 @@ func (sc *signalingClient) connect(ctx context.Context) (*Welcome, error) {
 	sc.lastSessionID = welcome.SessionID
 	sc.connMu.Unlock()
 
-	sc.logger.Info(
+	sc.logger.InfoContext(ctx,
 		"signaling connected",
-		"session_id", welcome.SessionID,
-		"peer_id", welcome.PeerID,
+		sessionIDKey, welcome.SessionID,
+		peerIDKey, welcome.PeerID,
 	)
 
 	return &welcome, nil
@@ -355,7 +350,7 @@ func (sc *signalingClient) recvLoop() {
 		if err != nil {
 			// Check if we should reconnect
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				sc.logger.Warn("signaling connection lost", "error", err)
+				sc.logger.Warn("signaling connection lost", errorKey, err)
 			}
 			// #35 ②：结算本次连接存活并打点重连原因（崩溃循环观测）。
 			sc.connMu.Lock()
@@ -420,7 +415,7 @@ func (sc *signalingClient) reconnectWithBackoff() {
 		}
 
 		delay := reconnectDelay(attempt, baseDelay, maxDelay, sc.currentReconnectCooldown())
-		sc.logger.Info("reconnecting", "attempt", attempt+1, "delay", delay)
+		sc.logger.Info("reconnecting", attemptKey, attempt+1, delayKey, delay)
 		select {
 		case <-sc.closeCh:
 			return
@@ -457,7 +452,7 @@ func (sc *signalingClient) reconnectAttempt(attempt int) bool {
 	}
 	conn, resp, err := dialer.Dial(sc.cfg.ServerURL, http.Header{})
 	if err != nil {
-		sc.logger.Warn("reconnect dial failed", "attempt", attempt+1, "error", err)
+		sc.logger.Warn("reconnect dial failed", attemptKey, attempt+1, errorKey, err)
 		return false
 	}
 	_ = resp.Body.Close()
@@ -499,7 +494,7 @@ func (sc *signalingClient) helloReconnect(conn *websocket.Conn) bool {
 		return false
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := conn.WriteMessage(websocket.TextMessage, helloData); err != nil {
+	if writeErr := conn.WriteMessage(websocket.TextMessage, helloData); writeErr != nil {
 		_ = conn.Close()
 		return false
 	}
@@ -511,7 +506,7 @@ func (sc *signalingClient) helloReconnect(conn *websocket.Conn) bool {
 		return errors.As(rerr, &stop)
 	}
 	var welcome Welcome
-	if err := UnmarshalPayload(msg, &welcome); err != nil {
+	if unmarshalErr := UnmarshalPayload(msg, &welcome); unmarshalErr != nil {
 		_ = conn.Close()
 		return false
 	}
@@ -556,20 +551,20 @@ func (sc *signalingClient) tryResume(conn *websocket.Conn) bool {
 		return false
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	if writeErr := conn.WriteMessage(websocket.TextMessage, data); writeErr != nil {
 		return false
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
+	_, raw, readErr := conn.ReadMessage()
+	if readErr != nil {
 		return false
 	}
-	msg, err := ParseAndValidate(raw)
-	if err != nil || msg.Type != MessageTypeWelcome {
+	msg, parseErr := ParseAndValidate(raw)
+	if parseErr != nil || msg.Type != MessageTypeWelcome {
 		return false
 	}
 	var welcome Welcome
-	if err := UnmarshalPayload(msg, &welcome); err != nil {
+	if unmarshalErr := UnmarshalPayload(msg, &welcome); unmarshalErr != nil {
 		return false
 	}
 	sc.connMu.Lock()
@@ -577,7 +572,7 @@ func (sc *signalingClient) tryResume(conn *websocket.Conn) bool {
 	sc.lastSessionID = welcome.SessionID
 	sc.connMu.Unlock()
 	sc.done = make(chan struct{})
-	sc.logger.Info("resumed session", "session_id", welcome.SessionID)
+	sc.logger.Info("resumed session", sessionIDKey, welcome.SessionID)
 	go sc.recvLoop()
 	return true
 }
@@ -626,7 +621,7 @@ func (sc *signalingClient) currentJWT() string {
 	}
 	fresh, err := sc.cfg.TokenFunc()
 	if err != nil || fresh == "" {
-		sc.logger.Warn("TokenFunc mint failed, falling back to static JWT", "error", err)
+		sc.logger.Warn("TokenFunc mint failed, falling back to static JWT", errorKey, err)
 		return sc.cfg.JWT
 	}
 	return fresh
@@ -672,7 +667,7 @@ func (sc *signalingClient) deviceHelloSignature() string {
 	}
 	sub, jti, err := jwtSubjectAndJTI(sc.cfg.JWT)
 	if err != nil {
-		sc.logger.Warn("device hello signature skipped: unreadable JWT payload", "error", err)
+		sc.logger.Warn("device hello signature skipped: unreadable JWT payload", errorKey, err)
 		return ""
 	}
 	sig := ed25519.Sign(sc.deviceKey, []byte(sub+":"+jti))
@@ -698,8 +693,8 @@ func jwtSubjectAndJTI(token string) (string, string, error) {
 		Sub string `json:"sub"`
 		Jti string `json:"jti"`
 	}
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		return "", "", fmt.Errorf("parse claims: %w", err)
+	if unmarshalErr := json.Unmarshal(raw, &claims); unmarshalErr != nil {
+		return "", "", fmt.Errorf("parse claims: %w", unmarshalErr)
 	}
 	if claims.Sub == "" || claims.Jti == "" {
 		return "", "", errors.New("missing sub or jti claim")
@@ -714,7 +709,9 @@ func splitJWT(token string) []string {
 
 // authLadderStop is the typed signal that readWelcomeOrClose wants the
 // reconnect ladder terminated (terminal auth verdict).
-type authLadderStop struct{ reason string }
+type authLadderStop struct {
+	reason string
+}
 
 func (authLadderStop) Error() string { return "ladder abandoned" }
 
@@ -729,7 +726,7 @@ func (sc *signalingClient) readWelcomeOrClose(conn *websocket.Conn) (*Message, e
 		if cls := classifyCloseError(err); cls != authCloseNone {
 			if sc.noteAuthClassClose(cls) {
 				sc.logger.Warn("reconnect ladder abandoned: auth-class close",
-					"reason", err.Error())
+					reasonKey, err.Error())
 				return nil, authLadderStop{reason: err.Error()}
 			}
 		}
@@ -764,7 +761,7 @@ func (sc *signalingClient) tryResumeOrRedial(
 	_ = conn.Close()
 	redialed, resp, err := dialer.Dial(sc.cfg.ServerURL, http.Header{})
 	if err != nil {
-		sc.logger.Warn("reconnect dial failed", "attempt", attempt+1, "error", err)
+		sc.logger.Warn("reconnect dial failed", attemptKey, attempt+1, errorKey, err)
 		return false, nil, err
 	}
 	_ = resp.Body.Close()

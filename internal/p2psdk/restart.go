@@ -59,7 +59,7 @@ func (p *p2pSession) markICERecovered() {
 	p.restartFailures = 0
 	if !p.recoveryStart.IsZero() {
 		elapsed := time.Since(p.recoveryStart)
-		p.log().Info("ICE recovered", "duration_seconds", elapsed.Seconds())
+		p.log().Info("ICE recovered", durationSecondsKey, elapsed.Seconds())
 		p.recoveryStart = time.Time{}
 	}
 	if p.iceReady != nil {
@@ -178,7 +178,7 @@ func (p *p2pSession) attemptICERestart() {
 			p.stopRestartTimerLocked()
 			failures := p.restartFailures
 			p.mu.Unlock()
-			p.log().Error("ICE restart failed", "error", err, "consecutive_failures", failures)
+			p.log().Error("ICE restart failed", errorKey, err, consecutiveFailuresKey, failures)
 			// Async: we may be on pion's ICE-state callback goroutine, and
 			// close() joins the ICE agent — calling it inline would deadlock.
 			go p.abandonSession("ice_restart_failed")
@@ -192,7 +192,7 @@ func (p *p2pSession) attemptICERestart() {
 	p.mu.Unlock()
 
 	if err != nil {
-		p.log().Error("ICE restart failed", "error", err, "consecutive_failures", failures)
+		p.log().Error("ICE restart failed", errorKey, err, consecutiveFailuresKey, failures)
 	}
 }
 
@@ -225,7 +225,7 @@ func (p *p2pSession) onRestartRetry() {
 func (p *p2pSession) abandonSession(reason string) {
 	p.log().Warn(
 		"abandoning P2P session after repeated ICE restart failures",
-		"session_id", p.sessionID, "reason", reason,
+		sessionIDKey, p.sessionID, reasonKey, reason,
 	)
 	p.teardownWithReason(reason)
 }
@@ -264,7 +264,7 @@ func (p *p2pSession) triggerICERestart() error {
 
 	p.log().Info(
 		"triggering ICE restart",
-		"session_id", p.sessionID,
+		sessionIDKey, p.sessionID,
 	)
 
 	offer, err := p.pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
@@ -273,9 +273,9 @@ func (p *p2pSession) triggerICERestart() error {
 		return fmt.Errorf("create restart offer: %w", err)
 	}
 
-	if err := p.pc.SetLocalDescription(offer); err != nil {
+	if descErr := p.pc.SetLocalDescription(offer); descErr != nil {
 		p.mu.Unlock()
-		return fmt.Errorf("set local desc for restart: %w", err)
+		return fmt.Errorf("set local desc for restart: %w", descErr)
 	}
 
 	// Release lock while ICE candidates gather.

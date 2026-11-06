@@ -19,11 +19,11 @@ import (
 // on one side surface as OnMessage on the other, synchronously captured so
 // tests can inspect the WIRE FORMAT (asserting plaintext never leaks).
 type loopTransport struct {
-	mu        sync.Mutex
 	onMessage func([]byte)
-	wire      [][]byte // frames this side sent (for wire inspection)
-	pending   [][]byte // frames that arrived before Serve registered (mirrors wrapDataChannel buffering)
 	peerLink  *loopTransport
+	wire      [][]byte
+	pending   [][]byte
+	mu        sync.Mutex
 }
 
 func newLoopPair() (*loopTransport, *loopTransport) {
@@ -109,18 +109,18 @@ func startEchoPair(t *testing.T, enableA, enableB bool) (client *Tunnel, server 
 	require.NoError(t, err)
 	go func() {
 		for {
-			c, err := ln.Accept()
-			if err != nil {
+			c, acceptErr := ln.Accept()
+			if acceptErr != nil {
 				return
 			}
 			go func() {
 				buf := make([]byte, 4096)
 				for {
-					n, err := c.Read(buf)
+					n, readErr := c.Read(buf)
 					if n > 0 {
 						_, _ = c.Write(buf[:n])
 					}
-					if err != nil {
+					if readErr != nil {
 						_ = c.Close()
 						return
 					}

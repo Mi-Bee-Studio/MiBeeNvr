@@ -79,7 +79,7 @@ func TestRelayRebuildHonorsGate(t *testing.T) {
 		closeCh: make(chan struct{}),
 	}
 	done := make(chan struct{})
-	go func() { s.rebuildRelayClient(); close(done) }()
+	go func() { s.rebuildRelayClient(nil); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):

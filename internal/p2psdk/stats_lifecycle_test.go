@@ -61,3 +61,28 @@ func TestStartStatsCollectorLocked_NilOverPrevious(t *testing.T) {
 	p.statsCollector.Stop()
 	p.mu.Unlock()
 }
+
+// TestStatsCollectorSelfStopsOnClosedPC verifies the 2026-10-19 self-heal:
+// a collector whose session was never close()d (leaked by whatever
+// lifecycle path) stops itself once the PeerConnection reports Closed,
+// instead of polling GetStats forever (fleet evidence: ~36k
+// "the agent is closed" journal lines/day from ~2 orphaned collectors).
+func TestStatsCollectorSelfStopsOnClosedPC(t *testing.T) {
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	require.NoError(t, err)
+	require.NoError(t, pc.Close())
+
+	sc := NewStatsCollector(pc, nil)
+	sc.interval = 50 * time.Millisecond
+	sc.Start()
+
+	select {
+	case <-sc.done:
+		// Self-stopped on the first tick against the closed PC.
+	case <-time.After(2 * time.Second):
+		t.Fatal("collector kept polling a closed PeerConnection")
+	}
+
+	// A late Stop() (the leaked session's eventual close) stays safe.
+	sc.Stop()
+}

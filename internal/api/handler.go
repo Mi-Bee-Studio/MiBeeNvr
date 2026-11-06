@@ -91,6 +91,23 @@ type HealthResponse struct {
 	// manual connect both fail without it (#899). Fleet details (names,
 	// ids, scores) stay behind auth on /api/health/cameras (#879).
 	Cameras *HealthCameraCounts `json:"cameras,omitempty"`
+	// License surfaces the licensing gate on the standard probe endpoint
+	// (#49): a silently blocking gate was invisible to every monitoring
+	// surface for a week. Bare summary only — the document and reason stay
+	// on the authenticated /api/license. Omitted when licensing is not
+	// enforced (not required) or the capability is absent.
+	License *HealthLicense `json:"license,omitempty"`
+}
+
+// HealthLicense is the privacy-safe license summary embedded in the public
+// /api/health response: state machine name, enforcement flag, gate verdict,
+// and expiry horizon. No document payload, no reason text.
+type HealthLicense struct {
+	State       string `json:"state"` // none | invalid | expired | expiring | valid
+	Required    bool   `json:"required"`
+	Allowed     bool   `json:"allowed"`
+	ExpiresAt   string `json:"expires_at,omitempty"`    // RFC3339; zero/absent omitted
+	TimeLeftSec int64  `json:"time_left_sec,omitempty"` // >0 only
 }
 
 // HealthCameraCounts is the privacy-safe camera aggregation embedded in the

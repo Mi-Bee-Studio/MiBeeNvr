@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -21,6 +22,17 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
+
+// startupBringupConcurrency bounds how many cameras dial out simultaneously
+// during boot (#48). Serial bring-up spent 80-90s on a 21-camera fleet —
+// each recorder Start does blocking network I/O (RTSP/ONVIF/HTTP dial,
+// multi-second timeouts for unreachable cameras) — stretching every restart's
+// recording gap. Four wide keeps the box's dial storms (and the camera-side
+// SYN bursts) modest while cutting the tail ~4x; per-camera bring-up is
+// lifecycle-guarded and registry mutations go through apply(), so cross-
+// camera concurrency was already the runtime shape (manual restarts race
+// boot on live systems today).
+const startupBringupConcurrency = 4
 
 // Start creates and starts recorders for all enabled cameras in the config.
 // If a single camera fails to start, it logs the error and continues with the rest.
@@ -38,106 +50,22 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 	// Periodic exporter of hub per-consumer atomics to Prometheus (#469).
 	cm.startHubStatsFlusher()
 
+	// DB upserts stay serial: they are quick, and ordered writes keep the
+	// boot log legible. Only the slow network bring-up fans out (#48).
 	for _, cam := range cm.cfg.Cameras {
-		// Insert camera record into database
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cam.StableID); err != nil {
 			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
 		} else {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
 		}
-
-		switch cam.Protocol {
-		case string(model.ProtoRTSP), string(model.ProtoHTTP), string(model.ProtoGB28181):
-			rec := cm.createRecorder(cam, cm.segmentDurFor(cam))
-			if rec != nil {
-				cm.apply(func(s *snapshot) *snapshot {
-					s.recorders[cam.ID] = rec
-					return s
-				})
-				if err := rec.Start(ctx); err != nil {
-					logger.Error("failed to start recorder", "camera_id", cam.ID, "error", err)
-					if cm.metrics != nil {
-						cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
-					}
-				} else {
-					logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
-					// GB28181 recorders are passive — pull media with a SIP
-					// INVITE now that the recorder exists. This also heals a
-					// session wired before startup finished (catalog-driven
-					// INVITE racing camera-manager boot): the recycle inside
-					// replaces the orphan-hub binding with this recorder.
-					cm.autoInviteGB28181(cam)
-					// Notify health manager of new camera with per-camera overrides
-					var hOverrides *config.ResolvedHealthOverrides
-					if cm.cfg.Health.Enabled {
-						resolved := config.ResolveHealthOverrides(cm.cfg.Health, cam.HealthOverrides)
-						hOverrides = &resolved
-					}
-					cm.healthMgr.OnCameraAdded(cam.ID, rec, hOverrides)
-					// Check if recording is enabled (nil = default true).
-					// When recording_enabled=true, timelapse frames come from recorded
-					// segments via PeriodicMergeManager — skip starting the dedicated
-					// capturer (keyframe extractor or frame poller) and rolling merge.
-					recordingEnabled := cm.cfg.RecordingGate(cam.RecordingEnabled)
-					if recordingEnabled && cam.Timelapse != nil && cam.Timelapse.Enabled {
-						logger.Info("skipping timelapse capturer + rolling merge: recording_enabled=true",
-							"camera_id", cam.ID)
-					} else {
-						// Start keyframe extractor if camera has rtsp_keyframe timelapse config
-						if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
-							// Runtime override: an ONVIF camera with empty encoding may have
-							// resolved to rtsp_keyframe statically but actually be a JPEG device
-							// (e.g. ESP32 MiBeeCam auto-detected as HTTPJPEG delegate). In that
-							// case, use a frame poller instead.
-							if isRecorderJPEG(rec) {
-								if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
-									logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
-								} else if poller != nil {
-									cm.setFramePoller(cam.ID, poller)
-								}
-							} else if hub := getRecorderHub(rec); hub != nil {
-								if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
-									logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
-								}
-							}
-						} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
-							if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
-								logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
-							} else if poller != nil {
-								cm.setFramePoller(cam.ID, poller)
-							}
-						}
-					}
-					// Enforce timelapse schedule for dual-mode cameras (start/stop
-					// the keyframe extractor or frame poller based on time-of-day).
-					cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
-				}
-			}
-		case string(model.ProtoONVIF):
-			if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
-				logger.Error("failed to start ONVIF recorder", "camera_id", cam.ID, "error", err)
-			} else {
-				logger.Info("started ONVIF recorder", "camera_id", cam.ID)
-			}
-		case string(model.ProtoSRT), string(model.ProtoRTMP):
-			// Push/ingest cameras: the recorder waits for an incoming publisher
-			// (it does not dial out). Its hub is registered in hubRegistry so the
-			// SRT listener / RTMP server can find it.
-			if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
-				logger.Error("failed to start ingest recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "error", err)
-			} else {
-				logger.Info("started ingest recorder, awaiting publisher",
-					"camera_id", cam.ID, "protocol", cam.Protocol)
-			}
-		default:
-			// Try plugin-registered protocols (e.g. xiaomi)
-			if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
-				logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
-			} else {
-				logger.Info("started plugin recorder", "camera_id", cam.ID, "protocol", cam.Protocol)
-			}
-		}
 	}
+
+	jobs := make([]func(), 0, len(cm.cfg.Cameras))
+	for _, cam := range cm.cfg.Cameras {
+		jobs = append(jobs, func() { cm.bringUpCamera(ctx, cam) })
+	}
+	runBounded(startupBringupConcurrency, jobs)
+
 	// Camera-side ONVIF motion subscriptions (#711): async like the relay
 	// replay below — Subscribe dials the camera and must not delay boot.
 	for _, cam := range cm.cfg.Cameras {
@@ -189,6 +117,125 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 		}()
 	}
 	return nil
+}
+
+// bringUpCamera starts one camera's recorder chain (the per-camera body of
+// the boot loop, extracted for bounded-parallel bring-up #48). Errors are
+// logged, never propagated — one dead camera must not hold back the fleet.
+func (cm *CameraManager) bringUpCamera(ctx context.Context, cam config.CameraConfig) {
+	switch cam.Protocol {
+	case string(model.ProtoRTSP), string(model.ProtoHTTP), string(model.ProtoGB28181):
+		rec := cm.createRecorder(cam, cm.segmentDurFor(cam))
+		if rec != nil {
+			cm.apply(func(s *snapshot) *snapshot {
+				s.recorders[cam.ID] = rec
+				return s
+			})
+			if err := rec.Start(ctx); err != nil {
+				logger.Error("failed to start recorder", "camera_id", cam.ID, "error", err)
+				if cm.metrics != nil {
+					cm.metrics.CameraConnectionErrorsTotal.WithLabelValues(cam.ID, classifyError(err)).Inc()
+				}
+			} else {
+				logger.Info("started recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "encoding", cam.Encoding)
+				// GB28181 recorders are passive — pull media with a SIP
+				// INVITE now that the recorder exists. This also heals a
+				// session wired before startup finished (catalog-driven
+				// INVITE racing camera-manager boot): the recycle inside
+				// replaces the orphan-hub binding with this recorder.
+				cm.autoInviteGB28181(cam)
+				// Notify health manager of new camera with per-camera overrides
+				var hOverrides *config.ResolvedHealthOverrides
+				if cm.cfg.Health.Enabled {
+					resolved := config.ResolveHealthOverrides(cm.cfg.Health, cam.HealthOverrides)
+					hOverrides = &resolved
+				}
+				cm.healthMgr.OnCameraAdded(cam.ID, rec, hOverrides)
+				// Check if recording is enabled (nil = default true).
+				// When recording_enabled=true, timelapse frames come from recorded
+				// segments via PeriodicMergeManager — skip starting the dedicated
+				// capturer (keyframe extractor or frame poller) and rolling merge.
+				recordingEnabled := cm.cfg.RecordingGate(cam.RecordingEnabled)
+				if recordingEnabled && cam.Timelapse != nil && cam.Timelapse.Enabled {
+					logger.Info("skipping timelapse capturer + rolling merge: recording_enabled=true",
+						"camera_id", cam.ID)
+				} else {
+					// Start keyframe extractor if camera has rtsp_keyframe timelapse config
+					if effectiveDualModeFrameSource(cam) == "rtsp_keyframe" {
+						// Runtime override: an ONVIF camera with empty encoding may have
+						// resolved to rtsp_keyframe statically but actually be a JPEG device
+						// (e.g. ESP32 MiBeeCam auto-detected as HTTPJPEG delegate). In that
+						// case, use a frame poller instead.
+						if isRecorderJPEG(rec) {
+							if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+								logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+							} else if poller != nil {
+								cm.setFramePoller(cam.ID, poller)
+							}
+						} else if hub := getRecorderHub(rec); hub != nil {
+							if err := cm.startTimelapseKeyframeExtractor(cam.ID, cam, hub, rec); err != nil {
+								logger.Error("failed to start keyframe extractor", "camera_id", cam.ID, "error", err)
+							}
+						}
+					} else if effectiveDualModeFrameSource(cam) == "latest_frame" {
+						if poller, perr := cm.startTimelapseFramePoller(cam.ID, cam, rec); perr != nil {
+							logger.Error("failed to start timelapse frame poller", "camera_id", cam.ID, "error", perr)
+						} else if poller != nil {
+							cm.setFramePoller(cam.ID, poller)
+						}
+					}
+				}
+				// Enforce timelapse schedule for dual-mode cameras (start/stop
+				// the keyframe extractor or frame poller based on time-of-day).
+				cm.startDualModeTimelapseScheduleMonitorForCamera(ctx, cam.ID, cam, rec)
+			}
+		}
+	case string(model.ProtoONVIF):
+		if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
+			logger.Error("failed to start ONVIF recorder", "camera_id", cam.ID, "error", err)
+		} else {
+			logger.Info("started ONVIF recorder", "camera_id", cam.ID)
+		}
+	case string(model.ProtoSRT), string(model.ProtoRTMP):
+		// Push/ingest cameras: the recorder waits for an incoming publisher
+		// (it does not dial out). Its hub is registered in hubRegistry so the
+		// SRT listener / RTMP server can find it.
+		if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
+			logger.Error("failed to start ingest recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "error", err)
+		} else {
+			logger.Info("started ingest recorder, awaiting publisher",
+				"camera_id", cam.ID, "protocol", cam.Protocol)
+		}
+	default:
+		// Try plugin-registered protocols (e.g. xiaomi)
+		if err := cm.startRecorder(ctx, cam, cm.segmentDurFor(cam)); err != nil {
+			logger.Warn("camera has unknown protocol, skipping", "camera_id", cam.ID, "protocol", cam.Protocol)
+		} else {
+			logger.Info("started plugin recorder", "camera_id", cam.ID, "protocol", cam.Protocol)
+		}
+	}
+}
+
+// runBounded executes jobs with at most `limit` running concurrently and
+// returns when all have finished. Jobs start in submission order (the head
+// of the fleet still comes up first); a panicking job would take the process
+// down exactly as the serial loop did — bring-up bodies only log errors.
+func runBounded(limit int, jobs []func()) {
+	if limit < 1 {
+		limit = 1
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for _, job := range jobs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(job func()) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			job()
+		}(job)
+	}
+	wg.Wait()
 }
 
 // Stop stops all running recorders and waits for them to complete.

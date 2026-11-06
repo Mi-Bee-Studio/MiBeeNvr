@@ -104,8 +104,8 @@ func DiscoverGatewayUPnP(timeout time.Duration) (*UPnPGateway, error) {
 			_ = p.sock.Close()
 		}
 	}()
-	if err := ssdpFanOut(probes); err != nil {
-		return nil, err
+	if fanErr := ssdpFanOut(probes); fanErr != nil {
+		return nil, fanErr
 	}
 
 	buf := make([]byte, 4096)
@@ -169,10 +169,10 @@ var wantedServiceTypes = []string{
 
 // UPnPGateway is a SOAP client for one IGD's WAN connection service.
 type UPnPGateway struct {
+	hc          *http.Client
 	controlURL  string
 	serviceType string
-	internalIP  string // gateway-facing local address (mapping target)
-	hc          *http.Client
+	internalIP  string
 }
 
 func newIGDClient(location, localIP string, timeout time.Duration) (*UPnPGateway, error) {
@@ -191,8 +191,8 @@ func newIGDClient(location, localIP string, timeout time.Duration) (*UPnPGateway
 		return nil, err
 	}
 	var root upnpRoot
-	if err := xml.Unmarshal(body, &root); err != nil {
-		return nil, err
+	if xmlErr := xml.Unmarshal(body, &root); xmlErr != nil {
+		return nil, xmlErr
 	}
 	svc := findWANService(root.Device)
 	if svc == nil {
@@ -203,8 +203,8 @@ func newIGDClient(location, localIP string, timeout time.Duration) (*UPnPGateway
 		return nil, err
 	}
 	if root.URLBase != "" {
-		if ub, err := url.Parse(root.URLBase); err == nil {
-			if ref, err := ub.Parse(svc.ControlURL); err == nil {
+		if ub, ubErr := url.Parse(root.URLBase); ubErr == nil {
+			if ref, refErr := ub.Parse(svc.ControlURL); refErr == nil {
 				cu = ref
 			}
 		}

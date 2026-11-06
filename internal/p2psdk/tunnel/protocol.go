@@ -62,8 +62,8 @@ type TunnelMessage struct {
 //
 //nolint:revive // stutters as tunnel.TunnelOpen; renaming would break API
 type TunnelOpen struct {
-	StreamID      uint32 `json:"stream_id"`
 	TargetService string `json:"target_service"`
+	StreamID      uint32 `json:"stream_id"`
 	E2EE          bool   `json:"e2ee,omitempty"`
 }
 
@@ -75,10 +75,10 @@ type TunnelOpen struct {
 //
 //nolint:revive // stutters as tunnel.TunnelData; renaming would break API
 type TunnelData struct {
+	Payload  string `json:"payload"`
 	StreamID uint32 `json:"stream_id"`
 	Seq      uint32 `json:"seq"`
 	Total    uint32 `json:"total"`
-	Payload  string `json:"payload"`
 	Enc      bool   `json:"enc,omitempty"`
 }
 
@@ -108,8 +108,8 @@ func (g *StreamIDGenerator) Next() uint32 {
 
 // StreamRegistry enforces unique stream_id per peer connection.
 type StreamRegistry struct {
-	mu      sync.Mutex
 	streams map[uint32]bool
+	mu      sync.Mutex
 }
 
 // NewStreamRegistry creates a new StreamRegistry.
@@ -224,16 +224,16 @@ func (w *SendWindow) Inflight() int {
 
 // Reassembler collects TunnelData fragments and reassembles them.
 type Reassembler struct {
-	mu      sync.Mutex
 	streams map[uint32]*reassemblyBuf
 	maxSize int
+	mu      sync.Mutex
 }
 
 type reassemblyBuf struct {
-	totalBytes int
-	expected   int
 	seqs       map[uint32]struct{}
 	buf        map[uint32][]byte
+	totalBytes int
+	expected   int
 }
 
 // NewReassembler creates a Reassembler for collecting tunnel data fragments.

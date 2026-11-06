@@ -16,11 +16,11 @@ import (
 // fakePMPGateway answers NAT-PMP requests on a loopback UDP socket.
 type fakePMPGateway struct {
 	t        *testing.T
-	addr     string
-	wanIP    [4]byte
-	mapCode  uint16 // result code for map responses (0 = success)
-	extPort  uint16 // assigned external port in the map response
 	listener *net.UDPConn
+	addr     string
+	mapCode  uint16
+	extPort  uint16
+	wanIP    [4]byte
 }
 
 func newFakePMPGateway(t *testing.T) *fakePMPGateway {

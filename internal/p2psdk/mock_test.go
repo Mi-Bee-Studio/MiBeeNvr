@@ -14,35 +14,31 @@ import (
 // mockSignalServer implements an in-process protocol v1 signaling server for tests.
 type mockSignalServer struct {
 	server        *httptest.Server
-	url           string
-	upgrader      websocket.Upgrader
-	mu            sync.RWMutex
-	writeMu       sync.Mutex // serializes websocket writes (gorilla/websocket is not goroutine-safe for writes)
 	peers         map[string]*websocket.Conn
 	sessions      map[string]*mockSession
 	sessionToPeer map[string]string // Welcome.SessionID -> PeerID for resume
-
 	// pendingReject, when set, makes the mock respond to the next
 	// connect_request with a connect_reject instead of forwarding it.
-	pendingReject   *ConnectReject
-	pendingRejectMu sync.Mutex
-
-	// pings counts app-level pings received per peer (keepalive tests).
-	pings map[string]int
-
-	// connectAcceptDelay, when > 0, holds the delivery of connect_accept to
-	// the initiator — used by callback-timing tests to assign OnDataChannel
-	// after Connect() returns but before the DataChannel can open.
-	connectAcceptDelay time.Duration
-
+	pendingReject *ConnectReject
 	// helloGate, when set, acts as the server's JWT policy: a rejected JWT
 	// gets the production server's auth-class close (1008 +
 	// "authentication_failed" close text) instead of a welcome. Used by the
 	// ladder-token tests.
 	helloGate func(jwt string) bool
+	// pings counts app-level pings received per peer (keepalive tests).
+	pings    map[string]int
+	upgrader websocket.Upgrader
+	url      string
+	// connectAcceptDelay, when > 0, holds the delivery of connect_accept to
+	// the initiator — used by callback-timing tests to assign OnDataChannel
+	// after Connect() returns but before the DataChannel can open.
+	connectAcceptDelay time.Duration
 
 	// hellos counts hello messages received (any outcome).
-	hellos int
+	hellos          int
+	mu              sync.RWMutex
+	pendingRejectMu sync.Mutex
+	writeMu         sync.Mutex // serializes websocket writes (gorilla/websocket is not goroutine-safe for writes)
 }
 
 type mockSession struct {
@@ -89,9 +85,13 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	var peerID string
 	switch msg.Type {
+	case MessageTypeTelemetry:
+		// Client→server quality report (research doc 07): the mock server
+		// accepts and ignores it — no peer identity to record.
+		return
 	case MessageTypeHello:
 		var hello Hello
-		if err := UnmarshalPayload(msg, &hello); err != nil {
+		if unmarshalErr := UnmarshalPayload(msg, &hello); unmarshalErr != nil {
 			return
 		}
 		peerID = hello.PeerID
@@ -132,7 +132,7 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	case MessageTypeSignalResume:
 		var state SyncState
-		if err := UnmarshalPayload(msg, &state); err != nil {
+		if unmarshalErr := UnmarshalPayload(msg, &state); unmarshalErr != nil {
 			return
 		}
 		// Look up the original peer ID from the session mapping.
@@ -180,15 +180,15 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Relay loop
 	for {
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
+		_, rawMsg, readErr := conn.ReadMessage()
+		if readErr != nil {
 			break
 		}
-		msg, err := ParseAndValidate(raw)
-		if err != nil {
+		routedMsg, parseErr := ParseAndValidate(rawMsg)
+		if parseErr != nil {
 			continue
 		}
-		if !s.routeMessage(conn, msg) {
+		if !s.routeMessage(conn, routedMsg) {
 			break
 		}
 	}
@@ -197,6 +197,10 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 //nolint:funlen // test mock function
 func (s *mockSignalServer) routeMessage(sender *websocket.Conn, msg *Message) bool {
 	switch msg.Type {
+	case MessageTypeTelemetry:
+		// Client→server quality report (research doc 07): swallow — never
+		// routed between mock peers.
+		return true
 	case MessageTypeConnectRequest:
 		var req ConnectRequest
 		if err := UnmarshalPayload(msg, &req); err != nil {
