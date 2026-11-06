@@ -7,9 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/stretchr/testify/require"
 )
+
+// quietGoroutineTripwire lifts the goroutine check's baseline to the config
+// maximum: under the full parallel suite, leftover goroutines from other
+// tests would otherwise trip the default threshold and make every overall-
+// status assertion environment-dependent.
+func quietGoroutineTripwire(h *Handler) {
+	h.config = &config.Config{Health: config.HealthConfig{GoroutineBaseline: 1000000}}
+}
 
 // mintLicense produces (pubB64, signedDocument) for a required=true manager,
 // the same way the operational minting tool does.
@@ -49,6 +58,7 @@ func TestHealthLicenseSummary(t *testing.T) {
 		h := TestHandler(db, store)
 		m := license.NewManager("dev-h1")
 		require.NoError(t, m.Configure("", "", true)) // doc wiped, required stays
+		quietGoroutineTripwire(h)
 		h.SetLicenseManager(m)
 
 		rr := doRequest(t, h.Routes(), http.MethodGet, "/api/health", nil, "", "")
@@ -72,6 +82,7 @@ func TestHealthLicenseSummary(t *testing.T) {
 		pub, doc := mintLicense(t, "dev-h2", time.Now().Add(30*24*time.Hour))
 		m := license.NewManager("dev-h2")
 		require.NoError(t, m.Configure(doc, pub, true))
+		quietGoroutineTripwire(h)
 		h.SetLicenseManager(m)
 
 		rr := doRequest(t, h.Routes(), http.MethodGet, "/api/health", nil, "", "")
@@ -95,6 +106,7 @@ func TestHealthLicenseSummary(t *testing.T) {
 		pub, doc := mintLicense(t, "dev-h3", time.Now().Add(time.Hour)) // < 6h window
 		m := license.NewManager("dev-h3")
 		require.NoError(t, m.Configure(doc, pub, true))
+		quietGoroutineTripwire(h)
 		h.SetLicenseManager(m)
 
 		rr := doRequest(t, h.Routes(), http.MethodGet, "/api/health", nil, "", "")
@@ -115,6 +127,7 @@ func TestHealthLicenseSummary(t *testing.T) {
 		h := TestHandler(db, store)
 		m := license.NewManager("dev-h4")
 		require.NoError(t, m.Configure("", "", false))
+		quietGoroutineTripwire(h)
 		h.SetLicenseManager(m)
 
 		rr := doRequest(t, h.Routes(), http.MethodGet, "/api/health", nil, "", "")
