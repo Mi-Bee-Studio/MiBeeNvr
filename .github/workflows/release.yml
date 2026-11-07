@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p ha-stage/custom_components
-          cp -r deploy/home-assistant/custom_components/mibee_nvr ha-stage/custom_components/
+          cp -r custom_components/mibee_nvr ha-stage/custom_components/
           sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" \
             ha-stage/custom_components/mibee_nvr/manifest.json
           grep '"version"' ha-stage/custom_components/mibee_nvr/manifest.json
