@@ -791,7 +791,7 @@ cameras:
 
 - **Type**: boolean
 - **Default**: `true` for GB cameras; `false` for non-GB cameras (nil resolves per protocol)
-- **Description**: GB28181 cascade catalog-boundary switch. On-demand playback is guaranteed only for GB sources — non-GB sources have no on-demand pull and only play while the camera is recording, so they stay out of the catalog by default (an explicit `true` publishes one; recommended only for continuously-recording cameras). `false` explicitly hides any camera: gone from the upper platform's aggregated catalog, its channel's INVITEs answer 404. The channel-code allocation is kept, so re-enabling restores the same code (upper-platform bindings don't drift).
+- **Description**: GB28181 cascade catalog-boundary switch. On-demand playback works for GB sources and sources with a dialable main stream (rtsp/onvif — the INVITE pulls the main stream on demand and forwards it); sources without one (push ingest, xiaomi, …) only play while the camera is recording, so they stay out of the catalog by default (an explicit `true` publishes one). `false` explicitly hides any camera: gone from the upper platform's aggregated catalog, its channel's INVITEs answer 404. The channel-code allocation is kept, so re-enabling restores the same code (upper-platform bindings don't drift).
 - **Example**: `false`
 
 ### `cameras[].cascade_sub_stream`
