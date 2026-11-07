@@ -237,15 +237,21 @@ func pairKeyOf(snap StatsSnapshot) string {
 }
 
 // initTelemetryLocked arms per-session telemetry state. Caller holds p.mu
-// (startAsOfferer / startAsAnswerer).
+// (startAsOfferer / startAsAnswerer); the telemetry fields themselves are
+// telMu-guarded so close()'s final report (emitSessionStats holds no p.mu)
+// cannot race a session still mid-setup (main-CI run 42325867875).
 func (p *p2pSession) initTelemetryLocked(cfg SignalingConfig, welcome *Welcome) {
+	p.telMu.Lock()
 	p.telOn = !cfg.DisableTelemetry
 	p.iceTags = buildICETagIndex(welcome)
 	p.startedAt = time.Now()
+	p.telMu.Unlock()
 }
 
 // telemetryEnabled reports whether this session reports telemetry.
 func (p *p2pSession) telemetryEnabled() bool {
+	p.telMu.Lock()
+	defer p.telMu.Unlock()
 	return p.telOn
 }
 
@@ -268,6 +274,7 @@ func (p *p2pSession) maybeSendIceSelected(snap StatsSnapshot) {
 	}
 	p.lastPairKey = key
 	p.lastSnap = snap
+	tags := p.iceTags
 	p.telMu.Unlock()
 
 	p.sendTelemetry(TelemetryReport{
@@ -276,7 +283,7 @@ func (p *p2pSession) maybeSendIceSelected(snap StatsSnapshot) {
 		LocalType:     snap.ICELocalCandidateType,
 		RemoteType:    snap.ICERemoteCandidateType,
 		RelayProtocol: snap.ICERelayProtocol,
-		Provider:      p.iceTags.providerForCandidate(snap),
+		Provider:      tags.providerForCandidate(snap),
 		RTTMS:         snap.ICERTTSeconds * 1000,
 		AvailMbps:     snap.ICEAvailableBitrateBits / 1_000_000,
 	})
@@ -301,6 +308,7 @@ func (p *p2pSession) emitSessionStats() {
 	reported := p.lastPairKey != ""
 	reason := p.closeReason
 	startedAt := p.startedAt
+	tags := p.iceTags
 	p.telMu.Unlock()
 	if !reported && snap.DataChannelBytesSent == 0 && snap.DataChannelBytesReceived == 0 {
 		return
@@ -313,7 +321,7 @@ func (p *p2pSession) emitSessionStats() {
 		Event:       "session_stats",
 		SessionID:   p.sessionID,
 		LocalType:   snap.ICELocalCandidateType,
-		Provider:    p.iceTags.providerForCandidate(snap),
+		Provider:    tags.providerForCandidate(snap),
 		DurationSec: dur,
 		BytesSent:   snap.DataChannelBytesSent,
 		BytesRecv:   snap.DataChannelBytesReceived,
@@ -322,12 +330,18 @@ func (p *p2pSession) emitSessionStats() {
 }
 
 // sendTelemetry is a non-blocking best-effort send: telemetry must never
-// perturb session lifecycle, so errors are swallowed at debug level.
+// perturb session lifecycle, so errors are swallowed at debug level. Caller
+// holds no locks. p.signal is p.mu-guarded (assigned by the startAs* setup
+// paths) — snapshot it here so a close-path report never reads it bare while
+// an answerer is still mid-setup.
 func (p *p2pSession) sendTelemetry(report TelemetryReport) {
-	if p.signal == nil {
+	p.mu.Lock()
+	signal := p.signal
+	p.mu.Unlock()
+	if signal == nil {
 		return
 	}
-	if err := p.signal.sendRaw(MessageTypeTelemetry, report); err != nil {
+	if err := signal.sendRaw(MessageTypeTelemetry, report); err != nil {
 		p.log().Debug("telemetry send failed", errorKey, err)
 	}
 }

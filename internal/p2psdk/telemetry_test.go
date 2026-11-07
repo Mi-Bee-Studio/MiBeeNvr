@@ -215,6 +215,60 @@ func TestCloseEmitsSessionStats(t *testing.T) {
 	assert.Greater(t, final.DurationSec, float64(0))
 }
 
+// TestCloseRacesAnswererTelemetryInit pins the main-CI race detector catch
+// (run 42325867875, 2026-11-07): close() reads telOn/startedAt under telMu
+// while the answerer setup path wrote them under p.mu — mismatched guards.
+// dev.Close() during a connect_accept still mid-setup hit exactly this
+// window. Drives both sides head-on; red under -race before the telMu fix.
+func TestCloseRacesAnswererTelemetryInit(t *testing.T) {
+	for range 50 {
+		p := &p2pSession{sessionID: "race"}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			p.mu.Lock()
+			p.initTelemetryLocked(SignalingConfig{}, telemetryTestWelcome())
+			p.mu.Unlock()
+		}()
+		go func() {
+			defer wg.Done()
+			p.emitSessionStats()
+		}()
+		wg.Wait()
+	}
+}
+
+// TestSendTelemetryRacesSignalAssign covers the sibling hazard the same CI
+// trace exposed: sendTelemetry read p.signal bare, but the field is written
+// under p.mu by the startAs* paths — a pre-nominated session closing while
+// an answerer assigns the signal would race the same way.
+func TestSendTelemetryRacesSignalAssign(t *testing.T) {
+	for range 50 {
+		fake := &fakeTelemetrySender{}
+		p := &p2pSession{sessionID: "race-signal"}
+		p.telMu.Lock()
+		p.telOn = true
+		p.lastPairKey = "relay|a|srflx|b" // pre-nominated so emit reaches sendTelemetry
+		p.lastSnap = StatsSnapshot{DataChannelBytesSent: 1, ICELocalCandidateType: "relay"}
+		p.startedAt = time.Now().Add(-time.Second)
+		p.telMu.Unlock()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			p.mu.Lock()
+			p.signal = fake
+			p.mu.Unlock()
+		}()
+		go func() {
+			defer wg.Done()
+			p.emitSessionStats()
+		}()
+		wg.Wait()
+	}
+}
+
 func TestCloseWithoutTrafficEmitsNothing(t *testing.T) {
 	fake := &fakeTelemetrySender{}
 	p := newTelemetrySession(fake)

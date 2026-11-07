@@ -87,7 +87,10 @@ type p2pSession struct {
 	// (SignalingConfig.DisableTelemetry); iceTags attributes the selected
 	// path; lastPairKey/lastSnap carry change detection; startedAt (moved
 	// beside recoveryStart — same alignment class, fieldalignment) and
-	// closeReason feed the final session_stats report.
+	// closeReason feed the final session_stats report. telOn/iceTags/startedAt
+	// are telMu-guarded (written once by initTelemetryLocked, which callers
+	// invoke under p.mu — close()'s report path holds no p.mu and must not
+	// race a session still mid-setup).
 	telOn       bool
 	iceTags     *iceTagIndex
 	telMu       sync.Mutex
