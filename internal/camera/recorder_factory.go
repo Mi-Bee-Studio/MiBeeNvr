@@ -268,7 +268,21 @@ func (cm *CameraManager) startRecorderLocked(ctx context.Context, cam config.Cam
 	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.Encoding) == "" {
 		cm.launchTrackedEnsure(cm.ensureEncoding, cam.ID)
 	}
+	// For ONVIF cameras without a snapshot URL, fill it from GetSnapshotUri
+	// now that the recorder is starting with credentials. The add-time fill
+	// runs before an auto-discovered camera has any (pending_activation) and
+	// fails on the device's auth, so an activated camera used to answer the
+	// snapshot API with 404 "not configured" for good.
+	if (cam.Protocol == "onvif" || cam.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(cam.SnapshotURL) == "" {
+		cm.launchTrackedEnsure(cm.ensureSnapshotURL, cam.ID)
+	}
 	return nil
+}
+
+// ensureSnapshotURL is the tracked-ensure wrapper of autoPopulateSnapshotURL
+// (fill-once: it never overwrites a configured URL).
+func (cm *CameraManager) ensureSnapshotURL(cameraID string) {
+	cm.autoPopulateSnapshotURL(context.Background(), cameraID)
 }
 
 // launchTrackedEnsure runs a best-effort ONVIF ensure* pass for a camera in a

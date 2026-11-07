@@ -757,6 +757,8 @@ export interface TestConnectionRequest {
   password?: string;
   encoding?: string;
   onvif_endpoint?: string;
+  /** ONVIF: probe this media profile's stream (default: the first one). */
+  profile_token?: string;
 }
 
 export interface TestConnectionResult {

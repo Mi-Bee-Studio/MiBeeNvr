@@ -560,6 +560,9 @@ let validationErrors = $state<Record<string, string>>({});
         password: formPassword || undefined,
         encoding: formEncoding || undefined,
         onvif_endpoint: formProtocol === 'onvif' ? formUrl : undefined,
+        // A picked media profile is what gets probed — re-testing after
+        // choosing a dual-spectrum thermal profile reports ITS codec.
+        profile_token: formProtocol === 'onvif' ? formProfileToken.trim() || undefined : undefined,
       });
       // The ONVIF probe returns the device's media profiles — feed the
       // main-profile picker so a dual-spectrum camera's thermal profile can
