@@ -33,9 +33,9 @@ def test_module_imports(module: str) -> None:
 
 def test_manifest_is_valid() -> None:
     manifest = json.loads(
-        (Path(__file__).parent.parent.parent.parent / "custom_components/mibee_nvr/manifest.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            Path(__file__).parent.parent.parent.parent / "custom_components/mibee_nvr/manifest.json"
+        ).read_text(encoding="utf-8")
     )
     assert manifest["domain"] == "mibee_nvr"
     assert manifest["config_flow"] is True
