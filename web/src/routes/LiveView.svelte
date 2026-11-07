@@ -90,7 +90,7 @@
   const siblingCamera = $derived(
     dualPane && spectrumSiblings.length > 0 ? spectrumSiblings[0] : null
   );
-  let linkedProbe = $state<{ nx: number; ny: number; c: number } | null>(null);
+  let linkedProbe = $state<{ nx: number; ny: number; c: number; vx: number; vy: number } | null>(null);
   let registeredSiblingId = '';
 
   function toggleDualPane(): void {
@@ -98,7 +98,7 @@
     linkedProbe = null;
   }
 
-  function handleLinkedProbe(p: { nx: number; ny: number; c: number }): void {
+  function handleLinkedProbe(p: { nx: number; ny: number; c: number; vx: number; vy: number }): void {
     linkedProbe = p;
   }
 
@@ -639,8 +639,9 @@
             {#if dualPane && siblingCamera}
               <!-- Sibling pane: the other channel of the same device. The
                    thermal side keeps its full overlay; the visible side
-                   mirrors the probed spot at the same relative position
-                   (approximate — the two FOVs are not pixel-registered). -->
+                   mirrors the probed spot — through the device's reported
+                   thermal→visible registration when it has one (Hikvision
+                   radiometric frames), else at the same relative position. -->
               <div class="card border th-border overflow-hidden relative" data-testid="spectrum-sibling-pane">
                 <div class="flex items-center justify-between gap-2 px-3 py-2 border-b th-border th-bg-secondary">
                   <span class="text-sm font-medium th-text-primary truncate">{siblingCamera.name || siblingCamera.id}</span>
@@ -665,7 +666,7 @@
                     {:else if linkedProbe}
                       <span
                         class="absolute z-10 -translate-x-1/2 -translate-y-[150%] px-1 py-0.5 rounded bg-black/70 text-[10px] font-mono text-white border border-amber-400/60"
-                        style="left:{linkedProbe.nx * 100}%;top:{linkedProbe.ny * 100}%"
+                        style="left:{linkedProbe.vx * 100}%;top:{linkedProbe.vy * 100}%"
                         data-testid="spectrum-probe-mirror"
                         title={t('live.spectrum.probeMirrorHint')}
                       >

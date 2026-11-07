@@ -13,6 +13,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onvif"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 )
 
@@ -290,10 +291,20 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		if h.db != nil {
 			existingCams, _ := h.db.ListCameras(r.Context())
 			for _, ec := range existingCams {
-				if ec.Protocol == "onvif" && ec.ONVIFEndpoint == body.ONVIFEndpoint {
-					WriteError(w, http.StatusConflict, "ONVIF camera with this endpoint already exists")
-					return
+				if ec.Protocol != "onvif" || ec.ONVIFEndpoint != body.ONVIFEndpoint {
+					continue
 				}
+				// One ONVIF endpoint can carry several video sources
+				// (dual-spectrum thermal + visible, multi-lens, encoders);
+				// each is its own camera, told apart by its media profile.
+				// An explicit profile_token no existing camera on this
+				// endpoint records is another channel, not a duplicate.
+				if body.ProfileToken != "" && onvifProfileTokenOf(h.config, &ec) != body.ProfileToken {
+					continue
+				}
+				WriteError(w, http.StatusConflict, "ONVIF camera with this endpoint already exists"+
+					" — to add another channel of the same device (e.g. its thermal lens), pick that channel's media profile")
+				return
 			}
 		}
 	} else if !isPush && !isGB28181 && body.URL == "" {
@@ -340,7 +351,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		case "onvif":
 			// Auto-detect encoding from ONVIF device profiles
 			if body.StreamEncoding == "" {
-				if detected := probeONVIFEncoding(r.Context(), body.ONVIFEndpoint, body.Username, body.Password); detected != "" {
+				if detected := probeONVIFEncoding(r.Context(), body.ONVIFEndpoint, body.Username, body.Password, body.ProfileToken); detected != "" {
 					body.StreamEncoding = detected
 					enc = strings.ToLower(detected)
 					logger.Info("auto-detected ONVIF encoding", "camera", body.Name, "encoding", enc)
@@ -523,4 +534,18 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		cam.ID = id
 		writeJSON(w, http.StatusCreated, cam)
 	}
+}
+
+// onvifProfileTokenOf returns the media profile an existing ONVIF camera
+// records: the yaml config value (auto-persisted on first connect, the live
+// source of truth) falling back to the DB column.
+func onvifProfileTokenOf(cfg *config.Config, row *storage.CameraRow) string {
+	if cfg != nil {
+		for i := range cfg.Cameras {
+			if cfg.Cameras[i].ID == row.ID && cfg.Cameras[i].ProfileToken != "" {
+				return cfg.Cameras[i].ProfileToken
+			}
+		}
+	}
+	return row.ProfileToken
 }

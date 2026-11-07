@@ -90,6 +90,9 @@
   // Imaging channel (dual-spectrum): 'visible' (default) or 'thermal'. Purely
   // a semantic label + default-policy key (AI push skip, motion-gate caveat).
   let formImagingType = $state<'visible' | 'thermal'>('visible');
+  // Dual-spectrum pairing key: channels of one physical device that register
+  // as separate cameras (two ONVIF profiles, two SIP devices) share it.
+  let formSpectrumGroup = $state('');
   // Manual main-stream profile override (ONVIF). Empty = automatic selection
   // (highest resolution). Needed for dual-spectrum devices where the thermal
   // channel is the low-res profile automatic selection would never pick.
@@ -347,6 +350,7 @@ let validationErrors = $state<Record<string, string>>({});
     formLocation = '';
     formGroup = '';
     formImagingType = 'visible';
+    formSpectrumGroup = '';
     formProfileToken = '';
     profileOptions = [];
     formAudioLinkCameraID = '';
@@ -403,6 +407,7 @@ let validationErrors = $state<Record<string, string>>({});
     formLocation = camera.location || '';
     formGroup = camera.group || '';
     formImagingType = camera.imaging_type === 'thermal' ? 'thermal' : 'visible';
+    formSpectrumGroup = camera.spectrum_group || '';
     formProfileToken = camera.profile_token || '';
     formAudioLinkCameraID = camera.audio_link_camera_id || '';
     formBrand = camera.brand || '';
@@ -609,10 +614,14 @@ async function handleSubmit() {
     try {
         await performCameraSave();
         onsave();
-    } catch (e) { console.warn('Failed to save camera:', e); showToast(
-        editingCamera ? t('cameras.failedUpdate') : t('cameras.failedAdd'),
-        'error'
-    );
+    } catch (e) {
+        console.warn('Failed to save camera:', e);
+        // Carry the server's reason (e.g. the 409 "endpoint already exists —
+        // pick that channel's media profile") — a bare "failed to add" left
+        // the dual-spectrum second-channel add looking like a silent no-op.
+        const base = editingCamera ? t('cameras.failedUpdate') : t('cameras.failedAdd');
+        const detail = friendlyError(e, '');
+        showToast(detail ? `${base}: ${detail}` : base, 'error');
     } finally {
         saving = false;
     }
@@ -691,6 +700,7 @@ async function performCameraSave() {
             location: formLocation || undefined,
             group: formGroup.trim(),
             imaging_type: formImagingType,
+            spectrum_group: formSpectrumGroup.trim(),
             profile_token: formProtocol === 'onvif' ? (formProfileToken.trim() || '') : undefined,
             audio_link_camera_id: isAudioSource ? (formAudioLinkCameraID.trim() || '') : undefined,
             brand: formBrand || undefined,
@@ -768,6 +778,7 @@ async function performCameraSave() {
             location: formLocation || undefined,
             group: formGroup.trim() || undefined,
             imaging_type: formImagingType,
+            spectrum_group: formSpectrumGroup.trim() || undefined,
             profile_token: formProtocol === 'onvif' ? (formProfileToken.trim() || '') : undefined,
             audio_link_camera_id: isAudioSource ? (formAudioLinkCameraID.trim() || '') : undefined,
             brand: formBrand || undefined,
@@ -933,6 +944,24 @@ async function performCameraSave() {
       {#if formImagingType === 'thermal'}
         <p class="text-xs th-text-muted mt-1">{t('cameras.thermalHint')}</p>
       {/if}
+    </div>
+
+    <!-- Dual-spectrum pairing (spectrum_group): same key on the visible and
+         the thermal channel of one device lights the switch chip and the
+         side-by-side panes on the live view. -->
+    <div>
+      <label for="cam-spectrum-group" class="input-label">{t('cameras.spectrumGroup')}</label>
+      <input
+        id="cam-spectrum-group"
+        class="input"
+        type="text"
+        maxlength="64"
+        pattern="[A-Za-z0-9._\-]*"
+        placeholder={t('cameras.spectrumGroupPlaceholder')}
+        bind:value={formSpectrumGroup}
+        data-testid="cam-spectrum-group"
+      />
+      <p class="text-xs th-text-muted mt-1">{t('cameras.spectrumGroupHint')}</p>
     </div>
 
     <!-- Encoding -->

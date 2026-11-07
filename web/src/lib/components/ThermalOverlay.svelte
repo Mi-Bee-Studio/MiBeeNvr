@@ -1,7 +1,7 @@
 <script lang="ts">
   import { appendAuthToken, API_BASE } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { gridCellAt, cellCenter, gridValues, cellsOverThreshold } from '$lib/spectrum';
+  import { gridCellAt, cellCenter, gridFrame, cellsOverThreshold, thermalToVisible, type GridFrame } from '$lib/spectrum';
 
   // Live temperature overlay for a thermal camera's live view. Subscribes
   // to the per-camera SSE feed and renders the latest thermal.temperature
@@ -17,8 +17,10 @@
     cameraId: string;
     /** Fired on every probe click with the normalized position + resolved
      *  cell temperature (NaN when the grid fetch failed) — lets the parent
-     *  mirror the spot on a dual-pane sibling pane (same device FOV). */
-    onprobe?: (probe: { nx: number; ny: number; c: number }) => void;
+     *  mirror the spot on a dual-pane sibling pane. vx/vy is the same spot in
+     *  the visible picture when the device reports its thermal→visible
+     *  registration (else equal to nx/ny: the FOVs are assumed aligned). */
+    onprobe?: (probe: { nx: number; ny: number; c: number; vx: number; vy: number }) => void;
   } = $props();
 
   type Reading = {
@@ -72,21 +74,22 @@
   }
 
   // ---- Spot temperature & threshold highlight (#1106 data path) ----
-  // Click anywhere on the player to probe that point; the 32x24 grid comes
-  // from the NVR proxy (device credentials never reach the browser).
+  // Click anywhere on the player to probe that point; the temperature grid
+  // (32x24 SPEC, or the vendor's native geometry, e.g. 160x120) comes from
+  // the NVR proxy (device credentials never reach the browser).
   let probe = $state<{ nx: number; ny: number; c: number } | null>(null);
   let threshold = $state<number | null>(null);
   let hotCells = $state<Array<{ nx: number; ny: number; v: number }>>([]);
-  let frameCache: { at: number; values: number[] | null } = { at: 0, values: null };
+  let frameCache: { at: number; frame: GridFrame | null } = { at: 0, frame: null };
   let probeLayer: HTMLElement | null = $state(null);
 
-  async function fetchGrid(): Promise<number[] | null> {
-    if (Date.now() - frameCache.at < 1500) return frameCache.values;
+  async function fetchGrid(): Promise<GridFrame | null> {
+    if (Date.now() - frameCache.at < 1500) return frameCache.frame;
     try {
       const res = await fetch(appendAuthToken(`${API_BASE}/cameras/${encodeURIComponent(cameraId)}/thermal/frame`));
       if (!res.ok) return null;
-      frameCache = { at: Date.now(), values: gridValues(await res.json()) };
-      return frameCache.values;
+      frameCache = { at: Date.now(), frame: gridFrame(await res.json()) };
+      return frameCache.frame;
     } catch {
       return null;
     }
@@ -99,15 +102,16 @@
     const nx = (e.clientX - r.left) / r.width;
     const ny = (e.clientY - r.top) / r.height;
     if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
-    const values = await fetchGrid();
-    if (!values) {
+    const frame = await fetchGrid();
+    if (!frame) {
       probe = { nx, ny, c: NaN };
-      onprobe?.(probe);
+      onprobe?.({ ...probe, vx: nx, vy: ny });
       return;
     }
-    const { x, y } = gridCellAt(nx, ny);
-    probe = { nx, ny, c: values[y * 32 + x] };
-    onprobe?.(probe);
+    const { x, y } = gridCellAt(nx, ny, frame.cols, frame.rows);
+    probe = { nx, ny, c: frame.values[y * frame.cols + x] };
+    const v = thermalToVisible(nx, ny, frame.visibleRect);
+    onprobe?.({ ...probe, vx: v.nx, vy: v.ny });
   }
 
   $effect(() => {
@@ -117,9 +121,12 @@
     }
     let alive = true;
     const run = async () => {
-      const values = await fetchGrid();
-      if (!alive || !values) return;
-      hotCells = cellsOverThreshold(values, threshold).map((c0) => ({ ...cellCenter(c0.x, c0.y), v: c0.v }));
+      const frame = await fetchGrid();
+      if (!alive || !frame) return;
+      hotCells = cellsOverThreshold(frame.values, threshold, 8, frame.cols).map((c0) => ({
+        ...cellCenter(c0.x, c0.y, frame.cols, frame.rows),
+        v: c0.v,
+      }));
     };
     run();
     const iv = setInterval(run, 3000);

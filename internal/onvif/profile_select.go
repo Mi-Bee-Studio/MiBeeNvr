@@ -79,11 +79,19 @@ func looksLikeMain(token, name string) bool {
 // IP4M-1051 pattern) — not a sub stream. Returns "" when the camera has no
 // distinct secondary profile (single-profile devices stay empty; consumers
 // treat that as "no sub-stream capability").
+//
+// On multi-source devices (dual-spectrum thermal + visible, multi-lens) the
+// candidates are limited to the main profile's video source: a thermal
+// channel's sub stream must never resolve to the visible lens's sub profile
+// just because that one ranks higher (a Hikvision DS-2TB2617 with the thermal
+// main at 1280×720 would otherwise pick the visible 704×576 sub).
 func SelectSubProfile(profiles []DeviceProfile, mainToken string) string {
 	mainPixels := 0
+	mainSource := ""
 	for _, p := range profiles {
 		if p.Token == mainToken {
 			mainPixels = profilePixels(p)
+			mainSource = p.VideoSourceToken
 			break
 		}
 	}
@@ -94,6 +102,9 @@ func SelectSubProfile(profiles []DeviceProfile, mainToken string) string {
 	bestPixels := 0
 	for i, p := range profiles {
 		if p.Token == mainToken {
+			continue
+		}
+		if mainSource != "" && p.VideoSourceToken != "" && p.VideoSourceToken != mainSource {
 			continue
 		}
 		pixels := profilePixels(p)

@@ -1101,6 +1101,16 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 	if !ValidSpectrumGroup(cam.SpectrumGroup) {
 		return fmt.Errorf("cameras.%s.spectrum_group must be empty or 1-64 chars of [A-Za-z0-9._-] (got %q)", cam.ID, cam.SpectrumGroup)
 	}
+	if tr := cam.ThermalReadout; tr != nil {
+		switch tr.Kind {
+		case "", ThermalReadoutKindHikvision:
+		default:
+			return fmt.Errorf("cameras.%s.thermal_readout.kind must be empty or %q (got %q)", cam.ID, ThermalReadoutKindHikvision, tr.Kind)
+		}
+		if tr.Channel < 0 || tr.Channel > 64 {
+			return fmt.Errorf("cameras.%s.thermal_readout.channel must be 0-64 (got %d)", cam.ID, tr.Channel)
+		}
+	}
 	if cam.MotionSource == MotionSourceCameraONVIF && cam.Protocol != "onvif" {
 		return fmt.Errorf("cameras.%s.motion_source=camera:onvif requires an onvif protocol camera (got %q)", cam.ID, cam.Protocol)
 	}

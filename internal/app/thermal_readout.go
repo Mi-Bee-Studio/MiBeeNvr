@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -20,22 +19,16 @@ type thermalReadoutService struct {
 }
 
 // newThermalReadoutService collects the poller sources from camera configs —
-// thermal cameras carrying a thermal_readout block only.
+// thermal cameras carrying a usable thermal_readout block only (SPEC JSON
+// endpoint, or kind: hikvision — the ISAPI radiometric frame).
 func newThermalReadoutService(cfg *config.Config, bus *event.EventBus) *thermalReadoutService {
 	sources := make(map[string]thermal.ReadoutSource)
 	if cfg == nil {
 		return &thermalReadoutService{bus: bus}
 	}
 	for i := range cfg.Cameras {
-		cam := &cfg.Cameras[i]
-		if cam.ImagingType != config.ImagingTypeThermal || cam.ThermalReadout == nil || cam.ThermalReadout.URL == "" {
-			continue
-		}
-		sources[cam.ID] = thermal.ReadoutSource{
-			URL:        cam.ThermalReadout.URL,
-			AuthHeader: cam.ThermalReadout.AuthHeader,
-			AuthValue:  cam.ThermalReadout.AuthValue,
-			Interval:   time.Duration(cam.ThermalReadout.IntervalS) * time.Second,
+		if src, ok := thermal.SourceForCamera(&cfg.Cameras[i]); ok {
+			sources[cfg.Cameras[i].ID] = src
 		}
 	}
 	return &thermalReadoutService{sources: sources, bus: bus}

@@ -146,7 +146,7 @@ func TestProbeONVIFStreamDualSpectrumProfiles(t *testing.T) {
 		5*time.Second, 50*time.Millisecond)
 
 	endpoint := "http://" + sim.ListenAddr() + "/onvif/device_service"
-	probe := probeONVIFStream(context.Background(), endpoint, "admin", "sim-pass")
+	probe := probeONVIFStream(context.Background(), endpoint, "admin", "sim-pass", "")
 
 	require.True(t, probe.Reachable, "device_service must answer: %s", probe.Reason)
 	require.NotEmpty(t, probe.Profiles, "the profile list must ride the probe even without a stream leg")
