@@ -2,6 +2,7 @@
   import { appendAuthToken, API_BASE } from '$lib/api';
   import { t } from '$lib/i18n';
   import { gridCellAt, cellCenter, gridFrame, cellsOverThreshold, thermalToVisible, type GridFrame } from '$lib/spectrum';
+  import { mediaContentBox, toNormalized, toHostPx } from '$lib/mediaBox';
 
   // Live temperature overlay for a thermal camera's live view. Subscribes
   // to the per-camera SSE feed and renders the latest thermal.temperature
@@ -80,6 +81,8 @@
   let probe = $state<{ nx: number; ny: number; c: number } | null>(null);
   let threshold = $state<number | null>(null);
   let hotCells = $state<Array<{ nx: number; ny: number; v: number }>>([]);
+  // Bumped on resize so marker pixel positions re-measure the picture box.
+  let layoutTick = $state(0);
   let frameCache: { at: number; frame: GridFrame | null } = { at: 0, frame: null };
   let probeLayer: HTMLElement | null = $state(null);
 
@@ -95,13 +98,32 @@
     }
   }
 
+  // Marker position in layer pixels: measured against the picture's content
+  // box (the stream is letter/pillar-boxed inside the player), not the layer.
+  function markerStyle(nx: number, ny: number): string {
+    void layoutTick;
+    const host = probeLayer?.parentElement;
+    if (!host) return `left:${nx * 100}%;top:${ny * 100}%`;
+    const p = toHostPx(host, mediaContentBox(host), nx, ny);
+    return `left:${p.x}px;top:${p.y}px`;
+  }
+
+  $effect(() => {
+    const bump = () => (layoutTick += 1);
+    window.addEventListener('resize', bump);
+    const iv = setInterval(bump, 2000); // the player may resize without a window resize
+    return () => {
+      window.removeEventListener('resize', bump);
+      clearInterval(iv);
+    };
+  });
+
   async function onProbeClick(e: MouseEvent) {
     const host = probeLayer?.parentElement;
     if (!host) return;
-    const r = host.getBoundingClientRect();
-    const nx = (e.clientX - r.left) / r.width;
-    const ny = (e.clientY - r.top) / r.height;
-    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+    const pos = toNormalized(mediaContentBox(host), e.clientX, e.clientY);
+    if (!pos) return;
+    const { nx, ny } = pos;
     const frame = await fetchGrid();
     if (!frame) {
       probe = { nx, ny, c: NaN };
@@ -188,14 +210,14 @@
   {#each hotCells as hc (hc.nx.toFixed(3) + hc.ny.toFixed(3))}
     <span
       class="absolute w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500/85 ring-1 ring-white/70"
-      style="left:{hc.nx * 100}%;top:{hc.ny * 100}%"
+      style={markerStyle(hc.nx, hc.ny)}
       title="{hc.v.toFixed(1)}°C"
     ></span>
   {/each}
   {#if probe}
     <span
       class="absolute -translate-x-1/2 -translate-y-[150%] px-1 py-0.5 rounded bg-black/70 text-[10px] font-mono text-white border border-white/20"
-      style="left:{probe.nx * 100}%;top:{probe.ny * 100}%"
+      style={markerStyle(probe.nx, probe.ny)}
       data-testid="thermal-probe-value"
     >
       {Number.isNaN(probe.c) ? '--' : probe.c.toFixed(1)}°C
