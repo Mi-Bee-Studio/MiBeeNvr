@@ -935,6 +935,14 @@ func (cm *CameraManager) ActivateCamera(ctx context.Context, cameraID, username,
 		return err
 	}
 	logger.Info("camera activated", "camera_id", cameraID)
+	// The add-time snapshot-URL fill ran while the camera was still
+	// credential-less (auto-discovered pending_activation) and failed on the
+	// device's auth, so an activated camera never got one — the snapshot API
+	// answered 404 "not configured" for good. Retry it now that the
+	// credentials are in.
+	if cfg := cm.GetCameraConfig(cameraID); cfg != nil && cfg.Protocol == string(model.ProtoONVIF) && cfg.SnapshotURL == "" {
+		go cm.autoPopulateSnapshotURL(context.Background(), cameraID)
+	}
 	// StartCamera is idempotent (returns CameraAlreadyRunningError if running);
 	// for a freshly-activated pending camera it starts the recorder for the first
 	// time, for an already-active camera it restarts with updated creds.
