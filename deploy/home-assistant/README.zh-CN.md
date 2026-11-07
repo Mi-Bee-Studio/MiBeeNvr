@@ -24,7 +24,7 @@ NVR，为每台相机创建摄像头实体、连接/录制传感器和录制开�
 ```bash
 git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git /tmp/mibee-nvr
 mkdir -p <HA配置目录>/custom_components
-cp -r /tmp/mibee-nvr/deploy/home-assistant/custom_components/mibee_nvr \
+cp -r /tmp/mibee-nvr/custom_components/mibee_nvr \
       <HA配置目录>/custom_components/
 ```
 

@@ -36,7 +36,7 @@ Install (manual copy, ~1 minute; the integration lives in a subdirectory of the 
 ```bash
 git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git /tmp/mibee-nvr
 mkdir -p <HA-config-dir>/custom_components
-cp -r /tmp/mibee-nvr/deploy/home-assistant/custom_components/mibee_nvr \
+cp -r /tmp/mibee-nvr/custom_components/mibee_nvr \
       <HA-config-dir>/custom_components/
 ```
 

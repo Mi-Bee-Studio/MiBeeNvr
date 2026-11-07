@@ -1,0 +1,23 @@
+# HACS validation (https://github.com/hacs/action) — required, error-free,
+# before a hacs/default inclusion PR (#878).
+name: hacs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "18 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration

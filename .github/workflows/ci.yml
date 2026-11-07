@@ -206,6 +206,6 @@ jobs:
           cache-dependency-path: deploy/home-assistant/requirements_test.txt
 
       - run: pip install -r requirements_test.txt
-      - run: ruff check custom_components tests
-      - run: ruff format --check custom_components tests
+      - run: ruff check ../../custom_components tests
+      - run: ruff format --check ../../custom_components tests
       - run: python -m pytest -v

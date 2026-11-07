@@ -36,7 +36,7 @@ MiBee NVR 自带一个可选的 Home Assistant 自定义集成（方案 0：自�
 ```bash
 git clone https://github.com/Mi-Bee-Studio/MiBeeNvr.git /tmp/mibee-nvr
 mkdir -p <HA配置目录>/custom_components
-cp -r /tmp/mibee-nvr/deploy/home-assistant/custom_components/mibee_nvr \
+cp -r /tmp/mibee-nvr/custom_components/mibee_nvr \
       <HA配置目录>/custom_components/
 ```
 

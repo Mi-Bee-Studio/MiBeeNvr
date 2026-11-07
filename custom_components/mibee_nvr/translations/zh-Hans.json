@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "将 Home Assistant 连接到你的 MiBee NVR。",
+        "data": {
+          "host": "主机",
+          "port": "端口（Web 界面，默认 9090）",
+          "username": "用户名",
+          "password": "密码",
+          "verify_ssl": "验证 SSL 证书",
+          "rtsp_port": "RTSP 输出端口（默认 8554）"
+        }
+      },
+      "confirm_discovery": {
+        "description": "在 {host}:{port} 发现 MiBee NVR。请输入 Web 登录凭据。",
+        "data": {
+          "username": "用户名",
+          "password": "密码",
+          "verify_ssl": "验证 SSL 证书",
+          "rtsp_port": "RTSP 输出端口（默认 8554）"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "连接失败",
+      "invalid_auth": "认证无效"
+    },
+    "abort": {
+      "already_configured": "该 NVR 已配置"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "rtsp_port": "RTSP 输出端口",
+          "scan_interval": "轮询间隔（秒）"
+        }
+      }
+    }
+  }
+}

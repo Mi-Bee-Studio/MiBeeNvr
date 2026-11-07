@@ -1,0 +1,22 @@
+# Hassfest validates the custom integration's manifest/strings/translations
+# (https://github.com/home-assistant/actions) — required alongside HACS
+# Action for a hacs/default inclusion PR (#878).
+name: hassfest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "33 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Hassfest
+        uses: home-assistant/actions/hassfest@master
