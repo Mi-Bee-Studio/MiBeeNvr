@@ -183,14 +183,17 @@ func (s *rtspFake) ensureStream() {
 		close(s.streamReady)
 	})
 }
+
 func (s *rtspFake) OnDescribe(*gortsplib.ServerHandlerOnDescribeCtx) (*base.Response, *gortsplib.ServerStream, error) {
 	s.ensureStream()
 	return &base.Response{StatusCode: base.StatusOK}, s.stream, nil
 }
+
 func (s *rtspFake) OnSetup(*gortsplib.ServerHandlerOnSetupCtx) (*base.Response, *gortsplib.ServerStream, error) {
 	s.ensureStream()
 	return &base.Response{StatusCode: base.StatusOK}, s.stream, nil
 }
+
 func (s *rtspFake) OnPlay(*gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
