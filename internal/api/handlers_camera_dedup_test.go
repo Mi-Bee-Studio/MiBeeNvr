@@ -155,7 +155,7 @@ func TestHandleCreateCamera_NoFingerprintNoProbe(t *testing.T) {
 // flow impossible. Same endpoint with no / the same profile stays a dup.
 func TestHandleCreateCamera_ONVIFSecondChannelSameEndpoint(t *testing.T) {
 	h := setupDedupHandler(t)
-	ep := "http://192.0.2.77/onvif/device_service"
+	ep := "http://127.0.0.1:1/onvif/device_service" // refused at once: no dial timeouts
 	create := func(name, profile string) *httptest.ResponseRecorder {
 		body := `{"name":"` + name + `","protocol":"onvif","onvif_endpoint":"` + ep +
 			`","stream_encoding":"H264","enabled":false`
