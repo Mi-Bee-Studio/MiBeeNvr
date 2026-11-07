@@ -166,7 +166,7 @@ func TestThermalFrameHikvisionKind(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/ISAPI/Thermal/channels/2/thermometry/jpegPicWithAppendData", r.URL.Path)
 		meta := `{"JpegPictureWithAppendData":{"jpegPicWidth":4,"jpegPicHeight":3,"p2pDataLen":48,` +
-			`"isFreezedata":false,"temperatureDataLength":4,"VisibleValidRect":{"height":0.858,"width":0.646,"x":0.149,"y":0.11}}}`
+			`"isFreezedata":false,"temperatureDataLength":4}}` // visiblePicEnabled off: no VisibleValidRect
 		var b bytes.Buffer
 		b.WriteString("--boundary\r\nContent-Type: application/json\r\n\r\n" + meta + "\r\n")
 		b.WriteString("--boundary\r\nContent-Type: application/octet-stream\r\n\r\n")
@@ -184,7 +184,10 @@ func TestThermalFrameHikvisionKind(t *testing.T) {
 	h.config = &config.Config{Cameras: []config.CameraConfig{{
 		ID: "cam-hik-t", Protocol: "onvif", ImagingType: "thermal",
 		ONVIFEndpoint: up.URL + "/onvif/device_service", Username: "admin", Password: "pw",
-		ThermalReadout: &config.ThermalReadoutConfig{Kind: "hikvision"},
+		ThermalReadout: &config.ThermalReadoutConfig{
+			Kind:        "hikvision",
+			VisibleRect: &config.ThermalVisibleRect{X: 0.149, Y: 0.11, W: 0.646, H: 0.858}, // pinned registration
+		},
 	}}}
 	require.NoError(t, h.db.UpsertCamera(context.Background(), "cam-hik-t", "hik", "onvif", "", "", "", "", "", "", "", ""))
 

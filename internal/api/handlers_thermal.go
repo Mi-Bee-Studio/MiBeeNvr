@@ -53,6 +53,9 @@ func (h *Handler) handleThermalFrame(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusBadGateway, "readout endpoint error")
 			return
 		}
+		if frame.VisibleRect == nil {
+			frame.VisibleRect = src.VisibleRect // configured registration
+		}
 		writeJSON(w, http.StatusOK, frame.FramePayload())
 		return
 	}

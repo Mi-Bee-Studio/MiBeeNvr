@@ -244,9 +244,11 @@ func TestSourceForCamera(t *testing.T) {
 
 	// Explicit base + channel; an RTSP-only camera derives http://host.
 	cam.ThermalReadout = &config.ThermalReadoutConfig{Kind: config.ThermalReadoutKindHikvision, URL: "http://192.0.2.191:8080/x", Channel: 3}
+	cam.ThermalReadout.VisibleRect = &config.ThermalVisibleRect{X: 0.15, Y: 0.11, W: 0.65, H: 0.86}
 	src, ok = SourceForCamera(cam)
 	require.True(t, ok)
 	require.Equal(t, "http://192.0.2.191:8080/ISAPI/Thermal/channels/3/thermometry/jpegPicWithAppendData?format=json", src.URL)
+	require.Equal(t, &NormRect{X: 0.15, Y: 0.11, W: 0.65, H: 0.86}, src.VisibleRect)
 	rtsp := &config.CameraConfig{
 		ID: "cam-r", Protocol: "rtsp", ImagingType: config.ImagingTypeThermal, URL: "rtsp://192.0.2.192:554/Streaming/Channels/201",
 		ThermalReadout: &config.ThermalReadoutConfig{Kind: config.ThermalReadoutKindHikvision},

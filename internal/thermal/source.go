@@ -48,6 +48,9 @@ func SourceForCamera(cam *config.CameraConfig) (ReadoutSource, bool) {
 	src.URL = frameURL
 	src.Username = cam.Username
 	src.Password = cam.Password
+	if r := tr.VisibleRect; r != nil {
+		src.VisibleRect = &NormRect{X: r.X, Y: r.Y, W: r.W, H: r.H}
+	}
 	return src, true
 }
 

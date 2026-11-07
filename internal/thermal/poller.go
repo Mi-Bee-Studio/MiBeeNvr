@@ -27,6 +27,9 @@ type ReadoutSource struct {
 	Kind     string
 	Username string
 	Password string
+	// VisibleRect is the configured thermal→visible registration, used
+	// when the device does not report one per frame.
+	VisibleRect *NormRect
 }
 
 // StartReadoutPoller polls every source and republishes readings through

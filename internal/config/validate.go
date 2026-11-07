@@ -1110,6 +1110,9 @@ func ValidateCameraRecordingMode(cam CameraConfig) error {
 		if tr.Channel < 0 || tr.Channel > 64 {
 			return fmt.Errorf("cameras.%s.thermal_readout.channel must be 0-64 (got %d)", cam.ID, tr.Channel)
 		}
+		if r := tr.VisibleRect; r != nil && (r.X < 0 || r.Y < 0 || r.W <= 0 || r.H <= 0 || r.X+r.W > 1.0001 || r.Y+r.H > 1.0001) {
+			return fmt.Errorf("cameras.%s.thermal_readout.visible_rect must lie within 0..1 with positive w/h", cam.ID)
+		}
 	}
 	if cam.MotionSource == MotionSourceCameraONVIF && cam.Protocol != "onvif" {
 		return fmt.Errorf("cameras.%s.motion_source=camera:onvif requires an onvif protocol camera (got %q)", cam.ID, cam.Protocol)

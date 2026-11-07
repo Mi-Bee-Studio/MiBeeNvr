@@ -267,6 +267,20 @@ type ThermalReadoutConfig struct {
 	AuthValue  string `yaml:"auth_value,omitempty" json:"auth_value,omitempty"`
 	Kind       string `yaml:"kind,omitempty" json:"kind,omitempty"`       // "" (SPEC JSON) | "hikvision"
 	Channel    int    `yaml:"channel,omitempty" json:"channel,omitempty"` // hikvision: thermal channel, default 2
+	// VisibleRect is the thermal FOV inside the visible picture (normalized
+	// 0..1) for the dual-pane probe mirror, when the device does not report
+	// its registration per frame — a Hikvision only sends VisibleValidRect
+	// while visiblePicEnabled is on, which costs a full visible JPEG per
+	// poll; turn it off and pin the rect here instead.
+	VisibleRect *ThermalVisibleRect `yaml:"visible_rect,omitempty" json:"visible_rect,omitempty"`
+}
+
+// ThermalVisibleRect is a normalized (0..1) rectangle.
+type ThermalVisibleRect struct {
+	X float64 `yaml:"x" json:"x"`
+	Y float64 `yaml:"y" json:"y"`
+	W float64 `yaml:"w" json:"w"`
+	H float64 `yaml:"h" json:"h"`
 }
 
 // ThermalReadoutKindHikvision is the Hikvision ISAPI radiometric readout.
