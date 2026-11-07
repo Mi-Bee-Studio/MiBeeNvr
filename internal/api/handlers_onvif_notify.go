@@ -41,3 +41,33 @@ func (h *Handler) handleONVIFNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(code)
 }
+
+// handleONVIFNotifyShort is the short consumer path the NVR now subscribes
+// devices with: the token alone identifies the camera, keeping the
+// ConsumerReference under the ~85-character buffer some firmware (Hikvision
+// V5.5.x) stores it in.
+//
+// POST /api/onvif/n/{token}
+func (h *Handler) handleONVIFNotifyShort(w http.ResponseWriter, r *http.Request) {
+	if h.camMgr == nil {
+		http.NotFound(w, r)
+		return
+	}
+	token := chi.URLParam(r, "token")
+	cameraID, ok := h.camMgr.CameraIDForPushToken(token)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxONVIFNotifyBody))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	code, msg := h.camMgr.HandleOnvifNotify(cameraID, token, body)
+	if msg != "" && code != http.StatusOK {
+		http.Error(w, msg, code)
+		return
+	}
+	w.WriteHeader(code)
+}
