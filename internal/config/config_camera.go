@@ -253,12 +253,38 @@ type CameraConfig struct {
 // polled for the live-view chip. AuthHeader/AuthValue is a static-header
 // seam for pre-SPEC integrations (intranet deployments); the finalized
 // SPEC session auth replaces it without touching the poll loop.
+//
+// Kind "hikvision" reads a Hikvision thermographic camera's ISAPI
+// pixel-to-pixel frame instead (scene max/min, spot probe on the native
+// matrix, thermal→visible registration): URL is then optional — empty means
+// the camera's own host (its ONVIF endpoint / stream URL) — Channel is the
+// thermal video channel (default 2), and the camera's username/password
+// answer the device's HTTP Digest challenge (no extra secret in the yaml).
 type ThermalReadoutConfig struct {
-	URL        string `yaml:"url" json:"url"`
+	URL        string `yaml:"url,omitempty" json:"url,omitempty"`
 	IntervalS  int    `yaml:"interval_s,omitempty" json:"interval_s,omitempty"` // default 2
 	AuthHeader string `yaml:"auth_header,omitempty" json:"auth_header,omitempty"`
 	AuthValue  string `yaml:"auth_value,omitempty" json:"auth_value,omitempty"`
+	Kind       string `yaml:"kind,omitempty" json:"kind,omitempty"`       // "" (SPEC JSON) | "hikvision"
+	Channel    int    `yaml:"channel,omitempty" json:"channel,omitempty"` // hikvision: thermal channel, default 2
+	// VisibleRect is the thermal FOV inside the visible picture (normalized
+	// 0..1) for the dual-pane probe mirror, when the device does not report
+	// its registration per frame — a Hikvision only sends VisibleValidRect
+	// while visiblePicEnabled is on, which costs a full visible JPEG per
+	// poll; turn it off and pin the rect here instead.
+	VisibleRect *ThermalVisibleRect `yaml:"visible_rect,omitempty" json:"visible_rect,omitempty"`
 }
+
+// ThermalVisibleRect is a normalized (0..1) rectangle.
+type ThermalVisibleRect struct {
+	X float64 `yaml:"x" json:"x"`
+	Y float64 `yaml:"y" json:"y"`
+	W float64 `yaml:"w" json:"w"`
+	H float64 `yaml:"h" json:"h"`
+}
+
+// ThermalReadoutKindHikvision is the Hikvision ISAPI radiometric readout.
+const ThermalReadoutKindHikvision = "hikvision"
 
 // AdaptiveRecordingConfig tunes recording_mode: adaptive (issue #435).
 // Durations are strings ("60s") parsed at wire-up, mirroring the

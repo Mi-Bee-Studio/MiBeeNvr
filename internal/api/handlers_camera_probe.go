@@ -29,6 +29,9 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		Password      string `json:"password"`
 		Encoding      string `json:"encoding"`
 		ONVIFEndpoint string `json:"onvif_endpoint"`
+		// ProfileToken (optional) points the stream leg at one media
+		// profile — the thermal channel of a dual-spectrum device.
+		ProfileToken string `json:"profile_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
@@ -51,7 +54,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 	// wrong for GetStreamUri — the root of the "test passes but no image" reports
 	// (issues #29/#30). The probe distinguishes reachable / stream-ok / codec-lie.
 	if body.Protocol == "onvif" {
-		probe := probeONVIFStream(r.Context(), target, body.Username, body.Password)
+		probe := probeONVIFStream(r.Context(), target, body.Username, body.Password, body.ProfileToken)
 		resp := map[string]any{
 			"success":    probe.StreamOK,
 			"reachable":  probe.Reachable,
@@ -292,12 +295,13 @@ func (p onvifStreamProbe) reasonOrOK() string {
 // verifies the stream actually plays via an RTSP DESCRIBE. This is the
 // "does it really work?" check that the test-connection flow needs. It is also
 // the engine behind probeONVIFEncoding (which discards everything but encoding).
-
-// probeONVIFStream connects to an ONVIF device, resolves the stream URI, and
-// verifies the stream actually plays via an RTSP DESCRIBE. This is the
-// "does it really work?" check that the test-connection flow needs. It is also
-// the engine behind probeONVIFEncoding (which discards everything but encoding).
-func probeONVIFStream(ctx context.Context, endpoint, username, password string) onvifStreamProbe {
+//
+// profileToken selects which media profile the stream leg probes; "" keeps
+// the device's first profile. Multi-source devices need the explicit token:
+// a dual-spectrum camera's thermal profile (H.264) and visible profile
+// (H.265) do not share a codec, so probing the first profile mislabels the
+// thermal channel at create time.
+func probeONVIFStream(ctx context.Context, endpoint, username, password, profileToken string) onvifStreamProbe {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
@@ -333,13 +337,20 @@ func probeONVIFStream(ctx context.Context, endpoint, username, password string) 
 			Reason:    "device responded but exposed no media profiles — check the camera's ONVIF/stream configuration",
 		}
 	}
-	declared := profiles[0].Encoding
+	probed := profiles[0]
+	for _, p := range profiles {
+		if profileToken != "" && p.Token == profileToken {
+			probed = p
+			break
+		}
+	}
+	declared := probed.Encoding
 	// Carry the profile list on every post-GetProfiles outcome so the create
 	// form's manual main-profile picker works even when the stream leg fails.
 	profileList := append([]onvif.DeviceProfile(nil), profiles...)
 	autoMain := onvif.SelectMainProfile(profiles)
 
-	si, err := client.GetStreamURI(ctx, profiles[0].Token)
+	si, err := client.GetStreamURI(ctx, probed.Token)
 	if err != nil || si.URI == "" {
 		return onvifStreamProbe{
 			Reachable:     true,
@@ -376,15 +387,12 @@ func probeONVIFStream(ctx context.Context, endpoint, username, password string) 
 	}
 }
 
-// probeONVIFEncoding returns just the resolved encoding (empty on failure),
-// preserving the original contract of the create-camera path. It now delegates
-// to probeONVIFStream so both paths share one probing implementation.
-
-// probeONVIFEncoding returns just the resolved encoding (empty on failure),
-// preserving the original contract of the create-camera path. It now delegates
-// to probeONVIFStream so both paths share one probing implementation.
-func probeONVIFEncoding(ctx context.Context, endpoint, username, password string) string {
-	return probeONVIFStream(ctx, endpoint, username, password).Encoding
+// probeONVIFEncoding returns just the resolved encoding (empty on failure) of
+// the given media profile ("" = the device's first profile), preserving the
+// original contract of the create-camera path. It delegates to
+// probeONVIFStream so both paths share one probing implementation.
+func probeONVIFEncoding(ctx context.Context, endpoint, username, password, profileToken string) string {
+	return probeONVIFStream(ctx, endpoint, username, password, profileToken).Encoding
 }
 
 // registerCameraRoutes registers all /api/cameras* routes (including nested

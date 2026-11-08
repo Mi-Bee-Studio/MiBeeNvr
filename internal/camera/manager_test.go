@@ -603,6 +603,31 @@ func TestAddCamera_DuplicateStableID(t *testing.T) {
 	assert.Contains(t, err.Error(), "already exists")
 }
 
+// TestAddCamera_ONVIFSecondChannel: a dual-spectrum ONVIF device (one
+// endpoint, one hardware serial, a visible and a thermal media profile) is
+// two cameras. An explicit profile token the first camera does not record
+// passes both the endpoint and the stable_id dedup; the same token, or none
+// (auto selection → the same main stream), is still refused.
+func TestAddCamera_ONVIFSecondChannel(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const ep = "http://192.0.2.190:80/onvif/device_service"
+	const serial = "DS-2TB2617-6-TEST"
+	add := func(id, token string) error {
+		_, err := mgr.AddCamera(ctx, config.CameraConfig{
+			ID: id, Name: id, Protocol: "onvif", ONVIFEndpoint: ep, StableID: serial,
+			ProfileToken: token, ActivationState: "pending_activation",
+		})
+		return err
+	}
+	require.NoError(t, add("cam-visible", "Profile_101"))
+	require.NoError(t, add("cam-thermal", "Profile_201"), "thermal channel of the same device")
+	require.Error(t, add("cam-visible-2", "Profile_101"), "same channel again")
+	require.Error(t, add("cam-auto", ""), "auto selection duplicates the main stream")
+}
+
 func TestAddCamera_AutoID(t *testing.T) {
 	mgr, _, _, _ := newTestManager(t)
 	ctx, cancel := context.WithCancel(context.Background())

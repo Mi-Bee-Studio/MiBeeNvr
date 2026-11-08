@@ -341,10 +341,33 @@ func (cm *CameraManager) pushTokenFor(cameraID string) string {
 }
 
 // onvifNotifyURL builds the ConsumerReference address for a camera: the
-// advertised base URL plus the token-credentialed notify path.
+// advertised base URL plus the token-credentialed notify path. The short
+// form carries the token alone (it maps back to the camera): devices keep
+// the consumer address in a small fixed buffer — a Hikvision DS-2TB2617
+// (V5.5.38) accepts the Subscribe but, past ~85 characters, POSTs every
+// Notify with an empty request target ("POST  HTTP/1.1"), which the HTTP
+// server rejects before any handler runs, so push events silently never
+// arrived. "<base>/api/onvif/n/<32 hex>" is ~70 characters on a LAN address.
+// The long /api/onvif/notify/{camera}/{token} route stays served for
+// subscriptions made before the change.
 func (cm *CameraManager) onvifNotifyURL(cameraID, token string) string {
+	_ = cameraID
 	base := strings.TrimSuffix(cm.cfg.Server.AdvertiseURL, "/")
-	return base + "/api/onvif/notify/" + cameraID + "/" + token
+	return base + "/api/onvif/n/" + token
+}
+
+// CameraIDForPushToken resolves the short notify path's token to its camera
+// (constant-time per comparison; the token space is 128-bit random).
+func (cm *CameraManager) CameraIDForPushToken(token string) (string, bool) {
+	cm.onvifMu.Lock()
+	defer cm.onvifMu.Unlock()
+	found := ""
+	for id, t := range cm.pushTokens {
+		if subtle.ConstantTimeCompare([]byte(t), []byte(token)) == 1 {
+			found = id
+		}
+	}
+	return found, found != ""
 }
 
 // startPushSubscription probes the camera with a wsnt:Subscribe and, on

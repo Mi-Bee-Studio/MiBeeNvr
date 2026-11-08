@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -152,4 +155,64 @@ func TestThermalHistoryEndpoint(t *testing.T) {
 	rec, req = thermalHistoryReq(t, "gb-hot", q+"&points=9999")
 	h.handleThermalHistory(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// kind: hikvision — the frame proxy decodes the ISAPI radiometric multipart
+// server-side and serves the native matrix with its geometry plus the
+// device's thermal→visible registration (the SPA probe/mirror contract).
+func TestThermalFrameHikvisionKind(t *testing.T) {
+	t.Parallel()
+	const cols, rows = 4, 3
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/ISAPI/Thermal/channels/2/thermometry/jpegPicWithAppendData", r.URL.Path)
+		meta := `{"JpegPictureWithAppendData":{"jpegPicWidth":4,"jpegPicHeight":3,"p2pDataLen":48,` +
+			`"isFreezedata":false,"temperatureDataLength":4}}` // visiblePicEnabled off: no VisibleValidRect
+		var b bytes.Buffer
+		b.WriteString("--boundary\r\nContent-Type: application/json\r\n\r\n" + meta + "\r\n")
+		b.WriteString("--boundary\r\nContent-Type: application/octet-stream\r\n\r\n")
+		for i := range cols * rows {
+			v := float32(20 + i) // 20..31, hottest last
+			_ = binary.Write(&b, binary.LittleEndian, math.Float32bits(v))
+		}
+		b.WriteString("\r\n--boundary--\r\n")
+		w.Header().Set("Content-Type", "multipart/form-data; boundary=boundary")
+		_, _ = w.Write(b.Bytes())
+	}))
+	t.Cleanup(up.Close)
+
+	h := setupGB28181TestHandler(t)
+	h.config = &config.Config{Cameras: []config.CameraConfig{{
+		ID: "cam-hik-t", Protocol: "onvif", ImagingType: "thermal",
+		ONVIFEndpoint: up.URL + "/onvif/device_service", Username: "admin", Password: "pw",
+		ThermalReadout: &config.ThermalReadoutConfig{
+			Kind:        "hikvision",
+			VisibleRect: &config.ThermalVisibleRect{X: 0.149, Y: 0.11, W: 0.646, H: 0.858}, // pinned registration
+		},
+	}}}
+	require.NoError(t, h.db.UpsertCamera(context.Background(), "cam-hik-t", "hik", "onvif", "", "", "", "", "", "", "", ""))
+
+	rec, req := thermalFrameReq(t, "cam-hik-t")
+	h.handleThermalFrame(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var got struct {
+		Grid struct {
+			Cols   int       `json:"cols"`
+			Rows   int       `json:"rows"`
+			Values []float64 `json:"values"`
+		} `json:"grid"`
+		Max struct {
+			ValueC float64 `json:"value_c"`
+			X      int     `json:"x"`
+			Y      int     `json:"y"`
+		} `json:"max"`
+		VisibleRect map[string]float64 `json:"visible_rect"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, cols, got.Grid.Cols)
+	require.Equal(t, rows, got.Grid.Rows)
+	require.Len(t, got.Grid.Values, cols*rows)
+	require.InDelta(t, 31, got.Max.ValueC, 1e-9)
+	require.Equal(t, 3, got.Max.X)
+	require.Equal(t, 2, got.Max.Y)
+	require.InDelta(t, 0.149, got.VisibleRect["x"], 1e-9)
 }

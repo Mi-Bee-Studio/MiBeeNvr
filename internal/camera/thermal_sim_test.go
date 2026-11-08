@@ -103,6 +103,7 @@ func newDualSpectrumSimulator(t *testing.T) (*onvifserver.Server, string) {
 				},
 				Framerate: 25, GovLength: 25, Bitrate: 4096,
 			},
+			Snapshot: onvifserver.SnapshotConfig{Enabled: true},
 		},
 		{
 			Token: "Profile_thermal", Name: "Thermal",
@@ -119,6 +120,7 @@ func newDualSpectrumSimulator(t *testing.T) (*onvifserver.Server, string) {
 				},
 				Framerate: 9, GovLength: 9, Bitrate: 512,
 			},
+			Snapshot: onvifserver.SnapshotConfig{Enabled: true},
 		},
 	}
 

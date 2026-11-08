@@ -140,6 +140,16 @@ func classifyCredentialError(err error) CredentialVerdict {
 		return CredentialRejected
 	}
 	low := strings.ToLower(err.Error())
+	// SOAP 1.2's HTTP binding carries env:Sender faults — ter:NotAuthorized
+	// included — as HTTP 400, and the library hands any non-200 reply back as
+	// a raw status error whose body is cut at 2 KiB. Hikvision's fault
+	// envelope declares ~30 namespaces, which pushes the NotAuthorized
+	// subcode past that cut, so the marker sniff below never saw it and the
+	// probe aborted after the first candidate. GetUsers takes no arguments:
+	// a Sender fault on it can only be about the credential.
+	if errors.Is(err, onvifgo.ErrHTTPRequestFailed) && strings.Contains(low, "with status 400") {
+		return CredentialRejected
+	}
 	for _, marker := range []string{"notauthorized", "not authorized", "unauthorized", "sender not authorized"} {
 		if strings.Contains(low, marker) {
 			return CredentialRejected

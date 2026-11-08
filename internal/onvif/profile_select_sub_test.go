@@ -83,3 +83,30 @@ func TestSelectSubProfile(t *testing.T) {
 		})
 	}
 }
+
+// TestSelectSubProfile_StaysOnMainVideoSource pins the dual-spectrum field
+// case (Hikvision DS-2TB2617): visible VideoSource_1 (101 main / 102 sub) and
+// thermal VideoSource_2 (201 main / 202 sub). The thermal camera's sub must be
+// 202 even when the visible sub (704×576) ranks higher than it and below the
+// thermal main (1280×720).
+func TestSelectSubProfile_StaysOnMainVideoSource(t *testing.T) {
+	profiles := []DeviceProfile{
+		{Token: "Profile_101", Width: 2688, Height: 1520, VideoSourceToken: "VideoSource_1"},
+		{Token: "Profile_102", Width: 704, Height: 576, VideoSourceToken: "VideoSource_1"},
+		{Token: "Profile_201", Width: 1280, Height: 720, VideoSourceToken: "VideoSource_2"},
+		{Token: "Profile_202", Width: 320, Height: 240, VideoSourceToken: "VideoSource_2"},
+	}
+	if got := SelectSubProfile(profiles, "Profile_201"); got != "Profile_202" {
+		t.Errorf("thermal main → sub = %q, want Profile_202 (same video source)", got)
+	}
+	if got := SelectSubProfile(profiles, "Profile_101"); got != "Profile_102" {
+		t.Errorf("visible main → sub = %q, want Profile_102", got)
+	}
+	// Devices that do not report source tokens keep the resolution-only rule.
+	for i := range profiles {
+		profiles[i].VideoSourceToken = ""
+	}
+	if got := SelectSubProfile(profiles, "Profile_201"); got != "Profile_102" {
+		t.Errorf("sourceless → sub = %q, want Profile_102 (legacy ranking)", got)
+	}
+}

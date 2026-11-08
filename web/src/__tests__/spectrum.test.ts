@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gbSiblings, spectrumLabelKey, gridCellAt, gridValues, cellsOverThreshold } from '$lib/spectrum';
+import { gbSiblings, spectrumLabelKey, gridCellAt, gridValues, gridFrame, cellsOverThreshold, thermalToVisible } from '$lib/spectrum';
 import type { Camera } from '$lib/api/cameras';
 
 const gb = (id: string, deviceId: string, imaging_type?: string): Camera =>
@@ -79,5 +79,40 @@ describe('spot-temperature grid helpers', () => {
     const hot = cellsOverThreshold(v, 30);
     expect(hot[0]).toMatchObject({ x: 4, y: 3, v: 60 }); // index 100
     expect(hot.map((c) => c.v)).toEqual([60, 50, 45, 30]);
+  });
+});
+
+describe('dual-spectrum ONVIF pairs and vendor grid geometry', () => {
+  it('pairs two ONVIF cameras of one device through spectrum_group', () => {
+    // One Hikvision endpoint, visible + thermal media profiles = two cameras.
+    const vis = { id: 'cam-v', protocol: 'onvif', spectrum_group: 'hik-1' } as unknown as Camera;
+    const thr = { id: 'cam-t', protocol: 'onvif', spectrum_group: 'hik-1', imaging_type: 'thermal' } as unknown as Camera;
+    const other = { id: 'cam-x', protocol: 'onvif', spectrum_group: 'other' } as unknown as Camera;
+    expect(gbSiblings(vis, [vis, thr, other]).map((c) => c.id)).toEqual(['cam-t']);
+    expect(gbSiblings(thr, [vis, thr, other]).map((c) => c.id)).toEqual(['cam-v']);
+  });
+
+  it('reads a 160x120 radiometric frame with its own geometry and registration', () => {
+    const values = new Array(160 * 120).fill(25);
+    values[60 * 160 + 80] = 41.5; // centre cell
+    const f = gridFrame({
+      grid: { cols: 160, rows: 120, values },
+      visible_rect: { x: 0.149, y: 0.11, w: 0.646, h: 0.858 },
+    });
+    expect(f).not.toBeNull();
+    expect(f!.cols).toBe(160);
+    expect(f!.rows).toBe(120);
+    const { x, y } = gridCellAt(0.5, 0.5, f!.cols, f!.rows);
+    expect(f!.values[y * f!.cols + x]).toBe(41.5);
+    expect(cellsOverThreshold(f!.values, 40, 8, f!.cols)[0]).toMatchObject({ x: 80, y: 60 });
+    const v = thermalToVisible(0.5, 0.5, f!.visibleRect);
+    expect(v.nx).toBeCloseTo(0.472, 3);
+    expect(v.ny).toBeCloseTo(0.539, 3);
+  });
+
+  it('keeps the SPEC 32x24 default and rejects a geometry/value mismatch', () => {
+    expect(gridFrame({ grid: { values: new Array(768).fill(1) } })?.cols).toBe(32);
+    expect(gridFrame({ grid: { cols: 160, rows: 120, values: new Array(768) } })).toBeNull();
+    expect(thermalToVisible(0.25, 0.75)).toEqual({ nx: 0.25, ny: 0.75 });
   });
 });

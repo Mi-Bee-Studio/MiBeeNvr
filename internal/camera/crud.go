@@ -66,6 +66,13 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 			dupID = existing.ID
 			break
 		}
+		// Another media channel of the same ONVIF device (dual-spectrum
+		// thermal + visible, multi-lens): same endpoint, same hardware
+		// serial, but an explicit profile token the existing camera does
+		// not record — a distinct camera, not a re-add.
+		if distinctONVIFChannel(&existing, &cam) {
+			continue
+		}
 		// ONVIF endpoint dedup: both must be onvif protocol with a non-empty,
 		// equal endpoint. Compared via NormalizeOnvifEndpoint (lowercases
 		// scheme/host, elides default port :80/:443, strips trailing slash) so
@@ -932,4 +939,16 @@ func (cm *CameraManager) ActivateCamera(ctx context.Context, cameraID, username,
 	// for a freshly-activated pending camera it starts the recorder for the first
 	// time, for an already-active camera it restarts with updated creds.
 	return cm.StartCamera(ctx, cameraID)
+}
+
+// distinctONVIFChannel reports whether cam is another media channel of the
+// ONVIF device existing already enrols: both ONVIF, and cam names an explicit
+// profile token existing does not record. One endpoint (and one hardware
+// serial) can carry several video sources — a dual-spectrum camera's visible
+// and thermal lenses, a multi-lens or encoder box — and each is its own
+// camera. An empty token (automatic selection) stays a duplicate: it would
+// resolve to the same main stream the existing camera records.
+func distinctONVIFChannel(existing, cam *config.CameraConfig) bool {
+	return cam.Protocol == string(model.ProtoONVIF) && existing.Protocol == string(model.ProtoONVIF) &&
+		cam.ProfileToken != "" && cam.ProfileToken != existing.ProfileToken
 }

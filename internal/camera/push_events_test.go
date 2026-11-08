@@ -23,7 +23,11 @@ func TestEnsureMotionSubscriptionPrefersPush(t *testing.T) {
 	var pushCalls, pullCalls int
 	cm.SetPushSubscriberFactory(func(ctx context.Context, cameraID, notifyURL string, cb onvif.EventCallback, onFallback func(string, string)) (onvif.EventSubscriber, error) {
 		pushCalls++
-		require.Equal(t, "http://nvr.test:9090/api/onvif/notify/cam-o/", notifyURL[:len("http://nvr.test:9090/api/onvif/notify/cam-o/")])
+		// Short consumer path: the token alone, so the address fits the
+		// small buffer device firmware keeps it in (Hikvision truncates
+		// past ~85 chars and POSTs with an empty request target).
+		require.Regexp(t, `^http://nvr\.test:9090/api/onvif/n/[0-9a-f]{32}$`, notifyURL)
+		require.LessOrEqual(t, len(notifyURL), 85)
 		return &onvif.MockEventSubscriber{}, nil
 	})
 	cm.SetEventSubscriberFactory(func(ctx context.Context, cameraID string, cb onvif.EventCallback) (onvif.EventSubscriber, error) {
@@ -203,4 +207,19 @@ func TestPushTokenStableAcrossTeardowns(t *testing.T) {
 	second := cm.pushTokenFor("cam-o")
 	require.Equal(t, first, second)
 	require.NotEqual(t, first, cm.pushTokenFor("cam-p"), "tokens must differ per camera")
+}
+
+// TestCameraIDForPushToken: the short notify path resolves its token back to
+// the camera; unknown tokens resolve to nothing.
+func TestCameraIDForPushToken(t *testing.T) {
+	t.Parallel()
+	cm := NewCameraManager(testConfig(), nil, nil, "")
+	tokA := cm.pushTokenFor("cam-a")
+	tokB := cm.pushTokenFor("cam-b")
+	require.NotEqual(t, tokA, tokB)
+	id, ok := cm.CameraIDForPushToken(tokB)
+	require.True(t, ok)
+	require.Equal(t, "cam-b", id)
+	_, ok = cm.CameraIDForPushToken("00000000000000000000000000000000")
+	require.False(t, ok)
 }

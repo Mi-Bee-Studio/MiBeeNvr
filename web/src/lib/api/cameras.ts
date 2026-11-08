@@ -247,6 +247,9 @@ export interface CreateCameraRequest {
   motion_source?: string;
   /** Imaging channel (dual-spectrum): 'visible' (default) or 'thermal'. */
   imaging_type?: string;
+  /** Dual-spectrum pairing key: cameras sharing it are the channels of one
+   *  physical device (switch chip + side-by-side panes). */
+  spectrum_group?: string;
   // Time-sync opt in/out (#time-sync): null/undefined = follow time_sync.auto;
   // false = never auto-correct this camera.
   auto_time_sync?: boolean | null;
@@ -318,6 +321,8 @@ export interface UpdateCameraRequest {
   /** Imaging channel (dual-spectrum): 'visible' (default) or 'thermal'.
    *  Omit = unchanged. Thermal re-applies the AI-push skip default. */
   imaging_type?: string;
+  /** Dual-spectrum pairing key; "" clears it, omit = unchanged. */
+  spectrum_group?: string;
   // Time-sync opt in/out (#time-sync): null/undefined = unchanged (follow
   // time_sync.auto); false = never auto-correct this camera.
   auto_time_sync?: boolean | null;
@@ -752,6 +757,8 @@ export interface TestConnectionRequest {
   password?: string;
   encoding?: string;
   onvif_endpoint?: string;
+  /** ONVIF: probe this media profile's stream (default: the first one). */
+  profile_token?: string;
 }
 
 export interface TestConnectionResult {

@@ -451,6 +451,7 @@ func (h *Handler) registerPublicRoutes(r chi.Router) {
 		// in the URL is the credential; devices cannot BasicAuth, #922)
 		if h.camMgr != nil {
 			r.Post("/api/onvif/notify/{cameraID}/{token}", h.handleONVIFNotify)
+			r.Post("/api/onvif/n/{token}", h.handleONVIFNotifyShort)
 		}
 	})
 }

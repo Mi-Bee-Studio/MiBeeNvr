@@ -146,3 +146,36 @@ func TestHandleCreateCamera_NoFingerprintNoProbe(t *testing.T) {
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
 	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
 }
+
+// TestHandleCreateCamera_ONVIFSecondChannelSameEndpoint: a dual-spectrum ONVIF
+// device (Hikvision DS-2TB2617: visible Profile_101, thermal Profile_201) is
+// ONE endpoint carrying two video sources. The thermal channel must be
+// addable as its own camera by naming its media profile — the blanket
+// same-endpoint 409 used to make the documented "pick the thermal profile"
+// flow impossible. Same endpoint with no / the same profile stays a dup.
+func TestHandleCreateCamera_ONVIFSecondChannelSameEndpoint(t *testing.T) {
+	h := setupDedupHandler(t)
+	ep := "http://127.0.0.1:1/onvif/device_service" // refused at once: no dial timeouts
+	create := func(name, profile string) *httptest.ResponseRecorder {
+		body := `{"name":"` + name + `","protocol":"onvif","onvif_endpoint":"` + ep +
+			`","stream_encoding":"H264","enabled":false`
+		if profile != "" {
+			body += `,"profile_token":"` + profile + `"`
+		}
+		body += `}`
+		return doRequest(t, h.Routes(), "POST", "/api/cameras/", bytes.NewReader([]byte(body)), "", "")
+	}
+
+	rr := create("Visible", "Profile_101")
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+
+	rr = create("Visible again", "")
+	require.Equal(t, http.StatusConflict, rr.Code, "auto profile on a known endpoint is a duplicate")
+	require.Contains(t, rr.Body.String(), "media profile", "the 409 must point at the per-channel way out")
+
+	rr = create("Visible same profile", "Profile_101")
+	require.Equal(t, http.StatusConflict, rr.Code, "same endpoint + same profile is a duplicate")
+
+	rr = create("Thermal", "Profile_201")
+	require.Equal(t, http.StatusCreated, rr.Code, "another channel of the same device: body: %s", rr.Body.String())
+}

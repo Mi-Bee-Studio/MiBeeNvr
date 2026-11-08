@@ -14,11 +14,22 @@ import (
 // AuthHeader/AuthValue carry an optional static header — the pre-SPEC
 // integration seam; the finalized SPEC session auth replaces it later
 // without touching the poll loop.
+//
+// Kind KindHikvision switches the source to the Hikvision ISAPI radiometric
+// frame: URL is then the full jpegPicWithAppendData URL (HikvisionFrameURL)
+// and Username/Password answer the device's HTTP Digest challenge.
 type ReadoutSource struct {
 	URL        string
 	AuthHeader string
 	AuthValue  string
 	Interval   time.Duration // poll cadence; <=0 → 2s
+
+	Kind     string
+	Username string
+	Password string
+	// VisibleRect is the configured thermal→visible registration, used
+	// when the device does not report one per frame.
+	VisibleRect *NormRect
 }
 
 // StartReadoutPoller polls every source and republishes readings through
@@ -33,7 +44,64 @@ func StartReadoutPoller(ctx context.Context, feed *Feed, sources map[string]Read
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
 	for cameraID, src := range sources {
+		if src.Kind == KindHikvision {
+			go pollHikvision(ctx, feed, cameraID, src)
+			continue
+		}
 		go pollReadout(ctx, feed, client, cameraID, src)
+	}
+}
+
+// NewHikvisionClient returns an HTTP client answering the device's Digest
+// challenge with the given credentials (one per source: the transport
+// caches the device nonce).
+func NewHikvisionClient(username, password string, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: &DigestTransport{Username: username, Password: password},
+	}
+}
+
+// pollHikvision is the radiometric-frame twin of pollReadout: each tick
+// pulls one per-pixel frame, skips frames the device flags as frozen
+// (shutter / NUC calibration) and publishes the scene extremes.
+func pollHikvision(ctx context.Context, feed *Feed, cameraID string, src ReadoutSource) {
+	interval := src.Interval
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	client := NewHikvisionClient(src.Username, src.Password, 8*time.Second)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	failing := false
+	poll := func() {
+		frame, err := FetchHikvisionFrame(ctx, client, src.URL)
+		if err != nil {
+			if !failing {
+				slog.Warn("thermal readout: hikvision frame failed", "camera_id", cameraID, "error", err)
+				failing = true
+			}
+			return
+		}
+		if failing {
+			slog.Info("thermal readout: hikvision frames recovered", "camera_id", cameraID)
+			failing = false
+		}
+		if frame.Frozen {
+			return // calibration freeze — not a live measurement
+		}
+		if reading, ok := frame.Reading(cameraID); ok {
+			feed.Publish(reading)
+		}
+	}
+	poll()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			poll()
+		}
 	}
 }
 

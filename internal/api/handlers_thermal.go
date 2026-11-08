@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/thermal"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -17,6 +18,12 @@ import (
 // thermal_readout source. The NVR proxies so the browser never needs the
 // device address or credentials (and no CORS). Pass-through: the SPA unwraps
 // the family envelope the same way the SSE chip data does.
+//
+// kind: hikvision sources are decoded server-side instead: the ISAPI
+// multipart radiometric frame (Digest-authenticated with the camera's own
+// credentials) becomes {"grid":{"cols","rows","values"},"max","min",
+// "visible_rect"} — the native matrix (160×120 on a DS-2TB2617) plus the
+// device's thermal→visible registration for the dual-pane mirror.
 func (h *Handler) handleThermalFrame(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()
@@ -33,9 +40,23 @@ func (h *Handler) handleThermalFrame(w http.ResponseWriter, r *http.Request) {
 	// imaging_type lives in the yaml config (the DB row never carries it),
 	// so both the thermal gate and the readout source read from there —
 	// the same source of truth the boot-wired poller uses.
-	src := thermalReadoutOf(h.config, id)
-	if src == nil || !thermalCameraIs(h.config, id) {
+	src, ok := thermal.SourceForCamera(thermalCameraConfig(h.config, id))
+	if !ok {
 		WriteError(w, http.StatusNotFound, "no thermal readout configured")
+		return
+	}
+	if src.Kind == thermal.KindHikvision {
+		client := thermal.NewHikvisionClient(src.Username, src.Password, 8*time.Second)
+		frame, err := thermal.FetchHikvisionFrame(ctx, client, src.URL)
+		if err != nil {
+			logger.Warn("thermal frame: hikvision readout failed", "camera_id", id, "error", err)
+			WriteError(w, http.StatusBadGateway, "readout endpoint error")
+			return
+		}
+		if frame.VisibleRect == nil {
+			frame.VisibleRect = src.VisibleRect // configured registration
+		}
+		writeJSON(w, http.StatusOK, frame.FramePayload())
 		return
 	}
 
@@ -158,15 +179,16 @@ func decimateThermalPoints(rows []storage.ThermalPoint, n int) []storage.Thermal
 	return out
 }
 
-// thermalReadoutOf finds the configured readout source for a camera ID
-// (yaml-backed, the same source of truth the boot-wired poller reads).
-func thermalReadoutOf(cfg *config.Config, cameraID string) *config.ThermalReadoutConfig {
+// thermalCameraConfig finds a camera's yaml config (the source of truth for
+// imaging_type and thermal_readout — the DB row never carries them), the
+// same config the boot-wired poller resolves its sources from.
+func thermalCameraConfig(cfg *config.Config, cameraID string) *config.CameraConfig {
 	if cfg == nil {
 		return nil
 	}
 	for i := range cfg.Cameras {
 		if cfg.Cameras[i].ID == cameraID {
-			return cfg.Cameras[i].ThermalReadout
+			return &cfg.Cameras[i]
 		}
 	}
 	return nil

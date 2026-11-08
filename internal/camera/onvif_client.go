@@ -330,7 +330,19 @@ func (cm *CameraManager) autoPopulateSnapshotURL(ctx context.Context, cameraID s
 		return
 	}
 
-	provider := client.NewSnapshotProvider(profiles[0].Token)
+	// The camera's own media profile when it names one: on a dual-spectrum
+	// device profiles[0] is the visible lens, so the thermal channel's
+	// snapshot would otherwise be a visible-light picture.
+	token := profiles[0].Token
+	if want := cm.cameraProfileToken(cameraID); want != "" {
+		for _, p := range profiles {
+			if p.Token == want {
+				token = want
+				break
+			}
+		}
+	}
+	provider := client.NewSnapshotProvider(token)
 	if provider == nil {
 		logger.Warn("failed to create snapshot provider", "camera_id", cameraID)
 		return
@@ -358,4 +370,13 @@ func (cm *CameraManager) autoPopulateSnapshotURL(ctx context.Context, cameraID s
 	cm.configMu.Unlock()
 
 	logger.Info("auto-populated snapshot URL from ONVIF device", "camera_id", cameraID, "url", slogx.RedactURL(uri))
+}
+
+// cameraProfileToken returns the configured (or auto-persisted) main media
+// profile token of a camera, "" when unset or unknown.
+func (cm *CameraManager) cameraProfileToken(cameraID string) string {
+	if cfg := cm.GetCameraConfig(cameraID); cfg != nil {
+		return cfg.ProfileToken
+	}
+	return ""
 }

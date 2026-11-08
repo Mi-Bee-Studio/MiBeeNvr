@@ -1,7 +1,8 @@
 <script lang="ts">
   import { appendAuthToken, API_BASE } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { gridCellAt, cellCenter, gridValues, cellsOverThreshold } from '$lib/spectrum';
+  import { gridCellAt, cellCenter, gridFrame, cellsOverThreshold, thermalToVisible, type GridFrame } from '$lib/spectrum';
+  import { mediaContentBox, toNormalized, toHostPx } from '$lib/mediaBox';
 
   // Live temperature overlay for a thermal camera's live view. Subscribes
   // to the per-camera SSE feed and renders the latest thermal.temperature
@@ -17,8 +18,10 @@
     cameraId: string;
     /** Fired on every probe click with the normalized position + resolved
      *  cell temperature (NaN when the grid fetch failed) — lets the parent
-     *  mirror the spot on a dual-pane sibling pane (same device FOV). */
-    onprobe?: (probe: { nx: number; ny: number; c: number }) => void;
+     *  mirror the spot on a dual-pane sibling pane. vx/vy is the same spot in
+     *  the visible picture when the device reports its thermal→visible
+     *  registration (else equal to nx/ny: the FOVs are assumed aligned). */
+    onprobe?: (probe: { nx: number; ny: number; c: number; vx: number; vy: number }) => void;
   } = $props();
 
   type Reading = {
@@ -72,42 +75,65 @@
   }
 
   // ---- Spot temperature & threshold highlight (#1106 data path) ----
-  // Click anywhere on the player to probe that point; the 32x24 grid comes
-  // from the NVR proxy (device credentials never reach the browser).
+  // Click anywhere on the player to probe that point; the temperature grid
+  // (32x24 SPEC, or the vendor's native geometry, e.g. 160x120) comes from
+  // the NVR proxy (device credentials never reach the browser).
   let probe = $state<{ nx: number; ny: number; c: number } | null>(null);
   let threshold = $state<number | null>(null);
   let hotCells = $state<Array<{ nx: number; ny: number; v: number }>>([]);
-  let frameCache: { at: number; values: number[] | null } = { at: 0, values: null };
+  // Bumped on resize so marker pixel positions re-measure the picture box.
+  let layoutTick = $state(0);
+  let frameCache: { at: number; frame: GridFrame | null } = { at: 0, frame: null };
   let probeLayer: HTMLElement | null = $state(null);
 
-  async function fetchGrid(): Promise<number[] | null> {
-    if (Date.now() - frameCache.at < 1500) return frameCache.values;
+  async function fetchGrid(): Promise<GridFrame | null> {
+    if (Date.now() - frameCache.at < 1500) return frameCache.frame;
     try {
       const res = await fetch(appendAuthToken(`${API_BASE}/cameras/${encodeURIComponent(cameraId)}/thermal/frame`));
       if (!res.ok) return null;
-      frameCache = { at: Date.now(), values: gridValues(await res.json()) };
-      return frameCache.values;
+      frameCache = { at: Date.now(), frame: gridFrame(await res.json()) };
+      return frameCache.frame;
     } catch {
       return null;
     }
   }
 
+  // Marker position in layer pixels: measured against the picture's content
+  // box (the stream is letter/pillar-boxed inside the player), not the layer.
+  function markerStyle(nx: number, ny: number): string {
+    void layoutTick;
+    const host = probeLayer?.parentElement;
+    if (!host) return `left:${nx * 100}%;top:${ny * 100}%`;
+    const p = toHostPx(host, mediaContentBox(host), nx, ny);
+    return `left:${p.x}px;top:${p.y}px`;
+  }
+
+  $effect(() => {
+    const bump = () => (layoutTick += 1);
+    window.addEventListener('resize', bump);
+    const iv = setInterval(bump, 2000); // the player may resize without a window resize
+    return () => {
+      window.removeEventListener('resize', bump);
+      clearInterval(iv);
+    };
+  });
+
   async function onProbeClick(e: MouseEvent) {
     const host = probeLayer?.parentElement;
     if (!host) return;
-    const r = host.getBoundingClientRect();
-    const nx = (e.clientX - r.left) / r.width;
-    const ny = (e.clientY - r.top) / r.height;
-    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
-    const values = await fetchGrid();
-    if (!values) {
+    const pos = toNormalized(mediaContentBox(host), e.clientX, e.clientY);
+    if (!pos) return;
+    const { nx, ny } = pos;
+    const frame = await fetchGrid();
+    if (!frame) {
       probe = { nx, ny, c: NaN };
-      onprobe?.(probe);
+      onprobe?.({ ...probe, vx: nx, vy: ny });
       return;
     }
-    const { x, y } = gridCellAt(nx, ny);
-    probe = { nx, ny, c: values[y * 32 + x] };
-    onprobe?.(probe);
+    const { x, y } = gridCellAt(nx, ny, frame.cols, frame.rows);
+    probe = { nx, ny, c: frame.values[y * frame.cols + x] };
+    const v = thermalToVisible(nx, ny, frame.visibleRect);
+    onprobe?.({ ...probe, vx: v.nx, vy: v.ny });
   }
 
   $effect(() => {
@@ -117,9 +143,12 @@
     }
     let alive = true;
     const run = async () => {
-      const values = await fetchGrid();
-      if (!alive || !values) return;
-      hotCells = cellsOverThreshold(values, threshold).map((c0) => ({ ...cellCenter(c0.x, c0.y), v: c0.v }));
+      const frame = await fetchGrid();
+      if (!alive || !frame) return;
+      hotCells = cellsOverThreshold(frame.values, threshold, 8, frame.cols).map((c0) => ({
+        ...cellCenter(c0.x, c0.y, frame.cols, frame.rows),
+        v: c0.v,
+      }));
     };
     run();
     const iv = setInterval(run, 3000);
@@ -181,14 +210,14 @@
   {#each hotCells as hc (hc.nx.toFixed(3) + hc.ny.toFixed(3))}
     <span
       class="absolute w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500/85 ring-1 ring-white/70"
-      style="left:{hc.nx * 100}%;top:{hc.ny * 100}%"
+      style={markerStyle(hc.nx, hc.ny)}
       title="{hc.v.toFixed(1)}°C"
     ></span>
   {/each}
   {#if probe}
     <span
       class="absolute -translate-x-1/2 -translate-y-[150%] px-1 py-0.5 rounded bg-black/70 text-[10px] font-mono text-white border border-white/20"
-      style="left:{probe.nx * 100}%;top:{probe.ny * 100}%"
+      style={markerStyle(probe.nx, probe.ny)}
       data-testid="thermal-probe-value"
     >
       {Number.isNaN(probe.c) ? '--' : probe.c.toFixed(1)}°C
