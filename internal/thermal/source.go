@@ -46,8 +46,13 @@ func SourceForCamera(cam *config.CameraConfig) (ReadoutSource, bool) {
 		return ReadoutSource{}, false
 	}
 	src.URL = frameURL
-	src.Username = cam.Username
-	src.Password = cam.Password
+	src.Username, src.Password = cam.Username, cam.Password
+	// The readout block's own credentials win: a GB28181 auto-enrolled
+	// channel has no HTTP credentials on its row, so its readout carries
+	// the device's web credentials there.
+	if tr.Username != "" {
+		src.Username, src.Password = tr.Username, tr.Password
+	}
 	if r := tr.VisibleRect; r != nil {
 		src.VisibleRect = &NormRect{X: r.X, Y: r.Y, W: r.W, H: r.H}
 	}

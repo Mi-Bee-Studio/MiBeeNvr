@@ -257,6 +257,30 @@ func TestSourceForCamera(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, strings.HasPrefix(src.URL, "http://192.0.2.192/ISAPI/"))
 
+	// A GB28181 auto-enrolled channel: no ONVIF endpoint, no row credentials —
+	// the readout block's own credentials authenticate the ISAPI call.
+	gb := &config.CameraConfig{
+		ID: "gb-hik", Protocol: "gb28181", ImagingType: config.ImagingTypeThermal,
+		ThermalReadout: &config.ThermalReadoutConfig{
+			Kind: config.ThermalReadoutKindHikvision, URL: "http://192.0.2.193",
+			Username: "admin", Password: "devpw",
+		},
+	}
+	src, ok = SourceForCamera(gb)
+	require.True(t, ok)
+	require.Equal(t, "http://192.0.2.193/ISAPI/Thermal/channels/2/thermometry/jpegPicWithAppendData?format=json", src.URL)
+	require.Equal(t, "admin", src.Username)
+	require.Equal(t, "devpw", src.Password)
+
+	// Readout credentials take precedence over the camera row's.
+	cam.ThermalReadout = &config.ThermalReadoutConfig{
+		Kind: config.ThermalReadoutKindHikvision, Username: "ro", Password: "ropw",
+	}
+	src, ok = SourceForCamera(cam)
+	require.True(t, ok)
+	require.Equal(t, "ro", src.Username)
+	require.Equal(t, "ropw", src.Password)
+
 	// SPEC JSON source unchanged; visible channels and empty SPEC URLs refused.
 	spec := &config.CameraConfig{
 		ID: "gb-t", ImagingType: config.ImagingTypeThermal,
