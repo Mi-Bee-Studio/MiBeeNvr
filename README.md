@@ -76,6 +76,10 @@ cd MiBeeNvr && make build
 
 For detailed setup, see [Getting Started](docs/en/getting-started.md).
 
+## One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/MiBee%20NVR/)
+
 ## Why MiBee NVR?
 
 - **Single Binary**: Zero dependencies, embedded Svelte 5 SPA, `CGO_ENABLED=0`
