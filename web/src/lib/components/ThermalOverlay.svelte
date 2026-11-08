@@ -84,6 +84,8 @@
   // Bumped on resize so marker pixel positions re-measure the picture box.
   let layoutTick = $state(0);
   let frameCache: { at: number; frame: GridFrame | null } = { at: 0, frame: null };
+  // Bumped when a fresh grid lands so the hover readout re-derives from it.
+  let frameVersion = $state(0);
   let probeLayer: HTMLElement | null = $state(null);
 
   async function fetchGrid(): Promise<GridFrame | null> {
@@ -92,6 +94,7 @@
       const res = await fetch(appendAuthToken(`${API_BASE}/cameras/${encodeURIComponent(cameraId)}/thermal/frame`));
       if (!res.ok) return null;
       frameCache = { at: Date.now(), frame: gridFrame(await res.json()) };
+      frameVersion += 1;
       return frameCache.frame;
     } catch {
       return null;
@@ -134,6 +137,34 @@
     probe = { nx, ny, c: frame.values[y * frame.cols + x] };
     const v = thermalToVisible(nx, ny, frame.visibleRect);
     onprobe?.({ ...probe, vx: v.nx, vy: v.ny });
+  }
+
+  // Hover readout: the temperature under the cursor, from the cached grid —
+  // mousemoves never wait on the network; fetchGrid throttles itself to the
+  // ~1.5s cache window and the tooltip re-derives when a fresh frame lands.
+  let hover = $state<{ px: number; py: number; nx: number; ny: number } | null>(null);
+  const hoverC = $derived.by(() => {
+    void frameVersion;
+    if (!hover || !frameCache.frame) return null;
+    const { x, y } = gridCellAt(hover.nx, hover.ny, frameCache.frame.cols, frameCache.frame.rows);
+    return frameCache.frame.values[y * frameCache.frame.cols + x];
+  });
+
+  function onHoverMove(e: MouseEvent) {
+    const host = probeLayer?.parentElement;
+    if (!host) return;
+    const pos = toNormalized(mediaContentBox(host), e.clientX, e.clientY);
+    if (!pos) {
+      hover = null; // cursor is on the letterbox, off the picture
+      return;
+    }
+    const lr = probeLayer!.getBoundingClientRect();
+    hover = { px: e.clientX - lr.left, py: e.clientY - lr.top, nx: pos.nx, ny: pos.ny };
+    void fetchGrid();
+  }
+
+  function onHoverLeave() {
+    hover = null;
   }
 
   $effect(() => {
@@ -205,6 +236,8 @@
   bind:this={probeLayer}
   class="absolute inset-0 z-10 cursor-crosshair"
   onclick={onProbeClick}
+  onmousemove={onHoverMove}
+  onmouseleave={onHoverLeave}
   data-testid="thermal-probe-layer"
 >
   {#each hotCells as hc (hc.nx.toFixed(3) + hc.ny.toFixed(3))}
@@ -221,6 +254,16 @@
       data-testid="thermal-probe-value"
     >
       {Number.isNaN(probe.c) ? '--' : probe.c.toFixed(1)}°C
+    </span>
+  {/if}
+  {#if hover && hoverC !== null}
+    <span
+      class="absolute translate-x-2 -translate-y-7 px-1.5 py-0.5 rounded bg-black/75 text-[10px] font-mono
+             text-white border border-white/20 pointer-events-none whitespace-nowrap"
+      style="left:{hover.px}px;top:{hover.py}px"
+      data-testid="thermal-hover-value"
+    >
+      {hoverC.toFixed(1)}°C
     </span>
   {/if}
 </div>
