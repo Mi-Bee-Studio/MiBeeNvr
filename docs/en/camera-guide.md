@@ -677,9 +677,41 @@ cameras:
 | --- | --- |
 | Live temperature chip (max/min) | Thermal-channel live view, mounted automatically |
 | Spot probe (click to measure a point) | Thermal-channel live view |
+| Hover readout (move the pointer anywhere on the thermal image to read that point's temperature; served from the cached matrix, no extra device requests) | Thermal-channel live view |
 | Over-threshold highlighting | "Highlight ≥°C" input on the live view |
 | Dual pane (visible + thermal side by side, probe mirroring) | "Dual pane" toggle on the live view |
 | Playback temperature curve (minute-level max/min, 90-day retention) | Recording detail page of thermal channels |
+
+### Hikvision dual-spectrum field notes
+
+All three bring-up paths are field-verified on Hikvision dual-spectrum cameras; the temperature source is the vendor's private ISAPI per-pixel matrix:
+
+```yaml
+cameras:
+  - id: "gb-thermal"
+    protocol: "gb28181"
+    imaging_type: thermal
+    health_overrides:
+      min_fps: 1
+    thermal_readout:
+      kind: hikvision           # Hikvision ISAPI per-pixel temperature matrix
+                                 # (Digest auth; the device-declared thermal↔optical
+                                 # registration rectangle is applied automatically)
+      url: "http://192.168.1.50"
+      username: "admin"         # thermal_readout credentials take priority over the
+      password: "******"        # camera entry's (GB-enrolled channels usually have
+                                 # no usable HTTP credentials on the entry itself)
+    spectrum_group: "front-gate"
+```
+
+Firmware quirks verified in the field (Hikvision V5.5.x firmware):
+
+| Symptom | Root cause | Workaround |
+| --- | --- | --- |
+| Resolution silently changes after switching to H.265 and saving | The firmware's save pipeline couples codec and resolution | Re-check resolution after a codec switch; save a second time if needed |
+| Thermal main stream looks horizontally stretched | Factory 1280×720 (16:9) stretches the 4:3 sensor | Set the resolution to 640×480 (integer 4×, 4:3) |
+| Device load/traffic spikes while the temperature matrix is polled | Frame-attached visible-light JPEG is on by default (hundreds of KB per frame) | Disable "frame-attached visible image" before enabling temperature polling |
+| ONVIF event subscription succeeds but no notification ever arrives | The device silently drops subscriptions with long consumer addresses (POSTs to an empty path) | Keep the event listener path short (the NVR already uses a short path automatically) |
 
 ### Storage and framerate
 
