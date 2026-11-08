@@ -265,8 +265,15 @@ type ThermalReadoutConfig struct {
 	IntervalS  int    `yaml:"interval_s,omitempty" json:"interval_s,omitempty"` // default 2
 	AuthHeader string `yaml:"auth_header,omitempty" json:"auth_header,omitempty"`
 	AuthValue  string `yaml:"auth_value,omitempty" json:"auth_value,omitempty"`
-	Kind       string `yaml:"kind,omitempty" json:"kind,omitempty"`       // "" (SPEC JSON) | "hikvision"
-	Channel    int    `yaml:"channel,omitempty" json:"channel,omitempty"` // hikvision: thermal channel, default 2
+	// Username/Password authenticate the readout when the camera row carries
+	// no HTTP credentials of its own — a GB28181 auto-enrolled channel only
+	// knows the platform's SIP password, so a Hikvision ISAPI readout on such
+	// a channel carries the device's web credentials here. They take
+	// precedence over the camera row's.
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+	Kind     string `yaml:"kind,omitempty" json:"kind,omitempty"`       // "" (SPEC JSON) | "hikvision"
+	Channel  int    `yaml:"channel,omitempty" json:"channel,omitempty"` // hikvision: thermal channel, default 2
 	// VisibleRect is the thermal FOV inside the visible picture (normalized
 	// 0..1) for the dual-pane probe mirror, when the device does not report
 	// its registration per frame — a Hikvision only sends VisibleValidRect
