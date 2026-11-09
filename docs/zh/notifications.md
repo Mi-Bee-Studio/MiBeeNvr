@@ -88,11 +88,14 @@ notifications:
       severity_min: "info"                # 低于该级别的告警丢弃
       timeout_s: 5                        # 单请求超时
       burst_per_min: 30                   # 每分钟发送上限
+  expose_origin: false                    # 在公开的 /api/health 上列出接收端 origin（默认关）
 ```
 
 每个 sink 拥有独立队列与投递 worker——一个接收端宕机不影响其他接收端；按 sink 的 `events` / `severity_min` 过滤可实现「付费短信通道只收 critical、聊天机器人全收」这类分流。
 
 设置 → 通知 面板用 Web UI 管理同一配置节：接收端列表编辑、事件类型勾选、实时投递计数，以及一个绕过过滤直达每个接收端的**发送测试告警**按钮。
+
+`expose_origin` 打开后，公开的 `GET /api/health` 会携带一个 `notify_receivers` 数组，列出全部接收端的 **origin**（`scheme://host:port`，去重；路径与 token 一律剥离，非法 URL 自动跳过）。用途：让局域网内的生态客户端在**不登录、不带凭据**的前提下发现「这台 NVR 已绑定本网告警接收端」并拿到其 origin 做关系绑定。因为 `/api/health` 无鉴权，暴露内部拓扑（哪怕只有 origin）必须是部署者的显式选择，所以默认关闭；未开启、无 sink 或全部 URL 解析失败时该字段整体省略。
 
 ## API
 

@@ -97,6 +97,13 @@ type HealthResponse struct {
 	// on the authenticated /api/license. Omitted when licensing is not
 	// enforced (not required) or the capability is absent.
 	License *HealthLicense `json:"license,omitempty"`
+	// NotifyReceivers lists the origins (scheme://host:port) of the
+	// configured notification sinks, deduplicated, so unauthenticated LAN
+	// clients can discover that an alert receiver is bound and where it
+	// lives for relationship binding (#1121). Path and token never appear
+	// here — only the origin. Omitted unless notifications.expose_origin
+	// is explicitly enabled and at least one sink URL parses.
+	NotifyReceivers []string `json:"notify_receivers,omitempty"`
 }
 
 // HealthLicense is the privacy-safe license summary embedded in the public

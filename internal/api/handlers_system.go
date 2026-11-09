@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strconv"
 	"strings"
@@ -253,8 +254,37 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if h.config != nil {
 		resp.DeviceID = h.config.Server.DeviceID
 		resp.DeviceName = h.config.Server.DeviceName
+		resp.NotifyReceivers = notifyReceiverOrigins(h.config.Notifications)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// notifyReceiverOrigins extracts the deduplicated origins
+// (scheme://host:port) of the configured notification sinks. The sink path
+// and token never enter the result: this feeds the PUBLIC /api/health
+// payload, which is opt-in via notifications.expose_origin (#1121). Sinks
+// whose URL fails to parse into a usable origin are skipped; returns nil
+// when exposure is off or nothing usable remains.
+func notifyReceiverOrigins(nc config.NotificationsConfig) []string {
+	if !nc.ExposeOrigin || len(nc.Sinks) == 0 {
+		return nil
+	}
+
+	var origins []string
+	seen := make(map[string]bool, len(nc.Sinks))
+	for _, sink := range nc.Sinks {
+		u, err := url.Parse(sink.URL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			continue
+		}
+		origin := u.Scheme + "://" + u.Host
+		if seen[origin] {
+			continue
+		}
+		seen[origin] = true
+		origins = append(origins, origin)
+	}
+	return origins
 }
 
 // aggregateCameraHealth builds a CameraHealthSummary from the health manager and camera DB.
