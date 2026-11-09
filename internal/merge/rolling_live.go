@@ -55,6 +55,17 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 	fragBytes := make(map[string]int64)
 	fragTimers := make(map[string]*time.Timer)
 
+	// Grace-rail hold queue: on transcode-enabled cameras the
+	// #810 age rail defers segments younger than TranscodeGrace — dropping
+	// them back to the 10-minute backfill sweep left the open bucket's DB row
+	// stale for up to tens of minutes (soak end_trails 1000-2800s) while every
+	// fold the journal showed was for OTHER cameras. Young segments queue
+	// here instead, with a timer at their grace deadline that re-dispatches
+	// the batch — the fold then passes the (now expired) age rail and the
+	// bucket row advances within ~grace+debounce of segment close.
+	youngHold := make(map[string][]pendingSegmentInfo)
+	youngTimers := make(map[string]*time.Timer)
+
 	// fireCh carries cameraIDs whose debounce timer elapsed. Buffered so a timer
 	// callback virtually never blocks; the per-camera dedup in pending (delete on
 	// dispatch) keeps semantics correct if multiple signals queue. Dispatch is
@@ -84,6 +95,15 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 			t.Stop()
 			delete(fragTimers, cameraID)
 		}
+		// Grace-aged young segments ride along (mergeSegments re-sorts and
+		// its age rail re-checks each one — anything still young inside the
+		// fold is re-deferred there and picked up by the backfill sweep).
+		segs = append(segs, youngHold[cameraID]...)
+		delete(youngHold, cameraID)
+		if t := youngTimers[cameraID]; t != nil {
+			t.Stop()
+			delete(youngTimers, cameraID)
+		}
 		segs = append(segs, pending[cameraID]...)
 		delete(pending, cameraID)
 		delete(timers, cameraID)
@@ -111,6 +131,9 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 				t.Stop()
 			}
 			for _, t := range fragTimers {
+				t.Stop()
+			}
+			for _, t := range youngTimers {
 				t.Stop()
 			}
 			pendingMu.Unlock()
@@ -238,6 +261,39 @@ func (r *RollingMergeCoordinator) eventLoop(ctx context.Context) {
 			}
 
 			pending[sc.CameraID] = append(pending[sc.CameraID], seg)
+
+			// Grace-rail young hold: route segments that the
+			// fold's age rail would defer anyway into the grace queue instead
+			// of pending, so they re-dispatch at their grace deadline rather
+			// than waiting for the backfill sweep. mergeSegments keeps the
+			// authoritative re-check (TOCTOU stays #810's); this is purely the
+			// re-delivery path.
+			if cfg.TranscodeGrace > 0 && r.cameraTranscodeEnabled != nil && r.cameraTranscodeEnabled(sc.CameraID) &&
+				time.Since(endedAt) < cfg.TranscodeGrace {
+				youngHold[sc.CameraID] = append(youngHold[sc.CameraID], seg)
+				delete(pending, sc.CameraID)
+				// One timer per camera at the first young segment's grace
+				// deadline (+debounce, so a healthy segment closing in the
+				// same window rides the same dispatch); later young segments
+				// queue behind it, and mergeSegments' age-rail re-check
+				// re-defers (to backfill) any that are still young when it
+				// fires.
+				if yt := youngTimers[sc.CameraID]; yt == nil {
+					camID := sc.CameraID
+					delay := cfg.TranscodeGrace - time.Since(endedAt) + cfg.Debounce
+					if delay < 0 {
+						delay = 0
+					}
+					youngTimers[sc.CameraID] = time.AfterFunc(delay, func() {
+						pendingMu.Lock()
+						delete(youngTimers, camID)
+						pendingMu.Unlock()
+						signalFire(camID)
+					})
+				}
+				pendingMu.Unlock()
+				continue
+			}
 
 			// Reset or create the debounce timer. The timer callback only signals
 			// fireCh (non-blocking); the actual wg.Add/dispatch happens in the
