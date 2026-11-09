@@ -234,6 +234,11 @@ func readAppendBucketMarker(f *os.File) (layout appendBucketLayout, ok bool, err
 // --- 创建 ---
 
 // estimateSampleCap 按首段样本率 × 窗口 × 1.3 安全系数预估容量。
+//
+// 首段采样对可变帧率源（桌面捕获类：空闲首段几 fps、运动段 3-4 倍）会
+// 低估——桌面录制源实测 18~25 分钟即容量耗尽触发整桶经典重写。
+// 保守下限 25fps（主流摄像头帧率上界）兜住低估；真实高帧率源仍按实
+// 测值扩容，不受影响。MaxSamples 上限不变（默认 262144）。
 func estimateSampleCap(first *SegmentInfo, window time.Duration, maxSamples uint32) uint32 {
 	if window <= 0 {
 		window = time.Hour
@@ -241,6 +246,9 @@ func estimateSampleCap(first *SegmentInfo, window time.Duration, maxSamples uint
 	perSec := float64(first.SampleCount) / first.TotalDuration.Seconds()
 	if perSec <= 0 || math.IsInf(perSec, 0) || math.IsNaN(perSec) {
 		perSec = 25
+	}
+	if perSec < minEstimatedFPS {
+		perSec = minEstimatedFPS
 	}
 	cap32 := uint32(perSec * window.Seconds() * 1.3)
 	if cap32 < 1024 {
@@ -251,6 +259,10 @@ func estimateSampleCap(first *SegmentInfo, window time.Duration, maxSamples uint
 	}
 	return cap32
 }
+
+// minEstimatedFPS 是容量预估采用的保守帧率下限：VFR 源的空闲首段
+// 采样不可信，按主流摄像头帧率上界兜底。
+const minEstimatedFPS = 25.0
 
 // CreateAppendBucket 以 info 的编码参数创建一个空的追加桶文件。
 func CreateAppendBucket(path string, info *SegmentInfo, cfg AppendBucketConfig) (*AppendBucket, error) {

@@ -373,3 +373,35 @@ func TestAppendBucket_TkhdDimensionsWritten(t *testing.T) {
 	require.Equal(t, uint16(wantH), vt.Height, "tkhd height must come from SPS")
 	require.NoError(t, ValidateMergedMP4(bucketPath), "append-bucket output must pass Chromium-grade validation")
 }
+
+// TestEstimateSampleCapVFRFloor: the capacity
+// estimate samples the FIRST segment's frame rate, but variable-frame-rate
+// sources (desktop capture: idle first segment at a few fps, busy stretches
+// 3-4x higher) made the bucket exhaust 18-25 minutes into a 1h window,
+// forcing a full classic rewrite. The estimate must not trust a low first
+// segment below a conservative camera-rate floor.
+func TestEstimateSampleCapVFRFloor(t *testing.T) {
+	low := &SegmentInfo{SampleCount: 90, TotalDuration: 30 * time.Second} // 3 fps first segment
+	const defMax = uint32(262144)
+	capLow := estimateSampleCap(low, time.Hour, defMax)
+
+	// Conservative floor: 25 fps × 1h × 1.3 — a 3 fps sample must not
+	// shrink the bucket below ~4.6x its own measurement.
+	if floor := uint32(25 * 3600 * 1.3); capLow < floor {
+		t.Errorf("estimateSampleCap(3fps first segment) = %d, want >= floor %d (VFR sources spike far above the idle sample)", capLow, floor)
+	}
+
+	// A genuinely high-rate first segment still sizes up normally (no clamp
+	// down): 50 fps → 50*3600*1.3.
+	high := &SegmentInfo{SampleCount: 1500, TotalDuration: 30 * time.Second} // 50 fps
+	capHigh := estimateSampleCap(high, time.Hour, defMax)
+	if want := uint32(50 * 3600 * 1.3); capHigh != want {
+		t.Errorf("estimateSampleCap(50fps) = %d, want %d", capHigh, want)
+	}
+
+	// Degenerate duration still yields the floor, not a panic or zero.
+	degen := &SegmentInfo{SampleCount: 10, TotalDuration: 0}
+	if capD := estimateSampleCap(degen, time.Hour, defMax); capD == 0 {
+		t.Error("degenerate first segment must still yield a positive capacity")
+	}
+}
