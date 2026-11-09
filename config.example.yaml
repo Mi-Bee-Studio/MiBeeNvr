@@ -411,6 +411,10 @@ notifications:
   #     severity_min: "info"        # Drop alerts below this severity (info|warning|error|critical)
   #     timeout_s: 5                # Per-request timeout (default 5)
   #     burst_per_min: 30           # Outbound posts per minute cap (default 30)
+  # expose_origin: false            # List sink ORIGINS (scheme://host:port, path+token
+  #                                 # stripped, deduplicated) on the PUBLIC /api/health
+  #                                 # endpoint for LAN ecosystem clients. Opt-in: reveals
+  #                                 # internal topology on an unauthenticated endpoint.
 
 # WebDAV server — file access over WebDAV protocol
 # Shares recordings directory over HTTP

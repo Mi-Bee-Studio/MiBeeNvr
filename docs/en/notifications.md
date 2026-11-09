@@ -88,11 +88,14 @@ notifications:
       severity_min: "info"                # drop alerts below this severity
       timeout_s: 5                        # per-request timeout
       burst_per_min: 30                   # outbound posts per minute cap
+  expose_origin: false                    # list receiver origins on the public /api/health (off by default)
 ```
 
 Each sink gets its own queue and delivery worker — one dead receiver never affects another, and per-sink `events` / `severity_min` filters let you send, say, only critical alerts to a paid SMS bridge while everything goes to the chat robot.
 
 The Settings → Notifications panel manages the same section with the web UI: sink list editing, event-type checkboxes, live delivery counters, and a **Send test alert** button that reaches every receiver bypassing the filters.
+
+With `expose_origin` on, the public `GET /api/health` carries a `notify_receivers` array listing every receiver's **origin** (`scheme://host:port`, deduplicated; paths and tokens are always stripped, malformed URLs are skipped). Purpose: let LAN ecosystem clients discover — without logging in or sending credentials — that this NVR has a local alert receiver bound, and where it lives, for relationship binding. Since `/api/health` is unauthenticated, revealing internal topology (even bare origins) must be the deployer's explicit choice, hence the default off; the field is omitted entirely when the switch is off, no sink is configured, or every sink URL fails to parse.
 
 ## API
 

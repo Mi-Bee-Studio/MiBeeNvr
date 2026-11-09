@@ -28,6 +28,15 @@ type NotificationsConfig struct {
 	// Sinks is the list of webhook receivers. Each gets its own bounded
 	// queue and delivery worker; one dead receiver never affects another.
 	Sinks []NotificationSinkConfig `yaml:"sinks"`
+
+	// ExposeOrigin opts the deployment into listing the sink origins
+	// (scheme://host:port, path and token stripped) on the PUBLIC
+	// /api/health endpoint, so unauthenticated LAN clients can discover
+	// that a local alert receiver is bound and where it lives (ecosystem
+	// relationship binding, #1121). Default false: /api/health is
+	// unauthenticated, and revealing internal topology — even bare
+	// origins — must be the deployer's explicit choice.
+	ExposeOrigin bool `yaml:"expose_origin"`
 }
 
 // NotificationSinkConfig is one webhook receiver.
