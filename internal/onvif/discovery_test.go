@@ -3,6 +3,7 @@ package onvif
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -154,6 +155,60 @@ func TestProbeDevice_MultipleXAddrs(t *testing.T) {
 	require.Len(t, device.XAddrs, 2)
 	// Endpoint should be first XAddr
 	require.Equal(t, "http://10.0.0.1:80/onvif/device_service", device.Endpoint)
+}
+
+// gdiInfoResponse is a compact GetDeviceInformation answer for the strict
+// old-firmware emulation below.
+const gdiInfoResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>
+<tds:GetDeviceInformationResponse xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
+<tds:Manufacturer>OldCam</tds:Manufacturer>
+<tds:Model>OC-1</tds:Model>
+<tds:SerialNumber>SN-OLD-1</tds:SerialNumber>
+</tds:GetDeviceInformationResponse>
+</s:Body></s:Envelope>`
+
+// TestProbeDevice_CanonicalEnvelopeStrictFirmware pins the #1125 regression:
+// old-camera firmware (thttpd-era stacks) silently drops probe envelopes
+// that are indented or declare the operation namespace on the operation
+// element — HTTP 200 with an empty body, no SOAP Fault. The probe library
+// must keep emitting the canonical compact form (single line, xmlns:tds on
+// s:Body) the main SOAP client uses, or such devices look unsupported in
+// the probe UI while the add-camera path works.
+func TestProbeDevice_CanonicalEnvelopeStrictFirmware(t *testing.T) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		s := string(body)
+
+		// WS-Discovery probe: reject with 405 to force the GDI fallback path.
+		if strings.Contains(s, ":Probe") || strings.Contains(s, "<Probe ") {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		// GetDeviceInformation: emulate the strict old firmware — only the
+		// canonical compact form gets an answer, anything else gets 200 +
+		// empty body (exactly what the affected device does).
+		compact := !strings.Contains(s, "\n") &&
+			strings.Contains(s, `<s:Body xmlns:tds="http://www.onvif.org/ver10/device/wsdl">`)
+		if !compact {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+		fmt.Fprint(w, gdiInfoResponse)
+	}))
+	defer server.Close()
+
+	host, port := testServerAddr(t, server)
+	device, err := ProbeDevice(context.Background(), host, port, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, device, "strict old firmware (200+empty body on non-canonical envelopes) must still be probed")
+	require.Equal(t, "OldCam", device.Manufacturer)
+	require.Equal(t, "SN-OLD-1", device.Serial)
 }
 
 func TestProbeDevice_NonONVIFDevice_ReturnsNil(t *testing.T) {
