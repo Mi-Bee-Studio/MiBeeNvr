@@ -174,10 +174,22 @@ func (m *Manager) Adopt(ctx context.Context, req AdoptRequest) (*AdoptResult, er
 		}
 	}()
 
-	// 2. ONVIF network change.
+	// 2. Network change: ONVIF SetNetworkInterfaces first (the researched
+	// happy path — applies immediately on Hikvision current firmware); on
+	// any ONVIF failure fall back to the ISAPI surface, which a whole class
+	// of firmwares leaves open while their ONVIF write op rejects
+	// re-addressing with ter:InvalidArgVal (field case #1120: a live
+	// DS-2CD2225Y).
 	reboot, err := m.setNet(ctx, req.IP, req.Username, req.Password, dhcp, target, prefix)
 	if err != nil {
-		return nil, fmt.Errorf("adopt: ONVIF SetNetworkInterfaces: %w", err)
+		if dhcp {
+			return nil, fmt.Errorf("adopt: ONVIF SetNetworkInterfaces: %w (ISAPI fallback not available in DHCP mode)", err)
+		}
+		logger.Info("adopt: ONVIF network change rejected — falling back to ISAPI", "ip", req.IP, "error", err)
+		if err := isapiSetNet(ctx, req.IP, req.Username, req.Password, target, prefix); err != nil {
+			return nil, fmt.Errorf("adopt: network change failed on both surfaces (ONVIF: %v; ISAPI: %w)", err, err)
+		}
+		reboot = false
 	}
 	if reboot {
 		logger.Info("adopt: device reported rebootNeeded — waiting out the reboot window", "ip", req.IP)
@@ -240,6 +252,12 @@ func (m *Manager) findAdoptedCamera(ctx context.Context, req AdoptRequest, dhcp 
 				if serial == "" {
 					serial = m.authedSerial(ctx, staticTarget, req.Username, req.Password)
 				}
+				return serial, staticTarget, nil
+			}
+			// ISAPI face as the second signal (the ONVIF user and the device
+			// admin are independent tables; one may answer where the other
+			// is absent).
+			if isapiReach(ctx, staticTarget, req.Username, req.Password) {
 				return serial, staticTarget, nil
 			}
 			select {
