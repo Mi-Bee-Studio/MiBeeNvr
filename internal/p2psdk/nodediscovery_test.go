@@ -79,6 +79,47 @@ func TestDiscoverBestNodePrefersLowLatencyBucket(t *testing.T) {
 	assert.Equal(t, before, f.fastHits.Load(), "TTL cache must absorb repeat discovery")
 }
 
+// TestFetchNodeListAcceptsWrapperShape: the platform's pre-spec server
+// wrapped the list in {"nodes":[…]} (live observation 2026-11-10); the
+// tolerant decoder must unwrap it, and reject shapes that are neither.
+func TestFetchNodeListAcceptsWrapperShape(t *testing.T) {
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fast.Close)
+
+	for name, payload := range map[string]string{
+		"bare array (spec)": `[
+			{"node_id":"a","signal_url":"ws://` + fast.Listener.Addr().String() + `/signal","online":true}
+		]`,
+		"wrapped object (pre-spec server)": `{"nodes":[
+			{"node_id":"a","signal_url":"ws://` + fast.Listener.Addr().String() + `/signal","online":true}
+		]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(payload))
+			}))
+			t.Cleanup(srv.Close)
+			nodes, err := fetchNodeList(context.Background(), srv.URL)
+			require.NoError(t, err)
+			require.Len(t, nodes, 1)
+			assert.Equal(t, "a", nodes[0].NodeID)
+		})
+	}
+
+	t.Run("unrelated shape is an error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"error":"nope"}`))
+		}))
+		t.Cleanup(srv.Close)
+		_, err := fetchNodeList(context.Background(), srv.URL)
+		require.Error(t, err)
+	})
+}
+
 // TestReadyzURLDerivation: signal URLs map to the readiness endpoint.
 func TestReadyzURLDerivation(t *testing.T) {
 	assert.Equal(t, "http://h:1/readyz", readyzURL("ws://h:1/signal"))

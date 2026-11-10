@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand"
 	"net/http"
@@ -174,7 +175,12 @@ func maxBucket(m map[int64][]nodeCand) int64 {
 	return top
 }
 
-// fetchNodeList retrieves the public node list.
+// fetchNodeList retrieves the public node list. It accepts the two shapes
+// seen in the wild: the federation-spec bare array, or the {"nodes":[…]}
+// wrapper the platform served before aligning to the spec (live
+// observation 2026-11-10: the wrapper decodes into a nil slice with no
+// error, silently disabling nearest-node selection). Any other shape is an
+// error, which callers treat as "use the configured URL".
 func fetchNodeList(ctx context.Context, nodesURL string) ([]PublicNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, nodeProbeTimeout)
 	defer cancel()
@@ -190,11 +196,21 @@ func fetchNodeList(ctx context.Context, nodesURL string) ([]PublicNode, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("node list status %d", resp.StatusCode)
 	}
-	var nodes []PublicNode
-	if decodeErr := json.NewDecoder(resp.Body).Decode(&nodes); decodeErr != nil {
-		return nil, decodeErr
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return nil, readErr
 	}
-	return nodes, nil
+	var nodes []PublicNode
+	if decodeErr := json.Unmarshal(body, &nodes); decodeErr == nil {
+		return nodes, nil
+	}
+	var wrapped struct {
+		Nodes []PublicNode `json:"nodes"`
+	}
+	if wrapErr := json.Unmarshal(body, &wrapped); wrapErr != nil || wrapped.Nodes == nil {
+		return nil, fmt.Errorf("node list: unexpected shape")
+	}
+	return wrapped.Nodes, nil
 }
 
 // probeAll times an HTTP readiness check against each candidate's signal
