@@ -83,7 +83,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 via_device=(DOMAIN, nvr_device_id),
             )
 
-    await hass.config_entries.async_forward_platforms(entry, PLATFORMS)
+    # async_forward_entry_setups: the older async_forward_platforms was
+    # removed in HA 2025.12 — a live install on 2026.x failed setup with
+    # AttributeError (found via the #878 real-instance test).
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
