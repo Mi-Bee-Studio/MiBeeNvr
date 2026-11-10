@@ -34,7 +34,11 @@ func defaultRouteLink() (netlink.Link, error) {
 		return nil, fmt.Errorf("route dump: %w", err)
 	}
 	for _, r := range routes {
-		if r.Dst == nil && r.LinkIndex != 0 {
+		// Default route: no destination (nil) or the unspecified address —
+		// some kernel/lib decodings surface 0.0.0.0/0 as a non-nil zero
+		// IPNet (field-found on the M5: the default route hid behind the
+		// zero form and the alias bind failed with "no default route").
+		if r.LinkIndex != 0 && (r.Dst == nil || r.Dst.IP == nil || r.Dst.IP.IsUnspecified()) {
 			return netlink.LinkByIndex(r.LinkIndex)
 		}
 	}
