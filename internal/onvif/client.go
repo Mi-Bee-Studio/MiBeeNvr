@@ -46,7 +46,7 @@ func NewClient(endpoint, username, password string) *Client {
 func newLibClient(endpoint, username, password string, opts ...onvifgo.ClientOption) (*onvifgo.Client, error) {
 	opts = append([]onvifgo.ClientOption{
 		onvifgo.WithCredentials(username, password),
-		onvifgo.WithAuthFallback(onvifgo.AuthPasswordText, onvifgo.AuthHTTPBasic, onvifgo.AuthNone),
+		onvifgo.WithAuthFallback(onvifgo.AuthPasswordText, onvifgo.AuthHTTPDigest, onvifgo.AuthHTTPBasic, onvifgo.AuthNone),
 		onvifgo.WithAutoClockSkew(),
 	}, opts...)
 
