@@ -18,6 +18,13 @@ RestartSec=5s
 WorkingDirectory=/var/lib/mibee-nvr
 LimitNOFILE=65536
 
+# Zero-touch camera onboarding (camera_onboarding.enabled, #1120) binds a
+# temporary secondary IP on the primary interface — uncomment the two lines
+# below and restart to grant it. Everything else in this unit runs without
+# extra capabilities.
+# AmbientCapabilities=CAP_NET_ADMIN
+# CapabilityBoundingSet=CAP_NET_ADMIN
+
 # Security hardening
 NoNewPrivileges=true
 PrivateTmp=true

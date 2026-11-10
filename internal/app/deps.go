@@ -29,6 +29,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/notify"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/objectstore"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/offload"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onboarding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/p2p"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/pixgate"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
@@ -127,13 +128,16 @@ type appDeps struct {
 	wsMgr     *wsstream.Manager
 
 	// Ingest listeners (optional)
-	mqttClient        *mqtt.Client
-	mqttStatusPub     *mqtt.StatusPublisher
-	notifySvc         *notify.Service  // outbound alert webhook dispatcher (optional)
-	snapRunner        *snapshot.Runner // MQTT snapshot trigger: capture → persist → event (#656)
-	ftpServer         *ftp.Server
-	dlnaServer        *dlna.Server
-	doorbellServer    *doorbell.Server
+	mqttClient     *mqtt.Client
+	mqttStatusPub  *mqtt.StatusPublisher
+	notifySvc      *notify.Service  // outbound alert webhook dispatcher (optional)
+	snapRunner     *snapshot.Runner // MQTT snapshot trigger: capture → persist → event (#656)
+	ftpServer      *ftp.Server
+	dlnaServer     *dlna.Server
+	doorbellServer *doorbell.Server
+	// onboarding is the zero-touch camera onboarding manager (#1120); nil
+	// unless camera_onboarding.enabled.
+	onboarding        *onboarding.Manager
 	rtmpServer        *rtmp.Server
 	srtListener       *srt.Listener
 	whipServer        *whip.Server

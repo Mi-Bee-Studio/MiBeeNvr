@@ -737,6 +737,28 @@ cameras:
 - 温度历史按分钟聚合独立落库（默认保留 90 天），不占录像存储配额。
 - 2–8 fps 的低帧率热像务必配置 `health_overrides.min_fps: 1`。
 
+## 零接触接入（跨网段默认 IP 相机打捞）
+
+新相机出厂时通常落在默认网段（海康系 `192.168.1.64` 等），与 NVR 不同网段时无法直接接入。零接触接入让 NVR 自己完成「发现 → 改网 → 纳管」：NVR 在本机网卡上临时挂一个默认网段的辅助地址（IP 别名），扫描该网段识别可对话的设备，然后通过 ONVIF `SetNetworkInterfaces` 把相机改到 NVR 所在网段（DHCP 或指定静态地址），改网即生效（海康现款固件实测免重启），最后按 serial 绑定纳管。
+
+**默认关闭**。启用需要：①NVR 进程有 `CAP_NET_ADMIN`（systemd 部署见 `deploy/mibee-nvr.service` 的注释）；②配置 `camera_onboarding` 节（见 `config.example.yaml`）；③目标网段可达（同一广播域）。
+
+启用后的操作面（全部需登录）：
+
+| 端点 | 用途 |
+|------|------|
+| `GET /api/onboarding/status` | 功能状态、网段、别名状态、上次扫描结果 |
+| `POST /api/onboarding/scan` | 后台扫描默认网段，返回 job_id |
+| `GET /api/onboarding/jobs/{id}` | 扫描结果：候选设备（`unactivated`=出厂未激活 / `auth_required`=已激活需凭据） |
+| `POST /api/onboarding/adopt` | 引导纳管：`{"ip","username","password","mode":"dhcp"\|"static","static_ip"}` |
+
+行为与边界：
+
+- **出厂未激活设备**（`activated=false`）：可被发现并报告，但改网前必须先激活（海康激活协议的挑战-应答变体暂未支持——需要一台真恢复出厂的设备做实机验证后才敢上线，见 issue #1120）。
+- **已激活设备**（典型：IP 漂移到默认网段的存量相机）：提供凭据即可走完整链路。
+- DHCP 模式改网后，NVR 用 serial 在本网段扫描定位新地址；多台候选时拒绝猜测（fail-safe），请改用 static 模式。
+- 扫描上限 /24、并行 16、单探测 1.5s——RPi 3B 量级的安全值。
+
 ## 通用配置技巧
 
 ### RTSP URL 测试

@@ -416,6 +416,20 @@ notifications:
   #                                 # endpoint for LAN ecosystem clients. Opt-in: reveals
   #                                 # internal topology on an unauthenticated endpoint.
 
+# Zero-touch camera onboarding (#1120) — discover cameras sitting on a
+# factory-default IP subnet (e.g. 192.168.1.0/24) and move them onto the
+# NVR's own subnet for enrollment, guided from the API. DEFAULT OFF: the
+# scan binds a temporary secondary IP on the NVR's interface, which needs
+# CAP_NET_ADMIN on Linux (see deploy/mibee-nvr.service).
+# camera_onboarding:
+#   enabled: false
+#   default_subnet: "192.168.1.0/24"  # where factory-fresh cameras sit
+#   alias_ip: ""                      # default: the subnet's last address (x.x.x.254)
+#   target_dhcp: true                 # move the camera to DHCP (static: set
+#                                     # target_static_ip instead)
+#   target_static_ip: ""              # static-mode target on the NVR subnet
+#   scan_interval_s: 0                # 0 = manual scans only (POST /api/onboarding/scan)
+
 # WebDAV server — file access over WebDAV protocol
 # Shares recordings directory over HTTP
 webdav:

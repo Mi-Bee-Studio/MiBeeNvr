@@ -25,6 +25,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/gb28181"
 	authmw "github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/onboarding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/snapshot"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/transcoding"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/upload"
@@ -210,6 +211,14 @@ func buildHTTPDeps(deps *appDeps, flvMgr *flv.Manager, gbLibEvents *gbsip.EventB
 	// SIP doorbell API seam (#971): calls list / answer / reject / talk WS.
 	if deps.doorbellServer != nil {
 		handler.SetDoorbellService(api.NewDoorbellAdapter(deps.doorbellServer, store))
+	}
+	// Zero-touch camera onboarding (#1120): default off; when enabled the
+	// manager gets registered as a service (periodic sweep lifecycle) below
+	// in registerServices — here we only hand it to the API layer.
+	if cfg.CameraOnboarding.Enabled {
+		onb := onboarding.NewManager(func() *config.Config { return cfg }, camMgr)
+		handler.SetOnboardingService(onb)
+		deps.onboarding = onb
 	}
 	// Wire the cascade client: registration status surfaced in Settings, and
 	// upper-platform PTZ DeviceControl commands bridged to the local camera's

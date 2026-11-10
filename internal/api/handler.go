@@ -324,6 +324,7 @@ type Handler struct {
 	vodMgr       *vod.Manager
 	gb28181Media GB28181DeviceMedia
 	doorbell     DoorbellService
+	onboarding   OnboardingService
 	// triggerDispatcher maps a trigger action (record/stop/snapshot) to camera
 	// lifecycle ops (#709). The SAME func feeds the MQTT client — wired once
 	// in builders.go so HTTP webhook and MQTT triggers share semantics.
@@ -409,6 +410,7 @@ func (h *Handler) Routes() http.Handler {
 		h.registerMergeRoutes(r)
 		h.registerTimelapseRoutes(r)
 		h.registerONVIFRoutes(r)
+		h.registerOnboardingRoutes(r)
 		h.registerArchiveRoutes(r)
 		h.registerXiaomiRoutes(r)
 		h.registerHealthRoutes(r)
