@@ -87,6 +87,34 @@ jobs:
           fi
           echo "Coverage threshold check passed"
 
+          # Per-package floors (#1013): the packages this repo flagged as
+          # highest-risk-for-lowest-coverage get individual gates, so one
+          # package's rot can't hide under the global average. Floors sit a
+          # measured margin below today's actuals (migration 72.8 / vod 74.1
+          # / dlna 67.8) — tight enough to catch a deleted test file or a
+          # big untested addition, loose enough not to trip normal refactors.
+          # install/tray stay floored by execution only (their windows-gated
+          # tests run in the test-windows job; linux coverage never sees
+          # them).
+          check_floor() {
+            pkg=$1; floor=$2
+            { echo "mode: set"; grep "MiBeeNvr/internal/$pkg/" coverage.out; } > "cov-$pkg.out"
+            if [ ! -s "cov-$pkg.out" ]; then
+              echo "No coverage lines for internal/$pkg — profile merge is broken"
+              exit 1
+            fi
+            pct=$(go tool cover -func="cov-$pkg.out" | grep 'total:' | awk '{print $3}' | sed 's/%//')
+            echo "internal/$pkg coverage: $pct% (floor $floor%)"
+            if (( $(echo "$pct < $floor" | bc -l) )); then
+              echo "internal/$pkg coverage $pct% is below its floor of $floor%"
+              exit 1
+            fi
+          }
+          check_floor migration 65
+          check_floor vod 65
+          check_floor dlna 60
+          echo "Per-package floors passed"
+
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v6
         with:

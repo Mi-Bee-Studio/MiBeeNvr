@@ -70,7 +70,12 @@ func goroutineCheckStatus(count, numCameras, baseline, perCamera int) (status, m
 	return "ok", fmt.Sprintf("%d goroutines (threshold: %d, cameras: %d)", count, threshold, numCameras)
 }
 
-const goroutineHardFail = 5000
+// The hard cap is a runaway-leak backstop; production fleets sit far below
+// it (an 18-camera box measured ~390). Raised from 5000: the API unit-test
+// binary itself crosses 5000 goroutines at peak parallelism on CI runners
+// (observed 2026-11-10 as recurring TestReadyz_OK flakes on unrelated
+// branches — the test process, not the product, was tripping the wire).
+const goroutineHardFail = 10000
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := HealthResponse{Checks: make(map[string]HealthCheck)}
