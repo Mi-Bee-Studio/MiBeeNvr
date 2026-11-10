@@ -189,7 +189,7 @@ func (m *Manager) Adopt(ctx context.Context, req AdoptRequest) (*AdoptResult, er
 	}
 
 	// 3. Find the camera at its new address.
-	serial, newIP, err := m.findAdoptedCamera(ctx, req.IP, dhcp, target, prefix)
+	serial, newIP, err := m.findAdoptedCamera(ctx, req, dhcp, target, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -207,9 +207,12 @@ func (m *Manager) Adopt(ctx context.Context, req AdoptRequest) (*AdoptResult, er
 // mode polls the known address for the serial it had before the move;
 // DHCP mode sweeps the NVR's own subnet matching the serial captured at
 // the old address.
-func (m *Manager) findAdoptedCamera(ctx context.Context, oldIP string, dhcp bool, staticTarget string, prefix int) (serial, newIP string, err error) {
+func (m *Manager) findAdoptedCamera(ctx context.Context, req AdoptRequest, dhcp bool, staticTarget string, prefix int) (serial, newIP string, err error) {
 	// Serial captured at the factory address (either face may serve it).
-	serial = m.serialAt(ctx, oldIP)
+	serial = m.serialAt(ctx, req.IP)
+	if serial == "" {
+		serial = m.authedSerial(ctx, req.IP, req.Username, req.Password)
+	}
 
 	if !dhcp {
 		if serial == "" {
@@ -229,6 +232,15 @@ func (m *Manager) findAdoptedCamera(ctx context.Context, oldIP string, dhcp bool
 					}
 					return serial, staticTarget, nil
 				}
+			}
+			// Activated cameras wall every unauthenticated probe off (401
+			// across ISAPI and ONVIF) — an authenticated GetDeviceInformation
+			// answering is the reachability signal for them.
+			if m.reach(ctx, staticTarget, req.Username, req.Password) {
+				if serial == "" {
+					serial = m.authedSerial(ctx, staticTarget, req.Username, req.Password)
+				}
+				return serial, staticTarget, nil
 			}
 			select {
 			case <-ctx.Done():
@@ -250,7 +262,7 @@ func (m *Manager) findAdoptedCamera(ctx context.Context, oldIP string, dhcp bool
 		cands := ScanSubnet(ctx, targets, scanHostTimeout, scanParallel)
 		matched := make([]Candidate, 0, 1)
 		for _, c := range cands {
-			if c.IP == oldIP {
+			if c.IP == req.IP {
 				continue // still answering at the old address = move didn't land
 			}
 			if serial == "" || c.Serial == serial || (c.Serial == "" && c.State != "") {

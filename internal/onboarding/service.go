@@ -71,6 +71,8 @@ type Manager struct {
 	// seams (tests swap these; NewManager sets production defaults)
 	setNet       func(ctx context.Context, ip, user, pass string, dhcp bool, staticIP string, prefix int) (bool, error)
 	serialAt     func(ctx context.Context, ip string) string
+	reach        func(ctx context.Context, ip, user, pass string) bool
+	authedSerial func(ctx context.Context, ip, user, pass string) string
 	sweepTargets func() []string
 }
 
@@ -97,6 +99,19 @@ func NewManager(cfg func() *config.Config, camMgr *camera.CameraManager) *Manage
 	}
 	m.serialAt = probeSerial
 	m.sweepTargets = primarySubnetTargets
+	m.reach = func(ctx context.Context, ip, user, pass string) bool {
+		client := onvif.NewClient(onvifEndpoint(ip), user, pass)
+		_, err := client.GetDeviceInformation(ctx)
+		return err == nil
+	}
+	m.authedSerial = func(ctx context.Context, ip, user, pass string) string {
+		client := onvif.NewClient(onvifEndpoint(ip), user, pass)
+		info, err := client.GetDeviceInformation(ctx)
+		if err != nil {
+			return ""
+		}
+		return info.SerialNumber
+	}
 	return m
 }
 
