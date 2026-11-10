@@ -23,12 +23,15 @@ type fakeOnboarding struct {
 }
 
 func (f *fakeOnboarding) Status() onboarding.Status { return f.status }
+
 func (f *fakeOnboarding) StartScanJob() (string, error) {
 	return f.scanJobID, f.scanErr
 }
+
 func (f *fakeOnboarding) StartAdoptJob(req onboarding.AdoptRequest) (string, error) {
 	return f.adoptJobID, f.scanErr
 }
+
 func (f *fakeOnboarding) Job(id string) (onboarding.Job, bool) { return f.job, id == f.job.ID }
 
 func TestOnboarding_DisabledByDefault_409(t *testing.T) {
