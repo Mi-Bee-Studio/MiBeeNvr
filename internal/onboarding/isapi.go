@@ -281,11 +281,11 @@ func replaceTagValue(doc, tag, value string) string {
 	if start == -1 {
 		return doc
 	}
-	end := strings.Index(doc[start:], close)
-	if end == -1 {
+	endIdx := strings.Index(doc[start:], close)
+	if endIdx == -1 {
 		return doc
 	}
-	return doc[:start] + open + value + doc[start+end:]
+	return doc[:start] + open + value + doc[start+endIdx:]
 }
 
 func prefixToMask(prefix int) string {
@@ -293,7 +293,7 @@ func prefixToMask(prefix int) string {
 		prefix = 24
 	}
 	var b [4]byte
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if prefix >= 8 {
 			b[i] = 255
 			prefix -= 8

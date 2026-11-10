@@ -187,7 +187,7 @@ func (m *Manager) Adopt(ctx context.Context, req AdoptRequest) (*AdoptResult, er
 		}
 		logger.Info("adopt: ONVIF network change rejected — falling back to ISAPI", "ip", req.IP, "error", err)
 		if err := isapiSetNet(ctx, req.IP, req.Username, req.Password, target, prefix); err != nil {
-			return nil, fmt.Errorf("adopt: network change failed on both surfaces (ONVIF: %v; ISAPI: %w)", err, err)
+			return nil, fmt.Errorf("adopt: network change failed on both surfaces (ONVIF: %w; ISAPI failed too)", err)
 		}
 		reboot = false
 	}
