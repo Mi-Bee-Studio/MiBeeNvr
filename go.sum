@@ -109,8 +109,6 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 h1:/Tnpcb2E0Pz/tN9s3bfEY2Q8ePC
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0/go.mod h1:zOBXOsUaBSjKgmH4OGzV1esUpR3oUSCPYVd2cUBjKYY=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
-github.com/hashicorp/mdns v1.0.7 h1:yWoQVMW5JOiDxQnIUcm3IDt0kCjf3TuXHDbdEKPsbAY=
-github.com/hashicorp/mdns v1.0.7/go.mod h1:yjuhYhZyPDqXXL48xC7cdpGwGUMwu7OViDmsuT5COvg=
 github.com/hpcloud/tail v1.0.0/go.mod h1:ab1qPbhIpdTxEkNHXyeSf5vhxWSCs/tWer42PpOxQnU=
 github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTfY5j4=
 github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
@@ -136,8 +134,6 @@ github.com/mickeyzzc/gb28181-go v0.15.3 h1:kfBCMAwTJ9yZLBJZMusT69/Ny1EofXu6RUeJ5
 github.com/mickeyzzc/gb28181-go v0.15.3/go.mod h1:BHoRPKNAn9T8uPDFuYGl2ybBNDA5+IHNbyLsb3v230g=
 github.com/mickeyzzc/onvif-go/v2 v2.7.4 h1:8SgVD25iQ7+wwe+aMGWAxbO5W5eNcZ6g2dfMyHp5Y0Q=
 github.com/mickeyzzc/onvif-go/v2 v2.7.4/go.mod h1:Ev+Uh2j6Ii6pJ5JrHm50wv4ZburLr97GZwTYovj0YsU=
-github.com/miekg/dns v1.1.73 h1:uhT8nJxmTrPJYClxVxTCX+CVn6qnzSiybRk72Z6DgrE=
-github.com/miekg/dns v1.1.73/go.mod h1:RW2Obtfd5NZHvOFe3zYG0W8koWOQtAzyHaLo8vASBuQ=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/ncruces/go-strftime v1.1.0 h1:vtPmPWMkb539RGV9WpWT9EwJGvrOCKvMNI4obWL47Hk=
