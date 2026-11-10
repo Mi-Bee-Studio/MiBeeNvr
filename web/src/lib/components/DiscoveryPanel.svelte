@@ -121,11 +121,11 @@
     probeError = '';
     probedDevice = null;
     try {
-      const device = await probeONVIFDevice(manualHost.trim(), manualPort);
+      const { device, reason } = await probeONVIFDevice(manualHost.trim(), manualPort);
       if (device) {
         probedDevice = device;
       } else {
-        probeError = t('onvif.probeFailed');
+        probeError = reason === 'no_onvif_response' ? t('onvif.probeNoResponse') : t('onvif.probeFailed');
       }
     } catch (e) {
       probeError = e instanceof Error ? e.message : String(e);
