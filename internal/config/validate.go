@@ -79,6 +79,11 @@ func validateConfigDetails(cfg *Config) error {
 	if err := cfg.License.validate(); err != nil {
 		return err
 	}
+	// Zero-touch camera onboarding (#1120): only validated when enabled —
+	// the section is default-off and inert otherwise.
+	if err := ValidateOnboarding(cfg); err != nil {
+		return err
+	}
 	// Timezone validation
 	if cfg.Timezone != "" && cfg.Timezone != "UTC" && cfg.Timezone != "Local" {
 		if _, err := time.LoadLocation(cfg.Timezone); err != nil {

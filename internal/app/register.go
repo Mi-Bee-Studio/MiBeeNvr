@@ -669,6 +669,23 @@ func registerMaintenanceServices(a *App, deps *appDeps) error {
 		}
 	}
 
+	// 9b2. zero-touch camera onboarding (#1120) — optional, default off.
+	// Start/Stop wrap the periodic sweep lifecycle; a disabled config leaves
+	// deps.onboarding nil and nothing registers.
+	if deps.onboarding != nil {
+		if err := a.Register(&serviceFunc{
+			name: "camera-onboarding",
+			startFunc: func(ctx context.Context) error {
+				return deps.onboarding.Start(ctx)
+			},
+			stopFunc: func() error {
+				return deps.onboarding.Stop()
+			},
+		}); err != nil {
+			return fmt.Errorf("register camera-onboarding: %w", err)
+		}
+	}
+
 	// 9c. doorbell (optional) — SIP ingress; bind failures log and disable,
 	// never abort startup.
 	if deps.doorbellServer != nil {

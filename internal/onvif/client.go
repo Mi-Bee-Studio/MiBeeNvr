@@ -7,6 +7,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
+	device "github.com/mickeyzzc/onvif-go/v2/device"
 	onvifgo "github.com/mickeyzzc/onvif-go/v2/onvif"
 )
 
@@ -401,4 +402,58 @@ func (c *Client) DiagnoseAuth(ctx context.Context) AuthDiagnosis {
 		out.SkewDetected = diag.ClockSkew != 0
 	}
 	return out
+}
+
+// NetworkInterfaceSummary is one device network interface, reduced to the
+// fields zero-touch onboarding needs (the interface token is the handle
+// SetNetworkInterfaces addresses).
+type NetworkInterfaceSummary struct {
+	Token     string
+	HwAddress string
+	MTU       int
+}
+
+// GetNetworkInterfaces lists the device's network interfaces (zero-touch
+// onboarding #1120). The wrapper shares the recorder's connected client so
+// the auth ladder and clock-skew handling apply here too.
+func (c *Client) GetNetworkInterfaces(ctx context.Context) ([]NetworkInterfaceSummary, error) {
+	if err := c.Connect(ctx); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	lib := c.client
+	c.mu.Unlock()
+
+	ifaces, err := lib.Device().GetNetworkInterfaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("GetNetworkInterfaces failed: %w", err)
+	}
+	out := make([]NetworkInterfaceSummary, 0, len(ifaces))
+	for _, i := range ifaces {
+		s := NetworkInterfaceSummary{Token: i.Token, HwAddress: i.Info.HwAddress, MTU: i.Info.MTU}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// SetNetworkInterfaces applies an IPv4 interface configuration (dhcp=true
+// acquires via DHCP; otherwise manualAddress/prefixLen are assigned). The
+// returned rebootNeeded tells the caller whether the device applies the
+// change only on reboot — most Hikvision firmwares answer false (immediate
+// apply, field-verified #1120), but the caller must honor the flag.
+func (c *Client) SetNetworkInterfaces(ctx context.Context, token string, dhcp bool, manualAddress string, prefixLen int) (bool, error) {
+	if err := c.Connect(ctx); err != nil {
+		return false, err
+	}
+	c.mu.Lock()
+	lib := c.client
+	c.mu.Unlock()
+
+	return lib.Device().SetNetworkInterfaces(ctx, token, device.NetworkInterfaceConfig{
+		Enabled:            true,
+		IPv4Enabled:        true,
+		DHCP:               dhcp,
+		ManualAddress:      manualAddress,
+		ManualPrefixLength: prefixLen,
+	})
 }

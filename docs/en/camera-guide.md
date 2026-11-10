@@ -845,6 +845,28 @@ cameras:
 - Some cameras don't support audio in RTSP stream
 - Consider separate audio recording if needed
 
+## Zero-Touch Onboarding (Cross-Subnet Factory-Default Cameras)
+
+New cameras usually sit on a factory-default subnet out of the box (Hikvision-family: `192.168.1.64`), unreachable when the NVR lives on a different subnet. Zero-touch onboarding lets the NVR perform discover → re-address → enroll on its own: the NVR binds a temporary secondary address (IP alias) on its primary interface, sweeps the default subnet for responsive devices, then moves the camera onto the NVR's subnet via ONVIF `SetNetworkInterfaces` (DHCP or a chosen static address). The change applies immediately on current Hikvision firmware (field-verified, no reboot), and enrollment binds the camera by serial.
+
+**Off by default.** Enabling requires: 1) the NVR process to hold `CAP_NET_ADMIN` (see the comments in `deploy/mibee-nvr.service` for the systemd unit); 2) a `camera_onboarding` config section (see `config.example.yaml`); 3) the default subnet reachable on the same broadcast domain.
+
+Once enabled, the API surface (all authenticated):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/onboarding/status` | feature state, subnet, alias state, last scan result |
+| `POST /api/onboarding/scan` | background sweep of the default subnet; returns a job_id |
+| `GET /api/onboarding/jobs/{id}` | scan result: candidates (`unactivated` = factory-fresh / `auth_required` = activated, credentials needed) |
+| `POST /api/onboarding/adopt` | guided enrollment: `{"ip","username","password","mode":"dhcp" or "static","static_ip"}` |
+
+Behavior and boundaries:
+
+- **Factory-unactivated devices** (`activated=false`): discovered and reported, but they must be activated before they can be re-addressed — the challenge-response activation variant is not implemented yet (it needs a genuinely factory-reset device for field verification before shipping; tracked in issue #1120).
+- **Activated devices** (the typical case: an existing camera that drifted onto the default subnet): the full flow works with credentials.
+- In DHCP mode the NVR locates the camera at its new address by sweeping its own subnet for the serial; with several candidates it refuses to guess (fail-safe) — use static mode instead.
+- Sweep bounds: /24 max, 16 parallel probes, 1.5s per probe — safe for RPi-class hardware.
+
 ## Support Resources
 
 ### Documentation
