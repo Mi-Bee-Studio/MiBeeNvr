@@ -275,17 +275,17 @@ func rewriteISAPIDoc(inner, xmlns, version string, id int, patched string) strin
 }
 
 func replaceTagValue(doc, tag, value string) string {
-	open := "<" + tag + ">"
-	close := "</" + tag + ">"
-	start := strings.Index(doc, open)
+	openTag := "<" + tag + ">"
+	closeTag := "</" + tag + ">"
+	start := strings.Index(doc, openTag)
 	if start == -1 {
 		return doc
 	}
-	endIdx := strings.Index(doc[start:], close)
+	endIdx := strings.Index(doc[start:], closeTag)
 	if endIdx == -1 {
 		return doc
 	}
-	return doc[:start] + open + value + doc[start+endIdx:]
+	return doc[:start] + openTag + value + doc[start+endIdx:]
 }
 
 func prefixToMask(prefix int) string {
