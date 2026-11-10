@@ -167,6 +167,25 @@ jobs:
       - name: Build darwin/amd64
         run: CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build ./...
 
+  # Windows-gated tests (#1013): internal/install's console/service/shortcut
+  # code and internal/tray's windows path only execute on a windows host —
+  # linux CI compiles them (build-desktop) but never runs them, so their
+  # coverage rotted unnoticed (install 0.15 / tray 0.09 at triage). Run the
+  # two packages on the real OS. darwin has no _test.go today (compile guard
+  # only), so windows alone closes the executable-coverage gap.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Test windows-gated packages
+        run: go test ./internal/install/... ./internal/tray/...
+
   # GB 35114 A-level variant (#707): the security35114 seam (and the
   # gb28181-go code behind it) only compiles with `-tags gb35114` — without
   # this job, a default-build-green PR could break the tagged binary.
