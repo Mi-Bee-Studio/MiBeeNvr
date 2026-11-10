@@ -215,7 +215,7 @@ func (m *Manager) findAdoptedCamera(ctx context.Context, oldIP string, dhcp bool
 		if serial == "" {
 			serial = "" // unknown serial is fine — the static address IS the identity
 		}
-		for i := 0; i < adoptReachTries; i++ {
+		for range adoptReachTries {
 			if ctx.Err() != nil {
 				return "", "", ctx.Err()
 			}

@@ -113,7 +113,7 @@ func (c *CameraOnboardingConfig) ResolveOnboardingAliasIP() net.IP {
 	base := subnet.IP.To4()
 	mask := subnet.Mask
 	last := make(net.IP, 4)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		last[i] = base[i] | ^mask[i]
 	}
 	last[3]-- // .255 → .254 (drop broadcast)
