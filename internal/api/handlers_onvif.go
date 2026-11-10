@@ -123,6 +123,19 @@ func (h *Handler) handleONVIFProbe(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadGateway, fmt.Sprintf("probe failed: %v", err))
 		return
 	}
+	if device == nil {
+		// Reachable (the TCP pre-check inside ProbeDevice passed) but no
+		// ONVIF answer: non-ONVIF server, auth-walled device, or firmware
+		// that answers the probe envelopes with empty/404 bodies. A bare
+		// device:null was indistinguishable from offline in the UI (#1125
+		// suggestion 3) — carry a structured reason the frontend maps to a
+		// specific message ("still try adding via the endpoint URL").
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"device": nil,
+			"reason": "no_onvif_response",
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"device": device,
 	})

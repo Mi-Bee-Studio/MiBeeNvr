@@ -1,7 +1,7 @@
 /**
  * Camera API — CRUD, ONVIF discovery, PTZ, protocols, per-camera merge config
  */
-import { apiRequest, getAuthHeader, clearToken, API_BASE , readJson } from './client';
+import { apiRequest, getAuthHeader, clearToken, API_BASE, readJson } from './client';
 
 // --- Types ---
 
@@ -540,10 +540,12 @@ export async function listCameras(signal?: AbortSignal): Promise<Camera[]> {
   if (newEtag) fullListEtag = newEtag;
   // On a gateway bounce the retry skips the ETag capture above; the next poll
   // then misses 304 once and refreshes the full list — self-correcting.
-  const data = await readJson<Camera[]>(resp, () => fetch(`${API_BASE}/cameras`, {
-    headers,
-    signal: signal ?? AbortSignal.timeout(30000),
-  }));
+  const data = await readJson<Camera[]>(resp, () =>
+    fetch(`${API_BASE}/cameras`, {
+      headers,
+      signal: signal ?? AbortSignal.timeout(30000),
+    }),
+  );
   cachedFullList = data;
   return data;
 }
@@ -587,10 +589,12 @@ export async function listCamerasSummary(signal?: AbortSignal): Promise<CameraSu
   if (newEtag) summaryEtag = newEtag;
   // Retry skips the ETag capture above on a gateway bounce; the next poll
   // misses 304 once and refreshes — self-correcting.
-  const data = await readJson<CameraSummary[]>(resp, () => fetch(`${API_BASE}/cameras?view=summary`, {
-    headers,
-    signal: signal ?? AbortSignal.timeout(30000),
-  }));
+  const data = await readJson<CameraSummary[]>(resp, () =>
+    fetch(`${API_BASE}/cameras?view=summary`, {
+      headers,
+      signal: signal ?? AbortSignal.timeout(30000),
+    }),
+  );
   cachedSummary = data;
   return data;
 }
@@ -795,14 +799,10 @@ export interface DeviceProfileOption {
 }
 
 /** Fetch a registered ONVIF camera's media profiles (edit-form picker). */
-export async function getCameraProfiles(
-  cameraId: string,
-  signal?: AbortSignal,
-): Promise<DeviceProfileOption[]> {
-  const result = await apiRequest<{ profiles: DeviceProfileOption[] }>(
-    `/cameras/${cameraId}/onvif/profiles`,
-    { signal },
-  );
+export async function getCameraProfiles(cameraId: string, signal?: AbortSignal): Promise<DeviceProfileOption[]> {
+  const result = await apiRequest<{ profiles: DeviceProfileOption[] }>(`/cameras/${cameraId}/onvif/profiles`, {
+    signal,
+  });
   return result.profiles || [];
 }
 
@@ -911,17 +911,24 @@ export async function getONVIFDeviceDetail(ip: string, signal?: AbortSignal): Pr
   return apiRequest<ONVIFDeviceDetail>(`/onvif/discover/${ip}`, { signal });
 }
 
+export interface ONVIFProbeResult {
+  device: DiscoveredDevice | null;
+  // Present (as "no_onvif_response") when the endpoint was reachable but
+  // answered nothing ONVIF-shaped — the frontend maps it to a distinct,
+  // actionable message instead of the generic "probe failed" (#1125).
+  reason?: string;
+}
+
 export async function probeONVIFDevice(
   host: string,
   port: number = 80,
   signal?: AbortSignal,
-): Promise<DiscoveredDevice | null> {
-  const result = await apiRequest<{ device: DiscoveredDevice | null }>('/onvif/probe', {
+): Promise<ONVIFProbeResult> {
+  return apiRequest<ONVIFProbeResult>('/onvif/probe', {
     method: 'POST',
     body: JSON.stringify({ host, port }),
     signal,
   });
-  return result.device;
 }
 
 // --- Protocols ---
@@ -1398,7 +1405,11 @@ export async function getCameraTime(id: string, signal?: AbortSignal): Promise<C
 }
 
 /** Write the NVR time to the camera when the skew is ≥1s (needs camera admin credentials). */
-export async function syncCameraTime(id: string, timezone?: string, signal?: AbortSignal): Promise<CameraTimeSyncResult> {
+export async function syncCameraTime(
+  id: string,
+  timezone?: string,
+  signal?: AbortSignal,
+): Promise<CameraTimeSyncResult> {
   return apiRequest<CameraTimeSyncResult>(`/cameras/${encodeURIComponent(id)}/time/sync`, {
     method: 'POST',
     body: JSON.stringify(timezone ? { timezone } : {}),
@@ -1407,7 +1418,11 @@ export async function syncCameraTime(id: string, timezone?: string, signal?: Abo
 }
 
 /** Point the camera at the NVR's SNTP server and switch it to NTP mode (path B). */
-export async function pointCameraAtNVR(id: string, server?: string, signal?: AbortSignal): Promise<{ ok: boolean; server: string }> {
+export async function pointCameraAtNVR(
+  id: string,
+  server?: string,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; server: string }> {
   return apiRequest<{ ok: boolean; server: string }>(`/cameras/${encodeURIComponent(id)}/time/ntp`, {
     method: 'POST',
     body: JSON.stringify(server ? { server } : {}),
