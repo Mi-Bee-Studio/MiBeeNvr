@@ -94,6 +94,14 @@ class MiBeeMjpegCamera(MiBeeCameraBase, MjpegCamera):
         device_info: DeviceInfo,
     ) -> None:
         MiBeeCameraBase.__init__(self, coordinator, cam, device_info)
+        # HA 2026.x MjpegCamera takes the URLs as __init__ kwargs (older HA
+        # accepted property overrides only); passing them keeps both worlds
+        # working — our properties below still supply the values.
+        MjpegCamera.__init__(
+            self,
+            mjpeg_url=client.mjpeg_url(cam.id),
+            still_image_url=client.latest_frame_url(cam.id),
+        )
         self._username = client.username
         self._password = client.password
         self._mjpeg_url = client.mjpeg_url(cam.id)
@@ -137,6 +145,10 @@ class MiBeeStreamCamera(MiBeeCameraBase, camera.Camera):
         device_info: DeviceInfo,
     ) -> None:
         MiBeeCameraBase.__init__(self, coordinator, cam, device_info)
+        # HA 2026.x Camera gained its own __init__ (initializes e.g.
+        # _webrtc_provider); skipping it crashed entity add with
+        # AttributeError (found via the #878 real-instance test).
+        camera.Camera.__init__(self)
         self._stream_source = client.rtsp_url(cam.id, rtsp_port)
         self._still_image_url = client.latest_frame_url(cam.id)
         self._attr_supported_features = camera.CameraEntityFeature.STREAM
