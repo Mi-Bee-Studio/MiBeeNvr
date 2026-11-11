@@ -792,3 +792,5 @@ curl -u username:password \
   }
 }
 ```
+
+主机 TCP 可达但没有 ONVIF 服务应答时（非 ONVIF 的 HTTP 服务、鉴权墙拦截、或固件对探测信封回空 body），响应为 `{"device": null, "reason": "no_onvif_response"}`——与单纯的超时/离线失败区分开。成功探测不带 `reason` 键。

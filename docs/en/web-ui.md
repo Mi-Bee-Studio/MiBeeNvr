@@ -10,14 +10,22 @@ The MiBee NVR web interface is organized into five top-level pages plus the sing
 
 The default page after login — a live multi-camera grid:
 
-- **Grid layout**: the "Configure" button opens the **camera picker** to choose which cameras to show (up to 4)
+- **Grid layout**: the "Configure" button opens the **camera picker** to choose which cameras to show; the **preview count** is selectable at 4 / 6 / 9 / 12 / 16 — tiers above the server HLS budget are greyed out until you raise the HLS preview budget under Settings → Streaming (applies after restart)
 - **Header quality switch**: a **Smooth / HD** toggle for the whole grid — "Smooth" rides the camera's [sub-stream](sub-stream.md) (default), slashing bandwidth and decode load when viewing many cameras at once; cameras without one silently fall back to the main stream
 - **Per tile**: camera name, live badge, playback protocol (WebCodecs / MJPEG, etc.), and a **health score**
 - **Tile controls**: unmute (cameras with audio) and fullscreen
 - **AI overlay**: with [browser-side AI detection](ai-detection-tuning.md) enabled, detection boxes draw directly on the feed
 - **Click a tile** to open that camera's live page
 
-The picker is built for larger fleets: a **search box** filters by name / group; the **Online only** toggle hides offline cameras by default (already-selected offline ones stay visible so you can deselect them); cameras are organized into per-group sections with counts, and **Add group** fills the remaining grid slots with that group's cameras in order. The selected-chips strip shows pick order 1-4, each removable with ×.
+The picker is built for larger fleets: a **search box** filters by name / group; the **Online only** toggle hides offline cameras by default (already-selected offline ones stay visible so you can deselect them); cameras are organized into per-group sections with counts, and **Add group** fills the remaining grid slots with that group's cameras in order. The selected-chips strip shows pick order, each removable with ×.
+
+### Photo wall
+
+Above 4 previews the configure panel gains a **photo wall** switch: the first tile enlarges to a 2×2 featured view and the remaining small tiles fill the leftover space (small tiles stay on the [sub-stream](sub-stream.md), so total decode load does not change).
+
+- **Layout**: template chips render live mini previews at the current camera count — featured tile in a corner / center / dual / triple; templates needing more cameras are greyed out
+- **Rotation**: rotate the featured tile every 30s / 60s / 300s; hovering the featured tile pauses it; "Off" is static
+- Rotation pauses automatically while any tile is expanded or the configure panel is open; the preference is stored per browser
 
 > H.265 cameras play in the browser via WASM decoding — no HTTPS or plugins needed; see [Streaming Protocol Selection](streaming-protocol-selection.md).
 

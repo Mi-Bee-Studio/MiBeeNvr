@@ -792,3 +792,5 @@ curl -u username:password \
   }
 }
 ```
+
+When the host answers TCP but no ONVIF service responds (non-ONVIF HTTP server, auth-walled device, or firmware answering the probe envelopes with empty bodies), the response is `{"device": null, "reason": "no_onvif_response"}` — distinct from a plain timeout/offline failure. Successful probes carry no `reason` key.
