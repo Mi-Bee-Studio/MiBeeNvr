@@ -390,13 +390,16 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 	stats, err := MergeMP4Segments(ctx, infos, tempPath, r.resolveTimelapseCadence(cameraID), r.resolveTimelapseGap(cameraID))
 	if err != nil {
 		os.Remove(tempPath)
-		// Mark these as incompatible so we don't retry forever.
+		// Mark these as incompatible so we don't retry forever — with the
+		// reason recorded (#1149): an empty merge_error made these rows
+		// undiagnosable and, via the backfill query skipping the status,
+		// unretryable.
 		ids := make([]string, len(recs))
 		for i, rec := range recs {
 			ids[i] = rec.ID
 		}
 		_ = storage.RetryOnBusy(ctx, func() error {
-			return r.db.SetMergeStatus(ctx, ids, model.MergeStatusIncompatible)
+			return r.db.SetMergeIncompatible(ctx, ids, mergeErrorReason(err))
 		})
 		return 0, fmt.Errorf("merge: %w", err)
 	}
@@ -408,7 +411,7 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 			skipIDs = append(skipIDs, recs[idx].ID)
 		}
 		_ = storage.RetryOnBusy(ctx, func() error {
-			return r.db.SetMergeStatus(ctx, skipIDs, model.MergeStatusIncompatible)
+			return r.db.SetMergeIncompatible(ctx, skipIDs, "no keyframe sample")
 		})
 		rollingLogger.Warn("audio run merge skipped keyframe-less segments",
 			"camera_id", cameraID, "skipped", len(skipIDs))
@@ -646,3 +649,14 @@ func (r *RollingMergeCoordinator) mergeBatchSegments(ctx context.Context, camera
 // App.Service contract ("must release all goroutines") and prevents the
 // TempDir cleanup race (#143/#125 class) where outlived goroutines write files
 // after the caller (e.g. a test's t.TempDir) begins cleanup.
+
+// mergeErrorReason caps an error string for merge_error storage (#1149). MP4
+// parse errors can embed long paths and sample-table dumps; merge_error is
+// surfaced via APIs and the SPA verbatim, so keep it bounded and greppable.
+func mergeErrorReason(err error) string {
+	s := "merge failed: " + err.Error()
+	if len(s) > 300 {
+		s = s[:300]
+	}
+	return s
+}
