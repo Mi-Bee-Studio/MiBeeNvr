@@ -14,6 +14,7 @@
   import { getMiBeeVisionConnected } from '$lib/mibeevision-status';
   import AiStatusCard from '$lib/components/AiStatusCard.svelte';
   import P2pViewerCard from '$lib/components/P2pViewerCard.svelte';
+  import { isRouteSuspended } from '$lib/page-lifecycle.svelte';
 
   let { initialTab = 'storage' }: { initialTab?: string } = $props();
 
@@ -403,24 +404,48 @@
     // Quick second sample after 2s so CPU/network show without waiting 30s
     const quickSample = window.setTimeout(() => loadSystemStats(), 2000);
 
-    // Auto-refresh every 30 seconds — only the lightweight, frequently-changing
-    // data. Trends are NOT polled (they change once/day; backend caches 2min;
-    // loaded lazily on tab open). loadHealth is dropped from the poll — the
-    // Dashboard's health card derives from healthCameras (lighter, per-camera
-    // detail), and the top-level /api/health is only needed once on mount for
-    // the overall status badge.
-    refreshInterval = window.setInterval(() => {
-      loadStats();
-      loadCameras();
-      loadSystemStats();
-      loadHealthCameras();
-      loadCameraStorage();
-    }, 30000);
-
+    // Auto-refresh arming lives in the route-suspension effect below — the
+    // dashboard is a keep-alive page (#perf D①): when hidden behind another
+    // keep-alive page the poll must pause, and resume must refresh
+    // immediately so the visible page is never stale.
     return () => {
       if (refreshInterval) clearInterval(refreshInterval);
       clearTimeout(quickSample);
     };
+  });
+
+  function pollDashboard(): void {
+    // Only the lightweight, frequently-changing data. Trends are NOT polled
+    // (they change once/day; backend caches 2min; loaded lazily on tab open).
+    // loadHealth is dropped from the poll — the Dashboard's health card
+    // derives from healthCameras (lighter, per-camera detail), and the
+    // top-level /api/health is only needed once on mount for the overall
+    // status badge.
+    loadStats();
+    loadCameras();
+    loadSystemStats();
+    loadHealthCameras();
+    loadCameraStorage();
+  }
+
+  let pollWasSuspended = false;
+  $effect(() => {
+    const suspended = isRouteSuspended('dashboard');
+    if (suspended) {
+      pollWasSuspended = true;
+      if (refreshInterval) {
+        clearInterval(refreshInterval);
+        refreshInterval = 0;
+      }
+      return;
+    }
+    if (refreshInterval) return; // armed and active — nothing to do
+    refreshInterval = window.setInterval(pollDashboard, 30000);
+    if (pollWasSuspended) {
+      // Resume after a suspended period: refresh immediately.
+      pollWasSuspended = false;
+      pollDashboard();
+    }
   });
 </script>
 
