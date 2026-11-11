@@ -33,6 +33,9 @@ auth:
 
 cameras: []                  # camera list (prefer maintaining via web UI, see below)
 
+camera_onboarding:           # zero-touch onboarding of factory-subnet cameras (default off)
+  # enabled: false           # discover on 192.168.1.x-style subnets, re-address, enroll — see onboarding.md
+
 recording:
   # default_enabled: true    # global recording gate default: cameras without an explicit recording_enabled inherit it; false = pure-live, no segments
 

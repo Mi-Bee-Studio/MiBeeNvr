@@ -21,6 +21,8 @@ Everything MiBee NVR can do, on one page. Each section links to its dedicated gu
 
 Zero-config discovery: ONVIF WS-Discovery scanning + mDNS/DNS-SD service advertisement + UDP broadcast responder — open the web UI in your LAN and both the NVR and cameras show up.
 
+Zero-touch onboarding: cameras still on a vendor-default subnet (Hikvision-family `192.168.1.64`) are discovered, re-addressed and enrolled by the NVR itself — [zero-touch onboarding](onboarding.md), off by default.
+
 ## Live Viewing
 
 | Protocol | Latency | Best for |

@@ -759,6 +759,8 @@ cameras:
 - DHCP 模式改网后，NVR 用 serial 在本网段扫描定位新地址；多台候选时拒绝猜测（fail-safe），请改用 static 模式。
 - 扫描上限 /24、并行 16、单探测 1.5s——RPi 3B 量级的安全值。
 
+完整指南：[零接触接入](onboarding.md) · API 参考：[Onboarding API](api/onboarding.md)。
+
 ## 通用配置技巧
 
 ### RTSP URL 测试

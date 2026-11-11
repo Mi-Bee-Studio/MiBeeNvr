@@ -1091,6 +1091,23 @@ credential_probe:
   attempt_interval_ms: 2000
 ```
 
+## Zero-Touch Camera Onboarding (camera_onboarding:)
+
+Discover cameras that sit on a factory-default IP subnet (e.g. `192.168.1.0/24` while the NVR lives elsewhere) and move them onto the NVR's own subnet for enrollment — see the [zero-touch onboarding guide](onboarding.md) for the flow, the API walkthrough, and vendor notes. **Off by default**: the scan binds a temporary secondary IP on the NVR's interface, which requires `CAP_NET_ADMIN` on Linux (see the comments in `deploy/mibee-nvr.service`), and the adopt flow rewrites device network settings.
+
+```yaml
+camera_onboarding:
+  enabled: false
+  # default_subnet: "192.168.1.0/24"  # required when enabled; wider CIDRs clamp to their /24 base
+  # alias_ip: ""                      # default: the subnet's last host address (x.x.x.254 for a /24)
+  # target_dhcp: true                 # tri-state: unset follows target_static_ip being set or not
+  # target_static_ip: ""              # static-mode target on the NVR's subnet (valid IPv4)
+  # scan_interval_s: 0                # 0 = manual scans only; >= 60 enables a periodic sweep
+```
+
+- Startup validation rejects a `default_subnet` that is not CIDR, an `alias_ip` outside the subnet, a static mode without a valid `target_static_ip`, and `scan_interval_s` below 60 (non-zero) — a too-fast sweep would hammer the LAN.
+- While enabled, scan and adopt run as async jobs over `POST /api/onboarding/scan` / `POST /api/onboarding/adopt`; every endpoint answers `409` while the feature is off.
+
 ## Cleanup Configuration
 
 ### `cleanup.retention_days`

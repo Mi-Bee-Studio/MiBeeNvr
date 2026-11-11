@@ -1014,6 +1014,23 @@ credential_probe:
   attempt_interval_ms: 2000
 ```
 
+## 相机零接触接入（camera_onboarding:）
+
+发现落在出厂默认网段的相机（如 `192.168.1.0/24`，而 NVR 在别的网段），改网到 NVR 所在网段并纳管——流程、API 走查与厂商实测注意见[零接触接入指南](onboarding.md)。**默认关闭**：扫描要在 NVR 网卡上临时挂辅助 IP（Linux 需 `CAP_NET_ADMIN`，见 `deploy/mibee-nvr.service` 注释），纳管流程会改写设备网络配置。
+
+```yaml
+camera_onboarding:
+  enabled: false
+  # default_subnet: "192.168.1.0/24"  # 开启时必填；更宽的 CIDR 钳到 /24 基址
+  # alias_ip: ""                      # 默认：网段最后一个主机地址（/24 即 x.x.x.254）
+  # target_dhcp: true                 # 三态：不配置时看 target_static_ip 是否设置
+  # target_static_ip: ""              # 静态模式目标地址（NVR 所在网段，合法 IPv4）
+  # scan_interval_s: 0                # 0 = 仅手动扫描；>= 60 开启周期扫描
+```
+
+- 启动校验拒绝：`default_subnet` 非 CIDR、`alias_ip` 不在网段内、静态模式缺合法 `target_static_ip`、`scan_interval_s` 非 0 但低于 60（太快会锤局域网）。
+- 开启后，扫描与纳管以异步任务运行（`POST /api/onboarding/scan` / `POST /api/onboarding/adopt`）；功能关闭时所有端点一律 `409`。
+
 ## 清理配置
 
 ### `cleanup.retention_days`
