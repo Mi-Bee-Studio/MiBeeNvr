@@ -97,6 +97,10 @@ type MergeStats struct {
 	// AmbientSamples counts synthesized atmosphere-bed samples rendered from
 	// compressed spans' continuous ambient audio (#496 audio phase).
 	AmbientSamples int
+	// SilenceSamples counts synthesized G.711 silence bytes filling the
+	// uncovered spans of audio-bearing segments (#1150 ③) — segments without
+	// an audio track in an otherwise audio-consistent run.
+	SilenceSamples int
 	// WallToFile maps the product's wall-clock span onto its (possibly
 	// compressed) file timeline: cumulative [wallSeconds, fileSeconds] pairs
 	// at every input boundary, len == len(segments)+1 (starts at [0,0]).
@@ -334,13 +338,18 @@ func alignSegmentsToKeyframes(segments []*SegmentInfo, stats *MergeStats) ([]*Se
 }
 
 // validateMergeInputs enforces same-codec/same-parameter-set compatibility
-// across all (already aligned) segments and resolves audio presence. Mixed
-// audio presence/config downgrades the merge to video-only — this handles
-// camera reconnection scenarios where audio_enabled was toggled or G.711
-// negotiation succeeded/failed mid-session. Video is always preserved; losing
-// audio in merged files is acceptable — the individual source segments (if
-// still on disk) retain it. A first segment with no samples at all is
-// rejected.
+// across all (already aligned) segments and resolves audio presence.
+//
+// Audio-bearing segments must agree on codec config (AAC AudioSpecificConfig
+// bytes / G.711 law flag) — a mismatch still downgrades the merge to
+// video-only. PRESENCE gaps (some segments without audio, e.g. camera
+// reconnections where audio_enabled was toggled or G.711 negotiation
+// succeeded/failed mid-session) no longer drop the track: G.711 runs get
+// silence synthesized for the uncovered spans (#1150 ③), while AAC gap-runs
+// keep the legacy drop (synthesizing AAC silence needs a real encoder).
+// Video is always preserved — the individual source segments (if still on
+// disk) retain their audio either way. A first segment with no samples at
+// all is rejected.
 func validateMergeInputs(segments []*SegmentInfo) (codec string, hasAudio bool, err error) {
 	first := segments[0]
 	codec = first.Codec
@@ -369,23 +378,38 @@ func validateMergeInputs(segments []*SegmentInfo) (codec string, hasAudio bool, 
 		}
 	}
 
-	// Validate audio consistency. When segments have mixed audio presence
-	// (some have audio, some don't), we DROP audio from the merged output
-	// rather than failing the merge (see function comment).
+	// Validate audio consistency across audio-BEARING segments: AAC compares
+	// AudioSpecificConfig bytes, G.711 compares the law flag. Presence gaps
+	// are handled downstream — G.711 runs get silence synthesized
+	// (#1150 ③); AAC gap-runs keep the legacy drop.
 	hasAudio = false
-	audioConfig := first.AudioConfig
+	var refConfig []byte
+	var refIsG711, refMULaw bool
 	audioMixed := false
-	for i, seg := range segments {
-		if i == 0 {
-			hasAudio = seg.HasAudio
+	for _, seg := range segments {
+		if !seg.HasAudio {
 			continue
 		}
-		if seg.HasAudio != hasAudio {
+		if !hasAudio {
+			hasAudio = true
+			refConfig, refIsG711, refMULaw = seg.AudioConfig, seg.AudioCodec == "g711", seg.G711MULaw
+			continue
+		}
+		if refIsG711 {
+			if seg.AudioCodec != "g711" || seg.G711MULaw != refMULaw {
+				audioMixed = true
+			}
+		} else if seg.AudioCodec == "g711" || !bytes.Equal(seg.AudioConfig, refConfig) {
 			audioMixed = true
 		}
-		if seg.HasAudio && !bytes.Equal(seg.AudioConfig, audioConfig) {
-			// Different audio codec config — also treat as mixed.
-			audioMixed = true
+	}
+	// Legacy drop for AAC runs with presence gaps — no AAC silence synthesis.
+	if hasAudio && !refIsG711 {
+		for _, seg := range segments {
+			if !seg.HasAudio {
+				audioMixed = true
+				break
+			}
 		}
 	}
 	if audioMixed {
@@ -482,10 +506,16 @@ func budgetMoovSize(codec string, segments []*SegmentInfo, hasAudio bool, frameD
 		videoTrack.samples[i].duration = 33 // placeholder
 		videoTrack.samples[i].isKeyFrame = true
 	}
-	// Build audio track placeholder for size calculation.
+	// Build audio track placeholder for size calculation. The track's config
+	// comes from the first AUDIO-BEARING segment — segments[0] may be a
+	// presence gap (no audio) in a silence-padded run (#1150 ③).
 	if hasAudio {
+		var ref *SegmentInfo
 		var totalAudioSamples int
 		for _, seg := range segments {
+			if ref == nil && seg.HasAudio {
+				ref = seg
+			}
 			count := seg.AudioSampleCount
 			// Ambient-bed reservation (#1024): a compressed G.711 span renders
 			// one audio sample per output byte (nOut, derived from the
@@ -500,15 +530,27 @@ func budgetMoovSize(codec string, segments []*SegmentInfo, hasAudio bool, frameD
 						count = nOut
 					}
 				}
+			} else if ref != nil && ref.AudioCodec == "g711" && len(seg.AudioSamples) == 0 {
+				// Silence-padding reservation (#1150 ③): one synthesized byte
+				// per output tick for segments without an audio track.
+				if _, file := predictSpanTimeline(seg, frameDur); file > 0 {
+					if nSil := int(file*float64(ref.AudioTimescale) + 0.5); nSil > count {
+						count = nSil
+					}
+				}
 			}
 			totalAudioSamples += count
 		}
+		audioConfig, audioCodec, audioMULaw, audioTs := first.AudioConfig, first.AudioCodec, first.G711MULaw, first.AudioTimescale
+		if ref != nil {
+			audioConfig, audioCodec, audioMULaw, audioTs = ref.AudioConfig, ref.AudioCodec, ref.G711MULaw, ref.AudioTimescale
+		}
 		audioTrack = &mergeTrack{
 			isAudio:      true,
-			audioConfig:  first.AudioConfig,
-			audioCodec:   first.AudioCodec,
-			g711MULaw:    first.G711MULaw,
-			timescale:    first.AudioTimescale,
+			audioConfig:  audioConfig,
+			audioCodec:   audioCodec,
+			g711MULaw:    audioMULaw,
+			timescale:    audioTs,
 			totalSamples: totalAudioSamples,
 		}
 		audioTrack.samples = make([]mergedSample, totalAudioSamples)
@@ -668,14 +710,65 @@ func streamVideoSamples(ctx context.Context, out io.Writer, segments []*SegmentI
 func streamAudioSamples(ctx context.Context, out io.Writer, segments []*SegmentInfo, stats *MergeStats, mdatDataStart, startOffset int64, buf []byte) ([]mergedSample, int64, error) {
 	var allAudioSamples []mergedSample
 	currentOffset := startOffset
-	for segIdx, seg := range segments {
-		if len(seg.AudioSamples) == 0 {
-			continue
-		}
 
+	// G.711 silence padding (#1150 ③): the run kept audio and validated
+	// config-consistent — segments without an audio track get silence
+	// synthesized for their output span so the track stays continuous.
+	// Compressed spans skip padding (TL dwell compression intentionally
+	// removes silence); AAC gap-runs never reach here (validate drops them).
+	var padMULaw bool
+	padTs := uint32(0)
+	padG711 := false
+	for _, seg := range segments {
+		if seg.HasAudio {
+			padG711, padMULaw, padTs = seg.AudioCodec == "g711", seg.G711MULaw, seg.AudioTimescale
+			break
+		}
+	}
+	silence := byte(0xD5) // A-law positive zero
+	if padMULaw {
+		silence = 0xFF // μ-law zero
+	}
+
+	for segIdx, seg := range segments {
 		spanWall := stats.WallToFile[segIdx+1][0] - stats.WallToFile[segIdx][0]
 		spanFile := stats.WallToFile[segIdx+1][1] - stats.WallToFile[segIdx][1]
 		compressedSpan := spanWall > 0 && spanFile > 0 && spanWall > 1.5*spanFile
+
+		if len(seg.AudioSamples) == 0 {
+			// Uncovered span of a kept G.711 track: synthesize silence at one
+			// byte per output tick.
+			if !compressedSpan && padG711 && padTs > 0 {
+				nSil := int(spanFile*float64(padTs) + 0.5)
+				if nSil > 0 {
+					off := currentOffset + mdatDataStart
+					written := 0
+					for written < nSil {
+						chunk := len(buf)
+						if chunk > nSil-written {
+							chunk = nSil - written
+						}
+						for i := range chunk {
+							buf[i] = silence
+						}
+						if _, werr := out.Write(buf[:chunk]); werr != nil {
+							return nil, 0, fmt.Errorf("write silence: %w", werr)
+						}
+						for i := range chunk {
+							allAudioSamples = append(allAudioSamples, mergedSample{
+								offset:   off + int64(written+i),
+								size:     1,
+								duration: 1, // one tick per G.711 byte on the audio timescale
+							})
+						}
+						written += chunk
+					}
+					currentOffset += int64(nSil)
+					stats.SilenceSamples += nSil
+				}
+			}
+			continue
+		}
 
 		if compressedSpan {
 			if seg.AudioCodec != "g711" {

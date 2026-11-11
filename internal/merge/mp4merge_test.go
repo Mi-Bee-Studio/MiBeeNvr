@@ -1034,3 +1034,146 @@ func TestMergeMP4Segments_SemanticallyEqualSPS(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, len(out.Included), "both segments must merge despite byte-different SPS")
 }
+
+// --- G.711 silence padding fixtures (#1150 ③) -------------------------------
+
+// createH264SegmentWithG711 creates an H.264 MP4 with a G.711 audio track
+// (ulaw/alaw sample entry, 8kHz, one byte per sample) mirroring the
+// recorder's muxing. audioBytes are the raw G.711 bytes.
+func createH264SegmentWithG711(t *testing.T, dir, name string, sps, pps []byte, videoSamples [][]byte, muLaw bool, audioBytes []byte) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+
+	m := muxer.NewMP4Muxer(path)
+	videoTrackID, err := m.AddH264Track(sps, pps)
+	require.NoError(t, err)
+	law := byte(0) // A-law
+	if muLaw {
+		law = 1
+	}
+	cfg := []byte{law, 0x00, 0x00, 0x1F, 0x40} // law flag + BE uint32 8000
+	audioTrackID, err := m.AddAudioTrack("g711", cfg)
+	require.NoError(t, err)
+
+	for i, nalu := range videoSamples {
+		pts := time.Duration(i) * 33 * time.Millisecond
+		require.NoError(t, m.WriteSample(videoTrackID, nalu, pts, 33*time.Millisecond))
+	}
+	for i := range audioBytes {
+		pts := time.Duration(i) * 125 * time.Microsecond // 1 byte = 1 tick @ 8kHz
+		require.NoError(t, m.WriteAudioSample(audioTrackID, audioBytes[i:i+1], pts, 125*time.Microsecond))
+	}
+
+	require.NoError(t, m.Close())
+	return path
+}
+
+// TestMergeMP4Segments_G711SilencePadding — #1150 ③: a run where an
+// audio-bearing segment is followed by a video-only segment keeps the G.711
+// track, synthesizing silence for the uncovered span (one 0xFF byte per
+// output tick for µ-law) instead of dropping the whole track.
+func TestMergeMP4Segments_G711SilencePadding(t *testing.T) {
+	dir := t.TempDir()
+
+	sps := h264SPS1920Fixture
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
+
+	// seg1: 2 video samples + 100 µ-law bytes; seg2: 3 video samples, no audio.
+	const audioN = 100
+	seg1 := createH264SegmentWithG711(t, dir, "g711a.mp4", sps, pps,
+		[][]byte{idrNAL, pNAL}, true, bytes.Repeat([]byte{0x55}, audioN))
+	seg2 := createH264SegmentWithSamples(t, dir, "g711b.mp4", sps, pps,
+		[][]byte{idrNAL, pNAL, pNAL})
+
+	info1, err := ParseSegment(seg1)
+	require.NoError(t, err)
+	require.True(t, info1.HasAudio)
+	require.Equal(t, "g711", info1.AudioCodec)
+	info2, err := ParseSegment(seg2)
+	require.NoError(t, err)
+	require.False(t, info2.HasAudio)
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	stats, err := MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	require.NoError(t, err)
+
+	merged, err := ParseSegment(outputPath)
+	require.NoError(t, err)
+	require.True(t, merged.HasAudio, "mixed-presence G.711 run must keep its audio track")
+
+	// seg2's file span = 3 × 33ms = 99ms. The muxer writes tracks at the
+	// default timescale 1000, so 99 synthesized ticks (one per ms).
+	require.Equal(t, audioN+99, merged.AudioSampleCount, "seg1 bytes + synthesized silence")
+	require.Equal(t, 99, stats.SilenceSamples)
+
+	// The synthesized region must be µ-law silence (0xFF), not A-law.
+	raw, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.NotEmpty(t, merged.AudioSamples)
+	last := merged.AudioSamples[len(merged.AudioSamples)-1]
+	tail := raw[last.Offset : last.Offset+int64(last.Size)]
+	require.Equal(t, []byte{0xFF}, tail, "last synthesized byte must be μ-law silence")
+}
+
+// TestMergeMP4Segments_G711LawMismatchDrops — µ-law and A-law in one run
+// disagree on config: the track drops (legacy behavior), video still merges.
+func TestMergeMP4Segments_G711LawMismatchDrops(t *testing.T) {
+	dir := t.TempDir()
+
+	sps := h264SPS1920Fixture
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
+
+	seg1 := createH264SegmentWithG711(t, dir, "mu.mp4", sps, pps,
+		[][]byte{idrNAL, pNAL}, true, bytes.Repeat([]byte{0xFF}, 80))
+	seg2 := createH264SegmentWithG711(t, dir, "al.mp4", sps, pps,
+		[][]byte{idrNAL, pNAL}, false, bytes.Repeat([]byte{0xD5}, 80))
+
+	info1, err := ParseSegment(seg1)
+	require.NoError(t, err)
+	info2, err := ParseSegment(seg2)
+	require.NoError(t, err)
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	require.NoError(t, err)
+
+	merged, err := ParseSegment(outputPath)
+	require.NoError(t, err)
+	require.False(t, merged.HasAudio, "law mismatch must drop the audio track")
+	require.Equal(t, 4, merged.SampleCount, "video still merges (2+2)")
+}
+
+// TestMergeMP4Segments_AACGapStillDrops — AAC runs keep the legacy behavior
+// for presence gaps (synthesizing AAC silence needs a real encoder; the gap
+// would also drift the sample chain).
+func TestMergeMP4Segments_AACGapStillDrops(t *testing.T) {
+	dir := t.TempDir()
+
+	sps := h264SPS1920Fixture
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
+
+	seg1 := createH264SegmentWithAudio(t, dir, "aac.mp4", sps, pps,
+		[][]byte{idrNAL, pNAL}, testAudioConfig,
+		[][]byte{testAACFrame, testAACFrame})
+	seg2 := createH264SegmentWithSamples(t, dir, "noaudio.mp4", sps, pps,
+		[][]byte{idrNAL, pNAL, pNAL})
+
+	info1, err := ParseSegment(seg1)
+	require.NoError(t, err)
+	info2, err := ParseSegment(seg2)
+	require.NoError(t, err)
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	require.NoError(t, err)
+
+	merged, err := ParseSegment(outputPath)
+	require.NoError(t, err)
+	require.False(t, merged.HasAudio, "AAC gap-run keeps the legacy drop")
+}
