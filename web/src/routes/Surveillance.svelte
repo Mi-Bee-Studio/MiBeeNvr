@@ -15,6 +15,7 @@
   import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS, MAX_GRID_CAMERAS_DEFAULT, getWallTemplateId, setWallTemplateId } from '$lib/preferences';
   import { WALL_TEMPLATES, wallGeometry, getWallTemplate, tileQualityFor, wallRowEstimate, fillSelection, CLASSIC_GRID_SIZE, type WallTemplate } from '$lib/wall-layouts';
   import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
+  import { isRouteSuspended } from '$lib/page-lifecycle.svelte';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -30,6 +31,10 @@
 
   // Page Visibility — pause/resume all players when tab hidden/visible
   let tabVisible = $state(true);
+  // Route keep-alive suspension (#perf D①): true while this page is mounted
+  // but hidden behind another keep-alive page. Feeds both the orchestrator
+  // (degrade/upgrade hold) and the players (stream release via tabVisible).
+  let routeSuspended = $derived(isRouteSuspended('surveillance'));
 
   let ptzOpenIndex = $state(-1);
 
@@ -101,7 +106,7 @@
   const featuredTileCount = $derived(photoWallActive ? activeWallTemplate.featured : 1);
 
   $effect(() => {
-    if (rotationSecs <= 0 || !photoWallActive || rotationPaused || !tabVisible || expandedCameraId || configOpen) return;
+    if (rotationSecs <= 0 || !photoWallActive || rotationPaused || !tabVisible || routeSuspended || expandedCameraId || configOpen) return;
     const timer = setInterval(rotateFeatured, rotationSecs * 1000);
     return () => clearInterval(timer);
   });
@@ -701,13 +706,11 @@
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
-    // Page Visibility API: tell the orchestrator when the tab hides/shows so it
-    // can pause players (release WS/RTCPeerConnection) and attempt upgrades on
-    // return. The orchestrator owns visibility now — NOT the per-player effects
-    // (those caused the WS reconnect storm).
+    // Page Visibility API: the orchestrator learns about tab hides/shows via
+    // the combined-visibility effect below (tab × route suspension, D①);
+    // this handler only records the raw tab state.
     const visibilityHandler = () => {
       tabVisible = !document.hidden;
-      orchestrator.setTabVisible(tabVisible);
     };
     document.addEventListener('visibilitychange', visibilityHandler);
 
@@ -735,19 +738,30 @@
 
   let prevVisibleIds: Set<string> = new Set();
 
+  // Combined visibility → orchestrator: tab hidden OR route suspended (D①)
+  // both hold adaptive degrade/upgrade; the players receive the same signal
+  // via the tabVisible prop below and release their streams.
+  $effect(() => {
+    orchestrator.setTabVisible(tabVisible && !routeSuspended);
+  });
+
   // React to camera list changes — init/teardown snapshot cameras.
   // Expansion-aware (#perf): while a tile is expanded the hidden cells are
   // suspended (players release their streams) — their snapshot polling
   // pauses too, by treating the effective set as {expanded tile} only.
+  // Route-suspension-aware (D①): a hidden keep-alive page pauses snapshot
+  // polling entirely (effective set = {}).
   // Cleanup return ensures intervals are cleared on component destroy
   $effect(() => {
     const _cameras = cameras;
     const _loading = loading;
     if (_loading || _cameras.length === 0) return;
 
-    const effective = expandedCameraId !== null && _cameras.some(c => c.id === expandedCameraId)
-      ? _cameras.filter(c => c.id === expandedCameraId)
-      : _cameras;
+    const effective = routeSuspended
+      ? []
+      : expandedCameraId !== null && _cameras.some(c => c.id === expandedCameraId)
+        ? _cameras.filter(c => c.id === expandedCameraId)
+        : _cameras;
     const visibleIds = new Set(effective.map(c => c.id));
 
     // Cleanup snapshot cameras that were removed
@@ -1139,7 +1153,7 @@
               <CameraPlayer
                 {camera}
                 expanded={expandedCameraId === camera.id}
-                {tabVisible}
+                tabVisible={tabVisible && !routeSuspended}
                 suspended={expandedCameraId !== null && expandedCameraId !== camera.id}
                 streamUrl={getStreamUrl(camera.id)}
                 quality={tileQuality(index)}

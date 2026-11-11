@@ -15,6 +15,7 @@
   } from '$lib/api';
   import type { TimelapseMerge } from '$lib/api';
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
+  import { isRouteSuspended } from '$lib/page-lifecycle.svelte';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
 
@@ -1008,22 +1009,13 @@ $effect(() => {
     // Pause all polling when the tab is hidden (e.g. backgrounded) to avoid firing DB
     // queries against the shared read pool while the user isn't looking. Resume on focus.
     // This is the single biggest lever for reducing idle DB read load at scale.
+    // The same pause/resume serves route keep-alive suspension (#perf D①) —
+    // the page stays mounted when hidden behind another keep-alive page.
     visibilityHandler = () => {
       if (document.hidden) {
-        if (refreshInterval) {
-          clearInterval(refreshInterval);
-          refreshInterval = null;
-        }
-        stopTranscodingPoll();
-      } else if (refreshInterval === null) {
-        // Resumed: restart polling and refresh immediately so data is fresh.
-        refreshInterval = window.setInterval(() => {
-          loadCalendarSummary();
-          loadTimelineData();
-        }, getRefreshInterval());
-        loadCalendarSummary();
-        loadTimelineData();
-        startTranscodingPoll();
+        pauseRecordingsPolling();
+      } else {
+        resumeRecordingsPolling();
       }
     };
     document.addEventListener('visibilitychange', visibilityHandler);
@@ -1036,6 +1028,39 @@ $effect(() => {
       }
       stopTranscodingPoll();
     };
+  });
+
+  function pauseRecordingsPolling(): void {
+    if (refreshInterval) {
+      clearInterval(refreshInterval);
+      refreshInterval = null;
+    }
+    stopTranscodingPoll();
+  }
+
+  function resumeRecordingsPolling(): void {
+    if (refreshInterval === null) {
+      // Resumed: restart polling and refresh immediately so data is fresh.
+      refreshInterval = window.setInterval(() => {
+        loadCalendarSummary();
+        loadTimelineData();
+      }, getRefreshInterval());
+      loadCalendarSummary();
+      loadTimelineData();
+      startTranscodingPoll();
+    }
+  }
+
+  let recordingsPollWasSuspended = false;
+  $effect(() => {
+    const suspended = isRouteSuspended('recordings');
+    if (suspended) {
+      recordingsPollWasSuspended = true;
+      pauseRecordingsPolling();
+    } else if (recordingsPollWasSuspended) {
+      recordingsPollWasSuspended = false;
+      resumeRecordingsPolling();
+    }
   });
 
   // ── Effects ──
