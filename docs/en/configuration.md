@@ -808,6 +808,15 @@ cameras:
 - **Description**: Xiaomi Device ID from cloud service
 - **Example**: `"camera_did_123"`
 
+
+### `cameras[].merge_friendly`
+
+- **Type**: boolean
+- **Optional**: yes (Xiaomi cameras only)
+- **Default**: `false`
+- **Description**: Merge-friendly mode — disarms the Xiaomi SD→HD upgrade probe (a stable SD period later re-probes HD, issue #502), collapsing quality flips to at most the one failure-driven downgrade. Every flip leaves a parameter-set boundary between segments that fragments rolling-merge buckets and can mark whole groups incompatible. Opt in for cameras whose merge output matters more than recovering HD (typically a `quality: "auto"` Xiaomi camera with merge enabled)
+- **Example**: `true`
+
 ### `cameras[].merge`
 - **Type**: object
 - **Optional**: Yes

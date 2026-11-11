@@ -108,7 +108,14 @@ type XiaomiRecorderConfig struct {
 	IdleTimeout       time.Duration
 	Channel           string // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
 	Quality           string // Stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
-	EventBus          *event.EventBus
+	// MergeFriendly pins the stream quality for merge-consistent recordings:
+	// the SD→HD upgrade probe (issue #502 defect B) is disarmed, so quality
+	// flips — and the SPS/PPS boundaries they put between segments — collapse
+	// to at most the one failure-driven downgrade. Off by default; opt in per
+	// camera (yaml merge_friendly) when rolling merge matters more than
+	// recovering HD after a transient (#1150).
+	MergeFriendly bool
+	EventBus      *event.EventBus
 	// RecordEnabled gates disk writes. nil or true = record normally;
 	// false = "live-only" mode — the stream stays connected (for live preview /
 	// HLS) but no segments are written to disk. Matches baseRecorder.RecordEnabled
@@ -688,6 +695,7 @@ func (r *XiaomiRecorder) handleQualityFailure(err error, streamedStable bool) {
 // lifecycle so a camera that refuses HD cannot oscillate forever.
 func (r *XiaomiRecorder) shouldProbeUpgrade(now time.Time) bool {
 	return r.currentQuality == "sd" && r.qualityAuto() &&
+		!r.cfg.MergeFriendly &&
 		r.upgradeAttempts < r.maxUpgradeAttempts &&
 		!r.mediaStart.IsZero() &&
 		now.Sub(r.mediaStart) >= r.upgradeStableWindow
