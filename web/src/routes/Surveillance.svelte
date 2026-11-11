@@ -15,6 +15,7 @@
   import { getCameraProtocolOverride, getMaxGridCameras, setMaxGridCameras, isPhotoWallEnabled, setPhotoWallEnabled, getWallRotationSecs, setWallRotationSecs, WALL_ROTATION_OPTIONS, MAX_GRID_CAMERAS_OPTIONS, MAX_GRID_CAMERAS_DEFAULT, getWallTemplateId, setWallTemplateId } from '$lib/preferences';
   import { WALL_TEMPLATES, wallGeometry, getWallTemplate, tileQualityFor, wallRowEstimate, fillSelection, CLASSIC_GRID_SIZE, type WallTemplate } from '$lib/wall-layouts';
   import { getGridQuality, toggleGridQuality } from '$lib/stream-quality.svelte';
+  import { loadSurveillancePages, saveSurveillancePages, SURVEILLANCE_PAGE_COUNT, type SurveillancePages } from '$lib/surveillance-pages';
 
   let cameras = $state<Camera[]>([]);
   let loading = $state(true);
@@ -37,6 +38,13 @@
   let configOpen = $state(false);
   let selectedCameraIds = $state<string[]>([]);
   let pendingCameraIds = $state<string[]>([]);
+
+  // Multi-page grid: three independently configured camera combinations,
+  // flipped via the header tab strip. pagesModel is the persistence source
+  // of truth (loaded in onMount); the applied grid (cameras /
+  // selectedCameraIds) always mirrors pagesModel.pages[activePage].
+  let pagesModel: SurveillancePages = { pages: [[], [], []], active: 0 };
+  let activePage = $state(0);
 
   // --- Grid wall capacity (#1072) ---
   // The preview count is an explicit opt-in above the calibrated default of 4
@@ -239,7 +247,11 @@
   }
 
   function saveCameraIds(ids: string[]) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+    pagesModel.pages[activePage] = [...ids];
+    // Page 0 mirrors the legacy single-selection key so builds predating
+    // multi-page (and any other reader of that key) keep a valid selection.
+    if (activePage === 0) localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+    saveSurveillancePages(pagesModel);
   }
 
   // Camera picker (config panel) state — search + online-only filter +
@@ -312,6 +324,11 @@
   }
 
   function applyCameraSelection() {
+    // Capture everything that may hold an orchestrator registration BEFORE
+    // overwriting selectedCameraIds — this union must come from the pre-apply
+    // state, otherwise cameras dropped by the draft keep their registrations
+    // (and degrade timers) running in the background.
+    const previouslyKnown = new Set([...selectedCameraIds, ...pendingCameraIds]);
     selectedCameraIds = [...pendingCameraIds];
     saveCameraIds(selectedCameraIds);
     const available = new Map(allCameras.map(c => [c.id, c]));
@@ -324,7 +341,7 @@
     // cooldowns) and register the new set fresh. A camera demoted in a prior
     // session starts at the head of its chain again.
     const newIds = new Set(filtered.map((c) => c.id));
-    for (const id of [...selectedCameraIds, ...pendingCameraIds]) {
+    for (const id of previouslyKnown) {
       if (!newIds.has(id)) orchestrator.unregisterCamera(id);
     }
     syncOrchestrator();
@@ -332,6 +349,32 @@
     // is what drives auto-selection; runs in parallel and never blocks render.
     // (refreshCameraProtocols calls syncOrchestrator again once responses land.)
     void refreshCameraProtocols(filtered.map((c) => c.id));
+  }
+
+  // Flip to another page: swap the applied grid, close overlays that target
+  // cameras which may not exist on the incoming page, and reuse cached
+  // protocol rankings so a switch doesn't re-fetch what's already known.
+  function switchToPage(index: number) {
+    if (index < 0 || index >= SURVEILLANCE_PAGE_COUNT || index === activePage) return;
+    const leavingIds = new Set(cameras.map((c) => c.id));
+    activePage = index;
+    pagesModel.active = index;
+    saveSurveillancePages(pagesModel);
+    expandedCameraId = null;
+    ptzOpenIndex = -1;
+    const available = new Map(allCameras.map((c) => [c.id, c]));
+    const filtered = (pagesModel.pages[index] ?? [])
+      .map((id) => available.get(id))
+      .filter((c): c is Camera => c !== undefined);
+    cameras = filtered;
+    selectedCameraIds = filtered.map((c) => c.id);
+    pendingCameraIds = [...selectedCameraIds];
+    for (const id of leavingIds) {
+      if (!selectedCameraIds.includes(id)) orchestrator.unregisterCamera(id);
+    }
+    syncOrchestrator();
+    const missing = selectedCameraIds.filter((id) => !cameraProtocols.has(id));
+    void refreshCameraProtocols(missing);
   }
 
   function getStreamUrl(cameraId: string): string {
@@ -642,7 +685,10 @@
       // error tile. Exclude them from the grid and its picker.
       const activeFetched = fetched.filter((c) => c.encoding !== 'audio');
       allCameras = activeFetched;
-      const savedIds = loadSavedCameraIds();
+      const legacyIds = loadSavedCameraIds();
+      pagesModel = loadSurveillancePages(legacyIds);
+      activePage = pagesModel.active;
+      const savedIds = pagesModel.pages[activePage] ?? [];
       if (savedIds.length > 0) {
         const available = new Map(activeFetched.map(c => [c.id, c]));
         const filtered = savedIds
@@ -650,10 +696,15 @@
           .filter((c): c is Camera => c !== undefined);
         selectedCameraIds = filtered.map(c => c.id);
         cameras = filtered;
-      } else {
+      } else if (!pagesModel.saved) {
+        // True first run — no saved record at all. Seed the classic 4-tile
+        // view without persisting, matching the pre-multi-page behavior
+        // (a later explicit selection persists it).
         cameras = activeFetched.slice(0, 4);
         selectedCameraIds = cameras.map(c => c.id);
       }
+      // else: a configured-empty page — cameras stays empty and the
+      // page-empty state below invites configuring it.
       pendingCameraIds = [...selectedCameraIds];
       // Probe device caps once (cached in sessionStorage) so the orchestrator
       // can build latency-optimal chains (WebCodecs/wasm lead when available).
@@ -780,6 +831,20 @@
         {t('surveillance.title')}
       </h1>
       <div class="flex items-center gap-1">
+        <!-- Multi-page tab strip: three independently configured camera
+             combinations; clicking a tab flips the whole grid. The camera
+             picker always edits whichever page is active. -->
+        <div class="flex items-center gap-1 mr-1" role="group" aria-label={t('surveillance.pages')}>
+          {#each Array(SURVEILLANCE_PAGE_COUNT) as _, i (i)}
+            <button
+              type="button"
+              class="opt-chip {activePage === i ? 'opt-chip-active' : ''}"
+              aria-pressed={activePage === i}
+              title={t('surveillance.pageTab', { n: i + 1 })}
+              onclick={() => switchToPage(i)}
+            >{t('surveillance.pageTab', { n: i + 1 })}</button>
+          {/each}
+        </div>
         <!-- Grid preview quality (#513): sub tiles save decode/bandwidth;
              cameras without a sub stream silently stay on main. -->
         <button
@@ -1021,12 +1086,27 @@
         <h3 class="text-lg font-medium th-text-primary mb-2">{t('common.error')}</h3>
         <p class="th-text-secondary mb-4">{error}</p>
       </div>
-    {:else if cameras.length === 0}
+    {:else if allCameras.length === 0}
       <!-- Empty state -->
       <div class="card p-8 sm:p-12 text-center">
         <div class="th-text-muted mb-4 flex justify-center"><VideoOff size={48} /></div>
         <h3 class="text-lg font-medium th-text-primary mb-2">{t('dashboard.noCameras')}</h3>
         <p class="th-text-secondary text-sm">{t('dashboard.noCamerasHint')}</p>
+      </div>
+    {:else if cameras.length === 0}
+      <!-- This page has no cameras configured yet — invite configuring it
+           instead of the misleading "no cameras" message (the server does
+           have cameras; they just aren't on this page). -->
+      <div class="card p-8 sm:p-12 text-center">
+        <div class="th-text-muted mb-4 flex justify-center"><VideoOff size={48} /></div>
+        <h3 class="text-lg font-medium th-text-primary mb-2">{t('surveillance.pageEmpty')}</h3>
+        <p class="th-text-secondary text-sm mb-4">{t('surveillance.pageEmptyHint')}</p>
+        <button
+          class="btn btn-primary text-sm px-3 py-1.5"
+          onclick={() => { configOpen = true; pendingCameraIds = [...selectedCameraIds]; }}
+        >
+          {t('surveillance.configurePage')}
+        </button>
       </div>
     {:else}
       <!-- Camera grid -->
