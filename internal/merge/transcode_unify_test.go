@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -52,10 +53,25 @@ func TestTranscodeUnify_MixedCodecsStub(t *testing.T) {
 	require.Error(t, err)
 
 	out := filepath.Join(dir, "unified.mp4")
+	// Capture the stub's argv to pin the flag wiring (see the -f mp4 comment
+	// in transcodeUnifyTo — the M5 field catch).
+	argvFile := filepath.Join(dir, "ffstub.argv")
+	t.Setenv("FFSTUB_ARGV_FILE", argvFile)
 	stats, err := transcodeUnifyTo(context.Background(), []*SegmentInfo{infoA, infoB}, out)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, stats.Included, "ffmpeg renders the run or fails outright — all inputs included")
 	require.NotEmpty(t, stats.WallToFile)
+
+	argv, rerr := os.ReadFile(argvFile)
+	require.NoError(t, rerr)
+	lines := strings.Split(string(argv), "\n")
+	hasOutputMuxer := false
+	for i, l := range lines {
+		if l == "-f" && i+2 < len(lines) && lines[i+1] == "mp4" && lines[i+2] == "-y" {
+			hasOutputMuxer = true
+		}
+	}
+	require.True(t, hasOutputMuxer, "output side must pin -f mp4: ffmpeg infers the muxer from the file extension and the out path is a .tmp during the run")
 
 	merged, err := ParseSegment(out)
 	require.NoError(t, err)

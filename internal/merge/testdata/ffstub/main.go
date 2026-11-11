@@ -18,6 +18,11 @@ import (
 
 func main() {
 	args := os.Args[1:]
+	// FFSTUB_ARGV_FILE, when set, records the full argv — lets tests assert
+	// exact flag wiring (e.g. the output muxer pin) without real ffmpeg.
+	if argvFile := os.Getenv("FFSTUB_ARGV_FILE"); argvFile != "" {
+		_ = os.WriteFile(argvFile, []byte(strings.Join(args, "\n")), 0o644)
+	}
 	listPath, outPath := "", ""
 	for i, a := range args {
 		if a == "-i" && i+1 < len(args) {

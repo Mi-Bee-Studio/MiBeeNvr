@@ -79,6 +79,11 @@ func transcodeUnifyTo(ctx context.Context, infos []*SegmentInfo, outPath string)
 		"-pix_fmt", "yuv420p",
 		"-c:a", "aac",
 		"-movflags", "+faststart",
+		// The outPath is a dotless-basename .tmp file during the run — ffmpeg
+		// infers the muxer from the extension and aborts on unknown ones
+		// ("Error initializing the muxer: Invalid argument", M5 field catch).
+		// Pin the muxer explicitly.
+		"-f", "mp4",
 		"-y",
 		outPath,
 	}
