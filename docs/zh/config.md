@@ -33,6 +33,9 @@ auth:
 
 cameras: []                  # 摄像头列表（推荐 Web UI 维护，见下）
 
+camera_onboarding:           # 出厂网段相机零接触接入（默认关）
+  # enabled: false           # 在 192.168.1.x 类默认网段发现相机、改网、纳管——见 onboarding.md
+
 recording:
   # default_enabled: true    # 全局录像默认开关：未显式设置 recording_enabled 的摄像头继承；false = 纯直播不落盘
 

@@ -867,6 +867,8 @@ Behavior and boundaries:
 - In DHCP mode the NVR locates the camera at its new address by sweeping its own subnet for the serial; with several candidates it refuses to guess (fail-safe) — use static mode instead.
 - Sweep bounds: /24 max, 16 parallel probes, 1.5s per probe — safe for RPi-class hardware.
 
+Full guide: [Zero-Touch Camera Onboarding](onboarding.md) · API reference: [Onboarding API](api/onboarding.md).
+
 ## Support Resources
 
 ### Documentation

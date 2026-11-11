@@ -15,6 +15,7 @@ Most endpoints require authentication via HTTP Basic Auth. See [Authentication](
 | Streaming | [streaming.md](streaming.md) | HLS, WebRTC, HTTP-FLV, WebSocket streaming, camera protocols |
 | Camera Stats & Events | [camera-details.md](camera-details.md) | Recording stats, camera event stream (SSE) |
 | ONVIF | [onvif.md](onvif.md) | PTZ control, presets, imaging, network, users, discovery, event subscription status |
+| Onboarding | [onboarding.md](onboarding.md) | Zero-touch camera onboarding: status, default-subnet scan, guided adopt, job tracking |
 | Recordings | [recordings.md](recordings.md) | List, get, delete, download recordings, timelapse frames (incl. batch) |
 | Archives | [archives.md](archives.md) | Archive groups, retention management |
 | Settings | [settings.md](settings.md) | System stats, settings CRUD, merge/streaming/transcoding/RTSP output settings, storage candidates & migration, MiBeeVision integration status & runtime metrics |

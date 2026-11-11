@@ -15,6 +15,7 @@
 | 流媒体 | [streaming.md](streaming.md) | HLS、WebRTC、HTTP-FLV、WebSocket 流媒体、摄像头协议 |
 | 摄像头统计与事件 | [camera-details.md](camera-details.md) | 录制统计、摄像头事件流（SSE） |
 | ONVIF | [onvif.md](onvif.md) | PTZ 控制、预置位、成像、网络、用户、发现、事件订阅状态 |
+| 零接触接入 | [onboarding.md](onboarding.md) | 相机零接触接入：状态、默认网段扫描、引导纳管、任务查询 |
 | 录制 | [recordings.md](recordings.md) | 列出、获取、删除、下载录制文件、延时摄影帧（含批量） |
 | 归档 | [archives.md](archives.md) | 归档组、保留管理 |
 | 设置 | [settings.md](settings.md) | 系统统计、设置增删改查、合并/流媒体/转码/RTSP 输出设置、存储候选卷与批量迁移、MiBeeVision 集成状态与运行指标 |

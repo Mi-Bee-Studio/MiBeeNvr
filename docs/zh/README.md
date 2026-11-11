@@ -35,6 +35,7 @@
 | [摄像头指南](camera-guide.md) | 相机接入、品牌兼容性、排障 |
 | [ONVIF 指南](onvif-guide.md) | ONVIF 接入、云台控制、成像设置 |
 | [ONVIF 自动发现](onvif-discovery.md) | 自动发现、即插即录、IP 自愈 |
+| [零接触接入](onboarding.md) | 跨网段出厂默认 IP 相机打捞：发现、改网、纳管 |
 | [GB/T 28181](gb28181-guide.md) | 国标 SIP 平台（海康/大华/宇视设备） |
 | [小米相机](xiaomi-setup.md) | 小米 CS2 + 旧版 TUTK 云台机 |
 | [SRT / RTMP 接入](srt-rtmp.md) | 跨网络推流接入 |

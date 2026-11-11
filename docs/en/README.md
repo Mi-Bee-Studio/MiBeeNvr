@@ -35,6 +35,7 @@
 | [Camera Guide](camera-guide.md) | Camera setup, brand compatibility, troubleshooting |
 | [ONVIF Guide](onvif-guide.md) | ONVIF setup, PTZ control, imaging |
 | [ONVIF Discovery](onvif-discovery.md) | Auto-discovery, plug-and-play enrollment, IP self-healing |
+| [Zero-Touch Onboarding](onboarding.md) | Cross-subnet factory-default cameras: discover, re-address, enroll |
 | [GB/T 28181](gb28181-guide.md) | National-standard SIP platform (Hikvision/Dahua/Uniview devices) |
 | [Xiaomi Setup](xiaomi-setup.md) | Xiaomi CS2 + legacy TUTK cloud cameras |
 | [SRT / RTMP Ingest](srt-rtmp.md) | Cross-network push-in cameras |
