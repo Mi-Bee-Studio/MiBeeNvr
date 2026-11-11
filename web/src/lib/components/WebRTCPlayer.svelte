@@ -60,8 +60,14 @@
       }
     };
     void poll();
+    let flowTick = 0;
     latencyTimer = setInterval(() => {
-      void poll();
+      // /flow refresh every OTHER tick (6s effective): the ingest stamp moves
+      // slowly and the latency badge tolerates the staleness — on a 16-tile
+      // grid this halves the per-tile /flow request rate (16×/3s → 16×/6s).
+      // The latency math itself still runs every tick against the last known
+      // stamp, so the badge cadence is unchanged.
+      if (++flowTick % 2 === 0) void poll();
       latency.track(lastIngestAtMs);
     }, 3000);
   }

@@ -787,14 +787,20 @@
 
   let prevVisibleIds: Set<string> = new Set();
 
-  // React to camera list changes — init/teardown snapshot cameras
+  // React to camera list changes — init/teardown snapshot cameras.
+  // Expansion-aware (#perf): while a tile is expanded the hidden cells are
+  // suspended (players release their streams) — their snapshot polling
+  // pauses too, by treating the effective set as {expanded tile} only.
   // Cleanup return ensures intervals are cleared on component destroy
   $effect(() => {
     const _cameras = cameras;
     const _loading = loading;
     if (_loading || _cameras.length === 0) return;
 
-    const visibleIds = new Set(_cameras.map(c => c.id));
+    const effective = expandedCameraId !== null && _cameras.some(c => c.id === expandedCameraId)
+      ? _cameras.filter(c => c.id === expandedCameraId)
+      : _cameras;
+    const visibleIds = new Set(effective.map(c => c.id));
 
     // Cleanup snapshot cameras that were removed
     for (const id of prevVisibleIds) {
@@ -804,7 +810,7 @@
     }
 
     // Init snapshot cameras that were added
-    for (const cam of _cameras) {
+    for (const cam of effective) {
       if (prevVisibleIds.has(cam.id)) continue;
 
       const mode = getCameraMode(cam);
@@ -1215,6 +1221,7 @@
                 {camera}
                 expanded={expandedCameraId === camera.id}
                 {tabVisible}
+                suspended={expandedCameraId !== null && expandedCameraId !== camera.id}
                 streamUrl={getStreamUrl(camera.id)}
                 quality={tileQuality(index)}
               />

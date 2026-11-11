@@ -46,12 +46,18 @@
     camera,
     expanded = false,
     tabVisible = true,
+    suspended = false,
     streamUrl,
     quality = 'main',
   }: {
     camera: Camera;
     expanded?: boolean;
     tabVisible?: boolean;
+    /** True when this tile is temporarily hidden but kept mounted — grid
+     *  expand view hides the non-expanded cells with display:none. Players
+     *  release their streams exactly as they do when the tab hides (#perf:
+     *  N-1 hidden tiles used to keep decoding + pulling streams). */
+    suspended?: boolean;
     /** HLS playlist URL (used only for the HLS mode). */
     streamUrl?: string;
     /** Quality INTENT ('main' | 'sub') from the route — resolved against the
@@ -64,6 +70,11 @@
   // The orchestrator's active mode is reactive (it's a $state read), so reading
   // it inside `$derived` re-runs whenever the orchestrator demotes/promotes.
   let mode = $derived(orchestrator?.activeMode(camera.id) ?? null);
+
+  // Effective visibility for the underlying player: the tab OR the parent
+  // grid (expand view) can suspend this tile. Players treat false exactly
+  // like a hidden tab — release the connection, rebuild on resume.
+  let effTabVisible = $derived(tabVisible && !suspended);
 
   // Derived per-camera fields so they stay correct if the parent passes a
   // refreshed `camera` object (e.g. after a camera-list reload). Referencing
@@ -190,7 +201,7 @@
           {cameraName}
           {codec}
           {expanded}
-          {tabVisible}
+          tabVisible={effTabVisible}
           quality={effQuality}
           onFallbackNeeded={() => report(healthFromStreamState('error'))}
         />
