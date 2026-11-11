@@ -211,7 +211,11 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
       pinned: patch.pinned ?? prev?.pinned ?? false,
       sub: patch.sub ?? prev?.sub ?? null,
     };
-    slots = { ...slots, [cameraId]: next };
+    // In-place key update (#perf D④): $state proxies track per-key reads, so
+    // mutating just this camera's slot only invalidates THAT camera's
+    // consumers. The old whole-record replacement re-ran every grid cell's
+    // mode derivation on any single camera's state change.
+    slots[cameraId] = next;
     return next;
   }
 
@@ -237,9 +241,7 @@ export function createPlayerOrchestrator(): PlayerOrchestrator {
       internal.delete(cameraId);
     }
     coordinator.cancelRequest(cameraId);
-    const next = { ...slots };
-    delete next[cameraId];
-    slots = next;
+    delete slots[cameraId]; // per-key delete — same fine-grained tracking as setSlot (#perf D④)
   }
 
   function reportHealth(cameraId: string, h: HealthState): void {

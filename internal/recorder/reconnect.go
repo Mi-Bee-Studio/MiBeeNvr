@@ -44,6 +44,11 @@ type reconnectDeps struct {
 	// 503 with exponential backoff), and their single-slot HTTP server
 	// already collapses under a 1-2s reconnect storm.
 	MinBackoff time.Duration
+
+	// reconnectLog collapses identical reconnect-error floods (#perf D⑥) —
+	// first occurrence emits, exact repeats suppress until the message
+	// changes or the window elapses. Loop-owned, single goroutine.
+	reconnectLog ReconnectLogLimiter
 }
 
 // nextBackoff computes one retry delay: the tiered ladder + jitter (storage
@@ -119,9 +124,16 @@ func runReconnectLoop(ctx context.Context, d reconnectDeps) {
 		if d.Metrics != nil {
 			d.Metrics.CameraReconnectBackoffSeconds.WithLabelValues(d.CameraID).Set(backoff.Seconds())
 		}
-		d.Log.Error("connection error, reconnecting",
-			"camera_id", d.CameraID, "error", err,
-			"backoff", backoff, "attempt", retryCount, "storage_failed", storageFailed)
+		if emit, suppressed := d.reconnectLog.Allow(time.Now(), err.Error()); emit {
+			args := []any{
+				"camera_id", d.CameraID, "error", err,
+				"backoff", backoff, "attempt", retryCount, "storage_failed", storageFailed,
+			}
+			if suppressed > 0 {
+				args = append(args, "suppressed_repeats", suppressed)
+			}
+			d.Log.Error("connection error, reconnecting", args...)
+		}
 		d.RecordError("connection")
 		d.SetStatus(model.StatusReconnecting)
 		select {

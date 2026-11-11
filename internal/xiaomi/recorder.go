@@ -187,6 +187,10 @@ type XiaomiRecorder struct {
 	noMediaFailCount int    // no-media failures since the last stable-streaming window (issue #502: true consecutive semantics)
 	connectFailCount int    // consecutive connect/handshake failures (miss connect i/o timeout etc.)
 	lastMissURL      string // last resolved MISS URL (for error messages naming the unreachable host)
+	// reconnectLog collapses identical reconnect-error floods (#perf D⑥) —
+	// first occurrence emits, exact repeats suppress until the message
+	// changes or the window elapses. Run-loop-owned, single goroutine.
+	reconnectLog recorder.ReconnectLogLimiter
 
 	// Quality state machine (issue #502). Owned by the run goroutine.
 	mediaStart      time.Time // when StartMedia succeeded for the current connection; zero while connecting
@@ -646,7 +650,16 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 		if r.connectFailCount >= connectFailThreshold {
 			delay = backoff.StorageBackoffWithJitter() // ~60s — the camera isn't coming back soon
 		}
-		xiaomiLogger.Error("connection error, reconnecting", "camera_id", r.cfg.CameraID, "error", err, "backoff", delay, "attempt", retryCount, "connect_failures", r.connectFailCount)
+		if emit, suppressed := r.reconnectLog.Allow(time.Now(), err.Error()); emit {
+			args := []any{
+				"camera_id", r.cfg.CameraID, "error", err,
+				"backoff", delay, "attempt", retryCount, "connect_failures", r.connectFailCount,
+			}
+			if suppressed > 0 {
+				args = append(args, "suppressed_repeats", suppressed)
+			}
+			xiaomiLogger.Error("connection error, reconnecting", args...)
+		}
 		r.recordError("connection")
 		r.recordXiaomiDisconnect(classifyDisconnectReason(err))
 		r.setStatus(model.StatusReconnecting)

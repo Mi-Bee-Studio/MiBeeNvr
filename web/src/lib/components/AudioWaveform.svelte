@@ -98,6 +98,10 @@
 
   let canvas: HTMLCanvasElement | undefined = $state();
   let raf = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  // Painted at least once since the last idle settle — the resting state
+  // (flat 2px pulse dots) is painted once on entry and needs no repaint.
+  let paintedSinceWake = false;
 
   let graph: wired | null = null;
   let levels: number[] = [];
@@ -110,24 +114,11 @@
     return v || accent;
   }
 
-  function draw(): void {
-    raf = requestAnimationFrame(draw);
-    const cvs = canvas;
-    if (!cvs) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = cvs.clientWidth;
-    const h = cvs.clientHeight;
-    if (w === 0 || h === 0) return;
-    if (cvs.width !== Math.round(w * dpr) || cvs.height !== Math.round(h * dpr)) {
-      cvs.width = Math.round(w * dpr);
-      cvs.height = Math.round(h * dpr);
-      accent = readAccent();
-    }
-    const g2d = cvs.getContext('2d');
-    if (!g2d) return;
-    g2d.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g2d.clearRect(0, 0, w, h);
-
+  // Sample the analyser and decay the bar state. Returns whether the bars
+  // are still visually MOVING (decaying toward rest or driven by signal) —
+  // the gate for full-rate animation (#perf D⑤: a mounted-but-silent
+  // waveform used to repaint every rAF frame forever).
+  function sampleLevels(): boolean {
     if (levels.length !== bars) {
       levels = new Array(bars).fill(0);
       peaks = new Array(bars).fill(0);
@@ -168,6 +159,25 @@
         normPeaks[i] = normPeaks[i] * 0.992;
       }
     }
+    return levels.some((l) => l > 0.01) || peaks.some((p) => p > 0.012);
+  }
+
+  function paint(): void {
+    const cvs = canvas;
+    if (!cvs) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = cvs.clientWidth;
+    const h = cvs.clientHeight;
+    if (w === 0 || h === 0) return;
+    if (cvs.width !== Math.round(w * dpr) || cvs.height !== Math.round(h * dpr)) {
+      cvs.width = Math.round(w * dpr);
+      cvs.height = Math.round(h * dpr);
+      accent = readAccent();
+    }
+    const g2d = cvs.getContext('2d');
+    if (!g2d) return;
+    g2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g2d.clearRect(0, 0, w, h);
 
     const mid = h / 2;
     const barW = w / bars;
@@ -220,9 +230,40 @@
     normPeaks = [];
   });
 
+  function scheduleNext(delayMs: number): void {
+    cancelAnimationFrame(raf);
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (delayMs === 0) {
+      raf = requestAnimationFrame(() => tick());
+    } else {
+      idleTimer = setTimeout(() => tick(), delayMs);
+    }
+  }
+
+  function tick(): void {
+    const moving = sampleLevels();
+    const cvs = canvas;
+    if (cvs && (moving || !paintedSinceWake)) {
+      paint();
+      paintedSinceWake = moving;
+    }
+    // Visually moving → full-rate frames; settled (silent, bars at rest) →
+    // cheap 200ms sampling just to catch the next sound (#perf D⑤).
+    scheduleNext(moving ? 0 : 200);
+  }
+
   $effect(() => {
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    scheduleNext(0);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
   });
 </script>
 
