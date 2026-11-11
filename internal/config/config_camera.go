@@ -78,6 +78,12 @@ type CameraConfig struct {
 	Vendor  string `yaml:"vendor,omitempty"`  // Transport vendor: "cs2" (default)
 	Channel string `yaml:"channel,omitempty"` // Xiaomi dual-lens channel ("" or "0" = main, "1" = secondary)
 	Quality string `yaml:"quality,omitempty"` // Xiaomi stream quality: "" or "auto" (HD→SD fallback), "hd", "sd"
+	// MergeFriendly disarms the Xiaomi SD→HD upgrade probe (issue #502) so
+	// quality flips — and the parameter-set boundaries they put between
+	// recorded segments — collapse to at most one failure-driven downgrade.
+	// Opt in for cameras whose segments feed rolling merge and whose quality
+	// oscillation fragments the merge buckets (#1150).
+	MergeFriendly bool `yaml:"merge_friendly,omitempty" json:"merge_friendly,omitempty"`
 
 	// Push/ingest camera fields (only used when protocol is "srt" or "rtmp").
 	// For these cameras the publisher connects TO the NVR; the URL field is

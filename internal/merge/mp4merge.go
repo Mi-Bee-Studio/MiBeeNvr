@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/fadvise"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model/nalutil"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/mp4util"
 	"github.com/abema/go-mp4"
 )
@@ -350,8 +351,17 @@ func validateMergeInputs(segments []*SegmentInfo) (codec string, hasAudio bool, 
 			return "", false, fmt.Errorf("segment %d: codec mismatch (%s vs %s)", i, seg.Codec, codec)
 		}
 		if i > 0 {
-			if !bytes.Equal(seg.SPS, first.SPS) || !bytes.Equal(seg.PPS, first.PPS) {
-				return "", false, fmt.Errorf("segment %d: SPS/PPS mismatch", i)
+			// SPS compares semantically (#642/#1150): the live dispatcher
+			// groups runs by the SPS decode key — VUI/timing bytes rotate on
+			// some cameras without affecting decode — so a byte-different but
+			// decode-equal segment must not hard-fail here and mark the whole
+			// run incompatible. PPS stays byte-exact: it is tiny and any
+			// change is meaningful.
+			if !nalutil.SPSSemanticallyEqual(seg.SPS, first.SPS, codec == "h265") {
+				return "", false, fmt.Errorf("segment %d: SPS mismatch", i)
+			}
+			if !bytes.Equal(seg.PPS, first.PPS) {
+				return "", false, fmt.Errorf("segment %d: PPS mismatch", i)
 			}
 			if codec == "h265" && !bytes.Equal(seg.VPS, first.VPS) {
 				return "", false, fmt.Errorf("segment %d: VPS mismatch", i)
