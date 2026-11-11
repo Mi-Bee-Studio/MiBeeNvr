@@ -560,7 +560,7 @@ func (r *RollingMergeCoordinator) classifyForFold(ctx context.Context, seg pendi
 			"camera_id", seg.cameraID, "recording_id", seg.recordingID,
 			"samples", newInfo.SampleCount)
 		if markErr := storage.RetryOnBusy(ctx, func() error {
-			return r.db.SetMergeStatus(ctx, []string{seg.recordingID}, model.MergeStatusIncompatible)
+			return r.db.SetMergeIncompatible(ctx, []string{seg.recordingID}, "no keyframe sample")
 		}); markErr != nil {
 			rollingLogger.Warn("failed to mark keyframe-less segment",
 				"recording_id", seg.recordingID, "error", markErr)

@@ -383,7 +383,7 @@ func (d *DB) ListMergeableSegments(ctx context.Context, cameraID string, windowS
 // All mergeable formats are returned (h264, h265, avi, mjpeg). The timelapse format
 // is excluded — it has its own merge pipeline (timelapse package).
 // If cameraID is empty, returns pending segments for ALL cameras.
-// Optionally reincludes 'failed' segments (for forced backfill via API).
+// Optionally reincludes 'failed' and 'incompatible' segments (for forced backfill via API).
 //
 // limit caps the number of rows returned (0 = unlimited). since, when non-zero,
 // filters to segments whose started_at >= since — this bounds startup backfill to
@@ -394,7 +394,7 @@ func (d *DB) ListPendingSegmentsForRolling(ctx context.Context, cameraID string,
 	query := `SELECT id, camera_id, file_path, format, started_at, ended_at, duration, file_size, frame_count, merge_status, archived FROM recordings WHERE merge_status = 'pending' AND COALESCE(layer,0)=0 AND ended_at IS NOT NULL AND format != 'timelapse'`
 	args := []interface{}{}
 	if includeFailed {
-		query = strings.Replace(query, "merge_status = 'pending'", "merge_status IN ('pending', 'failed')", 1)
+		query = strings.Replace(query, "merge_status = 'pending'", "merge_status IN ('pending', 'failed', 'incompatible')", 1)
 	}
 	if cameraID != "" {
 		query += " AND camera_id = ?"
@@ -736,6 +736,37 @@ func (d *DB) SetMergeError(ctx context.Context, ids []string, mergeError string)
 		args = append(args, model.MergeStatusFailed, mergeError, 0)
 		for i, id := range chunk {
 			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		stmt := fmt.Sprintf(q, strings.Join(placeholders, ","))
+		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetMergeIncompatible marks the given IDs merge_status='incompatible' with a
+// reason in merge_error (#1149). Incompatible rows used to carry no error, which
+// made them invisible to operators (empty merge_error) and — together with the
+// backfill query skipping the status — effectively unretryable. The reason is
+// what a later retry/repair decision reads.
+func (d *DB) SetMergeIncompatible(ctx context.Context, ids []string, reason string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	q := `UPDATE recordings SET merge_status=?, merge_error=? WHERE id IN (%s);`
+	for _, chunk := range chunkIDs(ids, batchUpdateChunkSize) {
+		placeholders := make([]string, 0, len(chunk))
+		args := make([]any, 0, len(chunk)+2)
+		args = append(args, model.MergeStatusIncompatible, reason)
+		for _, id := range chunk {
+			placeholders = append(placeholders, "?")
 			args = append(args, id)
 		}
 		stmt := fmt.Sprintf(q, strings.Join(placeholders, ","))

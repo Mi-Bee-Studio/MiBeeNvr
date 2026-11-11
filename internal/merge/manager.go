@@ -509,7 +509,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 				skipIDs = append(skipIDs, recordings[idx].ID)
 			}
 			if err := storage.RetryOnBusy(ctx, func() error {
-				return m.db.SetMergeStatus(ctx, skipIDs, model.MergeStatusIncompatible)
+				return m.db.SetMergeIncompatible(ctx, skipIDs, "no keyframe sample")
 			}); err != nil {
 				logger.Warn("failed to mark keyframe-less segments", "error", err)
 			}
@@ -612,7 +612,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 	// together, but they are NOT failures — the individual recordings are still valid.
 	if len(smallGroupIDs) > 0 {
 		if err := storage.RetryOnBusy(ctx, func() error {
-			return m.db.SetMergeStatus(ctx, smallGroupIDs, model.MergeStatusIncompatible)
+			return m.db.SetMergeIncompatible(ctx, smallGroupIDs, "undersized parameter group")
 		}); err != nil {
 			logger.Warn("failed to mark undersized group segments", "error", err)
 		} else {

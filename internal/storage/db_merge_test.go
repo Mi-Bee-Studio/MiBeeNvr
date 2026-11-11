@@ -309,3 +309,61 @@ func TestRollingReplaceMigratesAIEvents(t *testing.T) {
 	require.Equal(t, 2, total, "both AI events should be on the rolling-merged recording")
 	require.Len(t, events, 2)
 }
+
+// TestListPendingSegmentsForRollingIncludeIncompatible — #1149: includeFailed
+// must also surface 'incompatible' rows (the backfill endpoint advertises
+// "failed/incompatible", and those rows are exactly what an operator retries),
+// SetMergeIncompatible must persist the reason, and ResetFailedMergeStatus
+// (the backfill's reset step) must clear it again.
+func TestListPendingSegmentsForRollingIncludeIncompatible(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test_merge.db")
+	db, err := New(dbPath)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	now := time.Now().UTC()
+	recs := []*model.Recording{
+		{ID: "pend-a", CameraID: "camA", FilePath: "/p1.mp4", Format: model.FormatH264, StartedAt: now, EndedAt: now.Add(30 * time.Second), Duration: 30, FileSize: 100},
+		{ID: "fail-a", CameraID: "camA", FilePath: "/p2.mp4", Format: model.FormatH264, StartedAt: now.Add(time.Second), EndedAt: now.Add(31 * time.Second), Duration: 30, FileSize: 100},
+		{ID: "incomp-a", CameraID: "camA", FilePath: "/p3.mp4", Format: model.FormatH264, StartedAt: now.Add(2 * time.Second), EndedAt: now.Add(32 * time.Second), Duration: 30, FileSize: 100},
+	}
+	for _, r := range recs {
+		require.NoError(t, db.InsertRecording(ctx, r))
+	}
+	require.NoError(t, db.SetMergeStatus(ctx, []string{"fail-a"}, model.MergeStatusFailed))
+	require.NoError(t, db.SetMergeIncompatible(ctx, []string{"incomp-a"}, "merge failed: sps mismatch"))
+
+	// includeFailed=false: only pending.
+	got, err := db.ListPendingSegmentsForRolling(ctx, "camA", false, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "pend-a", got[0].ID)
+
+	// includeFailed=true: pending + failed + incompatible, started_at ASC.
+	got, err = db.ListPendingSegmentsForRolling(ctx, "camA", true, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	require.Equal(t, []string{"pend-a", "fail-a", "incomp-a"},
+		[]string{got[0].ID, got[1].ID, got[2].ID})
+
+	// The reason persisted on the incompatible row.
+	var status, mergeErr string
+	require.NoError(t, db.DB().QueryRowContext(ctx,
+		`SELECT merge_status, merge_error FROM recordings WHERE id = 'incomp-a'`,
+	).Scan(&status, &mergeErr))
+	require.Equal(t, model.MergeStatusIncompatible, status)
+	require.Contains(t, mergeErr, "sps mismatch")
+
+	// Reset path (BackfillCamera's reset step) returns it to pending, error cleared.
+	n, err := db.ResetFailedMergeStatus(ctx, []string{"incomp-a"})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+	require.NoError(t, db.DB().QueryRowContext(ctx,
+		`SELECT merge_status, merge_error FROM recordings WHERE id = 'incomp-a'`,
+	).Scan(&status, &mergeErr))
+	require.Equal(t, model.MergeStatusPending, status)
+	require.Empty(t, mergeErr)
+}
