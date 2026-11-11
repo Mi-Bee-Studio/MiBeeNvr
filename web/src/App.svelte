@@ -22,6 +22,7 @@
     'transcoding-history': () => import('./routes/TranscodingHistory.svelte'),
   };
   import Header from '$lib/components/Header.svelte';
+  import { KEEPALIVE_ROUTES, setActiveKeepAliveRoute } from '$lib/page-lifecycle.svelte';
 
   // Network status
   let isOffline = $state(false);
@@ -239,6 +240,18 @@ function parseRoute(hash: string) {
   let currentRoute = $state(initialRoute.route);
   let params: Record<string, string> = $state(initialRoute.params);
 
+  // Route keep-alive (#perf D①): the heavy cross-navigation trio stays
+  // mounted once visited — hidden with display:none instead of destroyed —
+  // so back-and-forth navigation skips the teardown + skeleton + refetch
+  // stall. The pages pause their polling and release their streams via the
+  // page-lifecycle suspension signal; auth transition to login/setup still
+  // unmounts everything (the trio renders inside the authenticated branch).
+  let visitedKeepAlive: Record<string, boolean> = $state({});
+  $effect(() => {
+    if (KEEPALIVE_ROUTES.includes(currentRoute)) visitedKeepAlive[currentRoute] = true;
+    setActiveKeepAliveRoute(currentRoute);
+  });
+
 
   function updateRoute() {
     const hash = window.location.hash;
@@ -348,13 +361,29 @@ function parseRoute(hash: string) {
        across recordings, #321). Every other id-based route (timelapse-merge,
        live, cameras-detail) loads its id once in onMount and relies on the
        remount for id changes — keep the id in their key. -->
-  {#key currentRoute + '|' + (currentRoute === 'recording-detail' ? '' : params.id || '')}
-  {#await routeLoaders[currentRoute]()}
-    <div class="skeleton skeleton--page"></div>
-  {:then module}
-    <module.default {...routeProps} />
-  {/await}
-  {/key}
+  {#if !KEEPALIVE_ROUTES.includes(currentRoute)}
+    {#key currentRoute + '|' + (currentRoute === 'recording-detail' ? '' : params.id || '')}
+    {#await routeLoaders[currentRoute]()}
+      <div class="skeleton skeleton--page"></div>
+    {:then module}
+      <module.default {...routeProps} />
+    {/await}
+    {/key}
+  {/if}
+  <!-- Keep-alive trio: mounted once visited, hidden (not destroyed) when
+       inactive. Each keeps its own {#await} — after the first load the
+       module import resolves from cache, so revisits swap instantly. -->
+  {#each KEEPALIVE_ROUTES as kr (kr)}
+    {#if visitedKeepAlive[kr]}
+      <div style={kr === currentRoute ? '' : 'display:none'}>
+        {#await routeLoaders[kr]()}
+          <div class="skeleton skeleton--page"></div>
+        {:then module}
+          <module.default {...getRouteProps(kr)} />
+        {/await}
+      </div>
+    {/if}
+  {/each}
 {/if}
 
 <style>
