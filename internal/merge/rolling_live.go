@@ -804,6 +804,14 @@ bucketStateUpdate:
 // kept for direct callers (tests); the live dispatch path goes through
 // foldIntoBuckets with run grouping (#852).
 func (r *RollingMergeCoordinator) mergeOneSegment(ctx context.Context, seg pendingSegmentInfo) error {
+	// transcode_merge cameras (#1150 C②) skip live bucketing: their segments
+	// stay PENDING so the batch paths (startup/manual backfill, periodic
+	// sweep) unify mixed codec/parameter windows via the ffmpeg transcode
+	// fallback — the append-bucket architecture cannot re-encode
+	// incrementally, and per-key buckets would fragment the hour.
+	if r.transcodeMergeFor(seg.cameraID) {
+		return nil
+	}
 	cfg := r.resolveRollingConfig(seg.cameraID)
 	fs, ok := r.classifyForFold(ctx, seg, cfg)
 	if !ok {

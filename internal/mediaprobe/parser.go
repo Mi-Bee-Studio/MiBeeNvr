@@ -23,8 +23,9 @@ type SegmentInfo struct {
 	Timescale     uint32
 	SampleCount   int
 	TotalDuration time.Duration
-	MdatOffset    int64 // file offset of mdat box header
-	MdatSize      int64 // total mdat box size including header
+	Width, Height uint32 // display dimensions in pixels (tkhd); 0 when absent
+	MdatOffset    int64  // file offset of mdat box header
+	MdatSize      int64  // total mdat box size including header
 	Samples       []SampleEntry
 	FilePath      string // source file path for data reading
 	// KeyframesFromStss reports that Samples' IsKeyFrame flags were populated
@@ -65,6 +66,9 @@ type trackAccum struct {
 	audioConfig []byte
 	audioCodec  string // "g711" if detected from ulaw/alaw sample entry
 	g711MULaw   bool   // true=μ-law, false=A-law
+
+	// Track display dimensions from tkhd (raw 16.16 fixed-point).
+	width, height uint32
 
 	// Sample table fields
 	sttsEntries []mp4.SttsEntry
@@ -190,6 +194,10 @@ func parseSegment(filePath string, probeKeyframes bool) (*SegmentInfo, error) {
 		switch b := box.(type) {
 		case *mp4.Hdlr:
 			current.handlerType = b.HandlerType
+
+		case *mp4.Tkhd:
+			current.width = b.Width   // 16.16 fixed-point
+			current.height = b.Height // 16.16 fixed-point
 
 		case *mp4.Mdhd:
 			current.timescale = b.Timescale
@@ -351,6 +359,8 @@ func parseSegment(filePath string, probeKeyframes bool) (*SegmentInfo, error) {
 		Timescale:         videoTrack.timescale,
 		SampleCount:       len(videoSamples),
 		TotalDuration:     totalDur,
+		Width:             videoTrack.width >> 16,
+		Height:            videoTrack.height >> 16,
 		MdatOffset:        mdatOffset,
 		MdatSize:          mdatSize,
 		Samples:           videoSamples,

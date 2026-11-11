@@ -817,6 +817,16 @@ cameras:
 - **Description**: Merge-friendly mode — disarms the Xiaomi SD→HD upgrade probe (a stable SD period later re-probes HD, issue #502), collapsing quality flips to at most the one failure-driven downgrade. Every flip leaves a parameter-set boundary between segments that fragments rolling-merge buckets and can mark whole groups incompatible. Opt in for cameras whose merge output matters more than recovering HD (typically a `quality: "auto"` Xiaomi camera with merge enabled)
 - **Example**: `true`
 
+
+### `merge.transcode_merge`
+
+- **Type**: boolean
+- **Optional**: yes (global, or per-camera via `cameras[].merge.transcode_merge`)
+- **Default**: `false`
+- **Description**: Transcode-fallback merge — for cameras whose quality state machine flips between HEVC and H.264, whose rolling-merge output otherwise fragments into one file per parameter set. When enabled the camera **skips live bucket merging**: segments stay pending and the batch paths (startup/manual backfill, periodic sweep) unify each window via an ffmpeg concat + re-encode (libx264 veryfast + AAC) — mixed-codec windows land as a **single file**. Requires ffmpeg in PATH (re-encoding costs real CPU, default off); same-parameter runs still merge losslessly natively. Failures mark the run incompatible with a recorded reason, retryable via backfill. Per-camera opt-in: set `transcode_merge: true` inside the camera's `merge` block.
+- **Example**: `true`
+
+
 ### `cameras[].merge`
 - **Type**: object
 - **Optional**: Yes

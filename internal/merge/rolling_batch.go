@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 )
@@ -247,7 +248,19 @@ func (r *RollingMergeCoordinator) mergeBatchMP4(ctx context.Context, cameraID st
 	}
 
 	merged := 0
-	for _, run := range splitRunsByCompatKey(parsedRecs, infos) {
+	runs := splitRunsByCompatKey(parsedRecs, infos)
+	// transcode_merge (#1150 C②): coalesce every compat-key run into one —
+	// mergeAudioRun routes the coalesced run through the ffmpeg unify, so a
+	// quality-flipping camera's hour lands as a single file instead of
+	// fragmenting per codec/parameter set.
+	if len(runs) > 1 && r.transcodeMergeFor(cameraID) {
+		runs = []segmentRun{{recs: parsedRecs, infos: infos}}
+	}
+	rollingLogger.Info("backfill MP4 runs formed",
+		"camera_id", cameraID, "runs", len(runs),
+		"segments", len(parsedRecs),
+		"transcode_merge", r.transcodeMergeFor(cameraID))
+	for _, run := range runs {
 		if len(run.infos) < 2 {
 			// Lone segment in its audio run — no merge partner within the run.
 			// Mark it merged; the file stays as a standalone recording.
@@ -326,8 +339,16 @@ func splitRunsByCompatKey(recs []*model.Recording, infos []*SegmentInfo) []segme
 	return runs
 }
 
-// mergeAudioRun merges one audio-homogeneous run into a single output file and
-// updates the DB atomically. Returns the number of source segments merged.
+// transcodeMergeFor reports whether the camera opted into the transcode_merge
+// fallback (#1150 C②): rolling-merge MIXED-KEY runs route through an ffmpeg
+// concat + re-encode so mixed codec/parameter windows land in one file.
+// Resolved like every merge setting: per-camera override over the global
+// (ResolveMergeConfig).
+func (r *RollingMergeCoordinator) transcodeMergeFor(cameraID string) bool {
+	global := r.getGlobalCfg()
+	perCamera := r.getCameraCfg(cameraID)
+	return config.ResolveMergeConfig(global, perCamera).TranscodeMerge
+}
 
 // mergeAudioRun merges one audio-homogeneous run into a single output file and
 // updates the DB atomically. Returns the number of source segments merged.
@@ -386,8 +407,31 @@ func (r *RollingMergeCoordinator) mergeAudioRun(ctx context.Context, cameraID st
 		return 0, fmt.Errorf("create output: %w", err)
 	}
 
-	// Merge.
-	stats, err := MergeMP4Segments(ctx, infos, tempPath, r.resolveTimelapseCadence(cameraID), r.resolveTimelapseGap(cameraID))
+	// Merge. transcode_merge cameras (#1150 C②) route MIXED-KEY runs through
+	// the ffmpeg concat + re-encode unify — a quality-flipping camera's
+	// window lands in ONE file instead of fragmenting per compat key.
+	// Homogeneous runs keep the Go merger (no pointless re-encode). Failure
+	// marks the run incompatible (with reason, #1149) — retryable via
+	// backfill once the environment (ffmpeg presence) is fixed.
+	mixedRun := false
+	for i := 1; i < len(infos); i++ {
+		if segmentCompatKey(infos[i]) != segmentCompatKey(infos[0]) {
+			mixedRun = true
+			break
+		}
+	}
+	var stats *MergeStats
+	tm := r.transcodeMergeFor(cameraID)
+	rollingLogger.Info("run merge decision", "camera_id", cameraID,
+		"segments", len(infos), "mixed", mixedRun, "transcode_merge", tm)
+	if mixedRun && tm {
+		rollingLogger.Info("transcode unify engaged", "camera_id", cameraID, "segments", len(infos))
+		stats, err = transcodeUnifyTo(ctx, infos, tempPath)
+	} else {
+		var s MergeStats
+		s, err = MergeMP4Segments(ctx, infos, tempPath, r.resolveTimelapseCadence(cameraID), r.resolveTimelapseGap(cameraID))
+		stats = &s
+	}
 	if err != nil {
 		os.Remove(tempPath)
 		// Mark these as incompatible so we don't retry forever — with the
