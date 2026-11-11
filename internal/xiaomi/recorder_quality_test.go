@@ -271,3 +271,17 @@ func TestRecordQualityChangeDBErrorDoesNotPanic(t *testing.T) {
 		r.recordQualityChange("hd", "sd", "3 consecutive no-media failures")
 	})
 }
+
+// TestShouldProbeUpgrade_MergeFriendlyDisarmed — #1150: merge_friendly pins
+// the quality — the SD→HD upgrade probe never arms, so a merge_friendly
+// camera's segments see at most the one failure-driven downgrade instead of
+// the bounded-but-recurring flip cycle.
+func TestShouldProbeUpgrade_MergeFriendlyDisarmed(t *testing.T) {
+	r := makeQualityTestRecorder(t)
+	r.cfg.MergeFriendly = true
+	start := time.Now()
+	r.mediaStart = start
+	r.currentQuality = "sd"
+	require.False(t, r.shouldProbeUpgrade(start.Add(r.upgradeStableWindow)),
+		"merge_friendly must disarm the upgrade probe even in stable SD")
+}

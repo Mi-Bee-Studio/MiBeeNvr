@@ -101,7 +101,7 @@ func TestMergeMP4Segments_DifferentSPS(t *testing.T) {
 	outputPath := filepath.Join(dir, "merged.mp4")
 	_, err = MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "SPS/PPS mismatch")
+	require.Contains(t, err.Error(), "SPS mismatch")
 }
 
 func TestMergeMP4Segments_SingleSegment(t *testing.T) {
@@ -909,4 +909,128 @@ func TestMergeHvcC_ByteAlignment(t *testing.T) {
 	if out[22] != 3 {
 		t.Errorf("hvcC[22] (numOfArrays) = %d, want 3", out[22])
 	}
+}
+
+// --- Semantically-equal SPS fixture (#1150) ---------------------------------
+// Minimal H.264 SPS builder mirroring nalutil's test generator (that helper
+// stays package-private; this local copy keeps the nalutil test surface out
+// of merge). Produces a 640×352 baseline SPS whose VUI time_scale varies —
+// the #642 production shape: byte-different, decode-equal.
+
+type mergeSPSBits struct {
+	buf []byte
+	n   int
+}
+
+func (w *mergeSPSBits) u(val, width int) {
+	for i := width - 1; i >= 0; i-- {
+		bit := (val >> i) & 1
+		byteIdx := w.n / 8
+		if byteIdx >= len(w.buf) {
+			w.buf = append(w.buf, 0)
+		}
+		if bit == 1 {
+			w.buf[byteIdx] |= byte(1 << (7 - w.n%8))
+		}
+		w.n++
+	}
+}
+
+func (w *mergeSPSBits) ue(v int) {
+	val := v + 1
+	bits := 0
+	for m := val; m > 1; m >>= 1 {
+		bits++
+	}
+	w.u(0, bits)
+	w.u(val, bits+1)
+}
+
+func (w *mergeSPSBits) trailing() {
+	w.u(1, 1)
+	if w.n%8 != 0 {
+		w.u(0, 8-w.n%8)
+	}
+}
+
+func mergeInsertEPB(rbsp []byte) []byte {
+	var out []byte
+	zeros := 0
+	for _, b := range rbsp {
+		if zeros >= 2 && b <= 3 {
+			out = append(out, 0x03)
+			zeros = 0
+		}
+		out = append(out, b)
+		if b == 0 {
+			zeros++
+		} else {
+			zeros = 0
+		}
+	}
+	return out
+}
+
+func mergeVUISPS(t *testing.T, timeScale int) []byte {
+	t.Helper()
+	w := &mergeSPSBits{}
+	w.u(66, 8) // profile_idc = baseline
+	w.u(0, 8)  // constraint_set flags
+	w.u(30, 8) // level_idc
+	w.ue(0)    // seq_parameter_set_id
+	w.ue(0)    // log2_max_frame_num_minus4
+	w.ue(0)    // pic_order_cnt_type = 0
+	w.ue(0)    // log2_max_pic_order_cnt_lsb_minus4
+	w.ue(1)    // max_num_ref_frames
+	w.u(0, 1)  // gaps_in_frame_num_value_allowed_flag
+	w.ue(39)   // pic_width_in_mbs_minus1  → 640
+	w.ue(21)   // pic_height_in_map_units_minus1 → 352
+	w.u(1, 1)  // frame_mbs_only_flag
+	w.u(1, 1)  // direct_8x8_inference_flag
+	w.u(0, 1)  // frame_cropping_flag
+	w.u(1, 1)  // vui_parameters_present_flag
+	w.u(0, 1)  // aspect_ratio_info_present_flag
+	w.u(0, 1)  // overscan_info_present_flag
+	w.u(0, 1)  // video_signal_type_present_flag
+	w.u(0, 1)  // chroma_loc_info_present_flag
+	w.u(1, 1)  // timing_info_present_flag
+	w.u(1, 32) // num_units_in_tick
+	w.u(timeScale, 32)
+	w.u(1, 1) // fixed_frame_rate_flag
+	w.u(0, 1) // nal_hrd_parameters_present_flag
+	w.u(0, 1) // vcl_hrd_parameters_present_flag
+	w.u(0, 1) // pic_struct_present_flag
+	w.u(0, 1) // bitstream_restriction_flag
+	w.trailing()
+	return append([]byte{0x67}, mergeInsertEPB(w.buf)...)
+}
+
+// TestMergeMP4Segments_SemanticallyEqualSPS — #1150: segments whose SPS
+// differs only in VUI timing bytes must merge. The live dispatcher groups
+// runs by the semantic SPS key (#642); the validator now agrees, so a run
+// that grouped successfully can no longer hard-fail into whole-batch
+// incompatible.
+func TestMergeMP4Segments_SemanticallyEqualSPS(t *testing.T) {
+	dir := t.TempDir()
+
+	spsA := mergeVUISPS(t, 50)
+	spsB := mergeVUISPS(t, 60)
+	if bytes.Equal(spsA, spsB) {
+		t.Fatal("fixture degenerate: time_scale variants must differ at byte level")
+	}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+
+	seg1 := createH264SegmentWithSamples(t, dir, "sema1.mp4", spsA, pps, [][]byte{idrNAL})
+	seg2 := createH264SegmentWithSamples(t, dir, "sema2.mp4", spsB, pps, [][]byte{idrNAL})
+
+	info1, err := ParseSegment(seg1)
+	require.NoError(t, err)
+	info2, err := ParseSegment(seg2)
+	require.NoError(t, err)
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	out, err := MergeMP4Segments(context.Background(), []*SegmentInfo{info1, info2}, outputPath)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(out.Included), "both segments must merge despite byte-different SPS")
 }

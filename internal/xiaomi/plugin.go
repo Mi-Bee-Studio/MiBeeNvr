@@ -68,6 +68,7 @@ func (p *XiaomiPlugin) NewRecorder(cfg config.CameraConfig, store *storage.Manag
 		AudioInRecordings: cfg.AudioInRecordings,
 		Channel:           cfg.Channel,
 		Quality:           cfg.Quality,
+		MergeFriendly:     cfg.MergeFriendly,
 		EventBus:          p.eventBus,
 		RecordEnabled:     cfg.RecordingEnabled,
 	}
