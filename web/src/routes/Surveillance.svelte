@@ -698,10 +698,11 @@
         cameras = filtered;
       } else if (!pagesModel.saved) {
         // True first run — no saved record at all. Seed the classic 4-tile
-        // view without persisting, matching the pre-multi-page behavior
-        // (a later explicit selection persists it).
+        // view and persist it immediately: with multiple pages, an unpersisted
+        // seed would vanish the moment the user flips away and back.
         cameras = activeFetched.slice(0, 4);
         selectedCameraIds = cameras.map(c => c.id);
+        saveCameraIds(selectedCameraIds);
       }
       // else: a configured-empty page — cameras stays empty and the
       // page-empty state below invites configuring it.
