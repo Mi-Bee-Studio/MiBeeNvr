@@ -758,6 +758,16 @@ cameras:
 - **描述**: 合并友好模式——解除小米画质自动回升探测（低清稳定一段时间后回探高清，issue #502），画质翻转收敛为「失败降级一次」。每次画质翻转都会在片段间留下参数集边界，打散滚动合并的分组并可能把整组片段标记为 incompatible；以合并产出优先的相机（典型：`quality: "auto"` 且合并启用的小米相机）建议开启
 - **示例**: `true`
 
+
+### `merge.transcode_merge`
+
+- **类型**: boolean
+- **可选**: 是（全局，或按相机 `cameras[].merge.transcode_merge` 覆盖）
+- **默认**: `false`
+- **描述**: 转码兜底合并——画质状态机在 HEVC↔H.264 间翻转的相机，其滚动合并输出会按参数集碎片化成多个文件。开启后该相机**跳过实时桶合并**：片段保持 pending，由批量路径（启动/手动回填、周期扫描）经 ffmpeg concat + 重编码（libx264 veryfast + AAC）统一合并——混编码窗口落地为**单个文件**。需要 PATH 中有 ffmpeg（转码 CPU 开销真实存在，默认关）；同参数集的 run 仍走原生无损合并。失败时该 run 标记 incompatible 并记录原因，可经回填重试。按相机开启：在对应 `cameras[].merge` 块内设 `transcode_merge: true`
+- **示例**: `true`
+
+
 ### `cameras[].merge`
 - **类型**: object
 - **可选**: 是

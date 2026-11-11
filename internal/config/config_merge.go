@@ -30,6 +30,14 @@ type MergeConfig struct {
 	TranscodeGrace string `yaml:"transcode_grace" json:"transcode_grace"`
 	RollingWindow  string `yaml:"rolling_window" json:"rolling_window"` // e.g. "1h", "30m"
 
+	// TranscodeMerge is the opt-in ffmpeg-unify fallback (#1150 C②): runs
+	// spanning multiple codec/parameter sets (quality flips between HEVC and
+	// H.264) re-encode through ffmpeg (libx264 + AAC — real CPU cost) and land
+	// in ONE file per window instead of fragmenting per parameter set.
+	// Cameras with this flag skip live bucket merging — their segments stay
+	// pending and merge through the batch paths. Requires ffmpeg in PATH.
+	TranscodeMerge bool `yaml:"transcode_merge" json:"transcode_merge"`
+
 	// RollingMinDuration is the target minimum duration for merged recordings.
 	// Merged files shorter than this are marked merge_quality='short' and can be
 	// further consolidated via POST /api/merge/consolidate. Default "5m".
@@ -152,6 +160,13 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.MinSegmentsToMerge > 0 {
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
+	}
+	// TranscodeMerge is opt-in (default off): a per-camera true enables the
+	// ffmpeg unify for that camera regardless of the global; global true
+	// enables it everywhere. There is no per-camera "off" — disable
+	// globally instead (#1150 C②).
+	if perCamera.TranscodeMerge {
+		result.TranscodeMerge = true
 	}
 	// Rolling merge fields: per-camera overrides only when explicitly set.
 	// RollingEnabled is a *bool — a non-nil per-camera value (true OR false)
