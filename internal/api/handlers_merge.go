@@ -305,7 +305,8 @@ func (h *Handler) handleMergeReclassify(w http.ResponseWriter, r *http.Request) 
 	}
 
 	result, err := h.db.DB().ExecContext(r.Context(), `
-		UPDATE recordings SET merge_status = 'incompatible'
+		UPDATE recordings SET merge_status = 'incompatible',
+		  merge_error = 'reclassified from failed (no error recorded)'
 		WHERE merge_status = 'failed' AND (merge_error IS NULL OR merge_error = '')
 	`)
 	if err != nil {
