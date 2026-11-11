@@ -18,14 +18,14 @@ interface FetchLog {
   headers: Record<string, string>;
 }
 
-function stubFetch(gatewayFlag: boolean | 'fail'): FetchLog[] {
+function stubFetch(gatewayFlag: boolean | 'fail', gatewayAdminFlag = false): FetchLog[] {
   const calls: FetchLog[] = [];
   const respond = (url: string): Response => {
     if (url.includes('/api/health')) {
       if (gatewayFlag === 'fail') {
         return new Response('gateway down', { status: 500 });
       }
-      return new Response(JSON.stringify({ status: 'ok', checks: {}, uptime: '1m', gateway: gatewayFlag }), {
+      return new Response(JSON.stringify({ status: 'ok', checks: {}, uptime: '1m', gateway: gatewayFlag, gateway_admin: gatewayAdminFlag }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -117,5 +117,68 @@ describe('Authorization header per access path (#938)', () => {
     const api = calls.find((c) => c.url.includes('/api/settings'));
     expect(api).toBeDefined();
     expect(api!.headers['Authorization']).toBeUndefined();
+  });
+});
+
+// Gateway fronting with a NON-admin NAS identity (#1148): the Authorization
+// header stays suppressed (the gateway hijacks any Authorization header,
+// #865/#938 — narrowing the suppression to admins would replay that storm for
+// exactly the users who have no other auth), and the gateway SSO endpoint
+// 401s non-admins — so the stored NVR session token must ride as ?token=,
+// the same channel media players already use through the gateway. Admin
+// gateway sessions keep the SSO flow: no token in URLs for them.
+describe('gateway non-admin ?token= auth (#1148)', () => {
+  it('gateway non-admin: no Authorization header, token rides as ?token=', async () => {
+    const calls = stubFetch(true, false);
+    storeSession();
+    const client = await importClient('/app/mibee-nvr');
+    await client.checkLocalBypass();
+    expect(client.isGatewayFronted()).toBe(true);
+    expect(client.isGatewayAdmin()).toBe(false);
+
+    await client.apiRequest('/settings');
+    const api = calls.find((c) => c.url.includes('/api/settings'));
+    expect(api).toBeDefined();
+    expect(api!.headers['Authorization']).toBeUndefined();
+    expect(api!.url).toContain('token=mbs_test_token');
+  });
+
+  it('gateway admin: SSO flow untouched — no token in URL, no header', async () => {
+    const calls = stubFetch(true, true);
+    storeSession();
+    const client = await importClient('/app/mibee-nvr');
+    await client.checkLocalBypass();
+    expect(client.isGatewayFronted()).toBe(true);
+    expect(client.isGatewayAdmin()).toBe(true);
+
+    await client.apiRequest('/settings');
+    const api = calls.find((c) => c.url.includes('/api/settings'));
+    expect(api).toBeDefined();
+    expect(api!.headers['Authorization']).toBeUndefined();
+    expect(api!.url).not.toContain('token=');
+  });
+
+  it('gateway non-admin without a stored session: URL stays clean (login flow)', async () => {
+    const calls = stubFetch(true, false);
+    const client = await importClient('/app/mibee-nvr');
+    await client.checkLocalBypass();
+
+    await client.apiRequest('/settings');
+    const api = calls.find((c) => c.url.includes('/api/settings'));
+    expect(api).toBeDefined();
+    expect(api!.url).not.toContain('token=');
+    expect(api!.headers['Authorization']).toBeUndefined();
+  });
+
+  it('gateway non-admin: blob requests carry ?token= too', async () => {
+    const calls = stubFetch(true, false);
+    storeSession();
+    const client = await importClient('/app/mibee-nvr');
+    await client.checkLocalBypass();
+
+    await client.apiRequestBlob('/recordings/abc/download');
+    const api = calls.find((c) => c.url.includes('/api/recordings'));
+    expect(api).toBeDefined();
+    expect(api!.url).toContain('token=mbs_test_token');
   });
 });

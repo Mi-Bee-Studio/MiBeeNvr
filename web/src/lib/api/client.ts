@@ -76,6 +76,11 @@ export interface HealthResponse {
   // verified NAS identity. The SPA suppresses its Authorization header
   // exactly when this is set (#938) — see getAuthHeader().
   gateway?: boolean;
+  // True when that gateway identity is a NAS admin — the only identity the
+  // gateway SSO endpoint mints a session for. A non-admin gateway identity
+  // authorizes nothing on the NVR; the SPA must then carry its own session
+  // token via ?token= (see gatewayAuthUrl) instead of relying on SSO (#1148).
+  gateway_admin?: boolean;
 }
 
 export interface SystemStats {
@@ -221,6 +226,12 @@ let localBypass = false;
 // the first authenticated call came back headerless, 401'd, and the route
 // guard bounced the user back to the login page in a loop (#938).
 let gatewayFronted = false;
+// True when the gateway identity seen at boot is a NAS ADMIN (health
+// `gateway_admin`, #1148). Only admins get a gateway SSO session; a
+// non-admin identity must carry its own NVR session token — via ?token= on
+// API calls (see gatewayAuthUrl) since the Authorization header stays
+// suppressed under any gateway fronting.
+let gatewayAdmin = false;
 
 // Query /api/health (public) to learn whether the backend considers the current
 // request local (see /api/health local_access), and whether it arrived through
@@ -237,6 +248,7 @@ export async function checkLocalBypass(): Promise<boolean> {
       localBypass = true;
     }
     gatewayFronted = health.gateway === true;
+    gatewayAdmin = health.gateway_admin === true;
   } catch {
     // Health check failed or timed out — leave localBypass false; the login
     // page will show.
@@ -248,6 +260,28 @@ export async function checkLocalBypass(): Promise<boolean> {
 // gatewayFronted above). Exported for tests.
 export function isGatewayFronted(): boolean {
   return gatewayFronted;
+}
+
+// Whether the fronting gateway identity is a NAS admin (see gatewayAdmin
+// above). Exported for tests.
+export function isGatewayAdmin(): boolean {
+  return gatewayAdmin;
+}
+
+// Auth for API fetches under gateway fronting, by identity:
+//   - direct access: no change — the Bearer header applies (see getAuthHeader)
+//   - gateway admin: no change — the gateway SSO session authorizes every
+//     request; a token in the URL would only leak into gateway logs
+//   - gateway NON-admin: the suppressed Bearer header and the absent SSO
+//     identity would leave every call unauthenticated (the exact #1148
+//     bounce loop), so the session token rides as ?token= instead — the
+//     same channel WS/FLV/WHEP players already use through the gateway.
+//     Tradeoff: the token becomes visible in gateway access logs; mbs_
+//     tokens are 2h HMACs with server-side revocation, so exposure is
+//     bounded.
+function gatewayAuthUrl(url: string): string {
+  if (!gatewayFronted || gatewayAdmin) return url;
+  return appendAuthToken(url);
 }
 
 // Check if user is authenticated (has a non-expired session token, OR the
@@ -331,7 +365,9 @@ export async function readJson<T>(response: Response, refetch?: () => Promise<Re
 // "invalid token" (verified live 2026-09-20: identical endpoint — with the
 // header bounces, without it succeeds, because the gateway forwards its own
 // verified NAS identity and the NVR authorizes on that). Query-param auth
-// (?token=) is unaffected — WS/FLV/WHEP players keep using getTokenForUrl().
+// (?token=) is unaffected — WS/FLV/WHEP players keep using getTokenForUrl(),
+// and under a NON-admin gateway identity API calls use it too (gatewayAuthUrl,
+// #1148): there is no SSO identity to authorize the request.
 //
 // The discriminator is the /api/health `gateway` flag (set per request by the
 // backend from its verified gateway-identity context), NOT the base path: a
@@ -367,7 +403,7 @@ export const API_BASE = `${APP_BASE}/api`;
 
 // Generic API request function
 export async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE}${endpoint}`;
+  const url = gatewayAuthUrl(`${API_BASE}${endpoint}`);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -439,7 +475,7 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {})
 
 // Generic API request for blob responses (e.g. file downloads)
 export async function apiRequestBlob(endpoint: string, options: RequestInit = {}): Promise<Blob> {
-  const url = `${API_BASE}${endpoint}`;
+  const url = gatewayAuthUrl(`${API_BASE}${endpoint}`);
 
   const headers: HeadersInit = {};
   const authHeader = getAuthHeader();
@@ -481,7 +517,7 @@ export async function apiHeadHeader(
   headerName: string,
   options: RequestInit = {},
 ): Promise<string | null> {
-  const url = `${API_BASE}${endpoint}`;
+  const url = gatewayAuthUrl(`${API_BASE}${endpoint}`);
   const headers: HeadersInit = {};
   const authHeader = getAuthHeader();
   if (authHeader) {
