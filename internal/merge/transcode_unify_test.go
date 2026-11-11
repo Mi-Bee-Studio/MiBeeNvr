@@ -78,6 +78,40 @@ func TestTranscodeUnify_MixedCodecsStub(t *testing.T) {
 	require.Greater(t, merged.SampleCount, 0)
 }
 
+// TestTranscodeUnify_DurationGuard — the M5 field catch class: a broken
+// join (concat demuxer on codec-mismatched files) exits 0 with a valid
+// output that only contains the FIRST segment. The stub reproduces that
+// shape (copies the first -i input); the output-span gate must reject it.
+func TestTranscodeUnify_DurationGuard(t *testing.T) {
+	stub := buildFFStub(t)
+	orig := ffmpegLookup
+	ffmpegLookup = func() (string, error) { return stub, nil }
+	defer func() { ffmpegLookup = orig }()
+
+	dir := t.TempDir()
+	sps := []byte{0x67, 0x42, 0x00, 0x0a, 0xe2, 0x40, 0x40, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xc8, 0x40}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
+	// segA ≈ 99ms; segB ≈ 825ms (25 samples × 33ms) so the gate's
+	// 0.8×wall − 0.25s slack has real room to trip.
+	segA := createH264SegmentWithSamples(t, dir, "a.mp4", sps, pps, [][]byte{idrNAL, pNAL, pNAL})
+	samplesB := make([][]byte, 25)
+	for i := range samplesB {
+		samplesB[i] = pNAL
+	}
+	segB := createH264SegmentWithSamples(t, dir, "b.mp4", sps, pps, samplesB)
+	infoA, err := ParseSegment(segA)
+	require.NoError(t, err)
+	infoB, err := ParseSegment(segB)
+	require.NoError(t, err)
+
+	out := filepath.Join(dir, "unified.mp4")
+	_, err = transcodeUnifyTo(context.Background(), []*SegmentInfo{infoA, infoB}, out)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "inputs were dropped")
+}
+
 // TestTranscodeUnify_FFMpegMissing — a transcode_merge camera on a host
 // without ffmpeg fails the unify with an actionable error (the caller marks
 // the run incompatible with the reason; retryable once ffmpeg appears).
