@@ -593,14 +593,28 @@ jobs:
 
       - name: Pack .fpk
         run: |
+          # fnpack writes the .fpk to the CWD under the appname — plain
+          # "mibee-nvr-native.fpk", no version/arch in the name (verified on
+          # the v0.15.0 retro run: the first attach glob silently missed for
+          # exactly this reason — softprops prints "does not match any files"
+          # and still exits green). Rename to the release convention v0.14.1
+          # established: mibee-nvr-native_<ver>_{aarch64,x86}.fpk. The mv is
+          # the existence assertion — no fpk, no green step.
+          case "${{ matrix.arch }}" in
+            arm64) PLAT=aarch64 ;;
+            amd64) PLAT=x86 ;;
+          esac
           "$FNPACK_BIN" build -d "deploy/fnos-native/out/mibee-nvr-native-${{ matrix.arch }}"
+          mkdir -p deploy/fnos-native/dist
+          mv mibee-nvr-native.fpk \
+            "deploy/fnos-native/dist/mibee-nvr-native_${{ steps.ver.outputs.version }}_${PLAT}.fpk"
           find deploy/fnos-native -name "*.fpk" -print
 
       - name: Attach .fpk to the Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          files: deploy/fnos-native/**/*.fpk
+          files: deploy/fnos-native/dist/*.fpk
           append_body: false
 
   # ---- Gitee mirror release (mainland-China download page) -------------------
