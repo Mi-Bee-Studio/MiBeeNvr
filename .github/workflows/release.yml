@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Retro-build native fpk onto release v<version> (X.Y.Z). Tag pushes ignore this.'
+        required: false
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -347,10 +352,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Download fnpack 1.2.3
+      - name: Download fnpack 1.2.3 (SHA-256 pinned)
         run: |
           curl -fsSL -o "$RUNNER_TEMP/fnpack" \
             https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          # Third-party static host serving an executable that runs with repo
+          # write permissions — pin the bytes (hashed on a trusted machine,
+          # 2026-11-14). Rotate URL+hash together on a fnpack version bump.
+          echo "54b97fa7b70968c4d05c79840f5daeff508957d0bb2062fdb0376d00d9615c93  $RUNNER_TEMP/fnpack" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/fnpack"
           # build.sh reads FNPACK_BIN; keep it outside the checkout so it can't
           # leak into any artifact.
@@ -492,10 +501,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Download fnpack 1.2.3
+      - name: Download fnpack 1.2.3 (SHA-256 pinned)
         run: |
           curl -fsSL -o "$RUNNER_TEMP/fnpack" \
             https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          # Same pin as the offline fnos-fpk job (see the comment there).
+          echo "54b97fa7b70968c4d05c79840f5daeff508957d0bb2062fdb0376d00d9615c93  $RUNNER_TEMP/fnpack" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/fnpack"
           echo "FNPACK_BIN=$RUNNER_TEMP/fnpack" >> "$GITHUB_ENV"
 
@@ -515,6 +526,81 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: deploy/fnos/mibee-nvr-fnos-online-*.fpk
+          append_body: false
+
+  # ---- Native fnOS .fpk (no Docker on the NAS) --------------------------------
+  # fnOS packages for boxes that prefer a bare install: single static binary +
+  # embedded SPA, assembled by deploy/fnos-native/build.sh (npm build + Go
+  # cross-compile, no docker) and packed by fnpack — the same public
+  # linux-amd64 binary the offline job downloads, so the runner needs no fnOS
+  # environment. Stable tags only: the manifest surface label is plain X.Y.Z
+  # and native prereleases were never shipped (prerelease tags skip this job).
+  # Retro path: workflow_dispatch with inputs.version attaches to the EXISTING
+  # release v<version> without re-tagging (v0.15.0 shipped before this job
+  # existed — the native fpk was a manual off-CI step). On dispatch the
+  # release job is tag-gated and skipped, hence the always() + result guard.
+  fnos-fpk-native:
+    needs: release
+    if: >-
+      always() &&
+      (needs.release.result == 'success' || needs.release.result == 'skipped') &&
+      ((startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.version != ''))
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, amd64]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Download fnpack 1.2.3 (SHA-256 pinned)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/fnpack" \
+            https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          echo "54b97fa7b70968c4d05c79840f5daeff508957d0bb2062fdb0376d00d9615c93  $RUNNER_TEMP/fnpack" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/fnpack"
+          echo "FNPACK_BIN=$RUNNER_TEMP/fnpack" >> "$GITHUB_ENV"
+
+      - name: Resolve version (tag push or dispatch input)
+        id: ver
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VER="${{ inputs.version }}"
+            if ! [[ "${VER}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version must be X.Y.Z, got '${VER}'"
+              exit 1
+            fi
+          else
+            VER="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build native project (arch ${{ matrix.arch }})
+        run: FNOS_ARCH=${{ matrix.arch }} bash deploy/fnos-native/build.sh ${{ steps.ver.outputs.version }}
+
+      - name: Pack .fpk
+        run: |
+          "$FNPACK_BIN" build -d "deploy/fnos-native/out/mibee-nvr-native-${{ matrix.arch }}"
+          find deploy/fnos-native -name "*.fpk" -print
+
+      - name: Attach .fpk to the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          files: deploy/fnos-native/**/*.fpk
           append_body: false
 
   # ---- Gitee mirror release (mainland-China download page) -------------------
