@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -321,4 +322,99 @@ func TestHTTPStatusErrorRetryAfter(t *testing.T) {
 			t.Fatalf("inter-attempt gap must respect Retry-After 2s, got %s", gap)
 		}
 	})
+}
+
+// backoffCaptureHandler records the "attempt" field of every "connection
+// error, reconnecting" log record — the attempt number is retryCount
+// post-increment, so it doubles as a tier-state probe: values climbing
+// 1,2,3… mean the tier is being retained; a run of 1,1,1 means it resets.
+type backoffCaptureHandler struct {
+	inner    slog.Handler
+	mu       sync.Mutex
+	attempts []int
+}
+
+func (h *backoffCaptureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *backoffCaptureHandler) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == "connection error, reconnecting" {
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "attempt" {
+				h.mu.Lock()
+				h.attempts = append(h.attempts, int(a.Value.Int64()))
+				h.mu.Unlock()
+			}
+			return true
+		})
+	}
+	return h.inner.Handle(context.Background(), r)
+}
+
+func (h *backoffCaptureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *backoffCaptureHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *backoffCaptureHandler) captured() []int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]int(nil), h.attempts...)
+}
+
+func TestRunReconnectLoopYoungSessionRetainsTier(t *testing.T) {
+	// #1138: media flowing for a moment must NOT reset the backoff tier —
+	// a crash-looping device (RTSP server up 1-2s per boot) would otherwise
+	// lock-phase with our retry cadence and get re-hit on every boot.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture := &backoffCaptureHandler{inner: slog.NewTextHandler(io.Discard, nil)}
+	h := &runReconnectLoopHarness{
+		connect: func(attempt int) (error, bool) {
+			time.Sleep(20 * time.Millisecond) // media "flows" briefly, then the device dies
+			if attempt >= 4 {
+				cancel() // exit the loop after enough samples; no log for this attempt
+			}
+			return errors.New("stream died"), true
+		},
+	}
+	runReconnectLoop(ctx, reconnectDeps{
+		CameraID:      "test-cam",
+		Log:           slog.New(capture),
+		Connect:       h.Connect,
+		RecordError:   h.RecordError,
+		SetStatus:     h.SetStatus,
+		StableSession: 200 * time.Millisecond, // 20ms sessions are "young"
+	})
+	got := capture.captured()
+	require.Len(t, got, 3, "expected three logged retries before cancel")
+	require.Equal(t, []int{1, 2, 3}, got,
+		"tier must keep climbing despite connected=true on young sessions")
+}
+
+func TestRunReconnectLoopStableSessionResetsTier(t *testing.T) {
+	// Sessions surviving the stability window reset the tier as before: the
+	// attempt number stays at 1 on every retry (jitter aside, the ladder
+	// never climbs).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture := &backoffCaptureHandler{inner: slog.NewTextHandler(io.Discard, nil)}
+	h := &runReconnectLoopHarness{
+		connect: func(attempt int) (error, bool) {
+			time.Sleep(40 * time.Millisecond) // ≥ StableSession
+			if attempt >= 4 {
+				cancel()
+			}
+			return errors.New("stream died"), true
+		},
+	}
+	runReconnectLoop(ctx, reconnectDeps{
+		CameraID:      "test-cam",
+		Log:           slog.New(capture),
+		Connect:       h.Connect,
+		RecordError:   h.RecordError,
+		SetStatus:     h.SetStatus,
+		StableSession: 20 * time.Millisecond,
+	})
+	got := capture.captured()
+	require.Len(t, got, 3, "expected three logged retries before cancel")
+	require.Equal(t, []int{1, 1, 1}, got,
+		"stable sessions must reset the tier to zero every cycle")
 }

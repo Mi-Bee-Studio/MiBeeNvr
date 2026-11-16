@@ -44,7 +44,21 @@ type reconnectDeps struct {
 	// 503 with exponential backoff), and their single-slot HTTP server
 	// already collapses under a 1-2s reconnect storm.
 	MinBackoff time.Duration
+
+	// StableSession is how long an attempt must survive (media flowing) before
+	// the backoff tier resets to zero; zero = defaultStableSession (60s).
+	// #1138: "media flowed" alone resets the tier, so a device in a crash/reboot
+	// loop — RTSP server up for 1-2s, then the firmware dies — lock-phases our
+	// retry cadence with its boot cycle and gets re-hit within seconds of every
+	// boot. Short-lived sessions now retain the climbing tier instead.
+	StableSession time.Duration
 }
+
+// defaultStableSession is the tier-reset stability window (#1138): sessions
+// shorter than this are treated as failures for backoff purposes even when
+// media flowed. Long enough to ride out firmware-upgrade reboots (~30-60s),
+// short enough that the next genuinely healthy session resets the tier.
+const defaultStableSession = 60 * time.Second
 
 // nextBackoff computes one retry delay: the tiered ladder + jitter (storage
 // failures get the flat ~60s storage backoff), floored at min. The floor
@@ -93,13 +107,27 @@ var reconnectTracer = otel.Tracer("mibee-nvr/recorder")
 // done. Callers keep their own wrappers around it — done-channel close, the
 // final StatusStopped transition, panic recovery, inner stream-cancel
 // plumbing (via the Connect closure), and any idle watchdog goroutines.
+//
+// Tier reset is gated by the stable-session window (#1138): media flowing is
+// not enough — the attempt must survive StableSession (default 60s) before
+// the ladder resets, so crash-looping devices cannot lock-phase with the
+// retry cadence by streaming for a second or two each boot.
 func runReconnectLoop(ctx context.Context, d reconnectDeps) {
+	stable := d.StableSession
+	if stable <= 0 {
+		stable = defaultStableSession
+	}
 	var retryCount int
 	for {
 		spanCtx, span := reconnectTracer.Start(ctx, "recorder.connect",
 			oteltrace.WithAttributes(attribute.String("camera_id", d.CameraID)))
+		attemptStart := time.Now()
 		err, connected := d.Connect(spanCtx)
+		sessionAge := time.Since(attemptStart)
 		span.SetAttributes(attribute.Bool("connected", connected))
+		if connected {
+			span.SetAttributes(attribute.Float64("session_age_s", sessionAge.Seconds()))
+		}
 		if err != nil && ctx.Err() == nil {
 			span.SetStatus(codes.Error, err.Error())
 		}
@@ -108,9 +136,19 @@ func runReconnectLoop(ctx context.Context, d reconnectDeps) {
 			return
 		}
 		if connected {
-			retryCount = 0
-			if d.Metrics != nil {
-				d.Metrics.CameraReconnectBackoffSeconds.WithLabelValues(d.CameraID).Set(0)
+			if sessionAge >= stable {
+				retryCount = 0
+				if d.Metrics != nil {
+					d.Metrics.CameraReconnectBackoffSeconds.WithLabelValues(d.CameraID).Set(0)
+				}
+			} else {
+				// Media flowed but the session died young (#1138): a device in
+				// a boot/crash loop would otherwise lock-phase with our retry
+				// cadence. Keep the tier climbing so the device gets breathing
+				// room between reconnects.
+				d.Log.Warn("session ended young, backoff tier retained",
+					"camera_id", d.CameraID, "session_age", sessionAge.Round(time.Millisecond),
+					"attempt", retryCount+1)
 			}
 		}
 		retryCount++
