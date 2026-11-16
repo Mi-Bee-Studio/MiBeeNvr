@@ -153,8 +153,16 @@ class MiBeeStreamCamera(MiBeeCameraBase, camera.Camera):
         self._still_image_url = client.latest_frame_url(cam.id)
         self._attr_supported_features = camera.CameraEntityFeature.STREAM
 
-    @property
-    def stream_source(self) -> str | None:
+    async def stream_source(self) -> str | None:
+        """Return the RTSP source URL.
+
+        Base-class contract is an async method on every HA version (verified
+        2025.1.0 → dev): `await camera.stream_source()`. A property override
+        shadows the method with a str, which crashes the WebRTC provider scan
+        that eagerly runs at entity add on 2025.4+ (`TypeError: 'str' object
+        is not callable`, found by the 2025.10 container smoke) and breaks
+        stream creation everywhere else.
+        """
         return self._stream_source
 
     async def async_camera_image(
