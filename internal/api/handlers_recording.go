@@ -111,6 +111,31 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Attach camera display names in one batched query (#1167): the lite list
+	// SELECT carries only camera_id, but mobile clients can't always resolve
+	// names locally — their live-grid camera list intentionally filters out
+	// audio-only cameras, so recordings of those cameras would fall back to
+	// "Unknown camera". Single extra query per page, only when there are rows
+	// to annotate; IDs without a camera row (purged) are left empty and the
+	// field is omitted (omitempty).
+	if len(recordings) > 0 {
+		camIDs := make([]string, 0, len(recordings))
+		seen := make(map[string]struct{}, len(recordings))
+		for i := range recordings {
+			if _, ok := seen[recordings[i].CameraID]; !ok {
+				seen[recordings[i].CameraID] = struct{}{}
+				camIDs = append(camIDs, recordings[i].CameraID)
+			}
+		}
+		if names, err := h.db.BatchGetCameraNames(ctx, camIDs); err == nil {
+			for i := range recordings {
+				if n, ok := names[recordings[i].CameraID]; ok {
+					recordings[i].CameraName = n
+				}
+			}
+		}
+	}
+
 	// Compute next_cursor for the frontend: the started_at of the last row in this page.
 	// The client passes it back as ?cursor= for O(1) deep pagination. Empty when no more rows.
 	nextCursor := ""

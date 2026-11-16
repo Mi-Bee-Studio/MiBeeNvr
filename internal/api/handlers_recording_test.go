@@ -386,3 +386,53 @@ func TestListRecordings_ArchivedFilter(t *testing.T) {
 	require.Len(t, resp.Recordings, 1)
 	require.Equal(t, "rec-arch", resp.Recordings[0].ID)
 }
+
+func TestListRecordings_CameraName(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	defer db.Close()
+	h := TestHandler(db, store)
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	// Camera present in the cameras table → camera_name annotated (#1167).
+	require.NoError(t, db.UpsertCamera(ctx, "cam-named", "Front Door", "rtsp", "h264",
+		"rtsp://example.com/stream", "", "", "", "", "", ""))
+	// Recording whose camera has no row (purged) → camera_name omitted.
+	seedRecording(t, db, makeRecording("rec-named", "cam-named", "h264", now, false))
+	seedRecording(t, db, makeRecording("rec-orphan", "cam-gone", "h264", now.Add(-time.Minute), false))
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/recordings", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	rawBody := rr.Body.Bytes() // json.Decoder consumes the buffer — decode from bytes so we can parse twice.
+
+	var resp recordingsResponse
+	require.NoError(t, json.NewDecoder(bytes.NewReader(rawBody)).Decode(&resp))
+	require.Len(t, resp.Recordings, 2)
+	for _, rec := range resp.Recordings {
+		if rec.ID == "rec-named" {
+			require.Equal(t, "Front Door", rec.CameraName)
+		}
+		if rec.ID == "rec-orphan" {
+			require.Empty(t, rec.CameraName)
+		}
+	}
+
+	// Raw payload: the known camera exposes camera_name; the orphan omits the
+	// key entirely (omitempty) so clients can distinguish "no name" from "".
+	var raw struct {
+		Recordings []map[string]any `json:"recordings"`
+	}
+	require.NoError(t, json.NewDecoder(bytes.NewReader(rawBody)).Decode(&raw))
+	require.Len(t, raw.Recordings, 2)
+	for _, row := range raw.Recordings {
+		_, has := row["camera_name"]
+		if row["id"] == "rec-named" {
+			require.True(t, has, "known camera must expose camera_name")
+		}
+		if row["id"] == "rec-orphan" {
+			require.False(t, has, "unknown camera must omit camera_name")
+		}
+	}
+}
