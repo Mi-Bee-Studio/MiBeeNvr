@@ -595,11 +595,16 @@ func (b *baseRecorder) run(ctx context.Context) {
 	defer close(b.done)
 	defer b.setStatus(model.StatusStopped)
 	runReconnectLoop(ctx, reconnectDeps{
-		CameraID:    b.cfg.CameraID,
-		Store:       b.store,
-		Metrics:     b.mtrics,
-		Log:         b.log,
-		Connect:     b.self.connectAndRecord,
+		CameraID: b.cfg.CameraID,
+		Store:    b.store,
+		Metrics:  b.mtrics,
+		Log:      b.log,
+		Connect:  b.self.connectAndRecord,
+		// 5s floor (#1138, mirroring #711 for http_jpeg): ESP32-class RTSP
+		// servers spawn a full session (task threads) per TCP accept, and a
+		// tier-1 (~1s) retry against a device that just booted hammers it
+		// before it can even finish initializing.
+		MinBackoff:  5 * time.Second,
 		RecordError: b.recordError,
 		SetStatus:   b.setStatus,
 	})
