@@ -68,6 +68,13 @@ type CleanupManager struct {
 	consecutivePassiveFailures int  // tracks consecutive PASSIVE checkpoint failures for escalation to TRUNCATE
 	motionAwareDisk            bool // disk-threshold path deletes boring-first (issue #435); default true
 
+	// Disk-usage source override for diskThresholdCleanup. nil = real statfs on
+	// the storage root. Tests inject a fake here: the real one reads the HOST
+	// filesystem holding t.TempDir(), so the threshold test's outcome depends
+	// on ambient mount usage (a 0%-used tmpfs /tmp skips cleanup entirely and
+	// the assertions fail — observed on WSL, green on CI runners).
+	diskUsageFn func() (int64, int64, error)
+
 	// Directory-form deletion pacing (#748): MJPEG/timelapse sources are frame
 	// directories holding up to hundreds of thousands of small files (a 1s
 	// natural-day window ≈ 600K). Unthrottled recursive removal saturates the

@@ -12,7 +12,11 @@ import (
 
 // diskThresholdCleanup deletes oldest recordings in batches when disk usage exceeds threshold.
 func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
-	total, used, err := cm.store.GetDiskUsage()
+	getUsage := cm.store.GetDiskUsage
+	if cm.diskUsageFn != nil {
+		getUsage = cm.diskUsageFn
+	}
+	total, used, err := getUsage()
 	if err != nil {
 		return err
 	}
@@ -60,7 +64,7 @@ func (cm *CleanupManager) diskThresholdCleanup(ctx context.Context) error {
 		}
 
 		// Recheck disk usage
-		_, used, err = cm.store.GetDiskUsage()
+		_, used, err = getUsage()
 		if err != nil {
 			return err
 		}
