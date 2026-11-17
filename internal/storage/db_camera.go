@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -754,4 +755,35 @@ func (d *DB) DeleteCameraGroup(ctx context.Context, name string) (int64, error) 
 		return n, nil
 	})
 	return ungrouped, err
+}
+
+// BatchGetCameraNames returns a map of camera ID to display name for a batch
+// of IDs, in a single query (#1167). Unknown IDs are simply absent from the
+// result. Archived cameras are included: their recordings stay listed in the
+// archive view, which still needs the name.
+func (d *DB) BatchGetCameraNames(ctx context.Context, ids []string) (map[string]string, error) {
+	if len(ids) == 0 {
+		return map[string]string{}, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := "SELECT id, name FROM cameras WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := d.readConn().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch get camera names: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("batch get camera names: %w", err)
+		}
+		result[id] = name
+	}
+	return result, rows.Err()
 }

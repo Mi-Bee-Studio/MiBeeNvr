@@ -38,8 +38,14 @@ type Camera struct {
 }
 
 type Recording struct {
-	ID            string    `json:"id"`
-	CameraID      string    `json:"camera_id"`
+	ID       string `json:"id"`
+	CameraID string `json:"camera_id"`
+	// CameraName is not a DB column: the recordings-list handler batch-annotates
+	// it per page (#1167) so clients can label rows without a second cameras
+	// lookup — mobile clients filter audio-only cameras out of their live-grid
+	// list and would otherwise fall back to "Unknown camera" for those
+	// recordings. Absent (omitempty) when the camera row no longer exists.
+	CameraName    string    `json:"camera_name,omitempty"`
 	FilePath      string    `json:"file_path"`
 	Format        Format    `json:"format"`
 	StartedAt     time.Time `json:"started_at"`
