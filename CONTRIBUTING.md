@@ -37,6 +37,37 @@ explicitly in your pull request so they can be reviewed before merge.
    (this file is gitignored — see the repository conventions in
    existing packages).
 
+## Sensitive-information red line (issues, PRs, docs, comments)
+
+This repository is public. Everything you write into an issue, PR,
+commit message, comment, or document is immediately world-visible and
+may be cached or indexed by third parties even after deletion. Before
+submitting, **scrub the following from all public artifacts**:
+
+| Category | Examples | Replace with |
+|---|---|---|
+| Credentials | passwords, API keys, tokens, session cookies | `**********` (never paste, even "temporarily") |
+| Internal network info | LAN IPs (`192.168.*`, `10.*`), hostnames, device hostnames, internal domain names | "internal address (redacted)" / "test device" |
+| Device identifiers | GB28181 national IDs, camera serial numbers, MAC addresses, cloud peer IDs | `gb-<redacted>`, "test camera" |
+| Account identities | platform/user account names of internal test accounts | "owner account" / "grantee account" |
+| Local paths | `C:\Users\...`, `/mnt/d/...`, `/home/...` | relative paths or "local workspace" |
+
+Rules of thumb:
+
+- **Reproduce without exposing**: a good bug report describes the
+  *shape* of the identifier (`gb-<national-ID>`) and the *behavior*,
+  not the concrete value. Reviewers reproducing internally can map it
+  back; outsiders learn nothing exploitable.
+- **Log excerpts are not exempt**: pasted server/app logs frequently
+  contain the above — trim to the relevant lines and redact before
+  pasting.
+- **Post-hoc redaction leaves traces**: GitHub keeps edit history;
+  anything once published must be treated as leaked. Get it right
+  before submitting — redaction after the fact is damage control, not
+  a fix.
+- **If credentials did leak**, rotate them immediately (rotation is
+  the only real fix; deleting the post is not).
+
 ## What CI runs
 
 A PR runs seven checks; all of them must be green before merge:
