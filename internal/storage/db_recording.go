@@ -1382,30 +1382,51 @@ func (d *DB) UpdateRecordingMotionScore(ctx context.Context, id string, score, c
 // BatchGetRecordingAIStatus returns a map of recording ID to AI status for a batch of IDs.
 // Eliminates N+1 by fetching all statuses in a single query.
 func (d *DB) BatchGetRecordingAIStatus(ctx context.Context, ids []string) (map[string]string, error) {
-	if len(ids) == 0 {
-		return map[string]string{}, nil
-	}
-	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	q := "SELECT id, COALESCE(ai_status, '') FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
-	rows, err := d.readConn().QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("batch get recording ai status: %w", err)
-	}
-	defer rows.Close()
 	result := make(map[string]string, len(ids))
-	for rows.Next() {
-		var id, status string
-		if err := rows.Scan(&id, &status); err != nil {
+	if len(ids) == 0 {
+		return result, nil
+	}
+	// SQLITE_MAX_VARIABLE_NUMBER rail (#1173): callers hand over unbounded id
+	// sets — cleanup's BatchDeleteRecordingsWithFiles passes the full expired
+	// list of a camera in one call, and an audio-only camera (born-terminal
+	// rows, no merge consumer) accumulates well past 32766 expired rows. One
+	// placeholder per id then failed the prepare with "too many SQL variables"
+	// and the whole deletion batch aborted on every cleanup cycle, so retention
+	// never converged for that camera. Chunk at 500 (same rail as
+	// GetRecordingsByPathSet).
+	const chunkSize = 500
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		q := "SELECT id, COALESCE(ai_status, '') FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+		rows, err := d.readConn().QueryContext(ctx, q, args...)
+		if err != nil {
 			return nil, fmt.Errorf("batch get recording ai status: %w", err)
 		}
-		result[id] = status
+		for rows.Next() {
+			var id, status string
+			if err := rows.Scan(&id, &status); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("batch get recording ai status: %w", err)
+			}
+			result[id] = status
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("batch get recording ai status: %w", err)
+		}
+		rows.Close()
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
 // ListDarkRecordings returns recordings with merge_status='dark' older than
