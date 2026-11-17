@@ -265,6 +265,12 @@ func TestRunOnce_DiskThresholdCleanup(t *testing.T) {
 	cm, err := NewCleanupManager(env.db, env.store, cfg)
 	require.NoError(t, err)
 
+	// Hermetic disk usage: the default statfs source reads the HOST filesystem
+	// holding t.TempDir() — a 0%-used tmpfs /tmp skips cleanup entirely and the
+	// assertions below fail (observed on WSL). Inject a constant >threshold so
+	// the eviction loop runs to completion regardless of ambient mount usage.
+	cm.diskUsageFn = func() (int64, int64, error) { return 100 << 30, 50 << 30, nil }
+
 	now := time.Now()
 
 	// Insert several recordings; oldest should be deleted first
