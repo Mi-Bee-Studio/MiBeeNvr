@@ -1408,23 +1408,25 @@ func (d *DB) BatchGetRecordingAIStatus(ctx context.Context, ids []string) (map[s
 			args[i] = id
 		}
 		q := "SELECT id, COALESCE(ai_status, '') FROM recordings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
-		rows, err := d.readConn().QueryContext(ctx, q, args...)
-		if err != nil {
-			return nil, fmt.Errorf("batch get recording ai status: %w", err)
-		}
-		for rows.Next() {
-			var id, status string
-			if err := rows.Scan(&id, &status); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("batch get recording ai status: %w", err)
+		// Per-chunk closure so rows.Close is a defer (sqlclosecheck) while the
+		// outer loop keeps scanning chunks — same shape as GetRecordingsByPathSet.
+		if err := func() error {
+			rows, err := d.readConn().QueryContext(ctx, q, args...)
+			if err != nil {
+				return fmt.Errorf("batch get recording ai status: %w", err)
 			}
-			result[id] = status
+			defer rows.Close()
+			for rows.Next() {
+				var id, status string
+				if err := rows.Scan(&id, &status); err != nil {
+					return fmt.Errorf("batch get recording ai status: %w", err)
+				}
+				result[id] = status
+			}
+			return rows.Err()
+		}(); err != nil {
+			return nil, err
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("batch get recording ai status: %w", err)
-		}
-		rows.Close()
 	}
 	return result, nil
 }
