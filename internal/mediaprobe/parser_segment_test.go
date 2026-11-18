@@ -169,3 +169,23 @@ func createH264SegmentWithG711Audio(t *testing.T, dir string) string {
 	require.NoError(t, m.Close())
 	return path
 }
+
+// TestParseSegment_AudioOnly_ReturnsErrNoVideoTrack: a pickup/mic channel
+// produces segments with no video track at all. ParseSegment must surface the
+// sentinel ErrNoVideoTrack so the recording auditor can classify them as
+// audio-only instead of logging a probe failure per segment forever.
+func TestParseSegment_AudioOnly_ReturnsErrNoVideoTrack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audio_only.mp4")
+
+	m := muxer.NewMP4Muxer(path)
+	audioTrackID, err := m.AddAudioTrack("g711", []byte{1, 0x00, 0x00, 0x1F, 0x40})
+	require.NoError(t, err)
+	require.NoError(t, m.WriteAudioSample(audioTrackID, []byte{0x55}, 0, 20*time.Millisecond))
+	require.NoError(t, m.WriteAudioSample(audioTrackID, []byte{0xAA}, 20*time.Millisecond, 20*time.Millisecond))
+	require.NoError(t, m.Close())
+
+	_, err = mediaprobe.ParseSegment(path)
+	require.Error(t, err)
+	require.ErrorIs(t, err, mediaprobe.ErrNoVideoTrack)
+}

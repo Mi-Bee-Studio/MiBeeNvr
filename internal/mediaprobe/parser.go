@@ -14,6 +14,12 @@ import (
 
 var logger = slog.Default().With("component", "mediaprobe")
 
+// ErrNoVideoTrack reports an MP4 whose tracks are all non-video (an audio-only
+// segment — e.g. a pickup/mic channel). Callers that record video integrity
+// must tell this apart from a corrupt file: an audio-only segment is the
+// expected product of such a channel, not a probe failure.
+var ErrNoVideoTrack = errors.New("no video track found")
+
 // SegmentInfo contains parsed metadata and sample table from an MP4 segment.
 type SegmentInfo struct {
 	Codec         string // "h264" or "h265"
@@ -295,7 +301,7 @@ func parseSegment(filePath string, probeKeyframes bool) (*SegmentInfo, error) {
 	}
 
 	if videoTrack == nil {
-		return nil, fmt.Errorf("no video track found")
+		return nil, ErrNoVideoTrack
 	}
 	if videoTrack.timescale == 0 {
 		return nil, fmt.Errorf("no mdhd box found")
