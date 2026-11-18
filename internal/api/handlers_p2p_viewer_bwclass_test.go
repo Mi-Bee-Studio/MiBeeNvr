@@ -64,3 +64,35 @@ func TestP2pViewerBandwidthClassRoundTrip(t *testing.T) {
 	// 兼容 viewer = 最新上报者（本例为空串——旧语义不破）。
 	require.NotNil(t, st.Viewer)
 }
+
+// TestP2pViewerLanModeAccepted：App 的 LAN 质量周期上报（mode=lan，
+// app_state _lanQualityTick）此前被 "mode must be tunnel|relay" 拒收为
+// 400 且 App 静默吞掉——LAN 观众从未上过仪表盘卡片。lan 是合法枚举。
+func TestP2pViewerLanModeAccepted(t *testing.T) {
+	h, _, _ := setupP2PTestHandler(t)
+	r := h.Routes()
+
+	rr := postViewerReport(t, r, map[string]any{
+		"mode": "lan", "viewer_id": "lan-peer-1", "self_addr": "198.51.100.40:40010",
+		"rtt_ms": 12, "app_version": "0.1.16",
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// 状态面可见且 mode 原样透传。
+	rr = doRequest(t, r, "GET", "/api/p2p/viewer", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var st struct {
+		Viewer *struct {
+			Mode string `json:"mode"`
+		} `json:"viewer"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &st))
+	require.NotNil(t, st.Viewer)
+	require.Equal(t, "lan", st.Viewer.Mode)
+
+	// 彻底的垃圾 mode 仍拒收。
+	rr = postViewerReport(t, r, map[string]any{
+		"mode": "carrier-pigeon", "self_addr": "198.51.100.41:40011",
+	})
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+}

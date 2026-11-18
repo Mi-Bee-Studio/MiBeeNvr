@@ -2259,6 +2259,7 @@
   "dashboard.p2p.waiting": "Связано — ожидание приложения…",
   "dashboard.p2p.tunnel": "Туннель",
   "dashboard.p2p.relay": "Ретрансляция",
+  "dashboard.p2p.lan": "Локальная сеть",
   "dashboard.p2p.rtt": "Задержка",
   "dashboard.p2p.rate": "Скорость",
   "dashboard.p2p.app": "Адрес приложения",

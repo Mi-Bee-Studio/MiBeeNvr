@@ -2259,6 +2259,7 @@
   "dashboard.p2p.waiting": "Associated — waiting for the app…",
   "dashboard.p2p.tunnel": "Tunnel",
   "dashboard.p2p.relay": "Relay",
+  "dashboard.p2p.lan": "LAN",
   "dashboard.p2p.rtt": "Latency",
   "dashboard.p2p.rate": "Rate",
   "dashboard.p2p.app": "App address",

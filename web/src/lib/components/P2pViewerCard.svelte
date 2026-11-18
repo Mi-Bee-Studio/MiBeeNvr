@@ -90,7 +90,7 @@
                 ? 'background-color: color-mix(in srgb, var(--color-live, #22c55e) 16%, transparent); color: var(--color-live, #22c55e)'
                 : ''}
             >
-              {v.mode === 'relay' ? t('dashboard.p2p.relay') : t('dashboard.p2p.tunnel')}
+              {v.mode === 'relay' ? t('dashboard.p2p.relay') : v.mode === 'lan' ? t('dashboard.p2p.lan') : t('dashboard.p2p.tunnel')}
             </span>
             <span class="font-mono th-text-primary">{v.viewer_id || v.self_addr || '--'}</span>
             {#if v.stale}
