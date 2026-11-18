@@ -26,7 +26,7 @@ import (
 // p2pViewerSample 一次上报换算出的质量采样点（历史曲线用）。
 type p2pViewerSample struct {
 	At       time.Time `json:"at"`
-	Mode     string    `json:"mode"` // tunnel|relay
+	Mode     string    `json:"mode"` // tunnel|relay|lan
 	RttMs    int       `json:"rtt_ms"`
 	KbpsUp   int       `json:"kbps_up"`
 	KbpsDown int       `json:"kbps_down"`
@@ -63,7 +63,7 @@ func (h *Handler) appendViewerJSONL(name string, line []byte) {
 // rtt_* 为应用层（HTTP 过隧道）窗口统计；net_rtt_ms 为直连隧道的
 // ICE 传输层真实往返（「网络差」vs「隧道被视频流量占满」的分离证据）。
 type p2pViewerReport struct {
-	Mode     string `json:"mode"`                // tunnel|relay
+	Mode     string `json:"mode"`                // tunnel|relay|lan
 	ViewerID string `json:"viewer_id,omitempty"` // App 装机稳定标识（fix4 起上报）
 	SelfAddr string `json:"self_addr"`
 	RttMs    int    `json:"rtt_ms"`
@@ -215,8 +215,8 @@ func (h *Handler) handleP2pViewerReport(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if body.Mode != "tunnel" && body.Mode != "relay" {
-		WriteError(w, http.StatusBadRequest, "mode must be tunnel|relay")
+	if body.Mode != "tunnel" && body.Mode != "relay" && body.Mode != "lan" {
+		WriteError(w, http.StatusBadRequest, "mode must be tunnel|relay|lan")
 		return
 	}
 	if body.RttMs < 0 || body.RttMs > 60000 || body.KbpsUp < 0 || body.KbpsDown < 0 ||

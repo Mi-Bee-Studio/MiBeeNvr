@@ -2259,6 +2259,7 @@
   "dashboard.p2p.waiting": "已关联，等待 App 连接…",
   "dashboard.p2p.tunnel": "隧道直连",
   "dashboard.p2p.relay": "中继",
+  "dashboard.p2p.lan": "局域网",
   "dashboard.p2p.rtt": "延时",
   "dashboard.p2p.rate": "速率",
   "dashboard.p2p.app": "App 地址",
