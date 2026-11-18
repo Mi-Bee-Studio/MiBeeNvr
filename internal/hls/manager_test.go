@@ -3,6 +3,8 @@ package hls
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -14,6 +16,7 @@ import (
 	"github.com/bluenviron/gohlslib/v2"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
 )
 
 // newTestManager creates a Manager with a writable temp directory.
@@ -1914,4 +1917,51 @@ func TestRefreshParamCache_H265(t *testing.T) {
 func stampedEntry(base *streamEntry, t time.Time) *streamEntry {
 	base.setLastUsed(t)
 	return base
+}
+
+// TestHandle_GapPlaceholderServesInitSegment : gohlslib's LL-HLS media
+// playlists open with up to SegmentCount gap placeholders whose URI is the
+// literal "gap.mp4", and the library never registers a handler for that name —
+// the request used to fall through to the zero-write path and surface as 404.
+// Clients that do not honour EXT-X-GAP (observed with ExoPlayer) fetch it on
+// join and treat the 404 as fatal, so playback died on every fresh muxer.
+// The manager must answer gap.mp4 with the stream's init segment (valid fMP4,
+// zero samples).
+func TestHandle_GapPlaceholderServesInitSegment(t *testing.T) {
+	t.Helper()
+	mm := metrics.NewMetrics()
+	// LL-HLS requires SegmentCount >= 7 (gohlslib validation, #772 auto-lift).
+	m := NewManagerWithOpts(context.Background(), t.TempDir(), 64, 1<<20, 7, mm)
+	t.Cleanup(m.StopAll)
+	m.SetLowLatency(true, 200*time.Millisecond)
+
+	require.NoError(t, m.StartStream("cam-gap", pumpSPS, pumpPPS, 0))
+	m.mu.RLock()
+	dir := m.streams["cam-gap"].dirPath
+	m.mu.RUnlock()
+
+	hub := streamhub.New()
+	require.NoError(t, m.SubscribeToHub("cam-gap", hub, false))
+	for i := range 60 {
+		hub.Broadcast(int64(90000*i), [][]byte{pumpSPS, pumpPPS, pumpH264IDR}, true)
+		hub.Broadcast(int64(90000*i+3000), [][]byte{pumpH264P}, false)
+	}
+	require.Eventually(t, func() bool { return len(segmentFiles(t, dir)) > 0 },
+		15*time.Second, 200*time.Millisecond, "never produced segments")
+
+	rec := httptest.NewRecorder()
+	require.True(t, m.Handle("cam-gap", rec, httptest.NewRequest(http.MethodGet, "/hls/cam-gap/gap.mp4", nil)))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "video/mp4", rec.Header().Get("Content-Type"))
+
+	// Body must be a parseable fMP4 init (ftyp+moov, zero samples) built from
+	// the stream's parameter sets — gohlslib keeps init in RAM in LL mode, so
+	// there is no on-disk file to compare against.
+	require.NotEmpty(t, rec.Body.Bytes())
+	require.Equal(t, "ftyp", string(rec.Body.Bytes()[4:8]))
+
+	// Sanity: pre-fix behavior on an unrelated unknown name stays 404.
+	rec404 := httptest.NewRecorder()
+	require.True(t, m.Handle("cam-gap", rec404, httptest.NewRequest(http.MethodGet, "/hls/cam-gap/nope.mp4", nil)))
+	require.Equal(t, http.StatusNotFound, rec404.Code)
 }

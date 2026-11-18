@@ -23,6 +23,9 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph265"
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4/seekablebuffer"
+	mp4codecs "github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 	"github.com/pion/rtp"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/frametrace"
@@ -440,10 +443,12 @@ func (m *Manager) rebuildMuxer(cameraID string, entry *streamEntry, au [][]byte)
 // NALs (SPS/PPS for H264, VPS/SPS/PPS for H265). In-band bytes are fresher
 // than the startStream seed — a mid-stream codec change lands here first and
 // the next injected IDR / muxer rebuild uses the new values. Called from
-// writeLoop only (cache owner).
+// writeLoop only (cache owner); the field writes hold entry.mu because
+// Handle's gap-placeholder path reads the cache from HTTP goroutines.
 func refreshParamCache(entry *streamEntry, au [][]byte) {
 	if entry.isH265 {
 		vps, sps, pps := nalutil.ExtractParamSetsH265(au)
+		entry.mu.Lock()
 		if vps != nil {
 			entry.vps = vps
 		}
@@ -453,15 +458,18 @@ func refreshParamCache(entry *streamEntry, au [][]byte) {
 		if pps != nil {
 			entry.pps = pps
 		}
+		entry.mu.Unlock()
 		return
 	}
 	sps, pps := nalutil.ExtractParamSetsH264(au)
+	entry.mu.Lock()
 	if sps != nil {
 		entry.sps = sps
 	}
 	if pps != nil {
 		entry.pps = pps
 	}
+	entry.mu.Unlock()
 }
 
 // withCachedParamSets returns au with any missing parameter-set NALs prepended
@@ -1234,6 +1242,21 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 		return false
 	}
 
+	// gohlslib's LL-HLS playlists open with up to SegmentCount gap placeholder
+	// entries whose URI is the literal "gap.mp4" (iOS LL-HLS segment-count
+	// padding). The library never registers a handler for that name, so the
+	// request used to fall through to the silentResponseWriter zero-write path
+	// and surfaced as 404 "unknown HLS resource". Clients that do not honour
+	// EXT-X-GAP (observed with ExoPlayer) fetch it right after joining and
+	// treat the 404 as fatal, killing playback on every freshly created muxer.
+	// Serve a valid fMP4 init segment built from the stream's cached
+	// parameter sets instead: zero samples — gap-aware clients skip it by flag
+	// and never fetch, naive ones parse an empty segment and continue joining.
+	if filepath.Base(r.URL.Path) == gapPlaceholderName {
+		serveGapPlaceholder(w, entry)
+		return true
+	}
+
 	// Guard against muxer blocking forever when no frames arrive.
 	// The muxer blocks on m3u8 requests until the first segment is ready.
 	// If no frames reach the muxer (e.g. Hub subscription failed), this
@@ -1272,6 +1295,55 @@ func (m *Manager) Handle(cameraID string, w http.ResponseWriter, r *http.Request
 		hlsLogger.Warn("HLS Handle timed out or cancelled", "camera_id", cameraID, "timeout", handleTimeout)
 		return true
 	}
+}
+
+// gapPlaceholderName is the literal URI gohlslib emits for LL-HLS gap
+// placeholders in media playlists (see Handle).
+const gapPlaceholderName = "gap.mp4"
+
+// serveGapPlaceholder answers a fetch of the LL-HLS gap placeholder with a
+// valid fMP4 init segment (ftyp+moov, zero samples) marshalled from the
+// stream's cached parameter sets — the same bytes the muxer's own init handler
+// would serve for this codec (gohlslib caches init in RAM in LL mode and only
+// spills it to disk for non-LL variants, so there is nothing to read from
+// dirPath). Clients that ignore EXT-X-GAP and fetch the placeholder get an
+// empty segment they can parse and move past, instead of a fatal 404.
+func serveGapPlaceholder(w http.ResponseWriter, entry *streamEntry) {
+	entry.mu.Lock()
+	isH265, vps, sps, pps := entry.isH265, entry.vps, entry.sps, entry.pps
+	entry.mu.Unlock()
+
+	var codec mp4codecs.Codec
+	switch {
+	case isH265 && nalutil.HasCompleteParamSets([][]byte{vps, sps, pps}, true):
+		codec = &mp4codecs.H265{VPS: vps, SPS: sps, PPS: pps}
+	case !isH265 && sps != nil && pps != nil:
+		codec = &mp4codecs.H264{SPS: sps, PPS: pps}
+	default:
+		// Parameter sets not cached yet — nothing sensible to serve; the
+		// playlists that advertise gaps cannot exist before the first segment
+		// either, so this window is unreachable in practice.
+		http.Error(w, "init segment not ready", http.StatusNotFound)
+		return
+	}
+
+	init := fmp4.Init{
+		Tracks: []*fmp4.InitTrack{{
+			ID:        1,
+			TimeScale: 90000,
+			Codec:     codec,
+		}},
+	}
+	var buf seekablebuffer.Buffer
+	if err := init.Marshal(&buf); err != nil {
+		http.Error(w, "init segment marshal failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "video/mp4")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 // StopAll stops all active HLS streams and cancels the manager context.
