@@ -340,6 +340,14 @@ func (a *RecordingAuditor) probe(seg event.SegmentCompleted) {
 	}
 	info, err := mediaprobe.ProbeMP4(seg.FilePath)
 	switch {
+	case errors.Is(err, mediaprobe.ErrNoVideoTrack):
+		// Audio-only channel (pickup/mic): a segment whose tracks are all
+		// non-video is the expected product, not a probe failure. Counting it
+		// as probe_error used to emit one WARN per minute per channel forever
+		// (154 hits over 18 days, all on a single pickup channel).
+		a.metrics.IncRecordingAudit(seg.CameraID, "audio_only")
+		slog.Debug("recording audit: audio-only segment",
+			"camera_id", seg.CameraID, "file", seg.FilePath)
 	case err != nil:
 		if errors.Is(err, fs.ErrNotExist) {
 			// Vanished between the stat above and the open — same race.

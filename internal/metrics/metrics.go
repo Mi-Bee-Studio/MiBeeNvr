@@ -452,7 +452,7 @@ func NewMetrics() *Metrics {
 
 	recordingAuditTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_recording_audit_total",
-		Help: "Recording integrity audit outcomes (mediaprobe on closed segments), by camera and result (ok|zero_duration|probe_error).",
+		Help: "Recording integrity audit outcomes (mediaprobe on closed segments), by camera and result (ok|zero_duration|probe_error|audio_only|vanished).",
 	}, []string{"camera_id", "result"})
 
 	recordingDeepCheckTotal := prometheus.NewCounterVec(prometheus.CounterOpts{

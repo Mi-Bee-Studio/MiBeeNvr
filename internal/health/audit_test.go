@@ -13,6 +13,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/metrics"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/muxer"
 	"github.com/stretchr/testify/require"
 )
 
@@ -421,4 +422,68 @@ func TestRecordingAuditor_ProbeVanishedNotProbeError(t *testing.T) {
 	require.Eventually(t, func() bool { return auditResult(t, m, "vanished") }, 3*time.Second, 20*time.Millisecond,
 		"a vanished source must score audit result=vanished")
 	require.False(t, auditResult(t, m, "probe_error"), "vanished must not grow probe_error")
+}
+
+// TestRecordingAuditor_AudioOnlyIsNotProbeError: pickup/mic channels produce
+// segments with no video track. Those are the expected product — counting them
+// as probe_error emitted one WARN per minute per channel indefinitely (154
+// hits over 18 days on one pickup channel in the field). They must land in the
+// audio_only bucket and never in probe_error.
+func TestRecordingAuditor_AudioOnlyIsNotProbeError(t *testing.T) {
+	bus := event.NewEventBus(16)
+	m := metrics.NewMetrics()
+	a := NewRecordingAuditor(bus, m)
+	require.NotNil(t, a)
+	require.NoError(t, a.Start(context.Background()))
+	t.Cleanup(func() { _ = a.Stop() })
+
+	// Build a real MP4 with an audio track only.
+	path := filepath.Join(t.TempDir(), "audio_only.mp4")
+	mux := muxer.NewMP4Muxer(path)
+	audioTrackID, err := mux.AddAudioTrack("g711", []byte{1, 0x00, 0x00, 0x1F, 0x40})
+	require.NoError(t, err)
+	require.NoError(t, mux.WriteAudioSample(audioTrackID, []byte{0x55}, 0, 20*time.Millisecond))
+	require.NoError(t, mux.Close())
+
+	bus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
+		CameraID: "cam-audio",
+		FilePath: path,
+	})
+
+	require.Eventually(t, func() bool {
+		families, err := m.Registry.Gather()
+		if err != nil {
+			return false
+		}
+		for _, f := range families {
+			if f.GetName() != "nvr_recording_audit_total" {
+				continue
+			}
+			for _, metric := range f.GetMetric() {
+				for _, l := range metric.GetLabel() {
+					if l.GetName() == "result" && l.GetValue() == "audio_only" &&
+						metric.GetCounter().GetValue() >= 1 {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}, 3*time.Second, 20*time.Millisecond, "audio-only segment must land in the audio_only bucket")
+
+	// And never in probe_error.
+	families, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() != "nvr_recording_audit_total" {
+			continue
+		}
+		for _, metric := range f.GetMetric() {
+			for _, l := range metric.GetLabel() {
+				if l.GetName() == "result" && l.GetValue() == "probe_error" {
+					require.Zero(t, metric.GetCounter().GetValue(), "audio-only segment must not count as probe_error")
+				}
+			}
+		}
+	}
 }
