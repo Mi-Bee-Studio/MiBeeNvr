@@ -9,6 +9,7 @@
   // `playbackMode` props. This component re-initializes its player state in a
   // $effect whenever those props change.
   import { tick, onDestroy } from 'svelte';
+  import { segmentVideoUrlSync as pickVideoUrl, seekEl } from '$lib/playback-helpers';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast.svelte';
   import type { Recording, TimelapseFrame } from '$lib/api';
@@ -505,12 +506,10 @@
   // Direct-playback URL for a recording, or null when it is not <video>-playable
   // (timelapse/mjpeg without a merged MP4 → the JPEG cycler owns it).
   function segmentVideoUrlSync(rec: Recording): string | null {
-    const f = rec.format;
-    if (f === 'h264' || f === 'h265') return getRecordingVideoUrl(rec.id);
-    if (f === 'timelapse' || f === 'mjpeg') {
-      if (rec.merge_status === 'merged' && rec.merge_path) return getMergedRecordingUrl(rec.id);
-    }
-    return null;
+    return pickVideoUrl(rec, {
+      segment: getRecordingVideoUrl,
+      merged: getMergedRecordingUrl,
+    });
   }
   async function segmentVideoUrl(rec: Recording): Promise<string | null> {
     const url = segmentVideoUrlSync(rec);
@@ -570,23 +569,6 @@
       const timer = setTimeout(finish, timeoutMs);
       el.addEventListener('canplay', onCanPlay);
       el.addEventListener('error', onError);
-    });
-  }
-
-  // Seek an element and resolve once the seek lands (or after a safety timeout).
-  function seekEl(el: HTMLVideoElement, offset: number): Promise<void> {
-    return new Promise((resolve) => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        el.removeEventListener('seeked', finish);
-        resolve();
-      };
-      const timer = setTimeout(finish, 5000);
-      el.addEventListener('seeked', finish);
-      el.currentTime = offset;
     });
   }
 
