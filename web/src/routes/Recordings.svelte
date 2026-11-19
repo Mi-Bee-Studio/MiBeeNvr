@@ -18,6 +18,7 @@
   import { isRouteSuspended } from '$lib/page-lifecycle.svelte';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
+  import { remoteDayBounds, computePresetWindowStart, DAY_CACHE_TTL_MS } from '$lib/recordings-windows';
 
   import type { Recording, Camera, RecordingDaySummary, RecordingTimelineSegment } from '$lib/api';
   import { t } from '$lib/i18n';
@@ -30,6 +31,8 @@
 
   // New components
   import FormatFilter from '$lib/components/library/FormatFilter.svelte';
+  import RecordingsFilterBar from '$lib/components/recordings/RecordingsFilterBar.svelte';
+  import BatchActionBar from '$lib/components/recordings/BatchActionBar.svelte';
   import CompactList from '$lib/components/library/CompactList.svelte';
   import CalendarView from '$lib/components/timelapse/CalendarView.svelte';
   import AviPlayback from '$lib/components/AviPlayback.svelte';
@@ -82,7 +85,6 @@
     at: number;
   }
   let dayCache: { key: string; entry: DayCacheEntry } | null = null;
-  const DAY_CACHE_TTL_MS = 30_000;
 
   function takeDayCache(key: string): DayCacheEntry | null {
     if (dayCache && dayCache.key === key && Date.now() - dayCache.entry.at < DAY_CACHE_TTL_MS) {
@@ -595,14 +597,6 @@ $effect(() => {
   let remoteAbort: AbortController | undefined;
   let playingRemoteId = $state<number | null>(null);
 
-  function remoteDayBounds(date: string): { start: string; end: string } {
-    const [y, m, d] = date.split('-').map(Number);
-    return {
-      start: new Date(y, m - 1, d, 0, 0, 0).toISOString(),
-      end: new Date(y, m - 1, d, 23, 59, 59, 999).toISOString(),
-    };
-  }
-
   async function loadRemoteArchive(date: string) {
     if (remoteAbort) remoteAbort.abort();
     remoteAbort = new AbortController();
@@ -891,24 +885,6 @@ $effect(() => {
     }
   }
 
-  // computePresetWindowStart returns the inclusive lower bound to pass as the
-  // `start` query when looking for an existing merge for the given window.
-  function computePresetWindowStart(duration: string, now: Date): Date {
-    switch (duration) {
-      case 'natural-day': {
-        // Start of today in local time.
-        const d = new Date(now);
-        d.setHours(0, 0, 0, 0);
-        return d;
-      }
-      case '8h': return new Date(now.getTime() - 8 * 3600 * 1000);
-      case '24h': return new Date(now.getTime() - 24 * 3600 * 1000);
-      case '7d': return new Date(now.getTime() - 7 * 24 * 3600 * 1000);
-      case '30d': return new Date(now.getTime() - 30 * 24 * 3600 * 1000);
-      default: return new Date(now.getTime() - 24 * 3600 * 1000);
-    }
-  }
-
   // generateAndPlayPreset triggers a merge for the given camera/duration and
   // polls progress until completion, then navigates to the player route.
   async function generateAndPlayPreset(cameraId: string, duration: string, refTime: Date) {
@@ -1180,86 +1156,18 @@ $effect(() => {
     <div class="mb-6">
       <h2 class="text-2xl font-bold th-text-primary mb-4">{t('nav.recordings')}</h2>
 
-      <!-- ── Filter bar ── -->
-      <div class="card p-4 mb-6 border th-border">
-        <div class="flex flex-wrap items-end gap-3">
-          <div class="flex items-center gap-2 pb-[2px]">
-            <FormatFilter bind:selectedFormat={formatPill} />
-            {#if miBeeVisionConnected}
-              <button
-                type="button"
-                class="ai-marker-toggle {showAIMarkers ? 'is-active' : ''}"
-                onclick={() => showAIMarkers = !showAIMarkers}
-                title={t('library.showAIMarkers')}
-                aria-pressed={showAIMarkers}
-              >
-                <Brain size={14} />
-                <span>{t('library.showAIMarkers')}</span>
-              </button>
-            {/if}
-          </div>
-          <div class="flex-1 min-w-[160px]">
-            <label for="camera" class="input-label">{t('recordings.camera')}</label>
-            <select id="camera" class="input" bind:value={cameraId}>
-              <option value="">{t('recordings.allCameras')}</option>
-              {#each cameras as camera}
-                <option value={camera.id}>{camera.name}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="flex-1 min-w-[140px]">
-            <label for="ai-class" class="input-label" title={t('recordings.aiClassHint')}>
-              {t('recordings.aiClass')}
-            </label>
-            <select id="ai-class" class="input" bind:value={aiClass}>
-              <option value="">{t('recordings.aiClassAll')}</option>
-              <option value="person">{t('recordings.aiClassPerson')}</option>
-              <option value="car">{t('recordings.aiClassCar')}</option>
-            </select>
-          </div>
-          <div class="min-w-[130px]">
-            <label for="activity-filter" class="input-label" title={t('recordings.activityHint')}>
-              {t('recordings.activityFilter')}
-            </label>
-            <select id="activity-filter" class="input" bind:value={activityFilter}>
-              <option value="">{t('recordings.activityAll')}</option>
-              <option value="motion">{t('recordings.activityMotion')}</option>
-              <option value="static">{t('recordings.activityStatic')}</option>
-              <option value="scene_cut">{t('recordings.activitySceneCut')}</option>
-            </select>
-          </div>
-          <div class="min-w-[120px]">
-            <label for="min-motion" class="input-label" title={t('recordings.minMotionHint')}>
-              {t('recordings.minMotionScore')}
-            </label>
-            <select id="min-motion" class="input" bind:value={minMotionScore}>
-              <option value="">{t('recordings.minMotionAny')}</option>
-              {#each ['0.05', '0.1', '0.2', '0.3', '0.5'] as v}
-                <option value={v}>{t('recordings.minMotionAtLeast')} {v}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="flex-1 min-w-[180px]">
-            <label class="input-label" for="search-input">{t('recordings.search')}</label>
-            <div class="relative">
-              <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 th-text-tertiary" />
-              <input
-                id="search-input"
-                type="text"
-                class="input pl-9"
-                placeholder={t('recordings.search')}
-                bind:value={searchQuery}
-              />
-            </div>
-          </div>
-          <div class="flex items-center gap-1 pb-[2px]">
-            <button onclick={clearFilters} class="btn btn-ghost btn-sm">
-              {t('recordings.clearFilters')}
-            </button>
-          </div>
-        </div>
-      </div>
-
+      <RecordingsFilterBar
+        bind:formatPill
+        bind:showAIMarkers
+        miBeeVisionConnected={miBeeVisionConnected}
+        bind:cameraId
+        bind:aiClass
+        bind:activityFilter
+        bind:minMotionScore
+        bind:searchQuery
+        {cameras}
+        onClear={clearFilters}
+      />
 
       <!-- ── Calendar view (always visible) ── -->
       <CalendarView bind:currentMonth bind:selectedDate days={calendarSummary} />
@@ -1535,55 +1443,17 @@ $effect(() => {
 </div>
 
 <!-- ── Floating batch action bar ── -->
-{#if selectedIds.size > 0}
-  <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-lg shadow-lg border th-border th-bg-primary">
-    <span class="text-sm font-medium th-text-primary">
-      {t('recordings.selected', { count: String(selectedIds.size) })}
-    </span>
-    <button
-      onclick={() => showBatchDeleteConfirm = true}
-      class="btn btn-danger btn-sm"
-    >
-      {t('recordings.deleteSelected')}
-    </button>
-    {#if transcodingStatus?.enabled}
-      <button
-        onclick={handleBatchTranscode}
-        class="btn btn-primary btn-sm"
-      >
-        {t('transcoding.transcode_selected')}
-      </button>
-    {/if}
-    {#if showBatchMergeButton}
-      <select
-        class="input input-sm w-auto"
-        bind:value={batchMergeDuration}
-        disabled={batchMerging}
-      >
-        <option value="1h">{t('timelapse.mergeDuration1h')}</option>
-        <option value="8h">{t('timelapse.mergeDuration8h')}</option>
-        <option value="12h">{t('timelapse.mergeDuration12h')}</option>
-        <option value="24h">{t('timelapse.mergeDuration24h')}</option>
-        <option value="natural-day">{t('timelapse.mergeDurationNaturalDay')}</option>
-        <option value="7d">{t('timelapse.mergeDuration7d')}</option>
-        <option value="30d">{t('timelapse.mergeDuration30d')}</option>
-      </select>
-      <button
-        onclick={handleBatchMerge}
-        class="btn btn-primary btn-sm"
-        disabled={batchMerging}
-      >
-        {t('timelapse.batchMerge')}
-      </button>
-    {/if}
-    <button
-      onclick={() => selectedIds = new Set()}
-      class="btn btn-ghost btn-sm"
-    >
-      {t('recordings.cancel')}
-    </button>
-  </div>
-{/if}
+<BatchActionBar
+  count={selectedIds.size}
+  transcodingEnabled={!!transcodingStatus?.enabled}
+  showMergeButton={showBatchMergeButton}
+  merging={batchMerging}
+  bind:mergeDuration={batchMergeDuration}
+  onDelete={() => (showBatchDeleteConfirm = true)}
+  onTranscode={handleBatchTranscode}
+  onMerge={handleBatchMerge}
+  onCancel={() => (selectedIds = new Set())}
+/>
 
 <!-- ── Batch delete confirmation modal ── -->
 {#if showBatchDeleteConfirm}

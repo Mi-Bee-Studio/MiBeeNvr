@@ -36,6 +36,10 @@ const startupBringupConcurrency = 4
 
 // Start creates and starts recorders for all enabled cameras in the config.
 // If a single camera fails to start, it logs the error and continues with the rest.
+// Name returns the service identifier used by pkg/app.App.
+// *CameraManager satisfies pkg/app.Service via Name + Start + Stop.
+func (cm *CameraManager) Name() string { return "camera" }
+
 func (cm *CameraManager) Start(ctx context.Context) error {
 	// Serialized against Stop: app wiring launches Start detached, so a Stop
 	// racing an in-flight Start would tear down state the registration is

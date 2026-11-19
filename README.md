@@ -158,7 +158,7 @@ Version numbers, configuration syntax, and CLI flags are authoritative **only** 
 2. Web SPA: Node 22, `cd web && npm run build && npm run test`
 3. Write clear commit messages
 
-Project layout — `cmd/mibee-nvr/` CLI entry, `internal/` core packages, `web/` Svelte 5 SPA, `deploy/` service files, `docs/` bilingual documentation, `tests/` + `e2e-tests/` integration and Playwright tests. Details in the [architecture overview](docs/en/architecture.md).
+Project layout — `cmd/mibee-nvr/` CLI entry, `internal/` core packages, `web/` Svelte 5 SPA, `deploy/` service files, `docs/` bilingual documentation, `tests/` cross-package integration tests. Details in the [architecture overview](docs/en/architecture.md).
 
 Thanks to everyone who has contributed:
 

@@ -350,3 +350,88 @@ func TestDiscoverByStableID_GetDeviceInfoPathStillWorks(t *testing.T) {
 	}
 	mustEqual(t, res.NewHost, "192.0.2.50", "legacy UUID-path match host")
 }
+
+// #58: a re-leased DHCP address is usually numerically near the old one, so
+// within the camera's own subnet the near neighbours must be probed before
+// the bottom of the range. (Which physical subnets exist varies per host —
+// assert relative order inside the .63 block, not absolute positions.)
+func TestBuildCandidates_NearestHostsFirst(t *testing.T) {
+	cam := config.CameraConfig{
+		ID:            "c",
+		ONVIFEndpoint: "http://192.168.63.238:8080/onvif/device_service",
+		SubnetHints:   []string{"192.168.63.0/24"},
+	}
+	got := buildCandidates(cam)
+
+	// The last-known host itself leads.
+	mustEqual(t, got[0], "192.168.63.238", "last-known host first")
+
+	pos := make(map[string]int, len(got))
+	for i, h := range got {
+		if _, seen := pos[h]; !seen {
+			pos[h] = i
+		}
+	}
+	// Distance order inside the .63 block: near neighbours before .1.
+	for _, near := range []string{"192.168.63.237", "192.168.63.239", "192.168.63.236"} {
+		if pos[near] > pos["192.168.63.1"] {
+			t.Fatalf("neighbour %s must come before .1 (positions %d vs %d)", near, pos[near], pos["192.168.63.1"])
+		}
+	}
+	// And the far end of the range must sort after the near neighbours.
+	if pos["192.168.63.150"] < pos["192.168.63.237"] {
+		t.Fatalf(".150 must sort after .237: %d < %d", pos["192.168.63.150"], pos["192.168.63.237"])
+	}
+}
+
+// #58: successive scans must sweep different slices, so a candidate set larger
+// than one scan's budget is fully covered after a few rotations.
+func TestRotated_CoversWholeSetAcrossScans(t *testing.T) {
+	e := NewEngineWithConfirm(Config{
+		MaxParallel:  4,
+		ProbeTimeout: 1 * time.Second,
+		MaxDuration:  4 * time.Second, // reach = 4 waves × 4 = 16 hosts
+	}, nil, nil)
+
+	cands := make([]string, 40)
+	for i := range cands {
+		cands[i] = "192.0.2." + itoaSimple(i+1)
+	}
+
+	seen := map[string]bool{}
+	scans := 0
+	for len(seen) < len(cands) && scans < 10 {
+		for _, h := range e.rotated("cam-x", cands) {
+			seen[h] = true
+		}
+		scans++
+	}
+	mustEqual(t, len(seen), len(cands), "all candidates covered within a few rotations")
+	if scans > 4 {
+		t.Fatalf("expected full coverage in ≤4 scans (40 hosts / 16 reach), took %d", scans)
+	}
+}
+
+// rotate must be a pure logical rotation: same length, same members.
+func TestRotated_PreservesMembers(t *testing.T) {
+	e := NewEngineWithConfirm(Config{MaxParallel: 1, ProbeTimeout: time.Second, MaxDuration: time.Second}, nil, nil)
+	cands := []string{"a", "b", "c", "d"}
+	_ = e.rotated("cam-y", cands) // advance cursor to 1
+	out := e.rotated("cam-y", cands)
+	mustEqual(t, len(out), len(cands), "rotation keeps length")
+	if out[0] != "b" {
+		t.Fatalf("expected rotation to start at b, got %v", out)
+	}
+}
+
+func itoaSimple(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
+}

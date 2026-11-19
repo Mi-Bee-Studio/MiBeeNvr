@@ -130,7 +130,7 @@ func (a *App) RegisterValue(name string, v any) error {
 // Value returns the value registered under name, or nil if not registered.
 // The caller is expected to type-assert:
 //
-//	m := a.Value("camera-manager").(camera.Manager)
+//	m := a.Value("camera-manager").(*camera.CameraManager)
 func (a *App) Value(name string) any {
 	a.mu.Lock()
 	defer a.mu.Unlock()

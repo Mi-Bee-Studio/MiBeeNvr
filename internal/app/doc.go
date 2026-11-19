@@ -24,8 +24,8 @@
 //
 //	a, err := app.RunFree(cfg, configPath)
 //	if err != nil { return err }
-//	camMgr := a.Value("camera-manager").(camera.Manager)
-//	bus := a.Value("eventbus").(eventbus.Bus)
+//	camMgr := a.Value("camera-manager").(*camera.CameraManager)
+//	bus := a.Value("eventbus").(*event.EventBus)
 //	extSvc := myextension.New(camMgr, bus)
 //	if err := a.Register(extSvc); err != nil { return err }
 //	if err := a.Start(ctx); err != nil { return err }

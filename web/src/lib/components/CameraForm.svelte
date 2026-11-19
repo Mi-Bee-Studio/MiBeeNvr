@@ -1,5 +1,7 @@
 <script lang="ts">
     import { t } from '$lib/i18n';
+  import { parseSubnetHints, profileOptionLabel, fmtSkew } from '$lib/camera-form-helpers';
+  import RecordingPolicyFields from '$lib/components/camera-form/RecordingPolicyFields.svelte';
     import { friendlyError } from '$lib/errors';
     import { buildTranscodingPayload } from '$lib/camera-form-payload';
     import {
@@ -321,22 +323,6 @@ let validationErrors = $state<Record<string, string>>({});
       mergeConfigLoading = false;
     }
   });
-
-  // Parse the subnet-hints textarea into a clean CIDR list (one per line,
-  // whitespace/comma tolerant, blanks dropped). The backend validates each as a
-  // CIDR; /24-or-smaller only (the rediscovery scanner rejects wider ranges).
-  function parseSubnetHints(text: string): string[] | undefined {
-    const parts = text.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0);
-    return parts.length > 0 ? parts : undefined;
-  }
-
-  // Label one media profile in the main-profile picker: name (or token),
-  // resolution and codec — the dimensions are what distinguishes a thermal
-  // channel (384×288-class) from the visible-light main stream.
-  function profileOptionLabel(p: DeviceProfileOption): string {
-    const dims = p.width && p.height ? `${p.width}×${p.height}` : '';
-    return [p.name || p.token, dims, p.encoding || ''].filter(Boolean).join(' · ');
-  }
 
   function resetFormFields() {
     formName = '';
@@ -886,13 +872,6 @@ async function performCameraSave() {
     }
   }
 
-  function fmtSkew(seconds: number): string {
-    const abs = Math.abs(seconds);
-    if (abs >= 3600) return (seconds / 3600).toFixed(1) + ' h';
-    if (abs >= 60) return (seconds / 60).toFixed(1) + ' min';
-    return seconds.toFixed(1) + ' s';
-  }
-
 </script>
 <div class="card p-6 border th-border">
   <h3 class="text-lg font-semibold th-text-primary mb-4">
@@ -1017,88 +996,37 @@ async function performCameraSave() {
       bind:formGB28181DeviceID bind:formGB28181ChannelID bind:formStreamKey
       bind:formSRTPassphrase bind:formSRTStreamID bind:formPushRetentionDays />
 
-    <!-- Recording toggle: when off, the camera is live-only (no segments on disk) -->
-    <div class="flex items-center gap-2">
-      <input
-        id="cam-recording"
-        type="checkbox"
-        class="checkbox"
-        bind:checked={formRecordingEnabled}
-      />
-      <label for="cam-recording" class="input-label cursor-pointer">
-        {t('cameras.recordingEnabled')}
-      </label>
-    </div>
-      {#if formProtocol === 'onvif'}
-        <!-- Motion source (#711): NVR-side detectors or the camera's own
-             Pull-Point MotionAlarm subscription (mibee_cam WiFi-CSI). -->
-        <div>
-          <label for="cam-motion-source" class="input-label">{t('cameras.motionSource')}</label>
-          <select id="cam-motion-source" class="input" bind:value={formMotionSource}>
-            <option value="nvr">{t('cameras.motionSourceNvr')}</option>
-            <option value="camera:onvif">{t('cameras.motionSourceCamera')}</option>
-          </select>
-          <p class="text-xs th-text-muted mt-1">
-            {formMotionSource === 'camera:onvif' ? t('cameras.motionSourceCameraHint') : t('cameras.motionSourceNvrHint')}
-          </p>
-          {#if formMotionSource === 'camera:onvif' && editingCamera}
-            <MotionSubscriptionStatus cameraId={editingCamera.id} />
-          {/if}
-        </div>
-      {/if}
-    {#if !formRecordingEnabled}
-      <p class="text-xs th-text-muted -mt-1">{t('cameras.recordingDisabledHint')}</p>
-    {:else if formEncoding === 'h264' || formEncoding === 'h265'}
-      <AdaptiveRecordingFields {formProtocol}
-        bind:formRecordingMode bind:formRecordingTier bind:formAdaptiveCalmThreshold
-        bind:formAdaptiveTimelapseInterval bind:formAdaptiveSpikeFactor bind:formAdaptiveGopBufferMB
-        bind:formNoiseFloorKB bind:formAutoNoiseFloor bind:formVideoExit bind:formTimelapseFrameMs
-        bind:formAudioTriggerEnabled bind:formAudioMinDBFS bind:formAudioPreCaptureS
-        bind:formPixgateEnabled bind:formPixgateFPS bind:formPixgateMinArea bind:formPixgateHold
-        bind:formAmbientAudio bind:formAmbientArchive />
-      {#if formImagingType === 'thermal' && formRecordingMode === 'adaptive'}
-        <p class="text-xs th-color-warning -mt-1">{t('cameras.thermalAdaptiveWarn')}</p>
-      {/if}
-    {/if}
-
-    <!-- Cascade catalog toggle: when off, the camera is hidden from the
-         GB28181 cascade upper platform (catalog + INVITE). Non-GB sources
-         start off — they only play upstream while this camera is recording. -->
-    <div class="flex items-center gap-2">
-      <input
-        id="cam-cascade"
-        type="checkbox"
-        class="checkbox"
-        bind:checked={formCascadeEnabled}
-        onchange={() => (formCascadeTouched = true)}
-      />
-      <label for="cam-cascade" class="input-label cursor-pointer">
-        {t('cameras.cascadeEnabled')}
-      </label>
-    </div>
-    {#if !formCascadeEnabled}
-      <p class="text-xs th-text-muted -mt-1">{t('cameras.cascadeDisabledHint')}</p>
-    {:else if formProtocol !== 'gb28181' && !isAudioSource}
-      <p class="text-xs th-text-muted -mt-1">{t('cameras.cascadeNonGBHint')}</p>
-    {/if}
-    {#if formCascadeEnabled && !isAudioSource}
-      <!-- Sub-stream forwarding is video-only; audio channels keep just the
-           catalog-exposure toggle above. -->
-      <div class="flex items-center gap-2 ml-5">
-        <input
-          id="cam-cascade-sub"
-          type="checkbox"
-          class="checkbox"
-          bind:checked={formCascadeSubStream}
-        />
-        <label for="cam-cascade-sub" class="input-label cursor-pointer text-sm">
-          {t('cameras.cascadeSubStream')}
-        </label>
-      </div>
-      {#if formCascadeSubStream}
-        <p class="text-xs th-text-muted -mt-1 ml-5">{t('cameras.cascadeSubStreamHint')}</p>
-      {/if}
-    {/if}
+    <RecordingPolicyFields
+      {formProtocol}
+      {formEncoding}
+      bind:formRecordingEnabled
+      bind:formMotionSource
+      bind:formRecordingMode
+      bind:formRecordingTier
+      bind:formAdaptiveCalmThreshold
+      bind:formAdaptiveTimelapseInterval
+      bind:formAdaptiveSpikeFactor
+      bind:formAdaptiveGopBufferMB
+      bind:formNoiseFloorKB
+      bind:formAutoNoiseFloor
+      bind:formVideoExit
+      bind:formTimelapseFrameMs
+      bind:formAudioTriggerEnabled
+      bind:formAudioMinDBFS
+      bind:formAudioPreCaptureS
+      bind:formPixgateEnabled
+      bind:formPixgateFPS
+      bind:formPixgateMinArea
+      bind:formPixgateHold
+      bind:formAmbientAudio
+      bind:formAmbientArchive
+      bind:formCascadeEnabled
+      bind:formCascadeSubStream
+      {formImagingType}
+      {isAudioSource}
+      {editingCamera}
+      onCascadeTouched={() => (formCascadeTouched = true)}
+    />
 
     <!-- Time sync (#time-sync): clock status + corrections; ONVIF + existing cameras only -->
     {#if formProtocol === 'onvif' && editingCamera}

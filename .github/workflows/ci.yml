@@ -138,7 +138,7 @@ jobs:
       # center syncs docs/{zh,en}/ and maps repo-relative links to site pages —
       # a renamed file silently turns them into 404s without this check.
       - name: Check docs relative links + zh/en parity
-        run: python3 scripts/check-docs-links.py
+        run: python3 devtools/check-docs-links.py
   build:
     runs-on: ubuntu-latest
     # Run in parallel with test — build validates compilation; test validates correctness.

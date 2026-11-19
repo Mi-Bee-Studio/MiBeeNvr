@@ -1,0 +1,92 @@
+name: repo-guard
+
+# Repository structure guards (docs/architecture/CONVENTIONS.md).
+# Cheap, dependency-free checks that catch drift the normal lint/test jobs
+# cannot see: forbidden root directories, oversized new files, and the
+# internal→pkg dependency inversion.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Forbidden root directories
+        run: |
+          set -eu
+          bad=""
+          for d in scripts tools dist dist2 tmp-probe web_embed pkg; do
+            # Only tracked directories matter: build/ and tmp-probe/ are
+            # gitignored local scratch and are not present on a clean checkout.
+            if git ls-files --error-unmatch "$d" >/dev/null 2>&1; then bad="$bad $d"; fi
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::Forbidden top-level directories present:$bad"
+            echo "See docs/architecture/CONVENTIONS.md §1. Use devtools/ for tooling;"
+            echo "build output belongs in build/ or internal/ui/static/ (both gitignored)."
+            exit 1
+          fi
+          echo "OK: no forbidden root directories"
+
+      - name: internal must not import pkg
+        run: |
+          set -eu
+          # Only the interface packages themselves may be imported from
+          # internal side once §4.3 lands; today this asserts the direction is
+          # not widened any further.
+          hits=$(grep -rn 'MiBeeNvr/pkg/' internal/ --include='*.go' | grep -v '_test.go' || true)
+          count=$(printf '%s' "$hits" | grep -c 'MiBeeNvr/pkg/' || true)
+          baseline=4
+          echo "internal→pkg import sites: $count (baseline $baseline)"
+          if [ "$count" -gt "$baseline" ]; then
+            echo "::error::New internal→pkg dependency added (CONVENTIONS §2/§5)."
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+          echo "OK: internal→pkg dependency count not increased"
+
+      - name: Changed Go files under 1200 lines
+        run: |
+          set -eu
+          base="${{ github.event.pull_request.base.sha || 'HEAD~1' }}"
+          head="${{ github.event.pull_request.head.sha || 'HEAD' }}"
+          files=$(git diff --name-only --diff-filter=AM "$base" "$head" -- '*.go' | grep -v '_test.go' || true)
+          [ -z "$files" ] && { echo "no changed Go files"; exit 0; }
+          fail=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            n=$(wc -l < "$f")
+            if [ "$n" -gt 1200 ]; then
+              echo "::error file=$f::file has $n lines (limit 1200, CONVENTIONS §3)"
+              fail=1
+            fi
+          done <<EOF2
+          $files
+          EOF2
+          exit $fail
+
+      - name: No private paths or secrets patterns
+        run: |
+          set -eu
+          # Guard against the historical docs/private/ pattern coming back and
+          # against literal internal addresses in tracked files.
+          fail=0
+          if git ls-files | grep -q '^docs/private/'; then
+            echo "::error::docs/private/ must stay out of the repo (CONVENTIONS §7)"
+            fail=1
+          fi
+          if git grep -nE '192\.168\.(63|62|1)\.[0-9]+' -- '*.go' '*.md' '*.ts' '*.svelte' \
+               ':!docs/architecture/*' 2>/dev/null | grep -vE 'EXAMPLE|192\.0\.2\.' | head -5; then
+            echo "::warning::internal addresses found in tracked sources — verify they are examples"
+          fi
+          exit $fail
