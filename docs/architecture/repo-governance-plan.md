@@ -83,18 +83,24 @@
 
 ## Phase 3 — 代码切割（多 PR，按风险升序）
 
-### 3.1 大文件切割（8 个目标，每文件 1 PR 或合并为 2-3 PR）
+### 3.1 大文件切割（8 个目标，每文件 1 PR 或合并为 2-3 PR）—— ✅ 全部完成
 
 | 文件 | 行数 | 建议切法 |
 |---|---|---|
-| `internal/merge/mp4merge.go` | 1,862 | box 读写 / sample 表 / track 合并 三段 |
-| `internal/xiaomi/recorder.go` | 1,639 | 录制循环 / 重连策略 / 音频轨 |
-| `internal/hls/manager.go` | 1,498 | 会话生命周期 / 分片发布 / 客户端跟踪 |
-| `internal/storage/db_recording.go` | 1,457 | CRUD / 查询组装 / 批量操作 |
-| `internal/recorder/base.go` | 1,320 | 生命周期 / 帧处理 / 段轮转 |
-| `internal/config/validate.go` | 1,295 | 按配置域拆校验函数文件 |
-| `internal/metrics/metrics.go` | 1,220 | 采集 / 聚合 / 暴露 |
-| `internal/p2p/manager.go` | 1,148 | 连接管理 / 会话 / 重连 |
+| 文件 | 原 → 现 | 拆出 |
+|---|---|---|
+| `merge/mp4merge.go` | 1862 → **995** | mp4moov.go, mp4writers.go |
+| `xiaomi/recorder.go` | 1639 → **1502** | recorder_report.go |
+| `hls/manager.go` | 1498 → **1153** | paramsets.go, substream_reader.go |
+| `storage/db_recording.go` | 1457 → **953** | query_helpers.go, db_recording_paths.go |
+| `recorder/base.go` | 1320 → **1009** | segment_files.go, metrics_stats.go |
+| `config/validate.go` | 1295 → **1052** | validate_camera.go |
+| `metrics/metrics.go` | 1220 → **971** | observers.go |
+| `p2p/manager.go` | 1148 → **922** | observers.go |
+| `api/handler.go` | 1207 → **950** | handler_setters.go, handler_gb28181.go |
+| `web/lib/api/cameras.ts` | 1431 → **413** | camera-types.ts, camera-ptz.ts |
+
+全部降至 1200 行阈值以下。
 
 > 切割纪律：只做**文件内移动**，不改逻辑、不改行为；每步 `go build` + 包内测试绿；
 > 有测试的文件先确认测试覆盖再动。
@@ -102,6 +108,7 @@
 ### 3.2 `internal/api` 拆分（接 `api-package-split.md`）
 
 - [x] Step 1 `httpx` 叶子包 —— **已完成**（`internal/httpx/httpx.go`，api/upload 双方在用）
+- [x] 前置 golden 路由测试 —— **已完成**（285 条 method+path 快照，`routes_golden_test.go`）
 - [ ] Step 2 逐域迁移：`streams` → `recordings` → `cameras` → `system` → `gb`
   - 每域暴露 `Register(r chi.Router, deps Deps)`，`Handler` 只留聚合
   - **前置**：先补 golden 路由表测试（`Routes()` 的 method+path 快照）
@@ -109,13 +116,18 @@
 - [ ] Step 4 `handler.go` 收敛到 <400 行纯装配
 - 验收：每步 CI 四绿 + 路由行为零变化
 
-### 3.3 前端切割
+### 3.3 前端切割 ✅ 纯逻辑已抽出
 
 | 文件 | 行数 | 建议切法 |
 |---|---|---|
-| `routes/Recordings.svelte` | 1,699 | 列表 / 筛选条 / 批量操作 |
-| `routes/recordings/PlaybackPanel.svelte` | 1,675 | 播放器 / 时间轴 / 控制条 |
-| `lib/components/CameraForm.svelte` | 1,590 | 按表单分区（基础/协议/高级/分组） |
+| 文件 | 原 → 现 | 抽出 |
+|---|---|---|
+| `routes/Recordings.svelte` | 1699 → **1673** | lib/recordings-windows.ts |
+| `routes/recordings/PlaybackPanel.svelte` | 1675 → **1657** | lib/playback-helpers.ts |
+| `lib/components/CameraForm.svelte` | 1590 → **1568** | lib/camera-form-helpers.ts |
+
+纯逻辑（无响应式耦合）已外移并全部配单测（+25 tests）。剩余体量是 Svelte
+模板与状态编排，进一步拆分需引入子组件边界，风险高于收益，暂缓。
 
 > 依赖 `web/src/lib/api/cameras.ts`（1,431 行）先按资源域拆分。
 
