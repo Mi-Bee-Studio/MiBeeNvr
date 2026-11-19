@@ -1,0 +1,852 @@
+package storage
+
+// Segment file allocation and lifecycle on Manager: creating temp/final paths
+// for a camera segment, tracking active temps and the accounting that keeps
+// disk pressure visible. Split out of manager.go.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
+)
+
+// CreateSegment creates a new recording segment.
+// For format "h264": creates a .tmp file for writing MP4 data.
+// For formats "mjpeg" and "timelapse": creates a .tmp directory for writing JPEG frames.
+// Returns the temp path (for writing) and the suggested final path (for CloseSegment).
+func (m *Manager) CreateSegment(cameraID string, format string) (tempPath string, finalPath string, err error) {
+	if err := m.EnsureCameraDir(cameraID); err != nil {
+		m.recordWriteFailure(cameraID)
+		return "", "", err
+	}
+
+	now := time.Now()
+	// Time-bucketed layout: cameraID/YYYYMM/DD/HH/segment.mp4
+	// Reduces per-directory file count from thousands (flat layout) to
+	// ~120/hour, dramatically improving ext4 readdir/stat performance on
+	// slow USB HDD storage. Old flat-layout files coexist until naturally
+	// aged out by retention.
+	hourDir := filepath.Join(m.RootFor(cameraID), cameraID, now.Format("200601"), now.Format("02"), now.Format("15"))
+	if err := os.MkdirAll(hourDir, 0o755); err != nil {
+		m.recordWriteFailure(cameraID)
+		return "", "", fmt.Errorf("storage: failed to create hour bucket dir: %w", err)
+	}
+	ts := now.Format("20060102_150405")
+	uuid := strconv.FormatInt(now.UnixNano(), 10)
+
+	switch strings.ToLower(format) {
+	case "h264", "h265", "audio":
+		// "audio" = audio-only source device segments: same single-file MP4
+		// shape as h264/h265 (the muxer writes one audio track, no video).
+		tempPath = filepath.Join(hourDir, uuid+".tmp")
+		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s.mp4", cameraID, ts, uuid))
+		// Register BEFORE the file exists: the startup temp-cleanup scan
+		// must never observe an unregistered in-flight segment. Registration
+		// happens-before creation, so once the .tmp is visible on disk it is
+		// already protected (2026-09-08 incident: the scan deleted an active
+		// segment temp mid-write).
+		m.registerTempPath(tempPath, cameraID)
+		m.registerWriterState(tempPath, cameraID, false)
+		f, err := os.Create(tempPath)
+		if err != nil {
+			m.recordWriteFailure(cameraID)
+			m.unregisterTempPath(tempPath)
+			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)
+		}
+		f.Close()
+
+	case "mjpeg", "timelapse":
+		tempPath = filepath.Join(hourDir, uuid+".tmp")
+		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s", cameraID, ts, uuid))
+
+		m.registerTempPath(tempPath, cameraID)
+		m.registerWriterState(tempPath, cameraID, true)
+		if err := os.MkdirAll(tempPath, 0o755); err != nil {
+			m.recordWriteFailure(cameraID)
+			m.unregisterTempPath(tempPath)
+			return "", "", fmt.Errorf("storage: failed to create temp dir: %w", err)
+		}
+
+	case "avi":
+		tempPath = filepath.Join(hourDir, uuid+".tmp")
+		finalPath = filepath.Join(hourDir, fmt.Sprintf("%s_%s_%s.avi", cameraID, ts, uuid))
+		m.registerTempPath(tempPath, cameraID)
+		m.registerWriterState(tempPath, cameraID, false)
+		f, err := os.Create(tempPath)
+		if err != nil {
+			m.recordWriteFailure(cameraID)
+			m.unregisterTempPath(tempPath)
+			return "", "", fmt.Errorf("storage: failed to create temp file: %w", err)
+		}
+		f.Close()
+	default:
+		return "", "", fmt.Errorf("storage: unsupported format %q", format)
+	}
+
+	return tempPath, finalPath, nil
+}
+
+// RegisterActiveTemp marks tempPath as an in-flight segment owned by
+// cameraID, protecting it from CleanupTempFiles. For temps created via
+// CreateSegment this happens automatically; writers that create their own
+// .tmp files under cam-* trees (e.g. tierrec) must call this themselves for
+// the segment's whole open→finalize window.
+func (m *Manager) RegisterActiveTemp(tempPath, cameraID string) {
+	m.registerTempPath(tempPath, cameraID)
+}
+
+// UnregisterActiveTemp releases the protection granted by RegisterActiveTemp
+// (or CreateSegment) — call once the segment's fate is sealed (renamed to
+// final, or removed).
+func (m *Manager) UnregisterActiveTemp(tempPath string) {
+	m.unregisterTempPath(tempPath)
+}
+
+// registerTempPath records the tempPath → cameraID mapping for health
+// tracking and cleanup protection.
+func (m *Manager) registerTempPath(tempPath, cameraID string) {
+	m.segMapMu.Lock()
+	m.segmentCameraMap[tempPath] = cameraID
+	m.segMapMu.Unlock()
+}
+
+// isActiveTemp reports whether tempPath belongs to an in-flight segment.
+func (m *Manager) isActiveTemp(tempPath string) bool {
+	m.segMapMu.RLock()
+	_, ok := m.segmentCameraMap[tempPath]
+	m.segMapMu.RUnlock()
+	return ok
+}
+
+// recordFinalizeFailure feeds a finalize-path error into health tracking —
+// unless the temp segment simply vanished. A missing .tmp is a stale-segment
+// cleanup or restart-window artifact, not an I/O error: counting it escalates
+// a healthy camera to Failed on every restart, and the recorders' skip-before-
+// write behavior then blocks the successful write that would reset the state,
+// deadlocking the camera out of recording until the process restarts.
+func (m *Manager) recordFinalizeFailure(tempPath string, err error) {
+	if errors.Is(err, fs.ErrNotExist) {
+		slog.Warn("storage: temp segment vanished before finalize — segment lost, storage healthy",
+			"path", tempPath)
+		return
+	}
+	m.RecordWriteFailureForPath(tempPath)
+}
+
+// CloseSegment atomically finalizes a segment by syncing and renaming .tmp to final path.
+// Segments with writer state (#750) finalize through the retained FD — any
+// coalesced bytes are flushed first; segments written through external
+// handles (the MP4 muxer, merge outputs) fall back to the reopen-and-sync
+// path, preserving the original behavior.
+func (m *Manager) CloseSegment(tempPath, finalPath string) error {
+	return m.closeSegment(tempPath, finalPath, m.durabilityRelaxed.Load())
+}
+
+// CloseSegmentMerged finalizes a MERGE/TIMELAPSE PRODUCT segment. These are
+// long-term assets (#760): they always fsync, regardless of the durability
+// tier — only raw rolling segments may opt into relaxed.
+func (m *Manager) CloseSegmentMerged(tempPath, finalPath string) error {
+	return m.closeSegment(tempPath, finalPath, false)
+}
+
+// SetDurability selects the raw-segment durability tier: "strict" (default)
+// or "relaxed" (skip proactive fsync; see docs — a power loss may drop the
+// last seconds of raw segments on flash media). Unknown values keep strict.
+func (m *Manager) SetDurability(tier string) {
+	if m == nil {
+		return
+	}
+	m.durabilityRelaxed.Store(tier == "relaxed")
+}
+
+// DurabilityRelaxed reports the current tier (observability/wiring tests).
+func (m *Manager) DurabilityRelaxed() bool {
+	if m == nil {
+		return false
+	}
+	return m.durabilityRelaxed.Load()
+}
+
+func (m *Manager) closeSegment(tempPath, finalPath string, relaxed bool) error {
+	st, serr := m.stateFor(tempPath)
+	if serr != nil {
+		// No state and classification failed (external temp that is already
+		// gone, or stat trouble) — identical to the pre-#750 behavior.
+		m.recordFinalizeFailure(tempPath, serr)
+		m.unregisterTempPath(tempPath)
+		return fmt.Errorf("storage: temp path not found: %w", serr)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	isDir := st.isDir
+
+	if isDir {
+		// Sync the directory for MJPEG (strict tier only — #760: relaxed
+		// leaves directory-entry persistence to the FS commit interval).
+		if !relaxed {
+			dirFd, err := os.Open(tempPath)
+			if err != nil {
+				m.recordFinalizeFailure(tempPath, err)
+				m.unregisterTempPath(tempPath)
+				return fmt.Errorf("storage: cannot open temp dir for sync: %w", err)
+			}
+			if err := syncFileFn(dirFd); err != nil {
+				dirFd.Close()
+				m.RecordWriteFailureForPath(tempPath)
+				return fmt.Errorf("storage: failed to sync temp dir: %w", err)
+			}
+			dirFd.Close()
+		}
+
+		// Atomic rename of directory
+		if err := os.Rename(tempPath, finalPath); err != nil {
+			m.RecordWriteFailureForPath(tempPath)
+			m.unregisterTempPath(tempPath)
+			return fmt.Errorf("storage: failed to rename temp dir to final: %w", err)
+		}
+	} else {
+		// File form: finalize the retained FD when this segment wrote through
+		// WriteFrame (flushes the coalescing buffer); otherwise reopen-and-sync
+		// for externally written temps (muxer/merge outputs already closed
+		// their own handles before calling CloseSegment).
+		if st == nil || st.file == nil {
+			if !relaxed {
+				f, err := openFileFn(tempPath, os.O_WRONLY, 0)
+				if err != nil {
+					m.recordFinalizeFailure(tempPath, err)
+					m.unregisterTempPath(tempPath)
+					return fmt.Errorf("storage: cannot open temp file for sync: %w", err)
+				}
+				if err := syncFileFn(f); err != nil {
+					f.Close()
+					m.RecordWriteFailureForPath(tempPath)
+					return fmt.Errorf("storage: failed to sync temp file: %w", err)
+				}
+				f.Close()
+			}
+		} else if err := st.finalize(relaxed); err != nil {
+			m.RecordWriteFailureForPath(tempPath)
+			return fmt.Errorf("storage: failed to finalize temp file: %w", err)
+		}
+
+		// Atomic rename
+		if err := os.Rename(tempPath, finalPath); err != nil {
+			m.RecordWriteFailureForPath(tempPath)
+			m.unregisterTempPath(tempPath)
+			return fmt.Errorf("storage: failed to rename temp file to final: %w", err)
+		}
+	}
+
+	// Success — unregister mapping (also drops the writer state).
+	m.unregisterTempPath(tempPath)
+	return nil
+}
+
+// WriteFrame writes data to a segment's temp path.
+// For H.264/AVI: appends data through the segment's coalescing buffer (#750).
+// For MJPEG: creates a timestamped .jpg file in the temp directory.
+//
+// Classification and camera attribution come from the per-segment writer
+// state (registered at CreateSegment, or classified once lazily) — no
+// per-frame stat or path→camera map lookup. Locking is per segment, so
+// cameras do not serialize through a global mutex.
+func (m *Manager) WriteFrame(tempPath string, data []byte) (int, error) {
+	st, serr := m.stateFor(tempPath)
+	if serr != nil {
+		// Classification stat failed. A vanished temp is a rotation/cleanup
+		// artifact, not an I/O error — counting it escalates a healthy camera
+		// to Failed and the skip-before-write recorders then never record the
+		// successful write that would reset the state (#413). Anything else
+		// (permissions, EIO) is a real failure.
+		if errors.Is(serr, fs.ErrNotExist) {
+			slog.Warn("storage: temp segment vanished before write — frame dropped, storage healthy",
+				"path", tempPath)
+			return 0, fmt.Errorf("storage: temp path not accessible: %w", serr)
+		}
+		m.recordWriteFailure(m.lookupCameraByPath(tempPath))
+		return 0, fmt.Errorf("storage: temp path not accessible: %w", serr)
+	}
+
+	n, err := st.writeFrame(data)
+	if err != nil {
+		// A vanished temp (or a write racing segment finalize) is a
+		// rotation/cleanup artifact, not an I/O error — same rationale
+		// as the classification gate above (#413).
+		if errors.Is(err, fs.ErrNotExist) {
+			slog.Warn("storage: temp segment vanished before write — frame dropped, storage healthy",
+				"path", tempPath)
+			m.dropWriterState(tempPath)
+			return n, err
+		}
+		m.recordWriteFailure(st.cameraID)
+		return n, err
+	}
+
+	m.recordWriteSuccess(st.cameraID)
+	return n, nil
+}
+
+// unregisterTempPath removes the tempPath → cameraID mapping and drops the
+// per-segment writer state. The retained-FD close is a backstop: CloseSegment
+// (which holds the state lock while finalizing) normally closed it already,
+// hence the try-lock — a contended state is being finalized by its holder.
+// Safe for concurrent use.
+func (m *Manager) unregisterTempPath(tempPath string) {
+	m.segMapMu.Lock()
+	delete(m.segmentCameraMap, tempPath)
+	m.segMapMu.Unlock()
+
+	if st := m.peekWriterState(tempPath); st != nil && st.mu.TryLock() {
+		st.releaseLocked()
+		st.mu.Unlock()
+	}
+	m.dropWriterState(tempPath)
+}
+
+// peekWriterState returns the state without creating one (nil if absent).
+func (m *Manager) peekWriterState(tempPath string) *segmentWriter {
+	m.statesMu.RLock()
+	defer m.statesMu.RUnlock()
+	return m.segmentStates[tempPath]
+}
+
+// ListFiles lists all recording files (non-.tmp) for a camera.
+func (m *Manager) ListFiles(cameraID string) ([]string, error) {
+	cameraDir := filepath.Join(m.currentRoot(), cameraID)
+
+	// Return an explicit error for a nonexistent camera directory —
+	// filepath.WalkDir would otherwise silently return an empty result.
+	if _, statErr := os.Stat(cameraDir); statErr != nil {
+		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraDir, statErr)
+	}
+
+	var files []string
+	err := filepath.WalkDir(cameraDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // skip inaccessible entries
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		// Skip temp files and hidden files
+		if strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".") {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: cannot walk camera dir %q: %w", cameraDir, err)
+	}
+	return files, nil
+}
+
+// ListSegments lists all recording segment entries for a camera. Unlike
+// ListFiles (which returns only leaf files — e.g. the individual .jpg frames
+// inside an MJPEG segment directory), ListSegments returns one entry per
+// segment: directories for MJPEG/timelapse recordings, files (.mp4/.avi) for
+// H.264/H.265/AVI recordings. Temp (.tmp) and hidden entries are skipped.
+//
+// Use this (not ListFiles) when you need to count or inspect segments — the
+// segment directory IS the unit of a recording segment, regardless of format.
+func (m *Manager) ListSegments(cameraID string) ([]string, error) {
+	cameraDir := filepath.Join(m.currentRoot(), cameraID)
+
+	// Return an explicit error for a nonexistent camera directory —
+	// filepath.WalkDir would otherwise silently return an empty result.
+	if _, statErr := os.Stat(cameraDir); statErr != nil {
+		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraDir, statErr)
+	}
+
+	var segments []string
+	err := filepath.WalkDir(cameraDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // skip inaccessible entries
+		}
+		// Skip temp and hidden entries at any level.
+		name := d.Name()
+		if strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		// A segment entry is either:
+		//   - a directory whose name matches the MJPEG/timelapse segment pattern
+		//     "{cameraID}_{timestamp}_{uuid}" (no extension), OR
+		//   - a file whose name matches the mp4/avi segment pattern
+		//     "{cameraID}_{timestamp}_{uuid}.{ext}".
+		// Both contain an underscore-delimited timestamp + uuid. The recording
+		// tree is YYYYMM/DD/HH/<segment>, so segments live exactly three levels
+		// below the camera dir. We detect them by the naming pattern rather than
+		// by depth so this stays robust to tree-layout changes.
+		if isSegmentEntry(name) {
+			segments = append(segments, path)
+			if d.IsDir() {
+				return filepath.SkipDir // don't descend into the segment dir
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: cannot walk camera dir %q: %w", cameraDir, err)
+	}
+	return segments, nil
+}
+
+// isSegmentEntry reports whether name looks like a recording segment entry
+// (MJPEG/timelapse dir or mp4/avi file). It matches the segment naming pattern
+// produced by CreateSegment: "{cameraID}_{timestamp}_{uuid}" optionally with an
+// extension. This is intentionally a structural check (≥2 underscores, the
+// middle field parses as digits) rather than a strict format match, so it
+// tolerates cameraID characters and uuid variations.
+func isSegmentEntry(name string) bool {
+	// Must have at least the {cameraID}_{ts}_{uuid} shape → ≥2 underscores.
+	first := strings.IndexByte(name, '_')
+	if first < 0 {
+		return false
+	}
+	rest := name[first+1:]
+	second := strings.IndexByte(rest, '_')
+	if second < 0 {
+		return false
+	}
+	// The timestamp field (between the first two underscores) should be all digits.
+	ts := rest[:second]
+	if len(ts) == 0 {
+		return false
+	}
+	for i := range ts {
+		if ts[i] < '0' || ts[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ListCameraDirEntries returns all entries in a camera's storage directory.
+func (m *Manager) ListCameraDirEntries(cameraID string) ([]os.DirEntry, error) {
+	cameraDir := filepath.Join(m.currentRoot(), cameraID)
+	entries, err := os.ReadDir(cameraDir)
+	if err != nil {
+		return nil, fmt.Errorf("storage: cannot read camera dir %q: %w", cameraID, err)
+	}
+	return entries, nil
+}
+
+// GetFileSize returns the size of a file in bytes.
+func (m *Manager) GetFileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("storage: cannot stat %q: %w", path, err)
+	}
+	return info.Size(), nil
+}
+
+// DeleteFile removes a file or directory from disk.
+// For directory-based recordings (MJPEG, timelapse), it uses os.RemoveAll.
+func (m *Manager) DeleteFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("storage: failed to stat %q: %w", path, err)
+	}
+	if info.IsDir() {
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("storage: failed to remove directory %q: %w", path, err)
+		}
+	} else {
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("storage: failed to delete %q: %w", path, err)
+		}
+		// VOD playback-plan sidecar (suffix contract with internal/vod/sidecar.go):
+		// deleting a recording MP4 must reclaim its .vodidx too, or these tiny
+		// index files accumulate as orphans no scanner ever reaches (every
+		// delete path — API, batch, archive, cleanup, merge source reclaim —
+		// funnels through here). Best-effort: a missing sidecar is fine.
+		_ = os.Remove(path + ".vodidx") // best-effort sidecar reclaim
+	}
+	return nil
+}
+
+// DeleteCameraDir removes the entire directory for a camera.
+func (m *Manager) DeleteCameraDir(cameraID string) error {
+	// A camera may have recorded on several roots over its lifetime —
+	// remove its directory from every active root.
+	for _, root := range m.Roots() {
+		dir := filepath.Join(root, cameraID)
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("storage: failed to remove camera dir %q: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// GetDiskUsage returns total and used disk space for the filesystem containing rootDir.
+func (m *Manager) GetDiskUsage() (total int64, used int64, err error) {
+	var free int64
+	total, free, err = statfsFree(m.currentRoot())
+	if err != nil {
+		return 0, 0, fmt.Errorf("storage: failed to stat filesystem: %w", err)
+	}
+	// Used = total - free
+	used = total - free
+
+	if m.metrics != nil {
+		m.metrics.StorageUsedBytes.Set(float64(used))
+		m.metrics.StorageTotalBytes.Set(float64(total))
+	}
+
+	return total, used, nil
+}
+
+// IsAvailable checks whether the root directory is accessible.
+func (m *Manager) IsAvailable() bool {
+	_, err := os.Stat(m.currentRoot())
+	return err == nil
+}
+
+// CleanupTempFiles removes all orphaned .tmp files and directories left by
+// crashed segment writes. Temp segments are only ever created under
+// <root>/cam-xxx/YYYY/MM/DD/HH/{uuid}.tmp (see CreateSegment), so this scan is
+// scoped to cam-* subtrees only — it skips hls/, recordings/, bin/, certs/,
+// database files, and any other non-camera content at the root. This keeps the
+// scan bounded: on a production tree with 100k+ files it avoids walking the
+// HLS shard directories entirely.
+//
+// Active in-flight segments (registered via CreateSegment or
+// RegisterActiveTemp) are never touched: the scan runs concurrently with
+// recording, and deleting a live temp loses the whole segment — the final
+// rename then fails and the recorder's DB row becomes a permanent 404 entry
+// (2026-09-08 production incident). Registration happens-before file
+// creation, so any .tmp visible on disk without a registration is a genuine
+// crash leftover.
+//
+// The registry only covers writers in THIS process. External tools (repair
+// mjpeg-containerize writes <seg>.avi.tmp under cam-* trees) cannot
+// register; a service restart mid-write raced their tmp between fsync and
+// reopen (#803, 2026-09-14 production: service start 13:30:27 == neighbor
+// .avi mtimes ±4s). Entries younger than 1h are therefore spared — same rail
+// as both orphan scans — costing nothing for the crash-leftover purpose,
+// since leftovers are old by the time any startup scan sees them.
+//
+// Callers that don't need the result immediately should run it in a
+// goroutine to avoid blocking startup.
+func (m *Manager) CleanupTempFiles() error {
+	var firstErr error
+	for _, root := range m.Roots() {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			logger.Warn("temp cleanup: cannot read root", "root", root, "error", err)
+			continue
+		}
+		for _, entry := range entries {
+			// Only descend into camera directories (prefix "cam-"). Everything else
+			// at the root (hls/, recordings/, bin/, certs/, *.db, config files,
+			// top-level *.tmp backups, etc.) is out of scope for segment cleanup.
+			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "cam-") {
+				continue
+			}
+			camDir := filepath.Join(root, entry.Name())
+			if err := filepath.WalkDir(camDir, func(path string, d os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return nil // skip inaccessible entries
+				}
+				if !d.IsDir() {
+					if strings.HasSuffix(d.Name(), ".tmp") {
+						if m.isActiveTemp(path) {
+							return nil // in-flight segment — protected
+						}
+						if youngTmp(d) {
+							return nil // possible external writer's in-flight temp (#803)
+						}
+						if err := os.Remove(path); err != nil {
+							// Don't abort the whole walk on a single failure (file
+							// may be in use); record and continue.
+							logger.Warn("temp cleanup: failed to remove temp file", "path", path, "error", err)
+						}
+					}
+					return nil
+				}
+				// Don't remove the camera dir itself, and skip .tmp directories
+				if path == camDir {
+					return nil
+				}
+				if strings.HasSuffix(d.Name(), ".tmp") {
+					if m.isActiveTemp(path) {
+						return filepath.SkipDir // in-flight MJPEG/timelapse segment — protected
+					}
+					if youngTmp(d) {
+						return filepath.SkipDir // possible external writer's in-flight temp (#803)
+					}
+					if err := os.RemoveAll(path); err != nil {
+						logger.Warn("temp cleanup: failed to remove temp dir", "path", path, "error", err)
+					}
+					return filepath.SkipDir
+				}
+				return nil
+			}); err != nil {
+				logger.Warn("temp cleanup: walk error", "dir", camDir, "error", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+	}
+	return firstErr
+}
+
+// youngTmp reports whether a walk entry is a .tmp younger than the orphan
+// rail — possibly an external writer's in-flight temp rather than a crash
+// leftover (#803). Unreadable entries count as young (fail-safe: keep).
+func youngTmp(d os.DirEntry) bool {
+	info, err := d.Info()
+	if err != nil {
+		return true
+	}
+	return time.Since(info.ModTime()) < time.Hour
+}
+
+// ReconcileOrphanedFiles scans camera directories for .mp4 files that are not registered
+// in the database and inserts their metadata. Returns the number of reconciled files.
+// Uses per-camera incremental commits to avoid holding the write lock too long.
+// Context timeout is checked between camera directories.
+func (m *Manager) ReconcileOrphanedFiles(ctx context.Context, db *DB, cameraIDs map[string]bool) (int, error) {
+	skippedDirs := map[string]bool{"hls": true, "recordings": true, "logs": true, "backups": true, "bin": true}
+	totalReconciled := 0
+
+	for _, root := range m.Roots() {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			logger.Warn("reconcile: cannot read root", "root", root, "error", err)
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			dirName := entry.Name()
+			if skippedDirs[dirName] || !cameraIDs[dirName] {
+				continue
+			}
+
+			// Check context timeout between cameras
+			if ctx.Err() != nil {
+				return totalReconciled, ctx.Err()
+			}
+
+			reconciled, err := m.reconcileCameraDir(ctx, db, dirName)
+			if err != nil {
+				logger.Warn("reconcile: error processing camera dir", "dir", dirName, "error", err)
+				continue
+			}
+			totalReconciled += reconciled
+		}
+	}
+
+	if totalReconciled > 0 {
+		logger.Info("reconciled orphaned recording files", "count", totalReconciled)
+	}
+
+	return totalReconciled, nil
+}
+
+// recordingNameInfo holds the parsed fields of a recording file/dir name.
+// Populated by parseRecordingName when the name matches the canonical shape.
+type recordingNameInfo struct {
+	cameraID  string
+	startedAt time.Time
+	nanoID    string
+	// fileExt is "" for extension-less MJPEG dirs, ".mp4" or ".avi" for the
+	// single-file segment forms.
+	fileExt string
+}
+
+// parseRecordingName parses a cam-dir entry name into its recording fields,
+// without touching the disk. Returns ok=false if the name does not match the
+// canonical recording shape:
+//
+//	<camID>_YYYYMMDD_HHMMSS_<nano>        (MJPEG dir, no extension)
+//	<camID>_YYYYMMDD_HHMMSS_<nano>.mp4     (H264 file)
+//
+// This is the cheap name-shape gate used by reconcileCameraDir to skip
+// non-recording entries — most importantly date-bucket dirs ("202607/", "20/",
+// "07/") created by the segment writer — before paying for any stat or subtree
+// walk. Misclassifying a date dir as an MJPEG recording dir caused a production
+// 8.7GB / 6.5-minute IO storm because each date dir's entire subtree got walked.
+//
+// cameraIDHint, when non-empty, requires parts[0] == cameraIDHint (the parent
+// cam dir name); entries from other cameras are rejected. Pass "" to skip the
+// camera-ID check (only shape is validated).
+func parseRecordingName(name, cameraIDHint string) (recordingNameInfo, bool) {
+	// Recording file forms: .mp4 (H264/H265) and .avi (MJPEG/JPEG container,
+	// the #761 default). Extension-less names are MJPEG dir candidates.
+	fileExt := ""
+	switch {
+	case strings.HasSuffix(name, ".mp4"):
+		fileExt = ".mp4"
+	case strings.HasSuffix(name, ".avi"):
+		fileExt = ".avi"
+	case filepath.Ext(name) != "":
+		// Any other extension (.json, .tmp, ...) — not a recording name.
+		return recordingNameInfo{}, false
+	}
+	baseName := strings.TrimSuffix(name, fileExt)
+	parts := strings.SplitN(baseName, "_", 4)
+	if len(parts) != 4 {
+		return recordingNameInfo{}, false
+	}
+	if cameraIDHint != "" && parts[0] != cameraIDHint {
+		return recordingNameInfo{}, false
+	}
+	startedAt, err := time.ParseInLocation("20060102_150405", parts[1]+"_"+parts[2], time.Local)
+	if err != nil {
+		return recordingNameInfo{}, false
+	}
+	return recordingNameInfo{
+		cameraID:  parts[0],
+		startedAt: startedAt,
+		nanoID:    parts[3],
+		fileExt:   fileExt,
+	}, true
+}
+
+// reconcileCameraDir scans a single camera directory and inserts orphaned recordings.
+// Uses incremental batches of orphanBatchSize to minimize write lock duration.
+//
+// To avoid expensive disk IO on large trees, entry filtering is done in two
+// cheap phases BEFORE any stat or subtree walk, both encapsulated in
+// parseRecordingName:
+//  1. Name-shape gate: only entries shaped "<camID>_YYYYMMDD_HHMMSS_<nano>"
+//     (optionally suffixed with .mp4) are considered. This skips date bucket
+//     directories (e.g. "202607/", "20/", "07/") that the segment writer
+//     creates under each cam dir, as well as random unrelated files. Without
+//     this gate, a single date directory like "202607/" would be misclassified
+//     as an MJPEG recording dir and fully walked, causing the entire historical
+//     subtree (potentially 100k+ files) to be re-stat'd per date dir.
+//  2. Camera-ID gate: parts[0] must equal dirName. Entries from other cameras
+//     or stale exports are skipped without IO.
+//
+// Only after both gates does the function call f.Info() (one stat per
+// surviving entry) and, for MJPEG dirs, the per-frame Walk.
+func (m *Manager) reconcileCameraDir(ctx context.Context, db *DB, dirName string) (int, error) {
+	files, err := os.ReadDir(filepath.Join(m.currentRoot(), dirName))
+	if err != nil {
+		return 0, err
+	}
+
+	var cameraOrphans []model.Recording
+	for _, f := range files {
+		name := f.Name()
+
+		// Phase 1 + 2: cheap name-shape + camera-ID gate, no IO. This is what
+		// prevents date-bucket dirs from being walked.
+		info, ok := parseRecordingName(name, dirName)
+		if !ok {
+			continue
+		}
+
+		// Only now — after the gates pass — pay for one stat per entry.
+		fi, fiErr := f.Info()
+		if fiErr != nil {
+			continue
+		}
+
+		var totalSize int64
+		var frameCount int
+		var format model.Format
+		if f.IsDir() {
+			// MJPEG recording directory: count JPEG frames and total size.
+			// Only legit recording-named dirs reach here, so this Walk is now
+			// bounded to actual frame dirs (tens of entries), not date trees.
+			format = model.FormatMJPEG
+			dirPath := filepath.Join(m.currentRoot(), dirName, name)
+			filepath.Walk(dirPath, func(path string, walkFI os.FileInfo, walkErr error) error {
+				if walkErr != nil || walkFI.IsDir() {
+					return nil
+				}
+				frameCount++
+				totalSize += walkFI.Size()
+				return nil
+			})
+			if frameCount == 0 {
+				continue
+			}
+		} else {
+			if info.fileExt == "" {
+				continue // extension-less file — shouldn't happen (dirs only)
+			}
+			if fi.Size() == 0 {
+				continue
+			}
+			if info.fileExt == ".avi" {
+				format = model.FormatAVI
+			} else {
+				format = model.FormatH264
+			}
+			totalSize = fi.Size()
+		}
+
+		cameraOrphans = append(cameraOrphans, model.Recording{
+			ID:          info.nanoID,
+			CameraID:    dirName,
+			FilePath:    filepath.Join(m.currentRoot(), dirName, name),
+			Format:      format,
+			StartedAt:   info.startedAt,
+			EndedAt:     info.startedAt,
+			Duration:    0,
+			FileSize:    totalSize,
+			FrameCount:  frameCount,
+			MergeStatus: model.MergeStatusPending,
+		})
+	}
+
+	if len(cameraOrphans) == 0 {
+		return 0, nil
+	}
+
+	// Query which files already exist in DB. Use the per-camera path set rather
+	// than GetRecordingsByPathSet(IN ?, ?, ...): the per-camera query rides the
+	// idx_recordings_camera_time index for a bounded range scan of just this
+	// camera's rows, instead of a full table scan on the unindexed file_path
+	// column. On a production tree (~15k recordings, ~6 cameras) this cut
+	// reconcile IO dramatically. We intersect locally against the hashset.
+	existing, err := db.GetRecordingPathsByCamera(ctx, dirName)
+	if err != nil {
+		return 0, fmt.Errorf("query existing recordings for %q: %w", dirName, err)
+	}
+
+	var toInsert []*model.Recording
+	for i := range cameraOrphans {
+		if !existing[cameraOrphans[i].FilePath] {
+			toInsert = append(toInsert, &cameraOrphans[i])
+		}
+	}
+
+	if len(toInsert) == 0 {
+		return 0, nil
+	}
+
+	reconciled, err := db.InsertOrphanRecordings(ctx, toInsert)
+	if err != nil {
+		return 0, fmt.Errorf("insert orphan recordings for %q: %w", dirName, err)
+	}
+
+	return reconciled, nil
+}
+
+// FreeSpace returns total and free bytes on the filesystem containing path.
+// Exported wrapper around the shared statfs helper so the self-update layer
+// (#647) can run its disk prechecks without constructing a Manager.
+func FreeSpace(path string) (total, free int64, err error) {
+	return statfsFree(path)
+}
