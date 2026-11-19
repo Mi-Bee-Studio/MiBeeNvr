@@ -1,7 +1,8 @@
-package api
+package streamsapi
 
 import (
 	"errors"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,7 +25,7 @@ import (
 // sub-stream reference acquired here is released when the session ends —
 // the webrtc manager's onSessionEnd hook is the per-session anchor, since
 // WHEP sessions outlive this HTTP request.
-func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	// Validate request parameters before service availability (a bad
@@ -35,7 +36,7 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if h.webrtcMgr == nil {
+	if s.deps.WebRTC == nil {
 		WriteError(w, http.StatusServiceUnavailable, "WebRTC not available")
 		return
 	}
@@ -45,7 +46,7 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cam, err := h.db.GetCamera(r.Context(), id)
+	cam, err := s.deps.DB.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
@@ -68,9 +69,9 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 	// quality=sub: acquire the on-demand pull and try to serve it. The
 	// reference pairs with the manager's onSessionEnd release; every path
 	// that does NOT create a session must release inline.
-	if quality == qualitySub && h.camMgr != nil {
-		if subSrc := h.acquireSub(w, r, id); subSrc != nil {
-			if h.tryServeWHEPSub(w, r, id, subSrc, offerSDP) {
+	if quality == qualitySub && s.deps.Cam != nil {
+		if subSrc := s.acquireSub(w, r, id); subSrc != nil {
+			if s.tryServeWHEPSub(w, r, id, subSrc, offerSDP) {
 				return
 			}
 			// Sub stream unusable over WebRTC (non-H.264 codec or session
@@ -78,30 +79,30 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 			// acquireSub already stamped X-Stream-Quality: sub; rewrite it so
 			// the client sees the fallback.
 			w.Header().Set("X-Stream-Quality", qualityMain)
-			h.camMgr.ReleaseSubStream(id)
+			s.deps.Cam.ReleaseSubStream(id)
 		}
 	}
 
 	// On-demand StreamHub registration for WebRTC. The recorder's SPS picks
 	// the offered H.264 profile variant (High-profile streams need the
 	// 640028 track or browsers reject every frame — see webrtc.NewManager).
-	if h.camMgr != nil {
-		rec := h.camMgr.GetRecorder(id)
+	if s.deps.Cam != nil {
+		rec := s.deps.Cam.GetRecorder(id)
 		if rec != nil {
-			hub := getStreamHub(rec)
+			hub := recorder.HubOf(rec)
 			if hub != nil {
-				_, sps, _, _ := getCodecParams(rec)
-				h.webrtcMgr.RegisterStream(id, hub, sps)
+				_, sps, _, _ := recorder.CodecParamsOf(rec)
+				s.deps.WebRTC.RegisterStream(id, hub, sps)
 				// Audio muxing (#372): G.711/Opus ride the WebRTC track;
 				// AAC cameras are left video-only by the manager (keep the
 				// separate audio-WS path). Best-effort — video continues on
 				// any error.
-				setupAudioForWebRTC(h, id, rec)
+				setupAudioForWebRTC(s.deps.WebRTC, id, rec)
 			}
 		}
 	}
 
-	answerSDP, sessionID, err := h.webrtcMgr.CreateWHEPSession(id, offerSDP)
+	answerSDP, sessionID, err := s.deps.WebRTC.CreateWHEPSession(id, offerSDP)
 	if err != nil {
 		if errors.Is(err, webrtc.ErrMaxPeersReached) {
 			WriteError(w, http.StatusServiceUnavailable, "maximum WebRTC viewers reached for this camera")
@@ -120,7 +121,7 @@ func (h *Handler) handleCreateWHEPSession(w http.ResponseWriter, r *http.Request
 // response written); callers must release the sub-stream reference when it
 // returns false. On success the release is owned by the webrtc manager's
 // onSessionEnd hook.
-func (h *Handler) tryServeWHEPSub(w http.ResponseWriter, r *http.Request, id string, subSrc *substream.Source, offerSDP []byte) bool {
+func (s *server) tryServeWHEPSub(w http.ResponseWriter, r *http.Request, id string, subSrc *substream.Source, offerSDP []byte) bool {
 	// WebRTC tracks are H.264-only — a sub-stream the camera encodes as
 	// H.265 (common: many devices switch codec families between profiles)
 	// cannot be served here. Poll briefly like the WS path: acquire waits
@@ -140,8 +141,8 @@ func (h *Handler) tryServeWHEPSub(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	key := subKey(id)
-	h.webrtcMgr.RegisterStream(key, subSrc.Hub(), sps)
-	answerSDP, sessionID, err := h.webrtcMgr.CreateWHEPSession(key, offerSDP)
+	s.deps.WebRTC.RegisterStream(key, subSrc.Hub(), sps)
+	answerSDP, sessionID, err := s.deps.WebRTC.CreateWHEPSession(key, offerSDP)
 	if err != nil {
 		if !errors.Is(err, webrtc.ErrMaxPeersReached) {
 			logger.Error("failed to create sub WHEP session", "camera_id", id, "error", err)
@@ -166,15 +167,15 @@ func writeWHEPAnswer(w http.ResponseWriter, cameraID string, answerSDP []byte, s
 
 // handleDeleteWHEPSession handles DELETE /api/cameras/{id}/stream/webrtc/{session}
 // It tears down an active WHEP session.
-func (h *Handler) handleDeleteWHEPSession(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleDeleteWHEPSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session")
 
-	if h.webrtcMgr == nil {
+	if s.deps.WebRTC == nil {
 		WriteError(w, http.StatusServiceUnavailable, "WebRTC not available")
 		return
 	}
 
-	if err := h.webrtcMgr.DeleteWHEPSession(sessionID); err != nil {
+	if err := s.deps.WebRTC.DeleteWHEPSession(sessionID); err != nil {
 		if errors.Is(err, webrtc.ErrSessionNotFound) {
 			WriteError(w, http.StatusNotFound, "session not found")
 			return
@@ -192,8 +193,13 @@ func (h *Handler) handleDeleteWHEPSession(w http.ResponseWriter, r *http.Request
 // the recorder and calls SetAudioInfo. AAC and unknown codecs are ignored by
 // the manager (video-only WHEP, separate audio-WS path stays). Errors are
 // non-fatal — video streaming continues.
-func setupAudioForWebRTC(h *Handler, id string, rec model.Recorder) {
-	actualRec := unwrapDelegate(rec)
+// SetupAudioForWebRTC is the exported form (mirrors SetupAudioForWS).
+func SetupAudioForWebRTC(mgr *webrtc.Manager, id string, rec model.Recorder) {
+	setupAudioForWebRTC(mgr, id, rec)
+}
+
+func setupAudioForWebRTC(mgr *webrtc.Manager, id string, rec model.Recorder) {
+	actualRec := model.UnwrapDelegate(rec)
 	provider, ok := actualRec.(audioInfoProvider)
 	if !ok {
 		return
@@ -211,7 +217,7 @@ func setupAudioForWebRTC(h *Handler, id string, rec model.Recorder) {
 		}
 	}
 
-	if err := h.webrtcMgr.SetAudioInfo(id, audioCodec, muLaw, provider.AudioSampleRate(), provider.AudioChannels()); err != nil {
+	if err := mgr.SetAudioInfo(id, audioCodec, muLaw, provider.AudioSampleRate(), provider.AudioChannels()); err != nil {
 		slog.Warn("WebRTC: failed to set audio info", "camera_id", id, "error", err)
 	}
 }

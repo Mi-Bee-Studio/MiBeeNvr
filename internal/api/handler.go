@@ -17,6 +17,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/notifyapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/relayapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -28,10 +29,8 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/license"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/merge"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recframes"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/relay"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/rtsp"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/storage"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/timelapse"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/viewer"
@@ -223,17 +222,6 @@ type protocolCapability struct {
 	Enabled bool `json:"enabled"`
 	Port    int  `json:"port"`
 }
-type snapshotCache struct {
-	data      []byte
-	timestamp time.Time
-}
-
-// SnapshotCapturer captures one JPEG for a camera — satisfied by
-// *snapshot.Capturer (FFmpeg-gated decode + device snapshot-URL fallback,
-// #657). Interface keeps the handler testable with a stub.
-type SnapshotCapturer interface {
-	Capture(cameraID string) ([]byte, error)
-}
 
 // Handler holds dependencies for the REST API handlers.
 
@@ -249,23 +237,24 @@ type Handler struct {
 	// semantics unchanged.
 	playbackBudget atomic.Pointer[iobudget.Limiter]
 	// DB txn panel rate window (#759): previous /api/system/stats sample.
-	dbTxnMu           sync.Mutex
-	dbTxnPrev         *dbTxnSample
-	db                *storage.DB
-	store             *storage.Manager
-	authMW            func(http.Handler) http.Handler
-	config            *config.Config
-	camMgr            *camera.CameraManager
-	hlsMgr            *hls.Manager
-	webrtcMgr         *webrtc.Manager
-	flvMgr            *flv.Manager
-	wsMgr             *wsstream.Manager
-	viewerStore       *viewer.Store
-	viewerLogin       ViewerLoginFn
-	configPath        string
-	snapshotMu        sync.RWMutex
-	snapshots         map[string]*snapshotCache // cameraID -> cached snapshot
-	snapCapturer      SnapshotCapturer
+	dbTxnMu     sync.Mutex
+	dbTxnPrev   *dbTxnSample
+	db          *storage.DB
+	store       *storage.Manager
+	authMW      func(http.Handler) http.Handler
+	config      *config.Config
+	camMgr      *camera.CameraManager
+	hlsMgr      *hls.Manager
+	webrtcMgr   *webrtc.Manager
+	flvMgr      *flv.Manager
+	wsMgr       *wsstream.Manager
+	viewerStore *viewer.Store
+	viewerLogin ViewerLoginFn
+	configPath  string
+	// snapStore owns the shared JPEG-still TTL cache (snapshot / latest-frame /
+	// HLS stale-serve) — state lives in the streamsapi domain package, the
+	// capturer is wired here and forwarded into its Deps.
+	snapStore         *streamsapi.SnapshotStore
 	mergeMgr          *merge.MergeManager
 	rollingMergeMgr   *merge.RollingMergeCoordinator
 	healthMgr         HealthManager
@@ -350,7 +339,8 @@ type Handler struct {
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr *hls.Manager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy, mergeScheduler *timelapse.MergeScheduler, gb28181DeviceMgr *platform.DeviceManager, gb28181SessionMgr *platform.SessionManager, timeSync TimeSyncOps) *Handler {
-	h := &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, snapshots: make(map[string]*snapshotCache), recFrames: recframes.New(), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	h := &Handler{db: db, store: store, authMW: authMW, config: cfg, camMgr: camMgr, hlsMgr: hlsMgr, configPath: configPath, recFrames: recframes.New(), mergeMgr: mergeMgr, cloudProxy: cloudProxy, mergeScheduler: mergeScheduler, gb28181DeviceMgr: gb28181DeviceMgr, gb28181SessionMgr: gb28181SessionMgr, timeSync: timeSync, vodMgr: vod.NewManager()}
+	h.snapStore = streamsapi.NewSnapshotStore()
 	// The device-record domain service shares the handler's post-injection
 	// wiring: media API, device registry, GB timezone (#1009).
 	h.gb28181Records = gb28181.NewDeviceRecordService()
@@ -404,7 +394,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Use(h.authMW)
 		h.registerRecordingRoutes(r)
 		h.registerCameraRoutes(r)
-		h.registerFlowRoutes(r)
+		streamsapi.Register(r, streamsDeps(h))
 		h.registerSystemRoutes(r)
 		h.registerMergeRoutes(r)
 		h.registerTimelapseRoutes(r)
@@ -581,7 +571,7 @@ func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset
 }
 
 func writeAPIError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{"error": err.Error(), "code": model.ErrorCode(err)})
+	httpx.WriteAPIError(w, status, err)
 }
 
 // validateURL checks that a URL has a valid scheme and non-empty host.
@@ -649,196 +639,6 @@ func extractDIDFromURL(rawURL string) string {
 // strPtr returns a pointer to the given string.
 func strPtr(s string) *string {
 	return &s
-}
-
-// cameraProtocolsResponse is the response for GET /api/cameras/{id}/protocols.
-type cameraProtocolsResponse struct {
-	Protocols []ProtocolDetail `json:"protocols"`
-	Encoding  string           `json:"encoding"`
-	Default   string           `json:"default"`
-	// RTSP exposes the built-in RTSP output server pull URL (#522) — the
-	// address third-party platforms (Synology etc.) fill in as a camera
-	// source. Nil when the server is disabled.
-	RTSP *rtspEndpointDetail `json:"rtsp,omitempty"`
-	// SubStream reports the camera's sub-stream capability (#512): where a
-	// lower-resolution secondary feed exists (or can be configured), for
-	// consumers like grid preview, cascade and external AI push.
-	SubStream subStreamDetail `json:"sub_stream"`
-}
-
-// rtspEndpointDetail describes the RTSP pull endpoint for one camera.
-type rtspEndpointDetail struct {
-	Available bool   `json:"available"`
-	Reason    string `json:"reason,omitempty"`
-	URL       string `json:"url,omitempty"`
-}
-
-// subStreamDetail describes the sub-stream capability of one camera.
-type subStreamDetail struct {
-	Available bool   `json:"available"`
-	Source    string `json:"source,omitempty"` // "onvif" (auto-discovered) | "manual" (URL set)
-	Reason    string `json:"reason,omitempty"` // why not, when unavailable
-	// Codec is the sub-stream's ACTUAL codec once a pull has come up — it can
-	// differ from the main stream's (devices switching codec families between
-	// profiles are common). Empty until first observed; consumers gate on it
-	// when the decode path is codec-sensitive (e.g. MSE H.265 browsers).
-	Codec string `json:"codec,omitempty"`
-}
-
-// handleCameraProtocols handles GET /api/cameras/{id}/protocols.
-// It returns the available streaming protocols for a specific camera
-// based on its encoding and the registered stream handlers.
-func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	cam, err := h.db.GetCamera(r.Context(), id)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "failed to get camera")
-		return
-	}
-	if cam == nil {
-		WriteError(w, http.StatusNotFound, "camera not found")
-		return
-	}
-
-	encoding := strings.ToLower(cam.Encoding)
-	if encoding == "" {
-		encoding = strings.ToLower(cam.StreamEncoding)
-	}
-
-	// Probe the running recorder for the actual codec. The recorder reads the
-	// REAL codec from the live stream (RTSP DESCRIBE for ONVIF/RTSP, MISS
-	// CodecID for Xiaomi, etc.), which is authoritative over the DB-stored
-	// encoding. The stored encoding may be stale or wrong — e.g. Xiaomi CS2
-	// cameras that were initially configured as h264 but actually stream h265
-	// (the recorder detects codec=h265, but DB still says h264). Without this
-	// probe, /protocols returns the wrong encoding, the frontend picks protocols
-	// that can't handle the actual codec (WebRTC for H.265, FLV without MSE
-	// H.265), and EVERY protocol renders black.
-	//
-	// Previously this probe was gated to ONVIF + empty-encoding only, out of
-	// fear that a runtime probe might mislabel a correctly-configured camera.
-	// But the recorder's codec detection is reliable (it reads actual stream
-	// data), and the cost of a wrong DB encoding (all-protocols-black-screen)
-	// is far worse than an occasional over-correction. Trust the recorder.
-	if h.camMgr != nil {
-		if rec := h.camMgr.GetRecorder(id); rec != nil {
-			if codec, _, _, _ := getCodecParams(rec); codec != "" {
-				encoding = string(codec)
-			}
-		}
-	}
-
-	var protocols []ProtocolDetail
-	if h.streamRegistry != nil {
-		protocols = h.streamRegistry.ProtocolsDetailForCodec(model.Format(encoding))
-	}
-	if protocols == nil {
-		protocols = []ProtocolDetail{}
-	}
-
-	// Determine default protocol by latency-optimal fallback order. The global
-	// streaming.default_protocol config was removed — the frontend Player
-	// Orchestrator now auto-selects per camera based on this hint + browser
-	// capability, demoting on health failure. Per-camera overrides remain via
-	// the Protocol Switcher on each camera's LiveView page.
-	defaultProto := ""
-	for _, preferred := range []string{"webrtc", "flv", "ll-hls", "hls", "mjpeg"} {
-		for _, p := range protocols {
-			if p.Protocol == preferred && p.Available {
-				defaultProto = preferred
-				break
-			}
-		}
-		if defaultProto != "" {
-			break
-		}
-	}
-
-	writeJSON(w, http.StatusOK, cameraProtocolsResponse{
-		Protocols: protocols,
-		Encoding:  encoding,
-		Default:   defaultProto,
-		RTSP:      h.rtspEndpointFor(r, id, model.Format(encoding)),
-		SubStream: h.subStreamDetailFor(id),
-	})
-}
-
-// subStreamDetailFor derives the camera's sub-stream capability (#512) from
-// its protocol and configured/discovered sub fields. "Available" means a
-// consumer can request a sub stream today; unavailable reasons guide the UI.
-func (h *Handler) subStreamDetailFor(cameraID string) subStreamDetail {
-	var cam *config.CameraConfig
-	if h.camMgr != nil {
-		cam = h.camMgr.GetCameraConfig(cameraID)
-	}
-	if cam == nil {
-		return subStreamDetail{Reason: "camera config unavailable"}
-	}
-	switch {
-	case cam.SubStreamURL != "":
-		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "manual"}, cameraID)
-	case cam.SubProfileToken != "":
-		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "onvif"}, cameraID)
-	case cam.Protocol == string(model.ProtoGB28181) && strings.TrimSpace(cam.GB28181.SubChannelID) != "":
-		return h.withSubStreamCodec(subStreamDetail{Available: true, Source: "gb-sub-channel"}, cameraID)
-	}
-	switch cam.Protocol {
-	case "onvif":
-		// Discovery runs once after the recorder comes online; until then (or
-		// on single-profile cameras) there is no sub stream to consume.
-		return subStreamDetail{Reason: "no secondary ONVIF profile discovered (single-stream camera, or discovery pending)"}
-	case "rtsp_h264", "rtsp_mjpeg", string(model.ProtoRTSP):
-		return subStreamDetail{Reason: "set sub_stream_url to use this camera's sub stream"}
-	case "gb28181":
-		// Prober (#560) runs once per channel per boot after the catalog
-		// merges (vendor-gated in auto mode); no code = device has no
-		// usable sub channel — degrade to main, never an error state.
-		return subStreamDetail{Reason: "no sub-channel probed (device has no vendor-convention sub stream, or probe pending)"}
-	default:
-		// xiaomi (proprietary single stream), srt/rtmp push (publisher owns
-		// the encode), http_jpeg/mjpeg (already low-bitrate stills).
-		return subStreamDetail{Reason: "protocol does not expose a sub stream"}
-	}
-}
-
-// withSubStreamCodec decorates an availability verdict with the puller's
-// observed codec when a sub-stream source is currently alive — the /protocols
-// consumer (SPA quality gating) uses it to predict decodability before
-// requesting quality=sub.
-func (h *Handler) withSubStreamCodec(d subStreamDetail, cameraID string) subStreamDetail {
-	if !d.Available || h.camMgr == nil {
-		return d
-	}
-	for _, st := range h.camMgr.SubStreams().Snapshot() {
-		if st.CameraID == cameraID && st.Codec != "" {
-			d.Codec = string(st.Codec)
-			break
-		}
-	}
-	return d
-}
-
-// rtspEndpointFor builds the RTSP output-server entry for the protocols
-// response (#522): available when the server is enabled and the camera's codec
-// is servable (H.264/H.265/MJPEG). The URL targets the requesting host (with
-// configured credentials embedded, #686) so it is directly copy-pasteable.
-func (h *Handler) rtspEndpointFor(r *http.Request, cameraID string, codec model.Format) *rtspEndpointDetail {
-	if h.config == nil || h.config.Server.RTSP.Enabled == nil || !*h.config.Server.RTSP.Enabled {
-		return nil
-	}
-	detail := &rtspEndpointDetail{}
-	switch codec {
-	case model.FormatH264, model.FormatH265, model.FormatMJPEG:
-		// Parameter readiness mirrors the RTSP server's own gate — an idle or
-		// warming-up camera still gets the URL (clients retry DESCRIBE).
-		detail.Available = true
-		detail.URL = rtsp.URLForAuth(r.Host, h.config.Server.RTSP.Port, cameraID,
-			h.config.Server.RTSP.Username, h.config.Server.RTSP.Password)
-	default:
-		detail.Reason = "codec not servable over RTSP (H.264/H.265/MJPEG only)"
-	}
-	return detail
 }
 
 // handleCapabilities handles GET /api/capabilities.

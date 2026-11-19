@@ -1,4 +1,4 @@
-package api
+package streamsapi
 
 import (
 	"net/http"
@@ -114,4 +114,25 @@ func TestSetStreamCookieOnPlaylistAPIKey(t *testing.T) {
 		require.Len(t, cookies, 1)
 		require.Equal(t, token, cookies[0].Value)
 	})
+}
+
+// TestRewriteLegacyPlaylistName covers the #772 compatibility aliases: docs
+// through v0.12.0 advertised stream.m3u8 (never a registered muxer name);
+// playlist.m3u8 is the conventional guess. Segment/init names pass through.
+func TestRewriteLegacyPlaylistName(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ in, want string }{
+		{"/api/cameras/cam-1/stream/stream.m3u8", "/api/cameras/cam-1/stream/index.m3u8"},
+		{"/api/cameras/cam-1/stream/playlist.m3u8", "/api/cameras/cam-1/stream/index.m3u8"},
+		{"/api/cameras/cam-1/stream/sub/stream.m3u8", "/api/cameras/cam-1/stream/sub/index.m3u8"},
+		{"/api/cameras/cam-1/stream/STREAM.M3U8", "/api/cameras/cam-1/stream/index.m3u8"},
+		// Registered names and server-generated segment files: untouched.
+		{"/api/cameras/cam-1/stream/index.m3u8", "/api/cameras/cam-1/stream/index.m3u8"},
+		{"/api/cameras/cam-1/stream/abc123_video1_seg0.mp4", "/api/cameras/cam-1/stream/abc123_video1_seg0.mp4"},
+		{"/api/cameras/cam-1/stream/video1_stream.m3u8", "/api/cameras/cam-1/stream/video1_stream.m3u8"},
+		{"/api/cameras/cam-1/stream/init.mp4", "/api/cameras/cam-1/stream/init.mp4"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, rewriteLegacyPlaylistName(tc.in), "input %q", tc.in)
+	}
 }

@@ -5,6 +5,7 @@ package api
 // route registration for the GB28181 endpoints. Split out of handler.go.
 
 import (
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -45,17 +46,10 @@ func (h *Handler) SetGB28181Inviter(s GB28181InviteSender) {
 	h.gb28181Inviter = s
 }
 
-// GB28181SessionStatus mirrors the GB library's session observability
-// snapshot (payload classification + production counters + stall flag) for
-// /api/streams. Declared locally — Handler does not import the GB library.
-type GB28181SessionStatus struct {
-	ChannelID       string `json:"channel_id"`
-	Classification  string `json:"classification"`
-	PacketsReceived int64  `json:"packets_received"`
-	AUEmitted       int64  `json:"au_emitted"`
-	AudioFrames     int64  `json:"audio_frames_emitted"`
-	Stalled         bool   `json:"stalled"`
-}
+// GB28181SessionStatus mirrors the GB library's session observability for
+// the flow view. The struct lives in streamsapi (flow-response data); this
+// alias keeps the setter signature and app-layer references unchanged.
+type GB28181SessionStatus = streamsapi.GB28181SessionStatus
 
 // SetGB28181Sessions wires the GB28181 session observability provider
 // (live session snapshot + stall-watchdog recycle count).

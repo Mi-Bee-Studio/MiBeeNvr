@@ -124,7 +124,7 @@ type liveAudioFormat struct {
 // handleAudioLiveWav: G.711 → streaming PCM WAV (legacy consumers).
 func (h *Handler) handleAudioLiveWav(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "cameraID")
-	rec := unwrapDelegate(h.camMgr.GetRecorder(cameraID))
+	rec := model.UnwrapDelegate(h.camMgr.GetRecorder(cameraID))
 	ar, ok := rec.(*recorder.AudioRecorder)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "not an audio-source device")
@@ -153,7 +153,7 @@ func (h *Handler) handleAudioLiveWav(w http.ResponseWriter, r *http.Request) {
 // as garbage.
 func (h *Handler) handleAudioLive(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "cameraID")
-	rec := unwrapDelegate(h.camMgr.GetRecorder(cameraID))
+	rec := model.UnwrapDelegate(h.camMgr.GetRecorder(cameraID))
 	ar, ok := rec.(*recorder.AudioRecorder)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "not an audio-source device")

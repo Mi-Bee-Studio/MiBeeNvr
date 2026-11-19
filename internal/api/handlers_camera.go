@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"hash/crc32"
 	"net/http"
 	"strings"
@@ -302,7 +303,7 @@ func probeCodec(camMgr *camera.CameraManager, id string) model.Format {
 	if rec == nil {
 		return ""
 	}
-	codec, _, _, _ := getCodecParams(rec)
+	codec, _, _, _ := recorder.CodecParamsOf(rec)
 	return codec
 }
 
@@ -798,25 +799,14 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Get("/", h.handleGetCamera)
 			r.Put("/", h.handleUpdateCamera)
 			r.Delete("/", h.handleDeleteCamera)
-			// WebSocket stream (must be before HLS catch-all /stream/*)
-			r.Get("/stream/ws", h.handleStreamWS)
-			r.Get("/stream/*", h.handleHLSStream)
-			r.Delete("/stream", h.handleStopHLSStream)
-			// WebRTC WHEP endpoints
-			r.Post("/stream/webrtc", h.handleCreateWHEPSession)
-			r.Delete("/stream/webrtc/{session}", h.handleDeleteWHEPSession)
-			// HTTP-FLV stream
-			r.Get("/stream.flv", h.handleFLVStream)
-			r.Get("/stream.mjpeg", h.handleMjpegStream)
-			r.Get("/latest-frame", h.handleLatestFrame)
+			// Live egress (WS/HLS/WHEP/FLV/MJPEG), stills (snapshot/latest-frame),
+			// protocol capabilities and the flow snapshot live in the streamsapi
+			// domain package (registered flat from Routes — chi forbids mounting
+			// the same subtree pattern twice).
 			// Dual-spectrum spot-temperature grid (proxied device readout)
 			r.Get("/thermal/frame", h.handleThermalFrame)
 			// P4 temperature history (minute-aggregated, playback curve)
 			r.Get("/thermal/history", h.handleThermalHistory)
-			// Per-camera protocols
-			r.Get("/protocols", h.handleCameraProtocols)
-			// Flow-path snapshot (#469)
-			r.Get("/flow", h.handleCameraFlow)
 			// Per-camera frame-trace sampling window (#482)
 			r.Get("/trace", h.handleCameraTrace)
 			r.Post("/trace", h.handleCameraTrace)
@@ -850,7 +840,6 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Get("/time", h.handleCameraTimeStatus)
 			r.Post("/time/sync", h.handleCameraTimeSync)
 			r.Post("/time/ntp", h.handleCameraTimeNTP)
-			r.Get("/snapshot", h.handleSnapshot)
 			r.Get("/merge-config", h.handleGetCameraMergeConfig)
 			r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
 			r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)

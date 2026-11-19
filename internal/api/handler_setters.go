@@ -66,13 +66,13 @@ func (h *Handler) SetDownloader(d TranscodeDownloader) {
 // latest-frame endpoint for H.264/H.265 cameras (#657). Without it the
 // endpoint keeps its JPEG-recorder-only behavior.
 func (h *Handler) SetSnapshotCapturer(c SnapshotCapturer) {
-	h.snapCapturer = c
+	h.snapStore.SetCapturer(c)
 }
 
 // HasSnapshotCapturer reports whether the snapshot capturer is wired —
 // observable wiring guard for the pkg/app regression tests.
 func (h *Handler) HasSnapshotCapturer() bool {
-	return h.snapCapturer != nil
+	return h.snapStore.HasCapturer()
 }
 
 // SetEventBus sets the event bus on the handler.

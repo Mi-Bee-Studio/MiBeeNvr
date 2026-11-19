@@ -1,8 +1,9 @@
-package api
+package streamsapi
 
 import (
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"log/slog"
 	"net/http"
 	"time"
@@ -24,7 +25,7 @@ import (
 // no usable sub-stream. Unlike FLV/HLS/WHEP there is no X-Stream-Quality
 // response header here (the 101 upgrade writes its own headers) — the
 // negotiated outcome is reported in-band as the first WS message (#541).
-func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	// Validate request parameters before service availability (a bad
@@ -35,12 +36,12 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.wsMgr == nil {
+	if s.deps.WS == nil {
 		WriteError(w, http.StatusServiceUnavailable, "WebSocket streaming not available")
 		return
 	}
 
-	cam, err := h.db.GetCamera(r.Context(), id)
+	cam, err := s.deps.DB.GetCamera(r.Context(), id)
 	if err != nil {
 		slog.Error("WS: failed to get camera", "camera_id", id, "error", err)
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
@@ -59,12 +60,12 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 	key := id
 	servedQuality := qualityMain
 	var subSrc *substream.Source
-	if quality == qualitySub && h.camMgr != nil {
-		subSrc = h.acquireSub(w, r, id)
+	if quality == qualitySub && s.deps.Cam != nil {
+		subSrc = s.acquireSub(w, r, id)
 		if subSrc != nil {
 			key = subKey(id)
 			servedQuality = qualitySub
-			defer h.camMgr.ReleaseSubStream(id)
+			defer s.deps.Cam.ReleaseSubStream(id)
 		}
 	}
 
@@ -73,19 +74,19 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 	// recorder reconnected and got a fresh hub — or the sub-stream puller was
 	// recycled and restarted) — rebind before serving, or the viewer would
 	// sit on a dead hub with zero frames forever.
-	if h.wsMgr.IsActive(key) && h.camMgr != nil {
+	if s.deps.WS.IsActive(key) && s.deps.Cam != nil {
 		if subSrc != nil {
-			if h.wsMgr.ActiveHub(key) != subSrc.Hub() {
-				h.wsMgr.RebindHub(key, subSrc.Hub())
+			if s.deps.WS.ActiveHub(key) != subSrc.Hub() {
+				s.deps.WS.RebindHub(key, subSrc.Hub())
 			}
-		} else if rec := h.camMgr.GetRecorder(id); rec != nil {
-			if hub := getStreamHub(rec); hub != nil && hub != h.wsMgr.ActiveHub(id) {
-				h.wsMgr.RebindHub(id, hub)
+		} else if rec := s.deps.Cam.GetRecorder(id); rec != nil {
+			if hub := recorder.HubOf(rec); hub != nil && hub != s.deps.WS.ActiveHub(id) {
+				s.deps.WS.RebindHub(id, hub)
 			}
 		}
 	}
-	if !h.wsMgr.IsActive(key) {
-		if h.camMgr == nil {
+	if !s.deps.WS.IsActive(key) {
+		if s.deps.Cam == nil {
 			WriteError(w, http.StatusNotFound, "WebSocket stream not active")
 			return
 		}
@@ -116,14 +117,14 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		} else {
-			rec := h.camMgr.GetRecorder(id)
+			rec := s.deps.Cam.GetRecorder(id)
 			if rec == nil {
 				slog.Warn("WS: recorder not running", "camera_id", id)
 				WriteError(w, http.StatusBadRequest, "camera recorder not running")
 				return
 			}
 
-			codec, sps, pps, vps = getCodecParams(rec)
+			codec, sps, pps, vps = recorder.CodecParamsOf(rec)
 			// Normalize JPEG/MJPEG codec names for wsstream: both "jpeg" and "mjpeg"
 			// map to wsstream.CodecMJPEG ("mjpeg") since the wire protocol treats
 			// them identically (complete JPEG frames in VideoFrame.NALUs[0]).
@@ -146,15 +147,15 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 							return
 						}
 						time.Sleep(wsCodecPoll)
-						codec, sps, pps, vps = getCodecParams(rec)
+						codec, sps, pps, vps = recorder.CodecParamsOf(rec)
 					}
 					slog.Info("WS: codec params available after poll", "camera_id", id, "codec", codec)
 				}
 			}
-			hub = getStreamHub(rec)
+			hub = recorder.HubOf(rec)
 		}
 
-		if err := h.wsMgr.RegisterStream(key, codec, sps, pps, vps, hub); err != nil {
+		if err := s.deps.WS.RegisterStream(key, codec, sps, pps, vps, hub); err != nil {
 			if !errors.Is(err, wsstream.ErrStreamExists) {
 				slog.Error("WS: failed to register", "camera_id", id, "key", key, "error", err)
 				WriteError(w, http.StatusInternalServerError, "failed to register WebSocket stream")
@@ -164,8 +165,8 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 		// Configure audio streaming if the recorder provides audio
 		// (main-stream entries only — the sub-stream pull is video-only).
 		if subSrc == nil {
-			if rec := h.camMgr.GetRecorder(id); rec != nil {
-				setupAudioForWS(h, id, rec)
+			if rec := s.deps.Cam.GetRecorder(id); rec != nil {
+				setupAudioForWS(s.deps.WS, id, rec)
 			}
 		}
 	}
@@ -175,7 +176,7 @@ func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
 	// Serve WebSocket stream (blocks until client disconnects). servedQuality
 	// is emitted as the first in-band message so clients detect sub→main
 	// fallback even though the 101 upgrade response drops headers (#541).
-	if err := h.wsMgr.ServeWS(key, servedQuality, w, r); err != nil {
+	if err := s.deps.WS.ServeWS(key, servedQuality, w, r); err != nil {
 		if errors.Is(err, wsstream.ErrStreamNotActive) {
 			WriteError(w, http.StatusNotFound, "WebSocket stream not active")
 			return
@@ -200,8 +201,14 @@ type audioInfoProvider interface {
 // for a camera stream. It is called after RegisterStream.
 // If the recorder has audio, it extracts the codec parameters and calls
 // SetAudioInfo. Errors are non-fatal — video streaming continues.
-func setupAudioForWS(h *Handler, id string, rec model.Recorder) {
-	actualRec := unwrapDelegate(rec)
+// SetupAudioForWS is the exported form (the api root's remaining audio tests
+// reference it through the compat shim).
+func SetupAudioForWS(mgr *wsstream.Manager, id string, rec model.Recorder) {
+	setupAudioForWS(mgr, id, rec)
+}
+
+func setupAudioForWS(mgr *wsstream.Manager, id string, rec model.Recorder) {
+	actualRec := model.UnwrapDelegate(rec)
 	provider, ok := actualRec.(audioInfoProvider)
 	if !ok {
 		slog.Info("WS: recorder does not expose audio info", "camera_id", id, "type", fmt.Sprintf("%T", actualRec))
@@ -230,7 +237,7 @@ func setupAudioForWS(h *Handler, id string, rec model.Recorder) {
 		audioConfig = provider.AudioConfig()
 	}
 
-	if err := h.wsMgr.SetAudioInfo(id, audioCodec, muLaw, sampleRate, channels, audioConfig); err != nil {
+	if err := mgr.SetAudioInfo(id, audioCodec, muLaw, sampleRate, channels, audioConfig); err != nil {
 		slog.Warn("WS: failed to set audio info", "camera_id", id, "error", err)
 	} else {
 		slog.Info("WS: audio configured", "camera_id", id, "codec", audioCodec, "muLaw", muLaw, "rate", sampleRate, "channels", channels, "config_len", len(audioConfig))

@@ -1,4 +1,4 @@
-package api
+package streamsapi
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
@@ -24,14 +23,14 @@ var mjpegLogger = slogx.Component("mjpeg-proxy")
 // <img> tag connects directly to the camera using its own browser connection pool.
 //
 // Response: {"url": "http://192.168.1.100:80/stream"}
-func (h *Handler) handleMjpegStream(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleMjpegStream(w http.ResponseWriter, r *http.Request) {
 	cameraID := r.PathValue("id")
 	if cameraID == "" {
 		WriteError(w, http.StatusBadRequest, "camera ID required")
 		return
 	}
 
-	mjpegURL := h.resolveMjpegURL(cameraID)
+	mjpegURL := s.resolveMjpegURL(cameraID)
 	if mjpegURL == "" {
 		WriteError(w, http.StatusNotFound, "MJPEG stream not available for this camera")
 		return
@@ -42,13 +41,13 @@ func (h *Handler) handleMjpegStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveMjpegURL finds the MJPEG stream URL for a camera.
-func (h *Handler) resolveMjpegURL(cameraID string) string {
-	if h.camMgr == nil {
+func (s *server) resolveMjpegURL(cameraID string) string {
+	if s.deps.Cam == nil {
 		return ""
 	}
 
 	// Try to get URL from the recorder delegate
-	rec := h.camMgr.GetRecorder(cameraID)
+	rec := s.deps.Cam.GetRecorder(cameraID)
 	if rec != nil {
 		if url := getMjpegURLFromRecorder(rec); url != "" {
 			return url
@@ -56,7 +55,7 @@ func (h *Handler) resolveMjpegURL(cameraID string) string {
 	}
 
 	// Fallback: use camera's configured URL for HTTP protocol cameras
-	cam := h.camMgr.GetCameraConfig(cameraID)
+	cam := s.deps.Cam.GetCameraConfig(cameraID)
 	if cam != nil && cam.Protocol == "http" && strings.HasPrefix(cam.URL, "http") {
 		return cam.URL
 	}
@@ -100,14 +99,14 @@ func getMjpegURLFromRecorder(rec interface{}) string {
 // Response: raw JPEG image (Content-Type: image/jpeg)
 // or 304 if the frame is unchanged (ETag match)
 // or 404 if no frame is available.
-func (h *Handler) handleLatestFrame(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleLatestFrame(w http.ResponseWriter, r *http.Request) {
 	cameraID := r.PathValue("id")
 	if cameraID == "" {
 		WriteError(w, http.StatusBadRequest, "camera ID required")
 		return
 	}
 
-	frame := h.getLatestFrameFromRecorder(cameraID)
+	frame := s.getLatestFrameFromRecorder(cameraID)
 	if frame == nil {
 		WriteError(w, http.StatusNotFound, "no frame available")
 		return
@@ -131,17 +130,13 @@ func (h *Handler) handleLatestFrame(w http.ResponseWriter, r *http.Request) {
 	w.Write(frame)
 }
 
-// latestFrameCacheTTL bounds how long a decoded snapshot serves repeated
-// latest-frame polls before re-capturing. Var so tests can manipulate expiry.
-var latestFrameCacheTTL = 10 * time.Second
-
 // getLatestFrameFromRecorder extracts the latest JPEG frame from a camera's
 // recorder. JPEG-family recorders answer from their frame cache; everything
 // else (H.264/H.265, or no live recorder) goes through the FFmpeg-gated
 // snapshot capturer with the shared snapshot TTL cache (#657).
-func (h *Handler) getLatestFrameFromRecorder(cameraID string) []byte {
-	if h.camMgr != nil {
-		if rec := h.camMgr.GetRecorder(cameraID); rec != nil {
+func (s *server) getLatestFrameFromRecorder(cameraID string) []byte {
+	if s.deps.Cam != nil {
+		if rec := s.deps.Cam.GetRecorder(cameraID); rec != nil {
 			// Unwrap delegate layers (ONVIF → inner recorder)
 			for {
 				type delegater interface{ Delegate() model.Recorder }
@@ -160,32 +155,16 @@ func (h *Handler) getLatestFrameFromRecorder(cameraID string) []byte {
 			}
 		}
 	}
-	return h.getDecodedLatestFrame(cameraID)
+	return s.getDecodedLatestFrame(cameraID)
 }
 
 // getDecodedLatestFrame captures one frame via the snapshot capturer (hub IDR
 // decode → device snapshot URL) and caches it. Any failure degrades to nil —
 // the endpoint answers 404, never 500 (FFmpeg stays optional).
-func (h *Handler) getDecodedLatestFrame(cameraID string) []byte {
-	if h.snapCapturer == nil {
+func (s *server) getDecodedLatestFrame(cameraID string) []byte {
+	frame, ok := s.snapStore.CaptureLatest(cameraID)
+	if !ok {
 		return nil
 	}
-
-	h.snapshotMu.RLock()
-	cached, ok := h.snapshots[cameraID]
-	h.snapshotMu.RUnlock()
-	if ok && time.Since(cached.timestamp) < latestFrameCacheTTL {
-		return cached.data
-	}
-
-	frame, err := h.snapCapturer.Capture(cameraID)
-	if err != nil || len(frame) == 0 {
-		mjpegLogger.Debug("latest-frame capture unavailable", "camera_id", cameraID, "error", err)
-		return nil
-	}
-
-	h.snapshotMu.Lock()
-	h.snapshots[cameraID] = &snapshotCache{data: frame, timestamp: time.Now()}
-	h.snapshotMu.Unlock()
 	return frame
 }

@@ -17,6 +17,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// delegatingStub unwraps to an inner recorder (ONVIF-style) — mirrors the
+// stub of the same name in streamsapi's adapter tests.
+type delegatingStub struct {
+	stubRecorder
+	inner model.Recorder
+}
+
+func (d *delegatingStub) Delegate() model.Recorder { return d.inner }
+
 // frameStub serves a fixed latest frame.
 type frameStub struct {
 	stubRecorder
@@ -64,20 +73,6 @@ func TestMjpegStreamURL(t *testing.T) {
 	rr = doRequest(t, mjpegEnv(t, nil, cams), http.MethodGet, "/api/cameras/cam-1/stream.mjpeg", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Contains(t, rr.Body.String(), "http://10.0.0.5/mjpeg")
-}
-
-func TestGetMjpegURLFromRecorder(t *testing.T) {
-	t.Parallel()
-
-	jpegRec := recorder.NewHTTPJPEGRecorder(recorder.HTTPJPEGConfig{URL: "http://x:81/stream"}, nil)
-	require.Equal(t, "http://x:81/stream", getMjpegURLFromRecorder(jpegRec))
-
-	// Delegate layers are unwrapped before the type check.
-	wrapped := &delegatingStub{inner: jpegRec}
-	require.Equal(t, "http://x:81/stream", getMjpegURLFromRecorder(wrapped))
-
-	// RTSP MJPEG recorders have no HTTP URL.
-	require.Empty(t, getMjpegURLFromRecorder(stubRecorder{}))
 }
 
 func TestLatestFrame_ETagFlow(t *testing.T) {

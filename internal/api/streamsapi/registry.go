@@ -1,9 +1,7 @@
-package api
+package streamsapi
 
 import (
 	"errors"
-	"fmt"
-	"net/http"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
@@ -11,7 +9,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/streamhub"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/substream"
 )
 
 // StreamHandler is a protocol-agnostic interface for live streaming handlers.
@@ -105,6 +102,8 @@ func (r *StreamRegistry) ProtocolsDetailForCodec(codec model.Format) []ProtocolD
 	return result
 }
 
+var streamLogger = slogx.Component("stream-handler")
+
 // --- HLSStreamHandler ---
 
 // HLSStreamHandler implements StreamHandler for HLS live streaming.
@@ -142,7 +141,7 @@ func (h *HLSStreamHandler) StartStream(camID string, rec model.Recorder, opts St
 
 	// For recorders that don't implement HLSProvider, unwrap ONVIF delegation
 	// and use concrete type access for SPS/PPS/VPS.
-	actualRec := unwrapDelegate(rec)
+	actualRec := model.UnwrapDelegate(rec)
 
 	switch r := actualRec.(type) {
 	case *recorder.H264Recorder:
@@ -255,131 +254,6 @@ func (h *HLSStreamHandler) StopStreamWithRecorder(camID string, rec model.Record
 // StopStream implements StreamHandler.StopStream.
 func (h *HLSStreamHandler) StopStream(camID string) error {
 	return h.StopStreamWithRecorder(camID, nil)
-}
-
-var streamLogger = slogx.Component("stream-handler")
-
-// unwrapper is an interface for recorders that delegate to an inner recorder.
-// This avoids importing recorder.ONVIFRecorder directly in the stream handler.
-type unwrapper interface {
-	Delegate() model.Recorder
-}
-
-// unwrapDelegate returns the innermost recorder by unwrapping delegate layers (e.g. ONVIF).
-// If the recorder is not a delegator, it returns the recorder unchanged.
-func unwrapDelegate(rec model.Recorder) model.Recorder {
-	for {
-		if u, ok := rec.(unwrapper); ok {
-			if d := u.Delegate(); d != nil {
-				rec = d
-				continue
-			}
-		}
-		return rec
-	}
-}
-
-// getCodecParams extracts codec parameters from a recorder.
-// Uses the HLSProvider interface first (covering H264/H265/Ingest/Xiaomi
-// recorders via a single atomic codec-snapshot read), then falls back to a
-// concrete type switch for JPEG/MJPEG cameras which have no codec parameter sets.
-func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byte) {
-	// Unwrap delegates (e.g. ONVIFRecorder → concrete H264/H265) so the
-	// HLSProvider check sees the real recorder that owns the codec params.
-	actualRec := unwrapDelegate(rec)
-	if provider, ok := actualRec.(model.HLSProvider); ok {
-		codec, sps, pps, vps = provider.CodecParams()
-		// Return as soon as we have a usable param set. codec is always set even
-		// when params are still nil (before the first keyframe) — callers treat a
-		// non-nil codec with nil sps/pps as "stream initializing" (503) and a nil
-		// codec as "not a codec-streaming camera" (e.g. JPEG/MJPEG).
-		if codec != "" {
-			return
-		}
-	}
-
-	switch actualRec.(type) {
-	case *recorder.HTTPJPEGRecorder:
-		// ESP32 MiBeeCam and other HTTP JPEG cameras. Live preview is served via
-		// latest-frame polling (MjpegLivePlayer), advertised as the "mjpeg" protocol
-		// by MJPEGStreamHandler. Without this case, encoding probes return "" and
-		// /protocols reports no protocols → frontend cannot live-preview the camera.
-		codec = model.EncJPEG
-	case *recorder.MJPEGRecorder:
-		codec = model.FormatMJPEG
-	case *recorder.AudioRecorder:
-		// Audio-only source devices: no video codec, no live-video protocols.
-		// Leaving codec "" would make /protocols report nothing; the SPA then
-		// treats the camera as video-less (correct) and live listening goes
-		// through the WS audio path instead. Keep "" — the audio case exists
-		// here to document the deliberate no-op.
-		codec = ""
-	}
-	return
-}
-
-// getStreamHub extracts the StreamHub from a recorder via the GetHub()
-// interface (implemented by every recorder type). Returns nil if the recorder
-// doesn't implement it or the hub is not set.
-func getStreamHub(rec model.Recorder) *streamhub.StreamHub {
-	if h, ok := rec.(interface{ GetHub() *streamhub.StreamHub }); ok {
-		return h.GetHub()
-	}
-	return nil
-}
-
-// SetStreamRegistry sets the stream registry on the handler for protocol queries.
-func (h *Handler) SetStreamRegistry(reg *StreamRegistry) {
-	h.streamRegistry = reg
-}
-
-// --- Stream quality negotiation (#513) ---
-
-// Quality values for the live egress endpoints. "main" is the default;
-// "sub" selects the camera's on-demand sub-stream (falls back to main when
-// the camera has none — callers detect the fallback via X-Stream-Quality).
-const (
-	qualityMain = "main"
-	qualitySub  = "sub"
-)
-
-// parseQuality parses the ?quality= parameter ("" and "main" → main).
-func parseQuality(r *http.Request) (string, error) {
-	switch q := r.URL.Query().Get("quality"); q {
-	case "", qualityMain:
-		return qualityMain, nil
-	case qualitySub:
-		return qualitySub, nil
-	default:
-		return "", fmt.Errorf("invalid quality %q (supported: main, sub)", q)
-	}
-}
-
-// subKey is the protocol-manager stream key under which a camera's sub-stream
-// egress is registered. Managers key entries by an opaque string, so the
-// suffixed key reuses all of their machinery (viewer caps, GOP cache, idle
-// watchdogs) without any per-quality plumbing inside them.
-func subKey(cameraID string) string { return cameraID + "/" + qualitySub }
-
-// acquireSub attempts the on-demand sub-stream acquisition and reports
-// whether egress should serve the sub entry. On any failure (no sub config,
-// pull not ready) it falls back to main — quality negotiation degrades, never
-// hard-fails — and logs the reason. The header tells the client which quality
-// it actually got.
-func (h *Handler) acquireSub(w http.ResponseWriter, r *http.Request, cameraID string) *substream.Source {
-	if h.camMgr == nil {
-		w.Header().Set("X-Stream-Quality", qualityMain)
-		return nil
-	}
-	src, err := h.camMgr.AcquireSubStream(r.Context(), cameraID)
-	if err != nil {
-		streamLogger.Info("quality=sub unavailable, serving main stream",
-			"camera_id", cameraID, "reason", err.Error())
-		w.Header().Set("X-Stream-Quality", qualityMain)
-		return nil
-	}
-	w.Header().Set("X-Stream-Quality", qualitySub)
-	return src
 }
 
 // --- WebRTCStreamHandler ---

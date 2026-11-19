@@ -1,8 +1,9 @@
-package api
+package streamsapi
 
 import (
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"io"
 	"net/http"
 	"strings"
@@ -45,7 +46,7 @@ func subscribeHLS(hub *streamhub.StreamHub, cameraID string, hlsMgr *hls.Manager
 // segment fetches would drop.
 const hlsSubPathPrefix = "/stream/sub/"
 
-func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	// Validate request parameters before service availability. quality
@@ -63,12 +64,12 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.hlsMgr == nil || h.camMgr == nil {
+	if s.deps.HLS == nil || s.deps.Cam == nil {
 		WriteError(w, http.StatusInternalServerError, "HLS not available")
 		return
 	}
 
-	cam, err := h.db.GetCamera(r.Context(), id)
+	cam, err := s.deps.DB.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
@@ -84,10 +85,10 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		// Hold the reference for this request only. Playlist polling re-
 		// acquires well inside the idle timeout, so an active player keeps
 		// the puller warm; once polling stops, the idle timeout recycles it.
-		if src := h.acquireSub(w, r, id); src != nil {
+		if src := s.acquireSub(w, r, id); src != nil {
 			subSrc = src
 			key = subKey(id)
-			defer h.camMgr.ReleaseSubStream(id)
+			defer s.deps.Cam.ReleaseSubStream(id)
 		}
 		if strings.HasSuffix(r.URL.Path, ".m3u8") {
 			// (acquireSub already set the header; re-affirm for playlists
@@ -99,8 +100,8 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If stream not active, start it
-	if !h.hlsMgr.IsActive(key) {
-		camCfg := h.camMgr.GetCameraConfig(id)
+	if !s.deps.HLS.IsActive(key) {
+		camCfg := s.deps.Cam.GetCameraConfig(id)
 		hlsMaxFPS := 0
 		if camCfg != nil {
 			hlsMaxFPS = camCfg.HLSMaxFPS
@@ -115,13 +116,13 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 			codec, sps, pps, vps = subSrc.CodecParams()
 			hub = subSrc.Hub()
 		} else {
-			rec := h.camMgr.GetRecorder(id)
+			rec := s.deps.Cam.GetRecorder(id)
 			if rec == nil {
 				WriteError(w, http.StatusBadRequest, "camera recorder not running")
 				return
 			}
-			codec, sps, pps, vps = getCodecParams(rec)
-			hub = getStreamHub(rec)
+			codec, sps, pps, vps = recorder.CodecParamsOf(rec)
+			hub = recorder.HubOf(rec)
 		}
 
 		switch codec {
@@ -130,33 +131,33 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 				WriteError(w, http.StatusServiceUnavailable, "SPS/PPS not available yet, waiting for video stream")
 				return
 			}
-			if err := h.hlsMgr.StartStream(key, sps, pps, hlsMaxFPS); err != nil {
+			if err := s.deps.HLS.StartStream(key, sps, pps, hlsMaxFPS); err != nil {
 				if errors.Is(err, hls.ErrMaxStreamsReached) {
-					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
+					httpx.WriteAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 				} else {
 					logger.Error("failed to start HLS stream", "camera_id", id, "key", key, "error", err)
 					WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 				}
 				return
 			}
-			_ = subscribeHLS(hub, key, h.hlsMgr, false)
+			_ = subscribeHLS(hub, key, s.deps.HLS, false)
 		case model.FormatH265:
 			if sps == nil || pps == nil || vps == nil {
 				WriteError(w, http.StatusServiceUnavailable, "VPS/SPS/PPS not available yet, waiting for video stream")
 				return
 			}
-			if err := h.hlsMgr.StartStreamH265(key, vps, sps, pps, hlsMaxFPS); err != nil {
+			if err := s.deps.HLS.StartStreamH265(key, vps, sps, pps, hlsMaxFPS); err != nil {
 				if errors.Is(err, hls.ErrMaxStreamsReached) {
-					writeAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
+					httpx.WriteAPIError(w, http.StatusServiceUnavailable, &model.HLSMaxStreamsError{})
 				} else {
 					logger.Error("failed to start HLS H265 stream", "camera_id", id, "key", key, "error", err)
 					WriteError(w, http.StatusInternalServerError, "failed to start HLS stream")
 				}
 				return
 			}
-			_ = subscribeHLS(hub, key, h.hlsMgr, true)
+			_ = subscribeHLS(hub, key, s.deps.HLS, true)
 		default:
-			writeAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
+			httpx.WriteAPIError(w, http.StatusBadRequest, &model.HLSSupportedCodecError{CameraID: id})
 			return
 		}
 	} else if subSrc != nil {
@@ -164,8 +165,8 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 		// puller generation (recycled + restarted since) — rebind, mirroring
 		// the WS endpoint's recovery.
 		codec, _, _, _ := subSrc.CodecParams()
-		if h.hlsMgr.ActiveHub(key) != subSrc.Hub() {
-			h.hlsMgr.RebindHub(key, subSrc.Hub(), codec == model.FormatH265)
+		if s.deps.HLS.ActiveHub(key) != subSrc.Hub() {
+			s.deps.HLS.RebindHub(key, subSrc.Hub(), codec == model.FormatH265)
 		}
 	}
 	// Issue the stream cookie on playlist fetches (#331): media players that
@@ -184,7 +185,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	// integrations that followed the old docs.
 	r.URL.Path = rewriteLegacyPlaylistName(r.URL.Path)
 	// Proxy to muxer handler
-	if !h.hlsMgr.Handle(key, w, r) {
+	if !s.deps.HLS.Handle(key, w, r) {
 		WriteError(w, http.StatusServiceUnavailable, "HLS stream not available")
 		return
 	}
@@ -215,6 +216,12 @@ func rewriteLegacyPlaylistName(p string) string {
 // actually validated the key (IsAPIKeyAuthenticated), and the cookie stays
 // scoped to this camera's subtree + GET/HEAD media fetches — no more power
 // than the ?api_key= playlist URL already granted.
+// SetStreamCookieOnPlaylist is the exported form — the VOD playback handlers
+// in the api root (recordings domain) issue the same cookie on VOD playlists.
+func SetStreamCookieOnPlaylist(w http.ResponseWriter, r *http.Request, cameraID string) {
+	setStreamCookieOnPlaylist(w, r, cameraID)
+}
+
 func setStreamCookieOnPlaylist(w http.ResponseWriter, r *http.Request, cameraID string) {
 	if !strings.HasSuffix(r.URL.Path, ".m3u8") {
 		return
@@ -253,22 +260,22 @@ func setStreamCookieOnPlaylist(w http.ResponseWriter, r *http.Request, cameraID 
 	})
 }
 
-func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	if h.hlsMgr == nil {
+	if s.deps.HLS == nil {
 		WriteError(w, http.StatusInternalServerError, "HLS not available")
 		return
 	}
 
-	if !h.hlsMgr.IsActive(id) && !h.hlsMgr.IsActive(subKey(id)) {
+	if !s.deps.HLS.IsActive(id) && !s.deps.HLS.IsActive(subKey(id)) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "not active"})
 		return
 	}
 
 	// Unsubscribe HLS consumer from StreamHub before stopping the stream
-	if h.camMgr != nil {
-		if rec := h.camMgr.GetRecorder(id); rec != nil {
+	if s.deps.Cam != nil {
+		if rec := s.deps.Cam.GetRecorder(id); rec != nil {
 			hub := getRecorderHub(rec)
 			if hub != nil {
 				hub.Unsubscribe("hls")
@@ -276,14 +283,14 @@ func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.hlsMgr.StopStream(id)
+	s.deps.HLS.StopStream(id)
 	// Stop the sub-stream entry too and release its pull reference (#513) —
 	// the on-demand puller otherwise idles out up to idle_timeout_s later.
-	if h.hlsMgr.IsActive(subKey(id)) {
-		if hub := h.hlsMgr.ActiveHub(subKey(id)); hub != nil {
+	if s.deps.HLS.IsActive(subKey(id)) {
+		if hub := s.deps.HLS.ActiveHub(subKey(id)); hub != nil {
 			hub.Unsubscribe("hls")
 		}
-		h.hlsMgr.StopStream(subKey(id))
+		s.deps.HLS.StopStream(subKey(id))
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
@@ -320,12 +327,12 @@ func getRecorderHub(rec model.Recorder) *streamhub.StreamHub {
 
 // --- Snapshot endpoint ---
 
-func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 
 	var snapshotURL, username, password string
-	if h.config != nil {
-		for _, cam := range h.config.Cameras {
+	if s.deps.Config != nil {
+		for _, cam := range s.deps.Config.Cameras {
 			if cam.ID == cameraID {
 				snapshotURL = cam.SnapshotURL
 				username = cam.Username
@@ -341,9 +348,7 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	// Check cache (10 second TTL)
 	const cacheTTL = 10 * time.Second
-	h.snapshotMu.RLock()
-	cached, ok := h.snapshots[cameraID]
-	h.snapshotMu.RUnlock()
+	cached, ok := s.snapStore.get(cameraID)
 
 	if ok && time.Since(cached.timestamp) < cacheTTL {
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -389,9 +394,7 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.snapshotMu.Lock()
-	h.snapshots[cameraID] = &snapshotCache{data: data, timestamp: time.Now()}
-	h.snapshotMu.Unlock()
+	s.snapStore.put(cameraID, data)
 
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "max-age=5")

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/binary"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"io"
 	"net/http"
 	"os"
@@ -35,7 +36,7 @@ func (h *Handler) handlePlaybackPlaylist(w http.ResponseWriter, r *http.Request)
 	cameraID := chi.URLParam(r, "cameraID")
 	// Segment fetches by hls.js carry no headers: hand them the scoped
 	// mbs_session cookie, same mechanism as live HLS (#879).
-	setStreamCookieOnPlaylist(w, r, cameraID)
+	streamsapi.SetStreamCookieOnPlaylist(w, r, cameraID)
 	q := r.URL.Query()
 	startStr, endStr := q.Get("start"), q.Get("end")
 	if startStr == "" || endStr == "" {

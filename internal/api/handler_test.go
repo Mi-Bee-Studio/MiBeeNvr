@@ -2216,14 +2216,7 @@ func TestHandleSnapshot_StaleFallback(t *testing.T) {
 	require.Equal(t, 1, requestCount)
 
 	// Make cache stale by backdating the timestamp
-	h.snapshotMu.Lock()
-	if cached, ok := h.snapshots["cam-snap"]; ok {
-		h.snapshots["cam-snap"] = &snapshotCache{
-			data:      cached.data,
-			timestamp: time.Now().Add(-11 * time.Second),
-		}
-	}
-	h.snapshotMu.Unlock()
+	h.snapStore.Backdate("cam-snap", -11*time.Second)
 
 	// Close the server to cause a connection error (stale fallback only triggers on err != nil)
 	snapshotServer.Close()

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -97,9 +98,7 @@ func TestLatestFrame_DecodedPath_StaleCacheRefreshes(t *testing.T) {
 	h.SetSnapshotCapturer(capt)
 
 	// Seed an expired cache entry: the next request must re-capture.
-	h.snapshotMu.Lock()
-	h.snapshots["cam-h264"] = &snapshotCache{data: []byte("stale"), timestamp: time.Now().Add(-latestFrameCacheTTL - time.Second)}
-	h.snapshotMu.Unlock()
+	h.snapStore.Seed("cam-h264", []byte("stale"), time.Now().Add(-streamsapi.LatestFrameCacheTTL-time.Second))
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-h264/latest-frame", nil, "", "")
 	require.Equal(t, http.StatusOK, rr.Code)

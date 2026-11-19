@@ -59,7 +59,7 @@ func TestSetupAudioForWS_NoAudioNoOp(t *testing.T) {
 
 	// Empty codec string → setupAudioForWS returns before touching the manager.
 	rec := &mockAudioRecorder{codec: "", rate: 0, channels: 0}
-	require.NotPanics(t, func() { setupAudioForWS(h, "cam-silent", rec) })
+	require.NotPanics(t, func() { setupAudioForWS(h.wsMgr, "cam-silent", rec) })
 }
 
 func TestSetupAudioForWS_NonAudioRecorderNoOp(t *testing.T) {
@@ -69,7 +69,7 @@ func TestSetupAudioForWS_NonAudioRecorderNoOp(t *testing.T) {
 	// A recorder that does NOT implement audioInfoProvider: setupAudioForWS
 	// unwraps delegates, finds no provider, and returns without error.
 	rec := silentRecorder{}
-	require.NotPanics(t, func() { setupAudioForWS(h, "cam-noaudio", rec) })
+	require.NotPanics(t, func() { setupAudioForWS(h.wsMgr, "cam-noaudio", rec) })
 }
 
 // silentRecorder implements model.Recorder but NOT audioInfoProvider.

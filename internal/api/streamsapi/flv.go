@@ -1,7 +1,8 @@
-package api
+package streamsapi
 
 import (
 	"errors"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"net/http"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/flv"
@@ -18,7 +19,7 @@ import (
 // quality=sub (#513) registers the entry under the camera's "/sub" key and
 // streams the on-demand sub-stream; it falls back to main when the camera has
 // no usable sub-stream (X-Stream-Quality response header reports the outcome).
-func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	quality, qerr := parseQuality(r)
@@ -27,12 +28,12 @@ func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.flvMgr == nil {
+	if s.deps.FLV == nil {
 		WriteError(w, http.StatusServiceUnavailable, "FLV streaming not available")
 		return
 	}
 
-	cam, err := h.db.GetCamera(r.Context(), id)
+	cam, err := s.deps.DB.GetCamera(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
@@ -46,17 +47,17 @@ func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 	// whole ServeFLV lifetime (the handler blocks until the viewer leaves).
 	key := id
 	var subSrc *substream.Source
-	if quality == qualitySub && h.camMgr != nil {
-		subSrc = h.acquireSub(w, r, id)
+	if quality == qualitySub && s.deps.Cam != nil {
+		subSrc = s.acquireSub(w, r, id)
 		if subSrc != nil {
 			key = subKey(id)
-			defer h.camMgr.ReleaseSubStream(id)
+			defer s.deps.Cam.ReleaseSubStream(id)
 		}
 	}
 
 	// On-demand registration: if FLV stream not registered, register it
-	if !h.flvMgr.IsActive(key) {
-		if h.camMgr == nil {
+	if !s.deps.FLV.IsActive(key) {
+		if s.deps.Cam == nil {
 			WriteError(w, http.StatusNotFound, "FLV stream not active")
 			return
 		}
@@ -72,44 +73,44 @@ func (h *Handler) handleFLVStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			rec := h.camMgr.GetRecorder(id)
+			rec := s.deps.Cam.GetRecorder(id)
 			if rec == nil {
 				WriteError(w, http.StatusBadRequest, "camera recorder not running")
 				return
 			}
 
-			codec, sps, pps, vps = getCodecParams(rec)
+			codec, sps, pps, vps = recorder.CodecParamsOf(rec)
 			if sps == nil || pps == nil {
 				WriteError(w, http.StatusServiceUnavailable, "waiting for video stream")
 				return
 			}
-			hub = getStreamHub(rec)
+			hub = recorder.HubOf(rec)
 		}
 
-		if err := h.flvMgr.RegisterStream(key, codec, sps, pps, vps, hub); err != nil {
+		if err := s.deps.FLV.RegisterStream(key, codec, sps, pps, vps, hub); err != nil {
 			if !errors.Is(err, flv.ErrStreamExists) {
 				logger.Error("failed to register FLV stream", "camera_id", id, "key", key, "error", err)
 				WriteError(w, http.StatusInternalServerError, "failed to register FLV stream")
 				return
 			}
 		}
-	} else if subSrc != nil && h.flvMgr.ActiveHub(key) != subSrc.Hub() {
+	} else if subSrc != nil && s.deps.FLV.ActiveHub(key) != subSrc.Hub() {
 		// Active entry subscribed to a recycled puller's dead hub — rebind.
-		h.flvMgr.RebindHub(key, subSrc.Hub())
+		s.deps.FLV.RebindHub(key, subSrc.Hub())
 	}
 
 	// Arm the AAC audio leg when the camera provides AAC params (#1066):
 	// idempotent and retried on every request, so a camera whose audio
 	// config arrives after the first viewer still gets armed by the next
 	// one. Sub-streams are video-only (#513) — main quality only.
-	if quality != qualitySub && h.camMgr != nil {
-		if ci := h.camMgr.GetCodecInfo(id); ci.AudioCodec == "aac" && len(ci.AudioConfig) > 0 {
-			h.flvMgr.RegisterAudioConfig(key, ci.AudioConfig, ci.AudioSampleRate, ci.AudioChannels)
+	if quality != qualitySub && s.deps.Cam != nil {
+		if ci := s.deps.Cam.GetCodecInfo(id); ci.AudioCodec == "aac" && len(ci.AudioConfig) > 0 {
+			s.deps.FLV.RegisterAudioConfig(key, ci.AudioConfig, ci.AudioSampleRate, ci.AudioChannels)
 		}
 	}
 
 	// Serve FLV stream (blocks until client disconnects)
-	if err := h.flvMgr.ServeFLV(key, w, r); err != nil {
+	if err := s.deps.FLV.ServeFLV(key, w, r); err != nil {
 		if errors.Is(err, flv.ErrStreamNotActive) {
 			WriteError(w, http.StatusNotFound, "FLV stream not active")
 			return

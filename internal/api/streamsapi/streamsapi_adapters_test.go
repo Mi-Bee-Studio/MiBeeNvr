@@ -1,4 +1,4 @@
-package api
+package streamsapi
 
 // Tests for the StreamHandler adapters + StreamRegistry + codec/hub
 // extractors in handlers_stream.go / handlers_hls.go (#578). Fully
@@ -194,16 +194,16 @@ func TestUnwrapDelegate(t *testing.T) {
 	t.Parallel()
 	inner := &providerStub{codec: model.FormatH264}
 	outer := &delegatingStub{inner: inner}
-	require.Equal(t, inner, unwrapDelegate(outer))
+	require.Equal(t, inner, model.UnwrapDelegate(outer))
 
 	// Delegation chain terminates at nil-safe innermost recorder.
 	chain := &delegatingStub{inner: &delegatingStub{inner: stubRecorder{}}}
-	_, ok := unwrapDelegate(chain).(stubRecorder)
+	_, ok := model.UnwrapDelegate(chain).(stubRecorder)
 	require.True(t, ok)
 
 	// Plain recorder is returned unchanged.
 	plain := stubRecorder{}
-	require.Equal(t, plain, unwrapDelegate(plain))
+	require.Equal(t, plain, model.UnwrapDelegate(plain))
 }
 
 func TestGetCodecParams(t *testing.T) {
@@ -211,19 +211,19 @@ func TestGetCodecParams(t *testing.T) {
 
 	// Provider path (through a delegation layer).
 	deep := &delegatingStub{inner: &providerStub{codec: model.FormatH265, vps: []byte{1}}}
-	codec, sps, _, vps := getCodecParams(deep)
+	codec, sps, _, vps := recorder.CodecParamsOf(deep)
 	require.Equal(t, model.FormatH265, codec)
 	require.Nil(t, sps)
 	require.NotNil(t, vps)
 
 	// JPEG/MJPEG concrete fallbacks.
-	codec, _, _, _ = getCodecParams(&recorder.HTTPJPEGRecorder{})
+	codec, _, _, _ = recorder.CodecParamsOf(&recorder.HTTPJPEGRecorder{})
 	require.Equal(t, model.EncJPEG, codec)
-	codec, _, _, _ = getCodecParams(&recorder.MJPEGRecorder{})
+	codec, _, _, _ = recorder.CodecParamsOf(&recorder.MJPEGRecorder{})
 	require.Equal(t, model.FormatMJPEG, codec)
 
 	// Unknown type → empty codec.
-	codec, _, _, _ = getCodecParams(stubRecorder{})
+	codec, _, _, _ = recorder.CodecParamsOf(stubRecorder{})
 	require.Empty(t, codec)
 }
 
@@ -232,13 +232,13 @@ func TestGetStreamHubs(t *testing.T) {
 
 	// GetHub interface path.
 	hub := &streamhub.StreamHub{}
-	require.Equal(t, hub, getStreamHub(&providerStub{hub: hub}))
+	require.Equal(t, hub, recorder.HubOf(&providerStub{hub: hub}))
 
 	// Recorders without a hub surface fall through to nil. (Concrete
 	// recorder types embed *baseRecorder — a zero value panics on promoted
 	// field reads, so they are exercised via their constructors in the
 	// recorder package's own tests instead.)
-	require.Nil(t, getStreamHub(stubRecorder{}))
+	require.Nil(t, recorder.HubOf(stubRecorder{}))
 	require.Nil(t, getRecorderHub(stubRecorder{}))
 }
 
@@ -257,17 +257,33 @@ func TestAcquireSub(t *testing.T) {
 	t.Parallel()
 
 	// No camera manager → main-stream header, nil source.
-	db, store := setupTestDB(t)
+	db, store := setupStreamsTestDB(t)
 	t.Cleanup(func() { db.Close() })
-	h := TestHandler(db, store)
+	h := &server{deps: Deps{}}
 	w := httptest.NewRecorder()
 	require.Nil(t, h.acquireSub(w, httptest.NewRequest(http.MethodGet, "/x", nil), "cam-1"))
 	require.Equal(t, "main", w.Header().Get("X-Stream-Quality"))
 
 	// Real manager, unknown camera → AcquireSubStream errors → main fallback.
 	cfg := &config.Config{Storage: config.StorageConfig{RootDir: store.RootDir()}, Cameras: []config.CameraConfig{}}
-	h2 := NewHandler(db, store, noopAuthMW(), cfg, camera.NewCameraManager(cfg, store, db, ""), nil, "", nil, nil, nil, nil, nil, nil)
+	h2 := &server{deps: Deps{Cam: camera.NewCameraManager(cfg, store, db, "")}}
 	w2 := httptest.NewRecorder()
 	require.Nil(t, h2.acquireSub(w2, httptest.NewRequest(http.MethodGet, "/x", nil), "ghost"))
 	require.Equal(t, "main", w2.Header().Get("X-Stream-Quality"))
+}
+
+func TestStreamRegistry_RegisterAndQuery(t *testing.T) {
+	t.Parallel()
+	reg := NewStreamRegistry()
+
+	hlsHandler := &HLSStreamHandler{}
+	reg.Register(hlsHandler)
+
+	handlers := reg.handlersForCodec(model.FormatH264)
+	require.Len(t, handlers, 1)
+	require.Equal(t, "hls", handlers[0].Name())
+
+	handlers = reg.handlersForCodec(model.FormatH265)
+	require.Len(t, handlers, 1)
+	require.Equal(t, "hls", handlers[0].Name())
 }

@@ -6,6 +6,8 @@ package httpx
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
 
 // WriteJSON writes v as a JSON response with the given status code.
@@ -22,6 +24,14 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // (#1009: one error track, two entry points).
 func WriteError(w http.ResponseWriter, status int, msg string) {
 	WriteJSON(w, status, map[string]string{"error": msg, "code": codeForStatus(status)})
+}
+
+// WriteAPIError writes a typed error (model.CodedError or plain error) using
+// the shared {"error", "code"} response shape — model.ErrorCode supplies the
+// code (#1009: one error track). Domain packages call this directly; the api
+// root keeps a writeAPIError wrapper for its remaining call sites.
+func WriteAPIError(w http.ResponseWriter, status int, err error) {
+	WriteJSON(w, status, map[string]string{"error": err.Error(), "code": model.ErrorCode(err)})
 }
 
 // codeForStatus maps an HTTP status to the coarse machine-readable code used
