@@ -145,6 +145,24 @@ func TestCameraUpdate(t *testing.T) {
 	}
 	require.True(t, persisted, "audio_in_recordings must survive the YAML persist")
 
+	// stable_id / subnet_hints round-trip (#57): both fields were declared and
+	// validated in the PUT body but never mapped into CameraUpdate, so a valid
+	// update returned 200 while the value stayed unchanged.
+	require.Equal(t, http.StatusOK, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam",
+		`{"stable_id":"88492D665CCF","subnet_hints":["192.168.63.0/24"]}`).Code)
+	updated = cm.GetCameraConfig("ingest-cam")
+	require.NotNil(t, updated)
+	require.Equal(t, "88492D665CCF", updated.StableID, "stable_id must reach the in-memory config")
+	require.Equal(t, []string{"192.168.63.0/24"}, updated.SubnetHints, "subnet_hints must reach the in-memory config")
+	disk3, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	for i := range disk3.Cameras {
+		if disk3.Cameras[i].ID == "ingest-cam" {
+			require.Equal(t, "88492D665CCF", disk3.Cameras[i].StableID)
+			require.Equal(t, []string{"192.168.63.0/24"}, disk3.Cameras[i].SubnetHints)
+		}
+	}
+
 	// Validation branches.
 	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", "not json").Code)
 	require.Equal(t, http.StatusBadRequest, camDo(t, h, http.MethodPut, "/api/cameras/ingest-cam", `{"sub_stream_url":"http://x"}`).Code)

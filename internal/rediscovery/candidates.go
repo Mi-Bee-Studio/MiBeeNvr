@@ -3,6 +3,7 @@ package rediscovery
 import (
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -45,9 +46,15 @@ func buildCandidates(cam config.CameraConfig) []string {
 	}
 
 	// 2. The NVR's own interface subnets (/24). Catches same-L2 roams and the
-	// common home setup where everything shares a /24.
+	// common home setup where everything shares a /24. Ordered by numeric
+	// distance from the last-known host so a DHCP re-lease nearby is found
+	// early instead of the scan exhausting its budget in the low range (#58).
+	prev := hostFromEndpoint(cam.ONVIFEndpoint)
+	if prev == "" {
+		prev = hostFromEndpoint(cam.URL)
+	}
 	for _, ipnet := range localSubnets() {
-		for _, ip := range ipsInIPNet(ipnet) {
+		for _, ip := range sortByDistanceFrom(ipsInIPNet(ipnet), prev) {
 			add(ip)
 		}
 	}
@@ -63,7 +70,7 @@ func buildCandidates(cam config.CameraConfig) []string {
 		if err != nil {
 			continue
 		}
-		for _, ip := range ipsInIPNet(ipnet) {
+		for _, ip := range sortByDistanceFrom(ipsInIPNet(ipnet), prev) {
 			add(ip)
 		}
 	}
@@ -170,6 +177,52 @@ func broadcastIP(ip net.IP, mask net.IPMask) net.IP {
 		b[i] = ip[i] | ^mask[i]
 	}
 	return net.IP(b)
+}
+
+// sortByDistanceFrom reorders hosts so the ones numerically closest to the
+// last-known address come first (#58). A DHCP server almost always hands a
+// returning device an address in the same block it held before, so probing
+// the numeric neighbours before sweeping .1 upward finds the camera within
+// the 30s scan budget instead of running out of time in the low range.
+//
+// prev may be empty (no last-known host) — the input order is then kept.
+// Hosts with unparsable IPv4 stay at the end in their original relative order.
+func sortByDistanceFrom(hosts []string, prev string) []string {
+	prevIP := net.ParseIP(strings.TrimSpace(prev)).To4()
+	if prevIP == nil {
+		return hosts
+	}
+	prevNum := ipToUint32(prevIP)
+	out := make([]string, len(hosts))
+	copy(out, hosts)
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := net.ParseIP(out[i]).To4(), net.ParseIP(out[j]).To4()
+		switch {
+		case a == nil && b == nil:
+			return false
+		case a == nil:
+			return false
+		case b == nil:
+			return true
+		}
+		return absDiff(ipToUint32(a), prevNum) < absDiff(ipToUint32(b), prevNum)
+	})
+	return out
+}
+
+func ipToUint32(ip net.IP) uint32 {
+	v := ip.To4()
+	if v == nil {
+		return 0
+	}
+	return uint32(v[0])<<24 | uint32(v[1])<<16 | uint32(v[2])<<8 | uint32(v[3])
+}
+
+func absDiff(a, b uint32) uint32 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }
 
 func incIP(ip net.IP) net.IP {

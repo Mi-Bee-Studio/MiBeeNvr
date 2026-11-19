@@ -151,6 +151,14 @@ type Engine struct {
 	cfg     Config
 	probe   ProbeFunc
 	confirm ConfirmFunc
+
+	// cursorMu guards cursor, the per-camera round-robin offset into the
+	// candidate list (#58). A single 30s scan can only reach a fraction of a
+	// large candidate set, so each scan resumes where the previous one left
+	// off; over several scans every host is eventually probed instead of the
+	// low range being re-scanned forever.
+	cursorMu sync.Mutex
+	cursor   map[string]int
 }
 
 // NewEngine creates an Engine. If probe is nil, the real onvif.ProbeDevice is
@@ -169,7 +177,7 @@ func NewEngineWithConfirm(cfg Config, probe ProbeFunc, confirm ConfirmFunc) *Eng
 	if probe == nil {
 		probe = onvif.ProbeDevice
 	}
-	return &Engine{cfg: cfg, probe: probe, confirm: confirm}
+	return &Engine{cfg: cfg, probe: probe, confirm: confirm, cursor: make(map[string]int)}
 }
 
 // Result is the outcome of a successful re-discovery.
@@ -222,6 +230,13 @@ func (e *Engine) DiscoverByStableID(ctx context.Context, cam config.CameraConfig
 		"camera_id", cam.ID, "stable_id", want, "candidates", len(candidates),
 		"ports", ports, "max_parallel", e.cfg.MaxParallel)
 
+	// Rotate the candidate window so successive scans cover different slices of
+	// a large candidate set (#58). The cursor advances by the number of hosts a
+	// scan can reasonably reach; the list order itself stays stable, so the
+	// distance-ordered prefix (the most likely addresses) is still probed first
+	// on the first scan and revisited every full rotation.
+	candidates = e.rotated(cam.ID, candidates)
+
 	match := e.scanFor(scanCtx, candidates, ports, want)
 	if match.host == "" {
 		return nil, ErrNotFound
@@ -238,6 +253,53 @@ func (e *Engine) DiscoverByStableID(ctx context.Context, cam config.CameraConfig
 type scanMatch struct {
 	host string
 	port int
+}
+
+// rotated returns candidates starting at the camera's current round-robin
+// cursor, with the skipped prefix appended at the end (a logical rotation —
+// no host is dropped). The cursor then advances by the number of hosts one
+// scan can reach, so consecutive scans sweep successive slices of the list.
+//
+// The reach estimate mirrors scanFor's budget: MaxDuration / ProbeTimeout
+// concurrent waves of MaxParallel probes, capped at the candidate count.
+func (e *Engine) rotated(cameraID string, candidates []string) []string {
+	if len(candidates) == 0 {
+		return candidates
+	}
+	e.cursorMu.Lock()
+	start := e.cursor[cameraID]
+	if start < 0 || start >= len(candidates) {
+		start = 0
+	}
+	reach := e.reachEstimate()
+	next := start + reach
+	if next >= len(candidates) {
+		next = 0 // wrapped — next scan restarts from the top
+	}
+	e.cursor[cameraID] = next
+	e.cursorMu.Unlock()
+
+	if start == 0 {
+		return candidates
+	}
+	out := make([]string, 0, len(candidates))
+	out = append(out, candidates[start:]...)
+	out = append(out, candidates[:start]...)
+	return out
+}
+
+// reachEstimate is how many hosts one scan can probe before MaxDuration runs
+// out, given the per-probe timeout and concurrency. At least 1 so the cursor
+// always advances.
+func (e *Engine) reachEstimate() int {
+	if e.cfg.ProbeTimeout <= 0 || e.cfg.MaxParallel <= 0 || e.cfg.MaxDuration <= 0 {
+		return 1
+	}
+	waves := int(e.cfg.MaxDuration / e.cfg.ProbeTimeout)
+	if waves < 1 {
+		waves = 1
+	}
+	return waves * e.cfg.MaxParallel
 }
 
 // scanFor probes every candidate concurrently and returns the first host whose

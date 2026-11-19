@@ -544,9 +544,14 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		PushTargets:            body.PushTargets,
 		PushRetentionDays:      body.PushRetentionDays,
 		VisionTargets:          body.VisionTargets,
-		GB28181:                body.GB28181.toConfigPtr(),
-		Group:                  body.Group,
-		AudioLinkCameraID:      body.AudioLinkCameraID,
+		// IP self-healing (#57): the body fields are declared and validated
+		// above but were never mapped into CameraUpdate, so a legitimate
+		// stable_id / subnet_hints update was silently dropped after a 200.
+		StableID:          body.StableID,
+		SubnetHints:       body.SubnetHints,
+		GB28181:           body.GB28181.toConfigPtr(),
+		Group:             body.Group,
+		AudioLinkCameraID: body.AudioLinkCameraID,
 	}
 
 	// Audio link (v43): validate before mutating anything.

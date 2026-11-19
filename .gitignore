@@ -48,8 +48,6 @@ package-lock.json
 /qa-*.png
 plugins-*.png
 
-# Private documentation (not committed to remote)
-docs/private/
 
 # Cross-team collaboration (private, do NOT commit)
 docs/MiBee-Projects/
@@ -71,8 +69,6 @@ dist/
 deploy/fnos/*.fpk
 # docker-saved image tars bundled into the offline .fpk by build.sh
 deploy/fnos/app/images/
-internal/transcoding/-decoders
-internal/transcoding/-encoders
 .zcode/
 .codegraph/
 # Home Assistant integration local dev artifacts (deploy/home-assistant)
