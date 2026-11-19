@@ -83,19 +83,26 @@ func Dial(ctx context.Context, cfg SignalingConfig) (*Session, error) {
 	}
 	s.lastSessionID = welcome.SessionID
 	sc.lastSessionID = welcome.SessionID
+	// Relay identity is minted BEFORE any dial attempt (mibeescout#16): the
+	// announced public key must exist even when the dial below is gated or
+	// fails — the peer arms its tunnel E2EE and routing key against it.
+	s.relayIdentity = relay.NewClient()
 	// Connect to relay server if enabled (host gate + outcome callback
-	// consulted inside — see connectSessionRelay).
+	// consulted inside — see connectSessionRelay). The IDENTITY client is
+	// the one being connected: on success it becomes relayClient (announced
+	// key == routing key, always); on gated/failure it stays identity-only.
 	if welcome.RelayURL != "" && welcome.RelayPubKey != "" {
-		rc, err := connectSessionRelay(ctx, welcome.RelayURL, welcome.RelayPubKey, cfg, logger)
+		err := connectRelayClient(ctx, s.relayIdentity, welcome.RelayURL,
+			welcome.RelayPubKey, cfg, logger)
 		switch {
 		case errors.Is(err, ErrRelayGated):
 			// host circuit open — deliberate skip, not a failure
 		case err == nil:
-			s.relayClient = rc
-			rc.OnFatal(s.handleRelayFatal)
-			rc.OnPeerGone(s.handleRelayPeerGone)
+			s.relayClient = s.relayIdentity
+			s.relayIdentity.OnFatal(s.handleRelayFatal)
+			s.relayIdentity.OnPeerGone(s.handleRelayPeerGone)
 		default:
-			// failure already logged + reported inside connectSessionRelay
+			// failure already logged + reported inside connectRelayClient
 		}
 	}
 
@@ -219,6 +226,15 @@ type Session struct {
 	logger           *slog.Logger
 	welcome          *Welcome
 	relayClient      *relay.Client
+	// relayIdentity is the session-stable relay IDENTITY keypair holder
+	// (mibeescout#16 device-side half): minted at session creation, before
+	// and independent of any relay CONNECTION. Offer/answer and
+	// connect_request announce ITS public key, so the peer can arm tunnel
+	// E2EE and aim its routing key even while the relay dial is gated,
+	// failing, or mid-rebuild. When the dial succeeds the SAME client
+	// becomes relayClient (identity == routing key, always); on failure the
+	// identity survives for the next attempt. See NewClientWithIdentity.
+	relayIdentity *relay.Client
 	// Callbacks (set by the user; OnSession/OnDataChannel/OnReject are read
 	// live at event time, so they may be assigned any time before the event
 	// fires — including after Connect() returns via SetOnDataChannel)
@@ -252,13 +268,14 @@ func (s *Session) Connect(ctx context.Context, targetPeerID string, serviceName 
 	sessionID := uuid.New().String()
 
 	p2p := &p2pSession{
-		sessionID:    sessionID,
-		remotePeerID: targetPeerID,
-		isOfferer:    false,
-		logger:       s.logger,
-		owner:        s,
-		onStats:      s.OnStats,
-		relayClient:  s.relayClient,
+		sessionID:     sessionID,
+		remotePeerID:  targetPeerID,
+		isOfferer:     false,
+		logger:        s.logger,
+		owner:         s,
+		onStats:       s.OnStats,
+		relayClient:   s.relayClient,
+		relayIdentity: s.relayIdentity,
 	}
 	// 活跃度锚点=创建时刻：从未承载流量的会话（握手即死）也会被
 	// 空闲清扫按超时回收，而不是永久滞留名册。
@@ -282,10 +299,14 @@ func (s *Session) Connect(ctx context.Context, targetPeerID string, serviceName 
 	}
 	// Arm direct-path E2EE upfront (mibeescout#16): the device creates the
 	// DataChannel before the SDP exchange can carry our relay identity, so
-	// hand it over with the request. The keypair exists independently of
-	// any live relay connection.
-	if s.relayClient != nil {
-		callerPub := s.relayClient.PubKey()
+	// hand it over with the request. The IDENTITY keypair exists
+	// independently of any live relay connection — gated on relay INTENT
+	// (welcome carried relay config), not on dial success: with intent the
+	// rebuild loop keeps trying, so the key becomes routable; announcing it
+	// early is what lets the device arm direct-path E2EE while the relay
+	// leg is still down.
+	if s.relayIntent() {
+		callerPub := s.relayIdentity.PubKey()
 		req.CallerRelayPubKey = hex.EncodeToString(callerPub[:])
 	}
 	if err := s.signal.sendRawMsg(MessageTypeConnectRequest, req); err != nil {
@@ -501,33 +522,57 @@ func (s *Session) handleRelayPeerGone(peer [32]byte, reason byte) {
 // gated skip: an attempt that never happened cannot fail.
 var ErrRelayGated = errors.New("relay dial skipped by host gate")
 
-// connectSessionRelay dials the session-level relay transport, honoring
-// the host's RelayDialGate and reporting every real attempt outcome via
-// OnRelayConnect. Both relay connect sites (Dial-time and the mid-life
-// rebuild loop) go through here so host-side circuit breaking sees every
-// dial.
+// connectSessionRelay dials the session-level relay transport with a FRESH
+// identity (CLI convenience path). The session layer uses connectRelayClient
+// instead so its announced identity and routing key stay one and the same.
 func connectSessionRelay(ctx context.Context, serverURL, serverPubKeyHex string, cfg SignalingConfig, logger *slog.Logger) (*relay.Client, error) {
+	rc := relay.NewClient()
+	if err := connectRelayClient(ctx, rc, serverURL, serverPubKeyHex, cfg, logger); err != nil {
+		return nil, err
+	}
+	return rc, nil
+}
+
+// connectRelayClient dials an EXISTING relay client (identity pre-minted —
+// mibeescout#16), honoring the host's RelayDialGate and reporting every
+// real attempt outcome via OnRelayConnect. Both relay connect sites (Dial-
+// time and the mid-life rebuild loop) go through here so host-side circuit
+// breaking sees every dial.
+func connectRelayClient(ctx context.Context, rc *relay.Client, serverURL, serverPubKeyHex string, cfg SignalingConfig, logger *slog.Logger) error {
 	if cfg.RelayDialGate != nil && !cfg.RelayDialGate() {
 		logger.Info("relay connect skipped by host gate (circuit open)")
-		return nil, ErrRelayGated
+		return ErrRelayGated
 	}
-	rc := relay.NewClient()
 	err := rc.Connect(ctx, serverURL, serverPubKeyHex)
 	if cfg.OnRelayConnect != nil {
 		cfg.OnRelayConnect(err)
 	}
 	if err != nil {
 		logger.Warn("relay connect failed (non-fatal)", "error", err)
-		return nil, err
+		return err
 	}
 	logger.Info("relay connection established", relayURLKey, serverURL)
-	return rc, nil
+	return nil
+}
+
+// relayIntent reports whether the platform welcome carried relay
+// configuration — regardless of the current dial state (gated, failed,
+// mid-rebuild). Only under intent does the session announce its relay
+// identity: with no relay to ever register on, an announced key would be a
+// permanently unroutable destination, actively misleading the peer's
+// forced-relay path.
+func (s *Session) relayIntent() bool {
+	w := s.welcome
+	return w != nil && w.RelayURL != "" && w.RelayPubKey != ""
 }
 
 // rebuildRelayClient reconnects the session-level relay transport with
 // bounded retries. A fresh relay.Client is used each attempt (the previous
 // one is permanently failed — fatalOnce is spent), matching the
-// full-rebuild contract. New sessions snapshot the new client at creation.
+// full-rebuild contract — but every attempt is RE-KEYED WITH THE SESSION'S
+// STABLE IDENTITY (mibeescout#16): the announced public key must not change
+// across rebuilds, or the peer's armed E2EE key and routing key go stale.
+// New sessions snapshot the new client at creation.
 // A restarting cause (#106-B) shortens the FIRST attempt to the server's
 // retry hint (+ jitter, clamped) — the server said it will be back shortly.
 func (s *Session) rebuildRelayClient(cause error) {
@@ -558,8 +603,11 @@ func (s *Session) rebuildRelayClient(cause error) {
 			return
 		case <-time.After(delay):
 		}
+		// Same identity as the announced key — see NewClientWithIdentity.
+		pub, priv := s.relayIdentity.IdentityKeys()
+		rc := relay.NewClientWithIdentity(pub, priv)
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		rc, err := connectSessionRelay(ctx, w.RelayURL, w.RelayPubKey, cfg, s.logger)
+		err := connectRelayClient(ctx, rc, w.RelayURL, w.RelayPubKey, cfg, s.logger)
 		cancel()
 		if errors.Is(err, ErrRelayGated) {
 			return // gate closed between the check and the dial

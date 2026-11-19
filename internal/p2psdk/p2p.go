@@ -47,6 +47,11 @@ type p2pSession struct {
 	ctrlRaw     *webrtc.DataChannel
 	graceTimer  *time.Timer
 	relayClient *relay.Client
+	// relayIdentity is the session-stable announced key (mibeescout#16):
+	// exists even when relayClient is nil (dial gated/failed/pending).
+	// Offer/answer/e2ee derivation use it; CONNECTED-transport decisions
+	// (fallback, ForceRelay adoption) keep using relayClient.
+	relayIdentity *relay.Client
 	// ctrlDC holds the wrapped lossy control channel once open; nil
 	// otherwise. Guarded by mu.
 	ctrlDC       *DataChannel
@@ -181,8 +186,9 @@ func (p *p2pSession) startAsOfferer(signal *signalingClient, cfg SignalingConfig
 	offerMsg := SDPOffer{
 		SessionID: p.sessionID, SDP: finalOffer.SDP,
 	}
-	if p.relayClient != nil {
-		pk := p.relayClient.PubKey()
+	// Announce the session-stable IDENTITY key — see announcedRelayKey
+	// (mibeescout#16).
+	if pk, ok := p.announcedRelayKey(); ok {
 		offerMsg.RelayPubKey = hex.EncodeToString(pk[:])
 	}
 	if sendErr := signal.sendRaw(MessageTypeSDPOffer, offerMsg); sendErr != nil {
@@ -351,11 +357,27 @@ func (p *p2pSession) handleRemoteOffer(sdp string, signal *signalingClient) erro
 	answerMsg := SDPAnswer{
 		SessionID: p.sessionID, SDP: finalAnswer.SDP,
 	}
-	if p.relayClient != nil {
-		pk := p.relayClient.PubKey()
+	// Identity key announcement — see announcedRelayKey (mibeescout#16).
+	if pk, ok := p.announcedRelayKey(); ok {
 		answerMsg.RelayPubKey = hex.EncodeToString(pk[:])
 	}
 	return signal.sendRaw(MessageTypeSDPAnswer, answerMsg)
+}
+
+// announcedRelayKey returns the relay identity public key to announce in
+// SDP offer/answer and whether to announce it at all.
+//
+// The IDENTITY key (session-stable, mibeescout#16) — not the connected
+// client's: the peer arms tunnel E2EE and aims its routing key at this
+// value, so it must exist even while the relay dial is gated/failed/
+// pending. Gated on relay intent — with no relay to ever register on, an
+// announced key would be a permanently unroutable destination, actively
+// misleading the peer's forced-relay path.
+func (p *p2pSession) announcedRelayKey() ([32]byte, bool) {
+	if p.owner.relayIntent() && p.relayIdentity != nil {
+		return p.relayIdentity.PubKey(), true
+	}
+	return [32]byte{}, false
 }
 
 // handleRemoteAnswer processes an incoming SDP answer (for offerer).
@@ -678,9 +700,13 @@ func (p *p2pSession) kickRelay() {
 // before E2EE existed.
 func (p *p2pSession) e2eeKey() []byte {
 	p.mu.Lock()
-	rc := p.relayClient
+	rc := p.relayIdentity
 	remote := p.remoteRelayKey
 	p.mu.Unlock()
+	// Derivation is pure key math (X25519) — it needs the identity keypair
+	// and the remote public key, NOT a live relay connection (mibeescout#16
+	// device-side half: this is what lets direct-path sessions arm E2EE
+	// while the relay leg is gated/failed/pending).
 	if rc == nil || remote == [32]byte{} {
 		return nil
 	}
