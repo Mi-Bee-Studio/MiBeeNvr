@@ -163,6 +163,7 @@ func (s *Session) handleConnectRequest(msg *Message) {
 		owner:          s,
 		onStats:        s.OnStats,
 		relayClient:    s.relayClient,
+		relayIdentity:  s.relayIdentity,
 		ctrlWanted:     req.CtrlChannel, // #88① dual-channel gate (requester-declared)
 	}
 	// 活跃度锚点=创建时刻：从未承载流量的会话（握手即死）也会被
@@ -413,7 +414,12 @@ var _ = slog.Default
 // federation cross-node relay endpoint. The previous client is NOT closed:
 // concurrent local sessions may still ride it, and it dies with the Session.
 func (s *Session) repointRelay(serverURL, serverPubKeyHex string) {
-	rc := relay.NewClient()
+	// Same identity as the announced key (mibeescout#16): the peer routes
+	// and derives E2EE against the key we announced — a fresh keypair would
+	// make that key unroutable on the new node. Symmetric with the Dart
+	// client's repoint, which likewise reuses its keypair.
+	pub, priv := s.relayIdentity.IdentityKeys()
+	rc := relay.NewClientWithIdentity(pub, priv)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := rc.Connect(ctx, serverURL, serverPubKeyHex); err != nil {

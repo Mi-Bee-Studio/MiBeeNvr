@@ -252,6 +252,20 @@ func NewClient() *Client {
 	// identity is now stable across reconnects, matching the server-side
 	// static-key semantics (#55).
 	pub, priv := GenerateKeyPair()
+	return NewClientWithIdentity(pub, priv)
+}
+
+// NewClientWithIdentity creates an unconnected relay client bound to a
+// CALLER-SUPPLIED identity keypair (mibeescout#16 device-side half).
+//
+// Why it exists: the session layer mints its relay identity once and
+// announces it in SDP/connect_request before any relay connection exists.
+// When the dial is retried (rebuild) or re-pointed (federation cross-node),
+// the re-connecting client MUST keep that same identity — the peer already
+// armed its tunnel E2EE and its routing key against the announced public
+// key. A fresh keypair would make every announced key stale (peer frames
+// drop, E2EE derives mismatched keys on both sides).
+func NewClientWithIdentity(pubKey, privKey [32]byte) *Client {
 	c := &Client{
 		closeCh:      make(chan struct{}),
 		ctrlCh:       make(chan []byte, clientCtrlQueueFrames),
@@ -261,10 +275,18 @@ func NewClient() *Client {
 		pongTimeout:  defaultPongTimeout,
 		writeTimeout: defaultWriteTimeout,
 
-		pubKey:  pub,
-		privKey: priv,
+		pubKey:  pubKey,
+		privKey: privKey,
 	}
 	return c
+}
+
+// IdentityKeys returns the client's relay identity keypair (public,
+// private). Callers use it with NewClientWithIdentity to re-key a fresh
+// client with the SAME identity across dial rebuilds / federation
+// re-points — see that constructor for why the identity must not change.
+func (c *Client) IdentityKeys() (pubKey, privKey [32]byte) {
+	return c.pubKey, c.privKey
 }
 
 // SetRemotePeer sets the remote peer's relay public key for Send operations.

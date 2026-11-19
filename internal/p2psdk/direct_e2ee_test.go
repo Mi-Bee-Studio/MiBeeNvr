@@ -39,6 +39,12 @@ func TestConnectRequestCallerRelayKeyFieldCompat(t *testing.T) {
 // SDP round-trips.
 func TestConnectArmsDeviceE2EEBeforeSDP(t *testing.T) {
 	mock := newMockServer(t)
+	// Relay intent on the welcome (mibeescout#16 shape): the relay DIAL will
+	// fail against the dead URL — the point of the test is that arming no
+	// longer depends on dial success. The identity key is announced with
+	// intent, not with a live connection.
+	dead := "wss://127.0.0.1:1/relay"
+	mock.relayWelcome = &Welcome{RelayURL: dead, RelayPubKey: strings.Repeat("ab", 32)}
 
 	device, err := Dial(context.Background(), SignalingConfig{
 		ServerURL: mock.url,
@@ -49,7 +55,6 @@ func TestConnectArmsDeviceE2EEBeforeSDP(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = device.Close() })
-	device.relayClient = relay.NewClient()
 
 	clientRC := relay.NewClient()
 	callerPub := clientRC.PubKey()
@@ -63,7 +68,9 @@ func TestConnectArmsDeviceE2EEBeforeSDP(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	client.relayClient = clientRC
+	// The caller announces its IDENTITY key (minted at session creation —
+	// its relay dial against the dead URL fails, non-fatal).
+	client.relayIdentity = clientRC
 
 	require.NoError(t, client.Connect(context.Background(), "device-1"))
 

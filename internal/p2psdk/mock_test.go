@@ -34,6 +34,10 @@ type mockSignalServer struct {
 	// after Connect() returns but before the DataChannel can open.
 	connectAcceptDelay time.Duration
 
+	// relayWelcome, when set, rides the welcome as relay intent
+	// (RelayURL/RelayPubKey) — relay-identity tests use a dead URL so the
+	// dial fails fast while the INTENT is present (mibeescout#16 shape).
+	relayWelcome *Welcome
 	// hellos counts hello messages received (any outcome).
 	hellos          int
 	mu              sync.RWMutex
@@ -117,6 +121,10 @@ func (s *mockSignalServer) handleWS(w http.ResponseWriter, r *http.Request) {
 			MaxDevices:   10,
 			RelayEnabled: true,
 			ServerTime:   time.Now().Unix(),
+		}
+		if s.relayWelcome != nil {
+			welcome.RelayURL = s.relayWelcome.RelayURL
+			welcome.RelayPubKey = s.relayWelcome.RelayPubKey
 		}
 
 		// Register peer and session->peer mapping
