@@ -8,7 +8,6 @@
 |---|---|
 | `internal/<pkg>/*_test.go` | **单元测试**——贴着被测包放，可访问包内私有符号。这是绝大多数测试的归宿。 |
 | `tests/`（本目录） | **集成测试**——跨包装配、真实文件/进程形态、端到端数据通路。 |
-| `e2e-tests/` | Playwright 浏览器 E2E（当前未接入 CI，见 `docs/architecture/repo-governance-plan.md` Phase 2.3）。 |
 
 ## 怎么跑
 

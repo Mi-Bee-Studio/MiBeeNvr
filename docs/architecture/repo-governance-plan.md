@@ -29,9 +29,9 @@
    （`web/dist`、`web/dist2`、`dist/`、`internal/ui/static/`），是 1009/1101 陈旧 SPA
    事故的土壤。
 2. **P0 私有物在公开工作树**：`docs/private/`（release-test-checklist.md）靠 gitignore 防守。
-3. **P1 孤儿目录**：`e2e-tests/`（6 个 Playwright spec，无 package.json/无 config/CI 零引用）、
-   `tools/`（仅 1 个 README，无工具）。`tests/` 与包内测试形成位置二义性
-   （虽然 `go list ./...` 确实覆盖它）。
+3. **P1 孤儿目录**（**已解决 2026-11-19**）：`e2e-tests/`（6 个 Playwright spec，
+   无 package.json/无 config/CI 零引用）已删除；`tools/`（仅 1 个 README）已迁入
+   `docs/architecture/`；`tests/` 已补 README 澄清职责，与包内单测的分工明确。
 4. **P1 命名空间混乱**：认证/限流住 `internal/middleware/`（非 `internal/auth`）；
    `pkg/{camera,eventbus,streamhub}` 镜像与 `internal/` 同名且 internal 反向依赖 pkg。
 5. **P2 上帝包与巨型文件**：`internal/api` 73 文件单包；8 个 Go 文件 >1,200 行；
@@ -73,9 +73,9 @@
   `docs/architecture/eval-replay.md`，删空目录
 - [x] **2.2 `scripts/`**：CI 引用 `scripts/check-docs-links.py`（ci.yml:141），
   与 `tools/` 并存的单文件目录 → 合并为 `devtools/`（同步改 ci.yml + CONTRIBUTING.md）
-- [ ] **2.3 `e2e-tests/` 处置**（二选一，需裁定）
-  - A 复活：补 `package.json`（@playwright/test）+ `playwright.config.ts` + CI job（需真机 NVR，建议 nightly）
-  - B 删除：6 个 spec 已 3 个月未跑、依赖缺失
+- [x] **2.3 `e2e-tests/` 处置** —— **已删除**（用户裁定 2026-11-19：无法为 TDD 提供
+  有效反馈即可移除）。6 个 spec 自 8 月起未运行、无 package.json/playwright.config、
+  CI 零引用；等价覆盖由 Go 集成测试 + `web/src/__tests__` + 真机探针承担。
 - [x] **2.4 `tests/` 命名**：加 `tests/README.md` 说明「这里是跨包集成测试，包内单测贴包放」；
   CI 显式列出 `./tests/...` 保证不被分片逻辑遗漏
 - [x] **2.5 SPA 产物单一链路**：确立 `web/dist` → `internal/ui/static` 唯一方向
@@ -199,7 +199,6 @@ Phase 4（规范固化）      —— 依赖 3 的经验数据（行数阈值要
 
 1. **`tmp-probe` 内容目录**（`y26-compare` 2.7 GB 评测语料 / `promo_20261110` 2.0 GB 宣传底稿）
    —— 删还是留？宣传成品是否已全部迁到 `D:\Projects\宣传材料`？
-2. **`e2e-tests/`** —— 复活（加 CI nightly）还是删除？
 3. **`pkg/` 边界** —— 保留为对外契约，还是合并回 `internal/`？
 
 ---

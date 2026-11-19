@@ -19,7 +19,7 @@
 | `custom_components/` | Home Assistant 集成（**HACS 硬约束**：必须在仓库根） |
 | `tests/` | 跨包集成测试（见 §4） |
 
-禁止：`scripts/`、`tools/`、`dist/`、`dist2/`、临时探针目录。构建产物只允许
+禁止：`scripts/`、`tools/`、`dist/`、`dist2/`、`e2e-tests/`、临时探针目录。构建产物只允许
 落在 `build/`（gitignored）与 `internal/ui/static/`（SPA 嵌入点）。
 
 ## 2. 包边界（`internal/`）
@@ -54,7 +54,6 @@
 | `internal/<pkg>/*_test.go` | 单元测试，可访问包内私有符号 |
 | `tests/` | 跨包装配的集成测试 |
 | `web/src/__tests__/` | vitest 前端单测 |
-| `e2e-tests/` | Playwright 浏览器 E2E（当前未接入 CI，见台账 Phase 2.3） |
 
 新增有外部行为的功能，测试必须同 PR；无测试的 PR 需在描述里说明理由。
 
@@ -83,5 +82,4 @@
 
 - `internal/api` 73 文件单包（拆分方案见 `api-package-split.md`，Step 1 `httpx` 已完成）
 - `internal/{camera,event,streamhub}/adapter.go` 反向依赖 `pkg/`
-- `e2e-tests/` 未接 CI
 - AGENTS.md 尚未瘦身

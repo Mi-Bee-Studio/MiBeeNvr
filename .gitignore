@@ -33,7 +33,6 @@ web_embed/
 AGENTS.md
 
 # Test / tooling artifacts
-e2e-tests/
 .playwright-mcp/
 test-results/
 tmp/

@@ -158,7 +158,7 @@ cd MiBeeNvr && make build
 2. Web SPA：Node 22，`cd web && npm run build && npm run test`
 3. 写清晰的提交信息
 
-项目结构——`cmd/mibee-nvr/` CLI 入口、`internal/` 核心包、`web/` Svelte 5 SPA、`deploy/` 服务文件、`docs/` 中英双语文档、`tests/` + `e2e-tests/` 集成与 Playwright 测试。详见[架构总览](docs/zh/architecture.md)。
+项目结构——`cmd/mibee-nvr/` CLI 入口、`internal/` 核心包、`web/` Svelte 5 SPA、`deploy/` 服务文件、`docs/` 中英双语文档、`tests/` 跨包集成测试。详见[架构总览](docs/zh/architecture.md)。
 
 感谢所有贡献者：
 
