@@ -81,7 +81,8 @@ linters:
       - path: internal/storage/
         linters: [rowserrcheck]
       # rationale: WalkDir/Walk callback nil returns skip inaccessible entries — standard Go pattern
-      - path: internal/storage/manager\.go
+      # (must track the manager split files, not one filename)
+      - path: internal/storage/manager(_segments)?\.go
         linters: [nilerr]
       # Internal packages: context intentionally omitted (non-blocking I/O)
       # rationale: Internal packages use non-blocking I/O — context passed explicitly where needed

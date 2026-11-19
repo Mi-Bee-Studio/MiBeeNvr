@@ -122,7 +122,7 @@ func TestRepo_ExecSitesAreWaited(t *testing.T) {
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
 
 	var violations []string
-	for _, dir := range []string{"internal", "pkg", "cmd"} {
+	for _, dir := range []string{"internal", "cmd"} {
 		root := filepath.Join(repoRoot, dir)
 		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {

@@ -11,7 +11,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/discovery"
 )
 
-
 // registerProtocolServices — rtmp, whip, rtsp, srt, gb28181-cascade,
 // gb28181, discovery, mdns.
 func registerProtocolServices(a *App, deps *appDeps) error {
