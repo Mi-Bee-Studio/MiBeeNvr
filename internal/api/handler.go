@@ -15,6 +15,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/relayapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
@@ -411,7 +412,7 @@ func (h *Handler) Routes() http.Handler {
 		h.registerArchiveRoutes(r)
 		h.registerXiaomiRoutes(r)
 		h.registerHealthRoutes(r)
-		h.registerRelayRoutes(r)
+		relayapi.Register(r, relayapi.Deps{Relay: relayDeps(h.relayMgr)})
 		h.registerTranscodeRoutes(r)
 		h.registerAIRoutes(r)
 		h.registerVisionRoutes(r)
