@@ -15,6 +15,7 @@ import (
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/notifyapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/relayapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
@@ -420,7 +421,7 @@ func (h *Handler) Routes() http.Handler {
 		h.registerViewerRoutes(r)
 		h.registerGB28181Routes(r)
 		h.registerDoorbellRoutes(r)
-		h.registerNotifyRoutes(r)
+		notifyapi.Register(r, notifyapi.Deps{Service: notifyDeps(h.notifySvc)})
 		h.registerMediaRoutes(r)
 		// 预投产调试：App 诊断上报（authed；文件落盘不进 DB）。
 		r.Post("/api/diagnostics/app", h.handleAppDiagnosticsReport)
