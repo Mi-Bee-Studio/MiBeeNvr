@@ -1,4 +1,4 @@
-package api
+package recordingsapi
 
 import (
 	"encoding/json"
@@ -12,26 +12,26 @@ import (
 
 // --- Merge settings endpoints ---
 
-func (h *Handler) handleGetMergeSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleGetMergeSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":                 h.config.Merge.Enabled,
-		"check_interval":          h.config.Merge.CheckInterval,
-		"window_size":             h.config.Merge.WindowSize,
-		"batch_limit":             h.config.Merge.BatchLimit,
-		"min_segment_age":         h.config.Merge.MinSegmentAge,
-		"min_segments_to_merge":   h.config.Merge.MinSegmentsToMerge,
-		"rolling_fragment_hold_s": h.config.Merge.RollingFragmentHoldValue(),
-		"rolling_append_bucket":   h.config.Merge.RollingAppendBucket,
+		"enabled":                 s.deps.Config.Merge.Enabled,
+		"check_interval":          s.deps.Config.Merge.CheckInterval,
+		"window_size":             s.deps.Config.Merge.WindowSize,
+		"batch_limit":             s.deps.Config.Merge.BatchLimit,
+		"min_segment_age":         s.deps.Config.Merge.MinSegmentAge,
+		"min_segments_to_merge":   s.deps.Config.Merge.MinSegmentsToMerge,
+		"rolling_fragment_hold_s": s.deps.Config.Merge.RollingFragmentHoldValue(),
+		"rolling_append_bucket":   s.deps.Config.Merge.RollingAppendBucket,
 	})
 }
 
-func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
+func (s *server) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
 		WriteError(w, http.StatusInternalServerError, "config not available")
 		return
 	}
@@ -53,7 +53,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 	}
 
 	if body.Enabled != nil {
-		h.config.Merge.Enabled = *body.Enabled
+		s.deps.Config.Merge.Enabled = *body.Enabled
 	}
 	if body.CheckInterval != nil {
 		// Blank = keep current (partial PUT). time.ParseDuration("") would 400
@@ -63,7 +63,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 				WriteError(w, http.StatusBadRequest, "check_interval must be a valid duration (e.g., \"30m\", \"1h\")")
 				return
 			}
-			h.config.Merge.CheckInterval = v
+			s.deps.Config.Merge.CheckInterval = v
 		}
 	}
 	if body.WindowSize != nil {
@@ -72,7 +72,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 				WriteError(w, http.StatusBadRequest, "window_size must be a valid duration (e.g., \"24h\", \"48h\")")
 				return
 			}
-			h.config.Merge.WindowSize = v
+			s.deps.Config.Merge.WindowSize = v
 		}
 	}
 	if body.BatchLimit != nil {
@@ -80,7 +80,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 			WriteError(w, http.StatusBadRequest, "batch_limit must be >= 1")
 			return
 		}
-		h.config.Merge.BatchLimit = *body.BatchLimit
+		s.deps.Config.Merge.BatchLimit = *body.BatchLimit
 	}
 	if body.MinSegmentAge != nil {
 		if v := strings.TrimSpace(*body.MinSegmentAge); v != "" {
@@ -88,7 +88,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 				WriteError(w, http.StatusBadRequest, "min_segment_age must be a valid duration (e.g., \"1h\", \"6h\")")
 				return
 			}
-			h.config.Merge.MinSegmentAge = v
+			s.deps.Config.Merge.MinSegmentAge = v
 		}
 	}
 	if body.MinSegmentsToMerge != nil {
@@ -96,7 +96,7 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 			WriteError(w, http.StatusBadRequest, "min_segments_to_merge must be >= 1")
 			return
 		}
-		h.config.Merge.MinSegmentsToMerge = *body.MinSegmentsToMerge
+		s.deps.Config.Merge.MinSegmentsToMerge = *body.MinSegmentsToMerge
 	}
 	// Fragment batching window (#852): seconds a <30s MP4 fragment waits before
 	// its batch folds into the hour bucket. 0 disables batching; nil keeps the
@@ -106,25 +106,25 @@ func (h *Handler) handleUpdateMergeSettings(w http.ResponseWriter, r *http.Reque
 			WriteError(w, http.StatusBadRequest, "rolling_fragment_hold_s must be between 0 (off) and 3600")
 			return
 		}
-		h.config.Merge.RollingFragmentHoldS = body.RollingFragmentHoldS
+		s.deps.Config.Merge.RollingFragmentHoldS = body.RollingFragmentHoldS
 	}
 	// Sequential-append bucket (#853): experimental, default OFF (RPi 3B
 	// baseline — ~1-2MB RAM mirror per active camera). Existing buckets keep
 	// their format; the switch affects new buckets.
 	if body.RollingAppendBucket != nil {
-		h.config.Merge.RollingAppendBucket = *body.RollingAppendBucket
+		s.deps.Config.Merge.RollingAppendBucket = *body.RollingAppendBucket
 	}
 
 	// Persist config to disk
-	if err := config.Save(h.configPath, h.config); err != nil {
+	if err := config.Save(s.deps.ConfigPath, s.deps.Config); err != nil {
 		logger.Warn("failed to save config", "error", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
@@ -179,7 +179,7 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if err := h.db.UpsertCameraMerge(r.Context(), cameraID,
+	if err := s.deps.DB.UpsertCameraMerge(r.Context(), cameraID,
 		body.Enabled, checkInterval, windowSize, minSegmentAge,
 		body.BatchLimit, body.MinSegmentsToMerge); err != nil {
 		logger.Warn("failed to update camera merge config", "error", err, "camera_id", cameraID)
@@ -190,8 +190,8 @@ func (h *Handler) handleUpdateCameraMergeConfig(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
@@ -206,7 +206,7 @@ func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.R
 	// global defaults. (Previously called UpsertCameraMerge with all-nil args,
 	// which COALESCEs to existing values — a no-op — so the override never
 	// cleared and the editor kept reopening in "(customized)" state. Issue #68-3.)
-	if err := h.db.ClearCameraMerge(r.Context(), cameraID); err != nil {
+	if err := s.deps.DB.ClearCameraMerge(r.Context(), cameraID); err != nil {
 		logger.Warn("failed to clear camera merge config", "error", err, "camera_id", cameraID)
 		WriteError(w, http.StatusInternalServerError, "failed to clear merge config")
 		return
@@ -215,8 +215,8 @@ func (h *Handler) handleDeleteCameraMergeConfig(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }
 
-func (h *Handler) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
@@ -227,7 +227,7 @@ func (h *Handler) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	cam, err := h.db.GetCamera(r.Context(), cameraID)
+	cam, err := s.deps.DB.GetCamera(r.Context(), cameraID)
 	if err != nil {
 		logger.Warn("failed to get camera", "error", err, "camera_id", cameraID)
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
@@ -263,14 +263,14 @@ func (h *Handler) handleGetCameraMergeConfig(w http.ResponseWriter, r *http.Requ
 
 // --- Merge status endpoints ---
 
-func (h *Handler) handleMergeStatus(w http.ResponseWriter, r *http.Request) {
-	if h.mergeMgr == nil {
+func (s *server) handleMergeStatus(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Merge == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"enabled": false,
 		})
 		return
 	}
-	status := h.mergeMgr.Status()
+	status := s.deps.Merge.Status()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":         true,
 		"last_run_time":   status.LastRunTime,
@@ -280,15 +280,15 @@ func (h *Handler) handleMergeStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleMergePending(w http.ResponseWriter, r *http.Request) {
-	if h.mergeMgr == nil {
+func (s *server) handleMergePending(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Merge == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"enabled": false,
 			"pending": map[string]int{},
 		})
 		return
 	}
-	counts := h.mergeMgr.PendingCounts(r.Context())
+	counts := s.deps.Merge.PendingCounts(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled": true,
 		"pending": counts,
@@ -298,13 +298,13 @@ func (h *Handler) handleMergePending(w http.ResponseWriter, r *http.Request) {
 // handleMergeReclassify converts existing merge_status='failed' recordings with
 // empty merge_error to 'incompatible'. This backfills undersized SPS/PPS groups
 // that were incorrectly classified as failures.
-func (h *Handler) handleMergeReclassify(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleMergeReclassify(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
-	result, err := h.db.DB().ExecContext(r.Context(), `
+	result, err := s.deps.DB.DB().ExecContext(r.Context(), `
 		UPDATE recordings SET merge_status = 'incompatible',
 		  merge_error = 'reclassified from failed (no error recorded)'
 		WHERE merge_status = 'failed' AND (merge_error IS NULL OR merge_error = '')
@@ -332,8 +332,8 @@ func (h *Handler) handleMergeReclassify(w http.ResponseWriter, r *http.Request) 
 // Query params:
 //
 //	include_failed=true  — also re-process previously failed/incompatible segments
-func (h *Handler) handleMergeBackfillCamera(w http.ResponseWriter, r *http.Request) {
-	if h.rollingMergeMgr == nil {
+func (s *server) handleMergeBackfillCamera(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RollingMerge == nil {
 		WriteError(w, http.StatusServiceUnavailable, "rolling merge is not enabled")
 		return
 	}
@@ -346,7 +346,7 @@ func (h *Handler) handleMergeBackfillCamera(w http.ResponseWriter, r *http.Reque
 
 	includeFailed := r.URL.Query().Get("include_failed") == "true"
 
-	merged, err := h.rollingMergeMgr.BackfillCamera(r.Context(), cameraID, includeFailed)
+	merged, err := s.deps.RollingMerge.BackfillCamera(r.Context(), cameraID, includeFailed)
 	if err != nil {
 		logger.Warn("backfill failed for camera",
 			"camera_id", cameraID, "error", err, "include_failed", includeFailed)
@@ -371,8 +371,8 @@ func (h *Handler) handleMergeBackfillCamera(w http.ResponseWriter, r *http.Reque
 // Query params:
 //
 //	include_failed=true  — also re-process previously failed/incompatible segments
-func (h *Handler) handleMergeBackfillAll(w http.ResponseWriter, r *http.Request) {
-	if h.rollingMergeMgr == nil {
+func (s *server) handleMergeBackfillAll(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RollingMerge == nil {
 		WriteError(w, http.StatusServiceUnavailable, "rolling merge is not enabled")
 		return
 	}
@@ -381,7 +381,7 @@ func (h *Handler) handleMergeBackfillAll(w http.ResponseWriter, r *http.Request)
 
 	// List all pending segments across all cameras. This is a status/inspection
 	// endpoint — no throttling (needs the true total).
-	recs, err := h.db.ListPendingSegmentsForRolling(r.Context(), "", includeFailed, 0, time.Time{})
+	recs, err := s.deps.DB.ListPendingSegmentsForRolling(r.Context(), "", includeFailed, 0, time.Time{})
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list pending segments: "+err.Error())
 		return
@@ -395,7 +395,7 @@ func (h *Handler) handleMergeBackfillAll(w http.ResponseWriter, r *http.Request)
 
 	totalMerged := 0
 	for cameraID := range byCamera {
-		merged, err := h.rollingMergeMgr.BackfillCamera(r.Context(), cameraID, includeFailed)
+		merged, err := s.deps.RollingMerge.BackfillCamera(r.Context(), cameraID, includeFailed)
 		if err != nil {
 			logger.Warn("backfill failed for camera during global backfill",
 				"camera_id", cameraID, "error", err)
@@ -417,14 +417,14 @@ func (h *Handler) handleMergeBackfillAll(w http.ResponseWriter, r *http.Request)
 // handleMergeConsolidate finds merge_quality='short' recordings and attempts to
 // merge them with adjacent recordings of the same format to reach the minimum
 // duration threshold.
-func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request) {
-	if h.rollingMergeMgr == nil {
+func (s *server) handleMergeConsolidate(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RollingMerge == nil {
 		WriteError(w, http.StatusServiceUnavailable, "rolling merge is not enabled")
 		return
 	}
 
 	minDurStr := r.URL.Query().Get("min_duration")
-	cfg := h.config.Merge
+	cfg := s.deps.Config.Merge
 	if minDurStr == "" {
 		minDurStr = cfg.RollingMinDuration
 	}
@@ -438,7 +438,7 @@ func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request)
 	}
 
 	cameraID := r.URL.Query().Get("camera_id")
-	shortRecs, err := h.db.ListShortMergedRecordings(r.Context(), cameraID, minDur.Seconds())
+	shortRecs, err := s.deps.DB.ListShortMergedRecordings(r.Context(), cameraID, minDur.Seconds())
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list short recordings: "+err.Error())
 		return
@@ -452,7 +452,7 @@ func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request)
 
 	totalConsolidated := 0
 	for cam := range cameras {
-		merged, err := h.rollingMergeMgr.ConsolidateShortRecord(r.Context(), cam, minDur)
+		merged, err := s.deps.RollingMerge.ConsolidateShortRecord(r.Context(), cam, minDur)
 		if err != nil {
 			logger.Warn("consolidate failed for camera", "camera_id", cam, "error", err)
 			continue
@@ -471,11 +471,3 @@ func (h *Handler) handleMergeConsolidate(w http.ResponseWriter, r *http.Request)
 }
 
 // registerMergeRoutes registers merge status/backfill/reclassify/consolidate routes.
-func (h *Handler) registerMergeRoutes(r chi.Router) {
-	r.Get("/api/merge/status", h.handleMergeStatus)
-	r.Get("/api/merge/pending", h.handleMergePending)
-	r.Post("/api/merge/reclassify", h.handleMergeReclassify)
-	r.Post("/api/merge/backfill", h.handleMergeBackfillAll)                 // Backfill all cameras
-	r.Post("/api/merge/consolidate", h.handleMergeConsolidate)              // Merge short recordings into longer ones
-	r.Post("/api/cameras/{id}/merge/backfill", h.handleMergeBackfillCamera) // Backfill single camera
-}

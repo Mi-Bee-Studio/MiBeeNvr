@@ -176,7 +176,7 @@ func (s *server) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 	// + the method/suffix gate in bearerSessionToken keep the cookie from
 	// ever authenticating anything but read-only media fetches. Re-issued on
 	// every playlist fetch, so players polling the playlist stay fresh.
-	setStreamCookieOnPlaylist(w, r, id)
+	middleware.SetStreamCookieOnPlaylist(w, r, id)
 	// Legacy playlist-name aliases (#772): the API docs advertised
 	// stream.m3u8 through v0.12.0 (the muxer never served that name — the
 	// request surfaced as an empty 200), and playlist.m3u8 is the name most
@@ -216,12 +216,6 @@ func rewriteLegacyPlaylistName(p string) string {
 // actually validated the key (IsAPIKeyAuthenticated), and the cookie stays
 // scoped to this camera's subtree + GET/HEAD media fetches — no more power
 // than the ?api_key= playlist URL already granted.
-// SetStreamCookieOnPlaylist is the exported form — the VOD playback handlers
-// in the api root (recordings domain) issue the same cookie on VOD playlists.
-func SetStreamCookieOnPlaylist(w http.ResponseWriter, r *http.Request, cameraID string) {
-	setStreamCookieOnPlaylist(w, r, cameraID)
-}
-
 func setStreamCookieOnPlaylist(w http.ResponseWriter, r *http.Request, cameraID string) {
 	if !strings.HasSuffix(r.URL.Path, ".m3u8") {
 		return

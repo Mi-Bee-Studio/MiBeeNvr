@@ -1,4 +1,4 @@
-package api
+package recordingsapi
 
 import (
 	"context"
@@ -55,7 +55,7 @@ type playbackState struct {
 //	{"action":"pause"}  — stop streaming (stay at current position)
 //	{"action":"play"}   — resume streaming
 //	{"action":"stop"}   — close connection
-func (h *Handler) handlePlayback(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		WriteError(w, http.StatusBadRequest, "recording id is required")
@@ -63,7 +63,7 @@ func (h *Handler) handlePlayback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up recording in DB.
-	rec, err := h.db.GetRecording(r.Context(), id)
+	rec, err := s.deps.DB.GetRecording(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
@@ -79,7 +79,7 @@ func (h *Handler) handlePlayback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validPath, err := storage.ValidatePath(h.store.RootDir(), rec.FilePath)
+	validPath, err := storage.ValidatePath(s.deps.Store.RootDir(), rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, "recording file not found")
 		return

@@ -1,8 +1,8 @@
-package api
+package recordingsapi
 
 import (
 	"encoding/binary"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"io"
 	"net/http"
 	"os"
@@ -32,11 +32,11 @@ const maxVodSpan = 48 * time.Hour
 var vodSegmentName = regexp.MustCompile(`^f(\d+)-(\d+)\.m4s$`)
 
 // handlePlaybackPlaylist renders the VOD M3U8 for a camera + time range.
-func (h *Handler) handlePlaybackPlaylist(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePlaybackPlaylist(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "cameraID")
 	// Segment fetches by hls.js carry no headers: hand them the scoped
 	// mbs_session cookie, same mechanism as live HLS (#879).
-	streamsapi.SetStreamCookieOnPlaylist(w, r, cameraID)
+	middleware.SetStreamCookieOnPlaylist(w, r, cameraID)
 	q := r.URL.Query()
 	startStr, endStr := q.Get("start"), q.Get("end")
 	if startStr == "" || endStr == "" {
@@ -62,7 +62,7 @@ func (h *Handler) handlePlaybackPlaylist(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	recs, err := h.db.ListRecordings(r.Context(), model.RecordingFilter{
+	recs, err := s.deps.DB.ListRecordings(r.Context(), model.RecordingFilter{
 		CameraID:  cameraID,
 		StartTime: start,
 		EndTime:   end,
@@ -80,7 +80,7 @@ func (h *Handler) handlePlaybackPlaylist(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	playlist, count, err := h.vodMgr.BuildPlaylist(cameraID, recs)
+	playlist, count, err := s.deps.VOD.BuildPlaylist(cameraID, recs)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "build playlist: "+err.Error())
 		return
@@ -95,12 +95,12 @@ func (h *Handler) handlePlaybackPlaylist(w http.ResponseWriter, r *http.Request)
 
 // handlePlaybackSegment serves a recording's init segment (init.mp4) or one
 // media fragment (f{first}-{end}.m4s, half-open sample range).
-func (h *Handler) handlePlaybackSegment(w http.ResponseWriter, r *http.Request) {
+func (s *server) handlePlaybackSegment(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "cameraID")
 	recordingID := chi.URLParam(r, "recordingID")
 	segName := chi.URLParam(r, "segName")
 
-	rec, err := h.db.GetRecording(r.Context(), recordingID)
+	rec, err := s.deps.DB.GetRecording(r.Context(), recordingID)
 	if err != nil || rec == nil {
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
@@ -114,7 +114,7 @@ func (h *Handler) handlePlaybackSegment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	info, err := h.vodMgr.GetInfo(*rec)
+	info, err := s.deps.VOD.GetInfo(*rec)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "parse recording: "+err.Error())
 		return
@@ -148,7 +148,7 @@ func (h *Handler) handlePlaybackSegment(w http.ResponseWriter, r *http.Request) 
 
 	// Look up the cached fragment plan and locate the requested fragment.
 	var frag *vod.Fragment
-	frags, _, err := h.vodMgr.Fragments(*rec)
+	frags, _, err := s.deps.VOD.Fragments(*rec)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "plan fragments: "+err.Error())
 		return

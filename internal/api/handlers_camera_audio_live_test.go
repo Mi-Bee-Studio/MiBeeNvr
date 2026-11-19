@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/binary"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/audioaudit"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -94,9 +95,7 @@ func TestAudioLiveWav_StreamsPCM(t *testing.T) {
 
 	// Session teardown must land in the audit ring.
 	require.Eventually(t, func() bool {
-		audioAudit.mu.Lock()
-		defer audioAudit.mu.Unlock()
-		for _, e := range audioAudit.entries {
+		for _, e := range audioaudit.Recent(200) {
 			if e.Kind == "live" && e.CameraID == "cam-mic" && e.DurationS > 0 {
 				return true
 			}

@@ -1,9 +1,11 @@
-package api
+package recordingsapi
 
 import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/audioaudit"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"io"
 	"net/http"
 	"os"
@@ -28,9 +30,9 @@ var audioRecLogger = slogx.Component("api-audio-recording")
 //
 // Compliance: audio evidence is more sensitive than video — every fetch is
 // audit-logged with the authenticated requester.
-func (h *Handler) handleAudioWav(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleAudioWav(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	rec, err := h.db.GetRecording(r.Context(), id)
+	rec, err := s.deps.DB.GetRecording(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
@@ -47,9 +49,9 @@ func (h *Handler) handleAudioWav(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, "file not available")
 		return
 	}
-	validPath, err := storage.ValidatePath(h.store.RootDir(), rec.FilePath)
+	validPath, err := storage.ValidatePath(s.deps.Store.RootDir(), rec.FilePath)
 	if err != nil {
-		writeAPIError(w, http.StatusNotFound, &model.PathTraversalError{Path: rec.FilePath})
+		httpx.WriteAPIError(w, http.StatusNotFound, &model.PathTraversalError{Path: rec.FilePath})
 		return
 	}
 
@@ -62,9 +64,9 @@ func (h *Handler) handleAudioWav(w http.ResponseWriter, r *http.Request) {
 	var pcm []byte
 	switch fourcc {
 	case "ulaw":
-		pcm = g711ToPCM(payload, true, rate)
+		pcm = recorder.G711ToPCM(payload, true, rate)
 	case "alaw":
-		pcm = g711ToPCM(payload, false, rate)
+		pcm = recorder.G711ToPCM(payload, false, rate)
 	case "mp4a", "dops", "Opus":
 		// AAC ('mp4a') and Opus ('Opus' QuickTime style — what our muxer
 		// writes — plus 'dops' MPEG style defensively) are natively playable
@@ -87,7 +89,7 @@ func (h *Handler) handleAudioWav(w http.ResponseWriter, r *http.Request) {
 		"recording_id", id, "camera_id", rec.CameraID,
 		"remote", r.RemoteAddr, "ua", r.UserAgent(),
 		"codec", fourcc, "bytes_in", len(payload), "bytes_out", len(pcm)+44)
-	recordAudioAudit(audioAuditEntry{
+	audioaudit.Record(audioaudit.Entry{
 		At: time.Now(), Kind: "wav", Recording: id, CameraID: rec.CameraID,
 		Remote: r.RemoteAddr, UA: r.UserAgent(),
 		Bytes: int64(len(pcm) + 44),
@@ -102,21 +104,6 @@ func (h *Handler) handleAudioWav(w http.ResponseWriter, r *http.Request) {
 	if err := writeWav(w, pcm, rate, channels); err != nil {
 		audioRecLogger.Warn("audio WAV write failed", "recording_id", id, "error", err)
 	}
-}
-
-// g711ToPCM decodes a raw G.711 byte stream into little-endian 16-bit PCM.
-func g711ToPCM(g711 []byte, muLaw bool, _ int) []byte {
-	pcm := make([]byte, len(g711)*2)
-	for i, b := range g711 {
-		var s int16
-		if muLaw {
-			s = recorder.DecodeMuLaw(b)
-		} else {
-			s = recorder.DecodeALaw(b)
-		}
-		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(s))
-	}
-	return pcm
 }
 
 // writeWav streams a canonical 44-byte-header PCM WAV.

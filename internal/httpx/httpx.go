@@ -5,7 +5,10 @@ package httpx
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 )
@@ -78,4 +81,47 @@ func codeForStatus(status int) string {
 		return "CLIENT_ERROR"
 	}
 	return "INTERNAL"
+}
+
+// ParsePagination parses the limit/offset query params with a caller-specified
+// default limit and a hard upper bound — the single source of truth for the
+// list handlers across domains (#222). offset defaults to 0, never negative.
+func ParsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset int) {
+	limit = defaultLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if maxLimit > 0 && limit > maxLimit {
+		limit = maxLimit
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	return limit, offset
+}
+
+// ValidateURL checks that a URL has a valid scheme and non-empty host — a
+// basic sanity check; specific protocol validation is handled by callers.
+func ValidateURL(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme != "" && parsed.Host != ""
+}
+
+// ValidateIP checks that a string is a valid IPv4/IPv6 address, supporting
+// ip:port format.
+func ValidateIP(ip string) bool {
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		return net.ParseIP(host) != nil
+	}
+	return net.ParseIP(ip) != nil
 }

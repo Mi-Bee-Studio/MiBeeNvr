@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"hash/crc32"
 	"log/slog"
 	"net"
@@ -815,7 +816,7 @@ func (h *Handler) handleChannelPlaybackControl(w http.ResponseWriter, r *http.Re
 var gbTalkUpgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin:     checkWSOrigin,
+	CheckOrigin:     middleware.WSOriginAllowed,
 }
 
 // handleGB28181TalkWS streams the browser microphone to a GB28181 camera's

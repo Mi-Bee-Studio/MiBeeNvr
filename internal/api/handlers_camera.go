@@ -840,13 +840,7 @@ func (h *Handler) registerCameraRoutes(r chi.Router) {
 			r.Get("/time", h.handleCameraTimeStatus)
 			r.Post("/time/sync", h.handleCameraTimeSync)
 			r.Post("/time/ntp", h.handleCameraTimeNTP)
-			r.Get("/merge-config", h.handleGetCameraMergeConfig)
-			r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
-			r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
 			r.Get("/stats", h.handleCameraRecordingStats)
-			// Per-camera timelapse configuration
-			r.Get("/timelapse", h.handleGetCameraTimelapse)
-			r.Put("/timelapse", h.handlePutCameraTimelapse)
 			// Camera-specific events (SSE)
 			r.Get("/events", h.handleCameraEvents)
 			r.Post("/start", h.handleStartCamera)

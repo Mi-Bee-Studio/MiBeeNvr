@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/middleware"
 	"net/http"
 	"path/filepath"
 
@@ -31,7 +32,7 @@ type DoorbellService interface {
 var doorbellTalkUpgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin:     checkWSOrigin,
+	CheckOrigin:     middleware.WSOriginAllowed,
 }
 
 // registerDoorbellRoutes mounts /doorbell/* (inside the authed group).

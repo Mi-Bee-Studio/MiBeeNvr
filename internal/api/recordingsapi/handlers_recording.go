@@ -1,8 +1,9 @@
-package api
+package recordingsapi
 
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"math"
 	"net/http"
 	"strconv"
@@ -14,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	filter := model.RecordingFilter{
 		CameraID: r.URL.Query().Get("camera_id"),
@@ -40,7 +41,7 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 
 	// limit/offset parsing centralized in parsePagination (#222); recordings use a
 	// safe default of 50 and a hard cap of 500 to prevent accidental full-table scans.
-	filter.Limit, filter.Offset = parsePagination(r, 50, 500)
+	filter.Limit, filter.Offset = httpx.ParsePagination(r, 50, 500)
 
 	// Keyset (cursor) pagination: ?cursor=<RFC3339 started_at of last row on prev page>.
 	// When provided with default sort, the DB uses WHERE started_at < cursor (O(1) deep page)
@@ -83,7 +84,7 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// List + cached count. Cursor-based requests still get the total from cache.
-	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
+	recordings, total, err := s.deps.DB.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list recordings")
 		return
@@ -102,7 +103,7 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 		for i := range recordings {
 			ids = append(ids, recordings[i].ID)
 		}
-		if statuses, err := h.db.BatchGetRecordingAIStatus(ctx, ids); err == nil {
+		if statuses, err := s.deps.DB.BatchGetRecordingAIStatus(ctx, ids); err == nil {
 			for i := range recordings {
 				if s, ok := statuses[recordings[i].ID]; ok {
 					recordings[i].AIStatus = s
@@ -127,7 +128,7 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 				camIDs = append(camIDs, recordings[i].CameraID)
 			}
 		}
-		if names, err := h.db.BatchGetCameraNames(ctx, camIDs); err == nil {
+		if names, err := s.deps.DB.BatchGetCameraNames(ctx, camIDs); err == nil {
 			for i := range recordings {
 				if n, ok := names[recordings[i].CameraID]; ok {
 					recordings[i].CameraName = n
@@ -174,7 +175,7 @@ func (h *Handler) handleListRecordings(w http.ResponseWriter, r *http.Request) {
 // Response: {segments: [...], total: N, truncated: bool}. Issue #115.
 //
 // GET /api/recordings/timeline
-func (h *Handler) handleTimelineSegments(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleTimelineSegments(w http.ResponseWriter, r *http.Request) {
 	filter := model.RecordingFilter{
 		CameraID: r.URL.Query().Get("camera_id"),
 		Format:   model.Format(r.URL.Query().Get("format")),
@@ -201,7 +202,7 @@ func (h *Handler) handleTimelineSegments(w http.ResponseWriter, r *http.Request)
 	}
 	filter.Activity = r.URL.Query().Get("activity")
 
-	segments, total, err := h.db.ListRecordingTimelineSegments(r.Context(), filter)
+	segments, total, err := s.deps.DB.ListRecordingTimelineSegments(r.Context(), filter)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list timeline segments")
 		return
@@ -226,7 +227,7 @@ func (h *Handler) handleTimelineSegments(w http.ResponseWriter, r *http.Request)
 // calendar rendering. Unlike handleListRecordings, this is a lightweight GROUP BY query
 // with no row-level limit — the result is bounded by the number of days in the range.
 // GET /api/recordings/daily-summary?start=&end=&camera_id=&format=&formats=&tz_offset=
-func (h *Handler) handleDailyRecordingSummary(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleDailyRecordingSummary(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	filter := model.RecordingFilter{
 		CameraID: r.URL.Query().Get("camera_id"),
@@ -273,7 +274,7 @@ func (h *Handler) handleDailyRecordingSummary(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	summary, err := h.db.DailyRecordingSummary(ctx, filter, tzOffset)
+	summary, err := s.deps.DB.DailyRecordingSummary(ctx, filter, tzOffset)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get daily summary")
 		return
@@ -301,7 +302,7 @@ func (h *Handler) handleDailyRecordingSummary(w http.ResponseWriter, r *http.Req
 // handleCreateRecording allows MiBeeVision (or other authenticated clients) to register
 // a recording in the NVR database. Requires API Key authentication.
 // POST /api/recordings  body: {camera_id, file_path, format, started_at, ...}
-func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleCreateRecording(w http.ResponseWriter, r *http.Request) {
 	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
 		WriteError(w, http.StatusUnauthorized, "API key required")
 		return
@@ -348,7 +349,7 @@ func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) 
 		rec.EndedAt, _ = time.Parse(time.RFC3339, body.EndedAt)
 	}
 
-	if err := h.db.InsertRecording(r.Context(), rec); err != nil {
+	if err := s.deps.DB.InsertRecording(r.Context(), rec); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to create recording")
 		return
 	}
@@ -364,7 +365,7 @@ func (h *Handler) handleCreateRecording(w http.ResponseWriter, r *http.Request) 
 // handleUpdateRecording allows MiBeeVision to update recording metadata.
 // Requires API Key authentication.
 // PATCH /api/recordings/{id}  body: {file_path?, format?, duration?, ...}
-func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleUpdateRecording(w http.ResponseWriter, r *http.Request) {
 	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
 		WriteError(w, http.StatusUnauthorized, "API key required")
 		return
@@ -379,7 +380,7 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 	// these fields (duration/file_size/…) are source-segment scoped and must
 	// not be stamped onto the merged bucket row. A 200 no-op stops the
 	// consumer's retry loop instead of feeding it 404s.
-	existing, _ := h.resolveRecordingForWrite(r, id)
+	existing, _ := s.resolveRecordingForWrite(r, id)
 	if existing == nil {
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
@@ -423,7 +424,7 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 		existing.FrameCount = *body.FrameCount
 	}
 
-	if err := h.db.UpdateRecording(r.Context(), existing); err != nil {
+	if err := s.deps.DB.UpdateRecording(r.Context(), existing); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to update recording")
 		return
 	}
@@ -438,7 +439,7 @@ func (h *Handler) handleUpdateRecording(w http.ResponseWriter, r *http.Request) 
 // Valid ai_status values: pending, processing, completed, failed, skipped.
 // 'skipped' (#671) = consumer-reported queue drop: terminal, stamps
 // ai_processed_at, reason goes in ai_error.
-func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.Request) {
 	if !middleware.IsAPIKeyAuthenticated(r.Context()) {
 		WriteError(w, http.StatusUnauthorized, "API key required")
 		return
@@ -472,7 +473,7 @@ func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.R
 	// analysis was lost). The status lands on the merged bucket row; the
 	// rank guard keeps the aggregate non-regressing across per-source reports.
 	reqID := id
-	existing, id := h.resolveRecordingForWrite(r, id)
+	existing, id := s.resolveRecordingForWrite(r, id)
 	if existing == nil {
 		WriteError(w, http.StatusNotFound, "recording not found")
 		return
@@ -481,7 +482,7 @@ func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.R
 		w.Header().Set("X-Recording-Fallback-For", reqID)
 	}
 
-	if err := h.db.UpdateRecordingAIStatus(r.Context(), id, body.AIStatus, body.AIError); err != nil {
+	if err := s.deps.DB.UpdateRecordingAIStatus(r.Context(), id, body.AIStatus, body.AIError); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to update AI status")
 		return
 	}
@@ -491,7 +492,7 @@ func (h *Handler) handleUpdateRecordingAIStatus(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "ai_status": body.AIStatus})
 }
 
-func (h *Handler) handleTimelineSeekEvent(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleTimelineSeekEvent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CameraID string `json:"camera_id"`
 		Type     string `json:"type"` // "segment" | "intra"
@@ -508,15 +509,15 @@ func (h *Handler) handleTimelineSeekEvent(w http.ResponseWriter, r *http.Request
 	if cameraID == "" {
 		cameraID = "unknown"
 	}
-	if m := currentAPIMetrics(); m != nil {
-		m.TimelineSeeksTotal.WithLabelValues(cameraID, seekType).Inc()
+	if s.deps.RecordTimelineSeek != nil {
+		s.deps.RecordTimelineSeek(cameraID, seekType)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
 }
 
-func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	rec, err := h.db.GetRecording(r.Context(), id)
+	rec, err := s.deps.DB.GetRecording(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
@@ -527,7 +528,7 @@ func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 		// the dead ID until the next refresh. Recording IDs are UnixNano
 		// creation stamps, so the covering merged row is recoverable from the
 		// stale ID alone (see FindMergedCoveringIDs).
-		if fb := h.fallbackRecording(r, id); fb != nil {
+		if fb := s.fallbackRecording(r, id); fb != nil {
 			w.Header().Set("X-Recording-Fallback-For", id)
 			writeJSON(w, http.StatusOK, fb)
 			return
@@ -547,21 +548,21 @@ func (h *Handler) handleGetRecording(w http.ResponseWriter, r *http.Request) {
 // lineage existed. Returns nil when the ID is not a UnixNano stamp, neither
 // step resolves, or the cover is ambiguous across cameras (the caller may
 // pass ?camera_id= to disambiguate).
-func (h *Handler) fallbackRecording(r *http.Request, id string) *model.Recording {
+func (s *server) fallbackRecording(r *http.Request, id string) *model.Recording {
 	n, err := strconv.ParseInt(id, 10, 64)
 	if err != nil || n < 1_000_000_000_000_000_000 || n > 1<<62 {
 		return nil
 	}
-	if target, lerr := h.db.FindLineageTarget(r.Context(), id); lerr == nil && target != "" {
-		if fb, gerr := h.db.GetRecording(r.Context(), target); gerr == nil && fb != nil {
+	if target, lerr := s.deps.DB.FindLineageTarget(r.Context(), id); lerr == nil && target != "" {
+		if fb, gerr := s.deps.DB.GetRecording(r.Context(), target); gerr == nil && fb != nil {
 			return fb
 		}
 	}
-	ids, err := h.db.FindMergedCoveringIDs(r.Context(), time.Unix(0, n), r.URL.Query().Get("camera_id"))
+	ids, err := s.deps.DB.FindMergedCoveringIDs(r.Context(), time.Unix(0, n), r.URL.Query().Get("camera_id"))
 	if err != nil || len(ids) != 1 {
 		return nil
 	}
-	fb, err := h.db.GetRecording(r.Context(), ids[0])
+	fb, err := s.deps.DB.GetRecording(r.Context(), ids[0])
 	if err != nil || fb == nil {
 		return nil
 	}
@@ -576,12 +577,12 @@ func (h *Handler) fallbackRecording(r *http.Request, id string) *model.Recording
 // updates in one hour). Exact lineage provenance only — never the covering-
 // time heuristic, which could route a write onto an unrelated camera's row.
 // Returns the live row (nil when unknown) plus the ID it resolved to.
-func (h *Handler) resolveRecordingForWrite(r *http.Request, id string) (*model.Recording, string) {
-	if rec, err := h.db.GetRecording(r.Context(), id); err == nil && rec != nil {
+func (s *server) resolveRecordingForWrite(r *http.Request, id string) (*model.Recording, string) {
+	if rec, err := s.deps.DB.GetRecording(r.Context(), id); err == nil && rec != nil {
 		return rec, id
 	}
-	if target, lerr := h.db.FindLineageTarget(r.Context(), id); lerr == nil && target != "" {
-		if rec, gerr := h.db.GetRecording(r.Context(), target); gerr == nil && rec != nil {
+	if target, lerr := s.deps.DB.FindLineageTarget(r.Context(), id); lerr == nil && target != "" {
+		if rec, gerr := s.deps.DB.GetRecording(r.Context(), target); gerr == nil && rec != nil {
 			return rec, target
 		}
 	}
@@ -596,8 +597,8 @@ func (h *Handler) resolveRecordingForWrite(r *http.Request, id string) (*model.R
 //
 //	date=YYYY-MM-DD  — the day to analyze (required)
 //	min_gap=30s      — minimum gap duration to report (default 30s)
-func (h *Handler) handleTimelineGaps(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleTimelineGaps(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
@@ -632,7 +633,7 @@ func (h *Handler) handleTimelineGaps(w http.ResponseWriter, r *http.Request) {
 	dayStart := time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.UTC)
 	dayEnd := dayStart.Add(24 * time.Hour)
 
-	recs, err := h.db.ListRecordings(r.Context(), model.RecordingFilter{
+	recs, err := s.deps.DB.ListRecordings(r.Context(), model.RecordingFilter{
 		CameraID:  cameraID,
 		StartTime: dayStart,
 		EndTime:   dayEnd,
@@ -698,30 +699,3 @@ func parseDateParts(s string) (year, month, day int, err error) {
 
 // registerRecordingRoutes registers all /api/recordings* routes on the given
 // (already auth-protected) router.
-func (h *Handler) registerRecordingRoutes(r chi.Router) {
-	r.Route("/api/recordings", func(r chi.Router) {
-		r.Get("/", h.handleListRecordings)
-		r.Get("/daily-summary", h.handleDailyRecordingSummary)
-		r.Get("/timeline", h.handleTimelineSegments)
-		r.Post("/", h.handleCreateRecording)
-		r.Post("/timeline/seek-event", h.handleTimelineSeekEvent)
-		r.Post("/batch-delete", h.handleBatchDeleteRecordings)
-		r.Route("/{id}", func(r chi.Router) {
-			r.Get("/", h.handleGetRecording)
-			r.Delete("/", h.handleDeleteRecording)
-			r.Patch("/", h.handleUpdateRecording)
-			r.Patch("/ai-status", h.handleUpdateRecordingAIStatus)
-			r.Get("/frames", h.handleListFrames)
-			r.Get("/playback", h.handlePlayback)
-			r.Get("/timelapse-frames", h.handleTimelapseFrames)
-			// Batch endpoint registered BEFORE the {filename} wildcard.
-			r.Get("/timelapse-frames/batch", h.handleTimelapseFramesBatch)
-			r.Get("/timelapse-frames/{filename}", h.handleTimelapseFrame)
-			r.Post("/retry-merge", h.handleRetryTimelapseMerge)
-			r.Post("/repair", h.handleRepairRecording)
-		})
-	})
-	// Recording gaps for timeline (per-camera, registered here to keep recording-
-	// related routes together)
-	r.Get("/api/cameras/{id}/timeline/gaps", h.handleTimelineGaps)
-}

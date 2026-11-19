@@ -1,4 +1,4 @@
-package api
+package recordingsapi
 
 import (
 	"fmt"
@@ -37,15 +37,15 @@ import (
 // Not repairable here and intentionally not pretended away: codec unsupported
 // by the browser (the transcode-to-H.264 button owns that path) and files
 // whose bytes are damaged beyond header metadata.
-func (h *Handler) handleRepairRecording(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleRepairRecording(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	rec, err := h.db.GetRecording(ctx, id)
+	rec, err := s.deps.DB.GetRecording(ctx, id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -54,8 +54,8 @@ func (h *Handler) handleRepairRecording(w http.ResponseWriter, r *http.Request) 
 		// The row is gone — the classic fold-consumed stale ID. Resolve it
 		// exactly (lineage first, covering fallback second) and tell the
 		// caller where the content lives now.
-		if fb := h.fallbackRecording(r, id); fb != nil {
-			writeJSON(w, http.StatusOK, repairResponse{
+		if fb := s.fallbackRecording(r, id); fb != nil {
+			writeJSON(w, http.StatusOK, RepairResponse{
 				Status:        "resolved_fallback",
 				TargetID:      fb.ID,
 				Actions:       []string{"stale_id_resolved"},
@@ -67,16 +67,16 @@ func (h *Handler) handleRepairRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	resp := repairResponse{Status: "no_problem_found", Actions: []string{}}
+	resp := RepairResponse{Status: "no_problem_found", Actions: []string{}}
 
 	if _, statErr := os.Stat(rec.FilePath); statErr != nil {
 		// Dead-row classes: a .tmp-pathed row whose file vanished is #912-era
 		// residue — sweep it exactly like the startup orphan sweep (archived
 		// rows stay out of scope, their file semantics belong to offload).
 		if strings.HasSuffix(rec.FilePath, ".tmp") && !rec.Archived {
-			if _, derr := h.db.DeleteRecordingsBatch(ctx, []string{rec.ID}); derr == nil {
+			if _, derr := s.deps.DB.DeleteRecordingsBatch(ctx, []string{rec.ID}); derr == nil {
 				resp.Actions = append(resp.Actions, "dead_tmp_row_swept")
-				if fb := h.fallbackRecording(r, id); fb != nil {
+				if fb := s.fallbackRecording(r, id); fb != nil {
 					resp.Status = "resolved_fallback"
 					resp.TargetID = fb.ID
 					resp.RetryPlayback = true
@@ -95,7 +95,7 @@ func (h *Handler) handleRepairRecording(w http.ResponseWriter, r *http.Request) 
 	if rec.Duration <= 0 {
 		if d, perr := mediaprobe.ProbeDuration(rec.FilePath); perr == nil && d >= 0.001 {
 			endedAt := rec.StartedAt.Add(time.Duration(d * float64(time.Second)))
-			if uerr := h.db.UpdateRecordingDuration(ctx, rec.ID, d, endedAt); uerr == nil {
+			if uerr := s.deps.DB.UpdateRecordingDuration(ctx, rec.ID, d, endedAt); uerr == nil {
 				resp.Actions = append(resp.Actions, fmt.Sprintf("duration_updated=%.1fs", d))
 				resp.Status = "repaired"
 			}
@@ -128,7 +128,7 @@ func (h *Handler) handleRepairRecording(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-type repairResponse struct {
+type RepairResponse struct {
 	// repaired        — at least one problem was found and fixed
 	// no_problem_found— data looks healthy; retry playback (error was likely
 	//                   transient network/codec — the transcode button owns

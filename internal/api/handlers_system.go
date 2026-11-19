@@ -645,8 +645,7 @@ func (h *Handler) registerSystemRoutes(r chi.Router) {
 	r.Put("/api/cameras/{id}/storage-root", h.handleSetCameraStorageRoot)
 	r.Post("/api/settings/api-keys", h.handleGenerateAPIKey)
 	r.Delete("/api/settings/api-keys/{name}", h.handleRevokeAPIKey)
-	r.Get("/api/settings/merge", h.handleGetMergeSettings)
-	r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
+	// Merge settings live in the recordings domain (recordingsapi).
 	r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
 	r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
 	r.Get("/api/settings/auto-discover", h.handleGetAutoDiscoverSettings)

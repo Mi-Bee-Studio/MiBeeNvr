@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/audioaudit"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/recorder"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
@@ -24,45 +24,12 @@ var audioLiveLogger = slogx.Component("api-audio-live")
 // live-listening session is recorded here (in addition to the slog line) in a
 // bounded in-memory ring, queryable via GET /api/recordings/audio-audit.
 
-const audioAuditRingCap = 200
+// recordAudioAudit/audioAuditEntry alias the shared ring now owned by
+// internal/audioaudit (the WAV fetch path moved to recordingsapi; live
+// sessions here still append).
+type audioAuditEntry = audioaudit.Entry
 
-type audioAuditEntry struct {
-	At        time.Time `json:"at"`
-	Kind      string    `json:"kind"` // "wav" | "live"
-	Recording string    `json:"recording,omitempty"`
-	CameraID  string    `json:"camera_id"`
-	Remote    string    `json:"remote"`
-	UA        string    `json:"ua"`
-	Bytes     int64     `json:"bytes,omitempty"`
-	DurationS float64   `json:"duration_s,omitempty"` // live sessions
-}
-
-var audioAudit = struct {
-	mu      sync.Mutex
-	entries []audioAuditEntry
-}{}
-
-func recordAudioAudit(e audioAuditEntry) {
-	audioAudit.mu.Lock()
-	defer audioAudit.mu.Unlock()
-	audioAudit.entries = append(audioAudit.entries, e)
-	if len(audioAudit.entries) > audioAuditRingCap {
-		audioAudit.entries = audioAudit.entries[len(audioAudit.entries)-audioAuditRingCap:]
-	}
-}
-
-// handleAudioAudit returns the recent audio-access audit trail, newest first.
-func (h *Handler) handleAudioAudit(w http.ResponseWriter, r *http.Request) {
-	limit := 200
-	audioAudit.mu.Lock()
-	n := len(audioAudit.entries)
-	out := make([]audioAuditEntry, 0, n)
-	for i := n - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, audioAudit.entries[i])
-	}
-	audioAudit.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"entries": out})
-}
+func recordAudioAudit(e audioaudit.Entry) { audioaudit.Record(e) }
 
 // --- Live listening ---
 //
@@ -325,7 +292,7 @@ func newLiveWavFormat(ar *recorder.AudioRecorder) (liveAudioFormat, error) {
 		ext:         "wav",
 		header:      hdr,
 		accept:      model.AudioG711,
-		frame:       func(d []byte) []byte { return g711ToPCM(d, muLaw, rate) },
+		frame:       func(d []byte) []byte { return recorder.G711ToPCM(d, muLaw, rate) },
 		contentLen:  int64(len(hdr)) + nominal,
 	}, nil
 }

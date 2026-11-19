@@ -1,9 +1,10 @@
-package api
+package recordingsapi
 
 import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/httpx"
 	"net/http"
 	"os"
 	"time"
@@ -25,9 +26,9 @@ type archiveGroupItem struct {
 	ArchiveRetentionDays int        `json:"archive_retention_days"`
 }
 
-func (h *Handler) handleListArchives(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleListArchives(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	cameras, err := h.db.ListArchivedCameras(ctx)
+	cameras, err := s.deps.DB.ListArchivedCameras(ctx)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list archived cameras")
 		return
@@ -38,7 +39,7 @@ func (h *Handler) handleListArchives(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]archiveGroupItem, 0, len(cameras))
 	for _, cam := range cameras {
-		count, totalSize, err := h.db.GetArchiveGroupStats(ctx, cam.ID)
+		count, totalSize, err := s.deps.DB.GetArchiveGroupStats(ctx, cam.ID)
 		if err != nil {
 			logger.Warn("failed to get archive stats", "camera_id", cam.ID, "error", err)
 			count, totalSize = 0, 0
@@ -55,7 +56,7 @@ func (h *Handler) handleListArchives(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"archives": items})
 }
 
-func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleListArchiveRecordings(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
@@ -64,11 +65,11 @@ func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Req
 		CameraID: cameraID,
 		Archived: &trueVal,
 	}
-	filter.Limit, filter.Offset = parsePagination(r, 0, 0)
+	filter.Limit, filter.Offset = httpx.ParsePagination(r, 0, 0)
 	filter.SortBy = r.URL.Query().Get("sort_by")
 	filter.SortOrder = r.URL.Query().Get("order")
 
-	recordings, total, err := h.db.ListRecordingsWithTotal(ctx, filter)
+	recordings, total, err := s.deps.DB.ListRecordingsWithTotal(ctx, filter)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to list archived recordings")
 		return
@@ -82,19 +83,19 @@ func (h *Handler) handleListArchiveRecordings(w http.ResponseWriter, r *http.Req
 	})
 }
 
-func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
 	// 1. Verify camera is archived
-	cam, err := h.db.GetCamera(ctx, cameraID)
+	cam, err := s.deps.DB.GetCamera(ctx, cameraID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get camera")
 		return
 	}
 	if cam == nil || !cam.Archived {
 		// Idempotent: if a cleanup task already exists (concurrent delete), return 202.
-		if exists, _ := h.db.HasArchiveCleanupTaskForCamera(ctx, cameraID); exists {
+		if exists, _ := s.deps.DB.HasArchiveCleanupTaskForCamera(ctx, cameraID); exists {
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "deleting"})
 			return
 		}
@@ -103,11 +104,11 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 2. Get stats for the task record (best-effort)
-	count, totalSize, _ := h.db.GetArchiveGroupStats(ctx, cameraID)
+	count, totalSize, _ := s.deps.DB.GetArchiveGroupStats(ctx, cameraID)
 
 	// 3. Create cleanup task (status=pending)
 	// Fire-and-forget: SQLite INSERT into own table; failure is logged by driver.
-	_ = h.db.CreateArchiveCleanupTask(ctx, storage.ArchiveCleanupTask{
+	_ = s.deps.DB.CreateArchiveCleanupTask(ctx, storage.ArchiveCleanupTask{
 		CameraID:       cameraID,
 		CameraName:     cam.Name,
 		RecordingCount: count,
@@ -118,7 +119,7 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 	// 4. Delete camera row immediately (vanishes from all list queries).
 	// Map sql.ErrNoRows to success: a concurrent delete request may have
 	// already deleted the row — the cleanup task is still needed regardless.
-	if err := h.db.DeleteCamera(ctx, cameraID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := s.deps.DB.DeleteCamera(ctx, cameraID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		WriteError(w, http.StatusInternalServerError, "failed to delete camera")
 		return
 	}
@@ -127,22 +128,22 @@ func (h *Handler) handleDeleteArchiveGroup(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deleting"})
 }
 
-func (h *Handler) handleGetCleanupStatus(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleGetCleanupStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	active, _ := h.db.ListActiveArchiveCleanupTasks(ctx)
-	recent, _ := h.db.ListRecentArchiveCleanupTasks(ctx, time.Now().Add(-1*time.Hour))
+	active, _ := s.deps.DB.ListActiveArchiveCleanupTasks(ctx)
+	recent, _ := s.deps.DB.ListRecentArchiveCleanupTasks(ctx, time.Now().Add(-1*time.Hour))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"active": active, // pending + running
 		"recent": recent, // done + failed (last 1h)
 	})
 }
 
-func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	recordingID := chi.URLParam(r, "recordingID")
 	ctx := r.Context()
 
-	rec, err := h.db.GetRecording(ctx, recordingID)
+	rec, err := s.deps.DB.GetRecording(ctx, recordingID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
@@ -161,24 +162,24 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 		}
 	}
 	if rec.FilePath != "" {
-		if err := h.store.DeleteFile(rec.FilePath); err != nil {
+		if err := s.deps.Store.DeleteFile(rec.FilePath); err != nil {
 			logger.Warn("failed to delete archived recording file", "file_path", rec.FilePath, "error", err)
 		}
 	}
 
-	if err := h.db.DeleteRecording(ctx, recordingID); err != nil {
+	if err := s.deps.DB.DeleteRecording(ctx, recordingID); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to delete recording")
 		return
 	}
 
 	// Check if this was the last archived recording for this camera
-	count, _, err := h.db.GetArchiveGroupStats(ctx, cameraID)
+	count, _, err := s.deps.DB.GetArchiveGroupStats(ctx, cameraID)
 	if err == nil && count == 0 {
 		// No more recordings — clean up camera row and directory
-		if err := h.db.DeleteCamera(ctx, cameraID); err != nil {
+		if err := s.deps.DB.DeleteCamera(ctx, cameraID); err != nil {
 			logger.Warn("failed to delete empty archive camera", "camera_id", cameraID, "error", err)
 		}
-		if err := h.store.DeleteCameraDir(cameraID); err != nil {
+		if err := s.deps.Store.DeleteCameraDir(cameraID); err != nil {
 			logger.Warn("failed to remove camera directory", "camera_id", cameraID, "error", err)
 		}
 	}
@@ -186,7 +187,7 @@ func (h *Handler) handleDeleteArchiveRecording(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-func (h *Handler) handleSetArchiveRetention(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleSetArchiveRetention(w http.ResponseWriter, r *http.Request) {
 	cameraID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
@@ -202,7 +203,7 @@ func (h *Handler) handleSetArchiveRetention(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.db.SetArchiveRetention(ctx, cameraID, body.RetentionDays); err != nil {
+	if err := s.deps.DB.SetArchiveRetention(ctx, cameraID, body.RetentionDays); err != nil {
 		WriteError(w, http.StatusNotFound, "archived camera not found")
 		return
 	}
@@ -210,13 +211,3 @@ func (h *Handler) handleSetArchiveRetention(w http.ResponseWriter, r *http.Reque
 }
 
 // registerArchiveRoutes registers archive list/delete/retention routes.
-func (h *Handler) registerArchiveRoutes(r chi.Router) {
-	r.Route("/api/archives", func(r chi.Router) {
-		r.Get("/", h.handleListArchives)
-		r.Get("/{id}/recordings", h.handleListArchiveRecordings)
-		r.Get("/cleanup-status", h.handleGetCleanupStatus)
-		r.Delete("/{id}", h.handleDeleteArchiveGroup)
-		r.Delete("/{id}/recordings/{recordingID}", h.handleDeleteArchiveRecording)
-		r.Put("/{id}/retention", h.handleSetArchiveRetention)
-	})
-}

@@ -1,4 +1,4 @@
-package api
+package recordingsapi
 
 import (
 	"encoding/json"
@@ -8,11 +8,11 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleDeleteRecording(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	rec, err := h.db.GetRecording(ctx, id)
+	rec, err := s.deps.DB.GetRecording(ctx, id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
@@ -23,7 +23,7 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Delete from DB first (authoritative source)
-	if err := h.db.DeleteRecording(ctx, id); err != nil {
+	if err := s.deps.DB.DeleteRecording(ctx, id); err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to delete recording")
 		return
 	}
@@ -39,7 +39,7 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if rec.FilePath != "" {
-		if err := h.store.DeleteFile(rec.FilePath); err != nil {
+		if err := s.deps.Store.DeleteFile(rec.FilePath); err != nil {
 			logger.Warn("failed to delete file", "file_path", rec.FilePath, "error", err)
 		}
 	}
@@ -47,7 +47,7 @@ func (h *Handler) handleDeleteRecording(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var body struct {
@@ -73,7 +73,7 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 		mergePath string
 	}
 	paths := map[string]recPaths{}
-	recordings, err := h.db.GetRecordingsByIDBatch(ctx, body.IDs)
+	recordings, err := s.deps.DB.GetRecordingsByIDBatch(ctx, body.IDs)
 	if err != nil {
 		logger.Warn("batch delete: failed to fetch recordings", "error", err)
 	} else {
@@ -83,7 +83,7 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 	}
 
 	// Delete DB records (transaction)
-	deleted, err := h.db.DeleteRecordingsBatch(ctx, body.IDs)
+	deleted, err := s.deps.DB.DeleteRecordingsBatch(ctx, body.IDs)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to delete recordings")
 		return
@@ -104,7 +104,7 @@ func (h *Handler) handleBatchDeleteRecordings(w http.ResponseWriter, r *http.Req
 			}
 		}
 		if p.filePath != "" {
-			if err := h.store.DeleteFile(p.filePath); err != nil {
+			if err := s.deps.Store.DeleteFile(p.filePath); err != nil {
 				logger.Warn("batch delete: failed to delete file", "file_path", p.filePath, "error", err)
 			}
 		}

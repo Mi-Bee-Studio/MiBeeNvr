@@ -20,20 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseDateParts(t *testing.T) {
-	t.Parallel()
-	y, m, d, err := parseDateParts("2026-08-20")
-	require.NoError(t, err)
-	require.Equal(t, 2026, y)
-	require.Equal(t, 8, m)
-	require.Equal(t, 20, d)
-
-	for _, bad := range []string{"2026-08", "2026/08/20", "aaaa-bb-cc", ""} {
-		_, _, _, err := parseDateParts(bad)
-		require.Error(t, err, bad)
-	}
-}
-
 func TestTimelineSegments(t *testing.T) {
 	t.Parallel()
 	db, store := setupTestDB(t)

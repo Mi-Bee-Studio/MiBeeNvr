@@ -16,6 +16,7 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/slogx"
 
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/notifyapi"
+	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/recordingsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/relayapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/api/streamsapi"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
@@ -392,15 +393,12 @@ func (h *Handler) Routes() http.Handler {
 	// Protected routes (behind authMW)
 	r.Group(func(r chi.Router) {
 		r.Use(h.authMW)
-		h.registerRecordingRoutes(r)
+		recordingsapi.Register(r, recordingsDeps(h))
 		h.registerCameraRoutes(r)
 		streamsapi.Register(r, streamsDeps(h))
 		h.registerSystemRoutes(r)
-		h.registerMergeRoutes(r)
-		h.registerTimelapseRoutes(r)
 		h.registerONVIFRoutes(r)
 		h.registerOnboardingRoutes(r)
-		h.registerArchiveRoutes(r)
 		h.registerXiaomiRoutes(r)
 		h.registerHealthRoutes(r)
 		relayapi.Register(r, relayapi.Deps{Relay: relayDeps(h.relayMgr)})
@@ -498,36 +496,11 @@ func (h *Handler) registerAnonymousRoutes(r chi.Router) {
 // group. The remote offload playback proxy (#874 batch 2, tightened #893)
 // shares this exposure class — outbox ids are equally predictable.
 func (h *Handler) registerMediaRoutes(r chi.Router) {
-	r.Get("/api/recordings/{id}/download", h.handleDownloadRecording)
-	r.Head("/api/recordings/{id}/download", h.handleDownloadRecording) // HEAD for browser <video> probe
-	// Audio-only recordings (v43): G.711 → WAV pure-Go transcode (browsers
-	// don't play G.711-in-MP4). Same auth class as download + audit log, and
-	// per-IP rate-limited on top: the transcode is CPU work proportional to
-	// segment size, so a looping/scrubbing client must not be able to turn
-	// playback into a self-DoS (60/min covers segment-per-click playback plus
-	// browser range re-probes with wide margin). The live-listening stream
-	// shares the limiter for its OPEN (sessions are long-lived — one request
-	// each, the limiter never bites mid-stream).
-	r.Group(func(r chi.Router) {
-		rl := middleware.NewRateLimiter(context.Background(), middleware.RateLimiterConfig{
-			MaxRequests: 60,
-			Window:      time.Minute,
-		})
-		r.Use(rl.Handler)
-		r.Get("/api/recordings/{id}/audio.wav", h.handleAudioWav)
-		r.Head("/api/recordings/{id}/audio.wav", h.handleAudioWav)
-		r.Get("/api/cameras/{cameraID}/audio/live.wav", h.handleAudioLiveWav)
-		r.Get("/api/cameras/{cameraID}/audio/live", h.handleAudioLive)
-	})
-	// Audio access audit trail (compliance): the WAV fetch above and live
-	// sessions append here; queryable newest-first.
-	r.Get("/api/recordings/audio-audit", h.handleAudioAudit)
-	r.Get("/api/recordings/{id}/merged", h.handleMergedRecording)
-	r.Head("/api/recordings/{id}/merged", h.handleMergedRecording) // HEAD for browser <video> probe
-	r.Get("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
-	r.Head("/api/timelapse/merges/{id}/download", h.handleDownloadTimelapseMerge)
-	r.Get("/api/cameras/{cameraID}/playback/playlist.m3u8", h.handlePlaybackPlaylist)
-	r.Get("/api/cameras/{cameraID}/playback/{recordingID}/{segName}", h.handlePlaybackSegment)
+	// Live camera audio (xiaomi/two-way speakers; camera-audio domain concern)
+	// and the remote-offload proxy share this exposure class with the
+	// recording download paths, which moved to recordingsapi.
+	r.Get("/api/cameras/{cameraID}/audio/live.wav", h.handleAudioLiveWav)
+	r.Get("/api/cameras/{cameraID}/audio/live", h.handleAudioLive)
 	r.Get("/api/offload/objects/{id}", h.handleOffloadObject)
 	r.Head("/api/offload/objects/{id}", h.handleOffloadObject)
 }
@@ -553,21 +526,7 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 // defaultLimit is used when ?limit is absent or invalid; maxLimit<=0 disables
 // the upper-bound clamp. offset defaults to 0 and is never negative.
 func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset int) {
-	limit = defaultLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if maxLimit > 0 && limit > maxLimit {
-		limit = maxLimit
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
-	return limit, offset
+	return httpx.ParsePagination(r, defaultLimit, maxLimit)
 }
 
 func writeAPIError(w http.ResponseWriter, status int, err error) {
@@ -592,11 +551,7 @@ func validateURL(rawURL string) bool {
 
 // validateIP checks that a string is a valid IPv4 or IPv6 address, supporting ip:port format.
 func validateIP(ip string) bool {
-	// Support ip:port format (e.g., "192.168.1.100:8080")
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		return net.ParseIP(host) != nil
-	}
-	return net.ParseIP(ip) != nil
+	return httpx.ValidateIP(ip)
 }
 
 // noopAuthMW is a middleware that passes all requests through (no auth).

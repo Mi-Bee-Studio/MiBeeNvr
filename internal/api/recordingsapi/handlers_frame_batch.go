@@ -3,7 +3,7 @@
 // MJPEG playback (merged timelapse outputs + raw recording dirs + AVI files).
 // The frontend streams the response and decodes parts as Blobs — N frames per
 // request instead of N requests.
-package api
+package recordingsapi
 
 import (
 	"fmt"
@@ -55,7 +55,7 @@ func parseFrameBatchParams(r *http.Request) (offset, limit int, err error) {
 // offset+limit) as JPEG parts. count is clamped to the available range; an
 // out-of-range offset yields an empty (but valid) multipart body so players
 // stop cleanly. emit writes the i-th frame as one part.
-func (h *Handler) writeFrameBatch(w http.ResponseWriter, total, offset, limit int, emit func(i int, mw *multipart.Writer) error) {
+func (s *server) writeFrameBatch(w http.ResponseWriter, total, offset, limit int, emit func(i int, mw *multipart.Writer) error) {
 	count := limit
 	if offset+count > total {
 		count = total - offset
@@ -100,8 +100,8 @@ func writeJPEGPartHeader(mw *multipart.Writer, index int) (io.Writer, error) {
 // pure-Go MP4 sample table (merge.ParseSegment → stsz/stco), streaming one
 // multipart part per frame. Only for codec=mjpeg merges — h264/h265 outputs
 // play natively via <video>.
-func (h *Handler) handleTimelapseMergeFrames(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleTimelapseMergeFrames(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
@@ -110,7 +110,7 @@ func (h *Handler) handleTimelapseMergeFrames(w http.ResponseWriter, r *http.Requ
 		WriteError(w, http.StatusBadRequest, "invalid merge id")
 		return
 	}
-	m, err := h.db.GetTimelapseMerge(r.Context(), id)
+	m, err := s.deps.DB.GetTimelapseMerge(r.Context(), id)
 	if err != nil || m == nil {
 		WriteError(w, http.StatusNotFound, "timelapse merge not found")
 		return
@@ -149,7 +149,7 @@ func (h *Handler) handleTimelapseMergeFrames(w http.ResponseWriter, r *http.Requ
 	if m.FPS > 0 {
 		w.Header().Set("X-Frame-Fps", strconv.Itoa(m.FPS))
 	}
-	h.writeFrameBatch(w, len(seg.Samples), offset, limit, func(i int, mw *multipart.Writer) error {
+	s.writeFrameBatch(w, len(seg.Samples), offset, limit, func(i int, mw *multipart.Writer) error {
 		s := seg.Samples[i]
 		part, err := writeJPEGPartHeader(mw, i)
 		if err != nil {
@@ -168,13 +168,13 @@ func (h *Handler) handleTimelapseMergeFrames(w http.ResponseWriter, r *http.Requ
 // Serves a multipart/mixed JPEG batch from an MJPEG/timelapse recording
 // directory (timestamped .jpg files, cached listing) or an AVI recording
 // (frames indexed via the AVI movi chunk index).
-func (h *Handler) handleTimelapseFramesBatch(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+func (s *server) handleTimelapseFramesBatch(w http.ResponseWriter, r *http.Request) {
+	if s.deps.DB == nil {
 		WriteError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	id := chi.URLParam(r, "id")
-	rec, err := h.db.GetRecording(r.Context(), id)
+	rec, err := s.deps.DB.GetRecording(r.Context(), id)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "failed to get recording")
 		return
@@ -186,27 +186,27 @@ func (h *Handler) handleTimelapseFramesBatch(w http.ResponseWriter, r *http.Requ
 
 	switch rec.Format {
 	case model.FormatMJPEG, model.FormatTimelapse:
-		h.handleFramesBatchDir(w, r, rec)
+		s.handleFramesBatchDir(w, r, rec)
 	case model.FormatAVI:
-		h.handleFramesBatchAVI(w, r, rec)
+		s.handleFramesBatchAVI(w, r, rec)
 	default:
 		WriteError(w, http.StatusNotFound, "not a timelapse or MJPEG recording")
 	}
 }
 
 // handleFramesBatchDir streams a JPEG batch from an MJPEG/timelapse directory.
-func (h *Handler) handleFramesBatchDir(w http.ResponseWriter, r *http.Request, rec *model.Recording) {
+func (s *server) handleFramesBatchDir(w http.ResponseWriter, r *http.Request, rec *model.Recording) {
 	offset, limit, err := parseFrameBatchParams(r)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	names, err := h.recFrames.SortedImageFiles(rec.FilePath)
+	names, err := s.deps.RecFrames.SortedImageFiles(rec.FilePath)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, "timelapse directory not found")
 		return
 	}
-	h.writeFrameBatch(w, len(names), offset, limit, func(i int, mw *multipart.Writer) error {
+	s.writeFrameBatch(w, len(names), offset, limit, func(i int, mw *multipart.Writer) error {
 		part, err := writeJPEGPartHeader(mw, i)
 		if err != nil {
 			return err
@@ -223,7 +223,7 @@ func (h *Handler) handleFramesBatchDir(w http.ResponseWriter, r *http.Request, r
 
 // handleFramesBatchAVI streams a JPEG batch from an AVI recording using the
 // demuxer's video frame index (one seek + copy per frame, no full demux).
-func (h *Handler) handleFramesBatchAVI(w http.ResponseWriter, r *http.Request, rec *model.Recording) {
+func (s *server) handleFramesBatchAVI(w http.ResponseWriter, r *http.Request, rec *model.Recording) {
 	offset, limit, err := parseFrameBatchParams(r)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
@@ -247,7 +247,7 @@ func (h *Handler) handleFramesBatchAVI(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
-	h.writeFrameBatch(w, len(entries), offset, limit, func(i int, mw *multipart.Writer) error {
+	s.writeFrameBatch(w, len(entries), offset, limit, func(i int, mw *multipart.Writer) error {
 		part, err := writeJPEGPartHeader(mw, i)
 		if err != nil {
 			return err
