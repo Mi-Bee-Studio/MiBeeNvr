@@ -100,7 +100,25 @@
 | `api/handler.go` | 1207 → **950** | handler_setters.go, handler_gb28181.go |
 | `web/lib/api/cameras.ts` | 1431 → **413** | camera-types.ts, camera-ptz.ts |
 
-全部降至 1200 行阈值以下。
+全部降至 1200 行阈值以下；后续批次继续收敛，**最终全仓 Go 产品文件均 ≤ 1000 行**
+（最大 995 行 `merge/mp4merge.go`）。追加批次：
+
+| 文件 | 原 → 现 | 拆出 |
+|---|---|---|
+| `storage/db.go` | 1134 → **676** | db_schema_migrations.go |
+| `app/register.go` | 1118 → **813** | register_protocols.go |
+| `api/handlers_settings.go` | 1111 → **916** | handlers_api_keys.go |
+| `webrtc/manager.go` | 1109 → **966** | congestion.go, peer_types.go |
+| `storage/manager.go` | 1023 → **191** | manager_segments.go |
+| `api/handlers_onvif.go` | 1030 → **228** | handlers_ptz_vectors.go |
+| `xiaomi/cloud.go` | 1046 → **913** | cloud_crypto.go |
+| `muxer/mp4mux.go` | 1087 → **454** | mp4boxes.go |
+| `xiaomi/recorder.go` | 1502 → **944** | recorder_packets.go, recorder_device.go |
+| `hls/manager.go` | 1153 → **602** | manager_lifecycle.go |
+| `p2psdk/p2p.go` | 1057 → **798** | webrtc_tuning.go |
+| `config/validate.go` | 1051 → **96** | validate_details.go |
+| `streamhub/streamhub.go` | 1008 → **888** | consumers.go |
+| `recorder/base.go` | 1320 → **888** | segment_files.go, metrics_stats.go, adaptive_triggers.go |
 
 > 切割纪律：只做**文件内移动**，不改逻辑、不改行为；每步 `go build` + 包内测试绿；
 > 有测试的文件先确认测试覆盖再动。
