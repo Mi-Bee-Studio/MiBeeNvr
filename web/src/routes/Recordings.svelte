@@ -18,6 +18,7 @@
   import { isRouteSuspended } from '$lib/page-lifecycle.svelte';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
+  import { remoteDayBounds, computePresetWindowStart, DAY_CACHE_TTL_MS } from '$lib/recordings-windows';
 
   import type { Recording, Camera, RecordingDaySummary, RecordingTimelineSegment } from '$lib/api';
   import { t } from '$lib/i18n';
@@ -82,7 +83,6 @@
     at: number;
   }
   let dayCache: { key: string; entry: DayCacheEntry } | null = null;
-  const DAY_CACHE_TTL_MS = 30_000;
 
   function takeDayCache(key: string): DayCacheEntry | null {
     if (dayCache && dayCache.key === key && Date.now() - dayCache.entry.at < DAY_CACHE_TTL_MS) {
@@ -595,14 +595,6 @@ $effect(() => {
   let remoteAbort: AbortController | undefined;
   let playingRemoteId = $state<number | null>(null);
 
-  function remoteDayBounds(date: string): { start: string; end: string } {
-    const [y, m, d] = date.split('-').map(Number);
-    return {
-      start: new Date(y, m - 1, d, 0, 0, 0).toISOString(),
-      end: new Date(y, m - 1, d, 23, 59, 59, 999).toISOString(),
-    };
-  }
-
   async function loadRemoteArchive(date: string) {
     if (remoteAbort) remoteAbort.abort();
     remoteAbort = new AbortController();
@@ -888,24 +880,6 @@ $effect(() => {
       await generateAndPlayPreset(cameraId, preset.duration, now);
     } catch (e) {
       showToast(e instanceof Error ? e.message : t('common.error'), 'error');
-    }
-  }
-
-  // computePresetWindowStart returns the inclusive lower bound to pass as the
-  // `start` query when looking for an existing merge for the given window.
-  function computePresetWindowStart(duration: string, now: Date): Date {
-    switch (duration) {
-      case 'natural-day': {
-        // Start of today in local time.
-        const d = new Date(now);
-        d.setHours(0, 0, 0, 0);
-        return d;
-      }
-      case '8h': return new Date(now.getTime() - 8 * 3600 * 1000);
-      case '24h': return new Date(now.getTime() - 24 * 3600 * 1000);
-      case '7d': return new Date(now.getTime() - 7 * 24 * 3600 * 1000);
-      case '30d': return new Date(now.getTime() - 30 * 24 * 3600 * 1000);
-      default: return new Date(now.getTime() - 24 * 3600 * 1000);
     }
   }
 

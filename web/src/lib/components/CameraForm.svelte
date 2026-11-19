@@ -1,5 +1,6 @@
 <script lang="ts">
     import { t } from '$lib/i18n';
+  import { parseSubnetHints, profileOptionLabel, fmtSkew } from '$lib/camera-form-helpers';
     import { friendlyError } from '$lib/errors';
     import { buildTranscodingPayload } from '$lib/camera-form-payload';
     import {
@@ -321,22 +322,6 @@ let validationErrors = $state<Record<string, string>>({});
       mergeConfigLoading = false;
     }
   });
-
-  // Parse the subnet-hints textarea into a clean CIDR list (one per line,
-  // whitespace/comma tolerant, blanks dropped). The backend validates each as a
-  // CIDR; /24-or-smaller only (the rediscovery scanner rejects wider ranges).
-  function parseSubnetHints(text: string): string[] | undefined {
-    const parts = text.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0);
-    return parts.length > 0 ? parts : undefined;
-  }
-
-  // Label one media profile in the main-profile picker: name (or token),
-  // resolution and codec — the dimensions are what distinguishes a thermal
-  // channel (384×288-class) from the visible-light main stream.
-  function profileOptionLabel(p: DeviceProfileOption): string {
-    const dims = p.width && p.height ? `${p.width}×${p.height}` : '';
-    return [p.name || p.token, dims, p.encoding || ''].filter(Boolean).join(' · ');
-  }
 
   function resetFormFields() {
     formName = '';
@@ -884,13 +869,6 @@ async function performCameraSave() {
     } finally {
       timeBusy = false;
     }
-  }
-
-  function fmtSkew(seconds: number): string {
-    const abs = Math.abs(seconds);
-    if (abs >= 3600) return (seconds / 3600).toFixed(1) + ' h';
-    if (abs >= 60) return (seconds / 60).toFixed(1) + ' min';
-    return seconds.toFixed(1) + ' s';
   }
 
 </script>
