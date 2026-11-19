@@ -61,5 +61,10 @@ flowchart TB
 
 - Svelte 5 + Vite; the build lands in `internal/ui/static` and is embedded in
   the binary — **a binary refresh must always ship a freshly built SPA**.
+- **The only build path is `make frontend`** (`web/dist` → `internal/ui/static`,
+  wiping generated files first). There is no second output directory: anything
+  else named `dist/` or `dist2/` is stale and must not be used. Committing or
+  serving a stale SPA has caused field outages (empty SPA, mismatched asset
+  hashes) — always rebuild rather than copy an old bundle.
 - The service worker caches by content fingerprint; cache-busting follows the
   build hash.

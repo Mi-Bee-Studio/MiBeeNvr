@@ -71,14 +71,14 @@
 
 - [x] **2.1 `tools/` 去留**：`tools/eval/README.md`（评测框架说明）→
   `docs/architecture/eval-replay.md`，删空目录
-- [ ] **2.2 `scripts/`**：CI 引用 `scripts/check-docs-links.py`（ci.yml:141），
+- [x] **2.2 `scripts/`**：CI 引用 `scripts/check-docs-links.py`（ci.yml:141），
   与 `tools/` 并存的单文件目录 → 合并为 `devtools/`（同步改 ci.yml + CONTRIBUTING.md）
 - [ ] **2.3 `e2e-tests/` 处置**（二选一，需裁定）
   - A 复活：补 `package.json`（@playwright/test）+ `playwright.config.ts` + CI job（需真机 NVR，建议 nightly）
   - B 删除：6 个 spec 已 3 个月未跑、依赖缺失
-- [ ] **2.4 `tests/` 命名**：加 `tests/README.md` 说明「这里是跨包集成测试，包内单测贴包放」；
+- [x] **2.4 `tests/` 命名**：加 `tests/README.md` 说明「这里是跨包集成测试，包内单测贴包放」；
   CI 显式列出 `./tests/...` 保证不被分片逻辑遗漏
-- [ ] **2.5 SPA 产物单一链路**：确立 `web/dist` → `internal/ui/static` 唯一方向
+- [x] **2.5 SPA 产物单一链路**：确立 `web/dist` → `internal/ui/static` 唯一方向
   （Makefile:27 已是此路径），在 `docs/architecture/platform.md` 写明并加注释
 
 ## Phase 3 — 代码切割（多 PR，按风险升序）

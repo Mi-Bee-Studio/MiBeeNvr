@@ -76,7 +76,7 @@ A PR runs seven checks; all of them must be green before merge:
 |-------|--------------|
 | `test` | `go test -race` split into three parallel shards (two balanced package shards + a dedicated quiet shard for `internal/p2psdk`, whose realtime-protocol tests need a runner to themselves) |
 | `coverage` | Merges the shard coverage profiles and enforces the 55% floor |
-| `lint` | golangci-lint v2 + markdown fence lint (MD040) + docs relative links & zh/en parity (`scripts/check-docs-links.py`) |
+| `lint` | golangci-lint v2 + markdown fence lint (MD040) + docs relative links & zh/en parity (`devtools/check-docs-links.py`) |
 | `build` | Frontend tests + build (Node 24), then the Go binary |
 | `build-desktop` | Cross-builds the Windows/macOS desktop binaries |
 | `gb35114` | Builds and tests the `-tags gb35114` security seam |
@@ -84,7 +84,7 @@ A PR runs seven checks; all of them must be green before merge:
 
 Docs-only PRs: keep fenced code blocks tagged (a bare ``` fence fails
 MD040), keep image paths and relative links resolvable, and keep the
-zh/en page sets in parity — `scripts/check-docs-links.py` enforces all
+zh/en page sets in parity — `devtools/check-docs-links.py` enforces all
 three.
 
 ## Vendored code
