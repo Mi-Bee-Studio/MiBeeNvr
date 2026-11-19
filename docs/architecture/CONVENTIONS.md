@@ -29,8 +29,7 @@
   可被任意包引用；业务包之间**禁止双向依赖**。
 - **跨域编排走 `app/`**：两个业务域需要协作时，由 `app` 装配，不要让
   `internal/a` 直接依赖 `internal/b` 且 `internal/b` 又依赖 `internal/a`。
-- **`internal/*` 不得 import `pkg/*`**（当前 `internal/{camera,event,streamhub}/adapter.go`
-  是待清理的反向依赖，见台账 §4.3）。
+- **`internal/*` 与全仓不得 import `pkg/*`**（pkg/ 已删除，CI 强制）。
 - 认证/授权/限流类代码归 **`internal/auth`**，不要散落在 `internal/middleware`。
 
 ## 3. 文件规模
@@ -57,13 +56,15 @@
 
 新增有外部行为的功能，测试必须同 PR；无测试的 PR 需在描述里说明理由。
 
-## 5. `pkg/` 契约层
+## 5. `pkg/` 已移除（2026-11-19，治理 4.3）
 
-`pkg/` 只放**给仓外消费者**的接口。加进来之前先问：消费者是否在同一 module 内？
+`pkg/{camera,eventbus,streamhub}` 曾是为「仓外商业 P2P 模块」预留的契约层；
+该模块已于 2026-10 并入 `internal/p2psdk`，契约层与三个 adapter 成了无消费者的
+空壳，已删除。`app.RegisterValue` 现在注册具体类型（`*camera.CameraManager` 等）。
 
-- 若是 → 放 `internal/`，不要建镜像。
-- 若否 → 接口定义放 `pkg/`，实现留 `internal/`，adapter 在 `internal/` 侧，
-  **依赖方向永远是 `internal → pkg`**。
+**如需恢复对外契约**：必须先有真实的仓外消费者与版本承诺，经用户裁定后按
+当时的实际需求重新设计接口——不要凭空恢复旧镜像。CI 守卫会拒绝任何
+`MiBeeNvr/pkg/` 引用与根目录 `pkg/`。
 
 ## 6. SPA 构建
 

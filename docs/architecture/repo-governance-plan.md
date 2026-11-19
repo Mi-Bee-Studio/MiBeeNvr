@@ -161,11 +161,13 @@
 - [ ] **4.2 CI 守卫**
   - 新增 `.github/workflows/repo-guard.yml`：目录白名单 + 新增文件行数上限 + 禁止
     `internal/*` import `pkg/*` 的 grep 断言
-- [ ] **4.3 `pkg/` 边界裁定**
-  - 现状：`pkg/*` 仅被 `internal/*/adapter.go` 与 `app/register.go` 使用，无仓外消费者
-  - 选项 A：保留为「商业模块对外契约」（注释声称的用途）
-  - 选项 B：合并回 `internal/`，删除 3 个 adapter（若商业模块已同仓）
-  - **需用户裁定**后执行
+- [x] **4.3 `pkg/` 边界裁定** —— **选项 A 执行完毕（用户裁定 2026-11-19）**
+  - 删除 `pkg/{camera,eventbus,streamhub}` 三个包与
+    `internal/{camera,event,streamhub}/adapter.go`（及对应测试）——无仓外消费者
+    （商业 P2P 已并入 internal/p2psdk，直接依赖 internal 实现）
+  - `app.RegisterValue` 改注册具体类型（`*camera.CameraManager` / `*event.EventBus`），
+    doc.go 示例同步
+  - repo-guard：`pkg/` 列入禁止根目录；`MiBeeNvr/pkg/` 任何引用直接报错（基线归零）
 - [ ] **4.4 AGENTS.md 瘦身**
   - 206 KB 编年史 → 保留「当前事实 + 索引」，历史迁 `docs/architecture/history/` 或
     dev-journal；根文件目标 ≤30 KB
@@ -199,7 +201,6 @@ Phase 4（规范固化）      —— 依赖 3 的经验数据（行数阈值要
 
 1. **`tmp-probe` 内容目录**（`y26-compare` 2.7 GB 评测语料 / `promo_20261110` 2.0 GB 宣传底稿）
    —— 删还是留？宣传成品是否已全部迁到 `D:\Projects\宣传材料`？
-3. **`pkg/` 边界** —— 保留为对外契约，还是合并回 `internal/`？
 
 ---
 *台账维护：每完成一项勾选并追加 PR 号；发现新问题追加到对应 Phase 而非另开文档。*

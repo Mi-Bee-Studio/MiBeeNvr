@@ -25,7 +25,7 @@ jobs:
         run: |
           set -eu
           bad=""
-          for d in scripts tools dist dist2 tmp-probe web_embed; do
+          for d in scripts tools dist dist2 tmp-probe web_embed pkg; do
             # Only tracked directories matter: build/ and tmp-probe/ are
             # gitignored local scratch and are not present on a clean checkout.
             if git ls-files --error-unmatch "$d" >/dev/null 2>&1; then bad="$bad $d"; fi

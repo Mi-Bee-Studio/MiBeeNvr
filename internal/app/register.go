@@ -20,7 +20,6 @@ import (
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/autodiscover"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/camera"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/config"
-	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/event"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/health"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/model"
 	"github.com/Mi-Bee-Studio/MiBeeNvr/internal/motion"
@@ -710,17 +709,17 @@ func registerMaintenanceServices(a *App, deps *appDeps) error {
 	return nil
 }
 
-// registerValues exposes typed handles for out-of-module consumers (e.g.
-// MiBeeNvrP2P) via a.Value(...). Order is not load-bearing but is preserved
-// from the historical RunFree for stability.
+// registerValues exposes typed handles for in-module extensions via a.Value(...)
+// (concrete types — there is no out-of-module consumer since the P2P module
+// merged into internal/p2psdk, #repo-governance 4.3 removed the pkg/ mirrors).
 func registerValues(a *App, deps *appDeps) error {
-	if err := a.RegisterValue("camera-manager", deps.camMgr.AsPublic()); err != nil {
+	if err := a.RegisterValue("camera-manager", deps.camMgr); err != nil {
 		return fmt.Errorf("register camera-manager value: %w", err)
 	}
 	if err := a.RegisterValue("relay-manager", deps.relayMgr); err != nil {
 		return fmt.Errorf("register relay-manager value: %w", err)
 	}
-	if err := a.RegisterValue("eventbus", event.NewBusAdapter(deps.eventBus)); err != nil {
+	if err := a.RegisterValue("eventbus", deps.eventBus); err != nil {
 		return fmt.Errorf("register eventbus value: %w", err)
 	}
 	if err := a.RegisterValue("config", deps.cfg); err != nil {
