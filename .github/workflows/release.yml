@@ -74,11 +74,13 @@ jobs:
           cp mibee-nvr-windows-amd64.exe "MiBeeNVR-Setup-${{ github.ref_name }}-windows-amd64.exe"
 
       # ---- Home Assistant custom integration (HACS) --------------------------
-      # HACS only discovers custom_components/ at the repository root; this
-      # repo keeps the integration under deploy/home-assistant, so it ships
-      # as a release zip instead (hacs.json: zip_release + filename). The
-      # manifest version inside the zip is stamped from the tag — hacs/default
-      # requires manifest.version to equal the release tag.
+      # This repo ships the integration as a release zip (hacs.json:
+      # zip_release + filename): its source must live at the repository root
+      # (custom_components/mibee_nvr, required by HA's loader) while its
+      # dev/test harness lives in deploy/home-assistant. Build the zip with
+      # the same custom_components/ layout HA expects on install.
+      # manifest.version is stamped from the tag — hacs/default requires it
+      # to equal the release tag.
       - name: Package HA integration zip
         run: |
           set -euo pipefail
