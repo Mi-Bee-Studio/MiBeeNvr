@@ -192,7 +192,7 @@ describe('PlayerOrchestrator — degrade', () => {
   // write when (status, reason) are unchanged.
   it('does NOT rewrite slots when the same (status, reason) is reported repeatedly (H80 regression)', () => {
     // Build a single-element wasm chain (H.265 + no MSE → only wasm usable),
-    // mirroring cam-608e6966's real topology. Force mseH265=false (and keep
+    // mirroring an H.265 camera's topology. Force mseH265=false (and keep
     // webCodecs/wasmH265 true) so HLS/FLV are excluded by the codec gate while
     // wasm stays usable → chain=['wasm']. We seed sessionStorage and invalidate
     // the in-memory cache so getCaps() (called inside makeRegistration) picks

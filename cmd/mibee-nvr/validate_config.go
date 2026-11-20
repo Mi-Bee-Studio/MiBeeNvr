@@ -13,9 +13,9 @@ import (
 // Pre-deploy smoke check for hand-edited YAML: loads the config through the
 // exact same Load → Validate pipeline the server uses at boot and reports
 // pass/fail without starting anything. Exit code 0 = the NVR would boot on
-// this file; 1 = it would crash-loop. Born from the 2026-09-11 M5 incident
-// (removing a vision instance while a camera still referenced it bricked the
-// service into a systemd restart loop for ~2 minutes).
+// this file; 1 = it would crash-loop. Born from a past config-validation
+// bug (removing a vision instance while a camera still referenced it bricked
+// the service into a systemd restart loop).
 func cmdValidateConfig() {
 	os.Exit(runValidateConfig(os.Args))
 }

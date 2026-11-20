@@ -24,8 +24,8 @@ var (
 
 // IsValidStableID reports whether s is a plausible hardware-identity value
 // suitable for persisting as a camera's StableID. It accepts real-world serial
-// formats observed in the field: 12-hex MAC (lowercase `744dbd988218`), uppercase
-// efuse MAC (`88492D665CCF`), colon-separated MAC (`74:4d:bd:98:82:18`), and
+// formats seen on real hardware: 12-hex MAC, uppercase efuse MAC,
+// colon-separated MAC, and
 // vendor serials with `-`/`_` separators (`SN-AAA`, `XIAOMI-CAM-001`). It rejects
 // the dirty values that have caused permanent rediscovery failure in production
 // (see #216): IP addresses, URLs, all-zero, all-same-char, too short/long.

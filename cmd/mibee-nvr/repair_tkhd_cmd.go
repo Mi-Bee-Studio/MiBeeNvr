@@ -1,7 +1,7 @@
 package main
 
-// repair append-tkhd —— 2026-09-24 现场回归（#853 追加桶）的历史产物修复：
-// 2026-09-19 20:5x 至修复之间，追加桶合并输出的 moov 模板把视频轨的 stsd
+// repair append-tkhd —— #853 追加桶历史产物的修复工具：
+// 在修复之前，追加桶合并输出的 moov 模板把视频轨的 stsd
 // 样本条目与 tkhd 宽高都写成 0×0。Chromium 一族构建流配置读 stsd 样本条目
 // 尺寸 → "no supported streams" 整文件拒播（网页回放全灭）；ffprobe/VLC
 // 解码时从 SPS 重推尺寸照常可播（下载可播掩盖网页不可播）。

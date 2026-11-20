@@ -196,7 +196,7 @@ Edge 150 实例访问 M5 部署：
   `ee7b0660...`）。
 - **ORT 会话创建**：`ort.InferenceSession.create(buf, {executionProviders:
   ['wasm']})` → `SESSION OK inputs=["images"]`（之前是 `ERROR_CODE: 7`）。
-- **实时视图 AI 指示器**：视通相机（H.265，在线）在状态栏显示**「AI
+- **实时视图 AI 指示器**：一台 H.265 相机（在线）在状态栏显示**「AI
   就绪」**（之前是 "AI ✗ ERROR_CODE 7"）。截图确认视频在播、绿色 AI 就绪
   徽章可见。
 - 所有既有 `TestStreamingGzip_*` 测试仍然通过；新增了回归测试。

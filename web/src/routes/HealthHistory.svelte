@@ -38,7 +38,7 @@
     switch (status) {
       case 'healthy': return 'badge badge-success';
       case 'warning': return 'badge bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300';
-      case 'error': return 'badge badge-danger';
+      case 'error': return 'badge badge-error';
       default: return 'badge badge-neutral';
     }
   }

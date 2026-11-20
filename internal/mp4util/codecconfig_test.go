@@ -91,7 +91,7 @@ func TestBuildHvcC_ArrayNumNalusIsOne(t *testing.T) {
 }
 
 // TestBuildHvcC_ConservativeTierAndCompat pins the PR #92 behavior: when an
-// ONVIF camera emits an inconsistent SPS (the production cam-fa049182 SPS with
+// ONVIF camera emits an inconsistent SPS (a field-captured SPS with
 // High-tier bits in sps[2] and a stray compat flag), the hvcC must still
 // advertise Main tier + Main profile + zeroed compat/constraint so Edge's HEVC
 // extension accepts the stream.
@@ -100,7 +100,7 @@ func TestBuildHvcC_ArrayNumNalusIsOne(t *testing.T) {
 // keeping it here means the shared helper is independently pinned without
 // relying on the timelapse wrapper test.
 func TestBuildHvcC_ConservativeTierAndCompat(t *testing.T) {
-	// Inconsistent SPS captured from cam-fa049182:
+	// Inconsistent SPS captured from an ONVIF camera:
 	//   sps[0]=0x42 NAL header (type=33 SPS)
 	//   sps[1]=0x01 layerID=0 + temporalID=1  → profile_idc (low 5 bits) = 1 (Main)
 	//   sps[2]=0x21 profile_space=0 + tier_flag=1 (High!) + profile_idc=1

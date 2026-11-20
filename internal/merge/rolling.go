@@ -234,8 +234,8 @@ type RollingMergeCoordinator struct {
 
 	// cameraTranscodeEnabled reports whether a camera has transcoding on
 	// (#810 TOCTOU follow-up): the pending-task hold cannot see a task row
-	// that has not been inserted yet — production (2026-09-15, cam-3bbed0e1)
-	// showed the 500ms merge debounce folding a segment ~4s BEFORE its
+	// that has not been inserted yet — a field report showed the 500ms merge
+	// debounce folding a segment ~4s BEFORE its
 	// transcode task row landed. On transcode-enabled cameras, segments
 	// younger than transcodeGraceWindow defer by AGE, independent of task
 	// visibility. nil = rail off; the constructor wires the config-backed

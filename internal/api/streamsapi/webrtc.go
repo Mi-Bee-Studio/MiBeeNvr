@@ -194,11 +194,6 @@ func (s *server) handleDeleteWHEPSession(w http.ResponseWriter, r *http.Request)
 // the recorder and calls SetAudioInfo. AAC and unknown codecs are ignored by
 // the manager (video-only WHEP, separate audio-WS path stays). Errors are
 // non-fatal — video streaming continues.
-// SetupAudioForWebRTC is the exported form (mirrors SetupAudioForWS).
-func SetupAudioForWebRTC(mgr *webrtc.Manager, id string, rec model.Recorder) {
-	setupAudioForWebRTC(mgr, id, rec)
-}
-
 func setupAudioForWebRTC(mgr *webrtc.Manager, id string, rec model.Recorder) {
 	actualRec := model.UnwrapDelegate(rec)
 	provider, ok := actualRec.(audioInfoProvider)

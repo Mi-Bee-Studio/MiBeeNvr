@@ -1,7 +1,7 @@
 package systemapi
 
 // Exported compat surface: the api root's transitional shims (documented in
-// transitional shims) and root-side tests call these. Each handler
+// in system_compat.go) and root-side tests call these. Each handler
 // wrapper constructs a per-call server — the route-time server in Register
 // keeps the DB-txn rate state, so only stateless paths go through here.
 

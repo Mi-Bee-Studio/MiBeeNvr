@@ -90,7 +90,7 @@ const MERGE_STRIP_LAYERS = 2;
 
 export const DAY_SECONDS = 86400;
 
-function clampDay(sec: number): number {
+export function clampDay(sec: number): number {
   return Math.max(0, Math.min(DAY_SECONDS, sec));
 }
 

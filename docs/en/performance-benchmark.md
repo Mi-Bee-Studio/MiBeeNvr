@@ -13,7 +13,7 @@ This report contributes a self-tested dataset for MiBeeNvr. The goal is not to c
 
 | Device | Role | CPU | RAM | Storage | Deployment |
 |---|---|---|---|---|---|
-| Banana Pi M5 | Production unit (read-only observation) | Amlogic S905X3, ARMv8 ×4 | 4GB | 2.7TB SATA | bare metal, systemd |
+| Low-power ARM SBC | Representative host (read-only observation) | quad-core ARMv8 | 4GB | SATA storage | bare metal, systemd |
 | RK3399 NAS | Controlled load (low tier) | RK3399 ×6 | 4GB | eMMC-class volume | fnOS + Docker |
 | x86 workstation | Controlled load (high tier) | i5-12600KF, 10C16T | 64GB | NVMe | bare metal |
 | x86 laptop | Traffic generator / idle measurements | 8 cores | 16GB | SSD | — |
@@ -137,9 +137,9 @@ Conclusion: on eMMC-class slow storage, `relaxed` smooths write queuing (a reaso
 
 Note: during the controlled comparison, one `docker restart` of that container hit a runtime hang (docker ps reported Up while the process no longer existed; stop/start recovered it; the exiting process logged no panic and the kernel recorded no OOM — a host-environment event, not an NVR crash). The event lost SQLite stream keys that had not been checkpointed (camera and recording data intact); the setup was rebuilt and testing continued — production deployments should restart through the normal path (systemd / app store) rather than `docker restart`.
 
-## 7. ARM SBC Production Unit: Two Observation Windows
+## 7. ARM SBC Host: Two Observation Windows
 
-Banana Pi M5 (S905X3 ×4 / 4GB / 2.7TB SATA), 18 real cameras (mixed ONVIF / GB28181 / Xiaomi / MJPEG), running 24/7, with 2.1TB of recordings accumulated on disk (largest single camera: 467 GB / 2014 segments). Read-only observation, no changes made:
+A representative low-power ARM SBC (quad-core / 4GB / SATA storage), ~20 cameras (mixed ONVIF / GB28181 / Xiaomi / MJPEG), running 24/7, with a large recording archive on disk. Read-only observation, no changes made:
 
 | Metric | Normal window (14 min) | High IO pressure window (46 min)¹ |
 |---|---|---|

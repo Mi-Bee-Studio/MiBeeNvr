@@ -262,11 +262,8 @@ func (d *DB) CompactOnline(ctx context.Context) (int64, error) {
 	oldSize := oldInfo.Size()
 
 	// VACUUM INTO creates a new DB file with all data defragmented and packed.
-	// auto_vacuum must be set on the NEW file — VACUUM INTO resets it to NONE by default.
-	// We do this by setting the pragma on a temp DB first, then vacuuming into it.
-	// However, VACUUM INTO does not carry pragma settings. The workaround: vacuum into
-	// the temp file, then we rely on the next full rebuild cycle to set it. For now,
-	// defragmentation alone is the win.
+	// auto_vacuum must be set on the NEW file — VACUUM INTO resets it to NONE by
+	// default, so the target connection sets it before populate (below).
 	tmpPath := d.path + ".compact.tmp"
 	// Remove stale temp file if a previous attempt was interrupted.
 	_ = os.Remove(tmpPath)

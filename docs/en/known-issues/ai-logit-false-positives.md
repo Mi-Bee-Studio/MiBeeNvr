@@ -121,8 +121,8 @@ With the debug overlay reading the worker's actual output:
 
 | Camera | Before fix | After fix |
 |--------|-----------|-----------|
-| cam 0 (7-8楼转角) | 78 × `person:100%` | `no detections` (empty scene) |
-| cam 2 (视通) | 260 × `person:100%` | `no detections` (empty scene) |
+| cam A (static corner) | 78 × `person:100%` | `no detections` (empty scene) |
+| cam B (street-facing) | 260 × `person:100%` | `no detections` (empty scene) |
 
 An empty scene now correctly produces **zero boxes**. The confidence threshold
 (0.5) finally discriminates: background noise (logit <0 → sigmoid <0.5) is

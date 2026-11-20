@@ -165,7 +165,7 @@ func TestBackfillCamera_HoldsPendingTranscodeSegments(t *testing.T) {
 }
 
 // TestRollingMerge_HoldsYoungSegmentsOnTranscodeCameras pins the #810 TOCTOU
-// follow-up observed on production M5 (2026-09-15 evening, cam-3bbed0e1):
+// follow-up observed in the field:
 // segment completed 21:57:25 → merge debounce folded it at 21:57:26 → the
 // transcode task row only landed at 21:57:30 → queue found the input gone at
 // 21:57:42 (cancelled, H.264 version lost). The pending-task hold cannot see
@@ -366,7 +366,7 @@ func TestRollingMerge_TranscodeGraceOffFoldsImmediately(t *testing.T) {
 
 // --- #810 residual follow-up (M5 production 2026-09-16): fold-site re-check ---
 //
-// Production evidence (cam-3bbed0e1, flapping Xiaomi H.265): task 8538 sat
+// Production evidence (cam-test-002, flapping Xiaomi H.265): task 8538 sat
 // pending in the DB from 06:45:51 while its input segment folded at 06:47:40
 // (bucket-create site) and the queue cancelled the claim at 06:57:22 ("input
 // vanished"). Two seconds after the fold, a neighboring dispatch's hold query
@@ -558,7 +558,7 @@ func TestRollingMerge_HoldQueryErrorDefersFold(t *testing.T) {
 
 // --- #817 follow-up (M5 production 2026-09-16, round 2): two residual gaps ---
 //
-// cam-3bbed0e1 is DB-managed (absent from the yaml camera list): the task
+// cam-test-002 is DB-managed (absent from the yaml camera list): the task
 // creator resolves it against GLOBAL transcoding (enabled) and keeps creating
 // tasks, while the coordinator's per-camera-block-only lookup said "disabled"
 // and turned the age rail OFF — and the fold-site re-check ran at

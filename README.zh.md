@@ -107,7 +107,7 @@ cd MiBeeNvr && make build
 | 任意（空载） | — | 内存 38 MB，冷启动 122 ms |
 | x86 台式机（i5-12600KF） | 68 路 · 226 Mbps 录制，另加 32 路并发观看 | CPU 24%，API p50 < 11 ms，零失败 |
 | RK3399 NAS（低配档） | 28 路录制 | CPU 20–23%（瓶颈在 eMMC 存储） |
-| Banana Pi M5（生产机） | 18 路，80% iowait 风暴 | health API p50 13.5 ms |
+| 低功耗 ARM SBC（代表机型） | 18 路，80% iowait 风暴 | health API p50 13.5 ms |
 
 ## 可观测性
 

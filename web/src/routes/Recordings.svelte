@@ -15,6 +15,7 @@
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import { isRouteSuspended } from '$lib/page-lifecycle.svelte';
   import { getTranscodingStatus, enqueueTranscodeTask, cancelTranscodeTask } from '$lib/api/transcoding';
+  import { activeTranscodeTask as isTranscodingRecording, completedTranscodeTask as getCompletedTranscodeTask, failedTranscodeTask as getFailedTranscodeTask } from '$lib/library-list-helpers';
   import { getItemsPerPage, getAutoRefresh, parseRefreshInterval } from '../lib/preferences';
   import { DAY_CACHE_TTL_MS } from '$lib/recordings-windows';
 
@@ -37,7 +38,6 @@
   import AviPlaybackModal from '$lib/components/recordings/AviPlaybackModal.svelte';
   import CompactList from '$lib/components/library/CompactList.svelte';
   import CalendarView from '$lib/components/timelapse/CalendarView.svelte';
-  import AviPlayback from '$lib/components/AviPlayback.svelte';
   import DayTimeline from '$lib/components/DayTimeline.svelte';
   import type { TimelineAIEvent } from '$lib/components/DayTimeline.svelte';
   import { listAIEvents } from '../lib/api/ai-events';
@@ -640,27 +640,6 @@ function handlePresetGenerated() {
     }
   }
 
-  function isTranscodingRecording(recordingId: string): TranscodeTask | undefined {
-    if (!transcodingStatus?.recent_results) return undefined;
-    return transcodingStatus.recent_results.find(
-      (t) => t.recording_id === recordingId && (t.status === 'running' || t.status === 'pending')
-    );
-  }
-
-  function getCompletedTranscodeTask(recordingId: string): TranscodeTask | undefined {
-    if (!transcodingStatus?.recent_results) return undefined;
-    return transcodingStatus.recent_results.find(
-      (t) => t.recording_id === recordingId && t.status === 'completed'
-    );
-  }
-
-  function getFailedTranscodeTask(recordingId: string): TranscodeTask | undefined {
-    if (!transcodingStatus?.recent_results) return undefined;
-    return transcodingStatus.recent_results.find(
-      (t) => t.recording_id === recordingId && t.status === 'failed' && t.error
-    );
-  }
-
   async function handleTranscode(recording: Recording) {
     const target = recording.format === 'h264' ? 'h265' : recording.format === 'h265' ? 'h264' : 'h264';
     try {
@@ -676,6 +655,18 @@ function handlePresetGenerated() {
       startTranscodingPoll();
     } catch {
       showToast(t('transcoding.recordings.transcodeFailed'), 'error');
+    }
+  }
+
+  async function handleCancelTranscode(task: TranscodeTask) {
+    try {
+      await cancelTranscodeTask(task.id);
+      showToast(t('transcoding.task_cancelled'), 'success');
+      // The cancelled task drops out of recent_results; refresh once so the
+      // progress strip disappears without waiting for the next poll tick.
+      await loadTranscodingStatus();
+    } catch {
+      showToast(t('common.error'), 'error');
     }
   }
 
@@ -1048,6 +1039,7 @@ function handlePresetGenerated() {
           onview={viewRecording}
           ondelete={(r: Recording) => deleteConfirm = r}
           ontranscode={handleTranscode}
+          oncanceltranscode={handleCancelTranscode}
           ondownload={handleDownload}
           bind:sortBy
           bind:sortOrder
